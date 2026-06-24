@@ -239,36 +239,77 @@
        (b64url (.getBytes (format "{\"sub\":\"%s\",\"exp\":9999999999}" did) "UTF-8")) "."
        "kotoba-cli-media"))
 
+(defn- pinned-wit []
+  (let [b (str (System/getProperty "user.dir") "/bin/wit")]
+    (if (.exists (java.io.File. b)) b (str kotoba-dir "/crates/kotoba-runtime/wit"))))
+
+(defn- fwd [host port lport]
+  (p/sh "bash" "-c" (format "pkill -f '%d:localhost' 2>/dev/null; sleep 0.3; ssh -o BatchMode=yes -fN -L %d:localhost:%d %s" lport lport port host))
+  (Thread/sleep 1300))
+
+(defn- distribute-artifact
+  "Block-put the WASM artifact to EVERY reachable node so the lattice can place
+   the component anywhere and the winner always has the bytes (no IPFS/bitswap
+   dependency). Operator-authed."
+  [fleet token wasm nodes]
+  (print "  distributing artifact →") (flush)
+  (doseq [n nodes]
+    (when (ssh/reachable? (:host n))
+      (fwd (:host n) (node-port fleet n) 18900)
+      (let [r (p/sh (str local-bin "/kotoba") "--url" "http://localhost:18900"
+                    "--token" token "block" "put" "--file" wasm)]
+        (print (format " %s%s" (:name n) (if (zero? (:exit r)) "✓" "✗"))) (flush))))
+  (p/sh "bash" "-c" "pkill -f '18900:localhost' 2>/dev/null")
+  (println))
+
+(defn- placed-on
+  "Which nodes have executed the component CID (from their logs) — i.e. where the
+   lattice actually placed + ran it."
+  [fleet cid nodes]
+  (keep (fn [n]
+          (let [c (:out (ssh/sh (:host n)
+                                (format "grep -c 'trigger: executed.*%s' ~/.murakumo/mesh.log 2>/dev/null" cid)))]
+            (when (pos? (Integer/parseInt (str/trim (str c)))) (:name n))))
+        nodes))
+
 (defn cmd-deploy
-  "Compile a kotoba app manifest (clj→WASM), seed the artifact into the node's
-   blockstore, and publish its triggers/routes to that node's lattice — so the
-   component is PLACED + its cron fires. Usage: deploy <app.edn> [node]."
-  [fleet [manifest sel]]
-  (when-not manifest (binding [*out* *err*] (println "usage: deploy <app.edn> [node]")) (System/exit 2))
-  (let [node (first (fleet/select fleet (or sel "asher")))
-        port (node-port fleet node)
-        wit (str kotoba-dir "/crates/kotoba-runtime/wit")
+  "Deploy a kotoba app manifest to the FLEET: resolve its component CID, distribute
+   the artifact to every node, publish its triggers/routes to one node's lattice,
+   and report which node the lattice PLACED it on (honouring the manifest's
+   :placement constraints over node labels). Usage: deploy <app.edn> [publish-node]."
+  [fleet [manifest pubsel]]
+  (when-not manifest (binding [*out* *err*] (println "usage: deploy <app.edn> [publish-node]")) (System/exit 2))
+  (when-not (operator-seed fleet) (binding [*out* *err*] (println "set MURAKUMO_OPERATOR_SEED first")) (System/exit 2))
+  (let [fleet (fleet/enrich fleet)
         kotoba (str local-bin "/kotoba")
+        wit (pinned-wit)
         token (op-token (did-for (operator-seed fleet)))
-        url "http://localhost:18077"
-        ;; resolve the manifest's first component source → build the wasm artifact.
-        src (->> (slurp manifest) (re-find #":src\s+\"([^\"]+)\"") second)
-        srcdir (-> manifest (str/replace #"/[^/]+$" ""))
-        wasm "/tmp/murakumo-deploy.wasm"]
-    (println (format "deploying %s → %s" manifest (:name node)))
-    ;; port-forward the node's kotoba port to localhost:18077.
-    (p/sh "bash" "-c" (format "ssh -o BatchMode=yes -fN -L 18077:localhost:%d %s" port (:host node)))
-    (Thread/sleep 1500)
-    ;; 1) compile clj → WASM (CID matches the deploy plan).
-    (p/sh kotoba "component" "build" (str srcdir "/" src) "--wit-dir" wit "-o" wasm)
-    ;; 2) seed the artifact into the node's blockstore (operator-authed).
-    (let [bp (p/sh kotoba "--url" url "--token" token "block" "put" "--file" wasm)]
-      (println "  block put →" (str/trim (str (:out bp)))))
-    ;; 3) publish triggers/routes → the lattice places it + fires cron.
-    (let [{:keys [out err exit]}
-          (p/sh kotoba "app" "deploy" manifest "--wit-dir" wit "--publish" "--url" url)]
-      (println (str out err))
-      (System/exit (or exit 0)))))
+        man (slurp manifest)
+        srcdir (str/replace manifest #"/[^/]+$" "")
+        src (some-> (re-find #":src\s+\"([^\"]+)\"" man) second)
+        explicit-cid (some-> (re-find #":cid\s+\"([^\"]+)\"" man) second)
+        wasm "/tmp/murakumo-deploy.wasm"
+        ;; compile :src → wasm+CID, or use an explicit :cid (artifact must already be on nodes).
+        cid (if src
+              ;; `component build` writes the wasm AND prints its CID (last line).
+              (let [o (:out (p/sh kotoba "component" "build" (str srcdir "/" src) "--wit-dir" wit "-o" wasm))]
+                (last (str/split-lines (str/trim (str o)))))
+              explicit-cid)
+        pub (first (fleet/select fleet (or pubsel "asher")))]
+    (println (format "deploy %s  (component %s)" manifest cid))
+    (when src (distribute-artifact fleet token wasm (:nodes fleet)))
+    ;; publish PutApp+PutRoutes from one node → gossiped fleet-wide → lattice auctions + places.
+    (fwd (:host pub) (node-port fleet pub) 18077)
+    (let [{:keys [out err]} (p/sh kotoba "app" "deploy" manifest "--wit-dir" wit "--publish" "--url" "http://localhost:18077")]
+      (println (str (str/trim (str out)) (str err))))
+    (p/sh "bash" "-c" "pkill -f '18077:localhost' 2>/dev/null")
+    ;; let the auction close + first trigger fire, then report placement.
+    (println "  waiting for the lattice to place + run it…")
+    (Thread/sleep 75000)
+    (let [where (placed-on fleet cid (:nodes fleet))]
+      (if (seq where)
+        (println (format "  ✓ placed + running on: %s  (deployed from %s)" (str/join ", " where) (:name pub)))
+        (println "  ⚠ not yet observed running on any node (check `murakumo status` / node logs)")))))
 
 (defn cmd-pin
   "Copy a consistent kotoba binary set into murakumo's own ./bin (gitignored) and
@@ -284,6 +325,13 @@
         (when-not (.exists (java.io.File. s))
           (binding [*out* *err*] (println "missing binary:" s)) (System/exit 2))
         (p/sh "cp" s (str dest "/" bin))))
+    ;; pin the WIT alongside the binary (a release dir is target/<triple>/release,
+    ;; so its WIT is ../../../crates/kotoba-runtime/wit) — deploy compiles against
+    ;; the SAME WIT version the binary expects (avoids world-name skew).
+    (let [wit (str src "/../../../crates/kotoba-runtime/wit")]
+      (when (.exists (java.io.File. wit))
+        (p/sh "rm" "-rf" (str dest "/wit"))
+        (p/sh "cp" "-R" wit (str dest "/wit"))))
     (let [sha (str/trim (str (:out (p/sh "git" "-C" src "rev-parse" "--short" "HEAD"))))
           ver (str/trim (str (:out (p/sh (str dest "/kotoba") "--version"))))]
       (spit (str dest "/BUILD.edn")
