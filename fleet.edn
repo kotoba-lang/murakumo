@@ -1,0 +1,26 @@
+;; fleet.edn — the kotoba WASM mesh fleet inventory (SSoT).
+;;
+;; murakumo operates these nodes over Tailscale SSH. Each `:host` is a Tailscale
+;; MagicDNS name (or IP) reachable as `ssh <host>`. `:roles` map to kotoba's
+;; KOTOBA_NODE_ROLES; `:labels` to KOTOBA_NODE_LABELS (placement constraints the
+;; lattice auction matches). `:port` is the node's kotoba-server HTTP port.
+;;
+;; The names mirror the etzhayyim murakumo cell fleet (12 tribes), but THIS fleet
+;; is the kotoba mesh layer (libp2p lattice hosting WASM components), distinct
+;; from the k3s/Ansible LangGraph-cell control plane (etzhayyim-project-murakumo).
+{:fleet/name "com-junkawasaki-kotoba-mesh"
+ :fleet/port 8077                      ; default kotoba-server HTTP port per node
+ :fleet/operator-seed-env "MURAKUMO_OPERATOR_SEED"  ; 32-byte hex; shared operator DID across the fleet
+
+ :nodes
+ [{:name "naphtali" :host "naphtali" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "simeon"   :host "simeon"   :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "judah"    :host "judah"    :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "zebulun"  :host "zebulun"  :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "levi"     :host "levi"     :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "joseph"   :host "joseph"   :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "issachar" :host "issachar" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "dan"      :host "dan"      :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "benjamin" :host "benjamin" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  ;; asher = replica/failover; also the canary (verified reachable first).
+  {:name "asher"    :host "asher"    :roles ["pin" "compute" "relay"] :labels {:tier "edge" :zone "jp" :role "canary"}}]}

@@ -1,0 +1,195 @@
+;; murakumo.core — control plane for the kotoba WASM lattice/mesh across the
+;; Tailscale Mac-mini fleet. One terminal drives provisioning, residence (launchd),
+;; fleet-wide status aggregation, and WASM-component deployment.
+;;
+;; Why this exists: kotoba ships a single-node `kotoba lattice ps` and no
+;; fleet-facing control surface. murakumo is that surface — a thin bb/clj operator
+;; that SSHes the fleet (no agent to install on nodes beyond the kotoba binaries),
+;; renders a resident LaunchAgent per node, and folds every node's /health +
+;; lattice participation into one view.
+
+(ns murakumo.core
+  (:require [babashka.process :as p]
+            [clojure.string :as str]
+            [cheshire.core :as json]
+            [murakumo.fleet :as fleet]
+            [murakumo.ssh :as ssh]))
+
+(def ^:private remote-bin "$HOME/.murakumo/bin")  ; where node binaries live
+(def ^:private plist-label "com.murakumo.kotoba-mesh")
+(def ^:private kotoba-dir
+  (or (System/getenv "MURAKUMO_KOTOBA_DIR")
+      (str (System/getenv "HOME")
+           "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba")))
+(def ^:private local-bin
+  (str kotoba-dir "/target/aarch64-apple-darwin/release"))
+
+;; ── identity ──────────────────────────────────────────────────────────────
+;; Derive a deterministic per-node Ed25519 seed from the shared operator seed +
+;; node name, so node identities are stable + reproducible without storing a
+;; secret per node. The operator seed itself comes from the env (never committed).
+
+(defn- operator-seed [fleet]
+  (or (System/getenv (:fleet/operator-seed-env fleet))
+      (System/getenv "MURAKUMO_OPERATOR_SEED")))
+
+(defn- sha256-hex [^String s]
+  (->> (.digest (java.security.MessageDigest/getInstance "SHA-256") (.getBytes s "UTF-8"))
+       (map #(format "%02x" (bit-and (int %) 0xff))) (apply str)))
+
+(defn- node-seed [fleet node]
+  ;; 32-byte hex, deterministic: sha256(operator-seed | node-name).
+  (sha256-hex (str (operator-seed fleet) ":" (:name node))))
+
+(defn- did-for [node-seed-hex]
+  ;; ask the local kotoba CLI to derive the did:key for this seed.
+  (str/trim (str (:out (p/sh (str local-bin "/kotoba") "did-derive" node-seed-hex)))))
+
+;; ── commands ────────────────────────────────────────────────────────────────
+
+(defn cmd-nodes
+  "List the fleet with Tailscale reachability + whether the mesh binary/agent is
+   present. Read-only — the at-a-glance fleet map."
+  [fleet _]
+  (let [fleet (fleet/enrich fleet)]
+    (println (format "%-10s %-16s %-8s %-9s %s" "NODE" "TAILSCALE-IP" "ONLINE" "SSH" "MESH"))
+    (doseq [n (:nodes fleet)]
+      (let [ssh-ok (and (:online? n) (ssh/reachable? (:host n)))
+            mesh (if ssh-ok
+                   (let [b (:out (ssh/sh (:host n) (str "test -x " remote-bin "/kotoba-server && echo installed || echo absent")))
+                         up (:out (ssh/sh (:host n) (str "sudo launchctl print system/" plist-label " >/dev/null 2>&1 && echo running || echo stopped")))]
+                     (str b "/" up))
+                   "-")]
+        (println (format "%-10s %-16s %-8s %-9s %s"
+                         (:name n) (or (:ip n) "?")
+                         (if (:online? n) "yes" "no")
+                         (if ssh-ok "ok" "no") mesh))))))
+
+(defn cmd-provision
+  "Push the kotoba binaries + a rendered LaunchAgent to selected node(s), then
+   load it. Idempotent. Requires MURAKUMO_OPERATOR_SEED in the env."
+  [fleet [sel]]
+  (when-not (operator-seed fleet)
+    (binding [*out* *err*] (println "set MURAKUMO_OPERATOR_SEED (32-byte hex) first")) (System/exit 2))
+  (let [port (str (:fleet/port fleet 8077))
+        tmpl (slurp "deploy/com.murakumo.kotoba-mesh.plist.tmpl")]
+    (doseq [n (fleet/select fleet sel)]
+      (let [host (:host n)]
+        (print (format "[%s] " (:name n))) (flush)
+        (if-not (ssh/reachable? host)
+          (println "unreachable — skipped")
+          (let [;; reuse the operator DID (shared) so writes are operator-attributed.
+                op-seed (operator-seed fleet)
+                did (did-for op-seed)
+                user (:out (ssh/sh host "whoami"))
+                roles (str/join "," (:roles n))
+                labels (->> (:labels n) (map (fn [[k v]] (str (name k) "=" v))) (str/join ","))
+                home (:out (ssh/sh host "echo $HOME"))
+                plist (-> tmpl
+                          (str/replace "{{USER}}" user)
+                          (str/replace "{{BIN}}" (str home "/.murakumo/bin"))
+                          (str/replace "{{PORT}}" port)
+                          (str/replace "{{ROLES}}" roles)
+                          (str/replace "{{LABELS}}" labels)
+                          (str/replace "{{HOME}}" home)
+                          (str/replace "{{ED25519}}" op-seed)
+                          (str/replace "{{X25519}}" (sha256-hex (str op-seed ":x25519")))
+                          (str/replace "{{DID}}" did))]
+            (ssh/sh host "mkdir -p ~/.murakumo/bin ~/.murakumo/store")
+            (print "rsync… ") (flush)
+            (doseq [bin ["kotoba" "kotoba-server"]]
+              (apply p/sh (concat ["rsync" "-az" "-e" "ssh -o BatchMode=yes -o ConnectTimeout=8"]
+                                  [(str local-bin "/" bin) (str host ":.murakumo/bin/" bin)])))
+            ;; LaunchDaemon (system domain) → headless residence, no GUI session.
+            ;; Needs passwordless sudo on the node (true for the fleet).
+            (let [pp (str "/Library/LaunchDaemons/" plist-label ".plist")]
+              (ssh/sh host (format "sudo tee %s >/dev/null <<'PLIST'\n%s\nPLIST" pp plist))
+              (ssh/sh host (format "sudo launchctl bootout system/%s 2>/dev/null; sudo launchctl bootstrap system %s" plist-label pp)))
+            (println "provisioned + loaded (LaunchDaemon)")))))))
+
+(defn- launch [host action]
+  (ssh/sh host (case action
+                 :up   (format "sudo launchctl kickstart -k system/%s" plist-label)
+                 :down (format "sudo launchctl bootout system/%s" plist-label))))
+
+(defn cmd-up   [fleet [sel]] (doseq [n (fleet/select fleet sel)] (println (:name n) (:exit (launch (:host n) :up)))))
+(defn cmd-down [fleet [sel]] (doseq [n (fleet/select fleet sel)] (println (:name n) (:exit (launch (:host n) :down)))))
+
+(defn cmd-status
+  "Fold every node's /health (+ lattice ps) into one view — the management read."
+  [fleet [sel]]
+  (let [port (:fleet/port fleet 8077)]
+    (println (format "%-10s %-8s %-12s %-7s %s" "NODE" "HEALTH" "WASM-EXEC" "PEERS" "HOSTED"))
+    (doseq [n (fleet/select (fleet/enrich fleet) sel)]
+      (if-not (and (:online? n) (ssh/reachable? (:host n)))
+        (println (format "%-10s %-8s" (:name n) "down"))
+        (let [h (ssh/curl-local (:host n) (format "http://localhost:%d/health" port))
+              j (try (json/parse-string h true) (catch Exception _ nil))
+              subs (:subsystems j)
+              hosted (-> (ssh/curl-local (:host n) (format "http://localhost:%d/xrpc/com.etzhayyim.apps.kotoba.lattice.ps" port)))]
+          (println (format "%-10s %-8s %-12s %-7s %s"
+                           (:name n)
+                           (if j "ok" "no-resp")
+                           (or (:wasm_executor subs) "?")
+                           (get-in j [:node :peer_count] "?")
+                           (if (str/blank? hosted) "-" (subs hosted 0 (min 40 (count hosted)))))))))))
+
+(defn- b64url [^bytes b]
+  (-> (.encodeToString (java.util.Base64/getUrlEncoder) b) (str/replace "=" "")))
+
+(defn- op-token
+  "Craft the operator Bearer JWT kotoba checks (sub == operator DID; signature is
+   not re-verified — the edge is the trust boundary, see kotoba graph_auth)."
+  [did]
+  (str (b64url (.getBytes "{\"alg\":\"HS256\",\"typ\":\"JWT\"}" "UTF-8")) "."
+       (b64url (.getBytes (format "{\"sub\":\"%s\",\"exp\":9999999999}" did) "UTF-8")) "."
+       "kotoba-cli-media"))
+
+(defn cmd-deploy
+  "Compile a kotoba app manifest (clj→WASM), seed the artifact into the node's
+   blockstore, and publish its triggers/routes to that node's lattice — so the
+   component is PLACED + its cron fires. Usage: deploy <app.edn> [node]."
+  [fleet [manifest sel]]
+  (when-not manifest (binding [*out* *err*] (println "usage: deploy <app.edn> [node]")) (System/exit 2))
+  (let [port (:fleet/port fleet 8077)
+        node (first (fleet/select fleet (or sel "asher")))
+        wit (str kotoba-dir "/crates/kotoba-runtime/wit")
+        kotoba (str local-bin "/kotoba")
+        token (op-token (did-for (operator-seed fleet)))
+        url "http://localhost:18077"
+        ;; resolve the manifest's first component source → build the wasm artifact.
+        src (->> (slurp manifest) (re-find #":src\s+\"([^\"]+)\"") second)
+        srcdir (-> manifest (str/replace #"/[^/]+$" ""))
+        wasm "/tmp/murakumo-deploy.wasm"]
+    (println (format "deploying %s → %s" manifest (:name node)))
+    ;; port-forward the node's kotoba port to localhost:18077.
+    (p/sh "bash" "-c" (format "ssh -o BatchMode=yes -fN -L 18077:localhost:%d %s" port (:host node)))
+    (Thread/sleep 1500)
+    ;; 1) compile clj → WASM (CID matches the deploy plan).
+    (p/sh kotoba "component" "build" (str srcdir "/" src) "--wit-dir" wit "-o" wasm)
+    ;; 2) seed the artifact into the node's blockstore (operator-authed).
+    (let [bp (p/sh kotoba "--url" url "--token" token "block" "put" "--file" wasm)]
+      (println "  block put →" (str/trim (str (:out bp)))))
+    ;; 3) publish triggers/routes → the lattice places it + fires cron.
+    (let [{:keys [out err exit]}
+          (p/sh kotoba "app" "deploy" manifest "--wit-dir" wit "--publish" "--url" url)]
+      (println (str out err))
+      (System/exit (or exit 0)))))
+
+(def ^:private commands
+  {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
+   "status" cmd-status "deploy" cmd-deploy})
+
+(defn -main [& args]
+  (let [[cmd & rest] args
+        fleet (fleet/load-fleet)]
+    (if-let [f (get commands cmd)]
+      (f fleet rest)
+      (do (println "murakumo — kotoba WASM mesh control plane\n")
+          (println "commands:")
+          (println "  nodes                       fleet reachability + mesh presence")
+          (println "  provision [node|all]        rsync binaries + install resident LaunchAgent")
+          (println "  up/down   [node|all]        start/stop the resident mesh node")
+          (println "  status    [node|all]        fold /health + lattice ps across the fleet")
+          (println "  deploy    <app.edn> [node]  compile clj→WASM + publish to a node's lattice")
+          (println "\nenv: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR")))))

@@ -1,0 +1,13 @@
+{;; murakumo — kotoba WASM mesh control plane (babashka; uses built-in
+ ;; babashka.process + cheshire, no external deps).
+ :paths ["src"]
+ :tasks
+ {murakumo
+  {:doc "kotoba WASM mesh control plane. `bb murakumo` for the command list. Drives the Tailscale fleet over SSH: provision/up/down/status/deploy."
+   :requires ([murakumo.core :as core])
+   :task (apply core/-main *command-line-args*)}
+
+  nodes    {:doc "Fleet reachability + mesh presence."           :requires ([murakumo.core :as core]) :task (apply core/-main "nodes" *command-line-args*)}
+  status   {:doc "Fold /health + lattice ps across the fleet."   :requires ([murakumo.core :as core]) :task (apply core/-main "status" *command-line-args*)}
+  provision{:doc "rsync binaries + install resident LaunchAgent."  :requires ([murakumo.core :as core]) :task (apply core/-main "provision" *command-line-args*)}
+  deploy   {:doc "Compile clj→WASM + publish to a node's lattice." :requires ([murakumo.core :as core]) :task (apply core/-main "deploy" *command-line-args*)}}}

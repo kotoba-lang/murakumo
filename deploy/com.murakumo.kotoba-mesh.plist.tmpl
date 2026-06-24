@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- com.murakumo.kotoba-mesh — resident kotoba WASM mesh node (macOS LaunchDaemon).
+     Rendered per-node by `murakumo provision`. {{PLACEHOLDERS}} are substituted.
+     Installed in /Library/LaunchDaemons (system domain) so it runs HEADLESS — no
+     GUI login session required (the fleet macs are reached over SSH). `UserName`
+     drops it to the login user so $HOME paths + Tailscale work. RunAtLoad +
+     KeepAlive ⇒ starts at boot and self-heals on crash. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.murakumo.kotoba-mesh</string>
+  <key>UserName</key>         <string>{{USER}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{BIN}}/kotoba-server</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>KOTOBA_PORT</key>            <string>{{PORT}}</string>
+    <key>KOTOBA_IPFS</key>           <string>off</string>
+    <key>KOTOBA_NODE_ROLES</key>      <string>{{ROLES}}</string>
+    <key>KOTOBA_NODE_LABELS</key>     <string>{{LABELS}}</string>
+    <key>KOTOBA_STORE_PATH</key>      <string>{{HOME}}/.murakumo/store</string>
+    <key>KOTOBA_NO_KEYCHAIN</key>     <string>1</string>
+    <key>KOTOBA_AGENT_ED25519_HEX</key> <string>{{ED25519}}</string>
+    <key>KOTOBA_AGENT_X25519_HEX</key>  <string>{{X25519}}</string>
+    <key>KOTOBA_AGENT_DID</key>         <string>{{DID}}</string>
+    <key>RUST_LOG</key>              <string>kotoba_server::net_actor=info,kotoba_server=warn</string>
+  </dict>
+  <key>RunAtLoad</key>        <true/>
+  <key>KeepAlive</key>        <true/>
+  <key>ThrottleInterval</key> <integer>10</integer>
+  <key>StandardOutPath</key>  <string>{{HOME}}/.murakumo/mesh.log</string>
+  <key>StandardErrorPath</key><string>{{HOME}}/.murakumo/mesh.log</string>
+</dict>
+</plist>
