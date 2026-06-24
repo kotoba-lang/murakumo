@@ -21,8 +21,17 @@
   (or (System/getenv "MURAKUMO_KOTOBA_DIR")
       (str (System/getenv "HOME")
            "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba")))
+
+;; Binary resolution (raced-checkout safety): murakumo deploys a PINNED binary
+;; set it owns (./bin/, gitignored) so a concurrent rebuild of the shared kotoba
+;; checkout can't swap the CLI/server protocol out from under a live fleet.
+;; Fallbacks: $MURAKUMO_BIN, then the kotoba checkout's target/.
 (def ^:private local-bin
-  (str kotoba-dir "/target/aarch64-apple-darwin/release"))
+  (let [pinned (str (System/getProperty "user.dir") "/bin")]
+    (cond
+      (.exists (java.io.File. pinned "kotoba-server")) pinned
+      (System/getenv "MURAKUMO_BIN") (System/getenv "MURAKUMO_BIN")
+      :else (str kotoba-dir "/target/aarch64-apple-darwin/release"))))
 
 ;; ── identity ──────────────────────────────────────────────────────────────
 ;; Derive a deterministic per-node Ed25519 seed from the shared operator seed +
@@ -239,9 +248,29 @@
       (println (str out err))
       (System/exit (or exit 0)))))
 
+(defn cmd-pin
+  "Copy a consistent kotoba binary set into murakumo's own ./bin (gitignored) and
+   record its provenance, so the fleet always gets the SAME cli+server the control
+   plane drives — independent of the shared kotoba checkout. Usage: pin <src-dir>
+   (defaults to the kotoba checkout's release target)."
+  [_ [src]]
+  (let [src (or src (str kotoba-dir "/target/aarch64-apple-darwin/release"))
+        dest (str (System/getProperty "user.dir") "/bin")]
+    (.mkdirs (java.io.File. dest))
+    (doseq [bin ["kotoba" "kotoba-server"]]
+      (let [s (str src "/" bin)]
+        (when-not (.exists (java.io.File. s))
+          (binding [*out* *err*] (println "missing binary:" s)) (System/exit 2))
+        (p/sh "cp" s (str dest "/" bin))))
+    (let [sha (str/trim (str (:out (p/sh "git" "-C" src "rev-parse" "--short" "HEAD"))))
+          ver (str/trim (str (:out (p/sh (str dest "/kotoba") "--version"))))]
+      (spit (str dest "/BUILD.edn")
+            (pr-str {:source src :git-sha sha :version ver :features "p2p,realtime-wasm"}))
+      (println (format "pinned kotoba + kotoba-server → bin/  (src %s @ %s, %s)" src sha ver)))))
+
 (def ^:private commands
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
-   "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh})
+   "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin})
 
 (defn -main [& args]
   (let [[cmd & rest] args
@@ -251,6 +280,7 @@
       (do (println "murakumo — kotoba WASM mesh control plane\n")
           (println "commands:")
           (println "  nodes                       fleet reachability + mesh presence")
+          (println "  pin       [src-dir]         copy a consistent kotoba cli+server into ./bin (own it)")
           (println "  provision [node|all]        rsync binaries + install resident LaunchDaemon")
           (println "  mesh      [node|all]        form ONE gossipsub lattice (2-pass: peer-id + bootstrap)")
           (println "  up/down   [node|all]        start/stop the resident mesh node")
