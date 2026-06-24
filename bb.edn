@@ -11,4 +11,5 @@
   status   {:doc "Fold /health + lattice ps across the fleet."   :requires ([murakumo.core :as core]) :task (apply core/-main "status" *command-line-args*)}
   provision{:doc "rsync binaries + install resident LaunchDaemon."  :requires ([murakumo.core :as core]) :task (apply core/-main "provision" *command-line-args*)}
   mesh     {:doc "Form ONE gossipsub lattice across the fleet (peer-id + bootstrap)." :requires ([murakumo.core :as core]) :task (apply core/-main "mesh" *command-line-args*)}
+  dash     {:doc "Web dashboard + snapshotter: persists fleet heartbeat/placement to the Datom log and serves `status` as a web page. Args: [port=8899] [interval-s=15]." :requires ([murakumo.dash :as dash]) :task (apply dash/-main *command-line-args*)}
   deploy   {:doc "Compile clj→WASM + publish to a node's lattice." :requires ([murakumo.core :as core]) :task (apply core/-main "deploy" *command-line-args*)}}}

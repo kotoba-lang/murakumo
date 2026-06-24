@@ -60,6 +60,25 @@ bb murakumo provision all         # roll out to the whole fleet once the canary 
 | `src/murakumo/core.clj` | the command implementations + per-node identity derivation |
 | `deploy/com.murakumo.kotoba-mesh.plist.tmpl` | the resident LaunchAgent template |
 
+## Dashboard + Datom persistence
+
+```bash
+bb dash [port=8899] [interval-s=15]   # → http://localhost:8899
+```
+
+`dash` runs a background snapshotter + a web UI (babashka's built-in http-kit):
+
+- every `interval` seconds it polls the fleet (each node's `/health`, live libp2p
+  **LINKS**, and the component CIDs it **HOSTS** = where the lattice placed things);
+- it **persists** each snapshot to the kotoba Datom log — one `atproto.repo.write`
+  tx into the `murakumo-fleet` graph, so the fleet's heartbeat + placement state
+  becomes an append-only **as-of history** (tamper-evident, queryable);
+- it serves that snapshot as an auto-refreshing page (`/`) + JSON (`/api`).
+
+The page shows, per node: HEALTH · WASM-EXEC · LINKS · P2P-PORT · HOSTED (the
+content-addressed components the lattice placed there) — `murakumo status`, live,
+in a browser, with history on the Datom log behind it.
+
 ## Binary pinning (raced-checkout safety)
 
 The shared `kotoba` checkout is raced by concurrent agents — a sibling rebuild can
