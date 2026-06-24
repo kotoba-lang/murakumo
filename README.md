@@ -60,6 +60,31 @@ bb murakumo provision all         # roll out to the whole fleet once the canary 
 | `src/murakumo/core.clj` | the command implementations + per-node identity derivation |
 | `deploy/com.murakumo.kotoba-mesh.plist.tmpl` | the resident LaunchAgent template |
 
+## Binary pinning (raced-checkout safety)
+
+The shared `kotoba` checkout is raced by concurrent agents — a sibling rebuild can
+swap the cli/server protocol out from under a live fleet. So murakumo deploys a
+**pinned binary set it owns** under `./bin` (the binaries themselves are gitignored;
+never commit machine-built blobs). What IS tracked is **`bin/BUILD.edn`** — the
+fleet's *expected* version:
+
+```edn
+{:source "…/release" :git-sha "d3595506" :version "kotoba 0.1.0" :features "p2p,realtime-wasm"}
+```
+
+So "which kotoba the fleet runs" is auditable in git, while the binary is distributed
+out-of-band. To bump the fleet version:
+
+```bash
+# build the new kotoba (cli+server, p2p,realtime-wasm), then:
+bb murakumo pin <its release dir>     # copies binaries → ./bin, rewrites bin/BUILD.edn
+git commit bin/BUILD.edn -m "bump fleet kotoba → <sha>"   # the auditable version pin
+bb murakumo provision all             # roll it out
+```
+
+`provision`/`mesh` print the pinned version on rollout and refuse if `bin/BUILD.edn`
+declares a version but `./bin` is empty (clone murakumo → `pin` the declared sha first).
+
 ## Identity & no-server-key
 
 The fleet shares one **operator DID** derived from `MURAKUMO_OPERATOR_SEED` (32-byte

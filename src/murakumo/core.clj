@@ -127,6 +127,25 @@
 
 (defn- load-peers [] (try (clojure.edn/read-string (slurp peers-file)) (catch Exception _ {})))
 
+(defn- build-manifest []
+  (try (clojure.edn/read-string (slurp (str (System/getProperty "user.dir") "/bin/BUILD.edn")))
+       (catch Exception _ nil)))
+
+(defn- ensure-pinned!
+  "BUILD.edn (tracked in git) pins the fleet's expected kotoba version; the binary
+   itself is distributed out-of-band (built + `murakumo pin`). Refuse to roll out
+   if a version is pinned but ./bin is empty — so the fleet always gets the exact
+   version the repo declares. Returns the manifest (or nil if none)."
+  []
+  (let [bm (build-manifest)]
+    (when (and bm (not (.exists (java.io.File. (str local-bin "/kotoba-server")))))
+      (binding [*out* *err*]
+        (println (format "fleet pins kotoba %s (sha %s) but ./bin has no binaries."
+                         (:version bm) (:git-sha bm)))
+        (println "Build that version and `murakumo pin <its release dir>` before provisioning."))
+      (System/exit 2))
+    bm))
+
 (defn cmd-provision
   "Push binaries + a resident LaunchDaemon to selected node(s). Idempotent.
    Uses any known PeerIds (.murakumo-peers.edn) for bootstrap. Requires
@@ -134,6 +153,8 @@
   [fleet [sel]]
   (when-not (operator-seed fleet)
     (binding [*out* *err*] (println "set MURAKUMO_OPERATOR_SEED (32-byte hex) first")) (System/exit 2))
+  (when-let [bm (ensure-pinned!)]
+    (println (format "rolling out kotoba %s (sha %s, %s)" (:version bm) (:git-sha bm) (:features bm))))
   (let [tmpl (slurp "deploy/com.murakumo.kotoba-mesh.plist.tmpl")
         fleet (fleet/enrich fleet)
         peers (load-peers)]
@@ -154,6 +175,7 @@
   [fleet [sel]]
   (when-not (operator-seed fleet)
     (binding [*out* *err*] (println "set MURAKUMO_OPERATOR_SEED first")) (System/exit 2))
+  (ensure-pinned!)
   (let [tmpl (slurp "deploy/com.murakumo.kotoba-mesh.plist.tmpl")
         fleet (fleet/enrich fleet)
         nodes (fleet/select fleet sel)]
