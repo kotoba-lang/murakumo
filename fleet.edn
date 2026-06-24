@@ -15,7 +15,9 @@
 
  :nodes
  [{:name "naphtali" :host "naphtali" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
-  {:name "simeon"   :host "simeon"   :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  ;; simeon is the ipfs-pinner — its IPFS daemon owns UDP 4001, so give the mesh
+  ;; node a different libp2p port (4001 default would fail swarm init).
+  {:name "simeon"   :host "simeon"   :p2p-port 4003 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   {:name "judah"    :host "judah"    :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   {:name "zebulun"  :host "zebulun"  :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   {:name "levi"     :host "levi"     :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
@@ -23,7 +25,7 @@
   ;; issachar already runs a kotoba-server on :8077 (yabai CTI persistence) — give
   ;; the murakumo mesh node its own ports so the two coexist.
   {:name "issachar" :host "issachar" :port 8076 :p2p-port 4002 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
-  {:name "dan"      :host "dan"      :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "dan"      :host "dan"      :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp" :role "pdshost"}}
   {:name "benjamin" :host "benjamin" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   ;; asher = replica/failover; also the canary (verified reachable first).
   {:name "asher"    :host "asher"    :roles ["pin" "compute" "relay"] :labels {:tier "edge" :zone "jp" :role "canary"}}]}
