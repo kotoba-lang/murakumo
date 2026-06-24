@@ -11,6 +11,7 @@
 (ns murakumo.dash
   (:require [babashka.process :as p]
             [cheshire.core :as json]
+            [clojure.set :as set]
             [clojure.string :as str]
             [murakumo.fleet :as fleet]
             [murakumo.ssh :as ssh]
@@ -116,19 +117,66 @@
                   "-d" body)]
       (some? (re-find #"\"status\":\"ok\"" (str (:out r)))))))
 
-;; ── web ──────────────────────────────────────────────────────────────────────
+;; ── history + liveness alerts ────────────────────────────────────────────────
 
 (def ^:private cache (atom {:ts "—" :nodes []}))
 (def ^:private persisted (atom 0))
+(def ^:private history (atom []))     ; ring of recent snapshots (time-travel)
+(def ^:private alerts (atom []))      ; ring of liveness alerts
+(def ^:private hist-cap 240)          ; ~1h at 15s
+(def ^:private alert-cap 100)
 
-(defn- html [{:keys [ts nodes fleet]}]
+(defn diff-alerts
+  "Compare two snapshots and surface liveness changes: a node going down, losing
+   its mesh links, having a placed component evicted, or recovering."
+  [prev curr]
+  (when prev
+    (let [pm (into {} (map (juxt :name identity)) (:nodes prev))
+          ts (:ts curr)]
+      (vec (mapcat
+            (fn [n]
+              (let [p (get pm (:name n)) nm (:name n)]
+                (when p
+                  (cond-> []
+                    (and (= "ok" (:health p)) (not= "ok" (:health n)))
+                    (conj {:level "error" :node nm :msg "node went DOWN" :ts ts})
+                    (and (not= "ok" (:health p)) (= "ok" (:health n)))
+                    (conj {:level "info" :node nm :msg "node recovered" :ts ts})
+                    (and (number? (:links p)) (number? (:links n))
+                         (pos? (:links p)) (zero? (:links n)))
+                    (conj {:level "error" :node nm :msg (str "lost all mesh links (" (:links p) "→0)") :ts ts})
+                    (and (number? (:links p)) (number? (:links n))
+                         (pos? (:links n)) (< (:links n) (:links p)))
+                    (conj {:level "warn" :node nm :msg (str "links degraded " (:links p) "→" (:links n)) :ts ts})
+                    (seq (set/difference (set (:hosted p)) (set (:hosted n))))
+                    (conj {:level "warn" :node nm
+                           :msg (str "component evicted: "
+                                     (str/join "," (map #(subs % 0 (min 14 (count %)))
+                                                        (set/difference (set (:hosted p)) (set (:hosted n)))))) :ts ts})))))
+            (:nodes curr))))))
+
+;; ── web ──────────────────────────────────────────────────────────────────────
+
+(defn- html [{:keys [ts nodes fleet]} at total live?]
   (str "<!doctype html><html><head><meta charset=utf-8><title>murakumo</title>"
-       "<meta http-equiv=refresh content=10>"
+       (when live? "<meta http-equiv=refresh content=10>")
        "<style>body{font:14px ui-monospace,Menlo,monospace;background:#0b0e14;color:#cdd6f4;margin:24px}"
-       "h1{font-size:18px}table{border-collapse:collapse;margin-top:12px}td,th{padding:6px 14px;text-align:left;border-bottom:1px solid #313244}"
-       "th{color:#89b4fa}.ok{color:#a6e3a1}.down{color:#f38ba8}.muted{color:#6c7086}.cid{color:#fab387;font-size:12px}</style></head><body>"
-       "<h1>叢雲 murakumo — " (or fleet "kotoba wasm mesh") "</h1>"
+       "h1{font-size:18px}a{color:#89b4fa}table{border-collapse:collapse;margin-top:12px}td,th{padding:6px 14px;text-align:left;border-bottom:1px solid #313244}"
+       "th{color:#89b4fa}.ok{color:#a6e3a1}.down{color:#f38ba8}.muted{color:#6c7086}.cid{color:#fab387;font-size:12px}"
+       ".nav{margin:10px 0}.al{margin:10px 0;padding:8px 12px;border-radius:6px}.error{background:#2a1620;color:#f38ba8}.warn{background:#2a2416;color:#f9e2af}.info{background:#16242a;color:#94e2d5}</style></head><body>"
+       "<h1>叢雲 murakumo — " (or fleet "kotoba wasm mesh") (when-not live? " · time-travel") "</h1>"
        "<div class=muted>snapshot " ts " · persisted " @persisted " snapshots to the Datom log (graph murakumo-fleet)</div>"
+       ;; time-travel nav
+       "<div class=nav>history " (inc at) "/" (max 1 total) " &nbsp; "
+       (if (< (inc at) total) (str "<a href='/?at=" (inc at) "'>◀ older</a>") "<span class=muted>◀ older</span>")
+       " &nbsp; <a href='/'>latest ▶▶</a>"
+       (when (pos? at) (str " &nbsp; <a href='/?at=" (dec at) "'>newer ▶</a>")) "</div>"
+       ;; recent liveness alerts (newest first)
+       (let [as (take 6 (reverse @alerts))]
+         (if (seq as)
+           (apply str (for [a as] (str "<div class='al " (:level a) "'>⚠ " (:node a) " — " (:msg a)
+                                       " <span class=muted>" (:ts a) "</span></div>")))
+           "<div class='al info'>✓ no liveness alerts</div>"))
        "<table><tr><th>NODE</th><th>HEALTH</th><th>WASM</th><th>LINKS</th><th>P2P</th><th>HOSTED (placed components)</th></tr>"
        (apply str (for [n nodes]
                     (str "<tr><td>" (:name n) "</td>"
@@ -139,17 +187,33 @@
                          "<td class=cid>" (if (seq (:hosted n)) (str/join " " (map #(subs % 0 (min 18 (count %))) (:hosted n))) "<span class=muted>—</span>") "</td></tr>")))
        "</table></body></html>"))
 
+(defn- query-at [req]
+  (some-> (:query-string req) (->> (re-find #"at=(\d+)")) second Integer/parseInt))
+
 (defn- handler [req]
   (case (:uri req)
-    "/api" {:status 200 :headers {"content-type" "application/json"} :body (json/generate-string @cache)}
-    {:status 200 :headers {"content-type" "text/html; charset=utf-8"} :body (html @cache)}))
+    "/api"         {:status 200 :headers {"content-type" "application/json"} :body (json/generate-string @cache)}
+    "/api/history" {:status 200 :headers {"content-type" "application/json"} :body (json/generate-string @history)}
+    "/api/alerts"  {:status 200 :headers {"content-type" "application/json"} :body (json/generate-string @alerts)}
+    (let [h @history n (count h)
+          at (min (max 0 (or (query-at req) 0)) (max 0 (dec n)))
+          ;; at=0 → newest; index from the end of the ring.
+          snap (if (pos? n) (nth h (- n 1 at)) @cache)]
+      {:status 200 :headers {"content-type" "text/html; charset=utf-8"}
+       :body (html snap at n (zero? at))})))
 
 (defn- snapshotter [fleet token target interval]
   (future
     (loop []
       (try
-        (let [snap (collect fleet)]
+        (let [prev @cache
+              snap (collect fleet)
+              al (diff-alerts (when (seq (:nodes prev)) prev) snap)]
           (reset! cache snap)
+          (swap! history (fn [h] (vec (take-last hist-cap (conj h snap)))))
+          (when (seq al)
+            (swap! alerts (fn [a] (vec (take-last alert-cap (concat a al)))))
+            (doseq [a al] (println (format "[alert/%s] %s — %s" (:level a) (:node a) (:msg a)))))
           (when (and token target (persist! fleet token target snap)) (swap! persisted inc)))
         (catch Exception e (binding [*out* *err*] (println "snapshot error:" (.getMessage e)))))
       (Thread/sleep (* 1000 interval))

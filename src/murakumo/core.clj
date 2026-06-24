@@ -196,7 +196,8 @@
 
 (defn- launch [host action]
   (ssh/sh host (case action
-                 :up   (format "sudo launchctl kickstart -k system/%s" plist-label)
+                 ;; bootstrap if `down` (bootout) unloaded it, else just (re)kickstart.
+                 :up   (format "sudo launchctl bootstrap system /Library/LaunchDaemons/%s.plist 2>/dev/null; sudo launchctl kickstart -k system/%s" plist-label plist-label)
                  :down (format "sudo launchctl bootout system/%s" plist-label))))
 
 (defn cmd-up   [fleet [sel]] (doseq [n (fleet/select fleet sel)] (println (:name n) (:exit (launch (:host n) :up)))))
@@ -338,9 +339,16 @@
             (pr-str {:source src :git-sha sha :version ver :features "p2p,realtime-wasm"}))
       (println (format "pinned kotoba + kotoba-server → bin/  (src %s @ %s, %s)" src sha ver)))))
 
+(defn cmd-dash
+  "Web dashboard + Datom-log snapshotter. Args: [port=8899] [interval-s=15]."
+  [_ args]
+  (require 'murakumo.dash)
+  (apply (resolve 'murakumo.dash/-main) args))
+
 (def ^:private commands
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
-   "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin})
+   "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin
+   "dash" cmd-dash})
 
 (defn -main [& args]
   (let [[cmd & rest] args
@@ -355,5 +363,6 @@
           (println "  mesh      [node|all]        form ONE gossipsub lattice (2-pass: peer-id + bootstrap)")
           (println "  up/down   [node|all]        start/stop the resident mesh node")
           (println "  status    [node|all]        fold /health across the fleet (PEERS = live links)")
-          (println "  deploy    <app.edn> [node]  compile clj→WASM + publish to a node's lattice")
+          (println "  deploy    <app.edn> [node]  compile clj→WASM + distribute + publish to the lattice")
+          (println "  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log")
           (println "\nenv: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR")))))
