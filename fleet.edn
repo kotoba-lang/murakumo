@@ -10,6 +10,7 @@
 ;; from the k3s/Ansible LangGraph-cell control plane (etzhayyim-project-murakumo).
 {:fleet/name "com-junkawasaki-kotoba-mesh"
  :fleet/port 8077                      ; default kotoba-server HTTP port per node
+ :fleet/p2p-port 4001                  ; default libp2p QUIC port (fixed → predictable multiaddr)
  :fleet/operator-seed-env "MURAKUMO_OPERATOR_SEED"  ; 32-byte hex; shared operator DID across the fleet
 
  :nodes
@@ -19,7 +20,9 @@
   {:name "zebulun"  :host "zebulun"  :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   {:name "levi"     :host "levi"     :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   {:name "joseph"   :host "joseph"   :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
-  {:name "issachar" :host "issachar" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  ;; issachar already runs a kotoba-server on :8077 (yabai CTI persistence) — give
+  ;; the murakumo mesh node its own ports so the two coexist.
+  {:name "issachar" :host "issachar" :port 8076 :p2p-port 4002 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   {:name "dan"      :host "dan"      :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   {:name "benjamin" :host "benjamin" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   ;; asher = replica/failover; also the canary (verified reachable first).

@@ -24,7 +24,14 @@
     <key>KOTOBA_AGENT_ED25519_HEX</key> <string>{{ED25519}}</string>
     <key>KOTOBA_AGENT_X25519_HEX</key>  <string>{{X25519}}</string>
     <key>KOTOBA_AGENT_DID</key>         <string>{{DID}}</string>
-    <key>RUST_LOG</key>              <string>kotoba_server::net_actor=info,kotoba_server=warn</string>
+    <!-- libp2p lattice: fixed P2P port + stable PeerId (from a per-node seed) +
+         own external multiaddr + comma-list of bootstrap peers (peerid@multiaddr).
+         These turn the per-node lattices into ONE gossipsub mesh. -->
+    <key>KOTOBA_P2P_PORT</key>          <string>{{P2PPORT}}</string>
+    <key>KOTOBA_P2P_ED25519_HEX</key>   <string>{{P2PSEED}}</string>
+    <key>KOTOBA_P2P_EXTERNAL_ADDR</key> <string>{{EXTADDR}}</string>
+    <key>KOTOBA_BOOTSTRAP_PEERS</key>   <string>{{BOOTSTRAP}}</string>
+    <key>RUST_LOG</key>              <string>kotoba_server::net_actor=info,kotoba_net=info,kotoba_server=warn</string>
   </dict>
   <key>RunAtLoad</key>        <true/>
   <key>KeepAlive</key>        <true/>

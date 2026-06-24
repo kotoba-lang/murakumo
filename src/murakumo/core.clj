@@ -65,47 +65,103 @@
                          (if (:online? n) "yes" "no")
                          (if ssh-ok "ok" "no") mesh))))))
 
+(def ^:private peers-file ".murakumo-peers.edn")  ; node-name → libp2p PeerId (control-plane state)
+
+(defn- node-port [fleet n] (or (:port n) (:fleet/port fleet) 8077))
+(defn- node-p2p-port [fleet n] (or (:p2p-port n) (:fleet/p2p-port fleet) 4001))
+(defn- node-p2p-seed [fleet n] (sha256-hex (str (operator-seed fleet) ":" (:name n) ":p2p")))
+(defn- multiaddr [ip port] (format "/ip4/%s/udp/%d/quic-v1" ip port))
+
+(defn- bootstrap-str
+  "Comma-list of `peerid@multiaddr` for every OTHER node we know a PeerId for."
+  [fleet peers self]
+  (->> (:nodes fleet)
+       (remove #(= (:name %) (:name self)))
+       (keep (fn [n] (when-let [pid (get peers (:name n))]
+                       (str pid "@" (multiaddr (:ip n) (node-p2p-port fleet n))))))
+       (str/join ",")))
+
+(defn- provision-node
+  "rsync the binaries + render & load the LaunchDaemon for one (enriched) node.
+   `peers` is the name→PeerId map (for KOTOBA_BOOTSTRAP_PEERS; may be empty)."
+  [fleet tmpl peers n]
+  (let [host (:host n)]
+    (print (format "[%s] " (:name n))) (flush)
+    (if-not (ssh/reachable? host)
+      (println "unreachable — skipped")
+      (let [op-seed (operator-seed fleet)
+            user (:out (ssh/sh host "whoami"))
+            home (:out (ssh/sh host "echo $HOME"))
+            plist (-> tmpl
+                      (str/replace "{{USER}}" user)
+                      (str/replace "{{BIN}}" (str home "/.murakumo/bin"))
+                      (str/replace "{{PORT}}" (str (node-port fleet n)))
+                      (str/replace "{{ROLES}}" (str/join "," (:roles n)))
+                      (str/replace "{{LABELS}}" (->> (:labels n) (map (fn [[k v]] (str (name k) "=" v))) (str/join ",")))
+                      (str/replace "{{HOME}}" home)
+                      (str/replace "{{ED25519}}" op-seed)
+                      (str/replace "{{X25519}}" (sha256-hex (str op-seed ":x25519")))
+                      (str/replace "{{DID}}" (did-for op-seed))
+                      (str/replace "{{P2PPORT}}" (str (node-p2p-port fleet n)))
+                      (str/replace "{{P2PSEED}}" (node-p2p-seed fleet n))
+                      (str/replace "{{EXTADDR}}" (if (:ip n) (multiaddr (:ip n) (node-p2p-port fleet n)) ""))
+                      (str/replace "{{BOOTSTRAP}}" (bootstrap-str fleet peers n)))]
+        (ssh/sh host "mkdir -p ~/.murakumo/bin ~/.murakumo/store")
+        (print "rsync… ") (flush)
+        (doseq [bin ["kotoba" "kotoba-server"]]
+          (apply p/sh (concat ["rsync" "-az" "-e" "ssh -o BatchMode=yes -o ConnectTimeout=8"]
+                              [(str local-bin "/" bin) (str host ":.murakumo/bin/" bin)])))
+        (let [pp (str "/Library/LaunchDaemons/" plist-label ".plist")]
+          (ssh/sh host (format "sudo tee %s >/dev/null <<'PLIST'\n%s\nPLIST" pp plist))
+          (ssh/sh host (format "sudo launchctl bootout system/%s 2>/dev/null; sudo launchctl bootstrap system %s" plist-label pp)))
+        (println (str "provisioned + loaded" (when (seq (bootstrap-str fleet peers n)) " (peered)")))))))
+
+(defn- load-peers [] (try (clojure.edn/read-string (slurp peers-file)) (catch Exception _ {})))
+
 (defn cmd-provision
-  "Push the kotoba binaries + a rendered LaunchAgent to selected node(s), then
-   load it. Idempotent. Requires MURAKUMO_OPERATOR_SEED in the env."
+  "Push binaries + a resident LaunchDaemon to selected node(s). Idempotent.
+   Uses any known PeerIds (.murakumo-peers.edn) for bootstrap. Requires
+   MURAKUMO_OPERATOR_SEED."
   [fleet [sel]]
   (when-not (operator-seed fleet)
     (binding [*out* *err*] (println "set MURAKUMO_OPERATOR_SEED (32-byte hex) first")) (System/exit 2))
-  (let [port (str (:fleet/port fleet 8077))
-        tmpl (slurp "deploy/com.murakumo.kotoba-mesh.plist.tmpl")]
-    (doseq [n (fleet/select fleet sel)]
-      (let [host (:host n)]
-        (print (format "[%s] " (:name n))) (flush)
-        (if-not (ssh/reachable? host)
-          (println "unreachable — skipped")
-          (let [;; reuse the operator DID (shared) so writes are operator-attributed.
-                op-seed (operator-seed fleet)
-                did (did-for op-seed)
-                user (:out (ssh/sh host "whoami"))
-                roles (str/join "," (:roles n))
-                labels (->> (:labels n) (map (fn [[k v]] (str (name k) "=" v))) (str/join ","))
-                home (:out (ssh/sh host "echo $HOME"))
-                plist (-> tmpl
-                          (str/replace "{{USER}}" user)
-                          (str/replace "{{BIN}}" (str home "/.murakumo/bin"))
-                          (str/replace "{{PORT}}" port)
-                          (str/replace "{{ROLES}}" roles)
-                          (str/replace "{{LABELS}}" labels)
-                          (str/replace "{{HOME}}" home)
-                          (str/replace "{{ED25519}}" op-seed)
-                          (str/replace "{{X25519}}" (sha256-hex (str op-seed ":x25519")))
-                          (str/replace "{{DID}}" did))]
-            (ssh/sh host "mkdir -p ~/.murakumo/bin ~/.murakumo/store")
-            (print "rsync… ") (flush)
-            (doseq [bin ["kotoba" "kotoba-server"]]
-              (apply p/sh (concat ["rsync" "-az" "-e" "ssh -o BatchMode=yes -o ConnectTimeout=8"]
-                                  [(str local-bin "/" bin) (str host ":.murakumo/bin/" bin)])))
-            ;; LaunchDaemon (system domain) → headless residence, no GUI session.
-            ;; Needs passwordless sudo on the node (true for the fleet).
-            (let [pp (str "/Library/LaunchDaemons/" plist-label ".plist")]
-              (ssh/sh host (format "sudo tee %s >/dev/null <<'PLIST'\n%s\nPLIST" pp plist))
-              (ssh/sh host (format "sudo launchctl bootout system/%s 2>/dev/null; sudo launchctl bootstrap system %s" plist-label pp)))
-            (println "provisioned + loaded (LaunchDaemon)")))))))
+  (let [tmpl (slurp "deploy/com.murakumo.kotoba-mesh.plist.tmpl")
+        fleet (fleet/enrich fleet)
+        peers (load-peers)]
+    (doseq [n (fleet/select fleet sel)] (provision-node fleet tmpl peers n))))
+
+(defn- node-peer-id
+  "Read a node's stable libp2p PeerId from its mesh.log (net_actor logs it as
+   `node_did=did:key:<peerid>` on lattice startup)."
+  [host]
+  (let [out (:out (ssh/sh host "grep -ho 'did:key:12D3[A-Za-z0-9]*' ~/.murakumo/mesh.log 2>/dev/null | tail -1"))]
+    (when (str/starts-with? (str out) "did:key:12D3") (subs out 8))))
+
+(defn cmd-mesh
+  "Form ONE gossipsub lattice across the fleet (2-pass): provision every node
+   with a fixed P2P port + stable PeerId, collect the PeerIds, then re-provision
+   with each node's KOTOBA_BOOTSTRAP_PEERS = all the others. After this, nodes
+   dial each other over Tailscale and a component placed anywhere can run anywhere."
+  [fleet [sel]]
+  (when-not (operator-seed fleet)
+    (binding [*out* *err*] (println "set MURAKUMO_OPERATOR_SEED first")) (System/exit 2))
+  (let [tmpl (slurp "deploy/com.murakumo.kotoba-mesh.plist.tmpl")
+        fleet (fleet/enrich fleet)
+        nodes (fleet/select fleet sel)]
+    (println "── pass 1: provision with fixed P2P port + stable PeerId ──")
+    (doseq [n nodes] (provision-node fleet tmpl {} n))
+    (println "── waiting for nodes to advertise their PeerId ──")
+    (Thread/sleep 8000)
+    (let [peers (into {} (for [n nodes
+                               :when (and (:ip n) (ssh/reachable? (:host n)))
+                               :let [pid (node-peer-id (:host n))]
+                               :when pid]
+                           [(:name n) pid]))]
+      (spit peers-file (pr-str peers))
+      (println (format "── collected %d PeerIds → %s ──" (count peers) peers-file))
+      (println "── pass 2: re-provision with KOTOBA_BOOTSTRAP_PEERS = the others ──")
+      (doseq [n nodes] (provision-node fleet tmpl peers n))
+      (println "── lattice forming; check `murakumo status` (PEERS should climb) ──"))))
 
 (defn- launch [host action]
   (ssh/sh host (case action
@@ -115,24 +171,31 @@
 (defn cmd-up   [fleet [sel]] (doseq [n (fleet/select fleet sel)] (println (:name n) (:exit (launch (:host n) :up)))))
 (defn cmd-down [fleet [sel]] (doseq [n (fleet/select fleet sel)] (println (:name n) (:exit (launch (:host n) :down)))))
 
+(defn- node-links
+  "Distinct libp2p peers this node has connected to (from its mesh.log — the real
+   lattice connectivity signal; the /health peer_count is the KDHT neighborhood,
+   not the live link set)."
+  [host]
+  (let [out (:out (ssh/sh host "grep 'kotoba-net: peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l"))]
+    (str/trim (str out))))
+
 (defn cmd-status
-  "Fold every node's /health (+ lattice ps) into one view — the management read."
+  "Fold every node's /health into one view — the management read. LINKS is the
+   number of distinct mesh peers the node has connected to (>0 once `mesh` ran)."
   [fleet [sel]]
-  (let [port (:fleet/port fleet 8077)]
-    (println (format "%-10s %-8s %-12s %-7s %s" "NODE" "HEALTH" "WASM-EXEC" "PEERS" "HOSTED"))
-    (doseq [n (fleet/select (fleet/enrich fleet) sel)]
-      (if-not (and (:online? n) (ssh/reachable? (:host n)))
-        (println (format "%-10s %-8s" (:name n) "down"))
-        (let [h (ssh/curl-local (:host n) (format "http://localhost:%d/health" port))
-              j (try (json/parse-string h true) (catch Exception _ nil))
-              subs (:subsystems j)
-              hosted (-> (ssh/curl-local (:host n) (format "http://localhost:%d/xrpc/com.etzhayyim.apps.kotoba.lattice.ps" port)))]
-          (println (format "%-10s %-8s %-12s %-7s %s"
-                           (:name n)
-                           (if j "ok" "no-resp")
-                           (or (:wasm_executor subs) "?")
-                           (get-in j [:node :peer_count] "?")
-                           (if (str/blank? hosted) "-" (subs hosted 0 (min 40 (count hosted)))))))))))
+  (println (format "%-10s %-8s %-12s %-6s %s" "NODE" "HEALTH" "WASM-EXEC" "LINKS" "P2P-PORT"))
+  (doseq [n (fleet/select (fleet/enrich fleet) sel)]
+    (if-not (and (:online? n) (ssh/reachable? (:host n)))
+      (println (format "%-10s %-8s" (:name n) "down"))
+      (let [h (ssh/curl-local (:host n) (format "http://localhost:%d/health" (node-port fleet n)))
+            j (try (json/parse-string h true) (catch Exception _ nil))
+            subs (:subsystems j)]
+        (println (format "%-10s %-8s %-12s %-6s %d"
+                         (:name n)
+                         (if j "ok" "no-resp")
+                         (or (:wasm_executor subs) "?")
+                         (if j (node-links (:host n)) "-")
+                         (node-p2p-port fleet n)))))))
 
 (defn- b64url [^bytes b]
   (-> (.encodeToString (java.util.Base64/getUrlEncoder) b) (str/replace "=" "")))
@@ -151,8 +214,8 @@
    component is PLACED + its cron fires. Usage: deploy <app.edn> [node]."
   [fleet [manifest sel]]
   (when-not manifest (binding [*out* *err*] (println "usage: deploy <app.edn> [node]")) (System/exit 2))
-  (let [port (:fleet/port fleet 8077)
-        node (first (fleet/select fleet (or sel "asher")))
+  (let [node (first (fleet/select fleet (or sel "asher")))
+        port (node-port fleet node)
         wit (str kotoba-dir "/crates/kotoba-runtime/wit")
         kotoba (str local-bin "/kotoba")
         token (op-token (did-for (operator-seed fleet)))
@@ -178,7 +241,7 @@
 
 (def ^:private commands
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
-   "status" cmd-status "deploy" cmd-deploy})
+   "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh})
 
 (defn -main [& args]
   (let [[cmd & rest] args
@@ -188,8 +251,9 @@
       (do (println "murakumo — kotoba WASM mesh control plane\n")
           (println "commands:")
           (println "  nodes                       fleet reachability + mesh presence")
-          (println "  provision [node|all]        rsync binaries + install resident LaunchAgent")
+          (println "  provision [node|all]        rsync binaries + install resident LaunchDaemon")
+          (println "  mesh      [node|all]        form ONE gossipsub lattice (2-pass: peer-id + bootstrap)")
           (println "  up/down   [node|all]        start/stop the resident mesh node")
-          (println "  status    [node|all]        fold /health + lattice ps across the fleet")
+          (println "  status    [node|all]        fold /health across the fleet (PEERS = live links)")
           (println "  deploy    <app.edn> [node]  compile clj→WASM + publish to a node's lattice")
           (println "\nenv: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR")))))
