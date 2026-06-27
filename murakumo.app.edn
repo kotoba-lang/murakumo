@@ -1,0 +1,45 @@
+;; murakumo.app.edn — DECLARATIVE desired state for the kotoba WASM mesh fleet.
+;;
+;; This is murakumo's wadm manifest. You declare *what should be running and with
+;; what spread*; `bb murakumo reconcile murakumo.app.edn` folds it against the live
+;; placement (dash/collect) and reports the drift; `--apply` converges the fleet
+;; (re-publishes under-replicated apps so the auction places them on eligible
+;; nodes); `--watch` keeps it converged and records each plan to the Datom log.
+;;
+;; Per-app keys:
+;;   :name       label for this app in plans/history (required)
+;;   :manifest   path (relative to THIS file) to the kotoba app.edn that compiles
+;;               clj→WASM on `--apply` (publish path). Required to actually place.
+;;   :cid        the component CID once known — fills in after a first `deploy`/
+;;               `component build`. Lets reconcile MATCH observed placement (the
+;;               node logs `trigger: executed … <cid>`) without a rebuild. If
+;;               absent, the app is reported :needs-build (placement is unknown).
+;;   :replicas   desired number of eligible nodes hosting it (default 1)
+;;   :placement  eligibility constraint the auction must honour:
+;;                 :labels  every k/v must match the node's KOTOBA_NODE_LABELS
+;;                 :roles   every role must be in the node's KOTOBA_NODE_ROLES
+;;               (omit for "any node")
+;; NOTE on layering vs kotoba's own manifest: a kotoba `kotoba.app.edn` already
+;; carries per-component `:scale` + `:placement` and `app deploy --publish` places
+;; them ONCE via the auction. murakumo.app.edn sits ABOVE that: it declares the
+;; FLEET-level desired replica count per app and CONTINUOUSLY reconciles observed
+;; placement back to it (drift detection + self-heal + as-of history on the Datom
+;; log) — the convergence loop kotoba's one-shot deploy doesn't have.
+{:murakumo/version 1
+ :apps
+ [{:name      "kotodama-bot"
+   ;; the real kotoba mesh example (clj→wasm); path is relative to THIS file.
+   :manifest  "../kotoba/examples/kotoba-mesh-app/kotoba.app.edn"
+   ;; :cid    "bafy…"            ; ← paste a component CID after a first deploy to
+   ;;                              enable match-without-rebuild (else :needs-build)
+   :replicas  2
+   :placement {:labels {:tier "edge" :zone "jp"} :roles ["compute"]}}
+
+  ;; A browser-facing component: :reach declares the client class it must serve.
+  ;; connect.edn says native nodes speak only :quic on the live plane, so until
+  ;; :webrtc is wired into the native class this app reconciles to :blocked —
+  ;; honestly, instead of being placed where browsers can't reach it.
+  {:name      "live-ui"
+   :manifest  "apps/live-ui.edn"
+   :replicas  1
+   :placement {:roles ["compute"] :reach [:browser/live]}}]}

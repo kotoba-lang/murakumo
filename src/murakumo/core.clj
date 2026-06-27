@@ -13,6 +13,7 @@
             [clojure.string :as str]
             [cheshire.core :as json]
             [murakumo.fleet :as fleet]
+            [murakumo.reconcile :as reconcile]
             [murakumo.ssh :as ssh]))
 
 (def ^:private remote-bin "$HOME/.murakumo/bin")  ; where node binaries live
@@ -345,10 +346,20 @@
   (require 'murakumo.dash)
   (apply (resolve 'murakumo.dash/-main) args))
 
+(defn cmd-reconcile
+  "Declarative fleet reconcile (murakumo's wadm). Folds a desired-state manifest
+   (murakumo.app.edn) against live placement and reports/converges the drift.
+   Placement is delegated back to `deploy` (publish → auction places on eligible
+   nodes). See murakumo.reconcile."
+  [fleet args]
+  (let [deploy-fn (fn [a manifest-dir]
+                    (cmd-deploy fleet [(str manifest-dir "/" (:manifest a)) nil]))]
+    (reconcile/cmd-reconcile fleet (cons "reconcile" args) deploy-fn)))
+
 (def ^:private commands
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
    "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin
-   "dash" cmd-dash})
+   "dash" cmd-dash "reconcile" cmd-reconcile})
 
 (defn -main [& args]
   (let [[cmd & rest] args
@@ -364,5 +375,6 @@
           (println "  up/down   [node|all]        start/stop the resident mesh node")
           (println "  status    [node|all]        fold /health across the fleet (PEERS = live links)")
           (println "  deploy    <app.edn> [node]  compile clj→WASM + distribute + publish to the lattice")
+          (println "  reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]  declarative desired-state (wadm)")
           (println "  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log")
           (println "\nenv: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR")))))

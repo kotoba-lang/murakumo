@@ -1,0 +1,46 @@
+;; connect.edn — ONE declarative description of how the kotoba mesh connects.
+;;
+;; Like a Connect schema (one description that spans every transport/protocol),
+;; this is the single source of truth for connectivity. Everything else (kotoba-net
+;; swarm config, murakumo placement reach) should derive from it, not redeclare it.
+;;
+;; The mesh has TWO planes (see 90-docs/adr/2606271700-kotoba-transport-planes.md):
+;;   :read — CID-over-HTTP. transport-UNtrusted: CID == sha256(dag-cbor(bytes)) is
+;;           the trust, so any gateway/peer/CDN serving the bytes is equivalent.
+;;           Browser + edge are first-class here with ZERO p2p transport.
+;;   :live — libp2p multi-transport (quic/webrtc/webtransport/wss). Only an
+;;           availability/liveness layer (placement gossip, realtime, 持ち合い).
+;;
+;; Node CLASSES declare which transports each kind of node actually speaks.
+;; murakumo's `reconcile` reads this to honour an app's :placement {:reach […]}:
+;; place a component only on nodes that can REACH its intended client class.
+{:connect/version 1
+
+ :planes
+ {:read {:protocol :http
+         :alpn     [:h3 :h2]                 ; HTTP/3 preferred, HTTP/2 fallback
+         :trust    :cid                      ; CID verification, not transport security
+         :cache    :immutable                ; CIDs are immutable ⇒ CDN ∞-TTL cacheable
+         :surface  [:block.get :wasi-http :xrpc :firehose-sse]}
+  :live {:transports [:quic :webrtc :webtransport :wss]
+         :security   :noise                  ; CA-less (Noise / certhash), per libp2p
+         :relay      :circuit-relay-v2
+         :holepunch  :dcutr
+         :turn       "kotoba-turn (RFC 8656) — reused for webrtc ICE relay"}}
+
+ ;; node-class → the transports it speaks on each plane, and whether it can be
+ ;; DIALED (a server/peer) or is a leaf (a browser tab dials out only).
+ ;; `:read [:http]` is universal (every class can pull by CID).
+ :classes
+ {:native  {:read [:http] :live [:quic]                 :dialable true}   ; mac-mini fleet (today)
+  :edge    {:read [:http] :live [:wss]                   :dialable true}   ; CF Worker / Deno Deploy
+  :browser {:read [:http] :live [:webrtc :webtransport]  :dialable false}} ; tab
+
+ ;; the class a fleet.edn node gets when it doesn't declare :class.
+ :default-class :native
+
+ ;; WIRING KNOB — to let the native fleet serve BROWSER live peers (webrtc) or
+ ;; EDGE peers (wss), add that transport to :native :live above. That single edit
+ ;; (plus the kotoba-net swarm gaining the transport) flips reconcile eligibility
+ ;; for every :reach :browser/live app. Tracked as the next increment in the ADR.
+ :roadmap {:native-live-target [:quic :webrtc :wss]}}
