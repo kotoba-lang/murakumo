@@ -42,4 +42,16 @@
   {:name      "live-ui"
    :manifest  "apps/live-ui.edn"
    :replicas  1
-   :placement {:roles ["compute"] :reach [:browser/live]}}]}
+   :placement {:roles ["compute"] :reach [:browser/live]}}
+
+  ;; kenchi (検地) worldwide real-estate valuation actor — ON-MESH surface only:
+  ;; serves/refreshes governor-CLEARED, license-stamped valuation records the
+  ;; off-mesh ParcelActor wrote to the Datom log (heavy ingest+fusion runs on the
+  ;; JVM operator side; ToS-restricted inputs stay Murakumo-only). See
+  ;; ../kenchi-actor/mesh/kenchi.app.edn and ../kenchi-actor/docs/DESIGN.md §6.
+  {:name      "kenchi-valuation"
+   :manifest  "../kenchi-actor/mesh/kenchi.app.edn"
+   ;; :cid    "bafy…"   ; paste after a first `deploy`/`component build` to match
+   ;;                     observed placement without a rebuild (else :needs-build)
+   :replicas  2
+   :placement {:labels {:tier "edge" :zone "jp"} :roles ["compute"]}}]}
