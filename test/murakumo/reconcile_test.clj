@@ -107,6 +107,16 @@
   (testing "no connect spec ⇒ reach is a no-op (degrades, never blocks)"
     (is (seq (r/eligible-nodes fleet {:roles ["compute"] :reach [:browser/live]} nil)))))
 
+(deftest real-connect-edn-native-speaks-webrtc
+  ;; Guard the 2026-06-27 flip: connect.edn :native :live now includes :webrtc, so
+  ;; native fleet nodes are eligible for :reach :browser/live apps. Backed by
+  ;; kotoba#229 (webrtc-direct transport + KOTOBA_WEBRTC listen) + provision render.
+  (let [conn (c/load-connect "connect.edn")]
+    (is (some? conn) "connect.edn loads")
+    (is (true? (c/serves-reach? conn {:name "asher"} :browser/live))
+        "native must serve browser/live after the flip")
+    (is (true? (c/serves-reach? conn {:name "asher"} :native/live)))))
+
 (deftest reach-unreachable-is-blocked
   (let [d (r/reconcile-app fleet snap connect
                            {:name "ui" :cid "bafyUI" :replicas 1

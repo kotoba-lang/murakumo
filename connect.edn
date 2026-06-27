@@ -32,15 +32,17 @@
  ;; DIALED (a server/peer) or is a leaf (a browser tab dials out only).
  ;; `:read [:http]` is universal (every class can pull by CID).
  :classes
- {:native  {:read [:http] :live [:quic]                 :dialable true}   ; mac-mini fleet (today)
+ {:native  {:read [:http] :live [:quic :webrtc]          :dialable true}   ; mac-mini fleet (quic + webrtc-direct)
   :edge    {:read [:http] :live [:wss]                   :dialable true}   ; CF Worker / Deno Deploy
   :browser {:read [:http] :live [:webrtc :webtransport]  :dialable false}} ; tab
 
  ;; the class a fleet.edn node gets when it doesn't declare :class.
  :default-class :native
 
- ;; WIRING KNOB — to let the native fleet serve BROWSER live peers (webrtc) or
- ;; EDGE peers (wss), add that transport to :native :live above. That single edit
- ;; (plus the kotoba-net swarm gaining the transport) flips reconcile eligibility
- ;; for every :reach :browser/live app. Tracked as the next increment in the ADR.
+ ;; WIRING KNOB (FLIPPED 2026-06-27) — `:native :live` now includes `:webrtc`, so
+ ;; reconcile makes every `:reach :browser/live` app eligible on the fleet. This is
+ ;; backed by: kotoba-net's `webrtc` feature + /webrtc-direct listen (kotoba#229),
+ ;; and `provision` rendering KOTOBA_WEBRTC on native nodes. ⚠ The pinned binary must
+ ;; be BUILT `--features p2p,webrtc` (bin/BUILD.edn :features) for the listen to bind;
+ ;; otherwise the env is a no-op and the node won't actually serve browser-live.
  :roadmap {:native-live-target [:quic :webrtc :wss]}}
