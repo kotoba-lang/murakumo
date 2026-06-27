@@ -136,7 +136,14 @@
                               [(str local-bin "/" bin) (str host ":.murakumo/bin/" bin)])))
         (let [pp (str "/Library/LaunchDaemons/" plist-label ".plist")]
           (ssh/sh host (format "sudo tee %s >/dev/null <<'PLIST'\n%s\nPLIST" pp plist))
-          (ssh/sh host (format "sudo launchctl bootout system/%s 2>/dev/null; sudo launchctl bootstrap system %s" plist-label pp)))
+          ;; RE-provision safety: on a node already running the service, an immediate
+          ;; bootstrap after bootout races launchd and leaves the service UNLOADED
+          ;; (caught by the asher canary). Settle after bootout, tolerate a re-bootstrap
+          ;; of an already-loaded label, then kickstart to force the (re)start.
+          (ssh/sh host (format (str "sudo launchctl bootout system/%s 2>/dev/null || true; sleep 1; "
+                                    "sudo launchctl bootstrap system %s 2>/dev/null || true; "
+                                    "sudo launchctl kickstart -k system/%s")
+                               plist-label pp plist-label)))
         (println (str "provisioned + loaded" (when (seq (bootstrap-str fleet peers n)) " (peered)")))))))
 
 (defn- load-peers [] (try (clojure.edn/read-string (slurp peers-file)) (catch Exception _ {})))
