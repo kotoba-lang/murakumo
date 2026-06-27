@@ -12,7 +12,9 @@
   (:require [babashka.process :as p]
             [clojure.string :as str]
             [cheshire.core :as json]
+            [murakumo.connect :as connect]
             [murakumo.fleet :as fleet]
+            [murakumo.reconcile :as reconcile]
             [murakumo.ssh :as ssh]))
 
 (def ^:private remote-bin "$HOME/.murakumo/bin")  ; where node binaries live
@@ -78,6 +80,17 @@
 
 (defn- node-port [fleet n] (or (:port n) (:fleet/port fleet) 8077))
 (defn- node-p2p-port [fleet n] (or (:p2p-port n) (:fleet/p2p-port fleet) 4001))
+
+(defn- node-webrtc-port
+  "The /webrtc-direct UDP port for a node whose connect.edn class speaks :webrtc on
+   the Live plane, or nil (→ empty KOTOBA_WEBRTC = off). Offset +100 from the p2p
+   port so it never clashes with the QUIC port. Requires a binary built with the
+   `webrtc` feature for the env to actually bind (see connect.edn / bin/BUILD.edn)."
+  [fleet n]
+  (let [conn (connect/load-connect)]
+    (when (and conn (some #{:webrtc}
+                          (set (connect/class-transports conn (connect/node-class conn n) :live))))
+      (+ 100 (node-p2p-port fleet n)))))
 (defn- node-p2p-seed [fleet n] (sha256-hex (str (operator-seed fleet) ":" (:name n) ":p2p")))
 (defn- multiaddr [ip port] (format "/ip4/%s/udp/%d/quic-v1" ip port))
 
@@ -114,7 +127,8 @@
                       (str/replace "{{P2PPORT}}" (str (node-p2p-port fleet n)))
                       (str/replace "{{P2PSEED}}" (node-p2p-seed fleet n))
                       (str/replace "{{EXTADDR}}" (if (:ip n) (multiaddr (:ip n) (node-p2p-port fleet n)) ""))
-                      (str/replace "{{BOOTSTRAP}}" (bootstrap-str fleet peers n)))]
+                      (str/replace "{{BOOTSTRAP}}" (bootstrap-str fleet peers n))
+                      (str/replace "{{WEBRTC}}" (str (node-webrtc-port fleet n))))]
         (ssh/sh host "mkdir -p ~/.murakumo/bin ~/.murakumo/store")
         (print "rsync… ") (flush)
         (doseq [bin ["kotoba" "kotoba-server"]]
@@ -336,7 +350,10 @@
     (let [sha (str/trim (str (:out (p/sh "git" "-C" src "rev-parse" "--short" "HEAD"))))
           ver (str/trim (str (:out (p/sh (str dest "/kotoba") "--version"))))]
       (spit (str dest "/BUILD.edn")
-            (pr-str {:source src :git-sha sha :version ver :features "p2p,realtime-wasm"}))
+            ;; webrtc: the fleet's browser-Live transport (connect.edn :native :live ⊇
+            ;; :webrtc). Build kotoba with `--features p2p,realtime-wasm,webrtc` so the
+            ;; KOTOBA_WEBRTC /webrtc-direct listen actually binds.
+            (pr-str {:source src :git-sha sha :version ver :features "p2p,realtime-wasm,webrtc"}))
       (println (format "pinned kotoba + kotoba-server → bin/  (src %s @ %s, %s)" src sha ver)))))
 
 (defn cmd-dash
@@ -345,10 +362,20 @@
   (require 'murakumo.dash)
   (apply (resolve 'murakumo.dash/-main) args))
 
+(defn cmd-reconcile
+  "Declarative fleet reconcile (murakumo's wadm). Folds a desired-state manifest
+   (murakumo.app.edn) against live placement and reports/converges the drift.
+   Placement is delegated back to `deploy` (publish → auction places on eligible
+   nodes). See murakumo.reconcile."
+  [fleet args]
+  (let [deploy-fn (fn [a manifest-dir]
+                    (cmd-deploy fleet [(str manifest-dir "/" (:manifest a)) nil]))]
+    (reconcile/cmd-reconcile fleet (cons "reconcile" args) deploy-fn)))
+
 (def ^:private commands
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
    "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin
-   "dash" cmd-dash})
+   "dash" cmd-dash "reconcile" cmd-reconcile})
 
 (defn -main [& args]
   (let [[cmd & rest] args
@@ -364,5 +391,6 @@
           (println "  up/down   [node|all]        start/stop the resident mesh node")
           (println "  status    [node|all]        fold /health across the fleet (PEERS = live links)")
           (println "  deploy    <app.edn> [node]  compile clj→WASM + distribute + publish to the lattice")
+          (println "  reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]  declarative desired-state (wadm)")
           (println "  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log")
           (println "\nenv: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR")))))
