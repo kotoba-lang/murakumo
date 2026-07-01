@@ -6,18 +6,14 @@
 
 (ns murakumo.ssh
   (:require [babashka.process :as p]
-            [clojure.string :as str]))
-
-(def ^:private ssh-opts
-  ["-o" "BatchMode=yes" "-o" "ConnectTimeout=8" "-o" "StrictHostKeyChecking=accept-new"])
+            [murakumo.tunnel :as tunnel]))
 
 (defn sh
   "Run `cmd` (a shell string) on `host` over SSH. Returns {:exit :out :err}.
    Never throws on a non-zero remote exit — the caller inspects :exit."
   [host cmd]
-  (let [{:keys [exit out err]}
-        (apply p/sh (concat ["ssh"] ssh-opts [host cmd]))]
-    {:exit exit :out (str/trim (str out)) :err (str/trim (str err))}))
+  (tunnel/sh-result
+   (apply p/sh (tunnel/ssh-argv host cmd))))
 
 (defn reachable?
   "True if `host` answers SSH within the connect timeout."
@@ -27,12 +23,11 @@
 (defn scp
   "Copy a local file to `host:dest`. Returns {:exit :err}."
   [host local dest]
-  (let [{:keys [exit err]}
-        (apply p/sh (concat ["scp"] ssh-opts [local (str host ":" dest)]))]
-    {:exit exit :err (str/trim (str err))}))
+  (tunnel/scp-result
+   (apply p/sh (tunnel/scp-argv host local dest))))
 
 (defn curl-local
   "Run a curl on the node against its OWN loopback (so we read node-local state
    without exposing ports). Returns the body string (empty on failure)."
   [host url]
-  (:out (sh host (format "curl -s -m 5 %s 2>/dev/null" url))))
+  (:out (sh host (tunnel/remote-curl-command url))))

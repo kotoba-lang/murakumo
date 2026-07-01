@@ -1,0 +1,40 @@
+;; murakumo.cloud — CLI shell for the murakumo-native overlay control plane.
+
+(ns murakumo.cloud
+  (:require [murakumo.config :as config]
+            [murakumo.cloud.plan :as plan]
+            [murakumo.fleet :as fleet]
+            [murakumo.identity :as identity]))
+
+(defn load-cloud
+  ([] (load-cloud config/default-cloud-path))
+  ([path] (plan/merge-defaults (config/read-edn-file path))))
+
+(defn- auth-key-from-env [cloud]
+  (when-let [env-name (:overlay/auth-key-env cloud)]
+    (System/getenv env-name)))
+
+(defn- auth-key-from-operator-seed [cloud fleet]
+  (when (= :operator-seed (:overlay/auth-key-source cloud))
+    (when-let [seed (config/current-operator-seed fleet)]
+      (identity/overlay-auth-key seed (plan/overlay-id cloud)))))
+
+(defn- inject-auth-key [cloud fleet opts]
+  (if-let [auth-key (or (:auth-key opts)
+                        (auth-key-from-env cloud)
+                        (auth-key-from-operator-seed cloud fleet))]
+    (assoc cloud :overlay/auth-key auth-key)
+    cloud))
+
+(defn cmd-cloud
+  "Plan murakumo.cloud overlay records/routes. No network mutation yet."
+  [args]
+  (let [{:keys [command cloud-path fleet-path target] :as opts} (plan/parse-flags args)
+        fleet (fleet/load-fleet fleet-path)
+        cloud (inject-auth-key (load-cloud cloud-path) fleet opts)
+        cloud-plan (plan/cloud-plan fleet cloud)]
+    (doseq [line (plan/command-lines command cloud-plan target opts)]
+      (println line))))
+
+(defn -main [& args]
+  (cmd-cloud args))

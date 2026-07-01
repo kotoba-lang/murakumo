@@ -1,13 +1,16 @@
 # murakumo 叢雲
 
-**Control plane for the kotoba WASM lattice/mesh across the Tailscale Mac-mini fleet.**
+**Control plane for the kotoba WASM lattice/mesh across the Mac-mini fleet.**
 
 kotoba ships a single-node mesh runtime (`kotoba-server` with the `p2p,realtime-wasm`
 features) and a single-node status command (`kotoba lattice ps`) — but **no
 fleet-facing control surface**. `murakumo` is that surface: a thin **babashka/clj**
-operator that runs **from your terminal**, reaches every node over **Tailscale SSH**,
-installs a **resident** kotoba mesh node on each, and folds the whole fleet into one
-view. No agent is installed on the nodes beyond the two kotoba binaries.
+operator that runs **from your terminal**, reaches every node over **Tailscale SSH**
+today, installs a **resident** kotoba mesh node on each, and folds the whole fleet
+into one view. `murakumo.cloud` is the Murakumo-native overlay being built to replace
+the Tailscale/WireGuard dependency with DID/CID identity addressing, policy records,
+direct QUIC/WebRTC/WebTransport paths, and relay fallback. No agent is installed on
+the nodes beyond the two kotoba binaries.
 
 > Not to be confused with the *etzhayyim* murakumo (k3s-on-Lima + Ansible control
 > plane for the religious-corp **LangGraph/Pregel cells**). This repo is the
@@ -40,6 +43,14 @@ bb murakumo deploy app.edn asher  # compile clj→WASM + publish to a node's lat
 bb murakumo provision all         # roll out to the whole fleet once the canary is green
 bb murakumo mesh all              # form ONE gossipsub lattice (fleet-wide auction)
 bb reconcile murakumo.app.edn --dry-run   # declarative desired-state plan (wadm); --apply to converge
+bb cloud plan                     # plan murakumo.cloud overlay records from fleet.edn + cloud.edn
+bb cloud dial asher               # show direct identity-overlay dial hints + relay fallback
+bb cloud connect asher            # print canonical murakumo-overlay driver argv
+bb cloud relay jp-tyo-1           # print canonical murakumo-overlay relay argv
+bb cloud bootstrap                # print relays-first, nodes-second overlay bootstrap plan
+bb cloud bootstrap --format=edn   # machine-readable bootstrap manifest
+bb overlay dial --overlay ...     # validate/normalise a native overlay dial request
+bb overlay relay --overlay ...    # validate/normalise a native overlay relay request
 ```
 
 ## Command surface
@@ -53,6 +64,8 @@ bb reconcile murakumo.app.edn --dry-run   # declarative desired-state plan (wadm
 | `mesh [node\|all]` | 2-pass: provision with a fixed P2P port + stable PeerId, collect PeerIds, re-provision with `KOTOBA_BOOTSTRAP_PEERS` = the others ⇒ ONE gossipsub lattice (fleet-wide auction) |
 | `deploy <app.edn> [node]` | port-forward the node's kotoba port, then `kotoba app deploy --publish` (clj→WASM → lattice) |
 | `reconcile <murakumo.app.edn> [--dry-run\|--apply\|--watch[=secs]]` | **declarative desired-state (wadm)** — fold a fleet manifest vs live placement, report/converge the drift (see below) |
+| `cloud [plan\|records\|routes\|dial\|connect <node>\|relay <name>\|bootstrap] [--cloud=cloud.edn] [--fleet=fleet.edn]` | plan the `murakumo.cloud` identity overlay, route hints, driver argv, relay argv, bootstrap order, and control-plane records that replace an external VPN control plane |
+| `overlay dial\|relay --overlay ...` | native overlay driver shell: validate canonical dial/relay argv and emit the session record a real stream/packet driver will open |
 
 ## Layout
 
@@ -60,14 +73,36 @@ bb reconcile murakumo.app.edn --dry-run   # declarative desired-state plan (wadm
 |---|---|
 | `fleet.edn` | node inventory (host, roles, labels, port) — the SSoT |
 | `connect.edn` | **single connectivity description** (read=HTTP-by-CID / live=libp2p multi-transport); node-class → transports |
+| `cloud.edn` | **murakumo.cloud overlay declaration**: domain, relay set, direct transports, and policy |
 | `murakumo.app.edn` | **declarative desired state** (wadm manifest): apps × replicas × placement (incl. `:reach`) |
-| `src/murakumo/connect.clj` | connect.edn loader + `serves-reach?` (pure: can a node reach a client class on a plane?) |
+| `src/murakumo/config.cljc` | portable config/path/runtime resolution helpers |
+| `src/murakumo/connect.cljc` | connect.edn loader + portable `serves-reach?` (pure: can a node reach a client class on a plane?) |
+| `src/murakumo/cloud.clj` | `bb cloud` CLI shell: load fleet/cloud declarations and print plans or records |
+| `src/murakumo/cloud/plan.cljc` | portable murakumo.cloud overlay planner: stable IDs, relay choice, node/relay/route/policy records |
+| `src/murakumo/overlay.clj` | `bb overlay` CLI shell for the native overlay driver boundary |
+| `src/murakumo/overlay/forward.clj` | local TCP forwarder over the sealed relay stream contract |
+| `src/murakumo/overlay/dial.clj` | host-side dial reachability plus relay hello/frame checks |
+| `src/murakumo/overlay/driver.cljc` | portable overlay driver core: parse/validate canonical dial argv and emit session records |
+| `src/murakumo/overlay/relay.clj` | host-side relay listener process with identity-aware ack and frame handling |
+| `src/murakumo/overlay/runtime.cljc` | portable overlay runtime adapter registry and execution-report placeholder contract |
+| `src/murakumo/deploy/plan.cljc` | portable deploy/pin helpers: app manifest parsing, kotoba command argv shapes, placement observation, pinned binary copy plans |
+| `src/murakumo/identity.cljc` | portable identity formatting helpers: SHA-256 hex, graph CID, operator token |
+| `src/murakumo/persist.cljc` | portable Datom/atproto repo.write envelope helpers |
 | `src/murakumo/ssh.clj` | Tailscale-SSH transport (BatchMode, fast-fail, scp/curl-on-node) |
-| `src/murakumo/fleet.clj` | inventory load + `tailscale status` enrichment + node selector |
+| `src/murakumo/fleet/inventory.cljc` | portable fleet inventory helpers: node port defaults + selector semantics |
+| `src/murakumo/fleet.clj` | inventory load + `tailscale status` enrichment around the `.cljc` inventory helpers |
+| `src/murakumo/provision/plan.cljc` | portable provision/mesh helpers: p2p ports, bootstrap peers, plist rendering, rsync argv, launch commands |
+| `src/murakumo/report.cljc` | portable CLI report formatting for nodes/status/deploy/reconcile/help |
+| `src/murakumo/tunnel.cljc` | portable SSH local-forward command helpers |
 | `src/murakumo/core.clj` | the command implementations + per-node identity derivation |
-| `src/murakumo/reconcile.clj` | the wadm reconciler — PURE desired/observed→plan core + apply/watch/persist shell |
-| `src/murakumo/dash.clj` | snapshotter + web UI + Datom-log persistence (observed-state source for reconcile) |
+| `src/murakumo/reconcile/plan.cljc` | portable wadm planner — PURE desired/observed→plan core |
+| `src/murakumo/reconcile.clj` | the wadm CLI shell — collect/apply/watch/persist around the `.cljc` planner |
+| `src/murakumo/dash/state.cljc` | portable dashboard state helpers: snapshot record shape + liveness alert diffs |
+| `src/murakumo/dash.clj` | snapshotter + web UI + Datom-log persistence around the `.cljc` state helpers |
+| `test/murakumo/cloud_plan_test.clj` | offline unit tests for the murakumo.cloud overlay planner |
+| `test/murakumo/overlay_driver_test.clj` | offline unit tests for the native overlay driver shell core |
 | `test/murakumo/reconcile_test.clj` | offline unit tests for the pure reconcile core (`bb test`) |
+| `test/murakumo/smoke_test.clj` | namespace-load smoke tests for CLI shell entrypoints |
 | `deploy/com.murakumo.kotoba-mesh.plist.tmpl` | the resident LaunchAgent template |
 
 ## Dashboard + Datom persistence
@@ -171,6 +206,173 @@ only on nodes that can actually **reach** its client class:
 `kotoba-net` swarm. That single change flips eligibility for every `:reach
 :browser/live` app (proven by `reach-after-wiring-webrtc-into-native` in the tests).
 QUIC stays the native↔native default; browser/edge are **not** raw-QUIC peers.
+
+## murakumo.cloud — replacing Tailscale/WireGuard
+
+Tailscale and WireGuard are IP/subnet VPN substrates. `murakumo.cloud` is designed as
+Murakumo's own identity-addressed overlay instead: nodes are addressed by stable
+overlay/node CIDs, the control plane is a Datom/atproto graph (`murakumo-cloud`), and
+policy is expressed as records rather than ACLs in an external VPN product.
+
+```bash
+bb cloud plan        # human summary: overlay CID, nodes, chosen relays, policy count
+bb cloud routes      # route table: direct transport candidates + relay fallback
+bb cloud dial asher  # policy-checked identity-overlay dial hints for one node
+bb cloud connect asher  # canonical murakumo-overlay driver argv for that dial
+bb cloud relay jp-tyo-1 # canonical murakumo-overlay relay argv for one relay
+bb cloud bootstrap      # relays first, then policy-authorized node connects
+bb cloud bootstrap --format=edn # cloud.murakumo.bootstrap manifest for runners
+bb cloud dial asher --from=browser --capability=ssh  # denied unless policy allows it
+bb overlay bootstrap --manifest-file bootstrap.edn   # validate every bootstrap step
+bb overlay run --manifest-file bootstrap.edn         # dry-run ordered overlay runner plan
+bb overlay dispatch --manifest-file bootstrap.edn    # attach runtime adapters to every step
+bb overlay execute --manifest-file bootstrap.edn     # execution-report contract through runtime adapters
+bb overlay adapters                                  # list runtime adapters and implementation status
+bb overlay transports                                # list transport adapters: native relay + external QUIC/WebRTC boundaries
+bb overlay transport-probe --overlay ...             # probe the selected direct transport socket boundary
+bb overlay adapter-plan --overlay ...                # build external QUIC/WebRTC adapter argv + EDN request
+bb overlay adapter-check --overlay ...               # run the configured adapter check command
+bb overlay adapter-supervisor --overlay ...          # plan restart policy for a long-running adapter process
+MURAKUMO_QUIC_DRIVER="bb overlay-adapter" bb overlay adapter-check --overlay ... # use the bundled reference adapter
+bb quic-driver check --request-edn '{...}'        # JVM Clojure/Kwik QUIC driver
+bb quic-cert ensure --overlay=bafyOverlay --node=bafyNode --host=localhost # issue/ensure stored QUIC cert/key
+bb quic-cert list                              # show active QUIC material generations/fingerprints
+bb quic-cert rotate --overlay=bafyOverlay --node=bafyNode --host=localhost # rotate active QUIC cert/key
+bb quic-cert verify                            # verify files, fingerprints, and audit hash chain
+bb quic-cert prune --keep=1                    # remove old non-active generations
+bb quic-driver serve --request-edn '{...}'       # QUIC listener; auto-issues cert/key if env is absent
+MURAKUMO_QUIC_CERT=cert.pem MURAKUMO_QUIC_KEY=key.pem bb quic-driver serve --request-edn '{...}' # explicit cert/key override
+MURAKUMO_QUIC_DRIVER="clojure -M:quic-driver" bb overlay adapter-check --overlay ... # real Clojure QUIC driver
+bb overlay-adapter check --request-edn '{...}'       # reference external adapter driver entrypoint
+bb overlay dial-check --overlay ...                  # probe direct endpoint reachability
+bb overlay dial-check --via=relay --overlay ...      # connect to relay and exchange overlay hello/frame/ack
+bb overlay dial-check --via=relay --frames=a,b,c ... # stream ordered frames through the relay contract
+bb overlay dial-check --auth-key ... --via=relay ... # stream frames with keyed MAC validation
+bb overlay relay-check --overlay ...                 # prove a relay listener can bind locally
+bb overlay serve-relay --auth-key ... --require-auth true --max-frame-bytes 65536 --overlay ... # hardened relay listener
+bb overlay service-plan --listen 127.0.0.1:18022 --service ssh --auth-key ... --via=relay ... # persistent service proxy plan
+bb overlay service-proxy --listen 127.0.0.1:18022 --service ssh --auth-key ... --via=relay ... # persistent byte proxy
+bb overlay local-forward --listen 127.0.0.1:18022 --auth-key ... --via=relay ... # local TCP lines over sealed relay stream
+bb overlay local-forward-bytes --listen 127.0.0.1:18023 --auth-key ... --via=relay ... # local TCP byte chunks over sealed relay stream
+MURAKUMO_OVERLAY_AUTH_KEY=... bb cloud bootstrap --format=edn # inject auth-key into driver argv
+MURAKUMO_OPERATOR_SEED=... bb cloud bootstrap --format=edn     # derive overlay auth-key if no explicit key is set
+bb cloud records     # EDN records ready to persist/publish into the cloud graph
+```
+
+The current implementation is the deterministic control-plane layer:
+
+- `cloud.edn` declares the domain, overlay, direct transports, relay regions, and
+  default-deny capability policy.
+- `murakumo.cloud.plan` folds `fleet.edn + cloud.edn` into `cloud.murakumo.node`,
+  `cloud.murakumo.relay`, `cloud.murakumo.route`, and `cloud.murakumo.policy`
+  records.
+- Relay fallback is deterministic and region-aware (`:labels {:zone ...}` /
+  `:region`), while direct paths prefer QUIC/WebRTC/WebTransport.
+- `bb cloud dial <node>` is policy-aware: it defaults to
+  `from=operator to=fleet capability=ssh`, emits direct/relay candidates only when
+  `cloud.edn` allows that capability, and otherwise returns a policy denial instead
+  of a route.
+- `bb cloud connect <node>` turns the authorized dial plan into the canonical
+  `murakumo-overlay dial ...` argv that a native stream/packet driver can execute.
+- `bb cloud relay <name>` turns a relay control record into the canonical
+  `murakumo-overlay relay ...` argv for starting a relay process.
+- `bb overlay transports` exposes the adapter boundary: relay is native today;
+  QUIC/WebRTC/WebTransport are executable external-adapter slots
+  (`MURAKUMO_QUIC_DRIVER`, `MURAKUMO_WEBRTC_DRIVER`,
+  `MURAKUMO_WEBTRANSPORT_DRIVER`) until a JVM/babashka-safe transport is linked.
+- `bb overlay adapter-plan` and `bb overlay adapter-check` implement the external
+  driver protocol: the configured command receives
+  `<action> --request-edn '<murakumo.overlay.adapter-request>'`, and murakumo records
+  exit code, stdout, stderr, timeout, and missing-adapter failures as EDN.
+- `bb overlay adapter-supervisor` produces the long-running process supervision
+  plan for QUIC/WebRTC/WebTransport drivers, including restart policy and max
+  restart count.
+- `bb overlay-adapter` is a bundled reference external driver. It implements
+  `check`, `dial`, `serve`, and `serve-once` against the same EDN request contract,
+  so real `murakumo-quic-driver` / `murakumo-webrtc-driver` binaries can be tested
+  against a known protocol shape.
+- `murakumo.overlay.quic-driver` is the first real external transport driver. It is
+  JVM Clojure using the pure-Java Kwik QUIC stack. It performs QUIC `check`,
+  `dial`, `serve`, and `serve-once`, opens a QUIC stream, and exchanges the same
+  `adapter-hello` / `adapter-ack` records used by the reference adapter.
+- `bb quic-cert` issues, lists, and rotates QUIC certificate material under
+  `.murakumo/kagi/quic` by default (`MURAKUMO_KAGI_DIR` overrides the path). Files
+  are written owner-only (`0600`), indexed in `index.edn`, and tracked by
+  overlay/node/host generation, active generation, fingerprint, and expiry.
+  Issue/rotate/prune operations append to a hash-chained audit log, and
+  `bb quic-cert verify` checks both material fingerprints and that audit chain.
+  `MURAKUMO_QUIC_CERT` and `MURAKUMO_QUIC_KEY` still override the stored material
+  when supplied.
+- `murakumo.overlay.stream` models ordered logical streams, so multiple service
+  sessions can share one overlay transport contract.
+- `murakumo.overlay.peer` keeps deterministic peer discovery/route-selection state
+  from `cloud.murakumo.route` records.
+- `murakumo.overlay.keyring` derives per-overlay, per-epoch key material for key
+  rotation while accepting previous/current/next key ids during rollover.
+- `bb overlay service-proxy` is the persistent service-proxy entrypoint over the
+  relay byte stream; `local-forward*` remains the lower-level debug surface.
+- Relay hardening now includes optional auth-required mode and max frame byte
+  limits; rejected frames are not counted as successful dial checks.
+- `bb cloud bootstrap` prints the fleet-wide overlay boot sequence: relay processes
+  first, then policy-authorized node dial argv.
+- `bb cloud bootstrap --format=edn` emits the same sequence as a
+  `cloud.murakumo.bootstrap` manifest with explicit phases and executable argv.
+- `bb overlay bootstrap --manifest-file <file>` reads that manifest and validates
+  every phase step through the same `dial` / `relay` driver contracts before a
+  future runtime opens sockets.
+- `bb overlay run --manifest-file <file>` turns a validated bootstrap manifest into
+  a dry-run `murakumo.overlay.run-plan`, preserving phase order and marking every
+  step as `:run` or `:blocked`.
+- `bb overlay dispatch --manifest-file <file>` attaches runtime adapter names
+  (`murakumo.runtime.quic`, `murakumo.runtime.relay`, etc.) to each runnable step.
+- `bb overlay execute --manifest-file <file>` preserves the same ordering and emits
+  a `murakumo.overlay.execution-report`. `murakumo.overlay.runtime` owns the adapter
+  registry (`relay`, `quic`, `webrtc`, `webtransport`, relay-client) and currently
+  returns explicit `:would-run` execution records; the real socket/relay runtime
+  plugs into this boundary.
+- `bb overlay adapters` lists those runtime adapters and their current
+  implementation status.
+- `bb overlay dial-check ...` opens a host socket to the planned direct endpoint,
+  proving the dial target is reachable before full QUIC/WebRTC framing exists.
+- `bb overlay dial-check --via=relay ...` connects to the relay endpoint and
+  exchanges minimal EDN `relay-hello`, `relay-ack`, `relay-frame`, and
+  `relay-frame-ack` records carrying overlay, node, principal identity, target, and
+  a small payload.
+- `bb overlay dial-check --via=relay --frames=a,b,c ...` streams multiple ordered
+  frames over the same relay connection and verifies one digest-checked ack per
+  frame.
+- `--auth-key <secret>` on both `serve-relay` and `dial-check` adds a keyed frame
+  MAC; relay acks expose `:mac-ok?` and reject frames with a bad MAC.
+- With `--auth-key`, relay frame payloads are sealed with AES-GCM on the wire;
+  acks expose `:open-ok?` / `:sealed?` after successful decrypt-and-verify.
+- `bb overlay local-forward ...` opens a local TCP listener and forwards client
+  input lines as sealed relay stream frames, returning acknowledged payload lines
+  to the local client. This is the first host-side tunnel boundary; byte-stream
+  framing and service proxying can replace the line codec next.
+- `bb overlay local-forward-bytes ...` uses the same sealed relay stream but frames
+  raw local TCP bytes as base64url chunks, then decodes acknowledged chunks back to
+  bytes for the local client.
+- `cloud.edn` declares `:overlay/auth-key-env` so `bb cloud connect`, `relay`, and
+  `bootstrap` can inject `--auth-key` into executable driver argv from the local
+  environment without storing the secret in control-plane records.
+- If no explicit overlay auth key is set, `:overlay/auth-key-source :operator-seed`
+  derives the driver MAC key from `MURAKUMO_OPERATOR_SEED` and the overlay CID.
+  The derived key is still only placed in executable argv, not records.
+- `bb overlay relay-check ...` opens and closes the relay listener, proving the
+  host can bind the requested port.
+- `bb overlay serve-relay ...` starts the minimal host relay process. It accepts
+  TCP connections and returns an identity-aware ack while transport framing is
+  still being implemented.
+- `bb overlay dial ...` / `bb overlay relay ...` are the repo-local driver shell for
+  those canonical argv. They do not open sockets yet; they validate requests and emit
+  `murakumo.overlay.session` / `murakumo.overlay.relay` records so the next
+  implementation layer has a stable executable contract.
+
+The live packet/stream driver is intentionally separate: SSH and provisioning still
+use Tailscale today, but the CLI now owns the node, relay, policy, and route records
+needed for a Murakumo-native overlay control plane. The next layer is to bind these
+route hints to relay processes and host networking so `murakumo cli` can open the
+planned identity dials without depending on Tailscale/WireGuard.
 
 ## Binary pinning (raced-checkout safety)
 

@@ -5,7 +5,7 @@
 (ns murakumo.reconcile-test
   (:require [clojure.test :refer [deftest is testing]]
             [murakumo.connect :as c]
-            [murakumo.reconcile :as r]))
+            [murakumo.reconcile.plan :as r]))
 
 (def fleet
   {:fleet/name "test-mesh"
@@ -144,4 +144,31 @@
       (is (= 2 (count (:apps plan))))
       (is (= :place (:action (second (:apps plan)))))
       (is (= ["d"] (:targets (second (:apps plan)))))
-      (is (false? (r/plan-converged? plan))))))
+      (is (false? (r/plan-converged? plan)))
+      (is (= ["relay"] (mapv :app (r/apply-apps plan)))))))
+
+(deftest command-flags-are-pure-data
+  (is (= {:manifest "murakumo.app.edn" :dry-run true :snapshot "snap.edn"}
+         (r/parse-flags ["murakumo.app.edn" "--dry-run" "--snapshot=snap.edn"])))
+  (is (= {:manifest "murakumo.app.edn" :apply true :watch 30}
+         (r/parse-flags ["--apply" "--watch" "murakumo.app.edn"])))
+  (is (= {:manifest "murakumo.app.edn" :watch 5}
+         (r/parse-flags ["--ignored" "--watch=5" "murakumo.app.edn"])))
+  (is (= :missing-manifest (r/reconcile-command-error {})))
+  (is (nil? (r/reconcile-command-error {:manifest "murakumo.app.edn"})))
+  (is (= 5000 (r/watch-sleep-ms 5))))
+
+(deftest reconcile-record-shape
+  (let [plan {:ts "t"
+              :fleet "test"
+              :apps [{:app "heartbeat" :cid "bafyHEART" :desired 2
+                      :running ["a"] :action :place :targets ["b"]}]}
+        rec (r/reconcile-record plan "{\"plan\":true}")]
+    (is (= {:$type "com.murakumo.fleet.reconcile"
+            :ts "t"
+            :fleet "test"
+            :converged false
+            :apps [{:app "heartbeat" :cid "bafyHEART" :desired 2
+                    :running 1 :action "place" :targets ["b"]}]
+            :plan "{\"plan\":true}"}
+           rec))))
