@@ -343,11 +343,18 @@
   (require 'murakumo.fleet-view)
   (apply (resolve 'murakumo.fleet-view/-main) args))
 
+(defn cmd-infer
+  "Distributed inference across the fleet, exo-style (memory-weighted layer
+   sharding, llama.cpp RPC / MLX ring engines). See murakumo.infer."
+  [_ args]
+  (require 'murakumo.infer)
+  (apply (resolve 'murakumo.infer/-main) args))
+
 (def ^:private commands
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
    "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin
    "dash" cmd-dash "reconcile" cmd-reconcile "fleet" cmd-fleet
-   "cloud" cmd-cloud})
+   "cloud" cmd-cloud "infer" cmd-infer})
 
 (defn -main [& args]
   (let [[cmd & rest] args

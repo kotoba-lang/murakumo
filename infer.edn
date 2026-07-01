@@ -1,0 +1,41 @@
+;; infer.edn — murakumo distributed-inference config (SSoT for `bb murakumo infer`).
+;;
+;; The mesh fleet (fleet.edn) is reused as the inference fleet; :extra-nodes adds
+;; machines that serve inference but are not kotoba-mesh members. The HEAD is the
+;; operator's own machine: it holds the checkpoint on disk, drives the ring, and
+;; serves the OpenAI-compatible API.
+{:infer/rpc-port 50052
+ :infer/api-port 8080
+ ;; GPU-wired ceiling provisioned onto each 16 GiB worker (sudo sysctl
+ ;; iogpu.wired_limit_mb) — 13 GiB wired leaves ~3 GiB for macOS + the mesh node.
+ :infer/wired-limit-mb 13312
+ ;; Workers are headless: macOS floor ≈ 2.5 GiB once we stop counting desktop apps.
+ :infer/node-os-reserve-gib 5/2
+ ;; The head is the operator's interactive machine — keep a fat OS reserve.
+ :infer/head {:name "head" :host "localhost" :os-reserve-gib 12}
+ :infer/extra-nodes [{:name "jacob" :host "100.117.208.83"}]
+ ;; rpc-server -c caches streamed shards on the worker's disk; skip when free
+ ;; disk < this (the cache costs ~one shard).
+ :infer/cache-min-free-gib 20
+
+ :models
+ {"glm-5.2-reap50-q2k"
+  {:model/id "glm-5.2-reap50-q2k"
+   :model/family "GLM-5.2"
+   :model/format :gguf
+   :hf/repo "pipenetwork/GLM-5.2-REAP50-Q2_K-GGUF"
+   :model/params-b 381            ; REAP50: 128 of 256 experts kept per layer
+   :model/active-params-b 39
+   :model/layers 78               ; zai-org/GLM-5.2 num_hidden_layers
+   :model/weight-bytes 139000000000
+   :model/gguf "GLM-5.2-REAP50-Q2_K-00001-of-00004.gguf"}
+
+  "glm-5.2-reap50-4bit-mlx"
+  {:model/id "glm-5.2-reap50-4bit-mlx"
+   :model/family "GLM-5.2"
+   :model/format :mlx
+   :hf/repo "pipenetwork/GLM-5.2-REAP50-MLX-4bit"
+   :model/params-b 381
+   :model/active-params-b 39
+   :model/layers 78
+   :model/weight-bytes 229780000000}}} ; 214 GiB — needs ~19 more 16 GiB nodes
