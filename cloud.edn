@@ -1,0 +1,29 @@
+;; cloud.edn — murakumo.cloud overlay control-plane declaration.
+;;
+;; Goal: replace the operational dependency on Tailscale/WireGuard with a
+;; Murakumo-native identity overlay:
+;;   - every node has a stable DID-derived overlay identity;
+;;   - control records are append-only Datoms in the murakumo cloud graph;
+;;   - nodes prefer direct QUIC/WebRTC, then fall back to murakumo relays;
+;;   - policy is declared here, not in an external VPN admin console.
+
+{:cloud/name "murakumo.cloud"
+ :cloud/domain "murakumo.cloud"
+ :cloud/graph "murakumo-cloud"
+ :cloud/control-url "https://murakumo.cloud/xrpc"
+
+ :overlay/id "com-junkawasaki-murakumo"
+ :overlay/version 1
+ :overlay/address-family :identity            ; DID/CID addressed, not IP-subnet addressed
+ :overlay/direct [:quic :webrtc :webtransport]
+ :overlay/relay [:murakumo-relay]
+ :overlay/auth-key-env "MURAKUMO_OVERLAY_AUTH_KEY"
+ :overlay/auth-key-source :operator-seed
+
+ :relays [{:name "jp-tyo-1" :region "jp" :url "relay://jp-tyo-1.murakumo.cloud" :transports [:quic :webrtc]}
+          {:name "us-sjc-1" :region "us" :url "relay://us-sjc-1.murakumo.cloud" :transports [:quic :webtransport]}]
+
+ :policy {:default :deny
+          :allow [{:from :operator :to :fleet :capabilities [:ssh :http :deploy :reconcile]}
+                  {:from :fleet :to :fleet :capabilities [:gossip :block-sync :health]}
+                  {:from :browser :to :apps :capabilities [:read :live]}]}}

@@ -1,20 +1,18 @@
 ;; murakumo.connect — read the single connectivity description (connect.edn) and
-;; answer "can this node reach that client class on that plane?". Pure; this is the
-;; one place murakumo turns the declarative transport matrix into placement truth.
+;; answer "can this node reach that client class on that plane?".
 ;;
-;; See 90-docs/adr/2606271700-kotoba-transport-planes.md for the model:
-;;   read plane = CID-over-HTTP (universal, transport-untrusted)
-;;   live plane = libp2p multi-transport; a node serves a client on :live iff they
-;;                share at least one live transport.
+;; The decision helpers are portable .cljc and pure. load-connect is a small host
+;; convenience for the bb/JVM CLI; callers that need strict portability can pass
+;; the parsed connect map directly.
 
 (ns murakumo.connect
-  (:require [clojure.edn :as edn]
-            [clojure.set :as set]))
+  (:require [clojure.set :as set]
+            [murakumo.config :as config]))
 
 (defn load-connect
   "Read connect.edn (nil if absent — reach constraints then degrade to no-op)."
-  ([] (load-connect "connect.edn"))
-  ([path] (try (edn/read-string (slurp path)) (catch Exception _ nil))))
+  ([] (load-connect config/default-connect-path))
+  ([path] (config/read-edn-file-or path nil)))
 
 (defn default-class [connect] (or (:default-class connect) :native))
 
@@ -26,7 +24,7 @@
   (get-in connect [:classes class plane] []))
 
 (defn- parse-reach
-  "Normalise a reach token. `:browser/live` → {:class :browser :plane :live};
+  "Normalise a reach token. `:browser/live` -> {:class :browser :plane :live};
    a map passes through unchanged."
   [r]
   (if (map? r)
@@ -36,7 +34,7 @@
 (defn serves-reach?
   "Can `node` serve a client of `(:class reach)` on `(:plane reach)`?
      :read — node speaks :http (universal CID pull).
-     :live — node and the target client class share ≥1 live transport."
+     :live — node and target client class share at least one live transport."
   [connect node reach]
   (let [{:keys [class plane]} (parse-reach reach)
         ncls (node-class connect node)]
@@ -48,6 +46,6 @@
       false)))
 
 (defn serves-all?
-  "True if `node` satisfies every reach requirement (empty ⇒ trivially true)."
+  "True if `node` satisfies every reach requirement (empty => trivially true)."
   [connect node reaches]
   (every? #(serves-reach? connect node %) reaches))
