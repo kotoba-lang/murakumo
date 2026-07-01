@@ -67,6 +67,7 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `cloud [plan\|records\|routes\|dial\|connect <node>\|relay <name>\|bootstrap] [--cloud=cloud.edn] [--fleet=fleet.edn]` | plan the `murakumo.cloud` identity overlay, route hints, driver argv, relay argv, bootstrap order, and control-plane records that replace an external VPN control plane |
 | `overlay dial\|relay --overlay ...` | native overlay driver shell: validate canonical dial/relay argv and emit the session record a real stream/packet driver will open |
 | `fleet <datom-log.edn> [now-ms]` | **coordination-plane view** — fold a [kotoba-fleet](https://github.com/kotoba-lang/kotoba-fleet) Datom log into one snapshot (per-work holders · active leases · pending proposals) via `kotoba.fleet.view/snapshot`. The `status` of the 20-agent coordination layer, next to the mesh `status`. |
+| `infer probe\|plan <model>\|provision\|up\|down\|ps\|serve\|generate` | **distributed inference across the fleet, exo-style** — memory-weighted shard plan + pipeline-parallel ring (see below) |
 
 ## Layout
 
@@ -105,6 +106,11 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `test/murakumo/reconcile_test.clj` | offline unit tests for the pure reconcile core (`bb test`) |
 | `test/murakumo/smoke_test.clj` | namespace-load smoke tests for CLI shell entrypoints |
 | `deploy/com.murakumo.kotoba-mesh.plist.tmpl` | the resident LaunchAgent template |
+| `infer.edn` | distributed-inference config: model registry + head/worker memory policy — the SSoT |
+| `src/murakumo/infer/plan.cljc` | **PURE exo-style planner**: memory-weighted contiguous layer partition + fits-gate (bb/JVM/cljs/WASM portable) |
+| `src/murakumo/infer/engine.cljc` | **PURE engine adapters**: plan → llama.cpp `--rpc/--tensor-split` cmds / `mlx.launch` ring cmds |
+| `src/murakumo/infer.clj` | the inference operator: SSH probe → plan → provision → ring up/down → serve/generate |
+| `test/murakumo/infer_test.clj` | offline unit tests for the pure planner/engine (`bb test`) |
 
 ## Dashboard + Datom persistence
 
@@ -399,6 +405,42 @@ bb murakumo provision all             # roll it out
 
 `provision`/`mesh` print the pinned version on rollout and refuse if `bin/BUILD.edn`
 declares a version but `./bin` is empty (clone murakumo → `pin` the declared sha first).
+
+## Distributed inference — `infer` (the fleet as one model host, exo-style)
+
+The same fleet that hosts WASM components can serve **one LLM too large for any
+single node**, [exo](https://github.com/exo-explore/exo)-style: probe every node's
+live memory, cut a **memory-weighted contiguous layer partition** (each node's slice
+∝ its usable RAM), and run a pipeline-parallel ring over it. Pipeline parallel is
+the only scheme that survives the fleet's 1 GbE interconnect (one activation handoff
+per shard boundary per token — ADR-2605300000); tensor/expert all-to-all stay the
+Thunderbolt upgrade axis.
+
+The planner + engine adapters are **pure cljc** (`murakumo.infer.plan` / `.engine`) —
+the same code cuts plans in bb on the operator's terminal, in JVM tests, in
+cloud-murakumo's CF Worker, and (eventually) inside a kotoba WASM component. Engines:
+
+- **`:llamacpp-rpc`** — every worker runs a small `rpc-server` (ggml RPC: Metal /
+  CUDA / CPU alike, so macOS minis and linux boxes mix freely); the head runs
+  `llama-server --rpc … --tensor-split …`, holds the GGUF on ITS disk (weights
+  stream to workers at load, cacheable node-side with `-c`), and serves the
+  **OpenAI-compatible `/v1` API**. No model download on any worker.
+- **`:mlx-ring`** — `mlx.launch --backend ring` + mlx_lm pipeline sharding for
+  MLX-format checkpoints (all-Apple fleets).
+
+```bash
+bb murakumo infer probe                    # live mem/disk/GPU map of the fleet
+bb murakumo infer plan glm-5.2-reap50-q2k  # shard plan + go/no-go gate (infer.edn registry)
+bb murakumo infer provision                # push rpc-server + raise iogpu.wired_limit_mb
+bb murakumo infer up                       # start the worker ring
+bb murakumo infer serve glm-5.2-reap50-q2k ~/models/GLM-5.2-…-00001-of-00004.gguf
+bb murakumo infer generate "叢雲とは何ですか"   # OpenAI API → the whole fleet answers
+```
+
+The go/no-go gate is honest about the memory math: `plan` exits non-zero when the
+fleet cannot hold the weights (e.g. GLM-5.2-REAP50 **MLX-4bit = 214 GiB ✗** on
+today's 11×16 GiB + head, while **GGUF Q2_K = 129.5 GiB ✓**). Plans, model registry,
+and run results (tok/s) are published to cloud-murakumo's `/infer/*` API.
 
 ## Identity & no-server-key
 
