@@ -66,6 +66,7 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `reconcile <murakumo.app.edn> [--dry-run\|--apply\|--watch[=secs]]` | **declarative desired-state (wadm)** — fold a fleet manifest vs live placement, report/converge the drift (see below) |
 | `cloud [plan\|records\|routes\|dial\|connect <node>\|relay <name>\|bootstrap] [--cloud=cloud.edn] [--fleet=fleet.edn]` | plan the `murakumo.cloud` identity overlay, route hints, driver argv, relay argv, bootstrap order, and control-plane records that replace an external VPN control plane |
 | `overlay dial\|relay --overlay ...` | native overlay driver shell: validate canonical dial/relay argv and emit the session record a real stream/packet driver will open |
+| `fleet <datom-log.edn> [now-ms]` | **coordination-plane view** — fold a [kotoba-fleet](https://github.com/kotoba-lang/kotoba-fleet) Datom log into one snapshot (per-work holders · active leases · pending proposals) via `kotoba.fleet.view/snapshot`. The `status` of the 20-agent coordination layer, next to the mesh `status`. |
 
 ## Layout
 

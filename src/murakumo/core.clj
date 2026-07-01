@@ -335,10 +335,19 @@
                     (cmd-deploy fleet [(deploy/app-manifest-path manifest-dir a) nil]))]
     (reconcile/cmd-reconcile fleet (cons "reconcile" args) deploy-fn)))
 
+(defn cmd-fleet
+  "Coordination-plane view: fold a kotoba-fleet Datom log into one snapshot
+   (per-work holders, active leases, pending proposals). Args: [datom-log.edn] [now-ms].
+   See murakumo.fleet-view / kotoba.fleet.view."
+  [_ args]
+  (require 'murakumo.fleet-view)
+  (apply (resolve 'murakumo.fleet-view/-main) args))
+
 (def ^:private commands
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
    "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin
-   "dash" cmd-dash "reconcile" cmd-reconcile "cloud" cmd-cloud})
+   "dash" cmd-dash "reconcile" cmd-reconcile "fleet" cmd-fleet
+   "cloud" cmd-cloud})
 
 (defn -main [& args]
   (let [[cmd & rest] args

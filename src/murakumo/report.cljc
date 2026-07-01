@@ -216,5 +216,6 @@
     "  reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]  declarative desired-state (wadm)"
     "  cloud     [plan|records|routes|dial|connect <node>|relay <name>|bootstrap]    plan murakumo.cloud identity overlay"
     "  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log"
+    "  fleet     <datom-log.edn>    fold a kotoba-fleet Datom log into one coordination view"
     ""
     "env: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR"]))
