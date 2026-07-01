@@ -1,6 +1,8 @@
 {;; murakumo — kotoba WASM mesh control plane (babashka; uses built-in
- ;; babashka.process + cheshire, no external deps).
+ ;; babashka.process + cheshire). The only external dep is the zero-dep,
+ ;; pure-.cljc kotoba-fleet lib, for the `fleet` coordination-view command.
  :paths ["src"]
+ :deps {io.github.kotoba-lang/kotoba-fleet {:local/root "../kotoba-fleet"}}
  :tasks
  {murakumo
   {:doc "kotoba WASM mesh control plane. `bb murakumo` for the command list. Drives the Tailscale fleet over SSH: provision/up/down/status/deploy."
@@ -14,6 +16,7 @@
   dash     {:doc "Web dashboard + snapshotter: persists fleet heartbeat/placement to the Datom log and serves `status` as a web page. Args: [port=8899] [interval-s=15]." :requires ([murakumo.dash :as dash]) :task (apply dash/-main *command-line-args*)}
   deploy   {:doc "Compile clj→WASM + publish to a node's lattice." :requires ([murakumo.core :as core]) :task (apply core/-main "deploy" *command-line-args*)}
   reconcile{:doc "Declarative desired-state (wadm): fold murakumo.app.edn vs live placement. Flags: --dry-run|--apply|--watch[=secs]." :requires ([murakumo.core :as core]) :task (apply core/-main "reconcile" *command-line-args*)}
+  fleet    {:doc "Coordination view: fold a kotoba-fleet Datom log into one snapshot (holders · leases · pending). Args: <datom-log.edn> [now-ms]." :requires ([murakumo.core :as core]) :task (apply core/-main "fleet" *command-line-args*)}
 
   test     {:doc "Run the offline reconcile unit tests (no fleet/SSH needed)."
             :extra-paths ["test"]

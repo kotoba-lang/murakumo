@@ -379,10 +379,18 @@
                     (cmd-deploy fleet [(str manifest-dir "/" (:manifest a)) nil]))]
     (reconcile/cmd-reconcile fleet (cons "reconcile" args) deploy-fn)))
 
+(defn cmd-fleet
+  "Coordination-plane view: fold a kotoba-fleet Datom log into one snapshot
+   (per-work holders, active leases, pending proposals). Args: [datom-log.edn] [now-ms].
+   See murakumo.fleet-view / kotoba.fleet.view."
+  [_ args]
+  (require 'murakumo.fleet-view)
+  (apply (resolve 'murakumo.fleet-view/-main) args))
+
 (def ^:private commands
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
    "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin
-   "dash" cmd-dash "reconcile" cmd-reconcile})
+   "dash" cmd-dash "reconcile" cmd-reconcile "fleet" cmd-fleet})
 
 (defn -main [& args]
   (let [[cmd & rest] args
@@ -400,4 +408,5 @@
           (println "  deploy    <app.edn> [node]  compile clj→WASM + distribute + publish to the lattice")
           (println "  reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]  declarative desired-state (wadm)")
           (println "  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log")
+          (println "  fleet     <datom-log.edn>    fold a kotoba-fleet Datom log into one coordination view")
           (println "\nenv: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR")))))
