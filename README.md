@@ -451,6 +451,51 @@ reproducible without storing a secret per node. Autonomous component writes are
 attributed to the operator (or, with a member CACAO leash, to the consenting member —
 see `com-junkawasaki/kotoba`'s mesh persistence + etzhayyim's `issue-cacao`).
 
+## Fleet admission — kekkai (zero-trust gate, opt-in)
+
+`fleet.edn` is the **desired** inventory; it is not, by itself, an admission
+record — anyone who can edit `fleet.edn` and reach a node over Tailscale gets
+treated as fleet today. `murakumo.kekkai` closes that gap by gating
+`murakumo.fleet/select` — the single choke point every command (`nodes`,
+`provision`, `status`, `mesh`, `deploy`, `up`/`down`) resolves its node set
+through — against [`kotoba-lang/kekkai`](https://github.com/kotoba-lang/kekkai),
+a zero-trust Tailscale-equivalent control plane (coord-LLM proposal ⊣
+TailnetGovernor, admission always routed to a human, append-only ledger).
+
+```bash
+cp kekkai-tailnet.edn.example kekkai-tailnet.edn   # opt in
+# edit :status per node ("authorized" | "pending" | "expired" | "revoked")
+bb murakumo nodes    # nodes without :status "authorized" are now excluded,
+                      # reported to stderr: "[kekkai] <name>: not authorized (<status>) — excluded from fleet ops"
+```
+
+- **Opt-in, not a breaking default.** Absent `./kekkai-tailnet.edn` (or
+  `$MURAKUMO_KEKKAI_LEDGER`), `select` behaves exactly as before — every
+  command against every fleet.edn node. The gate only activates once that
+  ledger file exists.
+- **Deny-by-default.** A node not in the ledger at all is treated as
+  `"unknown"`, same as `"pending"`/`"expired"`/`"revoked"` — only an explicit
+  `"authorized"` entry passes. Being listed in `fleet.edn` is never, on its
+  own, sufficient (that would make the governor a no-op).
+- **Process boundary, not an in-process dep.** kekkai rides langgraph/JVM;
+  murakumo's own CLI runs on babashka. Status lookups shell out to
+  `clojure -M -m kekkai.cli <ledger> <node-id>` in the sibling kekkai checkout
+  (`$MURAKUMO_KEKKAI_DIR`, default
+  `~/github/com-junkawasaki/orgs/kotoba-lang/kekkai`) — the same
+  process-boundary shape murakumo already uses for the kotoba/tailscale/ssh/
+  quic-driver binaries, rather than requiring kekkai's StateGraph stack
+  in-process (a sci/babashka compatibility risk).
+- **What this does NOT replace.** `cloud.edn`'s default-deny capability
+  policy (`bb cloud dial ... capability=ssh`) still governs what a given
+  *admitted* node may reach; kekkai gates fleet **membership** (is this node
+  operable at all), a layer below that. Real admission (`"pending"` →
+  `"authorized"`) happens through kekkai's own CoordinationActor elsewhere —
+  this ledger file is the ground-fact snapshot murakumo reads, not the
+  admission flow itself.
+- Pure logic (`murakumo.kekkai.gate`, env resolution + node partitioning) is
+  unit-tested offline in `bb test`; the subprocess shell (`murakumo.kekkai`)
+  is exercised manually against a real sibling kekkai checkout.
+
 ## Status (honest)
 
 - **Works now**:
@@ -463,6 +508,8 @@ see `com-junkawasaki/kotoba`'s mesh persistence + etzhayyim's `issue-cacao`).
     snapshots persisted to the Datom log, web UI, drift alerts.
   - **`wadm` layer (declarative)**: `reconcile` desired-vs-observed plan + `--apply`
     convergence + `--watch` with as-of history. Pure core unit-tested offline (`bb test`).
+  - **kekkai fleet-admission gate** (opt-in): `select` filters to
+    kekkai-`"authorized"` nodes once `kekkai-tailnet.edn` is configured.
 - **Next**:
   - `reconcile --apply` currently converges *up* (re-publish under-replicated apps);
     **scale-down / eviction** of `:over` placements is reported but not enacted (kotoba
