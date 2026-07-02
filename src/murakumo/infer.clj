@@ -141,10 +141,11 @@
         (if-not (ssh/reachable? host)
           (println "unreachable — skipped")
           (do (ssh/sh host (str "mkdir -p " remote-bin))
-              (let [{:keys [exit err]} (ssh/scp host "bin/rpc-server" (str remote-bin "/rpc-server"))]
+              (let [{:keys [exit err]} (ssh/scp host "bin/rpc-server" ".murakumo/bin/rpc-server")]
                 (if-not (zero? exit)
                   (println (str "scp failed: " err))
-                  (let [w (ssh/sh host (format "sudo -n sysctl iogpu.wired_limit_mb=%d 2>&1 || echo no-sudo" wired))]
+                  (let [_ (ssh/sh host "chmod +x .murakumo/bin/rpc-server")
+                        w (ssh/sh host (format "sudo -n sysctl iogpu.wired_limit_mb=%d 2>&1 || echo no-sudo" wired))]
                     (println (str "rpc-server ✓  wired-limit: " (:out w))))))))))))
 
 (defn cmd-up [[sel]]
