@@ -62,14 +62,60 @@
                    (into {} (map (fn [[n w]] [n (* pool (/ w mt-sum))]) mt))
                    {head-name pool})}))
 
+(defn spend
+  "A demand-side ledger entry: `who` redeems `credits` for inference (or fiat
+   payout). Same append-only feed as settlements — balances/1 folds both, so
+   the account is one number. Pure; the caller appends it to the signed feed."
+  [who credits {:keys [for] :as _meta}]
+  {:run/spend {(name who) (double credits)}
+   :run/spend-for for})
+
+(defn balance-of [balances who]
+  (get balances (name who) 0.0))
+
+(defn charge
+  "Demand-side admission: can `who` afford `tokens` of `model` at its registry
+   price, given folded `balances`? → {:allow? bool :cost c :entry spend-entry}.
+   THE redemption rule: credits earned by holding shards are the only way to
+   buy inference beyond the fiat gateway — supply and demand meet in one unit."
+  [balances who {:keys [model tokens]}]
+  (let [cost (* (double (:credit/per-token model default-per-token))
+                (double (or tokens 0)))
+        bal (balance-of balances who)]
+    (if (>= bal cost)
+      {:allow? true :cost cost
+       :entry (spend who cost {:for {:model (:model/id model) :tokens tokens}})}
+      {:allow? false :cost cost :balance bal})))
+
+(defn receipt
+  "A verifiable inference receipt — the blockchain-facing artifact. Pure data:
+   the settled run + the shard-verification reports (kotodama.inference.shard
+   rank reports: owned bytes, contract tensors byte-checked) + the previous
+   receipt's hash, ready for the actor's kotoba key (CACAO) to sign and for a
+   chain gateway to mint against. No consensus here: tamper-evidence comes
+   from the hash chain + signature, disputes replay the feed."
+  [{:keys [settled shard-reports prev-hash hash-fn]}]
+  (let [body {:receipt/v 1
+              :receipt/run (select-keys settled [:run/total :run/shares
+                                                 :run/head :run/treasury])
+              :receipt/shards (mapv #(select-keys % [:shard/rank :shard/owned-bytes
+                                                     :shard/owned-tensors :shard/host
+                                                     :shard/ok])
+                                    shard-reports)
+              :receipt/prev (or prev-hash "genesis")}]
+    (assoc body :receipt/hash
+           (if hash-fn (hash-fn (pr-str body)) :receipt.hash/host-injected))))
+
 (defn balances
   "Fold a run ledger (seq of settled runs or raw runs) → account balances.
    Accepts either pre-settled maps (with :run/shares) or raw runs (settled
    here), so the CF Worker can fold whatever the feed contains."
   [runs]
   (reduce (fn [acc run]
-            (let [s (if (:run/shares run) run (settle run))]
-              (-> (reduce (fn [a [n c]] (update a n (fnil + 0.0) c)) acc (:run/shares s))
-                  (update "head" (fnil + 0.0) (:run/head s))
-                  (update :treasury (fnil + 0.0) (:run/treasury s)))))
+            (if-let [sp (:run/spend run)]
+              (reduce (fn [a [n c]] (update a (name n) (fnil - 0.0) c)) acc sp)
+              (let [s (if (:run/shares run) run (settle run))]
+                (-> (reduce (fn [a [n c]] (update a n (fnil + 0.0) c)) acc (:run/shares s))
+                    (update "head" (fnil + 0.0) (:run/head s))
+                    (update :treasury (fnil + 0.0) (:run/treasury s))))))
           {} runs))

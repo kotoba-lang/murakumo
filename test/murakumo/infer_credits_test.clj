@@ -29,6 +29,46 @@
   (testing "pre-settled entries fold identically to raw runs"
     (is (= (credits/balances [run]) (credits/balances [(credits/settle run)])))))
 
+(deftest redemption
+  (let [ledger [run run]                                    ; naphtali earns twice
+        bal (credits/balances ledger)
+        model {:model/id "gemma-4-26b-a4b" :credit/per-token 2}]
+    (testing "an earner can spend up to the balance, and the fold debits it"
+      (let [{:keys [allow? entry cost]} (credits/charge bal "naphtali" {:model model :tokens 30})]
+        (is allow?)
+        (is (= 60.0 cost))
+        (let [bal2 (credits/balances (conj ledger entry))]
+          (is (< (credits/balance-of bal2 "naphtali")
+                 (credits/balance-of bal "naphtali"))))))
+    (testing "beyond the balance → denied with the price quoted"
+      (let [r (credits/charge bal "levi" {:model model :tokens 100000})]
+        (is (not (:allow? r)))
+        (is (= 200000.0 (:cost r)))))
+    (testing "credits are conserved through a spend (spend burns from the account)"
+      (let [{:keys [entry]} (credits/charge bal "naphtali" {:model model :tokens 30})
+            before (reduce + (vals (dissoc bal :treasury)))
+            after (reduce + (vals (dissoc (credits/balances (conj ledger entry)) :treasury)))]
+        (is (= 60.0 (- before after)))))))
+
+(deftest receipts
+  (let [settled (credits/settle run)
+        r1 (credits/receipt {:settled settled
+                             :shard-reports [{:shard/rank {:layers [0 21]} :shard/owned-bytes 1745007264
+                                              :shard/owned-tensors 358 :shard/host "main-2" :shard/ok true}]
+                             :hash-fn (fn [s] (str "h" (hash s)))})
+        r2 (credits/receipt {:settled settled :shard-reports [] :prev-hash (:receipt/hash r1)
+                             :hash-fn (fn [s] (str "h" (hash s)))})]
+    (testing "receipts chain and carry the shard evidence"
+      (is (= "genesis" (:receipt/prev r1)))
+      (is (= (:receipt/hash r1) (:receipt/prev r2)))
+      (is (= 358 (get-in r1 [:receipt/shards 0 :shard/owned-tensors]))))
+    (testing "identical bodies hash identically (deterministic, signable)"
+      (is (= (:receipt/hash r1)
+             (:receipt/hash (credits/receipt {:settled settled
+                                              :shard-reports [{:shard/rank {:layers [0 21]} :shard/owned-bytes 1745007264
+                                                               :shard/owned-tensors 358 :shard/host "main-2" :shard/ok true}]
+                                              :hash-fn (fn [s] (str "h" (hash s)))})))))))
+
 (deftest degenerate-runs
   (testing "a run with no serving assignments pays the head, not /0"
     (let [s (credits/settle {:model {} :tokens 10 :duration-ms 1 :plan {:assignments []}})]
