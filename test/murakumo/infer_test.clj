@@ -46,6 +46,19 @@
   (testing "zero-memory fleet plans to zero, not to a crash"
     (is (not (:fits? (plan/plan glm [{:mem-bytes 0}]))))))
 
+(deftest dense-layer-aware-partition
+  (testing "GLM-5.2's 3 light dense layers let ELEVEN 16 GiB ranks hold what
+            uniform layer math says they cannot"
+    (let [glm-dense (assoc glm :model/dense-layers 3 :model/dense-layer-frac 1/10)
+          ranks (mapv #(mini (str "m" %)) (range 11))
+          pl (plan/plan glm-dense ranks)
+          first-asg (first (:assignments pl))]
+      (is (:fits? pl))
+      (is (> (:span first-asg) 7) "the dense-heavy first shard takes extra layers")
+      (is (= 78 (reduce + (map :span (:assignments pl)))))))
+  (testing "without dense info the same fleet is honestly rejected"
+    (is (not (:fits? (plan/plan glm (mapv #(mini (str "m" %)) (range 11))))))))
+
 (deftest deterministic
   (let [nodes (conj (mapv mini ["a" "b" "c"]) head)]
     (is (= (plan/plan glm nodes) (plan/plan glm nodes)))))
@@ -59,7 +72,7 @@
                                                 {:bin-dir "bin" :model-path "m.gguf"})]
     (testing "one rpc-server per worker — the head is NOT a worker"
       (is (= ["a" "b"] (map :name workers)))
-      (is (re-find #"-c$" (:cmd (first workers))))
+      (is (re-find #"-d MTL0 -c$" (:cmd (first workers))))
       (is (not (re-find #"-c$" (:cmd (second workers))))))
     (testing "head drives the ring: endpoints in order, tensor-split = workers + head last"
       (is (re-find #"--rpc 100\.0\.0\.1:50052,100\.0\.0\.2:50052 " (:cmd head)))

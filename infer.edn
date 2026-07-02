@@ -5,14 +5,18 @@
 ;; operator's own machine: it holds the checkpoint on disk, drives the ring, and
 ;; serves the OpenAI-compatible API.
 {:infer/rpc-port 50052
- :infer/api-port 8080
+ :infer/api-port 8090
  ;; GPU-wired ceiling provisioned onto each 16 GiB worker (sudo sysctl
  ;; iogpu.wired_limit_mb) — 13 GiB wired leaves ~3 GiB for macOS + the mesh node.
  :infer/wired-limit-mb 13312
  ;; Workers are headless: macOS floor ≈ 2.5 GiB once we stop counting desktop apps.
  :infer/node-os-reserve-gib 5/2
- ;; The head is the operator's interactive machine — keep a fat OS reserve.
- :infer/head {:name "head" :host "localhost" :os-reserve-gib 12}
+ ;; The head holds the GGUF, drives the ring, serves /v1. When the operator\'s
+ ;; machine is NOT on the fleet LAN (probe it: >5 ms RTT to workers ⇒ every
+ ;; token pays it), promote a fleet node instead: :remote? true + :host, and
+ ;; a modest os-reserve since it also mmaps the checkpoint while serving.
+ :infer/head {:name "head" :host "simeon" :remote? true :os-reserve-gib 3
+              :model-dir "glm"}
  :infer/extra-nodes [{:name "jacob" :host "100.117.208.83"}]
  ;; rpc-server -c caches streamed shards on the worker's disk; skip when free
  ;; disk < this (the cache costs ~one shard).
@@ -27,6 +31,8 @@
    :model/params-b 381            ; REAP50: 128 of 256 experts kept per layer
    :model/active-params-b 39
    :model/layers 78               ; zai-org/GLM-5.2 num_hidden_layers
+   :model/dense-layers 3          ; first_k_dense_replace: light, expert-free layers
+   :model/dense-layer-frac 1/10
    :model/weight-bytes 139000000000
    :model/gguf "GLM-5.2-REAP50-Q2_K-00001-of-00004.gguf"}
 
@@ -38,4 +44,6 @@
    :model/params-b 381
    :model/active-params-b 39
    :model/layers 78
+   :model/dense-layers 3
+   :model/dense-layer-frac 1/10
    :model/weight-bytes 229780000000}}} ; 214 GiB — needs ~19 more 16 GiB nodes

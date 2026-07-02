@@ -58,18 +58,23 @@
                                (gib (:infer/cache-min-free-gib cfg 20))))))))
 
 (defn- probe-fleet
-  "All inference workers probed in parallel + the head probed locally."
+  "All inference workers probed in parallel + the head (local operator machine,
+   or a fleet node when the head is :remote? — the operator being off the fleet
+   LAN would otherwise put a WAN hop inside every token)."
   [cfg]
-  (let [workers (->> (infer-nodes cfg)
+  (let [head-cfg (:infer/head cfg)
+        workers (->> (infer-nodes cfg)
+                     (remove #(= (:host %) (:host head-cfg)))   ; head serves, but not as an rpc worker
                      (pmap #(probe-node cfg %))
                      (filter some?)
                      vec)
-        head-cfg (:infer/head cfg)
-        head-mem (-> (p/sh "sysctl" "-n" "hw.memsize") :out str str/trim parse-long)]
+        head (if (:remote? head-cfg)
+               (probe-node cfg head-cfg)
+               (assoc head-cfg
+                      :mem-bytes (-> (p/sh "sysctl" "-n" "hw.memsize") :out str str/trim parse-long)))]
     {:workers workers
-     :head (assoc head-cfg
+     :head (assoc head
                   :head? true
-                  :mem-bytes head-mem
                   :os-reserve-bytes (gib (:os-reserve-gib head-cfg 12)))}))
 
 (defn- model-or-die [cfg id]
@@ -146,7 +151,17 @@
                   (println (str "scp failed: " err))
                   (let [_ (ssh/sh host "chmod +x .murakumo/bin/rpc-server")
                         w (ssh/sh host (format "sudo -n sysctl iogpu.wired_limit_mb=%d 2>&1 || echo no-sudo" wired))]
-                    (println (str "rpc-server ✓  wired-limit: " (:out w))))))))))))
+                    (println (str "rpc-server ✓  wired-limit: " (:out w))))))))))
+    ;; a remote head serves llama-server from its own .murakumo/bin
+    (let [{:keys [remote? host]} (:infer/head cfg)]
+      (when remote?
+        (print (format "[%s] " host)) (flush)
+        (ssh/sh host (str "mkdir -p " remote-bin))
+        (let [{:keys [exit err]} (ssh/scp host "bin/llama-server" ".murakumo/bin/llama-server")]
+          (if (zero? exit)
+            (do (ssh/sh host "chmod +x .murakumo/bin/llama-server")
+                (println "llama-server ✓ (head)"))
+            (println (str "scp failed: " err))))))))
 
 (defn cmd-up [[sel]]
   (let [cfg (load-config)
@@ -156,8 +171,9 @@
     (doseq [{:keys [node]} (serving-workers pl)
             :when (or (nil? want) (want (:name node)))]
       (let [cache (if (:rpc-cache? node) " -c" "")
-            cmd (format "pkill -f '%s/rpc-server' 2>/dev/null; sleep 0.2; nohup %s/rpc-server -H 0.0.0.0 -p %d%s >/tmp/murakumo-rpc.log 2>&1 & sleep 0.3; pgrep -f rpc-server >/dev/null && echo up || echo FAILED"
-                        remote-bin remote-bin port cache)]
+            dev (or (:rpc-device node) (:infer/rpc-device cfg "MTL0"))
+            cmd (format "pkill -f '%s/rpc-server' 2>/dev/null; sleep 0.2; nohup %s/rpc-server -H 0.0.0.0 -p %d -d %s%s >/tmp/murakumo-rpc.log 2>&1 & sleep 0.3; pgrep -f rpc-server >/dev/null && echo up || echo FAILED"
+                        remote-bin remote-bin port dev cache)]
         (println (format "[%s] %s" (:name node) (:out (ssh/sh (:host node) cmd))))))))
 
 (defn cmd-down [[sel]]
@@ -175,26 +191,40 @@
         (println (format "[%-10s] %-8s layers %d-%d" (:name node) out (first layers) (second layers)))))))
 
 (defn cmd-serve
-  "Run the head llama-server in the foreground (^C stops serving, workers stay up)."
+  "Run the head llama-server: locally in the foreground, or — for a :remote?
+   head — resident on the fleet node over SSH (the GGUF lives in the head\'s
+   :model-dir there; `provision` pushes the binary)."
   [[model-id gguf-path]]
   (let [cfg (load-config)
         model (model-or-die cfg (or model-id "glm-5.2-reap50-q2k"))
         pl (load-plan)
-        cmd (engine/head-cmd pl {:bin-dir "bin"
-                                 :model-path (or gguf-path (:model/gguf model))
-                                 :rpc-port (:infer/rpc-port cfg engine/default-rpc-port)
-                                 :port (:infer/api-port cfg 8080)
-                                 :ctx (:infer/ctx cfg 4096)})]
+        head-cfg (:infer/head cfg)
+        remote? (:remote? head-cfg)
+        opts {:bin-dir (if remote? ".murakumo/bin" "bin")
+              :model-path (or gguf-path
+                              (if remote?
+                                (str (:model-dir head-cfg "glm") "/" (:model/gguf model))
+                                (:model/gguf model)))
+              :rpc-port (:infer/rpc-port cfg engine/default-rpc-port)
+              :port (:infer/api-port cfg 8080)
+              :ctx (:infer/ctx cfg 4096)}
+        cmd (engine/head-cmd pl opts)]
     (println cmd)
-    (p/shell cmd)))
+    (if remote?
+      (let [{:keys [out]} (ssh/sh (:host head-cfg)
+                                  (format "pkill -f '.murakumo/bin/llama-server' 2>/dev/null; sleep 0.3; nohup %s >/tmp/murakumo-head.log 2>&1 & sleep 1; pgrep -f llama-server >/dev/null && echo serving || echo FAILED" cmd))]
+        (println (format "[%s] %s — http://%s:%s/v1 (load streams the shards; watch /tmp/murakumo-head.log)"
+                         (:host head-cfg) out (:host head-cfg) (:infer/api-port cfg 8080))))
+      (p/shell cmd))))
 
 (defn cmd-generate [[prompt]]
   (let [cfg (load-config)
+        head-host (let [h (:infer/head cfg)] (if (:remote? h) (:host h) "localhost"))
         body (json/generate-string
               {:messages [{:role "user" :content (or prompt "Name three Japanese cities.")}]
                :max_tokens 256})
         {:keys [out]} (p/sh "curl" "-s" "-m" "600"
-                            (str "http://localhost:" (:infer/api-port cfg 8080) "/v1/chat/completions")
+                            (str "http://" head-host ":" (:infer/api-port cfg 8080) "/v1/chat/completions")
                             "-H" "Content-Type: application/json" "-d" body)]
     (let [r (json/parse-string (str out) true)]
       (println (or (get-in r [:choices 0 :message :content]) out))

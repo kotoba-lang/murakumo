@@ -46,30 +46,49 @@
         bump (set (take short order))]
     (vec (map-indexed (fn [i f] (+ f (if (bump i) 1 0))) floors))))
 
+(defn layer-weights
+  "Per-layer byte estimates for the model's decoder stack. MoE models often open
+   with a few DENSE layers (`:model/dense-layers`, e.g. GLM-5.2 first_k_dense=3)
+   that weigh a fraction (`:model/dense-layer-frac`, default 1/10) of an
+   expert-bearing layer — the first shard can therefore take MORE layers, which
+   is exactly what lets a 78-layer GLM-5.2 sit on eleven 16 GiB ranks."
+  [{:model/keys [layers weight-bytes dense-layers dense-layer-frac]}]
+  (let [d (or dense-layers 0)
+        f (or dense-layer-frac 1/10)
+        units (+ (* d (double f)) (- layers d))          ; total in MoE-layer units
+        moe-bytes (/ (double weight-bytes) units)]
+    (mapv #(if (< % d) (* f moe-bytes) moe-bytes) (range layers))))
+
 (defn partition-layers
-  "Memory-weighted contiguous partition of `(:model/layers model)` decoder layers
-   over `nodes` (ring order = given order). Each node gets span_i ∝ usable_i.
+  "Memory-weighted contiguous partition of the decoder stack over `nodes` (ring
+   order = given order): walk the per-layer weight vector, cutting each node a
+   contiguous slice whose BYTES (not count) match its share of usable memory.
    Returns [{:node <node> :layers [lo hi) :span n :est-bytes b :fits? bool} …] —
-   nodes with zero usable memory get :span 0 and are dropped from serving.
-   Estimation: weights are dominated by the (uniform, MoE-expert-bearing) decoder
-   layers, so est-bytes = weight-bytes × span/layers."
-  [{:model/keys [layers weight-bytes] :as _model} nodes]
+   nodes with zero usable memory get :span 0 and are dropped from serving."
+  [{:model/keys [layers] :as model} nodes]
   (let [usable (mapv usable-bytes nodes)
         total (reduce + usable)
-        quotas (if (pos? total)
-                 (mapv #(/ (* (double layers) %) total) usable)
-                 (mapv (constantly 0.0) usable))
-        spans (largest-remainder layers quotas)
-        per-layer (/ (double weight-bytes) layers)]
-    (loop [i 0, lo 0, out []]
+        lw (layer-weights model)
+        wsum (reduce + lw)]
+    (loop [i 0, lo 0, acc 0.0, out []]
       (if (= i (count nodes))
         out
-        (let [span (nth spans i)
-              est (long (* per-layer span))]
-          (recur (inc i) (+ lo span)
+        (let [;; cumulative byte target through node i, mapped onto the layer axis
+              target (if (pos? total)
+                       (* wsum (/ (double (reduce + (take (inc i) usable))) total))
+                       0.0)
+              last? (= i (dec (count nodes)))
+              hi (if last?
+                   layers
+                   ;; advance while adding the next layer keeps us nearer target
+                   (loop [h lo, a acc]
+                     (if (or (= h layers)
+                             (> (+ a (nth lw h)) target)) h (recur (inc h) (+ a (nth lw h))))))
+              est (long (reduce + (subvec lw lo hi)))]
+          (recur (inc i) hi (+ acc (double (reduce + (subvec lw lo hi))))
                  (conj out {:node (nth nodes i)
-                            :layers [lo (+ lo span)]
-                            :span span
+                            :layers [lo hi]
+                            :span (- hi lo)
                             :est-bytes est
                             :fits? (<= est (nth usable i))})))))))
 
