@@ -237,6 +237,8 @@
   (case cmd
     "media" (do (require 'murakumo.infer.media)
                 (apply (resolve 'murakumo.infer.media/-main) args))
+    "gc" (do (require 'murakumo.infer.gc-op)
+             (apply (resolve 'murakumo.infer.gc-op/-main) args))
     "probe" (cmd-probe args)
     "plan" (cmd-plan args)
     "provision" (cmd-provision args)
@@ -245,4 +247,4 @@
     "ps" (cmd-ps args)
     "serve" (cmd-serve args)
     "generate" (cmd-generate args)
-    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|generate \"<prompt>\"|media …")))
+    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|generate \"<prompt>\"|media …|gc [--apply] [--target GiB]")))
