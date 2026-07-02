@@ -36,3 +36,33 @@
 (deftest deterministic
   (let [pixels [[10 20 30] [200 100 50] [0 0 0] [255 255 255]]]
     (is (= (pp/features pixels) (pp/features pixels)))))
+
+(deftest upscale-2x
+  (let [;; 2×2 image: red, green / blue, white
+        img [[255 0 0] [0 255 0] [0 0 255] [255 255 255]]
+        up (pp/bilinear-2x img 2 2)]
+    (testing "2× produces a 4×4 (16px) image"
+      (is (= 16 (count up))))
+    (testing "corners preserve the source corners (clamped edges)"
+      (is (= [255 0 0] (first up)))              ; top-left stays red
+      (is (= [255 255 255] (last up))))          ; bottom-right stays white
+    (testing "interior is a blend, not a copy"
+      (let [center (nth up (+ (* 4 1) 2))]        ; near the middle
+        (is (not (some #{center} img)))))
+    (testing "deterministic"
+      (is (= up (pp/bilinear-2x img 2 2))))))
+
+(deftest upscale-proof-of-compute
+  (let [img [[255 0 0] [0 255 0] [0 0 255] [255 255 255]]
+        ref (pp/bilinear-2x img 2 2)
+        samples [0 5 10 15]]
+    (testing "correct output verifies at the sampled positions"
+      (is (pp/verify-upscale img 2 2 ref samples)))
+    (testing "a tampered pixel at a sampled position is caught"
+      (is (not (pp/verify-upscale img 2 2 (assoc (vec ref) 5 [1 2 3]) samples))))))
+
+(deftest upscale-wgsl-present
+  (let [k (pp/wgsl-upscale-kernel)]
+    (is (re-find #"@compute" k))
+    (is (re-find #"bilinear|top\+\(bot-top\)" k))
+    (is (re-find #"dst\[idx\]" k))))
