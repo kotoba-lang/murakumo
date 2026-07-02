@@ -69,7 +69,7 @@
     {"1" {:class_type "ImageOnlyCheckpointLoader" :inputs {:ckpt_name ckpt}}
      "2" {:class_type "LoadImage" :inputs {:image image}}
      "4" {:class_type "SVD_img2vid_Conditioning"
-          :inputs {:clip_vision ["1" 3] :init_image ["2" 0] :vae ["1" 2]
+          :inputs {:clip_vision ["1" 1] :init_image ["2" 0] :vae ["1" 2]
                    :width width :height height :video_frames frames
                    :motion_bucket_id 127 :fps fps :augmentation_level 0.0}}
      "5" {:class_type "KSampler" :inputs {:model ["1" 0] :positive ["4" 0] :negative ["4" 1]
@@ -79,6 +79,35 @@
      "6" {:class_type "VAEDecode" :inputs {:samples ["5" 0] :vae ["1" 2]}}
      "7" {:class_type "SaveAnimatedWEBP"
           :inputs {:images ["6" 0] :filename_prefix "murakumo-vid"
+                   :fps fps :lossless false :quality 85 :method "default"}}}))
+
+(defn ltxv-t2v-workflow
+  "LTX-Video text-to-video (DiT) ComfyUI graph as data. Native ComfyUI LTX
+   nodes: EmptyLTXVLatentVideo sizes the clip (length must be 8k+1 frames),
+   LTXVConditioning carries the frame_rate. Distilled 2B fits a 16 GB mini with
+   headroom — the DiT samples far faster per step than SVD's UNet."
+  [{:keys [ckpt clip prompt negative width height seconds fps steps cfg seed]
+    :or {clip "t5xxl_fp8_e4m3fn.safetensors"
+         negative "worst quality, blurry, jittery, distorted"
+         width 704 height 480 seconds 3 fps 24 steps 24 cfg 3.0 seed 20260703}}]
+  ;; LTX 2B is diffusion-only: the text encoder (T5-XXL) is loaded SEPARATELY via
+  ;; CLIPLoader type=ltxv — the checkpoint's own CLIP output is nil.
+  (let [length (inc (* 8 (max 1 (int (/ (* fps seconds) 8)))))]  ; 8k+1 frames
+    {"1" {:class_type "CheckpointLoaderSimple" :inputs {:ckpt_name ckpt}}
+     "9" {:class_type "CLIPLoader" :inputs {:clip_name clip :type "ltxv"}}
+     "2" {:class_type "CLIPTextEncode" :inputs {:clip ["9" 0] :text prompt}}
+     "3" {:class_type "CLIPTextEncode" :inputs {:clip ["9" 0] :text negative}}
+     "4" {:class_type "EmptyLTXVLatentVideo" :inputs {:width width :height height
+                                                      :length length :batch_size 1}}
+     "5" {:class_type "LTXVConditioning" :inputs {:positive ["2" 0] :negative ["3" 0]
+                                                  :frame_rate fps}}
+     "6" {:class_type "KSampler" :inputs {:model ["1" 0] :positive ["5" 0] :negative ["5" 1]
+                                          :latent_image ["4" 0] :seed seed :steps steps
+                                          :cfg cfg :sampler_name "euler" :scheduler "normal"
+                                          :denoise 1.0}}
+     "7" {:class_type "VAEDecode" :inputs {:samples ["6" 0] :vae ["1" 2]}}
+     "8" {:class_type "SaveAnimatedWEBP"
+          :inputs {:images ["7" 0] :filename_prefix "murakumo-ltx"
                    :fps fps :lossless false :quality 85 :method "default"}}}))
 
 (defn txt2audio-workflow
@@ -148,14 +177,16 @@
    the artifact home over scp. Pure of the ledger — the caller settles."
   [node kind opts]
   (let [host (:host node)
-        ckpt (first (checkpoints host))
-        wf (case kind
-             :image (txt2img-workflow (assoc opts :ckpt ckpt))
-             :video (i2v-workflow (assoc opts :ckpt ckpt :image (:image opts "seed.png")))
-             :audio (txt2audio-workflow (assoc opts :ckpt ckpt)))
+        ;; :ckpt from opts (scheduler resolves the model's checkpoint) or first
+        ckpt (or (:ckpt opts) (first (checkpoints host)))
+        [wf out-node] (case kind
+                        :image [(txt2img-workflow (assoc opts :ckpt ckpt)) :7]
+                        :video [(i2v-workflow (assoc opts :ckpt ckpt :image (:image opts "seed.png"))) :7]
+                        :ltx-video [(ltxv-t2v-workflow (assoc opts :ckpt ckpt)) :8]
+                        :audio [(txt2audio-workflow (assoc opts :ckpt ckpt)) :7])
         pid (submit! host wf)
         hist (await-history host pid 900)
-        out (get-in hist [:outputs :7])
+        out (get-in hist [:outputs out-node])
         file (or (get-in out [:images 0]) (get-in out [:gifs 0]) (get-in out [:audio 0]))]
     (when file
       (let [remote (format "comfyui/output/%s" (:filename file))
