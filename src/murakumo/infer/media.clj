@@ -139,8 +139,29 @@
        :free-bytes (get-in stats [:system :ram_free] 0)
        :queue queue})))
 
-(defn- live-fleet [f]
+(defn live-fleet [f]
   (->> (:nodes f) (pmap live-node) (filter some?) vec))
+
+(defn run-job!
+  "Render ONE media job on `node` and return its ComfyUI history. `kind` ∈
+   #{:image :video :audio}; `opts` are the workflow params. Blocking. Fetches
+   the artifact home over scp. Pure of the ledger — the caller settles."
+  [node kind opts]
+  (let [host (:host node)
+        ckpt (first (checkpoints host))
+        wf (case kind
+             :image (txt2img-workflow (assoc opts :ckpt ckpt))
+             :video (i2v-workflow (assoc opts :ckpt ckpt :image (:image opts "seed.png")))
+             :audio (txt2audio-workflow (assoc opts :ckpt ckpt)))
+        pid (submit! host wf)
+        hist (await-history host pid 900)
+        out (get-in hist [:outputs :7])
+        file (or (get-in out [:images 0]) (get-in out [:gifs 0]) (get-in out [:audio 0]))]
+    (when file
+      (let [remote (format "comfyui/output/%s" (:filename file))
+            local (str "murakumo-" (:filename file))]
+        (p/sh "scp" "-o" "BatchMode=yes" (str host ":" remote) local)))
+    hist))
 
 (defn cmd-nodes [_]
   (let [f (fleet/enrich (fleet/load-fleet))]

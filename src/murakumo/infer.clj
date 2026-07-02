@@ -239,6 +239,8 @@
                 (apply (resolve 'murakumo.infer.media/-main) args))
     "gc" (do (require 'murakumo.infer.gc-op)
              (apply (resolve 'murakumo.infer.gc-op/-main) args))
+    "bench" (do (require 'murakumo.infer.bench)
+                (apply (resolve 'murakumo.infer.bench/-main) args))
     "probe" (cmd-probe args)
     "plan" (cmd-plan args)
     "provision" (cmd-provision args)
