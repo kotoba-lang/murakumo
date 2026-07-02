@@ -495,6 +495,14 @@ bb murakumo nodes    # nodes without :status "authorized" are now excluded,
 - Pure logic (`murakumo.kekkai.gate`, env resolution + node partitioning) is
   unit-tested offline in `bb test`; the subprocess shell (`murakumo.kekkai`)
   is exercised manually against a real sibling kekkai checkout.
+- **Known cost (not yet optimized): one JVM spawn per node.** `apply-gate`
+  shells out to `kekkai.cli` once per node in the selection (no batching), so
+  enabling the gate on a full fleet adds one `clojure -M` cold-start per node
+  to every command. Fine for occasional `provision`/`mesh`, noticeable on a
+  larger fleet or a tight loop. A batched `kekkai.cli <ledger> <node-id>...`
+  (one JVM, N statuses) would remove this — not done yet. A launch failure
+  (missing `clojure` on PATH, broken checkout) degrades that node to
+  `"unknown"` (denied) rather than crashing the command.
 
 ## Status (honest)
 

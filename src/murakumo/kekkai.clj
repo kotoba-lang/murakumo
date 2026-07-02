@@ -32,14 +32,18 @@
 
 (defn status-for
   "One node's kekkai admission status, via the kekkai.cli subprocess.
-   \"unknown\" when the sibling kekkai checkout is absent or the subprocess
-   fails (fail closed, not fail open)."
+   \"unknown\" when the sibling kekkai checkout is absent, the `clojure`
+   binary isn't on PATH, or the subprocess otherwise fails to launch or run
+   (fail closed, not fail open — a missing/broken kekkai toolchain must never
+   crash murakumo's own CLI, only deny admission)."
   [node-name]
   (let [dir (gate/kekkai-dir getenv)]
     (if-not (.exists (java.io.File. dir))
       "unknown"
-      (gate/parse-status
-       (p/sh (gate/cli-argv (absolute (gate/ledger-path getenv)) node-name) {:dir dir})))))
+      (try
+        (gate/parse-status
+         (p/sh (gate/cli-argv (absolute (gate/ledger-path getenv)) node-name) {:dir dir}))
+        (catch Exception _ "unknown")))))
 
 (defn apply-gate
   "Filter `nodes` to kekkai-authorized members when the gate is enabled;
