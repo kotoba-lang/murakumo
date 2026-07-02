@@ -17,6 +17,7 @@
 (ns murakumo.infer.relay-server
   (:require [cheshire.core :as json]
             [clojure.edn :as edn]
+            [murakumo.infer.postproc :as pp]
             [murakumo.infer.relay :as relay]
             [org.httpkit.server :as http]))
 
@@ -50,11 +51,23 @@
 
       :result
       (when-let [wid (get @chans ch)]
-        (let [[settled st] (relay/on-result @state wid m)]
-          (reset! state st)
-          (when settled
-            (append-ledger! settled)
-            (send! ch settled))))
+        ;; proof-of-compute: for feature-extraction jobs, verify the returned
+        ;; histogram against the pure reference BEFORE crediting. A bogus result
+        ;; is rejected (requeued via lease), so a lying worker earns nothing.
+        (let [job (get-in @state [:assigned (:job-id m) :job])
+              pixels (get-in job [:input :pixels])
+              ;; :kind arrives as a JSON string ("media-postproc"), keep string-safe
+              postproc? (contains? #{"media-postproc" :media-postproc} (:kind job))
+              ok? (or (not postproc?)
+                      (nil? pixels)
+                      (pp/verify pixels (get-in m [:output :histogram])))]
+          (if-not ok?
+            (send! ch {:msg :rejected :job-id (:job-id m) :reason "verification failed"})
+            (let [[settled st] (relay/on-result @state wid m)]
+              (reset! state st)
+              (when settled
+                (append-ledger! settled)
+                (send! ch settled))))))
 
       :ping (send! ch {:msg :pong})
       nil)))
