@@ -3,7 +3,8 @@
 (ns murakumo.fleet
   (:require [babashka.process :as p]
             [murakumo.config :as config]
-            [murakumo.fleet.inventory :as inv]))
+            [murakumo.fleet.inventory :as inv]
+            [murakumo.kekkai :as kekkai]))
 
 (defn load-fleet
   "Read fleet.edn from the repo root (or an explicit path)."
@@ -25,5 +26,11 @@
   [fleet]
   (inv/enrich fleet (tailscale-status)))
 
-(def select inv/select)
+(defn select
+  "Resolve a node selector to node maps, then gate through kekkai admission
+   (murakumo.kekkai/apply-gate is a pass-through no-op unless a kekkai ledger
+   is configured — see README ## Fleet admission — kekkai)."
+  [fleet sel]
+  (kekkai/apply-gate (inv/select fleet sel)))
+
 (def node-named inv/node-named)

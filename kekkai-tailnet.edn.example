@@ -1,0 +1,24 @@
+;; kekkai-tailnet.edn.example — the murakumo fleet-admission ledger (kekkai gate).
+;;
+;; Copy this to ./kekkai-tailnet.edn (gitignored — it's local operational state,
+;; like .murakumo-peers.edn) to OPT IN to the zero-trust admission gate: once
+;; present, `murakumo.fleet/select` (and every command built on it — nodes,
+;; provision, status, mesh, deploy, up/down) only operates on nodes whose entry
+;; here has :status "authorized". A node merely listed in fleet.edn but absent
+;; or non-"authorized" here is excluded and reported to stderr — being in the
+;; desired inventory is not enough (that would make the governor a no-op).
+;;
+;; This is the same shape kotoba-lang/kekkai's Store expects (kekkai.store/
+;; demo-data's :nodes). Real admission (moving a node from "pending" to
+;; "authorized") happens through kekkai's own CoordinationActor — a coord-LLM
+;; proposal, censored by TailnetGovernor, with node admission ALWAYS routed to
+;; a human (kekkai.governor's :node/admit high-stakes rule). This file is the
+;; resulting ground-fact snapshot murakumo consults; it does not run the
+;; admission flow itself. See kotoba-lang/kekkai/README.md.
+{:nodes
+ {"naphtali" {:id "naphtali" :status "authorized" :did "did:key:zNaphtali"}
+  "simeon"   {:id "simeon"   :status "authorized" :did "did:key:zSimeon"}
+  ;; a newly added Mac mini stays "pending" (excluded from fleet ops) until an
+  ;; operator explicitly admits it through kekkai — adding a fleet.edn line
+  ;; alone does not grant it trust.
+  "judah"    {:id "judah"    :status "pending"    :did "did:key:zJudah"}}}
