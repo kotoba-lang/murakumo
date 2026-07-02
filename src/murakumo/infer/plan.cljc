@@ -108,6 +108,36 @@
      :fits? (and (>= total (:model/weight-bytes model))
                  (every? :fits? (filter (comp pos? :span) asg)))}))
 
+(defn choose-strategy
+  "Pick the parallelism the interconnect can actually pay for — the exo/petals
+   question answered as a pure function, not a config flag.
+
+   {:link-gbps measured-bandwidth :ranks n
+    :model {:model/experts e :model/kv-heads k}}
+   → {:strategy :pipeline | :tensor | :expert :why <reason>}
+
+   The wire costs per generated token:
+     :pipeline  one activation handoff per shard boundary   (~KBs)   any link
+     :tensor    an all-reduce EVERY layer                   (~MBs)   ≥20 Gb/s
+     :expert    top-k expert dispatch every MoE layer       (~MBs)   ≥20 Gb/s
+   :tensor additionally needs kv-heads divisible by ranks (GQA splits by head);
+   :expert needs a MoE (experts > ranks) so each rank holds whole experts."
+  [{:keys [link-gbps ranks model]}]
+  (let [{:model/keys [experts kv-heads]} model
+        fast? (and link-gbps (>= (double link-gbps) 20.0))]
+    (cond
+      (and fast? kv-heads (pos? (or ranks 0)) (zero? (mod kv-heads ranks)))
+      {:strategy :tensor
+       :why "fast interconnect and kv-heads divide the ranks — all-reduce per layer is affordable"}
+
+      (and fast? experts (> (or experts 0) (or ranks 1)))
+      {:strategy :expert
+       :why "fast interconnect and enough experts for every rank to hold whole ones"}
+
+      :else
+      {:strategy :pipeline
+       :why "GbE-class link: one activation handoff per boundary is all it can pay for"})))
+
 (defn report
   "Human-oriented rows for the plan table (pure; printing is the caller's job)."
   [{:keys [assignments] :as plan}]

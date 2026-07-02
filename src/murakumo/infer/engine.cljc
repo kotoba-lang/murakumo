@@ -62,13 +62,23 @@
 
 (defn head-cmd
   "The head's `llama-server` — loads the GGUF, drives the RPC ring, serves
-   OpenAI-compatible /v1 on :port. The head's own slice stays on its local GPU."
-  [plan {:keys [bin-dir model-path port rpc-port ctx parallel]
-         :or {port 8080 rpc-port default-rpc-port ctx 4096 parallel 1}}]
+   OpenAI-compatible /v1 on :port. The head's own slice stays on its local GPU.
+
+   :strategy (murakumo.infer.plan/choose-strategy) maps onto llama.cpp:
+     :pipeline → --split-mode layer  (contiguous layer shards; the default)
+     :tensor   → --split-mode row    (row-parallel matmuls, all-reduce per layer)
+     :expert   → --split-mode layer + :moe-override (-ot regex) pinning expert
+                 tensors; whole-expert placement rides layer splits today —
+                 true cross-node token routing is an upstream llama.cpp gap."
+  [plan {:keys [bin-dir model-path port rpc-port ctx parallel strategy moe-override]
+         :or {port 8080 rpc-port default-rpc-port ctx 4096 parallel 1
+              strategy :pipeline}}]
   (let [ws (rpc-worker-cmds plan {:bin-dir bin-dir :port rpc-port})]
     (str bin-dir "/llama-server -m " model-path
          " --rpc " (rpc-endpoints ws)
+         " --split-mode " (case strategy :tensor "row" "layer")
          " --tensor-split " (tensor-split plan)
+         (when moe-override (str " -ot " (pr-str moe-override)))
          " -ngl 999 -c " ctx " --parallel " parallel
          " --host 0.0.0.0 --port " port)))
 
