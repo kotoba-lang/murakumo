@@ -63,6 +63,29 @@
   (let [nodes (conj (mapv mini ["a" "b" "c"]) head)]
     (is (= (plan/plan glm nodes) (plan/plan glm nodes)))))
 
+(deftest strategy-choice
+  (testing "1 GbE fleet → pipeline, whatever the model shape"
+    (is (= :pipeline (:strategy (plan/choose-strategy
+                                 {:link-gbps 1 :ranks 12
+                                  :model {:model/experts 128 :model/kv-heads 4}})))))
+  (testing "Thunderbolt-class + divisible kv-heads → tensor"
+    (is (= :tensor (:strategy (plan/choose-strategy
+                               {:link-gbps 40 :ranks 4
+                                :model {:model/experts 128 :model/kv-heads 8}})))))
+  (testing "fast link, indivisible heads, MoE → expert"
+    (is (= :expert (:strategy (plan/choose-strategy
+                               {:link-gbps 40 :ranks 5
+                                :model {:model/experts 128 :model/kv-heads 8}})))))
+  (testing "no link measurement → conservative pipeline"
+    (is (= :pipeline (:strategy (plan/choose-strategy {:ranks 3 :model {}}))))))
+
+(deftest strategy-command-emission
+  (let [pl (plan/plan glm [(assoc (mini "a") :ip "100.0.0.1") head])]
+    (is (re-find #"--split-mode row" (engine/head-cmd pl {:bin-dir "bin" :model-path "m" :strategy :tensor})))
+    (is (re-find #"--split-mode layer" (engine/head-cmd pl {:bin-dir "bin" :model-path "m"})))
+    (is (re-find #"-ot \"exps=CPU\"" (engine/head-cmd pl {:bin-dir "bin" :model-path "m"
+                                                          :strategy :expert :moe-override "exps=CPU"})))))
+
 (deftest llamacpp-rpc-commands
   (let [nodes [(assoc (mini "a") :ip "100.0.0.1")
                (assoc (mini "b") :ip "100.0.0.2" :rpc-cache? false)
