@@ -212,3 +212,33 @@
   (str "sudo launchctl bootout system/" plist-label " 2>/dev/null || true; sleep 1; "
        "sudo launchctl bootstrap system /Library/LaunchDaemons/" plist-label ".plist 2>/dev/null || true; "
        "sudo launchctl kickstart -k system/" plist-label))
+
+;; ── HTTP-wedge watchdog (com.murakumo.kotoba-mesh-watchdog) ─────────────────
+;; kotoba-server can wedge its HTTP surface while libp2p stays alive (2026-07-02,
+;; pin 4f38b74a): the process never exits, so the mesh daemon's KeepAlive cannot
+;; heal it. A sibling StartInterval daemon probes /health and kills the server on
+;; two consecutive failures — KeepAlive then restarts it.
+
+(def watchdog-label "com.murakumo.kotoba-mesh-watchdog")
+
+(defn render-watchdog-plist
+  "Substitute the watchdog template's placeholders for one node."
+  [tmpl fleet node {:keys [user home]}]
+  (-> tmpl
+      (str/replace "{{USER}}" user)
+      (str/replace "{{HOME}}" home)
+      (str/replace "{{PORT}}" (str (inv/node-port fleet node)))))
+
+(defn write-watchdog-plist-command
+  "Remote shell command that writes the watchdog plist to the system LaunchDaemon path."
+  [plist]
+  (format "sudo tee /Library/LaunchDaemons/%s.plist >/dev/null <<'PLIST'\n%s\nPLIST"
+          watchdog-label
+          plist))
+
+(defn watchdog-reprovision-command
+  "Reload + kickstart the watchdog (same bootout-settle-bootstrap dance as the mesh)."
+  []
+  (str "sudo launchctl bootout system/" watchdog-label " 2>/dev/null || true; sleep 1; "
+       "sudo launchctl bootstrap system /Library/LaunchDaemons/" watchdog-label ".plist 2>/dev/null || true; "
+       "sudo launchctl kickstart -k system/" watchdog-label))
