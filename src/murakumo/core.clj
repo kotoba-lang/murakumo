@@ -100,6 +100,13 @@
           ;; (caught by the asher canary). Settle after bootout, tolerate a re-bootstrap
           ;; of an already-loaded label, then kickstart to force the (re)start.
           (ssh/sh host (provision/reprovision-command)))
+        ;; sibling watchdog: kotoba-server can wedge its HTTP surface without
+        ;; exiting (KeepAlive can't heal that) — probe /health, kill on 2 strikes.
+        (let [wd (provision/render-watchdog-plist
+                  (slurp "deploy/com.murakumo.kotoba-mesh-watchdog.plist.tmpl")
+                  fleet n {:user user :home home})]
+          (ssh/sh host (provision/write-watchdog-plist-command wd))
+          (ssh/sh host (provision/watchdog-reprovision-command)))
         (println (report/provision-result-line (seq (provision/bootstrap-str fleet peers n))))))))
 
 (defn- load-peers [] (config/read-edn-file-or peers-file {}))

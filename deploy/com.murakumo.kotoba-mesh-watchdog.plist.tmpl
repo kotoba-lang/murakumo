@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- com.murakumo.kotoba-mesh-watchdog — HTTP-wedge watchdog for the resident
+     kotoba mesh node. Rendered per-node by `murakumo provision` next to
+     com.murakumo.kotoba-mesh. Every 60s it probes the node's own
+     http://127.0.0.1:{{PORT}}/health; TWO consecutive failures (a strike file
+     survives between runs) kill the kotoba-server process, and the mesh
+     daemon's KeepAlive brings it back. Motivated by the 2026-07-02 incident:
+     kotoba-server (pin 4f38b74a) kept its libp2p plane alive while the HTTP
+     surface wedged (accepts TCP, never responds) after days of uptime — the
+     process never crashes, so KeepAlive alone cannot heal it. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.murakumo.kotoba-mesh-watchdog</string>
+  <key>UserName</key>         <string>{{USER}}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>H="{{HOME}}"; M="$H/.murakumo/watchdog.strike"; if curl -sf -m 5 "http://127.0.0.1:{{PORT}}/health" >/dev/null 2>&#38;1; then rm -f "$M"; elif [ -f "$M" ]; then rm -f "$M"; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) health failed twice on :{{PORT}} — killing kotoba-server" >> "$H/.murakumo/watchdog.log"; pkill -f "$H/.murakumo/bin/kotoba-server"; else touch "$M"; fi</string>
+  </array>
+  <key>StartInterval</key>    <integer>60</integer>
+  <key>RunAtLoad</key>        <true/>
+  <key>StandardOutPath</key>  <string>{{HOME}}/.murakumo/watchdog.log</string>
+  <key>StandardErrorPath</key><string>{{HOME}}/.murakumo/watchdog.log</string>
+</dict>
+</plist>
