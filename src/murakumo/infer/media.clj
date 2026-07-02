@@ -23,6 +23,7 @@
             [clojure.string :as str]
             [murakumo.fleet :as fleet]
             [murakumo.infer.credits :as credits]
+            [murakumo.infer.schedule :as sched]
             [murakumo.ssh :as ssh]))
 
 (def ^:private comfy-port 8188)
@@ -55,6 +56,47 @@
    "6" {:class_type "VAEDecode" :inputs {:samples ["5" 0] :vae ["1" 2]}}
    "7" {:class_type "SaveImage" :inputs {:images ["6" 0] :filename_prefix "murakumo"}}})
 
+(defn i2v-workflow
+  "Image-to-video (Wan/LTX-style) ComfyUI graph as data: load an i2v diffusion
+   model, encode the driving image + prompt, sample N frames, decode, save as an
+   animated webp. Frame count = fps×seconds (per-second billing lines up)."
+  [{:keys [ckpt image prompt width height seconds fps steps seed]
+    :or {width 640 height 640 seconds 3 fps 16 steps 20 seed 20260703}}]
+  ;; SVD is image-only conditioning: the driving image + clip-vision carry the
+  ;; signal; there is no text-prompt node (`prompt` kept for API symmetry/logs).
+  (let [frames (int (* fps seconds))
+        _ prompt]
+    {"1" {:class_type "ImageOnlyCheckpointLoader" :inputs {:ckpt_name ckpt}}
+     "2" {:class_type "LoadImage" :inputs {:image image}}
+     "4" {:class_type "SVD_img2vid_Conditioning"
+          :inputs {:clip_vision ["1" 3] :init_image ["2" 0] :vae ["1" 2]
+                   :width width :height height :video_frames frames
+                   :motion_bucket_id 127 :fps fps :augmentation_level 0.0}}
+     "5" {:class_type "KSampler" :inputs {:model ["1" 0] :positive ["4" 0] :negative ["4" 1]
+                                          :latent_image ["4" 2] :seed seed :steps steps
+                                          :cfg 3.0 :sampler_name "euler" :scheduler "karras"
+                                          :denoise 1.0}}
+     "6" {:class_type "VAEDecode" :inputs {:samples ["5" 0] :vae ["1" 2]}}
+     "7" {:class_type "SaveAnimatedWEBP"
+          :inputs {:images ["6" 0] :filename_prefix "murakumo-vid"
+                   :fps fps :lossless false :quality 85 :method "default"}}}))
+
+(defn txt2audio-workflow
+  "Text-to-audio (Stable-Audio / audio-diffusion style) ComfyUI graph as data.
+   Duration in seconds → per-audio-second billing."
+  [{:keys [ckpt prompt negative seconds steps seed]
+    :or {negative "" seconds 10 steps 50 seed 20260703}}]
+  {"1" {:class_type "CheckpointLoaderSimple" :inputs {:ckpt_name ckpt}}
+   "2" {:class_type "CLIPTextEncode" :inputs {:clip ["1" 1] :text prompt}}
+   "3" {:class_type "CLIPTextEncode" :inputs {:clip ["1" 1] :text negative}}
+   "4" {:class_type "EmptyLatentAudio" :inputs {:seconds seconds}}
+   "5" {:class_type "KSampler" :inputs {:model ["1" 0] :positive ["2" 0] :negative ["3" 0]
+                                        :latent_image ["4" 0] :seed seed :steps steps
+                                        :cfg 5.0 :sampler_name "dpmpp_3m_sde_gpu"
+                                        :scheduler "exponential" :denoise 1.0}}
+   "6" {:class_type "VAEDecodeAudio" :inputs {:samples ["5" 0] :vae ["1" 2]}}
+   "7" {:class_type "SaveAudio" :inputs {:audio ["6" 0] :filename_prefix "murakumo-aud"}}})
+
 (defn- submit! [host workflow]
   (let [body (json/generate-string {:prompt workflow})
         out (:out (ssh/sh host (format "curl -s -m 30 -X POST http://localhost:%d/prompt -H 'Content-Type: application/json' -d %s"
@@ -82,20 +124,56 @@
     (spit runs-file (pr-str (conj ledger settled)))
     settled))
 
+(defn- live-node
+  "Probe one fleet node into the shape murakumo.infer.schedule expects:
+   which engines it serves, which checkpoints it holds, free RAM, queue depth."
+  [n]
+  (let [host (:host n)
+        stats (comfy host "/system_stats")
+        cks (set (try (checkpoints host) (catch Exception _ nil)))
+        queue (or (some-> (comfy host "/queue") :queue_running count) 0)]
+    (when stats
+      {:name (:name n) :host host
+       :engines #{:comfyui}
+       :checkpoints cks
+       :free-bytes (get-in stats [:system :ram_free] 0)
+       :queue queue})))
+
+(defn- live-fleet [f]
+  (->> (:nodes f) (pmap live-node) (filter some?) vec))
+
 (defn cmd-nodes [_]
   (let [f (fleet/enrich (fleet/load-fleet))]
-    (doseq [n (:nodes f)
-            :let [cks (try (checkpoints (:host n)) (catch Exception _ nil))]]
-      (println (format "%-10s %s" (:name n) (or (seq cks) "-"))))))
+    (println (format "%-10s %6s %6s  %s" "NODE" "FREE" "QUEUE" "CHECKPOINTS"))
+    (doseq [n (live-fleet f)]
+      (println (format "%-10s %5.1fG %6d  %s"
+                       (:name n)
+                       (/ (double (:free-bytes n)) 1e9)
+                       (:queue n)
+                       (str/join ", " (:checkpoints n)))))))
+
+(defn- resolve-node
+  "Pick the node to run `model`: the named node if given & eligible, else the
+   scheduler's choice over the live fleet. Returns the fleet node map."
+  [f model node-name]
+  (let [live (live-fleet f)]
+    (if node-name
+      (or (first (filter #(= node-name (:name %)) (:nodes f)))
+          (throw (ex-info (str "unknown node " node-name) {})))
+      (if-let [chosen (sched/pick live model)]
+        (first (filter #(= (:name chosen) (:name %)) (:nodes f)))
+        (throw (ex-info "no eligible node for this model" {:model (:model/id model)}))))))
 
 (defn cmd-generate [[node-name prompt negative size steps]]
   (let [cfg (edn/read-string (slurp "infer.edn"))
         f (fleet/enrich (fleet/load-fleet))
-        node (or (first (filter #(= node-name (:name %)) (:nodes f)))
-                 (do (println "unknown node" node-name) (System/exit 1)))
+        img-model (or (first (filter #(= :image (:model/kind %)) (vals (:models cfg))))
+                      {:model/id "animagine-xl-4.0" :model/engine :comfyui :credit/per-image 100})
+        ;; when no node named, the scheduler routes the job (render-farm mode)
+        node (resolve-node f img-model (when (and node-name (not= node-name "-")) node-name))
         host (:host node)
         ckpt (or (first (checkpoints host))
-                 (do (println "no checkpoint on" node-name) (System/exit 1)))
+                 (do (println "no checkpoint on" (:name node)) (System/exit 1)))
         model (or (first (filter #(= ckpt (get % :model/gguf (:model/checkpoint %)))
                                  (vals (:models cfg))))
                   {:model/id ckpt :credit/per-image 100})
@@ -105,7 +183,7 @@
                               :steps (or (some-> steps parse-long) 24)})
         t0 (System/currentTimeMillis)
         pid (submit! host wf)
-        _ (println (format "[%s] %s → prompt %s, sampling…" node-name ckpt pid))
+        _ (println (format "[%s] %s → prompt %s, sampling…" (:name node) ckpt pid))
         hist (await-history host pid 600)
         ms (- (System/currentTimeMillis) t0)
         img (get-in hist [:outputs :7 :images 0])
@@ -113,7 +191,7 @@
         local (str "murakumo-" (:filename img))]
     (p/sh "scp" "-o" "BatchMode=yes" (str host ":" remote) local)
     (let [settled (settle! node model {:images 1} ms)]
-      (println (format "image → %s  (%.1fs on %s)" local (/ ms 1000.0) node-name))
+      (println (format "image → %s  (%.1fs on %s)" local (/ ms 1000.0) (:name node)))
       (println (format "settled: %.1f credits — %s earns %.1f, treasury %.1f"
                        (:run/total settled)
                        node-name
