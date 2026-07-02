@@ -68,23 +68,29 @@
                          (throughput batch fleet-ms)
                          (/ (double single-ms) (max 1 fleet-ms))))))))
 
-(defn cmd-video [[seconds]]
-  (let [seconds (or (some-> seconds parse-long) 1)
+(defn cmd-video [[which seconds]]
+  ;; `which` ∈ {ltx, svd}; default ltx (16GB-friendly DiT)
+  (let [ltx? (not= which "svd")
+        seconds (or (some-> (if ltx? seconds which) parse-long) 3)
+        kind (if ltx? :ltx-video :video)
         cfg (edn/read-string (slurp "infer.edn"))
-        model (first (filter #(= :video (:model/kind %)) (vals (:models cfg))))
+        model (first (filter #(= kind (:model/kind %)) (vals (:models cfg))))
         f (fleet/enrich (fleet/load-fleet))
         live (media/live-fleet f)
-        node (some #(when (sched/eligible? % model) %) live)]
+        node (some #(when (sched/eligible? % model) %) live)
+        fps (if ltx? 24 16)]
     (if-not node
-      (println "no node holds a video checkpoint with enough free memory")
+      (println (format "no node holds %s with enough free memory" (:model/id model)))
       (let [fleet-node (first (filter #(= (:name node) (:name %)) (:nodes f)))
-            ms (run-one! fleet-node :video {:seconds seconds :fps 16 :steps 20
-                                            :prompt "gentle motion"})]
+            ms (run-one! fleet-node kind {:seconds seconds :fps fps :steps (if ltx? 24 20)
+                                          :ckpt (:model/checkpoint model)
+                                          :prompt "a cloud spirit drifting over a stormy sky, cinematic"})]
         (when ms
-          (println (format "SVD i2v: %ds (%d frames) in %.0fs on %s = %.2f frames/s (%.1fx realtime)"
-                           seconds (* 16 seconds) (/ ms 1000.0) (:name node)
-                           (/ (* 16.0 seconds) (/ ms 1000.0))
-                           (/ (double seconds) (/ ms 1000.0)))))))))
+          (let [frames (int (* fps seconds))]
+            (println (format "%s: %ds (%d frames) in %.0fs on %s = %.2f frames/s (%.2fx realtime)"
+                             (:model/family model) seconds frames (/ ms 1000.0) (:name node)
+                             (/ (double frames) (/ ms 1000.0))
+                             (/ (double seconds) (/ ms 1000.0))))))))))
 
 (defn cmd-audio [[seconds]]
   (let [seconds (or (some-> seconds parse-long) 10)
