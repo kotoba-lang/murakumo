@@ -36,14 +36,18 @@
 (defn rpc-worker-cmds
   "One `rpc-server` spec per serving worker node.
    `-c` caches streamed tensors on the node's disk (skip on disk-tight nodes)."
-  [plan {:keys [bin-dir port cache-dir] :or {port default-rpc-port}}]
+  [plan {:keys [bin-dir port cache-dir device] :or {port default-rpc-port device "MTL0"}}]
   (for [{:keys [node]} (workers plan)
         :let [cache? (not (false? (:rpc-cache? node)))]]
     {:name (:name node)
      :host (:host node)
      :ip (:ip node)
      :port port
+     ;; -d pins the worker to ONE device: rpc-server otherwise also exports its
+     ;; BLAS/CPU backends and the head schedules ops onto them that they cannot
+     ;; run (live fleet: RMS_NORM → ggml_backend_blas abort).
      :cmd (str bin-dir "/rpc-server -H 0.0.0.0 -p " port
+               " -d " (or (:rpc-device node) device)
                (when cache? (str " -c"
                                  (when cache-dir (str " " cache-dir)))))}))
 
