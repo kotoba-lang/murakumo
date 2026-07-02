@@ -192,7 +192,7 @@
 
 (defn cmd-serve
   "Run the head llama-server: locally in the foreground, or — for a :remote?
-   head — resident on the fleet node over SSH (the GGUF lives in the head\'s
+   head — resident on the fleet node over SSH (the GGUF lives in the head's
    :model-dir there; `provision` pushes the binary)."
   [[model-id gguf-path]]
   (let [cfg (load-config)
@@ -235,6 +235,8 @@
 
 (defn -main [& [cmd & args]]
   (case cmd
+    "media" (do (require 'murakumo.infer.media)
+                (apply (resolve 'murakumo.infer.media/-main) args))
     "probe" (cmd-probe args)
     "plan" (cmd-plan args)
     "provision" (cmd-provision args)
@@ -243,4 +245,4 @@
     "ps" (cmd-ps args)
     "serve" (cmd-serve args)
     "generate" (cmd-generate args)
-    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|generate \"<prompt>\"")))
+    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|generate \"<prompt>\"|media …")))

@@ -50,6 +50,20 @@
             after (reduce + (vals (dissoc (credits/balances (conj ledger entry)) :treasury)))]
         (is (= 60.0 (- before after)))))))
 
+(deftest media-units
+  (let [bal {"artist" 500.0}
+        sdxl {:model/id "animagine-xl-4.0" :credit/per-image 100}
+        video {:model/id "wan-2.2" :credit/per-video-second 40}]
+    (testing "per-image pricing, Civitai-Buzz shape"
+      (let [{:keys [allow? cost]} (credits/charge bal "artist" {:model sdxl :units {:images 4}})]
+        (is allow?) (is (= 400.0 cost))))
+    (testing "per-second video pricing"
+      (is (= 200.0 (:cost (credits/charge bal "artist" {:model video :units {:video-seconds 5}})))))
+    (testing "tokens shorthand still works"
+      (is (= 60.0 (:cost (credits/charge bal "artist" {:model {:credit/per-token 2} :tokens 30})))))
+    (testing "unknown units are an error, not free"
+      (is (thrown? Exception (credits/job-cost sdxl {:pixels 1e6}))))))
+
 (deftest receipts
   (let [settled (credits/settle run)
         r1 (credits/receipt {:settled settled

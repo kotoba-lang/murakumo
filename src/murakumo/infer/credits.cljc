@@ -35,18 +35,43 @@
               :when (pos? (or span 0))]
           [(:name node) (* (double est-bytes) duration-ms)])))
 
+
+(def unit-prices
+  "Media-first pricing keys (Civitai-Buzz-style per-job units) alongside
+   per-token text. A model's registry entry carries whichever apply."
+  {:tokens :credit/per-token
+   :images :credit/per-image
+   :video-seconds :credit/per-video-second
+   :audio-seconds :credit/per-audio-second
+   :training-steps :credit/per-training-step})
+
+(defn job-cost
+  "Σ units×price for a media/text job. `units` e.g. {:images 4} or
+   {:tokens 300} or {:video-seconds 5}. Unknown unit keys are an error —
+   silence would mean free inference."
+  [model units]
+  (reduce (fn [acc [u n]]
+            (let [price-key (or (unit-prices u)
+                                (throw (ex-info "unknown billing unit" {:unit u})))]
+              (+ acc (* (double (get model price-key
+                                      (if (= u :tokens) default-per-token 0)))
+                        (double n)))))
+          0.0 units))
+
+
 (defn settle
   "One run → its credit distribution (pure).
-   run: {:model {:credit/per-token n} :tokens n :duration-ms ms
+   run: {:model {…prices…} (:tokens n | :units {:images 1 …}) :duration-ms ms
          :plan {:assignments [...]}}
    → {:run/total t :run/treasury x :run/head y :run/shares {node credits}}
    Shares are proportional to memory-time; the head's OWN layer share rides
-   the same rule, PLUS it earns head-frac off the top for terminating the API."
-  [{:keys [model tokens duration-ms plan] :as _run}]
-  (let [per-token (:credit/per-token model default-per-token)
-        head-frac (:credit/head-frac model default-head-frac)
+   the same rule, PLUS it earns head-frac off the top for terminating the API.
+   Total is Σ units×price (job-cost) — text (:tokens) and media (:units) alike."
+  [{:keys [model tokens units duration-ms plan] :as _run}]
+  (let [head-frac (:credit/head-frac model default-head-frac)
         proto-frac (:credit/protocol-frac model default-protocol-frac)
-        total (* (double per-token) (or tokens 0))
+        units (or units (when tokens {:tokens tokens}))
+        total (job-cost model units)
         treasury (* total (double proto-frac))
         head-cut (* total (double head-frac))
         pool (- total treasury head-cut)
@@ -74,17 +99,17 @@
   (get balances (name who) 0.0))
 
 (defn charge
-  "Demand-side admission: can `who` afford `tokens` of `model` at its registry
-   price, given folded `balances`? → {:allow? bool :cost c :entry spend-entry}.
-   THE redemption rule: credits earned by holding shards are the only way to
-   buy inference beyond the fiat gateway — supply and demand meet in one unit."
-  [balances who {:keys [model tokens]}]
-  (let [cost (* (double (:credit/per-token model default-per-token))
-                (double (or tokens 0)))
+  "Demand-side admission: can `who` afford this job of `model` at its registry
+   prices, given folded `balances`? → {:allow? bool :cost c :entry spend-entry}.
+   Text passes {:tokens n}; media passes {:images n} / {:video-seconds s} /
+   {:audio-seconds s} — Civitai's Buzz shape, one ledger."
+  [balances who {:keys [model tokens units]}]
+  (let [units (or units (when tokens {:tokens tokens}))
+        cost (job-cost model units)
         bal (balance-of balances who)]
     (if (>= bal cost)
       {:allow? true :cost cost
-       :entry (spend who cost {:for {:model (:model/id model) :tokens tokens}})}
+       :entry (spend who cost {:for {:model (:model/id model) :units units}})}
       {:allow? false :cost cost :balance bal})))
 
 (defn receipt
