@@ -59,6 +59,69 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   atomicAdd(&hist[bin], 1u);
 }")
 
+;; ── upscale: native generates small, the browser swarm enlarges ─────────────
+;; The real division of labor for a render farm — a 16GB mini renders SDXL at
+;; 832×1216 fast; upscaling to 2× is embarrassingly parallel per output pixel
+;; and belongs on the browser swarm, not the generator.
+
+(defn- clampi [x lo hi] (max lo (min hi x)))
+
+(defn bilinear-2x
+  "Pure reference 2× bilinear upscale of a row-major [r g b] image of size w×h.
+   Returns the 2w×2h pixel vector. This is the contract the WGSL upscale kernel
+   must reproduce (spot-checked by verify-upscale)."
+  [pixels w h]
+  (let [src (vec pixels)
+        at (fn [x y] (nth src (+ (* (clampi y 0 (dec h)) w) (clampi x 0 (dec w)))))
+        ow (* 2 w) oh (* 2 h)]
+    (vec
+     (for [oy (range oh) ox (range ow)
+           :let [gx (/ (double ox) 2.0) gy (/ (double oy) 2.0)
+                 x0 (int gx) y0 (int gy)
+                 fx (- gx x0) fy (- gy y0)
+                 lerp (fn [a b t] (+ a (* (- b a) t)))
+                 mix (fn [i] (lerp (lerp (nth (at x0 y0) i) (nth (at (inc x0) y0) i) fx)
+                                   (lerp (nth (at x0 (inc y0)) i) (nth (at (inc x0) (inc y0)) i) fx)
+                                   fy))]]
+       [(Math/round (mix 0)) (Math/round (mix 1)) (Math/round (mix 2))]))))
+
+(defn wgsl-upscale-kernel
+  "WGSL 2× bilinear upscale — one thread per OUTPUT pixel. Ships with its
+   contract (bilinear-2x)."
+  []
+  "@group(0) @binding(0) var<storage,read> src: array<u32>;
+@group(0) @binding(1) var<storage,read_write> dst: array<u32>;
+@group(0) @binding(2) var<uniform> dims: vec2<u32>;   // w,h
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let w = dims.x; let h = dims.y; let ow = w*2u; let oh = h*2u;
+  let idx = gid.x; if (idx >= ow*oh) { return; }
+  let ox = idx % ow; let oy = idx / ow;
+  let gx = f32(ox)/2.0; let gy = f32(oy)/2.0;
+  let x0 = u32(gx); let y0 = u32(gy);
+  let x1 = min(x0+1u, w-1u); let y1 = min(y0+1u, h-1u);
+  let fx = gx - f32(x0); let fy = gy - f32(y0);
+  let p00 = src[y0*w+x0]; let p10 = src[y0*w+x1];
+  let p01 = src[y1*w+x0]; let p11 = src[y1*w+x1];
+  var out = 0u;
+  for (var c=0u; c<3u; c++) {
+    let s=c*8u;
+    let a=f32((p00>>s)&0xffu); let b=f32((p10>>s)&0xffu);
+    let cc=f32((p01>>s)&0xffu); let d=f32((p11>>s)&0xffu);
+    let top=a+(b-a)*fx; let bot=cc+(d-cc)*fx; let v=u32(round(top+(bot-top)*fy));
+    out = out | ((v & 0xffu) << s);
+  }
+  dst[idx] = out;
+}")
+
+(defn verify-upscale
+  "Spot-check: does the worker's upscaled output match the reference at `samples`
+   random-but-seeded positions? (Full re-check would defeat offloading; sampling
+   is the proof-of-compute knob.)"
+  [pixels w h claimed sample-positions]
+  (let [ref (bilinear-2x pixels w h)]
+    (every? (fn [p] (= (nth ref p) (nth (vec claimed) p))) sample-positions)))
+
 (defn verify
   "Does a worker's returned histogram match the pure reference for these pixels?
    The relay/dispatcher uses this to reject a bogus result before crediting —

@@ -15,7 +15,8 @@
 ;; cloud-murakumo /infer/runs as signed run records).
 
 (ns murakumo.infer.relay-server
-  (:require [cheshire.core :as json]
+  (:require [babashka.process :as p]
+            [cheshire.core :as json]
             [clojure.edn :as edn]
             [murakumo.infer.postproc :as pp]
             [murakumo.infer.relay :as relay]
@@ -24,14 +25,33 @@
 (defonce ^:private state (atom (relay/init)))
 (defonce ^:private chans (atom {}))          ; worker-id → channel
 (defonce ^:private ledger-file ".murakumo-relay-ledger.edn")
+;; when set (MURAKUMO_CLOUD env), each settled job is POSTed to cloud-murakumo
+;; /infer/runs as a signed run record — the dispatcher loop closes here.
+(def ^:private cloud-url (System/getenv "MURAKUMO_CLOUD"))
 
 (defn- send! [ch msg] (http/send! ch (json/generate-string msg)))
 
 (defn- now [] (System/currentTimeMillis))
 
+(defn- post-run! [settled]
+  ;; report the settled job to cloud-murakumo as a run record: the worker's did
+  ;; earns :run/shares, the protocol takes its treasury cut — same ledger as
+  ;; text/media generation. Fire-and-forget (best-effort; the local ledger is
+  ;; the durable record).
+  (when cloud-url
+    (let [run {:model "browser-swarm" :units {:jobs 1}
+               :run/total (:credits settled)
+               :run/shares {(:did settled) (* 0.95 (:credits settled))}
+               :run/treasury (* 0.05 (:credits settled))
+               :run/proof :verified}]
+      (try (p/sh "curl" "-s" "-m" "5" "-X" "POST" (str cloud-url "/infer/runs")
+                 "-H" "Content-Type: application/json" "-d" (json/generate-string run))
+           (catch Exception _ nil)))))
+
 (defn- append-ledger! [settled]
   (let [l (or (try (edn/read-string (slurp ledger-file)) (catch Exception _ nil)) [])]
-    (spit ledger-file (pr-str (conj l (select-keys settled [:job-id :did :credits :ms]))))))
+    (spit ledger-file (pr-str (conj l (select-keys settled [:job-id :did :credits :ms])))))
+  (post-run! settled))
 
 (defn- handle-msg [ch raw]
   (let [{:keys [msg] :as m} (json/parse-string raw true)]
@@ -55,12 +75,16 @@
         ;; histogram against the pure reference BEFORE crediting. A bogus result
         ;; is rejected (requeued via lease), so a lying worker earns nothing.
         (let [job (get-in @state [:assigned (:job-id m) :job])
-              pixels (get-in job [:input :pixels])
+              {:keys [pixels op w h samples]} (:input job)
               ;; :kind arrives as a JSON string ("media-postproc"), keep string-safe
               postproc? (contains? #{"media-postproc" :media-postproc} (:kind job))
-              ok? (or (not postproc?)
-                      (nil? pixels)
-                      (pp/verify pixels (get-in m [:output :histogram])))]
+              ok? (cond
+                    (not postproc?) true
+                    (contains? #{"upscale-2x" :upscale-2x} op)
+                    (pp/verify-upscale pixels w h (get-in m [:output :pixels]) samples)
+                    (some? pixels)
+                    (pp/verify pixels (get-in m [:output :histogram]))
+                    :else true)]
           (if-not ok?
             (send! ch {:msg :rejected :job-id (:job-id m) :reason "verification failed"})
             (let [[settled st] (relay/on-result @state wid m)]
