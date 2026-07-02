@@ -36,6 +36,47 @@
    :model/weight-bytes 139000000000
    :model/gguf "GLM-5.2-REAP50-Q2_K-00001-of-00004.gguf"}
 
+  "gemma-4-26b-a4b"
+  {:model/id "gemma-4-26b-a4b"
+   :model/family "Gemma 4"
+   :model/format :gguf
+   :hf/repo "unsloth/gemma-4-26B-A4B-it-GGUF"
+   :model/gguf "gemma-4-26B-A4B-it-MXFP4_MOE.gguf"
+   :model/params-b 26 :model/active-params-b 4
+   :model/layers 48
+   :model/weight-bytes 16551046944
+   ;; 実測 2026-07-02: 3×M4 mini (Metal RPC) + gad head, 全LAN:
+   ;; prefill 18.3 / decode 13.88 tok/s
+   :model/experts 128}
+
+  "nemotron-3-nano-30b-a3b"
+  {:model/id "nemotron-3-nano-30b-a3b"
+   :model/family "Nemotron 3 Nano"
+   :model/format :gguf
+   :hf/repo "unsloth/Nemotron-3-Nano-30B-A3B-GGUF"
+   :model/gguf "Nemotron-3-Nano-30B-A3B-Q4_K_M.gguf"
+   :model/params-b 30 :model/active-params-b 3
+   :model/layers 52
+   :model/weight-bytes 24574373664
+   ;; ⚠ RPC 分散不可 (実測 2026-07-02): Mamba-2 hybrid の再帰状態が
+   ;; ggml RPC backend でグラフ構築できない ([create_node] invalid data ptr、
+   ;; llama.cpp #20570 系)。単一ノード実行のみ。
+   :model/rpc-capable? false}
+
+  "qwen3-next-80b-a3b"
+  {:model/id "qwen3-next-80b-a3b"
+   :model/family "Qwen3-Next"
+   :model/format :gguf
+   :hf/repo "Qwen/Qwen3-Next-80B-A3B-Instruct-GGUF"
+   :model/gguf "Qwen3-Next-80B-A3B-Instruct-Q4_K_M.gguf"
+   :model/params-b 80 :model/active-params-b 3
+   :model/layers 48
+   :model/weight-bytes 48410988384
+   ;; 実測 2026-07-02: 6×M4 mini (-ngl 38 ≈6.4GB/台) + gad CPU 10 層, 全LAN:
+   ;; prefill 6.1 / decode 4.68 tok/s。-ngl 44+ は linear-attention の
+   ;; compute buffer で 16GB Mac が Metal OOM。
+   :model/experts 512}
+
   "glm-5.2-reap50-4bit-mlx"
   {:model/id "glm-5.2-reap50-4bit-mlx"
    :model/family "GLM-5.2"
