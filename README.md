@@ -108,9 +108,11 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `deploy/com.murakumo.kotoba-mesh.plist.tmpl` | the resident LaunchAgent template |
 | `infer.edn` | distributed-inference config: model registry + head/worker memory policy — the SSoT |
 | `src/murakumo/infer/plan.cljc` | **PURE exo-style planner**: memory-weighted contiguous layer partition + fits-gate (bb/JVM/cljs/WASM portable) |
-| `src/murakumo/infer/engine.cljc` | **PURE engine adapters**: plan → llama.cpp `--rpc/--tensor-split` cmds / `mlx.launch` ring cmds |
-| `src/murakumo/infer.clj` | the inference operator: SSH probe → plan → provision → ring up/down → serve/generate |
+| `src/murakumo/infer/moe.cljc` | **PURE mlx-moe planner**: single best-memory-node pick, README capacity tiers, expert-ratio verdict heuristic |
+| `src/murakumo/infer/engine.cljc` | **PURE engine adapters**: plan → llama.cpp `--rpc/--tensor-split` cmds / `mlx.launch` ring cmds / `mlx-moe serve` cmd |
+| `src/murakumo/infer.clj` | the inference operator: SSH probe → plan → provision → ring up/down → serve/generate (mlx-moe models take the single-node path) |
 | `test/murakumo/infer_test.clj` | offline unit tests for the pure planner/engine (`bb test`) |
+| `test/murakumo/infer_moe_test.cljc` | offline unit tests for the pure mlx-moe planner (`bb test`) |
 
 ## Dashboard + Datom persistence
 
@@ -427,6 +429,20 @@ cloud-murakumo's CF Worker, and (eventually) inside a kotoba WASM component. Eng
   **OpenAI-compatible `/v1` API**. No model download on any worker.
 - **`:mlx-ring`** — `mlx.launch --backend ring` + mlx_lm pipeline sharding for
   MLX-format checkpoints (all-Apple fleets).
+- **`:mlx-moe`** — [mu-hashmi/mlx-moe](https://github.com/mu-hashmi/mlx-moe)
+  single-node MoE serving: **no ring at all**. A model registry entry with
+  `:model/engine :mlx-moe` skips the fleet-wide layer partition — a MoE
+  checkpoint's router only ever activates a handful of experts per token, so
+  mlx-moe loads the model WITHOUT its expert weights, discovers which experts
+  a prompt routes to, and pages only those in from the node's own SSD. One
+  Mac with ≥32 GiB usable memory then serves a checkpoint whose full weights
+  exceed it (mlx-moe's own number: a 46 GB Qwen3-Coder-Next model on a 32 GB
+  Mac). `murakumo.infer.moe` is the pure single-node planner (best-memory-node
+  pick, README hardware-table capacity tiers, an honest "does this model
+  benefit" verdict from the expert-ratio/shared-expert heuristic); it shapes
+  its plan exactly like `murakumo.infer.plan`'s (one `:head?` assignment
+  spanning every layer), so `infer.engine/commands`, `infer.credits/settle`,
+  and `plan/report` all work on it unmodified.
 
 ```bash
 bb murakumo infer probe                    # live mem/disk/GPU map of the fleet
@@ -435,12 +451,20 @@ bb murakumo infer provision                # push rpc-server + raise iogpu.wired
 bb murakumo infer up                       # start the worker ring
 bb murakumo infer serve glm-5.2-reap50-q2k ~/models/GLM-5.2-…-00001-of-00004.gguf
 bb murakumo infer generate "叢雲とは何ですか"   # OpenAI API → the whole fleet answers
+
+# :model/engine :mlx-moe — same verbs, single-node path (no ring/up/down):
+bb murakumo infer plan qwen3-coder-next-mlx-moe    # picks the best-memory node + capacity + verdict
+bb murakumo infer provision                        # pip install -U mlx-moe on that node
+bb murakumo infer serve qwen3-coder-next-mlx-moe   # nohup `mlx-moe serve` there, OpenAI-compatible /v1
+bb murakumo infer generate "叢雲とは何ですか"        # targets whichever host the last plan chose
 ```
 
 The go/no-go gate is honest about the memory math: `plan` exits non-zero when the
 fleet cannot hold the weights (e.g. GLM-5.2-REAP50 **MLX-4bit = 214 GiB ✗** on
-today's 11×16 GiB + head, while **GGUF Q2_K = 129.5 GiB ✓**). Plans, model registry,
-and run results (tok/s) are published to cloud-murakumo's `/infer/*` API.
+today's 11×16 GiB + head, while **GGUF Q2_K = 129.5 GiB ✓**) — or, for an
+`:mlx-moe` model, when no single node clears mlx-moe's smallest measured
+hardware tier (32 GiB usable memory). Plans, model registry, and run results
+(tok/s) are published to cloud-murakumo's `/infer/*` API.
 
 ## Identity & no-server-key
 
@@ -526,6 +550,11 @@ bb murakumo nodes    # nodes without :status "authorized" are now excluded,
     `murakumo.app.edn` automatically (today you paste `:cid` after a first deploy).
   - reconcile reads observed placement from node logs (`trigger: executed … <cid>`);
     a first-class `lattice ps --json` on `kotoba-server` would replace the log grep.
+  - `:mlx-moe`: the planner/engine/CLI path is implemented and unit-tested
+    (`bb test`), but **not yet run against the live fleet** — today's minis are
+    16 GiB each, below mlx-moe's smallest measured 32 GiB tier, so `infer plan
+    qwen3-coder-next-mlx-moe` currently reports `DOES NOT FIT` honestly on this
+    exact hardware until a ≥32 GiB node (fleet or `:infer/extra-nodes`) joins.
 
 ## License
 
