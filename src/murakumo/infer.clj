@@ -91,20 +91,26 @@
 
 (defn- moe? [model] (= :mlx-moe (:model/engine model)))
 
+(defn- probe-and-plan
+  "Probe the fleet + :infer/extra-nodes and hand every candidate to `plan-fn`
+   (murakumo.infer.plan/plan or murakumo.infer.moe/plan — same 2-arg shape,
+   [model nodes])."
+  [cfg model plan-fn]
+  (let [{:keys [workers head]} (probe-fleet cfg)]
+    (plan-fn model (conj workers head))))
+
 (defn- cut-plan
   "Probe + partition: workers in fleet order, the head as the LAST ring member
    (llama.cpp device order = RPC workers first, local GPU last)."
   [cfg model]
-  (let [{:keys [workers head]} (probe-fleet cfg)]
-    (plan/plan model (conj workers head))))
+  (probe-and-plan cfg model plan/plan))
 
 (defn- cut-plan-moe
   "Probe the fleet + :infer/extra-nodes and hand every candidate to
    murakumo.infer.moe/plan — it alone picks the single best-memory node (no
    ring, so the :infer/head config doesn't apply here)."
   [cfg model]
-  (let [{:keys [workers head]} (probe-fleet cfg)]
-    (moe/plan model (conj workers head))))
+  (probe-and-plan cfg model moe/plan))
 
 (defn cmd-probe [_cfg-args]
   (let [cfg (load-config)
@@ -257,21 +263,29 @@
    is whichever fleet/extra-node the planner picked, not the operator's own
    machine, so there is no local-foreground path the way llama-server has)."
   [cfg model pl]
-  (if-let [node (moe-node pl)]
-    (let [opts {:model-repo (or (:model/mlx-repo model) (:hf/repo model))
+  (cond
+    (not= :mlx-moe (:engine pl))
+    (println (str "stale/mismatched plan (last `plan` was not for an mlx-moe model) — "
+                  "run `bb murakumo infer plan " (:model/id model) "` first"))
+
+    (not (moe-node pl))
+    (println "no candidate node in the plan — run `bb murakumo infer plan <moe-model>` first")
+
+    :else
+    (let [node (moe-node pl)
+          opts {:model-repo (or (:model/mlx-repo model) (:hf/repo model))
                 :port (:infer/api-port cfg 8080)
                 :capacity (:capacity pl)
                 :kv-bits (:infer/kv-bits cfg)}
           cmd (engine/mlx-moe-cmd opts)
-          {:keys [why]} (:verdict pl)
+          {:keys [verdict why]} (:verdict pl)
           host (:host node)]
       (println cmd)
-      (println (str "verdict: " (name (get-in pl [:verdict :verdict])) " — " why))
+      (println (str "verdict: " (name verdict) " — " why))
       (let [{:keys [out]} (ssh/sh host
                                   (format "pkill -f 'mlx-moe serve' 2>/dev/null; sleep 0.3; nohup %s >/tmp/murakumo-moe.log 2>&1 & sleep 1; pgrep -f 'mlx-moe serve' >/dev/null && echo serving || echo FAILED" cmd))]
         (println (format "[%s] %s — http://%s:%s/v1 (first launch downloads the model; watch /tmp/murakumo-moe.log)"
-                         host out host (:infer/api-port cfg 8080)))))
-    (println "no candidate node in the plan — run `bb murakumo infer plan <moe-model>` first")))
+                         host out host (:infer/api-port cfg 8080)))))))
 
 (defn- cmd-serve-ring
   "The original ring path: llama-server locally in the foreground, or — for a
