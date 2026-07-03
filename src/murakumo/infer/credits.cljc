@@ -63,9 +63,15 @@
   "One run → its credit distribution (pure).
    run: {:model {…prices…} (:tokens n | :units {:images 1 …}) :duration-ms ms
          :plan {:assignments [...]}}
-   → {:run/total t :run/treasury x :run/head y :run/shares {node credits}}
+   → {:run/total t :run/treasury x :run/head y :run/head-name n
+      :run/shares {node credits}}
    Shares are proportional to memory-time; the head's OWN layer share rides
-   the same rule, PLUS it earns head-frac off the top for terminating the API.
+   the same rule, PLUS it earns head-frac off the top for terminating the API
+   — credited under :run/head-name, WHATEVER the :head? node's real :name is
+   (an mlx-moe plan's sole node keeps its own fleet name, e.g. \"asher\", not
+   the literal \"head\" the llama.cpp/mlx-ring head is conventionally aliased
+   to — balances/1 must credit the SAME name settle reports here, not assume
+   the literal string \"head\").
    Total is Σ units×price (job-cost) — text (:tokens) and media (:units) alike."
   [{:keys [model tokens units duration-ms plan] :as _run}]
   (let [head-frac (:credit/head-frac model default-head-frac)
@@ -83,6 +89,7 @@
     {:run/total total
      :run/treasury treasury
      :run/head head-cut
+     :run/head-name head-name
      :run/shares (if (pos? mt-sum)
                    (into {} (map (fn [[n w]] [n (* pool (/ w mt-sum))]) mt))
                    {head-name pool})}))
@@ -141,6 +148,6 @@
               (reduce (fn [a [n c]] (update a (name n) (fnil - 0.0) c)) acc sp)
               (let [s (if (:run/shares run) run (settle run))]
                 (-> (reduce (fn [a [n c]] (update a n (fnil + 0.0) c)) acc (:run/shares s))
-                    (update "head" (fnil + 0.0) (:run/head s))
+                    (update (:run/head-name s "head") (fnil + 0.0) (:run/head s))
                     (update :treasury (fnil + 0.0) (:run/treasury s))))))
           {} runs))

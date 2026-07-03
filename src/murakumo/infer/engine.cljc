@@ -15,6 +15,11 @@
 ;;   :mlx-ring      mlx_lm pipeline parallel via `mlx.launch --backend ring`
 ;;                  (all-Apple fleets; MLX-format checkpoints).
 ;;
+;;   :mlx-moe       mu-hashmi/mlx-moe single-node MoE serving — no ring, ONE
+;;                  process on the plan's sole (:head?) node; inactive experts
+;;                  page in from SSD as the router selects them instead of
+;;                  sharding layers across the fleet (murakumo.infer.moe).
+;;
 ;; Everything here is pure string/data assembly — runnable and testable anywhere.
 
 (ns murakumo.infer.engine
@@ -99,6 +104,21 @@
        " --pipeline --max-tokens " max-tokens
        " --prompt " (pr-str (or prompt "Name three Japanese cities."))))
 
+;; ── mlx-moe (single-node, SSD-paged experts) ───────────────────────────────
+
+(defn mlx-moe-cmd
+  "mu-hashmi/mlx-moe `serve` invocation. No --rpc/--hosts/ring — one process,
+   one node; `:capacity` (murakumo.infer.moe/capacity-for-usable) and
+   `:kv-bits` are optional, mlx-moe auto-selects capacity from live RAM when
+   omitted."
+  [{:keys [venv model-repo port capacity kv-bits profile]
+    :or {port 8080}}]
+  (str (if venv (str venv "/bin/mlx-moe") "mlx-moe") " serve " model-repo
+       " --host 0.0.0.0 --port " port
+       (when capacity (str " --capacity " capacity))
+       (when kv-bits (str " --kv-bits " kv-bits))
+       (when profile (str " --profile " profile))))
+
 (defn commands
   "Plan + engine + opts → {:workers [...] :head {...}} process specs."
   [plan engine opts]
@@ -106,4 +126,7 @@
     :llamacpp-rpc {:workers (vec (rpc-worker-cmds plan opts))
                    :head {:cmd (head-cmd plan opts)}}
     :mlx-ring {:hosts (mlx-hosts plan)
-               :head {:cmd (mlx-launch-cmd plan opts)}}))
+               :head {:cmd (mlx-launch-cmd plan opts)}}
+    ;; :mlx-moe ignores `plan` (no ring to conduct) — the sole node + capacity
+    ;; already live in opts (murakumo.infer.moe/plan → cmd-serve-moe).
+    :mlx-moe {:head {:cmd (mlx-moe-cmd opts)}}))

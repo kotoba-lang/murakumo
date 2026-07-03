@@ -127,4 +127,24 @@
    :model/layers 78
    :model/dense-layers 3
    :model/dense-layer-frac 1/10
-   :model/weight-bytes 229780000000}}} ; 214 GiB — needs ~19 more 16 GiB nodes
+   :model/weight-bytes 229780000000} ; 214 GiB — needs ~19 more 16 GiB nodes
+
+  ;; ── mlx-moe (single-node, SSD-paged experts — mu-hashmi/mlx-moe) ──────────
+  ;; :model/engine :mlx-moe routes `infer plan`/`provision`/`serve` to
+  ;; murakumo.infer.moe instead of the fleet-wide ring: ONE node with ≥32 GiB
+  ;; usable memory serves the whole checkpoint, inactive experts stream from
+  ;; its own SSD. Numbers below are the mlx-moe README's OWN measured table
+  ;; for this exact checkpoint, not derived from a GGUF/MLX file we've probed
+  ;; (:model/weight-bytes is therefore the README's rounded "46 GB", not a
+  ;; byte-exact file size like the other entries).
+  "qwen3-coder-next-mlx-moe"
+  {:model/id "qwen3-coder-next-mlx-moe"
+   :model/family "Qwen3-Coder-Next"
+   :model/format :mlx
+   :model/engine :mlx-moe
+   :model/mlx-repo "mlx-community/Qwen3-Coder-Next-4bit"
+   :model/layers 48                     ; MoE layers (README)
+   :model/experts 512
+   :model/active-experts 10             ; top-k
+   :model/moe-shared-expert? true
+   :model/weight-bytes 46000000000}}}   ; ~46 GB full 4-bit checkpoint (OOMs a 32 GiB Mac whole)

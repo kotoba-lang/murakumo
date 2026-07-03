@@ -29,6 +29,21 @@
   (testing "pre-settled entries fold identically to raw runs"
     (is (= (credits/balances [run]) (credits/balances [(credits/settle run)])))))
 
+(deftest head-cut-follows-the-real-conducting-node
+  (testing "an mlx-moe-shaped plan (single :head? node, NOT literally named
+            \"head\") credits its conductor cut under its own real name, not
+            a phantom \"head\" account — same node earns 100% of the pool,
+            not ~90%"
+    (let [moe-plan {:assignments [{:node {:name "asher" :head? true}
+                                   :span 48 :est-bytes 18700000000}]}
+          moe-run {:model {:credit/per-token 2} :tokens 100 :duration-ms 60000 :plan moe-plan}
+          settled (credits/settle moe-run)
+          b (credits/balances [moe-run])]
+      (is (= "asher" (:run/head-name settled)))
+      (is (nil? (b "head")) "no orphan \"head\" account for a plan with no node literally named head")
+      (is (= (:run/head settled) (- (b "asher") (get-in settled [:run/shares "asher"])))
+          "the head-frac cut lands on the SAME account as the shard share"))))
+
 (deftest redemption
   (let [ledger [run run]                                    ; naphtali earns twice
         bal (credits/balances ledger)
