@@ -17,13 +17,23 @@ const PAGES = [
     must: ['叢雲に加わる', 'did:key', 'relay.gftd.ai'], clickJoin: true },
 ];
 
+// Full API surface. `assert` is an optional predicate over the parsed JSON body
+// — a 200 that returns the wrong shape (e.g. pay quote losing the Safe address,
+// or the model catalog going empty) is a regression the status check misses.
 const APIS = [
-  ['GET', 'https://api.murakumo.cloud/health'],
-  ['GET', 'https://api.murakumo.cloud/join'],
-  ['GET', 'https://app.itonami.cloud/itonami/plans'],
+  ['GET', 'https://api.murakumo.cloud/health', b => b.ok === true],
+  ['GET', 'https://api.murakumo.cloud/join', b => !!b.tiers],
+  ['GET', 'https://api.murakumo.cloud/infer/fleet', b => b['nodes-up'] >= 0],
+  ['GET', 'https://api.murakumo.cloud/infer/placement'],
+  ['GET', 'https://app.itonami.cloud/itonami/plans', b => !!b.enterprise],
   ['GET', 'https://app.itonami.cloud/itonami/verticals'],
-  ['GET', 'https://app.itonami.cloud/itonami/revenue'],
-  ['GET', 'https://relay.gftd.ai/stats'],
+  ['GET', 'https://app.itonami.cloud/itonami/revenue', b => 'usd-in' in b],
+  ['GET', 'https://app.itonami.cloud/itonami/funnel', b => 'granted' in b],
+  ['GET', 'https://app.itonami.cloud/itonami/models', b => Array.isArray(b) && b.length >= 7],
+  ['GET', 'https://app.itonami.cloud/itonami/pay/quote?usd=10',
+    b => b.chain === 'base' && b.to && b.to.startsWith('0x') && b.net === 950],
+  ['GET', 'https://app.itonami.cloud/itonami/pay/status?did=did:key:z6MkQA', b => 'pending' in b],
+  ['GET', 'https://relay.gftd.ai/stats', b => 'settled' in b],
 ];
 
 async function main() {
@@ -69,9 +79,14 @@ async function main() {
   }
 
   const req = await (await browser.newContext()).request;
-  for (const [m, url] of APIS) {
+  for (const [m, url, assert] of APIS) {
     try { const r = await req.fetch(url, { method: m, timeout: 12000 });
-      report.apis.push({ url, status: r.status(), ok: r.ok() });
+      const entry = { url, status: r.status(), ok: r.ok() };
+      if (assert && r.ok()) {
+        try { entry.assertOk = !!assert(await r.json()); }
+        catch (e) { entry.assertOk = false; entry.assertErr = String(e).slice(0, 60); }
+      }
+      report.apis.push(entry);
     } catch (e) { report.apis.push({ url, error: String(e).slice(0, 80) }); }
   }
   await browser.close();
