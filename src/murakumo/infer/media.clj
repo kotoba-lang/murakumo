@@ -194,6 +194,29 @@
         (p/sh "scp" "-o" "BatchMode=yes" (str host ":" remote) local)))
     hist))
 
+(defn run-custom-workflow!
+  "Submit an arbitrary caller-supplied ComfyUI API-format `workflow` graph
+  (e.g. a comfyui-clj/yukkuri.comfy-built workflow, not one of this
+  namespace's own txt2img/i2v/ltx/audio builders) on `node` and return the
+  local path of the artifact its `output-node` (a node id, e.g. \"7\") saved
+  — the same submit -> poll -> scp path `run-job!` uses, generalized to a
+  graph this namespace didn't build. `output-key` selects which output list
+  to read (:images (default), :gifs, or :audio), matching whichever
+  Save* node type the workflow's output node actually is. Blocking. Returns
+  nil if the output node produced no file."
+  ([node workflow output-node] (run-custom-workflow! node workflow output-node :images))
+  ([node workflow output-node output-key]
+   (let [host (:host node)
+         pid (submit! host workflow)
+         hist (await-history host pid 900)
+         out (get-in hist [:outputs (keyword output-node)])
+         file (first (get out output-key))]
+     (when file
+       (let [remote (format "comfyui/output/%s" (:filename file))
+             local (str "murakumo-" (:filename file))]
+         (p/sh "scp" "-o" "BatchMode=yes" (str host ":" remote) local)
+         local)))))
+
 (defn cmd-nodes [_]
   (let [f (fleet/enrich (fleet/load-fleet))]
     (println (format "%-10s %6s %6s  %s" "NODE" "FREE" "QUEUE" "CHECKPOINTS"))
