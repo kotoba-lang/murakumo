@@ -10,20 +10,72 @@
  ;; iogpu.wired_limit_mb) — 13 GiB wired leaves ~3 GiB for macOS + the mesh node.
  :infer/wired-limit-mb 13312
  ;; Workers are headless: macOS floor ≈ 2.5 GiB once we stop counting desktop apps.
- :infer/node-os-reserve-gib 5/2
+ :infer/node-os-reserve-gib 2
+ :infer/node-headroom-gib 5/4
+ :infer/head-headroom-gib 5/4
  ;; The head holds the GGUF, drives the ring, serves /v1. When the operator\'s
  ;; machine is NOT on the fleet LAN (probe it: >5 ms RTT to workers ⇒ every
  ;; token pays it), promote a fleet node instead: :remote? true + :host, and
  ;; a modest os-reserve since it also mmaps the checkpoint while serving.
- :infer/head {:name "head" :host "simeon" :remote? true :os-reserve-gib 3
-              :model-dir "glm"}
- :infer/extra-nodes [{:name "jacob" :host "100.117.208.83"}]
+ :infer/head {:name "head" :host "root@100.82.98.110" :remote? true
+              :os-reserve-gib 5
+              :bin-dir "/home/gad/murakumo/llama.cpp/build-rpc-glm/bin"
+              :model-dir "/home/gad/models/GLM-5.2-REAP50-Q2_K-GGUF"}
+ :infer/extra-nodes []
  ;; rpc-server -c caches streamed shards on the worker's disk; skip when free
  ;; disk < this (the cache costs ~one shard).
  :infer/cache-min-free-gib 20
+ ;; mlx-moe defaults are intentionally sparse; model entries can pin capacity,
+ ;; pin-top-k, warmup, profile, or extra args when a measured profile exists.
+ :infer/mlx-moe {:kv-bits 8 :warmup "none"}
 
  :models
- {"glm-5.2-reap50-q2k"
+ {;; ── base text models (2026-07-04): glm-5.2-reap50-q2k doesn't fit the fleet
+  ;; reliably right now (139GB, ~all of :total-usable-bytes) — these three are
+  ;; the new default `bb murakumo infer plan/provision/up` base text targets,
+  ;; small enough to fit a handful of edge nodes or the single GPU head alone.
+  "qwen-agentworld-35b-a3b"
+  {:model/id "qwen-agentworld-35b-a3b"
+   :model/family "Qwen-AgentWorld"
+   :model/format :gguf
+   :hf/repo "unsloth/Qwen-AgentWorld-35B-A3B-GGUF"
+   :model/params-b 35 :model/active-params-b 3
+   :model/layers 40
+   :model/experts 256
+   :model/active-experts 9            ; 8 routed + 1 shared
+   :model/moe-shared-expert? true
+   :model/context 262144
+   :model/gguf "Qwen-AgentWorld-35B-A3B-UD-Q4_K_M.gguf"
+   ;; HF file-listing size (UD-Q4_K_M, 2026-07-04) — not yet probed on-disk,
+   ;; unlike the byte-exact entries below.
+   :model/weight-bytes 22100000000}
+
+  "qwen3.6-35b-a3b"
+  {:model/id "qwen3.6-35b-a3b"
+   :model/family "Qwen3.6"
+   :model/format :gguf
+   :hf/repo "lmstudio-community/Qwen3.6-35B-A3B-GGUF"
+   :model/params-b 35 :model/active-params-b 3
+   :model/layers 40
+   :model/experts 256
+   :model/active-experts 9            ; 8 routed + 1 shared
+   :model/moe-shared-expert? true
+   :model/context 262144              ; extensible to 1,010,000 via YaRN
+   :model/gguf "Qwen3.6-35B-A3B-Q4_K_M.gguf"
+   :model/weight-bytes 21200000000}   ; HF file-listing size, not yet probed on-disk
+
+  "gemma-4-12b-it"
+  {:model/id "gemma-4-12b-it"
+   :model/family "Gemma 4"
+   :model/format :gguf
+   :hf/repo "unsloth/gemma-4-12b-it-GGUF"
+   :model/params-b 12                 ; dense (11.95B), not MoE
+   :model/layers 48
+   :model/context 262144
+   :model/gguf "gemma-4-12b-it-Q4_K_M.gguf"
+   :model/weight-bytes 7120000000}    ; HF file-listing size, not yet probed on-disk
+
+  "glm-5.2-reap50-q2k"
   {:model/id "glm-5.2-reap50-q2k"
    :model/family "GLM-5.2"
    :model/format :gguf
@@ -34,7 +86,8 @@
    :model/dense-layers 3          ; first_k_dense_replace: light, expert-free layers
    :model/dense-layer-frac 1/10
    :model/weight-bytes 139000000000
-   :model/gguf "GLM-5.2-REAP50-Q2_K-00001-of-00004.gguf"}
+   :model/gguf "GLM-5.2-REAP50-Q2_K-00001-of-00004.gguf"
+   :model/llama-extra-args ["--temp" "0.6" "--repeat-penalty" "1.1" "--top-p" "0.95"]}
 
   "gemma-4-26b-a4b"
   {:model/id "gemma-4-26b-a4b"
@@ -128,6 +181,32 @@
    :model/dense-layers 3
    :model/dense-layer-frac 1/10
    :model/weight-bytes 229780000000} ; 214 GiB — needs ~19 more 16 GiB nodes
+
+  "glm-5.2-mxfp4-mlx-moe"
+  {:model/id "glm-5.2-mxfp4-mlx-moe"
+   :model/family "GLM-5.2"
+   :model/format :mlx
+   :model/engine :mlx-moe
+   :model/mlx-repo "mlx-community/GLM-5.2-mxfp4"
+   :model/params-b 744
+   :model/active-params-b 40
+   :model/layers 78
+   :model/dense-layers 3
+   :model/dense-layer-frac 1/10
+   :model/experts 256
+   :model/active-experts 8
+   :model/moe-shared-expert? true
+   ;; Local measurement on 32 GiB Apple Silicon with the Clojure/Datomic profile:
+   ;; capacity=4 is stable but low quality; capacity=8 loads around 22 GiB wired
+   ;; and is the first useful hot-expert cache setting. 16 GiB M4 minis remain
+   ;; below this tier, so GLM-5.2 fleet quality should use the GGUF/RPC path.
+   :model/mlx-moe-capacity-tiers [[24 8] [20 4]]
+   :model/capacity 8
+   :model/pin-top-k 8
+   :model/kv-bits 8
+   :model/warmup "none"
+   :model/mlx-moe-profile "$HOME/.cache/mlx-moe/glm-5.2-mxfp4-clj-datomic-profile.json"
+   :model/weight-bytes 395110000000} ; HF download size, rounded decimal bytes
 
   ;; ── mlx-moe (single-node, SSD-paged experts — mu-hashmi/mlx-moe) ──────────
   ;; :model/engine :mlx-moe routes `infer plan`/`provision`/`serve` to

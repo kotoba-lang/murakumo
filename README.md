@@ -444,6 +444,15 @@ cloud-murakumo's CF Worker, and (eventually) inside a kotoba WASM component. Eng
   spanning every layer), so `infer.engine/commands`, `infer.credits/settle`,
   and `plan/report` all work on it unmodified.
 
+For the M4 mini fleet, the efficient GLM-5.2 path is still
+**GGUF + `:llamacpp-rpc`**: 16 GiB minis contribute small contiguous layer
+shards and cache them with `rpc-server -c`. `mlx-moe` is a per-node hot-expert
+cache for Apple nodes that can hold the non-expert base plus the measured
+resident expert capacity. The local GLM-5.2 mxfp4 Clojure/Datomic profile is
+registered as `glm-5.2-mxfp4-mlx-moe`; it requires a single Apple node at the
+measured `capacity=4/8` tiers, so 16 GiB minis are rejected honestly instead of
+being counted together as if `mlx-moe` were distributed.
+
 ```bash
 bb murakumo infer probe                    # live mem/disk/GPU map of the fleet
 bb murakumo infer plan glm-5.2-reap50-q2k  # shard plan + go/no-go gate (infer.edn registry)
@@ -457,6 +466,10 @@ bb murakumo infer plan qwen3-coder-next-mlx-moe    # picks the best-memory node 
 bb murakumo infer provision                        # pip install -U mlx-moe on that node
 bb murakumo infer serve qwen3-coder-next-mlx-moe   # nohup `mlx-moe serve` there, OpenAI-compatible /v1
 bb murakumo infer generate "叢雲とは何ですか"        # targets whichever host the last plan chose
+
+# Experimental GLM-5.2 mxfp4 hot-expert cache on one 32 GiB+ Apple node:
+bb murakumo infer plan glm-5.2-mxfp4-mlx-moe
+bb murakumo infer serve glm-5.2-mxfp4-mlx-moe      # capacity/pin-top-k/profile come from infer.edn
 ```
 
 The go/no-go gate is honest about the memory math: `plan` exits non-zero when the

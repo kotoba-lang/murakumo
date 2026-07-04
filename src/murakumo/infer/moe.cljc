@@ -31,13 +31,24 @@
 (def ^:private capacity-tiers
   [[128 512] [64 432] [48 320] [32 208]])
 
+(defn- capacity-from-tiers
+  [tiers usable-bytes]
+  (some (fn [[gib cap]] (when (>= usable-bytes (* gib plan/GiB)) cap))
+        (sort-by (comp - first) tiers)))
+
 (defn capacity-for-usable
   "Usable bytes → mlx-moe capacity (experts cached resident per MoE layer), or
    nil below the smallest measured tier (32 GiB usable) — honestly: below that
    floor mlx-moe hasn't been shown to hold quality, so this planner declines to
-   guess rather than extrapolate past the README's own table."
-  [usable-bytes]
-  (some (fn [[gib cap]] (when (>= usable-bytes (* gib plan/GiB)) cap)) capacity-tiers))
+   guess rather than extrapolate past the README's own table. A model registry
+   entry can provide :model/mlx-moe-capacity-tiers for measured profile-cache
+   tiers (for example GLM-5.2 mxfp4 capacity=4/8); those still gate on one
+   node's usable memory, never fleet-wide memory."
+  ([usable-bytes]
+   (capacity-from-tiers capacity-tiers usable-bytes))
+  ([model usable-bytes]
+   (capacity-from-tiers (or (:model/mlx-moe-capacity-tiers model) capacity-tiers)
+                        usable-bytes)))
 
 (defn expert-ratio
   "experts / active-experts (top-k) — the mlx-moe README's first predictor of
@@ -93,17 +104,17 @@
    partition (plan/plan partitions LAYERS across many ranks): picks the ONE
    node with the most usable memory, marks it :head? (it alone drives + serves
    the OpenAI-compatible /v1 API — there is no ring to conduct), and gives it
-   the full layer span. :fits? gates on that node clearing mlx-moe's smallest
-   measured hardware tier (32 GiB usable); `nodes` empty or all sub-floor
-   yields a plan with :fits? false, not a crash (same honesty as plan/plan's
-   zero-memory-fleet case)."
+   the full layer span. :fits? gates on that node clearing either mlx-moe's
+   default measured hardware tier or the model's measured profile tier;
+   `nodes` empty or all sub-floor yields a plan with :fits? false, not a crash
+   (same honesty as plan/plan's zero-memory-fleet case)."
   [{:model/keys [layers] :as model} nodes]
   (let [ranked (->> nodes
                      (map (fn [n] {:node (assoc n :head? true) :usable (plan/usable-bytes n)}))
                      (sort-by (comp - :usable)))
         best (first ranked)
         usable (:usable best 0)
-        cap (capacity-for-usable usable)
+        cap (capacity-for-usable model usable)
         span (or layers 1)
         est (resident-bytes-estimate model cap)]
     {:engine :mlx-moe   ; self-describing so callers holding only a saved plan (no model) can branch

@@ -19,6 +19,12 @@
    :model/layers 48 :model/weight-bytes 46000000000
    :model/experts 512 :model/active-experts 10 :model/moe-shared-expert? true})
 
+(def glm-mxfp4-profiled
+  {:model/id "glm-5.2-mxfp4-mlx-moe" :model/format :mlx
+   :model/layers 78 :model/weight-bytes 395110000000
+   :model/experts 256 :model/active-experts 8 :model/moe-shared-expert? true
+   :model/mlx-moe-capacity-tiers [[24 8] [20 4]]})
+
 (deftest capacity-tiers
   (testing "the README's measured hardware table, exactly"
     (is (= 208 (moe/capacity-for-usable (* 32 GiB))))
@@ -29,6 +35,12 @@
     (is (nil? (moe/capacity-for-usable (* 31 GiB)))))
   (testing "above the top tier still caps at the largest measured capacity"
     (is (= 512 (moe/capacity-for-usable (* 256 GiB))))))
+
+(deftest model-specific-capacity-tiers
+  (testing "GLM-5.2 mxfp4 uses the measured profiled-cache tiers, not Qwen's README tiers"
+    (is (nil? (moe/capacity-for-usable glm-mxfp4-profiled (* 19 GiB))))
+    (is (= 4 (moe/capacity-for-usable glm-mxfp4-profiled (* 20 GiB))))
+    (is (= 8 (moe/capacity-for-usable glm-mxfp4-profiled (* 24 GiB))))))
 
 (deftest expert-ratio-and-verdict
   (testing "512 experts / top-10 = 51x — the README's headline ratio"
@@ -56,6 +68,10 @@
 (deftest fits-gate-is-honest
   (testing "every node under the 32 GiB floor → does not fit, not a crash"
     (let [pl (moe/plan qwen-coder-next [(node "tiny" 8) (node "small" 16)])]
+      (is (not (:fits? pl)))
+      (is (nil? (:capacity pl)))))
+  (testing "profiled GLM-5.2 mxfp4 still rejects 16 GiB M4 minis"
+    (let [pl (moe/plan glm-mxfp4-profiled [(node "m4-mini" 16)])]
       (is (not (:fits? pl)))
       (is (nil? (:capacity pl)))))
   (testing "empty fleet → does not fit, not a crash"
@@ -91,3 +107,18 @@
          (engine/mlx-moe-cmd {:model-repo "mlx-community/Qwen3-Coder-Next-4bit"})))
   (is (re-find #"^~/mlxlm/bin/mlx-moe serve "
                (engine/mlx-moe-cmd {:venv "~/mlxlm" :model-repo "m"}))))
+
+(deftest mlx-moe-cmd-emits-profile-cache-knobs
+  (let [cmd (engine/mlx-moe-cmd {:model-repo "mlx-community/GLM-5.2-mxfp4"
+                                 :capacity 8
+                                 :pin-top-k 8
+                                 :kv-bits 8
+                                 :profile "$HOME/.cache/mlx-moe/glm.json"
+                                 :warmup "none"
+                                 :extra-args ["--debug"]})]
+    (is (re-find #"--capacity 8" cmd))
+    (is (re-find #"--pin-top-k 8" cmd))
+    (is (re-find #"--kv-bits 8" cmd))
+    (is (re-find #"--profile \$HOME/\.cache/mlx-moe/glm\.json" cmd))
+    (is (re-find #"--warmup none" cmd))
+    (is (re-find #"--debug$" cmd))))
