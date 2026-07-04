@@ -472,6 +472,17 @@ bb murakumo infer plan glm-5.2-mxfp4-mlx-moe
 bb murakumo infer serve glm-5.2-mxfp4-mlx-moe      # capacity/pin-top-k/profile come from infer.edn
 ```
 
+### Claude Code on the fleet
+
+`gftdcojp/local-murakumo`'s `/v1/messages` translates the Anthropic Messages
+API to/from whatever's actually serving here — the same shape of bridge z.ai
+runs for GLM. `tools/claude-murakumo` sets `ANTHROPIC_BASE_URL`/
+`ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_MODEL` and launches the real `claude` binary:
+
+```bash
+bb claude                 # or ./tools/claude-murakumo/claude-murakumo
+```
+
 The go/no-go gate is honest about the memory math: `plan` exits non-zero when the
 fleet cannot hold the weights (e.g. GLM-5.2-REAP50 **MLX-4bit = 214 GiB ✗** on
 today's 11×16 GiB + head, while **GGUF Q2_K = 129.5 GiB ✓**) — or, for an

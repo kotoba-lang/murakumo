@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# claude-murakumo — run Claude Code against murakumo.cloud instead of Anthropic's
+# own models, the same shape of setup as z.ai's `claude-zai` wrapper for GLM.
+#
+# murakumo.cloud's /v1/messages (gftdcojp/local-murakumo) translates the
+# Anthropic Messages API to/from whatever model is actually serving on the
+# murakumo distributed fleet (currently qwen-agentworld-35b-a3b across 6 Apple
+# M4 minis + 1 remote GPU head). Point Claude Code at it by exporting three
+# env vars and launching the real `claude` binary — see below for why this
+# script bypasses a `claude` shell function/alias if one is defined.
+set -euo pipefail
+
+MURAKUMO_CLAUDE_BASE_URL="${MURAKUMO_CLAUDE_BASE_URL:-https://api.murakumo.cloud}"
+MURAKUMO_CLAUDE_MODEL="${MURAKUMO_CLAUDE_MODEL:-qwen-agentworld-35b-a3b}"
+
+# Token resolution: explicit env var first, else 1Password (same op-item
+# convention as scripts/b2-creds.bb's env -> 1Password -> Keychain chain).
+# Never hardcode the token in this script or commit it anywhere.
+if [ -z "${MURAKUMO_CLAUDE_TOKEN:-}" ]; then
+  if command -v op >/dev/null 2>&1; then
+    MURAKUMO_CLAUDE_TOKEN="$(op item get "gftd.murakumo/ANTHROPIC_PROXY_TOKEN" --vault gftdcojp --fields credential --reveal 2>/dev/null || true)"
+  fi
+fi
+if [ -z "${MURAKUMO_CLAUDE_TOKEN:-}" ]; then
+  echo "claude-murakumo: no token found. Set MURAKUMO_CLAUDE_TOKEN, or ensure" >&2
+  echo "  \`op item get gftd.murakumo/ANTHROPIC_PROXY_TOKEN --vault gftdcojp\` resolves" >&2
+  echo "  (must match the api.murakumo.cloud Worker's ANTHROPIC_PROXY_TOKEN secret)." >&2
+  exit 1
+fi
+
+export ANTHROPIC_BASE_URL="$MURAKUMO_CLAUDE_BASE_URL"
+export ANTHROPIC_AUTH_TOKEN="$MURAKUMO_CLAUDE_TOKEN"
+export ANTHROPIC_MODEL="$MURAKUMO_CLAUDE_MODEL"
+export ANTHROPIC_DEFAULT_SONNET_MODEL="$MURAKUMO_CLAUDE_MODEL"
+export ANTHROPIC_DEFAULT_OPUS_MODEL="$MURAKUMO_CLAUDE_MODEL"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="$MURAKUMO_CLAUDE_MODEL"
+unset ANTHROPIC_API_KEY
+
+# `claude` is a shell function in some setups (e.g. this fleet's own dev shell
+# unsets ANTHROPIC_* before launching, to keep a live Claude Code session from
+# ever accidentally routing through an experiment) — `command claude` bypasses
+# any function/alias and always runs the real installed binary, so the env
+# vars set above actually reach it.
+if [ -n "${CLAUDE_CODE_EXECPATH:-}" ] && [ -x "$CLAUDE_CODE_EXECPATH" ]; then
+  exec "$CLAUDE_CODE_EXECPATH" "$@"
+else
+  exec command claude "$@"
+fi
