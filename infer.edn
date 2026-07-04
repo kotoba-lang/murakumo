@@ -6,6 +6,13 @@
 ;; serves the OpenAI-compatible API.
 {:infer/rpc-port 50052
  :infer/api-port 8090
+ ;; Claude Code (via the /v1/messages Anthropic bridge) always sends its full
+ ;; ~89-tool definition set — ~48K prompt tokens before the conversation even
+ ;; starts. The old 4096 default (llama-server's own default, unset here
+ ;; until 2026-07-04) rejected every Claude Code request outright
+ ;; ("exceeds the available context size"). 65536 leaves headroom for a real
+ ;; multi-turn coding session on top of the tool-definition floor.
+ :infer/ctx 65536
  ;; GPU-wired ceiling provisioned onto each 16 GiB worker (sudo sysctl
  ;; iogpu.wired_limit_mb) — 13 GiB wired leaves ~3 GiB for macOS + the mesh node.
  :infer/wired-limit-mb 13312
