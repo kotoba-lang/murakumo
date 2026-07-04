@@ -46,7 +46,7 @@
         :let [cache? (not (false? (:rpc-cache? node)))]]
     {:name (:name node)
      :host (:host node)
-     :ip (:ip node)
+     :ip (or (:rpc-ip node) (:ip node))
      :port port
      ;; -d pins the worker to ONE device: rpc-server otherwise also exports its
      ;; BLAS/CPU backends and the head schedules ops onto them that they cannot
@@ -75,7 +75,7 @@
      :expert   → --split-mode layer + :moe-override (-ot regex) pinning expert
                  tensors; whole-expert placement rides layer splits today —
                  true cross-node token routing is an upstream llama.cpp gap."
-  [plan {:keys [bin-dir model-path port rpc-port ctx parallel strategy moe-override]
+  [plan {:keys [bin-dir model-path port rpc-port ctx parallel strategy moe-override extra-args]
          :or {port 8080 rpc-port default-rpc-port ctx 4096 parallel 1
               strategy :pipeline}}]
   (let [ws (rpc-worker-cmds plan {:bin-dir bin-dir :port rpc-port})]
@@ -85,7 +85,8 @@
          " --tensor-split " (tensor-split plan)
          (when moe-override (str " -ot " (pr-str moe-override)))
          " -ngl 999 -c " ctx " --parallel " parallel
-         " --host 0.0.0.0 --port " port)))
+         " --host 0.0.0.0 --port " port
+         (when (seq extra-args) (str " " (str/join " " extra-args))))))
 
 ;; ── mlx ring ────────────────────────────────────────────────────────────────
 
@@ -110,14 +111,18 @@
   "mu-hashmi/mlx-moe `serve` invocation. No --rpc/--hosts/ring — one process,
    one node; `:capacity` (murakumo.infer.moe/capacity-for-usable) and
    `:kv-bits` are optional, mlx-moe auto-selects capacity from live RAM when
-   omitted."
-  [{:keys [venv model-repo port capacity kv-bits profile]
+   omitted. :extra-args is an escape hatch for mlx-moe flags that land before
+   murakumo grows a named key."
+  [{:keys [venv model-repo port capacity pin-top-k kv-bits profile warmup extra-args]
     :or {port 8080}}]
   (str (if venv (str venv "/bin/mlx-moe") "mlx-moe") " serve " model-repo
        " --host 0.0.0.0 --port " port
        (when capacity (str " --capacity " capacity))
+       (when pin-top-k (str " --pin-top-k " pin-top-k))
        (when kv-bits (str " --kv-bits " kv-bits))
-       (when profile (str " --profile " profile))))
+       (when profile (str " --profile " profile))
+       (when warmup (str " --warmup " warmup))
+       (when (seq extra-args) (str " " (str/join " " extra-args)))))
 
 (defn commands
   "Plan + engine + opts → {:workers [...] :head {...}} process specs."

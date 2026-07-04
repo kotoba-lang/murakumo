@@ -21,6 +21,7 @@
   (:require [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [murakumo.fleet :as fleet]
             [murakumo.infer.engine :as engine]
@@ -30,8 +31,15 @@
 
 (def ^:private plan-file ".murakumo-infer-plan.edn")  ; last cut plan (control-plane state)
 (def ^:private remote-bin "$HOME/.murakumo/bin")
+(def ^:private remote-env (str "DYLD_LIBRARY_PATH=" remote-bin ":$DYLD_LIBRARY_PATH "))
 
 (defn- load-config [] (edn/read-string (slurp "infer.edn")))
+
+(defn- api-host
+  "Host name for HTTP clients. SSH hosts may be written user@host."
+  [node]
+  (or (:api-host node)
+      (some-> (:host node) (str/split #"@") last)))
 
 (defn- gib [x] (long (* x plan/GiB)))
 
@@ -48,7 +56,7 @@
    SSH handshake, and losing a node silently shrinks the plan."
   [cfg n]
   (let [probe #(ssh/sh (:host n)
-                       "sysctl -n hw.memsize; df -k / | tail -1 | awk '{print $4}'; sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0")
+                       "if sysctl -n hw.memsize >/dev/null 2>&1; then sysctl -n hw.memsize; else awk '/MemTotal/ {print $2 * 1024}' /proc/meminfo; fi; df -k / | tail -1 | awk '{print $4}'; sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0")
         r (probe)
         {:keys [exit out]} (if (zero? (:exit r)) r (probe))]
     (when (zero? exit)
@@ -58,6 +66,7 @@
                :mem-bytes (parse-long (str/trim mem))
                :disk-free-bytes (* 1024 (parse-long (str/trim disk-k)))
                :os-reserve-bytes (gib (:infer/node-os-reserve-gib cfg 5/2))
+               :headroom-bytes (gib (:infer/node-headroom-gib cfg 5/4))
                ;; 0 = macOS default cap (~70 %); only an explicit raise is credited.
                :wired-limit-bytes (when (pos? wired-mb) (* 1024 1024 wired-mb))
                :rpc-cache? (>= (* 1024 (parse-long (str/trim disk-k)))
@@ -76,12 +85,25 @@
                      vec)
         head (if (:remote? head-cfg)
                (probe-node cfg head-cfg)
-               (assoc head-cfg
-                      :mem-bytes (-> (p/sh "sysctl" "-n" "hw.memsize") :out str str/trim parse-long)))]
+               (let [mem (-> (p/sh "sysctl" "-n" "hw.memsize") :out str str/trim parse-long)
+                     disk-k (-> (p/sh "sh" "-c" "df -k / | tail -1 | awk '{print $4}'")
+                                :out str str/trim parse-long)
+                     wired-mb (-> (p/sh "sh" "-c" "sysctl -n iogpu.wired_limit_mb 2>/dev/null || echo 0")
+                                  :out str str/trim parse-long)]
+                 (assoc head-cfg
+                        :mem-bytes mem
+                        :disk-free-bytes (* 1024 disk-k)
+                        :headroom-bytes (gib (:infer/head-headroom-gib cfg
+                                               (:infer/node-headroom-gib cfg 5/4)))
+                        :wired-limit-bytes (when (pos? wired-mb) (* 1024 1024 wired-mb))
+                        :rpc-cache? (>= (* 1024 disk-k)
+                                        (gib (:infer/cache-min-free-gib cfg 20))))))]
     {:workers workers
      :head (assoc head
                   :head? true
-                  :os-reserve-bytes (gib (:os-reserve-gib head-cfg 12)))}))
+                  :os-reserve-bytes (gib (:os-reserve-gib head-cfg 12))
+                  :headroom-bytes (gib (:infer/head-headroom-gib cfg
+                                         (:infer/node-headroom-gib cfg 5/4))))}))
 
 (defn- model-or-die [cfg id]
   (or (get (:models cfg) id)
@@ -90,6 +112,11 @@
           (System/exit 1))))
 
 (defn- moe? [model] (= :mlx-moe (:model/engine model)))
+
+(defn- moe-opt
+  [cfg model k]
+  (or (get model (keyword "model" (name k)))
+      (get-in cfg [:infer/mlx-moe k])))
 
 (defn- probe-and-plan
   "Probe the fleet + :infer/extra-nodes and hand every candidate to `plan-fn`
@@ -217,7 +244,11 @@
                   (let [{:keys [exit err]} (ssh/scp host "bin/rpc-server" ".murakumo/bin/rpc-server")]
                     (if-not (zero? exit)
                       (println (str "scp failed: " err))
-                      (let [_ (ssh/sh host "chmod +x .murakumo/bin/rpc-server")
+                      (let [_ (doseq [lib (->> (file-seq (io/file "bin"))
+                                               (map #(.getName %))
+                                               (filter #(str/ends-with? % ".dylib")))]
+                                (ssh/scp host (str "bin/" lib) (str ".murakumo/bin/" lib)))
+                            _ (ssh/sh host "chmod +x .murakumo/bin/rpc-server")
                             w (ssh/sh host (format "sudo -n sysctl iogpu.wired_limit_mb=%d 2>&1 || echo no-sudo" wired))]
                         (println (str "rpc-server ✓  wired-limit: " (:out w))))))))))
         ;; a remote head serves llama-server from its own .murakumo/bin
@@ -240,8 +271,8 @@
             :when (or (nil? want) (want (:name node)))]
       (let [cache (if (:rpc-cache? node) " -c" "")
             dev (or (:rpc-device node) (:infer/rpc-device cfg "MTL0"))
-            cmd (format "pkill -f '%s/rpc-server' 2>/dev/null; sleep 0.2; nohup %s/rpc-server -H 0.0.0.0 -p %d -d %s%s >/tmp/murakumo-rpc.log 2>&1 & sleep 0.3; pgrep -f rpc-server >/dev/null && echo up || echo FAILED"
-                        remote-bin remote-bin port dev cache)]
+            cmd (format "pkill -f '%s/rpc-server' 2>/dev/null; sleep 0.2; nohup env %s%s/rpc-server -H 0.0.0.0 -p %d -d %s%s >/tmp/murakumo-rpc.log 2>&1 & sleep 0.3; pgrep -f rpc-server >/dev/null && echo up || echo FAILED"
+                        remote-bin remote-env remote-bin port dev cache)]
         (println (format "[%s] %s" (:name node) (:out (ssh/sh (:host node) cmd))))))))
 
 (defn cmd-down [[sel]]
@@ -273,10 +304,15 @@
 
     :else
     (let [node (moe-node pl)
+          moe-cfg (:infer/mlx-moe cfg)
           opts {:model-repo (or (:model/mlx-repo model) (:hf/repo model))
                 :port (:infer/api-port cfg 8080)
-                :capacity (:capacity pl)
-                :kv-bits (:infer/kv-bits cfg)}
+                :capacity (or (:model/capacity model) (:capacity moe-cfg) (:capacity pl))
+                :pin-top-k (moe-opt cfg model :pin-top-k)
+                :kv-bits (or (moe-opt cfg model :kv-bits) (:infer/kv-bits cfg))
+                :profile (or (:model/mlx-moe-profile model) (:profile moe-cfg))
+                :warmup (moe-opt cfg model :warmup)
+                :extra-args (or (:model/mlx-moe-extra-args model) (:extra-args moe-cfg))}
           cmd (engine/mlx-moe-cmd opts)
           {:keys [verdict why]} (:verdict pl)
           host (:host node)]
@@ -285,7 +321,7 @@
       (let [{:keys [out]} (ssh/sh host
                                   (format "pkill -f 'mlx-moe serve' 2>/dev/null; sleep 0.3; nohup %s >/tmp/murakumo-moe.log 2>&1 & sleep 1; pgrep -f 'mlx-moe serve' >/dev/null && echo serving || echo FAILED" cmd))]
         (println (format "[%s] %s — http://%s:%s/v1 (first launch downloads the model; watch /tmp/murakumo-moe.log)"
-                         host out host (:infer/api-port cfg 8080)))))))
+                         host out (api-host node) (:infer/api-port cfg 8080)))))))
 
 (defn- cmd-serve-ring
   "The original ring path: llama-server locally in the foreground, or — for a
@@ -294,21 +330,22 @@
   [cfg model pl gguf-path]
   (let [head-cfg (:infer/head cfg)
         remote? (:remote? head-cfg)
-        opts {:bin-dir (if remote? ".murakumo/bin" "bin")
+        opts {:bin-dir (if remote? (:bin-dir head-cfg ".murakumo/bin") "bin")
               :model-path (or gguf-path
                               (if remote?
                                 (str (:model-dir head-cfg "glm") "/" (:model/gguf model))
                                 (:model/gguf model)))
               :rpc-port (:infer/rpc-port cfg engine/default-rpc-port)
               :port (:infer/api-port cfg 8080)
-              :ctx (:infer/ctx cfg 4096)}
+              :ctx (:infer/ctx cfg 4096)
+              :extra-args (:model/llama-extra-args model)}
         cmd (engine/head-cmd pl opts)]
     (println cmd)
     (if remote?
       (let [{:keys [out]} (ssh/sh (:host head-cfg)
-                                  (format "pkill -f '.murakumo/bin/llama-server' 2>/dev/null; sleep 0.3; nohup %s >/tmp/murakumo-head.log 2>&1 & sleep 1; pgrep -f llama-server >/dev/null && echo serving || echo FAILED" cmd))]
+                                  (format "pgrep -x llama-server | xargs -r kill 2>/dev/null || true; sleep 0.3; nohup %s >/tmp/murakumo-head.log 2>&1 & sleep 1; pgrep -x llama-server >/dev/null && echo serving || echo FAILED" cmd))]
         (println (format "[%s] %s — http://%s:%s/v1 (load streams the shards; watch /tmp/murakumo-head.log)"
-                         (:host head-cfg) out (:host head-cfg) (:infer/api-port cfg 8080))))
+                         (:host head-cfg) out (api-host head-cfg) (:infer/api-port cfg 8080))))
       (p/shell cmd))))
 
 (defn cmd-serve
@@ -331,8 +368,8 @@
         last-plan (try (edn/read-string (slurp plan-file)) (catch Exception _ nil))
         moe-node* (when (= :mlx-moe (:engine last-plan)) (moe-node last-plan))
         head-host (if moe-node*
-                    (:host moe-node*)
-                    (let [h (:infer/head cfg)] (if (:remote? h) (:host h) "localhost")))
+                    (api-host moe-node*)
+                    (let [h (:infer/head cfg)] (if (:remote? h) (api-host h) "localhost")))
         body (json/generate-string
               {:messages [{:role "user" :content (or prompt "Name three Japanese cities.")}]
                :max_tokens 256})
