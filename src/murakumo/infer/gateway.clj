@@ -15,6 +15,13 @@
 ;;   bb murakumo infer gateway [port=8790]
 ;;   POST /v1/images/generations  {:prompt :n :size "WxH" :model? :seed?}
 ;;                                 -> {:data [{:b64_json ...}]}
+;;   POST /workflows/run  {:workflow {...ComfyUI API-format graph...}
+;;                         :output-node "7" :output-key? "images"}
+;;                                 -> {:b64_json ... :filename ...}
+;;                         For callers with their own custom node graph (e.g.
+;;                         yukkuri.comfy's background/character/scene-composite
+;;                         workflows) that the simple txt2img-only
+;;                         /v1/images/generations shape can't express.
 ;;   GET  /health                  -> {:ok :fleet-nodes}
 ;;
 ;; Scope: image (txt2img) only, matching comfyui.gateway's KSampler contract.
@@ -74,6 +81,31 @@
       {:data [{:b64_json (.encodeToString (java.util.Base64/getEncoder) bytes)}]
        :murakumo {:node (:name node-info) :width width :height height :n (or n 1)}})))
 
+(defn pick-any-node!
+  "Pick any live fleet node serving :comfyui (schedule/pick with no
+  checkpoint preference). Throws ex-info if none is eligible."
+  [f]
+  (let [live (media/live-fleet f)
+        node-info (or (sched/pick live {:model/engine :comfyui})
+                      (throw (ex-info "no eligible murakumo fleet node for :comfyui" {:live-count (count live)})))]
+    (or (first (filter #(= (:name node-info) (:name %)) (:nodes f)))
+        (throw (ex-info "picked node not found in fleet.edn" {:node (:name node-info)})))))
+
+(defn run-workflow!
+  "{:workflow :output-node :output-key} -> {:b64_json ... :filename ...}.
+  Runs an arbitrary caller-supplied ComfyUI API-format graph on any eligible
+  fleet node via `media/run-custom-workflow!`. Throws ex-info if no node is
+  eligible or the workflow produced no output file."
+  [{:keys [workflow output-node output-key] :or {output-key "images"}}]
+  (let [f (fleet/enrich (fleet/load-fleet))
+        node (pick-any-node! f)
+        local (media/run-custom-workflow! node workflow output-node (keyword output-key))]
+    (when-not local
+      (throw (ex-info "murakumo workflow produced no output file" {:output-node output-node :output-key output-key})))
+    (let [bytes (.readAllBytes (io/input-stream local))]
+      {:b64_json (.encodeToString (java.util.Base64/getEncoder) bytes)
+       :filename local})))
+
 (defn- json-response [status body]
   {:status status :headers {"content-type" "application/json"} :body (json/generate-string body)})
 
@@ -83,6 +115,15 @@
     (try
       (let [body (json/parse-string (slurp (:body req)) true)]
         (json-response 200 (generate-image! body)))
+      (catch Exception e
+        (json-response 502 {:error {:message (ex-message e) :data (ex-data e)}})))
+
+    [:post "/workflows/run"]
+    (try
+      (let [{:keys [workflow] :as body} (json/parse-string (slurp (:body req)) true)]
+        (if-not (and (map? workflow) (seq workflow))
+          (json-response 400 {:error "workflow (object) required"})
+          (json-response 200 (run-workflow! body))))
       (catch Exception e
         (json-response 502 {:error {:message (ex-message e) :data (ex-data e)}})))
 
@@ -98,5 +139,5 @@
 (defn -main [& [port]]
   (let [port (or (some-> port parse-long) 8790)]
     (http/run-server http-handler {:port port})
-    (println (format "murakumo comfyui gateway on http://0.0.0.0:%d  (POST /v1/images/generations, GET /health)" port))
+    (println (format "murakumo comfyui gateway on http://0.0.0.0:%d  (POST /v1/images/generations, POST /workflows/run, GET /health)" port))
     @(promise)))
