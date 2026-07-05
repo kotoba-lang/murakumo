@@ -374,27 +374,34 @@
    ROCm 7.2 release build detects no device — gfx1151/Strix Halo isn't in
    ROCm's supported list yet; Vulkan/RADV is the working path.)
 
-   `parallel` (default 2, was 1) sets llama-server's concurrent slot count —
-   this is an AGGREGATE-throughput knob, not a single-stream speedup: each
-   slot gets ctx/parallel tokens of context, and multiple slots let
-   continuous batching amortize weight reads across concurrent requests.
-   Measured 2026-07-05 (65536 total ctx, `Count 1..40` prompts, wall-clock
-   completion_tokens/sec across N concurrent requests): N=1 53.8, N=2 77.1,
-   N=4 107.8, N=6 121.2 (peak), N=8 74.6 (regressed — per-slot ctx shrinks to
-   8192 and something in scheduling/compute saturates past ~6 concurrent
-   streams on this iGPU). A single Claude Code session only has one request
-   in flight at a time, so this doesn't raise the ~60 tok/s ceiling any one
-   conversation sees — but the default moved from 1 to 2 after a real
-   production incident (2026-07-05): with `parallel 1`, ANY second request —
-   a second claude-murakumo session, or even a client that was locally
-   killed with `pkill` but whose HTTP connection llama-server hadn't yet
-   noticed was gone — queues strictly behind whatever's already processing.
-   Observed live: a fresh request waited 113s behind an abandoned
-   105K-token conversation still being (slowly) detected as cancelled,
-   despite the request itself only needing 41s once it got its turn. 2
-   slots (131072 ctx each — plenty for real conversations; the largest
-   observed so far was 105503 tokens) meaningfully reduces how often one
-   request fully blocks another, at effectively zero single-stream cost.
+   `parallel` (default 1 — was briefly 2, reverted 2026-07-05, see below) sets
+   llama-server's concurrent slot count — this is an AGGREGATE-throughput
+   knob, not a single-stream speedup: each slot gets ctx/parallel tokens of
+   context, and multiple slots let continuous batching amortize weight reads
+   across concurrent requests. Measured 2026-07-05 (65536 total ctx,
+   `Count 1..40` prompts, wall-clock completion_tokens/sec across N
+   concurrent requests): N=1 53.8, N=2 77.1, N=4 107.8, N=6 121.2 (peak),
+   N=8 74.6 (regressed). A single Claude Code session only has one request
+   in flight at a time, so this never raises the ~60 tok/s ceiling any one
+   conversation sees.
+
+   History: briefly moved to `parallel 2` after an incident where a second
+   request queued 113s behind an abandoned (client-`pkill`'d but
+   server-undetected) 105K-token conversation under `parallel 1`. Reverted
+   back to 1 the same day after live production evidence that 2 slots don't
+   actually fix the problem for genuine concurrent load — they share ONE
+   physical GPU, and llama-server doesn't time-slice fairly between a slot
+   doing heavy prompt processing and another trying to decode: watched a
+   real second Claude Code session's generation crawl to 0.24-0.38 tok/s
+   (tg_3s) while another slot churned through repeated 14-28K-token
+   reprocessing. `parallel 1` is more PREDICTABLE for this hardware's actual
+   usage pattern (rarely more than one active claude-murakumo session): a
+   second request queues and waits, but gets the FULL ~60 tok/s the moment
+   its turn comes, rather than both requests limping along together. This
+   doesn't fix the underlying issue (llama-server not promptly detecting a
+   dead client connection) — that would need a request/idle timeout on the
+   server side, not attempted here — it just accepts the queueing failure
+   mode as preferable to the degraded-throughput-for-everyone one.
 
    :infer/head :standalone-bin-dir must point at that GPU-backend build on
    the head (get one: github.com/ggml-org/llama.cpp releases,
@@ -410,7 +417,7 @@
         model-path (or gguf-path (str (:model-dir head-cfg) "/" (:model/gguf model)))
         ctx (:infer/ctx cfg 4096)
         port (:infer/api-port cfg 8080)
-        parallel (or (some-> parallel parse-long) 2)
+        parallel (or (some-> parallel parse-long) 1)
         fa (:infer/flash-attn cfg)
         cmd (str bin-dir "/llama-server -m " model-path
                  " -ngl 999 -c " ctx " --parallel " parallel
