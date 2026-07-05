@@ -27,7 +27,11 @@
  :infer/head {:name "head" :host "root@100.82.98.110" :remote? true
               :os-reserve-gib 5
               :bin-dir "/home/gad/murakumo/llama.cpp/build-rpc-glm/bin"
-              :model-dir "/home/gad/models/GLM-5.2-REAP50-Q2_K-GGUF"}
+              :model-dir "/home/gad/models/GLM-5.2-REAP50-Q2_K-GGUF"
+              ;; GPU-backend build for `infer serve-standalone` (no RPC ring).
+              ;; CPU-only :bin-dir above never engaged the head's Radeon 8060S
+              ;; iGPU even at -ngl 999 — see cmd-serve-standalone docstring.
+              :standalone-bin-dir "/home/gad/murakumo/llama.cpp/build-vulkan/llama-b9873"}
  :infer/extra-nodes []
  ;; rpc-server -c caches streamed shards on the worker's disk; skip when free
  ;; disk < this (the cache costs ~one shard).

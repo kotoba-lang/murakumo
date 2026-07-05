@@ -359,6 +359,44 @@
       (cmd-serve-moe cfg model pl)
       (cmd-serve-ring cfg model pl gguf-path))))
 
+(defn cmd-serve-standalone
+  "Single-node serving on the head ONLY — no RPC ring, no `plan` needed. Use
+   when the model fits entirely in the head's own memory AND a GPU-backend
+   llama-server build is available there — this fleet's head is an AMD Strix
+   Halo APU (Ryzen AI MAX+ 395, Radeon 8060S iGPU); the RPC-ring binary at
+   :infer/head :bin-dir is a CPU-only build with no GPU backend linked, so
+   the head's ring-share (~40% of layers) was running on CPU alone.
+
+   Verified 2026-07-05: qwen-agentworld-35b-a3b (22GB) standalone via the
+   official llama.cpp Vulkan release binary on the head → 61.5 tok/s, vs.
+   12.7 tok/s for the same model spread across the 7-node CPU RPC ring — a
+   real GPU beats network-distributed CPU by ~5x on this hardware. (The
+   ROCm 7.2 release build detects no device — gfx1151/Strix Halo isn't in
+   ROCm's supported list yet; Vulkan/RADV is the working path.)
+
+   :infer/head :standalone-bin-dir must point at that GPU-backend build on
+   the head (get one: github.com/ggml-org/llama.cpp releases,
+   `*-ubuntu-vulkan-x64.tar.gz` for this hardware)."
+  [[model-id gguf-path]]
+  (let [cfg (load-config)
+        model (model-or-die cfg model-id)
+        head-cfg (:infer/head cfg)
+        bin-dir (:standalone-bin-dir head-cfg)
+        model-path (or gguf-path (str (:model-dir head-cfg) "/" (:model/gguf model)))
+        ctx (:infer/ctx cfg 4096)
+        port (:infer/api-port cfg 8080)
+        cmd (str bin-dir "/llama-server -m " model-path
+                 " -ngl 999 -c " ctx " --parallel 1 --host 0.0.0.0 --port " port)]
+    (if-not bin-dir
+      (println "no :infer/head :standalone-bin-dir configured in infer.edn — nothing to run")
+      (do
+        (println cmd)
+        (let [{:keys [out]}
+              (ssh/sh (:host head-cfg)
+                      (format "pgrep -x llama-server | xargs -r kill -9 2>/dev/null || true; sleep 0.5; mkdir -p /tmp/xdgrt; nohup env XDG_RUNTIME_DIR=/tmp/xdgrt %s >/tmp/murakumo-head.log 2>&1 & sleep 1; pgrep -x llama-server >/dev/null && echo serving || echo FAILED" cmd))]
+          (println (format "[%s] %s — http://%s:%s/v1 (no RPC workers needed; `bb murakumo infer down` frees them)"
+                           (:host head-cfg) out (api-host head-cfg) port)))))))
+
 (defn cmd-generate
   "One completion via the head's /v1 API. Targets whichever host actually
    served the last `plan` — the mlx-moe node when the saved plan is
@@ -402,5 +440,6 @@
     "down" (cmd-down args)
     "ps" (cmd-ps args)
     "serve" (cmd-serve args)
+    "serve-standalone" (cmd-serve-standalone args)
     "generate" (cmd-generate args)
-    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|gateway [port]")))
+    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|gateway [port]")))
