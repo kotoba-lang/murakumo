@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- com.murakumo.infer-gateway — resident ComfyUI-over-fleet HTTP gateway
+     (macOS LaunchAgent, per-user domain). Runs `bb murakumo infer gateway`
+     (PRs #7/#8/#9) on the OPERATOR/control machine (the box with Tailscale
+     SSH access to the fleet, e.g. main-2.local) -- not one of the compute
+     nodes, so this is a user-domain LaunchAgent (gui/<uid>), not the
+     system-domain LaunchDaemon `com.murakumo.kotoba-mesh.plist.tmpl` uses
+     for the resident mesh node on each fleet member. RunAtLoad + KeepAlive
+     so it survives a logout/login and self-heals on crash; StandardOutPath/
+     StandardErrorPath give a durable log for `tail -f` debugging (the
+     gateway's fleet-wide health probe legitimately takes ~20-30s -- 4 of
+     the fleet's 10 nodes are typically offline and each costs an SSH
+     ConnectTimeout before failing -- so a slow-but-eventually-200 /health
+     is expected, not a hang).
+
+     Install: substitute {{BB_BIN}} (`which bb`), {{REPO_DIR}} (this repo's
+     absolute path), {{HOME}}, then:
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.murakumo.infer-gateway.plist
+     Uninstall:
+       launchctl bootout gui/$(id -u)/com.murakumo.infer-gateway
+       rm ~/Library/LaunchAgents/com.murakumo.infer-gateway.plist
+
+     A LaunchAgent's default environment has none of an interactive shell's
+     PATH -- `tailscale` (murakumo.fleet/tailscale-status, run bare by
+     command name) won't resolve without it, so PATH is set explicitly
+     rather than assumed inherited. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>              <string>com.murakumo.infer-gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{BB_BIN}}</string>
+    <string>murakumo</string>
+    <string>infer</string>
+    <string>gateway</string>
+    <string>8790</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>WorkingDirectory</key>   <string>{{REPO_DIR}}</string>
+  <key>RunAtLoad</key>         <true/>
+  <key>KeepAlive</key>         <true/>
+  <key>StandardOutPath</key>   <string>{{HOME}}/.murakumo/infer-gateway.log</string>
+  <key>StandardErrorPath</key> <string>{{HOME}}/.murakumo/infer-gateway.log</string>
+</dict>
+</plist>
