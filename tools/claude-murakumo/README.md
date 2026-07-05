@@ -27,6 +27,12 @@ ln -s "$(pwd)/claude-murakumo" ~/.local/bin/claude-murakumo   # or anywhere on P
 | `MURAKUMO_CLAUDE_BASE_URL` | `https://api.murakumo.cloud` | the Anthropic-compatible endpoint |
 | `MURAKUMO_CLAUDE_MODEL` | `qwen-agentworld-35b-a3b` | sets `ANTHROPIC_MODEL` + the default/opus/sonnet/haiku overrides (murakumo currently serves one model at a time, so all four point at it) |
 | `MURAKUMO_CLAUDE_TOKEN` | resolved from 1Password (`gftd.murakumo/ANTHROPIC_PROXY_TOKEN`, vault `gftdcojp`) if unset | must match the `api.murakumo.cloud` Worker's `ANTHROPIC_PROXY_TOKEN` secret |
+| `MURAKUMO_CLAUDE_NO_SKIP_PERMISSIONS` | unset (skip-permissions ON by default) | set to any value to opt OUT of the default `--dangerously-skip-permissions` (e.g. to test the real permission-prompt flow). Passing your own `--permission-mode`/`--dangerously-skip-permissions`/`--allow-dangerously-skip-permissions` also takes precedence — the wrapper won't double up the flag. |
+
+`--dangerously-skip-permissions` is on by default here (unlike plain
+`claude`) because this is a throwaway model on a self-hosted fleet, not a
+live Claude session — the interactive permission prompts are pure friction
+for experimenting against murakumo.
 
 ## Why not just `export ANTHROPIC_BASE_URL=... && claude`
 
