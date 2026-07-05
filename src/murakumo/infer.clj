@@ -374,10 +374,26 @@
    ROCm 7.2 release build detects no device — gfx1151/Strix Halo isn't in
    ROCm's supported list yet; Vulkan/RADV is the working path.)
 
+   `parallel` (default 1) sets llama-server's concurrent slot count — this
+   is an AGGREGATE-throughput knob, not a single-stream speedup: each slot
+   gets ctx/parallel tokens of context, and multiple slots let continuous
+   batching amortize weight reads across concurrent requests. Measured
+   2026-07-05 (65536 total ctx, `Count 1..40` prompts, wall-clock
+   completion_tokens/sec across N concurrent requests): N=1 53.8, N=2 77.1,
+   N=4 107.8, N=6 121.2 (peak), N=8 74.6 (regressed — per-slot ctx shrinks to
+   8192 and something in scheduling/compute saturates past ~6 concurrent
+   streams on this iGPU). A single Claude Code session only has one request
+   in flight at a time, so this only helps if something drives genuine
+   concurrent load (parallel subagents, multiple sessions) — it does not
+   raise the ~60 tok/s ceiling any one conversation sees.
+
    :infer/head :standalone-bin-dir must point at that GPU-backend build on
    the head (get one: github.com/ggml-org/llama.cpp releases,
-   `*-ubuntu-vulkan-x64.tar.gz` for this hardware)."
-  [[model-id gguf-path]]
+   `*-ubuntu-vulkan-x64.tar.gz` for this hardware). :infer/flash-attn
+   ('on'/'off'/'auto') is passed through as `-fa`; measured no speed
+   difference for this model on Vulkan/RADV (mostly-linear-attention hybrid
+   architecture limits how much FA has to do), kept explicit anyway."
+  [[model-id gguf-path parallel]]
   (let [cfg (load-config)
         model (model-or-die cfg model-id)
         head-cfg (:infer/head cfg)
@@ -385,15 +401,19 @@
         model-path (or gguf-path (str (:model-dir head-cfg) "/" (:model/gguf model)))
         ctx (:infer/ctx cfg 4096)
         port (:infer/api-port cfg 8080)
+        parallel (or (some-> parallel parse-long) 1)
+        fa (:infer/flash-attn cfg)
         cmd (str bin-dir "/llama-server -m " model-path
-                 " -ngl 999 -c " ctx " --parallel 1 --host 0.0.0.0 --port " port)]
+                 " -ngl 999 -c " ctx " --parallel " parallel
+                 (when fa (str " -fa " fa))
+                 " --host 0.0.0.0 --port " port)]
     (if-not bin-dir
       (println "no :infer/head :standalone-bin-dir configured in infer.edn — nothing to run")
       (do
         (println cmd)
         (let [{:keys [out]}
               (ssh/sh (:host head-cfg)
-                      (format "pgrep -x llama-server | xargs -r kill -9 2>/dev/null || true; sleep 0.5; mkdir -p /tmp/xdgrt; nohup env XDG_RUNTIME_DIR=/tmp/xdgrt %s >/tmp/murakumo-head.log 2>&1 & sleep 1; pgrep -x llama-server >/dev/null && echo serving || echo FAILED" cmd))]
+                      (format "pgrep -x llama-server | xargs -r kill -9 2>/dev/null || true; while pgrep -x llama-server >/dev/null; do sleep 0.2; done; mkdir -p /tmp/xdgrt; nohup env XDG_RUNTIME_DIR=/tmp/xdgrt %s >/tmp/murakumo-head.log 2>&1 & sleep 1; pgrep -x llama-server >/dev/null && echo serving || echo FAILED" cmd))]
           (println (format "[%s] %s — http://%s:%s/v1 (no RPC workers needed; `bb murakumo infer down` frees them)"
                            (:host head-cfg) out (api-host head-cfg) port)))))))
 
@@ -442,4 +462,4 @@
     "serve" (cmd-serve args)
     "serve-standalone" (cmd-serve-standalone args)
     "generate" (cmd-generate args)
-    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|gateway [port]")))
+    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf] [parallel]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|gateway [port]")))
