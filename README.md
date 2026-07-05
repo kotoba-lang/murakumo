@@ -472,6 +472,29 @@ bb murakumo infer plan glm-5.2-mxfp4-mlx-moe
 bb murakumo infer serve glm-5.2-mxfp4-mlx-moe      # capacity/pin-top-k/profile come from infer.edn
 ```
 
+### Standalone (no RPC ring) — when the model fits on the head alone
+
+The head (this fleet's: an AMD Ryzen AI MAX+ 395 "Strix Halo" APU, Radeon
+8060S iGPU) is a real GPU-capable machine, but its `:infer/head :bin-dir`
+RPC-ring binary is a CPU-only build — `-ngl 999` was a no-op there, so the
+head's ~40% ring-share ran on CPU alone. For any model whose full weights
+fit in the head's own memory, skip the ring entirely and run a GPU-backend
+build standalone instead:
+
+```bash
+bb murakumo infer down                                              # free the 6 RPC workers, not needed
+bb murakumo infer serve-standalone qwen-agentworld-35b-a3b \
+  /home/gad/models/Qwen-AgentWorld-35B-A3B-GGUF/Qwen-AgentWorld-35B-A3B-UD-Q4_K_M.gguf
+```
+
+Verified 2026-07-05: **61.5 tok/s** vs. **12.7 tok/s** for the same model
+spread across the 7-node CPU RPC ring — real GPU beats network-distributed
+CPU by ~5x on this hardware. The binary is the official llama.cpp Vulkan
+release (`*-ubuntu-vulkan-x64.tar.gz` — Mesa/RADV detects the iGPU cleanly);
+the equivalent ROCm 7.2 release build detects **no device** at all
+(gfx1151/Strix Halo isn't in ROCm's supported list yet). `:infer/head
+:standalone-bin-dir` in infer.edn points at the Vulkan build.
+
 ### Claude Code on the fleet
 
 `gftdcojp/local-murakumo`'s `/v1/messages` translates the Anthropic Messages
