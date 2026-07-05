@@ -17,7 +17,8 @@
 ;; the image comes home over scp.
 
 (ns murakumo.infer.media
-  (:require [babashka.process :as p]
+  (:require [babashka.http-client :as http]
+            [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.edn :as edn]
             [clojure.string :as str]
@@ -273,8 +274,96 @@
                        (double (get (:run/shares settled) node-name 0.0))
                        (:run/treasury settled))))))
 
+;; ── model-map: fleet-wide "what's loaded where", across ALL categories ─────
+;; Answers "which terminal has which model loaded" across text/image/video/
+;; audio/text-to-3d in one snapshot — text-to-3d is always :unsupported
+;; because no such model is registered anywhere in infer.edn (an honest gap,
+;; not hidden). Distinct from murakumo.infer.orchestrate's POST /infer/placement
+;; (that publishes the REBALANCER's desired pool-seat allocation — a different
+;; concept from "what is actually resident on each node right now").
+
+(def ^:private checkpoint-family-aliases
+  "Small hand-maintained keyword→registered-model-id table for matching a
+   live ComfyUI checkpoint filename back to infer.edn's registry when the
+   exact filename has drifted (a node's checkpoint got upgraded without the
+   registry's :model/checkpoint being updated to match — a real, observed
+   case: ltxv-2b-0.9.1 registered as ltx-video-2b-v0.9.1.safetensors, but
+   naphtali/issachar actually run ltxv-2b-0.9.6-distilled-04-25.safetensors)."
+  {"ltxv" "ltxv-2b-0.9.1" "ltx-video" "ltxv-2b-0.9.1"
+   "animagine" "animagine-xl-4.0"
+   "svd" "svd-xt"
+   "stable-audio" "stable-audio-open"})
+
+(defn- match-checkpoint
+  "Live checkpoint filename → {:model-id :model-kind :match}. :exact when it
+   byte-matches a registered :model/checkpoint; :family-guess when only a
+   known family keyword matches (registry is stale, but we can still label
+   the category); :unregistered when neither matches (surfaced, not hidden)."
+  [ckpt reg]
+  (or (when-let [[id m] (first (filter (fn [[_ m]] (= ckpt (:model/checkpoint m))) reg))]
+        {:model-id id :model-kind (:model/kind m) :match :exact})
+      (when-let [[kw id] (first (filter (fn [[kw _]] (str/includes? (str/lower-case ckpt) kw))
+                                        checkpoint-family-aliases))]
+        {:model-id id :model-kind (:model/kind (get reg id)) :match :family-guess})
+      {:model-id nil :model-kind nil :match :unregistered}))
+
+(defn- current-text-model
+  "Query the head's own /v1/models to see which registered text model is
+   actually serving right now (matched by GGUF filename) — the fleet serves
+   exactly one text model at a time (standalone-GPU on the head; see
+   ADR-2607051431), so this is a single lookup, not a per-node scan. An RPC-
+   ring deployment would additionally involve worker nodes per
+   .murakumo-infer-plan.edn's shard assignments — not resolved here, a known
+   simplification since standalone-on-head is this fleet's current mode."
+  [cfg]
+  (let [head (:infer/head cfg)
+        port (:infer/api-port cfg 8080)
+        host (or (:api-host head) (some-> (:host head) (str/split #"@") last))
+        url (format "http://%s:%s/v1/models" host port)]
+    (try
+      (let [body (-> (http/get url {:timeout 4000}) :body (json/parse-string true))
+            path (get-in body [:data 0 :id])
+            fname (some-> path (str/split #"/") last)
+            hit (first (filter (fn [[_ m]] (= fname (:model/gguf m))) (:models cfg)))]
+        (if hit
+          {:model-id (first hit) :status :serving :node (:name head)}
+          {:model-id nil :status :unknown :raw-path path :node (:name head)}))
+      (catch Exception e {:model-id nil :status :unreachable :error (.getMessage e) :node (:name head)}))))
+
+(defn cmd-model-map
+  "bb murakumo infer media model-map [--push]
+   Prints (and, with --push, POSTs to MURAKUMO_API_URL's /infer/model-map,
+   same Bearer-token gate as tools/hwmetrics-report's /infer/hwmetrics) a
+   fleet-wide snapshot of what's loaded where, across text/image/video/audio
+   (text-to-3d listed as unsupported — no model registered for it anywhere)."
+  [args]
+  (let [push? (some #{"--push"} args)
+        cfg (edn/read-string (slurp "infer.edn"))
+        reg (:models cfg)
+        text (current-text-model cfg)
+        f (fleet/enrich (fleet/load-fleet))
+        media-rows (for [n (live-fleet f)
+                        ckpt (:checkpoints n)]
+                    (merge {:node (:name n) :engine :comfyui :checkpoint ckpt
+                            :free-bytes (:free-bytes n) :queue (:queue n)}
+                           (match-checkpoint ckpt reg)))
+        snapshot {:ts (System/currentTimeMillis)
+                  :text text
+                  :media (vec media-rows)
+                  :unsupported-categories [:text-to-3d]}]
+    (println (json/generate-string snapshot {:pretty true}))
+    (when push?
+      (let [url (str (or (System/getenv "MURAKUMO_API_URL") "https://api.murakumo.cloud") "/infer/model-map")
+            token (System/getenv "MURAKUMO_METRICS_TOKEN")]
+        (http/post url {:headers (cond-> {"content-type" "application/json"}
+                                   token (assoc "authorization" (str "Bearer " token)))
+                        :body (json/generate-string snapshot) :timeout 8000})
+        (println "pushed to" url)))
+    snapshot))
+
 (defn -main [& [cmd & args]]
   (case cmd
     "nodes" (cmd-nodes args)
     "generate" (cmd-generate args)
-    (println "usage: bb murakumo infer media nodes | generate <node> \"<prompt>\" [neg] [WxH] [steps]")))
+    "model-map" (cmd-model-map args)
+    (println "usage: bb murakumo infer media nodes | generate <node> \"<prompt>\" [neg] [WxH] [steps] | model-map [--push]")))
