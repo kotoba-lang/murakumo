@@ -8,11 +8,24 @@
  :infer/api-port 8090
  ;; Claude Code (via the /v1/messages Anthropic bridge) always sends its full
  ;; ~89-tool definition set — ~48K prompt tokens before the conversation even
- ;; starts. The old 4096 default (llama-server's own default, unset here
- ;; until 2026-07-04) rejected every Claude Code request outright
- ;; ("exceeds the available context size"). 65536 leaves headroom for a real
- ;; multi-turn coding session on top of the tool-definition floor.
- :infer/ctx 65536
+ ;; starts. 4096 (llama-server's own default) and then 65536 both proved too
+ ;; tight in real use (2026-07-05: a real request hit 65561, 25 over 65536).
+ ;; 262144 is qwen-agentworld-35b-a3b's own native training context (the GGUF
+ ;; metadata's qwen35moe.context_length) — the real ceiling on THIS binary,
+ ;; not an arbitrary round number: llama-server hard-caps any -c above this
+ ;; to 262144 regardless of --rope-scaling yarn overrides (a known upstream
+ ;; bug, ggml-org/llama.cpp#22140 closed-not-planned, #17459 open-unconfirmed
+ ;; — the model's own YaRN-extended 1,010,000 claim needs a source patch +
+ ;; rebuild to actually reach, not a config flag). KV cache at 262144 (only
+ ;; 10/40 layers are full-attention — full_attention_interval=4 hybrid
+ ;; Gated-DeltaNet/SSM architecture, the other 30 use a FIXED ~63MB recurrent
+ ;; state regardless of context length) measures 5GB f16 — trivial against
+ ;; the head's ~46GB unified RAM alongside the 20.6GB model.
+ :infer/ctx 262144
+ ;; auto-detect measured no different from explicit 'on' for this model (RADV
+ ;; Vulkan backend, mostly-linear-attention arch limits how much FA can help)
+ ;; — set explicitly so it's not silently 'auto'-disabled by a future build.
+ :infer/flash-attn "on"
  ;; GPU-wired ceiling provisioned onto each 16 GiB worker (sudo sysctl
  ;; iogpu.wired_limit_mb) — 13 GiB wired leaves ~3 GiB for macOS + the mesh node.
  :infer/wired-limit-mb 13312
