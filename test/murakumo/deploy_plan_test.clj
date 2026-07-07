@@ -9,8 +9,10 @@
 
 (deftest manifest-input-parsing-preserves-current-behaviour
   (is (= "apps" (plan/manifest-dir "apps/bot.edn")))
-  (is (= "bot.edn" (plan/manifest-dir "bot.edn"))
-      "current regex leaves slashless paths unchanged")
+  (is (= "." (plan/manifest-dir "bot.edn"))
+      "a bare filename resolves to \".\" so app paths join as ./<manifest> —
+       the old return-unchanged behaviour broke reconcile --apply
+       (murakumo.app.edn/../kenchi/… , ADR-2607071500 追記2)")
   (is (= "apps/heartbeat.edn"
          (plan/app-manifest-path "apps" {:manifest "heartbeat.edn"})))
   (is (= "asher" (plan/publish-selector nil)))

@@ -17,10 +17,13 @@
 (def placement-wait-ms 75000)
 
 (defn manifest-dir
-  "Directory portion of a manifest path. Preserves the original one-regex
-   behaviour: paths without slash are returned unchanged."
+  "Directory portion of a manifest path. A bare filename (no slash) resolves
+   to \".\" — the old return-unchanged behaviour made reconcile --apply build
+   broken app paths like \"murakumo.app.edn/../kenchi/…\" when invoked with a
+   bare relative manifest (found converging kenchi, ADR-2607071500 追記2)."
   [manifest]
-  (str/replace manifest #"/[^/]+$" ""))
+  (let [d (str/replace manifest #"/[^/]+$" "")]
+    (if (= d manifest) "." d)))
 
 (defn manifest-src
   "Extract the first `:src \"...\"` value from a kotoba app manifest string."
