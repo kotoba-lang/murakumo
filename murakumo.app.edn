@@ -54,4 +54,17 @@
    ;; :cid    "bafy…"   ; paste after a first `deploy`/`component build` to match
    ;;                     observed placement without a rebuild (else :needs-build)
    :replicas  2
+   :placement {:labels {:tier "edge" :zone "jp"} :roles ["compute"]}}
+
+  ;; minidrama (ミニドラマ座) aozora creator actor — ON-MESH surface only
+  ;; (ADR-2607071500, kenchi 同型の split of duties): drama-profile serves the
+  ;; actor's identity record over on-http /minidrama/profile, drama-heartbeat
+  ;; appends resident-liveness datoms on-tick. The governor-gated drama
+  ;; pipeline (DramaLLM proposal → DramaGovernor → generate → aozora publish)
+  ;; stays OFF-MESH on the JVM actor (etzhayyim/com-etzhayyim-minidrama).
+  {:name      "minidrama"
+   :manifest  "../../etzhayyim/com-etzhayyim-minidrama/mesh/minidrama.app.edn"
+   ;; :cid    "bafy…"   ; paste after a first `deploy`/`component build` to match
+   ;;                     observed placement without a rebuild (else :needs-build)
+   :replicas  1
    :placement {:labels {:tier "edge" :zone "jp"} :roles ["compute"]}}]}
