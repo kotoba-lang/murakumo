@@ -82,18 +82,20 @@
       false)))
 
 ;; ── apply (converge) ─────────────────────────────────────────────────────────
-;; Placement is delegated to the existing `deploy` path: publishing an app's
-;; triggers/routes to one node gossips it fleet-wide and the auction places it on
-;; eligible nodes. We re-publish for each app still short of its desired replicas
-;; (the auction + placement constraints do the node selection; murakumo's job is to
-;; keep *declaring* the desired set until observed == desired).
+;; No cross-node lattice auction is wired (ADR-2606271600 known gap; confirmed
+;; converging kenchi-valuation 2026-07-07, ADR-2607071500 追記3): publishing to
+;; one node and waiting for gossipsub to also place the app on the OTHER
+;; desired nodes never converges multi-replica apps. So murakumo imperatively
+;; deploys to EACH of the planner's `:targets` itself (`deploy/plan.cljc`'s
+;; `pick-targets`, least-loaded first already chose them) — the same
+;; `bb deploy <app.edn> <node>` path used manually before this was wired.
 
-(defn- apply-app!
-  "Converge one app by (re)publishing it via `murakumo deploy`. `deploy-fn` is
+(defn- apply-target!
+  "Converge one (app, target) pair by deploying to that node. `deploy-fn` is
    injected so the pure->impure boundary stays testable."
-  [deploy-fn manifest-dir a]
-  (println (report/apply-app-line a))
-  (deploy-fn a manifest-dir))
+  [deploy-fn manifest-dir app target]
+  (println (report/apply-target-line app target))
+  (deploy-fn app manifest-dir target))
 
 ;; ── command ──────────────────────────────────────────────────────────────────
 
@@ -108,7 +110,8 @@
   "Declarative fleet reconcile (murakumo's wadm). Usage:
      reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]] [--snapshot=f]
    --dry-run (default) prints the desired-vs-observed plan and exits.
-   --apply re-publishes under-replicated apps so the auction converges the fleet.
+   --apply imperatively deploys under-replicated apps to each of the planner's
+   target nodes (no cross-node auction — ADR-2606271600) until observed == desired.
    --watch loops apply every N s and persists each plan to the Datom log.
   Placement reach is honoured via connect.edn (the single connectivity SSoT)."
   [fleet [_ & args] deploy-fn]
@@ -126,8 +129,8 @@
                           plan (reconcile-plan fleet* snap conn man ts)]
                       (print-plan plan)
                       (when (and apply (not dry-run))
-                        (doseq [a (plan/apply-apps plan)]
-                          (apply-app! deploy-fn manifest-dir a)))
+                        (doseq [{:keys [app target]} (plan/apply-targets plan)]
+                          (apply-target! deploy-fn manifest-dir app target)))
                       plan))]
       (cond
         watch

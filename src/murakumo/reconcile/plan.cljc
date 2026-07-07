@@ -107,6 +107,21 @@
   [plan]
   (filterv #(= :place (:action %)) (:apps plan)))
 
+(defn apply-targets
+  "Flatten :place apps into one (app, target) deploy pair PER target node.
+
+   No cross-node lattice auction is wired (ADR-2606271600 known gap, confirmed
+   converging kenchi-valuation 2026-07-07, ADR-2607071500 追記3): publishing a
+   deploy message to one node and waiting for the gossipsub auction to also
+   place it on the OTHER desired nodes never converges — the auction only
+   places locally. So murakumo's own control plane (this planner already
+   picked `:targets` via `pick-targets`, least-loaded first) must imperatively
+   deploy to each target itself, same as the manual `bb deploy <app.edn>
+   <node>` workflow that converged kenchi's 2nd replica."
+  [plan]
+  (vec (for [a (apply-apps plan) target (:targets a)]
+         {:app a :target target})))
+
 (defn watch-sleep-ms
   "Milliseconds to sleep between reconcile watch iterations."
   [seconds]

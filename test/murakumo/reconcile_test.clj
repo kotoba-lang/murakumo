@@ -147,6 +147,20 @@
       (is (false? (r/plan-converged? plan)))
       (is (= ["relay"] (mapv :app (r/apply-apps plan)))))))
 
+(deftest apply-targets-flattens-one-pair-per-target-node
+  ;; No cross-node lattice auction (ADR-2606271600) — apply must deploy to
+  ;; EACH target itself, not publish once and hope the auction spreads it.
+  (let [man {:apps [{:name "heartbeat" :cid "bafyHEART" :replicas 3
+                     :placement {:labels {:zone "jp"} :roles ["compute"]}}
+                    {:name "relay" :cid "bafyRELAY" :replicas 1
+                     :placement {:labels {:role "canary"}}}]}
+        plan (r/reconcile-plan fleet snap nil man "2026-06-27T00:00:00Z")
+        pairs (r/apply-targets plan)]
+    (testing "heartbeat deficit=2 → two pairs (one per target), relay → one pair"
+      (is (= [["heartbeat" "b"] ["heartbeat" "c"] ["relay" "d"]]
+             (mapv (juxt (comp :app :app) :target) pairs))))))
+
+
 (deftest command-flags-are-pure-data
   (is (= {:manifest "murakumo.app.edn" :dry-run true :snapshot "snap.edn"}
          (r/parse-flags ["murakumo.app.edn" "--dry-run" "--snapshot=snap.edn"])))
