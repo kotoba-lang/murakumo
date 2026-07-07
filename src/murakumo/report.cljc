@@ -119,10 +119,9 @@
   (format "murakumo dashboard → http://localhost:%d  (snapshot every %ds → Datom log)"
           port interval))
 
-(defn apply-app-line [app]
-  (format "  applying %s → publish (auction will place on eligible: %s)"
-          (:app app)
-          (str/join "," (:targets app))))
+(defn apply-target-line [app target]
+  (format "  applying %s → deploy to %s (no cross-node auction; murakumo picks the target directly)"
+          (:app app) target))
 
 (defn watch-start-line [seconds]
   (format "── reconcile --watch (every %ds) ; Ctrl-C to stop ──" seconds))

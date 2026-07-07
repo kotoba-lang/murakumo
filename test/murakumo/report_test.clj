@@ -85,8 +85,8 @@
            (report/reconcile-persist-error-line "boom")))
     (is (= "murakumo dashboard → http://localhost:8899  (snapshot every 15s → Datom log)"
            (report/dashboard-start-line 8899 15)))
-    (is (= "  applying heartbeat → publish (auction will place on eligible: asher,judah)"
-           (report/apply-app-line {:app "heartbeat" :targets ["asher" "judah"]})))
+    (is (= "  applying heartbeat → deploy to asher (no cross-node auction; murakumo picks the target directly)"
+           (report/apply-target-line {:app "heartbeat"} "asher")))
     (is (= "── reconcile --watch (every 30s) ; Ctrl-C to stop ──"
            (report/watch-start-line 30)))
     (is (= "set MURAKUMO_OPERATOR_SEED first"

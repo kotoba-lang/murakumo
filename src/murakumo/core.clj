@@ -335,11 +335,12 @@
 (defn cmd-reconcile
   "Declarative fleet reconcile (murakumo's wadm). Folds a desired-state manifest
    (murakumo.app.edn) against live placement and reports/converges the drift.
-   Placement is delegated back to `deploy` (publish → auction places on eligible
-   nodes). See murakumo.reconcile."
+   Placement is imperative — deploys to each planner-chosen target node
+   directly (`cmd-deploy`'s publish-selector); no cross-node lattice auction
+   is wired (ADR-2606271600). See murakumo.reconcile."
   [fleet args]
-  (let [deploy-fn (fn [a manifest-dir]
-                    (cmd-deploy fleet [(deploy/app-manifest-path manifest-dir a) nil]))]
+  (let [deploy-fn (fn [a manifest-dir target]
+                    (cmd-deploy fleet [(deploy/app-manifest-path manifest-dir a) target]))]
     (reconcile/cmd-reconcile fleet (cons "reconcile" args) deploy-fn)))
 
 (defn cmd-fleet
