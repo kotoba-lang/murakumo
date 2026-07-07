@@ -29,9 +29,14 @@
  :apps
  [{:name      "kotodama-bot"
    ;; the real kotoba mesh example (clj→wasm); path is relative to THIS file.
-   :manifest  "../kotoba/examples/kotoba-mesh-app/kotoba.app.edn"
-   ;; :cid    "bafy…"            ; ← paste a component CID after a first deploy to
-   ;;                              enable match-without-rebuild (else :needs-build)
+   ;; the example lives in the com-junkawasaki/kotoba checkout (kotoba-lang/
+   ;; kotoba is the clj split without examples/) — old "../kotoba/…" was broken.
+   :manifest  "../../com-junkawasaki/kotoba/examples/kotoba-mesh-app/kotoba.app.edn"
+   ;; deployed 2026-07-07: ingest bafyreifef36wagh… / reply bafyreiejjetboql…
+   ;; but :cid is deliberately NOT recorded — reply's :links carry the example's
+   ;; placeholder CIDs (bafyGemmaModelCid / bafyDepth2GrantCid), so on-http
+   ;; execution 502s until a real model CID + CACAO grant replace them; a :cid
+   ;; here would make reconcile --apply churn on an app that cannot converge.
    :replicas  2
    :placement {:labels {:tier "edge" :zone "jp"} :roles ["compute"]}}
 
@@ -40,6 +45,9 @@
   ;; :webrtc is wired into the native class this app reconciles to :blocked —
   ;; honestly, instead of being placed where browsers can't reach it.
   {:name      "live-ui"
+   ;; NOTE: apps/live-ui.edn does not exist yet in this repo — the entry stays
+   ;; :needs-build (and would reconcile :blocked on :reach anyway until the
+   ;; native class speaks :webrtc). Kept declared as the honest desired state.
    :manifest  "apps/live-ui.edn"
    :replicas  1
    :placement {:roles ["compute"] :reach [:browser/live]}}
@@ -50,9 +58,11 @@
   ;; JVM operator side; ToS-restricted inputs stay Murakumo-only). See
   ;; ../kenchi-actor/mesh/kenchi.app.edn and ../kenchi-actor/docs/DESIGN.md §6.
   {:name      "kenchi-valuation"
-   :manifest  "../kenchi-actor/mesh/kenchi.app.edn"
-   ;; :cid    "bafy…"   ; paste after a first `deploy`/`component build` to match
-   ;;                     observed placement without a rebuild (else :needs-build)
+   :manifest  "../kenchi/mesh/kenchi.app.edn"   ; repo renamed kenchi-actor → kenchi
+   ;; representative CID = valuation-query (http-serving), deployed + probed
+   ;; 2026-07-07 (POST /mesh/http/kenchi/valuation → HTTP 200 on asher) after
+   ;; fixing the guest's regex literal (kotoba-clj reader has none, kenchi 7ae1af3b)
+   :cid       "bafyreiadyptg5s7kxo4jfv5euprcyuktzytkzjemjhzeuoxok5pab65q4i"
    :replicas  2
    :placement {:labels {:tier "edge" :zone "jp"} :roles ["compute"]}}
 
