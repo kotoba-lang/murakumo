@@ -86,7 +86,22 @@
    :model/moe-shared-expert? true
    :model/context 262144              ; extensible to 1,010,000 via YaRN
    :model/gguf "Qwen3.6-35B-A3B-Q4_K_M.gguf"
-   :model/weight-bytes 21200000000}   ; HF file-listing size, not yet probed on-disk
+   ;; byte-exact (2026-07-08: matches both the HF LFS listing and the file
+   ;; already resident at /home/gad/models/Qwen3.6-35B-A3B-GGUF/ on the head,
+   ;; downloaded 2026-07-05 for the standalone-GPU benchmark in catalog.cljc).
+   :model/weight-bytes 21166757728
+   ;; llama.cpp-native CLIP-in-GGUF vision projector, same HF repo as the text
+   ;; tower above (co-located, same quantizer/llama.cpp build — LM Studio team,
+   ;; llama.cpp release b8814). Confirmed llama.cpp/llama-server-compatible via
+   ;; unsloth's own `--mmproj unsloth/Qwen3.6-35B-A3B-GGUF/mmproj-F16.gguf`
+   ;; llama-server example for the SAME upstream Qwen3.6-35B-A3B checkpoint
+   ;; (unsloth.ai/docs/models/qwen3.6); this repo's mmproj is BF16, not yet
+   ;; downloaded to any fleet node. Pass via `llama-server --mmproj <path>`
+   ;; alongside :model/gguf — cmd-serve-standalone/cmd-serve-ring don't wire
+   ;; this through yet (2026-07-08: registry-only, no engine change in this
+   ;; commit — see ADR/deployment notes for the serve-time flag).
+   :model/mmproj "mmproj-Qwen3.6-35B-A3B-BF16.gguf"
+   :model/mmproj-bytes 902822016}
 
   "gemma-4-12b-it"
   {:model/id "gemma-4-12b-it"

@@ -415,11 +415,23 @@
         head-cfg (:infer/head cfg)
         bin-dir (:standalone-bin-dir head-cfg)
         model-path (or gguf-path (str (:model-dir head-cfg) "/" (:model/gguf model)))
+        ;; :model/mmproj (e.g. qwen3.6-35b-a3b) is a llama.cpp-native CLIP-in-GGUF
+        ;; vision projector co-located with the text tower — pass it through
+        ;; unconditionally when the registry entry declares one, so a model
+        ;; without :model/mmproj (every other entry today, incl. the currently
+        ;; -serving qwen-agentworld-35b-a3b) builds the exact same command line
+        ;; as before this was added.
+        mmproj-path (when-let [mmproj (:model/mmproj model)]
+                      (let [dir (if-let [i (str/last-index-of model-path "/")]
+                                  (subs model-path 0 i)
+                                  (:model-dir head-cfg))]
+                        (str dir "/" mmproj)))
         ctx (:infer/ctx cfg 4096)
         port (:infer/api-port cfg 8080)
         parallel (or (some-> parallel parse-long) 1)
         fa (:infer/flash-attn cfg)
         cmd (str bin-dir "/llama-server -m " model-path
+                 (when mmproj-path (str " --mmproj " mmproj-path))
                  " -ngl 999 -c " ctx " --parallel " parallel
                  (when fa (str " -fa " fa))
                  " --host 0.0.0.0 --port " port)]
