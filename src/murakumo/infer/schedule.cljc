@@ -17,12 +17,13 @@
   "Can `node` run `model`? node: {:engines #{:comfyui …} :checkpoints #{…}
    :free-bytes n :queue q}. model: {:model/engine :model/checkpoint
    :model/min-free-bytes}."
-  [{:keys [engines checkpoints free-bytes]} model]
+  [{:keys [engines checkpoints free-bytes] :as node} model]
   (and (contains? (or engines #{}) (:model/engine model))
        (or (nil? (:model/checkpoint model))
            (contains? (or checkpoints #{}) (:model/checkpoint model))
-           ;; a node that can fetch (has spare disk) is eligible even without it
-           (:node/can-fetch? true))
+           ;; a node that can fetch (has spare disk) is eligible even without
+           ;; it -- defaults to true since no caller currently opts out
+           (:node/can-fetch? node true))
        (>= (or free-bytes 0) (:model/min-free-bytes model 0))))
 
 (defn score
