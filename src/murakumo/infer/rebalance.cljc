@@ -79,14 +79,20 @@
 
 (defn- largest-remainder
   "Apportion `total` seats across `weights` (map k→w) by largest-remainder, with
-   a floor of `floor` seats for any pool whose weight > 0. Deterministic."
+   a floor of `floor` seats for any pool whose weight > 0. Deterministic. The
+   sum of the returned seats never exceeds `total` -- when floor × (count
+   active pools) > total, the effective per-pool floor is reduced to
+   (quot total (count active)) so every active pool competes fairly for the
+   remaining seats via the proportional/remainder pass below, rather than
+   promising more seats than `total` actually provides."
   [total weights floor]
   (let [active (into {} (filter (comp pos? val) weights))
         sumw (reduce + 0 (vals active))]
     (if (or (zero? total) (zero? sumw))
       (zipmap (keys weights) (repeat 0))
-      (let [;; floors first
-            base (into {} (map (fn [[k _]] [k floor]) active))
+      (let [;; floors first, capped so floors alone can't exceed total
+            eff-floor (min floor (quot total (count active)))
+            base (into {} (map (fn [[k _]] [k eff-floor]) active))
             left (- total (reduce + 0 (vals base)))
             left (max 0 left)
             ideal (into {} (map (fn [[k w]] [k (* left (/ (double w) sumw))]) active))

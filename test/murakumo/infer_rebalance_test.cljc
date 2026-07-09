@@ -62,6 +62,24 @@
     (is (not (:changed? r)))
     (is (empty? (:moves r)))))
 
+(deftest pool-seats-never-exceed-available-workers
+  ;; When floor × (count active pools) > total workers -- a shrunk fleet
+  ;; against diversified demand across more pools than there are workers --
+  ;; pool-seats must never sum past the actual worker count, and every
+  ;; :pool-seats entry must be backed by real assigned nodes in :pools.
+  (let [shrunk {:fleet "murakumo"
+                :nodes [{:id "n1" :status "up" :ram-gb 32 :roles ["relay"]}
+                        {:id "n2" :status "up" :ram-gb 32}
+                        {:id "n3" :status "up" :ram-gb 32}]}
+        cap (rb/capacity shrunk)
+        plan (rb/target-allocation cap {:text 1 :image 1 :video 0 :audio 0 :postproc 1})]
+    (is (= 3 (:online plan)))
+    (is (<= (reduce + (vals (:pool-seats plan))) 2)
+        "seats promised must not exceed the 2 actual workers")
+    (is (= (reduce + (vals (:pool-seats plan)))
+           (reduce + (map count (vals (:pools plan)))))
+        "every promised seat must be backed by an actually-assigned node")))
+
 (deftest empty-fleet-is-safe
   (let [r (rb/target-allocation [] {:text 10})]
     (is (nil? (:head r))) (is (zero? (:online r)))))
