@@ -20,6 +20,17 @@
     (is (not (sched/eligible? (node "a" :free (* 4 GiB)) wan))
         "4 GiB free cannot host a 12 GiB-min video model")))
 
+(deftest cold-node-without-checkpoint-is-still-eligible
+  (testing "a node with the engine and free memory but no checkpoint is
+            eligible via the fetch fallback, even on a fully cold cluster"
+    (let [cold (node "cold")]
+      (is (sched/eligible? cold sdxl))
+      (is (= "cold" (:name (sched/pick [cold] sdxl))))))
+  (testing "unless the node explicitly opts out of fetching"
+    (let [no-fetch (assoc (node "nofetch") :node/can-fetch? false)]
+      (is (not (sched/eligible? no-fetch sdxl)))
+      (is (nil? (sched/pick [no-fetch] sdxl))))))
+
 (deftest warm-preferred
   (testing "a node already holding the checkpoint beats a cold fetcher"
     (let [warm (node "warm" :ckpts #{"animagine-xl-4.0.safetensors"} :queue 1)
