@@ -47,15 +47,31 @@
 
 (defn job-cost
   "Σ units×price for a media/text job. `units` e.g. {:images 4} or
-   {:tokens 300} or {:video-seconds 5}. Unknown unit keys are an error —
-   silence would mean free inference."
+   {:tokens 300} or {:video-seconds 5}. Unknown unit keys are an error --
+   silence would mean free inference. That same 'silence = free inference'
+   guard also applies to a KNOWN unit whose price key is simply absent from
+   this particular model's registry entry: :tokens alone has a documented
+   global default (default-per-token) since per-token pricing genuinely is
+   sane to default; every other unit (:images/:video-seconds/:audio-seconds/
+   :training-steps) has no sane universal default (prices vary wildly by
+   model) and must be configured explicitly or error, never silently 0."
   [model units]
   (reduce (fn [acc [u n]]
             (let [price-key (or (unit-prices u)
-                                (throw (ex-info "unknown billing unit" {:unit u})))]
-              (+ acc (* (double (get model price-key
-                                      (if (= u :tokens) default-per-token 0)))
-                        (double n)))))
+                                (throw (ex-info "unknown billing unit" {:unit u})))
+                  ;; `(get model price-key default)` eagerly evaluates
+                  ;; `default` even when price-key IS present -- so a bare
+                  ;; `(get model price-key (if ... (throw ...)))` would throw
+                  ;; unconditionally regardless of whether the key exists.
+                  ;; `contains?` short-circuits that.
+                  price     (if (contains? model price-key)
+                              (get model price-key)
+                              (if (= u :tokens)
+                                default-per-token
+                                (throw (ex-info "model missing price for billing unit"
+                                                {:unit u :price-key price-key
+                                                 :model (:model/id model)}))))]
+              (+ acc (* (double price) (double n)))))
           0.0 units))
 
 

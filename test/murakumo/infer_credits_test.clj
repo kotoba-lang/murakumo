@@ -79,6 +79,24 @@
     (testing "unknown units are an error, not free"
       (is (thrown? Exception (credits/job-cost sdxl {:pixels 1e6}))))))
 
+(deftest media-unit-missing-price-key-is-an-error-not-free
+  (testing "a KNOWN media unit (:images/:video-seconds) whose price key is
+            simply absent from this model's registry entry must error, same
+            as an unrecognized unit -- silently defaulting to 0 would mean
+            free inference for any model onboarded before its media pricing
+            is backfilled. Only :tokens has a documented global default"
+    (let [incomplete-model {:model/id "no-media-pricing-yet"}]
+      (is (thrown? Exception (credits/job-cost incomplete-model {:images 500})))
+      (is (thrown? Exception (credits/job-cost incomplete-model {:video-seconds 300})))
+      (is (thrown? Exception (credits/job-cost incomplete-model {:audio-seconds 10})))
+      (is (thrown? Exception (credits/job-cost incomplete-model {:training-steps 50})))
+      (testing "tokens alone still falls back to the documented default"
+        (is (= (double credits/default-per-token)
+               (credits/job-cost incomplete-model {:tokens 1}))))
+      (testing "charge propagates the error too -- never silently approves at cost 0"
+        (is (thrown? Exception (credits/charge {} "broke-user"
+                                                {:model incomplete-model :units {:images 500}})))))))
+
 (deftest receipts
   (let [settled (credits/settle run)
         r1 (credits/receipt {:settled settled
