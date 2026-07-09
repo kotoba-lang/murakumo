@@ -71,9 +71,15 @@
      :cljs (js/parseInt s 10)))
 
 (defn query-at
-  "Parse dashboard `at=N` query parameter. Returns nil if absent."
+  "Parse dashboard `at=N` query parameter. Returns nil if absent. The regex is
+  anchored to a key boundary (start-of-string or `?`/`&`, terminated by `&` or
+  end-of-string) so it matches the exact key `at`, not any longer key that
+  happens to END in \"at=<digits>\" as a substring (e.g. \"format=5\",
+  \"chat=5\", \"combat=12\" would otherwise all be misread as history offsets
+  5/5/12 -- selected-snapshot would silently serve stale history instead of
+  the live snapshot for any query string containing such a param)."
   [query-string]
-  (some-> query-string (->> (re-find #"at=(\d+)")) second parse-int))
+  (some-> query-string (->> (re-find #"(?:^|[?&])at=(\d+)(?:&|$)")) second parse-int))
 
 (defn dashboard-options
   "Parse dashboard CLI args into port/interval defaults."
