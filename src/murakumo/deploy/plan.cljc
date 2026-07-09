@@ -117,7 +117,7 @@
 (defn execution-count-command
   "Remote shell command that counts execution log lines for a component CID."
   [cid]
-  (format "grep -c 'trigger: executed.*%s' ~/.murakumo/mesh.log 2>/dev/null" cid))
+  (str "grep -c 'trigger: executed.*" cid "' ~/.murakumo/mesh.log 2>/dev/null"))
 
 (defn observed-node
   "Return the node name when its execution count output proves placement."
@@ -155,7 +155,7 @@
 (defn stop-forward-command
   "Shell command that stops forwards bound to a local port."
   [local-port]
-  (format "pkill -f '%d:localhost' 2>/dev/null" local-port))
+  (str "pkill -f '" local-port ":localhost' 2>/dev/null"))
 
 (defn release-wit-path
   "WIT path paired with a release dir (`target/<triple>/release`)."

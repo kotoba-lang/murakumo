@@ -184,8 +184,7 @@
 (defn probe-command
   "Remote shell command for one dashboard probe round-trip."
   [port]
-  (format "echo \"H:$(curl -s -m4 http://localhost:%d/health 2>/dev/null)\"; echo \"L:$(grep 'peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l | tr -d ' ')\"; echo \"P:$(grep 'trigger: executed' ~/.murakumo/mesh.log 2>/dev/null | grep -oE 'bafy[a-z0-9]{40,}' | sort -u | tr '\\n' ',')\""
-          port))
+  (str "echo \"H:$(curl -s -m4 http://localhost:" port "/health 2>/dev/null)\"; echo \"L:$(grep 'peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l | tr -d ' ')\"; echo \"P:$(grep 'trigger: executed' ~/.murakumo/mesh.log 2>/dev/null | grep -oE 'bafy[a-z0-9]{40,}' | sort -u | tr '\\n' ',')\""))
 
 (defn parse-health
   "Decode health JSON with a host-supplied decoder, returning nil on failure."
