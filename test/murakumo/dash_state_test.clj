@@ -55,6 +55,18 @@
 (deftest dashboard-selection-and-display-helpers
   (is (= 12 (state/query-at "at=12")))
   (is (nil? (state/query-at "page=1")))
+  (testing "query-at only matches the exact key `at`, not a longer key that
+            happens to END in \"at=<digits>\" as a substring -- regression:
+            the regex #\"at=(\\d+)\" was unanchored, so \"format=5\" matched
+            the substring \"at=5\" inside \"form\" + \"at=5\" and was
+            misread as at=5 (a request to time-travel to history offset 5)
+            instead of nil (no history offset requested)"
+    (is (nil? (state/query-at "format=5")))
+    (is (nil? (state/query-at "chat=5")))
+    (is (nil? (state/query-at "combat=12")))
+    (is (nil? (state/query-at "flat=5")))
+    (is (= 12 (state/query-at "page=1&at=12")) "still matches the real key when combined with other params")
+    (is (= 7 (state/query-at "format=5&at=7")) "still matches the real key even alongside a colliding-shaped param"))
   (is (= {:port 8899 :interval 15} (state/dashboard-options [])))
   (is (= {:port 9000 :interval 5} (state/dashboard-options ["9000" "5"])))
   (is (= 5000 (state/interval-sleep-ms 5)))
