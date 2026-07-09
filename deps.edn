@@ -4,4 +4,8 @@
         org.bouncycastle/bcpkix-jdk18on {:mvn/version "1.78.1"}}
  :aliases
  {:quic-driver {:main-opts ["-m" "murakumo.overlay.quic-driver"]}
-  :quic-cert {:main-opts ["-m" "murakumo.overlay.cert"]}}}
+  :quic-cert {:main-opts ["-m" "murakumo.overlay.cert"]}
+  ;; clj-kondo as a Clojars lib (no Homebrew/system install needed).
+  :lint {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2024.11.14"}}
+         :main-opts ["-m" "clj-kondo.main" "--lint" "src" "test"
+                     "--fail-level" "error"]}}}
