@@ -23,18 +23,49 @@
 ;;                         yukkuri.comfy's background/character/scene-composite
 ;;                         workflows) that the simple txt2img-only
 ;;                         /v1/images/generations shape can't express.
+;;   POST /v1/chat/completions  {:model? :messages [{:role :content}] ...}
+;;                                 -> OpenAI chat-completions-shaped response,
+;;                         VERBATIM passthrough from the backend (see below).
+;;                         Added ADR-2607110200-followup (cloud-itonami.media,
+;;                         same-day owner instruction "cloud-murakumo 側を必要
+;;                         であれば修正、更新"): murakumo's OWN public dispatch
+;;                         API (/infer/dispatch -> relay -> browser-swarm
+;;                         worker) has no HTTP-pollable output-retrieval path
+;;                         for a headless caller — confirmed empirically
+;;                         (relay.gftd.ai/stats showed 0 connected workers,
+;;                         and /infer/runs' ledger entries carry only
+;;                         credits/shares telemetry, no :output field
+;;                         anywhere — the browser-swarm model returns results
+;;                         over the dispatching tab's own live WSS session,
+;;                         not to a stateless server caller). This route
+;;                         reuses the exact same synchronous-HTTP-proxy shape
+;;                         as /v1/images/generations above, but for TEXT: it
+;;                         forwards to an OpenAI-compatible text backend
+;;                         (MURAKUMO_TEXT_BACKEND_URL env, default a local
+;;                         Ollama at http://localhost:11434 — any fleet node
+;;                         running Ollama works, same "any fleet node with a
+;;                         public endpoint" posture as deploy/relay.md's own
+;;                         relay). Unlike the image path, this does NOT
+;;                         dispatch via SSH + media/run-job! — Ollama's own
+;;                         /v1/chat/completions is already OpenAI-shaped, so
+;;                         there is nothing to translate, only to proxy.
 ;;   GET  /health                  -> {:ok :fleet-nodes}
 ;;
-;; Scope: image (txt2img) only, matching comfyui.gateway's KSampler contract.
-;; Blocking (one request = one full render, per media.clj's run-job!) — fine
-;; for the current job-parallel/render-farm model; a queue-backed async
-;; variant (poll-by-id) is a follow-up if request-time synchronous rendering
-;; becomes a problem. Not deployed/exposed by this commit — running it
-;; reachable from outside localhost (Cloudflare Tunnel, Tailscale funnel, or
-;; a plain --bind) is an operational step the fleet owner takes separately,
-;; same as renderer-mac's README documents for its own tunnel.
+;; Scope: image (txt2img, fleet-dispatched via SSH) + text (proxied to an
+;; OpenAI-compatible backend) — NOT unified dispatch: image jobs still need
+;; murakumo's own fleet scheduler (pick-any-node!/media/run-job!) because
+;; ComfyUI has no HTTP-reachable OpenAI-images-compatible surface of its own;
+;; text generation already does (Ollama), so text is a plain proxy.
+;; Blocking (one request = one full render/generation) — fine for the
+;; current job-parallel/render-farm model; a queue-backed async variant
+;; (poll-by-id) is a follow-up if request-time synchronous serving becomes a
+;; problem. Not deployed/exposed by this commit — running it reachable from
+;; outside localhost (Cloudflare Tunnel, Tailscale funnel, or a plain --bind)
+;; is an operational step the fleet owner takes separately, same as
+;; renderer-mac's README documents for its own tunnel.
 (ns murakumo.infer.gateway
-  (:require [cheshire.core :as json]
+  (:require [babashka.http-client :as http-client]
+            [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [murakumo.fleet :as fleet]
@@ -128,6 +159,41 @@
       {:b64_json (.encodeToString (java.util.Base64/getEncoder) bytes)
        :filename local})))
 
+(def default-text-backend-url
+  "Any OpenAI-compatible /v1/chat/completions server. Default: a local Ollama
+  (already running with real models on the machine this gateway starts on —
+  `ollama list` / `curl localhost:11434/v1/models`). Override via
+  MURAKUMO_TEXT_BACKEND_URL to point at a different fleet node's Ollama, or
+  any other OpenAI-compatible endpoint (LiteLLM, vLLM, ...)."
+  "http://localhost:11434")
+
+(defn- text-backend-url []
+  (or (System/getenv "MURAKUMO_TEXT_BACKEND_URL") default-text-backend-url))
+
+(defn generate-text!
+  "Verbatim OpenAI-chat-completions proxy: POST `body` (already OpenAI-shaped
+  — :model/:messages/etc, whatever the caller sent) to
+  `{(text-backend-url)}/v1/chat/completions`, return the backend's parsed
+  JSON response as-is. No translation needed (unlike generate-image!,
+  Ollama's /v1/chat/completions is already the exact target shape) — the
+  ONLY value this fn adds over the caller hitting Ollama directly is a
+  stable murakumo-branded URL + being reachable from outside localhost once
+  an operator exposes this gateway (Cloudflare Tunnel / Tailscale funnel).
+  Throws ex-info on a non-2xx backend response or an unreachable backend."
+  [body]
+  (let [url (str (text-backend-url) "/v1/chat/completions")
+        resp (try
+               (http-client/post url {:headers {"content-type" "application/json"}
+                                      :body (json/generate-string body)
+                                      :throw false})
+               (catch Exception e
+                 (throw (ex-info "murakumo text backend unreachable"
+                                 {:url url :detail (ex-message e)}))))]
+    (if (<= 200 (:status resp) 299)
+      (json/parse-string (:body resp) true)
+      (throw (ex-info "murakumo text backend returned an error"
+                      {:url url :status (:status resp) :body (:body resp)})))))
+
 (defn- json-response [status body]
   {:status status :headers {"content-type" "application/json"} :body (json/generate-string body)})
 
@@ -149,10 +215,20 @@
       (catch Exception e
         (json-response 502 {:error {:message (ex-message e) :data (ex-data e)}})))
 
+    [:post "/v1/chat/completions"]
+    (try
+      (let [body (json/parse-string (slurp (:body req)) true)]
+        (if-not (seq (:messages body))
+          (json-response 400 {:error "messages (array) required"})
+          (json-response 200 (generate-text! body))))
+      (catch Exception e
+        (json-response 502 {:error {:message (ex-message e) :data (ex-data e)}})))
+
     [:get "/health"]
     (try
       (let [f (fleet/enrich (fleet/load-fleet))]
-        (json-response 200 {:ok true :fleet-nodes (count (media/live-fleet f))}))
+        (json-response 200 {:ok true :fleet-nodes (count (media/live-fleet f))
+                            :text-backend (text-backend-url)}))
       (catch Exception e
         (json-response 503 {:ok false :error (ex-message e)})))
 
@@ -161,5 +237,6 @@
 (defn -main [& [port]]
   (let [port (or (some-> port parse-long) 8790)]
     (http/run-server http-handler {:port port})
-    (println (format "murakumo comfyui gateway on http://0.0.0.0:%d  (POST /v1/images/generations, POST /workflows/run, GET /health)" port))
+    (println (format "murakumo comfyui gateway on http://0.0.0.0:%d  (POST /v1/images/generations, POST /workflows/run, POST /v1/chat/completions -> %s, GET /health)"
+                     port (text-backend-url)))
     @(promise)))
