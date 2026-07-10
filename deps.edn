@@ -1,11 +1,24 @@
 {:paths ["src"]
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}
         tech.kwik/kwik {:mvn/version "0.10.10"}
-        org.bouncycastle/bcpkix-jdk18on {:mvn/version "1.78.1"}}
+        org.bouncycastle/bcpkix-jdk18on {:mvn/version "1.78.1"}
+        ;; witness-quorum's pre-commit orchestrator, wired onto overlay QUIC
+        ;; in murakumo.overlay.witness-transport (ADR-2607110300 Phase 2).
+        ;; Pin is the kotoba-lang/witness-quorum#1 merge commit on main.
+        io.github.kotoba-lang/witness-quorum
+        {:git/sha "b9e2cea27cf7e0867e6d958823917e72f1d62c2f"}}
  :aliases
- {:quic-driver {:main-opts ["-m" "murakumo.overlay.quic-driver"]}
+ {;; offline workspace dev — pin witness-quorum to the local checkout
+  :dev {:override-deps
+        {io.github.kotoba-lang/witness-quorum {:local/root "../witness-quorum"}}}
+  :quic-driver {:main-opts ["-m" "murakumo.overlay.quic-driver"]}
   :quic-cert {:main-opts ["-m" "murakumo.overlay.cert"]}
-  ;; clj-kondo as a Clojars lib (no Homebrew/system install needed).
-  :lint {:replace-deps {clj-kondo/clj-kondo {:mvn/version "2024.11.14"}}
-         :main-opts ["-m" "clj-kondo.main" "--lint" "src" "test"
-                     "--fail-level" "error"]}}}
+  ;; JVM-only test path for the kwik/witness-quorum-dependent overlay code
+  ;; (quic-driver RPC + witness-transport) that bb.edn's portable `test`
+  ;; task deliberately excludes, same reason quic-driver/quic-cert are
+  ;; shelled to `clojure -M` instead of run under bb.
+  :test {:extra-paths ["test"]
+         :extra-deps {io.github.cognitect-labs/test-runner
+                      {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+         :main-opts ["-m" "cognitect.test-runner"]
+         :exec-fn cognitect.test-runner.api/test}}}

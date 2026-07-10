@@ -219,6 +219,129 @@
     (flush)
     @(promise)))
 
+;; --- Generalized request/response RPC (ADR-2607110300 Phase 2) -----------
+;;
+;; `hello`/`ack`/`dial!`/`handle-stream!` above are a FIXED single-shot
+;; handshake (payload is always the literal hello greeting). The functions
+;; below generalize the exact same connection/stream machinery to carry an
+;; arbitrary EDN payload and response, so callers (e.g.
+;; murakumo.overlay.witness-transport) can run a real request/response RPC
+;; over this transport without inventing a second wire protocol. `dial!`
+;; and `serve!` are unchanged and remain the liveness-check path.
+
+(defn request-envelope
+  "Generalized request envelope: same session/target framing `hello` uses,
+  carrying an arbitrary `payload` instead of a fixed greeting."
+  [request payload]
+  {:type "murakumo.overlay.rpc-request"
+   :transport :quic
+   :overlay (get-in request [:session :overlay])
+   :node (get-in request [:session :node])
+   :name (get-in request [:session :name])
+   :target (get-in request [:connect :path])
+   :payload payload})
+
+(defn request!
+  "One round-trip RPC over a fresh QUIC connection: dial the peer described
+  by `request`, send `payload` wrapped in a `request-envelope`, block for
+  the single EDN response line, return it. Reuses `connect!`/stream setup
+  from `dial!`, generalized from the fixed hello/ack payload to an
+  arbitrary one."
+  [request payload timeout-ms]
+  (try
+    (let [conn (connect! request timeout-ms)
+          stream (.createStream conn true)
+          writer (stream-writer stream)
+          reader (stream-reader stream)
+          envelope (request-envelope request payload)]
+      (write-line! writer (pr-str envelope))
+      (let [resp-line (.readLine reader)
+            response (when resp-line (edn/read-string resp-line))]
+        (.close conn)
+        {:ok? (some? response) :request envelope :response response}))
+    (catch Exception e
+      {:ok? false :reason :stream-error :message (.getMessage e)})))
+
+(defn handle-request-envelope
+  "Pure core of the RPC responder: given the request line already read off
+  the wire and `handler` (fn [payload] -> response-payload), apply the
+  handler and produce the response. Split out from `handle-request-stream!`
+  so the actual protocol logic (parse / dispatch / error handling) is
+  testable without a real QuicStream."
+  [req-line handler]
+  (let [envelope (when req-line (edn/read-string req-line))
+        response (try (handler (:payload envelope))
+                      (catch Exception e {:error (.getMessage e)}))]
+    {:request envelope :response response :response-line (pr-str response)}))
+
+(defn handle-request-stream!
+  "Server-side: read one EDN request envelope off `stream`, apply `handler`
+  via `handle-request-envelope`, write the response back as one EDN line."
+  [stream handler]
+  (let [reader (stream-reader stream)
+        writer (stream-writer stream)
+        req-line (.readLine reader)
+        {:keys [request response response-line]} (handle-request-envelope req-line handler)]
+    (write-line! writer response-line)
+    {:request request :response response}))
+
+(defn register-rpc-app! [connector handler delivered latch]
+  (.registerApplicationProtocol
+   connector
+   alpn
+   (reify ApplicationProtocolConnectionFactory
+     (createConnection [_ _protocol _conn]
+       (reify ApplicationProtocolConnection
+         (acceptPeerInitiatedStream [_ stream]
+           (try
+             (deliver delivered (handle-request-stream! stream handler))
+             (catch Exception e
+               (deliver delivered {:error (.getMessage e)}))
+             (finally
+               (.countDown latch)))))))))
+
+(defn serve-once-rpc!
+  "Like `serve-once!`, but with a `handler` (fn [payload] -> response) for
+  the generalized request/response RPC. Accepts exactly one stream then
+  stops listening -- for tests and one-shot responders."
+  [request handler timeout-ms]
+  (try
+    (let [connector (server-connector request)
+          delivered (promise)
+          latch (CountDownLatch. 1)]
+      (try
+        (register-rpc-app! connector handler delivered latch)
+        (.start connector)
+        (if (.await latch timeout-ms TimeUnit/MILLISECONDS)
+          (let [{:keys [request response error]} @delivered]
+            (if error
+              {:ok? false :reason :stream-error :message error}
+              {:ok? true :request request :response response}))
+          {:ok? false :reason :timeout})
+        (finally
+          (.close connector))))
+    (catch Exception e
+      {:ok? false :reason :listen-error :message (.getMessage e)})))
+
+(defn serve-rpc!
+  "Long-running QUIC RPC listener: like `serve!`, but answers every
+  incoming stream via `handler` (fn [payload] -> response) instead of the
+  fixed hello/ack echo. Blocks forever -- callers run this in its own
+  thread/process per fleet node."
+  [request handler]
+  (let [connector (server-connector request)
+        delivered (promise)
+        latch (CountDownLatch. 1)]
+    (register-rpc-app! connector handler delivered latch)
+    (.start connector)
+    (println (pr-str {:ok? true
+                      :type "murakumo.overlay.quic-listener"
+                      :mode :listening
+                      :transport :quic
+                      :listen (select-keys (:connect request) [:host :port])}))
+    (flush)
+    @(promise)))
+
 (defn execute [{:keys [action request timeout-ms]}]
   (let [timeout-ms (or timeout-ms default-timeout-ms)]
     (if-not (valid-request? request)
