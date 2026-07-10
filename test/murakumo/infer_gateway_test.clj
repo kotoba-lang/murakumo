@@ -18,6 +18,12 @@
     (is (nil? (#'gw/image-filename {:outputs {}})))
     (is (nil? (#'gw/image-filename {})))))
 
+(deftest text-backend-url-test
+  (testing "defaults to local Ollama when MURAKUMO_TEXT_BACKEND_URL is unset"
+    (is (= "http://localhost:11434" (#'gw/text-backend-url))))
+  (testing "default-text-backend-url is exactly that literal, no trailing slash"
+    (is (= "http://localhost:11434" gw/default-text-backend-url))))
+
 (deftest pick-any-node-eligibility-test
   (testing "a nil/default checkpoint restricts to nodes actually holding it,
             not every :comfyui node regardless of model (the bug a live
