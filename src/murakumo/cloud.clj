@@ -7,8 +7,12 @@
             [murakumo.identity :as identity]))
 
 (defn load-cloud
+  "Read cloud.edn. cloud.edn is Datomic/Datascript tx-data (edn-datomize.bb
+   wrap-map-keep-ns!, promote-ns \"cloud-doc\" for the previously-bare :relays/
+   :policy keys — the pre-existing :cloud/* and :overlay/* namespaces are left
+   as-is); tx-data->map reconstitutes the plain map merge-defaults expects."
   ([] (load-cloud config/default-cloud-path))
-  ([path] (plan/merge-defaults (config/read-edn-file path))))
+  ([path] (plan/merge-defaults (config/tx-data->map (config/read-edn-file path) "cloud-doc"))))
 
 (defn- auth-key-from-env [cloud]
   (when-let [env-name (:overlay/auth-key-env cloud)]

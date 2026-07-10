@@ -78,6 +78,42 @@
   #?(:clj (spit path (edn-string value))
      :cljs (throw (ex-info "write-edn-file is host-only" {:path path}))))
 
+(defn- unblob
+  "Undo edn-datomize.bb's pr-str blobbing of a non-scalar value. Strings that
+   don't parse back to a collection (ordinary scalar strings) pass through
+   unchanged."
+  [v]
+  (if (string? v)
+    (try
+      (let [parsed (parse-edn v)]
+        (if (coll? parsed) parsed v))
+      (catch #?(:clj Exception :cljs :default) _ v))
+    v))
+
+(defn tx-data->map
+  "Reconstitute the original plain map from an edn-datomize.bb
+   wrap-map-keep-ns! tx-data vector (`[{:db/id ... attr val ...}]`),
+   stripping :db/id, un-namespacing attrs whose namespace is `promote-ns`
+   back to bare keys, and unblobbing pr-str'd non-scalar values. Attrs whose
+   namespace is something OTHER than `promote-ns` (i.e. genuinely
+   pre-existing namespaces the file already used, like :overlay/* in
+   cloud.edn) are left namespaced as-is.
+
+   Content that is NOT already in this tx-data shape (a plain map, e.g. a
+   file nobody has run edn-datomize.bb over) passes through unchanged, so
+   this is safe to call unconditionally on read."
+  [content promote-ns]
+  (if (and (vector? content)
+           (= 1 (count content))
+           (map? (first content))
+           (contains? (first content) :db/id))
+    (into {}
+          (map (fn [[k v]]
+                 (let [k' (if (= (namespace k) promote-ns) (keyword (name k)) k)]
+                   [k' (unblob v)])))
+          (dissoc (first content) :db/id))
+    content))
+
 (defn runtime-env
   "Env subset used for local kotoba runtime path resolution."
   [env]
