@@ -11,6 +11,7 @@
 (ns murakumo.core
   (:require [babashka.process :as p]
             [cheshire.core :as json]
+            [clojure.string :as str]
             [murakumo.config :as config]
             [murakumo.connect :as connect]
             [murakumo.dash.state :as state]
@@ -18,6 +19,7 @@
             [murakumo.fleet :as fleet]
             [murakumo.identity :as identity]
             [murakumo.provision.plan :as provision]
+            [murakumo.token :as token]
             [murakumo.report :as report]
             [murakumo.reconcile :as reconcile]
             [murakumo.ssh :as ssh]
@@ -358,11 +360,66 @@
   (require 'murakumo.infer)
   (apply (resolve 'murakumo.infer/-main) args))
 
+(defn- parse-flags
+  "['--sub' 'x' '--scope' 'chat'] or ['--sub=x'] -> {\"sub\" \"x\" ...}."
+  [args]
+  (loop [xs args, acc {}]
+    (if-let [a (first xs)]
+      (if (str/starts-with? (str a) "--")
+        (let [body (subs a 2)]
+          (if-let [i (str/index-of body "=")]
+            (recur (rest xs) (assoc acc (subs body 0 i) (subs body (inc i))))
+            (recur (drop 2 xs) (assoc acc body (second xs)))))
+        (recur (rest xs) acc))
+      acc)))
+
+(defn- cmd-token
+  "Mint / inspect murakumo inference access tokens (HMAC, stateless — the
+  gateway verifies without any shared state). Reads the signing secret from
+  $MURAKUMO_TOKEN_SECRET.
+
+    murakumo token issue [--sub <label>] [--scope chat|image|all] [--ttl <secs>]
+    murakumo token verify <token>
+
+  The SAME secret must be set on the verifying gateway (cloud-murakumo):
+    npx wrangler secret put MURAKUMO_TOKEN_SECRET"
+  [_ args]
+  (let [[sub & rest] args
+        secret (System/getenv "MURAKUMO_TOKEN_SECRET")
+        now (quot (System/currentTimeMillis) 1000)]
+    (cond
+      (str/blank? secret)
+      (println "error: $MURAKUMO_TOKEN_SECRET is not set — export it (the same value the gateway verifies with).")
+
+      (= sub "issue")
+      (let [f (parse-flags rest)
+            ttl (some-> (get f "ttl") Long/parseLong)
+            t (token/sign secret {:sub (get f "sub" "client")
+                                  :scope (get f "scope" "all")
+                                  :now now
+                                  :ttl (or ttl 2592000)})]
+        (println t)
+        (binding [*out* *err*]
+          (println)
+          (println "# configure the client to send this token, e.g. shinshi companion chat:")
+          (println "#   npx wrangler secret put MURAKUMO_PROXY_TOKEN   # paste the token above")
+          (println "# the gateway (cloud-murakumo) verifies it with MURAKUMO_TOKEN_SECRET.")))
+
+      (= sub "verify")
+      (let [t (first rest)
+            cl (and t (token/verify secret t now))]
+        (if cl
+          (println (json/generate-string (assoc cl :valid true)))
+          (println (json/generate-string {:valid false}))))
+
+      :else
+      (println "usage: murakumo token issue [--sub L] [--scope chat|image|all] [--ttl secs] | verify <token>"))))
+
 (def ^:private commands
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
    "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin
    "dash" cmd-dash "reconcile" cmd-reconcile "fleet" cmd-fleet
-   "cloud" cmd-cloud "infer" cmd-infer})
+   "cloud" cmd-cloud "infer" cmd-infer "token" cmd-token})
 
 (defn -main [& args]
   (let [[cmd & rest] args
