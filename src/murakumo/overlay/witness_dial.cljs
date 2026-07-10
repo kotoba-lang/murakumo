@@ -1,0 +1,60 @@
+;; murakumo.overlay.witness-dial — nbb (ClojureScript-on-Node) client for
+;; the cloud-murakumo witness-rpc wire protocol (same wire contract as
+;; murakumo.overlay.witness-http-transport/http-dial!, ADR-2607110300
+;; Phase 3), runnable on any fleet node with Node.js already present --
+;; NO JVM install required. Matches this org's runtime priority (kotoba
+;; wasm > clojurewasm > ClojureScript > nbb, demoting JVM to a last
+;; resort, CLAUDE.md 2026-07-10): witness_http_transport.clj's http-dial!
+;; is JVM-only because it composes with witness-quorum's JVM-only Ed25519
+;; attestation signing (produce-http-witnessed-attestation); this script
+;; is the client-only dial capability alone, which has no such JVM
+;; dependency and should not carry one.
+;;
+;; Verified live against real fleet.edn machines (naphtali, zebulun) over
+;; the real Tailscale mesh via `npx --yes nbb` -- fleet nodes need Node.js
+;; only, not a JVM, to act as witness-rpc clients (ADR-2607110300
+;; addendum, 2026-07-10).
+;;
+;; Run: nbb witness_dial.cljs <url> <edn-payload>
+;;   e.g. nbb witness_dial.cljs http://100.86.235.122:28700/witness \
+;;          '{:inv {:job/id "j1"} :claimed-cids ["bafy-x" "bafy-y"]}'
+;;   or on a fresh fleet node with no local nbb install:
+;;     npx --yes nbb witness_dial.cljs <url> <edn-payload>
+
+(ns murakumo.overlay.witness-dial
+  (:require [cljs.reader :as edn]))
+
+(defn request-envelope [payload]
+  (pr-str {:type "cloud-murakumo.witness-rpc-request" :version 1 :payload payload}))
+
+(defn dial!
+  "POST an EDN-encoded request-envelope to `url` via the platform fetch,
+   returning a Promise of {:ok? bool :response ...} or
+   {:ok? false :reason ... :status/:message ...}. Same wire contract as
+   murakumo.overlay.witness-http-transport/http-dial! and
+   cloud_murakumo.verify.witness-rpc/dial!, reimplemented here (see ns
+   docstring) rather than shared -- a wire CONTRACT two independent
+   pieces of tooling agree on, not shared code."
+  [url payload]
+  (-> (js/fetch url (clj->js {:method "POST"
+                              :headers {"content-type" "application/edn"}
+                              :body (request-envelope payload)}))
+      (.then (fn [resp]
+               (if (.-ok resp)
+                 (.then (.text resp)
+                        (fn [body] {:ok? true :response (:payload (edn/read-string body))}))
+                 {:ok? false :reason :http-error :status (.-status resp)})))
+      (.catch (fn [err] {:ok? false :reason :connect-error :message (.-message err)}))))
+
+(defn -main [args]
+  (let [[url payload-str] args]
+    (if (and url payload-str)
+      (-> (dial! url (edn/read-string payload-str))
+          (.then (fn [result]
+                   (println (pr-str result))
+                   (js/process.exit (if (:ok? result) 0 1))))
+          (.catch (fn [e] (println "FATAL:" (.-message e)) (js/process.exit 2))))
+      (do (println "usage: nbb witness_dial.cljs <url> <edn-payload>")
+          (js/process.exit 1)))))
+
+(-main *command-line-args*)
