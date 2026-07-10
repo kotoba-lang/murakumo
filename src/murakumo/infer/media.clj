@@ -133,6 +133,26 @@
                                        comfy-port (pr-str body))))]
     (:prompt_id (json/parse-string out true))))
 
+;; Each poll iteration opens a FRESH SSH connection (`comfy` -> `ssh/curl-local`
+;; -> a brand-new `ssh` subprocess, no connection reuse — see ssh.clj). At the
+;; old flat 3s interval, a single ~84s image render alone cost ~28 separate SSH
+;; connections to the same fleet node; back-to-back/overlapping requests during
+;; rapid testing multiplied that further and reliably tripped intermittent
+;; 502/524s from the gateway (root-caused 2026-07-09/10 — connection churn on
+;; the remote sshd side, not a code bug in the gateway/CLI themselves; a
+;; process restart "fixing" it was coincidental with the load clearing, not a
+;; real fix). Poll fast only for the first `fast-window-s` (in case of a
+;; genuinely quick job), then back off to a longer interval for the remainder
+;; — a typical 60-90s image render now costs ~9-12 connections instead of
+;; ~20-30, with a worst-case completion-detection delay of `slow-interval-s`
+;; (a few seconds against a multi-second-to-minutes render is negligible).
+(def ^:private fast-interval-s 2)
+(def ^:private fast-window-s 8)
+(def ^:private slow-interval-s 8)
+
+(defn- poll-interval-s [waited]
+  (if (< waited fast-window-s) fast-interval-s slow-interval-s))
+
 (defn- await-history [host prompt-id timeout-s]
   (loop [waited 0]
     (when (> waited timeout-s)
@@ -140,7 +160,9 @@
     (let [h (get (comfy host (str "/history/" prompt-id)) (keyword prompt-id))]
       (if (and h (get-in h [:status :completed]))
         h
-        (do (Thread/sleep 3000) (recur (+ waited 3)))))))
+        (let [interval (poll-interval-s waited)]
+          (Thread/sleep (* interval 1000))
+          (recur (+ waited interval)))))))
 
 (defn- settle! [node model units duration-ms]
   (let [run {:model model
