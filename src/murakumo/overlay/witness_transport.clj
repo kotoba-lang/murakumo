@@ -13,6 +13,7 @@
 
 (ns murakumo.overlay.witness-transport
   (:require [kotoba.lang.witness-quorum.attestation :as attestation]
+            [kotoba.lang.witness-quorum.reputation :as reputation]
             [kotoba.lang.witness-quorum.selector :as selector]
             [murakumo.overlay.quic-driver :as quic-driver])
   (:import [java.util.concurrent ConcurrentHashMap LinkedBlockingQueue TimeUnit]
@@ -40,6 +41,33 @@
     (fn [node-name]
       (when-let [node (get by-name node-name)]
         (node-connect-target node p2p-port)))))
+
+(defn select-reputable-witnesses
+  "select-witnesses gated by reputation (ADR-2607110300 Phase 4): cells
+  below-threshold per `reputation-db` (see
+  kotoba.lang.witness-quorum.reputation) never enter the selection pool
+  at all. Composes fleet-edn->witness-fleet + reputation/eligible-fleet +
+  selector/select-witnesses in one call, so a caller building a quorum
+  from murakumo's real fleet.edn doesn't have to know the reputation gate
+  exists as a separate step.
+
+  Honesty note (same as this ns's top docstring): `fleet-edn` here is
+  meant to be murakumo's actual production fleet inventory (exercised
+  against it directly in this repo's tests, not a synthetic mock), but
+  every cell in it remains single-operator regardless of reputation
+  filtering -- this does not by itself earn the
+  '分散型経済/ブロックチェーン' label.
+
+  `opts`:
+    :min-score         passed to reputation/eligible-fleet. Default 0.5.
+    :min-observations  passed to reputation/eligible-fleet. Default 3."
+  ([record-cid fleet-edn reputation-db quorum-size]
+   (select-reputable-witnesses record-cid fleet-edn reputation-db quorum-size {}))
+  ([record-cid fleet-edn reputation-db quorum-size
+    {:keys [min-score min-observations] :or {min-score 0.5 min-observations 3}}]
+   (let [fleet (fleet-edn->witness-fleet fleet-edn)
+         eligible (reputation/eligible-fleet fleet reputation-db min-score min-observations)]
+     (selector/select-witnesses record-cid eligible quorum-size))))
 
 (defn witness-request-handler
   "Server-side handler a fleet node runs to answer witness-attestation RPCs:
