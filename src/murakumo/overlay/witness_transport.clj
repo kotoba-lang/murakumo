@@ -19,6 +19,25 @@
   (:import [java.util.concurrent ConcurrentHashMap LinkedBlockingQueue TimeUnit]
            [java.util.function Function]))
 
+;; `attestation/produce-attestation`'s `:signature` is a raw `byte[]` --
+;; correct for in-process use (create-in-memory-witness-transport never
+;; serializes it), but quic-driver's wire format is EDN pr-str/read-string,
+;; which has no reader function for a byte[] (Clojure's default
+;; print-method renders it as `#object[[B 0x... [B@...]`, unreadable).
+;; witness-request-handler/create-overlay-witness-transport hex-encode on
+;; the way out and decode back to bytes on the way in, so every OTHER
+;; witness-quorum consumer (quorum-state's Ed25519 signature verification,
+;; which requires a real byte[]) sees exactly the same shape it always did
+;; and stays unaware a network hop happened.
+(defn- bytes->hex ^String [^bytes b]
+  (let [sb (StringBuilder. (* 2 (alength b)))]
+    (dotimes [i (alength b)]
+      (.append sb (format "%02x" (bit-and (int (aget b i)) 0xff))))
+    (.toString sb)))
+(defn- hex->bytes ^bytes [^String s]
+  (byte-array (map (fn [[a b]] (unchecked-byte (Integer/parseInt (str a b) 16)))
+                    (partition 2 s))))
+
 (defn fleet-edn->witness-fleet
   "Map murakumo's fleet.edn `:nodes` (each `{:name ... :host ... :roles [...]}`)
   into witness-quorum fleet-cell maps. One witness cell per physical node
@@ -75,17 +94,20 @@
   `opts`: {:cell ... :signer ... :validators ...} -- same shape
   `kotoba.lang.witness-quorum.orchestrator/make-standard-cell-handler`
   takes, so a signer already wired for local (in-memory) attestation works
-  unchanged once served over the network."
+  unchanged once served over the network. `:signature` is hex-encoded
+  before it goes on the wire (see this ns's byte[]/EDN note above) --
+  `create-overlay-witness-transport` decodes it back on the way in."
   [{:keys [cell signer validators]}]
   (fn [payload]
-    (attestation/produce-attestation
-     {:record-uri (:record-uri payload)
-      :record-cid (:record-cid payload)
-      :record (:record payload)
-      :cell cell
-      :rule (:rule payload)
-      :validators validators
-      :signer signer})))
+    (let [att (attestation/produce-attestation
+               {:record-uri (:record-uri payload)
+                :record-cid (:record-cid payload)
+                :record (:record payload)
+                :cell cell
+                :rule (:rule payload)
+                :validators validators
+                :signer signer})]
+      (cond-> att (:signature att) (update :signature bytes->hex)))))
 
 (defn serve-witness!
   "Start a long-running QUIC RPC listener answering witness-attestation
@@ -109,7 +131,10 @@
   lands on a per-quorum-group `LinkedBlockingQueue` that
   `:subscribe-attestations`'s poll-fn drains. The ONLY thing that changes
   vs. the in-memory transport is that the attestation now crosses a real
-  network hop instead of a direct function call.
+  network hop instead of a direct function call. A hex-encoded
+  `:signature` (see this ns's byte[]/EDN note above) is decoded back to
+  bytes before it's queued, so `:subscribe-attestations` consumers see
+  the exact same shape `create-in-memory-witness-transport` produces.
 
   `opts`:
     :node-lookup  `(fn [node-name] -> {:host :port} or nil)`, e.g.
@@ -139,7 +164,9 @@
                           :rule (:rule req)}
                  {:keys [ok? response]} (quic-driver/request! quic-request payload timeout-ms)]
              (when (and ok? (map? response) (not (:error response)))
-               (.put (computing-queue queues (:quorum-group response)) response)))))
+               (let [response (cond-> response
+                                 (string? (:signature response)) (update :signature hex->bytes))]
+                 (.put (computing-queue queues (:quorum-group response)) response))))))
        nil)
 
      :subscribe-attestations
