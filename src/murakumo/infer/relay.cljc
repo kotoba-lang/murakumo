@@ -31,6 +31,7 @@
    :queue []              ; pending jobs (FIFO)
    :assigned {}           ; job-id → {:worker-id :job :at-ms}
    :settled #{}           ; job-ids already credited (dedupe)
+   :idempotency {}        ; caller key → job-id (safe retry across relay requests)
    :next 0})              ; monotonic id counter (ids passed in; see note)
 
 (defn- gen-id [state prefix]
@@ -38,10 +39,21 @@
   [(str prefix "-" (:next state)) (update state :next inc)])
 
 (defn enqueue
-  "Add a job {:kind :input :price} to the queue. Returns [job-id state']."
+  "Add a job {:kind :input :price} to the queue. Returns [job-id state'].
+
+  `:idempotency-key` is optional for generic work. When supplied, retrying the
+  same request returns the original job id without queueing a second evaluation.
+  The key is intentionally retained after settlement: a client retry must never
+  re-run a completed billable or benchmark job."
   [state job]
-  (let [[jid state] (gen-id state "job")]
-    [jid (update state :queue conj (assoc job :job-id jid))]))
+  (if-let [existing (and (:idempotency-key job)
+                         (get-in state [:idempotency (:idempotency-key job)]))]
+    [existing state]
+    (let [[jid state] (gen-id state "job")
+          state (update state :queue conj (assoc job :job-id jid))]
+      [jid (cond-> state
+             (:idempotency-key job)
+             (assoc-in [:idempotency (:idempotency-key job)] jid))])))
 
 (defn on-hello
   "A worker connection identifies itself. Returns [worker-id state']."

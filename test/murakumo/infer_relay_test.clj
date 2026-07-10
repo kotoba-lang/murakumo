@@ -39,6 +39,17 @@
         [reply _] (relay/on-ready s1 wid 0)]
     (is (= :idle (:msg reply)))))
 
+(deftest idempotent-enqueue-does-not-duplicate-a-retried-evaluation
+  (let [[jid s1] (relay/enqueue (relay/init)
+                                {:kind :embarrassingly-parallel :input {:n 1}
+                                 :idempotency-key "shinka/candidate-1/bench-1/0"})
+        [retry s2] (relay/enqueue s1
+                                  {:kind :embarrassingly-parallel :input {:n 1}
+                                   :idempotency-key "shinka/candidate-1/bench-1/0"})]
+    (is (= jid retry))
+    (is (= 1 (:queued (relay/stats s2))))
+    (is (= jid (get-in s2 [:idempotency "shinka/candidate-1/bench-1/0"])))))
+
 (deftest lease-expiry-requeues
   (let [[jid s1] (relay/enqueue (relay/init) {:kind :embarrassingly-parallel :input {} :price 3})
         [wid s2] (relay/on-hello s1 (browser "did:key:d"))
