@@ -15,11 +15,18 @@
 ;; only, not a JVM, to act as witness-rpc clients (ADR-2607110300
 ;; addendum, 2026-07-10).
 ;;
-;; Run: nbb witness_dial.cljs <url> <edn-payload>
-;;   e.g. nbb witness_dial.cljs http://100.86.235.122:28700/witness \
+;; Run as a standalone CLI: nbb -m murakumo.overlay.witness-dial <url> <edn-payload>
+;;   e.g. nbb -m murakumo.overlay.witness-dial http://100.86.235.122:28700/witness \
 ;;          '{:inv {:job/id "j1"} :claimed-cids ["bafy-x" "bafy-y"]}'
 ;;   or on a fresh fleet node with no local nbb install:
-;;     npx --yes nbb witness_dial.cljs <url> <edn-payload>
+;;     npx --yes nbb -m murakumo.overlay.witness-dial <url> <edn-payload>
+;;
+;; `-main` is invoked ONLY via `nbb -m` (which calls a namespace's -main
+;; with the trailing argv), not via a top-level call in this file --
+;; that top-level-call pattern is exactly what murakumo.overlay.
+;; witness-dial-attest's real-network test caught: requiring this ns as
+;; a library (to reuse `dial!`) would otherwise re-trigger the CLI's
+;; -main/process.exit on every require, which is wrong for a library.
 
 (ns murakumo.overlay.witness-dial
   (:require [cljs.reader :as edn]))
@@ -46,7 +53,7 @@
                  {:ok? false :reason :http-error :status (.-status resp)})))
       (.catch (fn [err] {:ok? false :reason :connect-error :message (.-message err)}))))
 
-(defn -main [args]
+(defn -main [& args]
   (let [[url payload-str] args]
     (if (and url payload-str)
       (-> (dial! url (edn/read-string payload-str))
@@ -54,7 +61,5 @@
                    (println (pr-str result))
                    (js/process.exit (if (:ok? result) 0 1))))
           (.catch (fn [e] (println "FATAL:" (.-message e)) (js/process.exit 2))))
-      (do (println "usage: nbb witness_dial.cljs <url> <edn-payload>")
+      (do (println "usage: nbb -m murakumo.overlay.witness-dial <url> <edn-payload>")
           (js/process.exit 1)))))
-
-(-main *command-line-args*)
