@@ -1,0 +1,12 @@
+;; schema.edn — Datomic/Datascript 互換スキーマ定義（自動生成 by edn-datomize.bb）
+;; :db/ident 属性定義のリスト。Datomic 固有キー(:db.install/_attribute 等)は使わない。
+;; 手編集禁止 — 再生成すると上書きされる。
+;;
+;; wrap-map-keep-ns で変換したファイルは、元々 Clojure 慣用の名前空間付き
+;; キーワード(:register/type, :case/id 等)をそのまま保持し、裸キーだけ
+;; ファイル(ディレクトリ)単位の namespace を付与している。同じ属性名でも
+;; 由来ファイルによって非scalar値の実データ形が異なる場合があるが、値は
+;; すべて pr-str の "blob" (valueType=string) として保持しているため型は
+;; 常に一意 — ADR 系(90-docs/adr/*.edn)のような型不一致の問題はここでは生じない。
+
+[#:db{:ident :cloud-doc/policy, :valueType :db.type/string, :cardinality :db.cardinality/one} #:db{:ident :cloud-doc/relays, :valueType :db.type/string, :cardinality :db.cardinality/one} #:db{:ident :cloud/control-url, :valueType :db.type/string, :cardinality :db.cardinality/one} #:db{:ident :cloud/domain, :valueType :db.type/string, :cardinality :db.cardinality/one} #:db{:ident :cloud/graph, :valueType :db.type/string, :cardinality :db.cardinality/one} #:db{:ident :cloud/name, :valueType :db.type/string, :cardinality :db.cardinality/one} #:db{:ident :connect-doc/classes, :valueType :db.type/string, :cardinality :db.cardinality/one} #:db{:ident :connect-doc/default-class, :valueType :db.type/keyword, :cardinality :db.cardinality/one} #:db{:ident :connect-doc/planes, :valueType :db.type/string, :cardinality :db.cardinality/one} #:db{:ident :connect-doc/roadmap, :valueType :db.type/string, :cardinality :db.cardinality/one} #:db{:ident :connect/version, :valueType :db.type/long, :cardinality :db.cardinality/one} #:db{:ident :overlay/address-family, :valueType :db.type/keyword, :cardinality :db.cardinality/one} #:db{:ident :overlay/auth-key-env, :valueType :db.type/string, :cardinality :db.cardinality/one} #:db{:ident :overlay/auth-key-source, :valueType :db.type/keyword, :cardinality :db.cardinality/one} #:db{:ident :overlay/direct, :valueType :db.type/keyword, :cardinality :db.cardinality/many} #:db{:ident :overlay/id, :valueType :db.type/string, :cardinality :db.cardinality/one} #:db{:ident :overlay/relay, :valueType :db.type/keyword, :cardinality :db.cardinality/many} #:db{:ident :overlay/version, :valueType :db.type/long, :cardinality :db.cardinality/one}]

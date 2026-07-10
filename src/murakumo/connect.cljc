@@ -10,9 +10,14 @@
             [murakumo.config :as config]))
 
 (defn load-connect
-  "Read connect.edn (nil if absent — reach constraints then degrade to no-op)."
+  "Read connect.edn (nil if absent — reach constraints then degrade to no-op).
+   connect.edn is Datomic/Datascript tx-data (edn-datomize.bb wrap-map-keep-ns!,
+   promote-ns \"connect-doc\" for the previously-bare :planes/:classes/
+   :default-class/:roadmap keys — the pre-existing :connect/* namespace is left
+   as-is); tx-data->map reconstitutes the plain map the reach helpers expect."
   ([] (load-connect config/default-connect-path))
-  ([path] (config/read-edn-file-or path nil)))
+  ([path] (some-> (config/read-edn-file-or path nil)
+                   (config/tx-data->map "connect-doc"))))
 
 (defn default-class [connect] (or (:default-class connect) :native))
 
