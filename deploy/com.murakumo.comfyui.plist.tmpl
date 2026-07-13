@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- com.murakumo.comfyui — resident ComfyUI on a fleet COMPUTE node (macOS
+     LaunchAgent, per-user gui domain — same domain as
+     com.murakumo.infer-gateway.plist.tmpl, matching the other per-user
+     agents already running on these nodes, e.g. ai.gftd.murakumo.serve).
+     Before this template, every fleet node launched ComfyUI from a plain
+     `crontab @reboot` line: it only ever started at actual machine boot, so
+     any mid-session death (crash, kill, an SSH-session teardown taking an
+     ad-hoc-launched child with it) left the node serving nothing until a
+     real reboot. RunAtLoad + KeepAlive make launchd restart it immediately
+     on ANY exit. ThrottleInterval guards against a fast crash-restart loop
+     if the death is actually a real, recurring cause (e.g. genuine OOM on
+     these 16GB-unified-memory M4s) rather than a one-off.
+
+     Root-caused live 2026-07-13 on `benjamin`: a real SDXL render completed
+     successfully (confirmed in ComfyUI's own log — sampling + VAE decode
+     both finished), then the process exited with no traceback, no macOS
+     crash report (ReportCrash), and no jetsam kill logged — i.e. something
+     an ad-hoc `nohup ... &` background launch doesn't survive but a real
+     KeepAlive daemon does regardless of the exact cause.
+
+     Install per node: substitute {{VENV_PYTHON}} (murakumo-venv's python3),
+     {{COMFYUI_DIR}} (~/comfyui), {{HOME}}, then:
+       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.murakumo.comfyui.plist
+     Uninstall:
+       launchctl bootout gui/$(id -u)/com.murakumo.comfyui
+       rm ~/Library/LaunchAgents/com.murakumo.comfyui.plist
+     Also remove the old `@reboot ... comfyui/main.py ...` crontab line so
+     the two launch paths don't race/double-bind :8188 on the next reboot. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>              <string>com.murakumo.comfyui</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{VENV_PYTHON}}</string>
+    <string>{{COMFYUI_DIR}}/main.py</string>
+    <string>--listen</string>
+    <string>0.0.0.0</string>
+    <string>--port</string>
+    <string>8188</string>
+    <string>--disable-auto-launch</string>
+  </array>
+  <key>WorkingDirectory</key>   <string>{{COMFYUI_DIR}}</string>
+  <key>RunAtLoad</key>         <true/>
+  <key>KeepAlive</key>         <true/>
+  <key>ThrottleInterval</key>  <integer>15</integer>
+  <key>StandardOutPath</key>   <string>{{HOME}}/.gftd/comfyui.log</string>
+  <key>StandardErrorPath</key> <string>{{HOME}}/.gftd/comfyui.log</string>
+</dict>
+</plist>
