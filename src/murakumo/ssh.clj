@@ -31,3 +31,11 @@
    without exposing ports). Returns the body string (empty on failure)."
   [host url]
   (:out (sh host (tunnel/remote-curl-command url))))
+
+(defn curl-local-raw
+  "Like curl-local, but keeps curl's own exit code — a blank body alone can't
+   tell \"reachable, nothing to report yet\" apart from \"unreachable\" (both
+   look like an empty string), but curl's exit is 0 only for the former (7 =
+   connection refused, i.e. the remote process is down, not just slow)."
+  [host url]
+  (sh host (tunnel/remote-curl-command url)))

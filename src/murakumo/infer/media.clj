@@ -153,16 +153,47 @@
 (defn- poll-interval-s [waited]
   (if (< waited fast-window-s) fast-interval-s slow-interval-s))
 
+;; A crashed ComfyUI process (connection refused) and "still rendering" both
+;; produce an empty body through the old blank-string-only check — curl's own
+;; exit code is the only thing that tells them apart (0 vs e.g. 7). One
+;; refused connection can be a process mid-restart, so this requires a few
+;; CONSECUTIVE misses (not one) before giving up — observed live 2026-07-13:
+;; a real render finished (confirmed via the node's own ComfyUI log) but the
+;; process then died with no crash report, and await-history silently polled
+;; connection-refused for the full 900s timeout instead of surfacing the
+;; failure in seconds.
+(def ^:private max-unreachable-polls 3)
+
+(defn- history-poll
+  "One /history/<prompt-id> poll. :reachable? false means curl itself failed
+   to connect (exit != 0) — the node's ComfyUI process is down, not just busy."
+  [host prompt-id]
+  (let [{:keys [exit out]} (ssh/curl-local-raw host (str "http://localhost:" comfy-port "/history/" prompt-id))]
+    (if (or (not (zero? exit)) (str/blank? out))
+      {:reachable? false}
+      {:reachable? true :history (get (json/parse-string out true) (keyword prompt-id))})))
+
 (defn- await-history [host prompt-id timeout-s]
-  (loop [waited 0]
+  (loop [waited 0 misses 0]
     (when (> waited timeout-s)
       (throw (ex-info "generation timed out" {:host host :prompt-id prompt-id})))
-    (let [h (get (comfy host (str "/history/" prompt-id)) (keyword prompt-id))]
-      (if (and h (get-in h [:status :completed]))
-        h
+    (let [{:keys [reachable? history]} (history-poll host prompt-id)]
+      (cond
+        (and reachable? (get-in history [:status :completed]))
+        history
+
+        (not reachable?)
+        (if (>= (inc misses) max-unreachable-polls)
+          (throw (ex-info "node became unreachable mid-render (ComfyUI process likely crashed or was restarted)"
+                          {:host host :prompt-id prompt-id :consecutive-misses (inc misses)}))
+          (let [interval (poll-interval-s waited)]
+            (Thread/sleep (* interval 1000))
+            (recur (+ waited interval) (inc misses))))
+
+        :else
         (let [interval (poll-interval-s waited)]
           (Thread/sleep (* interval 1000))
-          (recur (+ waited interval)))))))
+          (recur (+ waited interval) 0))))))
 
 (defn- settle! [node model units duration-ms]
   (let [run {:model model
