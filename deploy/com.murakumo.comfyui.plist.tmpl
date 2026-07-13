@@ -19,14 +19,29 @@
      an ad-hoc `nohup ... &` background launch doesn't survive but a real
      KeepAlive daemon does regardless of the exact cause.
 
+     CAVEAT verified live 2026-07-13: `launchctl bootstrap gui/$(id -u) ...`
+     over an SSH-only session FAILS ("125: Domain does not support specified
+     action") on a fleet node with no active console session (`who` empty,
+     `launchctl print gui/$(id -u)` itself unreachable) — normal for a
+     headless compute-farm Mac mini. The file below still gets picked up by
+     RunAtLoad the next time this user DOES get a console/auto-login
+     session, so it's harmless to install regardless, but it is NOT the
+     primary self-heal path on a fleet that's usually headless — that's
+     comfyui-watchdog.sh.tmpl (cron, no session dependency) in this same
+     directory. Install both.
+
      Install per node: substitute {{VENV_PYTHON}} (murakumo-venv's python3),
      {{COMFYUI_DIR}} (~/comfyui), {{HOME}}, then:
        launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.murakumo.comfyui.plist
+     (expect this to no-op/fail harmlessly on a headless node today — see
+     CAVEAT above; it will pick up the file at the next real console login)
      Uninstall:
        launchctl bootout gui/$(id -u)/com.murakumo.comfyui
        rm ~/Library/LaunchAgents/com.murakumo.comfyui.plist
      Also remove the old `@reboot ... comfyui/main.py ...` crontab line so
-     the two launch paths don't race/double-bind :8188 on the next reboot. -->
+     the two launch paths don't race/double-bind :8188 on the next reboot
+     (comfyui-watchdog.sh.tmpl's own `@reboot`-equivalent cron entry
+     replaces it). -->
 <plist version="1.0">
 <dict>
   <key>Label</key>              <string>com.murakumo.comfyui</string>
