@@ -3,9 +3,15 @@
 ;; SSH connection per poll, ~28 connections for a single ~84s render, which
 ;; tripped intermittent 502/524s under back-to-back testing). No fleet, no SSH.
 (ns murakumo.infer-media-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [murakumo.infer.media :as media]
             [murakumo.ssh :as ssh]))
+
+(def ^:private queued-response
+  "{\"queue_running\":[[0,\"pid-1\",{},{},[]]],\"queue_pending\":[]}")
+(def ^:private empty-queue-response
+  "{\"queue_running\":[],\"queue_pending\":[]}")
 
 (def poll-interval-s #'media/poll-interval-s)
 (def fast-window-s @#'media/fast-window-s)
@@ -61,30 +67,57 @@
       (is (thrown? clojure.lang.ExceptionInfo
                    (await-history "dead-host" "pid-1" 600))))))
 
-(deftest await-history-keeps-polling-a-live-but-still-rendering-node
-  (testing "a reachable node with no completed history yet keeps polling
-            instead of being mistaken for a dead one"
-    (let [calls (atom 0)]
+(deftest await-history-keeps-polling-a-live-still-queued-node
+  (testing "a reachable node with no completed history yet, but the job still
+            genuinely in queue_running/queue_pending, keeps polling instead
+            of being mistaken for a dead or vanished one"
+    (let [history-calls (atom 0)]
       (with-redefs [ssh/curl-local-raw
-                    (fn [_host _url]
-                      (if (>= (swap! calls inc) 3)
-                        {:exit 0 :out "{\"pid-1\":{\"status\":{\"completed\":true}}}"}
-                        {:exit 0 :out "{}"}))
+                    (fn [_host url]
+                      (if (str/includes? url "/queue")
+                        {:exit 0 :out queued-response}
+                        (if (>= (swap! history-calls inc) 3)
+                          {:exit 0 :out "{\"pid-1\":{\"status\":{\"completed\":true}}}"}
+                          {:exit 0 :out "{}"})))
                     media/fast-interval-s 0
                     media/slow-interval-s 0]
         (is (= {:status {:completed true}} (await-history "live-host" "pid-1" 600)))
-        (is (= 3 @calls))))))
+        (is (= 3 @history-calls))))))
 
 (deftest await-history-recovers-from-a-single-transient-miss
   (testing "one connection blip (process mid-restart) is not fatal — only
             max-unreachable-polls CONSECUTIVE misses give up"
-    (let [calls (atom 0)]
+    (let [history-calls (atom 0)]
       (with-redefs [ssh/curl-local-raw
-                    (fn [_host _url]
-                      (case (swap! calls inc)
-                        1 {:exit 0 :out "{}"}
-                        2 {:exit 7 :out ""}
-                        {:exit 0 :out "{\"pid-1\":{\"status\":{\"completed\":true}}}"}))
+                    (fn [_host url]
+                      (if (str/includes? url "/history/")
+                        (case (swap! history-calls inc)
+                          1 {:exit 0 :out "{}"}
+                          2 {:exit 7 :out ""}
+                          {:exit 0 :out "{\"pid-1\":{\"status\":{\"completed\":true}}}"})
+                        {:exit 0 :out queued-response}))
                     media/fast-interval-s 0
                     media/slow-interval-s 0]
         (is (= {:status {:completed true}} (await-history "flaky-host" "pid-1" 600)))))))
+
+;; Root-caused live 2026-07-13, right after the dead-node fix above landed:
+;; ComfyUI's queue + history are both in-process memory — a crash-and-
+;; respawn (the self-healing LaunchDaemon now does this automatically) loses
+;; BOTH, not just connectivity. A real render on `benjamin` completed
+;; ("Prompt executed in 157.45 seconds" in its own log), the process then
+;; crashed the same way as before, launchd respawned it — and the fresh
+;; process had no memory of the prompt-id: /history/<id> returned `{}`
+;; forever, identical to "genuinely still rendering" by body alone.
+(deftest await-history-fails-fast-when-the-job-vanishes-from-the-queue
+  (testing "reachable + empty history + NOT in the live queue means the job
+            is gone (process crashed and respawned mid-render, losing its
+            in-memory queue/history) — must not wait out the full timeout"
+    (with-redefs [ssh/curl-local-raw
+                  (fn [_host url]
+                    (if (str/includes? url "/queue")
+                      {:exit 0 :out empty-queue-response}
+                      {:exit 0 :out "{}"}))
+                  media/fast-interval-s 0
+                  media/slow-interval-s 0]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"vanished"
+                            (await-history "respawned-host" "pid-1" 600))))))
