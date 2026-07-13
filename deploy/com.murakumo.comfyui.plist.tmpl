@@ -1,65 +1,65 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- com.murakumo.comfyui — resident ComfyUI on a fleet COMPUTE node (macOS
-     LaunchAgent, per-user gui domain — same domain as
-     com.murakumo.infer-gateway.plist.tmpl, matching the other per-user
-     agents already running on these nodes, e.g. ai.gftd.murakumo.serve).
-     Before this template, every fleet node launched ComfyUI from a plain
-     `crontab @reboot` line: it only ever started at actual machine boot, so
-     any mid-session death (crash, kill, an SSH-session teardown taking an
-     ad-hoc-launched child with it) left the node serving nothing until a
-     real reboot. RunAtLoad + KeepAlive make launchd restart it immediately
-     on ANY exit. ThrottleInterval guards against a fast crash-restart loop
-     if the death is actually a real, recurring cause (e.g. genuine OOM on
-     these 16GB-unified-memory M4s) rather than a one-off.
+<!-- com.murakumo.comfyui — resident ComfyUI on a fleet COMPUTE node.
 
-     Root-caused live 2026-07-13 on `benjamin`: a real SDXL render completed
-     successfully (confirmed in ComfyUI's own log — sampling + VAE decode
-     both finished), then the process exited with no traceback, no macOS
-     crash report (ReportCrash), and no jetsam kill logged — i.e. something
-     an ad-hoc `nohup ... &` background launch doesn't survive but a real
-     KeepAlive daemon does regardless of the exact cause.
+     LaunchDaemon (SYSTEM domain, /Library/LaunchDaemons + `UserName`), same
+     shape as this repo's own com.murakumo.kotoba-mesh.plist.tmpl — NOT a
+     per-user LaunchAgent. Two other approaches were tried and verified NOT
+     to work on these nodes before landing on this one (2026-07-13, live on
+     `benjamin`+7 other fleet nodes):
 
-     CAVEAT verified live 2026-07-13: `launchctl bootstrap gui/$(id -u) ...`
-     over an SSH-only session FAILS ("125: Domain does not support specified
-     action") on a fleet node with no active console session (`who` empty,
-     `launchctl print gui/$(id -u)` itself unreachable) — normal for a
-     headless compute-farm Mac mini. The file below still gets picked up by
-     RunAtLoad the next time this user DOES get a console/auto-login
-     session, so it's harmless to install regardless, but it is NOT the
-     primary self-heal path on a fleet that's usually headless — that's
-     comfyui-watchdog.sh.tmpl (cron, no session dependency) in this same
-     directory. Install both.
+       1. gui/$(id -u) LaunchAgent — `launchctl bootstrap gui/<uid> ...`
+          fails ("125: Domain does not support specified action") because
+          these fleet Mac minis normally have NO active console session
+          (`who` empty, `launchctl print gui/<uid>` itself unreachable).
+       2. A `* * * * *` cron watchdog — `crontab <file>` (any form: plain,
+          piped from `crontab -l`, even `sudo crontab -u <user> <file>`)
+          fails with "Operation not permitted" over SSH: macOS gates
+          *writing* a crontab behind Full Disk Access TCC consent, which an
+          SSH-spawned shell doesn't have and can't grant itself non-
+          interactively. (Reading — `crontab -l` — is unaffected, which is
+          why the pre-existing `@reboot` line could be discovered but not
+          replaced.) This is also why the OLD `@reboot ... comfyui/main.py`
+          crontab line on each node could NOT be removed as part of this
+          fix — it's still there, and will race this LaunchDaemon for
+          :8188 at the next actual physical reboot. Harmless: whichever
+          loses the bind just fails and (for the LaunchDaemon) retries every
+          ThrottleInterval; only fix is removing that line at the physical
+          console (or granting sshd/Terminal Full Disk Access), not scoped
+          into this change.
 
-     Install per node: substitute {{VENV_PYTHON}} (murakumo-venv's python3),
-     {{COMFYUI_DIR}} (~/comfyui), {{HOME}}, then:
-       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.murakumo.comfyui.plist
-     (expect this to no-op/fail harmlessly on a headless node today — see
-     CAVEAT above; it will pick up the file at the next real console login)
+     The system domain has no console-session dependency (`sudo launchctl
+     bootstrap system ...` works headless) — verified live: killed the
+     running process with `sudo kill -9`, launchd respawned it within 5s.
+
+     Install per node (needs passwordless-or-already-authed sudo, which was
+     confirmed available on the fleet): substitute __USER__, __VENV_PYTHON__
+     (murakumo-venv's python3), __COMFYUI_DIR__ (~/comfyui), __HOME__, then:
+       sudo cp com.murakumo.comfyui.plist /Library/LaunchDaemons/com.murakumo.comfyui.plist
+       sudo chown root:wheel /Library/LaunchDaemons/com.murakumo.comfyui.plist
+       sudo chmod 644 /Library/LaunchDaemons/com.murakumo.comfyui.plist
+       sudo launchctl bootstrap system /Library/LaunchDaemons/com.murakumo.comfyui.plist
      Uninstall:
-       launchctl bootout gui/$(id -u)/com.murakumo.comfyui
-       rm ~/Library/LaunchAgents/com.murakumo.comfyui.plist
-     Also remove the old `@reboot ... comfyui/main.py ...` crontab line so
-     the two launch paths don't race/double-bind :8188 on the next reboot
-     (comfyui-watchdog.sh.tmpl's own `@reboot`-equivalent cron entry
-     replaces it). -->
+       sudo launchctl bootout system/com.murakumo.comfyui
+       sudo rm /Library/LaunchDaemons/com.murakumo.comfyui.plist -->
 <plist version="1.0">
 <dict>
-  <key>Label</key>              <string>com.murakumo.comfyui</string>
+  <key>Label</key>            <string>com.murakumo.comfyui</string>
+  <key>UserName</key>         <string>__USER__</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{{VENV_PYTHON}}</string>
-    <string>{{COMFYUI_DIR}}/main.py</string>
+    <string>__VENV_PYTHON__</string>
+    <string>__COMFYUI_DIR__/main.py</string>
     <string>--listen</string>
     <string>0.0.0.0</string>
     <string>--port</string>
     <string>8188</string>
     <string>--disable-auto-launch</string>
   </array>
-  <key>WorkingDirectory</key>   <string>{{COMFYUI_DIR}}</string>
-  <key>RunAtLoad</key>         <true/>
-  <key>KeepAlive</key>         <true/>
-  <key>ThrottleInterval</key>  <integer>15</integer>
-  <key>StandardOutPath</key>   <string>{{HOME}}/.gftd/comfyui.log</string>
-  <key>StandardErrorPath</key> <string>{{HOME}}/.gftd/comfyui.log</string>
+  <key>WorkingDirectory</key> <string>__COMFYUI_DIR__</string>
+  <key>RunAtLoad</key>        <true/>
+  <key>KeepAlive</key>        <true/>
+  <key>ThrottleInterval</key> <integer>15</integer>
+  <key>StandardOutPath</key>  <string>__HOME__/.gftd/comfyui.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/.gftd/comfyui.log</string>
 </dict>
 </plist>
