@@ -164,27 +164,57 @@
 ;; failure in seconds.
 (def ^:private max-unreachable-polls 3)
 
+;; ComfyUI's queue + history are both in-process memory, not persisted — a
+;; crash-and-respawn (the self-healing LaunchDaemon now does this
+;; automatically, see deploy/com.murakumo.comfyui.plist.tmpl) loses BOTH,
+;; not just connectivity. Observed live 2026-07-13, right after the dead-
+;; node fix above landed: a real render on `benjamin` completed ("Prompt
+;; executed in 157.45 seconds" in its own log), the process then crashed the
+;; same way as before, launchd respawned it seconds later — and the FRESH
+;; process had no memory of the prompt-id at all. /history/<id> on it
+;; returns `{}` forever, indistinguishable from "genuinely still rendering"
+;; by body alone, so a bare reachable-but-empty check now silently waits out
+;; the full timeout on a job that has already vanished. /queue is the
+;; distinguishing signal: a job that's actually in flight is always in
+;; queue_running or queue_pending; one that's neither queued nor in history
+;; isn't coming back.
+(defn- in-queue? [host prompt-id]
+  (let [{:keys [exit out]} (ssh/curl-local-raw host (str "http://localhost:" comfy-port "/queue"))]
+    (and (zero? exit)
+         (not (str/blank? out))
+         (boolean (let [q (json/parse-string out true)]
+                    (some #(= prompt-id (second %))
+                          (concat (:queue_running q) (:queue_pending q))))))))
+
 (defn- history-poll
-  "One /history/<prompt-id> poll. :reachable? false means curl itself failed
-   to connect (exit != 0) — the node's ComfyUI process is down, not just busy."
+  "One poll for prompt-id's status on host. :reachable? false means curl
+   itself failed to connect (exit != 0) — the node's ComfyUI process is down,
+   not just busy. When reachable but not yet complete, also checks /queue —
+   see in-queue? above for why (a stale-but-reachable process's empty history
+   looks identical to \"still rendering\")."
   [host prompt-id]
   (let [{:keys [exit out]} (ssh/curl-local-raw host (str "http://localhost:" comfy-port "/history/" prompt-id))]
     (if (or (not (zero? exit)) (str/blank? out))
       {:reachable? false}
-      {:reachable? true :history (get (json/parse-string out true) (keyword prompt-id))})))
+      (let [history (get (json/parse-string out true) (keyword prompt-id))]
+        (if (get-in history [:status :completed])
+          {:reachable? true :done? true :history history}
+          {:reachable? true :done? false :queued? (in-queue? host prompt-id)})))))
 
 (defn- await-history [host prompt-id timeout-s]
   (loop [waited 0 misses 0]
     (when (> waited timeout-s)
       (throw (ex-info "generation timed out" {:host host :prompt-id prompt-id})))
-    (let [{:keys [reachable? history]} (history-poll host prompt-id)]
+    (let [{:keys [reachable? done? history queued?]} (history-poll host prompt-id)]
       (cond
-        (and reachable? (get-in history [:status :completed]))
+        (and reachable? done?)
         history
 
-        (not reachable?)
+        (or (not reachable?) (and reachable? (not queued?)))
         (if (>= (inc misses) max-unreachable-polls)
-          (throw (ex-info "node became unreachable mid-render (ComfyUI process likely crashed or was restarted)"
+          (throw (ex-info (if reachable?
+                            "job vanished from the node's queue and history (ComfyUI process likely crashed and respawned mid-render, losing in-memory state)"
+                            "node became unreachable mid-render (ComfyUI process likely crashed or was restarted)")
                           {:host host :prompt-id prompt-id :consecutive-misses (inc misses)}))
           (let [interval (poll-interval-s waited)]
             (Thread/sleep (* interval 1000))
