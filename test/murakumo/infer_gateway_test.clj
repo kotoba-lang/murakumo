@@ -37,3 +37,11 @@
                              :checkpoints #{"ltxv-2b-0.9.6-distilled-04-25.safetensors"} :queue 0 :free-bytes 1e9}])]
         (is (= "img-node" (:name (gw/pick-any-node! f))))
         (is (= "img-node" (:name (gw/pick-any-node! f "animagine-xl-4.0.safetensors"))))))))
+
+(deftest ckpt-normalization
+  (testing "registry model id gets the on-disk .safetensors suffix"
+    (is (= "animagine-xl-4.0.safetensors" (gw/normalize-ckpt "animagine-xl-4.0"))))
+  (testing "already-correct filename passes through"
+    (is (= "waiREALCN_v150.safetensors" (gw/normalize-ckpt "waiREALCN_v150.safetensors"))))
+  (testing "nil stays nil (caller default applies)"
+    (is (nil? (gw/normalize-ckpt nil)))))
