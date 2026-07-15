@@ -111,9 +111,15 @@
                    {head-name pool})}))
 
 (defn spend
-  "A demand-side ledger entry: `who` redeems `credits` for inference (or fiat
-   payout). Same append-only feed as settlements — balances/1 folds both, so
-   the account is one number. Pure; the caller appends it to the signed feed."
+  "A demand-side ledger entry: `who` redeems `credits` for inference. Same
+   append-only feed as settlements — balances/1 folds both, so the account
+   is one number. Pure; the caller appends it to the signed feed.
+
+   Credits are a NON-redeemable prepaid usage claim, not a deposit or a
+   claim on fiat/USDC (ADR-2607995000, the credits<->fiat membrane is
+   one-way: fiat/USDC mints credits, never the reverse). There is
+   deliberately no fiat-payout path anywhere in this codebase — do not add
+   one without revisiting that ADR first."
   [who credits {:keys [for] :as _meta}]
   {:run/spend {(name who) (double credits)}
    :run/spend-for for})

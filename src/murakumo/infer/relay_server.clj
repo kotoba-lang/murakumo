@@ -18,6 +18,7 @@
   (:require [babashka.process :as p]
             [cheshire.core :as json]
             [clojure.edn :as edn]
+            [murakumo.infer.credits :as credits]
             [murakumo.infer.postproc :as pp]
             [murakumo.infer.relay :as relay]
             [org.httpkit.server :as http]))
@@ -33,17 +34,36 @@
 
 (defn- now [] (System/currentTimeMillis))
 
+(defn swarm-run-record
+  "Pure: build the run record for a completed browser-swarm job. `settled` is
+   `{:did :credits ...}` — the total credits already earned for this job
+   (settled upstream of this ns; there is no memory×time plan to run through
+   `murakumo.infer.credits/settle` here, since a browser-swarm job is a
+   single ad-hoc worker, not a fleet-planned shard job).
+
+   The treasury cut uses `credits/default-protocol-frac` — the SAME named
+   constant `settle` uses for fleet jobs — instead of a second, independently
+   hardcoded fraction (ADR-2607995000: two definitions of \"the treasury
+   cut\" drifting apart was the bug this fixes). There is no separate
+   head-frac cut here: a single browser worker IS its own conducting node,
+   so `settle`'s head-cut + memory-time-pool-share would both land on that
+   same worker anyway — net-equivalent to \"worker gets everything except
+   the treasury cut\"."
+  [{:keys [did credits] :as _settled} protocol-frac]
+  (let [treasury (* protocol-frac credits)]
+    {:model "browser-swarm" :units {:jobs 1}
+     :run/total credits
+     :run/shares {did (- credits treasury)}
+     :run/treasury treasury
+     :run/proof :verified}))
+
 (defn- post-run! [settled]
   ;; report the settled job to cloud-murakumo as a run record: the worker's did
   ;; earns :run/shares, the protocol takes its treasury cut — same ledger as
   ;; text/media generation. Fire-and-forget (best-effort; the local ledger is
   ;; the durable record).
   (when cloud-url
-    (let [run {:model "browser-swarm" :units {:jobs 1}
-               :run/total (:credits settled)
-               :run/shares {(:did settled) (* 0.95 (:credits settled))}
-               :run/treasury (* 0.05 (:credits settled))
-               :run/proof :verified}]
+    (let [run (swarm-run-record settled credits/default-protocol-frac)]
       (try (p/sh "curl" "-s" "-m" "5" "-X" "POST" (str cloud-url "/infer/runs")
                  "-H" "Content-Type: application/json" "-d" (json/generate-string run))
            (catch Exception _ nil)))))
