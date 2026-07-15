@@ -29,6 +29,12 @@
 ;; when set (MURAKUMO_CLOUD env), each settled job is POSTed to cloud-murakumo
 ;; /infer/runs as a signed run record — the dispatcher loop closes here.
 (def ^:private cloud-url (System/getenv "MURAKUMO_CLOUD"))
+;; ADR-2607995000 Fix #6: /infer/runs now requires either a matching CACAO or
+;; this shared service secret (local-murakumo.write-gate) -- this relay is the
+;; operator's OWN infrastructure reporting a job it already settled itself,
+;; not an external actor's claim, so the service-token path is the right one
+;; (not a self-minted CACAO per relay instance).
+(def ^:private service-token (System/getenv "MURAKUMO_SERVICE_TOKEN"))
 
 (defn- send! [ch msg] (http/send! ch (json/generate-string msg)))
 
@@ -61,11 +67,16 @@
   ;; report the settled job to cloud-murakumo as a run record: the worker's did
   ;; earns :run/shares, the protocol takes its treasury cut — same ledger as
   ;; text/media generation. Fire-and-forget (best-effort; the local ledger is
-  ;; the durable record).
+  ;; the durable record). Bearer-authenticates with MURAKUMO_SERVICE_TOKEN when
+  ;; configured (unconfigured => the write is now rejected server-side per
+  ;; Fix #6, same honesty as any other dropped-write audit gap).
   (when cloud-url
-    (let [run (swarm-run-record settled credits/default-protocol-frac)]
-      (try (p/sh "curl" "-s" "-m" "5" "-X" "POST" (str cloud-url "/infer/runs")
-                 "-H" "Content-Type: application/json" "-d" (json/generate-string run))
+    (let [run (swarm-run-record settled credits/default-protocol-frac)
+          args (cond-> ["curl" "-s" "-m" "5" "-X" "POST" (str cloud-url "/infer/runs")
+                        "-H" "Content-Type: application/json"]
+                 service-token (into ["-H" (str "Authorization: Bearer " service-token)])
+                 true (into ["-d" (json/generate-string run)]))]
+      (try (apply p/sh args)
            (catch Exception _ nil)))))
 
 (defn- append-ledger! [settled]
