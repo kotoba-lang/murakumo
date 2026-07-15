@@ -90,6 +90,20 @@
   fleet's default image model changes."
   (or (System/getenv "MURAKUMO_DEFAULT_IMAGE_CKPT") "animagine-xl-4.0.safetensors"))
 
+(defn normalize-ckpt
+  "Caller-supplied :model → the ComfyUI CheckpointLoaderSimple filename.
+   Callers naturally pass registry model ids (\"animagine-xl-4.0\") but
+   CheckpointLoaderSimple validates against on-disk names
+   (\"animagine-xl-4.0.safetensors\") and rejects the prompt otherwise —
+   worse, the rejection comes back through the poller as the misleading
+   『node became unreachable mid-render』(実測 2026-07-15: 拡張子なしの
+   model 指定で gad 側は invalid-prompt を返していたのに、gateway は
+   unreachable と報告した)。nil は nil のまま (呼び出し側の default に任せる)。"
+  [model]
+  (when model
+    (cond-> model
+      (not (str/ends-with? model ".safetensors")) (str ".safetensors"))))
+
 (defn- image-filename
   "The SaveImage output filename from a run-job! history (:image kind always
   lands on node :7, per media.clj's `run-job!` case)."
@@ -105,7 +119,7 @@
   and returns it base64-encoded. Throws ex-info if no fleet node is eligible
   or the render/scp produced no file."
   [{:keys [prompt negative n size model seed]}]
-  (let [ckpt (or model default-image-checkpoint)
+  (let [ckpt (or (normalize-ckpt model) default-image-checkpoint)
         [width height] (parse-size size)
         f (fleet/enrich (fleet/load-fleet))
         live (media/live-fleet f)
