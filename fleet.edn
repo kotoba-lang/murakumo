@@ -36,4 +36,13 @@
   ;; discrete GPU + unified-memory-free VRAM vs Mac mini shared memory —
   ;; verified 2026-07-13, ai-gftd-mangaka session). Reachable as `ssh gad`
   ;; (Tailscale, ~/.ssh/config alias → 100.82.98.110).
-  {:name "gad" :host "gad" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "comfy-render"}}]}
+  {:name "gad" :host "gad" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "comfy-render"}}
+  ;; xavier — NVIDIA Jetson AGX Xavier devkit (32GB LPDDR4x, 512-core Volta
+  ;; GPU, 8-core Carmel), NOT a 12-tribes Mac mini and not a kotoba P2P mesh
+  ;; member (no :pin role, doesn't run kotoba-server). Physically on gad's
+  ;; wired LAN (192.168.1.28). Recovered 2026-07-15 via full JetPack 5.1.x
+  ;; (L4T R35.4.1, Ubuntu 20.04) reflash after a forgotten OS password —
+  ;; flashed from gad (an x86_64 host) since this fleet's Macs are Apple
+  ;; Silicon and can't run NVIDIA's x86_64-only flash tooling. No verified
+  ;; workload yet. Reachable as `ssh xavier` (Tailscale → 100.87.226.80).
+  {:name "xavier" :host "xavier" :rpc-ip "192.168.1.28" :mac "48:b0:2d:18:4d:16" :roles ["compute"] :labels {:tier "gpu" :zone "jp"}}]}
