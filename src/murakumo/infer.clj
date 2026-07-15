@@ -122,6 +122,30 @@
   [head-cfg model]
   (or (:model/dir model) (:model-dir head-cfg)))
 
+(defn- standalone-unit
+  "systemd unit text for the head's standalone llama-server. serve-standalone
+   が /etc/systemd/system/murakumo-standalone.service へ書く — nohup 起動
+   (旧実装)は Restart 無しで、プロセスが死ぬと infer.murakumo.cloud ごと
+   落ちたままになる(実障害 2026-07-15: club-shinshi chat の 502 の根本原因。
+   cloudflared は生きているのに origin :8090 が不在)。systemd 化で
+   crash/再起動を跨いで自己復旧する。User=gad は既存 llama-server.service
+   (gemma :11434)と同じ運用。"
+  [cmd]
+  (str "[Unit]\n"
+       "Description=murakumo standalone llama-server (managed by `bb murakumo infer serve-standalone`)\n"
+       "After=network-online.target\n"
+       "Wants=network-online.target\n"
+       "\n"
+       "[Service]\n"
+       "Type=simple\n"
+       "User=gad\n"
+       "ExecStart=" cmd "\n"
+       "Restart=on-failure\n"
+       "RestartSec=5\n"
+       "\n"
+       "[Install]\n"
+       "WantedBy=multi-user.target\n"))
+
 (defn- moe? [model] (= :mlx-moe (:model/engine model)))
 
 (defn- moe-opt
@@ -450,11 +474,26 @@
       (println "no :infer/head :standalone-bin-dir configured in infer.edn — nothing to run")
       (do
         (println cmd)
-        (let [{:keys [out]}
-              (ssh/sh (:host head-cfg)
-                      (format "pgrep -x llama-server | xargs -r kill -9 2>/dev/null || true; while pgrep -x llama-server >/dev/null; do sleep 0.2; done; mkdir -p /tmp/xdgrt; nohup env XDG_RUNTIME_DIR=/tmp/xdgrt %s >/tmp/murakumo-head.log 2>&1 & sleep 1; pgrep -x llama-server >/dev/null && echo serving || echo FAILED" cmd))]
-          (println (format "[%s] %s — http://%s:%s/v1 (no RPC workers needed; `bb murakumo infer down` frees them)"
-                           (:host head-cfg) out (api-host head-cfg) port)))))))
+        (let [unit (standalone-unit cmd)
+              ;; 旧経路の掃除: transient systemd-run unit(2026-07-15 の応急復旧)と、
+              ;; unit 外で nohup 起動された旧 llama-server(このコマンドの旧実装)を
+              ;; 止める。gemma 等 OTHER unit の llama-server は殺さない —
+              ;; `pgrep -x llama-server` の全殺しは llama-server.service
+              ;; (gemma :11434) まで巻き込む雑さだったので、serve する port の
+              ;; listener だけ fuser で狙い撃ちする。unit 本文は heredoc で書く
+              ;; (printf '%s' + pr-str は \n をリテラルのまま吐く罠がある)。
+              script (str "systemctl stop murakumo-qwen-standalone.service 2>/dev/null || true; "
+                          "fuser -k " port "/tcp 2>/dev/null || true; "
+                          "cat > /etc/systemd/system/murakumo-standalone.service <<'MURAKUMO_UNIT'\n"
+                          unit
+                          "MURAKUMO_UNIT\n"
+                          "systemctl daemon-reload; "
+                          "systemctl enable murakumo-standalone.service >/dev/null 2>&1; "
+                          "systemctl restart murakumo-standalone.service; sleep 2; "
+                          "systemctl is-active murakumo-standalone.service")
+              {:keys [out]} (ssh/sh (:host head-cfg) script)]
+          (println (format "[%s] unit murakumo-standalone %s — http://%s:%s/v1 (systemd: Restart=on-failure, boot-persistent; `systemctl status murakumo-standalone` on the head; no RPC workers needed)"
+                           (:host head-cfg) (str/trim (str out)) (api-host head-cfg) port)))))))
 
 (defn cmd-generate
   "One completion via the head's /v1 API. Targets whichever host actually
