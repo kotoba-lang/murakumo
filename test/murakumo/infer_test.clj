@@ -118,3 +118,12 @@
     (testing "a model without :model/dir falls back to the head's global :model-dir"
       (is (= "/home/gad/models/GLM-5.2-REAP50-Q2_K-GGUF"
              (#'infer/model-dir head-cfg {:model/id "glm-5.2-reap50-q2k"}))))))
+
+(deftest standalone-systemd-unit
+  (let [unit (#'infer/standalone-unit "/opt/bin/llama-server -m /m.gguf --port 8090")]
+    (testing "unit embeds the exact serve command and self-heals on crash"
+      (is (re-find #"ExecStart=/opt/bin/llama-server -m /m\.gguf --port 8090\n" unit))
+      (is (re-find #"Restart=on-failure" unit))
+      (is (re-find #"WantedBy=multi-user\.target" unit)))
+    (testing "runs as the gad user like the existing llama-server.service"
+      (is (re-find #"User=gad" unit)))))
