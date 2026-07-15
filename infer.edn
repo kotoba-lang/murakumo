@@ -70,6 +70,12 @@
    :model/moe-shared-expert? true
    :model/context 262144
    :model/gguf "Qwen-AgentWorld-35B-A3B-UD-Q4_K_M.gguf"
+   ;; :infer/head :model-dir is a single global path (currently GLM's) — this
+   ;; model lives elsewhere on the head, so it needs its own :model/dir or
+   ;; cmd-serve-standalone/cmd-serve-ring build a path into GLM's directory
+   ;; instead (verified failure, 2026-07-15: gftdcojp/club-shinshi's chat
+   ;; gateway went down because of exactly this).
+   :model/dir "/home/gad/models/Qwen-AgentWorld-35B-A3B-GGUF"
    ;; HF file-listing size (UD-Q4_K_M, 2026-07-04) — not yet probed on-disk,
    ;; unlike the byte-exact entries below.
    :model/weight-bytes 22100000000}
@@ -86,6 +92,8 @@
    :model/moe-shared-expert? true
    :model/context 262144              ; extensible to 1,010,000 via YaRN
    :model/gguf "Qwen3.6-35B-A3B-Q4_K_M.gguf"
+   ;; See qwen-agentworld-35b-a3b's :model/dir comment above — same reason.
+   :model/dir "/home/gad/models/Qwen3.6-35B-A3B-GGUF"
    ;; byte-exact (2026-07-08: matches both the HF LFS listing and the file
    ;; already resident at /home/gad/models/Qwen3.6-35B-A3B-GGUF/ on the head,
    ;; downloaded 2026-07-05 for the standalone-GPU benchmark in catalog.cljc).
@@ -170,6 +178,34 @@
    :model/experts 512}
 
   ;; ── media (Civitai/HF 系。ジョブ並列 = 1 ノード完結、sharding 不要) ──
+  "trellis-image-large"
+  {:model/id "trellis-image-large"
+   :model/kind :model3d
+   :model/family "TRELLIS"
+   :hf/repo "microsoft/TRELLIS-image-large"
+   :model/snapshot-bytes 3299240850
+   :model/engine :trellis
+   :model/runtime :cuda
+   :model/min-vram-gib 24
+   :model/output [:glb :gltf]
+   :credit/per-model 500}
+
+  "hunyuan3d-2.1"
+  {:model/id "hunyuan3d-2.1"
+   :model/kind :model3d
+   :model/family "Hunyuan3D 2.1"
+   :hf/repo "tencent/Hunyuan3D-2.1"
+   :model/snapshot-bytes 14909683275
+   :model/engine :hunyuan3d
+   :model/runtime :rocm
+   :model/verified-node "gad"
+   :model/shape-only? false
+   :model/paint true
+   :model/paint-query-chunk 4096
+   :model/min-vram-gib 26
+   :model/output [:glb :gltf]
+   :credit/per-model 500}
+
   "animagine-xl-4.0"
   {:model/id "animagine-xl-4.0"
    :model/kind :image

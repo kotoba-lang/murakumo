@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Run the official Hunyuan3D 2.1 Paint pipeline on ROCm/gfx1151."""
+import argparse
+import os
+import pathlib
+import shutil
+import sys
+
+import torch
+import torch.nn.functional as functional
+
+ROOT = pathlib.Path(os.environ.get("HUNYUAN3D_ROOT", "/home/gad/src/Hunyuan3D-2.1"))
+QUERY_CHUNK = int(os.environ.get("HUNYUAN3D_PAINT_QUERY_CHUNK", "4096"))
+sys.path.insert(0, str(ROOT / "hy3dpaint"))
+
+
+def install_chunked_attention():
+    original = functional.scaled_dot_product_attention
+
+    def chunked(query, key, value, attn_mask=None, dropout_p=0.0,
+                is_causal=False, scale=None, enable_gqa=False):
+        count = query.shape[-2]
+        if count <= QUERY_CHUNK:
+            return original(query, key, value, attn_mask, dropout_p, is_causal,
+                            scale=scale, enable_gqa=enable_gqa)
+        output = []
+        for start in range(0, count, QUERY_CHUNK):
+            mask = attn_mask
+            if mask is not None and mask.shape[-2] == count:
+                mask = mask[..., start:start + QUERY_CHUNK, :]
+            output.append(original(query[..., start:start + QUERY_CHUNK, :],
+                                   key, value, mask, dropout_p, is_causal,
+                                   scale=scale, enable_gqa=enable_gqa))
+        return torch.cat(output, dim=-2)
+
+    functional.scaled_dot_product_attention = chunked
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--image", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--views", type=int, default=6)
+    parser.add_argument("--resolution", type=int, default=512)
+    args = parser.parse_args()
+
+    os.chdir(ROOT)
+    install_chunked_attention()
+    from textureGenPipeline import Hunyuan3DPaintConfig, Hunyuan3DPaintPipeline
+
+    pipeline = Hunyuan3DPaintPipeline(Hunyuan3DPaintConfig(args.views, args.resolution))
+    generated_obj = pathlib.Path(pipeline(mesh_path=os.path.abspath(args.input),
+                                          image_path=os.path.abspath(args.image)))
+    generated = generated_obj.with_suffix(".glb")
+    if not generated.exists():
+        raise RuntimeError(f"Paint pipeline did not produce {generated}")
+    destination = pathlib.Path(args.output)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if generated.resolve() != destination.resolve():
+        shutil.copy2(generated, destination)
+    print(destination.resolve())
+
+
+if __name__ == "__main__":
+    main()

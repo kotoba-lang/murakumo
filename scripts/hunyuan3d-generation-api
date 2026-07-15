@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Small async Murakumo photo-to-GLB API for the verified gad ROCm runner."""
+import base64
+import json
+import os
+import pathlib
+import subprocess
+import threading
+import uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
+
+ROOT = pathlib.Path(os.environ.get("MURAKUMO_GENERATION_DIR", "/home/gad/.murakumo/generation"))
+RUNNER = os.environ.get("HUNYUAN3D_RUNNER", "/home/gad/.murakumo/bin/hunyuan3d-run-rocm")
+POSTPROCESSOR = os.environ.get("MURAKUMO_3D_POSTPROCESSOR", "")
+PAINT_RUNNER = os.environ.get("HUNYUAN3D_PAINT_RUNNER", "")
+TOKEN = os.environ.get("MURAKUMO_GENERATION_TOKEN", "")
+PUBLIC_BASE = os.environ.get("MURAKUMO_GENERATION_PUBLIC_BASE", "http://127.0.0.1:8081").rstrip("/")
+jobs = {}
+lock = threading.Lock()
+
+
+def save():
+    ROOT.mkdir(parents=True, exist_ok=True)
+    (ROOT / "jobs.json").write_text(json.dumps(jobs, ensure_ascii=False))
+
+
+def run_job(job_id, image, params):
+    folder = ROOT / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    src, raw, out = folder / "input.png", folder / "model-raw.glb", folder / "model.glb"
+    try:
+        encoded = image.split(",", 1)[1] if image.startswith("data:") else image
+        src.write_bytes(base64.b64decode(encoded, validate=True))
+        with lock:
+            jobs[job_id].update(status="running", progress=10); save()
+        cmd = [RUNNER, "--model", "hunyuan3d-2.1", "--image", str(src),
+               "--output", str(raw), "--steps", str(params.get("steps", 20)),
+               "--octree-resolution", str(params.get("octree_resolution", 256))]
+        completed = subprocess.run(cmd, text=True, capture_output=True, timeout=1800)
+        if completed.returncode:
+            raise RuntimeError(completed.stderr[-4000:] or completed.stdout[-4000:])
+        capabilities = ["shape"]
+        postprocess_input = raw
+        officially_painted = False
+        if PAINT_RUNNER and params.get("paint", True):
+            painted = folder / "model-hy3dpaint-pbr.glb"
+            paint = subprocess.run([PAINT_RUNNER, "--input", str(raw), "--image", str(src),
+                                    "--output", str(painted)],
+                                   text=True, capture_output=True, timeout=3600)
+            if paint.returncode:
+                raise RuntimeError("Hunyuan3D Paint failed: " +
+                                   (paint.stderr[-4000:] or paint.stdout[-4000:]))
+            postprocess_input = painted
+            officially_painted = True
+            capabilities += ["pbr", "material", "multiview-texture"]
+        if POSTPROCESSOR and params.get("postprocess", True):
+            post_env = dict(os.environ, MURAKUMO_OFFICIAL_PAINTED="1" if officially_painted else "0")
+            post = subprocess.run([POSTPROCESSOR, "--input", str(postprocess_input), "--image", str(src),
+                                   "--output", str(out), "--asset-dir", str(folder)],
+                                  text=True, capture_output=True, timeout=900, env=post_env)
+            if post.returncode:
+                raise RuntimeError("3D postprocess failed: " + (post.stderr[-4000:] or post.stdout[-4000:]))
+            capabilities += ["auto-rig", "skin-weights", "motion", "morph-targets"]
+        else:
+            raw.replace(out)
+        artifact = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}/artifact"
+        with lock:
+            jobs[job_id].update(status="done", progress=100, artifactUrl=artifact,
+                                artifacts=[{"kind": "glb", "url": artifact,
+                                            "bytes": out.stat().st_size,
+                                            "capabilities": capabilities}],
+                                capabilities=capabilities); save()
+    except Exception as exc:
+        with lock:
+            jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
+
+
+class Handler(BaseHTTPRequestHandler):
+    def send_json(self, status, body):
+        data = json.dumps(body, ensure_ascii=False).encode()
+        self.send_response(status); self.send_header("content-type", "application/json")
+        self.send_header("access-control-allow-origin", "*")
+        self.send_header("access-control-allow-headers", "authorization,content-type")
+        self.send_header("content-length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
+    def authorized(self):
+        return not TOKEN or self.headers.get("authorization") == f"Bearer {TOKEN}"
+
+    def do_OPTIONS(self):
+        self.send_response(204); self.send_header("access-control-allow-origin", "*")
+        self.send_header("access-control-allow-methods", "GET,POST,OPTIONS")
+        self.send_header("access-control-allow-headers", "authorization,content-type"); self.end_headers()
+
+    def do_POST(self):
+        if not self.authorized(): return self.send_json(401, {"error": "unauthorized"})
+        if self.path != "/v1/generation": return self.send_json(404, {"error": "not-found"})
+        try:
+            body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))))
+            if body.get("type") != "model3d": raise ValueError("only model3d is currently supported")
+            image = (body.get("input") or {}).get("image")
+            if not image: raise ValueError("input.image is required")
+            job_id = uuid.uuid4().hex
+            status_url = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}"
+            jobs[job_id] = {"jobId": job_id, "status": "queued", "progress": 1,
+                            "statusUrl": status_url, "artifacts": []}; save()
+            threading.Thread(target=run_job, args=(job_id, image, body.get("params") or {}), daemon=True).start()
+            self.send_json(202, jobs[job_id])
+        except Exception as exc: self.send_json(400, {"error": "invalid-request", "message": str(exc)})
+
+    def do_GET(self):
+        if self.path == "/healthz": return self.send_json(200, {"status": "ok", "runtime": "hunyuan3d-rocm"})
+        if not self.authorized(): return self.send_json(401, {"error": "unauthorized"})
+        parts = urlparse(self.path).path.strip("/").split("/")
+        if len(parts) < 4 or parts[:3] != ["v1", "generation", "jobs"]:
+            return self.send_json(404, {"error": "not-found"})
+        job = jobs.get(parts[3])
+        if not job: return self.send_json(404, {"error": "job-not-found"})
+        if len(parts) == 5 and parts[4] == "artifact":
+            path = ROOT / parts[3] / "model.glb"
+            if job["status"] != "done" or not path.exists(): return self.send_json(409, {"error": "not-ready"})
+            data = path.read_bytes(); self.send_response(200); self.send_header("content-type", "model/gltf-binary")
+            self.send_header("content-length", str(len(data))); self.end_headers(); return self.wfile.write(data)
+        self.send_json(200, job)
+
+    def log_message(self, fmt, *args): print(fmt % args, flush=True)
+
+
+if __name__ == "__main__":
+    ROOT.mkdir(parents=True, exist_ok=True)
+    try: jobs.update(json.loads((ROOT / "jobs.json").read_text()))
+    except Exception: pass
+    ThreadingHTTPServer((os.environ.get("MURAKUMO_GENERATION_HOST", "127.0.0.1"),
+                         int(os.environ.get("MURAKUMO_GENERATION_PORT", "8081"))), Handler).serve_forever()

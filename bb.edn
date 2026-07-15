@@ -24,6 +24,7 @@
   quic-cert {:doc "Issue/ensure stored QUIC cert/key material under .murakumo/kagi/quic." :task (apply shell "clojure" "-M:quic-cert" *command-line-args*)}
   quic-driver {:doc "JVM Clojure QUIC transport driver. Args: check|dial|serve|serve-once --request-edn '<adapter-request>'." :task (apply shell "clojure" "-M:quic-driver" *command-line-args*)}
   infer    {:doc "Distributed inference (exo-style memory-weighted shard plan): probe|plan|provision|up|down|ps|serve|generate." :requires ([murakumo.core :as core]) :task (apply core/-main "infer" *command-line-args*)}
+  model    {:doc "Hugging Face model cache provisioning over Tailscale SSH: plan|setup|status <model> [node|all] [cache-dir]." :requires ([murakumo.model-setup :as model]) :task (apply model/-main *command-line-args*)}
   token    {:doc "Mint/inspect murakumo inference access tokens (HMAC, stateless). issue [--sub L] [--scope chat|image|all] [--ttl s] | verify <token>. Needs $MURAKUMO_TOKEN_SECRET." :requires ([murakumo.core :as core]) :task (apply core/-main "token" *command-line-args*)}
   orchestrate {:doc "Autonomous control loop: read fleet capacity + request demand → compute demand-aware placement → publish /infer/placement. Flags: --dry-run --watch=N." :requires ([murakumo.infer.orchestrate :as orch]) :task (apply orch/-main *command-line-args*)}
   claude   {:doc "Run Claude Code against murakumo.cloud instead of Anthropic's own models (tools/claude-murakumo — same shape as z.ai's claude-zai wrapper for GLM)." :task (apply shell "tools/claude-murakumo/claude-murakumo" *command-line-args*)}
@@ -66,7 +67,8 @@
 	                       [murakumo.infer-gateway-test]
 	                       [murakumo.infer-media-test]
 	                       [murakumo.infer-postproc-test]
-	                       [murakumo.infer-rebalance-test])
+	                       [murakumo.infer-rebalance-test]
+	                       [murakumo.model-setup-test])
 		            :task (let [{:keys [fail error]} (t/run-tests 'murakumo.cloud-plan-test
 		                                                          'murakumo.config-test
 	                                                          'murakumo.dash-state-test
@@ -102,5 +104,6 @@
 	                                                          'murakumo.infer-gateway-test
 	                                                          'murakumo.infer-media-test
 	                                                          'murakumo.infer-rebalance-test
-	                                                          'murakumo.infer-postproc-test)]
+	                                                          'murakumo.infer-postproc-test
+	                                                          'murakumo.model-setup-test)]
                     (System/exit (if (pos? (+ (or fail 0) (or error 0))) 1 0)))}}}

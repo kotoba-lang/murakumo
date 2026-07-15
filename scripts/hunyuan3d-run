@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""ROCm shape-only Hunyuan3D runner for the Murakumo process boundary."""
+import argparse
+import json
+import os
+import sys
+import time
+
+ROOT = os.environ.get("HUNYUAN3D_ROOT", "/home/gad/src/Hunyuan3D-2.1")
+MODEL = os.environ.get("HUNYUAN3D_MODEL", "/home/gad/models/Hunyuan3D-2.1-shape")
+sys.path.insert(0, os.path.join(ROOT, "hy3dshape"))
+
+from PIL import Image
+from hy3dshape.pipelines import Hunyuan3DDiTFlowMatchingPipeline
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--model", default="hunyuan3d-2.1")
+    p.add_argument("--image", required=True)
+    p.add_argument("--out", default="glb")
+    p.add_argument("--output", default="hunyuan3d-output.glb")
+    p.add_argument("--steps", type=int, default=20)
+    p.add_argument("--octree-resolution", type=int, default=256)
+    args = p.parse_args()
+    started = time.time()
+    pipe = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(MODEL, device="cuda")
+    image = Image.open(args.image).convert("RGBA")
+    mesh = pipe(image=image, num_inference_steps=args.steps,
+                octree_resolution=args.octree_resolution)[0]
+    mesh.export(args.output)
+    print(json.dumps({"outputs": [os.path.abspath(args.output)],
+                      "gpu-seconds": max(1, round(time.time() - started)),
+                      "runtime": "hunyuan3d-rocm-shape"}))
+
+
+if __name__ == "__main__":
+    main()

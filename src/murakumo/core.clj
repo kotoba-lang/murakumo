@@ -360,6 +360,33 @@
   (require 'murakumo.infer)
   (apply (resolve 'murakumo.infer/-main) args))
 
+(defn cmd-model
+  "Plan/download/inspect Hugging Face model caches on fleet nodes."
+  [_ args]
+  (require 'murakumo.model-setup)
+  (apply (resolve 'murakumo.model-setup/-main) args))
+
+(defn cmd-revive
+  "Wake offline Mac fleet nodes by sending Wake-on-LAN from a live LAN peer."
+  [fleet [selector]]
+  (let [nodes (:nodes fleet)
+        live (first (filter #(ssh/reachable? (:host %)) nodes))
+        targets (if (and selector (not= selector "all"))
+                  (filter #(= selector (:name %)) nodes)
+                  (remove #(ssh/reachable? (:host %)) nodes))]
+    (when-not live
+      (throw (ex-info "no live LAN fleet peer available to relay Wake-on-LAN" {})))
+    (doseq [{:keys [name mac]} targets]
+      (if-not mac
+        (println (format "[%-10s] skipped — no :mac in fleet.edn" name))
+        (let [py (str "import socket; m=bytes.fromhex('" (str/replace mac ":" "")
+                      "'); s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); "
+                      "s.setsockopt(socket.SOL_SOCKET,socket.SO_BROADCAST,1); "
+                      "s.sendto(b'\\xff'*6+m*16,('255.255.255.255',9)); print('sent')")
+              result (ssh/sh (:host live) (str "python3 -c " (pr-str py)))]
+          (println (format "[%-10s] wake=%s via=%s" name
+                           (str/trim (:out result)) (:name live))))))))
+
 (defn- parse-flags
   "['--sub' 'x' '--scope' 'chat'] or ['--sub=x'] -> {\"sub\" \"x\" ...}."
   [args]
@@ -419,7 +446,8 @@
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
    "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin
    "dash" cmd-dash "reconcile" cmd-reconcile "fleet" cmd-fleet
-   "cloud" cmd-cloud "infer" cmd-infer "token" cmd-token})
+   "cloud" cmd-cloud "infer" cmd-infer "model" cmd-model "revive" cmd-revive
+   "token" cmd-token})
 
 (defn -main [& args]
   (let [[cmd & rest] args
