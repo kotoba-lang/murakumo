@@ -111,6 +111,17 @@
                         (str/join ", " (keys (:models cfg)))))
           (System/exit 1))))
 
+(defn- model-dir
+  "The on-disk directory holding `model`'s GGUF on the head. :infer/head
+   :model-dir is a single global path (currently GLM's) — only correct for
+   whichever model it was last pointed at. A registry entry's own :model/dir
+   (when present) always wins, so serving any other model doesn't silently
+   build a path into the wrong model's directory (verified failure mode,
+   2026-07-15: qwen-agentworld-35b-a3b resolved into GLM-5.2-REAP50-Q2_K-GGUF/
+   and llama-server exited immediately)."
+  [head-cfg model]
+  (or (:model/dir model) (:model-dir head-cfg)))
+
 (defn- moe? [model] (= :mlx-moe (:model/engine model)))
 
 (defn- moe-opt
@@ -333,7 +344,7 @@
         opts {:bin-dir (if remote? (:bin-dir head-cfg ".murakumo/bin") "bin")
               :model-path (or gguf-path
                               (if remote?
-                                (str (:model-dir head-cfg "glm") "/" (:model/gguf model))
+                                (str (model-dir head-cfg model) "/" (:model/gguf model))
                                 (:model/gguf model)))
               :rpc-port (:infer/rpc-port cfg engine/default-rpc-port)
               :port (:infer/api-port cfg 8080)
@@ -414,7 +425,7 @@
         model (model-or-die cfg model-id)
         head-cfg (:infer/head cfg)
         bin-dir (:standalone-bin-dir head-cfg)
-        model-path (or gguf-path (str (:model-dir head-cfg) "/" (:model/gguf model)))
+        model-path (or gguf-path (str (model-dir head-cfg model) "/" (:model/gguf model)))
         ;; :model/mmproj (e.g. qwen3.6-35b-a3b) is a llama.cpp-native CLIP-in-GGUF
         ;; vision projector co-located with the text tower — pass it through
         ;; unconditionally when the registry entry declares one, so a model
@@ -424,7 +435,7 @@
         mmproj-path (when-let [mmproj (:model/mmproj model)]
                       (let [dir (if-let [i (str/last-index-of model-path "/")]
                                   (subs model-path 0 i)
-                                  (:model-dir head-cfg))]
+                                  (model-dir head-cfg model))]
                         (str dir "/" mmproj)))
         ctx (:infer/ctx cfg 4096)
         port (:infer/api-port cfg 8080)

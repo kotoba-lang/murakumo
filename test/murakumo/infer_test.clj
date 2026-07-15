@@ -1,6 +1,7 @@
 ;; Offline unit tests for the pure inference planner/engine (no fleet, no SSH).
 (ns murakumo.infer-test
   (:require [clojure.test :refer [deftest is testing]]
+            [murakumo.infer :as infer]
             [murakumo.infer.engine :as engine]
             [murakumo.infer.plan :as plan]))
 
@@ -108,3 +109,12 @@
                                                :model-repo "mlx-community/GLM-5.2-4bit"})]
     (is (= [{:ssh "a" :ips ["100.0.0.1"]} {:ssh "localhost" :ips ["localhost"]}] hosts))
     (is (re-find #"--backend ring" (:cmd head)))))
+
+(deftest model-dir-resolution
+  (let [head-cfg {:model-dir "/home/gad/models/GLM-5.2-REAP50-Q2_K-GGUF"}]
+    (testing "a model with its own :model/dir wins over the head's global :model-dir"
+      (is (= "/home/gad/models/Qwen-AgentWorld-35B-A3B-GGUF"
+             (#'infer/model-dir head-cfg {:model/dir "/home/gad/models/Qwen-AgentWorld-35B-A3B-GGUF"}))))
+    (testing "a model without :model/dir falls back to the head's global :model-dir"
+      (is (= "/home/gad/models/GLM-5.2-REAP50-Q2_K-GGUF"
+             (#'infer/model-dir head-cfg {:model/id "glm-5.2-reap50-q2k"}))))))
