@@ -4,14 +4,27 @@
         org.bouncycastle/bcpkix-jdk18on {:mvn/version "1.78.1"}
         ;; witness-quorum's pre-commit orchestrator, wired onto overlay QUIC
         ;; in murakumo.overlay.witness-transport (ADR-2607110300 Phase 2),
-        ;; plus reputation/stake (Phase 4). Pin is the
-        ;; kotoba-lang/witness-quorum#2 merge commit on main.
+        ;; plus reputation/stake (Phase 4). Pin advanced to witness-quorum's
+        ;; #4 merge (feat/reputation-stake-slashing) -- the previous pin
+        ;; (492ba889, #2) predates reputation.clj/stake.clj/slashing.clj,
+        ;; which murakumo.overlay.witness-write already requires; a fresh
+        ;; consumer without the :dev local-root override would fail to
+        ;; compile against the stale pin.
         io.github.kotoba-lang/witness-quorum
-        {:git/sha "492ba889346647ac8a504fc02b70e5b43b4c7782"}}
+        {:git/sha "e6fe9b7aa99a53d2fe162faa3f3f9e7330e52aa8"}
+        ;; kekkai's TailnetGovernor/CoordinationActor, for the treasury/
+        ;; release + witness/dispute end-to-end glue (ADR-2607110300 Phase 3,
+        ;; murakumo.overlay.witness-treasury). JVM-only, same as
+        ;; witness-write/witness-transport -- not part of the bb-portable
+        ;; CLI path (bb.edn's test task excludes this, same reason as the
+        ;; kwik/witness-quorum-dependent overlay code).
+        io.github.kotoba-lang/kekkai
+        {:git/sha "bb0c39c116fc26ead36c2428c46b9734053a49f5"}}
  :aliases
- {;; offline workspace dev — pin witness-quorum to the local checkout
+ {;; offline workspace dev — pin witness-quorum/kekkai to local checkouts
   :dev {:override-deps
-        {io.github.kotoba-lang/witness-quorum {:local/root "../witness-quorum"}}}
+        {io.github.kotoba-lang/witness-quorum {:local/root "../witness-quorum"}
+         io.github.kotoba-lang/kekkai {:local/root "../kekkai"}}}
   :quic-driver {:main-opts ["-m" "murakumo.overlay.quic-driver"]}
   :quic-cert {:main-opts ["-m" "murakumo.overlay.cert"]}
   ;; JVM-only test path for the kwik/witness-quorum-dependent overlay code
