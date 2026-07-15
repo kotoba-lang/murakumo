@@ -217,5 +217,7 @@
     "  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log"
     "  fleet     <datom-log.edn>    fold a kotoba-fleet Datom log into one coordination view"
     "  infer     probe|plan <model>|provision|up|down|ps|serve|generate  distributed inference (exo-style shard plan)"
+    "  model     plan|setup|status <model> [node|all] [cache-dir]  Hugging Face model provisioning"
+    "  revive    [node|all]        wake offline fleet Macs via a live LAN peer"
     ""
     "env: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR"]))

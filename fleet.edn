@@ -14,21 +14,21 @@
  :fleet/operator-seed-env "MURAKUMO_OPERATOR_SEED"  ; 32-byte hex; shared operator DID across the fleet
 
  :nodes
- [{:name "naphtali" :host "naphtali" :rpc-ip "192.168.1.25" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+ [{:name "naphtali" :host "naphtali" :rpc-ip "192.168.1.25" :mac "1c:f6:4c:35:21:a5" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   ;; simeon is the ipfs-pinner — its IPFS daemon owns UDP 4001, so give the mesh
   ;; node a different libp2p port (4001 default would fail swarm init).
-  {:name "simeon"   :host "simeon"   :rpc-ip "192.168.1.24" :p2p-port 4003 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
-  {:name "judah"    :host "judah"    :rpc-ip "192.168.1.21" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
-  {:name "zebulun"  :host "zebulun"  :rpc-ip "192.168.1.19" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
-  {:name "levi"     :host "levi"     :rpc-ip "192.168.1.26" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
-  {:name "joseph"   :host "joseph"   :rpc-ip "192.168.1.17" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "simeon"   :host "simeon@simeon" :rpc-ip "192.168.1.24" :mac "1c:f6:4c:51:5e:ec" :p2p-port 4003 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "judah"    :host "judah"    :rpc-ip "192.168.1.21" :mac "1c:f6:4c:56:a9:52" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "zebulun"  :host "zebulun"  :rpc-ip "192.168.1.19" :mac "1c:f6:4c:57:c8:4d" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "levi"     :host "levi@levi" :rpc-ip "192.168.1.26" :mac "1c:f6:4c:62:84:7d" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "joseph"   :host "joseph@joseph" :rpc-ip "192.168.1.17" :mac "1c:f6:4c:4e:b9:2b" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   ;; issachar already runs a kotoba-server on :8077 (yabai CTI persistence) — give
   ;; the murakumo mesh node its own ports so the two coexist.
-  {:name "issachar" :host "issachar" :rpc-ip "192.168.1.23" :port 8076 :p2p-port 4002 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
-  {:name "dan"      :host "dan"      :rpc-ip "192.168.1.18" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp" :role "pdshost"}}
-  {:name "benjamin" :host "benjamin" :rpc-ip "192.168.1.20" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "issachar" :host "issachar" :rpc-ip "192.168.1.23" :mac "1c:f6:4c:55:db:4b" :port 8076 :p2p-port 4002 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
+  {:name "dan"      :host "dan@dan"  :rpc-ip "192.168.1.18" :mac "1c:f6:4c:5a:34:d9" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp" :role "pdshost"}}
+  {:name "benjamin" :host "benjamin" :rpc-ip "192.168.1.20" :mac "1c:f6:4c:53:5b:d4" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   ;; asher = replica/failover; also the canary (verified reachable first).
-  {:name "asher"    :host "asher"    :rpc-ip "192.168.1.22" :roles ["pin" "compute" "relay"] :labels {:tier "edge" :zone "jp" :role "canary"}}
+  {:name "asher"    :host "asher"    :rpc-ip "192.168.1.22" :mac "1c:f6:4c:4f:46:5c" :roles ["pin" "compute" "relay"] :labels {:tier "edge" :zone "jp" :role "canary"}}
   ;; gad — Linux/ROCm GPU box, NOT a 12-tribes Mac mini and not a kotoba P2P
   ;; mesh member (no :pin role, doesn't run kotoba-server). Compute-only:
   ;; murakumo.infer.media's ComfyUI render farm (animagine-xl-4.0 resident),

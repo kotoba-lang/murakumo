@@ -20,6 +20,11 @@ the nodes beyond the two kotoba binaries.
 
 ## What it manages
 
+Operator policy is defined in [`RULES.md`](RULES.md). The liveness/model-placement
+decision is recorded in
+[`docs/adr/ADR-260712-fleet-liveness-model-provisioning.md`](docs/adr/ADR-260712-fleet-liveness-model-provisioning.md),
+with recovery commands in [`docs/FLEET-RECOVERY.md`](docs/FLEET-RECOVERY.md).
+
 Each fleet node runs `kotoba-server` as a **macOS LaunchAgent** (`RunAtLoad` +
 `KeepAlive` ⇒ starts at login, self-heals on crash). The node:
 
@@ -460,6 +465,12 @@ bb murakumo infer provision                # push rpc-server + raise iogpu.wired
 bb murakumo infer up                       # start the worker ring
 bb murakumo infer serve glm-5.2-reap50-q2k ~/models/GLM-5.2-…-00001-of-00004.gguf
 bb murakumo infer generate "叢雲とは何ですか"   # OpenAI API → the whole fleet answers
+
+# Hugging Face model cache setup over Tailscale SSH
+bb murakumo model plan trellis-image-large asher
+bb murakumo model setup trellis-image-large        # auto: live non-canary node; asher is fallback
+bb murakumo model status trellis-image-large all
+bb murakumo revive all                             # Wake-on-LAN offline Macs via a live peer
 
 # :model/engine :mlx-moe — same verbs, single-node path (no ring/up/down):
 bb murakumo infer plan qwen3-coder-next-mlx-moe    # picks the best-memory node + capacity + verdict
