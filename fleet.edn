@@ -43,6 +43,18 @@
   ;; wired LAN (192.168.1.28). Recovered 2026-07-15 via full JetPack 5.1.x
   ;; (L4T R35.4.1, Ubuntu 20.04) reflash after a forgotten OS password —
   ;; flashed from gad (an x86_64 host) since this fleet's Macs are Apple
-  ;; Silicon and can't run NVIDIA's x86_64-only flash tooling. No verified
-  ;; workload yet. Reachable as `ssh xavier` (Tailscale → 100.87.226.80).
-  {:name "xavier" :host "xavier" :rpc-ip "192.168.1.28" :mac "48:b0:2d:18:4d:16" :roles ["compute"] :labels {:tier "gpu" :zone "jp"}}]}
+  ;; Silicon and can't run NVIDIA's x86_64-only flash tooling. Second
+  ;; independent standalone-serving inference head (NOT part of gad's RPC
+  ;; ring): qwen3.6-35b-a3b-xavier-cuda, llama.cpp built from source with
+  ;; CUDA (JetPack 5.1.x / CUDA 11.4, sm72 — no official Jetson+CUDA release
+  ;; binary exists upstream), model on the 466GB NVMe (/mnt/nvme), served via
+  ;; murakumo-standalone-cuda.service on :8090. Benchmarked 2026-07-15 vs gad
+  ;; with an identical HTTP request: gad 31.5 tok/s prefill / 30.9 tok/s
+  ;; decode vs Xavier 5.0 tok/s prefill / 11.5 tok/s decode — Xavier is
+  ;; markedly slower (2018 Volta, lower LPDDR4x bandwidth vs gad's newer
+  ;; high-bandwidth APU; MoE decode is memory-bandwidth bound). Registered in
+  ;; api.murakumo.cloud as node `head-xavier` / model
+  ;; `qwen3.6-35b-a3b-xavier-cuda`, endpoint is Tailscale-only (no public
+  ;; Cloudflare Tunnel route set up yet). Reachable as `ssh xavier`
+  ;; (Tailscale → 100.87.226.80).
+  {:name "xavier" :host "xavier" :rpc-ip "192.168.1.28" :mac "48:b0:2d:18:4d:16" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "cuda-infer"}}]}
