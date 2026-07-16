@@ -98,13 +98,16 @@
                                                 {:model incomplete-model :units {:images 500}})))))))
 
 (deftest receipts
-  (let [settled (credits/settle run)
+  (let [sign-fn (fn [s] (str "sig" (hash s)))
+        settled (credits/settle run)
         r1 (credits/receipt {:settled settled
                              :shard-reports [{:shard/rank {:layers [0 21]} :shard/owned-bytes 1745007264
                                               :shard/owned-tensors 358 :shard/host "main-2" :shard/ok true}]
-                             :hash-fn (fn [s] (str "h" (hash s)))})
+                             :hash-fn (fn [s] (str "h" (hash s)))
+                             :sign-fn sign-fn :signer "did:key:zHead"})
         r2 (credits/receipt {:settled settled :shard-reports [] :prev-hash (:receipt/hash r1)
-                             :hash-fn (fn [s] (str "h" (hash s)))})]
+                             :hash-fn (fn [s] (str "h" (hash s)))
+                             :sign-fn sign-fn :signer "did:key:zHead"})]
     (testing "receipts chain and carry the shard evidence"
       (is (= "genesis" (:receipt/prev r1)))
       (is (= (:receipt/hash r1) (:receipt/prev r2)))
@@ -114,7 +117,28 @@
              (:receipt/hash (credits/receipt {:settled settled
                                               :shard-reports [{:shard/rank {:layers [0 21]} :shard/owned-bytes 1745007264
                                                                :shard/owned-tensors 358 :shard/host "main-2" :shard/ok true}]
-                                              :hash-fn (fn [s] (str "h" (hash s)))})))))))
+                                              :hash-fn (fn [s] (str "h" (hash s)))
+                                              :sign-fn sign-fn :signer "did:key:zHead"})))))
+    (testing "the actor signature is mandatory and covers hash + signer (ADR-2607995000 §7)"
+      (is (thrown? Exception
+                   (credits/receipt {:settled settled :shard-reports []
+                                     :hash-fn (fn [s] (str "h" (hash s)))}))
+          "unsigned receipts are rejected, not silently emitted")
+      (is (thrown? Exception
+                   (credits/receipt {:settled settled :shard-reports []
+                                     :hash-fn (fn [s] (str "h" (hash s)))
+                                     :sign-fn sign-fn}))
+          ":signer (the actor did) is required alongside :sign-fn")
+      (is (= "did:key:zHead" (:receipt/signer r1)))
+      (is (= (sign-fn (pr-str (dissoc r1 :receipt/sig))) (:receipt/sig r1))
+          "sig is over the HASHED body, so it covers the hash chain")
+      (is (not= (:receipt/hash r1)
+                (:receipt/hash (credits/receipt {:settled settled
+                                                 :shard-reports [{:shard/rank {:layers [0 21]} :shard/owned-bytes 1745007264
+                                                                  :shard/owned-tensors 358 :shard/host "main-2" :shard/ok true}]
+                                                 :hash-fn (fn [s] (str "h" (hash s)))
+                                                 :sign-fn sign-fn :signer "did:key:zOther"})))
+          "the signer sits INSIDE the hashed body — claiming another actor changes the hash"))))
 
 (deftest degenerate-runs
   (testing "a run with no serving assignments pays the head, not /0"

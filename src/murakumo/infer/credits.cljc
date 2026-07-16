@@ -145,20 +145,33 @@
   "A verifiable inference receipt — the blockchain-facing artifact. Pure data:
    the settled run + the shard-verification reports (kotodama.inference.shard
    rank reports: owned bytes, contract tensors byte-checked) + the previous
-   receipt's hash, ready for the actor's kotoba key (CACAO) to sign and for a
-   chain gateway to mint against. No consensus here: tamper-evidence comes
-   from the hash chain + signature, disputes replay the feed."
-  [{:keys [settled shard-reports prev-hash hash-fn]}]
-  (let [body {:receipt/v 1
+   receipt's hash, SIGNED by the acting node's kotoba key. No consensus here:
+   tamper-evidence comes from the hash chain + the actor signature, disputes
+   replay the feed.
+
+   :sign-fn and :signer are REQUIRED (ADR-2607995000 §7: receipts carry an
+   actor signature in addition to the hash chain — an unsigned receipt is not
+   a receipt). :signer (the actor's did) sits INSIDE the hashed body, so the
+   hash chain covers who claims the run; :receipt/sig is sign-fn over the
+   pr-str of the hashed body, so the signature covers hash + chain position
+   too. Fail-closed, same stance as ledger.witness/witness-run's :quorum-fn:
+   a missing signer never silently degrades to the old unsigned v1 shape."
+  [{:keys [settled shard-reports prev-hash hash-fn sign-fn signer]}]
+  (when-not (and sign-fn signer)
+    (throw (ex-info "receipt: :sign-fn and :signer are required — receipts must be actor-signed in addition to hash-chained (ADR-2607995000 §7)"
+                    {:signer signer :sign-fn? (some? sign-fn)})))
+  (let [body {:receipt/v 2
               :receipt/run (select-keys settled [:run/total :run/shares
                                                  :run/head :run/treasury])
               :receipt/shards (mapv #(select-keys % [:shard/rank :shard/owned-bytes
                                                      :shard/owned-tensors :shard/host
                                                      :shard/ok])
                                     shard-reports)
-              :receipt/prev (or prev-hash "genesis")}]
-    (assoc body :receipt/hash
-           (if hash-fn (hash-fn (pr-str body)) :receipt.hash/host-injected))))
+              :receipt/signer (name signer)
+              :receipt/prev (or prev-hash "genesis")}
+        hashed (assoc body :receipt/hash
+                      (if hash-fn (hash-fn (pr-str body)) :receipt.hash/host-injected))]
+    (assoc hashed :receipt/sig (sign-fn (pr-str hashed)))))
 
 (defn balances
   "Fold a run ledger (seq of settled runs or raw runs) → account balances.
