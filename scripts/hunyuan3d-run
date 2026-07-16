@@ -11,7 +11,22 @@ MODEL = os.environ.get("HUNYUAN3D_MODEL", "/home/gad/models/Hunyuan3D-2.1-shape"
 sys.path.insert(0, os.path.join(ROOT, "hy3dshape"))
 
 from PIL import Image
-from hy3dshape.pipelines import Hunyuan3DDiTFlowMatchingPipeline
+
+
+def validate_character_foreground(image):
+    """Reject compositions that cannot yield a complete humanoid reliably."""
+    alpha = image.getchannel("A")
+    bbox = alpha.point(lambda value: 255 if value >= 8 else 0).getbbox()
+    if bbox is None:
+        raise ValueError("MURAKUMO_INPUT_QUALITY:no-subject")
+    left, top, right, bottom = bbox
+    width, height = image.size
+    margin_x, margin_y = max(4, round(width * 0.015)), max(4, round(height * 0.015))
+    if left < margin_x or top < margin_y or right > width - margin_x or bottom > height - margin_y:
+        raise ValueError("MURAKUMO_INPUT_QUALITY:subject-touches-edge")
+    subject_width, subject_height = right - left, bottom - top
+    if subject_height < height * 0.55 or subject_height < subject_width * 1.25:
+        raise ValueError("MURAKUMO_INPUT_QUALITY:not-full-body-portrait")
 
 
 def main():
@@ -22,10 +37,23 @@ def main():
     p.add_argument("--output", default="hunyuan3d-output.glb")
     p.add_argument("--steps", type=int, default=20)
     p.add_argument("--octree-resolution", type=int, default=256)
+    p.add_argument("--subject-kind", choices=("object", "character"), default="object")
     args = p.parse_args()
     started = time.time()
-    pipe = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(MODEL, device="cuda")
     image = Image.open(args.image).convert("RGBA")
+    # Hunyuan's shape model expects an isolated object. Public character cards
+    # commonly contain an entire room; treating that as geometry produces the
+    # large background slabs seen in the production visual audit. Preserve an
+    # authored alpha mask, otherwise apply the official Hunyuan rembg worker
+    # and persist it so the later Paint stage uses the same foreground.
+    if image.getchannel("A").getextrema() == (255, 255):
+        from hy3dshape.rembg import BackgroundRemover
+        image = BackgroundRemover()(image)
+        image.save(args.image)
+    if args.subject_kind == "character":
+        validate_character_foreground(image)
+    from hy3dshape.pipelines import Hunyuan3DDiTFlowMatchingPipeline
+    pipe = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(MODEL, device="cuda")
     mesh = pipe(image=image, num_inference_steps=args.steps,
                 octree_resolution=args.octree_resolution)[0]
     mesh.export(args.output)
