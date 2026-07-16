@@ -10,7 +10,9 @@ import torch
 import torch.nn.functional as functional
 
 ROOT = pathlib.Path(os.environ.get("HUNYUAN3D_ROOT", "/home/gad/src/Hunyuan3D-2.1"))
-QUERY_CHUNK = int(os.environ.get("HUNYUAN3D_PAINT_QUERY_CHUNK", "4096"))
+QUERY_CHUNK = int(os.environ.get("HUNYUAN3D_PAINT_QUERY_CHUNK", "2048"))
+DEFAULT_VIEWS = int(os.environ.get("HUNYUAN3D_PAINT_VIEWS", "4"))
+DEFAULT_RESOLUTION = int(os.environ.get("HUNYUAN3D_PAINT_RESOLUTION", "256"))
 sys.path.insert(0, str(ROOT / "hy3dpaint"))
 
 
@@ -41,8 +43,8 @@ def main():
     parser.add_argument("--input", required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--views", type=int, default=6)
-    parser.add_argument("--resolution", type=int, default=512)
+    parser.add_argument("--views", type=int, default=DEFAULT_VIEWS)
+    parser.add_argument("--resolution", type=int, default=DEFAULT_RESOLUTION)
     args = parser.parse_args()
 
     os.chdir(ROOT)
