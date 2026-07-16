@@ -1,0 +1,82 @@
+#!/usr/bin/env python3
+"""Synthesize Piper WAV plus provider-timed VRM visemes from ONNX alignments."""
+
+import argparse
+import json
+import pathlib
+import wave
+
+from piper.voice import PiperVoice
+from piper.config import SynthesisConfig
+
+
+VOWELS = {
+    "aa": set("aɑɐæʌɒɶ"),
+    "ee": set("eɛɜɞøœiɪyʏ"),
+    "ou": set("uʊɯɰ"),
+    "oh": set("oɔɵɤ"),
+    "ih": set("ɨɩɘəɚ"),
+}
+
+
+def viseme_for(phoneme):
+    for viseme, symbols in VOWELS.items():
+        if any(symbol in phoneme for symbol in symbols):
+            return viseme
+    return "sil"
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--text", required=True)
+    parser.add_argument("--speed", required=True, type=float)
+    parser.add_argument("--emotion", required=True,
+                        choices=("neutral", "happy", "angry", "sad", "battle"))
+    parser.add_argument("--allow-missing-alignments", action="store_true")
+    args = parser.parse_args()
+    pathlib.Path(args.output + ".visemes.json").unlink(missing_ok=True)
+
+    voice = PiperVoice.load(args.model, config_path=args.config, download_dir=pathlib.Path(args.model).parent)
+    profiles = {
+        "neutral": (1.00, .667, .800, 1.00),
+        "happy": (.92, .760, .900, 1.08),
+        "angry": (.88, .820, .950, 1.12),
+        "sad": (1.15, .560, .700, .92),
+        "battle": (.82, .850, 1.000, 1.15),
+    }
+    tempo, noise, noise_w, volume = profiles[args.emotion]
+    config = SynthesisConfig(length_scale=tempo / args.speed, noise_scale=noise,
+                             noise_w_scale=noise_w, volume=volume)
+    chunks = list(voice.synthesize(args.text, syn_config=config, include_alignments=True))
+    if not chunks:
+        raise RuntimeError("Piper model returned no audio")
+    aligned = all(chunk.phoneme_alignments for chunk in chunks)
+    if not aligned and not args.allow_missing_alignments:
+        raise RuntimeError("Piper model did not return phoneme alignments")
+
+    cues, elapsed_samples, previous = [], 0, None
+    with wave.open(args.output, "wb") as output:
+        output.setnchannels(chunks[0].sample_channels)
+        output.setsampwidth(chunks[0].sample_width)
+        output.setframerate(chunks[0].sample_rate)
+        for chunk in chunks:
+            for alignment in chunk.phoneme_alignments or []:
+                viseme = viseme_for(alignment.phoneme)
+                if viseme != previous and len(cues) < 256:
+                    cues.append({"timeMs": round(elapsed_samples * 1000 / chunk.sample_rate, 2),
+                                 "viseme": viseme, "weight": 0.18 if viseme == "sil" else 0.86})
+                    previous = viseme
+                elapsed_samples += int(alignment.num_samples)
+            output.writeframes(chunk.audio_int16_bytes)
+
+    if aligned:
+        pathlib.Path(args.output + ".visemes.json").write_text(json.dumps({
+            "schema": "kotoba.viseme-timeline/v1", "timingSource": "piper-phoneme-alignment/v1",
+            "cues": cues}))
+
+
+if __name__ == "__main__":
+    main()

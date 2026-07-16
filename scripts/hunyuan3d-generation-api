@@ -1,23 +1,52 @@
 #!/usr/bin/env python3
-"""Small async Murakumo photo-to-GLB API for the verified gad ROCm runner."""
+"""Async Murakumo verified model, voice, motion and bounded effect artifact API."""
 import base64
+import hashlib
 import json
+import math
 import os
 import pathlib
+import signal
 import subprocess
 import threading
+import time
+import urllib.request
 import uuid
+import wave
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 ROOT = pathlib.Path(os.environ.get("MURAKUMO_GENERATION_DIR", "/home/gad/.murakumo/generation"))
 RUNNER = os.environ.get("HUNYUAN3D_RUNNER", "/home/gad/.murakumo/bin/hunyuan3d-run-rocm")
 POSTPROCESSOR = os.environ.get("MURAKUMO_3D_POSTPROCESSOR", "")
 PAINT_RUNNER = os.environ.get("HUNYUAN3D_PAINT_RUNNER", "")
+TTS_RUNNER = os.environ.get("MURAKUMO_TTS_RUNNER", "")
+VISEME_RUNNER = os.environ.get("MURAKUMO_VISEME_RUNNER", "")
+TTS_SPEAKER_VERSION = os.environ.get("MURAKUMO_TTS_SPEAKER_VERSION", "provider-default-v1")
+MOTION_RUNNER = os.environ.get("MURAKUMO_MOTION_RUNNER", "")
+EFFECT_RUNNER = os.environ.get("MURAKUMO_EFFECT_RUNNER", "")
+SOUND_RUNNER = os.environ.get("MURAKUMO_SOUND_RUNNER", "")
+COMFY_URL = os.environ.get("MURAKUMO_COMFY_URL", "").rstrip("/")
 TOKEN = os.environ.get("MURAKUMO_GENERATION_TOKEN", "")
 PUBLIC_BASE = os.environ.get("MURAKUMO_GENERATION_PUBLIC_BASE", "http://127.0.0.1:8081").rstrip("/")
 jobs = {}
 lock = threading.Lock()
+processes = {}
+cancelled_jobs = set()
+VOICE_LOCALES = {"ja-JP", "en-US", "ar-SA", "hi-IN", "zh-CN", "es-ES", "fr-FR"}
+VOICE_EMOTIONS = {"neutral", "happy", "angry", "sad", "battle"}
+VRM_BONES = {"hips", "spine", "chest", "upperChest", "neck", "head",
+             "leftUpperArm", "leftLowerArm", "leftHand", "rightUpperArm", "rightLowerArm", "rightHand",
+             "leftUpperLeg", "leftLowerLeg", "leftFoot", "leftToes",
+             "rightUpperLeg", "rightLowerLeg", "rightFoot", "rightToes"}
+EFFECT_PRESETS = {"hearts", "sparkle", "burst", "confetti", "embers", "soft-rain"}
+SOUND_KINDS = {"sfx", "ambience", "music"}
+IMAGE_MODELS = {"animagine-xl-4.0": "animagine-xl-4.0.safetensors"}
+IMAGE_DEFAULT_MODEL = "animagine-xl-4.0"
+IMAGE_SIZES = {512, 640, 768, 832, 896, 1024, 1152, 1216, 1280, 1344}
+IMAGE_DEFAULT_NEGATIVE = "lowres, bad anatomy, bad hands, worst quality"
+VRM_VISEMES = {"aa", "ih", "ou", "ee", "oh", "sil"}
 
 
 def save():
@@ -25,19 +54,284 @@ def save():
     (ROOT / "jobs.json").write_text(json.dumps(jobs, ensure_ascii=False))
 
 
-def run_job(job_id, image, params):
+class JobCancelled(RuntimeError):
+    pass
+
+
+def run_process(job_id, command, timeout, env=None):
+    with lock:
+        if job_id in cancelled_jobs:
+            raise JobCancelled("generation job was cancelled")
+    process = subprocess.Popen(command, text=True, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, env=env, start_new_session=True)
+    with lock:
+        if job_id in cancelled_jobs:
+            terminate_process(process)
+        processes[job_id] = process
+    try:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            terminate_process(process, force=True)
+            stdout, stderr = process.communicate()
+            raise RuntimeError("generation runner timed out")
+        with lock:
+            if job_id in cancelled_jobs:
+                raise JobCancelled("generation job was cancelled")
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    finally:
+        with lock:
+            if processes.get(job_id) is process:
+                processes.pop(job_id, None)
+
+
+def cancel_job(job_id):
+    with lock:
+        job = jobs.get(job_id)
+        if not job:
+            return None
+        if job.get("status") in ("done", "failed", "cancelled"):
+            return job
+        cancelled_jobs.add(job_id)
+        job.update(status="cancelled", progress=100, error="cancelled-by-owner")
+        process = processes.get(job_id)
+        save()
+    if process and process.poll() is None:
+        terminate_process(process)
+    return job
+
+
+def terminate_process(process, force=False):
+    """Stop the runner and descendants so detached GPU work cannot survive cancellation."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        if process.poll() is None:
+            (process.kill if force else process.terminate)()
+
+
+def validate_voice_request(inputs, params):
+    text = inputs.get("text")
+    if not isinstance(text, str) or not text.strip() or len(text) > 2000:
+        raise ValueError("input.text must contain 1-2000 characters")
+    if not TTS_RUNNER:
+        raise ValueError("voice output requires the configured TTS runner")
+    if params.get("locale") not in VOICE_LOCALES:
+        raise ValueError("params.locale is unsupported")
+    if params.get("emotion", "neutral") not in VOICE_EMOTIONS:
+        raise ValueError("params.emotion is unsupported")
+    speed = params.get("speed", 1.0)
+    if not isinstance(speed, (int, float)) or isinstance(speed, bool) or not math.isfinite(speed) or not .5 <= speed <= 2:
+        raise ValueError("params.speed must be between 0.5 and 2")
+    return text
+
+
+def read_voice_provider_metadata(out):
+    sidecar = pathlib.Path(str(out) + ".metadata.json")
+    if not sidecar.is_file():
+        return None
+    try:
+        document = json.loads(sidecar.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("TTS runner returned invalid provider metadata") from exc
+    if document.get("schema") != "kotoba.voice-provider/v1":
+        raise RuntimeError("TTS runner returned unsupported provider metadata")
+    engine = document.get("engine")
+    if engine not in {"piper", "espeak-ng", "voicevox"}:
+        raise RuntimeError("TTS runner returned unsupported voice engine")
+    values = {key: document.get(key) for key in ("speaker", "version", "modelLicense")}
+    if any(not isinstance(value, str) or not value or len(value) > 96
+           or any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._@+-" for char in value)
+           for value in values.values()):
+        raise RuntimeError("TTS runner returned invalid provider identity")
+    timing_source = document.get("timingSource")
+    if timing_source is not None and timing_source not in {
+            "piper-phoneme-alignment/v1", "duration-derived/v1"}:
+        raise RuntimeError("TTS runner returned unsupported timing source")
+    prosody_source = document.get("prosodySource")
+    if prosody_source is not None and prosody_source not in {
+            "piper-synthesis-config/v1", "espeak-prosody/v1", "voicevox-style/v1"}:
+        raise RuntimeError("TTS runner returned unsupported prosody source")
+    preset = document.get("prosodyPreset")
+    rate = document.get("speakingRate")
+    if ((preset is not None and preset not in VOICE_EMOTIONS)
+            or (rate is not None and (not isinstance(rate, (int, float)) or isinstance(rate, bool)
+                                      or not math.isfinite(rate) or not .5 <= rate <= 2))):
+        raise RuntimeError("TTS runner returned invalid prosody metadata")
+    return {"engine": engine, **values, "timingSource": timing_source,
+            "prosodySource": prosody_source, "prosodyPreset": preset, "speakingRate": rate}
+
+
+def validate_viseme_timeline(document, duration_ms):
+    if not isinstance(document, dict) or document.get("schema") != "kotoba.viseme-timeline/v1":
+        raise RuntimeError("viseme runner returned an unsupported schema")
+    cues = document.get("cues")
+    if not isinstance(cues, list) or len(cues) > 256:
+        raise RuntimeError("viseme runner returned an invalid cue list")
+    previous = -1
+    normalized = []
+    for cue in cues:
+        time_ms = cue.get("timeMs") if isinstance(cue, dict) else None
+        viseme = cue.get("viseme") if isinstance(cue, dict) else None
+        weight = cue.get("weight", 1.0) if isinstance(cue, dict) else None
+        if (not isinstance(time_ms, (int, float)) or isinstance(time_ms, bool)
+                or time_ms < previous or time_ms < 0 or time_ms > duration_ms
+                or viseme not in VRM_VISEMES
+                or not isinstance(weight, (int, float)) or isinstance(weight, bool)
+                or not math.isfinite(weight) or weight < 0 or weight > 1):
+            raise RuntimeError("viseme runner returned an invalid cue")
+        previous = time_ms
+        normalized.append({"timeMs": time_ms, "viseme": viseme, "weight": weight})
+    return {"schema": "kotoba.viseme-timeline/v1", "cues": normalized}
+
+
+def validate_motion_request(inputs, params):
+    prompt = inputs.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 500:
+        raise ValueError("input.prompt must contain 1-500 characters")
+    if not MOTION_RUNNER:
+        raise ValueError("motion output requires the configured motion runner")
+    if params.get("skeleton_profile") != "vrm-humanoid-1.0":
+        raise ValueError("params.skeleton_profile must be vrm-humanoid-1.0")
+    duration = params.get("duration_ms", 2000)
+    if not isinstance(duration, int) or isinstance(duration, bool) or not 100 <= duration <= 30000:
+        raise ValueError("params.duration_ms must be an integer from 100 to 30000")
+    return prompt
+
+
+def validate_motion_document(document, requested_duration):
+    if document.get("schema") != "kotoba.motion-clip/v1":
+        raise RuntimeError("motion runner returned an unsupported schema")
+    if document.get("skeletonProfile") != "vrm-humanoid-1.0":
+        raise RuntimeError("motion runner returned the wrong skeleton profile")
+    duration = document.get("durationMs")
+    if not isinstance(duration, (int, float)) or isinstance(duration, bool) or duration <= 0 or duration > requested_duration:
+        raise RuntimeError("motion runner returned an invalid duration")
+    tracks = document.get("tracks")
+    if not isinstance(tracks, list) or not tracks:
+        raise RuntimeError("motion runner returned no tracks")
+    changed = False
+    seen = set()
+    for track in tracks:
+        bone = track.get("bone") if isinstance(track, dict) else None
+        frames = track.get("keyframes") if isinstance(track, dict) else None
+        if bone not in VRM_BONES or bone in seen or not isinstance(frames, list) or len(frames) < 2:
+            raise RuntimeError("motion runner returned an invalid bone track")
+        seen.add(bone)
+        previous = -1
+        first_rotation = None
+        for frame in frames:
+            time_ms = frame.get("timeMs") if isinstance(frame, dict) else None
+            rotation = frame.get("rotation") if isinstance(frame, dict) else None
+            if (not isinstance(time_ms, (int, float)) or isinstance(time_ms, bool)
+                    or time_ms <= previous or time_ms < 0 or time_ms > duration
+                    or not isinstance(rotation, list) or len(rotation) != 4
+                    or not all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                               and math.isfinite(value) for value in rotation)):
+                raise RuntimeError("motion runner returned an invalid keyframe")
+            magnitude = math.sqrt(sum(value * value for value in rotation))
+            if not 0.98 <= magnitude <= 1.02:
+                raise RuntimeError("motion runner returned a non-normalized quaternion")
+            if first_rotation is None:
+                first_rotation = rotation
+            elif any(abs(a - b) > 1e-5 for a, b in zip(first_rotation, rotation)):
+                changed = True
+            previous = time_ms
+    if not changed:
+        raise RuntimeError("motion runner returned a static clip")
+    return float(duration)
+
+
+def validate_effect_request(inputs, params):
+    prompt = inputs.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 500:
+        raise ValueError("input.prompt must contain 1-500 characters")
+    if not EFFECT_RUNNER:
+        raise ValueError("effect output requires the configured effect runner")
+    duration = params.get("duration_ms", 1800)
+    if not isinstance(duration, int) or isinstance(duration, bool) or not 100 <= duration <= 5000:
+        raise ValueError("params.duration_ms must be an integer from 100 to 5000")
+    return prompt
+
+
+def validate_effect_document(document, requested_duration):
+    if document.get("schema") != "kotoba.effect-preset/v1":
+        raise RuntimeError("effect runner returned an unsupported schema")
+    if document.get("preset") not in EFFECT_PRESETS:
+        raise RuntimeError("effect runner returned an unknown preset")
+    duration = document.get("durationMs")
+    intensity = document.get("intensity")
+    particles = document.get("particles")
+    color = document.get("color")
+    if (not isinstance(duration, (int, float)) or isinstance(duration, bool)
+            or duration < 100 or duration > min(5000, requested_duration)):
+        raise RuntimeError("effect runner returned an invalid duration")
+    if (not isinstance(intensity, (int, float)) or isinstance(intensity, bool)
+            or not math.isfinite(intensity) or not 0 <= intensity <= 1):
+        raise RuntimeError("effect runner returned an invalid intensity")
+    if not isinstance(particles, int) or isinstance(particles, bool) or not 0 <= particles <= 24:
+        raise RuntimeError("effect runner returned an invalid particle count")
+    if (not isinstance(color, str) or len(color) != 7 or color[0] != "#"
+            or any(char not in "0123456789abcdefABCDEF" for char in color[1:])):
+        raise RuntimeError("effect runner returned an invalid color")
+    allowed = {"schema", "preset", "durationMs", "intensity", "particles", "color"}
+    if set(document) - allowed:
+        raise RuntimeError("effect runner returned unsupported executable fields")
+    return float(duration)
+
+
+def validate_sound_request(inputs, params):
+    prompt = inputs.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 500:
+        raise ValueError("input.prompt must contain 1-500 characters")
+    if not SOUND_RUNNER:
+        raise ValueError("sound output requires the configured sound runner")
+    if params.get("sound_kind") not in SOUND_KINDS:
+        raise ValueError("params.sound_kind must be sfx, ambience or music")
+    duration = params.get("duration_ms", 2000)
+    if not isinstance(duration, int) or isinstance(duration, bool) or not 100 <= duration <= 30000:
+        raise ValueError("params.duration_ms must be an integer from 100 to 30000")
+    loop = params.get("loop", False)
+    if not isinstance(loop, bool) or (loop and params["sound_kind"] == "sfx"):
+        raise ValueError("loop is allowed only for ambience or music")
+    return prompt
+
+
+def verified_wav(path, max_duration_ms):
+    data = path.read_bytes()
+    if len(data) > 16 * 1024 * 1024:
+        raise RuntimeError("sound runner artifact exceeds 16 MiB")
+    try:
+        with wave.open(str(path), "rb") as wav:
+            frames, rate = wav.getnframes(), wav.getframerate()
+            channels, sample_width = wav.getnchannels(), wav.getsampwidth()
+            duration_ms = frames * 1000.0 / rate
+    except (wave.Error, EOFError, ZeroDivisionError) as exc:
+        raise RuntimeError("sound runner returned an invalid WAV artifact") from exc
+    if (duration_ms <= 0 or duration_ms > max_duration_ms + 50
+            or channels not in (1, 2) or sample_width not in (2, 3, 4)):
+        raise RuntimeError("sound runner WAV exceeds the requested media contract")
+    return data, duration_ms, channels, sample_width * 8, rate
+
+
+def run_model3d_job(job_id, image, params):
     folder = ROOT / job_id
     folder.mkdir(parents=True, exist_ok=True)
-    src, raw, out = folder / "input.png", folder / "model-raw.glb", folder / "model.glb"
+    output_kind = params.get("output_format", "glb")
+    src, raw = folder / "input.png", folder / "model-raw.glb"
+    out = folder / ("model.vrm" if output_kind == "vrm" else "model.glb")
     try:
         encoded = image.split(",", 1)[1] if image.startswith("data:") else image
         src.write_bytes(base64.b64decode(encoded, validate=True))
         with lock:
+            if job_id in cancelled_jobs: return
             jobs[job_id].update(status="running", progress=10); save()
         cmd = [RUNNER, "--model", "hunyuan3d-2.1", "--image", str(src),
                "--output", str(raw), "--steps", str(params.get("steps", 20)),
                "--octree-resolution", str(params.get("octree_resolution", 256))]
-        completed = subprocess.run(cmd, text=True, capture_output=True, timeout=1800)
+        if output_kind == "vrm":
+            cmd += ["--subject-kind", "character"]
+        completed = run_process(job_id, cmd, 1800)
         if completed.returncode:
             raise RuntimeError(completed.stderr[-4000:] or completed.stdout[-4000:])
         capabilities = ["shape"]
@@ -45,9 +339,8 @@ def run_job(job_id, image, params):
         officially_painted = False
         if PAINT_RUNNER and params.get("paint", True):
             painted = folder / "model-hy3dpaint-pbr.glb"
-            paint = subprocess.run([PAINT_RUNNER, "--input", str(raw), "--image", str(src),
-                                    "--output", str(painted)],
-                                   text=True, capture_output=True, timeout=3600)
+            paint = run_process(job_id, [PAINT_RUNNER, "--input", str(raw), "--image", str(src),
+                                         "--output", str(painted)], 3600)
             if paint.returncode:
                 raise RuntimeError("Hunyuan3D Paint failed: " +
                                    (paint.stderr[-4000:] or paint.stdout[-4000:]))
@@ -56,23 +349,387 @@ def run_job(job_id, image, params):
             capabilities += ["pbr", "material", "multiview-texture"]
         if POSTPROCESSOR and params.get("postprocess", True):
             post_env = dict(os.environ, MURAKUMO_OFFICIAL_PAINTED="1" if officially_painted else "0")
-            post = subprocess.run([POSTPROCESSOR, "--input", str(postprocess_input), "--image", str(src),
-                                   "--output", str(out), "--asset-dir", str(folder)],
-                                  text=True, capture_output=True, timeout=900, env=post_env)
+            post = run_process(job_id, [POSTPROCESSOR, "--input", str(postprocess_input), "--image", str(src),
+                                        "--output", str(out), "--asset-dir", str(folder)], 900, env=post_env)
             if post.returncode:
                 raise RuntimeError("3D postprocess failed: " + (post.stderr[-4000:] or post.stdout[-4000:]))
             capabilities += ["auto-rig", "skin-weights", "motion", "morph-targets"]
+            if output_kind == "vrm": capabilities += ["vrm-1.0", "humanoid"]
         else:
             raw.replace(out)
         artifact = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}/artifact"
+        content_hash = "sha256:" + hashlib.sha256(out.read_bytes()).hexdigest()
+        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         with lock:
+            if job_id in cancelled_jobs: return
             jobs[job_id].update(status="done", progress=100, artifactUrl=artifact,
-                                artifacts=[{"kind": "glb", "url": artifact,
+                                outputKind=output_kind,
+                                artifacts=[{"kind": output_kind, "url": artifact,
                                             "bytes": out.stat().st_size,
+                                            "contentHash": content_hash,
+                                            "provenance": f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}",
+                                            "license": params.get("license", "proprietary"),
+                                            "generatedAt": generated_at,
                                             "capabilities": capabilities}],
                                 capabilities=capabilities); save()
+    except JobCancelled:
+        return
     except Exception as exc:
         with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
+
+
+def run_voice_job(job_id, text, params):
+    folder = ROOT / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / "voice.wav"
+    locale = params["locale"]
+    try:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="running", progress=10); save()
+        command = [TTS_RUNNER, "--text", text, "--locale", locale, "--output", str(out)]
+        if params.get("voice"): command += ["--voice", str(params["voice"])]
+        command += ["--emotion", params.get("emotion", "neutral"),
+                    "--speed", str(params.get("speed", 1.0))]
+        completed = run_process(job_id, command, 300)
+        if completed.returncode:
+            raise RuntimeError("TTS failed: " + (completed.stderr[-4000:] or completed.stdout[-4000:]))
+        data = out.read_bytes()
+        try:
+            with wave.open(str(out), "rb") as wav:
+                frames, rate = wav.getnframes(), wav.getframerate()
+                duration_ms = frames * 1000.0 / rate
+        except (wave.Error, EOFError, ZeroDivisionError) as exc:
+            raise RuntimeError("TTS runner returned an invalid WAV artifact") from exc
+        if duration_ms <= 0:
+            raise RuntimeError("TTS runner returned an empty WAV artifact")
+        provider = read_voice_provider_metadata(out)
+        visemes = None
+        viseme_timing_source = None
+        provider_viseme_out = pathlib.Path(str(out) + ".visemes.json")
+        if provider_viseme_out.is_file():
+            try:
+                visemes = validate_viseme_timeline(json.loads(provider_viseme_out.read_text()), duration_ms)
+                viseme_timing_source = (provider or {}).get("timingSource")
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError("TTS runner returned invalid provider viseme JSON") from exc
+        elif VISEME_RUNNER:
+            viseme_out = folder / "visemes.json"
+            viseme_command = [VISEME_RUNNER, "--audio", str(out), "--text", text,
+                              "--locale", locale, "--output", str(viseme_out)]
+            viseme_completed = run_process(job_id, viseme_command, 120)
+            if viseme_completed.returncode:
+                raise RuntimeError("viseme extraction failed: "
+                                   + (viseme_completed.stderr[-4000:] or viseme_completed.stdout[-4000:]))
+            try:
+                visemes = validate_viseme_timeline(json.loads(viseme_out.read_text()), duration_ms)
+                viseme_timing_source = "duration-derived/v1"
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError("viseme runner returned invalid JSON") from exc
+        artifact = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}/artifact"
+        content_hash = "sha256:" + hashlib.sha256(data).hexdigest()
+        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        speaker_id = provider["speaker"] if provider else str(params.get("voice") or "default")
+        speaker_version = provider["version"] if provider else str(params.get("speaker_version") or TTS_SPEAKER_VERSION)
+        capabilities = ["voice", "tts", "wav", f"locale:{locale}",
+                        f"speaker:{speaker_id}@{speaker_version}"]
+        if provider:
+            capabilities += [f"tts-engine:{provider['engine']}",
+                             f"model-license:{provider['modelLicense']}"]
+        if visemes is not None:
+            capabilities.append("visemes:kotoba.viseme-timeline/v1")
+        if viseme_timing_source:
+            capabilities.append(f"viseme-timing:{viseme_timing_source}")
+        if provider and provider.get("prosodySource"):
+            capabilities += [f"prosody:{provider['prosodySource']}",
+                             f"emotion:{provider['prosodyPreset']}"]
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="done", progress=100, artifactUrl=artifact,
+                                outputKind="wav", locale=locale, capabilities=capabilities,
+                                speaker={"id": speaker_id, "version": speaker_version},
+                                voiceProvider=provider,
+                                visemeTimingSource=viseme_timing_source,
+                                visemes=visemes,
+                                artifacts=[{"kind": "wav", "url": artifact, "bytes": len(data),
+                                            "contentHash": content_hash,
+                                            "provenance": f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}",
+                                            "license": params.get("license", "proprietary"),
+                                            "generatedAt": generated_at, "locale": locale,
+                                            "durationMs": duration_ms,
+                                            "speaker": {"id": speaker_id, "version": speaker_version},
+                                            "voiceProvider": provider,
+                                            "visemeTimingSource": viseme_timing_source,
+                                            "visemes": visemes,
+                                            "capabilities": capabilities}]); save()
+    except JobCancelled:
+        return
+    except Exception as exc:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
+
+
+def run_motion_job(job_id, prompt, params):
+    folder = ROOT / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / "motion.json"
+    try:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="running", progress=10); save()
+        command = [MOTION_RUNNER, "--prompt", prompt,
+                   "--skeleton-profile", params["skeleton_profile"],
+                   "--duration-ms", str(params.get("duration_ms", 2000)), "--output", str(out)]
+        completed = run_process(job_id, command, 300)
+        if completed.returncode:
+            raise RuntimeError("motion generation failed: " + (completed.stderr[-4000:] or completed.stdout[-4000:]))
+        if out.stat().st_size > 4 * 1024 * 1024:
+            raise RuntimeError("motion runner artifact exceeds 4 MiB")
+        data = out.read_bytes()
+        try:
+            document = json.loads(data)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("motion runner returned invalid JSON") from exc
+        duration_ms = validate_motion_document(document, params.get("duration_ms", 2000))
+        artifact = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}/artifact"
+        content_hash = "sha256:" + hashlib.sha256(data).hexdigest()
+        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        profile = params["skeleton_profile"]
+        capabilities = ["motion", "humanoid", f"skeleton:{profile}"]
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="done", progress=100, artifactUrl=artifact,
+                                outputKind="motion-json", skeletonProfile=profile,
+                                durationMs=duration_ms, capabilities=capabilities,
+                                artifacts=[{"kind": "motion-json", "url": artifact, "bytes": len(data),
+                                            "contentHash": content_hash,
+                                            "provenance": f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}",
+                                            "license": params.get("license", "proprietary"),
+                                            "generatedAt": generated_at, "durationMs": duration_ms,
+                                            "skeletonProfile": profile, "capabilities": capabilities}]); save()
+    except JobCancelled:
+        return
+    except Exception as exc:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
+
+
+def run_effect_job(job_id, prompt, params):
+    folder = ROOT / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / "effect.json"
+    try:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="running", progress=10); save()
+        command = [EFFECT_RUNNER, "--prompt", prompt,
+                   "--duration-ms", str(params.get("duration_ms", 1800)), "--output", str(out)]
+        completed = run_process(job_id, command, 120)
+        if completed.returncode:
+            raise RuntimeError("effect generation failed: " + (completed.stderr[-4000:] or completed.stdout[-4000:]))
+        if out.stat().st_size > 64 * 1024:
+            raise RuntimeError("effect runner artifact exceeds 64 KiB")
+        data = out.read_bytes()
+        try:
+            document = json.loads(data)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("effect runner returned invalid JSON") from exc
+        duration_ms = validate_effect_document(document, params.get("duration_ms", 1800))
+        artifact = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}/artifact"
+        content_hash = "sha256:" + hashlib.sha256(data).hexdigest()
+        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        capabilities = ["effect", "bounded-preset", f"preset:{document['preset']}"]
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="done", progress=100, artifactUrl=artifact,
+                                outputKind="effect-json", durationMs=duration_ms,
+                                capabilities=capabilities,
+                                artifacts=[{"kind": "effect-json", "url": artifact, "bytes": len(data),
+                                            "contentHash": content_hash,
+                                            "provenance": f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}",
+                                            "license": params.get("license", "proprietary"),
+                                            "generatedAt": generated_at, "durationMs": duration_ms,
+                                            "capabilities": capabilities}]); save()
+    except JobCancelled:
+        return
+    except Exception as exc:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
+
+
+def run_sound_job(job_id, prompt, params):
+    folder = ROOT / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / "sound.wav"
+    kind, requested = params["sound_kind"], params.get("duration_ms", 2000)
+    looped = params.get("loop", False)
+    try:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="running", progress=10); save()
+        command = [SOUND_RUNNER, "--prompt", prompt, "--kind", kind,
+                   "--duration-ms", str(requested), "--output", str(out)]
+        if looped: command.append("--loop")
+        completed = run_process(job_id, command, 300)
+        if completed.returncode:
+            raise RuntimeError("sound generation failed: " + (completed.stderr[-4000:] or completed.stdout[-4000:]))
+        data, duration_ms, channels, bit_depth, sample_rate = verified_wav(out, requested)
+        loop_start_ms, loop_end_ms = (0, duration_ms) if looped else (None, None)
+        artifact = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}/artifact"
+        content_hash = "sha256:" + hashlib.sha256(data).hexdigest()
+        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        capabilities = ["sound", "wav", f"sound-kind:{kind}"] + (["loop"] if looped else [])
+        metadata = {"kind": "sound-wav", "url": artifact, "bytes": len(data),
+                    "contentHash": content_hash,
+                    "provenance": f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}",
+                    "license": params.get("license", "proprietary"),
+                    "generatedAt": generated_at, "durationMs": duration_ms,
+                    "soundKind": kind, "loop": looped, "channels": channels,
+                    "bitDepth": bit_depth, "sampleRate": sample_rate,
+                    "capabilities": capabilities}
+        if looped:
+            metadata.update(loopStartMs=loop_start_ms, loopEndMs=loop_end_ms)
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="done", progress=100, artifactUrl=artifact,
+                                outputKind="sound-wav", soundKind=kind, durationMs=duration_ms,
+                                loop=looped, capabilities=capabilities,
+                                artifacts=[metadata]); save()
+    except JobCancelled:
+        return
+    except Exception as exc:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
+
+
+
+def validate_image_request(inputs, params):
+    prompt = inputs.get("prompt")
+    if not isinstance(prompt, str) or not 1 <= len(prompt) <= 2000:
+        raise ValueError("input.prompt must contain 1-2000 characters")
+    if not COMFY_URL:
+        raise ValueError("image output requires the configured ComfyUI backend")
+    if params.get("model", IMAGE_DEFAULT_MODEL) not in IMAGE_MODELS:
+        raise ValueError("params.model is unsupported")
+    for side in ("width", "height"):
+        if params.get(side, 1024) not in IMAGE_SIZES:
+            raise ValueError(f"params.{side} is unsupported")
+    steps = params.get("steps", 25)
+    if not isinstance(steps, int) or isinstance(steps, bool) or not 1 <= steps <= 50:
+        raise ValueError("params.steps must be an integer from 1 to 50")
+    negative = params.get("negative_prompt", "")
+    if not isinstance(negative, str) or len(negative) > 2000:
+        raise ValueError("params.negative_prompt must be at most 2000 characters")
+    seed = params.get("seed", 0)
+    if not isinstance(seed, int) or isinstance(seed, bool) or not 0 <= seed < 2 ** 53:
+        raise ValueError("params.seed must be a non-negative integer")
+    return prompt
+
+
+def comfy_image_graph(prompt, params):
+    """The same minimal CheckpointLoader/KSampler/VAEDecode graph cloud-murakumo's
+    engine.cljc and gad's comfy_openai_bridge.py use — kept boring on purpose."""
+    ckpt = IMAGE_MODELS[params.get("model", IMAGE_DEFAULT_MODEL)]
+    seed = params.get("seed", 0) or int.from_bytes(os.urandom(4), "big")
+    return {
+        "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt}},
+        "5": {"class_type": "EmptyLatentImage",
+              "inputs": {"width": params.get("width", 1024),
+                         "height": params.get("height", 1024), "batch_size": 1}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["4", 1]}},
+        "7": {"class_type": "CLIPTextEncode",
+              "inputs": {"text": params.get("negative_prompt") or IMAGE_DEFAULT_NEGATIVE,
+                         "clip": ["4", 1]}},
+        "3": {"class_type": "KSampler",
+              "inputs": {"seed": seed, "steps": params.get("steps", 25), "cfg": 5.0,
+                         "sampler_name": "euler_ancestral", "scheduler": "normal",
+                         "denoise": 1.0, "model": ["4", 0], "positive": ["6", 0],
+                         "negative": ["7", 0], "latent_image": ["5", 0]}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+        "9": {"class_type": "SaveImage",
+              "inputs": {"filename_prefix": "murakumo-gen", "images": ["8", 0]}},
+    }
+
+
+def comfy_json(method, path, payload=None, timeout=30):
+    request = urllib.request.Request(
+        COMFY_URL + path, method=method,
+        data=json.dumps(payload).encode() if payload is not None else None,
+        headers={"content-type": "application/json"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode())
+
+
+def run_image_job(job_id, prompt, params):
+    folder = ROOT / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / "image.png"
+    try:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="running", progress=10); save()
+        submitted = comfy_json("POST", "/prompt",
+                               {"prompt": comfy_image_graph(prompt, params)})
+        prompt_id = submitted.get("prompt_id")
+        if not prompt_id:
+            raise RuntimeError("ComfyUI rejected the image graph: "
+                               + json.dumps(submitted)[:2000])
+        deadline = time.monotonic() + 300
+        images = None
+        while time.monotonic() < deadline:
+            with lock:
+                if job_id in cancelled_jobs: return
+            entry = comfy_json("GET", f"/history/{prompt_id}").get(prompt_id) or {}
+            status = entry.get("status") or {}
+            if status.get("status_str") == "error":
+                raise RuntimeError("ComfyUI image job failed")
+            if status.get("completed"):
+                images = [image for node in (entry.get("outputs") or {}).values()
+                          for image in node.get("images", [])]
+                break
+            time.sleep(1.0)
+        if images is None:
+            raise RuntimeError("timed out waiting for ComfyUI")
+        if not images:
+            raise RuntimeError("ComfyUI returned no images")
+        first = images[0]
+        query = urlencode({"filename": first.get("filename", ""),
+                           "subfolder": first.get("subfolder", ""),
+                           "type": first.get("type", "output")})
+        with urllib.request.urlopen(COMFY_URL + "/view?" + query, timeout=60) as response:
+            data = response.read()
+        if not data.startswith(b"\x89PNG"):
+            raise RuntimeError("ComfyUI returned a non-PNG artifact")
+        out.write_bytes(data)
+        artifact = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}/artifact"
+        content_hash = "sha256:" + hashlib.sha256(data).hexdigest()
+        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        model = params.get("model", IMAGE_DEFAULT_MODEL)
+        capabilities = ["image", "png", f"model:{model}"]
+        metadata = {"kind": "png", "url": artifact, "bytes": len(data),
+                    "contentHash": content_hash,
+                    "provenance": f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}",
+                    "license": params.get("license", "proprietary"),
+                    "generatedAt": generated_at,
+                    "width": params.get("width", 1024),
+                    "height": params.get("height", 1024),
+                    "model": model, "capabilities": capabilities}
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="done", progress=100, artifactUrl=artifact,
+                                outputKind="png", capabilities=capabilities,
+                                artifacts=[metadata]); save()
+    except JobCancelled:
+        return
+    except Exception as exc:
+        with lock:
+            if job_id in cancelled_jobs: return
             jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
 
 
@@ -89,7 +746,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(204); self.send_header("access-control-allow-origin", "*")
-        self.send_header("access-control-allow-methods", "GET,POST,OPTIONS")
+        self.send_header("access-control-allow-methods", "GET,POST,DELETE,OPTIONS")
         self.send_header("access-control-allow-headers", "authorization,content-type"); self.end_headers()
 
     def do_POST(self):
@@ -97,30 +754,95 @@ class Handler(BaseHTTPRequestHandler):
         if self.path != "/v1/generation": return self.send_json(404, {"error": "not-found"})
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))))
-            if body.get("type") != "model3d": raise ValueError("only model3d is currently supported")
-            image = (body.get("input") or {}).get("image")
-            if not image: raise ValueError("input.image is required")
+            kind = body.get("type")
+            if kind not in ("model3d", "image", "voice", "motion", "effect", "sound"):
+                raise ValueError("type must be model3d, image, voice, motion, effect or sound")
+            inputs = body.get("input") or {}
+            params = body.get("params") or {}
+            if params.get("license", "proprietary") not in ("cc0", "cc-by", "cc-by-sa", "public-domain", "proprietary"):
+                raise ValueError("params.license is invalid")
+            if kind == "model3d":
+                source = inputs.get("image")
+                if not source: raise ValueError("input.image is required")
+                output_kind = params.get("output_format", "glb")
+                if output_kind not in ("glb", "vrm"): raise ValueError("params.output_format must be glb or vrm")
+                if output_kind == "vrm" and (not POSTPROCESSOR or not params.get("postprocess", True)):
+                    raise ValueError("VRM output requires the configured postprocessor")
+                target = run_model3d_job
+            elif kind == "image":
+                source = validate_image_request(inputs, params)
+                output_kind = "png"
+                target = run_image_job
+            elif kind == "voice":
+                source = validate_voice_request(inputs, params)
+                output_kind = "wav"
+                target = run_voice_job
+            elif kind == "motion":
+                source = validate_motion_request(inputs, params)
+                output_kind = "motion-json"
+                target = run_motion_job
+            elif kind == "effect":
+                source = validate_effect_request(inputs, params)
+                output_kind = "effect-json"
+                target = run_effect_job
+            else:
+                source = validate_sound_request(inputs, params)
+                output_kind = "sound-wav"
+                target = run_sound_job
             job_id = uuid.uuid4().hex
             status_url = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}"
             jobs[job_id] = {"jobId": job_id, "status": "queued", "progress": 1,
-                            "statusUrl": status_url, "artifacts": []}; save()
-            threading.Thread(target=run_job, args=(job_id, image, body.get("params") or {}), daemon=True).start()
+                            "statusUrl": status_url, "outputKind": output_kind,
+                            "artifacts": []}; save()
+            threading.Thread(target=target, args=(job_id, source, params), daemon=True).start()
             self.send_json(202, jobs[job_id])
         except Exception as exc: self.send_json(400, {"error": "invalid-request", "message": str(exc)})
 
     def do_GET(self):
-        if self.path == "/healthz": return self.send_json(200, {"status": "ok", "runtime": "hunyuan3d-rocm"})
+        if self.path == "/healthz":
+            capabilities = ["model3d"]
+            if POSTPROCESSOR: capabilities.append("vrm")
+            if TTS_RUNNER: capabilities.append("voice")
+            if MOTION_RUNNER: capabilities.append("motion")
+            if EFFECT_RUNNER: capabilities.append("effect")
+            if SOUND_RUNNER: capabilities.append("sound")
+            if COMFY_URL: capabilities.append("image")
+            return self.send_json(200, {"status": "ok", "runtime": "murakumo-generation",
+                                        "capabilities": capabilities,
+                                        "voiceLocales": sorted(VOICE_LOCALES) if TTS_RUNNER else []})
         if not self.authorized(): return self.send_json(401, {"error": "unauthorized"})
         parts = urlparse(self.path).path.strip("/").split("/")
         if len(parts) < 4 or parts[:3] != ["v1", "generation", "jobs"]:
             return self.send_json(404, {"error": "not-found"})
+        if len(parts) not in (4, 5) or (len(parts) == 5 and parts[4] != "artifact"):
+            return self.send_json(404, {"error": "not-found"})
         job = jobs.get(parts[3])
         if not job: return self.send_json(404, {"error": "job-not-found"})
-        if len(parts) == 5 and parts[4] == "artifact":
-            path = ROOT / parts[3] / "model.glb"
+        if len(parts) == 5:
+            output_kind = job.get("outputKind")
+            path = ROOT / parts[3] / ({"vrm": "model.vrm", "glb": "model.glb", "wav": "voice.wav",
+                                      "motion-json": "motion.json", "effect-json": "effect.json",
+                                      "sound-wav": "sound.wav", "png": "image.png"}.get(output_kind, "artifact.bin"))
             if job["status"] != "done" or not path.exists(): return self.send_json(409, {"error": "not-ready"})
-            data = path.read_bytes(); self.send_response(200); self.send_header("content-type", "model/gltf-binary")
+            data = path.read_bytes(); self.send_response(200)
+            content_type = {"wav": "audio/wav", "motion-json": "application/vnd.kotoba.motion+json",
+                            "effect-json": "application/vnd.kotoba.effect+json",
+                            "sound-wav": "audio/wav", "png": "image/png"}.get(
+                output_kind, "model/gltf-binary")
+            self.send_header("content-type", content_type)
+            artifact_meta = (job.get("artifacts") or [{}])[0]
+            if artifact_meta.get("contentHash"):
+                self.send_header("x-content-sha256", artifact_meta["contentHash"])
             self.send_header("content-length", str(len(data))); self.end_headers(); return self.wfile.write(data)
+        self.send_json(200, job)
+
+    def do_DELETE(self):
+        if not self.authorized(): return self.send_json(401, {"error": "unauthorized"})
+        parts = urlparse(self.path).path.strip("/").split("/")
+        if len(parts) != 4 or parts[:3] != ["v1", "generation", "jobs"]:
+            return self.send_json(404, {"error": "not-found"})
+        job = cancel_job(parts[3])
+        if not job: return self.send_json(404, {"error": "job-not-found"})
         self.send_json(200, job)
 
     def log_message(self, fmt, *args): print(fmt % args, flush=True)
