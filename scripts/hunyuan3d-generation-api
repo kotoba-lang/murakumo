@@ -46,6 +46,11 @@ IMAGE_MODELS = {"animagine-xl-4.0": "animagine-xl-4.0.safetensors"}
 IMAGE_DEFAULT_MODEL = "animagine-xl-4.0"
 IMAGE_SIZES = {512, 640, 768, 832, 896, 1024, 1152, 1216, 1280, 1344}
 IMAGE_DEFAULT_NEGATIVE = "lowres, bad anatomy, bad hands, worst quality"
+VIDEO_MODELS = {"ltx-2.3": "ltx-2.3-22b-distilled-fp8.safetensors"}
+VIDEO_DEFAULT_MODEL = "ltx-2.3"
+VIDEO_TEXT_ENCODER = "gemma_3_12B_it_fp4_mixed.safetensors"
+VIDEO_SIDE_MIN, VIDEO_SIDE_MAX = 256, 1280
+VIDEO_FRAMES_MAX = 121  # LTX wants 8n+1; 121 frames = ~5s at 24fps
 VRM_VISEMES = {"aa", "ih", "ou", "ee", "oh", "sil"}
 
 
@@ -732,6 +737,174 @@ def run_image_job(job_id, prompt, params):
             if job_id in cancelled_jobs: return
             jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
 
+def validate_video_request(inputs, params):
+    prompt = inputs.get("prompt")
+    if not isinstance(prompt, str) or not 1 <= len(prompt) <= 2000:
+        raise ValueError("input.prompt must contain 1-2000 characters")
+    if not COMFY_URL:
+        raise ValueError("video output requires the configured ComfyUI backend")
+    # ai-gftd-animeka's murakumo_video client sends duration_ms instead of a
+    # frame count — derive frames (8n+1 at 24fps) when frames is absent.
+    if "frames" not in params and isinstance(params.get("duration_ms"), int):
+        raw = max(9, round(params["duration_ms"] / 1000 * 24))
+        params["frames"] = min(VIDEO_FRAMES_MAX, (raw // 8) * 8 + 1)
+    if params.get("model", VIDEO_DEFAULT_MODEL) not in VIDEO_MODELS:
+        raise ValueError("params.model is unsupported")
+    for side in ("width", "height"):
+        value = params.get(side, 768 if side == "width" else 448)
+        if (not isinstance(value, int) or isinstance(value, bool)
+                or not VIDEO_SIDE_MIN <= value <= VIDEO_SIDE_MAX or value % 32):
+            raise ValueError(f"params.{side} must be a multiple of 32 in "
+                             f"{VIDEO_SIDE_MIN}..{VIDEO_SIDE_MAX}")
+    frames = params.get("frames", 49)
+    if (not isinstance(frames, int) or isinstance(frames, bool)
+            or not 9 <= frames <= VIDEO_FRAMES_MAX or frames % 8 != 1):
+        raise ValueError("params.frames must be 8n+1 in 9..%d" % VIDEO_FRAMES_MAX)
+    seed = params.get("seed", 0)
+    if not isinstance(seed, int) or isinstance(seed, bool) or not 0 <= seed < 2 ** 53:
+        raise ValueError("params.seed must be a non-negative integer")
+    return prompt
+
+
+def comfy_video_graph(prompt, params):
+    """LTX-2.3 distilled single-stage t2v(+native audio). Byte-faithful port of
+    the graph verified E2E through this node's comfyui.service on 2026-07-17
+    (81s, mp4 with AAC audio) — same node ids as cloud-murakumo engine.cljc
+    ltx-video-graph. Two-stage upsampler refine is deliberately absent (it dies
+    deterministically on this node, ADR-2607171100)."""
+    ckpt = VIDEO_MODELS[params.get("model", VIDEO_DEFAULT_MODEL)]
+    seed = params.get("seed", 0) or int.from_bytes(os.urandom(4), "big")
+    width = params.get("width", 768)
+    height = params.get("height", 448)
+    frames = params.get("frames", 49)
+    return {
+        "100": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt}},
+        "101": {"class_type": "LTXVAudioVAELoader", "inputs": {"ckpt_name": ckpt}},
+        "102": {"class_type": "CLIPTextEncode",
+                "inputs": {"text": ["109", 0], "clip": ["111", 0]}},
+        "103": {"class_type": "LTXVConditioning",
+                "inputs": {"positive": ["102", 0], "negative": ["102", 0],
+                           "frame_rate": ["112", 0]}},
+        "104": {"class_type": "SaveVideo",
+                "inputs": {"video": ["114", 0], "filename_prefix": "murakumo-video",
+                           "format": "auto", "codec": "auto"}},
+        "106": {"class_type": "PrimitiveInt", "inputs": {"value": 24}},
+        "109": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": prompt}},
+        "111": {"class_type": "LTXAVTextEncoderLoader",
+                "inputs": {"text_encoder": VIDEO_TEXT_ENCODER, "ckpt_name": ckpt,
+                           "device": "default"}},
+        "112": {"class_type": "PrimitiveFloat", "inputs": {"value": 24}},
+        "113": {"class_type": "PrimitiveInt", "inputs": {"value": frames}},
+        "114": {"class_type": "CreateVideo",
+                "inputs": {"images": ["119", 0], "fps": ["112", 0],
+                           "audio": ["120", 0]}},
+        "115": {"class_type": "LTXVEmptyLatentAudio",
+                "inputs": {"frames_number": ["113", 0], "frame_rate": ["106", 0],
+                           "batch_size": 1, "audio_vae": ["101", 0]}},
+        "116": {"class_type": "EmptyLTXVLatentVideo",
+                "inputs": {"width": ["122", 0], "height": ["122", 1],
+                           "length": ["113", 0], "batch_size": 1}},
+        "119": {"class_type": "VAEDecodeTiled",
+                "inputs": {"samples": ["133", 0], "vae": ["100", 2],
+                           "tile_size": 512, "overlap": 64,
+                           "temporal_size": 4096, "temporal_overlap": 8}},
+        "120": {"class_type": "LTXVAudioVAEDecode",
+                "inputs": {"samples": ["133", 1], "audio_vae": ["101", 0]}},
+        "121": {"class_type": "ImageScaleBy",
+                "inputs": {"image": ["131", 0], "upscale_method": "nearest-exact",
+                           "scale_by": 1}},
+        "122": {"class_type": "GetImageSize", "inputs": {"image": ["121", 0]}},
+        "123": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
+        "125": {"class_type": "SamplerCustomAdvanced",
+                "inputs": {"noise": ["123", 0], "guider": ["127", 0],
+                           "sampler": ["126", 0], "sigmas": ["176", 0],
+                           "latent_image": ["132", 0]}},
+        "126": {"class_type": "KSamplerSelect",
+                "inputs": {"sampler_name": "euler_ancestral"}},
+        "127": {"class_type": "CFGGuider",
+                "inputs": {"model": ["100", 0], "positive": ["103", 0],
+                           "negative": ["103", 1], "cfg": 1}},
+        "131": {"class_type": "EmptyImage",
+                "inputs": {"width": width, "height": height, "batch_size": 1,
+                           "color": 0}},
+        "132": {"class_type": "LTXVConcatAVLatent",
+                "inputs": {"video_latent": ["116", 0], "audio_latent": ["115", 0]}},
+        "133": {"class_type": "LTXVSeparateAVLatent", "inputs": {"av_latent": ["125", 1]}},
+        "176": {"class_type": "ManualSigmas",
+                "inputs": {"sigmas": "1., 0.99375, 0.9875, 0.98125, 0.975, "
+                                     "0.909375, 0.725, 0.421875, 0.0"}},
+    }
+
+
+def run_video_job(job_id, prompt, params):
+    folder = ROOT / job_id
+    folder.mkdir(parents=True, exist_ok=True)
+    out = folder / "video.mp4"
+    try:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="running", progress=10); save()
+        submitted = comfy_json("POST", "/prompt",
+                               {"prompt": comfy_video_graph(prompt, params)})
+        prompt_id = submitted.get("prompt_id")
+        if not prompt_id:
+            raise RuntimeError("ComfyUI rejected the video graph: "
+                               + json.dumps(submitted)[:2000])
+        deadline = time.monotonic() + 1800
+        clips = None
+        while time.monotonic() < deadline:
+            with lock:
+                if job_id in cancelled_jobs: return
+            entry = comfy_json("GET", f"/history/{prompt_id}").get(prompt_id) or {}
+            status = entry.get("status") or {}
+            if status.get("status_str") == "error":
+                raise RuntimeError("ComfyUI video job failed")
+            if status.get("completed"):
+                clips = [clip for node in (entry.get("outputs") or {}).values()
+                         for key in ("video", "gifs", "images")
+                         for clip in node.get(key, [])]
+                break
+            time.sleep(2.0)
+        if clips is None:
+            raise RuntimeError("timed out waiting for ComfyUI")
+        if not clips:
+            raise RuntimeError("ComfyUI returned no video output")
+        first = clips[0]
+        query = urlencode({"filename": first.get("filename", ""),
+                           "subfolder": first.get("subfolder", ""),
+                           "type": first.get("type", "output")})
+        with urllib.request.urlopen(COMFY_URL + "/view?" + query, timeout=300) as response:
+            data = response.read()
+        if len(data) < 1024:
+            raise RuntimeError("ComfyUI returned an implausibly small video artifact")
+        out.write_bytes(data)
+        artifact = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}/artifact"
+        content_hash = "sha256:" + hashlib.sha256(data).hexdigest()
+        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        model = params.get("model", VIDEO_DEFAULT_MODEL)
+        capabilities = ["video", "mp4", f"model:{model}"]
+        metadata = {"kind": "mp4", "url": artifact, "bytes": len(data),
+                    "contentHash": content_hash,
+                    "provenance": f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}",
+                    "license": params.get("license", "proprietary"),
+                    "generatedAt": generated_at,
+                    "width": params.get("width", 768),
+                    "height": params.get("height", 448),
+                    "frames": params.get("frames", 49),
+                    "model": model, "capabilities": capabilities}
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="done", progress=100, artifactUrl=artifact,
+                                outputKind="mp4", capabilities=capabilities,
+                                artifacts=[metadata]); save()
+    except JobCancelled:
+        return
+    except Exception as exc:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
+
+
 
 class Handler(BaseHTTPRequestHandler):
     def send_json(self, status, body):
@@ -755,8 +928,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("content-length", "0"))))
             kind = body.get("type")
-            if kind not in ("model3d", "image", "voice", "motion", "effect", "sound"):
-                raise ValueError("type must be model3d, image, voice, motion, effect or sound")
+            if kind not in ("model3d", "image", "voice", "motion", "effect", "sound", "video"):
+                raise ValueError("type must be model3d, image, voice, motion, effect, sound or video")
             inputs = body.get("input") or {}
             params = body.get("params") or {}
             if params.get("license", "proprietary") not in ("cc0", "cc-by", "cc-by-sa", "public-domain", "proprietary"):
@@ -773,6 +946,12 @@ class Handler(BaseHTTPRequestHandler):
                 source = validate_image_request(inputs, params)
                 output_kind = "png"
                 target = run_image_job
+            elif kind == "video":
+                if "model" not in params and isinstance(body.get("model"), str):
+                    params["model"] = body["model"]  # animeka client sends model top-level
+                source = validate_video_request(inputs, params)
+                output_kind = "mp4"
+                target = run_video_job
             elif kind == "voice":
                 source = validate_voice_request(inputs, params)
                 output_kind = "wav"
@@ -806,7 +985,7 @@ class Handler(BaseHTTPRequestHandler):
             if MOTION_RUNNER: capabilities.append("motion")
             if EFFECT_RUNNER: capabilities.append("effect")
             if SOUND_RUNNER: capabilities.append("sound")
-            if COMFY_URL: capabilities.append("image")
+            if COMFY_URL: capabilities.append("image"); capabilities.append("video")
             return self.send_json(200, {"status": "ok", "runtime": "murakumo-generation",
                                         "capabilities": capabilities,
                                         "voiceLocales": sorted(VOICE_LOCALES) if TTS_RUNNER else []})
@@ -822,12 +1001,12 @@ class Handler(BaseHTTPRequestHandler):
             output_kind = job.get("outputKind")
             path = ROOT / parts[3] / ({"vrm": "model.vrm", "glb": "model.glb", "wav": "voice.wav",
                                       "motion-json": "motion.json", "effect-json": "effect.json",
-                                      "sound-wav": "sound.wav", "png": "image.png"}.get(output_kind, "artifact.bin"))
+                                      "sound-wav": "sound.wav", "png": "image.png", "mp4": "video.mp4"}.get(output_kind, "artifact.bin"))
             if job["status"] != "done" or not path.exists(): return self.send_json(409, {"error": "not-ready"})
             data = path.read_bytes(); self.send_response(200)
             content_type = {"wav": "audio/wav", "motion-json": "application/vnd.kotoba.motion+json",
                             "effect-json": "application/vnd.kotoba.effect+json",
-                            "sound-wav": "audio/wav", "png": "image/png"}.get(
+                            "sound-wav": "audio/wav", "png": "image/png", "mp4": "video/mp4"}.get(
                 output_kind, "model/gltf-binary")
             self.send_header("content-type", content_type)
             artifact_meta = (job.get("artifacts") or [{}])[0]
