@@ -79,7 +79,7 @@
      :cljs (throw (ex-info "write-edn-file is host-only" {:path path}))))
 
 (defn- unblob
-  "Undo edn-datomize.bb's pr-str blobbing of a non-scalar value. Strings that
+  "Undo edn-datomize.cljs's pr-str blobbing of a non-scalar value. Strings that
    don't parse back to a collection (ordinary scalar strings) pass through
    unchanged."
   [v]
@@ -91,7 +91,7 @@
     v))
 
 (defn tx-data->map
-  "Reconstitute the original plain map from an edn-datomize.bb
+  "Reconstitute the original plain map from an edn-datomize.cljs
    wrap-map-keep-ns! tx-data vector (`[{:db/id ... attr val ...}]`),
    stripping :db/id, un-namespacing attrs whose namespace is `promote-ns`
    back to bare keys, and unblobbing pr-str'd non-scalar values. Attrs whose
@@ -100,7 +100,7 @@
    cloud.edn) are left namespaced as-is.
 
    Content that is NOT already in this tx-data shape (a plain map, e.g. a
-   file nobody has run edn-datomize.bb over) passes through unchanged, so
+   file nobody has run edn-datomize.cljs over) passes through unchanged, so
    this is safe to call unconditionally on read."
   [content promote-ns]
   (if (and (vector? content)
