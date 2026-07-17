@@ -46,11 +46,26 @@ IMAGE_MODELS = {"animagine-xl-4.0": "animagine-xl-4.0.safetensors"}
 IMAGE_DEFAULT_MODEL = "animagine-xl-4.0"
 IMAGE_SIZES = {512, 640, 768, 832, 896, 1024, 1152, 1216, 1280, 1344}
 IMAGE_DEFAULT_NEGATIVE = "lowres, bad anatomy, bad hands, worst quality"
-VIDEO_MODELS = {"ltx-2.3": "ltx-2.3-22b-distilled-fp8.safetensors"}
+VIDEO_MODELS = {
+    "ltx-2.3": {"family": "ltx",
+                "checkpoint": "ltx-2.3-22b-distilled-fp8.safetensors",
+                "text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors"},
+    "wan2.2-ti2v-5b": {"family": "wan",
+                       "unet": "wan2.2_ti2v_5B_fp16.safetensors",
+                       "vae": "wan2.2_vae.safetensors",
+                       "text_encoder": "umt5_xxl_fp8_e4m3fn_scaled.safetensors"},
+    "wan-dancer-14b": {"family": "wan21",
+                       "unet": "Wan-Dancer-14B/global_model.safetensors",
+                       "vae": "Wan2.1_VAE.pth",
+                       "text_encoder": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+                       # bf16 (32.9GB) loads+samples but dies at VAE decode on the
+                       # 46GB APU; fp8 (~16GB, matches the verified 2026-07-17 run)
+                       "weight_dtype": "fp8_e4m3fn"},
+}
 VIDEO_DEFAULT_MODEL = "ltx-2.3"
-VIDEO_TEXT_ENCODER = "gemma_3_12B_it_fp4_mixed.safetensors"
 VIDEO_SIDE_MIN, VIDEO_SIDE_MAX = 256, 1280
-VIDEO_FRAMES_MAX = 121  # LTX wants 8n+1; 121 frames = ~5s at 24fps
+VIDEO_FRAMES_MAX = 121  # LTX wants 8n+1 (also satisfies Wan's 4n+1); ~5s at 24fps
+VIDEO_IMAGE_MAX_BYTES = 25 * 1024 * 1024
 VRM_VISEMES = {"aa", "ih", "ou", "ee", "oh", "sil"}
 
 
@@ -743,11 +758,11 @@ def validate_video_request(inputs, params):
         raise ValueError("input.prompt must contain 1-2000 characters")
     if not COMFY_URL:
         raise ValueError("video output requires the configured ComfyUI backend")
-    # ai-gftd-animeka's murakumo_video client sends duration_ms instead of a
-    # frame count — derive frames (8n+1 at 24fps) when frames is absent.
-    if "frames" not in params and isinstance(params.get("duration_ms"), int):
-        raw = max(9, round(params["duration_ms"] / 1000 * 24))
-        params["frames"] = min(VIDEO_FRAMES_MAX, (raw // 8) * 8 + 1)
+    image = inputs.get("image")
+    if image is not None:
+        if (not isinstance(image, str) or len(image) > 2048
+                or not (image.startswith("https://") or image.startswith("http://"))):
+            raise ValueError("input.image must be an http(s) URL (keyframe for image-to-video)")
     if params.get("model", VIDEO_DEFAULT_MODEL) not in VIDEO_MODELS:
         raise ValueError("params.model is unsupported")
     for side in ("width", "height"):
@@ -756,6 +771,11 @@ def validate_video_request(inputs, params):
                 or not VIDEO_SIDE_MIN <= value <= VIDEO_SIDE_MAX or value % 32):
             raise ValueError(f"params.{side} must be a multiple of 32 in "
                              f"{VIDEO_SIDE_MIN}..{VIDEO_SIDE_MAX}")
+    # ai-gftd-animeka's murakumo_video client sends duration_ms instead of a
+    # frame count — derive frames (8n+1 at 24fps) when frames is absent.
+    if "frames" not in params and isinstance(params.get("duration_ms"), int):
+        raw = max(9, round(params["duration_ms"] / 1000 * 24))
+        params["frames"] = min(VIDEO_FRAMES_MAX, (raw // 8) * 8 + 1)
     frames = params.get("frames", 49)
     if (not isinstance(frames, int) or isinstance(frames, bool)
             or not 9 <= frames <= VIDEO_FRAMES_MAX or frames % 8 != 1):
@@ -763,21 +783,51 @@ def validate_video_request(inputs, params):
     seed = params.get("seed", 0)
     if not isinstance(seed, int) or isinstance(seed, bool) or not 0 <= seed < 2 ** 53:
         raise ValueError("params.seed must be a non-negative integer")
-    return prompt
+    return {"prompt": prompt, "image": image}
 
 
-def comfy_video_graph(prompt, params):
-    """LTX-2.3 distilled single-stage t2v(+native audio). Byte-faithful port of
-    the graph verified E2E through this node's comfyui.service on 2026-07-17
-    (81s, mp4 with AAC audio) — same node ids as cloud-murakumo engine.cljc
-    ltx-video-graph. Two-stage upsampler refine is deliberately absent (it dies
-    deterministically on this node, ADR-2607171100)."""
-    ckpt = VIDEO_MODELS[params.get("model", VIDEO_DEFAULT_MODEL)]
+def comfy_upload_image(url):
+    """Fetch an http(s) keyframe and upload it to ComfyUI /upload/image
+    (multipart, stdlib only). Returns the stored input name for LoadImage."""
+    # default Python-urllib UA is blocked by Cloudflare on our own hosts (403)
+    fetch = urllib.request.Request(url, headers={"user-agent": "murakumo-generation/1.0"})
+    with urllib.request.urlopen(fetch, timeout=60) as response:
+        data = response.read(VIDEO_IMAGE_MAX_BYTES + 1)
+    if len(data) > VIDEO_IMAGE_MAX_BYTES:
+        raise RuntimeError("keyframe image exceeds %d bytes" % VIDEO_IMAGE_MAX_BYTES)
+    if not data:
+        raise RuntimeError("keyframe image is empty")
+    name = "murakumo-ref-" + hashlib.sha256(data).hexdigest()[:24] + ".png"
+    boundary = "----murakumo" + uuid.uuid4().hex
+    parts = []
+    parts.append(f"--{boundary}\r\nContent-Disposition: form-data; "
+                 f'name="image"; filename="{name}"\r\n'
+                 "Content-Type: application/octet-stream\r\n\r\n".encode())
+    parts.append(data)
+    parts.append(f"\r\n--{boundary}\r\nContent-Disposition: form-data; "
+                 'name="overwrite"\r\n\r\ntrue'.encode())
+    parts.append(f"\r\n--{boundary}--\r\n".encode())
+    body = b"".join(parts)
+    request = urllib.request.Request(
+        COMFY_URL + "/upload/image", method="POST", data=body,
+        headers={"content-type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(request, timeout=120) as response:
+        info = json.loads(response.read().decode())
+    stored = info.get("name") or name
+    sub = info.get("subfolder")
+    return f"{sub}/{stored}" if sub else stored
+
+
+def ltx_video_graph(prompt, params, ref_image=None):
+    """LTX-2.3 distilled single-stage t2v/i2v (+native audio). Byte-faithful
+    port of the graph verified E2E through this node's comfyui.service on
+    2026-07-17 (81s, mp4 with AAC audio) — same node ids as cloud-murakumo
+    engine.cljc ltx-video-graph (i2v wiring from main 12238ed). Two-stage
+    upsampler refine is deliberately absent (ADR-2607171100)."""
+    ckpt = VIDEO_MODELS[params.get("model", VIDEO_DEFAULT_MODEL)]["checkpoint"]
+    te = VIDEO_MODELS[params.get("model", VIDEO_DEFAULT_MODEL)]["text_encoder"]
     seed = params.get("seed", 0) or int.from_bytes(os.urandom(4), "big")
-    width = params.get("width", 768)
-    height = params.get("height", 448)
-    frames = params.get("frames", 49)
-    return {
+    g = {
         "100": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt}},
         "101": {"class_type": "LTXVAudioVAELoader", "inputs": {"ckpt_name": ckpt}},
         "102": {"class_type": "CLIPTextEncode",
@@ -791,10 +841,10 @@ def comfy_video_graph(prompt, params):
         "106": {"class_type": "PrimitiveInt", "inputs": {"value": 24}},
         "109": {"class_type": "PrimitiveStringMultiline", "inputs": {"value": prompt}},
         "111": {"class_type": "LTXAVTextEncoderLoader",
-                "inputs": {"text_encoder": VIDEO_TEXT_ENCODER, "ckpt_name": ckpt,
+                "inputs": {"text_encoder": te, "ckpt_name": ckpt,
                            "device": "default"}},
         "112": {"class_type": "PrimitiveFloat", "inputs": {"value": 24}},
-        "113": {"class_type": "PrimitiveInt", "inputs": {"value": frames}},
+        "113": {"class_type": "PrimitiveInt", "inputs": {"value": params.get("frames", 49)}},
         "114": {"class_type": "CreateVideo",
                 "inputs": {"images": ["119", 0], "fps": ["112", 0],
                            "audio": ["120", 0]}},
@@ -825,8 +875,9 @@ def comfy_video_graph(prompt, params):
                 "inputs": {"model": ["100", 0], "positive": ["103", 0],
                            "negative": ["103", 1], "cfg": 1}},
         "131": {"class_type": "EmptyImage",
-                "inputs": {"width": width, "height": height, "batch_size": 1,
-                           "color": 0}},
+                "inputs": {"width": params.get("width", 768),
+                           "height": params.get("height", 448),
+                           "batch_size": 1, "color": 0}},
         "132": {"class_type": "LTXVConcatAVLatent",
                 "inputs": {"video_latent": ["116", 0], "audio_latent": ["115", 0]}},
         "133": {"class_type": "LTXVSeparateAVLatent", "inputs": {"av_latent": ["125", 1]}},
@@ -834,18 +885,97 @@ def comfy_video_graph(prompt, params):
                 "inputs": {"sigmas": "1., 0.99375, 0.9875, 0.98125, 0.975, "
                                      "0.909375, 0.725, 0.421875, 0.0"}},
     }
+    if ref_image:
+        g["98"] = {"class_type": "LoadImage", "inputs": {"image": ref_image}}
+        g["99"] = {"class_type": "LTXVPreprocess",
+                   "inputs": {"image": ["98", 0], "img_compression": 33}}
+        g["107"] = {"class_type": "LTXVImgToVideoInplace",
+                    "inputs": {"vae": ["100", 2], "image": ["99", 0],
+                               "latent": ["116", 0], "strength": 1.0,
+                               "bypass": False}}
+        g["132"]["inputs"]["video_latent"] = ["107", 0]
+    return g
 
 
-def run_video_job(job_id, prompt, params):
+def wan_video_graph(prompt, params, ref_image=None):
+    """Wan2.2 ti2v standard template (API form), same node ids as
+    cloud-murakumo engine.cljc wan-video-graph. i2v via optional
+    Wan22ImageToVideoLatent start_image."""
+    spec = VIDEO_MODELS[params.get("model", VIDEO_DEFAULT_MODEL)]
+    seed = params.get("seed", 0) or int.from_bytes(os.urandom(4), "big")
+    g = {
+        "37": {"class_type": "UNETLoader",
+               "inputs": {"unet_name": spec["unet"],
+                          "weight_dtype": spec.get("weight_dtype", "default")}},
+        "38": {"class_type": "CLIPLoader",
+               "inputs": {"clip_name": spec["text_encoder"], "type": "wan",
+                          "device": "default"}},
+        "39": {"class_type": "VAELoader", "inputs": {"vae_name": spec["vae"]}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": prompt, "clip": ["38", 0]}},
+        "7": {"class_type": "CLIPTextEncode",
+              "inputs": {"text": params.get("negative_prompt", ""), "clip": ["38", 0]}},
+        "48": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["37", 0], "shift": 8.0}},
+        "55": {"class_type": "Wan22ImageToVideoLatent",
+               "inputs": {"vae": ["39", 0], "width": params.get("width", 768),
+                          "height": params.get("height", 448),
+                          "length": params.get("frames", 49), "batch_size": 1}},
+        "3": {"class_type": "KSampler",
+              "inputs": {"seed": seed, "steps": params.get("steps", 20),
+                         "cfg": 5.0, "sampler_name": "uni_pc", "scheduler": "simple",
+                         "denoise": 1.0, "model": ["48", 0], "positive": ["6", 0],
+                         "negative": ["7", 0], "latent_image": ["55", 0]}},
+    }
+    family = VIDEO_MODELS[params.get("model", VIDEO_DEFAULT_MODEL)]["family"]
+    if family == "wan21":
+        # Wan2.1-lineage models (Wan-Dancer-14B): 16ch latent — Wan22ImageToVideoLatent
+        # (48ch) tensor-mismatches, use WanImageToVideo which also carries the
+        # conditioning through (outputs: positive, negative, latent).
+        g55 = {"class_type": "WanImageToVideo",
+               "inputs": {"positive": ["6", 0], "negative": ["7", 0],
+                          "vae": ["39", 0], "width": params.get("width", 768),
+                          "height": params.get("height", 448),
+                          "length": params.get("frames", 49), "batch_size": 1}}
+        g = {**g, "55": g55}
+        g["3"]["inputs"]["positive"] = ["55", 0]
+        g["3"]["inputs"]["negative"] = ["55", 1]
+        g["3"]["inputs"]["latent_image"] = ["55", 2]
+    g.update({
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["39", 0]}},
+        "57": {"class_type": "CreateVideo", "inputs": {"images": ["8", 0], "fps": 24.0}},
+        "58": {"class_type": "SaveVideo",
+               "inputs": {"video": ["57", 0], "filename_prefix": "murakumo-video",
+                          "format": "auto", "codec": "auto"}},
+    })
+    if ref_image:
+        g["52"] = {"class_type": "LoadImage", "inputs": {"image": ref_image}}
+        g["55"]["inputs"]["start_image"] = ["52", 0]
+    return g
+
+
+def comfy_video_graph(prompt, params, ref_image=None):
+    family = VIDEO_MODELS[params.get("model", VIDEO_DEFAULT_MODEL)]["family"]
+    builder = {"ltx": ltx_video_graph, "wan": wan_video_graph,
+               "wan21": wan_video_graph}[family]
+    return builder(prompt, params, ref_image)
+
+
+def run_video_job(job_id, source, params):
     folder = ROOT / job_id
     folder.mkdir(parents=True, exist_ok=True)
     out = folder / "video.mp4"
     try:
         with lock:
             if job_id in cancelled_jobs: return
-            jobs[job_id].update(status="running", progress=10); save()
+            jobs[job_id].update(status="running", progress=5); save()
+        ref_image = None
+        if source.get("image"):
+            ref_image = comfy_upload_image(source["image"])
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(progress=10); save()
         submitted = comfy_json("POST", "/prompt",
-                               {"prompt": comfy_video_graph(prompt, params)})
+                               {"prompt": comfy_video_graph(source["prompt"], params,
+                                                            ref_image)})
         prompt_id = submitted.get("prompt_id")
         if not prompt_id:
             raise RuntimeError("ComfyUI rejected the video graph: "
@@ -883,6 +1013,8 @@ def run_video_job(job_id, prompt, params):
         generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         model = params.get("model", VIDEO_DEFAULT_MODEL)
         capabilities = ["video", "mp4", f"model:{model}"]
+        if ref_image:
+            capabilities.append("i2v")
         metadata = {"kind": "mp4", "url": artifact, "bytes": len(data),
                     "contentHash": content_hash,
                     "provenance": f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}",
