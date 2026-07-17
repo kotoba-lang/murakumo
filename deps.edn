@@ -1,5 +1,9 @@
 {:paths ["src"]
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+        cheshire/cheshire {:mvn/version "5.13.0"}
+        http-kit/http-kit {:mvn/version "2.8.0"}
+        org.babashka/http-client {:mvn/version "0.4.22"}
+        babashka/process {:mvn/version "0.5.22"}
         tech.kwik/kwik {:mvn/version "0.10.10"}
         org.bouncycastle/bcpkix-jdk18on {:mvn/version "1.78.1"}
         ;; witness-quorum's pre-commit orchestrator, wired onto overlay QUIC
@@ -7,13 +11,26 @@
         ;; plus reputation/stake (Phase 4). Pin is the
         ;; kotoba-lang/witness-quorum#2 merge commit on main.
         io.github.kotoba-lang/witness-quorum
-        {:git/sha "492ba889346647ac8a504fc02b70e5b43b4c7782"}}
+        {:git/sha "492ba889346647ac8a504fc02b70e5b43b4c7782"}
+        io.github.kotoba-lang/ci
+        {:git/sha "b99512a6644774f91e12070a508333419542beb6"}
+        io.github.kotoba-lang/kotoba-git
+        {:git/sha "ed6109069b7bfba88cb5bd325f96d7c759387903"}
+        io.github.kotoba-lang/kotoba-rad
+        {:git/sha "4ad606013008aa58229821e73ee2d4fe34f28b07"}}
  :aliases
  {;; offline workspace dev — pin witness-quorum to the local checkout
   :dev {:override-deps
-        {io.github.kotoba-lang/witness-quorum {:local/root "../witness-quorum"}}}
+        {io.github.kotoba-lang/witness-quorum {:local/root "../witness-quorum"}
+         io.github.kotoba-lang/ci {:local/root "../ci"}
+         io.github.kotoba-lang/kotoba-git {:local/root "../kotoba-git"}
+         io.github.kotoba-lang/kotoba-rad {:local/root "../kotoba-rad"}}}
   :quic-driver {:main-opts ["-m" "murakumo.overlay.quic-driver"]}
   :quic-cert {:main-opts ["-m" "murakumo.overlay.cert"]}
+  :cd-node {:main-opts ["-m" "murakumo.cd.node-daemon"]}
+  :artifact-import {:main-opts ["-m" "murakumo.artifact-import"]}
+  :ci-coordinator {:main-opts ["-m" "murakumo.ci.coordinator"]}
+  :ci-runner {:main-opts ["-m" "murakumo.ci.runner-daemon"]}
   ;; JVM-only test path for the kwik/witness-quorum-dependent overlay code
   ;; (quic-driver RPC + witness-transport) that bb.edn's portable `test`
   ;; task deliberately excludes, same reason quic-driver/quic-cert are

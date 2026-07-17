@@ -28,4 +28,12 @@
   {:name "dan"      :host "dan"      :rpc-ip "192.168.1.18" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp" :role "pdshost"}}
   {:name "benjamin" :host "benjamin" :rpc-ip "192.168.1.20" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   ;; asher = replica/failover; also the canary (verified reachable first).
-  {:name "asher"    :host "asher"    :rpc-ip "192.168.1.22" :roles ["pin" "compute" "relay"] :labels {:tier "edge" :zone "jp" :role "canary"}}]}
+  {:name "asher"    :host "asher"    :rpc-ip "192.168.1.22" :roles ["pin" "compute" "relay"] :labels {:tier "edge" :zone "jp" :role "canary"}}
+  ;; gad — Linux/ROCm GPU box, NOT a 12-tribes Mac mini and not a kotoba P2P
+  ;; mesh member (no :pin role, doesn't run kotoba-server). Compute-only:
+  ;; murakumo.infer.media's ComfyUI render farm (animagine-xl-4.0 resident),
+  ;; ~9x faster per image than the MPS-backed mesh nodes above (dedicated
+  ;; discrete GPU + unified-memory-free VRAM vs Mac mini shared memory —
+  ;; verified 2026-07-13, ai-gftd-mangaka session). Reachable as `ssh gad`
+  ;; (Tailscale, ~/.ssh/config alias → 100.82.98.110).
+  {:name "gad" :host "gad" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "comfy-render"}}]}

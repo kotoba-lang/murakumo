@@ -30,6 +30,142 @@ Each fleet node runs `kotoba-server` as a **macOS LaunchAgent** (`RunAtLoad` +
 - **persists** the components' `kqe-assert!` output to its kotoba Datom log — i.e. the
   node is a real PDS/graph writer, not a sandbox.
 
+## CI broker core
+
+The governing architecture decision is
+[`docs/adr/0001-murakumo-native-distributed-cicd.md`](docs/adr/0001-murakumo-native-distributed-cicd.md).
+
+`murakumo.ci.broker` is the portable, pure scheduling core for Murakumo CI.
+It provides idempotent submission, runner-capability matching, expiring leases,
+heartbeat renewal, stale-token rejection, crash requeue, terminal receipt-CID
+recording, and an append-only event stream. Network, sandbox execution, clocks,
+tokens, and Kotobase persistence are injected by the host rather than hidden in
+the state machine.
+
+`murakumo.ci.source` normalizes verified GitHub and Radicle events into stable
+RunRequests. `murakumo.ci.store` checkpoints broker state through an
+`IStore`-shaped injected port and gives every appended event a deterministic ID
+for replay deduplication. `murakumo.ci.protocol` carries lease and signed-receipt
+references as versioned payloads over `murakumo.overlay.stream`.
+`murakumo.ci.coordinator` replaces the former process-local gateway state with
+a durable `murakumo.ci.file-store` and serves lease/start/heartbeat/completion
+RPC through the Murakumo QUIC overlay. State transitions become visible only
+after checkpoint persistence succeeds; expired leases are durably requeued and
+stale bearer tokens are rejected. Radicle ingress verifies the exact raw body
+with the event signer's Ed25519 `did:key`, checks a RID-scoped allowlist, and
+enforces timestamp freshness. GitHub and Radicle secrets/signers are configured
+through `examples/ci-coordinator.edn`, with the GitHub secret read from env.
+Each logical run is expanded into stable replica jobs. A runner that already
+holds or completed one replica cannot lease another, so threshold votes require
+distinct authorized DIDs. Completion is accepted only when its `kotoba-rad`
+sigref belongs to the lease holder, targets the logical result ref, and its
+included verdict document recomputes to the signed CID. `/ci/v1/runs/<id>`
+returns pending or threshold-canonical state from persisted attestations.
+
+`murakumo.ci.sandbox` converts explicit argv-only steps into rootless OCI
+commands with a digest-pinned image, read-only source, isolated writable output,
+no network by default, all capabilities dropped, no-new-privileges, and bounded
+CPU, memory, PIDs, tmpfs, and runtime. `murakumo.ci.host` executes that prepared
+argv directly (never through a shell), kills timeouts, and hashes stdout/stderr.
+`murakumo.ci.runner` evaluates job waves fail-fast and emits a deterministic
+receipt containing runner, source, pipeline, step, log, and artifact identities.
+`murakumo.ci.worker` / `clojure -M:ci-runner examples/ci-runner.edn` provide the
+long-running runner path: remote lease, heartbeat renewal, immutable detached
+checkout, source import, checked-out pipeline digest verification, sandbox
+execution, artifact/release packaging, kotoba-git snapshot persistence, signed
+verdict, and attested completion. Infrastructure failures produce signed failed
+receipts rather than unauthenticated error claims.
+Every runner CAS write is also streamed in bounded chunks to the coordinator
+over the same QUIC RPC session. Every request carries the still-active run
+lease, and the coordinator independently verifies the object CID before CAS
+admission; expired or cross-run lease use is rejected. Broker completion also
+fails unless the signed verdict, receipt commit/snapshot, and every declared
+artifact are already readable from that coordinator CAS.
+Declared `:ci/artifacts` are collected from a fresh per-step output directory;
+traversal, symlinks, missing or oversize files, dirty output directories, and
+absent durable storage fail the step. The host hashes the actual bytes into
+`murakumo.artifact-store`; runner-supplied artifact claims are not accepted.
+
+`murakumo.ci.pipeline` loads the repository-owned `.murakumo/pipeline.edn`,
+validates its DAG with `ci-clj`, validates every executable step against the
+sandbox policy, derives a stable pipeline CID, and produces execution waves.
+After immutable Git checkout, `murakumo.ci.import` rejects symlinks and imports
+the regular-file tree into `kotoba-git`; the resulting source tree/commit CIDs
+are attached beside the original Git revision in the RunRequest provenance.
+
+`murakumo.ci.attest` stores the complete runner receipt as a `kotoba-git`
+blob/tree/commit, while deriving a separate runner-independent verdict CID from
+source, pipeline, terminal result, and artifact identities. Each runner signs
+the shared result ref using `kotoba-rad` sigrefs. Distinct authorized DIDs count
+once toward threshold; artifact disagreement produces different verdicts, and
+split quorum is rejected instead of resolved by message arrival order.
+`murakumo.ci.release-bundle` builds a typed release artifact from the verified,
+fully resolved `kotoba.app.edn` and its exact component outputs. Source-bearing
+or CID-inconsistent manifests are rejected. Only this typed bundle—not an
+ordinary CI artifact—can receive deployment authority.
+
+`murakumo.ci.github-status` publishes the threshold result through GitHub's
+external commit-status API under the stable `murakumo.cloud/ci` context; no
+GitHub Action executes. The coordinator first records each canonical status in
+a content-addressed durable outbox and marks it delivered only after GitHub
+accepts it, so restart and transient failures retry without duplicating a
+successful logical delivery. Configure
+`:ci.coordinator/github-status-token-env` together with
+`:ci.coordinator/public-base-url`; the token stays in the environment.
+`murakumo.cd.release` permits CD only after a passed
+canonical verdict and only for an artifact named by that verdict.
+When a repository has an entry under `:ci.coordinator/deployments`, the same
+durable finalizer emits a separate `:cd/deploy` action for its single typed
+release bundle. The executor loads that bundle and every component from the
+coordinator CAS, issues an environment-scoped capability from an environment
+seed, replicates to the configured canary and batches, and advances durable
+environment state only after a successful terminal rollout. Replaying an
+already-advanced action is a no-op. See `examples/ci-deployment-policy.edn` for
+the map accepted under `:ci.coordinator/deployments`.
+The end-to-end provisioning, bootstrap, observation, retry, backup, and key
+rotation procedure is in `docs/murakumo-cicd-runbook.md`.
+`murakumo.cd.capability` then issues a short-lived,
+environment/artifact/verdict/revision scoped CID document signed by an
+authorized deploy issuer; both the promoted and rollback revisions and their
+respective immutable artifact CIDs are bound into the signature. Deployment outcomes become deterministic receipt CIDs
+under `refs/cd/deployments/*`.
+
+`murakumo.cd.executor` revalidates that capability before every rollout batch,
+deploys a canary first, requires a health pass before promotion, and rolls every
+touched node back to the previous revision on deploy/health/expiry failure.
+`murakumo.cd.receipt` persists the complete success or rollback history as a
+`kotoba-git` object and signs its deployment ref with the executor DID.
+`murakumo.cd.fleet-adapter` carries each deploy, health, and rollback operation
+through the native Murakumo overlay QUIC request/response transport.
+`murakumo.cd.remote` verifies the signed capability again at the destination
+node using that node's local issuer policy, checks its own node identity and
+the action-specific revision, and only then invokes the node-local operation.
+Controller-supplied trust policy is never accepted by the remote endpoint;
+unknown nodes, malformed responses, transport errors, expired capabilities,
+and scope mismatches all fail closed.
+`murakumo.cd.node-ops` is the node-local execution boundary: only locally
+configured argv builders can select executables, commands run directly through
+`ProcessBuilder`, successful activations atomically replace a durable active
+release record, and health promotion requires that record to match both the
+signed revision and artifact. A failed command never advances active state.
+`murakumo.cd.bundle` verifies and atomically materializes that immutable bundle;
+`murakumo.cd.kotoba-ops` then puts every verified component into the node's
+Kotoba block store and publishes the resolved app manifest before health gating.
+`murakumo.artifact-replication` transfers the bundle and only its declared
+components to each target node before deploy. Transfers are bounded and chunked,
+revalidate the release capability on every begin/chunk/commit request, expire
+abandoned temporary files, and commit through the verified CAS. A component is
+accepted only after its signed bundle is present and proves membership.
+`murakumo.cd.controller` composes replication with canary rollout so deployment
+RPCs are never sent when staging fails. Fleet nodes run the multiplexed artifact
+and deployment endpoint with `clojure -M:cd-node examples/cd-node.edn`; the
+checked-in example keeps operator credentials in a named environment variable,
+not in EDN.
+All CI/CD content identities use `murakumo.canonical`, whose expanded-key EDN
+encoding is explicitly insulated from thread-local printer bindings. This is
+required because QUIC handlers run on transport-owned threads; the same signed
+document must hash identically on the controller and destination node.
+
 ## Quickstart
 
 ```bash
@@ -51,6 +187,7 @@ bb cloud bootstrap                # print relays-first, nodes-second overlay boo
 bb cloud bootstrap --format=edn   # machine-readable bootstrap manifest
 bb overlay dial --overlay ...     # validate/normalise a native overlay dial request
 bb overlay relay --overlay ...    # validate/normalise a native overlay relay request
+bb ci-gateway 8791                # authenticated CI event ingress
 ```
 
 ## Command surface
@@ -68,6 +205,7 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `overlay dial\|relay --overlay ...` | native overlay driver shell: validate canonical dial/relay argv and emit the session record a real stream/packet driver will open |
 | `fleet <datom-log.edn> [now-ms]` | **coordination-plane view** — fold a [kotoba-fleet](https://github.com/kotoba-lang/kotoba-fleet) Datom log into one snapshot (per-work holders · active leases · pending proposals) via `kotoba.fleet.view/snapshot`. The `status` of the 20-agent coordination layer, next to the mesh `status`. |
 | `infer probe\|plan <model>\|provision\|up\|down\|ps\|serve\|generate` | **distributed inference across the fleet, exo-style** — memory-weighted shard plan + pipeline-parallel ring (see below) |
+| `ci-gateway [port]` | GitHub HMAC-verified and Radicle verifier-gated event ingress; normalizes RunRequests and enqueues the broker |
 
 ## Layout
 
