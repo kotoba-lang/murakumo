@@ -111,6 +111,27 @@
    :model/mmproj "mmproj-Qwen3.6-35B-A3B-BF16.gguf"
    :model/mmproj-bytes 902822016}
 
+  "qwen3-vl-30b-a3b"
+  {:model/id "qwen3-vl-30b-a3b"
+   :model/family "Qwen3-VL"
+   :model/format :gguf
+   :hf/repo "Qwen/Qwen3-VL-30B-A3B-Instruct-GGUF"
+   :model/params-b 30 :model/active-params-b 3
+   :model/context 8192              ; served ctx (model native higher; sized
+                                    ; for xavier's 30GB RAM, not the ceiling)
+   :model/gguf "Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf"
+   :model/mmproj "mmproj-Qwen3VL-30B-A3B-Instruct-F16.gguf"
+   ;; VL-native architecture (not a text tower with a bolted-on mmproj like
+   ;; qwen3.6 above) — measured materially better on manga character
+   ;; identification (ADR-2607165100 addendum 5/6 + xavier deployment note
+   ;; in fleet.edn 2026-07-18): accuracy 0.833 (3/3 stable) vs qwen3.6's
+   ;; 0.283 and gemma-4-26b's 0.367, tied with claude-sonnet-4-5 and
+   ;; fleet-OSS's best. Deployed on both gad (:11502, ad hoc) and xavier
+   ;; (:8090, systemd murakumo-standalone-cuda.service, 2026-07-18 —
+   ;; replaced qwen3.6 there per owner directive "xavier を vl に置き換える").
+   :model/weight-bytes 18556687168
+   :model/mmproj-bytes 1083499584}
+
   "gemma-4-12b-it"
   {:model/id "gemma-4-12b-it"
    :model/family "Gemma 4"
