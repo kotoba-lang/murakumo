@@ -11,7 +11,7 @@
 
 (defn load-connect
   "Read connect.edn (nil if absent — reach constraints then degrade to no-op).
-   connect.edn is Datomic/Datascript tx-data (edn-datomize.bb wrap-map-keep-ns!,
+   connect.edn is Datomic/Datascript tx-data (edn-datomize.cljs wrap-map-keep-ns!,
    promote-ns \"connect-doc\" for the previously-bare :planes/:classes/
    :default-class/:roadmap keys — the pre-existing :connect/* namespace is left
    as-is); tx-data->map reconstitutes the plain map the reach helpers expect."
