@@ -45,16 +45,48 @@
   ;; flashed from gad (an x86_64 host) since this fleet's Macs are Apple
   ;; Silicon and can't run NVIDIA's x86_64-only flash tooling. Second
   ;; independent standalone-serving inference head (NOT part of gad's RPC
-  ;; ring): qwen3.6-35b-a3b-xavier-cuda, llama.cpp built from source with
-  ;; CUDA (JetPack 5.1.x / CUDA 11.4, sm72 — no official Jetson+CUDA release
-  ;; binary exists upstream), model on the 466GB NVMe (/mnt/nvme), served via
-  ;; murakumo-standalone-cuda.service on :8090. Benchmarked 2026-07-15 vs gad
-  ;; with an identical HTTP request: gad 31.5 tok/s prefill / 30.9 tok/s
-  ;; decode vs Xavier 5.0 tok/s prefill / 11.5 tok/s decode — Xavier is
-  ;; markedly slower (2018 Volta, lower LPDDR4x bandwidth vs gad's newer
-  ;; high-bandwidth APU; MoE decode is memory-bandwidth bound). Registered in
-  ;; api.murakumo.cloud as node `head-xavier` / model
-  ;; `qwen3.6-35b-a3b-xavier-cuda`, endpoint is Tailscale-only (no public
+  ;; ring), llama.cpp built from source with CUDA (JetPack 5.1.x / CUDA
+  ;; 11.4, sm72 — no official Jetson+CUDA release binary exists upstream),
+  ;; models on the 466GB NVMe (/mnt/nvme), served via
+  ;; murakumo-standalone-cuda.service on :8090.
+  ;;
+  ;; 2026-07-18: **switched from qwen3.6-35b-a3b-xavier-cuda to
+  ;; qwen3-vl-30b-a3b-xavier-cuda** (owner directive — "xavier を vl に置き換
+  ;; える" — vision-quality upgrade). Same manga-character-identification
+  ;; benchmark this ADR's fleet-main pick (qwen3.6) scored :measurement
+  ;; accuracy=0.283 (worst of the fleet-OSS set) on: qwen3-vl-30b-a3b
+  ;; reproduces the gad result exactly (accuracy=0.833, 3/3 stable runs,
+  ;; identical panel-by-panel output) — GGUF quantization is deterministic
+  ;; across hosts, only throughput differs. Verified end-to-end on xavier
+  ;; itself before the systemd cutover: download (18.5GB GGUF Q4_K_M +
+  ;; 1.1GB mmproj F16) → manual llama-server smoke test (vision OK, one
+  ;; live manga-page request: 2314 prompt / 74 completion tokens in 66.4s)
+  ;; → 3x identification benchmark via SSH port-forward from the fleet
+  ;; client, matching gad bit-for-bit → THEN cut over the systemd unit
+  ;; (`-c 8192`, not the old unit's `-c 262144` — that ceiling was sized for
+  ;; qwen3.6's 262144-token native context and is unnecessary headroom this
+  ;; model doesn't need on 30GB RAM; `--reasoning off` required or answers
+  ;; land in reasoning_content with empty content, same footgun measured on
+  ;; gad). systemd load: ~103s cold model+mmproj load, ~6.9GB resident.
+  ;; qwen3.6-35b-a3b weights (+mmproj) kept on /mnt/nvme for rollback (ample
+  ;; disk: 387GB free after both models resident) — same policy as gad's
+  ;; retained-gemma4 precedent; restore by reverting the unit's ExecStart.
+  ;; Old speed baseline (gad 31.5 tok/s prefill / 30.9 tok/s decode vs
+  ;; Xavier 5.0 / 11.5 — Xavier ~6x/2.7x slower, 2018 Volta + lower LPDDR4x
+  ;; bandwidth, MoE decode is memory-bandwidth bound) is architecture-level
+  ;; and carries over; not independently re-benchmarked for qwen3-vl (same
+  ;; A3B active-param class, expect a similar ratio — flagged as unverified
+  ;; here, do not treat as measured).
+  ;;
+  ;; Registered in api.murakumo.cloud as node `head-xavier` / model
+  ;; `qwen3-vl-30b-a3b-xavier-cuda`, endpoint is Tailscale-only (no public
   ;; Cloudflare Tunnel route set up yet). Reachable as `ssh xavier`
-  ;; (Tailscale → 100.87.226.80).
+  ;; (Tailscale → 100.87.226.80). NOTE (2026-07-17/18): this host has no
+  ;; entry in ~/.ssh/config (unlike gad) and MagicDNS hostname resolution
+  ;; (`xavier.tail110d8b.ts.net`) was observed unreachable from at least one
+  ;; client Mac even with `tailscale status` showing the peer online and
+  ;; `tailscale dns query` resolving it correctly server-side — use
+  ;; `ssh -o "ProxyCommand=tailscale nc %h %p" xavier@xavier.tail110d8b.ts.net`
+  ;; (or the raw Tailscale IP with the same ProxyCommand) as a working
+  ;; fallback when `ssh xavier` / `tailscale ssh xavier` fail to resolve.
   {:name "xavier" :host "xavier" :rpc-ip "192.168.1.28" :mac "48:b0:2d:18:4d:16" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "cuda-infer"}}]}
