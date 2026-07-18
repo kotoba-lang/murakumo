@@ -43,7 +43,8 @@
    :images :credit/per-image
    :video-seconds :credit/per-video-second
    :audio-seconds :credit/per-audio-second
-   :training-steps :credit/per-training-step})
+   :training-steps :credit/per-training-step
+   :gb-months :credit/per-gb-month})
 
 (defn job-cost
   "Σ units×price for a media/text job. `units` e.g. {:images 4} or
@@ -127,18 +128,50 @@
 (defn balance-of [balances who]
   (get balances (name who) 0.0))
 
+(defn- availability-proof-ok?
+  "Every verdict in `verdicts` carries :kotobase.availability/verdict :ok --
+   the exact keyword kotobase-peer's audit-outcome standardizes on. A nil or
+   empty seq is NOT proof (an :sla job asserting nothing was checked must
+   fail closed, same stance job-cost takes on silently-missing prices)."
+  [verdicts]
+  (and (seq verdicts)
+       (every? #(= :ok (:kotobase.availability/verdict %)) verdicts)))
+
 (defn charge
   "Demand-side admission: can `who` afford this job of `model` at its registry
-   prices, given folded `balances`? → {:allow? bool :cost c :entry spend-entry}.
-   Text passes {:tokens n}; media passes {:images n} / {:video-seconds s} /
-   {:audio-seconds s} — Civitai's Buzz shape, one ledger."
-  [balances who {:keys [model tokens units]}]
+   prices, given folded `balances`? → {:allow? bool :cost c :entry spend-entry}
+   on success; on refusal either {:allow? false :cost c :balance b} (can't
+   afford it) or {:allow? false :cost c :reason :availability-proof-failed}
+   (SLA proof gate below). Text passes {:tokens n}; media passes {:images n} /
+   {:video-seconds s} / {:audio-seconds s} — Civitai's Buzz shape, one ledger.
+   Storage passes {:gb-months g}.
+
+   `:tier` is one of :volatile/:standard/:sla, mirroring kotobase-peer's
+   redundancy-tiers as plain data (this ns does not import kotobase-peer).
+   It's optional; when absent, or :volatile/:standard, behavior is IDENTICAL
+   to before this key existed -- no availability check at all, admission is
+   a pure balance check. Only :sla additionally gates the charge on proof:
+   the job must carry `:availability-verdicts`, a seq of
+   {:kotobase.availability/node n :kotobase.availability/cid c
+    :kotobase.availability/epoch e :kotobase.availability/verdict v}, and
+   EVERY entry's :kotobase.availability/verdict must be :ok. A missing,
+   empty, or partially-failed verdict seq is a hard gate -- charge denies
+   with :reason :availability-proof-failed even when the balance would
+   otherwise cover the job (the balance is never consulted in that case);
+   an unprovable SLA-tier job is refused before affordability is asked."
+  [balances who {:keys [model tokens units tier availability-verdicts]}]
   (let [units (or units (when tokens {:tokens tokens}))
         cost (job-cost model units)
         bal (balance-of balances who)]
-    (if (>= bal cost)
+    (cond
+      (and (= tier :sla) (not (availability-proof-ok? availability-verdicts)))
+      {:allow? false :cost cost :reason :availability-proof-failed}
+
+      (>= bal cost)
       {:allow? true :cost cost
        :entry (spend who cost {:for {:model (:model/id model) :units units}})}
+
+      :else
       {:allow? false :cost cost :balance bal})))
 
 (defn receipt
