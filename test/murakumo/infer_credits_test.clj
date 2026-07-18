@@ -65,6 +65,47 @@
             after (reduce + (vals (dissoc (credits/balances (conj ledger entry)) :treasury)))]
         (is (= 60.0 (- before after)))))))
 
+(deftest sla-tier-availability-gate
+  (let [bal {"artist" 500.0}
+        model {:model/id "storage-pin" :credit/per-gb-month 10}
+        job {:model model :units {:gb-months 5}}
+        ok-verdicts [{:kotobase.availability/node "naphtali" :kotobase.availability/cid "bafy1"
+                      :kotobase.availability/epoch 1 :kotobase.availability/verdict :ok}
+                     {:kotobase.availability/node "levi" :kotobase.availability/cid "bafy1"
+                      :kotobase.availability/epoch 1 :kotobase.availability/verdict :ok}]
+        failed-verdicts [{:kotobase.availability/node "naphtali" :kotobase.availability/cid "bafy1"
+                          :kotobase.availability/epoch 1 :kotobase.availability/verdict :ok}
+                         {:kotobase.availability/node "levi" :kotobase.availability/cid "bafy1"
+                          :kotobase.availability/epoch 1 :kotobase.availability/verdict :failed}]]
+    (testing "sla tier + all-:ok verdicts + sufficient balance -> allowed"
+      (let [{:keys [allow? cost]} (credits/charge bal "artist"
+                                                   (assoc job :tier :sla
+                                                          :availability-verdicts ok-verdicts))]
+        (is allow?)
+        (is (= 50.0 cost))))
+    (testing "sla tier + a :failed verdict + sufficient balance -> denied, hard gate not a balance check"
+      (let [r (credits/charge bal "artist"
+                              (assoc job :tier :sla :availability-verdicts failed-verdicts))]
+        (is (not (:allow? r)))
+        (is (= :availability-proof-failed (:reason r)))
+        (is (= 50.0 (:cost r)))))
+    (testing "sla tier + missing availability-verdicts entirely -> denied, fails closed"
+      (let [r (credits/charge bal "artist" (assoc job :tier :sla))]
+        (is (not (:allow? r)))
+        (is (= :availability-proof-failed (:reason r)))))
+    (testing ":standard tier / no tier, no verdicts at all -> unchanged, gated only by balance"
+      (let [{:keys [allow? cost]} (credits/charge bal "artist" (assoc job :tier :standard))]
+        (is allow?)
+        (is (= 50.0 cost)))
+      (let [{:keys [allow? cost]} (credits/charge bal "artist" job)]
+        (is allow?)
+        (is (= 50.0 cost)))
+      (testing "and :standard/no-tier still denies on balance exactly as before, unaffected by the sla gate"
+        (let [broke (credits/charge {} "penniless" job)]
+          (is (not (:allow? broke)))
+          (is (nil? (:reason broke)))
+          (is (= 50.0 (:cost broke))))))))
+
 (deftest media-units
   (let [bal {"artist" 500.0}
         sdxl {:model/id "animagine-xl-4.0" :credit/per-image 100}
