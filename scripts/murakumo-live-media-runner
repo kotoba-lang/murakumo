@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Bounded, prompt-conditioned live media runners for Murakumo generation."""
+
+import argparse
+import json
+import math
+import os
+import pathlib
+import random
+import struct
+import subprocess
+import sys
+import wave
+
+
+def args_for(kind):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output", required=True)
+    if kind == "tts":
+        parser.add_argument("--text", required=True)
+        parser.add_argument("--locale", required=True)
+        parser.add_argument("--voice")
+        parser.add_argument("--speed", required=True, type=float)
+        parser.add_argument("--emotion", required=True,
+                            choices=("neutral", "happy", "angry", "sad", "battle"))
+    elif kind == "viseme":
+        parser.add_argument("--audio", required=True)
+        parser.add_argument("--text", required=True)
+        parser.add_argument("--locale", required=True)
+    else:
+        parser.add_argument("--prompt", required=True)
+        parser.add_argument("--duration-ms", required=True, type=int)
+        if kind == "motion": parser.add_argument("--skeleton-profile", required=True)
+        if kind == "sound":
+            parser.add_argument("--kind", required=True, choices=("sfx", "ambience", "music"))
+            parser.add_argument("--loop", action="store_true")
+    return parser.parse_args()
+
+
+def quat(axis, angle):
+    s = math.sin(angle / 2)
+    return [round(axis[0] * s, 7), round(axis[1] * s, 7), round(axis[2] * s, 7), round(math.cos(angle / 2), 7)]
+
+
+def motion(a):
+    prompt = a.prompt.lower()
+    dance = any(x in prompt for x in ("dance", "踊", "ダンス", "رقص", "नृत्य", "舞"))
+    wave_hand = any(x in prompt for x in ("wave", "手を振", "挥手", "salud", "bonjour"))
+    bones = [("hips", (0, 1, 0), .32 if dance else .10),
+             ("chest", (0, 0, 1), .18),
+             (("rightUpperArm" if wave_hand else "leftUpperArm"), (0, 0, 1), .75 if wave_hand else .22),
+             ("head", (1, 0, 0), .14)]
+    times = [0, a.duration_ms // 4, a.duration_ms // 2, 3 * a.duration_ms // 4, a.duration_ms]
+    tracks = []
+    for bone, axis, amplitude in bones:
+        tracks.append({"bone": bone, "keyframes": [
+            {"timeMs": t, "rotation": quat(axis, amplitude * math.sin(2 * math.pi * t / a.duration_ms))}
+            for t in times]})
+    pathlib.Path(a.output).write_text(json.dumps({"schema": "kotoba.motion-clip/v1",
+        "skeletonProfile": a.skeleton_profile, "durationMs": a.duration_ms, "tracks": tracks}))
+
+
+def effect(a):
+    p = a.prompt.lower()
+    choices = [("soft-rain", ("rain", "雨", "lluvia", "pluie"), "#88bbff"),
+               ("hearts", ("heart", "love", "好き", "愛", "amor"), "#ff44aa"),
+               ("confetti", ("party", "celebr", "祝", "fiesta"), "#ffd166"),
+               ("embers", ("fire", "炎", "fuego"), "#ff7744")]
+    preset, color = "sparkle", "#ddbbff"
+    for candidate, words, candidate_color in choices:
+        if any(word in p for word in words): preset, color = candidate, candidate_color; break
+    pathlib.Path(a.output).write_text(json.dumps({"schema": "kotoba.effect-preset/v1", "preset": preset,
+        "durationMs": a.duration_ms, "intensity": .72, "particles": 16, "color": color}))
+
+
+def sound(a):
+    rate, frames = 24000, max(1, int(24000 * a.duration_ms / 1000))
+    seed = int.from_bytes(a.prompt.encode("utf-8")[:8].ljust(8, b"\0"), "little")
+    rng, phase, filtered = random.Random(seed), 0.0, 0.0
+    with wave.open(a.output, "wb") as out:
+        out.setnchannels(2); out.setsampwidth(2); out.setframerate(rate)
+        data = bytearray()
+        for i in range(frames):
+            t = i / rate
+            if a.kind == "ambience":
+                filtered = .985 * filtered + .015 * rng.uniform(-1, 1)
+                sample = filtered * .32 + rng.uniform(-.025, .025)
+            elif a.kind == "music":
+                notes = (220.0, 277.18, 329.63, 440.0)
+                sample = sum(math.sin(2 * math.pi * n * t) for n in notes) * .055
+            else:
+                env = math.exp(-7 * t / max(.1, a.duration_ms / 1000))
+                sample = (math.sin(2 * math.pi * (660 - 180 * t) * t) + rng.uniform(-.2, .2)) * .24 * env
+            value = max(-32767, min(32767, int(sample * 32767)))
+            data += struct.pack("<hh", value, value)
+        out.writeframes(data)
+
+
+def tts(a):
+    piper_root = pathlib.Path(os.environ.get("MURAKUMO_PIPER_DIR", "/home/gad/.murakumo/piper"))
+    piper_models = {
+        "en-US": "en_US-kristin-medium.onnx",       # public domain
+        "zh-CN": "zh_CN-chaowen-medium.onnx",       # CC0
+        "es-ES": "es_ES-davefx-medium.onnx",        # CC0
+        "fr-FR": "fr_FR-gilles-low.onnx",           # CC0
+    }
+    model = piper_root / "voices" / piper_models.get(a.locale, "")
+    aligned_model = model.with_name(model.stem + ".aligned.onnx")
+    aligned_tts = pathlib.Path(os.environ.get(
+        "MURAKUMO_PIPER_ALIGNED_TTS", "/home/gad/.murakumo/bin/murakumo-piper-aligned-tts"))
+    if aligned_model.is_file() and aligned_tts.is_file():
+        data_dir = piper_root / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run([str(piper_root / "bin" / "python"), str(aligned_tts),
+                            "--model", str(aligned_model), "--config", str(model) + ".json",
+                            "--output", a.output, "--text", a.text,
+                            "--speed", str(a.speed), "--emotion", a.emotion,
+                            "--allow-missing-alignments"],
+                           check=True, cwd=data_dir)
+        except subprocess.CalledProcessError:
+            pathlib.Path(a.output).unlink(missing_ok=True)
+            pathlib.Path(a.output + ".visemes.json").unlink(missing_ok=True)
+        else:
+            licenses = {"en-US": "public-domain", "zh-CN": "cc0",
+                        "es-ES": "cc0", "fr-FR": "cc0"}
+            provider = {
+                "schema": "kotoba.voice-provider/v1", "engine": "piper",
+                "speaker": model.stem, "version": "piper-voices-main",
+                "modelLicense": licenses[a.locale],
+                "prosodySource": "piper-synthesis-config/v1",
+                "prosodyPreset": a.emotion, "speakingRate": a.speed}
+            if pathlib.Path(a.output + ".visemes.json").is_file():
+                provider["timingSource"] = "piper-phoneme-alignment/v1"
+            pathlib.Path(a.output + ".metadata.json").write_text(json.dumps(provider))
+            return
+    voices = {"ja-JP": "ja", "en-US": "en-us", "ar-SA": "ar", "hi-IN": "hi",
+              "zh-CN": "cmn", "es-ES": "es", "fr-FR": "fr-fr"}
+    profiles = {"neutral": (1.00, 50, 100), "happy": (1.08, 65, 115),
+                "angry": (1.12, 42, 130), "sad": (.86, 35, 88),
+                "battle": (1.18, 55, 140)}
+    tempo, pitch, amplitude = profiles[a.emotion]
+    rate = max(80, min(350, round(155 * a.speed * tempo)))
+    command = ["/usr/bin/espeak-ng", "-v", voices[a.locale], "-s", str(rate),
+               "-p", str(pitch), "-a", str(amplitude), "-w", a.output, a.text]
+    subprocess.run(command, check=True)
+    pathlib.Path(a.output + ".metadata.json").write_text(json.dumps({
+        "schema": "kotoba.voice-provider/v1", "engine": "espeak-ng",
+        "speaker": voices[a.locale], "version": "espeak-ng-system",
+        "modelLicense": "unknown", "prosodySource": "espeak-prosody/v1",
+        "prosodyPreset": a.emotion, "speakingRate": a.speed}))
+
+
+def viseme(a):
+    with wave.open(a.audio, "rb") as source:
+        duration = source.getnframes() * 1000 / source.getframerate()
+    symbols = ["aa", "ih", "ou", "ee", "oh"]
+    count = max(1, min(len(a.text), int(duration // 120) + 1))
+    cues = [{"timeMs": round(i * duration / count, 2), "viseme": symbols[i % len(symbols)], "weight": .72}
+            for i in range(count)]
+    pathlib.Path(a.output).write_text(json.dumps({"schema": "kotoba.viseme-timeline/v1", "cues": cues}))
+
+
+kind = pathlib.Path(sys.argv[0]).name.rsplit("-", 1)[-1]
+handler = {"motion": motion, "effect": effect, "sound": sound, "tts": tts, "viseme": viseme}[kind]
+handler(args_for(kind))

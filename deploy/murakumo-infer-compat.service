@@ -1,0 +1,11 @@
+[Unit]
+Description=Proxy legacy Murakumo inference port 8090 to llama-server 11434
+Requires=murakumo-infer-compat.socket
+After=llama-server.service
+
+[Service]
+ExecStart=/lib/systemd/systemd-socket-proxyd 127.0.0.1:11434
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
