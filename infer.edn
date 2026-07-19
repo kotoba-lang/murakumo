@@ -6,6 +6,12 @@
 ;; serves the OpenAI-compatible API.
 {:infer/rpc-port 50052
  :infer/api-port 8090
+ ;; embedding engine head port (ADR-2607192200 2026-07-19 addendum) —
+ ;; deliberately separate from :infer/api-port (the chat head) so the two
+ ;; llama-server processes never collide and murakumo-main chat traffic is
+ ;; never touched by embedding load. See murakumo.infer.engine/embed-head-cmd
+ ;; + murakumo.infer/cmd-serve-embed.
+ :infer/embed-port 8091
  ;; Claude Code (via the /v1/messages Anthropic bridge) always sends its full
  ;; ~89-tool definition set — ~48K prompt tokens before the conversation even
  ;; starts. 4096 (llama-server's own default) and then 65536 both proved too
@@ -339,4 +345,38 @@
    :model/experts 512
    :model/active-experts 10             ; top-k
    :model/moe-shared-expert? true
-   :model/weight-bytes 46000000000}}}   ; ~46 GB full 4-bit checkpoint (OOMs a 32 GiB Mac whole)
+   :model/weight-bytes 46000000000}   ; ~46 GB full 4-bit checkpoint (OOMs a 32 GiB Mac whole)
+
+  ;; ── embedding (ADR-2607192200 2026-07-19 addendum) ────────────────────────
+  ;; :model/engine :llamacpp-embed routes to murakumo.infer.engine/embed-head-cmd
+  ;; (murakumo.infer/cmd-serve-embed) instead of the fleet-wide ring or
+  ;; mlx-moe: ONE node runs `llama-server --embedding --pooling mean` on
+  ;; :infer/embed-port (8091 — separate from the chat head's 8090), so
+  ;; murakumo-main chat traffic is never touched by this addition.
+  ;;
+  ;; gpustack/bge-m3-GGUF verified live via the HF API 2026-07-19 (this repo's
+  ;; :hf/repo has NOT been independently re-verified beyond that API check —
+  ;; treat as high-confidence, not on-disk-probed): a GGUF quantization of
+  ;; BAAI/bge-m3 (multilingual dense/sparse/multi-vector embedding model,
+  ;; ~100 languages, 1024-dim dense output, 8192 native context, bert-family
+  ;; architecture per the GGUF metadata). Q8_0 (635MB, HF file listing) chosen
+  ;; over the smaller K-quants (Q2_K..Q6_K also published in the same repo)
+  ;; because embedding quality is known to degrade more from aggressive
+  ;; quantization than generative quality does, and 635MB is trivial either
+  ;; way next to the chat head's tens-of-GB checkpoint — there is no capacity
+  ;; pressure pushing toward a smaller quant here. :model/dir is a projected
+  ;; path (this repo has not yet been pulled onto any fleet node — see
+  ;; `bb murakumo model setup bge-m3-embed-gguf`), following the same
+  ;; per-model-id directory convention as qwen-agentworld-35b-a3b above.
+  "bge-m3-embed-gguf"
+  {:model/id "bge-m3-embed-gguf"
+   :model/family "BGE-M3"
+   :model/format :gguf
+   :model/engine :llamacpp-embed
+   :hf/repo "gpustack/bge-m3-GGUF"
+   :model/gguf "bge-m3-Q8_0.gguf"
+   :model/dir "/home/gad/models/bge-m3-embed-gguf"
+   :model/context 8192
+   :model/embedding-dim 1024
+   :model/pooling "mean"
+   :model/weight-bytes 635000000}}}   ; HF file-listing size (Q8_0, verified via HF API 2026-07-19)

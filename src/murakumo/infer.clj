@@ -495,6 +495,41 @@
           (println (format "[%s] unit murakumo-standalone %s — http://%s:%s/v1 (systemd: Restart=on-failure, boot-persistent; `systemctl status murakumo-standalone` on the head; no RPC workers needed)"
                            (:host head-cfg) (str/trim (str out)) (api-host head-cfg) port)))))))
 
+(defn cmd-serve-embed
+  "Single-node llama.cpp embedding server (ADR-2607192200 2026-07-19
+   addendum) — no `plan`/ring needed, same single-node posture as
+   cmd-serve-moe above but for the dedicated :llamacpp-embed engine. Runs on
+   :infer/embed-port (default 8091), separate from the chat head's
+   :infer/api-port (8090) — the pkill pattern below matches ONLY processes
+   whose command line contains `--embedding`, so it can never touch the
+   chat head's own `llama-server` process (cmd-serve/cmd-serve-standalone),
+   which never passes that flag."
+  [[model-id]]
+  (let [cfg (load-config)
+        model (model-or-die cfg (or model-id "bge-m3-embed-gguf"))
+        head-cfg (:infer/head cfg)
+        remote? (:remote? head-cfg)
+        bin-dir (if remote?
+                  (or (:standalone-bin-dir head-cfg) (:bin-dir head-cfg ".murakumo/bin"))
+                  "bin")
+        model-path (if remote?
+                     (str (model-dir head-cfg model) "/" (:model/gguf model))
+                     (:model/gguf model))
+        opts {:bin-dir bin-dir
+              :model-path model-path
+              :port (:infer/embed-port cfg 8091)
+              :ctx (:model/context model 8192)
+              :pooling (:model/pooling model "mean")
+              :extra-args (:model/llama-extra-args model)}
+        cmd (engine/embed-head-cmd opts)]
+    (println cmd)
+    (if remote?
+      (let [{:keys [out]} (ssh/sh (:host head-cfg)
+                                  (format "pkill -f 'llama-server .*--embedding' 2>/dev/null || true; sleep 0.3; nohup %s >/tmp/murakumo-embed.log 2>&1 & sleep 1; pgrep -f 'llama-server .*--embedding' >/dev/null && echo serving || echo FAILED" cmd))]
+        (println (format "[%s] %s — http://%s:%s/v1 (first launch downloads-free — model must already be on disk via `bb murakumo model setup`; watch /tmp/murakumo-embed.log)"
+                         (:host head-cfg) out (api-host head-cfg) (:infer/embed-port cfg 8091))))
+      (p/shell cmd))))
+
 (defn cmd-generate
   "One completion via the head's /v1 API. Targets whichever host actually
    served the last `plan` — the mlx-moe node when the saved plan is
@@ -539,5 +574,6 @@
     "ps" (cmd-ps args)
     "serve" (cmd-serve args)
     "serve-standalone" (cmd-serve-standalone args)
+    "serve-embed" (cmd-serve-embed args)
     "generate" (cmd-generate args)
-    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf] [parallel]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|gateway [port]")))
+    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf] [parallel]|serve-embed [model]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|gateway [port]")))
