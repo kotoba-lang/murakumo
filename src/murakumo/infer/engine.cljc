@@ -20,6 +20,15 @@
 ;;                  page in from SSD as the router selects them instead of
 ;;                  sharding layers across the fleet (murakumo.infer.moe).
 ;;
+;;   :llamacpp-embed  single-node llama.cpp embedding server (ADR-2607192200
+;;                  2026-07-19 addendum) — like :mlx-moe, no --rpc/--tensor-split
+;;                  ring: the embedding model (BGE-M3-class, ~1024-dim dense) is
+;;                  small enough for one node. `--embedding --pooling` switches
+;;                  llama-server into embedding-serving mode (OpenAI-compatible
+;;                  /v1/embeddings) on a port separate from any chat head, so
+;;                  murakumo-main chat traffic (:llamacpp-rpc's head-cmd) is
+;;                  never touched by this engine.
+;;
 ;; Everything here is pure string/data assembly — runnable and testable anywhere.
 
 (ns murakumo.infer.engine
@@ -124,6 +133,23 @@
        (when warmup (str " --warmup " warmup))
        (when (seq extra-args) (str " " (str/join " " extra-args)))))
 
+;; ── llamacpp-embed (single-node, no ring — mirrors :mlx-moe's positioning) ──
+
+(defn embed-head-cmd
+  "Single-node llama.cpp embedding server — model is small enough that no
+   --rpc/--tensor-split ring is needed (mirrors :mlx-moe's single-node
+   positioning). --embedding + --pooling switch llama-server into
+   embedding-serving mode (OpenAI-compatible /v1/embeddings), on a port
+   separate from any chat head so murakumo-main chat traffic is never
+   touched by this addition."
+  [{:keys [bin-dir model-path port ctx pooling parallel extra-args]
+    :or {port 8091 ctx 8192 pooling "mean" parallel 4}}]
+  (str bin-dir "/llama-server -m " model-path
+       " --embedding --pooling " pooling
+       " -ngl 999 -c " ctx " --parallel " parallel
+       " --host 0.0.0.0 --port " port
+       (when (seq extra-args) (str " " (str/join " " extra-args)))))
+
 (defn commands
   "Plan + engine + opts → {:workers [...] :head {...}} process specs."
   [plan engine opts]
@@ -134,4 +160,7 @@
                :head {:cmd (mlx-launch-cmd plan opts)}}
     ;; :mlx-moe ignores `plan` (no ring to conduct) — the sole node + capacity
     ;; already live in opts (murakumo.infer.moe/plan → cmd-serve-moe).
-    :mlx-moe {:head {:cmd (mlx-moe-cmd opts)}}))
+    :mlx-moe {:head {:cmd (mlx-moe-cmd opts)}}
+    ;; :llamacpp-embed also ignores `plan` (single node, no ring) — same
+    ;; single-node posture as :mlx-moe, for the embedding engine instead.
+    :llamacpp-embed {:head {:cmd (embed-head-cmd opts)}}))
