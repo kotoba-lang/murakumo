@@ -26,7 +26,13 @@
     (when-not (seq repo)
       (throw (ex-info "model has no :hf/repo" {:model (:model/id model)})))
     (str "mkdir -p " (quote-arg dest)
-         " && (command -v hf >/dev/null 2>&1 || python3 -m pip install --user -q -U huggingface_hub)"
+         ;; --break-system-packages: modern Debian/Ubuntu (PEP 668,
+         ;; "externally-managed-environment") refuses even a --user pip
+         ;; install without it — verified live 2026-07-19 against gad
+         ;; (Ubuntu 24.04). Still --user (never touches system site-packages
+         ;; or apt-managed files), just overrides the refusal for a
+         ;; user-local install of one well-known PyPI package.
+         " && (command -v hf >/dev/null 2>&1 || python3 -m pip install --user --break-system-packages -q -U huggingface_hub)"
          " && export PATH=\"$(python3 -m site --user-base)/bin:$HOME/.local/bin:$PATH\""
          " && hf download " (quote-arg repo)
          (apply str (map #(str " " (quote-arg %)) files))
