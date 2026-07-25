@@ -1,39 +1,48 @@
 ;; Offline unit tests for the exec shell's pure helpers (no SSH is opened).
+;; The ssh dialect itself is tested in murakumo.tunnel-test — this file only
+;; covers what the executor adds on top: probing and multiplexing plumbing.
 ;;   nbb --classpath src:test test/murakumo/task_exec_test.cljs
 
 (ns murakumo.task-exec-test
-  (:require [cljs.test :refer [deftest is testing run-tests]]
+  (:require ["node:fs" :as fs]
+            [cljs.test :refer [deftest is testing run-tests]]
             [clojure.string :as str]
             [murakumo.task.exec :as exec]))
 
-(deftest ssh-argv-is-non-interactive
-  (let [argv (exec/ssh-argv "asher" "hostname" 8)]
-    (is (= "ssh" (first argv)))
-    (is (some #{"BatchMode=yes"} argv) "never prompt — an unreachable node must fail fast")
-    (is (some #{"ConnectTimeout=8"} argv))
-    (is (= "hostname" (last argv)))))
+(deftest probe-command-is-portable-and-answers-both-questions
+  (let [cmd (exec/probe-cmd 8077)]
+    (is (str/includes? cmd "hw.ncpu") "macOS core count")
+    (is (str/includes? cmd "nproc") "Linux core count")
+    (is (str/includes? cmd "MemTotal") "Linux memory")
+    (is (str/includes? cmd "http://localhost:8077/health") "mesh health in the same round trip")
+    (is (str/includes? (exec/probe-cmd 8076) ":8076/health") "per-node port is honoured")))
 
-(deftest wrapped-command-survives-a-bare-exit
-  (let [w (exec/wrap-cmd "exit 7")]
-    (is (str/starts-with? w "( ") "the payload runs in a subshell…")
-    (is (str/includes? w "__mrc=$?") "…so its status can still be captured")
-    (is (str/includes? w (str "echo \"" exec/rc-marker "$__mrc\"")))))
+(deftest probe-parsing
+  (testing "healthy node with a live kotoba-server"
+    (let [p (exec/parse-probe "10 17179869184 1.53 dannoMac-mini.local\nhealth:{:status ok}")]
+      (is (= 10 (:cores p)))
+      (is (= 17179869184 (:mem-bytes p)) "byte counts must survive (cljs `int` would zero this)")
+      (is (= 1.53 (:load1 p)))
+      (is (= "dannoMac-mini.local" (:hostname p)))
+      (is (true? (:mesh-up? p)))))
+  (testing "node up, mesh down — reported honestly, not as a probe failure"
+    (let [p (exec/parse-probe "10 17179869184 0.4 asher.local\nhealth:")]
+      (is (= 10 (:cores p)))
+      (is (false? (:mesh-up? p)))
+      (is (nil? (:mesh-health p)))))
+  (testing "big-memory Linux node"
+    (is (= 50130219008 (:mem-bytes (exec/parse-probe "32 50130219008 0.16 gad\nhealth:"))))))
 
-(deftest in-band-exit-code-parsing
-  (testing "sentinel wins and is stripped from stdout"
-    (is (= ["hello" 0] (exec/parse-rc "hello\n__murakumo_rc=0")))
-    (is (= ["" 7] (exec/parse-rc "__murakumo_rc=7")))
-    (is (= ["a\nb" 3] (exec/parse-rc "a\nb\n__murakumo_rc=3"))))
-  (testing "no sentinel (connection died / killed) => nil, caller falls back to ssh's code"
-    (is (= ["partial output" nil] (exec/parse-rc "partial output"))))
-  (testing "a task that legitimately prints something marker-shaped last still parses"
-    (is (= ["done" 12] (exec/parse-rc "done\n__murakumo_rc=12")))))
-
-(deftest probe-output-parsing
-  (let [cmd exec/probe-cmd]
-    (is (str/includes? cmd "hw.ncpu") "macOS path")
-    (is (str/includes? cmd "nproc") "Linux path")
-    (is (str/includes? cmd "MemTotal") "Linux memory path")))
+(deftest multiplexing-plumbing
+  (testing "disabled by explicit opt-out"
+    (is (nil? (exec/control-dir! {:multiplex? false})))
+    (is (nil? (exec/control-path nil))))
+  (testing "enabled by default: a private dir, one socket per host via %C"
+    (let [dir (exec/control-dir! {})]
+      (is (some? dir))
+      (is (str/includes? (exec/control-path dir) "%C"))
+      (is (str/starts-with? (exec/control-path dir) dir))
+      (.rmSync fs dir #js {:recursive true :force true}))))
 
 (defmethod cljs.test/report [:cljs.test/default :end-run-tests] [m]
   (println (str "\n" (:test m) " tests, " (:pass m) " assertions, "

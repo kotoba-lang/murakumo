@@ -16,7 +16,9 @@
              :doc "Offline unit tests for the pure task scheduler (no SSH)."}
  :test-task-exec {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/task_exec_test.cljs"]
                   :doc "Offline unit tests for the exec shell's pure helpers (no SSH)."}
- :test-tasks {:runs [:test-task :test-task-exec]
+ :test-tunnel {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/tunnel_test.cljc"]
+               :doc "Offline tests for the fleet transport contract (in-band exit status, multiplexing, argv shapes)."}
+ :test-tasks {:runs [:test-task :test-task-exec :test-tunnel]
               :doc "Every offline test that runs under nbb today."}
 
  :claude {:cmd ["tools/claude-murakumo/claude-murakumo"], :pass-args? true, :doc "Run Claude Code against murakumo.cloud instead of Anthropic's own models (tools/claude-murakumo — same shape as z.ai's claude-zai wrapper for GLM)."}

@@ -30,12 +30,86 @@
    :connect-timeout-s 8})
 
 (defn slots
-  "Concurrent task capacity of `node`: explicit :slots, else the opts override,
-   else the node's core count, clamped to :max-slots. Always >= 1."
+  "Concurrent task capacity of `node`: a fleet-wide budget decided by `prepare`
+   wins, else explicit :slots, else the opts override, else the node's core
+   count, clamped to :max-slots. Always >= 1."
   [node opts]
-  (let [{:keys [max-slots slots-per-node]} (merge default-opts opts)]
-    (max 1 (min (or max-slots 8)
-                (or (:slots node) slots-per-node (:cores node) 1)))))
+  (or (get (:slots-by-node opts) (:name node))
+      (let [{:keys [max-slots slots-per-node]} (merge default-opts opts)]
+        (max 1 (min (or max-slots 8)
+                    (or (:slots node) slots-per-node (:cores node) 1))))))
+
+(defn admit
+  "Operational admission gate, applied BEFORE placement.
+
+   `:max-load1` / `:max-load-per-core` skip nodes that are already saturated
+   (this fleet's minis also run other resident work, so a node at load 10.8 on
+   10 cores is healthy but a bad place to add tasks). A skipped node is
+   reported separately from `:unschedulable`: skipping is a throughput choice
+   about a healthy node, unschedulable means no node can ever satisfy the task.
+   Nodes with no measured load are admitted — a missing probe must not empty
+   the fleet."
+  [nodes {:keys [max-load1 max-load-per-core]}]
+  (reduce (fn [acc n]
+            (let [l (:load1 n)
+                  per-core (when (and l (pos? (or (:cores n) 0))) (/ l (:cores n)))
+                  over (cond
+                         ;; A node that failed its probe is not a candidate at
+                         ;; all — dropping it here (not just at `eligible?`)
+                         ;; keeps it from consuming the fleet's slot budget.
+                         (false? (:online? n true))
+                         [:unreachable (or (:probe-error n) "probe failed")]
+
+                         (and max-load1 l (> l max-load1))
+                         [:saturated (str "load1 " l " > " max-load1)]
+
+                         (and max-load-per-core per-core (> per-core max-load-per-core))
+                         [:saturated (str "load/core " (/ (Math/round (* 100.0 per-core)) 100.0)
+                                          " > " max-load-per-core)])]
+              (if over
+                (update acc :skipped conj
+                        {:node (:name n) :reason (first over) :detail (second over)})
+                (update acc :nodes conj n))))
+          {:nodes [] :skipped []}
+          nodes))
+
+(defn- trim-to-budget
+  "Scale a {node-name slots} map down so the total stays within `budget`,
+   proportionally and deterministically (largest allocations give up first)."
+  [slots-map budget]
+  (let [total (reduce + 0 (vals slots-map))]
+    (if (or (nil? budget) (<= total budget))
+      slots-map
+      (let [ratio (/ (double budget) (double total))
+            scaled (into {} (map (fn [[k v]] [k (max 1 (int (Math/floor (* v ratio))))]) slots-map))]
+        (loop [m scaled]
+          (let [t (reduce + 0 (vals m))]
+            (if (<= t budget)
+              m
+              (let [[k v] (first (sort-by (juxt (comp - val) key) m))]
+                (if (<= v 1)
+                  ;; every node is already at one slot: drop whole nodes, least
+                  ;; preferred (by name) first, so the budget is really honoured
+                  (recur (dissoc m (first (sort (keys m)))))
+                  (recur (assoc m k (dec v))))))))))))
+
+(defn prepare
+  "Fold health gates and the fleet-wide concurrency budget into a ready-to-use
+   {:nodes :skipped :opts}. `:max-inflight` caps how many tasks the whole fleet
+   runs at once (protects a shared LAN / the operator's laptop); it is applied
+   by shrinking each node's slot budget, never by silently dropping tasks."
+  [nodes opts]
+  (let [{:keys [nodes skipped]} (admit nodes opts)
+        base (into {} (map (fn [n] [(:name n) (slots n (dissoc opts :slots-by-node))]) nodes))
+        budgeted (trim-to-budget base (:max-inflight opts))
+        kept (filterv #(contains? budgeted (:name %)) nodes)
+        dropped (for [n nodes :when (not (contains? budgeted (:name n)))]
+                  {:node (:name n) :reason :over-inflight-budget
+                   :detail (str "fleet --max-inflight " (:max-inflight opts)
+                                " is smaller than the node count")})]
+    {:nodes kept
+     :skipped (into (vec skipped) dropped)
+     :opts (assoc opts :slots-by-node budgeted)}))
 
 (defn eligible?
   "Can `node` run `task`? Same placement vocabulary as reconcile/plan.cljc
@@ -143,6 +217,14 @@
                          (update :exclude-nodes (fnil conj []) node))))))
          vec)))
 
+(defn percentile
+  "Nearest-rank percentile of `xs` (0.0–1.0), nil for an empty sample."
+  [xs p]
+  (let [v (vec (sort xs))]
+    (when (seq v)
+      (nth v (min (dec (count v))
+                  (max 0 (int (Math/floor (* p (count v))))))))))
+
 (defn final-results
   "One result per task id — the last attempt made. A task that failed on asher
    and then succeeded on gad is ONE succeeded task with two attempts, so the
@@ -177,6 +259,11 @@
      :task-ms task-ms
      :speedup (when (and (pos? (or wall-ms 0)) (pos? task-ms))
                 (/ (double task-ms) (double wall-ms)))
+     ;; NOTE: :speedup compares total task time to wall clock, so it only
+     ;; compares runs of the SAME work. Per-task latency (p50/p95) is the
+     ;; figure to watch when the transport changes.
+     :p50-ms (percentile durations 0.5)
+     :p95-ms (percentile durations 0.95)
      :slowest (when (seq durations) (apply max durations))
      :failures (mapv (fn [r] {:id (get-in r [:task :id])
                               :node (:node r)
