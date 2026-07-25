@@ -73,6 +73,7 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `overlay dial\|relay --overlay ...` | native overlay driver shell: validate canonical dial/relay argv and emit the session record a real stream/packet driver will open |
 | `fleet <datom-log.edn> [now-ms]` | **coordination-plane view** — fold a [kotoba-fleet](https://github.com/kotoba-lang/kotoba-fleet) Datom log into one snapshot (per-work holders · active leases · pending proposals) via `kotoba.fleet.view/snapshot`. The `status` of the 20-agent coordination layer, next to the mesh `status`. |
 | `infer probe\|plan <model>\|provision\|up\|down\|ps\|serve\|generate` | **distributed inference across the fleet, exo-style** — memory-weighted shard plan + pipeline-parallel ring (see below) |
+| `task probe\|plan\|run\|report` | **fleet task plane** — fan a BATCH of short-lived tasks over the fleet and gather the results (k8s-Job / Ray-tasks shape, next to `reconcile`'s k8s-Deployment shape). `nbb scripts/run-task.cljs task run --n 22 --cmd 'hostname'` (see below) |
 
 ## Layout
 
@@ -117,6 +118,11 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `src/murakumo/infer/engine.cljc` | **PURE engine adapters**: plan → llama.cpp `--rpc/--tensor-split` cmds / `mlx.launch` ring cmds / `mlx-moe serve` cmd |
 | `src/murakumo/infer.clj` | the inference operator: SSH probe → plan → provision → ring up/down → serve/generate (mlx-moe models take the single-node path) |
 | `test/murakumo/infer_test.clj` | offline unit tests for the pure planner/engine (`bb test`) |
+| `src/murakumo/task/plan.cljc` | **PURE task scheduler**: eligibility (labels/roles/memory/exclusions) → slot-aware least-filled placement → retry-elsewhere → honest speedup summary |
+| `src/murakumo/task/exec.cljs` | nbb execution shell: bounded-concurrency SSH fan-out, per-task timeout, in-band exit-code sentinel, node probing |
+| `src/murakumo/task.cljs` | the `task` CLI (nbb): `probe` / `plan` / `run` / `report` + run ledger |
+| `test/murakumo/task_plan_test.cljs` | offline unit tests for the pure scheduler (`nbb scripts/run-task.cljs test-task`) |
+| `test/murakumo/task_exec_test.cljs` | offline unit tests for the exec shell's pure helpers |
 | `test/murakumo/infer_moe_test.cljc` | offline unit tests for the pure mlx-moe planner (`bb test`) |
 
 ## Dashboard + Datom persistence
@@ -186,6 +192,44 @@ queryable as-of Datom chain (alongside `dash`'s heartbeat snapshots).
 > the auction. `murakumo.app.edn` sits **above** that with the fleet-level desired
 > replica count and the **convergence loop** (drift detection + self-heal + history)
 > that the one-shot deploy doesn't have. `reconcile` ≈ wadm; `deploy` ≈ `wash app`.
+
+## Task plane — `task` (the fleet as one batch executor)
+
+`reconcile` converges **long-lived apps** (k8s Deployment / wadm shape).
+`task` fans a **batch of short-lived units of work** across the same fleet and
+gathers the results — the k8s-Job / Ray-`.remote` shape that ADR-2607071400's
+equivalence table had no entry for (ADR-2607250100).
+
+```bash
+nbb scripts/run-task.cljs task probe                       # cores / RAM / load1 / reachability, per node
+nbb scripts/run-task.cljs task plan  --n 22 --cmd 'hostname'   # pure placement preview, nothing executed
+nbb scripts/run-task.cljs task run   --n 22 --cmd 'hostname'   # place → execute over SSH → gather → retry
+nbb scripts/run-task.cljs task run   --tasks batch.edn         # heterogeneous batch from a file
+nbb scripts/run-task.cljs task run   --n 8 --labels tier=gpu --cmd './render.sh'
+nbb scripts/run-task.cljs task report --last 5                 # replay recorded runs from the ledger
+```
+
+- **Placement** reuses `reconcile`'s vocabulary — `--labels` (all must match),
+  `--roles` (all must be present) — plus `--min-mem-gb` and `--nodes`.
+  Unschedulable tasks are **reported, never silently dropped**.
+- **Slots**: each node runs at most `min(cores, --max-slots)` tasks at once
+  (`--slots N` to override). Placement is least-*filled*-first (assigned/slots),
+  so a 32-core box takes proportionally more than a 10-core mini.
+- **Retry**: a failed task is re-placed on a **different** node (`--attempts`,
+  default 2). A task that succeeds on retry is a **succeeded task** — the run's
+  verdict is the final attempt, with `attempts`/`retried` reported separately.
+  This is Ray's task retry, *not* lineage re-execution.
+- **Exit codes are read in band.** Measured 2026-07-25: Tailscale SSH on the
+  macOS nodes does **not** propagate the remote exit status (`ssh asher 'exit 7'`
+  → 0), while the Linux node returns it correctly. Every command therefore runs
+  in a subshell that echoes a `__murakumo_rc=` sentinel, which wins over ssh's
+  own code — otherwise 10 of 11 nodes would report silent false successes.
+- **Ledger**: every run appends one EDN map to `.murakumo-task-ledger.edn`
+  (`--ledger` to move it), the same append-only shape as the relay ledger.
+
+Deliberately NOT provided (see ADR-2607250100 for the honest gap list): a
+distributed object store / futures, lineage-based re-execution, gang scheduling
+or placement groups, and an autoscaler. Results come back inline.
 
 ## Connectivity — `connect.edn` (one description, every transport)
 

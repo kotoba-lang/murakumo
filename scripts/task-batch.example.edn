@@ -1,0 +1,18 @@
+;; Example heterogeneous batch for `task run --tasks scripts/task-batch.example.edn`.
+;; Each entry is a task; per-task placement/resources/timeout override the CLI flags.
+{:tasks
+ [{:id "gpu-probe"
+   :cmd "uname -m; (rocm-smi --showproductname 2>/dev/null || nvidia-smi -L 2>/dev/null || echo 'no discrete gpu')"
+   :placement {:labels {:tier "gpu"}}}
+
+  {:id "mesh-health"
+   :cmd "curl -s --max-time 5 http://localhost:8077/health || echo 'no kotoba-server on :8077'"
+   :placement {:roles ["pin" "compute"]}
+   :timeout-ms 20000}
+
+  {:id "big-mem-only"
+   :cmd "echo running on $(hostname -s) with $(( $(sysctl -n hw.memsize 2>/dev/null || awk '/MemTotal/{print $2*1024}' /proc/meminfo) / 1073741824 ))G"
+   :min-mem-bytes 34359738368}
+
+  {:id "disk-headroom"
+   :cmd "df -h / | tail -1"}]}
