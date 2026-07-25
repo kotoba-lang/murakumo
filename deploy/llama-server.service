@@ -1,0 +1,35 @@
+# The fleet main chat server on the inference head (root@100.82.98.110).
+#
+# Captured into the repo 2026-07-25 because it existed ONLY on that machine:
+# infer.edn has documented `:infer/ctx 262144` for weeks while the unit that
+# actually runs was serving --ctx-size 8192, and nothing in the repo could have
+# shown the difference. Config that lives only on a box is config nobody can
+# review.
+#
+# --ctx-size 262144 --parallel 4 → 65536 tokens per slot, which is what an
+# individual request is measured against. The prior 8192 was the binding
+# constraint on the fleet's coding agent: every L3 benchmark attempt was
+# refused before the model saw the task (kotoba-fleet examples/eval/results,
+# ADR-2607252600). KV cache for this hybrid Gated-DeltaNet/SSM architecture is
+# ~5GB f16 at the full 262144 (only 10 of 40 layers are full-attention), against
+# ~46GB on the head with a 20.6GB model — measured after the change: 42GB free.
+#
+# Install:  scp deploy/llama-server.service root@<head>:/etc/systemd/system/ \
+#           && ssh root@<head> 'systemctl daemon-reload && systemctl restart llama-server'
+# Verify:   curl -s https://infer.murakumo.cloud/props \
+#             | jq '.default_generation_settings.n_ctx, .total_slots'
+[Unit]
+Description=llama.cpp Vulkan server (Qwen3.6 35B A3B MoE multimodal — fleet main, gemma deprecated 2026-07-17 owner directive, ADR-2607173100)
+After=network.target
+
+[Service]
+Type=simple
+User=gad
+WorkingDirectory=/home/gad/llamacpp-vk
+Environment="LD_LIBRARY_PATH=/home/gad/llamacpp-vk"
+ExecStart=/home/gad/llamacpp-vk/llama-server   -m /home/gad/models/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-Q4_K_M.gguf   --mmproj /home/gad/models/Qwen3.6-35B-A3B-GGUF/mmproj-Qwen3.6-35B-A3B-BF16.gguf   --host 0.0.0.0 --port 11434   -ngl 999   --ctx-size 262144   --parallel 4   --jinja
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
