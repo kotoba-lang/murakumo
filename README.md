@@ -23,6 +23,8 @@ the nodes beyond the two kotoba binaries.
 Operator policy is defined in [`RULES.md`](RULES.md). The liveness/model-placement
 decision is recorded in
 [`docs/adr/ADR-260712-fleet-liveness-model-provisioning.md`](docs/adr/ADR-260712-fleet-liveness-model-provisioning.md),
+Component authority epochs are defined in
+[`docs/adr/ADR-260725-component-authority-epochs.md`](docs/adr/ADR-260725-component-authority-epochs.md),
 with recovery commands in [`docs/FLEET-RECOVERY.md`](docs/FLEET-RECOVERY.md).
 
 Each fleet node runs `kotoba-server` as a **macOS LaunchAgent** (`RunAtLoad` +
@@ -85,6 +87,7 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `cloud.edn` | **murakumo.cloud overlay declaration**: domain, relay set, direct transports, and policy |
 | `murakumo.app.edn` | **declarative desired state** (wadm manifest): apps × replicas × placement (incl. `:reach`) |
 | `src/murakumo/config.cljc` | portable config/path/runtime resolution helpers |
+| `src/murakumo/component_authority.cljc` | Component placement/revocation authority: monotonic epochs and exact events consumed by Kototama hosts |
 | `src/murakumo/connect.cljc` | connect.edn loader + portable `serves-reach?` (pure: can a node reach a client class on a plane?) |
 | `src/murakumo/cloud.clj` | `bb cloud` CLI shell: load fleet/cloud declarations and print plans or records |
 | `src/murakumo/cloud/plan.cljc` | portable murakumo.cloud overlay planner: stable IDs, relay choice, node/relay/route/policy records |
