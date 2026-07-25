@@ -675,9 +675,18 @@ bb murakumo nodes    # nodes without :status "authorized" are now excluded,
 > - `~/.murakumo/bin/kotoba-server` is installed on **5** of them (simeon, levi, joseph, dan,
 >   benjamin) and those 5 answer `/health` with `wasm_executor: ready`. The other 6 have no
 >   binary — they are un-provisioned, not crashed.
-> - **No node has `~/Library/LaunchAgents/com.murakumo.kotoba-mesh.plist`.** The residency this
->   README describes (`RunAtLoad` + `KeepAlive` ⇒ self-heal) is not installed anywhere; the 5
->   live servers are plain processes with nothing to restart them.
+> - **No LaunchAgent on any node starts `kotoba-server`.** The residency this README describes
+>   (`RunAtLoad` + `KeepAlive` ⇒ self-heal) is not in effect: the 5 live servers run with
+>   `PPID 1`, i.e. they are launchd-*adopted orphans*, not launchd-*managed* services — nothing
+>   restarts one that dies and nothing starts one at login. murakumo's own
+>   `com.murakumo.kotoba-mesh` label is installed on zero nodes.
+>   Do not be misled by the `ai.gftd.murakumo-*` agents that several nodes do carry: the
+>   `ai.gftd.murakumo-mesh` one launches `/usr/local/bin/gftd-murakumo … tunnel` against
+>   `murakumo.gftd.ai` (a different system that happens to share the name), and it is configured
+>   `RunAtLoad=false` + `KeepAlive=false` anyway. `issachar` carries a
+>   `com.etzhayyim.kotoba-server` plist pointing at a binary that no longer exists.
+> - The `kotoba-server` binaries that ARE installed are byte-identical across all 5 nodes
+>   (sha256 `f1c813cf…`), so redistributing that artifact needs no rebuild.
 > - The `LINKS` column counts peers seen in `~/.murakumo/mesh.log`, which survives the binary
 >   being removed — read it as history, not as current peering.
 >
