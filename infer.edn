@@ -27,7 +27,17 @@
  ;; Gated-DeltaNet/SSM architecture, the other 30 use a FIXED ~63MB recurrent
  ;; state regardless of context length) measures 5GB f16 — trivial against
  ;; the head's ~46GB unified RAM alongside the 20.6GB model.
- :infer/ctx 262144
+ ;; 2026-07-25: measured on the head rather than reasoned about. This value is
+ ;; the TOTAL passed as --ctx-size; what a request is measured against is the
+ ;; per-slot window (total / --parallel), so at 4 slots this gives 131072 each.
+ ;; KV costs ~19 KiB per token of total context on this hybrid architecture
+ ;; (10 of 40 layers full-attention): 262144 → 26 GiB VRAM, 524288 → 31 GiB,
+ ;; 1048576 → 41 GiB of the 48 GiB carve-out. Prefill runs 856 tok/s, so a full
+ ;; 131072-token window costs ~2.5 min before the first token. 131072 per slot
+ ;; covers the Claude Code bridge's ~48k opening prompt with headroom; the
+ ;; model's own ceiling is n_ctx_train 262144 and per-slot values above that buy
+ ;; nothing. See deploy/llama-server.service for the measurement table.
+ :infer/ctx 524288
  ;; auto-detect measured no different from explicit 'on' for this model (RADV
  ;; Vulkan backend, mostly-linear-attention arch limits how much FA can help)
  ;; — set explicitly so it's not silently 'auto'-disabled by a future build.

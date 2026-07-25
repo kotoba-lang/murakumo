@@ -1,18 +1,40 @@
 # The fleet main chat server on the inference head (root@100.82.98.110).
 #
 # Captured into the repo 2026-07-25 because it existed ONLY on that machine:
-# infer.edn has documented `:infer/ctx 262144` for weeks while the unit that
-# actually runs was serving --ctx-size 8192, and nothing in the repo could have
-# shown the difference. Config that lives only on a box is config nobody can
-# review.
+# infer.edn had documented `:infer/ctx 262144` for weeks while the unit that
+# actually ran served --ctx-size 8192, and nothing in the repo could show the
+# difference. Config that lives only on a box is config nobody can review.
 #
-# --ctx-size 262144 --parallel 4 → 65536 tokens per slot, which is what an
-# individual request is measured against. The prior 8192 was the binding
-# constraint on the fleet's coding agent: every L3 benchmark attempt was
-# refused before the model saw the task (kotoba-fleet examples/eval/results,
-# ADR-2607252600). KV cache for this hybrid Gated-DeltaNet/SSM architecture is
-# ~5GB f16 at the full 262144 (only 10 of 40 layers are full-attention), against
-# ~46GB on the head with a 20.6GB model — measured after the change: 42GB free.
+# ── sizing, measured on this head 2026-07-25 (not extrapolated) ──────────────
+#
+# What a request is measured against is the PER-SLOT window = --ctx-size /
+# --parallel. llama.cpp warns `n_ctx_seq < n_ctx_train` when that is below the
+# model's trained context.
+#
+#   model            Qwen3.6-35B-A3B Q4_K_M, 20GB + 861MB mmproj
+#   n_ctx_train      262144  ← the model's own ceiling; llama.cpp caps a
+#                              sequence there, and the checkpoint's claimed
+#                              YaRN 1M needs a source patch, not a flag
+#   device           Radeon 8060S (RADV GFX1151), 48 GiB VRAM carve-out
+#                              (Vulkan reports 73 GiB incl. GTT), 46 GiB system
+#   KV cost          ~19 KiB per token of TOTAL context — this is a hybrid
+#                              Gated-DeltaNet/SSM model, only 10 of 40 layers
+#                              are full-attention, so KV is far cheaper than a
+#                              dense 35B would be
+#   throughput       856 tok/s prefill, 59 tok/s generation (33k-token probe)
+#
+#   --ctx-size  per slot (÷4)   VRAM used   worst-case prefill
+#   262144      65536           26 / 48 GiB   ~1.3 min
+#   524288      131072          31 / 48 GiB   ~2.5 min   ← current
+#   1048576     262144          41 / 48 GiB   ~5.1 min   (model's full window)
+#
+# 131072 per slot is the standing choice: it covers every measured consumer —
+# the Claude Code bridge sends ~48k prompt tokens before a conversation starts,
+# the fleet coding agent ~10-15k — with better than 2x headroom, at 65% VRAM,
+# and a full-window prefill still returns inside three minutes. The model's
+# full 262144 per slot DOES fit (41/48 GiB, verified by running it), but it
+# costs 10 GiB more and up to five minutes of prefill for a window nothing
+# currently asks for. Above 262144 per slot there is nothing to buy.
 #
 # Install:  scp deploy/llama-server.service root@<head>:/etc/systemd/system/ \
 #           && ssh root@<head> 'systemctl daemon-reload && systemctl restart llama-server'
@@ -27,7 +49,7 @@ Type=simple
 User=gad
 WorkingDirectory=/home/gad/llamacpp-vk
 Environment="LD_LIBRARY_PATH=/home/gad/llamacpp-vk"
-ExecStart=/home/gad/llamacpp-vk/llama-server   -m /home/gad/models/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-Q4_K_M.gguf   --mmproj /home/gad/models/Qwen3.6-35B-A3B-GGUF/mmproj-Qwen3.6-35B-A3B-BF16.gguf   --host 0.0.0.0 --port 11434   -ngl 999   --ctx-size 262144   --parallel 4   --jinja
+ExecStart=/home/gad/llamacpp-vk/llama-server   -m /home/gad/models/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-Q4_K_M.gguf   --mmproj /home/gad/models/Qwen3.6-35B-A3B-GGUF/mmproj-Qwen3.6-35B-A3B-BF16.gguf   --host 0.0.0.0 --port 11434   -ngl 999   --ctx-size 524288   --parallel 4   --jinja
 Restart=on-failure
 RestartSec=5
 
