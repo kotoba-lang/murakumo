@@ -1,3 +1,24 @@
-;; Auto-generated from bb.edn (ADR-2607173000).
-;; nbb scripts/run-task.cljs <task> [args…]
-{:claude {:cmd ["tools/claude-murakumo/claude-murakumo"], :pass-args? true, :doc "Run Claude Code against murakumo.cloud instead of Anthropic's own models (tools/claude-murakumo — same shape as z.ai's claude-zai wrapper for GLM)."}, :quic-cert {:cmd ["clojure" "-M:quic-cert"], :pass-args? true, :doc "Issue/ensure stored QUIC cert/key material under .murakumo/kagi/quic."}, :quic-driver {:cmd ["clojure" "-M:quic-driver"], :pass-args? true, :doc "JVM Clojure QUIC transport driver. Args: check|dial|serve|serve-once --request-edn '<adapter-request>'."}}
+;; Originally generated from bb.edn (ADR-2607173000 Wave 3); hand-maintained
+;; since — bb.edn is gone, so this file is the entrypoint registry.
+;;   nbb scripts/run-task.cljs <task> [args…]
+;;
+;; NOTE (2026-07-25, ADR-2607250100): the Wave-3 conversion carried over only
+;; the three shell-out tasks at the bottom. The bb-hosted control-plane
+;; entrypoints (murakumo/nodes/status/provision/mesh/deploy/reconcile/infer/
+;; model/token/dash/cloud/overlay/test) were dropped and have NO runnable
+;; entrypoint today — those namespaces are .clj on babashka.process/cheshire,
+;; so they need an nbb port, not a re-added bb.edn. `task` is the first port.
+{:task {:cmd ["nbb" "src/murakumo/task.cljs"]
+        :pass-args? true
+        :doc "Fleet task plane (k8s-Job / Ray-tasks shape): probe | plan | run | report. Fans a BATCH of short-lived tasks over the fleet via SSH and gathers the results. e.g. `nbb scripts/run-task.cljs task run --n 22 --cmd 'hostname'`."}
+
+ :test-task {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/task_plan_test.cljs"]
+             :doc "Offline unit tests for the pure task scheduler (no SSH)."}
+ :test-task-exec {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/task_exec_test.cljs"]
+                  :doc "Offline unit tests for the exec shell's pure helpers (no SSH)."}
+ :test-tasks {:runs [:test-task :test-task-exec]
+              :doc "Every offline test that runs under nbb today."}
+
+ :claude {:cmd ["tools/claude-murakumo/claude-murakumo"], :pass-args? true, :doc "Run Claude Code against murakumo.cloud instead of Anthropic's own models (tools/claude-murakumo — same shape as z.ai's claude-zai wrapper for GLM)."}
+ :quic-cert {:cmd ["clojure" "-M:quic-cert"], :pass-args? true, :doc "Issue/ensure stored QUIC cert/key material under .murakumo/kagi/quic."}
+ :quic-driver {:cmd ["clojure" "-M:quic-driver"], :pass-args? true, :doc "JVM Clojure QUIC transport driver. Args: check|dial|serve|serve-once --request-edn '<adapter-request>'."}}
