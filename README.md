@@ -675,16 +675,24 @@ bb murakumo nodes    # nodes without :status "authorized" are now excluded,
 > - `~/.murakumo/bin/kotoba-server` is installed on **5** of them (simeon, levi, joseph, dan,
 >   benjamin) and those 5 answer `/health` with `wasm_executor: ready`. The other 6 have no
 >   binary — they are un-provisioned, not crashed.
-> - **No LaunchAgent on any node starts `kotoba-server`.** The residency this README describes
->   (`RunAtLoad` + `KeepAlive` ⇒ self-heal) is not in effect: the 5 live servers run with
->   `PPID 1`, i.e. they are launchd-*adopted orphans*, not launchd-*managed* services — nothing
->   restarts one that dies and nothing starts one at login. murakumo's own
->   `com.murakumo.kotoba-mesh` label is installed on zero nodes.
->   Do not be misled by the `ai.gftd.murakumo-*` agents that several nodes do carry: the
->   `ai.gftd.murakumo-mesh` one launches `/usr/local/bin/gftd-murakumo … tunnel` against
->   `murakumo.gftd.ai` (a different system that happens to share the name), and it is configured
->   `RunAtLoad=false` + `KeepAlive=false` anyway. `issachar` carries a
->   `com.etzhayyim.kotoba-server` plist pointing at a binary that no longer exists.
+> - **Residency IS in place on those 5**, and it is a **system LaunchDaemon**, not a user
+>   LaunchAgent: `/Library/LaunchDaemons/com.murakumo.kotoba-mesh.plist`, `RunAtLoad=true`,
+>   `KeepAlive=true`, with `com.murakumo.kotoba-mesh-watchdog` alongside it on dan / simeon /
+>   joseph. Every live server reports `XPC_SERVICE_NAME=com.murakumo.kotoba-mesh` and the full
+>   provisioned env (`KOTOBA_AGENT_*`, `KOTOBA_P2P_*`, roles/labels/ports, bootstrap peers), so
+>   these are launchd-managed services that self-heal as designed.
+>   **Look in `/Library/LaunchDaemons`, not `~/Library/LaunchAgents`**, and note that
+>   `launchctl list` run over SSH shows the *user* domain only — it will not list this job.
+>   (Two earlier passes of this note got that wrong in both directions; the prose above is what
+>   was actually measured.) The `ai.gftd.murakumo-*` agents several nodes carry are a different
+>   system — `/usr/local/bin/gftd-murakumo … tunnel` against `murakumo.gftd.ai` — and are
+>   unrelated to the kotoba mesh.
+> - So the gap is **provisioning, not residency**: the 5 dark Macs (asher, judah, zebulun,
+>   naphtali, issachar) have neither the binary nor the daemon. All 5 accept passwordless
+>   `sudo`, so installing the daemon is possible; disk headroom is thin on issachar (1.3G) and
+>   naphtali (2.8G). What is still missing is `MURAKUMO_OPERATOR_SEED`, from which each node's
+>   `KOTOBA_AGENT_*` / `KOTOBA_P2P_*` identity is deterministically derived — it is not in the
+>   environment, not in kagi under that name, and not in the login Keychain under that service.
 > - The `kotoba-server` binaries that ARE installed are byte-identical across all 5 nodes
 >   (sha256 `f1c813cf…`), so redistributing that artifact needs no rebuild.
 > - The `LINKS` column counts peers seen in `~/.murakumo/mesh.log`, which survives the binary
