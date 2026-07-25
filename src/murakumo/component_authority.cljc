@@ -4,13 +4,10 @@
   Murakumo decides where a Component may run and advances its epoch whenever
   that authority is revoked. Runtime hosts consume the emitted exact events;
   they do not infer authority from eventually-consistent placement telemetry."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [kotoba.abi.contract :as abi]))
 
 (def event-version 1)
-(def event-keys
-  #{:murakumo.component/version :murakumo.component/event
-    :murakumo.component/component-cid :murakumo.component/epoch
-    :murakumo.component/sequence :murakumo.component/node})
 
 (defn initial-state []
   {:epochs {} :placements {} :sequence 0})
@@ -24,18 +21,7 @@
 (defn valid-event?
   "Strict event validation for the process-boundary representation."
   [event]
-  (and (map? event)
-       (= event-keys (set (keys event)))
-       (= event-version (:murakumo.component/version event))
-       (contains? #{:placed :revoked} (:murakumo.component/event event))
-       (identifier? (:murakumo.component/component-cid event))
-       (pos-int? (:murakumo.component/epoch event))
-       (pos-int? (:murakumo.component/sequence event))
-       (or (nil? (:murakumo.component/node event))
-           (identifier? (:murakumo.component/node event)))
-       (if (= :placed (:murakumo.component/event event))
-         (some? (:murakumo.component/node event))
-         (nil? (:murakumo.component/node event)))))
+  (abi/valid-component-authority-event? event))
 
 (defn- event [state kind component-cid epoch node]
   {:murakumo.component/version event-version
