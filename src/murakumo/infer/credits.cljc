@@ -24,8 +24,16 @@
 (ns murakumo.infer.credits)
 
 (def default-per-token 1)          ; credits per generated token
-(def default-head-frac 1/10)       ; conductor's cut
-(def default-protocol-frac 1/20)   ; fleet treasury (upgrade fund)
+;; NOT ratio literals (1/10, 1/20): clojure.lang.Ratio is not a valid
+;; ClojureScript compile-time constant ("failed compiling constant: 1/10")
+;; -- this file's own docstring promises "runs identically in bb, the JVM,
+;; the CF Worker (cloud-murakumo /infer/credits) and a kotoba WASM
+;; component", so cljs portability is a real requirement here, not
+;; optional. (/ 1 10) evaluates to the identical Clojure ratio value at
+;; runtime on bb/JVM (arithmetic, not a literal, so it's fine there too) --
+;; only the *literal syntax* is the problem.
+(def default-head-frac (/ 1 10))     ; conductor's cut
+(def default-protocol-frac (/ 1 20)) ; fleet treasury (upgrade fund)
 
 (defn- memory-time
   "node → shard-bytes × duration-ms, the contribution weight of one run."
