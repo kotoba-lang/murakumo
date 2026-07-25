@@ -101,7 +101,7 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `src/murakumo/fleet.clj` | inventory load + `tailscale status` enrichment around the `.cljc` inventory helpers |
 | `src/murakumo/provision/plan.cljc` | portable provision/mesh helpers: p2p ports, bootstrap peers, plist rendering, rsync argv, launch commands |
 | `src/murakumo/report.cljc` | portable CLI report formatting for nodes/status/deploy/reconcile/help |
-| `src/murakumo/tunnel.cljc` | portable SSH local-forward command helpers |
+| `src/murakumo/tunnel.cljc` | **THE transport contract** (portable): ssh connection options, the in-band exit-status sentinel every remote command is wrapped in, optional ControlMaster multiplexing, local-forward command shapes |
 | `src/murakumo/core.clj` | the command implementations + per-node identity derivation |
 | `src/murakumo/reconcile/plan.cljc` | portable wadm planner — PURE desired/observed→plan core |
 | `src/murakumo/reconcile.clj` | the wadm CLI shell — collect/apply/watch/persist around the `.cljc` planner |
@@ -215,6 +215,22 @@ nbb scripts/run-task.cljs task report --last 5                 # replay recorded
 - **Slots**: each node runs at most `min(cores, --max-slots)` tasks at once
   (`--slots N` to override). Placement is least-*filled*-first (assigned/slots),
   so a 32-core box takes proportionally more than a 10-core mini.
+- **Admission**: `--max-load` / `--max-load-per-core` hold back nodes that are
+  already saturated by other resident work, and `--max-inflight` caps fleet-wide
+  concurrency by *shrinking slot budgets* rather than dropping tasks. Nodes that
+  fail their probe are dropped before the budget is divided, so an unreachable
+  node cannot consume capacity. Every held-back node is listed with its reason.
+- **Connection reuse**: one multiplexed SSH connection per node (ControlMaster),
+  established by the probe and reused by every task — measured on the fleet:
+  per-task p50 **241ms → 139ms**, 110-task wall **2572ms → 1926ms**. `--no-multiplex`
+  restores one fresh connection per task. (The socket path is length-checked:
+  macOS caps a unix socket at 104 bytes and `os.tmpdir()` alone eats half of it.)
+- **`probe` also reports mesh health** — the same round trip curls the node's own
+  `kotoba-server /health`, so `SSH up / MESH down` is visible per node.
+- **`--format edn`** emits the whole probe/plan/run/report payload as EDN for
+  piping into another tool; `p50`/`p95` per-task latency are reported next to
+  `speedup` (speedup only compares runs of the *same* work — latency is the
+  figure that survives a transport change).
 - **Retry**: a failed task is re-placed on a **different** node (`--attempts`,
   default 2). A task that succeeds on retry is a **succeeded task** — the run's
   verdict is the final attempt, with `attempts`/`retried` reported separately.
@@ -224,6 +240,11 @@ nbb scripts/run-task.cljs task report --last 5                 # replay recorded
   → 0), while the Linux node returns it correctly. Every command therefore runs
   in a subshell that echoes a `__murakumo_rc=` sentinel, which wins over ssh's
   own code — otherwise 10 of 11 nodes would report silent false successes.
+  This lives in `murakumo.tunnel` (`.cljc`), so the bb/JVM control plane
+  (`murakumo.ssh` → provision / status / deploy / infer / model GC) inherits the
+  same fix instead of each caller re-inventing an `&& echo ok || echo FAILED`
+  workaround. `sh-result` keeps ssh's own code as `:ssh-exit` so a transport
+  failure is still distinguishable from a remote non-zero exit.
 - **Ledger**: every run appends one EDN map to `.murakumo-task-ledger.edn`
   (`--ledger` to move it), the same append-only shape as the relay ledger.
 

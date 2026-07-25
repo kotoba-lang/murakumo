@@ -10,45 +10,47 @@
 
 (ns murakumo.task.exec
   (:require ["node:child_process" :as cp]
+            ["node:fs" :as fs]
+            ["node:os" :as os]
+            ["node:path" :as path]
             [clojure.string :as str]
-            [murakumo.task.plan :as plan]))
+            [murakumo.task.plan :as plan]
+            [murakumo.tunnel :as tunnel]))
 
-(defn ssh-argv
-  "Canonical non-interactive SSH argv for a fleet node. BatchMode so an
-   unreachable node fails fast instead of prompting; accept-new so a freshly
-   reflashed node doesn't wedge the batch on a host-key prompt."
-  [host cmd connect-timeout-s]
-  ["ssh" "-o" "BatchMode=yes"
-   "-o" (str "ConnectTimeout=" connect-timeout-s)
-   "-o" "StrictHostKeyChecking=accept-new"
-   host cmd])
+;; The ssh dialect (BatchMode, in-band exit sentinel, ControlMaster reuse) is
+;; NOT defined here: murakumo.tunnel owns it so the bb/JVM control plane and
+;; this nbb task plane cannot drift apart.
 
-(def rc-marker "__murakumo_rc=")
+;; A ControlPath is a unix socket path, capped at ~104 bytes by sockaddr_un —
+;; and macOS's os.tmpdir() alone is ~50 of them (/var/folders/…/T/). Adding
+;; ssh's 40-char %C hash blows the limit and EVERY connection fails. Prefer a
+;; short base and refuse to enable multiplexing if it still would not fit.
+(def ^:private control-path-max 104)
+(def ^:private control-name-budget 44)   ; "/" + 40-char %C hash + slack
 
-(defn wrap-cmd
-  "Wrap a remote command so it reports its OWN exit status in-band.
+(defn- short-tmp-base []
+  (or (first (filter (fn [d] (and d (.existsSync fs d) (< (count d) 24)))
+                     ["/tmp" (.tmpdir os)]))
+      (.tmpdir os)))
 
-   MEASURED 2026-07-25: Tailscale SSH on the macOS fleet nodes does NOT
-   propagate the remote exit status — `ssh asher 'exit 7'` and `ssh asher false`
-   both return 0, while the same commands on the Linux node (gad) correctly
-   return 7 and 1. Trusting ssh's exit code would make this task plane report
-   silent false successes on 10 of 11 nodes. So the command runs in a subshell
-   (so a bare `exit N` inside it doesn't kill the reporting shell) and the real
-   status is echoed as a sentinel line that `run-one` parses and strips."
-  [cmd]
-  (str "( " cmd "\n); __mrc=$?; echo \"" rc-marker "$__mrc\""))
+(defn control-dir!
+  "Create a private directory for this run's multiplexed control sockets.
+   Returns nil when multiplexing is disabled or would not fit in a socket path."
+  [opts]
+  (when-not (false? (:multiplex? opts))
+    (let [dir (.mkdtempSync fs (.join path (short-tmp-base) "mk-"))]
+      (if (< (+ (count dir) control-name-budget) control-path-max)
+        dir
+        (do (.rmSync fs dir #js {:recursive true :force true})
+            (binding [*print-fn* *print-err-fn*]
+              (println "note: ssh multiplexing disabled — no short enough socket path available"))
+            nil)))))
 
-(defn parse-rc
-  "Split captured stdout into [clean-stdout rc-or-nil]. rc is nil when the
-   sentinel never arrived (connection failure, kill, non-shell remote)."
-  [out]
-  (let [lines (str/split-lines (str out))
-        rc-line (last (filter #(str/starts-with? (str/trim %) rc-marker) lines))
-        rc (when rc-line
-             (let [v (js/parseInt (str/replace (str/trim rc-line) rc-marker "") 10)]
-               (when-not (js/isNaN v) v)))]
-    [(str/trim (str/join "\n" (remove #(str/starts-with? (str/trim %) rc-marker) lines)))
-     rc]))
+(defn control-path
+  "ControlPath template for a run. %C is ssh's hash of (host, port, user), so
+   one socket per node, and the whole run's sockets live in one removable dir."
+  [dir]
+  (when dir (.join path dir "%C")))
 
 (defn run-one
   "Execute one assignment remotely. Returns a Promise of a result map
@@ -60,14 +62,16 @@
    (fn [resolve _reject]
      (let [t0 (js/Date.now)
            timeout-ms (or (:timeout-ms task) (:timeout-ms opts) 120000)
-           argv (ssh-argv host (wrap-cmd (:cmd task)) (or (:connect-timeout-s opts) 8))
+           argv (tunnel/ssh-argv host (:cmd task)
+                                 {:connect-timeout-s (or (:connect-timeout-s opts) 8)
+                                  :control-path (:control-path opts)})
            child (.spawn cp (first argv) (to-array (rest argv))
                          #js {:stdio #js ["ignore" "pipe" "pipe"]})
            out (atom "")
            err (atom "")
            state (atom nil)
            finish (fn [m]
-                    (let [[clean rc] (parse-rc @out)]
+                    (let [[clean rc] (tunnel/parse-rc @out)]
                       (resolve (merge {:task task :node node :host host
                                        :stdout clean
                                        :remote-rc rc
@@ -94,7 +98,7 @@
               (when (not= :error @state)
                 ;; The in-band sentinel wins when present: ssh's own exit code
                 ;; is unreliable on this fleet (see wrap-cmd).
-                (let [[_ rc] (parse-rc @out)]
+                (let [[_ rc] (tunnel/parse-rc @out)]
                   (finish {:exit (when-not (= :timeout @state) (or rc code))
                            :ssh-exit code
                            :timeout? (= :timeout @state)})))))))))
@@ -141,25 +145,60 @@
       (-> (js/Promise.all (to-array ps))
           (.then (fn [rss] (vec (apply concat (array-seq rss)))))))))
 
+(defn close-masters!
+  "Shut this run's multiplexed master connections down and remove the socket
+   dir, instead of leaving masters idling until ControlPersist expires.
+   Best-effort: a failure here never fails the run."
+  [dir hosts]
+  (if-not dir
+    (js/Promise.resolve nil)
+    (let [cpath (control-path dir)
+          ps (mapv (fn [h]
+                     (js/Promise.
+                      (fn [resolve _]
+                        (let [argv (tunnel/close-master-argv h cpath)
+                              child (.spawn cp (first argv) (to-array (rest argv))
+                                            #js {:stdio "ignore"})]
+                          (.on child "close" (fn [_] (resolve nil)))
+                          (.on child "error" (fn [_] (resolve nil)))))))
+                   (distinct (remove nil? hosts)))]
+      (-> (js/Promise.all (to-array ps))
+          (.then (fn [_]
+                   (try (.rmSync fs dir #js {:recursive true :force true})
+                        (catch :default _ nil))
+                   nil))))))
+
 ;; --- node probing -----------------------------------------------------------
 
-(def probe-cmd
-  "Portable across macOS (sysctl) and Linux (nproc//proc/meminfo): prints
-   `<cores> <mem-bytes> <load1> <hostname>` on one line."
+(defn probe-cmd
+  "Portable across macOS (sysctl) and Linux (nproc//proc/meminfo). Prints
+   `<cores> <mem-bytes> <load1> <hostname>` on the first line, then the node's
+   own kotoba-server /health body on a `health:` line — so one round trip
+   answers both `can I place work here` and `is the mesh node alive here`."
+  [port]
   (str "cores=$(sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 1); "
        "mem=$(sysctl -n hw.memsize 2>/dev/null || awk '/MemTotal/{print $2*1024}' /proc/meminfo 2>/dev/null || echo 0); "
        "load=$(uptime | sed 's/.*averages*: //' | awk '{print $1}' | tr -d ','); "
-       "echo \"$cores $mem $load $(hostname)\""))
+       "echo \"$cores $mem $load $(hostname)\"; "
+       "echo \"health:$(curl -s -m 3 http://localhost:" port "/health 2>/dev/null | tr -d '\\n' | head -c 200)\""))
 
-(defn- parse-probe [s]
-  (let [[cores mem load host] (str/split (str/trim (str s)) #"\s+")
+(defn parse-probe
+  "Parse the probe payload into node metadata. Health is reported honestly:
+   :mesh-up? is false when the node answered but kotoba-server did not."
+  [s]
+  (let [lines (str/split-lines (str/trim (str s)))
+        health-line (first (filter #(str/starts-with? % "health:") lines))
+        health (some-> health-line (subs 7) str/trim)
+        [cores mem load host] (str/split (str/trim (or (first (remove #(str/starts-with? % "health:") lines)) "")) #"\s+")
         n (fn [x] (let [v (js/parseFloat x)] (when-not (js/isNaN v) v)))]
     ;; NB: `int` is a 32-bit bit-or in ClojureScript, which silently mangles
     ;; byte counts (17179869184 | 0 = 0). Round instead.
     {:cores (some-> (n cores) js/Math.round)
      :mem-bytes (some-> (n mem) js/Math.round)
      :load1 (n load)
-     :hostname host}))
+     :hostname host
+     :mesh-up? (boolean (seq health))
+     :mesh-health (when (seq health) health)}))
 
 (defn probe
   "SSH every node once to learn cores / memory / load / hostname. Returns a
@@ -167,7 +206,8 @@
    probe failed — the planner then refuses to place work there)."
   [nodes opts]
   (let [ps (mapv (fn [node]
-                   (-> (run-one {:task {:cmd probe-cmd :id (str "probe-" (:name node))}
+                   (-> (run-one {:task {:cmd (probe-cmd (or (:port node) (:fleet-port opts) 8077))
+                                        :id (str "probe-" (:name node))}
                                  :node (:name node) :host (:host node)}
                                 (assoc opts :timeout-ms (or (:probe-timeout-ms opts) 15000)))
                        (.then (fn [r]

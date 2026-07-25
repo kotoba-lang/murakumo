@@ -9,8 +9,15 @@
             [murakumo.tunnel :as tunnel]))
 
 (defn sh
-  "Run `cmd` (a shell string) on `host` over SSH. Returns {:exit :out :err}.
-   Never throws on a non-zero remote exit — the caller inspects :exit."
+  "Run `cmd` (a shell string) on `host` over SSH.
+   Returns {:exit :ssh-exit :out :err}. Never throws on a non-zero remote exit —
+   the caller inspects :exit.
+
+   `:exit` is the REMOTE command's status, recovered from the in-band sentinel
+   murakumo.tunnel wraps every command in: Tailscale SSH on this fleet's macOS
+   nodes reports 0 no matter what the command did (measured, ADR-2607256000), so
+   ssh's own code — kept here as `:ssh-exit` — cannot be used for that decision.
+   `:ssh-exit` is still the right signal for transport failures (255)."
   [host cmd]
   (tunnel/sh-result
    (apply p/sh (tunnel/ssh-argv host cmd))))

@@ -4,7 +4,7 @@
 ;;   nbb src/murakumo/task.cljs probe
 ;;   nbb src/murakumo/task.cljs plan  --n 20 --cmd 'hostname'
 ;;   nbb src/murakumo/task.cljs run   --n 20 --cmd 'hostname'
-;;   nbb src/murakumo/task.cljs run   --tasks scripts/tasks-example.edn
+;;   nbb src/murakumo/task.cljs run   --tasks scripts/task-batch.example.edn
 ;;   nbb src/murakumo/task.cljs report --last 3
 ;;
 ;; Positioning: `reconcile` converges long-lived APPS onto the fleet (wadm /
@@ -42,6 +42,9 @@
 (defn- flag-int [f k default]
   (if-let [v (get f k)] (js/parseInt v 10) default))
 
+(defn- flag-num [f k default]
+  (if-let [v (get f k)] (js/parseFloat v) default))
+
 (defn- csv [s] (when (seq (str s)) (vec (remove str/blank? (str/split (str s) #",")))))
 
 (defn- kv-map
@@ -53,6 +56,15 @@
                  :when (and k v)]
              [(keyword k) v])))
 
+(defn- edn-out? [f] (= "edn" (get f "format")))
+
+(defn- emit
+  "Print either the human table (via `table-fn`) or a machine-readable EDN map."
+  [f data table-fn]
+  (if (edn-out? f)
+    (println (pr-str data))
+    (table-fn data)))
+
 ;; --- io ---------------------------------------------------------------------
 
 (defn- slurp-edn [path]
@@ -61,13 +73,18 @@
 (defn load-fleet [f]
   (slurp-edn (get f "fleet" "fleet.edn")))
 
-(defn- opts-from [f]
+(defn- opts-from [f fleet]
   (merge plan/default-opts
          {:max-slots (flag-int f "max-slots" (:max-slots plan/default-opts))
           :slots-per-node (when (get f "slots") (flag-int f "slots" nil))
           :max-attempts (flag-int f "attempts" (:max-attempts plan/default-opts))
           :timeout-ms (flag-int f "timeout-ms" (:timeout-ms plan/default-opts))
-          :connect-timeout-s (flag-int f "connect-timeout" (:connect-timeout-s plan/default-opts))}))
+          :connect-timeout-s (flag-int f "connect-timeout" (:connect-timeout-s plan/default-opts))
+          :max-inflight (when (get f "max-inflight") (flag-int f "max-inflight" nil))
+          :max-load1 (when (get f "max-load") (flag-num f "max-load" nil))
+          :max-load-per-core (when (get f "max-load-per-core") (flag-num f "max-load-per-core" nil))
+          :multiplex? (not (get f "no-multiplex"))
+          :fleet-port (:fleet/port fleet)}))
 
 (defn- tasks-from
   "Either --tasks <file.edn> ({:tasks [...]} or a bare vector) or --n/--cmd."
@@ -100,18 +117,28 @@
       (println (str/join "  " (map (fn [k w] (pad (get r k "") w)) ks widths))))))
 
 (defn- print-nodes [nodes]
-  (print-rows [[:name "NODE"] [:host "HOST"] [:online "ONLINE"] [:cores "CORES"]
-               [:mem "MEM"] [:load1 "LOAD1"] [:hostname "HOSTNAME"] [:note "NOTE"]]
+  (print-rows [[:name "NODE"] [:host "HOST"] [:online "SSH"] [:mesh "MESH"] [:cores "CORES"]
+               [:mem "MEM"] [:load1 "LOAD1"] [:ms "PROBE-MS"] [:note "NOTE"]]
               (mapv (fn [n]
                       {:name (:name n) :host (:host n)
-                       :online (if (:online? n) "yes" "NO")
+                       :online (if (:online? n) "up" "DOWN")
+                       :mesh (cond (not (:online? n)) "-"
+                                   (:mesh-up? n) "up"
+                                   :else "down")
                        :cores (or (:cores n) "-")
                        :mem (if-let [m (:mem-bytes n)]
                               (str (.toFixed (/ m 1024 1024 1024) 0) "G") "-")
                        :load1 (or (:load1 n) "-")
-                       :hostname (or (:hostname n) "-")
+                       :ms (or (:probe-ms n) "-")
                        :note (or (some-> (:probe-error n) (str/replace #"\s+" " ")) "")})
                     nodes)))
+
+(defn- print-skipped [skipped]
+  (when (seq skipped)
+    (println)
+    (println (str "SKIPPED (" (count skipped) " node(s) not used):"))
+    (doseq [s skipped]
+      (println (str "  " (:node s) " — " (name (:reason s)) ": " (:detail s))))))
 
 (defn- print-summary [s]
   (println)
@@ -120,123 +147,177 @@
                 " nodes-used=" (:nodes-used s)
                 " wall=" (:wall-ms s) "ms"
                 " task-time=" (:task-ms s) "ms"
+                " p50=" (:p50-ms s) "ms p95=" (:p95-ms s) "ms"
                 (when-let [sp (:speedup s)] (str " speedup=" (.toFixed sp 2) "x"))))
   (println (str "by-node: " (str/join "  " (map (fn [[k v]] (str k "=" v)) (:by-node s))))))
 
 ;; --- commands ---------------------------------------------------------------
 
+(defn- with-multiplexing
+  "Run `body-fn` with a per-run ControlMaster socket dir, then tear the masters
+   down. body-fn receives opts carrying :control-path and returns a Promise."
+  [opts hosts-fn body-fn]
+  (let [dir (exec/control-dir! opts)
+        opts (assoc opts :control-path (exec/control-path dir))]
+    (-> (body-fn opts)
+        (.then (fn [result]
+                 (-> (exec/close-masters! dir (hosts-fn result))
+                     (.then (fn [_] result)))))
+        (.catch (fn [e]
+                  (-> (exec/close-masters! dir [])
+                      (.then (fn [_] (throw e)))))))))
+
 (defn cmd-probe [f]
   (let [fleet (load-fleet f)
-        nodes (:nodes fleet)]
-    (-> (exec/probe nodes (opts-from f))
-        (.then (fn [probed]
-                 (print-nodes probed)
-                 (let [up (filterv :online? probed)]
-                   (println)
-                   (println (str (count up) "/" (count probed) " nodes reachable, "
-                                 (reduce + 0 (keep :cores up)) " cores, "
-                                 (.toFixed (/ (reduce + 0 (keep :mem-bytes up)) 1024 1024 1024) 0)
-                                 "G RAM")))
-                 (when (get f "out")
-                   (.writeFileSync fs (get f "out") (pr-str probed))
-                   (println (str "wrote " (get f "out")))))))))
+        nodes (:nodes fleet)
+        opts (opts-from f fleet)]
+    (with-multiplexing
+      opts
+      (constantly (map :host nodes))
+      (fn [opts]
+        (-> (exec/probe nodes opts)
+            (.then (fn [probed]
+                     (let [up (filterv :online? probed)
+                           mesh (filterv :mesh-up? probed)]
+                       (emit f {:nodes probed
+                                :reachable (count up) :total (count probed)
+                                :mesh-up (count mesh)
+                                :cores (reduce + 0 (keep :cores up))
+                                :mem-bytes (reduce + 0 (keep :mem-bytes up))}
+                             (fn [d]
+                               (print-nodes (:nodes d))
+                               (println)
+                               (println (str (:reachable d) "/" (:total d) " nodes reachable, "
+                                             (:cores d) " cores, "
+                                             (.toFixed (/ (:mem-bytes d) 1024 1024 1024) 0) "G RAM, "
+                                             (:mesh-up d) " running kotoba-server")))))
+                     (when (get f "out")
+                       (.writeFileSync fs (get f "out") (pr-str probed))
+                       (println (str "wrote " (get f "out"))))
+                     probed)))))))
 
-(defn- plan-and-print [nodes tasks opts]
-  (let [p (plan/assign nodes tasks opts)]
-    (print-rows [[:node "NODE"] [:assigned "ASSIGNED"] [:slots "SLOTS"] [:waves "WAVES"]]
-                (plan/plan-table p nodes opts))
-    (when (seq (:unschedulable p))
-      (println)
-      (println (str "UNSCHEDULABLE (" (count (:unschedulable p)) "):"))
-      (doseq [u (take 5 (:unschedulable p))]
-        (println (str "  " (get-in u [:task :id]) " — " (:detail u)))))
-    p))
+(defn- plan-report [nodes skipped p opts]
+  {:by-node (plan/plan-table p nodes opts)
+   :skipped (vec skipped)
+   :assigned (count (:assignments p))
+   :unschedulable (mapv (fn [u] {:id (get-in u [:task :id]) :detail (:detail u)})
+                        (:unschedulable p))})
+
+(defn- print-plan [d]
+  (print-rows [[:node "NODE"] [:assigned "ASSIGNED"] [:slots "SLOTS"] [:waves "WAVES"]]
+              (:by-node d))
+  (print-skipped (:skipped d))
+  (when (seq (:unschedulable d))
+    (println)
+    (println (str "UNSCHEDULABLE (" (count (:unschedulable d)) "):"))
+    (doseq [u (take 5 (:unschedulable d))]
+      (println (str "  " (:id u) " — " (:detail u))))))
 
 (defn cmd-plan [f]
   (let [fleet (load-fleet f)
         tasks (tasks-from f)
-        opts (opts-from f)]
+        opts0 (opts-from f fleet)
+        finish (fn [nodes]
+                 (let [{:keys [nodes skipped opts]} (plan/prepare nodes opts0)
+                       p (plan/assign nodes tasks opts)]
+                   (emit f (plan-report nodes skipped p opts) print-plan)
+                   p))]
     (if (get f "no-probe")
-      (do (plan-and-print (:nodes fleet) tasks opts) (js/Promise.resolve nil))
-      (-> (exec/probe (:nodes fleet) opts)
-          (.then (fn [probed] (plan-and-print probed tasks opts)))))))
+      (do (finish (:nodes fleet)) (js/Promise.resolve nil))
+      (with-multiplexing opts0 (constantly (map :host (:nodes fleet)))
+        (fn [opts] (-> (exec/probe (:nodes fleet) opts) (.then finish)))))))
 
 (defn- append-ledger! [path entry]
   (.appendFileSync fs path (str (pr-str entry) "\n")))
 
+(defn- result-row [r]
+  {:id (get-in r [:task :id])
+   :try (or (get-in r [:task :attempt]) 1)
+   :node (or (:node r) "-")
+   :exit (cond (:timeout? r) "TIMEOUT" (:error r) "ERR" :else (:exit r))
+   :ms (:duration-ms r)
+   :out (let [o (str/replace (str (or (not-empty (:stdout r)) (:error r) "")) #"\s+" " ")]
+          (subs o 0 (min 60 (count o))))})
+
 (defn cmd-run [f]
   (let [fleet (load-fleet f)
         tasks (tasks-from f)
-        opts (opts-from f)
+        opts0 (opts-from f fleet)
         ledger (get f "ledger" default-ledger)
         run-id (str "run-" (js/Date.now))]
     (when (str/blank? (str (:cmd (first tasks))))
       (println "error: --cmd is required (or --tasks <file.edn>)")
       (.exit js/process 2))
-    (-> (if (get f "no-probe")
-          (js/Promise.resolve (:nodes fleet))
-          (exec/probe (:nodes fleet) opts))
-        (.then
-         (fn [nodes]
-           (let [t0 (js/Date.now)
-                 acc (atom [])]
-             (letfn [(round [pending]
-                       (let [p (plan/assign nodes pending opts)]
-                         (when (seq (:unschedulable p))
-                           (doseq [u (:unschedulable p)]
-                             (swap! acc conj {:task (:task u) :node nil :exit nil
-                                              :error (str "unschedulable: " (:detail u))
-                                              :duration-ms 0})))
-                         (-> (exec/run-plan p nodes opts)
-                             (.then (fn [results]
-                                      (swap! acc into results)
-                                      (let [retry (plan/retry-tasks results opts)]
-                                        (if (seq retry)
-                                          (do (println (str "retrying " (count retry)
-                                                            " failed task(s) on other nodes…"))
-                                              (round retry))
-                                          nil)))))))]
-               (println (str "submitting " (count tasks) " task(s) to "
-                             (count (filter :online? nodes)) " reachable node(s)…"))
-               (-> (round tasks)
-                   (.then
-                    (fn [_]
-                      (let [results @acc
-                            wall (- (js/Date.now) t0)
-                            s (plan/summary results wall)]
-                        (print-rows [[:id "TASK"] [:try "TRY"] [:node "NODE"] [:exit "EXIT"]
-                                     [:ms "MS"] [:out "STDOUT"]]
-                                    (mapv (fn [r]
-                                            {:id (get-in r [:task :id])
-                                             :try (or (get-in r [:task :attempt]) 1)
-                                             :node (or (:node r) "-")
-                                             :exit (cond (:timeout? r) "TIMEOUT"
-                                                         (:error r) "ERR"
-                                                         :else (:exit r))
-                                             :ms (:duration-ms r)
-                                             :out (let [o (str/replace (str (or (:stdout r) (:error r))) #"\s+" " ")]
-                                                    (subs o 0 (min 60 (count o))))})
-                                          (sort-by (juxt #(get-in % [:task :id])
-                                                         #(get-in % [:task :attempt]))
-                                                   results)))
-                        (print-summary s)
-                        (append-ledger! ledger
-                                        {:run/id run-id
-                                         :run/at (.toISOString (js/Date.))
-                                         :run/cmd (:cmd (first tasks))
-                                         :run/task-count (count tasks)
-                                         :run/summary s
-                                         :run/results (mapv (fn [r]
-                                                              {:id (get-in r [:task :id])
-                                                               :attempt (get-in r [:task :attempt])
-                                                               :node (:node r)
-                                                               :exit (:exit r)
-                                                               :timeout? (:timeout? r)
-                                                               :duration-ms (:duration-ms r)
-                                                               :stdout (:stdout r)})
-                                                            results)})
-                        (println (str "recorded " run-id " -> " ledger))
-                        (when (pos? (:failed s)) (.exit js/process 1)))))))))))))
+    (with-multiplexing
+      opts0
+      (constantly (map :host (:nodes fleet)))
+      (fn [mopts]
+        (-> (if (get f "no-probe")
+              (js/Promise.resolve (:nodes fleet))
+              (exec/probe (:nodes fleet) mopts))
+            (.then
+             (fn [probed]
+               (let [{:keys [nodes skipped opts]} (plan/prepare probed mopts)
+                     t0 (js/Date.now)
+                     acc (atom [])]
+                 (letfn [(round [pending]
+                           (let [p (plan/assign nodes pending opts)]
+                             (doseq [u (:unschedulable p)]
+                               (swap! acc conj {:task (:task u) :node nil :exit nil
+                                                :error (str "unschedulable: " (:detail u))
+                                                :duration-ms 0}))
+                             (-> (exec/run-plan p nodes opts)
+                                 (.then (fn [results]
+                                          (swap! acc into results)
+                                          (let [retry (plan/retry-tasks results opts)]
+                                            (if (seq retry)
+                                              (do (when-not (edn-out? f)
+                                                    (println (str "retrying " (count retry)
+                                                                  " failed task(s) on other nodes…")))
+                                                  (round retry))
+                                              nil)))))))]
+                   (when-not (edn-out? f)
+                     (println (str "submitting " (count tasks) " task(s) to "
+                                   (count nodes) " node(s)"
+                                   (when (seq skipped) (str ", " (count skipped) " skipped"))
+                                   (if (:control-path opts) " (multiplexed ssh)" " (one ssh per task)")
+                                   "…")))
+                   (-> (round tasks)
+                       (.then
+                        (fn [_]
+                          (let [results @acc
+                                wall (- (js/Date.now) t0)
+                                s (plan/summary results wall)
+                                entry {:run/id run-id
+                                       :run/at (.toISOString (js/Date.))
+                                       :run/cmd (:cmd (first tasks))
+                                       :run/task-count (count tasks)
+                                       :run/multiplexed (boolean (:control-path opts))
+                                       :run/skipped-nodes (vec skipped)
+                                       :run/summary s
+                                       :run/results (mapv (fn [r]
+                                                            {:id (get-in r [:task :id])
+                                                             :attempt (get-in r [:task :attempt])
+                                                             :node (:node r)
+                                                             :exit (:exit r)
+                                                             :timeout? (:timeout? r)
+                                                             :duration-ms (:duration-ms r)
+                                                             :stdout (:stdout r)})
+                                                          results)}]
+                            (append-ledger! ledger entry)
+                            (emit f entry
+                                  (fn [_]
+                                    (print-rows [[:id "TASK"] [:try "TRY"] [:node "NODE"] [:exit "EXIT"]
+                                                 [:ms "MS"] [:out "STDOUT"]]
+                                                (mapv result-row
+                                                      (sort-by (juxt #(get-in % [:task :id])
+                                                                     #(get-in % [:task :attempt]))
+                                                               results)))
+                                    (print-skipped skipped)
+                                    (print-summary s)
+                                    (println (str "recorded " run-id " -> " ledger))))
+                            (when (pos? (:failed s)) (.exit js/process 1))
+                            results)))))))))))))
 
 (defn cmd-report [f]
   (let [ledger (get f "ledger" default-ledger)]
@@ -245,18 +326,23 @@
       (let [entries (->> (str/split-lines (.readFileSync fs ledger "utf8"))
                          (remove str/blank?)
                          (mapv edn/read-string))
-            n (flag-int f "last" 5)]
-        (print-rows [[:id "RUN"] [:at "AT"] [:tasks "TASKS"] [:ok "OK"] [:failed "FAIL"]
-                     [:nodes "NODES"] [:wall "WALL-MS"] [:speedup "SPEEDUP"] [:cmd "CMD"]]
-                    (mapv (fn [e]
-                            (let [s (:run/summary e)]
-                              {:id (:run/id e) :at (:run/at e)
-                               :tasks (:tasks s) :ok (:ok s) :failed (:failed s)
-                               :nodes (:nodes-used s) :wall (:wall-ms s)
-                               :speedup (if-let [sp (:speedup s)] (str (.toFixed sp 2) "x") "-")
-                               :cmd (let [c (str (:run/cmd e))]
-                                      (subs c 0 (min 40 (count c))))}))
-                          (take-last n entries)))))
+            n (flag-int f "last" 5)
+            rows (mapv (fn [e]
+                         (let [s (:run/summary e)]
+                           {:id (:run/id e) :at (:run/at e)
+                            :tasks (:tasks s) :ok (:ok s) :failed (:failed s)
+                            :nodes (:nodes-used s) :wall (:wall-ms s)
+                            :mux (if (:run/multiplexed e) "yes" "no")
+                            :speedup (if-let [sp (:speedup s)] (str (.toFixed sp 2) "x") "-")
+                            :cmd (let [c (str (:run/cmd e))]
+                                   (subs c 0 (min 40 (count c))))}))
+                       (take-last n entries))]
+        (emit f rows
+              (fn [rs]
+                (print-rows [[:id "RUN"] [:at "AT"] [:tasks "TASKS"] [:ok "OK"] [:failed "FAIL"]
+                             [:nodes "NODES"] [:wall "WALL-MS"] [:mux "MUX"] [:speedup "SPEEDUP"]
+                             [:cmd "CMD"]]
+                            rs)))))
     (js/Promise.resolve nil)))
 
 (def usage
@@ -264,24 +350,33 @@
    "\n"
    ["murakumo task — distribute a BATCH of tasks over the fleet (k8s-Job / Ray-tasks shape)"
     ""
-    "  probe                       SSH every node: cores / memory / load / reachability"
+    "  probe                       SSH every node: cores / RAM / load / kotoba-server health"
     "  plan   --n N --cmd '…'      pure placement preview (no execution)"
     "  run    --n N --cmd '…'      place, execute over SSH, gather results, retry failures"
     "  report [--last N]           replay recorded runs from the ledger"
     ""
-    "flags:"
-    "  --fleet fleet.edn      inventory (default fleet.edn)"
-    "  --tasks tasks.edn      explicit task list instead of --n/--cmd"
+    "placement:"
     "  --labels tier=edge     placement label constraints (all must match)"
     "  --roles compute,pin    placement role constraints (all must be present)"
     "  --nodes a,b            explicit node allow-list"
     "  --min-mem-gb 16        require at least this much RAM on the node"
+    ""
+    "throughput / admission:"
     "  --slots N              fixed slots per node (default: node core count)"
     "  --max-slots N          cap slots per node (default 8)"
+    "  --max-inflight N       fleet-wide concurrency budget (shrinks slots to fit)"
+    "  --max-load X           hold back nodes whose 1-min load average exceeds X"
+    "  --max-load-per-core X  same, normalised by core count"
+    "  --no-multiplex         one fresh ssh per task (default: reuse one connection per node)"
+    ""
+    "execution:"
+    "  --tasks tasks.edn      explicit task list instead of --n/--cmd"
     "  --attempts N           max attempts per task (default 2 = one retry elsewhere)"
     "  --timeout-ms N         per-task timeout (default 120000)"
     "  --no-probe             skip the SSH probe (offline planning)"
-    "  --ledger PATH          run ledger (default .murakumo-task-ledger.edn)"]))
+    "  --fleet fleet.edn      inventory (default fleet.edn)"
+    "  --ledger PATH          run ledger (default .murakumo-task-ledger.edn)"
+    "  --format edn           machine-readable output instead of tables"]))
 
 (defn -main [& args]
   (let [[cmd & rest] args
