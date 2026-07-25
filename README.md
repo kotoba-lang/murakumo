@@ -198,7 +198,7 @@ queryable as-of Datom chain (alongside `dash`'s heartbeat snapshots).
 `reconcile` converges **long-lived apps** (k8s Deployment / wadm shape).
 `task` fans a **batch of short-lived units of work** across the same fleet and
 gathers the results — the k8s-Job / Ray-`.remote` shape that ADR-2607071400's
-equivalence table had no entry for (ADR-2607250100).
+equivalence table had no entry for (ADR-2607256000).
 
 ```bash
 nbb scripts/run-task.cljs task probe                       # cores / RAM / load1 / reachability, per node
@@ -227,7 +227,7 @@ nbb scripts/run-task.cljs task report --last 5                 # replay recorded
 - **Ledger**: every run appends one EDN map to `.murakumo-task-ledger.edn`
   (`--ledger` to move it), the same append-only shape as the relay ledger.
 
-Deliberately NOT provided (see ADR-2607250100 for the honest gap list): a
+Deliberately NOT provided (see ADR-2607256000 for the honest gap list): a
 distributed object store / futures, lineage-based re-execution, gang scheduling
 or placement groups, and an autoscaler. Results come back inline.
 

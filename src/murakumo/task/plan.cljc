@@ -14,7 +14,7 @@
 ;; and inside a kotoba WASM component. Every decision is deterministic, so a
 ;; plan can be recorded to the Datom log and replayed/audited later.
 ;;
-;; What this deliberately does NOT do (honest scope; see ADR-2607250100):
+;; What this deliberately does NOT do (honest scope; see ADR-2607256000):
 ;;   - no distributed object store / futures — results come back inline
 ;;   - no lineage-based re-execution — a failed task is retried, not replayed
 ;;   - no autoscaler / placement groups / gang scheduling
