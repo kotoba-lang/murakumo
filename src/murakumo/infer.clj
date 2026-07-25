@@ -11,6 +11,10 @@
 ;;   bb murakumo infer up|down|ps [sel]      start/stop/inspect the worker ring
 ;;   bb murakumo infer serve <model> <gguf>  run the head (llama-server, OpenAI API)
 ;;   bb murakumo infer generate "<prompt>"   one completion via the head's /v1 API
+;;   bb murakumo infer relay [port]          run a work-dispatch relay (murakumo.infer.relay-server)
+;;   bb murakumo infer join [url] --model m  join a relay as a :native worker, earn
+;;                                            credits for served completions (see
+;;                                            murakumo.infer.relay-worker)
 ;;
 ;; A model whose registry entry carries `:model/engine :mlx-moe` (mu-hashmi/
 ;; mlx-moe) skips the fleet-wide ring entirely: `plan`/`provision`/`serve` cut
@@ -564,6 +568,8 @@
                 (apply (resolve 'murakumo.infer.bench/-main) args))
     "relay" (do (require 'murakumo.infer.relay-server)
                 (apply (resolve 'murakumo.infer.relay-server/-main) args))
+    "join" (do (require 'murakumo.infer.relay-worker)
+               (apply (resolve 'murakumo.infer.relay-worker/-main) args))
     "gateway" (do (require 'murakumo.infer.gateway)
                   (apply (resolve 'murakumo.infer.gateway/-main) args))
     "probe" (cmd-probe args)
@@ -576,4 +582,4 @@
     "serve-standalone" (cmd-serve-standalone args)
     "serve-embed" (cmd-serve-embed args)
     "generate" (cmd-generate args)
-    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf] [parallel]|serve-embed [model]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|gateway [port]")))
+    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf] [parallel]|serve-embed [model]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|join [relay-url] --model <id> [--name <node>]|gateway [port]")))
