@@ -18,6 +18,23 @@ the nodes beyond the two kotoba binaries.
 > components (`run` / `on-http` / `on-tick` / `on-kse`). Different substrate, on the
 > same hardware.
 
+## Execution boundary
+
+Murakumo is analogous to a wasmCloud control plane, not a Wasm engine or a
+capability authority. It may select a node and distribute a content-addressed
+Component, but it must never turn placement metadata into guest authority.
+
+```text
+compiler → Component → kototama executes it
+                       ↑          │
+                 aiueos grants    │ Murakumo places / observes only
+```
+
+The versioned WIT, artifact identity, and admission envelope live in
+[`kotoba-lang/abi`](https://github.com/kotoba-lang/abi). A Murakumo deployment
+spec may name an artifact and requested capability class, but Kototama must
+obtain concrete provider bindings only after an Aiueos decision.
+
 ## What it manages
 
 Operator policy is defined in [`RULES.md`](RULES.md). The liveness/model-placement
