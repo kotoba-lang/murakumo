@@ -15,6 +15,7 @@
             ["node:path" :as path]
             [clojure.string :as str]
             [murakumo.task.plan :as plan]
+            [murakumo.task.worker :as worker]
             [murakumo.tunnel :as tunnel]))
 
 ;; The ssh dialect (BatchMode, in-band exit sentinel, ControlMaster reuse) is
@@ -133,12 +134,21 @@
 
 (defn run-plan
   "Execute a whole plan: every node drains its own queue concurrently, each
-   bounded by its slot count. Returns a Promise of the result vector."
+   bounded by its slot count. Returns a Promise of the result vector.
+
+   Two transports, same result shape:
+     resident workers (default) — one `ssh host bash -s` per slot, tasks framed
+       on its stdin; the ssh handshake and shell start are paid once per slot
+     one ssh per task (`:worker? false`) — simplest, isolates stderr, and is the
+       fallback when a node's shell cannot host a resident session"
   [plan nodes opts]
   (let [by-name (into {} (map (juxt :name identity)) nodes)
         groups (group-by :node (:assignments plan))
         ps (mapv (fn [[node-name as]]
-                   (run-node-queue as (plan/slots (get by-name node-name) opts) opts))
+                   (let [slot-count (plan/slots (get by-name node-name) opts)]
+                     (if (false? (:worker? opts))
+                       (run-node-queue as slot-count opts)
+                       (worker/run-node-queue (:host (first as)) as slot-count opts))))
                  groups)]
     (if (empty? ps)
       (js/Promise.resolve [])

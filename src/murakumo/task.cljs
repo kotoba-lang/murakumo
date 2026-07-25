@@ -84,6 +84,7 @@
           :max-load1 (when (get f "max-load") (flag-num f "max-load" nil))
           :max-load-per-core (when (get f "max-load-per-core") (flag-num f "max-load-per-core" nil))
           :multiplex? (not (get f "no-multiplex"))
+          :worker? (not (get f "no-worker"))
           :fleet-port (:fleet/port fleet)}))
 
 (defn- tasks-from
@@ -99,8 +100,12 @@
                                                (* 1024 1024 1024 (flag-int f "min-mem-gb" 0))))]
     (if-let [path (get f "tasks")]
       (let [raw (slurp-edn path)
-            ts (if (map? raw) (:tasks raw) raw)]
-        (mapv (fn [i t] (merge {:id (str "t-" i) :attempt 1} t)) (range) ts))
+            ts (if (map? raw) (:tasks raw) raw)
+            ;; CLI placement flags are DEFAULTS for a file batch (each task may
+            ;; still override them) — otherwise `--tasks f --nodes asher` would
+            ;; silently ignore the constraint and fan out over the whole fleet.
+            defaults (dissoc template :cmd)]
+        (mapv (fn [i t] (merge {:id (str "t-" i) :attempt 1} defaults t)) (range) ts))
       (plan/expand (flag-int f "n" 1) template))))
 
 ;; --- printing ---------------------------------------------------------------
@@ -227,6 +232,10 @@
       (with-multiplexing opts0 (constantly (map :host (:nodes fleet)))
         (fn [opts] (-> (exec/probe (:nodes fleet) opts) (.then finish)))))))
 
+(defn transport-label [opts]
+  (str (if (false? (:worker? opts)) "one ssh per task" "resident workers")
+       (if (:control-path opts) " on a multiplexed connection" ", one connection each")))
+
 (defn- append-ledger! [path entry]
   (.appendFileSync fs path (str (pr-str entry) "\n")))
 
@@ -280,8 +289,7 @@
                      (println (str "submitting " (count tasks) " task(s) to "
                                    (count nodes) " node(s)"
                                    (when (seq skipped) (str ", " (count skipped) " skipped"))
-                                   (if (:control-path opts) " (multiplexed ssh)" " (one ssh per task)")
-                                   "…")))
+                                   " via " (transport-label opts) "…")))
                    (-> (round tasks)
                        (.then
                         (fn [_]
@@ -293,6 +301,7 @@
                                        :run/cmd (:cmd (first tasks))
                                        :run/task-count (count tasks)
                                        :run/multiplexed (boolean (:control-path opts))
+                                       :run/transport (transport-label opts)
                                        :run/skipped-nodes (vec skipped)
                                        :run/summary s
                                        :run/results (mapv (fn [r]
@@ -368,6 +377,7 @@
     "  --max-load X           hold back nodes whose 1-min load average exceeds X"
     "  --max-load-per-core X  same, normalised by core count"
     "  --no-multiplex         one fresh ssh per task (default: reuse one connection per node)"
+    "  --no-worker            no resident remote shells (default: one `ssh bash -s` per slot)"
     ""
     "execution:"
     "  --tasks tasks.edn      explicit task list instead of --n/--cmd"

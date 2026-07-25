@@ -74,6 +74,7 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `fleet <datom-log.edn> [now-ms]` | **coordination-plane view** — fold a [kotoba-fleet](https://github.com/kotoba-lang/kotoba-fleet) Datom log into one snapshot (per-work holders · active leases · pending proposals) via `kotoba.fleet.view/snapshot`. The `status` of the 20-agent coordination layer, next to the mesh `status`. |
 | `infer probe\|plan <model>\|provision\|up\|down\|ps\|serve\|generate` | **distributed inference across the fleet, exo-style** — memory-weighted shard plan + pipeline-parallel ring (see below) |
 | `task probe\|plan\|run\|report` | **fleet task plane** — fan a BATCH of short-lived tasks over the fleet and gather the results (k8s-Job / Ray-tasks shape, next to `reconcile`'s k8s-Deployment shape). `nbb scripts/run-task.cljs task run --n 22 --cmd 'hostname'` (see below) |
+| `ops status [all\|a,b]` | **fleet read surface, restored on nbb** — one ssh round trip per node for `/health`, wasm_executor, peer links, hosted component CIDs, mesh binary presence and LaunchAgent state. This is the nbb port of the bb-era `nodes` + `status`, which have had no runnable entrypoint since the bb.edn removal. `nbb scripts/run-task.cljs ops status` |
 
 ## Layout
 
@@ -120,7 +121,9 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `test/murakumo/infer_test.clj` | offline unit tests for the pure planner/engine (`bb test`) |
 | `src/murakumo/task/plan.cljc` | **PURE task scheduler**: eligibility (labels/roles/memory/exclusions) → slot-aware least-filled placement → retry-elsewhere → honest speedup summary |
 | `src/murakumo/task/exec.cljs` | nbb execution shell: bounded-concurrency SSH fan-out, per-task timeout, in-band exit-code sentinel, node probing |
+| `src/murakumo/task/worker.cljs` | resident remote shells (`ssh host bash -s` per slot) with per-task framing, timeout-kill + respawn — the transport that removes the per-task ssh cost |
 | `src/murakumo/task.cljs` | the `task` CLI (nbb): `probe` / `plan` / `run` / `report` + run ledger |
+| `src/murakumo/ops.cljs` | the `ops status` CLI (nbb): the restored fleet read surface, built on the portable `dash/state.cljc` probe core |
 | `test/murakumo/task_plan_test.cljs` | offline unit tests for the pure scheduler (`nbb scripts/run-task.cljs test-task`) |
 | `test/murakumo/task_exec_test.cljs` | offline unit tests for the exec shell's pure helpers |
 | `test/murakumo/infer_moe_test.cljc` | offline unit tests for the pure mlx-moe planner (`bb test`) |
@@ -220,10 +223,21 @@ nbb scripts/run-task.cljs task report --last 5                 # replay recorded
   concurrency by *shrinking slot budgets* rather than dropping tasks. Nodes that
   fail their probe are dropped before the budget is divided, so an unreachable
   node cannot consume capacity. Every held-back node is listed with its reason.
-- **Connection reuse**: one multiplexed SSH connection per node (ControlMaster),
-  established by the probe and reused by every task — measured on the fleet:
-  per-task p50 **241ms → 139ms**, 110-task wall **2572ms → 1926ms**. `--no-multiplex`
-  restores one fresh connection per task. (The socket path is length-checked:
+- **Transport**: by default each slot keeps a **resident remote shell**
+  (`ssh host bash -s`) and tasks are framed onto its stdin, over a multiplexed
+  connection. Measured on the fleet (110 tasks × 11 nodes):
+
+  | transport | per-task p50 | wall |
+  |---|---|---|
+  | one ssh per task | 241ms | 2572ms |
+  | + connection multiplexing | 90ms | 1577ms |
+  | + resident workers (default) | **15ms** | **403ms** |
+
+  `--no-worker` falls back to one ssh per task (which keeps stderr separate);
+  `--no-multiplex` also drops connection reuse. In worker mode stderr is merged
+  into stdout (`:stderr-merged? true`) and a hung task is stopped by killing its
+  worker — the task is reported `TIMEOUT`, the worker is respawned, and the rest
+  of that node's queue continues. (The multiplex socket path is length-checked:
   macOS caps a unix socket at 104 bytes and `os.tmpdir()` alone eats half of it.)
 - **`probe` also reports mesh health** — the same round trip curls the node's own
   `kotoba-server /health`, so `SSH up / MESH down` is visible per node.
@@ -652,6 +666,24 @@ bb murakumo nodes    # nodes without :status "authorized" are now excluded,
   `"unknown"` (denied) rather than crashing the command.
 
 ## Status (honest)
+
+> **Measured fleet state, 2026-07-25** (`nbb scripts/run-task.cljs ops status`, cross-checked
+> with a `task run` over all 11 reachable nodes). The claims in this section describe what the
+> CODE does; here is what the FLEET currently looks like:
+>
+> - 11 of 12 nodes reachable over ssh (xavier has no `~/.ssh/config` entry — see `fleet.edn`).
+> - `~/.murakumo/bin/kotoba-server` is installed on **5** of them (simeon, levi, joseph, dan,
+>   benjamin) and those 5 answer `/health` with `wasm_executor: ready`. The other 6 have no
+>   binary — they are un-provisioned, not crashed.
+> - **No node has `~/Library/LaunchAgents/com.murakumo.kotoba-mesh.plist`.** The residency this
+>   README describes (`RunAtLoad` + `KeepAlive` ⇒ self-heal) is not installed anywhere; the 5
+>   live servers are plain processes with nothing to restart them.
+> - The `LINKS` column counts peers seen in `~/.murakumo/mesh.log`, which survives the binary
+>   being removed — read it as history, not as current peering.
+>
+> Re-provisioning needs the pinned `kotoba` / `kotoba-server` binaries (`bin/BUILD.edn`:
+> kotoba `4f38b74a`, features `p2p,realtime-wasm,webrtc`), which are distributed out of band
+> and are not in this checkout.
 
 - **Works now**:
   - `wash` layer (imperative): provision / resident LaunchDaemon / status-aggregation /
