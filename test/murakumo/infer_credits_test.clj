@@ -186,3 +186,108 @@
     (let [s (credits/settle {:model {} :tokens 10 :duration-ms 1 :plan {:assignments []}})]
       (is (= 10.0 (:run/total s)))
       (is (pos? (get-in s [:run/shares "head"]))))))
+
+;; ── credits transfer between holders (ADR-2607995000 amend, adr-ledger seq 73)
+;;
+;; The amend adds exactly one membrane row -- credits -> third-party seller,
+;; credits-denominated -- to break the acceptance density of 1 that the
+;; system-dynamics pass named as the binding constraint on the credits sphere.
+;; These tests pin what the amend explicitly did NOT change alongside what it did.
+
+(deftest transfer-conserves-total
+  (testing "a transfer moves value, it never creates or destroys it -- issuance
+            stays labor-only"
+    (let [feed [{:run/shares {"asher" 100.0} :run/head 0.0 :run/head-name "asher"
+                 :run/treasury 0.0}
+                (credits/transfer "asher" "acme-corp" 30 {:for "dataset access"})]
+          bal (credits/balances feed)]
+      (is (= 70.0 (credits/balance-of bal "asher")))
+      (is (= 30.0 (credits/balance-of bal "acme-corp")))
+      (is (= 100.0 (+ (credits/balance-of bal "asher")
+                      (credits/balance-of bal "acme-corp")))
+          "the total is exactly what labor issued -- the transfer added nothing")))
+  (testing "a chain of transfers still conserves"
+    (let [feed [{:run/shares {"asher" 90.0} :run/head 10.0 :run/head-name "asher"
+                 :run/treasury 0.0}
+                (credits/transfer "asher" "b" 40 {})
+                (credits/transfer "b" "c" 25 {})
+                (credits/transfer "c" "asher" 5 {})]
+          bal (credits/balances feed)]
+      (is (= 100.0 (reduce + (vals (dissoc bal :treasury)))))
+      (is (= 65.0 (credits/balance-of bal "asher")))
+      (is (= 15.0 (credits/balance-of bal "b")))
+      (is (= 20.0 (credits/balance-of bal "c"))))))
+
+(deftest transfer-rejects-nonsense-eagerly
+  (testing "non-positive amounts are refused at construction, not folded silently"
+    (is (thrown? clojure.lang.ExceptionInfo (credits/transfer "a" "b" 0 {})))
+    (is (thrown? clojure.lang.ExceptionInfo (credits/transfer "a" "b" -5 {}))))
+  (testing "a self-transfer is not a transfer -- it would be a no-op that still
+            shows up in the acceptance-density count"
+    (is (thrown? clojure.lang.ExceptionInfo (credits/transfer "a" "a" 5 {})))))
+
+(deftest overdraft-is-reported-as-data
+  (testing "credits are a PREPAID claim, not a credit line -- this is exactly
+            where they must not behave like EN, which has a declared negative
+            credit-limit"
+    (let [feed [{:run/shares {"asher" 10.0} :run/head 0.0 :run/head-name "asher"
+                 :run/treasury 0.0}
+                (credits/transfer "asher" "acme-corp" 30 {})]
+          v (credits/ledger-violations feed)]
+      (is (= 1 (count v)))
+      (is (= "asher" (:account (first v))))
+      (is (= -20.0 (:balance (first v))))
+      (is (= 1 (:index (first v))) "the offending event's position in the feed")
+      (testing "and it is reported, never thrown -- same discipline as
+                engi.core/fold-balance"
+        (is (vector? v)))))
+  (testing "a clean feed has no violations"
+    (is (empty? (credits/ledger-violations
+                 [{:run/shares {"asher" 100.0} :run/head 0.0 :run/head-name "asher"
+                   :run/treasury 0.0}
+                  (credits/transfer "asher" "acme-corp" 30 {})]))))
+  (testing "the pre-existing spend path is covered too -- it never checked
+            affordability, which was survivable only while the operator's own
+            fleet was the sole payee"
+    (let [v (credits/ledger-violations [(credits/spend "nobody" 5 {:for "run-1"})])]
+      (is (= 1 (count v)))
+      (is (= "nobody" (:account (first v))))))
+  (testing ":treasury is exempt -- it is an accrual bucket that only receives"
+    (is (empty? (credits/ledger-violations
+                 [{:run/shares {"asher" 1.0} :run/head 0.0 :run/head-name "asher"
+                   :run/treasury 0.0}])))))
+
+(deftest balances-step-is-the-single-source-of-fold-semantics
+  (testing "ledger-violations replays through the same step fn balances uses, so
+            the two can never disagree about what an event means"
+    (let [feed [{:run/shares {"a" 50.0} :run/head 0.0 :run/head-name "a" :run/treasury 0.0}
+                (credits/transfer "a" "b" 20 {})
+                (credits/spend "b" 5 {:for "inference"})]
+          folded (credits/balances feed)
+          stepped (reduce credits/balances-step {} feed)]
+      (is (= folded stepped)))))
+
+(deftest acceptance-density-is-a-ledger-query
+  (testing "the number the growth analysis called the binding constraint must be
+            countable from the feed, not asserted"
+    (let [feed [{:run/shares {"asher" 100.0} :run/head 0.0 :run/head-name "asher"
+                 :run/treasury 0.0}
+                (credits/transfer "asher" "acme-corp" 10 {})
+                (credits/transfer "asher" "beta-labs" 10 {})
+                (credits/transfer "asher" "acme-corp" 5 {})]]
+      (is (= #{"acme-corp" "beta-labs"} (credits/accepting-sellers feed))
+          "distinct RECIPIENTS, not transfer count")))
+  (testing "a feed with no transfers has zero accepting sellers -- which is the
+            honest reading of the state before this amend: the only acceptor was
+            the fleet itself, and that is not a transfer"
+    (is (empty? (credits/accepting-sellers
+                 [{:run/shares {"asher" 1.0} :run/head 0.0 :run/head-name "asher"
+                   :run/treasury 0.0}
+                  (credits/spend "asher" 1 {:for "inference"})])))))
+
+(deftest amend-does-not-open-a-redemption-path
+  (testing "transferability is not redeemability -- there is still no fn anywhere
+            in this ns that turns credits into fiat, USDC or EN"
+    (let [fns (->> (ns-publics 'murakumo.infer.credits) keys (map name) set)]
+      (is (not-any? #(re-find #"(?i)fiat|usdc|payout|redeem|withdraw|cash" %) fns)
+          (str "unexpected redemption-shaped fn: " fns)))))

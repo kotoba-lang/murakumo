@@ -128,6 +128,75 @@
 (defn balance-of [balances who]
   (get balances (name who) 0.0))
 
+;; ── credits transfer between holders (ADR-2607995000 amend, adr-ledger seq 73)
+;;
+;; Until 2026-07-25 the only thing anyone could do with credits was burn them on
+;; this fleet's inference, which made the ACCEPTANCE DENSITY of the unit exactly
+;; 1 -- the operator's own fleet was the sole acceptor. A non-redeemable unit's
+;; value is bounded by the number of distinct things it buys, so that 1 was the
+;; binding constraint on the whole credits sphere, and ADR-2607995000's own
+;; Consequences section already conceded it ("witness 報酬が credits 建てである
+;; 限り外部第三者の参加誘因は弱い").
+;;
+;; The membrane table in that ADR is EXHAUSTIVE ("ここに無い流れは禁止"), and
+;; holder-to-holder transfer was not in it. adr-ledger seq 73 adds exactly one
+;; row -- credits -> third-party seller, credits-denominated -- and changes
+;; nothing else. Specifically still forbidden, and NOT touched here:
+;; credits->fiat/USDC (both directions of redemption), credits<->EN, EN<->USDC.
+;;
+;; Transferability is not redeemability. A transferred credit still cannot leave
+;; the economy, so §1's structural non-speculation proof (neither internal unit
+;; is redeemable, therefore neither can be an investment) survives intact.
+;;
+;; Two invariants the amend requires, both enforced here:
+;;   1. CONSERVATION -- a transfer moves value, it never creates or destroys it.
+;;      Issuance stays labor-only (settled runs and settled witness duty).
+;;   2. NON-NEGATIVE BALANCES -- credits are a PREPAID usage claim, not a credit
+;;      line. This is exactly where credits must NOT behave like EN: EN is
+;;      net-zero mutual credit with a declared negative credit-limit, and if
+;;      credits acquired an overdraft they would quietly become a second mutual
+;;      credit system, collapsing the credits<->EN separation §1 draws.
+
+(defn transfer
+  "A holder-to-holder ledger entry: `from` pays `credits` to `to`, both inside
+   the credits sphere. Pure; the caller appends it to the signed feed, exactly
+   like `spend` and `settle`.
+
+   Conserving by construction -- one map, one amount, applied as a debit and a
+   credit by `balances`. There is deliberately no fee: the 5% protocol cut is
+   taken at MINT (fiat/USDC -> credits) and taking a second one here would give
+   the economy two fee numbers for one economy.
+
+   This does NOT check the sender's balance, because a pure event constructor
+   has no ledger to check against -- `ledger-violations` does that over the
+   folded feed. Callers admitting a transfer must run it; see its docstring for
+   why silence here would be a real theft path rather than a rounding issue."
+  [from to credits {:keys [for] :as _meta}]
+  (when-not (pos? credits)
+    (throw (ex-info "transfer amount must be positive"
+                    {:from (name from) :to (name to) :credits credits})))
+  (when (= (name from) (name to))
+    (throw (ex-info "self-transfer is not a transfer" {:who (name from)})))
+  {:run/transfer {:from (name from) :to (name to) :credits (double credits)}
+   :run/transfer-for for})
+
+(defn transfer?
+  "Is this ledger event a holder-to-holder transfer?"
+  [event]
+  (boolean (:run/transfer event)))
+
+(defn accepting-sellers
+  "The distinct accounts that have ever RECEIVED a credits transfer, i.e. the
+   sellers who actually accept credits as payment.
+
+   This is the acceptance-density measurement, answerable from the ledger
+   instead of by assertion. It was 1 by construction before transfers existed
+   (only the fleet could be paid), and the system-dynamics pass named that 1 as
+   the binding constraint on the credits sphere -- so it is worth being able to
+   count without a second system."
+  [runs]
+  (into #{} (comp (filter transfer?) (map (comp :to :run/transfer))) runs))
+
 (defn- availability-proof-ok?
   "Every verdict in `verdicts` carries :kotobase.availability/verdict :ok --
    the exact keyword kotobase-peer's audit-outcome standardizes on. A nil or
@@ -206,16 +275,72 @@
                       (if hash-fn (hash-fn (pr-str body)) :receipt.hash/host-injected))]
     (assoc hashed :receipt/sig (sign-fn (pr-str hashed)))))
 
+(defn balances-step
+  "Apply ONE ledger event to a balances map. Extracted from `balances` so that
+   `ledger-violations` replays with byte-identical semantics rather than a
+   second implementation that could drift from it."
+  [acc run]
+  (cond
+    ;; holder-to-holder transfer: debit and credit in the same step, so the fold
+    ;; cannot lose or invent value even on a truncated feed
+    (:run/transfer run)
+    (let [{:keys [from to credits]} (:run/transfer run)]
+      (-> acc
+          (update from (fnil - 0.0) credits)
+          (update to (fnil + 0.0) credits)))
+
+    (:run/spend run)
+    (reduce (fn [a [n c]] (update a (name n) (fnil - 0.0) c)) acc (:run/spend run))
+
+    :else
+    (let [s (if (:run/shares run) run (settle run))]
+      (-> (reduce (fn [a [n c]] (update a n (fnil + 0.0) c)) acc (:run/shares s))
+          (update (:run/head-name s "head") (fnil + 0.0) (:run/head s))
+          (update :treasury (fnil + 0.0) (:run/treasury s))))))
+
 (defn balances
   "Fold a run ledger (seq of settled runs or raw runs) → account balances.
    Accepts either pre-settled maps (with :run/shares) or raw runs (settled
-   here), so the CF Worker can fold whatever the feed contains."
+   here), so the CF Worker can fold whatever the feed contains.
+
+   Permissive by design: it reports what the feed says, including a negative
+   balance. `ledger-violations` is the fn that judges — see its docstring for
+   why the check is beside this fold rather than inside it."
   [runs]
-  (reduce (fn [acc run]
-            (if-let [sp (:run/spend run)]
-              (reduce (fn [a [n c]] (update a (name n) (fnil - 0.0) c)) acc sp)
-              (let [s (if (:run/shares run) run (settle run))]
-                (-> (reduce (fn [a [n c]] (update a n (fnil + 0.0) c)) acc (:run/shares s))
-                    (update (:run/head-name s "head") (fnil + 0.0) (:run/head s))
-                    (update :treasury (fnil + 0.0) (:run/treasury s))))))
-          {} runs))
+  (reduce balances-step {} runs))
+
+(defn ledger-violations
+  "Replay `runs` in order and report every point where an account went NEGATIVE,
+   as data -- never throwing, the same discipline `engi.core/fold-balance` holds
+   for the EN side.
+
+   Why this is a separate fn rather than a check inside `balances`: `balances`
+   is the historical fold that existing feeds and the CF Worker already run, and
+   changing what it returns would retroactively reinterpret feeds already
+   written. So the invariant is added alongside it, not inside it.
+
+   Why it matters more than it did yesterday, stated plainly: `spend` has never
+   checked that the spender could afford the spend. While the only payee was the
+   operator's own fleet, an overdraft cost the operator and nobody else. Once a
+   THIRD-PARTY seller can be paid in credits (adr-ledger seq 73), an unchecked
+   overdraft is a path to taking real goods and services from a stranger with
+   credits that were never earned. Any admission path for a transfer must run
+   this and refuse on a non-empty result.
+
+   Returns [{:index i :account a :balance b :event e}], empty when clean.
+   `:treasury` is exempt: it is an accrual bucket that only ever receives."
+  [runs]
+  (:violations
+   (reduce
+    (fn [{:keys [bal violations] :as acc} [i run]]
+      (let [next-bal (balances-step bal run)
+            newly-negative (for [[a b] next-bal
+                                 :when (and (not= a :treasury)
+                                            (neg? b)
+                                            (not (neg? (get bal a 0.0))))]
+                             {:index i :account a :balance b :event run})]
+        (assoc acc
+               :bal next-bal
+               :violations (into violations newly-negative))))
+    {:bal {} :violations []}
+    (map-indexed vector runs))))
