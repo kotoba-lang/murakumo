@@ -1,6 +1,14 @@
 (ns murakumo.component-authority-test
   (:require [clojure.test :refer [deftest is testing]]
+            [ed25519.core :as ed]
+            [kotoba.abi.contract :as abi]
             [murakumo.component-authority :as authority]))
+
+(defn unhex [value]
+  (byte-array
+   (map (fn [[a b]]
+          (unchecked-byte (Integer/parseInt (str a b) 16)))
+        (partition 2 value))))
 
 (deftest placement-and-revocation-form-a-monotonic-fence
   (let [state (atom (authority/initial-state))
@@ -41,3 +49,30 @@
                     #(swap! published conj %)
                     {:op :grant-ambient :component-cid "bafyrei"})))
       (is (empty? @published)))))
+
+(deftest production-events-are-audience-bound-and-ed25519-signed
+  (let [seed (byte-array (range 32))
+        published (atom [])
+        envelope
+        (authority/apply-signed-command!
+         (atom (authority/initial-state))
+         #(swap! published conj %)
+         {:op :revoke :component-cid "bafyreicomponent"}
+         {:seed seed :key-id "murakumo-2026-01"
+          :issuer "did:key:murakumo"
+          :audience "did:key:kototama-edge-a"
+          :issued-at-ms 1785000000000})
+        payload (.getBytes
+                 (abi/component-authority-signing-payload envelope) "UTF-8")]
+    (is (= [envelope] @published))
+    (is (abi/valid-component-authority-envelope? envelope))
+    (is (ed/verify (ed/pubkey-from-seed seed)
+                   payload
+                   (unhex (:signature envelope))))
+    (is (not (ed/verify
+              (ed/pubkey-from-seed seed)
+              (.getBytes
+               (abi/component-authority-signing-payload
+                (assoc envelope :audience "did:key:attacker"))
+               "UTF-8")
+              (unhex (:signature envelope)))))))
