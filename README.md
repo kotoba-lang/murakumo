@@ -88,6 +88,7 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `murakumo.app.edn` | **declarative desired state** (wadm manifest): apps × replicas × placement (incl. `:reach`) |
 | `src/murakumo/config.cljc` | portable config/path/runtime resolution helpers |
 | `src/murakumo/component_authority.cljc` | Component placement/revocation authority: monotonic epochs and exact events consumed by Kototama hosts |
+| `src/murakumo/component_authority_store.clj` | fsync-backed signed authority outbox: enqueue-before-state, ordered retry, acknowledge-after-delivery |
 | `src/murakumo/connect.cljc` | connect.edn loader + portable `serves-reach?` (pure: can a node reach a client class on a plane?) |
 | `src/murakumo/cloud.clj` | `bb cloud` CLI shell: load fleet/cloud declarations and print plans or records |
 | `src/murakumo/cloud/plan.cljc` | portable murakumo.cloud overlay planner: stable IDs, relay choice, node/relay/route/policy records |

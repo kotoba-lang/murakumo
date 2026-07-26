@@ -95,6 +95,15 @@
                    (update :sequence inc))]
     [state' (event state' :revoked component-cid epoch nil)]))
 
+(defn transition
+  "Apply one exact authority command to immutable STATE."
+  [state command]
+  (case (:op command)
+    :place (place state (:component-cid command) (:node command))
+    :revoke (revoke state (:component-cid command))
+    (reject :unknown-command "Unknown Component authority command"
+            {:command command})))
+
 (defn apply-command!
   "Atomically apply PLACE/REVOKE and publish its exact event.
 
@@ -109,11 +118,7 @@
     (swap! state-atom
            (fn [state]
              (let [[state' event]
-                   (case (:op command)
-                     :place (place state (:component-cid command) (:node command))
-                     :revoke (revoke state (:component-cid command))
-                     (reject :unknown-command "Unknown Component authority command"
-                             {:command command}))]
+                   (transition state command)]
                (vreset! emitted event)
                state')))
     (publish! @emitted)
