@@ -90,6 +90,7 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `src/murakumo/component_authority.cljc` | Component placement/revocation authority: monotonic epochs and exact events consumed by Kototama hosts |
 | `src/murakumo/component_authority_store.clj` | fsync-backed signed authority outbox: enqueue-before-state, ordered retry, acknowledge-after-delivery |
 | `src/murakumo/component_authority_http.clj` | HTTPS publisher connecting the durable authority outbox to Kototama’s bounded receiver |
+| `src/murakumo/component_authority_deploy.clj` | secret-free per-node TLS receiver rollout plan, node audience binding, and overlap-first trusted-key rotation |
 | `src/murakumo/connect.cljc` | connect.edn loader + portable `serves-reach?` (pure: can a node reach a client class on a plane?) |
 | `src/murakumo/cloud.clj` | `bb cloud` CLI shell: load fleet/cloud declarations and print plans or records |
 | `src/murakumo/cloud/plan.cljc` | portable murakumo.cloud overlay planner: stable IDs, relay choice, node/relay/route/policy records |
@@ -122,6 +123,15 @@ bb overlay relay --overlay ...    # validate/normalise a native overlay relay re
 | `src/murakumo/infer/plan.cljc` | **PURE exo-style planner**: memory-weighted contiguous layer partition + fits-gate (bb/JVM/cljs/WASM portable) |
 | `src/murakumo/infer/moe.cljc` | **PURE mlx-moe planner**: single best-memory-node pick, README capacity tiers, expert-ratio verdict heuristic |
 | `src/murakumo/infer/engine.cljc` | **PURE engine adapters**: plan → llama.cpp `--rpc/--tensor-split` cmds / `mlx.launch` ring cmds / `mlx-moe serve` cmd |
+
+The authority receiver rollout is deliberately secret-free. Its default
+artifact source is the pinned sibling checkout at `../kototama`; callers may
+instead pass an explicit release checkout to `deployment-plan`. Before changing
+the remote configuration, the rollout verifies that the Kototama runtime is
+installed at `/opt/kototama`, and that the node already has a readable PKCS#12
+certificate plus a root-managed
+`/etc/kototama/component-authority.secret`. Neither TLS material nor passwords
+are copied by Murakumo.
 | `src/murakumo/infer.clj` | the inference operator: SSH probe → plan → provision → ring up/down → serve/generate (mlx-moe models take the single-node path) |
 | `test/murakumo/infer_test.clj` | offline unit tests for the pure planner/engine (`bb test`) |
 | `src/murakumo/task/plan.cljc` | **PURE task scheduler**: eligibility (labels/roles/memory/exclusions) → slot-aware least-filled placement → retry-elsewhere → honest speedup summary |
