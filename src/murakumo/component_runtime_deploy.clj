@@ -23,7 +23,7 @@
 
 (defn validate-input!
   [{:keys [node user home binary bundle component-cid component-sha256
-           expected-result budgets template] :as input}]
+           expected-result budgets template capability-config] :as input}]
   (when-not
    (and (map? input)
         (map? node) (identifier? (:name node))
@@ -39,6 +39,12 @@
         (integer? expected-result)
         (= #{:fuel :memory-pages :deadline-ms} (set (keys budgets)))
         (every? pos-int? (vals budgets))
+        (or (nil? capability-config)
+            (and (map? capability-config)
+                 (= #{:local :sha256} (set (keys capability-config)))
+                 (string? (:local capability-config))
+                 (.startsWith ^String (:local capability-config) "/")
+                 (digest? (:sha256 capability-config))))
         (string? template) (str/includes? template "{{COMPONENT_CID}}"))
     (throw (ex-info "invalid resident Component rollout input"
                     {:phase :component-runtime-deploy})))
@@ -46,7 +52,7 @@
 
 (defn render-plist
   [template {:keys [node user home component-cid component-sha256
-                    expected-result budgets]}]
+                    expected-result budgets capability-config]}]
   (let [root (str home "/" remote-root)]
     (-> template
         (str/replace "{{USER}}" user)
@@ -60,6 +66,12 @@
         (str/replace "{{NODE}}" (:name node))
         (str/replace "{{SEED}}" (str root "/receipt.seed"))
         (str/replace "{{RECEIPTS}}" (str root "/receipts.jsonl"))
+        (str/replace "{{CAPABILITY_CONFIG}}"
+                     (if capability-config
+                       (str root "/capabilities.json")
+                       ""))
+        (str/replace "{{CAPABILITY_CONFIG_SHA256}}"
+                     (or (:sha256 capability-config) ""))
         (str/replace "{{LOG}}" (str root "/daemon.log")))))
 
 (defn- rsync-argv [local host remote]
@@ -67,7 +79,7 @@
    local (str host ":" remote)])
 
 (defn deployment-plan
-  [{:keys [node home binary bundle template] :as input}]
+  [{:keys [node home binary bundle template capability-config] :as input}]
   (validate-input! input)
   (let [host (:host node)
         root (str home "/" remote-root)
@@ -81,13 +93,17 @@
            "if test ! -s " root "/receipt.seed; then "
            "umask 077; openssl rand -hex 32 > " root "/receipt.seed; fi")]
      :copies
-     [(rsync-argv binary host (str root "/tender-component-host"))
-      (rsync-argv (:component bundle) host (str root "/application.component.wasm"))
-      (rsync-argv (:wit bundle) host (str root "/application.component.wasm.wit"))
-      (rsync-argv (:admission bundle) host
-                  (str root "/application.component.wasm.admission.edn"))
-      (rsync-argv (:provenance bundle) host
-                  (str root "/application.component.wasm.provenance.edn"))]
+     (cond->
+      [(rsync-argv binary host (str root "/tender-component-host"))
+       (rsync-argv (:component bundle) host (str root "/application.component.wasm"))
+       (rsync-argv (:wit bundle) host (str root "/application.component.wasm.wit"))
+       (rsync-argv (:admission bundle) host
+                   (str root "/application.component.wasm.admission.edn"))
+       (rsync-argv (:provenance bundle) host
+                   (str root "/application.component.wasm.provenance.edn"))]
+       capability-config
+       (conj (rsync-argv (:local capability-config) host
+                         (str root "/capabilities.json"))))
      :activate-commands
      [(str "chmod 700 " root "/tender-component-host")
       (str "sudo tee /Library/LaunchDaemons/" label ".plist >/dev/null <<'PLIST'\n"
