@@ -3,7 +3,7 @@
             [murakumo.component-runtime-deploy :as deploy]))
 
 (def template
-  "<plist>{{USER}} {{BIN}} {{COMPONENT}} {{COMPONENT_CID}} {{COMPONENT_SHA256}} {{EXPECTED_RESULT}} {{FUEL}} {{MEMORY_PAGES}} {{NODE}} {{SEED}} {{RECEIPTS}} {{LOG}}</plist>")
+  "<plist>{{USER}} {{BIN}} {{COMPONENT}} {{COMPONENT_CID}} {{COMPONENT_SHA256}} {{EXPECTED_RESULT}} {{FUEL}} {{MEMORY_PAGES}} {{NODE}} {{SEED}} {{RECEIPTS}} {{CAPABILITY_CONFIG}} {{CAPABILITY_CONFIG_SHA256}} {{LOG}}</plist>")
 
 (def input
   {:node {:name "asher" :host "asher"}
@@ -38,6 +38,20 @@
     (doseq [bad [(assoc input :component-sha256 "bad")
                  (assoc input :component-cid "not-a-cid")
                  (assoc-in input [:budgets :fuel] 0)
+                 (assoc input :capability-config
+                        {:local "/tmp/capabilities.json" :sha256 "bad"})
                  (assoc input :template "<plist/>")]]
       (is (thrown? clojure.lang.ExceptionInfo
                    (deploy/deployment-plan bad))))))
+
+(deftest effectful-rollout-pins-and-copies-the-capability-config
+  (let [sha (apply str (repeat 64 "a"))
+        configured (assoc input :capability-config
+                          {:local "/tmp/capabilities.json" :sha256 sha})
+        plan (deploy/deployment-plan configured)
+        rendered (deploy/render-plist template configured)]
+    (is (= 6 (count (:copies plan))))
+    (is (= "/tmp/capabilities.json" (nth (last (:copies plan)) 4)))
+    (is (re-find #"/Users/asher/.murakumo/kototama-component/capabilities.json"
+                 rendered))
+    (is (re-find (re-pattern sha) rendered))))
