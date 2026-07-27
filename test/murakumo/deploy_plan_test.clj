@@ -7,6 +7,56 @@
 (def manifest-text
   "{:components [{:name \"bot\" :src \"src/bot.clj\" :cid \"bafyOLD\"}]}")
 
+(def component-manifest
+  {:format :murakumo.kototama-component/v1
+   :name "cloud-itonami-assoc-6419-nga-cibn-canary"
+   :source "qualification/resident_canary.kotoba"
+   :target :wasm-component-kotoba-v1
+   :expected-result 6419002
+   :ambient-wasi false
+   :budgets {:fuel 512 :memory-pages 16 :deadline-ms 10000}
+   :placement {:replicas 1 :labels {:role "canary"}}})
+
+(deftest kototama-component-deployment-is-exact-and-ambient-free
+  (let [deployment
+        (plan/component-deployment-plan
+         "apps/cibn/murakumo.component.edn"
+         component-manifest
+         "/opt/kotoba/compiler/bin/kotoba")]
+    (is (= :murakumo.component-deployment-plan/v1 (:format deployment)))
+    (is (= "apps/cibn/qualification/resident_canary.kotoba"
+           (:source deployment)))
+    (is (false? (:ambient-wasi deployment)))
+    (is (= ["/opt/kotoba/compiler/bin/kotoba" "-M" "compile"
+            "apps/cibn/qualification/resident_canary.kotoba"
+            "--target" "component"
+            "--output" "/tmp/murakumo-deploy.component.wasm"
+            "--fuel" "512"
+            "--memory-pages" "16"]
+           (:compile-argv deployment)))
+    (is (= {:component "/tmp/murakumo-deploy.component.wasm"
+            :wit "/tmp/murakumo-deploy.component.wasm.wit"
+            :admission "/tmp/murakumo-deploy.component.wasm.admission.edn"
+            :provenance "/tmp/murakumo-deploy.component.wasm.provenance.edn"}
+           (:bundle deployment)))
+    (is (= {:admission "/tmp/murakumo-deploy.component.wasm.admission.edn"
+            :provenance "/tmp/murakumo-deploy.component.wasm.provenance.edn"}
+           (plan/missing-component-bundle-files
+            deployment
+            #{"/tmp/murakumo-deploy.component.wasm"
+              "/tmp/murakumo-deploy.component.wasm.wit"})))))
+
+(deftest kototama-component-manifest-fails-closed
+  (doseq [invalid [(assoc component-manifest :ambient-wasi true)
+                   (assoc component-manifest :target :wasm32-wasi-kotoba-v1)
+                   (assoc-in component-manifest [:budgets :memory-pages] 0)
+                   (assoc component-manifest :extra :not-admitted)
+                   (assoc-in component-manifest [:placement :labels] {"role" "canary"})]]
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"invalid Kototama Component deployment manifest"
+         (plan/validate-component-manifest! invalid)))))
+
 (deftest manifest-input-parsing-preserves-current-behaviour
   (is (= "apps" (plan/manifest-dir "apps/bot.edn")))
   (is (= "." (plan/manifest-dir "bot.edn"))

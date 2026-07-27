@@ -9,12 +9,100 @@
             [murakumo.config :as config]))
 
 (def default-wasm "/tmp/murakumo-deploy.wasm")
+(def default-component "/tmp/murakumo-deploy.component.wasm")
 (def default-publish-node "asher")
 (def pinned-binaries ["kotoba" "kotoba-server"])
 (def artifact-forward-port 18900)
 (def publish-forward-port 18077)
 (def forward-settle-ms 1300)
 (def placement-wait-ms 75000)
+
+(def component-manifest-keys
+  #{:format :name :source :target :expected-result :ambient-wasi
+    :budgets :placement})
+(def component-budget-keys #{:fuel :memory-pages :deadline-ms})
+(def component-placement-keys #{:replicas :labels})
+
+(declare manifest-dir)
+
+(defn- component-identifier? [value]
+  (and (string? value)
+       (boolean (re-matches #"[A-Za-z0-9._-]{1,200}" value))))
+
+(defn validate-component-manifest!
+  "Validate the new compiler → Kototama Component deployment contract.
+   This is deliberately separate from the legacy kotoba-server app manifest:
+   no ambient WASI or implicit build/runtime defaults are accepted."
+  [manifest]
+  (let [budgets (:budgets manifest)
+        placement (:placement manifest)]
+    (when-not
+     (and (map? manifest)
+          (= component-manifest-keys (set (keys manifest)))
+          (= :murakumo.kototama-component/v1 (:format manifest))
+          (component-identifier? (:name manifest))
+          (string? (:source manifest))
+          (not (str/blank? (:source manifest)))
+          (= :wasm-component-kotoba-v1 (:target manifest))
+          (integer? (:expected-result manifest))
+          (false? (:ambient-wasi manifest))
+          (map? budgets)
+          (= component-budget-keys (set (keys budgets)))
+          (every? pos-int? (vals budgets))
+          (map? placement)
+          (= component-placement-keys (set (keys placement)))
+          (pos-int? (:replicas placement))
+          (map? (:labels placement))
+          (every? keyword? (keys (:labels placement)))
+          (every? string? (vals (:labels placement))))
+      (throw (ex-info "invalid Kototama Component deployment manifest"
+                      {:phase :component-deployment-manifest}))))
+  manifest)
+
+(defn component-sidecars
+  "Exact files emitted by `kotoba -M compile --target component`."
+  [component-output]
+  {:component component-output
+   :wit (str component-output ".wit")
+   :admission (str component-output ".admission.edn")
+   :provenance (str component-output ".provenance.edn")})
+
+(defn component-compile-argv
+  "Build argv for the current compiler-owned Component CLI."
+  [kotoba source output budgets]
+  [kotoba "-M" "compile" source
+   "--target" "component"
+   "--output" output
+   "--fuel" (str (:fuel budgets))
+   "--memory-pages" (str (:memory-pages budgets))])
+
+(defn component-deployment-plan
+  "Resolve a validated Component manifest into a pristine compiler invocation
+   and the complete content-addressed bundle expected by Kototama."
+  ([manifest-path manifest kotoba]
+   (component-deployment-plan manifest-path manifest kotoba default-component))
+  ([manifest-path manifest kotoba output]
+   (validate-component-manifest! manifest)
+   (let [source (str (manifest-dir manifest-path) "/" (:source manifest))]
+     {:format :murakumo.component-deployment-plan/v1
+      :manifest manifest-path
+      :name (:name manifest)
+      :source source
+      :target (:target manifest)
+      :expected-result (:expected-result manifest)
+      :ambient-wasi false
+      :budgets (:budgets manifest)
+      :placement (:placement manifest)
+      :compile-argv (component-compile-argv kotoba source output
+                                            (:budgets manifest))
+      :bundle (component-sidecars output)})))
+
+(defn missing-component-bundle-files
+  "Return named bundle members not present according to EXISTS?."
+  [plan exists?]
+  (into {}
+        (remove (fn [[_ path]] (exists? path)))
+        (:bundle plan)))
 
 (defn manifest-dir
   "Directory portion of a manifest path. A bare filename (no slash) resolves
