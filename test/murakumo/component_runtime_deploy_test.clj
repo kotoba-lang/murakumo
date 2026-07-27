@@ -3,7 +3,7 @@
             [murakumo.component-runtime-deploy :as deploy]))
 
 (def template
-  "<plist>{{USER}} {{BIN}} {{COMPONENT}} {{COMPONENT_CID}} {{COMPONENT_SHA256}} {{EXPECTED_RESULT}} {{FUEL}} {{MEMORY_PAGES}} {{NODE}} {{SEED}} {{RECEIPTS}} {{CAPABILITY_CONFIG}} {{CAPABILITY_CONFIG_SHA256}} {{LOG}}</plist>")
+  "<plist>{{LABEL}} {{PORT}} {{STARTUP_MODE}} {{USER}} {{BIN}} {{COMPONENT}} {{COMPONENT_CID}} {{COMPONENT_SHA256}} {{EXPECTED_RESULT}} {{FUEL}} {{MEMORY_PAGES}} {{NODE}} {{SEED}} {{RECEIPTS}} {{CAPABILITY_CONFIG}} {{CAPABILITY_CONFIG_SHA256}} {{LOG}}</plist>")
 
 (def input
   {:node {:name "asher" :host "asher"}
@@ -33,6 +33,20 @@
     (is (re-find #"6419002" rendered))
     (is (re-find #"bafkreieuedg6" rendered))))
 
+(deftest named-service-keeps-a-separate-port-root-and-launchd-label
+  (let [named (assoc input :service {:instance "orderops"
+                                     :port 18911
+                                     :startup-mode :compile-only})
+        plan (deploy/deployment-plan named)
+        rendered (deploy/render-plist template named)]
+    (is (= "http://127.0.0.1:18911" (:endpoint plan)))
+    (is (re-find #"com\.murakumo\.kototama-component\.orderops" rendered))
+    (is (re-find #"/Users/asher/\.murakumo/kototama-component-orderops/"
+                 rendered))
+    (is (re-find #"compile-only" rendered))
+    (is (re-find #"kototama-component\.orderops\.plist"
+                 (second (:activate-commands plan))))))
+
 (deftest rollout-fails-closed
   (testing "ambient or incomplete identities cannot be smuggled into the plan"
     (doseq [bad [(assoc input :component-sha256 "bad")
@@ -40,6 +54,12 @@
                  (assoc-in input [:budgets :fuel] 0)
                  (assoc input :capability-config
                         {:local "/tmp/capabilities.json" :sha256 "bad"})
+                 (assoc input :service {:instance "../escape"
+                                        :port 18911
+                                        :startup-mode :compile-only})
+                 (assoc input :service {:instance "orderops"
+                                        :port 70000
+                                        :startup-mode :compile-only})
                  (assoc input :template "<plist/>")]]
       (is (thrown? clojure.lang.ExceptionInfo
                    (deploy/deployment-plan bad))))))

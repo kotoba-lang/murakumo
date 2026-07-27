@@ -11,6 +11,15 @@
 (def port 18901)
 (def remote-root ".murakumo/kototama-component")
 
+(defn- service-profile [{:keys [service]}]
+  (if service
+    {:label (str label "." (:instance service))
+     :port (:port service)
+     :remote-root (str remote-root "-" (:instance service))
+     :startup-mode (:startup-mode service)}
+    {:label label :port port :remote-root remote-root
+     :startup-mode :execute-main}))
+
 (defn- identifier? [value]
   (and (string? value)
        (boolean (re-matches #"[A-Za-z0-9._-]{1,200}" value))))
@@ -23,7 +32,7 @@
 
 (defn validate-input!
   [{:keys [node user home binary bundle component-cid component-sha256
-           expected-result budgets template capability-config] :as input}]
+           expected-result budgets template capability-config service] :as input}]
   (when-not
    (and (map? input)
         (map? node) (identifier? (:name node))
@@ -45,6 +54,14 @@
                  (string? (:local capability-config))
                  (.startsWith ^String (:local capability-config) "/")
                  (digest? (:sha256 capability-config))))
+        (or (nil? service)
+            (and (map? service)
+                 (= #{:instance :port :startup-mode} (set (keys service)))
+                 (identifier? (:instance service))
+                 (pos-int? (:port service))
+                 (< (:port service) 65536)
+                 (contains? #{:execute-main :compile-only}
+                            (:startup-mode service))))
         (string? template) (str/includes? template "{{COMPONENT_CID}}"))
     (throw (ex-info "invalid resident Component rollout input"
                     {:phase :component-runtime-deploy})))
@@ -52,9 +69,13 @@
 
 (defn render-plist
   [template {:keys [node user home component-cid component-sha256
-                    expected-result budgets capability-config]}]
-  (let [root (str home "/" remote-root)]
+                    expected-result budgets capability-config] :as input}]
+  (let [{:keys [label port remote-root startup-mode]} (service-profile input)
+        root (str home "/" remote-root)]
     (-> template
+        (str/replace "{{LABEL}}" label)
+        (str/replace "{{PORT}}" (str port))
+        (str/replace "{{STARTUP_MODE}}" (name startup-mode))
         (str/replace "{{USER}}" user)
         (str/replace "{{BIN}}" (str root "/tender-component-host"))
         (str/replace "{{COMPONENT}}" (str root "/application.component.wasm"))
@@ -81,7 +102,8 @@
 (defn deployment-plan
   [{:keys [node home binary bundle template capability-config] :as input}]
   (validate-input! input)
-  (let [host (:host node)
+  (let [{:keys [label port remote-root]} (service-profile input)
+        host (:host node)
         root (str home "/" remote-root)
         plist (render-plist template input)]
     {:format :murakumo.component-runtime-deployment/v1
