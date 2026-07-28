@@ -30,7 +30,8 @@
    :infer-plan "murakumo/oracle/infer_plan_core.kir.edn"
    :dash-state "murakumo/oracle/dash_state_core.kir.edn"
    :infer-schedule "murakumo/oracle/infer_schedule_core.kir.edn"
-   :task-plan "murakumo/oracle/task_plan_core.kir.edn"})
+   :task-plan "murakumo/oracle/task_plan_core.kir.edn"
+   :infer-engine "murakumo/oracle/infer_engine_core.kir.edn"})
 
 (def ^:private kir-cache
   "Atom map of oracle-id → loaded KIR document."

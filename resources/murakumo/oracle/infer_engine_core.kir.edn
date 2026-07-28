@@ -1,0 +1,246 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-rpc-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 50052,
+   :param-types []}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name split-mode-name,
+   :params [strategy],
+   :result :string,
+   :effects #{},
+   :body (if (string=? strategy "tensor") "row" "layer"),
+   :param-types [:string]}
+  {:name endpoint,
+   :params [host port],
+   :result :string,
+   :effects #{},
+   :body (string-concat host (string-concat ":" (i64-str port))),
+   :param-types [:string :i64]}
+  {:name rpc-server-cmd,
+   :params [bin-dir port device cache cache-dir],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [base
+     (string-concat
+      bin-dir
+      (string-concat
+       "/rpc-server -H 0.0.0.0 -p "
+       (string-concat (i64-str port) (string-concat " -d " device))))]
+    (if
+     (= cache 0)
+     base
+     (if
+      (string=? cache-dir "")
+      (string-concat base " -c")
+      (string-concat base (string-concat " -c " cache-dir))))),
+   :param-types [:string :i64 :string :i64 :string]}
+  {:name embed-head-front,
+   :params [bin-dir model-path pooling ctx],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    bin-dir
+    (string-concat
+     "/llama-server -m "
+     (string-concat
+      model-path
+      (string-concat
+       " --embedding --pooling "
+       (string-concat
+        pooling
+        (string-concat " -ngl 999 -c " (i64-str ctx))))))),
+   :param-types [:string :string :string :i64]}
+  {:name embed-head-back,
+   :params [parallel port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    " --parallel "
+    (string-concat
+     (i64-str parallel)
+     (string-concat " --host 0.0.0.0 --port " (i64-str port)))),
+   :param-types [:i64 :i64]}
+  {:name mlx-moe-bin,
+   :params [venv],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (string=? venv "")
+    "mlx-moe"
+    (string-concat venv "/bin/mlx-moe")),
+   :param-types [:string]}
+  {:name mlx-moe-front,
+   :params [venv model-repo port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (mlx-moe-bin venv)
+    (string-concat
+     " serve "
+     (string-concat
+      model-repo
+      (string-concat " --host 0.0.0.0 --port " (i64-str port))))),
+   :param-types [:string :string :i64]}
+  {:name opt-i64-flag,
+   :params [flag val present],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= present 0)
+    ""
+    (string-concat flag (string-concat " " (i64-str val)))),
+   :param-types [:string :i64 :i64]}
+  {:name opt-str-flag,
+   :params [flag val present],
+   :result :string,
+   :effects #{},
+   :body
+   (if (= present 0) "" (string-concat flag (string-concat " " val))),
+   :param-types [:string :string :i64]}
+  {:name tensor-split-3,
+   :params [s0 s1 s2],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (i64-str s0)
+    (string-concat
+     ","
+     (string-concat (i64-str s1) (string-concat "," (i64-str s2))))),
+   :param-types [:i64 :i64 :i64]}
+  {:name mlx-launch-front,
+   :params [venv hosts-file model-repo max-tokens],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    venv
+    (string-concat
+     "/bin/mlx.launch --hosts "
+     (string-concat
+      hosts-file
+      (string-concat
+       " --backend ring "
+       (string-concat
+        venv
+        (string-concat
+         "/bin/mlx_lm.generate -- --model "
+         (string-concat
+          model-repo
+          (string-concat
+           " --pipeline --max-tokens "
+           (i64-str max-tokens))))))))),
+   :param-types [:string :string :string :i64]}
+  {:name head-cmd-front,
+   :params [bin-dir model-path],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    bin-dir
+    (string-concat "/llama-server -m " model-path)),
+   :param-types [:string :string]}
+  {:name rpc-csv-2,
+   :params [ep0 ep1],
+   :result :string,
+   :effects #{},
+   :body (string-concat ep0 (string-concat "," ep1)),
+   :param-types [:string :string]}
+  {:name rpc-csv-3,
+   :params [ep0 ep1 ep2],
+   :result :string,
+   :effects #{},
+   :body (string-concat ep0 (string-concat "," (rpc-csv-2 ep1 ep2))),
+   :param-types [:string :string :string]}
+  {:name head-cmd-middle,
+   :params [rpc-csv strategy tensor-csv],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    " --rpc "
+    (string-concat
+     rpc-csv
+     (string-concat
+      " --split-mode "
+      (string-concat
+       (split-mode-name strategy)
+       (string-concat " --tensor-split " tensor-csv))))),
+   :param-types [:string :string :string]}
+  {:name head-cmd-tail,
+   :params [ctx parallel port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    " -ngl 999 -c "
+    (string-concat
+     (i64-str ctx)
+     (string-concat
+      " --parallel "
+      (string-concat
+       (i64-str parallel)
+       (string-concat " --host 0.0.0.0 --port " (i64-str port)))))),
+   :param-types [:i64 :i64 :i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-rpc-port
+  digit-char
+  nat-str
+  i64-str
+  split-mode-name
+  endpoint
+  rpc-server-cmd
+  embed-head-front
+  embed-head-back
+  mlx-moe-bin
+  mlx-moe-front
+  opt-i64-flag
+  opt-str-flag
+  tensor-split-3
+  mlx-launch-front
+  head-cmd-front
+  head-cmd-middle
+  head-cmd-tail
+  rpc-csv-2
+  rpc-csv-3],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}
