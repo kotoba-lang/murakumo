@@ -1,0 +1,75 @@
+(ns infer-engine-core
+  (:export [default-rpc-port digit-char nat-str i64-str
+            split-mode-name endpoint rpc-server-cmd
+            embed-head-front embed-head-back]))
+
+;; W6 pure-planner oracle — murakumo.infer.engine string/cmd assembly subset.
+;; Plan-walking (workers/tensor-split/head-cmd over assignments) stays cljc.
+;; Guest ABI max arity 5: embed cmd is front+back concat (parity joins).
+;; i64-str via digit table (no number→string builtin). No capabilities.
+;; Parity: test/murakumo/infer_engine_kotoba_parity_test.clj
+
+(defn default-rpc-port [] :i64 50052)
+
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+(defn split-mode-name [strategy :string] :string
+  ;; cljc head-cmd: (case strategy :tensor "row" "layer")
+  (if (string=? strategy "tensor")
+    "row"
+    "layer"))
+
+(defn endpoint [host :string port :i64] :string
+  ;; cljc rpc-endpoints element: (str ip-or-host ":" port)
+  (string-concat host (string-concat ":" (i64-str port))))
+
+(defn rpc-server-cmd [bin-dir :string port :i64 device :string
+                      cache :i64 cache-dir :string] :string
+  ;; cljc rpc-worker-cmds :cmd for one worker.
+  ;; cache 0/1; empty cache-dir ⇒ bare "-c", else "-c <dir>".
+  (let [base (string-concat
+              bin-dir
+              (string-concat
+               "/rpc-server -H 0.0.0.0 -p "
+               (string-concat
+                (i64-str port)
+                (string-concat " -d " device))))]
+    (if (= cache 0)
+      base
+      (if (string=? cache-dir "")
+        (string-concat base " -c")
+        (string-concat base (string-concat " -c " cache-dir))))))
+
+(defn embed-head-front [bin-dir :string model-path :string
+                        pooling :string ctx :i64] :string
+  ;; cljc embed-head-cmd through "-c <ctx>" (before --parallel).
+  (string-concat
+   bin-dir
+   (string-concat
+    "/llama-server -m "
+    (string-concat
+     model-path
+     (string-concat
+      " --embedding --pooling "
+      (string-concat
+       pooling
+       (string-concat " -ngl 999 -c " (i64-str ctx))))))))
+
+(defn embed-head-back [parallel :i64 port :i64] :string
+  (string-concat
+   " --parallel "
+   (string-concat
+    (i64-str parallel)
+    (string-concat " --host 0.0.0.0 --port " (i64-str port)))))
