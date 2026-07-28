@@ -1,9 +1,13 @@
 (ns task-plan-core
   (:export [default-max-slots default-max-attempts default-timeout-ms
-            slots failed? can-retry?]))
+            slots failed? can-retry?
+            task-eligible? fill-milli better-fill?
+            better-task-score? better-mem?
+            wave-of slot-of load-after-assign]))
 
 ;; W6 pure-planner oracle — murakumo.task.plan integer core.
-;; Full admit/assign/prepare stay cljc (vectors, maps, float load ratios).
+;; Full admit/prepare vector folds stay cljc.
+;; task-eligible? bit flags + better-task-score? + wave/slot: pure assign-1 core.
 ;; Sentinel -1 = absent optional field (nil in cljc).
 ;; failed?: exit-present 0/1, exit-code, timeout 0/1, has-error 0/1 → 0/1.
 ;; Parity: test/murakumo/task_plan_kotoba_parity_test.clj
@@ -22,7 +26,6 @@
     node-slots))
 
 (defn slots [budget-slots :i64 node-slots :i64 slots-per :i64 max-slots :i64 cores :i64] :i64
-  ;; budget-slots >= 0 → slots-by-node override wins (no clamp).
   (if (< budget-slots 0)
     (let [cap (capacity node-slots slots-per cores)
           m (if (< max-slots 0) 8 max-slots)
@@ -31,7 +34,6 @@
     budget-slots))
 
 (defn failed? [exit-present :i64 exit-code :i64 timeout :i64 has-error :i64] :i64
-  ;; cljc: (or error timeout? (nil? exit) (not (zero? exit)))
   (if (= has-error 1)
     1
     (if (= timeout 1)
@@ -41,5 +43,69 @@
         (if (= exit-code 0) 0 1)))))
 
 (defn can-retry? [attempt :i64 max-attempts :i64] :i64
-  ;; cljc retry-tasks: (< attempt max-attempts)
   (if (< attempt max-attempts) 1 0))
+
+(defn rem2 [n :i64] :i64
+  (- n (* (quot n 2) 2)))
+
+(defn bit?-safe [flags :i64 mask :i64] :i64
+  (if (= 0 (rem2 (quot flags mask)))
+    0
+    1))
+
+(defn task-eligible? [flags :i64 mem-bytes :i64 min-mem :i64] :i64
+  ;; flags: 1 online | 2 labels-ok | 4 roles-ok | 8 not-excluded | 16 allowlist-ok
+  (let [online (bit?-safe flags 1)
+        labels (bit?-safe flags 2)
+        roles (bit?-safe flags 4)
+        not-ex (bit?-safe flags 8)
+        allow (bit?-safe flags 16)
+        mem-ok (if (< mem-bytes min-mem) 0 1)]
+    (if (= online 0)
+      0
+      (if (= labels 0)
+        0
+        (if (= roles 0)
+          0
+          (if (= not-ex 0)
+            0
+            (if (= allow 0)
+              0
+              mem-ok)))))))
+
+(defn fill-milli [assigned :i64 slots :i64] :i64
+  (if (< slots 1)
+    0
+    (quot (* assigned 1000) slots)))
+
+(defn better-fill? [fill0 :i64 fill1 :i64] :i64
+  (if (< fill0 fill1) 1 0))
+
+(defn better-task-score? [fill0 :i64 load0 :i64 _memneg0 :i64
+                          fill1 :i64 load1 :i64] :i64
+  ;; Returns 1 if node0 better, 0 if node1 better, 2 if fill+load tie.
+  (if (< fill0 fill1)
+    1
+    (if (< fill1 fill0)
+      0
+      (if (< load0 load1)
+        1
+        (if (< load1 load0)
+          0
+          2)))))
+
+(defn better-mem? [memneg0 :i64 memneg1 :i64 name-ord0 :i64 name-ord1 :i64] :i64
+  (if (< memneg0 memneg1)
+    1
+    (if (< memneg1 memneg0)
+      0
+      (if (< name-ord0 name-ord1) 1 0))))
+
+(defn wave-of [used :i64 slots :i64] :i64
+  (if (< slots 1) 0 (quot used slots)))
+
+(defn slot-of [used :i64 slots :i64] :i64
+  (if (< slots 1) 0 (- used (* (quot used slots) slots))))
+
+(defn load-after-assign [used :i64] :i64
+  (+ used 1))

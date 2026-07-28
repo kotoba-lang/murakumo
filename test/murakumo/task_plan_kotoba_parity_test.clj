@@ -11,7 +11,9 @@
 (def port-source (slurp "kotoba/task_plan_core.kotoba"))
 
 (def export-prefix
-  "default-max-slots default-max-attempts default-timeout-ms slots failed? can-retry?")
+  (str "default-max-slots default-max-attempts default-timeout-ms slots failed? can-retry? "
+       "task-eligible? fill-milli better-fill? better-task-score? better-mem? "
+       "wave-of slot-of load-after-assign"))
 
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
@@ -100,3 +102,78 @@
       (testing (pr-str [a m])
         (is (= (if (< a m) 1 0)
                (get actual (str "r_" i))))))))
+
+(defn- task-flags
+  "1 online | 2 labels | 4 roles | 8 not-excluded | 16 allowlist"
+  [node task]
+  (let [online (if (false? (:online? node true)) 0 1)
+        labels (if (every? (fn [[k v]] (= v (get (:labels node) k)))
+                           (or (get-in task [:placement :labels]) {}))
+                 1 0)
+        roles (if (every? (set (or (:roles node) #{}))
+                          (or (get-in task [:placement :roles]) []))
+                1 0)
+        not-ex (if (contains? (set (or (:exclude-nodes task) [])) (:name node)) 0 1)
+        allow (if (or (empty? (or (:nodes task) []))
+                      (contains? (set (:nodes task)) (:name node)))
+                1 0)]
+    (+ online (* 2 labels) (* 4 roles) (* 8 not-ex) (* 16 allow))))
+
+(deftest task-eligible-matches-cljc
+  (let [nodes [{:name "a" :online? true :labels {:tier "gpu"} :roles #{:worker}
+                :mem-bytes (* 16 1024 1024 1024)}
+               {:name "b" :online? false :labels {:tier "gpu"} :roles #{:worker}
+                :mem-bytes (* 16 1024 1024 1024)}
+               {:name "c" :online? true :labels {:tier "cpu"} :roles #{:worker}
+                :mem-bytes (* 16 1024 1024 1024)}
+               {:name "d" :online? true :labels {:tier "gpu"} :roles #{:worker}
+                :mem-bytes (* 1 1024 1024 1024)}]
+        tasks [{:placement {:labels {:tier "gpu"} :roles [:worker]} :min-mem-bytes (* 8 1024 1024 1024)}
+               {:placement {:labels {:tier "gpu"} :roles [:worker]} :min-mem-bytes (* 8 1024 1024 1024)
+                :exclude-nodes ["a"]}
+               {:placement {:labels {:tier "gpu"} :roles [:worker]} :min-mem-bytes 0
+                :nodes ["d"]}]
+        corpus (for [n nodes t tasks] [n t])
+        cases (into {}
+                    (map-indexed
+                     (fn [i [n t]]
+                       [(str "e_" i)
+                        (str "(task-eligible? " (task-flags n t) " "
+                             (long (or (:mem-bytes n) 0)) " "
+                             (long (or (:min-mem-bytes t) 0)) ")")])
+                     corpus))
+        actual (compile-i64-cases cases)]
+    (doseq [[i [n t]] (map-indexed vector corpus)]
+      (testing (str (:name n) " " (pr-str t))
+        (is (= (if (plan/eligible? n t) 1 0)
+               (get actual (str "e_" i))))))))
+
+(deftest wave-slot-and-score-helpers
+  (let [actual (compile-i64-cases
+                {"f0" "(fill-milli 0 4)"
+                 "f1" "(fill-milli 2 4)"
+                 "f2" "(fill-milli 4 4)"
+                 "w0" "(wave-of 0 4)"
+                 "w1" "(wave-of 5 4)"
+                 "s0" "(slot-of 0 4)"
+                 "s1" "(slot-of 5 4)"
+                 "la" "(load-after-assign 3)"
+                 "bf" "(better-fill? 250 500)"
+                 "bs" "(better-task-score? 250 1 0 500 0)"
+                 "tie" "(better-task-score? 250 1 0 250 1)"
+                 "bm" "(better-mem? -100 -50 0 1)"
+                 "bn" "(better-mem? -50 -50 0 1)"})]
+    (is (= 0 (get actual "f0")))
+    (is (= 500 (get actual "f1")))
+    (is (= 1000 (get actual "f2")))
+    (is (= 0 (get actual "w0")))
+    (is (= 1 (get actual "w1")))
+    (is (= 0 (get actual "s0")))
+    (is (= 1 (get actual "s1")))
+    (is (= 4 (get actual "la")))
+    (is (= 1 (get actual "bf")))
+    (is (= 1 (get actual "bs")))
+    (is (= 2 (get actual "tie")))
+    (is (= 1 (get actual "bm")))
+    (is (= 1 (get actual "bn")))))
+

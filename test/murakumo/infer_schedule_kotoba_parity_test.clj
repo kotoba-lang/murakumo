@@ -10,7 +10,7 @@
 
 (def port-source (slurp "kotoba/infer_schedule_core.kotoba"))
 
-(def export-prefix "eligible? score-queue score-free better-score? holds-warm? prefer-warm-then-score pick-idx-2-full pick-idx-3-tournament queue-after-assign")
+(def export-prefix "eligible? score-queue score-free better-score? holds-warm? prefer-warm-then-score pick-idx-2-full pick-idx-3-tournament queue-after-assign lane-base pack3 pack-get queues-pack-2 pick-code assign-step-2 assign-result-pick assign-result-q0 assign-result-q1 better-from-queues")
 
 (def GiB (* 1024 1024 1024))
 
@@ -196,4 +196,71 @@
     (is (= 4 (get actual "qa2")))
     ;; champ 0 warm, node2 cold, better champ → stay 0
     (is (= 0 (get actual "t3")))))
+
+
+(deftest assign-step-2-matches-schedule-assign
+  (let [model {:model/engine :comfyui
+               :model/checkpoint "c.safetensors"
+               :model/min-free-bytes (* 8 GiB)}
+        a {:name "a" :engines #{:comfyui} :checkpoints #{"c.safetensors"}
+           :free-bytes (* 16 GiB) :queue 0}
+        b {:name "b" :engines #{:comfyui} :checkpoints #{}
+           :free-bytes (* 16 GiB) :queue 0}
+        jobs [{:model model} {:model model}]
+        cljc (sched/assign [a b] jobs)
+        f0 (:free-bytes a)
+        f1 (:free-bytes b)
+        ;; step0
+        b0 (str "(better-from-queues 0 " f0 " 0 " f1 ")")
+        s0 (str "(assign-step-2 0 0 1 1 (pack3 1 0 " b0 "))")
+        ;; after step0: q=(1,0); step1
+        b1 (str "(better-from-queues 1 " f0 " 0 " f1 ")")
+        s1 (str "(assign-step-2 1 0 1 1 (pack3 1 0 " b1 "))")
+        actual (compile-i64-cases
+                {"b0" b0
+                 "s0" s0
+                 "b1" b1
+                 "s1" s1
+                 "pc" "(pick-code -1)"
+                 "pc0" "(pick-code 0)"
+                 "pc1" "(pick-code 1)"
+                 "qp" "(queues-pack-2 3 4)"
+                 "g0" "(pack-get (queues-pack-2 3 4) 0)"
+                 "g1" "(pack-get (queues-pack-2 3 4) 1)"})]
+    (is (= 0 (get actual "pc")))
+    (is (= 1 (get actual "pc0")))
+    (is (= 2 (get actual "pc1")))
+    (is (= 3 (get actual "g0")))
+    (is (= 4 (get actual "g1")))
+    (let [s0v (get actual "s0")
+          code (mod s0v 65536)
+          nq0 (mod (quot s0v 65536) 65536)
+          nq1 (quot s0v (* 65536 65536))]
+      (is (= 1 code) "pick a (warm)")
+      (is (= 1 nq0))
+      (is (= 0 nq1)))
+    (let [s1v (get actual "s1")
+          code (mod s1v 65536)
+          nq0 (mod (quot s1v 65536) 65536)
+          nq1 (quot s1v (* 65536 65536))]
+      ;; warm preference still binds both jobs to a (cold b never enters warm set)
+      (is (= 1 code) "still pick warm a")
+      (is (= 2 nq0))
+      (is (= 0 nq1)))
+    (is (= "a" (:node (cljc 0))))
+    (is (= "a" (:node (cljc 1))))))
+
+(deftest assign-step-2-both-warm-load-balances
+  (let [f (* 16 GiB)
+        ;; both warm → score by queue; tie picks index 1 (#73 prefer-warm-then-score)
+        b0 (str "(better-from-queues 0 " f " 0 " f ")")
+        s0 (str "(assign-step-2 0 0 1 1 (pack3 1 1 " b0 "))")
+        ;; after pick node1: queues (0,1)
+        b1 (str "(better-from-queues 0 " f " 1 " f ")")
+        s1 (str "(assign-step-2 0 1 1 1 (pack3 1 1 " b1 "))")
+        actual (compile-i64-cases {"s0" s0 "s1" s1})]
+    (let [c0 (mod (get actual "s0") 65536)
+          c1 (mod (get actual "s1") 65536)]
+      (is (= 2 c0))
+      (is (= 1 c1)))))
 
