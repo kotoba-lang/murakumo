@@ -1,11 +1,17 @@
 (ns infer-rebalance-core
   (:export [shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class
             lane-base largest-remainder-3
-            seats-text seats-media seats-postproc]))
+            seats-text seats-media seats-postproc
+            pool-demand-pack seats-from-pool-pack
+            classify-run-flags]))
 
 ;; W6 pure-planner oracle — murakumo.infer.rebalance capacity + 3-pool
 ;; largest-remainder seat apportionment (map-fold product vertical).
-;; demand-from-runs folds, rebalance moves / node placement stay cljc.
+;; demand-from-runs vector reduce + rebalance moves stay cljc.
+;; pool-demand-pack: class counts → packed pool weights (map-fold).
+;; seats-from-pool-pack: total + packed weights + floor → seat pack (compose LR).
+;; classify-run-flags: one-run class tag for demand-from-runs building block.
+
 ;;
 ;; largest-remainder-3: integer form of cljc `largest-remainder` for the
 ;; fixed pools text/media/postproc (weights wt,wm,wp). Floor applied only
@@ -152,3 +158,34 @@
             sm (+ bm (+ fm bump-m))
             sp (+ bp (+ fp bump-p))]
         (pack3 st sm sp)))))
+
+(defn pool-demand-pack [text :i64 image :i64 video :i64 audio :i64 postproc :i64] :i64
+  ;; cljc pool-demand: text→text-pool; image+video+audio→media-pool; postproc→postproc-pool
+  (let [wt text
+        wm (+ image (+ video audio))
+        wp postproc]
+    (pack3 wt wm wp)))
+
+(defn seats-from-pool-pack [total :i64 pool-pack :i64 floor :i64] :i64
+  ;; compose largest-remainder-3 over packed pool-demand weights
+  (largest-remainder-3 total
+                       (seats-text pool-pack)
+                       (seats-media pool-pack)
+                       (seats-postproc pool-pack)
+                       floor))
+
+(defn classify-run-flags [has-images :i64 has-video :i64 has-audio :i64
+                          is-swarm :i64 has-tokens :i64] :i64
+  ;; mirrors demand-from-runs cond order; returns class code:
+  ;; 0 none, 1 text, 2 image, 3 video, 4 audio, 5 postproc
+  (if (= has-images 1)
+    2
+    (if (= has-video 1)
+      3
+      (if (= has-audio 1)
+        4
+        (if (= is-swarm 1)
+          5
+          (if (= has-tokens 1)
+            1
+            0))))))

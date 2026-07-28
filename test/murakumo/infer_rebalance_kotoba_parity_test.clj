@@ -7,7 +7,7 @@
 
 (def port-source (slurp "kotoba/infer_rebalance_core.kotoba"))
 (def export-prefix
-  "shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class lane-base largest-remainder-3 seats-text seats-media seats-postproc")
+  "shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class lane-base largest-remainder-3 seats-text seats-media seats-postproc pool-demand-pack seats-from-pool-pack classify-run-flags")
 
 (def largest-remainder
   "Private cljc largest-remainder (var-quote for oracle parity)."
@@ -104,3 +104,49 @@
             packed (get actual label)
             got (unpack packed)]
         (is (= cljc got) (str label " cljc=" cljc " kotoba=" got " packed=" packed))))))
+
+(deftest pool-demand-pack-matches-cljc
+  (let [cases [["d0" 0 0 0 0 0]
+               ["d1" 5 2 1 0 3]
+               ["d2" 1 0 0 0 0]
+               ["d3" 0 1 1 1 0]
+               ["d4" 10 0 0 5 2]]
+        kotoba-cases (into {}
+                           (map (fn [[label t i v a p]]
+                                  [label (str "(pool-demand-pack "
+                                              t " " i " " v " " a " " p ")")])
+                                cases))
+        actual (compile-i64-cases kotoba-cases)]
+    (doseq [[label t i v a p] cases]
+      (let [cljc (rb/pool-demand {:text t :image i :video v :audio a :postproc p})
+            got (unpack (get actual label))]
+        (is (= cljc got) (str label " cljc=" cljc " kotoba=" got))))))
+
+(deftest seats-from-pool-pack-composes-largest-remainder
+  (let [actual (compile-i64-cases
+                {"s1" "(seats-from-pool-pack 10 (pool-demand-pack 5 2 1 0 3) 1)"
+                 "s2" "(seats-from-pool-pack 7 (pool-demand-pack 1 1 0 0 1) 1)"
+                 "s3" "(seats-from-pool-pack 0 (pool-demand-pack 5 2 1 0 3) 1)"})
+        ;; class demand 5,2,1,0,3 → pool weights 5,3,3
+        cljc1 (largest-remainder 10 (rb/pool-demand {:text 5 :image 2 :video 1 :audio 0 :postproc 3}) 1)
+        cljc2 (largest-remainder 7 (rb/pool-demand {:text 1 :image 1 :video 0 :audio 0 :postproc 1}) 1)
+        cljc3 (largest-remainder 0 (rb/pool-demand {:text 5 :image 2 :video 1 :audio 0 :postproc 3}) 1)]
+    (is (= cljc1 (unpack (get actual "s1"))))
+    (is (= cljc2 (unpack (get actual "s2"))))
+    (is (= cljc3 (unpack (get actual "s3"))))))
+
+(deftest classify-run-flags-matches-demand-cond-order
+  (let [actual (compile-i64-cases
+                {;; priority: images > video > audio > swarm > tokens
+                 "c_img" "(classify-run-flags 1 1 1 1 1)"
+                 "c_vid" "(classify-run-flags 0 1 1 1 1)"
+                 "c_aud" "(classify-run-flags 0 0 1 1 1)"
+                 "c_sw" "(classify-run-flags 0 0 0 1 1)"
+                 "c_tok" "(classify-run-flags 0 0 0 0 1)"
+                 "c_none" "(classify-run-flags 0 0 0 0 0)"})]
+    (is (= 2 (get actual "c_img")))
+    (is (= 3 (get actual "c_vid")))
+    (is (= 4 (get actual "c_aud")))
+    (is (= 5 (get actual "c_sw")))
+    (is (= 1 (get actual "c_tok")))
+    (is (= 0 (get actual "c_none")))))
