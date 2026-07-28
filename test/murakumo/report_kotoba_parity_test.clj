@@ -21,7 +21,10 @@
        "watch-start-line deploy-observed-empty-line deploy-observed-placed-line "
        "missing-pinned-binaries-line1 missing-pinned-binaries-line2 "
        "nodes-header status-header status-down-suffix "
-       "spaces pad-right field-10 field-16 field-8 field-9 field-12 field-6"))
+       "spaces pad-right field-10 field-16 field-8 field-9 field-12 field-6 "
+       "command-help reconcile-title reconcile-col-header "
+       "cid-display action-detail nat-len field-i64-7 "
+       "reconcile-app-row reconcile-app-line reach-line drift-line"))
 
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -188,4 +191,66 @@
                    (get actual "n2") " " (get actual "n3") " " "up/running")]
       (is (= (report/nodes-row {:name "asher" :ip "100.1.2.3" :online? true} true "up/running")
              row)))))
+
+(deftest command-help-and-reconcile-pure
+  (let [padn (fn [s w] (max 0 (- w (count s))))
+        help (compile-string-cases {"h" "(command-help)"})
+        actual
+        (compile-string-cases
+         {"title" (str "(reconcile-title " (kotoba-literal "f1") " " (kotoba-literal "T") ")")
+          "tdef" (str "(reconcile-title " (kotoba-literal "fleet") " " (kotoba-literal "t0") ")")
+          "col" "(reconcile-col-header)"
+          "cid0" (str "(cid-display " (kotoba-literal "") " 0)")
+          "cid1" (str "(cid-display " (kotoba-literal "bafy1234567890ab") " 1)")
+          "dplace" (str "(action-detail " (kotoba-literal "place") " "
+                        (kotoba-literal "t1,t2") " " (kotoba-literal "") " 1 "
+                        (kotoba-literal "") ")")
+          "dsat" (str "(action-detail " (kotoba-literal "satisfied") " "
+                      (kotoba-literal "") " " (kotoba-literal "n1") " 0 "
+                      (kotoba-literal "") ")")
+          "dsat0" (str "(action-detail " (kotoba-literal "satisfied") " "
+                       (kotoba-literal "") " " (kotoba-literal "") " 1 "
+                       (kotoba-literal "") ")")
+          "drem" (str "(action-detail " (kotoba-literal "remove") " "
+                      (kotoba-literal "") " " (kotoba-literal "") " 1 "
+                      (kotoba-literal "gone") ")")
+          "fi" "(field-i64-7 2)"
+          "fi0" "(field-i64-7 0)"
+          "reach" (str "(reach-line " (kotoba-literal "r1") " " (kotoba-literal "e1") ")")
+          "drift" (str "(drift-line " (kotoba-literal "m1") ")")
+          "row" (let [app "a1"
+                      cid "bafy1234567890ab"
+                      act "satisfied"
+                      app14 (str "(pad-right " (kotoba-literal app) " " (padn app 14) ")")
+                      cid10 (str "(pad-right " (kotoba-literal cid) " " (padn cid 10) ")")
+                      act9 (str "(pad-right " (kotoba-literal act) " " (padn act 9) ")")
+                      front (str "(reconcile-app-row " app14 " " cid10 " 2 1 " act9 ")")
+                      detail (str "(action-detail " (kotoba-literal "satisfied") " "
+                                  (kotoba-literal "") " " (kotoba-literal "n1") " 0 "
+                                  (kotoba-literal "") ")")]
+                  (str "(reconcile-app-line " front " " detail ")"))})]
+    (is (= (report/command-help) (get help "h")))
+    (is (= "reconcile f1  @ T" (get actual "title")))
+    (is (= "reconcile fleet  @ t0" (get actual "tdef")))
+    (is (= (second (report/reconcile-lines {:fleet "x" :ts "y" :apps []}))
+           (get actual "col")))
+    (is (= "—" (get actual "cid0")))
+    (is (= "bafy1234567890ab" (get actual "cid1")))
+    (is (= "→ t1,t2" (get actual "dplace")))
+    (is (= "on n1" (get actual "dsat")))
+    (is (= "" (get actual "dsat0")))
+    (is (= "gone" (get actual "drem")))
+    (is (= "2      " (get actual "fi")))
+    (is (= "0      " (get actual "fi0")))
+    (let [plan {:fleet "f" :ts "t"
+                :apps [{:app "a" :cid "c" :desired 1 :running [] :action :place
+                        :targets ["x"] :reach ["r1"] :eligible ["e1"] :misplaced ["m1"]}]}
+          lines (report/reconcile-lines plan)]
+      (is (= (nth lines 3) (get actual "reach")))
+      (is (= (nth lines 4) (get actual "drift"))))
+    (let [plan {:fleet "f1" :ts "T"
+                :apps [{:app "a1" :cid "bafy1234567890abcd" :desired 2
+                        :running ["n1"] :action :satisfied}]}
+          want (nth (report/reconcile-lines plan) 2)]
+      (is (= want (get actual "row"))))))
 
