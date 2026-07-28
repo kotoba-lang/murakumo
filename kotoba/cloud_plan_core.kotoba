@@ -26,7 +26,13 @@
             flag-driver-value flag-format-value flag-auth-key-value
             node-record-type route-record-type relay-record-type
             policy-record-type bootstrap-record-type
-            cap-ssh cap-http cap-gossip cap-deploy cap-reconcile]))
+            cap-ssh cap-http cap-gossip cap-deploy cap-reconcile
+            cmd-plan cmd-records cmd-routes cmd-dial cmd-connect
+            cmd-relay cmd-bootstrap default-command-token command-token
+            flag-dash-prefix flag-cloud-prefix flag-fleet-prefix
+            flag-target-prefix flag-from-prefix flag-to-prefix
+            flag-capability-prefix flag-driver-prefix flag-format-prefix
+            flag-auth-key-prefix]))
 
 ;; W6 pure-planner oracle — murakumo.cloud.plan scalar/string core (low).
 ;; graph-cid hashing, choose-relay sort, record maps stay cljc.
@@ -34,7 +40,10 @@
 ;; webtransport + generic transport endpoint URL fragments dual-source.
 ;; CLI presentation labels/line templates dual-source (width fmt stays host).
 ;; Summary address-family/policy lines dual-source (counts as i64).
-;; parse-flags command/flag classifiers dual-source (reduce fold stays host).
+;; parse-flags classifiers + command/flag tokens dual-source
+;; (reduce fold + keyword mapping stay host).
+;; command-token: pure cmd name from argv token ("" if not a command).
+;; flag prefixes SSoT for is-flag-* and flag-*-value lengths.
 ;; record $type strings + default capability name tokens dual-source.
 ;; Parity: test/murakumo/cloud_plan_kotoba_parity_test.clj
 
@@ -223,7 +232,7 @@
   ;; host pads name column; this is the trailing " skipped reason=…" fragment
   (string-concat " skipped reason=" reason))
 
-;; ── residual parse-flags command/flag classifiers ───────────────────
+;; ── residual parse-flags command/flag tokens + classifiers ───────────
 
 (defn starts-with? [s :string prefix :string] :i64
   (let [n (string-byte-length s)
@@ -232,56 +241,101 @@
       0
       (if (string=? (string-substring s 0 p) prefix) 1 0))))
 
+;; command name tokens (host keyword mapping)
+
+(defn cmd-plan [] :string "plan")
+(defn cmd-records [] :string "records")
+(defn cmd-routes [] :string "routes")
+(defn cmd-dial [] :string "dial")
+(defn cmd-connect [] :string "connect")
+(defn cmd-relay [] :string "relay")
+(defn cmd-bootstrap [] :string "bootstrap")
+
+(defn default-command-token [] :string
+  ;; parse-flags initial :command
+  (cmd-plan))
+
+;; flag prefixes (SSoT for is-flag-* and flag-*-value lengths)
+
+(defn flag-dash-prefix [] :string "--")
+(defn flag-cloud-prefix [] :string "--cloud=")
+(defn flag-fleet-prefix [] :string "--fleet=")
+(defn flag-target-prefix [] :string "--target=")
+(defn flag-from-prefix [] :string "--from=")
+(defn flag-to-prefix [] :string "--to=")
+(defn flag-capability-prefix [] :string "--capability=")
+(defn flag-driver-prefix [] :string "--driver=")
+(defn flag-format-prefix [] :string "--format=")
+(defn flag-auth-key-prefix [] :string "--auth-key=")
+
 (defn is-cmd-plan? [a :string] :i64
-  (if (string=? a "plan") 1 0))
+  (if (string=? a (cmd-plan)) 1 0))
 
 (defn is-cmd-records? [a :string] :i64
-  (if (string=? a "records") 1 0))
+  (if (string=? a (cmd-records)) 1 0))
 
 (defn is-cmd-routes? [a :string] :i64
-  (if (string=? a "routes") 1 0))
+  (if (string=? a (cmd-routes)) 1 0))
 
 (defn is-cmd-dial? [a :string] :i64
-  (if (string=? a "dial") 1 0))
+  (if (string=? a (cmd-dial)) 1 0))
 
 (defn is-cmd-connect? [a :string] :i64
-  (if (string=? a "connect") 1 0))
+  (if (string=? a (cmd-connect)) 1 0))
 
 (defn is-cmd-relay? [a :string] :i64
-  (if (string=? a "relay") 1 0))
+  (if (string=? a (cmd-relay)) 1 0))
 
 (defn is-cmd-bootstrap? [a :string] :i64
-  (if (string=? a "bootstrap") 1 0))
+  (if (string=? a (cmd-bootstrap)) 1 0))
+
+(defn command-token [a :string] :string
+  ;; pure command name if a is a known cmd, else ""
+  (if (= (is-cmd-plan? a) 1)
+    (cmd-plan)
+    (if (= (is-cmd-records? a) 1)
+      (cmd-records)
+      (if (= (is-cmd-routes? a) 1)
+        (cmd-routes)
+        (if (= (is-cmd-dial? a) 1)
+          (cmd-dial)
+          (if (= (is-cmd-connect? a) 1)
+            (cmd-connect)
+            (if (= (is-cmd-relay? a) 1)
+              (cmd-relay)
+              (if (= (is-cmd-bootstrap? a) 1)
+                (cmd-bootstrap)
+                ""))))))))
 
 (defn is-flag-cloud? [a :string] :i64
-  (starts-with? a "--cloud="))
+  (starts-with? a (flag-cloud-prefix)))
 
 (defn is-flag-fleet? [a :string] :i64
-  (starts-with? a "--fleet="))
+  (starts-with? a (flag-fleet-prefix)))
 
 (defn is-flag-target? [a :string] :i64
-  (starts-with? a "--target="))
+  (starts-with? a (flag-target-prefix)))
 
 (defn is-flag-from? [a :string] :i64
-  (starts-with? a "--from="))
+  (starts-with? a (flag-from-prefix)))
 
 (defn is-flag-to? [a :string] :i64
-  (starts-with? a "--to="))
+  (starts-with? a (flag-to-prefix)))
 
 (defn is-flag-capability? [a :string] :i64
-  (starts-with? a "--capability="))
+  (starts-with? a (flag-capability-prefix)))
 
 (defn is-flag-driver? [a :string] :i64
-  (starts-with? a "--driver="))
+  (starts-with? a (flag-driver-prefix)))
 
 (defn is-flag-format? [a :string] :i64
-  (starts-with? a "--format="))
+  (starts-with? a (flag-format-prefix)))
 
 (defn is-flag-auth-key? [a :string] :i64
-  (starts-with? a "--auth-key="))
+  (starts-with? a (flag-auth-key-prefix)))
 
 (defn is-flag-dash? [a :string] :i64
-  (starts-with? a "--"))
+  (starts-with? a (flag-dash-prefix)))
 
 (defn is-positional-target? [a :string] :i64
   ;; not a --flag → free target token
@@ -294,31 +348,31 @@
       (string-substring a prefix-len n))))
 
 (defn flag-cloud-value [a :string] :string
-  (flag-value-after a 8))
+  (flag-value-after a (string-byte-length (flag-cloud-prefix))))
 
 (defn flag-fleet-value [a :string] :string
-  (flag-value-after a 8))
+  (flag-value-after a (string-byte-length (flag-fleet-prefix))))
 
 (defn flag-target-value [a :string] :string
-  (flag-value-after a 9))
+  (flag-value-after a (string-byte-length (flag-target-prefix))))
 
 (defn flag-from-value [a :string] :string
-  (flag-value-after a 7))
+  (flag-value-after a (string-byte-length (flag-from-prefix))))
 
 (defn flag-to-value [a :string] :string
-  (flag-value-after a 5))
+  (flag-value-after a (string-byte-length (flag-to-prefix))))
 
 (defn flag-capability-value [a :string] :string
-  (flag-value-after a 13))
+  (flag-value-after a (string-byte-length (flag-capability-prefix))))
 
 (defn flag-driver-value [a :string] :string
-  (flag-value-after a 9))
+  (flag-value-after a (string-byte-length (flag-driver-prefix))))
 
 (defn flag-format-value [a :string] :string
-  (flag-value-after a 9))
+  (flag-value-after a (string-byte-length (flag-format-prefix))))
 
 (defn flag-auth-key-value [a :string] :string
-  (flag-value-after a 11))
+  (flag-value-after a (string-byte-length (flag-auth-key-prefix))))
 
 ;; ── residual record $type + default capability name tokens ───────────
 

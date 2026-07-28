@@ -5,11 +5,12 @@
 ;; packet plumbing; this namespace owns deterministic cloud records and routing
 ;; choices so the CLI can plan/publish them without an external VPN control plane.
 ;;
-;; W6 product-shell (ADR-260728-w6-cloud-node-type-pure-oracle +
-;; ADR-260728-w6-cloud-parse-flags-pure-oracle):
+;; W6 product-shell (ADR-260728-w6-cloud-cmd-tokens-pure-oracle +
+;; ADR-260728-w6-cloud-node-type-pure-oracle + parse-flags):
 ;; defaults + endpoints + CLI presentation + summary lines + parse-flags
-;; classifiers + record $type + capability name tokens DELEGATE to kotoba
-;; cloud_plan_core when oracle is loadable (JVM classpath or cljs/nbb).
+;; classifiers + command/flag tokens + record $type + capability name tokens
+;; DELEGATE to kotoba cloud_plan_core when oracle is loadable
+;; (JVM classpath or cljs/nbb).
 ;; Record assembly, choose-relay sort, width fmt / reduce fold stay host.
 ;; cljs mirrors remain fallback.
 
@@ -179,6 +180,35 @@
 (defn- mirror-flag-value-after [a n]
   (let [s (str a)]
     (if (< (count s) n) "" (subs s n))))
+
+(def ^:private mirror-cmd-plan "plan")
+(def ^:private mirror-cmd-records "records")
+(def ^:private mirror-cmd-routes "routes")
+(def ^:private mirror-cmd-dial "dial")
+(def ^:private mirror-cmd-connect "connect")
+(def ^:private mirror-cmd-relay "relay")
+(def ^:private mirror-cmd-bootstrap "bootstrap")
+(def ^:private mirror-flag-dash-prefix "--")
+(def ^:private mirror-flag-cloud-prefix "--cloud=")
+(def ^:private mirror-flag-fleet-prefix "--fleet=")
+(def ^:private mirror-flag-target-prefix "--target=")
+(def ^:private mirror-flag-from-prefix "--from=")
+(def ^:private mirror-flag-to-prefix "--to=")
+(def ^:private mirror-flag-capability-prefix "--capability=")
+(def ^:private mirror-flag-driver-prefix "--driver=")
+(def ^:private mirror-flag-format-prefix "--format=")
+(def ^:private mirror-flag-auth-key-prefix "--auth-key=")
+
+(defn- mirror-command-token [a]
+  (cond
+    (mirror-is-cmd a mirror-cmd-plan) mirror-cmd-plan
+    (mirror-is-cmd a mirror-cmd-records) mirror-cmd-records
+    (mirror-is-cmd a mirror-cmd-routes) mirror-cmd-routes
+    (mirror-is-cmd a mirror-cmd-dial) mirror-cmd-dial
+    (mirror-is-cmd a mirror-cmd-connect) mirror-cmd-connect
+    (mirror-is-cmd a mirror-cmd-relay) mirror-cmd-relay
+    (mirror-is-cmd a mirror-cmd-bootstrap) mirror-cmd-bootstrap
+    :else ""))
 
 ;; ── dual-source defaults ─────────────────────────────────────────────
 
@@ -393,7 +423,63 @@
    #(o 'skipped-reason-suffix [(str reason)])
    #(mirror-skipped-reason-suffix reason)))
 
-;; ── dual-source parse-flags classifiers ──────────────────────────────
+;; ── dual-source parse-flags tokens + classifiers ─────────────────────
+
+(def cmd-plan
+  "CLI command token `plan`. Kotoba when ready."
+  (oracle-str-const 'cmd-plan mirror-cmd-plan))
+
+(def cmd-records
+  (oracle-str-const 'cmd-records mirror-cmd-records))
+
+(def cmd-routes
+  (oracle-str-const 'cmd-routes mirror-cmd-routes))
+
+(def cmd-dial
+  (oracle-str-const 'cmd-dial mirror-cmd-dial))
+
+(def cmd-connect
+  (oracle-str-const 'cmd-connect mirror-cmd-connect))
+
+(def cmd-relay
+  (oracle-str-const 'cmd-relay mirror-cmd-relay))
+
+(def cmd-bootstrap
+  (oracle-str-const 'cmd-bootstrap mirror-cmd-bootstrap))
+
+(def default-command-token
+  "Default parse-flags command token. Kotoba when ready."
+  (oracle-str-const 'default-command-token mirror-cmd-plan))
+
+(def flag-dash-prefix
+  (oracle-str-const 'flag-dash-prefix mirror-flag-dash-prefix))
+
+(def flag-cloud-prefix
+  (oracle-str-const 'flag-cloud-prefix mirror-flag-cloud-prefix))
+
+(def flag-fleet-prefix
+  (oracle-str-const 'flag-fleet-prefix mirror-flag-fleet-prefix))
+
+(def flag-target-prefix
+  (oracle-str-const 'flag-target-prefix mirror-flag-target-prefix))
+
+(def flag-from-prefix
+  (oracle-str-const 'flag-from-prefix mirror-flag-from-prefix))
+
+(def flag-to-prefix
+  (oracle-str-const 'flag-to-prefix mirror-flag-to-prefix))
+
+(def flag-capability-prefix
+  (oracle-str-const 'flag-capability-prefix mirror-flag-capability-prefix))
+
+(def flag-driver-prefix
+  (oracle-str-const 'flag-driver-prefix mirror-flag-driver-prefix))
+
+(def flag-format-prefix
+  (oracle-str-const 'flag-format-prefix mirror-flag-format-prefix))
+
+(def flag-auth-key-prefix
+  (oracle-str-const 'flag-auth-key-prefix mirror-flag-auth-key-prefix))
 
 (defn- flag1
   "Oracle 0/1 predicate dual-source."
@@ -402,104 +488,111 @@
    #(= 1 (oracle/i64->host (o export [(str a)])))
    mirror-thunk))
 
+(defn command-token
+  "Known CLI command name for argv token, or \"\". Kotoba when ready."
+  [a]
+  (try-oracle
+   #(o 'command-token [(str a)])
+   #(mirror-command-token a)))
+
 (defn- is-cmd-plan? [a]
-  (flag1 'is-cmd-plan? a #(mirror-is-cmd a "plan")))
+  (flag1 'is-cmd-plan? a #(mirror-is-cmd a cmd-plan)))
 
 (defn- is-cmd-records? [a]
-  (flag1 'is-cmd-records? a #(mirror-is-cmd a "records")))
+  (flag1 'is-cmd-records? a #(mirror-is-cmd a cmd-records)))
 
 (defn- is-cmd-routes? [a]
-  (flag1 'is-cmd-routes? a #(mirror-is-cmd a "routes")))
+  (flag1 'is-cmd-routes? a #(mirror-is-cmd a cmd-routes)))
 
 (defn- is-cmd-dial? [a]
-  (flag1 'is-cmd-dial? a #(mirror-is-cmd a "dial")))
+  (flag1 'is-cmd-dial? a #(mirror-is-cmd a cmd-dial)))
 
 (defn- is-cmd-connect? [a]
-  (flag1 'is-cmd-connect? a #(mirror-is-cmd a "connect")))
+  (flag1 'is-cmd-connect? a #(mirror-is-cmd a cmd-connect)))
 
 (defn- is-cmd-relay? [a]
-  (flag1 'is-cmd-relay? a #(mirror-is-cmd a "relay")))
+  (flag1 'is-cmd-relay? a #(mirror-is-cmd a cmd-relay)))
 
 (defn- is-cmd-bootstrap? [a]
-  (flag1 'is-cmd-bootstrap? a #(mirror-is-cmd a "bootstrap")))
+  (flag1 'is-cmd-bootstrap? a #(mirror-is-cmd a cmd-bootstrap)))
 
 (defn- is-flag-cloud? [a]
-  (flag1 'is-flag-cloud? a #(mirror-starts-with? a "--cloud=")))
+  (flag1 'is-flag-cloud? a #(mirror-starts-with? a flag-cloud-prefix)))
 
 (defn- is-flag-fleet? [a]
-  (flag1 'is-flag-fleet? a #(mirror-starts-with? a "--fleet=")))
+  (flag1 'is-flag-fleet? a #(mirror-starts-with? a flag-fleet-prefix)))
 
 (defn- is-flag-target? [a]
-  (flag1 'is-flag-target? a #(mirror-starts-with? a "--target=")))
+  (flag1 'is-flag-target? a #(mirror-starts-with? a flag-target-prefix)))
 
 (defn- is-flag-from? [a]
-  (flag1 'is-flag-from? a #(mirror-starts-with? a "--from=")))
+  (flag1 'is-flag-from? a #(mirror-starts-with? a flag-from-prefix)))
 
 (defn- is-flag-to? [a]
-  (flag1 'is-flag-to? a #(mirror-starts-with? a "--to=")))
+  (flag1 'is-flag-to? a #(mirror-starts-with? a flag-to-prefix)))
 
 (defn- is-flag-capability? [a]
-  (flag1 'is-flag-capability? a #(mirror-starts-with? a "--capability=")))
+  (flag1 'is-flag-capability? a #(mirror-starts-with? a flag-capability-prefix)))
 
 (defn- is-flag-driver? [a]
-  (flag1 'is-flag-driver? a #(mirror-starts-with? a "--driver=")))
+  (flag1 'is-flag-driver? a #(mirror-starts-with? a flag-driver-prefix)))
 
 (defn- is-flag-format? [a]
-  (flag1 'is-flag-format? a #(mirror-starts-with? a "--format=")))
+  (flag1 'is-flag-format? a #(mirror-starts-with? a flag-format-prefix)))
 
 (defn- is-flag-auth-key? [a]
-  (flag1 'is-flag-auth-key? a #(mirror-starts-with? a "--auth-key=")))
+  (flag1 'is-flag-auth-key? a #(mirror-starts-with? a flag-auth-key-prefix)))
 
 (defn- is-flag-dash? [a]
-  (flag1 'is-flag-dash? a #(mirror-starts-with? a "--")))
+  (flag1 'is-flag-dash? a #(mirror-starts-with? a flag-dash-prefix)))
 
 (defn- is-positional-target? [a]
-  (flag1 'is-positional-target? a #(not (mirror-starts-with? a "--"))))
+  (flag1 'is-positional-target? a #(not (mirror-starts-with? a flag-dash-prefix))))
 
 (defn- flag-cloud-value [a]
   (try-oracle
    #(o 'flag-cloud-value [(str a)])
-   #(mirror-flag-value-after a 8)))
+   #(mirror-flag-value-after a (count flag-cloud-prefix))))
 
 (defn- flag-fleet-value [a]
   (try-oracle
    #(o 'flag-fleet-value [(str a)])
-   #(mirror-flag-value-after a 8)))
+   #(mirror-flag-value-after a (count flag-fleet-prefix))))
 
 (defn- flag-target-value [a]
   (try-oracle
    #(o 'flag-target-value [(str a)])
-   #(mirror-flag-value-after a 9)))
+   #(mirror-flag-value-after a (count flag-target-prefix))))
 
 (defn- flag-from-value [a]
   (try-oracle
    #(o 'flag-from-value [(str a)])
-   #(mirror-flag-value-after a 7)))
+   #(mirror-flag-value-after a (count flag-from-prefix))))
 
 (defn- flag-to-value [a]
   (try-oracle
    #(o 'flag-to-value [(str a)])
-   #(mirror-flag-value-after a 5)))
+   #(mirror-flag-value-after a (count flag-to-prefix))))
 
 (defn- flag-capability-value [a]
   (try-oracle
    #(o 'flag-capability-value [(str a)])
-   #(mirror-flag-value-after a 13)))
+   #(mirror-flag-value-after a (count flag-capability-prefix))))
 
 (defn- flag-driver-value [a]
   (try-oracle
    #(o 'flag-driver-value [(str a)])
-   #(mirror-flag-value-after a 9)))
+   #(mirror-flag-value-after a (count flag-driver-prefix))))
 
 (defn- flag-format-value [a]
   (try-oracle
    #(o 'flag-format-value [(str a)])
-   #(mirror-flag-value-after a 9)))
+   #(mirror-flag-value-after a (count flag-format-prefix))))
 
 (defn- flag-auth-key-value [a]
   (try-oracle
    #(o 'flag-auth-key-value [(str a)])
-   #(mirror-flag-value-after a 11)))
+   #(mirror-flag-value-after a (count flag-auth-key-prefix))))
 
 (defn merge-defaults [cloud]
   (merge-with (fn [a b]
@@ -937,31 +1030,27 @@
      :plan (summary-lines plan))))
 
 (defn parse-flags
-  "Parse cloud CLI argv. Command/flag classification dual-sourced via
+  "Parse cloud CLI argv. Command/flag tokens + classifiers dual-sourced via
    cloud_plan_core; reduce fold + keyword mapping stay host."
   [args]
   (reduce (fn [m arg]
-            (cond
-              (is-cmd-plan? arg) (assoc m :command :plan)
-              (is-cmd-records? arg) (assoc m :command :records)
-              (is-cmd-routes? arg) (assoc m :command :routes)
-              (is-cmd-dial? arg) (assoc m :command :dial)
-              (is-cmd-connect? arg) (assoc m :command :connect)
-              (is-cmd-relay? arg) (assoc m :command :relay)
-              (is-cmd-bootstrap? arg) (assoc m :command :bootstrap)
-              (is-flag-cloud? arg) (assoc m :cloud-path (flag-cloud-value arg))
-              (is-flag-fleet? arg) (assoc m :fleet-path (flag-fleet-value arg))
-              (is-flag-target? arg) (assoc m :target (flag-target-value arg))
-              (is-flag-from? arg) (assoc m :from (keyword (flag-from-value arg)))
-              (is-flag-to? arg) (assoc m :to (keyword (flag-to-value arg)))
-              (is-flag-capability? arg) (assoc m :capability (keyword (flag-capability-value arg)))
-              (is-flag-driver? arg) (assoc m :driver (flag-driver-value arg))
-              (is-flag-format? arg) (assoc m :format (keyword (flag-format-value arg)))
-              (is-flag-auth-key? arg) (assoc m :auth-key (flag-auth-key-value arg))
-              (is-positional-target? arg) (assoc m :target arg)
-              (is-flag-dash? arg) m
-              :else m))
-          {:command :plan
+            (let [cmd (command-token arg)]
+              (if-not (str/blank? cmd)
+                (assoc m :command (keyword cmd))
+                (cond
+                  (is-flag-cloud? arg) (assoc m :cloud-path (flag-cloud-value arg))
+                  (is-flag-fleet? arg) (assoc m :fleet-path (flag-fleet-value arg))
+                  (is-flag-target? arg) (assoc m :target (flag-target-value arg))
+                  (is-flag-from? arg) (assoc m :from (keyword (flag-from-value arg)))
+                  (is-flag-to? arg) (assoc m :to (keyword (flag-to-value arg)))
+                  (is-flag-capability? arg) (assoc m :capability (keyword (flag-capability-value arg)))
+                  (is-flag-driver? arg) (assoc m :driver (flag-driver-value arg))
+                  (is-flag-format? arg) (assoc m :format (keyword (flag-format-value arg)))
+                  (is-flag-auth-key? arg) (assoc m :auth-key (flag-auth-key-value arg))
+                  (is-positional-target? arg) (assoc m :target arg)
+                  (is-flag-dash? arg) m
+                  :else m))))
+          {:command (keyword default-command-token)
            :cloud-path default-cloud-path
            :fleet-path config/default-fleet-path}
           args))
