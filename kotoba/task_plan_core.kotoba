@@ -3,13 +3,16 @@
             slots failed? can-retry?
             task-eligible? fill-milli better-fill?
             better-task-score? better-mem?
-            wave-of slot-of load-after-assign]))
+            wave-of slot-of load-after-assign
+            digit-char nat-str i64-str pad4 task-id
+            pick-task-idx-2 assign-task-step-2
+            attempt-next exclude-append-marker]))
 
-;; W6 pure-planner oracle — murakumo.task.plan integer core.
+;; W6 pure-planner oracle — murakumo.task.plan integer + assign/expand core.
 ;; Full admit/prepare vector folds stay cljc.
 ;; task-eligible? bit flags + better-task-score? + wave/slot: pure assign-1 core.
-;; Sentinel -1 = absent optional field (nil in cljc).
-;; failed?: exit-present 0/1, exit-code, timeout 0/1, has-error 0/1 → 0/1.
+;; expand: task-id = "t-" + zero-pad-4 (cljc last-4 of "0000"+i for i≥10000).
+;; assign-task-step-2: one task pure pick for fixed 2 nodes + load inc.
 ;; Parity: test/murakumo/task_plan_kotoba_parity_test.clj
 
 (defn default-max-slots [] :i64 8)
@@ -83,7 +86,7 @@
 
 (defn better-task-score? [fill0 :i64 load0 :i64 _memneg0 :i64
                           fill1 :i64 load1 :i64] :i64
-  ;; Returns 1 if node0 better, 0 if node1 better, 2 if fill+load tie.
+  ;; 1 if node0 better, 0 if node1 better, 2 if fill+load tie
   (if (< fill0 fill1)
     1
     (if (< fill1 fill0)
@@ -109,3 +112,78 @@
 
 (defn load-after-assign [used :i64] :i64
   (+ used 1))
+
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+(defn rem64 [a :i64 b :i64] :i64
+  (- a (* (quot a b) b)))
+
+(defn pad4 [n :i64] :string
+  ;; cljc (subs (str "0000" i) (- (count …) 4)) — last 4 decimal digits zero-padded
+  (let [m (if (< n 0) 0 n)
+        d (rem64 m 10000)]
+    (if (< d 10)
+      (string-concat "000" (i64-str d))
+      (if (< d 100)
+        (string-concat "00" (i64-str d))
+        (if (< d 1000)
+          (string-concat "0" (i64-str d))
+          (i64-str d))))))
+
+(defn task-id [i :i64] :string
+  (string-concat "t-" (pad4 i)))
+
+(defn attempt-next [attempt :i64] :i64
+  (+ attempt 1))
+
+(defn exclude-append-marker [] :i64
+  ;; host conj's node name; pure marker that retry path is active
+  1)
+
+(defn pick-task-idx-2 [ok0 :i64 ok1 :i64 fill0 :i64 fill1 :i64
+                       load-pack :i64] :i64
+  ;; load-pack unused high: load0 + load1*65536 — actually pass load0 via fill...
+  ;; Arity 5: ok0 ok1 fill0 fill1 load-pack where load-pack = load0 + load1*B
+  (let [B 65536
+        load0 (rem64 load-pack B)
+        load1 (quot load-pack B)]
+    (if (= ok0 0)
+      (if (= ok1 0) -1 1)
+      (if (= ok1 0)
+        0
+        (let [b (better-task-score? fill0 load0 0 fill1 load1)]
+          (if (= b 2)
+            0
+            (if (= b 1) 0 1)))))))
+
+(defn assign-task-step-2 [load0 :i64 load1 :i64 ok0 :i64 ok1 :i64
+                          score-pack :i64] :i64
+  ;; score-pack = pack fill0 + fill1*B + (load0 already separate)
+  ;; Use score-pack = fill0 + fill1*B only; loads are load0/load1 args — arity 5!
+  ;; load0 load1 ok0 ok1 fill-pack (fill0 + fill1*B)
+  (let [B 65536
+        fill0 (rem64 score-pack B)
+        fill1 (quot score-pack B)
+        p (if (= ok0 0)
+            (if (= ok1 0) -1 1)
+            (if (= ok1 0)
+              0
+              (let [b (better-task-score? fill0 load0 0 fill1 load1)]
+                (if (= b 2) 0 (if (= b 1) 0 1)))))
+        code (if (< p 0) 0 (+ p 1))
+        n0 (if (= p 0) (+ load0 1) load0)
+        n1 (if (= p 1) (+ load1 1) load1)]
+    ;; pack3: code + n0*B + n1*B*B
+    (+ code (+ (* n0 B) (* n1 (* B B))))))
