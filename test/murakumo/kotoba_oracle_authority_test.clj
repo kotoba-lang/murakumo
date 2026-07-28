@@ -20,6 +20,7 @@
             [murakumo.infer.schedule :as sched]
             [murakumo.task.plan :as task]
             [murakumo.infer.engine :as eng]
+            [murakumo.secret :as secret]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -41,6 +42,7 @@
   (is (oracle/ready? :infer-schedule))
   (is (oracle/ready? :task-plan))
   (is (oracle/ready? :infer-engine))
+  (is (oracle/ready? :secret))
   (is (some #{:kekkai-gate} (oracle/catalog-ids)))
   (is (some #{:token} (oracle/catalog-ids)))
   (is (some #{:report-core} (oracle/catalog-ids)))
@@ -48,7 +50,8 @@
   (is (some #{:dash-state} (oracle/catalog-ids)))
   (is (some #{:infer-schedule} (oracle/catalog-ids)))
   (is (some #{:task-plan} (oracle/catalog-ids)))
-  (is (some #{:infer-engine} (oracle/catalog-ids))))
+  (is (some #{:infer-engine} (oracle/catalog-ids)))
+  (is (some #{:secret} (oracle/catalog-ids))))
 
 (deftest product-shell-gate-uses-oracle-results
   (testing "parse-status delegates to kotoba parse-status-out"
@@ -479,3 +482,64 @@
 (deftest engine-precompiled-kir-does-not-drift
   (is (= (eng-live-kir) (eng-resource-kir))
       "infer_engine KIR drift — run oracle-gen"))
+
+(def ^:private secret-source "kotoba/secret_core.kotoba")
+(def ^:private secret-resource "murakumo/oracle/secret_core.kir.edn")
+
+(defn- secret-live-kir []
+  (:kir (compiler/compile-source (slurp secret-source) :wasm32-kotoba-v1 {})))
+
+(defn- secret-resource-kir []
+  (edn/read-string (slurp (io/resource secret-resource))))
+
+(deftest product-shell-secret-uses-oracle-results
+  (testing "name/env constants via oracle"
+    (is (= "murakumo-token" secret/token-secret-name))
+    (is (= "MURAKUMO_TOKEN_SECRET" secret/token-secret-env))
+    (is (= "murakumo-service-token" secret/service-token-name))
+    (is (= "MURAKUMO_SERVICE_TOKEN" secret/service-token-env))
+    (is (= "murakumo-metrics-token" secret/metrics-token-name))
+    (is (= "MURAKUMO_METRICS_TOKEN" secret/metrics-token-env))
+    (is (= "murakumo-quic-cert-path" secret/quic-cert-path-name))
+    (is (= "MURAKUMO_QUIC_CERT" secret/quic-cert-path-env))
+    (is (= "murakumo-quic-key-path" secret/quic-key-path-name))
+    (is (= "MURAKUMO_QUIC_KEY" secret/quic-key-path-env)))
+  (testing "known-env-secrets map from oracle constants"
+    (is (= secret/token-secret-env (get secret/known-env-secrets secret/token-secret-name)))
+    (is (= 5 (count secret/known-env-secrets))))
+  (testing "valid-env-var-name? via oracle"
+    (is (true? (secret/valid-env-var-name? "MURAKUMO_TOKEN_SECRET")))
+    (is (false? (secret/valid-env-var-name? "")))
+    (is (false? (secret/valid-env-var-name? "FOO*")))
+    (is (false? (secret/valid-env-var-name? "A/B")))
+    (is (false? (secret/valid-env-var-name? "HAS SPACE"))))
+  (testing "valid-path-ref? POSIX via oracle"
+    (is (true? (secret/valid-path-ref? "/etc/ssl/cert.pem")))
+    (is (false? (secret/valid-path-ref? "relative.pem")))
+    (is (false? (secret/valid-path-ref? "-----BEGIN CERT-----")))
+    (is (false? (secret/valid-path-ref? "/tmp/*")))
+    (is (false? (secret/valid-path-ref? ""))))
+  (testing "resolve with map-fetch stays host; names match oracle"
+    (let [fetch (secret/map-fetch {secret/token-secret-name "sekrit"})]
+      (is (= "sekrit" (secret/resolve-token-secret {:fetch fetch}))))))
+
+(deftest secret-oracle-call-matches-live-compile
+  (let [live (secret-live-kir)]
+    (is (= (ir/execute live 'token-secret-name [])
+           (oracle/call :secret 'token-secret-name [])))
+    (is (= (ir/execute live 'token-secret-env [])
+           (oracle/call :secret 'token-secret-env [])))
+    (is (= (ir/execute live 'valid-env-var-name? ["OK_NAME"])
+           (oracle/call :secret 'valid-env-var-name? ["OK_NAME"])))
+    (is (= (ir/execute live 'valid-path-ref-unix? ["/abs/path"])
+           (oracle/call :secret 'valid-path-ref-unix? ["/abs/path"])))
+    (is (= (ir/execute live 'known-secret-name? ["murakumo-token"])
+           (oracle/call :secret 'known-secret-name? ["murakumo-token"])))
+    (is (= (ir/execute live 'env-for-secret-name ["murakumo-token"])
+           (oracle/call :secret 'env-for-secret-name ["murakumo-token"])))
+    (is (= (ir/execute live 'classify-fetched [0 0])
+           (oracle/call :secret 'classify-fetched [0 0])))))
+
+(deftest secret-precompiled-kir-does-not-drift
+  (is (= (secret-live-kir) (secret-resource-kir))
+      "secret KIR drift — run oracle-gen"))
