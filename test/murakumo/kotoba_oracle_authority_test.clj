@@ -1015,7 +1015,20 @@
          (persist/repo-uri "com.murakumo.fleet.snapshot" "snap-1-0")))
   (is (str/includes? (persist/repo-write-url 18099) "localhost:18099"))
   (is (true? (persist/write-ok? "{\"status\":\"ok\"}")))
-  (is (false? (persist/write-ok? "error"))))
+  (is (false? (persist/write-ok? "error")))
+  (is (= "create" persist/operation-create))
+  (is (= "\"status\":\"ok\"" persist/write-ok-marker))
+  (is (= "Authorization: Bearer tok" (persist/auth-header "tok")))
+  (is (= "content-type: application/json" persist/content-type-json-header))
+  (is (= 6 persist/curl-timeout-s))
+  (is (= "POST" persist/curl-method-post))
+  (is (str/includes? persist/xrpc-repo-write-path "repo.write"))
+  (is (= ["curl" "-s" "-m" "6" "-X" "POST"
+          (persist/repo-write-url 18099)
+          "-H" "Authorization: Bearer tok"
+          "-H" "content-type: application/json"
+          "-d" "{}"]
+         (persist/repo-write-curl-argv 18099 "tok" "{}"))))
 
 (deftest persist-oracle-call-matches-live-compile
   (let [live (:kir (compiler/compile-source (slurp "kotoba/persist_core.kotoba")
@@ -1031,7 +1044,15 @@
     (is (= (ir/execute live 'repo-write-url [18099])
            (oracle/call :persist 'repo-write-url [18099])))
     (is (= (ir/execute live 'write-ok? ["{\"status\":\"ok\"}"])
-           (oracle/call :persist 'write-ok? ["{\"status\":\"ok\"}"])))))
+           (oracle/call :persist 'write-ok? ["{\"status\":\"ok\"}"])))
+    (is (= (ir/execute live 'operation-create [])
+           (oracle/call :persist 'operation-create [])))
+    (is (= (ir/execute live 'auth-header ["tok"])
+           (oracle/call :persist 'auth-header ["tok"])))
+    (is (= (ir/execute live 'curl-timeout-s [])
+           (oracle/call :persist 'curl-timeout-s [])))
+    (is (= (ir/execute live 'xrpc-repo-write-path [])
+           (oracle/call :persist 'xrpc-repo-write-path [])))))
 
 (deftest persist-precompiled-kir-does-not-drift
   (let [live (:kir (compiler/compile-source (slurp "kotoba/persist_core.kotoba")

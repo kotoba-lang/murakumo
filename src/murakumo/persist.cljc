@@ -1,10 +1,10 @@
 ;; murakumo.persist — portable Datom/atproto persistence data helpers.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-persist-oracle-authority):
-;; constants + rkey/uri/url/write-ok? DELEGATE to precompiled
-;; persist_core.kir.edn when oracle is loadable (JVM classpath or cljs/nbb —
-;; ADR-260728-w6-cljs-oracle-load). Envelope maps + graph-cid hashing stay host.
-;; cljs mirrors remain fallback; i64-str-based rkey/url may try/catch on cljs.
+;; W6 product-shell authority (ADR-260728-w6-persist-oracle-authority +
+;; ADR-260728-w6-persist-envelope-pure-oracle):
+;; constants + rkey/uri/url/write-ok? + curl/auth/operation field helpers DELEGATE
+;; to precompiled persist_core.kir.edn when oracle is loadable (JVM or cljs/nbb).
+;; Envelope maps + graph-cid hashing stay host. cljs mirrors remain fallback.
 
 (ns murakumo.persist
   (:require [murakumo.dash.state :as dash-state]
@@ -76,6 +76,18 @@
 (defn- mirror-write-ok? [out]
   (some? (re-find #"\"status\":\"ok\"" (str out))))
 
+(def ^:private mirror-operation-create "create")
+(def ^:private mirror-write-ok-marker "\"status\":\"ok\"")
+(def ^:private mirror-auth-bearer-prefix "Authorization: Bearer ")
+(def ^:private mirror-content-type-json-header "content-type: application/json")
+(def ^:private mirror-curl-timeout-s 6)
+(def ^:private mirror-curl-method-post "POST")
+(def ^:private mirror-xrpc-repo-write-path
+  "/xrpc/com.etzhayyim.apps.kotoba.atproto.repo.write")
+
+(defn- mirror-auth-header [token]
+  (str mirror-auth-bearer-prefix token))
+
 ;; ── dual-source constants ──────────────────────────────────────────────
 
 (def repo-authority
@@ -98,6 +110,34 @@
 
 (def forward-settle-ms
   (oracle-i64-const 'forward-settle-ms mirror-forward-settle-ms))
+
+(def operation-create
+  (oracle-const 'operation-create mirror-operation-create))
+
+(def write-ok-marker
+  (oracle-const 'write-ok-marker mirror-write-ok-marker))
+
+(def auth-bearer-prefix
+  (oracle-const 'auth-bearer-prefix mirror-auth-bearer-prefix))
+
+(def content-type-json-header
+  (oracle-const 'content-type-json-header mirror-content-type-json-header))
+
+(def curl-timeout-s
+  (oracle-i64-const 'curl-timeout-s mirror-curl-timeout-s))
+
+(def curl-method-post
+  (oracle-const 'curl-method-post mirror-curl-method-post))
+
+(def xrpc-repo-write-path
+  (oracle-const 'xrpc-repo-write-path mirror-xrpc-repo-write-path))
+
+(defn auth-header
+  "Authorization Bearer header value. Kotoba `auth-header` when ready."
+  [token]
+  (try-oracle
+   #(o 'auth-header [(str token)])
+   #(mirror-auth-header token)))
 
 (defn fleet-graph-cid []
   (identity/graph-cid fleet-graph-name))
@@ -125,11 +165,12 @@
    #(mirror-reconcile-rkey millis sequence-number)))
 
 (defn repo-write-envelope
-  "Build the pure repo.write payload before host-side JSON encoding."
+  "Build the pure repo.write payload before host-side JSON encoding.
+   `:operation` from kotoba `operation-create` when ready."
   [graph collection rkey record]
   {:graph graph
    :uri (repo-uri collection rkey)
-   :operation "create"
+   :operation operation-create
    :cid (identity/graph-cid rkey)
    :record record})
 
@@ -174,12 +215,13 @@
    #(mirror-repo-write-url local-port)))
 
 (defn repo-write-curl-argv
-  "argv for POSTing a repo.write envelope through a local forward."
+  "argv for POSTing a repo.write envelope through a local forward.
+   Method/timeout/headers via kotoba pure constants when ready."
   [local-port token body]
-  ["curl" "-s" "-m" "6" "-X" "POST"
+  ["curl" "-s" "-m" (str curl-timeout-s) "-X" curl-method-post
    (repo-write-url local-port)
-   "-H" (str "Authorization: Bearer " token)
-   "-H" "content-type: application/json"
+   "-H" (auth-header token)
+   "-H" content-type-json-header
    "-d" body])
 
 (defn write-forward-command

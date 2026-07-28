@@ -2,10 +2,15 @@
   (:export [repo-authority fleet-graph-name snapshot-collection reconcile-collection
             snapshot-local-port reconcile-local-port forward-settle-ms
             digit-char nat-str i64-str
-            snapshot-rkey reconcile-rkey repo-uri repo-write-url write-ok?]))
+            snapshot-rkey reconcile-rkey repo-uri repo-write-url write-ok?
+            operation-create write-ok-marker
+            auth-bearer-prefix content-type-json-header
+            curl-timeout-s curl-method-post
+            auth-header xrpc-repo-write-path]))
 
 ;; W6 pure-planner oracle — murakumo.persist string/constant core (optional).
 ;; graph-cid hashing and envelope map assembly stay cljc (identity/graph-cid).
+;; curl argv field constants + operation/auth headers dual-source pure.
 ;; write-ok?: substring match for "\"status\":\"ok\"" (cljc re-find).
 ;; Parity: test/murakumo/persist_kotoba_parity_test.clj
 
@@ -48,12 +53,30 @@
     (repo-authority)
     (string-concat "/" (string-concat collection (string-concat "/" rkey))))))
 
+(defn operation-create [] :string "create")
+
+(defn write-ok-marker [] :string "\"status\":\"ok\"")
+
+(defn auth-bearer-prefix [] :string "Authorization: Bearer ")
+
+(defn content-type-json-header [] :string "content-type: application/json")
+
+(defn curl-timeout-s [] :i64 6)
+
+(defn curl-method-post [] :string "POST")
+
+(defn auth-header [token :string] :string
+  (string-concat (auth-bearer-prefix) token))
+
+(defn xrpc-repo-write-path [] :string
+  "/xrpc/com.etzhayyim.apps.kotoba.atproto.repo.write")
+
 (defn repo-write-url [local-port :i64] :string
   (string-concat
    "http://localhost:"
    (string-concat
     (i64-str local-port)
-    "/xrpc/com.etzhayyim.apps.kotoba.atproto.repo.write")))
+    (xrpc-repo-write-path))))
 
 (defn write-ok? [out :string] :i64
-  (if (string-contains? out "\"status\":\"ok\"") 1 0))
+  (if (string-contains? out (write-ok-marker)) 1 0))
