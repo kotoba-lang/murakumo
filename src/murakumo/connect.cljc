@@ -60,23 +60,23 @@
   "Can `node` serve a client of `(:class reach)` on `(:plane reach)`?
      :read — node speaks :http (universal CID pull).
      :live — node and target client class share at least one live transport.
-   JVM: kotoba `serves-plane?` with host-projected transport flags."
+   JVM: kotoba `serves-plane?` with Product Value ABI optional transports."
   [connect node reach]
   (let [{:keys [class plane]} (parse-reach reach)
         ncls (node-class connect node)
-        has-http (if (some #{:http} (class-transports connect ncls :read)) 1 0)
-        has-common (if (seq (set/intersection
-                             (set (class-transports connect ncls :live))
-                             (set (class-transports connect class :live))))
-                     1 0)]
+        http? (boolean (some #{:http} (class-transports connect ncls :read)))
+        common (set/intersection
+                (set (class-transports connect ncls :live))
+                (set (class-transports connect class :live)))
+        common-name (when (seq common) (name (first (sort common))))]
     #?(:clj (= 1 (o 'serves-plane?
-                    [(name plane) (long has-http) (long has-common)]))
+                    [(name plane)
+                     (oracle/option-string (when http? "http"))
+                     (oracle/option-string common-name)]))
        :cljs
        (case plane
-         :read (boolean (some #{:http} (class-transports connect ncls :read)))
-         :live (boolean (seq (set/intersection
-                              (set (class-transports connect ncls :live))
-                              (set (class-transports connect class :live)))))
+         :read http?
+         :live (boolean (seq common))
          false))))
 
 (defn serves-all?

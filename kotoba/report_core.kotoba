@@ -27,7 +27,8 @@
             reconcile-app-row reconcile-app-line
             reach-line drift-line]))
 
-;; W6 pure-planner oracle — murakumo.report string core.
+;; Product Value ABI v1 pure oracle — murakumo.report string core.
+;; health-label / status-row use [:option :string] (no has-health sentinel).
 ;; Column-padded tables: pad-to(width) + nodes-row / status-row pure (ASCII).
 ;; reconcile-lines: pure title/col-header/app-row/detail/reach/drift;
 ;; host still mapcats apps + joins CSV targets/running/reach.
@@ -155,8 +156,10 @@
 (defn ssh-label [ok :i64] :string
   (if (= ok 1) "ok" "no"))
 
-(defn health-label [has-health :i64] :string
-  (if (= has-health 1) "ok" "no-resp"))
+(defn health-label [health [:option :string]] :string
+  ;; Product Value ABI v1: optional health payload (no has-health sentinel).
+  ;; presence ⇒ "ok"; none ⇒ "no-resp"
+  (if-some [_ health] "ok" "no-resp"))
 
 (defn launch-result-line [name :string exit-str :string] :string
   ;; cljc: (str (:name node) " " (:exit result)) — host projects exit as string
@@ -336,15 +339,16 @@
 (defn status-down-row [name :string] :string
   (string-concat (pad-to name 10) (string-concat " " (status-down-suffix))))
 
-(defn status-row [name :string has-health :i64 wasm-exec :string
+(defn status-row [name :string health [:option :string] wasm-exec :string
                   links-str :string p2p-port :i64] :string
+  ;; Product Value ABI v1: optional health (no has-health sentinel).
   ;; host projects wasm "?" / links "-" when no health-json
   (string-concat
    (pad-to name 10)
    (string-concat
     " "
     (string-concat
-     (pad-to (health-label has-health) 8)
+     (pad-to (health-label health) 8)
      (string-concat
       " "
       (string-concat

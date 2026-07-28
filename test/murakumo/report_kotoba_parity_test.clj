@@ -30,6 +30,11 @@
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
+(defn- opt-str-form [s]
+  (if (nil? s)
+    "(option-none-of [:option :string])"
+    (str "(option-some-of [:option :string] " (kotoba-literal s) ")")))
+
 (defn- compile-string-cases [cases]
   (let [defs (for [[name body] cases]
                (str "(defn " name " [] :string " body ")"))
@@ -71,7 +76,8 @@
                  "re" (str "(reconcile-persist-error-line " (kotoba-literal "nope") ")")
                  "on" "(online-label 1)" "off" "(online-label 0)"
                  "so" "(ssh-label 1)" "sn" "(ssh-label 0)"
-                 "ho" "(health-label 1)" "hn" "(health-label 0)"
+                 "ho" (str "(health-label " (opt-str-form "ok") ")")
+                 "hn" (str "(health-label " (opt-str-form nil) ")")
                  "e1" (str "(command-error-line " (kotoba-literal "provision") " "
                            (kotoba-literal "missing-operator-seed-hex") ")")
                  "e2" (str "(command-error-line " (kotoba-literal "deploy") " "
@@ -178,10 +184,12 @@
                  "nrq" (str "(nodes-row " (kotoba-literal "x") " "
                             (kotoba-literal "?") " 0 0 "
                             (kotoba-literal "off") ")")
-                 "sr" (str "(status-row " (kotoba-literal "asher") " 1 "
+                 "sr" (str "(status-row " (kotoba-literal "asher") " "
+                           (opt-str-form "ok") " "
                            (kotoba-literal "ready") " "
                            (kotoba-literal "3") " 8077)")
-                 "srn" (str "(status-row " (kotoba-literal "asher") " 0 "
+                 "srn" (str "(status-row " (kotoba-literal "asher") " "
+                            (opt-str-form nil) " "
                             (kotoba-literal "?") " "
                             (kotoba-literal "-") " 0)")})]
     (is (= (report/nodes-header) (get actual "nh")))

@@ -41,15 +41,22 @@
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
+(defn- opt-str-form [s]
+  (if (nil? s)
+    "(option-none-of [:option :string])"
+    (str "(option-some-of [:option :string] " (kotoba-literal s) ")")))
+
 (defn- project-serves [node reach]
   (let [{:keys [class plane]} (#'connect/parse-reach reach)
         ncls (connect/node-class connect-spec node)
-        has-http (if (some #{:http} (connect/class-transports connect-spec ncls :read)) 1 0)
+        http? (boolean (some #{:http} (connect/class-transports connect-spec ncls :read)))
         common (set/intersection
                 (set (connect/class-transports connect-spec ncls :live))
                 (set (connect/class-transports connect-spec class :live)))
-        has-common (if (seq common) 1 0)]
-    {:plane (name plane) :has-http has-http :has-common has-common
+        common-name (when (seq common) (name (first (sort common))))]
+    {:plane (name plane)
+     :http (when http? "http")
+     :common common-name
      :expected (if (connect/serves-reach? connect-spec node reach) 1 0)}))
 
 (deftest class-defaults-match
@@ -77,7 +84,8 @@
                        (let [p (project-serves node reach)]
                          [(str "s_" i)
                           (str "(serves-plane? " (kotoba-literal (:plane p)) " "
-                               (:has-http p) " " (:has-common p) ")")]))
+                               (opt-str-form (:http p)) " "
+                               (opt-str-form (:common p)) ")")]))
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [node reach]] (map-indexed vector corpus)]

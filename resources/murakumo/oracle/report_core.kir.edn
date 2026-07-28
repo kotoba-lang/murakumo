@@ -242,11 +242,19 @@
    :body (if (= ok 1) "ok" "no"),
    :param-types [:i64]}
   {:name health-label,
-   :params [has-health],
+   :params [health],
    :result :string,
    :effects #{},
-   :body (if (= has-health 1) "ok" "no-resp"),
-   :param-types [:i64]}
+   :body
+   (let
+    [binding-some__1 health]
+    (if
+     (option-some?-of [:option :string] binding-some__1)
+     (let
+      [_ (option-value-of [:option :string] binding-some__1 "")]
+      "ok")
+     "no-resp")),
+   :param-types [[:option :string]]}
   {:name launch-result-line,
    :params [name exit-str],
    :result :string,
@@ -529,7 +537,7 @@
     (string-concat " " (status-down-suffix))),
    :param-types [:string]}
   {:name status-row,
-   :params [name has-health wasm-exec links-str p2p-port],
+   :params [name health wasm-exec links-str p2p-port],
    :result :string,
    :effects #{},
    :body
@@ -538,7 +546,7 @@
     (string-concat
      " "
      (string-concat
-      (pad-to (health-label has-health) 8)
+      (pad-to (health-label health) 8)
       (string-concat
        " "
        (string-concat
@@ -548,7 +556,7 @@
          (string-concat
           (pad-to links-str 6)
           (string-concat " " (i64-str p2p-port))))))))),
-   :param-types [:string :i64 :string :string :i64]}
+   :param-types [:string [:option :string] :string :string :i64]}
   {:name command-help,
    :params [],
    :result :string,

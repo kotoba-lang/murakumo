@@ -44,15 +44,15 @@
   (ocall 'status-down-row [(str (:name node))]))
 
 (defn status-row
-  "Format one `murakumo status` row."
+  "Format one `murakumo status` row.
+   JVM: kotoba `status-row` with Product Value ABI optional health."
   [node health-json links p2p-port]
   (let [subsystems (:subsystems health-json)
-        has-health (if health-json 1 0)
         wasm (or (:wasm_executor subsystems) "?")
         links-str (if health-json (str links) "-")]
     (ocall 'status-row
            [(str (:name node))
-            (long has-health)
+            (oracle/option-string (when health-json "ok"))
             (str wasm)
             (str links-str)
             (long p2p-port)])))

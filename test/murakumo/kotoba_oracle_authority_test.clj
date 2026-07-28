@@ -229,8 +229,13 @@
            (oracle/call :report-core 'reconcile-col-header [])))
     (is (= (ir/execute live 'nodes-row ["x" "?" 0 0 "off"])
            (oracle/call :report-core 'nodes-row ["x" "?" 0 0 "off"])))
-    (is (= (ir/execute live 'status-row ["asher" 0 "?" "-" 0])
-           (oracle/call :report-core 'status-row ["asher" 0 "?" "-" 0])))))
+    (let [none-s (oracle/option-string nil)]
+      (is (= (ir/execute live 'status-row ["asher" none-s "?" "-" 0])
+             (oracle/call :report-core 'status-row ["asher" none-s "?" "-" 0])))
+      (is (= (ir/execute live 'health-label [none-s])
+             (oracle/call :report-core 'health-label [none-s])))
+      (is (= "no-resp" (oracle/call :report-core 'health-label [none-s])))
+      (is (= "ok" (oracle/call :report-core 'health-label [(oracle/option-string "ok")]))))))
 
 (deftest report-precompiled-kir-does-not-drift
   (is (= (report-live-kir) (report-resource-kir))
@@ -1026,8 +1031,12 @@
            (oracle/call :deploy-plan 'manifest-dir ["apps/x.edn"])))
     (is (= (ir/execute c 'default-class-name [""])
            (oracle/call :connect 'default-class-name [""])))
-    (is (= (ir/execute c 'serves-plane? ["read" 1 0])
-           (oracle/call :connect 'serves-plane? ["read" 1 0])))
+    (let [http (oracle/option-string "http")
+          none-s (oracle/option-string nil)]
+      (is (= (ir/execute c 'serves-plane? ["read" http none-s])
+             (oracle/call :connect 'serves-plane? ["read" http none-s])))
+      (is (= 1 (oracle/call :connect 'serves-plane? ["read" http none-s])))
+      (is (= 0 (oracle/call :connect 'serves-plane? ["read" none-s none-s]))))
     (is (= (ir/execute a 'place-epoch [0])
            (oracle/call :component-authority 'place-epoch [0])))
     (is (= (ir/execute a 'revoke-epoch [1])

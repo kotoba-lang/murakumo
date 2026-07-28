@@ -2,8 +2,10 @@
   (:export [default-class-name node-class-name
             serves-read? serves-live? serves-plane?]))
 
-;; W6 pure-planner oracle — murakumo.connect decision core (low priority).
-;; class-transports / set intersection stay host-projected into flags.
+;; Product Value ABI v1 pure oracle — murakumo.connect decision core.
+;; serves-read? / serves-live? / serves-plane? use [:option :string]
+;; for host-projected transport presence (no has-http / has-common sentinels).
+;; class-transports / set intersection stay host-projected into options.
 ;; empty default-class string ⇒ "native". node-class empty ⇒ use default.
 ;; plane: "read" | "live" | other.
 ;; Parity: test/murakumo/connect_kotoba_parity_test.clj
@@ -20,17 +22,19 @@
     (default-class-name default-class)
     node-class))
 
-(defn serves-read? [has-http :i64] :i64
+(defn serves-read? [http [:option :string]] :i64
   ;; cljc :read plane — (some #{:http} read-transports)
-  (if (= has-http 1) 1 0))
+  ;; host passes some "http" when present, else none
+  (if-some [_ http] 1 0))
 
-(defn serves-live? [has-common :i64] :i64
+(defn serves-live? [common [:option :string]] :i64
   ;; cljc :live — non-empty intersection of live transports
-  (if (= has-common 1) 1 0))
+  ;; host passes some transport name when intersection non-empty
+  (if-some [_ common] 1 0))
 
-(defn serves-plane? [plane :string has-http :i64 has-common :i64] :i64
+(defn serves-plane? [plane :string http [:option :string] common [:option :string]] :i64
   (if (string=? plane "read")
-    (serves-read? has-http)
+    (serves-read? http)
     (if (string=? plane "live")
-      (serves-live? has-common)
+      (serves-live? common)
       0)))
