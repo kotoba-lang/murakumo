@@ -14,7 +14,9 @@
   (str "ws? trim seed-node seed-p2p seed-x25519 seed-overlay "
        "did-derive-cmd did-from-output "
        "jwt-header-json jwt-payload-json op-token-sig-seg "
-       "cid-b-prefix graph-name-fleet"))
+       "cid-b-prefix graph-name-fleet "
+       "seed-sep seed-p2p-suffix seed-x25519-suffix seed-overlay-suffix "
+       "did-derive-subcmd jwt-seg-sep argv-join-sep"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -95,3 +97,29 @@
     (is (str/starts-with? (id/graph-cid (get actual "fn")) "b"))
     (is (= "bafyreiawk4q375adm6eibq2ut6dhamgfw4syd2cphmw4juhbmn5g4rytmy"
            (id/graph-cid (get actual "fn"))))))
+
+(deftest seed-jwt-seps-and-subcmd-match
+  (let [s (compile-string-cases
+           {"ss" "(seed-sep)"
+            "p2" "(seed-p2p-suffix)"
+            "x2" "(seed-x25519-suffix)"
+            "os" "(seed-overlay-suffix)"
+            "dd" "(did-derive-subcmd)"
+            "js" "(jwt-seg-sep)"
+            "aj" "(argv-join-sep)"})]
+    (is (= id/seed-sep (get s "ss")))
+    (is (= ":" (get s "ss")))
+    (is (= id/seed-p2p-suffix (get s "p2")))
+    (is (= ":p2p" (get s "p2")))
+    (is (= id/seed-x25519-suffix (get s "x2")))
+    (is (= id/seed-overlay-suffix (get s "os")))
+    (is (= id/did-derive-subcmd (get s "dd")))
+    (is (= "did-derive" (get s "dd")))
+    (is (= id/jwt-seg-sep (get s "js")))
+    (is (= "." (get s "js")))
+    (is (= id/argv-join-sep (get s "aj")))
+    (is (= " " (get s "aj")))
+    (is (= ["/bin/kotoba" "did-derive" "seedhex"]
+           (id/did-derive-argv "/bin/kotoba" "seedhex")))
+    (let [parts (str/split (id/op-token "did:key:z") #"\.")]
+      (is (= 3 (count parts))))))

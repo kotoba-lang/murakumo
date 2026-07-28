@@ -952,7 +952,15 @@
       (is (= (oracle/call :identity 'op-token-sig-seg []) (last parts)))))
   (testing "graph-cid b-prefix + fleet name"
     (is (str/starts-with? (id/graph-cid (id/graph-name-fleet)) "b"))
-    (is (= "murakumo-fleet" (id/graph-name-fleet)))))
+    (is (= "murakumo-fleet" (id/graph-name-fleet))))
+  (testing "seed/jwt seps dual-source"
+    (is (= ":" id/seed-sep))
+    (is (= ":p2p" id/seed-p2p-suffix))
+    (is (= ":x25519" id/seed-x25519-suffix))
+    (is (= ":murakumo-overlay-auth" id/seed-overlay-suffix))
+    (is (= "did-derive" id/did-derive-subcmd))
+    (is (= "." id/jwt-seg-sep))
+    (is (= " " id/argv-join-sep))))
 
 (deftest identity-oracle-call-matches-live-compile
   (let [live (:kir (compiler/compile-source (slurp "kotoba/identity_core.kotoba")
@@ -966,7 +974,15 @@
     (is (= (ir/execute live 'jwt-payload-json ["did:key:z"])
            (oracle/call :identity 'jwt-payload-json ["did:key:z"])))
     (is (= (ir/execute live 'graph-name-fleet [])
-           (oracle/call :identity 'graph-name-fleet [])))))
+           (oracle/call :identity 'graph-name-fleet [])))
+    (is (= (ir/execute live 'seed-sep [])
+           (oracle/call :identity 'seed-sep [])))
+    (is (= (ir/execute live 'did-derive-subcmd [])
+           (oracle/call :identity 'did-derive-subcmd [])))
+    (is (= (ir/execute live 'jwt-seg-sep [])
+           (oracle/call :identity 'jwt-seg-sep [])))
+    (is (= (oracle/call :identity 'seed-sep []) id/seed-sep))
+    (is (= (oracle/call :identity 'did-derive-subcmd []) id/did-derive-subcmd))))
 
 (deftest identity-precompiled-kir-does-not-drift
   (let [live (:kir (compiler/compile-source (slurp "kotoba/identity_core.kotoba")
