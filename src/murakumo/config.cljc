@@ -413,6 +413,7 @@
    "MURAKUMO_WEBTRANSPORT_DRIVER"
    "MURAKUMO_KEKKAI_LEDGER"
    "MURAKUMO_KEKKAI_DIR"
+   "MURAKUMO_KAGI_DIR"
    "HOME"])
 
 (defn ops-env-from-getenv
@@ -510,3 +511,9 @@
   "HOME for default path construction (config leave, not a secret)."
   ([] (config-string-or-nil "HOME"))
   ([getenv] (config-string-or-nil "HOME" getenv)))
+
+(defn kagi-dir
+  "MURAKUMO_KAGI_DIR exact overlay cert/material store override, or nil
+   (caller uses default-store-dir / path-ref under scoped-fs)."
+  ([] (config-string-or-nil "MURAKUMO_KAGI_DIR"))
+  ([getenv] (config-string-or-nil "MURAKUMO_KAGI_DIR" getenv)))

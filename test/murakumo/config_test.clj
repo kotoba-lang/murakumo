@@ -212,7 +212,10 @@
          (config/kekkai-dir {"MURAKUMO_KEKKAI_DIR" "/opt/kekkai"})))
   (is (nil? (config/home-dir (constantly nil))))
   (is (= "/home/jun" (config/home-dir {"HOME" "/home/jun"})))
-  (is (some #{"MURAKUMO_KEKKAI_LEDGER" "MURAKUMO_KEKKAI_DIR" "HOME"}
+  (is (nil? (config/kagi-dir (constantly nil))))
+  (is (= "/var/murakumo/kagi"
+         (config/kagi-dir {"MURAKUMO_KAGI_DIR" "/var/murakumo/kagi"})))
+  (is (some #{"MURAKUMO_KEKKAI_LEDGER" "MURAKUMO_KEKKAI_DIR" "MURAKUMO_KAGI_DIR" "HOME"}
             config/ops-config-keys))
   (is (nil? (config/config-string-or-nil "MURAKUMO_CLOUD" (constantly nil))))
   (is (nil? (config/config-string-or-nil "MURAKUMO_CLOUD" {"MURAKUMO_CLOUD" "  "}))))
