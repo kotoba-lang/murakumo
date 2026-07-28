@@ -1232,7 +1232,18 @@
                                     {:fleet/name "f"}
                                     {:name "n" :host "h" :p2p-port 4001}
                                     :quic)]
-      (is (= "quic://h:4001" (:endpoint ep))))))
+      (is (= "quic://h:4001" (:endpoint ep))))
+    (is (= "-" cplan/dash-placeholder))
+    (is (str/includes? cplan/summary-nodes-header "NODE"))
+    (is (str/includes? cplan/routes-header "DIRECT"))
+    (is (= "unknown murakumo.cloud node: asher"
+           (cplan/unknown-node-line "asher")))
+    (is (= "murakumo.cloud dial asher denied by policy"
+           (cplan/dial-denied-line "asher")))
+    (is (= "murakumo.cloud connect asher"
+           (cplan/connect-ok-title "asher")))
+    (is (= "  reason=unknown" (cplan/reason-line "unknown")))
+    (is (= "  murakumo-overlay x" (cplan/indent-argv-line "murakumo-overlay x")))))
 
 (deftest overlay-cloud-prov-oracle-call-matches-live
   (let [k (:kir (compiler/compile-source (slurp "kotoba/overlay_keyring_core.kotoba")
@@ -1265,6 +1276,17 @@
            (oracle/call :cloud-plan 'webtransport-endpoint ["h" 8077])))
     (is (= (ir/execute c 'transport-endpoint ["custom" "h"])
            (oracle/call :cloud-plan 'transport-endpoint ["custom" "h"])))
+    (is (= (ir/execute c 'dash-placeholder [])
+           (oracle/call :cloud-plan 'dash-placeholder [])))
+    (is (= (ir/execute c 'unknown-node-line ["asher"])
+           (oracle/call :cloud-plan 'unknown-node-line ["asher"])))
+    (is (= (ir/execute c 'from-to-cap-reason ["a" "b" "c" "d"])
+           (oracle/call :cloud-plan 'from-to-cap-reason ["a" "b" "c" "d"])))
+    (is (= (ir/execute c 'summary-title ["dom" "ov"])
+           (oracle/call :cloud-plan 'summary-title ["dom" "ov"])))
+    (is (= (oracle/call :cloud-plan 'dash-placeholder []) cplan/dash-placeholder))
+    (is (= (oracle/call :cloud-plan 'unknown-node-line ["x"])
+           (cplan/unknown-node-line "x")))
     (is (= (ir/execute pr 'multiaddr ["1.2.3.4" 4001])
            (oracle/call :provision-plan 'multiaddr ["1.2.3.4" 4001])))
     (is (= (ir/execute pr 'launch-status-command [])

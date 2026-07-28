@@ -4,12 +4,21 @@
             digit-char nat-str i64-str
             node-region relay-score overlay-id-input node-id-input
             quic-endpoint webrtc-endpoint relay-endpoint-url
-            webtransport-endpoint transport-endpoint]))
+            webtransport-endpoint transport-endpoint
+            dash-placeholder summary-nodes-header routes-header
+            direct-candidates-label relays-section-label connects-section-label
+            summary-title routes-title bootstrap-title
+            unknown-node-line unknown-relay-line
+            dial-denied-line connect-denied-line
+            dial-ok-title connect-ok-title relay-ok-title
+            from-to-cap-reason authorized-line
+            relay-fallback-line reason-line indent-argv-line]))
 
 ;; W6 pure-planner oracle — murakumo.cloud.plan scalar/string core (low).
 ;; graph-cid hashing, choose-relay sort, record maps stay cljc.
 ;; node-region: first non-empty of zone, region-label, region, else "global".
 ;; webtransport + generic transport endpoint URL fragments dual-source.
+;; CLI presentation labels/line templates dual-source (width fmt stays host).
 ;; Parity: test/murakumo/cloud_plan_kotoba_parity_test.clj
 
 (defn default-driver [] :string "murakumo-overlay")
@@ -83,3 +92,94 @@
 (defn transport-endpoint [scheme :string host :string] :string
   ;; cljc fallback: (str (name transport) "://" host)
   (string-concat scheme (string-concat "://" host)))
+
+;; ── residual CLI presentation labels + line templates ────────────────
+
+(defn dash-placeholder [] :string "-")
+
+(defn summary-nodes-header [] :string
+  "  NODE           REGION     RELAY          DIRECT")
+
+(defn routes-header [] :string
+  "  NODE           DIRECT                                      RELAY")
+
+(defn direct-candidates-label [] :string
+  "  direct candidates:")
+
+(defn relays-section-label [] :string
+  "  relays:")
+
+(defn connects-section-label [] :string
+  "  connects:")
+
+(defn summary-title [domain :string overlay :string] :string
+  (string-concat
+   "murakumo.cloud "
+   (string-concat domain (string-concat "  overlay " overlay))))
+
+(defn routes-title [overlay :string] :string
+  (string-concat "murakumo.cloud routes overlay " overlay))
+
+(defn bootstrap-title [overlay :string] :string
+  (string-concat "murakumo.cloud bootstrap overlay " overlay))
+
+(defn unknown-node-line [node-name :string] :string
+  (string-concat "unknown murakumo.cloud node: " node-name))
+
+(defn unknown-relay-line [relay-name :string] :string
+  (string-concat "unknown murakumo.cloud relay: " relay-name))
+
+(defn dial-denied-line [node-name :string] :string
+  (string-concat
+   "murakumo.cloud dial "
+   (string-concat node-name " denied by policy")))
+
+(defn connect-denied-line [node-name :string] :string
+  (string-concat
+   "murakumo.cloud connect "
+   (string-concat node-name " denied by policy")))
+
+(defn dial-ok-title [route-name :string node :string] :string
+  (string-concat
+   "murakumo.cloud dial "
+   (string-concat route-name (string-concat "  node " node))))
+
+(defn connect-ok-title [node-name :string] :string
+  (string-concat "murakumo.cloud connect " node-name))
+
+(defn relay-ok-title [relay-name :string] :string
+  (string-concat "murakumo.cloud relay " relay-name))
+
+(defn from-to-cap-reason [from :string to :string
+                          capability :string reason :string] :string
+  ;; "  from=%s to=%s capability=%s reason=%s"
+  (string-concat
+   "  from="
+   (string-concat
+    from
+    (string-concat
+     " to="
+     (string-concat
+      to
+      (string-concat
+       " capability="
+       (string-concat capability (string-concat " reason=" reason))))))))
+
+(defn authorized-line [from :string to :string capability :string] :string
+  ;; "  authorized: from=%s to=%s capability=%s"
+  (string-concat
+   "  authorized: from="
+   (string-concat
+    from
+    (string-concat
+     " to="
+     (string-concat to (string-concat " capability=" capability))))))
+
+(defn relay-fallback-line [endpoint :string] :string
+  (string-concat "  relay fallback: " endpoint))
+
+(defn reason-line [reason :string] :string
+  (string-concat "  reason=" reason))
+
+(defn indent-argv-line [argv-joined :string] :string
+  (string-concat "  " argv-joined))
