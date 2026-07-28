@@ -3,16 +3,26 @@
 ;; Collection, persistence, JSON encoding, and HTTP serving stay in murakumo.dash.
 ;; This namespace owns deterministic snapshot -> record/alert/display data.
 ;;
-;; W6 product-shell authority: on JVM, pure display helpers DELEGATE to
-;; precompiled kotoba/dash_state_core.kotoba KIR
-;; (resources/murakumo/oracle/dash_state_core.kir.edn). Map/vector folds,
-;; HTML join, probe parse, and query-string stay host/cljc.
+;; W6 product-shell authority (ADR-260728-w6-dash-oracle-authority + cljs load):
+;; pure display helpers DELEGATE to precompiled kotoba/dash_state_core.kotoba KIR
+;; (resources/murakumo/oracle/dash_state_core.kir.edn) when oracle is loadable
+;; (JVM classpath or cljs/nbb resource loader — ADR-260728-w6-cljs-oracle-load).
+;; Map/vector folds, HTML join, probe parse, and query-string stay host/cljc.
+;; cljs mirrors remain as fallback when oracle is not ready.
 
 (ns murakumo.dash.state
-  "Dashboard pure helpers use kotoba/dash_state_core.kotoba authority on JVM."
+  "Dashboard pure helpers use kotoba/dash_state_core.kotoba when oracle ready."
   (:require [clojure.set :as set]
             [clojure.string :as str]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
+
+(def ^:private oid :dash-state)
+
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
 
 ;; ── host-mirror pure helpers (cljs fallback + semantic documentation) ──
 
@@ -36,14 +46,20 @@
 (defn- mirror-recent-take-n [n default-n]
   (if (neg? n) default-n n))
 
-;; ── pure display helpers: kotoba dash_state_core SSoT on JVM ─────────
+;; ── pure display helpers: kotoba dash_state_core SSoT when oracle ready ─
 
 (defn short-hosted-cid
   "CID abbreviation used in the dashboard hosted-components table.
-   JVM: kotoba `short-hosted-cid`."
+   Kotoba `short-hosted-cid` when oracle ready (falls back if KIR
+   string-substring bounds fail on a runtime — e.g. some cljs kir builds)."
   [cid]
-  #?(:clj (oracle/call :dash-state 'short-hosted-cid [(str cid)])
-     :cljs (mirror-short-hosted-cid cid)))
+  (let [s (str cid)]
+    (if (oracle-ready?)
+      (try
+        (o 'short-hosted-cid [s])
+        (catch #?(:clj Exception :cljs :default) _
+          (mirror-short-hosted-cid s)))
+      (mirror-short-hosted-cid s))))
 
 (defn- short-cid [cid]
   (subs cid 0 (min 14 (count cid))))
@@ -56,10 +72,12 @@
 
 (defn health-class
   "CSS class for a node health value.
-   JVM: kotoba `health-class-of` on `:health`."
+   Kotoba `health-class-of` on `:health` when oracle ready."
   [node]
-  #?(:clj (oracle/call :dash-state 'health-class-of [(str (or (:health node) ""))])
-     :cljs (mirror-health-class (:health node))))
+  (let [h (str (or (:health node) ""))]
+    (if (oracle-ready?)
+      (o 'health-class-of [h])
+      (mirror-health-class h))))
 
 (defn- parse-int [s]
   #?(:clj (Integer/parseInt s)
@@ -84,18 +102,21 @@
 
 (defn interval-sleep-ms
   "Milliseconds to sleep between dashboard snapshots.
-   JVM: kotoba `interval-sleep-ms`."
+   Kotoba `interval-sleep-ms` when oracle ready."
   [seconds]
-  #?(:clj (long (oracle/call :dash-state 'interval-sleep-ms [(long seconds)]))
-     :cljs (mirror-interval-sleep-ms seconds)))
+  (if (oracle-ready?)
+    (oracle/i64->host (o 'interval-sleep-ms [(oracle/as-i64 seconds)]))
+    (mirror-interval-sleep-ms seconds)))
 
 (defn clamp-at
   "Clamp a requested history offset into the available history range.
-   JVM: kotoba `clamp-at` (nil requested-at → 0)."
+   Kotoba `clamp-at` when oracle ready (nil requested-at → 0)."
   [requested-at history-count]
-  #?(:clj (long (oracle/call :dash-state 'clamp-at
-                             [(long (or requested-at 0)) (long history-count)]))
-     :cljs (mirror-clamp-at requested-at history-count)))
+  (if (oracle-ready?)
+    (oracle/i64->host
+     (o 'clamp-at [(oracle/as-i64 (or requested-at 0))
+                   (oracle/as-i64 history-count)]))
+    (mirror-clamp-at requested-at history-count)))
 
 (defn selected-snapshot
   "Select dashboard snapshot for a history offset.
@@ -114,23 +135,25 @@
 
 (defn recent-alerts
   "Newest dashboard alerts first, capped for display.
-   JVM: cap `n` via kotoba `recent-take-n` (negative → default 6)."
+   Cap `n` via kotoba `recent-take-n` when oracle ready (negative → default 6)."
   ([alerts] (recent-alerts alerts 6))
   ([alerts n]
-   (let [take-n #?(:clj (long (oracle/call :dash-state 'recent-take-n
-                                           [(long n) 6]))
-                   :cljs (mirror-recent-take-n n 6))]
+   (let [take-n (if (oracle-ready?)
+                  (oracle/i64->host
+                   (o 'recent-take-n [(oracle/as-i64 n) (oracle/as-i64 6)]))
+                  (mirror-recent-take-n n 6))]
      (take take-n (reverse alerts)))))
 
 (defn append-capped
   "Append one item to a vector-like history, keeping only the newest cap items.
-   JVM: start index via kotoba `take-last-start`; vector slice stays host."
+   Start index via kotoba `take-last-start` when oracle ready; vector slice stays host."
   [items cap item]
   (let [v (conj (vec items) item)
         len (count v)
-        start #?(:clj (long (oracle/call :dash-state 'take-last-start
-                                         [(long len) (long cap)]))
-                 :cljs (mirror-take-last-start len cap))]
+        start (if (oracle-ready?)
+                (oracle/i64->host
+                 (o 'take-last-start [(oracle/as-i64 len) (oracle/as-i64 cap)]))
+                (mirror-take-last-start len cap))]
     (subvec v start)))
 
 (defn concat-capped
