@@ -29,7 +29,9 @@
    {"source" "kotoba/task_plan_core.kotoba"
     "out" "resources/murakumo/oracle/task_plan_core.kir.edn"}
    {"source" "kotoba/infer_engine_core.kotoba"
-    "out" "resources/murakumo/oracle/infer_engine_core.kir.edn"}])
+    "out" "resources/murakumo/oracle/infer_engine_core.kir.edn"}
+   {"source" "kotoba/secret_core.kotoba"
+    "out" "resources/murakumo/oracle/secret_core.kir.edn"}])
 
 (defn compile-kir
   "Compile one .kotoba file to a KIR map (same path as parity tests)."
