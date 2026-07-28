@@ -1,0 +1,47 @@
+(ns overlay-crypto-core
+  (:export [alg-name cipher-transform nonce-bytes gcm-tag-bits
+            field-alg field-nonce field-ciphertext
+            strip-b64-pad sealed-alg-ok? sealed-fields-present?]))
+
+;; W6 pure-planner oracle — murakumo.overlay.crypto packaging constants.
+;; AES-GCM seal/open, SecureRandom nonce, SHA-256 key material stay host.
+;; Pure = alg name, nonce/tag sizes, sealed-map field names, b64url pad strip.
+;; Host keyword :aes-256-gcm ⇔ string alg-name "aes-256-gcm".
+;; Parity: test/murakumo/overlay_crypto_kotoba_parity_test.clj
+
+(defn alg-name [] :string
+  "aes-256-gcm")
+
+(defn cipher-transform [] :string
+  ;; javax.crypto Cipher/getInstance transform (host-only call site)
+  "AES/GCM/NoPadding")
+
+(defn nonce-bytes [] :i64
+  12)
+
+(defn gcm-tag-bits [] :i64
+  128)
+
+(defn field-alg [] :string
+  "alg")
+
+(defn field-nonce [] :string
+  "nonce")
+
+(defn field-ciphertext [] :string
+  "ciphertext")
+
+(defn strip-b64-pad [s :string] :string
+  ;; matches host Base64 URL encoder + (.replace "=" "") / str/replace "=" ""
+  (string-replace-all s "=" ""))
+
+(defn sealed-alg-ok? [alg :string] :i64
+  (if (string=? alg (alg-name)) 1 0))
+
+(defn sealed-fields-present? [has-alg :i64 has-nonce :i64 has-ct :i64] :i64
+  ;; host seal map always carries :alg :nonce :ciphertext; pure presence gate
+  (if (= has-alg 0)
+    0
+    (if (= has-nonce 0)
+      0
+      (if (= has-ct 0) 0 1))))
