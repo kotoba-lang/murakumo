@@ -10,28 +10,55 @@
 ;; The planner is engine-agnostic: it emits layer ranges + byte estimates. Engine
 ;; adapters (murakumo.infer.engine) turn a plan into concrete process commands
 ;; (llama.cpp --rpc/--tensor-split, mlx.launch ring, …).
+;;
+;; W6 product-shell authority: on JVM, GiB/defaults/usable-bytes/choose-strategy
+;; name DELEGATE to precompiled kotoba/infer_plan_core.kotoba KIR. Partition walk
+;; and plan map assembly stay cljc (float/vector host path).
 
-(ns murakumo.infer.plan)
+(ns murakumo.infer.plan
+  "Shard planning. Pure helpers use kotoba/infer_plan_core.kotoba authority on JVM."
+  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def GiB (* 1024 1024 1024))
+;; ── constants + usable-bytes: kotoba infer_plan_core SSoT on JVM ─────
 
-;; What a node cannot give to weights: the OS floor plus a per-node headroom for
-;; KV cache + activations + runtime overhead. macOS keeps ~3.5 GiB to itself on a
-;; 16 GiB Apple-Silicon box before memory pressure bites; GPU-wired allocations
-;; are additionally capped by iogpu.wired_limit_mb (0 = macOS default ≈ 70 %).
-(def default-os-reserve (* 7/2 GiB))
-(def default-headroom (* 5/4 GiB))
+(def ^:private mirror-GiB (* 1024 1024 1024))
+(def ^:private mirror-os-reserve (long (* 7/2 mirror-GiB)))
+(def ^:private mirror-headroom (long (* 5/4 mirror-GiB)))
 
-(defn usable-bytes
-  "Bytes of weights a node can realistically hold resident.
-   {:mem-bytes total, :os-reserve-bytes?, :headroom-bytes?, :wired-limit-bytes?}
-   → min(mem − os-reserve, wired-limit) − headroom, floored at 0."
+(def GiB
+  "Binary GiB in bytes (oracle `gib` on JVM)."
+  #?(:clj (long (oracle/call :infer-plan 'gib []))
+     :cljs mirror-GiB))
+
+(def default-os-reserve
+  "Default OS reserve bytes (oracle `default-os-reserve` on JVM)."
+  #?(:clj (long (oracle/call :infer-plan 'default-os-reserve []))
+     :cljs mirror-os-reserve))
+
+(def default-headroom
+  "Default per-node headroom bytes (oracle `default-headroom` on JVM)."
+  #?(:clj (long (oracle/call :infer-plan 'default-headroom []))
+     :cljs mirror-headroom))
+
+(defn- mirror-usable-bytes
   [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes]}]
   (let [os-res (or os-reserve-bytes default-os-reserve)
         head (or headroom-bytes default-headroom)
         ceiling (- mem-bytes os-res)
         ceiling (if wired-limit-bytes (min ceiling wired-limit-bytes) ceiling)]
     (max 0 (long (- ceiling head)))))
+
+(defn usable-bytes
+  "Bytes of weights a node can realistically hold resident.
+   JVM: kotoba `usable-bytes` (wired -1 = absent)."
+  [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes] :as node}]
+  #?(:clj
+     (let [os (long (or os-reserve-bytes default-os-reserve))
+           head (long (or headroom-bytes default-headroom))
+           wired (if (some? wired-limit-bytes) (long wired-limit-bytes) -1)]
+       (long (oracle/call :infer-plan 'usable-bytes
+                          [(long mem-bytes) os head wired])))
+     :cljs (mirror-usable-bytes node)))
 
 (defn- largest-remainder
   "Apportion `total` integer units over `quotas` (seq of non-negative reals that
@@ -108,35 +135,37 @@
      :fits? (and (>= total (:model/weight-bytes model))
                  (every? :fits? (filter (comp pos? :span) asg)))}))
 
-(defn choose-strategy
-  "Pick the parallelism the interconnect can actually pay for — the exo/petals
-   question answered as a pure function, not a config flag.
+(def ^:private strategy-why
+  {:tensor "fast interconnect and kv-heads divide the ranks — all-reduce per layer is affordable"
+   :expert "fast interconnect and enough experts for every rank to hold whole ones"
+   :pipeline "GbE-class link: one activation handoff per boundary is all it can pay for"})
 
-   {:link-gbps measured-bandwidth :ranks n
-    :model {:model/experts e :model/kv-heads k}}
-   → {:strategy :pipeline | :tensor | :expert :why <reason>}
-
-   The wire costs per generated token:
-     :pipeline  one activation handoff per shard boundary   (~KBs)   any link
-     :tensor    an all-reduce EVERY layer                   (~MBs)   ≥20 Gb/s
-     :expert    top-k expert dispatch every MoE layer       (~MBs)   ≥20 Gb/s
-   :tensor additionally needs kv-heads divisible by ranks (GQA splits by head);
-   :expert needs a MoE (experts > ranks) so each rank holds whole experts."
+(defn- mirror-choose-strategy
   [{:keys [link-gbps ranks model]}]
   (let [{:model/keys [experts kv-heads]} model
         fast? (and link-gbps (>= (double link-gbps) 20.0))]
     (cond
       (and fast? kv-heads (pos? (or ranks 0)) (zero? (mod kv-heads ranks)))
-      {:strategy :tensor
-       :why "fast interconnect and kv-heads divide the ranks — all-reduce per layer is affordable"}
-
+      {:strategy :tensor :why (:tensor strategy-why)}
       (and fast? experts (> (or experts 0) (or ranks 1)))
-      {:strategy :expert
-       :why "fast interconnect and enough experts for every rank to hold whole ones"}
-
+      {:strategy :expert :why (:expert strategy-why)}
       :else
-      {:strategy :pipeline
-       :why "GbE-class link: one activation handoff per boundary is all it can pay for"})))
+      {:strategy :pipeline :why (:pipeline strategy-why)})))
+
+(defn choose-strategy
+  "Pick the parallelism the interconnect can actually pay for.
+   JVM: strategy name from kotoba `choose-strategy-name`; :why from host table."
+  [{:keys [link-gbps ranks model] :as opts}]
+  #?(:clj
+     (let [name (oracle/call :infer-plan 'choose-strategy-name
+                             [(long (or link-gbps 0))
+                              (long (or ranks 0))
+                              (long (or (:model/experts model) 0))
+                              (long (or (:model/kv-heads model) 0))])
+           strat (keyword name)]
+       {:strategy strat
+        :why (get strategy-why strat (:pipeline strategy-why))})
+     :cljs (mirror-choose-strategy opts)))
 
 (defn report
   "Human-oriented rows for the plan table (pure; printing is the caller's job)."
