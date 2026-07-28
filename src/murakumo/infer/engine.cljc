@@ -1,24 +1,39 @@
 ;; murakumo.infer.engine — engine adapters: shard plan → concrete process specs.
 ;;
 ;; W6 product-shell authority (ADR-260728-w6-engine-oracle-authority):
-;; On the JVM, pure cmd-string helpers DELEGATE to precompiled
-;; kotoba/infer_engine_core.kotoba → resources/murakumo/oracle/infer_engine_core.kir.edn.
+;; pure cmd-string helpers DELEGATE to precompiled
+;; kotoba/infer_engine_core.kotoba when oracle loadable (JVM or cljs/nbb).
 ;; Host remains: plan vector walks (workers/serving), variable-arity CSV joins,
-;; pr-str prompt quoting, optional extra-args join.
+;; pr-str prompt quoting, optional extra-args join. cljs mirrors as fallback.
 
 (ns murakumo.infer.engine
   (:require [clojure.string :as str]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :infer-engine)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
 
 (def default-rpc-port
-  #?(:clj (long (o 'default-rpc-port []))
-     :cljs 50052))
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid 'default-rpc-port []))
+      50052)
+    (catch #?(:clj Exception :cljs :default) _
+      50052)))
 
 (defn- serving [plan] (filter (comp pos? :span) (:assignments plan)))
 
@@ -41,13 +56,14 @@
   (for [{:keys [node]} (workers plan)
         :let [cache? (not (false? (:rpc-cache? node)))
               dev (or (:rpc-device node) device)
-              cmd #?(:clj (o 'rpc-server-cmd
-                             [(str bin-dir)
-                              (long port)
-                              (str dev)
-                              (long (if cache? 1 0))
-                              (str (or cache-dir ""))])
-                     :cljs (mirror-rpc-worker-cmd bin-dir port dev cache? cache-dir))]]
+              cmd (try-oracle
+                   #(o 'rpc-server-cmd
+                       [(str bin-dir)
+                        (oracle/as-i64 port)
+                        (str dev)
+                        (oracle/as-i64 (if cache? 1 0))
+                        (str (or cache-dir ""))])
+                   #(mirror-rpc-worker-cmd bin-dir port dev cache? cache-dir))]]
     {:name (:name node)
      :host (:host node)
      :ip (or (:rpc-ip node) (:ip node))
@@ -57,23 +73,24 @@
 (defn tensor-split
   "--tensor-split proportions: RPC workers then head last."
   [plan]
-  #?(:clj
-     (let [spans (concat (map :span (workers plan)) [(head-span plan)])]
-       ;; host join; oracle has fixed tensor-split-3 for 3-way only
-       (str/join "," (map #(o 'i64-str [(long %)]) spans)))
-     :cljs
-     (str/join "," (concat (map :span (workers plan)) [(head-span plan)]))))
+  (let [spans (concat (map :span (workers plan)) [(head-span plan)])]
+    ;; host join; oracle has fixed tensor-split-3 for 3-way only / i64-str
+    (str/join ","
+              (map (fn [s]
+                     (try-oracle
+                      #(o 'i64-str [(oracle/as-i64 s)])
+                      #(str s)))
+                   spans))))
 
 (defn rpc-endpoints [worker-cmds]
-  #?(:clj
-     (str/join ","
-               (map (fn [w]
-                      (o 'endpoint
-                         [(str (or (:ip w) (:host w)))
-                          (long (:port w))]))
-                    worker-cmds))
-     :cljs
-     (str/join "," (map #(str (or (:ip %) (:host %)) ":" (:port %)) worker-cmds))))
+  (str/join ","
+            (map (fn [w]
+                   (try-oracle
+                    #(o 'endpoint
+                        [(str (or (:ip w) (:host w)))
+                         (oracle/as-i64 (:port w))])
+                    #(str (or (:ip w) (:host w)) ":" (:port w))))
+                 worker-cmds)))
 
 (defn head-cmd
   "The head's `llama-server` — loads GGUF, drives RPC ring, serves /v1."
@@ -84,13 +101,14 @@
         strat (name (or strategy :pipeline))
         rpc-csv (rpc-endpoints ws)
         tsplit (tensor-split plan)]
-    #?(:clj
+    (try-oracle
+     (fn []
        (str (o 'head-cmd-front [(str bin-dir) (str model-path)])
             (o 'head-cmd-middle [(str rpc-csv) (str strat) (str tsplit)])
             (when moe-override (str " -ot " (pr-str moe-override)))
-            (o 'head-cmd-tail [(long ctx) (long parallel) (long port)])
-            (when (seq extra-args) (str " " (str/join " " extra-args))))
-       :cljs
+            (o 'head-cmd-tail [(oracle/as-i64 ctx) (oracle/as-i64 parallel) (oracle/as-i64 port)])
+            (when (seq extra-args) (str " " (str/join " " extra-args)))))
+     (fn []
        (str bin-dir "/llama-server -m " model-path
             " --rpc " rpc-csv
             " --split-mode " (case strategy :tensor "row" "layer")
@@ -98,7 +116,7 @@
             (when moe-override (str " -ot " (pr-str moe-override)))
             " -ngl 999 -c " ctx " --parallel " parallel
             " --host 0.0.0.0 --port " port
-            (when (seq extra-args) (str " " (str/join " " extra-args)))))))
+            (when (seq extra-args) (str " " (str/join " " extra-args))))))))
 
 ;; ── mlx ring ────────────────────────────────────────────────────────────────
 
@@ -111,15 +129,14 @@
 (defn mlx-launch-cmd
   [plan {:keys [hosts-file venv model-repo prompt max-tokens]
          :or {max-tokens 128}}]
-  #?(:clj
-     (str (o 'mlx-launch-front
-             [(str venv) (str hosts-file) (str model-repo) (long max-tokens)])
-          " --prompt " (pr-str (or prompt "Name three Japanese cities.")))
-     :cljs
-     (str venv "/bin/mlx.launch --hosts " hosts-file " --backend ring "
-          venv "/bin/mlx_lm.generate -- --model " model-repo
-          " --pipeline --max-tokens " max-tokens
-          " --prompt " (pr-str (or prompt "Name three Japanese cities.")))))
+  (try-oracle
+   #(str (o 'mlx-launch-front
+            [(str venv) (str hosts-file) (str model-repo) (oracle/as-i64 max-tokens)])
+         " --prompt " (pr-str (or prompt "Name three Japanese cities.")))
+   #(str venv "/bin/mlx.launch --hosts " hosts-file " --backend ring "
+         venv "/bin/mlx_lm.generate -- --model " model-repo
+         " --pipeline --max-tokens " max-tokens
+         " --prompt " (pr-str (or prompt "Name three Japanese cities.")))))
 
 ;; ── mlx-moe ─────────────────────────────────────────────────────────────────
 
@@ -127,21 +144,22 @@
   "mu-hashmi/mlx-moe `serve` invocation (single-node)."
   [{:keys [venv model-repo port capacity pin-top-k kv-bits profile warmup extra-args]
     :or {port 8080}}]
-  #?(:clj
+  (try-oracle
+   (fn []
      (str (o 'mlx-moe-front
-             [(str (or venv "")) (str model-repo) (long port)])
+             [(str (or venv "")) (str model-repo) (oracle/as-i64 port)])
           (o 'opt-i64-flag
-             [" --capacity" (long (or capacity 0)) (long (if capacity 1 0))])
+             [" --capacity" (oracle/as-i64 (or capacity 0)) (oracle/as-i64 (if capacity 1 0))])
           (o 'opt-i64-flag
-             [" --pin-top-k" (long (or pin-top-k 0)) (long (if pin-top-k 1 0))])
+             [" --pin-top-k" (oracle/as-i64 (or pin-top-k 0)) (oracle/as-i64 (if pin-top-k 1 0))])
           (o 'opt-i64-flag
-             [" --kv-bits" (long (or kv-bits 0)) (long (if kv-bits 1 0))])
+             [" --kv-bits" (oracle/as-i64 (or kv-bits 0)) (oracle/as-i64 (if kv-bits 1 0))])
           (o 'opt-str-flag
-             [" --profile" (str (or profile "")) (long (if profile 1 0))])
+             [" --profile" (str (or profile "")) (oracle/as-i64 (if profile 1 0))])
           (o 'opt-str-flag
-             [" --warmup" (str (or warmup "")) (long (if warmup 1 0))])
-          (when (seq extra-args) (str " " (str/join " " extra-args))))
-     :cljs
+             [" --warmup" (str (or warmup "")) (oracle/as-i64 (if warmup 1 0))])
+          (when (seq extra-args) (str " " (str/join " " extra-args)))))
+   (fn []
      (str (if venv (str venv "/bin/mlx-moe") "mlx-moe") " serve " model-repo
           " --host 0.0.0.0 --port " port
           (when capacity (str " --capacity " capacity))
@@ -149,7 +167,7 @@
           (when kv-bits (str " --kv-bits " kv-bits))
           (when profile (str " --profile " profile))
           (when warmup (str " --warmup " warmup))
-          (when (seq extra-args) (str " " (str/join " " extra-args))))))
+          (when (seq extra-args) (str " " (str/join " " extra-args)))))))
 
 ;; ── llamacpp-embed ──────────────────────────────────────────────────────────
 
@@ -157,17 +175,18 @@
   "Single-node llama.cpp embedding server."
   [{:keys [bin-dir model-path port ctx pooling parallel extra-args]
     :or {port 8091 ctx 8192 pooling "mean" parallel 4}}]
-  #?(:clj
+  (try-oracle
+   (fn []
      (str (o 'embed-head-front
-             [(str bin-dir) (str model-path) (str pooling) (long ctx)])
-          (o 'embed-head-back [(long parallel) (long port)])
-          (when (seq extra-args) (str " " (str/join " " extra-args))))
-     :cljs
+             [(str bin-dir) (str model-path) (str pooling) (oracle/as-i64 ctx)])
+          (o 'embed-head-back [(oracle/as-i64 parallel) (oracle/as-i64 port)])
+          (when (seq extra-args) (str " " (str/join " " extra-args)))))
+   (fn []
      (str bin-dir "/llama-server -m " model-path
           " --embedding --pooling " pooling
           " -ngl 999 -c " ctx " --parallel " parallel
           " --host 0.0.0.0 --port " port
-          (when (seq extra-args) (str " " (str/join " " extra-args))))))
+          (when (seq extra-args) (str " " (str/join " " extra-args)))))))
 
 (defn commands
   "Plan + engine + opts → {:workers [...] :head {...}} process specs."
