@@ -4,16 +4,17 @@
 ;; kotoba DID derivation, and filesystem reads. This namespace owns deterministic
 ;; strings and defaults used by those effects.
 ;;
-;; W6 product-shell (ADR-260728-w6-provision-plist-path-pure-oracle):
+;; W6 product-shell (ADR-260728-w6-provision-peer-id-pure-oracle):
 ;; constants + port/multiaddr + launch/peer/link shell + rsync argv +
-;; peer-entry + home-bin-path + label/roles join seps DELEGATE to kotoba
-;; provision_plan_core when oracle is loadable (JVM classpath or cljs/nbb).
-;; bootstrap fold, peer-id regex, write-plist heredoc body, template replace
-;; fold stay host. cljs mirrors remain fallback when oracle is not ready.
+;; peer-entry + home-bin-path + label/roles join seps + peer-id DID/body
+;; patterns DELEGATE to kotoba provision_plan_core when oracle is loadable
+;; (JVM classpath or cljs/nbb). bootstrap fold, peer-id re-find host, write-plist
+;; heredoc body, template replace fold stay host. cljs mirrors remain fallback
+;; when oracle is not ready.
 
 (ns murakumo.provision.plan
   "Portable provision/mesh planning helpers.
-   W6 product-shell: path/port + shell/rsync/peer-entry/plist pure via provision_plan_core."
+   W6 product-shell: path/port + shell/rsync/peer-entry/plist/peer-id pure via provision_plan_core."
   (:require [clojure.string :as str]
             [murakumo.connect :as connect]
             [murakumo.fleet.inventory :as inv]
@@ -132,6 +133,9 @@
 (def ^:private mirror-peer-at-sep "@")
 (def ^:private mirror-peer-join-sep ",")
 (def ^:private mirror-did-key-prefix "did:key:")
+(def ^:private mirror-peer-id-body-prefix "12D3")
+(def ^:private mirror-peer-id-body-pattern "12D3[A-Za-z0-9]*")
+(def ^:private mirror-peer-id-did-pattern "did:key:12D3[A-Za-z0-9]*")
 (def ^:private mirror-home-bin-suffix "/.murakumo/bin")
 (def ^:private mirror-label-join-sep ",")
 (def ^:private mirror-roles-join-sep ",")
@@ -139,8 +143,14 @@
 (defn- mirror-peer-entry [peer-id multiaddr]
   (str peer-id "@" multiaddr))
 
+(defn- mirror-did-peer-id [peer-id]
+  (str mirror-did-key-prefix peer-id))
+
 (defn- mirror-home-bin-path [home]
   (str home "/.murakumo/bin"))
+
+(defn- mirror-peer-id-from-log [out]
+  (some-> (re-find #"did:key:(12D3[A-Za-z0-9]*)" (str out)) second))
 
 ;; ── dual-source constants ────────────────────────────────────────────
 
@@ -222,12 +232,31 @@
   "DID key URI prefix for mesh PeerIds. Kotoba when ready."
   (oracle-str-const 'did-key-prefix mirror-did-key-prefix))
 
+(def peer-id-body-prefix
+  "libp2p PeerId body prefix in mesh logs. Kotoba when ready."
+  (oracle-str-const 'peer-id-body-prefix mirror-peer-id-body-prefix))
+
+(def peer-id-body-pattern
+  "grep -o pattern for PeerId body. Kotoba when ready."
+  (oracle-str-const 'peer-id-body-pattern mirror-peer-id-body-pattern))
+
+(def peer-id-did-pattern
+  "grep -ho pattern for did:key:PeerId. Kotoba when ready."
+  (oracle-str-const 'peer-id-did-pattern mirror-peer-id-did-pattern))
+
 (defn peer-entry
   "One bootstrap peer `peer-id@multiaddr`. Kotoba `peer-entry` when ready."
   [peer-id multiaddr]
   (try-oracle
    #(o 'peer-entry [(str peer-id) (str multiaddr)])
    #(mirror-peer-entry peer-id multiaddr)))
+
+(defn did-peer-id
+  "DID URI for a mesh PeerId (`did:key:` + body). Kotoba when ready."
+  [peer-id]
+  (try-oracle
+   #(o 'did-peer-id [(str peer-id)])
+   #(mirror-did-peer-id peer-id)))
 
 (def home-bin-suffix
   "Path under node home for murakumo binaries ({{BIN}}). Kotoba when ready."
@@ -314,9 +343,16 @@
        (str/join peer-join-sep)))
 
 (defn peer-id-from-log
-  "Extract the libp2p PeerId from kotoba mesh log output containing `did:key:<peerid>`."
+  "Extract the libp2p PeerId from kotoba mesh log output containing `did:key:<peerid>`.
+   Pattern fragments dual-sourced via `did-key-prefix` / `peer-id-body-prefix`;
+   re-find stays host."
   [out]
-  (some-> (re-find #"did:key:(12D3[A-Za-z0-9]*)" (str out)) second))
+  (try-oracle
+   #(let [re (re-pattern
+              (str did-key-prefix
+                   "(" peer-id-body-prefix "[A-Za-z0-9]*)"))]
+      (some-> (re-find re (str out)) second))
+   #(mirror-peer-id-from-log out)))
 
 (defn collected-peers
   "Build the persisted node-name → PeerId map from node/peer pairs."
