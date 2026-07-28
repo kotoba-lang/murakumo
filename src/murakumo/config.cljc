@@ -1,47 +1,122 @@
 ;; murakumo.config — portable path/config resolution helpers.
 ;;
 ;; W6 product-shell authority (ADR-260728-w6-tunnel-config-oracle-authority):
-;; On the JVM, pure path-string helpers DELEGATE to precompiled
-;; kotoba/config_core.kotoba → resources/murakumo/oracle/config_core.kir.edn.
+;; pure path-string helpers DELEGATE to precompiled
+;; kotoba/config_core.kotoba → resources/murakumo/oracle/config_core.kir.edn
+;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: EDN parse/IO, env map folds, filesystem existence probes.
+;; cljs mirrors remain fallback when oracle is not ready.
 
 (ns murakumo.config
   (:require #?(:clj [clojure.edn :as edn]
                :cljs [cljs.reader :as edn])
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :config)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+(defn- oracle-const
+  "Load-time constant from oracle export, or mirror string."
+  [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+;; ── host-mirror pure helpers ───────────────────────────────────────────
+
+(def ^:private mirror-default-fleet-path "fleet.edn")
+(def ^:private mirror-default-connect-path "connect.edn")
+(def ^:private mirror-default-cloud-path "cloud.edn")
+(def ^:private mirror-peers-path ".murakumo-peers.edn")
+(def ^:private mirror-launchd-template-path "deploy/com.murakumo.kotoba-mesh.plist.tmpl")
+
+(defn- mirror-default-kotoba-dir [home]
+  (str home "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba"))
+
+(defn- mirror-pinned-bin-dir [user-dir]
+  (str user-dir "/bin"))
+
+(defn- mirror-release-bin-dir [kotoba-dir]
+  (str kotoba-dir "/target/aarch64-apple-darwin/release"))
+
+(defn- mirror-kotoba-server-bin [bin-dir]
+  (str bin-dir "/kotoba-server"))
+
+(defn- mirror-local-kotoba-bin [bin-dir]
+  (str bin-dir "/kotoba"))
+
+(defn- mirror-pinned-wit-dir [user-dir]
+  (str (mirror-pinned-bin-dir user-dir) "/wit"))
+
+(defn- mirror-runtime-wit-dir [kotoba-dir]
+  (str kotoba-dir "/crates/kotoba-runtime/wit"))
+
+(defn- mirror-build-manifest-path [user-dir]
+  (str (mirror-pinned-bin-dir user-dir) "/BUILD.edn"))
+
+(defn- mirror-kotoba-bin [user-dir pinned-exists?]
+  (if pinned-exists?
+    (str (mirror-pinned-bin-dir user-dir) "/kotoba")
+    "kotoba"))
+
+(defn- mirror-resolve-local-bin [env user-dir kotoba-dir pinned-exists?]
+  (cond
+    pinned-exists? (mirror-pinned-bin-dir user-dir)
+    (get env "MURAKUMO_BIN") (get env "MURAKUMO_BIN")
+    :else (mirror-release-bin-dir kotoba-dir)))
+
+(defn- mirror-resolve-wit-dir [user-dir kotoba-dir pinned-wit-exists?]
+  (if pinned-wit-exists?
+    (mirror-pinned-wit-dir user-dir)
+    (mirror-runtime-wit-dir kotoba-dir)))
+
+;; ── dual-source constants ──────────────────────────────────────────────
 
 (def default-fleet-path
-  #?(:clj (o 'default-fleet-path [])
-     :cljs "fleet.edn"))
+  (oracle-const 'default-fleet-path mirror-default-fleet-path))
 
 (def default-connect-path
-  #?(:clj (o 'default-connect-path [])
-     :cljs "connect.edn"))
+  (oracle-const 'default-connect-path mirror-default-connect-path))
 
 (def default-cloud-path
-  #?(:clj (o 'default-cloud-path [])
-     :cljs "cloud.edn"))
+  (oracle-const 'default-cloud-path mirror-default-cloud-path))
 
 (defn default-kotoba-dir
-  "Default sibling kotoba checkout location under a user home."
+  "Default sibling kotoba checkout location under a user home.
+   Kotoba `default-kotoba-dir` when oracle ready."
   [home]
-  #?(:clj (o 'default-kotoba-dir [(str (or home ""))])
-     :cljs (str home "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba")))
+  (try-oracle
+   #(o 'default-kotoba-dir [(str (or home ""))])
+   #(mirror-default-kotoba-dir home)))
 
 (defn kotoba-dir
-  "Resolve the kotoba checkout directory from env."
+  "Resolve the kotoba checkout directory from env.
+   Kotoba `kotoba-dir-from` when oracle ready."
   [env]
-  #?(:clj (o 'kotoba-dir-from
-              [(str (or (get env "MURAKUMO_KOTOBA_DIR") ""))
-               (str (or (get env "HOME") ""))])
-     :cljs (or (get env "MURAKUMO_KOTOBA_DIR")
-               (default-kotoba-dir (get env "HOME")))))
+  (try-oracle
+   #(o 'kotoba-dir-from
+       [(str (or (get env "MURAKUMO_KOTOBA_DIR") ""))
+        (str (or (get env "HOME") ""))])
+   #(or (get env "MURAKUMO_KOTOBA_DIR")
+        (mirror-default-kotoba-dir (get env "HOME")))))
 
 (defn operator-seed-env-keys
   "Env keys consulted for the fleet operator seed, in preference order."
@@ -154,82 +229,86 @@
   (env-values getenv runtime-env-keys))
 
 (defn pinned-bin-dir [user-dir]
-  #?(:clj (o 'pinned-bin-dir [(str user-dir)])
-     :cljs (str user-dir "/bin")))
+  (try-oracle
+   #(o 'pinned-bin-dir [(str user-dir)])
+   #(mirror-pinned-bin-dir user-dir)))
 
 (defn release-bin-dir [kotoba-dir]
-  #?(:clj (o 'release-bin-dir [(str kotoba-dir)])
-     :cljs (str kotoba-dir "/target/aarch64-apple-darwin/release")))
+  (try-oracle
+   #(o 'release-bin-dir [(str kotoba-dir)])
+   #(mirror-release-bin-dir kotoba-dir)))
 
 (defn resolve-local-bin
   "Resolve the binary dir preference order.
 
    `pinned-exists?` is supplied by the host shell after checking for the pinned
-   kotoba-server binary."
+   kotoba-server binary. Kotoba `resolve-local-bin` when oracle ready."
   [env user-dir kotoba-dir pinned-exists?]
-  #?(:clj (o 'resolve-local-bin
-              [(str user-dir)
-               (str kotoba-dir)
-               (long (if pinned-exists? 1 0))
-               (str (or (get env "MURAKUMO_BIN") ""))])
-     :cljs
-     (let [pinned (pinned-bin-dir user-dir)]
-       (cond
-         pinned-exists? pinned
-         (get env "MURAKUMO_BIN") (get env "MURAKUMO_BIN")
-         :else (release-bin-dir kotoba-dir)))))
+  (try-oracle
+   #(o 'resolve-local-bin
+       [(str user-dir)
+        (str kotoba-dir)
+        (oracle/as-i64 (if pinned-exists? 1 0))
+        (str (or (get env "MURAKUMO_BIN") ""))])
+   #(mirror-resolve-local-bin env user-dir kotoba-dir pinned-exists?)))
 
 (defn kotoba-bin
-  "kotoba CLI executable path, falling back to PATH lookup when no pinned binary exists."
+  "kotoba CLI executable path, falling back to PATH lookup when no pinned binary exists.
+   Kotoba `kotoba-bin` when oracle ready."
   [user-dir pinned-exists?]
-  #?(:clj (o 'kotoba-bin [(str user-dir) (long (if pinned-exists? 1 0))])
-     :cljs
-     (let [pinned (str (pinned-bin-dir user-dir) "/kotoba")]
-       (if pinned-exists? pinned "kotoba"))))
+  (try-oracle
+   #(o 'kotoba-bin [(str user-dir) (oracle/as-i64 (if pinned-exists? 1 0))])
+   #(mirror-kotoba-bin user-dir pinned-exists?)))
 
 (defn kotoba-server-bin [bin-dir]
-  #?(:clj (o 'kotoba-server-bin [(str bin-dir)])
-     :cljs (str bin-dir "/kotoba-server")))
+  (try-oracle
+   #(o 'kotoba-server-bin [(str bin-dir)])
+   #(mirror-kotoba-server-bin bin-dir)))
 
 (defn local-kotoba-bin [bin-dir]
-  #?(:clj (o 'local-kotoba-bin [(str bin-dir)])
-     :cljs (str bin-dir "/kotoba")))
+  (try-oracle
+   #(o 'local-kotoba-bin [(str bin-dir)])
+   #(mirror-local-kotoba-bin bin-dir)))
 
 (defn pinned-wit-dir [user-dir]
-  #?(:clj (o 'pinned-wit-dir [(str user-dir)])
-     :cljs (str (pinned-bin-dir user-dir) "/wit")))
+  (try-oracle
+   #(o 'pinned-wit-dir [(str user-dir)])
+   #(mirror-pinned-wit-dir user-dir)))
 
 (defn runtime-wit-dir [kotoba-dir]
-  #?(:clj (o 'runtime-wit-dir [(str kotoba-dir)])
-     :cljs (str kotoba-dir "/crates/kotoba-runtime/wit")))
+  (try-oracle
+   #(o 'runtime-wit-dir [(str kotoba-dir)])
+   #(mirror-runtime-wit-dir kotoba-dir)))
 
 (defn resolve-wit-dir
-  "Resolve deploy WIT dir from pinned WIT existence."
+  "Resolve deploy WIT dir from pinned WIT existence.
+   Kotoba `resolve-wit-dir` when oracle ready."
   [user-dir kotoba-dir pinned-wit-exists?]
-  #?(:clj (o 'resolve-wit-dir
-              [(str user-dir)
-               (str kotoba-dir)
-               (long (if pinned-wit-exists? 1 0))])
-     :cljs
-     (if pinned-wit-exists?
-       (pinned-wit-dir user-dir)
-       (runtime-wit-dir kotoba-dir))))
+  (try-oracle
+   #(o 'resolve-wit-dir
+       [(str user-dir)
+        (str kotoba-dir)
+        (oracle/as-i64 (if pinned-wit-exists? 1 0))])
+   #(mirror-resolve-wit-dir user-dir kotoba-dir pinned-wit-exists?)))
 
 (defn build-manifest-path [user-dir]
-  #?(:clj (o 'build-manifest-path [(str user-dir)])
-     :cljs (str (pinned-bin-dir user-dir) "/BUILD.edn")))
+  (try-oracle
+   #(o 'build-manifest-path [(str user-dir)])
+   #(mirror-build-manifest-path user-dir)))
 
 (defn peers-path
   "Control-plane peer-id cache path under the repo root."
   [_user-dir]
-  #?(:clj (o 'peers-path [])
-     :cljs ".murakumo-peers.edn"))
+  (try-oracle
+   #(o 'peers-path [])
+   (fn [] mirror-peers-path)))
 
 (defn launchd-template-path
   "Resident LaunchDaemon template path under the repo root."
   [_user-dir]
-  #?(:clj (o 'launchd-template-path [])
-     :cljs "deploy/com.murakumo.kotoba-mesh.plist.tmpl"))
+  (try-oracle
+   #(o 'launchd-template-path [])
+   (fn [] mirror-launchd-template-path)))
 
 (defn runtime-probe-paths
   "Paths the host shell should check before building a runtime-context."
