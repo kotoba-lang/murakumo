@@ -11,7 +11,10 @@
 (def port-source (slurp "kotoba/infer_engine_core.kotoba"))
 
 (def export-prefix
-  "default-rpc-port digit-char nat-str i64-str split-mode-name endpoint rpc-server-cmd embed-head-front embed-head-back")
+  (str "default-rpc-port digit-char nat-str i64-str split-mode-name endpoint "
+       "rpc-server-cmd embed-head-front embed-head-back "
+       "mlx-moe-bin mlx-moe-front opt-i64-flag opt-str-flag "
+       "tensor-split-3 mlx-launch-front"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -128,3 +131,74 @@
       (testing (pr-str m)
         (is (= (engine/embed-head-cmd m)
                (get actual (str "em_" i))))))))
+
+(defn- mlx-moe-join
+  "Join kotoba front + optional flags the same way cljc mlx-moe-cmd does."
+  [{:keys [venv model-repo port capacity pin-top-k kv-bits profile warmup]
+    :or {port 8080}}]
+  (let [v (or venv "")
+        front (str "(mlx-moe-front " (kotoba-literal v) " "
+                   (kotoba-literal model-repo) " " port ")")
+        flags [(str "(opt-i64-flag " (kotoba-literal " --capacity") " "
+                    (long (or capacity 0)) " " (if capacity 1 0) ")")
+               (str "(opt-i64-flag " (kotoba-literal " --pin-top-k") " "
+                    (long (or pin-top-k 0)) " " (if pin-top-k 1 0) ")")
+               (str "(opt-i64-flag " (kotoba-literal " --kv-bits") " "
+                    (long (or kv-bits 0)) " " (if kv-bits 1 0) ")")
+               (str "(opt-str-flag " (kotoba-literal " --profile") " "
+                    (kotoba-literal (or profile "")) " " (if profile 1 0) ")")
+               (str "(opt-str-flag " (kotoba-literal " --warmup") " "
+                    (kotoba-literal (or warmup "")) " " (if warmup 1 0) ")")]
+        nest (reduce (fn [acc f] (str "(string-concat " acc " " f ")"))
+                     front
+                     flags)]
+    nest))
+
+(deftest mlx-moe-cmd-matches-engine
+  (let [corpus [{:venv "/opt/mlx" :model-repo "org/model" :port 8080}
+                {:venv nil :model-repo "m" :port 9000 :capacity 8}
+                {:venv "/v" :model-repo "r" :port 8080 :capacity 4
+                 :pin-top-k 2 :kv-bits 8 :profile "fast" :warmup "1"}]
+        cases (into {} (map-indexed (fn [i m] [(str "moe_" i) (mlx-moe-join m)]) corpus))
+        actual (compile-string-cases cases)]
+    (doseq [[i m] (map-indexed vector corpus)]
+      (let [opts (cond-> {:model-repo (:model-repo m) :port (:port m)}
+                   (:venv m) (assoc :venv (:venv m))
+                   (:capacity m) (assoc :capacity (:capacity m))
+                   (:pin-top-k m) (assoc :pin-top-k (:pin-top-k m))
+                   (:kv-bits m) (assoc :kv-bits (:kv-bits m))
+                   (:profile m) (assoc :profile (:profile m))
+                   (:warmup m) (assoc :warmup (:warmup m)))]
+        (testing (pr-str m)
+          (is (= (engine/mlx-moe-cmd opts)
+                 (get actual (str "moe_" i)))))))))
+
+(deftest tensor-split-3-matches-engine
+  (let [plan {:assignments
+              [{:span 3 :node {:name "w0" :host "w0" :head? false}}
+               {:span 2 :node {:name "w1" :host "w1" :head? false}}
+               {:span 1 :node {:name "h" :host "h" :head? true}}]}
+        want (engine/tensor-split plan)
+        actual (compile-string-cases
+                {"ts" "(tensor-split-3 3 2 1)"
+                 "ts0" "(tensor-split-3 0 0 5)"})]
+    (is (= want (get actual "ts")))
+    (is (= "0,0,5" (get actual "ts0")))))
+
+(deftest mlx-launch-front-matches-engine-prefix
+  (let [plan {:assignments [{:span 1 :node {:name "n" :host "h" :head? true}}]}
+        opts {:venv "/opt/mlx" :hosts-file "/tmp/hosts.json"
+              :model-repo "org/m" :max-tokens 64
+              :prompt "hello"}
+        full (engine/mlx-launch-cmd plan opts)
+        prefix (subs full 0 (str/index-of full " --prompt "))
+        actual (compile-string-cases
+                {"lf" (str "(mlx-launch-front "
+                           (kotoba-literal "/opt/mlx") " "
+                           (kotoba-literal "/tmp/hosts.json") " "
+                           (kotoba-literal "org/m") " 64)")
+                 "bin" (str "(mlx-moe-bin " (kotoba-literal "") ")")
+                 "bin2" (str "(mlx-moe-bin " (kotoba-literal "/x") ")")})]
+    (is (= prefix (get actual "lf")))
+    (is (= "mlx-moe" (get actual "bin")))
+    (is (= "/x/bin/mlx-moe" (get actual "bin2")))))

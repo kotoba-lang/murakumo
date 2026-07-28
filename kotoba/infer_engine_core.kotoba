@@ -1,12 +1,14 @@
 (ns infer-engine-core
   (:export [default-rpc-port digit-char nat-str i64-str
             split-mode-name endpoint rpc-server-cmd
-            embed-head-front embed-head-back]))
+            embed-head-front embed-head-back
+            mlx-moe-bin mlx-moe-front opt-i64-flag opt-str-flag
+            tensor-split-3 mlx-launch-front]))
 
 ;; W6 pure-planner oracle — murakumo.infer.engine string/cmd assembly subset.
-;; Plan-walking (workers/tensor-split/head-cmd over assignments) stays cljc.
-;; Guest ABI max arity 5: embed cmd is front+back concat (parity joins).
-;; i64-str via digit table (no number→string builtin). No capabilities.
+;; Plan-walking (workers/head-cmd over assignment vectors) stays cljc.
+;; Guest ABI max arity 5: embed/mlx-moe cmds are front + optional flags joined
+;; in parity tests. i64-str via digit table. No capabilities.
 ;; Parity: test/murakumo/infer_engine_kotoba_parity_test.clj
 
 (defn default-rpc-port [] :i64 50052)
@@ -73,3 +75,63 @@
    (string-concat
     (i64-str parallel)
     (string-concat " --host 0.0.0.0 --port " (i64-str port)))))
+
+(defn mlx-moe-bin [venv :string] :string
+  ;; cljc: (if venv (str venv "/bin/mlx-moe") "mlx-moe")
+  ;; empty venv string ⇒ bare "mlx-moe"
+  (if (string=? venv "")
+    "mlx-moe"
+    (string-concat venv "/bin/mlx-moe")))
+
+(defn mlx-moe-front [venv :string model-repo :string port :i64] :string
+  ;; cljc mlx-moe-cmd through "--port <port>" (before optional flags).
+  (string-concat
+   (mlx-moe-bin venv)
+   (string-concat
+    " serve "
+    (string-concat
+     model-repo
+     (string-concat " --host 0.0.0.0 --port " (i64-str port))))))
+
+(defn opt-i64-flag [flag :string val :i64 present :i64] :string
+  ;; present 0/1. flag includes leading space + name, e.g. " --capacity".
+  ;; cljc (when x (str flag " " x))
+  (if (= present 0)
+    ""
+    (string-concat flag (string-concat " " (i64-str val)))))
+
+(defn opt-str-flag [flag :string val :string present :i64] :string
+  ;; present 0/1. empty present ⇒ "".
+  (if (= present 0)
+    ""
+    (string-concat flag (string-concat " " val))))
+
+(defn tensor-split-3 [s0 :i64 s1 :i64 s2 :i64] :string
+  ;; cljc tensor-split for 2 workers + head: "a,b,c"
+  (string-concat
+   (i64-str s0)
+   (string-concat
+    ","
+    (string-concat
+     (i64-str s1)
+     (string-concat "," (i64-str s2))))))
+
+(defn mlx-launch-front [venv :string hosts-file :string
+                        model-repo :string max-tokens :i64] :string
+  ;; cljc mlx-launch-cmd through --max-tokens (before --prompt).
+  ;; Prompt uses pr-str quoting — stays host.
+  (string-concat
+   venv
+   (string-concat
+    "/bin/mlx.launch --hosts "
+    (string-concat
+     hosts-file
+     (string-concat
+      " --backend ring "
+      (string-concat
+       venv
+       (string-concat
+        "/bin/mlx_lm.generate -- --model "
+        (string-concat
+         model-repo
+         (string-concat " --pipeline --max-tokens " (i64-str max-tokens))))))))))
