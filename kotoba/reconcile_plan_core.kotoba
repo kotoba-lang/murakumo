@@ -2,12 +2,18 @@
   (:export [default-replicas desired deficit watch-sleep-ms action-name
             better-target? first-of-2 first-of-3
             pick-targets-2-pack pick-targets-3-first
-            target-pack-first target-pack-second target-pack-count]))
+            target-pack-first target-pack-second target-pack-count
+            blank? missing-manifest? action-is-satisfied? action-is-place?
+            default-watch-seconds starts-with?
+            flag-is-dry-run? flag-is-apply? flag-is-watch? flag-is-snapshot?
+            flag-is-dash? watch-seconds snapshot-value
+            digit-val? digit-of-go digit-of parse-digits-go parse-digits trim-ws]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.reconcile.plan scalar + pick.
 ;; desired / action-name use [:option …] (no has-replicas / has-cid sentinels).
 ;; has-misplaced was unused in action-name and is dropped from the guest ABI.
-;; eligible-nodes / observed-hosts / reconcile-app maps stay cljc.
+;; eligible-nodes / observed-hosts / reconcile-app maps / parse-flags fold stay cljc.
+;; flag/action/missing-manifest pure helpers dual-source for CLI shell.
 ;; pick-targets: pure sort-by [load, name] for fixed 2/3 free candidates.
 ;; name order projected by host: name-a-before-b = 1 if name(a) <= name(b).
 ;; For 3-way: name-bits bit0=n0<=n1, bit1=n0<=n2, bit2=n1<=n2 (values 1/2/4).
@@ -97,3 +103,111 @@
   ;; first target among 3 free candidates (n>=1). For n>1 host may re-call
   ;; on remaining pair via pick-targets-2-pack.
   (first-of-3 load0 load1 load2 name-bits))
+
+(defn blank? [s :string] :i64
+  (if (string=? s "") 1 0))
+
+(defn missing-manifest? [manifest :string] :i64
+  ;; cljc: (str/blank? (str manifest)) — host passes "" for nil
+  (blank? manifest))
+
+(defn action-is-satisfied? [action :string] :i64
+  (if (string=? action "satisfied") 1 0))
+
+(defn action-is-place? [action :string] :i64
+  (if (string=? action "place") 1 0))
+
+(defn default-watch-seconds [] :i64 30)
+
+(defn starts-with? [s :string prefix :string] :i64
+  (let [n (string-byte-length s)
+        p (string-byte-length prefix)]
+    (if (< n p)
+      0
+      (if (string=? (string-substring s 0 p) prefix) 1 0))))
+
+(defn flag-is-dry-run? [a :string] :i64
+  (if (string=? a "--dry-run") 1 0))
+
+(defn flag-is-apply? [a :string] :i64
+  (if (string=? a "--apply") 1 0))
+
+(defn flag-is-watch? [a :string] :i64
+  (starts-with? a "--watch"))
+
+(defn flag-is-snapshot? [a :string] :i64
+  (starts-with? a "--snapshot="))
+
+(defn flag-is-dash? [a :string] :i64
+  (starts-with? a "--"))
+
+(defn ws? [c :string] :i64
+  (if (string=? c " ")
+    1
+    (if (string=? c "\n")
+      1
+      (if (string=? c "\t")
+        1
+        (if (string=? c "\r") 1 0)))))
+
+(defn trim-ws [s :string] :string
+  (let [n (string-byte-length s)]
+    (if (= n 0)
+      s
+      (if (= (ws? (string-substring s 0 1)) 1)
+        (trim-ws (string-substring s 1 n))
+        (if (= (ws? (string-substring s (- n 1) n)) 1)
+          (trim-ws (string-substring s 0 (- n 1)))
+          s)))))
+
+(defn digit-val? [c :string] :i64
+  (if (= (string-byte-length c) 1)
+    (if (string-contains? "0123456789" c) 1 0)
+    0))
+
+(defn digit-of-go [digits :string c :string i :i64] :i64
+  (let [n (string-byte-length digits)]
+    (if (< i n)
+      (if (string=? (string-substring digits i (+ i 1)) c)
+        i
+        (digit-of-go digits c (+ i 1)))
+      0)))
+
+(defn digit-of [c :string] :i64
+  (digit-of-go "0123456789" c 0))
+
+(defn parse-digits-go [s :string acc :i64] :i64
+  (let [n (string-byte-length s)]
+    (if (= n 0)
+      acc
+      (let [c (string-substring s 0 1)]
+        (if (= (digit-val? c) 0)
+          -1
+          (parse-digits-go (string-substring s 1 n)
+                           (+ (* acc 10) (digit-of c))))))))
+
+(defn parse-digits [s :string] :i64
+  (let [t (trim-ws s)
+        n (string-byte-length t)]
+    (if (= n 0)
+      -1
+      (parse-digits-go t 0))))
+
+(defn watch-seconds [a :string] :i64
+  ;; "--watch" → 30; "--watch=5" → 5; bad digits → 30 default
+  (if (string=? a "--watch")
+    (default-watch-seconds)
+    (if (= (starts-with? a "--watch=") 1)
+      (let [n (string-byte-length a)
+            v (parse-digits (string-substring a 8 n))]
+        (if (< v 0)
+          (default-watch-seconds)
+          v))
+      (default-watch-seconds))))
+
+(defn snapshot-value [a :string] :string
+  ;; "--snapshot=PATH" → PATH; else ""
+  (if (= (starts-with? a "--snapshot=") 1)
+    (let [n (string-byte-length a)]
+      (string-substring a 11 n))
+    ""))

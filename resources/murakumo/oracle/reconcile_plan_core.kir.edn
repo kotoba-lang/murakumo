@@ -138,7 +138,197 @@
    :result :i64,
    :effects #{},
    :body (first-of-3 load0 load1 load2 name-bits),
-   :param-types [:i64 :i64 :i64 :i64]}],
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name blank?,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? s "") 1 0),
+   :param-types [:string]}
+  {:name missing-manifest?,
+   :params [manifest],
+   :result :i64,
+   :effects #{},
+   :body (blank? manifest),
+   :param-types [:string]}
+  {:name action-is-satisfied?,
+   :params [action],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? action "satisfied") 1 0),
+   :param-types [:string]}
+  {:name action-is-place?,
+   :params [action],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? action "place") 1 0),
+   :param-types [:string]}
+  {:name default-watch-seconds,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 30,
+   :param-types []}
+  {:name starts-with?,
+   :params [s prefix],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s) p (string-byte-length prefix)]
+    (if
+     (< n p)
+     0
+     (if (string=? (string-substring s 0 p) prefix) 1 0))),
+   :param-types [:string :string]}
+  {:name flag-is-dry-run?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? a "--dry-run") 1 0),
+   :param-types [:string]}
+  {:name flag-is-apply?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? a "--apply") 1 0),
+   :param-types [:string]}
+  {:name flag-is-watch?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--watch"),
+   :param-types [:string]}
+  {:name flag-is-snapshot?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--snapshot="),
+   :param-types [:string]}
+  {:name flag-is-dash?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--"),
+   :param-types [:string]}
+  {:name ws?,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? c " ")
+    1
+    (if
+     (string=? c "\n")
+     1
+     (if (string=? c "\t") 1 (if (string=? c "\r") 1 0)))),
+   :param-types [:string]}
+  {:name trim-ws,
+   :params [s],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     s
+     (if
+      (= (ws? (string-substring s 0 1)) 1)
+      (trim-ws (string-substring s 1 n))
+      (if
+       (= (ws? (string-substring s (- n 1) n)) 1)
+       (trim-ws (string-substring s 0 (- n 1)))
+       s)))),
+   :param-types [:string]}
+  {:name digit-val?,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= (string-byte-length c) 1)
+    (if (string-contains? "0123456789" c) 1 0)
+    0),
+   :param-types [:string]}
+  {:name digit-of-go,
+   :params [digits c i],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length digits)]
+    (if
+     (< i n)
+     (if
+      (string=? (string-substring digits i (+ i 1)) c)
+      i
+      (digit-of-go digits c (+ i 1)))
+     0)),
+   :param-types [:string :string :i64]}
+  {:name digit-of,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body (digit-of-go "0123456789" c 0),
+   :param-types [:string]}
+  {:name parse-digits-go,
+   :params [s acc],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     acc
+     (let
+      [c (string-substring s 0 1)]
+      (if
+       (= (digit-val? c) 0)
+       -1
+       (parse-digits-go
+        (string-substring s 1 n)
+        (+ (* acc 10) (digit-of c))))))),
+   :param-types [:string :i64]}
+  {:name parse-digits,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [t (trim-ws s) n (string-byte-length t)]
+    (if (= n 0) -1 (parse-digits-go t 0))),
+   :param-types [:string]}
+  {:name watch-seconds,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? a "--watch")
+    (default-watch-seconds)
+    (if
+     (= (starts-with? a "--watch=") 1)
+     (let
+      [n
+       (string-byte-length a)
+       v
+       (parse-digits (string-substring a 8 n))]
+      (if (< v 0) (default-watch-seconds) v))
+     (default-watch-seconds))),
+   :param-types [:string]}
+  {:name snapshot-value,
+   :params [a],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= (starts-with? a "--snapshot=") 1)
+    (let [n (string-byte-length a)] (string-substring a 11 n))
+    ""),
+   :param-types [:string]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
@@ -154,7 +344,26 @@
   pick-targets-3-first
   target-pack-first
   target-pack-second
-  target-pack-count],
+  target-pack-count
+  blank?
+  missing-manifest?
+  action-is-satisfied?
+  action-is-place?
+  default-watch-seconds
+  starts-with?
+  flag-is-dry-run?
+  flag-is-apply?
+  flag-is-watch?
+  flag-is-snapshot?
+  flag-is-dash?
+  watch-seconds
+  snapshot-value
+  digit-val?
+  digit-of-go
+  digit-of
+  parse-digits-go
+  parse-digits
+  trim-ws],
  :schemas nil,
  :effects #{},
  :blocks [],
