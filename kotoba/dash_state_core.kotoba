@@ -8,7 +8,11 @@
             health-from-present health-ok-label health-down-label
             health-url mesh-log-path
             probe-h-prefix probe-l-clause probe-p-clause
-            probe-command]))
+            probe-command
+            short-hosted-cid-max-len short-cid-max-len
+            hosted-join-sep
+            default-dashboard-port default-dashboard-interval
+            default-dashboard-port-str default-dashboard-interval-str]))
 
 ;; W6 pure-planner oracle — murakumo.dash.state display / probe pure helpers.
 ;; Map/vector reducers (placements, selected-snapshot, render-html, probe-lines
@@ -16,11 +20,17 @@
 ;; parse-links: trim + digits → i64 (0 on empty/non-digit), matching host catch.
 ;; probe-line-key/value: H:/L:/P: line shape for probe-lines host fold.
 ;; probe-command shell string dual-source (compose pure fragments; SSH exec host).
+;; dashboard defaults + hosted-join-sep dual-source for hosted-summary / CLI opts.
 ;; Parity: test/murakumo/dash_state_kotoba_parity_test.clj
+
+(defn short-hosted-cid-max-len [] :i64 18)
+
+(defn short-cid-max-len [] :i64 14)
 
 (defn short-hosted-cid [cid :string] :string
   (let [n (string-byte-length cid)
-        end (if (< n 18) n 18)]
+        max (short-hosted-cid-max-len)
+        end (if (< n max) n max)]
     (string-substring cid 0 end)))
 
 (defn health-class-of [health :string] :string
@@ -201,3 +211,21 @@
     (string-concat
      " 2>/dev/null"
      (string-concat (probe-l-clause) (probe-p-clause))))))
+
+;; ── residual dashboard defaults + hosted-summary join ────────────────
+
+(defn hosted-join-sep [] :string
+  ;; space between short-hosted-cid in hosted-summary
+  " ")
+
+(defn default-dashboard-port [] :i64 8899)
+
+(defn default-dashboard-interval [] :i64 15)
+
+(defn default-dashboard-port-str [] :string
+  ;; CLI default when port arg absent
+  "8899")
+
+(defn default-dashboard-interval-str [] :string
+  ;; CLI default when interval arg absent
+  "15")

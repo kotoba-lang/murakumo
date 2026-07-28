@@ -1,13 +1,30 @@
 {:format :kotoba.kir/v4,
  :signature nil,
  :functions
- [{:name short-hosted-cid,
+ [{:name short-hosted-cid-max-len,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 18,
+   :param-types []}
+  {:name short-cid-max-len,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 14,
+   :param-types []}
+  {:name short-hosted-cid,
    :params [cid],
    :result :string,
    :effects #{},
    :body
    (let
-    [n (string-byte-length cid) end (if (< n 18) n 18)]
+    [n
+     (string-byte-length cid)
+     max
+     (short-hosted-cid-max-len)
+     end
+     (if (< n max) n max)]
     (string-substring cid 0 end)),
    :param-types [:string]}
   {:name health-class-of,
@@ -315,7 +332,37 @@
      (string-concat
       " 2>/dev/null"
       (string-concat (probe-l-clause) (probe-p-clause))))),
-   :param-types [:i64]}],
+   :param-types [:i64]}
+  {:name hosted-join-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " ",
+   :param-types []}
+  {:name default-dashboard-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 8899,
+   :param-types []}
+  {:name default-dashboard-interval,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 15,
+   :param-types []}
+  {:name default-dashboard-port-str,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "8899",
+   :param-types []}
+  {:name default-dashboard-interval-str,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "15",
+   :param-types []}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
@@ -349,7 +396,14 @@
   probe-h-prefix
   probe-l-clause
   probe-p-clause
-  probe-command],
+  probe-command
+  short-hosted-cid-max-len
+  short-cid-max-len
+  hosted-join-sep
+  default-dashboard-port
+  default-dashboard-interval
+  default-dashboard-port-str
+  default-dashboard-interval-str],
  :schemas nil,
  :effects #{},
  :blocks [],
