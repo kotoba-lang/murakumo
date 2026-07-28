@@ -6,25 +6,33 @@
 ;; choices so the CLI can plan/publish them without an external VPN control plane.
 
 (ns murakumo.cloud.plan
+  "Portable murakumo.cloud overlay planning.
+   W6 product-shell: defaults + region/score/endpoints via kotoba cloud_plan_core."
   (:require [clojure.string :as str]
             [murakumo.config :as config]
             [murakumo.fleet.inventory :as inv]
             [murakumo.identity :as identity]
-            [murakumo.provision.plan :as provision]))
+            [murakumo.provision.plan :as provision]
+            [murakumo.kotoba.oracle :as oracle]))
+
+(def ^:private oid :cloud-plan)
+
+(defn- o [export args]
+  (oracle/call oid export args))
 
 (def default-cloud-path config/default-cloud-path)
 
-(def default-driver "murakumo-overlay")
+(def default-driver (o 'default-driver []))
 
 (def default-cloud
-  {:cloud/name "murakumo.cloud"
-   :cloud/domain "murakumo.cloud"
-   :cloud/graph "murakumo-cloud"
-   :overlay/version 1
+  {:cloud/name (o 'default-cloud-name [])
+   :cloud/domain (o 'default-cloud-domain [])
+   :cloud/graph (o 'default-cloud-graph [])
+   :overlay/version (long (o 'overlay-version []))
    :overlay/address-family :identity
    :overlay/direct [:quic :webrtc :webtransport]
    :overlay/relay [:murakumo-relay]
-   :overlay/auth-key-env "MURAKUMO_OVERLAY_AUTH_KEY"
+   :overlay/auth-key-env (o 'default-auth-key-env [])
    :overlay/auth-key-source :operator-seed
    :relays []
    :policy {:default :deny :allow []}})
@@ -36,23 +44,36 @@
               cloud))
 
 (defn overlay-id
-  "Stable CID for an overlay namespace."
+  "Stable CID for an overlay namespace.
+   JVM: preimage via kotoba `overlay-id-input`."
   [cloud]
-  (identity/graph-cid (or (:overlay/id cloud) (:cloud/name cloud) "murakumo.cloud")))
+  (identity/graph-cid
+   (o 'overlay-id-input
+      [(str (or (:overlay/id cloud) ""))
+       (str (or (:cloud/name cloud) ""))])))
 
 (defn node-id
-  "Stable node CID inside an overlay."
+  "Stable node CID inside an overlay.
+   JVM: preimage via kotoba `node-id-input`."
   [cloud node]
-  (identity/graph-cid (str (overlay-id cloud) ":" (:name node))))
+  (identity/graph-cid
+   (o 'node-id-input
+      [(str (overlay-id cloud)) (str (:name node))])))
 
-(defn node-region [node]
-  (or (get-in node [:labels :zone])
-      (get-in node [:labels :region])
-      (:region node)
-      "global"))
+(defn node-region
+  "JVM: kotoba `node-region` (zone / region-label / region / global)."
+  [node]
+  (o 'node-region
+     [(str (or (get-in node [:labels :zone]) ""))
+      (str (or (get-in node [:labels :region]) ""))
+      (str (or (:region node) ""))]))
 
-(defn relay-score [node relay]
-  (if (= (node-region node) (:region relay)) 0 1))
+(defn relay-score
+  "JVM: kotoba `relay-score`."
+  [node relay]
+  (long (o 'relay-score
+           [(str (node-region node))
+            (str (or (:region relay) ""))])))
 
 (defn choose-relay
   "Choose a deterministic relay for node fallback."
@@ -85,19 +106,22 @@
         http-port (inv/node-port fleet node)]
     (case transport
       :quic {:transport :quic
-             :endpoint (format "quic://%s:%d" host p2p-port)}
+             :endpoint (o 'quic-endpoint [(str host) (long p2p-port)])}
       :webrtc {:transport :webrtc
-               :endpoint (format "webrtc://%s:%d" host (+ 100 p2p-port))}
+               :endpoint (o 'webrtc-endpoint [(str host) (long p2p-port)])}
       :webtransport {:transport :webtransport
                      :endpoint (format "https://%s:%d/.well-known/murakumo/webtransport" host http-port)}
       {:transport transport
        :endpoint (format "%s://%s" (name transport) host)})))
 
-(defn relay-endpoint [relay node-id]
+(defn relay-endpoint
+  "JVM: endpoint URL via kotoba `relay-endpoint-url`."
+  [relay node-id]
   (when relay
     {:relay (:name relay)
      :transport (first (:transports relay))
-     :endpoint (str (:url relay) "/" node-id)}))
+     :endpoint (o 'relay-endpoint-url
+                  [(str (:url relay)) (str node-id)])}))
 
 (defn route-record
   "Identity-overlay route hints for one node: direct candidates plus relay fallback."
