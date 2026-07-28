@@ -16,7 +16,11 @@
             did-key-prefix peer-id-body-prefix peer-id-body-pattern
             peer-id-did-pattern did-peer-id
             home-bin-suffix home-bin-path
-            label-join-sep roles-join-sep]))
+            label-join-sep roles-join-sep
+            plist-ph-user plist-ph-bin plist-ph-port plist-ph-roles
+            plist-ph-labels plist-ph-home plist-ph-ed25519 plist-ph-x25519
+            plist-ph-did plist-ph-p2pport plist-ph-p2pseed
+            plist-ph-extaddr plist-ph-bootstrap plist-ph-webrtc]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.provision.plan string/port.
 ;; resolve-p2p-port uses [:option :i64] (no has-* sentinels).
@@ -26,6 +30,7 @@
 ;; peer-entry (peerid@multiaddr) dual-source for bootstrap-str host fold.
 ;; home-bin-path + label/roles join seps dual-source for render-plist.
 ;; peer-id body/DID patterns dual-source; log/link grep commands recompose them.
+;; render-plist placeholder tokens dual-source; str/replace fold stays host.
 ;; Parity: test/murakumo/provision_plan_kotoba_parity_test.clj
 
 (defn plist-label [] :string "com.murakumo.kotoba-mesh")
@@ -255,3 +260,20 @@
 (defn roles-join-sep [] :string
   ;; render-plist {{ROLES}} CSV join
   ",")
+
+;; ── residual render-plist / watchdog placeholder tokens ──────────────
+
+(defn plist-ph-user [] :string "{{USER}}")
+(defn plist-ph-bin [] :string "{{BIN}}")
+(defn plist-ph-port [] :string "{{PORT}}")
+(defn plist-ph-roles [] :string "{{ROLES}}")
+(defn plist-ph-labels [] :string "{{LABELS}}")
+(defn plist-ph-home [] :string "{{HOME}}")
+(defn plist-ph-ed25519 [] :string "{{ED25519}}")
+(defn plist-ph-x25519 [] :string "{{X25519}}")
+(defn plist-ph-did [] :string "{{DID}}")
+(defn plist-ph-p2pport [] :string "{{P2PPORT}}")
+(defn plist-ph-p2pseed [] :string "{{P2PSEED}}")
+(defn plist-ph-extaddr [] :string "{{EXTADDR}}")
+(defn plist-ph-bootstrap [] :string "{{BOOTSTRAP}}")
+(defn plist-ph-webrtc [] :string "{{WEBRTC}}")

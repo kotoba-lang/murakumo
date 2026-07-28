@@ -4,13 +4,13 @@
 ;; kotoba DID derivation, and filesystem reads. This namespace owns deterministic
 ;; strings and defaults used by those effects.
 ;;
-;; W6 product-shell (ADR-260728-w6-provision-peer-id-pure-oracle):
+;; W6 product-shell (ADR-260728-w6-provision-plist-ph-pure-oracle):
 ;; constants + port/multiaddr + launch/peer/link shell + rsync argv +
 ;; peer-entry + home-bin-path + label/roles join seps + peer-id DID/body
-;; patterns DELEGATE to kotoba provision_plan_core when oracle is loadable
-;; (JVM classpath or cljs/nbb). bootstrap fold, peer-id re-find host, write-plist
-;; heredoc body, template replace fold stay host. cljs mirrors remain fallback
-;; when oracle is not ready.
+;; patterns + render-plist placeholder tokens DELEGATE to kotoba
+;; provision_plan_core when oracle is loadable (JVM classpath or cljs/nbb).
+;; bootstrap fold, peer-id re-find host, write-plist heredoc body, template
+;; replace fold stay host. cljs mirrors remain fallback when oracle is not ready.
 
 (ns murakumo.provision.plan
   "Portable provision/mesh planning helpers.
@@ -139,6 +139,20 @@
 (def ^:private mirror-home-bin-suffix "/.murakumo/bin")
 (def ^:private mirror-label-join-sep ",")
 (def ^:private mirror-roles-join-sep ",")
+(def ^:private mirror-plist-ph-user "{{USER}}")
+(def ^:private mirror-plist-ph-bin "{{BIN}}")
+(def ^:private mirror-plist-ph-port "{{PORT}}")
+(def ^:private mirror-plist-ph-roles "{{ROLES}}")
+(def ^:private mirror-plist-ph-labels "{{LABELS}}")
+(def ^:private mirror-plist-ph-home "{{HOME}}")
+(def ^:private mirror-plist-ph-ed25519 "{{ED25519}}")
+(def ^:private mirror-plist-ph-x25519 "{{X25519}}")
+(def ^:private mirror-plist-ph-did "{{DID}}")
+(def ^:private mirror-plist-ph-p2pport "{{P2PPORT}}")
+(def ^:private mirror-plist-ph-p2pseed "{{P2PSEED}}")
+(def ^:private mirror-plist-ph-extaddr "{{EXTADDR}}")
+(def ^:private mirror-plist-ph-bootstrap "{{BOOTSTRAP}}")
+(def ^:private mirror-plist-ph-webrtc "{{WEBRTC}}")
 
 (defn- mirror-peer-entry [peer-id multiaddr]
   (str peer-id "@" multiaddr))
@@ -269,6 +283,62 @@
 (def roles-join-sep
   "Comma separator for node roles CSV. Kotoba when ready."
   (oracle-str-const 'roles-join-sep mirror-roles-join-sep))
+
+(def plist-ph-user
+  "LaunchDaemon template placeholder {{USER}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-user mirror-plist-ph-user))
+
+(def plist-ph-bin
+  "LaunchDaemon template placeholder {{BIN}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-bin mirror-plist-ph-bin))
+
+(def plist-ph-port
+  "LaunchDaemon template placeholder {{PORT}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-port mirror-plist-ph-port))
+
+(def plist-ph-roles
+  "LaunchDaemon template placeholder {{ROLES}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-roles mirror-plist-ph-roles))
+
+(def plist-ph-labels
+  "LaunchDaemon template placeholder {{LABELS}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-labels mirror-plist-ph-labels))
+
+(def plist-ph-home
+  "LaunchDaemon template placeholder {{HOME}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-home mirror-plist-ph-home))
+
+(def plist-ph-ed25519
+  "LaunchDaemon template placeholder {{ED25519}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-ed25519 mirror-plist-ph-ed25519))
+
+(def plist-ph-x25519
+  "LaunchDaemon template placeholder {{X25519}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-x25519 mirror-plist-ph-x25519))
+
+(def plist-ph-did
+  "LaunchDaemon template placeholder {{DID}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-did mirror-plist-ph-did))
+
+(def plist-ph-p2pport
+  "LaunchDaemon template placeholder {{P2PPORT}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-p2pport mirror-plist-ph-p2pport))
+
+(def plist-ph-p2pseed
+  "LaunchDaemon template placeholder {{P2PSEED}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-p2pseed mirror-plist-ph-p2pseed))
+
+(def plist-ph-extaddr
+  "LaunchDaemon template placeholder {{EXTADDR}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-extaddr mirror-plist-ph-extaddr))
+
+(def plist-ph-bootstrap
+  "LaunchDaemon template placeholder {{BOOTSTRAP}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-bootstrap mirror-plist-ph-bootstrap))
+
+(def plist-ph-webrtc
+  "LaunchDaemon template placeholder {{WEBRTC}}. Kotoba when ready."
+  (oracle-str-const 'plist-ph-webrtc mirror-plist-ph-webrtc))
 
 (defn home-bin-path
   "Absolute `{{BIN}}` path under node home. Kotoba `home-bin-path` when ready."
@@ -461,24 +531,24 @@
 
    `identity` supplies host-derived or crypto-derived values:
    :operator-seed, :x25519-seed, :did, and :p2p-seed.
-   {{BIN}} path and roles/labels join seps dual-sourced; template replace fold
-   stays host."
+   Placeholder tokens + {{BIN}} path + roles/labels join seps dual-sourced;
+   template replace fold stays host."
   [template fleet connect-spec peers node {:keys [user home operator-seed x25519-seed did p2p-seed]}]
   (-> template
-      (str/replace "{{USER}}" user)
-      (str/replace "{{BIN}}" (home-bin-path home))
-      (str/replace "{{PORT}}" (str (inv/node-port fleet node)))
-      (str/replace "{{ROLES}}" (str/join roles-join-sep (:roles node)))
-      (str/replace "{{LABELS}}" (labels-env (:labels node)))
-      (str/replace "{{HOME}}" home)
-      (str/replace "{{ED25519}}" operator-seed)
-      (str/replace "{{X25519}}" x25519-seed)
-      (str/replace "{{DID}}" did)
-      (str/replace "{{P2PPORT}}" (str (node-p2p-port fleet node)))
-      (str/replace "{{P2PSEED}}" p2p-seed)
-      (str/replace "{{EXTADDR}}" (if (:ip node) (multiaddr (:ip node) (node-p2p-port fleet node)) ""))
-      (str/replace "{{BOOTSTRAP}}" (bootstrap-str fleet peers node))
-      (str/replace "{{WEBRTC}}" (str (node-webrtc-port fleet connect-spec node)))))
+      (str/replace plist-ph-user user)
+      (str/replace plist-ph-bin (home-bin-path home))
+      (str/replace plist-ph-port (str (inv/node-port fleet node)))
+      (str/replace plist-ph-roles (str/join roles-join-sep (:roles node)))
+      (str/replace plist-ph-labels (labels-env (:labels node)))
+      (str/replace plist-ph-home home)
+      (str/replace plist-ph-ed25519 operator-seed)
+      (str/replace plist-ph-x25519 x25519-seed)
+      (str/replace plist-ph-did did)
+      (str/replace plist-ph-p2pport (str (node-p2p-port fleet node)))
+      (str/replace plist-ph-p2pseed p2p-seed)
+      (str/replace plist-ph-extaddr (if (:ip node) (multiaddr (:ip node) (node-p2p-port fleet node)) ""))
+      (str/replace plist-ph-bootstrap (bootstrap-str fleet peers node))
+      (str/replace plist-ph-webrtc (str (node-webrtc-port fleet connect-spec node)))))
 
 (defn launch-command
   "Shell command used to start or stop the resident LaunchDaemon.
@@ -529,12 +599,13 @@
   (oracle-str-const 'watchdog-label mirror-watchdog-label))
 
 (defn render-watchdog-plist
-  "Substitute the watchdog template's placeholders for one node."
+  "Substitute the watchdog template's placeholders for one node.
+   Placeholder tokens dual-sourced; replace fold stays host."
   [tmpl fleet node {:keys [user home]}]
   (-> tmpl
-      (str/replace "{{USER}}" user)
-      (str/replace "{{HOME}}" home)
-      (str/replace "{{PORT}}" (str (inv/node-port fleet node)))))
+      (str/replace plist-ph-user user)
+      (str/replace plist-ph-home home)
+      (str/replace plist-ph-port (str (inv/node-port fleet node)))))
 
 (defn write-watchdog-plist-command
   "Remote shell command that writes the watchdog plist to the system LaunchDaemon path.
