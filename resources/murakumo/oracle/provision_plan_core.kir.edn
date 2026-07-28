@@ -469,7 +469,41 @@
    :result :string,
    :effects #{},
    :body "{{WEBRTC}}",
-   :param-types []}],
+   :param-types []}
+  {:name join-append,
+   :params [acc sep next],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (string=? acc "")
+    next
+    (string-concat acc (string-concat sep next))),
+   :param-types [:string :string :string]}
+  {:name bootstrap-append,
+   :params [acc entry],
+   :result :string,
+   :effects #{},
+   :body (join-append acc (peer-join-sep) entry),
+   :param-types [:string :string]}
+  {:name labels-append,
+   :params [acc pair],
+   :result :string,
+   :effects #{},
+   :body (join-append acc (label-join-sep) pair),
+   :param-types [:string :string]}
+  {:name roles-append,
+   :params [acc role],
+   :result :string,
+   :effects #{},
+   :body (join-append acc (roles-join-sep) role),
+   :param-types [:string :string]}
+  {:name plist-replace,
+   :params [tmpl ph val],
+   :result :string,
+   :effects #{},
+   :body (string-replace-all tmpl ph val),
+   :param-types [:string :string :string]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
@@ -531,7 +565,12 @@
   plist-ph-p2pseed
   plist-ph-extaddr
   plist-ph-bootstrap
-  plist-ph-webrtc],
+  plist-ph-webrtc
+  join-append
+  bootstrap-append
+  labels-append
+  roles-append
+  plist-replace],
  :schemas nil,
  :effects #{},
  :blocks [],
