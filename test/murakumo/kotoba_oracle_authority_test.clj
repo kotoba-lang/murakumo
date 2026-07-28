@@ -25,6 +25,7 @@
             [murakumo.overlay.crypto :as crypto]
             [murakumo.tunnel :as tunnel]
             [murakumo.config :as config]
+            [murakumo.reconcile.plan :as rplan]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -613,6 +614,59 @@
                                             :wasm32-kotoba-v1 {}))
         shipped (edn/read-string (slurp (io/resource "murakumo/oracle/config_core.kir.edn")))]
     (is (= live shipped) "config_core KIR drift — run oracle-gen")))
+
+(deftest product-shell-reconcile-plan-uses-oracle-results
+  (testing "watch-sleep-ms via oracle"
+    (is (= 15000 (rplan/watch-sleep-ms 15)))
+    (is (= (oracle/call :reconcile-plan 'watch-sleep-ms [30])
+           (rplan/watch-sleep-ms 30))))
+  (testing "reconcile-app actions via action-name oracle"
+    (let [fleet {:fleet/name "t"
+                 :nodes [{:name "a" :roles ["compute"] :labels {:z "jp"}}
+                         {:name "b" :roles ["compute"] :labels {:z "jp"}}
+                         {:name "c" :roles ["compute"] :labels {:z "jp"}}]}
+          snap {:nodes [{:name "a" :hosted ["cid1"]}
+                        {:name "b" :hosted []}
+                        {:name "c" :hosted []}]}
+          place (rplan/reconcile-app fleet snap nil
+                                     {:name "app" :cid "cid1" :replicas 3
+                                      :placement {:labels {:z "jp"} :roles ["compute"]}})
+          sat (rplan/reconcile-app fleet snap nil
+                                   {:name "app" :cid "cid1" :replicas 1
+                                    :placement {:labels {:z "jp"} :roles ["compute"]}})
+          needs (rplan/reconcile-app fleet snap nil
+                                     {:name "app" :replicas 1 :placement {}})]
+      (is (= :place (:action place)))
+      (is (= 2 (:deficit place)))
+      (is (seq (:targets place)))
+      (is (= :satisfied (:action sat)))
+      (is (= :needs-build (:action needs)))
+      (is (= 1 (:desired needs))))))
+
+(deftest reconcile-oracle-call-matches-live-compile
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/reconcile_plan_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'default-replicas [])
+           (oracle/call :reconcile-plan 'default-replicas [])))
+    (is (= (ir/execute live 'desired [0 99])
+           (oracle/call :reconcile-plan 'desired [0 99])))
+    (is (= (ir/execute live 'desired [1 3])
+           (oracle/call :reconcile-plan 'desired [1 3])))
+    (is (= (ir/execute live 'deficit [3 1])
+           (oracle/call :reconcile-plan 'deficit [3 1])))
+    (is (= (ir/execute live 'watch-sleep-ms [15])
+           (oracle/call :reconcile-plan 'watch-sleep-ms [15])))
+    (is (= (ir/execute live 'action-name [1 1 3 2 0])
+           (oracle/call :reconcile-plan 'action-name [1 1 3 2 0])))
+    (is (= (ir/execute live 'action-name [0 0 1 0 0])
+           (oracle/call :reconcile-plan 'action-name [0 0 1 0 0])))))
+
+(deftest reconcile-precompiled-kir-does-not-drift
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/reconcile_plan_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))
+        shipped (edn/read-string
+                 (slurp (io/resource "murakumo/oracle/reconcile_plan_core.kir.edn")))]
+    (is (= live shipped) "reconcile_plan_core KIR drift — run oracle-gen")))
 
 (deftest bulk-gen-discovers-all-cores
   (let [arts (gen/discover-artifacts)]
