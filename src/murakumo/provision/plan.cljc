@@ -4,18 +4,17 @@
 ;; kotoba DID derivation, and filesystem reads. This namespace owns deterministic
 ;; strings and defaults used by those effects.
 ;;
-;; W6 product-shell (ADR-260728-w6-provision-bootstrap-fold-pure-oracle):
+;; W6 product-shell (ADR-260728-w6-provision-peerid-plist-pure-oracle):
 ;; constants + port/multiaddr + launch/peer/link shell + rsync argv +
 ;; peer-entry + home-bin-path + label/roles join seps + peer-id DID/body
-;; patterns + render-plist placeholder tokens + fold steps (bootstrap-append /
-;; labels-append / roles-append / plist-replace) DELEGATE to kotoba
-;; provision_plan_core when oracle is loadable (JVM classpath or cljs/nbb).
-;; peer-id re-find host, write-plist heredoc body, collection walks stay host.
-;; cljs mirrors remain fallback when oracle is not ready.
+;; patterns + render-plist placeholder tokens + fold steps + peer-id-from-log
+;; scan + write-plist-shell DELEGATE to kotoba provision_plan_core when oracle
+;; is loadable (JVM classpath or cljs/nbb). Collection walks stay host; plist
+;; body content is still host-rendered XML. cljs mirrors remain fallback.
 
 (ns murakumo.provision.plan
   "Portable provision/mesh planning helpers.
-   W6 product-shell: path/port + shell/rsync/peer-entry/plist/peer-id/fold pure via provision_plan_core."
+   W6 product-shell: path/port + shell/rsync/peer-entry/plist/peer-id pure via provision_plan_core."
   (:require [clojure.string :as str]
             [murakumo.connect :as connect]
             [murakumo.fleet.inventory :as inv]
@@ -183,6 +182,9 @@
 
 (defn- mirror-peer-id-from-log [out]
   (some-> (re-find #"did:key:(12D3[A-Za-z0-9]*)" (str out)) second))
+
+(defn- mirror-write-plist-shell [label body]
+  (str (mirror-tee-plist-prefix label) body mirror-plist-heredoc-footer))
 
 ;; ── dual-source constants ────────────────────────────────────────────
 
@@ -472,14 +474,11 @@
 
 (defn peer-id-from-log
   "Extract the libp2p PeerId from kotoba mesh log output containing `did:key:<peerid>`.
-   Pattern fragments dual-sourced via `did-key-prefix` / `peer-id-body-prefix`;
-   re-find stays host."
+   Kotoba pure scan (`peer-id-from-log`) when ready; blank → nil."
   [out]
   (try-oracle
-   #(let [re (re-pattern
-              (str did-key-prefix
-                   "(" peer-id-body-prefix "[A-Za-z0-9]*)"))]
-      (some-> (re-find re (str out)) second))
+   #(let [s (o 'peer-id-from-log [(str out)])]
+      (when-not (str/blank? (str s)) s))
    #(mirror-peer-id-from-log out)))
 
 (defn collected-peers
@@ -545,11 +544,19 @@
    #(o 'launch-status-command [])
    mirror-launch-status-command))
 
+(defn write-plist-shell
+  "Assemble sudo tee … <<'PLIST' shell for a LaunchDaemon label + body.
+   Kotoba `write-plist-shell` when ready."
+  [label body]
+  (try-oracle
+   #(o 'write-plist-shell [(str label) (str body)])
+   #(mirror-write-plist-shell label body)))
+
 (defn write-plist-command
   "Remote shell command that writes plist content to the system LaunchDaemon path.
-   tee prefix + footer dual-sourced; heredoc body stays host (quoting)."
+   Shell assembly dual-sourced via `write-plist-shell`; body content is host XML."
   [plist]
-  (str (tee-plist-prefix plist-label) plist plist-heredoc-footer))
+  (write-plist-shell plist-label plist))
 
 (defn peer-id-log-command
   "Remote shell command that prints the latest node PeerId DID from mesh.log.
@@ -676,9 +683,9 @@
 
 (defn write-watchdog-plist-command
   "Remote shell command that writes the watchdog plist to the system LaunchDaemon path.
-   tee prefix + footer dual-sourced; heredoc body stays host."
+   Shell assembly dual-sourced via `write-plist-shell`; body content is host XML."
   [plist]
-  (str (tee-plist-prefix watchdog-label) plist plist-heredoc-footer))
+  (write-plist-shell watchdog-label plist))
 
 (defn watchdog-reprovision-command
   "Reload + kickstart the watchdog (same bootout-settle-bootstrap dance as the mesh).

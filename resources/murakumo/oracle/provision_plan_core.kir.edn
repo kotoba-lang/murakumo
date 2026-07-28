@@ -503,7 +503,84 @@
    :result :string,
    :effects #{},
    :body (string-replace-all tmpl ph val),
-   :param-types [:string :string :string]}],
+   :param-types [:string :string :string]}
+  {:name alnum-char?,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string-contains?
+     "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+     c)
+    1
+    0),
+   :param-types [:string]}
+  {:name find-prefix-at,
+   :params [s prefix i],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s) p (string-byte-length prefix)]
+    (if
+     (let
+      [or-tmp__10886 (= p 0)]
+      (if or-tmp__10886 or-tmp__10886 (> (+ i p) n)))
+     -1
+     (if
+      (string=? (string-substring s i (+ i p)) prefix)
+      i
+      (find-prefix-at s prefix (+ i 1))))),
+   :param-types [:string :string :i64]}
+  {:name take-alnum,
+   :params [s i acc],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (>= i n)
+     acc
+     (let
+      [c (string-substring s i (+ i 1))]
+      (if
+       (= (alnum-char? c) 1)
+       (take-alnum s (+ i 1) (string-concat acc c))
+       acc)))),
+   :param-types [:string :i64 :string]}
+  {:name peer-id-from-log,
+   :params [out],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [needle
+     (string-concat (did-key-prefix) (peer-id-body-prefix))
+     idx
+     (find-prefix-at out needle 0)]
+    (if
+     (< idx 0)
+     ""
+     (let
+      [body-start
+       (+ idx (string-byte-length (did-key-prefix)))
+       n
+       (string-byte-length out)
+       rest
+       (string-substring out body-start n)]
+      (take-alnum rest 0 "")))),
+   :param-types [:string]}
+  {:name write-plist-shell,
+   :params [label body],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (tee-plist-prefix label)
+    (string-concat body (plist-heredoc-footer))),
+   :param-types [:string :string]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
@@ -570,7 +647,12 @@
   bootstrap-append
   labels-append
   roles-append
-  plist-replace],
+  plist-replace
+  alnum-char?
+  find-prefix-at
+  take-alnum
+  peer-id-from-log
+  write-plist-shell],
  :schemas nil,
  :effects #{},
  :blocks [],

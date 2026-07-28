@@ -1449,7 +1449,18 @@
     (is (= "p@/m,q@/n" (pplan/bootstrap-append "p@/m" "q@/n")))
     (is (= "zone=jp,role=c" (pplan/labels-append "zone=jp" "role=c")))
     (is (= "compute,pin" (pplan/roles-append "compute" "pin")))
-    (is (= "xopsy" (pplan/plist-replace "x{{U}}y" "{{U}}" "ops"))))
+    (is (= "xopsy" (pplan/plist-replace "x{{U}}y" "{{U}}" "ops")))
+    (is (= "12D3KooWPeerId123"
+           (pplan/peer-id-from-log "node_did=did:key:12D3KooWPeerId123\n")))
+    (is (= "12D3KooWPeerId123"
+           (pplan/peer-id-from-log "noise\ndid:key:12D3KooWPeerId123 trailing\n")))
+    (is (nil? (pplan/peer-id-from-log "did:key:zOther")))
+    (is (str/includes? (pplan/write-plist-shell "com.murakumo.kotoba-mesh" "<x/>")
+                       "<<'PLIST'"))
+    (is (= (pplan/write-plist-command "<x/>")
+           (pplan/write-plist-shell pplan/plist-label "<x/>")))
+    (is (= (pplan/write-watchdog-plist-command "<w/>")
+           (pplan/write-plist-shell pplan/watchdog-label "<w/>"))))
   (testing "cloud defaults + region/endpoints"
     (is (= "murakumo-overlay" cplan/default-driver))
     (is (= "cloud.murakumo.node" cplan/node-record-type))
@@ -1651,7 +1662,19 @@
            (oracle/call :provision-plan 'plist-replace ["x{{U}}y" "{{U}}" "ops"])))
     (is (= (oracle/call :provision-plan 'plist-replace ["x{{U}}y" "{{U}}" "ops"])
            (pplan/plist-replace "x{{U}}y" "{{U}}" "ops")))
-    (is (= "xopsy" (pplan/plist-replace "x{{U}}y" "{{U}}" "ops")))))
+    (is (= "xopsy" (pplan/plist-replace "x{{U}}y" "{{U}}" "ops")))
+    (is (= (ir/execute pr 'peer-id-from-log ["did:key:12D3KooWPeerId123"])
+           (oracle/call :provision-plan 'peer-id-from-log ["did:key:12D3KooWPeerId123"])))
+    (is (= "12D3KooWPeerId123"
+           (oracle/call :provision-plan 'peer-id-from-log ["did:key:12D3KooWPeerId123"])))
+    (is (= "" (oracle/call :provision-plan 'peer-id-from-log ["did:key:zOther"])))
+    (is (= (oracle/call :provision-plan 'peer-id-from-log ["did:key:12D3abc"])
+           (pplan/peer-id-from-log "did:key:12D3abc")))
+    (is (= (ir/execute pr 'write-plist-shell ["lab" "<b/>"])
+           (oracle/call :provision-plan 'write-plist-shell ["lab" "<b/>"])))
+    (is (= (oracle/call :provision-plan 'write-plist-shell
+                        [pplan/plist-label "<b/>"])
+           (pplan/write-plist-command "<b/>")))))
 
 (deftest product-shell-overlay-driver-runtime-uses-oracle
   (testing "driver endpoint-kind + dial-result + option-name"
