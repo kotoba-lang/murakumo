@@ -19,19 +19,33 @@
 
   One invariant: exactly one node is reserved as head/relay (I/O + dispatch), it
   never holds a shard. The rest are split across pools proportional to demand,
-  each with a floor so a live capability never drops to zero while any demand exists."
-  (:require [clojure.string :as str]))
+  each with a floor so a live capability never drops to zero while any demand exists.
 
-(def shard-ceiling-gb 10)   ; 16GB stability limit → ~10GB usable shard (ADR: kernel-panic guard)
+  W6 product-shell: usable-gb / largest-remainder-3 via kotoba infer_rebalance_core."
+  (:require [clojure.string :as str]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+
+(def ^:private oid :infer-rebalance)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
+
+(def shard-ceiling-gb
+  "16GB stability limit → ~10GB usable shard. JVM: kotoba `shard-ceiling-gb`."
+  #?(:clj (long (o 'shard-ceiling-gb []))
+     :cljs 10))
 
 ;; ── capacity ────────────────────────────────────────────────────────────────
 
 (defn node-capacity
   "One anonymized snapshot node → a capacity record. usable-gb is min(shard
-   ceiling, ram - OS/KV headroom)."
+   ceiling, ram - OS/KV headroom).
+   JVM: kotoba `usable-gb`."
   [{:keys [id ram-gb disk-free roles status] :as n}]
   (let [ram (or ram-gb 0)
-        usable (min shard-ceiling-gb (max 0 (- ram 6)))]  ; 6GB OS/KV headroom
+        usable #?(:clj (long (o 'usable-gb [(long ram)]))
+                  :cljs (min shard-ceiling-gb (max 0 (- ram 6))))]
     {:id id :status status :ram-gb ram :usable-gb usable
      :roles-capable (set (map keyword (or roles [])))
      :disk-free disk-free}))
@@ -77,21 +91,13 @@
 
 ;; ── allocation ────────────────────────────────────────────────────────────────
 
-(defn- largest-remainder
-  "Apportion `total` seats across `weights` (map k→w) by largest-remainder, with
-   a floor of `floor` seats for any pool whose weight > 0. Deterministic. The
-   sum of the returned seats never exceeds `total` -- when floor × (count
-   active pools) > total, the effective per-pool floor is reduced to
-   (quot total (count active)) so every active pool competes fairly for the
-   remaining seats via the proportional/remainder pass below, rather than
-   promising more seats than `total` actually provides."
+(defn- mirror-largest-remainder
   [total weights floor]
   (let [active (into {} (filter (comp pos? val) weights))
         sumw (reduce + 0 (vals active))]
     (if (or (zero? total) (zero? sumw))
       (zipmap (keys weights) (repeat 0))
-      (let [;; floors first, capped so floors alone can't exceed total
-            eff-floor (min floor (quot total (count active)))
+      (let [eff-floor (min floor (quot total (count active)))
             base (into {} (map (fn [[k _]] [k eff-floor]) active))
             left (- total (reduce + 0 (vals base)))
             left (max 0 left)
@@ -103,6 +109,22 @@
             bump (set (map first (take extra rema)))]
         (merge (zipmap (keys weights) (repeat 0))
                (into {} (map (fn [[k b]] [k (+ b (get floors k 0) (if (bump k) 1 0))]) base)))))))
+
+(defn- largest-remainder
+  "Apportion `total` seats across `weights` (map k→w) by largest-remainder, with
+   a floor of `floor` seats for any pool whose weight > 0. Deterministic.
+   JVM (text/media/postproc 3-pool): kotoba `largest-remainder-3` + seats-* unpack."
+  [total weights floor]
+  #?(:clj
+     (let [wt (long (or (get weights :text-pool) 0))
+           wm (long (or (get weights :media-pool) 0))
+           wp (long (or (get weights :postproc-pool) 0))
+           packed (long (o 'largest-remainder-3
+                           [(long total) wt wm wp (long floor)]))]
+       {:text-pool (long (o 'seats-text [packed]))
+        :media-pool (long (o 'seats-media [packed]))
+        :postproc-pool (long (o 'seats-postproc [packed]))})
+     :cljs (mirror-largest-remainder total weights floor)))
 
 (defn target-allocation
   "capacity + demand → a placement plan:
