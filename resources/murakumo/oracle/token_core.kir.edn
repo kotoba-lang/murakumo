@@ -13,6 +13,66 @@
    :effects #{},
    :body 2592000,
    :param-types []}
+  {:name default-sub,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "anonymous",
+   :param-types []}
+  {:name default-scope,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "all",
+   :param-types []}
+  {:name scope-all,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "all",
+   :param-types []}
+  {:name jwt-seg-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ".",
+   :param-types []}
+  {:name wire-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body (jwt-seg-sep),
+   :param-types []}
+  {:name json-sub-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "{\"sub\":\"",
+   :param-types []}
+  {:name json-scope-mid,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "\",\"scope\":\"",
+   :param-types []}
+  {:name json-iat-mid,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "\",\"iat\":",
+   :param-types []}
+  {:name json-exp-mid,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ",\"exp\":",
+   :param-types []}
+  {:name json-close,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "}",
+   :param-types []}
   {:name claim-sub,
    :params [sub],
    :result :string,
@@ -23,7 +83,7 @@
     (if
      (option-some?-of [:option :string] binding-some__1)
      (let [x (option-value-of [:option :string] binding-some__1 "")] x)
-     "anonymous")),
+     (default-sub))),
    :param-types [[:option :string]]}
   {:name claim-scope,
    :params [scope],
@@ -35,7 +95,7 @@
     (if
      (option-some?-of [:option :string] binding-some__2)
      (let [x (option-value-of [:option :string] binding-some__2 "")] x)
-     "all")),
+     (default-scope))),
    :param-types [[:option :string]]}
   {:name claim-exp,
    :params [now ttl],
@@ -49,7 +109,7 @@
      (if
       (option-some?-of [:option :i64] binding-some__3)
       (let [x (option-value-of [:option :i64] binding-some__3 0)] x)
-      2592000))),
+      (default-ttl)))),
    :param-types [:i64 [:option :i64]]}
   {:name expired?,
    :params [exp now],
@@ -71,7 +131,7 @@
    :effects #{},
    :body
    (if
-    (string=? token-scope "all")
+    (string=? token-scope (scope-all))
     1
     (if (string=? token-scope required) 1 0)),
    :param-types [:string :string]}
@@ -79,28 +139,30 @@
    :params [payload-seg],
    :result :string,
    :effects #{},
-   :body (string-concat "mk1." payload-seg),
+   :body
+   (string-concat (version) (string-concat (jwt-seg-sep) payload-seg)),
    :param-types [:string]}
   {:name encode-claims-json,
    :params [sub scope iat exp],
    :result :string,
    :effects #{},
    :body
-   (string-concat
-    "{\"sub\":\""
-    (string-concat
-     sub
-     (string-concat
-      "\",\"scope\":\""
-      (string-concat
-       scope
-       (string-concat
-        "\",\"iat\":"
-        (string-concat
-         (__kotoba_string_from_i64 iat)
-         (string-concat
-          ",\"exp\":"
-          (string-concat (__kotoba_string_from_i64 exp) "}")))))))),
+   (let
+    [a
+     (string-concat (json-sub-prefix) sub)
+     b
+     (string-concat a (json-scope-mid))
+     c
+     (string-concat b scope)
+     d
+     (string-concat c (json-iat-mid))
+     e
+     (string-concat d (__kotoba_string_from_i64 iat))
+     f
+     (string-concat e (json-exp-mid))
+     g
+     (string-concat f (__kotoba_string_from_i64 exp))]
+    (string-concat g (json-close))),
    :param-types [:string :string :i64 :i64]}
   {:name wire-token,
    :params [payload-seg sig],
@@ -108,14 +170,16 @@
    :effects #{},
    :body
    (string-concat
-    "mk1."
-    (string-concat payload-seg (string-concat "." sig))),
+    (version)
+    (string-concat
+     (wire-sep)
+     (string-concat payload-seg (string-concat (wire-sep) sig)))),
    :param-types [:string :string]}
   {:name version-ok?,
    :params [v],
    :result :i64,
    :effects #{},
-   :body (if (string=? v "mk1") 1 0),
+   :body (if (string=? v (version)) 1 0),
    :param-types [:string]}
   {:name parts-present?,
    :params [v p s],
@@ -215,7 +279,17 @@
   version-ok?
   parts-present?
   constant-time-eq
-  ct-scan],
+  ct-scan
+  default-sub
+  default-scope
+  scope-all
+  jwt-seg-sep
+  wire-sep
+  json-sub-prefix
+  json-scope-mid
+  json-iat-mid
+  json-exp-mid
+  json-close],
  :schemas nil,
  :effects #{},
  :blocks [],

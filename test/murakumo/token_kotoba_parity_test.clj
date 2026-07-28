@@ -13,7 +13,9 @@
 (def export-prefix
   (str "version default-ttl claim-sub claim-scope claim-exp expired? scope-allows? signing-input "
        "encode-claims-json wire-token "
-       "version-ok? parts-present? constant-time-eq ct-scan"))
+       "version-ok? parts-present? constant-time-eq ct-scan "
+       "default-sub default-scope scope-all jwt-seg-sep wire-sep "
+       "json-sub-prefix json-scope-mid json-iat-mid json-exp-mid json-close"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -53,11 +55,40 @@
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
 (deftest version-and-default-ttl-match
-  (let [s (compile-string-cases {"v" "(version)"})
+  (let [s (compile-string-cases
+           {"v" "(version)"
+            "ds" "(default-sub)"
+            "dsc" "(default-scope)"
+            "sa" "(scope-all)"
+            "js" "(jwt-seg-sep)"
+            "ws" "(wire-sep)"
+            "jp" "(json-sub-prefix)"
+            "jm" "(json-scope-mid)"
+            "ji" "(json-iat-mid)"
+            "je" "(json-exp-mid)"
+            "jc" "(json-close)"})
         n (compile-i64-cases {"ttl" "(default-ttl)"})]
     (is (= tok/version (get s "v")))
+    (is (= "mk1" (get s "v")))
+    (is (= tok/default-sub (get s "ds")))
+    (is (= "anonymous" (get s "ds")))
+    (is (= tok/default-scope (get s "dsc")))
+    (is (= "all" (get s "dsc")))
+    (is (= tok/scope-all (get s "sa")))
+    (is (= tok/jwt-seg-sep (get s "js")))
+    (is (= "." (get s "js")))
+    (is (= tok/wire-sep (get s "ws")))
+    (is (= tok/json-sub-prefix (get s "jp")))
+    (is (= tok/json-scope-mid (get s "jm")))
+    (is (= tok/json-iat-mid (get s "ji")))
+    (is (= tok/json-exp-mid (get s "je")))
+    (is (= tok/json-close (get s "jc")))
     (is (= 2592000 (get n "ttl")))
-    (is (= (:exp (tok/claims {:now 0})) (get n "ttl")))))
+    (is (= tok/default-ttl (get n "ttl")))
+    (is (= (:exp (tok/claims {:now 0})) (get n "ttl")))
+    (is (= (str tok/version tok/jwt-seg-sep "PAY") (tok/signing-input "PAY")))
+    (is (= (str tok/version tok/wire-sep "PAY" tok/wire-sep "SIG")
+           (tok/wire-token "PAY" "SIG")))))
 
 (deftest claim-defaults-match-claims
   (let [corpus [[nil nil]

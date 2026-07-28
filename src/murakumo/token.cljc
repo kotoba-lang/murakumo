@@ -16,9 +16,10 @@
   The signing secret (MURAKUMO_TOKEN_SECRET) is the operator's; it lives in the
   CLI's environment (to mint) and as a Worker secret (to verify).
 
-  W6 product-shell: pure helpers DELEGATE to precompiled KIR when oracle is
+  W6 product-shell (ADR-260728-w6-token-seps-pure-oracle): pure helpers +
+  version/default-sub/scope/jwt seps DELEGATE to precompiled KIR when oracle is
   loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
-  Host mirrors remain fallback when oracle is not ready."
+  Host mirrors remain fallback when oracle is not ready. HMAC/base64url stay host."
   (:require [clojure.string :as str]
             [murakumo.kotoba.oracle :as oracle])
   #?(:clj (:import [javax.crypto Mac]
@@ -34,8 +35,82 @@
 (defn- o [export args]
   (oracle/call oid export args))
 
-(def ^:const version "mk1")
-(def ^:const default-ttl 2592000)
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+(defn- oracle-i64-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid export []))
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+(def ^:private mirror-version "mk1")
+(def ^:private mirror-default-ttl 2592000)
+(def ^:private mirror-default-sub "anonymous")
+(def ^:private mirror-default-scope "all")
+(def ^:private mirror-scope-all "all")
+(def ^:private mirror-jwt-seg-sep ".")
+(def ^:private mirror-json-sub-prefix "{\"sub\":\"")
+(def ^:private mirror-json-scope-mid "\",\"scope\":\"")
+(def ^:private mirror-json-iat-mid "\",\"iat\":")
+(def ^:private mirror-json-exp-mid ",\"exp\":")
+(def ^:private mirror-json-close "}")
+
+(def version
+  "Wire version token. Kotoba when ready."
+  (oracle-str-const 'version mirror-version))
+
+(def default-ttl
+  "Default exp offset seconds. Kotoba when ready."
+  (oracle-i64-const 'default-ttl mirror-default-ttl))
+
+(def default-sub
+  "Default claim sub when absent. Kotoba when ready."
+  (oracle-str-const 'default-sub mirror-default-sub))
+
+(def default-scope
+  "Default claim scope when absent. Kotoba when ready."
+  (oracle-str-const 'default-scope mirror-default-scope))
+
+(def scope-all
+  "Wildcard scope token. Kotoba when ready."
+  (oracle-str-const 'scope-all mirror-scope-all))
+
+(def jwt-seg-sep
+  "Separator between wire segments. Kotoba when ready."
+  (oracle-str-const 'jwt-seg-sep mirror-jwt-seg-sep))
+
+(def wire-sep
+  "Alias of jwt-seg-sep for wire-token. Kotoba when ready."
+  (oracle-str-const 'wire-sep mirror-jwt-seg-sep))
+
+(def json-sub-prefix
+  (oracle-str-const 'json-sub-prefix mirror-json-sub-prefix))
+(def json-scope-mid
+  (oracle-str-const 'json-scope-mid mirror-json-scope-mid))
+(def json-iat-mid
+  (oracle-str-const 'json-iat-mid mirror-json-iat-mid))
+(def json-exp-mid
+  (oracle-str-const 'json-exp-mid mirror-json-exp-mid))
+(def json-close
+  (oracle-str-const 'json-close mirror-json-close))
 
 ;; ── base64url (no padding) over raw bytes — host codec ──────────────
 ;; cljs: prefer Node Buffer (nbb); fall back to btoa/atob in browsers.
@@ -81,24 +156,24 @@
 ;; ── pure claims / wire — kotoba/token_core.kotoba is SSoT ────────────
 
 (defn- mirror-claim-sub [sub]
-  (str (or sub "anonymous")))
+  (str (or sub default-sub)))
 
 (defn- mirror-claim-scope [scope]
-  (str (or scope "all")))
+  (str (or scope default-scope)))
 
 (defn- mirror-claim-exp [now ttl]
   (+ (oracle/i64->host (oracle/as-i64 now))
      (oracle/i64->host (oracle/as-i64 (or ttl default-ttl)))))
 
 (defn- mirror-encode-claims-json [{:keys [sub scope iat exp]}]
-  (str "{\"sub\":\"" sub "\",\"scope\":\"" scope
-       "\",\"iat\":" iat ",\"exp\":" exp "}"))
+  (str json-sub-prefix sub json-scope-mid scope
+       json-iat-mid iat json-exp-mid exp json-close))
 
 (defn- mirror-signing-input [payload-seg]
-  (str version "." payload-seg))
+  (str version jwt-seg-sep payload-seg))
 
 (defn- mirror-wire-token [payload-seg sig]
-  (str version "." payload-seg "." sig))
+  (str version wire-sep payload-seg wire-sep sig))
 
 (defn- mirror-version-ok? [v]
   (= version (str v)))
@@ -122,17 +197,7 @@
                       0 (range (count a))))))
 
 (defn- mirror-scope-allows? [token-scope required]
-  (or (= "all" (str token-scope)) (= (str token-scope) (str required))))
-
-(defn- try-oracle
-  "Run oracle body; on failure (e.g. cljs KIR string-from-i64 bounds) use mirror."
-  [thunk mirror-thunk]
-  (if (oracle-ready?)
-    (try
-      (thunk)
-      (catch #?(:clj Exception :cljs :default) _
-        (mirror-thunk)))
-    (mirror-thunk)))
+  (or (= scope-all (str token-scope)) (= (str token-scope) (str required))))
 
 (defn claims
   "Build the token claim map. Pure claim fields use kotoba when oracle ready
@@ -264,7 +329,8 @@
    (defn verify
      "Verify: pure version/parts/CT-eq + host HMAC; returns claims or nil."
      [secret token now]
-     (let [[v payload sig] (str/split (str token) #"\." 3)]
+     (let [sep-re (re-pattern (str "\\" jwt-seg-sep))
+           [v payload sig] (str/split (str token) sep-re 3)]
        (when (and (version-ok? v) (parts-present? v payload sig))
          (let [expected (hmac-b64url secret (signing-input payload))]
            (when (constant-time= sig expected)
@@ -284,7 +350,8 @@
    (defn verify
      "Promise<claims|nil>. Pure version/parts/CT-eq + host WebCrypto HMAC."
      [secret token now]
-     (let [[v payload sig] (str/split (str token) #"\." 3)]
+     (let [sep-re (re-pattern (str "\\" jwt-seg-sep))
+           [v payload sig] (str/split (str token) sep-re 3)]
        (if (and (version-ok? v) (parts-present? v payload sig))
          (-> (hmac-b64url secret (signing-input payload))
              (.then (fn [expected]

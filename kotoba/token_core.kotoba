@@ -3,11 +3,15 @@
             expired? scope-allows? signing-input
             encode-claims-json wire-token
             version-ok? parts-present?
-            constant-time-eq ct-scan]))
+            constant-time-eq ct-scan
+            default-sub default-scope scope-all
+            jwt-seg-sep wire-sep
+            json-sub-prefix json-scope-mid json-iat-mid json-exp-mid json-close]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.token claims/scope + wire.
 ;; Optional fields use [:option T] + if-some (no has-* / ttl -1 sentinels).
 ;; i64 decimal via string-from-i64. HMAC / base64url stay host.
+;; version/default-sub/scope-all/jwt seps dual-source; wire/claims recompose.
 ;; Parity + authority: test/murakumo/token_* + oracle catalog :token
 
 (defn version [] :string
@@ -16,18 +20,55 @@
 (defn default-ttl [] :i64
   2592000)
 
+;; ── residual default claim + wire separator tokens ───────────────────
+
+(defn default-sub [] :string
+  ;; claim-sub when optional sub is none
+  "anonymous")
+
+(defn default-scope [] :string
+  ;; claim-scope when optional scope is none
+  "all")
+
+(defn scope-all [] :string
+  ;; wildcard scope that grants any required scope
+  "all")
+
+(defn jwt-seg-sep [] :string
+  ;; between wire segments (version . payload . sig) and signing-input
+  ".")
+
+(defn wire-sep [] :string
+  ;; alias of jwt-seg-sep for wire-token clarity
+  (jwt-seg-sep))
+
+(defn json-sub-prefix [] :string
+  "{\"sub\":\"")
+
+(defn json-scope-mid [] :string
+  "\",\"scope\":\"")
+
+(defn json-iat-mid [] :string
+  "\",\"iat\":")
+
+(defn json-exp-mid [] :string
+  ",\"exp\":")
+
+(defn json-close [] :string
+  "}")
+
 (defn claim-sub [sub [:option :string]] :string
   (if-some [x sub]
     x
-    "anonymous"))
+    (default-sub)))
 
 (defn claim-scope [scope [:option :string]] :string
   (if-some [x scope]
     x
-    "all"))
+    (default-scope)))
 
 (defn claim-exp [now :i64 ttl [:option :i64]] :i64
-  (+ now (if-some [x ttl] x 2592000)))
+  (+ now (if-some [x ttl] x (default-ttl))))
 
 (defn expired? [exp [:option :i64] now :i64] :i64
   ;; 1 expired, 0 live — missing exp => expired
@@ -36,35 +77,35 @@
     1))
 
 (defn scope-allows? [token-scope :string required :string] :i64
-  (if (string=? token-scope "all")
+  (if (string=? token-scope (scope-all))
     1
     (if (string=? token-scope required) 1 0)))
 
 (defn signing-input [payload-seg :string] :string
-  (string-concat "mk1." payload-seg))
+  (string-concat (version) (string-concat (jwt-seg-sep) payload-seg)))
 
 (defn encode-claims-json [sub :string scope :string iat :i64 exp :i64] :string
-  (string-concat
-   "{\"sub\":\""
-   (string-concat
-    sub
-    (string-concat
-     "\",\"scope\":\""
-     (string-concat
-      scope
-      (string-concat
-       "\",\"iat\":"
-       (string-concat
-        (string-from-i64 iat)
-        (string-concat ",\"exp\":" (string-concat (string-from-i64 exp) "}")))))))))
+  ;; fixed-key claims JSON from pure fragments
+  (let [a (string-concat (json-sub-prefix) sub)
+        b (string-concat a (json-scope-mid))
+        c (string-concat b scope)
+        d (string-concat c (json-iat-mid))
+        e (string-concat d (string-from-i64 iat))
+        f (string-concat e (json-exp-mid))
+        g (string-concat f (string-from-i64 exp))]
+    (string-concat g (json-close))))
 
 (defn wire-token [payload-seg :string sig :string] :string
   (string-concat
-   "mk1."
-   (string-concat payload-seg (string-concat "." sig))))
+   (version)
+   (string-concat
+    (wire-sep)
+    (string-concat
+     payload-seg
+     (string-concat (wire-sep) sig)))))
 
 (defn version-ok? [v :string] :i64
-  (if (string=? v "mk1") 1 0))
+  (if (string=? v (version)) 1 0))
 
 (defn parts-present? [v [:option :string] p [:option :string] s [:option :string]] :i64
   (if-some [_ v]
