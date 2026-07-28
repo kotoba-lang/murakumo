@@ -5,22 +5,35 @@
 ;; murakumo.reconcile wraps it with CLI, collection, apply, and persistence.
 ;;
 ;; W6 product-shell authority (ADR-260728-w6-reconcile-oracle-authority):
-;; On the JVM, pure scalar helpers DELEGATE to precompiled
-;; kotoba/reconcile_plan_core.kotoba → resources/murakumo/oracle/reconcile_plan_core.kir.edn.
+;; pure scalar helpers DELEGATE to precompiled
+;; kotoba/reconcile_plan_core.kotoba → resources/murakumo/oracle/reconcile_plan_core.kir.edn
+;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: eligible-nodes / observed-hosts set algebra, variable-length
-;; pick-targets sort, reason strings, CLI flag parse, cljs mirrors.
+;; pick-targets sort, reason strings, CLI flag parse. cljs mirrors as fallback.
 
 (ns murakumo.reconcile.plan
   (:require [clojure.set :as set]
             [clojure.string :as str]
             [murakumo.connect :as connect]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :reconcile-plan)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
 
 (defn eligible-nodes
   "Node names whose labels/roles/reach satisfy an app's `:placement` constraint.
@@ -58,34 +71,46 @@
        (take (max 0 n))
        vec))
 
+(defn- mirror-desired-n [replicas]
+  (or replicas 1))
+
+(defn- mirror-deficit-n [desired running-count]
+  (max 0 (- desired running-count)))
+
+(defn- mirror-action-kw [cid running-count desired free-candidates]
+  (cond
+    (nil? cid) :needs-build
+    (< desired running-count) :over
+    (zero? (max 0 (- desired running-count))) :satisfied
+    (< free-candidates 1) :blocked
+    :else :place))
+
 (defn- desired-n
-  "Replica desired count — kotoba `desired` with Product Value ABI optional i64."
+  "Replica desired count — kotoba `desired` with Product Value ABI optional i64
+   when oracle ready."
   [replicas]
-  #?(:clj (long (o 'desired [(oracle/option-i64 replicas)]))
-     :cljs (or replicas 1)))
+  (try-oracle
+   #(oracle/i64->host (o 'desired [(oracle/option-i64 replicas)]))
+   #(mirror-desired-n replicas)))
 
 (defn- deficit-n
   [desired running-count]
-  #?(:clj (long (o 'deficit [(long desired) (long running-count)]))
-     :cljs (max 0 (- desired running-count))))
+  (try-oracle
+   #(oracle/i64->host
+     (o 'deficit [(oracle/as-i64 desired) (oracle/as-i64 running-count)]))
+   #(mirror-deficit-n desired running-count)))
 
 (defn- action-kw
   "Project reconcile-app inputs to kotoba `action-name` then keywordize.
-   JVM: optional cid string (no has-cid / has-misplaced sentinels)."
+   Optional cid string (no has-cid / has-misplaced sentinels) when oracle ready."
   [cid running-count desired free-candidates]
-  #?(:clj (keyword (o 'action-name
-                      [(oracle/option-string cid)
-                       (long running-count)
-                       (long desired)
-                       (long free-candidates)]))
-     :cljs
-     (cond
-       (nil? cid) :needs-build
-       (< desired running-count) :over
-       (zero? (max 0 (- desired running-count))) :satisfied
-       (< free-candidates 1) :blocked
-       :else :place)))
-
+  (try-oracle
+   #(keyword (o 'action-name
+                [(oracle/option-string cid)
+                 (oracle/as-i64 running-count)
+                 (oracle/as-i64 desired)
+                 (oracle/as-i64 free-candidates)]))
+   #(mirror-action-kw cid running-count desired free-candidates)))
 (defn reconcile-app
   "Pure per-app reconciliation.
 
@@ -178,11 +203,12 @@
          {:app a :target target})))
 
 (defn watch-sleep-ms
-  "Milliseconds to sleep between reconcile watch iterations."
+  "Milliseconds to sleep between reconcile watch iterations.
+   Kotoba `watch-sleep-ms` when oracle ready."
   [seconds]
-  #?(:clj (long (o 'watch-sleep-ms [(long seconds)]))
-     :cljs (* 1000 seconds)))
-
+  (try-oracle
+   #(oracle/i64->host (o 'watch-sleep-ms [(oracle/as-i64 seconds)]))
+   #(* 1000 seconds)))
 (defn- parse-int [s]
   #?(:clj (Integer/parseInt s)
      :cljs (js/parseInt s 10)))
