@@ -21,6 +21,7 @@
             [murakumo.infer.credits :as credits]
             [murakumo.infer.postproc :as pp]
             [murakumo.infer.relay :as relay]
+            [murakumo.secret :as secret]
             [org.httpkit.server :as http]))
 
 (defonce ^:private state (atom (relay/init)))
@@ -28,14 +29,10 @@
 (defonce ^:private ledger-file ".murakumo-relay-ledger.edn")
 ;; when set (MURAKUMO_CLOUD env), each settled job is POSTed to cloud-murakumo
 ;; /infer/runs as a signed run record — the dispatcher loop closes here.
+;; Config URL (not a secret) — exact name only, no env dump.
 (def ^:private cloud-url (System/getenv "MURAKUMO_CLOUD"))
-;; ADR-2607995000 Fix #6: /infer/runs now requires either a matching CACAO or
-;; this shared service secret (local-murakumo.write-gate) -- this relay is the
-;; operator's OWN infrastructure reporting a job it already settled itself,
-;; not an external actor's claim, so the service-token path is the right one
-;; (not a self-minted CACAO per relay instance).
-(def ^:private service-token (System/getenv "MURAKUMO_SERVICE_TOKEN"))
-
+;; ADR-2607995000 Fix #6: /infer/runs service secret via named secret fetch
+;; (murakumo-service-token → exact MURAKUMO_SERVICE_TOKEN).
 (defn- send! [ch msg] (http/send! ch (json/generate-string msg)))
 
 (defn- now [] (System/currentTimeMillis))
@@ -72,6 +69,7 @@
   ;; Fix #6, same honesty as any other dropped-write audit gap).
   (when cloud-url
     (let [run (swarm-run-record settled credits/default-protocol-frac)
+          service-token (secret/resolve-service-token)
           args (cond-> ["curl" "-s" "-m" "5" "-X" "POST" (str cloud-url "/infer/runs")
                         "-H" "Content-Type: application/json"]
                  service-token (into ["-H" (str "Authorization: Bearer " service-token)])

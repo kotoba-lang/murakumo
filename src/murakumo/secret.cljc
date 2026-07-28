@@ -7,13 +7,27 @@
       {:tag :value :value s} | {:tag :error :code kw :message s}
 
   Standing policy: **no ambient env dump**, **no keychain list**. Default
-  host path reads only the exact env var mapped for a secret name. Hosts
-  with provider can inject `provider.secret-transport/env-fetch`,
+  host path reads only the exact env vars mapped for known secret names.
+  Hosts with provider can inject `provider.secret-transport/env-fetch`,
   `fn-fetch` (kagi one-shot), or `keychain-fetch` as `:fetch`."
   (:require [clojure.string :as str]))
 
+;; ── named secrets (stable ids for kit allowlists) ───────────────────
+
 (def token-secret-name "murakumo-token")
 (def token-secret-env "MURAKUMO_TOKEN_SECRET")
+
+(def service-token-name "murakumo-service-token")
+(def service-token-env "MURAKUMO_SERVICE_TOKEN")
+
+(def metrics-token-name "murakumo-metrics-token")
+(def metrics-token-env "MURAKUMO_METRICS_TOKEN")
+
+(def known-env-secrets
+  "Default ops mapping: secret-name → exact env var (never enumerated)."
+  {token-secret-name token-secret-env
+   service-token-name service-token-env
+   metrics-token-name metrics-token-env})
 
 (defn env-fetch
   "Build a kit-shaped fetch from `{secret-name env-var-name}`.
@@ -24,6 +38,10 @@
                  (every? string? (vals name->env)))
     (throw (ex-info "murakumo.secret/env-fetch requires non-empty string map"
                     {:phase :murakumo-secret})))
+  (doseq [[_ e] name->env]
+    (when (or (str/blank? e) (str/includes? e "*"))
+      (throw (ex-info "murakumo.secret/env-fetch env var name invalid"
+                      {:phase :murakumo-secret :env e}))))
   (fn [{:keys [name]}]
     (if-let [env-name (get name->env name)]
       #?(:clj
@@ -70,6 +88,11 @@
          :message (or #?(:clj (.getMessage e) :cljs (.-message e))
                       "getter failed")}))))
 
+(defn default-ops-fetch
+  "Default ops path: exact env vars for all known secret names."
+  []
+  (env-fetch known-env-secrets))
+
 (defn default-token-fetch
   "Default ops path: exact MURAKUMO_TOKEN_SECRET only."
   []
@@ -79,20 +102,50 @@
   "Return the secret string for `name`, or nil when missing/empty/error.
 
   opts:
-    :fetch  kit-shaped `(fn [{:keys [name]}] reply)` — default token env-fetch
-            when name is token-secret-name, else nil path"
+    :fetch  kit-shaped `(fn [{:keys [name]}] reply)` — default `default-ops-fetch`"
   ([name] (resolve-secret name {}))
   ([name {:keys [fetch]}]
-   (let [fetch (or fetch
-                   (when (= name token-secret-name)
-                     (default-token-fetch)))]
-     (when fetch
-       (let [reply (fetch {:name name})]
-         (when (and (map? reply) (= :value (:tag reply)))
-           (let [v (str (:value reply))]
-             (when-not (str/blank? v) v))))))))
+   (let [fetch (or fetch (default-ops-fetch))]
+     (let [reply (fetch {:name name})]
+       (when (and (map? reply) (= :value (:tag reply)))
+         (let [v (str (:value reply))]
+           (when-not (str/blank? v) v)))))))
 
 (defn resolve-token-secret
   "Resolve the murakumo inference HMAC secret (named murakumo-token)."
   ([] (resolve-token-secret {}))
   ([opts] (resolve-secret token-secret-name opts)))
+
+(defn resolve-service-token
+  "Resolve the cloud write-gate service token (named murakumo-service-token)."
+  ([] (resolve-service-token {}))
+  ([opts] (resolve-secret service-token-name opts)))
+
+(defn resolve-metrics-token
+  "Resolve the metrics/model-map push token (named murakumo-metrics-token)."
+  ([] (resolve-metrics-token {}))
+  ([opts] (resolve-secret metrics-token-name opts)))
+
+(defn valid-env-var-name?
+  "Reject blank, wildcard, and path-like env var names."
+  [env-name]
+  (and (string? env-name)
+       (not (str/blank? env-name))
+       (not (str/includes? env-name "*"))
+       (not (str/includes? env-name "/"))
+       (not (str/includes? env-name "\\"))
+       (not (str/includes? env-name " "))
+       (<= (count env-name) 256)))
+
+(defn resolve-exact-env
+  "Read one **exact** env var by name declared in config (e.g. overlay
+  `:overlay/auth-key-env`). Never dumps the environment.
+
+  opts:
+    :fetch  optional kit-shaped fetch; default builds a one-entry env-fetch"
+  ([env-name] (resolve-exact-env env-name {}))
+  ([env-name {:keys [fetch]}]
+   (when (valid-env-var-name? env-name)
+     (let [alias "dyn-env"
+           fetch (or fetch (env-fetch {alias env-name}))]
+       (resolve-secret alias {:fetch fetch})))))
