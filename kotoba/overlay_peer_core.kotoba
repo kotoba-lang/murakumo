@@ -4,8 +4,9 @@
 
 ;; Product Value ABI v1 pure oracle — murakumo.overlay.peer path-selection.
 ;; catalog/remember map folds stay cljc.
+;; health/via name tokens dual-source; choose-via recomposes from tokens.
 ;; choose-via: optional direct/relay path tokens + health string (no has-*).
-;;   prefer direct when present and health ≠ "down"; else relay if present; else "".
+;;   prefer direct when present and health ≠ health-down; else relay if present; else "".
 ;; Parity: test/murakumo/overlay_peer_kotoba_parity_test.clj
 
 (defn health-unknown [] :string "unknown")
@@ -20,9 +21,9 @@
   ;; Product Value ABI v1: optional path tokens (no has-direct/has-relay).
   ;; cljc choose-path: first direct if not :down health, else first relay
   (if-some [_ direct]
-    (if (string=? health "down")
-      (if-some [_ relay] "relay" "")
-      "direct")
+    (if (string=? health (health-down))
+      (if-some [_ relay] (via-relay) "")
+      (via-direct))
     (if-some [_ relay]
-      "relay"
+      (via-relay)
       "")))
