@@ -1,0 +1,43 @@
+(ns infer-gc-core
+  (:export [gib default-target-free default-comfy-keep-days default-hf-keep
+            need-bytes free-after target-met? rank-better? comfy-evictable?]))
+
+;; W6 pure-planner oracle — murakumo.infer.gc policy math core (medium).
+;; Full plan (filter/sort/reduce over entries) stays cljc.
+;; rank-better?: true when entry1 should evict before entry2
+;;   (higher atime-days first, then larger bytes) — mirrors sort-by rank.
+;; Parity: test/murakumo/infer_gc_kotoba_parity_test.clj
+
+(defn gib [] :i64 1073741824)
+
+(defn default-target-free [] :i64 21474836480)
+
+(defn default-comfy-keep-days [] :i64 7)
+
+(defn default-hf-keep [] :i64 2)
+
+(defn need-bytes [target :i64 free :i64] :i64
+  ;; cljc: (max 0 (- target-free-bytes free-bytes))
+  (let [d (- target free)]
+    (if (< d 0) 0 d)))
+
+(defn free-after [free :i64 reclaimed :i64] :i64
+  (+ free reclaimed))
+
+(defn target-met? [free :i64 reclaimed :i64 target :i64] :i64
+  (if (< (+ free reclaimed) target) 0 1))
+
+(defn rank-better? [atime1 :i64 bytes1 :i64 atime2 :i64 bytes2 :i64] :i64
+  ;; cljc rank: [(- atime) (- bytes)]; lower tuple sorts first (evict sooner)
+  ;; ⇒ higher atime wins; tie ⇒ higher bytes wins
+  (if (< atime2 atime1)
+    1
+    (if (< atime1 atime2)
+      0
+      (if (< bytes2 bytes1) 1 0))))
+
+(defn comfy-evictable? [atime-days :i64 keep-days :i64] :i64
+  ;; cljc: (> (or atime-days 0) comfy-keep-days)
+  (if (< atime-days 0)
+    0
+    (if (< keep-days atime-days) 1 0)))

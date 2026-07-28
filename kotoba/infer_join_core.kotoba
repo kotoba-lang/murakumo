@@ -1,0 +1,67 @@
+(ns infer-join-core
+  (:export [tier-browser tier-wasm tier-native
+            max-resident-bytes needs-relay? can?
+            clamp-resident eligible-for-work?]))
+
+;; W6 pure-planner oracle — murakumo.infer.join pure core (medium priority).
+;; partition-work / enrollment map assembly stay cljc (vectors/maps).
+;; Tier codes: 0 browser | 1 wasm | 2 native (default when unknown).
+;; can? work-kind is a string name matching cljc keywords without ":".
+;; inbound-reachable: 0 false / 1 true (native only; browser/wasm always relay).
+;; mem-bytes sentinel -1 = absent (use tier max only).
+;; Parity: test/murakumo/infer_join_kotoba_parity_test.clj
+
+(defn tier-browser [] :i64 0)
+(defn tier-wasm [] :i64 1)
+(defn tier-native [] :i64 2)
+
+(defn max-resident-bytes [tier :i64] :i64
+  ;; cljc tiers :max-resident-bytes
+  (if (= tier 0)
+    2147483648
+    (if (= tier 1)
+      4294967296
+      13958643712)))
+
+(defn needs-relay? [tier :i64 inbound :i64] :i64
+  ;; cljc: browser/wasm always; native only when not inbound-reachable?
+  (if (< tier 2)
+    1
+    (if (= inbound 1) 0 1)))
+
+(defn swarm-can? [kind :string] :i64
+  (if (string=? kind "media-postproc")
+    1
+    (if (string=? kind "small-shard")
+      1
+      (if (string=? kind "embarrassingly-parallel")
+        1
+        (if (string=? kind "prompt-eval") 1 0)))))
+
+(defn native-can? [kind :string] :i64
+  (if (string=? kind "host-large-model")
+    1
+    (if (string=? kind "low-latency-pipeline")
+      1
+      (if (string=? kind "media-generate")
+        1
+        (if (string=? kind "full-shard") 1 0)))))
+
+(defn can? [tier :i64 kind :string] :i64
+  ;; cljc: (boolean (some #{kind} (:can (tier-of caps))))
+  (if (< tier 2)
+    (swarm-can? kind)
+    (native-can? kind)))
+
+(defn clamp-resident [mem :i64 tier-max :i64] :i64
+  ;; cljc enrollment: (min (or mem-bytes tier-max) tier-max)
+  (if (< mem 0)
+    tier-max
+    (if (< mem tier-max) mem tier-max)))
+
+(defn eligible-for-work? [can-kind :i64 max-res :i64 resident :i64] :i64
+  ;; cljc: (and can? (<= resident max-resident-bytes))
+  ;; resident already 0 when nil; can-kind host-projected 0/1
+  (if (= can-kind 0)
+    0
+    (if (< max-res resident) 0 1)))
