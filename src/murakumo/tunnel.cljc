@@ -10,9 +10,8 @@
 ;;   3. connection multiplexing — optional ControlMaster reuse, which removes
 ;;      the TCP+auth handshake from every command after the first
 ;;
-;; W6 product-shell authority (ADR-260728-w6-tunnel-config-oracle-authority +
-;; ADR-260728-w6-tunnel-result-pure-oracle):
-;; pure string/i64 helpers DELEGATE to precompiled
+;; W6 product-shell authority (ADR-260728-w6-tunnel-argv-pure-oracle):
+;; pure string/i64 helpers + ssh/scp bin/flag fragments DELEGATE to precompiled
 ;; kotoba/tunnel_core.kotoba → resources/murakumo/oracle/tunnel_core.kir.edn
 ;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: line-split of parse-rc, argv vector assembly, SSH subprocess.
@@ -89,6 +88,12 @@
   (str "pkill -f '" local-port ":localhost' 2>/dev/null; sleep 0.3; "
        "ssh -o BatchMode=yes -fN -L " local-port ":localhost:" remote-port " " host))
 
+(def ^:private mirror-ssh-bin "ssh")
+(def ^:private mirror-scp-bin "scp")
+(def ^:private mirror-o-flag "-o")
+(def ^:private mirror-O-flag "-O")
+(def ^:private mirror-exit-ctl "exit")
+
 (defn- mirror-remote-curl-command [url]
   (str "curl -s -m 5 " url " 2>/dev/null"))
 
@@ -108,6 +113,26 @@
   (try-oracle
    #(o 'rc-marker [])
    (fn [] mirror-rc-marker)))
+
+(def ssh-bin
+  "ssh binary name. Kotoba `ssh-bin` when ready."
+  (try-oracle #(o 'ssh-bin []) (fn [] mirror-ssh-bin)))
+
+(def scp-bin
+  "scp binary name. Kotoba `scp-bin` when ready."
+  (try-oracle #(o 'scp-bin []) (fn [] mirror-scp-bin)))
+
+(def o-flag
+  "ssh/scp -o flag. Kotoba `o-flag` when ready."
+  (try-oracle #(o 'o-flag []) (fn [] mirror-o-flag)))
+
+(def O-flag
+  "ssh -O control flag. Kotoba `O-flag` when ready."
+  (try-oracle #(o 'O-flag []) (fn [] mirror-O-flag)))
+
+(def exit-ctl
+  "ssh -O exit control verb. Kotoba `exit-ctl` when ready."
+  (try-oracle #(o 'exit-ctl []) (fn [] mirror-exit-ctl)))
 
 (defn- batch-mode-opt []
   (try-oracle #(o 'batch-mode-opt []) mirror-batch-mode-opt))
@@ -134,24 +159,24 @@
    #(mirror-control-persist-opt seconds)))
 
 (def ssh-opts
-  ["-o" (batch-mode-opt)
-   "-o" (connect-timeout-opt default-connect-timeout-s)
-   "-o" (strict-host-key-opt)])
+  [o-flag (batch-mode-opt)
+   o-flag (connect-timeout-opt default-connect-timeout-s)
+   o-flag (strict-host-key-opt)])
 
 (defn conn-opts
   "SSH -o flags for a connection. `:control-path` turns on multiplexing: the
    first connection to a host becomes the master, later ones reuse its socket.
-   Opt fragments via kotoba when oracle ready."
+   Opt fragments + o-flag via kotoba when oracle ready."
   [{:keys [connect-timeout-s control-path control-persist-s]}]
-  (vec (concat ["-o" (batch-mode-opt)
-                "-o" (connect-timeout-opt
-                      (or connect-timeout-s default-connect-timeout-s))
-                "-o" (strict-host-key-opt)]
+  (vec (concat [o-flag (batch-mode-opt)
+                o-flag (connect-timeout-opt
+                        (or connect-timeout-s default-connect-timeout-s))
+                o-flag (strict-host-key-opt)]
                (when control-path
-                 ["-o" (control-master-opt)
-                  "-o" (control-path-opt control-path)
-                  "-o" (control-persist-opt
-                        (or control-persist-s default-control-persist-s))]))))
+                 [o-flag (control-master-opt)
+                  o-flag (control-path-opt control-path)
+                  o-flag (control-persist-opt
+                          (or control-persist-s default-control-persist-s))]))))
 
 ;; --- in-band exit status ----------------------------------------------------
 
@@ -207,31 +232,33 @@
   "argv for running a remote shell command over SSH.
 
    The command is wrapped for in-band exit reporting unless `:wrap? false` is
-   passed (use that only for argv that is not a remote shell command)."
+   passed (use that only for argv that is not a remote shell command).
+   Bin name dual-sourced via `ssh-bin`."
   ([host cmd] (ssh-argv host cmd nil))
   ([host cmd opts]
-   (vec (concat ["ssh"] (conn-opts opts)
+   (vec (concat [ssh-bin] (conn-opts opts)
                 [host (if (false? (:wrap? opts)) cmd (wrap-cmd cmd))]))))
 
 (defn scp-argv
   "argv for copying a local file to host:dest. scp runs no remote shell, so it
    is NOT wrapped — scp's own exit status is the client's, which this fleet does
-   propagate correctly."
+   propagate correctly. Bin dual-sourced via `scp-bin`."
   ([host local dest] (scp-argv host local dest nil))
   ([host local dest opts]
-   (vec (concat ["scp"] (conn-opts opts)
+   (vec (concat [scp-bin] (conn-opts opts)
                 [local (try-oracle
                         #(o 'scp-dest [(str host) (str dest)])
                         #(mirror-scp-dest host dest))]))))
 
 (defn close-master-argv
   "argv that shuts down a multiplexed connection's master socket. Run this when
-   a batch finishes instead of leaving masters to expire on ControlPersist."
+   a batch finishes instead of leaving masters to expire on ControlPersist.
+   Bin/flags dual-sourced via ssh-bin / o-flag / O-flag / exit-ctl."
   [host control-path]
-  ["ssh" "-o" (try-oracle
-               #(o 'close-master-control-opt [(str control-path)])
-               #(mirror-close-master-control-opt control-path))
-   "-O" "exit" host])
+  [ssh-bin o-flag (try-oracle
+                   #(o 'close-master-control-opt [(str control-path)])
+                   #(mirror-close-master-control-opt control-path))
+   O-flag exit-ctl host])
 
 (defn ensure-forward-command
   "Shell command that starts an SSH local forward only when an equivalent one is absent.

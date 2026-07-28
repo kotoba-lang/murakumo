@@ -14,7 +14,8 @@
        "marker-prefix? strip-marker-digits "
        "batch-mode-opt strict-host-key-opt control-master-opt "
        "digit-val? parse-digits trim-ws "
-       "pick-exit trim-err err-ws?"))
+       "pick-exit trim-err err-ws? "
+       "ssh-bin scp-bin o-flag O-flag exit-ctl"))
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -125,3 +126,27 @@
            (tunnel/sh-result {:exit 255 :out "" :err " connection refused\n"})))
     (is (= {:exit 1 :err "missing"}
            (tunnel/scp-result {:exit 1 :err " missing\n"})))))
+
+(deftest ssh-scp-argv-fragments-match
+  (let [s (compile-string-cases
+           {"ssh" "(ssh-bin)"
+            "scp" "(scp-bin)"
+            "o" "(o-flag)"
+            "O" "(O-flag)"
+            "ex" "(exit-ctl)"})]
+    (is (= tunnel/ssh-bin (get s "ssh")))
+    (is (= tunnel/scp-bin (get s "scp")))
+    (is (= tunnel/o-flag (get s "o")))
+    (is (= tunnel/O-flag (get s "O")))
+    (is (= tunnel/exit-ctl (get s "ex")))
+    (is (= "ssh" (get s "ssh")))
+    (is (= "scp" (get s "scp")))
+    (is (= "-o" (get s "o")))
+    (is (= "-O" (get s "O")))
+    (is (= "exit" (get s "ex")))
+    (is (= tunnel/ssh-bin (first (tunnel/ssh-argv "asher" "true" {:wrap? false}))))
+    (is (= tunnel/scp-bin (first (tunnel/scp-argv "asher" "a" "b"))))
+    (is (= [tunnel/ssh-bin tunnel/o-flag "ControlPath=/tmp/m/%C"
+            tunnel/O-flag tunnel/exit-ctl "asher"]
+           (tunnel/close-master-argv "asher" "/tmp/m/%C")))
+    (is (= tunnel/o-flag (first (tunnel/conn-opts nil))))))

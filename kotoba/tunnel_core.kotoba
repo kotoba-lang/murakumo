@@ -7,12 +7,14 @@
             marker-prefix? strip-marker-digits
             batch-mode-opt strict-host-key-opt control-master-opt
             digit-val? parse-digits trim-ws
-            pick-exit trim-err err-ws?]))
+            pick-exit trim-err err-ws?
+            ssh-bin scp-bin o-flag O-flag exit-ctl]))
 
 ;; W6 pure-planner oracle — murakumo.tunnel string core (SSH host-forever,
 ;; pure argv/shell contract still oracle-eligible).
 ;; parse-rc: host splits lines; guest classifies marker + parse-digits for rc.
 ;; conn-opts vector assembly stays cljc (host concatenates pure -o fragments).
+;; ssh/scp bin + -o/-O/exit flags dual-source.
 ;; Parity: test/murakumo/tunnel_kotoba_parity_test.clj
 
 (defn default-connect-timeout-s [] :i64 8)
@@ -181,3 +183,11 @@
         (if (= (err-ws? (string-substring err (- n 1) n)) 1)
           (trim-err (string-substring err 0 (- n 1)))
           err)))))
+
+;; ── residual ssh/scp argv bin+flag fragments ─────────────────────────
+
+(defn ssh-bin [] :string "ssh")
+(defn scp-bin [] :string "scp")
+(defn o-flag [] :string "-o")
+(defn O-flag [] :string "-O")
+(defn exit-ctl [] :string "exit")
