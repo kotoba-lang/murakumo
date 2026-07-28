@@ -12,52 +12,78 @@
   `fn-fetch` (kagi one-shot), or `keychain-fetch` as `:fetch`.
 
   W6 product-shell: pure name/policy helpers use kotoba/secret_core.kotoba
-  on JVM (resources/murakumo/oracle/secret_core.kir.edn)."
+  when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+  Host mirrors remain fallback when oracle is not ready."
   (:require [clojure.string :as str]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :secret)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
 
-;; ── named secrets (stable ids — kotoba SSoT on JVM) ─────────────────
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+;; ── host-mirror constants ────────────────────────────────────────────
+
+(def ^:private mirror-token-secret-name "murakumo-token")
+(def ^:private mirror-token-secret-env "MURAKUMO_TOKEN_SECRET")
+(def ^:private mirror-service-token-name "murakumo-service-token")
+(def ^:private mirror-service-token-env "MURAKUMO_SERVICE_TOKEN")
+(def ^:private mirror-metrics-token-name "murakumo-metrics-token")
+(def ^:private mirror-metrics-token-env "MURAKUMO_METRICS_TOKEN")
+(def ^:private mirror-quic-cert-path-name "murakumo-quic-cert-path")
+(def ^:private mirror-quic-cert-path-env "MURAKUMO_QUIC_CERT")
+(def ^:private mirror-quic-key-path-name "murakumo-quic-key-path")
+(def ^:private mirror-quic-key-path-env "MURAKUMO_QUIC_KEY")
+
+(defn- oracle-const
+  "Load-time constant from oracle export, or mirror string."
+  [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+;; ── named secrets (stable ids — kotoba SSoT when ready) ──────────────
 
 (def token-secret-name
-  #?(:clj (o 'token-secret-name [])
-     :cljs "murakumo-token"))
+  (oracle-const 'token-secret-name mirror-token-secret-name))
 (def token-secret-env
-  #?(:clj (o 'token-secret-env [])
-     :cljs "MURAKUMO_TOKEN_SECRET"))
+  (oracle-const 'token-secret-env mirror-token-secret-env))
 
 (def service-token-name
-  #?(:clj (o 'service-token-name [])
-     :cljs "murakumo-service-token"))
+  (oracle-const 'service-token-name mirror-service-token-name))
 (def service-token-env
-  #?(:clj (o 'service-token-env [])
-     :cljs "MURAKUMO_SERVICE_TOKEN"))
+  (oracle-const 'service-token-env mirror-service-token-env))
 
 (def metrics-token-name
-  #?(:clj (o 'metrics-token-name [])
-     :cljs "murakumo-metrics-token"))
+  (oracle-const 'metrics-token-name mirror-metrics-token-name))
 (def metrics-token-env
-  #?(:clj (o 'metrics-token-env [])
-     :cljs "MURAKUMO_METRICS_TOKEN"))
+  (oracle-const 'metrics-token-env mirror-metrics-token-env))
 
 ;; Path refs: env holds absolute filesystem paths to PEM files (never PEM bodies).
 (def quic-cert-path-name
-  #?(:clj (o 'quic-cert-path-name [])
-     :cljs "murakumo-quic-cert-path"))
+  (oracle-const 'quic-cert-path-name mirror-quic-cert-path-name))
 (def quic-cert-path-env
-  #?(:clj (o 'quic-cert-path-env [])
-     :cljs "MURAKUMO_QUIC_CERT"))
+  (oracle-const 'quic-cert-path-env mirror-quic-cert-path-env))
 (def quic-key-path-name
-  #?(:clj (o 'quic-key-path-name [])
-     :cljs "murakumo-quic-key-path"))
+  (oracle-const 'quic-key-path-name mirror-quic-key-path-name))
 (def quic-key-path-env
-  #?(:clj (o 'quic-key-path-env [])
-     :cljs "MURAKUMO_QUIC_KEY"))
+  (oracle-const 'quic-key-path-env mirror-quic-key-path-env))
 
 (def known-env-secrets
   "Default ops mapping: secret-name → exact env var (never enumerated)."
@@ -189,21 +215,24 @@
   ([] (resolve-metrics-token {}))
   ([opts] (resolve-secret metrics-token-name opts)))
 
+(defn- mirror-valid-env-var-name? [env-name]
+  (and (string? env-name)
+       (not (str/blank? env-name))
+       (not (str/includes? env-name "*"))
+       (not (str/includes? env-name "/"))
+       (not (str/includes? env-name "\\"))
+       (not (str/includes? env-name " "))
+       (<= (count env-name) 256)))
+
 (defn valid-env-var-name?
   "Reject blank, wildcard, and path-like env var names.
-   JVM: kotoba `valid-env-var-name?`."
+   Kotoba `valid-env-var-name?` when oracle ready."
   [env-name]
-  #?(:clj
-     (boolean (and (string? env-name)
-                   (= 1 (o 'valid-env-var-name? [(str env-name)]))))
-     :cljs
-     (and (string? env-name)
-          (not (str/blank? env-name))
-          (not (str/includes? env-name "*"))
-          (not (str/includes? env-name "/"))
-          (not (str/includes? env-name "\\"))
-          (not (str/includes? env-name " "))
-          (<= (count env-name) 256))))
+  (try-oracle
+   #(boolean (and (string? env-name)
+                  (= 1 (oracle/i64->host
+                        (o 'valid-env-var-name? [(str env-name)])))))
+   #(mirror-valid-env-var-name? env-name)))
 
 (defn resolve-exact-env
   "Read one **exact** env var by name declared in config (e.g. overlay
@@ -218,25 +247,28 @@
            fetch (or fetch (env-fetch {alias env-name}))]
        (resolve-secret alias {:fetch fetch})))))
 
+(defn- mirror-valid-path-ref? [p]
+  (and (string? p)
+       (not (str/blank? p))
+       (not (str/includes? p "\0"))
+       (not (str/includes? p "-----BEGIN"))
+       (not (str/includes? p "*"))
+       (or (str/starts-with? p "/")
+           (boolean (re-matches #"[A-Za-z]:[\\/].*" p)))
+       (<= (count p) 1024)))
+
 (defn valid-path-ref?
   "True when `p` is an absolute filesystem path, not a PEM body or dump.
   Env path refs must point at files under host custody — never inline PEM.
-   JVM POSIX path: kotoba `valid-path-ref-unix?` (leading /); Windows host-only."
+   Kotoba `valid-path-ref-unix?` when ready (leading /); Windows host-only."
   [p]
-  #?(:clj
-     (boolean (and (string? p)
-                   (or (= 1 (o 'valid-path-ref-unix? [(str p)]))
-                       ;; Windows absolute (drive letter) stays host-only
-                       (boolean (re-matches #"[A-Za-z]:[\\/].*" (str p))))))
-     :cljs
-     (and (string? p)
-          (not (str/blank? p))
-          (not (str/includes? p "\0"))
-          (not (str/includes? p "-----BEGIN"))
-          (not (str/includes? p "*"))
-          (or (str/starts-with? p "/")
-              (boolean (re-matches #"[A-Za-z]:[\\/].*" p)))
-          (<= (count p) 1024))))
+  (try-oracle
+   #(boolean (and (string? p)
+                  (or (= 1 (oracle/i64->host
+                            (o 'valid-path-ref-unix? [(str p)])))
+                      ;; Windows absolute (drive letter) stays host-only
+                      (boolean (re-matches #"[A-Za-z]:[\\/].*" (str p))))))
+   #(mirror-valid-path-ref? p)))
 
 (defn resolve-path-ref
   "Resolve a named **path ref** secret (absolute path string to on-disk

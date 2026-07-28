@@ -4,19 +4,36 @@
 ;; The decision helpers are portable .cljc and pure. load-connect is a small host
 ;; convenience for the bb/JVM CLI; callers that need strict portability can pass
 ;; the parsed connect map directly.
+;;
+;; W6 product-shell: class/plane pure helpers DELEGATE to kotoba connect_core
+;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; Host remains: class-transports lookup, set intersection projection.
+;; cljs mirrors remain fallback when oracle is not ready.
 
 (ns murakumo.connect
   "Connectivity description helpers.
    W6 product-shell: class/plane decision pure helpers via kotoba connect_core."
   (:require [clojure.set :as set]
             [murakumo.config :as config]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :connect)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
 
 (defn load-connect
   "Read connect.edn (nil if absent — reach constraints then degrade to no-op).
@@ -29,19 +46,21 @@
                    (config/tx-data->map "connect-doc"))))
 
 (defn default-class
-  "JVM: kotoba `default-class-name` → keyword."
+  "Kotoba `default-class-name` → keyword when oracle ready."
   [connect]
-  #?(:clj (keyword (o 'default-class-name
-                      [(if-let [c (:default-class connect)] (name c) "")]))
-     :cljs (or (:default-class connect) :native)))
+  (try-oracle
+   #(keyword (o 'default-class-name
+                [(if-let [c (:default-class connect)] (name c) "")]))
+   #(or (:default-class connect) :native)))
 
 (defn node-class
-  "JVM: kotoba `node-class-name` → keyword."
+  "Kotoba `node-class-name` → keyword when oracle ready."
   [connect node]
-  #?(:clj (keyword (o 'node-class-name
-                      [(if-let [c (:class node)] (name c) "")
-                       (if-let [c (:default-class connect)] (name c) "")]))
-     :cljs (or (:class node) (default-class connect))))
+  (try-oracle
+   #(keyword (o 'node-class-name
+                [(if-let [c (:class node)] (name c) "")
+                 (if-let [c (:default-class connect)] (name c) "")]))
+   #(or (:class node) (default-class connect))))
 
 (defn class-transports
   "Transports a node-class speaks on `plane` (:read | :live)."
@@ -60,7 +79,7 @@
   "Can `node` serve a client of `(:class reach)` on `(:plane reach)`?
      :read — node speaks :http (universal CID pull).
      :live — node and target client class share at least one live transport.
-   JVM: kotoba `serves-plane?` with host-projected transport flags."
+   Kotoba `serves-plane?` when oracle ready (Product Value ABI optional flags)."
   [connect node reach]
   (let [{:keys [class plane]} (parse-reach reach)
         ncls (node-class connect node)
@@ -69,17 +88,18 @@
                             (set (class-transports connect ncls :live))
                             (set (class-transports connect class :live))))
                   1)]
-    #?(:clj (= 1 (o 'serves-plane?
-                    [(name plane)
-                     (oracle/option-i64 http?)
-                     (oracle/option-i64 common?)]))
-       :cljs
-       (case plane
-         :read (boolean (some #{:http} (class-transports connect ncls :read)))
-         :live (boolean (seq (set/intersection
-                              (set (class-transports connect ncls :live))
-                              (set (class-transports connect class :live)))))
-         false))))
+    (try-oracle
+     #(= 1 (oracle/i64->host
+            (o 'serves-plane?
+               [(name plane)
+                (oracle/option-i64 http?)
+                (oracle/option-i64 common?)])))
+     #(case plane
+        :read (boolean (some #{:http} (class-transports connect ncls :read)))
+        :live (boolean (seq (set/intersection
+                             (set (class-transports connect ncls :live))
+                             (set (class-transports connect class :live)))))
+        false))))
 
 (defn serves-all?
   "True if `node` satisfies every reach requirement (empty => trivially true)."
