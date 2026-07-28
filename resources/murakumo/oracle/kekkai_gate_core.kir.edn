@@ -1,0 +1,65 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-ledger-path,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "kekkai-tailnet.edn",
+   :param-types []}
+  {:name strip-trailing-newlines,
+   :params [s],
+   :result :string,
+   :effects #{},
+   :body (string-replace-all s "\n" ""),
+   :param-types [:string]}
+  {:name parse-status-out,
+   :params [out],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [s (strip-trailing-newlines out)]
+    (if (string=? s "") "unknown" s)),
+   :param-types [:string]}
+  {:name authorized?,
+   :params [status],
+   :result :i64,
+   :effects #{},
+   :body (string=? status "authorized"),
+   :param-types [:string]}
+  {:name denial-line-of,
+   :params [node-name status],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "[kekkai] "
+    (string-concat
+     node-name
+     (string-concat
+      ": not authorized ("
+      (string-concat status ") — excluded from fleet ops")))),
+   :param-types [:string :string]}
+  {:name default-kekkai-dir-under,
+   :params [home],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    home
+    "/github/com-junkawasaki/orgs/kotoba-lang/kekkai"),
+   :param-types [:string]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-ledger-path
+  strip-trailing-newlines
+  parse-status-out
+  authorized?
+  denial-line-of
+  default-kekkai-dir-under],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}
