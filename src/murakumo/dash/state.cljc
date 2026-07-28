@@ -3,11 +3,11 @@
 ;; Collection, persistence, JSON encoding, and HTTP serving stay in murakumo.dash.
 ;; This namespace owns deterministic snapshot -> record/alert/display data.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-dash-probe-command-pure-oracle +
-;; ADR-260728-w6-dash-probe-pure-oracle + cljs load):
-;; pure display + probe/parse helpers DELEGATE to precompiled
-;; kotoba/dash_state_core.kotoba KIR when oracle is loadable (JVM classpath or
-;; cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; W6 product-shell authority (ADR-260728-w6-dash-defaults-pure-oracle +
+;; ADR-260728-w6-dash-probe-command-pure-oracle + cljs load):
+;; pure display + probe/parse + dashboard defaults + hosted-join-sep DELEGATE to
+;; precompiled kotoba/dash_state_core.kotoba KIR when oracle is loadable
+;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Map/vector folds, HTML join, probe-lines fold, parse-hosted split, and
 ;; query-string stay host/cljc. cljs mirrors remain fallback when not ready.
 
@@ -57,8 +57,16 @@
 
 ;; ── host-mirror pure helpers (cljs fallback + semantic documentation) ──
 
+(def ^:private mirror-short-hosted-cid-max-len 18)
+(def ^:private mirror-short-cid-max-len 14)
+(def ^:private mirror-hosted-join-sep " ")
+(def ^:private mirror-default-dashboard-port 8899)
+(def ^:private mirror-default-dashboard-interval 15)
+(def ^:private mirror-default-dashboard-port-str "8899")
+(def ^:private mirror-default-dashboard-interval-str "15")
+
 (defn- mirror-short-hosted-cid [cid]
-  (subs cid 0 (min 18 (count cid))))
+  (subs cid 0 (min mirror-short-hosted-cid-max-len (count cid))))
 
 (defn- mirror-health-class [health]
   (if (= "ok" health) "ok" "down"))
@@ -94,6 +102,38 @@
 (def ^:private mirror-content-type-json "application/json")
 (def ^:private mirror-content-type-html "text/html; charset=utf-8")
 (def ^:private mirror-http-ok-status 200)
+
+;; ── dual-source dashboard defaults + join seps ───────────────────────
+
+(def short-hosted-cid-max-len
+  "Max chars for short-hosted-cid. Kotoba when ready."
+  (oracle-i64-const 'short-hosted-cid-max-len mirror-short-hosted-cid-max-len))
+
+(def short-cid-max-len
+  "Max chars for alert/table short-cid. Kotoba when ready."
+  (oracle-i64-const 'short-cid-max-len mirror-short-cid-max-len))
+
+(def hosted-join-sep
+  "Separator between hosted CIDs in hosted-summary. Kotoba when ready."
+  (oracle-str-const 'hosted-join-sep mirror-hosted-join-sep))
+
+(def default-dashboard-port
+  "Default dashboard HTTP port. Kotoba when ready."
+  (oracle-i64-const 'default-dashboard-port mirror-default-dashboard-port))
+
+(def default-dashboard-interval
+  "Default snapshot interval seconds. Kotoba when ready."
+  (oracle-i64-const 'default-dashboard-interval mirror-default-dashboard-interval))
+
+(def default-dashboard-port-str
+  "CLI default port string when arg absent. Kotoba when ready."
+  (oracle-str-const 'default-dashboard-port-str mirror-default-dashboard-port-str))
+
+(def default-dashboard-interval-str
+  "CLI default interval string when arg absent. Kotoba when ready."
+  (oracle-str-const 'default-dashboard-interval-str
+                    mirror-default-dashboard-interval-str))
+
 ;; ── pure display helpers: kotoba dash_state_core SSoT when oracle ready ─
 
 (defn short-hosted-cid
@@ -110,13 +150,14 @@
       (mirror-short-hosted-cid s))))
 
 (defn- short-cid [cid]
-  (subs cid 0 (min 14 (count cid))))
+  (subs cid 0 (min short-cid-max-len (count cid))))
 
 (defn hosted-summary
-  "Dashboard table text for hosted component CIDs, or nil when none are hosted."
+  "Dashboard table text for hosted component CIDs, or nil when none are hosted.
+   Join sep dual-sourced via `hosted-join-sep`; map fold stays host."
   [node]
   (when (seq (:hosted node))
-    (str/join " " (map short-hosted-cid (:hosted node)))))
+    (str/join hosted-join-sep (map short-hosted-cid (:hosted node)))))
 
 (defn health-class
   "CSS class for a node health value.
@@ -139,10 +180,11 @@
   (some-> query-string (->> (re-find #"(?:^|[?&])at=(\d+)(?:&|$)")) second parse-int))
 
 (defn dashboard-options
-  "Parse dashboard CLI args into port/interval defaults."
+  "Parse dashboard CLI args into port/interval defaults.
+   Default strings dual-sourced via `default-dashboard-*-str`."
   [args]
-  {:port (parse-int (or (first args) "8899"))
-   :interval (parse-int (or (second args) "15"))})
+  {:port (parse-int (or (first args) default-dashboard-port-str))
+   :interval (parse-int (or (second args) default-dashboard-interval-str))})
 
 (defn interval-sleep-ms
   "Milliseconds to sleep between dashboard snapshots.

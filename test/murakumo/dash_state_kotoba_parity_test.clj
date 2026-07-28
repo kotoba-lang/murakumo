@@ -18,7 +18,9 @@
        "content-type-json content-type-html http-ok-status "
        "health-from-present health-ok-label health-down-label "
        "health-url mesh-log-path probe-h-prefix probe-l-clause probe-p-clause "
-       "probe-command"))
+       "probe-command short-hosted-cid-max-len short-cid-max-len hosted-join-sep "
+       "default-dashboard-port default-dashboard-interval "
+       "default-dashboard-port-str default-dashboard-interval-str"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -194,3 +196,30 @@
     (is (str/includes? (get s "pc") "peer connected"))
     (is (str/includes? (get s "pc") "trigger: executed"))
     (is (str/starts-with? (get s "pc") "echo \"H:$(curl -s -m4 "))))
+
+(deftest dashboard-defaults-and-hosted-join-match
+  (let [s (compile-string-cases
+           {"hj" "(hosted-join-sep)"
+            "ps" "(default-dashboard-port-str)"
+            "is" "(default-dashboard-interval-str)"})
+        n (compile-i64-cases
+           {"hm" "(short-hosted-cid-max-len)"
+            "cm" "(short-cid-max-len)"
+            "dp" "(default-dashboard-port)"
+            "di" "(default-dashboard-interval)"})]
+    (is (= state/hosted-join-sep (get s "hj")))
+    (is (= " " (get s "hj")))
+    (is (= state/default-dashboard-port-str (get s "ps")))
+    (is (= "8899" (get s "ps")))
+    (is (= state/default-dashboard-interval-str (get s "is")))
+    (is (= "15" (get s "is")))
+    (is (= state/short-hosted-cid-max-len (get n "hm")))
+    (is (= 18 (get n "hm")))
+    (is (= state/short-cid-max-len (get n "cm")))
+    (is (= 14 (get n "cm")))
+    (is (= state/default-dashboard-port (get n "dp")))
+    (is (= 8899 (get n "dp")))
+    (is (= state/default-dashboard-interval (get n "di")))
+    (is (= 15 (get n "di")))
+    (is (= {:port 8899 :interval 15} (state/dashboard-options [])))
+    (is (= "bafyA bafyB" (state/hosted-summary {:hosted ["bafyA" "bafyB"]})))))
