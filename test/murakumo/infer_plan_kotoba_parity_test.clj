@@ -19,7 +19,8 @@
        "uniform-layer-bytes dense-units-milli moe-layer-bytes "
        "model-pack model-layers model-dense model-frac-milli "
        "layer-byte-at layer-wsum partition-target "
-       "advance-hi est-bytes-range partition-3-ends"))
+       "advance-hi est-bytes-range partition-3-ends "
+       "assignment-span plan-fits-3 ok-mark pick-max-idx-3 moe-capacity-ok"))
 
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
@@ -239,3 +240,41 @@
             got (unpack3 (get actual label))]
         (testing label
           (is (= want got) (str label " want=" want " got=" got)))))))
+
+(deftest plan-fits-3-matches-cljc-plan-gate
+  (let [model {:model/layers 12 :model/weight-bytes 1200}
+        nodes [{:name "a" :mem-bytes (* 16 GiB)}
+               {:name "b" :mem-bytes (* 16 GiB)}
+               {:name "c" :mem-bytes (* 16 GiB)}]
+        us (mapv plan/usable-bytes nodes)
+        mp "(model-pack 12 0 100)"
+        actual (compile-i64-cases
+                {"fit" (str "(plan-fits-3 1200 " mp " " (us 0) " " (us 1) " " (us 2) ")")
+                 "nofit" (str "(plan-fits-3 999999999999 " mp " " (us 0) " " (us 1) " " (us 2) ")")
+                 "sp" "(assignment-span 2 7)"
+                 "sp0" "(assignment-span 5 5)"})
+        cljc-plan (plan/plan model nodes)]
+    (is (= (if (:fits? cljc-plan) 1 0) (get actual "fit")))
+    (is (= 0 (get actual "nofit")))
+    (is (= 5 (get actual "sp")))
+    (is (= 0 (get actual "sp0")))))
+
+(deftest ok-mark-and-moe-pick
+  (let [marks (compile-string-cases
+               {"ok" "(ok-mark 1)"
+                "bad" "(ok-mark 0)"})
+        picks (compile-i64-cases
+               {"p0" "(pick-max-idx-3 10 5 5)"
+                "p1" "(pick-max-idx-3 5 10 5)"
+                "p2" "(pick-max-idx-3 5 5 10)"
+                "ptie" "(pick-max-idx-3 10 10 5)"
+                "c0" "(moe-capacity-ok 0)"
+                "c1" "(moe-capacity-ok 208)"})]
+    (is (= "✓" (get marks "ok")))
+    (is (= "✗" (get marks "bad")))
+    (is (= 0 (get picks "p0")))
+    (is (= 1 (get picks "p1")))
+    (is (= 2 (get picks "p2")))
+    (is (= 0 (get picks "ptie")))
+    (is (= 0 (get picks "c0")))
+    (is (= 1 (get picks "c1")))))

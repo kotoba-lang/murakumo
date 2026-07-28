@@ -5,12 +5,16 @@
             uniform-layer-bytes dense-units-milli moe-layer-bytes
             model-pack model-layers model-dense model-frac-milli
             layer-byte-at layer-wsum partition-target
-            advance-hi est-bytes-range partition-3-ends]))
+            advance-hi est-bytes-range partition-3-ends
+            assignment-span plan-fits-3 ok-mark
+            pick-max-idx-3 moe-capacity-ok]))
 
 ;; W6 pure-planner oracle — murakumo.infer.plan usable-bytes + choose-strategy
 ;; + plan largest-remainder (no per-pool floor) for fixed 3 ranks + fits gates
 ;; + integer partition-layers walk (fixed 3 nodes) over layer weights.
 ;; Full variable-arity node vectors / plan map assembly with node ids stay cljc.
+;; plan-fits-3: pure go/no-go for fixed 3-node integer partition.
+;; pick-max-idx-3 / moe-capacity-ok: mlx-moe single-node pick + fits gate.
 ;;
 ;; Layer weights use milli-fixed dense-frac (default 100 = 0.1) matching
 ;; uniform-layer-bytes / moe-layer-bytes scalars. Cumulative targets use
@@ -274,3 +278,47 @@
             hi1 (advance-hi weight-bytes mp hi0 acc0 t1)
             hi2 layers]
         (pack3 hi0 hi1 hi2)))))
+
+(defn assignment-span [lo :i64 hi :i64] :i64
+  (if (< hi lo) 0 (- hi lo)))
+
+(defn plan-fits-3 [weight-bytes :i64 mp :i64 u0 :i64 u1 :i64 u2 :i64] :i64
+  ;; cljc plan :fits? for 3-node ring using integer partition-3-ends
+  ;; total usable ≥ weights AND every positive-span assignment fits its usable
+  (let [ends (partition-3-ends weight-bytes mp u0 u1 u2)
+        hi0 (plan-lr-pack-get ends 0)
+        hi1 (plan-lr-pack-get ends 1)
+        hi2 (plan-lr-pack-get ends 2)
+        lo0 0
+        lo1 hi0
+        lo2 hi1
+        s0 (assignment-span lo0 hi0)
+        s1 (assignment-span lo1 hi1)
+        s2 (assignment-span lo2 hi2)
+        e0 (est-bytes-range weight-bytes mp lo0 hi0)
+        e1 (est-bytes-range weight-bytes mp lo1 hi1)
+        e2 (est-bytes-range weight-bytes mp lo2 hi2)
+        f0 (if (= s0 0) 1 (span-fits? e0 u0))
+        f1 (if (= s1 0) 1 (span-fits? e1 u1))
+        f2 (if (= s2 0) 1 (span-fits? e2 u2))
+        spans-ok (if (if (= f0 1) (if (= f1 1) (if (= f2 1) 1 0) 0) 0) 1 0)
+        total (+ u0 (+ u1 u2))
+        total-ok (plan-fits-total? total weight-bytes)]
+    (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)))
+
+(defn ok-mark [fits :i64] :string
+  ;; cljc report :ok
+  (if (= fits 1) "✓" "✗"))
+
+(defn pick-max-idx-3 [a :i64 b :i64 c :i64] :i64
+  ;; cljc sort-by (comp - :usable): highest first; ties keep earlier index
+  (if (if (< a b) 0 (if (< a c) 0 1))
+    0
+    (if (if (< b c) 0 1)
+      1
+      2)))
+
+(defn moe-capacity-ok [cap :i64] :i64
+  ;; cljc moe/plan :fits? (boolean cap) — nil/0 capacity ⇒ false
+  (if (< cap 1) 0 1))
+
