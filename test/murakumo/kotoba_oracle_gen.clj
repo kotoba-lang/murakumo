@@ -17,7 +17,9 @@
   [{"source" "kotoba/kekkai_gate_core.kotoba"
     "out" "resources/murakumo/oracle/kekkai_gate_core.kir.edn"}
    {"source" "kotoba/token_core.kotoba"
-    "out" "resources/murakumo/oracle/token_core.kir.edn"}])
+    "out" "resources/murakumo/oracle/token_core.kir.edn"}
+   {"source" "kotoba/report_core.kotoba"
+    "out" "resources/murakumo/oracle/report_core.kir.edn"}])
 
 (defn compile-kir
   "Compile one .kotoba file to a KIR map (same path as parity tests)."
