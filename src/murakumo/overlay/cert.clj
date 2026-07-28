@@ -23,6 +23,21 @@
 (def default-days 90)
 (def index-file "index.edn")
 
+;; Scoped-fs path-ref default: host maps :murakumo/kagi → absolute root dir,
+;; then material lives under relative "quic" (ADR W6 path-ref under scoped-fs).
+(def default-kagi-root :murakumo/kagi)
+(def default-quic-relpath "quic")
+
+(def ^:dynamic *store-opts*
+  "Optional host store options for cert material.
+  Keys:
+    :store-dir   explicit File/path (highest priority)
+    :path-ref    {:root qualified-kw :path relative} under :root-dirs
+    :root-dirs   {qualified-kw absolute-dir} — host-sealed scoped-fs roots
+    :getenv      (fn [name] string-or-nil) for legacy MURAKUMO_KAGI_DIR only
+  When nil/empty, falls back to getenv MURAKUMO_KAGI_DIR then default-store-dir."
+  nil)
+
 (defn ensure-provider! []
   (when-not (Security/getProvider "BC")
     (Security/addProvider (BouncyCastleProvider.))))
@@ -32,8 +47,68 @@
       (str/replace #"[^A-Za-z0-9_.-]+" "-")
       (str/replace #"^-+|-+$" "")))
 
-(defn store-dir []
-  (io/file (or (System/getenv "MURAKUMO_KAGI_DIR") default-store-dir)))
+(defn- absolute-path-string? [s]
+  (let [s (str s)]
+    (or (str/starts-with? s "/")
+        (boolean (re-matches #"[A-Za-z]:[\\/].*" s)))))
+
+(defn normalize-path-ref
+  "Pure path-ref policy aligned with provider.scoped-fs/resolve-path.
+  Returns {:ok {:root kw :path rel}} or {:error keyword}."
+  [path-ref]
+  (let [root (or (:root path-ref) default-kagi-root)
+        raw (or (:path path-ref) default-quic-relpath)
+        s (str raw)]
+    (cond
+      (not (keyword? root)) {:error :cert/bad-root}
+      (not (namespace root)) {:error :cert/unqualified-root}
+      (str/blank? s) {:error :cert/empty-path}
+      (str/includes? s "\0") {:error :cert/null-byte}
+      (str/includes? s "\\") {:error :cert/backslash}
+      (str/starts-with? s "/") {:error :cert/absolute}
+      (str/starts-with? s "~") {:error :cert/home-escape}
+      :else
+      (let [segs (vec (remove str/blank? (str/split s #"/")))
+            bad (some #{".." "."} segs)]
+        (cond
+          (empty? segs) {:error :cert/empty-path}
+          bad {:error :cert/escape}
+          :else {:ok {:root root :path (str/join "/" segs)}})))))
+
+(defn resolve-store-dir
+  "Resolve material store directory from host options (no ambient FS defaults
+  beyond the documented legacy getenv fallback)."
+  ([] (resolve-store-dir (or *store-opts* {})))
+  ([{:keys [store-dir path-ref root-dirs getenv]
+     :or {getenv #(System/getenv %)}}]
+   (cond
+     store-dir
+     (let [f (io/file store-dir)]
+       (when-not (absolute-path-string? (.getPath f))
+         (throw (ex-info "cert store-dir must be absolute"
+                         {:phase :overlay-cert :store-dir store-dir})))
+       f)
+
+     (or path-ref root-dirs)
+     (let [pr (normalize-path-ref (or path-ref {:root default-kagi-root
+                                                :path default-quic-relpath}))]
+       (when-let [err (:error pr)]
+         (throw (ex-info "cert path-ref rejected"
+                         {:phase :overlay-cert :error err :path-ref path-ref})))
+       (let [{:keys [root path]} (:ok pr)
+             base (get root-dirs root)]
+         (when-not (and base (absolute-path-string? (str base)))
+           (throw (ex-info "cert root-dirs missing absolute root for path-ref"
+                           {:phase :overlay-cert :root root :root-dirs (keys root-dirs)})))
+         (io/file (str base) path)))
+
+     :else
+     (io/file (or (getenv "MURAKUMO_KAGI_DIR") default-store-dir)))))
+
+(defn store-dir
+  "Material store directory. Prefer binding *store-opts* or passing opts."
+  ([] (resolve-store-dir))
+  ([opts] (resolve-store-dir opts)))
 
 (defn index-path []
   (io/file (store-dir) index-file))
@@ -208,28 +283,33 @@
      :record record
      :issued? false}))
 
-(defn ensure-quic-material! [request]
-  (if-let [{:keys [cert key] :as paths} (active-paths request)]
-    (if (existing-material? paths)
-      paths
-      (do
-        (write-index! (update-in (read-index) [:materials] dissoc (material-key request)))
-        (ensure-quic-material! request)))
-    (let [idx (read-index)
-          k (material-key request)
-          entry (get-in idx [:materials k])
-          generation (next-generation entry)
-          paths (material-paths request generation)
-          {:keys [cert-pem key-pem] :as issued} (issue-self-signed! request)
-          record (material-record request generation paths issued)]
-      (write-private! (:cert paths) cert-pem)
-      (write-private! (:key paths) key-pem)
-      (write-index! (-> idx
-                        (assoc-in [:materials k]
-                                  {:active generation
-                                   :generations (assoc (:generations entry) generation record)})
-                        (append-audit :issue k record {:active generation})))
-      (assoc paths :issued? true :record record))))
+(defn ensure-quic-material!
+  "Ensure cert/key PEM material exists for request.
+  Optional second arg is store-opts (see *store-opts*)."
+  ([request] (ensure-quic-material! request nil))
+  ([request store-opts]
+   (binding [*store-opts* (or store-opts *store-opts*)]
+     (if-let [{:keys [cert key] :as paths} (active-paths request)]
+       (if (existing-material? paths)
+         paths
+         (do
+           (write-index! (update-in (read-index) [:materials] dissoc (material-key request)))
+           (ensure-quic-material! request store-opts)))
+       (let [idx (read-index)
+             k (material-key request)
+             entry (get-in idx [:materials k])
+             generation (next-generation entry)
+             paths (material-paths request generation)
+             {:keys [cert-pem key-pem] :as issued} (issue-self-signed! request)
+             record (material-record request generation paths issued)]
+         (write-private! (:cert paths) cert-pem)
+         (write-private! (:key paths) key-pem)
+         (write-index! (-> idx
+                           (assoc-in [:materials k]
+                                     {:active generation
+                                      :generations (assoc (:generations entry) generation record)})
+                           (append-audit :issue k record {:active generation})))
+         (assoc paths :issued? true :record record))))))
 
 (defn rotate-quic-material! [request]
   (let [idx (read-index)
