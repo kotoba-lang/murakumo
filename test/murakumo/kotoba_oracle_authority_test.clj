@@ -366,8 +366,13 @@
     (is (= 15 dash/default-dashboard-interval))
     (is (= "8899" dash/default-dashboard-port-str))
     (is (= "15" dash/default-dashboard-interval-str))
+    (is (= "a" (dash/join-append "" " " "a")))
+    (is (= "a b" (dash/join-append "a" " " "b")))
+    (is (= "bafyA" (dash/hosted-append "" "bafyA")))
+    (is (= "bafyA bafyB" (dash/hosted-append "bafyA" "bafyB")))
     (is (= {:port 8899 :interval 15} (dash/dashboard-options [])))
-    (is (= "bafyA bafyB" (dash/hosted-summary {:hosted ["bafyA" "bafyB"]}))))
+    (is (= "bafyA bafyB" (dash/hosted-summary {:hosted ["bafyA" "bafyB"]})))
+    (is (nil? (dash/hosted-summary {:hosted []}))))
 
 (deftest dash-oracle-call-matches-live-compile
   (let [live (dash-live-kir)]
@@ -411,7 +416,14 @@
     (is (= (oracle/call :dash-state 'default-dashboard-port [])
            dash/default-dashboard-port))
     (is (= (oracle/call :dash-state 'short-hosted-cid-max-len [])
-           dash/short-hosted-cid-max-len))))
+           dash/short-hosted-cid-max-len))
+    (is (= (ir/execute live 'join-append ["" " " "a"])
+           (oracle/call :dash-state 'join-append ["" " " "a"])))
+    (is (= (ir/execute live 'hosted-append ["bafyA" "bafyB"])
+           (oracle/call :dash-state 'hosted-append ["bafyA" "bafyB"])))
+    (is (= (oracle/call :dash-state 'hosted-append ["bafyA" "bafyB"])
+           (dash/hosted-append "bafyA" "bafyB")))
+    (is (= "bafyA bafyB" (dash/hosted-append "bafyA" "bafyB")))))
 (deftest dash-precompiled-kir-does-not-drift
   (is (= (dash-live-kir) (dash-resource-kir))
       "dash_state KIR drift — run oracle-gen"))

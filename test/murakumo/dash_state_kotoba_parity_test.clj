@@ -20,7 +20,8 @@
        "health-url mesh-log-path probe-h-prefix probe-l-clause probe-p-clause "
        "probe-command short-hosted-cid-max-len short-cid-max-len hosted-join-sep "
        "default-dashboard-port default-dashboard-interval "
-       "default-dashboard-port-str default-dashboard-interval-str"))
+       "default-dashboard-port-str default-dashboard-interval-str "
+       "join-append hosted-append"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -201,7 +202,15 @@
   (let [s (compile-string-cases
            {"hj" "(hosted-join-sep)"
             "ps" "(default-dashboard-port-str)"
-            "is" "(default-dashboard-interval-str)"})
+            "is" "(default-dashboard-interval-str)"
+            "ja" (str "(join-append " (kotoba-literal "") " "
+                      (kotoba-literal " ") " " (kotoba-literal "a") ")")
+            "jb" (str "(join-append " (kotoba-literal "a") " "
+                      (kotoba-literal " ") " " (kotoba-literal "b") ")")
+            "ha0" (str "(hosted-append " (kotoba-literal "") " "
+                       (kotoba-literal "bafyA") ")")
+            "ha1" (str "(hosted-append " (kotoba-literal "bafyA") " "
+                       (kotoba-literal "bafyB") ")")})
         n (compile-i64-cases
            {"hm" "(short-hosted-cid-max-len)"
             "cm" "(short-cid-max-len)"
@@ -221,5 +230,13 @@
     (is (= 8899 (get n "dp")))
     (is (= state/default-dashboard-interval (get n "di")))
     (is (= 15 (get n "di")))
+    (is (= (state/join-append "" " " "a") (get s "ja")))
+    (is (= "a" (get s "ja")))
+    (is (= (state/join-append "a" " " "b") (get s "jb")))
+    (is (= "a b" (get s "jb")))
+    (is (= (state/hosted-append "" "bafyA") (get s "ha0")))
+    (is (= (state/hosted-append "bafyA" "bafyB") (get s "ha1")))
+    (is (= "bafyA bafyB" (get s "ha1")))
     (is (= {:port 8899 :interval 15} (state/dashboard-options [])))
-    (is (= "bafyA bafyB" (state/hosted-summary {:hosted ["bafyA" "bafyB"]})))))
+    (is (= "bafyA bafyB" (state/hosted-summary {:hosted ["bafyA" "bafyB"]})))
+    (is (nil? (state/hosted-summary {:hosted []})))))

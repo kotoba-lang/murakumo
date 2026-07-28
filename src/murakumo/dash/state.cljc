@@ -3,11 +3,12 @@
 ;; Collection, persistence, JSON encoding, and HTTP serving stay in murakumo.dash.
 ;; This namespace owns deterministic snapshot -> record/alert/display data.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-dash-defaults-pure-oracle +
-;; ADR-260728-w6-dash-probe-command-pure-oracle + cljs load):
-;; pure display + probe/parse + dashboard defaults + hosted-join-sep DELEGATE to
-;; precompiled kotoba/dash_state_core.kotoba KIR when oracle is loadable
-;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; W6 product-shell authority (ADR-260728-w6-dash-hosted-fold-pure-oracle +
+;; ADR-260728-w6-dash-defaults-pure-oracle + probe-command + cljs load):
+;; pure display + probe/parse + dashboard defaults + hosted-join-sep +
+;; hosted-append fold DELEGATE to precompiled kotoba/dash_state_core.kotoba
+;; KIR when oracle is loadable (JVM classpath or cljs/nbb —
+;; ADR-260728-w6-cljs-oracle-load).
 ;; Map/vector folds, HTML join, probe-lines fold, parse-hosted split, and
 ;; query-string stay host/cljc. cljs mirrors remain fallback when not ready.
 
@@ -117,6 +118,28 @@
   "Separator between hosted CIDs in hosted-summary. Kotoba when ready."
   (oracle-str-const 'hosted-join-sep mirror-hosted-join-sep))
 
+(defn- mirror-join-append [acc sep next]
+  (if (str/blank? (str acc))
+    (str next)
+    (str acc sep next)))
+
+(defn- mirror-hosted-append [acc next]
+  (mirror-join-append acc mirror-hosted-join-sep next))
+
+(defn join-append
+  "Generic empty-first join fold step. Kotoba when ready."
+  [acc sep next]
+  (try-oracle
+   #(o 'join-append [(str (or acc "")) (str sep) (str next)])
+   #(mirror-join-append acc sep next)))
+
+(defn hosted-append
+  "Append one short-hosted-cid to hosted-summary acc. Kotoba when ready."
+  [acc next]
+  (try-oracle
+   #(o 'hosted-append [(str (or acc "")) (str next)])
+   #(mirror-hosted-append acc next)))
+
 (def default-dashboard-port
   "Default dashboard HTTP port. Kotoba when ready."
   (oracle-i64-const 'default-dashboard-port mirror-default-dashboard-port))
@@ -154,10 +177,13 @@
 
 (defn hosted-summary
   "Dashboard table text for hosted component CIDs, or nil when none are hosted.
-   Join sep dual-sourced via `hosted-join-sep`; map fold stays host."
+   Join step dual-sourced via `hosted-append`; short-hosted-cid + walk stay host."
   [node]
   (when (seq (:hosted node))
-    (str/join hosted-join-sep (map short-hosted-cid (:hosted node)))))
+    (reduce (fn [acc cid]
+              (hosted-append acc (short-hosted-cid cid)))
+            ""
+            (:hosted node))))
 
 (defn health-class
   "CSS class for a node health value.
