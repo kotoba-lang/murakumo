@@ -1,9 +1,21 @@
 ;; murakumo.overlay.stream — deterministic stream/session framing.
+;;
+;; W6 product-shell: window size + advance-seq + ack-accepted? via kotoba
+;; overlay_stream_core. stream-id hashing and frame maps stay host.
 
 (ns murakumo.overlay.stream
-  (:require [murakumo.identity :as identity]))
+  (:require [murakumo.identity :as identity]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def default-window-size 64)
+(def ^:private oid :overlay-stream)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
+
+(def default-window-size
+  #?(:clj (long (o 'default-window-size []))
+     :cljs 64))
 
 (defn stream-id
   "Stable stream id for a logical service connection."
@@ -44,7 +56,10 @@
    :payload payload})
 
 (defn advance [stream]
-  (update stream :next-seq inc))
+  (update stream :next-seq
+          (fn [s]
+            #?(:clj (long (o 'advance-seq [(long s)]))
+               :cljs (inc s)))))
 
 (defn frames
   "Turn payloads into ordered frames and the advanced stream state."
@@ -60,7 +75,8 @@
   {:type "murakumo.overlay.stream-ack"
    :stream (:stream frame)
    :seq (:seq frame)
-   :accepted? (boolean accepted?)})
+   :accepted? #?(:clj (= 1 (o 'ack-accepted? [(if accepted? 1 0)]))
+                 :cljs (boolean accepted?))})
 
 (defn close [stream reason]
   (assoc stream :closed? true :close-reason reason))

@@ -37,6 +37,11 @@
             [murakumo.deploy.plan :as dplan]
             [murakumo.connect :as conn]
             [murakumo.component-authority :as cauth]
+            [murakumo.overlay.keyring :as okr]
+            [murakumo.overlay.peer :as opeer]
+            [murakumo.overlay.stream :as ostream]
+            [murakumo.cloud.plan :as cplan]
+            [murakumo.provision.plan :as pplan]
             [murakumo.persist :as persist]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
@@ -1011,3 +1016,75 @@
            (oracle/call :component-authority 'place-epoch [0])))
     (is (= (ir/execute a 'revoke-epoch [1])
            (oracle/call :component-authority 'revoke-epoch [1])))))
+
+(deftest product-shell-overlay-keyring-stream-peer-uses-oracle
+  (testing "keyring"
+    (is (= 86400 okr/default-rotation-seconds))
+    (is (= 1 (okr/epoch 90000 86400)))
+    (is (= 16 (count (okr/key-id "ov" 1))))
+    (let [k (okr/derive-key "seed" "ov" 1)]
+      (is (= 1 (:epoch k)))
+      (is (string? (:key k)))))
+  (testing "stream"
+    (is (= 64 ostream/default-window-size))
+    (let [s (ostream/open-stream {:overlay "o" :node "n" :name "x" :principal "p"} :svc)
+          s2 (ostream/advance s)]
+      (is (= 0 (:next-seq s)))
+      (is (= 1 (:next-seq s2)))
+      (is (true? (:accepted? (ostream/ack {:stream "s" :seq 0} true))))
+      (is (false? (:accepted? (ostream/ack {:stream "s" :seq 0} false))))))
+  (testing "peer choose-path"
+    (let [p {:direct [{:endpoint "quic://a"}] :relay {:endpoint "r"} :health :seen}
+          path (opeer/choose-path p)]
+      (is (= :direct (:via path))))
+    (let [p {:direct [{:endpoint "quic://a"}] :relay {:endpoint "r"} :health :down}
+          path (opeer/choose-path p)]
+      (is (= :relay (:via path))))))
+
+(deftest product-shell-cloud-provision-uses-oracle
+  (testing "provision constants + multiaddr"
+    (is (= "com.murakumo.kotoba-mesh" pplan/plist-label))
+    (is (= 8000 pplan/peer-advertise-wait-ms))
+    (is (true? (pplan/operator-seed-missing? "")))
+    (is (false? (pplan/operator-seed-missing? "abc")))
+    (is (= 4001 (pplan/node-p2p-port {} {})))
+    (is (= 5001 (pplan/node-p2p-port {} {:p2p-port 5001})))
+    (is (= "/ip4/1.2.3.4/udp/4001/quic-v1" (pplan/multiaddr "1.2.3.4" 4001)))
+    (is (re-find #"installed" (pplan/mesh-binary-status-command))))
+  (testing "cloud defaults + region/endpoints"
+    (is (= "murakumo-overlay" cplan/default-driver))
+    (is (= "murakumo.cloud" (:cloud/name cplan/default-cloud)))
+    (is (= 1 (:overlay/version cplan/default-cloud)))
+    (is (= "global" (cplan/node-region {})))
+    (is (= "z1" (cplan/node-region {:labels {:zone "z1"}})))
+    (is (= 0 (cplan/relay-score {:labels {:zone "a"}} {:region "a"})))
+    (is (= 1 (cplan/relay-score {:labels {:zone "a"}} {:region "b"})))
+    (let [ep (cplan/direct-endpoint cplan/default-cloud
+                                    {:fleet/name "f"}
+                                    {:name "n" :host "h" :p2p-port 4001}
+                                    :quic)]
+      (is (= "quic://h:4001" (:endpoint ep))))))
+
+(deftest overlay-cloud-prov-oracle-call-matches-live
+  (let [k (:kir (compiler/compile-source (slurp "kotoba/overlay_keyring_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))
+        pe (:kir (compiler/compile-source (slurp "kotoba/overlay_peer_core.kotoba")
+                                          :wasm32-kotoba-v1 {}))
+        s (:kir (compiler/compile-source (slurp "kotoba/overlay_stream_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))
+        c (:kir (compiler/compile-source (slurp "kotoba/cloud_plan_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))
+        pr (:kir (compiler/compile-source (slurp "kotoba/provision_plan_core.kotoba")
+                                          :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute k 'default-rotation-seconds [])
+           (oracle/call :overlay-keyring 'default-rotation-seconds [])))
+    (is (= (ir/execute pe 'choose-via [1 0 1])
+           (oracle/call :overlay-peer 'choose-via [1 0 1])))
+    (is (= (ir/execute s 'advance-seq [3])
+           (oracle/call :overlay-stream 'advance-seq [3])))
+    (is (= (ir/execute c 'node-region ["" "" ""])
+           (oracle/call :cloud-plan 'node-region ["" "" ""])))
+    (is (= (ir/execute c 'quic-endpoint ["h" 4001])
+           (oracle/call :cloud-plan 'quic-endpoint ["h" 4001])))
+    (is (= (ir/execute pr 'multiaddr ["1.2.3.4" 4001])
+           (oracle/call :provision-plan 'multiaddr ["1.2.3.4" 4001])))))

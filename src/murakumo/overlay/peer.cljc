@@ -1,6 +1,16 @@
 ;; murakumo.overlay.peer — peer discovery and route selection state.
+;;
+;; W6 product-shell: choose-via / health / via name strings via kotoba
+;; overlay_peer_core. Catalog/remember map folds stay host.
 
-(ns murakumo.overlay.peer)
+(ns murakumo.overlay.peer
+  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
+
+(def ^:private oid :overlay-peer)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
 
 (defn peer-record [route]
   {:type "murakumo.overlay.peer"
@@ -10,7 +20,8 @@
    :direct (vec (:direct route))
    :relay (:relay route)
    :seen-at 0
-   :health :unknown})
+   :health #?(:clj (keyword (o 'health-unknown []))
+              :cljs :unknown)})
 
 (defn catalog [routes]
   (into {}
@@ -23,7 +34,8 @@
    (assoc peers (:node route)
           (assoc (peer-record route)
                  :seen-at seen-at
-                 :health :seen))))
+                 :health #?(:clj (keyword (o 'health-seen []))
+                            :cljs :seen)))))
 
 (defn mark-health [peers node health]
   (assoc-in peers [node :health] health))
@@ -32,15 +44,31 @@
   (first (filter #(= name (:name %)) (vals peers))))
 
 (defn candidate-paths [peer]
-  (vec (concat (map #(assoc % :via :direct) (:direct peer))
+  (vec (concat (map #(assoc % :via #?(:clj (keyword (o 'via-direct []))
+                                      :cljs :direct))
+                    (:direct peer))
                (when-let [relay (:relay peer)]
-                 [(assoc relay :via :relay)]))))
+                 [(assoc relay :via #?(:clj (keyword (o 'via-relay []))
+                                       :cljs :relay))]))))
 
 (defn choose-path
-  "Prefer healthy direct paths, then relay fallback."
+  "Prefer healthy direct paths, then relay fallback.
+   JVM: via decision via kotoba `choose-via`."
   [peer]
-  (let [paths (candidate-paths peer)]
-    (or (first (filter #(and (= :direct (:via %))
-                             (not= :down (:health peer)))
-                       paths))
-        (first (filter #(= :relay (:via %)) paths)))))
+  (let [paths (candidate-paths peer)
+        has-direct (if (some #(= :direct (:via %)) paths) 1 0)
+        health-down (if (= :down (:health peer)) 1 0)
+        has-relay (if (some #(= :relay (:via %)) paths) 1 0)
+        via #?(:clj (o 'choose-via
+                       [(long has-direct) (long health-down) (long has-relay)])
+               :cljs nil)]
+    #?(:clj
+       (case via
+         "direct" (first (filter #(= :direct (:via %)) paths))
+         "relay" (first (filter #(= :relay (:via %)) paths))
+         nil)
+       :cljs
+       (or (first (filter #(and (= :direct (:via %))
+                                (not= :down (:health peer)))
+                          paths))
+           (first (filter #(= :relay (:via %)) paths))))))

@@ -1,17 +1,33 @@
 ;; murakumo.overlay.keyring — deterministic key rotation metadata.
+;;
+;; W6 product-shell: rotation seconds/epoch + hash preimages via kotoba
+;; overlay_keyring_core. SHA-256 stays host (identity/sha256-hex).
 
 (ns murakumo.overlay.keyring
-  (:require [murakumo.identity :as identity]))
+  (:require [murakumo.identity :as identity]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def default-rotation-seconds 86400)
+(def ^:private oid :overlay-keyring)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
+
+(def default-rotation-seconds
+  #?(:clj (long (o 'default-rotation-seconds []))
+     :cljs 86400))
 
 (defn epoch
   ([seconds] (epoch seconds default-rotation-seconds))
   ([seconds rotation-seconds]
-   (quot seconds rotation-seconds)))
+   #?(:clj (long (o 'epoch [(long seconds) (long rotation-seconds)]))
+      :cljs (quot seconds rotation-seconds))))
 
 (defn key-id [overlay epoch]
-  (subs (identity/sha256-hex (str overlay ":key:" epoch)) 0 16))
+  (subs (identity/sha256-hex
+         #?(:clj (o 'key-id-input [(str overlay) (long epoch)])
+            :cljs (str overlay ":key:" epoch)))
+        0 16))
 
 (defn derive-key
   "Derive per-overlay, per-epoch frame auth material."
@@ -22,7 +38,9 @@
    :kid (key-id overlay epoch)
    :alg :sha256-aes-gcm
    :key (identity/sha256-hex
-         (str operator-seed ":" overlay ":murakumo-overlay-key:" epoch))})
+         #?(:clj (o 'derive-key-input
+                    [(str operator-seed) (str overlay) (long epoch)])
+            :cljs (str operator-seed ":" overlay ":murakumo-overlay-key:" epoch)))})
 
 (defn rotation-plan
   ([operator-seed overlay now-seconds]

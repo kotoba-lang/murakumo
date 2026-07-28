@@ -5,24 +5,34 @@
 ;; strings and defaults used by those effects.
 
 (ns murakumo.provision.plan
+  "Portable provision/mesh planning helpers.
+   W6 product-shell: constants + port/multiaddr pure helpers via kotoba
+   provision_plan_core."
   (:require [clojure.string :as str]
             [murakumo.connect :as connect]
-            [murakumo.fleet.inventory :as inv]))
+            [murakumo.fleet.inventory :as inv]
+            [murakumo.kotoba.oracle :as oracle]))
 
-(def plist-label "com.murakumo.kotoba-mesh")
+(def ^:private oid :provision-plan)
 
-(def remote-bin "$HOME/.murakumo/bin")
+(defn- o [export args]
+  (oracle/call oid export args))
 
-(def remote-store "$HOME/.murakumo/store")
+(def plist-label (o 'plist-label []))
 
-(def ssh-rsync-options "ssh -o BatchMode=yes -o ConnectTimeout=8")
+(def remote-bin (o 'remote-bin []))
 
-(def peer-advertise-wait-ms 8000)
+(def remote-store (o 'remote-store []))
+
+(def ssh-rsync-options (o 'ssh-rsync-options []))
+
+(def peer-advertise-wait-ms (long (o 'peer-advertise-wait-ms [])))
 
 (defn operator-seed-missing?
-  "True when a command requiring the fleet operator seed should fail."
+  "True when a command requiring the fleet operator seed should fail.
+   JVM: kotoba `operator-seed-missing?`."
   [operator-seed]
-  (str/blank? (str operator-seed)))
+  (= 1 (o 'operator-seed-missing? [(str (or operator-seed ""))])))
 
 (defn provision-command-error
   "Validation error keyword for provision, or nil."
@@ -37,14 +47,19 @@
     :missing-operator-seed))
 
 (defn node-p2p-port
-  "Resolve a node's p2p QUIC port, defaulting to fleet p2p port, then 4001."
+  "Resolve a node's p2p QUIC port, defaulting to fleet p2p port, then 4001.
+   JVM: kotoba `resolve-p2p-port`."
   [fleet node]
-  (or (:p2p-port node) (:fleet/p2p-port fleet) 4001))
+  (let [has-node (if (some? (:p2p-port node)) 1 0)
+        has-fleet (if (some? (:fleet/p2p-port fleet)) 1 0)]
+    (long (o 'resolve-p2p-port
+             [has-node (long (or (:p2p-port node) 0))
+              has-fleet (long (or (:fleet/p2p-port fleet) 0))]))))
 
 (defn multiaddr
-  "Tailscale QUIC multiaddr for a node ip/port."
+  "Tailscale QUIC multiaddr for a node ip/port. JVM: kotoba `multiaddr`."
   [ip port]
-  (str "/ip4/" ip "/udp/" port "/quic-v1"))
+  (o 'multiaddr [(str ip) (long port)]))
 
 (defn node-webrtc-port
   "The /webrtc-direct UDP port for nodes whose class speaks :webrtc on :live.
@@ -56,7 +71,7 @@
                          connect-spec
                          (connect/node-class connect-spec node)
                          :live))))
-    (+ 100 (node-p2p-port fleet node))))
+    (long (o 'webrtc-port [(long (node-p2p-port fleet node))]))))
 
 (defn bootstrap-str
   "Comma-list of `peerid@multiaddr` for every other node with a known PeerId."
@@ -106,14 +121,14 @@
   (collected-peers node-peer-results))
 
 (defn mesh-binary-status-command
-  "Remote shell command that reports whether kotoba-server is installed."
+  "JVM: kotoba `mesh-binary-status-command`."
   []
-  (str "test -x " remote-bin "/kotoba-server && echo installed || echo absent"))
+  (o 'mesh-binary-status-command []))
 
 (defn remote-store-command
-  "Remote shell command that creates murakumo runtime directories."
+  "JVM: kotoba `remote-store-command`."
   []
-  (str "mkdir -p " remote-bin " " remote-store))
+  (o 'remote-store-command []))
 
 (defn rsync-binary-argv
   "argv for copying one pinned binary to a fleet node."
