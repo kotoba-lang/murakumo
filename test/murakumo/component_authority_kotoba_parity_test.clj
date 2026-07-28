@@ -13,7 +13,8 @@
 (def export-prefix
   (str "event-version max-identifier-bytes blank? ws? identifier? "
        "identifier-len-ok? place-epoch revoke-epoch next-sequence "
-       "command-op event-kind format-v1 algorithm-ed25519"))
+       "command-op event-kind format-v1 algorithm-ed25519 "
+       "op-place op-revoke op-unknown event-placed event-revoked"))
 
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -54,7 +55,9 @@
             "alg" "(algorithm-ed25519)"})]
     (is (= authority/event-version (get n "ev")))
     (is (= 4096 (get n "mx")))
+    (is (= authority/format-v1 (get s "fmt")))
     (is (= "murakumo.component-authority/v1" (get s "fmt")))
+    (is (= authority/algorithm-ed25519 (get s "alg")))
     (is (= "ed25519" (get s "alg")))))
 
 (deftest identifier-policy-matches-cljc
@@ -130,3 +133,33 @@
     (is (= "placed" (get actual "ep")))
     (is (= "revoked" (get actual "er")))
     (is (= "unknown" (get actual "eu")))))
+
+(deftest cauth-op-tokens-match
+  (let [s (compile-string-cases
+           {"op" "(op-place)"
+            "orv" "(op-revoke)"
+            "ou" "(op-unknown)"
+            "ep" "(event-placed)"
+            "er" "(event-revoked)"
+            "cp" (str "(command-op " (kotoba-literal "place") ")")
+            "cr" (str "(command-op " (kotoba-literal "revoke") ")")
+            "cu" (str "(command-op " (kotoba-literal "bogus") ")")
+            "kp" (str "(event-kind " (kotoba-literal "place") ")")
+            "kr" (str "(event-kind " (kotoba-literal "revoke") ")")
+            "ku" (str "(event-kind " (kotoba-literal "x") ")")})]
+    (is (= authority/op-place (get s "op")))
+    (is (= "place" (get s "op")))
+    (is (= authority/op-revoke (get s "orv")))
+    (is (= "revoke" (get s "orv")))
+    (is (= authority/op-unknown (get s "ou")))
+    (is (= "unknown" (get s "ou")))
+    (is (= authority/event-placed (get s "ep")))
+    (is (= "placed" (get s "ep")))
+    (is (= authority/event-revoked (get s "er")))
+    (is (= "revoked" (get s "er")))
+    (is (= authority/op-place (get s "cp")))
+    (is (= authority/op-revoke (get s "cr")))
+    (is (= authority/op-unknown (get s "cu")))
+    (is (= authority/event-placed (get s "kp")))
+    (is (= authority/event-revoked (get s "kr")))
+    (is (= authority/op-unknown (get s "ku")))))

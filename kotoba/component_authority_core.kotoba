@@ -3,12 +3,14 @@
             blank? ws? identifier? identifier-len-ok?
             place-epoch revoke-epoch next-sequence
             command-op event-kind
-            format-v1 algorithm-ed25519]))
+            format-v1 algorithm-ed25519
+            op-place op-revoke op-unknown
+            event-placed event-revoked]))
 
 ;; W6 pure-planner oracle — murakumo.component-authority scalar core.
 ;; State maps / placements sets / event map assembly / ed25519 stay cljc/host.
 ;; Host projects epoch 0 = missing key; place defaults to 1, revoke does (inc 0).
-;; command-op / event-kind: bare names (place|revoke|unknown, placed|revoked|unknown).
+;; Residual op/event name tokens dual-source; command-op / event-kind recompose.
 ;; Parity: test/murakumo/component_authority_kotoba_parity_test.clj
 
 (defn event-version [] :i64 1)
@@ -20,6 +22,23 @@
 
 (defn algorithm-ed25519 [] :string
   "ed25519")
+
+;; ── residual op / event name tokens ──────────────────────────────────
+
+(defn op-place [] :string
+  "place")
+
+(defn op-revoke [] :string
+  "revoke")
+
+(defn op-unknown [] :string
+  "unknown")
+
+(defn event-placed [] :string
+  "placed")
+
+(defn event-revoked [] :string
+  "revoked")
 
 (defn ws? [c :string] :i64
   (if (string=? c " ")
@@ -66,16 +85,16 @@
 
 (defn command-op [op :string] :string
   ;; cljc case :place / :revoke / else unknown
-  (if (string=? op "place")
-    "place"
-    (if (string=? op "revoke")
-      "revoke"
-      "unknown")))
+  (if (string=? op (op-place))
+    (op-place)
+    (if (string=? op (op-revoke))
+      (op-revoke)
+      (op-unknown))))
 
 (defn event-kind [op :string] :string
   ;; place → placed, revoke → revoked
-  (if (string=? op "place")
-    "placed"
-    (if (string=? op "revoke")
-      "revoked"
-      "unknown")))
+  (if (string=? op (op-place))
+    (event-placed)
+    (if (string=? op (op-revoke))
+      (event-revoked)
+      (op-unknown))))
