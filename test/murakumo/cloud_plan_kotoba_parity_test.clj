@@ -10,7 +10,19 @@
 
 (def port-source (slurp "kotoba/cloud_plan_core.kotoba"))
 (def export-prefix
-  "default-driver default-cloud-name default-cloud-domain default-cloud-graph default-auth-key-env overlay-version digit-char nat-str i64-str node-region relay-score overlay-id-input node-id-input quic-endpoint webrtc-endpoint relay-endpoint-url webtransport-endpoint transport-endpoint")
+  (str "default-driver default-cloud-name default-cloud-domain default-cloud-graph "
+       "default-auth-key-env overlay-version digit-char nat-str i64-str "
+       "node-region relay-score overlay-id-input node-id-input "
+       "quic-endpoint webrtc-endpoint relay-endpoint-url "
+       "webtransport-endpoint transport-endpoint "
+       "dash-placeholder summary-nodes-header routes-header "
+       "direct-candidates-label relays-section-label connects-section-label "
+       "summary-title routes-title bootstrap-title "
+       "unknown-node-line unknown-relay-line "
+       "dial-denied-line connect-denied-line "
+       "dial-ok-title connect-ok-title relay-ok-title "
+       "from-to-cap-reason authorized-line "
+       "relay-fallback-line reason-line indent-argv-line"))
 
 (def fleet
   {:fleet/name "test-fleet"
@@ -116,3 +128,59 @@
           te (cloud/direct-endpoint spec fleet node :custom)]
       (is (= (:endpoint wt) (get actual "wt")))
       (is (= (:endpoint te) (get actual "te"))))))
+
+(deftest cli-presentation-lines-match
+  (let [s (compile-string-cases
+           {"dp" "(dash-placeholder)"
+            "sh" "(summary-nodes-header)"
+            "rh" "(routes-header)"
+            "dc" "(direct-candidates-label)"
+            "rl" "(relays-section-label)"
+            "cl" "(connects-section-label)"
+            "st" (str "(summary-title " (kotoba-literal "murakumo.cloud") " "
+                      (kotoba-literal "ov1") ")")
+            "rt" (str "(routes-title " (kotoba-literal "ov1") ")")
+            "bt" (str "(bootstrap-title " (kotoba-literal "ov1") ")")
+            "un" (str "(unknown-node-line " (kotoba-literal "asher") ")")
+            "ur" (str "(unknown-relay-line " (kotoba-literal "jp-1") ")")
+            "dd" (str "(dial-denied-line " (kotoba-literal "asher") ")")
+            "cd" (str "(connect-denied-line " (kotoba-literal "asher") ")")
+            "do" (str "(dial-ok-title " (kotoba-literal "r1") " "
+                      (kotoba-literal "asher") ")")
+            "co" (str "(connect-ok-title " (kotoba-literal "asher") ")")
+            "ro" (str "(relay-ok-title " (kotoba-literal "jp-1") ")")
+            "ft" (str "(from-to-cap-reason " (kotoba-literal "browser") " "
+                      (kotoba-literal "wasm") " " (kotoba-literal "read") " "
+                      (kotoba-literal "policy-denied") ")")
+            "al" (str "(authorized-line " (kotoba-literal "browser") " "
+                      (kotoba-literal "wasm") " " (kotoba-literal "read") ")")
+            "rf" (str "(relay-fallback-line " (kotoba-literal "relay://jp/n") ")")
+            "rs" (str "(reason-line " (kotoba-literal "unknown") ")")
+            "ia" (str "(indent-argv-line " (kotoba-literal "murakumo-overlay dial") ")")})]
+    (is (= cloud/dash-placeholder (get s "dp")))
+    (is (= cloud/summary-nodes-header (get s "sh")))
+    (is (= cloud/routes-header (get s "rh")))
+    (is (= cloud/direct-candidates-label (get s "dc")))
+    (is (= cloud/relays-section-label (get s "rl")))
+    (is (= cloud/connects-section-label (get s "cl")))
+    (is (= (cloud/summary-title "murakumo.cloud" "ov1") (get s "st")))
+    (is (= (cloud/routes-title "ov1") (get s "rt")))
+    (is (= (cloud/bootstrap-title "ov1") (get s "bt")))
+    (is (= (cloud/unknown-node-line "asher") (get s "un")))
+    (is (= (cloud/unknown-relay-line "jp-1") (get s "ur")))
+    (is (= (cloud/dial-denied-line "asher") (get s "dd")))
+    (is (= (cloud/connect-denied-line "asher") (get s "cd")))
+    (is (= (cloud/dial-ok-title "r1" "asher") (get s "do")))
+    (is (= (cloud/connect-ok-title "asher") (get s "co")))
+    (is (= (cloud/relay-ok-title "jp-1") (get s "ro")))
+    (is (= (cloud/from-to-cap-reason "browser" "wasm" "read" "policy-denied")
+           (get s "ft")))
+    (is (= (cloud/authorized-line "browser" "wasm" "read") (get s "al")))
+    (is (= (cloud/relay-fallback-line "relay://jp/n") (get s "rf")))
+    (is (= (cloud/reason-line "unknown") (get s "rs")))
+    (is (= (cloud/indent-argv-line "murakumo-overlay dial") (get s "ia")))
+    (is (str/starts-with? (first (cloud/summary-lines
+                                  {:domain "murakumo.cloud" :overlay "x"
+                                   :address_family :identity :nodes [] :relays []
+                                   :policy {:default :deny :allow []}}))
+                          "murakumo.cloud "))))

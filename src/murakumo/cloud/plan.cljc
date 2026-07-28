@@ -5,14 +5,15 @@
 ;; packet plumbing; this namespace owns deterministic cloud records and routing
 ;; choices so the CLI can plan/publish them without an external VPN control plane.
 ;;
-;; W6 product-shell (ADR-260728-w6-cljs-clj-residual-dual):
-;; defaults + region/score/endpoints DELEGATE to kotoba cloud_plan_core when
-;; oracle is loadable (JVM classpath or cljs/nbb). Record assembly, choose-relay
-;; sort, and CLI format lines stay host. cljs mirrors remain fallback.
+;; W6 product-shell (ADR-260728-w6-cloud-lines-pure-oracle):
+;; defaults + region/score/endpoints + CLI presentation line templates DELEGATE
+;; to kotoba cloud_plan_core when oracle is loadable (JVM classpath or cljs/nbb).
+;; Record assembly, choose-relay sort, width fmt / collection folds stay host.
+;; cljs mirrors remain fallback.
 
 (ns murakumo.cloud.plan
   "Portable murakumo.cloud overlay planning.
-   W6 product-shell: defaults + region/score/endpoints via kotoba cloud_plan_core
+   W6 product-shell: defaults + endpoints + CLI line templates via cloud_plan_core
    when oracle ready."
   (:require [clojure.string :as str]
             [murakumo.config :as config]
@@ -94,6 +95,60 @@
 (defn- mirror-transport-endpoint [scheme host]
   (str scheme "://" host))
 
+(def ^:private mirror-dash-placeholder "-")
+(def ^:private mirror-summary-nodes-header
+  "  NODE           REGION     RELAY          DIRECT")
+(def ^:private mirror-routes-header
+  "  NODE           DIRECT                                      RELAY")
+(def ^:private mirror-direct-candidates-label "  direct candidates:")
+(def ^:private mirror-relays-section-label "  relays:")
+(def ^:private mirror-connects-section-label "  connects:")
+
+(defn- mirror-summary-title [domain overlay]
+  (str "murakumo.cloud " domain "  overlay " overlay))
+
+(defn- mirror-routes-title [overlay]
+  (str "murakumo.cloud routes overlay " overlay))
+
+(defn- mirror-bootstrap-title [overlay]
+  (str "murakumo.cloud bootstrap overlay " overlay))
+
+(defn- mirror-unknown-node-line [node-name]
+  (str "unknown murakumo.cloud node: " node-name))
+
+(defn- mirror-unknown-relay-line [relay-name]
+  (str "unknown murakumo.cloud relay: " relay-name))
+
+(defn- mirror-dial-denied-line [node-name]
+  (str "murakumo.cloud dial " node-name " denied by policy"))
+
+(defn- mirror-connect-denied-line [node-name]
+  (str "murakumo.cloud connect " node-name " denied by policy"))
+
+(defn- mirror-dial-ok-title [route-name node]
+  (str "murakumo.cloud dial " route-name "  node " node))
+
+(defn- mirror-connect-ok-title [node-name]
+  (str "murakumo.cloud connect " node-name))
+
+(defn- mirror-relay-ok-title [relay-name]
+  (str "murakumo.cloud relay " relay-name))
+
+(defn- mirror-from-to-cap-reason [from to capability reason]
+  (str "  from=" from " to=" to " capability=" capability " reason=" reason))
+
+(defn- mirror-authorized-line [from to capability]
+  (str "  authorized: from=" from " to=" to " capability=" capability))
+
+(defn- mirror-relay-fallback-line [endpoint]
+  (str "  relay fallback: " endpoint))
+
+(defn- mirror-reason-line [reason]
+  (str "  reason=" reason))
+
+(defn- mirror-indent-argv-line [argv-joined]
+  (str "  " argv-joined))
+
 ;; ── dual-source defaults ─────────────────────────────────────────────
 
 (def default-cloud-path config/default-cloud-path)
@@ -113,6 +168,131 @@
    :overlay/auth-key-source :operator-seed
    :relays []
    :policy {:default :deny :allow []}})
+
+;; ── dual-source CLI presentation labels ──────────────────────────────
+
+(def dash-placeholder
+  (oracle-str-const 'dash-placeholder mirror-dash-placeholder))
+
+(def summary-nodes-header
+  (oracle-str-const 'summary-nodes-header mirror-summary-nodes-header))
+
+(def routes-header
+  (oracle-str-const 'routes-header mirror-routes-header))
+
+(def direct-candidates-label
+  (oracle-str-const 'direct-candidates-label mirror-direct-candidates-label))
+
+(def relays-section-label
+  (oracle-str-const 'relays-section-label mirror-relays-section-label))
+
+(def connects-section-label
+  (oracle-str-const 'connects-section-label mirror-connects-section-label))
+
+(defn summary-title
+  "CLI title for plan summary. Kotoba `summary-title` when ready."
+  [domain overlay]
+  (try-oracle
+   #(o 'summary-title [(str domain) (str overlay)])
+   #(mirror-summary-title domain overlay)))
+
+(defn routes-title
+  "CLI title for routes listing. Kotoba `routes-title` when ready."
+  [overlay]
+  (try-oracle
+   #(o 'routes-title [(str overlay)])
+   #(mirror-routes-title overlay)))
+
+(defn bootstrap-title
+  "CLI title for bootstrap listing. Kotoba `bootstrap-title` when ready."
+  [overlay]
+  (try-oracle
+   #(o 'bootstrap-title [(str overlay)])
+   #(mirror-bootstrap-title overlay)))
+
+(defn unknown-node-line
+  "Unknown node error line. Kotoba `unknown-node-line` when ready."
+  [node-name]
+  (try-oracle
+   #(o 'unknown-node-line [(str node-name)])
+   #(mirror-unknown-node-line node-name)))
+
+(defn unknown-relay-line
+  "Unknown relay error line. Kotoba `unknown-relay-line` when ready."
+  [relay-name]
+  (try-oracle
+   #(o 'unknown-relay-line [(str relay-name)])
+   #(mirror-unknown-relay-line relay-name)))
+
+(defn dial-denied-line
+  "Dial policy-denied title. Kotoba `dial-denied-line` when ready."
+  [node-name]
+  (try-oracle
+   #(o 'dial-denied-line [(str node-name)])
+   #(mirror-dial-denied-line node-name)))
+
+(defn connect-denied-line
+  "Connect policy-denied title. Kotoba `connect-denied-line` when ready."
+  [node-name]
+  (try-oracle
+   #(o 'connect-denied-line [(str node-name)])
+   #(mirror-connect-denied-line node-name)))
+
+(defn dial-ok-title
+  "Dial authorized title. Kotoba `dial-ok-title` when ready."
+  [route-name node]
+  (try-oracle
+   #(o 'dial-ok-title [(str route-name) (str node)])
+   #(mirror-dial-ok-title route-name node)))
+
+(defn connect-ok-title
+  "Connect authorized title. Kotoba `connect-ok-title` when ready."
+  [node-name]
+  (try-oracle
+   #(o 'connect-ok-title [(str node-name)])
+   #(mirror-connect-ok-title node-name)))
+
+(defn relay-ok-title
+  "Relay ok title. Kotoba `relay-ok-title` when ready."
+  [relay-name]
+  (try-oracle
+   #(o 'relay-ok-title [(str relay-name)])
+   #(mirror-relay-ok-title relay-name)))
+
+(defn from-to-cap-reason
+  "from/to/capability/reason detail line. Kotoba when ready."
+  [from to capability reason]
+  (try-oracle
+   #(o 'from-to-cap-reason [(str from) (str to) (str capability) (str reason)])
+   #(mirror-from-to-cap-reason from to capability reason)))
+
+(defn authorized-line
+  "authorized from/to/capability line. Kotoba when ready."
+  [from to capability]
+  (try-oracle
+   #(o 'authorized-line [(str from) (str to) (str capability)])
+   #(mirror-authorized-line from to capability)))
+
+(defn relay-fallback-line
+  "relay fallback detail line. Kotoba when ready."
+  [endpoint]
+  (try-oracle
+   #(o 'relay-fallback-line [(str endpoint)])
+   #(mirror-relay-fallback-line endpoint)))
+
+(defn reason-line
+  "reason= detail line. Kotoba when ready."
+  [reason]
+  (try-oracle
+   #(o 'reason-line [(str reason)])
+   #(mirror-reason-line reason)))
+
+(defn indent-argv-line
+  "Two-space indented argv join line. Kotoba when ready."
+  [argv-joined]
+  (try-oracle
+   #(o 'indent-argv-line [(str argv-joined)])
+   #(mirror-indent-argv-line argv-joined)))
 
 (defn merge-defaults [cloud]
   (merge-with (fn [a b]
@@ -432,15 +612,15 @@
         node-count (count (:nodes plan))]
     (vec
      (concat
-      [(fmt "murakumo.cloud %s  overlay %s" (:domain plan) (:overlay plan))
+      [(summary-title (:domain plan) (:overlay plan))
        (fmt "  address-family %s ; nodes %d ; relays %d"
                (name (:address_family plan)) node-count relay-count)
-       "  NODE           REGION     RELAY          DIRECT"]
+       summary-nodes-header]
       (for [node (:nodes plan)]
         (fmt "  %-14s %-10s %-14s %s"
                 (:name node)
                 (:region node)
-                (or (:relay node) "-")
+                (or (:relay node) dash-placeholder)
                 (str/join "," (map name (:direct node)))))
       [(fmt "  policy default=%s allow=%d"
                (name (get-in plan [:policy :default]))
@@ -449,85 +629,83 @@
 (defn route-lines [plan]
   (vec
    (concat
-    [(fmt "murakumo.cloud routes overlay %s" (:overlay plan))
-     "  NODE           DIRECT                                      RELAY"]
+    [(routes-title (:overlay plan))
+     routes-header]
     (for [route (:routes plan)]
       (fmt "  %-14s %-43s %s"
               (:name route)
               (str/join "," (map (comp name :transport) (:direct route)))
-              (or (get-in route [:relay :relay]) "-"))))))
+              (or (get-in route [:relay :relay]) dash-placeholder))))))
 
 (defn dial-lines [plan node-name opts]
   (let [{:keys [request route allowed? reason]} (dial-plan plan node-name opts)]
     (cond
       (nil? route)
-      [(fmt "unknown murakumo.cloud node: %s" node-name)]
+      [(unknown-node-line node-name)]
 
       (not allowed?)
-      [(fmt "murakumo.cloud dial %s denied by policy" node-name)
-       (fmt "  from=%s to=%s capability=%s reason=%s"
-               (name (:from request))
-               (name (:to request))
-               (name (:capability request))
-               (name reason))]
+      [(dial-denied-line node-name)
+       (from-to-cap-reason (name (:from request))
+                           (name (:to request))
+                           (name (:capability request))
+                           (name reason))]
 
       :else
       (vec
        (concat
-        [(fmt "murakumo.cloud dial %s  node %s" (:name route) (:node route))
-         (fmt "  authorized: from=%s to=%s capability=%s"
-                 (name (:from request))
-                 (name (:to request))
-                 (name (:capability request)))
-         "  direct candidates:"]
+        [(dial-ok-title (:name route) (:node route))
+         (authorized-line (name (:from request))
+                          (name (:to request))
+                          (name (:capability request)))
+         direct-candidates-label]
         (map (fn [{:keys [transport endpoint]}]
                (fmt "    %-12s %s" (name transport) endpoint))
              (:direct route))
-        [(fmt "  relay fallback: %s"
-                 (or (some-> route :relay :endpoint) "-"))])))))
+        [(relay-fallback-line
+          (or (some-> route :relay :endpoint) dash-placeholder))])))))
 
 (defn connect-lines [plan node-name opts]
   (let [{:keys [request argv allowed? reason route]} (connect-plan plan node-name opts)]
     (cond
       (nil? route)
-      [(fmt "unknown murakumo.cloud node: %s" node-name)]
+      [(unknown-node-line node-name)]
 
       (not allowed?)
-      [(fmt "murakumo.cloud connect %s denied by policy" node-name)
-       (fmt "  from=%s to=%s capability=%s reason=%s"
-               (name (:from request))
-               (name (:to request))
-               (name (:capability request))
-               (name reason))]
+      [(connect-denied-line node-name)
+       (from-to-cap-reason (name (:from request))
+                           (name (:to request))
+                           (name (:capability request))
+                           (name reason))]
 
       :else
-      [(fmt "murakumo.cloud connect %s" node-name)
-       (str "  " (str/join " " argv))])))
+      [(connect-ok-title node-name)
+       (indent-argv-line (str/join " " argv))])))
 
 (defn relay-lines [plan relay-name opts]
   (let [{:keys [argv ok? reason]} (relay-plan plan relay-name opts)]
     (if ok?
-      [(fmt "murakumo.cloud relay %s" relay-name)
-       (str "  " (str/join " " argv))]
-      [(fmt "unknown murakumo.cloud relay: %s" relay-name)
-       (fmt "  reason=%s" (name reason))])))
+      [(relay-ok-title relay-name)
+       (indent-argv-line (str/join " " argv))]
+      [(unknown-relay-line relay-name)
+       (reason-line (name reason))])))
 
 (defn bootstrap-text-lines [plan opts]
   (let [{:keys [relays connects]} (bootstrap-plan plan opts)]
     (vec
      (concat
-      [(fmt "murakumo.cloud bootstrap overlay %s" (:overlay plan))
-       "  relays:"]
+      [(bootstrap-title (:overlay plan))
+       relays-section-label]
       (map (fn [{:keys [relay argv reason]}]
              (if argv
                (fmt "    %-14s %s" (:name relay) (str/join " " argv))
-               (fmt "    %-14s skipped reason=%s" "-" (name reason))))
+               (fmt "    %-14s skipped reason=%s" dash-placeholder (name reason))))
            relays)
-      ["  connects:"]
+      [connects-section-label]
       (map (fn [{:keys [route argv reason]}]
              (if argv
                (fmt "    %-14s %s" (:name route) (str/join " " argv))
-               (fmt "    %-14s skipped reason=%s" (or (:name route) "-") (name reason))))
+               (fmt "    %-14s skipped reason=%s"
+                    (or (:name route) dash-placeholder) (name reason))))
            connects)))))
 
 (defn bootstrap-lines [plan opts]

@@ -143,7 +143,166 @@
    :result :string,
    :effects #{},
    :body (string-concat scheme (string-concat "://" host)),
-   :param-types [:string :string]}],
+   :param-types [:string :string]}
+  {:name dash-placeholder,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-",
+   :param-types []}
+  {:name summary-nodes-header,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "  NODE           REGION     RELAY          DIRECT",
+   :param-types []}
+  {:name routes-header,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   "  NODE           DIRECT                                      RELAY",
+   :param-types []}
+  {:name direct-candidates-label,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "  direct candidates:",
+   :param-types []}
+  {:name relays-section-label,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "  relays:",
+   :param-types []}
+  {:name connects-section-label,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "  connects:",
+   :param-types []}
+  {:name summary-title,
+   :params [domain overlay],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "murakumo.cloud "
+    (string-concat domain (string-concat "  overlay " overlay))),
+   :param-types [:string :string]}
+  {:name routes-title,
+   :params [overlay],
+   :result :string,
+   :effects #{},
+   :body (string-concat "murakumo.cloud routes overlay " overlay),
+   :param-types [:string]}
+  {:name bootstrap-title,
+   :params [overlay],
+   :result :string,
+   :effects #{},
+   :body (string-concat "murakumo.cloud bootstrap overlay " overlay),
+   :param-types [:string]}
+  {:name unknown-node-line,
+   :params [node-name],
+   :result :string,
+   :effects #{},
+   :body (string-concat "unknown murakumo.cloud node: " node-name),
+   :param-types [:string]}
+  {:name unknown-relay-line,
+   :params [relay-name],
+   :result :string,
+   :effects #{},
+   :body (string-concat "unknown murakumo.cloud relay: " relay-name),
+   :param-types [:string]}
+  {:name dial-denied-line,
+   :params [node-name],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "murakumo.cloud dial "
+    (string-concat node-name " denied by policy")),
+   :param-types [:string]}
+  {:name connect-denied-line,
+   :params [node-name],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "murakumo.cloud connect "
+    (string-concat node-name " denied by policy")),
+   :param-types [:string]}
+  {:name dial-ok-title,
+   :params [route-name node],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "murakumo.cloud dial "
+    (string-concat route-name (string-concat "  node " node))),
+   :param-types [:string :string]}
+  {:name connect-ok-title,
+   :params [node-name],
+   :result :string,
+   :effects #{},
+   :body (string-concat "murakumo.cloud connect " node-name),
+   :param-types [:string]}
+  {:name relay-ok-title,
+   :params [relay-name],
+   :result :string,
+   :effects #{},
+   :body (string-concat "murakumo.cloud relay " relay-name),
+   :param-types [:string]}
+  {:name from-to-cap-reason,
+   :params [from to capability reason],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "  from="
+    (string-concat
+     from
+     (string-concat
+      " to="
+      (string-concat
+       to
+       (string-concat
+        " capability="
+        (string-concat
+         capability
+         (string-concat " reason=" reason))))))),
+   :param-types [:string :string :string :string]}
+  {:name authorized-line,
+   :params [from to capability],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "  authorized: from="
+    (string-concat
+     from
+     (string-concat
+      " to="
+      (string-concat to (string-concat " capability=" capability))))),
+   :param-types [:string :string :string]}
+  {:name relay-fallback-line,
+   :params [endpoint],
+   :result :string,
+   :effects #{},
+   :body (string-concat "  relay fallback: " endpoint),
+   :param-types [:string]}
+  {:name reason-line,
+   :params [reason],
+   :result :string,
+   :effects #{},
+   :body (string-concat "  reason=" reason),
+   :param-types [:string]}
+  {:name indent-argv-line,
+   :params [argv-joined],
+   :result :string,
+   :effects #{},
+   :body (string-concat "  " argv-joined),
+   :param-types [:string]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
@@ -164,7 +323,28 @@
   webrtc-endpoint
   relay-endpoint-url
   webtransport-endpoint
-  transport-endpoint],
+  transport-endpoint
+  dash-placeholder
+  summary-nodes-header
+  routes-header
+  direct-candidates-label
+  relays-section-label
+  connects-section-label
+  summary-title
+  routes-title
+  bootstrap-title
+  unknown-node-line
+  unknown-relay-line
+  dial-denied-line
+  connect-denied-line
+  dial-ok-title
+  connect-ok-title
+  relay-ok-title
+  from-to-cap-reason
+  authorized-line
+  relay-fallback-line
+  reason-line
+  indent-argv-line],
  :schemas nil,
  :effects #{},
  :blocks [],
