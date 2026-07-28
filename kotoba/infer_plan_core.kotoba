@@ -7,7 +7,10 @@
             layer-byte-at layer-wsum partition-target
             advance-hi est-bytes-range partition-3-ends
             assignment-span plan-fits-3 ok-mark
-            pick-max-idx-3 moe-capacity-ok]))
+            pick-max-idx-3 moe-capacity-ok
+            digit-char nat-str i64-str
+            bytes-to-gib-milli bytes-to-gib-floor layers-range-str
+            mem-gib-milli usable-gib-milli est-gib-milli]))
 
 ;; W6 pure-planner oracle — murakumo.infer.plan usable-bytes + choose-strategy
 ;; + plan largest-remainder (no per-pool floor) for fixed 3 ranks + fits gates
@@ -15,6 +18,7 @@
 ;; Full variable-arity node vectors / plan map assembly with node ids stay cljc.
 ;; plan-fits-3: pure go/no-go for fixed 3-node integer partition.
 ;; pick-max-idx-3 / moe-capacity-ok: mlx-moe single-node pick + fits gate.
+;; report GiB helpers: milli/floor of bytes/GiB + layers-range-str for plan/report rows.
 ;;
 ;; Layer weights use milli-fixed dense-frac (default 100 = 0.1) matching
 ;; uniform-layer-bytes / moe-layer-bytes scalars. Cumulative targets use
@@ -322,3 +326,46 @@
   ;; cljc moe/plan :fits? (boolean cap) — nil/0 capacity ⇒ false
   (if (< cap 1) 0 1))
 
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+
+(defn bytes-to-gib-milli [bytes :i64] :i64
+  ;; cljc plan/report: (/ (double bytes) GiB) as milli-GiB (floor)
+  ;; exact for whole-GiB sizes; sub-GiB floors to 0 milli when < GiB/1000
+  (if (< bytes 0)
+    0
+    (quot (* bytes 1000) (gib))))
+
+(defn bytes-to-gib-floor [bytes :i64] :i64
+  ;; whole GiB floor
+  (if (< bytes 0)
+    0
+    (quot bytes (gib))))
+
+(defn layers-range-str [lo :i64 hi :i64] :string
+  ;; display form for :layers [lo hi) — "lo..hi"
+  (string-concat (i64-str lo) (string-concat ".." (i64-str hi))))
+
+(defn mem-gib-milli [mem-bytes :i64] :i64
+  ;; cljc report :mem-gib
+  (bytes-to-gib-milli mem-bytes))
+
+(defn usable-gib-milli [mem :i64 os :i64 head :i64 wired :i64] :i64
+  ;; usable-bytes then milli-GiB (arity 5)
+  (bytes-to-gib-milli (usable-bytes mem os head wired)))
+
+(defn est-gib-milli [est-bytes :i64] :i64
+  ;; cljc report :est-gib
+  (bytes-to-gib-milli est-bytes))

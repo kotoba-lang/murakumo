@@ -15,11 +15,14 @@
             artifact-node-status deploy-command-output alert-line
             dashboard-start-line apply-target-line watch-start-line
             deploy-observed-empty-line deploy-observed-placed-line
-            missing-pinned-binaries-line1 missing-pinned-binaries-line2]))
+            missing-pinned-binaries-line1 missing-pinned-binaries-line2
+            nodes-header status-header status-down-suffix
+            spaces pad-right field-10 field-16 field-8 field-9 field-12 field-6]))
 
 ;; W6 pure-planner oracle — murakumo.report string core.
-;; Column-padded format tables (nodes-header/row, status-header/row,
-;; reconcile-lines) stay cljc (no printf in guest ABI).
+;; Column-padded tables: pure pad-right + fixed field widths unlock
+;; nodes-header/status-header/nodes-row/status-down-row without printf.
+;; reconcile-lines multi-join stays cljc.
 ;; Parity: test/murakumo/report_kotoba_parity_test.clj
 
 (defn digit-char [d :i64] :string
@@ -257,3 +260,42 @@
             (string-concat
              "unknown "
              (string-concat command (string-concat " error: " error)))))))))
+
+(defn spaces [n :i64] :string
+  (if (< n 1)
+    ""
+    (string-concat " " (spaces (- n 1)))))
+
+(defn pad-right [s :string pad-n :i64] :string
+  ;; host supplies pad-n = max(0, width - (count s)); pure concat
+  (string-concat s (spaces pad-n)))
+
+(defn field-10 [s :string pad-n :i64] :string
+  (pad-right s pad-n))
+
+(defn field-16 [s :string pad-n :i64] :string
+  (pad-right s pad-n))
+
+(defn field-8 [s :string pad-n :i64] :string
+  (pad-right s pad-n))
+
+(defn field-9 [s :string pad-n :i64] :string
+  (pad-right s pad-n))
+
+(defn field-12 [s :string pad-n :i64] :string
+  (pad-right s pad-n))
+
+(defn field-6 [s :string pad-n :i64] :string
+  (pad-right s pad-n))
+
+(defn nodes-header [] :string
+  ;; cljc (format "%-10s %-16s %-8s %-9s %s" ...)
+  "NODE       TAILSCALE-IP     ONLINE   SSH       MESH")
+
+(defn status-header [] :string
+  ;; cljc (format "%-10s %-8s %-12s %-6s %s" ...)
+  "NODE       HEALTH   WASM-EXEC    LINKS  P2P-PORT")
+
+(defn status-down-suffix [] :string
+  ;; trailing spaces after "down" in status-down-row format "%-10s %-8s"
+  "down    ")

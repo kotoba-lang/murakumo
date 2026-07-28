@@ -20,7 +20,9 @@
        "model-pack model-layers model-dense model-frac-milli "
        "layer-byte-at layer-wsum partition-target "
        "advance-hi est-bytes-range partition-3-ends "
-       "assignment-span plan-fits-3 ok-mark pick-max-idx-3 moe-capacity-ok"))
+       "assignment-span plan-fits-3 ok-mark pick-max-idx-3 moe-capacity-ok "
+       "digit-char nat-str i64-str bytes-to-gib-milli bytes-to-gib-floor layers-range-str "
+       "mem-gib-milli usable-gib-milli est-gib-milli"))
 
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
@@ -278,3 +280,43 @@
     (is (= 0 (get picks "ptie")))
     (is (= 0 (get picks "c0")))
     (is (= 1 (get picks "c1")))))
+
+(deftest report-gib-helpers-match-cljc
+  (let [nodes [{:name "a" :mem-bytes (* 16 GiB)}
+               {:name "b" :mem-bytes (* 8 GiB)}
+               {:name "c" :mem-bytes 1024}]
+        cases (into {}
+                    (mapcat
+                     (fn [i n]
+                       (let [os plan/default-os-reserve
+                             hd plan/default-headroom
+                             ub (plan/usable-bytes n)]
+                         [[(str "m_" i) (str "(mem-gib-milli " (:mem-bytes n) ")")]
+                          [(str "u_" i) (str "(usable-gib-milli " (:mem-bytes n) " " os " " hd " -1)")]
+                          [(str "e_" i) (str "(est-gib-milli " ub ")")]]))
+                     (range) nodes))
+        actual (compile-i64-cases
+                (merge cases
+                       {"b0" "(bytes-to-gib-milli 0)"
+                        "b16" (str "(bytes-to-gib-milli " (* 16 GiB) ")")
+                        "f16" (str "(bytes-to-gib-floor " (* 16 GiB) ")")
+                        "f1k" "(bytes-to-gib-floor 1024)"}))
+        marks (compile-string-cases
+               {"lr" "(layers-range-str 0 4)"
+                "lr2" "(layers-range-str 4 12)"})]
+    (is (= 0 (get actual "b0")))
+    (is (= 16000 (get actual "b16")))
+    (is (= 16 (get actual "f16")))
+    (is (= 0 (get actual "f1k")))
+    (is (= "0..4" (get marks "lr")))
+    (is (= "4..12" (get marks "lr2")))
+    (doseq [[i n] (map-indexed vector nodes)]
+      (let [ub (plan/usable-bytes n)
+            mem-m (long (* 1000.0 (/ (double (:mem-bytes n)) GiB)))
+            use-m (long (* 1000.0 (/ (double ub) GiB)))
+            est-m (long (* 1000.0 (/ (double ub) GiB)))]
+        (testing (:name n)
+          (is (= mem-m (get actual (str "m_" i))))
+          (is (= use-m (get actual (str "u_" i))))
+          (is (= est-m (get actual (str "e_" i)))))))))
+
