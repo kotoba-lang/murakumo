@@ -13,6 +13,7 @@
             [kotoba.compiler.core :as compiler]
             [kotoba.kir :as ir]
             [murakumo.kekkai.gate :as gate]
+            [murakumo.token :as tok]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -27,7 +28,9 @@
 
 (deftest oracle-catalog-ready
   (is (oracle/ready? :kekkai-gate))
-  (is (some #{:kekkai-gate} (oracle/catalog-ids))))
+  (is (oracle/ready? :token))
+  (is (some #{:kekkai-gate} (oracle/catalog-ids)))
+  (is (some #{:token} (oracle/catalog-ids))))
 
 (deftest product-shell-gate-uses-oracle-results
   (testing "parse-status delegates to kotoba parse-status-out"
@@ -80,3 +83,54 @@
   (let [kir (gen/compile-kir source-path)]
     (is (map? kir))
     (is (= "authorized" (ir/execute kir 'parse-status-out ["authorized\n"])))))
+
+
+(def ^:private token-source "kotoba/token_core.kotoba")
+(def ^:private token-resource "murakumo/oracle/token_core.kir.edn")
+
+(defn- token-live-kir []
+  (:kir (compiler/compile-source (slurp token-source) :wasm32-kotoba-v1 {})))
+
+(defn- token-resource-kir []
+  (edn/read-string (slurp (io/resource token-resource))))
+
+(deftest product-shell-token-uses-oracle-results
+  (testing "encode-claims-json + signing-input + wire-token via oracle"
+    (is (= "{\"sub\":\"a\",\"scope\":\"chat\",\"iat\":1,\"exp\":2}"
+           (tok/encode-claims-json {:sub "a" :scope "chat" :iat 1 :exp 2})))
+    (is (= "mk1.PAY" (tok/signing-input "PAY")))
+    (is (= "mk1.PAY.SIG" (tok/wire-token "PAY" "SIG"))))
+  (testing "constant-time= / version / scope via oracle"
+    (is (true? (tok/constant-time= "abc" "abc")))
+    (is (false? (tok/constant-time= "abc" "abd")))
+    (is (true? (tok/version-ok? "mk1")))
+    (is (false? (tok/version-ok? "mk0")))
+    (is (true? (tok/scope-allows? "all" "chat")))
+    (is (false? (tok/scope-allows? "image" "chat"))))
+  (testing "claims fields via oracle claim-*"
+    (let [cl (tok/claims {:sub "x" :scope "chat" :now 100 :ttl 10})]
+      (is (= "x" (:sub cl)))
+      (is (= "chat" (:scope cl)))
+      (is (= 100 (:iat cl)))
+      (is (= 110 (:exp cl))))
+    (let [cl (tok/claims {:now 0})]
+      (is (= "anonymous" (:sub cl)))
+      (is (= "all" (:scope cl)))
+      (is (= 2592000 (:exp cl))))))
+
+(deftest token-oracle-call-matches-live-compile
+  (let [live (token-live-kir)]
+    (is (= (ir/execute live 'encode-claims-json ["shinshi" "chat" 1 2])
+           (oracle/call :token 'encode-claims-json ["shinshi" "chat" 1 2])))
+    (is (= (ir/execute live 'signing-input ["P"])
+           (oracle/call :token 'signing-input ["P"])))
+    (is (= (ir/execute live 'wire-token ["P" "S"])
+           (oracle/call :token 'wire-token ["P" "S"])))
+    (is (= (ir/execute live 'constant-time-eq ["ab" "ab"])
+           (oracle/call :token 'constant-time-eq ["ab" "ab"])))
+    (is (= (ir/execute live 'scope-allows? ["all" "x"])
+           (oracle/call :token 'scope-allows? ["all" "x"])))))
+
+(deftest token-precompiled-kir-does-not-drift
+  (is (= (token-live-kir) (token-resource-kir))
+      "token KIR drift — run: clojure -M:test -m murakumo.kotoba-oracle-gen (or deps -M -m ...)"))
