@@ -16,7 +16,10 @@
        "quic-key-path-name quic-key-path-env max-env-name max-path-ref "
        "blank? ws? valid-env-var-name? valid-path-ref-unix? "
        "env-for-secret-name known-secret-name? reply-tag classify-fetched "
-       "secret-error-code secret-error-message reply-is-value?"))
+       "secret-error-code secret-error-message reply-is-value? "
+       "class-value class-not-found class-empty class-fetch class-unknown "
+       "error-code-prefix msg-empty msg-not-found msg-fetch msg-unknown "
+       "pem-begin-marker"))
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -153,3 +156,36 @@
       (is (= :value (:tag (f {:name "murakumo-token"}))))
       (is (= :secret/empty (:code (f {:name "empty"}))))
       (is (= :secret/not-found (:code (f {:name "missing"})))))))
+
+(deftest secret-reply-tokens-match
+  (let [s (compile-string-cases
+           {"cv" "(class-value)"
+            "cn" "(class-not-found)"
+            "ce" "(class-empty)"
+            "cf" "(class-fetch)"
+            "cu" "(class-unknown)"
+            "ep" "(error-code-prefix)"
+            "me" "(msg-empty)"
+            "mn" "(msg-not-found)"
+            "mf" "(msg-fetch)"
+            "mu" "(msg-unknown)"
+            "pb" "(pem-begin-marker)"
+            "cl" "(classify-fetched 0 0)"
+            "sc" (str "(secret-error-code " (kotoba-literal "empty") ")")})]
+    (is (= secret/class-value (get s "cv")))
+    (is (= "value" (get s "cv")))
+    (is (= secret/class-not-found (get s "cn")))
+    (is (= "not-found" (get s "cn")))
+    (is (= secret/class-empty (get s "ce")))
+    (is (= secret/class-fetch (get s "cf")))
+    (is (= secret/class-unknown (get s "cu")))
+    (is (= secret/error-code-prefix (get s "ep")))
+    (is (= "secret/" (get s "ep")))
+    (is (= secret/msg-empty (get s "me")))
+    (is (= secret/msg-not-found (get s "mn")))
+    (is (= secret/msg-fetch (get s "mf")))
+    (is (= secret/msg-unknown (get s "mu")))
+    (is (= secret/pem-begin-marker (get s "pb")))
+    (is (= "-----BEGIN" (get s "pb")))
+    (is (= secret/class-value (get s "cl")))
+    (is (= (str secret/error-code-prefix secret/class-empty) (get s "sc")))))
