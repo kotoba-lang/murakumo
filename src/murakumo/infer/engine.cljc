@@ -1,107 +1,109 @@
 ;; murakumo.infer.engine — engine adapters: shard plan → concrete process specs.
 ;;
-;; A plan (murakumo.infer.plan) is engine-agnostic layer math. This namespace
-;; turns it into the exact commands each participant runs, per engine:
-;;
-;;   :llamacpp-rpc  llama.cpp distributed — every worker runs `rpc-server`
-;;                  (ggml RPC backend, Metal/CUDA/CPU alike → works on the mixed
-;;                  macOS/linux fleet), the head runs `llama-server` with
-;;                  --rpc <endpoints> --tensor-split <spans> and serves the
-;;                  OpenAI-compatible API. Weights stream head→workers at load
-;;                  (cacheable node-side with `-c`), tokens cost one activation
-;;                  hop per shard boundary — the same pipeline-parallel wire
-;;                  profile ADR-2605300000 picked for the 1 GbE fleet.
-;;
-;;   :mlx-ring      mlx_lm pipeline parallel via `mlx.launch --backend ring`
-;;                  (all-Apple fleets; MLX-format checkpoints).
-;;
-;;   :mlx-moe       mu-hashmi/mlx-moe single-node MoE serving — no ring, ONE
-;;                  process on the plan's sole (:head?) node; inactive experts
-;;                  page in from SSD as the router selects them instead of
-;;                  sharding layers across the fleet (murakumo.infer.moe).
-;;
-;;   :llamacpp-embed  single-node llama.cpp embedding server (ADR-2607192200
-;;                  2026-07-19 addendum) — like :mlx-moe, no --rpc/--tensor-split
-;;                  ring: the embedding model (BGE-M3-class, ~1024-dim dense) is
-;;                  small enough for one node. `--embedding --pooling` switches
-;;                  llama-server into embedding-serving mode (OpenAI-compatible
-;;                  /v1/embeddings) on a port separate from any chat head, so
-;;                  murakumo-main chat traffic (:llamacpp-rpc's head-cmd) is
-;;                  never touched by this engine.
-;;
-;; Everything here is pure string/data assembly — runnable and testable anywhere.
+;; W6 product-shell authority (ADR-260728-w6-engine-oracle-authority):
+;; On the JVM, pure cmd-string helpers DELEGATE to precompiled
+;; kotoba/infer_engine_core.kotoba → resources/murakumo/oracle/infer_engine_core.kir.edn.
+;; Host remains: plan vector walks (workers/serving), variable-arity CSV joins,
+;; pr-str prompt quoting, optional extra-args join.
 
 (ns murakumo.infer.engine
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def default-rpc-port 50052)
+(def ^:private oid :infer-engine)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
+
+(def default-rpc-port
+  #?(:clj (long (o 'default-rpc-port []))
+     :cljs 50052))
 
 (defn- serving [plan] (filter (comp pos? :span) (:assignments plan)))
 
 (defn workers
-  "Serving assignments that need a remote rpc-server — i.e. everyone but the
-   head (the head's slice rides its own local GPU, marked :head? on the node)."
+  "Serving assignments that need a remote rpc-server — everyone but the head."
   [plan]
   (remove (comp :head? :node) (serving plan)))
 
 (defn head-span [plan]
   (or (some #(when (get-in % [:node :head?]) (:span %)) (:assignments plan)) 0))
 
+(defn- mirror-rpc-worker-cmd [bin-dir port device cache? cache-dir]
+  (str bin-dir "/rpc-server -H 0.0.0.0 -p " port
+       " -d " device
+       (when cache? (str " -c" (when cache-dir (str " " cache-dir))))))
+
 (defn rpc-worker-cmds
-  "One `rpc-server` spec per serving worker node.
-   `-c` caches streamed tensors on the node's disk (skip on disk-tight nodes)."
+  "One `rpc-server` spec per serving worker node."
   [plan {:keys [bin-dir port cache-dir device] :or {port default-rpc-port device "MTL0"}}]
   (for [{:keys [node]} (workers plan)
-        :let [cache? (not (false? (:rpc-cache? node)))]]
+        :let [cache? (not (false? (:rpc-cache? node)))
+              dev (or (:rpc-device node) device)
+              cmd #?(:clj (o 'rpc-server-cmd
+                             [(str bin-dir)
+                              (long port)
+                              (str dev)
+                              (long (if cache? 1 0))
+                              (str (or cache-dir ""))])
+                     :cljs (mirror-rpc-worker-cmd bin-dir port dev cache? cache-dir))]]
     {:name (:name node)
      :host (:host node)
      :ip (or (:rpc-ip node) (:ip node))
      :port port
-     ;; -d pins the worker to ONE device: rpc-server otherwise also exports its
-     ;; BLAS/CPU backends and the head schedules ops onto them that they cannot
-     ;; run (live fleet: RMS_NORM → ggml_backend_blas abort).
-     :cmd (str bin-dir "/rpc-server -H 0.0.0.0 -p " port
-               " -d " (or (:rpc-device node) device)
-               (when cache? (str " -c"
-                                 (when cache-dir (str " " cache-dir)))))}))
+     :cmd cmd}))
 
 (defn tensor-split
-  "--tensor-split proportions in DEVICE order: RPC workers as listed, the head's
-   own device last (span 0 head = pure conductor)."
+  "--tensor-split proportions: RPC workers then head last."
   [plan]
-  (str/join "," (concat (map :span (workers plan)) [(head-span plan)])))
+  #?(:clj
+     (let [spans (concat (map :span (workers plan)) [(head-span plan)])]
+       ;; host join; oracle has fixed tensor-split-3 for 3-way only
+       (str/join "," (map #(o 'i64-str [(long %)]) spans)))
+     :cljs
+     (str/join "," (concat (map :span (workers plan)) [(head-span plan)]))))
 
 (defn rpc-endpoints [worker-cmds]
-  (str/join "," (map #(str (or (:ip %) (:host %)) ":" (:port %)) worker-cmds)))
+  #?(:clj
+     (str/join ","
+               (map (fn [w]
+                      (o 'endpoint
+                         [(str (or (:ip w) (:host w)))
+                          (long (:port w))]))
+                    worker-cmds))
+     :cljs
+     (str/join "," (map #(str (or (:ip %) (:host %)) ":" (:port %)) worker-cmds))))
 
 (defn head-cmd
-  "The head's `llama-server` — loads the GGUF, drives the RPC ring, serves
-   OpenAI-compatible /v1 on :port. The head's own slice stays on its local GPU.
-
-   :strategy (murakumo.infer.plan/choose-strategy) maps onto llama.cpp:
-     :pipeline → --split-mode layer  (contiguous layer shards; the default)
-     :tensor   → --split-mode row    (row-parallel matmuls, all-reduce per layer)
-     :expert   → --split-mode layer + :moe-override (-ot regex) pinning expert
-                 tensors; whole-expert placement rides layer splits today —
-                 true cross-node token routing is an upstream llama.cpp gap."
+  "The head's `llama-server` — loads GGUF, drives RPC ring, serves /v1."
   [plan {:keys [bin-dir model-path port rpc-port ctx parallel strategy moe-override extra-args]
          :or {port 8080 rpc-port default-rpc-port ctx 4096 parallel 1
               strategy :pipeline}}]
-  (let [ws (rpc-worker-cmds plan {:bin-dir bin-dir :port rpc-port})]
-    (str bin-dir "/llama-server -m " model-path
-         " --rpc " (rpc-endpoints ws)
-         " --split-mode " (case strategy :tensor "row" "layer")
-         " --tensor-split " (tensor-split plan)
-         (when moe-override (str " -ot " (pr-str moe-override)))
-         " -ngl 999 -c " ctx " --parallel " parallel
-         " --host 0.0.0.0 --port " port
-         (when (seq extra-args) (str " " (str/join " " extra-args))))))
+  (let [ws (rpc-worker-cmds plan {:bin-dir bin-dir :port rpc-port})
+        strat (name (or strategy :pipeline))
+        rpc-csv (rpc-endpoints ws)
+        tsplit (tensor-split plan)]
+    #?(:clj
+       (str (o 'head-cmd-front [(str bin-dir) (str model-path)])
+            (o 'head-cmd-middle [(str rpc-csv) (str strat) (str tsplit)])
+            (when moe-override (str " -ot " (pr-str moe-override)))
+            (o 'head-cmd-tail [(long ctx) (long parallel) (long port)])
+            (when (seq extra-args) (str " " (str/join " " extra-args))))
+       :cljs
+       (str bin-dir "/llama-server -m " model-path
+            " --rpc " rpc-csv
+            " --split-mode " (case strategy :tensor "row" "layer")
+            " --tensor-split " tsplit
+            (when moe-override (str " -ot " (pr-str moe-override)))
+            " -ngl 999 -c " ctx " --parallel " parallel
+            " --host 0.0.0.0 --port " port
+            (when (seq extra-args) (str " " (str/join " " extra-args)))))))
 
 ;; ── mlx ring ────────────────────────────────────────────────────────────────
 
 (defn mlx-hosts
-  "mlx.launch hosts JSON structure (write with your JSON encoder of choice).
-   The head IS a ring rank in MLX (rank 0 = the launcher's own machine)."
+  "mlx.launch hosts JSON structure."
   [plan]
   (vec (for [{:keys [node]} (serving plan)]
          {:ssh (:host node) :ips [(or (:ip node) (:host node))]})))
@@ -109,46 +111,63 @@
 (defn mlx-launch-cmd
   [plan {:keys [hosts-file venv model-repo prompt max-tokens]
          :or {max-tokens 128}}]
-  (str venv "/bin/mlx.launch --hosts " hosts-file " --backend ring "
-       venv "/bin/mlx_lm.generate -- --model " model-repo
-       " --pipeline --max-tokens " max-tokens
-       " --prompt " (pr-str (or prompt "Name three Japanese cities."))))
+  #?(:clj
+     (str (o 'mlx-launch-front
+             [(str venv) (str hosts-file) (str model-repo) (long max-tokens)])
+          " --prompt " (pr-str (or prompt "Name three Japanese cities.")))
+     :cljs
+     (str venv "/bin/mlx.launch --hosts " hosts-file " --backend ring "
+          venv "/bin/mlx_lm.generate -- --model " model-repo
+          " --pipeline --max-tokens " max-tokens
+          " --prompt " (pr-str (or prompt "Name three Japanese cities.")))))
 
-;; ── mlx-moe (single-node, SSD-paged experts) ───────────────────────────────
+;; ── mlx-moe ─────────────────────────────────────────────────────────────────
 
 (defn mlx-moe-cmd
-  "mu-hashmi/mlx-moe `serve` invocation. No --rpc/--hosts/ring — one process,
-   one node; `:capacity` (murakumo.infer.moe/capacity-for-usable) and
-   `:kv-bits` are optional, mlx-moe auto-selects capacity from live RAM when
-   omitted. :extra-args is an escape hatch for mlx-moe flags that land before
-   murakumo grows a named key."
+  "mu-hashmi/mlx-moe `serve` invocation (single-node)."
   [{:keys [venv model-repo port capacity pin-top-k kv-bits profile warmup extra-args]
     :or {port 8080}}]
-  (str (if venv (str venv "/bin/mlx-moe") "mlx-moe") " serve " model-repo
-       " --host 0.0.0.0 --port " port
-       (when capacity (str " --capacity " capacity))
-       (when pin-top-k (str " --pin-top-k " pin-top-k))
-       (when kv-bits (str " --kv-bits " kv-bits))
-       (when profile (str " --profile " profile))
-       (when warmup (str " --warmup " warmup))
-       (when (seq extra-args) (str " " (str/join " " extra-args)))))
+  #?(:clj
+     (str (o 'mlx-moe-front
+             [(str (or venv "")) (str model-repo) (long port)])
+          (o 'opt-i64-flag
+             [" --capacity" (long (or capacity 0)) (long (if capacity 1 0))])
+          (o 'opt-i64-flag
+             [" --pin-top-k" (long (or pin-top-k 0)) (long (if pin-top-k 1 0))])
+          (o 'opt-i64-flag
+             [" --kv-bits" (long (or kv-bits 0)) (long (if kv-bits 1 0))])
+          (o 'opt-str-flag
+             [" --profile" (str (or profile "")) (long (if profile 1 0))])
+          (o 'opt-str-flag
+             [" --warmup" (str (or warmup "")) (long (if warmup 1 0))])
+          (when (seq extra-args) (str " " (str/join " " extra-args))))
+     :cljs
+     (str (if venv (str venv "/bin/mlx-moe") "mlx-moe") " serve " model-repo
+          " --host 0.0.0.0 --port " port
+          (when capacity (str " --capacity " capacity))
+          (when pin-top-k (str " --pin-top-k " pin-top-k))
+          (when kv-bits (str " --kv-bits " kv-bits))
+          (when profile (str " --profile " profile))
+          (when warmup (str " --warmup " warmup))
+          (when (seq extra-args) (str " " (str/join " " extra-args))))))
 
-;; ── llamacpp-embed (single-node, no ring — mirrors :mlx-moe's positioning) ──
+;; ── llamacpp-embed ──────────────────────────────────────────────────────────
 
 (defn embed-head-cmd
-  "Single-node llama.cpp embedding server — model is small enough that no
-   --rpc/--tensor-split ring is needed (mirrors :mlx-moe's single-node
-   positioning). --embedding + --pooling switch llama-server into
-   embedding-serving mode (OpenAI-compatible /v1/embeddings), on a port
-   separate from any chat head so murakumo-main chat traffic is never
-   touched by this addition."
+  "Single-node llama.cpp embedding server."
   [{:keys [bin-dir model-path port ctx pooling parallel extra-args]
     :or {port 8091 ctx 8192 pooling "mean" parallel 4}}]
-  (str bin-dir "/llama-server -m " model-path
-       " --embedding --pooling " pooling
-       " -ngl 999 -c " ctx " --parallel " parallel
-       " --host 0.0.0.0 --port " port
-       (when (seq extra-args) (str " " (str/join " " extra-args)))))
+  #?(:clj
+     (str (o 'embed-head-front
+             [(str bin-dir) (str model-path) (str pooling) (long ctx)])
+          (o 'embed-head-back [(long parallel) (long port)])
+          (when (seq extra-args) (str " " (str/join " " extra-args))))
+     :cljs
+     (str bin-dir "/llama-server -m " model-path
+          " --embedding --pooling " pooling
+          " -ngl 999 -c " ctx " --parallel " parallel
+          " --host 0.0.0.0 --port " port
+          (when (seq extra-args) (str " " (str/join " " extra-args))))))
 
 (defn commands
   "Plan + engine + opts → {:workers [...] :head {...}} process specs."
@@ -158,9 +177,5 @@
                    :head {:cmd (head-cmd plan opts)}}
     :mlx-ring {:hosts (mlx-hosts plan)
                :head {:cmd (mlx-launch-cmd plan opts)}}
-    ;; :mlx-moe ignores `plan` (no ring to conduct) — the sole node + capacity
-    ;; already live in opts (murakumo.infer.moe/plan → cmd-serve-moe).
     :mlx-moe {:head {:cmd (mlx-moe-cmd opts)}}
-    ;; :llamacpp-embed also ignores `plan` (single node, no ring) — same
-    ;; single-node posture as :mlx-moe, for the embedding engine instead.
     :llamacpp-embed {:head {:cmd (embed-head-cmd opts)}}))
