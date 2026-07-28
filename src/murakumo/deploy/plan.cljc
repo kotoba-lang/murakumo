@@ -4,15 +4,16 @@
 ;; forwarding, artifact distribution, and sleeps. This namespace owns the pure
 ;; manifest parsing and command argv shapes used by that shell.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-deploy-probe-pure-oracle):
-;; constants + path/url + execution probe pure helpers DELEGATE to precompiled
-;; kotoba/deploy_plan_core when oracle is loadable (JVM classpath or cljs/nbb —
-;; ADR-260728-w6-cljs-oracle-load). Regex extract, argv vectors, node folds stay host.
-;; cljs mirrors remain fallback when oracle is not ready.
+;; W6 product-shell authority (ADR-260728-w6-deploy-argv-pure-oracle):
+;; constants + path/url + probe + argv flag/gate pure helpers DELEGATE to
+;; precompiled kotoba/deploy_plan_core when oracle is loadable (JVM classpath
+;; or cljs/nbb — ADR-260728-w6-cljs-oracle-load). Regex extract, argv vector
+;; assembly, node folds stay host. cljs mirrors remain fallback when oracle
+;; is not ready.
 
 (ns murakumo.deploy.plan
   "Portable deploy planning helpers.
-   W6 product-shell: path/url + probe pure helpers via kotoba deploy_plan_core."
+   W6 product-shell: path/url + probe + argv pure helpers via deploy_plan_core."
   (:require [clojure.string :as str]
             [murakumo.config :as config]
             [murakumo.kotoba.oracle :as oracle]))
@@ -101,6 +102,26 @@
            (boolean (re-matches #"[A-Za-z]:[\\/].*" p)))
        (not= p "git")))
 
+(def ^:private mirror-cp-bin "cp")
+(def ^:private mirror-rm-bin "rm")
+(def ^:private mirror-rm-rf-flag "-rf")
+(def ^:private mirror-cp-recursive-flag "-R")
+(def ^:private mirror-git-c-flag "-C")
+(def ^:private mirror-git-rev-parse "rev-parse")
+(def ^:private mirror-git-short-flag "--short")
+(def ^:private mirror-git-head-ref "HEAD")
+(def ^:private mirror-version-flag "--version")
+(def ^:private mirror-build-features "p2p,realtime-wasm,webrtc")
+
+(defn- mirror-version-bin-path [dest]
+  (str dest "/kotoba"))
+
+(defn- mirror-missing-manifest? [manifest]
+  (str/blank? (str manifest)))
+
+(defn- mirror-missing-operator-seed? [operator-seed]
+  (str/blank? (str operator-seed)))
+
 ;; ── dual-source constants ──────────────────────────────────────────────
 
 (def default-wasm
@@ -122,6 +143,53 @@
 
 (def placement-wait-ms
   (oracle-i64-const 'placement-wait-ms mirror-placement-wait-ms))
+
+(def cp-bin
+  "cp binary name for pin/copy argvs. Kotoba `cp-bin` when ready."
+  (oracle-str-const 'cp-bin mirror-cp-bin))
+
+(def rm-bin
+  "rm binary name for tree remove. Kotoba `rm-bin` when ready."
+  (oracle-str-const 'rm-bin mirror-rm-bin))
+
+(def rm-rf-flag
+  "rm force-recursive flag. Kotoba `rm-rf-flag` when ready."
+  (oracle-str-const 'rm-rf-flag mirror-rm-rf-flag))
+
+(def cp-recursive-flag
+  "cp recursive flag. Kotoba `cp-recursive-flag` when ready."
+  (oracle-str-const 'cp-recursive-flag mirror-cp-recursive-flag))
+
+(def git-c-flag
+  "git -C flag. Kotoba `git-c-flag` when ready."
+  (oracle-str-const 'git-c-flag mirror-git-c-flag))
+
+(def git-rev-parse
+  "git rev-parse subcommand. Kotoba `git-rev-parse` when ready."
+  (oracle-str-const 'git-rev-parse mirror-git-rev-parse))
+
+(def git-short-flag
+  "git --short flag. Kotoba `git-short-flag` when ready."
+  (oracle-str-const 'git-short-flag mirror-git-short-flag))
+
+(def git-head-ref
+  "git HEAD ref. Kotoba `git-head-ref` when ready."
+  (oracle-str-const 'git-head-ref mirror-git-head-ref))
+
+(def version-flag
+  "kotoba --version flag. Kotoba `version-flag` when ready."
+  (oracle-str-const 'version-flag mirror-version-flag))
+
+(def build-features
+  "BUILD.edn :features string. Kotoba `build-features` when ready."
+  (oracle-str-const 'build-features mirror-build-features))
+
+(defn version-bin-path
+  "Pinned kotoba binary path under dest. Kotoba `version-bin-path` when ready."
+  [dest]
+  (try-oracle
+   #(o 'version-bin-path [(str dest)])
+   #(mirror-version-bin-path dest)))
 
 (defn manifest-dir
   "Directory portion of a manifest path. Bare filename → \".\".
@@ -311,9 +379,9 @@
   (filterv #(not (exists? (:src %))) (:binaries pin)))
 
 (defn copy-argv
-  "argv for copying one file."
+  "argv for copying one file. Bin name dual-sourced via `cp-bin`."
   [src dest]
-  ["cp" src dest])
+  [cp-bin src dest])
 
 (defn pin-binary-copy-argvs
   "argvs for copying every pinned binary."
@@ -322,14 +390,14 @@
         (:binaries pin)))
 
 (defn remove-tree-argv
-  "argv for removing a directory tree."
+  "argv for removing a directory tree. Bin/flags dual-sourced."
   [path]
-  ["rm" "-rf" path])
+  [rm-bin rm-rf-flag path])
 
 (defn copy-tree-argv
-  "argv for copying one directory tree."
+  "argv for copying one directory tree. Bin/flags dual-sourced."
   [src dest]
-  ["cp" "-R" src dest])
+  [cp-bin cp-recursive-flag src dest])
 
 (defn pin-wit-argvs
   "argvs for replacing the pinned WIT dir when a source WIT dir exists."
@@ -394,25 +462,28 @@
 
   **Requires absolute `git-bin`** (no PATH, no bare \"git\"). Ops hosts
   must call `resolve-git-bin` first. The 1-arity form is removed from the
-  ops path — tests pass an explicit absolute path."
+  ops path — tests pass an explicit absolute path.
+  Flag fragments dual-sourced via kotoba git-* exports."
   [src git-bin]
   (when-not (absolute-git-bin? git-bin)
     (throw (ex-info "git-short-sha-argv requires absolute git-bin (no PATH)"
                     {:phase :deploy-plan :git-bin git-bin})))
-  [git-bin "-C" src "rev-parse" "--short" "HEAD"])
+  [git-bin git-c-flag src git-rev-parse git-short-flag git-head-ref])
 
 (defn version-argv
-  "argv for reading the pinned kotoba CLI version."
+  "argv for reading the pinned kotoba CLI version.
+   Path + flag dual-sourced via version-bin-path / version-flag."
   [dest]
-  [(str dest "/kotoba") "--version"])
+  [(version-bin-path dest) version-flag])
 
 (defn build-manifest
-  "Tracked BUILD.edn content for a pinned kotoba binary set."
+  "Tracked BUILD.edn content for a pinned kotoba binary set.
+   :features dual-sourced via `build-features`."
   [source git-sha version]
   {:source source
    :git-sha git-sha
    :version version
-   :features "p2p,realtime-wasm,webrtc"})
+   :features build-features})
 
 (defn missing-pinned-binaries?
   "True when a BUILD.edn pins a rollout but the owned pinned server binary is absent."
@@ -420,11 +491,22 @@
   (boolean (and build-manifest (not pinned-server-exists?))))
 
 (defn deploy-command-error
-  "Validation error keyword for deploy, or nil."
+  "Validation error keyword for deploy, or nil.
+   Kotoba `missing-manifest?` / `missing-operator-seed?` when ready."
   [manifest operator-seed]
   (cond
-    (str/blank? (str manifest)) :missing-manifest
-    (str/blank? (str operator-seed)) :missing-operator-seed
+    (try-oracle
+     #(= 1 (oracle/i64->host
+            (o 'missing-manifest? [(str (or manifest ""))])))
+     #(mirror-missing-manifest? manifest))
+    :missing-manifest
+
+    (try-oracle
+     #(= 1 (oracle/i64->host
+            (o 'missing-operator-seed? [(str (or operator-seed ""))])))
+     #(mirror-missing-operator-seed? operator-seed))
+    :missing-operator-seed
+
     :else nil))
 
 (defn deployment-plan
