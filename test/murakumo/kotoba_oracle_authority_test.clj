@@ -29,6 +29,8 @@
             [murakumo.fleet.inventory :as finv]
             [murakumo.identity :as id]
             [murakumo.infer.credits :as credits]
+            [murakumo.infer.join :as join]
+            [murakumo.infer.gc :as gc]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -800,3 +802,95 @@
         shipped (edn/read-string
                  (slurp (io/resource "murakumo/oracle/infer_credits_core.kir.edn")))]
     (is (= live shipped) "infer_credits_core KIR drift — run oracle-gen")))
+
+(deftest product-shell-join-uses-oracle-results
+  (testing "max-resident from oracle"
+    (is (= (oracle/call :infer-join 'max-resident-bytes [0])
+           (get-in join/tiers [:browser :max-resident-bytes])))
+    (is (= (oracle/call :infer-join 'max-resident-bytes [2])
+           (get-in join/tiers [:native :max-resident-bytes]))))
+  (testing "can? + needs-relay? via oracle"
+    (is (true? (join/can? {:tier :browser} :media-postproc)))
+    (is (false? (join/can? {:tier :browser} :host-large-model)))
+    (is (true? (join/can? {:tier :native} :full-shard)))
+    (is (true? (join/needs-relay? {:tier :browser})))
+    (is (false? (join/needs-relay? {:tier :native :inbound-reachable? true})))
+    (is (true? (join/needs-relay? {:tier :native :inbound-reachable? false}))))
+  (testing "enrollment clamp-resident"
+    (let [en (join/enrollment {:name "t" :did "d" :tier :browser
+                               :mem-bytes (* 8 1024 1024 1024)})]
+      (is (= (get-in join/tiers [:browser :max-resident-bytes])
+             (get-in en [:node/caps :max-resident-bytes])))
+      (is (true? (:node/needs-relay? en)))))
+  (testing "eligible-for-work?"
+    (let [node {:node/can [:media-postproc]
+                :node/caps {:max-resident-bytes (* 2 1024 1024 1024)}}]
+      (is (true? (join/eligible-for-work?
+                  node {:work-kind :media-postproc :resident-bytes 100})))
+      (is (false? (join/eligible-for-work?
+                   node {:work-kind :host-large-model :resident-bytes 100})))
+      (is (false? (join/eligible-for-work?
+                   node {:work-kind :media-postproc
+                         :resident-bytes (* 9 1024 1024 1024)}))))))
+
+(deftest join-oracle-call-matches-live-compile
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/infer_join_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'max-resident-bytes [0])
+           (oracle/call :infer-join 'max-resident-bytes [0])))
+    (is (= (ir/execute live 'can? [0 "media-postproc"])
+           (oracle/call :infer-join 'can? [0 "media-postproc"])))
+    (is (= (ir/execute live 'needs-relay? [2 1])
+           (oracle/call :infer-join 'needs-relay? [2 1])))
+    (is (= (ir/execute live 'clamp-resident [-1 2147483648])
+           (oracle/call :infer-join 'clamp-resident [-1 2147483648])))
+    (is (= (ir/execute live 'eligible-for-work? [1 100 50])
+           (oracle/call :infer-join 'eligible-for-work? [1 100 50])))))
+
+(deftest join-precompiled-kir-does-not-drift
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/infer_join_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))
+        shipped (edn/read-string
+                 (slurp (io/resource "murakumo/oracle/infer_join_core.kir.edn")))]
+    (is (= live shipped) "infer_join_core KIR drift — run oracle-gen")))
+
+(deftest product-shell-gc-uses-oracle-results
+  (testing "defaults from oracle"
+    (is (= (oracle/call :infer-gc 'gib []) gc/GiB))
+    (is (= (oracle/call :infer-gc 'default-target-free [])
+           (:target-free-bytes gc/default-policy)))
+    (is (= 7 (:comfy-keep-days gc/default-policy)))
+    (is (= 2 (:hf-keep gc/default-policy))))
+  (testing "plan uses need/free-after/target-met"
+    (let [entries [{:path "/rpc" :class :rpc-cache :bytes (* 20 gc/GiB) :atime-days 10}
+                   {:path "/p" :class :protected :bytes (* 1 gc/GiB) :atime-days 0}]
+          free (* 5 gc/GiB)
+          p (gc/plan entries free {})]
+      (is (seq (:evict p)))
+      (is (pos? (:reclaim-bytes p)))
+      (is (= (+ free (:reclaim-bytes p)) (:free-after p)))
+      (is (true? (:target-met? p)))
+      (is (= 1 (:kept-protected p))))))
+
+(deftest gc-oracle-call-matches-live-compile
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/infer_gc_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'gib [])
+           (oracle/call :infer-gc 'gib [])))
+    (is (= (ir/execute live 'need-bytes [100 30])
+           (oracle/call :infer-gc 'need-bytes [100 30])))
+    (is (= (ir/execute live 'free-after [10 5])
+           (oracle/call :infer-gc 'free-after [10 5])))
+    (is (= (ir/execute live 'target-met? [10 5 12])
+           (oracle/call :infer-gc 'target-met? [10 5 12])))
+    (is (= (ir/execute live 'rank-better? [10 1 5 9])
+           (oracle/call :infer-gc 'rank-better? [10 1 5 9])))
+    (is (= (ir/execute live 'comfy-evictable? [10 7])
+           (oracle/call :infer-gc 'comfy-evictable? [10 7])))))
+
+(deftest gc-precompiled-kir-does-not-drift
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/infer_gc_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))
+        shipped (edn/read-string
+                 (slurp (io/resource "murakumo/oracle/infer_gc_core.kir.edn")))]
+    (is (= live shipped) "infer_gc_core KIR drift — run oracle-gen")))

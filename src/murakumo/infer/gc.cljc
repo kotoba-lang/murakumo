@@ -17,16 +17,34 @@
 ;;                    used, evict the rest (re-fetchable from HF).
 ;; Within a class, oldest (largest atime-days) goes first; ties by largest bytes
 ;; (reclaim the most per deletion).
+;;
+;; W6 product-shell authority (ADR-260728-w6-join-gc-oracle-authority):
+;; On the JVM, policy constants + need/free-after/target-met/rank/comfy gates
+;; DELEGATE to precompiled infer_gc_core.kir.edn. Host remains: entry filters,
+;; vector reduce, cljs mirrors.
 
-(ns murakumo.infer.gc)
+(ns murakumo.infer.gc
+  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def GiB (* 1024 1024 1024))
+(def ^:private oid :infer-gc)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
+
+(def GiB
+  #?(:clj (long (o 'gib []))
+     :cljs (* 1024 1024 1024)))
 
 (def default-policy
-  {:target-free-bytes (* 20 GiB)      ; reclaim until at least this much is free
-   :comfy-keep-days 7                  ; keep ComfyUI temp/output newer than this
-   :hf-keep 2                          ; keep the N most-recently-used HF models
-   :evict-order [:rpc-cache :comfy-temp :hf-stale]})
+  #?(:clj {:target-free-bytes (long (o 'default-target-free []))
+           :comfy-keep-days (long (o 'default-comfy-keep-days []))
+           :hf-keep (long (o 'default-hf-keep []))
+           :evict-order [:rpc-cache :comfy-temp :hf-stale]}
+     :cljs {:target-free-bytes (* 20 GiB)
+            :comfy-keep-days 7
+            :hf-keep 2
+            :evict-order [:rpc-cache :comfy-temp :hf-stale]}))
 
 (def reclaimable #{:rpc-cache :comfy-temp :hf-stale})
 
@@ -34,6 +52,20 @@
   "Eviction rank within a class: oldest first, then biggest. Lower = evict sooner."
   [{:keys [atime-days bytes]}]
   [(- (or atime-days 0)) (- (or bytes 0))])
+
+(defn- rank-compare
+  "Comparator using kotoba rank-better? on JVM (1 ⇒ a evicts before b)."
+  [a b]
+  #?(:clj
+     (let [a1 (long (or (:atime-days a) 0))
+           b1 (long (or (:bytes a) 0))
+           a2 (long (or (:atime-days b) 0))
+           b2 (long (or (:bytes b) 0))]
+       (cond
+         (= 1 (o 'rank-better? [a1 b1 a2 b2])) -1
+         (= 1 (o 'rank-better? [a2 b2 a1 b1])) 1
+         :else 0))
+     :cljs (compare (rank a) (rank b))))
 
 (defn- hf-lru-evictable
   "Of the :hf-stale entries, mark the (count - keep) least-recently-used as
@@ -50,21 +82,31 @@
   [entries free-bytes policy]
   (let [{:keys [target-free-bytes comfy-keep-days hf-keep evict-order]}
         (merge default-policy policy)
-        need (max 0 (- target-free-bytes (or free-bytes 0)))
+        need #?(:clj (long (o 'need-bytes
+                              [(long target-free-bytes)
+                               (long (or free-bytes 0))]))
+                :cljs (max 0 (- target-free-bytes (or free-bytes 0))))
         candidates (reduce
                     (fn [acc cls]
                       (concat acc
                               (case cls
                                 :rpc-cache
-                                (sort-by rank (filter #(= :rpc-cache (:class %)) entries))
+                                (sort rank-compare
+                                      (filter #(= :rpc-cache (:class %)) entries))
                                 :comfy-temp
-                                (sort-by rank (filter #(and (= :comfy-temp (:class %))
-                                                            (> (or (:atime-days %) 0) comfy-keep-days))
-                                                      entries))
+                                (sort rank-compare
+                                      (filter #(and (= :comfy-temp (:class %))
+                                                    #?(:clj (= 1 (o 'comfy-evictable?
+                                                                    [(long (or (:atime-days %) 0))
+                                                                     (long comfy-keep-days)]))
+                                                       :cljs (> (or (:atime-days %) 0)
+                                                                comfy-keep-days)))
+                                              entries))
                                 :hf-stale
-                                (sort-by rank (hf-lru-evictable
-                                               (filter #(= :hf-stale (:class %)) entries)
-                                               hf-keep))
+                                (sort rank-compare
+                                      (hf-lru-evictable
+                                       (filter #(= :hf-stale (:class %)) entries)
+                                       hf-keep))
                                 nil)))
                     [] evict-order)
         [evict reclaimed]
@@ -72,9 +114,14 @@
                   (if (>= got need)
                     (reduced [ev got])
                     [(conj ev e) (+ got (or (:bytes e) 0))]))
-                [[] 0] candidates)]
+                [[] 0] candidates)
+        free0 (or free-bytes 0)]
     {:evict (vec evict)
      :reclaim-bytes reclaimed
-     :free-after (+ (or free-bytes 0) reclaimed)
-     :target-met? (>= (+ (or free-bytes 0) reclaimed) target-free-bytes)
+     :free-after #?(:clj (long (o 'free-after [(long free0) (long reclaimed)]))
+                    :cljs (+ free0 reclaimed))
+     :target-met? #?(:clj (= 1 (o 'target-met?
+                                  [(long free0) (long reclaimed)
+                                   (long target-free-bytes)]))
+                     :cljs (>= (+ free0 reclaimed) target-free-bytes))
      :kept-protected (count (filter #(= :protected (:class %)) entries))}))
