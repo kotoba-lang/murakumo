@@ -14,13 +14,15 @@
             partition-1-end plan-fits-1
             partition-2-ends plan-fits-2
             asg-row-pack asg-row-span asg-row-fits
-            pick-max-idx-2 ends-lo ends-hi]))
+            pick-max-idx-2 ends-lo ends-hi
+            lo-acc-pack partition-step partition-step-hi partition-step-acc
+            partition-last fits-and]))
 
 ;; W6 pure-planner oracle — murakumo.infer.plan usable-bytes + choose-strategy
 ;; + plan largest-remainder (no per-pool floor) for fixed 3 ranks + fits gates
 ;; + integer partition-layers walk for fixed 1/2/3 nodes over layer weights.
+;; + partition-step host-fold for n>3 rings (lo/acc → hi/new-acc per node).
 ;; Host attaches node ids when assembling plan maps from pure ends/spans/fits.
-;; Full variable-arity node vectors (n>3) stay cljc.
 ;; plan-fits-1/2/3: pure go/no-go for fixed n-node integer partition.
 ;; asg-row-pack: span+fits for one assignment (host pairs with node id).
 ;; pick-max-idx-3 / moe-capacity-ok: mlx-moe single-node pick + fits gate.
@@ -34,6 +36,7 @@
 ;; model-pack = pack3(layers, dense, dense-frac-milli), base 65536.
 ;; partition-2-ends → pack3(hi0, hi1, 0) with hi1 = layers.
 ;; partition-3-ends → pack3(hi0, hi1, hi2) exclusive layer ends (last = layers).
+;; partition-step: pack3(lo,acc,0)+cum+total → pack3(hi,new-acc,0); last uses partition-last.
 ;; Parity: test/murakumo/infer_plan_kotoba_parity_test.clj
 
 (defn gib [] :i64 1073741824)
@@ -382,6 +385,37 @@
 
 (defn asg-row-fits [row :i64] :i64
   (plan-lr-pack-get row 1))
+
+(defn lo-acc-pack [lo :i64 acc :i64] :i64
+  ;; state for partition-step host fold
+  (pack3 lo acc 0))
+
+(defn partition-step [weight-bytes :i64 mp :i64 lo-acc :i64
+                      cum-usable :i64 total-usable :i64] :i64
+  ;; one non-last ring node: cut hi from lo/acc at cumulative target.
+  ;; lo-acc = pack3(lo, acc, 0). → pack3(hi, new-acc, 0).
+  ;; Host: cum-usable = sum usable[0..i] inclusive; last node uses partition-last.
+  (let [lo (plan-lr-pack-get lo-acc 0)
+        acc (plan-lr-pack-get lo-acc 1)
+        wsum (layer-wsum weight-bytes mp)
+        target (partition-target wsum cum-usable total-usable)
+        hi (advance-hi weight-bytes mp lo acc target)
+        new-acc (+ acc (est-bytes-range weight-bytes mp lo hi))]
+    (pack3 hi new-acc 0)))
+
+(defn partition-step-hi [step-pack :i64] :i64
+  (plan-lr-pack-get step-pack 0))
+
+(defn partition-step-acc [step-pack :i64] :i64
+  (plan-lr-pack-get step-pack 1))
+
+(defn partition-last [mp :i64] :i64
+  ;; last ring node exclusive end is always layers
+  (model-layers mp))
+
+(defn fits-and [acc-fits :i64 row-fits :i64] :i64
+  ;; fold positive-span fits across assignments
+  (if (if (= acc-fits 1) (if (= row-fits 1) 1 0) 0) 1 0))
 
 (defn ok-mark [fits :i64] :string
   ;; cljc report :ok

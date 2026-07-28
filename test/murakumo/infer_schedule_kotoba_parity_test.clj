@@ -15,7 +15,8 @@
                         "queue-after-assign lane-base pack3 pack-get queues-pack-2 pick-code "
                         "assign-step-2 assign-result-pick assign-result-q0 assign-result-q1 "
                         "better-from-queues queues-pack-3 pick-code-3 assign-pick-3 apply-pick-3 "
-                        "assign-step-3 assign-step-3-code assign-step-3-queues better-pair"))
+                        "assign-step-3 assign-step-3-code assign-step-3-queues better-pair "
+                        "pick-fold-step queue-inc-if"))
 
 (def GiB (* 1024 1024 1024))
 
@@ -328,4 +329,56 @@
         (is (= "b" (:node (nth cljc 1))))
         (is (= 3 (count cljc)))
         (is (every? some? (map :node cljc)))))))
+
+(deftest pick-fold-step-n4-matches-schedule-pick
+  "Host-fold pick-fold-step over 4 nodes equals cljc pick when free differs."
+  (let [fa (* 4 GiB)
+        fb (* 8 GiB)
+        fc (* 16 GiB)
+        fd (* 32 GiB)
+        model {:model/engine :comfyui
+               :model/checkpoint "c.safetensors"
+               :model/min-free-bytes (* 2 GiB)}
+        nodes [{:name "a" :engines #{:comfyui} :checkpoints #{"c.safetensors"}
+                :free-bytes fa :queue 0}
+               {:name "b" :engines #{:comfyui} :checkpoints #{"c.safetensors"}
+                :free-bytes fb :queue 0}
+               {:name "c" :engines #{:comfyui} :checkpoints #{"c.safetensors"}
+                :free-bytes fc :queue 0}
+               {:name "d" :engines #{:comfyui} :checkpoints #{"c.safetensors"}
+                :free-bytes fd :queue 0}]
+        cljc (sched/pick nodes model)
+        frees [fa fb fc fd]
+        ;; host fold: start no champ; all ok+warm
+        ;; step i=0: has=0 ok=1 → take 0
+        f0 "(pick-fold-step 0 1 0 1 0)"
+        ;; champ=0 warm=1; vs i=1 better 0 vs 1: free a < b so a not better → better=0
+        b01 (str "(better-pair 0 " fa " 0 " fb ")")
+        f1 (str "(pick-fold-step 1 1 1 1 " b01 ")")
+        actual (compile-i64-cases
+                {"f0" f0
+                 "b01" b01
+                 "f1" f1
+                 "none" "(pick-fold-step 0 0 0 0 0)"
+                 "keep" "(pick-fold-step 1 0 1 0 0)"
+                 "qi0" "(queue-inc-if 0 0)"
+                 "qi1" "(queue-inc-if 3 1)"})]
+    (is (= 1 (get actual "f0")) "take first eligible")
+    (is (= 0 (get actual "b01")) "b better free")
+    (is (= 1 (get actual "f1")) "take challenger b")
+    (is (= 0 (get actual "none")))
+    (is (= 2 (get actual "keep")))
+    (is (= 0 (get actual "qi0")))
+    (is (= 4 (get actual "qi1")))
+    ;; continue fold in second compile with b as champ vs c, d
+    (let [b02 (str "(better-pair 0 " fb " 0 " fc ")")
+          f2 (str "(pick-fold-step 1 1 1 1 " b02 ")")
+          act2 (compile-i64-cases {"b02" b02 "f2" f2})]
+      (is (= 0 (get act2 "b02")))
+      (is (= 1 (get act2 "f2")) "take c")
+      (let [b03 (str "(better-pair 0 " fc " 0 " fd ")")
+            f3 (str "(pick-fold-step 1 1 1 1 " b03 ")")
+            act3 (compile-i64-cases {"f3" f3})]
+        (is (= 1 (get act3 "f3")) "take d — largest free")
+        (is (= "d" (:name cljc)))))))
 

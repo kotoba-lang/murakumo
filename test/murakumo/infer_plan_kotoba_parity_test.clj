@@ -24,7 +24,9 @@
        "digit-char nat-str i64-str bytes-to-gib-milli bytes-to-gib-floor layers-range-str "
        "mem-gib-milli usable-gib-milli est-gib-milli "
        "partition-1-end plan-fits-1 partition-2-ends plan-fits-2 "
-       "asg-row-pack asg-row-span asg-row-fits pick-max-idx-2 ends-lo ends-hi"))
+       "asg-row-pack asg-row-span asg-row-fits pick-max-idx-2 ends-lo ends-hi "
+       "lo-acc-pack partition-step partition-step-hi partition-step-acc "
+       "partition-last fits-and"))
 
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
@@ -336,6 +338,54 @@
       (is (= (if (:fits? a0) 1 0) (mod (quot r0 65536) 65536)))
       (is (= (:span a1) (mod r1 65536)))
       (is (= (if (:fits? a1) 1 0) (mod (quot r1 65536) 65536))))))
+
+(deftest partition-step-fold-matches-n4-cljc
+  "Host-fold partition-step for n=4 ring equals cljc partition-layers ends."
+  (let [model {:model/layers 20 :model/weight-bytes 2000}
+        nodes [{:name "a" :mem-bytes (* 32 GiB)}
+               {:name "b" :mem-bytes (* 16 GiB)}
+               {:name "c" :mem-bytes (* 16 GiB)}
+               {:name "d" :mem-bytes (* 8 GiB)}]
+        us (mapv plan/usable-bytes nodes)
+        total (reduce + us)
+        mp "(model-pack 20 0 100)"
+        cljc-ends (mapv (fn [a] (second (:layers a))) (plan/partition-layers model nodes))
+        ;; step0: lo=0 acc=0 cum=u0
+        s0 (str "(partition-step 2000 " mp " (lo-acc-pack 0 0) " (us 0) " " total ")")
+        actual0 (compile-i64-cases {"s0" s0 "last" (str "(partition-last " mp ")")
+                                    "fa" "(fits-and 1 1)" "fb" "(fits-and 1 0)"})
+        hi0 (mod (get actual0 "s0") 65536)
+        acc0 (mod (quot (get actual0 "s0") 65536) 65536)
+        s1 (str "(partition-step 2000 " mp " (lo-acc-pack " hi0 " " acc0 ") "
+                (+ (us 0) (us 1)) " " total ")")
+        actual1 (compile-i64-cases {"s1" s1})
+        hi1 (mod (get actual1 "s1") 65536)
+        acc1 (mod (quot (get actual1 "s1") 65536) 65536)
+        s2 (str "(partition-step 2000 " mp " (lo-acc-pack " hi1 " " acc1 ") "
+                (+ (us 0) (us 1) (us 2)) " " total ")")
+        actual2 (compile-i64-cases {"s2" s2})
+        hi2 (mod (get actual2 "s2") 65536)
+        hi3 (get actual0 "last")
+        pure-ends [hi0 hi1 hi2 hi3]
+        ;; fits fold over asg rows
+        rows (compile-i64-cases
+              {"r0" (str "(asg-row-pack 2000 " mp " 0 " hi0 " " (us 0) ")")
+               "r1" (str "(asg-row-pack 2000 " mp " " hi0 " " hi1 " " (us 1) ")")
+               "r2" (str "(asg-row-pack 2000 " mp " " hi1 " " hi2 " " (us 2) ")")
+               "r3" (str "(asg-row-pack 2000 " mp " " hi2 " " hi3 " " (us 3) ")")})
+        f0 (mod (quot (get rows "r0") 65536) 65536)
+        f1 (mod (quot (get rows "r1") 65536) 65536)
+        f2 (mod (quot (get rows "r2") 65536) 65536)
+        f3 (mod (quot (get rows "r3") 65536) 65536)
+        fold (compile-i64-cases
+              {"fall" (str "(fits-and (fits-and (fits-and " f0 " " f1 ") " f2 ") " f3 ")")
+               "tot" (str "(plan-fits-total? " total " 2000)")})]
+    (is (= 20 (get actual0 "last")))
+    (is (= 1 (get actual0 "fa")))
+    (is (= 0 (get actual0 "fb")))
+    (is (= cljc-ends pure-ends) (str "cljc=" cljc-ends " pure=" pure-ends))
+    (is (= (if (:fits? (plan/plan model nodes)) 1 0)
+           (if (and (= 1 (get fold "tot")) (= 1 (get fold "fall"))) 1 0)))))
 
 (deftest ok-mark-and-moe-pick
   (let [marks (compile-string-cases

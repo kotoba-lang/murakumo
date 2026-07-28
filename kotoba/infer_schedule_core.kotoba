@@ -8,13 +8,14 @@
             queues-pack-3 pick-code-3
             assign-pick-3 apply-pick-3
             assign-step-3 assign-step-3-code assign-step-3-queues
-            better-pair]))
+            better-pair
+            pick-fold-step queue-inc-if]))
 
 ;; W6 pure-planner oracle — murakumo.infer.schedule eligible?/score + pick.
 ;; assign-step-2: pure assign batch step for fixed 2 nodes.
 ;; assign-step-3 / assign-pick-3 / apply-pick-3: pure step for fixed 3 nodes.
-;; Variable-length node filter/sort (n>3) and atom map stay cljc.
-;; pick-idx-*-full is pure pick for fixed 2/3 candidates.
+;; pick-fold-step: host-fold tournament for n>3 (0=none, 1=take challenger, 2=keep champ).
+;; queue-inc-if: host updates one node's queue after pick.
 ;; Guest ABI max arity 5: eligibility flags bit-packed into one i64.
 ;;   flags bits: 1 has-engine | 2 has-checkpoint | 4 holds-checkpoint | 8 can-fetch
 ;; score is two i64 keys (queue, -free); better-score? compares lexicographically.
@@ -202,3 +203,21 @@
 
 (defn assign-step-3-queues [result :i64] :i64
   (quot result 4))
+
+(defn pick-fold-step [has-champ :i64 ok-i :i64 warm-champ :i64 warm-i :i64
+                      better-c-i :i64] :i64
+  ;; Host folds candidates i=0..n-1. has-champ=1 once a champ exists.
+  ;; Returns: 0 = no pick yet (no champ and ok-i=0)
+  ;;          1 = take challenger i as new champ
+  ;;          2 = keep existing champ
+  (if (= has-champ 0)
+    (if (= ok-i 0) 0 1)
+    (if (= ok-i 0)
+      2
+      (if (= (prefer-warm-then-score warm-champ warm-i better-c-i) 0)
+        2
+        1))))
+
+(defn queue-inc-if [queue :i64 picked :i64] :i64
+  ;; picked 0/1 — alias queue-after-assign for host fold clarity
+  (queue-after-assign queue picked))
