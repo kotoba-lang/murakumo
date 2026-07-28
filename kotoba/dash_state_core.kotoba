@@ -5,14 +5,17 @@
             digit-val? digit-of parse-digits-go parse-digits trim-ws parse-links
             probe-line-key probe-line-value
             content-type-json content-type-html http-ok-status
-            health-from-present health-ok-label health-down-label]))
+            health-from-present health-ok-label health-down-label
+            health-url mesh-log-path
+            probe-h-prefix probe-l-clause probe-p-clause
+            probe-command]))
 
 ;; W6 pure-planner oracle — murakumo.dash.state display / probe pure helpers.
 ;; Map/vector reducers (placements, selected-snapshot, render-html, probe-lines
 ;; fold, parse-hosted split) stay cljc.
 ;; parse-links: trim + digits → i64 (0 on empty/non-digit), matching host catch.
 ;; probe-line-key/value: H:/L:/P: line shape for probe-lines host fold.
-;; probe-command shell string stays host (SSH host-forever; quoting hazard).
+;; probe-command shell string dual-source (compose pure fragments; SSH exec host).
 ;; Parity: test/murakumo/dash_state_kotoba_parity_test.clj
 
 (defn short-hosted-cid [cid :string] :string
@@ -158,3 +161,43 @@
   (if (= present 1)
     (health-ok-label)
     (health-down-label)))
+
+;; ── residual probe-command shell fragments ───────────────────────────
+
+(defn mesh-log-path [] :string
+  "~/.murakumo/mesh.log")
+
+(defn health-url [port :i64] :string
+  ;; http://localhost:{port}/health
+  (string-concat
+   "http://localhost:"
+   (string-concat (i64-str port) "/health")))
+
+(defn probe-h-prefix [] :string
+  "echo \"H:$(curl -s -m4 ")
+
+(defn probe-l-clause [] :string
+  ;; "; echo \"L:$(grep 'peer connected' ~/.murakumo/mesh.log 2>/dev/null | …)\""
+  (string-concat
+   ")\"; echo \"L:$(grep 'peer connected' "
+   (string-concat
+    (mesh-log-path)
+    " 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l | tr -d ' ')\"")))
+
+(defn probe-p-clause [] :string
+  (string-concat
+   "; echo \"P:$(grep 'trigger: executed' "
+   (string-concat
+    (mesh-log-path)
+    " 2>/dev/null | grep -oE 'bafy[a-z0-9]{40,}' | sort -u | tr '\\n' ',')\"")))
+
+(defn probe-command [port :i64] :string
+  ;; Host-exec shell string for one dashboard probe round-trip.
+  ;; Compose pure fragments; byte-stable with murakumo.dash.state mirror.
+  (string-concat
+   (probe-h-prefix)
+   (string-concat
+    (health-url port)
+    (string-concat
+     " 2>/dev/null"
+     (string-concat (probe-l-clause) (probe-p-clause))))))

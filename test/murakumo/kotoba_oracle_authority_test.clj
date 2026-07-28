@@ -316,7 +316,12 @@
     (is (= "text/html; charset=utf-8"
            (get-in (dash/html-response "<x/>") [:headers "content-type"])))
     (is (= "ok" (dash/health-from-present true)))
-    (is (= "down" (dash/health-from-present false)))))
+    (is (= "down" (dash/health-from-present false)))
+    (is (= "http://localhost:8077/health" (dash/health-url 8077)))
+    (is (= "~/.murakumo/mesh.log" (dash/mesh-log-path)))
+    (is (str/includes? (dash/probe-command 8077) "http://localhost:8077/health"))
+    (is (str/includes? (dash/probe-command 8077) "peer connected"))
+    (is (str/starts-with? (dash/probe-command 18099) "echo \"H:$(curl -s -m4 "))))
 
 (deftest dash-oracle-call-matches-live-compile
   (let [live (dash-live-kir)]
@@ -339,7 +344,17 @@
     (is (= (ir/execute live 'content-type-html [])
            (oracle/call :dash-state 'content-type-html [])))
     (is (= (ir/execute live 'health-from-present [1])
-           (oracle/call :dash-state 'health-from-present [1])))))
+           (oracle/call :dash-state 'health-from-present [1])))
+    (is (= (ir/execute live 'health-url [8077])
+           (oracle/call :dash-state 'health-url [8077])))
+    (is (= (ir/execute live 'mesh-log-path [])
+           (oracle/call :dash-state 'mesh-log-path [])))
+    (is (= (ir/execute live 'probe-command [8077])
+           (oracle/call :dash-state 'probe-command [8077])))
+    (is (= (oracle/call :dash-state 'probe-command [8077])
+           (dash/probe-command 8077)))
+    (is (= (oracle/call :dash-state 'health-url [18099])
+           (dash/health-url 18099)))))
 (deftest dash-precompiled-kir-does-not-drift
   (is (= (dash-live-kir) (dash-resource-kir))
       "dash_state KIR drift — run oracle-gen"))

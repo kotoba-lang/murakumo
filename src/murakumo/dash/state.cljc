@@ -3,7 +3,7 @@
 ;; Collection, persistence, JSON encoding, and HTTP serving stay in murakumo.dash.
 ;; This namespace owns deterministic snapshot -> record/alert/display data.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-dash-oracle-authority +
+;; W6 product-shell authority (ADR-260728-w6-dash-probe-command-pure-oracle +
 ;; ADR-260728-w6-dash-probe-pure-oracle + cljs load):
 ;; pure display + probe/parse helpers DELEGATE to precompiled
 ;; kotoba/dash_state_core.kotoba KIR when oracle is loadable (JVM classpath or
@@ -334,11 +334,37 @@
               :when (seq k)]
           [k (probe-line-value line)])))
 
+(defn- mirror-health-url [port]
+  (str "http://localhost:" port "/health"))
+
+(defn- mirror-mesh-log-path []
+  "~/.murakumo/mesh.log")
+
+(defn- mirror-probe-command [port]
+  (str "echo \"H:$(curl -s -m4 http://localhost:" port "/health 2>/dev/null)\"; echo \"L:$(grep 'peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l | tr -d ' ')\"; echo \"P:$(grep 'trigger: executed' ~/.murakumo/mesh.log 2>/dev/null | grep -oE 'bafy[a-z0-9]{40,}' | sort -u | tr '\\n' ',')\""))
+
+(defn health-url
+  "Local health URL for a control port. Kotoba `health-url` when ready."
+  [port]
+  (try-oracle
+   #(o 'health-url [(oracle/as-i64 port)])
+   #(mirror-health-url port)))
+
+(defn mesh-log-path
+  "Mesh log path used by probe L:/P: clauses. Kotoba when ready."
+  []
+  (try-oracle
+   #(o 'mesh-log-path [])
+   mirror-mesh-log-path))
+
 (defn probe-command
   "Remote shell command for one dashboard probe round-trip.
-   Host-forever shell string (SSH path; not kotoba — quoting hazard)."
+   Kotoba `probe-command` when ready (pure shell string compose).
+   SSH execution of this string stays host-forever."
   [port]
-  (str "echo \"H:$(curl -s -m4 http://localhost:" port "/health 2>/dev/null)\"; echo \"L:$(grep 'peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l | tr -d ' ')\"; echo \"P:$(grep 'trigger: executed' ~/.murakumo/mesh.log 2>/dev/null | grep -oE 'bafy[a-z0-9]{40,}' | sort -u | tr '\\n' ',')\""))
+  (try-oracle
+   #(o 'probe-command [(oracle/as-i64 port)])
+   #(mirror-probe-command port)))
 (defn parse-health
   "Decode health JSON with a host-supplied decoder, returning nil on failure."
   [decode-fn text]
