@@ -1,0 +1,144 @@
+;; W6 pure-planner oracle: murakumo.secret names + env/path policy
+;; vs kotoba/secret_core.kotoba.
+
+(ns murakumo.secret-kotoba-parity-test
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
+            [kotoba.compiler.core :as compiler]
+            [kotoba.kir :as ir]
+            [murakumo.secret :as secret]))
+
+(def port-source (slurp "kotoba/secret_core.kotoba"))
+
+(def export-prefix
+  (str "token-secret-name token-secret-env service-token-name service-token-env "
+       "metrics-token-name metrics-token-env quic-cert-path-name quic-cert-path-env "
+       "quic-key-path-name quic-key-path-env max-env-name max-path-ref "
+       "blank? ws? valid-env-var-name? valid-path-ref-unix? "
+       "env-for-secret-name known-secret-name? reply-tag classify-fetched"))
+
+(defn- kotoba-literal [s]
+  (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
+
+(defn- compile-string-cases [cases]
+  (let [defs (for [[name body] cases]
+               (str "(defn " name " [] :string " body ")"))
+        names (map first cases)
+        src (-> port-source
+                (str/replace-first
+                 #"\(:export \[[^\]]+\]\)"
+                 (str "(:export [" export-prefix " " (str/join " " names) "])"))
+                (str "\n" (str/join "\n" defs)))
+        kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
+    (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
+
+(defn- compile-i64-cases [cases]
+  (let [defs (for [[name body] cases]
+               (str "(defn " name " [] :i64 " body ")"))
+        names (map first cases)
+        src (-> port-source
+                (str/replace-first
+                 #"\(:export \[[^\]]+\]\)"
+                 (str "(:export [" export-prefix " " (str/join " " names) "])"))
+                (str "\n" (str/join "\n" defs)))
+        kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
+    (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
+
+(deftest secret-name-constants-match
+  (let [actual (compile-string-cases
+                {"tn" "(token-secret-name)"
+                 "te" "(token-secret-env)"
+                 "sn" "(service-token-name)"
+                 "se" "(service-token-env)"
+                 "mn" "(metrics-token-name)"
+                 "me" "(metrics-token-env)"
+                 "cn" "(quic-cert-path-name)"
+                 "ce" "(quic-cert-path-env)"
+                 "kn" "(quic-key-path-name)"
+                 "ke" "(quic-key-path-env)"})]
+    (is (= secret/token-secret-name (get actual "tn")))
+    (is (= secret/token-secret-env (get actual "te")))
+    (is (= secret/service-token-name (get actual "sn")))
+    (is (= secret/service-token-env (get actual "se")))
+    (is (= secret/metrics-token-name (get actual "mn")))
+    (is (= secret/metrics-token-env (get actual "me")))
+    (is (= secret/quic-cert-path-name (get actual "cn")))
+    (is (= secret/quic-cert-path-env (get actual "ce")))
+    (is (= secret/quic-key-path-name (get actual "kn")))
+    (is (= secret/quic-key-path-env (get actual "ke")))))
+
+(deftest known-env-secrets-lookup
+  (let [names [secret/token-secret-name
+               secret/service-token-name
+               secret/metrics-token-name
+               secret/quic-cert-path-name
+               secret/quic-key-path-name
+               "unknown"]
+        cases (into {} (map-indexed
+                        (fn [i n]
+                          [(str "e_" i)
+                           (str "(env-for-secret-name " (kotoba-literal n) ")")])
+                        names))
+        known (into {} (map-indexed
+                        (fn [i n]
+                          [(str "k_" i)
+                           (str "(known-secret-name? " (kotoba-literal n) ")")])
+                        names))
+        actual (compile-string-cases cases)
+        kn (compile-i64-cases known)]
+    (doseq [[i n] (map-indexed vector names)]
+      (testing n
+        (is (= (or (get secret/known-env-secrets n) "")
+               (get actual (str "e_" i))))
+        (is (= (if (contains? secret/known-env-secrets n) 1 0)
+               (get kn (str "k_" i))))))))
+
+(deftest valid-env-var-name-matches-secret
+  (let [corpus ["MURAKUMO_OVERLAY_AUTH" "tok*" "" "a/b" "has space"
+                "ok_NAME-1" (apply str (repeat 257 "A"))]
+        cases (into {} (map-indexed
+                        (fn [i s]
+                          [(str "v_" i)
+                           (str "(valid-env-var-name? " (kotoba-literal s) ")")])
+                        corpus))
+        actual (compile-i64-cases cases)]
+    (doseq [[i s] (map-indexed vector corpus)]
+      (testing (pr-str s)
+        (is (= (if (secret/valid-env-var-name? s) 1 0)
+               (get actual (str "v_" i))))))))
+
+(deftest valid-path-ref-unix-matches-secret
+  (let [corpus ["/var/murakumo/quic/node.cert.pem"
+                "relative/cert.pem"
+                "-----BEGIN CERTIFICATE-----\nabc"
+                ""
+                "/tmp/c.pem"
+                "/x*y"
+                (str "/tmp/" (apply str (repeat 1020 "a")))]
+        cases (into {} (map-indexed
+                        (fn [i s]
+                          [(str "p_" i)
+                           (str "(valid-path-ref-unix? " (kotoba-literal s) ")")])
+                        corpus))
+        actual (compile-i64-cases cases)]
+    (doseq [[i s] (map-indexed vector corpus)]
+      (testing (pr-str (if (< (count s) 80) s (str (subs s 0 40) "…")))
+        (is (= (if (secret/valid-path-ref? s) 1 0)
+               (get actual (str "p_" i))))))))
+
+(deftest classify-fetched-matches-map-fetch-shape
+  (let [actual (compile-string-cases
+                {"v" "(classify-fetched 0 0)"
+                 "e" "(classify-fetched 0 1)"
+                 "m" "(classify-fetched 1 0)"
+                 "mb" "(classify-fetched 1 1)"
+                 "tv" (str "(reply-tag " (kotoba-literal "value") ")")
+                 "tn" (str "(reply-tag " (kotoba-literal "not-found") ")")})]
+    (is (= "value" (get actual "v") (get actual "tv")))
+    (is (= "empty" (get actual "e")))
+    (is (= "not-found" (get actual "m") (get actual "tn")))
+    (is (= "not-found" (get actual "mb")))
+    (let [f (secret/map-fetch {"murakumo-token" "hmac" "empty" ""})]
+      (is (= :value (:tag (f {:name "murakumo-token"}))))
+      (is (= :secret/empty (:code (f {:name "empty"}))))
+      (is (= :secret/not-found (:code (f {:name "missing"})))))))
