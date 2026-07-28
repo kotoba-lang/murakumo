@@ -47,18 +47,27 @@
     budget-slots),
    :param-types [:i64 :i64 :i64 :i64 :i64]}
   {:name failed?,
-   :params [exit-present exit-code timeout has-error],
+   :params [exit timeout error],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (= has-error 1)
-    1
+   (let
+    [binding-some__1 error]
     (if
-     (= timeout 1)
-     1
-     (if (= exit-present 0) 1 (if (= exit-code 0) 0 1)))),
-   :param-types [:i64 :i64 :i64 :i64]}
+     (option-some?-of [:option :string] binding-some__1)
+     (let [_ (option-value-of [:option :string] binding-some__1 "")] 1)
+     (if
+      (= timeout 1)
+      1
+      (let
+       [binding-some__2 exit]
+       (if
+        (option-some?-of [:option :i64] binding-some__2)
+        (let
+         [e (option-value-of [:option :i64] binding-some__2 0)]
+         (if (= e 0) 0 1))
+        1))))),
+   :param-types [[:option :i64] :i64 [:option :string]]}
   {:name can-retry?,
    :params [attempt max-attempts],
    :result :i64,

@@ -12,7 +12,8 @@
             nearest-rank-idx summary-retried speedup-milli
             max2 min2 clamp-nonneg]))
 
-;; W6 pure-planner oracle — murakumo.task.plan integer + assign/expand core.
+;; Product Value ABI v1 pure oracle — murakumo.task.plan integer + assign core.
+;; failed? uses [:option :i64] exit + [:option :string] error (no has-*).
 ;; Full admit/prepare vector folds stay cljc.
 ;; task-eligible? bit flags + better-task-score? + wave/slot: pure assign-1 core.
 ;; expand: task-id = "t-" + zero-pad-4 (cljc last-4 of "0000"+i for i≥10000).
@@ -41,14 +42,16 @@
       (if (< capped 1) 1 capped))
     budget-slots))
 
-(defn failed? [exit-present :i64 exit-code :i64 timeout :i64 has-error :i64] :i64
-  (if (= has-error 1)
+(defn failed? [exit [:option :i64] timeout :i64 error [:option :string]] :i64
+  ;; Product Value ABI v1: optional exit code + optional error (no has-*).
+  ;; failed when error present, timeout, missing exit, or non-zero exit
+  (if-some [_ error]
     1
     (if (= timeout 1)
       1
-      (if (= exit-present 0)
-        1
-        (if (= exit-code 0) 0 1)))))
+      (if-some [e exit]
+        (if (= e 0) 0 1)
+        1))))
 
 (defn can-retry? [attempt :i64 max-attempts :i64] :i64
   (if (< attempt max-attempts) 1 0))

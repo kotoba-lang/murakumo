@@ -282,14 +282,13 @@
 
 (defn failed?
   "A result is a failure when the process could not start, timed out, or exited
-   non-zero. JVM: kotoba `failed?`."
+   non-zero. JVM: kotoba `failed?` with Product Value ABI optional exit/error."
   [{:keys [exit timeout? error] :as r}]
   #?(:clj
      (= 1 (o 'failed?
-             [(if (some? exit) 1 0)
-              (long (or exit 0))
-              (if timeout? 1 0)
-              (if (some? error) 1 0)]))
+             [(oracle/option-i64 exit)
+              (long (if timeout? 1 0))
+              (oracle/option-string error)]))
      :cljs (mirror-failed? r)))
 
 (defn retry-tasks

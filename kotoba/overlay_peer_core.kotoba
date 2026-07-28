@@ -2,10 +2,10 @@
   (:export [choose-via health-unknown health-seen health-down
             via-direct via-relay]))
 
-;; W6 pure-planner oracle — murakumo.overlay.peer path-selection core.
+;; Product Value ABI v1 pure oracle — murakumo.overlay.peer path-selection.
 ;; catalog/remember map folds stay cljc.
-;; choose-via: host projects has-direct / health-down / has-relay → via string.
-;;   prefer direct when has-direct and not down; else relay if present; else "".
+;; choose-via: optional direct/relay path tokens + health string (no has-*).
+;;   prefer direct when present and health ≠ "down"; else relay if present; else "".
 ;; Parity: test/murakumo/overlay_peer_kotoba_parity_test.clj
 
 (defn health-unknown [] :string "unknown")
@@ -14,10 +14,15 @@
 (defn via-direct [] :string "direct")
 (defn via-relay [] :string "relay")
 
-(defn choose-via [has-direct :i64 health-down :i64 has-relay :i64] :string
+(defn choose-via [direct [:option :string]
+                  health :string
+                  relay [:option :string]] :string
+  ;; Product Value ABI v1: optional path tokens (no has-direct/has-relay).
   ;; cljc choose-path: first direct if not :down health, else first relay
-  (if (if (= has-direct 1) (if (= health-down 0) 1 0) 0)
-    "direct"
-    (if (= has-relay 1)
+  (if-some [_ direct]
+    (if (string=? health "down")
+      (if-some [_ relay] "relay" "")
+      "direct")
+    (if-some [_ relay]
       "relay"
       "")))
