@@ -1,0 +1,38 @@
+(ns reconcile-plan-core
+  (:export [default-replicas desired deficit watch-sleep-ms action-name]))
+
+;; W6 pure-planner oracle — murakumo.reconcile.plan scalar decision core.
+;; eligible-nodes / observed-hosts / pick-targets / reconcile-app maps stay cljc.
+;; action-name encodes reconcile-app cond with host-projected counts:
+;;   has-cid 0/1, running, desired, deficit, free-candidates, has-misplaced 0/1
+;; Parity: test/murakumo/reconcile_plan_kotoba_parity_test.clj
+
+(defn default-replicas [] :i64 1)
+
+(defn desired [has-replicas :i64 replicas :i64] :i64
+  ;; cljc: (or replicas 1)
+  (if (= has-replicas 0) 1 replicas))
+
+(defn deficit [desired-n :i64 running :i64] :i64
+  ;; cljc: (max 0 (- desired (count running)))
+  (let [d (- desired-n running)]
+    (if (< d 0) 0 d)))
+
+(defn watch-sleep-ms [seconds :i64] :i64
+  (* 1000 seconds))
+
+(defn action-name [has-cid :i64 running :i64 desired-n :i64
+                   free-candidates :i64 has-misplaced :i64] :string
+  ;; Mirrors reconcile-app cond (misplaced only matters when deficit=0 branch).
+  ;; has-misplaced kept for future; current cljc: zero deficit + empty misplaced
+  ;; → satisfied; zero deficit + misplaced → still :satisfied (:else).
+  (let [def-n (deficit desired-n running)]
+    (if (= has-cid 0)
+      "needs-build"
+      (if (< desired-n running)
+        "over"
+        (if (= def-n 0)
+          "satisfied"
+          (if (< free-candidates 1)
+            "blocked"
+            "place"))))))
