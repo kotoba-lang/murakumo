@@ -280,15 +280,19 @@
     (+ code (+ (* n0 B) (* n1 (* B B))))),
    :param-types [:i64 :i64 :i64 :i64 :i64]}
   {:name pick-task-fold-step,
-   :params [has-champ ok-i better-c-i],
+   :params [champ ok-i better-c-i],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (= has-champ 0)
-    (if (= ok-i 0) 0 1)
-    (if (= ok-i 0) 2 (if (= better-c-i 1) 1 2))),
-   :param-types [:i64 :i64 :i64]}
+   (let
+    [binding-some__3 champ]
+    (if
+     (option-some?-of [:option :i64] binding-some__3)
+     (let
+      [_ (option-value-of [:option :i64] binding-some__3 0)]
+      (if (= ok-i 0) 2 (if (= better-c-i 1) 1 2)))
+     (if (= ok-i 0) 0 1))),
+   :param-types [[:option :i64] :i64 :i64]}
   {:name load-inc-if,
    :params [load picked],
    :result :i64,

@@ -448,7 +448,14 @@
     (is (= (ir/execute live 'nearest-rank-idx [10 500])
            (oracle/call :task-plan 'nearest-rank-idx [10 500])))
     (is (= (ir/execute live 'speedup-milli [300 150])
-           (oracle/call :task-plan 'speedup-milli [300 150])))))
+           (oracle/call :task-plan 'speedup-milli [300 150])))
+    (let [champ (oracle/option-i64 1)
+          none-c (oracle/option-i64 nil)]
+      (is (= (ir/execute live 'pick-task-fold-step [none-c 1 0])
+             (oracle/call :task-plan 'pick-task-fold-step [none-c 1 0])))
+      (is (= 1 (oracle/call :task-plan 'pick-task-fold-step [none-c 1 0])))
+      (is (= 2 (oracle/call :task-plan 'pick-task-fold-step [champ 1 0])))
+      (is (= 1 (oracle/call :task-plan 'pick-task-fold-step [champ 1 1]))))))
 
 (deftest task-precompiled-kir-does-not-drift
   (is (= (task-live-kir) (task-resource-kir))
@@ -942,6 +949,15 @@
            (oracle/call :infer-rebalance 'usable-gb [16])))
     (is (= (ir/execute r 'largest-remainder-3 [5 3 1 1 1])
            (oracle/call :infer-rebalance 'largest-remainder-3 [5 3 1 1 1])))
+    (let [img (oracle/option-string "images")
+          none-s (oracle/option-string nil)]
+      (is (= (ir/execute r 'classify-run-flags [img none-s none-s none-s none-s])
+             (oracle/call :infer-rebalance 'classify-run-flags
+                          [img none-s none-s none-s none-s])))
+      (is (= 2 (oracle/call :infer-rebalance 'classify-run-flags
+                            [img none-s none-s none-s none-s])))
+      (is (= 0 (oracle/call :infer-rebalance 'classify-run-flags
+                            [none-s none-s none-s none-s none-s]))))
     (is (= (ir/execute y 'make-id ["job" 0])
            (oracle/call :infer-relay 'make-id ["job" 0])))
     (is (= (ir/execute y 'lease-expired? [2000 1000 100])

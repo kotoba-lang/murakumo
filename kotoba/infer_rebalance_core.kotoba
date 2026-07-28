@@ -15,7 +15,8 @@
             pool-code pool-name seat-order-pack order-nth
             take-end take-count pipeline-note rebalance-reason-detail]))
 
-;; W6 pure-planner oracle — murakumo.infer.rebalance capacity + 3-pool
+;; Product Value ABI v1 pure oracle — murakumo.infer.rebalance capacity + 3-pool.
+;; classify-run-flags uses [:option :string] unit/kind tokens (no has-*).
 ;; largest-remainder seat apportionment (map-fold product vertical).
 ;; rebalance moves / capacity vector filters stay cljc.
 ;; pool-demand-pack: class counts → packed pool weights (map-fold).
@@ -187,19 +188,23 @@
                        (seats-postproc pool-pack)
                        floor))
 
-(defn classify-run-flags [has-images :i64 has-video :i64 has-audio :i64
-                          is-swarm :i64 has-tokens :i64] :i64
+(defn classify-run-flags [images [:option :string]
+                          video [:option :string]
+                          audio [:option :string]
+                          swarm [:option :string]
+                          tokens [:option :string]] :i64
+  ;; Product Value ABI v1: optional unit/kind tokens (no has-* sentinels).
   ;; mirrors demand-from-runs cond order; returns class code:
   ;; 0 none, 1 text, 2 image, 3 video, 4 audio, 5 postproc
-  (if (= has-images 1)
+  (if-some [_ images]
     2
-    (if (= has-video 1)
+    (if-some [_ video]
       3
-      (if (= has-audio 1)
+      (if-some [_ audio]
         4
-        (if (= is-swarm 1)
+        (if-some [_ swarm]
           5
-          (if (= has-tokens 1)
+          (if-some [_ tokens]
             1
             0))))))
 

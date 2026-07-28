@@ -145,15 +145,22 @@
     (is (= cljc2 (unpack (get actual "s2"))))
     (is (= cljc3 (unpack (get actual "s3"))))))
 
+(defn- opt-str-form [s]
+  (if (nil? s)
+    "(option-none-of [:option :string])"
+    (str "(option-some-of [:option :string] " (kotoba-literal s) ")")))
+
 (deftest classify-run-flags-matches-demand-cond-order
-  (let [actual (compile-i64-cases
+  (let [s (opt-str-form "x")
+        n (opt-str-form nil)
+        actual (compile-i64-cases
                 {;; priority: images > video > audio > swarm > tokens
-                 "c_img" "(classify-run-flags 1 1 1 1 1)"
-                 "c_vid" "(classify-run-flags 0 1 1 1 1)"
-                 "c_aud" "(classify-run-flags 0 0 1 1 1)"
-                 "c_sw" "(classify-run-flags 0 0 0 1 1)"
-                 "c_tok" "(classify-run-flags 0 0 0 0 1)"
-                 "c_none" "(classify-run-flags 0 0 0 0 0)"})]
+                 "c_img" (str "(classify-run-flags " s " " s " " s " " s " " s ")")
+                 "c_vid" (str "(classify-run-flags " n " " s " " s " " s " " s ")")
+                 "c_aud" (str "(classify-run-flags " n " " n " " s " " s " " s ")")
+                 "c_sw" (str "(classify-run-flags " n " " n " " n " " s " " s ")")
+                 "c_tok" (str "(classify-run-flags " n " " n " " n " " n " " s ")")
+                 "c_none" (str "(classify-run-flags " n " " n " " n " " n " " n ")")})]
     (is (= 2 (get actual "c_img")))
     (is (= 3 (get actual "c_vid")))
     (is (= 4 (get actual "c_aud")))
@@ -162,15 +169,15 @@
     (is (= 0 (get actual "c_none")))))
 
 (defn- run-flags
-  "Host projection of demand-from-runs unit/kind presence → classify-run-flags args."
+  "Host projection of demand-from-runs unit/kind presence → optional tokens."
   [run]
   (let [u (or (:units run) {})
         kind (or (:run/kind run) (:model run))]
-    [(if (or (:images u) (get u "images")) 1 0)
-     (if (or (:video-seconds u) (get u "video-seconds")) 1 0)
-     (if (or (:audio-seconds u) (get u "audio-seconds")) 1 0)
-     (if (= "browser-swarm" (str kind)) 1 0)
-     (if (or (:tokens u) (get u "tokens")) 1 0)]))
+    [(when (or (:images u) (get u "images")) "images")
+     (when (or (:video-seconds u) (get u "video-seconds")) "video")
+     (when (or (:audio-seconds u) (get u "audio-seconds")) "audio")
+     (when (= "browser-swarm" (str kind)) "swarm")
+     (when (or (:tokens u) (get u "tokens")) "tokens")]))
 
 (deftest demand-from-runs-fold-matches-cljc
   (let [runs [{:units {:tokens 100}}
@@ -178,12 +185,16 @@
               {:units {:images 1}}
               {:model "browser-swarm" :units {:jobs 1}}
               {:units {:video-seconds 3}}]
-        ;; host projects flags; guest folds demand-inc + classify-run-flags
+        ;; host projects options; guest folds demand-inc + classify-run-flags
         fold (reduce (fn [expr run]
-                       (let [[hi hv ha sw tok] (run-flags run)]
+                       (let [[img vid aud sw tok] (run-flags run)]
                          (str "(demand-inc " expr
                               " (classify-run-flags "
-                              hi " " hv " " ha " " sw " " tok "))")))
+                              (opt-str-form img) " "
+                              (opt-str-form vid) " "
+                              (opt-str-form aud) " "
+                              (opt-str-form sw) " "
+                              (opt-str-form tok) "))")))
                      "(demand-empty)"
                      runs)
         actual (compile-i64-cases
