@@ -229,8 +229,10 @@
            (oracle/call :report-core 'reconcile-col-header [])))
     (is (= (ir/execute live 'nodes-row ["x" "?" 0 0 "off"])
            (oracle/call :report-core 'nodes-row ["x" "?" 0 0 "off"])))
-    (is (= (ir/execute live 'status-row ["asher" 0 "?" "-" 0])
-           (oracle/call :report-core 'status-row ["asher" 0 "?" "-" 0])))))
+    (is (= (ir/execute live 'status-row
+                       ["asher" (oracle/option-i64 nil) "?" "-" 0])
+           (oracle/call :report-core 'status-row
+                        ["asher" (oracle/option-i64 nil) "?" "-" 0])))))
 
 (deftest report-precompiled-kir-does-not-drift
   (is (= (report-live-kir) (report-resource-kir))
@@ -1026,8 +1028,10 @@
            (oracle/call :deploy-plan 'manifest-dir ["apps/x.edn"])))
     (is (= (ir/execute c 'default-class-name [""])
            (oracle/call :connect 'default-class-name [""])))
-    (is (= (ir/execute c 'serves-plane? ["read" 1 0])
-           (oracle/call :connect 'serves-plane? ["read" 1 0])))
+    (is (= (ir/execute c 'serves-plane?
+                       ["read" (oracle/option-i64 1) (oracle/option-i64 nil)])
+           (oracle/call :connect 'serves-plane?
+                        ["read" (oracle/option-i64 1) (oracle/option-i64 nil)])))
     (is (= (ir/execute a 'place-epoch [0])
            (oracle/call :component-authority 'place-epoch [0])))
     (is (= (ir/execute a 'revoke-epoch [1])

@@ -155,8 +155,9 @@
 (defn ssh-label [ok :i64] :string
   (if (= ok 1) "ok" "no"))
 
-(defn health-label [has-health :i64] :string
-  (if (= has-health 1) "ok" "no-resp"))
+(defn health-label [health? [:option :i64]] :string
+  ;; Product Value ABI v1: optional health presence (no has-health sentinel).
+  (if-some [_ health?] "ok" "no-resp"))
 
 (defn launch-result-line [name :string exit-str :string] :string
   ;; cljc: (str (:name node) " " (:exit result)) — host projects exit as string
@@ -336,15 +337,16 @@
 (defn status-down-row [name :string] :string
   (string-concat (pad-to name 10) (string-concat " " (status-down-suffix))))
 
-(defn status-row [name :string has-health :i64 wasm-exec :string
+(defn status-row [name :string health? [:option :i64] wasm-exec :string
                   links-str :string p2p-port :i64] :string
   ;; host projects wasm "?" / links "-" when no health-json
+  ;; Product Value ABI v1: optional health? (no has-health sentinel)
   (string-concat
    (pad-to name 10)
    (string-concat
     " "
     (string-concat
-     (pad-to (health-label has-health) 8)
+     (pad-to (health-label health?) 8)
      (string-concat
       " "
       (string-concat

@@ -18,27 +18,39 @@
     node-class),
    :param-types [:string :string]}
   {:name serves-read?,
-   :params [has-http],
+   :params [http?],
    :result :i64,
    :effects #{},
-   :body (if (= has-http 1) 1 0),
-   :param-types [:i64]}
+   :body
+   (let
+    [binding-some__1 http?]
+    (if
+     (option-some?-of [:option :i64] binding-some__1)
+     (let [_ (option-value-of [:option :i64] binding-some__1 0)] 1)
+     0)),
+   :param-types [[:option :i64]]}
   {:name serves-live?,
-   :params [has-common],
+   :params [common?],
    :result :i64,
    :effects #{},
-   :body (if (= has-common 1) 1 0),
-   :param-types [:i64]}
+   :body
+   (let
+    [binding-some__2 common?]
+    (if
+     (option-some?-of [:option :i64] binding-some__2)
+     (let [_ (option-value-of [:option :i64] binding-some__2 0)] 1)
+     0)),
+   :param-types [[:option :i64]]}
   {:name serves-plane?,
-   :params [plane has-http has-common],
+   :params [plane http? common?],
    :result :i64,
    :effects #{},
    :body
    (if
     (string=? plane "read")
-    (serves-read? has-http)
-    (if (string=? plane "live") (serves-live? has-common) 0)),
-   :param-types [:string :i64 :i64]}],
+    (serves-read? http?)
+    (if (string=? plane "live") (serves-live? common?) 0)),
+   :param-types [:string [:option :i64] [:option :i64]]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
