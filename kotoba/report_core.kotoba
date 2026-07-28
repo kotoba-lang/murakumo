@@ -17,12 +17,20 @@
             deploy-observed-empty-line deploy-observed-placed-line
             missing-pinned-binaries-line1 missing-pinned-binaries-line2
             nodes-header status-header status-down-suffix
-            spaces pad-right field-10 field-16 field-8 field-9 field-12 field-6]))
+            spaces pad-right field-10 field-16 field-8 field-9 field-12 field-6
+            command-help
+            reconcile-title reconcile-col-header
+            cid-display action-detail
+            nat-len field-i64-7
+            reconcile-app-row reconcile-app-line
+            reach-line drift-line]))
 
 ;; W6 pure-planner oracle — murakumo.report string core.
 ;; Column-padded tables: pure pad-right + fixed field widths unlock
 ;; nodes-header/status-header/nodes-row/status-down-row without printf.
-;; reconcile-lines multi-join stays cljc.
+;; reconcile-lines: pure title/col-header/app-row/detail/reach/drift;
+;; host still mapcats apps + joins CSV targets/running/reach.
+;; command-help: full CLI help as one pure string.
 ;; Parity: test/murakumo/report_kotoba_parity_test.clj
 
 (defn digit-char [d :i64] :string
@@ -299,3 +307,84 @@
 (defn status-down-suffix [] :string
   ;; trailing spaces after "down" in status-down-row format "%-10s %-8s"
   "down    ")
+
+(defn command-help [] :string
+  ;; cljc (str/join "\n" [...]) full operator help
+  "murakumo — kotoba WASM mesh control plane\n\ncommands:\n  nodes                       fleet reachability + mesh presence\n  pin       [src-dir]         copy a consistent kotoba cli+server into ./bin (own it)\n  provision [node|all]        rsync binaries + install resident LaunchDaemon\n  mesh      [node|all]        form ONE gossipsub lattice (2-pass: peer-id + bootstrap)\n  up/down   [node|all]        start/stop the resident mesh node\n  status    [node|all]        fold /health across the fleet (PEERS = live links)\n  deploy    <app.edn> [node]  compile clj→WASM + distribute + publish to the lattice\n  reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]  declarative desired-state (wadm)\n  cloud     [plan|records|routes|dial|connect <node>|relay <name>|bootstrap]    plan murakumo.cloud identity overlay\n  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log\n  fleet     <datom-log.edn>    fold a kotoba-fleet Datom log into one coordination view\n  infer     probe|plan <model>|provision|up|down|ps|serve|generate  distributed inference (exo-style shard plan)\n  model     plan|setup|status <model> [node|all] [cache-dir]  Hugging Face model provisioning\n  revive    [node|all]        wake offline fleet Macs via a live LAN peer\n\nenv: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR")
+
+(defn reconcile-title [fleet :string ts :string] :string
+  ;; host passes "fleet" when plan :fleet is nil
+  (string-concat
+   "reconcile "
+   (string-concat fleet (string-concat "  @ " ts))))
+
+(defn reconcile-col-header [] :string
+  "  APP            CID        DESIRED RUNNING ACTION    DETAIL")
+
+(defn cid-display [cid :string present :i64] :string
+  ;; present 0 → em dash; 1 → host-truncated cid (≤16 like fmt-cid)
+  (if (= present 0)
+    "—"
+    cid))
+
+(defn action-detail [action :string targets-csv :string
+                     running-csv :string running-empty :i64
+                     reason :string] :string
+  (if (string=? action "place")
+    (string-concat "→ " targets-csv)
+    (if (string=? action "satisfied")
+      (if (= running-empty 1)
+        ""
+        (string-concat "on " running-csv))
+      reason)))
+
+(defn nat-len [n :i64] :i64
+  (if (< n 0)
+    (+ 1 (nat-len (- 0 n)))
+    (if (< n 10)
+      1
+      (+ 1 (nat-len (quot n 10))))))
+
+(defn field-i64-7 [n :i64] :string
+  ;; cljc %-7d left-aligned
+  (let [s (i64-str n)
+        pad (- 7 (nat-len n))]
+    (pad-right s (if (< pad 0) 0 pad))))
+
+(defn reconcile-app-row [app14 :string cid10 :string
+                         desired :i64 running-n :i64
+                         action9 :string] :string
+  ;; app14/cid10/action9 are host pad-right fields (widths 14/10/9).
+  ;; detail is joined by host after this front (arity 5).
+  (string-concat
+   "  "
+   (string-concat
+    app14
+    (string-concat
+     " "
+     (string-concat
+      cid10
+      (string-concat
+       " "
+       (string-concat
+        (field-i64-7 desired)
+        (string-concat
+         " "
+         (string-concat
+          (field-i64-7 running-n)
+          (string-concat " " action9))))))))))
+
+(defn reconcile-app-line [front :string detail :string] :string
+  (string-concat front (string-concat " " detail)))
+
+(defn reach-line [reach-csv :string eligible-csv :string] :string
+  (string-concat
+   "                            reach: "
+   (string-concat
+    reach-csv
+    (string-concat " → eligible(by transport)=" eligible-csv))))
+
+(defn drift-line [misplaced-csv :string] :string
+  (string-concat
+   "                            drift: running on non-eligible node(s): "
+   misplaced-csv))
