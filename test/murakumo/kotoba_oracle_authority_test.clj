@@ -1295,7 +1295,12 @@
             "/local/bin/kotoba" "asher:.murakumo/bin/kotoba"]
            (pplan/rsync-binary-argv "/local/bin" "asher" "kotoba")))
     (is (str/includes? (pplan/write-plist-command "<x/>") "<<'PLIST'"))
-    (is (str/ends-with? (pplan/write-plist-command "<x/>") "\nPLIST")))
+    (is (str/ends-with? (pplan/write-plist-command "<x/>") "\nPLIST"))
+    (is (= "@" pplan/peer-at-sep))
+    (is (= "," pplan/peer-join-sep))
+    (is (= "did:key:" pplan/did-key-prefix))
+    (is (= "12D3x@/ip4/1.2.3.4/udp/4001/quic-v1"
+           (pplan/peer-entry "12D3x" (pplan/multiaddr "1.2.3.4" 4001)))))
   (testing "cloud defaults + region/endpoints"
     (is (= "murakumo-overlay" cplan/default-driver))
     (is (= "murakumo.cloud" (:cloud/name cplan/default-cloud)))
@@ -1411,7 +1416,15 @@
            (oracle/call :provision-plan 'label-kv ["k" "v"])))
     (is (= (oracle/call :provision-plan 'rsync-bin []) pplan/rsync-bin))
     (is (= (oracle/call :provision-plan 'local-bin-path ["/b" "x"])
-           (pplan/local-bin-path "/b" "x")))))
+           (pplan/local-bin-path "/b" "x")))
+    (is (= (ir/execute pr 'peer-entry ["p" "/ip4/1.1.1.1/udp/1/quic-v1"])
+           (oracle/call :provision-plan 'peer-entry ["p" "/ip4/1.1.1.1/udp/1/quic-v1"])))
+    (is (= (ir/execute pr 'peer-at-sep [])
+           (oracle/call :provision-plan 'peer-at-sep [])))
+    (is (= (ir/execute pr 'did-key-prefix [])
+           (oracle/call :provision-plan 'did-key-prefix [])))
+    (is (= (oracle/call :provision-plan 'peer-entry ["p" "m"])
+           (pplan/peer-entry "p" "m")))))
 
 (deftest product-shell-overlay-driver-runtime-uses-oracle
   (testing "driver endpoint-kind + dial-result + option-name"

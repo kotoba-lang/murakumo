@@ -4,15 +4,16 @@
 ;; kotoba DID derivation, and filesystem reads. This namespace owns deterministic
 ;; strings and defaults used by those effects.
 ;;
-;; W6 product-shell (ADR-260728-w6-provision-argv-pure-oracle):
-;; constants + port/multiaddr + launch/peer/link shell + rsync argv fragments
-;; DELEGATE to kotoba provision_plan_core when oracle is loadable (JVM classpath
-;; or cljs/nbb). bootstrap fold, peer-id regex, plist heredoc body stay host.
-;; cljs mirrors remain fallback when oracle is not ready.
+;; W6 product-shell (ADR-260728-w6-provision-peer-entry-pure-oracle):
+;; constants + port/multiaddr + launch/peer/link shell + rsync argv +
+;; peer-entry (bootstrap) DELEGATE to kotoba provision_plan_core when oracle
+;; is loadable (JVM classpath or cljs/nbb). bootstrap fold, peer-id regex,
+;; plist heredoc body stay host. cljs mirrors remain fallback when oracle is
+;; not ready.
 
 (ns murakumo.provision.plan
   "Portable provision/mesh planning helpers.
-   W6 product-shell: path/port + shell/rsync pure helpers via provision_plan_core."
+   W6 product-shell: path/port + shell/rsync/peer-entry pure via provision_plan_core."
   (:require [clojure.string :as str]
             [murakumo.connect :as connect]
             [murakumo.fleet.inventory :as inv]
@@ -128,6 +129,13 @@
 (defn- mirror-label-kv [k v]
   (str k "=" v))
 
+(def ^:private mirror-peer-at-sep "@")
+(def ^:private mirror-peer-join-sep ",")
+(def ^:private mirror-did-key-prefix "did:key:")
+
+(defn- mirror-peer-entry [peer-id multiaddr]
+  (str peer-id "@" multiaddr))
+
 ;; ── dual-source constants ────────────────────────────────────────────
 
 (def plist-label
@@ -196,6 +204,25 @@
    #(o 'label-kv [(str k) (str v)])
    #(mirror-label-kv k v)))
 
+(def peer-at-sep
+  "Separator between peer-id and multiaddr. Kotoba when ready."
+  (oracle-str-const 'peer-at-sep mirror-peer-at-sep))
+
+(def peer-join-sep
+  "Comma separator for bootstrap peer list. Kotoba when ready."
+  (oracle-str-const 'peer-join-sep mirror-peer-join-sep))
+
+(def did-key-prefix
+  "DID key URI prefix for mesh PeerIds. Kotoba when ready."
+  (oracle-str-const 'did-key-prefix mirror-did-key-prefix))
+
+(defn peer-entry
+  "One bootstrap peer `peer-id@multiaddr`. Kotoba `peer-entry` when ready."
+  [peer-id multiaddr]
+  (try-oracle
+   #(o 'peer-entry [(str peer-id) (str multiaddr)])
+   #(mirror-peer-entry peer-id multiaddr)))
+
 (defn operator-seed-missing?
   "True when a command requiring the fleet operator seed should fail.
    Kotoba `operator-seed-missing?` when oracle ready."
@@ -251,14 +278,15 @@
        #(+ 100 p2p)))))
 
 (defn bootstrap-str
-  "Comma-list of `peerid@multiaddr` for every other node with a known PeerId."
+  "Comma-list of `peerid@multiaddr` for every other node with a known PeerId.
+   Pair format dual-sourced via `peer-entry`; fold + join stay host."
   [fleet peers self]
   (->> (:nodes fleet)
        (remove #(= (:name %) (:name self)))
        (keep (fn [node]
                (when-let [peer-id (get peers (:name node))]
-                 (str peer-id "@" (multiaddr (:ip node) (node-p2p-port fleet node))))))
-       (str/join ",")))
+                 (peer-entry peer-id (multiaddr (:ip node) (node-p2p-port fleet node))))))
+       (str/join peer-join-sep)))
 
 (defn peer-id-from-log
   "Extract the libp2p PeerId from kotoba mesh log output containing `did:key:<peerid>`."

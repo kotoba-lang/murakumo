@@ -14,7 +14,8 @@
        "live-link-count-output launch-up-command launch-down-command "
        "reprovision-command watchdog-label watchdog-reprovision-command "
        "rsync-bin rsync-az-flag rsync-e-flag local-bin-path remote-bin-dest "
-       "launchd-daemon-path tee-plist-prefix label-kv plist-heredoc-footer"))
+       "launchd-daemon-path tee-plist-prefix label-kv plist-heredoc-footer "
+       "peer-at-sep peer-join-sep peer-entry did-key-prefix"))
 (def fleet
   {:fleet/port 8077
    :fleet/p2p-port 4001
@@ -124,3 +125,26 @@
            (plan/write-plist-command "<body>")))
     (is (= "zone=jp,role=compute"
            (plan/labels-env {:zone "jp" :role "compute"})))))
+
+(deftest peer-entry-and-bootstrap-fragments-match
+  (let [s (compile-string-cases
+           {"at" "(peer-at-sep)"
+            "js" "(peer-join-sep)"
+            "dk" "(did-key-prefix)"
+            "pe" (str "(peer-entry " (kotoba-literal "12D3peer") " "
+                      (kotoba-literal "/ip4/1.2.3.4/udp/4001/quic-v1") ")")
+            "ma" (str "(multiaddr " (kotoba-literal "1.2.3.4") " 4001)")})]
+    (is (= plan/peer-at-sep (get s "at")))
+    (is (= plan/peer-join-sep (get s "js")))
+    (is (= plan/did-key-prefix (get s "dk")))
+    (is (= (plan/peer-entry "12D3peer" "/ip4/1.2.3.4/udp/4001/quic-v1")
+           (get s "pe")))
+    (is (= "12D3peer@/ip4/1.2.3.4/udp/4001/quic-v1" (get s "pe")))
+    (is (= (plan/multiaddr "1.2.3.4" 4001) (get s "ma")))
+    (is (= "12D3peer@/ip4/1.2.3.4/udp/4001/quic-v1"
+           (plan/peer-entry "12D3peer" (plan/multiaddr "1.2.3.4" 4001))))
+    (let [peers {"judah" "12D3j"}
+          boot (plan/bootstrap-str fleet peers (first (:nodes fleet)))]
+      (is (str/includes? boot "12D3j@"))
+      (is (str/includes? boot "/ip4/100.0.0.2/udp/5001/quic-v1"))
+      (is (not (str/includes? boot "asher"))))))
