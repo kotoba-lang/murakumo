@@ -10,7 +10,12 @@
 
 (def port-source (slurp "kotoba/infer_schedule_core.kotoba"))
 
-(def export-prefix "eligible? score-queue score-free better-score? holds-warm? prefer-warm-then-score pick-idx-2-full pick-idx-3-tournament queue-after-assign lane-base pack3 pack-get queues-pack-2 pick-code assign-step-2 assign-result-pick assign-result-q0 assign-result-q1 better-from-queues")
+(def export-prefix (str "eligible? score-queue score-free better-score? holds-warm? "
+                        "prefer-warm-then-score pick-idx-2-full pick-idx-3-tournament "
+                        "queue-after-assign lane-base pack3 pack-get queues-pack-2 pick-code "
+                        "assign-step-2 assign-result-pick assign-result-q0 assign-result-q1 "
+                        "better-from-queues queues-pack-3 pick-code-3 assign-pick-3 apply-pick-3 "
+                        "assign-step-3 assign-step-3-code assign-step-3-queues better-pair"))
 
 (def GiB (* 1024 1024 1024))
 
@@ -263,4 +268,64 @@
           c1 (mod (get actual "s1") 65536)]
       (is (= 2 c0))
       (is (= 1 c1)))))
+
+(deftest assign-step-3-matches-schedule-assign
+  (let [f (* 16 GiB)
+        B 65536
+        unpack3 (fn [p] [(mod p B) (mod (quot p B) B) (quot p (* B B))])
+        ;; unequal free so score is strict (avoids known tie→later-idx vs cljc first)
+        fa (* 8 GiB)
+        fb (* 16 GiB)
+        fc (* 32 GiB)
+        model {:model/engine :comfyui
+               :model/checkpoint "c.safetensors"
+               :model/min-free-bytes (* 4 GiB)}
+        a {:name "a" :engines #{:comfyui} :checkpoints #{"c.safetensors"}
+           :free-bytes fa :queue 0}
+        b {:name "b" :engines #{:comfyui} :checkpoints #{"c.safetensors"}
+           :free-bytes fb :queue 0}
+        c {:name "c" :engines #{:comfyui} :checkpoints #{"c.safetensors"}
+           :free-bytes fc :queue 0}
+        jobs (repeat 3 {:model model})
+        cljc (sched/assign [a b c] jobs)
+        ;; all warm; more free ⇒ better score (score-free = -free)
+        bp0 (str "(pack3 (better-pair 0 " fa " 0 " fb ") "
+                 "(better-pair 0 " fa " 0 " fc ") "
+                 "(better-pair 0 " fb " 0 " fc "))")
+        s0 (str "(assign-step-3 (queues-pack-3 0 0 0) (pack3 1 1 1) (pack3 1 1 1) " bp0 ")")
+        actual0 (compile-i64-cases
+                 {"s0" s0
+                  "pcn" "(pick-code-3 -1)"
+                  "pc0" "(pick-code-3 0)"
+                  "pc2" "(pick-code-3 2)"
+                  "ap" (str "(assign-pick-3 (pack3 1 1 1) (pack3 1 1 1) " bp0 ")")
+                  "aq" "(apply-pick-3 (queues-pack-3 0 0 0) 2)"})]
+    (is (= 0 (get actual0 "pcn")))
+    (is (= 1 (get actual0 "pc0")))
+    (is (= 3 (get actual0 "pc2")))
+    (is (= 2 (get actual0 "ap")) "pick c — largest free")
+    (is (= [0 0 1] (unpack3 (get actual0 "aq"))))
+    (let [code (mod (get actual0 "s0") 4)
+          [nq0 nq1 nq2] (unpack3 (quot (get actual0 "s0") 4))]
+      (is (= 3 code) "pick-code for node2")
+      (is (= [0 0 1] [nq0 nq1 nq2]))
+      (is (= "c" (:node (nth cljc 0)))))
+    ;; step1: q=(0,0,1) — still prefer largest free among low queue
+    (let [bp1 (str "(pack3 (better-pair 0 " fa " 0 " fb ") "
+                   "(better-pair 0 " fa " 1 " fc ") "
+                   "(better-pair 0 " fb " 1 " fc "))")
+          s1 (str "(assign-step-3 (queues-pack-3 0 0 1) (pack3 1 1 1) (pack3 1 1 1) " bp1 ")")
+          actual1 (compile-i64-cases
+                   {"s1" s1
+                    "gc" (str "(assign-step-3-code " (get actual0 "s0") ")")
+                    "gq" (str "(assign-step-3-queues " (get actual0 "s0") ")")})]
+      (is (= 3 (get actual1 "gc")))
+      (is (= (quot (get actual0 "s0") 4) (get actual1 "gq")))
+      (let [code (mod (get actual1 "s1") 4)
+            [nq0 nq1 nq2] (unpack3 (quot (get actual1 "s1") 4))]
+        (is (= 2 code) "pick b — free 16GiB, queue 0 beats c queue 1")
+        (is (= [0 1 1] [nq0 nq1 nq2]))
+        (is (= "b" (:node (nth cljc 1))))
+        (is (= 3 (count cljc)))
+        (is (every? some? (map :node cljc)))))))
 
