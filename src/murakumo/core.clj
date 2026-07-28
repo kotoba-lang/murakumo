@@ -20,6 +20,7 @@
             [murakumo.identity :as identity]
             [murakumo.provision.plan :as provision]
             [murakumo.token :as token]
+            [murakumo.secret :as secret]
             [murakumo.report :as report]
             [murakumo.reconcile :as reconcile]
             [murakumo.ssh :as ssh]
@@ -402,8 +403,9 @@
 
 (defn- cmd-token
   "Mint / inspect murakumo inference access tokens (HMAC, stateless — the
-  gateway verifies without any shared state). Reads the signing secret from
-  $MURAKUMO_TOKEN_SECRET.
+  gateway verifies without any shared state). Resolves the signing secret
+  via murakumo.secret (named `murakumo-token` → exact $MURAKUMO_TOKEN_SECRET;
+  no ambient env dump). Hosts may inject a kit-shaped :fetch later.
 
     murakumo token issue [--sub <label>] [--scope chat|image|all] [--ttl <secs>]
     murakumo token verify <token>
@@ -412,19 +414,19 @@
     npx wrangler secret put MURAKUMO_TOKEN_SECRET"
   [_ args]
   (let [[sub & rest] args
-        secret (System/getenv "MURAKUMO_TOKEN_SECRET")
+        signing-secret (secret/resolve-token-secret)
         now (quot (System/currentTimeMillis) 1000)]
     (cond
-      (str/blank? secret)
+      (str/blank? signing-secret)
       (println "error: $MURAKUMO_TOKEN_SECRET is not set — export it (the same value the gateway verifies with).")
 
       (= sub "issue")
       (let [f (parse-flags rest)
             ttl (some-> (get f "ttl") Long/parseLong)
-            t (token/sign secret {:sub (get f "sub" "client")
-                                  :scope (get f "scope" "all")
-                                  :now now
-                                  :ttl (or ttl 2592000)})]
+            t (token/sign signing-secret {:sub (get f "sub" "client")
+                                          :scope (get f "scope" "all")
+                                          :now now
+                                          :ttl (or ttl 2592000)})]
         (println t)
         (binding [*out* *err*]
           (println)
@@ -434,7 +436,7 @@
 
       (= sub "verify")
       (let [t (first rest)
-            cl (and t (token/verify secret t now))]
+            cl (and t (token/verify signing-secret t now))]
         (if cl
           (println (json/generate-string (assoc cl :valid true)))
           (println (json/generate-string {:valid false}))))
