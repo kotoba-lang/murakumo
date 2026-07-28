@@ -495,7 +495,12 @@
       (is (= 0 (:wave (first (:assignments asg)))))
       (is (= 3 (:tasks sum)))
       (is (= 0 (:retried sum)))
-      (is (some? (:speedup sum))))))
+      (is (some? (:speedup sum)))))
+  (testing "unschedulable seps dual-source"
+    (is (= "," task/exclude-join-sep))
+    (is (= "no node satisfies placement=" task/unsched-placement-prefix))
+    (is (= " excluding=" task/unsched-excluding-prefix))
+    (is (= " min-mem-bytes=" task/unsched-min-mem-prefix))))
 
 (deftest task-oracle-call-matches-live-compile
   (let [live (task-live-kir)]
@@ -518,6 +523,17 @@
            (oracle/call :task-plan 'task-id [12])))
     (is (= (ir/execute live 'unschedulable-detail ["nil" "a,b" "64"])
            (oracle/call :task-plan 'unschedulable-detail ["nil" "a,b" "64"])))
+    (is (= (ir/execute live 'exclude-join-sep [])
+           (oracle/call :task-plan 'exclude-join-sep [])))
+    (is (= (ir/execute live 'unsched-placement-prefix [])
+           (oracle/call :task-plan 'unsched-placement-prefix [])))
+    (is (= (ir/execute live 'unsched-excluding-prefix [])
+           (oracle/call :task-plan 'unsched-excluding-prefix [])))
+    (is (= (ir/execute live 'unsched-min-mem-prefix [])
+           (oracle/call :task-plan 'unsched-min-mem-prefix [])))
+    (is (= (oracle/call :task-plan 'exclude-join-sep []) task/exclude-join-sep))
+    (is (= (oracle/call :task-plan 'unsched-placement-prefix [])
+           task/unsched-placement-prefix))
     (is (= (ir/execute live 'wave-of [5 2])
            (oracle/call :task-plan 'wave-of [5 2])))
     (is (= (ir/execute live 'nearest-rank-idx [10 500])

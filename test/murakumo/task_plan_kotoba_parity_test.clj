@@ -19,7 +19,8 @@
        "pick-task-fold-step load-inc-if challenger-wins? "
        "assign-task-pick-3 apply-task-pick-3 assign-task-step-3 "
        "nearest-rank-idx summary-retried speedup-milli max2 min2 clamp-nonneg "
-       "unschedulable-detail"))
+       "unschedulable-detail exclude-join-sep "
+       "unsched-placement-prefix unsched-excluding-prefix unsched-min-mem-prefix"))
 
 
 (defn- compile-string-cases [cases]
@@ -306,16 +307,28 @@
                 {"u0" "(unschedulable-detail \"{:labels {\\\"gpu\\\" \\\"1\\\"}}\" \"\" \"\")"
                  "u1" "(unschedulable-detail \"nil\" \"a,b\" \"\")"
                  "u2" "(unschedulable-detail \"nil\" \"\" \"1073741824\")"
-                 "u3" "(unschedulable-detail \"{:roles [\\\"compute\\\"]}\" \"x\" \"64\")"})]
+                 "u3" "(unschedulable-detail \"{:roles [\\\"compute\\\"]}\" \"x\" \"64\")"
+                 "ej" "(exclude-join-sep)"
+                 "pp" "(unsched-placement-prefix)"
+                 "ep" "(unsched-excluding-prefix)"
+                 "mp" "(unsched-min-mem-prefix)"})]
     (is (= "no node satisfies placement={:labels {\"gpu\" \"1\"}}" (get actual "u0")))
     (is (= "no node satisfies placement=nil excluding=a,b" (get actual "u1")))
     (is (= "no node satisfies placement=nil min-mem-bytes=1073741824" (get actual "u2")))
     (is (= "no node satisfies placement={:roles [\"compute\"]} excluding=x min-mem-bytes=64"
            (get actual "u3")))
+    (is (= plan/exclude-join-sep (get actual "ej")))
+    (is (= "," (get actual "ej")))
+    (is (= plan/unsched-placement-prefix (get actual "pp")))
+    (is (= "no node satisfies placement=" (get actual "pp")))
+    (is (= plan/unsched-excluding-prefix (get actual "ep")))
+    (is (= " excluding=" (get actual "ep")))
+    (is (= plan/unsched-min-mem-prefix (get actual "mp")))
+    (is (= " min-mem-bytes=" (get actual "mp")))
     ;; host assign path projects same detail shape
     (let [r (plan/assign [{:name "n" :roles [] :online? true}]
                          [{:id "t0" :placement {:roles ["missing"]}}]
                          {})
           d (:detail (first (:unschedulable r)))]
       (is (string? d))
-      (is (str/starts-with? d "no node satisfies placement=")))))
+      (is (str/starts-with? d plan/unsched-placement-prefix)))))
