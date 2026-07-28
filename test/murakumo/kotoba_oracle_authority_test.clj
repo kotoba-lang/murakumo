@@ -27,6 +27,8 @@
             [murakumo.config :as config]
             [murakumo.reconcile.plan :as rplan]
             [murakumo.fleet.inventory :as finv]
+            [murakumo.identity :as id]
+            [murakumo.infer.credits :as credits]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -706,3 +708,95 @@
            (oracle/call :fleet-inventory 'selector-wants-name? ["a,c" "a"])))
     (is (= (ir/execute live 'line-has-offline? ["x offline y"])
            (oracle/call :fleet-inventory 'line-has-offline? ["x offline y"])))))
+
+(deftest product-shell-identity-uses-oracle-results
+  (testing "seed preimages via oracle then host sha"
+    (is (= (id/sha256-hex (oracle/call :identity 'seed-node ["op" "asher"]))
+           (id/node-seed "op" {:name "asher"})))
+    (is (= (id/sha256-hex (oracle/call :identity 'seed-p2p ["op" "asher"]))
+           (id/node-p2p-seed "op" {:name "asher"})))
+    (is (= (id/sha256-hex (oracle/call :identity 'seed-x25519 ["op"]))
+           (id/x25519-seed "op")))
+    (is (= (id/sha256-hex (oracle/call :identity 'seed-overlay ["op" "ov1"]))
+           (id/overlay-auth-key "op" "ov1"))))
+  (testing "did-from-output + argv via oracle"
+    (is (= "did:key:z" (id/did-from-output " did:key:z\n")))
+    (is (= ["/bin/kotoba" "did-derive" "seedhex"]
+           (id/did-derive-argv "/bin/kotoba" "seedhex"))))
+  (testing "op-token templates via oracle"
+    (let [did "did:key:z-test"
+          tok (id/op-token did)
+          parts (str/split tok #"\.")]
+      (is (= 3 (count parts)))
+      (is (= (id/b64url (oracle/call :identity 'jwt-header-json [])) (first parts)))
+      (is (= (id/b64url (oracle/call :identity 'jwt-payload-json [did])) (second parts)))
+      (is (= (oracle/call :identity 'op-token-sig-seg []) (last parts)))))
+  (testing "graph-cid b-prefix + fleet name"
+    (is (str/starts-with? (id/graph-cid (id/graph-name-fleet)) "b"))
+    (is (= "murakumo-fleet" (id/graph-name-fleet)))))
+
+(deftest identity-oracle-call-matches-live-compile
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/identity_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'seed-node ["a" "b"])
+           (oracle/call :identity 'seed-node ["a" "b"])))
+    (is (= (ir/execute live 'did-from-output [" x\n"])
+           (oracle/call :identity 'did-from-output [" x\n"])))
+    (is (= (ir/execute live 'jwt-header-json [])
+           (oracle/call :identity 'jwt-header-json [])))
+    (is (= (ir/execute live 'jwt-payload-json ["did:key:z"])
+           (oracle/call :identity 'jwt-payload-json ["did:key:z"])))
+    (is (= (ir/execute live 'graph-name-fleet [])
+           (oracle/call :identity 'graph-name-fleet [])))))
+
+(deftest identity-precompiled-kir-does-not-drift
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/identity_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))
+        shipped (edn/read-string
+                 (slurp (io/resource "murakumo/oracle/identity_core.kir.edn")))]
+    (is (= live shipped) "identity_core KIR drift — run oracle-gen")))
+
+(deftest product-shell-credits-uses-oracle-results
+  (testing "defaults from oracle"
+    (is (= 1 credits/default-per-token))
+    (is (= (double (/ 1 10)) (double credits/default-head-frac)))
+    (is (= (double (/ 1 20)) (double credits/default-protocol-frac)))
+    (is (= (oracle/call :infer-credits 'default-per-token [])
+           credits/default-per-token)))
+  (testing "settle uses memory-time-weight"
+    (let [s (credits/settle
+             {:model {:credit/per-token 2}
+              :tokens 100
+              :duration-ms 1000
+              :plan {:assignments
+                     [{:node {:name "a" :head? true} :span 1 :est-bytes 10}
+                      {:node {:name "b"} :span 2 :est-bytes 20}]}})]
+      (is (= 200.0 (double (:run/total s))))
+      (is (pos? (get-in s [:run/shares "a"] 0)))
+      (is (pos? (get-in s [:run/shares "b"] 0)))))
+  (testing "charge-allow via oracle for whole balances"
+    (is (true? (:allow? (credits/charge {"alice" 100} "alice"
+                                        {:model {:credit/per-token 1} :tokens 50}))))
+    (is (false? (:allow? (credits/charge {"alice" 10} "alice"
+                                         {:model {:credit/per-token 1} :tokens 50}))))))
+
+(deftest credits-oracle-call-matches-live-compile
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/infer_credits_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'default-per-token [])
+           (oracle/call :infer-credits 'default-per-token [])))
+    (is (= (ir/execute live 'head-num [])
+           (oracle/call :infer-credits 'head-num [])))
+    (is (= (ir/execute live 'memory-time-weight [10 1000 2])
+           (oracle/call :infer-credits 'memory-time-weight [10 1000 2])))
+    (is (= (ir/execute live 'charge-allow? [100 50])
+           (oracle/call :infer-credits 'charge-allow? [100 50])))
+    (is (= (ir/execute live 'token-cost [2 100])
+           (oracle/call :infer-credits 'token-cost [2 100])))))
+
+(deftest credits-precompiled-kir-does-not-drift
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/infer_credits_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))
+        shipped (edn/read-string
+                 (slurp (io/resource "murakumo/oracle/infer_credits_core.kir.edn")))]
+    (is (= live shipped) "infer_credits_core KIR drift — run oracle-gen")))
