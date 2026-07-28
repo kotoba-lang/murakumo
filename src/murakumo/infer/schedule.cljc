@@ -1,19 +1,30 @@
 ;; murakumo.infer.schedule — job-parallel media scheduling (pure cljc).
 ;;
 ;; W6 product-shell authority (ADR-260728-w6-schedule-oracle-authority):
-;; On the JVM, eligible? / score / queue-inc DELEGATE to precompiled
-;; kotoba/infer_schedule_core.kotoba → resources/murakumo/oracle/infer_schedule_core.kir.edn.
+;; eligible? / score / queue-inc DELEGATE to precompiled
+;; kotoba/infer_schedule_core.kotoba when oracle loadable (JVM or cljs/nbb).
 ;; Host remains: set membership projection (engines/checkpoints), pick sort-by
 ;; (stable order on ties — differs from tournament later-index), assign atom fold.
 
 (ns murakumo.infer.schedule
-  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
+  (:require [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :infer-schedule)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
 
 ;; flags: 1 has-engine | 2 has-checkpoint | 4 holds-checkpoint | 8 can-fetch
 
@@ -37,23 +48,25 @@
        (>= (or free-bytes 0) (:model/min-free-bytes model 0))))
 
 (defn eligible?
-  "Can `node` run `model`? JVM: kotoba eligible? with projected flags."
+  "Can `node` run `model`? Kotoba eligible? with projected flags when ready."
   [node model]
-  #?(:clj
-     (= 1 (o 'eligible?
-             [(long (eligibility-flags node model))
-              (long (or (:free-bytes node) 0))
-              (long (:model/min-free-bytes model 0))]))
-     :cljs (mirror-eligible? node model)))
+  (try-oracle
+   #(= 1 (oracle/i64->host
+          (o 'eligible?
+             [(oracle/as-i64 (eligibility-flags node model))
+              (oracle/as-i64 (or (:free-bytes node) 0))
+              (oracle/as-i64 (:model/min-free-bytes model 0))])))
+   #(mirror-eligible? node model)))
 
 (defn score
-  "Lower is better: queue then -free-bytes. JVM: score-queue + score-free."
+  "Lower is better: queue then -free-bytes. Kotoba score-queue + score-free when ready."
   [{:keys [queue free-bytes]}]
-  #?(:clj
-     [(long (o 'score-queue [(long (or queue 0))]))
-      (long (o 'score-free [(long (or free-bytes 0))]))]
-     :cljs
-     [(or queue 0) (- (or free-bytes 0))]))
+  (try-oracle
+   (fn []
+     [(oracle/i64->host (o 'score-queue [(oracle/as-i64 (or queue 0))]))
+      (oracle/i64->host (o 'score-free [(oracle/as-i64 (or free-bytes 0))]))])
+   (fn []
+     [(or queue 0) (- (or free-bytes 0))])))
 
 (defn pick
   "Choose the node to run `model`, or nil if none eligible.
@@ -74,6 +87,9 @@
        (do (when n
              (swap! by-name update-in [(:name n) :queue]
                     (fn [q]
-                      #?(:clj (long (o 'queue-inc-if [(long (or q 0)) 1]))
-                         :cljs ((fnil inc 0) q)))))
+                      (try-oracle
+                       (fn []
+                         (oracle/i64->host
+                          (o 'queue-inc-if [(oracle/as-i64 (or q 0)) (oracle/as-i64 1)])))
+                       (fn [] ((fnil inc 0) q))))))
            {:job job :node (when n (:name n))})))))

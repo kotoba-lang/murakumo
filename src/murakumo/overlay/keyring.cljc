@@ -1,32 +1,51 @@
 ;; murakumo.overlay.keyring — deterministic key rotation metadata.
 ;;
 ;; W6 product-shell: rotation seconds/epoch + hash preimages via kotoba
-;; overlay_keyring_core. SHA-256 stays host (identity/sha256-hex).
+;; overlay_keyring_core when oracle loadable (JVM or cljs/nbb).
+;; SHA-256 stays host (identity/sha256-hex).
 
 (ns murakumo.overlay.keyring
   (:require [murakumo.identity :as identity]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :overlay-keyring)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
 
 (def default-rotation-seconds
-  #?(:clj (long (o 'default-rotation-seconds []))
-     :cljs 86400))
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid 'default-rotation-seconds []))
+      86400)
+    (catch #?(:clj Exception :cljs :default) _
+      86400)))
 
 (defn epoch
   ([seconds] (epoch seconds default-rotation-seconds))
   ([seconds rotation-seconds]
-   #?(:clj (long (o 'epoch [(long seconds) (long rotation-seconds)]))
-      :cljs (quot seconds rotation-seconds))))
+   (try-oracle
+    #(oracle/i64->host
+      (o 'epoch [(oracle/as-i64 seconds) (oracle/as-i64 rotation-seconds)]))
+    #(quot seconds rotation-seconds))))
 
 (defn key-id [overlay epoch]
   (subs (identity/sha256-hex
-         #?(:clj (o 'key-id-input [(str overlay) (long epoch)])
-            :cljs (str overlay ":key:" epoch)))
+         (try-oracle
+          #(o 'key-id-input [(str overlay) (oracle/as-i64 epoch)])
+          #(str overlay ":key:" epoch)))
         0 16))
 
 (defn derive-key
@@ -38,9 +57,10 @@
    :kid (key-id overlay epoch)
    :alg :sha256-aes-gcm
    :key (identity/sha256-hex
-         #?(:clj (o 'derive-key-input
-                    [(str operator-seed) (str overlay) (long epoch)])
-            :cljs (str operator-seed ":" overlay ":murakumo-overlay-key:" epoch)))})
+         (try-oracle
+          #(o 'derive-key-input
+              [(str operator-seed) (str overlay) (oracle/as-i64 epoch)])
+          #(str operator-seed ":" overlay ":murakumo-overlay-key:" epoch)))})
 
 (defn rotation-plan
   ([operator-seed overlay now-seconds]

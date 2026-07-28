@@ -1,16 +1,31 @@
 ;; murakumo.overlay.peer — peer discovery and route selection state.
 ;;
 ;; W6 product-shell: choose-via / health / via name strings via kotoba
-;; overlay_peer_core. Catalog/remember map folds stay host.
+;; overlay_peer_core when oracle loadable (JVM or cljs/nbb).
+;; Catalog/remember map folds stay host.
 
 (ns murakumo.overlay.peer
-  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
+  (:require [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :overlay-peer)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+(defn- via-kw [s]
+  (keyword s))
 
 (defn peer-record [route]
   {:type "murakumo.overlay.peer"
@@ -20,8 +35,10 @@
    :direct (vec (:direct route))
    :relay (:relay route)
    :seen-at 0
-   :health #?(:clj (keyword (o 'health-unknown []))
-              :cljs :unknown)})
+   :health (via-kw
+            (try-oracle
+             #(o 'health-unknown [])
+             (fn [] "unknown")))})
 
 (defn catalog [routes]
   (into {}
@@ -34,8 +51,10 @@
    (assoc peers (:node route)
           (assoc (peer-record route)
                  :seen-at seen-at
-                 :health #?(:clj (keyword (o 'health-seen []))
-                            :cljs :seen)))))
+                 :health (via-kw
+                          (try-oracle
+                           #(o 'health-seen [])
+                           (fn [] "seen")))))))
 
 (defn mark-health [peers node health]
   (assoc-in peers [node :health] health))
@@ -44,33 +63,31 @@
   (first (filter #(= name (:name %)) (vals peers))))
 
 (defn candidate-paths [peer]
-  (vec (concat (map #(assoc % :via #?(:clj (keyword (o 'via-direct []))
-                                      :cljs :direct))
-                    (:direct peer))
-               (when-let [relay (:relay peer)]
-                 [(assoc relay :via #?(:clj (keyword (o 'via-relay []))
-                                       :cljs :relay))]))))
+  (let [direct-kw (via-kw (try-oracle #(o 'via-direct []) (fn [] "direct")))
+        relay-kw (via-kw (try-oracle #(o 'via-relay []) (fn [] "relay")))]
+    (vec (concat (map #(assoc % :via direct-kw) (:direct peer))
+                 (when-let [relay (:relay peer)]
+                   [(assoc relay :via relay-kw)])))))
 
 (defn choose-path
   "Prefer healthy direct paths, then relay fallback.
-   JVM: via decision via kotoba `choose-via`."
+   Kotoba `choose-via` when oracle ready (Product Value ABI options)."
   [peer]
   (let [paths (candidate-paths peer)
         direct? (boolean (some #(= :direct (:via %)) paths))
         relay? (boolean (some #(= :relay (:via %)) paths))
         health (name (or (:health peer) :unknown))
-        via #?(:clj (o 'choose-via
-                       [(oracle/option-string (when direct? "direct"))
-                        health
-                        (oracle/option-string (when relay? "relay"))])
-               :cljs nil)]
-    #?(:clj
-       (case via
-         "direct" (first (filter #(= :direct (:via %)) paths))
-         "relay" (first (filter #(= :relay (:via %)) paths))
-         nil)
-       :cljs
-       (or (first (filter #(and (= :direct (:via %))
-                                (not= :down (:health peer)))
-                          paths))
-           (first (filter #(= :relay (:via %)) paths))))))
+        via (try-oracle
+             #(o 'choose-via
+                 [(oracle/option-string (when direct? "direct"))
+                  health
+                  (oracle/option-string (when relay? "relay"))])
+             (fn []
+               (cond
+                 (and direct? (not= :down (:health peer))) "direct"
+                 relay? "relay"
+                 :else "")))]
+    (case via
+      "direct" (first (filter #(= :direct (:via %)) paths))
+      "relay" (first (filter #(= :relay (:via %)) paths))
+      nil)))
