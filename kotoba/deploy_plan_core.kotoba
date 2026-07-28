@@ -5,7 +5,13 @@
             digit-char nat-str i64-str
             app-manifest-path publish-selector
             localhost-url last-slash-index manifest-dir
-            command-output component-build-cmd app-deploy-cmd]))
+            command-output component-build-cmd app-deploy-cmd
+            digit-val? digit-of parse-digits-go parse-digits trim-ws
+            execution-observed? execution-count-command
+            release-wit-path stop-forward-command
+            absolute-unix-git-bin? blank?
+            pin-bin-kotoba pin-bin-server
+            join-path release-wit-suffix]))
 
 ;; W6 pure-planner oracle — murakumo.deploy.plan path/argv/constants core.
 ;; Vector argv maps, artifact distribution over nodes, regex extract stay cljc.
@@ -109,3 +115,85 @@
       (string-concat
        wit
        (string-concat " --publish --url " (localhost-url port))))))))
+
+(defn pin-bin-kotoba [] :string "kotoba")
+(defn pin-bin-server [] :string "kotoba-server")
+
+(defn release-wit-suffix [] :string
+  "/../../../crates/kotoba-runtime/wit")
+
+(defn blank? [s :string] :i64
+  (let [n (string-byte-length s)]
+    (if (= n 0)
+      1
+      (if (= (ws? (string-substring s 0 1)) 1)
+        (blank? (string-substring s 1 n))
+        0))))
+
+(defn trim-ws [s :string] :string
+  (trim s))
+
+(defn digit-val? [c :string] :i64
+  ;; 1 if single char is ASCII digit (tunnel_core pattern)
+  (if (= (string-byte-length c) 1)
+    (if (string-contains? "0123456789" c) 1 0)
+    0))
+
+(defn digit-of-go [digits :string c :string i :i64] :i64
+  (let [n (string-byte-length digits)]
+    (if (< i n)
+      (if (string=? (string-substring digits i (+ i 1)) c)
+        i
+        (digit-of-go digits c (+ i 1)))
+      0)))
+
+(defn digit-of [c :string] :i64
+  (digit-of-go "0123456789" c 0))
+
+(defn parse-digits-go [s :string acc :i64] :i64
+  (let [n (string-byte-length s)]
+    (if (= n 0)
+      acc
+      (let [c (string-substring s 0 1)]
+        (if (= (digit-val? c) 0)
+          -1
+          (parse-digits-go (string-substring s 1 n)
+                           (+ (* acc 10) (digit-of c))))))))
+
+(defn parse-digits [s :string] :i64
+  (let [t (trim-ws s)
+        n (string-byte-length t)]
+    (if (= n 0)
+      -1
+      (parse-digits-go t 0))))
+
+(defn execution-observed? [grep-count-out :string] :i64
+  ;; cljc: (pos? (Integer/parseInt (trim out))) catch false
+  (let [n (parse-digits grep-count-out)]
+    (if (< n 1) 0 1)))
+
+(defn execution-count-command [cid :string] :string
+  (string-concat
+   "grep -c 'trigger: executed.*"
+   (string-concat cid "' ~/.murakumo/mesh.log 2>/dev/null")))
+
+(defn join-path [a :string b :string] :string
+  (string-concat a (string-concat "/" b)))
+
+(defn release-wit-path [release-dir :string] :string
+  (string-concat release-dir (release-wit-suffix)))
+
+(defn stop-forward-command [local-port :i64] :string
+  (string-concat
+   "pkill -f '"
+   (string-concat (i64-str local-port) ":localhost' 2>/dev/null")))
+
+(defn absolute-unix-git-bin? [p :string] :i64
+  ;; Unix absolute path, non-blank, not bare "git". Windows drive letter stays host.
+  (if (= (blank? p) 1)
+    0
+    (if (string=? p "git")
+      0
+      (if (< (string-byte-length p) 1)
+        0
+        (if (string=? (string-substring p 0 1) "/") 1 0)))))
