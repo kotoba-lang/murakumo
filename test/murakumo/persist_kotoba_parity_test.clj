@@ -7,8 +7,12 @@
 
 (def port-source (slurp "kotoba/persist_core.kotoba"))
 (def export-prefix
-  "repo-authority fleet-graph-name snapshot-collection reconcile-collection snapshot-local-port reconcile-local-port forward-settle-ms digit-char nat-str i64-str snapshot-rkey reconcile-rkey repo-uri repo-write-url write-ok?")
-
+  (str "repo-authority fleet-graph-name snapshot-collection reconcile-collection "
+       "snapshot-local-port reconcile-local-port forward-settle-ms "
+       "digit-char nat-str i64-str snapshot-rkey reconcile-rkey repo-uri "
+       "repo-write-url write-ok? operation-create write-ok-marker "
+       "auth-bearer-prefix content-type-json-header curl-timeout-s curl-method-post "
+       "auth-header xrpc-repo-write-path"))
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -41,10 +45,18 @@
             "rk" "(snapshot-rkey 1000 1)" "rr" "(reconcile-rkey 1000 2)"
             "u" (str "(repo-uri " (kotoba-literal "com.murakumo.fleet.snapshot") " "
                      (kotoba-literal "snap-1") ")")
-            "w" "(repo-write-url 18099)"})
+            "w" "(repo-write-url 18099)"
+            "op" "(operation-create)"
+            "mk" "(write-ok-marker)"
+            "ab" "(auth-bearer-prefix)"
+            "ct" "(content-type-json-header)"
+            "mp" "(curl-method-post)"
+            "ah" (str "(auth-header " (kotoba-literal "tok") ")")
+            "xp" "(xrpc-repo-write-path)"})
         n (compile-i64-cases
            {"sp" "(snapshot-local-port)" "rp" "(reconcile-local-port)"
             "fs" "(forward-settle-ms)"
+            "ctm" "(curl-timeout-s)"
             "ok" (str "(write-ok? " (kotoba-literal "{\"status\":\"ok\"}") ")")
             "bad" (str "(write-ok? " (kotoba-literal "{\"status\":\"err\"}") ")")})]
     (is (= persist/repo-authority (get s "a")))
@@ -55,8 +67,16 @@
     (is (= (persist/reconcile-rkey 1000 2) (get s "rr")))
     (is (= (persist/repo-uri "com.murakumo.fleet.snapshot" "snap-1") (get s "u")))
     (is (= (persist/repo-write-url 18099) (get s "w")))
+    (is (= persist/operation-create (get s "op")))
+    (is (= persist/write-ok-marker (get s "mk")))
+    (is (= persist/auth-bearer-prefix (get s "ab")))
+    (is (= persist/content-type-json-header (get s "ct")))
+    (is (= persist/curl-method-post (get s "mp")))
+    (is (= (persist/auth-header "tok") (get s "ah")))
+    (is (= persist/xrpc-repo-write-path (get s "xp")))
     (is (= persist/snapshot-local-port (get n "sp")))
     (is (= persist/reconcile-local-port (get n "rp")))
     (is (= persist/forward-settle-ms (get n "fs")))
+    (is (= persist/curl-timeout-s (get n "ctm")))
     (is (= (if (persist/write-ok? "{\"status\":\"ok\"}") 1 0) (get n "ok")))
     (is (= (if (persist/write-ok? "{\"status\":\"err\"}") 1 0) (get n "bad")))))

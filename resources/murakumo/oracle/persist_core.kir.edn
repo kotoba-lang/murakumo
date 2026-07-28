@@ -103,6 +103,54 @@
       "/"
       (string-concat collection (string-concat "/" rkey))))),
    :param-types [:string :string]}
+  {:name operation-create,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "create",
+   :param-types []}
+  {:name write-ok-marker,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "\"status\":\"ok\"",
+   :param-types []}
+  {:name auth-bearer-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "Authorization: Bearer ",
+   :param-types []}
+  {:name content-type-json-header,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "content-type: application/json",
+   :param-types []}
+  {:name curl-timeout-s,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 6,
+   :param-types []}
+  {:name curl-method-post,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "POST",
+   :param-types []}
+  {:name auth-header,
+   :params [token],
+   :result :string,
+   :effects #{},
+   :body (string-concat (auth-bearer-prefix) token),
+   :param-types [:string]}
+  {:name xrpc-repo-write-path,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/xrpc/com.etzhayyim.apps.kotoba.atproto.repo.write",
+   :param-types []}
   {:name repo-write-url,
    :params [local-port],
    :result :string,
@@ -110,15 +158,13 @@
    :body
    (string-concat
     "http://localhost:"
-    (string-concat
-     (i64-str local-port)
-     "/xrpc/com.etzhayyim.apps.kotoba.atproto.repo.write")),
+    (string-concat (i64-str local-port) (xrpc-repo-write-path))),
    :param-types [:i64]}
   {:name write-ok?,
    :params [out],
    :result :i64,
    :effects #{},
-   :body (if (string-contains? out "\"status\":\"ok\"") 1 0),
+   :body (if (string-contains? out (write-ok-marker)) 1 0),
    :param-types [:string]}],
  :oracle-value nil,
  :schema-identities nil,
@@ -137,7 +183,15 @@
   reconcile-rkey
   repo-uri
   repo-write-url
-  write-ok?],
+  write-ok?
+  operation-create
+  write-ok-marker
+  auth-bearer-prefix
+  content-type-json-header
+  curl-timeout-s
+  curl-method-post
+  auth-header
+  xrpc-repo-write-path],
  :schemas nil,
  :effects #{},
  :blocks [],
