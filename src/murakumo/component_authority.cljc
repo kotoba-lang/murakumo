@@ -6,34 +6,88 @@
   they do not infer authority from eventually-consistent placement telemetry.
 
   W6 product-shell: identifier?/epochs/sequence pure helpers via kotoba
-  component_authority_core on JVM. Event maps + ed25519 stay host."
+  component_authority_core when oracle is loadable (JVM classpath or cljs/nbb —
+  ADR-260728-w6-cljs-oracle-load). Event maps + ed25519 stay host.
+  cljs mirrors remain fallback when oracle is not ready."
   (:require [clojure.string :as str]
             [kotoba.abi.contract :as abi]
-            #?(:clj [ed25519.core :as ed])
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]
+            #?(:clj [ed25519.core :as ed])))
 
 (def ^:private oid :component-authority)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+(defn- oracle-i64-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid export []))
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+;; ── host-mirror pure helpers ───────────────────────────────────────────
+
+(def ^:private mirror-event-version 1)
+(def ^:private mirror-format-v1 "murakumo.component-authority/v1")
+(def ^:private mirror-algorithm-ed25519 "ed25519")
+
+(defn- mirror-identifier? [x]
+  (and (string? x) (not (str/blank? x)) (<= (count x) 4096)))
+
+(defn- mirror-place-epoch [prev]
+  (if (zero? prev) 1 prev))
+
+(defn- mirror-revoke-epoch [prev]
+  (inc prev))
+
+(defn- mirror-next-sequence [seq]
+  (inc seq))
+
+(defn- mirror-event-kind [op]
+  (case op
+    "place" :placed
+    "revoke" :revoked
+    :unknown))
+
+(defn- utf8-len [s]
+  #?(:clj (count (.getBytes ^String s "UTF-8"))
+     :cljs (count s)))
+
+;; ── dual-source scalars ────────────────────────────────────────────────
 
 (def event-version
-  #?(:clj (long (o 'event-version []))
-     :cljs 1))
+  (oracle-i64-const 'event-version mirror-event-version))
 
 (defn initial-state []
   {:epochs {} :placements {} :sequence 0})
 
 (defn- identifier?
-  "JVM: blank? + len via kotoba `identifier-len-ok?` (host projects blank + UTF-8 len)."
+  "Bounded non-blank identifier. Kotoba `identifier-len-ok?` when oracle ready
+   (host projects blank + length; blank? KIR may fail on some cljs builds)."
   [x]
-  #?(:clj
-     (and (string? x)
-          (= 1 (o 'identifier-len-ok?
-                  [(if (str/blank? x) 1 0)
-                   (long (count (.getBytes ^String x "UTF-8")))])))
-     :cljs (and (string? x) (not (str/blank? x)) (<= (count x) 4096))))
+  (if-not (string? x)
+    false
+    (try-oracle
+     #(= 1 (oracle/i64->host
+            (o 'identifier-len-ok?
+               [(oracle/as-i64 (if (str/blank? x) 1 0))
+                (oracle/as-i64 (utf8-len x))])))
+     #(mirror-identifier? x))))
 
 (defn- reject [reason message data]
   (throw (ex-info message (assoc data :murakumo.component/reason reason))))
@@ -59,10 +113,12 @@
                     (valid-event? event))
        (reject :invalid-signing-input
                "Complete Component authority signing input is required" {}))
-     (let [fmt #?(:clj (keyword (o 'format-v1 []))
-                  :cljs :murakumo.component-authority/v1)
-           alg #?(:clj (keyword (o 'algorithm-ed25519 []))
-                  :cljs :ed25519)
+     (let [fmt (keyword (try-oracle
+                         #(o 'format-v1 [])
+                         (fn [] mirror-format-v1)))
+           alg (keyword (try-oracle
+                         #(o 'algorithm-ed25519 [])
+                         (fn [] mirror-algorithm-ed25519)))
            unsigned {:format fmt
                      :algorithm alg
                      :key-id key-id
@@ -90,45 +146,56 @@
   "Authorize COMPONENT-CID on NODE. Returns [new-state event].
 
   A first placement starts at epoch 1. Adding replicas does not rotate an
-  epoch; hosts receive the same current authority generation."
+  epoch; hosts receive the same current authority generation.
+  Epoch/sequence via kotoba when oracle ready."
   [state component-cid node]
   (when-not (and (identifier? component-cid) (identifier? node))
     (reject :invalid-placement "Component CID and node must be bounded identifiers"
             {:component-cid component-cid :node node}))
   (let [prev (long (or (get-in state [:epochs component-cid]) 0))
-        epoch #?(:clj (long (o 'place-epoch [prev]))
-                 :cljs (get-in state [:epochs component-cid] 1))
-        seq' #?(:clj (long (o 'next-sequence [(long (:sequence state))]))
-                :cljs (inc (:sequence state)))
+        epoch (try-oracle
+               #(oracle/i64->host (o 'place-epoch [(oracle/as-i64 prev)]))
+               #(mirror-place-epoch prev))
+        seq' (try-oracle
+              #(oracle/i64->host
+                (o 'next-sequence [(oracle/as-i64 (:sequence state))]))
+              #(mirror-next-sequence (:sequence state)))
+        kind (try-oracle
+              #(keyword (o 'event-kind ["place"]))
+              #(mirror-event-kind "place"))
         state' (-> state
                    (assoc-in [:epochs component-cid] epoch)
                    (update-in [:placements component-cid] (fnil conj #{}) node)
                    (assoc :sequence seq'))]
-    [state' (event state' #?(:clj (keyword (o 'event-kind ["place"]))
-                             :cljs :placed)
-                   component-cid epoch node)]))
+    [state' (event state' kind component-cid epoch node)]))
 
 (defn revoke
   "Revoke all existing placements and advance the Component epoch.
 
   Advancing even when no placement is currently observed is intentional:
-  delayed or partitioned hosts holding an older lease must still fence."
+  delayed or partitioned hosts holding an older lease must still fence.
+  Epoch/sequence via kotoba when oracle ready."
   [state component-cid]
   (when-not (identifier? component-cid)
     (reject :invalid-component "Component CID must be a bounded identifier"
             {:component-cid component-cid}))
   (let [prev (long (or (get-in state [:epochs component-cid]) 0))
-        epoch #?(:clj (long (o 'revoke-epoch [prev]))
-                 :cljs (inc prev))
-        seq' #?(:clj (long (o 'next-sequence [(long (:sequence state))]))
-                :cljs (inc (:sequence state)))
+        epoch (try-oracle
+               #(oracle/i64->host (o 'revoke-epoch [(oracle/as-i64 prev)]))
+               #(mirror-revoke-epoch prev))
+        seq' (try-oracle
+              #(oracle/i64->host
+                (o 'next-sequence [(oracle/as-i64 (:sequence state))]))
+              #(mirror-next-sequence (:sequence state)))
+        kind (try-oracle
+              #(keyword (o 'event-kind ["revoke"]))
+              #(mirror-event-kind "revoke"))
         state' (-> state
                    (assoc-in [:epochs component-cid] epoch)
                    (update :placements dissoc component-cid)
                    (assoc :sequence seq'))]
-    [state' (event state' #?(:clj (keyword (o 'event-kind ["revoke"]))
-                             :cljs :revoked)
-                   component-cid epoch nil)]))
+    [state' (event state' kind component-cid epoch nil)]))
+
 (defn transition
   "Apply one exact authority command to immutable STATE."
   [state command]
