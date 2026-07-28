@@ -4,15 +4,21 @@
             pick-idx-3-tournament queue-after-assign
             lane-base pack3 pack-get queues-pack-2 pick-code
             assign-step-2 assign-result-pick assign-result-q0 assign-result-q1
-            better-from-queues]))
+            better-from-queues
+            queues-pack-3 pick-code-3
+            assign-pick-3 apply-pick-3
+            assign-step-3 assign-step-3-code assign-step-3-queues
+            better-pair]))
 
 ;; W6 pure-planner oracle — murakumo.infer.schedule eligible?/score + pick.
-;; assign-step-2 / assign-2jobs-2nodes: pure assign batch for fixed 2 nodes.
-;; Variable-length node filter/sort and atom map stay cljc.
+;; assign-step-2: pure assign batch step for fixed 2 nodes.
+;; assign-step-3 / assign-pick-3 / apply-pick-3: pure step for fixed 3 nodes.
+;; Variable-length node filter/sort (n>3) and atom map stay cljc.
 ;; pick-idx-*-full is pure pick for fixed 2/3 candidates.
 ;; Guest ABI max arity 5: eligibility flags bit-packed into one i64.
 ;;   flags bits: 1 has-engine | 2 has-checkpoint | 4 holds-checkpoint | 8 can-fetch
 ;; score is two i64 keys (queue, -free); better-score? compares lexicographically.
+;; assign-step-3 result = pick-code-3 + 4 * pack3(nq0,nq1,nq2).
 ;; Parity: test/murakumo/infer_schedule_kotoba_parity_test.clj
 
 (defn rem64 [a :i64 b :i64] :i64
@@ -140,3 +146,59 @@
   ;; recompute better01 after queue updates (free-bytes fixed per node)
   (better-score? (score-queue q0) (score-free f0)
                  (score-queue q1) (score-free f1)))
+
+(defn queues-pack-3 [q0 :i64 q1 :i64 q2 :i64] :i64
+  (pack3 q0 q1 q2))
+
+(defn pick-code-3 [pick-idx :i64] :i64
+  ;; -1|0|1|2 → 0=none, 1=node0, 2=node1, 3=node2
+  (if (< pick-idx 0) 0 (+ pick-idx 1)))
+
+(defn better-pair [q-a :i64 f-a :i64 q-b :i64 f-b :i64] :i64
+  ;; 1 if a strictly better score than b (alias for host pack assembly)
+  (better-from-queues q-a f-a q-b f-b))
+
+(defn assign-pick-3 [ok-pack :i64 warm-pack :i64 better-pack :i64] :i64
+  ;; better-pack = pack3(better01, better02, better12)
+  ;; → pick idx −1|0|1|2
+  (let [ok0 (pack-get ok-pack 0)
+        ok1 (pack-get ok-pack 1)
+        ok2 (pack-get ok-pack 2)
+        warm0 (pack-get warm-pack 0)
+        warm1 (pack-get warm-pack 1)
+        warm2 (pack-get warm-pack 2)
+        better01 (pack-get better-pack 0)
+        better02 (pack-get better-pack 1)
+        better12 (pack-get better-pack 2)
+        champ (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
+        warm-champ (if (= champ 0)
+                     warm0
+                     (if (= champ 1) warm1 0))
+        better-c2 (if (= champ 0)
+                    better02
+                    better12)]
+    (pick-idx-3-tournament champ ok2 warm-champ warm2 better-c2)))
+
+(defn apply-pick-3 [q-pack :i64 pick :i64] :i64
+  ;; → pack3(nq0, nq1, nq2) after assigning one job to pick (−1 = none)
+  (let [q0 (pack-get q-pack 0)
+        q1 (pack-get q-pack 1)
+        q2 (pack-get q-pack 2)
+        nq0 (queue-after-assign q0 (if (= pick 0) 1 0))
+        nq1 (queue-after-assign q1 (if (= pick 1) 1 0))
+        nq2 (queue-after-assign q2 (if (= pick 2) 1 0))]
+    (pack3 nq0 nq1 nq2)))
+
+(defn assign-step-3 [q-pack :i64 ok-pack :i64 warm-pack :i64 better-pack :i64] :i64
+  ;; one job pure assign for 3 nodes.
+  ;; result = pick-code-3 + 4 * pack3(nq0,nq1,nq2)
+  (let [p (assign-pick-3 ok-pack warm-pack better-pack)
+        code (pick-code-3 p)
+        nq (apply-pick-3 q-pack p)]
+    (+ code (* 4 nq))))
+
+(defn assign-step-3-code [result :i64] :i64
+  (rem64 result 4))
+
+(defn assign-step-3-queues [result :i64] :i64
+  (quot result 4))
