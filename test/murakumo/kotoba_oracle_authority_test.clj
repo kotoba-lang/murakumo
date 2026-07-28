@@ -664,21 +664,29 @@
 
 (deftest reconcile-oracle-call-matches-live-compile
   (let [live (:kir (compiler/compile-source (slurp "kotoba/reconcile_plan_core.kotoba")
-                                            :wasm32-kotoba-v1 {}))]
+                                            :wasm32-kotoba-v1 {}))
+        none-i64 (oracle/option-i64 nil)
+        some-3 (oracle/option-i64 3)
+        none-s (oracle/option-string nil)
+        some-cid (oracle/option-string "bafy")]
     (is (= (ir/execute live 'default-replicas [])
            (oracle/call :reconcile-plan 'default-replicas [])))
-    (is (= (ir/execute live 'desired [0 99])
-           (oracle/call :reconcile-plan 'desired [0 99])))
-    (is (= (ir/execute live 'desired [1 3])
-           (oracle/call :reconcile-plan 'desired [1 3])))
+    (is (= (ir/execute live 'desired [none-i64])
+           (oracle/call :reconcile-plan 'desired [none-i64])))
+    (is (= 1 (oracle/call :reconcile-plan 'desired [none-i64])))
+    (is (= (ir/execute live 'desired [some-3])
+           (oracle/call :reconcile-plan 'desired [some-3])))
+    (is (= 3 (oracle/call :reconcile-plan 'desired [some-3])))
     (is (= (ir/execute live 'deficit [3 1])
            (oracle/call :reconcile-plan 'deficit [3 1])))
     (is (= (ir/execute live 'watch-sleep-ms [15])
            (oracle/call :reconcile-plan 'watch-sleep-ms [15])))
-    (is (= (ir/execute live 'action-name [1 1 3 2 0])
-           (oracle/call :reconcile-plan 'action-name [1 1 3 2 0])))
-    (is (= (ir/execute live 'action-name [0 0 1 0 0])
-           (oracle/call :reconcile-plan 'action-name [0 0 1 0 0])))))
+    (is (= (ir/execute live 'action-name [some-cid 1 3 2])
+           (oracle/call :reconcile-plan 'action-name [some-cid 1 3 2])))
+    (is (= "place" (oracle/call :reconcile-plan 'action-name [some-cid 1 3 2])))
+    (is (= (ir/execute live 'action-name [none-s 0 1 0])
+           (oracle/call :reconcile-plan 'action-name [none-s 0 1 0])))
+    (is (= "needs-build" (oracle/call :reconcile-plan 'action-name [none-s 0 1 0])))))
 
 (deftest reconcile-precompiled-kir-does-not-drift
   (let [live (:kir (compiler/compile-source (slurp "kotoba/reconcile_plan_core.kotoba")

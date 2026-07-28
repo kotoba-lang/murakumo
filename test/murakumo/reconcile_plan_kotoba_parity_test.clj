@@ -55,11 +55,23 @@
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
+(defn- opt-i64-form [n]
+  (if (nil? n)
+    "(option-none-of [:option :i64])"
+    (str "(option-some-of [:option :i64] " (long n) ")")))
+
+(defn- opt-str-form [s]
+  (if (nil? s)
+    "(option-none-of [:option :string])"
+    (let [lit (str \" (-> (str s)
+                          (str/replace "\\" "\\\\")
+                          (str/replace "\"" "\\\"")) \")]
+      (str "(option-some-of [:option :string] " lit ")"))))
+
 (defn- project-action-args
-  "Host-project reconcile-app inputs into guest scalars."
+  "Host-project reconcile-app inputs into guest Product Value ABI options."
   [app snap]
   (let [decision (r/reconcile-app fleet snap nil app)
-        has-cid (if (:cid app) 1 0)
         running (count (:running decision))
         desired (or (:replicas app) 1)
         free (count (:targets decision))
@@ -68,20 +80,18 @@
                           0
                           (if (= :place (:action decision))
                             (max free 1)
-                            free))
-        has-misplaced (if (seq (:misplaced decision)) 1 0)]
+                            free))]
     {:decision decision
-     :has-cid has-cid
+     :cid (:cid app)
      :running running
      :desired desired
-     :free-candidates free-candidates
-     :has-misplaced has-misplaced}))
+     :free-candidates free-candidates}))
 
 (deftest defaults-and-deficit-and-sleep
   (let [actual (compile-i64-cases
                 {"dr" "(default-replicas)"
-                 "d0" "(desired 0 99)"
-                 "d1" "(desired 1 3)"
+                 "d0" (str "(desired " (opt-i64-form nil) ")")
+                 "d1" (str "(desired " (opt-i64-form 3) ")")
                  "df" "(deficit 3 1)"
                  "df0" "(deficit 1 3)"
                  "sl" "(watch-sleep-ms 15)"})]
@@ -119,9 +129,9 @@
                      (fn [i [app sn]]
                        (let [p (project-action-args app sn)]
                          [(str "a_" i)
-                          (str "(action-name " (:has-cid p) " " (:running p) " "
-                               (:desired p) " " (:free-candidates p) " "
-                               (:has-misplaced p) ")")]))
+                          (str "(action-name " (opt-str-form (:cid p)) " "
+                               (:running p) " " (:desired p) " "
+                               (:free-candidates p) ")")]))
                      corpus))
         actual (compile-string-cases cases)]
     (doseq [[i [app sn]] (map-indexed vector corpus)]

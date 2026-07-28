@@ -59,11 +59,9 @@
        vec))
 
 (defn- desired-n
-  "Replica desired count — kotoba `desired` (has-replicas flag + value)."
+  "Replica desired count — kotoba `desired` with Product Value ABI optional i64."
   [replicas]
-  #?(:clj (long (o 'desired
-                   [(long (if (some? replicas) 1 0))
-                    (long (or replicas 0))]))
+  #?(:clj (long (o 'desired [(oracle/option-i64 replicas)]))
      :cljs (or replicas 1)))
 
 (defn- deficit-n
@@ -72,17 +70,17 @@
      :cljs (max 0 (- desired running-count))))
 
 (defn- action-kw
-  "Project reconcile-app inputs to kotoba `action-name` then keywordize."
-  [has-cid? running-count desired free-candidates has-misplaced?]
+  "Project reconcile-app inputs to kotoba `action-name` then keywordize.
+   JVM: optional cid string (no has-cid / has-misplaced sentinels)."
+  [cid running-count desired free-candidates]
   #?(:clj (keyword (o 'action-name
-                      [(long (if has-cid? 1 0))
+                      [(oracle/option-string cid)
                        (long running-count)
                        (long desired)
-                       (long free-candidates)
-                       (long (if has-misplaced? 1 0))]))
+                       (long free-candidates)]))
      :cljs
      (cond
-       (not has-cid?) :needs-build
+       (nil? cid) :needs-build
        (< desired running-count) :over
        (zero? (max 0 (- desired running-count))) :satisfied
        (< free-candidates 1) :blocked
@@ -112,11 +110,10 @@
                    :running (vec (sort running))
                    :misplaced (vec (sort misplaced))
                    :deficit deficit}
-        action (action-kw (some? cid)
+        action (action-kw cid
                           (count running)
                           desired
-                          (count candidates)
-                          (seq misplaced))]
+                          (count candidates))]
     (case action
       :needs-build
       (assoc base :action :needs-build
