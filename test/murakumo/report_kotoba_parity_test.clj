@@ -19,7 +19,9 @@
        "launch-result-line rollout-line collected-peers-line artifact-node-status "
        "deploy-command-output alert-line dashboard-start-line apply-target-line "
        "watch-start-line deploy-observed-empty-line deploy-observed-placed-line "
-       "missing-pinned-binaries-line1 missing-pinned-binaries-line2"))
+       "missing-pinned-binaries-line1 missing-pinned-binaries-line2 "
+       "nodes-header status-header status-down-suffix "
+       "spaces pad-right field-10 field-16 field-8 field-9 field-12 field-6"))
 
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -153,3 +155,37 @@
     (is (= (second (report/missing-pinned-binaries-lines
                     {:version "9.0" :git-sha "abc123"}))
            (get actual "mp2")))))
+
+
+(deftest nodes-status-headers-and-pad
+  (let [padn (fn [s w] (max 0 (- w (count s))))
+        name "asher"
+        actual (compile-string-cases
+                {"nh" "(nodes-header)"
+                 "sh" "(status-header)"
+                 "sd" "(status-down-suffix)"
+                 "sp3" "(spaces 3)"
+                 "sp0" "(spaces 0)"
+                 "pr" (str "(pad-right " (kotoba-literal "asher") " 5)")
+                 "f10" (str "(field-10 " (kotoba-literal "NODE") " 6)")
+                 "sdr" (str "(string-concat (pad-right " (kotoba-literal name) " "
+                            (padn name 10) ") (string-concat "
+                            (kotoba-literal " ") " (status-down-suffix)))")
+                 ;; nodes-row: build stepwise with separate pad fragments joined in host
+                 "n0" (str "(pad-right " (kotoba-literal "asher") " " (padn "asher" 10) ")")
+                 "n1" (str "(pad-right " (kotoba-literal "100.1.2.3") " " (padn "100.1.2.3" 16) ")")
+                 "n2" (str "(pad-right " (kotoba-literal "yes") " " (padn "yes" 8) ")")
+                 "n3" (str "(pad-right " (kotoba-literal "ok") " " (padn "ok" 9) ")")})]
+    (is (= (report/nodes-header) (get actual "nh")))
+    (is (= (report/status-header) (get actual "sh")))
+    (is (= "down    " (get actual "sd")))
+    (is (= "   " (get actual "sp3")))
+    (is (= "" (get actual "sp0")))
+    (is (= "asher     " (get actual "pr")))
+    (is (= "NODE      " (get actual "f10")))
+    (is (= (report/status-down-row {:name "asher"}) (get actual "sdr")))
+    (let [row (str (get actual "n0") " " (get actual "n1") " "
+                   (get actual "n2") " " (get actual "n3") " " "up/running")]
+      (is (= (report/nodes-row {:name "asher" :ip "100.1.2.3" :online? true} true "up/running")
+             row)))))
+
