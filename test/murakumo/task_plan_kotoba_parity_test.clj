@@ -255,10 +255,14 @@
         actual (compile-i64-cases
                 {"p3" (str "(assign-task-pick-3 " ok " " fill " " load0 ")")
                  "s3" (str "(assign-task-step-3 " load0 " " ok " " fill ")")
-                 "fold0" "(pick-task-fold-step 0 1 0)"
-                 "fold1" "(pick-task-fold-step 1 1 1)"
-                 "fold2" "(pick-task-fold-step 1 1 0)"
-                 "foldn" "(pick-task-fold-step 0 0 0)"
+                 "fold0" (str "(pick-task-fold-step "
+                              (opt-i64-form nil) " 1 0)")
+                 "fold1" (str "(pick-task-fold-step "
+                              (opt-i64-form 1) " 1 1)")
+                 "fold2" (str "(pick-task-fold-step "
+                              (opt-i64-form 1) " 1 0)")
+                 "foldn" (str "(pick-task-fold-step "
+                              (opt-i64-form nil) " 0 0)")
                  "nr50" "(nearest-rank-idx 10 500)"
                  "nr95" "(nearest-rank-idx 10 950)"
                  "nr0" "(nearest-rank-idx 0 500)"

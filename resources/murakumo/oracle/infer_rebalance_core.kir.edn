@@ -289,21 +289,51 @@
     floor),
    :param-types [:i64 :i64 :i64]}
   {:name classify-run-flags,
-   :params [has-images has-video has-audio is-swarm has-tokens],
+   :params [images video audio swarm tokens],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (= has-images 1)
-    2
+   (let
+    [binding-some__1 images]
     (if
-     (= has-video 1)
-     3
-     (if
-      (= has-audio 1)
-      4
-      (if (= is-swarm 1) 5 (if (= has-tokens 1) 1 0))))),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+     (option-some?-of [:option :string] binding-some__1)
+     (let [_ (option-value-of [:option :string] binding-some__1 "")] 2)
+     (let
+      [binding-some__2 video]
+      (if
+       (option-some?-of [:option :string] binding-some__2)
+       (let
+        [_ (option-value-of [:option :string] binding-some__2 "")]
+        3)
+       (let
+        [binding-some__3 audio]
+        (if
+         (option-some?-of [:option :string] binding-some__3)
+         (let
+          [_ (option-value-of [:option :string] binding-some__3 "")]
+          4)
+         (let
+          [binding-some__4 swarm]
+          (if
+           (option-some?-of [:option :string] binding-some__4)
+           (let
+            [_ (option-value-of [:option :string] binding-some__4 "")]
+            5)
+           (let
+            [binding-some__5 tokens]
+            (if
+             (option-some?-of [:option :string] binding-some__5)
+             (let
+              [_
+               (option-value-of [:option :string] binding-some__5 "")]
+              1)
+             0)))))))))),
+   :param-types
+   [[:option :string]
+    [:option :string]
+    [:option :string]
+    [:option :string]
+    [:option :string]]}
   {:name demand-base,
    :params [],
    :result :i64,

@@ -196,14 +196,15 @@
     ;; pack3: code + n0*B + n1*B*B
     (+ code (+ (* n0 B) (* n1 (* B B))))))
 
-(defn pick-task-fold-step [has-champ :i64 ok-i :i64 better-c-i :i64] :i64
+(defn pick-task-fold-step [champ [:option :i64] ok-i :i64 better-c-i :i64] :i64
   ;; Host folds candidates. better-c-i=1 ⇒ challenger strictly better than champ.
+  ;; Product Value ABI v1: optional champ presence (no has-champ sentinel).
   ;; 0=none yet, 1=take i, 2=keep champ (incl. ties)
-  (if (= has-champ 0)
-    (if (= ok-i 0) 0 1)
+  (if-some [_ champ]
     (if (= ok-i 0)
       2
-      (if (= better-c-i 1) 1 2))))
+      (if (= better-c-i 1) 1 2))
+    (if (= ok-i 0) 0 1)))
 
 (defn load-inc-if [load :i64 picked :i64] :i64
   (if (= picked 0) load (+ load 1)))
