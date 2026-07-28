@@ -11,62 +11,147 @@
 ;;      the TCP+auth handshake from every command after the first
 ;;
 ;; W6 product-shell authority (ADR-260728-w6-tunnel-config-oracle-authority):
-;; On the JVM, pure string/i64 helpers DELEGATE to precompiled
-;; kotoba/tunnel_core.kotoba → resources/murakumo/oracle/tunnel_core.kir.edn.
+;; pure string/i64 helpers DELEGATE to precompiled
+;; kotoba/tunnel_core.kotoba → resources/murakumo/oracle/tunnel_core.kir.edn
+;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: line-split of parse-rc, argv vector assembly, SSH subprocess.
+;; cljs mirrors remain fallback; string ops that use i64 indices may try/catch
+;; (some cljs kir builds reject BigInt substring bounds).
 
 (ns murakumo.tunnel
   (:require [clojure.string :as str]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :tunnel)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  "Run oracle body; on failure (e.g. cljs KIR substring bounds) use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+;; ── host-mirror pure helpers ───────────────────────────────────────────
+
+(def ^:private mirror-default-connect-timeout-s 8)
+(def ^:private mirror-default-control-persist-s 30)
+(def ^:private mirror-rc-marker "__murakumo_rc=")
+
+(defn- mirror-batch-mode-opt [] "BatchMode=yes")
+(defn- mirror-strict-host-key-opt [] "StrictHostKeyChecking=accept-new")
+(defn- mirror-control-master-opt [] "ControlMaster=auto")
+
+(defn- mirror-connect-timeout-opt [seconds]
+  (str "ConnectTimeout=" seconds))
+
+(defn- mirror-control-path-opt [path]
+  (str "ControlPath=" path))
+
+(defn- mirror-control-persist-opt [seconds]
+  (str "ControlPersist=" seconds "s"))
+
+(defn- mirror-wrap-cmd [cmd]
+  (str "( " cmd "\n); __mrc=$?; echo \"" mirror-rc-marker "$__mrc\""))
+
+(defn- mirror-marker-prefix? [line]
+  (str/starts-with? (str/trim line) mirror-rc-marker))
+
+(defn- mirror-strip-marker-digits [line]
+  (str/replace (str/trim line) mirror-rc-marker ""))
+
+(defn- mirror-parse-digits [digits]
+  (try
+    #?(:clj (Long/parseLong (str digits))
+       :cljs (let [n (js/parseInt digits 10)]
+               (when-not (js/isNaN n) n)))
+    (catch #?(:clj Exception :cljs :default) _ nil)))
+
+(defn- mirror-scp-dest [host dest]
+  (str host ":" dest))
+
+(defn- mirror-close-master-control-opt [control-path]
+  (str "ControlPath=" control-path))
+
+(defn- mirror-ensure-forward-command [local-port remote-port host]
+  (str "pgrep -f '" local-port ":localhost:" remote-port " " host "' >/dev/null 2>&1"
+       " || ssh -o BatchMode=yes -fN -L " local-port ":localhost:" remote-port " " host))
+
+(defn- mirror-replace-forward-command [local-port remote-port host]
+  (str "pkill -f '" local-port ":localhost' 2>/dev/null; sleep 0.3; "
+       "ssh -o BatchMode=yes -fN -L " local-port ":localhost:" remote-port " " host))
+
+(defn- mirror-remote-curl-command [url]
+  (str "curl -s -m 5 " url " 2>/dev/null"))
+
+;; ── dual-source defaults ───────────────────────────────────────────────
 
 (def default-connect-timeout-s
-  #?(:clj (long (o 'default-connect-timeout-s []))
-     :cljs 8))
+  (try-oracle
+   #(oracle/i64->host (o 'default-connect-timeout-s []))
+   (fn [] mirror-default-connect-timeout-s)))
 
 (def default-control-persist-s
-  #?(:clj (long (o 'default-control-persist-s []))
-     :cljs 30))
+  (try-oracle
+   #(oracle/i64->host (o 'default-control-persist-s []))
+   (fn [] mirror-default-control-persist-s)))
 
 (def rc-marker
-  #?(:clj (o 'rc-marker [])
-     :cljs "__murakumo_rc="))
+  (try-oracle
+   #(o 'rc-marker [])
+   (fn [] mirror-rc-marker)))
+
+(defn- batch-mode-opt []
+  (try-oracle #(o 'batch-mode-opt []) mirror-batch-mode-opt))
+
+(defn- strict-host-key-opt []
+  (try-oracle #(o 'strict-host-key-opt []) mirror-strict-host-key-opt))
+
+(defn- control-master-opt []
+  (try-oracle #(o 'control-master-opt []) mirror-control-master-opt))
+
+(defn- connect-timeout-opt [seconds]
+  (try-oracle
+   #(o 'connect-timeout-opt [(oracle/as-i64 seconds)])
+   #(mirror-connect-timeout-opt seconds)))
+
+(defn- control-path-opt [path]
+  (try-oracle
+   #(o 'control-path-opt [(str path)])
+   #(mirror-control-path-opt path)))
+
+(defn- control-persist-opt [seconds]
+  (try-oracle
+   #(o 'control-persist-opt [(oracle/as-i64 seconds)])
+   #(mirror-control-persist-opt seconds)))
 
 (def ssh-opts
-  #?(:clj ["-o" (o 'batch-mode-opt [])
-           "-o" (o 'connect-timeout-opt [(long default-connect-timeout-s)])
-           "-o" (o 'strict-host-key-opt [])]
-     :cljs ["-o" "BatchMode=yes"
-            "-o" (str "ConnectTimeout=" default-connect-timeout-s)
-            "-o" "StrictHostKeyChecking=accept-new"]))
+  ["-o" (batch-mode-opt)
+   "-o" (connect-timeout-opt default-connect-timeout-s)
+   "-o" (strict-host-key-opt)])
 
 (defn conn-opts
   "SSH -o flags for a connection. `:control-path` turns on multiplexing: the
-   first connection to a host becomes the master, later ones reuse its socket."
+   first connection to a host becomes the master, later ones reuse its socket.
+   Opt fragments via kotoba when oracle ready."
   [{:keys [connect-timeout-s control-path control-persist-s]}]
-  #?(:clj
-     (vec (concat ["-o" (o 'batch-mode-opt [])
-                   "-o" (o 'connect-timeout-opt
-                           [(long (or connect-timeout-s default-connect-timeout-s))])
-                   "-o" (o 'strict-host-key-opt [])]
-                  (when control-path
-                    ["-o" (o 'control-master-opt [])
-                     "-o" (o 'control-path-opt [(str control-path)])
-                     "-o" (o 'control-persist-opt
-                             [(long (or control-persist-s default-control-persist-s))])])))
-     :cljs
-     (vec (concat ["-o" "BatchMode=yes"
-                   "-o" (str "ConnectTimeout=" (or connect-timeout-s default-connect-timeout-s))
-                   "-o" "StrictHostKeyChecking=accept-new"]
-                  (when control-path
-                    ["-o" "ControlMaster=auto"
-                     "-o" (str "ControlPath=" control-path)
-                     "-o" (str "ControlPersist=" (or control-persist-s default-control-persist-s) "s")])))))
+  (vec (concat ["-o" (batch-mode-opt)
+                "-o" (connect-timeout-opt
+                      (or connect-timeout-s default-connect-timeout-s))
+                "-o" (strict-host-key-opt)]
+               (when control-path
+                 ["-o" (control-master-opt)
+                  "-o" (control-path-opt control-path)
+                  "-o" (control-persist-opt
+                        (or control-persist-s default-control-persist-s))]))))
 
 ;; --- in-band exit status ----------------------------------------------------
 
@@ -82,31 +167,38 @@
 
    The command runs in a subshell (so a bare `exit N` inside it does not kill
    the reporting shell) and the true status is echoed as a sentinel line that
-   `parse-rc` extracts and strips."
+   `parse-rc` extracts and strips.
+   Kotoba `wrap-cmd` when oracle ready."
   [cmd]
-  #?(:clj (o 'wrap-cmd [(str cmd)])
-     :cljs (str "( " cmd "\n); __mrc=$?; echo \"" rc-marker "$__mrc\"")))
+  (try-oracle
+   #(o 'wrap-cmd [(str cmd)])
+   #(mirror-wrap-cmd cmd)))
 
 (defn parse-rc
   "Split captured stdout into [clean-stdout rc-or-nil]. rc is nil when the
    sentinel never arrived (connection failure, kill, non-shell remote), in which
    case the caller falls back to ssh's own exit code — which IS trustworthy for
-   ssh-level failures (255) even where the remote status is not."
+   ssh-level failures (255) even where the remote status is not.
+   Marker/digits classification via kotoba when oracle ready."
   [out]
   (let [lines (str/split-lines (str out))
         marker? (fn [l]
-                  #?(:clj (= 1 (o 'marker-prefix? [(str/trim (str l))]))
-                     :cljs (str/starts-with? (str/trim l) rc-marker)))
+                  (let [t (str/trim (str l))]
+                    (try-oracle
+                     #(= 1 (oracle/i64->host (o 'marker-prefix? [t])))
+                     #(mirror-marker-prefix? t))))
         rc-line (last (filter marker? lines))
         digits (when rc-line
-                 #?(:clj (o 'strip-marker-digits [(str/trim (str rc-line))])
-                    :cljs (str/replace (str/trim rc-line) rc-marker "")))
-        rc #?(:clj (when digits
-                     (let [n (long (o 'parse-digits [(str digits)]))]
-                       (when-not (neg? n) n)))
-              :cljs (when digits
-                      (let [n (js/parseInt digits 10)]
-                        (when-not (js/isNaN n) n))))]
+                 (let [t (str/trim (str rc-line))]
+                   (try-oracle
+                    #(o 'strip-marker-digits [t])
+                    #(mirror-strip-marker-digits t))))
+        rc (when digits
+             (let [n (try-oracle
+                      #(let [v (oracle/i64->host (o 'parse-digits [(str digits)]))]
+                         (when-not (neg? v) v))
+                      #(mirror-parse-digits digits))]
+               n))]
     [(str/trim (str/join "\n" (remove marker? lines))) rc]))
 
 ;; --- argv shapes ------------------------------------------------------------
@@ -128,38 +220,44 @@
   ([host local dest] (scp-argv host local dest nil))
   ([host local dest opts]
    (vec (concat ["scp"] (conn-opts opts)
-                [local #?(:clj (o 'scp-dest [(str host) (str dest)])
-                          :cljs (str host ":" dest))]))))
+                [local (try-oracle
+                        #(o 'scp-dest [(str host) (str dest)])
+                        #(mirror-scp-dest host dest))]))))
 
 (defn close-master-argv
   "argv that shuts down a multiplexed connection's master socket. Run this when
    a batch finishes instead of leaving masters to expire on ControlPersist."
   [host control-path]
-  ["ssh" "-o" #?(:clj (o 'close-master-control-opt [(str control-path)])
-                 :cljs (str "ControlPath=" control-path))
+  ["ssh" "-o" (try-oracle
+               #(o 'close-master-control-opt [(str control-path)])
+               #(mirror-close-master-control-opt control-path))
    "-O" "exit" host])
 
 (defn ensure-forward-command
-  "Shell command that starts an SSH local forward only when an equivalent one is absent."
+  "Shell command that starts an SSH local forward only when an equivalent one is absent.
+   Kotoba `ensure-forward-command` when oracle ready."
   [local-port remote-port host]
-  #?(:clj (o 'ensure-forward-command
-             [(long local-port) (long remote-port) (str host)])
-     :cljs (str "pgrep -f '" local-port ":localhost:" remote-port " " host "' >/dev/null 2>&1"
-                " || ssh -o BatchMode=yes -fN -L " local-port ":localhost:" remote-port " " host)))
+  (try-oracle
+   #(o 'ensure-forward-command
+       [(oracle/as-i64 local-port) (oracle/as-i64 remote-port) (str host)])
+   #(mirror-ensure-forward-command local-port remote-port host)))
 
 (defn replace-forward-command
-  "Shell command that kills any forward on local-port, then starts a fresh one."
+  "Shell command that kills any forward on local-port, then starts a fresh one.
+   Kotoba `replace-forward-command` when oracle ready."
   [local-port remote-port host]
-  #?(:clj (o 'replace-forward-command
-             [(long local-port) (long remote-port) (str host)])
-     :cljs (str "pkill -f '" local-port ":localhost' 2>/dev/null; sleep 0.3; "
-                "ssh -o BatchMode=yes -fN -L " local-port ":localhost:" remote-port " " host)))
+  (try-oracle
+   #(o 'replace-forward-command
+       [(oracle/as-i64 local-port) (oracle/as-i64 remote-port) (str host)])
+   #(mirror-replace-forward-command local-port remote-port host)))
 
 (defn remote-curl-command
-  "Remote shell command for a bounded curl call from a node."
+  "Remote shell command for a bounded curl call from a node.
+   Kotoba `remote-curl-command` when oracle ready."
   [url]
-  #?(:clj (o 'remote-curl-command [(str url)])
-     :cljs (str "curl -s -m 5 " url " 2>/dev/null")))
+  (try-oracle
+   #(o 'remote-curl-command [(str url)])
+   #(mirror-remote-curl-command url)))
 
 ;; --- result shapes ----------------------------------------------------------
 
