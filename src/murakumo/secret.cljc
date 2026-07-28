@@ -88,6 +88,31 @@
          :message (or #?(:clj (.getMessage e) :cljs (.-message e))
                       "getter failed")}))))
 
+(defn kagi-fetch
+  "Wire named secrets to a kagi (or kagi-shaped) one-shot getter.
+
+  `name->ref` maps secret-name → opaque ref (string key id / path).
+  `getter` is `(fn [ref] string-or-nil)` performing exactly one lookup —
+  e.g. `(fn [ref] (kagi.secret-store/get-secret store ref {}))`.
+
+  Unknown names and nil getter results map to kit-shaped `:secret/not-found`.
+  No enumeration of the vault."
+  [name->ref getter]
+  (when-not (and (map? name->ref) (seq name->ref)
+                 (every? string? (keys name->ref))
+                 (every? string? (vals name->ref)))
+    (throw (ex-info "murakumo.secret/kagi-fetch requires string name→ref map"
+                    {:phase :murakumo-secret})))
+  (when-not (fn? getter)
+    (throw (ex-info "murakumo.secret/kagi-fetch requires getter fn"
+                    {:phase :murakumo-secret})))
+  (fn-fetch
+   (fn [name]
+     (if-let [ref (get name->ref name)]
+       (getter ref)
+       nil))))
+
+
 (defn default-ops-fetch
   "Default ops path: exact env vars for all known secret names."
   []

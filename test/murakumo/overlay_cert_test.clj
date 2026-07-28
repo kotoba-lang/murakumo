@@ -139,3 +139,26 @@
     (is (= "h" (get-in req [:connect :host])))
     (is (= 4001 (get-in req [:connect :port])))
     (is (= "ov" (get-in req [:session :overlay])))))
+
+;; ── path-ref under scoped roots (W6) ──────────────────────────────────
+
+(deftest normalize-path-ref-defaults-and-rejects-escape
+  (is (= {:ok {:root :murakumo/kagi :path "quic"}}
+         (cert/normalize-path-ref {})))
+  (is (= {:ok {:root :murakumo/kagi :path "quic/nodes"}}
+         (cert/normalize-path-ref {:path "quic/nodes"})))
+  (is (= :cert/escape (:error (cert/normalize-path-ref {:path "../etc"}))))
+  (is (= :cert/absolute (:error (cert/normalize-path-ref {:path "/etc/ssl"}))))
+  (is (= :cert/unqualified-root (:error (cert/normalize-path-ref {:root :kagi})))))
+
+(deftest resolve-store-dir-uses-path-ref-under-root-dirs
+  (let [root "/tmp/murakumo-kagi-root-test"
+        dir (cert/resolve-store-dir
+             {:path-ref {:root :murakumo/kagi :path "quic"}
+              :root-dirs {:murakumo/kagi root}})]
+    (is (= (str root "/quic") (.getPath dir))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"absolute"
+        (cert/resolve-store-dir {:store-dir "relative/nope"})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"missing absolute root"
+        (cert/resolve-store-dir {:path-ref {:root :murakumo/kagi :path "quic"}
+                                 :root-dirs {}}))))
