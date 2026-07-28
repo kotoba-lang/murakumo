@@ -23,11 +23,19 @@
 (def metrics-token-name "murakumo-metrics-token")
 (def metrics-token-env "MURAKUMO_METRICS_TOKEN")
 
+;; Path refs: env holds absolute filesystem paths to PEM files (never PEM bodies).
+(def quic-cert-path-name "murakumo-quic-cert-path")
+(def quic-cert-path-env "MURAKUMO_QUIC_CERT")
+(def quic-key-path-name "murakumo-quic-key-path")
+(def quic-key-path-env "MURAKUMO_QUIC_KEY")
+
 (def known-env-secrets
   "Default ops mapping: secret-name → exact env var (never enumerated)."
   {token-secret-name token-secret-env
    service-token-name service-token-env
-   metrics-token-name metrics-token-env})
+   metrics-token-name metrics-token-env
+   quic-cert-path-name quic-cert-path-env
+   quic-key-path-name quic-key-path-env})
 
 (defn env-fetch
   "Build a kit-shaped fetch from `{secret-name env-var-name}`.
@@ -174,3 +182,37 @@
      (let [alias "dyn-env"
            fetch (or fetch (env-fetch {alias env-name}))]
        (resolve-secret alias {:fetch fetch})))))
+
+(defn valid-path-ref?
+  "True when `p` is an absolute filesystem path, not a PEM body or dump.
+  Env path refs must point at files under host custody — never inline PEM."
+  [p]
+  (and (string? p)
+       (not (str/blank? p))
+       (not (str/includes? p "\0"))
+       (not (str/includes? p "-----BEGIN"))
+       (not (str/includes? p "*"))
+       #?(:clj (.isAbsolute (java.io.File. ^String p))
+          :cljs (or (str/starts-with? p "/")
+                    (boolean (re-matches #"[A-Za-z]:[\\/].*" p))))
+       (<= (count p) 1024)))
+
+(defn resolve-path-ref
+  "Resolve a named **path ref** secret (absolute path string to on-disk
+  material). Rejects PEM bodies and relative/wildcard paths.
+
+  opts: same as `resolve-secret` (`:fetch` inject)."
+  ([name] (resolve-path-ref name {}))
+  ([name opts]
+   (when-let [p (resolve-secret name opts)]
+     (when (valid-path-ref? p) p))))
+
+(defn resolve-quic-cert-path
+  "Absolute path to QUIC cert PEM file, or nil."
+  ([] (resolve-quic-cert-path {}))
+  ([opts] (resolve-path-ref quic-cert-path-name opts)))
+
+(defn resolve-quic-key-path
+  "Absolute path to QUIC private key PEM file, or nil."
+  ([] (resolve-quic-key-path {}))
+  ([opts] (resolve-path-ref quic-key-path-name opts)))
