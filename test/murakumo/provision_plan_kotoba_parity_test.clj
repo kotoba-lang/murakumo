@@ -189,3 +189,45 @@
     (is (= "," plan/roles-join-sep))
     (is (= "zone=jp,role=compute"
            (plan/labels-env {:zone "jp" :role "compute"})))))
+
+(deftest plist-placeholder-tokens-match
+  (let [s (compile-string-cases
+           {"u" "(plist-ph-user)"
+            "b" "(plist-ph-bin)"
+            "p" "(plist-ph-port)"
+            "r" "(plist-ph-roles)"
+            "l" "(plist-ph-labels)"
+            "h" "(plist-ph-home)"
+            "e" "(plist-ph-ed25519)"
+            "x" "(plist-ph-x25519)"
+            "d" "(plist-ph-did)"
+            "pp" "(plist-ph-p2pport)"
+            "ps" "(plist-ph-p2pseed)"
+            "ex" "(plist-ph-extaddr)"
+            "bo" "(plist-ph-bootstrap)"
+            "w" "(plist-ph-webrtc)"})]
+    (is (= plan/plist-ph-user (get s "u")))
+    (is (= "{{USER}}" (get s "u")))
+    (is (= plan/plist-ph-bin (get s "b")))
+    (is (= "{{BIN}}" (get s "b")))
+    (is (= plan/plist-ph-port (get s "p")))
+    (is (= plan/plist-ph-roles (get s "r")))
+    (is (= plan/plist-ph-labels (get s "l")))
+    (is (= plan/plist-ph-home (get s "h")))
+    (is (= plan/plist-ph-ed25519 (get s "e")))
+    (is (= plan/plist-ph-x25519 (get s "x")))
+    (is (= plan/plist-ph-did (get s "d")))
+    (is (= plan/plist-ph-p2pport (get s "pp")))
+    (is (= plan/plist-ph-p2pseed (get s "ps")))
+    (is (= plan/plist-ph-extaddr (get s "ex")))
+    (is (= plan/plist-ph-bootstrap (get s "bo")))
+    (is (= plan/plist-ph-webrtc (get s "w")))
+    (is (= "{{WEBRTC}}" (get s "w")))
+    (let [out (plan/render-plist
+               "{{USER}}|{{BIN}}|{{PORT}}|{{HOME}}"
+               {:fleet/port 8077 :nodes []}
+               nil {}
+               {:name "n" :roles [] :labels {}}
+               {:user "u" :home "/h" :operator-seed "" :x25519-seed ""
+                :did "" :p2p-seed ""})]
+      (is (= "u|/h/.murakumo/bin|8077|/h" out)))))
