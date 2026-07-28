@@ -259,6 +259,62 @@
    :result :string,
    :effects #{},
    :body (if (= present 1) (health-ok-label) (health-down-label)),
+   :param-types [:i64]}
+  {:name mesh-log-path,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "~/.murakumo/mesh.log",
+   :param-types []}
+  {:name health-url,
+   :params [port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "http://localhost:"
+    (string-concat (i64-str port) "/health")),
+   :param-types [:i64]}
+  {:name probe-h-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "echo \"H:$(curl -s -m4 ",
+   :param-types []}
+  {:name probe-l-clause,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    ")\"; echo \"L:$(grep 'peer connected' "
+    (string-concat
+     (mesh-log-path)
+     " 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l | tr -d ' ')\"")),
+   :param-types []}
+  {:name probe-p-clause,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "; echo \"P:$(grep 'trigger: executed' "
+    (string-concat
+     (mesh-log-path)
+     " 2>/dev/null | grep -oE 'bafy[a-z0-9]{40,}' | sort -u | tr '\\n' ',')\"")),
+   :param-types []}
+  {:name probe-command,
+   :params [port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (probe-h-prefix)
+    (string-concat
+     (health-url port)
+     (string-concat
+      " 2>/dev/null"
+      (string-concat (probe-l-clause) (probe-p-clause))))),
    :param-types [:i64]}],
  :oracle-value nil,
  :schema-identities nil,
@@ -287,7 +343,13 @@
   http-ok-status
   health-from-present
   health-ok-label
-  health-down-label],
+  health-down-label
+  health-url
+  mesh-log-path
+  probe-h-prefix
+  probe-l-clause
+  probe-p-clause
+  probe-command],
  :schemas nil,
  :effects #{},
  :blocks [],

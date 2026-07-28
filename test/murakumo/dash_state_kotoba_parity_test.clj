@@ -16,7 +16,9 @@
        "digit-char nat-str i64-str digit-val? digit-of parse-digits-go parse-digits "
        "trim-ws parse-links probe-line-key probe-line-value "
        "content-type-json content-type-html http-ok-status "
-       "health-from-present health-ok-label health-down-label"))
+       "health-from-present health-ok-label health-down-label "
+       "health-url mesh-log-path probe-h-prefix probe-l-clause probe-p-clause "
+       "probe-command"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -175,3 +177,20 @@
            (get actual-s "cth")))
     (is (= "ok" (state/health-from-present true)))
     (is (= "down" (state/health-from-present false)))))
+
+(deftest probe-command-matches-dash-state
+  (let [s (compile-string-cases
+           {"hu" "(health-url 8077)"
+            "ml" "(mesh-log-path)"
+            "hp" "(probe-h-prefix)"
+            "pc" "(probe-command 8077)"
+            "p2" "(probe-command 18099)"})]
+    (is (= (state/health-url 8077) (get s "hu")))
+    (is (= (state/mesh-log-path) (get s "ml")))
+    (is (str/starts-with? (get s "hp") "echo \"H:$(curl"))
+    (is (= (state/probe-command 8077) (get s "pc")))
+    (is (= (state/probe-command 18099) (get s "p2")))
+    (is (str/includes? (get s "pc") "http://localhost:8077/health"))
+    (is (str/includes? (get s "pc") "peer connected"))
+    (is (str/includes? (get s "pc") "trigger: executed"))
+    (is (str/starts-with? (get s "pc") "echo \"H:$(curl -s -m4 "))))
