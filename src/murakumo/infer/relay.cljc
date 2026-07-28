@@ -22,7 +22,19 @@
 ;; double-credited (a late duplicate :result for an already-settled job is a
 ;; no-op).
 
-(ns murakumo.infer.relay)
+(ns murakumo.infer.relay
+  "Relay work-dispatch pure state machine.
+
+  W6 product-shell (ADR-260728-w6-moe-relay-persist-oracle-authority):
+  JVM make-id / lease-expired? / msg-* DELEGATE to infer_relay_core.kir.edn.
+  Queue/worker map folds stay host."
+  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
+
+(def ^:private oid :infer-relay)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
 
 (defn init
   "Empty relay state."
@@ -35,8 +47,9 @@
 
 (defn- gen-id [state prefix]
   ;; ids are derived from the injected counter to stay pure/reproducible
-  [(str prefix "-" (:next state)) (update state :next inc)])
-
+  #?(:clj [(o 'make-id [(str prefix) (long (:next state))])
+           (update state :next inc)]
+     :cljs [(str prefix "-" (:next state)) (update state :next inc)]))
 (defn enqueue
   "Add a job {:kind :input :price} to the queue. Returns [job-id state']."
   [state job]
@@ -66,9 +79,10 @@
                       (update :queue (fn [q] (vec (remove #(= jid (:job-id %)) q))))
                       (assoc-in [:assigned jid] {:worker-id worker-id :job job :at-ms now-ms})
                       (assoc-in [:workers worker-id :job-id] jid))]
-        [{:msg :job :job-id jid :kind (:kind job) :input (:input job) :price (:price job)}
+        [{:msg #?(:clj (keyword (o 'msg-job [])) :cljs :job)
+          :job-id jid :kind (:kind job) :input (:input job) :price (:price job)}
          state])
-      [{:msg :idle} state])))
+      [{:msg #?(:clj (keyword (o 'msg-idle [])) :cljs :idle)} state])))
 
 (defn on-result
   "Worker returns a job result. Settles credits to the worker's did (once) and
@@ -86,7 +100,8 @@
                       (update :assigned dissoc job-id)
                       (update :settled conj job-id)
                       (assoc-in [:workers worker-id :job-id] nil))]
-        [{:msg :settled :job-id job-id :did did :credits price :output output :ms ms}
+        [{:msg #?(:clj (keyword (o 'msg-settled [])) :cljs :settled)
+          :job-id job-id :did did :credits price :output output :ms ms}
          state]))))
 
 (defn expire-leases
@@ -94,7 +109,9 @@
    at-least-once delivery. Returns state'."
   [state now-ms ttl-ms]
   (let [dead (for [[jid {:keys [at-ms job worker-id]}] (:assigned state)
-                   :when (> (- now-ms at-ms) ttl-ms)]
+                   :when #?(:clj (= 1 (o 'lease-expired?
+                                         [(long now-ms) (long at-ms) (long ttl-ms)]))
+                            :cljs (> (- now-ms at-ms) ttl-ms))]
                [jid job worker-id])]
     (reduce (fn [st [jid job wid]]
               (-> st

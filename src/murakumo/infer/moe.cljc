@@ -22,12 +22,24 @@
 ;; mlx-moe run is just a one-assignment, one-rank "ring".
 
 (ns murakumo.infer.moe
-  (:require [murakumo.infer.plan :as plan]))
+  "mlx-moe single-node MoE serving pure helpers.
+
+  W6 product-shell (ADR-260728-w6-moe-relay-persist-oracle-authority):
+  JVM capacity-default / expert-ratio-milli / verdict-name / resident-est
+  DELEGATE to infer_moe_core.kir.edn. Custom capacity tiers + plan ranking stay host."
+  (:require [murakumo.infer.plan :as plan]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+
+(def ^:private oid :infer-moe)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
 
 ;; mu-hashmi/mlx-moe README hardware table: usable RAM (GiB, binary) → experts
 ;; cached resident per MoE layer ("capacity"), the auto-selected setting the
 ;; measured tok/s and memory numbers in the README are for. Descending so the
-;; first tier the node clears wins.
+;; first tier the node clears wins. (Custom model tiers still use this host fold.)
 (def ^:private capacity-tiers
   [[128 512] [64 432] [48 320] [32 208]])
 
@@ -43,20 +55,40 @@
    guess rather than extrapolate past the README's own table. A model registry
    entry can provide :model/mlx-moe-capacity-tiers for measured profile-cache
    tiers (for example GLM-5.2 mxfp4 capacity=4/8); those still gate on one
-   node's usable memory, never fleet-wide memory."
+   node's usable memory, never fleet-wide memory.
+   JVM default table: kotoba capacity-default (0 → nil)."
   ([usable-bytes]
-   (capacity-from-tiers capacity-tiers usable-bytes))
+   #?(:clj (let [c (long (o 'capacity-default [(long usable-bytes)]))]
+             (when (pos? c) c))
+      :cljs (capacity-from-tiers capacity-tiers usable-bytes)))
   ([model usable-bytes]
-   (capacity-from-tiers (or (:model/mlx-moe-capacity-tiers model) capacity-tiers)
-                        usable-bytes)))
+   (if-let [custom (:model/mlx-moe-capacity-tiers model)]
+     (capacity-from-tiers custom usable-bytes)
+     (capacity-for-usable usable-bytes))))
 
 (defn expert-ratio
   "experts / active-experts (top-k) — the mlx-moe README's first predictor of
    whether reduced-coverage serving holds output quality. nil when the
-   registry entry doesn't carry both fields."
+   registry entry doesn't carry both fields.
+   JVM: expert-ratio-milli / 1000."
   [{:model/keys [experts active-experts]}]
-  (when (and experts active-experts (pos? active-experts))
-    (/ (double experts) active-experts)))
+  #?(:clj
+     (let [m (long (o 'expert-ratio-milli
+                      [(long (or experts 0))
+                       (long (or active-experts 0))]))]
+       (when (pos? m) (/ (double m) 1000.0)))
+     :cljs
+     (when (and experts active-experts (pos? active-experts))
+       (/ (double experts) active-experts))))
+
+(defn- verdict-why
+  [kw]
+  (case kw
+    :unknown "registry entry has no :model/experts / :model/active-experts"
+    :recommended "expert ratio >=10x + shared expert — quality holds at reduced coverage"
+    :workable "shared expert but ratio <10x — needs high coverage, verify output quality"
+    :not-recommended "no shared expert — quality likely degrades below ~75% coverage (README)"
+    "unknown"))
 
 (defn verdict
   "mu-hashmi/mlx-moe's 'which models benefit' heuristic (README), as data —
@@ -64,26 +96,23 @@
    (≥10x) PLUS a shared expert is where output quality holds up at reduced
    expert coverage; a shared expert alone still needs high coverage; no shared
    expert (or an unknown ratio) means quality likely degrades below ~75%
-   coverage, per the README's measured model table."
+   coverage, per the README's measured model table.
+   JVM: verdict-name from kotoba; why strings remain host."
   [model]
   (let [ratio (expert-ratio model)
-        shared? (boolean (:model/moe-shared-expert? model))]
-    (cond
-      (nil? ratio)
-      {:verdict :unknown :ratio nil
-       :why "registry entry has no :model/experts / :model/active-experts"}
-
-      (and (>= ratio 10) shared?)
-      {:verdict :recommended :ratio ratio
-       :why "expert ratio >=10x + shared expert — quality holds at reduced coverage"}
-
-      shared?
-      {:verdict :workable :ratio ratio
-       :why "shared expert but ratio <10x — needs high coverage, verify output quality"}
-
-      :else
-      {:verdict :not-recommended :ratio ratio
-       :why "no shared expert — quality likely degrades below ~75% coverage (README)"})))
+        kw #?(:clj (keyword (o 'verdict-name
+                               [(long (or (:model/experts model) 0))
+                                (long (or (:model/active-experts model) 0))
+                                (long (if (:model/moe-shared-expert? model) 1 0))]))
+              :cljs (let [shared? (boolean (:model/moe-shared-expert? model))]
+                      (cond
+                        (nil? ratio) :unknown
+                        (and (>= ratio 10) shared?) :recommended
+                        shared? :workable
+                        :else :not-recommended)))]
+    {:verdict kw
+     :ratio (when (not= kw :unknown) ratio)
+     :why (verdict-why kw)}))
 
 (defn resident-bytes-estimate
   "Approximate RAM mlx-moe holds resident at `capacity` experts/layer cached:
@@ -93,11 +122,17 @@
    entry lacks :model/experts (can't apportion) — a deliberately pessimistic
    default so an unknown model never LOOKS cheaper than it might be. This is a
    planning estimate (the README's own measured numbers run a couple GiB above
-   the raw ratio for KV cache/runtime overhead), not a promise."
+   the raw ratio for KV cache/runtime overhead), not a promise.
+   JVM: resident-est."
   [{:model/keys [weight-bytes experts]} capacity]
-  (if (and weight-bytes experts (pos? experts) capacity)
-    (long (* weight-bytes (/ (double capacity) experts)))
-    weight-bytes))
+  #?(:clj (long (o 'resident-est
+                   [(long (or weight-bytes 0))
+                    (long (or experts 0))
+                    (long (or capacity 0))]))
+     :cljs
+     (if (and weight-bytes experts (pos? experts) capacity)
+       (long (* weight-bytes (/ (double capacity) experts)))
+       weight-bytes)))
 
 (defn plan
   "Single-node mlx-moe plan for `model` over `nodes` — NOT a fleet-wide

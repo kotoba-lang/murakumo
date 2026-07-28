@@ -31,6 +31,9 @@
             [murakumo.infer.credits :as credits]
             [murakumo.infer.join :as join]
             [murakumo.infer.gc :as gc]
+            [murakumo.infer.moe :as moe]
+            [murakumo.infer.relay :as relay]
+            [murakumo.persist :as persist]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -853,3 +856,109 @@
            (oracle/call :infer-gc 'need-bytes [100 40])))
     (is (= (ir/execute g 'comfy-evictable? [10 7])
            (oracle/call :infer-gc 'comfy-evictable? [10 7])))))
+
+(deftest product-shell-moe-uses-oracle-results
+  (testing "default capacity table via oracle"
+    (is (= 512 (moe/capacity-for-usable (* 128 plan/GiB))))
+    (is (= 208 (moe/capacity-for-usable (* 32 plan/GiB))))
+    (is (nil? (moe/capacity-for-usable (* 16 plan/GiB)))))
+  (testing "expert-ratio + verdict"
+    (let [m {:model/experts 128 :model/active-experts 8 :model/moe-shared-expert? true}
+          v (moe/verdict m)]
+      (is (= 16.0 (double (moe/expert-ratio m))))
+      (is (= :recommended (:verdict v))))
+    (is (= :unknown (:verdict (moe/verdict {}))))
+    (is (= :not-recommended
+           (:verdict (moe/verdict {:model/experts 8 :model/active-experts 2})))))
+  (testing "resident-est"
+    (is (= 100 (moe/resident-bytes-estimate
+                {:model/weight-bytes 200 :model/experts 10} 5)))))
+
+(deftest moe-oracle-call-matches-live-compile
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/infer_moe_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'capacity-default [(* 64 1073741824)])
+           (oracle/call :infer-moe 'capacity-default [(* 64 1073741824)])))
+    (is (= (ir/execute live 'expert-ratio-milli [128 8])
+           (oracle/call :infer-moe 'expert-ratio-milli [128 8])))
+    (is (= (ir/execute live 'verdict-name [128 8 1])
+           (oracle/call :infer-moe 'verdict-name [128 8 1])))
+    (is (= (ir/execute live 'resident-est [200 10 5])
+           (oracle/call :infer-moe 'resident-est [200 10 5])))))
+
+(deftest moe-precompiled-kir-does-not-drift
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/infer_moe_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))
+        shipped (edn/read-string
+                 (slurp (io/resource "murakumo/oracle/infer_moe_core.kir.edn")))]
+    (is (= live shipped) "infer_moe_core KIR drift — run oracle-gen")))
+
+(deftest product-shell-relay-uses-oracle-results
+  (testing "make-id + lease via oracle"
+    (let [[id st] ((fn []
+                     (let [s (relay/init)
+                           [jid s2] (relay/enqueue s {:kind :x :input 1 :price 1})]
+                       [jid s2])))]
+      (is (re-find #"^job-0$" id)))
+    (let [s0 (relay/init)
+          [wid s1] (relay/on-hello s0 {:did "d" :tier :browser :caps {}})
+          [jid s2] (relay/enqueue s1 {:kind :media-postproc :input {} :price 2})
+          [reply s3] (relay/on-ready s2 wid 1000)
+          s4 (relay/expire-leases s3 2000 100)]  ; ttl 100, age 1000 → expired
+      (is (= :job (:msg reply)))
+      (is (empty? (:assigned s4)))
+      (is (= 1 (count (:queue s4)))))))
+
+(deftest relay-oracle-call-matches-live-compile
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/infer_relay_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'make-id ["job" 3])
+           (oracle/call :infer-relay 'make-id ["job" 3])))
+    (is (= (ir/execute live 'lease-expired? [200 100 50])
+           (oracle/call :infer-relay 'lease-expired? [200 100 50])))
+    (is (= (ir/execute live 'msg-idle [])
+           (oracle/call :infer-relay 'msg-idle [])))
+    (is (= (ir/execute live 'msg-job [])
+           (oracle/call :infer-relay 'msg-job [])))
+    (is (= (ir/execute live 'msg-settled [])
+           (oracle/call :infer-relay 'msg-settled [])))))
+
+(deftest relay-precompiled-kir-does-not-drift
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/infer_relay_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))
+        shipped (edn/read-string
+                 (slurp (io/resource "murakumo/oracle/infer_relay_core.kir.edn")))]
+    (is (= live shipped) "infer_relay_core KIR drift — run oracle-gen")))
+
+(deftest product-shell-persist-uses-oracle-results
+  (is (= "did:web:etzhayyim.com:murakumo" persist/repo-authority))
+  (is (= "murakumo-fleet" persist/fleet-graph-name))
+  (is (= 18099 persist/snapshot-local-port))
+  (is (= "snap-1-2" (persist/snapshot-rkey 1 2)))
+  (is (= "rec-3-4" (persist/reconcile-rkey 3 4)))
+  (is (str/starts-with? (persist/repo-uri "com.murakumo.fleet.snapshot" "snap-1-0")
+                        "at://did:web:etzhayyim.com:murakumo/"))
+  (is (str/includes? (persist/repo-write-url 18099) "localhost:18099"))
+  (is (true? (persist/write-ok? "{\"status\":\"ok\"}")))
+  (is (false? (persist/write-ok? "error"))))
+
+(deftest persist-oracle-call-matches-live-compile
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/persist_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'repo-authority [])
+           (oracle/call :persist 'repo-authority [])))
+    (is (= (ir/execute live 'snapshot-rkey [1 2])
+           (oracle/call :persist 'snapshot-rkey [1 2])))
+    (is (= (ir/execute live 'repo-uri ["c" "k"])
+           (oracle/call :persist 'repo-uri ["c" "k"])))
+    (is (= (ir/execute live 'repo-write-url [18099])
+           (oracle/call :persist 'repo-write-url [18099])))
+    (is (= (ir/execute live 'write-ok? ["{\"status\":\"ok\"}"])
+           (oracle/call :persist 'write-ok? ["{\"status\":\"ok\"}"])))))
+
+(deftest persist-precompiled-kir-does-not-drift
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/persist_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))
+        shipped (edn/read-string
+                 (slurp (io/resource "murakumo/oracle/persist_core.kir.edn")))]
+    (is (= live shipped) "persist_core KIR drift — run oracle-gen")))
