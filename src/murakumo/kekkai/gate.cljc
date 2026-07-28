@@ -67,11 +67,25 @@
 (defn kekkai-dir [getenv]
   (or (getenv "MURAKUMO_KEKKAI_DIR") (default-kekkai-dir (getenv "HOME"))))
 
+(defn- mirror-cli-argv [ledger-path node-name]
+  ["clojure" "-M" "-m" "kekkai.cli" ledger-path node-name])
+
 (defn cli-argv
   "The `kekkai.cli` subprocess argv for one node's status query, run with
-   :dir = kekkai-dir so its own deps.edn resolves."
+   :dir = kekkai-dir so its own deps.edn resolves.
+   Binary/flag/ns fragments dual-source from kotoba when oracle ready."
   [ledger-path node-name]
-  ["clojure" "-M" "-m" "kekkai.cli" ledger-path node-name])
+  (if (oracle-ready?)
+    (try
+      [(o 'cli-bin [])
+       (o 'cli-alias-flag [])
+       (o 'cli-main-flag [])
+       (o 'cli-main-ns [])
+       (str ledger-path)
+       (str node-name)]
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-cli-argv ledger-path node-name)))
+    (mirror-cli-argv ledger-path node-name)))
 
 (defn parse-status
   "Normalise a kekkai.cli process result ({:exit :out}) into a status string.

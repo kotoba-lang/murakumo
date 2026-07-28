@@ -1,10 +1,12 @@
 (ns kekkai-gate-core
   (:export [default-ledger-path strip-trailing-newlines parse-status-out
-            authorized? denial-line-of default-kekkai-dir-under]))
+            authorized? denial-line-of default-kekkai-dir-under
+            cli-bin cli-alias-flag cli-main-flag cli-main-ns]))
 
 ;; W6 pure-planner oracle cutover first slice (murakumo-pure-planners-v1).
 ;; Portable string core of murakumo.kekkai.gate. No capabilities.
 ;; Guest profile: string=? / string-contains? yield :i64 (0/1), not :bool.
+;; cli-argv fragments dual-source for host vector assembly.
 ;; Parity: test/murakumo/kekkai_gate_kotoba_parity_test.clj
 
 (defn default-ledger-path [] :string
@@ -33,3 +35,11 @@
 
 (defn default-kekkai-dir-under [home :string] :string
   (string-concat home "/github/com-junkawasaki/orgs/kotoba-lang/kekkai"))
+
+(defn cli-bin [] :string "clojure")
+
+(defn cli-alias-flag [] :string "-M")
+
+(defn cli-main-flag [] :string "-m")
+
+(defn cli-main-ns [] :string "kekkai.cli")
