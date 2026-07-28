@@ -18,6 +18,7 @@
             [murakumo.infer.plan :as plan]
             [murakumo.dash.state :as dash]
             [murakumo.infer.schedule :as sched]
+            [murakumo.task.plan :as task]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -37,12 +38,14 @@
   (is (oracle/ready? :infer-plan))
   (is (oracle/ready? :dash-state))
   (is (oracle/ready? :infer-schedule))
+  (is (oracle/ready? :task-plan))
   (is (some #{:kekkai-gate} (oracle/catalog-ids)))
   (is (some #{:token} (oracle/catalog-ids)))
   (is (some #{:report-core} (oracle/catalog-ids)))
   (is (some #{:infer-plan} (oracle/catalog-ids)))
   (is (some #{:dash-state} (oracle/catalog-ids)))
-  (is (some #{:infer-schedule} (oracle/catalog-ids))))
+  (is (some #{:infer-schedule} (oracle/catalog-ids)))
+  (is (some #{:task-plan} (oracle/catalog-ids))))
 
 (deftest product-shell-gate-uses-oracle-results
   (testing "parse-status delegates to kotoba parse-status-out"
@@ -339,3 +342,84 @@
 (deftest schedule-precompiled-kir-does-not-drift
   (is (= (sched-live-kir) (sched-resource-kir))
       "infer_schedule KIR drift — run oracle-gen"))
+
+(def ^:private task-source "kotoba/task_plan_core.kotoba")
+(def ^:private task-resource "murakumo/oracle/task_plan_core.kir.edn")
+
+(defn- task-live-kir []
+  (:kir (compiler/compile-source (slurp task-source) :wasm32-kotoba-v1 {})))
+
+(defn- task-resource-kir []
+  (edn/read-string (slurp (io/resource task-resource))))
+
+(deftest product-shell-task-plan-uses-oracle-results
+  (testing "defaults via oracle"
+    (is (= 8 (:max-slots task/default-opts)))
+    (is (= 2 (:max-attempts task/default-opts)))
+    (is (= 120000 (:timeout-ms task/default-opts))))
+  (testing "slots via oracle"
+    (is (= 8 (task/slots {:cores 8} {})))
+    (is (= 3 (task/slots {:name "a" :cores 8} {:slots-by-node {"a" 3}})))
+    (is (= 4 (task/slots {:slots 4 :cores 16} {}))))
+  (testing "failed? via oracle"
+    (is (true? (task/failed? {:exit 1})))
+    (is (true? (task/failed? {:exit nil :timeout? true})))
+    (is (true? (task/failed? {:error "x"})))
+    (is (false? (task/failed? {:exit 0}))))
+  (testing "eligible? via oracle flags"
+    (let [ok {:name "a" :online? true :labels {:tier "gpu"} :roles #{:worker}
+              :mem-bytes (* 16 1024 1024 1024)}
+          offline (assoc ok :online? false)
+          task-spec {:placement {:labels {:tier "gpu"} :roles [:worker]}
+                     :min-mem-bytes (* 8 1024 1024 1024)}]
+      (is (true? (task/eligible? ok task-spec)))
+      (is (false? (task/eligible? offline task-spec)))))
+  (testing "expand task-id via oracle"
+    (let [ts (task/expand 2 {:cmd ["echo"]})]
+      (is (= "t-0000" (:id (first ts))))
+      (is (= "t-0001" (:id (second ts))))
+      (is (= 1 (:attempt (first ts))))))
+  (testing "retry-tasks can-retry + attempt-next"
+    (let [rs [{:task {:id "t-0000" :attempt 1} :node "a" :exit 1}
+              {:task {:id "t-0001" :attempt 2} :node "b" :exit 1}]
+          out (task/retry-tasks rs {})]
+      (is (= 1 (count out)))
+      (is (= 2 (:attempt (first out))))
+      (is (= ["a"] (:exclude-nodes (first out))))))
+  (testing "assign wave/slot + summary retried/speedup"
+    (let [nodes [{:name "a" :host "a.ts" :cores 2 :online? true :roles #{:worker}
+                  :mem-bytes (* 16 1024 1024 1024)}]
+          tasks (task/expand 3 {:placement {:roles [:worker]}})
+          asg (task/assign nodes tasks {})
+          results (mapv (fn [a] {:task (:task a) :node (:node a) :exit 0
+                                 :duration-ms 100})
+                        (:assignments asg))
+          sum (task/summary results 150)]
+      (is (= 3 (count (:assignments asg))))
+      (is (= 0 (:wave (first (:assignments asg)))))
+      (is (= 3 (:tasks sum)))
+      (is (= 0 (:retried sum)))
+      (is (some? (:speedup sum))))))
+
+(deftest task-oracle-call-matches-live-compile
+  (let [live (task-live-kir)]
+    (is (= (ir/execute live 'default-max-slots [])
+           (oracle/call :task-plan 'default-max-slots [])))
+    (is (= (ir/execute live 'slots [-1 4 -1 8 16])
+           (oracle/call :task-plan 'slots [-1 4 -1 8 16])))
+    (is (= (ir/execute live 'failed? [1 0 0 0])
+           (oracle/call :task-plan 'failed? [1 0 0 0])))
+    (is (= (ir/execute live 'task-eligible? [31 (* 16 1024 1024 1024) 0])
+           (oracle/call :task-plan 'task-eligible? [31 (* 16 1024 1024 1024) 0])))
+    (is (= (ir/execute live 'task-id [12])
+           (oracle/call :task-plan 'task-id [12])))
+    (is (= (ir/execute live 'wave-of [5 2])
+           (oracle/call :task-plan 'wave-of [5 2])))
+    (is (= (ir/execute live 'nearest-rank-idx [10 500])
+           (oracle/call :task-plan 'nearest-rank-idx [10 500])))
+    (is (= (ir/execute live 'speedup-milli [300 150])
+           (oracle/call :task-plan 'speedup-milli [300 150])))))
+
+(deftest task-precompiled-kir-does-not-drift
+  (is (= (task-live-kir) (task-resource-kir))
+      "task_plan KIR drift — run oracle-gen"))

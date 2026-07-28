@@ -1,0 +1,473 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-max-slots,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 8,
+   :param-types []}
+  {:name default-max-attempts,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 2,
+   :param-types []}
+  {:name default-timeout-ms,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 120000,
+   :param-types []}
+  {:name capacity,
+   :params [node-slots slots-per cores],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< node-slots 0)
+    (if (< slots-per 0) (if (< cores 0) 1 cores) slots-per)
+    node-slots),
+   :param-types [:i64 :i64 :i64]}
+  {:name slots,
+   :params [budget-slots node-slots slots-per max-slots cores],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< budget-slots 0)
+    (let
+     [cap
+      (capacity node-slots slots-per cores)
+      m
+      (if (< max-slots 0) 8 max-slots)
+      capped
+      (if (< cap m) cap m)]
+     (if (< capped 1) 1 capped))
+    budget-slots),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name failed?,
+   :params [exit-present exit-code timeout has-error],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= has-error 1)
+    1
+    (if
+     (= timeout 1)
+     1
+     (if (= exit-present 0) 1 (if (= exit-code 0) 0 1)))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name can-retry?,
+   :params [attempt max-attempts],
+   :result :i64,
+   :effects #{},
+   :body (if (< attempt max-attempts) 1 0),
+   :param-types [:i64 :i64]}
+  {:name rem2,
+   :params [n],
+   :result :i64,
+   :effects #{},
+   :body (- n (* (quot n 2) 2)),
+   :param-types [:i64]}
+  {:name bit?-safe,
+   :params [flags mask],
+   :result :i64,
+   :effects #{},
+   :body (if (= 0 (rem2 (quot flags mask))) 0 1),
+   :param-types [:i64 :i64]}
+  {:name task-eligible?,
+   :params [flags mem-bytes min-mem],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [online
+     (bit?-safe flags 1)
+     labels
+     (bit?-safe flags 2)
+     roles
+     (bit?-safe flags 4)
+     not-ex
+     (bit?-safe flags 8)
+     allow
+     (bit?-safe flags 16)
+     mem-ok
+     (if (< mem-bytes min-mem) 0 1)]
+    (if
+     (= online 0)
+     0
+     (if
+      (= labels 0)
+      0
+      (if
+       (= roles 0)
+       0
+       (if (= not-ex 0) 0 (if (= allow 0) 0 mem-ok)))))),
+   :param-types [:i64 :i64 :i64]}
+  {:name fill-milli,
+   :params [assigned slots],
+   :result :i64,
+   :effects #{},
+   :body (if (< slots 1) 0 (quot (* assigned 1000) slots)),
+   :param-types [:i64 :i64]}
+  {:name better-fill?,
+   :params [fill0 fill1],
+   :result :i64,
+   :effects #{},
+   :body (if (< fill0 fill1) 1 0),
+   :param-types [:i64 :i64]}
+  {:name better-task-score?,
+   :params [fill0 load0 _memneg0 fill1 load1],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< fill0 fill1)
+    1
+    (if
+     (< fill1 fill0)
+     0
+     (if (< load0 load1) 1 (if (< load1 load0) 0 2)))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name better-mem?,
+   :params [memneg0 memneg1 name-ord0 name-ord1],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< memneg0 memneg1)
+    1
+    (if (< memneg1 memneg0) 0 (if (< name-ord0 name-ord1) 1 0))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name wave-of,
+   :params [used slots],
+   :result :i64,
+   :effects #{},
+   :body (if (< slots 1) 0 (quot used slots)),
+   :param-types [:i64 :i64]}
+  {:name slot-of,
+   :params [used slots],
+   :result :i64,
+   :effects #{},
+   :body (if (< slots 1) 0 (- used (* (quot used slots) slots))),
+   :param-types [:i64 :i64]}
+  {:name load-after-assign,
+   :params [used],
+   :result :i64,
+   :effects #{},
+   :body (+ used 1),
+   :param-types [:i64]}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name rem64,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (- a (* (quot a b) b)),
+   :param-types [:i64 :i64]}
+  {:name pad4,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [m (if (< n 0) 0 n) d (rem64 m 10000)]
+    (if
+     (< d 10)
+     (string-concat "000" (i64-str d))
+     (if
+      (< d 100)
+      (string-concat "00" (i64-str d))
+      (if (< d 1000) (string-concat "0" (i64-str d)) (i64-str d))))),
+   :param-types [:i64]}
+  {:name task-id,
+   :params [i],
+   :result :string,
+   :effects #{},
+   :body (string-concat "t-" (pad4 i)),
+   :param-types [:i64]}
+  {:name attempt-next,
+   :params [attempt],
+   :result :i64,
+   :effects #{},
+   :body (+ attempt 1),
+   :param-types [:i64]}
+  {:name exclude-append-marker,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1,
+   :param-types []}
+  {:name pick-task-idx-2,
+   :params [ok0 ok1 fill0 fill1 load-pack],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [B 65536 load0 (rem64 load-pack B) load1 (quot load-pack B)]
+    (if
+     (= ok0 0)
+     (if (= ok1 0) -1 1)
+     (if
+      (= ok1 0)
+      0
+      (let
+       [b (better-task-score? fill0 load0 0 fill1 load1)]
+       (if (= b 2) 0 (if (= b 1) 0 1)))))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name assign-task-step-2,
+   :params [load0 load1 ok0 ok1 score-pack],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [B
+     65536
+     fill0
+     (rem64 score-pack B)
+     fill1
+     (quot score-pack B)
+     p
+     (if
+      (= ok0 0)
+      (if (= ok1 0) -1 1)
+      (if
+       (= ok1 0)
+       0
+       (let
+        [b (better-task-score? fill0 load0 0 fill1 load1)]
+        (if (= b 2) 0 (if (= b 1) 0 1)))))
+     code
+     (if (< p 0) 0 (+ p 1))
+     n0
+     (if (= p 0) (+ load0 1) load0)
+     n1
+     (if (= p 1) (+ load1 1) load1)]
+    (+ code (+ (* n0 B) (* n1 (* B B))))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name pick-task-fold-step,
+   :params [has-champ ok-i better-c-i],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= has-champ 0)
+    (if (= ok-i 0) 0 1)
+    (if (= ok-i 0) 2 (if (= better-c-i 1) 1 2))),
+   :param-types [:i64 :i64 :i64]}
+  {:name load-inc-if,
+   :params [load picked],
+   :result :i64,
+   :effects #{},
+   :body (if (= picked 0) load (+ load 1)),
+   :param-types [:i64 :i64]}
+  {:name challenger-wins?,
+   :params [fill-c load-c fill-i load-i],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [b (better-task-score? fill-c load-c 0 fill-i load-i)]
+    (if (= b 0) 1 0)),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name assign-task-pick-3,
+   :params [ok-pack fill-pack load-pack],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [B
+     65536
+     ok0
+     (rem64 ok-pack B)
+     ok1
+     (rem64 (quot ok-pack B) B)
+     ok2
+     (quot ok-pack (* B B))
+     f0
+     (rem64 fill-pack B)
+     f1
+     (rem64 (quot fill-pack B) B)
+     f2
+     (quot fill-pack (* B B))
+     l0
+     (rem64 load-pack B)
+     l1
+     (rem64 (quot load-pack B) B)
+     l2
+     (quot load-pack (* B B))
+     p01
+     (if
+      (= ok0 0)
+      (if (= ok1 0) -1 1)
+      (if
+       (= ok1 0)
+       0
+       (let
+        [b (better-task-score? f0 l0 0 f1 l1)]
+        (if (= b 2) 0 (if (= b 1) 0 1)))))
+     fc
+     (if (= p01 0) f0 (if (= p01 1) f1 0))
+     lc
+     (if (= p01 0) l0 (if (= p01 1) l1 0))
+     win2
+     (if (< p01 0) 0 (challenger-wins? fc lc f2 l2))]
+    (if
+     (< p01 0)
+     (if (= ok2 0) -1 2)
+     (if (= ok2 0) p01 (if (= win2 1) 2 p01)))),
+   :param-types [:i64 :i64 :i64]}
+  {:name apply-task-pick-3,
+   :params [load-pack pick],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [B
+     65536
+     l0
+     (rem64 load-pack B)
+     l1
+     (rem64 (quot load-pack B) B)
+     l2
+     (quot load-pack (* B B))
+     n0
+     (load-inc-if l0 (if (= pick 0) 1 0))
+     n1
+     (load-inc-if l1 (if (= pick 1) 1 0))
+     n2
+     (load-inc-if l2 (if (= pick 2) 1 0))]
+    (+ n0 (+ (* n1 B) (* n2 (* B B))))),
+   :param-types [:i64 :i64]}
+  {:name assign-task-step-3,
+   :params [load-pack ok-pack fill-pack],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [p
+     (assign-task-pick-3 ok-pack fill-pack load-pack)
+     code
+     (if (< p 0) 0 (+ p 1))
+     nload
+     (apply-task-pick-3 load-pack p)]
+    (+ code (* 4 nload))),
+   :param-types [:i64 :i64 :i64]}
+  {:name nearest-rank-idx,
+   :params [n p-milli],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< n 1)
+    -1
+    (let
+     [raw
+      (quot (* p-milli n) 1000)
+      hi
+      (- n 1)
+      idx
+      (if (< raw 0) 0 raw)]
+     (if (< hi idx) hi idx))),
+   :param-types [:i64 :i64]}
+  {:name summary-retried,
+   :params [attempts finals],
+   :result :i64,
+   :effects #{},
+   :body (let [d (- attempts finals)] (if (< d 0) 0 d)),
+   :param-types [:i64 :i64]}
+  {:name speedup-milli,
+   :params [task-ms wall-ms],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (if (< wall-ms 1) 1 (if (< task-ms 1) 1 0))
+    0
+    (quot (* task-ms 1000) wall-ms)),
+   :param-types [:i64 :i64]}
+  {:name max2,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (if (< a b) b a),
+   :param-types [:i64 :i64]}
+  {:name min2,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (if (< a b) a b),
+   :param-types [:i64 :i64]}
+  {:name clamp-nonneg,
+   :params [n],
+   :result :i64,
+   :effects #{},
+   :body (if (< n 0) 0 n),
+   :param-types [:i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-max-slots
+  default-max-attempts
+  default-timeout-ms
+  slots
+  failed?
+  can-retry?
+  task-eligible?
+  fill-milli
+  better-fill?
+  better-task-score?
+  better-mem?
+  wave-of
+  slot-of
+  load-after-assign
+  digit-char
+  nat-str
+  i64-str
+  pad4
+  task-id
+  pick-task-idx-2
+  assign-task-step-2
+  attempt-next
+  exclude-append-marker
+  pick-task-fold-step
+  load-inc-if
+  challenger-wins?
+  assign-task-pick-3
+  apply-task-pick-3
+  assign-task-step-3
+  nearest-rank-idx
+  summary-retried
+  speedup-milli
+  max2
+  min2
+  clamp-nonneg],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

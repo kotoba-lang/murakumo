@@ -18,26 +18,93 @@
 ;;   - no distributed object store / futures — results come back inline
 ;;   - no lineage-based re-execution — a failed task is retried, not replayed
 ;;   - no autoscaler / placement groups / gang scheduling
+;;
+;; W6 product-shell authority (ADR-260728-w6-task-oracle-authority):
+;; On the JVM, slots / failed? / eligible? flags / task-id / retry bounds /
+;; wave-slot / percentile index / summary retried+speedup DELEGATE to
+;; precompiled kotoba/task_plan_core.kotoba KIR.
+;; Host remains: admit/prepare folds, set membership projection for labels/
+;; roles/exclude/allowlist, sort-by node-score, map assembly.
 
 (ns murakumo.task.plan
-  (:require [clojure.string :as str]))
+  "Task pure helpers use kotoba/task_plan_core.kotoba authority on JVM."
+  (:require [clojure.string :as str]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def default-opts
-  {:max-slots 8            ; hard ceiling on concurrent tasks per node
-   :slots-per-node nil     ; override: fixed slots for every node
-   :max-attempts 2         ; 1 = no retry
+(def ^:private oid :task-plan)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
+
+;; ── host-mirror pure helpers (cljs fallback + semantic documentation) ──
+
+(def ^:private mirror-default-opts
+  {:max-slots 8
+   :slots-per-node nil
+   :max-attempts 2
    :timeout-ms 120000
    :connect-timeout-s 8})
 
-(defn slots
-  "Concurrent task capacity of `node`: a fleet-wide budget decided by `prepare`
-   wins, else explicit :slots, else the opts override, else the node's core
-   count, clamped to :max-slots. Always >= 1."
-  [node opts]
+(defn- mirror-slots [node opts]
   (or (get (:slots-by-node opts) (:name node))
-      (let [{:keys [max-slots slots-per-node]} (merge default-opts opts)]
+      (let [{:keys [max-slots slots-per-node]} (merge mirror-default-opts opts)]
         (max 1 (min (or max-slots 8)
                     (or (:slots node) slots-per-node (:cores node) 1))))))
+
+(defn- mirror-failed? [{:keys [exit timeout? error]}]
+  (boolean (or error timeout? (nil? exit) (not (zero? exit)))))
+
+(defn- mirror-eligible? [node {:keys [placement min-mem-bytes exclude-nodes nodes] :as _task}]
+  (let [{:keys [labels roles]} placement]
+    (and (not (false? (:online? node true)))
+         (every? (fn [[k v]] (= v (get (:labels node) k))) labels)
+         (every? (set (:roles node)) roles)
+         (>= (or (:mem-bytes node) 0) (or min-mem-bytes 0))
+         (not (contains? (set exclude-nodes) (:name node)))
+         (or (empty? nodes) (contains? (set nodes) (:name node))))))
+
+(defn- mirror-task-id [i]
+  (str "t-" (subs (str "0000" i) (- (count (str "0000" i)) 4))))
+
+(defn- mirror-can-retry? [attempt max-attempts]
+  (< attempt max-attempts))
+
+(defn- mirror-wave-of [used s]
+  (quot used s))
+
+(defn- mirror-slot-of [used s]
+  (mod used s))
+
+(defn- opt-i64 [v]
+  (if (some? v) (long v) -1))
+
+;; ── product defaults + pure helpers (kotoba SSoT on JVM) ──────────────
+
+(def default-opts
+  "Default planner opts. JVM: max-slots / max-attempts / timeout-ms from oracle."
+  #?(:clj
+     {:max-slots (long (o 'default-max-slots []))
+      :slots-per-node nil
+      :max-attempts (long (o 'default-max-attempts []))
+      :timeout-ms (long (o 'default-timeout-ms []))
+      :connect-timeout-s 8}
+     :cljs mirror-default-opts))
+
+(defn slots
+  "Concurrent task capacity of `node`. JVM: kotoba `slots` with projected i64s."
+  [node opts]
+  #?(:clj
+     (let [merged (merge default-opts opts)
+           budget (if (contains? (or (:slots-by-node opts) {}) (:name node))
+                    (long (get (:slots-by-node opts) (:name node)))
+                    -1)
+           node-slots (opt-i64 (:slots node))
+           slots-per (opt-i64 (:slots-per-node merged))
+           max-slots (long (or (:max-slots merged) 8))
+           cores (opt-i64 (:cores node))]
+       (long (o 'slots [budget node-slots slots-per max-slots cores])))
+     :cljs (mirror-slots node opts)))
 
 (defn admit
   "Operational admission gate, applied BEFORE placement.
@@ -111,26 +178,37 @@
      :skipped (into (vec skipped) dropped)
      :opts (assoc opts :slots-by-node budgeted)}))
 
+(defn- eligibility-flags
+  "1 online | 2 labels-ok | 4 roles-ok | 8 not-excluded | 16 allowlist-ok.
+   Host projects set/map membership; oracle evaluates pure bit+mem gates."
+  [node {:keys [placement min-mem-bytes exclude-nodes nodes] :as _task}]
+  (let [{:keys [labels roles]} placement
+        online (if (false? (:online? node true)) 0 1)
+        labels-ok (if (every? (fn [[k v]] (= v (get (:labels node) k)))
+                              (or labels {}))
+                    1 0)
+        roles-ok (if (every? (set (or (:roles node) #{}))
+                             (or roles []))
+                   1 0)
+        not-ex (if (contains? (set (or exclude-nodes [])) (:name node)) 0 1)
+        allow (if (or (empty? (or nodes []))
+                      (contains? (set nodes) (:name node)))
+                1 0)]
+    (+ online (* 2 labels-ok) (* 4 roles-ok) (* 8 not-ex) (* 16 allow))))
+
 (defn eligible?
   "Can `node` run `task`? Same placement vocabulary as reconcile/plan.cljc
    (`:labels` all match, `:roles` all present) plus task-level resource and
-   exclusion constraints:
+   exclusion constraints.
 
-     :min-mem-bytes  node must have at least this much RAM
-     :exclude-nodes  node names this task already failed on (retry placement)
-     :nodes          explicit allow-list of node names
-
-   An offline node (`:online? false`) is never eligible; nodes with no
-   reachability metadata are assumed online (offline probing is the shell's
-   job, and a missing probe must not silently empty the fleet)."
-  [node {:keys [placement min-mem-bytes exclude-nodes nodes] :as _task}]
-  (let [{:keys [labels roles]} placement]
-    (and (not (false? (:online? node true)))
-         (every? (fn [[k v]] (= v (get (:labels node) k))) labels)
-         (every? (set (:roles node)) roles)
-         (>= (or (:mem-bytes node) 0) (or min-mem-bytes 0))
-         (not (contains? (set exclude-nodes) (:name node)))
-         (or (empty? nodes) (contains? (set nodes) (:name node))))))
+   JVM: kotoba `task-eligible?` with projected flags."
+  [node task]
+  #?(:clj
+     (= 1 (o 'task-eligible?
+             [(long (eligibility-flags node task))
+              (long (or (:mem-bytes node) 0))
+              (long (or (:min-mem-bytes task) 0))]))
+     :cljs (mirror-eligible? node task)))
 
 (defn node-score
   "Lower is better. Fill ratio (assigned / slots) dominates so big machines take
@@ -151,7 +229,8 @@
 
 (defn- assign-1
   "Place one task onto the currently least-filled eligible node, threading the
-   per-node load counter so the next task in the batch spreads elsewhere."
+   per-node load counter so the next task in the batch spreads elsewhere.
+   JVM: wave/slot/load-inc via oracle."
   [acc task nodes opts]
   (let [load (:load acc)
         candidates (filterv #(eligible? % task) nodes)]
@@ -162,11 +241,17 @@
             k (:name n)
             used (get load k 0)
             s (slots n opts)
+            wave #?(:clj (long (o 'wave-of [(long used) (long s)]))
+                    :cljs (mirror-wave-of used s))
+            slot #?(:clj (long (o 'slot-of [(long used) (long s)]))
+                    :cljs (mirror-slot-of used s))
             a {:task task :node k :host (:host n)
-               :wave (quot used s) :slot (mod used s)}]
+               :wave wave :slot slot}
+            next-load #?(:clj (long (o 'load-after-assign [(long used)]))
+                         :cljs (inc used))]
         (-> acc
             (update :assignments conj a)
-            (assoc-in [:load k] (inc used)))))))
+            (assoc-in [:load k] next-load))))))
 
 (defn assign
   "Assign `tasks` to `nodes`, greedily least-loaded-first.
@@ -186,44 +271,61 @@
 
 (defn expand
   "Build `n` identical tasks from a template. Task ids are positional (t-0000…),
-   so a plan is reproducible across runs."
+   so a plan is reproducible across runs. JVM: kotoba `task-id`."
   [n template]
   (mapv (fn [i]
-          (merge {:id (str "t-" (subs (str "0000" i) (- (count (str "0000" i)) 4)))
+          (merge {:id #?(:clj (o 'task-id [(long i)])
+                         :cljs (mirror-task-id i))
                   :attempt 1}
                  template))
         (range n)))
 
 (defn failed?
   "A result is a failure when the process could not start, timed out, or exited
-   non-zero."
-  [{:keys [exit timeout? error]}]
-  (boolean (or error timeout? (nil? exit) (not (zero? exit)))))
+   non-zero. JVM: kotoba `failed?`."
+  [{:keys [exit timeout? error] :as r}]
+  #?(:clj
+     (= 1 (o 'failed?
+             [(if (some? exit) 1 0)
+              (long (or exit 0))
+              (if timeout? 1 0)
+              (if (some? error) 1 0)]))
+     :cljs (mirror-failed? r)))
 
 (defn retry-tasks
   "Tasks to re-submit from `results`, one attempt later and excluding the node
    that just failed them. Empty when every failure has exhausted :max-attempts.
    This is Ray's task-retry semantics, NOT lineage re-execution: the task is
-   re-run from its own spec, nothing upstream is replayed."
+   re-run from its own spec, nothing upstream is replayed.
+   JVM: can-retry? + attempt-next via oracle."
   [results opts]
   (let [{:keys [max-attempts]} (merge default-opts opts)]
     (->> results
          (filter failed?)
          (keep (fn [{:keys [task node]}]
-                 (let [attempt (or (:attempt task) 1)]
-                   (when (< attempt max-attempts)
+                 (let [attempt (or (:attempt task) 1)
+                       can? #?(:clj (= 1 (o 'can-retry?
+                                            [(long attempt) (long max-attempts)]))
+                               :cljs (mirror-can-retry? attempt max-attempts))]
+                   (when can?
                      (-> task
-                         (assoc :attempt (inc attempt))
+                         (assoc :attempt #?(:clj (long (o 'attempt-next [(long attempt)]))
+                                            :cljs (inc attempt)))
                          (update :exclude-nodes (fnil conj []) node))))))
          vec)))
 
 (defn percentile
-  "Nearest-rank percentile of `xs` (0.0–1.0), nil for an empty sample."
+  "Nearest-rank percentile of `xs` (0.0–1.0), nil for an empty sample.
+   JVM: index via kotoba `nearest-rank-idx` (p as milli)."
   [xs p]
   (let [v (vec (sort xs))]
     (when (seq v)
-      (nth v (min (dec (count v))
-                  (max 0 (int (Math/floor (* p (count v))))))))))
+      (let [idx #?(:clj (long (o 'nearest-rank-idx
+                                 [(long (count v))
+                                  (long (Math/floor (* p 1000)))]))
+                   :cljs (min (dec (count v))
+                              (max 0 (int (Math/floor (* p (count v)))))))]
+        (nth v idx)))))
 
 (defn final-results
   "One result per task id — the last attempt made. A task that failed on asher
@@ -241,24 +343,34 @@
 
    Counts are per TASK (final attempt); `:attempts` is the raw execution count.
    `:speedup` is total task time / wall-clock — the honest parallelism figure:
-   1.0 means the fan-out bought nothing, ~N means N tasks really ran at once."
+   1.0 means the fan-out bought nothing, ~N means N tasks really ran at once.
+   JVM: retried + speedup milli via oracle."
   [results wall-ms]
   (let [finals (final-results results)
         ok (remove failed? finals)
         ko (filter failed? finals)
         durations (keep :duration-ms results)
-        task-ms (reduce + 0 durations)]
+        task-ms (reduce + 0 durations)
+        retried #?(:clj (long (o 'summary-retried
+                                 [(long (count results)) (long (count finals))]))
+                   :cljs (- (count results) (count finals)))
+        speedup #?(:clj
+                   (let [milli (long (o 'speedup-milli
+                                        [(long task-ms) (long (or wall-ms 0))]))]
+                     (when (pos? milli) (/ (double milli) 1000.0)))
+                   :cljs
+                   (when (and (pos? (or wall-ms 0)) (pos? task-ms))
+                     (/ (double task-ms) (double wall-ms))))]
     {:tasks (count finals)
      :ok (count ok)
      :failed (count ko)
      :attempts (count results)
-     :retried (- (count results) (count finals))
+     :retried retried
      :nodes-used (count (distinct (keep :node results)))
      :by-node (into (sorted-map) (frequencies (keep :node results)))
      :wall-ms wall-ms
      :task-ms task-ms
-     :speedup (when (and (pos? (or wall-ms 0)) (pos? task-ms))
-                (/ (double task-ms) (double wall-ms)))
+     :speedup speedup
      ;; NOTE: :speedup compares total task time to wall clock, so it only
      ;; compares runs of the SAME work. Per-task latency (p50/p95) is the
      ;; figure to watch when the transport changes.
