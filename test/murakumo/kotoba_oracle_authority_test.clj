@@ -76,10 +76,18 @@
     (is (= "unknown" (gate/parse-status {:exit 127 :out nil}))))
   (testing "denial-line delegates to denial-line-of"
     (is (= "[kekkai] judah: not authorized (pending) — excluded from fleet ops"
+           (gate/denial-line {:name "judah" :kekkai/status "pending"})))
+    (is (= (str gate/denial-prefix "judah" gate/denial-mid "pending" gate/denial-suffix)
            (gate/denial-line {:name "judah" :kekkai/status "pending"}))))
+  (testing "status/denial/cli tokens dual-sourced"
+    (is (= "authorized" gate/status-authorized))
+    (is (= "unknown" gate/status-unknown))
+    (is (= "[kekkai] " gate/denial-prefix))
+    (is (= "clojure" gate/cli-bin))
+    (is (= "kekkai.cli" gate/cli-main-ns)))
   (testing "default-ledger-path + default-kekkai-dir from oracle"
     (is (= "kekkai-tailnet.edn" gate/default-ledger-path))
-    (is (= "/home/jun/github/com-junkawasaki/orgs/kotoba-lang/kekkai"
+    (is (= (str "/home/jun" gate/kekkai-dir-suffix)
            (gate/default-kekkai-dir "/home/jun"))))
   (testing "partition-nodes uses oracle authorized?"
     (let [nodes [{:name "a"} {:name "b"}]
@@ -104,7 +112,16 @@
     (is (= (ir/execute live 'denial-line-of ["x" "revoked"])
            (oracle/call :kekkai-gate 'denial-line-of ["x" "revoked"])))
     (is (= (ir/execute live 'default-kekkai-dir-under ["/h"])
-           (oracle/call :kekkai-gate 'default-kekkai-dir-under ["/h"])))))
+           (oracle/call :kekkai-gate 'default-kekkai-dir-under ["/h"])))
+    (is (= (ir/execute live 'status-authorized [])
+           (oracle/call :kekkai-gate 'status-authorized [])))
+    (is (= (oracle/call :kekkai-gate 'status-authorized []) gate/status-authorized))
+    (is (= (ir/execute live 'denial-prefix [])
+           (oracle/call :kekkai-gate 'denial-prefix [])))
+    (is (= (oracle/call :kekkai-gate 'denial-suffix []) gate/denial-suffix))
+    (is (= (ir/execute live 'cli-bin [])
+           (oracle/call :kekkai-gate 'cli-bin [])))
+    (is (= (oracle/call :kekkai-gate 'cli-bin []) gate/cli-bin))))
 
 (deftest precompiled-kir-does-not-drift-from-source
   "Fail CI when kotoba source changed but resource was not regenerated.

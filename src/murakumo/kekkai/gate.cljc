@@ -8,10 +8,11 @@
 ;; (the kekkai.cli subprocess) stays in the host-only murakumo.kekkai; this ns
 ;; holds the env-resolution and node-partitioning logic, tested offline.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-product-shell-oracle-authority):
-;; pure string helpers DELEGATE to the precompiled kotoba oracle when loadable
-;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
-;; Kotoba is SSoT; host mirrors remain fallback when oracle is not ready.
+;; W6 product-shell authority (ADR-260728-w6-kekkai-denial-tokens-pure-oracle +
+;; ADR-260728-w6-product-shell-oracle-authority):
+;; pure string helpers + status/denial/dir tokens DELEGATE to the precompiled
+;; kotoba oracle when loadable (JVM classpath or cljs/nbb —
+;; ADR-260728-w6-cljs-oracle-load). Kotoba is SSoT; host mirrors remain fallback.
 
 (ns murakumo.kekkai.gate
   (:require [clojure.string :as str]
@@ -28,21 +29,73 @@
 
 ;; ── host-mirror pure helpers (cljs fallback + semantic documentation) ──
 
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
 (def ^:private mirror-default-ledger-path "kekkai-tailnet.edn")
+(def ^:private mirror-status-authorized "authorized")
+(def ^:private mirror-status-unknown "unknown")
+(def ^:private mirror-denial-prefix "[kekkai] ")
+(def ^:private mirror-denial-mid ": not authorized (")
+(def ^:private mirror-denial-suffix ") — excluded from fleet ops")
+(def ^:private mirror-kekkai-dir-suffix
+  "/github/com-junkawasaki/orgs/kotoba-lang/kekkai")
+(def ^:private mirror-cli-bin "clojure")
+(def ^:private mirror-cli-alias-flag "-M")
+(def ^:private mirror-cli-main-flag "-m")
+(def ^:private mirror-cli-main-ns "kekkai.cli")
+
+;; ── residual status / denial / dir / cli tokens ──────────────────────
+
+(def status-authorized
+  "Admitted membership status token. Kotoba when ready."
+  (oracle-str-const 'status-authorized mirror-status-authorized))
+
+(def status-unknown
+  "Absent/empty status token. Kotoba when ready."
+  (oracle-str-const 'status-unknown mirror-status-unknown))
+
+(def denial-prefix
+  (oracle-str-const 'denial-prefix mirror-denial-prefix))
+
+(def denial-mid
+  (oracle-str-const 'denial-mid mirror-denial-mid))
+
+(def denial-suffix
+  (oracle-str-const 'denial-suffix mirror-denial-suffix))
+
+(def kekkai-dir-suffix
+  (oracle-str-const 'kekkai-dir-suffix mirror-kekkai-dir-suffix))
+
+(def cli-bin
+  (oracle-str-const 'cli-bin mirror-cli-bin))
+
+(def cli-alias-flag
+  (oracle-str-const 'cli-alias-flag mirror-cli-alias-flag))
+
+(def cli-main-flag
+  (oracle-str-const 'cli-main-flag mirror-cli-main-flag))
+
+(def cli-main-ns
+  (oracle-str-const 'cli-main-ns mirror-cli-main-ns))
 
 (defn- mirror-default-kekkai-dir [home]
-  (str home "/github/com-junkawasaki/orgs/kotoba-lang/kekkai"))
+  (str home kekkai-dir-suffix))
 
 (defn- mirror-parse-status-out [out]
   (let [s (str/trim (str out))]
-    (if (seq s) s "unknown")))
+    (if (seq s) s status-unknown)))
 
 (defn- mirror-denial-line [node-name status]
-  (str "[kekkai] " node-name ": not authorized (" status
-       ") — excluded from fleet ops"))
+  (str denial-prefix node-name denial-mid status denial-suffix))
 
 (defn- mirror-authorized? [status]
-  (= "authorized" status))
+  (= status-authorized status))
 
 ;; ── public API ────────────────────────────────────────────────────────
 
@@ -82,24 +135,15 @@
        (default-kekkai-dir (or (config/home-dir getenv) "")))))
 
 (defn- mirror-cli-argv [ledger-path node-name]
-  ["clojure" "-M" "-m" "kekkai.cli" ledger-path node-name])
+  [cli-bin cli-alias-flag cli-main-flag cli-main-ns ledger-path node-name])
 
 (defn cli-argv
   "The `kekkai.cli` subprocess argv for one node's status query, run with
    :dir = kekkai-dir so its own deps.edn resolves.
    Binary/flag/ns fragments dual-source from kotoba when oracle ready."
   [ledger-path node-name]
-  (if (oracle-ready?)
-    (try
-      [(o 'cli-bin [])
-       (o 'cli-alias-flag [])
-       (o 'cli-main-flag [])
-       (o 'cli-main-ns [])
-       (str ledger-path)
-       (str node-name)]
-      (catch #?(:clj Exception :cljs :default) _
-        (mirror-cli-argv ledger-path node-name)))
-    (mirror-cli-argv ledger-path node-name)))
+  [cli-bin cli-alias-flag cli-main-flag cli-main-ns
+   (str ledger-path) (str node-name)])
 
 (defn parse-status
   "Normalise a kekkai.cli process result ({:exit :out}) into a status string.
@@ -125,7 +169,7 @@
    List/map reduce remains host (not yet in guest map-fold oracle)."
   [nodes status-by-name]
   (reduce (fn [acc n]
-            (let [status (get status-by-name (:name n) "unknown")
+            (let [status (get status-by-name (:name n) status-unknown)
                   ok? (if (oracle-ready?)
                         (= 1 (oracle/i64->host
                               (o 'authorized? [(str status)])))
