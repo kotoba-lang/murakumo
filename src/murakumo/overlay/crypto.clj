@@ -1,44 +1,51 @@
 ;; murakumo.overlay.crypto — host-side frame sealing for murakumo-overlay.
 ;;
-;; Packaging constants + sealed-map gates mirror kotoba/overlay_crypto_core.kotoba.
+;; W6 product-shell: packaging constants + gates DELEGATE to
+;; kotoba/overlay_crypto_core.kotoba (resources/murakumo/oracle/overlay_crypto_core.kir.edn).
 ;; AES-GCM Cipher, SecureRandom nonce, SHA-256 key material stay host.
 
 (ns murakumo.overlay.crypto
   (:require [clojure.string :as str]
-            [murakumo.identity :as identity])
+            [murakumo.identity :as identity]
+            [murakumo.kotoba.oracle :as oracle])
   (:import [java.security SecureRandom]
            [java.util Base64]
            [javax.crypto Cipher]
            [javax.crypto.spec GCMParameterSpec SecretKeySpec]))
 
-;; ── pure packaging (parity: kotoba/overlay_crypto_core) ─────────────
+(def ^:private oid :overlay-crypto)
 
-(def alg-name "aes-256-gcm")
-(def cipher-transform "AES/GCM/NoPadding")
-(def nonce-bytes 12)
-(def gcm-tag-bits 128)
-(def field-alg :alg)
-(def field-nonce :nonce)
-(def field-ciphertext :ciphertext)
+(defn- o [export args]
+  (oracle/call oid export args))
+
+;; ── pure packaging (kotoba SSoT) ─────────────────────────────────────
+
+(def alg-name (o 'alg-name []))
+(def cipher-transform (o 'cipher-transform []))
+(def nonce-bytes (long (o 'nonce-bytes [])))
+(def gcm-tag-bits (long (o 'gcm-tag-bits [])))
+(def field-alg (keyword (o 'field-alg [])))
+(def field-nonce (keyword (o 'field-nonce [])))
+(def field-ciphertext (keyword (o 'field-ciphertext [])))
 
 (defn strip-b64-pad
   "Strip '=' padding (kotoba `strip-b64-pad`)."
   [s]
-  (str/replace (str s) "=" ""))
+  (o 'strip-b64-pad [(str s)]))
 
 (defn sealed-alg-ok?
-  "True when sealed map carries the expected AES-GCM alg keyword/string."
+  "True when sealed map carries the expected AES-GCM alg."
   [alg]
-  (or (= alg :aes-256-gcm)
-      (= (str alg) alg-name)
-      (= (name (keyword alg)) alg-name)))
+  (= 1 (o 'sealed-alg-ok?
+          [(if (keyword? alg) (name alg) (str alg))])))
 
 (defn sealed-fields-present?
-  "True when :alg :nonce :ciphertext are all present (kotoba gate)."
+  "True when :alg :nonce :ciphertext are all present."
   [sealed]
-  (boolean (and (some? (get sealed field-alg))
-                (some? (get sealed field-nonce))
-                (some? (get sealed field-ciphertext)))))
+  (= 1 (o 'sealed-fields-present?
+          [(long (if (some? (get sealed field-alg)) 1 0))
+           (long (if (some? (get sealed field-nonce)) 1 0))
+           (long (if (some? (get sealed field-ciphertext)) 1 0))])))
 
 (defn sealed-map-ok?
   "Live open gate: fields present + alg ok."
@@ -72,8 +79,7 @@
            (GCMParameterSpec. gcm-tag-bits nonce))))
 
 (defn seal
-  "Encrypt a UTF-8 payload with AES-GCM using auth-key-derived key material.
-   Returns packaging map keyed by pure field names."
+  "Encrypt a UTF-8 payload with AES-GCM using auth-key-derived key material."
   [auth-key payload]
   (let [nonce (random-nonce)
         c (cipher Cipher/ENCRYPT_MODE auth-key nonce)]

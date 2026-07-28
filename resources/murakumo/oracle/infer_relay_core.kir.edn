@@ -1,0 +1,73 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name make-id,
+   :params [prefix n],
+   :result :string,
+   :effects #{},
+   :body (string-concat prefix (string-concat "-" (i64-str n))),
+   :param-types [:string :i64]}
+  {:name lease-expired?,
+   :params [now-ms at-ms ttl-ms],
+   :result :i64,
+   :effects #{},
+   :body (if (< ttl-ms (- now-ms at-ms)) 1 0),
+   :param-types [:i64 :i64 :i64]}
+  {:name msg-idle,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "idle",
+   :param-types []}
+  {:name msg-job,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "job",
+   :param-types []}
+  {:name msg-settled,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "settled",
+   :param-types []}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [digit-char
+  nat-str
+  i64-str
+  make-id
+  lease-expired?
+  msg-idle
+  msg-job
+  msg-settled],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

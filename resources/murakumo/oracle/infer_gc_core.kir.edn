@@ -1,0 +1,64 @@
+{:format :kotoba.kir/v3,
+ :signature nil,
+ :functions
+ [{:name gib, :params [], :result :i64, :effects #{}, :body 1073741824}
+  {:name default-target-free,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 21474836480}
+  {:name default-comfy-keep-days,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 7}
+  {:name default-hf-keep,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 2}
+  {:name need-bytes,
+   :params [target free],
+   :result :i64,
+   :effects #{},
+   :body (let [d (- target free)] (if (< d 0) 0 d))}
+  {:name free-after,
+   :params [free reclaimed],
+   :result :i64,
+   :effects #{},
+   :body (+ free reclaimed)}
+  {:name target-met?,
+   :params [free reclaimed target],
+   :result :i64,
+   :effects #{},
+   :body (if (< (+ free reclaimed) target) 0 1)}
+  {:name rank-better?,
+   :params [atime1 bytes1 atime2 bytes2],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< atime2 atime1)
+    1
+    (if (< atime1 atime2) 0 (if (< bytes2 bytes1) 1 0)))}
+  {:name comfy-evictable?,
+   :params [atime-days keep-days],
+   :result :i64,
+   :effects #{},
+   :body (if (< atime-days 0) 0 (if (< keep-days atime-days) 1 0))}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [gib
+  default-target-free
+  default-comfy-keep-days
+  default-hf-keep
+  need-bytes
+  free-after
+  target-met?
+  rank-better?
+  comfy-evictable?],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

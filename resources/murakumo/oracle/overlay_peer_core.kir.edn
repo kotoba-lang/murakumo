@@ -1,0 +1,56 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name health-unknown,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "unknown",
+   :param-types []}
+  {:name health-seen,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "seen",
+   :param-types []}
+  {:name health-down,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "down",
+   :param-types []}
+  {:name via-direct,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "direct",
+   :param-types []}
+  {:name via-relay,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "relay",
+   :param-types []}
+  {:name choose-via,
+   :params [has-direct health-down has-relay],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (if (= has-direct 1) (if (= health-down 0) 1 0) 0)
+    "direct"
+    (if (= has-relay 1) "relay" "")),
+   :param-types [:i64 :i64 :i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [choose-via
+  health-unknown
+  health-seen
+  health-down
+  via-direct
+  via-relay],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

@@ -1,0 +1,128 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name ws?,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? c " ")
+    1
+    (if
+     (string=? c "\n")
+     1
+     (if (string=? c "\t") 1 (if (string=? c "\r") 1 0)))),
+   :param-types [:string]}
+  {:name trim,
+   :params [s],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     s
+     (if
+      (= (ws? (string-substring s 0 1)) 1)
+      (trim (string-substring s 1 n))
+      (if
+       (= (ws? (string-substring s (- n 1) n)) 1)
+       (trim (string-substring s 0 (- n 1)))
+       s)))),
+   :param-types [:string]}
+  {:name seed-node,
+   :params [operator-seed node-name],
+   :result :string,
+   :effects #{},
+   :body (string-concat operator-seed (string-concat ":" node-name)),
+   :param-types [:string :string]}
+  {:name seed-p2p,
+   :params [operator-seed node-name],
+   :result :string,
+   :effects #{},
+   :body (string-concat (seed-node operator-seed node-name) ":p2p"),
+   :param-types [:string :string]}
+  {:name seed-x25519,
+   :params [operator-seed],
+   :result :string,
+   :effects #{},
+   :body (string-concat operator-seed ":x25519"),
+   :param-types [:string]}
+  {:name seed-overlay,
+   :params [operator-seed overlay-id],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    operator-seed
+    (string-concat
+     ":"
+     (string-concat overlay-id ":murakumo-overlay-auth"))),
+   :param-types [:string :string]}
+  {:name did-derive-cmd,
+   :params [kotoba seed],
+   :result :string,
+   :effects #{},
+   :body (string-concat kotoba (string-concat " did-derive " seed)),
+   :param-types [:string :string]}
+  {:name did-from-output,
+   :params [out],
+   :result :string,
+   :effects #{},
+   :body (trim out),
+   :param-types [:string]}
+  {:name jwt-header-json,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "{\"alg\":\"HS256\",\"typ\":\"JWT\"}",
+   :param-types []}
+  {:name jwt-payload-json,
+   :params [did],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "{\"sub\":\""
+    (string-concat did "\",\"exp\":9999999999}")),
+   :param-types [:string]}
+  {:name op-token-sig-seg,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "kotoba-cli-media",
+   :param-types []}
+  {:name cid-b-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "b",
+   :param-types []}
+  {:name graph-name-fleet,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo-fleet",
+   :param-types []}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [ws?
+  trim
+  seed-node
+  seed-p2p
+  seed-x25519
+  seed-overlay
+  did-derive-cmd
+  did-from-output
+  jwt-header-json
+  jwt-payload-json
+  op-token-sig-seg
+  cid-b-prefix
+  graph-name-fleet],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

@@ -1,0 +1,199 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-wasm,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/tmp/murakumo-deploy.wasm",
+   :param-types []}
+  {:name default-publish-node,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "asher",
+   :param-types []}
+  {:name artifact-forward-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 18900,
+   :param-types []}
+  {:name publish-forward-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 18077,
+   :param-types []}
+  {:name forward-settle-ms,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1300,
+   :param-types []}
+  {:name placement-wait-ms,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 75000,
+   :param-types []}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name app-manifest-path,
+   :params [manifest-dir app-manifest],
+   :result :string,
+   :effects #{},
+   :body (string-concat manifest-dir (string-concat "/" app-manifest)),
+   :param-types [:string :string]}
+  {:name publish-selector,
+   :params [selector],
+   :result :string,
+   :effects #{},
+   :body (if (string=? selector "") "asher" selector),
+   :param-types [:string]}
+  {:name localhost-url,
+   :params [port],
+   :result :string,
+   :effects #{},
+   :body (string-concat "http://localhost:" (i64-str port)),
+   :param-types [:i64]}
+  {:name last-slash-index,
+   :params [s i best],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (< i n)
+     (if
+      (string=? (string-substring s i (+ i 1)) "/")
+      (last-slash-index s (+ i 1) i)
+      (last-slash-index s (+ i 1) best))
+     best)),
+   :param-types [:string :i64 :i64]}
+  {:name manifest-dir,
+   :params [manifest],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [slash (last-slash-index manifest 0 -1)]
+    (if (< slash 0) "." (string-substring manifest 0 slash))),
+   :param-types [:string]}
+  {:name ws?,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? c " ")
+    1
+    (if
+     (string=? c "\n")
+     1
+     (if (string=? c "\t") 1 (if (string=? c "\r") 1 0)))),
+   :param-types [:string]}
+  {:name trim,
+   :params [s],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     s
+     (if
+      (= (ws? (string-substring s 0 1)) 1)
+      (trim (string-substring s 1 n))
+      (if
+       (= (ws? (string-substring s (- n 1) n)) 1)
+       (trim (string-substring s 0 (- n 1)))
+       s)))),
+   :param-types [:string]}
+  {:name command-output,
+   :params [out],
+   :result :string,
+   :effects #{},
+   :body (trim out),
+   :param-types [:string]}
+  {:name component-build-cmd,
+   :params [kotoba src-path wit wasm],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    kotoba
+    (string-concat
+     " component build "
+     (string-concat
+      src-path
+      (string-concat
+       " --wit-dir "
+       (string-concat wit (string-concat " -o " wasm)))))),
+   :param-types [:string :string :string :string]}
+  {:name app-deploy-cmd,
+   :params [kotoba manifest wit port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    kotoba
+    (string-concat
+     " app deploy "
+     (string-concat
+      manifest
+      (string-concat
+       " --wit-dir "
+       (string-concat
+        wit
+        (string-concat " --publish --url " (localhost-url port))))))),
+   :param-types [:string :string :string :i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-wasm
+  default-publish-node
+  artifact-forward-port
+  publish-forward-port
+  forward-settle-ms
+  placement-wait-ms
+  digit-char
+  nat-str
+  i64-str
+  app-manifest-path
+  publish-selector
+  localhost-url
+  last-slash-index
+  manifest-dir
+  command-output
+  component-build-cmd
+  app-deploy-cmd],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

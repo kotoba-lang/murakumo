@@ -1,0 +1,68 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-rotation-seconds,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 86400,
+   :param-types []}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name epoch,
+   :params [seconds rotation-seconds],
+   :result :i64,
+   :effects #{},
+   :body (quot seconds rotation-seconds),
+   :param-types [:i64 :i64]}
+  {:name key-id-input,
+   :params [overlay epoch],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat overlay (string-concat ":key:" (i64-str epoch))),
+   :param-types [:string :i64]}
+  {:name derive-key-input,
+   :params [operator-seed overlay epoch],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    operator-seed
+    (string-concat
+     ":"
+     (string-concat
+      overlay
+      (string-concat ":murakumo-overlay-key:" (i64-str epoch))))),
+   :param-types [:string :string :i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-rotation-seconds epoch key-id-input derive-key-input],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

@@ -1,0 +1,90 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-control-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 8077,
+   :param-types []}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name resolve-port,
+   :params [has-node node-port has-fleet fleet-port],
+   :result :i64,
+   :effects #{},
+   :body
+   (if (= has-node 1) node-port (if (= has-fleet 1) fleet-port 8077)),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name health-url,
+   :params [port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "http://localhost:"
+    (string-concat (i64-str port) "/health")),
+   :param-types [:i64]}
+  {:name selector-is-all?,
+   :params [sel],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? sel "") 1 (if (string=? sel "all") 1 0)),
+   :param-types [:string]}
+  {:name selector-wants-name?,
+   :params [sel name],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string-contains?
+     (string-concat "," (string-concat sel ","))
+     (string-concat "," (string-concat name ",")))
+    1
+    0),
+   :param-types [:string :string]}
+  {:name line-has-offline?,
+   :params [line],
+   :result :i64,
+   :effects #{},
+   :body (if (string-contains? line "offline") 1 0),
+   :param-types [:string]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-control-port
+  digit-char
+  nat-str
+  i64-str
+  resolve-port
+  health-url
+  selector-is-all?
+  selector-wants-name?
+  line-has-offline?],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

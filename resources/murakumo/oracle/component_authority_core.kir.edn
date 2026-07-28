@@ -1,0 +1,126 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name event-version,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1,
+   :param-types []}
+  {:name max-identifier-bytes,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 4096,
+   :param-types []}
+  {:name format-v1,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo.component-authority/v1",
+   :param-types []}
+  {:name algorithm-ed25519,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "ed25519",
+   :param-types []}
+  {:name ws?,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? c " ")
+    1
+    (if
+     (string=? c "\n")
+     1
+     (if (string=? c "\t") 1 (if (string=? c "\r") 1 0)))),
+   :param-types [:string]}
+  {:name blank?,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     1
+     (if
+      (= (ws? (string-substring s 0 1)) 1)
+      (blank? (string-substring s 1 n))
+      0))),
+   :param-types [:string]}
+  {:name identifier-len-ok?,
+   :params [is-blank byte-len],
+   :result :i64,
+   :effects #{},
+   :body
+   (if (= is-blank 1) 0 (if (< (max-identifier-bytes) byte-len) 0 1)),
+   :param-types [:i64 :i64]}
+  {:name identifier?,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body (identifier-len-ok? (blank? s) (string-byte-length s)),
+   :param-types [:string]}
+  {:name place-epoch,
+   :params [current-or-zero],
+   :result :i64,
+   :effects #{},
+   :body (if (= current-or-zero 0) 1 current-or-zero),
+   :param-types [:i64]}
+  {:name revoke-epoch,
+   :params [current-or-zero],
+   :result :i64,
+   :effects #{},
+   :body (+ current-or-zero 1),
+   :param-types [:i64]}
+  {:name next-sequence,
+   :params [seq],
+   :result :i64,
+   :effects #{},
+   :body (+ seq 1),
+   :param-types [:i64]}
+  {:name command-op,
+   :params [op],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (string=? op "place")
+    "place"
+    (if (string=? op "revoke") "revoke" "unknown")),
+   :param-types [:string]}
+  {:name event-kind,
+   :params [op],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (string=? op "place")
+    "placed"
+    (if (string=? op "revoke") "revoked" "unknown")),
+   :param-types [:string]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [event-version
+  max-identifier-bytes
+  blank?
+  ws?
+  identifier?
+  identifier-len-ok?
+  place-epoch
+  revoke-epoch
+  next-sequence
+  command-op
+  event-kind
+  format-v1
+  algorithm-ed25519],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

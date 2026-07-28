@@ -9,25 +9,55 @@
   Standing policy: **no ambient env dump**, **no keychain list**. Default
   host path reads only the exact env vars mapped for known secret names.
   Hosts with provider can inject `provider.secret-transport/env-fetch`,
-  `fn-fetch` (kagi one-shot), or `keychain-fetch` as `:fetch`."
-  (:require [clojure.string :as str]))
+  `fn-fetch` (kagi one-shot), or `keychain-fetch` as `:fetch`.
 
-;; ── named secrets (stable ids for kit allowlists) ───────────────────
+  W6 product-shell: pure name/policy helpers use kotoba/secret_core.kotoba
+  on JVM (resources/murakumo/oracle/secret_core.kir.edn)."
+  (:require [clojure.string :as str]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def token-secret-name "murakumo-token")
-(def token-secret-env "MURAKUMO_TOKEN_SECRET")
+(def ^:private oid :secret)
 
-(def service-token-name "murakumo-service-token")
-(def service-token-env "MURAKUMO_SERVICE_TOKEN")
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
 
-(def metrics-token-name "murakumo-metrics-token")
-(def metrics-token-env "MURAKUMO_METRICS_TOKEN")
+;; ── named secrets (stable ids — kotoba SSoT on JVM) ─────────────────
+
+(def token-secret-name
+  #?(:clj (o 'token-secret-name [])
+     :cljs "murakumo-token"))
+(def token-secret-env
+  #?(:clj (o 'token-secret-env [])
+     :cljs "MURAKUMO_TOKEN_SECRET"))
+
+(def service-token-name
+  #?(:clj (o 'service-token-name [])
+     :cljs "murakumo-service-token"))
+(def service-token-env
+  #?(:clj (o 'service-token-env [])
+     :cljs "MURAKUMO_SERVICE_TOKEN"))
+
+(def metrics-token-name
+  #?(:clj (o 'metrics-token-name [])
+     :cljs "murakumo-metrics-token"))
+(def metrics-token-env
+  #?(:clj (o 'metrics-token-env [])
+     :cljs "MURAKUMO_METRICS_TOKEN"))
 
 ;; Path refs: env holds absolute filesystem paths to PEM files (never PEM bodies).
-(def quic-cert-path-name "murakumo-quic-cert-path")
-(def quic-cert-path-env "MURAKUMO_QUIC_CERT")
-(def quic-key-path-name "murakumo-quic-key-path")
-(def quic-key-path-env "MURAKUMO_QUIC_KEY")
+(def quic-cert-path-name
+  #?(:clj (o 'quic-cert-path-name [])
+     :cljs "murakumo-quic-cert-path"))
+(def quic-cert-path-env
+  #?(:clj (o 'quic-cert-path-env [])
+     :cljs "MURAKUMO_QUIC_CERT"))
+(def quic-key-path-name
+  #?(:clj (o 'quic-key-path-name [])
+     :cljs "murakumo-quic-key-path"))
+(def quic-key-path-env
+  #?(:clj (o 'quic-key-path-env [])
+     :cljs "MURAKUMO_QUIC_KEY"))
 
 (def known-env-secrets
   "Default ops mapping: secret-name → exact env var (never enumerated)."
@@ -160,15 +190,20 @@
   ([opts] (resolve-secret metrics-token-name opts)))
 
 (defn valid-env-var-name?
-  "Reject blank, wildcard, and path-like env var names."
+  "Reject blank, wildcard, and path-like env var names.
+   JVM: kotoba `valid-env-var-name?`."
   [env-name]
-  (and (string? env-name)
-       (not (str/blank? env-name))
-       (not (str/includes? env-name "*"))
-       (not (str/includes? env-name "/"))
-       (not (str/includes? env-name "\\"))
-       (not (str/includes? env-name " "))
-       (<= (count env-name) 256)))
+  #?(:clj
+     (boolean (and (string? env-name)
+                   (= 1 (o 'valid-env-var-name? [(str env-name)]))))
+     :cljs
+     (and (string? env-name)
+          (not (str/blank? env-name))
+          (not (str/includes? env-name "*"))
+          (not (str/includes? env-name "/"))
+          (not (str/includes? env-name "\\"))
+          (not (str/includes? env-name " "))
+          (<= (count env-name) 256))))
 
 (defn resolve-exact-env
   "Read one **exact** env var by name declared in config (e.g. overlay
@@ -185,17 +220,23 @@
 
 (defn valid-path-ref?
   "True when `p` is an absolute filesystem path, not a PEM body or dump.
-  Env path refs must point at files under host custody — never inline PEM."
+  Env path refs must point at files under host custody — never inline PEM.
+   JVM POSIX path: kotoba `valid-path-ref-unix?` (leading /); Windows host-only."
   [p]
-  (and (string? p)
-       (not (str/blank? p))
-       (not (str/includes? p "\0"))
-       (not (str/includes? p "-----BEGIN"))
-       (not (str/includes? p "*"))
-       #?(:clj (.isAbsolute (java.io.File. ^String p))
-          :cljs (or (str/starts-with? p "/")
-                    (boolean (re-matches #"[A-Za-z]:[\\/].*" p))))
-       (<= (count p) 1024)))
+  #?(:clj
+     (boolean (and (string? p)
+                   (or (= 1 (o 'valid-path-ref-unix? [(str p)]))
+                       ;; Windows absolute (drive letter) stays host-only
+                       (boolean (re-matches #"[A-Za-z]:[\\/].*" (str p))))))
+     :cljs
+     (and (string? p)
+          (not (str/blank? p))
+          (not (str/includes? p "\0"))
+          (not (str/includes? p "-----BEGIN"))
+          (not (str/includes? p "*"))
+          (or (str/starts-with? p "/")
+              (boolean (re-matches #"[A-Za-z]:[\\/].*" p)))
+          (<= (count p) 1024))))
 
 (defn resolve-path-ref
   "Resolve a named **path ref** secret (absolute path string to on-disk

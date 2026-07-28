@@ -1,0 +1,99 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name tier-browser,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 0,
+   :param-types []}
+  {:name tier-wasm,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1,
+   :param-types []}
+  {:name tier-native,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 2,
+   :param-types []}
+  {:name max-resident-bytes,
+   :params [tier],
+   :result :i64,
+   :effects #{},
+   :body
+   (if (= tier 0) 2147483648 (if (= tier 1) 4294967296 13958643712)),
+   :param-types [:i64]}
+  {:name needs-relay?,
+   :params [tier inbound],
+   :result :i64,
+   :effects #{},
+   :body (if (< tier 2) 1 (if (= inbound 1) 0 1)),
+   :param-types [:i64 :i64]}
+  {:name swarm-can?,
+   :params [kind],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? kind "media-postproc")
+    1
+    (if
+     (string=? kind "small-shard")
+     1
+     (if
+      (string=? kind "embarrassingly-parallel")
+      1
+      (if (string=? kind "prompt-eval") 1 0)))),
+   :param-types [:string]}
+  {:name native-can?,
+   :params [kind],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? kind "host-large-model")
+    1
+    (if
+     (string=? kind "low-latency-pipeline")
+     1
+     (if
+      (string=? kind "media-generate")
+      1
+      (if (string=? kind "full-shard") 1 0)))),
+   :param-types [:string]}
+  {:name can?,
+   :params [tier kind],
+   :result :i64,
+   :effects #{},
+   :body (if (< tier 2) (swarm-can? kind) (native-can? kind)),
+   :param-types [:i64 :string]}
+  {:name clamp-resident,
+   :params [mem tier-max],
+   :result :i64,
+   :effects #{},
+   :body (if (< mem 0) tier-max (if (< mem tier-max) mem tier-max)),
+   :param-types [:i64 :i64]}
+  {:name eligible-for-work?,
+   :params [can-kind max-res resident],
+   :result :i64,
+   :effects #{},
+   :body (if (= can-kind 0) 0 (if (< max-res resident) 0 1)),
+   :param-types [:i64 :i64 :i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [tier-browser
+  tier-wasm
+  tier-native
+  max-resident-bytes
+  needs-relay?
+  can?
+  clamp-resident
+  eligible-for-work?],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

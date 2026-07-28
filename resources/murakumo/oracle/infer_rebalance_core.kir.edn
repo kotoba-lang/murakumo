@@ -1,0 +1,646 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name shard-ceiling-gb,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 10,
+   :param-types []}
+  {:name os-kv-headroom-gb,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 6,
+   :param-types []}
+  {:name usable-gb,
+   :params [ram-gb],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [raw
+     (- ram-gb 6)
+     floored
+     (if (< raw 0) 0 raw)
+     ceil
+     (shard-ceiling-gb)]
+    (if (< floored ceil) floored ceil)),
+   :param-types [:i64]}
+  {:name pool-for-class,
+   :params [cls],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (string=? cls "text")
+    "text-pool"
+    (if
+     (string=? cls "postproc")
+     "postproc-pool"
+     (if
+      (if
+       (string=? cls "image")
+       1
+       (if (string=? cls "video") 1 (if (string=? cls "audio") 1 0)))
+      "media-pool"
+      "text-pool"))),
+   :param-types [:string]}
+  {:name lane-base,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 65536,
+   :param-types []}
+  {:name rem64,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (- a (* (quot a b) b)),
+   :param-types [:i64 :i64]}
+  {:name seats-text,
+   :params [packed],
+   :result :i64,
+   :effects #{},
+   :body (rem64 packed (lane-base)),
+   :param-types [:i64]}
+  {:name seats-media,
+   :params [packed],
+   :result :i64,
+   :effects #{},
+   :body (rem64 (quot packed (lane-base)) (lane-base)),
+   :param-types [:i64]}
+  {:name seats-postproc,
+   :params [packed],
+   :result :i64,
+   :effects #{},
+   :body (quot packed (* (lane-base) (lane-base))),
+   :param-types [:i64]}
+  {:name pack3,
+   :params [t m p],
+   :result :i64,
+   :effects #{},
+   :body (let [b (lane-base)] (+ t (+ (* m b) (* p (* b b))))),
+   :param-types [:i64 :i64 :i64]}
+  {:name weight-pos?,
+   :params [w],
+   :result :i64,
+   :effects #{},
+   :body (if (< 0 w) 1 0),
+   :param-types [:i64]}
+  {:name count-active,
+   :params [wt wm wp],
+   :result :i64,
+   :effects #{},
+   :body (+ (weight-pos? wt) (+ (weight-pos? wm) (weight-pos? wp))),
+   :param-types [:i64 :i64 :i64]}
+  {:name min2,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (if (< a b) a b),
+   :param-types [:i64 :i64]}
+  {:name max2,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (if (< a b) b a),
+   :param-types [:i64 :i64]}
+  {:name better-bump?,
+   :params [rem-a idx-a rem-b idx-b],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< rem-b rem-a)
+    1
+    (if (< rem-a rem-b) 0 (if (< idx-a idx-b) 1 0))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name pick-bump-3,
+   :params [ok-t ok-m ok-p rem-packed _pad],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [rt
+     (seats-text rem-packed)
+     rm
+     (seats-media rem-packed)
+     rp
+     (seats-postproc rem-packed)]
+    (if
+     (= ok-t 0)
+     (if
+      (= ok-m 0)
+      (if (= ok-p 0) -1 2)
+      (if (= ok-p 0) 1 (if (= (better-bump? rm 1 rp 2) 1) 1 2)))
+     (if
+      (= ok-m 0)
+      (if (= ok-p 0) 0 (if (= (better-bump? rt 0 rp 2) 1) 0 2))
+      (let
+       [win-tm
+        (if (= (better-bump? rt 0 rm 1) 1) 0 1)
+        r-win
+        (if (= win-tm 0) rt rm)
+        i-win
+        win-tm]
+       (if
+        (= ok-p 0)
+        win-tm
+        (if (= (better-bump? r-win i-win rp 2) 1) win-tm 2)))))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name ok-for,
+   :params [active bumped],
+   :result :i64,
+   :effects #{},
+   :body (if (if (= active 1) (if (= bumped 0) 1 0) 0) 1 0),
+   :param-types [:i64 :i64]}
+  {:name largest-remainder-3,
+   :params [total wt wm wp floor],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [at
+     (weight-pos? wt)
+     am
+     (weight-pos? wm)
+     ap
+     (weight-pos? wp)
+     n-active
+     (count-active wt wm wp)]
+    (if
+     (if (= total 0) 1 (if (= n-active 0) 1 0))
+     (pack3 0 0 0)
+     (let
+      [eff-floor
+       (min2 floor (quot total n-active))
+       bt
+       (if (= at 1) eff-floor 0)
+       bm
+       (if (= am 1) eff-floor 0)
+       bp
+       (if (= ap 1) eff-floor 0)
+       left0
+       (- total (+ bt (+ bm bp)))
+       left
+       (max2 0 left0)
+       sumw
+       (+ (if (= at 1) wt 0) (+ (if (= am 1) wm 0) (if (= ap 1) wp 0)))
+       pt
+       (if (= at 1) (* left wt) 0)
+       pm
+       (if (= am 1) (* left wm) 0)
+       pp
+       (if (= ap 1) (* left wp) 0)
+       ft
+       (if (= at 1) (quot pt sumw) 0)
+       fm
+       (if (= am 1) (quot pm sumw) 0)
+       fp
+       (if (= ap 1) (quot pp sumw) 0)
+       rt
+       (if (= at 1) (rem64 pt sumw) 0)
+       rm
+       (if (= am 1) (rem64 pm sumw) 0)
+       rp
+       (if (= ap 1) (rem64 pp sumw) 0)
+       assigned
+       (+ ft (+ fm fp))
+       extra
+       (- left assigned)
+       rem-packed
+       (pack3 rt rm rp)
+       b0
+       (if
+        (< 0 extra)
+        (pick-bump-3
+         (ok-for at 0)
+         (ok-for am 0)
+         (ok-for ap 0)
+         rem-packed
+         0)
+        -1)
+       bt0
+       (if (= b0 0) 1 0)
+       bm0
+       (if (= b0 1) 1 0)
+       bp0
+       (if (= b0 2) 1 0)
+       b1
+       (if
+        (< 1 extra)
+        (pick-bump-3
+         (ok-for at bt0)
+         (ok-for am bm0)
+         (ok-for ap bp0)
+         rem-packed
+         0)
+        -1)
+       bt1
+       (if (= b1 0) 1 bt0)
+       bm1
+       (if (= b1 1) 1 bm0)
+       bp1
+       (if (= b1 2) 1 bp0)
+       b2
+       (if
+        (< 2 extra)
+        (pick-bump-3
+         (ok-for at bt1)
+         (ok-for am bm1)
+         (ok-for ap bp1)
+         rem-packed
+         0)
+        -1)
+       bump-t
+       (if (if (= b0 0) 1 (if (= b1 0) 1 (if (= b2 0) 1 0))) 1 0)
+       bump-m
+       (if (if (= b0 1) 1 (if (= b1 1) 1 (if (= b2 1) 1 0))) 1 0)
+       bump-p
+       (if (if (= b0 2) 1 (if (= b1 2) 1 (if (= b2 2) 1 0))) 1 0)
+       st
+       (+ bt (+ ft bump-t))
+       sm
+       (+ bm (+ fm bump-m))
+       sp
+       (+ bp (+ fp bump-p))]
+      (pack3 st sm sp)))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name pool-demand-pack,
+   :params [text image video audio postproc],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [wt text wm (+ image (+ video audio)) wp postproc]
+    (pack3 wt wm wp)),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name seats-from-pool-pack,
+   :params [total pool-pack floor],
+   :result :i64,
+   :effects #{},
+   :body
+   (largest-remainder-3
+    total
+    (seats-text pool-pack)
+    (seats-media pool-pack)
+    (seats-postproc pool-pack)
+    floor),
+   :param-types [:i64 :i64 :i64]}
+  {:name classify-run-flags,
+   :params [has-images has-video has-audio is-swarm has-tokens],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= has-images 1)
+    2
+    (if
+     (= has-video 1)
+     3
+     (if
+      (= has-audio 1)
+      4
+      (if (= is-swarm 1) 5 (if (= has-tokens 1) 1 0))))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name demand-base,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 4096,
+   :param-types []}
+  {:name demand-empty,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 0,
+   :param-types []}
+  {:name demand-text,
+   :params [pack],
+   :result :i64,
+   :effects #{},
+   :body (rem64 pack (demand-base)),
+   :param-types [:i64]}
+  {:name demand-image,
+   :params [pack],
+   :result :i64,
+   :effects #{},
+   :body (let [b (demand-base)] (rem64 (quot pack b) b)),
+   :param-types [:i64]}
+  {:name demand-video,
+   :params [pack],
+   :result :i64,
+   :effects #{},
+   :body (let [b (demand-base) b2 (* b b)] (rem64 (quot pack b2) b)),
+   :param-types [:i64]}
+  {:name demand-audio,
+   :params [pack],
+   :result :i64,
+   :effects #{},
+   :body
+   (let [b (demand-base) b3 (* b (* b b))] (rem64 (quot pack b3) b)),
+   :param-types [:i64]}
+  {:name demand-postproc,
+   :params [pack],
+   :result :i64,
+   :effects #{},
+   :body (let [b (demand-base) b4 (* (* b b) (* b b))] (quot pack b4)),
+   :param-types [:i64]}
+  {:name demand-pack5,
+   :params [t i v a p],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [b (demand-base) b2 (* b b) b3 (* b b2) b4 (* b b3)]
+    (+ t (+ (* i b) (+ (* v b2) (+ (* a b3) (* p b4)))))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name demand-inc,
+   :params [pack class-code],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [t
+     (demand-text pack)
+     i
+     (demand-image pack)
+     v
+     (demand-video pack)
+     a
+     (demand-audio pack)
+     p
+     (demand-postproc pack)]
+    (if
+     (= class-code 1)
+     (demand-pack5 (+ t 1) i v a p)
+     (if
+      (= class-code 2)
+      (demand-pack5 t (+ i 1) v a p)
+      (if
+       (= class-code 3)
+       (demand-pack5 t i (+ v 1) a p)
+       (if
+        (= class-code 4)
+        (demand-pack5 t i v (+ a 1) p)
+        (if (= class-code 5) (demand-pack5 t i v a (+ p 1)) pack)))))),
+   :param-types [:i64 :i64]}
+  {:name demand-to-pool-pack,
+   :params [pack],
+   :result :i64,
+   :effects #{},
+   :body
+   (pool-demand-pack
+    (demand-text pack)
+    (demand-image pack)
+    (demand-video pack)
+    (demand-audio pack)
+    (demand-postproc pack)),
+   :param-types [:i64]}
+  {:name workers-count,
+   :params [online],
+   :result :i64,
+   :effects #{},
+   :body (if (< online 1) 0 (- online 1)),
+   :param-types [:i64]}
+  {:name seats-for-online,
+   :params [online pool-pack floor],
+   :result :i64,
+   :effects #{},
+   :body (seats-from-pool-pack (workers-count online) pool-pack floor),
+   :param-types [:i64 :i64 :i64]}
+  {:name seats-equal,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (if (= a b) 1 0),
+   :param-types [:i64 :i64]}
+  {:name pipeline-effective-gb,
+   :params [usable-gb text-seats],
+   :result :i64,
+   :effects #{},
+   :body (* usable-gb text-seats),
+   :param-types [:i64 :i64]}
+  {:name node-online?,
+   :params [status],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? status "up") 1 0),
+   :param-types [:string]}
+  {:name move-needed,
+   :params [from-pool to-pool],
+   :result :i64,
+   :effects #{},
+   :body (if (= from-pool to-pool) 0 1),
+   :param-types [:i64 :i64]}
+  {:name assigned-from-seats,
+   :params [seat-pack],
+   :result :i64,
+   :effects #{},
+   :body
+   (+
+    (seats-text seat-pack)
+    (+ (seats-media seat-pack) (seats-postproc seat-pack))),
+   :param-types [:i64]}
+  {:name rebalance-reason-code,
+   :params [assigned-count move-count],
+   :result :i64,
+   :effects #{},
+   :body (if (= assigned-count 0) 1 (if (< 0 move-count) 2 0)),
+   :param-types [:i64 :i64]}
+  {:name rebalance-reason-name,
+   :params [code],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= code 1)
+    "initial placement"
+    (if (= code 2) "demand-shift" "stable")),
+   :param-types [:i64]}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name pool-code,
+   :params [name],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? name "text-pool")
+    0
+    (if
+     (string=? name "media-pool")
+     1
+     (if (string=? name "postproc-pool") 2 -1))),
+   :param-types [:string]}
+  {:name pool-name,
+   :params [code],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= code 0)
+    "text-pool"
+    (if
+     (= code 1)
+     "media-pool"
+     (if (= code 2) "postproc-pool" "unknown"))),
+   :param-types [:i64]}
+  {:name seat-of,
+   :params [code st sm sp],
+   :result :i64,
+   :effects #{},
+   :body (if (= code 0) st (if (= code 1) sm sp)),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name before-pool?,
+   :params [ia ib st sm sp],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [sa (seat-of ia st sm sp) sb (seat-of ib st sm sp)]
+    (if (< sb sa) 1 (if (< sa sb) 0 (if (< ia ib) 1 0)))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name seat-order-pack,
+   :params [st sm sp],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [p0
+     (if (= (before-pool? 0 1 st sm sp) 1) 0 1)
+     p1
+     (if (= (before-pool? 0 1 st sm sp) 1) 1 0)
+     q1
+     (if (= (before-pool? p1 2 st sm sp) 1) p1 2)
+     q2
+     (if (= (before-pool? p1 2 st sm sp) 1) 2 p1)
+     r0
+     (if (= (before-pool? p0 q1 st sm sp) 1) p0 q1)
+     r1
+     (if (= (before-pool? p0 q1 st sm sp) 1) q1 p0)]
+    (+ r0 (+ (* r1 4) (* q2 16)))),
+   :param-types [:i64 :i64 :i64]}
+  {:name order-nth,
+   :params [order-pack n],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= n 0)
+    (rem64 order-pack 4)
+    (if (= n 1) (rem64 (quot order-pack 4) 4) (quot order-pack 16))),
+   :param-types [:i64 :i64]}
+  {:name take-end,
+   :params [start k remaining],
+   :result :i64,
+   :effects #{},
+   :body (min2 remaining (+ start k)),
+   :param-types [:i64 :i64 :i64]}
+  {:name take-count,
+   :params [start end],
+   :result :i64,
+   :effects #{},
+   :body (max2 0 (- end start)),
+   :param-types [:i64 :i64]}
+  {:name pipeline-note,
+   :params [text-n usable],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "text pool sharded as a "
+    (string-concat
+     (i64-str text-n)
+     (string-concat
+      "-way pipeline (~"
+      (string-concat
+       (i64-str (* usable text-n))
+       (string-concat
+        "GB effective, ceiling "
+        (string-concat (i64-str (shard-ceiling-gb)) "GB/node)")))))),
+   :param-types [:i64 :i64]}
+  {:name rebalance-reason-detail,
+   :params [code move-count],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= code 2)
+    (string-concat
+     (i64-str move-count)
+     " node(s) re-placed by demand shift")
+    (rebalance-reason-name code)),
+   :param-types [:i64 :i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [shard-ceiling-gb
+  os-kv-headroom-gb
+  usable-gb
+  pool-for-class
+  lane-base
+  largest-remainder-3
+  seats-text
+  seats-media
+  seats-postproc
+  pool-demand-pack
+  seats-from-pool-pack
+  classify-run-flags
+  demand-base
+  demand-empty
+  demand-text
+  demand-image
+  demand-video
+  demand-audio
+  demand-postproc
+  demand-inc
+  demand-to-pool-pack
+  workers-count
+  seats-for-online
+  seats-equal
+  pipeline-effective-gb
+  node-online?
+  move-needed
+  assigned-from-seats
+  rebalance-reason-code
+  rebalance-reason-name
+  digit-char
+  nat-str
+  i64-str
+  pool-code
+  pool-name
+  seat-order-pack
+  order-nth
+  take-end
+  take-count
+  pipeline-note
+  rebalance-reason-detail],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

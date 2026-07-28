@@ -20,6 +20,8 @@
             [murakumo.infer.schedule :as sched]
             [murakumo.task.plan :as task]
             [murakumo.infer.engine :as eng]
+            [murakumo.secret :as secret]
+            [murakumo.overlay.crypto :as crypto]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -33,21 +35,14 @@
   (edn/read-string (slurp (io/resource resource-path))))
 
 (deftest oracle-catalog-ready
-  (is (oracle/ready? :kekkai-gate))
-  (is (oracle/ready? :token))
-  (is (oracle/ready? :report-core))
-  (is (oracle/ready? :infer-plan))
-  (is (oracle/ready? :dash-state))
-  (is (oracle/ready? :infer-schedule))
-  (is (oracle/ready? :task-plan))
-  (is (oracle/ready? :infer-engine))
-  (is (some #{:kekkai-gate} (oracle/catalog-ids)))
-  (is (some #{:token} (oracle/catalog-ids)))
-  (is (some #{:report-core} (oracle/catalog-ids)))
-  (is (some #{:infer-plan} (oracle/catalog-ids)))
-  (is (some #{:dash-state} (oracle/catalog-ids)))
-  (is (some #{:infer-schedule} (oracle/catalog-ids)))
-  (is (some #{:task-plan} (oracle/catalog-ids)))
+  (is (>= (oracle/catalog-count) 32)
+      "full product-shell catalog ships all kotoba/*_core artifacts")
+  (doseq [id (oracle/catalog-ids)]
+    (is (oracle/ready? id) (str "not ready: " id)))
+  (is (some #{:secret} (oracle/catalog-ids)))
+  (is (some #{:overlay-crypto} (oracle/catalog-ids)))
+  (is (some #{:tunnel} (oracle/catalog-ids)))
+  (is (some #{:reconcile-plan} (oracle/catalog-ids)))
   (is (some #{:infer-engine} (oracle/catalog-ids))))
 
 (deftest product-shell-gate-uses-oracle-results
@@ -479,3 +474,48 @@
 (deftest engine-precompiled-kir-does-not-drift
   (is (= (eng-live-kir) (eng-resource-kir))
       "infer_engine KIR drift — run oracle-gen"))
+
+(deftest product-shell-secret-uses-oracle-results
+  (testing "named secret constants from oracle"
+    (is (= "murakumo-token" secret/token-secret-name))
+    (is (= "MURAKUMO_TOKEN_SECRET" secret/token-secret-env))
+    (is (= "murakumo-service-token" secret/service-token-name))
+    (is (= (oracle/call :secret 'token-secret-name []) secret/token-secret-name)))
+  (testing "validators via oracle"
+    (is (true? (secret/valid-env-var-name? "FOO_BAR")))
+    (is (false? (secret/valid-env-var-name? "FOO*")))
+    (is (true? (secret/valid-path-ref? "/tmp/cert.pem")))
+    (is (false? (secret/valid-path-ref? "relative")))
+    (is (false? (secret/valid-path-ref? "-----BEGIN CERT-----")))))
+
+(deftest secret-oracle-call-matches-live-compile
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/secret_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'token-secret-name [])
+           (oracle/call :secret 'token-secret-name [])))
+    (is (= (ir/execute live 'valid-env-var-name? ["OK_ENV"])
+           (oracle/call :secret 'valid-env-var-name? ["OK_ENV"])))
+    (is (= (ir/execute live 'valid-path-ref-unix? ["/abs/path"])
+           (oracle/call :secret 'valid-path-ref-unix? ["/abs/path"])))))
+
+(deftest secret-precompiled-kir-does-not-drift
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/secret_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))
+        shipped (edn/read-string (slurp (io/resource "murakumo/oracle/secret_core.kir.edn")))]
+    (is (= live shipped) "secret_core KIR drift — run oracle-gen")))
+
+(deftest product-shell-overlay-crypto-uses-oracle-results
+  (is (= "aes-256-gcm" crypto/alg-name))
+  (is (= "AES/GCM/NoPadding" crypto/cipher-transform))
+  (is (= 12 crypto/nonce-bytes))
+  (is (= 128 crypto/gcm-tag-bits))
+  (is (= "abc" (crypto/strip-b64-pad "abc==")))
+  (let [sealed (crypto/seal "k" "payload")]
+    (is (crypto/sealed-map-ok? sealed))
+    (is (= "payload" (crypto/open "k" sealed)))))
+
+(deftest bulk-gen-discovers-all-cores
+  (let [arts (gen/discover-artifacts)]
+    (is (>= (count arts) 32))
+    (is (every? #(re-find #"_core\.kotoba$" (get % "source")) arts))
+    (is (every? #(re-find #"resources/murakumo/oracle/.*\.kir\.edn$" (get % "out")) arts))))

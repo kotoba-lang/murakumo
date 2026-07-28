@@ -1,0 +1,125 @@
+{:format :kotoba.kir/v3,
+ :signature nil,
+ :functions
+ [{:name default-per-token,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1}
+  {:name head-num, :params [], :result :i64, :effects #{}, :body 1}
+  {:name head-den, :params [], :result :i64, :effects #{}, :body 10}
+  {:name protocol-num, :params [], :result :i64, :effects #{}, :body 1}
+  {:name protocol-den,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 20}
+  {:name token-cost,
+   :params [price tokens],
+   :result :i64,
+   :effects #{},
+   :body (* price tokens)}
+  {:name unit-cost,
+   :params [price n],
+   :result :i64,
+   :effects #{},
+   :body (* price n)}
+  {:name job-cost-2,
+   :params [p0 n0 p1 n1],
+   :result :i64,
+   :effects #{},
+   :body (+ (* p0 n0) (* p1 n1))}
+  {:name job-cost-3,
+   :params [p0 n0 p1 n1 p2n],
+   :result :i64,
+   :effects #{},
+   :body (+ (+ (* p0 n0) (* p1 n1)) p2n)}
+  {:name cut,
+   :params [total num den],
+   :result :i64,
+   :effects #{},
+   :body (quot (* total num) den)}
+  {:name pool,
+   :params [total treasury head],
+   :result :i64,
+   :effects #{},
+   :body (- total (+ treasury head))}
+  {:name memory-time-weight,
+   :params [est-bytes duration-ms span],
+   :result :i64,
+   :effects #{},
+   :body (if (< span 1) 0 (* est-bytes duration-ms))}
+  {:name mt-sum-2,
+   :params [w0 w1],
+   :result :i64,
+   :effects #{},
+   :body (+ w0 w1)}
+  {:name mt-sum-3,
+   :params [w0 w1 w2],
+   :result :i64,
+   :effects #{},
+   :body (+ w0 (+ w1 w2))}
+  {:name share-floor,
+   :params [pool-amt w sumw],
+   :result :i64,
+   :effects #{},
+   :body (if (< sumw 1) 0 (quot (* pool-amt w) sumw))}
+  {:name share-pack-2,
+   :params [pool-amt w0 w1],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [sumw
+     (+ w0 w1)
+     s0
+     (share-floor pool-amt w0 sumw)
+     s1
+     (share-floor pool-amt w1 sumw)
+     B
+     65536]
+    (+ s0 (* s1 B)))}
+  {:name settle-pool-shares-2,
+   :params [total w0 w1],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [tr (cut total 1 20) hd (cut total 1 10) pl (pool total tr hd)]
+    (share-pack-2 pl w0 w1))}
+  {:name charge-allow?,
+   :params [balance cost],
+   :result :i64,
+   :effects #{},
+   :body (if (< balance cost) 0 1)}
+  {:name balance-after-spend,
+   :params [balance cost],
+   :result :i64,
+   :effects #{},
+   :body (let [left (- balance cost)] (if (< left 0) 0 left))}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-per-token
+  head-num
+  head-den
+  protocol-num
+  protocol-den
+  token-cost
+  cut
+  pool
+  memory-time-weight
+  charge-allow?
+  balance-after-spend
+  unit-cost
+  job-cost-2
+  job-cost-3
+  share-floor
+  share-pack-2
+  settle-pool-shares-2
+  mt-sum-2
+  mt-sum-3],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}
