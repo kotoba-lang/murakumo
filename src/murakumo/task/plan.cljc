@@ -19,11 +19,12 @@
 ;;   - no lineage-based re-execution — a failed task is retried, not replayed
 ;;   - no autoscaler / placement groups / gang scheduling
 ;;
-;; W6 product-shell authority (ADR-260728-w6-task-oracle-authority):
+;; W6 product-shell authority (ADR-260728-w6-task-unsched-seps-pure-oracle +
+;; ADR-260728-w6-task-oracle-authority):
 ;; slots / failed? / eligible? flags / task-id / retry bounds / wave-slot /
-;; percentile index / summary retried+speedup DELEGATE to precompiled
-;; kotoba/task_plan_core.kotoba KIR when the oracle is loadable (JVM classpath
-;; or cljs/nbb resource loader — ADR-260728-w6-cljs-oracle-load).
+;; percentile index / summary retried+speedup / unschedulable detail seps
+;; DELEGATE to precompiled kotoba/task_plan_core.kotoba KIR when the oracle is
+;; loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: admit/prepare folds, set membership projection for labels/
 ;; roles/exclude/allowlist, sort-by node-score, map assembly.
 ;; cljs mirrors remain as fallback when oracle is not ready.
@@ -40,6 +41,35 @@
 
 (defn- oracle-ready? []
   (oracle/ready? oid))
+
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+(def ^:private mirror-exclude-join-sep ",")
+(def ^:private mirror-unsched-placement-prefix "no node satisfies placement=")
+(def ^:private mirror-unsched-excluding-prefix " excluding=")
+(def ^:private mirror-unsched-min-mem-prefix " min-mem-bytes=")
+
+(def exclude-join-sep
+  "CSV join for :exclude-nodes in unschedulable detail. Kotoba when ready."
+  (oracle-str-const 'exclude-join-sep mirror-exclude-join-sep))
+
+(def unsched-placement-prefix
+  "Prefix before placement pr-str in unschedulable detail. Kotoba when ready."
+  (oracle-str-const 'unsched-placement-prefix mirror-unsched-placement-prefix))
+
+(def unsched-excluding-prefix
+  "Prefix before exclude CSV in unschedulable detail. Kotoba when ready."
+  (oracle-str-const 'unsched-excluding-prefix mirror-unsched-excluding-prefix))
+
+(def unsched-min-mem-prefix
+  "Prefix before min-mem-bytes in unschedulable detail. Kotoba when ready."
+  (oracle-str-const 'unsched-min-mem-prefix mirror-unsched-min-mem-prefix))
 
 ;; ── host-mirror pure helpers (cljs fallback + semantic documentation) ──
 
@@ -225,18 +255,20 @@
    (str (:name node))])
 
 (defn- mirror-why-unschedulable [task]
-  (str "no node satisfies placement=" (pr-str (:placement task))
+  (str mirror-unsched-placement-prefix (pr-str (:placement task))
        (when (seq (:exclude-nodes task))
-         (str " excluding=" (str/join "," (:exclude-nodes task))))
+         (str mirror-unsched-excluding-prefix
+              (str/join mirror-exclude-join-sep (:exclude-nodes task))))
        (when (:min-mem-bytes task)
-         (str " min-mem-bytes=" (:min-mem-bytes task)))))
+         (str mirror-unsched-min-mem-prefix (:min-mem-bytes task)))))
 
 (defn- why-unschedulable [task]
   "Reject detail string via kotoba `unschedulable-detail` when oracle ready.
-   Host projects placement pr-str, exclude CSV, optional min-mem string."
+   Host projects placement pr-str, exclude CSV (sep dual-sourced), optional
+   min-mem string."
   (let [placement (pr-str (:placement task))
         excluding (if (seq (:exclude-nodes task))
-                    (str/join "," (:exclude-nodes task))
+                    (str/join exclude-join-sep (:exclude-nodes task))
                     "")
         min-mem (if-let [m (:min-mem-bytes task)] (str m) "")]
     (if (oracle-ready?)

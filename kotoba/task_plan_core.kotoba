@@ -11,7 +11,10 @@
             assign-task-pick-3 apply-task-pick-3 assign-task-step-3
             nearest-rank-idx summary-retried speedup-milli
             max2 min2 clamp-nonneg
-            unschedulable-detail]))
+            unschedulable-detail
+            exclude-join-sep
+            unsched-placement-prefix unsched-excluding-prefix
+            unsched-min-mem-prefix]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.task.plan integer + assign core.
 ;; failed? uses [:option :i64] exit + [:option :string] error (no has-*).
@@ -21,6 +24,7 @@
 ;; assign-task-step-2/3 + pick-task-fold-step: pure assign reduce building blocks.
 ;; percentile: nearest-rank-idx; summary: retried/speedup-milli pure.
 ;; unschedulable-detail: pure reject detail string (host projects pr-str placement).
+;; exclude-join-sep + unsched prefixes dual-source for host exclude CSV join.
 ;; Parity: test/murakumo/task_plan_kotoba_parity_test.clj
 
 (defn default-max-slots [] :i64 8)
@@ -290,15 +294,32 @@
 (defn clamp-nonneg [n :i64] :i64
   (if (< n 0) 0 n))
 
+;; ── residual unschedulable detail fragments ──────────────────────────
+
+(defn exclude-join-sep [] :string
+  ;; host join for :exclude-nodes names in why-unschedulable
+  ",")
+
+(defn unsched-placement-prefix [] :string
+  "no node satisfies placement=")
+
+(defn unsched-excluding-prefix [] :string
+  " excluding=")
+
+(defn unsched-min-mem-prefix [] :string
+  " min-mem-bytes=")
+
 (defn unschedulable-detail [placement :string
                             excluding :string
                             min-mem-str :string] :string
   ;; cljc why-unschedulable: host projects (pr-str placement), joined exclude names,
   ;; and (str min-mem-bytes) or "" when absent.
-  (let [base (string-concat "no node satisfies placement=" placement)
+  (let [base (string-concat (unsched-placement-prefix) placement)
         with-ex (if (string=? excluding "")
                   base
-                  (string-concat base (string-concat " excluding=" excluding)))]
+                  (string-concat base
+                                (string-concat (unsched-excluding-prefix) excluding)))]
     (if (string=? min-mem-str "")
       with-ex
-      (string-concat with-ex (string-concat " min-mem-bytes=" min-mem-str)))))
+      (string-concat with-ex
+                     (string-concat (unsched-min-mem-prefix) min-mem-str)))))

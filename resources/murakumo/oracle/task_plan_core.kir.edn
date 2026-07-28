@@ -442,6 +442,30 @@
    :effects #{},
    :body (if (< n 0) 0 n),
    :param-types [:i64]}
+  {:name exclude-join-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ",",
+   :param-types []}
+  {:name unsched-placement-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "no node satisfies placement=",
+   :param-types []}
+  {:name unsched-excluding-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " excluding=",
+   :param-types []}
+  {:name unsched-min-mem-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " min-mem-bytes=",
+   :param-types []}
   {:name unschedulable-detail,
    :params [placement excluding min-mem-str],
    :result :string,
@@ -449,18 +473,20 @@
    :body
    (let
     [base
-     (string-concat "no node satisfies placement=" placement)
+     (string-concat (unsched-placement-prefix) placement)
      with-ex
      (if
       (string=? excluding "")
       base
-      (string-concat base (string-concat " excluding=" excluding)))]
+      (string-concat
+       base
+       (string-concat (unsched-excluding-prefix) excluding)))]
     (if
      (string=? min-mem-str "")
      with-ex
      (string-concat
       with-ex
-      (string-concat " min-mem-bytes=" min-mem-str)))),
+      (string-concat (unsched-min-mem-prefix) min-mem-str)))),
    :param-types [:string :string :string]}],
  :oracle-value nil,
  :schema-identities nil,
@@ -500,7 +526,11 @@
   max2
   min2
   clamp-nonneg
-  unschedulable-detail],
+  unschedulable-detail
+  exclude-join-sep
+  unsched-placement-prefix
+  unsched-excluding-prefix
+  unsched-min-mem-prefix],
  :schemas nil,
  :effects #{},
  :blocks [],
