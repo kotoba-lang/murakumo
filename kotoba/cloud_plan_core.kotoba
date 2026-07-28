@@ -3,11 +3,13 @@
             default-cloud-graph default-auth-key-env overlay-version
             digit-char nat-str i64-str
             node-region relay-score overlay-id-input node-id-input
-            quic-endpoint webrtc-endpoint relay-endpoint-url]))
+            quic-endpoint webrtc-endpoint relay-endpoint-url
+            webtransport-endpoint transport-endpoint]))
 
 ;; W6 pure-planner oracle — murakumo.cloud.plan scalar/string core (low).
 ;; graph-cid hashing, choose-relay sort, record maps stay cljc.
 ;; node-region: first non-empty of zone, region-label, region, else "global".
+;; webtransport + generic transport endpoint URL fragments dual-source.
 ;; Parity: test/murakumo/cloud_plan_kotoba_parity_test.clj
 
 (defn default-driver [] :string "murakumo-overlay")
@@ -66,3 +68,18 @@
 
 (defn relay-endpoint-url [relay-url :string node-id :string] :string
   (string-concat relay-url (string-concat "/" node-id)))
+
+(defn webtransport-endpoint [host :string http-port :i64] :string
+  ;; cljc: (str "https://" host ":" http-port "/.well-known/murakumo/webtransport")
+  (string-concat
+   "https://"
+   (string-concat
+    host
+    (string-concat
+     ":"
+     (string-concat (i64-str http-port)
+                    "/.well-known/murakumo/webtransport")))))
+
+(defn transport-endpoint [scheme :string host :string] :string
+  ;; cljc fallback: (str (name transport) "://" host)
+  (string-concat scheme (string-concat "://" host)))

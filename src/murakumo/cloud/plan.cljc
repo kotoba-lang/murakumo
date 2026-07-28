@@ -88,6 +88,12 @@
 (defn- mirror-relay-endpoint-url [relay-url node-id]
   (str relay-url "/" node-id))
 
+(defn- mirror-webtransport-endpoint [host http-port]
+  (str "https://" host ":" http-port "/.well-known/murakumo/webtransport"))
+
+(defn- mirror-transport-endpoint [scheme host]
+  (str scheme "://" host))
+
 ;; ── dual-source defaults ─────────────────────────────────────────────
 
 (def default-cloud-path config/default-cloud-path)
@@ -194,10 +200,15 @@
                           #(o 'webrtc-endpoint [(str host) (oracle/as-i64 p2p-port)])
                           #(mirror-webrtc-endpoint host p2p-port))}
       :webtransport {:transport :webtransport
-                     :endpoint (str "https://" host ":" http-port
-                                    "/.well-known/murakumo/webtransport")}
+                     :endpoint (try-oracle
+                                #(o 'webtransport-endpoint
+                                    [(str host) (oracle/as-i64 http-port)])
+                                #(mirror-webtransport-endpoint host http-port))}
       {:transport transport
-       :endpoint (str (name transport) "://" host)})))
+       :endpoint (try-oracle
+                  #(o 'transport-endpoint
+                      [(name transport) (str host)])
+                  #(mirror-transport-endpoint (name transport) host))})))
 
 (defn relay-endpoint
   "Endpoint URL via kotoba `relay-endpoint-url` when ready."

@@ -122,6 +122,27 @@
    :result :string,
    :effects #{},
    :body (string-concat relay-url (string-concat "/" node-id)),
+   :param-types [:string :string]}
+  {:name webtransport-endpoint,
+   :params [host http-port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "https://"
+    (string-concat
+     host
+     (string-concat
+      ":"
+      (string-concat
+       (i64-str http-port)
+       "/.well-known/murakumo/webtransport")))),
+   :param-types [:string :i64]}
+  {:name transport-endpoint,
+   :params [scheme host],
+   :result :string,
+   :effects #{},
+   :body (string-concat scheme (string-concat "://" host)),
    :param-types [:string :string]}],
  :oracle-value nil,
  :schema-identities nil,
@@ -141,7 +162,9 @@
   node-id-input
   quic-endpoint
   webrtc-endpoint
-  relay-endpoint-url],
+  relay-endpoint-url
+  webtransport-endpoint
+  transport-endpoint],
  :schemas nil,
  :effects #{},
  :blocks [],
