@@ -3,11 +3,24 @@
 ;; No filesystem, subprocess, wall-clock, Java-only APIs, or live fleet access.
 ;; This namespace is the .cljc source of truth for the wadm-style planning logic;
 ;; murakumo.reconcile wraps it with CLI, collection, apply, and persistence.
+;;
+;; W6 product-shell authority (ADR-260728-w6-reconcile-oracle-authority):
+;; On the JVM, pure scalar helpers DELEGATE to precompiled
+;; kotoba/reconcile_plan_core.kotoba → resources/murakumo/oracle/reconcile_plan_core.kir.edn.
+;; Host remains: eligible-nodes / observed-hosts set algebra, variable-length
+;; pick-targets sort, reason strings, CLI flag parse, cljs mirrors.
 
 (ns murakumo.reconcile.plan
   (:require [clojure.set :as set]
             [clojure.string :as str]
-            [murakumo.connect :as connect]))
+            [murakumo.connect :as connect]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+
+(def ^:private oid :reconcile-plan)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
 
 (defn eligible-nodes
   "Node names whose labels/roles/reach satisfy an app's `:placement` constraint.
@@ -34,12 +47,46 @@
           {} (:nodes snapshot)))
 
 (defn- pick-targets
-  "Choose `n` placement targets, preferring least-loaded nodes, then name."
+  "Choose `n` placement targets, preferring least-loaded nodes, then name.
+
+   Host projection: variable-length candidates still sort here. Oracle exposes
+   better-target?/pick-targets-2-pack/pick-targets-3-first for fixed 2/3
+   candidate tournaments (used by parity tests); product path keeps one sort."
   [candidates n load-by-node]
   (->> candidates
        (sort-by (juxt #(get load-by-node % 0) identity))
        (take (max 0 n))
        vec))
+
+(defn- desired-n
+  "Replica desired count — kotoba `desired` (has-replicas flag + value)."
+  [replicas]
+  #?(:clj (long (o 'desired
+                   [(long (if (some? replicas) 1 0))
+                    (long (or replicas 0))]))
+     :cljs (or replicas 1)))
+
+(defn- deficit-n
+  [desired running-count]
+  #?(:clj (long (o 'deficit [(long desired) (long running-count)]))
+     :cljs (max 0 (- desired running-count))))
+
+(defn- action-kw
+  "Project reconcile-app inputs to kotoba `action-name` then keywordize."
+  [has-cid? running-count desired free-candidates has-misplaced?]
+  #?(:clj (keyword (o 'action-name
+                      [(long (if has-cid? 1 0))
+                       (long running-count)
+                       (long desired)
+                       (long free-candidates)
+                       (long (if has-misplaced? 1 0))]))
+     :cljs
+     (cond
+       (not has-cid?) :needs-build
+       (< desired running-count) :over
+       (zero? (max 0 (- desired running-count))) :satisfied
+       (< free-candidates 1) :blocked
+       :else :place)))
 
 (defn reconcile-app
   "Pure per-app reconciliation.
@@ -51,12 +98,12 @@
    :over        — too many eligible hosts are running it; no auto-evict
    :blocked     — under-replicated and no eligible target is free"
   [fleet snapshot connect-spec {:keys [name cid replicas placement] :as app}]
-  (let [desired   (or replicas 1)
+  (let [desired   (desired-n replicas)
         eligible  (set (eligible-nodes fleet placement connect-spec))
         hosts     (get (observed-hosts snapshot) cid #{})
         running   (set/intersection hosts eligible)
         misplaced (set/difference hosts eligible)
-        deficit   (max 0 (- desired (count running)))
+        deficit   (deficit-n desired (count running))
         load      (into {} (map (fn [n] [(:name n) (count (:hosted n))]) (:nodes snapshot)))
         candidates (vec (sort (set/difference eligible running)))
         base      {:app name :cid cid :desired desired :manifest (:manifest app)
@@ -64,21 +111,32 @@
                    :eligible (vec (sort eligible))
                    :running (vec (sort running))
                    :misplaced (vec (sort misplaced))
-                   :deficit deficit}]
-    (cond
-      (nil? cid)
+                   :deficit deficit}
+        action (action-kw (some? cid)
+                          (count running)
+                          desired
+                          (count candidates)
+                          (seq misplaced))]
+    (case action
+      :needs-build
       (assoc base :action :needs-build
              :reason "no :cid — compile :manifest (clj→wasm) to resolve a CID first")
 
-      (> (count running) desired)
+      :over
       (assoc base :action :over
              :reason (str (count running) " running > " desired
                           " desired (no auto-evict; lower :replicas or stop a node)"))
 
-      (and (zero? deficit) (empty? misplaced))
+      :satisfied
       (assoc base :action :satisfied)
 
-      (pos? deficit)
+      :blocked
+      (assoc base :action :blocked
+             :reason (str "need " deficit " more but no eligible node free"
+                          " (eligible=" (count eligible)
+                          ", running=" (count running) ")"))
+
+      :place
       (let [targets (pick-targets candidates deficit load)]
         (if (empty? targets)
           (assoc base :action :blocked
@@ -87,7 +145,7 @@
                               ", running=" (count running) ")"))
           (assoc base :action :place :targets targets)))
 
-      :else
+      ;; defensive: treat unknown as satisfied
       (assoc base :action :satisfied))))
 
 (defn reconcile-plan
@@ -125,7 +183,8 @@
 (defn watch-sleep-ms
   "Milliseconds to sleep between reconcile watch iterations."
   [seconds]
-  (* 1000 seconds))
+  #?(:clj (long (o 'watch-sleep-ms [(long seconds)]))
+     :cljs (* 1000 seconds)))
 
 (defn- parse-int [s]
   #?(:clj (Integer/parseInt s)
