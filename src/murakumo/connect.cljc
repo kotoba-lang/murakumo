@@ -6,8 +6,17 @@
 ;; the parsed connect map directly.
 
 (ns murakumo.connect
+  "Connectivity description helpers.
+   W6 product-shell: class/plane decision pure helpers via kotoba connect_core."
   (:require [clojure.set :as set]
-            [murakumo.config :as config]))
+            [murakumo.config :as config]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+
+(def ^:private oid :connect)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
 
 (defn load-connect
   "Read connect.edn (nil if absent — reach constraints then degrade to no-op).
@@ -19,9 +28,20 @@
   ([path] (some-> (config/read-edn-file-or path nil)
                    (config/tx-data->map "connect-doc"))))
 
-(defn default-class [connect] (or (:default-class connect) :native))
+(defn default-class
+  "JVM: kotoba `default-class-name` → keyword."
+  [connect]
+  #?(:clj (keyword (o 'default-class-name
+                      [(if-let [c (:default-class connect)] (name c) "")]))
+     :cljs (or (:default-class connect) :native)))
 
-(defn node-class [connect node] (or (:class node) (default-class connect)))
+(defn node-class
+  "JVM: kotoba `node-class-name` → keyword."
+  [connect node]
+  #?(:clj (keyword (o 'node-class-name
+                      [(if-let [c (:class node)] (name c) "")
+                       (if-let [c (:default-class connect)] (name c) "")]))
+     :cljs (or (:class node) (default-class connect))))
 
 (defn class-transports
   "Transports a node-class speaks on `plane` (:read | :live)."
@@ -39,16 +59,25 @@
 (defn serves-reach?
   "Can `node` serve a client of `(:class reach)` on `(:plane reach)`?
      :read — node speaks :http (universal CID pull).
-     :live — node and target client class share at least one live transport."
+     :live — node and target client class share at least one live transport.
+   JVM: kotoba `serves-plane?` with host-projected transport flags."
   [connect node reach]
   (let [{:keys [class plane]} (parse-reach reach)
-        ncls (node-class connect node)]
-    (case plane
-      :read (boolean (some #{:http} (class-transports connect ncls :read)))
-      :live (boolean (seq (set/intersection
-                           (set (class-transports connect ncls :live))
-                           (set (class-transports connect class :live)))))
-      false)))
+        ncls (node-class connect node)
+        has-http (if (some #{:http} (class-transports connect ncls :read)) 1 0)
+        has-common (if (seq (set/intersection
+                             (set (class-transports connect ncls :live))
+                             (set (class-transports connect class :live))))
+                     1 0)]
+    #?(:clj (= 1 (o 'serves-plane?
+                    [(name plane) (long has-http) (long has-common)]))
+       :cljs
+       (case plane
+         :read (boolean (some #{:http} (class-transports connect ncls :read)))
+         :live (boolean (seq (set/intersection
+                              (set (class-transports connect ncls :live))
+                              (set (class-transports connect class :live)))))
+         false))))
 
 (defn serves-all?
   "True if `node` satisfies every reach requirement (empty => trivially true)."

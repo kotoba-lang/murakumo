@@ -5,25 +5,51 @@
 ;; manifest parsing and command argv shapes used by that shell.
 
 (ns murakumo.deploy.plan
+  "Portable deploy planning helpers.
+   W6 product-shell: constants + path/url pure helpers via kotoba deploy_plan_core."
   (:require [clojure.string :as str]
-            [murakumo.config :as config]))
+            [murakumo.config :as config]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def default-wasm "/tmp/murakumo-deploy.wasm")
-(def default-publish-node "asher")
+(def ^:private oid :deploy-plan)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
+
+(def default-wasm
+  #?(:clj (o 'default-wasm [])
+     :cljs "/tmp/murakumo-deploy.wasm"))
+
+(def default-publish-node
+  #?(:clj (o 'default-publish-node [])
+     :cljs "asher"))
+
 (def pinned-binaries ["kotoba" "kotoba-server"])
-(def artifact-forward-port 18900)
-(def publish-forward-port 18077)
-(def forward-settle-ms 1300)
-(def placement-wait-ms 75000)
+
+(def artifact-forward-port
+  #?(:clj (long (o 'artifact-forward-port []))
+     :cljs 18900))
+
+(def publish-forward-port
+  #?(:clj (long (o 'publish-forward-port []))
+     :cljs 18077))
+
+(def forward-settle-ms
+  #?(:clj (long (o 'forward-settle-ms []))
+     :cljs 1300))
+
+(def placement-wait-ms
+  #?(:clj (long (o 'placement-wait-ms []))
+     :cljs 75000))
 
 (defn manifest-dir
-  "Directory portion of a manifest path. A bare filename (no slash) resolves
-   to \".\" — the old return-unchanged behaviour made reconcile --apply build
-   broken app paths like \"murakumo.app.edn/../kenchi/…\" when invoked with a
-   bare relative manifest (found converging kenchi, ADR-2607071500 追記2)."
+  "Directory portion of a manifest path. Bare filename → \".\".
+   JVM: kotoba `manifest-dir`."
   [manifest]
-  (let [d (str/replace manifest #"/[^/]+$" "")]
-    (if (= d manifest) "." d)))
+  #?(:clj (o 'manifest-dir [(str manifest)])
+     :cljs (let [d (str/replace manifest #"/[^/]+$" "")]
+             (if (= d manifest) "." d))))
 
 (defn manifest-src
   "Extract the first `:src \"...\"` value from a kotoba app manifest string."
@@ -36,14 +62,18 @@
   (some-> (re-find #":cid\s+\"([^\"]+)\"" manifest-text) second))
 
 (defn app-manifest-path
-  "Resolve an app manifest file relative to a desired-state manifest directory."
+  "Resolve an app manifest file relative to a desired-state manifest directory.
+   JVM: kotoba `app-manifest-path`."
   [manifest-dir app]
-  (str manifest-dir "/" (:manifest app)))
+  #?(:clj (o 'app-manifest-path [(str manifest-dir) (str (:manifest app))])
+     :cljs (str manifest-dir "/" (:manifest app))))
 
 (defn publish-selector
-  "Resolve the publish-node selector, defaulting to the fleet canary."
+  "Resolve the publish-node selector, defaulting to the fleet canary.
+   JVM: kotoba `publish-selector`."
   [selector]
-  (or selector default-publish-node))
+  #?(:clj (o 'publish-selector [(str (or selector ""))])
+     :cljs (or selector default-publish-node)))
 
 (defn resolve-app-input
   "Pure deploy input summary from manifest path/text."
@@ -63,15 +93,18 @@
   [kotoba "component" "build" src-path "--wit-dir" wit "-o" wasm])
 
 (defn app-deploy-argv
-  "argv for `kotoba app deploy --publish` through a local port-forward."
+  "argv for `kotoba app deploy --publish` through a local port-forward.
+   JVM: localhost URL via kotoba `localhost-url`."
   [kotoba manifest wit local-port]
   [kotoba "app" "deploy" manifest "--wit-dir" wit "--publish" "--url"
-   (str "http://localhost:" local-port)])
+   #?(:clj (o 'localhost-url [(long local-port)])
+      :cljs (str "http://localhost:" local-port))])
 
 (defn block-put-argv
   "argv for putting a WASM artifact into a node-local forwarded kotoba server."
   [kotoba token wasm local-port]
-  [kotoba "--url" (str "http://localhost:" local-port)
+  [kotoba "--url" #?(:clj (o 'localhost-url [(long local-port)])
+                     :cljs (str "http://localhost:" local-port))
    "--token" token "block" "put" "--file" wasm])
 
 (defn artifact-node-plan
@@ -99,9 +132,11 @@
   (last (str/split-lines (str/trim (str out)))))
 
 (defn command-output
-  "Trim stdout from command output used as a scalar value."
+  "Trim stdout from command output used as a scalar value.
+   JVM: kotoba `command-output`."
   [out]
-  (str/trim (str out)))
+  #?(:clj (o 'command-output [(str out)])
+     :cljs (str/trim (str out))))
 
 (defn- parse-int [s]
   #?(:clj (Integer/parseInt s)

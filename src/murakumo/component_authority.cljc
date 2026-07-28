@@ -3,18 +3,37 @@
 
   Murakumo decides where a Component may run and advances its epoch whenever
   that authority is revoked. Runtime hosts consume the emitted exact events;
-  they do not infer authority from eventually-consistent placement telemetry."
+  they do not infer authority from eventually-consistent placement telemetry.
+
+  W6 product-shell: identifier?/epochs/sequence pure helpers via kotoba
+  component_authority_core on JVM. Event maps + ed25519 stay host."
   (:require [clojure.string :as str]
             [kotoba.abi.contract :as abi]
-            #?(:clj [ed25519.core :as ed])))
+            #?(:clj [ed25519.core :as ed])
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def event-version 1)
+(def ^:private oid :component-authority)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
+
+(def event-version
+  #?(:clj (long (o 'event-version []))
+     :cljs 1))
 
 (defn initial-state []
   {:epochs {} :placements {} :sequence 0})
 
-(defn- identifier? [x]
-  (and (string? x) (not (str/blank? x)) (<= (count x) 4096)))
+(defn- identifier?
+  "JVM: blank? + len via kotoba `identifier-len-ok?` (host projects blank + UTF-8 len)."
+  [x]
+  #?(:clj
+     (and (string? x)
+          (= 1 (o 'identifier-len-ok?
+                  [(if (str/blank? x) 1 0)
+                   (long (count (.getBytes ^String x "UTF-8")))])))
+     :cljs (and (string? x) (not (str/blank? x)) (<= (count x) 4096))))
 
 (defn- reject [reason message data]
   (throw (ex-info message (assoc data :murakumo.component/reason reason))))
@@ -40,8 +59,12 @@
                     (valid-event? event))
        (reject :invalid-signing-input
                "Complete Component authority signing input is required" {}))
-     (let [unsigned {:format :murakumo.component-authority/v1
-                     :algorithm :ed25519
+     (let [fmt #?(:clj (keyword (o 'format-v1 []))
+                  :cljs :murakumo.component-authority/v1)
+           alg #?(:clj (keyword (o 'algorithm-ed25519 []))
+                  :cljs :ed25519)
+           unsigned {:format fmt
+                     :algorithm alg
                      :key-id key-id
                      :issuer issuer
                      :audience audience
@@ -72,12 +95,18 @@
   (when-not (and (identifier? component-cid) (identifier? node))
     (reject :invalid-placement "Component CID and node must be bounded identifiers"
             {:component-cid component-cid :node node}))
-  (let [epoch (get-in state [:epochs component-cid] 1)
+  (let [prev (long (or (get-in state [:epochs component-cid]) 0))
+        epoch #?(:clj (long (o 'place-epoch [prev]))
+                 :cljs (get-in state [:epochs component-cid] 1))
+        seq' #?(:clj (long (o 'next-sequence [(long (:sequence state))]))
+                :cljs (inc (:sequence state)))
         state' (-> state
                    (assoc-in [:epochs component-cid] epoch)
                    (update-in [:placements component-cid] (fnil conj #{}) node)
-                   (update :sequence inc))]
-    [state' (event state' :placed component-cid epoch node)]))
+                   (assoc :sequence seq'))]
+    [state' (event state' #?(:clj (keyword (o 'event-kind ["place"]))
+                             :cljs :placed)
+                   component-cid epoch node)]))
 
 (defn revoke
   "Revoke all existing placements and advance the Component epoch.
@@ -88,13 +117,18 @@
   (when-not (identifier? component-cid)
     (reject :invalid-component "Component CID must be a bounded identifier"
             {:component-cid component-cid}))
-  (let [epoch (inc (get-in state [:epochs component-cid] 0))
+  (let [prev (long (or (get-in state [:epochs component-cid]) 0))
+        epoch #?(:clj (long (o 'revoke-epoch [prev]))
+                 :cljs (inc prev))
+        seq' #?(:clj (long (o 'next-sequence [(long (:sequence state))]))
+                :cljs (inc (:sequence state)))
         state' (-> state
                    (assoc-in [:epochs component-cid] epoch)
                    (update :placements dissoc component-cid)
-                   (update :sequence inc))]
-    [state' (event state' :revoked component-cid epoch nil)]))
-
+                   (assoc :sequence seq'))]
+    [state' (event state' #?(:clj (keyword (o 'event-kind ["revoke"]))
+                             :cljs :revoked)
+                   component-cid epoch nil)]))
 (defn transition
   "Apply one exact authority command to immutable STATE."
   [state command]
