@@ -21,7 +21,8 @@
        "watch-start-line deploy-observed-empty-line deploy-observed-placed-line "
        "missing-pinned-binaries-line1 missing-pinned-binaries-line2 "
        "nodes-header status-header status-down-suffix "
-       "spaces pad-right field-10 field-16 field-8 field-9 field-12 field-6 "
+       "spaces pad-right pad-to field-10 field-16 field-8 field-9 field-12 field-6 "
+       "nodes-row status-down-row status-row "
        "command-help reconcile-title reconcile-col-header "
        "cid-display action-detail nat-len field-i64-7 "
        "reconcile-app-row reconcile-app-line reach-line drift-line"))
@@ -161,37 +162,46 @@
 
 
 (deftest nodes-status-headers-and-pad
-  (let [padn (fn [s w] (max 0 (- w (count s))))
-        name "asher"
-        actual (compile-string-cases
+  (let [actual (compile-string-cases
                 {"nh" "(nodes-header)"
                  "sh" "(status-header)"
                  "sd" "(status-down-suffix)"
                  "sp3" "(spaces 3)"
                  "sp0" "(spaces 0)"
                  "pr" (str "(pad-right " (kotoba-literal "asher") " 5)")
+                 "pt" (str "(pad-to " (kotoba-literal "asher") " 10)")
                  "f10" (str "(field-10 " (kotoba-literal "NODE") " 6)")
-                 "sdr" (str "(string-concat (pad-right " (kotoba-literal name) " "
-                            (padn name 10) ") (string-concat "
-                            (kotoba-literal " ") " (status-down-suffix)))")
-                 ;; nodes-row: build stepwise with separate pad fragments joined in host
-                 "n0" (str "(pad-right " (kotoba-literal "asher") " " (padn "asher" 10) ")")
-                 "n1" (str "(pad-right " (kotoba-literal "100.1.2.3") " " (padn "100.1.2.3" 16) ")")
-                 "n2" (str "(pad-right " (kotoba-literal "yes") " " (padn "yes" 8) ")")
-                 "n3" (str "(pad-right " (kotoba-literal "ok") " " (padn "ok" 9) ")")})]
+                 "sdr" (str "(status-down-row " (kotoba-literal "asher") ")")
+                 "nr" (str "(nodes-row " (kotoba-literal "asher") " "
+                           (kotoba-literal "100.1.2.3") " 1 1 "
+                           (kotoba-literal "up/running") ")")
+                 "nrq" (str "(nodes-row " (kotoba-literal "x") " "
+                            (kotoba-literal "?") " 0 0 "
+                            (kotoba-literal "off") ")")
+                 "sr" (str "(status-row " (kotoba-literal "asher") " 1 "
+                           (kotoba-literal "ready") " "
+                           (kotoba-literal "3") " 8077)")
+                 "srn" (str "(status-row " (kotoba-literal "asher") " 0 "
+                            (kotoba-literal "?") " "
+                            (kotoba-literal "-") " 0)")})]
     (is (= (report/nodes-header) (get actual "nh")))
     (is (= (report/status-header) (get actual "sh")))
     (is (= "down    " (get actual "sd")))
     (is (= "   " (get actual "sp3")))
     (is (= "" (get actual "sp0")))
     (is (= "asher     " (get actual "pr")))
+    (is (= "asher     " (get actual "pt")))
     (is (= "NODE      " (get actual "f10")))
     (is (= (report/status-down-row {:name "asher"}) (get actual "sdr")))
-    (let [row (str (get actual "n0") " " (get actual "n1") " "
-                   (get actual "n2") " " (get actual "n3") " " "up/running")]
-      (is (= (report/nodes-row {:name "asher" :ip "100.1.2.3" :online? true} true "up/running")
-             row)))))
-
+    (is (= (report/nodes-row {:name "asher" :ip "100.1.2.3" :online? true} true "up/running")
+           (get actual "nr")))
+    (is (= (report/nodes-row {:name "x" :ip nil :online? false} false "off")
+           (get actual "nrq")))
+    (is (= (report/status-row {:name "asher"}
+                              {:subsystems {:wasm_executor "ready"}} 3 8077)
+           (get actual "sr")))
+    (is (= (report/status-row {:name "asher"} nil 0 0)
+           (get actual "srn")))))
 (deftest command-help-and-reconcile-pure
   (let [padn (fn [s w] (max 0 (- w (count s))))
         help (compile-string-cases {"h" "(command-help)"})
