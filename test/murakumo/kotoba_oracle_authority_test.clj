@@ -29,6 +29,8 @@
             [murakumo.fleet.inventory :as finv]
             [murakumo.identity :as id]
             [murakumo.infer.credits :as credits]
+            [murakumo.infer.join :as join]
+            [murakumo.infer.gc :as gc]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -800,3 +802,54 @@
         shipped (edn/read-string
                  (slurp (io/resource "murakumo/oracle/infer_credits_core.kir.edn")))]
     (is (= live shipped) "infer_credits_core KIR drift — run oracle-gen")))
+
+(deftest product-shell-join-uses-oracle-results
+  (testing "tier max-resident from oracle"
+    (is (= 2147483648 (get-in join/tiers [:browser :max-resident-bytes])))
+    (is (= 4294967296 (get-in join/tiers [:wasm :max-resident-bytes])))
+    (is (= 13958643712 (get-in join/tiers [:native :max-resident-bytes]))))
+  (testing "can? + needs-relay?"
+    (is (true? (join/can? {:tier :browser} :media-postproc)))
+    (is (false? (join/can? {:tier :browser} :host-large-model)))
+    (is (true? (join/needs-relay? {:tier :browser})))
+    (is (true? (join/needs-relay? {:tier :native})))
+    (is (false? (join/needs-relay? {:tier :native :inbound-reachable? true}))))
+  (testing "enrollment clamp + eligible"
+    (let [e (join/enrollment {:name "t" :did "did:x" :tier :browser :mem-bytes (* 8 1024 1024 1024)})]
+      (is (= :browser (:node/tier e)))
+      (is (= 2147483648 (get-in e [:node/caps :max-resident-bytes])))
+      (is (true? (join/eligible-for-work? e {:work-kind :media-postproc :resident-bytes 1000})))
+      (is (false? (join/eligible-for-work? e {:work-kind :host-large-model :resident-bytes 1000}))))))
+
+(deftest product-shell-gc-uses-oracle-results
+  (testing "defaults"
+    (is (= 1073741824 gc/GiB))
+    (is (= (* 20 gc/GiB) (:target-free-bytes gc/default-policy)))
+    (is (= 7 (:comfy-keep-days gc/default-policy)))
+    (is (= 2 (:hf-keep gc/default-policy))))
+  (testing "plan pure math via oracle"
+    (let [entries [{:path "/a" :class :rpc-cache :bytes (* 25 gc/GiB) :atime-days 30}
+                   {:path "/b" :class :protected :bytes 100 :atime-days 1}
+                   {:path "/c" :class :comfy-temp :bytes 1000 :atime-days 10}]
+          p (gc/plan entries (* 1 gc/GiB) {})]
+      (is (pos? (:reclaim-bytes p)))
+      (is (true? (:target-met? p)))
+      (is (= 1 (:kept-protected p)))
+      (is (some #(= "/a" (:path %)) (:evict p))))))
+(deftest join-gc-oracle-call-matches-live
+  (let [j (:kir (compiler/compile-source (slurp "kotoba/infer_join_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))
+        g (:kir (compiler/compile-source (slurp "kotoba/infer_gc_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute j 'max-resident-bytes [0])
+           (oracle/call :infer-join 'max-resident-bytes [0])))
+    (is (= (ir/execute j 'can? [0 "media-postproc"])
+           (oracle/call :infer-join 'can? [0 "media-postproc"])))
+    (is (= (ir/execute j 'needs-relay? [2 1])
+           (oracle/call :infer-join 'needs-relay? [2 1])))
+    (is (= (ir/execute g 'gib [])
+           (oracle/call :infer-gc 'gib [])))
+    (is (= (ir/execute g 'need-bytes [100 40])
+           (oracle/call :infer-gc 'need-bytes [100 40])))
+    (is (= (ir/execute g 'comfy-evictable? [10 7])
+           (oracle/call :infer-gc 'comfy-evictable? [10 7])))))
