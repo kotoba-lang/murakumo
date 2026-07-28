@@ -1,44 +1,30 @@
 ;; murakumo.infer.moe — mlx-moe single-node MoE serving (pure cljc).
 ;;
-;; murakumo.infer.plan cuts a memory-weighted CONTIGUOUS layer partition across
-;; many nodes — the only scheme the fleet's 1 GbE interconnect can pay for
-;; (ADR-2605300000), and the right one for a DENSE (or modestly-MoE) checkpoint
-;; bigger than any single node's RAM.
-;;
-;; mu-hashmi/mlx-moe (https://github.com/mu-hashmi/mlx-moe) answers a different
-;; question for MoE checkpoints specifically: a router only ever activates a
-;; handful of experts per token, so a node can load the model WITHOUT its
-;; expert weights (~GBs instead of tens of GBs), discover which experts a
-;; prompt actually routes to, and page only THOSE in from SSD. The result: one
-;; Mac with modest RAM serves a MoE checkpoint whose full weights exceed it —
-;; no ring, no fleet, no cross-node activation hop at all. That makes it the
-;; cheap path for MoE models the fleet doesn't need (or, on GbE, can't afford —
-;; plan/choose-strategy's :expert branch) to shard cross-node.
-;;
-;; This namespace deliberately shapes its plan output like murakumo.infer.plan
-;; ({:model :assignments :total-usable-bytes :fits?}, one :head? true
-;; assignment spanning ALL layers) so murakumo.infer.engine/commands,
-;; murakumo.infer.credits/settle, and plan/report all work UNMODIFIED — an
-;; mlx-moe run is just a one-assignment, one-rank "ring".
-;;
-;; W6 product-shell authority: capacity-default / expert-ratio / verdict-name /
-;; resident-est DELEGATE to precompiled kotoba/infer_moe_core.kotoba on JVM.
-;; Custom capacity tiers and plan ranking stay host.
+;; W6 product-shell: capacity-default / expert-ratio / verdict-name /
+;; resident-est DELEGATE to precompiled kotoba/infer_moe_core.kotoba when
+;; oracle loadable (JVM or cljs/nbb). Custom capacity tiers and plan ranking stay host.
 
 (ns murakumo.infer.moe
   (:require [murakumo.infer.plan :as plan]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :infer-moe)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
 
-;; mu-hashmi/mlx-moe README hardware table: usable RAM (GiB, binary) → experts
-;; cached resident per MoE layer ("capacity"), the auto-selected setting the
-;; measured tok/s and memory numbers in the README are for. Descending so the
-;; first tier the node clears wins.
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
 (def ^:private capacity-tiers
   [[128 512] [64 432] [48 320] [32 208]])
 
@@ -48,101 +34,87 @@
         (sort-by (comp - first) tiers)))
 
 (defn capacity-for-usable
-  "Usable bytes → mlx-moe capacity (experts cached resident per MoE layer), or
-   nil below the smallest measured tier (32 GiB usable) — honestly: below that
-   floor mlx-moe hasn't been shown to hold quality, so this planner declines to
-   guess rather than extrapolate past the README's own table. A model registry
-   entry can provide :model/mlx-moe-capacity-tiers for measured profile-cache
-   tiers (for example GLM-5.2 mxfp4 capacity=4/8); those still gate on one
-   node's usable memory, never fleet-wide memory.
-
-   JVM default table: kotoba `capacity-default` (0 ⇒ nil)."
+  "Usable bytes → mlx-moe capacity, or nil below the smallest measured tier."
   ([usable-bytes]
-   #?(:clj (let [c (long (o 'capacity-default [(long usable-bytes)]))]
-             (when (pos? c) c))
-      :cljs (capacity-from-tiers capacity-tiers usable-bytes)))
+   (try-oracle
+    (fn []
+      (let [c (oracle/i64->host (o 'capacity-default [(oracle/as-i64 usable-bytes)]))]
+        (when (pos? c) c)))
+    #(capacity-from-tiers capacity-tiers usable-bytes)))
   ([model usable-bytes]
    (if-let [custom (:model/mlx-moe-capacity-tiers model)]
      (capacity-from-tiers custom usable-bytes)
      (capacity-for-usable usable-bytes))))
 
 (defn expert-ratio
-  "experts / active-experts (top-k) — the mlx-moe README's first predictor of
-   whether reduced-coverage serving holds output quality. nil when the
-   registry entry doesn't carry both fields.
-   JVM: kotoba `expert-ratio-milli` / 1000.0."
+  "experts / active-experts (top-k)."
   [{:model/keys [experts active-experts]}]
   (when (and experts active-experts (pos? active-experts))
-    #?(:clj (let [milli (long (o 'expert-ratio-milli
-                                 [(long experts) (long active-experts)]))]
-              (when (pos? milli) (/ (double milli) 1000.0)))
-       :cljs (/ (double experts) active-experts))))
+    (try-oracle
+     (fn []
+       (let [milli (oracle/i64->host
+                    (o 'expert-ratio-milli
+                       [(oracle/as-i64 experts) (oracle/as-i64 active-experts)]))]
+         (when (pos? milli) (/ (double milli) 1000.0))))
+     #(/ (double experts) active-experts))))
+
+(defn- mirror-verdict [model ratio shared?]
+  (cond
+    (nil? ratio)
+    {:verdict :unknown :ratio nil
+     :why "registry entry has no :model/experts / :model/active-experts"}
+    (and (>= ratio 10) shared?)
+    {:verdict :recommended :ratio ratio
+     :why "expert ratio >=10x + shared expert — quality holds at reduced coverage"}
+    shared?
+    {:verdict :workable :ratio ratio
+     :why "shared expert but ratio <10x — needs high coverage, verify output quality"}
+    :else
+    {:verdict :not-recommended :ratio ratio
+     :why "no shared expert — quality likely degrades below ~75% coverage (README)"}))
 
 (defn verdict
-  "mu-hashmi/mlx-moe's 'which models benefit' heuristic (README), as data —
-   honest guidance, not a hard gate the way :fits? is.
-   JVM: verdict keyword via kotoba `verdict-name`; why strings stay host."
+  "mu-hashmi/mlx-moe 'which models benefit' heuristic as data."
   [model]
   (let [ratio (expert-ratio model)
-        shared? (boolean (:model/moe-shared-expert? model))
-        name #?(:clj (o 'verdict-name
-                        [(long (or (:model/experts model) 0))
-                         (long (or (:model/active-experts model) 0))
-                         (if shared? 1 0)])
-                :cljs nil)
-        v #?(:clj (keyword name)
-             :cljs nil)]
-    #?(:clj
-       (case v
-         :unknown
-         {:verdict :unknown :ratio nil
-          :why "registry entry has no :model/experts / :model/active-experts"}
-         :recommended
-         {:verdict :recommended :ratio ratio
-          :why "expert ratio >=10x + shared expert — quality holds at reduced coverage"}
-         :workable
-         {:verdict :workable :ratio ratio
-          :why "shared expert but ratio <10x — needs high coverage, verify output quality"}
-         {:verdict :not-recommended :ratio ratio
-          :why "no shared expert — quality likely degrades below ~75% coverage (README)"})
-       :cljs
-       (cond
-         (nil? ratio)
-         {:verdict :unknown :ratio nil
-          :why "registry entry has no :model/experts / :model/active-experts"}
-         (and (>= ratio 10) shared?)
-         {:verdict :recommended :ratio ratio
-          :why "expert ratio >=10x + shared expert — quality holds at reduced coverage"}
-         shared?
-         {:verdict :workable :ratio ratio
-          :why "shared expert but ratio <10x — needs high coverage, verify output quality"}
-         :else
-         {:verdict :not-recommended :ratio ratio
-          :why "no shared expert — quality likely degrades below ~75% coverage (README)"}))))
+        shared? (boolean (:model/moe-shared-expert? model))]
+    (try-oracle
+     (fn []
+       (let [name (o 'verdict-name
+                     [(oracle/as-i64 (or (:model/experts model) 0))
+                      (oracle/as-i64 (or (:model/active-experts model) 0))
+                      (oracle/as-i64 (if shared? 1 0))])
+             v (keyword name)]
+         (case v
+           :unknown
+           {:verdict :unknown :ratio nil
+            :why "registry entry has no :model/experts / :model/active-experts"}
+           :recommended
+           {:verdict :recommended :ratio ratio
+            :why "expert ratio >=10x + shared expert — quality holds at reduced coverage"}
+           :workable
+           {:verdict :workable :ratio ratio
+            :why "shared expert but ratio <10x — needs high coverage, verify output quality"}
+           {:verdict :not-recommended :ratio ratio
+            :why "no shared expert — quality likely degrades below ~75% coverage (README)"})))
+     #(mirror-verdict model ratio shared?))))
 
 (defn resident-bytes-estimate
-  "Approximate RAM mlx-moe holds resident at `capacity` experts/layer cached.
-   JVM: kotoba `resident-est`."
+  "Approximate RAM mlx-moe holds resident at `capacity` experts/layer cached."
   [{:model/keys [weight-bytes experts]} capacity]
-  #?(:clj
-     (long (o 'resident-est
-              [(long (or weight-bytes 0))
-               (long (or experts 0))
-               (long (or capacity 0))]))
-     :cljs
+  (try-oracle
+   #(oracle/i64->host
+     (o 'resident-est
+        [(oracle/as-i64 (or weight-bytes 0))
+         (oracle/as-i64 (or experts 0))
+         (oracle/as-i64 (or capacity 0))]))
+   (fn []
      (if (and weight-bytes experts (pos? experts) capacity)
        (long (* weight-bytes (/ (double capacity) experts)))
-       weight-bytes)))
+       weight-bytes))))
 
 (defn plan
-  "Single-node mlx-moe plan for `model` over `nodes` — NOT a fleet-wide
-   partition (plan/plan partitions LAYERS across many ranks): picks the ONE
-   node with the most usable memory, marks it :head? (it alone drives + serves
-   the OpenAI-compatible /v1 API — there is no ring to conduct), and gives it
-   the full layer span. :fits? gates on that node clearing either mlx-moe's
-   default measured hardware tier or the model's measured profile tier;
-   `nodes` empty or all sub-floor yields a plan with :fits? false, not a crash
-   (same honesty as plan/plan's zero-memory-fleet case)."
+  "Single-node mlx-moe plan for `model` over `nodes`."
   [{:model/keys [layers] :as model} nodes]
   (let [ranked (->> nodes
                     (map (fn [n] {:node (assoc n :head? true) :usable (plan/usable-bytes n)}))
