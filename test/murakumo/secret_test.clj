@@ -22,10 +22,14 @@
 (deftest resolve-known-secrets-via-inject
   (let [fetch (secret/map-fetch {"murakumo-token" "hmac"
                                  "murakumo-service-token" "svc"
-                                 "murakumo-metrics-token" "met"})]
+                                 "murakumo-metrics-token" "met"
+                                 "murakumo-quic-cert-path" "/tmp/c.pem"
+                                 "murakumo-quic-key-path" "/tmp/k.pem"})]
     (is (= "hmac" (secret/resolve-token-secret {:fetch fetch})))
     (is (= "svc" (secret/resolve-service-token {:fetch fetch})))
     (is (= "met" (secret/resolve-metrics-token {:fetch fetch})))
+    (is (= "/tmp/c.pem" (secret/resolve-quic-cert-path {:fetch fetch})))
+    (is (= "/tmp/k.pem" (secret/resolve-quic-key-path {:fetch fetch})))
     (is (nil? (secret/resolve-service-token {:fetch (secret/map-fetch {})}))))
   (testing "default name identity"
     (is (= "murakumo-token" secret/token-secret-name))
@@ -34,10 +38,28 @@
     (is (= "MURAKUMO_SERVICE_TOKEN" secret/service-token-env))
     (is (= "murakumo-metrics-token" secret/metrics-token-name))
     (is (= "MURAKUMO_METRICS_TOKEN" secret/metrics-token-env))
+    (is (= "murakumo-quic-cert-path" secret/quic-cert-path-name))
+    (is (= "MURAKUMO_QUIC_CERT" secret/quic-cert-path-env))
     (is (= secret/known-env-secrets
            {secret/token-secret-name secret/token-secret-env
             secret/service-token-name secret/service-token-env
-            secret/metrics-token-name secret/metrics-token-env}))))
+            secret/metrics-token-name secret/metrics-token-env
+            secret/quic-cert-path-name secret/quic-cert-path-env
+            secret/quic-key-path-name secret/quic-key-path-env}))))
+
+(deftest path-ref-rejects-pem-body-and-relative
+  (is (true? (secret/valid-path-ref? "/var/murakumo/quic/node.cert.pem")))
+  (is (false? (secret/valid-path-ref? "relative/cert.pem")))
+  (is (false? (secret/valid-path-ref? "-----BEGIN CERTIFICATE-----\nabc")))
+  (is (false? (secret/valid-path-ref? "")))
+  (is (nil? (secret/resolve-path-ref
+             "murakumo-quic-cert-path"
+             {:fetch (secret/map-fetch
+                      {"murakumo-quic-cert-path" "-----BEGIN PRIVATE KEY-----"})})))
+  (is (nil? (secret/resolve-path-ref
+             "murakumo-quic-cert-path"
+             {:fetch (secret/map-fetch
+                      {"murakumo-quic-cert-path" "not/absolute.pem"})}))))
 
 (deftest resolve-exact-env-for-overlay-auth-key
   (testing "config-declared env var name, exact read only"

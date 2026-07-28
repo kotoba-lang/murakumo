@@ -3,7 +3,8 @@
 (ns murakumo.overlay.quic-driver
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [murakumo.overlay.cert :as cert])
+            [murakumo.overlay.cert :as cert]
+            [murakumo.secret :as secret])
   (:import [java.io BufferedReader InputStreamReader OutputStreamWriter]
            [java.time Duration]
            [java.util.concurrent CountDownLatch TimeUnit]
@@ -133,11 +134,20 @@
       (result request :dial :stream-failed false
               {:reason :stream-error :message (.getMessage e)}))))
 
-(defn cert-files [request]
-  (let [cert (System/getenv "MURAKUMO_QUIC_CERT")
-        key (System/getenv "MURAKUMO_QUIC_KEY")]
-    (if (and (seq cert) (seq key))
-      [(io/file cert) (io/file key)]
+(defn cert-files
+  "Resolve QUIC TLS material as **path refs** (absolute files), never PEM
+  bodies from the environment.
+
+  Prefer named path refs `murakumo-quic-cert-path` / `murakumo-quic-key-path`
+  (exact env MURAKUMO_QUIC_CERT / MURAKUMO_QUIC_KEY). Fall back to the
+  kagi-compatible local cert store (`cert/ensure-quic-material!`)."
+  [request]
+  (let [cert (secret/resolve-quic-cert-path)
+        key (secret/resolve-quic-key-path)
+        cert-f (when cert (io/file cert))
+        key-f (when key (io/file key))]
+    (if (and cert-f key-f (.isFile cert-f) (.isFile key-f))
+      [cert-f key-f]
       (let [material (cert/ensure-quic-material! request)]
         [(:cert material) (:key material)]))))
 
