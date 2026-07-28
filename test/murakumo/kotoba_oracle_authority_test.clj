@@ -17,6 +17,7 @@
             [murakumo.report :as report]
             [murakumo.infer.plan :as plan]
             [murakumo.dash.state :as dash]
+            [murakumo.infer.schedule :as sched]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -35,11 +36,13 @@
   (is (oracle/ready? :report-core))
   (is (oracle/ready? :infer-plan))
   (is (oracle/ready? :dash-state))
+  (is (oracle/ready? :infer-schedule))
   (is (some #{:kekkai-gate} (oracle/catalog-ids)))
   (is (some #{:token} (oracle/catalog-ids)))
   (is (some #{:report-core} (oracle/catalog-ids)))
   (is (some #{:infer-plan} (oracle/catalog-ids)))
-  (is (some #{:dash-state} (oracle/catalog-ids))))
+  (is (some #{:dash-state} (oracle/catalog-ids)))
+  (is (some #{:infer-schedule} (oracle/catalog-ids))))
 
 (deftest product-shell-gate-uses-oracle-results
   (testing "parse-status delegates to kotoba parse-status-out"
@@ -295,3 +298,44 @@
 (deftest dash-precompiled-kir-does-not-drift
   (is (= (dash-live-kir) (dash-resource-kir))
       "dash_state KIR drift — run oracle-gen"))
+
+(def ^:private sched-source "kotoba/infer_schedule_core.kotoba")
+(def ^:private sched-resource "murakumo/oracle/infer_schedule_core.kir.edn")
+
+(defn- sched-live-kir []
+  (:kir (compiler/compile-source (slurp sched-source) :wasm32-kotoba-v1 {})))
+
+(defn- sched-resource-kir []
+  (edn/read-string (slurp (io/resource sched-resource))))
+
+(deftest product-shell-infer-schedule-uses-oracle-results
+  (let [model {:model/engine :comfyui
+               :model/checkpoint "c.safetensors"
+               :model/min-free-bytes (* 8 1024 1024 1024)}
+        warm {:name "a" :engines #{:comfyui} :checkpoints #{"c.safetensors"}
+              :free-bytes (* 16 1024 1024 1024) :queue 0}
+        cold {:name "b" :engines #{:comfyui} :checkpoints #{}
+              :free-bytes (* 16 1024 1024 1024) :queue 0}]
+    (testing "eligible? + score via oracle"
+      (is (true? (sched/eligible? warm model)))
+      (is (true? (sched/eligible? cold model)))
+      (is (= [0 (- (* 16 1024 1024 1024))] (sched/score warm))))
+    (testing "pick prefers warm"
+      (is (= "a" (:name (sched/pick [cold warm] model)))))
+    (testing "assign updates queue via queue-inc-if"
+      (let [asg (sched/assign [warm cold] [{:model model} {:model model}])]
+        (is (= "a" (:node (asg 0))))
+        (is (= "a" (:node (asg 1))))))))
+
+(deftest schedule-oracle-call-matches-live-compile
+  (let [live (sched-live-kir)]
+    (is (= (ir/execute live 'eligible? [15 (* 16 1024 1024 1024) 0])
+           (oracle/call :infer-schedule 'eligible? [15 (* 16 1024 1024 1024) 0])))
+    (is (= (ir/execute live 'score-queue [3])
+           (oracle/call :infer-schedule 'score-queue [3])))
+    (is (= (ir/execute live 'queue-inc-if [2 1])
+           (oracle/call :infer-schedule 'queue-inc-if [2 1])))))
+
+(deftest schedule-precompiled-kir-does-not-drift
+  (is (= (sched-live-kir) (sched-resource-kir))
+      "infer_schedule KIR drift — run oracle-gen"))

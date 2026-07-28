@@ -23,7 +23,9 @@
    {"source" "kotoba/infer_plan_core.kotoba"
     "out" "resources/murakumo/oracle/infer_plan_core.kir.edn"}
    {"source" "kotoba/dash_state_core.kotoba"
-    "out" "resources/murakumo/oracle/dash_state_core.kir.edn"}])
+    "out" "resources/murakumo/oracle/dash_state_core.kir.edn"}
+   {"source" "kotoba/infer_schedule_core.kotoba"
+    "out" "resources/murakumo/oracle/infer_schedule_core.kir.edn"}])
 
 (defn compile-kir
   "Compile one .kotoba file to a KIR map (same path as parity tests)."

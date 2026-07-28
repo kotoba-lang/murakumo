@@ -1,0 +1,318 @@
+{:format :kotoba.kir/v3,
+ :signature nil,
+ :functions
+ [{:name rem64,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (- a (* (quot a b) b))}
+  {:name bit?,
+   :params [flags mask],
+   :result :i64,
+   :effects #{},
+   :body (if (= 0 (rem64 (quot flags mask) 2)) 0 1)}
+  {:name eligible?,
+   :params [flags free-bytes min-free],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [has-engine
+     (bit? flags 1)
+     has-ckpt
+     (bit? flags 2)
+     holds
+     (bit? flags 4)
+     can-fetch
+     (bit? flags 8)
+     ckpt-ok
+     (if (= has-ckpt 0) 1 (if (= holds 1) 1 (if (= can-fetch 1) 1 0)))
+     mem-ok
+     (if (< free-bytes min-free) 0 1)]
+    (if (= has-engine 0) 0 (if (= ckpt-ok 0) 0 mem-ok)))}
+  {:name score-queue,
+   :params [queue],
+   :result :i64,
+   :effects #{},
+   :body (if (< queue 0) 0 queue)}
+  {:name score-free,
+   :params [free-bytes],
+   :result :i64,
+   :effects #{},
+   :body (if (< free-bytes 0) 0 (- 0 free-bytes))}
+  {:name better-score?,
+   :params [q1 f1 q2 f2],
+   :result :i64,
+   :effects #{},
+   :body (if (< q1 q2) 1 (if (< q2 q1) 0 (if (< f1 f2) 1 0)))}
+  {:name holds-warm?,
+   :params [flags],
+   :result :i64,
+   :effects #{},
+   :body (bit? flags 4)}
+  {:name prefer-warm-then-score,
+   :params [warm0 warm1 better01],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (if (= warm0 1) (if (= warm1 0) 1 0) 0)
+    0
+    (if
+     (if (= warm1 1) (if (= warm0 0) 1 0) 0)
+     1
+     (if (= better01 1) 0 1)))}
+  {:name pick-idx-2-full,
+   :params [ok0 ok1 warm0 warm1 better01],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= ok0 0)
+    (if (= ok1 0) -1 1)
+    (if (= ok1 0) 0 (prefer-warm-then-score warm0 warm1 better01)))}
+  {:name pick-idx-3-tournament,
+   :params [champ01 ok2 warm-champ warm2 better-champ-2],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< champ01 0)
+    (if (= ok2 0) -1 2)
+    (if
+     (= ok2 0)
+     champ01
+     (if
+      (= (prefer-warm-then-score warm-champ warm2 better-champ-2) 0)
+      champ01
+      2)))}
+  {:name queue-after-assign,
+   :params [queue picked],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= picked 0)
+    (if (< queue 0) 0 queue)
+    (if (< queue 0) 1 (+ queue 1)))}
+  {:name lane-base,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 65536}
+  {:name pack3,
+   :params [a b c],
+   :result :i64,
+   :effects #{},
+   :body (let [B (lane-base)] (+ a (+ (* b B) (* c (* B B)))))}
+  {:name pack-get,
+   :params [packed idx],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [B (lane-base)]
+    (if
+     (= idx 0)
+     (rem64 packed B)
+     (if (= idx 1) (rem64 (quot packed B) B) (quot packed (* B B)))))}
+  {:name queues-pack-2,
+   :params [q0 q1],
+   :result :i64,
+   :effects #{},
+   :body (pack3 q0 q1 0)}
+  {:name pick-code,
+   :params [pick-idx],
+   :result :i64,
+   :effects #{},
+   :body (if (< pick-idx 0) 0 (+ pick-idx 1))}
+  {:name assign-step-2,
+   :params [q0 q1 ok0 ok1 better-pack],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [warm0
+     (pack-get better-pack 0)
+     warm1
+     (pack-get better-pack 1)
+     better01
+     (pack-get better-pack 2)
+     p
+     (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
+     code
+     (pick-code p)
+     nq0
+     (queue-after-assign q0 (if (= p 0) 1 0))
+     nq1
+     (queue-after-assign q1 (if (= p 1) 1 0))]
+    (pack3 code nq0 nq1))}
+  {:name assign-result-pick,
+   :params [result-pack],
+   :result :i64,
+   :effects #{},
+   :body (pack-get result-pack 0)}
+  {:name assign-result-q0,
+   :params [result-pack],
+   :result :i64,
+   :effects #{},
+   :body (pack-get result-pack 1)}
+  {:name assign-result-q1,
+   :params [result-pack],
+   :result :i64,
+   :effects #{},
+   :body (pack-get result-pack 2)}
+  {:name better-from-queues,
+   :params [q0 f0 q1 f1],
+   :result :i64,
+   :effects #{},
+   :body
+   (better-score?
+    (score-queue q0)
+    (score-free f0)
+    (score-queue q1)
+    (score-free f1))}
+  {:name queues-pack-3,
+   :params [q0 q1 q2],
+   :result :i64,
+   :effects #{},
+   :body (pack3 q0 q1 q2)}
+  {:name pick-code-3,
+   :params [pick-idx],
+   :result :i64,
+   :effects #{},
+   :body (if (< pick-idx 0) 0 (+ pick-idx 1))}
+  {:name better-pair,
+   :params [q-a f-a q-b f-b],
+   :result :i64,
+   :effects #{},
+   :body (better-from-queues q-a f-a q-b f-b)}
+  {:name assign-pick-3,
+   :params [ok-pack warm-pack better-pack],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [ok0
+     (pack-get ok-pack 0)
+     ok1
+     (pack-get ok-pack 1)
+     ok2
+     (pack-get ok-pack 2)
+     warm0
+     (pack-get warm-pack 0)
+     warm1
+     (pack-get warm-pack 1)
+     warm2
+     (pack-get warm-pack 2)
+     better01
+     (pack-get better-pack 0)
+     better02
+     (pack-get better-pack 1)
+     better12
+     (pack-get better-pack 2)
+     champ
+     (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
+     warm-champ
+     (if (= champ 0) warm0 (if (= champ 1) warm1 0))
+     better-c2
+     (if (= champ 0) better02 better12)]
+    (pick-idx-3-tournament champ ok2 warm-champ warm2 better-c2))}
+  {:name apply-pick-3,
+   :params [q-pack pick],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [q0
+     (pack-get q-pack 0)
+     q1
+     (pack-get q-pack 1)
+     q2
+     (pack-get q-pack 2)
+     nq0
+     (queue-after-assign q0 (if (= pick 0) 1 0))
+     nq1
+     (queue-after-assign q1 (if (= pick 1) 1 0))
+     nq2
+     (queue-after-assign q2 (if (= pick 2) 1 0))]
+    (pack3 nq0 nq1 nq2))}
+  {:name assign-step-3,
+   :params [q-pack ok-pack warm-pack better-pack],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [p
+     (assign-pick-3 ok-pack warm-pack better-pack)
+     code
+     (pick-code-3 p)
+     nq
+     (apply-pick-3 q-pack p)]
+    (+ code (* 4 nq)))}
+  {:name assign-step-3-code,
+   :params [result],
+   :result :i64,
+   :effects #{},
+   :body (rem64 result 4)}
+  {:name assign-step-3-queues,
+   :params [result],
+   :result :i64,
+   :effects #{},
+   :body (quot result 4)}
+  {:name pick-fold-step,
+   :params [has-champ ok-i warm-champ warm-i better-c-i],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= has-champ 0)
+    (if (= ok-i 0) 0 1)
+    (if
+     (= ok-i 0)
+     2
+     (if
+      (= (prefer-warm-then-score warm-champ warm-i better-c-i) 0)
+      2
+      1)))}
+  {:name queue-inc-if,
+   :params [queue picked],
+   :result :i64,
+   :effects #{},
+   :body (queue-after-assign queue picked)}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [eligible?
+  score-queue
+  score-free
+  better-score?
+  holds-warm?
+  prefer-warm-then-score
+  pick-idx-2-full
+  pick-idx-3-tournament
+  queue-after-assign
+  lane-base
+  pack3
+  pack-get
+  queues-pack-2
+  pick-code
+  assign-step-2
+  assign-result-pick
+  assign-result-q0
+  assign-result-q1
+  better-from-queues
+  queues-pack-3
+  pick-code-3
+  assign-pick-3
+  apply-pick-3
+  assign-step-3
+  assign-step-3-code
+  assign-step-3-queues
+  better-pair
+  pick-fold-step
+  queue-inc-if],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}
