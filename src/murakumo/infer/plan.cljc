@@ -11,34 +11,57 @@
 ;; adapters (murakumo.infer.engine) turn a plan into concrete process commands
 ;; (llama.cpp --rpc/--tensor-split, mlx.launch ring, …).
 ;;
-;; W6 product-shell authority: on JVM, GiB/defaults/usable-bytes/choose-strategy
-;; name DELEGATE to precompiled kotoba/infer_plan_core.kotoba KIR. Partition walk
-;; and plan map assembly stay cljc (float/vector host path).
+;; W6 product-shell authority:
+;; GiB/defaults/usable-bytes/choose-strategy name DELEGATE to precompiled
+;; kotoba/infer_plan_core.kotoba when oracle loadable (JVM or cljs/nbb).
+;; Partition walk and plan map assembly stay cljc (float/vector host path).
 
 (ns murakumo.infer.plan
-  "Shard planning. Pure helpers use kotoba/infer_plan_core.kotoba authority on JVM."
-  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
+  "Shard planning. Pure helpers use kotoba/infer_plan_core when oracle ready."
+  (:require [murakumo.kotoba.oracle :as oracle]))
 
-;; ── constants + usable-bytes: kotoba infer_plan_core SSoT on JVM ─────
+(def ^:private oid :infer-plan)
+
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+(defn- oracle-i64-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid export []))
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+;; ── host-mirror constants + pure helpers ─────────────────────────────
 
 (def ^:private mirror-GiB (* 1024 1024 1024))
 (def ^:private mirror-os-reserve (long (* 7/2 mirror-GiB)))
 (def ^:private mirror-headroom (long (* 5/4 mirror-GiB)))
 
 (def GiB
-  "Binary GiB in bytes (oracle `gib` on JVM)."
-  #?(:clj (long (oracle/call :infer-plan 'gib []))
-     :cljs mirror-GiB))
+  "Binary GiB in bytes. Kotoba `gib` when oracle ready."
+  (oracle-i64-const 'gib mirror-GiB))
 
 (def default-os-reserve
-  "Default OS reserve bytes (oracle `default-os-reserve` on JVM)."
-  #?(:clj (long (oracle/call :infer-plan 'default-os-reserve []))
-     :cljs mirror-os-reserve))
+  "Default OS reserve bytes. Kotoba `default-os-reserve` when ready."
+  (oracle-i64-const 'default-os-reserve mirror-os-reserve))
 
 (def default-headroom
-  "Default per-node headroom bytes (oracle `default-headroom` on JVM)."
-  #?(:clj (long (oracle/call :infer-plan 'default-headroom []))
-     :cljs mirror-headroom))
+  "Default per-node headroom bytes. Kotoba `default-headroom` when ready."
+  (oracle-i64-const 'default-headroom mirror-headroom))
 
 (defn- mirror-usable-bytes
   [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes]}]
@@ -50,15 +73,20 @@
 
 (defn usable-bytes
   "Bytes of weights a node can realistically hold resident.
-   JVM: kotoba `usable-bytes` (wired -1 = absent)."
+   Kotoba `usable-bytes` when ready (wired -1 = absent)."
   [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes] :as node}]
-  #?(:clj
-     (let [os (long (or os-reserve-bytes default-os-reserve))
-           head (long (or headroom-bytes default-headroom))
-           wired (if (some? wired-limit-bytes) (long wired-limit-bytes) -1)]
-       (long (oracle/call :infer-plan 'usable-bytes
-                          [(long mem-bytes) os head wired])))
-     :cljs (mirror-usable-bytes node)))
+  (try-oracle
+   (fn []
+     (let [os (or os-reserve-bytes default-os-reserve)
+           head (or headroom-bytes default-headroom)
+           wired (if (some? wired-limit-bytes) wired-limit-bytes -1)]
+       (oracle/i64->host
+        (o 'usable-bytes
+           [(oracle/as-i64 mem-bytes)
+            (oracle/as-i64 os)
+            (oracle/as-i64 head)
+            (oracle/as-i64 wired)]))))
+   #(mirror-usable-bytes node)))
 
 (defn- largest-remainder
   "Apportion `total` integer units over `quotas` (seq of non-negative reals that
@@ -154,18 +182,19 @@
 
 (defn choose-strategy
   "Pick the parallelism the interconnect can actually pay for.
-   JVM: strategy name from kotoba `choose-strategy-name`; :why from host table."
+   Strategy name from kotoba `choose-strategy-name` when ready; :why from host table."
   [{:keys [link-gbps ranks model] :as opts}]
-  #?(:clj
-     (let [name (oracle/call :infer-plan 'choose-strategy-name
-                             [(long (or link-gbps 0))
-                              (long (or ranks 0))
-                              (long (or (:model/experts model) 0))
-                              (long (or (:model/kv-heads model) 0))])
+  (try-oracle
+   (fn []
+     (let [name (o 'choose-strategy-name
+                   [(oracle/as-i64 (or link-gbps 0))
+                    (oracle/as-i64 (or ranks 0))
+                    (oracle/as-i64 (or (:model/experts model) 0))
+                    (oracle/as-i64 (or (:model/kv-heads model) 0))])
            strat (keyword name)]
        {:strategy strat
-        :why (get strategy-why strat (:pipeline strategy-why))})
-     :cljs (mirror-choose-strategy opts)))
+        :why (get strategy-why strat (:pipeline strategy-why))}))
+   #(mirror-choose-strategy opts)))
 
 (defn report
   "Human-oriented rows for the plan table (pure; printing is the caller's job)."
