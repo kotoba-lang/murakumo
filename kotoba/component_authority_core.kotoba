@@ -1,0 +1,81 @@
+(ns component-authority-core
+  (:export [event-version max-identifier-bytes
+            blank? ws? identifier? identifier-len-ok?
+            place-epoch revoke-epoch next-sequence
+            command-op event-kind
+            format-v1 algorithm-ed25519]))
+
+;; W6 pure-planner oracle — murakumo.component-authority scalar core.
+;; State maps / placements sets / event map assembly / ed25519 stay cljc/host.
+;; Host projects epoch 0 = missing key; place defaults to 1, revoke does (inc 0).
+;; command-op / event-kind: bare names (place|revoke|unknown, placed|revoked|unknown).
+;; Parity: test/murakumo/component_authority_kotoba_parity_test.clj
+
+(defn event-version [] :i64 1)
+
+(defn max-identifier-bytes [] :i64 4096)
+
+(defn format-v1 [] :string
+  "murakumo.component-authority/v1")
+
+(defn algorithm-ed25519 [] :string
+  "ed25519")
+
+(defn ws? [c :string] :i64
+  (if (string=? c " ")
+    1
+    (if (string=? c "\n")
+      1
+      (if (string=? c "\t")
+        1
+        (if (string=? c "\r") 1 0)))))
+
+(defn blank? [s :string] :i64
+  (let [n (string-byte-length s)]
+    (if (= n 0)
+      1
+      (if (= (ws? (string-substring s 0 1)) 1)
+        (blank? (string-substring s 1 n))
+        0))))
+
+(defn identifier-len-ok? [is-blank :i64 byte-len :i64] :i64
+  ;; host projects blank? + UTF-8 byte length (avoids embedding huge literals)
+  (if (= is-blank 1)
+    0
+    (if (< (max-identifier-bytes) byte-len)
+      0
+      1)))
+
+(defn identifier? [s :string] :i64
+  ;; cljc: string? + not blank + count ≤ 4096
+  (identifier-len-ok? (blank? s) (string-byte-length s)))
+
+(defn place-epoch [current-or-zero :i64] :i64
+  ;; cljc place: (get-in state [:epochs cid] 1)
+  ;; host projects 0 when key absent
+  (if (= current-or-zero 0)
+    1
+    current-or-zero))
+
+(defn revoke-epoch [current-or-zero :i64] :i64
+  ;; cljc revoke: (inc (get-in state [:epochs cid] 0))
+  (+ current-or-zero 1))
+
+(defn next-sequence [seq :i64] :i64
+  (+ seq 1))
+
+(defn command-op [op :string] :string
+  ;; cljc case :place / :revoke / else unknown
+  (if (string=? op "place")
+    "place"
+    (if (string=? op "revoke")
+      "revoke"
+      "unknown")))
+
+(defn event-kind [op :string] :string
+  ;; place → placed, revoke → revoked
+  (if (string=? op "place")
+    "placed"
+    (if (string=? op "revoke")
+      "revoked"
+      "unknown")))
