@@ -48,13 +48,11 @@
 
 (defn node-p2p-port
   "Resolve a node's p2p QUIC port, defaulting to fleet p2p port, then 4001.
-   JVM: kotoba `resolve-p2p-port`."
+   JVM: kotoba `resolve-p2p-port` with Product Value ABI optional ports."
   [fleet node]
-  (let [has-node (if (some? (:p2p-port node)) 1 0)
-        has-fleet (if (some? (:fleet/p2p-port fleet)) 1 0)]
-    (long (o 'resolve-p2p-port
-             [has-node (long (or (:p2p-port node) 0))
-              has-fleet (long (or (:fleet/p2p-port fleet) 0))]))))
+  (long (o 'resolve-p2p-port
+           [(oracle/option-i64 (:p2p-port node))
+            (oracle/option-i64 (:fleet/p2p-port fleet))])))
 
 (defn multiaddr
   "Tailscale QUIC multiaddr for a node ip/port. JVM: kotoba `multiaddr`."

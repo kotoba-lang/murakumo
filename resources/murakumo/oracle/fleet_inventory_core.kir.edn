@@ -33,12 +33,22 @@
    (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
    :param-types [:i64]}
   {:name resolve-port,
-   :params [has-node node-port has-fleet fleet-port],
+   :params [node-port fleet-port],
    :result :i64,
    :effects #{},
    :body
-   (if (= has-node 1) node-port (if (= has-fleet 1) fleet-port 8077)),
-   :param-types [:i64 :i64 :i64 :i64]}
+   (let
+    [binding-some__1 node-port]
+    (if
+     (option-some?-of [:option :i64] binding-some__1)
+     (let [p (option-value-of [:option :i64] binding-some__1 0)] p)
+     (let
+      [binding-some__2 fleet-port]
+      (if
+       (option-some?-of [:option :i64] binding-some__2)
+       (let [f (option-value-of [:option :i64] binding-some__2 0)] f)
+       8077)))),
+   :param-types [[:option :i64] [:option :i64]]}
   {:name health-url,
    :params [port],
    :result :string,
@@ -46,7 +56,7 @@
    :body
    (string-concat
     "http://localhost:"
-    (string-concat (i64-str port) "/health")),
+    (string-concat (__kotoba_string_from_i64 port) "/health")),
    :param-types [:i64]}
   {:name selector-is-all?,
    :params [sel],
@@ -71,7 +81,32 @@
    :result :i64,
    :effects #{},
    :body (if (string-contains? line "offline") 1 0),
-   :param-types [:string]}],
+   :param-types [:string]}
+  {:name __kotoba_string_from_i64_nat,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (string-substring "0123456789" n (+ n 1))
+    (string-concat
+     (__kotoba_string_from_i64_nat (quot n 10))
+     (string-substring
+      "0123456789"
+      (- n (* (quot n 10) 10))
+      (+ (- n (* (quot n 10) 10)) 1)))),
+   :param-types [:i64]}
+  {:name __kotoba_string_from_i64,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 0)
+    (string-concat "-" (__kotoba_string_from_i64_nat (- 0 n)))
+    (__kotoba_string_from_i64_nat n)),
+   :param-types [:i64]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports

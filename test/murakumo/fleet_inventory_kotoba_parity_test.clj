@@ -40,12 +40,15 @@
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
+(defn- opt-i64-form [n]
+  (if (nil? n)
+    "(option-none-of [:option :i64])"
+    (str "(option-some-of [:option :i64] " (long n) ")")))
+
 (defn- resolve-call [fleet node]
-  (let [has-node (if (contains? node :port) 1 0)
-        node-port (long (or (:port node) 0))
-        has-fleet (if (contains? fleet :fleet/port) 1 0)
-        fleet-port (long (or (:fleet/port fleet) 0))]
-    (str "(resolve-port " has-node " " node-port " " has-fleet " " fleet-port ")")))
+  (let [node-port (when (contains? node :port) (:port node))
+        fleet-port (when (contains? fleet :fleet/port) (:fleet/port fleet))]
+    (str "(resolve-port " (opt-i64-form node-port) " " (opt-i64-form fleet-port) ")")))
 
 (deftest default-control-port-matches
   (let [actual (compile-i64-cases {"d" "(default-control-port)"})]
