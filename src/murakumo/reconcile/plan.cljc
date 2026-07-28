@@ -4,11 +4,13 @@
 ;; This namespace is the .cljc source of truth for the wadm-style planning logic;
 ;; murakumo.reconcile wraps it with CLI, collection, apply, and persistence.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-reconcile-flag-tokens-pure-oracle +
+;; W6 product-shell authority (ADR-260728-w6-collection-record-types-pure-oracle +
+;; ADR-260728-w6-reconcile-flag-tokens-pure-oracle +
 ;; ADR-260728-w6-reconcile-oracle-authority + flags):
-;; pure scalar + flag/action tokens + classifiers DELEGATE to precompiled
-;; kotoba/reconcile_plan_core.kotoba → resources/murakumo/oracle/reconcile_plan_core.kir.edn
-;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; pure scalar + flag/action tokens + classifiers + reconcile-record-type DELEGATE
+;; to precompiled kotoba/reconcile_plan_core.kotoba →
+;; resources/murakumo/oracle/reconcile_plan_core.kir.edn when oracle is loadable
+;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: eligible-nodes / observed-hosts set algebra, variable-length
 ;; pick-targets sort, reason strings, parse-flags reduce fold. cljs mirrors as fallback.
 
@@ -89,6 +91,12 @@
 
 (def action-needs-build
   (oracle-str-const 'action-needs-build mirror-action-needs-build))
+
+(def ^:private mirror-reconcile-record-type "com.murakumo.fleet.reconcile")
+
+(def reconcile-record-type
+  "Atproto $type / collection NSID for fleet reconcile records. Kotoba when ready."
+  (oracle-str-const 'reconcile-record-type mirror-reconcile-record-type))
 
 
 (defn eligible-nodes
@@ -379,9 +387,9 @@
   "Build the atproto record payload for a reconcile plan.
 
    `plan-json` is supplied by the host shell so this namespace stays free of any
-   JSON dependency."
+   JSON dependency. $type dual-sourced via `reconcile-record-type`."
   [plan plan-json]
-  {:$type "com.murakumo.fleet.reconcile"
+  {:$type reconcile-record-type
    :ts (:ts plan)
    :fleet (:fleet plan)
    :converged (plan-converged? plan)

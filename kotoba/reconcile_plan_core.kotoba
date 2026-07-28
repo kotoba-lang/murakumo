@@ -11,7 +11,8 @@
             flag-dry-run flag-apply flag-watch flag-watch-eq-prefix
             flag-snapshot-prefix flag-dash-prefix
             action-satisfied action-place action-over action-blocked
-            action-needs-build]))
+            action-needs-build
+            reconcile-record-type]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.reconcile.plan scalar + pick.
 ;; desired / action-name use [:option …] (no has-replicas / has-cid sentinels).
@@ -19,6 +20,7 @@
 ;; eligible-nodes / observed-hosts / reconcile-app maps / parse-flags fold stay cljc.
 ;; flag/action/missing-manifest pure helpers dual-source for CLI shell.
 ;; flag tokens + action name tokens SSoT; classifiers/value extract recompose.
+;; reconcile-record-type: atproto $type / collection NSID for fleet reconcile records.
 ;; pick-targets: pure sort-by [load, name] for fixed 2/3 free candidates.
 ;; name order projected by host: name-a-before-b = 1 if name(a) <= name(b).
 ;; For 3-way: name-bits bit0=n0<=n1, bit1=n0<=n2, bit2=n1<=n2 (values 1/2/4).
@@ -234,3 +236,9 @@
           plen (string-byte-length (flag-snapshot-prefix))]
       (string-substring a plen n))
     ""))
+
+;; ── residual atproto collection / record $type ───────────────────────
+
+(defn reconcile-record-type [] :string
+  ;; $type + persist reconcile-collection NSID
+  "com.murakumo.fleet.reconcile")

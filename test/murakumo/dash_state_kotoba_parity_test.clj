@@ -21,7 +21,7 @@
        "probe-command short-hosted-cid-max-len short-cid-max-len hosted-join-sep "
        "default-dashboard-port default-dashboard-interval "
        "default-dashboard-port-str default-dashboard-interval-str "
-       "join-append hosted-append"))
+       "join-append hosted-append snapshot-record-type"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -240,3 +240,11 @@
     (is (= {:port 8899 :interval 15} (state/dashboard-options [])))
     (is (= "bafyA bafyB" (state/hosted-summary {:hosted ["bafyA" "bafyB"]})))
     (is (nil? (state/hosted-summary {:hosted []})))))
+
+(deftest snapshot-record-type-matches
+  (let [s (compile-string-cases {"srt" "(snapshot-record-type)"})]
+    (is (= state/snapshot-record-type (get s "srt")))
+    (is (= "com.murakumo.fleet.snapshot" (get s "srt")))
+    (is (= "com.murakumo.fleet.snapshot"
+           (:$type (state/snapshot-record
+                    {:ts 1 :fleet "f" :nodes []} "{}"))))))
