@@ -34,6 +34,7 @@
             [murakumo.infer.moe :as moe]
             [murakumo.infer.rebalance :as reb]
             [murakumo.infer.relay :as relay]
+            [murakumo.persist :as persist]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -912,3 +913,41 @@
            (oracle/call :infer-relay 'make-id ["job" 0])))
     (is (= (ir/execute y 'lease-expired? [2000 1000 100])
            (oracle/call :infer-relay 'lease-expired? [2000 1000 100])))))
+
+(deftest product-shell-persist-uses-oracle-results
+  (is (= "did:web:etzhayyim.com:murakumo" persist/repo-authority))
+  (is (= "murakumo-fleet" persist/fleet-graph-name))
+  (is (= "com.murakumo.fleet.snapshot" persist/snapshot-collection))
+  (is (= 18099 persist/snapshot-local-port))
+  (is (= 18098 persist/reconcile-local-port))
+  (is (= 400 persist/forward-settle-ms))
+  (is (= "snap-1-2" (persist/snapshot-rkey 1 2)))
+  (is (= "rec-3-4" (persist/reconcile-rkey 3 4)))
+  (is (= (oracle/call :persist 'repo-uri ["com.murakumo.fleet.snapshot" "snap-1-0"])
+         (persist/repo-uri "com.murakumo.fleet.snapshot" "snap-1-0")))
+  (is (str/includes? (persist/repo-write-url 18099) "localhost:18099"))
+  (is (true? (persist/write-ok? "{\"status\":\"ok\"}")))
+  (is (false? (persist/write-ok? "error"))))
+
+(deftest persist-oracle-call-matches-live-compile
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/persist_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'repo-authority [])
+           (oracle/call :persist 'repo-authority [])))
+    (is (= (ir/execute live 'snapshot-rkey [1 2])
+           (oracle/call :persist 'snapshot-rkey [1 2])))
+    (is (= (ir/execute live 'reconcile-rkey [3 4])
+           (oracle/call :persist 'reconcile-rkey [3 4])))
+    (is (= (ir/execute live 'repo-uri ["c" "k"])
+           (oracle/call :persist 'repo-uri ["c" "k"])))
+    (is (= (ir/execute live 'repo-write-url [18099])
+           (oracle/call :persist 'repo-write-url [18099])))
+    (is (= (ir/execute live 'write-ok? ["{\"status\":\"ok\"}"])
+           (oracle/call :persist 'write-ok? ["{\"status\":\"ok\"}"])))))
+
+(deftest persist-precompiled-kir-does-not-drift
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/persist_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))
+        shipped (edn/read-string
+                 (slurp (io/resource "murakumo/oracle/persist_core.kir.edn")))]
+    (is (= live shipped) "persist_core KIR drift — run oracle-gen")))
