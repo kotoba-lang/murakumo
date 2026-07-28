@@ -4,18 +4,61 @@
 ;; validates a canonical `dial` argv and emits the session record a real stream or
 ;; packet driver will later use to open QUIC/WebRTC/WebTransport/relay paths.
 ;;
-;; W6 product-shell: endpoint-kind / option-name / dial-ok-reason / blank?
-;; via kotoba overlay_driver_core. parse-argv loops + session maps stay host.
+;; W6 product-shell authority:
+;; endpoint-kind / option-name / dial-ok-reason / blank? / command-is-dial?
+;; DELEGATE to precompiled kotoba/overlay_driver_core when oracle is loadable
+;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; Host remains: parse-argv loops + session maps. cljs mirrors as fallback.
 
 (ns murakumo.overlay.driver
   (:require [clojure.string :as str]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :overlay-driver)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+;; ── host-mirror pure helpers ───────────────────────────────────────────
+
+(defn- mirror-option-name [flag]
+  (let [s (str flag)]
+    (if (str/starts-with? s "--")
+      (subs s 2)
+      s)))
+
+(defn- mirror-blank? [s]
+  (str/blank? (str s)))
+
+(defn- mirror-endpoint-kind [endpoint]
+  (cond
+    (str/starts-with? endpoint "quic://") "quic"
+    (str/starts-with? endpoint "webrtc://") "webrtc"
+    (str/starts-with? endpoint "https://") "webtransport"
+    (str/starts-with? endpoint "relay://") "relay"
+    :else "unknown"))
+
+(defn- mirror-command-is-dial? [command]
+  (if (= "dial" (str command)) 1 0))
+
+(defn- mirror-dial-ok-reason [is-dial missing-count]
+  (cond
+    (zero? is-dial) "unknown-command"
+    (pos? missing-count) "missing-options"
+    :else "ok"))
 
 (def required-dial-options
   [:overlay :node :name :from :to :capability :direct :transport])
@@ -30,11 +73,12 @@
 
 (defn keyword-option
   "Strip leading `--` from a flag and keywordize.
-   JVM: kotoba `option-name`."
+   Kotoba `option-name` when oracle ready."
   [flag]
   (keyword
-   #?(:clj (o 'option-name [(str flag)])
-      :cljs (subs flag 2))))
+   (try-oracle
+    #(o 'option-name [(str flag)])
+    #(mirror-option-name flag))))
 
 (defn split-option [flag]
   (let [[option value] (str/split (str flag) #"=" 2)]
@@ -64,26 +108,23 @@
 
 (defn missing-options
   "Options whose string form is blank.
-   JVM: kotoba `blank?` (empty string only; whitespace still host)."
+   Kotoba `blank?` when ready (empty string only); mirror uses str/blank?."
   [required opts]
   (filterv (fn [k]
-             #?(:clj (= 1 (o 'blank? [(str (get opts k))]))
-                :cljs (str/blank? (str (get opts k)))))
+             (let [v (str (get opts k))]
+               (try-oracle
+                #(= 1 (oracle/i64->host (o 'blank? [v])))
+                #(mirror-blank? v))))
            required))
 
 (defn endpoint-kind
   "Classify a dial endpoint scheme.
-   JVM: kotoba `endpoint-kind` → keyword (quic|webrtc|webtransport|relay|unknown)."
+   Kotoba `endpoint-kind` → keyword (quic|webrtc|webtransport|relay|unknown)."
   [endpoint]
   (keyword
-   #?(:clj (o 'endpoint-kind [(str endpoint)])
-      :cljs
-      (cond
-        (str/starts-with? endpoint "quic://") :quic
-        (str/starts-with? endpoint "webrtc://") :webrtc
-        (str/starts-with? endpoint "https://") :webtransport
-        (str/starts-with? endpoint "relay://") :relay
-        :else :unknown))))
+   (try-oracle
+    #(o 'endpoint-kind [(str endpoint)])
+    #(mirror-endpoint-kind endpoint))))
 
 (defn dial-session
   "Normalised session request for the native overlay driver."
@@ -106,18 +147,18 @@
 
 (defn dial-result
   "Validate parsed driver options and return an executable driver result.
-   JVM: reason via kotoba `dial-ok-reason` with host-projected flags."
+   Reason via kotoba `dial-ok-reason` with host-projected flags when ready."
   [opts]
   (let [missing (missing-options required-dial-options opts)
-        is-dial #?(:clj (long (o 'command-is-dial?
-                                 [(name (or (:command opts) :unknown))]))
-                   :cljs (if (= :dial (:command opts)) 1 0))
-        reason #?(:clj (keyword (o 'dial-ok-reason
-                                   [(long is-dial) (long (count missing))]))
-                  :cljs (cond
-                          (not= :dial (:command opts)) :unknown-command
-                          (seq missing) :missing-options
-                          :else :ok))]
+        cmd-name (name (or (:command opts) :unknown))
+        is-dial (try-oracle
+                 #(oracle/i64->host (o 'command-is-dial? [cmd-name]))
+                 #(mirror-command-is-dial? cmd-name))
+        reason (keyword
+                (try-oracle
+                 #(o 'dial-ok-reason
+                     [(oracle/as-i64 is-dial) (oracle/as-i64 (count missing))])
+                 #(mirror-dial-ok-reason is-dial (count missing))))]
     (case reason
       :unknown-command
       {:ok? false
