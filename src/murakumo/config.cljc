@@ -48,6 +48,12 @@
 (def ^:private mirror-default-cloud-path "cloud.edn")
 (def ^:private mirror-peers-path ".murakumo-peers.edn")
 (def ^:private mirror-launchd-template-path "deploy/com.murakumo.kotoba-mesh.plist.tmpl")
+(def ^:private mirror-default-cloud-url "https://api.murakumo.cloud")
+(def ^:private mirror-default-api-url "https://api.murakumo.cloud")
+(def ^:private mirror-default-text-backend-url "http://localhost:11434")
+(def ^:private mirror-default-image-checkpoint "animagine-xl-4.0.safetensors")
+(def ^:private mirror-default-infer-local-url "http://localhost:11434/v1")
+(def ^:private mirror-default-kotoba-cli-bin "kotoba")
 
 (defn- mirror-default-kotoba-dir [home]
   (str home "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba"))
@@ -377,26 +383,37 @@
 ;; Delivery residual shells: inject getenv for tests; process defaults use
 ;; System/getenv for exact names only (no ambient env dump). Secrets stay on
 ;; murakumo.secret named fetch. Policy: w6-secret-getenv-audit.md.
+;; Default URL/string constants dual-source via config_core (kotoba SSoT).
 
 (def default-cloud-url
-  "Public murakumo cloud API base (config URL, not a secret)."
-  "https://api.murakumo.cloud")
+  "Public murakumo cloud API base (config URL, not a secret).
+   Kotoba `default-cloud-url` when oracle ready."
+  (oracle-const 'default-cloud-url mirror-default-cloud-url))
 
 (def default-api-url
-  "Alias base for metrics/model-map push (same default as cloud-url)."
-  "https://api.murakumo.cloud")
+  "Alias base for metrics/model-map push (same default as cloud-url).
+   Kotoba `default-api-url` when oracle ready."
+  (oracle-const 'default-api-url mirror-default-api-url))
 
 (def default-text-backend-url
-  "OpenAI-compatible text backend for infer gateway proxy."
-  "http://localhost:11434")
+  "OpenAI-compatible text backend for infer gateway proxy.
+   Kotoba `default-text-backend-url` when oracle ready."
+  (oracle-const 'default-text-backend-url mirror-default-text-backend-url))
 
 (def default-image-checkpoint
-  "Default ComfyUI txt2img checkpoint filename."
-  "animagine-xl-4.0.safetensors")
+  "Default ComfyUI txt2img checkpoint filename.
+   Kotoba `default-image-checkpoint` when oracle ready."
+  (oracle-const 'default-image-checkpoint mirror-default-image-checkpoint))
 
 (def default-infer-local-url
-  "Local OpenAI-compatible base for infer join/relay-worker."
-  "http://localhost:11434/v1")
+  "Local OpenAI-compatible base for infer join/relay-worker.
+   Kotoba `default-infer-local-url` when oracle ready."
+  (oracle-const 'default-infer-local-url mirror-default-infer-local-url))
+
+(def default-kotoba-cli-bin
+  "Bare kotoba CLI name for PATH hosts (prefer absolute pin).
+   Kotoba `default-kotoba-cli-bin` when oracle ready."
+  (oracle-const 'default-kotoba-cli-bin mirror-default-kotoba-cli-bin))
 
 (def ops-config-keys
   "Exact env names read by residual ops shells (config only, not secrets)."
@@ -473,9 +490,9 @@
   ([getenv] (config-string "MURAKUMO_DEFAULT_IMAGE_CKPT" default-image-checkpoint getenv)))
 
 (defn kotoba-cli-bin
-  "MURAKUMO_KOTOBA_BIN or bare \"kotoba\" (PATH host — prefer absolute pin)."
-  ([] (config-string "MURAKUMO_KOTOBA_BIN" "kotoba"))
-  ([getenv] (config-string "MURAKUMO_KOTOBA_BIN" "kotoba" getenv)))
+  "MURAKUMO_KOTOBA_BIN or default-kotoba-cli-bin (PATH host — prefer absolute pin)."
+  ([] (config-string "MURAKUMO_KOTOBA_BIN" default-kotoba-cli-bin))
+  ([getenv] (config-string "MURAKUMO_KOTOBA_BIN" default-kotoba-cli-bin getenv)))
 
 (defn infer-local-url
   "MURAKUMO_INFER_LOCAL_URL or default-infer-local-url."

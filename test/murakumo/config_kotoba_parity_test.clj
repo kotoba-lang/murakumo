@@ -10,7 +10,7 @@
 (def port-source (slurp "kotoba/config_core.kotoba"))
 
 (def export-prefix
-  "default-fleet-path default-connect-path default-cloud-path default-kotoba-dir pinned-bin-dir release-bin-dir kotoba-server-bin local-kotoba-bin pinned-wit-dir runtime-wit-dir build-manifest-path peers-path launchd-template-path kotoba-bin resolve-local-bin resolve-wit-dir kotoba-dir-from")
+  "default-fleet-path default-connect-path default-cloud-path default-kotoba-dir pinned-bin-dir release-bin-dir kotoba-server-bin local-kotoba-bin pinned-wit-dir runtime-wit-dir build-manifest-path peers-path launchd-template-path kotoba-bin resolve-local-bin resolve-wit-dir kotoba-dir-from default-cloud-url default-api-url default-text-backend-url default-image-checkpoint default-infer-local-url default-kotoba-cli-bin")
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -33,12 +33,24 @@
                  "c" "(default-connect-path)"
                  "cl" "(default-cloud-path)"
                  "p" "(peers-path)"
-                 "l" "(launchd-template-path)"})]
+                 "l" "(launchd-template-path)"
+                 "cu" "(default-cloud-url)"
+                 "au" "(default-api-url)"
+                 "tb" "(default-text-backend-url)"
+                 "ic" "(default-image-checkpoint)"
+                 "iu" "(default-infer-local-url)"
+                 "kb" "(default-kotoba-cli-bin)"})]
     (is (= config/default-fleet-path (get actual "f")))
     (is (= config/default-connect-path (get actual "c")))
     (is (= config/default-cloud-path (get actual "cl")))
     (is (= (config/peers-path "/x") (get actual "p")))
-    (is (= (config/launchd-template-path "/x") (get actual "l")))))
+    (is (= (config/launchd-template-path "/x") (get actual "l")))
+    (is (= config/default-cloud-url (get actual "cu")))
+    (is (= config/default-api-url (get actual "au")))
+    (is (= config/default-text-backend-url (get actual "tb")))
+    (is (= config/default-image-checkpoint (get actual "ic")))
+    (is (= config/default-infer-local-url (get actual "iu")))
+    (is (= config/default-kotoba-cli-bin (get actual "kb")))))
 
 (deftest path-builders-match
   (let [home "/Users/ops"
