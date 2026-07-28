@@ -3,9 +3,19 @@
 ;; This is the first executable boundary behind `murakumo.cloud connect`: it
 ;; validates a canonical `dial` argv and emits the session record a real stream or
 ;; packet driver will later use to open QUIC/WebRTC/WebTransport/relay paths.
+;;
+;; W6 product-shell: endpoint-kind / option-name / dial-ok-reason / blank?
+;; via kotoba overlay_driver_core. parse-argv loops + session maps stay host.
 
 (ns murakumo.overlay.driver
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+
+(def ^:private oid :overlay-driver)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
 
 (def required-dial-options
   [:overlay :node :name :from :to :capability :direct :transport])
@@ -18,8 +28,13 @@
 
 (declare command-result)
 
-(defn keyword-option [flag]
-  (keyword (subs flag 2)))
+(defn keyword-option
+  "Strip leading `--` from a flag and keywordize.
+   JVM: kotoba `option-name`."
+  [flag]
+  (keyword
+   #?(:clj (o 'option-name [(str flag)])
+      :cljs (subs flag 2))))
 
 (defn split-option [flag]
   (let [[option value] (str/split (str flag) #"=" 2)]
@@ -47,16 +62,28 @@
             :else
             (recur (update opts :extra (fnil conj []) flag) (cons value more))))))))
 
-(defn missing-options [required opts]
-  (filterv #(str/blank? (str (get opts %))) required))
+(defn missing-options
+  "Options whose string form is blank.
+   JVM: kotoba `blank?` (empty string only; whitespace still host)."
+  [required opts]
+  (filterv (fn [k]
+             #?(:clj (= 1 (o 'blank? [(str (get opts k))]))
+                :cljs (str/blank? (str (get opts k)))))
+           required))
 
-(defn endpoint-kind [endpoint]
-  (cond
-    (str/starts-with? endpoint "quic://") :quic
-    (str/starts-with? endpoint "webrtc://") :webrtc
-    (str/starts-with? endpoint "https://") :webtransport
-    (str/starts-with? endpoint "relay://") :relay
-    :else :unknown))
+(defn endpoint-kind
+  "Classify a dial endpoint scheme.
+   JVM: kotoba `endpoint-kind` → keyword (quic|webrtc|webtransport|relay|unknown)."
+  [endpoint]
+  (keyword
+   #?(:clj (o 'endpoint-kind [(str endpoint)])
+      :cljs
+      (cond
+        (str/starts-with? endpoint "quic://") :quic
+        (str/starts-with? endpoint "webrtc://") :webrtc
+        (str/starts-with? endpoint "https://") :webtransport
+        (str/starts-with? endpoint "relay://") :relay
+        :else :unknown))))
 
 (defn dial-session
   "Normalised session request for the native overlay driver."
@@ -78,21 +105,31 @@
     (:auth-key opts) (assoc :auth-key (:auth-key opts))))
 
 (defn dial-result
-  "Validate parsed driver options and return an executable driver result."
+  "Validate parsed driver options and return an executable driver result.
+   JVM: reason via kotoba `dial-ok-reason` with host-projected flags."
   [opts]
-  (let [missing (missing-options required-dial-options opts)]
-    (cond
-      (not= :dial (:command opts))
+  (let [missing (missing-options required-dial-options opts)
+        is-dial #?(:clj (long (o 'command-is-dial?
+                                 [(name (or (:command opts) :unknown))]))
+                   :cljs (if (= :dial (:command opts)) 1 0))
+        reason #?(:clj (keyword (o 'dial-ok-reason
+                                   [(long is-dial) (long (count missing))]))
+                  :cljs (cond
+                          (not= :dial (:command opts)) :unknown-command
+                          (seq missing) :missing-options
+                          :else :ok))]
+    (case reason
+      :unknown-command
       {:ok? false
        :reason :unknown-command
        :command (:command opts)}
 
-      (seq missing)
+      :missing-options
       {:ok? false
        :reason :missing-options
        :missing missing}
 
-      :else
+      ;; :ok
       {:ok? true
        :session (dial-session opts)})))
 
