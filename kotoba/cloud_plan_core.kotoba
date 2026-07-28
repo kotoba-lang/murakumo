@@ -23,7 +23,10 @@
             is-flag-dash? is-positional-target?
             flag-cloud-value flag-fleet-value flag-target-value
             flag-from-value flag-to-value flag-capability-value
-            flag-driver-value flag-format-value flag-auth-key-value]))
+            flag-driver-value flag-format-value flag-auth-key-value
+            node-record-type route-record-type relay-record-type
+            policy-record-type bootstrap-record-type
+            cap-ssh cap-http cap-gossip cap-deploy cap-reconcile]))
 
 ;; W6 pure-planner oracle — murakumo.cloud.plan scalar/string core (low).
 ;; graph-cid hashing, choose-relay sort, record maps stay cljc.
@@ -32,6 +35,7 @@
 ;; CLI presentation labels/line templates dual-source (width fmt stays host).
 ;; Summary address-family/policy lines dual-source (counts as i64).
 ;; parse-flags command/flag classifiers dual-source (reduce fold stays host).
+;; record $type strings + default capability name tokens dual-source.
 ;; Parity: test/murakumo/cloud_plan_kotoba_parity_test.clj
 
 (defn default-driver [] :string "murakumo-overlay")
@@ -315,3 +319,17 @@
 
 (defn flag-auth-key-value [a :string] :string
   (flag-value-after a 11))
+
+;; ── residual record $type + default capability name tokens ───────────
+
+(defn node-record-type [] :string "cloud.murakumo.node")
+(defn route-record-type [] :string "cloud.murakumo.route")
+(defn relay-record-type [] :string "cloud.murakumo.relay")
+(defn policy-record-type [] :string "cloud.murakumo.policy")
+(defn bootstrap-record-type [] :string "cloud.murakumo.bootstrap")
+
+(defn cap-ssh [] :string "ssh")
+(defn cap-http [] :string "http")
+(defn cap-gossip [] :string "gossip")
+(defn cap-deploy [] :string "deploy")
+(defn cap-reconcile [] :string "reconcile")

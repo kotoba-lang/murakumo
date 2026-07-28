@@ -5,16 +5,18 @@
 ;; packet plumbing; this namespace owns deterministic cloud records and routing
 ;; choices so the CLI can plan/publish them without an external VPN control plane.
 ;;
-;; W6 product-shell (ADR-260728-w6-cloud-parse-flags-pure-oracle):
+;; W6 product-shell (ADR-260728-w6-cloud-node-type-pure-oracle +
+;; ADR-260728-w6-cloud-parse-flags-pure-oracle):
 ;; defaults + endpoints + CLI presentation + summary lines + parse-flags
-;; command/flag classifiers DELEGATE to kotoba cloud_plan_core when oracle
-;; is loadable (JVM classpath or cljs/nbb). Record assembly, choose-relay sort,
-;; width fmt / reduce fold stay host. cljs mirrors remain fallback.
+;; classifiers + record $type + capability name tokens DELEGATE to kotoba
+;; cloud_plan_core when oracle is loadable (JVM classpath or cljs/nbb).
+;; Record assembly, choose-relay sort, width fmt / reduce fold stay host.
+;; cljs mirrors remain fallback.
 
 (ns murakumo.cloud.plan
   "Portable murakumo.cloud overlay planning.
    W6 product-shell: defaults + endpoints + CLI lines + flag classifiers
-   via cloud_plan_core when oracle ready."
+   + record types via cloud_plan_core when oracle ready."
   (:require [clojure.string :as str]
             [murakumo.config :as config]
             [murakumo.fleet.inventory :as inv]
@@ -59,6 +61,16 @@
 ;; ── host-mirror pure helpers ─────────────────────────────────────────
 
 (def ^:private mirror-default-driver "murakumo-overlay")
+(def ^:private mirror-node-record-type "cloud.murakumo.node")
+(def ^:private mirror-route-record-type "cloud.murakumo.route")
+(def ^:private mirror-relay-record-type "cloud.murakumo.relay")
+(def ^:private mirror-policy-record-type "cloud.murakumo.policy")
+(def ^:private mirror-bootstrap-record-type "cloud.murakumo.bootstrap")
+(def ^:private mirror-cap-ssh "ssh")
+(def ^:private mirror-cap-http "http")
+(def ^:private mirror-cap-gossip "gossip")
+(def ^:private mirror-cap-deploy "deploy")
+(def ^:private mirror-cap-reconcile "reconcile")
 (def ^:private mirror-default-cloud-name "murakumo.cloud")
 (def ^:private mirror-default-cloud-domain "murakumo.cloud")
 (def ^:private mirror-default-cloud-graph "murakumo-cloud")
@@ -174,6 +186,51 @@
 
 (def default-driver
   (oracle-str-const 'default-driver mirror-default-driver))
+
+(def node-record-type
+  "Record $type for node control-plane entries. Kotoba when ready."
+  (oracle-str-const 'node-record-type mirror-node-record-type))
+
+(def route-record-type
+  "Record $type for route entries. Kotoba when ready."
+  (oracle-str-const 'route-record-type mirror-route-record-type))
+
+(def relay-record-type
+  "Record $type for relay entries. Kotoba when ready."
+  (oracle-str-const 'relay-record-type mirror-relay-record-type))
+
+(def policy-record-type
+  "Record $type for policy entries. Kotoba when ready."
+  (oracle-str-const 'policy-record-type mirror-policy-record-type))
+
+(def bootstrap-record-type
+  "Record $type for bootstrap manifest. Kotoba when ready."
+  (oracle-str-const 'bootstrap-record-type mirror-bootstrap-record-type))
+
+(def cap-ssh
+  "Default node capability name: ssh. Kotoba when ready."
+  (oracle-str-const 'cap-ssh mirror-cap-ssh))
+
+(def cap-http
+  "Default node capability name: http. Kotoba when ready."
+  (oracle-str-const 'cap-http mirror-cap-http))
+
+(def cap-gossip
+  "Default node capability name: gossip. Kotoba when ready."
+  (oracle-str-const 'cap-gossip mirror-cap-gossip))
+
+(def cap-deploy
+  "Default node capability name: deploy. Kotoba when ready."
+  (oracle-str-const 'cap-deploy mirror-cap-deploy))
+
+(def cap-reconcile
+  "Default node capability name: reconcile. Kotoba when ready."
+  (oracle-str-const 'cap-reconcile mirror-cap-reconcile))
+
+(def default-node-capabilities
+  "Default node capability keywords (dual-sourced names)."
+  [(keyword cap-ssh) (keyword cap-http) (keyword cap-gossip)
+   (keyword cap-deploy) (keyword cap-reconcile)])
 
 (def default-cloud
   {:cloud/name (oracle-str-const 'default-cloud-name mirror-default-cloud-name)
@@ -497,10 +554,11 @@
   (first (sort-by (juxt #(relay-score node %) :name) (:relays cloud))))
 
 (defn node-record
-  "Cloud control-plane record for one fleet node."
+  "Cloud control-plane record for one fleet node.
+   $type + default capabilities dual-sourced; map assembly stays host."
   [cloud fleet node]
   (let [relay (choose-relay cloud node)]
-    {:$type "cloud.murakumo.node"
+    {:$type node-record-type
      :overlay (overlay-id cloud)
      :node (node-id cloud node)
      :name (:name node)
@@ -511,7 +569,7 @@
      :direct (vec (:overlay/direct cloud))
      :relay (:name relay)
      :relay_url (:url relay)
-     :capabilities [:ssh :http :gossip :deploy :reconcile]}))
+     :capabilities default-node-capabilities}))
 
 (defn direct-endpoint
   "Transport endpoint candidate for one node.
@@ -582,11 +640,12 @@
                  (recur (str (subs s 0 i) pad (subs s (+ i (count m)))) (next args))))))))))
 
 (defn route-record
-  "Identity-overlay route hints for one node: direct candidates plus relay fallback."
+  "Identity-overlay route hints for one node: direct candidates plus relay fallback.
+   $type dual-sourced; map assembly stays host."
   [cloud fleet node]
   (let [relay (choose-relay cloud node)
         node-id (node-id cloud node)]
-    {:$type "cloud.murakumo.route"
+    {:$type route-record-type
      :overlay (overlay-id cloud)
      :node node-id
      :name (:name node)
@@ -594,7 +653,7 @@
      :relay (relay-endpoint relay node-id)}))
 
 (defn relay-record [cloud relay]
-  {:$type "cloud.murakumo.relay"
+  {:$type relay-record-type
    :overlay (overlay-id cloud)
    :name (:name relay)
    :region (:region relay)
@@ -602,7 +661,7 @@
    :transports (vec (:transports relay))})
 
 (defn policy-record [cloud]
-  {:$type "cloud.murakumo.policy"
+  {:$type policy-record-type
    :overlay (overlay-id cloud)
    :default (get-in cloud [:policy :default] :deny)
    :allow (vec (get-in cloud [:policy :allow] []))})
@@ -746,10 +805,11 @@
      :argv (:argv item)}))
 
 (defn bootstrap-manifest
-  "Machine-readable bootstrap manifest for native overlay execution."
+  "Machine-readable bootstrap manifest for native overlay execution.
+   $type dual-sourced; phase assembly stays host."
   [plan opts]
   (let [{:keys [relays connects]} (bootstrap-plan plan opts)]
-    {:$type "cloud.murakumo.bootstrap"
+    {:$type bootstrap-record-type
      :overlay (:overlay plan)
      :driver (or (:driver opts) default-driver)
      :phases [{:name :relays

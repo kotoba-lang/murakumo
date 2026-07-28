@@ -28,6 +28,9 @@
        "is-cmd-plan? is-cmd-records? is-cmd-routes? "
        "is-cmd-dial? is-cmd-connect? is-cmd-relay? is-cmd-bootstrap? "
        "is-flag-cloud? is-flag-fleet? is-flag-target? "
+       "node-record-type route-record-type relay-record-type "
+       "policy-record-type bootstrap-record-type "
+       "cap-ssh cap-http cap-gossip cap-deploy cap-reconcile "
        "is-flag-from? is-flag-to? is-flag-capability? "
        "is-flag-driver? is-flag-format? is-flag-auth-key? "
        "is-flag-dash? is-positional-target? "
@@ -288,3 +291,31 @@
            (select-keys
             (cloud/parse-flags ["dial" "asher" "--from=browser" "--capability=live"])
             [:command :target :from :capability])))))
+
+(deftest record-types-and-caps-match
+  (let [s (compile-string-cases
+           {"nt" "(node-record-type)"
+            "rt" "(route-record-type)"
+            "lt" "(relay-record-type)"
+            "pt" "(policy-record-type)"
+            "bt" "(bootstrap-record-type)"
+            "cs" "(cap-ssh)"
+            "ch" "(cap-http)"
+            "cg" "(cap-gossip)"
+            "cd" "(cap-deploy)"
+            "cr" "(cap-reconcile)"})]
+    (is (= cloud/node-record-type (get s "nt")))
+    (is (= "cloud.murakumo.node" (get s "nt")))
+    (is (= cloud/route-record-type (get s "rt")))
+    (is (= "cloud.murakumo.route" (get s "rt")))
+    (is (= cloud/relay-record-type (get s "lt")))
+    (is (= cloud/policy-record-type (get s "pt")))
+    (is (= cloud/bootstrap-record-type (get s "bt")))
+    (is (= "cloud.murakumo.bootstrap" (get s "bt")))
+    (is (= cloud/cap-ssh (get s "cs")))
+    (is (= "ssh" (get s "cs")))
+    (is (= cloud/cap-http (get s "ch")))
+    (is (= cloud/cap-gossip (get s "cg")))
+    (is (= cloud/cap-deploy (get s "cd")))
+    (is (= cloud/cap-reconcile (get s "cr")))
+    (is (= [:ssh :http :gossip :deploy :reconcile] cloud/default-node-capabilities))))
