@@ -18,7 +18,8 @@
        "pick-task-idx-2 assign-task-step-2 attempt-next exclude-append-marker "
        "pick-task-fold-step load-inc-if challenger-wins? "
        "assign-task-pick-3 apply-task-pick-3 assign-task-step-3 "
-       "nearest-rank-idx summary-retried speedup-milli max2 min2 clamp-nonneg"))
+       "nearest-rank-idx summary-retried speedup-milli max2 min2 clamp-nonneg "
+       "unschedulable-detail"))
 
 
 (defn- compile-string-cases [cases]
@@ -299,3 +300,22 @@
         (is (= 5 (plan/percentile xs 0.5)))
         (is (= (nth (vec (sort xs)) 9) (plan/percentile xs 0.95)))))))
 
+
+(deftest unschedulable-detail-parity
+  (let [actual (compile-string-cases
+                {"u0" "(unschedulable-detail \"{:labels {\\\"gpu\\\" \\\"1\\\"}}\" \"\" \"\")"
+                 "u1" "(unschedulable-detail \"nil\" \"a,b\" \"\")"
+                 "u2" "(unschedulable-detail \"nil\" \"\" \"1073741824\")"
+                 "u3" "(unschedulable-detail \"{:roles [\\\"compute\\\"]}\" \"x\" \"64\")"})]
+    (is (= "no node satisfies placement={:labels {\"gpu\" \"1\"}}" (get actual "u0")))
+    (is (= "no node satisfies placement=nil excluding=a,b" (get actual "u1")))
+    (is (= "no node satisfies placement=nil min-mem-bytes=1073741824" (get actual "u2")))
+    (is (= "no node satisfies placement={:roles [\"compute\"]} excluding=x min-mem-bytes=64"
+           (get actual "u3")))
+    ;; host assign path projects same detail shape
+    (let [r (plan/assign [{:name "n" :roles [] :online? true}]
+                         [{:id "t0" :placement {:roles ["missing"]}}]
+                         {})
+          d (:detail (first (:unschedulable r)))]
+      (is (string? d))
+      (is (str/starts-with? d "no node satisfies placement=")))))
