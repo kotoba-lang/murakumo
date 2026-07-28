@@ -17,7 +17,11 @@
        "command-output component-build-cmd app-deploy-cmd "
        "digit-val? digit-of parse-digits-go parse-digits trim-ws "
        "execution-observed? execution-count-command release-wit-path stop-forward-command "
-       "absolute-unix-git-bin? blank? pin-bin-kotoba pin-bin-server join-path release-wit-suffix"))
+       "absolute-unix-git-bin? blank? pin-bin-kotoba pin-bin-server join-path release-wit-suffix "
+       "cp-bin rm-bin rm-rf-flag cp-recursive-flag "
+       "git-c-flag git-rev-parse git-short-flag git-head-ref "
+       "version-flag version-bin-path build-features "
+       "missing-manifest? missing-operator-seed?"))
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -128,3 +132,46 @@
     (is (false? (plan/absolute-git-bin? "git")))
     (is (= "kotoba" (get s "pk")))
     (is (= "kotoba-server" (get s "ps")))))
+
+(deftest argv-fragments-and-gates-match
+  (let [s (compile-string-cases
+           {"cp" "(cp-bin)"
+            "rm" "(rm-bin)"
+            "rf" "(rm-rf-flag)"
+            "cr" "(cp-recursive-flag)"
+            "gc" "(git-c-flag)"
+            "gr" "(git-rev-parse)"
+            "gs" "(git-short-flag)"
+            "gh" "(git-head-ref)"
+            "vf" "(version-flag)"
+            "vp" (str "(version-bin-path " (kotoba-literal "bin") ")")
+            "bf" "(build-features)"})
+        i (compile-i64-cases
+           {"m1" (str "(missing-manifest? " (kotoba-literal "") ")")
+            "m0" (str "(missing-manifest? " (kotoba-literal "apps/x.edn") ")")
+            "s1" (str "(missing-operator-seed? " (kotoba-literal "") ")")
+            "s0" (str "(missing-operator-seed? " (kotoba-literal "seed") ")")})]
+    (is (= plan/cp-bin (get s "cp")))
+    (is (= plan/rm-bin (get s "rm")))
+    (is (= plan/rm-rf-flag (get s "rf")))
+    (is (= plan/cp-recursive-flag (get s "cr")))
+    (is (= plan/git-c-flag (get s "gc")))
+    (is (= plan/git-rev-parse (get s "gr")))
+    (is (= plan/git-short-flag (get s "gs")))
+    (is (= plan/git-head-ref (get s "gh")))
+    (is (= plan/version-flag (get s "vf")))
+    (is (= (plan/version-bin-path "bin") (get s "vp")))
+    (is (= plan/build-features (get s "bf")))
+    (is (= 1 (get i "m1")))
+    (is (= 0 (get i "m0")))
+    (is (= 1 (get i "s1")))
+    (is (= 0 (get i "s0")))
+    (is (= :missing-manifest (plan/deploy-command-error nil "seed")))
+    (is (= :missing-operator-seed (plan/deploy-command-error "m.edn" nil)))
+    (is (nil? (plan/deploy-command-error "m.edn" "seed")))
+    (is (= ["cp" "a" "b"] (plan/copy-argv "a" "b")))
+    (is (= ["rm" "-rf" "bin/wit"] (plan/remove-tree-argv "bin/wit")))
+    (is (= ["cp" "-R" "s" "d"] (plan/copy-tree-argv "s" "d")))
+    (is (= ["/usr/bin/git" "-C" "release" "rev-parse" "--short" "HEAD"]
+           (plan/git-short-sha-argv "release" "/usr/bin/git")))
+    (is (= ["bin/kotoba" "--version"] (plan/version-argv "bin")))))

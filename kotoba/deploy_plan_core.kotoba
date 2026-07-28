@@ -11,11 +11,16 @@
             release-wit-path stop-forward-command
             absolute-unix-git-bin? blank?
             pin-bin-kotoba pin-bin-server
-            join-path release-wit-suffix]))
+            join-path release-wit-suffix
+            cp-bin rm-bin rm-rf-flag cp-recursive-flag
+            git-c-flag git-rev-parse git-short-flag git-head-ref
+            version-flag version-bin-path build-features
+            missing-manifest? missing-operator-seed?]))
 
 ;; W6 pure-planner oracle — murakumo.deploy.plan path/argv/constants core.
 ;; Vector argv maps, artifact distribution over nodes, regex extract stay cljc.
 ;; Guest ABI max arity 5: component-build joins 4 path args + bin.
+;; Argv flag/bin fragments + deploy-command-error gates dual-source.
 ;; Parity: test/murakumo/deploy_plan_kotoba_parity_test.clj
 
 (defn default-wasm [] :string "/tmp/murakumo-deploy.wasm")
@@ -197,3 +202,30 @@
       (if (< (string-byte-length p) 1)
         0
         (if (string=? (string-substring p 0 1) "/") 1 0)))))
+
+;; ── residual pin/git argv fragments + deploy CLI gates ───────────────
+
+(defn cp-bin [] :string "cp")
+(defn rm-bin [] :string "rm")
+(defn rm-rf-flag [] :string "-rf")
+(defn cp-recursive-flag [] :string "-R")
+
+(defn git-c-flag [] :string "-C")
+(defn git-rev-parse [] :string "rev-parse")
+(defn git-short-flag [] :string "--short")
+(defn git-head-ref [] :string "HEAD")
+
+(defn version-flag [] :string "--version")
+
+(defn version-bin-path [dest :string] :string
+  ;; cljc: (str dest "/kotoba")
+  (join-path dest (pin-bin-kotoba)))
+
+(defn build-features [] :string
+  "p2p,realtime-wasm,webrtc")
+
+(defn missing-manifest? [manifest :string] :i64
+  (blank? manifest))
+
+(defn missing-operator-seed? [operator-seed :string] :i64
+  (blank? operator-seed))

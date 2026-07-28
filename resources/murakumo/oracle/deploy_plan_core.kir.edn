@@ -322,6 +322,84 @@
       (< (string-byte-length p) 1)
       0
       (if (string=? (string-substring p 0 1) "/") 1 0)))),
+   :param-types [:string]}
+  {:name cp-bin,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "cp",
+   :param-types []}
+  {:name rm-bin,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "rm",
+   :param-types []}
+  {:name rm-rf-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-rf",
+   :param-types []}
+  {:name cp-recursive-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-R",
+   :param-types []}
+  {:name git-c-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-C",
+   :param-types []}
+  {:name git-rev-parse,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "rev-parse",
+   :param-types []}
+  {:name git-short-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "--short",
+   :param-types []}
+  {:name git-head-ref,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "HEAD",
+   :param-types []}
+  {:name version-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "--version",
+   :param-types []}
+  {:name version-bin-path,
+   :params [dest],
+   :result :string,
+   :effects #{},
+   :body (join-path dest (pin-bin-kotoba)),
+   :param-types [:string]}
+  {:name build-features,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "p2p,realtime-wasm,webrtc",
+   :param-types []}
+  {:name missing-manifest?,
+   :params [manifest],
+   :result :i64,
+   :effects #{},
+   :body (blank? manifest),
+   :param-types [:string]}
+  {:name missing-operator-seed?,
+   :params [operator-seed],
+   :result :i64,
+   :effects #{},
+   :body (blank? operator-seed),
    :param-types [:string]}],
  :oracle-value nil,
  :schema-identities nil,
@@ -357,7 +435,20 @@
   pin-bin-kotoba
   pin-bin-server
   join-path
-  release-wit-suffix],
+  release-wit-suffix
+  cp-bin
+  rm-bin
+  rm-rf-flag
+  cp-recursive-flag
+  git-c-flag
+  git-rev-parse
+  git-short-flag
+  git-head-ref
+  version-flag
+  version-bin-path
+  build-features
+  missing-manifest?
+  missing-operator-seed?],
  :schemas nil,
  :effects #{},
  :blocks [],
