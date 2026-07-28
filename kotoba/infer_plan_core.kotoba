@@ -2,14 +2,23 @@
   (:export [gib default-os-reserve default-headroom usable-bytes choose-strategy-name
             lane-base plan-lr-3 plan-lr-pack-get
             plan-fits-total? span-fits?
-            uniform-layer-bytes dense-units-milli moe-layer-bytes]))
+            uniform-layer-bytes dense-units-milli moe-layer-bytes
+            model-pack model-layers model-dense model-frac-milli
+            layer-byte-at layer-wsum partition-target
+            advance-hi est-bytes-range partition-3-ends]))
 
 ;; W6 pure-planner oracle — murakumo.infer.plan usable-bytes + choose-strategy
-;; + plan largest-remainder (no per-pool floor) for fixed 3 ranks + fits gates.
-;; Full partition-layers walk over layer vectors stays cljc (float targets).
-;; plan-lr-3: integer form of private largest-remainder over 3 weight quotas
-;;   (ideal = total*w_i/sumw; floor + modular remainder; ties → lower index).
-;; Packing: base-65536 digits s0 + s1*B + s2*B*B.
+;; + plan largest-remainder (no per-pool floor) for fixed 3 ranks + fits gates
+;; + integer partition-layers walk (fixed 3 nodes) over layer weights.
+;; Full variable-arity node vectors / plan map assembly with node ids stay cljc.
+;;
+;; Layer weights use milli-fixed dense-frac (default 100 = 0.1) matching
+;; uniform-layer-bytes / moe-layer-bytes scalars. Cumulative targets use
+;; integer quot (wsum * cum-usable / total) — matches cljc doubles when
+;; layer bytes stay integer and targets align (uniform + typical MoE cases).
+;;
+;; model-pack = pack3(layers, dense, dense-frac-milli), base 65536.
+;; partition-3-ends → pack3(hi0, hi1, hi2) exclusive layer ends (last = layers).
 ;; Parity: test/murakumo/infer_plan_kotoba_parity_test.clj
 
 (defn gib [] :i64 1073741824)
@@ -150,3 +159,118 @@
   ;; bytes per MoE-bearing layer (not dense): weight / units
   (let [units (dense-units-milli layers dense dense-frac-milli)]
     (if (< units 1) 0 (quot (* weight-bytes 1000) units))))
+
+(defn model-pack [layers :i64 dense :i64 dense-frac-milli :i64] :i64
+  ;; pack3(layers, dense, dense-frac-milli)
+  (pack3 layers dense dense-frac-milli))
+
+(defn model-layers [mp :i64] :i64
+  (plan-lr-pack-get mp 0))
+
+(defn model-dense [mp :i64] :i64
+  (plan-lr-pack-get mp 1))
+
+(defn model-frac-milli [mp :i64] :i64
+  (plan-lr-pack-get mp 2))
+
+(defn dense-layer-bytes [weight-bytes :i64 layers :i64 dense :i64 dense-frac-milli :i64] :i64
+  ;; f * moe-bytes via milli: (moe * frac-milli) / 1000
+  (let [moe (moe-layer-bytes weight-bytes layers dense dense-frac-milli)]
+    (quot (* moe dense-frac-milli) 1000)))
+
+(defn layer-byte-at [weight-bytes :i64 mp :i64 i :i64] :i64
+  ;; integer form of (nth (layer-weights model) i)
+  (let [layers (model-layers mp)
+        dense (model-dense mp)
+        frac (model-frac-milli mp)
+        d (if (< dense 0) 0 (if (< layers dense) layers dense))]
+    (if (< i d)
+      (dense-layer-bytes weight-bytes layers dense frac)
+      (moe-layer-bytes weight-bytes layers dense frac))))
+
+(defn layer-wsum [weight-bytes :i64 mp :i64] :i64
+  ;; sum of integer layer-byte-at over all layers (closed form)
+  (let [layers (model-layers mp)
+        dense (model-dense mp)
+        frac (model-frac-milli mp)
+        d (if (< dense 0) 0 (if (< layers dense) layers dense))
+        rest (- layers d)
+        moe (moe-layer-bytes weight-bytes layers dense frac)
+        db (dense-layer-bytes weight-bytes layers dense frac)]
+    (+ (* d db) (* rest moe))))
+
+(defn partition-target [wsum :i64 cum-usable :i64 total-usable :i64] :i64
+  ;; cljc: (* wsum (/ (double cum) total)) as integer quot
+  (if (< total-usable 1)
+    0
+    (quot (* wsum cum-usable) total-usable)))
+
+(defn min2 [a :i64 b :i64] :i64
+  (if (< a b) a b))
+
+(defn max2 [a :i64 b :i64] :i64
+  (if (< a b) b a))
+
+(defn clamp-nonneg [n :i64] :i64
+  (if (< n 0) 0 n))
+
+(defn est-bytes-range [weight-bytes :i64 mp :i64 lo :i64 hi :i64] :i64
+  ;; closed-form sum of layer-byte-at over [lo, hi) — dense then moe bands
+  (let [layers (model-layers mp)
+        dense (model-dense mp)
+        frac (model-frac-milli mp)
+        d (if (< dense 0) 0 (if (< layers dense) layers dense))
+        moe (moe-layer-bytes weight-bytes layers dense frac)
+        db (dense-layer-bytes weight-bytes layers dense frac)
+        lo2 (if (< lo 0) 0 lo)
+        hi2 (if (< hi lo2) lo2 (if (< layers hi) layers hi))
+        dense-lo lo2
+        dense-hi (min2 hi2 d)
+        dense-n (clamp-nonneg (- dense-hi dense-lo))
+        moe-lo (max2 lo2 d)
+        moe-hi hi2
+        moe-n (clamp-nonneg (- moe-hi moe-lo))]
+    (+ (* dense-n db) (* moe-n moe))))
+
+(defn advance-in-band [lo :i64 hi-cap :i64 layer-b :i64 acc :i64 target :i64] :i64
+  ;; closed-form: how far can we go in a constant-byte band [lo, hi-cap)
+  ;; while keeping acc + layer-b * k <= target
+  (if (if (< lo hi-cap) (if (< 0 layer-b) 1 0) 0)
+    (let [room (- target acc)
+          kmax (if (< room 0) 0 (quot room layer-b))
+          hi (+ lo kmax)]
+      (if (< hi-cap hi) hi-cap hi))
+    lo))
+
+(defn advance-hi [weight-bytes :i64 mp :i64 lo :i64 acc :i64 target :i64] :i64
+  ;; two-band closed form matching cljc inner cut loop
+  (let [layers (model-layers mp)
+        dense (model-dense mp)
+        frac (model-frac-milli mp)
+        d (if (< dense 0) 0 (if (< layers dense) layers dense))
+        moe (moe-layer-bytes weight-bytes layers dense frac)
+        db (dense-layer-bytes weight-bytes layers dense frac)
+        lo0 (if (< lo 0) 0 (if (< layers lo) layers lo))]
+    (if (< lo0 d)
+      (let [hi-d (advance-in-band lo0 d db acc target)
+            acc-d (+ acc (est-bytes-range weight-bytes mp lo0 hi-d))]
+        (if (< hi-d d)
+          hi-d
+          (advance-in-band d layers moe acc-d target)))
+      (advance-in-band lo0 layers moe acc target))))
+
+(defn partition-3-ends [weight-bytes :i64 mp :i64 u0 :i64 u1 :i64 u2 :i64] :i64
+  ;; exclusive layer ends for 3 ring nodes (last end = layers).
+  ;; Mirrors plan.cljc partition-layers loop for count(nodes)=3.
+  (let [layers (model-layers mp)
+        total (+ u0 (+ u1 u2))
+        wsum (layer-wsum weight-bytes mp)]
+    (if (= total 0)
+      (pack3 0 0 layers)
+      (let [t0 (partition-target wsum u0 total)
+            t1 (partition-target wsum (+ u0 u1) total)
+            hi0 (advance-hi weight-bytes mp 0 0 t0)
+            acc0 (est-bytes-range weight-bytes mp 0 hi0)
+            hi1 (advance-hi weight-bytes mp hi0 acc0 t1)
+            hi2 layers]
+        (pack3 hi0 hi1 hi2)))))
