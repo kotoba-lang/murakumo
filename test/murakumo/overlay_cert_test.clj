@@ -162,3 +162,10 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"missing absolute root"
         (cert/resolve-store-dir {:path-ref {:root :murakumo/kagi :path "quic"}
                                  :root-dirs {}}))))
+
+(deftest resolve-store-dir-uses-config-kagi-dir-inject
+  (let [dir (cert/resolve-store-dir
+             {:getenv {"MURAKUMO_KAGI_DIR" "/tmp/murakumo-kagi-inject"}})]
+    (is (= "/tmp/murakumo-kagi-inject" (.getPath dir))))
+  (let [dir (cert/resolve-store-dir {:getenv (constantly nil)})]
+    (is (= cert/default-store-dir (.getPath dir)))))

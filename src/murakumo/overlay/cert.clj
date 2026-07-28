@@ -2,7 +2,8 @@
 
 (ns murakumo.overlay.cert
   (:require [clojure.java.io :as io]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [murakumo.config :as config])
   (:import [java.io StringWriter]
            [java.math BigInteger]
            [java.nio.file Files]
@@ -34,8 +35,9 @@
     :store-dir   explicit File/path (highest priority)
     :path-ref    {:root qualified-kw :path relative} under :root-dirs
     :root-dirs   {qualified-kw absolute-dir} — host-sealed scoped-fs roots
-    :getenv      (fn [name] string-or-nil) for legacy MURAKUMO_KAGI_DIR only
-  When nil/empty, falls back to getenv MURAKUMO_KAGI_DIR then default-store-dir."
+    :getenv      (fn [name] or map) inject for MURAKUMO_KAGI_DIR via
+                 murakumo.config/kagi-dir (exact name only; no ambient dump)
+  When nil/empty, falls back to config/kagi-dir then default-store-dir."
   nil)
 
 (defn ensure-provider! []
@@ -77,7 +79,7 @@
 
 (defn resolve-store-dir
   "Resolve material store directory from host options (no ambient FS defaults
-  beyond the documented legacy getenv fallback)."
+  beyond the documented MURAKUMO_KAGI_DIR config inject fallback)."
   ([] (resolve-store-dir (or *store-opts* {})))
   ([{:keys [store-dir path-ref root-dirs getenv]
      :or {getenv #(System/getenv %)}}]
@@ -103,7 +105,7 @@
          (io/file (str base) path)))
 
      :else
-     (io/file (or (getenv "MURAKUMO_KAGI_DIR") default-store-dir)))))
+     (io/file (or (config/kagi-dir getenv) default-store-dir)))))
 
 (defn store-dir
   "Material store directory. Prefer binding *store-opts* or passing opts."
