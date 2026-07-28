@@ -3,12 +3,13 @@
 ;; Collection, persistence, JSON encoding, and HTTP serving stay in murakumo.dash.
 ;; This namespace owns deterministic snapshot -> record/alert/display data.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-dash-oracle-authority + cljs load):
-;; pure display helpers DELEGATE to precompiled kotoba/dash_state_core.kotoba KIR
-;; (resources/murakumo/oracle/dash_state_core.kir.edn) when oracle is loadable
-;; (JVM classpath or cljs/nbb resource loader — ADR-260728-w6-cljs-oracle-load).
-;; Map/vector folds, HTML join, probe parse, and query-string stay host/cljc.
-;; cljs mirrors remain as fallback when oracle is not ready.
+;; W6 product-shell authority (ADR-260728-w6-dash-oracle-authority +
+;; ADR-260728-w6-dash-probe-pure-oracle + cljs load):
+;; pure display + probe/parse helpers DELEGATE to precompiled
+;; kotoba/dash_state_core.kotoba KIR when oracle is loadable (JVM classpath or
+;; cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; Map/vector folds, HTML join, probe-lines fold, parse-hosted split, and
+;; query-string stay host/cljc. cljs mirrors remain fallback when not ready.
 
 (ns murakumo.dash.state
   "Dashboard pure helpers use kotoba/dash_state_core.kotoba when oracle ready."
@@ -23,6 +24,36 @@
 
 (defn- oracle-ready? []
   (oracle/ready? oid))
+
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+(defn- oracle-i64-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid export []))
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+(defn- parse-int [s]
+  #?(:clj (Integer/parseInt s)
+     :cljs (js/parseInt s 10)))
 
 ;; ── host-mirror pure helpers (cljs fallback + semantic documentation) ──
 
@@ -46,6 +77,23 @@
 (defn- mirror-recent-take-n [n default-n]
   (if (neg? n) default-n n))
 
+(defn- mirror-parse-links [s]
+  (try (parse-int (str/trim (or s "0")))
+       (catch #?(:clj Exception :cljs :default) _ 0)))
+(defn- mirror-probe-line-key [line]
+  (if (and (>= (count line) 2) (= (subs line 1 2) ":"))
+    (subs line 0 1)
+    ""))
+
+(defn- mirror-probe-line-value [line]
+  (if (seq (mirror-probe-line-key line))
+    (subs line 2)
+    ""))
+(defn- mirror-health-from-present [present?]
+  (if present? "ok" "down"))
+(def ^:private mirror-content-type-json "application/json")
+(def ^:private mirror-content-type-html "text/html; charset=utf-8")
+(def ^:private mirror-http-ok-status 200)
 ;; ── pure display helpers: kotoba dash_state_core SSoT when oracle ready ─
 
 (defn short-hosted-cid
@@ -78,10 +126,6 @@
     (if (oracle-ready?)
       (o 'health-class-of [h])
       (mirror-health-class h))))
-
-(defn- parse-int [s]
-  #?(:clj (Integer/parseInt s)
-     :cljs (js/parseInt s 10)))
 
 (defn query-at
   "Parse dashboard `at=N` query parameter. Returns nil if absent. The regex is
@@ -241,33 +285,60 @@
                        "<td class=cid>" (or (hosted-summary node) "<span class=muted>—</span>") "</td></tr>")))
          "</table></body></html>")))
 
+(def content-type-json
+  (oracle-str-const 'content-type-json mirror-content-type-json))
+
+(def content-type-html
+  (oracle-str-const 'content-type-html mirror-content-type-html))
+
+(def http-ok-status
+  (oracle-i64-const 'http-ok-status mirror-http-ok-status))
+
 (defn json-response
-  "HTTP response map for JSON API bodies."
+  "HTTP response map for JSON API bodies.
+   status + content-type via kotoba when ready."
   [body]
-  {:status 200
-   :headers {"content-type" "application/json"}
+  {:status http-ok-status
+   :headers {"content-type" content-type-json}
    :body body})
 
 (defn html-response
-  "HTTP response map for dashboard HTML bodies."
+  "HTTP response map for dashboard HTML bodies.
+   status + content-type via kotoba when ready."
   [body]
-  {:status 200
-   :headers {"content-type" "text/html; charset=utf-8"}
+  {:status http-ok-status
+   :headers {"content-type" content-type-html}
    :body body})
 
+(defn- probe-line-key
+  "First character of an H:/L:/P: probe line. Kotoba when ready."
+  [line]
+  (try-oracle
+   #(o 'probe-line-key [(str line)])
+   #(mirror-probe-line-key line)))
+
+(defn- probe-line-value
+  "Payload after the key colon. Kotoba when ready."
+  [line]
+  (try-oracle
+   #(o 'probe-line-value [(str line)])
+   #(mirror-probe-line-value line)))
+
 (defn probe-lines
-  "Parse the H:/L:/P: probe stdout into a map of string key -> value."
+  "Parse the H:/L:/P: probe stdout into a map of string key -> value.
+   Per-line key/value pure via kotoba; line fold stays host."
   [out]
   (into {}
         (for [line (str/split-lines (str out))
-              :when (>= (count line) 2)]
-          [(subs line 0 1) (subs line 2)])))
+              :let [k (probe-line-key line)]
+              :when (seq k)]
+          [k (probe-line-value line)])))
 
 (defn probe-command
-  "Remote shell command for one dashboard probe round-trip."
+  "Remote shell command for one dashboard probe round-trip.
+   Host-forever shell string (SSH path; not kotoba — quoting hazard)."
   [port]
   (str "echo \"H:$(curl -s -m4 http://localhost:" port "/health 2>/dev/null)\"; echo \"L:$(grep 'peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l | tr -d ' ')\"; echo \"P:$(grep 'trigger: executed' ~/.murakumo/mesh.log 2>/dev/null | grep -oE 'bafy[a-z0-9]{40,}' | sort -u | tr '\\n' ',')\""))
-
 (defn parse-health
   "Decode health JSON with a host-supplied decoder, returning nil on failure."
   [decode-fn text]
@@ -284,10 +355,12 @@
    :p2p-port p2p-port})
 
 (defn parse-links
-  "Parse the L: value from probe output."
+  "Parse the L: value from probe output.
+   Kotoba `parse-links` (trim + digits → i64, 0 on bad) when ready."
   [s]
-  (try (parse-int (str/trim (or s "0")))
-       (catch #?(:clj Exception :cljs :default) _ 0)))
+  (try-oracle
+   #(oracle/i64->host (o 'parse-links [(str (or s ""))]))
+   #(mirror-parse-links s)))
 
 (defn parse-hosted
   "Parse comma-separated hosted component CIDs from the P: value."
@@ -295,6 +368,13 @@
   (->> (str/split (or s "") #",")
        (remove str/blank?)
        vec))
+
+(defn health-from-present
+  "ok/down label from health-json presence. Kotoba when ready."
+  [present?]
+  (try-oracle
+   #(o 'health-from-present [(oracle/as-i64 (if present? 1 0))])
+   #(mirror-health-from-present present?)))
 
 (defn probe-node
   "Build a snapshot node from static node data and parsed probe values.
@@ -305,7 +385,7 @@
    :host (:host node)
    :ip (:ip node)
    :online (boolean (:online? node))
-   :health (if health-json "ok" "down")
+   :health (health-from-present (some? health-json))
    :wasm (get-in health-json [:subsystems :wasm_executor] "?")
    :links (parse-links (get lines "L"))
    :p2p p2p-port
@@ -314,8 +394,11 @@
 (defn down-node
   "Snapshot node for a node that could not be reached."
   [node]
-  {:name (:name node) :online false :health "down" :links 0 :hosted []})
-
+  {:name (:name node)
+   :online false
+   :health (health-from-present false)
+   :links 0
+   :hosted []})
 (defn diff-alerts
   "Compare two snapshots and surface liveness changes.
 

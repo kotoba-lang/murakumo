@@ -10,6 +10,14 @@
 
 (def port-source (slurp "kotoba/dash_state_core.kotoba"))
 
+(def export-prefix
+  (str "short-hosted-cid health-class-of interval-sleep-ms clamp-at "
+       "take-last-start append-new-len cap-count recent-take-n "
+       "digit-char nat-str i64-str digit-val? digit-of parse-digits-go parse-digits "
+       "trim-ws parse-links probe-line-key probe-line-value "
+       "content-type-json content-type-html http-ok-status "
+       "health-from-present health-ok-label health-down-label"))
+
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -20,8 +28,7 @@
         src (-> port-source
                 (str/replace-first
                  #"\(:export \[[^\]]+\]\)"
-                 (str "(:export [short-hosted-cid health-class-of interval-sleep-ms clamp-at take-last-start append-new-len cap-count recent-take-n "
-                      (str/join " " names) "])"))
+                 (str "(:export [" export-prefix " " (str/join " " names) "])"))
                 (str "\n" (str/join "\n" defs)))
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
@@ -33,12 +40,10 @@
         src (-> port-source
                 (str/replace-first
                  #"\(:export \[[^\]]+\]\)"
-                 (str "(:export [short-hosted-cid health-class-of interval-sleep-ms clamp-at take-last-start append-new-len cap-count recent-take-n "
-                      (str/join " " names) "])"))
+                 (str "(:export [" export-prefix " " (str/join " " names) "])"))
                 (str "\n" (str/join "\n" defs)))
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
-
 (deftest short-hosted-cid-matches-dash-state
   (let [corpus ["bafy12345678901234567890"
                 "bafyA"
@@ -115,3 +120,58 @@
         (is (= 6 (count v)))
         (is (= (take-last 6 (conj (vec (range 10)) :y)) v))))))
 
+(deftest parse-links-matches-dash-state
+  (let [corpus ["2" " 0 " "10" "" "not-int" "12x" " 7"]
+        cases (into {} (map-indexed
+                        (fn [i s]
+                          [(str "pl_" i)
+                           (str "(parse-links " (kotoba-literal s) ")")])
+                        corpus))
+        actual (compile-i64-cases cases)]
+    (doseq [[i s] (map-indexed vector corpus)]
+      (testing (pr-str s)
+        (is (= (state/parse-links s)
+               (get actual (str "pl_" i))))))))
+
+(deftest probe-line-key-value-matches
+  (let [lines ["H:{\"ok\":true}" "L:2" "P:bafyA," "nope" "X" ""]
+        key-cases (into {} (map-indexed
+                            (fn [i line]
+                              [(str "pk_" i)
+                               (str "(probe-line-key " (kotoba-literal line) ")")])
+                            lines))
+        val-cases (into {} (map-indexed
+                            (fn [i line]
+                              [(str "pv_" i)
+                               (str "(probe-line-value " (kotoba-literal line) ")")])
+                            lines))
+        keys (compile-string-cases key-cases)
+        vals (compile-string-cases val-cases)]
+    (doseq [[i line] (map-indexed vector lines)]
+      (testing (pr-str line)
+        (let [m (state/probe-lines (str line "\n"))
+              k (get keys (str "pk_" i))
+              v (get vals (str "pv_" i))]
+          (if (seq k)
+            (is (= {k v} m))
+            (is (= {} m))))))))
+
+(deftest content-type-and-health-from-present
+  (let [actual-s (compile-string-cases
+                  {"ctj" "(content-type-json)"
+                   "cth" "(content-type-html)"
+                   "ho" "(health-from-present 1)"
+                   "hd" "(health-from-present 0)"
+                   "ok" "(health-ok-label)"
+                   "dn" "(health-down-label)"})
+        actual-i (compile-i64-cases {"st" "(http-ok-status)"})]
+    (is (= "application/json" (get actual-s "ctj")))
+    (is (= "text/html; charset=utf-8" (get actual-s "cth")))
+    (is (= 200 (get actual-i "st")))
+    (is (= "ok" (get actual-s "ho")))
+    (is (= "down" (get actual-s "hd")))
+    (is (= (:status (state/json-response "{}")) (get actual-i "st")))
+    (is (= (get-in (state/html-response "<x/>") [:headers "content-type"])
+           (get actual-s "cth")))
+    (is (= "ok" (state/health-from-present true)))
+    (is (= "down" (state/health-from-present false)))))

@@ -304,7 +304,19 @@
       (is (= (take-last 6 (conj (vec (range 10)) :y)) v))))
   (testing "recent-alerts cap via recent-take-n"
     (is (= 3 (count (dash/recent-alerts (range 10) 3))))
-    (is (= 6 (count (dash/recent-alerts (range 10) -1))))))
+    (is (= 6 (count (dash/recent-alerts (range 10) -1)))))
+  (testing "parse-links + probe lines + response constants via oracle"
+    (is (= 2 (dash/parse-links "2")))
+    (is (= 0 (dash/parse-links "not-int")))
+    (is (= {"H" "{\"a\":1}" "L" "3"}
+           (dash/probe-lines "H:{\"a\":1}\nL:3\n")))
+    (is (= 200 (:status (dash/json-response "{}"))))
+    (is (= "application/json"
+           (get-in (dash/json-response "{}") [:headers "content-type"])))
+    (is (= "text/html; charset=utf-8"
+           (get-in (dash/html-response "<x/>") [:headers "content-type"])))
+    (is (= "ok" (dash/health-from-present true)))
+    (is (= "down" (dash/health-from-present false)))))
 
 (deftest dash-oracle-call-matches-live-compile
   (let [live (dash-live-kir)]
@@ -319,8 +331,15 @@
     (is (= (ir/execute live 'take-last-start [10 6])
            (oracle/call :dash-state 'take-last-start [10 6])))
     (is (= (ir/execute live 'recent-take-n [-1 6])
-           (oracle/call :dash-state 'recent-take-n [-1 6])))))
-
+           (oracle/call :dash-state 'recent-take-n [-1 6])))
+    (is (= (ir/execute live 'parse-links ["2"])
+           (oracle/call :dash-state 'parse-links ["2"])))
+    (is (= (ir/execute live 'probe-line-key ["L:9"])
+           (oracle/call :dash-state 'probe-line-key ["L:9"])))
+    (is (= (ir/execute live 'content-type-html [])
+           (oracle/call :dash-state 'content-type-html [])))
+    (is (= (ir/execute live 'health-from-present [1])
+           (oracle/call :dash-state 'health-from-present [1])))))
 (deftest dash-precompiled-kir-does-not-drift
   (is (= (dash-live-kir) (dash-resource-kir))
       "dash_state KIR drift — run oracle-gen"))
