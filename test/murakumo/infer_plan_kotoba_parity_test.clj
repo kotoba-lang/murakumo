@@ -1,5 +1,6 @@
 ;; W6 pure-planner oracle: murakumo.infer.plan usable-bytes + choose-strategy
-;; + plan-lr-3 / fits gates vs kotoba/infer_plan_core.kotoba.
+;; + plan-lr-3 / fits gates + integer partition-layers walk
+;; vs kotoba/infer_plan_core.kotoba.
 
 (ns murakumo.infer-plan-kotoba-parity-test
   (:require [clojure.string :as str]
@@ -15,7 +16,10 @@
 (def export-prefix
   (str "gib default-os-reserve default-headroom usable-bytes choose-strategy-name "
        "lane-base plan-lr-3 plan-lr-pack-get plan-fits-total? span-fits? "
-       "uniform-layer-bytes dense-units-milli moe-layer-bytes"))
+       "uniform-layer-bytes dense-units-milli moe-layer-bytes "
+       "model-pack model-layers model-dense model-frac-milli "
+       "layer-byte-at layer-wsum partition-target "
+       "advance-hi est-bytes-range partition-3-ends"))
 
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
@@ -143,3 +147,95 @@
     ;; units = 3*100 + 75*1000 = 75300 milli
     (is (= (+ (* 3 100) (* 75 1000)) (get actual "du")))
     (is (= (quot (* 1000000 1000) (+ (* 3 100) (* 75 1000))) (get actual "moe")))))
+
+(defn- frac-milli [model]
+  (long (* 1000 (double (or (:model/dense-layer-frac model) 1/10)))))
+
+(defn- model-pack-call [model]
+  (str "(model-pack " (:model/layers model) " "
+       (or (:model/dense-layers model) 0) " " (frac-milli model) ")"))
+
+(defn- cljc-ends [model nodes]
+  (mapv (fn [a] (second (:layers a))) (plan/partition-layers model nodes)))
+
+(deftest layer-byte-at-and-wsum
+  (let [models [{:model/layers 10 :model/weight-bytes 1000 :model/dense-layers 0}
+                {:model/layers 10 :model/weight-bytes 1000000 :model/dense-layers 3
+                 :model/dense-layer-frac 1/10}
+                {:model/layers 20 :model/weight-bytes 10000000 :model/dense-layers 3
+                 :model/dense-layer-frac 1/10}]
+        cases (into {}
+                    (mapcat
+                     (fn [i model]
+                       (let [mp (model-pack-call model)
+                             w (:model/weight-bytes model)
+                             L (:model/layers model)]
+                         [[(str "w_" i) (str "(layer-wsum " w " " mp ")")]
+                          [(str "b0_" i) (str "(layer-byte-at " w " " mp " 0)")]
+                          [(str "bl_" i) (str "(layer-byte-at " w " " mp " " (dec L) ")")]]))
+                     (range) models))
+        actual (compile-i64-cases cases)]
+    (doseq [[i model] (map-indexed vector models)]
+      (let [lw (plan/layer-weights model)
+            w (:model/weight-bytes model)
+            L (:model/layers model)
+            d (or (:model/dense-layers model) 0)
+            f (frac-milli model)
+            units (+ (* (min L d) f) (* (- L (min L d)) 1000))
+            moe (if (< units 1) 0 (quot (* w 1000) units))
+            db (quot (* moe f) 1000)
+            int-wsum (+ (* (min L d) db) (* (- L (min L d)) moe))]
+        (testing (str "model-" i)
+          (is (= int-wsum (get actual (str "w_" i))))
+          (is (= (long (first lw)) (get actual (str "b0_" i))))
+          (is (= (long (last lw)) (get actual (str "bl_" i)))))))))
+
+(deftest partition-3-ends-matches-cljc
+  (let [cases
+        [["eq" {:model/layers 12 :model/weight-bytes 1200}
+          [{:name "a" :mem-bytes (* 16 GiB)}
+           {:name "b" :mem-bytes (* 16 GiB)}
+           {:name "c" :mem-bytes (* 16 GiB)}]]
+         ["uneq" {:model/layers 12 :model/weight-bytes 1200}
+          [{:name "a" :mem-bytes (* 32 GiB)}
+           {:name "b" :mem-bytes (* 16 GiB)}
+           {:name "c" :mem-bytes (* 8 GiB)}]]
+         ["moe-eq" {:model/layers 20 :model/weight-bytes 10000000
+                    :model/dense-layers 3 :model/dense-layer-frac 1/10}
+          [{:name "a" :mem-bytes (* 16 GiB)}
+           {:name "b" :mem-bytes (* 16 GiB)}
+           {:name "c" :mem-bytes (* 16 GiB)}]]
+         ["moe-uneq" {:model/layers 20 :model/weight-bytes 10000000
+                      :model/dense-layers 3 :model/dense-layer-frac 1/10}
+          [{:name "a" :mem-bytes (* 48 GiB)}
+           {:name "b" :mem-bytes (* 16 GiB)}
+           {:name "c" :mem-bytes (* 16 GiB)}]]
+         ["zero" {:model/layers 10 :model/weight-bytes 1000}
+          [{:name "a" :mem-bytes 0}
+           {:name "b" :mem-bytes 0}
+           {:name "c" :mem-bytes 0}]]]
+        kotoba-cases
+        (into {}
+              (map (fn [[label model nodes]]
+                     (let [us (mapv plan/usable-bytes nodes)
+                           mp (model-pack-call model)
+                           w (:model/weight-bytes model)]
+                       [label (str "(partition-3-ends " w " " mp " "
+                                   (us 0) " " (us 1) " " (us 2) ")")]))
+                   cases))
+        actual (compile-i64-cases
+                (merge kotoba-cases
+                       {"t0" "(partition-target 1200 100 300)"
+                        "t1" "(partition-target 1200 0 0)"
+                        "ah" (str "(advance-hi 1200 (model-pack 12 0 100) 0 0 "
+                                  (quot (* 1200 1) 3) ")")
+                        "er" "(est-bytes-range 1200 (model-pack 12 0 100) 0 4)"}))]
+    (is (= 400 (get actual "t0")))
+    (is (= 0 (get actual "t1")))
+    (is (= 4 (get actual "ah")))
+    (is (= 400 (get actual "er")))
+    (doseq [[label model nodes] cases]
+      (let [want (cljc-ends model nodes)
+            got (unpack3 (get actual label))]
+        (testing label
+          (is (= want got) (str label " want=" want " got=" got)))))))
