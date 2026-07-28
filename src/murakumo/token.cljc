@@ -9,18 +9,12 @@
       payloadSeg = b64url(json {\"sub\":…, \"scope\":…, \"iat\":N, \"exp\":N})
       sig        = b64url( HMAC-SHA256(secret, \"mk1.\" + payloadSeg) )
 
-  b64url is RFC-4648 url-safe, no padding. `verify` recomputes the signature
-  over the LITERAL received `mk1.<payloadSeg>` bytes (never re-serialized), so
-  the two runtimes only need to agree on HMAC + base64url of raw bytes — not on
-  JSON key order or whitespace. That is what lets the CLI (JVM/babashka, javax
-  HMAC) and the Cloudflare Worker (cljs, WebCrypto) mint/verify the same token.
-
-  This file is the single source of truth for the format and is kept BYTE-
-  IDENTICAL in cloud-murakumo (the verifying gateway). Edit both together.
+  Pure wire/claims helpers mirror kotoba/token_core.kotoba (encode-claims-json,
+  signing-input, wire-token, constant-time=). HMAC-SHA256 + base64url codecs
+  stay host (javax on JVM/bb, WebCrypto on cljs).
 
   The signing secret (MURAKUMO_TOKEN_SECRET) is the operator's; it lives in the
-  CLI's environment (to mint) and as a Worker secret (to verify). It is never
-  embedded in a token and never leaves those two places."
+  CLI's environment (to mint) and as a Worker secret (to verify)."
   (:require [clojure.string :as str]
             #?(:cljs [goog.crypt.base64 :as gb64]))
   #?(:clj (:import [javax.crypto Mac]
@@ -29,8 +23,9 @@
                    [java.nio.charset StandardCharsets])))
 
 (def ^:const version "mk1")
+(def ^:const default-ttl 2592000)
 
-;; ── base64url (no padding) over raw bytes ───────────────────────────
+;; ── base64url (no padding) over raw bytes — host codec ──────────────
 
 (defn b64url-bytes [bytes]
   #?(:clj  (-> (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) bytes))
@@ -45,7 +40,7 @@
   #?(:clj  (b64url-bytes (.getBytes ^String s StandardCharsets/UTF_8))
      :cljs (-> (gb64/encodeString s) (str/replace "+" "-") (str/replace "/" "_") (str/replace "=" ""))))
 
-;; ── pure claims helpers (identical on both runtimes) ────────────────
+;; ── pure claims / wire (parity: kotoba/token_core.kotoba) ────────────
 
 (defn claims
   "Build the token claim map. `now`/`ttl` in epoch seconds (caller supplies the
@@ -55,12 +50,18 @@
   {:sub (str (or sub "anonymous"))
    :scope (str (or scope "all"))
    :iat (long now)
-   :exp (long (+ now (or ttl 2592000)))})   ; default 30d
+   :exp (long (+ now (or ttl default-ttl)))})
 
-(defn encode-claims [m]
-  (b64url-str #?(:clj (str "{\"sub\":\"" (:sub m) "\",\"scope\":\"" (:scope m)
-                           "\",\"iat\":" (:iat m) ",\"exp\":" (:exp m) "}")
-                 :cljs (js/JSON.stringify (clj->js m)))))
+(defn encode-claims-json
+  "Fixed-key JSON matching kotoba `encode-claims-json` on JVM and cljs."
+  [{:keys [sub scope iat exp]}]
+  (str "{\"sub\":\"" sub "\",\"scope\":\"" scope
+       "\",\"iat\":" iat ",\"exp\":" exp "}"))
+
+(defn encode-claims
+  "b64url of fixed-key claims JSON (host b64 codec)."
+  [m]
+  (b64url-str (encode-claims-json m)))
 
 (defn decode-claims [payload-seg]
   (try
@@ -76,17 +77,37 @@
 
 (defn expired? [cl now] (or (nil? (:exp cl)) (>= (long now) (long (:exp cl)))))
 
+(defn signing-input
+  "HMAC message: version + '.' + payloadSeg (kotoba `signing-input`)."
+  [payload-seg]
+  (str version "." payload-seg))
+
+(defn wire-token
+  "mk1.<payloadSeg>.<sig> (kotoba `wire-token`)."
+  [payload-seg sig]
+  (str version "." payload-seg "." sig))
+
+(defn version-ok? [v]
+  (= version (str v)))
+
+(defn parts-present?
+  "All three wire segments present (host split projects 0/1)."
+  [v payload sig]
+  (boolean (and v payload sig (not (str/blank? (str v)))
+                (not (str/blank? (str payload)))
+                (not (str/blank? (str sig))))))
+
 (defn- char-code [s i]
   #?(:clj (int (.charAt ^String s i)) :cljs (.charCodeAt ^string s i)))
 
-(defn- constant-time=
-  "Length-checked constant-time string compare (avoids sig timing leaks)."
+(defn constant-time=
+  "Length-checked constant-time string compare (kotoba `constant-time-eq`)."
   [a b]
   (and (string? a) (string? b) (= (count a) (count b))
        (zero? (reduce (fn [acc i] (bit-or acc (bit-xor (char-code a i) (char-code b i))))
                       0 (range (count a))))))
 
-;; ── HMAC — sync on the JVM (CLI), async in the Worker (WebCrypto) ────
+;; ── HMAC host adapter (javax / WebCrypto) ───────────────────────────
 
 #?(:clj
    (defn- hmac-b64url [secret msg]
@@ -104,44 +125,42 @@
            (.then (fn [k] (js/crypto.subtle.sign "HMAC" k (.encode enc msg))))
            (.then (fn [buf] (b64url-bytes (js/Uint8Array. buf))))))))
 
-;; ── sign / verify (sync on JVM, Promise on cljs) ────────────────────
-
 #?(:clj
    (defn sign
-     "Mint a token from claim opts. JVM/bb — returns the token string."
+     "Mint a token: pure wire + host HMAC."
      [secret opts]
      (let [payload (encode-claims (claims opts))
-           signing-input (str version "." payload)]
-       (str signing-input "." (hmac-b64url secret signing-input)))))
+           si (signing-input payload)
+           sig (hmac-b64url secret si)]
+       (wire-token payload sig))))
 
 #?(:clj
    (defn verify
-     "JVM/bb verify — returns the claim map if the signature is valid and the
-     token is unexpired, else nil."
+     "Verify: pure version/parts/CT-eq + host HMAC; returns claims or nil."
      [secret token now]
      (let [[v payload sig] (str/split (str token) #"\." 3)]
-       (when (and (= v version) payload sig)
-         (let [expected (hmac-b64url secret (str version "." payload))]
+       (when (and (version-ok? v) (parts-present? v payload sig))
+         (let [expected (hmac-b64url secret (signing-input payload))]
            (when (constant-time= sig expected)
              (let [cl (decode-claims payload)]
                (when (and cl (not (expired? cl now))) cl))))))))
 
 #?(:cljs
    (defn sign
-     "Promise<token>. Worker-side minting (rarely used — the CLI usually mints)."
+     "Promise<token>. Pure wire + host WebCrypto HMAC."
      [secret opts]
      (let [payload (encode-claims (claims opts))
-           signing-input (str version "." payload)]
-       (-> (hmac-b64url secret signing-input)
-           (.then (fn [sig] (str signing-input "." sig)))))))
+           si (signing-input payload)]
+       (-> (hmac-b64url secret si)
+           (.then (fn [sig] (wire-token payload sig)))))))
 
 #?(:cljs
    (defn verify
-     "Promise<claims|nil>. Worker-side verification for the gateway."
+     "Promise<claims|nil>. Pure version/parts/CT-eq + host WebCrypto HMAC."
      [secret token now]
      (let [[v payload sig] (str/split (str token) #"\." 3)]
-       (if (and (= v version) payload sig)
-         (-> (hmac-b64url secret (str version "." payload))
+       (if (and (version-ok? v) (parts-present? v payload sig))
+         (-> (hmac-b64url secret (signing-input payload))
              (.then (fn [expected]
                       (when (constant-time= sig expected)
                         (let [cl (decode-claims payload)]
@@ -150,6 +169,6 @@
 
 (defn scope-allows?
   "Does a token's scope grant `required`? \"all\" grants everything; otherwise
-  exact match. Pure — usable on both runtimes."
+  exact match. Pure — usable on both runtimes (kotoba `scope-allows?`)."
   [token-scope required]
   (or (= "all" (str token-scope)) (= (str token-scope) (str required))))

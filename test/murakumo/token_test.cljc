@@ -36,3 +36,25 @@
   (is (tok/scope-allows? "all" "chat"))
   (is (tok/scope-allows? "chat" "chat"))
   (is (not (tok/scope-allows? "image" "chat"))))
+
+(deftest live-hmac-adapter-uses-pure-wire
+  (testing "encode-claims-json fixed key order (kotoba parity)"
+    (is (= "{\"sub\":\"a\",\"scope\":\"chat\",\"iat\":1,\"exp\":2}"
+           (tok/encode-claims-json {:sub "a" :scope "chat" :iat 1 :exp 2}))))
+  (testing "signing-input + wire-token pure assembly"
+    (is (= "mk1.payload" (tok/signing-input "payload")))
+    (is (= "mk1.payload.sig" (tok/wire-token "payload" "sig"))))
+  (testing "version-ok? / parts-present? gates"
+    (is (tok/version-ok? "mk1"))
+    (is (not (tok/version-ok? "mk9")))
+    (is (tok/parts-present? "mk1" "p" "s"))
+    (is (not (tok/parts-present? "mk1" nil "s"))))
+  (testing "constant-time= rejects length mismatch"
+    (is (tok/constant-time= "ab" "ab"))
+    (is (not (tok/constant-time= "ab" "abc"))))
+  (testing "sign still uses pure wire path end-to-end"
+    (let [t (tok/sign secret {:sub "x" :scope "all" :now 10 :ttl 5})
+          [v p s] (str/split t #"\." 3)]
+      (is (tok/version-ok? v))
+      (is (tok/parts-present? v p s))
+      (is (= t (tok/wire-token p s))))))
