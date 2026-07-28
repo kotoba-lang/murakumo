@@ -11,7 +11,9 @@
 (def port-source (slurp "kotoba/fleet_inventory_core.kotoba"))
 
 (def export-prefix
-  "default-control-port digit-char nat-str i64-str resolve-port health-url selector-is-all? selector-wants-name? line-has-offline?")
+  (str "default-control-port digit-char nat-str i64-str resolve-port health-url "
+       "selector-is-all? selector-wants-name? line-has-offline? "
+       "selector-all offline-token health-url-prefix health-url-path selector-join-sep"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -99,7 +101,7 @@
     (doseq [[i s] (map-indexed vector corpus)]
       (testing (pr-str s)
         (let [sel (cljc-sel s)
-              expected (if (or (nil? sel) (= sel "all")) 1 0)]
+              expected (if (or (nil? sel) (= sel inv/selector-all)) 1 0)]
           (is (= expected (get actual (str "sa_" i)))))))))
 
 (deftest selector-wants-name-matches-split
@@ -135,5 +137,28 @@
         actual (compile-i64-cases cases)]
     (doseq [[i line] (map-indexed vector corpus)]
       (testing (pr-str line)
-        (let [expected (if (str/includes? line "offline") 1 0)]
+        (let [expected (if (str/includes? line inv/offline-token) 1 0)]
           (is (= expected (get actual (str "lo_" i)))))))))
+
+(deftest fleet-inventory-tokens-match
+  (let [s (compile-string-cases
+           {"sa" "(selector-all)"
+            "ot" "(offline-token)"
+            "hp" "(health-url-prefix)"
+            "hs" "(health-url-path)"
+            "sj" "(selector-join-sep)"})
+        n (compile-i64-cases {"dp" "(default-control-port)"})]
+    (is (= inv/selector-all (get s "sa")))
+    (is (= "all" (get s "sa")))
+    (is (= inv/offline-token (get s "ot")))
+    (is (= "offline" (get s "ot")))
+    (is (= inv/health-url-prefix (get s "hp")))
+    (is (= "http://localhost:" (get s "hp")))
+    (is (= inv/health-url-path (get s "hs")))
+    (is (= "/health" (get s "hs")))
+    (is (= inv/selector-join-sep (get s "sj")))
+    (is (= "," (get s "sj")))
+    (is (= inv/default-control-port (get n "dp")))
+    (is (= 8077 (get n "dp")))
+    (is (= (str inv/health-url-prefix 8077 inv/health-url-path)
+           (inv/node-health-url {} {})))))
