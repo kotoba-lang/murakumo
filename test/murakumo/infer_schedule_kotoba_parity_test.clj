@@ -20,6 +20,12 @@
 
 (def GiB (* 1024 1024 1024))
 
+
+(defn- opt-i64-form [n]
+  (if (nil? n)
+    "(option-none-of [:option :i64])"
+    (str "(option-some-of [:option :i64] " (long n) ")")))
+
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
                (str "(defn " name " [] :i64 " body ")"))
@@ -351,16 +357,16 @@
         frees [fa fb fc fd]
         ;; host fold: start no champ; all ok+warm
         ;; step i=0: has=0 ok=1 → take 0
-        f0 "(pick-fold-step 0 1 0 1 0)"
+        f0 (str "(pick-fold-step " (opt-i64-form nil) " 1 0 1 0)")
         ;; champ=0 warm=1; vs i=1 better 0 vs 1: free a < b so a not better → better=0
         b01 (str "(better-pair 0 " fa " 0 " fb ")")
-        f1 (str "(pick-fold-step 1 1 1 1 " b01 ")")
+        f1 (str "(pick-fold-step " (opt-i64-form 1) " 1 1 1 " b01 ")")
         actual (compile-i64-cases
                 {"f0" f0
                  "b01" b01
                  "f1" f1
-                 "none" "(pick-fold-step 0 0 0 0 0)"
-                 "keep" "(pick-fold-step 1 0 1 0 0)"
+                 "none" (str "(pick-fold-step " (opt-i64-form nil) " 0 0 0 0)")
+                 "keep" (str "(pick-fold-step " (opt-i64-form 1) " 0 1 0 0)")
                  "qi0" "(queue-inc-if 0 0)"
                  "qi1" "(queue-inc-if 3 1)"})]
     (is (= 1 (get actual "f0")) "take first eligible")
@@ -372,12 +378,12 @@
     (is (= 4 (get actual "qi1")))
     ;; continue fold in second compile with b as champ vs c, d
     (let [b02 (str "(better-pair 0 " fb " 0 " fc ")")
-          f2 (str "(pick-fold-step 1 1 1 1 " b02 ")")
+          f2 (str "(pick-fold-step " (opt-i64-form 1) " 1 1 1 " b02 ")")
           act2 (compile-i64-cases {"b02" b02 "f2" f2})]
       (is (= 0 (get act2 "b02")))
       (is (= 1 (get act2 "f2")) "take c")
       (let [b03 (str "(better-pair 0 " fc " 0 " fd ")")
-            f3 (str "(pick-fold-step 1 1 1 1 " b03 ")")
+            f3 (str "(pick-fold-step " (opt-i64-form 1) " 1 1 1 " b03 ")")
             act3 (compile-i64-cases {"f3" f3})]
         (is (= 1 (get act3 "f3")) "take d — largest free")
         (is (= "d" (:name cljc)))))))
