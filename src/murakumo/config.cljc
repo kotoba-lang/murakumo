@@ -410,7 +410,10 @@
    "MURAKUMO_GIT_BIN"
    "MURAKUMO_QUIC_DRIVER"
    "MURAKUMO_WEBRTC_DRIVER"
-   "MURAKUMO_WEBTRANSPORT_DRIVER"])
+   "MURAKUMO_WEBTRANSPORT_DRIVER"
+   "MURAKUMO_KEKKAI_LEDGER"
+   "MURAKUMO_KEKKAI_DIR"
+   "HOME"])
 
 (defn ops-env-from-getenv
   "Exact-name ops config map from injected getenv."
@@ -492,3 +495,18 @@
   "External overlay adapter driver command from exact driver-env name."
   ([env-name] (config-string-or-nil env-name))
   ([env-name getenv] (config-string-or-nil env-name getenv)))
+
+(defn kekkai-ledger
+  "MURAKUMO_KEKKAI_LEDGER exact path override, or nil (caller uses gate default)."
+  ([] (config-string-or-nil "MURAKUMO_KEKKAI_LEDGER"))
+  ([getenv] (config-string-or-nil "MURAKUMO_KEKKAI_LEDGER" getenv)))
+
+(defn kekkai-dir
+  "MURAKUMO_KEKKAI_DIR exact checkout override, or nil (caller uses home default)."
+  ([] (config-string-or-nil "MURAKUMO_KEKKAI_DIR"))
+  ([getenv] (config-string-or-nil "MURAKUMO_KEKKAI_DIR" getenv)))
+
+(defn home-dir
+  "HOME for default path construction (config leave, not a secret)."
+  ([] (config-string-or-nil "HOME"))
+  ([getenv] (config-string-or-nil "HOME" getenv)))

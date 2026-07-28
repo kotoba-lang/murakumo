@@ -15,6 +15,7 @@
 
 (ns murakumo.kekkai.gate
   (:require [clojure.string :as str]
+            [murakumo.config :as config]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :kekkai-gate)
@@ -61,11 +62,24 @@
     (o 'default-kekkai-dir-under [(str home)])
     (mirror-default-kekkai-dir home)))
 
-(defn ledger-path [getenv]
-  (or (getenv "MURAKUMO_KEKKAI_LEDGER") default-ledger-path))
+(defn ledger-path
+  "Ledger file path: exact MURAKUMO_KEKKAI_LEDGER via config inject, else default.
+   0-arity uses process getenv (exact name only)."
+  ([]
+   #?(:clj (ledger-path #(System/getenv %))
+      :cljs default-ledger-path))
+  ([getenv]
+   (or (config/kekkai-ledger getenv) default-ledger-path)))
 
-(defn kekkai-dir [getenv]
-  (or (getenv "MURAKUMO_KEKKAI_DIR") (default-kekkai-dir (getenv "HOME"))))
+(defn kekkai-dir
+  "Kekkai checkout dir: exact MURAKUMO_KEKKAI_DIR via config inject, else
+   default under HOME. 0-arity uses process getenv (exact names only)."
+  ([]
+   #?(:clj (kekkai-dir #(System/getenv %))
+      :cljs (default-kekkai-dir "")))
+  ([getenv]
+   (or (config/kekkai-dir getenv)
+       (default-kekkai-dir (or (config/home-dir getenv) "")))))
 
 (defn- mirror-cli-argv [ledger-path node-name]
   ["clojure" "-M" "-m" "kekkai.cli" ledger-path node-name])

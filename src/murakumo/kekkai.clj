@@ -15,8 +15,6 @@
   (:require [babashka.process :as p]
             [murakumo.kekkai.gate :as gate]))
 
-(defn- getenv [k] (System/getenv k))
-
 (defn- absolute
   "Canonicalize a (possibly relative-to-murakumo's-cwd) path, because the
    kekkai.cli subprocess runs with :dir = the kekkai checkout (so ITS
@@ -26,23 +24,25 @@
   (.getCanonicalPath (java.io.File. path)))
 
 (defn enabled?
-  "The gate activates only when its ledger file exists on disk."
+  "The gate activates only when its ledger file exists on disk.
+   Path via gate/ledger-path (config inject exact-name getenv)."
   []
-  (.exists (java.io.File. (gate/ledger-path getenv))))
+  (.exists (java.io.File. (gate/ledger-path))))
 
 (defn status-for
   "One node's kekkai admission status, via the kekkai.cli subprocess.
    \"unknown\" when the sibling kekkai checkout is absent, the `clojure`
    binary isn't on PATH, or the subprocess otherwise fails to launch or run
    (fail closed, not fail open — a missing/broken kekkai toolchain must never
-   crash murakumo's own CLI, only deny admission)."
+   crash murakumo's own CLI, only deny admission).
+   Dir/ledger via gate (config inject exact-name getenv)."
   [node-name]
-  (let [dir (gate/kekkai-dir getenv)]
+  (let [dir (gate/kekkai-dir)]
     (if-not (.exists (java.io.File. dir))
       "unknown"
       (try
         (gate/parse-status
-         (p/sh (gate/cli-argv (absolute (gate/ledger-path getenv)) node-name) {:dir dir}))
+         (p/sh (gate/cli-argv (absolute (gate/ledger-path)) node-name) {:dir dir}))
         (catch Exception _ "unknown")))))
 
 (defn apply-gate

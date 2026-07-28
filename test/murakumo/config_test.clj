@@ -204,5 +204,15 @@
   (is (= "/opt/quic-driver"
          (config/adapter-driver-command "MURAKUMO_QUIC_DRIVER"
                                         {"MURAKUMO_QUIC_DRIVER" "/opt/quic-driver"})))
+  (is (nil? (config/kekkai-ledger (constantly nil))))
+  (is (= "/etc/murakumo/ledger.edn"
+         (config/kekkai-ledger {"MURAKUMO_KEKKAI_LEDGER" "/etc/murakumo/ledger.edn"})))
+  (is (nil? (config/kekkai-dir (constantly nil))))
+  (is (= "/opt/kekkai"
+         (config/kekkai-dir {"MURAKUMO_KEKKAI_DIR" "/opt/kekkai"})))
+  (is (nil? (config/home-dir (constantly nil))))
+  (is (= "/home/jun" (config/home-dir {"HOME" "/home/jun"})))
+  (is (some #{"MURAKUMO_KEKKAI_LEDGER" "MURAKUMO_KEKKAI_DIR" "HOME"}
+            config/ops-config-keys))
   (is (nil? (config/config-string-or-nil "MURAKUMO_CLOUD" (constantly nil))))
   (is (nil? (config/config-string-or-nil "MURAKUMO_CLOUD" {"MURAKUMO_CLOUD" "  "}))))
