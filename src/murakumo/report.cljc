@@ -1,10 +1,11 @@
 ;; murakumo.report — portable CLI report formatting.
 ;;
-;; W6 product-shell (ADR-260728-w6-cljs-clj-residual-dual):
-;; pure string helpers DELEGATE to precompiled kotoba report_core when oracle
-;; is loadable (JVM classpath or cljs/nbb). Host remains: map/keyword
-;; projection, CSV joins, and the reconcile-lines mapcat structure over apps.
-;; cljs mirrors remain fallback when oracle is not ready.
+;; W6 product-shell (ADR-260728-w6-report-csv-pure-oracle):
+;; pure string helpers + CSV join seps + cid-display max DELEGATE to
+;; precompiled kotoba report_core when oracle is loadable (JVM classpath or
+;; cljs/nbb). Host remains: map/keyword projection, CSV join folds, and the
+;; reconcile-lines mapcat structure over apps. cljs mirrors remain fallback
+;; when oracle is not ready.
 
 (ns murakumo.report
   (:require [clojure.string :as str]
@@ -37,6 +38,35 @@
       mirror)
     (catch #?(:clj Exception :cljs :default) _
       mirror)))
+
+(defn- oracle-i64-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid export []))
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+(def ^:private mirror-report-csv-sep ",")
+(def ^:private mirror-report-csv-spaced-sep ", ")
+(def ^:private mirror-mesh-status-sep "/")
+(def ^:private mirror-cid-display-max-len 16)
+
+(def report-csv-sep
+  "CSV join for reconcile targets/running/reach. Kotoba when ready."
+  (oracle-str-const 'report-csv-sep mirror-report-csv-sep))
+
+(def report-csv-spaced-sep
+  "Spaced CSV join for deploy-observed where list. Kotoba when ready."
+  (oracle-str-const 'report-csv-spaced-sep mirror-report-csv-spaced-sep))
+
+(def mesh-status-sep
+  "Separator between binary/launch status. Kotoba when ready."
+  (oracle-str-const 'mesh-status-sep mirror-mesh-status-sep))
+
+(def cid-display-max-len
+  "Max chars for reconcile CID display truncate. Kotoba when ready."
+  (oracle-i64-const 'cid-display-max-len mirror-cid-display-max-len))
 
 ;; ── portable pad (cljs-safe mirrors of format %-Ns) ──────────────────
 
@@ -74,11 +104,11 @@
          (str p2p-port))))
 
 (defn- mirror-mesh-status [binary-status launch-status]
-  (str binary-status "/" launch-status))
+  (str binary-status mirror-mesh-status-sep launch-status))
 
 (defn- mirror-deploy-observed-row [where publish-node]
   (if (seq where)
-    (str "  ✓ placed + running on: " (str/join ", " where)
+    (str "  ✓ placed + running on: " (str/join mirror-report-csv-spaced-sep where)
          "  (deployed from " (:name publish-node) ")")
     "  ⚠ not yet observed running on any node (check `murakumo status` / node logs)"))
 
@@ -180,7 +210,7 @@
     (str "unknown " (name command) " error: " (name error))))
 
 (defn- mirror-fmt-cid [cid]
-  (if cid (subs cid 0 (min 16 (count cid))) "—"))
+  (if cid (subs cid 0 (min mirror-cid-display-max-len (count cid))) "—"))
 
 (defn- mirror-reconcile-lines [plan]
   (let [header [(str "reconcile " (or (:fleet plan) "fleet") "  @ " (:ts plan))
@@ -193,9 +223,9 @@
       (mapcat
        (fn [app]
          (let [detail (case (:action app)
-                        :place (str "→ " (str/join "," (:targets app)))
+                        :place (str "→ " (str/join mirror-report-csv-sep (:targets app)))
                         :satisfied (if (seq (:running app))
-                                     (str "on " (str/join "," (:running app)))
+                                     (str "on " (str/join mirror-report-csv-sep (:running app)))
                                      "")
                         (str (or (:reason app) "")))
                base [(str "  " (pad-to (:app app) 14) " "
@@ -206,13 +236,13 @@
                           detail)]
                reach (when (seq (:reach app))
                        [(str "  " (pad-to "" 14) " " (pad-to "" 10)
-                             " reach: " (str/join "," (map str (:reach app)))
+                             " reach: " (str/join mirror-report-csv-sep (map str (:reach app)))
                              " → eligible(by transport)="
-                             (str/join "," (:eligible app)))])
+                             (str/join mirror-report-csv-sep (:eligible app)))])
                misplaced (when (seq (:misplaced app))
                            [(str "  " (pad-to "" 14) " " (pad-to "" 10)
                                  " drift: running on non-eligible node(s): "
-                                 (str/join "," (:misplaced app)))])]
+                                 (str/join mirror-report-csv-sep (:misplaced app)))])]
            (concat base reach misplaced)))
        (:apps plan))))))
 
@@ -295,7 +325,7 @@
   (try-oracle
    #(if (seq where)
       (o 'deploy-observed-placed-line
-         [(str/join ", " where) (str (:name publish-node))])
+         [(str/join report-csv-spaced-sep where) (str (:name publish-node))])
       (o 'deploy-observed-empty-line []))
    #(mirror-deploy-observed-row where publish-node)))
 
@@ -459,14 +489,15 @@
 (defn- fmt-cid [cid]
   (try-oracle
    #(if cid
-      (o 'cid-display [(subs cid 0 (min 16 (count cid))) (oracle/as-i64 1)])
+      (o 'cid-display [(subs cid 0 (min cid-display-max-len (count cid)))
+                       (oracle/as-i64 1)])
       (o 'cid-display ["" (oracle/as-i64 0)]))
    #(mirror-fmt-cid cid)))
 
 (defn reconcile-lines
   "Render a reconcile plan as operator table lines.
    Pure title/col/row/detail/reach/drift from oracle when ready; host mapcats
-   apps and joins CSV for targets/running/reach/misplaced."
+   apps and joins CSV for targets/running/reach/misplaced (sep dual-sourced)."
   [plan]
   (try-oracle
    #(let [title (o 'reconcile-title
@@ -478,8 +509,8 @@
         (mapcat
          (fn [app]
            (let [action (name (:action app))
-                 targets-csv (str/join "," (:targets app))
-                 running-csv (str/join "," (:running app))
+                 targets-csv (str/join report-csv-sep (:targets app))
+                 running-csv (str/join report-csv-sep (:running app))
                  running-empty (if (seq (:running app)) 0 1)
                  reason (str (or (:reason app) ""))
                  detail (o 'action-detail
@@ -496,11 +527,11 @@
                  base [(o 'reconcile-app-line [front detail])]
                  reach (when (seq (:reach app))
                          [(o 'reach-line
-                             [(str/join "," (map str (:reach app)))
-                              (str/join "," (:eligible app))])])
+                             [(str/join report-csv-sep (map str (:reach app)))
+                              (str/join report-csv-sep (:eligible app))])])
                  misplaced (when (seq (:misplaced app))
                              [(o 'drift-line
-                                 [(str/join "," (:misplaced app))])])]
+                                 [(str/join report-csv-sep (:misplaced app))])])]
              (concat base reach misplaced)))
          (:apps plan)))))
    #(mirror-reconcile-lines plan)))

@@ -207,7 +207,15 @@
       (is (= "  APP            CID        DESIRED RUNNING ACTION    DETAIL"
              (second lines)))
       (is (re-find #"a1" (nth lines 2)))
-      (is (re-find #"on n1" (nth lines 2))))))
+      (is (re-find #"on n1" (nth lines 2)))))
+  (testing "CSV join seps + cid max dual-source"
+    (is (= "," report/report-csv-sep))
+    (is (= ", " report/report-csv-spaced-sep))
+    (is (= "/" report/mesh-status-sep))
+    (is (= 16 report/cid-display-max-len))
+    (is (str/includes?
+         (report/deploy-observed-row ["a" "b"] {:name "pub"})
+         "a, b"))))
 
 (deftest report-oracle-call-matches-live-compile
   (let [live (report-live-kir)]
@@ -232,7 +240,18 @@
     (is (= (ir/execute live 'status-row
                        ["asher" (oracle/option-i64 nil) "?" "-" 0])
            (oracle/call :report-core 'status-row
-                        ["asher" (oracle/option-i64 nil) "?" "-" 0])))))
+                        ["asher" (oracle/option-i64 nil) "?" "-" 0])))
+    (is (= (ir/execute live 'report-csv-sep [])
+           (oracle/call :report-core 'report-csv-sep [])))
+    (is (= (ir/execute live 'report-csv-spaced-sep [])
+           (oracle/call :report-core 'report-csv-spaced-sep [])))
+    (is (= (ir/execute live 'mesh-status-sep [])
+           (oracle/call :report-core 'mesh-status-sep [])))
+    (is (= (ir/execute live 'cid-display-max-len [])
+           (oracle/call :report-core 'cid-display-max-len [])))
+    (is (= (oracle/call :report-core 'report-csv-sep []) report/report-csv-sep))
+    (is (= (oracle/call :report-core 'cid-display-max-len [])
+           report/cid-display-max-len))))
 
 (deftest report-precompiled-kir-does-not-drift
   (is (= (report-live-kir) (report-resource-kir))

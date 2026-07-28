@@ -72,12 +72,20 @@
        (trim (string-substring s 0 (- n 1)))
        s)))),
    :param-types [:string]}
+  {:name mesh-status-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/",
+   :param-types []}
   {:name mesh-status,
    :params [binary-status launch-status],
    :result :string,
    :effects #{},
    :body
-   (string-concat binary-status (string-concat "/" launch-status)),
+   (string-concat
+    binary-status
+    (string-concat (mesh-status-sep) launch-status)),
    :param-types [:string :string]}
   {:name node-prefix,
    :params [name],
@@ -664,7 +672,25 @@
    (string-concat
     "                            drift: running on non-eligible node(s): "
     misplaced-csv),
-   :param-types [:string]}],
+   :param-types [:string]}
+  {:name report-csv-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ",",
+   :param-types []}
+  {:name report-csv-spaced-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ", ",
+   :param-types []}
+  {:name cid-display-max-len,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 16,
+   :param-types []}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
@@ -738,7 +764,11 @@
   reconcile-app-row
   reconcile-app-line
   reach-line
-  drift-line],
+  drift-line
+  report-csv-sep
+  report-csv-spaced-sep
+  mesh-status-sep
+  cid-display-max-len],
  :schemas nil,
  :effects #{},
  :blocks [],
