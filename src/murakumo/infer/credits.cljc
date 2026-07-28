@@ -21,27 +21,49 @@
 ;;   "investment" loop: treasury buys RAM/Thunderbolt, which raises the
 ;;   fleet's servable model class, which raises demand for credits).
 
-(ns murakumo.infer.credits)
+(ns murakumo.infer.credits
+  "Inference economy pure ledger math.
+   W6 product-shell: integer defaults + pure weight/cost helpers via kotoba
+   infer_credits_core on JVM. Float share folds and ledger assembly stay host."
+  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def default-per-token 1)          ; credits per generated token
+(def ^:private oid :infer-credits)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
+
+(def default-per-token
+  "Credits per generated token. JVM: kotoba `default-per-token`."
+  #?(:clj (long (o 'default-per-token []))
+     :cljs 1))
+
 ;; NOT ratio literals (1/10, 1/20): clojure.lang.Ratio is not a valid
-;; ClojureScript compile-time constant ("failed compiling constant: 1/10")
-;; -- this file's own docstring promises "runs identically in bb, the JVM,
-;; the CF Worker (cloud-murakumo /infer/credits) and a kotoba WASM
-;; component", so cljs portability is a real requirement here, not
-;; optional. (/ 1 10) evaluates to the identical Clojure ratio value at
-;; runtime on bb/JVM (arithmetic, not a literal, so it's fine there too) --
-;; only the *literal syntax* is the problem.
-(def default-head-frac (/ 1 10))     ; conductor's cut
-(def default-protocol-frac (/ 1 20)) ; fleet treasury (upgrade fund)
+;; ClojureScript compile-time constant. Use (/ num den); on JVM num/den come
+;; from the oracle so kotoba is SSoT for the cut fractions.
+(def default-head-frac
+  "Conductor's cut. JVM: head-num/head-den from oracle."
+  #?(:clj (/ (long (o 'head-num [])) (long (o 'head-den [])))
+     :cljs (/ 1 10)))
+
+(def default-protocol-frac
+  "Fleet treasury cut. JVM: protocol-num/protocol-den from oracle."
+  #?(:clj (/ (long (o 'protocol-num [])) (long (o 'protocol-den [])))
+     :cljs (/ 1 20)))
 
 (defn- memory-time
-  "node → shard-bytes × duration-ms, the contribution weight of one run."
+  "node → shard-bytes × duration-ms, the contribution weight of one run.
+   JVM: weight via kotoba `memory-time-weight` (span≤0 ⇒ 0)."
   [assignments duration-ms]
   (into {}
         (for [{:keys [node est-bytes span]} assignments
               :when (pos? (or span 0))]
-          [(:name node) (* (double est-bytes) duration-ms)])))
+          [(:name node)
+           #?(:clj (double (o 'memory-time-weight
+                              [(long (or est-bytes 0))
+                               (long (or duration-ms 1))
+                               (long span)]))
+              :cljs (* (double est-bytes) duration-ms))])))
 
 
 (def unit-prices
