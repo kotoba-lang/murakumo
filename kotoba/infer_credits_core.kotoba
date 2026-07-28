@@ -1,0 +1,44 @@
+(ns infer-credits-core
+  (:export [default-per-token head-num head-den protocol-num protocol-den
+            token-cost cut pool memory-time-weight
+            charge-allow? balance-after-spend]))
+
+;; W6 pure-planner oracle — murakumo.infer.credits integer core (medium).
+;; Float share folds (settle shares ∝ memory-time) and ledger map reduce stay cljc.
+;; Default fractions: head 1/10, protocol 1/20 (exact integer when total % den = 0).
+;; memory-time-weight: 0 when span < 1 (inactive shard), else est-bytes * duration-ms.
+;; charge-allow?: balance >= cost. balance-after-spend: max(0, bal - cost) not used
+;;   by cljc (spend is event); provided for guest prepaid checks.
+;; Parity: test/murakumo/infer_credits_kotoba_parity_test.clj
+
+(defn default-per-token [] :i64 1)
+
+(defn head-num [] :i64 1)
+(defn head-den [] :i64 10)
+(defn protocol-num [] :i64 1)
+(defn protocol-den [] :i64 20)
+
+(defn token-cost [price :i64 tokens :i64] :i64
+  ;; cljc job-cost for :tokens only (integer prices)
+  (* price tokens))
+
+(defn cut [total :i64 num :i64 den :i64] :i64
+  ;; floor(total * num / den) — matches double for exact ratios on clean totals
+  (quot (* total num) den))
+
+(defn pool [total :i64 treasury :i64 head :i64] :i64
+  (- total (+ treasury head)))
+
+(defn memory-time-weight [est-bytes :i64 duration-ms :i64 span :i64] :i64
+  ;; cljc memory-time: only when (pos? span)
+  (if (< span 1)
+    0
+    (* est-bytes duration-ms)))
+
+(defn charge-allow? [balance :i64 cost :i64] :i64
+  ;; cljc charge: allow? when balance covers cost
+  (if (< balance cost) 0 1))
+
+(defn balance-after-spend [balance :i64 cost :i64] :i64
+  (let [left (- balance cost)]
+    (if (< left 0) 0 left)))
