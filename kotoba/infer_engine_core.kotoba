@@ -3,7 +3,9 @@
             split-mode-name endpoint rpc-server-cmd
             embed-head-front embed-head-back
             mlx-moe-bin mlx-moe-front opt-i64-flag opt-str-flag
-            tensor-split-3 mlx-launch-front]))
+            tensor-split-3 mlx-launch-front
+            head-cmd-front head-cmd-middle head-cmd-tail
+            rpc-csv-2 rpc-csv-3]))
 
 ;; W6 pure-planner oracle — murakumo.infer.engine string/cmd assembly subset.
 ;; Plan-walking (workers/head-cmd over assignment vectors) stays cljc.
@@ -135,3 +137,41 @@
         (string-concat
          model-repo
          (string-concat " --pipeline --max-tokens " (i64-str max-tokens))))))))))
+
+(defn head-cmd-front [bin-dir :string model-path :string] :string
+  ;; cljc head-cmd through "-m <model>"
+  (string-concat
+   bin-dir
+   (string-concat "/llama-server -m " model-path)))
+
+(defn rpc-csv-2 [ep0 :string ep1 :string] :string
+  ;; cljc rpc-endpoints join for 2 workers
+  (string-concat ep0 (string-concat "," ep1)))
+
+(defn rpc-csv-3 [ep0 :string ep1 :string ep2 :string] :string
+  (string-concat ep0 (string-concat "," (rpc-csv-2 ep1 ep2))))
+
+(defn head-cmd-middle [rpc-csv :string strategy :string tensor-csv :string] :string
+  ;; " --rpc <csv> --split-mode <mode> --tensor-split <csv>"
+  (string-concat
+   " --rpc "
+   (string-concat
+    rpc-csv
+    (string-concat
+     " --split-mode "
+     (string-concat
+      (split-mode-name strategy)
+      (string-concat " --tensor-split " tensor-csv))))))
+
+(defn head-cmd-tail [ctx :i64 parallel :i64 port :i64] :string
+  ;; after optional -ot: " -ngl 999 -c … --parallel … --host 0.0.0.0 --port …"
+  (string-concat
+   " -ngl 999 -c "
+   (string-concat
+    (i64-str ctx)
+    (string-concat
+     " --parallel "
+     (string-concat
+      (i64-str parallel)
+      (string-concat " --host 0.0.0.0 --port " (i64-str port)))))))
+

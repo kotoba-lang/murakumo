@@ -14,7 +14,8 @@
   (str "default-rpc-port digit-char nat-str i64-str split-mode-name endpoint "
        "rpc-server-cmd embed-head-front embed-head-back "
        "mlx-moe-bin mlx-moe-front opt-i64-flag opt-str-flag "
-       "tensor-split-3 mlx-launch-front"))
+       "tensor-split-3 mlx-launch-front "
+       "head-cmd-front head-cmd-middle head-cmd-tail rpc-csv-2 rpc-csv-3"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -202,3 +203,45 @@
     (is (= prefix (get actual "lf")))
     (is (= "mlx-moe" (get actual "bin")))
     (is (= "/x/bin/mlx-moe" (get actual "bin2")))))
+
+(deftest head-cmd-fragments-match-cljc-assembly
+  (let [plan {:assignments
+              [{:span 10 :node {:name "w0" :host "w0" :ip "10.0.0.1" :head? false}}
+               {:span 10 :node {:name "w1" :host "w1" :ip "10.0.0.2" :head? false}}
+               {:span 5 :node {:name "head" :host "h" :ip "10.0.0.3" :head? true}}]}
+        opts {:bin-dir "/opt/llama" :model-path "/m.gguf" :port 8080
+              :rpc-port 50052 :ctx 4096 :parallel 1 :strategy :pipeline}
+        cljc (engine/head-cmd plan opts)
+        actual (compile-string-cases
+                {"front" "(head-cmd-front \"/opt/llama\" \"/m.gguf\")"
+                 "ep0" "(endpoint \"10.0.0.1\" 50052)"
+                 "ep1" "(endpoint \"10.0.0.2\" 50052)"
+                 "rpc" "(rpc-csv-2 (endpoint \"10.0.0.1\" 50052) (endpoint \"10.0.0.2\" 50052))"
+                 "mid" (str "(head-cmd-middle "
+                            "(rpc-csv-2 (endpoint \"10.0.0.1\" 50052) (endpoint \"10.0.0.2\" 50052)) "
+                            "\"pipeline\" "
+                            "(tensor-split-3 10 10 5))")
+                 "tail" "(head-cmd-tail 4096 1 8080)"
+                 "full" (str "(string-concat (head-cmd-front \"/opt/llama\" \"/m.gguf\") "
+                             "(string-concat "
+                             "(head-cmd-middle "
+                             "(rpc-csv-2 (endpoint \"10.0.0.1\" 50052) (endpoint \"10.0.0.2\" 50052)) "
+                             "\"pipeline\" "
+                             "(tensor-split-3 10 10 5)) "
+                             "(head-cmd-tail 4096 1 8080)))")
+                 "tensor" (str "(string-concat (head-cmd-front \"/opt/llama\" \"/m.gguf\") "
+                               "(string-concat "
+                               "(head-cmd-middle "
+                               "(rpc-csv-2 (endpoint \"10.0.0.1\" 50052) (endpoint \"10.0.0.2\" 50052)) "
+                               "\"tensor\" "
+                               "(tensor-split-3 10 10 5)) "
+                               "(head-cmd-tail 4096 1 8080)))")})]
+    (is (= "/opt/llama/llama-server -m /m.gguf" (get actual "front")))
+    (is (= "10.0.0.1:50052,10.0.0.2:50052" (get actual "rpc")))
+    (is (= cljc (get actual "full")))
+    (is (= (engine/head-cmd plan (assoc opts :strategy :tensor))
+           (get actual "tensor")))
+    (is (str/includes? (get actual "mid") "--split-mode layer"))
+    (is (str/includes? (get actual "mid") "--tensor-split 10,10,5"))
+    (is (str/ends-with? (get actual "tail") "--port 8080"))))
+
