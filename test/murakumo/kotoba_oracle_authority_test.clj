@@ -9,11 +9,13 @@
 (ns murakumo.kotoba-oracle-authority-test
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
             [kotoba.kir :as ir]
             [murakumo.kekkai.gate :as gate]
             [murakumo.token :as tok]
+            [murakumo.report :as report]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -29,8 +31,10 @@
 (deftest oracle-catalog-ready
   (is (oracle/ready? :kekkai-gate))
   (is (oracle/ready? :token))
+  (is (oracle/ready? :report))
   (is (some #{:kekkai-gate} (oracle/catalog-ids)))
-  (is (some #{:token} (oracle/catalog-ids))))
+  (is (some #{:token} (oracle/catalog-ids)))
+  (is (some #{:report} (oracle/catalog-ids))))
 
 (deftest product-shell-gate-uses-oracle-results
   (testing "parse-status delegates to kotoba parse-status-out"
@@ -134,3 +138,39 @@
 (deftest token-precompiled-kir-does-not-drift
   (is (= (token-live-kir) (token-resource-kir))
       "token KIR drift — run: clojure -M:test -m murakumo.kotoba-oracle-gen (or deps -M -m ...)"))
+
+(def ^:private report-source "kotoba/report_core.kotoba")
+(def ^:private report-resource "murakumo/oracle/report_core.kir.edn")
+
+(defn- report-live-kir []
+  (:kir (compiler/compile-source (slurp report-source) :wasm32-kotoba-v1 {})))
+
+(defn- report-resource-kir []
+  (edn/read-string (slurp (io/resource report-resource))))
+
+(deftest product-shell-report-uses-oracle-results
+  (testing "table headers/rows via report oracle"
+    (is (= "NODE       TAILSCALE-IP     ONLINE   SSH       MESH"
+           (report/nodes-header)))
+    (is (= (report/nodes-row {:name "asher" :ip "100.1.2.3" :online? true} true "up/running")
+           (oracle/call :report 'nodes-row ["asher" "100.1.2.3" 1 1 "up/running"])))
+    (is (= "installed/running" (report/mesh-status "installed" "running")))
+    (is (str/starts-with? (report/command-help) "murakumo —")))
+  (testing "constant lines from oracle"
+    (is (= "unreachable — skipped" report/unreachable-skipped-line))
+    (is (string? report/mesh-pass1-line))))
+
+(deftest report-oracle-call-matches-live-compile
+  (let [live (report-live-kir)]
+    (is (= (ir/execute live 'nodes-header [])
+           (oracle/call :report 'nodes-header [])))
+    (is (= (ir/execute live 'nodes-row ["a" "1.2.3.4" 1 0 "mesh"])
+           (oracle/call :report 'nodes-row ["a" "1.2.3.4" 1 0 "mesh"])))
+    (is (= (ir/execute live 'status-header [])
+           (oracle/call :report 'status-header [])))
+    (is (= (ir/execute live 'command-help [])
+           (oracle/call :report 'command-help [])))))
+
+(deftest report-precompiled-kir-does-not-drift
+  (is (= (report-live-kir) (report-resource-kir))
+      "report KIR drift — regenerate report_core.kir.edn via kotoba-oracle-gen"))
