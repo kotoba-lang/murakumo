@@ -1,16 +1,43 @@
 (ns kekkai-gate-core
   (:export [default-ledger-path strip-trailing-newlines parse-status-out
             authorized? denial-line-of default-kekkai-dir-under
-            cli-bin cli-alias-flag cli-main-flag cli-main-ns]))
+            cli-bin cli-alias-flag cli-main-flag cli-main-ns
+            status-authorized status-unknown
+            denial-prefix denial-mid denial-suffix
+            kekkai-dir-suffix]))
 
 ;; W6 pure-planner oracle cutover first slice (murakumo-pure-planners-v1).
 ;; Portable string core of murakumo.kekkai.gate. No capabilities.
 ;; Guest profile: string=? / string-contains? yield :i64 (0/1), not :bool.
+;; Residual status/denial-line/dir tokens dual-source; helpers recompose.
 ;; cli-argv fragments dual-source for host vector assembly.
 ;; Parity: test/murakumo/kekkai_gate_kotoba_parity_test.clj
 
 (defn default-ledger-path [] :string
   "kekkai-tailnet.edn")
+
+;; ── residual status / denial-line / dir tokens ───────────────────────
+
+(defn status-authorized [] :string
+  ;; admitted membership status in the kekkai ledger
+  "authorized")
+
+(defn status-unknown [] :string
+  ;; empty subprocess output / absent ledger node
+  "unknown")
+
+(defn denial-prefix [] :string
+  "[kekkai] ")
+
+(defn denial-mid [] :string
+  ": not authorized (")
+
+(defn denial-suffix [] :string
+  ") — excluded from fleet ops")
+
+(defn kekkai-dir-suffix [] :string
+  ;; default sibling checkout under HOME
+  "/github/com-junkawasaki/orgs/kotoba-lang/kekkai")
 
 (defn strip-trailing-newlines [s :string] :string
   (string-replace-all s "\n" ""))
@@ -18,23 +45,23 @@
 (defn parse-status-out [out :string] :string
   (let [s (strip-trailing-newlines out)]
     (if (string=? s "")
-      "unknown"
+      (status-unknown)
       s)))
 
 (defn authorized? [status :string] :i64
-  (string=? status "authorized"))
+  (if (string=? status (status-authorized)) 1 0))
 
 (defn denial-line-of [node-name :string status :string] :string
   (string-concat
-   "[kekkai] "
+   (denial-prefix)
    (string-concat
     node-name
     (string-concat
-     ": not authorized ("
-     (string-concat status ") — excluded from fleet ops")))))
+     (denial-mid)
+     (string-concat status (denial-suffix))))))
 
 (defn default-kekkai-dir-under [home :string] :string
-  (string-concat home "/github/com-junkawasaki/orgs/kotoba-lang/kekkai"))
+  (string-concat home (kekkai-dir-suffix)))
 
 (defn cli-bin [] :string "clojure")
 

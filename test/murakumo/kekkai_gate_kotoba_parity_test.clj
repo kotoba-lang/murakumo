@@ -26,6 +26,8 @@
              (str "(:export [default-ledger-path strip-trailing-newlines parse-status-out "
                   "authorized? denial-line-of default-kekkai-dir-under "
                   "cli-bin cli-alias-flag cli-main-flag cli-main-ns "
+                  "status-authorized status-unknown "
+                  "denial-prefix denial-mid denial-suffix kekkai-dir-suffix "
                   (str/join " " (map first cases)) "])"))
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [[name _]] [name (ir/execute kir (symbol name) [])]) cases))))
@@ -80,7 +82,7 @@
         actual (compile-cases cases)]
     (doseq [[i s] (map-indexed vector statuses)]
       (testing s
-        (is (= (if (= "authorized" s) "yes" "no")
+        (is (= (if (= gate/status-authorized s) "yes" "no")
                (get actual (str "az_" i))))))))
 
 
@@ -90,9 +92,38 @@
                  "alias" "(cli-alias-flag)"
                  "mflag" "(cli-main-flag)"
                  "mainns" "(cli-main-ns)"})]
+    (is (= gate/cli-bin (get actual "bin")))
     (is (= "clojure" (get actual "bin")))
+    (is (= gate/cli-alias-flag (get actual "alias")))
     (is (= "-M" (get actual "alias")))
+    (is (= gate/cli-main-flag (get actual "mflag")))
     (is (= "-m" (get actual "mflag")))
+    (is (= gate/cli-main-ns (get actual "mainns")))
     (is (= "kekkai.cli" (get actual "mainns")))
-    (is (= ["clojure" "-M" "-m" "kekkai.cli" "led.edn" "n1"]
+    (is (= [gate/cli-bin gate/cli-alias-flag gate/cli-main-flag gate/cli-main-ns
+            "led.edn" "n1"]
            (gate/cli-argv "led.edn" "n1")))))
+
+(deftest kekkai-denial-tokens-match
+  (let [actual (compile-cases
+                {"sa" "(status-authorized)"
+                 "su" "(status-unknown)"
+                 "dp" "(denial-prefix)"
+                 "dm" "(denial-mid)"
+                 "ds" "(denial-suffix)"
+                 "ks" "(kekkai-dir-suffix)"
+                 "dl" (str "(denial-line-of " (kotoba-literal "judah") " "
+                           (kotoba-literal "pending") ")")})]
+    (is (= gate/status-authorized (get actual "sa")))
+    (is (= "authorized" (get actual "sa")))
+    (is (= gate/status-unknown (get actual "su")))
+    (is (= "unknown" (get actual "su")))
+    (is (= gate/denial-prefix (get actual "dp")))
+    (is (= "[kekkai] " (get actual "dp")))
+    (is (= gate/denial-mid (get actual "dm")))
+    (is (= gate/denial-suffix (get actual "ds")))
+    (is (= gate/kekkai-dir-suffix (get actual "ks")))
+    (is (= (str gate/denial-prefix "judah" gate/denial-mid "pending" gate/denial-suffix)
+           (get actual "dl")))
+    (is (= (get actual "dl")
+           (gate/denial-line {:name "judah" :kekkai/status "pending"})))))

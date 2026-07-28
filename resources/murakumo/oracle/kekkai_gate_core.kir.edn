@@ -7,6 +7,42 @@
    :effects #{},
    :body "kekkai-tailnet.edn",
    :param-types []}
+  {:name status-authorized,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "authorized",
+   :param-types []}
+  {:name status-unknown,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "unknown",
+   :param-types []}
+  {:name denial-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "[kekkai] ",
+   :param-types []}
+  {:name denial-mid,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ": not authorized (",
+   :param-types []}
+  {:name denial-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ") — excluded from fleet ops",
+   :param-types []}
+  {:name kekkai-dir-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/github/com-junkawasaki/orgs/kotoba-lang/kekkai",
+   :param-types []}
   {:name strip-trailing-newlines,
    :params [s],
    :result :string,
@@ -20,13 +56,13 @@
    :body
    (let
     [s (strip-trailing-newlines out)]
-    (if (string=? s "") "unknown" s)),
+    (if (string=? s "") (status-unknown) s)),
    :param-types [:string]}
   {:name authorized?,
    :params [status],
    :result :i64,
    :effects #{},
-   :body (string=? status "authorized"),
+   :body (if (string=? status (status-authorized)) 1 0),
    :param-types [:string]}
   {:name denial-line-of,
    :params [node-name status],
@@ -34,21 +70,18 @@
    :effects #{},
    :body
    (string-concat
-    "[kekkai] "
+    (denial-prefix)
     (string-concat
      node-name
      (string-concat
-      ": not authorized ("
-      (string-concat status ") — excluded from fleet ops")))),
+      (denial-mid)
+      (string-concat status (denial-suffix))))),
    :param-types [:string :string]}
   {:name default-kekkai-dir-under,
    :params [home],
    :result :string,
    :effects #{},
-   :body
-   (string-concat
-    home
-    "/github/com-junkawasaki/orgs/kotoba-lang/kekkai"),
+   :body (string-concat home (kekkai-dir-suffix)),
    :param-types [:string]}
   {:name cli-bin,
    :params [],
@@ -86,7 +119,13 @@
   cli-bin
   cli-alias-flag
   cli-main-flag
-  cli-main-ns],
+  cli-main-ns
+  status-authorized
+  status-unknown
+  denial-prefix
+  denial-mid
+  denial-suffix
+  kekkai-dir-suffix],
  :schemas nil,
  :effects #{},
  :blocks [],
