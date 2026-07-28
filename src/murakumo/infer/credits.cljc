@@ -27,17 +27,32 @@
   W6 product-shell (ADR-260728-w6-identity-credits-oracle-authority):
   JVM defaults + memory-time weights + charge-allow? gate DELEGATE to
   infer_credits_core.kir.edn. Float settle folds, transfer, balances remain host."
-  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
+  (:require [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :infer-credits)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
 
 (def default-per-token
-  #?(:clj (long (o 'default-per-token []))
-     :cljs 1))          ; credits per generated token
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid 'default-per-token []))
+      1)
+    (catch #?(:clj Exception :cljs :default) _
+      1)))
 ;; NOT ratio literals (1/10, 1/20): clojure.lang.Ratio is not a valid
 ;; ClojureScript compile-time constant ("failed compiling constant: 1/10")
 ;; -- this file's own docstring promises "runs identically in bb, the JVM,
@@ -48,11 +63,21 @@
 ;; only the *literal syntax* is the problem.
 ;; JVM: numer/denom from kotoba head-num/head-den and protocol-num/protocol-den.
 (def default-head-frac
-  #?(:clj (/ (long (o 'head-num [])) (long (o 'head-den [])))
-     :cljs (/ 1 10)))     ; conductor's cut
+  (try
+    (if (oracle/ready? oid)
+      (/ (oracle/i64->host (oracle/call oid 'head-num []))
+         (oracle/i64->host (oracle/call oid 'head-den [])))
+      (/ 1 10))
+    (catch #?(:clj Exception :cljs :default) _
+      (/ 1 10))))
 (def default-protocol-frac
-  #?(:clj (/ (long (o 'protocol-num [])) (long (o 'protocol-den [])))
-     :cljs (/ 1 20))) ; fleet treasury (upgrade fund)
+  (try
+    (if (oracle/ready? oid)
+      (/ (oracle/i64->host (oracle/call oid 'protocol-num []))
+         (oracle/i64->host (oracle/call oid 'protocol-den [])))
+      (/ 1 20))
+    (catch #?(:clj Exception :cljs :default) _
+      (/ 1 20))))
 
 (defn- memory-time
   "node → shard-bytes × duration-ms, the contribution weight of one run.
@@ -60,13 +85,15 @@
   [assignments duration-ms]
   (into {}
         (for [{:keys [node est-bytes span]} assignments
-              :let [w #?(:clj (long (o 'memory-time-weight
-                                       [(long (or est-bytes 0))
-                                        (long (or duration-ms 0))
-                                        (long (or span 0))]))
-                       :cljs (if (pos? (or span 0))
-                               (* (double (or est-bytes 0)) duration-ms)
-                               0))]
+              :let [w (try-oracle
+                       #(oracle/i64->host
+                         (o 'memory-time-weight
+                            [(oracle/as-i64 (or est-bytes 0))
+                             (oracle/as-i64 (or duration-ms 0))
+                             (oracle/as-i64 (or span 0))]))
+                       #(if (pos? (or span 0))
+                          (* (double (or est-bytes 0)) duration-ms)
+                          0))]
               :when (pos? w)]
           [(:name node) (double w)])))
 
@@ -268,11 +295,16 @@
         cost (job-cost model units)
         bal (balance-of balances who)
         ;; JVM integer gate for whole balances/costs; float compare remains host fallback
-        allow? #?(:clj (if (and (== (double (long bal)) (double bal))
-                                (== (double (long cost)) (double cost)))
-                         (= 1 (o 'charge-allow? [(long bal) (long cost)]))
-                         (>= bal cost))
-                  :cljs (>= bal cost))]
+        allow? (try-oracle
+                (fn []
+                  (if (and (== (double (long bal)) (double bal))
+                           (== (double (long cost)) (double cost)))
+                    (= 1 (oracle/i64->host
+                          (o 'charge-allow?
+                             [(oracle/as-i64 (long bal))
+                              (oracle/as-i64 (long cost))])))
+                    (>= bal cost)))
+                #(>= bal cost))]
     (cond
       (and (= tier :sla) (not (availability-proof-ok? availability-verdicts)))
       {:allow? false :cost cost :reason :availability-proof-failed}

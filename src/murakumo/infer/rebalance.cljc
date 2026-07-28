@@ -23,18 +23,33 @@
 
   W6 product-shell: usable-gb / largest-remainder-3 via kotoba infer_rebalance_core."
   (:require [clojure.string :as str]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :infer-rebalance)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
 
 (def shard-ceiling-gb
-  "16GB stability limit → ~10GB usable shard. JVM: kotoba `shard-ceiling-gb`."
-  #?(:clj (long (o 'shard-ceiling-gb []))
-     :cljs 10))
+  "16GB stability limit → ~10GB usable shard."
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid 'shard-ceiling-gb []))
+      10)
+    (catch #?(:clj Exception :cljs :default) _
+      10)))
 
 ;; ── capacity ────────────────────────────────────────────────────────────────
 
@@ -44,8 +59,9 @@
    JVM: kotoba `usable-gb`."
   [{:keys [id ram-gb disk-free roles status] :as n}]
   (let [ram (or ram-gb 0)
-        usable #?(:clj (long (o 'usable-gb [(long ram)]))
-                  :cljs (min shard-ceiling-gb (max 0 (- ram 6))))]
+        usable (try-oracle
+                #(oracle/i64->host (o 'usable-gb [(oracle/as-i64 ram)]))
+                #(min shard-ceiling-gb (max 0 (- ram 6))))]
     {:id id :status status :ram-gb ram :usable-gb usable
      :roles-capable (set (map keyword (or roles [])))
      :disk-free disk-free}))
@@ -115,16 +131,22 @@
    a floor of `floor` seats for any pool whose weight > 0. Deterministic.
    JVM (text/media/postproc 3-pool): kotoba `largest-remainder-3` + seats-* unpack."
   [total weights floor]
-  #?(:clj
-     (let [wt (long (or (get weights :text-pool) 0))
-           wm (long (or (get weights :media-pool) 0))
-           wp (long (or (get weights :postproc-pool) 0))
-           packed (long (o 'largest-remainder-3
-                           [(long total) wt wm wp (long floor)]))]
-       {:text-pool (long (o 'seats-text [packed]))
-        :media-pool (long (o 'seats-media [packed]))
-        :postproc-pool (long (o 'seats-postproc [packed]))})
-     :cljs (mirror-largest-remainder total weights floor)))
+  (try-oracle
+   (fn []
+     (let [wt (or (get weights :text-pool) 0)
+           wm (or (get weights :media-pool) 0)
+           wp (or (get weights :postproc-pool) 0)
+           packed (oracle/i64->host
+                   (o 'largest-remainder-3
+                      [(oracle/as-i64 total)
+                       (oracle/as-i64 wt)
+                       (oracle/as-i64 wm)
+                       (oracle/as-i64 wp)
+                       (oracle/as-i64 floor)]))]
+       {:text-pool (oracle/i64->host (o 'seats-text [(oracle/as-i64 packed)]))
+        :media-pool (oracle/i64->host (o 'seats-media [(oracle/as-i64 packed)]))
+        :postproc-pool (oracle/i64->host (o 'seats-postproc [(oracle/as-i64 packed)]))}))
+   #(mirror-largest-remainder total weights floor)))
 
 (defn target-allocation
   "capacity + demand → a placement plan:

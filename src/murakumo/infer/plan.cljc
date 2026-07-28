@@ -1,44 +1,60 @@
 ;; murakumo.infer.plan — exo-style memory-weighted shard planning (pure cljc).
 ;;
-;; Given a model descriptor and the fleet's live memory map, decide which nodes
-;; participate and which CONTIGUOUS layer range each node serves, proportional to
-;; its usable memory (exo's ring memory-weighted partitioning). Pure data → data:
-;; no SSH, no engine, no platform — so the same planner runs in bb (the terminal
-;; operator), on the JVM (tests), in the CF Worker (cloud-murakumo), and inside a
-;; kotoba WASM component.
-;;
-;; The planner is engine-agnostic: it emits layer ranges + byte estimates. Engine
-;; adapters (murakumo.infer.engine) turn a plan into concrete process commands
-;; (llama.cpp --rpc/--tensor-split, mlx.launch ring, …).
-;;
-;; W6 product-shell authority: on JVM, GiB/defaults/usable-bytes/choose-strategy
-;; name DELEGATE to precompiled kotoba/infer_plan_core.kotoba KIR. Partition walk
-;; and plan map assembly stay cljc (float/vector host path).
+;; W6 product-shell: GiB/defaults/usable-bytes/choose-strategy-name DELEGATE to
+;; precompiled kotoba/infer_plan_core.kotoba when oracle loadable (JVM or cljs/nbb).
+;; Partition walk and plan map assembly stay host (float/vector).
 
 (ns murakumo.infer.plan
-  "Shard planning. Pure helpers use kotoba/infer_plan_core.kotoba authority on JVM."
-  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
+  "Shard planning. Pure helpers use kotoba/infer_plan_core.kotoba when oracle ready."
+  (:require [murakumo.kotoba.oracle :as oracle]))
 
-;; ── constants + usable-bytes: kotoba infer_plan_core SSoT on JVM ─────
+(def ^:private oid :infer-plan)
+
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
 
 (def ^:private mirror-GiB (* 1024 1024 1024))
 (def ^:private mirror-os-reserve (long (* 7/2 mirror-GiB)))
 (def ^:private mirror-headroom (long (* 5/4 mirror-GiB)))
 
 (def GiB
-  "Binary GiB in bytes (oracle `gib` on JVM)."
-  #?(:clj (long (oracle/call :infer-plan 'gib []))
-     :cljs mirror-GiB))
+  "Binary GiB in bytes."
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid 'gib []))
+      mirror-GiB)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror-GiB)))
 
 (def default-os-reserve
-  "Default OS reserve bytes (oracle `default-os-reserve` on JVM)."
-  #?(:clj (long (oracle/call :infer-plan 'default-os-reserve []))
-     :cljs mirror-os-reserve))
+  "Default OS reserve bytes."
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid 'default-os-reserve []))
+      mirror-os-reserve)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror-os-reserve)))
 
 (def default-headroom
-  "Default per-node headroom bytes (oracle `default-headroom` on JVM)."
-  #?(:clj (long (oracle/call :infer-plan 'default-headroom []))
-     :cljs mirror-headroom))
+  "Default per-node headroom bytes."
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid 'default-headroom []))
+      mirror-headroom)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror-headroom)))
 
 (defn- mirror-usable-bytes
   [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes]}]
@@ -49,21 +65,22 @@
     (max 0 (long (- ceiling head)))))
 
 (defn usable-bytes
-  "Bytes of weights a node can realistically hold resident.
-   JVM: kotoba `usable-bytes` (wired -1 = absent)."
+  "Bytes of weights a node can realistically hold resident."
   [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes] :as node}]
-  #?(:clj
-     (let [os (long (or os-reserve-bytes default-os-reserve))
-           head (long (or headroom-bytes default-headroom))
-           wired (if (some? wired-limit-bytes) (long wired-limit-bytes) -1)]
-       (long (oracle/call :infer-plan 'usable-bytes
-                          [(long mem-bytes) os head wired])))
-     :cljs (mirror-usable-bytes node)))
+  (try-oracle
+   (fn []
+     (let [os (or os-reserve-bytes default-os-reserve)
+           head (or headroom-bytes default-headroom)
+           wired (if (some? wired-limit-bytes) wired-limit-bytes -1)]
+       (oracle/i64->host
+        (o 'usable-bytes
+           [(oracle/as-i64 mem-bytes)
+            (oracle/as-i64 os)
+            (oracle/as-i64 head)
+            (oracle/as-i64 wired)]))))
+   #(mirror-usable-bytes node)))
 
 (defn- largest-remainder
-  "Apportion `total` integer units over `quotas` (seq of non-negative reals that
-   sum to ~total) — floor everything, then hand the remaining units to the largest
-   fractional parts. Deterministic: ties break to the earlier index."
   [total quotas]
   (let [floors (mapv long quotas)
         short (- total (reduce + floors))
@@ -74,24 +91,14 @@
     (vec (map-indexed (fn [i f] (+ f (if (bump i) 1 0))) floors))))
 
 (defn layer-weights
-  "Per-layer byte estimates for the model's decoder stack. MoE models often open
-   with a few DENSE layers (`:model/dense-layers`, e.g. GLM-5.2 first_k_dense=3)
-   that weigh a fraction (`:model/dense-layer-frac`, default 1/10) of an
-   expert-bearing layer — the first shard can therefore take MORE layers, which
-   is exactly what lets a 78-layer GLM-5.2 sit on eleven 16 GiB ranks."
   [{:model/keys [layers weight-bytes dense-layers dense-layer-frac]}]
   (let [d (or dense-layers 0)
         f (or dense-layer-frac 1/10)
-        units (+ (* d (double f)) (- layers d))          ; total in MoE-layer units
+        units (+ (* d (double f)) (- layers d))
         moe-bytes (/ (double weight-bytes) units)]
     (mapv #(if (< % d) (* f moe-bytes) moe-bytes) (range layers))))
 
 (defn partition-layers
-  "Memory-weighted contiguous partition of the decoder stack over `nodes` (ring
-   order = given order): walk the per-layer weight vector, cutting each node a
-   contiguous slice whose BYTES (not count) match its share of usable memory.
-   Returns [{:node <node> :layers [lo hi) :span n :est-bytes b :fits? bool} …] —
-   nodes with zero usable memory get :span 0 and are dropped from serving."
   [{:model/keys [layers] :as model} nodes]
   (let [usable (mapv usable-bytes nodes)
         total (reduce + usable)
@@ -100,14 +107,12 @@
     (loop [i 0, lo 0, acc 0.0, out []]
       (if (= i (count nodes))
         out
-        (let [;; cumulative byte target through node i, mapped onto the layer axis
-              target (if (pos? total)
+        (let [target (if (pos? total)
                        (* wsum (/ (double (reduce + (take (inc i) usable))) total))
                        0.0)
               last? (= i (dec (count nodes)))
               hi (if last?
                    layers
-                   ;; advance while adding the next layer keeps us nearer target
                    (loop [h lo, a acc]
                      (if (or (= h layers)
                              (> (+ a (nth lw h)) target)) h (recur (inc h) (+ a (nth lw h))))))
@@ -120,11 +125,6 @@
                             :fits? (<= est (nth usable i))})))))))
 
 (defn plan
-  "Full shard plan: {:model :assignments :total-usable-bytes :fits?}.
-   :fits? is the go/no-go gate — total usable memory ≥ model weights AND every
-   node's contiguous slice fits its own budget (largest-remainder keeps slices
-   proportional, so a per-node overflow means the fleet is genuinely too small,
-   not badly balanced)."
   [model nodes]
   (let [asg (partition-layers model nodes)
         total (reduce + (map (comp usable-bytes :node) asg))]
@@ -153,19 +153,19 @@
       {:strategy :pipeline :why (:pipeline strategy-why)})))
 
 (defn choose-strategy
-  "Pick the parallelism the interconnect can actually pay for.
-   JVM: strategy name from kotoba `choose-strategy-name`; :why from host table."
+  "Pick the parallelism the interconnect can actually pay for."
   [{:keys [link-gbps ranks model] :as opts}]
-  #?(:clj
-     (let [name (oracle/call :infer-plan 'choose-strategy-name
-                             [(long (or link-gbps 0))
-                              (long (or ranks 0))
-                              (long (or (:model/experts model) 0))
-                              (long (or (:model/kv-heads model) 0))])
+  (try-oracle
+   (fn []
+     (let [name (o 'choose-strategy-name
+                   [(oracle/as-i64 (or link-gbps 0))
+                    (oracle/as-i64 (or ranks 0))
+                    (oracle/as-i64 (or (:model/experts model) 0))
+                    (oracle/as-i64 (or (:model/kv-heads model) 0))])
            strat (keyword name)]
        {:strategy strat
-        :why (get strategy-why strat (:pipeline strategy-why))})
-     :cljs (mirror-choose-strategy opts)))
+        :why (get strategy-why strat (:pipeline strategy-why))}))
+   #(mirror-choose-strategy opts)))
 
 (defn report
   "Human-oriented rows for the plan table (pure; printing is the caller's job)."
