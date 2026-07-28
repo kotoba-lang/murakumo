@@ -23,7 +23,17 @@
        "dial-ok-title connect-ok-title relay-ok-title "
        "from-to-cap-reason authorized-line "
        "relay-fallback-line reason-line indent-argv-line "
-       "address-family-line policy-line skipped-reason-suffix"))
+       "address-family-line policy-line skipped-reason-suffix "
+       "starts-with? "
+       "is-cmd-plan? is-cmd-records? is-cmd-routes? "
+       "is-cmd-dial? is-cmd-connect? is-cmd-relay? is-cmd-bootstrap? "
+       "is-flag-cloud? is-flag-fleet? is-flag-target? "
+       "is-flag-from? is-flag-to? is-flag-capability? "
+       "is-flag-driver? is-flag-format? is-flag-auth-key? "
+       "is-flag-dash? is-positional-target? "
+       "flag-cloud-value flag-fleet-value flag-target-value "
+       "flag-from-value flag-to-value flag-capability-value "
+       "flag-driver-value flag-format-value flag-auth-key-value"))
 
 (def fleet
   {:fleet/name "test-fleet"
@@ -205,3 +215,76 @@
     (is (= " skipped reason=unknown" (get s "sk")))
     (is (= (cloud/address-family-line "identity" 1 1) (nth lines 1)))
     (is (= (cloud/policy-line "deny" 2) (last lines)))))
+
+(deftest parse-flags-classifiers-match
+  (let [i (compile-i64-cases
+           {"p1" (str "(is-cmd-plan? " (kotoba-literal "plan") ")")
+            "p0" (str "(is-cmd-plan? " (kotoba-literal "dial") ")")
+            "r1" (str "(is-cmd-records? " (kotoba-literal "records") ")")
+            "d1" (str "(is-cmd-dial? " (kotoba-literal "dial") ")")
+            "c1" (str "(is-cmd-connect? " (kotoba-literal "connect") ")")
+            "y1" (str "(is-cmd-relay? " (kotoba-literal "relay") ")")
+            "b1" (str "(is-cmd-bootstrap? " (kotoba-literal "bootstrap") ")")
+            "fc" (str "(is-flag-cloud? " (kotoba-literal "--cloud=x.edn") ")")
+            "ff" (str "(is-flag-fleet? " (kotoba-literal "--fleet=f.edn") ")")
+            "ft" (str "(is-flag-target? " (kotoba-literal "--target=n") ")")
+            "fr" (str "(is-flag-from? " (kotoba-literal "--from=browser") ")")
+            "to" (str "(is-flag-to? " (kotoba-literal "--to=wasm") ")")
+            "ca" (str "(is-flag-capability? " (kotoba-literal "--capability=live") ")")
+            "dr" (str "(is-flag-driver? " (kotoba-literal "--driver=x") ")")
+            "fm" (str "(is-flag-format? " (kotoba-literal "--format=edn") ")")
+            "ak" (str "(is-flag-auth-key? " (kotoba-literal "--auth-key=s") ")")
+            "da" (str "(is-flag-dash? " (kotoba-literal "--unknown") ")")
+            "po" (str "(is-positional-target? " (kotoba-literal "asher") ")")
+            "pn" (str "(is-positional-target? " (kotoba-literal "--x") ")")
+            "sw" (str "(starts-with? " (kotoba-literal "--cloud=x") " "
+                      (kotoba-literal "--cloud=") ")")})
+        s (compile-string-cases
+           {"vc" (str "(flag-cloud-value " (kotoba-literal "--cloud=prod.edn") ")")
+            "vf" (str "(flag-fleet-value " (kotoba-literal "--fleet=fleet.edn") ")")
+            "vt" (str "(flag-target-value " (kotoba-literal "--target=asher") ")")
+            "vfrom" (str "(flag-from-value " (kotoba-literal "--from=browser") ")")
+            "vto" (str "(flag-to-value " (kotoba-literal "--to=wasm") ")")
+            "vcap" (str "(flag-capability-value " (kotoba-literal "--capability=live") ")")
+            "vdr" (str "(flag-driver-value " (kotoba-literal "--driver=net") ")")
+            "vfm" (str "(flag-format-value " (kotoba-literal "--format=edn") ")")
+            "vak" (str "(flag-auth-key-value " (kotoba-literal "--auth-key=secret") ")")})]
+    (is (= 1 (get i "p1")))
+    (is (= 0 (get i "p0")))
+    (is (= 1 (get i "r1")))
+    (is (= 1 (get i "d1")))
+    (is (= 1 (get i "c1")))
+    (is (= 1 (get i "y1")))
+    (is (= 1 (get i "b1")))
+    (is (= 1 (get i "fc")))
+    (is (= 1 (get i "ff")))
+    (is (= 1 (get i "ft")))
+    (is (= 1 (get i "fr")))
+    (is (= 1 (get i "to")))
+    (is (= 1 (get i "ca")))
+    (is (= 1 (get i "dr")))
+    (is (= 1 (get i "fm")))
+    (is (= 1 (get i "ak")))
+    (is (= 1 (get i "da")))
+    (is (= 1 (get i "po")))
+    (is (= 0 (get i "pn")))
+    (is (= 1 (get i "sw")))
+    (is (= "prod.edn" (get s "vc")))
+    (is (= "fleet.edn" (get s "vf")))
+    (is (= "asher" (get s "vt")))
+    (is (= "browser" (get s "vfrom")))
+    (is (= "wasm" (get s "vto")))
+    (is (= "live" (get s "vcap")))
+    (is (= "net" (get s "vdr")))
+    (is (= "edn" (get s "vfm")))
+    (is (= "secret" (get s "vak")))
+    (is (= {:command :records
+            :cloud-path "prod.edn"
+            :fleet-path "fleet-prod.edn"}
+           (select-keys
+            (cloud/parse-flags ["records" "--cloud=prod.edn" "--fleet=fleet-prod.edn"])
+            [:command :cloud-path :fleet-path])))
+    (is (= {:command :dial :target "asher" :from :browser :capability :live}
+           (select-keys
+            (cloud/parse-flags ["dial" "asher" "--from=browser" "--capability=live"])
+            [:command :target :from :capability])))))

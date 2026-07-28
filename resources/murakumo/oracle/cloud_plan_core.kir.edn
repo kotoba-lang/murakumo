@@ -334,6 +334,189 @@
    :result :string,
    :effects #{},
    :body (string-concat " skipped reason=" reason),
+   :param-types [:string]}
+  {:name starts-with?,
+   :params [s prefix],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s) p (string-byte-length prefix)]
+    (if
+     (< n p)
+     0
+     (if (string=? (string-substring s 0 p) prefix) 1 0))),
+   :param-types [:string :string]}
+  {:name is-cmd-plan?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? a "plan") 1 0),
+   :param-types [:string]}
+  {:name is-cmd-records?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? a "records") 1 0),
+   :param-types [:string]}
+  {:name is-cmd-routes?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? a "routes") 1 0),
+   :param-types [:string]}
+  {:name is-cmd-dial?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? a "dial") 1 0),
+   :param-types [:string]}
+  {:name is-cmd-connect?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? a "connect") 1 0),
+   :param-types [:string]}
+  {:name is-cmd-relay?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? a "relay") 1 0),
+   :param-types [:string]}
+  {:name is-cmd-bootstrap?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? a "bootstrap") 1 0),
+   :param-types [:string]}
+  {:name is-flag-cloud?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--cloud="),
+   :param-types [:string]}
+  {:name is-flag-fleet?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--fleet="),
+   :param-types [:string]}
+  {:name is-flag-target?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--target="),
+   :param-types [:string]}
+  {:name is-flag-from?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--from="),
+   :param-types [:string]}
+  {:name is-flag-to?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--to="),
+   :param-types [:string]}
+  {:name is-flag-capability?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--capability="),
+   :param-types [:string]}
+  {:name is-flag-driver?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--driver="),
+   :param-types [:string]}
+  {:name is-flag-format?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--format="),
+   :param-types [:string]}
+  {:name is-flag-auth-key?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--auth-key="),
+   :param-types [:string]}
+  {:name is-flag-dash?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (starts-with? a "--"),
+   :param-types [:string]}
+  {:name is-positional-target?,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body (if (= (is-flag-dash? a) 1) 0 1),
+   :param-types [:string]}
+  {:name flag-value-after,
+   :params [a prefix-len],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length a)]
+    (if (< n prefix-len) "" (string-substring a prefix-len n))),
+   :param-types [:string :i64]}
+  {:name flag-cloud-value,
+   :params [a],
+   :result :string,
+   :effects #{},
+   :body (flag-value-after a 8),
+   :param-types [:string]}
+  {:name flag-fleet-value,
+   :params [a],
+   :result :string,
+   :effects #{},
+   :body (flag-value-after a 8),
+   :param-types [:string]}
+  {:name flag-target-value,
+   :params [a],
+   :result :string,
+   :effects #{},
+   :body (flag-value-after a 9),
+   :param-types [:string]}
+  {:name flag-from-value,
+   :params [a],
+   :result :string,
+   :effects #{},
+   :body (flag-value-after a 7),
+   :param-types [:string]}
+  {:name flag-to-value,
+   :params [a],
+   :result :string,
+   :effects #{},
+   :body (flag-value-after a 5),
+   :param-types [:string]}
+  {:name flag-capability-value,
+   :params [a],
+   :result :string,
+   :effects #{},
+   :body (flag-value-after a 13),
+   :param-types [:string]}
+  {:name flag-driver-value,
+   :params [a],
+   :result :string,
+   :effects #{},
+   :body (flag-value-after a 9),
+   :param-types [:string]}
+  {:name flag-format-value,
+   :params [a],
+   :result :string,
+   :effects #{},
+   :body (flag-value-after a 9),
+   :param-types [:string]}
+  {:name flag-auth-key-value,
+   :params [a],
+   :result :string,
+   :effects #{},
+   :body (flag-value-after a 11),
    :param-types [:string]}],
  :oracle-value nil,
  :schema-identities nil,
@@ -379,7 +562,35 @@
   indent-argv-line
   address-family-line
   policy-line
-  skipped-reason-suffix],
+  skipped-reason-suffix
+  starts-with?
+  is-cmd-plan?
+  is-cmd-records?
+  is-cmd-routes?
+  is-cmd-dial?
+  is-cmd-connect?
+  is-cmd-relay?
+  is-cmd-bootstrap?
+  is-flag-cloud?
+  is-flag-fleet?
+  is-flag-target?
+  is-flag-from?
+  is-flag-to?
+  is-flag-capability?
+  is-flag-driver?
+  is-flag-format?
+  is-flag-auth-key?
+  is-flag-dash?
+  is-positional-target?
+  flag-cloud-value
+  flag-fleet-value
+  flag-target-value
+  flag-from-value
+  flag-to-value
+  flag-capability-value
+  flag-driver-value
+  flag-format-value
+  flag-auth-key-value],
  :schemas nil,
  :effects #{},
  :blocks [],
