@@ -13,7 +13,22 @@
 (def export-prefix
   (str "default-max-slots default-max-attempts default-timeout-ms slots failed? can-retry? "
        "task-eligible? fill-milli better-fill? better-task-score? better-mem? "
-       "wave-of slot-of load-after-assign"))
+       "wave-of slot-of load-after-assign "
+       "digit-char nat-str i64-str pad4 task-id "
+       "pick-task-idx-2 assign-task-step-2 attempt-next exclude-append-marker"))
+
+
+(defn- compile-string-cases [cases]
+  (let [defs (for [[name body] cases]
+               (str "(defn " name " [] :string " body ")"))
+        names (map first cases)
+        src (-> port-source
+                (str/replace-first
+                 #"\(:export \[[^\]]+\]\)"
+                 (str "(:export [" export-prefix " " (str/join " " names) "])"))
+                (str "\n" (str/join "\n" defs)))
+        kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
+    (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
@@ -177,3 +192,42 @@
     (is (= 1 (get actual "bm")))
     (is (= 1 (get actual "bn")))))
 
+(deftest task-id-and-expand-parity
+  (let [ids (compile-string-cases
+             (into {} (map (fn [i] [(str "id_" i) (str "(task-id " i ")")])
+                           [0 1 9 10 99 100 999 1000 12345])))
+        attempts (compile-i64-cases
+                  {"a1" "(attempt-next 1)"
+                   "a2" "(attempt-next 2)"})]
+    (doseq [i [0 1 9 10 99 100 999 1000 12345]]
+      (let [want (:id (nth (plan/expand (inc i) {}) i))]
+        (is (= want (get ids (str "id_" i))) (str "i=" i))))
+    (is (= 2 (get attempts "a1")))
+    (is (= 3 (get attempts "a2")))))
+
+(deftest assign-task-step-2-matches-assign-1
+  (let [;; two identical eligible nodes, empty load → pick lower index 0
+        fill-pack (+ 0 (* 0 65536))
+        s0 "(assign-task-step-2 0 0 1 1 0)"
+        ;; after load0=1, fill would be higher on 0 if slots equal — use fill pack
+        ;; score-pack fill0=500 fill1=0 → prefer 1
+        s1 (str "(assign-task-step-2 1 0 1 1 " (+ 500 (* 0 65536)) ")")
+        actual (compile-i64-cases
+                {"s0" s0
+                 "s1" s1
+                 "p0" "(pick-task-idx-2 1 1 0 0 0)"
+                 "p1" (str "(pick-task-idx-2 1 1 500 0 " (+ 1 (* 0 65536)) ")")
+                 "pn" "(pick-task-idx-2 0 0 0 0 0)"})]
+    (let [r0 (get actual "s0")
+          code (mod r0 65536)
+          n0 (mod (quot r0 65536) 65536)
+          n1 (quot r0 (* 65536 65536))]
+      (is (= 1 code))
+      (is (= 1 n0))
+      (is (= 0 n1)))
+    (let [r1 (get actual "s1")
+          code (mod r1 65536)]
+      (is (= 2 code) "higher fill on node0 → pick node1"))
+    (is (= 0 (get actual "p0")))
+    (is (= 1 (get actual "p1")) "fill0=500 > fill1=0 → pick node1")
+    (is (= -1 (get actual "pn")))))
