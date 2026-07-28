@@ -1,21 +1,37 @@
 ;; murakumo.overlay.stream — deterministic stream/session framing.
 ;;
 ;; W6 product-shell: window size + advance-seq + ack-accepted? via kotoba
-;; overlay_stream_core. stream-id hashing and frame maps stay host.
+;; overlay_stream_core when oracle loadable (JVM or cljs/nbb).
+;; stream-id hashing and frame maps stay host.
 
 (ns murakumo.overlay.stream
   (:require [murakumo.identity :as identity]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :overlay-stream)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
 
 (def default-window-size
-  #?(:clj (long (o 'default-window-size []))
-     :cljs 64))
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid 'default-window-size []))
+      64)
+    (catch #?(:clj Exception :cljs :default) _
+      64)))
 
 (defn stream-id
   "Stable stream id for a logical service connection."
@@ -58,8 +74,9 @@
 (defn advance [stream]
   (update stream :next-seq
           (fn [s]
-            #?(:clj (long (o 'advance-seq [(long s)]))
-               :cljs (inc s)))))
+            (try-oracle
+             #(oracle/i64->host (o 'advance-seq [(oracle/as-i64 s)]))
+             #(inc s)))))
 
 (defn frames
   "Turn payloads into ordered frames and the advanced stream state."
@@ -75,8 +92,10 @@
   {:type "murakumo.overlay.stream-ack"
    :stream (:stream frame)
    :seq (:seq frame)
-   :accepted? #?(:clj (= 1 (o 'ack-accepted? [(if accepted? 1 0)]))
-                 :cljs (boolean accepted?))})
+   :accepted? (try-oracle
+               #(= 1 (oracle/i64->host
+                      (o 'ack-accepted? [(oracle/as-i64 (if accepted? 1 0))])))
+               #(boolean accepted?))})
 
 (defn close [stream reason]
   (assoc stream :closed? true :close-reason reason))
