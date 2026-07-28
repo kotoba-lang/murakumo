@@ -1,19 +1,67 @@
 (ns report-core
-  (:export [mesh-status node-prefix unreachable-skipped-line
+  (:export [digit-char nat-str i64-str blank? ws? trim
+            mesh-status node-prefix unreachable-skipped-line
             provision-result-line mesh-pass1-line mesh-wait-peerid-line
             mesh-pass2-line mesh-forming-line deploy-wait-placement-line
             operator-seed-required-line operator-seed-hex-required-line
             deploy-usage-line reconcile-usage-line
             dashboard-no-persistence-line reconcile-no-persistence-line
-            reconcile-converged-line
+            reconcile-converged-line reconcile-dry-run-line
             missing-binary-line deploy-start-line pin-success-line
             snapshot-error-line reconcile-persist-error-line
             online-label ssh-label health-label
-            command-error-line]))
+            command-error-line
+            launch-result-line rollout-line collected-peers-line
+            artifact-node-status deploy-command-output alert-line
+            dashboard-start-line apply-target-line watch-start-line
+            deploy-observed-empty-line deploy-observed-placed-line
+            missing-pinned-binaries-line1 missing-pinned-binaries-line2]))
 
 ;; W6 pure-planner oracle — murakumo.report string core.
-;; Column-padded format tables stay cljc (no printf in guest ABI).
+;; Column-padded format tables (nodes-header/row, status-header/row,
+;; reconcile-lines) stay cljc (no printf in guest ABI).
 ;; Parity: test/murakumo/report_kotoba_parity_test.clj
+
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+(defn ws? [c :string] :i64
+  (if (string=? c " ")
+    1
+    (if (string=? c "\n")
+      1
+      (if (string=? c "\t")
+        1
+        (if (string=? c "\r") 1 0)))))
+
+(defn blank? [s :string] :i64
+  (let [n (string-byte-length s)]
+    (if (= n 0)
+      1
+      (if (= (ws? (string-substring s 0 1)) 1)
+        (blank? (string-substring s 1 n))
+        0))))
+
+(defn trim [s :string] :string
+  (let [n (string-byte-length s)]
+    (if (= n 0)
+      s
+      (if (= (ws? (string-substring s 0 1)) 1)
+        (trim (string-substring s 1 n))
+        (if (= (ws? (string-substring s (- n 1) n)) 1)
+          (trim (string-substring s 0 (- n 1)))
+          s)))))
 
 (defn mesh-status [binary-status :string launch-status :string] :string
   (string-concat binary-status (string-concat "/" launch-status)))
@@ -63,6 +111,9 @@
 
 (defn reconcile-converged-line [] :string "  ✓ converged")
 
+(defn reconcile-dry-run-line [] :string
+  "\n(dry-run; re-run with --apply to converge, or --watch to keep it converged)")
+
 (defn missing-binary-line [path :string] :string
   (string-concat "missing binary: " path))
 
@@ -94,6 +145,93 @@
 
 (defn health-label [has-health :i64] :string
   (if (= has-health 1) "ok" "no-resp"))
+
+(defn launch-result-line [name :string exit-str :string] :string
+  ;; cljc: (str (:name node) " " (:exit result)) — host projects exit as string
+  (string-concat name (string-concat " " exit-str)))
+
+(defn rollout-line [version :string sha :string features :string] :string
+  (string-concat
+   "rolling out kotoba "
+   (string-concat
+    version
+    (string-concat
+     " (sha "
+     (string-concat sha (string-concat ", " (string-concat features ")")))))))
+
+(defn collected-peers-line [count :i64 peers-file :string] :string
+  (string-concat
+   "── collected "
+   (string-concat
+    (i64-str count)
+    (string-concat " PeerIds → " (string-concat peers-file " ──")))))
+
+(defn artifact-node-status [name :string ok :i64] :string
+  ;; cljc: (format " %s%s" name (if (zero? exit) "✓" "✗"))
+  (string-concat
+   " "
+   (string-concat name (if (= ok 1) "✓" "✗"))))
+
+(defn deploy-command-output [out :string err :string] :string
+  ;; cljc: (str (str/trim (str out)) (str err))
+  (string-concat (trim out) err))
+
+(defn alert-line [level :string node :string msg :string] :string
+  (string-concat
+   "[alert/"
+   (string-concat
+    level
+    (string-concat
+     "] "
+     (string-concat node (string-concat " — " msg))))))
+
+(defn dashboard-start-line [port :i64 interval :i64] :string
+  (string-concat
+   "murakumo dashboard → http://localhost:"
+   (string-concat
+    (i64-str port)
+    (string-concat
+     "  (snapshot every "
+     (string-concat (i64-str interval) "s → Datom log)")))))
+
+(defn apply-target-line [app :string target :string] :string
+  (string-concat
+   "  applying "
+   (string-concat
+    app
+    (string-concat
+     " → deploy to "
+     (string-concat
+      target
+      " (no cross-node auction; murakumo picks the target directly)")))))
+
+(defn watch-start-line [seconds :i64] :string
+  (string-concat
+   "── reconcile --watch (every "
+   (string-concat (i64-str seconds) "s) ; Ctrl-C to stop ──")))
+
+(defn deploy-observed-empty-line [] :string
+  "  ⚠ not yet observed running on any node (check `murakumo status` / node logs)")
+
+(defn deploy-observed-placed-line [where :string publish-name :string] :string
+  ;; host joins where nodes with ", "
+  (string-concat
+   "  ✓ placed + running on: "
+   (string-concat
+    where
+    (string-concat "  (deployed from " (string-concat publish-name ")")))))
+
+(defn missing-pinned-binaries-line1 [version :string sha :string] :string
+  (string-concat
+   "fleet pins kotoba "
+   (string-concat
+    version
+    (string-concat
+     " (sha "
+     (string-concat sha ") but ./bin has no binaries.")))))
+
+(defn missing-pinned-binaries-line2 [] :string
+  "Build that version and `murakumo pin <its release dir>` before provisioning.")
 
 (defn command-error-line [command :string error :string] :string
   (if (if (string=? command "provision")
