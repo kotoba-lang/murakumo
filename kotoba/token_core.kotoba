@@ -1,0 +1,46 @@
+(ns token-core
+  (:export [version default-ttl claim-sub claim-scope claim-exp
+            expired? scope-allows? signing-input]))
+
+;; W6 pure-planner oracle — murakumo.token pure claims/scope core.
+;; HMAC / base64url / sign-verify stay host (javax / WebCrypto).
+;; Sentinel: has-sub/has-scope/has-exp 0 = nil (absent); ttl -1 = default 30d.
+;; Parity: test/murakumo/token_kotoba_parity_test.clj
+
+(defn version [] :string
+  "mk1")
+
+(defn default-ttl [] :i64
+  2592000)
+
+(defn claim-sub [has-sub :i64 sub :string] :string
+  ;; cljc: (str (or sub "anonymous"))
+  (if (= has-sub 0)
+    "anonymous"
+    sub))
+
+(defn claim-scope [has-scope :i64 scope :string] :string
+  ;; cljc: (str (or scope "all"))
+  (if (= has-scope 0)
+    "all"
+    scope))
+
+(defn claim-exp [now :i64 ttl :i64] :i64
+  ;; cljc: (+ now (or ttl 2592000)); ttl -1 = absent
+  (let [t (if (< ttl 0) 2592000 ttl)]
+    (+ now t)))
+
+(defn expired? [has-exp :i64 exp :i64 now :i64] :i64
+  ;; cljc: (or (nil? exp) (>= now exp)) → 1 expired, 0 live
+  (if (= has-exp 0)
+    1
+    (if (< now exp) 0 1)))
+
+(defn scope-allows? [token-scope :string required :string] :i64
+  ;; cljc: (or (= "all" scope) (= scope required))
+  (if (string=? token-scope "all")
+    1
+    (if (string=? token-scope required) 1 0)))
+
+(defn signing-input [payload-seg :string] :string
+  (string-concat "mk1." payload-seg))
