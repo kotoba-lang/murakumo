@@ -1098,8 +1098,10 @@
                                           :wasm32-kotoba-v1 {}))]
     (is (= (ir/execute k 'default-rotation-seconds [])
            (oracle/call :overlay-keyring 'default-rotation-seconds [])))
-    (is (= (ir/execute pe 'choose-via [1 0 1])
-           (oracle/call :overlay-peer 'choose-via [1 0 1])))
+    (is (= (ir/execute pe 'choose-via
+                       [(oracle/option-i64 1) (oracle/option-i64 nil) (oracle/option-i64 1)])
+           (oracle/call :overlay-peer 'choose-via
+                        [(oracle/option-i64 1) (oracle/option-i64 nil) (oracle/option-i64 1)])))
     (is (= (ir/execute s 'advance-seq [3])
            (oracle/call :overlay-stream 'advance-seq [3])))
     (is (= (ir/execute c 'node-region ["" "" ""])

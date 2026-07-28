@@ -56,11 +56,13 @@
    JVM: via decision via kotoba `choose-via`."
   [peer]
   (let [paths (candidate-paths peer)
-        has-direct (if (some #(= :direct (:via %)) paths) 1 0)
-        health-down (if (= :down (:health peer)) 1 0)
-        has-relay (if (some #(= :relay (:via %)) paths) 1 0)
+        direct? (when (some #(= :direct (:via %)) paths) 1)
+        down? (when (= :down (:health peer)) 1)
+        relay? (when (some #(= :relay (:via %)) paths) 1)
         via #?(:clj (o 'choose-via
-                       [(long has-direct) (long health-down) (long has-relay)])
+                       [(oracle/option-i64 direct?)
+                        (oracle/option-i64 down?)
+                        (oracle/option-i64 relay?)])
                :cljs nil)]
     #?(:clj
        (case via

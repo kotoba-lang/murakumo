@@ -16,6 +16,12 @@
    :direct [{:transport :quic :endpoint "quic://asher:4001"}]
    :relay {:relay "jp-1" :transport :quic :endpoint "relay://jp/bafyNode"}})
 
+
+(defn- opt-i64-form [n]
+  (if (nil? n)
+    "(option-none-of [:option :i64])"
+    (str "(option-some-of [:option :i64] " (long n) ")")))
+
 (defn- compile-string-cases [cases]
   (let [defs (for [[name body] cases]
                (str "(defn " name " [] :string " body ")"))
@@ -29,11 +35,11 @@
 
 (defn- project-choose [peer]
   (let [paths (peer/candidate-paths peer)
-        has-direct (if (some #(= :direct (:via %)) paths) 1 0)
-        has-relay (if (some #(= :relay (:via %)) paths) 1 0)
-        health-down (if (= :down (:health peer)) 1 0)
+        direct? (when (some #(= :direct (:via %)) paths) 1)
+        relay? (when (some #(= :relay (:via %)) paths) 1)
+        down? (when (= :down (:health peer)) 1)
         via (some-> (peer/choose-path peer) :via name)]
-    {:has-direct has-direct :has-relay has-relay :health-down health-down
+    {:direct? direct? :relay? relay? :down? down?
      :expected (or via "")}))
 
 (deftest choose-via-matches-choose-path
@@ -46,8 +52,9 @@
                      (fn [i peer]
                        (let [x (project-choose peer)]
                          [(str "c_" i)
-                          (str "(choose-via " (:has-direct x) " "
-                               (:health-down x) " " (:has-relay x) ")")]))
+                          (str "(choose-via " (opt-i64-form (:direct? x)) " "
+                               (opt-i64-form (:down? x)) " "
+                               (opt-i64-form (:relay? x)) ")")]))
                      corpus))
         actual (compile-string-cases cases)
         labels (compile-string-cases

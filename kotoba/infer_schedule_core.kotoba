@@ -204,19 +204,20 @@
 (defn assign-step-3-queues [result :i64] :i64
   (quot result 4))
 
-(defn pick-fold-step [has-champ :i64 ok-i :i64 warm-champ :i64 warm-i :i64
+(defn pick-fold-step [champ [:option :i64] ok-i :i64 warm-champ :i64 warm-i :i64
                       better-c-i :i64] :i64
-  ;; Host folds candidates i=0..n-1. has-champ=1 once a champ exists.
+  ;; Host folds candidates i=0..n-1.
+  ;; Product Value ABI v1: optional champ presence (no has-champ sentinel).
   ;; Returns: 0 = no pick yet (no champ and ok-i=0)
   ;;          1 = take challenger i as new champ
   ;;          2 = keep existing champ
-  (if (= has-champ 0)
-    (if (= ok-i 0) 0 1)
+  (if-some [_ champ]
     (if (= ok-i 0)
       2
       (if (= (prefer-warm-then-score warm-champ warm-i better-c-i) 0)
         2
-        1))))
+        1))
+    (if (= ok-i 0) 0 1)))
 
 (defn queue-inc-if [queue :i64 picked :i64] :i64
   ;; picked 0/1 — alias queue-after-assign for host fold clarity
