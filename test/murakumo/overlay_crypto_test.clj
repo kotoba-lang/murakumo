@@ -15,3 +15,16 @@
 (deftest aes-gcm-rejects-wrong-key
   (let [sealed (crypto/seal "shared-secret" "payload")]
     (is (thrown? Exception (crypto/open "wrong-secret" sealed)))))
+
+(deftest live-aes-adapter-packaging-gates
+  (is (= "aes-256-gcm" crypto/alg-name))
+  (is (= "AES/GCM/NoPadding" crypto/cipher-transform))
+  (is (= 12 crypto/nonce-bytes))
+  (is (= 128 crypto/gcm-tag-bits))
+  (is (= "abc" (crypto/strip-b64-pad "abc==")))
+  (let [sealed (crypto/seal "k" "p")]
+    (is (crypto/sealed-alg-ok? (:alg sealed)))
+    (is (crypto/sealed-fields-present? sealed))
+    (is (crypto/sealed-map-ok? sealed))
+    (is (not (crypto/sealed-map-ok? (dissoc sealed :nonce))))
+    (is (thrown? Exception (crypto/open "k" (dissoc sealed :ciphertext))))))
