@@ -1,31 +1,34 @@
 ;; murakumo.infer.plan — exo-style memory-weighted shard planning (pure cljc).
 ;;
-;; Given a model descriptor and the fleet's live memory map, decide which nodes
-;; participate and which CONTIGUOUS layer range each node serves, proportional to
-;; its usable memory (exo's ring memory-weighted partitioning). Pure data → data:
-;; no SSH, no engine, no platform — so the same planner runs in bb (the terminal
-;; operator), on the JVM (tests), in the CF Worker (cloud-murakumo), and inside a
-;; kotoba WASM component.
-;;
-;; The planner is engine-agnostic: it emits layer ranges + byte estimates. Engine
-;; adapters (murakumo.infer.engine) turn a plan into concrete process commands
-;; (llama.cpp --rpc/--tensor-split, mlx.launch ring, …).
+;; W6 product-shell authority (ADR-260728-w6-infer-plan-oracle-authority):
+;; On the JVM, selected pure helpers DELEGATE to precompiled
+;; kotoba/infer_plan_core.kotoba → resources/murakumo/oracle/infer_plan_core.kir.edn:
+;;   usable-bytes, default reserves, choose-strategy-name, ok-mark, GiB.
+;; Host remains: partition-layers double walk (i64 overflow on weight*usable
+;; for multi-hundred-GB models), layer-weights, report double GiB fields.
 
-(ns murakumo.infer.plan)
+(ns murakumo.infer.plan
+  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def GiB (* 1024 1024 1024))
+(def ^:private oid :infer-plan)
 
-;; What a node cannot give to weights: the OS floor plus a per-node headroom for
-;; KV cache + activations + runtime overhead. macOS keeps ~3.5 GiB to itself on a
-;; 16 GiB Apple-Silicon box before memory pressure bites; GPU-wired allocations
-;; are additionally capped by iogpu.wired_limit_mb (0 = macOS default ≈ 70 %).
-(def default-os-reserve (* 7/2 GiB))
-(def default-headroom (* 5/4 GiB))
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
 
-(defn usable-bytes
-  "Bytes of weights a node can realistically hold resident.
-   {:mem-bytes total, :os-reserve-bytes?, :headroom-bytes?, :wired-limit-bytes?}
-   → min(mem − os-reserve, wired-limit) − headroom, floored at 0."
+(def GiB
+  #?(:clj (o 'gib [])
+     :cljs (* 1024 1024 1024)))
+
+(def default-os-reserve
+  #?(:clj (o 'default-os-reserve [])
+     :cljs (* 7/2 GiB)))
+
+(def default-headroom
+  #?(:clj (o 'default-headroom [])
+     :cljs (* 5/4 GiB)))
+
+(defn- mirror-usable-bytes
   [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes]}]
   (let [os-res (or os-reserve-bytes default-os-reserve)
         head (or headroom-bytes default-headroom)
@@ -33,10 +36,19 @@
         ceiling (if wired-limit-bytes (min ceiling wired-limit-bytes) ceiling)]
     (max 0 (long (- ceiling head)))))
 
+(defn usable-bytes
+  "Bytes of weights a node can realistically hold resident."
+  [node]
+  #?(:clj
+     (let [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes]} node
+           os (long (or os-reserve-bytes (o 'default-os-reserve [])))
+           hd (long (or headroom-bytes (o 'default-headroom [])))
+           wired (if wired-limit-bytes (long wired-limit-bytes) -1)]
+       (o 'usable-bytes [(long mem-bytes) os hd wired]))
+     :cljs (mirror-usable-bytes node)))
+
 (defn- largest-remainder
-  "Apportion `total` integer units over `quotas` (seq of non-negative reals that
-   sum to ~total) — floor everything, then hand the remaining units to the largest
-   fractional parts. Deterministic: ties break to the earlier index."
+  "Apportion `total` integer units over `quotas`."
   [total quotas]
   (let [floors (mapv long quotas)
         short (- total (reduce + floors))
@@ -47,24 +59,17 @@
     (vec (map-indexed (fn [i f] (+ f (if (bump i) 1 0))) floors))))
 
 (defn layer-weights
-  "Per-layer byte estimates for the model's decoder stack. MoE models often open
-   with a few DENSE layers (`:model/dense-layers`, e.g. GLM-5.2 first_k_dense=3)
-   that weigh a fraction (`:model/dense-layer-frac`, default 1/10) of an
-   expert-bearing layer — the first shard can therefore take MORE layers, which
-   is exactly what lets a 78-layer GLM-5.2 sit on eleven 16 GiB ranks."
+  "Per-layer byte estimates for the model's decoder stack."
   [{:model/keys [layers weight-bytes dense-layers dense-layer-frac]}]
   (let [d (or dense-layers 0)
         f (or dense-layer-frac 1/10)
-        units (+ (* d (double f)) (- layers d))          ; total in MoE-layer units
+        units (+ (* d (double f)) (- layers d))
         moe-bytes (/ (double weight-bytes) units)]
     (mapv #(if (< % d) (* f moe-bytes) moe-bytes) (range layers))))
 
 (defn partition-layers
-  "Memory-weighted contiguous partition of the decoder stack over `nodes` (ring
-   order = given order): walk the per-layer weight vector, cutting each node a
-   contiguous slice whose BYTES (not count) match its share of usable memory.
-   Returns [{:node <node> :layers [lo hi) :span n :est-bytes b :fits? bool} …] —
-   nodes with zero usable memory get :span 0 and are dropped from serving."
+  "Memory-weighted contiguous partition of the decoder stack over `nodes`.
+   Host double walk (integer guest partition-target overflows for large models)."
   [{:model/keys [layers] :as model} nodes]
   (let [usable (mapv usable-bytes nodes)
         total (reduce + usable)
@@ -73,14 +78,12 @@
     (loop [i 0, lo 0, acc 0.0, out []]
       (if (= i (count nodes))
         out
-        (let [;; cumulative byte target through node i, mapped onto the layer axis
-              target (if (pos? total)
+        (let [target (if (pos? total)
                        (* wsum (/ (double (reduce + (take (inc i) usable))) total))
                        0.0)
               last? (= i (dec (count nodes)))
               hi (if last?
                    layers
-                   ;; advance while adding the next layer keeps us nearer target
                    (loop [h lo, a acc]
                      (if (or (= h layers)
                              (> (+ a (nth lw h)) target)) h (recur (inc h) (+ a (nth lw h))))))
@@ -93,11 +96,7 @@
                             :fits? (<= est (nth usable i))})))))))
 
 (defn plan
-  "Full shard plan: {:model :assignments :total-usable-bytes :fits?}.
-   :fits? is the go/no-go gate — total usable memory ≥ model weights AND every
-   node's contiguous slice fits its own budget (largest-remainder keeps slices
-   proportional, so a per-node overflow means the fleet is genuinely too small,
-   not badly balanced)."
+  "Full shard plan: {:model :assignments :total-usable-bytes :fits?}."
   [model nodes]
   (let [asg (partition-layers model nodes)
         total (reduce + (map (comp usable-bytes :node) asg))]
@@ -108,39 +107,36 @@
      :fits? (and (>= total (:model/weight-bytes model))
                  (every? :fits? (filter (comp pos? :span) asg)))}))
 
+(def ^:private strategy-why
+  {"tensor" "fast interconnect and kv-heads divide the ranks — all-reduce per layer is affordable"
+   "expert" "fast interconnect and enough experts for every rank to hold whole ones"
+   "pipeline" "GbE-class link: one activation handoff per boundary is all it can pay for"})
+
 (defn choose-strategy
-  "Pick the parallelism the interconnect can actually pay for — the exo/petals
-   question answered as a pure function, not a config flag.
-
-   {:link-gbps measured-bandwidth :ranks n
-    :model {:model/experts e :model/kv-heads k}}
-   → {:strategy :pipeline | :tensor | :expert :why <reason>}
-
-   The wire costs per generated token:
-     :pipeline  one activation handoff per shard boundary   (~KBs)   any link
-     :tensor    an all-reduce EVERY layer                   (~MBs)   ≥20 Gb/s
-     :expert    top-k expert dispatch every MoE layer       (~MBs)   ≥20 Gb/s
-   :tensor additionally needs kv-heads divisible by ranks (GQA splits by head);
-   :expert needs a MoE (experts > ranks) so each rank holds whole experts."
+  "Pick parallelism; JVM strategy name from oracle, why on host."
   [{:keys [link-gbps ranks model]}]
-  (let [{:model/keys [experts kv-heads]} model
-        fast? (and link-gbps (>= (double link-gbps) 20.0))]
-    (cond
-      (and fast? kv-heads (pos? (or ranks 0)) (zero? (mod kv-heads ranks)))
-      {:strategy :tensor
-       :why "fast interconnect and kv-heads divide the ranks — all-reduce per layer is affordable"}
-
-      (and fast? experts (> (or experts 0) (or ranks 1)))
-      {:strategy :expert
-       :why "fast interconnect and enough experts for every rank to hold whole ones"}
-
-      :else
-      {:strategy :pipeline
-       :why "GbE-class link: one activation handoff per boundary is all it can pay for"})))
+  (let [{:model/keys [experts kv-heads]} model]
+    #?(:clj
+       (let [name (o 'choose-strategy-name
+                     [(long (or link-gbps 0))
+                      (long (or ranks 0))
+                      (long (or experts 0))
+                      (long (or kv-heads 0))])]
+         {:strategy (keyword name)
+          :why (get strategy-why name (strategy-why "pipeline"))})
+       :cljs
+       (let [fast? (and link-gbps (>= (double link-gbps) 20.0))]
+         (cond
+           (and fast? kv-heads (pos? (or ranks 0)) (zero? (mod kv-heads ranks)))
+           {:strategy :tensor :why (strategy-why "tensor")}
+           (and fast? experts (> (or experts 0) (or ranks 1)))
+           {:strategy :expert :why (strategy-why "expert")}
+           :else
+           {:strategy :pipeline :why (strategy-why "pipeline")})))))
 
 (defn report
-  "Human-oriented rows for the plan table (pure; printing is the caller's job)."
-  [{:keys [assignments] :as plan}]
+  "Human-oriented rows for the plan table."
+  [{:keys [assignments] :as _plan}]
   (for [{:keys [node layers span est-bytes fits?]} assignments]
     {:name (:name node)
      :mem-gib (/ (double (:mem-bytes node)) GiB)
@@ -148,4 +144,5 @@
      :layers layers
      :span span
      :est-gib (/ (double est-bytes) GiB)
-     :ok (if fits? "✓" "✗")}))
+     :ok #?(:clj (o 'ok-mark [(long (if fits? 1 0))])
+            :cljs (if fits? "✓" "✗"))}))

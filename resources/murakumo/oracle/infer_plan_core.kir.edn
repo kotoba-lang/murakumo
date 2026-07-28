@@ -1,0 +1,852 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name gib,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1073741824,
+   :param-types []}
+  {:name default-os-reserve,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 3758096384,
+   :param-types []}
+  {:name default-headroom,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1342177280,
+   :param-types []}
+  {:name rem64,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (- a (* (quot a b) b)),
+   :param-types [:i64 :i64]}
+  {:name usable-bytes,
+   :params [mem os head wired],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [ceil0
+     (- mem os)
+     ceil1
+     (if (< wired 0) ceil0 (if (< wired ceil0) wired ceil0))
+     left
+     (- ceil1 head)]
+    (if (< left 0) 0 left)),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name choose-strategy-name,
+   :params [link-gbps ranks experts kv-heads],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [fast
+     (if (< link-gbps 20) 0 1)
+     div
+     (if (< ranks 1) 0 (if (= 0 (rem64 kv-heads ranks)) 1 0))]
+    (if
+     (if (= fast 1) (if (= div 1) 1 0) 0)
+     "tensor"
+     (if
+      (if (= fast 1) (if (< ranks experts) 1 0) 0)
+      "expert"
+      "pipeline"))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name lane-base,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 65536,
+   :param-types []}
+  {:name pack3,
+   :params [a b c],
+   :result :i64,
+   :effects #{},
+   :body (let [B (lane-base)] (+ a (+ (* b B) (* c (* B B))))),
+   :param-types [:i64 :i64 :i64]}
+  {:name plan-lr-pack-get,
+   :params [packed idx],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [B (lane-base)]
+    (if
+     (= idx 0)
+     (rem64 packed B)
+     (if (= idx 1) (rem64 (quot packed B) B) (quot packed (* B B))))),
+   :param-types [:i64 :i64]}
+  {:name better-bump?,
+   :params [rem-a idx-a rem-b idx-b],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< rem-b rem-a)
+    1
+    (if (< rem-a rem-b) 0 (if (< idx-a idx-b) 1 0))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name pick-bump-3,
+   :params [ok-t ok-m ok-p rem-packed _pad],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [rt
+     (plan-lr-pack-get rem-packed 0)
+     rm
+     (plan-lr-pack-get rem-packed 1)
+     rp
+     (plan-lr-pack-get rem-packed 2)]
+    (if
+     (= ok-t 0)
+     (if
+      (= ok-m 0)
+      (if (= ok-p 0) -1 2)
+      (if (= ok-p 0) 1 (if (= (better-bump? rm 1 rp 2) 1) 1 2)))
+     (if
+      (= ok-m 0)
+      (if (= ok-p 0) 0 (if (= (better-bump? rt 0 rp 2) 1) 0 2))
+      (let
+       [win-tm
+        (if (= (better-bump? rt 0 rm 1) 1) 0 1)
+        r-win
+        (if (= win-tm 0) rt rm)
+        i-win
+        win-tm]
+       (if
+        (= ok-p 0)
+        win-tm
+        (if (= (better-bump? r-win i-win rp 2) 1) win-tm 2)))))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name ok-for,
+   :params [active bumped],
+   :result :i64,
+   :effects #{},
+   :body (if (if (= active 1) (if (= bumped 0) 1 0) 0) 1 0),
+   :param-types [:i64 :i64]}
+  {:name weight-pos?,
+   :params [w],
+   :result :i64,
+   :effects #{},
+   :body (if (< 0 w) 1 0),
+   :param-types [:i64]}
+  {:name plan-lr-3,
+   :params [total w0 w1 w2],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [a0
+     (weight-pos? w0)
+     a1
+     (weight-pos? w1)
+     a2
+     (weight-pos? w2)
+     sumw
+     (+ w0 (+ w1 w2))]
+    (if
+     (if (= total 0) 1 (if (= sumw 0) 1 0))
+     (pack3 0 0 0)
+     (let
+      [p0
+       (* total w0)
+       p1
+       (* total w1)
+       p2
+       (* total w2)
+       f0
+       (quot p0 sumw)
+       f1
+       (quot p1 sumw)
+       f2
+       (quot p2 sumw)
+       r0
+       (rem64 p0 sumw)
+       r1
+       (rem64 p1 sumw)
+       r2
+       (rem64 p2 sumw)
+       assigned
+       (+ f0 (+ f1 f2))
+       extra
+       (- total assigned)
+       rem-packed
+       (pack3 r0 r1 r2)
+       b0
+       (if
+        (< 0 extra)
+        (pick-bump-3
+         (ok-for a0 0)
+         (ok-for a1 0)
+         (ok-for a2 0)
+         rem-packed
+         0)
+        -1)
+       t0
+       (if (= b0 0) 1 0)
+       m0
+       (if (= b0 1) 1 0)
+       p0b
+       (if (= b0 2) 1 0)
+       b1
+       (if
+        (< 1 extra)
+        (pick-bump-3
+         (ok-for a0 t0)
+         (ok-for a1 m0)
+         (ok-for a2 p0b)
+         rem-packed
+         0)
+        -1)
+       t1
+       (if (= b1 0) 1 t0)
+       m1
+       (if (= b1 1) 1 m0)
+       p1b
+       (if (= b1 2) 1 p0b)
+       b2
+       (if
+        (< 2 extra)
+        (pick-bump-3
+         (ok-for a0 t1)
+         (ok-for a1 m1)
+         (ok-for a2 p1b)
+         rem-packed
+         0)
+        -1)
+       bump0
+       (if (if (= b0 0) 1 (if (= b1 0) 1 (if (= b2 0) 1 0))) 1 0)
+       bump1
+       (if (if (= b0 1) 1 (if (= b1 1) 1 (if (= b2 1) 1 0))) 1 0)
+       bump2
+       (if (if (= b0 2) 1 (if (= b1 2) 1 (if (= b2 2) 1 0))) 1 0)]
+      (pack3 (+ f0 bump0) (+ f1 bump1) (+ f2 bump2))))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name plan-fits-total?,
+   :params [total-usable weight-bytes],
+   :result :i64,
+   :effects #{},
+   :body (if (< total-usable weight-bytes) 0 1),
+   :param-types [:i64 :i64]}
+  {:name span-fits?,
+   :params [est-bytes usable],
+   :result :i64,
+   :effects #{},
+   :body (if (< usable est-bytes) 0 1),
+   :param-types [:i64 :i64]}
+  {:name uniform-layer-bytes,
+   :params [weight-bytes layers],
+   :result :i64,
+   :effects #{},
+   :body (if (< layers 1) 0 (quot weight-bytes layers)),
+   :param-types [:i64 :i64]}
+  {:name dense-units-milli,
+   :params [layers dense dense-frac-milli],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [d
+     (if (< dense 0) 0 (if (< layers dense) layers dense))
+     rest
+     (- layers d)]
+    (+ (* d dense-frac-milli) (* rest 1000))),
+   :param-types [:i64 :i64 :i64]}
+  {:name moe-layer-bytes,
+   :params [weight-bytes layers dense dense-frac-milli],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [units (dense-units-milli layers dense dense-frac-milli)]
+    (if (< units 1) 0 (quot (* weight-bytes 1000) units))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name model-pack,
+   :params [layers dense dense-frac-milli],
+   :result :i64,
+   :effects #{},
+   :body (pack3 layers dense dense-frac-milli),
+   :param-types [:i64 :i64 :i64]}
+  {:name model-layers,
+   :params [mp],
+   :result :i64,
+   :effects #{},
+   :body (plan-lr-pack-get mp 0),
+   :param-types [:i64]}
+  {:name model-dense,
+   :params [mp],
+   :result :i64,
+   :effects #{},
+   :body (plan-lr-pack-get mp 1),
+   :param-types [:i64]}
+  {:name model-frac-milli,
+   :params [mp],
+   :result :i64,
+   :effects #{},
+   :body (plan-lr-pack-get mp 2),
+   :param-types [:i64]}
+  {:name dense-layer-bytes,
+   :params [weight-bytes layers dense dense-frac-milli],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [moe (moe-layer-bytes weight-bytes layers dense dense-frac-milli)]
+    (quot (* moe dense-frac-milli) 1000)),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name layer-byte-at,
+   :params [weight-bytes mp i],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [layers
+     (model-layers mp)
+     dense
+     (model-dense mp)
+     frac
+     (model-frac-milli mp)
+     d
+     (if (< dense 0) 0 (if (< layers dense) layers dense))]
+    (if
+     (< i d)
+     (dense-layer-bytes weight-bytes layers dense frac)
+     (moe-layer-bytes weight-bytes layers dense frac))),
+   :param-types [:i64 :i64 :i64]}
+  {:name layer-wsum,
+   :params [weight-bytes mp],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [layers
+     (model-layers mp)
+     dense
+     (model-dense mp)
+     frac
+     (model-frac-milli mp)
+     d
+     (if (< dense 0) 0 (if (< layers dense) layers dense))
+     rest
+     (- layers d)
+     moe
+     (moe-layer-bytes weight-bytes layers dense frac)
+     db
+     (dense-layer-bytes weight-bytes layers dense frac)]
+    (+ (* d db) (* rest moe))),
+   :param-types [:i64 :i64]}
+  {:name partition-target,
+   :params [wsum cum-usable total-usable],
+   :result :i64,
+   :effects #{},
+   :body
+   (if (< total-usable 1) 0 (quot (* wsum cum-usable) total-usable)),
+   :param-types [:i64 :i64 :i64]}
+  {:name min2,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (if (< a b) a b),
+   :param-types [:i64 :i64]}
+  {:name max2,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (if (< a b) b a),
+   :param-types [:i64 :i64]}
+  {:name clamp-nonneg,
+   :params [n],
+   :result :i64,
+   :effects #{},
+   :body (if (< n 0) 0 n),
+   :param-types [:i64]}
+  {:name est-bytes-range,
+   :params [weight-bytes mp lo hi],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [layers
+     (model-layers mp)
+     dense
+     (model-dense mp)
+     frac
+     (model-frac-milli mp)
+     d
+     (if (< dense 0) 0 (if (< layers dense) layers dense))
+     moe
+     (moe-layer-bytes weight-bytes layers dense frac)
+     db
+     (dense-layer-bytes weight-bytes layers dense frac)
+     lo2
+     (if (< lo 0) 0 lo)
+     hi2
+     (if (< hi lo2) lo2 (if (< layers hi) layers hi))
+     dense-lo
+     lo2
+     dense-hi
+     (min2 hi2 d)
+     dense-n
+     (clamp-nonneg (- dense-hi dense-lo))
+     moe-lo
+     (max2 lo2 d)
+     moe-hi
+     hi2
+     moe-n
+     (clamp-nonneg (- moe-hi moe-lo))]
+    (+ (* dense-n db) (* moe-n moe))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name advance-in-band,
+   :params [lo hi-cap layer-b acc target],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (if (< lo hi-cap) (if (< 0 layer-b) 1 0) 0)
+    (let
+     [room
+      (- target acc)
+      kmax
+      (if (< room 0) 0 (quot room layer-b))
+      hi
+      (+ lo kmax)]
+     (if (< hi-cap hi) hi-cap hi))
+    lo),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name advance-hi,
+   :params [weight-bytes mp lo acc target],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [layers
+     (model-layers mp)
+     dense
+     (model-dense mp)
+     frac
+     (model-frac-milli mp)
+     d
+     (if (< dense 0) 0 (if (< layers dense) layers dense))
+     moe
+     (moe-layer-bytes weight-bytes layers dense frac)
+     db
+     (dense-layer-bytes weight-bytes layers dense frac)
+     lo0
+     (if (< lo 0) 0 (if (< layers lo) layers lo))]
+    (if
+     (< lo0 d)
+     (let
+      [hi-d
+       (advance-in-band lo0 d db acc target)
+       acc-d
+       (+ acc (est-bytes-range weight-bytes mp lo0 hi-d))]
+      (if (< hi-d d) hi-d (advance-in-band d layers moe acc-d target)))
+     (advance-in-band lo0 layers moe acc target))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name partition-3-ends,
+   :params [weight-bytes mp u0 u1 u2],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [layers
+     (model-layers mp)
+     total
+     (+ u0 (+ u1 u2))
+     wsum
+     (layer-wsum weight-bytes mp)]
+    (if
+     (= total 0)
+     (pack3 0 0 layers)
+     (let
+      [t0
+       (partition-target wsum u0 total)
+       t1
+       (partition-target wsum (+ u0 u1) total)
+       hi0
+       (advance-hi weight-bytes mp 0 0 t0)
+       acc0
+       (est-bytes-range weight-bytes mp 0 hi0)
+       hi1
+       (advance-hi weight-bytes mp hi0 acc0 t1)
+       hi2
+       layers]
+      (pack3 hi0 hi1 hi2)))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name assignment-span,
+   :params [lo hi],
+   :result :i64,
+   :effects #{},
+   :body (if (< hi lo) 0 (- hi lo)),
+   :param-types [:i64 :i64]}
+  {:name plan-fits-3,
+   :params [weight-bytes mp u0 u1 u2],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [ends
+     (partition-3-ends weight-bytes mp u0 u1 u2)
+     hi0
+     (plan-lr-pack-get ends 0)
+     hi1
+     (plan-lr-pack-get ends 1)
+     hi2
+     (plan-lr-pack-get ends 2)
+     lo0
+     0
+     lo1
+     hi0
+     lo2
+     hi1
+     s0
+     (assignment-span lo0 hi0)
+     s1
+     (assignment-span lo1 hi1)
+     s2
+     (assignment-span lo2 hi2)
+     e0
+     (est-bytes-range weight-bytes mp lo0 hi0)
+     e1
+     (est-bytes-range weight-bytes mp lo1 hi1)
+     e2
+     (est-bytes-range weight-bytes mp lo2 hi2)
+     f0
+     (if (= s0 0) 1 (span-fits? e0 u0))
+     f1
+     (if (= s1 0) 1 (span-fits? e1 u1))
+     f2
+     (if (= s2 0) 1 (span-fits? e2 u2))
+     spans-ok
+     (if (if (= f0 1) (if (= f1 1) (if (= f2 1) 1 0) 0) 0) 1 0)
+     total
+     (+ u0 (+ u1 u2))
+     total-ok
+     (plan-fits-total? total weight-bytes)]
+    (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name partition-1-end,
+   :params [mp],
+   :result :i64,
+   :effects #{},
+   :body (model-layers mp),
+   :param-types [:i64]}
+  {:name plan-fits-1,
+   :params [weight-bytes mp u0],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [layers
+     (partition-1-end mp)
+     s0
+     (assignment-span 0 layers)
+     e0
+     (est-bytes-range weight-bytes mp 0 layers)
+     f0
+     (if (= s0 0) 1 (span-fits? e0 u0))
+     total-ok
+     (plan-fits-total? u0 weight-bytes)]
+    (if (if (= total-ok 1) (if (= f0 1) 1 0) 0) 1 0)),
+   :param-types [:i64 :i64 :i64]}
+  {:name partition-2-ends,
+   :params [weight-bytes mp u0 u1],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [layers
+     (model-layers mp)
+     total
+     (+ u0 u1)
+     wsum
+     (layer-wsum weight-bytes mp)]
+    (if
+     (= total 0)
+     (pack3 0 layers 0)
+     (let
+      [t0
+       (partition-target wsum u0 total)
+       hi0
+       (advance-hi weight-bytes mp 0 0 t0)
+       hi1
+       layers]
+      (pack3 hi0 hi1 0)))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name plan-fits-2,
+   :params [weight-bytes mp u0 u1],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [ends
+     (partition-2-ends weight-bytes mp u0 u1)
+     hi0
+     (plan-lr-pack-get ends 0)
+     hi1
+     (plan-lr-pack-get ends 1)
+     lo0
+     0
+     lo1
+     hi0
+     s0
+     (assignment-span lo0 hi0)
+     s1
+     (assignment-span lo1 hi1)
+     e0
+     (est-bytes-range weight-bytes mp lo0 hi0)
+     e1
+     (est-bytes-range weight-bytes mp lo1 hi1)
+     f0
+     (if (= s0 0) 1 (span-fits? e0 u0))
+     f1
+     (if (= s1 0) 1 (span-fits? e1 u1))
+     spans-ok
+     (if (if (= f0 1) (if (= f1 1) 1 0) 0) 1 0)
+     total
+     (+ u0 u1)
+     total-ok
+     (plan-fits-total? total weight-bytes)]
+    (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name ends-lo,
+   :params [ends-pack idx],
+   :result :i64,
+   :effects #{},
+   :body (if (= idx 0) 0 (plan-lr-pack-get ends-pack (- idx 1))),
+   :param-types [:i64 :i64]}
+  {:name ends-hi,
+   :params [ends-pack idx],
+   :result :i64,
+   :effects #{},
+   :body (plan-lr-pack-get ends-pack idx),
+   :param-types [:i64 :i64]}
+  {:name asg-row-pack,
+   :params [weight-bytes mp lo hi usable],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [sp
+     (assignment-span lo hi)
+     est
+     (est-bytes-range weight-bytes mp lo hi)
+     fit
+     (if (= sp 0) 1 (span-fits? est usable))]
+    (pack3 sp fit 0)),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name asg-row-span,
+   :params [row],
+   :result :i64,
+   :effects #{},
+   :body (plan-lr-pack-get row 0),
+   :param-types [:i64]}
+  {:name asg-row-fits,
+   :params [row],
+   :result :i64,
+   :effects #{},
+   :body (plan-lr-pack-get row 1),
+   :param-types [:i64]}
+  {:name lo-acc-pack,
+   :params [lo acc],
+   :result :i64,
+   :effects #{},
+   :body (pack3 lo acc 0),
+   :param-types [:i64 :i64]}
+  {:name partition-step,
+   :params [weight-bytes mp lo-acc cum-usable total-usable],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [lo
+     (plan-lr-pack-get lo-acc 0)
+     acc
+     (plan-lr-pack-get lo-acc 1)
+     wsum
+     (layer-wsum weight-bytes mp)
+     target
+     (partition-target wsum cum-usable total-usable)
+     hi
+     (advance-hi weight-bytes mp lo acc target)
+     new-acc
+     (+ acc (est-bytes-range weight-bytes mp lo hi))]
+    (pack3 hi new-acc 0)),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name partition-step-hi,
+   :params [step-pack],
+   :result :i64,
+   :effects #{},
+   :body (plan-lr-pack-get step-pack 0),
+   :param-types [:i64]}
+  {:name partition-step-acc,
+   :params [step-pack],
+   :result :i64,
+   :effects #{},
+   :body (plan-lr-pack-get step-pack 1),
+   :param-types [:i64]}
+  {:name partition-last,
+   :params [mp],
+   :result :i64,
+   :effects #{},
+   :body (model-layers mp),
+   :param-types [:i64]}
+  {:name fits-and,
+   :params [acc-fits row-fits],
+   :result :i64,
+   :effects #{},
+   :body (if (if (= acc-fits 1) (if (= row-fits 1) 1 0) 0) 1 0),
+   :param-types [:i64 :i64]}
+  {:name ok-mark,
+   :params [fits],
+   :result :string,
+   :effects #{},
+   :body (if (= fits 1) "✓" "✗"),
+   :param-types [:i64]}
+  {:name pick-max-idx-2,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (if (< a b) 1 0),
+   :param-types [:i64 :i64]}
+  {:name pick-max-idx-3,
+   :params [a b c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if (if (< a b) 0 (if (< a c) 0 1)) 0 (if (if (< b c) 0 1) 1 2)),
+   :param-types [:i64 :i64 :i64]}
+  {:name moe-capacity-ok,
+   :params [cap],
+   :result :i64,
+   :effects #{},
+   :body (if (< cap 1) 0 1),
+   :param-types [:i64]}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name bytes-to-gib-milli,
+   :params [bytes],
+   :result :i64,
+   :effects #{},
+   :body (if (< bytes 0) 0 (quot (* bytes 1000) (gib))),
+   :param-types [:i64]}
+  {:name bytes-to-gib-floor,
+   :params [bytes],
+   :result :i64,
+   :effects #{},
+   :body (if (< bytes 0) 0 (quot bytes (gib))),
+   :param-types [:i64]}
+  {:name layers-range-str,
+   :params [lo hi],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat (i64-str lo) (string-concat ".." (i64-str hi))),
+   :param-types [:i64 :i64]}
+  {:name mem-gib-milli,
+   :params [mem-bytes],
+   :result :i64,
+   :effects #{},
+   :body (bytes-to-gib-milli mem-bytes),
+   :param-types [:i64]}
+  {:name usable-gib-milli,
+   :params [mem os head wired],
+   :result :i64,
+   :effects #{},
+   :body (bytes-to-gib-milli (usable-bytes mem os head wired)),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name est-gib-milli,
+   :params [est-bytes],
+   :result :i64,
+   :effects #{},
+   :body (bytes-to-gib-milli est-bytes),
+   :param-types [:i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [gib
+  default-os-reserve
+  default-headroom
+  usable-bytes
+  choose-strategy-name
+  lane-base
+  plan-lr-3
+  plan-lr-pack-get
+  plan-fits-total?
+  span-fits?
+  uniform-layer-bytes
+  dense-units-milli
+  moe-layer-bytes
+  model-pack
+  model-layers
+  model-dense
+  model-frac-milli
+  layer-byte-at
+  layer-wsum
+  partition-target
+  advance-hi
+  est-bytes-range
+  partition-3-ends
+  assignment-span
+  plan-fits-3
+  ok-mark
+  pick-max-idx-3
+  moe-capacity-ok
+  digit-char
+  nat-str
+  i64-str
+  bytes-to-gib-milli
+  bytes-to-gib-floor
+  layers-range-str
+  mem-gib-milli
+  usable-gib-milli
+  est-gib-milli
+  partition-1-end
+  plan-fits-1
+  partition-2-ends
+  plan-fits-2
+  asg-row-pack
+  asg-row-span
+  asg-row-fits
+  pick-max-idx-2
+  ends-lo
+  ends-hi
+  lo-acc-pack
+  partition-step
+  partition-step-hi
+  partition-step-acc
+  partition-last
+  fits-and],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}
