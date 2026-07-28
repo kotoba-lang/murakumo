@@ -91,69 +91,6 @@
    :effects #{},
    :body (string-concat "ControlPath=" control-path),
    :param-types [:string]}
-  {:name ensure-forward-command,
-   :params [local-port remote-port host],
-   :result :string,
-   :effects #{},
-   :body
-   (let
-    [lp
-     (i64-str local-port)
-     rp
-     (i64-str remote-port)
-     a
-     (string-concat "pgrep -f '" lp)
-     b
-     (string-concat a ":localhost:")
-     c
-     (string-concat b rp)
-     d
-     (string-concat c " ")
-     e
-     (string-concat d host)
-     f
-     (string-concat
-      e
-      "' >/dev/null 2>&1 || ssh -o BatchMode=yes -fN -L ")
-     g
-     (string-concat f lp)
-     h
-     (string-concat g ":localhost:")
-     i
-     (string-concat h rp)]
-    (string-concat i (string-concat " " host))),
-   :param-types [:i64 :i64 :string]}
-  {:name replace-forward-command,
-   :params [local-port remote-port host],
-   :result :string,
-   :effects #{},
-   :body
-   (let
-    [lp
-     (i64-str local-port)
-     rp
-     (i64-str remote-port)
-     a
-     (string-concat "pkill -f '" lp)
-     b
-     (string-concat
-      a
-      ":localhost' 2>/dev/null; sleep 0.3; ssh -o BatchMode=yes -fN -L ")
-     c
-     (string-concat b lp)
-     d
-     (string-concat c ":localhost:")
-     e
-     (string-concat d rp)]
-    (string-concat e (string-concat " " host))),
-   :param-types [:i64 :i64 :string]}
-  {:name remote-curl-command,
-   :params [url],
-   :result :string,
-   :effects #{},
-   :body
-   (string-concat "curl -s -m 5 " (string-concat url " 2>/dev/null")),
-   :param-types [:string]}
   {:name marker-prefix?,
    :params [line],
    :result :i64,
@@ -355,7 +292,176 @@
    :result :string,
    :effects #{},
    :body "exit",
-   :param-types []}],
+   :param-types []}
+  {:name pgrep-bin,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "pgrep",
+   :param-types []}
+  {:name pkill-bin,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "pkill",
+   :param-types []}
+  {:name f-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-f",
+   :param-types []}
+  {:name fN-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-fN",
+   :param-types []}
+  {:name L-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-L",
+   :param-types []}
+  {:name null-redirect,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " >/dev/null 2>&1",
+   :param-types []}
+  {:name or-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " || ",
+   :param-types []}
+  {:name settle-sleep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "sleep 0.3; ",
+   :param-types []}
+  {:name pkill-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " 2>/dev/null; ",
+   :param-types []}
+  {:name localhost-colon,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":localhost:",
+   :param-types []}
+  {:name curl-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "curl -s -m 5 ",
+   :param-types []}
+  {:name curl-stderr-redirect,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " 2>/dev/null",
+   :param-types []}
+  {:name forward-spec,
+   :params [local-port remote-port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (i64-str local-port)
+    (string-concat (localhost-colon) (i64-str remote-port))),
+   :param-types [:i64 :i64]}
+  {:name ssh-forward-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (ssh-bin)
+    (string-concat
+     " "
+     (string-concat
+      (o-flag)
+      (string-concat
+       " "
+       (string-concat
+        (batch-mode-opt)
+        (string-concat
+         " "
+         (string-concat
+          (fN-flag)
+          (string-concat " " (string-concat (L-flag) " "))))))))),
+   :param-types []}
+  {:name ensure-forward-command,
+   :params [local-port remote-port host],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [spec
+     (forward-spec local-port remote-port)
+     probe
+     (string-concat
+      (pgrep-bin)
+      (string-concat
+       " "
+       (string-concat
+        (f-flag)
+        (string-concat
+         " '"
+         (string-concat
+          spec
+          (string-concat " " (string-concat host "'")))))))]
+    (string-concat
+     probe
+     (string-concat
+      (null-redirect)
+      (string-concat
+       (or-sep)
+       (string-concat
+        (ssh-forward-prefix)
+        (string-concat spec (string-concat " " host))))))),
+   :param-types [:i64 :i64 :string]}
+  {:name replace-forward-command,
+   :params [local-port remote-port host],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [lp
+     (i64-str local-port)
+     spec
+     (forward-spec local-port remote-port)
+     kill
+     (string-concat
+      (pkill-bin)
+      (string-concat
+       " "
+       (string-concat
+        (f-flag)
+        (string-concat " '" (string-concat lp ":localhost'")))))]
+    (string-concat
+     kill
+     (string-concat
+      (pkill-suffix)
+      (string-concat
+       (settle-sleep)
+       (string-concat
+        (ssh-forward-prefix)
+        (string-concat spec (string-concat " " host))))))),
+   :param-types [:i64 :i64 :string]}
+  {:name remote-curl-command,
+   :params [url],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (curl-prefix)
+    (string-concat url (curl-stderr-redirect))),
+   :param-types [:string]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
@@ -389,7 +495,21 @@
   scp-bin
   o-flag
   O-flag
-  exit-ctl],
+  exit-ctl
+  pgrep-bin
+  pkill-bin
+  f-flag
+  fN-flag
+  L-flag
+  null-redirect
+  or-sep
+  settle-sleep
+  pkill-suffix
+  localhost-colon
+  curl-prefix
+  curl-stderr-redirect
+  forward-spec
+  ssh-forward-prefix],
  :schemas nil,
  :effects #{},
  :blocks [],

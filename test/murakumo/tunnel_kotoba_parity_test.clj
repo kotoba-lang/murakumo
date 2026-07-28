@@ -15,7 +15,11 @@
        "batch-mode-opt strict-host-key-opt control-master-opt "
        "digit-val? parse-digits trim-ws "
        "pick-exit trim-err err-ws? "
-       "ssh-bin scp-bin o-flag O-flag exit-ctl"))
+       "ssh-bin scp-bin o-flag O-flag exit-ctl "
+       "pgrep-bin pkill-bin f-flag fN-flag L-flag "
+       "null-redirect or-sep settle-sleep pkill-suffix "
+       "localhost-colon curl-prefix curl-stderr-redirect "
+       "forward-spec ssh-forward-prefix"))
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -150,3 +154,49 @@
             tunnel/O-flag tunnel/exit-ctl "asher"]
            (tunnel/close-master-argv "asher" "/tmp/m/%C")))
     (is (= tunnel/o-flag (first (tunnel/conn-opts nil))))))
+
+(deftest forward-curl-fragments-match
+  (let [s (compile-string-cases
+           {"pg" "(pgrep-bin)"
+            "pk" "(pkill-bin)"
+            "f" "(f-flag)"
+            "fN" "(fN-flag)"
+            "L" "(L-flag)"
+            "nr" "(null-redirect)"
+            "ors" "(or-sep)"
+            "sl" "(settle-sleep)"
+            "ps" "(pkill-suffix)"
+            "lc" "(localhost-colon)"
+            "cp" "(curl-prefix)"
+            "cr" "(curl-stderr-redirect)"
+            "fs" "(forward-spec 18099 8077)"
+            "sp" "(ssh-forward-prefix)"
+            "ef" (str "(ensure-forward-command 18099 8077 "
+                      (kotoba-literal "asher") ")")
+            "rf" (str "(replace-forward-command 18099 8077 "
+                      (kotoba-literal "asher") ")")
+            "rc" (str "(remote-curl-command "
+                      (kotoba-literal "http://localhost:8077/health") ")")})]
+    (is (= tunnel/pgrep-bin (get s "pg")))
+    (is (= tunnel/pkill-bin (get s "pk")))
+    (is (= tunnel/f-flag (get s "f")))
+    (is (= tunnel/fN-flag (get s "fN")))
+    (is (= tunnel/L-flag (get s "L")))
+    (is (= tunnel/null-redirect (get s "nr")))
+    (is (= tunnel/or-sep (get s "ors")))
+    (is (= tunnel/settle-sleep (get s "sl")))
+    (is (= tunnel/pkill-suffix (get s "ps")))
+    (is (= tunnel/localhost-colon (get s "lc")))
+    (is (= tunnel/curl-prefix (get s "cp")))
+    (is (= tunnel/curl-stderr-redirect (get s "cr")))
+    (is (= "18099:localhost:8077" (get s "fs")))
+    (is (str/starts-with? (get s "sp") "ssh -o "))
+    (is (str/includes? (get s "sp") "-fN -L "))
+    (is (= (tunnel/ensure-forward-command 18099 8077 "asher") (get s "ef")))
+    (is (= (tunnel/replace-forward-command 18099 8077 "asher") (get s "rf")))
+    (is (= (tunnel/remote-curl-command "http://localhost:8077/health") (get s "rc")))
+    (is (str/starts-with? (get s "ef") "pgrep -f '18099:localhost:8077 asher'"))
+    (is (str/includes? (get s "ef") "|| ssh -o BatchMode=yes -fN -L 18099:localhost:8077 asher"))
+    (is (str/starts-with? (get s "rf") "pkill -f '18099:localhost'"))
+    (is (str/includes? (get s "rf") "sleep 0.3; ssh -o BatchMode=yes -fN -L "))
+    (is (= "curl -s -m 5 http://localhost:8077/health 2>/dev/null" (get s "rc")))))

@@ -8,13 +8,18 @@
             batch-mode-opt strict-host-key-opt control-master-opt
             digit-val? parse-digits trim-ws
             pick-exit trim-err err-ws?
-            ssh-bin scp-bin o-flag O-flag exit-ctl]))
+            ssh-bin scp-bin o-flag O-flag exit-ctl
+            pgrep-bin pkill-bin f-flag fN-flag L-flag
+            null-redirect or-sep settle-sleep pkill-suffix
+            localhost-colon curl-prefix curl-stderr-redirect
+            forward-spec ssh-forward-prefix]))
 
 ;; W6 pure-planner oracle — murakumo.tunnel string core (SSH host-forever,
 ;; pure argv/shell contract still oracle-eligible).
 ;; parse-rc: host splits lines; guest classifies marker + parse-digits for rc.
 ;; conn-opts vector assembly stays cljc (host concatenates pure -o fragments).
 ;; ssh/scp bin + -o/-O/exit flags dual-source.
+;; ensure/replace-forward + remote-curl compose from pure fragments.
 ;; Parity: test/murakumo/tunnel_kotoba_parity_test.clj
 
 (defn default-connect-timeout-s [] :i64 8)
@@ -55,33 +60,6 @@
 
 (defn close-master-control-opt [control-path :string] :string
   (string-concat "ControlPath=" control-path))
-
-(defn ensure-forward-command [local-port :i64 remote-port :i64 host :string] :string
-  (let [lp (i64-str local-port)
-        rp (i64-str remote-port)
-        a (string-concat "pgrep -f '" lp)
-        b (string-concat a ":localhost:")
-        c (string-concat b rp)
-        d (string-concat c " ")
-        e (string-concat d host)
-        f (string-concat e "' >/dev/null 2>&1 || ssh -o BatchMode=yes -fN -L ")
-        g (string-concat f lp)
-        h (string-concat g ":localhost:")
-        i (string-concat h rp)]
-    (string-concat i (string-concat " " host))))
-
-(defn replace-forward-command [local-port :i64 remote-port :i64 host :string] :string
-  (let [lp (i64-str local-port)
-        rp (i64-str remote-port)
-        a (string-concat "pkill -f '" lp)
-        b (string-concat a ":localhost' 2>/dev/null; sleep 0.3; ssh -o BatchMode=yes -fN -L ")
-        c (string-concat b lp)
-        d (string-concat c ":localhost:")
-        e (string-concat d rp)]
-    (string-concat e (string-concat " " host))))
-
-(defn remote-curl-command [url :string] :string
-  (string-concat "curl -s -m 5 " (string-concat url " 2>/dev/null")))
 
 (defn marker-prefix? [line :string] :i64
   (let [m (rc-marker)
@@ -191,3 +169,98 @@
 (defn o-flag [] :string "-o")
 (defn O-flag [] :string "-O")
 (defn exit-ctl [] :string "exit")
+
+;; ── residual forward/curl shell fragments ────────────────────────────
+
+(defn pgrep-bin [] :string "pgrep")
+(defn pkill-bin [] :string "pkill")
+(defn f-flag [] :string "-f")
+(defn fN-flag [] :string "-fN")
+(defn L-flag [] :string "-L")
+(defn null-redirect [] :string " >/dev/null 2>&1")
+(defn or-sep [] :string " || ")
+(defn settle-sleep [] :string "sleep 0.3; ")
+(defn pkill-suffix [] :string " 2>/dev/null; ")
+(defn localhost-colon [] :string ":localhost:")
+(defn curl-prefix [] :string "curl -s -m 5 ")
+(defn curl-stderr-redirect [] :string " 2>/dev/null")
+
+(defn forward-spec [local-port :i64 remote-port :i64] :string
+  ;; "{local}:localhost:{remote}"
+  (string-concat
+   (i64-str local-port)
+   (string-concat (localhost-colon) (i64-str remote-port))))
+
+(defn ssh-forward-prefix [] :string
+  ;; "ssh -o BatchMode=yes -fN -L "
+  (string-concat
+   (ssh-bin)
+   (string-concat
+    " "
+    (string-concat
+     (o-flag)
+     (string-concat
+      " "
+      (string-concat
+       (batch-mode-opt)
+       (string-concat
+        " "
+        (string-concat
+         (fN-flag)
+         (string-concat
+          " "
+          (string-concat (L-flag) " "))))))))))
+
+(defn ensure-forward-command [local-port :i64 remote-port :i64 host :string] :string
+  ;; pgrep -f '{spec} {host}' >/dev/null 2>&1 || ssh -o BatchMode=yes -fN -L {spec} {host}
+  (let [spec (forward-spec local-port remote-port)
+        probe (string-concat
+               (pgrep-bin)
+               (string-concat
+                " "
+                (string-concat
+                 (f-flag)
+                 (string-concat
+                  " '"
+                  (string-concat
+                   spec
+                   (string-concat
+                    " "
+                    (string-concat host "'")))))))]
+    (string-concat
+     probe
+     (string-concat
+      (null-redirect)
+      (string-concat
+       (or-sep)
+       (string-concat
+        (ssh-forward-prefix)
+        (string-concat spec (string-concat " " host))))))))
+
+(defn replace-forward-command [local-port :i64 remote-port :i64 host :string] :string
+  ;; pkill -f '{local}:localhost' 2>/dev/null; sleep 0.3; ssh -o BatchMode=yes -fN -L {spec} {host}
+  (let [lp (i64-str local-port)
+        spec (forward-spec local-port remote-port)
+        kill (string-concat
+              (pkill-bin)
+              (string-concat
+               " "
+               (string-concat
+                (f-flag)
+                (string-concat
+                 " '"
+                 (string-concat lp ":localhost'")))))]
+    (string-concat
+     kill
+     (string-concat
+      (pkill-suffix)
+      (string-concat
+       (settle-sleep)
+       (string-concat
+        (ssh-forward-prefix)
+        (string-concat spec (string-concat " " host))))))))
+
+(defn remote-curl-command [url :string] :string
+  (string-concat
+   (curl-prefix)
+   (string-concat url (curl-stderr-redirect))))
