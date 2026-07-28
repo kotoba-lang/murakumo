@@ -27,13 +27,16 @@
             reconcile-app-row reconcile-app-line
             reach-line drift-line
             report-csv-sep report-csv-spaced-sep mesh-status-sep
-            cid-display-max-len]))
+            cid-display-max-len
+            join-append csv-append csv-spaced-append]))
 
 ;; W6 pure-planner oracle — murakumo.report string core.
 ;; Column-padded tables: pad-to(width) + nodes-row / status-row pure (ASCII).
 ;; reconcile-lines: pure title/col-header/app-row/detail/reach/drift;
-;; host still mapcats apps + joins CSV targets/running/reach.
+;; host still mapcats apps; CSV join fold steps dual-sourced.
 ;; CSV join seps + cid-display max dual-source for host folds.
+;; join-append / csv-append / csv-spaced-append: pure reduce steps for
+;; targets/running/reach/misplaced and deploy-observed where lists.
 ;; command-help: full CLI help as one pure string.
 ;; Parity: test/murakumo/report_kotoba_parity_test.clj
 
@@ -455,3 +458,19 @@
 (defn cid-display-max-len [] :i64
   ;; host fmt-cid truncates to this many chars before cid-display
   16)
+
+;; ── residual CSV join fold steps (host still walks item collections) ─
+
+(defn join-append [acc :string sep :string next :string] :string
+  ;; empty acc ⇒ first item only (no leading sep)
+  (if (string=? acc "")
+    next
+    (string-concat acc (string-concat sep next))))
+
+(defn csv-append [acc :string next :string] :string
+  ;; host reduce over targets/running/reach/eligible/misplaced
+  (join-append acc (report-csv-sep) next))
+
+(defn csv-spaced-append [acc :string next :string] :string
+  ;; host reduce over deploy-observed where list
+  (join-append acc (report-csv-spaced-sep) next))

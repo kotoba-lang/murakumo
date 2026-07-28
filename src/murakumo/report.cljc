@@ -1,9 +1,10 @@
 ;; murakumo.report — portable CLI report formatting.
 ;;
-;; W6 product-shell (ADR-260728-w6-report-csv-pure-oracle):
-;; pure string helpers + CSV join seps + cid-display max DELEGATE to
-;; precompiled kotoba report_core when oracle is loadable (JVM classpath or
-;; cljs/nbb). Host remains: map/keyword projection, CSV join folds, and the
+;; W6 product-shell (ADR-260728-w6-report-csv-fold-pure-oracle):
+;; pure string helpers + CSV join seps + cid-display max + CSV fold steps
+;; (join-append / csv-append / csv-spaced-append) DELEGATE to precompiled
+;; kotoba report_core when oracle is loadable (JVM classpath or cljs/nbb).
+;; Host remains: map/keyword projection, collection walks, and the
 ;; reconcile-lines mapcat structure over apps. cljs mirrors remain fallback
 ;; when oracle is not ready.
 
@@ -68,6 +69,52 @@
   "Max chars for reconcile CID display truncate. Kotoba when ready."
   (oracle-i64-const 'cid-display-max-len mirror-cid-display-max-len))
 
+(defn- mirror-join-append [acc sep next]
+  (if (str/blank? (str acc))
+    (str next)
+    (str acc sep next)))
+
+(defn- mirror-csv-append [acc next]
+  (mirror-join-append acc mirror-report-csv-sep next))
+
+(defn- mirror-csv-spaced-append [acc next]
+  (mirror-join-append acc mirror-report-csv-spaced-sep next))
+
+(defn join-append
+  "CSV-style fold step: empty acc ⇒ next only. Kotoba when ready."
+  [acc sep next]
+  (try-oracle
+   #(o 'join-append [(str (or acc "")) (str sep) (str next)])
+   #(mirror-join-append acc sep next)))
+
+(defn csv-append
+  "Append one CSV cell (comma sep). Kotoba when ready."
+  [acc next]
+  (try-oracle
+   #(o 'csv-append [(str (or acc "")) (str next)])
+   #(mirror-csv-append acc next)))
+
+(defn csv-spaced-append
+  "Append one CSV cell (comma+space sep). Kotoba when ready."
+  [acc next]
+  (try-oracle
+   #(o 'csv-spaced-append [(str (or acc "")) (str next)])
+   #(mirror-csv-spaced-append acc next)))
+
+(defn csv-join
+  "Join items with report-csv-sep via dual-sourced csv-append fold."
+  [items]
+  (reduce (fn [acc x] (csv-append acc (str x)))
+          ""
+          (or items [])))
+
+(defn csv-spaced-join
+  "Join items with report-csv-spaced-sep via dual-sourced csv-spaced-append."
+  [items]
+  (reduce (fn [acc x] (csv-spaced-append acc (str x)))
+          ""
+          (or items [])))
+
 ;; ── portable pad (cljs-safe mirrors of format %-Ns) ──────────────────
 
 (defn- pad-right-n [s n]
@@ -108,7 +155,8 @@
 
 (defn- mirror-deploy-observed-row [where publish-node]
   (if (seq where)
-    (str "  ✓ placed + running on: " (str/join mirror-report-csv-spaced-sep where)
+    (str "  ✓ placed + running on: "
+         (reduce (fn [acc x] (mirror-csv-spaced-append acc (str x))) "" where)
          "  (deployed from " (:name publish-node) ")")
     "  ⚠ not yet observed running on any node (check `murakumo status` / node logs)"))
 
@@ -223,9 +271,11 @@
       (mapcat
        (fn [app]
          (let [detail (case (:action app)
-                        :place (str "→ " (str/join mirror-report-csv-sep (:targets app)))
+                        :place (str "→ " (reduce (fn [acc x] (mirror-csv-append acc (str x)))
+                                                 "" (:targets app)))
                         :satisfied (if (seq (:running app))
-                                     (str "on " (str/join mirror-report-csv-sep (:running app)))
+                                     (str "on " (reduce (fn [acc x] (mirror-csv-append acc (str x)))
+                                                        "" (:running app)))
                                      "")
                         (str (or (:reason app) "")))
                base [(str "  " (pad-to (:app app) 14) " "
@@ -236,13 +286,16 @@
                           detail)]
                reach (when (seq (:reach app))
                        [(str "  " (pad-to "" 14) " " (pad-to "" 10)
-                             " reach: " (str/join mirror-report-csv-sep (map str (:reach app)))
+                             " reach: " (reduce (fn [acc x] (mirror-csv-append acc (str x)))
+                                                "" (map str (:reach app)))
                              " → eligible(by transport)="
-                             (str/join mirror-report-csv-sep (:eligible app)))])
+                             (reduce (fn [acc x] (mirror-csv-append acc (str x)))
+                                     "" (:eligible app)))])
                misplaced (when (seq (:misplaced app))
                            [(str "  " (pad-to "" 14) " " (pad-to "" 10)
                                  " drift: running on non-eligible node(s): "
-                                 (str/join mirror-report-csv-sep (:misplaced app)))])]
+                                 (reduce (fn [acc x] (mirror-csv-append acc (str x)))
+                                         "" (:misplaced app)))])]
            (concat base reach misplaced)))
        (:apps plan))))))
 
@@ -325,7 +378,7 @@
   (try-oracle
    #(if (seq where)
       (o 'deploy-observed-placed-line
-         [(str/join report-csv-spaced-sep where) (str (:name publish-node))])
+         [(csv-spaced-join where) (str (:name publish-node))])
       (o 'deploy-observed-empty-line []))
    #(mirror-deploy-observed-row where publish-node)))
 
@@ -497,7 +550,8 @@
 (defn reconcile-lines
   "Render a reconcile plan as operator table lines.
    Pure title/col/row/detail/reach/drift from oracle when ready; host mapcats
-   apps and joins CSV for targets/running/reach/misplaced (sep dual-sourced)."
+   apps and CSV-joins targets/running/reach/misplaced via dual-sourced
+   csv-append fold steps."
   [plan]
   (try-oracle
    #(let [title (o 'reconcile-title
@@ -509,8 +563,8 @@
         (mapcat
          (fn [app]
            (let [action (name (:action app))
-                 targets-csv (str/join report-csv-sep (:targets app))
-                 running-csv (str/join report-csv-sep (:running app))
+                 targets-csv (csv-join (:targets app))
+                 running-csv (csv-join (:running app))
                  running-empty (if (seq (:running app)) 0 1)
                  reason (str (or (:reason app) ""))
                  detail (o 'action-detail
@@ -527,11 +581,11 @@
                  base [(o 'reconcile-app-line [front detail])]
                  reach (when (seq (:reach app))
                          [(o 'reach-line
-                             [(str/join report-csv-sep (map str (:reach app)))
-                              (str/join report-csv-sep (:eligible app))])])
+                             [(csv-join (map str (:reach app)))
+                              (csv-join (:eligible app))])])
                  misplaced (when (seq (:misplaced app))
                              [(o 'drift-line
-                                 [(str/join report-csv-sep (:misplaced app))])])]
+                                 [(csv-join (:misplaced app))])])]
              (concat base reach misplaced)))
          (:apps plan)))))
    #(mirror-reconcile-lines plan)))

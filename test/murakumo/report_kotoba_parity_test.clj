@@ -26,7 +26,8 @@
        "command-help reconcile-title reconcile-col-header "
        "cid-display action-detail nat-len field-i64-7 "
        "reconcile-app-row reconcile-app-line reach-line drift-line "
-       "report-csv-sep report-csv-spaced-sep mesh-status-sep cid-display-max-len"))
+       "report-csv-sep report-csv-spaced-sep mesh-status-sep cid-display-max-len "
+       "join-append csv-append csv-spaced-append"))
 
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -288,7 +289,19 @@
   (let [s (compile-string-cases
            {"cs" "(report-csv-sep)"
             "ss" "(report-csv-spaced-sep)"
-            "ms" "(mesh-status-sep)"})
+            "ms" "(mesh-status-sep)"
+            "ja" (str "(join-append " (kotoba-literal "") " "
+                      (kotoba-literal ",") " " (kotoba-literal "a") ")")
+            "jb" (str "(join-append " (kotoba-literal "a") " "
+                      (kotoba-literal ",") " " (kotoba-literal "b") ")")
+            "ca0" (str "(csv-append " (kotoba-literal "") " "
+                       (kotoba-literal "t1") ")")
+            "ca1" (str "(csv-append " (kotoba-literal "t1") " "
+                       (kotoba-literal "t2") ")")
+            "sa0" (str "(csv-spaced-append " (kotoba-literal "") " "
+                       (kotoba-literal "a") ")")
+            "sa1" (str "(csv-spaced-append " (kotoba-literal "a") " "
+                       (kotoba-literal "b") ")")})
         n (compile-i64-cases
            {"cm" "(cid-display-max-len)"})]
     (is (= report/report-csv-sep (get s "cs")))
@@ -299,6 +312,18 @@
     (is (= "/" (get s "ms")))
     (is (= report/cid-display-max-len (get n "cm")))
     (is (= 16 (get n "cm")))
+    (is (= (report/join-append "" "," "a") (get s "ja")))
+    (is (= "a" (get s "ja")))
+    (is (= (report/join-append "a" "," "b") (get s "jb")))
+    (is (= "a,b" (get s "jb")))
+    (is (= (report/csv-append "" "t1") (get s "ca0")))
+    (is (= (report/csv-append "t1" "t2") (get s "ca1")))
+    (is (= "t1,t2" (get s "ca1")))
+    (is (= (report/csv-spaced-append "" "a") (get s "sa0")))
+    (is (= (report/csv-spaced-append "a" "b") (get s "sa1")))
+    (is (= "a, b" (get s "sa1")))
+    (is (= "t1,t2" (report/csv-join ["t1" "t2"])))
+    (is (= "a, b" (report/csv-spaced-join ["a" "b"])))
     (is (= "installed/running" (report/mesh-status "installed" "running")))
     (is (str/includes?
          (report/deploy-observed-row ["a" "b"] {:name "pub"})

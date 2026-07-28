@@ -690,7 +690,29 @@
    :result :i64,
    :effects #{},
    :body 16,
-   :param-types []}],
+   :param-types []}
+  {:name join-append,
+   :params [acc sep next],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (string=? acc "")
+    next
+    (string-concat acc (string-concat sep next))),
+   :param-types [:string :string :string]}
+  {:name csv-append,
+   :params [acc next],
+   :result :string,
+   :effects #{},
+   :body (join-append acc (report-csv-sep) next),
+   :param-types [:string :string]}
+  {:name csv-spaced-append,
+   :params [acc next],
+   :result :string,
+   :effects #{},
+   :body (join-append acc (report-csv-spaced-sep) next),
+   :param-types [:string :string]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
@@ -768,7 +790,10 @@
   report-csv-sep
   report-csv-spaced-sep
   mesh-status-sep
-  cid-display-max-len],
+  cid-display-max-len
+  join-append
+  csv-append
+  csv-spaced-append],
  :schemas nil,
  :effects #{},
  :blocks [],
