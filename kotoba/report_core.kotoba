@@ -17,7 +17,9 @@
             deploy-observed-empty-line deploy-observed-placed-line
             missing-pinned-binaries-line1 missing-pinned-binaries-line2
             nodes-header status-header status-down-suffix
-            spaces pad-right field-10 field-16 field-8 field-9 field-12 field-6
+            spaces pad-right pad-to
+            field-10 field-16 field-8 field-9 field-12 field-6
+            nodes-row status-down-row status-row
             command-help
             reconcile-title reconcile-col-header
             cid-display action-detail
@@ -26,8 +28,7 @@
             reach-line drift-line]))
 
 ;; W6 pure-planner oracle — murakumo.report string core.
-;; Column-padded tables: pure pad-right + fixed field widths unlock
-;; nodes-header/status-header/nodes-row/status-down-row without printf.
+;; Column-padded tables: pad-to(width) + nodes-row / status-row pure (ASCII).
 ;; reconcile-lines: pure title/col-header/app-row/detail/reach/drift;
 ;; host still mapcats apps + joins CSV targets/running/reach.
 ;; command-help: full CLI help as one pure string.
@@ -278,6 +279,12 @@
   ;; host supplies pad-n = max(0, width - (count s)); pure concat
   (string-concat s (spaces pad-n)))
 
+(defn pad-to [s :string width :i64] :string
+  ;; ASCII left-align to width (byte-length = char-length for CLI labels)
+  (let [n (string-byte-length s)
+        pad (- width n)]
+    (pad-right s (if (< pad 0) 0 pad))))
+
 (defn field-10 [s :string pad-n :i64] :string
   (pad-right s pad-n))
 
@@ -308,6 +315,45 @@
   ;; trailing spaces after "down" in status-down-row format "%-10s %-8s"
   "down    ")
 
+(defn nodes-row [name :string ip :string online :i64 ssh-ok :i64 mesh :string] :string
+  ;; cljc nodes-row; host projects nil ip → "?" and online?/ssh as 0/1
+  (string-concat
+   (pad-to name 10)
+   (string-concat
+    " "
+    (string-concat
+     (pad-to ip 16)
+     (string-concat
+      " "
+      (string-concat
+       (pad-to (online-label online) 8)
+       (string-concat
+        " "
+        (string-concat
+         (pad-to (ssh-label ssh-ok) 9)
+         (string-concat " " mesh)))))))))
+
+(defn status-down-row [name :string] :string
+  (string-concat (pad-to name 10) (string-concat " " (status-down-suffix))))
+
+(defn status-row [name :string has-health :i64 wasm-exec :string
+                  links-str :string p2p-port :i64] :string
+  ;; host projects wasm "?" / links "-" when no health-json
+  (string-concat
+   (pad-to name 10)
+   (string-concat
+    " "
+    (string-concat
+     (pad-to (health-label has-health) 8)
+     (string-concat
+      " "
+      (string-concat
+       (pad-to wasm-exec 12)
+       (string-concat
+        " "
+        (string-concat
+         (pad-to links-str 6)
+         (string-concat " " (i64-str p2p-port))))))))))
 (defn command-help [] :string
   ;; cljc (str/join "\n" [...]) full operator help
   "murakumo — kotoba WASM mesh control plane\n\ncommands:\n  nodes                       fleet reachability + mesh presence\n  pin       [src-dir]         copy a consistent kotoba cli+server into ./bin (own it)\n  provision [node|all]        rsync binaries + install resident LaunchDaemon\n  mesh      [node|all]        form ONE gossipsub lattice (2-pass: peer-id + bootstrap)\n  up/down   [node|all]        start/stop the resident mesh node\n  status    [node|all]        fold /health across the fleet (PEERS = live links)\n  deploy    <app.edn> [node]  compile clj→WASM + distribute + publish to the lattice\n  reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]  declarative desired-state (wadm)\n  cloud     [plan|records|routes|dial|connect <node>|relay <name>|bootstrap]    plan murakumo.cloud identity overlay\n  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log\n  fleet     <datom-log.edn>    fold a kotoba-fleet Datom log into one coordination view\n  infer     probe|plan <model>|provision|up|down|ps|serve|generate  distributed inference (exo-style shard plan)\n  model     plan|setup|status <model> [node|all] [cache-dir]  Hugging Face model provisioning\n  revive    [node|all]        wake offline fleet Macs via a live LAN peer\n\nenv: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR")

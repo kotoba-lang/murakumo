@@ -4,11 +4,14 @@
             wrap-cmd connect-timeout-opt control-path-opt control-persist-opt
             scp-dest close-master-control-opt
             ensure-forward-command replace-forward-command remote-curl-command
-            marker-prefix? strip-marker-digits]))
+            marker-prefix? strip-marker-digits
+            batch-mode-opt strict-host-key-opt control-master-opt
+            digit-val? parse-digits trim-ws]))
 
 ;; W6 pure-planner oracle — murakumo.tunnel string core (SSH host-forever,
 ;; pure argv/shell contract still oracle-eligible).
-;; Full parse-rc line-split + conn-opts vector assembly stay cljc.
+;; parse-rc: host splits lines; guest classifies marker + parse-digits for rc.
+;; conn-opts vector assembly stays cljc (host concatenates pure -o fragments).
 ;; Parity: test/murakumo/tunnel_kotoba_parity_test.clj
 
 (defn default-connect-timeout-s [] :i64 8)
@@ -92,3 +95,64 @@
     (if (< ln n)
       ""
       (string-substring line n ln))))
+
+(defn batch-mode-opt [] :string
+  "BatchMode=yes")
+
+(defn strict-host-key-opt [] :string
+  "StrictHostKeyChecking=accept-new")
+
+(defn control-master-opt [] :string
+  "ControlMaster=auto")
+
+(defn digit-val? [c :string] :i64
+  ;; 1 if single char is ASCII digit
+  (if (= (string-byte-length c) 1)
+    (if (string-contains? "0123456789" c) 1 0)
+    0))
+
+(defn digit-of [c :string] :i64
+  (if (string=? c "0") 0
+    (if (string=? c "1") 1
+      (if (string=? c "2") 2
+        (if (string=? c "3") 3
+          (if (string=? c "4") 4
+            (if (string=? c "5") 5
+              (if (string=? c "6") 6
+                (if (string=? c "7") 7
+                  (if (string=? c "8") 8
+                    (if (string=? c "9") 9 -1)))))))))))
+
+(defn trim-ws [s :string] :string
+  (let [n (string-byte-length s)]
+    (if (= n 0)
+      s
+      (let [c0 (string-substring s 0 1)]
+        (if (if (string=? c0 " ")
+              1
+              (if (string=? c0 "\t") 1 0))
+          (trim-ws (string-substring s 1 n))
+          (let [c1 (string-substring s (- n 1) n)]
+            (if (if (string=? c1 " ")
+                  1
+                  (if (string=? c1 "\t") 1 0))
+              (trim-ws (string-substring s 0 (- n 1)))
+              s)))))))
+
+(defn parse-digits-go [s :string acc :i64] :i64
+  (let [n (string-byte-length s)]
+    (if (= n 0)
+      acc
+      (let [c (string-substring s 0 1)
+            d (digit-of c)]
+        (if (< d 0)
+          -1
+          (parse-digits-go (string-substring s 1 n) (+ (* acc 10) d)))))))
+
+(defn parse-digits [s :string] :i64
+  ;; cljc Long/parseLong digits after marker; -1 if empty/non-digit
+  (let [t (trim-ws s)
+        n (string-byte-length t)]
+    (if (= n 0)
+      -1
+      (parse-digits-go t 0))))
