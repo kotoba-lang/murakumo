@@ -1,0 +1,111 @@
+(ns deploy-plan-core
+  (:export [default-wasm default-publish-node
+            artifact-forward-port publish-forward-port
+            forward-settle-ms placement-wait-ms
+            digit-char nat-str i64-str
+            app-manifest-path publish-selector
+            localhost-url last-slash-index manifest-dir
+            command-output component-build-cmd app-deploy-cmd]))
+
+;; W6 pure-planner oracle — murakumo.deploy.plan path/argv/constants core.
+;; Vector argv maps, artifact distribution over nodes, regex extract stay cljc.
+;; Guest ABI max arity 5: component-build joins 4 path args + bin.
+;; Parity: test/murakumo/deploy_plan_kotoba_parity_test.clj
+
+(defn default-wasm [] :string "/tmp/murakumo-deploy.wasm")
+(defn default-publish-node [] :string "asher")
+(defn artifact-forward-port [] :i64 18900)
+(defn publish-forward-port [] :i64 18077)
+(defn forward-settle-ms [] :i64 1300)
+(defn placement-wait-ms [] :i64 75000)
+
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+(defn app-manifest-path [manifest-dir :string app-manifest :string] :string
+  (string-concat manifest-dir (string-concat "/" app-manifest)))
+
+(defn publish-selector [selector :string] :string
+  ;; empty string ≡ cljc nil
+  (if (string=? selector "")
+    "asher"
+    selector))
+
+(defn localhost-url [port :i64] :string
+  (string-concat "http://localhost:" (i64-str port)))
+
+(defn last-slash-index [s :string i :i64 best :i64] :i64
+  ;; scan [0,n) for last '/'; returns -1 if none
+  (let [n (string-byte-length s)]
+    (if (< i n)
+      (if (string=? (string-substring s i (+ i 1)) "/")
+        (last-slash-index s (+ i 1) i)
+        (last-slash-index s (+ i 1) best))
+      best)))
+
+(defn manifest-dir [manifest :string] :string
+  ;; cljc: replace trailing /file → "" ; if unchanged → "."
+  (let [slash (last-slash-index manifest 0 -1)]
+    (if (< slash 0)
+      "."
+      (string-substring manifest 0 slash))))
+
+(defn ws? [c :string] :i64
+  (if (string=? c " ")
+    1
+    (if (string=? c "\n")
+      1
+      (if (string=? c "\t")
+        1
+        (if (string=? c "\r") 1 0)))))
+
+(defn trim [s :string] :string
+  (let [n (string-byte-length s)]
+    (if (= n 0)
+      s
+      (if (= (ws? (string-substring s 0 1)) 1)
+        (trim (string-substring s 1 n))
+        (if (= (ws? (string-substring s (- n 1) n)) 1)
+          (trim (string-substring s 0 (- n 1)))
+          s)))))
+
+(defn command-output [out :string] :string
+  (trim out))
+
+(defn component-build-cmd [kotoba :string src-path :string
+                           wit :string wasm :string] :string
+  ;; space-joined form of component-build-argv
+  (string-concat
+   kotoba
+   (string-concat
+    " component build "
+    (string-concat
+     src-path
+     (string-concat
+      " --wit-dir "
+      (string-concat wit (string-concat " -o " wasm)))))))
+
+(defn app-deploy-cmd [kotoba :string manifest :string
+                      wit :string port :i64] :string
+  (string-concat
+   kotoba
+   (string-concat
+    " app deploy "
+    (string-concat
+     manifest
+     (string-concat
+      " --wit-dir "
+      (string-concat
+       wit
+       (string-concat " --publish --url " (localhost-url port))))))))
