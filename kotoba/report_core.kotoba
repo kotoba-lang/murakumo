@@ -1,0 +1,121 @@
+(ns report-core
+  (:export [mesh-status node-prefix unreachable-skipped-line
+            provision-result-line mesh-pass1-line mesh-wait-peerid-line
+            mesh-pass2-line mesh-forming-line deploy-wait-placement-line
+            operator-seed-required-line operator-seed-hex-required-line
+            deploy-usage-line reconcile-usage-line
+            dashboard-no-persistence-line reconcile-no-persistence-line
+            reconcile-converged-line
+            missing-binary-line deploy-start-line pin-success-line
+            snapshot-error-line reconcile-persist-error-line
+            online-label ssh-label health-label
+            command-error-line]))
+
+;; W6 pure-planner oracle — murakumo.report string core.
+;; Column-padded format tables stay cljc (no printf in guest ABI).
+;; Parity: test/murakumo/report_kotoba_parity_test.clj
+
+(defn mesh-status [binary-status :string launch-status :string] :string
+  (string-concat binary-status (string-concat "/" launch-status)))
+
+(defn node-prefix [name :string] :string
+  (string-concat "[" (string-concat name "] ")))
+
+(defn unreachable-skipped-line [] :string "unreachable — skipped")
+
+(defn provision-result-line [peered :i64] :string
+  (if (= peered 1)
+    "provisioned + loaded (peered)"
+    "provisioned + loaded"))
+
+(defn mesh-pass1-line [] :string
+  "── pass 1: provision with fixed P2P port + stable PeerId ──")
+
+(defn mesh-wait-peerid-line [] :string
+  "── waiting for nodes to advertise their PeerId ──")
+
+(defn mesh-pass2-line [] :string
+  "── pass 2: re-provision with KOTOBA_BOOTSTRAP_PEERS = the others ──")
+
+(defn mesh-forming-line [] :string
+  "── lattice forming; check `murakumo status` (PEERS should climb) ──")
+
+(defn deploy-wait-placement-line [] :string
+  "  waiting for the lattice to place + run it…")
+
+(defn operator-seed-required-line [] :string
+  "set MURAKUMO_OPERATOR_SEED first")
+
+(defn operator-seed-hex-required-line [] :string
+  "set MURAKUMO_OPERATOR_SEED (32-byte hex) first")
+
+(defn deploy-usage-line [] :string
+  "usage: deploy <app.edn> [publish-node]")
+
+(defn reconcile-usage-line [] :string
+  "usage: reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]")
+
+(defn dashboard-no-persistence-line [] :string
+  "(no MURAKUMO_OPERATOR_SEED → dashboard live-only, no Datom persistence)")
+
+(defn reconcile-no-persistence-line [] :string
+  "(no MURAKUMO_OPERATOR_SEED → watch without Datom persistence)")
+
+(defn reconcile-converged-line [] :string "  ✓ converged")
+
+(defn missing-binary-line [path :string] :string
+  (string-concat "missing binary: " path))
+
+(defn deploy-start-line [manifest :string cid :string] :string
+  (string-concat
+   "deploy "
+   (string-concat manifest (string-concat "  (component " (string-concat cid ")")))))
+
+(defn pin-success-line [src :string sha :string version :string] :string
+  (string-concat
+   "pinned kotoba + kotoba-server → bin/  (src "
+   (string-concat
+    src
+    (string-concat
+     " @ "
+     (string-concat sha (string-concat ", " (string-concat version ")")))))))
+
+(defn snapshot-error-line [message :string] :string
+  (string-concat "snapshot error: " message))
+
+(defn reconcile-persist-error-line [message :string] :string
+  (string-concat "reconcile persist error: " message))
+
+(defn online-label [online :i64] :string
+  (if (= online 1) "yes" "no"))
+
+(defn ssh-label [ok :i64] :string
+  (if (= ok 1) "ok" "no"))
+
+(defn health-label [has-health :i64] :string
+  (if (= has-health 1) "ok" "no-resp"))
+
+(defn command-error-line [command :string error :string] :string
+  (if (if (string=? command "provision")
+        (if (string=? error "missing-operator-seed-hex") 1 0)
+        0)
+    (operator-seed-hex-required-line)
+    (if (if (string=? command "mesh")
+          (if (string=? error "missing-operator-seed") 1 0)
+          0)
+      (operator-seed-required-line)
+      (if (if (string=? command "deploy")
+            (if (string=? error "missing-manifest") 1 0)
+            0)
+        (deploy-usage-line)
+        (if (if (string=? command "deploy")
+              (if (string=? error "missing-operator-seed") 1 0)
+              0)
+          (operator-seed-required-line)
+          (if (if (string=? command "reconcile")
+                (if (string=? error "missing-manifest") 1 0)
+                0)
+            (reconcile-usage-line)
+            (string-concat
+             "unknown "
+             (string-concat command (string-concat " error: " error)))))))))

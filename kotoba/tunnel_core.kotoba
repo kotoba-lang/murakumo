@@ -1,0 +1,94 @@
+(ns tunnel-core
+  (:export [default-connect-timeout-s default-control-persist-s rc-marker
+            digit-char nat-str i64-str
+            wrap-cmd connect-timeout-opt control-path-opt control-persist-opt
+            scp-dest close-master-control-opt
+            ensure-forward-command replace-forward-command remote-curl-command
+            marker-prefix? strip-marker-digits]))
+
+;; W6 pure-planner oracle — murakumo.tunnel string core (SSH host-forever,
+;; pure argv/shell contract still oracle-eligible).
+;; Full parse-rc line-split + conn-opts vector assembly stay cljc.
+;; Parity: test/murakumo/tunnel_kotoba_parity_test.clj
+
+(defn default-connect-timeout-s [] :i64 8)
+(defn default-control-persist-s [] :i64 30)
+(defn rc-marker [] :string "__murakumo_rc=")
+
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+(defn wrap-cmd [cmd :string] :string
+  (let [a (string-concat "( " cmd)
+        b (string-concat a "\n); __mrc=$?; echo \"")
+        c (string-concat b (rc-marker))]
+    (string-concat c "$__mrc\"")))
+
+(defn connect-timeout-opt [seconds :i64] :string
+  (string-concat "ConnectTimeout=" (i64-str seconds)))
+
+(defn control-path-opt [path :string] :string
+  (string-concat "ControlPath=" path))
+
+(defn control-persist-opt [seconds :i64] :string
+  (string-concat "ControlPersist=" (string-concat (i64-str seconds) "s")))
+
+(defn scp-dest [host :string dest :string] :string
+  (string-concat host (string-concat ":" dest)))
+
+(defn close-master-control-opt [control-path :string] :string
+  (string-concat "ControlPath=" control-path))
+
+(defn ensure-forward-command [local-port :i64 remote-port :i64 host :string] :string
+  (let [lp (i64-str local-port)
+        rp (i64-str remote-port)
+        a (string-concat "pgrep -f '" lp)
+        b (string-concat a ":localhost:")
+        c (string-concat b rp)
+        d (string-concat c " ")
+        e (string-concat d host)
+        f (string-concat e "' >/dev/null 2>&1 || ssh -o BatchMode=yes -fN -L ")
+        g (string-concat f lp)
+        h (string-concat g ":localhost:")
+        i (string-concat h rp)]
+    (string-concat i (string-concat " " host))))
+
+(defn replace-forward-command [local-port :i64 remote-port :i64 host :string] :string
+  (let [lp (i64-str local-port)
+        rp (i64-str remote-port)
+        a (string-concat "pkill -f '" lp)
+        b (string-concat a ":localhost' 2>/dev/null; sleep 0.3; ssh -o BatchMode=yes -fN -L ")
+        c (string-concat b lp)
+        d (string-concat c ":localhost:")
+        e (string-concat d rp)]
+    (string-concat e (string-concat " " host))))
+
+(defn remote-curl-command [url :string] :string
+  (string-concat "curl -s -m 5 " (string-concat url " 2>/dev/null")))
+
+(defn marker-prefix? [line :string] :i64
+  (let [m (rc-marker)
+        n (string-byte-length m)
+        ln (string-byte-length line)]
+    (if (< ln n)
+      0
+      (if (string=? (string-substring line 0 n) m) 1 0))))
+
+(defn strip-marker-digits [line :string] :string
+  (let [m (rc-marker)
+        n (string-byte-length m)
+        ln (string-byte-length line)]
+    (if (< ln n)
+      ""
+      (string-substring line n ln))))
