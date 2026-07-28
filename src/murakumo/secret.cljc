@@ -11,9 +11,10 @@
   Hosts with provider can inject `provider.secret-transport/env-fetch`,
   `fn-fetch` (kagi one-shot), or `keychain-fetch` as `:fetch`.
 
-  W6 product-shell: pure name/policy helpers use kotoba/secret_core.kotoba
+  W6 product-shell (ADR-260728-w6-secret-reply-tokens-pure-oracle): pure
+  name/policy helpers + reply class/error tokens use kotoba/secret_core.kotoba
   when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
-  Host mirrors remain fallback when oracle is not ready."
+  Host mirrors remain fallback when oracle is not ready. env/map/kagi fetch stay host."
   (:require [clojure.string :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
@@ -85,6 +86,45 @@
 (def quic-key-path-env
   (oracle-const 'quic-key-path-env mirror-quic-key-path-env))
 
+;; ── residual reply class / error message / pem tokens ────────────────
+
+(def ^:private mirror-class-value "value")
+(def ^:private mirror-class-not-found "not-found")
+(def ^:private mirror-class-empty "empty")
+(def ^:private mirror-class-fetch "fetch")
+(def ^:private mirror-class-unknown "unknown")
+(def ^:private mirror-error-code-prefix "secret/")
+(def ^:private mirror-msg-empty "empty")
+(def ^:private mirror-msg-not-found "not found")
+(def ^:private mirror-msg-fetch "getter failed")
+(def ^:private mirror-msg-unknown "unknown")
+(def ^:private mirror-pem-begin-marker "-----BEGIN")
+
+(def class-value
+  "Kit success class token. Kotoba when ready."
+  (oracle-const 'class-value mirror-class-value))
+(def class-not-found
+  (oracle-const 'class-not-found mirror-class-not-found))
+(def class-empty
+  (oracle-const 'class-empty mirror-class-empty))
+(def class-fetch
+  (oracle-const 'class-fetch mirror-class-fetch))
+(def class-unknown
+  (oracle-const 'class-unknown mirror-class-unknown))
+(def error-code-prefix
+  (oracle-const 'error-code-prefix mirror-error-code-prefix))
+(def msg-empty
+  (oracle-const 'msg-empty mirror-msg-empty))
+(def msg-not-found
+  (oracle-const 'msg-not-found mirror-msg-not-found))
+(def msg-fetch
+  (oracle-const 'msg-fetch mirror-msg-fetch))
+(def msg-unknown
+  (oracle-const 'msg-unknown mirror-msg-unknown))
+(def pem-begin-marker
+  "PEM body marker forbidden in path-refs. Kotoba when ready."
+  (oracle-const 'pem-begin-marker mirror-pem-begin-marker))
+
 (def known-env-secrets
   "Default ops mapping: secret-name → exact env var (never enumerated)."
   {token-secret-name token-secret-env
@@ -130,7 +170,7 @@
    #(o 'classify-fetched
        [(oracle/as-i64 (if missing? 1 0))
         (oracle/as-i64 (if blank? 1 0))])
-   #(cond missing? "not-found" blank? "empty" :else "value")))
+   #(cond missing? class-not-found blank? class-empty :else class-value)))
 
 (defn- kit-reply-from-class
   "Build kit-shaped reply from classify class + optional value string.
@@ -138,22 +178,23 @@
   [class value]
   (if (try-oracle
        #(= 1 (oracle/i64->host (o 'reply-is-value? [(str class)])))
-       #(= class "value"))
+       #(= class class-value))
     {:tag :value :value (str value)}
     (let [code (try-oracle
                 #(keyword (o 'secret-error-code [(str class)]))
-                #(case class
-                   "empty" :secret/empty
-                   "not-found" :secret/not-found
-                   "fetch" :secret/fetch
-                   :secret/unknown))
+                #(keyword
+                  (cond
+                    (= class class-empty) (str error-code-prefix class-empty)
+                    (= class class-not-found) (str error-code-prefix class-not-found)
+                    (= class class-fetch) (str error-code-prefix class-fetch)
+                    :else (str error-code-prefix class-unknown))))
           msg (try-oracle
                #(o 'secret-error-message [(str class)])
-               #(case class
-                  "empty" "empty"
-                  "not-found" "not found"
-                  "fetch" "getter failed"
-                  "unknown"))]
+               #(cond
+                  (= class class-empty) msg-empty
+                  (= class class-not-found) msg-not-found
+                  (= class class-fetch) msg-fetch
+                  :else msg-unknown))]
       {:tag :error :code code :message msg})))
 
 (defn map-fetch
@@ -182,14 +223,14 @@
             class (classify-fetched missing? blank?)]
         (kit-reply-from-class class v))
       (catch #?(:clj Throwable :cljs :default) e
-        (let [class "fetch"
+        (let [class class-fetch
               code (try-oracle
                     #(keyword (o 'secret-error-code [class]))
-                    (fn [] :secret/fetch))
+                    (fn [] (keyword (str error-code-prefix class-fetch))))
               msg (or #?(:clj (.getMessage e) :cljs (.-message e))
                       (try-oracle
                        #(o 'secret-error-message [class])
-                       (fn [] "getter failed")))]
+                       (fn [] msg-fetch)))]
           {:tag :error :code code :message msg})))))
 
 (defn kagi-fetch
@@ -291,7 +332,7 @@
   (and (string? p)
        (not (str/blank? p))
        (not (str/includes? p "\0"))
-       (not (str/includes? p "-----BEGIN"))
+       (not (str/includes? p pem-begin-marker))
        (not (str/includes? p "*"))
        (or (str/starts-with? p "/")
            (boolean (re-matches #"[A-Za-z]:[\\/].*" p)))
