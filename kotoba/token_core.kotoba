@@ -1,16 +1,14 @@
 (ns token-core
   (:export [version default-ttl claim-sub claim-scope claim-exp
             expired? scope-allows? signing-input
-            digit-char nat-str i64-str
             encode-claims-json wire-token
             version-ok? parts-present?
             constant-time-eq ct-scan]))
 
-;; W6 pure-planner oracle — murakumo.token claims/scope + wire pure core.
-;; HMAC-SHA256 (javax / WebCrypto) and base64url byte codecs stay host.
-;; encode-claims-json matches JVM fixed-key JSON (not cljs JSON.stringify order).
-;; constant-time-eq: full-length scan (no early exit) for sig compare parity.
-;; Parity: test/murakumo/token_kotoba_parity_test.clj
+;; Product Value ABI v1 pure oracle — murakumo.token claims/scope + wire.
+;; Optional fields use [:option T] + if-some (no has-* / ttl -1 sentinels).
+;; i64 decimal via string-from-i64. HMAC / base64url stay host.
+;; Parity + authority: test/murakumo/token_* + oracle catalog :token
 
 (defn version [] :string
   "mk1")
@@ -18,24 +16,24 @@
 (defn default-ttl [] :i64
   2592000)
 
-(defn claim-sub [has-sub :i64 sub :string] :string
-  (if (= has-sub 0)
-    "anonymous"
-    sub))
+(defn claim-sub [sub [:option :string]] :string
+  (if-some [x sub]
+    x
+    "anonymous"))
 
-(defn claim-scope [has-scope :i64 scope :string] :string
-  (if (= has-scope 0)
-    "all"
-    scope))
+(defn claim-scope [scope [:option :string]] :string
+  (if-some [x scope]
+    x
+    "all"))
 
-(defn claim-exp [now :i64 ttl :i64] :i64
-  (let [t (if (< ttl 0) 2592000 ttl)]
-    (+ now t)))
+(defn claim-exp [now :i64 ttl [:option :i64]] :i64
+  (+ now (if-some [x ttl] x 2592000)))
 
-(defn expired? [has-exp :i64 exp :i64 now :i64] :i64
-  (if (= has-exp 0)
-    1
-    (if (< now exp) 0 1)))
+(defn expired? [exp [:option :i64] now :i64] :i64
+  ;; 1 expired, 0 live — missing exp => expired
+  (if-some [e exp]
+    (if (< now e) 0 1)
+    1))
 
 (defn scope-allows? [token-scope :string required :string] :i64
   (if (string=? token-scope "all")
@@ -45,22 +43,7 @@
 (defn signing-input [payload-seg :string] :string
   (string-concat "mk1." payload-seg))
 
-(defn digit-char [d :i64] :string
-  (string-substring "0123456789" d (+ d 1)))
-
-(defn nat-str [n :i64] :string
-  (if (< n 10)
-    (digit-char n)
-    (string-concat (nat-str (quot n 10))
-                   (digit-char (- n (* (quot n 10) 10))))))
-
-(defn i64-str [n :i64] :string
-  (if (< n 0)
-    (string-concat "-" (nat-str (- 0 n)))
-    (nat-str n)))
-
 (defn encode-claims-json [sub :string scope :string iat :i64 exp :i64] :string
-  ;; cljc JVM branch fixed key order for encode-claims
   (string-concat
    "{\"sub\":\""
    (string-concat
@@ -72,11 +55,10 @@
       (string-concat
        "\",\"iat\":"
        (string-concat
-        (i64-str iat)
-        (string-concat ",\"exp\":" (string-concat (i64-str exp) "}")))))))))
+        (string-from-i64 iat)
+        (string-concat ",\"exp\":" (string-concat (string-from-i64 exp) "}")))))))))
 
 (defn wire-token [payload-seg :string sig :string] :string
-  ;; mk1.<payload>.<sig>
   (string-concat
    "mk1."
    (string-concat payload-seg (string-concat "." sig))))
@@ -84,16 +66,14 @@
 (defn version-ok? [v :string] :i64
   (if (string=? v "mk1") 1 0))
 
-(defn parts-present? [has-v :i64 has-p :i64 has-s :i64] :i64
-  ;; host split: all three segments present
-  (if (= has-v 1)
-    (if (= has-p 1)
-      (if (= has-s 1) 1 0)
+(defn parts-present? [v [:option :string] p [:option :string] s [:option :string]] :i64
+  (if-some [_ v]
+    (if-some [_ p]
+      (if-some [_ s] 1 0)
       0)
     0))
 
 (defn ct-scan [a :string b :string i :i64 n :i64 acc :i64] :i64
-  ;; acc=0 means still equal so far; force full scan
   (if (< i n)
     (let [ca (string-substring a i (+ i 1))
           cb (string-substring b i (+ i 1))
@@ -103,9 +83,8 @@
     acc))
 
 (defn constant-time-eq [a :string b :string] :i64
-  ;; 1 equal, 0 unequal — always scans min lengths after length check
-  (let [na (string-byte-length a)
-        nb (string-byte-length b)]
+  (let [na (string-length a)
+        nb (string-length b)]
     (if (= na nb)
       (if (= (ct-scan a b 0 na 0) 0) 1 0)
       0)))
