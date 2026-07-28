@@ -4,10 +4,11 @@
 ;; deterministic local formatting used by multiple shells: SHA-256 hex, CIDv1
 ;; dag-cbor sha2-256 base32lower, and the operator bearer token shape.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-identity-credits-oracle-authority):
-;; pure seed preimages / JWT templates / trim / did-from-output DELEGATE to
-;; precompiled kotoba/identity_core.kotoba KIR when oracle is loadable
-;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; W6 product-shell authority (ADR-260728-w6-identity-seps-pure-oracle +
+;; ADR-260728-w6-identity-credits-oracle-authority):
+;; pure seed preimages / JWT templates / trim / did-from-output / seed-jwt seps
+;; DELEGATE to precompiled kotoba/identity_core.kotoba KIR when oracle is
+;; loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: SHA-256, base32 CID, b64url encode; mirrors stay fallback.
 ;; cljs: prefer Node crypto/Buffer (nbb); browser falls back to SubtleCrypto/btoa.
 
@@ -34,6 +35,50 @@
       (catch #?(:clj Exception :cljs :default) _
         (mirror-thunk)))
     (mirror-thunk)))
+
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+(def ^:private mirror-seed-sep ":")
+(def ^:private mirror-seed-p2p-suffix ":p2p")
+(def ^:private mirror-seed-x25519-suffix ":x25519")
+(def ^:private mirror-seed-overlay-suffix ":murakumo-overlay-auth")
+(def ^:private mirror-did-derive-subcmd "did-derive")
+(def ^:private mirror-jwt-seg-sep ".")
+(def ^:private mirror-argv-join-sep " ")
+
+(def seed-sep
+  "Separator in seed preimages. Kotoba when ready."
+  (oracle-str-const 'seed-sep mirror-seed-sep))
+
+(def seed-p2p-suffix
+  "Suffix for p2p seed preimage. Kotoba when ready."
+  (oracle-str-const 'seed-p2p-suffix mirror-seed-p2p-suffix))
+
+(def seed-x25519-suffix
+  "Suffix for x25519 seed preimage. Kotoba when ready."
+  (oracle-str-const 'seed-x25519-suffix mirror-seed-x25519-suffix))
+
+(def seed-overlay-suffix
+  "Suffix for overlay auth seed preimage. Kotoba when ready."
+  (oracle-str-const 'seed-overlay-suffix mirror-seed-overlay-suffix))
+
+(def did-derive-subcmd
+  "kotoba did-derive subcommand. Kotoba when ready."
+  (oracle-str-const 'did-derive-subcmd mirror-did-derive-subcmd))
+
+(def jwt-seg-sep
+  "JWT segment separator. Kotoba when ready."
+  (oracle-str-const 'jwt-seg-sep mirror-jwt-seg-sep))
+
+(def argv-join-sep
+  "Space between argv tokens in did-derive-cmd. Kotoba when ready."
+  (oracle-str-const 'argv-join-sep mirror-argv-join-sep))
 
 (def ^:private b32 "abcdefghijklmnopqrstuvwxyz234567")
 
@@ -90,7 +135,7 @@
   (sha256-hex
    (try-oracle
     #(o 'seed-node [(str operator-seed) (str (:name node))])
-    #(str operator-seed ":" (:name node)))))
+    #(str operator-seed seed-sep (:name node)))))
 
 (defn node-p2p-seed
   "Deterministic per-node libp2p seed from the shared operator seed and node name."
@@ -98,7 +143,7 @@
   (sha256-hex
    (try-oracle
     #(o 'seed-p2p [(str operator-seed) (str (:name node))])
-    #(str operator-seed ":" (:name node) ":p2p"))))
+    #(str operator-seed seed-sep (:name node) seed-p2p-suffix))))
 
 (defn x25519-seed
   "Deterministic fleet x25519 seed derived from the shared operator seed."
@@ -106,7 +151,7 @@
   (sha256-hex
    (try-oracle
     #(o 'seed-x25519 [(str operator-seed)])
-    #(str operator-seed ":x25519"))))
+    #(str operator-seed seed-x25519-suffix))))
 
 (defn overlay-auth-key
   "Deterministic per-overlay MAC key derived from the shared operator seed.
@@ -118,15 +163,15 @@
   (sha256-hex
    (try-oracle
     #(o 'seed-overlay [(str operator-seed) (str overlay-id)])
-    #(str operator-seed ":" overlay-id ":murakumo-overlay-auth"))))
+    #(str operator-seed seed-sep overlay-id seed-overlay-suffix))))
 
 (defn did-derive-argv
   "kotoba CLI argv for deriving a did:key from an Ed25519 seed.
-   Kotoba did-derive-cmd (space-joined) split with limit 3 when ready."
+   Subcmd dual-sourced via did-derive-subcmd; vector assembly stays host."
   [kotoba seed]
   (try-oracle
    #(vec (str/split (o 'did-derive-cmd [(str kotoba) (str seed)]) #" " 3))
-   (fn [] [kotoba "did-derive" seed])))
+   (fn [] [kotoba did-derive-subcmd seed])))
 
 (defn did-from-output
   "Normalise kotoba did-derive stdout."
@@ -183,14 +228,15 @@
 
 (defn op-token
   "Craft the operator Bearer JWT shape kotoba checks at the control-plane edge.
-   Kotoba header/payload/sig segment templates when ready; b64url join stays host."
+   Kotoba header/payload/sig segment templates when ready; b64url + seg join
+   dual-sourced via jwt-seg-sep."
   [did]
   (try-oracle
-   #(str (b64url (o 'jwt-header-json [])) "."
-         (b64url (o 'jwt-payload-json [(str did)])) "."
+   #(str (b64url (o 'jwt-header-json [])) jwt-seg-sep
+         (b64url (o 'jwt-payload-json [(str did)])) jwt-seg-sep
          (o 'op-token-sig-seg []))
-   #(str (b64url "{\"alg\":\"HS256\",\"typ\":\"JWT\"}") "."
-         (b64url (str "{\"sub\":\"" did "\",\"exp\":9999999999}")) "."
+   #(str (b64url "{\"alg\":\"HS256\",\"typ\":\"JWT\"}") jwt-seg-sep
+         (b64url (str "{\"sub\":\"" did "\",\"exp\":9999999999}")) jwt-seg-sep
          "kotoba-cli-media")))
 
 (defn graph-name-fleet

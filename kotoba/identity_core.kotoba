@@ -2,12 +2,15 @@
   (:export [ws? trim seed-node seed-p2p seed-x25519 seed-overlay
             did-derive-cmd did-from-output
             jwt-header-json jwt-payload-json op-token-sig-seg
-            cid-b-prefix graph-name-fleet]))
+            cid-b-prefix graph-name-fleet
+            seed-sep seed-p2p-suffix seed-x25519-suffix seed-overlay-suffix
+            did-derive-subcmd jwt-seg-sep argv-join-sep]))
 
 ;; W6 pure-planner oracle — murakumo.identity pure string core (medium + expand).
 ;; SHA-256 / base32 CID / base64url / HMAC stay host (crypto).
 ;; Seed *inputs* (preimage strings) and JWT/op-token *payload templates* ported;
 ;; hashing / b64url encoding remain cljc.
+;; seed/jwt seps + did-derive subcmd dual-source for host argv/token join.
 ;; trim matches clojure.string/trim for space/tab/newline/cr.
 ;; Parity: test/murakumo/identity_kotoba_parity_test.clj
 
@@ -30,26 +33,51 @@
           (trim (string-substring s 0 (- n 1)))
           s)))))
 
+;; ── residual seed/jwt/did-derive separators + subcmd ─────────────────
+
+(defn seed-sep [] :string
+  ;; between operator-seed and node-name / overlay-id in preimages
+  ":")
+
+(defn seed-p2p-suffix [] :string ":p2p")
+
+(defn seed-x25519-suffix [] :string ":x25519")
+
+(defn seed-overlay-suffix [] :string ":murakumo-overlay-auth")
+
+(defn did-derive-subcmd [] :string "did-derive")
+
+(defn jwt-seg-sep [] :string
+  ;; between JWT header/payload/sig segments
+  ".")
+
+(defn argv-join-sep [] :string
+  ;; space between argv tokens in did-derive-cmd
+  " ")
+
 (defn seed-node [operator-seed :string node-name :string] :string
   ;; preimage for node-seed before sha256-hex
-  (string-concat operator-seed (string-concat ":" node-name)))
+  (string-concat operator-seed (string-concat (seed-sep) node-name)))
 
 (defn seed-p2p [operator-seed :string node-name :string] :string
-  (string-concat (seed-node operator-seed node-name) ":p2p"))
+  (string-concat (seed-node operator-seed node-name) (seed-p2p-suffix)))
 
 (defn seed-x25519 [operator-seed :string] :string
-  (string-concat operator-seed ":x25519"))
+  (string-concat operator-seed (seed-x25519-suffix)))
 
 (defn seed-overlay [operator-seed :string overlay-id :string] :string
   (string-concat
    operator-seed
-   (string-concat ":" (string-concat overlay-id ":murakumo-overlay-auth"))))
+   (string-concat (seed-sep)
+                  (string-concat overlay-id (seed-overlay-suffix)))))
 
 (defn did-derive-cmd [kotoba :string seed :string] :string
   ;; space-joined argv for display/parity (cljc returns vector)
   (string-concat
    kotoba
-   (string-concat " did-derive " seed)))
+   (string-concat (argv-join-sep)
+                  (string-concat (did-derive-subcmd)
+                                 (string-concat (argv-join-sep) seed)))))
 
 (defn did-from-output [out :string] :string
   (trim out))

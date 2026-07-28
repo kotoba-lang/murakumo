@@ -32,23 +32,69 @@
        (trim (string-substring s 0 (- n 1)))
        s)))),
    :param-types [:string]}
+  {:name seed-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":",
+   :param-types []}
+  {:name seed-p2p-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":p2p",
+   :param-types []}
+  {:name seed-x25519-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":x25519",
+   :param-types []}
+  {:name seed-overlay-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":murakumo-overlay-auth",
+   :param-types []}
+  {:name did-derive-subcmd,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "did-derive",
+   :param-types []}
+  {:name jwt-seg-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ".",
+   :param-types []}
+  {:name argv-join-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " ",
+   :param-types []}
   {:name seed-node,
    :params [operator-seed node-name],
    :result :string,
    :effects #{},
-   :body (string-concat operator-seed (string-concat ":" node-name)),
+   :body
+   (string-concat operator-seed (string-concat (seed-sep) node-name)),
    :param-types [:string :string]}
   {:name seed-p2p,
    :params [operator-seed node-name],
    :result :string,
    :effects #{},
-   :body (string-concat (seed-node operator-seed node-name) ":p2p"),
+   :body
+   (string-concat
+    (seed-node operator-seed node-name)
+    (seed-p2p-suffix)),
    :param-types [:string :string]}
   {:name seed-x25519,
    :params [operator-seed],
    :result :string,
    :effects #{},
-   :body (string-concat operator-seed ":x25519"),
+   :body (string-concat operator-seed (seed-x25519-suffix)),
    :param-types [:string]}
   {:name seed-overlay,
    :params [operator-seed overlay-id],
@@ -58,14 +104,21 @@
    (string-concat
     operator-seed
     (string-concat
-     ":"
-     (string-concat overlay-id ":murakumo-overlay-auth"))),
+     (seed-sep)
+     (string-concat overlay-id (seed-overlay-suffix)))),
    :param-types [:string :string]}
   {:name did-derive-cmd,
    :params [kotoba seed],
    :result :string,
    :effects #{},
-   :body (string-concat kotoba (string-concat " did-derive " seed)),
+   :body
+   (string-concat
+    kotoba
+    (string-concat
+     (argv-join-sep)
+     (string-concat
+      (did-derive-subcmd)
+      (string-concat (argv-join-sep) seed)))),
    :param-types [:string :string]}
   {:name did-from-output,
    :params [out],
@@ -121,7 +174,14 @@
   jwt-payload-json
   op-token-sig-seg
   cid-b-prefix
-  graph-name-fleet],
+  graph-name-fleet
+  seed-sep
+  seed-p2p-suffix
+  seed-x25519-suffix
+  seed-overlay-suffix
+  did-derive-subcmd
+  jwt-seg-sep
+  argv-join-sep],
  :schemas nil,
  :effects #{},
  :blocks [],
