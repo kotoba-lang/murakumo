@@ -22,7 +22,10 @@
        "cp-bin rm-bin rm-rf-flag cp-recursive-flag "
        "git-c-flag git-rev-parse git-short-flag git-head-ref "
        "version-flag version-bin-path build-features "
-       "missing-manifest? missing-operator-seed?"))
+       "missing-manifest? missing-operator-seed? "
+       "component-subcmd build-subcmd app-subcmd deploy-subcmd "
+       "wit-dir-flag output-flag publish-flag url-flag "
+       "token-flag block-subcmd put-subcmd file-flag"))
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -198,3 +201,40 @@
       (is (= "/rel/kotoba" (-> pin :binaries first :src)))
       (is (= "bin/kotoba-server" (-> pin :binaries second :dest)))
       (is (= "bin/wit" (get-in pin [:wit :dest]))))))
+
+(deftest deploy-argv-flag-fragments-match
+  (let [s (compile-string-cases
+           {"cs" "(component-subcmd)"
+            "bs" "(build-subcmd)"
+            "as" "(app-subcmd)"
+            "ds" "(deploy-subcmd)"
+            "wf" "(wit-dir-flag)"
+            "of" "(output-flag)"
+            "pf" "(publish-flag)"
+            "uf" "(url-flag)"
+            "tf" "(token-flag)"
+            "bk" "(block-subcmd)"
+            "pt" "(put-subcmd)"
+            "ff" "(file-flag)"})]
+    (is (= plan/component-subcmd (get s "cs")))
+    (is (= "component" (get s "cs")))
+    (is (= plan/build-subcmd (get s "bs")))
+    (is (= plan/app-subcmd (get s "as")))
+    (is (= plan/deploy-subcmd (get s "ds")))
+    (is (= plan/wit-dir-flag (get s "wf")))
+    (is (= "--wit-dir" (get s "wf")))
+    (is (= plan/output-flag (get s "of")))
+    (is (= plan/publish-flag (get s "pf")))
+    (is (= plan/url-flag (get s "uf")))
+    (is (= plan/token-flag (get s "tf")))
+    (is (= plan/block-subcmd (get s "bk")))
+    (is (= plan/put-subcmd (get s "pt")))
+    (is (= plan/file-flag (get s "ff")))
+    (is (= ["/bin/kotoba" "component" "build" "apps/src/bot.clj" "--wit-dir" "wit" "-o" "/tmp/out.wasm"]
+           (plan/component-build-argv "/bin/kotoba" "apps/src/bot.clj" "wit" "/tmp/out.wasm")))
+    (is (= ["/bin/kotoba" "app" "deploy" "apps/bot.edn" "--wit-dir" "wit" "--publish" "--url"
+            "http://localhost:18077"]
+           (plan/app-deploy-argv "/bin/kotoba" "apps/bot.edn" "wit" 18077)))
+    (is (= ["/bin/kotoba" "--url" "http://localhost:18900" "--token" "tok" "block" "put" "--file"
+            "/tmp/out.wasm"]
+           (plan/block-put-argv "/bin/kotoba" "tok" "/tmp/out.wasm" 18900)))))

@@ -4,16 +4,16 @@
 ;; forwarding, artifact distribution, and sleeps. This namespace owns the pure
 ;; manifest parsing and command argv shapes used by that shell.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-deploy-pin-path-pure-oracle):
-;; constants + path/url + probe + argv flag/gate + pin join-path/wit-dest pure
-;; helpers DELEGATE to precompiled kotoba/deploy_plan_core when oracle is
-;; loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
-;; Regex extract, argv vector assembly, node folds stay host. cljs mirrors
-;; remain fallback when oracle is not ready.
+;; W6 product-shell authority (ADR-260728-w6-deploy-argv-flags-pure-oracle):
+;; constants + path/url + probe + argv flag/gate + pin join-path/wit-dest +
+;; component/app/block subcmd/flag pure helpers DELEGATE to precompiled
+;; kotoba/deploy_plan_core when oracle is loadable (JVM classpath or cljs/nbb —
+;; ADR-260728-w6-cljs-oracle-load). Regex extract, argv vector assembly, node
+;; folds stay host. cljs mirrors remain fallback when oracle is not ready.
 
 (ns murakumo.deploy.plan
   "Portable deploy planning helpers.
-   W6 product-shell: path/url + probe + argv + pin-path pure via deploy_plan_core."
+   W6 product-shell: path/url + probe + argv flags + pin-path pure via deploy_plan_core."
   (:require [clojure.string :as str]
             [murakumo.config :as config]
             [murakumo.kotoba.oracle :as oracle]))
@@ -115,6 +115,18 @@
 (def ^:private mirror-pin-bin-kotoba "kotoba")
 (def ^:private mirror-pin-bin-server "kotoba-server")
 (def ^:private mirror-pin-wit-dirname "wit")
+(def ^:private mirror-component-subcmd "component")
+(def ^:private mirror-build-subcmd "build")
+(def ^:private mirror-app-subcmd "app")
+(def ^:private mirror-deploy-subcmd "deploy")
+(def ^:private mirror-wit-dir-flag "--wit-dir")
+(def ^:private mirror-output-flag "-o")
+(def ^:private mirror-publish-flag "--publish")
+(def ^:private mirror-url-flag "--url")
+(def ^:private mirror-token-flag "--token")
+(def ^:private mirror-block-subcmd "block")
+(def ^:private mirror-put-subcmd "put")
+(def ^:private mirror-file-flag "--file")
 
 (defn- mirror-join-path [a b]
   (str a "/" b))
@@ -207,6 +219,54 @@
   "BUILD.edn :features string. Kotoba `build-features` when ready."
   (oracle-str-const 'build-features mirror-build-features))
 
+(def component-subcmd
+  "kotoba component subcommand. Kotoba when ready."
+  (oracle-str-const 'component-subcmd mirror-component-subcmd))
+
+(def build-subcmd
+  "kotoba component build subcommand. Kotoba when ready."
+  (oracle-str-const 'build-subcmd mirror-build-subcmd))
+
+(def app-subcmd
+  "kotoba app subcommand. Kotoba when ready."
+  (oracle-str-const 'app-subcmd mirror-app-subcmd))
+
+(def deploy-subcmd
+  "kotoba app deploy subcommand. Kotoba when ready."
+  (oracle-str-const 'deploy-subcmd mirror-deploy-subcmd))
+
+(def wit-dir-flag
+  "kotoba --wit-dir flag. Kotoba when ready."
+  (oracle-str-const 'wit-dir-flag mirror-wit-dir-flag))
+
+(def output-flag
+  "kotoba -o output flag. Kotoba when ready."
+  (oracle-str-const 'output-flag mirror-output-flag))
+
+(def publish-flag
+  "kotoba --publish flag. Kotoba when ready."
+  (oracle-str-const 'publish-flag mirror-publish-flag))
+
+(def url-flag
+  "kotoba --url flag. Kotoba when ready."
+  (oracle-str-const 'url-flag mirror-url-flag))
+
+(def token-flag
+  "kotoba --token flag. Kotoba when ready."
+  (oracle-str-const 'token-flag mirror-token-flag))
+
+(def block-subcmd
+  "kotoba block subcommand. Kotoba when ready."
+  (oracle-str-const 'block-subcmd mirror-block-subcmd))
+
+(def put-subcmd
+  "kotoba block put subcommand. Kotoba when ready."
+  (oracle-str-const 'put-subcmd mirror-put-subcmd))
+
+(def file-flag
+  "kotoba --file flag. Kotoba when ready."
+  (oracle-str-const 'file-flag mirror-file-flag))
+
 (defn join-path
   "Join two path segments with `/`. Kotoba `join-path` when ready."
   [a b]
@@ -275,26 +335,28 @@
      :wasm default-wasm}))
 
 (defn component-build-argv
-  "argv for `kotoba component build`."
+  "argv for `kotoba component build`.
+   Subcmd/flag fragments dual-sourced; vector assembly stays host."
   [kotoba src-path wit wasm]
-  [kotoba "component" "build" src-path "--wit-dir" wit "-o" wasm])
+  [kotoba component-subcmd build-subcmd src-path wit-dir-flag wit output-flag wasm])
 
 (defn app-deploy-argv
   "argv for `kotoba app deploy --publish` through a local port-forward.
-   Localhost URL via kotoba `localhost-url` when oracle ready."
+   Subcmd/flag fragments dual-sourced; localhost URL via kotoba when ready."
   [kotoba manifest wit local-port]
-  [kotoba "app" "deploy" manifest "--wit-dir" wit "--publish" "--url"
+  [kotoba app-subcmd deploy-subcmd manifest wit-dir-flag wit publish-flag url-flag
    (try-oracle
     #(o 'localhost-url [(oracle/as-i64 local-port)])
     #(mirror-localhost-url local-port))])
 
 (defn block-put-argv
-  "argv for putting a WASM artifact into a node-local forwarded kotoba server."
+  "argv for putting a WASM artifact into a node-local forwarded kotoba server.
+   Flag/subcmd fragments dual-sourced; vector assembly stays host."
   [kotoba token wasm local-port]
-  [kotoba "--url" (try-oracle
-                   #(o 'localhost-url [(oracle/as-i64 local-port)])
-                   #(mirror-localhost-url local-port))
-   "--token" token "block" "put" "--file" wasm])
+  [kotoba url-flag (try-oracle
+                    #(o 'localhost-url [(oracle/as-i64 local-port)])
+                    #(mirror-localhost-url local-port))
+   token-flag token block-subcmd put-subcmd file-flag wasm])
 
 (defn artifact-node-plan
   "Pure per-node plan for distributing an artifact through a local forward."
