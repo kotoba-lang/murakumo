@@ -15,7 +15,10 @@
        "task-eligible? fill-milli better-fill? better-task-score? better-mem? "
        "wave-of slot-of load-after-assign "
        "digit-char nat-str i64-str pad4 task-id "
-       "pick-task-idx-2 assign-task-step-2 attempt-next exclude-append-marker"))
+       "pick-task-idx-2 assign-task-step-2 attempt-next exclude-append-marker "
+       "pick-task-fold-step load-inc-if challenger-wins? "
+       "assign-task-pick-3 apply-task-pick-3 assign-task-step-3 "
+       "nearest-rank-idx summary-retried speedup-milli max2 min2 clamp-nonneg"))
 
 
 (defn- compile-string-cases [cases]
@@ -231,3 +234,54 @@
     (is (= 0 (get actual "p0")))
     (is (= 1 (get actual "p1")) "fill0=500 > fill1=0 → pick node1")
     (is (= -1 (get actual "pn")))))
+
+(deftest assign-task-step-3-and-summary
+  (let [B 65536
+        pack3 (fn [a b c] (+ a (* b B) (* c B B)))
+        ;; three equal empty nodes
+        ok (pack3 1 1 1)
+        fill (pack3 0 0 0)
+        load0 (pack3 0 0 0)
+        actual (compile-i64-cases
+                {"p3" (str "(assign-task-pick-3 " ok " " fill " " load0 ")")
+                 "s3" (str "(assign-task-step-3 " load0 " " ok " " fill ")")
+                 "fold0" "(pick-task-fold-step 0 1 0)"
+                 "fold1" "(pick-task-fold-step 1 1 1)"
+                 "fold2" "(pick-task-fold-step 1 1 0)"
+                 "foldn" "(pick-task-fold-step 0 0 0)"
+                 "nr50" "(nearest-rank-idx 10 500)"
+                 "nr95" "(nearest-rank-idx 10 950)"
+                 "nr0" "(nearest-rank-idx 0 500)"
+                 "ret" "(summary-retried 5 3)"
+                 "sp" "(speedup-milli 4000 1000)"
+                 "sp0" "(speedup-milli 0 1000)"
+                 "cw" "(challenger-wins? 500 1 0 0)"
+                 "cw2" "(challenger-wins? 0 0 500 1)"})]
+    (is (= 0 (get actual "p3")) "tie → lower index 0")
+    (let [r (get actual "s3")
+          code (mod r 4)
+          nload (quot r 4)
+          n0 (mod nload B)
+          n1 (mod (quot nload B) B)
+          n2 (quot nload (* B B))]
+      (is (= 1 code))
+      (is (= 1 n0))
+      (is (= 0 n1))
+      (is (= 0 n2)))
+    (is (= 1 (get actual "fold0")))
+    (is (= 1 (get actual "fold1")))
+    (is (= 2 (get actual "fold2")))
+    (is (= 0 (get actual "foldn")))
+    (is (= 5 (get actual "nr50")))
+    (is (= 9 (get actual "nr95")))
+    (is (= -1 (get actual "nr0")))
+    (is (= 2 (get actual "ret")))
+    (is (= 4000 (get actual "sp")))
+    (is (= 0 (get actual "sp0")))
+    (is (= 1 (get actual "cw")))
+    (is (= 0 (get actual "cw2")))
+    (testing "cljc percentile nearest-rank"
+      (let [xs (range 10)]
+        (is (= 5 (plan/percentile xs 0.5)))
+        (is (= (nth (vec (sort xs)) 9) (plan/percentile xs 0.95)))))))
+
