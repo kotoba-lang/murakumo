@@ -9,14 +9,21 @@
 ;; holds the env-resolution and node-partitioning logic, tested offline.
 ;;
 ;; W6 product-shell authority (ADR-260728-w6-product-shell-oracle-authority):
-;; On the JVM, pure string helpers DELEGATE to the precompiled kotoba oracle
-;; (kotoba/kekkai_gate_core.kotoba → resources/murakumo/oracle/…kir.edn).
-;; Kotoba is SSoT; the cljc bodies below are the cljs/host-mirror fallback and
-;; document the expected semantics for readers.
+;; pure string helpers DELEGATE to the precompiled kotoba oracle when loadable
+;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; Kotoba is SSoT; host mirrors remain fallback when oracle is not ready.
 
 (ns murakumo.kekkai.gate
   (:require [clojure.string :as str]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
+
+(def ^:private oid :kekkai-gate)
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- o [export args]
+  (oracle/call oid export args))
 
 ;; ── host-mirror pure helpers (cljs fallback + semantic documentation) ──
 
@@ -39,15 +46,20 @@
 ;; ── public API ────────────────────────────────────────────────────────
 
 (def default-ledger-path
-  "Constant default ledger path (oracle authority on JVM)."
-  #?(:clj (oracle/call :kekkai-gate 'default-ledger-path [])
-     :cljs mirror-default-ledger-path))
+  "Constant default ledger path (oracle authority when ready at load)."
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid 'default-ledger-path [])
+      mirror-default-ledger-path)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror-default-ledger-path)))
 
 (defn default-kekkai-dir
   "Default sibling kekkai checkout location under a user home."
   [home]
-  #?(:clj (oracle/call :kekkai-gate 'default-kekkai-dir-under [(str home)])
-     :cljs (mirror-default-kekkai-dir home)))
+  (if (oracle-ready?)
+    (o 'default-kekkai-dir-under [(str home)])
+    (mirror-default-kekkai-dir home)))
 
 (defn ledger-path [getenv]
   (or (getenv "MURAKUMO_KEKKAI_LEDGER") default-ledger-path))
@@ -70,10 +82,11 @@
    subprocess produced no output at all (a hard failure: bad ledger path,
    missing `clojure` binary, uncaught exception).
 
-   JVM: kotoba oracle authority (parse-status-out). cljs: host mirror."
+   Kotoba oracle when ready; host mirror otherwise."
   [{:keys [out]}]
-  #?(:clj (oracle/call :kekkai-gate 'parse-status-out [(str (or out ""))])
-     :cljs (mirror-parse-status-out out)))
+  (if (oracle-ready?)
+    (o 'parse-status-out [(str (or out ""))])
+    (mirror-parse-status-out out)))
 
 (defn partition-nodes
   "Split `nodes` into {:admitted [...] :denied [...]} using an injected
@@ -85,8 +98,10 @@
   [nodes status-by-name]
   (reduce (fn [acc n]
             (let [status (get status-by-name (:name n) "unknown")
-                  ok? #?(:clj (= 1 (oracle/call :kekkai-gate 'authorized? [(str status)]))
-                         :cljs (mirror-authorized? status))]
+                  ok? (if (oracle-ready?)
+                        (= 1 (oracle/i64->host
+                              (o 'authorized? [(str status)])))
+                        (mirror-authorized? status))]
               (if ok?
                 (update acc :admitted conj n)
                 (update acc :denied conj (assoc n :kekkai/status status)))))
@@ -94,6 +109,7 @@
           nodes))
 
 (defn denial-line [node]
-  #?(:clj (oracle/call :kekkai-gate 'denial-line-of
-                       [(str (:name node)) (str (:kekkai/status node))])
-     :cljs (mirror-denial-line (:name node) (:kekkai/status node))))
+  (if (oracle-ready?)
+    (o 'denial-line-of
+       [(str (:name node)) (str (:kekkai/status node))])
+    (mirror-denial-line (:name node) (:kekkai/status node))))

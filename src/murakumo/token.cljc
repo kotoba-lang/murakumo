@@ -14,36 +14,71 @@
   stay host (javax on JVM/bb, WebCrypto on cljs).
 
   The signing secret (MURAKUMO_TOKEN_SECRET) is the operator's; it lives in the
-  CLI's environment (to mint) and as a Worker secret (to verify)."
+  CLI's environment (to mint) and as a Worker secret (to verify).
+
+  W6 product-shell: pure helpers DELEGATE to precompiled KIR when oracle is
+  loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+  Host mirrors remain fallback when oracle is not ready."
   (:require [clojure.string :as str]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])
-            #?(:cljs [goog.crypt.base64 :as gb64]))
+            [murakumo.kotoba.oracle :as oracle])
   #?(:clj (:import [javax.crypto Mac]
                    [javax.crypto.spec SecretKeySpec]
                    [java.util Base64]
                    [java.nio.charset StandardCharsets])))
 
+(def ^:private oid :token)
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- o [export args]
+  (oracle/call oid export args))
+
 (def ^:const version "mk1")
 (def ^:const default-ttl 2592000)
 
 ;; ── base64url (no padding) over raw bytes — host codec ──────────────
+;; cljs: prefer Node Buffer (nbb); fall back to btoa/atob in browsers.
+
+#?(:cljs
+   (defn- cljs-b64-encode
+     "UTF-8 string or Uint8Array → standard base64."
+     [data]
+     (if (exists? js/Buffer)
+       (if (string? data)
+         (.toString (js/Buffer.from data "utf8") "base64")
+         (.toString (js/Buffer.from data) "base64"))
+       (let [bin (if (string? data)
+                   data
+                   (apply str (map #(js/String.fromCharCode %) (array-seq data))))]
+         (js/btoa bin)))))
+
+#?(:cljs
+   (defn- cljs-b64-decode-str
+     "standard base64 → UTF-8 string."
+     [b64]
+     (if (exists? js/Buffer)
+       (.toString (js/Buffer.from b64 "base64") "utf8")
+       (js/atob b64))))
+
+#?(:cljs
+   (defn- cljs-b64url [b64]
+     (-> b64 (str/replace "+" "-") (str/replace "/" "_") (str/replace "=" ""))))
 
 (defn b64url-bytes [bytes]
   #?(:clj  (-> (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) bytes))
-     :cljs (-> (gb64/encodeByteArray bytes) (str/replace "+" "-") (str/replace "/" "_") (str/replace "=" ""))))
+     :cljs (cljs-b64url (cljs-b64-encode bytes))))
 
 (defn- b64url-decode->str [s]
   #?(:clj  (String. (.decode (Base64/getUrlDecoder) ^String s) StandardCharsets/UTF_8)
      :cljs (let [b64 (-> s (str/replace "-" "+") (str/replace "_" "/"))]
-             (gb64/decodeString b64))))
+             (cljs-b64-decode-str b64))))
 
 (defn b64url-str [s]
   #?(:clj  (b64url-bytes (.getBytes ^String s StandardCharsets/UTF_8))
-     :cljs (-> (gb64/encodeString s) (str/replace "+" "-") (str/replace "/" "_") (str/replace "=" ""))))
+     :cljs (cljs-b64url (cljs-b64-encode s))))
 
 ;; ── pure claims / wire — kotoba/token_core.kotoba is SSoT ────────────
-;; JVM: public pure helpers DELEGATE to precompiled KIR oracle.
-;; cljs: host-mirror (same semantics; resource load is JVM/bb-only this slice).
 
 (defn- mirror-claim-sub [sub]
   (str (or sub "anonymous")))
@@ -52,7 +87,8 @@
   (str (or scope "all")))
 
 (defn- mirror-claim-exp [now ttl]
-  (long (+ (long now) (long (or ttl default-ttl)))))
+  (+ (oracle/i64->host (oracle/as-i64 now))
+     (oracle/i64->host (oracle/as-i64 (or ttl default-ttl)))))
 
 (defn- mirror-encode-claims-json [{:keys [sub scope iat exp]}]
   (str "{\"sub\":\"" sub "\",\"scope\":\"" scope
@@ -73,7 +109,9 @@
                 (not (str/blank? (str sig))))))
 
 (defn- mirror-expired? [cl now]
-  (or (nil? (:exp cl)) (>= (long now) (long (:exp cl)))))
+  (or (nil? (:exp cl))
+      (>= (oracle/i64->host (oracle/as-i64 now))
+          (oracle/i64->host (oracle/as-i64 (:exp cl))))))
 
 (defn- char-code [s i]
   #?(:clj (int (.charAt ^String s i)) :cljs (.charCodeAt ^string s i)))
@@ -86,24 +124,44 @@
 (defn- mirror-scope-allows? [token-scope required]
   (or (= "all" (str token-scope)) (= (str token-scope) (str required))))
 
+(defn- try-oracle
+  "Run oracle body; on failure (e.g. cljs KIR string-from-i64 bounds) use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
 (defn claims
-  "Build the token claim map. Pure claim fields use kotoba authority on JVM
+  "Build the token claim map. Pure claim fields use kotoba when oracle ready
   (claim-sub/scope/exp via Product Value ABI options); map assembly stays host."
   [{:keys [sub scope now ttl]}]
-  (let [sub' #?(:clj (oracle/call :token 'claim-sub [(oracle/option-string sub)])
-                :cljs (mirror-claim-sub sub))
-        scope' #?(:clj (oracle/call :token 'claim-scope [(oracle/option-string scope)])
-                  :cljs (mirror-claim-scope scope))
-        exp' #?(:clj (oracle/call :token 'claim-exp [(long now) (oracle/option-i64 ttl)])
-                :cljs (mirror-claim-exp now ttl))]
-    {:sub sub' :scope scope' :iat (long now) :exp (long exp')}))
+  (let [sub' (try-oracle
+              #(o 'claim-sub [(oracle/option-string sub)])
+              #(mirror-claim-sub sub))
+        scope' (try-oracle
+                #(o 'claim-scope [(oracle/option-string scope)])
+                #(mirror-claim-scope scope))
+        exp' (try-oracle
+              #(oracle/i64->host
+                (o 'claim-exp [(oracle/as-i64 now) (oracle/option-i64 ttl)]))
+              #(mirror-claim-exp now ttl))]
+    {:sub sub'
+     :scope scope'
+     :iat (oracle/i64->host (oracle/as-i64 now))
+     :exp exp'}))
 
 (defn encode-claims-json
-  "Fixed-key JSON. JVM: kotoba oracle. cljs: host mirror."
+  "Fixed-key JSON. Kotoba oracle when ready; host mirror otherwise.
+   Falls back if KIR string-from-i64 faults on some cljs builds."
   [{:keys [sub scope iat exp] :as m}]
-  #?(:clj (oracle/call :token 'encode-claims-json
-                       [(str sub) (str scope) (long iat) (long exp)])
-     :cljs (mirror-encode-claims-json m)))
+  (try-oracle
+   #(o 'encode-claims-json
+       [(str sub) (str scope)
+        (oracle/as-i64 iat) (oracle/as-i64 exp)])
+   #(mirror-encode-claims-json m)))
 
 (defn encode-claims
   "b64url of fixed-key claims JSON (host b64 codec)."
@@ -123,47 +181,57 @@
     (catch #?(:clj Exception :cljs :default) _ nil)))
 
 (defn expired?
-  "True if claims are expired. JVM: kotoba oracle (option exp)."
+  "True if claims are expired. Kotoba oracle (option exp) when ready."
   [cl now]
-  #?(:clj (= 1 (oracle/call :token 'expired?
-                            [(oracle/option-i64 (when (contains? cl :exp) (:exp cl)))
-                             (long now)]))
-     :cljs (mirror-expired? cl now)))
+  (try-oracle
+   #(= 1 (oracle/i64->host
+          (o 'expired?
+             [(oracle/option-i64 (when (contains? cl :exp) (:exp cl)))
+              (oracle/as-i64 now)])))
+   #(mirror-expired? cl now)))
 
 (defn signing-input
-  "HMAC message: version + '.' + payloadSeg. JVM: kotoba oracle."
+  "HMAC message: version + '.' + payloadSeg. Kotoba when ready."
   [payload-seg]
-  #?(:clj (oracle/call :token 'signing-input [(str payload-seg)])
-     :cljs (mirror-signing-input payload-seg)))
+  (try-oracle
+   #(o 'signing-input [(str payload-seg)])
+   #(mirror-signing-input payload-seg)))
 
 (defn wire-token
-  "mk1.<payloadSeg>.<sig>. JVM: kotoba oracle."
+  "mk1.<payloadSeg>.<sig>. Kotoba when ready."
   [payload-seg sig]
-  #?(:clj (oracle/call :token 'wire-token [(str payload-seg) (str sig)])
-     :cljs (mirror-wire-token payload-seg sig)))
+  (try-oracle
+   #(o 'wire-token [(str payload-seg) (str sig)])
+   #(mirror-wire-token payload-seg sig)))
 
 (defn version-ok? [v]
-  #?(:clj (= 1 (oracle/call :token 'version-ok? [(str v)]))
-     :cljs (mirror-version-ok? v)))
+  (try-oracle
+   #(= 1 (oracle/i64->host (o 'version-ok? [(str v)])))
+   #(mirror-version-ok? v)))
 
 (defn parts-present?
   "All three wire segments present (non-blank)."
   [v payload sig]
-  #?(:clj (let [seg (fn [x]
-                      (when (and x (not (str/blank? (str x))))
-                        (str x)))]
-            (= 1 (oracle/call :token 'parts-present?
-                              [(oracle/option-string (seg v))
-                               (oracle/option-string (seg payload))
-                               (oracle/option-string (seg sig))])))
-     :cljs (mirror-parts-present? v payload sig)))
+  (try-oracle
+   #(let [seg (fn [x]
+                (when (and x (not (str/blank? (str x))))
+                  (str x)))]
+      (= 1 (oracle/i64->host
+            (o 'parts-present?
+               [(oracle/option-string (seg v))
+                (oracle/option-string (seg payload))
+                (oracle/option-string (seg sig))]))))
+   #(mirror-parts-present? v payload sig)))
 
 (defn constant-time=
-  "Full-scan string compare. JVM: kotoba oracle constant-time-eq."
+  "Full-scan string compare. Kotoba constant-time-eq when ready.
+   Falls back if KIR string-substring scan faults on some cljs builds."
   [a b]
-  #?(:clj (and (string? a) (string? b)
-               (= 1 (oracle/call :token 'constant-time-eq [(str a) (str b)])))
-     :cljs (mirror-constant-time= a b)))
+  (try-oracle
+   #(and (string? a) (string? b)
+         (= 1 (oracle/i64->host
+               (o 'constant-time-eq [(str a) (str b)]))))
+   #(mirror-constant-time= a b)))
 
 ;; ── HMAC host adapter (javax / WebCrypto) ───────────────────────────
 
@@ -226,7 +294,9 @@
          (js/Promise.resolve nil)))))
 
 (defn scope-allows?
-  "Does a token's scope grant `required`? JVM: kotoba oracle."
+  "Does a token's scope grant `required`? Kotoba when ready."
   [token-scope required]
-  #?(:clj (= 1 (oracle/call :token 'scope-allows? [(str token-scope) (str required)]))
-     :cljs (mirror-scope-allows? token-scope required)))
+  (try-oracle
+   #(= 1 (oracle/i64->host
+          (o 'scope-allows? [(str token-scope) (str required)])))
+   #(mirror-scope-allows? token-scope required)))
