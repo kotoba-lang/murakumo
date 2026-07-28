@@ -4,16 +4,16 @@
 ;; forwarding, artifact distribution, and sleeps. This namespace owns the pure
 ;; manifest parsing and command argv shapes used by that shell.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-deploy-argv-pure-oracle):
-;; constants + path/url + probe + argv flag/gate pure helpers DELEGATE to
-;; precompiled kotoba/deploy_plan_core when oracle is loadable (JVM classpath
-;; or cljs/nbb — ADR-260728-w6-cljs-oracle-load). Regex extract, argv vector
-;; assembly, node folds stay host. cljs mirrors remain fallback when oracle
-;; is not ready.
+;; W6 product-shell authority (ADR-260728-w6-deploy-pin-path-pure-oracle):
+;; constants + path/url + probe + argv flag/gate + pin join-path/wit-dest pure
+;; helpers DELEGATE to precompiled kotoba/deploy_plan_core when oracle is
+;; loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; Regex extract, argv vector assembly, node folds stay host. cljs mirrors
+;; remain fallback when oracle is not ready.
 
 (ns murakumo.deploy.plan
   "Portable deploy planning helpers.
-   W6 product-shell: path/url + probe + argv pure helpers via deploy_plan_core."
+   W6 product-shell: path/url + probe + argv + pin-path pure via deploy_plan_core."
   (:require [clojure.string :as str]
             [murakumo.config :as config]
             [murakumo.kotoba.oracle :as oracle]))
@@ -112,6 +112,15 @@
 (def ^:private mirror-git-head-ref "HEAD")
 (def ^:private mirror-version-flag "--version")
 (def ^:private mirror-build-features "p2p,realtime-wasm,webrtc")
+(def ^:private mirror-pin-bin-kotoba "kotoba")
+(def ^:private mirror-pin-bin-server "kotoba-server")
+(def ^:private mirror-pin-wit-dirname "wit")
+
+(defn- mirror-join-path [a b]
+  (str a "/" b))
+
+(defn- mirror-pin-wit-dest [dest]
+  (str dest "/wit"))
 
 (defn- mirror-version-bin-path [dest]
   (str dest "/kotoba"))
@@ -130,7 +139,21 @@
 (def default-publish-node
   (oracle-str-const 'default-publish-node mirror-default-publish-node))
 
-(def pinned-binaries ["kotoba" "kotoba-server"])
+(def pin-bin-kotoba
+  "Pinned kotoba CLI binary name. Kotoba when ready."
+  (oracle-str-const 'pin-bin-kotoba mirror-pin-bin-kotoba))
+
+(def pin-bin-server
+  "Pinned kotoba-server binary name. Kotoba when ready."
+  (oracle-str-const 'pin-bin-server mirror-pin-bin-server))
+
+(def pin-wit-dirname
+  "WIT directory name under pin dest. Kotoba when ready."
+  (oracle-str-const 'pin-wit-dirname mirror-pin-wit-dirname))
+
+(def pinned-binaries
+  "Ordered pin binary names (CLI then server). Dual-sourced via pin-bin-*."
+  [pin-bin-kotoba pin-bin-server])
 
 (def artifact-forward-port
   (oracle-i64-const 'artifact-forward-port mirror-artifact-forward-port))
@@ -183,6 +206,20 @@
 (def build-features
   "BUILD.edn :features string. Kotoba `build-features` when ready."
   (oracle-str-const 'build-features mirror-build-features))
+
+(defn join-path
+  "Join two path segments with `/`. Kotoba `join-path` when ready."
+  [a b]
+  (try-oracle
+   #(o 'join-path [(str a) (str b)])
+   #(mirror-join-path a b)))
+
+(defn pin-wit-dest
+  "Pinned WIT directory path under dest. Kotoba `pin-wit-dest` when ready."
+  [dest]
+  (try-oracle
+   #(o 'pin-wit-dest [(str dest)])
+   #(mirror-pin-wit-dest dest)))
 
 (defn version-bin-path
   "Pinned kotoba binary path under dest. Kotoba `version-bin-path` when ready."
@@ -356,17 +393,19 @@
    #(o 'release-wit-path [(str release-dir)])
    #(mirror-release-wit-path release-dir)))
 (defn pin-copy-plan
-  "Pure copy plan for pinning a kotoba release into murakumo's owned ./bin dir."
+  "Pure copy plan for pinning a kotoba release into murakumo's owned ./bin dir.
+   Binary/wit path fragments dual-sourced via `join-path` / `pin-wit-dest`;
+   map assembly stays host."
   [src dest]
   {:src src
    :dest dest
    :binaries (mapv (fn [bin]
                      {:name bin
-                      :src (str src "/" bin)
-                      :dest (str dest "/" bin)})
+                      :src (join-path src bin)
+                      :dest (join-path dest bin)})
                    pinned-binaries)
    :wit {:src (release-wit-path src)
-         :dest (str dest "/wit")}})
+         :dest (pin-wit-dest dest)}})
 
 (defn pin-source
   "Resolve the source release directory for `murakumo pin`."
