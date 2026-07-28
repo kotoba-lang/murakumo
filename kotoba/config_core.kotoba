@@ -1,0 +1,75 @@
+(ns config-core
+  (:export [default-fleet-path default-connect-path default-cloud-path
+            default-kotoba-dir pinned-bin-dir release-bin-dir
+            kotoba-server-bin local-kotoba-bin pinned-wit-dir runtime-wit-dir
+            build-manifest-path peers-path launchd-template-path
+            kotoba-bin resolve-local-bin resolve-wit-dir
+            kotoba-dir-from]))
+
+;; W6 pure-planner oracle — murakumo.config path resolution core (medium).
+;; EDN parse/file I/O and env map folds stay cljc/host.
+;; kotoba-dir-from: empty override ⇒ default under home (cljc nil/absent env).
+;; pinned-exists / pinned-wit-exists: 0/1.
+;; Parity: test/murakumo/config_kotoba_parity_test.clj
+
+(defn default-fleet-path [] :string "fleet.edn")
+(defn default-connect-path [] :string "connect.edn")
+(defn default-cloud-path [] :string "cloud.edn")
+
+(defn default-kotoba-dir [home :string] :string
+  (string-concat
+   home
+   "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba"))
+
+(defn kotoba-dir-from [override :string home :string] :string
+  ;; cljc: (or MURAKUMO_KOTOBA_DIR (default-kotoba-dir HOME))
+  (if (string=? override "")
+    (default-kotoba-dir home)
+    override))
+
+(defn pinned-bin-dir [user-dir :string] :string
+  (string-concat user-dir "/bin"))
+
+(defn release-bin-dir [kotoba-dir :string] :string
+  (string-concat kotoba-dir "/target/aarch64-apple-darwin/release"))
+
+(defn kotoba-server-bin [bin-dir :string] :string
+  (string-concat bin-dir "/kotoba-server"))
+
+(defn local-kotoba-bin [bin-dir :string] :string
+  (string-concat bin-dir "/kotoba"))
+
+(defn pinned-wit-dir [user-dir :string] :string
+  (string-concat (pinned-bin-dir user-dir) "/wit"))
+
+(defn runtime-wit-dir [kotoba-dir :string] :string
+  (string-concat kotoba-dir "/crates/kotoba-runtime/wit"))
+
+(defn build-manifest-path [user-dir :string] :string
+  (string-concat (pinned-bin-dir user-dir) "/BUILD.edn"))
+
+(defn peers-path [] :string
+  ".murakumo-peers.edn")
+
+(defn launchd-template-path [] :string
+  "deploy/com.murakumo.kotoba-mesh.plist.tmpl")
+
+(defn kotoba-bin [user-dir :string pinned-exists :i64] :string
+  (if (= pinned-exists 1)
+    (string-concat (pinned-bin-dir user-dir) "/kotoba")
+    "kotoba"))
+
+(defn resolve-local-bin [user-dir :string kotoba-dir :string
+                         pinned-exists :i64 murakumo-bin :string] :string
+  ;; cljc: pinned → MURAKUMO_BIN → release-bin-dir
+  (if (= pinned-exists 1)
+    (pinned-bin-dir user-dir)
+    (if (string=? murakumo-bin "")
+      (release-bin-dir kotoba-dir)
+      murakumo-bin)))
+
+(defn resolve-wit-dir [user-dir :string kotoba-dir :string
+                       pinned-wit-exists :i64] :string
+  (if (= pinned-wit-exists 1)
+    (pinned-wit-dir user-dir)
+    (runtime-wit-dir kotoba-dir)))
