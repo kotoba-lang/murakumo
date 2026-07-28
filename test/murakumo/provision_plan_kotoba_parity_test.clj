@@ -7,8 +7,12 @@
 
 (def port-source (slurp "kotoba/provision_plan_core.kotoba"))
 (def export-prefix
-  "plist-label remote-bin remote-store ssh-rsync-options peer-advertise-wait-ms default-p2p-port digit-char nat-str i64-str operator-seed-missing? resolve-p2p-port multiaddr webrtc-port mesh-binary-status-command remote-store-command")
-
+  (str "plist-label remote-bin remote-store ssh-rsync-options peer-advertise-wait-ms "
+       "default-p2p-port digit-char nat-str i64-str operator-seed-missing? resolve-p2p-port "
+       "multiaddr webrtc-port mesh-binary-status-command remote-store-command "
+       "launch-status-command peer-id-log-command live-link-count-command "
+       "live-link-count-output launch-up-command launch-down-command "
+       "reprovision-command watchdog-label watchdog-reprovision-command"))
 (def fleet
   {:fleet/port 8077
    :fleet/p2p-port 4001
@@ -46,7 +50,16 @@
             "so" "(ssh-rsync-options)"
             "mb" "(mesh-binary-status-command)"
             "rc" "(remote-store-command)"
-            "ma" (str "(multiaddr " (kotoba-literal "100.0.0.1") " 4001)")})
+            "ma" (str "(multiaddr " (kotoba-literal "100.0.0.1") " 4001)")
+            "ls" "(launch-status-command)"
+            "pi" "(peer-id-log-command)"
+            "ll" "(live-link-count-command)"
+            "lo" (str "(live-link-count-output " (kotoba-literal " 3\n") ")")
+            "up" "(launch-up-command)"
+            "dn" "(launch-down-command)"
+            "rp" "(reprovision-command)"
+            "wl" "(watchdog-label)"
+            "wr" "(watchdog-reprovision-command)"})
         n (compile-i64-cases
            {"w" "(peer-advertise-wait-ms)" "d" "(default-p2p-port)"
             "m0" (str "(operator-seed-missing? " (kotoba-literal "") ")")
@@ -62,6 +75,15 @@
     (is (= (plan/mesh-binary-status-command) (get s "mb")))
     (is (= (plan/remote-store-command) (get s "rc")))
     (is (= (plan/multiaddr "100.0.0.1" 4001) (get s "ma")))
+    (is (= (plan/launch-status-command) (get s "ls")))
+    (is (= (plan/peer-id-log-command) (get s "pi")))
+    (is (= (plan/live-link-count-command) (get s "ll")))
+    (is (= (plan/live-link-count-output " 3\n") (get s "lo")))
+    (is (= (plan/launch-command :up) (get s "up")))
+    (is (= (plan/launch-command :down) (get s "dn")))
+    (is (= (plan/reprovision-command) (get s "rp")))
+    (is (= plan/watchdog-label (get s "wl")))
+    (is (= (plan/watchdog-reprovision-command) (get s "wr")))
     (is (= plan/peer-advertise-wait-ms (get n "w")))
     (is (= 4001 (get n "d")))
     (is (= (if (plan/operator-seed-missing? "") 1 0) (get n "m0")))

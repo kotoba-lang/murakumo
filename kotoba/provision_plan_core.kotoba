@@ -3,11 +3,16 @@
             peer-advertise-wait-ms default-p2p-port
             digit-char nat-str i64-str
             operator-seed-missing? resolve-p2p-port multiaddr webrtc-port
-            mesh-binary-status-command remote-store-command]))
+            mesh-binary-status-command remote-store-command
+            launch-status-command peer-id-log-command live-link-count-command
+            live-link-count-output launch-up-command launch-down-command
+            reprovision-command watchdog-label
+            watchdog-reprovision-command]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.provision.plan string/port.
 ;; resolve-p2p-port uses [:option :i64] (no has-* sentinels).
-;; bootstrap fold, peer-id regex, launch plists stay cljc/host.
+;; bootstrap fold, peer-id regex, write-plist heredoc stay cljc/host.
+;; launch/peer-id/link/watchdog shell strings are pure.
 ;; Parity: test/murakumo/provision_plan_kotoba_parity_test.clj
 
 (defn plist-label [] :string "com.murakumo.kotoba-mesh")
@@ -65,3 +70,81 @@
 
 (defn remote-store-command [] :string
   "mkdir -p $HOME/.murakumo/bin $HOME/.murakumo/store")
+
+(defn launch-status-command [] :string
+  (string-concat
+   "sudo launchctl print system/"
+   (string-concat
+    (plist-label)
+    " >/dev/null 2>&1 && echo running || echo stopped")))
+
+(defn peer-id-log-command [] :string
+  "grep -ho 'did:key:12D3[A-Za-z0-9]*' ~/.murakumo/mesh.log 2>/dev/null | tail -1")
+
+(defn live-link-count-command [] :string
+  "grep 'kotoba-net: peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l")
+
+(defn ws? [c :string] :i64
+  (if (string=? c " ")
+    1
+    (if (string=? c "\n")
+      1
+      (if (string=? c "\t")
+        1
+        (if (string=? c "\r") 1 0)))))
+
+(defn trim [s :string] :string
+  (let [n (string-byte-length s)]
+    (if (= n 0)
+      s
+      (if (= (ws? (string-substring s 0 1)) 1)
+        (trim (string-substring s 1 n))
+        (if (= (ws? (string-substring s (- n 1) n)) 1)
+          (trim (string-substring s 0 (- n 1)))
+          s)))))
+
+(defn live-link-count-output [out :string] :string
+  (trim out))
+
+(defn launch-up-command [] :string
+  (string-concat
+   "sudo launchctl bootstrap system /Library/LaunchDaemons/"
+   (string-concat
+    (plist-label)
+    (string-concat
+     ".plist 2>/dev/null; sudo launchctl kickstart -k system/"
+     (plist-label)))))
+
+(defn launch-down-command [] :string
+  (string-concat
+   "sudo launchctl bootout system/"
+   (plist-label)))
+
+(defn reprovision-command [] :string
+  (string-concat
+   "sudo launchctl bootout system/"
+   (string-concat
+    (plist-label)
+    (string-concat
+     " 2>/dev/null || true; sleep 1; sudo launchctl bootstrap system /Library/LaunchDaemons/"
+     (string-concat
+      (plist-label)
+      (string-concat
+       ".plist 2>/dev/null || true; sudo launchctl kickstart -k system/"
+       (plist-label)))))))
+
+(defn watchdog-label [] :string
+  "com.murakumo.kotoba-mesh-watchdog")
+
+(defn watchdog-reprovision-command [] :string
+  (string-concat
+   "sudo launchctl bootout system/"
+   (string-concat
+    (watchdog-label)
+    (string-concat
+     " 2>/dev/null || true; sleep 1; sudo launchctl bootstrap system /Library/LaunchDaemons/"
+     (string-concat
+      (watchdog-label)
+      (string-concat
+       ".plist 2>/dev/null || true; sudo launchctl kickstart -k system/"
+       (watchdog-label)))))))

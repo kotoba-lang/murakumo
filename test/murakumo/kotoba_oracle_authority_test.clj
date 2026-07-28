@@ -1117,7 +1117,7 @@
       (is (= :relay (:via path))))))
 
 (deftest product-shell-cloud-provision-uses-oracle
-  (testing "provision constants + multiaddr"
+  (testing "provision constants + multiaddr + shell pure"
     (is (= "com.murakumo.kotoba-mesh" pplan/plist-label))
     (is (= 8000 pplan/peer-advertise-wait-ms))
     (is (true? (pplan/operator-seed-missing? "")))
@@ -1125,7 +1125,15 @@
     (is (= 4001 (pplan/node-p2p-port {} {})))
     (is (= 5001 (pplan/node-p2p-port {} {:p2p-port 5001})))
     (is (= "/ip4/1.2.3.4/udp/4001/quic-v1" (pplan/multiaddr "1.2.3.4" 4001)))
-    (is (re-find #"installed" (pplan/mesh-binary-status-command))))
+    (is (re-find #"installed" (pplan/mesh-binary-status-command)))
+    (is (re-find #"launchctl print" (pplan/launch-status-command)))
+    (is (re-find #"did:key:12D3" (pplan/peer-id-log-command)))
+    (is (re-find #"peer connected" (pplan/live-link-count-command)))
+    (is (= "3" (pplan/live-link-count-output " 3\n")))
+    (is (re-find #"kickstart" (pplan/launch-command :up)))
+    (is (re-find #"bootout" (pplan/launch-command :down)))
+    (is (= "com.murakumo.kotoba-mesh-watchdog" pplan/watchdog-label))
+    (is (re-find #"watchdog" (pplan/watchdog-reprovision-command))))
   (testing "cloud defaults + region/endpoints"
     (is (= "murakumo-overlay" cplan/default-driver))
     (is (= "murakumo.cloud" (:cloud/name cplan/default-cloud)))
@@ -1168,7 +1176,11 @@
     (is (= (ir/execute c 'quic-endpoint ["h" 4001])
            (oracle/call :cloud-plan 'quic-endpoint ["h" 4001])))
     (is (= (ir/execute pr 'multiaddr ["1.2.3.4" 4001])
-           (oracle/call :provision-plan 'multiaddr ["1.2.3.4" 4001])))))
+           (oracle/call :provision-plan 'multiaddr ["1.2.3.4" 4001])))
+    (is (= (ir/execute pr 'launch-status-command [])
+           (oracle/call :provision-plan 'launch-status-command [])))
+    (is (= (ir/execute pr 'watchdog-label [])
+           (oracle/call :provision-plan 'watchdog-label [])))))
 
 (deftest product-shell-overlay-driver-runtime-uses-oracle
   (testing "driver endpoint-kind + dial-result + option-name"
