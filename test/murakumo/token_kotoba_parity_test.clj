@@ -11,7 +11,9 @@
 (def port-source (slurp "kotoba/token_core.kotoba"))
 
 (def export-prefix
-  "version default-ttl claim-sub claim-scope claim-exp expired? scope-allows? signing-input")
+  (str "version default-ttl claim-sub claim-scope claim-exp "
+       "expired? scope-allows? signing-input "
+       "digit-char nat-str i64-str encode-claims-json"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -140,3 +142,31 @@
                 {"si" (str "(signing-input " (kotoba-literal payload) ")")})]
     (is (= (str tok/version "." payload)
            (get actual "si")))))
+
+(deftest encode-claims-json-matches-clj-wire
+  ;; Host clj encode-claims builds fixed-order JSON then b64url-str.
+  ;; Oracle owns the JSON string only (b64url stays host).
+  (let [corpus [{:sub "anonymous" :scope "all" :iat 1000 :exp 2593000}
+                {:sub "shinshi" :scope "chat" :iat 0 :exp 1}
+                {:sub "" :scope "image" :iat 1700000000 :exp 1700003600}
+                {:sub "x" :scope "y" :iat 42 :exp 99}]
+        cases (into {}
+                    (map-indexed
+                     (fn [i {:keys [sub scope iat exp]}]
+                       [(str "j_" i)
+                        (str "(encode-claims-json "
+                             (kotoba-literal sub) " "
+                             (kotoba-literal scope) " "
+                             (long iat) " " (long exp) ")")])
+                     corpus))
+        actual (compile-string-cases cases)]
+    (doseq [[i m] (map-indexed vector corpus)]
+      (let [json (get actual (str "j_" i))
+            expected (str "{\"sub\":\"" (:sub m) "\",\"scope\":\"" (:scope m)
+                          "\",\"iat\":" (:iat m) ",\"exp\":" (:exp m) "}")]
+        (testing (pr-str m)
+          (is (= expected json))
+          ;; Round-trip: host encode-claims = b64url of the same JSON (clj path).
+          (is (= (tok/b64url-str expected)
+                 (tok/encode-claims m)))
+          (is (= m (tok/decode-claims (tok/b64url-str json)))))))))

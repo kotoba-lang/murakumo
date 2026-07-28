@@ -17,11 +17,15 @@ Port the pure claims/scope core of `murakumo.token` to
 | `scope-allows?` | `"all"` or exact match |
 | `signing-input` | `"mk1." + payloadSeg` |
 
-### Not ported
+### Later pure expansion (see ADR-260728-w6-identity-crypto-oracle)
+
+- `encode-claims-json` fixed key order (`sub→scope→iat→exp`) landed with crypto packaging slice
+
+### Still host
 
 - HMAC-SHA256 / base64url (host crypto)
 - `sign` / `verify` (platform Mac / WebCrypto)
-- `encode-claims` / `decode-claims` JSON wire (host)
+- `decode-claims` regex/JSON parse (host)
 
 ## Evidence
 

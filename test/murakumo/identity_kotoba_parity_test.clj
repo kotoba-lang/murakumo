@@ -1,5 +1,5 @@
-;; W6 pure-planner oracle: murakumo.identity string preimages + trim
-;; vs kotoba/identity_core.kotoba (hashing stays cljc).
+;; W6 pure-planner oracle: murakumo.identity string preimages + JWT templates
+;; vs kotoba/identity_core.kotoba (hashing / b64url stay cljc).
 
 (ns murakumo.identity-kotoba-parity-test
   (:require [clojure.string :as str]
@@ -11,7 +11,10 @@
 (def port-source (slurp "kotoba/identity_core.kotoba"))
 
 (def export-prefix
-  "ws? trim seed-node seed-p2p seed-x25519 seed-overlay did-derive-cmd did-from-output")
+  (str "ws? trim seed-node seed-p2p seed-x25519 seed-overlay "
+       "did-derive-cmd did-from-output "
+       "jwt-header-json jwt-payload-json op-token-sig-seg "
+       "cid-b-prefix graph-name-fleet"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -69,3 +72,26 @@
            (id/sha256-hex (get actual "o"))))
     (is (= (str/join " " (id/did-derive-argv "/bin/kotoba" seed))
            (get actual "cmd")))))
+
+(deftest op-token-templates-match-host-preimages
+  (let [did "did:key:z-test"
+        cases {"h" "(jwt-header-json)"
+               "p" (str "(jwt-payload-json " (kotoba-literal did) ")")
+               "sig" "(op-token-sig-seg)"
+               "bp" "(cid-b-prefix)"
+               "fn" "(graph-name-fleet)"}
+        actual (compile-string-cases cases)
+        header (get actual "h")
+        payload (get actual "p")
+        token (id/op-token did)
+        parts (str/split token #"\.")]
+    (is (= "{\"alg\":\"HS256\",\"typ\":\"JWT\"}" header))
+    (is (= (str "{\"sub\":\"" did "\",\"exp\":9999999999}") payload))
+    (is (= "kotoba-cli-media" (get actual "sig")))
+    (is (= (id/b64url header) (first parts)))
+    (is (= (id/b64url payload) (second parts)))
+    (is (= (get actual "sig") (last parts)))
+    (is (= "b" (get actual "bp")))
+    (is (str/starts-with? (id/graph-cid (get actual "fn")) "b"))
+    (is (= "bafyreiawk4q375adm6eibq2ut6dhamgfw4syd2cphmw4juhbmn5g4rytmy"
+           (id/graph-cid (get actual "fn"))))))

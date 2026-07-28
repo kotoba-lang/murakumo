@@ -1,9 +1,12 @@
 (ns token-core
   (:export [version default-ttl claim-sub claim-scope claim-exp
-            expired? scope-allows? signing-input]))
+            expired? scope-allows? signing-input
+            digit-char nat-str i64-str encode-claims-json]))
 
-;; W6 pure-planner oracle — murakumo.token pure claims/scope core.
+;; W6 pure-planner oracle — murakumo.token pure claims/scope + wire JSON core.
 ;; HMAC / base64url / sign-verify stay host (javax / WebCrypto).
+;; encode-claims-json: fixed key order sub→scope→iat→exp (clj encode-claims
+;; pre-b64url string). No JSON escaping — same naive quote join as host clj.
 ;; Sentinel: has-sub/has-scope/has-exp 0 = nil (absent); ttl -1 = default 30d.
 ;; Parity: test/murakumo/token_kotoba_parity_test.clj
 
@@ -44,3 +47,28 @@
 
 (defn signing-input [payload-seg :string] :string
   (string-concat "mk1." payload-seg))
+
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+(defn encode-claims-json [sub :string scope :string iat :i64 exp :i64] :string
+  ;; Fixed key order matches murakumo.token/encode-claims clj branch before b64url.
+  ;; Callers must pass claim-sub / claim-scope resolved strings (no nil).
+  (let [a (string-concat "{\"sub\":\"" sub)
+        b (string-concat a "\",\"scope\":\"")
+        c (string-concat b scope)
+        d (string-concat c "\",\"iat\":")
+        e (string-concat d (i64-str iat))
+        f (string-concat e ",\"exp\":")]
+    (string-concat f (string-concat (i64-str exp) "}"))))
