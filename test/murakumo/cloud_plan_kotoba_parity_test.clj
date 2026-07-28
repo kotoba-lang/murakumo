@@ -36,7 +36,13 @@
        "is-flag-dash? is-positional-target? "
        "flag-cloud-value flag-fleet-value flag-target-value "
        "flag-from-value flag-to-value flag-capability-value "
-       "flag-driver-value flag-format-value flag-auth-key-value"))
+       "flag-driver-value flag-format-value flag-auth-key-value "
+       "cmd-plan cmd-records cmd-routes cmd-dial cmd-connect "
+       "cmd-relay cmd-bootstrap default-command-token command-token "
+       "flag-dash-prefix flag-cloud-prefix flag-fleet-prefix "
+       "flag-target-prefix flag-from-prefix flag-to-prefix "
+       "flag-capability-prefix flag-driver-prefix flag-format-prefix "
+       "flag-auth-key-prefix"))
 
 (def fleet
   {:fleet/name "test-fleet"
@@ -251,7 +257,17 @@
             "vcap" (str "(flag-capability-value " (kotoba-literal "--capability=live") ")")
             "vdr" (str "(flag-driver-value " (kotoba-literal "--driver=net") ")")
             "vfm" (str "(flag-format-value " (kotoba-literal "--format=edn") ")")
-            "vak" (str "(flag-auth-key-value " (kotoba-literal "--auth-key=secret") ")")})]
+            "vak" (str "(flag-auth-key-value " (kotoba-literal "--auth-key=secret") ")")
+            "cp" "(cmd-plan)"
+            "cr" "(cmd-records)"
+            "cd" "(cmd-dial)"
+            "cb" "(cmd-bootstrap)"
+            "dct" "(default-command-token)"
+            "ct1" (str "(command-token " (kotoba-literal "dial") ")")
+            "ct0" (str "(command-token " (kotoba-literal "--cloud=x") ")")
+            "fp" "(flag-cloud-prefix)"
+            "fdp" "(flag-dash-prefix)"
+            "fcap" "(flag-capability-prefix)"})]
     (is (= 1 (get i "p1")))
     (is (= 0 (get i "p0")))
     (is (= 1 (get i "r1")))
@@ -281,6 +297,22 @@
     (is (= "net" (get s "vdr")))
     (is (= "edn" (get s "vfm")))
     (is (= "secret" (get s "vak")))
+    (is (= cloud/cmd-plan (get s "cp")))
+    (is (= "plan" (get s "cp")))
+    (is (= cloud/cmd-records (get s "cr")))
+    (is (= cloud/cmd-dial (get s "cd")))
+    (is (= cloud/cmd-bootstrap (get s "cb")))
+    (is (= cloud/default-command-token (get s "dct")))
+    (is (= "plan" (get s "dct")))
+    (is (= (cloud/command-token "dial") (get s "ct1")))
+    (is (= "dial" (get s "ct1")))
+    (is (= "" (get s "ct0")))
+    (is (= (cloud/command-token "--cloud=x") (get s "ct0")))
+    (is (= cloud/flag-cloud-prefix (get s "fp")))
+    (is (= "--cloud=" (get s "fp")))
+    (is (= cloud/flag-dash-prefix (get s "fdp")))
+    (is (= cloud/flag-capability-prefix (get s "fcap")))
+    (is (= "--capability=" (get s "fcap")))
     (is (= {:command :records
             :cloud-path "prod.edn"
             :fleet-path "fleet-prod.edn"}
@@ -290,7 +322,10 @@
     (is (= {:command :dial :target "asher" :from :browser :capability :live}
            (select-keys
             (cloud/parse-flags ["dial" "asher" "--from=browser" "--capability=live"])
-            [:command :target :from :capability])))))
+            [:command :target :from :capability])))
+    (is (= :plan (:command (cloud/parse-flags []))))
+    (is (= :bootstrap
+           (:command (cloud/parse-flags ["bootstrap" "--format=edn"]))))))
 
 (deftest record-types-and-caps-match
   (let [s (compile-string-cases
