@@ -13,7 +13,17 @@
             dial-ok-title connect-ok-title relay-ok-title
             from-to-cap-reason authorized-line
             relay-fallback-line reason-line indent-argv-line
-            address-family-line policy-line skipped-reason-suffix]))
+            address-family-line policy-line skipped-reason-suffix
+            starts-with?
+            is-cmd-plan? is-cmd-records? is-cmd-routes?
+            is-cmd-dial? is-cmd-connect? is-cmd-relay? is-cmd-bootstrap?
+            is-flag-cloud? is-flag-fleet? is-flag-target?
+            is-flag-from? is-flag-to? is-flag-capability?
+            is-flag-driver? is-flag-format? is-flag-auth-key?
+            is-flag-dash? is-positional-target?
+            flag-cloud-value flag-fleet-value flag-target-value
+            flag-from-value flag-to-value flag-capability-value
+            flag-driver-value flag-format-value flag-auth-key-value]))
 
 ;; W6 pure-planner oracle — murakumo.cloud.plan scalar/string core (low).
 ;; graph-cid hashing, choose-relay sort, record maps stay cljc.
@@ -21,6 +31,7 @@
 ;; webtransport + generic transport endpoint URL fragments dual-source.
 ;; CLI presentation labels/line templates dual-source (width fmt stays host).
 ;; Summary address-family/policy lines dual-source (counts as i64).
+;; parse-flags command/flag classifiers dual-source (reduce fold stays host).
 ;; Parity: test/murakumo/cloud_plan_kotoba_parity_test.clj
 
 (defn default-driver [] :string "murakumo-overlay")
@@ -207,3 +218,100 @@
 (defn skipped-reason-suffix [reason :string] :string
   ;; host pads name column; this is the trailing " skipped reason=…" fragment
   (string-concat " skipped reason=" reason))
+
+;; ── residual parse-flags command/flag classifiers ───────────────────
+
+(defn starts-with? [s :string prefix :string] :i64
+  (let [n (string-byte-length s)
+        p (string-byte-length prefix)]
+    (if (< n p)
+      0
+      (if (string=? (string-substring s 0 p) prefix) 1 0))))
+
+(defn is-cmd-plan? [a :string] :i64
+  (if (string=? a "plan") 1 0))
+
+(defn is-cmd-records? [a :string] :i64
+  (if (string=? a "records") 1 0))
+
+(defn is-cmd-routes? [a :string] :i64
+  (if (string=? a "routes") 1 0))
+
+(defn is-cmd-dial? [a :string] :i64
+  (if (string=? a "dial") 1 0))
+
+(defn is-cmd-connect? [a :string] :i64
+  (if (string=? a "connect") 1 0))
+
+(defn is-cmd-relay? [a :string] :i64
+  (if (string=? a "relay") 1 0))
+
+(defn is-cmd-bootstrap? [a :string] :i64
+  (if (string=? a "bootstrap") 1 0))
+
+(defn is-flag-cloud? [a :string] :i64
+  (starts-with? a "--cloud="))
+
+(defn is-flag-fleet? [a :string] :i64
+  (starts-with? a "--fleet="))
+
+(defn is-flag-target? [a :string] :i64
+  (starts-with? a "--target="))
+
+(defn is-flag-from? [a :string] :i64
+  (starts-with? a "--from="))
+
+(defn is-flag-to? [a :string] :i64
+  (starts-with? a "--to="))
+
+(defn is-flag-capability? [a :string] :i64
+  (starts-with? a "--capability="))
+
+(defn is-flag-driver? [a :string] :i64
+  (starts-with? a "--driver="))
+
+(defn is-flag-format? [a :string] :i64
+  (starts-with? a "--format="))
+
+(defn is-flag-auth-key? [a :string] :i64
+  (starts-with? a "--auth-key="))
+
+(defn is-flag-dash? [a :string] :i64
+  (starts-with? a "--"))
+
+(defn is-positional-target? [a :string] :i64
+  ;; not a --flag → free target token
+  (if (= (is-flag-dash? a) 1) 0 1))
+
+(defn flag-value-after [a :string prefix-len :i64] :string
+  (let [n (string-byte-length a)]
+    (if (< n prefix-len)
+      ""
+      (string-substring a prefix-len n))))
+
+(defn flag-cloud-value [a :string] :string
+  (flag-value-after a 8))
+
+(defn flag-fleet-value [a :string] :string
+  (flag-value-after a 8))
+
+(defn flag-target-value [a :string] :string
+  (flag-value-after a 9))
+
+(defn flag-from-value [a :string] :string
+  (flag-value-after a 7))
+
+(defn flag-to-value [a :string] :string
+  (flag-value-after a 5))
+
+(defn flag-capability-value [a :string] :string
+  (flag-value-after a 13))
+
+(defn flag-driver-value [a :string] :string
+  (flag-value-after a 9))
+
+(defn flag-format-value [a :string] :string
+  (flag-value-after a 9))
+
+(defn flag-auth-key-value [a :string] :string
+  (flag-value-after a 11))

@@ -1262,7 +1262,15 @@
     (is (= "  address-family identity ; nodes 2 ; relays 1"
            (cplan/address-family-line "identity" 2 1)))
     (is (= "  policy default=deny allow=3" (cplan/policy-line "deny" 3)))
-    (is (= " skipped reason=down" (cplan/skipped-reason-suffix "down")))))
+    (is (= " skipped reason=down" (cplan/skipped-reason-suffix "down")))
+    (is (= :records
+           (:command (cplan/parse-flags ["records" "--cloud=p.edn"]))))
+    (is (= "p.edn"
+           (:cloud-path (cplan/parse-flags ["records" "--cloud=p.edn"]))))
+    (is (= :browser
+           (:from (cplan/parse-flags ["dial" "n" "--from=browser"]))))
+    (is (= :edn
+           (:format (cplan/parse-flags ["bootstrap" "--format=edn"]))))))
 
 (deftest overlay-cloud-prov-oracle-call-matches-live
   (let [k (:kir (compiler/compile-source (slurp "kotoba/overlay_keyring_core.kotoba")
@@ -1314,6 +1322,16 @@
            (cplan/unknown-node-line "x")))
     (is (= (oracle/call :cloud-plan 'address-family-line ["identity" 0 0])
            (cplan/address-family-line "identity" 0 0)))
+    (is (= (ir/execute c 'is-cmd-plan? ["plan"])
+           (oracle/call :cloud-plan 'is-cmd-plan? ["plan"])))
+    (is (= (ir/execute c 'is-flag-cloud? ["--cloud=x"])
+           (oracle/call :cloud-plan 'is-flag-cloud? ["--cloud=x"])))
+    (is (= (ir/execute c 'flag-cloud-value ["--cloud=prod.edn"])
+           (oracle/call :cloud-plan 'flag-cloud-value ["--cloud=prod.edn"])))
+    (is (= (ir/execute c 'is-positional-target? ["asher"])
+           (oracle/call :cloud-plan 'is-positional-target? ["asher"])))
+    (is (= 1 (oracle/call :cloud-plan 'is-cmd-dial? ["dial"])))
+    (is (= "prod.edn" (oracle/call :cloud-plan 'flag-cloud-value ["--cloud=prod.edn"])))
     (is (= (ir/execute pr 'multiaddr ["1.2.3.4" 4001])
            (oracle/call :provision-plan 'multiaddr ["1.2.3.4" 4001])))
     (is (= (ir/execute pr 'launch-status-command [])

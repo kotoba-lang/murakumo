@@ -5,16 +5,16 @@
 ;; packet plumbing; this namespace owns deterministic cloud records and routing
 ;; choices so the CLI can plan/publish them without an external VPN control plane.
 ;;
-;; W6 product-shell (ADR-260728-w6-cloud-summary-pure-oracle):
-;; defaults + region/score/endpoints + CLI presentation + summary
-;; address-family/policy lines DELEGATE to kotoba cloud_plan_core when oracle
+;; W6 product-shell (ADR-260728-w6-cloud-parse-flags-pure-oracle):
+;; defaults + endpoints + CLI presentation + summary lines + parse-flags
+;; command/flag classifiers DELEGATE to kotoba cloud_plan_core when oracle
 ;; is loadable (JVM classpath or cljs/nbb). Record assembly, choose-relay sort,
-;; width fmt / collection folds stay host. cljs mirrors remain fallback.
+;; width fmt / reduce fold stay host. cljs mirrors remain fallback.
 
 (ns murakumo.cloud.plan
   "Portable murakumo.cloud overlay planning.
-   W6 product-shell: defaults + endpoints + CLI/summary lines via cloud_plan_core
-   when oracle ready."
+   W6 product-shell: defaults + endpoints + CLI lines + flag classifiers
+   via cloud_plan_core when oracle ready."
   (:require [clojure.string :as str]
             [murakumo.config :as config]
             [murakumo.fleet.inventory :as inv]
@@ -157,6 +157,16 @@
 
 (defn- mirror-skipped-reason-suffix [reason]
   (str " skipped reason=" reason))
+
+(defn- mirror-starts-with? [s prefix]
+  (str/starts-with? (str s) (str prefix)))
+
+(defn- mirror-is-cmd [a cmd]
+  (= (str a) cmd))
+
+(defn- mirror-flag-value-after [a n]
+  (let [s (str a)]
+    (if (< (count s) n) "" (subs s n))))
 
 ;; ── dual-source defaults ─────────────────────────────────────────────
 
@@ -325,6 +335,114 @@
   (try-oracle
    #(o 'skipped-reason-suffix [(str reason)])
    #(mirror-skipped-reason-suffix reason)))
+
+;; ── dual-source parse-flags classifiers ──────────────────────────────
+
+(defn- flag1
+  "Oracle 0/1 predicate dual-source."
+  [export a mirror-thunk]
+  (try-oracle
+   #(= 1 (oracle/i64->host (o export [(str a)])))
+   mirror-thunk))
+
+(defn- is-cmd-plan? [a]
+  (flag1 'is-cmd-plan? a #(mirror-is-cmd a "plan")))
+
+(defn- is-cmd-records? [a]
+  (flag1 'is-cmd-records? a #(mirror-is-cmd a "records")))
+
+(defn- is-cmd-routes? [a]
+  (flag1 'is-cmd-routes? a #(mirror-is-cmd a "routes")))
+
+(defn- is-cmd-dial? [a]
+  (flag1 'is-cmd-dial? a #(mirror-is-cmd a "dial")))
+
+(defn- is-cmd-connect? [a]
+  (flag1 'is-cmd-connect? a #(mirror-is-cmd a "connect")))
+
+(defn- is-cmd-relay? [a]
+  (flag1 'is-cmd-relay? a #(mirror-is-cmd a "relay")))
+
+(defn- is-cmd-bootstrap? [a]
+  (flag1 'is-cmd-bootstrap? a #(mirror-is-cmd a "bootstrap")))
+
+(defn- is-flag-cloud? [a]
+  (flag1 'is-flag-cloud? a #(mirror-starts-with? a "--cloud=")))
+
+(defn- is-flag-fleet? [a]
+  (flag1 'is-flag-fleet? a #(mirror-starts-with? a "--fleet=")))
+
+(defn- is-flag-target? [a]
+  (flag1 'is-flag-target? a #(mirror-starts-with? a "--target=")))
+
+(defn- is-flag-from? [a]
+  (flag1 'is-flag-from? a #(mirror-starts-with? a "--from=")))
+
+(defn- is-flag-to? [a]
+  (flag1 'is-flag-to? a #(mirror-starts-with? a "--to=")))
+
+(defn- is-flag-capability? [a]
+  (flag1 'is-flag-capability? a #(mirror-starts-with? a "--capability=")))
+
+(defn- is-flag-driver? [a]
+  (flag1 'is-flag-driver? a #(mirror-starts-with? a "--driver=")))
+
+(defn- is-flag-format? [a]
+  (flag1 'is-flag-format? a #(mirror-starts-with? a "--format=")))
+
+(defn- is-flag-auth-key? [a]
+  (flag1 'is-flag-auth-key? a #(mirror-starts-with? a "--auth-key=")))
+
+(defn- is-flag-dash? [a]
+  (flag1 'is-flag-dash? a #(mirror-starts-with? a "--")))
+
+(defn- is-positional-target? [a]
+  (flag1 'is-positional-target? a #(not (mirror-starts-with? a "--"))))
+
+(defn- flag-cloud-value [a]
+  (try-oracle
+   #(o 'flag-cloud-value [(str a)])
+   #(mirror-flag-value-after a 8)))
+
+(defn- flag-fleet-value [a]
+  (try-oracle
+   #(o 'flag-fleet-value [(str a)])
+   #(mirror-flag-value-after a 8)))
+
+(defn- flag-target-value [a]
+  (try-oracle
+   #(o 'flag-target-value [(str a)])
+   #(mirror-flag-value-after a 9)))
+
+(defn- flag-from-value [a]
+  (try-oracle
+   #(o 'flag-from-value [(str a)])
+   #(mirror-flag-value-after a 7)))
+
+(defn- flag-to-value [a]
+  (try-oracle
+   #(o 'flag-to-value [(str a)])
+   #(mirror-flag-value-after a 5)))
+
+(defn- flag-capability-value [a]
+  (try-oracle
+   #(o 'flag-capability-value [(str a)])
+   #(mirror-flag-value-after a 13)))
+
+(defn- flag-driver-value [a]
+  (try-oracle
+   #(o 'flag-driver-value [(str a)])
+   #(mirror-flag-value-after a 9)))
+
+(defn- flag-format-value [a]
+  (try-oracle
+   #(o 'flag-format-value [(str a)])
+   #(mirror-flag-value-after a 9)))
+
+(defn- flag-auth-key-value [a]
+  (try-oracle
+   #(o 'flag-auth-key-value [(str a)])
+   #(mirror-flag-value-after a 11)))
 
 (defn merge-defaults [cloud]
   (merge-with (fn [a b]
@@ -758,26 +876,30 @@
      :bootstrap (bootstrap-lines plan opts)
      :plan (summary-lines plan))))
 
-(defn parse-flags [args]
+(defn parse-flags
+  "Parse cloud CLI argv. Command/flag classification dual-sourced via
+   cloud_plan_core; reduce fold + keyword mapping stay host."
+  [args]
   (reduce (fn [m arg]
             (cond
-              (= arg "plan") (assoc m :command :plan)
-              (= arg "records") (assoc m :command :records)
-              (= arg "routes") (assoc m :command :routes)
-              (= arg "dial") (assoc m :command :dial)
-              (= arg "connect") (assoc m :command :connect)
-              (= arg "relay") (assoc m :command :relay)
-              (= arg "bootstrap") (assoc m :command :bootstrap)
-              (str/starts-with? arg "--cloud=") (assoc m :cloud-path (subs arg 8))
-              (str/starts-with? arg "--fleet=") (assoc m :fleet-path (subs arg 8))
-              (str/starts-with? arg "--target=") (assoc m :target (subs arg 9))
-              (str/starts-with? arg "--from=") (assoc m :from (keyword (subs arg 7)))
-              (str/starts-with? arg "--to=") (assoc m :to (keyword (subs arg 5)))
-              (str/starts-with? arg "--capability=") (assoc m :capability (keyword (subs arg 13)))
-              (str/starts-with? arg "--driver=") (assoc m :driver (subs arg 9))
-              (str/starts-with? arg "--format=") (assoc m :format (keyword (subs arg 9)))
-              (str/starts-with? arg "--auth-key=") (assoc m :auth-key (subs arg 11))
-              (not (str/starts-with? arg "--")) (assoc m :target arg)
+              (is-cmd-plan? arg) (assoc m :command :plan)
+              (is-cmd-records? arg) (assoc m :command :records)
+              (is-cmd-routes? arg) (assoc m :command :routes)
+              (is-cmd-dial? arg) (assoc m :command :dial)
+              (is-cmd-connect? arg) (assoc m :command :connect)
+              (is-cmd-relay? arg) (assoc m :command :relay)
+              (is-cmd-bootstrap? arg) (assoc m :command :bootstrap)
+              (is-flag-cloud? arg) (assoc m :cloud-path (flag-cloud-value arg))
+              (is-flag-fleet? arg) (assoc m :fleet-path (flag-fleet-value arg))
+              (is-flag-target? arg) (assoc m :target (flag-target-value arg))
+              (is-flag-from? arg) (assoc m :from (keyword (flag-from-value arg)))
+              (is-flag-to? arg) (assoc m :to (keyword (flag-to-value arg)))
+              (is-flag-capability? arg) (assoc m :capability (keyword (flag-capability-value arg)))
+              (is-flag-driver? arg) (assoc m :driver (flag-driver-value arg))
+              (is-flag-format? arg) (assoc m :format (keyword (flag-format-value arg)))
+              (is-flag-auth-key? arg) (assoc m :auth-key (flag-auth-key-value arg))
+              (is-positional-target? arg) (assoc m :target arg)
+              (is-flag-dash? arg) m
               :else m))
           {:command :plan
            :cloud-path default-cloud-path
