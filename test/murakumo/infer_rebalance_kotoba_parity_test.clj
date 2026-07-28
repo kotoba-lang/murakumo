@@ -14,7 +14,10 @@
        "demand-audio demand-postproc demand-inc demand-to-pool-pack "
        "workers-count seats-for-online seats-equal pipeline-effective-gb "
        "node-online? move-needed assigned-from-seats "
-       "rebalance-reason-code rebalance-reason-name"))
+       "rebalance-reason-code rebalance-reason-name "
+       "digit-char nat-str i64-str pool-code pool-name "
+       "seat-order-pack order-nth take-end take-count "
+       "pipeline-note rebalance-reason-detail"))
 
 (def largest-remainder
   "Private cljc largest-remainder (var-quote for oracle parity)."
@@ -245,11 +248,66 @@
         names (compile-string-cases
                {"n0" "(rebalance-reason-name 0)"
                 "n1" "(rebalance-reason-name 1)"
-                "n2" "(rebalance-reason-name 2)"})]
+                "n2" "(rebalance-reason-name 2)"
+                "d2" "(rebalance-reason-detail 2 3)"
+                "d0" "(rebalance-reason-detail 0 0)"
+                "pn" "(pipeline-note 3 10)"})]
     (is (= 1 (get online "up")))
     (is (= 0 (get online "down")))
     (is (= 0 (get online "empty")))
     (is (= "stable" (get names "n0")))
     (is (= "initial placement" (get names "n1")))
-    (is (= "demand-shift" (get names "n2")))))
+    (is (= "demand-shift" (get names "n2")))
+    (is (= "3 node(s) re-placed by demand shift" (get names "d2")))
+    (is (= "stable" (get names "d0")))
+    (is (= "text pool sharded as a 3-way pipeline (~30GB effective, ceiling 10GB/node)"
+           (get names "pn")))))
+
+(deftest seat-order-and-take-slices
+  (let [actual (compile-i64-cases
+                {;; seats text=5 media=3 post=2 → order 0,1,2
+                 "o0" "(order-nth (seat-order-pack 5 3 2) 0)"
+                 "o1" "(order-nth (seat-order-pack 5 3 2) 1)"
+                 "o2" "(order-nth (seat-order-pack 5 3 2) 2)"
+                 ;; media heaviest
+                 "m0" "(order-nth (seat-order-pack 1 9 2) 0)"
+                 "m1" "(order-nth (seat-order-pack 1 9 2) 1)"
+                 "m2" "(order-nth (seat-order-pack 1 9 2) 2)"
+                 ;; equal seats → stable index order text,media,post
+                 "e0" "(order-nth (seat-order-pack 2 2 2) 0)"
+                 "e1" "(order-nth (seat-order-pack 2 2 2) 1)"
+                 "e2" "(order-nth (seat-order-pack 2 2 2) 2)"
+                 "te" "(take-end 0 2 5)"
+                 "te2" "(take-end 2 3 5)"
+                 "te3" "(take-end 4 3 5)"
+                 "tc" "(take-count 0 2)"
+                 "pc" (str "(pool-code \"media-pool\")")
+                 "pc2" (str "(pool-code \"text-pool\")")})
+        names (compile-string-cases
+               {"pn0" "(pool-name 0)"
+                "pn1" "(pool-name 1)"
+                "pn2" "(pool-name 2)"})]
+    (is (= 0 (get actual "o0")))
+    (is (= 1 (get actual "o1")))
+    (is (= 2 (get actual "o2")))
+    (is (= 1 (get actual "m0")))
+    (is (= 2 (get actual "m1")))
+    (is (= 0 (get actual "m2")))
+    (is (= 0 (get actual "e0")))
+    (is (= 1 (get actual "e1")))
+    (is (= 2 (get actual "e2")))
+    (is (= 2 (get actual "te")))
+    (is (= 5 (get actual "te2")))
+    (is (= 5 (get actual "te3")))
+    (is (= 2 (get actual "tc")))
+    (is (= 1 (get actual "pc")))
+    (is (= 0 (get actual "pc2")))
+    (is (= "text-pool" (get names "pn0")))
+    (is (= "media-pool" (get names "pn1")))
+    (is (= "postproc-pool" (get names "pn2")))
+    (testing "cljc sort-by order matches seat-order-pack"
+      (let [seats {:text-pool 1 :media-pool 9 :postproc-pool 2}
+            ordered (mapv first (sort-by (comp - val) seats))]
+        (is (= [:media-pool :postproc-pool :text-pool] ordered))
+        (is (= [1 2 0] [(get actual "m0") (get actual "m1") (get actual "m2")]))))))
 

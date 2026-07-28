@@ -10,7 +10,10 @@
             workers-count seats-for-online seats-equal
             pipeline-effective-gb node-online?
             move-needed assigned-from-seats
-            rebalance-reason-code rebalance-reason-name]))
+            rebalance-reason-code rebalance-reason-name
+            digit-char nat-str i64-str
+            pool-code pool-name seat-order-pack order-nth
+            take-end take-count pipeline-note rebalance-reason-detail]))
 
 ;; W6 pure-planner oracle — murakumo.infer.rebalance capacity + 3-pool
 ;; largest-remainder seat apportionment (map-fold product vertical).
@@ -20,6 +23,7 @@
 ;; classify-run-flags: one-run class tag for demand-from-runs building block.
 ;; demand-*: class-count pack (base 4096, 5 lanes) + demand-inc reduce step
 ;;   + demand-to-pool-pack → pool-demand-pack (demand-from-runs fold core).
+;; seat-order-pack / take-end: pure assignment order for node-id slice (vectors stay host).
 
 ;;
 ;; largest-remainder-3: integer form of cljc `largest-remainder` for the
@@ -307,4 +311,92 @@
     (if (= code 2)
       "demand-shift"
       "stable")))
+
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+(defn pool-code [name :string] :i64
+  ;; 0 text-pool, 1 media-pool, 2 postproc-pool, -1 unknown
+  (if (string=? name "text-pool")
+    0
+    (if (string=? name "media-pool")
+      1
+      (if (string=? name "postproc-pool") 2 -1))))
+
+(defn pool-name [code :i64] :string
+  (if (= code 0)
+    "text-pool"
+    (if (= code 1)
+      "media-pool"
+      (if (= code 2) "postproc-pool" "unknown"))))
+
+(defn seat-of [code :i64 st :i64 sm :i64 sp :i64] :i64
+  (if (= code 0) st (if (= code 1) sm sp)))
+
+(defn before-pool? [ia :i64 ib :i64 st :i64 sm :i64 sp :i64] :i64
+  ;; sort-by (comp - val): higher seats first; ties → lower index first (stable text<media<post)
+  (let [sa (seat-of ia st sm sp)
+        sb (seat-of ib st sm sp)]
+    (if (< sb sa)
+      1
+      (if (< sa sb)
+        0
+        (if (< ia ib) 1 0)))))
+
+(defn seat-order-pack [st :i64 sm :i64 sp :i64] :i64
+  ;; pack permutation of pool codes 0,1,2 as a0 + a1*4 + a2*16 (desc seats)
+  ;; bubble-sort three indices with before-pool?
+  (let [p0 (if (= (before-pool? 0 1 st sm sp) 1) 0 1)
+        p1 (if (= (before-pool? 0 1 st sm sp) 1) 1 0)
+        ;; insert 2 after comparing with p1 then p0
+        q1 (if (= (before-pool? p1 2 st sm sp) 1) p1 2)
+        q2 (if (= (before-pool? p1 2 st sm sp) 1) 2 p1)
+        r0 (if (= (before-pool? p0 q1 st sm sp) 1) p0 q1)
+        r1 (if (= (before-pool? p0 q1 st sm sp) 1) q1 p0)]
+    (+ r0 (+ (* r1 4) (* q2 16)))))
+
+(defn order-nth [order-pack :i64 n :i64] :i64
+  (if (= n 0)
+    (rem64 order-pack 4)
+    (if (= n 1)
+      (rem64 (quot order-pack 4) 4)
+      (quot order-pack 16))))
+
+(defn take-end [start :i64 k :i64 remaining :i64] :i64
+  ;; exclusive end index for (take k rem) from start within [0, remaining)
+  (min2 remaining (+ start k)))
+
+(defn take-count [start :i64 end :i64] :i64
+  (max2 0 (- end start)))
+
+(defn pipeline-note [text-n :i64 usable :i64] :string
+  ;; cljc target-allocation pipeline :note
+  (string-concat
+   "text pool sharded as a "
+   (string-concat
+    (i64-str text-n)
+    (string-concat
+     "-way pipeline (~"
+     (string-concat
+      (i64-str (* usable text-n))
+      (string-concat
+       "GB effective, ceiling "
+       (string-concat (i64-str (shard-ceiling-gb)) "GB/node)")))))))
+
+(defn rebalance-reason-detail [code :i64 move-count :i64] :string
+  ;; cljc: (str (count moves) " node(s) re-placed by demand shift")
+  (if (= code 2)
+    (string-concat (i64-str move-count) " node(s) re-placed by demand shift")
+    (rebalance-reason-name code)))
 
