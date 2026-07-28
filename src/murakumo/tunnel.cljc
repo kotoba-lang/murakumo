@@ -10,7 +10,7 @@
 ;;   3. connection multiplexing — optional ControlMaster reuse, which removes
 ;;      the TCP+auth handshake from every command after the first
 ;;
-;; W6 product-shell authority (ADR-260728-w6-tunnel-argv-pure-oracle):
+;; W6 product-shell authority (ADR-260728-w6-tunnel-forward-pure-oracle):
 ;; pure string/i64 helpers + ssh/scp bin/flag fragments DELEGATE to precompiled
 ;; kotoba/tunnel_core.kotoba → resources/murakumo/oracle/tunnel_core.kir.edn
 ;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
@@ -93,6 +93,18 @@
 (def ^:private mirror-o-flag "-o")
 (def ^:private mirror-O-flag "-O")
 (def ^:private mirror-exit-ctl "exit")
+(def ^:private mirror-pgrep-bin "pgrep")
+(def ^:private mirror-pkill-bin "pkill")
+(def ^:private mirror-f-flag "-f")
+(def ^:private mirror-fN-flag "-fN")
+(def ^:private mirror-L-flag "-L")
+(def ^:private mirror-null-redirect " >/dev/null 2>&1")
+(def ^:private mirror-or-sep " || ")
+(def ^:private mirror-settle-sleep "sleep 0.3; ")
+(def ^:private mirror-pkill-suffix " 2>/dev/null; ")
+(def ^:private mirror-localhost-colon ":localhost:")
+(def ^:private mirror-curl-prefix "curl -s -m 5 ")
+(def ^:private mirror-curl-stderr-redirect " 2>/dev/null")
 
 (defn- mirror-remote-curl-command [url]
   (str "curl -s -m 5 " url " 2>/dev/null"))
@@ -133,6 +145,31 @@
 (def exit-ctl
   "ssh -O exit control verb. Kotoba `exit-ctl` when ready."
   (try-oracle #(o 'exit-ctl []) (fn [] mirror-exit-ctl)))
+
+(def pgrep-bin
+  (try-oracle #(o 'pgrep-bin []) (fn [] mirror-pgrep-bin)))
+(def pkill-bin
+  (try-oracle #(o 'pkill-bin []) (fn [] mirror-pkill-bin)))
+(def f-flag
+  (try-oracle #(o 'f-flag []) (fn [] mirror-f-flag)))
+(def fN-flag
+  (try-oracle #(o 'fN-flag []) (fn [] mirror-fN-flag)))
+(def L-flag
+  (try-oracle #(o 'L-flag []) (fn [] mirror-L-flag)))
+(def null-redirect
+  (try-oracle #(o 'null-redirect []) (fn [] mirror-null-redirect)))
+(def or-sep
+  (try-oracle #(o 'or-sep []) (fn [] mirror-or-sep)))
+(def settle-sleep
+  (try-oracle #(o 'settle-sleep []) (fn [] mirror-settle-sleep)))
+(def pkill-suffix
+  (try-oracle #(o 'pkill-suffix []) (fn [] mirror-pkill-suffix)))
+(def localhost-colon
+  (try-oracle #(o 'localhost-colon []) (fn [] mirror-localhost-colon)))
+(def curl-prefix
+  (try-oracle #(o 'curl-prefix []) (fn [] mirror-curl-prefix)))
+(def curl-stderr-redirect
+  (try-oracle #(o 'curl-stderr-redirect []) (fn [] mirror-curl-stderr-redirect)))
 
 (defn- batch-mode-opt []
   (try-oracle #(o 'batch-mode-opt []) mirror-batch-mode-opt))

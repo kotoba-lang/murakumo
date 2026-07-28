@@ -610,7 +610,22 @@
     (is (= "exit" tunnel/exit-ctl))
     (is (= tunnel/ssh-bin (first (tunnel/ssh-argv "asher" "true" {:wrap? false}))))
     (is (= tunnel/scp-bin (first (tunnel/scp-argv "asher" "a" "b"))))
-    (is (= tunnel/exit-ctl (nth (tunnel/close-master-argv "h" "/c") 4)))))
+    (is (= tunnel/exit-ctl (nth (tunnel/close-master-argv "h" "/c") 4)))
+    (is (= "pgrep" tunnel/pgrep-bin))
+    (is (= "pkill" tunnel/pkill-bin))
+    (is (= "-fN" tunnel/fN-flag))
+    (is (= "-L" tunnel/L-flag))
+    (is (str/starts-with?
+         (tunnel/ensure-forward-command 18099 8077 "asher")
+         "pgrep -f '18099:localhost:8077 asher'"))
+    (is (str/includes?
+         (tunnel/ensure-forward-command 18099 8077 "asher")
+         "|| ssh -o BatchMode=yes -fN -L 18099:localhost:8077 asher"))
+    (is (str/starts-with?
+         (tunnel/replace-forward-command 1 2 "h")
+         "pkill -f '1:localhost'"))
+    (is (= "curl -s -m 5 http://x 2>/dev/null"
+           (tunnel/remote-curl-command "http://x")))))
 
 (deftest tunnel-oracle-call-matches-live-compile
   (let [live (:kir (compiler/compile-source (slurp "kotoba/tunnel_core.kotoba")
@@ -637,7 +652,19 @@
     (is (= (ir/execute live 'scp-dest ["h" "d"])
            (oracle/call :tunnel 'scp-dest ["h" "d"])))
     (is (= (ir/execute live 'ensure-forward-command [1 2 "h"])
-           (oracle/call :tunnel 'ensure-forward-command [1 2 "h"])))))
+           (oracle/call :tunnel 'ensure-forward-command [1 2 "h"])))
+    (is (= (ir/execute live 'forward-spec [18099 8077])
+           (oracle/call :tunnel 'forward-spec [18099 8077])))
+    (is (= (ir/execute live 'ssh-forward-prefix [])
+           (oracle/call :tunnel 'ssh-forward-prefix [])))
+    (is (= (ir/execute live 'pgrep-bin [])
+           (oracle/call :tunnel 'pgrep-bin [])))
+    (is (= (ir/execute live 'curl-prefix [])
+           (oracle/call :tunnel 'curl-prefix [])))
+    (is (= (oracle/call :tunnel 'ensure-forward-command [18099 8077 "asher"])
+           (tunnel/ensure-forward-command 18099 8077 "asher")))
+    (is (= (oracle/call :tunnel 'replace-forward-command [1 2 "h"])
+           (tunnel/replace-forward-command 1 2 "h")))))
 
 (deftest tunnel-precompiled-kir-does-not-drift
   (let [live (:kir (compiler/compile-source (slurp "kotoba/tunnel_core.kotoba")
