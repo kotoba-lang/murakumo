@@ -6,7 +6,12 @@
             [murakumo.infer.rebalance :as rb]))
 
 (def port-source (slurp "kotoba/infer_rebalance_core.kotoba"))
-(def export-prefix "shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class")
+(def export-prefix
+  "shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class lane-base largest-remainder-3 seats-text seats-media seats-postproc")
+
+(def largest-remainder
+  "Private cljc largest-remainder (var-quote for oracle parity)."
+  @(var murakumo.infer.rebalance/largest-remainder))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -32,6 +37,12 @@
                 (str "\n" (str/join "\n" defs)))
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
+
+(defn- unpack [packed]
+  (let [b 65536]
+    {:text-pool (mod packed b)
+     :media-pool (mod (quot packed b) b)
+     :postproc-pool (quot packed (* b b))}))
 
 (deftest usable-gb-matches-node-capacity
   (let [actual (compile-i64-cases
@@ -59,3 +70,37 @@
                   "audio" "media-pool" "postproc" "postproc-pool" "other" "text-pool"}]
     (doseq [[i c] (map-indexed vector classes)]
       (is (= (get expected c) (get actual (str "p_" i)))))))
+
+(deftest largest-remainder-3-matches-cljc-map-fold
+  (let [cases [["a" 10 5 3 2 1]
+               ["b" 7 1 1 1 1]
+               ["c" 5 10 0 0 1]
+               ["d" 0 1 1 1 1]
+               ["e" 9 0 0 0 1]
+               ["f" 3 1 1 1 1]
+               ["g" 20 7 2 1 1]
+               ["h" 4 1 1 1 2]
+               ["i" 11 4 4 2 1]]
+        kotoba-cases (into {}
+                           (map (fn [[label total wt wm wp floor]]
+                                  [label (str "(largest-remainder-3 "
+                                              total " " wt " " wm " " wp " " floor ")")])
+                                cases))
+        actual (compile-i64-cases
+                (merge kotoba-cases
+                       {"lane" "(lane-base)"
+                        ;; unpack one known pack: a → text 5 media 3 post 2
+                        "ut" "(seats-text (largest-remainder-3 10 5 3 2 1))"
+                        "um" "(seats-media (largest-remainder-3 10 5 3 2 1))"
+                        "up" "(seats-postproc (largest-remainder-3 10 5 3 2 1))"}))]
+    (is (= 65536 (get actual "lane")))
+    (is (= 5 (get actual "ut")))
+    (is (= 3 (get actual "um")))
+    (is (= 2 (get actual "up")))
+    (doseq [[label total wt wm wp floor] cases]
+      (let [cljc (largest-remainder total
+                                    {:text-pool wt :media-pool wm :postproc-pool wp}
+                                    floor)
+            packed (get actual label)
+            got (unpack packed)]
+        (is (= cljc got) (str label " cljc=" cljc " kotoba=" got " packed=" packed))))))

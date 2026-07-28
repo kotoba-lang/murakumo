@@ -1,10 +1,18 @@
 (ns infer-rebalance-core
-  (:export [shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class]))
+  (:export [shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class
+            lane-base largest-remainder-3
+            seats-text seats-media seats-postproc]))
 
-;; W6 pure-planner oracle — murakumo.infer.rebalance capacity scalar core.
-;; demand folds, largest-remainder seats, rebalance moves stay cljc.
-;; usable-gb: min(ceiling, max(0, ram - 6)) matching node-capacity.
-;; pool-for-class: text|image|video|audio|postproc → pool name string.
+;; W6 pure-planner oracle — murakumo.infer.rebalance capacity + 3-pool
+;; largest-remainder seat apportionment (map-fold product vertical).
+;; demand-from-runs folds, rebalance moves / node placement stay cljc.
+;;
+;; largest-remainder-3: integer form of cljc `largest-remainder` for the
+;; fixed pools text/media/postproc (weights wt,wm,wp). Floor applied only
+;; to active (weight>0) pools; inactive stay 0. Tie-break for remainder
+;; seats uses fixed order text < media < postproc (array-map insertion).
+;; Packing via base-65536 digits (no bit-shift; guest arithmetic subset):
+;;   packed = text + media*B + postproc*B*B, B=65536
 ;; Parity: test/murakumo/infer_rebalance_kotoba_parity_test.clj
 
 (defn shard-ceiling-gb [] :i64 10)
@@ -12,14 +20,12 @@
 (defn os-kv-headroom-gb [] :i64 6)
 
 (defn usable-gb [ram-gb :i64] :i64
-  ;; cljc: (min shard-ceiling-gb (max 0 (- ram 6)))
   (let [raw (- ram-gb 6)
         floored (if (< raw 0) 0 raw)
         ceil (shard-ceiling-gb)]
     (if (< floored ceil) floored ceil)))
 
 (defn pool-for-class [cls :string] :string
-  ;; cljc class->pool
   (if (string=? cls "text")
     "text-pool"
     (if (string=? cls "postproc")
@@ -29,3 +35,120 @@
               (if (string=? cls "audio") 1 0)))
         "media-pool"
         "text-pool"))))
+
+(defn lane-base [] :i64 65536)
+
+(defn rem64 [a :i64 b :i64] :i64
+  (- a (* (quot a b) b)))
+
+(defn seats-text [packed :i64] :i64
+  (rem64 packed (lane-base)))
+
+(defn seats-media [packed :i64] :i64
+  (rem64 (quot packed (lane-base)) (lane-base)))
+
+(defn seats-postproc [packed :i64] :i64
+  (quot packed (* (lane-base) (lane-base))))
+
+(defn pack3 [t :i64 m :i64 p :i64] :i64
+  (let [b (lane-base)]
+    (+ t (+ (* m b) (* p (* b b))))))
+
+(defn weight-pos? [w :i64] :i64
+  (if (< 0 w) 1 0))
+
+(defn count-active [wt :i64 wm :i64 wp :i64] :i64
+  (+ (weight-pos? wt) (+ (weight-pos? wm) (weight-pos? wp))))
+
+(defn min2 [a :i64 b :i64] :i64
+  (if (< a b) a b))
+
+(defn max2 [a :i64 b :i64] :i64
+  (if (< a b) b a))
+
+(defn better-bump? [rem-a :i64 idx-a :i64 rem-b :i64 idx-b :i64] :i64
+  (if (< rem-b rem-a)
+    1
+    (if (< rem-a rem-b)
+      0
+      (if (< idx-a idx-b) 1 0))))
+
+;; Pick best among three optional candidates (ok=1 means eligible).
+;; Returns 0|1|2 or -1. Arity 5: ok-t, ok-m, ok-p, rem-packed, unused.
+;; rem-packed uses same base-65536 packing as seats.
+(defn pick-bump-3 [ok-t :i64 ok-m :i64 ok-p :i64 rem-packed :i64 _pad :i64] :i64
+  (let [rt (seats-text rem-packed)
+        rm (seats-media rem-packed)
+        rp (seats-postproc rem-packed)]
+    (if (= ok-t 0)
+      (if (= ok-m 0)
+        (if (= ok-p 0) -1 2)
+        (if (= ok-p 0)
+          1
+          (if (= (better-bump? rm 1 rp 2) 1) 1 2)))
+      (if (= ok-m 0)
+        (if (= ok-p 0)
+          0
+          (if (= (better-bump? rt 0 rp 2) 1) 0 2))
+        (let [win-tm (if (= (better-bump? rt 0 rm 1) 1) 0 1)
+              r-win (if (= win-tm 0) rt rm)
+              i-win win-tm]
+          (if (= ok-p 0)
+            win-tm
+            (if (= (better-bump? r-win i-win rp 2) 1) win-tm 2)))))))
+
+(defn ok-for [active :i64 bumped :i64] :i64
+  ;; active and bumped are 0|1 flags
+  (if (if (= active 1) (if (= bumped 0) 1 0) 0) 1 0))
+
+(defn largest-remainder-3 [total :i64 wt :i64 wm :i64 wp :i64 floor :i64] :i64
+  (let [at (weight-pos? wt)
+        am (weight-pos? wm)
+        ap (weight-pos? wp)
+        n-active (count-active wt wm wp)]
+    (if (if (= total 0) 1 (if (= n-active 0) 1 0))
+      (pack3 0 0 0)
+      (let [eff-floor (min2 floor (quot total n-active))
+            bt (if (= at 1) eff-floor 0)
+            bm (if (= am 1) eff-floor 0)
+            bp (if (= ap 1) eff-floor 0)
+            left0 (- total (+ bt (+ bm bp)))
+            left (max2 0 left0)
+            sumw (+ (if (= at 1) wt 0)
+                    (+ (if (= am 1) wm 0)
+                       (if (= ap 1) wp 0)))
+            pt (if (= at 1) (* left wt) 0)
+            pm (if (= am 1) (* left wm) 0)
+            pp (if (= ap 1) (* left wp) 0)
+            ft (if (= at 1) (quot pt sumw) 0)
+            fm (if (= am 1) (quot pm sumw) 0)
+            fp (if (= ap 1) (quot pp sumw) 0)
+            rt (if (= at 1) (rem64 pt sumw) 0)
+            rm (if (= am 1) (rem64 pm sumw) 0)
+            rp (if (= ap 1) (rem64 pp sumw) 0)
+            assigned (+ ft (+ fm fp))
+            extra (- left assigned)
+            rem-packed (pack3 rt rm rp)
+            ;; bump 0
+            b0 (if (< 0 extra)
+                 (pick-bump-3 (ok-for at 0) (ok-for am 0) (ok-for ap 0) rem-packed 0)
+                 -1)
+            bt0 (if (= b0 0) 1 0)
+            bm0 (if (= b0 1) 1 0)
+            bp0 (if (= b0 2) 1 0)
+            b1 (if (< 1 extra)
+                 (pick-bump-3 (ok-for at bt0) (ok-for am bm0) (ok-for ap bp0) rem-packed 0)
+                 -1)
+            bt1 (if (= b1 0) 1 bt0)
+            bm1 (if (= b1 1) 1 bm0)
+            bp1 (if (= b1 2) 1 bp0)
+            b2 (if (< 2 extra)
+                 (pick-bump-3 (ok-for at bt1) (ok-for am bm1) (ok-for ap bp1) rem-packed 0)
+                 -1)
+            bump-t (if (if (= b0 0) 1 (if (= b1 0) 1 (if (= b2 0) 1 0))) 1 0)
+            bump-m (if (if (= b0 1) 1 (if (= b1 1) 1 (if (= b2 1) 1 0))) 1 0)
+            bump-p (if (if (= b0 2) 1 (if (= b1 2) 1 (if (= b2 2) 1 0))) 1 0)
+            st (+ bt (+ ft bump-t))
+            sm (+ bm (+ fm bump-m))
+            sp (+ bp (+ fp bump-p))]
+        (pack3 st sm sp)))))
