@@ -5,11 +5,12 @@
             [kotoba.kir :as ir]
             [murakumo.cloud.plan :as cloud]
             [murakumo.identity :as identity]
-            [murakumo.provision.plan :as provision]))
+            [murakumo.provision.plan :as provision]
+            [murakumo.fleet.inventory :as inv]))
 
 (def port-source (slurp "kotoba/cloud_plan_core.kotoba"))
 (def export-prefix
-  "default-driver default-cloud-name default-cloud-domain default-cloud-graph default-auth-key-env overlay-version digit-char nat-str i64-str node-region relay-score overlay-id-input node-id-input quic-endpoint webrtc-endpoint relay-endpoint-url")
+  "default-driver default-cloud-name default-cloud-domain default-cloud-graph default-auth-key-env overlay-version digit-char nat-str i64-str node-region relay-score overlay-id-input node-id-input quic-endpoint webrtc-endpoint relay-endpoint-url webtransport-endpoint transport-endpoint")
 
 (def fleet
   {:fleet/name "test-fleet"
@@ -98,7 +99,11 @@
                  "qe" (str "(quic-endpoint " (kotoba-literal "asher") " " p2p ")")
                  "we" (str "(webrtc-endpoint " (kotoba-literal "asher") " " p2p ")")
                  "ru" (str "(relay-endpoint-url " (kotoba-literal "relay://jp") " "
-                           (kotoba-literal nid) ")")})]
+                           (kotoba-literal nid) ")")
+                 "wt" (str "(webtransport-endpoint " (kotoba-literal "asher") " "
+                           (inv/node-port fleet node) ")")
+                 "te" (str "(transport-endpoint " (kotoba-literal "custom") " "
+                           (kotoba-literal "asher") ")")})]
     (is (= "test-overlay" (get actual "oi")))
     (is (= (identity/graph-cid (get actual "oi")) oid))
     (is (= "murakumo.cloud" (get actual "oi0")))
@@ -106,4 +111,8 @@
     (is (= (identity/graph-cid (get actual "ni")) nid))
     (is (= (:endpoint ep) (get actual "qe")))
     (is (= (:endpoint we) (get actual "we")))
-    (is (= (:endpoint re) (get actual "ru")))))
+    (is (= (:endpoint re) (get actual "ru")))
+    (let [wt (cloud/direct-endpoint spec fleet node :webtransport)
+          te (cloud/direct-endpoint spec fleet node :custom)]
+      (is (= (:endpoint wt) (get actual "wt")))
+      (is (= (:endpoint te) (get actual "te"))))))
