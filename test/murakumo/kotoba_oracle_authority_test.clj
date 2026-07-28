@@ -1430,7 +1430,20 @@
       (is (= :direct (:via path))))
     (let [p {:direct [{:endpoint "quic://a"}] :relay {:endpoint "r"} :health :down}
           path (opeer/choose-path p)]
-      (is (= :relay (:via path))))))
+      (is (= :relay (:via path))))
+    (is (= "unknown" opeer/health-unknown))
+    (is (= "seen" opeer/health-seen))
+    (is (= "down" opeer/health-down))
+    (is (= "direct" opeer/via-direct))
+    (is (= "relay" opeer/via-relay))
+    (is (= (keyword opeer/via-direct)
+           (:via (opeer/choose-path
+                  {:direct [{:endpoint "q"}] :relay {:endpoint "r"}
+                   :health (keyword opeer/health-seen)}))))
+    (is (= (keyword opeer/via-relay)
+           (:via (opeer/choose-path
+                  {:direct [{:endpoint "q"}] :relay {:endpoint "r"}
+                   :health (keyword opeer/health-down)}))))))
 
 (deftest product-shell-cloud-provision-uses-oracle
   (testing "provision constants + multiaddr + shell pure"
@@ -1596,7 +1609,22 @@
              (oracle/call :overlay-peer 'choose-via [direct "unknown" relay])))
       (is (= "direct" (oracle/call :overlay-peer 'choose-via [direct "unknown" relay])))
       (is (= "relay" (oracle/call :overlay-peer 'choose-via [direct "down" relay])))
-      (is (= "" (oracle/call :overlay-peer 'choose-via [none-s "unknown" none-s]))))
+      (is (= "" (oracle/call :overlay-peer 'choose-via [none-s "unknown" none-s])))
+      (is (= (ir/execute pe 'health-down [])
+             (oracle/call :overlay-peer 'health-down [])))
+      (is (= (oracle/call :overlay-peer 'health-down []) opeer/health-down))
+      (is (= (ir/execute pe 'via-direct [])
+             (oracle/call :overlay-peer 'via-direct [])))
+      (is (= (oracle/call :overlay-peer 'via-direct []) opeer/via-direct))
+      (is (= (ir/execute pe 'via-relay [])
+             (oracle/call :overlay-peer 'via-relay [])))
+      (is (= (oracle/call :overlay-peer 'via-relay []) opeer/via-relay))
+      (is (= (oracle/call :overlay-peer 'choose-via
+                          [direct opeer/health-down relay])
+             opeer/via-relay))
+      (is (= (oracle/call :overlay-peer 'choose-via
+                          [direct opeer/health-seen relay])
+             opeer/via-direct)))
     (is (= (ir/execute s 'advance-seq [3])
            (oracle/call :overlay-stream 'advance-seq [3])))
     (is (= (ir/execute c 'node-region ["" "" ""])

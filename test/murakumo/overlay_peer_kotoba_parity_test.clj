@@ -37,12 +37,14 @@
 
 (defn- project-choose [peer]
   (let [paths (peer/candidate-paths peer)
-        direct? (boolean (some #(= :direct (:via %)) paths))
-        relay? (boolean (some #(= :relay (:via %)) paths))
-        health (name (or (:health peer) :unknown))
+        direct-kw (keyword peer/via-direct)
+        relay-kw (keyword peer/via-relay)
+        direct? (boolean (some #(= direct-kw (:via %)) paths))
+        relay? (boolean (some #(= relay-kw (:via %)) paths))
+        health (name (or (:health peer) (keyword peer/health-unknown)))
         via (some-> (peer/choose-path peer) :via name)]
-    {:direct (when direct? "direct")
-     :relay (when relay? "relay")
+    {:direct (when direct? peer/via-direct)
+     :relay (when relay? peer/via-relay)
      :health health
      :expected (or via "")}))
 
@@ -64,10 +66,15 @@
         labels (compile-string-cases
                 {"hu" "(health-unknown)" "hs" "(health-seen)" "hd" "(health-down)"
                  "vd" "(via-direct)" "vr" "(via-relay)"})]
+    (is (= peer/health-unknown (get labels "hu")))
     (is (= "unknown" (get labels "hu")))
+    (is (= peer/health-seen (get labels "hs")))
     (is (= "seen" (get labels "hs")))
+    (is (= peer/health-down (get labels "hd")))
     (is (= "down" (get labels "hd")))
+    (is (= peer/via-direct (get labels "vd")))
     (is (= "direct" (get labels "vd")))
+    (is (= peer/via-relay (get labels "vr")))
     (is (= "relay" (get labels "vr")))
     (doseq [[i peer] (map-indexed vector corpus)]
       (let [x (project-choose peer)]
