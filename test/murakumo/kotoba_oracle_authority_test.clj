@@ -34,6 +34,9 @@
             [murakumo.infer.moe :as moe]
             [murakumo.infer.rebalance :as reb]
             [murakumo.infer.relay :as relay]
+            [murakumo.deploy.plan :as dplan]
+            [murakumo.connect :as conn]
+            [murakumo.component-authority :as cauth]
             [murakumo.persist :as persist]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
@@ -951,3 +954,60 @@
         shipped (edn/read-string
                  (slurp (io/resource "murakumo/oracle/persist_core.kir.edn")))]
     (is (= live shipped) "persist_core KIR drift — run oracle-gen")))
+
+(deftest product-shell-deploy-uses-oracle-results
+  (is (= "/tmp/murakumo-deploy.wasm" dplan/default-wasm))
+  (is (= "asher" dplan/default-publish-node))
+  (is (= 18900 dplan/artifact-forward-port))
+  (is (= 18077 dplan/publish-forward-port))
+  (is (= "." (dplan/manifest-dir "murakumo.app.edn")))
+  (is (= "apps" (dplan/manifest-dir "apps/murakumo.app.edn")))
+  (is (= "apps/foo.edn" (dplan/app-manifest-path "apps" {:manifest "foo.edn"})))
+  (is (= "asher" (dplan/publish-selector nil)))
+  (is (= "judah" (dplan/publish-selector "judah")))
+  (is (= "http://localhost:8080"
+         (last (dplan/app-deploy-argv "k" "m" "w" 8080))))
+  (is (= "ok" (dplan/command-output "  ok\n"))))
+
+(deftest product-shell-connect-uses-oracle-results
+  (let [connect {:default-class :wasm
+                 :classes {:wasm {:read [:http] :live [:webrtc]}
+                           :browser {:read [:http] :live [:webrtc]}
+                           :native {:read [:http] :live [:quic]}}}]
+    (is (= :wasm (conn/default-class connect)))
+    (is (= :native (conn/default-class {})))
+    (is (= :wasm (conn/node-class connect {})))
+    (is (true? (conn/serves-reach? connect {:class :wasm} :browser/read)))
+    (is (true? (conn/serves-reach? connect {:class :wasm} :browser/live)))
+    (is (false? (conn/serves-reach? connect {:class :native} :browser/live)))))
+
+(deftest product-shell-component-authority-uses-oracle-results
+  (is (= 1 cauth/event-version))
+  (let [[st1 e1] (cauth/place (cauth/initial-state) "cid1" "node-a")]
+    (is (= 1 (get-in st1 [:epochs "cid1"])))
+    (is (= 1 (:sequence st1)))
+    (is (= :placed (:murakumo.component/event e1)))
+    (let [[st2 e2] (cauth/revoke st1 "cid1")]
+      (is (= 2 (get-in st2 [:epochs "cid1"])))
+      (is (= 2 (:sequence st2)))
+      (is (= :revoked (:murakumo.component/event e2))))))
+
+(deftest deploy-connect-cauth-oracle-call-matches-live
+  (let [d (:kir (compiler/compile-source (slurp "kotoba/deploy_plan_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))
+        c (:kir (compiler/compile-source (slurp "kotoba/connect_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))
+        a (:kir (compiler/compile-source (slurp "kotoba/component_authority_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute d 'default-wasm [])
+           (oracle/call :deploy-plan 'default-wasm [])))
+    (is (= (ir/execute d 'manifest-dir ["apps/x.edn"])
+           (oracle/call :deploy-plan 'manifest-dir ["apps/x.edn"])))
+    (is (= (ir/execute c 'default-class-name [""])
+           (oracle/call :connect 'default-class-name [""])))
+    (is (= (ir/execute c 'serves-plane? ["read" 1 0])
+           (oracle/call :connect 'serves-plane? ["read" 1 0])))
+    (is (= (ir/execute a 'place-epoch [0])
+           (oracle/call :component-authority 'place-epoch [0])))
+    (is (= (ir/execute a 'revoke-epoch [1])
+           (oracle/call :component-authority 'revoke-epoch [1])))))
