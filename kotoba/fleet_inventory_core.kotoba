@@ -1,14 +1,38 @@
 (ns fleet-inventory-core
   (:export [default-control-port digit-char nat-str i64-str
             resolve-port health-url selector-is-all?
-            selector-wants-name? line-has-offline?]))
+            selector-wants-name? line-has-offline?
+            selector-all offline-token
+            health-url-prefix health-url-path
+            selector-join-sep]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.fleet.inventory.
 ;; resolve-port uses [:option :i64] (no has-node/has-fleet sentinels).
 ;; selector-is-all?: empty string ≡ cljc nil selector.
+;; Residual selector/offline/health URL tokens dual-source; helpers recompose.
 ;; Parity: test/murakumo/fleet_inventory_kotoba_parity_test.clj
 
 (defn default-control-port [] :i64 8077)
+
+;; ── residual selector / offline / health URL tokens ──────────────────
+
+(defn selector-all [] :string
+  ;; CLI selector that selects every node (nil/empty also means all)
+  "all")
+
+(defn offline-token [] :string
+  ;; tailscale status column marker for offline peers
+  "offline")
+
+(defn health-url-prefix [] :string
+  "http://localhost:")
+
+(defn health-url-path [] :string
+  "/health")
+
+(defn selector-join-sep [] :string
+  ;; between node names in selector CSV; pad sides for exact-token match
+  ",")
 
 (defn digit-char [d :i64] :string
   (string-substring "0123456789" d (+ d 1)))
@@ -31,29 +55,30 @@
     p
     (if-some [f fleet-port]
       f
-      8077)))
+      (default-control-port))))
 
 (defn health-url [port :i64] :string
   ;; cljc: (str "http://localhost:" port "/health")
   (string-concat
-   "http://localhost:"
-   (string-concat (string-from-i64 port) "/health")))
+   (health-url-prefix)
+   (string-concat (string-from-i64 port) (health-url-path))))
 
 (defn selector-is-all? [sel :string] :i64
   ;; cljc: (or (nil? sel) (= sel "all")) — empty string ≡ nil
   (if (string=? sel "")
     1
-    (if (string=? sel "all") 1 0)))
+    (if (string=? sel (selector-all)) 1 0)))
 
 (defn selector-wants-name? [sel :string name :string] :i64
   ;; Exact comma-token match: pad both sides so substrings can't false-hit.
   ;; cljc: (contains? (set (str/split sel #",")) name)
-  (if (string-contains?
-       (string-concat "," (string-concat sel ","))
-       (string-concat "," (string-concat name ",")))
-    1
-    0))
+  (let [sep (selector-join-sep)]
+    (if (string-contains?
+         (string-concat sep (string-concat sel sep))
+         (string-concat sep (string-concat name sep)))
+      1
+      0)))
 
 (defn line-has-offline? [line :string] :i64
   ;; cljc parse-tailscale-status online?: (not (str/includes? line "offline"))
-  (if (string-contains? line "offline") 1 0))
+  (if (string-contains? line (offline-token)) 1 0))

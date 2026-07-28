@@ -1006,7 +1006,16 @@
       (let [m (finv/parse-tailscale-status
                "100.1.1.1 a linux - \n100.2.2.2 b macos offline\n")]
         (is (true? (get-in m ["a" :online?])))
-        (is (false? (get-in m ["b" :online?])))))))
+        (is (false? (get-in m ["b" :online?])))))
+    (testing "residual tokens dual-sourced"
+      (is (= 8077 finv/default-control-port))
+      (is (= "all" finv/selector-all))
+      (is (= "offline" finv/offline-token))
+      (is (= "http://localhost:" finv/health-url-prefix))
+      (is (= "/health" finv/health-url-path))
+      (is (= "," finv/selector-join-sep))
+      (is (= (str finv/health-url-prefix 1 finv/health-url-path)
+             (finv/node-health-url fleet {:port 1}))))))
 
 (deftest fleet-inventory-oracle-call-matches-live
   (let [live (:kir (compiler/compile-source (slurp "kotoba/fleet_inventory_core.kotoba")
@@ -1026,7 +1035,20 @@
     (is (= (ir/execute live 'selector-wants-name? ["a,c" "a"])
            (oracle/call :fleet-inventory 'selector-wants-name? ["a,c" "a"])))
     (is (= (ir/execute live 'line-has-offline? ["x offline y"])
-           (oracle/call :fleet-inventory 'line-has-offline? ["x offline y"])))))
+           (oracle/call :fleet-inventory 'line-has-offline? ["x offline y"])))
+    (is (= (ir/execute live 'selector-all [])
+           (oracle/call :fleet-inventory 'selector-all [])))
+    (is (= (oracle/call :fleet-inventory 'selector-all []) finv/selector-all))
+    (is (= (ir/execute live 'offline-token [])
+           (oracle/call :fleet-inventory 'offline-token [])))
+    (is (= (oracle/call :fleet-inventory 'offline-token []) finv/offline-token))
+    (is (= (ir/execute live 'health-url-prefix [])
+           (oracle/call :fleet-inventory 'health-url-prefix [])))
+    (is (= (oracle/call :fleet-inventory 'health-url-path []) finv/health-url-path))
+    (is (= (ir/execute live 'selector-join-sep [])
+           (oracle/call :fleet-inventory 'selector-join-sep [])))
+    (is (= (oracle/call :fleet-inventory 'default-control-port [])
+           finv/default-control-port))))
 
 (deftest product-shell-identity-uses-oracle-results
   (testing "seed preimages via oracle then host sha"

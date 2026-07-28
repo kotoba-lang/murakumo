@@ -3,11 +3,12 @@
 ;; This is the .cljc source of truth for selector/defaulting logic and portable
 ;; parsing of host inventory command output. Shell execution stays in murakumo.fleet.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-fleet-inventory-oracle-authority):
-;; pure port/url/selector/offline helpers DELEGATE to precompiled
-;; kotoba/fleet_inventory_core.kotoba KIR when oracle is loadable (JVM or
-;; cljs/nbb — ADR-260728-w6-cljs-oracle-load). Vector folds stay host.
-;; cljs mirrors remain as fallback when oracle is not ready.
+;; W6 product-shell authority (ADR-260728-w6-fleet-inv-tokens-pure-oracle +
+;; ADR-260728-w6-fleet-inventory-oracle-authority):
+;; pure port/url/selector/offline helpers + selector/offline/health URL tokens
+;; DELEGATE to precompiled kotoba/fleet_inventory_core.kotoba KIR when oracle
+;; is loadable (JVM or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; Vector folds stay host. cljs mirrors remain as fallback when not ready.
 
 (ns murakumo.fleet.inventory
   (:require [clojure.string :as str]
@@ -21,11 +22,70 @@
 (defn- oracle-ready? []
   (oracle/ready? oid))
 
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+(defn- oracle-i64-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid export []))
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+;; ── residual selector / offline / health URL tokens ──────────────────
+
+(def ^:private mirror-default-control-port 8077)
+(def ^:private mirror-selector-all "all")
+(def ^:private mirror-offline-token "offline")
+(def ^:private mirror-health-url-prefix "http://localhost:")
+(def ^:private mirror-health-url-path "/health")
+(def ^:private mirror-selector-join-sep ",")
+
+(def default-control-port
+  "Default control HTTP port when node/fleet port absent. Kotoba when ready."
+  (oracle-i64-const 'default-control-port mirror-default-control-port))
+
+(def selector-all
+  "Selector token that selects every node. Kotoba when ready."
+  (oracle-str-const 'selector-all mirror-selector-all))
+
+(def offline-token
+  "tailscale status offline marker. Kotoba when ready."
+  (oracle-str-const 'offline-token mirror-offline-token))
+
+(def health-url-prefix
+  "Health URL host prefix. Kotoba when ready."
+  (oracle-str-const 'health-url-prefix mirror-health-url-prefix))
+
+(def health-url-path
+  "Health URL path suffix. Kotoba when ready."
+  (oracle-str-const 'health-url-path mirror-health-url-path))
+
+(def selector-join-sep
+  "CSV separator between selector node names. Kotoba when ready."
+  (oracle-str-const 'selector-join-sep mirror-selector-join-sep))
+
 (defn- mirror-node-port [fleet node]
-  (or (:port node) (:fleet/port fleet) 8077))
+  (or (:port node) (:fleet/port fleet) default-control-port))
 
 (defn- mirror-health-url [port]
-  (str "http://localhost:" port "/health"))
+  (str health-url-prefix port health-url-path))
 
 (defn node-port
   "Resolve a node's control HTTP port, defaulting to the fleet port, then 8077.
@@ -66,7 +126,7 @@
                        (o 'selector-wants-name?
                           [(str sel) (str (:name %))])))
                 nodes))
-      (if (or (nil? sel) (= sel "all"))
+      (if (or (nil? sel) (= sel selector-all))
         nodes
         (let [want (set (str/split sel #","))]
           (filter #(want (:name %)) nodes))))))
@@ -88,7 +148,7 @@
                          :online? (if (oracle-ready?)
                                     (not= 1 (oracle/i64->host
                                              (o 'line-has-offline? [(str line)])))
-                                    (not (str/includes? line "offline")))}])))
+                                    (not (str/includes? line offline-token)))}])))
 
 (defn tailscale-status-result
   "Normalise a `tailscale status` process result into inventory metadata."
