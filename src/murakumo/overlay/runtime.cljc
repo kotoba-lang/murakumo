@@ -4,10 +4,11 @@
 ;; contract is stable enough for the CLI runner, tests, and the later socket/relay
 ;; implementation to share.
 ;;
-;; W6 product-shell authority:
-;; default ports, known-adapter?, adapter-kind, scheme-prefix-host DELEGATE to
-;; precompiled kotoba/overlay_runtime_core when oracle is loadable
-;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; W6 product-shell authority (ADR-260728-w6-overlay-runtime-tokens-pure-oracle):
+;; default ports, known-adapter?, adapter-kind, scheme-prefix-host +
+;; scheme/kind/adapter tokens DELEGATE to precompiled kotoba/overlay_runtime_core
+;; when oracle is loadable (JVM classpath or cljs/nbb —
+;; ADR-260728-w6-cljs-oracle-load).
 ;; Adapter registry maps and full URL regex parse stay host. cljs mirrors as fallback.
 
 (ns murakumo.overlay.runtime
@@ -39,16 +40,72 @@
     (catch #?(:clj Exception :cljs :default) _
       mirror)))
 
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
 (defn- oracle-str-call [export args mirror]
   (try-oracle
    #(o export args)
    (fn [] mirror)))
 
-;; ── host-mirror pure helpers ───────────────────────────────────────────
+;; ── host-mirror pure helpers + dual-source tokens ────────────────────
 
 (def ^:private mirror-default-relay-port 4701)
 (def ^:private mirror-default-web-port 443)
 (def ^:private mirror-default-quic-port 4001)
+(def ^:private mirror-scheme-quic "quic://")
+(def ^:private mirror-scheme-webrtc "webrtc://")
+(def ^:private mirror-scheme-relay "relay://")
+(def ^:private mirror-scheme-webtransport "webtransport://")
+(def ^:private mirror-kind-quic "quic")
+(def ^:private mirror-kind-webrtc "webrtc")
+(def ^:private mirror-kind-webtransport "webtransport")
+(def ^:private mirror-kind-relay "relay")
+(def ^:private mirror-kind-other "other")
+(def ^:private mirror-adapter-relay "murakumo.runtime.relay")
+(def ^:private mirror-adapter-quic "murakumo.runtime.quic")
+(def ^:private mirror-adapter-webrtc "murakumo.runtime.webrtc")
+(def ^:private mirror-adapter-webtransport "murakumo.runtime.webtransport")
+(def ^:private mirror-adapter-relay-client "murakumo.runtime.relay-client")
+(def ^:private mirror-adapter-kind-relay-runtime "relay-runtime")
+(def ^:private mirror-adapter-kind-quic "quic")
+(def ^:private mirror-adapter-kind-webrtc "webrtc")
+(def ^:private mirror-adapter-kind-webtransport "webtransport")
+(def ^:private mirror-adapter-kind-relay "relay")
+
+(def scheme-quic (oracle-str-const 'scheme-quic mirror-scheme-quic))
+(def scheme-webrtc (oracle-str-const 'scheme-webrtc mirror-scheme-webrtc))
+(def scheme-relay (oracle-str-const 'scheme-relay mirror-scheme-relay))
+(def scheme-webtransport
+  (oracle-str-const 'scheme-webtransport mirror-scheme-webtransport))
+(def kind-quic (oracle-str-const 'kind-quic mirror-kind-quic))
+(def kind-webrtc (oracle-str-const 'kind-webrtc mirror-kind-webrtc))
+(def kind-webtransport
+  (oracle-str-const 'kind-webtransport mirror-kind-webtransport))
+(def kind-relay (oracle-str-const 'kind-relay mirror-kind-relay))
+(def kind-other (oracle-str-const 'kind-other mirror-kind-other))
+(def adapter-relay (oracle-str-const 'adapter-relay mirror-adapter-relay))
+(def adapter-quic (oracle-str-const 'adapter-quic mirror-adapter-quic))
+(def adapter-webrtc (oracle-str-const 'adapter-webrtc mirror-adapter-webrtc))
+(def adapter-webtransport
+  (oracle-str-const 'adapter-webtransport mirror-adapter-webtransport))
+(def adapter-relay-client
+  (oracle-str-const 'adapter-relay-client mirror-adapter-relay-client))
+(def adapter-kind-relay-runtime
+  (oracle-str-const 'adapter-kind-relay-runtime mirror-adapter-kind-relay-runtime))
+(def adapter-kind-quic
+  (oracle-str-const 'adapter-kind-quic mirror-adapter-kind-quic))
+(def adapter-kind-webrtc
+  (oracle-str-const 'adapter-kind-webrtc mirror-adapter-kind-webrtc))
+(def adapter-kind-webtransport
+  (oracle-str-const 'adapter-kind-webtransport mirror-adapter-kind-webtransport))
+(def adapter-kind-relay
+  (oracle-str-const 'adapter-kind-relay mirror-adapter-kind-relay))
 
 (defn- mirror-default-port-for-kind [kind]
   (case (name kind)
@@ -57,21 +114,18 @@
     ("webrtc" "webtransport") mirror-default-web-port
     0))
 
-(def ^:private mirror-known-adapters
-  #{"murakumo.runtime.relay"
-    "murakumo.runtime.quic"
-    "murakumo.runtime.webrtc"
-    "murakumo.runtime.webtransport"
-    "murakumo.runtime.relay-client"})
+(defn- mirror-known-adapters []
+  #{adapter-relay adapter-quic adapter-webrtc adapter-webtransport
+    adapter-relay-client})
 
 (defn- mirror-adapter-kind [name]
-  (case name
-    "murakumo.runtime.relay" "relay-runtime"
-    "murakumo.runtime.quic" "quic"
-    "murakumo.runtime.webrtc" "webrtc"
-    "murakumo.runtime.webtransport" "webtransport"
-    "murakumo.runtime.relay-client" "relay"
-    ""))
+  (cond
+    (= name adapter-relay) adapter-kind-relay-runtime
+    (= name adapter-quic) adapter-kind-quic
+    (= name adapter-webrtc) adapter-kind-webrtc
+    (= name adapter-webtransport) adapter-kind-webtransport
+    (= name adapter-relay-client) adapter-kind-relay
+    :else ""))
 
 (defn- mirror-scheme-prefix-host [url]
   (when-let [[_ host] (re-matches #"[a-zA-Z][a-zA-Z0-9+.-]*://([^/:]+).*"
@@ -107,28 +161,28 @@
     #(mirror-adapter-kind name))))
 
 (def adapters
-  {"murakumo.runtime.relay"
-   {:kind (adapter-kind-kw "murakumo.runtime.relay")
+  {adapter-relay
+   {:kind (adapter-kind-kw adapter-relay)
     :status :placeholder
     :opens :relay-listener}
 
-   "murakumo.runtime.quic"
-   {:kind (adapter-kind-kw "murakumo.runtime.quic")
+   adapter-quic
+   {:kind (adapter-kind-kw adapter-quic)
     :status :placeholder
     :opens :identity-stream}
 
-   "murakumo.runtime.webrtc"
-   {:kind (adapter-kind-kw "murakumo.runtime.webrtc")
+   adapter-webrtc
+   {:kind (adapter-kind-kw adapter-webrtc)
     :status :placeholder
     :opens :browser-identity-stream}
 
-   "murakumo.runtime.webtransport"
-   {:kind (adapter-kind-kw "murakumo.runtime.webtransport")
+   adapter-webtransport
+   {:kind (adapter-kind-kw adapter-webtransport)
     :status :placeholder
     :opens :browser-identity-stream}
 
-   "murakumo.runtime.relay-client"
-   {:kind (adapter-kind-kw "murakumo.runtime.relay-client")
+   adapter-relay-client
+   {:kind (adapter-kind-kw adapter-relay-client)
     :status :placeholder
     :opens :relayed-identity-stream}})
 
@@ -145,7 +199,7 @@
   [name]
   (try-oracle
    #(= 1 (oracle/i64->host (o 'known-adapter? [(str name)])))
-   #(contains? mirror-known-adapters (str name))))
+   #(contains? (mirror-known-adapters) (str name))))
 
 (defn parse-int [value]
   #?(:clj (Integer/parseInt value)
@@ -234,15 +288,13 @@
        :runtime (:runtime step)
        :opens (:opens adapter-spec)
        :status (:status adapter-spec)
-       :listen (when (= "murakumo.runtime.relay" adapter-name)
+       :listen (when (= adapter-relay adapter-name)
                  (relay-listen-spec (:session step)))
-       :connect (when (#{"murakumo.runtime.quic"
-                         "murakumo.runtime.webrtc"
-                         "murakumo.runtime.webtransport"
-                         "murakumo.runtime.relay-client"}
+       :connect (when (#{adapter-quic adapter-webrtc adapter-webtransport
+                         adapter-relay-client}
                        adapter-name)
                   (dial-connect-spec (:session step)
-                                     (if (= "murakumo.runtime.relay-client" adapter-name)
+                                     (if (= adapter-relay-client adapter-name)
                                        :relay
                                        :direct)))
        :argv (:argv step)
