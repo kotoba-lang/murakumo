@@ -156,6 +156,14 @@
           #{"release/kotoba"})))
   (is (= ["git" "-C" "release" "rev-parse" "--short" "HEAD"]
          (plan/git-short-sha-argv "release")))
+  (is (= ["/usr/bin/git" "-C" "release" "rev-parse" "--short" "HEAD"]
+         (plan/git-short-sha-argv "release" "/usr/bin/git")))
+  (is (= "/usr/bin/git"
+         (plan/resolve-git-bin {:candidates ["/usr/bin/git" "/bin/git"]
+                                :exists? #{"/usr/bin/git"}})))
+  (is (nil? (plan/resolve-git-bin {:candidates ["/nope"] :exists? (constantly false)})))
+  (is (nil? (plan/resolve-git-bin {:git-bin "git" :exists? (constantly true)}))
+      "bare git name is never accepted")
   (is (= ["bin/kotoba" "--version"]
          (plan/version-argv "bin")))
   (is (= {:source "release"

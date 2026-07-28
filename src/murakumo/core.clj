@@ -315,7 +315,14 @@
     ;; the SAME WIT version the binary expects (avoids world-name skew).
     (doseq [argv (deploy/pin-wit-argvs pin (.exists (java.io.File. (get-in pin [:wit :src]))))]
       (apply p/sh argv))
-    (let [sha (deploy/command-output (:out (apply p/sh (deploy/git-short-sha-argv src))))
+    (let [git-bin (deploy/resolve-git-bin
+                   {:git-bin (System/getenv "MURAKUMO_GIT_BIN")})
+          _ (when-not git-bin
+              (binding [*out* *err*]
+                (println "error: no absolute git binary (set MURAKUMO_GIT_BIN or install /usr/bin/git)"))
+              (System/exit 2))
+          sha (deploy/command-output
+               (:out (apply p/sh (deploy/git-short-sha-argv src git-bin))))
           ver (deploy/command-output (:out (apply p/sh (deploy/version-argv dest))))]
       ;; webrtc: the fleet's browser-Live transport (connect.edn :native :live ⊇
       ;; :webrtc). Build kotoba with `--features p2p,realtime-wasm,webrtc` so the

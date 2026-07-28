@@ -215,10 +215,52 @@
        (copy-tree-argv wit-src wit-dest)]
       [])))
 
+(def default-git-bin-candidates
+  "Absolute git paths only — never bare \"git\" (no PATH scan)."
+  ["/opt/homebrew/bin/git" "/usr/bin/git" "/bin/git"])
+
+(defn resolve-git-bin
+  "Pick the first absolute candidate that exists and is executable.
+
+  opts:
+    :candidates  vector of absolute paths (default default-git-bin-candidates)
+    :exists?     (fn [path] bool) — default java.io.File exists+canExecute
+    :git-bin     explicit absolute override (must pass absolute-path? policy)
+
+  Returns absolute path string or nil. Never searches PATH."
+  ([] (resolve-git-bin {}))
+  ([{:keys [candidates exists? git-bin]
+     :or {candidates default-git-bin-candidates}}]
+   (let [exists? (or exists?
+                     #?(:clj (fn [p]
+                               (let [f (java.io.File. (str p))]
+                                 (and (.isAbsolute f) (.canExecute f))))
+                        :cljs (fn [p]
+                                (try
+                                  (let [fs (js/require "fs")
+                                        path (js/require "path")]
+                                    (and (.isAbsolute path p) (.existsSync fs p)))
+                                  (catch :default _ false)))))]
+     (cond
+       (and (string? git-bin) (not (str/blank? git-bin)))
+       (when (and (or (str/starts-with? git-bin "/")
+                      (boolean (re-matches #"[A-Za-z]:[\\/].*" git-bin)))
+                  (exists? git-bin))
+         git-bin)
+
+       :else
+       (some (fn [p] (when (exists? p) p)) candidates)))))
+
 (defn git-short-sha-argv
-  "argv for reading the pinned source git sha."
-  [src]
-  ["git" "-C" src "rev-parse" "--short" "HEAD"])
+  "argv for reading the pinned source git sha.
+
+  Prefer absolute `git-bin` (no PATH). When nil, still emits bare \"git\"
+  only for pure plan fixtures — ops hosts should call `resolve-git-bin`
+  and pass the result."
+  ([src] (git-short-sha-argv src nil))
+  ([src git-bin]
+   (let [bin (or (not-empty (str git-bin)) "git")]
+     [bin "-C" src "rev-parse" "--short" "HEAD"])))
 
 (defn version-argv
   "argv for reading the pinned kotoba CLI version."
