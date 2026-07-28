@@ -1,0 +1,48 @@
+(ns overlay-driver-core
+  (:export [endpoint-kind blank? option-name dial-ok-reason
+            command-is-dial?]))
+
+;; W6 pure-planner oracle — murakumo.overlay.driver scalar core.
+;; parse-argv loop / session map assembly stay cljc.
+;; endpoint-kind matches driver.cljc (https:// → webtransport).
+;; dial-ok-reason: host projects is-dial / missing-count → ok|unknown-command|missing-options.
+;; Parity: test/murakumo/overlay_driver_kotoba_parity_test.clj
+
+(defn blank? [s :string] :i64
+  (if (string=? s "") 1 0))
+
+(defn endpoint-kind [endpoint :string] :string
+  (let [n (string-byte-length endpoint)]
+    (if (if (< n 7) 0
+          (if (string=? (string-substring endpoint 0 7) "quic://") 1 0))
+      "quic"
+      (if (if (< n 9) 0
+            (if (string=? (string-substring endpoint 0 9) "webrtc://") 1 0))
+        "webrtc"
+        (if (if (< n 8) 0
+              (if (string=? (string-substring endpoint 0 8) "https://") 1 0))
+          "webtransport"
+          (if (if (< n 8) 0
+                (if (string=? (string-substring endpoint 0 8) "relay://") 1 0))
+            "relay"
+            "unknown"))))))
+
+(defn option-name [flag :string] :string
+  ;; cljc keyword-option: (keyword (subs flag 2)) → bare name without --
+  (let [n (string-byte-length flag)]
+    (if (< n 2)
+      ""
+      (if (string=? (string-substring flag 0 2) "--")
+        (string-substring flag 2 n)
+        flag))))
+
+(defn command-is-dial? [command :string] :i64
+  (if (string=? command "dial") 1 0))
+
+(defn dial-ok-reason [is-dial :i64 missing-count :i64] :string
+  ;; cljc dial-result reasons
+  (if (= is-dial 0)
+    "unknown-command"
+    (if (< 0 missing-count)
+      "missing-options"
+      "ok")))
