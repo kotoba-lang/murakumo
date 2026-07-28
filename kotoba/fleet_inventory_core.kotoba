@@ -1,0 +1,61 @@
+(ns fleet-inventory-core
+  (:export [default-control-port digit-char nat-str i64-str
+            resolve-port health-url selector-is-all?
+            selector-wants-name? line-has-offline?]))
+
+;; W6 pure-planner oracle — murakumo.fleet.inventory pure core (medium priority).
+;; select/node-named/enrich over node vectors stay cljc; this ports port/url
+;; resolution, selector predicates, and offline-line detection.
+;; Sentinel: has-node-port / has-fleet-port 0 = absent (nil in cljc).
+;; selector-is-all?: empty string ≡ cljc nil selector.
+;; Parity: test/murakumo/fleet_inventory_kotoba_parity_test.clj
+
+(defn default-control-port [] :i64 8077)
+
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+(defn resolve-port [has-node :i64 node-port :i64
+                    has-fleet :i64 fleet-port :i64] :i64
+  ;; cljc: (or (:port node) (:fleet/port fleet) 8077)
+  (if (= has-node 1)
+    node-port
+    (if (= has-fleet 1)
+      fleet-port
+      8077)))
+
+(defn health-url [port :i64] :string
+  ;; cljc: (str "http://localhost:" port "/health")
+  (string-concat
+   "http://localhost:"
+   (string-concat (i64-str port) "/health")))
+
+(defn selector-is-all? [sel :string] :i64
+  ;; cljc: (or (nil? sel) (= sel "all")) — empty string ≡ nil
+  (if (string=? sel "")
+    1
+    (if (string=? sel "all") 1 0)))
+
+(defn selector-wants-name? [sel :string name :string] :i64
+  ;; Exact comma-token match: pad both sides so substrings can't false-hit.
+  ;; cljc: (contains? (set (str/split sel #",")) name)
+  (if (string-contains?
+       (string-concat "," (string-concat sel ","))
+       (string-concat "," (string-concat name ",")))
+    1
+    0))
+
+(defn line-has-offline? [line :string] :i64
+  ;; cljc parse-tailscale-status online?: (not (str/includes? line "offline"))
+  (if (string-contains? line "offline") 1 0))
