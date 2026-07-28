@@ -7,7 +7,11 @@
 
 (def port-source (slurp "kotoba/infer_rebalance_core.kotoba"))
 (def export-prefix
-  "shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class lane-base largest-remainder-3 seats-text seats-media seats-postproc pool-demand-pack seats-from-pool-pack classify-run-flags")
+  (str "shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class lane-base "
+       "largest-remainder-3 seats-text seats-media seats-postproc "
+       "pool-demand-pack seats-from-pool-pack classify-run-flags "
+       "demand-base demand-empty demand-text demand-image demand-video "
+       "demand-audio demand-postproc demand-inc demand-to-pool-pack"))
 
 (def largest-remainder
   "Private cljc largest-remainder (var-quote for oracle parity)."
@@ -150,3 +154,50 @@
     (is (= 5 (get actual "c_sw")))
     (is (= 1 (get actual "c_tok")))
     (is (= 0 (get actual "c_none")))))
+
+(defn- run-flags
+  "Host projection of demand-from-runs unit/kind presence → classify-run-flags args."
+  [run]
+  (let [u (or (:units run) {})
+        kind (or (:run/kind run) (:model run))]
+    [(if (or (:images u) (get u "images")) 1 0)
+     (if (or (:video-seconds u) (get u "video-seconds")) 1 0)
+     (if (or (:audio-seconds u) (get u "audio-seconds")) 1 0)
+     (if (= "browser-swarm" (str kind)) 1 0)
+     (if (or (:tokens u) (get u "tokens")) 1 0)]))
+
+(deftest demand-from-runs-fold-matches-cljc
+  (let [runs [{:units {:tokens 100}}
+              {:units {:images 1}}
+              {:units {:images 1}}
+              {:model "browser-swarm" :units {:jobs 1}}
+              {:units {:video-seconds 3}}]
+        ;; host projects flags; guest folds demand-inc + classify-run-flags
+        fold (reduce (fn [expr run]
+                       (let [[hi hv ha sw tok] (run-flags run)]
+                         (str "(demand-inc " expr
+                              " (classify-run-flags "
+                              hi " " hv " " ha " " sw " " tok "))")))
+                     "(demand-empty)"
+                     runs)
+        actual (compile-i64-cases
+                {"t" (str "(demand-text " fold ")")
+                 "i" (str "(demand-image " fold ")")
+                 "v" (str "(demand-video " fold ")")
+                 "a" (str "(demand-audio " fold ")")
+                 "p" (str "(demand-postproc " fold ")")
+                 "pool" (str "(demand-to-pool-pack " fold ")")
+                 "base" "(demand-base)"})
+        cljc (rb/demand-from-runs runs)
+        pool (rb/pool-demand cljc)]
+    (is (= 4096 (get actual "base")))
+    (is (= (:text cljc) (get actual "t")))
+    (is (= (:image cljc) (get actual "i")))
+    (is (= (:video cljc) (get actual "v")))
+    (is (= (:audio cljc) (get actual "a")))
+    (is (= (:postproc cljc) (get actual "p")))
+    (is (= 1 (get actual "t")))
+    (is (= 2 (get actual "i")))
+    (is (= 1 (get actual "v")))
+    (is (= 1 (get actual "p")))
+    (is (= pool (unpack (get actual "pool"))))))

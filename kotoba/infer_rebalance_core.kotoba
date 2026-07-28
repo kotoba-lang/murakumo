@@ -3,14 +3,19 @@
             lane-base largest-remainder-3
             seats-text seats-media seats-postproc
             pool-demand-pack seats-from-pool-pack
-            classify-run-flags]))
+            classify-run-flags
+            demand-base demand-empty
+            demand-text demand-image demand-video demand-audio demand-postproc
+            demand-inc demand-to-pool-pack]))
 
 ;; W6 pure-planner oracle — murakumo.infer.rebalance capacity + 3-pool
 ;; largest-remainder seat apportionment (map-fold product vertical).
-;; demand-from-runs vector reduce + rebalance moves stay cljc.
+;; rebalance moves / capacity vector filters stay cljc.
 ;; pool-demand-pack: class counts → packed pool weights (map-fold).
 ;; seats-from-pool-pack: total + packed weights + floor → seat pack (compose LR).
 ;; classify-run-flags: one-run class tag for demand-from-runs building block.
+;; demand-*: class-count pack (base 4096, 5 lanes) + demand-inc reduce step
+;;   + demand-to-pool-pack → pool-demand-pack (demand-from-runs fold core).
 
 ;;
 ;; largest-remainder-3: integer form of cljc `largest-remainder` for the
@@ -189,3 +194,66 @@
           (if (= has-tokens 1)
             1
             0))))))
+
+;; ── demand-from-runs class pack (5 lanes @ base 4096) ────────────────
+;; pack = text + image*B + video*B^2 + audio*B^3 + postproc*B^4
+
+(defn demand-base [] :i64 4096)
+
+(defn demand-empty [] :i64 0)
+
+(defn demand-text [pack :i64] :i64
+  (rem64 pack (demand-base)))
+
+(defn demand-image [pack :i64] :i64
+  (let [b (demand-base)]
+    (rem64 (quot pack b) b)))
+
+(defn demand-video [pack :i64] :i64
+  (let [b (demand-base)
+        b2 (* b b)]
+    (rem64 (quot pack b2) b)))
+
+(defn demand-audio [pack :i64] :i64
+  (let [b (demand-base)
+        b3 (* b (* b b))]
+    (rem64 (quot pack b3) b)))
+
+(defn demand-postproc [pack :i64] :i64
+  (let [b (demand-base)
+        b4 (* (* b b) (* b b))]
+    (quot pack b4)))
+
+(defn demand-pack5 [t :i64 i :i64 v :i64 a :i64 p :i64] :i64
+  (let [b (demand-base)
+        b2 (* b b)
+        b3 (* b b2)
+        b4 (* b b3)]
+    (+ t (+ (* i b) (+ (* v b2) (+ (* a b3) (* p b4)))))))
+
+(defn demand-inc [pack :i64 class-code :i64] :i64
+  ;; one reduce step of demand-from-runs given classify-run-flags code
+  (let [t (demand-text pack)
+        i (demand-image pack)
+        v (demand-video pack)
+        a (demand-audio pack)
+        p (demand-postproc pack)]
+    (if (= class-code 1)
+      (demand-pack5 (+ t 1) i v a p)
+      (if (= class-code 2)
+        (demand-pack5 t (+ i 1) v a p)
+        (if (= class-code 3)
+          (demand-pack5 t i (+ v 1) a p)
+          (if (= class-code 4)
+            (demand-pack5 t i v (+ a 1) p)
+            (if (= class-code 5)
+              (demand-pack5 t i v a (+ p 1))
+              pack)))))))
+
+(defn demand-to-pool-pack [pack :i64] :i64
+  ;; cljc pool-demand after demand-from-runs
+  (pool-demand-pack (demand-text pack)
+                    (demand-image pack)
+                    (demand-video pack)
+                    (demand-audio pack)
+                    (demand-postproc pack)))
