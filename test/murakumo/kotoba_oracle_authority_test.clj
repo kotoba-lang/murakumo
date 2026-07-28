@@ -1449,14 +1449,23 @@
 
 (deftest product-shell-component-authority-uses-oracle-results
   (is (= 1 cauth/event-version))
+  (is (= "murakumo.component-authority/v1" cauth/format-v1))
+  (is (= "ed25519" cauth/algorithm-ed25519))
+  (is (= "place" cauth/op-place))
+  (is (= "revoke" cauth/op-revoke))
+  (is (= "unknown" cauth/op-unknown))
+  (is (= "placed" cauth/event-placed))
+  (is (= "revoked" cauth/event-revoked))
   (let [[st1 e1] (cauth/place (cauth/initial-state) "cid1" "node-a")]
     (is (= 1 (get-in st1 [:epochs "cid1"])))
     (is (= 1 (:sequence st1)))
     (is (= :placed (:murakumo.component/event e1)))
+    (is (= (keyword cauth/event-placed) (:murakumo.component/event e1)))
     (let [[st2 e2] (cauth/revoke st1 "cid1")]
       (is (= 2 (get-in st2 [:epochs "cid1"])))
       (is (= 2 (:sequence st2)))
-      (is (= :revoked (:murakumo.component/event e2))))))
+      (is (= :revoked (:murakumo.component/event e2)))
+      (is (= (keyword cauth/event-revoked) (:murakumo.component/event e2))))))
 
 (deftest deploy-connect-cauth-oracle-call-matches-live
   (let [d (:kir (compiler/compile-source (slurp "kotoba/deploy_plan_core.kotoba")
@@ -1521,7 +1530,20 @@
     (is (= (ir/execute a 'place-epoch [0])
            (oracle/call :component-authority 'place-epoch [0])))
     (is (= (ir/execute a 'revoke-epoch [1])
-           (oracle/call :component-authority 'revoke-epoch [1])))))
+           (oracle/call :component-authority 'revoke-epoch [1])))
+    (is (= (ir/execute a 'op-place [])
+           (oracle/call :component-authority 'op-place [])))
+    (is (= (oracle/call :component-authority 'op-place []) cauth/op-place))
+    (is (= (ir/execute a 'event-placed [])
+           (oracle/call :component-authority 'event-placed [])))
+    (is (= (oracle/call :component-authority 'event-revoked []) cauth/event-revoked))
+    (is (= (ir/execute a 'format-v1 [])
+           (oracle/call :component-authority 'format-v1 [])))
+    (is (= (oracle/call :component-authority 'format-v1 []) cauth/format-v1))
+    (is (= (ir/execute a 'event-kind ["place"])
+           (oracle/call :component-authority 'event-kind [cauth/op-place])))
+    (is (= cauth/event-placed
+           (oracle/call :component-authority 'event-kind [cauth/op-place])))))
 
 (deftest product-shell-overlay-keyring-stream-peer-uses-oracle
   (testing "keyring"

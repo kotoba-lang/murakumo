@@ -25,6 +25,36 @@
    :effects #{},
    :body "ed25519",
    :param-types []}
+  {:name op-place,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "place",
+   :param-types []}
+  {:name op-revoke,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "revoke",
+   :param-types []}
+  {:name op-unknown,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "unknown",
+   :param-types []}
+  {:name event-placed,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "placed",
+   :param-types []}
+  {:name event-revoked,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "revoked",
+   :param-types []}
   {:name ws?,
    :params [c],
    :result :i64,
@@ -90,9 +120,9 @@
    :effects #{},
    :body
    (if
-    (string=? op "place")
-    "place"
-    (if (string=? op "revoke") "revoke" "unknown")),
+    (string=? op (op-place))
+    (op-place)
+    (if (string=? op (op-revoke)) (op-revoke) (op-unknown))),
    :param-types [:string]}
   {:name event-kind,
    :params [op],
@@ -100,9 +130,9 @@
    :effects #{},
    :body
    (if
-    (string=? op "place")
-    "placed"
-    (if (string=? op "revoke") "revoked" "unknown")),
+    (string=? op (op-place))
+    (event-placed)
+    (if (string=? op (op-revoke)) (event-revoked) (op-unknown))),
    :param-types [:string]}],
  :oracle-value nil,
  :schema-identities nil,
@@ -119,7 +149,12 @@
   command-op
   event-kind
   format-v1
-  algorithm-ed25519],
+  algorithm-ed25519
+  op-place
+  op-revoke
+  op-unknown
+  event-placed
+  event-revoked],
  :schemas nil,
  :effects #{},
  :blocks [],

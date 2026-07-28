@@ -5,7 +5,8 @@
   that authority is revoked. Runtime hosts consume the emitted exact events;
   they do not infer authority from eventually-consistent placement telemetry.
 
-  W6 product-shell: identifier?/epochs/sequence pure helpers via kotoba
+  W6 product-shell (ADR-260728-w6-cauth-op-tokens-pure-oracle):
+  identifier?/epochs/sequence pure helpers + op/event tokens via kotoba
   component_authority_core when oracle is loadable (JVM classpath or cljs/nbb —
   ADR-260728-w6-cljs-oracle-load). Event maps + ed25519 stay host.
   cljs mirrors remain fallback when oracle is not ready."
@@ -40,11 +41,24 @@
     (catch #?(:clj Exception :cljs :default) _
       mirror)))
 
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
 ;; ── host-mirror pure helpers ───────────────────────────────────────────
 
 (def ^:private mirror-event-version 1)
 (def ^:private mirror-format-v1 "murakumo.component-authority/v1")
 (def ^:private mirror-algorithm-ed25519 "ed25519")
+(def ^:private mirror-op-place "place")
+(def ^:private mirror-op-revoke "revoke")
+(def ^:private mirror-op-unknown "unknown")
+(def ^:private mirror-event-placed "placed")
+(def ^:private mirror-event-revoked "revoked")
 
 (defn- mirror-identifier? [x]
   (and (string? x) (not (str/blank? x)) (<= (count x) 4096)))
@@ -59,10 +73,16 @@
   (inc seq))
 
 (defn- mirror-event-kind [op]
-  (case op
-    "place" :placed
-    "revoke" :revoked
-    :unknown))
+  (cond
+    (= op mirror-op-place) (keyword mirror-event-placed)
+    (= op mirror-op-revoke) (keyword mirror-event-revoked)
+    :else (keyword mirror-op-unknown)))
+
+(defn- mirror-command-op [op]
+  (cond
+    (= op mirror-op-place) mirror-op-place
+    (= op mirror-op-revoke) mirror-op-revoke
+    :else mirror-op-unknown))
 
 (defn- utf8-len [s]
   #?(:clj (count (.getBytes ^String s "UTF-8"))
@@ -72,6 +92,30 @@
 
 (def event-version
   (oracle-i64-const 'event-version mirror-event-version))
+
+(def format-v1
+  "Envelope format token. Kotoba when ready."
+  (oracle-str-const 'format-v1 mirror-format-v1))
+
+(def algorithm-ed25519
+  "Signing algorithm token. Kotoba when ready."
+  (oracle-str-const 'algorithm-ed25519 mirror-algorithm-ed25519))
+
+(def op-place
+  "Place command op token. Kotoba when ready."
+  (oracle-str-const 'op-place mirror-op-place))
+
+(def op-revoke
+  (oracle-str-const 'op-revoke mirror-op-revoke))
+
+(def op-unknown
+  (oracle-str-const 'op-unknown mirror-op-unknown))
+
+(def event-placed
+  (oracle-str-const 'event-placed mirror-event-placed))
+
+(def event-revoked
+  (oracle-str-const 'event-revoked mirror-event-revoked))
 
 (defn initial-state []
   {:epochs {} :placements {} :sequence 0})
@@ -113,12 +157,8 @@
                     (valid-event? event))
        (reject :invalid-signing-input
                "Complete Component authority signing input is required" {}))
-     (let [fmt (keyword (try-oracle
-                         #(o 'format-v1 [])
-                         (fn [] mirror-format-v1)))
-           alg (keyword (try-oracle
-                         #(o 'algorithm-ed25519 [])
-                         (fn [] mirror-algorithm-ed25519)))
+     (let [fmt (keyword format-v1)
+           alg (keyword algorithm-ed25519)
            unsigned {:format fmt
                      :algorithm alg
                      :key-id key-id
@@ -161,8 +201,8 @@
                 (o 'next-sequence [(oracle/as-i64 (:sequence state))]))
               #(mirror-next-sequence (:sequence state)))
         kind (try-oracle
-              #(keyword (o 'event-kind ["place"]))
-              #(mirror-event-kind "place"))
+              #(keyword (o 'event-kind [op-place]))
+              #(mirror-event-kind op-place))
         state' (-> state
                    (assoc-in [:epochs component-cid] epoch)
                    (update-in [:placements component-cid] (fnil conj #{}) node)
@@ -188,8 +228,8 @@
                 (o 'next-sequence [(oracle/as-i64 (:sequence state))]))
               #(mirror-next-sequence (:sequence state)))
         kind (try-oracle
-              #(keyword (o 'event-kind ["revoke"]))
-              #(mirror-event-kind "revoke"))
+              #(keyword (o 'event-kind [op-revoke]))
+              #(mirror-event-kind op-revoke))
         state' (-> state
                    (assoc-in [:epochs component-cid] epoch)
                    (update :placements dissoc component-cid)
