@@ -1,0 +1,16 @@
+(ns overlay-stream-core
+  (:export [default-window-size advance-seq ack-accepted?]))
+
+;; W6 pure-planner oracle — murakumo.overlay.stream scalar core.
+;; stream-id hashing and frame/map assembly stay cljc.
+;; Parity: test/murakumo/overlay_stream_kotoba_parity_test.clj
+
+(defn default-window-size [] :i64 64)
+
+(defn advance-seq [next-seq :i64] :i64
+  ;; cljc: (update stream :next-seq inc)
+  (+ next-seq 1))
+
+(defn ack-accepted? [accepted :i64] :i64
+  ;; cljc: (boolean accepted?) — 0/1 in guest
+  (if (= accepted 0) 0 1))
