@@ -430,8 +430,15 @@
            (oracle/call :task-plan 'default-max-slots [])))
     (is (= (ir/execute live 'slots [-1 4 -1 8 16])
            (oracle/call :task-plan 'slots [-1 4 -1 8 16])))
-    (is (= (ir/execute live 'failed? [1 0 0 0])
-           (oracle/call :task-plan 'failed? [1 0 0 0])))
+    (let [exit0 (oracle/option-i64 0)
+          none-err (oracle/option-string nil)]
+      (is (= (ir/execute live 'failed? [exit0 0 none-err])
+             (oracle/call :task-plan 'failed? [exit0 0 none-err])))
+      (is (= 0 (oracle/call :task-plan 'failed? [exit0 0 none-err])))
+      (is (= 1 (oracle/call :task-plan 'failed?
+                            [(oracle/option-i64 nil) 0 none-err])))
+      (is (= 1 (oracle/call :task-plan 'failed?
+                            [exit0 0 (oracle/option-string "x")]))))
     (is (= (ir/execute live 'task-eligible? [31 (* 16 1024 1024 1024) 0])
            (oracle/call :task-plan 'task-eligible? [31 (* 16 1024 1024 1024) 0])))
     (is (= (ir/execute live 'task-id [12])
@@ -1098,8 +1105,14 @@
                                           :wasm32-kotoba-v1 {}))]
     (is (= (ir/execute k 'default-rotation-seconds [])
            (oracle/call :overlay-keyring 'default-rotation-seconds [])))
-    (is (= (ir/execute pe 'choose-via [1 0 1])
-           (oracle/call :overlay-peer 'choose-via [1 0 1])))
+    (let [direct (oracle/option-string "direct")
+          relay (oracle/option-string "relay")
+          none-s (oracle/option-string nil)]
+      (is (= (ir/execute pe 'choose-via [direct "unknown" relay])
+             (oracle/call :overlay-peer 'choose-via [direct "unknown" relay])))
+      (is (= "direct" (oracle/call :overlay-peer 'choose-via [direct "unknown" relay])))
+      (is (= "relay" (oracle/call :overlay-peer 'choose-via [direct "down" relay])))
+      (is (= "" (oracle/call :overlay-peer 'choose-via [none-s "unknown" none-s]))))
     (is (= (ir/execute s 'advance-seq [3])
            (oracle/call :overlay-stream 'advance-seq [3])))
     (is (= (ir/execute c 'node-region ["" "" ""])

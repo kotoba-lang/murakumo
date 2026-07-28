@@ -27,13 +27,23 @@
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
+(defn- kotoba-literal [s]
+  (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
+
+(defn- opt-str-form [s]
+  (if (nil? s)
+    "(option-none-of [:option :string])"
+    (str "(option-some-of [:option :string] " (kotoba-literal s) ")")))
+
 (defn- project-choose [peer]
   (let [paths (peer/candidate-paths peer)
-        has-direct (if (some #(= :direct (:via %)) paths) 1 0)
-        has-relay (if (some #(= :relay (:via %)) paths) 1 0)
-        health-down (if (= :down (:health peer)) 1 0)
+        direct? (boolean (some #(= :direct (:via %)) paths))
+        relay? (boolean (some #(= :relay (:via %)) paths))
+        health (name (or (:health peer) :unknown))
         via (some-> (peer/choose-path peer) :via name)]
-    {:has-direct has-direct :has-relay has-relay :health-down health-down
+    {:direct (when direct? "direct")
+     :relay (when relay? "relay")
+     :health health
      :expected (or via "")}))
 
 (deftest choose-via-matches-choose-path
@@ -46,8 +56,9 @@
                      (fn [i peer]
                        (let [x (project-choose peer)]
                          [(str "c_" i)
-                          (str "(choose-via " (:has-direct x) " "
-                               (:health-down x) " " (:has-relay x) ")")]))
+                          (str "(choose-via " (opt-str-form (:direct x)) " "
+                               (kotoba-literal (:health x)) " "
+                               (opt-str-form (:relay x)) ")")]))
                      corpus))
         actual (compile-string-cases cases)
         labels (compile-string-cases
