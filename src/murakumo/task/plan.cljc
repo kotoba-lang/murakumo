@@ -20,22 +20,26 @@
 ;;   - no autoscaler / placement groups / gang scheduling
 ;;
 ;; W6 product-shell authority (ADR-260728-w6-task-oracle-authority):
-;; On the JVM, slots / failed? / eligible? flags / task-id / retry bounds /
-;; wave-slot / percentile index / summary retried+speedup DELEGATE to
-;; precompiled kotoba/task_plan_core.kotoba KIR.
+;; slots / failed? / eligible? flags / task-id / retry bounds / wave-slot /
+;; percentile index / summary retried+speedup DELEGATE to precompiled
+;; kotoba/task_plan_core.kotoba KIR when the oracle is loadable (JVM classpath
+;; or cljs/nbb resource loader — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: admit/prepare folds, set membership projection for labels/
 ;; roles/exclude/allowlist, sort-by node-score, map assembly.
+;; cljs mirrors remain as fallback when oracle is not ready.
 
 (ns murakumo.task.plan
-  "Task pure helpers use kotoba/task_plan_core.kotoba authority on JVM."
+  "Task pure helpers use kotoba/task_plan_core.kotoba authority when oracle ready."
   (:require [clojure.string :as str]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :task-plan)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
 
 ;; ── host-mirror pure helpers (cljs fallback + semantic documentation) ──
 
@@ -282,14 +286,15 @@
 
 (defn failed?
   "A result is a failure when the process could not start, timed out, or exited
-   non-zero. JVM: kotoba `failed?` with Product Value ABI optional exit/error."
+   non-zero. Kotoba `failed?` when oracle ready (JVM or cljs/nbb load)."
   [{:keys [exit timeout? error] :as r}]
-  #?(:clj
-     (= 1 (o 'failed?
+  (if (oracle-ready?)
+    (= 1 (oracle/i64->host
+          (o 'failed?
              [(oracle/option-i64 exit)
-              (long (if timeout? 1 0))
-              (oracle/option-string error)]))
-     :cljs (mirror-failed? r)))
+              (oracle/as-i64 (if timeout? 1 0))
+              (oracle/option-string error)])))
+    (mirror-failed? r)))
 
 (defn retry-tasks
   "Tasks to re-submit from `results`, one attempt later and excluding the node
