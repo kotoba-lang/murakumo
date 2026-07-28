@@ -10,7 +10,11 @@
 
 (def port-source (slurp "kotoba/reconcile_plan_core.kotoba"))
 
-(def export-prefix "default-replicas desired deficit watch-sleep-ms action-name")
+(def export-prefix
+  (str "default-replicas desired deficit watch-sleep-ms action-name "
+       "better-target? first-of-2 first-of-3 "
+       "pick-targets-2-pack pick-targets-3-first "
+       "target-pack-first target-pack-second target-pack-count"))
 
 (def fleet
   {:fleet/name "test-mesh"
@@ -125,3 +129,43 @@
             expected (name (:action (:decision p)))]
         (testing (str (:name app) " → " expected)
           (is (= expected (get actual (str "a_" i)))))))))
+
+(deftest pick-targets-pure-matches-cljc
+  (let [pick @#'r/pick-targets
+        ;; name order bits for ["c" "a" "b"]: indices 0=c,1=a,2=b
+        ;; name strings: a < b < c
+        ;; n01: c<=a? 0; n02: c<=b? 0; n12: a<=b? 1 → bits 0+0+4 = 4
+        name-bits-cab 4
+        actual (compile-i64-cases
+                {"f2" "(first-of-2 1 3 1)"  ;; load0=1 load1=3 name0 before → 0
+                 "f2b" "(first-of-2 1 1 0)" ;; equal load, name0 after → 1
+                 "p2" "(pick-targets-2-pack 1 3 1 2)"
+                 "p2n1" "(pick-targets-2-pack 1 3 1 1)"
+                 "p2n0" "(pick-targets-2-pack 1 3 1 0)"
+                 "f3" (str "(first-of-3 1 3 1 " name-bits-cab ")")
+                 "t3" (str "(pick-targets-3-first 1 3 1 " name-bits-cab ")")
+                 "pf" "(target-pack-first (pick-targets-2-pack 1 3 1 2))"
+                 "ps" "(target-pack-second (pick-targets-2-pack 1 3 1 2))"
+                 "pc" "(target-pack-count (pick-targets-2-pack 1 3 1 2))"})
+        ;; cljc: candidates c,a,b loads c=1,a=3,b=1 → sorted b,c,a
+        cljc (pick ["c" "a" "b"] 2 {"c" 1 "a" 3 "b" 1})]
+    (is (= 0 (get actual "f2")))
+    (is (= 1 (get actual "f2b")))
+    ;; first of c(1) vs a(3) with c before a? c>a so name0-before=0... wait
+    ;; candidates order in call is c,a,b as indices 0,1,2
+    ;; first-of-3 with loads 1,3,1: compare c vs a: load c better → w01=0
+    ;; compare c vs b: loads equal 1,1, name c<=b? false → n02=0 → b wins → first=2 (b)
+    (is (= 2 (get actual "f3")))
+    (is (= 2 (get actual "t3")))
+    (is (= 0 (get actual "pf")))  ;; first of two with load1=1,3 name0 before → 0
+    (is (= 1 (get actual "ps")))
+    (is (= 2 (get actual "pc")))
+    (is (= ["b" "c"] cljc))
+    ;; two-pack: candidates order [b c] loads 1,1 names b before c
+    (let [p2 (compile-i64-cases
+              {"ord" "(pick-targets-2-pack 1 1 1 2)"})
+          pack (get p2 "ord")]
+      (is (= 0 (rem pack 256)))
+      (is (= 1 (rem (quot pack 256) 256)))
+      (is (= 2 (quot pack 65536))))))
+
