@@ -1,0 +1,149 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-fleet-path,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "fleet.edn",
+   :param-types []}
+  {:name default-connect-path,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "connect.edn",
+   :param-types []}
+  {:name default-cloud-path,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "cloud.edn",
+   :param-types []}
+  {:name default-kotoba-dir,
+   :params [home],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    home
+    "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba"),
+   :param-types [:string]}
+  {:name kotoba-dir-from,
+   :params [override home],
+   :result :string,
+   :effects #{},
+   :body
+   (if (string=? override "") (default-kotoba-dir home) override),
+   :param-types [:string :string]}
+  {:name pinned-bin-dir,
+   :params [user-dir],
+   :result :string,
+   :effects #{},
+   :body (string-concat user-dir "/bin"),
+   :param-types [:string]}
+  {:name release-bin-dir,
+   :params [kotoba-dir],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat kotoba-dir "/target/aarch64-apple-darwin/release"),
+   :param-types [:string]}
+  {:name kotoba-server-bin,
+   :params [bin-dir],
+   :result :string,
+   :effects #{},
+   :body (string-concat bin-dir "/kotoba-server"),
+   :param-types [:string]}
+  {:name local-kotoba-bin,
+   :params [bin-dir],
+   :result :string,
+   :effects #{},
+   :body (string-concat bin-dir "/kotoba"),
+   :param-types [:string]}
+  {:name pinned-wit-dir,
+   :params [user-dir],
+   :result :string,
+   :effects #{},
+   :body (string-concat (pinned-bin-dir user-dir) "/wit"),
+   :param-types [:string]}
+  {:name runtime-wit-dir,
+   :params [kotoba-dir],
+   :result :string,
+   :effects #{},
+   :body (string-concat kotoba-dir "/crates/kotoba-runtime/wit"),
+   :param-types [:string]}
+  {:name build-manifest-path,
+   :params [user-dir],
+   :result :string,
+   :effects #{},
+   :body (string-concat (pinned-bin-dir user-dir) "/BUILD.edn"),
+   :param-types [:string]}
+  {:name peers-path,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ".murakumo-peers.edn",
+   :param-types []}
+  {:name launchd-template-path,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "deploy/com.murakumo.kotoba-mesh.plist.tmpl",
+   :param-types []}
+  {:name kotoba-bin,
+   :params [user-dir pinned-exists],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= pinned-exists 1)
+    (string-concat (pinned-bin-dir user-dir) "/kotoba")
+    "kotoba"),
+   :param-types [:string :i64]}
+  {:name resolve-local-bin,
+   :params [user-dir kotoba-dir pinned-exists murakumo-bin],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= pinned-exists 1)
+    (pinned-bin-dir user-dir)
+    (if
+     (string=? murakumo-bin "")
+     (release-bin-dir kotoba-dir)
+     murakumo-bin)),
+   :param-types [:string :string :i64 :string]}
+  {:name resolve-wit-dir,
+   :params [user-dir kotoba-dir pinned-wit-exists],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= pinned-wit-exists 1)
+    (pinned-wit-dir user-dir)
+    (runtime-wit-dir kotoba-dir)),
+   :param-types [:string :string :i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-fleet-path
+  default-connect-path
+  default-cloud-path
+  default-kotoba-dir
+  pinned-bin-dir
+  release-bin-dir
+  kotoba-server-bin
+  local-kotoba-bin
+  pinned-wit-dir
+  runtime-wit-dir
+  build-manifest-path
+  peers-path
+  launchd-template-path
+  kotoba-bin
+  resolve-local-bin
+  resolve-wit-dir
+  kotoba-dir-from],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

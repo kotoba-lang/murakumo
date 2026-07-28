@@ -1,0 +1,321 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-connect-timeout-s,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 8,
+   :param-types []}
+  {:name default-control-persist-s,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 30,
+   :param-types []}
+  {:name rc-marker,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "__murakumo_rc=",
+   :param-types []}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name wrap-cmd,
+   :params [cmd],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [a
+     (string-concat "( " cmd)
+     b
+     (string-concat a "\n); __mrc=$?; echo \"")
+     c
+     (string-concat b (rc-marker))]
+    (string-concat c "$__mrc\"")),
+   :param-types [:string]}
+  {:name connect-timeout-opt,
+   :params [seconds],
+   :result :string,
+   :effects #{},
+   :body (string-concat "ConnectTimeout=" (i64-str seconds)),
+   :param-types [:i64]}
+  {:name control-path-opt,
+   :params [path],
+   :result :string,
+   :effects #{},
+   :body (string-concat "ControlPath=" path),
+   :param-types [:string]}
+  {:name control-persist-opt,
+   :params [seconds],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "ControlPersist="
+    (string-concat (i64-str seconds) "s")),
+   :param-types [:i64]}
+  {:name scp-dest,
+   :params [host dest],
+   :result :string,
+   :effects #{},
+   :body (string-concat host (string-concat ":" dest)),
+   :param-types [:string :string]}
+  {:name close-master-control-opt,
+   :params [control-path],
+   :result :string,
+   :effects #{},
+   :body (string-concat "ControlPath=" control-path),
+   :param-types [:string]}
+  {:name ensure-forward-command,
+   :params [local-port remote-port host],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [lp
+     (i64-str local-port)
+     rp
+     (i64-str remote-port)
+     a
+     (string-concat "pgrep -f '" lp)
+     b
+     (string-concat a ":localhost:")
+     c
+     (string-concat b rp)
+     d
+     (string-concat c " ")
+     e
+     (string-concat d host)
+     f
+     (string-concat
+      e
+      "' >/dev/null 2>&1 || ssh -o BatchMode=yes -fN -L ")
+     g
+     (string-concat f lp)
+     h
+     (string-concat g ":localhost:")
+     i
+     (string-concat h rp)]
+    (string-concat i (string-concat " " host))),
+   :param-types [:i64 :i64 :string]}
+  {:name replace-forward-command,
+   :params [local-port remote-port host],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [lp
+     (i64-str local-port)
+     rp
+     (i64-str remote-port)
+     a
+     (string-concat "pkill -f '" lp)
+     b
+     (string-concat
+      a
+      ":localhost' 2>/dev/null; sleep 0.3; ssh -o BatchMode=yes -fN -L ")
+     c
+     (string-concat b lp)
+     d
+     (string-concat c ":localhost:")
+     e
+     (string-concat d rp)]
+    (string-concat e (string-concat " " host))),
+   :param-types [:i64 :i64 :string]}
+  {:name remote-curl-command,
+   :params [url],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat "curl -s -m 5 " (string-concat url " 2>/dev/null")),
+   :param-types [:string]}
+  {:name marker-prefix?,
+   :params [line],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [m
+     (rc-marker)
+     n
+     (string-byte-length m)
+     ln
+     (string-byte-length line)]
+    (if (< ln n) 0 (if (string=? (string-substring line 0 n) m) 1 0))),
+   :param-types [:string]}
+  {:name strip-marker-digits,
+   :params [line],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [m
+     (rc-marker)
+     n
+     (string-byte-length m)
+     ln
+     (string-byte-length line)]
+    (if (< ln n) "" (string-substring line n ln))),
+   :param-types [:string]}
+  {:name batch-mode-opt,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "BatchMode=yes",
+   :param-types []}
+  {:name strict-host-key-opt,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "StrictHostKeyChecking=accept-new",
+   :param-types []}
+  {:name control-master-opt,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "ControlMaster=auto",
+   :param-types []}
+  {:name digit-val?,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= (string-byte-length c) 1)
+    (if (string-contains? "0123456789" c) 1 0)
+    0),
+   :param-types [:string]}
+  {:name digit-of,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? c "0")
+    0
+    (if
+     (string=? c "1")
+     1
+     (if
+      (string=? c "2")
+      2
+      (if
+       (string=? c "3")
+       3
+       (if
+        (string=? c "4")
+        4
+        (if
+         (string=? c "5")
+         5
+         (if
+          (string=? c "6")
+          6
+          (if
+           (string=? c "7")
+           7
+           (if (string=? c "8") 8 (if (string=? c "9") 9 -1)))))))))),
+   :param-types [:string]}
+  {:name trim-ws,
+   :params [s],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     s
+     (let
+      [c0 (string-substring s 0 1)]
+      (if
+       (if (string=? c0 " ") 1 (if (string=? c0 "\t") 1 0))
+       (trim-ws (string-substring s 1 n))
+       (let
+        [c1 (string-substring s (- n 1) n)]
+        (if
+         (if (string=? c1 " ") 1 (if (string=? c1 "\t") 1 0))
+         (trim-ws (string-substring s 0 (- n 1)))
+         s)))))),
+   :param-types [:string]}
+  {:name parse-digits-go,
+   :params [s acc],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     acc
+     (let
+      [c (string-substring s 0 1) d (digit-of c)]
+      (if
+       (< d 0)
+       -1
+       (parse-digits-go (string-substring s 1 n) (+ (* acc 10) d)))))),
+   :param-types [:string :i64]}
+  {:name parse-digits,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [t (trim-ws s) n (string-byte-length t)]
+    (if (= n 0) -1 (parse-digits-go t 0))),
+   :param-types [:string]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-connect-timeout-s
+  default-control-persist-s
+  rc-marker
+  digit-char
+  nat-str
+  i64-str
+  wrap-cmd
+  connect-timeout-opt
+  control-path-opt
+  control-persist-opt
+  scp-dest
+  close-master-control-opt
+  ensure-forward-command
+  replace-forward-command
+  remote-curl-command
+  marker-prefix?
+  strip-marker-digits
+  batch-mode-opt
+  strict-host-key-opt
+  control-master-opt
+  digit-val?
+  parse-digits
+  trim-ws],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

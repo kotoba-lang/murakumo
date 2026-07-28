@@ -1,37 +1,34 @@
 ;; murakumo.kotoba-oracle-gen — regenerate precompiled KIR product-shell artifacts.
 ;;
 ;; Run under :test (needs kotoba.compiler):
-;;   clojure -M:test -m murakumo.kotoba-oracle-gen
+;;   clojure -M:test -e '(require (quote murakumo.kotoba-oracle-gen))
+;;                       (run! println (murakumo.kotoba-oracle-gen/regenerate-all!))'
 ;;
-;; Writes resources/murakumo/oracle/<name>.kir.edn from kotoba/<name>.kotoba
-;; using the same compile-source path as parity tests. No new runtime.
+;; Discovers every kotoba/*_core.kotoba and writes
+;; resources/murakumo/oracle/<name>.kir.edn using the same compile-source
+;; path as parity tests. No new runtime.
 
 (ns murakumo.kotoba-oracle-gen
   (:require [clojure.java.io :as io]
             [clojure.pprint :as pp]
+            [clojure.string :as str]
             [kotoba.compiler.core :as compiler])
   (:gen-class))
 
-(def ^:private artifacts
-  "Source relative to repo root → resource output path."
-  [{"source" "kotoba/kekkai_gate_core.kotoba"
-    "out" "resources/murakumo/oracle/kekkai_gate_core.kir.edn"}
-   {"source" "kotoba/token_core.kotoba"
-    "out" "resources/murakumo/oracle/token_core.kir.edn"}
-   {"source" "kotoba/report_core.kotoba"
-    "out" "resources/murakumo/oracle/report_core.kir.edn"}
-   {"source" "kotoba/infer_plan_core.kotoba"
-    "out" "resources/murakumo/oracle/infer_plan_core.kir.edn"}
-   {"source" "kotoba/dash_state_core.kotoba"
-    "out" "resources/murakumo/oracle/dash_state_core.kir.edn"}
-   {"source" "kotoba/infer_schedule_core.kotoba"
-    "out" "resources/murakumo/oracle/infer_schedule_core.kir.edn"}
-   {"source" "kotoba/task_plan_core.kotoba"
-    "out" "resources/murakumo/oracle/task_plan_core.kir.edn"}
-   {"source" "kotoba/infer_engine_core.kotoba"
-    "out" "resources/murakumo/oracle/infer_engine_core.kir.edn"}
-   {"source" "kotoba/secret_core.kotoba"
-    "out" "resources/murakumo/oracle/secret_core.kir.edn"}])
+(defn discover-artifacts
+  "Every kotoba/*_core.kotoba → resources/murakumo/oracle/*.kir.edn."
+  []
+  (->> (file-seq (io/file "kotoba"))
+       (filter #(and (.isFile %) (str/ends-with? (.getName %) "_core.kotoba")))
+       (sort-by #(.getName %))
+       (mapv (fn [f]
+               (let [base (str/replace (.getName f) #".kotoba$" "")]
+                 {"source" (.getPath f)
+                  "out" (str "resources/murakumo/oracle/" base ".kir.edn")})))))
+
+(def artifacts
+  "Lazy discovery at load; used by regenerate-all! and tests."
+  (discover-artifacts))
 
 (defn compile-kir
   "Compile one .kotoba file to a KIR map (same path as parity tests)."
@@ -53,7 +50,7 @@
 (defn regenerate-all!
   "Regenerate every product-shell oracle artifact. Returns written paths."
   []
-  (mapv write-artifact! artifacts))
+  (mapv write-artifact! (discover-artifacts)))
 
 (defn -main [& _]
   (doseq [p (regenerate-all!)]

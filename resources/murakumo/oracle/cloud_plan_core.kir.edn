@@ -1,0 +1,148 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-driver,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo-overlay",
+   :param-types []}
+  {:name default-cloud-name,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo.cloud",
+   :param-types []}
+  {:name default-cloud-domain,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo.cloud",
+   :param-types []}
+  {:name default-cloud-graph,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo-cloud",
+   :param-types []}
+  {:name default-auth-key-env,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "MURAKUMO_OVERLAY_AUTH_KEY",
+   :param-types []}
+  {:name overlay-version,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1,
+   :param-types []}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name node-region,
+   :params [zone region-label region],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (string=? zone "")
+    (if
+     (string=? region-label "")
+     (if (string=? region "") "global" region)
+     region-label)
+    zone),
+   :param-types [:string :string :string]}
+  {:name relay-score,
+   :params [node-region relay-region],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? node-region relay-region) 0 1),
+   :param-types [:string :string]}
+  {:name overlay-id-input,
+   :params [overlay-id cloud-name],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (string=? overlay-id "")
+    (if (string=? cloud-name "") "murakumo.cloud" cloud-name)
+    overlay-id),
+   :param-types [:string :string]}
+  {:name node-id-input,
+   :params [overlay-cid node-name],
+   :result :string,
+   :effects #{},
+   :body (string-concat overlay-cid (string-concat ":" node-name)),
+   :param-types [:string :string]}
+  {:name quic-endpoint,
+   :params [host port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "quic://"
+    (string-concat host (string-concat ":" (i64-str port)))),
+   :param-types [:string :i64]}
+  {:name webrtc-endpoint,
+   :params [host p2p-port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "webrtc://"
+    (string-concat
+     host
+     (string-concat ":" (i64-str (+ p2p-port 100))))),
+   :param-types [:string :i64]}
+  {:name relay-endpoint-url,
+   :params [relay-url node-id],
+   :result :string,
+   :effects #{},
+   :body (string-concat relay-url (string-concat "/" node-id)),
+   :param-types [:string :string]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-driver
+  default-cloud-name
+  default-cloud-domain
+  default-cloud-graph
+  default-auth-key-env
+  overlay-version
+  digit-char
+  nat-str
+  i64-str
+  node-region
+  relay-score
+  overlay-id-input
+  node-id-input
+  quic-endpoint
+  webrtc-endpoint
+  relay-endpoint-url],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

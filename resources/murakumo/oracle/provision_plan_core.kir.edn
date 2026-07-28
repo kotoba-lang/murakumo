@@ -1,0 +1,137 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name plist-label,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "com.murakumo.kotoba-mesh",
+   :param-types []}
+  {:name remote-bin,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "$HOME/.murakumo/bin",
+   :param-types []}
+  {:name remote-store,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "$HOME/.murakumo/store",
+   :param-types []}
+  {:name ssh-rsync-options,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "ssh -o BatchMode=yes -o ConnectTimeout=8",
+   :param-types []}
+  {:name peer-advertise-wait-ms,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 8000,
+   :param-types []}
+  {:name default-p2p-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 4001,
+   :param-types []}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name blank?,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? s "") 1 0),
+   :param-types [:string]}
+  {:name operator-seed-missing?,
+   :params [seed],
+   :result :i64,
+   :effects #{},
+   :body (blank? seed),
+   :param-types [:string]}
+  {:name resolve-p2p-port,
+   :params [has-node node-port has-fleet fleet-port],
+   :result :i64,
+   :effects #{},
+   :body
+   (if (= has-node 1) node-port (if (= has-fleet 1) fleet-port 4001)),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name multiaddr,
+   :params [ip port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "/ip4/"
+    (string-concat
+     ip
+     (string-concat
+      "/udp/"
+      (string-concat (i64-str port) "/quic-v1")))),
+   :param-types [:string :i64]}
+  {:name webrtc-port,
+   :params [p2p-port],
+   :result :i64,
+   :effects #{},
+   :body (+ p2p-port 100),
+   :param-types [:i64]}
+  {:name mesh-binary-status-command,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   "test -x $HOME/.murakumo/bin/kotoba-server && echo installed || echo absent",
+   :param-types []}
+  {:name remote-store-command,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "mkdir -p $HOME/.murakumo/bin $HOME/.murakumo/store",
+   :param-types []}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [plist-label
+  remote-bin
+  remote-store
+  ssh-rsync-options
+  peer-advertise-wait-ms
+  default-p2p-port
+  digit-char
+  nat-str
+  i64-str
+  operator-seed-missing?
+  resolve-p2p-port
+  multiaddr
+  webrtc-port
+  mesh-binary-status-command
+  remote-store-command],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

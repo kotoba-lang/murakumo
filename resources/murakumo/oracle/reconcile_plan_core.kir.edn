@@ -1,0 +1,151 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-replicas,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1,
+   :param-types []}
+  {:name desired,
+   :params [has-replicas replicas],
+   :result :i64,
+   :effects #{},
+   :body (if (= has-replicas 0) 1 replicas),
+   :param-types [:i64 :i64]}
+  {:name deficit,
+   :params [desired-n running],
+   :result :i64,
+   :effects #{},
+   :body (let [d (- desired-n running)] (if (< d 0) 0 d)),
+   :param-types [:i64 :i64]}
+  {:name watch-sleep-ms,
+   :params [seconds],
+   :result :i64,
+   :effects #{},
+   :body (* 1000 seconds),
+   :param-types [:i64]}
+  {:name action-name,
+   :params [has-cid running desired-n free-candidates has-misplaced],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [def-n (deficit desired-n running)]
+    (if
+     (= has-cid 0)
+     "needs-build"
+     (if
+      (< desired-n running)
+      "over"
+      (if
+       (= def-n 0)
+       "satisfied"
+       (if (< free-candidates 1) "blocked" "place"))))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name rem64,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body (- a (* (quot a b) b)),
+   :param-types [:i64 :i64]}
+  {:name bit?,
+   :params [flags mask],
+   :result :i64,
+   :effects #{},
+   :body (if (= 0 (rem64 (quot flags mask) 2)) 0 1),
+   :param-types [:i64 :i64]}
+  {:name better-target?,
+   :params [load-a load-b name-a-before-b],
+   :result :i64,
+   :effects #{},
+   :body
+   (if (< load-a load-b) 1 (if (< load-b load-a) 0 name-a-before-b)),
+   :param-types [:i64 :i64 :i64]}
+  {:name first-of-2,
+   :params [load0 load1 name0-before-1],
+   :result :i64,
+   :effects #{},
+   :body (if (= (better-target? load0 load1 name0-before-1) 1) 0 1),
+   :param-types [:i64 :i64 :i64]}
+  {:name first-of-3,
+   :params [load0 load1 load2 name-bits],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n01
+     (bit? name-bits 1)
+     n02
+     (bit? name-bits 2)
+     n12
+     (bit? name-bits 4)
+     w01
+     (first-of-2 load0 load1 n01)]
+    (if
+     (= w01 0)
+     (if (= (better-target? load0 load2 n02) 1) 0 2)
+     (if (= (better-target? load1 load2 n12) 1) 1 2))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name pack-targets,
+   :params [first second count],
+   :result :i64,
+   :effects #{},
+   :body (+ first (+ (* second 256) (* count 65536))),
+   :param-types [:i64 :i64 :i64]}
+  {:name target-pack-first,
+   :params [pack],
+   :result :i64,
+   :effects #{},
+   :body (rem64 pack 256),
+   :param-types [:i64]}
+  {:name target-pack-second,
+   :params [pack],
+   :result :i64,
+   :effects #{},
+   :body (rem64 (quot pack 256) 256),
+   :param-types [:i64]}
+  {:name target-pack-count,
+   :params [pack],
+   :result :i64,
+   :effects #{},
+   :body (quot pack 65536),
+   :param-types [:i64]}
+  {:name pick-targets-2-pack,
+   :params [load0 load1 name0-before-1 n],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< n 1)
+    (pack-targets 0 0 0)
+    (let
+     [f (first-of-2 load0 load1 name0-before-1) s (if (= f 0) 1 0)]
+     (if (= n 1) (pack-targets f 0 1) (pack-targets f s 2)))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name pick-targets-3-first,
+   :params [load0 load1 load2 name-bits],
+   :result :i64,
+   :effects #{},
+   :body (first-of-3 load0 load1 load2 name-bits),
+   :param-types [:i64 :i64 :i64 :i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-replicas
+  desired
+  deficit
+  watch-sleep-ms
+  action-name
+  better-target?
+  first-of-2
+  first-of-3
+  pick-targets-2-pack
+  pick-targets-3-first
+  target-pack-first
+  target-pack-second
+  target-pack-count],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

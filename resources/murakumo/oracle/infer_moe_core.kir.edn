@@ -1,0 +1,72 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name gib,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1073741824,
+   :param-types []}
+  {:name capacity-default,
+   :params [usable-bytes],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [g (gib) u128 (* 128 g) u64 (* 64 g) u48 (* 48 g) u32 (* 32 g)]
+    (if
+     (< usable-bytes u32)
+     0
+     (if
+      (< usable-bytes u48)
+      208
+      (if
+       (< usable-bytes u64)
+       320
+       (if (< usable-bytes u128) 432 512))))),
+   :param-types [:i64]}
+  {:name expert-ratio-milli,
+   :params [experts active],
+   :result :i64,
+   :effects #{},
+   :body (if (< active 1) 0 (quot (* experts 1000) active)),
+   :param-types [:i64 :i64]}
+  {:name verdict-name,
+   :params [experts active shared],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (if (< experts 1) 1 (if (< active 1) 1 0))
+    "unknown"
+    (let
+     [milli
+      (expert-ratio-milli experts active)
+      high
+      (if (< milli 10000) 0 1)]
+     (if
+      (if (= high 1) (if (= shared 1) 1 0) 0)
+      "recommended"
+      (if (= shared 1) "workable" "not-recommended")))),
+   :param-types [:i64 :i64 :i64]}
+  {:name resident-est,
+   :params [weight-bytes experts capacity],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (if
+     (< weight-bytes 1)
+     1
+     (if (< experts 1) 1 (if (< capacity 1) 1 0)))
+    weight-bytes
+    (quot (* weight-bytes capacity) experts)),
+   :param-types [:i64 :i64 :i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [gib capacity-default expert-ratio-milli verdict-name resident-est],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

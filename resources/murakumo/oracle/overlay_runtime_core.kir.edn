@@ -1,0 +1,208 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-relay-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 4701,
+   :param-types []}
+  {:name default-web-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 443,
+   :param-types []}
+  {:name default-quic-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 4001,
+   :param-types []}
+  {:name default-port-for-kind,
+   :params [kind],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? kind "quic")
+    4001
+    (if
+     (string=? kind "relay")
+     4701
+     (if
+      (if
+       (string=? kind "webrtc")
+       1
+       (if (string=? kind "webtransport") 1 0))
+      443
+      0))),
+   :param-types [:string]}
+  {:name known-adapter?,
+   :params [name],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? name "murakumo.runtime.relay")
+    1
+    (if
+     (string=? name "murakumo.runtime.quic")
+     1
+     (if
+      (string=? name "murakumo.runtime.webrtc")
+      1
+      (if
+       (string=? name "murakumo.runtime.webtransport")
+       1
+       (if (string=? name "murakumo.runtime.relay-client") 1 0))))),
+   :param-types [:string]}
+  {:name adapter-kind,
+   :params [name],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (string=? name "murakumo.runtime.relay")
+    "relay-runtime"
+    (if
+     (string=? name "murakumo.runtime.quic")
+     "quic"
+     (if
+      (string=? name "murakumo.runtime.webrtc")
+      "webrtc"
+      (if
+       (string=? name "murakumo.runtime.webtransport")
+       "webtransport"
+       (if
+        (string=? name "murakumo.runtime.relay-client")
+        "relay"
+        ""))))),
+   :param-types [:string]}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name endpoint-kind,
+   :params [endpoint],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length endpoint)]
+    (if
+     (if
+      (< n 7)
+      0
+      (if (string=? (string-substring endpoint 0 7) "quic://") 1 0))
+     "quic"
+     (if
+      (if
+       (< n 9)
+       0
+       (if (string=? (string-substring endpoint 0 9) "webrtc://") 1 0))
+      "webrtc"
+      (if
+       (if
+        (< n 8)
+        0
+        (if (string=? (string-substring endpoint 0 8) "relay://") 1 0))
+       "relay"
+       (if
+        (if
+         (< n 15)
+         0
+         (if
+          (string=? (string-substring endpoint 0 15) "webtransport://")
+          1
+          0))
+        "webtransport"
+        "other"))))),
+   :param-types [:string]}
+  {:name find-scheme-end,
+   :params [s i n],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< (+ i 2) n)
+    (if
+     (if
+      (string=? (string-substring s i (+ i 1)) ":")
+      (if
+       (string=? (string-substring s (+ i 1) (+ i 2)) "/")
+       (if (string=? (string-substring s (+ i 2) (+ i 3)) "/") 1 0)
+       0)
+      0)
+     (+ i 3)
+     (find-scheme-end s (+ i 1) n))
+    -1),
+   :param-types [:string :i64 :i64]}
+  {:name find-host-end,
+   :params [s i n],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< i n)
+    (let
+     [c (string-substring s i (+ i 1))]
+     (if
+      (if (string=? c ":") 1 (if (string=? c "/") 1 0))
+      i
+      (find-host-end s (+ i 1) n)))
+    n),
+   :param-types [:string :i64 :i64]}
+  {:name scheme-prefix-host,
+   :params [url],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length url) start (find-scheme-end url 0 n)]
+    (if
+     (< start 0)
+     ""
+     (let
+      [end (find-host-end url start n)]
+      (if (< start end) (string-substring url start end) "")))),
+   :param-types [:string]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-relay-port
+  default-web-port
+  default-quic-port
+  default-port-for-kind
+  known-adapter?
+  adapter-kind
+  digit-char
+  nat-str
+  i64-str
+  endpoint-kind
+  scheme-prefix-host],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

@@ -1,0 +1,81 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name alg-name,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "aes-256-gcm",
+   :param-types []}
+  {:name cipher-transform,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "AES/GCM/NoPadding",
+   :param-types []}
+  {:name nonce-bytes,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 12,
+   :param-types []}
+  {:name gcm-tag-bits,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 128,
+   :param-types []}
+  {:name field-alg,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "alg",
+   :param-types []}
+  {:name field-nonce,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "nonce",
+   :param-types []}
+  {:name field-ciphertext,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "ciphertext",
+   :param-types []}
+  {:name strip-b64-pad,
+   :params [s],
+   :result :string,
+   :effects #{},
+   :body (string-replace-all s "=" ""),
+   :param-types [:string]}
+  {:name sealed-alg-ok?,
+   :params [alg],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? alg (alg-name)) 1 0),
+   :param-types [:string]}
+  {:name sealed-fields-present?,
+   :params [has-alg has-nonce has-ct],
+   :result :i64,
+   :effects #{},
+   :body
+   (if (= has-alg 0) 0 (if (= has-nonce 0) 0 (if (= has-ct 0) 0 1))),
+   :param-types [:i64 :i64 :i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [alg-name
+  cipher-transform
+  nonce-bytes
+  gcm-tag-bits
+  field-alg
+  field-nonce
+  field-ciphertext
+  strip-b64-pad
+  sealed-alg-ok?
+  sealed-fields-present?],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

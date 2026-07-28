@@ -1,0 +1,144 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name repo-authority,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "did:web:etzhayyim.com:murakumo",
+   :param-types []}
+  {:name fleet-graph-name,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo-fleet",
+   :param-types []}
+  {:name snapshot-collection,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "com.murakumo.fleet.snapshot",
+   :param-types []}
+  {:name reconcile-collection,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "com.murakumo.fleet.reconcile",
+   :param-types []}
+  {:name snapshot-local-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 18099,
+   :param-types []}
+  {:name reconcile-local-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 18098,
+   :param-types []}
+  {:name forward-settle-ms,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 400,
+   :param-types []}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name snapshot-rkey,
+   :params [millis seq-n],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "snap-"
+    (string-concat
+     (i64-str millis)
+     (string-concat "-" (i64-str seq-n)))),
+   :param-types [:i64 :i64]}
+  {:name reconcile-rkey,
+   :params [millis seq-n],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "rec-"
+    (string-concat
+     (i64-str millis)
+     (string-concat "-" (i64-str seq-n)))),
+   :param-types [:i64 :i64]}
+  {:name repo-uri,
+   :params [collection rkey],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "at://"
+    (string-concat
+     (repo-authority)
+     (string-concat
+      "/"
+      (string-concat collection (string-concat "/" rkey))))),
+   :param-types [:string :string]}
+  {:name repo-write-url,
+   :params [local-port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "http://localhost:"
+    (string-concat
+     (i64-str local-port)
+     "/xrpc/com.etzhayyim.apps.kotoba.atproto.repo.write")),
+   :param-types [:i64]}
+  {:name write-ok?,
+   :params [out],
+   :result :i64,
+   :effects #{},
+   :body (if (string-contains? out "\"status\":\"ok\"") 1 0),
+   :param-types [:string]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [repo-authority
+  fleet-graph-name
+  snapshot-collection
+  reconcile-collection
+  snapshot-local-port
+  reconcile-local-port
+  forward-settle-ms
+  digit-char
+  nat-str
+  i64-str
+  snapshot-rkey
+  reconcile-rkey
+  repo-uri
+  repo-write-url
+  write-ok?],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}
