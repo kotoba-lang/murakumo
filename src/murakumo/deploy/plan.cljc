@@ -3,53 +3,108 @@
 ;; The CLI shell still performs filesystem reads, component builds, SSH
 ;; forwarding, artifact distribution, and sleeps. This namespace owns the pure
 ;; manifest parsing and command argv shapes used by that shell.
+;;
+;; W6 product-shell authority:
+;; constants + path/url pure helpers DELEGATE to precompiled
+;; kotoba/deploy_plan_core when oracle is loadable (JVM classpath or cljs/nbb —
+;; ADR-260728-w6-cljs-oracle-load). Regex extract, argv vectors, node folds stay host.
+;; cljs mirrors remain fallback when oracle is not ready.
 
 (ns murakumo.deploy.plan
   "Portable deploy planning helpers.
    W6 product-shell: constants + path/url pure helpers via kotoba deploy_plan_core."
   (:require [clojure.string :as str]
             [murakumo.config :as config]
-            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+            [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :deploy-plan)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+(defn- oracle-i64-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid export []))
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+;; ── host-mirror pure helpers ───────────────────────────────────────────
+
+(def ^:private mirror-default-wasm "/tmp/murakumo-deploy.wasm")
+(def ^:private mirror-default-publish-node "asher")
+(def ^:private mirror-artifact-forward-port 18900)
+(def ^:private mirror-publish-forward-port 18077)
+(def ^:private mirror-forward-settle-ms 1300)
+(def ^:private mirror-placement-wait-ms 75000)
+
+(defn- mirror-manifest-dir [manifest]
+  (let [d (str/replace (str manifest) #"/[^/]+$" "")]
+    (if (= d (str manifest)) "." d)))
+
+(defn- mirror-app-manifest-path [manifest-dir app-manifest]
+  (str manifest-dir "/" app-manifest))
+
+(defn- mirror-publish-selector [selector]
+  (or selector mirror-default-publish-node))
+
+(defn- mirror-localhost-url [port]
+  (str "http://localhost:" port))
+
+(defn- mirror-command-output [out]
+  (str/trim (str out)))
+
+;; ── dual-source constants ──────────────────────────────────────────────
 
 (def default-wasm
-  #?(:clj (o 'default-wasm [])
-     :cljs "/tmp/murakumo-deploy.wasm"))
+  (oracle-str-const 'default-wasm mirror-default-wasm))
 
 (def default-publish-node
-  #?(:clj (o 'default-publish-node [])
-     :cljs "asher"))
+  (oracle-str-const 'default-publish-node mirror-default-publish-node))
 
 (def pinned-binaries ["kotoba" "kotoba-server"])
 
 (def artifact-forward-port
-  #?(:clj (long (o 'artifact-forward-port []))
-     :cljs 18900))
+  (oracle-i64-const 'artifact-forward-port mirror-artifact-forward-port))
 
 (def publish-forward-port
-  #?(:clj (long (o 'publish-forward-port []))
-     :cljs 18077))
+  (oracle-i64-const 'publish-forward-port mirror-publish-forward-port))
 
 (def forward-settle-ms
-  #?(:clj (long (o 'forward-settle-ms []))
-     :cljs 1300))
+  (oracle-i64-const 'forward-settle-ms mirror-forward-settle-ms))
 
 (def placement-wait-ms
-  #?(:clj (long (o 'placement-wait-ms []))
-     :cljs 75000))
+  (oracle-i64-const 'placement-wait-ms mirror-placement-wait-ms))
 
 (defn manifest-dir
   "Directory portion of a manifest path. Bare filename → \".\".
-   JVM: kotoba `manifest-dir`."
+   Kotoba `manifest-dir` when oracle ready."
   [manifest]
-  #?(:clj (o 'manifest-dir [(str manifest)])
-     :cljs (let [d (str/replace manifest #"/[^/]+$" "")]
-             (if (= d manifest) "." d))))
+  (try-oracle
+   #(o 'manifest-dir [(str manifest)])
+   #(mirror-manifest-dir manifest)))
 
 (defn manifest-src
   "Extract the first `:src \"...\"` value from a kotoba app manifest string."
@@ -63,17 +118,19 @@
 
 (defn app-manifest-path
   "Resolve an app manifest file relative to a desired-state manifest directory.
-   JVM: kotoba `app-manifest-path`."
+   Kotoba `app-manifest-path` when oracle ready."
   [manifest-dir app]
-  #?(:clj (o 'app-manifest-path [(str manifest-dir) (str (:manifest app))])
-     :cljs (str manifest-dir "/" (:manifest app))))
+  (try-oracle
+   #(o 'app-manifest-path [(str manifest-dir) (str (:manifest app))])
+   #(mirror-app-manifest-path manifest-dir (:manifest app))))
 
 (defn publish-selector
   "Resolve the publish-node selector, defaulting to the fleet canary.
-   JVM: kotoba `publish-selector`."
+   Kotoba `publish-selector` when oracle ready (empty ≡ nil)."
   [selector]
-  #?(:clj (o 'publish-selector [(str (or selector ""))])
-     :cljs (or selector default-publish-node)))
+  (try-oracle
+   #(o 'publish-selector [(str (or selector ""))])
+   #(mirror-publish-selector selector)))
 
 (defn resolve-app-input
   "Pure deploy input summary from manifest path/text."
@@ -94,17 +151,19 @@
 
 (defn app-deploy-argv
   "argv for `kotoba app deploy --publish` through a local port-forward.
-   JVM: localhost URL via kotoba `localhost-url`."
+   Localhost URL via kotoba `localhost-url` when oracle ready."
   [kotoba manifest wit local-port]
   [kotoba "app" "deploy" manifest "--wit-dir" wit "--publish" "--url"
-   #?(:clj (o 'localhost-url [(long local-port)])
-      :cljs (str "http://localhost:" local-port))])
+   (try-oracle
+    #(o 'localhost-url [(oracle/as-i64 local-port)])
+    #(mirror-localhost-url local-port))])
 
 (defn block-put-argv
   "argv for putting a WASM artifact into a node-local forwarded kotoba server."
   [kotoba token wasm local-port]
-  [kotoba "--url" #?(:clj (o 'localhost-url [(long local-port)])
-                     :cljs (str "http://localhost:" local-port))
+  [kotoba "--url" (try-oracle
+                   #(o 'localhost-url [(oracle/as-i64 local-port)])
+                   #(mirror-localhost-url local-port))
    "--token" token "block" "put" "--file" wasm])
 
 (defn artifact-node-plan
@@ -133,10 +192,11 @@
 
 (defn command-output
   "Trim stdout from command output used as a scalar value.
-   JVM: kotoba `command-output`."
+   Kotoba `command-output` when oracle ready."
   [out]
-  #?(:clj (o 'command-output [(str out)])
-     :cljs (str/trim (str out))))
+  (try-oracle
+   #(o 'command-output [(str out)])
+   #(mirror-command-output out)))
 
 (defn- parse-int [s]
   #?(:clj (Integer/parseInt s)

@@ -4,69 +4,131 @@
 ;; contract is stable enough for the CLI runner, tests, and the later socket/relay
 ;; implementation to share.
 ;;
-;; W6 product-shell: default ports, known-adapter?, adapter-kind, endpoint-kind,
-;; scheme-prefix-host via kotoba overlay_runtime_core. Adapter registry maps and
-;; full URL regex parse stay host.
+;; W6 product-shell authority:
+;; default ports, known-adapter?, adapter-kind, scheme-prefix-host DELEGATE to
+;; precompiled kotoba/overlay_runtime_core when oracle is loadable
+;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; Adapter registry maps and full URL regex parse stay host. cljs mirrors as fallback.
 
 (ns murakumo.overlay.runtime
-  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
+  (:require [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :overlay-runtime)
 
-#?(:clj
-   (defn- o [export args]
-     (oracle/call oid export args)))
+(defn- o [export args]
+  (oracle/call oid export args))
+
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+(defn- oracle-i64-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid export []))
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+(defn- oracle-str-call [export args mirror]
+  (try-oracle
+   #(o export args)
+   (fn [] mirror)))
+
+;; ── host-mirror pure helpers ───────────────────────────────────────────
+
+(def ^:private mirror-default-relay-port 4701)
+(def ^:private mirror-default-web-port 443)
+(def ^:private mirror-default-quic-port 4001)
+
+(defn- mirror-default-port-for-kind [kind]
+  (case (name kind)
+    "quic" mirror-default-quic-port
+    "relay" mirror-default-relay-port
+    ("webrtc" "webtransport") mirror-default-web-port
+    0))
+
+(def ^:private mirror-known-adapters
+  #{"murakumo.runtime.relay"
+    "murakumo.runtime.quic"
+    "murakumo.runtime.webrtc"
+    "murakumo.runtime.webtransport"
+    "murakumo.runtime.relay-client"})
+
+(defn- mirror-adapter-kind [name]
+  (case name
+    "murakumo.runtime.relay" "relay-runtime"
+    "murakumo.runtime.quic" "quic"
+    "murakumo.runtime.webrtc" "webrtc"
+    "murakumo.runtime.webtransport" "webtransport"
+    "murakumo.runtime.relay-client" "relay"
+    ""))
+
+(defn- mirror-scheme-prefix-host [url]
+  (when-let [[_ host] (re-matches #"[a-zA-Z][a-zA-Z0-9+.-]*://([^/:]+).*"
+                                  (str url))]
+    host))
+
+;; ── dual-source constants ──────────────────────────────────────────────
 
 (def default-relay-port
-  #?(:clj (long (o 'default-relay-port []))
-     :cljs 4701))
+  (oracle-i64-const 'default-relay-port mirror-default-relay-port))
 
 (def default-web-port
-  #?(:clj (long (o 'default-web-port []))
-     :cljs 443))
+  (oracle-i64-const 'default-web-port mirror-default-web-port))
 
 (def default-quic-port
-  #?(:clj (long (o 'default-quic-port []))
-     :cljs 4001))
+  (oracle-i64-const 'default-quic-port mirror-default-quic-port))
+
+(defn- port-for-kind [kind]
+  (try-oracle
+   #(oracle/i64->host (o 'default-port-for-kind [(name kind)]))
+   #(mirror-default-port-for-kind kind)))
 
 (def default-port-by-kind
-  #?(:clj {:quic (long (o 'default-port-for-kind ["quic"]))
-           :webrtc (long (o 'default-port-for-kind ["webrtc"]))
-           :webtransport (long (o 'default-port-for-kind ["webtransport"]))
-           :relay (long (o 'default-port-for-kind ["relay"]))}
-     :cljs {:quic default-quic-port
-            :webrtc default-web-port
-            :webtransport default-web-port
-            :relay default-relay-port}))
+  {:quic (port-for-kind :quic)
+   :webrtc (port-for-kind :webrtc)
+   :webtransport (port-for-kind :webtransport)
+   :relay (port-for-kind :relay)})
+
+(defn- adapter-kind-kw [name]
+  (keyword
+   (try-oracle
+    #(o 'adapter-kind [(str name)])
+    #(mirror-adapter-kind name))))
 
 (def adapters
   {"murakumo.runtime.relay"
-   {:kind #?(:clj (keyword (o 'adapter-kind ["murakumo.runtime.relay"]))
-             :cljs :relay-runtime)
+   {:kind (adapter-kind-kw "murakumo.runtime.relay")
     :status :placeholder
     :opens :relay-listener}
 
    "murakumo.runtime.quic"
-   {:kind #?(:clj (keyword (o 'adapter-kind ["murakumo.runtime.quic"]))
-             :cljs :quic)
+   {:kind (adapter-kind-kw "murakumo.runtime.quic")
     :status :placeholder
     :opens :identity-stream}
 
    "murakumo.runtime.webrtc"
-   {:kind #?(:clj (keyword (o 'adapter-kind ["murakumo.runtime.webrtc"]))
-             :cljs :webrtc)
+   {:kind (adapter-kind-kw "murakumo.runtime.webrtc")
     :status :placeholder
     :opens :browser-identity-stream}
 
    "murakumo.runtime.webtransport"
-   {:kind #?(:clj (keyword (o 'adapter-kind ["murakumo.runtime.webtransport"]))
-             :cljs :webtransport)
+   {:kind (adapter-kind-kw "murakumo.runtime.webtransport")
     :status :placeholder
     :opens :browser-identity-stream}
 
    "murakumo.runtime.relay-client"
-   {:kind #?(:clj (keyword (o 'adapter-kind ["murakumo.runtime.relay-client"]))
-             :cljs :relay)
+   {:kind (adapter-kind-kw "murakumo.runtime.relay-client")
     :status :placeholder
     :opens :relayed-identity-stream}})
 
@@ -79,10 +141,11 @@
                (assoc spec :adapter name)))))
 
 (defn known-adapter?
-  "JVM: kotoba `known-adapter?`."
+  "Kotoba `known-adapter?` when oracle ready."
   [name]
-  #?(:clj (= 1 (o 'known-adapter? [(str name)]))
-     :cljs (contains? adapters name)))
+  (try-oracle
+   #(= 1 (oracle/i64->host (o 'known-adapter? [(str name)])))
+   #(contains? mirror-known-adapters (str name))))
 
 (defn parse-int [value]
   #?(:clj (Integer/parseInt value)
@@ -90,20 +153,19 @@
 
 (defn scheme-host
   "Host between `://` and next `:` or `/` or end.
-   JVM: kotoba `scheme-prefix-host`."
+   Kotoba `scheme-prefix-host` when oracle ready."
   [url]
-  #?(:clj (o 'scheme-prefix-host [(str url)])
-     :cljs
-     (when-let [[_ host] (re-matches #"[a-zA-Z][a-zA-Z0-9+.-]*://([^/:]+).*"
-                                     (str url))]
-       host)))
+  (let [s (str url)
+        host (try-oracle
+              #(o 'scheme-prefix-host [s])
+              #(or (mirror-scheme-prefix-host s) ""))]
+    (when (and (string? host) (seq host))
+      host)))
 
 (defn relay-url-parts [url]
   (when-let [[_ host port path] (re-matches #"relay://([^/:]+)(?::([0-9]+))?(/.*)?"
                                             (str url))]
-    {:host #?(:clj (let [h (scheme-host url)]
-                     (if (and (string? h) (seq h)) h host))
-              :cljs host)
+    {:host (or (scheme-host url) host)
      :port (when port (parse-int port))
      :path path}))
 
@@ -111,9 +173,7 @@
   (when-let [[_ scheme host port path] (re-matches #"([a-zA-Z][a-zA-Z0-9+.-]*)://([^/:]+)(?::([0-9]+))?(/.*)?"
                                                    (str url))]
     {:scheme scheme
-     :host #?(:clj (let [h (scheme-host url)]
-                     (if (and (string? h) (seq h)) h host))
-              :cljs host)
+     :host (or (scheme-host url) host)
      :port (when port (parse-int port))
      :path path}))
 
@@ -146,9 +206,7 @@
       :transport (:transport endpoint)
       :host host
       :port (or port (get default-port-by-kind kind
-                         #?(:clj (long (o 'default-port-for-kind
-                                          [(name (or kind :unknown))]))
-                            :cljs 0)))
+                         (port-for-kind (or kind :unknown))))
       :path path
       :overlay (:overlay session)
       :node (:node session)
@@ -164,8 +222,7 @@
   [step]
   (let [adapter-name (:adapter step)
         adapter-spec (adapter adapter-name)]
-    (if-not #?(:clj (known-adapter? adapter-name)
-               :cljs adapter-spec)
+    (if-not (known-adapter? adapter-name)
       {:ok? false
        :mode :adapter-missing
        :adapter adapter-name
