@@ -19,6 +19,12 @@
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
+(defn- opt-i64-form [n]
+  (if (nil? n)
+    "(option-none-of [:option :i64])"
+    (str "(option-some-of [:option :i64] " (long n) ")")))
+
+
 (defn- compile-string-cases [cases]
   (let [defs (for [[name body] cases]
                (str "(defn " name " [] :string " body ")"))
@@ -44,12 +50,12 @@
 (defn- project-serves [node reach]
   (let [{:keys [class plane]} (#'connect/parse-reach reach)
         ncls (connect/node-class connect-spec node)
-        has-http (if (some #{:http} (connect/class-transports connect-spec ncls :read)) 1 0)
+        http? (when (some #{:http} (connect/class-transports connect-spec ncls :read)) 1)
         common (set/intersection
                 (set (connect/class-transports connect-spec ncls :live))
                 (set (connect/class-transports connect-spec class :live)))
-        has-common (if (seq common) 1 0)]
-    {:plane (name plane) :has-http has-http :has-common has-common
+        common? (when (seq common) 1)]
+    {:plane (name plane) :http? http? :common? common?
      :expected (if (connect/serves-reach? connect-spec node reach) 1 0)}))
 
 (deftest class-defaults-match
@@ -77,7 +83,8 @@
                        (let [p (project-serves node reach)]
                          [(str "s_" i)
                           (str "(serves-plane? " (kotoba-literal (:plane p)) " "
-                               (:has-http p) " " (:has-common p) ")")]))
+                               (opt-i64-form (:http? p)) " "
+                               (opt-i64-form (:common? p)) ")")]))
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [node reach]] (map-indexed vector corpus)]

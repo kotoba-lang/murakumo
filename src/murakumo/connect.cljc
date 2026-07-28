@@ -64,13 +64,15 @@
   [connect node reach]
   (let [{:keys [class plane]} (parse-reach reach)
         ncls (node-class connect node)
-        has-http (if (some #{:http} (class-transports connect ncls :read)) 1 0)
-        has-common (if (seq (set/intersection
-                             (set (class-transports connect ncls :live))
-                             (set (class-transports connect class :live))))
-                     1 0)]
+        http? (when (some #{:http} (class-transports connect ncls :read)) 1)
+        common? (when (seq (set/intersection
+                            (set (class-transports connect ncls :live))
+                            (set (class-transports connect class :live))))
+                  1)]
     #?(:clj (= 1 (o 'serves-plane?
-                    [(name plane) (long has-http) (long has-common)]))
+                    [(name plane)
+                     (oracle/option-i64 http?)
+                     (oracle/option-i64 common?)]))
        :cljs
        (case plane
          :read (boolean (some #{:http} (class-transports connect ncls :read)))
