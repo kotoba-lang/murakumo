@@ -4,7 +4,8 @@
   (:require [murakumo.config :as config]
             [murakumo.cloud.plan :as plan]
             [murakumo.fleet :as fleet]
-            [murakumo.identity :as identity]))
+            [murakumo.identity :as identity]
+            [murakumo.secret :as secret]))
 
 (defn load-cloud
   "Read cloud.edn. cloud.edn is Datomic/Datascript tx-data (edn-datomize.cljs
@@ -14,9 +15,12 @@
   ([] (load-cloud config/default-cloud-path))
   ([path] (plan/merge-defaults (config/tx-data->map (config/read-edn-file path) "cloud-doc"))))
 
-(defn- auth-key-from-env [cloud]
+(defn- auth-key-from-env
+  "Resolve overlay auth key from the env var name declared in cloud.edn
+  (`:overlay/auth-key-env`) via exact named env read — no process env dump."
+  [cloud]
   (when-let [env-name (:overlay/auth-key-env cloud)]
-    (System/getenv env-name)))
+    (secret/resolve-exact-env env-name)))
 
 (defn- auth-key-from-operator-seed [cloud fleet]
   (when (= :operator-seed (:overlay/auth-key-source cloud))

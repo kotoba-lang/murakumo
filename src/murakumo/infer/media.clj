@@ -25,6 +25,7 @@
             [murakumo.fleet :as fleet]
             [murakumo.infer.credits :as credits]
             [murakumo.infer.schedule :as sched]
+            [murakumo.secret :as secret]
             [murakumo.ssh :as ssh]))
 
 (def ^:private comfy-port 8188)
@@ -437,7 +438,7 @@
     (println (json/generate-string snapshot {:pretty true}))
     (when push?
       (let [url (str (or (System/getenv "MURAKUMO_API_URL") "https://api.murakumo.cloud") "/infer/model-map")
-            token (System/getenv "MURAKUMO_METRICS_TOKEN")]
+            token (secret/resolve-metrics-token)]
         (http/post url {:headers (cond-> {"content-type" "application/json"}
                                    token (assoc "authorization" (str "Bearer " token)))
                         :body (json/generate-string snapshot) :timeout 8000})
