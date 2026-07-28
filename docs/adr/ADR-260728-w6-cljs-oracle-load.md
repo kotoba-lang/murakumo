@@ -21,6 +21,8 @@ fall back to cljc mirrors when false.
 
 - `murakumo.task.plan/failed?` — oracle when ready, else mirror
 - `murakumo.fleet.inventory` port/url/selector/offline — oracle when ready
+- `murakumo.dash.state` short-hosted-cid / health-class / interval-sleep-ms /
+  clamp-at / recent-take-n / take-last-start — oracle when ready (ops.cljs path)
 
 ### nbb packaging
 
@@ -32,8 +34,9 @@ fall back to cljc mirrors when false.
 - Full cljs rewire of all 32 catalog hosts (incremental)
 - Browser/webpack resource packaging (use `register-kir!` / custom loader)
 - schedule `eligible?` bit-pack residual
-- Some KIR string ops (`string-from-i64` in health-url) may fall back on cljs;
-  host mirrors remain the safety net via try/catch
+- Some KIR string ops (`string-from-i64` in health-url, `string-substring` in
+  short-hosted-cid) may fall back on cljs; host mirrors remain the safety net
+  via try/catch
 
 ## Evidence
 
