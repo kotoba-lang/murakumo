@@ -9,6 +9,7 @@
 (ns murakumo.kotoba-oracle-authority-test
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
             [kotoba.kir :as ir]
@@ -22,6 +23,8 @@
             [murakumo.infer.engine :as eng]
             [murakumo.secret :as secret]
             [murakumo.overlay.crypto :as crypto]
+            [murakumo.tunnel :as tunnel]
+            [murakumo.config :as config]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -513,6 +516,103 @@
   (let [sealed (crypto/seal "k" "payload")]
     (is (crypto/sealed-map-ok? sealed))
     (is (= "payload" (crypto/open "k" sealed)))))
+
+(deftest product-shell-tunnel-uses-oracle-results
+  (testing "constants from oracle"
+    (is (= 8 tunnel/default-connect-timeout-s))
+    (is (= 30 tunnel/default-control-persist-s))
+    (is (= "__murakumo_rc=" tunnel/rc-marker))
+    (is (= (oracle/call :tunnel 'rc-marker []) tunnel/rc-marker)))
+  (testing "conn-opts pure fragments via oracle"
+    (let [o (tunnel/conn-opts nil)]
+      (is (some #{"BatchMode=yes"} o))
+      (is (some #{"ConnectTimeout=8"} o))
+      (is (some #{"StrictHostKeyChecking=accept-new"} o)))
+    (let [o (tunnel/conn-opts {:control-path "/tmp/m/%C" :control-persist-s 45})]
+      (is (some #{"ControlMaster=auto"} o))
+      (is (some #{"ControlPath=/tmp/m/%C"} o))
+      (is (some #{"ControlPersist=45s"} o))))
+  (testing "wrap-cmd + parse-rc digits via oracle"
+    (is (str/includes? (tunnel/wrap-cmd "exit 7") "__murakumo_rc=$__mrc"))
+    (is (= ["hello" 0] (tunnel/parse-rc "hello\n__murakumo_rc=0")))
+    (is (= ["" 7] (tunnel/parse-rc "__murakumo_rc=7")))
+    (is (= ["partial" nil] (tunnel/parse-rc "partial"))))
+  (testing "command shapes via oracle"
+    (is (= "asher:.murakumo/bin/kotoba"
+           (last (tunnel/scp-argv "asher" "bin/kotoba" ".murakumo/bin/kotoba"))))
+    (is (= ["ssh" "-o" "ControlPath=/tmp/m/%C" "-O" "exit" "asher"]
+           (tunnel/close-master-argv "asher" "/tmp/m/%C")))
+    (is (= (oracle/call :tunnel 'ensure-forward-command [18099 8077 "asher"])
+           (tunnel/ensure-forward-command 18099 8077 "asher")))
+    (is (= (oracle/call :tunnel 'remote-curl-command ["http://localhost:8077/health"])
+           (tunnel/remote-curl-command "http://localhost:8077/health")))))
+
+(deftest tunnel-oracle-call-matches-live-compile
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/tunnel_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'default-connect-timeout-s [])
+           (oracle/call :tunnel 'default-connect-timeout-s [])))
+    (is (= (ir/execute live 'wrap-cmd ["exit 7"])
+           (oracle/call :tunnel 'wrap-cmd ["exit 7"])))
+    (is (= (ir/execute live 'parse-digits ["42"])
+           (oracle/call :tunnel 'parse-digits ["42"])))
+    (is (= (ir/execute live 'connect-timeout-opt [8])
+           (oracle/call :tunnel 'connect-timeout-opt [8])))
+    (is (= (ir/execute live 'scp-dest ["h" "d"])
+           (oracle/call :tunnel 'scp-dest ["h" "d"])))
+    (is (= (ir/execute live 'ensure-forward-command [1 2 "h"])
+           (oracle/call :tunnel 'ensure-forward-command [1 2 "h"])))))
+
+(deftest tunnel-precompiled-kir-does-not-drift
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/tunnel_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))
+        shipped (edn/read-string (slurp (io/resource "murakumo/oracle/tunnel_core.kir.edn")))]
+    (is (= live shipped) "tunnel_core KIR drift — run oracle-gen")))
+
+(deftest product-shell-config-uses-oracle-results
+  (testing "default path constants from oracle"
+    (is (= "fleet.edn" config/default-fleet-path))
+    (is (= "connect.edn" config/default-connect-path))
+    (is (= "cloud.edn" config/default-cloud-path))
+    (is (= (oracle/call :config 'default-fleet-path []) config/default-fleet-path)))
+  (testing "path builders via oracle"
+    (is (= "/home/ops/github/com-junkawasaki/orgs/com-junkawasaki/kotoba"
+           (config/default-kotoba-dir "/home/ops")))
+    (is (= "/custom/kotoba"
+           (config/kotoba-dir {"MURAKUMO_KOTOBA_DIR" "/custom/kotoba" "HOME" "/h"})))
+    (is (= (config/default-kotoba-dir "/h")
+           (config/kotoba-dir {"HOME" "/h"})))
+    (is (= "/work/bin" (config/pinned-bin-dir "/work")))
+    (is (= "/k/target/aarch64-apple-darwin/release" (config/release-bin-dir "/k")))
+    (is (= "/work/bin/kotoba" (config/kotoba-bin "/work" true)))
+    (is (= "kotoba" (config/kotoba-bin "/work" false)))
+    (is (= "/work/bin" (config/resolve-local-bin {} "/work" "/k" true)))
+    (is (= "/custom" (config/resolve-local-bin {"MURAKUMO_BIN" "/custom"} "/work" "/k" false)))
+    (is (= "/k/target/aarch64-apple-darwin/release"
+           (config/resolve-local-bin {} "/work" "/k" false)))
+    (is (= ".murakumo-peers.edn" (config/peers-path "/x")))
+    (is (= "deploy/com.murakumo.kotoba-mesh.plist.tmpl"
+           (config/launchd-template-path "/x")))))
+
+(deftest config-oracle-call-matches-live-compile
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/config_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'default-fleet-path [])
+           (oracle/call :config 'default-fleet-path [])))
+    (is (= (ir/execute live 'default-kotoba-dir ["/h"])
+           (oracle/call :config 'default-kotoba-dir ["/h"])))
+    (is (= (ir/execute live 'kotoba-dir-from ["" "/h"])
+           (oracle/call :config 'kotoba-dir-from ["" "/h"])))
+    (is (= (ir/execute live 'resolve-local-bin ["/u" "/k" 0 "/b"])
+           (oracle/call :config 'resolve-local-bin ["/u" "/k" 0 "/b"])))
+    (is (= (ir/execute live 'kotoba-bin ["/u" 1])
+           (oracle/call :config 'kotoba-bin ["/u" 1])))))
+
+(deftest config-precompiled-kir-does-not-drift
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/config_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))
+        shipped (edn/read-string (slurp (io/resource "murakumo/oracle/config_core.kir.edn")))]
+    (is (= live shipped) "config_core KIR drift — run oracle-gen")))
 
 (deftest bulk-gen-discovers-all-cores
   (let [arts (gen/discover-artifacts)]
