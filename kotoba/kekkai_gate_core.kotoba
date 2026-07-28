@@ -1,0 +1,35 @@
+(ns kekkai-gate-core
+  (:export [default-ledger-path strip-trailing-newlines parse-status-out
+            authorized? denial-line-of default-kekkai-dir-under]))
+
+;; W6 pure-planner oracle cutover first slice (murakumo-pure-planners-v1).
+;; Portable string core of murakumo.kekkai.gate. No capabilities.
+;; Guest profile: string=? / string-contains? yield :i64 (0/1), not :bool.
+;; Parity: test/murakumo/kekkai_gate_kotoba_parity_test.clj
+
+(defn default-ledger-path [] :string
+  "kekkai-tailnet.edn")
+
+(defn strip-trailing-newlines [s :string] :string
+  (string-replace-all s "\n" ""))
+
+(defn parse-status-out [out :string] :string
+  (let [s (strip-trailing-newlines out)]
+    (if (string=? s "")
+      "unknown"
+      s)))
+
+(defn authorized? [status :string] :i64
+  (string=? status "authorized"))
+
+(defn denial-line-of [node-name :string status :string] :string
+  (string-concat
+   "[kekkai] "
+   (string-concat
+    node-name
+    (string-concat
+     ": not authorized ("
+     (string-concat status ") — excluded from fleet ops")))))
+
+(defn default-kekkai-dir-under [home :string] :string
+  (string-concat home "/github/com-junkawasaki/orgs/kotoba-lang/kekkai"))
