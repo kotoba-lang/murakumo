@@ -31,6 +31,9 @@
             [murakumo.infer.credits :as credits]
             [murakumo.infer.join :as join]
             [murakumo.infer.gc :as gc]
+            [murakumo.infer.moe :as moe]
+            [murakumo.infer.rebalance :as reb]
+            [murakumo.infer.relay :as relay]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -853,3 +856,59 @@
            (oracle/call :infer-gc 'need-bytes [100 40])))
     (is (= (ir/execute g 'comfy-evictable? [10 7])
            (oracle/call :infer-gc 'comfy-evictable? [10 7])))))
+
+(deftest product-shell-moe-uses-oracle-results
+  (testing "capacity-default via oracle"
+    (is (nil? (moe/capacity-for-usable (* 16 plan/GiB))))
+    (is (= 208 (moe/capacity-for-usable (* 32 plan/GiB))))
+    (is (= 512 (moe/capacity-for-usable (* 128 plan/GiB)))))
+  (testing "expert-ratio + verdict"
+    (is (= 16.0 (moe/expert-ratio {:model/experts 128 :model/active-experts 8})))
+    (is (= :recommended (:verdict (moe/verdict {:model/experts 128 :model/active-experts 8
+                                                :model/moe-shared-expert? true}))))
+    (is (= :unknown (:verdict (moe/verdict {})))))
+  (testing "resident-est"
+    (is (= 1000 (moe/resident-bytes-estimate {:model/weight-bytes 4000 :model/experts 4} 1)))))
+
+(deftest product-shell-rebalance-uses-oracle-results
+  (testing "usable-gb + largest-remainder-3"
+    (is (= 10 reb/shard-ceiling-gb))
+    (is (= 10 (:usable-gb (reb/node-capacity {:id "a" :ram-gb 16 :status "up"}))))
+    (is (= 4 (:usable-gb (reb/node-capacity {:id "a" :ram-gb 10 :status "up"}))))
+    (let [seats (#'reb/largest-remainder 5 {:text-pool 3 :media-pool 1 :postproc-pool 1} 1)]
+      (is (= 5 (reduce + 0 (vals seats))))
+      (is (every? pos? (vals seats))))))
+
+(deftest product-shell-relay-uses-oracle-results
+  (testing "make-id + lease-expired? + msg kinds"
+    (let [[id st] (#'relay/gen-id (relay/init) "job")]
+      (is (= "job-0" id))
+      (is (= 1 (:next st))))
+    (let [st0 (relay/init)
+          [jid st1] (relay/enqueue st0 {:kind :x :input 1 :price 2})
+          [wid st2] (relay/on-hello st1 {:did "d" :tier :browser :caps {}})
+          [rep st3] (relay/on-ready st2 wid 1000)]
+      (is (= :job (:msg rep)))
+      (let [st4 (relay/expire-leases st3 2000 100)]
+        (is (empty? (:assigned st4)))
+        (is (= 1 (count (:queue st4))))))))
+
+(deftest moe-rebalance-relay-oracle-call-matches-live
+  (let [m (:kir (compiler/compile-source (slurp "kotoba/infer_moe_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))
+        r (:kir (compiler/compile-source (slurp "kotoba/infer_rebalance_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))
+        y (:kir (compiler/compile-source (slurp "kotoba/infer_relay_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute m 'capacity-default [(* 64 1024 1024 1024)])
+           (oracle/call :infer-moe 'capacity-default [(* 64 1024 1024 1024)])))
+    (is (= (ir/execute m 'verdict-name [128 8 1])
+           (oracle/call :infer-moe 'verdict-name [128 8 1])))
+    (is (= (ir/execute r 'usable-gb [16])
+           (oracle/call :infer-rebalance 'usable-gb [16])))
+    (is (= (ir/execute r 'largest-remainder-3 [5 3 1 1 1])
+           (oracle/call :infer-rebalance 'largest-remainder-3 [5 3 1 1 1])))
+    (is (= (ir/execute y 'make-id ["job" 0])
+           (oracle/call :infer-relay 'make-id ["job" 0])))
+    (is (= (ir/execute y 'lease-expired? [2000 1000 100])
+           (oracle/call :infer-relay 'lease-expired? [2000 1000 100])))))
