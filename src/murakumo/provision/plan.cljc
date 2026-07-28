@@ -4,15 +4,15 @@
 ;; kotoba DID derivation, and filesystem reads. This namespace owns deterministic
 ;; strings and defaults used by those effects.
 ;;
-;; W6 product-shell (ADR-260728-w6-cljs-clj-residual-dual +
-;; ADR-260728-w6-provision-shell-pure-oracle):
-;; constants + port/multiaddr + launch/peer/link shell pure helpers DELEGATE to
-;; kotoba provision_plan_core when oracle is loadable (JVM classpath or cljs/nbb).
+;; W6 product-shell (ADR-260728-w6-provision-argv-pure-oracle):
+;; constants + port/multiaddr + launch/peer/link shell + rsync argv fragments
+;; DELEGATE to kotoba provision_plan_core when oracle is loadable (JVM classpath
+;; or cljs/nbb). bootstrap fold, peer-id regex, plist heredoc body stay host.
 ;; cljs mirrors remain fallback when oracle is not ready.
 
 (ns murakumo.provision.plan
   "Portable provision/mesh planning helpers.
-   W6 product-shell: path/port + shell pure helpers via kotoba provision_plan_core."
+   W6 product-shell: path/port + shell/rsync pure helpers via provision_plan_core."
   (:require [clojure.string :as str]
             [murakumo.connect :as connect]
             [murakumo.fleet.inventory :as inv]
@@ -107,6 +107,27 @@
 (defn- mirror-multiaddr [ip port]
   (str "/ip4/" ip "/udp/" port "/quic-v1"))
 
+(def ^:private mirror-rsync-bin "rsync")
+(def ^:private mirror-rsync-az-flag "-az")
+(def ^:private mirror-rsync-e-flag "-e")
+(def ^:private mirror-plist-heredoc-footer "\nPLIST")
+
+(defn- mirror-local-bin-path [local-bin bin]
+  (str local-bin "/" bin))
+
+(defn- mirror-remote-bin-dest [host bin]
+  (str host ":.murakumo/bin/" bin))
+
+(defn- mirror-launchd-daemon-path [label]
+  (str "/Library/LaunchDaemons/" label ".plist"))
+
+(defn- mirror-tee-plist-prefix [label]
+  (str "sudo tee " (mirror-launchd-daemon-path label)
+       " >/dev/null <<'PLIST'\n"))
+
+(defn- mirror-label-kv [k v]
+  (str k "=" v))
+
 ;; ── dual-source constants ────────────────────────────────────────────
 
 (def plist-label
@@ -123,6 +144,57 @@
 
 (def peer-advertise-wait-ms
   (oracle-i64-const 'peer-advertise-wait-ms mirror-peer-advertise-wait-ms))
+
+(def rsync-bin
+  "rsync binary name. Kotoba `rsync-bin` when ready."
+  (oracle-str-const 'rsync-bin mirror-rsync-bin))
+
+(def rsync-az-flag
+  "rsync -az flag. Kotoba `rsync-az-flag` when ready."
+  (oracle-str-const 'rsync-az-flag mirror-rsync-az-flag))
+
+(def rsync-e-flag
+  "rsync -e flag. Kotoba `rsync-e-flag` when ready."
+  (oracle-str-const 'rsync-e-flag mirror-rsync-e-flag))
+
+(def plist-heredoc-footer
+  "Heredoc closer for write-plist. Kotoba `plist-heredoc-footer` when ready."
+  (oracle-str-const 'plist-heredoc-footer mirror-plist-heredoc-footer))
+
+(defn local-bin-path
+  "Local pin path for one binary. Kotoba `local-bin-path` when ready."
+  [local-bin bin]
+  (try-oracle
+   #(o 'local-bin-path [(str local-bin) (str bin)])
+   #(mirror-local-bin-path local-bin bin)))
+
+(defn remote-bin-dest
+  "Remote rsync dest for one binary. Kotoba `remote-bin-dest` when ready."
+  [host bin]
+  (try-oracle
+   #(o 'remote-bin-dest [(str host) (str bin)])
+   #(mirror-remote-bin-dest host bin)))
+
+(defn launchd-daemon-path
+  "System LaunchDaemon path for label. Kotoba when ready."
+  [label]
+  (try-oracle
+   #(o 'launchd-daemon-path [(str label)])
+   #(mirror-launchd-daemon-path label)))
+
+(defn tee-plist-prefix
+  "sudo tee … <<'PLIST'\\n prefix. Heredoc body stays host."
+  [label]
+  (try-oracle
+   #(o 'tee-plist-prefix [(str label)])
+   #(mirror-tee-plist-prefix label)))
+
+(defn label-kv
+  "Single k=v label pair. Host joins with comma. Kotoba when ready."
+  [k v]
+  (try-oracle
+   #(o 'label-kv [(str k) (str v)])
+   #(mirror-label-kv k v)))
 
 (defn operator-seed-missing?
   "True when a command requiring the fleet operator seed should fail.
@@ -240,11 +312,13 @@
    (fn [] mirror-remote-store-command)))
 
 (defn rsync-binary-argv
-  "argv for copying one pinned binary to a fleet node."
+  "argv for copying one pinned binary to a fleet node.
+   Bin/flags + path fragments dual-sourced via rsync-* / local-bin-path /
+   remote-bin-dest; ssh-rsync-options already dual-sourced."
   [local-bin host bin]
-  ["rsync" "-az" "-e" ssh-rsync-options
-   (str local-bin "/" bin)
-   (str host ":.murakumo/bin/" bin)])
+  [rsync-bin rsync-az-flag rsync-e-flag ssh-rsync-options
+   (local-bin-path local-bin bin)
+   (remote-bin-dest host bin)])
 
 (defn launch-status-command
   "Remote shell command that reports whether the resident launchd label is running.
@@ -256,10 +330,9 @@
 
 (defn write-plist-command
   "Remote shell command that writes plist content to the system LaunchDaemon path.
-   Heredoc stays host (SSH host-forever quoting)."
+   tee prefix + footer dual-sourced; heredoc body stays host (quoting)."
   [plist]
-  (str "sudo tee /Library/LaunchDaemons/" plist-label ".plist >/dev/null <<'PLIST'\n"
-       plist "\nPLIST"))
+  (str (tee-plist-prefix plist-label) plist plist-heredoc-footer))
 
 (defn peer-id-log-command
   "Remote shell command that prints the latest node PeerId DID from mesh.log.
@@ -286,10 +359,11 @@
    #(str/trim (str out))))
 
 (defn labels-env
-  "Render node labels as the launchd env string `k=v,k=v`."
+  "Render node labels as the launchd env string `k=v,k=v`.
+   Pair format dual-sourced via `label-kv`; join stays host."
   [labels]
   (->> labels
-       (map (fn [[k v]] (str (name k) "=" v)))
+       (map (fn [[k v]] (label-kv (name k) v)))
        (str/join ",")))
 
 (defn render-plist
@@ -371,10 +445,10 @@
       (str/replace "{{PORT}}" (str (inv/node-port fleet node)))))
 
 (defn write-watchdog-plist-command
-  "Remote shell command that writes the watchdog plist to the system LaunchDaemon path."
+  "Remote shell command that writes the watchdog plist to the system LaunchDaemon path.
+   tee prefix + footer dual-sourced; heredoc body stays host."
   [plist]
-  (str "sudo tee /Library/LaunchDaemons/" watchdog-label ".plist >/dev/null <<'PLIST'\n"
-       plist "\nPLIST"))
+  (str (tee-plist-prefix watchdog-label) plist plist-heredoc-footer))
 
 (defn watchdog-reprovision-command
   "Reload + kickstart the watchdog (same bootout-settle-bootstrap dance as the mesh).

@@ -1219,7 +1219,22 @@
     (is (re-find #"kickstart" (pplan/launch-command :up)))
     (is (re-find #"bootout" (pplan/launch-command :down)))
     (is (= "com.murakumo.kotoba-mesh-watchdog" pplan/watchdog-label))
-    (is (re-find #"watchdog" (pplan/watchdog-reprovision-command))))
+    (is (re-find #"watchdog" (pplan/watchdog-reprovision-command)))
+    (is (= "rsync" pplan/rsync-bin))
+    (is (= "-az" pplan/rsync-az-flag))
+    (is (= "-e" pplan/rsync-e-flag))
+    (is (= "/local/bin/kotoba" (pplan/local-bin-path "/local/bin" "kotoba")))
+    (is (= "asher:.murakumo/bin/kotoba" (pplan/remote-bin-dest "asher" "kotoba")))
+    (is (= "/Library/LaunchDaemons/com.murakumo.kotoba-mesh.plist"
+           (pplan/launchd-daemon-path "com.murakumo.kotoba-mesh")))
+    (is (str/starts-with? (pplan/tee-plist-prefix "com.murakumo.kotoba-mesh")
+                          "sudo tee /Library/LaunchDaemons/"))
+    (is (= "zone=jp" (pplan/label-kv "zone" "jp")))
+    (is (= ["rsync" "-az" "-e" pplan/ssh-rsync-options
+            "/local/bin/kotoba" "asher:.murakumo/bin/kotoba"]
+           (pplan/rsync-binary-argv "/local/bin" "asher" "kotoba")))
+    (is (str/includes? (pplan/write-plist-command "<x/>") "<<'PLIST'"))
+    (is (str/ends-with? (pplan/write-plist-command "<x/>") "\nPLIST")))
   (testing "cloud defaults + region/endpoints"
     (is (= "murakumo-overlay" cplan/default-driver))
     (is (= "murakumo.cloud" (:cloud/name cplan/default-cloud)))
@@ -1304,7 +1319,20 @@
     (is (= (ir/execute pr 'launch-status-command [])
            (oracle/call :provision-plan 'launch-status-command [])))
     (is (= (ir/execute pr 'watchdog-label [])
-           (oracle/call :provision-plan 'watchdog-label [])))))
+           (oracle/call :provision-plan 'watchdog-label [])))
+    (is (= (ir/execute pr 'rsync-bin [])
+           (oracle/call :provision-plan 'rsync-bin [])))
+    (is (= (ir/execute pr 'local-bin-path ["/b" "kotoba"])
+           (oracle/call :provision-plan 'local-bin-path ["/b" "kotoba"])))
+    (is (= (ir/execute pr 'remote-bin-dest ["h" "kotoba"])
+           (oracle/call :provision-plan 'remote-bin-dest ["h" "kotoba"])))
+    (is (= (ir/execute pr 'tee-plist-prefix ["lab"])
+           (oracle/call :provision-plan 'tee-plist-prefix ["lab"])))
+    (is (= (ir/execute pr 'label-kv ["k" "v"])
+           (oracle/call :provision-plan 'label-kv ["k" "v"])))
+    (is (= (oracle/call :provision-plan 'rsync-bin []) pplan/rsync-bin))
+    (is (= (oracle/call :provision-plan 'local-bin-path ["/b" "x"])
+           (pplan/local-bin-path "/b" "x")))))
 
 (deftest product-shell-overlay-driver-runtime-uses-oracle
   (testing "driver endpoint-kind + dial-result + option-name"

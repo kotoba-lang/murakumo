@@ -244,6 +244,68 @@
        (string-concat
         ".plist 2>/dev/null || true; sudo launchctl kickstart -k system/"
         (watchdog-label)))))),
+   :param-types []}
+  {:name rsync-bin,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "rsync",
+   :param-types []}
+  {:name rsync-az-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-az",
+   :param-types []}
+  {:name rsync-e-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-e",
+   :param-types []}
+  {:name local-bin-path,
+   :params [local-bin bin],
+   :result :string,
+   :effects #{},
+   :body (string-concat local-bin (string-concat "/" bin)),
+   :param-types [:string :string]}
+  {:name remote-bin-dest,
+   :params [host bin],
+   :result :string,
+   :effects #{},
+   :body (string-concat host (string-concat ":.murakumo/bin/" bin)),
+   :param-types [:string :string]}
+  {:name launchd-daemon-path,
+   :params [label],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "/Library/LaunchDaemons/"
+    (string-concat label ".plist")),
+   :param-types [:string]}
+  {:name tee-plist-prefix,
+   :params [label],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "sudo tee "
+    (string-concat
+     (launchd-daemon-path label)
+     " >/dev/null <<'PLIST'\n")),
+   :param-types [:string]}
+  {:name label-kv,
+   :params [k v],
+   :result :string,
+   :effects #{},
+   :body (string-concat k (string-concat "=" v)),
+   :param-types [:string :string]}
+  {:name plist-heredoc-footer,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "\nPLIST",
    :param-types []}],
  :oracle-value nil,
  :schema-identities nil,
@@ -271,7 +333,16 @@
   launch-down-command
   reprovision-command
   watchdog-label
-  watchdog-reprovision-command],
+  watchdog-reprovision-command
+  rsync-bin
+  rsync-az-flag
+  rsync-e-flag
+  local-bin-path
+  remote-bin-dest
+  launchd-daemon-path
+  tee-plist-prefix
+  label-kv
+  plist-heredoc-footer],
  :schemas nil,
  :effects #{},
  :blocks [],
