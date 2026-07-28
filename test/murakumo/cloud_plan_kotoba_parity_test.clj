@@ -22,7 +22,8 @@
        "dial-denied-line connect-denied-line "
        "dial-ok-title connect-ok-title relay-ok-title "
        "from-to-cap-reason authorized-line "
-       "relay-fallback-line reason-line indent-argv-line"))
+       "relay-fallback-line reason-line indent-argv-line "
+       "address-family-line policy-line skipped-reason-suffix"))
 
 (def fleet
   {:fleet/name "test-fleet"
@@ -184,3 +185,23 @@
                                    :address_family :identity :nodes [] :relays []
                                    :policy {:default :deny :allow []}}))
                           "murakumo.cloud "))))
+
+(deftest summary-address-policy-lines-match
+  (let [s (compile-string-cases
+           {"af" (str "(address-family-line " (kotoba-literal "identity") " 2 1)")
+            "pl" (str "(policy-line " (kotoba-literal "deny") " 3)")
+            "sk" (str "(skipped-reason-suffix " (kotoba-literal "unknown") ")")})
+        lines (cloud/summary-lines
+               {:domain "murakumo.cloud" :overlay "ov"
+                :address_family :identity
+                :nodes [{:name "a" :region "jp" :relay "r" :direct [:quic]}]
+                :relays [{:name "r"}]
+                :policy {:default :deny :allow [{} {}]}})]
+    (is (= (cloud/address-family-line "identity" 2 1) (get s "af")))
+    (is (= (cloud/policy-line "deny" 3) (get s "pl")))
+    (is (= (cloud/skipped-reason-suffix "unknown") (get s "sk")))
+    (is (= "  address-family identity ; nodes 2 ; relays 1" (get s "af")))
+    (is (= "  policy default=deny allow=3" (get s "pl")))
+    (is (= " skipped reason=unknown" (get s "sk")))
+    (is (= (cloud/address-family-line "identity" 1 1) (nth lines 1)))
+    (is (= (cloud/policy-line "deny" 2) (last lines)))))

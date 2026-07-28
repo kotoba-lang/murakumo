@@ -302,6 +302,38 @@
    :result :string,
    :effects #{},
    :body (string-concat "  " argv-joined),
+   :param-types [:string]}
+  {:name address-family-line,
+   :params [af nodes relays],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "  address-family "
+    (string-concat
+     af
+     (string-concat
+      " ; nodes "
+      (string-concat
+       (i64-str nodes)
+       (string-concat " ; relays " (i64-str relays)))))),
+   :param-types [:string :i64 :i64]}
+  {:name policy-line,
+   :params [default allow-n],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "  policy default="
+    (string-concat
+     default
+     (string-concat " allow=" (i64-str allow-n)))),
+   :param-types [:string :i64]}
+  {:name skipped-reason-suffix,
+   :params [reason],
+   :result :string,
+   :effects #{},
+   :body (string-concat " skipped reason=" reason),
    :param-types [:string]}],
  :oracle-value nil,
  :schema-identities nil,
@@ -344,7 +376,10 @@
   authorized-line
   relay-fallback-line
   reason-line
-  indent-argv-line],
+  indent-argv-line
+  address-family-line
+  policy-line
+  skipped-reason-suffix],
  :schemas nil,
  :effects #{},
  :blocks [],
