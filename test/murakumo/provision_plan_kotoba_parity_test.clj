@@ -16,7 +16,8 @@
        "rsync-bin rsync-az-flag rsync-e-flag local-bin-path remote-bin-dest "
        "launchd-daemon-path tee-plist-prefix label-kv plist-heredoc-footer "
        "peer-at-sep peer-join-sep peer-entry did-key-prefix "
-       "join-append bootstrap-append labels-append roles-append plist-replace"))
+       "join-append bootstrap-append labels-append roles-append plist-replace "
+       "alnum-char? find-prefix-at take-alnum peer-id-from-log write-plist-shell"))
 (def fleet
   {:fleet/port 8077
    :fleet/p2p-port 4001
@@ -199,7 +200,15 @@
             "dp" "(peer-id-did-pattern)"
             "di" (str "(did-peer-id " (kotoba-literal "12D3KooWPeer") ")")
             "pl" "(peer-id-log-command)"
-            "ll" "(live-link-count-command)"})]
+            "ll" "(live-link-count-command)"
+            "pi" (str "(peer-id-from-log "
+                      (kotoba-literal "node_did=did:key:12D3KooWPeerId123\n") ")")
+            "pn" (str "(peer-id-from-log " (kotoba-literal "did:key:zOther") ")")
+            "pt" (str "(peer-id-from-log "
+                      (kotoba-literal "noise\ndid:key:12D3KooWPeerId123 trailing\n") ")")
+            "ws" (str "(write-plist-shell "
+                      (kotoba-literal "com.murakumo.kotoba-mesh") " "
+                      (kotoba-literal "<plist/>") ")")})]
     (is (= plan/peer-id-body-prefix (get s "bp")))
     (is (= "12D3" (get s "bp")))
     (is (= plan/peer-id-body-pattern (get s "bb")))
@@ -212,9 +221,19 @@
     (is (str/includes? (get s "pl") plan/peer-id-did-pattern))
     (is (= (plan/live-link-count-command) (get s "ll")))
     (is (str/includes? (get s "ll") plan/peer-id-body-pattern))
-    (is (= "12D3KooWPeerId123"
-           (plan/peer-id-from-log "node_did=did:key:12D3KooWPeerId123\n")))
-    (is (nil? (plan/peer-id-from-log "did:key:zOther")))))
+    (is (= "12D3KooWPeerId123" (get s "pi")))
+    (is (= (plan/peer-id-from-log "node_did=did:key:12D3KooWPeerId123\n")
+           (get s "pi")))
+    (is (= "" (get s "pn")))
+    (is (nil? (plan/peer-id-from-log "did:key:zOther")))
+    (is (= "12D3KooWPeerId123" (get s "pt")))
+    (is (= (plan/peer-id-from-log "noise\ndid:key:12D3KooWPeerId123 trailing\n")
+           (get s "pt")))
+    (is (= (plan/write-plist-shell "com.murakumo.kotoba-mesh" "<plist/>")
+           (get s "ws")))
+    (is (= (plan/write-plist-command "<plist/>") (get s "ws")))
+    (is (str/includes? (get s "ws") "<<'PLIST'"))
+    (is (str/ends-with? (get s "ws") "\nPLIST"))))
 
 (deftest home-bin-and-join-sep-fragments-match
   (let [s (compile-string-cases
