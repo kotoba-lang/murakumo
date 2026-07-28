@@ -1,10 +1,15 @@
 (ns infer-plan-core
-  (:export [gib default-os-reserve default-headroom usable-bytes choose-strategy-name]))
+  (:export [gib default-os-reserve default-headroom usable-bytes choose-strategy-name
+            lane-base plan-lr-3 plan-lr-pack-get
+            plan-fits-total? span-fits?
+            uniform-layer-bytes dense-units-milli moe-layer-bytes]))
 
-;; W6 pure-planner oracle — murakumo.infer.plan subset (usable-bytes + choose-strategy).
-;; Full partition-layers/plan remain cljc (floats + vector reduce). No capabilities.
-;; GiB = 1073741824; default-os-reserve = 7/2 GiB; default-headroom = 5/4 GiB.
-;; wired-limit: pass -1 when absent (cljc nil).
+;; W6 pure-planner oracle — murakumo.infer.plan usable-bytes + choose-strategy
+;; + plan largest-remainder (no per-pool floor) for fixed 3 ranks + fits gates.
+;; Full partition-layers walk over layer vectors stays cljc (float targets).
+;; plan-lr-3: integer form of private largest-remainder over 3 weight quotas
+;;   (ideal = total*w_i/sumw; floor + modular remainder; ties → lower index).
+;; Packing: base-65536 digits s0 + s1*B + s2*B*B.
 ;; Parity: test/murakumo/infer_plan_kotoba_parity_test.clj
 
 (defn gib [] :i64 1073741824)
@@ -30,3 +35,118 @@
       (if (if (= fast 1) (if (< ranks experts) 1 0) 0)
         "expert"
         "pipeline"))))
+
+(defn lane-base [] :i64 65536)
+
+(defn pack3 [a :i64 b :i64 c :i64] :i64
+  (let [B (lane-base)]
+    (+ a (+ (* b B) (* c (* B B))))))
+
+(defn plan-lr-pack-get [packed :i64 idx :i64] :i64
+  ;; idx 0|1|2
+  (let [B (lane-base)]
+    (if (= idx 0)
+      (rem64 packed B)
+      (if (= idx 1)
+        (rem64 (quot packed B) B)
+        (quot packed (* B B))))))
+
+(defn better-bump? [rem-a :i64 idx-a :i64 rem-b :i64 idx-b :i64] :i64
+  ;; higher rem wins; lower index wins ties (plan.cljc sort key [(- frac) i])
+  (if (< rem-b rem-a)
+    1
+    (if (< rem-a rem-b)
+      0
+      (if (< idx-a idx-b) 1 0))))
+
+(defn pick-bump-3 [ok-t :i64 ok-m :i64 ok-p :i64 rem-packed :i64 _pad :i64] :i64
+  (let [rt (plan-lr-pack-get rem-packed 0)
+        rm (plan-lr-pack-get rem-packed 1)
+        rp (plan-lr-pack-get rem-packed 2)]
+    (if (= ok-t 0)
+      (if (= ok-m 0)
+        (if (= ok-p 0) -1 2)
+        (if (= ok-p 0)
+          1
+          (if (= (better-bump? rm 1 rp 2) 1) 1 2)))
+      (if (= ok-m 0)
+        (if (= ok-p 0)
+          0
+          (if (= (better-bump? rt 0 rp 2) 1) 0 2))
+        (let [win-tm (if (= (better-bump? rt 0 rm 1) 1) 0 1)
+              r-win (if (= win-tm 0) rt rm)
+              i-win win-tm]
+          (if (= ok-p 0)
+            win-tm
+            (if (= (better-bump? r-win i-win rp 2) 1) win-tm 2)))))))
+
+(defn ok-for [active :i64 bumped :i64] :i64
+  (if (if (= active 1) (if (= bumped 0) 1 0) 0) 1 0))
+
+(defn weight-pos? [w :i64] :i64
+  (if (< 0 w) 1 0))
+
+(defn plan-lr-3 [total :i64 w0 :i64 w1 :i64 w2 :i64] :i64
+  ;; plan.cljc largest-remainder without rebalance per-active floor:
+  ;; floor(total*w_i/sumw) + remainder seats by fractional rank.
+  (let [a0 (weight-pos? w0)
+        a1 (weight-pos? w1)
+        a2 (weight-pos? w2)
+        sumw (+ w0 (+ w1 w2))]
+    (if (if (= total 0) 1 (if (= sumw 0) 1 0))
+      (pack3 0 0 0)
+      (let [p0 (* total w0)
+            p1 (* total w1)
+            p2 (* total w2)
+            f0 (quot p0 sumw)
+            f1 (quot p1 sumw)
+            f2 (quot p2 sumw)
+            r0 (rem64 p0 sumw)
+            r1 (rem64 p1 sumw)
+            r2 (rem64 p2 sumw)
+            assigned (+ f0 (+ f1 f2))
+            extra (- total assigned)
+            rem-packed (pack3 r0 r1 r2)
+            b0 (if (< 0 extra)
+                 (pick-bump-3 (ok-for a0 0) (ok-for a1 0) (ok-for a2 0) rem-packed 0)
+                 -1)
+            t0 (if (= b0 0) 1 0)
+            m0 (if (= b0 1) 1 0)
+            p0b (if (= b0 2) 1 0)
+            b1 (if (< 1 extra)
+                 (pick-bump-3 (ok-for a0 t0) (ok-for a1 m0) (ok-for a2 p0b) rem-packed 0)
+                 -1)
+            t1 (if (= b1 0) 1 t0)
+            m1 (if (= b1 1) 1 m0)
+            p1b (if (= b1 2) 1 p0b)
+            b2 (if (< 2 extra)
+                 (pick-bump-3 (ok-for a0 t1) (ok-for a1 m1) (ok-for a2 p1b) rem-packed 0)
+                 -1)
+            bump0 (if (if (= b0 0) 1 (if (= b1 0) 1 (if (= b2 0) 1 0))) 1 0)
+            bump1 (if (if (= b0 1) 1 (if (= b1 1) 1 (if (= b2 1) 1 0))) 1 0)
+            bump2 (if (if (= b0 2) 1 (if (= b1 2) 1 (if (= b2 2) 1 0))) 1 0)]
+        (pack3 (+ f0 bump0) (+ f1 bump1) (+ f2 bump2))))))
+
+(defn plan-fits-total? [total-usable :i64 weight-bytes :i64] :i64
+  ;; cljc plan :fits? partial — total usable ≥ model weights
+  (if (< total-usable weight-bytes) 0 1))
+
+(defn span-fits? [est-bytes :i64 usable :i64] :i64
+  ;; cljc :fits? per assignment (<= est usable)
+  (if (< usable est-bytes) 0 1))
+
+(defn uniform-layer-bytes [weight-bytes :i64 layers :i64] :i64
+  ;; dense-layers=0 case of layer-weights (each layer equal)
+  (if (< layers 1) 0 (quot weight-bytes layers)))
+
+(defn dense-units-milli [layers :i64 dense :i64 dense-frac-milli :i64] :i64
+  ;; units = dense*frac + (layers-dense) in milli-layer units
+  ;; dense-frac-milli = 100 → 0.1 default
+  (let [d (if (< dense 0) 0 (if (< layers dense) layers dense))
+        rest (- layers d)]
+    (+ (* d dense-frac-milli) (* rest 1000))))
+
+(defn moe-layer-bytes [weight-bytes :i64 layers :i64 dense :i64 dense-frac-milli :i64] :i64
+  ;; bytes per MoE-bearing layer (not dense): weight / units
+  (let [units (dense-units-milli layers dense dense-frac-milli)]
+    (if (< units 1) 0 (quot (* weight-bytes 1000) units))))
