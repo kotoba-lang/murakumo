@@ -87,6 +87,18 @@
         (is (= (plan/slots n o)
                (get actual (str "sl_" i))))))))
 
+(defn- opt-i64-form [n]
+  (if (nil? n)
+    "(option-none-of [:option :i64])"
+    (str "(option-some-of [:option :i64] " (long n) ")")))
+
+(defn- opt-str-form [s]
+  (if (nil? s)
+    "(option-none-of [:option :string])"
+    (str "(option-some-of [:option :string] "
+         \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"
+         ")")))
+
 (deftest failed-matches-task-plan-cljc
   (let [corpus [{:exit 1}
                 {:exit nil :timeout? true}
@@ -97,11 +109,9 @@
                 {:exit 0 :error "x"}
                 {}]
         call (fn [{:keys [exit timeout? error]}]
-               (let [present (if (some? exit) 1 0)
-                     code (long (or exit 0))
-                     to (if timeout? 1 0)
-                     err (if (some? error) 1 0)]
-                 (str "(failed? " present " " code " " to " " err ")")))
+               (let [to (if timeout? 1 0)]
+                 (str "(failed? " (opt-i64-form exit) " " to " "
+                      (opt-str-form error) ")")))
         cases (into {} (map-indexed (fn [i r] [(str "f_" i) (call r)]) corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i r] (map-indexed vector corpus)]

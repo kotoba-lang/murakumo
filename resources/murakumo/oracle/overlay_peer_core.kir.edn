@@ -32,34 +32,36 @@
    :body "relay",
    :param-types []}
   {:name choose-via,
-   :params [direct? down? relay?],
+   :params [direct health relay],
    :result :string,
    :effects #{},
    :body
-   (if
-    (let
-     [binding-some__1 direct?]
-     (if
-      (option-some?-of [:option :i64] binding-some__1)
-      (let
-       [_ (option-value-of [:option :i64] binding-some__1 0)]
+   (let
+    [binding-some__1 direct]
+    (if
+     (option-some?-of [:option :string] binding-some__1)
+     (let
+      [_ (option-value-of [:option :string] binding-some__1 "")]
+      (if
+       (string=? health "down")
        (let
-        [binding-some__2 down?]
+        [binding-some__2 relay]
         (if
-         (option-some?-of [:option :i64] binding-some__2)
-         (let [_ (option-value-of [:option :i64] binding-some__2 0)] 0)
-         1)))
-      0))
-    "direct"
-    (let
-     [binding-some__3 relay?]
-     (if
-      (option-some?-of [:option :i64] binding-some__3)
-      (let
-       [_ (option-value-of [:option :i64] binding-some__3 0)]
-       "relay")
-      ""))),
-   :param-types [[:option :i64] [:option :i64] [:option :i64]]}],
+         (option-some?-of [:option :string] binding-some__2)
+         (let
+          [_ (option-value-of [:option :string] binding-some__2 "")]
+          "relay")
+         ""))
+       "direct"))
+     (let
+      [binding-some__3 relay]
+      (if
+       (option-some?-of [:option :string] binding-some__3)
+       (let
+        [_ (option-value-of [:option :string] binding-some__3 "")]
+        "relay")
+       "")))),
+   :param-types [[:option :string] :string [:option :string]]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports

@@ -16,12 +16,6 @@
    :direct [{:transport :quic :endpoint "quic://asher:4001"}]
    :relay {:relay "jp-1" :transport :quic :endpoint "relay://jp/bafyNode"}})
 
-
-(defn- opt-i64-form [n]
-  (if (nil? n)
-    "(option-none-of [:option :i64])"
-    (str "(option-some-of [:option :i64] " (long n) ")")))
-
 (defn- compile-string-cases [cases]
   (let [defs (for [[name body] cases]
                (str "(defn " name " [] :string " body ")"))
@@ -33,13 +27,23 @@
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
+(defn- kotoba-literal [s]
+  (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
+
+(defn- opt-str-form [s]
+  (if (nil? s)
+    "(option-none-of [:option :string])"
+    (str "(option-some-of [:option :string] " (kotoba-literal s) ")")))
+
 (defn- project-choose [peer]
   (let [paths (peer/candidate-paths peer)
-        direct? (when (some #(= :direct (:via %)) paths) 1)
-        relay? (when (some #(= :relay (:via %)) paths) 1)
-        down? (when (= :down (:health peer)) 1)
+        direct? (boolean (some #(= :direct (:via %)) paths))
+        relay? (boolean (some #(= :relay (:via %)) paths))
+        health (name (or (:health peer) :unknown))
         via (some-> (peer/choose-path peer) :via name)]
-    {:direct? direct? :relay? relay? :down? down?
+    {:direct (when direct? "direct")
+     :relay (when relay? "relay")
+     :health health
      :expected (or via "")}))
 
 (deftest choose-via-matches-choose-path
@@ -52,9 +56,9 @@
                      (fn [i peer]
                        (let [x (project-choose peer)]
                          [(str "c_" i)
-                          (str "(choose-via " (opt-i64-form (:direct? x)) " "
-                               (opt-i64-form (:down? x)) " "
-                               (opt-i64-form (:relay? x)) ")")]))
+                          (str "(choose-via " (opt-str-form (:direct x)) " "
+                               (kotoba-literal (:health x)) " "
+                               (opt-str-form (:relay x)) ")")]))
                      corpus))
         actual (compile-string-cases cases)
         labels (compile-string-cases
