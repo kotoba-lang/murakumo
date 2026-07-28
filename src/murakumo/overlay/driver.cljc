@@ -4,9 +4,10 @@
 ;; validates a canonical `dial` argv and emits the session record a real stream or
 ;; packet driver will later use to open QUIC/WebRTC/WebTransport/relay paths.
 ;;
-;; W6 product-shell authority:
+;; W6 product-shell authority (ADR-260728-w6-overlay-driver-tokens-pure-oracle):
 ;; endpoint-kind / option-name / dial-ok-reason / blank? / command-is-dial?
-;; DELEGATE to precompiled kotoba/overlay_driver_core when oracle is loadable
+;; + scheme/kind/cmd/reason tokens DELEGATE to precompiled
+;; kotoba/overlay_driver_core when oracle is loadable
 ;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: parse-argv loops + session maps. cljs mirrors as fallback.
 
@@ -32,33 +33,86 @@
         (mirror-thunk)))
     (mirror-thunk)))
 
-;; ── host-mirror pure helpers ───────────────────────────────────────────
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+;; ── host-mirror pure helpers + dual-source tokens ────────────────────
+
+(def ^:private mirror-scheme-quic "quic://")
+(def ^:private mirror-scheme-webrtc "webrtc://")
+(def ^:private mirror-scheme-https "https://")
+(def ^:private mirror-scheme-relay "relay://")
+(def ^:private mirror-kind-quic "quic")
+(def ^:private mirror-kind-webrtc "webrtc")
+(def ^:private mirror-kind-webtransport "webtransport")
+(def ^:private mirror-kind-relay "relay")
+(def ^:private mirror-kind-unknown "unknown")
+(def ^:private mirror-flag-dash-prefix "--")
+(def ^:private mirror-cmd-dial "dial")
+(def ^:private mirror-reason-ok "ok")
+(def ^:private mirror-reason-unknown-command "unknown-command")
+(def ^:private mirror-reason-missing-options "missing-options")
+
+(def scheme-quic
+  (oracle-str-const 'scheme-quic mirror-scheme-quic))
+(def scheme-webrtc
+  (oracle-str-const 'scheme-webrtc mirror-scheme-webrtc))
+(def scheme-https
+  (oracle-str-const 'scheme-https mirror-scheme-https))
+(def scheme-relay
+  (oracle-str-const 'scheme-relay mirror-scheme-relay))
+(def kind-quic
+  (oracle-str-const 'kind-quic mirror-kind-quic))
+(def kind-webrtc
+  (oracle-str-const 'kind-webrtc mirror-kind-webrtc))
+(def kind-webtransport
+  (oracle-str-const 'kind-webtransport mirror-kind-webtransport))
+(def kind-relay
+  (oracle-str-const 'kind-relay mirror-kind-relay))
+(def kind-unknown
+  (oracle-str-const 'kind-unknown mirror-kind-unknown))
+(def flag-dash-prefix
+  (oracle-str-const 'flag-dash-prefix mirror-flag-dash-prefix))
+(def cmd-dial
+  (oracle-str-const 'cmd-dial mirror-cmd-dial))
+(def reason-ok
+  (oracle-str-const 'reason-ok mirror-reason-ok))
+(def reason-unknown-command
+  (oracle-str-const 'reason-unknown-command mirror-reason-unknown-command))
+(def reason-missing-options
+  (oracle-str-const 'reason-missing-options mirror-reason-missing-options))
 
 (defn- mirror-option-name [flag]
   (let [s (str flag)]
-    (if (str/starts-with? s "--")
-      (subs s 2)
+    (if (str/starts-with? s flag-dash-prefix)
+      (subs s (count flag-dash-prefix))
       s)))
 
 (defn- mirror-blank? [s]
   (str/blank? (str s)))
 
 (defn- mirror-endpoint-kind [endpoint]
-  (cond
-    (str/starts-with? endpoint "quic://") "quic"
-    (str/starts-with? endpoint "webrtc://") "webrtc"
-    (str/starts-with? endpoint "https://") "webtransport"
-    (str/starts-with? endpoint "relay://") "relay"
-    :else "unknown"))
+  (let [endpoint (str endpoint)]
+    (cond
+      (str/starts-with? endpoint scheme-quic) kind-quic
+      (str/starts-with? endpoint scheme-webrtc) kind-webrtc
+      (str/starts-with? endpoint scheme-https) kind-webtransport
+      (str/starts-with? endpoint scheme-relay) kind-relay
+      :else kind-unknown)))
 
 (defn- mirror-command-is-dial? [command]
-  (if (= "dial" (str command)) 1 0))
+  (if (= cmd-dial (str command)) 1 0))
 
 (defn- mirror-dial-ok-reason [is-dial missing-count]
   (cond
-    (zero? is-dial) "unknown-command"
-    (pos? missing-count) "missing-options"
-    :else "ok"))
+    (zero? is-dial) reason-unknown-command
+    (pos? missing-count) reason-missing-options
+    :else reason-ok))
 
 (def required-dial-options
   [:overlay :node :name :from :to :capability :direct :transport])
@@ -94,13 +148,13 @@
         opts
         (let [[flag value & more] flags]
           (cond
-            (and (str/starts-with? (str flag) "--")
+            (and (str/starts-with? (str flag) flag-dash-prefix)
                  (str/includes? (str flag) "="))
             (let [[option inline-value] (split-option flag)]
               (recur (assoc opts option inline-value)
                      (if value (cons value more) more)))
 
-            (and (str/starts-with? (str flag) "--") value)
+            (and (str/starts-with? (str flag) flag-dash-prefix) value)
             (recur (assoc opts (keyword-option flag) value) more)
 
             :else
