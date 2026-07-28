@@ -1,5 +1,5 @@
 ;; W6 pure-planner oracle: murakumo.infer.plan usable-bytes + choose-strategy
-;; vs kotoba/infer_plan_core.kotoba.
+;; + plan-lr-3 / fits gates vs kotoba/infer_plan_core.kotoba.
 
 (ns murakumo.infer-plan-kotoba-parity-test
   (:require [clojure.string :as str]
@@ -10,6 +10,12 @@
 
 (def port-source (slurp "kotoba/infer_plan_core.kotoba"))
 (def GiB plan/GiB)
+(def plan-lr @(var murakumo.infer.plan/largest-remainder))
+
+(def export-prefix
+  (str "gib default-os-reserve default-headroom usable-bytes choose-strategy-name "
+       "lane-base plan-lr-3 plan-lr-pack-get plan-fits-total? span-fits? "
+       "uniform-layer-bytes dense-units-milli moe-layer-bytes"))
 
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
@@ -18,8 +24,7 @@
         src (-> port-source
                 (str/replace-first
                  #"\(:export \[[^\]]+\]\)"
-                 (str "(:export [gib default-os-reserve default-headroom usable-bytes "
-                      "choose-strategy-name " (str/join " " names) "])"))
+                 (str "(:export [" export-prefix " " (str/join " " names) "])"))
                 (str "\n" (str/join "\n" defs)))
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
@@ -31,8 +36,7 @@
         src (-> port-source
                 (str/replace-first
                  #"\(:export \[[^\]]+\]\)"
-                 (str "(:export [gib default-os-reserve default-headroom usable-bytes "
-                      "choose-strategy-name " (str/join " " names) "])"))
+                 (str "(:export [" export-prefix " " (str/join " " names) "])"))
                 (str "\n" (str/join "\n" defs)))
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
@@ -45,6 +49,10 @@
         head (or (:headroom-bytes node) plan/default-headroom)
         wired (wired-arg node)]
     (str "(usable-bytes " (:mem-bytes node) " " os " " head " " wired ")")))
+
+(defn- unpack3 [packed]
+  (let [b 65536]
+    [(mod packed b) (mod (quot packed b) b) (quot packed (* b b))]))
 
 (deftest constants-match-plan-cljc
   (let [actual (compile-i64-cases
@@ -73,7 +81,6 @@
                 {:link-gbps 40 :ranks 4 :model {:model/experts 128 :model/kv-heads 8}}
                 {:link-gbps 40 :ranks 5 :model {:model/experts 128 :model/kv-heads 8}}
                 {:link-gbps nil :ranks 8 :model {:model/experts 64 :model/kv-heads 8}}]
-        ;; nil link → treat as 0 (conservative pipeline), matching missing measurement
         call (fn [{:keys [link-gbps ranks model]}]
                (let [link (long (or link-gbps 0))
                      exp (long (or (:model/experts model) 0))
@@ -86,3 +93,53 @@
       (testing (pr-str m)
         (is (= (name (:strategy (plan/choose-strategy m)))
                (get actual (str "s_" i))))))))
+
+(deftest plan-lr-3-matches-cljc-largest-remainder
+  (let [cases [["a" 10 5 3 2]
+               ["b" 10 1 1 1]
+               ["c" 5 5 0 0]
+               ["d" 4 3 3 2]
+               ["e" 7 1 1 1]
+               ["f" 0 1 1 1]
+               ["g" 9 0 0 0]]
+        ;; cljc quotas = total * w_i / sumw as doubles
+        cljc (fn [total w0 w1 w2]
+               (let [sumw (+ w0 w1 w2)]
+                 (if (or (zero? total) (zero? sumw))
+                   [0 0 0]
+                   (let [qs (mapv #(* total (/ (double %) sumw)) [w0 w1 w2])]
+                     (plan-lr total qs)))))
+        kotoba-cases (into {}
+                           (map (fn [[label total w0 w1 w2]]
+                                  [label (str "(plan-lr-3 " total " " w0 " " w1 " " w2 ")")])
+                                cases))
+        actual (compile-i64-cases
+                (merge kotoba-cases
+                       {"g0" "(plan-lr-pack-get (plan-lr-3 10 5 3 2) 0)"
+                        "g1" "(plan-lr-pack-get (plan-lr-3 10 5 3 2) 1)"
+                        "g2" "(plan-lr-pack-get (plan-lr-3 10 5 3 2) 2)"}))]
+    (is (= 5 (get actual "g0")))
+    (is (= 3 (get actual "g1")))
+    (is (= 2 (get actual "g2")))
+    (doseq [[label total w0 w1 w2] cases]
+      (let [want (cljc total w0 w1 w2)
+            got (unpack3 (get actual label))]
+        (is (= want got) (str label " want=" want " got=" got))))))
+
+(deftest plan-fits-and-layer-bytes
+  (let [actual (compile-i64-cases
+                {"ft1" "(plan-fits-total? 100 80)"
+                 "ft0" "(plan-fits-total? 70 80)"
+                 "sf1" "(span-fits? 50 50)"
+                 "sf0" "(span-fits? 51 50)"
+                 "ul" "(uniform-layer-bytes 1000 10)"
+                 "du" "(dense-units-milli 78 3 100)"
+                 "moe" "(moe-layer-bytes 1000000 78 3 100)"})]
+    (is (= 1 (get actual "ft1")))
+    (is (= 0 (get actual "ft0")))
+    (is (= 1 (get actual "sf1")))
+    (is (= 0 (get actual "sf0")))
+    (is (= 100 (get actual "ul")))
+    ;; units = 3*100 + 75*1000 = 75300 milli
+    (is (= (+ (* 3 100) (* 75 1000)) (get actual "du")))
+    (is (= (quot (* 1000000 1000) (+ (* 3 100) (* 75 1000))) (get actual "moe")))))
