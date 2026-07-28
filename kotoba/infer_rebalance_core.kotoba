@@ -1,0 +1,31 @@
+(ns infer-rebalance-core
+  (:export [shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class]))
+
+;; W6 pure-planner oracle — murakumo.infer.rebalance capacity scalar core.
+;; demand folds, largest-remainder seats, rebalance moves stay cljc.
+;; usable-gb: min(ceiling, max(0, ram - 6)) matching node-capacity.
+;; pool-for-class: text|image|video|audio|postproc → pool name string.
+;; Parity: test/murakumo/infer_rebalance_kotoba_parity_test.clj
+
+(defn shard-ceiling-gb [] :i64 10)
+
+(defn os-kv-headroom-gb [] :i64 6)
+
+(defn usable-gb [ram-gb :i64] :i64
+  ;; cljc: (min shard-ceiling-gb (max 0 (- ram 6)))
+  (let [raw (- ram-gb 6)
+        floored (if (< raw 0) 0 raw)
+        ceil (shard-ceiling-gb)]
+    (if (< floored ceil) floored ceil)))
+
+(defn pool-for-class [cls :string] :string
+  ;; cljc class->pool
+  (if (string=? cls "text")
+    "text-pool"
+    (if (string=? cls "postproc")
+      "postproc-pool"
+      (if (if (string=? cls "image") 1
+            (if (string=? cls "video") 1
+              (if (string=? cls "audio") 1 0)))
+        "media-pool"
+        "text-pool"))))

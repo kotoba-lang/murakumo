@@ -1,0 +1,52 @@
+(ns infer-moe-core
+  (:export [gib capacity-default expert-ratio-milli verdict-name
+            resident-est]))
+
+;; W6 pure-planner oracle — murakumo.infer.moe scalar core (optional).
+;; plan/node ranking and custom :model/mlx-moe-capacity-tiers stay cljc.
+;; capacity-default: README table only (128→512, 64→432, 48→320, 32→208).
+;; Below 32 GiB usable → 0 (cljc nil). expert-ratio-milli: experts*1000/active.
+;; verdict-name: recommended|workable|not-recommended|unknown.
+;; Parity: test/murakumo/infer_moe_kotoba_parity_test.clj
+
+(defn gib [] :i64 1073741824)
+
+(defn capacity-default [usable-bytes :i64] :i64
+  (let [g (gib)
+        u128 (* 128 g)
+        u64 (* 64 g)
+        u48 (* 48 g)
+        u32 (* 32 g)]
+    (if (< usable-bytes u32)
+      0
+      (if (< usable-bytes u48)
+        208
+        (if (< usable-bytes u64)
+          320
+          (if (< usable-bytes u128)
+            432
+            512))))))
+
+(defn expert-ratio-milli [experts :i64 active :i64] :i64
+  ;; cljc: (/ experts active) as milli; active <= 0 → 0 (unknown)
+  (if (< active 1)
+    0
+    (quot (* experts 1000) active)))
+
+(defn verdict-name [experts :i64 active :i64 shared :i64] :string
+  ;; shared 0/1; experts/active 0 ⇒ missing fields → unknown
+  (if (if (< experts 1) 1 (if (< active 1) 1 0))
+    "unknown"
+    (let [milli (expert-ratio-milli experts active)
+          high (if (< milli 10000) 0 1)]
+      (if (if (= high 1) (if (= shared 1) 1 0) 0)
+        "recommended"
+        (if (= shared 1)
+          "workable"
+          "not-recommended")))))
+
+(defn resident-est [weight-bytes :i64 experts :i64 capacity :i64] :i64
+  ;; cljc: (long (* weight (/ capacity experts))) when all present; else weight
+  (if (if (< weight-bytes 1) 1 (if (< experts 1) 1 (if (< capacity 1) 1 0)))
+    weight-bytes
+    (quot (* weight-bytes capacity) experts)))

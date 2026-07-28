@@ -1,0 +1,34 @@
+(ns infer-relay-core
+  (:export [digit-char nat-str i64-str make-id lease-expired?
+            msg-idle msg-job msg-settled]))
+
+;; W6 pure-planner oracle — murakumo.infer.relay id/lease scalar core.
+;; Queue/worker map state machine stays cljc.
+;; lease-expired?: (> (- now at) ttl) matching expire-leases predicate.
+;; make-id: "<prefix>-<n>" for gen-id counter.
+;; Parity: test/murakumo/infer_relay_kotoba_parity_test.clj
+
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+(defn make-id [prefix :string n :i64] :string
+  (string-concat prefix (string-concat "-" (i64-str n))))
+
+(defn lease-expired? [now-ms :i64 at-ms :i64 ttl-ms :i64] :i64
+  ;; cljc: (> (- now-ms at-ms) ttl-ms)
+  (if (< ttl-ms (- now-ms at-ms)) 1 0))
+
+(defn msg-idle [] :string "idle")
+(defn msg-job [] :string "job")
+(defn msg-settled [] :string "settled")
