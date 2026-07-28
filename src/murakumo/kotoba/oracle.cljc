@@ -92,6 +92,38 @@
     (boolean (load-kir oracle-id))
     (catch #?(:clj Exception :cljs :default) _ false)))
 
+
+(defn option-of
+  "Host nil → option none; non-nil → option some (Product Value ABI v1).
+  `type` examples: [:option :string], [:option :i64]."
+  [type value]
+  (if (nil? value)
+    [type false]
+    [type true value]))
+
+(defn option-string
+  "Optional string: nil → none; otherwise some (including empty string)."
+  [s]
+  (option-of [:option :string] (when (some? s) (str s))))
+
+(defn option-i64
+  "Optional i64: nil → none; otherwise some long."
+  [n]
+  (if (nil? n)
+    [[:option :i64] false]
+    [[:option :i64] true (long n)]))
+
+(defn option-some?
+  "True when opt is a some-tagged Product Value ABI option."
+  [opt]
+  (boolean (and (vector? opt) (true? (second opt)))))
+
+(defn option-value
+  "Payload of a some option, or nil if none/malformed."
+  [opt]
+  (when (option-some? opt)
+    (nth opt 2)))
+
 (defn call
   "Execute a pure export on the precompiled oracle.
 

@@ -88,13 +88,13 @@
 
 (defn claims
   "Build the token claim map. Pure claim fields use kotoba authority on JVM
-  (claim-sub/scope/exp); map assembly stays host."
+  (claim-sub/scope/exp via Product Value ABI options); map assembly stays host."
   [{:keys [sub scope now ttl]}]
-  (let [sub' #?(:clj (oracle/call :token 'claim-sub [(if (some? sub) 1 0) (str (or sub ""))])
+  (let [sub' #?(:clj (oracle/call :token 'claim-sub [(oracle/option-string sub)])
                 :cljs (mirror-claim-sub sub))
-        scope' #?(:clj (oracle/call :token 'claim-scope [(if (some? scope) 1 0) (str (or scope ""))])
+        scope' #?(:clj (oracle/call :token 'claim-scope [(oracle/option-string scope)])
                   :cljs (mirror-claim-scope scope))
-        exp' #?(:clj (oracle/call :token 'claim-exp [(long now) (long (if (some? ttl) ttl -1))])
+        exp' #?(:clj (oracle/call :token 'claim-exp [(long now) (oracle/option-i64 ttl)])
                 :cljs (mirror-claim-exp now ttl))]
     {:sub sub' :scope scope' :iat (long now) :exp (long exp')}))
 
@@ -123,11 +123,10 @@
     (catch #?(:clj Exception :cljs :default) _ nil)))
 
 (defn expired?
-  "True if claims are expired. JVM: kotoba oracle."
+  "True if claims are expired. JVM: kotoba oracle (option exp)."
   [cl now]
   #?(:clj (= 1 (oracle/call :token 'expired?
-                            [(if (contains? cl :exp) 1 0)
-                             (long (or (:exp cl) 0))
+                            [(oracle/option-i64 (when (contains? cl :exp) (:exp cl)))
                              (long now)]))
      :cljs (mirror-expired? cl now)))
 
@@ -148,12 +147,15 @@
      :cljs (mirror-version-ok? v)))
 
 (defn parts-present?
-  "All three wire segments present."
+  "All three wire segments present (non-blank)."
   [v payload sig]
-  #?(:clj (= 1 (oracle/call :token 'parts-present?
-                            [(if (and v (not (str/blank? (str v)))) 1 0)
-                             (if (and payload (not (str/blank? (str payload)))) 1 0)
-                             (if (and sig (not (str/blank? (str sig)))) 1 0)]))
+  #?(:clj (let [seg (fn [x]
+                      (when (and x (not (str/blank? (str x))))
+                        (str x)))]
+            (= 1 (oracle/call :token 'parts-present?
+                              [(oracle/option-string (seg v))
+                               (oracle/option-string (seg payload))
+                               (oracle/option-string (seg sig))])))
      :cljs (mirror-parts-present? v payload sig)))
 
 (defn constant-time=

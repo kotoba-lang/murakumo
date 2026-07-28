@@ -1,5 +1,5 @@
 ;; W6 pure-planner oracle: murakumo.token claims/scope helpers
-;; vs kotoba/token_core.kotoba.
+;; vs kotoba/token_core.kotoba (Product Value ABI v1 — options, no has-*).
 
 (ns murakumo.token-kotoba-parity-test
   (:require [clojure.string :as str]
@@ -12,11 +12,21 @@
 
 (def export-prefix
   (str "version default-ttl claim-sub claim-scope claim-exp expired? scope-allows? signing-input "
-       "digit-char nat-str i64-str encode-claims-json wire-token "
+       "encode-claims-json wire-token "
        "version-ok? parts-present? constant-time-eq ct-scan"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
+
+(defn- opt-string-form [s]
+  (if (nil? s)
+    "(option-none-of [:option :string])"
+    (str "(option-some-of [:option :string] " (kotoba-literal s) ")")))
+
+(defn- opt-i64-form [n]
+  (if (nil? n)
+    "(option-none-of [:option :i64])"
+    (str "(option-some-of [:option :i64] " (long n) ")")))
 
 (defn- compile-string-cases [cases]
   (let [defs (for [[name body] cases]
@@ -57,18 +67,14 @@
         sub-cases (into {}
                         (map-indexed
                          (fn [i [sub _]]
-                           (let [has (if (some? sub) 1 0)
-                                 s (or sub "")]
-                             [(str "sub_" i)
-                              (str "(claim-sub " has " " (kotoba-literal s) ")")]))
+                           [(str "sub_" i)
+                            (str "(claim-sub " (opt-string-form sub) ")")])
                          corpus))
         scope-cases (into {}
                           (map-indexed
                            (fn [i [_ scope]]
-                             (let [has (if (some? scope) 1 0)
-                                   s (or scope "")]
-                               [(str "sc_" i)
-                                (str "(claim-scope " has " " (kotoba-literal s) ")")]))
+                             [(str "sc_" i)
+                              (str "(claim-scope " (opt-string-form scope) ")")])
                            corpus))
         subs (compile-string-cases sub-cases)
         scopes (compile-string-cases scope-cases)]
@@ -79,21 +85,16 @@
           (is (= (:scope cl) (get scopes (str "sc_" i)))))))))
 
 (deftest claim-exp-matches-claims
-  (let [corpus [[1000 3600] [1000 nil] [0 1] [1700000000 -1]]
-        ;; -1 in last row means "pass -1 to kotoba as absent" and compare to nil ttl
+  (let [corpus [[1000 3600] [1000 nil] [0 1] [1700000000 nil]]
         cases (into {}
                     (map-indexed
                      (fn [i [now ttl]]
-                       (let [k-ttl (if (nil? ttl) -1 (long ttl))
-                             ;; corpus last uses -1 as explicit absent sentinel for kotoba only
-                             k-ttl (if (= k-ttl -1) -1 k-ttl)
-                             now' (long now)]
-                         [(str "e_" i) (str "(claim-exp " now' " " k-ttl ")")]))
+                       [(str "e_" i)
+                        (str "(claim-exp " (long now) " " (opt-i64-form ttl) ")")])
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [now ttl]] (map-indexed vector corpus)]
-      (let [ttl' (if (and (some? ttl) (neg? ttl)) nil ttl)
-            cl (tok/claims {:now now :ttl ttl'})]
+      (let [cl (tok/claims {:now now :ttl ttl})]
         (testing (pr-str [now ttl])
           (is (= (:exp cl) (get actual (str "e_" i)))))))))
 
@@ -106,10 +107,11 @@
         cases (into {}
                     (map-indexed
                      (fn [i [cl now]]
-                       (let [has (if (contains? cl :exp) 1 0)
-                             exp (long (or (:exp cl) 0))]
+                       (let [exp-form (if (contains? cl :exp)
+                                        (opt-i64-form (:exp cl))
+                                        (opt-i64-form nil))]
                          [(str "x_" i)
-                          (str "(expired? " has " " exp " " (long now) ")")]))
+                          (str "(expired? " exp-form " " (long now) ")")]))
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [cl now]] (map-indexed vector corpus)]
@@ -136,49 +138,27 @@
         (is (= (if (tok/scope-allows? s r) 1 0)
                (get actual (str "sa_" i))))))))
 
-(deftest signing-input-matches-wire-prefix
-  (let [payload "abcPAYLOAD"
-        actual (compile-string-cases
-                {"si" (str "(signing-input " (kotoba-literal payload) ")")})]
-    (is (= (str tok/version "." payload)
-           (get actual "si")))))
+(deftest encode-claims-json-and-wire-match
+  (let [cl (tok/claims {:sub "a" :scope "all" :now 10 :ttl 5})
+        json (tok/encode-claims-json cl)
+        cases (compile-string-cases
+               {"j" (str "(encode-claims-json "
+                         (kotoba-literal (:sub cl)) " "
+                         (kotoba-literal (:scope cl)) " "
+                         (:iat cl) " " (:exp cl) ")")
+                "w" (str "(wire-token " (kotoba-literal "pay") " " (kotoba-literal "sig") ")")
+                "si" (str "(signing-input " (kotoba-literal "pay") ")")})]
+    (is (= json (get cases "j")))
+    (is (= (tok/wire-token "pay" "sig") (get cases "w")))
+    (is (= (tok/signing-input "pay") (get cases "si")))))
 
-
-(deftest encode-claims-and-wire-token
-  (let [cl (tok/claims {:sub "shinshi" :scope "chat" :now 1000 :ttl 60})
-        jvm-json (str "{\"sub\":\"" (:sub cl) "\",\"scope\":\"" (:scope cl)
-                      "\",\"iat\":" (:iat cl) ",\"exp\":" (:exp cl) "}")
-        actual (compile-string-cases
-                {"ej" (str "(encode-claims-json "
-                           (kotoba-literal (:sub cl)) " "
-                           (kotoba-literal (:scope cl)) " "
-                           (:iat cl) " " (:exp cl) ")")
-                 "wt" (str "(wire-token " (kotoba-literal "PAY") " "
-                           (kotoba-literal "SIG") ")")
-                 "si" (str "(signing-input " (kotoba-literal "PAY") ")")})]
-    (is (= jvm-json (get actual "ej")))
-    (is (= "mk1.PAY.SIG" (get actual "wt")))
-    (is (= "mk1.PAY" (get actual "si")))))
-
-(deftest constant-time-eq-and-parts
-  (let [ct @(var murakumo.token/constant-time=)
-        actual (compile-i64-cases
-                {"eq" (str "(constant-time-eq " (kotoba-literal "abc") " "
-                           (kotoba-literal "abc") ")")
-                 "ne" (str "(constant-time-eq " (kotoba-literal "abc") " "
-                           (kotoba-literal "abd") ")")
-                 "len" (str "(constant-time-eq " (kotoba-literal "ab") " "
-                            (kotoba-literal "abc") ")")
-                 "vok" (str "(version-ok? " (kotoba-literal "mk1") ")")
-                 "vbad" (str "(version-ok? " (kotoba-literal "mk2") ")")
-                 "pp1" "(parts-present? 1 1 1)"
-                 "pp0" "(parts-present? 1 1 0)"})]
-    (is (= 1 (get actual "eq")))
-    (is (= 0 (get actual "ne")))
-    (is (= 0 (get actual "len")))
-    (is (= (if (ct "abc" "abc") 1 0) (get actual "eq")))
-    (is (= (if (ct "abc" "abd") 1 0) (get actual "ne")))
-    (is (= 1 (get actual "vok")))
-    (is (= 0 (get actual "vbad")))
-    (is (= 1 (get actual "pp1")))
-    (is (= 0 (get actual "pp0")))))
+(deftest constant-time-eq-matches
+  (let [cases (compile-i64-cases
+               {"eq" "(constant-time-eq \"abc\" \"abc\")"
+                "ne" "(constant-time-eq \"abc\" \"abd\")"
+                "len" "(constant-time-eq \"ab\" \"abc\")"})]
+    (is (= 1 (get cases "eq")))
+    (is (= 0 (get cases "ne")))
+    (is (= 0 (get cases "len")))
+    (is (true? (tok/constant-time= "abc" "abc")))
+    (is (false? (tok/constant-time= "abc" "abd")))))

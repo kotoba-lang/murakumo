@@ -14,29 +14,57 @@
    :body 2592000,
    :param-types []}
   {:name claim-sub,
-   :params [has-sub sub],
+   :params [sub],
    :result :string,
    :effects #{},
-   :body (if (= has-sub 0) "anonymous" sub),
-   :param-types [:i64 :string]}
+   :body
+   (let
+    [binding-some__1 sub]
+    (if
+     (option-some?-of [:option :string] binding-some__1)
+     (let [x (option-value-of [:option :string] binding-some__1 "")] x)
+     "anonymous")),
+   :param-types [[:option :string]]}
   {:name claim-scope,
-   :params [has-scope scope],
+   :params [scope],
    :result :string,
    :effects #{},
-   :body (if (= has-scope 0) "all" scope),
-   :param-types [:i64 :string]}
+   :body
+   (let
+    [binding-some__2 scope]
+    (if
+     (option-some?-of [:option :string] binding-some__2)
+     (let [x (option-value-of [:option :string] binding-some__2 "")] x)
+     "all")),
+   :param-types [[:option :string]]}
   {:name claim-exp,
    :params [now ttl],
    :result :i64,
    :effects #{},
-   :body (let [t (if (< ttl 0) 2592000 ttl)] (+ now t)),
-   :param-types [:i64 :i64]}
+   :body
+   (+
+    now
+    (let
+     [binding-some__3 ttl]
+     (if
+      (option-some?-of [:option :i64] binding-some__3)
+      (let [x (option-value-of [:option :i64] binding-some__3 0)] x)
+      2592000))),
+   :param-types [:i64 [:option :i64]]}
   {:name expired?,
-   :params [has-exp exp now],
+   :params [exp now],
    :result :i64,
    :effects #{},
-   :body (if (= has-exp 0) 1 (if (< now exp) 0 1)),
-   :param-types [:i64 :i64 :i64]}
+   :body
+   (let
+    [binding-some__4 exp]
+    (if
+     (option-some?-of [:option :i64] binding-some__4)
+     (let
+      [e (option-value-of [:option :i64] binding-some__4 0)]
+      (if (< now e) 0 1))
+     1)),
+   :param-types [[:option :i64] :i64]}
   {:name scope-allows?,
    :params [token-scope required],
    :result :i64,
@@ -53,31 +81,6 @@
    :effects #{},
    :body (string-concat "mk1." payload-seg),
    :param-types [:string]}
-  {:name digit-char,
-   :params [d],
-   :result :string,
-   :effects #{},
-   :body (string-substring "0123456789" d (+ d 1)),
-   :param-types [:i64]}
-  {:name nat-str,
-   :params [n],
-   :result :string,
-   :effects #{},
-   :body
-   (if
-    (< n 10)
-    (digit-char n)
-    (string-concat
-     (nat-str (quot n 10))
-     (digit-char (- n (* (quot n 10) 10))))),
-   :param-types [:i64]}
-  {:name i64-str,
-   :params [n],
-   :result :string,
-   :effects #{},
-   :body
-   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
-   :param-types [:i64]}
   {:name encode-claims-json,
    :params [sub scope iat exp],
    :result :string,
@@ -94,10 +97,10 @@
        (string-concat
         "\",\"iat\":"
         (string-concat
-         (i64-str iat)
+         (__kotoba_string_from_i64 iat)
          (string-concat
           ",\"exp\":"
-          (string-concat (i64-str exp) "}")))))))),
+          (string-concat (__kotoba_string_from_i64 exp) "}")))))))),
    :param-types [:string :string :i64 :i64]}
   {:name wire-token,
    :params [payload-seg sig],
@@ -115,11 +118,34 @@
    :body (if (string=? v "mk1") 1 0),
    :param-types [:string]}
   {:name parts-present?,
-   :params [has-v has-p has-s],
+   :params [v p s],
    :result :i64,
    :effects #{},
-   :body (if (= has-v 1) (if (= has-p 1) (if (= has-s 1) 1 0) 0) 0),
-   :param-types [:i64 :i64 :i64]}
+   :body
+   (let
+    [binding-some__5 v]
+    (if
+     (option-some?-of [:option :string] binding-some__5)
+     (let
+      [_ (option-value-of [:option :string] binding-some__5 "")]
+      (let
+       [binding-some__6 p]
+       (if
+        (option-some?-of [:option :string] binding-some__6)
+        (let
+         [_ (option-value-of [:option :string] binding-some__6 "")]
+         (let
+          [binding-some__7 s]
+          (if
+           (option-some?-of [:option :string] binding-some__7)
+           (let
+            [_ (option-value-of [:option :string] binding-some__7 "")]
+            1)
+           0)))
+        0)))
+     0)),
+   :param-types
+   [[:option :string] [:option :string] [:option :string]]}
   {:name ct-scan,
    :params [a b i n acc],
    :result :i64,
@@ -147,7 +173,32 @@
    (let
     [na (string-byte-length a) nb (string-byte-length b)]
     (if (= na nb) (if (= (ct-scan a b 0 na 0) 0) 1 0) 0)),
-   :param-types [:string :string]}],
+   :param-types [:string :string]}
+  {:name __kotoba_string_from_i64_nat,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (string-substring "0123456789" n (+ n 1))
+    (string-concat
+     (__kotoba_string_from_i64_nat (quot n 10))
+     (string-substring
+      "0123456789"
+      (- n (* (quot n 10) 10))
+      (+ (- n (* (quot n 10) 10)) 1)))),
+   :param-types [:i64]}
+  {:name __kotoba_string_from_i64,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 0)
+    (string-concat "-" (__kotoba_string_from_i64_nat (- 0 n)))
+    (__kotoba_string_from_i64_nat n)),
+   :param-types [:i64]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
@@ -159,9 +210,6 @@
   expired?
   scope-allows?
   signing-input
-  digit-char
-  nat-str
-  i64-str
   encode-claims-json
   wire-token
   version-ok?
