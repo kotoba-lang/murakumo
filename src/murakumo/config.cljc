@@ -116,12 +116,15 @@
 
 (defn kotoba-dir
   "Resolve the kotoba checkout directory from env.
-   Kotoba `kotoba-dir-from` when oracle ready."
+   Kotoba `kotoba-dir-from` when oracle ready.
+   Uses oracle/call-record (T5.2 structural host map → positional guest args)."
   [env]
   (try-oracle
-   #(o 'kotoba-dir-from
-       [(str (or (get env "MURAKUMO_KOTOBA_DIR") ""))
-        (str (or (get env "HOME") ""))])
+   #(oracle/call-record
+     oid 'kotoba-dir-from
+     env
+     [["MURAKUMO_KOTOBA_DIR" :string]
+      ["HOME" :string]])
    #(or (get env "MURAKUMO_KOTOBA_DIR")
         (mirror-default-kotoba-dir (get env "HOME")))))
 
