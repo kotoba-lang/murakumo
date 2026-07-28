@@ -2,10 +2,143 @@
 ;;
 ;; Collection, persistence, JSON encoding, and HTTP serving stay in murakumo.dash.
 ;; This namespace owns deterministic snapshot -> record/alert/display data.
+;;
+;; W6 product-shell authority: on JVM, pure display helpers DELEGATE to
+;; precompiled kotoba/dash_state_core.kotoba KIR
+;; (resources/murakumo/oracle/dash_state_core.kir.edn). Map/vector folds,
+;; HTML join, probe parse, and query-string stay host/cljc.
 
 (ns murakumo.dash.state
+  "Dashboard pure helpers use kotoba/dash_state_core.kotoba authority on JVM."
   (:require [clojure.set :as set]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
+
+;; ── host-mirror pure helpers (cljs fallback + semantic documentation) ──
+
+(defn- mirror-short-hosted-cid [cid]
+  (subs cid 0 (min 18 (count cid))))
+
+(defn- mirror-health-class [health]
+  (if (= "ok" health) "ok" "down"))
+
+(defn- mirror-interval-sleep-ms [seconds]
+  (* 1000 seconds))
+
+(defn- mirror-clamp-at [requested-at history-count]
+  (min (max 0 (or requested-at 0)) (max 0 (dec history-count))))
+
+(defn- mirror-take-last-start [len cap]
+  (if (< cap 1)
+    len
+    (max 0 (- len cap))))
+
+(defn- mirror-recent-take-n [n default-n]
+  (if (neg? n) default-n n))
+
+;; ── pure display helpers: kotoba dash_state_core SSoT on JVM ─────────
+
+(defn short-hosted-cid
+  "CID abbreviation used in the dashboard hosted-components table.
+   JVM: kotoba `short-hosted-cid`."
+  [cid]
+  #?(:clj (oracle/call :dash-state 'short-hosted-cid [(str cid)])
+     :cljs (mirror-short-hosted-cid cid)))
+
+(defn- short-cid [cid]
+  (subs cid 0 (min 14 (count cid))))
+
+(defn hosted-summary
+  "Dashboard table text for hosted component CIDs, or nil when none are hosted."
+  [node]
+  (when (seq (:hosted node))
+    (str/join " " (map short-hosted-cid (:hosted node)))))
+
+(defn health-class
+  "CSS class for a node health value.
+   JVM: kotoba `health-class-of` on `:health`."
+  [node]
+  #?(:clj (oracle/call :dash-state 'health-class-of [(str (or (:health node) ""))])
+     :cljs (mirror-health-class (:health node))))
+
+(defn- parse-int [s]
+  #?(:clj (Integer/parseInt s)
+     :cljs (js/parseInt s 10)))
+
+(defn query-at
+  "Parse dashboard `at=N` query parameter. Returns nil if absent. The regex is
+  anchored to a key boundary (start-of-string or `?`/`&`, terminated by `&` or
+  end-of-string) so it matches the exact key `at`, not any longer key that
+  happens to END in \"at=<digits>\" as a substring (e.g. \"format=5\",
+  \"chat=5\", \"combat=12\" would otherwise all be misread as history offsets
+  5/5/12 -- selected-snapshot would silently serve stale history instead of
+  the live snapshot for any query string containing such a param)."
+  [query-string]
+  (some-> query-string (->> (re-find #"(?:^|[?&])at=(\d+)(?:&|$)")) second parse-int))
+
+(defn dashboard-options
+  "Parse dashboard CLI args into port/interval defaults."
+  [args]
+  {:port (parse-int (or (first args) "8899"))
+   :interval (parse-int (or (second args) "15"))})
+
+(defn interval-sleep-ms
+  "Milliseconds to sleep between dashboard snapshots.
+   JVM: kotoba `interval-sleep-ms`."
+  [seconds]
+  #?(:clj (long (oracle/call :dash-state 'interval-sleep-ms [(long seconds)]))
+     :cljs (mirror-interval-sleep-ms seconds)))
+
+(defn clamp-at
+  "Clamp a requested history offset into the available history range.
+   JVM: kotoba `clamp-at` (nil requested-at → 0)."
+  [requested-at history-count]
+  #?(:clj (long (oracle/call :dash-state 'clamp-at
+                             [(long (or requested-at 0)) (long history-count)]))
+     :cljs (mirror-clamp-at requested-at history-count)))
+
+(defn selected-snapshot
+  "Select dashboard snapshot for a history offset.
+
+   at=0 is latest; history is stored oldest->newest. Falls back to cache when
+   history is empty."
+  [history cache requested-at]
+  (let [history-count (count history)
+        at (clamp-at requested-at history-count)]
+    {:at at
+     :total history-count
+     :live? (zero? at)
+     :snapshot (if (pos? history-count)
+                 (nth history (- history-count 1 at))
+                 cache)}))
+
+(defn recent-alerts
+  "Newest dashboard alerts first, capped for display.
+   JVM: cap `n` via kotoba `recent-take-n` (negative → default 6)."
+  ([alerts] (recent-alerts alerts 6))
+  ([alerts n]
+   (let [take-n #?(:clj (long (oracle/call :dash-state 'recent-take-n
+                                           [(long n) 6]))
+                   :cljs (mirror-recent-take-n n 6))]
+     (take take-n (reverse alerts)))))
+
+(defn append-capped
+  "Append one item to a vector-like history, keeping only the newest cap items.
+   JVM: start index via kotoba `take-last-start`; vector slice stays host."
+  [items cap item]
+  (let [v (conj (vec items) item)
+        len (count v)
+        start #?(:clj (long (oracle/call :dash-state 'take-last-start
+                                         [(long len) (long cap)]))
+                 :cljs (mirror-take-last-start len cap))]
+    (subvec v start)))
+
+(defn concat-capped
+  "Append a collection to a vector-like history, keeping only the newest cap items."
+  [items cap more]
+  (vec (take-last cap (concat items more))))
+
+;; ── map/vector host folds (stay cljc) ────────────────────────────────
 
 (defn placements
   "Flatten snapshot hosted CIDs into [{:node name :cid cid} ...]."
@@ -30,8 +163,8 @@
    :fleet (:fleet snapshot)
    :nodes (count (:nodes snapshot))
    :links_total (links-total snapshot)
-	   :placements (placements snapshot)
-	   :snapshot snapshot-json})
+   :placements (placements snapshot)
+   :snapshot snapshot-json})
 
 (defn snapshot
   "Build the live dashboard snapshot map."
@@ -47,86 +180,6 @@
           {:action (if (and (:online? node) (reachable-node? node)) :probe :down)
            :node node})
         nodes))
-
-(defn- short-cid [cid]
-  (subs cid 0 (min 14 (count cid))))
-
-(defn short-hosted-cid [cid]
-  "CID abbreviation used in the dashboard hosted-components table."
-  (subs cid 0 (min 18 (count cid))))
-
-(defn hosted-summary
-  "Dashboard table text for hosted component CIDs, or nil when none are hosted."
-  [node]
-  (when (seq (:hosted node))
-    (str/join " " (map short-hosted-cid (:hosted node)))))
-
-(defn health-class
-  "CSS class for a node health value."
-  [node]
-  (if (= "ok" (:health node)) "ok" "down"))
-
-(defn- parse-int [s]
-  #?(:clj (Integer/parseInt s)
-     :cljs (js/parseInt s 10)))
-
-(defn query-at
-  "Parse dashboard `at=N` query parameter. Returns nil if absent. The regex is
-  anchored to a key boundary (start-of-string or `?`/`&`, terminated by `&` or
-  end-of-string) so it matches the exact key `at`, not any longer key that
-  happens to END in \"at=<digits>\" as a substring (e.g. \"format=5\",
-  \"chat=5\", \"combat=12\" would otherwise all be misread as history offsets
-  5/5/12 -- selected-snapshot would silently serve stale history instead of
-  the live snapshot for any query string containing such a param)."
-  [query-string]
-  (some-> query-string (->> (re-find #"(?:^|[?&])at=(\d+)(?:&|$)")) second parse-int))
-
-(defn dashboard-options
-  "Parse dashboard CLI args into port/interval defaults."
-  [args]
-  {:port (parse-int (or (first args) "8899"))
-   :interval (parse-int (or (second args) "15"))})
-
-(defn interval-sleep-ms
-  "Milliseconds to sleep between dashboard snapshots."
-  [seconds]
-  (* 1000 seconds))
-
-(defn clamp-at
-  "Clamp a requested history offset into the available history range."
-  [requested-at history-count]
-  (min (max 0 (or requested-at 0)) (max 0 (dec history-count))))
-
-(defn selected-snapshot
-  "Select dashboard snapshot for a history offset.
-
-   at=0 is latest; history is stored oldest->newest. Falls back to cache when
-   history is empty."
-  [history cache requested-at]
-  (let [history-count (count history)
-        at (clamp-at requested-at history-count)]
-    {:at at
-     :total history-count
-     :live? (zero? at)
-     :snapshot (if (pos? history-count)
-                 (nth history (- history-count 1 at))
-                 cache)}))
-
-(defn recent-alerts
-  "Newest dashboard alerts first, capped for display."
-  ([alerts] (recent-alerts alerts 6))
-  ([alerts n]
-   (take n (reverse alerts))))
-
-(defn append-capped
-  "Append one item to a vector-like history, keeping only the newest cap items."
-  [items cap item]
-  (vec (take-last cap (conj (vec items) item))))
-
-(defn concat-capped
-  "Append a collection to a vector-like history, keeping only the newest cap items."
-  [items cap more]
-  (vec (take-last cap (concat items more))))
 
 (defn render-html
   "Render the dashboard HTML for a selected snapshot.
@@ -185,7 +238,7 @@
   (into {}
         (for [line (str/split-lines (str out))
               :when (>= (count line) 2)]
-	          [(subs line 0 1) (subs line 2)])))
+          [(subs line 0 1) (subs line 2)])))
 
 (defn probe-command
   "Remote shell command for one dashboard probe round-trip."

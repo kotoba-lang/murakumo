@@ -27,7 +27,8 @@
   {:kekkai-gate "murakumo/oracle/kekkai_gate_core.kir.edn"
    :token "murakumo/oracle/token_core.kir.edn"
    :report-core "murakumo/oracle/report_core.kir.edn"
-   :infer-plan "murakumo/oracle/infer_plan_core.kir.edn"})
+   :infer-plan "murakumo/oracle/infer_plan_core.kir.edn"
+   :dash-state "murakumo/oracle/dash_state_core.kir.edn"})
 
 (def ^:private kir-cache
   "Atom map of oracle-id → loaded KIR document."

@@ -16,6 +16,7 @@
             [murakumo.token :as tok]
             [murakumo.report :as report]
             [murakumo.infer.plan :as plan]
+            [murakumo.dash.state :as dash]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -33,10 +34,12 @@
   (is (oracle/ready? :token))
   (is (oracle/ready? :report-core))
   (is (oracle/ready? :infer-plan))
+  (is (oracle/ready? :dash-state))
   (is (some #{:kekkai-gate} (oracle/catalog-ids)))
   (is (some #{:token} (oracle/catalog-ids)))
   (is (some #{:report-core} (oracle/catalog-ids)))
-  (is (some #{:infer-plan} (oracle/catalog-ids))))
+  (is (some #{:infer-plan} (oracle/catalog-ids)))
+  (is (some #{:dash-state} (oracle/catalog-ids))))
 
 (deftest product-shell-gate-uses-oracle-results
   (testing "parse-status delegates to kotoba parse-status-out"
@@ -240,3 +243,55 @@
 (deftest infer-plan-precompiled-kir-does-not-drift
   (is (= (plan-live-kir) (plan-resource-kir))
       "infer_plan KIR drift — run oracle-gen"))
+
+(def ^:private dash-source "kotoba/dash_state_core.kotoba")
+(def ^:private dash-resource "murakumo/oracle/dash_state_core.kir.edn")
+
+(defn- dash-live-kir []
+  (:kir (compiler/compile-source (slurp dash-source) :wasm32-kotoba-v1 {})))
+
+(defn- dash-resource-kir []
+  (edn/read-string (slurp (io/resource dash-resource))))
+
+(deftest product-shell-dash-state-uses-oracle-results
+  (testing "short-hosted-cid + health-class via oracle"
+    (is (= "bafy12345678901234"
+           (dash/short-hosted-cid "bafy12345678901234567890")))
+    (is (= "bafyA" (dash/short-hosted-cid "bafyA")))
+    (is (= "ok" (dash/health-class {:health "ok"})))
+    (is (= "down" (dash/health-class {:health "pending"})))
+    (is (= "down" (dash/health-class {:health nil}))))
+  (testing "interval-sleep-ms + clamp-at via oracle"
+    (is (= 15000 (dash/interval-sleep-ms 15)))
+    (is (= 0 (dash/clamp-at nil 3)))
+    (is (= 2 (dash/clamp-at 99 3)))
+    (is (= 0 (dash/clamp-at 0 0))))
+  (testing "append-capped uses take-last-start oracle index"
+    (let [v (dash/append-capped (vec (range 5)) 6 :x)]
+      (is (= 6 (count v)))
+      (is (= :x (last v))))
+    (let [v (dash/append-capped (vec (range 10)) 6 :y)]
+      (is (= 6 (count v)))
+      (is (= (take-last 6 (conj (vec (range 10)) :y)) v))))
+  (testing "recent-alerts cap via recent-take-n"
+    (is (= 3 (count (dash/recent-alerts (range 10) 3))))
+    (is (= 6 (count (dash/recent-alerts (range 10) -1))))))
+
+(deftest dash-oracle-call-matches-live-compile
+  (let [live (dash-live-kir)]
+    (is (= (ir/execute live 'short-hosted-cid ["bafy12345678901234567890"])
+           (oracle/call :dash-state 'short-hosted-cid ["bafy12345678901234567890"])))
+    (is (= (ir/execute live 'health-class-of ["ok"])
+           (oracle/call :dash-state 'health-class-of ["ok"])))
+    (is (= (ir/execute live 'interval-sleep-ms [15])
+           (oracle/call :dash-state 'interval-sleep-ms [15])))
+    (is (= (ir/execute live 'clamp-at [99 3])
+           (oracle/call :dash-state 'clamp-at [99 3])))
+    (is (= (ir/execute live 'take-last-start [10 6])
+           (oracle/call :dash-state 'take-last-start [10 6])))
+    (is (= (ir/execute live 'recent-take-n [-1 6])
+           (oracle/call :dash-state 'recent-take-n [-1 6])))))
+
+(deftest dash-precompiled-kir-does-not-drift
+  (is (= (dash-live-kir) (dash-resource-kir))
+      "dash_state KIR drift — run oracle-gen"))

@@ -1,0 +1,75 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name short-hosted-cid,
+   :params [cid],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length cid) end (if (< n 18) n 18)]
+    (string-substring cid 0 end)),
+   :param-types [:string]}
+  {:name health-class-of,
+   :params [health],
+   :result :string,
+   :effects #{},
+   :body (if (string=? health "ok") "ok" "down"),
+   :param-types [:string]}
+  {:name interval-sleep-ms,
+   :params [seconds],
+   :result :i64,
+   :effects #{},
+   :body (* 1000 seconds),
+   :param-types [:i64]}
+  {:name clamp-at,
+   :params [requested-at history-count],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [req
+     (if (< requested-at 0) 0 requested-at)
+     hi
+     (if (< history-count 1) 0 (- history-count 1))]
+    (if (< req hi) req hi)),
+   :param-types [:i64 :i64]}
+  {:name take-last-start,
+   :params [len cap],
+   :result :i64,
+   :effects #{},
+   :body (if (< cap 1) len (let [s (- len cap)] (if (< s 0) 0 s))),
+   :param-types [:i64 :i64]}
+  {:name append-new-len,
+   :params [len add],
+   :result :i64,
+   :effects #{},
+   :body (if (< add 0) len (+ len add)),
+   :param-types [:i64 :i64]}
+  {:name cap-count,
+   :params [len cap],
+   :result :i64,
+   :effects #{},
+   :body (if (< cap 1) 0 (if (< len cap) len cap)),
+   :param-types [:i64 :i64]}
+  {:name recent-take-n,
+   :params [n default-n],
+   :result :i64,
+   :effects #{},
+   :body (if (< n 0) default-n n),
+   :param-types [:i64 :i64]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [short-hosted-cid
+  health-class-of
+  interval-sleep-ms
+  clamp-at
+  take-last-start
+  append-new-len
+  cap-count
+  recent-take-n],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}
