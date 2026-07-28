@@ -695,7 +695,19 @@
       (is (seq (:targets place)))
       (is (= :satisfied (:action sat)))
       (is (= :needs-build (:action needs)))
-      (is (= 1 (:desired needs))))))
+      (is (= 1 (:desired needs)))
+      (is (true? (rplan/plan-converged?
+                 {:apps [sat]})))
+      (is (false? (rplan/plan-converged?
+                   {:apps [place sat]})))
+      (is (= [place] (rplan/apply-apps {:apps [place sat needs]})))))
+  (testing "CLI flags + missing-manifest via oracle"
+    (is (= :missing-manifest (rplan/reconcile-command-error {})))
+    (is (nil? (rplan/reconcile-command-error {:manifest "murakumo.app.edn"})))
+    (is (= {:manifest "m.edn" :dry-run true :watch 5}
+           (rplan/parse-flags ["m.edn" "--dry-run" "--watch=5"])))
+    (is (= {:apply true :watch 30 :manifest "m.edn"}
+           (rplan/parse-flags ["--apply" "--watch" "m.edn"])))))
 
 (deftest reconcile-oracle-call-matches-live-compile
   (let [live (:kir (compiler/compile-source (slurp "kotoba/reconcile_plan_core.kotoba")
@@ -721,7 +733,15 @@
     (is (= "place" (oracle/call :reconcile-plan 'action-name [some-cid 1 3 2])))
     (is (= (ir/execute live 'action-name [none-s 0 1 0])
            (oracle/call :reconcile-plan 'action-name [none-s 0 1 0])))
-    (is (= "needs-build" (oracle/call :reconcile-plan 'action-name [none-s 0 1 0])))))
+    (is (= "needs-build" (oracle/call :reconcile-plan 'action-name [none-s 0 1 0])))
+    (is (= (ir/execute live 'missing-manifest? [""])
+           (oracle/call :reconcile-plan 'missing-manifest? [""])))
+    (is (= (ir/execute live 'action-is-satisfied? ["satisfied"])
+           (oracle/call :reconcile-plan 'action-is-satisfied? ["satisfied"])))
+    (is (= (ir/execute live 'watch-seconds ["--watch=7"])
+           (oracle/call :reconcile-plan 'watch-seconds ["--watch=7"])))
+    (is (= (ir/execute live 'snapshot-value ["--snapshot=x.edn"])
+           (oracle/call :reconcile-plan 'snapshot-value ["--snapshot=x.edn"])))))
 
 (deftest reconcile-precompiled-kir-does-not-drift
   (let [live (:kir (compiler/compile-source (slurp "kotoba/reconcile_plan_core.kotoba")

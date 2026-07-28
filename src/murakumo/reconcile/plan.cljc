@@ -4,12 +4,13 @@
 ;; This namespace is the .cljc source of truth for the wadm-style planning logic;
 ;; murakumo.reconcile wraps it with CLI, collection, apply, and persistence.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-reconcile-oracle-authority):
-;; pure scalar helpers DELEGATE to precompiled
+;; W6 product-shell authority (ADR-260728-w6-reconcile-oracle-authority +
+;; ADR-260728-w6-reconcile-flags-pure-oracle):
+;; pure scalar + flag/action helpers DELEGATE to precompiled
 ;; kotoba/reconcile_plan_core.kotoba → resources/murakumo/oracle/reconcile_plan_core.kir.edn
 ;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: eligible-nodes / observed-hosts set algebra, variable-length
-;; pick-targets sort, reason strings, CLI flag parse. cljs mirrors as fallback.
+;; pick-targets sort, reason strings, parse-flags reduce fold. cljs mirrors as fallback.
 
 (ns murakumo.reconcile.plan
   (:require [clojure.set :as set]
@@ -177,15 +178,33 @@
    :fleet (:fleet/name fleet)
    :apps (mapv #(reconcile-app fleet snapshot connect-spec %) (:apps manifest))})
 
+(defn- action-is-satisfied?
+  "Kotoba `action-is-satisfied?` when ready."
+  [action]
+  (try-oracle
+   #(= 1 (oracle/i64->host
+          (o 'action-is-satisfied? [(name action)])))
+   #(= :satisfied action)))
+
+(defn- action-is-place?
+  "Kotoba `action-is-place?` when ready."
+  [action]
+  (try-oracle
+   #(= 1 (oracle/i64->host
+          (o 'action-is-place? [(name action)])))
+   #(= :place action)))
+
 (defn plan-converged?
-  "True when every app is satisfied."
+  "True when every app is satisfied.
+   Per-app gate via kotoba; fold stays host."
   [plan]
-  (every? #(= :satisfied (:action %)) (:apps plan)))
+  (every? #(action-is-satisfied? (:action %)) (:apps plan)))
 
 (defn apply-apps
-  "Apps that require an apply pass."
+  "Apps that require an apply pass.
+   Per-app gate via kotoba; fold stays host."
   [plan]
-  (filterv #(= :place (:action %)) (:apps plan)))
+  (filterv #(action-is-place? (:action %)) (:apps plan)))
 
 (defn apply-targets
   "Flatten :place apps into one (app, target) deploy pair PER target node.
@@ -213,28 +232,77 @@
   #?(:clj (Integer/parseInt s)
      :cljs (js/parseInt s 10)))
 
+(defn- mirror-watch-seconds [a]
+  (let [[_ v] (str/split a #"=")]
+    (if v
+      (try (parse-int v)
+           (catch #?(:clj Exception :cljs :default) _ 30))
+      30)))
+
+(defn- watch-seconds
+  "Seconds for --watch / --watch=N. Kotoba when ready."
+  [a]
+  (try-oracle
+   #(oracle/i64->host (o 'watch-seconds [(str a)]))
+   #(mirror-watch-seconds a)))
+
+(defn- snapshot-value
+  "Path after --snapshot=. Kotoba when ready."
+  [a]
+  (try-oracle
+   #(o 'snapshot-value [(str a)])
+   #(subs a 11)))
+
+(defn- flag-is-dry-run? [a]
+  (try-oracle
+   #(= 1 (oracle/i64->host (o 'flag-is-dry-run? [(str a)])))
+   #(= a "--dry-run")))
+
+(defn- flag-is-apply? [a]
+  (try-oracle
+   #(= 1 (oracle/i64->host (o 'flag-is-apply? [(str a)])))
+   #(= a "--apply")))
+
+(defn- flag-is-watch? [a]
+  (try-oracle
+   #(= 1 (oracle/i64->host (o 'flag-is-watch? [(str a)])))
+   #(str/starts-with? a "--watch")))
+
+(defn- flag-is-snapshot? [a]
+  (try-oracle
+   #(= 1 (oracle/i64->host (o 'flag-is-snapshot? [(str a)])))
+   #(str/starts-with? a "--snapshot=")))
+
+(defn- flag-is-dash? [a]
+  (try-oracle
+   #(= 1 (oracle/i64->host (o 'flag-is-dash? [(str a)])))
+   #(str/starts-with? a "--")))
+
 (defn parse-flags
   "Parse reconcile CLI flags into data.
 
-   Pure helper used by the bb shell. Unknown --flags are ignored, matching the
-   original command parser; the first non-flag token is the manifest path."
+   Pure flag classifiers + watch/snapshot value extract via kotoba when ready.
+   Reduce fold stays host. Unknown --flags are ignored; first non-flag token
+   is the manifest path."
   [args]
   (reduce (fn [m a]
             (cond
-              (= a "--dry-run") (assoc m :dry-run true)
-              (= a "--apply") (assoc m :apply true)
-              (str/starts-with? a "--watch")
-              (assoc m :watch (let [[_ v] (str/split a #"=")]
-                                (if v (parse-int v) 30)))
-              (str/starts-with? a "--snapshot=") (assoc m :snapshot (subs a 11))
-              (str/starts-with? a "--") m
+              (flag-is-dry-run? a) (assoc m :dry-run true)
+              (flag-is-apply? a) (assoc m :apply true)
+              (flag-is-watch? a) (assoc m :watch (watch-seconds a))
+              (flag-is-snapshot? a) (assoc m :snapshot (snapshot-value a))
+              (flag-is-dash? a) m
               :else (assoc m :manifest a)))
           {} args))
 
 (defn reconcile-command-error
-  "Validation error keyword for reconcile command flags, or nil."
+  "Validation error keyword for reconcile command flags, or nil.
+   Kotoba `missing-manifest?` when ready."
   [{:keys [manifest]}]
-  (when (str/blank? (str manifest))
+  (when (try-oracle
+         #(= 1 (oracle/i64->host
+                (o 'missing-manifest? [(str (or manifest ""))])))
+         #(str/blank? (str manifest)))
     :missing-manifest))
 
 (defn reconcile-app-record

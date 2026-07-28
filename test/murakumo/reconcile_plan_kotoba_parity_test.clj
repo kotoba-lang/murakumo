@@ -14,8 +14,12 @@
   (str "default-replicas desired deficit watch-sleep-ms action-name "
        "better-target? first-of-2 first-of-3 "
        "pick-targets-2-pack pick-targets-3-first "
-       "target-pack-first target-pack-second target-pack-count"))
-
+       "target-pack-first target-pack-second target-pack-count "
+       "blank? missing-manifest? action-is-satisfied? action-is-place? "
+       "default-watch-seconds starts-with? "
+       "flag-is-dry-run? flag-is-apply? flag-is-watch? flag-is-snapshot? "
+       "flag-is-dash? watch-seconds snapshot-value "
+       "digit-val? digit-of-go digit-of parse-digits-go parse-digits trim-ws"))
 (def fleet
   {:fleet/name "test-mesh"
    :nodes [{:name "a" :roles ["pin" "compute"] :labels {:zone "jp" :tier "edge"}}
@@ -30,6 +34,9 @@
            {:name "c" :hosted []}
            {:name "d" :hosted []}
            {:name "e" :hosted ["bafyHEART"]}]})
+
+(defn- kotoba-literal [s]
+  (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
@@ -178,4 +185,42 @@
       (is (= 0 (rem pack 256)))
       (is (= 1 (rem (quot pack 256) 256)))
       (is (= 2 (quot pack 65536))))))
+
+(deftest flag-and-action-pure-match
+  (let [i (compile-i64-cases
+           {"mm0" (str "(missing-manifest? " (kotoba-literal "") ")")
+            "mm1" (str "(missing-manifest? " (kotoba-literal "app.edn") ")")
+            "as" (str "(action-is-satisfied? " (kotoba-literal "satisfied") ")")
+            "ap" (str "(action-is-place? " (kotoba-literal "place") ")")
+            "ao" (str "(action-is-place? " (kotoba-literal "satisfied") ")")
+            "dw" "(default-watch-seconds)"
+            "fd" (str "(flag-is-dry-run? " (kotoba-literal "--dry-run") ")")
+            "fa" (str "(flag-is-apply? " (kotoba-literal "--apply") ")")
+            "fw" (str "(flag-is-watch? " (kotoba-literal "--watch=5") ")")
+            "fs" (str "(flag-is-snapshot? " (kotoba-literal "--snapshot=x") ")")
+            "ws" (str "(watch-seconds " (kotoba-literal "--watch") ")")
+            "w5" (str "(watch-seconds " (kotoba-literal "--watch=5") ")")})
+        s (compile-string-cases
+           {"sv" (str "(snapshot-value " (kotoba-literal "--snapshot=snap.edn") ")")})]
+    (is (= 1 (get i "mm0")))
+    (is (= 0 (get i "mm1")))
+    (is (= 1 (get i "as")))
+    (is (= 1 (get i "ap")))
+    (is (= 0 (get i "ao")))
+    (is (= 30 (get i "dw")))
+    (is (= 1 (get i "fd")))
+    (is (= 1 (get i "fa")))
+    (is (= 1 (get i "fw")))
+    (is (= 1 (get i "fs")))
+    (is (= 30 (get i "ws")))
+    (is (= 5 (get i "w5")))
+    (is (= "snap.edn" (get s "sv")))
+    (is (= :missing-manifest (r/reconcile-command-error {})))
+    (is (nil? (r/reconcile-command-error {:manifest "murakumo.app.edn"})))
+    (is (= {:manifest "murakumo.app.edn" :dry-run true :snapshot "snap.edn"}
+           (r/parse-flags ["murakumo.app.edn" "--dry-run" "--snapshot=snap.edn"])))
+    (is (= {:manifest "murakumo.app.edn" :apply true :watch 30}
+           (r/parse-flags ["--apply" "--watch" "murakumo.app.edn"])))
+    (is (= {:manifest "murakumo.app.edn" :watch 5}
+           (r/parse-flags ["--ignored" "--watch=5" "murakumo.app.edn"])))))
 
