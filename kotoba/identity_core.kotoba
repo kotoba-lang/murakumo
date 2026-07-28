@@ -1,10 +1,13 @@
 (ns identity-core
   (:export [ws? trim seed-node seed-p2p seed-x25519 seed-overlay
-            did-derive-cmd did-from-output]))
+            did-derive-cmd did-from-output
+            jwt-header-json jwt-payload-json op-token-sig-seg
+            cid-b-prefix graph-name-fleet]))
 
-;; W6 pure-planner oracle — murakumo.identity pure string core (medium).
-;; SHA-256 / base32 CID / base64url / op-token stay host (crypto).
-;; Seed *inputs* (preimage strings) ported; hashing remains cljc.
+;; W6 pure-planner oracle — murakumo.identity pure string core (medium + expand).
+;; SHA-256 / base32 CID / base64url / HMAC stay host (crypto).
+;; Seed *inputs* (preimage strings) and JWT/op-token *payload templates* ported;
+;; hashing / b64url encoding remain cljc.
 ;; trim matches clojure.string/trim for space/tab/newline/cr.
 ;; Parity: test/murakumo/identity_kotoba_parity_test.clj
 
@@ -50,3 +53,27 @@
 
 (defn did-from-output [out :string] :string
   (trim out))
+
+;; ── op-token pure string templates (b64url + join stay host) ─────────
+
+(defn jwt-header-json [] :string
+  ;; preimage for first JWT segment before b64url
+  "{\"alg\":\"HS256\",\"typ\":\"JWT\"}")
+
+(defn jwt-payload-json [did :string] :string
+  ;; preimage for second JWT segment before b64url; exp fixed sentinel
+  (string-concat
+   "{\"sub\":\""
+   (string-concat did "\",\"exp\":9999999999}")))
+
+(defn op-token-sig-seg [] :string
+  ;; third JWT segment is a fixed CLI media marker (not an HMAC)
+  "kotoba-cli-media")
+
+(defn cid-b-prefix [] :string
+  ;; CIDv1 base32lower display prefix (multihash bytes stay host)
+  "b")
+
+(defn graph-name-fleet [] :string
+  ;; common graph-cid input used by fleet/persist
+  "murakumo-fleet")
