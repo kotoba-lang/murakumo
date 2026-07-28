@@ -10,7 +10,7 @@
 
 (def port-source (slurp "kotoba/infer_schedule_core.kotoba"))
 
-(def export-prefix "eligible? score-queue score-free better-score?")
+(def export-prefix "eligible? score-queue score-free better-score? holds-warm? prefer-warm-then-score pick-idx-2-full pick-idx-3-tournament queue-after-assign")
 
 (def GiB (* 1024 1024 1024))
 
@@ -130,3 +130,70 @@
       (testing (pr-str [a b])
         (let [expected (if (neg? (compare a b)) 1 0)]
           (is (= expected (get actual (str "b_" i)))))))))
+
+(deftest pick-idx-2-full-matches-schedule-pick
+  (let [GiB (* 1024 1024 1024)
+        model {:model/engine :comfyui
+               :model/checkpoint "c.safetensors"
+               :model/min-free-bytes (* 8 GiB)}
+        warm (fn [n m]
+               (merge {:name n :engines #{:comfyui} :checkpoints #{"c.safetensors"}
+                       :free-bytes (* 16 GiB) :queue 0} m))
+        cold (fn [n m]
+               (merge {:name n :engines #{:comfyui} :checkpoints #{}
+                       :free-bytes (* 16 GiB) :queue 0} m))
+        ;; cases: [nodes] expected-name-or-nil
+        pairs [[[(warm "a" {:queue 2}) (cold "b" {:queue 0})] "a"]
+               [[(cold "b" {:queue 0}) (warm "a" {:queue 2})] "a"]
+               [[(warm "x" {:queue 1}) (warm "y" {:queue 0})] "y"]
+               [[(cold "z" {:engines #{:mlx}})] nil]
+               [[(cold "only" {})] "only"]]
+        ;; build kotoba cases with host-projected ok/warm/better
+        pack (fn [node]
+               (let [engine (:model/engine model)
+                     ckpt (:model/checkpoint model)
+                     engines (or (:engines node) #{})
+                     checkpoints (or (:checkpoints node) #{})
+                     has-engine (if (contains? engines engine) 1 0)
+                     has-ckpt (if (nil? ckpt) 0 1)
+                     holds (if (and ckpt (contains? checkpoints ckpt)) 1 0)
+                     can-fetch (if (false? (:node/can-fetch? node)) 0 1)]
+                 (+ has-engine (* 2 has-ckpt) (* 4 holds) (* 8 can-fetch))))
+        body2 (fn [n0 n1]
+                (let [ok0 (if (sched/eligible? n0 model) 1 0)
+                      ok1 (if (sched/eligible? n1 model) 1 0)
+                      w0 (if (contains? (or (:checkpoints n0) #{}) (:model/checkpoint model)) 1 0)
+                      w1 (if (contains? (or (:checkpoints n1) #{}) (:model/checkpoint model)) 1 0)
+                      s0 (sched/score n0)
+                      s1 (sched/score n1)
+                      better (if (neg? (compare s0 s1)) 1 0)]
+                  (str "(pick-idx-2-full " ok0 " " ok1 " " w0 " " w1 " " better ")")))
+        cases (into {}
+                    (map-indexed
+                     (fn [i [nodes _]]
+                       (if (= 1 (count nodes))
+                         [(str "p_" i)
+                          (let [n0 (first nodes)
+                                ok0 (if (sched/eligible? n0 model) 1 0)]
+                            (str "(pick-idx-2-full " ok0 " 0 0 0 0)"))]
+                         [(str "p_" i) (body2 (nodes 0) (nodes 1))]))
+                     pairs))
+        actual (compile-i64-cases
+                (merge cases
+                       {"qa0" "(queue-after-assign 0 0)"
+                        "qa1" "(queue-after-assign 0 1)"
+                        "qa2" "(queue-after-assign 3 1)"
+                        "t3" "(pick-idx-3-tournament 0 1 1 0 1)"}))]
+    (doseq [[i [nodes expect]] (map-indexed vector pairs)]
+      (let [got (get actual (str "p_" i))
+            ;; map idx to name
+            name (cond (neg? got) nil
+                       (= 1 (count nodes)) (when (not (neg? got)) (:name (first nodes)))
+                       :else (:name (nth nodes got)))]
+        (is (= expect name) (str "case " i " expect=" expect " got-idx=" got " name=" name))))
+    (is (= 0 (get actual "qa0")))
+    (is (= 1 (get actual "qa1")))
+    (is (= 4 (get actual "qa2")))
+    ;; champ 0 warm, node2 cold, better champ → stay 0
+    (is (= 0 (get actual "t3")))))
+

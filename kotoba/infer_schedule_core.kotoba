@@ -1,11 +1,13 @@
 (ns infer-schedule-core
-  (:export [eligible? score-queue score-free better-score?]))
+  (:export [eligible? score-queue score-free better-score?
+            holds-warm? prefer-warm-then-score pick-idx-2-full
+            pick-idx-3-tournament queue-after-assign]))
 
-;; W6 pure-planner oracle — murakumo.infer.schedule eligible? + score core.
-;; pick/assign over node vectors stay cljc (filter/sort/atom). No capabilities.
-;; Guest ABI max arity 5: eligibility flags are bit-packed into one i64.
+;; W6 pure-planner oracle — murakumo.infer.schedule eligible?/score + pick.
+;; assign over job batches stays cljc (atom). pick-idx-*-full is pure pick for
+;; fixed 2/3 candidates; host projects eligibility/warm/score keys.
+;; Guest ABI max arity 5: eligibility flags bit-packed into one i64.
 ;;   flags bits: 1 has-engine | 2 has-checkpoint | 4 holds-checkpoint | 8 can-fetch
-;; Host computes set membership; guest applies pure and/or/memory rule.
 ;; score is two i64 keys (queue, -free); better-score? compares lexicographically.
 ;; Parity: test/murakumo/infer_schedule_kotoba_parity_test.clj
 
@@ -13,17 +15,11 @@
   (- a (* (quot a b) b)))
 
 (defn bit? [flags :i64 mask :i64] :i64
-  ;; (bit-and flags mask) != 0 using only +/*//quot (no bit ops)
-  ;; mask is power of 2: 1,2,4,8
   (if (= 0 (rem64 (quot flags mask) 2))
     0
     1))
 
 (defn eligible? [flags :i64 free-bytes :i64 min-free :i64] :i64
-  ;; cljc:
-  ;; (and (contains? engines engine)
-  ;;      (or (nil? checkpoint) (contains? checkpoints checkpoint) can-fetch?)
-  ;;      (>= free-bytes min-free))
   (let [has-engine (bit? flags 1)
         has-ckpt (bit? flags 2)
         holds (bit? flags 4)
@@ -41,19 +37,54 @@
         mem-ok))))
 
 (defn score-queue [queue :i64] :i64
-  ;; cljc score first key: (or queue 0); callers pass 0 for nil
   (if (< queue 0) 0 queue))
 
 (defn score-free [free-bytes :i64] :i64
-  ;; cljc score second key: (- (or free-bytes 0))
   (if (< free-bytes 0)
     0
     (- 0 free-bytes)))
 
 (defn better-score? [q1 :i64 f1 :i64 q2 :i64 f2 :i64] :i64
-  ;; true (1) when score(a)=[q1 f1] is strictly better (lower) than score(b)
   (if (< q1 q2)
     1
     (if (< q2 q1)
       0
       (if (< f1 f2) 1 0))))
+
+(defn holds-warm? [flags :i64] :i64
+  ;; bit 4 = holds-checkpoint
+  (bit? flags 4))
+
+(defn prefer-warm-then-score [warm0 :i64 warm1 :i64 better01 :i64] :i64
+  ;; both eligible. Return 0 or 1. better01=1 ⇒ node0 score strictly better.
+  (if (if (= warm0 1) (if (= warm1 0) 1 0) 0)
+    0
+    (if (if (= warm1 1) (if (= warm0 0) 1 0) 0)
+      1
+      (if (= better01 1) 0 1))))
+
+(defn pick-idx-2-full [ok0 :i64 ok1 :i64 warm0 :i64 warm1 :i64 better01 :i64] :i64
+  ;; Pure pick between two candidates. -1 if neither eligible.
+  (if (= ok0 0)
+    (if (= ok1 0) -1 1)
+    (if (= ok1 0)
+      0
+      (prefer-warm-then-score warm0 warm1 better01))))
+
+(defn pick-idx-3-tournament [champ01 :i64 ok2 :i64 warm-champ :i64 warm2 :i64
+                             better-champ-2 :i64] :i64
+  ;; champ01 ∈ {-1,0,1} from pick-idx-2-full on nodes 0/1.
+  ;; Compare champion to node 2. Returns -1|0|1|2.
+  (if (< champ01 0)
+    (if (= ok2 0) -1 2)
+    (if (= ok2 0)
+      champ01
+      (if (= (prefer-warm-then-score warm-champ warm2 better-champ-2) 0)
+        champ01
+        2))))
+
+(defn queue-after-assign [queue :i64 picked :i64] :i64
+  ;; cljc assign: (fnil inc 0) when node picked (picked 0/1)
+  (if (= picked 0)
+    (if (< queue 0) 0 queue)
+    (if (< queue 0) 1 (+ queue 1))))
