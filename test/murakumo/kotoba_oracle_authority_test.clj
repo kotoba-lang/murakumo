@@ -15,6 +15,7 @@
             [murakumo.kekkai.gate :as gate]
             [murakumo.token :as tok]
             [murakumo.report :as report]
+            [murakumo.infer.plan :as plan]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -31,9 +32,11 @@
   (is (oracle/ready? :kekkai-gate))
   (is (oracle/ready? :token))
   (is (oracle/ready? :report-core))
+  (is (oracle/ready? :infer-plan))
   (is (some #{:kekkai-gate} (oracle/catalog-ids)))
   (is (some #{:token} (oracle/catalog-ids)))
-  (is (some #{:report-core} (oracle/catalog-ids))))
+  (is (some #{:report-core} (oracle/catalog-ids)))
+  (is (some #{:infer-plan} (oracle/catalog-ids))))
 
 (deftest product-shell-gate-uses-oracle-results
   (testing "parse-status delegates to kotoba parse-status-out"
@@ -202,3 +205,38 @@
 (deftest report-precompiled-kir-does-not-drift
   (is (= (report-live-kir) (report-resource-kir))
       "report KIR drift — run: clojure -M:test -m murakumo.kotoba-oracle-gen"))
+
+(def ^:private plan-source "kotoba/infer_plan_core.kotoba")
+(def ^:private plan-resource "murakumo/oracle/infer_plan_core.kir.edn")
+
+(defn- plan-live-kir []
+  (:kir (compiler/compile-source (slurp plan-source) :wasm32-kotoba-v1 {})))
+
+(defn- plan-resource-kir []
+  (edn/read-string (slurp (io/resource plan-resource))))
+
+(deftest product-shell-infer-plan-uses-oracle-results
+  (testing "constants"
+    (is (= 1073741824 plan/GiB))
+    (is (= 3758096384 plan/default-os-reserve))
+    (is (= 1342177280 plan/default-headroom)))
+  (testing "usable-bytes via oracle"
+    (let [n {:name "a" :mem-bytes (* 16 plan/GiB)}]
+      (is (pos? (plan/usable-bytes n)))
+      (is (= (plan/usable-bytes n)
+             (oracle/call :infer-plan 'usable-bytes
+                          [(* 16 plan/GiB) plan/default-os-reserve plan/default-headroom -1])))))
+  (testing "choose-strategy name via oracle"
+    (is (= :pipeline (:strategy (plan/choose-strategy
+                                 {:link-gbps 1 :ranks 4
+                                  :model {:model/experts 128 :model/kv-heads 8}}))))
+    (is (= :tensor (:strategy (plan/choose-strategy
+                               {:link-gbps 40 :ranks 4
+                                :model {:model/experts 128 :model/kv-heads 8}}))))
+    (is (= :expert (:strategy (plan/choose-strategy
+                               {:link-gbps 40 :ranks 5
+                                :model {:model/experts 128 :model/kv-heads 8}}))))))
+
+(deftest infer-plan-precompiled-kir-does-not-drift
+  (is (= (plan-live-kir) (plan-resource-kir))
+      "infer_plan KIR drift — run oracle-gen"))
