@@ -462,6 +462,8 @@
            (oracle/call :task-plan 'task-eligible? [31 (* 16 1024 1024 1024) 0])))
     (is (= (ir/execute live 'task-id [12])
            (oracle/call :task-plan 'task-id [12])))
+    (is (= (ir/execute live 'unschedulable-detail ["nil" "a,b" "64"])
+           (oracle/call :task-plan 'unschedulable-detail ["nil" "a,b" "64"])))
     (is (= (ir/execute live 'wave-of [5 2])
            (oracle/call :task-plan 'wave-of [5 2])))
     (is (= (ir/execute live 'nearest-rank-idx [10 500])

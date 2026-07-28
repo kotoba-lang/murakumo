@@ -224,12 +224,27 @@
    (- (double (or (:mem-bytes node) 0)))
    (str (:name node))])
 
-(defn- why-unschedulable [task]
+(defn- mirror-why-unschedulable [task]
   (str "no node satisfies placement=" (pr-str (:placement task))
        (when (seq (:exclude-nodes task))
          (str " excluding=" (str/join "," (:exclude-nodes task))))
        (when (:min-mem-bytes task)
          (str " min-mem-bytes=" (:min-mem-bytes task)))))
+
+(defn- why-unschedulable [task]
+  "Reject detail string via kotoba `unschedulable-detail` when oracle ready.
+   Host projects placement pr-str, exclude CSV, optional min-mem string."
+  (let [placement (pr-str (:placement task))
+        excluding (if (seq (:exclude-nodes task))
+                    (str/join "," (:exclude-nodes task))
+                    "")
+        min-mem (if-let [m (:min-mem-bytes task)] (str m) "")]
+    (if (oracle-ready?)
+      (try
+        (o 'unschedulable-detail [placement excluding min-mem])
+        (catch #?(:clj Exception :cljs :default) _
+          (mirror-why-unschedulable task)))
+      (mirror-why-unschedulable task))))
 
 (defn- assign-1
   "Place one task onto the currently least-filled eligible node, threading the

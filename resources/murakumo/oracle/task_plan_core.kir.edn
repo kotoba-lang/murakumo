@@ -441,7 +441,27 @@
    :result :i64,
    :effects #{},
    :body (if (< n 0) 0 n),
-   :param-types [:i64]}],
+   :param-types [:i64]}
+  {:name unschedulable-detail,
+   :params [placement excluding min-mem-str],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [base
+     (string-concat "no node satisfies placement=" placement)
+     with-ex
+     (if
+      (string=? excluding "")
+      base
+      (string-concat base (string-concat " excluding=" excluding)))]
+    (if
+     (string=? min-mem-str "")
+     with-ex
+     (string-concat
+      with-ex
+      (string-concat " min-mem-bytes=" min-mem-str)))),
+   :param-types [:string :string :string]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
@@ -479,7 +499,8 @@
   speedup-milli
   max2
   min2
-  clamp-nonneg],
+  clamp-nonneg
+  unschedulable-detail],
  :schemas nil,
  :effects #{},
  :blocks [],
