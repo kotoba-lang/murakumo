@@ -26,6 +26,7 @@
             [murakumo.tunnel :as tunnel]
             [murakumo.config :as config]
             [murakumo.reconcile.plan :as rplan]
+            [murakumo.fleet.inventory :as finv]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -673,3 +674,35 @@
     (is (>= (count arts) 32))
     (is (every? #(re-find #"_core\.kotoba$" (get % "source")) arts))
     (is (every? #(re-find #"resources/murakumo/oracle/.*\.kir\.edn$" (get % "out")) arts))))
+
+(deftest product-shell-fleet-inventory-uses-oracle-results
+  (let [fleet {:fleet/port 9000
+               :nodes [{:name "a" :port 1} {:name "b"} {:name "c" :port 3}]}]
+    (testing "resolve-port + health-url"
+      (is (= 1 (finv/node-port fleet {:port 1})))
+      (is (= 9000 (finv/node-port fleet {})))
+      (is (= 8077 (finv/node-port {} {})))
+      (is (= "http://localhost:1/health" (finv/node-health-url fleet {:port 1}))))
+    (testing "select via selector predicates"
+      (is (= 3 (count (finv/select fleet nil))))
+      (is (= 3 (count (finv/select fleet "all"))))
+      (is (= ["a" "c"] (mapv :name (finv/select fleet "a,c")))))
+    (testing "offline line detection"
+      (let [m (finv/parse-tailscale-status
+               "100.1.1.1 a linux - \n100.2.2.2 b macos offline\n")]
+        (is (true? (get-in m ["a" :online?])))
+        (is (false? (get-in m ["b" :online?])))))))
+
+(deftest fleet-inventory-oracle-call-matches-live
+  (let [live (:kir (compiler/compile-source (slurp "kotoba/fleet_inventory_core.kotoba")
+                                            :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute live 'resolve-port [0 0 0 0])
+           (oracle/call :fleet-inventory 'resolve-port [0 0 0 0])))
+    (is (= (ir/execute live 'health-url [8077])
+           (oracle/call :fleet-inventory 'health-url [8077])))
+    (is (= (ir/execute live 'selector-is-all? [""])
+           (oracle/call :fleet-inventory 'selector-is-all? [""])))
+    (is (= (ir/execute live 'selector-wants-name? ["a,c" "a"])
+           (oracle/call :fleet-inventory 'selector-wants-name? ["a,c" "a"])))
+    (is (= (ir/execute live 'line-has-offline? ["x offline y"])
+           (oracle/call :fleet-inventory 'line-has-offline? ["x offline y"])))))
