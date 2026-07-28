@@ -7,41 +7,120 @@
    :effects #{},
    :body (if (string=? s "") 1 0),
    :param-types [:string]}
+  {:name starts-with?,
+   :params [s prefix],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s) p (string-byte-length prefix)]
+    (if
+     (< n p)
+     0
+     (if (string=? (string-substring s 0 p) prefix) 1 0))),
+   :param-types [:string :string]}
+  {:name scheme-quic,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "quic://",
+   :param-types []}
+  {:name scheme-webrtc,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "webrtc://",
+   :param-types []}
+  {:name scheme-https,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "https://",
+   :param-types []}
+  {:name scheme-relay,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "relay://",
+   :param-types []}
+  {:name kind-quic,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "quic",
+   :param-types []}
+  {:name kind-webrtc,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "webrtc",
+   :param-types []}
+  {:name kind-webtransport,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "webtransport",
+   :param-types []}
+  {:name kind-relay,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "relay",
+   :param-types []}
+  {:name kind-unknown,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "unknown",
+   :param-types []}
+  {:name flag-dash-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "--",
+   :param-types []}
+  {:name cmd-dial,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "dial",
+   :param-types []}
+  {:name reason-ok,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "ok",
+   :param-types []}
+  {:name reason-unknown-command,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "unknown-command",
+   :param-types []}
+  {:name reason-missing-options,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "missing-options",
+   :param-types []}
   {:name endpoint-kind,
    :params [endpoint],
    :result :string,
    :effects #{},
    :body
-   (let
-    [n (string-byte-length endpoint)]
+   (if
+    (= (starts-with? endpoint (scheme-quic)) 1)
+    (kind-quic)
     (if
+     (= (starts-with? endpoint (scheme-webrtc)) 1)
+     (kind-webrtc)
      (if
-      (< n 7)
-      0
-      (if (string=? (string-substring endpoint 0 7) "quic://") 1 0))
-     "quic"
-     (if
+      (= (starts-with? endpoint (scheme-https)) 1)
+      (kind-webtransport)
       (if
-       (< n 9)
-       0
-       (if (string=? (string-substring endpoint 0 9) "webrtc://") 1 0))
-      "webrtc"
-      (if
-       (if
-        (< n 8)
-        0
-        (if (string=? (string-substring endpoint 0 8) "https://") 1 0))
-       "webtransport"
-       (if
-        (if
-         (< n 8)
-         0
-         (if
-          (string=? (string-substring endpoint 0 8) "relay://")
-          1
-          0))
-        "relay"
-        "unknown"))))),
+       (= (starts-with? endpoint (scheme-relay)) 1)
+       (kind-relay)
+       (kind-unknown))))),
    :param-types [:string]}
   {:name option-name,
    :params [flag],
@@ -49,20 +128,23 @@
    :effects #{},
    :body
    (let
-    [n (string-byte-length flag)]
+    [n
+     (string-byte-length flag)
+     p
+     (string-byte-length (flag-dash-prefix))]
     (if
-     (< n 2)
+     (< n p)
      ""
      (if
-      (string=? (string-substring flag 0 2) "--")
-      (string-substring flag 2 n)
+      (= (starts-with? flag (flag-dash-prefix)) 1)
+      (string-substring flag p n)
       flag))),
    :param-types [:string]}
   {:name command-is-dial?,
    :params [command],
    :result :i64,
    :effects #{},
-   :body (if (string=? command "dial") 1 0),
+   :body (if (string=? command (cmd-dial)) 1 0),
    :param-types [:string]}
   {:name dial-ok-reason,
    :params [is-dial missing-count],
@@ -71,13 +153,32 @@
    :body
    (if
     (= is-dial 0)
-    "unknown-command"
-    (if (< 0 missing-count) "missing-options" "ok")),
+    (reason-unknown-command)
+    (if (< 0 missing-count) (reason-missing-options) (reason-ok))),
    :param-types [:i64 :i64]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
- [endpoint-kind blank? option-name dial-ok-reason command-is-dial?],
+ [endpoint-kind
+  blank?
+  option-name
+  dial-ok-reason
+  command-is-dial?
+  starts-with?
+  scheme-quic
+  scheme-webrtc
+  scheme-https
+  scheme-relay
+  kind-quic
+  kind-webrtc
+  kind-webtransport
+  kind-relay
+  kind-unknown
+  flag-dash-prefix
+  cmd-dial
+  reason-ok
+  reason-unknown-command
+  reason-missing-options],
  :schemas nil,
  :effects #{},
  :blocks [],

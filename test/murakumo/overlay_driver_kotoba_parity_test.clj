@@ -7,7 +7,11 @@
 
 (def port-source (slurp "kotoba/overlay_driver_core.kotoba"))
 (def export-prefix
-  "endpoint-kind blank? option-name dial-ok-reason command-is-dial?")
+  (str "endpoint-kind blank? option-name dial-ok-reason command-is-dial? "
+       "starts-with? scheme-quic scheme-webrtc scheme-https scheme-relay "
+       "kind-quic kind-webrtc kind-webtransport kind-relay kind-unknown "
+       "flag-dash-prefix cmd-dial "
+       "reason-ok reason-unknown-command reason-missing-options"))
 
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -44,7 +48,19 @@
                  "oname" (str "(option-name " (kotoba-literal "--overlay") ")")
                  "rok" (str "(dial-ok-reason 1 0)")
                  "rmiss" (str "(dial-ok-reason 1 2)")
-                 "runk" (str "(dial-ok-reason 0 0)")})]
+                 "runk" (str "(dial-ok-reason 0 0)")
+                 "sq" "(scheme-quic)"
+                 "sw" "(scheme-webrtc)"
+                 "sh" "(scheme-https)"
+                 "sr" "(scheme-relay)"
+                 "kq" "(kind-quic)"
+                 "kw" "(kind-webtransport)"
+                 "ku" "(kind-unknown)"
+                 "fd" "(flag-dash-prefix)"
+                 "cd" "(cmd-dial)"
+                 "ro" "(reason-ok)"
+                 "ru" "(reason-unknown-command)"
+                 "rm" "(reason-missing-options)"})]
     (is (= (name (driver/endpoint-kind "quic://asher:4001")) (get actual "q")))
     (is (= (name (driver/endpoint-kind "webrtc://h:1")) (get actual "w")))
     (is (= (name (driver/endpoint-kind "https://x/.well-known")) (get actual "h")))
@@ -53,13 +69,32 @@
     (is (= "overlay" (get actual "oname")))
     (is (= "ok" (get actual "rok")))
     (is (= "missing-options" (get actual "rmiss")))
-    (is (= "unknown-command" (get actual "runk"))))
+    (is (= "unknown-command" (get actual "runk")))
+    (is (= driver/scheme-quic (get actual "sq")))
+    (is (= "quic://" (get actual "sq")))
+    (is (= driver/scheme-webrtc (get actual "sw")))
+    (is (= driver/scheme-https (get actual "sh")))
+    (is (= driver/scheme-relay (get actual "sr")))
+    (is (= driver/kind-quic (get actual "kq")))
+    (is (= driver/kind-webtransport (get actual "kw")))
+    (is (= "webtransport" (get actual "kw")))
+    (is (= driver/kind-unknown (get actual "ku")))
+    (is (= driver/flag-dash-prefix (get actual "fd")))
+    (is (= "--" (get actual "fd")))
+    (is (= driver/cmd-dial (get actual "cd")))
+    (is (= "dial" (get actual "cd")))
+    (is (= driver/reason-ok (get actual "ro")))
+    (is (= driver/reason-unknown-command (get actual "ru")))
+    (is (= driver/reason-missing-options (get actual "rm"))))
   (let [n (compile-i64-cases
            {"b0" (str "(blank? " (kotoba-literal "") ")")
             "b1" (str "(blank? " (kotoba-literal "x") ")")
             "cd" (str "(command-is-dial? " (kotoba-literal "dial") ")")
-            "cn" (str "(command-is-dial? " (kotoba-literal "relay") ")")})]
+            "cn" (str "(command-is-dial? " (kotoba-literal "relay") ")")
+            "sw" (str "(starts-with? " (kotoba-literal "quic://a") " "
+                      (kotoba-literal "quic://") ")")})]
     (is (= 1 (get n "b0")))
     (is (= 0 (get n "b1")))
     (is (= 1 (get n "cd")))
-    (is (= 0 (get n "cn")))))
+    (is (= 0 (get n "cn")))
+    (is (= 1 (get n "sw")))))
