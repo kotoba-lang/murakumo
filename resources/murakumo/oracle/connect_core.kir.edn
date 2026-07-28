@@ -1,11 +1,29 @@
 {:format :kotoba.kir/v4,
  :signature nil,
  :functions
- [{:name default-class-name,
+ [{:name class-native,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "native",
+   :param-types []}
+  {:name plane-read,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "read",
+   :param-types []}
+  {:name plane-live,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "live",
+   :param-types []}
+  {:name default-class-name,
    :params [default-class],
    :result :string,
    :effects #{},
-   :body (if (string=? default-class "") "native" default-class),
+   :body (if (string=? default-class "") (class-native) default-class),
    :param-types [:string]}
   {:name node-class-name,
    :params [node-class default-class],
@@ -47,9 +65,9 @@
    :effects #{},
    :body
    (if
-    (string=? plane "read")
+    (string=? plane (plane-read))
     (serves-read? http?)
-    (if (string=? plane "live") (serves-live? common?) 0)),
+    (if (string=? plane (plane-live)) (serves-live? common?) 0)),
    :param-types [:string [:option :i64] [:option :i64]]}],
  :oracle-value nil,
  :schema-identities nil,
@@ -58,7 +76,10 @@
   node-class-name
   serves-read?
   serves-live?
-  serves-plane?],
+  serves-plane?
+  class-native
+  plane-read
+  plane-live],
  :schemas nil,
  :effects #{},
  :blocks [],
