@@ -69,7 +69,7 @@
     (let [f (fleet/load-fleet)
           seed (config/current-operator-seed f)
           node-seed (identity/node-seed seed {:name node-name})
-          kotoba (or (System/getenv "MURAKUMO_KOTOBA_BIN") "kotoba")
+          kotoba (config/kotoba-cli-bin)
           {:keys [exit] :as result} (apply p/sh (identity/did-derive-argv kotoba node-seed))]
       (when (zero? exit)
         (not-empty (identity/did-from-command-result result))))
@@ -131,8 +131,8 @@
 (defn -main [& args]
   (let [{:keys [relay-url model], arg-name :name} (parse-args args)
         relay-url (or relay-url default-relay-url)
-        local-url (or (System/getenv "MURAKUMO_INFER_LOCAL_URL") default-local-url)
-        node-name (or arg-name (System/getenv "MURAKUMO_INFER_NODE_NAME") (local-hostname))]
+        local-url (config/infer-local-url)
+        node-name (or arg-name (config/infer-node-name) (local-hostname))]
     (when (str/blank? (str model))
       (println "usage: bb murakumo infer join [relay-url] --model <local-model-id> [--name <node>]")
       (println "  local-model-id must already be served at" (str local-url "/chat/completions")

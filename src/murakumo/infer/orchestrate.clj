@@ -17,18 +17,22 @@
   data. Applying moves to nodes (restarting engines) is a separate, gated step;
   here we compute + publish the desired placement, which the reconcile path
   (murakumo.core reconcile) can then converge nodes toward."
-  (:require [murakumo.infer.rebalance :as rb]
+  (:require [murakumo.config :as config]
+            [murakumo.infer.rebalance :as rb]
             [babashka.http-client :as http]
             [cheshire.core :as json]))
 
-(def cloud (or (System/getenv "MURAKUMO_CLOUD") "https://api.murakumo.cloud"))
+(defn- cloud-url
+  "Config URL (MURAKUMO_CLOUD). Injectable via config/cloud-url for tests."
+  []
+  (config/cloud-url))
 
 (defn- GET [path]
-  (-> (http/get (str cloud path) {:headers {"accept" "application/json"} :timeout 12000})
+  (-> (http/get (str (cloud-url) path) {:headers {"accept" "application/json"} :timeout 12000})
       :body (json/parse-string true)))
 
 (defn- POST [path body]
-  (http/post (str cloud path)
+  (http/post (str (cloud-url) path)
              {:headers {"content-type" "application/json"} :timeout 12000
               :body (json/generate-string body)}))
 

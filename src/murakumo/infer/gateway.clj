@@ -71,6 +71,7 @@
             [murakumo.fleet :as fleet]
             [murakumo.infer.media :as media]
             [murakumo.infer.schedule :as sched]
+            [murakumo.config :as config]
             [org.httpkit.server :as http]))
 
 (defn- parse-size [size]
@@ -78,17 +79,11 @@
     [(parse-long w) (parse-long h)]
     [832 1216]))
 
-(def default-image-checkpoint
-  "Used when the caller omits :model. `schedule/eligible?` treats a nil
-  :model/checkpoint as \"any node running this engine is eligible\" — for
-  media generation that's wrong: the fleet's :comfyui nodes hold mixed
-  checkpoints (image / i2v / t2v / txt2audio), and CheckpointLoaderSimple +
-  a video-diffusion checkpoint in the plain txt2img graph either errors or
-  silently misbehaves. Defaulting to a real, known-good txt2img checkpoint
-  name here (rather than leaving it nil) makes `pick` correctly restrict to
-  nodes that actually hold (or can fetch) it. Override via env if the
-  fleet's default image model changes."
-  (or (System/getenv "MURAKUMO_DEFAULT_IMAGE_CKPT") "animagine-xl-4.0.safetensors"))
+(defn default-image-checkpoint
+  "Used when the caller omits :model. Override via MURAKUMO_DEFAULT_IMAGE_CKPT
+  (exact-name config inject via config/image-checkpoint)."
+  []
+  (config/image-checkpoint))
 
 (defn normalize-ckpt
   "Caller-supplied :model → the ComfyUI CheckpointLoaderSimple filename.
@@ -119,7 +114,7 @@
   and returns it base64-encoded. Throws ex-info if no fleet node is eligible
   or the render/scp produced no file."
   [{:keys [prompt negative n size model seed]}]
-  (let [ckpt (or (normalize-ckpt model) default-image-checkpoint)
+  (let [ckpt (or (normalize-ckpt model) (default-image-checkpoint))
         [width height] (parse-size size)
         f (fleet/enrich (fleet/load-fleet))
         live (media/live-fleet f)
@@ -148,7 +143,7 @@
   model it actually holds, so callers should always pass one; `run-workflow!`
   defaults to `default-image-checkpoint` when the request omits it. Throws
   ex-info if none is eligible."
-  ([f] (pick-any-node! f default-image-checkpoint))
+  ([f] (pick-any-node! f (default-image-checkpoint)))
   ([f checkpoint]
    (let [live (media/live-fleet f)
          node-info (or (sched/pick live {:model/engine :comfyui :model/checkpoint checkpoint})
@@ -165,7 +160,7 @@
   no node is eligible or the workflow produced no output file."
   [{:keys [workflow output-node output-key checkpoint] :or {output-key "images"}}]
   (let [f (fleet/enrich (fleet/load-fleet))
-        node (pick-any-node! f (or checkpoint default-image-checkpoint))
+        node (pick-any-node! f (or checkpoint (default-image-checkpoint)))
         local (media/run-custom-workflow! node workflow output-node (keyword output-key))]
     (when-not local
       (throw (ex-info "murakumo workflow produced no output file" {:output-node output-node :output-key output-key})))
@@ -174,15 +169,11 @@
        :filename local})))
 
 (def default-text-backend-url
-  "Any OpenAI-compatible /v1/chat/completions server. Default: a local Ollama
-  (already running with real models on the machine this gateway starts on —
-  `ollama list` / `curl localhost:11434/v1/models`). Override via
-  MURAKUMO_TEXT_BACKEND_URL to point at a different fleet node's Ollama, or
-  any other OpenAI-compatible endpoint (LiteLLM, vLLM, ...)."
-  "http://localhost:11434")
+  "Any OpenAI-compatible /v1/chat/completions server. See config/default-text-backend-url."
+  config/default-text-backend-url)
 
 (defn- text-backend-url []
-  (or (System/getenv "MURAKUMO_TEXT_BACKEND_URL") default-text-backend-url))
+  (config/text-backend-url))
 
 (defn generate-text!
   "Verbatim OpenAI-chat-completions proxy: POST `body` (already OpenAI-shaped

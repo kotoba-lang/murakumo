@@ -25,6 +25,7 @@
             [murakumo.fleet :as fleet]
             [murakumo.infer.credits :as credits]
             [murakumo.infer.schedule :as sched]
+            [murakumo.config :as config]
             [murakumo.secret :as secret]
             [murakumo.ssh :as ssh]))
 
@@ -437,7 +438,7 @@
                   :unsupported-categories [:text-to-3d]}]
     (println (json/generate-string snapshot {:pretty true}))
     (when push?
-      (let [url (str (or (System/getenv "MURAKUMO_API_URL") "https://api.murakumo.cloud") "/infer/model-map")
+      (let [url (str (config/api-url) "/infer/model-map")
             token (secret/resolve-metrics-token)]
         (http/post url {:headers (cond-> {"content-type" "application/json"}
                                    token (assoc "authorization" (str "Bearer " token)))

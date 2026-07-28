@@ -2,6 +2,7 @@
 
 (ns murakumo.overlay.transport
   (:require [clojure.string :as str]
+            [murakumo.config :as config]
             [murakumo.overlay.runtime :as runtime])
   (:import [java.io ByteArrayOutputStream]
            [java.net InetSocketAddress Socket SocketTimeoutException]
@@ -35,9 +36,12 @@
 (defn transport-records []
   (mapv (fn [[kind spec]] (assoc spec :transport kind)) transports))
 
-(defn adapter-command [kind]
-  (when-let [env-name (:driver-env (get transports kind))]
-    (System/getenv env-name)))
+(defn adapter-command
+  "External adapter driver command from exact driver-env name (config inject)."
+  ([kind] (adapter-command kind #(System/getenv %)))
+  ([kind getenv]
+   (when-let [env-name (:driver-env (get transports kind))]
+     (config/adapter-driver-command env-name getenv))))
 
 (defn split-command [command]
   (when-not (str/blank? (str command))

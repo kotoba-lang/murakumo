@@ -10,6 +10,7 @@
 (ns murakumo.config
   (:require #?(:clj [clojure.edn :as edn]
                :cljs [cljs.reader :as edn])
+            [clojure.string :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :config)
@@ -371,3 +372,123 @@
                                          user-dir
                                          #(.exists (java.io.File. %))))
      :cljs (throw (ex-info "current-runtime-context is host-only" {}))))
+
+;; ── Ops config (non-secret exact-name getenv) ──────────────────────────
+;; Delivery residual shells: inject getenv for tests; process defaults use
+;; System/getenv for exact names only (no ambient env dump). Secrets stay on
+;; murakumo.secret named fetch. Policy: w6-secret-getenv-audit.md.
+
+(def default-cloud-url
+  "Public murakumo cloud API base (config URL, not a secret)."
+  "https://api.murakumo.cloud")
+
+(def default-api-url
+  "Alias base for metrics/model-map push (same default as cloud-url)."
+  "https://api.murakumo.cloud")
+
+(def default-text-backend-url
+  "OpenAI-compatible text backend for infer gateway proxy."
+  "http://localhost:11434")
+
+(def default-image-checkpoint
+  "Default ComfyUI txt2img checkpoint filename."
+  "animagine-xl-4.0.safetensors")
+
+(def default-infer-local-url
+  "Local OpenAI-compatible base for infer join/relay-worker."
+  "http://localhost:11434/v1")
+
+(def ops-config-keys
+  "Exact env names read by residual ops shells (config only, not secrets)."
+  ["MURAKUMO_CLOUD"
+   "MURAKUMO_API_URL"
+   "MURAKUMO_TEXT_BACKEND_URL"
+   "MURAKUMO_DEFAULT_IMAGE_CKPT"
+   "MURAKUMO_KOTOBA_BIN"
+   "MURAKUMO_INFER_LOCAL_URL"
+   "MURAKUMO_INFER_NODE_NAME"
+   "MURAKUMO_GIT_BIN"
+   "MURAKUMO_QUIC_DRIVER"
+   "MURAKUMO_WEBRTC_DRIVER"
+   "MURAKUMO_WEBTRANSPORT_DRIVER"])
+
+(defn ops-env-from-getenv
+  "Exact-name ops config map from injected getenv."
+  [getenv]
+  (env-values getenv ops-config-keys))
+
+(defn- nonblank [s]
+  (let [s (when (some? s) (str s))]
+    (when (and s (not (str/blank? s))) s)))
+
+(defn- as-getenv
+  "Normalize inject: fn [name] → string-or-nil, or map of name→value."
+  [getenv]
+  (cond
+    (fn? getenv) getenv
+    (map? getenv) (fn [k] (get getenv k))
+    :else (throw (ex-info "config getenv must be fn or map"
+                          {:phase :murakumo-config}))))
+
+(defn config-string
+  "Exact env name → non-blank string, else default.
+   Inject `getenv` (fn [name] or map) for tests."
+  ([env-name default]
+   #?(:clj (config-string env-name default #(System/getenv %))
+      :cljs (or default nil)))
+  ([env-name default getenv]
+   (let [g (as-getenv getenv)]
+     (or (nonblank (g env-name)) default))))
+
+(defn config-string-or-nil
+  "Exact env name → non-blank string or nil (no default)."
+  ([env-name]
+   #?(:clj (config-string-or-nil env-name #(System/getenv %))
+      :cljs nil))
+  ([env-name getenv]
+   (nonblank ((as-getenv getenv) env-name))))
+
+(defn cloud-url
+  "MURAKUMO_CLOUD or default-cloud-url."
+  ([] (config-string "MURAKUMO_CLOUD" default-cloud-url))
+  ([getenv] (config-string "MURAKUMO_CLOUD" default-cloud-url getenv)))
+
+(defn api-url
+  "MURAKUMO_API_URL or default-api-url (model-map / metrics push base)."
+  ([] (config-string "MURAKUMO_API_URL" default-api-url))
+  ([getenv] (config-string "MURAKUMO_API_URL" default-api-url getenv)))
+
+(defn text-backend-url
+  "MURAKUMO_TEXT_BACKEND_URL or default-text-backend-url."
+  ([] (config-string "MURAKUMO_TEXT_BACKEND_URL" default-text-backend-url))
+  ([getenv] (config-string "MURAKUMO_TEXT_BACKEND_URL" default-text-backend-url getenv)))
+
+(defn image-checkpoint
+  "MURAKUMO_DEFAULT_IMAGE_CKPT or default-image-checkpoint."
+  ([] (config-string "MURAKUMO_DEFAULT_IMAGE_CKPT" default-image-checkpoint))
+  ([getenv] (config-string "MURAKUMO_DEFAULT_IMAGE_CKPT" default-image-checkpoint getenv)))
+
+(defn kotoba-cli-bin
+  "MURAKUMO_KOTOBA_BIN or bare \"kotoba\" (PATH host — prefer absolute pin)."
+  ([] (config-string "MURAKUMO_KOTOBA_BIN" "kotoba"))
+  ([getenv] (config-string "MURAKUMO_KOTOBA_BIN" "kotoba" getenv)))
+
+(defn infer-local-url
+  "MURAKUMO_INFER_LOCAL_URL or default-infer-local-url."
+  ([] (config-string "MURAKUMO_INFER_LOCAL_URL" default-infer-local-url))
+  ([getenv] (config-string "MURAKUMO_INFER_LOCAL_URL" default-infer-local-url getenv)))
+
+(defn infer-node-name
+  "MURAKUMO_INFER_NODE_NAME or nil (caller supplies hostname fallback)."
+  ([] (config-string-or-nil "MURAKUMO_INFER_NODE_NAME"))
+  ([getenv] (config-string-or-nil "MURAKUMO_INFER_NODE_NAME" getenv)))
+
+(defn git-bin-override
+  "MURAKUMO_GIT_BIN absolute override or nil."
+  ([] (config-string-or-nil "MURAKUMO_GIT_BIN"))
+  ([getenv] (config-string-or-nil "MURAKUMO_GIT_BIN" getenv)))
+
+(defn adapter-driver-command
+  "External overlay adapter driver command from exact driver-env name."
+  ([env-name] (config-string-or-nil env-name))
+  ([env-name getenv] (config-string-or-nil env-name getenv)))
