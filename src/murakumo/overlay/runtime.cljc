@@ -3,42 +3,70 @@
 ;; These adapters intentionally return a structured would-run result today. The
 ;; contract is stable enough for the CLI runner, tests, and the later socket/relay
 ;; implementation to share.
+;;
+;; W6 product-shell: default ports, known-adapter?, adapter-kind, endpoint-kind,
+;; scheme-prefix-host via kotoba overlay_runtime_core. Adapter registry maps and
+;; full URL regex parse stay host.
 
-(ns murakumo.overlay.runtime)
+(ns murakumo.overlay.runtime
+  (:require #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def default-relay-port 4701)
-(def default-web-port 443)
-(def default-quic-port 4001)
+(def ^:private oid :overlay-runtime)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
+
+(def default-relay-port
+  #?(:clj (long (o 'default-relay-port []))
+     :cljs 4701))
+
+(def default-web-port
+  #?(:clj (long (o 'default-web-port []))
+     :cljs 443))
+
+(def default-quic-port
+  #?(:clj (long (o 'default-quic-port []))
+     :cljs 4001))
 
 (def default-port-by-kind
-  {:quic default-quic-port
-   :webrtc default-web-port
-   :webtransport default-web-port
-   :relay default-relay-port})
+  #?(:clj {:quic (long (o 'default-port-for-kind ["quic"]))
+           :webrtc (long (o 'default-port-for-kind ["webrtc"]))
+           :webtransport (long (o 'default-port-for-kind ["webtransport"]))
+           :relay (long (o 'default-port-for-kind ["relay"]))}
+     :cljs {:quic default-quic-port
+            :webrtc default-web-port
+            :webtransport default-web-port
+            :relay default-relay-port}))
 
 (def adapters
   {"murakumo.runtime.relay"
-   {:kind :relay-runtime
+   {:kind #?(:clj (keyword (o 'adapter-kind ["murakumo.runtime.relay"]))
+             :cljs :relay-runtime)
     :status :placeholder
     :opens :relay-listener}
 
    "murakumo.runtime.quic"
-   {:kind :quic
+   {:kind #?(:clj (keyword (o 'adapter-kind ["murakumo.runtime.quic"]))
+             :cljs :quic)
     :status :placeholder
     :opens :identity-stream}
 
    "murakumo.runtime.webrtc"
-   {:kind :webrtc
+   {:kind #?(:clj (keyword (o 'adapter-kind ["murakumo.runtime.webrtc"]))
+             :cljs :webrtc)
     :status :placeholder
     :opens :browser-identity-stream}
 
    "murakumo.runtime.webtransport"
-   {:kind :webtransport
+   {:kind #?(:clj (keyword (o 'adapter-kind ["murakumo.runtime.webtransport"]))
+             :cljs :webtransport)
     :status :placeholder
     :opens :browser-identity-stream}
 
    "murakumo.runtime.relay-client"
-   {:kind :relay
+   {:kind #?(:clj (keyword (o 'adapter-kind ["murakumo.runtime.relay-client"]))
+             :cljs :relay)
     :status :placeholder
     :opens :relayed-identity-stream}})
 
@@ -50,17 +78,32 @@
        (mapv (fn [[name spec]]
                (assoc spec :adapter name)))))
 
-(defn known-adapter? [name]
-  (contains? adapters name))
+(defn known-adapter?
+  "JVM: kotoba `known-adapter?`."
+  [name]
+  #?(:clj (= 1 (o 'known-adapter? [(str name)]))
+     :cljs (contains? adapters name)))
 
 (defn parse-int [value]
   #?(:clj (Integer/parseInt value)
      :cljs (js/parseInt value 10)))
 
+(defn scheme-host
+  "Host between `://` and next `:` or `/` or end.
+   JVM: kotoba `scheme-prefix-host`."
+  [url]
+  #?(:clj (o 'scheme-prefix-host [(str url)])
+     :cljs
+     (when-let [[_ host] (re-matches #"[a-zA-Z][a-zA-Z0-9+.-]*://([^/:]+).*"
+                                     (str url))]
+       host)))
+
 (defn relay-url-parts [url]
   (when-let [[_ host port path] (re-matches #"relay://([^/:]+)(?::([0-9]+))?(/.*)?"
                                             (str url))]
-    {:host host
+    {:host #?(:clj (let [h (scheme-host url)]
+                     (if (and (string? h) (seq h)) h host))
+              :cljs host)
      :port (when port (parse-int port))
      :path path}))
 
@@ -68,7 +111,9 @@
   (when-let [[_ scheme host port path] (re-matches #"([a-zA-Z][a-zA-Z0-9+.-]*)://([^/:]+)(?::([0-9]+))?(/.*)?"
                                                    (str url))]
     {:scheme scheme
-     :host host
+     :host #?(:clj (let [h (scheme-host url)]
+                     (if (and (string? h) (seq h)) h host))
+              :cljs host)
      :port (when port (parse-int port))
      :path path}))
 
@@ -100,7 +145,10 @@
       :kind kind
       :transport (:transport endpoint)
       :host host
-      :port (or port (default-port-by-kind kind))
+      :port (or port (get default-port-by-kind kind
+                         #?(:clj (long (o 'default-port-for-kind
+                                          [(name (or kind :unknown))]))
+                            :cljs 0)))
       :path path
       :overlay (:overlay session)
       :node (:node session)
@@ -116,7 +164,8 @@
   [step]
   (let [adapter-name (:adapter step)
         adapter-spec (adapter adapter-name)]
-    (if-not adapter-spec
+    (if-not #?(:clj (known-adapter? adapter-name)
+               :cljs adapter-spec)
       {:ok? false
        :mode :adapter-missing
        :adapter adapter-name

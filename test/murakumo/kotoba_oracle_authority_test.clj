@@ -40,6 +40,8 @@
             [murakumo.overlay.keyring :as okr]
             [murakumo.overlay.peer :as opeer]
             [murakumo.overlay.stream :as ostream]
+            [murakumo.overlay.driver :as odriver]
+            [murakumo.overlay.runtime :as ort]
             [murakumo.cloud.plan :as cplan]
             [murakumo.provision.plan :as pplan]
             [murakumo.persist :as persist]
@@ -1088,3 +1090,61 @@
            (oracle/call :cloud-plan 'quic-endpoint ["h" 4001])))
     (is (= (ir/execute pr 'multiaddr ["1.2.3.4" 4001])
            (oracle/call :provision-plan 'multiaddr ["1.2.3.4" 4001])))))
+
+(deftest product-shell-overlay-driver-runtime-uses-oracle
+  (testing "driver endpoint-kind + dial-result + option-name"
+    (is (= :quic (odriver/endpoint-kind "quic://asher:4001")))
+    (is (= :webrtc (odriver/endpoint-kind "webrtc://h:1")))
+    (is (= :webtransport (odriver/endpoint-kind "https://x/.well-known")))
+    (is (= :relay (odriver/endpoint-kind "relay://jp/n")))
+    (is (= :unknown (odriver/endpoint-kind "ftp://x")))
+    (is (= :overlay (odriver/keyword-option "--overlay")))
+    (is (= {:ok? false :reason :unknown-command :command :listen}
+           (odriver/dial-result {:command :listen})))
+    (is (= :missing-options
+           (:reason (odriver/dial-result {:command :dial :overlay "o"}))))
+    (let [r (odriver/dial-result
+             {:command :dial
+              :overlay "bafyOverlay" :node "bafyNode" :name "asher"
+              :from "operator" :to "fleet" :capability "ssh"
+              :direct "quic://asher:4001" :transport "quic"})]
+      (is (true? (:ok? r)))
+      (is (= :quic (get-in r [:session :direct :kind])))))
+  (testing "runtime ports + adapters + scheme-host"
+    (is (= 4701 ort/default-relay-port))
+    (is (= 443 ort/default-web-port))
+    (is (= 4001 ort/default-quic-port))
+    (is (= 4001 (get ort/default-port-by-kind :quic)))
+    (is (= 4701 (get ort/default-port-by-kind :relay)))
+    (is (true? (ort/known-adapter? "murakumo.runtime.quic")))
+    (is (false? (ort/known-adapter? "nope")))
+    (is (= :quic (:kind (ort/adapter "murakumo.runtime.quic"))))
+    (is (= :relay-runtime (:kind (ort/adapter "murakumo.runtime.relay"))))
+    (is (= "asher" (ort/scheme-host "quic://asher:4001")))
+    (is (= "jp" (ort/scheme-host "relay://jp/bafy")))
+    (is (= "jp-tyo-1.murakumo.cloud"
+           (ort/scheme-host "relay://jp-tyo-1.murakumo.cloud")))
+    (is (= "jp-tyo-1.murakumo.cloud"
+           (:host (ort/relay-url-parts "relay://jp-tyo-1.murakumo.cloud"))))))
+
+(deftest overlay-driver-runtime-oracle-call-matches-live
+  (let [d (:kir (compiler/compile-source (slurp "kotoba/overlay_driver_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))
+        r (:kir (compiler/compile-source (slurp "kotoba/overlay_runtime_core.kotoba")
+                                         :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute d 'endpoint-kind ["quic://a:1"])
+           (oracle/call :overlay-driver 'endpoint-kind ["quic://a:1"])))
+    (is (= (ir/execute d 'option-name ["--overlay"])
+           (oracle/call :overlay-driver 'option-name ["--overlay"])))
+    (is (= (ir/execute d 'dial-ok-reason [1 0])
+           (oracle/call :overlay-driver 'dial-ok-reason [1 0])))
+    (is (= (ir/execute d 'blank? [""])
+           (oracle/call :overlay-driver 'blank? [""])))
+    (is (= (ir/execute r 'default-relay-port [])
+           (oracle/call :overlay-runtime 'default-relay-port [])))
+    (is (= (ir/execute r 'known-adapter? ["murakumo.runtime.quic"])
+           (oracle/call :overlay-runtime 'known-adapter? ["murakumo.runtime.quic"])))
+    (is (= (ir/execute r 'adapter-kind ["murakumo.runtime.relay"])
+           (oracle/call :overlay-runtime 'adapter-kind ["murakumo.runtime.relay"])))
+    (is (= (ir/execute r 'scheme-prefix-host ["quic://asher:4001"])
+           (oracle/call :overlay-runtime 'scheme-prefix-host ["quic://asher:4001"])))))
