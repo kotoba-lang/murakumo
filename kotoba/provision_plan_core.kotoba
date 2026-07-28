@@ -13,17 +13,19 @@
             launchd-daemon-path tee-plist-prefix
             label-kv plist-heredoc-footer
             peer-at-sep peer-join-sep peer-entry
-            did-key-prefix
+            did-key-prefix peer-id-body-prefix peer-id-body-pattern
+            peer-id-did-pattern did-peer-id
             home-bin-suffix home-bin-path
             label-join-sep roles-join-sep]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.provision.plan string/port.
 ;; resolve-p2p-port uses [:option :i64] (no has-* sentinels).
-;; bootstrap fold, peer-id regex, write-plist heredoc body stay cljc/host.
+;; bootstrap fold, peer-id re-find host, write-plist heredoc body stay host.
 ;; launch/peer-id/link/watchdog shell strings are pure.
 ;; rsync argv fragments + launchd path/tee prefix dual-source.
 ;; peer-entry (peerid@multiaddr) dual-source for bootstrap-str host fold.
 ;; home-bin-path + label/roles join seps dual-source for render-plist.
+;; peer-id body/DID patterns dual-source; log/link grep commands recompose them.
 ;; Parity: test/murakumo/provision_plan_kotoba_parity_test.clj
 
 (defn plist-label [] :string "com.murakumo.kotoba-mesh")
@@ -89,11 +91,42 @@
     (plist-label)
     " >/dev/null 2>&1 && echo running || echo stopped")))
 
+;; ── peer-id DID / body patterns (shared by log grep + host re-find) ──
+
+(defn did-key-prefix [] :string
+  "did:key:")
+
+(defn peer-id-body-prefix [] :string
+  ;; libp2p peer-id multihash body starts with 12D3 in mesh logs
+  "12D3")
+
+(defn peer-id-body-pattern [] :string
+  ;; 12D3[A-Za-z0-9]*
+  (string-concat (peer-id-body-prefix) "[A-Za-z0-9]*"))
+
+(defn peer-id-did-pattern [] :string
+  ;; did:key:12D3[A-Za-z0-9]*
+  (string-concat (did-key-prefix) (peer-id-body-pattern)))
+
+(defn did-peer-id [peer-id :string] :string
+  ;; cljc: (str did-key-prefix peer-id)
+  (string-concat (did-key-prefix) peer-id))
+
 (defn peer-id-log-command [] :string
-  "grep -ho 'did:key:12D3[A-Za-z0-9]*' ~/.murakumo/mesh.log 2>/dev/null | tail -1")
+  ;; grep -ho 'did:key:12D3…' ~/.murakumo/mesh.log … | tail -1
+  (string-concat
+   "grep -ho '"
+   (string-concat
+    (peer-id-did-pattern)
+    "' ~/.murakumo/mesh.log 2>/dev/null | tail -1")))
 
 (defn live-link-count-command [] :string
-  "grep 'kotoba-net: peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l")
+  ;; grep peer connected … | grep -o '12D3…' | sort -u | wc -l
+  (string-concat
+   "grep 'kotoba-net: peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '"
+   (string-concat
+    (peer-id-body-pattern)
+    "' | sort -u | wc -l")))
 
 (defn ws? [c :string] :i64
   (if (string=? c " ")
@@ -204,10 +237,6 @@
 (defn peer-entry [peer-id :string multiaddr :string] :string
   ;; cljc: (str peer-id "@" multiaddr)
   (string-concat peer-id (string-concat (peer-at-sep) multiaddr)))
-
-(defn did-key-prefix [] :string
-  ;; peer-id-from-log / peer-id-log-command DID prefix
-  "did:key:")
 
 ;; ── residual render-plist path + join seps ───────────────────────────
 

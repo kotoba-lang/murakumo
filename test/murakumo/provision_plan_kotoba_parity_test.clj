@@ -149,6 +149,30 @@
       (is (str/includes? boot "/ip4/100.0.0.2/udp/5001/quic-v1"))
       (is (not (str/includes? boot "asher"))))))
 
+(deftest peer-id-patterns-and-log-commands-match
+  (let [s (compile-string-cases
+           {"bp" "(peer-id-body-prefix)"
+            "bb" "(peer-id-body-pattern)"
+            "dp" "(peer-id-did-pattern)"
+            "di" (str "(did-peer-id " (kotoba-literal "12D3KooWPeer") ")")
+            "pl" "(peer-id-log-command)"
+            "ll" "(live-link-count-command)"})]
+    (is (= plan/peer-id-body-prefix (get s "bp")))
+    (is (= "12D3" (get s "bp")))
+    (is (= plan/peer-id-body-pattern (get s "bb")))
+    (is (= "12D3[A-Za-z0-9]*" (get s "bb")))
+    (is (= plan/peer-id-did-pattern (get s "dp")))
+    (is (= "did:key:12D3[A-Za-z0-9]*" (get s "dp")))
+    (is (= (plan/did-peer-id "12D3KooWPeer") (get s "di")))
+    (is (= "did:key:12D3KooWPeer" (get s "di")))
+    (is (= (plan/peer-id-log-command) (get s "pl")))
+    (is (str/includes? (get s "pl") plan/peer-id-did-pattern))
+    (is (= (plan/live-link-count-command) (get s "ll")))
+    (is (str/includes? (get s "ll") plan/peer-id-body-pattern))
+    (is (= "12D3KooWPeerId123"
+           (plan/peer-id-from-log "node_did=did:key:12D3KooWPeerId123\n")))
+    (is (nil? (plan/peer-id-from-log "did:key:zOther")))))
+
 (deftest home-bin-and-join-sep-fragments-match
   (let [s (compile-string-cases
            {"hs" "(home-bin-suffix)"

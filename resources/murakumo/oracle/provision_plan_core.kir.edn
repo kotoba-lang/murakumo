@@ -134,19 +134,55 @@
      (plist-label)
      " >/dev/null 2>&1 && echo running || echo stopped")),
    :param-types []}
+  {:name did-key-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "did:key:",
+   :param-types []}
+  {:name peer-id-body-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "12D3",
+   :param-types []}
+  {:name peer-id-body-pattern,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body (string-concat (peer-id-body-prefix) "[A-Za-z0-9]*"),
+   :param-types []}
+  {:name peer-id-did-pattern,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body (string-concat (did-key-prefix) (peer-id-body-pattern)),
+   :param-types []}
+  {:name did-peer-id,
+   :params [peer-id],
+   :result :string,
+   :effects #{},
+   :body (string-concat (did-key-prefix) peer-id),
+   :param-types [:string]}
   {:name peer-id-log-command,
    :params [],
    :result :string,
    :effects #{},
    :body
-   "grep -ho 'did:key:12D3[A-Za-z0-9]*' ~/.murakumo/mesh.log 2>/dev/null | tail -1",
+   (string-concat
+    "grep -ho '"
+    (string-concat
+     (peer-id-did-pattern)
+     "' ~/.murakumo/mesh.log 2>/dev/null | tail -1")),
    :param-types []}
   {:name live-link-count-command,
    :params [],
    :result :string,
    :effects #{},
    :body
-   "grep 'kotoba-net: peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l",
+   (string-concat
+    "grep 'kotoba-net: peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '"
+    (string-concat (peer-id-body-pattern) "' | sort -u | wc -l")),
    :param-types []}
   {:name ws?,
    :params [c],
@@ -326,12 +362,6 @@
    :body
    (string-concat peer-id (string-concat (peer-at-sep) multiaddr)),
    :param-types [:string :string]}
-  {:name did-key-prefix,
-   :params [],
-   :result :string,
-   :effects #{},
-   :body "did:key:",
-   :param-types []}
   {:name home-bin-suffix,
    :params [],
    :result :string,
@@ -396,6 +426,10 @@
   peer-join-sep
   peer-entry
   did-key-prefix
+  peer-id-body-prefix
+  peer-id-body-pattern
+  peer-id-did-pattern
+  did-peer-id
   home-bin-suffix
   home-bin-path
   label-join-sep
