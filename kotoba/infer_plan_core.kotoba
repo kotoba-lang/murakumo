@@ -10,13 +10,19 @@
             pick-max-idx-3 moe-capacity-ok
             digit-char nat-str i64-str
             bytes-to-gib-milli bytes-to-gib-floor layers-range-str
-            mem-gib-milli usable-gib-milli est-gib-milli]))
+            mem-gib-milli usable-gib-milli est-gib-milli
+            partition-1-end plan-fits-1
+            partition-2-ends plan-fits-2
+            asg-row-pack asg-row-span asg-row-fits
+            pick-max-idx-2 ends-lo ends-hi]))
 
 ;; W6 pure-planner oracle — murakumo.infer.plan usable-bytes + choose-strategy
 ;; + plan largest-remainder (no per-pool floor) for fixed 3 ranks + fits gates
-;; + integer partition-layers walk (fixed 3 nodes) over layer weights.
-;; Full variable-arity node vectors / plan map assembly with node ids stay cljc.
-;; plan-fits-3: pure go/no-go for fixed 3-node integer partition.
+;; + integer partition-layers walk for fixed 1/2/3 nodes over layer weights.
+;; Host attaches node ids when assembling plan maps from pure ends/spans/fits.
+;; Full variable-arity node vectors (n>3) stay cljc.
+;; plan-fits-1/2/3: pure go/no-go for fixed n-node integer partition.
+;; asg-row-pack: span+fits for one assignment (host pairs with node id).
 ;; pick-max-idx-3 / moe-capacity-ok: mlx-moe single-node pick + fits gate.
 ;; report GiB helpers: milli/floor of bytes/GiB + layers-range-str for plan/report rows.
 ;;
@@ -26,6 +32,7 @@
 ;; layer bytes stay integer and targets align (uniform + typical MoE cases).
 ;;
 ;; model-pack = pack3(layers, dense, dense-frac-milli), base 65536.
+;; partition-2-ends → pack3(hi0, hi1, 0) with hi1 = layers.
 ;; partition-3-ends → pack3(hi0, hi1, hi2) exclusive layer ends (last = layers).
 ;; Parity: test/murakumo/infer_plan_kotoba_parity_test.clj
 
@@ -310,9 +317,79 @@
         total-ok (plan-fits-total? total weight-bytes)]
     (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)))
 
+(defn partition-1-end [mp :i64] :i64
+  ;; single-node ring: exclusive end is always layers
+  (model-layers mp))
+
+(defn plan-fits-1 [weight-bytes :i64 mp :i64 u0 :i64] :i64
+  ;; cljc plan :fits? for 1-node (whole stack on one rank)
+  (let [layers (partition-1-end mp)
+        s0 (assignment-span 0 layers)
+        e0 (est-bytes-range weight-bytes mp 0 layers)
+        f0 (if (= s0 0) 1 (span-fits? e0 u0))
+        total-ok (plan-fits-total? u0 weight-bytes)]
+    (if (if (= total-ok 1) (if (= f0 1) 1 0) 0) 1 0)))
+
+(defn partition-2-ends [weight-bytes :i64 mp :i64 u0 :i64 u1 :i64] :i64
+  ;; exclusive layer ends for 2 ring nodes → pack3(hi0, layers, 0)
+  (let [layers (model-layers mp)
+        total (+ u0 u1)
+        wsum (layer-wsum weight-bytes mp)]
+    (if (= total 0)
+      (pack3 0 layers 0)
+      (let [t0 (partition-target wsum u0 total)
+            hi0 (advance-hi weight-bytes mp 0 0 t0)
+            hi1 layers]
+        (pack3 hi0 hi1 0)))))
+
+(defn plan-fits-2 [weight-bytes :i64 mp :i64 u0 :i64 u1 :i64] :i64
+  ;; cljc plan :fits? for 2-node ring using integer partition-2-ends
+  (let [ends (partition-2-ends weight-bytes mp u0 u1)
+        hi0 (plan-lr-pack-get ends 0)
+        hi1 (plan-lr-pack-get ends 1)
+        lo0 0
+        lo1 hi0
+        s0 (assignment-span lo0 hi0)
+        s1 (assignment-span lo1 hi1)
+        e0 (est-bytes-range weight-bytes mp lo0 hi0)
+        e1 (est-bytes-range weight-bytes mp lo1 hi1)
+        f0 (if (= s0 0) 1 (span-fits? e0 u0))
+        f1 (if (= s1 0) 1 (span-fits? e1 u1))
+        spans-ok (if (if (= f0 1) (if (= f1 1) 1 0) 0) 1 0)
+        total (+ u0 u1)
+        total-ok (plan-fits-total? total weight-bytes)]
+    (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)))
+
+(defn ends-lo [ends-pack :i64 idx :i64] :i64
+  ;; lo of assignment idx from packed exclusive ends (idx 0 → 0)
+  (if (= idx 0)
+    0
+    (plan-lr-pack-get ends-pack (- idx 1))))
+
+(defn ends-hi [ends-pack :i64 idx :i64] :i64
+  (plan-lr-pack-get ends-pack idx))
+
+(defn asg-row-pack [weight-bytes :i64 mp :i64 lo :i64 hi :i64 usable :i64] :i64
+  ;; pure assignment numeric row: pack3(span, fits, 0). Host adds :node id.
+  ;; est-bytes via est-bytes-range (may exceed pack lane).
+  (let [sp (assignment-span lo hi)
+        est (est-bytes-range weight-bytes mp lo hi)
+        fit (if (= sp 0) 1 (span-fits? est usable))]
+    (pack3 sp fit 0)))
+
+(defn asg-row-span [row :i64] :i64
+  (plan-lr-pack-get row 0))
+
+(defn asg-row-fits [row :i64] :i64
+  (plan-lr-pack-get row 1))
+
 (defn ok-mark [fits :i64] :string
   ;; cljc report :ok
   (if (= fits 1) "✓" "✗"))
+
+(defn pick-max-idx-2 [a :i64 b :i64] :i64
+  ;; highest first; ties keep earlier index
+  (if (< a b) 1 0))
 
 (defn pick-max-idx-3 [a :i64 b :i64 c :i64] :i64
   ;; cljc sort-by (comp - :usable): highest first; ties keep earlier index

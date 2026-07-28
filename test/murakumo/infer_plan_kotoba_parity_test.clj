@@ -22,7 +22,9 @@
        "advance-hi est-bytes-range partition-3-ends "
        "assignment-span plan-fits-3 ok-mark pick-max-idx-3 moe-capacity-ok "
        "digit-char nat-str i64-str bytes-to-gib-milli bytes-to-gib-floor layers-range-str "
-       "mem-gib-milli usable-gib-milli est-gib-milli"))
+       "mem-gib-milli usable-gib-milli est-gib-milli "
+       "partition-1-end plan-fits-1 partition-2-ends plan-fits-2 "
+       "asg-row-pack asg-row-span asg-row-fits pick-max-idx-2 ends-lo ends-hi"))
 
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
@@ -260,6 +262,80 @@
     (is (= 0 (get actual "nofit")))
     (is (= 5 (get actual "sp")))
     (is (= 0 (get actual "sp0")))))
+
+(deftest partition-n-neq-3-and-asg-row-maps
+  "n=1 / n=2 partition + plan-fits + asg-row (host attaches node ids)."
+  (let [model {:model/layers 12 :model/weight-bytes 1200}
+        n1 [{:name "solo" :mem-bytes (* 32 GiB)}]
+        n2eq [{:name "a" :mem-bytes (* 16 GiB)}
+              {:name "b" :mem-bytes (* 16 GiB)}]
+        n2uneq [{:name "a" :mem-bytes (* 32 GiB)}
+                {:name "b" :mem-bytes (* 8 GiB)}]
+        n2zero [{:name "a" :mem-bytes 0}
+                {:name "b" :mem-bytes 0}]
+        cljc-ends (fn [nodes]
+                    (let [asg (plan/partition-layers model nodes)]
+                      (mapv (fn [a] (second (:layers a))) asg)))
+        us1 (mapv plan/usable-bytes n1)
+        us2 (mapv plan/usable-bytes n2eq)
+        us2u (mapv plan/usable-bytes n2uneq)
+        us2z (mapv plan/usable-bytes n2zero)
+        mp "(model-pack 12 0 100)"
+        actual (compile-i64-cases
+                {"p1" (str "(partition-1-end " mp ")")
+                 "f1" (str "(plan-fits-1 1200 " mp " " (us1 0) ")")
+                 "f1n" (str "(plan-fits-1 999999999999 " mp " " (us1 0) ")")
+                 "p2" (str "(partition-2-ends 1200 " mp " " (us2 0) " " (us2 1) ")")
+                 "p2u" (str "(partition-2-ends 1200 " mp " " (us2u 0) " " (us2u 1) ")")
+                 "p2z" (str "(partition-2-ends 1200 " mp " " (us2z 0) " " (us2z 1) ")")
+                 "f2" (str "(plan-fits-2 1200 " mp " " (us2 0) " " (us2 1) ")")
+                 "f2n" (str "(plan-fits-2 999999999999 " mp " " (us2 0) " " (us2 1) ")")
+                 "f2u" (str "(plan-fits-2 1200 " mp " " (us2u 0) " " (us2u 1) ")")
+                 "pm2a" "(pick-max-idx-2 10 5)"
+                 "pm2b" "(pick-max-idx-2 5 10)"
+                 "pm2t" "(pick-max-idx-2 10 10)"})
+        p2 (get actual "p2")
+        p2u (get actual "p2u")
+        [hi0 hi1 _] (unpack3 p2)
+        [hi0u hi1u _] (unpack3 p2u)
+        ;; asg rows from ends for n2eq — host would zip with node names
+        asg-actual
+        (compile-i64-cases
+         {"r0" (str "(asg-row-pack 1200 " mp " 0 " hi0 " " (us2 0) ")")
+          "r1" (str "(asg-row-pack 1200 " mp " " hi0 " " hi1 " " (us2 1) ")")
+          "elo0" (str "(ends-lo " p2 " 0)")
+          "elo1" (str "(ends-lo " p2 " 1)")
+          "ehi0" (str "(ends-hi " p2 " 0)")
+          "ehi1" (str "(ends-hi " p2 " 1)")
+          "sp0" (str "(asg-row-span (asg-row-pack 1200 " mp " 0 " hi0 " " (us2 0) "))")
+          "ft0" (str "(asg-row-fits (asg-row-pack 1200 " mp " 0 " hi0 " " (us2 0) "))")})]
+    (is (= 12 (get actual "p1")))
+    (is (= (if (:fits? (plan/plan model n1)) 1 0) (get actual "f1")))
+    (is (= 0 (get actual "f1n")))
+    (is (= (cljc-ends n2eq) [hi0 hi1]))
+    (is (= (cljc-ends n2uneq) [hi0u hi1u]))
+    (is (= [0 12 0] (unpack3 (get actual "p2z"))))
+    (is (= (if (:fits? (plan/plan model n2eq)) 1 0) (get actual "f2")))
+    (is (= 0 (get actual "f2n")))
+    (is (= (if (:fits? (plan/plan model n2uneq)) 1 0) (get actual "f2u")))
+    (is (= 0 (get actual "pm2a")))
+    (is (= 1 (get actual "pm2b")))
+    (is (= 0 (get actual "pm2t")))
+    (is (= 0 (get asg-actual "elo0")))
+    (is (= hi0 (get asg-actual "elo1")))
+    (is (= hi0 (get asg-actual "ehi0")))
+    (is (= hi1 (get asg-actual "ehi1")))
+    (let [cljc (plan/partition-layers model n2eq)
+          a0 (first cljc)
+          a1 (second cljc)
+          r0 (get asg-actual "r0")
+          r1 (get asg-actual "r1")]
+      (is (= (:span a0) (get asg-actual "sp0")))
+      (is (= (if (:fits? a0) 1 0) (get asg-actual "ft0")))
+      (is (= (:span a0) (mod r0 65536)))
+      (is (= (if (:fits? a0) 1 0) (mod (quot r0 65536) 65536)))
+      (is (= (:span a1) (mod r1 65536)))
+      (is (= (if (:fits? a1) 1 0) (mod (quot r1 65536) 65536))))))
 
 (deftest ok-mark-and-moe-pick
   (let [marks (compile-string-cases
