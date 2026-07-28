@@ -123,34 +123,74 @@
              :else {:tag :value :value (str v)})))
       {:tag :error :code :secret/not-found :message "no env mapping"})))
 
+(defn- classify-fetched
+  "Kotoba `classify-fetched` when ready: missing/blank → not-found|empty|value."
+  [missing? blank?]
+  (try-oracle
+   #(o 'classify-fetched
+       [(oracle/as-i64 (if missing? 1 0))
+        (oracle/as-i64 (if blank? 1 0))])
+   #(cond missing? "not-found" blank? "empty" :else "value")))
+
+(defn- kit-reply-from-class
+  "Build kit-shaped reply from classify class + optional value string.
+   Tags/codes/messages via kotoba when ready."
+  [class value]
+  (if (try-oracle
+       #(= 1 (oracle/i64->host (o 'reply-is-value? [(str class)])))
+       #(= class "value"))
+    {:tag :value :value (str value)}
+    (let [code (try-oracle
+                #(keyword (o 'secret-error-code [(str class)]))
+                #(case class
+                   "empty" :secret/empty
+                   "not-found" :secret/not-found
+                   "fetch" :secret/fetch
+                   :secret/unknown))
+          msg (try-oracle
+               #(o 'secret-error-message [(str class)])
+               #(case class
+                  "empty" "empty"
+                  "not-found" "not found"
+                  "fetch" "getter failed"
+                  "unknown"))]
+      {:tag :error :code code :message msg})))
+
 (defn map-fetch
-  "Sealed map fetch for tests / host-injected secrets."
+  "Sealed map fetch for tests / host-injected secrets.
+   Classification via kotoba `classify-fetched` when ready."
   [m]
   (fn [{:keys [name]}]
-    (if-let [v (get m name)]
-      (if (and (string? v) (str/blank? v))
-        {:tag :error :code :secret/empty :message "empty"}
-        {:tag :value :value (str v)})
-      {:tag :error :code :secret/not-found :message "not found"})))
+    (let [missing? (not (contains? m name))
+          v (get m name)
+          blank? (and (not missing?) (string? v) (str/blank? v))
+          class (classify-fetched missing? blank?)]
+      (kit-reply-from-class class v))))
 
 (defn fn-fetch
-  "Wrap a host one-shot getter `(fn [name] string-or-nil)` — kagi shape."
+  "Wrap a host one-shot getter `(fn [name] string-or-nil)` — kagi shape.
+   Classification via kotoba when ready."
   [getter]
   (when-not (fn? getter)
     (throw (ex-info "murakumo.secret/fn-fetch requires a getter fn"
                     {:phase :murakumo-secret})))
   (fn [{:keys [name]}]
     (try
-      (let [v (getter name)]
-        (cond
-          (nil? v) {:tag :error :code :secret/not-found :message "nil"}
-          (and (string? v) (str/blank? v)) {:tag :error :code :secret/empty :message "blank"}
-          :else {:tag :value :value (str v)}))
+      (let [v (getter name)
+            missing? (nil? v)
+            blank? (and (string? v) (str/blank? v))
+            class (classify-fetched missing? blank?)]
+        (kit-reply-from-class class v))
       (catch #?(:clj Throwable :cljs :default) e
-        {:tag :error
-         :code :secret/fetch
-         :message (or #?(:clj (.getMessage e) :cljs (.-message e))
-                      "getter failed")}))))
+        (let [class "fetch"
+              code (try-oracle
+                    #(keyword (o 'secret-error-code [class]))
+                    (fn [] :secret/fetch))
+              msg (or #?(:clj (.getMessage e) :cljs (.-message e))
+                      (try-oracle
+                       #(o 'secret-error-message [class])
+                       (fn [] "getter failed")))]
+          {:tag :error :code code :message msg})))))
 
 (defn kagi-fetch
   "Wire named secrets to a kagi (or kagi-shaped) one-shot getter.

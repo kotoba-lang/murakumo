@@ -6,7 +6,8 @@
             ensure-forward-command replace-forward-command remote-curl-command
             marker-prefix? strip-marker-digits
             batch-mode-opt strict-host-key-opt control-master-opt
-            digit-val? parse-digits trim-ws]))
+            digit-val? parse-digits trim-ws
+            pick-exit trim-err err-ws?]))
 
 ;; W6 pure-planner oracle — murakumo.tunnel string core (SSH host-forever,
 ;; pure argv/shell contract still oracle-eligible).
@@ -156,3 +157,27 @@
     (if (= n 0)
       -1
       (parse-digits-go t 0))))
+
+(defn pick-exit [has-rc :i64 rc :i64 ssh-exit :i64] :i64
+  ;; cljc sh-result: (if (some? rc) rc exit)
+  (if (= has-rc 1) rc ssh-exit))
+
+(defn err-ws? [c :string] :i64
+  (if (string=? c " ")
+    1
+    (if (string=? c "\t")
+      1
+      (if (string=? c "\n")
+        1
+        (if (string=? c "\r") 1 0)))))
+
+(defn trim-err [err :string] :string
+  ;; host str/trim on err
+  (let [n (string-byte-length err)]
+    (if (= n 0)
+      err
+      (if (= (err-ws? (string-substring err 0 1)) 1)
+        (trim-err (string-substring err 1 n))
+        (if (= (err-ws? (string-substring err (- n 1) n)) 1)
+          (trim-err (string-substring err 0 (- n 1)))
+          err)))))

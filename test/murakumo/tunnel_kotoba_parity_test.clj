@@ -13,8 +13,8 @@
        "ensure-forward-command replace-forward-command remote-curl-command "
        "marker-prefix? strip-marker-digits "
        "batch-mode-opt strict-host-key-opt control-master-opt "
-       "digit-val? parse-digits trim-ws"))
-
+       "digit-val? parse-digits trim-ws "
+       "pick-exit trim-err err-ws?"))
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -107,3 +107,21 @@
     (let [[_ rc] (tunnel/parse-rc "out\n__murakumo_rc=7\n")]
       (is (= 7 rc))
       (is (= rc (get n "pd7"))))))
+
+(deftest pick-exit-and-trim-err-match
+  (let [i (compile-i64-cases
+           {"p1" "(pick-exit 1 7 0)"
+            "p0" "(pick-exit 0 7 255)"})
+        s (compile-string-cases
+           {"te" (str "(trim-err " (kotoba-literal " connection refused\n") ")")
+            "te0" (str "(trim-err " (kotoba-literal "") ")")})]
+    (is (= 7 (get i "p1")))
+    (is (= 255 (get i "p0")))
+    (is (= "connection refused" (get s "te")))
+    (is (= "" (get s "te0")))
+    (is (= {:exit 7 :ssh-exit 0 :out "" :err ""}
+           (tunnel/sh-result {:exit 0 :out "__murakumo_rc=7\n" :err nil})))
+    (is (= {:exit 255 :ssh-exit 255 :out "" :err "connection refused"}
+           (tunnel/sh-result {:exit 255 :out "" :err " connection refused\n"})))
+    (is (= {:exit 1 :err "missing"}
+           (tunnel/scp-result {:exit 1 :err " missing\n"})))))
