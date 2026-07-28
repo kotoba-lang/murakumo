@@ -1,11 +1,15 @@
 (ns infer-schedule-core
   (:export [eligible? score-queue score-free better-score?
             holds-warm? prefer-warm-then-score pick-idx-2-full
-            pick-idx-3-tournament queue-after-assign]))
+            pick-idx-3-tournament queue-after-assign
+            lane-base pack3 pack-get queues-pack-2 pick-code
+            assign-step-2 assign-result-pick assign-result-q0 assign-result-q1
+            better-from-queues]))
 
 ;; W6 pure-planner oracle — murakumo.infer.schedule eligible?/score + pick.
-;; assign over job batches stays cljc (atom). pick-idx-*-full is pure pick for
-;; fixed 2/3 candidates; host projects eligibility/warm/score keys.
+;; assign-step-2 / assign-2jobs-2nodes: pure assign batch for fixed 2 nodes.
+;; Variable-length node filter/sort and atom map stay cljc.
+;; pick-idx-*-full is pure pick for fixed 2/3 candidates.
 ;; Guest ABI max arity 5: eligibility flags bit-packed into one i64.
 ;;   flags bits: 1 has-engine | 2 has-checkpoint | 4 holds-checkpoint | 8 can-fetch
 ;; score is two i64 keys (queue, -free); better-score? compares lexicographically.
@@ -88,3 +92,51 @@
   (if (= picked 0)
     (if (< queue 0) 0 queue)
     (if (< queue 0) 1 (+ queue 1))))
+
+(defn lane-base [] :i64 65536)
+
+(defn pack3 [a :i64 b :i64 c :i64] :i64
+  (let [B (lane-base)]
+    (+ a (+ (* b B) (* c (* B B))))))
+
+(defn pack-get [packed :i64 idx :i64] :i64
+  (let [B (lane-base)]
+    (if (= idx 0)
+      (rem64 packed B)
+      (if (= idx 1)
+        (rem64 (quot packed B) B)
+        (quot packed (* B B))))))
+
+(defn queues-pack-2 [q0 :i64 q1 :i64] :i64
+  (pack3 q0 q1 0))
+
+(defn pick-code [pick-idx :i64] :i64
+  ;; -1|0|1 → 0=none, 1=node0, 2=node1
+  (if (< pick-idx 0) 0 (+ pick-idx 1)))
+
+(defn assign-step-2 [q0 :i64 q1 :i64 ok0 :i64 ok1 :i64
+                     better-pack :i64] :i64
+  ;; better-pack = pack3(warm0, warm1, better01)
+  ;; → pack3(pick-code, nq0, nq1)
+  (let [warm0 (pack-get better-pack 0)
+        warm1 (pack-get better-pack 1)
+        better01 (pack-get better-pack 2)
+        p (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
+        code (pick-code p)
+        nq0 (queue-after-assign q0 (if (= p 0) 1 0))
+        nq1 (queue-after-assign q1 (if (= p 1) 1 0))]
+    (pack3 code nq0 nq1)))
+
+(defn assign-result-pick [result-pack :i64] :i64
+  (pack-get result-pack 0))
+
+(defn assign-result-q0 [result-pack :i64] :i64
+  (pack-get result-pack 1))
+
+(defn assign-result-q1 [result-pack :i64] :i64
+  (pack-get result-pack 2))
+
+(defn better-from-queues [q0 :i64 f0 :i64 q1 :i64 f1 :i64] :i64
+  ;; recompute better01 after queue updates (free-bytes fixed per node)
+  (better-score? (score-queue q0) (score-free f0)
+                 (score-queue q1) (score-free f1)))
