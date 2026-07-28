@@ -251,16 +251,26 @@
        :else
        (some (fn [p] (when (exists? p) p)) candidates)))))
 
+(defn absolute-git-bin?
+  "True when `p` looks like an absolute filesystem path to git."
+  [p]
+  (and (string? p)
+       (not (str/blank? p))
+       (or (str/starts-with? p "/")
+           (boolean (re-matches #"[A-Za-z]:[\\/].*" p)))
+       (not= p "git")))
+
 (defn git-short-sha-argv
   "argv for reading the pinned source git sha.
 
-  Prefer absolute `git-bin` (no PATH). When nil, still emits bare \"git\"
-  only for pure plan fixtures — ops hosts should call `resolve-git-bin`
-  and pass the result."
-  ([src] (git-short-sha-argv src nil))
-  ([src git-bin]
-   (let [bin (or (not-empty (str git-bin)) "git")]
-     [bin "-C" src "rev-parse" "--short" "HEAD"])))
+  **Requires absolute `git-bin`** (no PATH, no bare \"git\"). Ops hosts
+  must call `resolve-git-bin` first. The 1-arity form is removed from the
+  ops path — tests pass an explicit absolute path."
+  [src git-bin]
+  (when-not (absolute-git-bin? git-bin)
+    (throw (ex-info "git-short-sha-argv requires absolute git-bin (no PATH)"
+                    {:phase :deploy-plan :git-bin git-bin})))
+  [git-bin "-C" src "rev-parse" "--short" "HEAD"])
 
 (defn version-argv
   "argv for reading the pinned kotoba CLI version."

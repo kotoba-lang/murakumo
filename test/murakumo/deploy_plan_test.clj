@@ -154,10 +154,14 @@
          (plan/missing-pin-binaries
           (plan/pin-copy-plan "release" "bin")
           #{"release/kotoba"})))
-  (is (= ["git" "-C" "release" "rev-parse" "--short" "HEAD"]
-         (plan/git-short-sha-argv "release")))
   (is (= ["/usr/bin/git" "-C" "release" "rev-parse" "--short" "HEAD"]
          (plan/git-short-sha-argv "release" "/usr/bin/git")))
+  (is (thrown-with-msg? Exception #"absolute git-bin"
+        (plan/git-short-sha-argv "release" "git")))
+  (is (thrown-with-msg? Exception #"absolute git-bin"
+        (plan/git-short-sha-argv "release" nil)))
+  (is (true? (plan/absolute-git-bin? "/usr/bin/git")))
+  (is (false? (plan/absolute-git-bin? "git")))
   (is (= "/usr/bin/git"
          (plan/resolve-git-bin {:candidates ["/usr/bin/git" "/bin/git"]
                                 :exists? #{"/usr/bin/git"}})))
