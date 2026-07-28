@@ -4,9 +4,9 @@
 ;; This namespace is the .cljc source of truth for the wadm-style planning logic;
 ;; murakumo.reconcile wraps it with CLI, collection, apply, and persistence.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-reconcile-oracle-authority +
-;; ADR-260728-w6-reconcile-flags-pure-oracle):
-;; pure scalar + flag/action helpers DELEGATE to precompiled
+;; W6 product-shell authority (ADR-260728-w6-reconcile-flag-tokens-pure-oracle +
+;; ADR-260728-w6-reconcile-oracle-authority + flags):
+;; pure scalar + flag/action tokens + classifiers DELEGATE to precompiled
 ;; kotoba/reconcile_plan_core.kotoba → resources/murakumo/oracle/reconcile_plan_core.kir.edn
 ;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: eligible-nodes / observed-hosts set algebra, variable-length
@@ -35,6 +35,61 @@
       (catch #?(:clj Exception :cljs :default) _
         (mirror-thunk)))
     (mirror-thunk)))
+
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+(def ^:private mirror-flag-dry-run "--dry-run")
+(def ^:private mirror-flag-apply "--apply")
+(def ^:private mirror-flag-watch "--watch")
+(def ^:private mirror-flag-watch-eq-prefix "--watch=")
+(def ^:private mirror-flag-snapshot-prefix "--snapshot=")
+(def ^:private mirror-flag-dash-prefix "--")
+(def ^:private mirror-action-satisfied "satisfied")
+(def ^:private mirror-action-place "place")
+(def ^:private mirror-action-over "over")
+(def ^:private mirror-action-blocked "blocked")
+(def ^:private mirror-action-needs-build "needs-build")
+
+(def flag-dry-run
+  "CLI token for dry-run. Kotoba when ready."
+  (oracle-str-const 'flag-dry-run mirror-flag-dry-run))
+
+(def flag-apply
+  (oracle-str-const 'flag-apply mirror-flag-apply))
+
+(def flag-watch
+  (oracle-str-const 'flag-watch mirror-flag-watch))
+
+(def flag-watch-eq-prefix
+  (oracle-str-const 'flag-watch-eq-prefix mirror-flag-watch-eq-prefix))
+
+(def flag-snapshot-prefix
+  (oracle-str-const 'flag-snapshot-prefix mirror-flag-snapshot-prefix))
+
+(def flag-dash-prefix
+  (oracle-str-const 'flag-dash-prefix mirror-flag-dash-prefix))
+
+(def action-satisfied
+  (oracle-str-const 'action-satisfied mirror-action-satisfied))
+
+(def action-place
+  (oracle-str-const 'action-place mirror-action-place))
+
+(def action-over
+  (oracle-str-const 'action-over mirror-action-over))
+
+(def action-blocked
+  (oracle-str-const 'action-blocked mirror-action-blocked))
+
+(def action-needs-build
+  (oracle-str-const 'action-needs-build mirror-action-needs-build))
+
 
 (defn eligible-nodes
   "Node names whose labels/roles/reach satisfy an app's `:placement` constraint.
@@ -184,7 +239,7 @@
   (try-oracle
    #(= 1 (oracle/i64->host
           (o 'action-is-satisfied? [(name action)])))
-   #(= :satisfied action)))
+   #(= (name action) action-satisfied)))
 
 (defn- action-is-place?
   "Kotoba `action-is-place?` when ready."
@@ -192,7 +247,7 @@
   (try-oracle
    #(= 1 (oracle/i64->host
           (o 'action-is-place? [(name action)])))
-   #(= :place action)))
+   #(= (name action) action-place)))
 
 (defn plan-converged?
   "True when every app is satisfied.
@@ -233,11 +288,13 @@
      :cljs (js/parseInt s 10)))
 
 (defn- mirror-watch-seconds [a]
-  (let [[_ v] (str/split a #"=")]
-    (if v
-      (try (parse-int v)
+  (let [a (str a)]
+    (cond
+      (= a flag-watch) 30
+      (str/starts-with? a flag-watch-eq-prefix)
+      (try (parse-int (subs a (count flag-watch-eq-prefix)))
            (catch #?(:clj Exception :cljs :default) _ 30))
-      30)))
+      :else 30)))
 
 (defn- watch-seconds
   "Seconds for --watch / --watch=N. Kotoba when ready."
@@ -251,32 +308,35 @@
   [a]
   (try-oracle
    #(o 'snapshot-value [(str a)])
-   #(subs a 11)))
+   #(let [a (str a)]
+      (if (str/starts-with? a flag-snapshot-prefix)
+        (subs a (count flag-snapshot-prefix))
+        ""))))
 
 (defn- flag-is-dry-run? [a]
   (try-oracle
    #(= 1 (oracle/i64->host (o 'flag-is-dry-run? [(str a)])))
-   #(= a "--dry-run")))
+   #(= (str a) flag-dry-run)))
 
 (defn- flag-is-apply? [a]
   (try-oracle
    #(= 1 (oracle/i64->host (o 'flag-is-apply? [(str a)])))
-   #(= a "--apply")))
+   #(= (str a) flag-apply)))
 
 (defn- flag-is-watch? [a]
   (try-oracle
    #(= 1 (oracle/i64->host (o 'flag-is-watch? [(str a)])))
-   #(str/starts-with? a "--watch")))
+   #(str/starts-with? (str a) flag-watch)))
 
 (defn- flag-is-snapshot? [a]
   (try-oracle
    #(= 1 (oracle/i64->host (o 'flag-is-snapshot? [(str a)])))
-   #(str/starts-with? a "--snapshot=")))
+   #(str/starts-with? (str a) flag-snapshot-prefix)))
 
 (defn- flag-is-dash? [a]
   (try-oracle
    #(= 1 (oracle/i64->host (o 'flag-is-dash? [(str a)])))
-   #(str/starts-with? a "--")))
+   #(str/starts-with? (str a) flag-dash-prefix)))
 
 (defn parse-flags
   "Parse reconcile CLI flags into data.

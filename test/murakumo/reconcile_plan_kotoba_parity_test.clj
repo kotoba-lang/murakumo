@@ -19,7 +19,11 @@
        "default-watch-seconds starts-with? "
        "flag-is-dry-run? flag-is-apply? flag-is-watch? flag-is-snapshot? "
        "flag-is-dash? watch-seconds snapshot-value "
-       "digit-val? digit-of-go digit-of parse-digits-go parse-digits trim-ws"))
+       "digit-val? digit-of-go digit-of parse-digits-go parse-digits trim-ws "
+       "flag-dry-run flag-apply flag-watch flag-watch-eq-prefix "
+       "flag-snapshot-prefix flag-dash-prefix "
+       "action-satisfied action-place action-over action-blocked "
+       "action-needs-build"))
 (def fleet
   {:fleet/name "test-mesh"
    :nodes [{:name "a" :roles ["pin" "compute"] :labels {:zone "jp" :tier "edge"}}
@@ -201,7 +205,18 @@
             "ws" (str "(watch-seconds " (kotoba-literal "--watch") ")")
             "w5" (str "(watch-seconds " (kotoba-literal "--watch=5") ")")})
         s (compile-string-cases
-           {"sv" (str "(snapshot-value " (kotoba-literal "--snapshot=snap.edn") ")")})]
+           {"sv" (str "(snapshot-value " (kotoba-literal "--snapshot=snap.edn") ")")
+            "fdry" "(flag-dry-run)"
+            "fapp" "(flag-apply)"
+            "fwch" "(flag-watch)"
+            "fweq" "(flag-watch-eq-prefix)"
+            "fsp" "(flag-snapshot-prefix)"
+            "fdp" "(flag-dash-prefix)"
+            "asat" "(action-satisfied)"
+            "aplc" "(action-place)"
+            "aov" "(action-over)"
+            "abl" "(action-blocked)"
+            "anb" "(action-needs-build)"})]
     (is (= 1 (get i "mm0")))
     (is (= 0 (get i "mm1")))
     (is (= 1 (get i "as")))
@@ -215,6 +230,21 @@
     (is (= 30 (get i "ws")))
     (is (= 5 (get i "w5")))
     (is (= "snap.edn" (get s "sv")))
+    (is (= r/flag-dry-run (get s "fdry")))
+    (is (= "--dry-run" (get s "fdry")))
+    (is (= r/flag-apply (get s "fapp")))
+    (is (= r/flag-watch (get s "fwch")))
+    (is (= r/flag-watch-eq-prefix (get s "fweq")))
+    (is (= "--watch=" (get s "fweq")))
+    (is (= r/flag-snapshot-prefix (get s "fsp")))
+    (is (= "--snapshot=" (get s "fsp")))
+    (is (= r/flag-dash-prefix (get s "fdp")))
+    (is (= r/action-satisfied (get s "asat")))
+    (is (= "satisfied" (get s "asat")))
+    (is (= r/action-place (get s "aplc")))
+    (is (= r/action-over (get s "aov")))
+    (is (= r/action-blocked (get s "abl")))
+    (is (= r/action-needs-build (get s "anb")))
     (is (= :missing-manifest (r/reconcile-command-error {})))
     (is (nil? (r/reconcile-command-error {:manifest "murakumo.app.edn"})))
     (is (= {:manifest "murakumo.app.edn" :dry-run true :snapshot "snap.edn"}

@@ -871,7 +871,18 @@
     (is (= {:manifest "m.edn" :dry-run true :watch 5}
            (rplan/parse-flags ["m.edn" "--dry-run" "--watch=5"])))
     (is (= {:apply true :watch 30 :manifest "m.edn"}
-           (rplan/parse-flags ["--apply" "--watch" "m.edn"])))))
+           (rplan/parse-flags ["--apply" "--watch" "m.edn"])))
+    (is (= "--dry-run" rplan/flag-dry-run))
+    (is (= "--apply" rplan/flag-apply))
+    (is (= "--watch" rplan/flag-watch))
+    (is (= "--watch=" rplan/flag-watch-eq-prefix))
+    (is (= "--snapshot=" rplan/flag-snapshot-prefix))
+    (is (= "--" rplan/flag-dash-prefix))
+    (is (= "satisfied" rplan/action-satisfied))
+    (is (= "place" rplan/action-place))
+    (is (= "over" rplan/action-over))
+    (is (= "blocked" rplan/action-blocked))
+    (is (= "needs-build" rplan/action-needs-build))))
 
 (deftest reconcile-oracle-call-matches-live-compile
   (let [live (:kir (compiler/compile-source (slurp "kotoba/reconcile_plan_core.kotoba")
@@ -905,7 +916,21 @@
     (is (= (ir/execute live 'watch-seconds ["--watch=7"])
            (oracle/call :reconcile-plan 'watch-seconds ["--watch=7"])))
     (is (= (ir/execute live 'snapshot-value ["--snapshot=x.edn"])
-           (oracle/call :reconcile-plan 'snapshot-value ["--snapshot=x.edn"])))))
+           (oracle/call :reconcile-plan 'snapshot-value ["--snapshot=x.edn"])))
+    (is (= (ir/execute live 'flag-dry-run [])
+           (oracle/call :reconcile-plan 'flag-dry-run [])))
+    (is (= (oracle/call :reconcile-plan 'flag-dry-run []) rplan/flag-dry-run))
+    (is (= (ir/execute live 'flag-watch-eq-prefix [])
+           (oracle/call :reconcile-plan 'flag-watch-eq-prefix [])))
+    (is (= (oracle/call :reconcile-plan 'flag-watch-eq-prefix [])
+           rplan/flag-watch-eq-prefix))
+    (is (= (ir/execute live 'action-satisfied [])
+           (oracle/call :reconcile-plan 'action-satisfied [])))
+    (is (= (oracle/call :reconcile-plan 'action-satisfied [])
+           rplan/action-satisfied))
+    (is (= (ir/execute live 'action-needs-build [])
+           (oracle/call :reconcile-plan 'action-needs-build [])))
+    (is (= "needs-build" (oracle/call :reconcile-plan 'action-needs-build [])))))
 
 (deftest reconcile-precompiled-kir-does-not-drift
   (let [live (:kir (compiler/compile-source (slurp "kotoba/reconcile_plan_core.kotoba")
