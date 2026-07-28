@@ -1300,7 +1300,13 @@
     (is (= "," pplan/peer-join-sep))
     (is (= "did:key:" pplan/did-key-prefix))
     (is (= "12D3x@/ip4/1.2.3.4/udp/4001/quic-v1"
-           (pplan/peer-entry "12D3x" (pplan/multiaddr "1.2.3.4" 4001)))))
+           (pplan/peer-entry "12D3x" (pplan/multiaddr "1.2.3.4" 4001))))
+    (is (= "/.murakumo/bin" pplan/home-bin-suffix))
+    (is (= "/Users/mesh/.murakumo/bin" (pplan/home-bin-path "/Users/mesh")))
+    (is (= "," pplan/label-join-sep))
+    (is (= "," pplan/roles-join-sep))
+    (is (= "zone=jp,role=compute"
+           (pplan/labels-env {:zone "jp" :role "compute"}))))
   (testing "cloud defaults + region/endpoints"
     (is (= "murakumo-overlay" cplan/default-driver))
     (is (= "murakumo.cloud" (:cloud/name cplan/default-cloud)))
@@ -1424,7 +1430,19 @@
     (is (= (ir/execute pr 'did-key-prefix [])
            (oracle/call :provision-plan 'did-key-prefix [])))
     (is (= (oracle/call :provision-plan 'peer-entry ["p" "m"])
-           (pplan/peer-entry "p" "m")))))
+           (pplan/peer-entry "p" "m")))
+    (is (= (ir/execute pr 'home-bin-suffix [])
+           (oracle/call :provision-plan 'home-bin-suffix [])))
+    (is (= (ir/execute pr 'home-bin-path ["/h"])
+           (oracle/call :provision-plan 'home-bin-path ["/h"])))
+    (is (= (oracle/call :provision-plan 'home-bin-path ["/h"])
+           (pplan/home-bin-path "/h")))
+    (is (= (ir/execute pr 'label-join-sep [])
+           (oracle/call :provision-plan 'label-join-sep [])))
+    (is (= (ir/execute pr 'roles-join-sep [])
+           (oracle/call :provision-plan 'roles-join-sep [])))
+    (is (= (oracle/call :provision-plan 'label-join-sep [])
+           pplan/label-join-sep))))
 
 (deftest product-shell-overlay-driver-runtime-uses-oracle
   (testing "driver endpoint-kind + dial-result + option-name"

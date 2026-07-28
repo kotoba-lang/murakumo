@@ -4,16 +4,16 @@
 ;; kotoba DID derivation, and filesystem reads. This namespace owns deterministic
 ;; strings and defaults used by those effects.
 ;;
-;; W6 product-shell (ADR-260728-w6-provision-peer-entry-pure-oracle):
+;; W6 product-shell (ADR-260728-w6-provision-plist-path-pure-oracle):
 ;; constants + port/multiaddr + launch/peer/link shell + rsync argv +
-;; peer-entry (bootstrap) DELEGATE to kotoba provision_plan_core when oracle
-;; is loadable (JVM classpath or cljs/nbb). bootstrap fold, peer-id regex,
-;; plist heredoc body stay host. cljs mirrors remain fallback when oracle is
-;; not ready.
+;; peer-entry + home-bin-path + label/roles join seps DELEGATE to kotoba
+;; provision_plan_core when oracle is loadable (JVM classpath or cljs/nbb).
+;; bootstrap fold, peer-id regex, write-plist heredoc body, template replace
+;; fold stay host. cljs mirrors remain fallback when oracle is not ready.
 
 (ns murakumo.provision.plan
   "Portable provision/mesh planning helpers.
-   W6 product-shell: path/port + shell/rsync/peer-entry pure via provision_plan_core."
+   W6 product-shell: path/port + shell/rsync/peer-entry/plist pure via provision_plan_core."
   (:require [clojure.string :as str]
             [murakumo.connect :as connect]
             [murakumo.fleet.inventory :as inv]
@@ -132,9 +132,15 @@
 (def ^:private mirror-peer-at-sep "@")
 (def ^:private mirror-peer-join-sep ",")
 (def ^:private mirror-did-key-prefix "did:key:")
+(def ^:private mirror-home-bin-suffix "/.murakumo/bin")
+(def ^:private mirror-label-join-sep ",")
+(def ^:private mirror-roles-join-sep ",")
 
 (defn- mirror-peer-entry [peer-id multiaddr]
   (str peer-id "@" multiaddr))
+
+(defn- mirror-home-bin-path [home]
+  (str home "/.murakumo/bin"))
 
 ;; ── dual-source constants ────────────────────────────────────────────
 
@@ -222,6 +228,25 @@
   (try-oracle
    #(o 'peer-entry [(str peer-id) (str multiaddr)])
    #(mirror-peer-entry peer-id multiaddr)))
+
+(def home-bin-suffix
+  "Path under node home for murakumo binaries ({{BIN}}). Kotoba when ready."
+  (oracle-str-const 'home-bin-suffix mirror-home-bin-suffix))
+
+(def label-join-sep
+  "Comma separator for labels-env. Kotoba when ready."
+  (oracle-str-const 'label-join-sep mirror-label-join-sep))
+
+(def roles-join-sep
+  "Comma separator for node roles CSV. Kotoba when ready."
+  (oracle-str-const 'roles-join-sep mirror-roles-join-sep))
+
+(defn home-bin-path
+  "Absolute `{{BIN}}` path under node home. Kotoba `home-bin-path` when ready."
+  [home]
+  (try-oracle
+   #(o 'home-bin-path [(str home)])
+   #(mirror-home-bin-path home)))
 
 (defn operator-seed-missing?
   "True when a command requiring the fleet operator seed should fail.
@@ -388,23 +413,26 @@
 
 (defn labels-env
   "Render node labels as the launchd env string `k=v,k=v`.
-   Pair format dual-sourced via `label-kv`; join stays host."
+   Pair format dual-sourced via `label-kv`; sep dual-sourced via `label-join-sep`;
+   map fold stays host."
   [labels]
   (->> labels
        (map (fn [[k v]] (label-kv (name k) v)))
-       (str/join ",")))
+       (str/join label-join-sep)))
 
 (defn render-plist
   "Render the LaunchDaemon plist template for a node.
 
    `identity` supplies host-derived or crypto-derived values:
-   :operator-seed, :x25519-seed, :did, and :p2p-seed."
+   :operator-seed, :x25519-seed, :did, and :p2p-seed.
+   {{BIN}} path and roles/labels join seps dual-sourced; template replace fold
+   stays host."
   [template fleet connect-spec peers node {:keys [user home operator-seed x25519-seed did p2p-seed]}]
   (-> template
       (str/replace "{{USER}}" user)
-      (str/replace "{{BIN}}" (str home "/.murakumo/bin"))
+      (str/replace "{{BIN}}" (home-bin-path home))
       (str/replace "{{PORT}}" (str (inv/node-port fleet node)))
-      (str/replace "{{ROLES}}" (str/join "," (:roles node)))
+      (str/replace "{{ROLES}}" (str/join roles-join-sep (:roles node)))
       (str/replace "{{LABELS}}" (labels-env (:labels node)))
       (str/replace "{{HOME}}" home)
       (str/replace "{{ED25519}}" operator-seed)
