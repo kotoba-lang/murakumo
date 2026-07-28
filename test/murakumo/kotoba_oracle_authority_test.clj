@@ -400,7 +400,10 @@
     (is (= "bafyA bafyB" (dash/hosted-append "bafyA" "bafyB")))
     (is (= {:port 8899 :interval 15} (dash/dashboard-options [])))
     (is (= "bafyA bafyB" (dash/hosted-summary {:hosted ["bafyA" "bafyB"]})))
-    (is (nil? (dash/hosted-summary {:hosted []}))))
+    (is (nil? (dash/hosted-summary {:hosted []})))
+    (is (= "com.murakumo.fleet.snapshot" dash/snapshot-record-type))
+    (is (= "com.murakumo.fleet.snapshot"
+           (:$type (dash/snapshot-record {:ts 1 :fleet "f" :nodes []} "{}")))))
 
 (deftest dash-oracle-call-matches-live-compile
   (let [live (dash-live-kir)]
@@ -451,7 +454,11 @@
            (oracle/call :dash-state 'hosted-append ["bafyA" "bafyB"])))
     (is (= (oracle/call :dash-state 'hosted-append ["bafyA" "bafyB"])
            (dash/hosted-append "bafyA" "bafyB")))
-    (is (= "bafyA bafyB" (dash/hosted-append "bafyA" "bafyB")))))
+    (is (= "bafyA bafyB" (dash/hosted-append "bafyA" "bafyB")))
+    (is (= (ir/execute live 'snapshot-record-type [])
+           (oracle/call :dash-state 'snapshot-record-type [])))
+    (is (= (oracle/call :dash-state 'snapshot-record-type [])
+           dash/snapshot-record-type))))
 (deftest dash-precompiled-kir-does-not-drift
   (is (= (dash-live-kir) (dash-resource-kir))
       "dash_state KIR drift — run oracle-gen"))
@@ -910,7 +917,10 @@
     (is (= "place" rplan/action-place))
     (is (= "over" rplan/action-over))
     (is (= "blocked" rplan/action-blocked))
-    (is (= "needs-build" rplan/action-needs-build))))
+    (is (= "needs-build" rplan/action-needs-build))
+    (is (= "com.murakumo.fleet.reconcile" rplan/reconcile-record-type))
+    (is (= "com.murakumo.fleet.reconcile"
+           (:$type (rplan/reconcile-record {:ts 1 :fleet "f" :apps []} "{}"))))))
 
 (deftest reconcile-oracle-call-matches-live-compile
   (let [live (:kir (compiler/compile-source (slurp "kotoba/reconcile_plan_core.kotoba")
@@ -948,6 +958,13 @@
     (is (= (ir/execute live 'flag-dry-run [])
            (oracle/call :reconcile-plan 'flag-dry-run [])))
     (is (= (oracle/call :reconcile-plan 'flag-dry-run []) rplan/flag-dry-run))
+    (is (= "com.murakumo.fleet.reconcile" rplan/reconcile-record-type))
+    (is (= "com.murakumo.fleet.reconcile"
+           (:$type (rplan/reconcile-record {:ts 1 :fleet "f" :apps []} "{}"))))
+    (is (= (oracle/call :reconcile-plan 'reconcile-record-type [])
+           rplan/reconcile-record-type))
+    (is (= (ir/execute live 'reconcile-record-type [])
+           (oracle/call :reconcile-plan 'reconcile-record-type [])))
     (is (= (ir/execute live 'flag-watch-eq-prefix [])
            (oracle/call :reconcile-plan 'flag-watch-eq-prefix [])))
     (is (= (oracle/call :reconcile-plan 'flag-watch-eq-prefix [])

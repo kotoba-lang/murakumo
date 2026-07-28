@@ -3,12 +3,13 @@
 ;; Collection, persistence, JSON encoding, and HTTP serving stay in murakumo.dash.
 ;; This namespace owns deterministic snapshot -> record/alert/display data.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-dash-hosted-fold-pure-oracle +
+;; W6 product-shell authority (ADR-260728-w6-collection-record-types-pure-oracle +
+;; ADR-260728-w6-dash-hosted-fold-pure-oracle +
 ;; ADR-260728-w6-dash-defaults-pure-oracle + probe-command + cljs load):
 ;; pure display + probe/parse + dashboard defaults + hosted-join-sep +
-;; hosted-append fold DELEGATE to precompiled kotoba/dash_state_core.kotoba
-;; KIR when oracle is loadable (JVM classpath or cljs/nbb —
-;; ADR-260728-w6-cljs-oracle-load).
+;; hosted-append fold + snapshot-record-type DELEGATE to precompiled
+;; kotoba/dash_state_core.kotoba KIR when oracle is loadable (JVM classpath
+;; or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Map/vector folds, HTML join, probe-lines fold, parse-hosted split, and
 ;; query-string stay host/cljc. cljs mirrors remain fallback when not ready.
 
@@ -157,6 +158,12 @@
   (oracle-str-const 'default-dashboard-interval-str
                     mirror-default-dashboard-interval-str))
 
+(def ^:private mirror-snapshot-record-type "com.murakumo.fleet.snapshot")
+
+(def snapshot-record-type
+  "Atproto $type / collection NSID for fleet snapshot records. Kotoba when ready."
+  (oracle-str-const 'snapshot-record-type mirror-snapshot-record-type))
+
 ;; ── pure display helpers: kotoba dash_state_core SSoT when oracle ready ─
 
 (defn short-hosted-cid
@@ -291,9 +298,9 @@
   "Build the atproto record payload for a fleet snapshot.
 
    `snapshot-json` is supplied by the host shell so this namespace stays free of
-   any JSON dependency."
+   any JSON dependency. $type dual-sourced via `snapshot-record-type`."
   [snapshot snapshot-json]
-  {:$type "com.murakumo.fleet.snapshot"
+  {:$type snapshot-record-type
    :ts (:ts snapshot)
    :fleet (:fleet snapshot)
    :nodes (count (:nodes snapshot))

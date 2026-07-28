@@ -13,7 +13,8 @@
             hosted-join-sep
             default-dashboard-port default-dashboard-interval
             default-dashboard-port-str default-dashboard-interval-str
-            join-append hosted-append]))
+            join-append hosted-append
+            snapshot-record-type]))
 
 ;; W6 pure-planner oracle — murakumo.dash.state display / probe pure helpers.
 ;; Map/vector reducers (placements, selected-snapshot, render-html, probe-lines
@@ -24,6 +25,7 @@
 ;; dashboard defaults + hosted-join-sep dual-source for hosted-summary / CLI opts.
 ;; join-append / hosted-append: pure fold steps for hosted-summary; host still
 ;; walks hosted CID collections after short-hosted-cid projection.
+;; snapshot-record-type: atproto $type / collection NSID for fleet snapshot records.
 ;; Parity: test/murakumo/dash_state_kotoba_parity_test.clj
 
 (defn short-hosted-cid-max-len [] :i64 18)
@@ -244,3 +246,9 @@
 (defn hosted-append [acc :string next :string] :string
   ;; host reduce over short-hosted-cid strings for hosted-summary
   (join-append acc (hosted-join-sep) next))
+
+;; ── residual atproto collection / record $type ───────────────────────
+
+(defn snapshot-record-type [] :string
+  ;; $type + persist snapshot-collection NSID
+  "com.murakumo.fleet.snapshot")

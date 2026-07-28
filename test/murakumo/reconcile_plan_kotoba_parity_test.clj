@@ -23,7 +23,7 @@
        "flag-dry-run flag-apply flag-watch flag-watch-eq-prefix "
        "flag-snapshot-prefix flag-dash-prefix "
        "action-satisfied action-place action-over action-blocked "
-       "action-needs-build"))
+       "action-needs-build reconcile-record-type"))
 (def fleet
   {:fleet/name "test-mesh"
    :nodes [{:name "a" :roles ["pin" "compute"] :labels {:zone "jp" :tier "edge"}}
@@ -254,3 +254,10 @@
     (is (= {:manifest "murakumo.app.edn" :watch 5}
            (r/parse-flags ["--ignored" "--watch=5" "murakumo.app.edn"])))))
 
+(deftest reconcile-record-type-matches
+  (let [s (compile-string-cases {"rrt" "(reconcile-record-type)"})]
+    (is (= r/reconcile-record-type (get s "rrt")))
+    (is (= "com.murakumo.fleet.reconcile" (get s "rrt")))
+    (is (= "com.murakumo.fleet.reconcile"
+           (:$type (r/reconcile-record
+                    {:ts 1 :fleet "f" :apps []} "{}"))))))
