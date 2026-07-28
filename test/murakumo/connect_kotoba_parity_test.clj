@@ -8,7 +8,8 @@
 
 (def port-source (slurp "kotoba/connect_core.kotoba"))
 (def export-prefix
-  "default-class-name node-class-name serves-read? serves-live? serves-plane?")
+  (str "default-class-name node-class-name serves-read? serves-live? serves-plane? "
+       "class-native plane-read plane-live"))
 
 (def connect-spec
   {:default-class :native
@@ -91,3 +92,18 @@
       (let [p (project-serves node reach)]
         (testing (str reach)
           (is (= (:expected p) (get actual (str "s_" i)))))))))
+
+(deftest connect-plane-tokens-match
+  (let [s (compile-string-cases
+           {"cn" "(class-native)"
+            "pr" "(plane-read)"
+            "pl" "(plane-live)"
+            "d0" (str "(default-class-name " (kotoba-literal "") ")")})]
+    (is (= connect/class-native (get s "cn")))
+    (is (= "native" (get s "cn")))
+    (is (= connect/plane-read (get s "pr")))
+    (is (= "read" (get s "pr")))
+    (is (= connect/plane-live (get s "pl")))
+    (is (= "live" (get s "pl")))
+    (is (= connect/class-native (get s "d0")))
+    (is (= (name (connect/default-class {})) connect/class-native))))

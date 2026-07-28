@@ -1400,10 +1400,14 @@
                            :native {:read [:http] :live [:quic]}}}]
     (is (= :wasm (conn/default-class connect)))
     (is (= :native (conn/default-class {})))
+    (is (= (keyword conn/class-native) (conn/default-class {})))
     (is (= :wasm (conn/node-class connect {})))
     (is (true? (conn/serves-reach? connect {:class :wasm} :browser/read)))
     (is (true? (conn/serves-reach? connect {:class :wasm} :browser/live)))
-    (is (false? (conn/serves-reach? connect {:class :native} :browser/live)))))
+    (is (false? (conn/serves-reach? connect {:class :native} :browser/live)))
+    (is (= "native" conn/class-native))
+    (is (= "read" conn/plane-read))
+    (is (= "live" conn/plane-live))))
 
 (deftest product-shell-component-authority-uses-oracle-results
   (is (= 1 cauth/event-version))
@@ -1466,6 +1470,12 @@
     (is (= (oracle/call :deploy-plan 'block-subcmd []) dplan/block-subcmd))
     (is (= (ir/execute c 'default-class-name [""])
            (oracle/call :connect 'default-class-name [""])))
+    (is (= (ir/execute c 'class-native [])
+           (oracle/call :connect 'class-native [])))
+    (is (= (oracle/call :connect 'class-native []) conn/class-native))
+    (is (= (ir/execute c 'plane-read [])
+           (oracle/call :connect 'plane-read [])))
+    (is (= (oracle/call :connect 'plane-live []) conn/plane-live))
     (is (= (ir/execute c 'serves-plane?
                        ["read" (oracle/option-i64 1) (oracle/option-i64 nil)])
            (oracle/call :connect 'serves-plane?

@@ -1,18 +1,34 @@
 (ns connect-core
   (:export [default-class-name node-class-name
-            serves-read? serves-live? serves-plane?]))
+            serves-read? serves-live? serves-plane?
+            class-native plane-read plane-live]))
 
 ;; W6 pure-planner oracle — murakumo.connect decision core (low priority).
 ;; class-transports / set intersection stay host-projected into optional flags.
 ;; Product Value ABI v1: optional i64 flags (no has-http / has-common sentinels).
-;; empty default-class string ⇒ "native". node-class empty ⇒ use default.
-;; plane: "read" | "live" | other.
+;; Residual class/plane name tokens dual-source; helpers recompose.
+;; empty default-class string ⇒ class-native. node-class empty ⇒ use default.
+;; plane: plane-read | plane-live | other.
 ;; Parity: test/murakumo/connect_kotoba_parity_test.clj
+
+;; ── residual class / plane name tokens ───────────────────────────────
+
+(defn class-native [] :string
+  ;; default node class when connect omits :default-class
+  "native")
+
+(defn plane-read [] :string
+  ;; :read plane name — host projects :http presence
+  "read")
+
+(defn plane-live [] :string
+  ;; :live plane name — host projects live-transport intersection
+  "live")
 
 (defn default-class-name [default-class :string] :string
   ;; cljc: (or (:default-class connect) :native) → name string
   (if (string=? default-class "")
-    "native"
+    (class-native)
     default-class))
 
 (defn node-class-name [node-class :string default-class :string] :string
@@ -32,8 +48,8 @@
 (defn serves-plane? [plane :string
                      http? [:option :i64]
                      common? [:option :i64]] :i64
-  (if (string=? plane "read")
+  (if (string=? plane (plane-read))
     (serves-read? http?)
-    (if (string=? plane "live")
+    (if (string=? plane (plane-live))
       (serves-live? common?)
       0)))
