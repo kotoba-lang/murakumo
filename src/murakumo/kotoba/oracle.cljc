@@ -24,7 +24,8 @@
 
 (def ^:private catalog
   "Logical oracle id → classpath resource path under resources/."
-  {:kekkai-gate "murakumo/oracle/kekkai_gate_core.kir.edn"})
+  {:kekkai-gate "murakumo/oracle/kekkai_gate_core.kir.edn"
+   :token "murakumo/oracle/token_core.kir.edn"})
 
 (def ^:private kir-cache
   "Atom map of oracle-id → loaded KIR document."

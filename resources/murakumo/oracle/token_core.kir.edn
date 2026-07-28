@@ -1,0 +1,174 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name version,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "mk1",
+   :param-types []}
+  {:name default-ttl,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 2592000,
+   :param-types []}
+  {:name claim-sub,
+   :params [has-sub sub],
+   :result :string,
+   :effects #{},
+   :body (if (= has-sub 0) "anonymous" sub),
+   :param-types [:i64 :string]}
+  {:name claim-scope,
+   :params [has-scope scope],
+   :result :string,
+   :effects #{},
+   :body (if (= has-scope 0) "all" scope),
+   :param-types [:i64 :string]}
+  {:name claim-exp,
+   :params [now ttl],
+   :result :i64,
+   :effects #{},
+   :body (let [t (if (< ttl 0) 2592000 ttl)] (+ now t)),
+   :param-types [:i64 :i64]}
+  {:name expired?,
+   :params [has-exp exp now],
+   :result :i64,
+   :effects #{},
+   :body (if (= has-exp 0) 1 (if (< now exp) 0 1)),
+   :param-types [:i64 :i64 :i64]}
+  {:name scope-allows?,
+   :params [token-scope required],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? token-scope "all")
+    1
+    (if (string=? token-scope required) 1 0)),
+   :param-types [:string :string]}
+  {:name signing-input,
+   :params [payload-seg],
+   :result :string,
+   :effects #{},
+   :body (string-concat "mk1." payload-seg),
+   :param-types [:string]}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name encode-claims-json,
+   :params [sub scope iat exp],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "{\"sub\":\""
+    (string-concat
+     sub
+     (string-concat
+      "\",\"scope\":\""
+      (string-concat
+       scope
+       (string-concat
+        "\",\"iat\":"
+        (string-concat
+         (i64-str iat)
+         (string-concat
+          ",\"exp\":"
+          (string-concat (i64-str exp) "}")))))))),
+   :param-types [:string :string :i64 :i64]}
+  {:name wire-token,
+   :params [payload-seg sig],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "mk1."
+    (string-concat payload-seg (string-concat "." sig))),
+   :param-types [:string :string]}
+  {:name version-ok?,
+   :params [v],
+   :result :i64,
+   :effects #{},
+   :body (if (string=? v "mk1") 1 0),
+   :param-types [:string]}
+  {:name parts-present?,
+   :params [has-v has-p has-s],
+   :result :i64,
+   :effects #{},
+   :body (if (= has-v 1) (if (= has-p 1) (if (= has-s 1) 1 0) 0) 0),
+   :param-types [:i64 :i64 :i64]}
+  {:name ct-scan,
+   :params [a b i n acc],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< i n)
+    (let
+     [ca
+      (string-substring a i (+ i 1))
+      cb
+      (string-substring b i (+ i 1))
+      ne
+      (if (string=? ca cb) 0 1)
+      nacc
+      (if (= acc 0) ne 1)]
+     (ct-scan a b (+ i 1) n nacc))
+    acc),
+   :param-types [:string :string :i64 :i64 :i64]}
+  {:name constant-time-eq,
+   :params [a b],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [na (string-byte-length a) nb (string-byte-length b)]
+    (if (= na nb) (if (= (ct-scan a b 0 na 0) 0) 1 0) 0)),
+   :param-types [:string :string]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [version
+  default-ttl
+  claim-sub
+  claim-scope
+  claim-exp
+  expired?
+  scope-allows?
+  signing-input
+  digit-char
+  nat-str
+  i64-str
+  encode-claims-json
+  wire-token
+  version-ok?
+  parts-present?
+  constant-time-eq
+  ct-scan],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}
