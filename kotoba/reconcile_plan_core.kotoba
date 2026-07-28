@@ -7,13 +7,18 @@
             default-watch-seconds starts-with?
             flag-is-dry-run? flag-is-apply? flag-is-watch? flag-is-snapshot?
             flag-is-dash? watch-seconds snapshot-value
-            digit-val? digit-of-go digit-of parse-digits-go parse-digits trim-ws]))
+            digit-val? digit-of-go digit-of parse-digits-go parse-digits trim-ws
+            flag-dry-run flag-apply flag-watch flag-watch-eq-prefix
+            flag-snapshot-prefix flag-dash-prefix
+            action-satisfied action-place action-over action-blocked
+            action-needs-build]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.reconcile.plan scalar + pick.
 ;; desired / action-name use [:option …] (no has-replicas / has-cid sentinels).
 ;; has-misplaced was unused in action-name and is dropped from the guest ABI.
 ;; eligible-nodes / observed-hosts / reconcile-app maps / parse-flags fold stay cljc.
 ;; flag/action/missing-manifest pure helpers dual-source for CLI shell.
+;; flag tokens + action name tokens SSoT; classifiers/value extract recompose.
 ;; pick-targets: pure sort-by [load, name] for fixed 2/3 free candidates.
 ;; name order projected by host: name-a-before-b = 1 if name(a) <= name(b).
 ;; For 3-way: name-bits bit0=n0<=n1, bit1=n0<=n2, bit2=n1<=n2 (values 1/2/4).
@@ -35,18 +40,24 @@
 (defn watch-sleep-ms [seconds :i64] :i64
   (* 1000 seconds))
 
+(defn action-satisfied [] :string "satisfied")
+(defn action-place [] :string "place")
+(defn action-over [] :string "over")
+(defn action-blocked [] :string "blocked")
+(defn action-needs-build [] :string "needs-build")
+
 (defn action-name [cid [:option :string] running :i64 desired-n :i64
                    free-candidates :i64] :string
   (let [def-n (deficit desired-n running)]
     (if-some [_ cid]
       (if (< desired-n running)
-        "over"
+        (action-over)
         (if (= def-n 0)
-          "satisfied"
+          (action-satisfied)
           (if (< free-candidates 1)
-            "blocked"
-            "place")))
-      "needs-build")))
+            (action-blocked)
+            (action-place))))
+      (action-needs-build))))
 
 (defn rem64 [a :i64 b :i64] :i64
   (- a (* (quot a b) b)))
@@ -112,10 +123,10 @@
   (blank? manifest))
 
 (defn action-is-satisfied? [action :string] :i64
-  (if (string=? action "satisfied") 1 0))
+  (if (string=? action (action-satisfied)) 1 0))
 
 (defn action-is-place? [action :string] :i64
-  (if (string=? action "place") 1 0))
+  (if (string=? action (action-place)) 1 0))
 
 (defn default-watch-seconds [] :i64 30)
 
@@ -126,20 +137,30 @@
       0
       (if (string=? (string-substring s 0 p) prefix) 1 0))))
 
+;; CLI flag tokens (SSoT for classifiers + value extract)
+
+(defn flag-dry-run [] :string "--dry-run")
+(defn flag-apply [] :string "--apply")
+(defn flag-watch [] :string "--watch")
+(defn flag-watch-eq-prefix [] :string "--watch=")
+(defn flag-snapshot-prefix [] :string "--snapshot=")
+(defn flag-dash-prefix [] :string "--")
+
 (defn flag-is-dry-run? [a :string] :i64
-  (if (string=? a "--dry-run") 1 0))
+  (if (string=? a (flag-dry-run)) 1 0))
 
 (defn flag-is-apply? [a :string] :i64
-  (if (string=? a "--apply") 1 0))
+  (if (string=? a (flag-apply)) 1 0))
 
 (defn flag-is-watch? [a :string] :i64
-  (starts-with? a "--watch"))
+  ;; bare --watch or --watch=N
+  (starts-with? a (flag-watch)))
 
 (defn flag-is-snapshot? [a :string] :i64
-  (starts-with? a "--snapshot="))
+  (starts-with? a (flag-snapshot-prefix)))
 
 (defn flag-is-dash? [a :string] :i64
-  (starts-with? a "--"))
+  (starts-with? a (flag-dash-prefix)))
 
 (defn ws? [c :string] :i64
   (if (string=? c " ")
@@ -195,11 +216,12 @@
 
 (defn watch-seconds [a :string] :i64
   ;; "--watch" → 30; "--watch=5" → 5; bad digits → 30 default
-  (if (string=? a "--watch")
+  (if (string=? a (flag-watch))
     (default-watch-seconds)
-    (if (= (starts-with? a "--watch=") 1)
+    (if (= (starts-with? a (flag-watch-eq-prefix)) 1)
       (let [n (string-byte-length a)
-            v (parse-digits (string-substring a 8 n))]
+            plen (string-byte-length (flag-watch-eq-prefix))
+            v (parse-digits (string-substring a plen n))]
         (if (< v 0)
           (default-watch-seconds)
           v))
@@ -207,7 +229,8 @@
 
 (defn snapshot-value [a :string] :string
   ;; "--snapshot=PATH" → PATH; else ""
-  (if (= (starts-with? a "--snapshot=") 1)
-    (let [n (string-byte-length a)]
-      (string-substring a 11 n))
+  (if (= (starts-with? a (flag-snapshot-prefix)) 1)
+    (let [n (string-byte-length a)
+          plen (string-byte-length (flag-snapshot-prefix))]
+      (string-substring a plen n))
     ""))
