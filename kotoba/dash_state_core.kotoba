@@ -12,7 +12,8 @@
             short-hosted-cid-max-len short-cid-max-len
             hosted-join-sep
             default-dashboard-port default-dashboard-interval
-            default-dashboard-port-str default-dashboard-interval-str]))
+            default-dashboard-port-str default-dashboard-interval-str
+            join-append hosted-append]))
 
 ;; W6 pure-planner oracle — murakumo.dash.state display / probe pure helpers.
 ;; Map/vector reducers (placements, selected-snapshot, render-html, probe-lines
@@ -21,6 +22,8 @@
 ;; probe-line-key/value: H:/L:/P: line shape for probe-lines host fold.
 ;; probe-command shell string dual-source (compose pure fragments; SSH exec host).
 ;; dashboard defaults + hosted-join-sep dual-source for hosted-summary / CLI opts.
+;; join-append / hosted-append: pure fold steps for hosted-summary; host still
+;; walks hosted CID collections after short-hosted-cid projection.
 ;; Parity: test/murakumo/dash_state_kotoba_parity_test.clj
 
 (defn short-hosted-cid-max-len [] :i64 18)
@@ -229,3 +232,15 @@
 (defn default-dashboard-interval-str [] :string
   ;; CLI default when interval arg absent
   "15")
+
+;; ── residual hosted-summary join fold steps ──────────────────────────
+
+(defn join-append [acc :string sep :string next :string] :string
+  ;; empty acc ⇒ first item only (no leading sep)
+  (if (string=? acc "")
+    next
+    (string-concat acc (string-concat sep next))))
+
+(defn hosted-append [acc :string next :string] :string
+  ;; host reduce over short-hosted-cid strings for hosted-summary
+  (join-append acc (hosted-join-sep) next))

@@ -362,7 +362,23 @@
    :result :string,
    :effects #{},
    :body "15",
-   :param-types []}],
+   :param-types []}
+  {:name join-append,
+   :params [acc sep next],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (string=? acc "")
+    next
+    (string-concat acc (string-concat sep next))),
+   :param-types [:string :string :string]}
+  {:name hosted-append,
+   :params [acc next],
+   :result :string,
+   :effects #{},
+   :body (join-append acc (hosted-join-sep) next),
+   :param-types [:string :string]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
@@ -403,7 +419,9 @@
   default-dashboard-port
   default-dashboard-interval
   default-dashboard-port-str
-  default-dashboard-interval-str],
+  default-dashboard-interval-str
+  join-append
+  hosted-append],
  :schemas nil,
  :effects #{},
  :blocks [],
