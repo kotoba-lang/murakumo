@@ -1,0 +1,739 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name ws?,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? c " ")
+    1
+    (if
+     (string=? c "\n")
+     1
+     (if (string=? c "\t") 1 (if (string=? c "\r") 1 0)))),
+   :param-types [:string]}
+  {:name blank?,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     1
+     (if
+      (= (ws? (string-substring s 0 1)) 1)
+      (blank? (string-substring s 1 n))
+      0))),
+   :param-types [:string]}
+  {:name trim,
+   :params [s],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     s
+     (if
+      (= (ws? (string-substring s 0 1)) 1)
+      (trim (string-substring s 1 n))
+      (if
+       (= (ws? (string-substring s (- n 1) n)) 1)
+       (trim (string-substring s 0 (- n 1)))
+       s)))),
+   :param-types [:string]}
+  {:name mesh-status,
+   :params [binary-status launch-status],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat binary-status (string-concat "/" launch-status)),
+   :param-types [:string :string]}
+  {:name node-prefix,
+   :params [name],
+   :result :string,
+   :effects #{},
+   :body (string-concat "[" (string-concat name "] ")),
+   :param-types [:string]}
+  {:name unreachable-skipped-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "unreachable — skipped",
+   :param-types []}
+  {:name provision-result-line,
+   :params [peered],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= peered 1)
+    "provisioned + loaded (peered)"
+    "provisioned + loaded"),
+   :param-types [:i64]}
+  {:name mesh-pass1-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "── pass 1: provision with fixed P2P port + stable PeerId ──",
+   :param-types []}
+  {:name mesh-wait-peerid-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "── waiting for nodes to advertise their PeerId ──",
+   :param-types []}
+  {:name mesh-pass2-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   "── pass 2: re-provision with KOTOBA_BOOTSTRAP_PEERS = the others ──",
+   :param-types []}
+  {:name mesh-forming-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   "── lattice forming; check `murakumo status` (PEERS should climb) ──",
+   :param-types []}
+  {:name deploy-wait-placement-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "  waiting for the lattice to place + run it…",
+   :param-types []}
+  {:name operator-seed-required-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "set MURAKUMO_OPERATOR_SEED first",
+   :param-types []}
+  {:name operator-seed-hex-required-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "set MURAKUMO_OPERATOR_SEED (32-byte hex) first",
+   :param-types []}
+  {:name deploy-usage-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "usage: deploy <app.edn> [publish-node]",
+   :param-types []}
+  {:name reconcile-usage-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   "usage: reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]",
+   :param-types []}
+  {:name dashboard-no-persistence-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   "(no MURAKUMO_OPERATOR_SEED → dashboard live-only, no Datom persistence)",
+   :param-types []}
+  {:name reconcile-no-persistence-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   "(no MURAKUMO_OPERATOR_SEED → watch without Datom persistence)",
+   :param-types []}
+  {:name reconcile-converged-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "  ✓ converged",
+   :param-types []}
+  {:name reconcile-dry-run-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   "\n(dry-run; re-run with --apply to converge, or --watch to keep it converged)",
+   :param-types []}
+  {:name missing-binary-line,
+   :params [path],
+   :result :string,
+   :effects #{},
+   :body (string-concat "missing binary: " path),
+   :param-types [:string]}
+  {:name deploy-start-line,
+   :params [manifest cid],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "deploy "
+    (string-concat
+     manifest
+     (string-concat "  (component " (string-concat cid ")")))),
+   :param-types [:string :string]}
+  {:name pin-success-line,
+   :params [src sha version],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "pinned kotoba + kotoba-server → bin/  (src "
+    (string-concat
+     src
+     (string-concat
+      " @ "
+      (string-concat
+       sha
+       (string-concat ", " (string-concat version ")")))))),
+   :param-types [:string :string :string]}
+  {:name snapshot-error-line,
+   :params [message],
+   :result :string,
+   :effects #{},
+   :body (string-concat "snapshot error: " message),
+   :param-types [:string]}
+  {:name reconcile-persist-error-line,
+   :params [message],
+   :result :string,
+   :effects #{},
+   :body (string-concat "reconcile persist error: " message),
+   :param-types [:string]}
+  {:name online-label,
+   :params [online],
+   :result :string,
+   :effects #{},
+   :body (if (= online 1) "yes" "no"),
+   :param-types [:i64]}
+  {:name ssh-label,
+   :params [ok],
+   :result :string,
+   :effects #{},
+   :body (if (= ok 1) "ok" "no"),
+   :param-types [:i64]}
+  {:name health-label,
+   :params [has-health],
+   :result :string,
+   :effects #{},
+   :body (if (= has-health 1) "ok" "no-resp"),
+   :param-types [:i64]}
+  {:name launch-result-line,
+   :params [name exit-str],
+   :result :string,
+   :effects #{},
+   :body (string-concat name (string-concat " " exit-str)),
+   :param-types [:string :string]}
+  {:name rollout-line,
+   :params [version sha features],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "rolling out kotoba "
+    (string-concat
+     version
+     (string-concat
+      " (sha "
+      (string-concat
+       sha
+       (string-concat ", " (string-concat features ")")))))),
+   :param-types [:string :string :string]}
+  {:name collected-peers-line,
+   :params [count peers-file],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "── collected "
+    (string-concat
+     (i64-str count)
+     (string-concat " PeerIds → " (string-concat peers-file " ──")))),
+   :param-types [:i64 :string]}
+  {:name artifact-node-status,
+   :params [name ok],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat " " (string-concat name (if (= ok 1) "✓" "✗"))),
+   :param-types [:string :i64]}
+  {:name deploy-command-output,
+   :params [out err],
+   :result :string,
+   :effects #{},
+   :body (string-concat (trim out) err),
+   :param-types [:string :string]}
+  {:name alert-line,
+   :params [level node msg],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "[alert/"
+    (string-concat
+     level
+     (string-concat
+      "] "
+      (string-concat node (string-concat " — " msg))))),
+   :param-types [:string :string :string]}
+  {:name dashboard-start-line,
+   :params [port interval],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "murakumo dashboard → http://localhost:"
+    (string-concat
+     (i64-str port)
+     (string-concat
+      "  (snapshot every "
+      (string-concat (i64-str interval) "s → Datom log)")))),
+   :param-types [:i64 :i64]}
+  {:name apply-target-line,
+   :params [app target],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "  applying "
+    (string-concat
+     app
+     (string-concat
+      " → deploy to "
+      (string-concat
+       target
+       " (no cross-node auction; murakumo picks the target directly)")))),
+   :param-types [:string :string]}
+  {:name watch-start-line,
+   :params [seconds],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "── reconcile --watch (every "
+    (string-concat (i64-str seconds) "s) ; Ctrl-C to stop ──")),
+   :param-types [:i64]}
+  {:name deploy-observed-empty-line,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   "  ⚠ not yet observed running on any node (check `murakumo status` / node logs)",
+   :param-types []}
+  {:name deploy-observed-placed-line,
+   :params [where publish-name],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "  ✓ placed + running on: "
+    (string-concat
+     where
+     (string-concat
+      "  (deployed from "
+      (string-concat publish-name ")")))),
+   :param-types [:string :string]}
+  {:name missing-pinned-binaries-line1,
+   :params [version sha],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "fleet pins kotoba "
+    (string-concat
+     version
+     (string-concat
+      " (sha "
+      (string-concat sha ") but ./bin has no binaries.")))),
+   :param-types [:string :string]}
+  {:name missing-pinned-binaries-line2,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   "Build that version and `murakumo pin <its release dir>` before provisioning.",
+   :param-types []}
+  {:name command-error-line,
+   :params [command error],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (if
+     (string=? command "provision")
+     (if (string=? error "missing-operator-seed-hex") 1 0)
+     0)
+    (operator-seed-hex-required-line)
+    (if
+     (if
+      (string=? command "mesh")
+      (if (string=? error "missing-operator-seed") 1 0)
+      0)
+     (operator-seed-required-line)
+     (if
+      (if
+       (string=? command "deploy")
+       (if (string=? error "missing-manifest") 1 0)
+       0)
+      (deploy-usage-line)
+      (if
+       (if
+        (string=? command "deploy")
+        (if (string=? error "missing-operator-seed") 1 0)
+        0)
+       (operator-seed-required-line)
+       (if
+        (if
+         (string=? command "reconcile")
+         (if (string=? error "missing-manifest") 1 0)
+         0)
+        (reconcile-usage-line)
+        (string-concat
+         "unknown "
+         (string-concat
+          command
+          (string-concat " error: " error)))))))),
+   :param-types [:string :string]}
+  {:name spaces,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body (if (< n 1) "" (string-concat " " (spaces (- n 1)))),
+   :param-types [:i64]}
+  {:name pad-right,
+   :params [s pad-n],
+   :result :string,
+   :effects #{},
+   :body (string-concat s (spaces pad-n)),
+   :param-types [:string :i64]}
+  {:name pad-to,
+   :params [s width],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s) pad (- width n)]
+    (pad-right s (if (< pad 0) 0 pad))),
+   :param-types [:string :i64]}
+  {:name field-10,
+   :params [s pad-n],
+   :result :string,
+   :effects #{},
+   :body (pad-right s pad-n),
+   :param-types [:string :i64]}
+  {:name field-16,
+   :params [s pad-n],
+   :result :string,
+   :effects #{},
+   :body (pad-right s pad-n),
+   :param-types [:string :i64]}
+  {:name field-8,
+   :params [s pad-n],
+   :result :string,
+   :effects #{},
+   :body (pad-right s pad-n),
+   :param-types [:string :i64]}
+  {:name field-9,
+   :params [s pad-n],
+   :result :string,
+   :effects #{},
+   :body (pad-right s pad-n),
+   :param-types [:string :i64]}
+  {:name field-12,
+   :params [s pad-n],
+   :result :string,
+   :effects #{},
+   :body (pad-right s pad-n),
+   :param-types [:string :i64]}
+  {:name field-6,
+   :params [s pad-n],
+   :result :string,
+   :effects #{},
+   :body (pad-right s pad-n),
+   :param-types [:string :i64]}
+  {:name nodes-header,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "NODE       TAILSCALE-IP     ONLINE   SSH       MESH",
+   :param-types []}
+  {:name status-header,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "NODE       HEALTH   WASM-EXEC    LINKS  P2P-PORT",
+   :param-types []}
+  {:name status-down-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "down    ",
+   :param-types []}
+  {:name nodes-row,
+   :params [name ip online ssh-ok mesh],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (pad-to name 10)
+    (string-concat
+     " "
+     (string-concat
+      (pad-to ip 16)
+      (string-concat
+       " "
+       (string-concat
+        (pad-to (online-label online) 8)
+        (string-concat
+         " "
+         (string-concat
+          (pad-to (ssh-label ssh-ok) 9)
+          (string-concat " " mesh)))))))),
+   :param-types [:string :string :i64 :i64 :string]}
+  {:name status-down-row,
+   :params [name],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (pad-to name 10)
+    (string-concat " " (status-down-suffix))),
+   :param-types [:string]}
+  {:name status-row,
+   :params [name has-health wasm-exec links-str p2p-port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (pad-to name 10)
+    (string-concat
+     " "
+     (string-concat
+      (pad-to (health-label has-health) 8)
+      (string-concat
+       " "
+       (string-concat
+        (pad-to wasm-exec 12)
+        (string-concat
+         " "
+         (string-concat
+          (pad-to links-str 6)
+          (string-concat " " (i64-str p2p-port))))))))),
+   :param-types [:string :i64 :string :string :i64]}
+  {:name command-help,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   "murakumo — kotoba WASM mesh control plane\n\ncommands:\n  nodes                       fleet reachability + mesh presence\n  pin       [src-dir]         copy a consistent kotoba cli+server into ./bin (own it)\n  provision [node|all]        rsync binaries + install resident LaunchDaemon\n  mesh      [node|all]        form ONE gossipsub lattice (2-pass: peer-id + bootstrap)\n  up/down   [node|all]        start/stop the resident mesh node\n  status    [node|all]        fold /health across the fleet (PEERS = live links)\n  deploy    <app.edn> [node]  compile clj→WASM + distribute + publish to the lattice\n  reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]  declarative desired-state (wadm)\n  cloud     [plan|records|routes|dial|connect <node>|relay <name>|bootstrap]    plan murakumo.cloud identity overlay\n  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log\n  fleet     <datom-log.edn>    fold a kotoba-fleet Datom log into one coordination view\n  infer     probe|plan <model>|provision|up|down|ps|serve|generate  distributed inference (exo-style shard plan)\n  model     plan|setup|status <model> [node|all] [cache-dir]  Hugging Face model provisioning\n  revive    [node|all]        wake offline fleet Macs via a live LAN peer\n\nenv: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR",
+   :param-types []}
+  {:name reconcile-title,
+   :params [fleet ts],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "reconcile "
+    (string-concat fleet (string-concat "  @ " ts))),
+   :param-types [:string :string]}
+  {:name reconcile-col-header,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   "  APP            CID        DESIRED RUNNING ACTION    DETAIL",
+   :param-types []}
+  {:name cid-display,
+   :params [cid present],
+   :result :string,
+   :effects #{},
+   :body (if (= present 0) "—" cid),
+   :param-types [:string :i64]}
+  {:name action-detail,
+   :params [action targets-csv running-csv running-empty reason],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (string=? action "place")
+    (string-concat "→ " targets-csv)
+    (if
+     (string=? action "satisfied")
+     (if (= running-empty 1) "" (string-concat "on " running-csv))
+     reason)),
+   :param-types [:string :string :string :i64 :string]}
+  {:name nat-len,
+   :params [n],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< n 0)
+    (+ 1 (nat-len (- 0 n)))
+    (if (< n 10) 1 (+ 1 (nat-len (quot n 10))))),
+   :param-types [:i64]}
+  {:name field-i64-7,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [s (i64-str n) pad (- 7 (nat-len n))]
+    (pad-right s (if (< pad 0) 0 pad))),
+   :param-types [:i64]}
+  {:name reconcile-app-row,
+   :params [app14 cid10 desired running-n action9],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "  "
+    (string-concat
+     app14
+     (string-concat
+      " "
+      (string-concat
+       cid10
+       (string-concat
+        " "
+        (string-concat
+         (field-i64-7 desired)
+         (string-concat
+          " "
+          (string-concat
+           (field-i64-7 running-n)
+           (string-concat " " action9))))))))),
+   :param-types [:string :string :i64 :i64 :string]}
+  {:name reconcile-app-line,
+   :params [front detail],
+   :result :string,
+   :effects #{},
+   :body (string-concat front (string-concat " " detail)),
+   :param-types [:string :string]}
+  {:name reach-line,
+   :params [reach-csv eligible-csv],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "                            reach: "
+    (string-concat
+     reach-csv
+     (string-concat " → eligible(by transport)=" eligible-csv))),
+   :param-types [:string :string]}
+  {:name drift-line,
+   :params [misplaced-csv],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "                            drift: running on non-eligible node(s): "
+    misplaced-csv),
+   :param-types [:string]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [digit-char
+  nat-str
+  i64-str
+  blank?
+  ws?
+  trim
+  mesh-status
+  node-prefix
+  unreachable-skipped-line
+  provision-result-line
+  mesh-pass1-line
+  mesh-wait-peerid-line
+  mesh-pass2-line
+  mesh-forming-line
+  deploy-wait-placement-line
+  operator-seed-required-line
+  operator-seed-hex-required-line
+  deploy-usage-line
+  reconcile-usage-line
+  dashboard-no-persistence-line
+  reconcile-no-persistence-line
+  reconcile-converged-line
+  reconcile-dry-run-line
+  missing-binary-line
+  deploy-start-line
+  pin-success-line
+  snapshot-error-line
+  reconcile-persist-error-line
+  online-label
+  ssh-label
+  health-label
+  command-error-line
+  launch-result-line
+  rollout-line
+  collected-peers-line
+  artifact-node-status
+  deploy-command-output
+  alert-line
+  dashboard-start-line
+  apply-target-line
+  watch-start-line
+  deploy-observed-empty-line
+  deploy-observed-placed-line
+  missing-pinned-binaries-line1
+  missing-pinned-binaries-line2
+  nodes-header
+  status-header
+  status-down-suffix
+  spaces
+  pad-right
+  pad-to
+  field-10
+  field-16
+  field-8
+  field-9
+  field-12
+  field-6
+  nodes-row
+  status-down-row
+  status-row
+  command-help
+  reconcile-title
+  reconcile-col-header
+  cid-display
+  action-detail
+  nat-len
+  field-i64-7
+  reconcile-app-row
+  reconcile-app-line
+  reach-line
+  drift-line],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

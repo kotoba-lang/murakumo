@@ -1,10 +1,10 @@
 ;; W6 product-shell oracle authority:
-;;   1. precompiled KIR resource is loadable and executes pure helpers
-;;   2. murakumo.kekkai.gate public API (JVM) matches live-compiled kotoba
-;;   3. checked-in KIR resource does not drift from kotoba/kekkai_gate_core.kotoba
+;;   1. precompiled KIR resources are loadable and execute pure helpers
+;;   2. JVM public APIs (gate / token / report) match live-compiled kotoba
+;;   3. checked-in KIR resources do not drift from kotoba/*_core.kotoba
 ;;
 ;; This is the CI gate that keeps dual-source honest: kotoba source is SSoT,
-;; the resource is the product artifact, cljc is the thin shell.
+;; the resource is the product artifact, host ns is the thin shell.
 
 (ns murakumo.kotoba-oracle-authority-test
   (:require [clojure.edn :as edn]
@@ -14,6 +14,7 @@
             [kotoba.kir :as ir]
             [murakumo.kekkai.gate :as gate]
             [murakumo.token :as tok]
+            [murakumo.report :as report]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -29,8 +30,10 @@
 (deftest oracle-catalog-ready
   (is (oracle/ready? :kekkai-gate))
   (is (oracle/ready? :token))
+  (is (oracle/ready? :report-core))
   (is (some #{:kekkai-gate} (oracle/catalog-ids)))
-  (is (some #{:token} (oracle/catalog-ids))))
+  (is (some #{:token} (oracle/catalog-ids)))
+  (is (some #{:report-core} (oracle/catalog-ids))))
 
 (deftest product-shell-gate-uses-oracle-results
   (testing "parse-status delegates to kotoba parse-status-out"
@@ -134,3 +137,68 @@
 (deftest token-precompiled-kir-does-not-drift
   (is (= (token-live-kir) (token-resource-kir))
       "token KIR drift — run: clojure -M:test -m murakumo.kotoba-oracle-gen (or deps -M -m ...)"))
+
+(def ^:private report-source "kotoba/report_core.kotoba")
+(def ^:private report-resource "murakumo/oracle/report_core.kir.edn")
+
+(defn- report-live-kir []
+  (:kir (compiler/compile-source (slurp report-source) :wasm32-kotoba-v1 {})))
+
+(defn- report-resource-kir []
+  (edn/read-string (slurp (io/resource report-resource))))
+
+(deftest product-shell-report-uses-oracle-results
+  (testing "headers + pad via oracle"
+    (is (= "NODE       TAILSCALE-IP     ONLINE   SSH       MESH"
+           (report/nodes-header)))
+    (is (= "NODE       HEALTH   WASM-EXEC    LINKS  P2P-PORT"
+           (report/status-header)))
+    (is (= "asher      100.0.0.1        yes      ok        installed/running"
+           (report/nodes-row {:name "asher" :ip "100.0.0.1" :online? true}
+                             true "installed/running")))
+    (is (= "judah      down    "
+           (report/status-down-row {:name "judah"})))
+    (is (= "asher      ok       ready        3      4001"
+           (report/status-row {:name "asher"}
+                              {:subsystems {:wasm_executor "ready"}}
+                              "3" 4001))))
+  (testing "command-help is pure multi-line oracle string"
+    (is (re-find #"murakumo — kotoba WASM mesh control plane" (report/command-help)))
+    (is (re-find #"reconcile <murakumo.app.edn>" (report/command-help))))
+  (testing "reconcile pure builders via oracle (host joins CSV)"
+    (let [lines (report/reconcile-lines
+                 {:fleet "f1" :ts "T"
+                  :apps [{:app "a1" :cid "bafy1234567890abcd" :desired 2
+                          :running ["n1"] :action :satisfied}]})]
+      (is (= "reconcile f1  @ T" (first lines)))
+      (is (= "  APP            CID        DESIRED RUNNING ACTION    DETAIL"
+             (second lines)))
+      (is (re-find #"a1" (nth lines 2)))
+      (is (re-find #"on n1" (nth lines 2))))))
+
+(deftest report-oracle-call-matches-live-compile
+  (let [live (report-live-kir)]
+    (is (= (ir/execute live 'nodes-header [])
+           (oracle/call :report-core 'nodes-header [])))
+    (is (= (ir/execute live 'status-header [])
+           (oracle/call :report-core 'status-header [])))
+    (is (= (ir/execute live 'spaces [3])
+           (oracle/call :report-core 'spaces [3])))
+    (is (= (ir/execute live 'pad-right ["asher" 5])
+           (oracle/call :report-core 'pad-right ["asher" 5])))
+    (is (= (ir/execute live 'pad-to ["asher" 10])
+           (oracle/call :report-core 'pad-to ["asher" 10])))
+    (is (= (ir/execute live 'command-help [])
+           (oracle/call :report-core 'command-help [])))
+    (is (= (ir/execute live 'reconcile-title ["f" "t"])
+           (oracle/call :report-core 'reconcile-title ["f" "t"])))
+    (is (= (ir/execute live 'reconcile-col-header [])
+           (oracle/call :report-core 'reconcile-col-header [])))
+    (is (= (ir/execute live 'nodes-row ["x" "?" 0 0 "off"])
+           (oracle/call :report-core 'nodes-row ["x" "?" 0 0 "off"])))
+    (is (= (ir/execute live 'status-row ["asher" 0 "?" "-" 0])
+           (oracle/call :report-core 'status-row ["asher" 0 "?" "-" 0])))))
+
+(deftest report-precompiled-kir-does-not-drift
+  (is (= (report-live-kir) (report-resource-kir))
+      "report KIR drift — run: clojure -M:test -m murakumo.kotoba-oracle-gen"))

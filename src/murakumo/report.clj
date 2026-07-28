@@ -1,223 +1,232 @@
 ;; murakumo.report — portable CLI report formatting.
+;;
+;; W6 product-shell authority (ADR-260728-w6-report-oracle-authority):
+;; On the JVM, pure string helpers DELEGATE to the precompiled kotoba oracle
+;; (kotoba/report_core.kotoba → resources/murakumo/oracle/report_core.kir.edn).
+;; Kotoba is SSoT. Host remains: map/keyword projection, CSV joins, and the
+;; reconcile-lines mapcat structure over apps.
 
 (ns murakumo.report
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [murakumo.kotoba.oracle :as oracle]))
+
+(def ^:private oid :report-core)
+
+(defn- ocall
+  "Execute a report_core export on the precompiled KIR oracle."
+  [export args]
+  (oracle/call oid export args))
+
+;; ── headers / pad / table rows ───────────────────────────────────────
 
 (defn nodes-header []
-  (format "%-10s %-16s %-8s %-9s %s" "NODE" "TAILSCALE-IP" "ONLINE" "SSH" "MESH"))
+  (ocall 'nodes-header []))
 
 (defn nodes-row
-  "Format one `murakumo nodes` row."
+  "Format one `murakumo nodes` row (oracle nodes-row + host projection)."
   [node ssh-ok mesh]
-  (format "%-10s %-16s %-8s %-9s %s"
-          (:name node)
-          (or (:ip node) "?")
-          (if (:online? node) "yes" "no")
-          (if ssh-ok "ok" "no")
-          mesh))
+  (ocall 'nodes-row
+         [(str (:name node))
+          (str (or (:ip node) "?"))
+          (long (if (:online? node) 1 0))
+          (long (if ssh-ok 1 0))
+          (str mesh)]))
 
 (defn mesh-status
   "Render installed/running probe outputs into a compact mesh status."
   [binary-status launch-status]
-  (str binary-status "/" launch-status))
+  (ocall 'mesh-status [(str binary-status) (str launch-status)]))
 
 (defn status-header []
-  (format "%-10s %-8s %-12s %-6s %s" "NODE" "HEALTH" "WASM-EXEC" "LINKS" "P2P-PORT"))
+  (ocall 'status-header []))
 
 (defn status-down-row [node]
-  (format "%-10s %-8s" (:name node) "down"))
+  (ocall 'status-down-row [(str (:name node))]))
 
 (defn status-row
   "Format one `murakumo status` row."
   [node health-json links p2p-port]
-  (let [subsystems (:subsystems health-json)]
-    (format "%-10s %-8s %-12s %-6s %d"
-            (:name node)
-            (if health-json "ok" "no-resp")
-            (or (:wasm_executor subsystems) "?")
-            (if health-json links "-")
-            p2p-port)))
+  (let [subsystems (:subsystems health-json)
+        has-health (if health-json 1 0)
+        wasm (or (:wasm_executor subsystems) "?")
+        links-str (if health-json (str links) "-")]
+    (ocall 'status-row
+           [(str (:name node))
+            (long has-health)
+            (str wasm)
+            (str links-str)
+            (long p2p-port)])))
 
 (defn status-row* [{:keys [node health-json links p2p-port]}]
   (status-row node health-json links p2p-port))
 
 (defn deploy-observed-row [where publish-node]
   (if (seq where)
-    (format "  ✓ placed + running on: %s  (deployed from %s)"
-            (str/join ", " where) (:name publish-node))
-    "  ⚠ not yet observed running on any node (check `murakumo status` / node logs)"))
+    (ocall 'deploy-observed-placed-line
+           [(str/join ", " where) (str (:name publish-node))])
+    (ocall 'deploy-observed-empty-line [])))
 
 (defn node-prefix [node]
-  (format "[%s] " (:name node)))
+  (ocall 'node-prefix [(str (:name node))]))
 
 (def unreachable-skipped-line
-  "unreachable — skipped")
+  (ocall 'unreachable-skipped-line []))
 
 (defn provision-result-line [peered?]
-  (str "provisioned + loaded" (when peered? " (peered)")))
+  (ocall 'provision-result-line [(long (if peered? 1 0))]))
 
 (defn launch-result-line
   "Format one launchctl up/down result row."
   [node result]
-  (str (:name node) " " (:exit result)))
+  (ocall 'launch-result-line [(str (:name node)) (str (:exit result))]))
 
 (defn missing-pinned-binaries-lines [build-manifest]
-  [(format "fleet pins kotoba %s (sha %s) but ./bin has no binaries."
-           (:version build-manifest)
-           (:git-sha build-manifest))
-   "Build that version and `murakumo pin <its release dir>` before provisioning."])
+  [(ocall 'missing-pinned-binaries-line1
+          [(str (:version build-manifest)) (str (:git-sha build-manifest))])
+   (ocall 'missing-pinned-binaries-line2 [])])
 
 (defn rollout-line [build-manifest]
-  (format "rolling out kotoba %s (sha %s, %s)"
-          (:version build-manifest)
-          (:git-sha build-manifest)
-          (:features build-manifest)))
+  (ocall 'rollout-line
+         [(str (:version build-manifest))
+          (str (:git-sha build-manifest))
+          (str (:features build-manifest))]))
 
 (defn collected-peers-line [count peers-file]
-  (format "── collected %d PeerIds → %s ──" count peers-file))
+  (ocall 'collected-peers-line [(long count) (str peers-file)]))
 
 (def mesh-pass1-line
-  "── pass 1: provision with fixed P2P port + stable PeerId ──")
+  (ocall 'mesh-pass1-line []))
 
 (def mesh-wait-peerid-line
-  "── waiting for nodes to advertise their PeerId ──")
+  (ocall 'mesh-wait-peerid-line []))
 
 (def mesh-pass2-line
-  "── pass 2: re-provision with KOTOBA_BOOTSTRAP_PEERS = the others ──")
+  (ocall 'mesh-pass2-line []))
 
 (def mesh-forming-line
-  "── lattice forming; check `murakumo status` (PEERS should climb) ──")
+  (ocall 'mesh-forming-line []))
 
 (defn artifact-node-status [node result]
-  (format " %s%s" (:name node) (if (zero? (:exit result)) "✓" "✗")))
+  (ocall 'artifact-node-status
+         [(str (:name node)) (long (if (zero? (:exit result)) 1 0))]))
 
 (defn deploy-start-line [manifest cid]
-  (format "deploy %s  (component %s)" manifest cid))
+  (ocall 'deploy-start-line [(str manifest) (str cid)]))
 
 (defn deploy-command-output [out err]
-  (str (str/trim (str out)) (str err)))
+  (ocall 'deploy-command-output [(str out) (str err)]))
 
 (defn pin-success-line [src sha version]
-  (format "pinned kotoba + kotoba-server → bin/  (src %s @ %s, %s)" src sha version))
+  (ocall 'pin-success-line [(str src) (str sha) (str version)]))
 
 (defn missing-binary-line [path]
-  (str "missing binary: " path))
+  (ocall 'missing-binary-line [(str path)]))
 
 (def deploy-wait-placement-line
-  "  waiting for the lattice to place + run it…")
+  (ocall 'deploy-wait-placement-line []))
 
 (defn alert-line [alert]
-  (format "[alert/%s] %s — %s" (:level alert) (:node alert) (:msg alert)))
+  (ocall 'alert-line
+         [(str (:level alert)) (str (:node alert)) (str (:msg alert))]))
 
 (defn snapshot-error-line [message]
-  (str "snapshot error: " message))
+  (ocall 'snapshot-error-line [(str message)]))
 
 (defn reconcile-persist-error-line [message]
-  (str "reconcile persist error: " message))
+  (ocall 'reconcile-persist-error-line [(str message)]))
 
 (defn dashboard-start-line [port interval]
-  (format "murakumo dashboard → http://localhost:%d  (snapshot every %ds → Datom log)"
-          port interval))
+  (ocall 'dashboard-start-line [(long port) (long interval)]))
 
 (defn apply-target-line [app target]
-  (format "  applying %s → deploy to %s (no cross-node auction; murakumo picks the target directly)"
-          (:app app) target))
+  (ocall 'apply-target-line [(str (:app app)) (str target)]))
 
 (defn watch-start-line [seconds]
-  (format "── reconcile --watch (every %ds) ; Ctrl-C to stop ──" seconds))
+  (ocall 'watch-start-line [(long seconds)]))
 
 (def operator-seed-required-line
-  "set MURAKUMO_OPERATOR_SEED first")
+  (ocall 'operator-seed-required-line []))
 
 (def operator-seed-hex-required-line
-  "set MURAKUMO_OPERATOR_SEED (32-byte hex) first")
+  (ocall 'operator-seed-hex-required-line []))
 
 (def deploy-usage-line
-  "usage: deploy <app.edn> [publish-node]")
+  (ocall 'deploy-usage-line []))
 
 (def reconcile-usage-line
-  "usage: reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]")
+  (ocall 'reconcile-usage-line []))
 
 (defn command-error-line
   "Render a validation error keyword for a command."
   [command error]
-  (case [command error]
-    [:provision :missing-operator-seed-hex] operator-seed-hex-required-line
-    [:mesh :missing-operator-seed] operator-seed-required-line
-    [:deploy :missing-manifest] deploy-usage-line
-    [:deploy :missing-operator-seed] operator-seed-required-line
-    [:reconcile :missing-manifest] reconcile-usage-line
-    (str "unknown " (name command) " error: " (name error))))
+  (ocall 'command-error-line [(name command) (name error)]))
 
 (def dashboard-no-persistence-line
-  "(no MURAKUMO_OPERATOR_SEED → dashboard live-only, no Datom persistence)")
+  (ocall 'dashboard-no-persistence-line []))
 
 (def reconcile-no-persistence-line
-  "(no MURAKUMO_OPERATOR_SEED → watch without Datom persistence)")
+  (ocall 'reconcile-no-persistence-line []))
 
 (def reconcile-converged-line
-  "  ✓ converged")
+  (ocall 'reconcile-converged-line []))
 
 (def reconcile-dry-run-line
-  "\n(dry-run; re-run with --apply to converge, or --watch to keep it converged)")
+  (ocall 'reconcile-dry-run-line []))
+
+;; ── reconcile pure builders + host mapcat ────────────────────────────
+
+(defn- pad-field
+  "Left-align field via oracle pad-right; host supplies remaining pad from
+  Clojure string count (not UTF-8 byte-length) so multi-byte glyphs like
+  em-dash CID placeholder keep %-Ns layout parity."
+  [s width]
+  (let [s (str s)]
+    (ocall 'pad-right [s (long (max 0 (- width (count s))))])))
 
 (defn- fmt-cid [cid]
-  (if cid (subs cid 0 (min 16 (count cid))) "—"))
+  (if cid
+    (ocall 'cid-display [(subs cid 0 (min 16 (count cid))) 1])
+    (ocall 'cid-display ["" 0])))
 
 (defn reconcile-lines
-  "Render a reconcile plan as operator table lines."
+  "Render a reconcile plan as operator table lines.
+   Pure title/col/row/detail/reach/drift from oracle; host mapcats apps
+   and joins CSV for targets/running/reach/misplaced."
   [plan]
-  (let [header [(format "reconcile %s  @ %s" (or (:fleet plan) "fleet") (:ts plan))
-                (format "  %-14s %-10s %-7s %-7s %-9s %s"
-                        "APP" "CID" "DESIRED" "RUNNING" "ACTION" "DETAIL")]]
+  (let [title (ocall 'reconcile-title
+                     [(str (or (:fleet plan) "fleet")) (str (:ts plan))])
+        col (ocall 'reconcile-col-header [])]
     (vec
      (concat
-      header
+      [title col]
       (mapcat
        (fn [app]
-         (let [detail (case (:action app)
-                        :place (str "→ " (str/join "," (:targets app)))
-                        :satisfied (if (seq (:running app))
-                                     (str "on " (str/join "," (:running app)))
-                                     "")
-                        (:reason app ""))
-               base [(format "  %-14s %-10s %-7d %-7d %-9s %s"
-                             (:app app)
-                             (fmt-cid (:cid app))
-                             (:desired app)
-                             (count (:running app))
-                             (name (:action app))
-                             detail)]
+         (let [action (name (:action app))
+               targets-csv (str/join "," (:targets app))
+               running-csv (str/join "," (:running app))
+               running-empty (if (seq (:running app)) 0 1)
+               reason (str (or (:reason app) ""))
+               detail (ocall 'action-detail
+                             [action targets-csv running-csv
+                              (long running-empty) reason])
+               app14 (pad-field (:app app) 14)
+               cid10 (pad-field (fmt-cid (:cid app)) 10)
+               act9 (pad-field action 9)
+               front (ocall 'reconcile-app-row
+                            [app14 cid10
+                             (long (:desired app))
+                             (long (count (:running app)))
+                             act9])
+               base [(ocall 'reconcile-app-line [front detail])]
                reach (when (seq (:reach app))
-                       [(format "  %-14s %-10s reach: %s → eligible(by transport)=%s"
-                                "" ""
-                                (str/join "," (map str (:reach app)))
-                                (str/join "," (:eligible app)))])
+                       [(ocall 'reach-line
+                               [(str/join "," (map str (:reach app)))
+                                (str/join "," (:eligible app))])])
                misplaced (when (seq (:misplaced app))
-                           [(format "  %-14s %-10s drift: running on non-eligible node(s): %s"
-                                    "" "" (str/join "," (:misplaced app)))])]
+                           [(ocall 'drift-line
+                                   [(str/join "," (:misplaced app))])])]
            (concat base reach misplaced)))
        (:apps plan))))))
 
 (defn command-help []
-  (str/join
-   "\n"
-   ["murakumo — kotoba WASM mesh control plane"
-    ""
-    "commands:"
-    "  nodes                       fleet reachability + mesh presence"
-    "  pin       [src-dir]         copy a consistent kotoba cli+server into ./bin (own it)"
-    "  provision [node|all]        rsync binaries + install resident LaunchDaemon"
-    "  mesh      [node|all]        form ONE gossipsub lattice (2-pass: peer-id + bootstrap)"
-    "  up/down   [node|all]        start/stop the resident mesh node"
-    "  status    [node|all]        fold /health across the fleet (PEERS = live links)"
-    "  deploy    <app.edn> [node]  compile clj→WASM + distribute + publish to the lattice"
-    "  reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]  declarative desired-state (wadm)"
-    "  cloud     [plan|records|routes|dial|connect <node>|relay <name>|bootstrap]    plan murakumo.cloud identity overlay"
-    "  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log"
-    "  fleet     <datom-log.edn>    fold a kotoba-fleet Datom log into one coordination view"
-    "  infer     probe|plan <model>|provision|up|down|ps|serve|generate  distributed inference (exo-style shard plan)"
-    "  model     plan|setup|status <model> [node|all] [cache-dir]  Hugging Face model provisioning"
-    "  revive    [node|all]        wake offline fleet Macs via a live LAN peer"
-    ""
-    "env: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR"]))
+  (ocall 'command-help []))
