@@ -1,0 +1,68 @@
+(ns cloud-plan-core
+  (:export [default-driver default-cloud-name default-cloud-domain
+            default-cloud-graph default-auth-key-env overlay-version
+            digit-char nat-str i64-str
+            node-region relay-score overlay-id-input node-id-input
+            quic-endpoint webrtc-endpoint relay-endpoint-url]))
+
+;; W6 pure-planner oracle — murakumo.cloud.plan scalar/string core (low).
+;; graph-cid hashing, choose-relay sort, record maps stay cljc.
+;; node-region: first non-empty of zone, region-label, region, else "global".
+;; Parity: test/murakumo/cloud_plan_kotoba_parity_test.clj
+
+(defn default-driver [] :string "murakumo-overlay")
+(defn default-cloud-name [] :string "murakumo.cloud")
+(defn default-cloud-domain [] :string "murakumo.cloud")
+(defn default-cloud-graph [] :string "murakumo-cloud")
+(defn default-auth-key-env [] :string "MURAKUMO_OVERLAY_AUTH_KEY")
+(defn overlay-version [] :i64 1)
+
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+(defn node-region [zone :string region-label :string region :string] :string
+  (if (string=? zone "")
+    (if (string=? region-label "")
+      (if (string=? region "")
+        "global"
+        region)
+      region-label)
+    zone))
+
+(defn relay-score [node-region :string relay-region :string] :i64
+  (if (string=? node-region relay-region) 0 1))
+
+(defn overlay-id-input [overlay-id :string cloud-name :string] :string
+  ;; preimage for identity/graph-cid
+  (if (string=? overlay-id "")
+    (if (string=? cloud-name "")
+      "murakumo.cloud"
+      cloud-name)
+    overlay-id))
+
+(defn node-id-input [overlay-cid :string node-name :string] :string
+  (string-concat overlay-cid (string-concat ":" node-name)))
+
+(defn quic-endpoint [host :string port :i64] :string
+  (string-concat
+   "quic://"
+   (string-concat host (string-concat ":" (i64-str port)))))
+
+(defn webrtc-endpoint [host :string p2p-port :i64] :string
+  (string-concat
+   "webrtc://"
+   (string-concat host (string-concat ":" (i64-str (+ p2p-port 100))))))
+
+(defn relay-endpoint-url [relay-url :string node-id :string] :string
+  (string-concat relay-url (string-concat "/" node-id)))

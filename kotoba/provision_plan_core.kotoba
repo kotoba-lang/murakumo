@@ -1,0 +1,65 @@
+(ns provision-plan-core
+  (:export [plist-label remote-bin remote-store ssh-rsync-options
+            peer-advertise-wait-ms default-p2p-port
+            digit-char nat-str i64-str
+            operator-seed-missing? resolve-p2p-port multiaddr webrtc-port
+            mesh-binary-status-command remote-store-command]))
+
+;; W6 pure-planner oracle — murakumo.provision.plan string/port core (low).
+;; bootstrap fold, peer-id regex, launch plists stay cljc/host.
+;; Parity: test/murakumo/provision_plan_kotoba_parity_test.clj
+
+(defn plist-label [] :string "com.murakumo.kotoba-mesh")
+(defn remote-bin [] :string "$HOME/.murakumo/bin")
+(defn remote-store [] :string "$HOME/.murakumo/store")
+(defn ssh-rsync-options [] :string "ssh -o BatchMode=yes -o ConnectTimeout=8")
+(defn peer-advertise-wait-ms [] :i64 8000)
+(defn default-p2p-port [] :i64 4001)
+
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+(defn blank? [s :string] :i64
+  (if (string=? s "") 1 0))
+
+(defn operator-seed-missing? [seed :string] :i64
+  ;; cljc: (str/blank? (str operator-seed)) — empty after str
+  (blank? seed))
+
+(defn resolve-p2p-port [has-node :i64 node-port :i64
+                        has-fleet :i64 fleet-port :i64] :i64
+  ;; cljc: (or (:p2p-port node) (:fleet/p2p-port fleet) 4001)
+  (if (= has-node 1)
+    node-port
+    (if (= has-fleet 1)
+      fleet-port
+      4001)))
+
+(defn multiaddr [ip :string port :i64] :string
+  (string-concat
+   "/ip4/"
+   (string-concat
+    ip
+    (string-concat
+     "/udp/"
+     (string-concat (i64-str port) "/quic-v1")))))
+
+(defn webrtc-port [p2p-port :i64] :i64
+  (+ p2p-port 100))
+
+(defn mesh-binary-status-command [] :string
+  "test -x $HOME/.murakumo/bin/kotoba-server && echo installed || echo absent")
+
+(defn remote-store-command [] :string
+  "mkdir -p $HOME/.murakumo/bin $HOME/.murakumo/store")
