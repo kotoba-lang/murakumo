@@ -1,20 +1,23 @@
 (ns reconcile-plan-core
-  (:export [default-replicas desired deficit watch-sleep-ms action-name]))
+  (:export [default-replicas desired deficit watch-sleep-ms action-name
+            better-target? first-of-2 first-of-3
+            pick-targets-2-pack pick-targets-3-first
+            target-pack-first target-pack-second target-pack-count]))
 
-;; W6 pure-planner oracle — murakumo.reconcile.plan scalar decision core.
-;; eligible-nodes / observed-hosts / pick-targets / reconcile-app maps stay cljc.
-;; action-name encodes reconcile-app cond with host-projected counts:
-;;   has-cid 0/1, running, desired, deficit, free-candidates, has-misplaced 0/1
+;; W6 pure-planner oracle — murakumo.reconcile.plan scalar + pick-targets.
+;; eligible-nodes / observed-hosts / reconcile-app maps stay cljc.
+;; pick-targets: pure sort-by [load, name] for fixed 2/3 free candidates.
+;; name order projected by host: name-a-before-b = 1 if name(a) <= name(b).
+;; For 3-way: name-bits bit0=n0<=n1, bit1=n0<=n2, bit2=n1<=n2 (values 1/2/4).
+;; Pack: first | second*256 | count*65536 (indices 0..2, count 0..2).
 ;; Parity: test/murakumo/reconcile_plan_kotoba_parity_test.clj
 
 (defn default-replicas [] :i64 1)
 
 (defn desired [has-replicas :i64 replicas :i64] :i64
-  ;; cljc: (or replicas 1)
   (if (= has-replicas 0) 1 replicas))
 
 (defn deficit [desired-n :i64 running :i64] :i64
-  ;; cljc: (max 0 (- desired (count running)))
   (let [d (- desired-n running)]
     (if (< d 0) 0 d)))
 
@@ -23,9 +26,6 @@
 
 (defn action-name [has-cid :i64 running :i64 desired-n :i64
                    free-candidates :i64 has-misplaced :i64] :string
-  ;; Mirrors reconcile-app cond (misplaced only matters when deficit=0 branch).
-  ;; has-misplaced kept for future; current cljc: zero deficit + empty misplaced
-  ;; → satisfied; zero deficit + misplaced → still :satisfied (:else).
   (let [def-n (deficit desired-n running)]
     (if (= has-cid 0)
       "needs-build"
@@ -36,3 +36,59 @@
           (if (< free-candidates 1)
             "blocked"
             "place"))))))
+
+(defn rem64 [a :i64 b :i64] :i64
+  (- a (* (quot a b) b)))
+
+(defn bit? [flags :i64 mask :i64] :i64
+  (if (= 0 (rem64 (quot flags mask) 2))
+    0
+    1))
+
+(defn better-target? [load-a :i64 load-b :i64 name-a-before-b :i64] :i64
+  ;; cljc sort-by (juxt load identity): lower load first; ties by name ascending
+  ;; name-a-before-b=1 means name(a) <= name(b) so a wins ties
+  (if (< load-a load-b)
+    1
+    (if (< load-b load-a)
+      0
+      name-a-before-b)))
+
+(defn first-of-2 [load0 :i64 load1 :i64 name0-before-1 :i64] :i64
+  (if (= (better-target? load0 load1 name0-before-1) 1) 0 1))
+
+(defn first-of-3 [load0 :i64 load1 :i64 load2 :i64 name-bits :i64] :i64
+  (let [n01 (bit? name-bits 1)
+        n02 (bit? name-bits 2)
+        n12 (bit? name-bits 4)
+        w01 (first-of-2 load0 load1 n01)]
+    (if (= w01 0)
+      (if (= (better-target? load0 load2 n02) 1) 0 2)
+      (if (= (better-target? load1 load2 n12) 1) 1 2))))
+
+(defn pack-targets [first :i64 second :i64 count :i64] :i64
+  (+ first (+ (* second 256) (* count 65536))))
+
+(defn target-pack-first [pack :i64] :i64
+  (rem64 pack 256))
+
+(defn target-pack-second [pack :i64] :i64
+  (rem64 (quot pack 256) 256))
+
+(defn target-pack-count [pack :i64] :i64
+  (quot pack 65536))
+
+(defn pick-targets-2-pack [load0 :i64 load1 :i64 name0-before-1 :i64 n :i64] :i64
+  ;; take min(n,2) from two candidates sorted by load then name
+  (if (< n 1)
+    (pack-targets 0 0 0)
+    (let [f (first-of-2 load0 load1 name0-before-1)
+          s (if (= f 0) 1 0)]
+      (if (= n 1)
+        (pack-targets f 0 1)
+        (pack-targets f s 2)))))
+
+(defn pick-targets-3-first [load0 :i64 load1 :i64 load2 :i64 name-bits :i64] :i64
+  ;; first target among 3 free candidates (n>=1). For n>1 host may re-call
+  ;; on remaining pair via pick-targets-2-pack.
+  (first-of-3 load0 load1 load2 name-bits))
