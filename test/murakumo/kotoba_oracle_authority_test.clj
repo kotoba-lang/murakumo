@@ -22,6 +22,9 @@
             [murakumo.infer.engine :as eng]
             [murakumo.secret :as secret]
             [murakumo.overlay.crypto :as crypto]
+            [murakumo.tunnel :as tunnel]
+            [murakumo.fleet.inventory :as finv]
+            [murakumo.config :as config]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -519,3 +522,92 @@
     (is (>= (count arts) 32))
     (is (every? #(re-find #"_core\.kotoba$" (get % "source")) arts))
     (is (every? #(re-find #"resources/murakumo/oracle/.*\.kir\.edn$" (get % "out")) arts))))
+
+(deftest product-shell-tunnel-uses-oracle-results
+  (testing "defaults + wrap-cmd via oracle"
+    (is (= 8 tunnel/default-connect-timeout-s))
+    (is (= 30 tunnel/default-control-persist-s))
+    (is (= "__murakumo_rc=" tunnel/rc-marker))
+    (is (= "( true\n); __mrc=$?; echo \"__murakumo_rc=$__mrc\""
+           (tunnel/wrap-cmd "true"))))
+  (testing "conn-opts + scp-dest + forwards"
+    (is (= ["-o" "BatchMode=yes"
+            "-o" "ConnectTimeout=8"
+            "-o" "StrictHostKeyChecking=accept-new"]
+           (tunnel/conn-opts {})))
+    (let [o (tunnel/conn-opts {:control-path "/tmp/cm" :connect-timeout-s 5})]
+      (is (some #{"ControlPath=/tmp/cm"} o))
+      (is (some #{"ConnectTimeout=5"} o)))
+    (is (= "h:/dest" (last (tunnel/scp-argv "h" "local" "/dest"))))
+    (is (re-find #"pgrep -f '8080:localhost:80 host'"
+                 (tunnel/ensure-forward-command 8080 80 "host")))
+    (is (re-find #"curl -s -m 5 http://x 2>/dev/null"
+                 (tunnel/remote-curl-command "http://x"))))
+  (testing "parse-rc marker + digits via oracle"
+    (let [[clean rc] (tunnel/parse-rc "hello\n__murakumo_rc=7\n")]
+      (is (= "hello" clean))
+      (is (= 7 rc)))
+    (let [[clean rc] (tunnel/parse-rc "no marker\n")]
+      (is (= "no marker" clean))
+      (is (nil? rc)))))
+
+(deftest product-shell-fleet-inventory-uses-oracle-results
+  (let [fleet {:fleet/port 9000
+               :nodes [{:name "a" :port 1} {:name "b"} {:name "c" :port 3}]}]
+    (testing "resolve-port + health-url"
+      (is (= 1 (finv/node-port fleet {:port 1})))
+      (is (= 9000 (finv/node-port fleet {})))
+      (is (= 8077 (finv/node-port {} {})))
+      (is (= "http://localhost:1/health" (finv/node-health-url fleet {:port 1}))))
+    (testing "select via selector predicates"
+      (is (= 3 (count (finv/select fleet nil))))
+      (is (= 3 (count (finv/select fleet "all"))))
+      (is (= ["a" "c"] (mapv :name (finv/select fleet "a,c")))))
+    (testing "offline line detection"
+      (let [m (finv/parse-tailscale-status
+               "100.1.1.1 a linux - \n100.2.2.2 b macos offline\n")]
+        (is (true? (get-in m ["a" :online?])))
+        (is (false? (get-in m ["b" :online?])))))))
+
+(deftest product-shell-config-uses-oracle-results
+  (testing "default paths"
+    (is (= "fleet.edn" config/default-fleet-path))
+    (is (= "connect.edn" config/default-connect-path))
+    (is (= "cloud.edn" config/default-cloud-path)))
+  (testing "kotoba-dir + pure path builders"
+    (is (= "/h/github/com-junkawasaki/orgs/com-junkawasaki/kotoba"
+           (config/default-kotoba-dir "/h")))
+    (is (= "/override"
+           (config/kotoba-dir {"MURAKUMO_KOTOBA_DIR" "/override" "HOME" "/h"})))
+    (is (= "/h/github/com-junkawasaki/orgs/com-junkawasaki/kotoba"
+           (config/kotoba-dir {"HOME" "/h"})))
+    (is (= "/u/bin" (config/pinned-bin-dir "/u")))
+    (is (= "/k/target/aarch64-apple-darwin/release" (config/release-bin-dir "/k")))
+    (is (= "/u/bin" (config/resolve-local-bin {} "/u" "/k" true)))
+    (is (= "/custom" (config/resolve-local-bin {"MURAKUMO_BIN" "/custom"} "/u" "/k" false)))
+    (is (= "kotoba" (config/kotoba-bin "/u" false)))
+    (is (= "/u/bin/kotoba" (config/kotoba-bin "/u" true)))
+    (is (= "/b/kotoba-server" (config/kotoba-server-bin "/b")))
+    (is (= ".murakumo-peers.edn" (config/peers-path "/u")))
+    (is (= "deploy/com.murakumo.kotoba-mesh.plist.tmpl"
+           (config/launchd-template-path "/u")))))
+
+(deftest tunnel-fleet-config-oracle-call-matches-live
+  (let [t-live (:kir (compiler/compile-source (slurp "kotoba/tunnel_core.kotoba")
+                                              :wasm32-kotoba-v1 {}))
+        f-live (:kir (compiler/compile-source (slurp "kotoba/fleet_inventory_core.kotoba")
+                                              :wasm32-kotoba-v1 {}))
+        c-live (:kir (compiler/compile-source (slurp "kotoba/config_core.kotoba")
+                                              :wasm32-kotoba-v1 {}))]
+    (is (= (ir/execute t-live 'wrap-cmd ["x"])
+           (oracle/call :tunnel 'wrap-cmd ["x"])))
+    (is (= (ir/execute t-live 'parse-digits ["42"])
+           (oracle/call :tunnel 'parse-digits ["42"])))
+    (is (= (ir/execute f-live 'resolve-port [0 0 0 0])
+           (oracle/call :fleet-inventory 'resolve-port [0 0 0 0])))
+    (is (= (ir/execute f-live 'selector-is-all? [""])
+           (oracle/call :fleet-inventory 'selector-is-all? [""])))
+    (is (= (ir/execute c-live 'default-fleet-path [])
+           (oracle/call :config 'default-fleet-path [])))
+    (is (= (ir/execute c-live 'pinned-bin-dir ["/u"])
+           (oracle/call :config 'pinned-bin-dir ["/u"])))))

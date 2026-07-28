@@ -9,33 +9,100 @@
 ;;      corrupts every fleet decision if it is not fixed at this layer
 ;;   3. connection multiplexing — optional ControlMaster reuse, which removes
 ;;      the TCP+auth handshake from every command after the first
+;;
+;; W6 product-shell authority: pure string helpers DELEGATE to precompiled
+;; kotoba/tunnel_core.kotoba KIR on JVM. argv vector assembly stays host.
 
 (ns murakumo.tunnel
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def default-connect-timeout-s 8)
-(def default-control-persist-s 30)
+(def ^:private oid :tunnel)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
+
+;; ── host-mirror pure helpers (cljs fallback) ─────────────────────────
+
+(def ^:private mirror-default-connect-timeout-s 8)
+(def ^:private mirror-default-control-persist-s 30)
+(def ^:private mirror-rc-marker "__murakumo_rc=")
+
+(defn- mirror-wrap-cmd [cmd]
+  (str "( " cmd "\n); __mrc=$?; echo \"" mirror-rc-marker "$__mrc\""))
+
+(defn- mirror-connect-timeout-opt [seconds]
+  (str "ConnectTimeout=" seconds))
+
+(defn- mirror-control-path-opt [path]
+  (str "ControlPath=" path))
+
+(defn- mirror-control-persist-opt [seconds]
+  (str "ControlPersist=" seconds "s"))
+
+(defn- mirror-scp-dest [host dest]
+  (str host ":" dest))
+
+(defn- mirror-ensure-forward-command [local-port remote-port host]
+  (str "pgrep -f '" local-port ":localhost:" remote-port " " host "' >/dev/null 2>&1"
+       " || ssh -o BatchMode=yes -fN -L " local-port ":localhost:" remote-port " " host))
+
+(defn- mirror-replace-forward-command [local-port remote-port host]
+  (str "pkill -f '" local-port ":localhost' 2>/dev/null; sleep 0.3; "
+       "ssh -o BatchMode=yes -fN -L " local-port ":localhost:" remote-port " " host))
+
+(defn- mirror-remote-curl-command [url]
+  (str "curl -s -m 5 " url " 2>/dev/null"))
+
+;; ── product defaults + pure string helpers (kotoba SSoT on JVM) ──────
+
+(def default-connect-timeout-s
+  #?(:clj (long (o 'default-connect-timeout-s []))
+     :cljs mirror-default-connect-timeout-s))
+
+(def default-control-persist-s
+  #?(:clj (long (o 'default-control-persist-s []))
+     :cljs mirror-default-control-persist-s))
+
+(def rc-marker
+  #?(:clj (o 'rc-marker [])
+     :cljs mirror-rc-marker))
 
 (def ssh-opts
-  ["-o" "BatchMode=yes"
-   "-o" (str "ConnectTimeout=" default-connect-timeout-s)
-   "-o" "StrictHostKeyChecking=accept-new"])
+  #?(:clj ["-o" (o 'batch-mode-opt [])
+           "-o" (o 'connect-timeout-opt [(long default-connect-timeout-s)])
+           "-o" (o 'strict-host-key-opt [])]
+     :cljs ["-o" "BatchMode=yes"
+            "-o" (str "ConnectTimeout=" default-connect-timeout-s)
+            "-o" "StrictHostKeyChecking=accept-new"]))
 
 (defn conn-opts
   "SSH -o flags for a connection. `:control-path` turns on multiplexing: the
-   first connection to a host becomes the master, later ones reuse its socket."
+   first connection to a host becomes the master, later ones reuse its socket.
+   JVM: pure -o value strings via oracle."
   [{:keys [connect-timeout-s control-path control-persist-s]}]
-  (vec (concat ["-o" "BatchMode=yes"
-                "-o" (str "ConnectTimeout=" (or connect-timeout-s default-connect-timeout-s))
-                "-o" "StrictHostKeyChecking=accept-new"]
-               (when control-path
-                 ["-o" "ControlMaster=auto"
-                  "-o" (str "ControlPath=" control-path)
-                  "-o" (str "ControlPersist=" (or control-persist-s default-control-persist-s) "s")]))))
+  #?(:clj
+     (let [cto (long (or connect-timeout-s default-connect-timeout-s))
+           cps (long (or control-persist-s default-control-persist-s))]
+       (vec (concat ["-o" (o 'batch-mode-opt [])
+                     "-o" (o 'connect-timeout-opt [cto])
+                     "-o" (o 'strict-host-key-opt [])]
+                    (when control-path
+                      ["-o" (o 'control-master-opt [])
+                       "-o" (o 'control-path-opt [(str control-path)])
+                       "-o" (o 'control-persist-opt [cps])]))))
+     :cljs
+     (vec (concat ["-o" "BatchMode=yes"
+                   "-o" (str "ConnectTimeout=" (or connect-timeout-s default-connect-timeout-s))
+                   "-o" "StrictHostKeyChecking=accept-new"]
+                  (when control-path
+                    ["-o" "ControlMaster=auto"
+                     "-o" (str "ControlPath=" control-path)
+                     "-o" (str "ControlPersist="
+                               (or control-persist-s default-control-persist-s) "s")])))))
 
 ;; --- in-band exit status ----------------------------------------------------
-
-(def rc-marker "__murakumo_rc=")
 
 (defn wrap-cmd
   "Wrap a remote command so it reports its OWN exit status in-band.
@@ -43,32 +110,36 @@
    MEASURED 2026-07-25 (ADR-2607256000): Tailscale SSH on the macOS fleet nodes
    does NOT propagate the remote exit status — `ssh asher 'exit 7'` and
    `ssh asher false` both return 0, while the Linux node (gad) correctly returns
-   7 and 1. Every fleet decision made on `(:exit (ssh/sh …))` — provision
-   success, launchctl load, `rm -rf` in the model GC, engine probes — therefore
+   7 and 1. Every fleet decision made on `(:exit (ssh/sh …))` therefore
    reads as SUCCESS on 10 of the 11 reachable nodes, whatever actually happened.
 
-   The command runs in a subshell (so a bare `exit N` inside it does not kill
-   the reporting shell) and the true status is echoed as a sentinel line that
-   `parse-rc` extracts and strips."
+   JVM: kotoba `wrap-cmd`."
   [cmd]
-  (str "( " cmd "\n); __mrc=$?; echo \"" rc-marker "$__mrc\""))
+  #?(:clj (o 'wrap-cmd [(str cmd)])
+     :cljs (mirror-wrap-cmd cmd)))
 
 (defn parse-rc
   "Split captured stdout into [clean-stdout rc-or-nil]. rc is nil when the
    sentinel never arrived (connection failure, kill, non-shell remote), in which
    case the caller falls back to ssh's own exit code — which IS trustworthy for
-   ssh-level failures (255) even where the remote status is not."
+   ssh-level failures (255) even where the remote status is not.
+
+   JVM: marker classification + digit parse via oracle; line split stays host."
   [out]
   (let [lines (str/split-lines (str out))
-        marker? (fn [l] (str/starts-with? (str/trim l) rc-marker))
+        marker? (fn [l]
+                  #?(:clj (= 1 (o 'marker-prefix? [(str/trim (str l))]))
+                     :cljs (str/starts-with? (str/trim l) rc-marker)))
         rc-line (last (filter marker? lines))
-        digits (when rc-line (str/replace (str/trim rc-line) rc-marker ""))
-        rc #?(:clj (when (re-matches #"\d+" (str digits)) (Long/parseLong digits))
-              :cljs (when digits
-                      (let [n (js/parseInt digits 10)]
+        digits (when rc-line
+                 #?(:clj (o 'strip-marker-digits [(str/trim rc-line)])
+                    :cljs (str/replace (str/trim rc-line) rc-marker "")))
+        rc (when digits
+             #?(:clj (let [n (long (o 'parse-digits [(str digits)]))]
+                       (when-not (neg? n) n))
+                :cljs (let [n (js/parseInt digits 10)]
                         (when-not (js/isNaN n) n))))]
     [(str/trim (str/join "\n" (remove marker? lines))) rc]))
-
 ;; --- argv shapes ------------------------------------------------------------
 
 (defn ssh-argv
@@ -84,33 +155,44 @@
 (defn scp-argv
   "argv for copying a local file to host:dest. scp runs no remote shell, so it
    is NOT wrapped — scp's own exit status is the client's, which this fleet does
-   propagate correctly."
+   propagate correctly.
+   JVM: dest string via kotoba `scp-dest`."
   ([host local dest] (scp-argv host local dest nil))
   ([host local dest opts]
-   (vec (concat ["scp"] (conn-opts opts) [local (str host ":" dest)]))))
+   (vec (concat ["scp"] (conn-opts opts)
+                [local #?(:clj (o 'scp-dest [(str host) (str dest)])
+                          :cljs (mirror-scp-dest host dest))]))))
 
 (defn close-master-argv
   "argv that shuts down a multiplexed connection's master socket. Run this when
-   a batch finishes instead of leaving masters to expire on ControlPersist."
+   a batch finishes instead of leaving masters to expire on ControlPersist.
+   JVM: ControlPath= via oracle."
   [host control-path]
-  ["ssh" "-o" (str "ControlPath=" control-path) "-O" "exit" host])
+  #?(:clj ["ssh" "-o" (o 'close-master-control-opt [(str control-path)]) "-O" "exit" host]
+     :cljs ["ssh" "-o" (str "ControlPath=" control-path) "-O" "exit" host]))
 
 (defn ensure-forward-command
-  "Shell command that starts an SSH local forward only when an equivalent one is absent."
+  "Shell command that starts an SSH local forward only when an equivalent one is absent.
+   JVM: kotoba `ensure-forward-command`."
   [local-port remote-port host]
-  (str "pgrep -f '" local-port ":localhost:" remote-port " " host "' >/dev/null 2>&1"
-       " || ssh -o BatchMode=yes -fN -L " local-port ":localhost:" remote-port " " host))
+  #?(:clj (o 'ensure-forward-command
+             [(long local-port) (long remote-port) (str host)])
+     :cljs (mirror-ensure-forward-command local-port remote-port host)))
 
 (defn replace-forward-command
-  "Shell command that kills any forward on local-port, then starts a fresh one."
+  "Shell command that kills any forward on local-port, then starts a fresh one.
+   JVM: kotoba `replace-forward-command`."
   [local-port remote-port host]
-  (str "pkill -f '" local-port ":localhost' 2>/dev/null; sleep 0.3; "
-       "ssh -o BatchMode=yes -fN -L " local-port ":localhost:" remote-port " " host))
+  #?(:clj (o 'replace-forward-command
+             [(long local-port) (long remote-port) (str host)])
+     :cljs (mirror-replace-forward-command local-port remote-port host)))
 
 (defn remote-curl-command
-  "Remote shell command for a bounded curl call from a node."
+  "Remote shell command for a bounded curl call from a node.
+   JVM: kotoba `remote-curl-command`."
   [url]
-  (str "curl -s -m 5 " url " 2>/dev/null"))
+  #?(:clj (o 'remote-curl-command [(str url)])
+     :cljs (mirror-remote-curl-command url)))
 
 ;; --- result shapes ----------------------------------------------------------
 
