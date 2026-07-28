@@ -8,11 +8,17 @@
    :body 1,
    :param-types []}
   {:name desired,
-   :params [has-replicas replicas],
+   :params [replicas],
    :result :i64,
    :effects #{},
-   :body (if (= has-replicas 0) 1 replicas),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [binding-some__1 replicas]
+    (if
+     (option-some?-of [:option :i64] binding-some__1)
+     (let [r (option-value-of [:option :i64] binding-some__1 0)] r)
+     1)),
+   :param-types [[:option :i64]]}
   {:name deficit,
    :params [desired-n running],
    :result :i64,
@@ -26,23 +32,27 @@
    :body (* 1000 seconds),
    :param-types [:i64]}
   {:name action-name,
-   :params [has-cid running desired-n free-candidates has-misplaced],
+   :params [cid running desired-n free-candidates],
    :result :string,
    :effects #{},
    :body
    (let
     [def-n (deficit desired-n running)]
-    (if
-     (= has-cid 0)
-     "needs-build"
+    (let
+     [binding-some__2 cid]
      (if
-      (< desired-n running)
-      "over"
-      (if
-       (= def-n 0)
-       "satisfied"
-       (if (< free-candidates 1) "blocked" "place"))))),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+      (option-some?-of [:option :string] binding-some__2)
+      (let
+       [_ (option-value-of [:option :string] binding-some__2 "")]
+       (if
+        (< desired-n running)
+        "over"
+        (if
+         (= def-n 0)
+         "satisfied"
+         (if (< free-candidates 1) "blocked" "place"))))
+      "needs-build"))),
+   :param-types [[:option :string] :i64 :i64 :i64]}
   {:name rem64,
    :params [a b],
    :result :i64,

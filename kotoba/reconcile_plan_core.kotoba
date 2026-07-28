@@ -4,7 +4,9 @@
             pick-targets-2-pack pick-targets-3-first
             target-pack-first target-pack-second target-pack-count]))
 
-;; W6 pure-planner oracle — murakumo.reconcile.plan scalar + pick-targets.
+;; Product Value ABI v1 pure oracle — murakumo.reconcile.plan scalar + pick.
+;; desired / action-name use [:option …] (no has-replicas / has-cid sentinels).
+;; has-misplaced was unused in action-name and is dropped from the guest ABI.
 ;; eligible-nodes / observed-hosts / reconcile-app maps stay cljc.
 ;; pick-targets: pure sort-by [load, name] for fixed 2/3 free candidates.
 ;; name order projected by host: name-a-before-b = 1 if name(a) <= name(b).
@@ -14,8 +16,11 @@
 
 (defn default-replicas [] :i64 1)
 
-(defn desired [has-replicas :i64 replicas :i64] :i64
-  (if (= has-replicas 0) 1 replicas))
+(defn desired [replicas [:option :i64]] :i64
+  ;; cljc: (or replicas 1)
+  (if-some [r replicas]
+    r
+    1))
 
 (defn deficit [desired-n :i64 running :i64] :i64
   (let [d (- desired-n running)]
@@ -24,18 +29,18 @@
 (defn watch-sleep-ms [seconds :i64] :i64
   (* 1000 seconds))
 
-(defn action-name [has-cid :i64 running :i64 desired-n :i64
-                   free-candidates :i64 has-misplaced :i64] :string
+(defn action-name [cid [:option :string] running :i64 desired-n :i64
+                   free-candidates :i64] :string
   (let [def-n (deficit desired-n running)]
-    (if (= has-cid 0)
-      "needs-build"
+    (if-some [_ cid]
       (if (< desired-n running)
         "over"
         (if (= def-n 0)
           "satisfied"
           (if (< free-candidates 1)
             "blocked"
-            "place"))))))
+            "place")))
+      "needs-build")))
 
 (defn rem64 [a :i64 b :i64] :i64
   (- a (* (quot a b) b)))

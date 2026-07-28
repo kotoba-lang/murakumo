@@ -56,12 +56,34 @@
    :body (if (string=? alg (alg-name)) 1 0),
    :param-types [:string]}
   {:name sealed-fields-present?,
-   :params [has-alg has-nonce has-ct],
+   :params [alg nonce ct],
    :result :i64,
    :effects #{},
    :body
-   (if (= has-alg 0) 0 (if (= has-nonce 0) 0 (if (= has-ct 0) 0 1))),
-   :param-types [:i64 :i64 :i64]}],
+   (let
+    [binding-some__1 alg]
+    (if
+     (option-some?-of [:option :string] binding-some__1)
+     (let
+      [_ (option-value-of [:option :string] binding-some__1 "")]
+      (let
+       [binding-some__2 nonce]
+       (if
+        (option-some?-of [:option :string] binding-some__2)
+        (let
+         [_ (option-value-of [:option :string] binding-some__2 "")]
+         (let
+          [binding-some__3 ct]
+          (if
+           (option-some?-of [:option :string] binding-some__3)
+           (let
+            [_ (option-value-of [:option :string] binding-some__3 "")]
+            1)
+           0)))
+        0)))
+     0)),
+   :param-types
+   [[:option :string] [:option :string] [:option :string]]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports

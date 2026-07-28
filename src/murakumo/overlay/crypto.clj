@@ -39,13 +39,21 @@
   (= 1 (o 'sealed-alg-ok?
           [(if (keyword? alg) (name alg) (str alg))])))
 
+(defn- option-field
+  "Product Value ABI optional sealed field: keyword → name string."
+  [v]
+  (oracle/option-string
+   (when (some? v)
+     (if (keyword? v) (name v) (str v)))))
+
 (defn sealed-fields-present?
-  "True when :alg :nonce :ciphertext are all present."
+  "True when :alg :nonce :ciphertext are all present.
+   JVM: kotoba `sealed-fields-present?` with Product Value ABI optional strings."
   [sealed]
   (= 1 (o 'sealed-fields-present?
-          [(long (if (some? (get sealed field-alg)) 1 0))
-           (long (if (some? (get sealed field-nonce)) 1 0))
-           (long (if (some? (get sealed field-ciphertext)) 1 0))])))
+          [(option-field (get sealed field-alg))
+           (option-field (get sealed field-nonce))
+           (option-field (get sealed field-ciphertext))])))
 
 (defn sealed-map-ok?
   "Live open gate: fields present + alg ok."

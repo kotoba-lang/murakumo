@@ -86,17 +86,24 @@
         (is (= (str/replace s "=" "")
                (get actual (str "p_" i))))))))
 
+(defn- opt-str-form [s]
+  (if (nil? s)
+    "(option-none-of [:option :string])"
+    (str "(option-some-of [:option :string] " (kotoba-literal s) ")")))
+
 (deftest sealed-shape-gates
   (let [alg-ok (compile-i64-cases
                 {"ok" "(sealed-alg-ok? \"aes-256-gcm\")"
                  "bad" "(sealed-alg-ok? \"aes-128-gcm\")"
                  "empty" "(sealed-alg-ok? \"\")"})
+        some-s (opt-str-form "x")
+        none-s (opt-str-form nil)
         fields (compile-i64-cases
-                {"full" "(sealed-fields-present? 1 1 1)"
-                 "no-alg" "(sealed-fields-present? 0 1 1)"
-                 "no-n" "(sealed-fields-present? 1 0 1)"
-                 "no-ct" "(sealed-fields-present? 1 1 0)"
-                 "none" "(sealed-fields-present? 0 0 0)"})
+                {"full" (str "(sealed-fields-present? " some-s " " some-s " " some-s ")")
+                 "no-alg" (str "(sealed-fields-present? " none-s " " some-s " " some-s ")")
+                 "no-n" (str "(sealed-fields-present? " some-s " " none-s " " some-s ")")
+                 "no-ct" (str "(sealed-fields-present? " some-s " " some-s " " none-s ")")
+                 "none" (str "(sealed-fields-present? " none-s " " none-s " " none-s ")")})
         sealed (crypto/seal "k" "p")]
     (is (= 1 (get alg-ok "ok")))
     (is (= 0 (get alg-ok "bad")))
@@ -106,6 +113,7 @@
     (is (= 0 (get fields "no-n")))
     (is (= 0 (get fields "no-ct")))
     (is (= 0 (get fields "none")))
-    (is (= 1 (get alg-ok "ok")))
+    (is (crypto/sealed-fields-present? sealed))
+    (is (not (crypto/sealed-fields-present? (dissoc sealed :alg))))
     (is (= (name (:alg sealed)) "aes-256-gcm"))
     (is (every? #(contains? sealed %) [:alg :nonce :ciphertext]))))
