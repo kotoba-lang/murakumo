@@ -1,0 +1,45 @@
+(ns task-plan-core
+  (:export [default-max-slots default-max-attempts default-timeout-ms
+            slots failed? can-retry?]))
+
+;; W6 pure-planner oracle — murakumo.task.plan integer core.
+;; Full admit/assign/prepare stay cljc (vectors, maps, float load ratios).
+;; Sentinel -1 = absent optional field (nil in cljc).
+;; failed?: exit-present 0/1, exit-code, timeout 0/1, has-error 0/1 → 0/1.
+;; Parity: test/murakumo/task_plan_kotoba_parity_test.clj
+
+(defn default-max-slots [] :i64 8)
+
+(defn default-max-attempts [] :i64 2)
+
+(defn default-timeout-ms [] :i64 120000)
+
+(defn capacity [node-slots :i64 slots-per :i64 cores :i64] :i64
+  (if (< node-slots 0)
+    (if (< slots-per 0)
+      (if (< cores 0) 1 cores)
+      slots-per)
+    node-slots))
+
+(defn slots [budget-slots :i64 node-slots :i64 slots-per :i64 max-slots :i64 cores :i64] :i64
+  ;; budget-slots >= 0 → slots-by-node override wins (no clamp).
+  (if (< budget-slots 0)
+    (let [cap (capacity node-slots slots-per cores)
+          m (if (< max-slots 0) 8 max-slots)
+          capped (if (< cap m) cap m)]
+      (if (< capped 1) 1 capped))
+    budget-slots))
+
+(defn failed? [exit-present :i64 exit-code :i64 timeout :i64 has-error :i64] :i64
+  ;; cljc: (or error timeout? (nil? exit) (not (zero? exit)))
+  (if (= has-error 1)
+    1
+    (if (= timeout 1)
+      1
+      (if (= exit-present 0)
+        1
+        (if (= exit-code 0) 0 1)))))
+
+(defn can-retry? [attempt :i64 max-attempts :i64] :i64
+  ;; cljc retry-tasks: (< attempt max-attempts)
+  (if (< attempt max-attempts) 1 0))
