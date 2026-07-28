@@ -192,11 +192,65 @@
 
   `oracle-id`  — keyword in catalog (e.g. :kekkai-gate)
   `export`     — symbol matching a kotoba (:export …) name
-  `args`       — vector of host values (strings / i64 longs) matching guest ABI"
+  `args`       — vector of host values (strings / i64 longs) matching guest ABI.
+
+  Prefer `call-record` when the host boundary is a map (T5.1 structural args)."
   [oracle-id export args]
   (let [kir (load-kir oracle-id)
         fn-name (if (symbol? export) export (symbol (name export)))]
     (ir/execute kir fn-name (vec args))))
+
+(defn project-field
+  "Project one host map field into a guest ABI payload (T5.2).
+
+  kind:
+    :string         — str of v (nil becomes empty string)
+    :i64            — as-i64 (required number)
+    :option-string  — Product Value ABI option string
+    :option-i64     — Product Value ABI option i64
+    :raw            — pass through unchanged
+    nil / omitted   — treated as :raw"
+  [kind v]
+  (case kind
+    :string (str (or v ""))
+    :i64 (as-i64 v)
+    :option-string (option-string v)
+    :option-i64 (option-i64 v)
+    :raw v
+    (if (nil? kind) v v)))
+
+(defn map->args
+  "Structural host map to ordered guest arg vector (T5.2 positional projection).
+
+  field-specs is a vector of keys or [key kind] pairs.
+  Kinds: :string :i64 :option-string :option-i64 :raw."
+  [m field-specs]
+  (when-not (map? m)
+    (throw (ex-info "map->args requires a host map"
+                    {:phase :oracle-call-record :got (type m)})))
+  (when-not (sequential? field-specs)
+    (throw (ex-info "map->args requires field-specs sequential"
+                    {:phase :oracle-call-record})))
+  (mapv (fn [spec]
+          (if (vector? spec)
+            (let [[k kind] spec]
+              (project-field kind (get m k)))
+            (get m spec)))
+        field-specs))
+
+(defn call-record
+  "Call an oracle export with a structural host map (T5.2 first slice).
+
+  Projects `host-map` through `field-specs` (see `map->args`) into the
+  positional guest ABI, then `call`. Product hosts should prefer this over
+  hand-built arity vectors when the natural host shape is a map/record
+  (T5.1 structural-args policy).
+
+  Non-claim: does **not** yet pass a native guest `[:record …]` wire value —
+  that needs a KIR record-arg pilot (T5.2 remainder / T5.3). Positional
+  projection is the honest first bridge."
+  [oracle-id export host-map field-specs]
+  (call oracle-id export (map->args host-map field-specs)))
 
 (defn catalog-ids
   "Known oracle ids shipped as product-shell artifacts."
