@@ -25,7 +25,8 @@
        "nodes-row status-down-row status-row "
        "command-help reconcile-title reconcile-col-header "
        "cid-display action-detail nat-len field-i64-7 "
-       "reconcile-app-row reconcile-app-line reach-line drift-line"))
+       "reconcile-app-row reconcile-app-line reach-line drift-line "
+       "report-csv-sep report-csv-spaced-sep mesh-status-sep cid-display-max-len"))
 
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -39,6 +40,17 @@
 (defn- compile-string-cases [cases]
   (let [defs (for [[name body] cases]
                (str "(defn " name " [] :string " body ")"))
+        names (map first cases)
+        src (-> port-source
+                (str/replace-first #"\(:export \[[^\]]+\]\)"
+                                   (str "(:export [" export-prefix " " (str/join " " names) "])"))
+                (str "\n" (str/join "\n" defs)))
+        kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
+    (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
+
+(defn- compile-i64-cases [cases]
+  (let [defs (for [[name body] cases]
+               (str "(defn " name " [] :i64 " body ")"))
         names (map first cases)
         src (-> port-source
                 (str/replace-first #"\(:export \[[^\]]+\]\)"
@@ -271,4 +283,24 @@
                         :running ["n1"] :action :satisfied}]}
           want (nth (report/reconcile-lines plan) 2)]
       (is (= want (get actual "row"))))))
+
+(deftest report-csv-seps-and-cid-max-match
+  (let [s (compile-string-cases
+           {"cs" "(report-csv-sep)"
+            "ss" "(report-csv-spaced-sep)"
+            "ms" "(mesh-status-sep)"})
+        n (compile-i64-cases
+           {"cm" "(cid-display-max-len)"})]
+    (is (= report/report-csv-sep (get s "cs")))
+    (is (= "," (get s "cs")))
+    (is (= report/report-csv-spaced-sep (get s "ss")))
+    (is (= ", " (get s "ss")))
+    (is (= report/mesh-status-sep (get s "ms")))
+    (is (= "/" (get s "ms")))
+    (is (= report/cid-display-max-len (get n "cm")))
+    (is (= 16 (get n "cm")))
+    (is (= "installed/running" (report/mesh-status "installed" "running")))
+    (is (str/includes?
+         (report/deploy-observed-row ["a" "b"] {:name "pub"})
+         "a, b"))))
 

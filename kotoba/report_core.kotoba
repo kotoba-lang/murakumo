@@ -25,12 +25,15 @@
             cid-display action-detail
             nat-len field-i64-7
             reconcile-app-row reconcile-app-line
-            reach-line drift-line]))
+            reach-line drift-line
+            report-csv-sep report-csv-spaced-sep mesh-status-sep
+            cid-display-max-len]))
 
 ;; W6 pure-planner oracle — murakumo.report string core.
 ;; Column-padded tables: pad-to(width) + nodes-row / status-row pure (ASCII).
 ;; reconcile-lines: pure title/col-header/app-row/detail/reach/drift;
 ;; host still mapcats apps + joins CSV targets/running/reach.
+;; CSV join seps + cid-display max dual-source for host folds.
 ;; command-help: full CLI help as one pure string.
 ;; Parity: test/murakumo/report_kotoba_parity_test.clj
 
@@ -75,8 +78,10 @@
           (trim (string-substring s 0 (- n 1)))
           s)))))
 
+(defn mesh-status-sep [] :string "/")
+
 (defn mesh-status [binary-status :string launch-status :string] :string
-  (string-concat binary-status (string-concat "/" launch-status)))
+  (string-concat binary-status (string-concat (mesh-status-sep) launch-status)))
 
 (defn node-prefix [name :string] :string
   (string-concat "[" (string-concat name "] ")))
@@ -436,3 +441,17 @@
   (string-concat
    "                            drift: running on non-eligible node(s): "
    misplaced-csv))
+
+;; ── residual CSV join seps + cid display length ──────────────────────
+
+(defn report-csv-sep [] :string
+  ;; reconcile targets/running/reach/misplaced host join
+  ",")
+
+(defn report-csv-spaced-sep [] :string
+  ;; deploy-observed where-list host join
+  ", ")
+
+(defn cid-display-max-len [] :i64
+  ;; host fmt-cid truncates to this many chars before cid-display
+  16)
