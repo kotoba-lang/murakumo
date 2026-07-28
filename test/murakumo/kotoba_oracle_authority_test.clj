@@ -19,6 +19,7 @@
             [murakumo.dash.state :as dash]
             [murakumo.infer.schedule :as sched]
             [murakumo.task.plan :as task]
+            [murakumo.infer.engine :as eng]
             [murakumo.kotoba.oracle :as oracle]
             [murakumo.kotoba-oracle-gen :as gen]))
 
@@ -39,13 +40,15 @@
   (is (oracle/ready? :dash-state))
   (is (oracle/ready? :infer-schedule))
   (is (oracle/ready? :task-plan))
+  (is (oracle/ready? :infer-engine))
   (is (some #{:kekkai-gate} (oracle/catalog-ids)))
   (is (some #{:token} (oracle/catalog-ids)))
   (is (some #{:report-core} (oracle/catalog-ids)))
   (is (some #{:infer-plan} (oracle/catalog-ids)))
   (is (some #{:dash-state} (oracle/catalog-ids)))
   (is (some #{:infer-schedule} (oracle/catalog-ids)))
-  (is (some #{:task-plan} (oracle/catalog-ids))))
+  (is (some #{:task-plan} (oracle/catalog-ids)))
+  (is (some #{:infer-engine} (oracle/catalog-ids))))
 
 (deftest product-shell-gate-uses-oracle-results
   (testing "parse-status delegates to kotoba parse-status-out"
@@ -423,3 +426,56 @@
 (deftest task-precompiled-kir-does-not-drift
   (is (= (task-live-kir) (task-resource-kir))
       "task_plan KIR drift — run oracle-gen"))
+
+(def ^:private eng-source "kotoba/infer_engine_core.kotoba")
+(def ^:private eng-resource "murakumo/oracle/infer_engine_core.kir.edn")
+
+(defn- eng-live-kir []
+  (:kir (compiler/compile-source (slurp eng-source) :wasm32-kotoba-v1 {})))
+
+(defn- eng-resource-kir []
+  (edn/read-string (slurp (io/resource eng-resource))))
+
+(deftest product-shell-infer-engine-uses-oracle-results
+  (testing "default-rpc-port + pure cmd pieces"
+    (is (= 50052 eng/default-rpc-port))
+    (is (= (oracle/call :infer-engine 'default-rpc-port []) eng/default-rpc-port)))
+  (testing "embed-head-cmd via oracle front/back"
+    (let [cmd (eng/embed-head-cmd
+               {:bin-dir "bin" :model-path "m.gguf" :port 8091
+                :ctx 8192 :pooling "mean" :parallel 4})]
+      (is (re-find #"bin/llama-server -m m.gguf --embedding --pooling mean" cmd))
+      (is (re-find #"--port 8091" cmd))))
+  (testing "mlx-moe-cmd via oracle"
+    (let [cmd (eng/mlx-moe-cmd
+               {:venv "/v" :model-repo "repo" :port 8080 :capacity 2})]
+      (is (re-find #"/v/bin/mlx-moe serve repo" cmd))
+      (is (re-find #"--capacity 2" cmd))))
+  (testing "head-cmd composition for 2-worker plan"
+    (let [plan {:assignments
+                [{:node {:name "w0" :host "h0" :ip "1.1.1.1"} :span 10}
+                 {:node {:name "w1" :host "h1" :ip "1.1.1.2"} :span 10}
+                 {:node {:name "head" :host "localhost" :head? true} :span 5}]}
+          cmd (eng/head-cmd plan
+                            {:bin-dir "bin" :model-path "m.gguf"
+                             :port 8080 :rpc-port 50052 :ctx 4096
+                             :parallel 1 :strategy :pipeline})]
+      (is (re-find #"bin/llama-server -m m.gguf" cmd))
+      (is (re-find #"--rpc 1\.1\.1\.1:50052,1\.1\.1\.2:50052" cmd))
+      (is (re-find #"--split-mode layer" cmd))
+      (is (re-find #"--tensor-split 10,10,5" cmd)))))
+
+(deftest engine-oracle-call-matches-live-compile
+  (let [live (eng-live-kir)]
+    (is (= (ir/execute live 'split-mode-name ["tensor"])
+           (oracle/call :infer-engine 'split-mode-name ["tensor"])))
+    (is (= (ir/execute live 'endpoint ["h" 50052])
+           (oracle/call :infer-engine 'endpoint ["h" 50052])))
+    (is (= (ir/execute live 'rpc-server-cmd ["bin" 50052 "MTL0" 1 ""])
+           (oracle/call :infer-engine 'rpc-server-cmd ["bin" 50052 "MTL0" 1 ""])))
+    (is (= (ir/execute live 'head-cmd-front ["bin" "m.gguf"])
+           (oracle/call :infer-engine 'head-cmd-front ["bin" "m.gguf"])))))
+
+(deftest engine-precompiled-kir-does-not-drift
+  (is (= (eng-live-kir) (eng-resource-kir))
+      "infer_engine KIR drift — run oracle-gen"))
