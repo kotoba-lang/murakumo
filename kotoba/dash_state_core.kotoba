@@ -1,8 +1,10 @@
 (ns dash-state-core
-  (:export [short-hosted-cid health-class-of interval-sleep-ms clamp-at]))
+  (:export [short-hosted-cid health-class-of interval-sleep-ms clamp-at
+            take-last-start append-new-len cap-count recent-take-n]))
 
 ;; W6 pure-planner oracle — murakumo.dash.state subset (display / selection math).
 ;; Map/vector reducers (placements, selected-snapshot, render-html) stay cljc.
+;; take-last-start / append-new-len: pure index math for append-capped.
 ;; Guest: string=? yields truthy for if; lengths are byte indices (ASCII CIDs).
 ;; Parity: test/murakumo/dash_state_kotoba_parity_test.clj
 
@@ -25,3 +27,23 @@
   (let [req (if (< requested-at 0) 0 requested-at)
         hi (if (< history-count 1) 0 (- history-count 1))]
     (if (< req hi) req hi)))
+
+(defn take-last-start [len :i64 cap :i64] :i64
+  ;; start index for (take-last cap items) on a seq of length len
+  (if (< cap 1)
+    len
+    (let [s (- len cap)]
+      (if (< s 0) 0 s))))
+
+(defn append-new-len [len :i64 add :i64] :i64
+  (if (< add 0) len (+ len add)))
+
+(defn cap-count [len :i64 cap :i64] :i64
+  ;; length after take-last cap
+  (if (< cap 1)
+    0
+    (if (< len cap) len cap)))
+
+(defn recent-take-n [n :i64 default-n :i64] :i64
+  ;; cljc recent-alerts default 6
+  (if (< n 0) default-n n))

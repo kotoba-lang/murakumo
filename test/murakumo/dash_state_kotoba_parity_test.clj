@@ -20,7 +20,7 @@
         src (-> port-source
                 (str/replace-first
                  #"\(:export \[[^\]]+\]\)"
-                 (str "(:export [short-hosted-cid health-class-of interval-sleep-ms clamp-at "
+                 (str "(:export [short-hosted-cid health-class-of interval-sleep-ms clamp-at take-last-start append-new-len cap-count recent-take-n "
                       (str/join " " names) "])"))
                 (str "\n" (str/join "\n" defs)))
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
@@ -33,7 +33,7 @@
         src (-> port-source
                 (str/replace-first
                  #"\(:export \[[^\]]+\]\)"
-                 (str "(:export [short-hosted-cid health-class-of interval-sleep-ms clamp-at "
+                 (str "(:export [short-hosted-cid health-class-of interval-sleep-ms clamp-at take-last-start append-new-len cap-count recent-take-n "
                       (str/join " " names) "])"))
                 (str "\n" (str/join "\n" defs)))
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
@@ -90,3 +90,28 @@
       (testing (pr-str [at hc])
         (is (= (state/clamp-at at hc)
                (get actual (str "cl_" i))))))))
+
+(deftest cap-index-math-matches-append-capped
+  (let [actual (compile-i64-cases
+                {"tls" "(take-last-start 10 6)"
+                 "tls0" "(take-last-start 3 6)"
+                 "anl" "(append-new-len 5 1)"
+                 "cc" "(cap-count 10 6)"
+                 "cc2" "(cap-count 3 6)"
+                 "rt" "(recent-take-n -1 6)"
+                 "rt2" "(recent-take-n 3 6)"})]
+    (is (= 4 (get actual "tls")))
+    (is (= 0 (get actual "tls0")))
+    (is (= 6 (get actual "anl")))
+    (is (= 6 (get actual "cc")))
+    (is (= 3 (get actual "cc2")))
+    (is (= 6 (get actual "rt")))
+    (is (= 3 (get actual "rt2")))
+    (testing "cljc append-capped length"
+      (let [v (state/append-capped (vec (range 5)) 6 :x)]
+        (is (= 6 (count v)))
+        (is (= :x (last v))))
+      (let [v (state/append-capped (vec (range 10)) 6 :y)]
+        (is (= 6 (count v)))
+        (is (= (take-last 6 (conj (vec (range 10)) :y)) v))))))
+

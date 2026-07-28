@@ -6,13 +6,18 @@
             wave-of slot-of load-after-assign
             digit-char nat-str i64-str pad4 task-id
             pick-task-idx-2 assign-task-step-2
-            attempt-next exclude-append-marker]))
+            attempt-next exclude-append-marker
+            pick-task-fold-step load-inc-if challenger-wins?
+            assign-task-pick-3 apply-task-pick-3 assign-task-step-3
+            nearest-rank-idx summary-retried speedup-milli
+            max2 min2 clamp-nonneg]))
 
 ;; W6 pure-planner oracle — murakumo.task.plan integer + assign/expand core.
 ;; Full admit/prepare vector folds stay cljc.
 ;; task-eligible? bit flags + better-task-score? + wave/slot: pure assign-1 core.
 ;; expand: task-id = "t-" + zero-pad-4 (cljc last-4 of "0000"+i for i≥10000).
-;; assign-task-step-2: one task pure pick for fixed 2 nodes + load inc.
+;; assign-task-step-2/3 + pick-task-fold-step: pure assign reduce building blocks.
+;; percentile: nearest-rank-idx; summary: retried/speedup-milli pure.
 ;; Parity: test/murakumo/task_plan_kotoba_parity_test.clj
 
 (defn default-max-slots [] :i64 8)
@@ -187,3 +192,94 @@
         n1 (if (= p 1) (+ load1 1) load1)]
     ;; pack3: code + n0*B + n1*B*B
     (+ code (+ (* n0 B) (* n1 (* B B))))))
+
+(defn pick-task-fold-step [has-champ :i64 ok-i :i64 better-c-i :i64] :i64
+  ;; Host folds candidates. better-c-i=1 ⇒ challenger strictly better than champ.
+  ;; 0=none yet, 1=take i, 2=keep champ (incl. ties)
+  (if (= has-champ 0)
+    (if (= ok-i 0) 0 1)
+    (if (= ok-i 0)
+      2
+      (if (= better-c-i 1) 1 2))))
+
+(defn load-inc-if [load :i64 picked :i64] :i64
+  (if (= picked 0) load (+ load 1)))
+
+(defn challenger-wins? [fill-c :i64 load-c :i64 fill-i :i64 load-i :i64] :i64
+  ;; 1 if i better than champ (score lower). Tie → 0 (keep champ).
+  (let [b (better-task-score? fill-c load-c 0 fill-i load-i)]
+    (if (= b 0) 1 0)))
+
+(defn assign-task-pick-3 [ok-pack :i64 fill-pack :i64 load-pack :i64] :i64
+  ;; packs of 3: ok/fill/load per node → pick idx −1|0|1|2
+  (let [B 65536
+        ok0 (rem64 ok-pack B)
+        ok1 (rem64 (quot ok-pack B) B)
+        ok2 (quot ok-pack (* B B))
+        f0 (rem64 fill-pack B)
+        f1 (rem64 (quot fill-pack B) B)
+        f2 (quot fill-pack (* B B))
+        l0 (rem64 load-pack B)
+        l1 (rem64 (quot load-pack B) B)
+        l2 (quot load-pack (* B B))
+        p01 (if (= ok0 0)
+              (if (= ok1 0) -1 1)
+              (if (= ok1 0)
+                0
+                (let [b (better-task-score? f0 l0 0 f1 l1)]
+                  (if (= b 2) 0 (if (= b 1) 0 1)))))
+        fc (if (= p01 0) f0 (if (= p01 1) f1 0))
+        lc (if (= p01 0) l0 (if (= p01 1) l1 0))
+        win2 (if (< p01 0)
+               0
+               (challenger-wins? fc lc f2 l2))]
+    (if (< p01 0)
+      (if (= ok2 0) -1 2)
+      (if (= ok2 0)
+        p01
+        (if (= win2 1) 2 p01)))))
+
+(defn apply-task-pick-3 [load-pack :i64 pick :i64] :i64
+  (let [B 65536
+        l0 (rem64 load-pack B)
+        l1 (rem64 (quot load-pack B) B)
+        l2 (quot load-pack (* B B))
+        n0 (load-inc-if l0 (if (= pick 0) 1 0))
+        n1 (load-inc-if l1 (if (= pick 1) 1 0))
+        n2 (load-inc-if l2 (if (= pick 2) 1 0))]
+    (+ n0 (+ (* n1 B) (* n2 (* B B))))))
+
+(defn assign-task-step-3 [load-pack :i64 ok-pack :i64 fill-pack :i64] :i64
+  ;; result = pick-code (0..3) + 4 * new-load-pack
+  (let [p (assign-task-pick-3 ok-pack fill-pack load-pack)
+        code (if (< p 0) 0 (+ p 1))
+        nload (apply-task-pick-3 load-pack p)]
+    (+ code (* 4 nload))))
+
+(defn nearest-rank-idx [n :i64 p-milli :i64] :i64
+  ;; cljc percentile: (int (floor (* p (count v)))) clamped to [0, n-1]
+  (if (< n 1)
+    -1
+    (let [raw (quot (* p-milli n) 1000)
+          hi (- n 1)
+          idx (if (< raw 0) 0 raw)]
+      (if (< hi idx) hi idx))))
+
+(defn summary-retried [attempts :i64 finals :i64] :i64
+  (let [d (- attempts finals)]
+    (if (< d 0) 0 d)))
+
+(defn speedup-milli [task-ms :i64 wall-ms :i64] :i64
+  ;; cljc (/ task-ms wall-ms) as milli; 0 when either non-positive
+  (if (if (< wall-ms 1) 1 (if (< task-ms 1) 1 0))
+    0
+    (quot (* task-ms 1000) wall-ms)))
+
+(defn max2 [a :i64 b :i64] :i64
+  (if (< a b) b a))
+
+(defn min2 [a :i64 b :i64] :i64
+  (if (< a b) a b))
+
+(defn clamp-nonneg [n :i64] :i64
+  (if (< n 0) 0 n))
