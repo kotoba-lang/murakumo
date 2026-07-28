@@ -20,17 +20,22 @@
             plist-ph-user plist-ph-bin plist-ph-port plist-ph-roles
             plist-ph-labels plist-ph-home plist-ph-ed25519 plist-ph-x25519
             plist-ph-did plist-ph-p2pport plist-ph-p2pseed
-            plist-ph-extaddr plist-ph-bootstrap plist-ph-webrtc]))
+            plist-ph-extaddr plist-ph-bootstrap plist-ph-webrtc
+            join-append bootstrap-append labels-append roles-append
+            plist-replace]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.provision.plan string/port.
 ;; resolve-p2p-port uses [:option :i64] (no has-* sentinels).
-;; bootstrap fold, peer-id re-find host, write-plist heredoc body stay host.
+;; peer-id re-find host, write-plist heredoc body stay host.
 ;; launch/peer-id/link/watchdog shell strings are pure.
 ;; rsync argv fragments + launchd path/tee prefix dual-source.
 ;; peer-entry (peerid@multiaddr) dual-source for bootstrap-str host fold.
 ;; home-bin-path + label/roles join seps dual-source for render-plist.
 ;; peer-id body/DID patterns dual-source; log/link grep commands recompose them.
-;; render-plist placeholder tokens dual-source; str/replace fold stays host.
+;; render-plist placeholder tokens dual-source.
+;; join-append / bootstrap-append / labels-append / roles-append: pure fold
+;; steps; host still walks node/label/role collections.
+;; plist-replace: pure template replace step; host chains placeholders.
 ;; Parity: test/murakumo/provision_plan_kotoba_parity_test.clj
 
 (defn plist-label [] :string "com.murakumo.kotoba-mesh")
@@ -277,3 +282,27 @@
 (defn plist-ph-extaddr [] :string "{{EXTADDR}}")
 (defn plist-ph-bootstrap [] :string "{{BOOTSTRAP}}")
 (defn plist-ph-webrtc [] :string "{{WEBRTC}}")
+
+;; ── residual fold steps (host still walks collections / chains steps) ─
+
+(defn join-append [acc :string sep :string next :string] :string
+  ;; empty acc ⇒ first item only (no leading sep)
+  (if (string=? acc "")
+    next
+    (string-concat acc (string-concat sep next))))
+
+(defn bootstrap-append [acc :string entry :string] :string
+  ;; host reduce over peer-entry strings for bootstrap-str
+  (join-append acc (peer-join-sep) entry))
+
+(defn labels-append [acc :string pair :string] :string
+  ;; host reduce over label-kv pairs for labels-env
+  (join-append acc (label-join-sep) pair))
+
+(defn roles-append [acc :string role :string] :string
+  ;; host reduce over role names for {{ROLES}} CSV
+  (join-append acc (roles-join-sep) role))
+
+(defn plist-replace [tmpl :string ph :string val :string] :string
+  ;; one placeholder substitution; host chains render-plist / watchdog
+  (string-replace-all tmpl ph val))

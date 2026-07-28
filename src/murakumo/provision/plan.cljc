@@ -4,17 +4,18 @@
 ;; kotoba DID derivation, and filesystem reads. This namespace owns deterministic
 ;; strings and defaults used by those effects.
 ;;
-;; W6 product-shell (ADR-260728-w6-provision-plist-ph-pure-oracle):
+;; W6 product-shell (ADR-260728-w6-provision-bootstrap-fold-pure-oracle):
 ;; constants + port/multiaddr + launch/peer/link shell + rsync argv +
 ;; peer-entry + home-bin-path + label/roles join seps + peer-id DID/body
-;; patterns + render-plist placeholder tokens DELEGATE to kotoba
+;; patterns + render-plist placeholder tokens + fold steps (bootstrap-append /
+;; labels-append / roles-append / plist-replace) DELEGATE to kotoba
 ;; provision_plan_core when oracle is loadable (JVM classpath or cljs/nbb).
-;; bootstrap fold, peer-id re-find host, write-plist heredoc body, template
-;; replace fold stay host. cljs mirrors remain fallback when oracle is not ready.
+;; peer-id re-find host, write-plist heredoc body, collection walks stay host.
+;; cljs mirrors remain fallback when oracle is not ready.
 
 (ns murakumo.provision.plan
   "Portable provision/mesh planning helpers.
-   W6 product-shell: path/port + shell/rsync/peer-entry/plist/peer-id pure via provision_plan_core."
+   W6 product-shell: path/port + shell/rsync/peer-entry/plist/peer-id/fold pure via provision_plan_core."
   (:require [clojure.string :as str]
             [murakumo.connect :as connect]
             [murakumo.fleet.inventory :as inv]
@@ -162,6 +163,23 @@
 
 (defn- mirror-home-bin-path [home]
   (str home "/.murakumo/bin"))
+
+(defn- mirror-join-append [acc sep next]
+  (if (str/blank? (str acc))
+    (str next)
+    (str acc sep next)))
+
+(defn- mirror-bootstrap-append [acc entry]
+  (mirror-join-append acc mirror-peer-join-sep entry))
+
+(defn- mirror-labels-append [acc pair]
+  (mirror-join-append acc mirror-label-join-sep pair))
+
+(defn- mirror-roles-append [acc role]
+  (mirror-join-append acc mirror-roles-join-sep role))
+
+(defn- mirror-plist-replace [tmpl ph val]
+  (str/replace (str tmpl) (str ph) (str val)))
 
 (defn- mirror-peer-id-from-log [out]
   (some-> (re-find #"did:key:(12D3[A-Za-z0-9]*)" (str out)) second))
@@ -340,6 +358,41 @@
   "LaunchDaemon template placeholder {{WEBRTC}}. Kotoba when ready."
   (oracle-str-const 'plist-ph-webrtc mirror-plist-ph-webrtc))
 
+(defn join-append
+  "CSV-style fold step: empty acc ⇒ next only. Kotoba when ready."
+  [acc sep next]
+  (try-oracle
+   #(o 'join-append [(str (or acc "")) (str sep) (str next)])
+   #(mirror-join-append acc sep next)))
+
+(defn bootstrap-append
+  "Append one peer-entry to bootstrap-str acc. Kotoba when ready."
+  [acc entry]
+  (try-oracle
+   #(o 'bootstrap-append [(str (or acc "")) (str entry)])
+   #(mirror-bootstrap-append acc entry)))
+
+(defn labels-append
+  "Append one label-kv pair to labels-env acc. Kotoba when ready."
+  [acc pair]
+  (try-oracle
+   #(o 'labels-append [(str (or acc "")) (str pair)])
+   #(mirror-labels-append acc pair)))
+
+(defn roles-append
+  "Append one role name to roles CSV acc. Kotoba when ready."
+  [acc role]
+  (try-oracle
+   #(o 'roles-append [(str (or acc "")) (str role)])
+   #(mirror-roles-append acc role)))
+
+(defn plist-replace
+  "Substitute one placeholder token in a LaunchDaemon template. Kotoba when ready."
+  [tmpl ph val]
+  (try-oracle
+   #(o 'plist-replace [(str tmpl) (str ph) (str (or val ""))])
+   #(mirror-plist-replace tmpl ph val)))
+
 (defn home-bin-path
   "Absolute `{{BIN}}` path under node home. Kotoba `home-bin-path` when ready."
   [home]
@@ -403,14 +456,19 @@
 
 (defn bootstrap-str
   "Comma-list of `peerid@multiaddr` for every other node with a known PeerId.
-   Pair format dual-sourced via `peer-entry`; fold + join stay host."
+   Pair format dual-sourced via `peer-entry`; join step dual-sourced via
+   `bootstrap-append`; node walk / peer lookup stay host."
   [fleet peers self]
-  (->> (:nodes fleet)
-       (remove #(= (:name %) (:name self)))
-       (keep (fn [node]
-               (when-let [peer-id (get peers (:name node))]
-                 (peer-entry peer-id (multiaddr (:ip node) (node-p2p-port fleet node))))))
-       (str/join peer-join-sep)))
+  (reduce (fn [acc node]
+            (if (= (:name node) (:name self))
+              acc
+              (if-let [peer-id (get peers (:name node))]
+                (bootstrap-append
+                 acc
+                 (peer-entry peer-id (multiaddr (:ip node) (node-p2p-port fleet node))))
+                acc)))
+          ""
+          (:nodes fleet)))
 
 (defn peer-id-from-log
   "Extract the libp2p PeerId from kotoba mesh log output containing `did:key:<peerid>`.
@@ -519,36 +577,45 @@
 
 (defn labels-env
   "Render node labels as the launchd env string `k=v,k=v`.
-   Pair format dual-sourced via `label-kv`; sep dual-sourced via `label-join-sep`;
-   map fold stays host."
+   Pair format dual-sourced via `label-kv`; join step dual-sourced via
+   `labels-append`; map walk stays host."
   [labels]
-  (->> labels
-       (map (fn [[k v]] (label-kv (name k) v)))
-       (str/join label-join-sep)))
+  (reduce (fn [acc [k v]]
+            (labels-append acc (label-kv (name k) v)))
+          ""
+          labels))
+
+(defn- roles-csv
+  "Comma-joined role names. Join step dual-sourced via `roles-append`."
+  [roles]
+  (reduce (fn [acc role] (roles-append acc (str role)))
+          ""
+          (or roles [])))
 
 (defn render-plist
   "Render the LaunchDaemon plist template for a node.
 
    `identity` supplies host-derived or crypto-derived values:
    :operator-seed, :x25519-seed, :did, and :p2p-seed.
-   Placeholder tokens + {{BIN}} path + roles/labels join seps dual-sourced;
-   template replace fold stays host."
+   Placeholder tokens + {{BIN}} path + roles/labels joins dual-sourced;
+   each substitution dual-sourced via `plist-replace`; placeholder chain
+   order stays host."
   [template fleet connect-spec peers node {:keys [user home operator-seed x25519-seed did p2p-seed]}]
   (-> template
-      (str/replace plist-ph-user user)
-      (str/replace plist-ph-bin (home-bin-path home))
-      (str/replace plist-ph-port (str (inv/node-port fleet node)))
-      (str/replace plist-ph-roles (str/join roles-join-sep (:roles node)))
-      (str/replace plist-ph-labels (labels-env (:labels node)))
-      (str/replace plist-ph-home home)
-      (str/replace plist-ph-ed25519 operator-seed)
-      (str/replace plist-ph-x25519 x25519-seed)
-      (str/replace plist-ph-did did)
-      (str/replace plist-ph-p2pport (str (node-p2p-port fleet node)))
-      (str/replace plist-ph-p2pseed p2p-seed)
-      (str/replace plist-ph-extaddr (if (:ip node) (multiaddr (:ip node) (node-p2p-port fleet node)) ""))
-      (str/replace plist-ph-bootstrap (bootstrap-str fleet peers node))
-      (str/replace plist-ph-webrtc (str (node-webrtc-port fleet connect-spec node)))))
+      (plist-replace plist-ph-user user)
+      (plist-replace plist-ph-bin (home-bin-path home))
+      (plist-replace plist-ph-port (str (inv/node-port fleet node)))
+      (plist-replace plist-ph-roles (roles-csv (:roles node)))
+      (plist-replace plist-ph-labels (labels-env (:labels node)))
+      (plist-replace plist-ph-home home)
+      (plist-replace plist-ph-ed25519 operator-seed)
+      (plist-replace plist-ph-x25519 x25519-seed)
+      (plist-replace plist-ph-did did)
+      (plist-replace plist-ph-p2pport (str (node-p2p-port fleet node)))
+      (plist-replace plist-ph-p2pseed p2p-seed)
+      (plist-replace plist-ph-extaddr (if (:ip node) (multiaddr (:ip node) (node-p2p-port fleet node)) ""))
+      (plist-replace plist-ph-bootstrap (bootstrap-str fleet peers node))
+      (plist-replace plist-ph-webrtc (str (node-webrtc-port fleet connect-spec node)))))
 
 (defn launch-command
   "Shell command used to start or stop the resident LaunchDaemon.
@@ -600,12 +667,12 @@
 
 (defn render-watchdog-plist
   "Substitute the watchdog template's placeholders for one node.
-   Placeholder tokens dual-sourced; replace fold stays host."
+   Placeholder tokens + replace step dual-sourced; chain order stays host."
   [tmpl fleet node {:keys [user home]}]
   (-> tmpl
-      (str/replace plist-ph-user user)
-      (str/replace plist-ph-home home)
-      (str/replace plist-ph-port (str (inv/node-port fleet node)))))
+      (plist-replace plist-ph-user user)
+      (plist-replace plist-ph-home home)
+      (plist-replace plist-ph-port (str (inv/node-port fleet node)))))
 
 (defn write-watchdog-plist-command
   "Remote shell command that writes the watchdog plist to the system LaunchDaemon path.

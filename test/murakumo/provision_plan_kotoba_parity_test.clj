@@ -15,7 +15,8 @@
        "reprovision-command watchdog-label watchdog-reprovision-command "
        "rsync-bin rsync-az-flag rsync-e-flag local-bin-path remote-bin-dest "
        "launchd-daemon-path tee-plist-prefix label-kv plist-heredoc-footer "
-       "peer-at-sep peer-join-sep peer-entry did-key-prefix"))
+       "peer-at-sep peer-join-sep peer-entry did-key-prefix "
+       "join-append bootstrap-append labels-append roles-append plist-replace"))
 (def fleet
   {:fleet/port 8077
    :fleet/p2p-port 4001
@@ -148,6 +149,48 @@
       (is (str/includes? boot "12D3j@"))
       (is (str/includes? boot "/ip4/100.0.0.2/udp/5001/quic-v1"))
       (is (not (str/includes? boot "asher"))))))
+
+(deftest fold-steps-match
+  (let [s (compile-string-cases
+           {"ja" (str "(join-append " (kotoba-literal "") " "
+                      (kotoba-literal ",") " " (kotoba-literal "a") ")")
+            "jb" (str "(join-append " (kotoba-literal "a") " "
+                      (kotoba-literal ",") " " (kotoba-literal "b") ")")
+            "ba0" (str "(bootstrap-append " (kotoba-literal "") " "
+                       (kotoba-literal "p@/m") ")")
+            "ba1" (str "(bootstrap-append " (kotoba-literal "p@/m") " "
+                       (kotoba-literal "q@/n") ")")
+            "la0" (str "(labels-append " (kotoba-literal "") " "
+                       (kotoba-literal "zone=jp") ")")
+            "la1" (str "(labels-append " (kotoba-literal "zone=jp") " "
+                       (kotoba-literal "role=compute") ")")
+            "ra0" (str "(roles-append " (kotoba-literal "") " "
+                       (kotoba-literal "compute") ")")
+            "ra1" (str "(roles-append " (kotoba-literal "compute") " "
+                       (kotoba-literal "pin") ")")
+            "pr" (str "(plist-replace " (kotoba-literal "x{{U}}y") " "
+                      (kotoba-literal "{{U}}") " " (kotoba-literal "ops") ")")})]
+    (is (= (plan/join-append "" "," "a") (get s "ja")))
+    (is (= "a" (get s "ja")))
+    (is (= (plan/join-append "a" "," "b") (get s "jb")))
+    (is (= "a,b" (get s "jb")))
+    (is (= (plan/bootstrap-append "" "p@/m") (get s "ba0")))
+    (is (= "p@/m" (get s "ba0")))
+    (is (= (plan/bootstrap-append "p@/m" "q@/n") (get s "ba1")))
+    (is (= "p@/m,q@/n" (get s "ba1")))
+    (is (= (plan/labels-append "" "zone=jp") (get s "la0")))
+    (is (= (plan/labels-append "zone=jp" "role=compute") (get s "la1")))
+    (is (= "zone=jp,role=compute" (get s "la1")))
+    (is (= (plan/roles-append "" "compute") (get s "ra0")))
+    (is (= (plan/roles-append "compute" "pin") (get s "ra1")))
+    (is (= "compute,pin" (get s "ra1")))
+    (is (= (plan/plist-replace "x{{U}}y" "{{U}}" "ops") (get s "pr")))
+    (is (= "xopsy" (get s "pr")))
+    (is (= "zone=jp,role=compute"
+           (plan/labels-env {:zone "jp" :role "compute"})))
+    (let [peers {"judah" "12D3j" "asher" "12D3a"}
+          boot (plan/bootstrap-str fleet peers (first (:nodes fleet)))]
+      (is (= "12D3j@/ip4/100.0.0.2/udp/5001/quic-v1" boot)))))
 
 (deftest peer-id-patterns-and-log-commands-match
   (let [s (compile-string-cases
