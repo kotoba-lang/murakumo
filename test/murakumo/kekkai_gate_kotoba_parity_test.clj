@@ -25,6 +25,7 @@
              #"\(:export \[[^\]]+\]\)"
              (str "(:export [default-ledger-path strip-trailing-newlines parse-status-out "
                   "authorized? denial-line-of default-kekkai-dir-under "
+                  "cli-bin cli-alias-flag cli-main-flag cli-main-ns "
                   (str/join " " (map first cases)) "])"))
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [[name _]] [name (ir/execute kir (symbol name) [])]) cases))))
@@ -81,3 +82,17 @@
       (testing s
         (is (= (if (= "authorized" s) "yes" "no")
                (get actual (str "az_" i))))))))
+
+
+(deftest cli-argv-fragments-parity
+  (let [actual (compile-cases
+                {"bin" "(cli-bin)"
+                 "alias" "(cli-alias-flag)"
+                 "mflag" "(cli-main-flag)"
+                 "mainns" "(cli-main-ns)"})]
+    (is (= "clojure" (get actual "bin")))
+    (is (= "-M" (get actual "alias")))
+    (is (= "-m" (get actual "mflag")))
+    (is (= "kekkai.cli" (get actual "mainns")))
+    (is (= ["clojure" "-M" "-m" "kekkai.cli" "led.edn" "n1"]
+           (gate/cli-argv "led.edn" "n1")))))
