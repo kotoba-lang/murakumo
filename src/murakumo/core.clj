@@ -316,7 +316,7 @@
     (doseq [argv (deploy/pin-wit-argvs pin (.exists (java.io.File. (get-in pin [:wit :src]))))]
       (apply p/sh argv))
     (let [git-bin (deploy/resolve-git-bin
-                   {:git-bin (System/getenv "MURAKUMO_GIT_BIN")})
+                   {:git-bin (config/git-bin-override)})
           _ (when-not git-bin
               (binding [*out* *err*]
                 (println "error: no absolute git binary (set MURAKUMO_GIT_BIN or install /usr/bin/git)"))

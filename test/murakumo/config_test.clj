@@ -170,3 +170,39 @@
            "MURAKUMO_KOTOBA_DIR" "/custom/kotoba"}
           "/work/murakumo"
           #{"/work/murakumo/bin/kotoba"}))))
+
+(deftest ops-config-inject-is-exact-name-only
+  (is (= "https://api.murakumo.cloud" config/default-cloud-url))
+  (is (= "https://api.murakumo.cloud"
+         (config/cloud-url (constantly nil))))
+  (is (= "https://custom.example"
+         (config/cloud-url {"MURAKUMO_CLOUD" "https://custom.example"})))
+  (is (= "https://api.murakumo.cloud"
+         (config/api-url (constantly nil))))
+  (is (= "https://metrics.example"
+         (config/api-url {"MURAKUMO_API_URL" "https://metrics.example"})))
+  (is (= "http://localhost:11434"
+         (config/text-backend-url (constantly nil))))
+  (is (= "http://gpu:11434"
+         (config/text-backend-url {"MURAKUMO_TEXT_BACKEND_URL" "http://gpu:11434"})))
+  (is (= "animagine-xl-4.0.safetensors"
+         (config/image-checkpoint (constantly nil))))
+  (is (= "foo.safetensors"
+         (config/image-checkpoint {"MURAKUMO_DEFAULT_IMAGE_CKPT" "foo.safetensors"})))
+  (is (= "kotoba" (config/kotoba-cli-bin (constantly nil))))
+  (is (= "/pin/kotoba"
+         (config/kotoba-cli-bin {"MURAKUMO_KOTOBA_BIN" "/pin/kotoba"})))
+  (is (= "http://localhost:11434/v1"
+         (config/infer-local-url (constantly nil))))
+  (is (nil? (config/infer-node-name (constantly nil))))
+  (is (= "node-a"
+         (config/infer-node-name {"MURAKUMO_INFER_NODE_NAME" "node-a"})))
+  (is (nil? (config/git-bin-override (constantly nil))))
+  (is (= "/usr/bin/git"
+         (config/git-bin-override {"MURAKUMO_GIT_BIN" "/usr/bin/git"})))
+  (is (nil? (config/adapter-driver-command "MURAKUMO_QUIC_DRIVER" (constantly nil))))
+  (is (= "/opt/quic-driver"
+         (config/adapter-driver-command "MURAKUMO_QUIC_DRIVER"
+                                        {"MURAKUMO_QUIC_DRIVER" "/opt/quic-driver"})))
+  (is (nil? (config/config-string-or-nil "MURAKUMO_CLOUD" (constantly nil))))
+  (is (nil? (config/config-string-or-nil "MURAKUMO_CLOUD" {"MURAKUMO_CLOUD" "  "}))))
