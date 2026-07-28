@@ -1,23 +1,47 @@
 ;; murakumo.config — portable path/config resolution helpers.
+;;
+;; W6 product-shell authority (ADR-260728-w6-tunnel-config-oracle-authority):
+;; On the JVM, pure path-string helpers DELEGATE to precompiled
+;; kotoba/config_core.kotoba → resources/murakumo/oracle/config_core.kir.edn.
+;; Host remains: EDN parse/IO, env map folds, filesystem existence probes.
 
 (ns murakumo.config
-  #?(:clj (:require [clojure.edn :as edn])
-     :cljs (:require [cljs.reader :as edn])))
+  (:require #?(:clj [clojure.edn :as edn]
+               :cljs [cljs.reader :as edn])
+            #?(:clj [murakumo.kotoba.oracle :as oracle])))
 
-(def default-fleet-path "fleet.edn")
-(def default-connect-path "connect.edn")
-(def default-cloud-path "cloud.edn")
+(def ^:private oid :config)
+
+#?(:clj
+   (defn- o [export args]
+     (oracle/call oid export args)))
+
+(def default-fleet-path
+  #?(:clj (o 'default-fleet-path [])
+     :cljs "fleet.edn"))
+
+(def default-connect-path
+  #?(:clj (o 'default-connect-path [])
+     :cljs "connect.edn"))
+
+(def default-cloud-path
+  #?(:clj (o 'default-cloud-path [])
+     :cljs "cloud.edn"))
 
 (defn default-kotoba-dir
   "Default sibling kotoba checkout location under a user home."
   [home]
-  (str home "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba"))
+  #?(:clj (o 'default-kotoba-dir [(str (or home ""))])
+     :cljs (str home "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba")))
 
 (defn kotoba-dir
   "Resolve the kotoba checkout directory from env."
   [env]
-  (or (get env "MURAKUMO_KOTOBA_DIR")
-      (default-kotoba-dir (get env "HOME"))))
+  #?(:clj (o 'kotoba-dir-from
+              [(str (or (get env "MURAKUMO_KOTOBA_DIR") ""))
+               (str (or (get env "HOME") ""))])
+     :cljs (or (get env "MURAKUMO_KOTOBA_DIR")
+               (default-kotoba-dir (get env "HOME")))))
 
 (defn operator-seed-env-keys
   "Env keys consulted for the fleet operator seed, in preference order."
@@ -130,10 +154,12 @@
   (env-values getenv runtime-env-keys))
 
 (defn pinned-bin-dir [user-dir]
-  (str user-dir "/bin"))
+  #?(:clj (o 'pinned-bin-dir [(str user-dir)])
+     :cljs (str user-dir "/bin")))
 
 (defn release-bin-dir [kotoba-dir]
-  (str kotoba-dir "/target/aarch64-apple-darwin/release"))
+  #?(:clj (o 'release-bin-dir [(str kotoba-dir)])
+     :cljs (str kotoba-dir "/target/aarch64-apple-darwin/release")))
 
 (defn resolve-local-bin
   "Resolve the binary dir preference order.
@@ -141,49 +167,69 @@
    `pinned-exists?` is supplied by the host shell after checking for the pinned
    kotoba-server binary."
   [env user-dir kotoba-dir pinned-exists?]
-  (let [pinned (pinned-bin-dir user-dir)]
-    (cond
-      pinned-exists? pinned
-      (get env "MURAKUMO_BIN") (get env "MURAKUMO_BIN")
-      :else (release-bin-dir kotoba-dir))))
+  #?(:clj (o 'resolve-local-bin
+              [(str user-dir)
+               (str kotoba-dir)
+               (long (if pinned-exists? 1 0))
+               (str (or (get env "MURAKUMO_BIN") ""))])
+     :cljs
+     (let [pinned (pinned-bin-dir user-dir)]
+       (cond
+         pinned-exists? pinned
+         (get env "MURAKUMO_BIN") (get env "MURAKUMO_BIN")
+         :else (release-bin-dir kotoba-dir)))))
 
 (defn kotoba-bin
   "kotoba CLI executable path, falling back to PATH lookup when no pinned binary exists."
   [user-dir pinned-exists?]
-  (let [pinned (str (pinned-bin-dir user-dir) "/kotoba")]
-    (if pinned-exists? pinned "kotoba")))
+  #?(:clj (o 'kotoba-bin [(str user-dir) (long (if pinned-exists? 1 0))])
+     :cljs
+     (let [pinned (str (pinned-bin-dir user-dir) "/kotoba")]
+       (if pinned-exists? pinned "kotoba"))))
 
 (defn kotoba-server-bin [bin-dir]
-  (str bin-dir "/kotoba-server"))
+  #?(:clj (o 'kotoba-server-bin [(str bin-dir)])
+     :cljs (str bin-dir "/kotoba-server")))
 
 (defn local-kotoba-bin [bin-dir]
-  (str bin-dir "/kotoba"))
+  #?(:clj (o 'local-kotoba-bin [(str bin-dir)])
+     :cljs (str bin-dir "/kotoba")))
 
 (defn pinned-wit-dir [user-dir]
-  (str (pinned-bin-dir user-dir) "/wit"))
+  #?(:clj (o 'pinned-wit-dir [(str user-dir)])
+     :cljs (str (pinned-bin-dir user-dir) "/wit")))
 
 (defn runtime-wit-dir [kotoba-dir]
-  (str kotoba-dir "/crates/kotoba-runtime/wit"))
+  #?(:clj (o 'runtime-wit-dir [(str kotoba-dir)])
+     :cljs (str kotoba-dir "/crates/kotoba-runtime/wit")))
 
 (defn resolve-wit-dir
   "Resolve deploy WIT dir from pinned WIT existence."
   [user-dir kotoba-dir pinned-wit-exists?]
-  (if pinned-wit-exists?
-    (pinned-wit-dir user-dir)
-    (runtime-wit-dir kotoba-dir)))
+  #?(:clj (o 'resolve-wit-dir
+              [(str user-dir)
+               (str kotoba-dir)
+               (long (if pinned-wit-exists? 1 0))])
+     :cljs
+     (if pinned-wit-exists?
+       (pinned-wit-dir user-dir)
+       (runtime-wit-dir kotoba-dir))))
 
 (defn build-manifest-path [user-dir]
-  (str (pinned-bin-dir user-dir) "/BUILD.edn"))
+  #?(:clj (o 'build-manifest-path [(str user-dir)])
+     :cljs (str (pinned-bin-dir user-dir) "/BUILD.edn")))
 
 (defn peers-path
   "Control-plane peer-id cache path under the repo root."
   [_user-dir]
-  ".murakumo-peers.edn")
+  #?(:clj (o 'peers-path [])
+     :cljs ".murakumo-peers.edn"))
 
 (defn launchd-template-path
   "Resident LaunchDaemon template path under the repo root."
   [_user-dir]
-  "deploy/com.murakumo.kotoba-mesh.plist.tmpl")
+  #?(:clj (o 'launchd-template-path [])
+     :cljs "deploy/com.murakumo.kotoba-mesh.plist.tmpl"))
 
 (defn runtime-probe-paths
   "Paths the host shell should check before building a runtime-context."
