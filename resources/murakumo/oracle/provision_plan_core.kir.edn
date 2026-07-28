@@ -75,12 +75,22 @@
    :body (blank? seed),
    :param-types [:string]}
   {:name resolve-p2p-port,
-   :params [has-node node-port has-fleet fleet-port],
+   :params [node-port fleet-port],
    :result :i64,
    :effects #{},
    :body
-   (if (= has-node 1) node-port (if (= has-fleet 1) fleet-port 4001)),
-   :param-types [:i64 :i64 :i64 :i64]}
+   (let
+    [binding-some__1 node-port]
+    (if
+     (option-some?-of [:option :i64] binding-some__1)
+     (let [p (option-value-of [:option :i64] binding-some__1 0)] p)
+     (let
+      [binding-some__2 fleet-port]
+      (if
+       (option-some?-of [:option :i64] binding-some__2)
+       (let [f (option-value-of [:option :i64] binding-some__2 0)] f)
+       4001)))),
+   :param-types [[:option :i64] [:option :i64]]}
   {:name multiaddr,
    :params [ip port],
    :result :string,

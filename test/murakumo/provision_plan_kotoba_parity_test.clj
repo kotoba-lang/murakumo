@@ -51,9 +51,9 @@
            {"w" "(peer-advertise-wait-ms)" "d" "(default-p2p-port)"
             "m0" (str "(operator-seed-missing? " (kotoba-literal "") ")")
             "m1" (str "(operator-seed-missing? " (kotoba-literal "seed") ")")
-            "p0" "(resolve-p2p-port 0 0 1 4001)"
-            "p1" "(resolve-p2p-port 1 5001 1 4001)"
-            "p2" "(resolve-p2p-port 0 0 0 0)"
+            "p0" "(resolve-p2p-port (option-none-of [:option :i64]) (option-some-of [:option :i64] 4001))"
+            "p1" "(resolve-p2p-port (option-some-of [:option :i64] 5001) (option-some-of [:option :i64] 4001))"
+            "p2" "(resolve-p2p-port (option-none-of [:option :i64]) (option-none-of [:option :i64]))"
             "wp" "(webrtc-port 4001)"})]
     (is (= plan/plist-label (get s "pl")))
     (is (= plan/remote-bin (get s "rb")))

@@ -25,14 +25,12 @@
 
 (defn node-port
   "Resolve a node's control HTTP port, defaulting to the fleet port, then 8077.
-   JVM: kotoba `resolve-port` (has-node/has-fleet 0/1 sentinels)."
+   JVM: kotoba `resolve-port` with Product Value ABI optional ports."
   [fleet node]
   #?(:clj
-     (let [has-node (if (some? (:port node)) 1 0)
-           has-fleet (if (some? (:fleet/port fleet)) 1 0)]
-       (long (o 'resolve-port
-                [has-node (long (or (:port node) 0))
-                 has-fleet (long (or (:fleet/port fleet) 0))])))
+     (long (o 'resolve-port
+              [(oracle/option-i64 (:port node))
+               (oracle/option-i64 (:fleet/port fleet))]))
      :cljs (mirror-node-port fleet node)))
 
 (defn node-health-url

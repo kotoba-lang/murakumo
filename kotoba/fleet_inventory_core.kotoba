@@ -3,10 +3,8 @@
             resolve-port health-url selector-is-all?
             selector-wants-name? line-has-offline?]))
 
-;; W6 pure-planner oracle — murakumo.fleet.inventory pure core (medium priority).
-;; select/node-named/enrich over node vectors stay cljc; this ports port/url
-;; resolution, selector predicates, and offline-line detection.
-;; Sentinel: has-node-port / has-fleet-port 0 = absent (nil in cljc).
+;; Product Value ABI v1 pure oracle — murakumo.fleet.inventory.
+;; resolve-port uses [:option :i64] (no has-node/has-fleet sentinels).
 ;; selector-is-all?: empty string ≡ cljc nil selector.
 ;; Parity: test/murakumo/fleet_inventory_kotoba_parity_test.clj
 
@@ -26,20 +24,20 @@
     (string-concat "-" (nat-str (- 0 n)))
     (nat-str n)))
 
-(defn resolve-port [has-node :i64 node-port :i64
-                    has-fleet :i64 fleet-port :i64] :i64
+(defn resolve-port [node-port [:option :i64]
+                    fleet-port [:option :i64]] :i64
   ;; cljc: (or (:port node) (:fleet/port fleet) 8077)
-  (if (= has-node 1)
-    node-port
-    (if (= has-fleet 1)
-      fleet-port
+  (if-some [p node-port]
+    p
+    (if-some [f fleet-port]
+      f
       8077)))
 
 (defn health-url [port :i64] :string
   ;; cljc: (str "http://localhost:" port "/health")
   (string-concat
    "http://localhost:"
-   (string-concat (i64-str port) "/health")))
+   (string-concat (string-from-i64 port) "/health")))
 
 (defn selector-is-all? [sel :string] :i64
   ;; cljc: (or (nil? sel) (= sel "all")) — empty string ≡ nil

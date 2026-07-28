@@ -5,7 +5,8 @@
             operator-seed-missing? resolve-p2p-port multiaddr webrtc-port
             mesh-binary-status-command remote-store-command]))
 
-;; W6 pure-planner oracle — murakumo.provision.plan string/port core (low).
+;; Product Value ABI v1 pure oracle — murakumo.provision.plan string/port.
+;; resolve-p2p-port uses [:option :i64] (no has-* sentinels).
 ;; bootstrap fold, peer-id regex, launch plists stay cljc/host.
 ;; Parity: test/murakumo/provision_plan_kotoba_parity_test.clj
 
@@ -37,13 +38,14 @@
   ;; cljc: (str/blank? (str operator-seed)) — empty after str
   (blank? seed))
 
-(defn resolve-p2p-port [has-node :i64 node-port :i64
-                        has-fleet :i64 fleet-port :i64] :i64
+(defn resolve-p2p-port [node-port [:option :i64]
+                        fleet-port [:option :i64]] :i64
+  ;; Product Value ABI v1: optional ports (no has-* sentinels).
   ;; cljc: (or (:p2p-port node) (:fleet/p2p-port fleet) 4001)
-  (if (= has-node 1)
-    node-port
-    (if (= has-fleet 1)
-      fleet-port
+  (if-some [p node-port]
+    p
+    (if-some [f fleet-port]
+      f
       4001)))
 
 (defn multiaddr [ip :string port :i64] :string

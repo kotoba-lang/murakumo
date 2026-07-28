@@ -714,8 +714,14 @@
 (deftest fleet-inventory-oracle-call-matches-live
   (let [live (:kir (compiler/compile-source (slurp "kotoba/fleet_inventory_core.kotoba")
                                             :wasm32-kotoba-v1 {}))]
-    (is (= (ir/execute live 'resolve-port [0 0 0 0])
-           (oracle/call :fleet-inventory 'resolve-port [0 0 0 0])))
+    (is (= (ir/execute live 'resolve-port
+                       [(oracle/option-i64 nil) (oracle/option-i64 nil)])
+           (oracle/call :fleet-inventory 'resolve-port
+                        [(oracle/option-i64 nil) (oracle/option-i64 nil)])))
+    (is (= (ir/execute live 'resolve-port
+                       [(oracle/option-i64 9010) (oracle/option-i64 9000)])
+           (oracle/call :fleet-inventory 'resolve-port
+                        [(oracle/option-i64 9010) (oracle/option-i64 9000)])))
     (is (= (ir/execute live 'health-url [8077])
            (oracle/call :fleet-inventory 'health-url [8077])))
     (is (= (ir/execute live 'selector-is-all? [""])
