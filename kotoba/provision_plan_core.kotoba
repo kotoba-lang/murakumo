@@ -7,12 +7,17 @@
             launch-status-command peer-id-log-command live-link-count-command
             live-link-count-output launch-up-command launch-down-command
             reprovision-command watchdog-label
-            watchdog-reprovision-command]))
+            watchdog-reprovision-command
+            rsync-bin rsync-az-flag rsync-e-flag
+            local-bin-path remote-bin-dest
+            launchd-daemon-path tee-plist-prefix
+            label-kv plist-heredoc-footer]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.provision.plan string/port.
 ;; resolve-p2p-port uses [:option :i64] (no has-* sentinels).
-;; bootstrap fold, peer-id regex, write-plist heredoc stay cljc/host.
+;; bootstrap fold, peer-id regex, write-plist heredoc body stay cljc/host.
 ;; launch/peer-id/link/watchdog shell strings are pure.
+;; rsync argv fragments + launchd path/tee prefix dual-source.
 ;; Parity: test/murakumo/provision_plan_kotoba_parity_test.clj
 
 (defn plist-label [] :string "com.murakumo.kotoba-mesh")
@@ -148,3 +153,38 @@
       (string-concat
        ".plist 2>/dev/null || true; sudo launchctl kickstart -k system/"
        (watchdog-label)))))))
+
+;; ── residual rsync argv fragments + launchd path/tee ─────────────────
+
+(defn rsync-bin [] :string "rsync")
+(defn rsync-az-flag [] :string "-az")
+(defn rsync-e-flag [] :string "-e")
+
+(defn local-bin-path [local-bin :string bin :string] :string
+  ;; cljc: (str local-bin "/" bin)
+  (string-concat local-bin (string-concat "/" bin)))
+
+(defn remote-bin-dest [host :string bin :string] :string
+  ;; cljc: (str host ":.murakumo/bin/" bin)
+  (string-concat host (string-concat ":.murakumo/bin/" bin)))
+
+(defn launchd-daemon-path [label :string] :string
+  ;; /Library/LaunchDaemons/{label}.plist
+  (string-concat
+   "/Library/LaunchDaemons/"
+   (string-concat label ".plist")))
+
+(defn tee-plist-prefix [label :string] :string
+  ;; "sudo tee {path} >/dev/null <<'PLIST'\n" — heredoc body stays host
+  (string-concat
+   "sudo tee "
+   (string-concat
+    (launchd-daemon-path label)
+    " >/dev/null <<'PLIST'\n")))
+
+(defn label-kv [k :string v :string] :string
+  ;; single launchd env pair; host joins with comma
+  (string-concat k (string-concat "=" v)))
+
+(defn plist-heredoc-footer [] :string
+  "\nPLIST")
