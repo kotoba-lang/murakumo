@@ -10,13 +10,13 @@
 ;;   3. connection multiplexing — optional ControlMaster reuse, which removes
 ;;      the TCP+auth handshake from every command after the first
 ;;
-;; W6 product-shell authority (ADR-260728-w6-tunnel-config-oracle-authority):
+;; W6 product-shell authority (ADR-260728-w6-tunnel-config-oracle-authority +
+;; ADR-260728-w6-tunnel-result-pure-oracle):
 ;; pure string/i64 helpers DELEGATE to precompiled
 ;; kotoba/tunnel_core.kotoba → resources/murakumo/oracle/tunnel_core.kir.edn
 ;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: line-split of parse-rc, argv vector assembly, SSH subprocess.
-;; cljs mirrors remain fallback; string ops that use i64 indices may try/catch
-;; (some cljs kir builds reject BigInt substring bounds).
+;; sh-result exit pick + err trim dual-source. cljs mirrors remain fallback.
 
 (ns murakumo.tunnel
   (:require [clojure.string :as str]
@@ -261,22 +261,41 @@
 
 ;; --- result shapes ----------------------------------------------------------
 
+(defn- pick-exit
+  "Prefer in-band rc when present. Kotoba `pick-exit` when ready."
+  [rc ssh-exit]
+  (try-oracle
+   #(oracle/i64->host
+     (o 'pick-exit
+        [(oracle/as-i64 (if (some? rc) 1 0))
+         (oracle/as-i64 (or rc 0))
+         (oracle/as-i64 (or ssh-exit 0))]))
+   #(if (some? rc) rc ssh-exit)))
+
+(defn- trim-err
+  "Trim stderr. Kotoba `trim-err` when ready."
+  [err]
+  (try-oracle
+   #(o 'trim-err [(str (or err ""))])
+   #(str/trim (str err))))
+
 (defn sh-result
   "Normalise process output from an SSH command.
 
    `:exit` is the REMOTE command's status (from the in-band sentinel) whenever
    it is available, falling back to ssh's own code; `:ssh-exit` keeps what the
    ssh client reported, so a caller can still tell a transport failure from a
-   remote non-zero exit."
+   remote non-zero exit. Exit pick + err trim via kotoba when ready."
   [{:keys [exit out err]}]
   (let [[clean rc] (parse-rc out)]
-    {:exit (if (some? rc) rc exit)
+    {:exit (pick-exit rc exit)
      :ssh-exit exit
      :out clean
-     :err (str/trim (str err))}))
+     :err (trim-err err)}))
 
 (defn scp-result
-  "Normalise process output from an SCP command."
+  "Normalise process output from an SCP command.
+   Err trim via kotoba when ready."
   [{:keys [exit err]}]
   {:exit exit
-   :err (str/trim (str err))})
+   :err (trim-err err)})

@@ -15,8 +15,8 @@
        "metrics-token-name metrics-token-env quic-cert-path-name quic-cert-path-env "
        "quic-key-path-name quic-key-path-env max-env-name max-path-ref "
        "blank? ws? valid-env-var-name? valid-path-ref-unix? "
-       "env-for-secret-name known-secret-name? reply-tag classify-fetched"))
-
+       "env-for-secret-name known-secret-name? reply-tag classify-fetched "
+       "secret-error-code secret-error-message reply-is-value?"))
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -133,11 +133,22 @@
                  "m" "(classify-fetched 1 0)"
                  "mb" "(classify-fetched 1 1)"
                  "tv" (str "(reply-tag " (kotoba-literal "value") ")")
-                 "tn" (str "(reply-tag " (kotoba-literal "not-found") ")")})]
+                 "tn" (str "(reply-tag " (kotoba-literal "not-found") ")")
+                 "ce" (str "(secret-error-code " (kotoba-literal "empty") ")")
+                 "cn" (str "(secret-error-code " (kotoba-literal "not-found") ")")
+                 "me" (str "(secret-error-message " (kotoba-literal "empty") ")")})
+        iv (compile-i64-cases
+            {"rv" (str "(reply-is-value? " (kotoba-literal "value") ")")
+             "rn" (str "(reply-is-value? " (kotoba-literal "empty") ")")})]
     (is (= "value" (get actual "v") (get actual "tv")))
     (is (= "empty" (get actual "e")))
     (is (= "not-found" (get actual "m") (get actual "tn")))
     (is (= "not-found" (get actual "mb")))
+    (is (= "secret/empty" (get actual "ce")))
+    (is (= "secret/not-found" (get actual "cn")))
+    (is (= "empty" (get actual "me")))
+    (is (= 1 (get iv "rv")))
+    (is (= 0 (get iv "rn")))
     (let [f (secret/map-fetch {"murakumo-token" "hmac" "empty" ""})]
       (is (= :value (:tag (f {:name "murakumo-token"}))))
       (is (= :secret/empty (:code (f {:name "empty"}))))
