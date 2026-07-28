@@ -4,15 +4,15 @@
 ;; kotoba DID derivation, and filesystem reads. This namespace owns deterministic
 ;; strings and defaults used by those effects.
 ;;
-;; W6 product-shell (ADR-260728-w6-cljs-clj-residual-dual):
-;; constants + port/multiaddr pure helpers DELEGATE to kotoba provision_plan_core
-;; when oracle is loadable (JVM classpath or cljs/nbb). cljs mirrors remain
-;; fallback when oracle is not ready.
+;; W6 product-shell (ADR-260728-w6-cljs-clj-residual-dual +
+;; ADR-260728-w6-provision-shell-pure-oracle):
+;; constants + port/multiaddr + launch/peer/link shell pure helpers DELEGATE to
+;; kotoba provision_plan_core when oracle is loadable (JVM classpath or cljs/nbb).
+;; cljs mirrors remain fallback when oracle is not ready.
 
 (ns murakumo.provision.plan
   "Portable provision/mesh planning helpers.
-   W6 product-shell: constants + port/multiaddr pure helpers via kotoba
-   provision_plan_core when oracle ready."
+   W6 product-shell: path/port + shell pure helpers via kotoba provision_plan_core."
   (:require [clojure.string :as str]
             [murakumo.connect :as connect]
             [murakumo.fleet.inventory :as inv]
@@ -66,6 +66,37 @@
 
 (def ^:private mirror-remote-store-command
   "mkdir -p $HOME/.murakumo/bin $HOME/.murakumo/store")
+
+(def ^:private mirror-peer-id-log-command
+  "grep -ho 'did:key:12D3[A-Za-z0-9]*' ~/.murakumo/mesh.log 2>/dev/null | tail -1")
+
+(def ^:private mirror-live-link-count-command
+  "grep 'kotoba-net: peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l")
+
+(def ^:private mirror-watchdog-label "com.murakumo.kotoba-mesh-watchdog")
+
+(defn- mirror-launch-status-command []
+  (str "sudo launchctl print system/" mirror-plist-label
+       " >/dev/null 2>&1 && echo running || echo stopped"))
+
+(defn- mirror-launch-up-command []
+  (str "sudo launchctl bootstrap system /Library/LaunchDaemons/" mirror-plist-label
+       ".plist 2>/dev/null; sudo launchctl kickstart -k system/" mirror-plist-label))
+
+(defn- mirror-launch-down-command []
+  (str "sudo launchctl bootout system/" mirror-plist-label))
+
+(defn- mirror-reprovision-command []
+  (str "sudo launchctl bootout system/" mirror-plist-label " 2>/dev/null || true; sleep 1; "
+       "sudo launchctl bootstrap system /Library/LaunchDaemons/" mirror-plist-label
+       ".plist 2>/dev/null || true; "
+       "sudo launchctl kickstart -k system/" mirror-plist-label))
+
+(defn- mirror-watchdog-reprovision-command []
+  (str "sudo launchctl bootout system/" mirror-watchdog-label " 2>/dev/null || true; sleep 1; "
+       "sudo launchctl bootstrap system /Library/LaunchDaemons/" mirror-watchdog-label
+       ".plist 2>/dev/null || true; "
+       "sudo launchctl kickstart -k system/" mirror-watchdog-label))
 
 (defn- mirror-operator-seed-missing? [operator-seed]
   (str/blank? (str operator-seed)))
@@ -216,31 +247,43 @@
    (str host ":.murakumo/bin/" bin)])
 
 (defn launch-status-command
-  "Remote shell command that reports whether the resident launchd label is running."
+  "Remote shell command that reports whether the resident launchd label is running.
+   Kotoba `launch-status-command` when ready."
   []
-  (str "sudo launchctl print system/" plist-label
-       " >/dev/null 2>&1 && echo running || echo stopped"))
+  (try-oracle
+   #(o 'launch-status-command [])
+   mirror-launch-status-command))
 
 (defn write-plist-command
-  "Remote shell command that writes plist content to the system LaunchDaemon path."
+  "Remote shell command that writes plist content to the system LaunchDaemon path.
+   Heredoc stays host (SSH host-forever quoting)."
   [plist]
   (str "sudo tee /Library/LaunchDaemons/" plist-label ".plist >/dev/null <<'PLIST'\n"
        plist "\nPLIST"))
 
 (defn peer-id-log-command
-  "Remote shell command that prints the latest node PeerId DID from mesh.log."
+  "Remote shell command that prints the latest node PeerId DID from mesh.log.
+   Kotoba when ready."
   []
-  "grep -ho 'did:key:12D3[A-Za-z0-9]*' ~/.murakumo/mesh.log 2>/dev/null | tail -1")
+  (try-oracle
+   #(o 'peer-id-log-command [])
+   (fn [] mirror-peer-id-log-command)))
 
 (defn live-link-count-command
-  "Remote shell command that counts distinct connected libp2p peers."
+  "Remote shell command that counts distinct connected libp2p peers.
+   Kotoba when ready."
   []
-  "grep 'kotoba-net: peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l")
+  (try-oracle
+   #(o 'live-link-count-command [])
+   (fn [] mirror-live-link-count-command)))
 
 (defn live-link-count-output
-  "Normalise the stdout from live-link-count-command."
+  "Normalise the stdout from live-link-count-command.
+   Kotoba `live-link-count-output` (trim) when ready."
   [out]
-  (str/trim (str out)))
+  (try-oracle
+   #(o 'live-link-count-output [(str out)])
+   #(str/trim (str out))))
 
 (defn labels-env
   "Render node labels as the launchd env string `k=v,k=v`."
@@ -272,12 +315,16 @@
       (str/replace "{{WEBRTC}}" (str (node-webrtc-port fleet connect-spec node)))))
 
 (defn launch-command
-  "Shell command used to start or stop the resident LaunchDaemon."
+  "Shell command used to start or stop the resident LaunchDaemon.
+   Kotoba launch-up/down-command when ready."
   [action]
   (case action
-    :up (str "sudo launchctl bootstrap system /Library/LaunchDaemons/" plist-label
-             ".plist 2>/dev/null; sudo launchctl kickstart -k system/" plist-label)
-    :down (str "sudo launchctl bootout system/" plist-label)))
+    :up (try-oracle
+         #(o 'launch-up-command [])
+         mirror-launch-up-command)
+    :down (try-oracle
+           #(o 'launch-down-command [])
+           mirror-launch-down-command)))
 
 (defn launch-plan
   "Host command plan for changing one resident node state."
@@ -299,11 +346,12 @@
         (launch-plans nodes action)))
 
 (defn reprovision-command
-  "Shell command used after writing the plist to reload and kickstart it."
+  "Shell command used after writing the plist to reload and kickstart it.
+   Kotoba `reprovision-command` when ready."
   []
-  (str "sudo launchctl bootout system/" plist-label " 2>/dev/null || true; sleep 1; "
-       "sudo launchctl bootstrap system /Library/LaunchDaemons/" plist-label ".plist 2>/dev/null || true; "
-       "sudo launchctl kickstart -k system/" plist-label))
+  (try-oracle
+   #(o 'reprovision-command [])
+   mirror-reprovision-command))
 
 ;; ── HTTP-wedge watchdog (com.murakumo.kotoba-mesh-watchdog) ─────────────────
 ;; kotoba-server can wedge its HTTP surface while libp2p stays alive (2026-07-02,
@@ -311,7 +359,8 @@
 ;; heal it. A sibling StartInterval daemon probes /health and kills the server on
 ;; two consecutive failures — KeepAlive then restarts it.
 
-(def watchdog-label "com.murakumo.kotoba-mesh-watchdog")
+(def watchdog-label
+  (oracle-str-const 'watchdog-label mirror-watchdog-label))
 
 (defn render-watchdog-plist
   "Substitute the watchdog template's placeholders for one node."
@@ -328,8 +377,9 @@
        plist "\nPLIST"))
 
 (defn watchdog-reprovision-command
-  "Reload + kickstart the watchdog (same bootout-settle-bootstrap dance as the mesh)."
+  "Reload + kickstart the watchdog (same bootout-settle-bootstrap dance as the mesh).
+   Kotoba `watchdog-reprovision-command` when ready."
   []
-  (str "sudo launchctl bootout system/" watchdog-label " 2>/dev/null || true; sleep 1; "
-       "sudo launchctl bootstrap system /Library/LaunchDaemons/" watchdog-label ".plist 2>/dev/null || true; "
-       "sudo launchctl kickstart -k system/" watchdog-label))
+  (try-oracle
+   #(o 'watchdog-reprovision-command [])
+   mirror-watchdog-reprovision-command))
