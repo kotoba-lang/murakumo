@@ -3,11 +3,16 @@
 ;; Host effects stay in murakumo.core: SSH reachability, rsync, launchctl, local
 ;; kotoba DID derivation, and filesystem reads. This namespace owns deterministic
 ;; strings and defaults used by those effects.
+;;
+;; W6 product-shell (ADR-260728-w6-cljs-clj-residual-dual):
+;; constants + port/multiaddr pure helpers DELEGATE to kotoba provision_plan_core
+;; when oracle is loadable (JVM classpath or cljs/nbb). cljs mirrors remain
+;; fallback when oracle is not ready.
 
 (ns murakumo.provision.plan
   "Portable provision/mesh planning helpers.
    W6 product-shell: constants + port/multiaddr pure helpers via kotoba
-   provision_plan_core."
+   provision_plan_core when oracle ready."
   (:require [clojure.string :as str]
             [murakumo.connect :as connect]
             [murakumo.fleet.inventory :as inv]
@@ -18,21 +23,84 @@
 (defn- o [export args]
   (oracle/call oid export args))
 
-(def plist-label (o 'plist-label []))
+(defn- oracle-ready? []
+  (oracle/ready? oid))
 
-(def remote-bin (o 'remote-bin []))
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
 
-(def remote-store (o 'remote-store []))
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
 
-(def ssh-rsync-options (o 'ssh-rsync-options []))
+(defn- oracle-i64-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid export []))
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
 
-(def peer-advertise-wait-ms (long (o 'peer-advertise-wait-ms [])))
+;; ── host-mirror pure helpers ─────────────────────────────────────────
+
+(def ^:private mirror-plist-label "com.murakumo.kotoba-mesh")
+(def ^:private mirror-remote-bin "$HOME/.murakumo/bin")
+(def ^:private mirror-remote-store "$HOME/.murakumo/store")
+(def ^:private mirror-ssh-rsync-options "ssh -o BatchMode=yes -o ConnectTimeout=8")
+(def ^:private mirror-peer-advertise-wait-ms 8000)
+(def ^:private mirror-default-p2p-port 4001)
+
+(def ^:private mirror-mesh-binary-status-command
+  "test -x $HOME/.murakumo/bin/kotoba-server && echo installed || echo absent")
+
+(def ^:private mirror-remote-store-command
+  "mkdir -p $HOME/.murakumo/bin $HOME/.murakumo/store")
+
+(defn- mirror-operator-seed-missing? [operator-seed]
+  (str/blank? (str operator-seed)))
+
+(defn- mirror-node-p2p-port [fleet node]
+  (or (:p2p-port node) (:fleet/p2p-port fleet) mirror-default-p2p-port))
+
+(defn- mirror-multiaddr [ip port]
+  (str "/ip4/" ip "/udp/" port "/quic-v1"))
+
+;; ── dual-source constants ────────────────────────────────────────────
+
+(def plist-label
+  (oracle-str-const 'plist-label mirror-plist-label))
+
+(def remote-bin
+  (oracle-str-const 'remote-bin mirror-remote-bin))
+
+(def remote-store
+  (oracle-str-const 'remote-store mirror-remote-store))
+
+(def ssh-rsync-options
+  (oracle-str-const 'ssh-rsync-options mirror-ssh-rsync-options))
+
+(def peer-advertise-wait-ms
+  (oracle-i64-const 'peer-advertise-wait-ms mirror-peer-advertise-wait-ms))
 
 (defn operator-seed-missing?
   "True when a command requiring the fleet operator seed should fail.
-   JVM: kotoba `operator-seed-missing?`."
+   Kotoba `operator-seed-missing?` when oracle ready."
   [operator-seed]
-  (= 1 (o 'operator-seed-missing? [(str (or operator-seed ""))])))
+  (try-oracle
+   #(= 1 (oracle/i64->host
+          (o 'operator-seed-missing? [(str (or operator-seed ""))])))
+   #(mirror-operator-seed-missing? operator-seed)))
 
 (defn provision-command-error
   "Validation error keyword for provision, or nil."
@@ -48,16 +116,21 @@
 
 (defn node-p2p-port
   "Resolve a node's p2p QUIC port, defaulting to fleet p2p port, then 4001.
-   JVM: kotoba `resolve-p2p-port` with Product Value ABI optional ports."
+   Kotoba `resolve-p2p-port` with Product Value ABI optional ports when ready."
   [fleet node]
-  (long (o 'resolve-p2p-port
-           [(oracle/option-i64 (:p2p-port node))
-            (oracle/option-i64 (:fleet/p2p-port fleet))])))
+  (try-oracle
+   #(oracle/i64->host
+     (o 'resolve-p2p-port
+        [(oracle/option-i64 (:p2p-port node))
+         (oracle/option-i64 (:fleet/p2p-port fleet))]))
+   #(mirror-node-p2p-port fleet node)))
 
 (defn multiaddr
-  "Tailscale QUIC multiaddr for a node ip/port. JVM: kotoba `multiaddr`."
+  "Tailscale QUIC multiaddr for a node ip/port. Kotoba `multiaddr` when ready."
   [ip port]
-  (o 'multiaddr [(str ip) (long port)]))
+  (try-oracle
+   #(o 'multiaddr [(str ip) (oracle/as-i64 port)])
+   #(mirror-multiaddr ip port)))
 
 (defn node-webrtc-port
   "The /webrtc-direct UDP port for nodes whose class speaks :webrtc on :live.
@@ -69,7 +142,10 @@
                          connect-spec
                          (connect/node-class connect-spec node)
                          :live))))
-    (long (o 'webrtc-port [(long (node-p2p-port fleet node))]))))
+    (let [p2p (node-p2p-port fleet node)]
+      (try-oracle
+       #(oracle/i64->host (o 'webrtc-port [(oracle/as-i64 p2p)]))
+       #(+ 100 p2p)))))
 
 (defn bootstrap-str
   "Comma-list of `peerid@multiaddr` for every other node with a known PeerId."
@@ -79,7 +155,7 @@
        (keep (fn [node]
                (when-let [peer-id (get peers (:name node))]
                  (str peer-id "@" (multiaddr (:ip node) (node-p2p-port fleet node))))))
-	       (str/join ",")))
+       (str/join ",")))
 
 (defn peer-id-from-log
   "Extract the libp2p PeerId from kotoba mesh log output containing `did:key:<peerid>`."
@@ -119,14 +195,18 @@
   (collected-peers node-peer-results))
 
 (defn mesh-binary-status-command
-  "JVM: kotoba `mesh-binary-status-command`."
+  "Kotoba `mesh-binary-status-command` when oracle ready."
   []
-  (o 'mesh-binary-status-command []))
+  (try-oracle
+   #(o 'mesh-binary-status-command [])
+   (fn [] mirror-mesh-binary-status-command)))
 
 (defn remote-store-command
-  "JVM: kotoba `remote-store-command`."
+  "Kotoba `remote-store-command` when oracle ready."
   []
-  (o 'remote-store-command []))
+  (try-oracle
+   #(o 'remote-store-command [])
+   (fn [] mirror-remote-store-command)))
 
 (defn rsync-binary-argv
   "argv for copying one pinned binary to a fleet node."
@@ -144,9 +224,8 @@
 (defn write-plist-command
   "Remote shell command that writes plist content to the system LaunchDaemon path."
   [plist]
-  (format "sudo tee /Library/LaunchDaemons/%s.plist >/dev/null <<'PLIST'\n%s\nPLIST"
-          plist-label
-          plist))
+  (str "sudo tee /Library/LaunchDaemons/" plist-label ".plist >/dev/null <<'PLIST'\n"
+       plist "\nPLIST"))
 
 (defn peer-id-log-command
   "Remote shell command that prints the latest node PeerId DID from mesh.log."
@@ -245,9 +324,8 @@
 (defn write-watchdog-plist-command
   "Remote shell command that writes the watchdog plist to the system LaunchDaemon path."
   [plist]
-  (format "sudo tee /Library/LaunchDaemons/%s.plist >/dev/null <<'PLIST'\n%s\nPLIST"
-          watchdog-label
-          plist))
+  (str "sudo tee /Library/LaunchDaemons/" watchdog-label ".plist >/dev/null <<'PLIST'\n"
+       plist "\nPLIST"))
 
 (defn watchdog-reprovision-command
   "Reload + kickstart the watchdog (same bootout-settle-bootstrap dance as the mesh)."

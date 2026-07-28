@@ -4,10 +4,16 @@
 ;; Murakumo-native overlay. The live drivers still need host networking, relay, and
 ;; packet plumbing; this namespace owns deterministic cloud records and routing
 ;; choices so the CLI can plan/publish them without an external VPN control plane.
+;;
+;; W6 product-shell (ADR-260728-w6-cljs-clj-residual-dual):
+;; defaults + region/score/endpoints DELEGATE to kotoba cloud_plan_core when
+;; oracle is loadable (JVM classpath or cljs/nbb). Record assembly, choose-relay
+;; sort, and CLI format lines stay host. cljs mirrors remain fallback.
 
 (ns murakumo.cloud.plan
   "Portable murakumo.cloud overlay planning.
-   W6 product-shell: defaults + region/score/endpoints via kotoba cloud_plan_core."
+   W6 product-shell: defaults + region/score/endpoints via kotoba cloud_plan_core
+   when oracle ready."
   (:require [clojure.string :as str]
             [murakumo.config :as config]
             [murakumo.fleet.inventory :as inv]
@@ -20,19 +26,84 @@
 (defn- o [export args]
   (oracle/call oid export args))
 
+(defn- oracle-ready? []
+  (oracle/ready? oid))
+
+(defn- try-oracle
+  "Run oracle body; on failure use mirror."
+  [thunk mirror-thunk]
+  (if (oracle-ready?)
+    (try
+      (thunk)
+      (catch #?(:clj Exception :cljs :default) _
+        (mirror-thunk)))
+    (mirror-thunk)))
+
+(defn- oracle-str-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/call oid export [])
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+(defn- oracle-i64-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid export []))
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+;; ── host-mirror pure helpers ─────────────────────────────────────────
+
+(def ^:private mirror-default-driver "murakumo-overlay")
+(def ^:private mirror-default-cloud-name "murakumo.cloud")
+(def ^:private mirror-default-cloud-domain "murakumo.cloud")
+(def ^:private mirror-default-cloud-graph "murakumo-cloud")
+(def ^:private mirror-default-auth-key-env "MURAKUMO_OVERLAY_AUTH_KEY")
+(def ^:private mirror-overlay-version 1)
+
+(defn- mirror-node-region [node]
+  (or (get-in node [:labels :zone])
+      (get-in node [:labels :region])
+      (:region node)
+      "global"))
+
+(defn- mirror-relay-score [node relay]
+  (if (= (mirror-node-region node) (:region relay)) 0 1))
+
+(defn- mirror-overlay-id-input [cloud]
+  (or (:overlay/id cloud) (:cloud/name cloud) "murakumo.cloud"))
+
+(defn- mirror-node-id-input [overlay-cid node-name]
+  (str overlay-cid ":" node-name))
+
+(defn- mirror-quic-endpoint [host port]
+  (str "quic://" host ":" port))
+
+(defn- mirror-webrtc-endpoint [host p2p-port]
+  (str "webrtc://" host ":" (+ 100 p2p-port)))
+
+(defn- mirror-relay-endpoint-url [relay-url node-id]
+  (str relay-url "/" node-id))
+
+;; ── dual-source defaults ─────────────────────────────────────────────
+
 (def default-cloud-path config/default-cloud-path)
 
-(def default-driver (o 'default-driver []))
+(def default-driver
+  (oracle-str-const 'default-driver mirror-default-driver))
 
 (def default-cloud
-  {:cloud/name (o 'default-cloud-name [])
-   :cloud/domain (o 'default-cloud-domain [])
-   :cloud/graph (o 'default-cloud-graph [])
-   :overlay/version (long (o 'overlay-version []))
+  {:cloud/name (oracle-str-const 'default-cloud-name mirror-default-cloud-name)
+   :cloud/domain (oracle-str-const 'default-cloud-domain mirror-default-cloud-domain)
+   :cloud/graph (oracle-str-const 'default-cloud-graph mirror-default-cloud-graph)
+   :overlay/version (oracle-i64-const 'overlay-version mirror-overlay-version)
    :overlay/address-family :identity
    :overlay/direct [:quic :webrtc :webtransport]
    :overlay/relay [:murakumo-relay]
-   :overlay/auth-key-env (o 'default-auth-key-env [])
+   :overlay/auth-key-env (oracle-str-const 'default-auth-key-env mirror-default-auth-key-env)
    :overlay/auth-key-source :operator-seed
    :relays []
    :policy {:default :deny :allow []}})
@@ -45,35 +116,44 @@
 
 (defn overlay-id
   "Stable CID for an overlay namespace.
-   JVM: preimage via kotoba `overlay-id-input`."
+   Preimage via kotoba `overlay-id-input` when oracle ready."
   [cloud]
   (identity/graph-cid
-   (o 'overlay-id-input
-      [(str (or (:overlay/id cloud) ""))
-       (str (or (:cloud/name cloud) ""))])))
+   (try-oracle
+    #(o 'overlay-id-input
+        [(str (or (:overlay/id cloud) ""))
+         (str (or (:cloud/name cloud) ""))])
+    #(mirror-overlay-id-input cloud))))
 
 (defn node-id
   "Stable node CID inside an overlay.
-   JVM: preimage via kotoba `node-id-input`."
+   Preimage via kotoba `node-id-input` when oracle ready."
   [cloud node]
   (identity/graph-cid
-   (o 'node-id-input
-      [(str (overlay-id cloud)) (str (:name node))])))
+   (try-oracle
+    #(o 'node-id-input
+        [(str (overlay-id cloud)) (str (:name node))])
+    #(mirror-node-id-input (overlay-id cloud) (:name node)))))
 
 (defn node-region
-  "JVM: kotoba `node-region` (zone / region-label / region / global)."
+  "Kotoba `node-region` (zone / region-label / region / global) when ready."
   [node]
-  (o 'node-region
-     [(str (or (get-in node [:labels :zone]) ""))
-      (str (or (get-in node [:labels :region]) ""))
-      (str (or (:region node) ""))]))
+  (try-oracle
+   #(o 'node-region
+       [(str (or (get-in node [:labels :zone]) ""))
+        (str (or (get-in node [:labels :region]) ""))
+        (str (or (:region node) ""))])
+   #(mirror-node-region node)))
 
 (defn relay-score
-  "JVM: kotoba `relay-score`."
+  "Kotoba `relay-score` when oracle ready."
   [node relay]
-  (long (o 'relay-score
-           [(str (node-region node))
-            (str (or (:region relay) ""))])))
+  (try-oracle
+   #(oracle/i64->host
+     (o 'relay-score
+        [(str (node-region node))
+         (str (or (:region relay) ""))]))
+   #(mirror-relay-score node relay)))
 
 (defn choose-relay
   "Choose a deterministic relay for node fallback."
@@ -106,22 +186,59 @@
         http-port (inv/node-port fleet node)]
     (case transport
       :quic {:transport :quic
-             :endpoint (o 'quic-endpoint [(str host) (long p2p-port)])}
+             :endpoint (try-oracle
+                        #(o 'quic-endpoint [(str host) (oracle/as-i64 p2p-port)])
+                        #(mirror-quic-endpoint host p2p-port))}
       :webrtc {:transport :webrtc
-               :endpoint (o 'webrtc-endpoint [(str host) (long p2p-port)])}
+               :endpoint (try-oracle
+                          #(o 'webrtc-endpoint [(str host) (oracle/as-i64 p2p-port)])
+                          #(mirror-webrtc-endpoint host p2p-port))}
       :webtransport {:transport :webtransport
-                     :endpoint (format "https://%s:%d/.well-known/murakumo/webtransport" host http-port)}
+                     :endpoint (str "https://" host ":" http-port
+                                    "/.well-known/murakumo/webtransport")}
       {:transport transport
-       :endpoint (format "%s://%s" (name transport) host)})))
+       :endpoint (str (name transport) "://" host)})))
 
 (defn relay-endpoint
-  "JVM: endpoint URL via kotoba `relay-endpoint-url`."
+  "Endpoint URL via kotoba `relay-endpoint-url` when ready."
   [relay node-id]
   (when relay
     {:relay (:name relay)
      :transport (first (:transports relay))
-     :endpoint (o 'relay-endpoint-url
-                  [(str (:url relay)) (str node-id)])}))
+     :endpoint (try-oracle
+                #(o 'relay-endpoint-url
+                    [(str (:url relay)) (str node-id)])
+                #(mirror-relay-endpoint-url (:url relay) node-id))}))
+
+
+(defn- fmt
+  "CLI line formatter. On JVM uses clojure.core/format; on cljs interpolates %s/%d left-to-right."
+  [template & args]
+  #?(:clj (apply format template args)
+     :cljs
+     (loop [s template args (seq args)]
+       (if-not args
+         s
+         (let [a (first args)
+               i-s (str/index-of s "%s")
+               i-d (str/index-of s "%d")
+               i-p (str/index-of s "%-")
+               candidates (remove nil? [i-s i-d i-p])
+               i (when (seq candidates) (apply min candidates))]
+           (if (nil? i)
+             (throw (js/Error. (str "fmt: leftover args for " s)))
+             (cond
+               (= i i-s)
+               (recur (str (subs s 0 i) a (subs s (+ i 2))) (next args))
+               (= i i-d)
+               (recur (str (subs s 0 i) a (subs s (+ i 2))) (next args))
+               :else
+               ;; %-Ns padded field
+               (let [m (re-find #"%-[0-9]+s" (subs s i))
+                     _ (when-not m (throw (js/Error. (str "fmt: bad pad at " (subs s i)))))
+                     width (js/parseInt (re-find #"[0-9]+" m) 10)
+                     pad (str a (apply str (repeat (max 0 (- width (count (str a)))) " ")))]
+                 (recur (str (subs s 0 i) pad (subs s (+ i (count m)))) (next args))))))))))
 
 (defn route-record
   "Identity-overlay route hints for one node: direct candidates plus relay fallback."
@@ -304,27 +421,27 @@
         node-count (count (:nodes plan))]
     (vec
      (concat
-      [(format "murakumo.cloud %s  overlay %s" (:domain plan) (:overlay plan))
-       (format "  address-family %s ; nodes %d ; relays %d"
+      [(fmt "murakumo.cloud %s  overlay %s" (:domain plan) (:overlay plan))
+       (fmt "  address-family %s ; nodes %d ; relays %d"
                (name (:address_family plan)) node-count relay-count)
        "  NODE           REGION     RELAY          DIRECT"]
       (for [node (:nodes plan)]
-        (format "  %-14s %-10s %-14s %s"
+        (fmt "  %-14s %-10s %-14s %s"
                 (:name node)
                 (:region node)
                 (or (:relay node) "-")
                 (str/join "," (map name (:direct node)))))
-      [(format "  policy default=%s allow=%d"
+      [(fmt "  policy default=%s allow=%d"
                (name (get-in plan [:policy :default]))
                (count (get-in plan [:policy :allow])))]))))
 
 (defn route-lines [plan]
   (vec
    (concat
-    [(format "murakumo.cloud routes overlay %s" (:overlay plan))
+    [(fmt "murakumo.cloud routes overlay %s" (:overlay plan))
      "  NODE           DIRECT                                      RELAY"]
     (for [route (:routes plan)]
-      (format "  %-14s %-43s %s"
+      (fmt "  %-14s %-43s %s"
               (:name route)
               (str/join "," (map (comp name :transport) (:direct route)))
               (or (get-in route [:relay :relay]) "-"))))))
@@ -333,11 +450,11 @@
   (let [{:keys [request route allowed? reason]} (dial-plan plan node-name opts)]
     (cond
       (nil? route)
-      [(format "unknown murakumo.cloud node: %s" node-name)]
+      [(fmt "unknown murakumo.cloud node: %s" node-name)]
 
       (not allowed?)
-      [(format "murakumo.cloud dial %s denied by policy" node-name)
-       (format "  from=%s to=%s capability=%s reason=%s"
+      [(fmt "murakumo.cloud dial %s denied by policy" node-name)
+       (fmt "  from=%s to=%s capability=%s reason=%s"
                (name (:from request))
                (name (:to request))
                (name (:capability request))
@@ -346,60 +463,60 @@
       :else
       (vec
        (concat
-        [(format "murakumo.cloud dial %s  node %s" (:name route) (:node route))
-         (format "  authorized: from=%s to=%s capability=%s"
+        [(fmt "murakumo.cloud dial %s  node %s" (:name route) (:node route))
+         (fmt "  authorized: from=%s to=%s capability=%s"
                  (name (:from request))
                  (name (:to request))
                  (name (:capability request)))
          "  direct candidates:"]
         (map (fn [{:keys [transport endpoint]}]
-               (format "    %-12s %s" (name transport) endpoint))
+               (fmt "    %-12s %s" (name transport) endpoint))
              (:direct route))
-        [(format "  relay fallback: %s"
+        [(fmt "  relay fallback: %s"
                  (or (some-> route :relay :endpoint) "-"))])))))
 
 (defn connect-lines [plan node-name opts]
   (let [{:keys [request argv allowed? reason route]} (connect-plan plan node-name opts)]
     (cond
       (nil? route)
-      [(format "unknown murakumo.cloud node: %s" node-name)]
+      [(fmt "unknown murakumo.cloud node: %s" node-name)]
 
       (not allowed?)
-      [(format "murakumo.cloud connect %s denied by policy" node-name)
-       (format "  from=%s to=%s capability=%s reason=%s"
+      [(fmt "murakumo.cloud connect %s denied by policy" node-name)
+       (fmt "  from=%s to=%s capability=%s reason=%s"
                (name (:from request))
                (name (:to request))
                (name (:capability request))
                (name reason))]
 
       :else
-      [(format "murakumo.cloud connect %s" node-name)
+      [(fmt "murakumo.cloud connect %s" node-name)
        (str "  " (str/join " " argv))])))
 
 (defn relay-lines [plan relay-name opts]
   (let [{:keys [argv ok? reason]} (relay-plan plan relay-name opts)]
     (if ok?
-      [(format "murakumo.cloud relay %s" relay-name)
+      [(fmt "murakumo.cloud relay %s" relay-name)
        (str "  " (str/join " " argv))]
-      [(format "unknown murakumo.cloud relay: %s" relay-name)
-       (format "  reason=%s" (name reason))])))
+      [(fmt "unknown murakumo.cloud relay: %s" relay-name)
+       (fmt "  reason=%s" (name reason))])))
 
 (defn bootstrap-text-lines [plan opts]
   (let [{:keys [relays connects]} (bootstrap-plan plan opts)]
     (vec
      (concat
-      [(format "murakumo.cloud bootstrap overlay %s" (:overlay plan))
+      [(fmt "murakumo.cloud bootstrap overlay %s" (:overlay plan))
        "  relays:"]
       (map (fn [{:keys [relay argv reason]}]
              (if argv
-               (format "    %-14s %s" (:name relay) (str/join " " argv))
-               (format "    %-14s skipped reason=%s" "-" (name reason))))
+               (fmt "    %-14s %s" (:name relay) (str/join " " argv))
+               (fmt "    %-14s skipped reason=%s" "-" (name reason))))
            relays)
       ["  connects:"]
       (map (fn [{:keys [route argv reason]}]
              (if argv
-               (format "    %-14s %s" (:name route) (str/join " " argv))
-               (format "    %-14s skipped reason=%s" (or (:name route) "-") (name reason))))
+               (fmt "    %-14s %s" (:name route) (str/join " " argv))
+               (fmt "    %-14s skipped reason=%s" (or (:name route) "-") (name reason))))
            connects)))))
 
 (defn bootstrap-lines [plan opts]
