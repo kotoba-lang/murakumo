@@ -8,7 +8,14 @@
 
 (def port-source (slurp "kotoba/overlay_runtime_core.kotoba"))
 (def export-prefix
-  "default-relay-port default-web-port default-quic-port default-port-for-kind known-adapter? adapter-kind digit-char nat-str i64-str endpoint-kind scheme-prefix-host")
+  (str "default-relay-port default-web-port default-quic-port "
+       "default-port-for-kind known-adapter? adapter-kind "
+       "digit-char nat-str i64-str endpoint-kind scheme-prefix-host "
+       "starts-with? scheme-quic scheme-webrtc scheme-relay scheme-webtransport "
+       "kind-quic kind-webrtc kind-webtransport kind-relay kind-other "
+       "adapter-relay adapter-quic adapter-webrtc adapter-webtransport "
+       "adapter-relay-client adapter-kind-relay-runtime adapter-kind-quic "
+       "adapter-kind-webrtc adapter-kind-webtransport adapter-kind-relay"))
 
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -45,7 +52,13 @@
             "k0" (str "(known-adapter? " (kotoba-literal "nope") ")")})
         s (compile-string-cases
            {"ak" (str "(adapter-kind " (kotoba-literal "murakumo.runtime.quic") ")")
-            "ar" (str "(adapter-kind " (kotoba-literal "murakumo.runtime.relay") ")")})]
+            "ar" (str "(adapter-kind " (kotoba-literal "murakumo.runtime.relay") ")")
+            "sq" "(scheme-quic)"
+            "aq" "(adapter-quic)"
+            "arly" "(adapter-relay)"
+            "kq" "(kind-quic)"
+            "ko" "(kind-other)"
+            "akr" "(adapter-kind-relay-runtime)"})]
     (is (= runtime/default-relay-port (get n "r")))
     (is (= runtime/default-web-port (get n "w")))
     (is (= runtime/default-quic-port (get n "q")))
@@ -55,7 +68,19 @@
     (is (= (if (runtime/known-adapter? "murakumo.runtime.quic") 1 0) (get n "k1")))
     (is (= 0 (get n "k0")))
     (is (= (name (:kind (runtime/adapter "murakumo.runtime.quic"))) (get s "ak")))
-    (is (= (name (:kind (runtime/adapter "murakumo.runtime.relay"))) (get s "ar")))))
+    (is (= (name (:kind (runtime/adapter "murakumo.runtime.relay"))) (get s "ar")))
+    (is (= runtime/scheme-quic (get s "sq")))
+    (is (= "quic://" (get s "sq")))
+    (is (= runtime/adapter-quic (get s "aq")))
+    (is (= "murakumo.runtime.quic" (get s "aq")))
+    (is (= runtime/adapter-relay (get s "arly")))
+    (is (= runtime/kind-quic (get s "kq")))
+    (is (= runtime/kind-other (get s "ko")))
+    (is (= "other" (get s "ko")))
+    (is (= runtime/adapter-kind-relay-runtime (get s "akr")))
+    (is (= "relay-runtime" (get s "akr")))
+    (is (true? (runtime/known-adapter? runtime/adapter-quic)))
+    (is (= :quic (:kind (runtime/adapter runtime/adapter-quic))))))
 
 (deftest endpoint-kind-and-host-parse
   (let [actual (compile-string-cases

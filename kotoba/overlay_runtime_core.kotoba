@@ -2,12 +2,19 @@
   (:export [default-relay-port default-web-port default-quic-port
             default-port-for-kind known-adapter? adapter-kind
             digit-char nat-str i64-str
-            endpoint-kind scheme-prefix-host]))
+            endpoint-kind scheme-prefix-host
+            starts-with?
+            scheme-quic scheme-webrtc scheme-relay scheme-webtransport
+            kind-quic kind-webrtc kind-webtransport kind-relay kind-other
+            adapter-relay adapter-quic adapter-webrtc adapter-webtransport
+            adapter-relay-client
+            adapter-kind-relay-runtime adapter-kind-quic adapter-kind-webrtc
+            adapter-kind-webtransport adapter-kind-relay]))
 
 ;; W6 pure-planner oracle — murakumo.overlay.runtime + driver scalar core.
 ;; adapter registry maps and full URL regex parse stay cljc.
-;; known-adapter? / adapter-kind cover the five placeholder adapters.
-;; endpoint-kind: quic|webrtc|webtransport|relay|other from scheme prefix.
+;; scheme/kind/adapter name tokens dual-source; known-adapter?/adapter-kind/
+;; endpoint-kind/default-port-for-kind recompose from tokens.
 ;; scheme-prefix-host: host between "://" and next ":" or "/" or end.
 ;; Parity: test/murakumo/overlay_runtime_kotoba_parity_test.clj
 
@@ -15,38 +22,70 @@
 (defn default-web-port [] :i64 443)
 (defn default-quic-port [] :i64 4001)
 
+(defn starts-with? [s :string prefix :string] :i64
+  (let [n (string-byte-length s)
+        p (string-byte-length prefix)]
+    (if (< n p)
+      0
+      (if (string=? (string-substring s 0 p) prefix) 1 0))))
+
+;; ── residual scheme / kind / adapter tokens ──────────────────────────
+
+(defn scheme-quic [] :string "quic://")
+(defn scheme-webrtc [] :string "webrtc://")
+(defn scheme-relay [] :string "relay://")
+(defn scheme-webtransport [] :string "webtransport://")
+
+(defn kind-quic [] :string "quic")
+(defn kind-webrtc [] :string "webrtc")
+(defn kind-webtransport [] :string "webtransport")
+(defn kind-relay [] :string "relay")
+(defn kind-other [] :string "other")
+
+(defn adapter-relay [] :string "murakumo.runtime.relay")
+(defn adapter-quic [] :string "murakumo.runtime.quic")
+(defn adapter-webrtc [] :string "murakumo.runtime.webrtc")
+(defn adapter-webtransport [] :string "murakumo.runtime.webtransport")
+(defn adapter-relay-client [] :string "murakumo.runtime.relay-client")
+
+(defn adapter-kind-relay-runtime [] :string "relay-runtime")
+(defn adapter-kind-quic [] :string "quic")
+(defn adapter-kind-webrtc [] :string "webrtc")
+(defn adapter-kind-webtransport [] :string "webtransport")
+(defn adapter-kind-relay [] :string "relay")
+
 (defn default-port-for-kind [kind :string] :i64
-  (if (string=? kind "quic")
-    4001
-    (if (string=? kind "relay")
-      4701
-      (if (if (string=? kind "webrtc") 1
-            (if (string=? kind "webtransport") 1 0))
-        443
+  (if (string=? kind (kind-quic))
+    (default-quic-port)
+    (if (string=? kind (kind-relay))
+      (default-relay-port)
+      (if (if (string=? kind (kind-webrtc)) 1
+            (if (string=? kind (kind-webtransport)) 1 0))
+        (default-web-port)
         0))))
 
 (defn known-adapter? [name :string] :i64
-  (if (string=? name "murakumo.runtime.relay")
+  (if (string=? name (adapter-relay))
     1
-    (if (string=? name "murakumo.runtime.quic")
+    (if (string=? name (adapter-quic))
       1
-      (if (string=? name "murakumo.runtime.webrtc")
+      (if (string=? name (adapter-webrtc))
         1
-        (if (string=? name "murakumo.runtime.webtransport")
+        (if (string=? name (adapter-webtransport))
           1
-          (if (string=? name "murakumo.runtime.relay-client") 1 0))))))
+          (if (string=? name (adapter-relay-client)) 1 0))))))
 
 (defn adapter-kind [name :string] :string
-  (if (string=? name "murakumo.runtime.relay")
-    "relay-runtime"
-    (if (string=? name "murakumo.runtime.quic")
-      "quic"
-      (if (string=? name "murakumo.runtime.webrtc")
-        "webrtc"
-        (if (string=? name "murakumo.runtime.webtransport")
-          "webtransport"
-          (if (string=? name "murakumo.runtime.relay-client")
-            "relay"
+  (if (string=? name (adapter-relay))
+    (adapter-kind-relay-runtime)
+    (if (string=? name (adapter-quic))
+      (adapter-kind-quic)
+      (if (string=? name (adapter-webrtc))
+        (adapter-kind-webrtc)
+        (if (string=? name (adapter-webtransport))
+          (adapter-kind-webtransport)
+          (if (string=? name (adapter-relay-client))
+            (adapter-kind-relay)
             ""))))))
 
 (defn digit-char [d :i64] :string
@@ -64,20 +103,16 @@
     (nat-str n)))
 
 (defn endpoint-kind [endpoint :string] :string
-  (let [n (string-byte-length endpoint)]
-    (if (if (< n 7) 0
-          (if (string=? (string-substring endpoint 0 7) "quic://") 1 0))
-      "quic"
-      (if (if (< n 9) 0
-            (if (string=? (string-substring endpoint 0 9) "webrtc://") 1 0))
-        "webrtc"
-        (if (if (< n 8) 0
-              (if (string=? (string-substring endpoint 0 8) "relay://") 1 0))
-          "relay"
-          (if (if (< n 15) 0
-                (if (string=? (string-substring endpoint 0 15) "webtransport://") 1 0))
-            "webtransport"
-            "other"))))))
+  ;; quic|webrtc|relay|webtransport|other from scheme prefix
+  (if (= (starts-with? endpoint (scheme-quic)) 1)
+    (kind-quic)
+    (if (= (starts-with? endpoint (scheme-webrtc)) 1)
+      (kind-webrtc)
+      (if (= (starts-with? endpoint (scheme-relay)) 1)
+        (kind-relay)
+        (if (= (starts-with? endpoint (scheme-webtransport)) 1)
+          (kind-webtransport)
+          (kind-other))))))
 
 (defn find-scheme-end [s :string i :i64 n :i64] :i64
   ;; index after "://" or -1
