@@ -13,7 +13,9 @@
             launchd-daemon-path tee-plist-prefix
             label-kv plist-heredoc-footer
             peer-at-sep peer-join-sep peer-entry
-            did-key-prefix]))
+            did-key-prefix
+            home-bin-suffix home-bin-path
+            label-join-sep roles-join-sep]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.provision.plan string/port.
 ;; resolve-p2p-port uses [:option :i64] (no has-* sentinels).
@@ -21,6 +23,7 @@
 ;; launch/peer-id/link/watchdog shell strings are pure.
 ;; rsync argv fragments + launchd path/tee prefix dual-source.
 ;; peer-entry (peerid@multiaddr) dual-source for bootstrap-str host fold.
+;; home-bin-path + label/roles join seps dual-source for render-plist.
 ;; Parity: test/murakumo/provision_plan_kotoba_parity_test.clj
 
 (defn plist-label [] :string "com.murakumo.kotoba-mesh")
@@ -205,3 +208,21 @@
 (defn did-key-prefix [] :string
   ;; peer-id-from-log / peer-id-log-command DID prefix
   "did:key:")
+
+;; ── residual render-plist path + join seps ───────────────────────────
+
+(defn home-bin-suffix [] :string
+  ;; cljc: "/.murakumo/bin" under node home for {{BIN}}
+  "/.murakumo/bin")
+
+(defn home-bin-path [home :string] :string
+  ;; cljc: (str home "/.murakumo/bin")
+  (string-concat home (home-bin-suffix)))
+
+(defn label-join-sep [] :string
+  ;; labels-env host join between label-kv pairs
+  ",")
+
+(defn roles-join-sep [] :string
+  ;; render-plist {{ROLES}} CSV join
+  ",")

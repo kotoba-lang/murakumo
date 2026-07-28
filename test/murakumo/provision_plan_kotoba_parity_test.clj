@@ -148,3 +148,20 @@
       (is (str/includes? boot "12D3j@"))
       (is (str/includes? boot "/ip4/100.0.0.2/udp/5001/quic-v1"))
       (is (not (str/includes? boot "asher"))))))
+
+(deftest home-bin-and-join-sep-fragments-match
+  (let [s (compile-string-cases
+           {"hs" "(home-bin-suffix)"
+            "hp" (str "(home-bin-path " (kotoba-literal "/Users/mesh") ")")
+            "lj" "(label-join-sep)"
+            "rj" "(roles-join-sep)"})]
+    (is (= plan/home-bin-suffix (get s "hs")))
+    (is (= "/.murakumo/bin" (get s "hs")))
+    (is (= (plan/home-bin-path "/Users/mesh") (get s "hp")))
+    (is (= "/Users/mesh/.murakumo/bin" (get s "hp")))
+    (is (= plan/label-join-sep (get s "lj")))
+    (is (= plan/roles-join-sep (get s "rj")))
+    (is (= "," plan/label-join-sep))
+    (is (= "," plan/roles-join-sep))
+    (is (= "zone=jp,role=compute"
+           (plan/labels-env {:zone "jp" :role "compute"})))))
