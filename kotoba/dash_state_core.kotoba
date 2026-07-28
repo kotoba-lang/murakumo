@@ -1,0 +1,27 @@
+(ns dash-state-core
+  (:export [short-hosted-cid health-class-of interval-sleep-ms clamp-at]))
+
+;; W6 pure-planner oracle — murakumo.dash.state subset (display / selection math).
+;; Map/vector reducers (placements, selected-snapshot, render-html) stay cljc.
+;; Guest: string=? yields truthy for if; lengths are byte indices (ASCII CIDs).
+;; Parity: test/murakumo/dash_state_kotoba_parity_test.clj
+
+(defn short-hosted-cid [cid :string] :string
+  (let [n (string-byte-length cid)
+        end (if (< n 18) n 18)]
+    (string-substring cid 0 end)))
+
+(defn health-class-of [health :string] :string
+  (if (string=? health "ok")
+    "ok"
+    "down"))
+
+(defn interval-sleep-ms [seconds :i64] :i64
+  (* 1000 seconds))
+
+(defn clamp-at [requested-at :i64 history-count :i64] :i64
+  ;; cljc: (min (max 0 (or requested-at 0)) (max 0 (dec history-count)))
+  ;; Callers pass 0 for nil requested-at.
+  (let [req (if (< requested-at 0) 0 requested-at)
+        hi (if (< history-count 1) 0 (- history-count 1))]
+    (if (< req hi) req hi)))
