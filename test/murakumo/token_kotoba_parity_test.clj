@@ -11,7 +11,9 @@
 (def port-source (slurp "kotoba/token_core.kotoba"))
 
 (def export-prefix
-  "version default-ttl claim-sub claim-scope claim-exp expired? scope-allows? signing-input")
+  (str "version default-ttl claim-sub claim-scope claim-exp expired? scope-allows? signing-input "
+       "digit-char nat-str i64-str encode-claims-json wire-token "
+       "version-ok? parts-present? constant-time-eq ct-scan"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -140,3 +142,43 @@
                 {"si" (str "(signing-input " (kotoba-literal payload) ")")})]
     (is (= (str tok/version "." payload)
            (get actual "si")))))
+
+
+(deftest encode-claims-and-wire-token
+  (let [cl (tok/claims {:sub "shinshi" :scope "chat" :now 1000 :ttl 60})
+        jvm-json (str "{\"sub\":\"" (:sub cl) "\",\"scope\":\"" (:scope cl)
+                      "\",\"iat\":" (:iat cl) ",\"exp\":" (:exp cl) "}")
+        actual (compile-string-cases
+                {"ej" (str "(encode-claims-json "
+                           (kotoba-literal (:sub cl)) " "
+                           (kotoba-literal (:scope cl)) " "
+                           (:iat cl) " " (:exp cl) ")")
+                 "wt" (str "(wire-token " (kotoba-literal "PAY") " "
+                           (kotoba-literal "SIG") ")")
+                 "si" (str "(signing-input " (kotoba-literal "PAY") ")")})]
+    (is (= jvm-json (get actual "ej")))
+    (is (= "mk1.PAY.SIG" (get actual "wt")))
+    (is (= "mk1.PAY" (get actual "si")))))
+
+(deftest constant-time-eq-and-parts
+  (let [ct @(var murakumo.token/constant-time=)
+        actual (compile-i64-cases
+                {"eq" (str "(constant-time-eq " (kotoba-literal "abc") " "
+                           (kotoba-literal "abc") ")")
+                 "ne" (str "(constant-time-eq " (kotoba-literal "abc") " "
+                           (kotoba-literal "abd") ")")
+                 "len" (str "(constant-time-eq " (kotoba-literal "ab") " "
+                            (kotoba-literal "abc") ")")
+                 "vok" (str "(version-ok? " (kotoba-literal "mk1") ")")
+                 "vbad" (str "(version-ok? " (kotoba-literal "mk2") ")")
+                 "pp1" "(parts-present? 1 1 1)"
+                 "pp0" "(parts-present? 1 1 0)"})]
+    (is (= 1 (get actual "eq")))
+    (is (= 0 (get actual "ne")))
+    (is (= 0 (get actual "len")))
+    (is (= (if (ct "abc" "abc") 1 0) (get actual "eq")))
+    (is (= (if (ct "abc" "abd") 1 0) (get actual "ne")))
+    (is (= 1 (get actual "vok")))
+    (is (= 0 (get actual "vbad")))
+    (is (= 1 (get actual "pp1")))
+    (is (= 0 (get actual "pp0")))))
