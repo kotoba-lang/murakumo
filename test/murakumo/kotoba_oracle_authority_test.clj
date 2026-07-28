@@ -1204,7 +1204,22 @@
   (is (= ["kotoba" "kotoba-server"] dplan/pinned-binaries))
   (let [pin (dplan/pin-copy-plan "/rel" "bin")]
     (is (= "/rel/kotoba" (-> pin :binaries first :src)))
-    (is (= "bin/wit" (get-in pin [:wit :dest])))))
+    (is (= "bin/wit" (get-in pin [:wit :dest]))))
+  (is (= "component" dplan/component-subcmd))
+  (is (= "build" dplan/build-subcmd))
+  (is (= "app" dplan/app-subcmd))
+  (is (= "deploy" dplan/deploy-subcmd))
+  (is (= "--wit-dir" dplan/wit-dir-flag))
+  (is (= "-o" dplan/output-flag))
+  (is (= "--publish" dplan/publish-flag))
+  (is (= "--url" dplan/url-flag))
+  (is (= "--token" dplan/token-flag))
+  (is (= "block" dplan/block-subcmd))
+  (is (= "put" dplan/put-subcmd))
+  (is (= "--file" dplan/file-flag))
+  (is (= "component" (second (dplan/component-build-argv "k" "s" "w" "o"))))
+  (is (= "--wit-dir" (nth (dplan/app-deploy-argv "k" "m" "w" 1) 4)))
+  (is (= "block" (nth (dplan/block-put-argv "k" "t" "w" 1) 5))))
 (deftest product-shell-connect-uses-oracle-results
   (let [connect {:default-class :wasm
                  :classes {:wasm {:read [:http] :live [:webrtc]}
@@ -1268,6 +1283,14 @@
     (is (= (oracle/call :deploy-plan 'pin-wit-dest ["bin"])
            (dplan/pin-wit-dest "bin")))
     (is (= (oracle/call :deploy-plan 'pin-bin-kotoba []) dplan/pin-bin-kotoba))
+    (is (= (ir/execute d 'component-subcmd [])
+           (oracle/call :deploy-plan 'component-subcmd [])))
+    (is (= (ir/execute d 'wit-dir-flag [])
+           (oracle/call :deploy-plan 'wit-dir-flag [])))
+    (is (= (ir/execute d 'file-flag [])
+           (oracle/call :deploy-plan 'file-flag [])))
+    (is (= (oracle/call :deploy-plan 'component-subcmd []) dplan/component-subcmd))
+    (is (= (oracle/call :deploy-plan 'block-subcmd []) dplan/block-subcmd))
     (is (= (ir/execute c 'default-class-name [""])
            (oracle/call :connect 'default-class-name [""])))
     (is (= (ir/execute c 'serves-plane?

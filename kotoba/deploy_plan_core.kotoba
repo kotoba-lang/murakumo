@@ -16,13 +16,17 @@
             cp-bin rm-bin rm-rf-flag cp-recursive-flag
             git-c-flag git-rev-parse git-short-flag git-head-ref
             version-flag version-bin-path build-features
-            missing-manifest? missing-operator-seed?]))
+            missing-manifest? missing-operator-seed?
+            component-subcmd build-subcmd app-subcmd deploy-subcmd
+            wit-dir-flag output-flag publish-flag url-flag
+            token-flag block-subcmd put-subcmd file-flag]))
 
 ;; W6 pure-planner oracle — murakumo.deploy.plan path/argv/constants core.
 ;; Vector argv maps, artifact distribution over nodes, regex extract stay cljc.
 ;; Guest ABI max arity 5: component-build joins 4 path args + bin.
 ;; Argv flag/bin fragments + deploy-command-error gates dual-source.
 ;; pin-wit-dest + join-path dual-source for pin-copy-plan path fragments.
+;; component/app/block subcmd + flag fragments dual-source for argv vectors.
 ;; Parity: test/murakumo/deploy_plan_kotoba_parity_test.clj
 
 (defn default-wasm [] :string "/tmp/murakumo-deploy.wasm")
@@ -96,9 +100,24 @@
 (defn command-output [out :string] :string
   (trim out))
 
+;; ── residual component/app/block argv subcmd + flag fragments ────────
+
+(defn component-subcmd [] :string "component")
+(defn build-subcmd [] :string "build")
+(defn app-subcmd [] :string "app")
+(defn deploy-subcmd [] :string "deploy")
+(defn wit-dir-flag [] :string "--wit-dir")
+(defn output-flag [] :string "-o")
+(defn publish-flag [] :string "--publish")
+(defn url-flag [] :string "--url")
+(defn token-flag [] :string "--token")
+(defn block-subcmd [] :string "block")
+(defn put-subcmd [] :string "put")
+(defn file-flag [] :string "--file")
+
 (defn component-build-cmd [kotoba :string src-path :string
                            wit :string wasm :string] :string
-  ;; space-joined form of component-build-argv
+  ;; space-joined form of component-build-argv (fragments dual-sourced for argv)
   (string-concat
    kotoba
    (string-concat
