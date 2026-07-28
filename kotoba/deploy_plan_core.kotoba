@@ -12,6 +12,7 @@
             absolute-unix-git-bin? blank?
             pin-bin-kotoba pin-bin-server
             join-path release-wit-suffix
+            pin-wit-dirname pin-wit-dest
             cp-bin rm-bin rm-rf-flag cp-recursive-flag
             git-c-flag git-rev-parse git-short-flag git-head-ref
             version-flag version-bin-path build-features
@@ -21,6 +22,7 @@
 ;; Vector argv maps, artifact distribution over nodes, regex extract stay cljc.
 ;; Guest ABI max arity 5: component-build joins 4 path args + bin.
 ;; Argv flag/bin fragments + deploy-command-error gates dual-source.
+;; pin-wit-dest + join-path dual-source for pin-copy-plan path fragments.
 ;; Parity: test/murakumo/deploy_plan_kotoba_parity_test.clj
 
 (defn default-wasm [] :string "/tmp/murakumo-deploy.wasm")
@@ -229,3 +231,13 @@
 
 (defn missing-operator-seed? [operator-seed :string] :i64
   (blank? operator-seed))
+
+;; ── residual pin-copy-plan path fragments ────────────────────────────
+
+(defn pin-wit-dirname [] :string
+  ;; cljc: "wit" under pin dest
+  "wit")
+
+(defn pin-wit-dest [dest :string] :string
+  ;; cljc: (str dest "/wit")
+  (join-path dest (pin-wit-dirname)))

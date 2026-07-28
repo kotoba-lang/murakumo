@@ -18,6 +18,7 @@
        "digit-val? digit-of parse-digits-go parse-digits trim-ws "
        "execution-observed? execution-count-command release-wit-path stop-forward-command "
        "absolute-unix-git-bin? blank? pin-bin-kotoba pin-bin-server join-path release-wit-suffix "
+       "pin-wit-dirname pin-wit-dest "
        "cp-bin rm-bin rm-rf-flag cp-recursive-flag "
        "git-c-flag git-rev-parse git-short-flag git-head-ref "
        "version-flag version-bin-path build-features "
@@ -175,3 +176,25 @@
     (is (= ["/usr/bin/git" "-C" "release" "rev-parse" "--short" "HEAD"]
            (plan/git-short-sha-argv "release" "/usr/bin/git")))
     (is (= ["bin/kotoba" "--version"] (plan/version-argv "bin")))))
+
+(deftest pin-path-fragments-match
+  (let [s (compile-string-cases
+           {"jp" (str "(join-path " (kotoba-literal "src") " "
+                      (kotoba-literal "kotoba") ")")
+            "wd" "(pin-wit-dirname)"
+            "pw" (str "(pin-wit-dest " (kotoba-literal "bin") ")")
+            "pk" "(pin-bin-kotoba)"
+            "ps" "(pin-bin-server)"})]
+    (is (= (plan/join-path "src" "kotoba") (get s "jp")))
+    (is (= "src/kotoba" (get s "jp")))
+    (is (= plan/pin-wit-dirname (get s "wd")))
+    (is (= "wit" (get s "wd")))
+    (is (= (plan/pin-wit-dest "bin") (get s "pw")))
+    (is (= "bin/wit" (get s "pw")))
+    (is (= plan/pin-bin-kotoba (get s "pk")))
+    (is (= plan/pin-bin-server (get s "ps")))
+    (is (= ["kotoba" "kotoba-server"] plan/pinned-binaries))
+    (let [pin (plan/pin-copy-plan "/rel" "bin")]
+      (is (= "/rel/kotoba" (-> pin :binaries first :src)))
+      (is (= "bin/kotoba-server" (-> pin :binaries second :dest)))
+      (is (= "bin/wit" (get-in pin [:wit :dest]))))))

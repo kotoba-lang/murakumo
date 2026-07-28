@@ -1175,7 +1175,16 @@
   (is (= ["bin/kotoba" "--version"] (dplan/version-argv "bin")))
   (is (= :missing-manifest (dplan/deploy-command-error nil "seed")))
   (is (= :missing-operator-seed (dplan/deploy-command-error "m.edn" "")))
-  (is (nil? (dplan/deploy-command-error "m.edn" "seed"))))
+  (is (nil? (dplan/deploy-command-error "m.edn" "seed")))
+  (is (= "kotoba" dplan/pin-bin-kotoba))
+  (is (= "kotoba-server" dplan/pin-bin-server))
+  (is (= "wit" dplan/pin-wit-dirname))
+  (is (= "a/b" (dplan/join-path "a" "b")))
+  (is (= "bin/wit" (dplan/pin-wit-dest "bin")))
+  (is (= ["kotoba" "kotoba-server"] dplan/pinned-binaries))
+  (let [pin (dplan/pin-copy-plan "/rel" "bin")]
+    (is (= "/rel/kotoba" (-> pin :binaries first :src)))
+    (is (= "bin/wit" (get-in pin [:wit :dest])))))
 (deftest product-shell-connect-uses-oracle-results
   (let [connect {:default-class :wasm
                  :classes {:wasm {:read [:http] :live [:webrtc]}
@@ -1228,6 +1237,17 @@
            (oracle/call :deploy-plan 'missing-operator-seed? ["seed"])))
     (is (= (oracle/call :deploy-plan 'cp-bin []) dplan/cp-bin))
     (is (= (oracle/call :deploy-plan 'build-features []) dplan/build-features))
+    (is (= (ir/execute d 'join-path ["a" "b"])
+           (oracle/call :deploy-plan 'join-path ["a" "b"])))
+    (is (= (ir/execute d 'pin-wit-dirname [])
+           (oracle/call :deploy-plan 'pin-wit-dirname [])))
+    (is (= (ir/execute d 'pin-wit-dest ["bin"])
+           (oracle/call :deploy-plan 'pin-wit-dest ["bin"])))
+    (is (= (oracle/call :deploy-plan 'join-path ["a" "b"])
+           (dplan/join-path "a" "b")))
+    (is (= (oracle/call :deploy-plan 'pin-wit-dest ["bin"])
+           (dplan/pin-wit-dest "bin")))
+    (is (= (oracle/call :deploy-plan 'pin-bin-kotoba []) dplan/pin-bin-kotoba))
     (is (= (ir/execute c 'default-class-name [""])
            (oracle/call :connect 'default-class-name [""])))
     (is (= (ir/execute c 'serves-plane?

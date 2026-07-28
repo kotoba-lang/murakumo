@@ -400,6 +400,18 @@
    :result :i64,
    :effects #{},
    :body (blank? operator-seed),
+   :param-types [:string]}
+  {:name pin-wit-dirname,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "wit",
+   :param-types []}
+  {:name pin-wit-dest,
+   :params [dest],
+   :result :string,
+   :effects #{},
+   :body (join-path dest (pin-wit-dirname)),
    :param-types [:string]}],
  :oracle-value nil,
  :schema-identities nil,
@@ -436,6 +448,8 @@
   pin-bin-server
   join-path
   release-wit-suffix
+  pin-wit-dirname
+  pin-wit-dest
   cp-bin
   rm-bin
   rm-rf-flag
