@@ -1,0 +1,59 @@
+(ns persist-core
+  (:export [repo-authority fleet-graph-name snapshot-collection reconcile-collection
+            snapshot-local-port reconcile-local-port forward-settle-ms
+            digit-char nat-str i64-str
+            snapshot-rkey reconcile-rkey repo-uri repo-write-url write-ok?]))
+
+;; W6 pure-planner oracle — murakumo.persist string/constant core (optional).
+;; graph-cid hashing and envelope map assembly stay cljc (identity/graph-cid).
+;; write-ok?: substring match for "\"status\":\"ok\"" (cljc re-find).
+;; Parity: test/murakumo/persist_kotoba_parity_test.clj
+
+(defn repo-authority [] :string "did:web:etzhayyim.com:murakumo")
+(defn fleet-graph-name [] :string "murakumo-fleet")
+(defn snapshot-collection [] :string "com.murakumo.fleet.snapshot")
+(defn reconcile-collection [] :string "com.murakumo.fleet.reconcile")
+(defn snapshot-local-port [] :i64 18099)
+(defn reconcile-local-port [] :i64 18098)
+(defn forward-settle-ms [] :i64 400)
+
+(defn digit-char [d :i64] :string
+  (string-substring "0123456789" d (+ d 1)))
+
+(defn nat-str [n :i64] :string
+  (if (< n 10)
+    (digit-char n)
+    (string-concat (nat-str (quot n 10))
+                   (digit-char (- n (* (quot n 10) 10))))))
+
+(defn i64-str [n :i64] :string
+  (if (< n 0)
+    (string-concat "-" (nat-str (- 0 n)))
+    (nat-str n)))
+
+(defn snapshot-rkey [millis :i64 seq-n :i64] :string
+  (string-concat
+   "snap-"
+   (string-concat (i64-str millis) (string-concat "-" (i64-str seq-n)))))
+
+(defn reconcile-rkey [millis :i64 seq-n :i64] :string
+  (string-concat
+   "rec-"
+   (string-concat (i64-str millis) (string-concat "-" (i64-str seq-n)))))
+
+(defn repo-uri [collection :string rkey :string] :string
+  (string-concat
+   "at://"
+   (string-concat
+    (repo-authority)
+    (string-concat "/" (string-concat collection (string-concat "/" rkey))))))
+
+(defn repo-write-url [local-port :i64] :string
+  (string-concat
+   "http://localhost:"
+   (string-concat
+    (i64-str local-port)
+    "/xrpc/com.etzhayyim.apps.kotoba.atproto.repo.write")))
+
+(defn write-ok? [out :string] :i64
+  (if (string-contains? out "\"status\":\"ok\"") 1 0))
