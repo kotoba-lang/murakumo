@@ -1,0 +1,32 @@
+(ns infer-plan-core
+  (:export [gib default-os-reserve default-headroom usable-bytes choose-strategy-name]))
+
+;; W6 pure-planner oracle — murakumo.infer.plan subset (usable-bytes + choose-strategy).
+;; Full partition-layers/plan remain cljc (floats + vector reduce). No capabilities.
+;; GiB = 1073741824; default-os-reserve = 7/2 GiB; default-headroom = 5/4 GiB.
+;; wired-limit: pass -1 when absent (cljc nil).
+;; Parity: test/murakumo/infer_plan_kotoba_parity_test.clj
+
+(defn gib [] :i64 1073741824)
+
+(defn default-os-reserve [] :i64 3758096384)
+
+(defn default-headroom [] :i64 1342177280)
+
+(defn rem64 [a :i64 b :i64] :i64
+  (- a (* (quot a b) b)))
+
+(defn usable-bytes [mem :i64 os :i64 head :i64 wired :i64] :i64
+  (let [ceil0 (- mem os)
+        ceil1 (if (< wired 0) ceil0 (if (< wired ceil0) wired ceil0))
+        left (- ceil1 head)]
+    (if (< left 0) 0 left)))
+
+(defn choose-strategy-name [link-gbps :i64 ranks :i64 experts :i64 kv-heads :i64] :string
+  (let [fast (if (< link-gbps 20) 0 1)
+        div (if (< ranks 1) 0 (if (= 0 (rem64 kv-heads ranks)) 1 0))]
+    (if (if (= fast 1) (if (= div 1) 1 0) 0)
+      "tensor"
+      (if (if (= fast 1) (if (< ranks experts) 1 0) 0)
+        "expert"
+        "pipeline"))))
