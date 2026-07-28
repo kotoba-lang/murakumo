@@ -12,13 +12,15 @@
             dial-denied-line connect-denied-line
             dial-ok-title connect-ok-title relay-ok-title
             from-to-cap-reason authorized-line
-            relay-fallback-line reason-line indent-argv-line]))
+            relay-fallback-line reason-line indent-argv-line
+            address-family-line policy-line skipped-reason-suffix]))
 
 ;; W6 pure-planner oracle — murakumo.cloud.plan scalar/string core (low).
 ;; graph-cid hashing, choose-relay sort, record maps stay cljc.
 ;; node-region: first non-empty of zone, region-label, region, else "global".
 ;; webtransport + generic transport endpoint URL fragments dual-source.
 ;; CLI presentation labels/line templates dual-source (width fmt stays host).
+;; Summary address-family/policy lines dual-source (counts as i64).
 ;; Parity: test/murakumo/cloud_plan_kotoba_parity_test.clj
 
 (defn default-driver [] :string "murakumo-overlay")
@@ -183,3 +185,25 @@
 
 (defn indent-argv-line [argv-joined :string] :string
   (string-concat "  " argv-joined))
+
+(defn address-family-line [af :string nodes :i64 relays :i64] :string
+  ;; "  address-family %s ; nodes %d ; relays %d"
+  (string-concat
+   "  address-family "
+   (string-concat
+    af
+    (string-concat
+     " ; nodes "
+     (string-concat
+      (i64-str nodes)
+      (string-concat " ; relays " (i64-str relays)))))))
+
+(defn policy-line [default :string allow-n :i64] :string
+  ;; "  policy default=%s allow=%d"
+  (string-concat
+   "  policy default="
+   (string-concat default (string-concat " allow=" (i64-str allow-n)))))
+
+(defn skipped-reason-suffix [reason :string] :string
+  ;; host pads name column; this is the trailing " skipped reason=…" fragment
+  (string-concat " skipped reason=" reason))

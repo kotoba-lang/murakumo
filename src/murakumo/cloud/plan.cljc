@@ -5,15 +5,15 @@
 ;; packet plumbing; this namespace owns deterministic cloud records and routing
 ;; choices so the CLI can plan/publish them without an external VPN control plane.
 ;;
-;; W6 product-shell (ADR-260728-w6-cloud-lines-pure-oracle):
-;; defaults + region/score/endpoints + CLI presentation line templates DELEGATE
-;; to kotoba cloud_plan_core when oracle is loadable (JVM classpath or cljs/nbb).
-;; Record assembly, choose-relay sort, width fmt / collection folds stay host.
-;; cljs mirrors remain fallback.
+;; W6 product-shell (ADR-260728-w6-cloud-summary-pure-oracle):
+;; defaults + region/score/endpoints + CLI presentation + summary
+;; address-family/policy lines DELEGATE to kotoba cloud_plan_core when oracle
+;; is loadable (JVM classpath or cljs/nbb). Record assembly, choose-relay sort,
+;; width fmt / collection folds stay host. cljs mirrors remain fallback.
 
 (ns murakumo.cloud.plan
   "Portable murakumo.cloud overlay planning.
-   W6 product-shell: defaults + endpoints + CLI line templates via cloud_plan_core
+   W6 product-shell: defaults + endpoints + CLI/summary lines via cloud_plan_core
    when oracle ready."
   (:require [clojure.string :as str]
             [murakumo.config :as config]
@@ -148,6 +148,15 @@
 
 (defn- mirror-indent-argv-line [argv-joined]
   (str "  " argv-joined))
+
+(defn- mirror-address-family-line [af nodes relays]
+  (str "  address-family " af " ; nodes " nodes " ; relays " relays))
+
+(defn- mirror-policy-line [default allow-n]
+  (str "  policy default=" default " allow=" allow-n))
+
+(defn- mirror-skipped-reason-suffix [reason]
+  (str " skipped reason=" reason))
 
 ;; ── dual-source defaults ─────────────────────────────────────────────
 
@@ -293,6 +302,29 @@
   (try-oracle
    #(o 'indent-argv-line [(str argv-joined)])
    #(mirror-indent-argv-line argv-joined)))
+
+(defn address-family-line
+  "Summary address-family + node/relay counts. Kotoba when ready."
+  [af nodes relays]
+  (try-oracle
+   #(o 'address-family-line [(str af)
+                             (oracle/as-i64 nodes)
+                             (oracle/as-i64 relays)])
+   #(mirror-address-family-line af nodes relays)))
+
+(defn policy-line
+  "Summary policy default + allow count. Kotoba when ready."
+  [default allow-n]
+  (try-oracle
+   #(o 'policy-line [(str default) (oracle/as-i64 allow-n)])
+   #(mirror-policy-line default allow-n)))
+
+(defn skipped-reason-suffix
+  "Trailing ' skipped reason=…' fragment (name column padding stays host)."
+  [reason]
+  (try-oracle
+   #(o 'skipped-reason-suffix [(str reason)])
+   #(mirror-skipped-reason-suffix reason)))
 
 (defn merge-defaults [cloud]
   (merge-with (fn [a b]
@@ -613,8 +645,7 @@
     (vec
      (concat
       [(summary-title (:domain plan) (:overlay plan))
-       (fmt "  address-family %s ; nodes %d ; relays %d"
-               (name (:address_family plan)) node-count relay-count)
+       (address-family-line (name (:address_family plan)) node-count relay-count)
        summary-nodes-header]
       (for [node (:nodes plan)]
         (fmt "  %-14s %-10s %-14s %s"
@@ -622,9 +653,8 @@
                 (:region node)
                 (or (:relay node) dash-placeholder)
                 (str/join "," (map name (:direct node)))))
-      [(fmt "  policy default=%s allow=%d"
-               (name (get-in plan [:policy :default]))
-               (count (get-in plan [:policy :allow])))]))))
+      [(policy-line (name (get-in plan [:policy :default]))
+                    (count (get-in plan [:policy :allow])))]))))
 
 (defn route-lines [plan]
   (vec
@@ -698,14 +728,15 @@
       (map (fn [{:keys [relay argv reason]}]
              (if argv
                (fmt "    %-14s %s" (:name relay) (str/join " " argv))
-               (fmt "    %-14s skipped reason=%s" dash-placeholder (name reason))))
+               (str (fmt "    %-14s" dash-placeholder)
+                    (skipped-reason-suffix (name reason)))))
            relays)
       [connects-section-label]
       (map (fn [{:keys [route argv reason]}]
              (if argv
                (fmt "    %-14s %s" (:name route) (str/join " " argv))
-               (fmt "    %-14s skipped reason=%s"
-                    (or (:name route) dash-placeholder) (name reason))))
+               (str (fmt "    %-14s" (or (:name route) dash-placeholder))
+                    (skipped-reason-suffix (name reason)))))
            connects)))))
 
 (defn bootstrap-lines [plan opts]

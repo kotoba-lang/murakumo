@@ -1243,7 +1243,11 @@
     (is (= "murakumo.cloud connect asher"
            (cplan/connect-ok-title "asher")))
     (is (= "  reason=unknown" (cplan/reason-line "unknown")))
-    (is (= "  murakumo-overlay x" (cplan/indent-argv-line "murakumo-overlay x")))))
+    (is (= "  murakumo-overlay x" (cplan/indent-argv-line "murakumo-overlay x")))
+    (is (= "  address-family identity ; nodes 2 ; relays 1"
+           (cplan/address-family-line "identity" 2 1)))
+    (is (= "  policy default=deny allow=3" (cplan/policy-line "deny" 3)))
+    (is (= " skipped reason=down" (cplan/skipped-reason-suffix "down")))))
 
 (deftest overlay-cloud-prov-oracle-call-matches-live
   (let [k (:kir (compiler/compile-source (slurp "kotoba/overlay_keyring_core.kotoba")
@@ -1284,9 +1288,17 @@
            (oracle/call :cloud-plan 'from-to-cap-reason ["a" "b" "c" "d"])))
     (is (= (ir/execute c 'summary-title ["dom" "ov"])
            (oracle/call :cloud-plan 'summary-title ["dom" "ov"])))
+    (is (= (ir/execute c 'address-family-line ["identity" 2 1])
+           (oracle/call :cloud-plan 'address-family-line ["identity" 2 1])))
+    (is (= (ir/execute c 'policy-line ["deny" 3])
+           (oracle/call :cloud-plan 'policy-line ["deny" 3])))
+    (is (= (ir/execute c 'skipped-reason-suffix ["x"])
+           (oracle/call :cloud-plan 'skipped-reason-suffix ["x"])))
     (is (= (oracle/call :cloud-plan 'dash-placeholder []) cplan/dash-placeholder))
     (is (= (oracle/call :cloud-plan 'unknown-node-line ["x"])
            (cplan/unknown-node-line "x")))
+    (is (= (oracle/call :cloud-plan 'address-family-line ["identity" 0 0])
+           (cplan/address-family-line "identity" 0 0)))
     (is (= (ir/execute pr 'multiaddr ["1.2.3.4" 4001])
            (oracle/call :provision-plan 'multiaddr ["1.2.3.4" 4001])))
     (is (= (ir/execute pr 'launch-status-command [])
