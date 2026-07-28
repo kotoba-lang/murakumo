@@ -1032,8 +1032,15 @@
   (is (= "judah" (dplan/publish-selector "judah")))
   (is (= "http://localhost:8080"
          (last (dplan/app-deploy-argv "k" "m" "w" 8080))))
-  (is (= "ok" (dplan/command-output "  ok\n"))))
-
+  (is (= "ok" (dplan/command-output "  ok\n")))
+  (is (true? (dplan/execution-observed? "1\n")))
+  (is (false? (dplan/execution-observed? "0\n")))
+  (is (re-find #"bafyCID" (dplan/execution-count-command "bafyCID")))
+  (is (= "release/../../../crates/kotoba-runtime/wit"
+         (dplan/release-wit-path "release")))
+  (is (re-find #"18900:localhost" (dplan/stop-forward-command 18900)))
+  (is (true? (dplan/absolute-git-bin? "/usr/bin/git")))
+  (is (false? (dplan/absolute-git-bin? "git"))))
 (deftest product-shell-connect-uses-oracle-results
   (let [connect {:default-class :wasm
                  :classes {:wasm {:read [:http] :live [:webrtc]}
@@ -1068,6 +1075,12 @@
            (oracle/call :deploy-plan 'default-wasm [])))
     (is (= (ir/execute d 'manifest-dir ["apps/x.edn"])
            (oracle/call :deploy-plan 'manifest-dir ["apps/x.edn"])))
+    (is (= (ir/execute d 'execution-observed? ["2"])
+           (oracle/call :deploy-plan 'execution-observed? ["2"])))
+    (is (= (ir/execute d 'release-wit-path ["rel"])
+           (oracle/call :deploy-plan 'release-wit-path ["rel"])))
+    (is (= (ir/execute d 'absolute-unix-git-bin? ["/bin/git"])
+           (oracle/call :deploy-plan 'absolute-unix-git-bin? ["/bin/git"])))
     (is (= (ir/execute c 'default-class-name [""])
            (oracle/call :connect 'default-class-name [""])))
     (is (= (ir/execute c 'serves-plane?

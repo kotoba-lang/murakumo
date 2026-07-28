@@ -4,15 +4,15 @@
 ;; forwarding, artifact distribution, and sleeps. This namespace owns the pure
 ;; manifest parsing and command argv shapes used by that shell.
 ;;
-;; W6 product-shell authority:
-;; constants + path/url pure helpers DELEGATE to precompiled
+;; W6 product-shell authority (ADR-260728-w6-deploy-probe-pure-oracle):
+;; constants + path/url + execution probe pure helpers DELEGATE to precompiled
 ;; kotoba/deploy_plan_core when oracle is loadable (JVM classpath or cljs/nbb —
 ;; ADR-260728-w6-cljs-oracle-load). Regex extract, argv vectors, node folds stay host.
 ;; cljs mirrors remain fallback when oracle is not ready.
 
 (ns murakumo.deploy.plan
   "Portable deploy planning helpers.
-   W6 product-shell: constants + path/url pure helpers via kotoba deploy_plan_core."
+   W6 product-shell: path/url + probe pure helpers via kotoba deploy_plan_core."
   (:require [clojure.string :as str]
             [murakumo.config :as config]
             [murakumo.kotoba.oracle :as oracle]))
@@ -75,6 +75,31 @@
 
 (defn- mirror-command-output [out]
   (str/trim (str out)))
+
+(defn- parse-int [s]
+  #?(:clj (Integer/parseInt s)
+     :cljs (js/parseInt s 10)))
+
+(defn- mirror-execution-observed? [grep-count-out]
+  (try
+    (pos? (parse-int (str/trim (str grep-count-out))))
+    (catch #?(:clj Exception :cljs :default) _ false)))
+
+(defn- mirror-execution-count-command [cid]
+  (str "grep -c 'trigger: executed.*" cid "' ~/.murakumo/mesh.log 2>/dev/null"))
+
+(defn- mirror-release-wit-path [release-dir]
+  (str release-dir "/../../../crates/kotoba-runtime/wit"))
+
+(defn- mirror-stop-forward-command [local-port]
+  (str "pkill -f '" local-port ":localhost' 2>/dev/null"))
+
+(defn- mirror-absolute-git-bin? [p]
+  (and (string? p)
+       (not (str/blank? p))
+       (or (str/starts-with? p "/")
+           (boolean (re-matches #"[A-Za-z]:[\\/].*" p)))
+       (not= p "git")))
 
 ;; ── dual-source constants ──────────────────────────────────────────────
 
@@ -198,22 +223,22 @@
    #(o 'command-output [(str out)])
    #(mirror-command-output out)))
 
-(defn- parse-int [s]
-  #?(:clj (Integer/parseInt s)
-     :cljs (js/parseInt s 10)))
-
 (defn execution-observed?
-  "True when a node log grep count indicates the component has executed there."
+  "True when a node log grep count indicates the component has executed there.
+   Kotoba `execution-observed?` when oracle ready."
   [grep-count-out]
-  (try
-    (pos? (parse-int (str/trim (str grep-count-out))))
-    (catch #?(:clj Exception :cljs :default) _ false)))
+  (try-oracle
+   #(= 1 (oracle/i64->host
+          (o 'execution-observed? [(str grep-count-out)])))
+   #(mirror-execution-observed? grep-count-out)))
 
 (defn execution-count-command
-  "Remote shell command that counts execution log lines for a component CID."
+  "Remote shell command that counts execution log lines for a component CID.
+   Kotoba `execution-count-command` when ready."
   [cid]
-  (str "grep -c 'trigger: executed.*" cid "' ~/.murakumo/mesh.log 2>/dev/null"))
-
+  (try-oracle
+   #(o 'execution-count-command [(str cid)])
+   #(mirror-execution-count-command cid)))
 (defn observed-node
   "Return the node name when its execution count output proves placement."
   [node grep-count-out]
@@ -248,15 +273,20 @@
         (placement-probe-plans cid nodes)))
 
 (defn stop-forward-command
-  "Shell command that stops forwards bound to a local port."
+  "Shell command that stops forwards bound to a local port.
+   Kotoba `stop-forward-command` when ready."
   [local-port]
-  (str "pkill -f '" local-port ":localhost' 2>/dev/null"))
+  (try-oracle
+   #(o 'stop-forward-command [(oracle/as-i64 local-port)])
+   #(mirror-stop-forward-command local-port)))
 
 (defn release-wit-path
-  "WIT path paired with a release dir (`target/<triple>/release`)."
+  "WIT path paired with a release dir (`target/<triple>/release`).
+   Kotoba `release-wit-path` when ready."
   [release-dir]
-  (str release-dir "/../../../crates/kotoba-runtime/wit"))
-
+  (try-oracle
+   #(o 'release-wit-path [(str release-dir)])
+   #(mirror-release-wit-path release-dir)))
 (defn pin-copy-plan
   "Pure copy plan for pinning a kotoba release into murakumo's owned ./bin dir."
   [src dest]
@@ -347,14 +377,18 @@
        (some (fn [p] (when (exists? p) p)) candidates)))))
 
 (defn absolute-git-bin?
-  "True when `p` looks like an absolute filesystem path to git."
+  "True when `p` looks like an absolute filesystem path to git.
+   Kotoba `absolute-unix-git-bin?` for Unix `/…` paths when ready;
+   Windows drive letters remain host mirror."
   [p]
-  (and (string? p)
-       (not (str/blank? p))
-       (or (str/starts-with? p "/")
+  (if (and (string? p)
+           (not (str/blank? p))
            (boolean (re-matches #"[A-Za-z]:[\\/].*" p)))
-       (not= p "git")))
-
+    true
+    (try-oracle
+     #(= 1 (oracle/i64->host
+            (o 'absolute-unix-git-bin? [(str (or p ""))])))
+     #(mirror-absolute-git-bin? p))))
 (defn git-short-sha-argv
   "argv for reading the pinned source git sha.
 

@@ -11,8 +11,13 @@
 (def port-source (slurp "kotoba/deploy_plan_core.kotoba"))
 
 (def export-prefix
-  "default-wasm default-publish-node artifact-forward-port publish-forward-port forward-settle-ms placement-wait-ms digit-char nat-str i64-str app-manifest-path publish-selector localhost-url last-slash-index manifest-dir command-output component-build-cmd app-deploy-cmd")
-
+  (str "default-wasm default-publish-node artifact-forward-port publish-forward-port "
+       "forward-settle-ms placement-wait-ms digit-char nat-str i64-str "
+       "app-manifest-path publish-selector localhost-url last-slash-index manifest-dir "
+       "command-output component-build-cmd app-deploy-cmd "
+       "digit-val? digit-of parse-digits-go parse-digits trim-ws "
+       "execution-observed? execution-count-command release-wit-path stop-forward-command "
+       "absolute-unix-git-bin? blank? pin-bin-kotoba pin-bin-server join-path release-wit-suffix"))
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -91,3 +96,35 @@
     (is (= (str/join " " build) (get actual "b")))
     (is (= (str/join " " deploy) (get actual "d")))
     (is (= "http://localhost:18077" (get actual "u")))))
+
+(deftest execution-and-pin-probe-pure-match
+  (let [i (compile-i64-cases
+           {"e1" (str "(execution-observed? " (kotoba-literal "1\n") ")")
+            "e0" (str "(execution-observed? " (kotoba-literal "0\n") ")")
+            "ee" (str "(execution-observed? " (kotoba-literal "") ")")
+            "ex" (str "(execution-observed? " (kotoba-literal "x") ")")
+            "ag" (str "(absolute-unix-git-bin? " (kotoba-literal "/usr/bin/git") ")")
+            "ab" (str "(absolute-unix-git-bin? " (kotoba-literal "git") ")")
+            "ae" (str "(absolute-unix-git-bin? " (kotoba-literal "") ")")})
+        s (compile-string-cases
+           {"ec" (str "(execution-count-command " (kotoba-literal "bafyCID") ")")
+            "rw" (str "(release-wit-path " (kotoba-literal "release") ")")
+            "sf" "(stop-forward-command 18900)"
+            "pk" "(pin-bin-kotoba)"
+            "ps" "(pin-bin-server)"})]
+    (is (= 1 (get i "e1")))
+    (is (= 0 (get i "e0")))
+    (is (= 0 (get i "ee")))
+    (is (= 0 (get i "ex")))
+    (is (true? (plan/execution-observed? "1\n")))
+    (is (false? (plan/execution-observed? "0\n")))
+    (is (false? (plan/execution-observed? "")))
+    (is (= (plan/execution-count-command "bafyCID") (get s "ec")))
+    (is (= (plan/release-wit-path "release") (get s "rw")))
+    (is (= (plan/stop-forward-command 18900) (get s "sf")))
+    (is (= 1 (get i "ag")))
+    (is (= 0 (get i "ab")))
+    (is (true? (plan/absolute-git-bin? "/usr/bin/git")))
+    (is (false? (plan/absolute-git-bin? "git")))
+    (is (= "kotoba" (get s "pk")))
+    (is (= "kotoba-server" (get s "ps")))))
