@@ -11,7 +11,10 @@
        "largest-remainder-3 seats-text seats-media seats-postproc "
        "pool-demand-pack seats-from-pool-pack classify-run-flags "
        "demand-base demand-empty demand-text demand-image demand-video "
-       "demand-audio demand-postproc demand-inc demand-to-pool-pack"))
+       "demand-audio demand-postproc demand-inc demand-to-pool-pack "
+       "workers-count seats-for-online seats-equal pipeline-effective-gb "
+       "node-online? move-needed assigned-from-seats "
+       "rebalance-reason-code rebalance-reason-name"))
 
 (def largest-remainder
   "Private cljc largest-remainder (var-quote for oracle parity)."
@@ -201,3 +204,52 @@
     (is (= 1 (get actual "v")))
     (is (= 1 (get actual "p")))
     (is (= pool (unpack (get actual "pool"))))))
+
+(deftest placement-pure-layer
+  (let [actual (compile-i64-cases
+                {"w0" "(workers-count 0)"
+                 "w1" "(workers-count 1)"
+                 "w4" "(workers-count 4)"
+                 "eq1" "(seats-equal 10 10)"
+                 "eq0" "(seats-equal 10 11)"
+                 "pipe" "(pipeline-effective-gb 10 3)"
+                 "asg" "(assigned-from-seats (largest-remainder-3 4 2 1 1 1))"
+                 "mn0" "(move-needed 0 0)"
+                 "mn1" "(move-needed 0 1)"
+                 "rc0" "(rebalance-reason-code 3 0)"
+                 "rc1" "(rebalance-reason-code 0 0)"
+                 "rc2" "(rebalance-reason-code 3 2)"
+                 ;; seats-for-online: 4 online → 3 workers; demand 5/2/0/0/1 → pool 5,2,1
+                 "sfo" "(seats-for-online 4 (pool-demand-pack 5 2 0 0 1) 1)"})
+        lr @(var murakumo.infer.rebalance/largest-remainder)
+        expected-seats (lr 3 (rb/pool-demand {:text 5 :image 2 :video 0 :audio 0 :postproc 1}) 1)]
+    (is (= 0 (get actual "w0")))
+    (is (= 0 (get actual "w1")))
+    (is (= 3 (get actual "w4")))
+    (is (= 1 (get actual "eq1")))
+    (is (= 0 (get actual "eq0")))
+    (is (= 30 (get actual "pipe")))
+    (is (= 4 (get actual "asg")))
+    (is (= 0 (get actual "mn0")))
+    (is (= 1 (get actual "mn1")))
+    (is (= 0 (get actual "rc0")))
+    (is (= 1 (get actual "rc1")))
+    (is (= 2 (get actual "rc2")))
+    (is (= expected-seats (unpack (get actual "sfo"))))))
+
+(deftest node-online-and-reason-names
+  (let [online (compile-i64-cases
+                {"up" "(node-online? \"up\")"
+                 "down" "(node-online? \"down\")"
+                 "empty" "(node-online? \"\")"})
+        names (compile-string-cases
+               {"n0" "(rebalance-reason-name 0)"
+                "n1" "(rebalance-reason-name 1)"
+                "n2" "(rebalance-reason-name 2)"})]
+    (is (= 1 (get online "up")))
+    (is (= 0 (get online "down")))
+    (is (= 0 (get online "empty")))
+    (is (= "stable" (get names "n0")))
+    (is (= "initial placement" (get names "n1")))
+    (is (= "demand-shift" (get names "n2")))))
+

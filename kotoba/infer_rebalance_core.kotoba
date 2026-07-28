@@ -6,7 +6,11 @@
             classify-run-flags
             demand-base demand-empty
             demand-text demand-image demand-video demand-audio demand-postproc
-            demand-inc demand-to-pool-pack]))
+            demand-inc demand-to-pool-pack
+            workers-count seats-for-online seats-equal
+            pipeline-effective-gb node-online?
+            move-needed assigned-from-seats
+            rebalance-reason-code rebalance-reason-name]))
 
 ;; W6 pure-planner oracle — murakumo.infer.rebalance capacity + 3-pool
 ;; largest-remainder seat apportionment (map-fold product vertical).
@@ -257,3 +261,50 @@
                     (demand-video pack)
                     (demand-audio pack)
                     (demand-postproc pack)))
+
+;; ── placement pure layer (target-allocation / rebalance hysteresis) ──
+
+(defn workers-count [online :i64] :i64
+  ;; reserve one head/relay when any node is online
+  (if (< online 1) 0 (- online 1)))
+
+(defn seats-for-online [online :i64 pool-pack :i64 floor :i64] :i64
+  ;; pure core of target-allocation seat step (node id assignment stays cljc)
+  (seats-from-pool-pack (workers-count online) pool-pack floor))
+
+(defn seats-equal [a :i64 b :i64] :i64
+  ;; hysteresis: seat allocation unchanged?
+  (if (= a b) 1 0))
+
+(defn pipeline-effective-gb [usable-gb :i64 text-seats :i64] :i64
+  ;; cljc: (* usable text-n) for text pool pipeline
+  (* usable-gb text-seats))
+
+(defn node-online? [status :string] :i64
+  ;; capacity filter: status "up" only
+  (if (string=? status "up") 1 0))
+
+(defn move-needed [from-pool :i64 to-pool :i64] :i64
+  ;; pool codes 0=text 1=media 2=postproc; one node placement diff
+  (if (= from-pool to-pool) 0 1))
+
+(defn assigned-from-seats [seat-pack :i64] :i64
+  ;; total workers assigned across three pools
+  (+ (seats-text seat-pack)
+     (+ (seats-media seat-pack) (seats-postproc seat-pack))))
+
+(defn rebalance-reason-code [assigned-count :i64 move-count :i64] :i64
+  ;; 0 stable, 1 initial placement, 2 demand-shift
+  ;; (cljc checks empty current assignment; empty? of missing nodes-of is always true
+  ;;  in current source — intended semantics: no assigned nodes ⇒ initial)
+  (if (= assigned-count 0)
+    1
+    (if (< 0 move-count) 2 0)))
+
+(defn rebalance-reason-name [code :i64] :string
+  (if (= code 1)
+    "initial placement"
+    (if (= code 2)
+      "demand-shift"
+      "stable")))
+
