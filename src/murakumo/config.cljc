@@ -1,7 +1,8 @@
 ;; murakumo.config — portable path/config resolution helpers.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-tunnel-config-oracle-authority):
-;; pure path-string helpers DELEGATE to precompiled
+;; W6 product-shell authority (ADR-260728-w6-config-path-suffixes-pure-oracle +
+;; ADR-260728-w6-tunnel-config-oracle-authority):
+;; pure path-string helpers + path-suffix tokens DELEGATE to precompiled
 ;; kotoba/config_core.kotoba → resources/murakumo/oracle/config_core.kir.edn
 ;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: EDN parse/IO, env map folds, filesystem existence probes.
@@ -54,35 +55,64 @@
 (def ^:private mirror-default-image-checkpoint "animagine-xl-4.0.safetensors")
 (def ^:private mirror-default-infer-local-url "http://localhost:11434/v1")
 (def ^:private mirror-default-kotoba-cli-bin "kotoba")
+(def ^:private mirror-kotoba-dir-suffix
+  "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba")
+(def ^:private mirror-bin-suffix "/bin")
+(def ^:private mirror-release-bin-suffix
+  "/target/aarch64-apple-darwin/release")
+(def ^:private mirror-wit-suffix "/wit")
+(def ^:private mirror-runtime-wit-suffix "/crates/kotoba-runtime/wit")
+(def ^:private mirror-kotoba-server-suffix "/kotoba-server")
+(def ^:private mirror-kotoba-cli-suffix "/kotoba")
+(def ^:private mirror-build-edn-suffix "/BUILD.edn")
+
+;; ── residual path suffix tokens ──────────────────────────────────────
+
+(def kotoba-dir-suffix
+  (oracle-const 'kotoba-dir-suffix mirror-kotoba-dir-suffix))
+(def bin-suffix
+  (oracle-const 'bin-suffix mirror-bin-suffix))
+(def release-bin-suffix
+  (oracle-const 'release-bin-suffix mirror-release-bin-suffix))
+(def wit-suffix
+  (oracle-const 'wit-suffix mirror-wit-suffix))
+(def runtime-wit-suffix
+  (oracle-const 'runtime-wit-suffix mirror-runtime-wit-suffix))
+(def kotoba-server-suffix
+  (oracle-const 'kotoba-server-suffix mirror-kotoba-server-suffix))
+(def kotoba-cli-suffix
+  (oracle-const 'kotoba-cli-suffix mirror-kotoba-cli-suffix))
+(def build-edn-suffix
+  (oracle-const 'build-edn-suffix mirror-build-edn-suffix))
 
 (defn- mirror-default-kotoba-dir [home]
-  (str home "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba"))
+  (str home kotoba-dir-suffix))
 
 (defn- mirror-pinned-bin-dir [user-dir]
-  (str user-dir "/bin"))
+  (str user-dir bin-suffix))
 
 (defn- mirror-release-bin-dir [kotoba-dir]
-  (str kotoba-dir "/target/aarch64-apple-darwin/release"))
+  (str kotoba-dir release-bin-suffix))
 
 (defn- mirror-kotoba-server-bin [bin-dir]
-  (str bin-dir "/kotoba-server"))
+  (str bin-dir kotoba-server-suffix))
 
 (defn- mirror-local-kotoba-bin [bin-dir]
-  (str bin-dir "/kotoba"))
+  (str bin-dir kotoba-cli-suffix))
 
 (defn- mirror-pinned-wit-dir [user-dir]
-  (str (mirror-pinned-bin-dir user-dir) "/wit"))
+  (str (mirror-pinned-bin-dir user-dir) wit-suffix))
 
 (defn- mirror-runtime-wit-dir [kotoba-dir]
-  (str kotoba-dir "/crates/kotoba-runtime/wit"))
+  (str kotoba-dir runtime-wit-suffix))
 
 (defn- mirror-build-manifest-path [user-dir]
-  (str (mirror-pinned-bin-dir user-dir) "/BUILD.edn"))
+  (str (mirror-pinned-bin-dir user-dir) build-edn-suffix))
 
 (defn- mirror-kotoba-bin [user-dir pinned-exists?]
   (if pinned-exists?
-    (str (mirror-pinned-bin-dir user-dir) "/kotoba")
-    "kotoba"))
+    (str (mirror-pinned-bin-dir user-dir) kotoba-cli-suffix)
+    mirror-default-kotoba-cli-bin))
 
 (defn- mirror-resolve-local-bin [env user-dir kotoba-dir pinned-exists?]
   (cond

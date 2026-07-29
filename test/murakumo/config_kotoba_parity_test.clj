@@ -10,7 +10,13 @@
 (def port-source (slurp "kotoba/config_core.kotoba"))
 
 (def export-prefix
-  "default-fleet-path default-connect-path default-cloud-path default-kotoba-dir pinned-bin-dir release-bin-dir kotoba-server-bin local-kotoba-bin pinned-wit-dir runtime-wit-dir build-manifest-path peers-path launchd-template-path kotoba-bin resolve-local-bin resolve-wit-dir kotoba-dir-from default-cloud-url default-api-url default-text-backend-url default-image-checkpoint default-infer-local-url default-kotoba-cli-bin")
+  (str "default-fleet-path default-connect-path default-cloud-path default-kotoba-dir "
+       "pinned-bin-dir release-bin-dir kotoba-server-bin local-kotoba-bin pinned-wit-dir "
+       "runtime-wit-dir build-manifest-path peers-path launchd-template-path kotoba-bin "
+       "resolve-local-bin resolve-wit-dir kotoba-dir-from default-cloud-url default-api-url "
+       "default-text-backend-url default-image-checkpoint default-infer-local-url "
+       "default-kotoba-cli-bin kotoba-dir-suffix bin-suffix release-bin-suffix "
+       "wit-suffix runtime-wit-suffix kotoba-server-suffix kotoba-cli-suffix build-edn-suffix"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -101,3 +107,46 @@
     (is (= (config/resolve-local-bin {} user kd false) (get actual "rl3")))
     (is (= (config/resolve-wit-dir user kd true) (get actual "rw1")))
     (is (= (config/resolve-wit-dir user kd false) (get actual "rw0")))))
+
+(deftest config-path-suffixes-match
+  (let [s (compile-string-cases
+           {"kds" "(kotoba-dir-suffix)"
+            "bs" "(bin-suffix)"
+            "rbs" "(release-bin-suffix)"
+            "ws" "(wit-suffix)"
+            "rws" "(runtime-wit-suffix)"
+            "kss" "(kotoba-server-suffix)"
+            "kcs" "(kotoba-cli-suffix)"
+            "bes" "(build-edn-suffix)"
+            "dk" (str "(default-kotoba-dir " (kotoba-literal "/h") ")")
+            "pb" (str "(pinned-bin-dir " (kotoba-literal "/w") ")")
+            "rb" (str "(release-bin-dir " (kotoba-literal "/k") ")")
+            "ks" (str "(kotoba-server-bin " (kotoba-literal "/bin") ")")
+            "lk" (str "(local-kotoba-bin " (kotoba-literal "/bin") ")")
+            "pw" (str "(pinned-wit-dir " (kotoba-literal "/w") ")")
+            "rw" (str "(runtime-wit-dir " (kotoba-literal "/k") ")")
+            "bm" (str "(build-manifest-path " (kotoba-literal "/w") ")")
+            "kb1" (str "(kotoba-bin " (kotoba-literal "/w") " 1)")
+            "kb0" (str "(kotoba-bin " (kotoba-literal "/w") " 0)")})]
+    (is (= config/kotoba-dir-suffix (get s "kds")))
+    (is (= "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba" (get s "kds")))
+    (is (= config/bin-suffix (get s "bs")))
+    (is (= "/bin" (get s "bs")))
+    (is (= config/release-bin-suffix (get s "rbs")))
+    (is (= config/wit-suffix (get s "ws")))
+    (is (= config/runtime-wit-suffix (get s "rws")))
+    (is (= config/kotoba-server-suffix (get s "kss")))
+    (is (= config/kotoba-cli-suffix (get s "kcs")))
+    (is (= config/build-edn-suffix (get s "bes")))
+    (is (= (str "/h" config/kotoba-dir-suffix) (get s "dk")))
+    (is (= (config/default-kotoba-dir "/h") (get s "dk")))
+    (is (= (str "/w" config/bin-suffix) (get s "pb")))
+    (is (= (config/pinned-bin-dir "/w") (get s "pb")))
+    (is (= (str "/k" config/release-bin-suffix) (get s "rb")))
+    (is (= (str "/bin" config/kotoba-server-suffix) (get s "ks")))
+    (is (= (str "/bin" config/kotoba-cli-suffix) (get s "lk")))
+    (is (= (str "/w" config/bin-suffix config/wit-suffix) (get s "pw")))
+    (is (= (str "/k" config/runtime-wit-suffix) (get s "rw")))
+    (is (= (str "/w" config/bin-suffix config/build-edn-suffix) (get s "bm")))
+    (is (= (str "/w" config/bin-suffix config/kotoba-cli-suffix) (get s "kb1")))
+    (is (= config/default-kotoba-cli-bin (get s "kb0")))))
