@@ -62,11 +62,44 @@
    :body
    (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
    :param-types [:i64]}
+  {:name path-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/",
+   :param-types []}
+  {:name exec-count-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "grep -c 'trigger: executed.*",
+   :param-types []}
+  {:name exec-count-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "' ~/.murakumo/mesh.log 2>/dev/null",
+   :param-types []}
+  {:name pkill-f-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "pkill -f '",
+   :param-types []}
+  {:name stop-forward-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":localhost' 2>/dev/null",
+   :param-types []}
   {:name app-manifest-path,
    :params [manifest-dir app-manifest],
    :result :string,
    :effects #{},
-   :body (string-concat manifest-dir (string-concat "/" app-manifest)),
+   :body
+   (string-concat
+    manifest-dir
+    (string-concat (path-sep) app-manifest)),
    :param-types [:string :string]}
   {:name publish-selector,
    :params [selector],
@@ -102,7 +135,7 @@
     (if
      (< i n)
      (if
-      (string=? (string-substring s i (+ i 1)) "/")
+      (string=? (string-substring s i (+ i 1)) (path-sep))
       (last-slash-index s (+ i 1) i)
       (last-slash-index s (+ i 1) best))
      best)),
@@ -407,14 +440,14 @@
    :effects #{},
    :body
    (string-concat
-    "grep -c 'trigger: executed.*"
-    (string-concat cid "' ~/.murakumo/mesh.log 2>/dev/null")),
+    (exec-count-prefix)
+    (string-concat cid (exec-count-suffix))),
    :param-types [:string]}
   {:name join-path,
    :params [a b],
    :result :string,
    :effects #{},
-   :body (string-concat a (string-concat "/" b)),
+   :body (string-concat a (string-concat (path-sep) b)),
    :param-types [:string :string]}
   {:name release-wit-path,
    :params [release-dir],
@@ -428,8 +461,8 @@
    :effects #{},
    :body
    (string-concat
-    "pkill -f '"
-    (string-concat (i64-str local-port) ":localhost' 2>/dev/null")),
+    (pkill-f-prefix)
+    (string-concat (i64-str local-port) (stop-forward-suffix))),
    :param-types [:i64]}
   {:name absolute-unix-git-bin?,
    :params [p],
@@ -445,7 +478,7 @@
      (if
       (< (string-byte-length p) 1)
       0
-      (if (string=? (string-substring p 0 1) "/") 1 0)))),
+      (if (string=? (string-substring p 0 1) (path-sep)) 1 0)))),
    :param-types [:string]}
   {:name cp-bin,
    :params [],
@@ -600,7 +633,12 @@
   put-subcmd
   file-flag
   argv-join-sep
-  localhost-url-prefix],
+  localhost-url-prefix
+  path-sep
+  exec-count-prefix
+  exec-count-suffix
+  pkill-f-prefix
+  stop-forward-suffix],
  :schemas nil,
  :effects #{},
  :blocks [],

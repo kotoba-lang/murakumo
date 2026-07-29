@@ -4,13 +4,15 @@
 ;; forwarding, artifact distribution, and sleeps. This namespace owns the pure
 ;; manifest parsing and command argv shapes used by that shell.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-deploy-cmd-recompose-pure-oracle +
+;; W6 product-shell authority (ADR-260728-w6-deploy-shell-tokens-pure-oracle +
+;; ADR-260728-w6-deploy-cmd-recompose-pure-oracle +
 ;; ADR-260728-w6-deploy-argv-flags-pure-oracle):
 ;; constants + path/url + probe + argv flag/gate + pin join-path/wit-dest +
-;; component/app/block subcmd/flag + argv-join/localhost-url-prefix pure helpers
-;; DELEGATE to precompiled kotoba/deploy_plan_core when oracle is loadable
-;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load). Regex extract,
-;; argv vector assembly, node folds stay host. cljs mirrors remain fallback.
+;; component/app/block subcmd/flag + argv-join/localhost-url-prefix +
+;; path-sep/exec-count/stop-forward pure helpers DELEGATE to precompiled
+;; kotoba/deploy_plan_core when oracle is loadable (JVM classpath or cljs/nbb —
+;; ADR-260728-w6-cljs-oracle-load). Regex extract, argv vector assembly, node
+;; folds stay host. cljs mirrors remain fallback.
 
 (ns murakumo.deploy.plan
   "Portable deploy planning helpers.
@@ -66,14 +68,19 @@
   (let [d (str/replace (str manifest) #"/[^/]+$" "")]
     (if (= d (str manifest)) "." d)))
 
+(def ^:private mirror-argv-join-sep " ")
+(def ^:private mirror-localhost-url-prefix "http://localhost:")
+(def ^:private mirror-path-sep "/")
+(def ^:private mirror-exec-count-prefix "grep -c 'trigger: executed.*")
+(def ^:private mirror-exec-count-suffix "' ~/.murakumo/mesh.log 2>/dev/null")
+(def ^:private mirror-pkill-f-prefix "pkill -f '")
+(def ^:private mirror-stop-forward-suffix ":localhost' 2>/dev/null")
+
 (defn- mirror-app-manifest-path [manifest-dir app-manifest]
-  (str manifest-dir "/" app-manifest))
+  (str manifest-dir mirror-path-sep app-manifest))
 
 (defn- mirror-publish-selector [selector]
   (or selector mirror-default-publish-node))
-
-(def ^:private mirror-argv-join-sep " ")
-(def ^:private mirror-localhost-url-prefix "http://localhost:")
 
 (def argv-join-sep
   "Space between space-joined deploy cmd tokens. Kotoba when ready."
@@ -82,6 +89,26 @@
 (def localhost-url-prefix
   "Scheme+host prefix before port for local control URLs. Kotoba when ready."
   (oracle-str-const 'localhost-url-prefix mirror-localhost-url-prefix))
+
+(def path-sep
+  "Path segment separator. Kotoba when ready."
+  (oracle-str-const 'path-sep mirror-path-sep))
+
+(def exec-count-prefix
+  "grep -c execution marker prefix before CID. Kotoba when ready."
+  (oracle-str-const 'exec-count-prefix mirror-exec-count-prefix))
+
+(def exec-count-suffix
+  "After CID: quote + mesh log path. Kotoba when ready."
+  (oracle-str-const 'exec-count-suffix mirror-exec-count-suffix))
+
+(def pkill-f-prefix
+  "pkill -f pattern open quote. Kotoba when ready."
+  (oracle-str-const 'pkill-f-prefix mirror-pkill-f-prefix))
+
+(def stop-forward-suffix
+  "After local-port in stop-forward-command. Kotoba when ready."
+  (oracle-str-const 'stop-forward-suffix mirror-stop-forward-suffix))
 
 (defn- mirror-localhost-url [port]
   (str localhost-url-prefix port))
@@ -99,13 +126,13 @@
     (catch #?(:clj Exception :cljs :default) _ false)))
 
 (defn- mirror-execution-count-command [cid]
-  (str "grep -c 'trigger: executed.*" cid "' ~/.murakumo/mesh.log 2>/dev/null"))
+  (str exec-count-prefix cid exec-count-suffix))
 
 (defn- mirror-release-wit-path [release-dir]
   (str release-dir "/../../../crates/kotoba-runtime/wit"))
 
 (defn- mirror-stop-forward-command [local-port]
-  (str "pkill -f '" local-port ":localhost' 2>/dev/null"))
+  (str pkill-f-prefix local-port stop-forward-suffix))
 
 (defn- mirror-absolute-git-bin? [p]
   (and (string? p)
@@ -141,13 +168,13 @@
 (def ^:private mirror-file-flag "--file")
 
 (defn- mirror-join-path [a b]
-  (str a "/" b))
+  (str a path-sep b))
 
 (defn- mirror-pin-wit-dest [dest]
-  (str dest "/wit"))
+  (str dest path-sep mirror-pin-wit-dirname))
 
 (defn- mirror-version-bin-path [dest]
-  (str dest "/kotoba"))
+  (str dest path-sep mirror-pin-bin-kotoba))
 
 (defn- mirror-missing-manifest? [manifest]
   (str/blank? (str manifest)))
@@ -280,7 +307,7 @@
   (oracle-str-const 'file-flag mirror-file-flag))
 
 (defn join-path
-  "Join two path segments with `/`. Kotoba `join-path` when ready."
+  "Join two path segments with path-sep. Kotoba `join-path` when ready."
   [a b]
   (try-oracle
    #(o 'join-path [(str a) (str b)])
@@ -413,7 +440,7 @@
 
 (defn execution-count-command
   "Remote shell command that counts execution log lines for a component CID.
-   Kotoba `execution-count-command` when ready."
+   Prefix/suffix dual-sourced; recomposes via kotoba when ready."
   [cid]
   (try-oracle
    #(o 'execution-count-command [(str cid)])
@@ -453,7 +480,7 @@
 
 (defn stop-forward-command
   "Shell command that stops forwards bound to a local port.
-   Kotoba `stop-forward-command` when ready."
+   pkill/suffix dual-sourced; recomposes via kotoba when ready."
   [local-port]
   (try-oracle
    #(o 'stop-forward-command [(oracle/as-i64 local-port)])
