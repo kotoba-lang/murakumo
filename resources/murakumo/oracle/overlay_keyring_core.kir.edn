@@ -7,6 +7,42 @@
    :effects #{},
    :body 86400,
    :param-types []}
+  {:name key-id-hex-len,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 16,
+   :param-types []}
+  {:name seed-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":",
+   :param-types []}
+  {:name key-id-mid,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":key:",
+   :param-types []}
+  {:name derive-key-mid,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":murakumo-overlay-key:",
+   :param-types []}
+  {:name type-key,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo.overlay.key",
+   :param-types []}
+  {:name type-rotation,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo.overlay.key-rotation",
+   :param-types []}
   {:name digit-char,
    :params [d],
    :result :string,
@@ -43,7 +79,9 @@
    :result :string,
    :effects #{},
    :body
-   (string-concat overlay (string-concat ":key:" (i64-str epoch))),
+   (string-concat
+    overlay
+    (string-concat (key-id-mid) (i64-str epoch))),
    :param-types [:string :i64]}
   {:name derive-key-input,
    :params [operator-seed overlay epoch],
@@ -53,15 +91,27 @@
    (string-concat
     operator-seed
     (string-concat
-     ":"
+     (seed-sep)
      (string-concat
       overlay
-      (string-concat ":murakumo-overlay-key:" (i64-str epoch))))),
+      (string-concat (derive-key-mid) (i64-str epoch))))),
    :param-types [:string :string :i64]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports
- [default-rotation-seconds epoch key-id-input derive-key-input],
+ [default-rotation-seconds
+  epoch
+  key-id-input
+  derive-key-input
+  digit-char
+  nat-str
+  i64-str
+  seed-sep
+  key-id-mid
+  derive-key-mid
+  key-id-hex-len
+  type-key
+  type-rotation],
  :schemas nil,
  :effects #{},
  :blocks [],

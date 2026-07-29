@@ -1739,6 +1739,18 @@
                                           :wasm32-kotoba-v1 {}))]
     (is (= (ir/execute k 'default-rotation-seconds [])
            (oracle/call :overlay-keyring 'default-rotation-seconds [])))
+    (is (= (ir/execute k 'key-id-mid [])
+           (oracle/call :overlay-keyring 'key-id-mid [])))
+    (is (= (oracle/call :overlay-keyring 'key-id-mid []) okr/key-id-mid))
+    (is (= (ir/execute k 'derive-key-mid [])
+           (oracle/call :overlay-keyring 'derive-key-mid [])))
+    (is (= (oracle/call :overlay-keyring 'seed-sep []) okr/seed-sep))
+    (is (= (ir/execute k 'type-key [])
+           (oracle/call :overlay-keyring 'type-key [])))
+    (is (= (oracle/call :overlay-keyring 'type-rotation []) okr/type-rotation))
+    (is (= (ir/execute k 'key-id-hex-len [])
+           (oracle/call :overlay-keyring 'key-id-hex-len [])))
+    (is (= (oracle/call :overlay-keyring 'key-id-hex-len []) okr/key-id-hex-len))
     (let [direct (oracle/option-string "direct")
           relay (oracle/option-string "relay")
           none-s (oracle/option-string nil)]

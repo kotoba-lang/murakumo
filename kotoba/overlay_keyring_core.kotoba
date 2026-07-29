@@ -1,11 +1,37 @@
 (ns overlay-keyring-core
-  (:export [default-rotation-seconds epoch key-id-input derive-key-input]))
+  (:export [default-rotation-seconds epoch key-id-input derive-key-input
+            digit-char nat-str i64-str
+            seed-sep key-id-mid derive-key-mid
+            key-id-hex-len type-key type-rotation]))
 
 ;; W6 pure-planner oracle — murakumo.overlay.keyring scalar/preimage core.
+;; Residual seed/key-id seps + type tokens dual-source; preimages recompose.
 ;; SHA-256 kid/key hashing stays host (identity/sha256-hex).
 ;; Parity: test/murakumo/overlay_keyring_kotoba_parity_test.clj
 
 (defn default-rotation-seconds [] :i64 86400)
+
+(defn key-id-hex-len [] :i64 16)
+
+;; ── residual preimage seps + type tokens ─────────────────────────────
+
+(defn seed-sep [] :string
+  ;; between operator-seed / overlay / epoch segments
+  ":")
+
+(defn key-id-mid [] :string
+  ;; overlay + mid + epoch preimage for kid hash
+  ":key:")
+
+(defn derive-key-mid [] :string
+  ;; overlay + mid + epoch in derive-key preimage
+  ":murakumo-overlay-key:")
+
+(defn type-key [] :string
+  "murakumo.overlay.key")
+
+(defn type-rotation [] :string
+  "murakumo.overlay.key-rotation")
 
 (defn digit-char [d :i64] :string
   (string-substring "0123456789" d (+ d 1)))
@@ -25,13 +51,13 @@
   (quot seconds rotation-seconds))
 
 (defn key-id-input [overlay :string epoch :i64] :string
-  (string-concat overlay (string-concat ":key:" (i64-str epoch))))
+  (string-concat overlay (string-concat (key-id-mid) (i64-str epoch))))
 
 (defn derive-key-input [operator-seed :string overlay :string epoch :i64] :string
   (string-concat
    operator-seed
    (string-concat
-    ":"
+    (seed-sep)
     (string-concat
      overlay
-     (string-concat ":murakumo-overlay-key:" (i64-str epoch))))))
+     (string-concat (derive-key-mid) (i64-str epoch))))))
