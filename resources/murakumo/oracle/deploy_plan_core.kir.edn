@@ -74,11 +74,23 @@
    :effects #{},
    :body (if (string=? selector "") "asher" selector),
    :param-types [:string]}
+  {:name argv-join-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " ",
+   :param-types []}
+  {:name localhost-url-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "http://localhost:",
+   :param-types []}
   {:name localhost-url,
    :params [port],
    :result :string,
    :effects #{},
-   :body (string-concat "http://localhost:" (i64-str port)),
+   :body (string-concat (localhost-url-prefix) (i64-str port)),
    :param-types [:i64]}
   {:name last-slash-index,
    :params [s i best],
@@ -221,12 +233,30 @@
    (string-concat
     kotoba
     (string-concat
-     " component build "
+     (argv-join-sep)
      (string-concat
-      src-path
+      (component-subcmd)
       (string-concat
-       " --wit-dir "
-       (string-concat wit (string-concat " -o " wasm)))))),
+       (argv-join-sep)
+       (string-concat
+        (build-subcmd)
+        (string-concat
+         (argv-join-sep)
+         (string-concat
+          src-path
+          (string-concat
+           (argv-join-sep)
+           (string-concat
+            (wit-dir-flag)
+            (string-concat
+             (argv-join-sep)
+             (string-concat
+              wit
+              (string-concat
+               (argv-join-sep)
+               (string-concat
+                (output-flag)
+                (string-concat (argv-join-sep) wasm)))))))))))))),
    :param-types [:string :string :string :string]}
   {:name app-deploy-cmd,
    :params [kotoba manifest wit port],
@@ -236,14 +266,36 @@
    (string-concat
     kotoba
     (string-concat
-     " app deploy "
+     (argv-join-sep)
      (string-concat
-      manifest
+      (app-subcmd)
       (string-concat
-       " --wit-dir "
+       (argv-join-sep)
        (string-concat
-        wit
-        (string-concat " --publish --url " (localhost-url port))))))),
+        (deploy-subcmd)
+        (string-concat
+         (argv-join-sep)
+         (string-concat
+          manifest
+          (string-concat
+           (argv-join-sep)
+           (string-concat
+            (wit-dir-flag)
+            (string-concat
+             (argv-join-sep)
+             (string-concat
+              wit
+              (string-concat
+               (argv-join-sep)
+               (string-concat
+                (publish-flag)
+                (string-concat
+                 (argv-join-sep)
+                 (string-concat
+                  (url-flag)
+                  (string-concat
+                   (argv-join-sep)
+                   (localhost-url port))))))))))))))))),
    :param-types [:string :string :string :i64]}
   {:name pin-bin-kotoba,
    :params [],
@@ -546,7 +598,9 @@
   token-flag
   block-subcmd
   put-subcmd
-  file-flag],
+  file-flag
+  argv-join-sep
+  localhost-url-prefix],
  :schemas nil,
  :effects #{},
  :blocks [],

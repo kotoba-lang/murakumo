@@ -19,7 +19,8 @@
             missing-manifest? missing-operator-seed?
             component-subcmd build-subcmd app-subcmd deploy-subcmd
             wit-dir-flag output-flag publish-flag url-flag
-            token-flag block-subcmd put-subcmd file-flag]))
+            token-flag block-subcmd put-subcmd file-flag
+            argv-join-sep localhost-url-prefix]))
 
 ;; W6 pure-planner oracle — murakumo.deploy.plan path/argv/constants core.
 ;; Vector argv maps, artifact distribution over nodes, regex extract stay cljc.
@@ -27,6 +28,8 @@
 ;; Argv flag/bin fragments + deploy-command-error gates dual-source.
 ;; pin-wit-dest + join-path dual-source for pin-copy-plan path fragments.
 ;; component/app/block subcmd + flag fragments dual-source for argv vectors.
+;; argv-join-sep + localhost-url-prefix dual-source; build/deploy cmds
+;; and localhost-url recompose from fragment SSoTs.
 ;; Parity: test/murakumo/deploy_plan_kotoba_parity_test.clj
 
 (defn default-wasm [] :string "/tmp/murakumo-deploy.wasm")
@@ -59,8 +62,18 @@
     "asher"
     selector))
 
+;; ── residual argv join + localhost URL prefix ────────────────────────
+
+(defn argv-join-sep [] :string
+  ;; space between space-joined cmd tokens (parity with host str/join)
+  " ")
+
+(defn localhost-url-prefix [] :string
+  ;; scheme+host prefix before port for publish/local control URLs
+  "http://localhost:")
+
 (defn localhost-url [port :i64] :string
-  (string-concat "http://localhost:" (i64-str port)))
+  (string-concat (localhost-url-prefix) (i64-str port)))
 
 (defn last-slash-index [s :string i :i64 best :i64] :i64
   ;; scan [0,n) for last '/'; returns -1 if none
@@ -117,30 +130,69 @@
 
 (defn component-build-cmd [kotoba :string src-path :string
                            wit :string wasm :string] :string
-  ;; space-joined form of component-build-argv (fragments dual-sourced for argv)
+  ;; space-joined form of component-build-argv; recomposes fragment SSoTs
   (string-concat
    kotoba
    (string-concat
-    " component build "
+    (argv-join-sep)
     (string-concat
-     src-path
+     (component-subcmd)
      (string-concat
-      " --wit-dir "
-      (string-concat wit (string-concat " -o " wasm)))))))
+      (argv-join-sep)
+      (string-concat
+       (build-subcmd)
+       (string-concat
+        (argv-join-sep)
+        (string-concat
+         src-path
+         (string-concat
+          (argv-join-sep)
+          (string-concat
+           (wit-dir-flag)
+           (string-concat
+            (argv-join-sep)
+            (string-concat
+             wit
+             (string-concat
+              (argv-join-sep)
+              (string-concat (output-flag)
+                             (string-concat (argv-join-sep) wasm)))))))))))))))
 
 (defn app-deploy-cmd [kotoba :string manifest :string
                       wit :string port :i64] :string
+  ;; space-joined form of app-deploy-argv; recomposes fragment SSoTs
   (string-concat
    kotoba
    (string-concat
-    " app deploy "
+    (argv-join-sep)
     (string-concat
-     manifest
+     (app-subcmd)
      (string-concat
-      " --wit-dir "
+      (argv-join-sep)
       (string-concat
-       wit
-       (string-concat " --publish --url " (localhost-url port))))))))
+       (deploy-subcmd)
+       (string-concat
+        (argv-join-sep)
+        (string-concat
+         manifest
+         (string-concat
+          (argv-join-sep)
+          (string-concat
+           (wit-dir-flag)
+           (string-concat
+            (argv-join-sep)
+            (string-concat
+             wit
+             (string-concat
+              (argv-join-sep)
+              (string-concat
+               (publish-flag)
+               (string-concat
+                (argv-join-sep)
+                (string-concat
+                 (url-flag)
+                 (string-concat (argv-join-sep)
+                                (localhost-url port))))))))))))))))))
 
 (defn pin-bin-kotoba [] :string "kotoba")
 (defn pin-bin-server [] :string "kotoba-server")
