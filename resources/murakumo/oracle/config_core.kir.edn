@@ -55,14 +55,59 @@
    :effects #{},
    :body "kotoba",
    :param-types []}
+  {:name kotoba-dir-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba",
+   :param-types []}
+  {:name bin-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/bin",
+   :param-types []}
+  {:name release-bin-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/target/aarch64-apple-darwin/release",
+   :param-types []}
+  {:name wit-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/wit",
+   :param-types []}
+  {:name runtime-wit-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/crates/kotoba-runtime/wit",
+   :param-types []}
+  {:name kotoba-server-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/kotoba-server",
+   :param-types []}
+  {:name kotoba-cli-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/kotoba",
+   :param-types []}
+  {:name build-edn-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/BUILD.edn",
+   :param-types []}
   {:name default-kotoba-dir,
    :params [home],
    :result :string,
    :effects #{},
-   :body
-   (string-concat
-    home
-    "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba"),
+   :body (string-concat home (kotoba-dir-suffix)),
    :param-types [:string]}
   {:name kotoba-dir-from,
    :params [override home],
@@ -75,44 +120,43 @@
    :params [user-dir],
    :result :string,
    :effects #{},
-   :body (string-concat user-dir "/bin"),
+   :body (string-concat user-dir (bin-suffix)),
    :param-types [:string]}
   {:name release-bin-dir,
    :params [kotoba-dir],
    :result :string,
    :effects #{},
-   :body
-   (string-concat kotoba-dir "/target/aarch64-apple-darwin/release"),
+   :body (string-concat kotoba-dir (release-bin-suffix)),
    :param-types [:string]}
   {:name kotoba-server-bin,
    :params [bin-dir],
    :result :string,
    :effects #{},
-   :body (string-concat bin-dir "/kotoba-server"),
+   :body (string-concat bin-dir (kotoba-server-suffix)),
    :param-types [:string]}
   {:name local-kotoba-bin,
    :params [bin-dir],
    :result :string,
    :effects #{},
-   :body (string-concat bin-dir "/kotoba"),
+   :body (string-concat bin-dir (kotoba-cli-suffix)),
    :param-types [:string]}
   {:name pinned-wit-dir,
    :params [user-dir],
    :result :string,
    :effects #{},
-   :body (string-concat (pinned-bin-dir user-dir) "/wit"),
+   :body (string-concat (pinned-bin-dir user-dir) (wit-suffix)),
    :param-types [:string]}
   {:name runtime-wit-dir,
    :params [kotoba-dir],
    :result :string,
    :effects #{},
-   :body (string-concat kotoba-dir "/crates/kotoba-runtime/wit"),
+   :body (string-concat kotoba-dir (runtime-wit-suffix)),
    :param-types [:string]}
   {:name build-manifest-path,
    :params [user-dir],
    :result :string,
    :effects #{},
-   :body (string-concat (pinned-bin-dir user-dir) "/BUILD.edn"),
+   :body (string-concat (pinned-bin-dir user-dir) (build-edn-suffix)),
    :param-types [:string]}
   {:name peers-path,
    :params [],
@@ -133,8 +177,8 @@
    :body
    (if
     (= pinned-exists 1)
-    (string-concat (pinned-bin-dir user-dir) "/kotoba")
-    "kotoba"),
+    (string-concat (pinned-bin-dir user-dir) (kotoba-cli-suffix))
+    (default-kotoba-cli-bin)),
    :param-types [:string :i64]}
   {:name resolve-local-bin,
    :params [user-dir kotoba-dir pinned-exists murakumo-bin],
@@ -184,7 +228,15 @@
   default-text-backend-url
   default-image-checkpoint
   default-infer-local-url
-  default-kotoba-cli-bin],
+  default-kotoba-cli-bin
+  kotoba-dir-suffix
+  bin-suffix
+  release-bin-suffix
+  wit-suffix
+  runtime-wit-suffix
+  kotoba-server-suffix
+  kotoba-cli-suffix
+  build-edn-suffix],
  :schemas nil,
  :effects #{},
  :blocks [],
