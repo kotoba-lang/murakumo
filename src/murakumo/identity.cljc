@@ -4,11 +4,12 @@
 ;; deterministic local formatting used by multiple shells: SHA-256 hex, CIDv1
 ;; dag-cbor sha2-256 base32lower, and the operator bearer token shape.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-identity-seps-pure-oracle +
+;; W6 product-shell authority (ADR-260728-w6-identity-jwt-frags-pure-oracle +
+;; ADR-260728-w6-identity-seps-pure-oracle +
 ;; ADR-260728-w6-identity-credits-oracle-authority):
-;; pure seed preimages / JWT templates / trim / did-from-output / seed-jwt seps
-;; DELEGATE to precompiled kotoba/identity_core.kotoba KIR when oracle is
-;; loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; pure seed preimages / JWT templates + payload frags / seps DELEGATE to
+;; precompiled kotoba/identity_core.kotoba KIR when oracle is loadable
+;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: SHA-256, base32 CID, b64url encode; mirrors stay fallback.
 ;; cljs: prefer Node crypto/Buffer (nbb); browser falls back to SubtleCrypto/btoa.
 
@@ -79,6 +80,42 @@
 (def argv-join-sep
   "Space between argv tokens in did-derive-cmd. Kotoba when ready."
   (oracle-str-const 'argv-join-sep mirror-argv-join-sep))
+
+(def ^:private mirror-jwt-header-json "{\"alg\":\"HS256\",\"typ\":\"JWT\"}")
+(def ^:private mirror-jwt-payload-sub-prefix "{\"sub\":\"")
+(def ^:private mirror-jwt-payload-exp-mid "\",\"exp\":")
+(def ^:private mirror-jwt-payload-exp-val "9999999999")
+(def ^:private mirror-jwt-payload-close "}")
+(def ^:private mirror-op-token-sig-seg "kotoba-cli-media")
+(def ^:private mirror-cid-b-prefix "b")
+(def ^:private mirror-graph-name-fleet "murakumo-fleet")
+
+(def jwt-header-json
+  "JWT header preimage. Kotoba when ready."
+  (oracle-str-const 'jwt-header-json mirror-jwt-header-json))
+
+(def jwt-payload-sub-prefix
+  (oracle-str-const 'jwt-payload-sub-prefix mirror-jwt-payload-sub-prefix))
+
+(def jwt-payload-exp-mid
+  (oracle-str-const 'jwt-payload-exp-mid mirror-jwt-payload-exp-mid))
+
+(def jwt-payload-exp-val
+  (oracle-str-const 'jwt-payload-exp-val mirror-jwt-payload-exp-val))
+
+(def jwt-payload-close
+  (oracle-str-const 'jwt-payload-close mirror-jwt-payload-close))
+
+(def op-token-sig-seg
+  "CLI media JWT sig segment marker. Kotoba when ready."
+  (oracle-str-const 'op-token-sig-seg mirror-op-token-sig-seg))
+
+(def cid-b-prefix
+  "CIDv1 b-prefix. Kotoba when ready."
+  (oracle-str-const 'cid-b-prefix mirror-cid-b-prefix))
+
+(def ^:private graph-name-fleet-const
+  (oracle-str-const 'graph-name-fleet mirror-graph-name-fleet))
 
 (def ^:private b32 "abcdefghijklmnopqrstuvwxyz234567")
 
@@ -204,9 +241,7 @@
   [name]
   (let [digest (seq (sha256-bytes name))
         raw (concat [0x01 0x71 0x12 0x20] digest)
-        prefix (try-oracle
-                #(o 'cid-b-prefix [])
-                (fn [] "b"))]
+        prefix cid-b-prefix]
     (str prefix (base32-lower raw))))
 
 (defn b64url-bytes
@@ -228,20 +263,19 @@
 
 (defn op-token
   "Craft the operator Bearer JWT shape kotoba checks at the control-plane edge.
-   Kotoba header/payload/sig segment templates when ready; b64url + seg join
-   dual-sourced via jwt-seg-sep."
+   Header/payload/sig tokens dual-sourced; b64url + seg join host."
   [did]
   (try-oracle
    #(str (b64url (o 'jwt-header-json [])) jwt-seg-sep
          (b64url (o 'jwt-payload-json [(str did)])) jwt-seg-sep
          (o 'op-token-sig-seg []))
-   #(str (b64url "{\"alg\":\"HS256\",\"typ\":\"JWT\"}") jwt-seg-sep
-         (b64url (str "{\"sub\":\"" did "\",\"exp\":9999999999}")) jwt-seg-sep
-         "kotoba-cli-media")))
+   #(str (b64url jwt-header-json) jwt-seg-sep
+         (b64url (str jwt-payload-sub-prefix did jwt-payload-exp-mid
+                      jwt-payload-exp-val jwt-payload-close))
+         jwt-seg-sep
+         op-token-sig-seg)))
 
 (defn graph-name-fleet
   "Common graph-cid input used by fleet/persist. Kotoba constant when ready."
   []
-  (try-oracle
-   #(o 'graph-name-fleet [])
-   (fn [] "murakumo-fleet")))
+  graph-name-fleet-const)
