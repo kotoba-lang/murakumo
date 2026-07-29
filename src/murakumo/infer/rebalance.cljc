@@ -21,7 +21,7 @@
   never holds a shard. The rest are split across pools proportional to demand,
   each with a floor so a live capability never drops to zero while any demand exists.
 
-  W6 product-shell: usable-gb / largest-remainder-3 via kotoba infer_rebalance_core
+  W6 product-shell: usable-gb / seats-of-* via kotoba infer_rebalance_core
   when oracle loadable (JVM or cljs/nbb). Placement folds stay host."
   (:require [clojure.string :as str]
             [murakumo.kotoba.oracle :as oracle]))
@@ -130,23 +130,22 @@
 (defn- largest-remainder
   "Apportion `total` seats across `weights` (map k→w) by largest-remainder, with
    a floor of `floor` seats for any pool whose weight > 0. Deterministic.
-   3-pool text/media/postproc: kotoba `largest-remainder-3` + seats-* when ready."
+   3-pool text/media/postproc: kotoba `seats-of-text/media/postproc` (T5.3 record)."
   [total weights floor]
   (try-oracle
    (fn []
-     (let [wt (or (get weights :text-pool) 0)
-           wm (or (get weights :media-pool) 0)
-           wp (or (get weights :postproc-pool) 0)
-           packed (oracle/i64->host
-                   (o 'largest-remainder-3
-                      [(oracle/as-i64 total)
-                       (oracle/as-i64 wt)
-                       (oracle/as-i64 wm)
-                       (oracle/as-i64 wp)
-                       (oracle/as-i64 floor)]))]
-       {:text-pool (oracle/i64->host (o 'seats-text [(oracle/as-i64 packed)]))
-        :media-pool (oracle/i64->host (o 'seats-media [(oracle/as-i64 packed)]))
-        :postproc-pool (oracle/i64->host (o 'seats-postproc [(oracle/as-i64 packed)]))}))
+     ;; T5.3: three scalar lane projections. The guest builds a
+     ;; [:record :rebalance/lanes …] internally; no base-65536 seat pack
+     ;; crosses this boundary, and this is one call fewer than the old
+     ;; pack-then-unpack shape.
+     (let [args [(oracle/as-i64 total)
+                 (oracle/as-i64 (or (get weights :text-pool) 0))
+                 (oracle/as-i64 (or (get weights :media-pool) 0))
+                 (oracle/as-i64 (or (get weights :postproc-pool) 0))
+                 (oracle/as-i64 floor)]]
+       {:text-pool (oracle/i64->host (o 'seats-of-text args))
+        :media-pool (oracle/i64->host (o 'seats-of-media args))
+        :postproc-pool (oracle/i64->host (o 'seats-of-postproc args))}))
    #(mirror-largest-remainder total weights floor)))
 
 (defn target-allocation

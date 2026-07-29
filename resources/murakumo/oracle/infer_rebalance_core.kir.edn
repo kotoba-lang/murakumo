@@ -58,19 +58,19 @@
    :effects #{},
    :body (- a (* (quot a b) b)),
    :param-types [:i64 :i64]}
-  {:name seats-text,
+  {:name lane-0,
    :params [packed],
    :result :i64,
    :effects #{},
    :body (rem64 packed (lane-base)),
    :param-types [:i64]}
-  {:name seats-media,
+  {:name lane-1,
    :params [packed],
    :result :i64,
    :effects #{},
    :body (rem64 (quot packed (lane-base)) (lane-base)),
    :param-types [:i64]}
-  {:name seats-postproc,
+  {:name lane-2,
    :params [packed],
    :result :i64,
    :effects #{},
@@ -117,17 +117,32 @@
     (if (< rem-a rem-b) 0 (if (< idx-a idx-b) 1 0))),
    :param-types [:i64 :i64 :i64 :i64]}
   {:name pick-bump-3,
-   :params [ok-t ok-m ok-p rem-packed _pad],
+   :params [ok-t ok-m ok-p rems],
    :result :i64,
    :effects #{},
    :body
    (let
     [rt
-     (seats-text rem-packed)
+     (record-get
+      [:record
+       :rebalance/lanes
+       [[:text :i64] [:media :i64] [:postproc :i64]]]
+      rems
+      :text)
      rm
-     (seats-media rem-packed)
+     (record-get
+      [:record
+       :rebalance/lanes
+       [[:text :i64] [:media :i64] [:postproc :i64]]]
+      rems
+      :media)
      rp
-     (seats-postproc rem-packed)]
+     (record-get
+      [:record
+       :rebalance/lanes
+       [[:text :i64] [:media :i64] [:postproc :i64]]]
+      rems
+      :postproc)]
     (if
      (= ok-t 0)
      (if
@@ -148,16 +163,25 @@
         (= ok-p 0)
         win-tm
         (if (= (better-bump? r-win i-win rp 2) 1) win-tm 2)))))),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+   :param-types
+   [:i64
+    :i64
+    :i64
+    [:record
+     :rebalance/lanes
+     [[:text :i64] [:media :i64] [:postproc :i64]]]]}
   {:name ok-for,
    :params [active bumped],
    :result :i64,
    :effects #{},
    :body (if (if (= active 1) (if (= bumped 0) 1 0) 0) 1 0),
    :param-types [:i64 :i64]}
-  {:name largest-remainder-3,
+  {:name seats-record,
    :params [total wt wm wp floor],
-   :result :i64,
+   :result
+   [:record
+    :rebalance/lanes
+    [[:text :i64] [:media :i64] [:postproc :i64]]],
    :effects #{},
    :body
    (let
@@ -171,7 +195,13 @@
      (count-active wt wm wp)]
     (if
      (if (= total 0) 1 (if (= n-active 0) 1 0))
-     (pack3 0 0 0)
+     (record-new
+      [:record
+       :rebalance/lanes
+       [[:text :i64] [:media :i64] [:postproc :i64]]]
+      0
+      0
+      0)
      (let
       [eff-floor
        (min2 floor (quot total n-active))
@@ -209,17 +239,18 @@
        (+ ft (+ fm fp))
        extra
        (- left assigned)
-       rem-packed
-       (pack3 rt rm rp)
+       rems
+       (record-new
+        [:record
+         :rebalance/lanes
+         [[:text :i64] [:media :i64] [:postproc :i64]]]
+        rt
+        rm
+        rp)
        b0
        (if
         (< 0 extra)
-        (pick-bump-3
-         (ok-for at 0)
-         (ok-for am 0)
-         (ok-for ap 0)
-         rem-packed
-         0)
+        (pick-bump-3 (ok-for at 0) (ok-for am 0) (ok-for ap 0) rems)
         -1)
        bt0
        (if (= b0 0) 1 0)
@@ -234,8 +265,7 @@
          (ok-for at bt0)
          (ok-for am bm0)
          (ok-for ap bp0)
-         rem-packed
-         0)
+         rems)
         -1)
        bt1
        (if (= b1 0) 1 bt0)
@@ -250,8 +280,7 @@
          (ok-for at bt1)
          (ok-for am bm1)
          (ok-for ap bp1)
-         rem-packed
-         0)
+         rems)
         -1)
        bump-t
        (if (if (= b0 0) 1 (if (= b1 0) 1 (if (= b2 0) 1 0))) 1 0)
@@ -265,7 +294,60 @@
        (+ bm (+ fm bump-m))
        sp
        (+ bp (+ fp bump-p))]
-      (pack3 st sm sp)))),
+      (record-new
+       [:record
+        :rebalance/lanes
+        [[:text :i64] [:media :i64] [:postproc :i64]]]
+       st
+       sm
+       sp)))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name seats-of-text,
+   :params [total wt wm wp floor],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record
+     :rebalance/lanes
+     [[:text :i64] [:media :i64] [:postproc :i64]]]
+    (seats-record total wt wm wp floor)
+    :text),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name seats-of-media,
+   :params [total wt wm wp floor],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record
+     :rebalance/lanes
+     [[:text :i64] [:media :i64] [:postproc :i64]]]
+    (seats-record total wt wm wp floor)
+    :media),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name seats-of-postproc,
+   :params [total wt wm wp floor],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record
+     :rebalance/lanes
+     [[:text :i64] [:media :i64] [:postproc :i64]]]
+    (seats-record total wt wm wp floor)
+    :postproc),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name seats-total,
+   :params [total wt wm wp floor],
+   :result :i64,
+   :effects #{},
+   :body
+   (+
+    (seats-of-text total wt wm wp floor)
+    (+
+     (seats-of-media total wt wm wp floor)
+     (seats-of-postproc total wt wm wp floor))),
    :param-types [:i64 :i64 :i64 :i64 :i64]}
   {:name pool-demand-pack,
    :params [text image video audio postproc],
@@ -276,16 +358,40 @@
     [wt text wm (+ image (+ video audio)) wp postproc]
     (pack3 wt wm wp)),
    :param-types [:i64 :i64 :i64 :i64 :i64]}
-  {:name seats-from-pool-pack,
+  {:name pool-seats-of-text,
    :params [total pool-pack floor],
    :result :i64,
    :effects #{},
    :body
-   (largest-remainder-3
+   (seats-of-text
     total
-    (seats-text pool-pack)
-    (seats-media pool-pack)
-    (seats-postproc pool-pack)
+    (lane-0 pool-pack)
+    (lane-1 pool-pack)
+    (lane-2 pool-pack)
+    floor),
+   :param-types [:i64 :i64 :i64]}
+  {:name pool-seats-of-media,
+   :params [total pool-pack floor],
+   :result :i64,
+   :effects #{},
+   :body
+   (seats-of-media
+    total
+    (lane-0 pool-pack)
+    (lane-1 pool-pack)
+    (lane-2 pool-pack)
+    floor),
+   :param-types [:i64 :i64 :i64]}
+  {:name pool-seats-of-postproc,
+   :params [total pool-pack floor],
+   :result :i64,
+   :effects #{},
+   :body
+   (seats-of-postproc
+    total
+    (lane-0 pool-pack)
+    (lane-1 pool-pack)
+    (lane-2 pool-pack)
     floor),
    :param-types [:i64 :i64 :i64]}
   {:name classify-run-flags,
@@ -434,11 +540,24 @@
    :effects #{},
    :body (if (< online 1) 0 (- online 1)),
    :param-types [:i64]}
-  {:name seats-for-online,
+  {:name seats-for-online-text,
    :params [online pool-pack floor],
    :result :i64,
    :effects #{},
-   :body (seats-from-pool-pack (workers-count online) pool-pack floor),
+   :body (pool-seats-of-text (workers-count online) pool-pack floor),
+   :param-types [:i64 :i64 :i64]}
+  {:name seats-for-online-media,
+   :params [online pool-pack floor],
+   :result :i64,
+   :effects #{},
+   :body (pool-seats-of-media (workers-count online) pool-pack floor),
+   :param-types [:i64 :i64 :i64]}
+  {:name seats-for-online-postproc,
+   :params [online pool-pack floor],
+   :result :i64,
+   :effects #{},
+   :body
+   (pool-seats-of-postproc (workers-count online) pool-pack floor),
    :param-types [:i64 :i64 :i64]}
   {:name seats-equal,
    :params [a b],
@@ -464,15 +583,6 @@
    :effects #{},
    :body (if (= from-pool to-pool) 0 1),
    :param-types [:i64 :i64]}
-  {:name assigned-from-seats,
-   :params [seat-pack],
-   :result :i64,
-   :effects #{},
-   :body
-   (+
-    (seats-text seat-pack)
-    (+ (seats-media seat-pack) (seats-postproc seat-pack))),
-   :param-types [:i64]}
   {:name rebalance-reason-code,
    :params [assigned-count move-count],
    :result :i64,
@@ -633,13 +743,14 @@
   os-kv-headroom-gb
   usable-gb
   pool-for-class
-  lane-base
-  largest-remainder-3
-  seats-text
-  seats-media
-  seats-postproc
+  seats-of-text
+  seats-of-media
+  seats-of-postproc
+  seats-total
   pool-demand-pack
-  seats-from-pool-pack
+  pool-seats-of-text
+  pool-seats-of-media
+  pool-seats-of-postproc
   classify-run-flags
   demand-base
   demand-empty
@@ -651,12 +762,13 @@
   demand-inc
   demand-to-pool-pack
   workers-count
-  seats-for-online
   seats-equal
+  seats-for-online-text
+  seats-for-online-media
+  seats-for-online-postproc
   pipeline-effective-gb
   node-online?
   move-needed
-  assigned-from-seats
   rebalance-reason-code
   rebalance-reason-name
   digit-char
