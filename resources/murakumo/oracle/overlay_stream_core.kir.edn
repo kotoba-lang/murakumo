@@ -1,24 +1,58 @@
-{:format :kotoba.kir/v3,
+{:format :kotoba.kir/v4,
  :signature nil,
  :functions
  [{:name default-window-size,
    :params [],
    :result :i64,
    :effects #{},
-   :body 64}
+   :body 64,
+   :param-types []}
+  {:name initial-next-seq,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 0,
+   :param-types []}
+  {:name type-stream,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo.overlay.stream",
+   :param-types []}
+  {:name type-frame,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo.overlay.stream-frame",
+   :param-types []}
+  {:name type-ack,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo.overlay.stream-ack",
+   :param-types []}
   {:name advance-seq,
    :params [next-seq],
    :result :i64,
    :effects #{},
-   :body (+ next-seq 1)}
+   :body (+ next-seq 1),
+   :param-types [:i64]}
   {:name ack-accepted?,
    :params [accepted],
    :result :i64,
    :effects #{},
-   :body (if (= accepted 0) 0 1)}],
+   :body (if (= accepted 0) 0 1),
+   :param-types [:i64]}],
  :oracle-value nil,
  :schema-identities nil,
- :exports [default-window-size advance-seq ack-accepted?],
+ :exports
+ [default-window-size
+  advance-seq
+  ack-accepted?
+  initial-next-seq
+  type-stream
+  type-frame
+  type-ack],
  :schemas nil,
  :effects #{},
  :blocks [],

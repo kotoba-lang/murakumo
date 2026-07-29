@@ -1,6 +1,7 @@
 ;; murakumo.overlay.stream — deterministic stream/session framing.
 ;;
-;; W6 product-shell: window size + advance-seq + ack-accepted? via kotoba
+;; W6 product-shell (ADR-260728-w6-stream-type-tokens-pure-oracle):
+;; window size + advance-seq + ack-accepted? + type tokens via kotoba
 ;; overlay_stream_core when oracle loadable (JVM or cljs/nbb).
 ;; stream-id hashing and frame maps stay host.
 
@@ -25,13 +26,46 @@
         (mirror-thunk)))
     (mirror-thunk)))
 
-(def default-window-size
+(defn- oracle-str-const [export mirror]
   (try
     (if (oracle/ready? oid)
-      (oracle/i64->host (oracle/call oid 'default-window-size []))
-      64)
+      (oracle/call oid export [])
+      mirror)
     (catch #?(:clj Exception :cljs :default) _
-      64)))
+      mirror)))
+
+(defn- oracle-i64-const [export mirror]
+  (try
+    (if (oracle/ready? oid)
+      (oracle/i64->host (oracle/call oid export []))
+      mirror)
+    (catch #?(:clj Exception :cljs :default) _
+      mirror)))
+
+;; ── residual type tokens + scalars ───────────────────────────────────
+
+(def ^:private mirror-default-window-size 64)
+(def ^:private mirror-initial-next-seq 0)
+(def ^:private mirror-type-stream "murakumo.overlay.stream")
+(def ^:private mirror-type-frame "murakumo.overlay.stream-frame")
+(def ^:private mirror-type-ack "murakumo.overlay.stream-ack")
+
+(def default-window-size
+  "Stream receive window size. Kotoba when ready."
+  (oracle-i64-const 'default-window-size mirror-default-window-size))
+
+(def initial-next-seq
+  "Initial :next-seq for open-stream. Kotoba when ready."
+  (oracle-i64-const 'initial-next-seq mirror-initial-next-seq))
+
+(def type-stream
+  (oracle-str-const 'type-stream mirror-type-stream))
+
+(def type-frame
+  (oracle-str-const 'type-frame mirror-type-frame))
+
+(def type-ack
+  (oracle-str-const 'type-ack mirror-type-ack))
 
 (defn stream-id
   "Stable stream id for a logical service connection."
@@ -47,7 +81,7 @@
 (defn open-stream
   ([session service] (open-stream session service 0))
   ([session service opened-at]
-   {:type "murakumo.overlay.stream"
+   {:type type-stream
     :id (stream-id session service opened-at)
     :overlay (:overlay session)
     :node (:node session)
@@ -55,14 +89,14 @@
     :principal (:principal session)
     :service service
     :opened-at opened-at
-    :next-seq 0
+    :next-seq initial-next-seq
     :window default-window-size
     :closed? false}))
 
 (defn frame
   "Build one ordered stream frame."
   [stream payload]
-  {:type "murakumo.overlay.stream-frame"
+  {:type type-frame
    :stream (:id stream)
    :overlay (:overlay stream)
    :node (:node stream)
@@ -89,7 +123,7 @@
 
 (defn ack
   [frame accepted?]
-  {:type "murakumo.overlay.stream-ack"
+  {:type type-ack
    :stream (:stream frame)
    :seq (:seq frame)
    :accepted? (try-oracle
