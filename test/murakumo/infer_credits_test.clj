@@ -291,3 +291,25 @@
     (let [fns (->> (ns-publics 'murakumo.infer.credits) keys (map name) set)]
       (is (not-any? #(re-find #"(?i)fiat|usdc|payout|redeem|withdraw|cash" %) fns)
           (str "unexpected redemption-shaped fn: " fns)))))
+
+(deftest balances-step-survives-a-presettled-run-without-head-or-treasury
+  (testing "a stored feed carries whatever its writer put in it. A run with
+            shares but no :run/head / :run/treasury used to NPE the fold on
+            (+ 0.0 nil), taking the whole balances endpoint with it.
+
+            It stayed invisible because local-murakumo carried a SECOND copy of
+            this fold that guarded the same spot with cond-> -- the divergence
+            hid the defect in the canonical one. That copy is gone as of the
+            local-murakumo credits-admission wiring, so this is now the only
+            implementation and has to hold the shape on its own."
+    (is (= {"n1" 10.0 "head" 0.0 :treasury 0.0}
+           (credits/balances [{:run/shares {"n1" 10}}])))
+    (testing "head-name is still honoured when present"
+      (is (= {"n1" 10.0 "h" 2.0 :treasury 1.0}
+             (credits/balances [{:run/shares {"n1" 10} :run/head-name "h"
+                                 :run/head 2 :run/treasury 1}]))))
+    (testing "and a transfer over such a feed conserves value"
+      (let [b (credits/balances [{:run/shares {"n1" 10}}
+                                 (credits/transfer "n1" "seller" 4 {})])]
+        (is (= 6.0 (get b "n1")))
+        (is (= 4.0 (get b "seller")))))))
