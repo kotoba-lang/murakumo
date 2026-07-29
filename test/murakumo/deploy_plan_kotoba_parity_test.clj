@@ -26,7 +26,9 @@
        "component-subcmd build-subcmd app-subcmd deploy-subcmd "
        "wit-dir-flag output-flag publish-flag url-flag "
        "token-flag block-subcmd put-subcmd file-flag "
-       "argv-join-sep localhost-url-prefix"))
+       "argv-join-sep localhost-url-prefix "
+       "path-sep exec-count-prefix exec-count-suffix "
+       "pkill-f-prefix stop-forward-suffix"))
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -126,7 +128,14 @@
             "rw" (str "(release-wit-path " (kotoba-literal "release") ")")
             "sf" "(stop-forward-command 18900)"
             "pk" "(pin-bin-kotoba)"
-            "ps" "(pin-bin-server)"})]
+            "ps" "(pin-bin-server)"
+            "ps2" "(path-sep)"
+            "ep" "(exec-count-prefix)"
+            "es" "(exec-count-suffix)"
+            "pf" "(pkill-f-prefix)"
+            "ss" "(stop-forward-suffix)"
+            "jp" (str "(join-path " (kotoba-literal "a") " "
+                      (kotoba-literal "b") ")")})]
     (is (= 1 (get i "e1")))
     (is (= 0 (get i "e0")))
     (is (= 0 (get i "ee")))
@@ -134,9 +143,21 @@
     (is (true? (plan/execution-observed? "1\n")))
     (is (false? (plan/execution-observed? "0\n")))
     (is (false? (plan/execution-observed? "")))
+    (is (= plan/path-sep (get s "ps2")))
+    (is (= "/" (get s "ps2")))
+    (is (= plan/exec-count-prefix (get s "ep")))
+    (is (= plan/exec-count-suffix (get s "es")))
+    (is (= plan/pkill-f-prefix (get s "pf")))
+    (is (= plan/stop-forward-suffix (get s "ss")))
     (is (= (plan/execution-count-command "bafyCID") (get s "ec")))
+    (is (= (str plan/exec-count-prefix "bafyCID" plan/exec-count-suffix)
+           (get s "ec")))
     (is (= (plan/release-wit-path "release") (get s "rw")))
     (is (= (plan/stop-forward-command 18900) (get s "sf")))
+    (is (= (str plan/pkill-f-prefix "18900" plan/stop-forward-suffix)
+           (get s "sf")))
+    (is (= (plan/join-path "a" "b") (get s "jp")))
+    (is (= (str "a" plan/path-sep "b") (get s "jp")))
     (is (= 1 (get i "ag")))
     (is (= 0 (get i "ab")))
     (is (true? (plan/absolute-git-bin? "/usr/bin/git")))
