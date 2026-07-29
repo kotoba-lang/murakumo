@@ -302,8 +302,9 @@
             hid the defect in the canonical one. That copy is gone as of the
             local-murakumo credits-admission wiring, so this is now the only
             implementation and has to hold the shape on its own."
-    (is (= {"n1" 10.0 "head" 0.0 :treasury 0.0}
-           (credits/balances [{:run/shares {"n1" 10}}])))
+    (is (= {"n1" 10.0} (credits/balances [{:run/shares {"n1" 10}}]))
+        "absent head/treasury are OMITTED, not defaulted to 0.0 -- defaulting
+         would add a \"head\" row to every existing balances response")
     (testing "head-name is still honoured when present"
       (is (= {"n1" 10.0 "h" 2.0 :treasury 1.0}
              (credits/balances [{:run/shares {"n1" 10} :run/head-name "h"
