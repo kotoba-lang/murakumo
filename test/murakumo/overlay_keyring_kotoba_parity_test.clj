@@ -8,7 +8,9 @@
 
 (def port-source (slurp "kotoba/overlay_keyring_core.kotoba"))
 (def export-prefix
-  "default-rotation-seconds epoch key-id-input derive-key-input digit-char nat-str")
+  (str "default-rotation-seconds epoch key-id-input derive-key-input "
+       "digit-char nat-str i64-str seed-sep key-id-mid derive-key-mid "
+       "key-id-hex-len type-key type-rotation"))
 
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -47,8 +49,42 @@
     (is (= keyring/default-rotation-seconds (get n "d")))
     (is (= (keyring/epoch (* 3 86400)) (get n "e")))
     (is (= (keyring/epoch 0) (get n "e0")))
+    (is (= (str "bafyOverlay" keyring/key-id-mid "3") (get s "k")))
     (is (= (str "bafyOverlay:key:3") (get s "k")))
     (is (= (keyring/key-id "bafyOverlay" 3)
            (subs (identity/sha256-hex (get s "k")) 0 16)))
     (is (= (get-in (keyring/derive-key "operator-seed" "bafyOverlay" 3) [:key])
            (identity/sha256-hex (get s "dk"))))))
+
+(deftest keyring-seps-tokens-match
+  (let [s (compile-string-cases
+           {"ss" "(seed-sep)"
+            "km" "(key-id-mid)"
+            "dm" "(derive-key-mid)"
+            "tk" "(type-key)"
+            "tr" "(type-rotation)"
+            "ki" (str "(key-id-input " (kotoba-literal "ov") " 2)")
+            "di" (str "(derive-key-input " (kotoba-literal "seed") " "
+                      (kotoba-literal "ov") " 2)")})
+        n (compile-i64-cases
+           {"hl" "(key-id-hex-len)"
+            "dr" "(default-rotation-seconds)"})]
+    (is (= keyring/seed-sep (get s "ss")))
+    (is (= ":" (get s "ss")))
+    (is (= keyring/key-id-mid (get s "km")))
+    (is (= ":key:" (get s "km")))
+    (is (= keyring/derive-key-mid (get s "dm")))
+    (is (= ":murakumo-overlay-key:" (get s "dm")))
+    (is (= keyring/type-key (get s "tk")))
+    (is (= "murakumo.overlay.key" (get s "tk")))
+    (is (= keyring/type-rotation (get s "tr")))
+    (is (= "murakumo.overlay.key-rotation" (get s "tr")))
+    (is (= keyring/key-id-hex-len (get n "hl")))
+    (is (= 16 (get n "hl")))
+    (is (= keyring/default-rotation-seconds (get n "dr")))
+    (is (= (str "ov" keyring/key-id-mid "2") (get s "ki")))
+    (is (= (str "seed" keyring/seed-sep "ov" keyring/derive-key-mid "2")
+           (get s "di")))
+    (is (= keyring/type-key (:type (keyring/derive-key "s" "o" 0))))
+    (is (= keyring/type-rotation
+           (:type (keyring/rotation-plan "s" "o" 0))))))
