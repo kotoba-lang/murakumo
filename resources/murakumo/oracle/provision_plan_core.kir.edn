@@ -91,18 +91,36 @@
        (let [f (option-value-of [:option :i64] binding-some__2 0)] f)
        4001)))),
    :param-types [[:option :i64] [:option :i64]]}
+  {:name multiaddr-ip4-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/ip4/",
+   :param-types []}
+  {:name multiaddr-udp-mid,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/udp/",
+   :param-types []}
+  {:name multiaddr-quic-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/quic-v1",
+   :param-types []}
   {:name multiaddr,
    :params [ip port],
    :result :string,
    :effects #{},
    :body
    (string-concat
-    "/ip4/"
+    (multiaddr-ip4-prefix)
     (string-concat
      ip
      (string-concat
-      "/udp/"
-      (string-concat (i64-str port) "/quic-v1")))),
+      (multiaddr-udp-mid)
+      (string-concat (i64-str port) (multiaddr-quic-suffix))))),
    :param-types [:string :i64]}
   {:name webrtc-port,
    :params [p2p-port],
@@ -525,8 +543,8 @@
     [n (string-byte-length s) p (string-byte-length prefix)]
     (if
      (let
-      [or-tmp__10886 (= p 0)]
-      (if or-tmp__10886 or-tmp__10886 (> (+ i p) n)))
+      [or-tmp__10890 (= p 0)]
+      (if or-tmp__10890 or-tmp__10890 (> (+ i p) n)))
      -1
      (if
       (string=? (string-substring s i (+ i p)) prefix)
@@ -652,7 +670,10 @@
   find-prefix-at
   take-alnum
   peer-id-from-log
-  write-plist-shell],
+  write-plist-shell
+  multiaddr-ip4-prefix
+  multiaddr-udp-mid
+  multiaddr-quic-suffix],
  :schemas nil,
  :effects #{},
  :blocks [],

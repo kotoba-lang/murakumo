@@ -133,16 +133,28 @@
            {"at" "(peer-at-sep)"
             "js" "(peer-join-sep)"
             "dk" "(did-key-prefix)"
+            "ip4" "(multiaddr-ip4-prefix)"
+            "udp" "(multiaddr-udp-mid)"
+            "quic" "(multiaddr-quic-suffix)"
             "pe" (str "(peer-entry " (kotoba-literal "12D3peer") " "
                       (kotoba-literal "/ip4/1.2.3.4/udp/4001/quic-v1") ")")
             "ma" (str "(multiaddr " (kotoba-literal "1.2.3.4") " 4001)")})]
     (is (= plan/peer-at-sep (get s "at")))
     (is (= plan/peer-join-sep (get s "js")))
     (is (= plan/did-key-prefix (get s "dk")))
+    (is (= plan/multiaddr-ip4-prefix (get s "ip4")))
+    (is (= "/ip4/" (get s "ip4")))
+    (is (= plan/multiaddr-udp-mid (get s "udp")))
+    (is (= "/udp/" (get s "udp")))
+    (is (= plan/multiaddr-quic-suffix (get s "quic")))
+    (is (= "/quic-v1" (get s "quic")))
     (is (= (plan/peer-entry "12D3peer" "/ip4/1.2.3.4/udp/4001/quic-v1")
            (get s "pe")))
     (is (= "12D3peer@/ip4/1.2.3.4/udp/4001/quic-v1" (get s "pe")))
     (is (= (plan/multiaddr "1.2.3.4" 4001) (get s "ma")))
+    (is (= (str plan/multiaddr-ip4-prefix "1.2.3.4"
+                plan/multiaddr-udp-mid "4001" plan/multiaddr-quic-suffix)
+           (get s "ma")))
     (is (= "12D3peer@/ip4/1.2.3.4/udp/4001/quic-v1"
            (plan/peer-entry "12D3peer" (plan/multiaddr "1.2.3.4" 4001))))
     (let [peers {"judah" "12D3j"}

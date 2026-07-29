@@ -4,8 +4,9 @@
 ;; kotoba DID derivation, and filesystem reads. This namespace owns deterministic
 ;; strings and defaults used by those effects.
 ;;
-;; W6 product-shell (ADR-260728-w6-provision-peerid-plist-pure-oracle):
-;; constants + port/multiaddr + launch/peer/link shell + rsync argv +
+;; W6 product-shell (ADR-260728-w6-provision-multiaddr-tokens-pure-oracle +
+;; ADR-260728-w6-provision-peerid-plist-pure-oracle):
+;; constants + port/multiaddr path tokens + launch/peer/link shell + rsync argv +
 ;; peer-entry + home-bin-path + label/roles join seps + peer-id DID/body
 ;; patterns + render-plist placeholder tokens + fold steps + peer-id-from-log
 ;; scan + write-plist-shell DELEGATE to kotoba provision_plan_core when oracle
@@ -106,8 +107,24 @@
 (defn- mirror-node-p2p-port [fleet node]
   (or (:p2p-port node) (:fleet/p2p-port fleet) mirror-default-p2p-port))
 
+(def ^:private mirror-multiaddr-ip4-prefix "/ip4/")
+(def ^:private mirror-multiaddr-udp-mid "/udp/")
+(def ^:private mirror-multiaddr-quic-suffix "/quic-v1")
+
+(def multiaddr-ip4-prefix
+  "libp2p multiaddr IP4 protocol prefix. Kotoba when ready."
+  (oracle-str-const 'multiaddr-ip4-prefix mirror-multiaddr-ip4-prefix))
+
+(def multiaddr-udp-mid
+  "Between host and UDP port in multiaddr. Kotoba when ready."
+  (oracle-str-const 'multiaddr-udp-mid mirror-multiaddr-udp-mid))
+
+(def multiaddr-quic-suffix
+  "Tailscale QUIC transport multiaddr suffix. Kotoba when ready."
+  (oracle-str-const 'multiaddr-quic-suffix mirror-multiaddr-quic-suffix))
+
 (defn- mirror-multiaddr [ip port]
-  (str "/ip4/" ip "/udp/" port "/quic-v1"))
+  (str multiaddr-ip4-prefix ip multiaddr-udp-mid port multiaddr-quic-suffix))
 
 (def ^:private mirror-rsync-bin "rsync")
 (def ^:private mirror-rsync-az-flag "-az")
@@ -435,7 +452,8 @@
    #(mirror-node-p2p-port fleet node)))
 
 (defn multiaddr
-  "Tailscale QUIC multiaddr for a node ip/port. Kotoba `multiaddr` when ready."
+  "Tailscale QUIC multiaddr for a node ip/port.
+   Path tokens dual-sourced; multiaddr recomposes via kotoba when ready."
   [ip port]
   (try-oracle
    #(o 'multiaddr [(str ip) (oracle/as-i64 port)])
