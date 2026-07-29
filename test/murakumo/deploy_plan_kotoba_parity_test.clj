@@ -25,7 +25,8 @@
        "missing-manifest? missing-operator-seed? "
        "component-subcmd build-subcmd app-subcmd deploy-subcmd "
        "wit-dir-flag output-flag publish-flag url-flag "
-       "token-flag block-subcmd put-subcmd file-flag"))
+       "token-flag block-subcmd put-subcmd file-flag "
+       "argv-join-sep localhost-url-prefix"))
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -99,12 +100,18 @@
                         (kotoba-literal "/bin/kotoba") " "
                         (kotoba-literal "apps/bot.edn") " "
                         (kotoba-literal "wit") " 18077)")
-               "u" "(localhost-url 18077)"}
+               "u" "(localhost-url 18077)"
+               "sep" "(argv-join-sep)"
+               "lp" "(localhost-url-prefix)"}
         actual (compile-string-cases cases)]
-    (is (= (str/join " " build) (get actual "b")))
-    (is (= (str/join " " deploy) (get actual "d")))
+    (is (= plan/argv-join-sep (get actual "sep")))
+    (is (= " " (get actual "sep")))
+    (is (= plan/localhost-url-prefix (get actual "lp")))
+    (is (= "http://localhost:" (get actual "lp")))
+    (is (= (str/join plan/argv-join-sep build) (get actual "b")))
+    (is (= (str/join plan/argv-join-sep deploy) (get actual "d")))
+    (is (= (str plan/localhost-url-prefix "18077") (get actual "u")))
     (is (= "http://localhost:18077" (get actual "u")))))
-
 (deftest execution-and-pin-probe-pure-match
   (let [i (compile-i64-cases
            {"e1" (str "(execution-observed? " (kotoba-literal "1\n") ")")

@@ -4,12 +4,13 @@
 ;; forwarding, artifact distribution, and sleeps. This namespace owns the pure
 ;; manifest parsing and command argv shapes used by that shell.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-deploy-argv-flags-pure-oracle):
+;; W6 product-shell authority (ADR-260728-w6-deploy-cmd-recompose-pure-oracle +
+;; ADR-260728-w6-deploy-argv-flags-pure-oracle):
 ;; constants + path/url + probe + argv flag/gate + pin join-path/wit-dest +
-;; component/app/block subcmd/flag pure helpers DELEGATE to precompiled
-;; kotoba/deploy_plan_core when oracle is loadable (JVM classpath or cljs/nbb —
-;; ADR-260728-w6-cljs-oracle-load). Regex extract, argv vector assembly, node
-;; folds stay host. cljs mirrors remain fallback when oracle is not ready.
+;; component/app/block subcmd/flag + argv-join/localhost-url-prefix pure helpers
+;; DELEGATE to precompiled kotoba/deploy_plan_core when oracle is loadable
+;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load). Regex extract,
+;; argv vector assembly, node folds stay host. cljs mirrors remain fallback.
 
 (ns murakumo.deploy.plan
   "Portable deploy planning helpers.
@@ -71,8 +72,19 @@
 (defn- mirror-publish-selector [selector]
   (or selector mirror-default-publish-node))
 
+(def ^:private mirror-argv-join-sep " ")
+(def ^:private mirror-localhost-url-prefix "http://localhost:")
+
+(def argv-join-sep
+  "Space between space-joined deploy cmd tokens. Kotoba when ready."
+  (oracle-str-const 'argv-join-sep mirror-argv-join-sep))
+
+(def localhost-url-prefix
+  "Scheme+host prefix before port for local control URLs. Kotoba when ready."
+  (oracle-str-const 'localhost-url-prefix mirror-localhost-url-prefix))
+
 (defn- mirror-localhost-url [port]
-  (str "http://localhost:" port))
+  (str localhost-url-prefix port))
 
 (defn- mirror-command-output [out]
   (str/trim (str out)))
