@@ -1,15 +1,16 @@
 (ns infer-rebalance-core
   (:export [shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class
-            lane-base largest-remainder-3
-            seats-text seats-media seats-postproc
-            pool-demand-pack seats-from-pool-pack
+            seats-of-text seats-of-media seats-of-postproc seats-total
+            pool-demand-pack
+            pool-seats-of-text pool-seats-of-media pool-seats-of-postproc
             classify-run-flags
             demand-base demand-empty
             demand-text demand-image demand-video demand-audio demand-postproc
             demand-inc demand-to-pool-pack
-            workers-count seats-for-online seats-equal
+            workers-count seats-equal
+            seats-for-online-text seats-for-online-media seats-for-online-postproc
             pipeline-effective-gb node-online?
-            move-needed assigned-from-seats
+            move-needed
             rebalance-reason-code rebalance-reason-name
             digit-char nat-str i64-str
             pool-code pool-name seat-order-pack order-nth
@@ -20,19 +21,18 @@
 ;; largest-remainder seat apportionment (map-fold product vertical).
 ;; rebalance moves / capacity vector filters stay cljc.
 ;; pool-demand-pack: class counts → packed pool weights (map-fold).
-;; seats-from-pool-pack: total + packed weights + floor → seat pack (compose LR).
+;; pool-seats-of-*: total + packed weights + floor → one seat lane (compose LR).
 ;; classify-run-flags: one-run class tag for demand-from-runs building block.
 ;; demand-*: class-count pack (base 4096, 5 lanes) + demand-inc reduce step
 ;;   + demand-to-pool-pack → pool-demand-pack (demand-from-runs fold core).
 ;; seat-order-pack / take-end: pure assignment order for node-id slice (vectors stay host).
 
 ;;
-;; largest-remainder-3: integer form of cljc `largest-remainder` for the
+;; seats-record: integer form of cljc `largest-remainder` for the
 ;; fixed pools text/media/postproc (weights wt,wm,wp). Floor applied only
 ;; to active (weight>0) pools; inactive stay 0. Tie-break for remainder
 ;; seats uses fixed order text < media < postproc (array-map insertion).
-;; Packing via base-65536 digits (no bit-shift; guest arithmetic subset):
-;;   packed = text + media*B + postproc*B*B, B=65536
+;; T5.3: the result is a `[:record :rebalance/lanes …]`, not a base-65536 pack.
 ;; Parity: test/murakumo/infer_rebalance_kotoba_parity_test.clj
 
 (defn shard-ceiling-gb [] :i64 10)
@@ -56,18 +56,30 @@
         "media-pool"
         "text-pool"))))
 
+;; ── T5.3: seats are a record, not a base-65536 pack ──────────────────────
+;;
+;; `[:record :rebalance/lanes [[:text :i64] [:media :i64] [:postproc :i64]]]`
+;; carries both the apportioned seats and the largest-remainder remainders.
+;; The public API exposes three scalar projections (`seats-of-*`), so no pack
+;; crosses the host boundary and the host makes 3 calls instead of 1 pack call
+;; plus 3 unpack calls.
+;;
+;; `lane-base` / `pack3` / `lane-0..2` survive as *internal* helpers for the
+;; pool-weight pack (`pool-demand-pack` / `demand-to-pool-pack`), which is a
+;; separate lane and a separate slice — see the note above that function.
+
 (defn lane-base [] :i64 65536)
 
 (defn rem64 [a :i64 b :i64] :i64
   (- a (* (quot a b) b)))
 
-(defn seats-text [packed :i64] :i64
+(defn lane-0 [packed :i64] :i64
   (rem64 packed (lane-base)))
 
-(defn seats-media [packed :i64] :i64
+(defn lane-1 [packed :i64] :i64
   (rem64 (quot packed (lane-base)) (lane-base)))
 
-(defn seats-postproc [packed :i64] :i64
+(defn lane-2 [packed :i64] :i64
   (quot packed (* (lane-base) (lane-base))))
 
 (defn pack3 [t :i64 m :i64 p :i64] :i64
@@ -94,12 +106,17 @@
       (if (< idx-a idx-b) 1 0))))
 
 ;; Pick best among three optional candidates (ok=1 means eligible).
-;; Returns 0|1|2 or -1. Arity 5: ok-t, ok-m, ok-p, rem-packed, unused.
-;; rem-packed uses same base-65536 packing as seats.
-(defn pick-bump-3 [ok-t :i64 ok-m :i64 ok-p :i64 rem-packed :i64 _pad :i64] :i64
-  (let [rt (seats-text rem-packed)
-        rm (seats-media rem-packed)
-        rp (seats-postproc rem-packed)]
+;; Returns 0|1|2 or -1. T5.3: the remainders arrive as a lanes record, so the
+;; `_pad` argument that only existed to reach the old fixed shape is gone.
+(defn pick-bump-3 [ok-t :i64 ok-m :i64 ok-p :i64
+                   rems [:record :rebalance/lanes
+                         [[:text :i64] [:media :i64] [:postproc :i64]]]] :i64
+  (let [rt (record-get [:record :rebalance/lanes
+                        [[:text :i64] [:media :i64] [:postproc :i64]]] rems :text)
+        rm (record-get [:record :rebalance/lanes
+                        [[:text :i64] [:media :i64] [:postproc :i64]]] rems :media)
+        rp (record-get [:record :rebalance/lanes
+                        [[:text :i64] [:media :i64] [:postproc :i64]]] rems :postproc)]
     (if (= ok-t 0)
       (if (= ok-m 0)
         (if (= ok-p 0) -1 2)
@@ -121,13 +138,15 @@
   ;; active and bumped are 0|1 flags
   (if (if (= active 1) (if (= bumped 0) 1 0) 0) 1 0))
 
-(defn largest-remainder-3 [total :i64 wt :i64 wm :i64 wp :i64 floor :i64] :i64
+(defn seats-record [total :i64 wt :i64 wm :i64 wp :i64 floor :i64]
+  [:record :rebalance/lanes [[:text :i64] [:media :i64] [:postproc :i64]]]
   (let [at (weight-pos? wt)
         am (weight-pos? wm)
         ap (weight-pos? wp)
         n-active (count-active wt wm wp)]
     (if (if (= total 0) 1 (if (= n-active 0) 1 0))
-      (pack3 0 0 0)
+      (record-new [:record :rebalance/lanes
+                   [[:text :i64] [:media :i64] [:postproc :i64]]] 0 0 0)
       (let [eff-floor (min2 floor (quot total n-active))
             bt (if (= at 1) eff-floor 0)
             bm (if (= am 1) eff-floor 0)
@@ -148,22 +167,23 @@
             rp (if (= ap 1) (rem64 pp sumw) 0)
             assigned (+ ft (+ fm fp))
             extra (- left assigned)
-            rem-packed (pack3 rt rm rp)
+            rems (record-new [:record :rebalance/lanes
+                              [[:text :i64] [:media :i64] [:postproc :i64]]] rt rm rp)
             ;; bump 0
             b0 (if (< 0 extra)
-                 (pick-bump-3 (ok-for at 0) (ok-for am 0) (ok-for ap 0) rem-packed 0)
+                 (pick-bump-3 (ok-for at 0) (ok-for am 0) (ok-for ap 0) rems)
                  -1)
             bt0 (if (= b0 0) 1 0)
             bm0 (if (= b0 1) 1 0)
             bp0 (if (= b0 2) 1 0)
             b1 (if (< 1 extra)
-                 (pick-bump-3 (ok-for at bt0) (ok-for am bm0) (ok-for ap bp0) rem-packed 0)
+                 (pick-bump-3 (ok-for at bt0) (ok-for am bm0) (ok-for ap bp0) rems)
                  -1)
             bt1 (if (= b1 0) 1 bt0)
             bm1 (if (= b1 1) 1 bm0)
             bp1 (if (= b1 2) 1 bp0)
             b2 (if (< 2 extra)
-                 (pick-bump-3 (ok-for at bt1) (ok-for am bm1) (ok-for ap bp1) rem-packed 0)
+                 (pick-bump-3 (ok-for at bt1) (ok-for am bm1) (ok-for ap bp1) rems)
                  -1)
             bump-t (if (if (= b0 0) 1 (if (= b1 0) 1 (if (= b2 0) 1 0))) 1 0)
             bump-m (if (if (= b0 1) 1 (if (= b1 1) 1 (if (= b2 1) 1 0))) 1 0)
@@ -171,7 +191,32 @@
             st (+ bt (+ ft bump-t))
             sm (+ bm (+ fm bump-m))
             sp (+ bp (+ fp bump-p))]
-        (pack3 st sm sp)))))
+        (record-new [:record :rebalance/lanes
+                     [[:text :i64] [:media :i64] [:postproc :i64]]] st sm sp)))))
+
+;; Public seat API (T5.3). Three scalar projections; no pack crosses the host
+;; boundary. Replaces `largest-remainder-3` + `seats-text/media/postproc`.
+
+(defn seats-of-text [total :i64 wt :i64 wm :i64 wp :i64 floor :i64] :i64
+  (record-get [:record :rebalance/lanes
+               [[:text :i64] [:media :i64] [:postproc :i64]]]
+              (seats-record total wt wm wp floor) :text))
+
+(defn seats-of-media [total :i64 wt :i64 wm :i64 wp :i64 floor :i64] :i64
+  (record-get [:record :rebalance/lanes
+               [[:text :i64] [:media :i64] [:postproc :i64]]]
+              (seats-record total wt wm wp floor) :media))
+
+(defn seats-of-postproc [total :i64 wt :i64 wm :i64 wp :i64 floor :i64] :i64
+  (record-get [:record :rebalance/lanes
+               [[:text :i64] [:media :i64] [:postproc :i64]]]
+              (seats-record total wt wm wp floor) :postproc))
+
+(defn seats-total [total :i64 wt :i64 wm :i64 wp :i64 floor :i64] :i64
+  ;; total workers assigned across three pools (was assigned-from-seats of a pack)
+  (+ (seats-of-text total wt wm wp floor)
+     (+ (seats-of-media total wt wm wp floor)
+        (seats-of-postproc total wt wm wp floor))))
 
 (defn pool-demand-pack [text :i64 image :i64 video :i64 audio :i64 postproc :i64] :i64
   ;; cljc pool-demand: text→text-pool; image+video+audio→media-pool; postproc→postproc-pool
@@ -180,13 +225,18 @@
         wp postproc]
     (pack3 wt wm wp)))
 
-(defn seats-from-pool-pack [total :i64 pool-pack :i64 floor :i64] :i64
-  ;; compose largest-remainder-3 over packed pool-demand weights
-  (largest-remainder-3 total
-                       (seats-text pool-pack)
-                       (seats-media pool-pack)
-                       (seats-postproc pool-pack)
-                       floor))
+;; Compose the seat apportionment over the (still packed) pool-weight lane.
+;; Scalar projections only — the seat pack is gone; the pool-weight pack is the
+;; next slice.
+
+(defn pool-seats-of-text [total :i64 pool-pack :i64 floor :i64] :i64
+  (seats-of-text total (lane-0 pool-pack) (lane-1 pool-pack) (lane-2 pool-pack) floor))
+
+(defn pool-seats-of-media [total :i64 pool-pack :i64 floor :i64] :i64
+  (seats-of-media total (lane-0 pool-pack) (lane-1 pool-pack) (lane-2 pool-pack) floor))
+
+(defn pool-seats-of-postproc [total :i64 pool-pack :i64 floor :i64] :i64
+  (seats-of-postproc total (lane-0 pool-pack) (lane-1 pool-pack) (lane-2 pool-pack) floor))
 
 (defn classify-run-flags [images [:option :string]
                           video [:option :string]
@@ -277,9 +327,17 @@
   ;; reserve one head/relay when any node is online
   (if (< online 1) 0 (- online 1)))
 
-(defn seats-for-online [online :i64 pool-pack :i64 floor :i64] :i64
-  ;; pure core of target-allocation seat step (node id assignment stays cljc)
-  (seats-from-pool-pack (workers-count online) pool-pack floor))
+;; pure core of target-allocation seat step (node id assignment stays cljc).
+;; T5.3: three scalar lanes instead of one seat pack.
+
+(defn seats-for-online-text [online :i64 pool-pack :i64 floor :i64] :i64
+  (pool-seats-of-text (workers-count online) pool-pack floor))
+
+(defn seats-for-online-media [online :i64 pool-pack :i64 floor :i64] :i64
+  (pool-seats-of-media (workers-count online) pool-pack floor))
+
+(defn seats-for-online-postproc [online :i64 pool-pack :i64 floor :i64] :i64
+  (pool-seats-of-postproc (workers-count online) pool-pack floor))
 
 (defn seats-equal [a :i64 b :i64] :i64
   ;; hysteresis: seat allocation unchanged?
@@ -297,10 +355,7 @@
   ;; pool codes 0=text 1=media 2=postproc; one node placement diff
   (if (= from-pool to-pool) 0 1))
 
-(defn assigned-from-seats [seat-pack :i64] :i64
-  ;; total workers assigned across three pools
-  (+ (seats-text seat-pack)
-     (+ (seats-media seat-pack) (seats-postproc seat-pack))))
+;; assigned-from-seats replaced by `seats-total` (T5.3) — it took a seat pack.
 
 (defn rebalance-reason-code [assigned-count :i64 move-count :i64] :i64
   ;; 0 stable, 1 initial placement, 2 demand-shift

@@ -1288,7 +1288,7 @@
     (is (= 1000 (moe/resident-bytes-estimate {:model/weight-bytes 4000 :model/experts 4} 1)))))
 
 (deftest product-shell-rebalance-uses-oracle-results
-  (testing "usable-gb + largest-remainder-3"
+  (testing "usable-gb + seats-of-* (T5.3)"
     (is (= 10 reb/shard-ceiling-gb))
     (is (= 10 (:usable-gb (reb/node-capacity {:id "a" :ram-gb 16 :status "up"}))))
     (is (= 4 (:usable-gb (reb/node-capacity {:id "a" :ram-gb 10 :status "up"}))))
@@ -1323,8 +1323,9 @@
            (oracle/call :infer-moe 'verdict-name [128 8 1])))
     (is (= (ir/execute r 'usable-gb [16])
            (oracle/call :infer-rebalance 'usable-gb [16])))
-    (is (= (ir/execute r 'largest-remainder-3 [5 3 1 1 1])
-           (oracle/call :infer-rebalance 'largest-remainder-3 [5 3 1 1 1])))
+    (doseq [ex '[seats-of-text seats-of-media seats-of-postproc seats-total]]
+      (is (= (ir/execute r ex [5 3 1 1 1])
+             (oracle/call :infer-rebalance ex [5 3 1 1 1]))))
     (let [img (oracle/option-string "images")
           none-s (oracle/option-string nil)]
       (is (= (ir/execute r 'classify-run-flags [img none-s none-s none-s none-s])
