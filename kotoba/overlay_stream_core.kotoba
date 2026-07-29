@@ -1,11 +1,26 @@
 (ns overlay-stream-core
-  (:export [default-window-size advance-seq ack-accepted?]))
+  (:export [default-window-size advance-seq ack-accepted?
+            initial-next-seq type-stream type-frame type-ack]))
 
 ;; W6 pure-planner oracle — murakumo.overlay.stream scalar core.
+;; Residual type tokens + initial next-seq dual-source; advance/ack recompose.
 ;; stream-id hashing and frame/map assembly stay cljc.
 ;; Parity: test/murakumo/overlay_stream_kotoba_parity_test.clj
 
 (defn default-window-size [] :i64 64)
+
+(defn initial-next-seq [] :i64 0)
+
+;; ── residual stream map type tokens ──────────────────────────────────
+
+(defn type-stream [] :string
+  "murakumo.overlay.stream")
+
+(defn type-frame [] :string
+  "murakumo.overlay.stream-frame")
+
+(defn type-ack [] :string
+  "murakumo.overlay.stream-ack")
 
 (defn advance-seq [next-seq :i64] :i64
   ;; cljc: (update stream :next-seq inc)
