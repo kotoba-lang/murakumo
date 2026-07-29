@@ -17,7 +17,11 @@
        "launchd-daemon-path tee-plist-prefix label-kv plist-heredoc-footer "
        "peer-at-sep peer-join-sep peer-entry did-key-prefix "
        "join-append bootstrap-append labels-append roles-append plist-replace "
-       "alnum-char? find-prefix-at take-alnum peer-id-from-log write-plist-shell"))
+       "alnum-char? find-prefix-at take-alnum peer-id-from-log write-plist-shell "
+       "launchctl-print-prefix launchctl-bootout-prefix launchctl-bootstrap-sys "
+       "launchctl-bootstrap-prefix launchctl-kickstart-prefix launchctl-status-suffix "
+       "launchctl-plist-quiet-semi launchctl-quiet-true-sleep "
+       "launchctl-plist-quiet-true-semi launchd-daemons-dir plist-ext"))
 (def fleet
   {:fleet/port 8077
    :fleet/p2p-port 4001
@@ -81,11 +85,18 @@
     (is (= (plan/remote-store-command) (get s "rc")))
     (is (= (plan/multiaddr "100.0.0.1" 4001) (get s "ma")))
     (is (= (plan/launch-status-command) (get s "ls")))
+    (is (= (str plan/launchctl-print-prefix plan/plist-label plan/launchctl-status-suffix)
+           (get s "ls")))
     (is (= (plan/peer-id-log-command) (get s "pi")))
     (is (= (plan/live-link-count-command) (get s "ll")))
     (is (= (plan/live-link-count-output " 3\n") (get s "lo")))
     (is (= (plan/launch-command :up) (get s "up")))
+    (is (= (str plan/launchctl-bootstrap-prefix plan/plist-label
+                plan/launchctl-plist-quiet-semi plan/launchctl-kickstart-prefix
+                plan/plist-label)
+           (get s "up")))
     (is (= (plan/launch-command :down) (get s "dn")))
+    (is (= (str plan/launchctl-bootout-prefix plan/plist-label) (get s "dn")))
     (is (= (plan/reprovision-command) (get s "rp")))
     (is (= plan/watchdog-label (get s "wl")))
     (is (= (plan/watchdog-reprovision-command) (get s "wr")))
@@ -110,13 +121,34 @@
             "ld" (str "(launchd-daemon-path " (kotoba-literal "com.murakumo.kotoba-mesh") ")")
             "tp" (str "(tee-plist-prefix " (kotoba-literal "com.murakumo.kotoba-mesh") ")")
             "kv" (str "(label-kv " (kotoba-literal "zone") " " (kotoba-literal "jp") ")")
-            "ft" "(plist-heredoc-footer)"})]
+            "ft" "(plist-heredoc-footer)"
+            "dd" "(launchd-daemons-dir)"
+            "pe" "(plist-ext)"
+            "pp" "(launchctl-print-prefix)"
+            "bp" "(launchctl-bootout-prefix)"
+            "bs" "(launchctl-bootstrap-sys)"
+            "bf" "(launchctl-bootstrap-prefix)"
+            "kp" "(launchctl-kickstart-prefix)"
+            "ss" "(launchctl-status-suffix)"})]
     (is (= plan/rsync-bin (get s "rb")))
     (is (= plan/rsync-az-flag (get s "az")))
     (is (= plan/rsync-e-flag (get s "ef")))
     (is (= (plan/local-bin-path "/local/bin" "kotoba") (get s "lp")))
     (is (= (plan/remote-bin-dest "asher" "kotoba") (get s "rd")))
     (is (= (plan/launchd-daemon-path "com.murakumo.kotoba-mesh") (get s "ld")))
+    (is (= (str plan/launchd-daemons-dir "com.murakumo.kotoba-mesh" plan/plist-ext)
+           (get s "ld")))
+    (is (= plan/launchd-daemons-dir (get s "dd")))
+    (is (= "/Library/LaunchDaemons/" (get s "dd")))
+    (is (= plan/plist-ext (get s "pe")))
+    (is (= ".plist" (get s "pe")))
+    (is (= plan/launchctl-print-prefix (get s "pp")))
+    (is (= plan/launchctl-bootout-prefix (get s "bp")))
+    (is (= plan/launchctl-bootstrap-sys (get s "bs")))
+    (is (= plan/launchctl-bootstrap-prefix (get s "bf")))
+    (is (= (str plan/launchctl-bootstrap-sys plan/launchd-daemons-dir) (get s "bf")))
+    (is (= plan/launchctl-kickstart-prefix (get s "kp")))
+    (is (= plan/launchctl-status-suffix (get s "ss")))
     (is (= (plan/tee-plist-prefix "com.murakumo.kotoba-mesh") (get s "tp")))
     (is (= (plan/label-kv "zone" "jp") (get s "kv")))
     (is (= plan/plist-heredoc-footer (get s "ft")))

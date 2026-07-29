@@ -4,14 +4,16 @@
 ;; kotoba DID derivation, and filesystem reads. This namespace owns deterministic
 ;; strings and defaults used by those effects.
 ;;
-;; W6 product-shell (ADR-260728-w6-provision-multiaddr-tokens-pure-oracle +
+;; W6 product-shell (ADR-260728-w6-provision-launchctl-tokens-pure-oracle +
+;; ADR-260728-w6-provision-multiaddr-tokens-pure-oracle +
 ;; ADR-260728-w6-provision-peerid-plist-pure-oracle):
-;; constants + port/multiaddr path tokens + launch/peer/link shell + rsync argv +
-;; peer-entry + home-bin-path + label/roles join seps + peer-id DID/body
-;; patterns + render-plist placeholder tokens + fold steps + peer-id-from-log
-;; scan + write-plist-shell DELEGATE to kotoba provision_plan_core when oracle
-;; is loadable (JVM classpath or cljs/nbb). Collection walks stay host; plist
-;; body content is still host-rendered XML. cljs mirrors remain fallback.
+;; constants + port/multiaddr path tokens + launchctl shell tokens +
+;; peer/link shell + rsync argv + peer-entry + home-bin-path + label/roles
+;; join seps + peer-id DID/body patterns + render-plist placeholder tokens +
+;; fold steps + peer-id-from-log scan + write-plist-shell DELEGATE to kotoba
+;; provision_plan_core when oracle is loadable (JVM classpath or cljs/nbb).
+;; Collection walks stay host; plist body content is still host-rendered XML.
+;; cljs mirrors remain fallback.
 
 (ns murakumo.provision.plan
   "Portable provision/mesh planning helpers.
@@ -78,28 +80,85 @@
 
 (def ^:private mirror-watchdog-label "com.murakumo.kotoba-mesh-watchdog")
 
+(def ^:private mirror-launchctl-print-prefix "sudo launchctl print system/")
+(def ^:private mirror-launchctl-bootout-prefix "sudo launchctl bootout system/")
+(def ^:private mirror-launchctl-bootstrap-sys "sudo launchctl bootstrap system ")
+(def ^:private mirror-launchctl-kickstart-prefix "sudo launchctl kickstart -k system/")
+(def ^:private mirror-launchctl-status-suffix
+  " >/dev/null 2>&1 && echo running || echo stopped")
+(def ^:private mirror-launchctl-plist-quiet-semi ".plist 2>/dev/null; ")
+(def ^:private mirror-launchctl-quiet-true-sleep " 2>/dev/null || true; sleep 1; ")
+(def ^:private mirror-launchctl-plist-quiet-true-semi ".plist 2>/dev/null || true; ")
+(def ^:private mirror-launchd-daemons-dir "/Library/LaunchDaemons/")
+(def ^:private mirror-plist-ext ".plist")
+
+(def launchctl-print-prefix
+  "sudo launchctl print system/ prefix. Kotoba when ready."
+  (oracle-str-const 'launchctl-print-prefix mirror-launchctl-print-prefix))
+
+(def launchctl-bootout-prefix
+  "sudo launchctl bootout system/ prefix. Kotoba when ready."
+  (oracle-str-const 'launchctl-bootout-prefix mirror-launchctl-bootout-prefix))
+
+(def launchctl-bootstrap-sys
+  "sudo launchctl bootstrap system  verb prefix. Kotoba when ready."
+  (oracle-str-const 'launchctl-bootstrap-sys mirror-launchctl-bootstrap-sys))
+
+(def launchd-daemons-dir
+  "System LaunchDaemons directory. Kotoba when ready."
+  (oracle-str-const 'launchd-daemons-dir mirror-launchd-daemons-dir))
+
+(def launchctl-bootstrap-prefix
+  "bootstrap + LaunchDaemons path. Kotoba when ready."
+  (oracle-str-const 'launchctl-bootstrap-prefix
+                    (str mirror-launchctl-bootstrap-sys mirror-launchd-daemons-dir)))
+
+(def launchctl-kickstart-prefix
+  "sudo launchctl kickstart -k system/ prefix. Kotoba when ready."
+  (oracle-str-const 'launchctl-kickstart-prefix mirror-launchctl-kickstart-prefix))
+
+(def launchctl-status-suffix
+  "running/stopped status probe suffix. Kotoba when ready."
+  (oracle-str-const 'launchctl-status-suffix mirror-launchctl-status-suffix))
+
+(def launchctl-plist-quiet-semi
+  ".plist 2>/dev/null; mid for launch-up. Kotoba when ready."
+  (oracle-str-const 'launchctl-plist-quiet-semi mirror-launchctl-plist-quiet-semi))
+
+(def launchctl-quiet-true-sleep
+  "quiet bootout + sleep mid for reprovision. Kotoba when ready."
+  (oracle-str-const 'launchctl-quiet-true-sleep mirror-launchctl-quiet-true-sleep))
+
+(def launchctl-plist-quiet-true-semi
+  ".plist quiet-true mid for reprovision. Kotoba when ready."
+  (oracle-str-const 'launchctl-plist-quiet-true-semi
+                    mirror-launchctl-plist-quiet-true-semi))
+
+(def plist-ext
+  "LaunchDaemon .plist extension. Kotoba when ready."
+  (oracle-str-const 'plist-ext mirror-plist-ext))
+
 (defn- mirror-launch-status-command []
-  (str "sudo launchctl print system/" mirror-plist-label
-       " >/dev/null 2>&1 && echo running || echo stopped"))
+  (str launchctl-print-prefix mirror-plist-label launchctl-status-suffix))
 
 (defn- mirror-launch-up-command []
-  (str "sudo launchctl bootstrap system /Library/LaunchDaemons/" mirror-plist-label
-       ".plist 2>/dev/null; sudo launchctl kickstart -k system/" mirror-plist-label))
+  (str launchctl-bootstrap-prefix mirror-plist-label
+       launchctl-plist-quiet-semi launchctl-kickstart-prefix mirror-plist-label))
 
 (defn- mirror-launch-down-command []
-  (str "sudo launchctl bootout system/" mirror-plist-label))
+  (str launchctl-bootout-prefix mirror-plist-label))
 
 (defn- mirror-reprovision-command []
-  (str "sudo launchctl bootout system/" mirror-plist-label " 2>/dev/null || true; sleep 1; "
-       "sudo launchctl bootstrap system /Library/LaunchDaemons/" mirror-plist-label
-       ".plist 2>/dev/null || true; "
-       "sudo launchctl kickstart -k system/" mirror-plist-label))
+  (str launchctl-bootout-prefix mirror-plist-label launchctl-quiet-true-sleep
+       launchctl-bootstrap-prefix mirror-plist-label
+       launchctl-plist-quiet-true-semi
+       launchctl-kickstart-prefix mirror-plist-label))
 
 (defn- mirror-watchdog-reprovision-command []
-  (str "sudo launchctl bootout system/" mirror-watchdog-label " 2>/dev/null || true; sleep 1; "
-       "sudo launchctl bootstrap system /Library/LaunchDaemons/" mirror-watchdog-label
-       ".plist 2>/dev/null || true; "
-       "sudo launchctl kickstart -k system/" mirror-watchdog-label))
+  (str launchctl-bootout-prefix mirror-watchdog-label launchctl-quiet-true-sleep
+       launchctl-bootstrap-prefix mirror-watchdog-label
+       launchctl-plist-quiet-true-semi
+       launchctl-kickstart-prefix mirror-watchdog-label))
 
 (defn- mirror-operator-seed-missing? [operator-seed]
   (str/blank? (str operator-seed)))
@@ -138,7 +197,7 @@
   (str host ":.murakumo/bin/" bin))
 
 (defn- mirror-launchd-daemon-path [label]
-  (str "/Library/LaunchDaemons/" label ".plist"))
+  (str launchd-daemons-dir label plist-ext))
 
 (defn- mirror-tee-plist-prefix [label]
   (str "sudo tee " (mirror-launchd-daemon-path label)
@@ -556,7 +615,7 @@
 
 (defn launch-status-command
   "Remote shell command that reports whether the resident launchd label is running.
-   Kotoba `launch-status-command` when ready."
+   Launchctl tokens dual-sourced; command recomposes via kotoba when ready."
   []
   (try-oracle
    #(o 'launch-status-command [])
@@ -644,7 +703,7 @@
 
 (defn launch-command
   "Shell command used to start or stop the resident LaunchDaemon.
-   Kotoba launch-up/down-command when ready."
+   Launchctl tokens dual-sourced; up/down recomposes via kotoba when ready."
   [action]
   (case action
     :up (try-oracle
@@ -675,7 +734,7 @@
 
 (defn reprovision-command
   "Shell command used after writing the plist to reload and kickstart it.
-   Kotoba `reprovision-command` when ready."
+   Launchctl tokens dual-sourced; recomposes via kotoba when ready."
   []
   (try-oracle
    #(o 'reprovision-command [])
@@ -707,7 +766,7 @@
 
 (defn watchdog-reprovision-command
   "Reload + kickstart the watchdog (same bootout-settle-bootstrap dance as the mesh).
-   Kotoba `watchdog-reprovision-command` when ready."
+   Launchctl tokens dual-sourced; recomposes via kotoba when ready."
   []
   (try-oracle
    #(o 'watchdog-reprovision-command [])

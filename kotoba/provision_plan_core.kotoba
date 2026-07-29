@@ -25,7 +25,13 @@
             plist-replace
             alnum-char? find-prefix-at take-alnum peer-id-from-log
             write-plist-shell
-            multiaddr-ip4-prefix multiaddr-udp-mid multiaddr-quic-suffix]))
+            multiaddr-ip4-prefix multiaddr-udp-mid multiaddr-quic-suffix
+            launchctl-print-prefix launchctl-bootout-prefix
+            launchctl-bootstrap-sys launchctl-bootstrap-prefix
+            launchctl-kickstart-prefix launchctl-status-suffix
+            launchctl-plist-quiet-semi launchctl-quiet-true-sleep
+            launchctl-plist-quiet-true-semi
+            launchd-daemons-dir plist-ext]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.provision.plan string/port.
 ;; resolve-p2p-port uses [:option :i64] (no has-* sentinels).
@@ -36,6 +42,8 @@
 ;; peer-id body/DID patterns dual-source; log/link grep commands recompose them.
 ;; render-plist placeholder tokens dual-source.
 ;; multiaddr path tokens dual-source; multiaddr recomposes from them.
+;; launchctl shell tokens dual-source; status/up/down/reprovision/watchdog
+;; cmds + launchd-daemon-path recompose from those SSoTs.
 ;; join-append / bootstrap-append / labels-append / roles-append: pure fold
 ;; steps; host still walks node/label/role collections.
 ;; plist-replace: pure template replace step; host chains placeholders.
@@ -114,12 +122,49 @@
 (defn remote-store-command [] :string
   "mkdir -p $HOME/.murakumo/bin $HOME/.murakumo/store")
 
+;; ── residual launchctl shell tokens ──────────────────────────────────
+
+(defn launchctl-print-prefix [] :string
+  "sudo launchctl print system/")
+
+(defn launchctl-bootout-prefix [] :string
+  "sudo launchctl bootout system/")
+
+(defn launchctl-bootstrap-sys [] :string
+  ;; verb + domain before daemons dir
+  "sudo launchctl bootstrap system ")
+
+(defn launchd-daemons-dir [] :string
+  "/Library/LaunchDaemons/")
+
+(defn launchctl-bootstrap-prefix [] :string
+  (string-concat (launchctl-bootstrap-sys) (launchd-daemons-dir)))
+
+(defn launchctl-kickstart-prefix [] :string
+  "sudo launchctl kickstart -k system/")
+
+(defn launchctl-status-suffix [] :string
+  " >/dev/null 2>&1 && echo running || echo stopped")
+
+(defn launchctl-plist-quiet-semi [] :string
+  ;; after label in launch-up: quiet bootstrap then kickstart
+  ".plist 2>/dev/null; ")
+
+(defn launchctl-quiet-true-sleep [] :string
+  ;; after bootout label in reprovision: ignore miss + settle
+  " 2>/dev/null || true; sleep 1; ")
+
+(defn launchctl-plist-quiet-true-semi [] :string
+  ;; after bootstrap label in reprovision: quiet then kickstart
+  ".plist 2>/dev/null || true; ")
+
+(defn plist-ext [] :string
+  ".plist")
+
 (defn launch-status-command [] :string
   (string-concat
-   "sudo launchctl print system/"
-   (string-concat
-    (plist-label)
-    " >/dev/null 2>&1 && echo running || echo stopped")))
+   (launchctl-print-prefix)
+   (string-concat (plist-label) (launchctl-status-suffix))))
 
 ;; ── peer-id DID / body patterns (shared by log grep + host re-find) ──
 
@@ -182,46 +227,48 @@
 
 (defn launch-up-command [] :string
   (string-concat
-   "sudo launchctl bootstrap system /Library/LaunchDaemons/"
+   (launchctl-bootstrap-prefix)
    (string-concat
     (plist-label)
     (string-concat
-     ".plist 2>/dev/null; sudo launchctl kickstart -k system/"
-     (plist-label)))))
+     (launchctl-plist-quiet-semi)
+     (string-concat (launchctl-kickstart-prefix) (plist-label))))))
 
 (defn launch-down-command [] :string
-  (string-concat
-   "sudo launchctl bootout system/"
-   (plist-label)))
+  (string-concat (launchctl-bootout-prefix) (plist-label)))
 
 (defn reprovision-command [] :string
   (string-concat
-   "sudo launchctl bootout system/"
+   (launchctl-bootout-prefix)
    (string-concat
     (plist-label)
     (string-concat
-     " 2>/dev/null || true; sleep 1; sudo launchctl bootstrap system /Library/LaunchDaemons/"
+     (launchctl-quiet-true-sleep)
      (string-concat
-      (plist-label)
+      (launchctl-bootstrap-prefix)
       (string-concat
-       ".plist 2>/dev/null || true; sudo launchctl kickstart -k system/"
-       (plist-label)))))))
+       (plist-label)
+       (string-concat
+        (launchctl-plist-quiet-true-semi)
+        (string-concat (launchctl-kickstart-prefix) (plist-label)))))))))
 
 (defn watchdog-label [] :string
   "com.murakumo.kotoba-mesh-watchdog")
 
 (defn watchdog-reprovision-command [] :string
   (string-concat
-   "sudo launchctl bootout system/"
+   (launchctl-bootout-prefix)
    (string-concat
     (watchdog-label)
     (string-concat
-     " 2>/dev/null || true; sleep 1; sudo launchctl bootstrap system /Library/LaunchDaemons/"
+     (launchctl-quiet-true-sleep)
      (string-concat
-      (watchdog-label)
+      (launchctl-bootstrap-prefix)
       (string-concat
-       ".plist 2>/dev/null || true; sudo launchctl kickstart -k system/"
-       (watchdog-label)))))))
+       (watchdog-label)
+       (string-concat
+        (launchctl-plist-quiet-true-semi)
+        (string-concat (launchctl-kickstart-prefix) (watchdog-label)))))))))
 
 ;; ── residual rsync argv fragments + launchd path/tee ─────────────────
 
@@ -238,10 +285,10 @@
   (string-concat host (string-concat ":.murakumo/bin/" bin)))
 
 (defn launchd-daemon-path [label :string] :string
-  ;; /Library/LaunchDaemons/{label}.plist
+  ;; /Library/LaunchDaemons/{label}.plist — recomposes dir + ext SSoTs
   (string-concat
-   "/Library/LaunchDaemons/"
-   (string-concat label ".plist")))
+   (launchd-daemons-dir)
+   (string-concat label (plist-ext))))
 
 (defn tee-plist-prefix [label :string] :string
   ;; "sudo tee {path} >/dev/null <<'PLIST'\n" — heredoc body stays host

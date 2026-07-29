@@ -141,16 +141,81 @@
    :effects #{},
    :body "mkdir -p $HOME/.murakumo/bin $HOME/.murakumo/store",
    :param-types []}
+  {:name launchctl-print-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "sudo launchctl print system/",
+   :param-types []}
+  {:name launchctl-bootout-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "sudo launchctl bootout system/",
+   :param-types []}
+  {:name launchctl-bootstrap-sys,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "sudo launchctl bootstrap system ",
+   :param-types []}
+  {:name launchd-daemons-dir,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/Library/LaunchDaemons/",
+   :param-types []}
+  {:name launchctl-bootstrap-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat (launchctl-bootstrap-sys) (launchd-daemons-dir)),
+   :param-types []}
+  {:name launchctl-kickstart-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "sudo launchctl kickstart -k system/",
+   :param-types []}
+  {:name launchctl-status-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " >/dev/null 2>&1 && echo running || echo stopped",
+   :param-types []}
+  {:name launchctl-plist-quiet-semi,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ".plist 2>/dev/null; ",
+   :param-types []}
+  {:name launchctl-quiet-true-sleep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " 2>/dev/null || true; sleep 1; ",
+   :param-types []}
+  {:name launchctl-plist-quiet-true-semi,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ".plist 2>/dev/null || true; ",
+   :param-types []}
+  {:name plist-ext,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ".plist",
+   :param-types []}
   {:name launch-status-command,
    :params [],
    :result :string,
    :effects #{},
    :body
    (string-concat
-    "sudo launchctl print system/"
-    (string-concat
-     (plist-label)
-     " >/dev/null 2>&1 && echo running || echo stopped")),
+    (launchctl-print-prefix)
+    (string-concat (plist-label) (launchctl-status-suffix))),
    :param-types []}
   {:name did-key-prefix,
    :params [],
@@ -245,19 +310,18 @@
    :effects #{},
    :body
    (string-concat
-    "sudo launchctl bootstrap system /Library/LaunchDaemons/"
+    (launchctl-bootstrap-prefix)
     (string-concat
      (plist-label)
      (string-concat
-      ".plist 2>/dev/null; sudo launchctl kickstart -k system/"
-      (plist-label)))),
+      (launchctl-plist-quiet-semi)
+      (string-concat (launchctl-kickstart-prefix) (plist-label))))),
    :param-types []}
   {:name launch-down-command,
    :params [],
    :result :string,
    :effects #{},
-   :body
-   (string-concat "sudo launchctl bootout system/" (plist-label)),
+   :body (string-concat (launchctl-bootout-prefix) (plist-label)),
    :param-types []}
   {:name reprovision-command,
    :params [],
@@ -265,16 +329,20 @@
    :effects #{},
    :body
    (string-concat
-    "sudo launchctl bootout system/"
+    (launchctl-bootout-prefix)
     (string-concat
      (plist-label)
      (string-concat
-      " 2>/dev/null || true; sleep 1; sudo launchctl bootstrap system /Library/LaunchDaemons/"
+      (launchctl-quiet-true-sleep)
       (string-concat
-       (plist-label)
+       (launchctl-bootstrap-prefix)
        (string-concat
-        ".plist 2>/dev/null || true; sudo launchctl kickstart -k system/"
-        (plist-label)))))),
+        (plist-label)
+        (string-concat
+         (launchctl-plist-quiet-true-semi)
+         (string-concat
+          (launchctl-kickstart-prefix)
+          (plist-label)))))))),
    :param-types []}
   {:name watchdog-label,
    :params [],
@@ -288,16 +356,20 @@
    :effects #{},
    :body
    (string-concat
-    "sudo launchctl bootout system/"
+    (launchctl-bootout-prefix)
     (string-concat
      (watchdog-label)
      (string-concat
-      " 2>/dev/null || true; sleep 1; sudo launchctl bootstrap system /Library/LaunchDaemons/"
+      (launchctl-quiet-true-sleep)
       (string-concat
-       (watchdog-label)
+       (launchctl-bootstrap-prefix)
        (string-concat
-        ".plist 2>/dev/null || true; sudo launchctl kickstart -k system/"
-        (watchdog-label)))))),
+        (watchdog-label)
+        (string-concat
+         (launchctl-plist-quiet-true-semi)
+         (string-concat
+          (launchctl-kickstart-prefix)
+          (watchdog-label)))))))),
    :param-types []}
   {:name rsync-bin,
    :params [],
@@ -335,8 +407,8 @@
    :effects #{},
    :body
    (string-concat
-    "/Library/LaunchDaemons/"
-    (string-concat label ".plist")),
+    (launchd-daemons-dir)
+    (string-concat label (plist-ext))),
    :param-types [:string]}
   {:name tee-plist-prefix,
    :params [label],
@@ -673,7 +745,18 @@
   write-plist-shell
   multiaddr-ip4-prefix
   multiaddr-udp-mid
-  multiaddr-quic-suffix],
+  multiaddr-quic-suffix
+  launchctl-print-prefix
+  launchctl-bootout-prefix
+  launchctl-bootstrap-sys
+  launchctl-bootstrap-prefix
+  launchctl-kickstart-prefix
+  launchctl-status-suffix
+  launchctl-plist-quiet-semi
+  launchctl-quiet-true-sleep
+  launchctl-plist-quiet-true-semi
+  launchd-daemons-dir
+  plist-ext],
  :schemas nil,
  :effects #{},
  :blocks [],
