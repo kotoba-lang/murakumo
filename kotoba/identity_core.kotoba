@@ -4,12 +4,15 @@
             jwt-header-json jwt-payload-json op-token-sig-seg
             cid-b-prefix graph-name-fleet
             seed-sep seed-p2p-suffix seed-x25519-suffix seed-overlay-suffix
-            did-derive-subcmd jwt-seg-sep argv-join-sep]))
+            did-derive-subcmd jwt-seg-sep argv-join-sep
+            jwt-payload-sub-prefix jwt-payload-exp-mid jwt-payload-exp-val
+            jwt-payload-close]))
 
 ;; W6 pure-planner oracle — murakumo.identity pure string core (medium + expand).
 ;; SHA-256 / base32 CID / base64url / HMAC stay host (crypto).
 ;; Seed *inputs* (preimage strings) and JWT/op-token *payload templates* ported;
 ;; hashing / b64url encoding remain cljc.
+;; Residual JWT payload fragments dual-source; jwt-payload-json recompose.
 ;; seed/jwt seps + did-derive subcmd dual-source for host argv/token join.
 ;; trim matches clojure.string/trim for space/tab/newline/cr.
 ;; Parity: test/murakumo/identity_kotoba_parity_test.clj
@@ -82,17 +85,34 @@
 (defn did-from-output [out :string] :string
   (trim out))
 
-;; ── op-token pure string templates (b64url + join stay host) ─────────
+;; ── residual JWT payload fragments + header/sig/cid tokens ───────────
 
 (defn jwt-header-json [] :string
   ;; preimage for first JWT segment before b64url
   "{\"alg\":\"HS256\",\"typ\":\"JWT\"}")
 
+(defn jwt-payload-sub-prefix [] :string
+  "{\"sub\":\"")
+
+(defn jwt-payload-exp-mid [] :string
+  "\",\"exp\":")
+
+(defn jwt-payload-exp-val [] :string
+  ;; fixed sentinel exp for CLI media op-token
+  "9999999999")
+
+(defn jwt-payload-close [] :string
+  "}")
+
 (defn jwt-payload-json [did :string] :string
-  ;; preimage for second JWT segment before b64url; exp fixed sentinel
+  ;; preimage for second JWT segment before b64url
   (string-concat
-   "{\"sub\":\""
-   (string-concat did "\",\"exp\":9999999999}")))
+   (jwt-payload-sub-prefix)
+   (string-concat
+    did
+    (string-concat
+     (jwt-payload-exp-mid)
+     (string-concat (jwt-payload-exp-val) (jwt-payload-close))))))
 
 (defn op-token-sig-seg [] :string
   ;; third JWT segment is a fixed CLI media marker (not an HMAC)

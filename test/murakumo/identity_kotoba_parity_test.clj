@@ -16,7 +16,9 @@
        "jwt-header-json jwt-payload-json op-token-sig-seg "
        "cid-b-prefix graph-name-fleet "
        "seed-sep seed-p2p-suffix seed-x25519-suffix seed-overlay-suffix "
-       "did-derive-subcmd jwt-seg-sep argv-join-sep"))
+       "did-derive-subcmd jwt-seg-sep argv-join-sep "
+       "jwt-payload-sub-prefix jwt-payload-exp-mid jwt-payload-exp-val "
+       "jwt-payload-close"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -123,3 +125,38 @@
            (id/did-derive-argv "/bin/kotoba" "seedhex")))
     (let [parts (str/split (id/op-token "did:key:z") #"\.")]
       (is (= 3 (count parts))))))
+
+(deftest identity-jwt-frags-match
+  (let [s (compile-string-cases
+           {"jh" "(jwt-header-json)"
+            "sp" "(jwt-payload-sub-prefix)"
+            "em" "(jwt-payload-exp-mid)"
+            "ev" "(jwt-payload-exp-val)"
+            "cl" "(jwt-payload-close)"
+            "sig" "(op-token-sig-seg)"
+            "bp" "(cid-b-prefix)"
+            "gn" "(graph-name-fleet)"
+            "pj" (str "(jwt-payload-json " (kotoba-literal "did:key:z") ")")})
+        did "did:key:z"
+        expected (str id/jwt-payload-sub-prefix did id/jwt-payload-exp-mid
+                      id/jwt-payload-exp-val id/jwt-payload-close)]
+    (is (= id/jwt-header-json (get s "jh")))
+    (is (= "{\"alg\":\"HS256\",\"typ\":\"JWT\"}" (get s "jh")))
+    (is (= id/jwt-payload-sub-prefix (get s "sp")))
+    (is (= id/jwt-payload-exp-mid (get s "em")))
+    (is (= id/jwt-payload-exp-val (get s "ev")))
+    (is (= "9999999999" (get s "ev")))
+    (is (= id/jwt-payload-close (get s "cl")))
+    (is (= id/op-token-sig-seg (get s "sig")))
+    (is (= "kotoba-cli-media" (get s "sig")))
+    (is (= id/cid-b-prefix (get s "bp")))
+    (is (= "b" (get s "bp")))
+    (is (= (id/graph-name-fleet) (get s "gn")))
+    (is (= "murakumo-fleet" (get s "gn")))
+    (is (= expected (get s "pj")))
+    (let [tok (id/op-token did)
+          parts (str/split tok #"\." 3)]
+      (is (= 3 (count parts)))
+      (is (= (id/b64url id/jwt-header-json) (first parts)))
+      (is (= (id/b64url expected) (second parts)))
+      (is (= id/op-token-sig-seg (last parts))))))
