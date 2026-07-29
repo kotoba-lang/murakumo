@@ -370,14 +370,19 @@
     ;; written before head/treasury were split out (or by any producer that
     ;; only records shares) has neither. `settle` always emits all three, so
     ;; this only bites on the `(:run/shares run)` branch -- which is exactly
-    ;; the branch a stored feed takes. Without the `or 0` the fold NPEs on
-    ;; `(+ 0.0 nil)` and takes the whole balances endpoint down with it;
-    ;; local-murakumo's own copy of this fold had guarded it with `cond->`,
-    ;; and that divergence is how the gap stayed invisible.
+    ;; the branch a stored feed takes. Unguarded it NPEs on `(+ 0.0 nil)` and
+    ;; takes the whole balances endpoint down with it.
+    ;;
+    ;; `cond->` and NOT `(or ... 0)`: defaulting to 0 would ADD a "head" 0.0
+    ;; row to every balances map that has no head, changing the shape of
+    ;; /infer/credits for every existing feed. local-murakumo's copy of this
+    ;; fold used cond-> for exactly that reason and its routes-test pins it.
+    ;; The divergence between the two copies is how the NPE stayed invisible;
+    ;; converging on the copy that was already right is the fix.
     (let [s (if (:run/shares run) run (settle run))]
-      (-> (reduce (fn [a [n c]] (update a n (fnil + 0.0) c)) acc (:run/shares s))
-          (update (:run/head-name s "head") (fnil + 0.0) (or (:run/head s) 0))
-          (update :treasury (fnil + 0.0) (or (:run/treasury s) 0))))))
+      (cond-> (reduce (fn [a [n c]] (update a n (fnil + 0.0) c)) acc (:run/shares s))
+        (:run/head s) (update (:run/head-name s "head") (fnil + 0.0) (:run/head s))
+        (:run/treasury s) (update :treasury (fnil + 0.0) (:run/treasury s))))))
 
 (defn balances
   "Fold a run ledger (seq of settled runs or raw runs) → account balances.
