@@ -3,207 +3,88 @@
 ;; Collection, persistence, JSON encoding, and HTTP serving stay in murakumo.dash.
 ;; This namespace owns deterministic snapshot -> record/alert/display data.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-collection-record-types-pure-oracle +
-;; ADR-260728-w6-dash-hosted-fold-pure-oracle +
-;; ADR-260728-w6-dash-defaults-pure-oracle + probe-command + cljs load):
-;; pure display + probe/parse + dashboard defaults + hosted-join-sep +
-;; hosted-append fold + snapshot-record-type DELEGATE to precompiled
-;; kotoba/dash_state_core.kotoba KIR when oracle is loadable (JVM classpath
-;; or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; W6 product-shell + T6.4: pure display + probe/parse + dashboard defaults +
+;; hosted fold + snapshot-record-type require the shipped `:dash-state` KIR on
+;; **every** platform. Host pure mirrors are gone — cljs/nbb must preload
+;; shipped KIR before requiring this ns
+;; (ADR-260731-w6-t64-dash-mirror-delete).
 ;; Map/vector folds, HTML join, probe-lines fold, parse-hosted split, and
-;; query-string stay host/cljc. cljs mirrors remain fallback when not ready.
+;; query-string stay host/cljc.
 
 (ns murakumo.dash.state
-  "Dashboard pure helpers use kotoba/dash_state_core.kotoba when oracle ready."
+  "Dashboard pure helpers use kotoba/dash_state_core.kotoba (oracle required)."
   (:require [clojure.set :as set]
             [clojure.string :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :dash-state)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
-
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-(defn- oracle-str-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/call oid export []))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/call oid export [])
-         mirror)
-       (catch :default _
-         mirror))))
-
-(defn- oracle-i64-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/i64->host (oracle/call oid export [])))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/i64->host (oracle/call oid export []))
-         mirror)
-       (catch :default _
-         mirror))))
 
 (defn- parse-int [s]
   #?(:clj (Integer/parseInt s)
      :cljs (js/parseInt s 10)))
 
-;; ── host-mirror pure helpers (cljs fallback + semantic documentation) ──
-
-(def ^:private mirror-short-hosted-cid-max-len 18)
-(def ^:private mirror-short-cid-max-len 14)
-(def ^:private mirror-hosted-join-sep " ")
-(def ^:private mirror-default-dashboard-port 8899)
-(def ^:private mirror-default-dashboard-interval 15)
-(def ^:private mirror-default-dashboard-port-str "8899")
-(def ^:private mirror-default-dashboard-interval-str "15")
-
-(defn- mirror-short-hosted-cid [cid]
-  (subs cid 0 (min mirror-short-hosted-cid-max-len (count cid))))
-
-(defn- mirror-health-class [health]
-  (if (= "ok" health) "ok" "down"))
-
-(defn- mirror-interval-sleep-ms [seconds]
-  (* 1000 seconds))
-
-(defn- mirror-clamp-at [requested-at history-count]
-  (min (max 0 (or requested-at 0)) (max 0 (dec history-count))))
-
-(defn- mirror-take-last-start [len cap]
-  (if (< cap 1)
-    len
-    (max 0 (- len cap))))
-
-(defn- mirror-recent-take-n [n default-n]
-  (if (neg? n) default-n n))
-
-(defn- mirror-parse-links [s]
-  (try (parse-int (str/trim (or s "0")))
-       (catch #?(:clj Exception :cljs :default) _ 0)))
-(defn- mirror-probe-line-key [line]
-  (if (and (>= (count line) 2) (= (subs line 1 2) ":"))
-    (subs line 0 1)
-    ""))
-
-(defn- mirror-probe-line-value [line]
-  (if (seq (mirror-probe-line-key line))
-    (subs line 2)
-    ""))
-(defn- mirror-health-from-present [present?]
-  (if present? "ok" "down"))
-(def ^:private mirror-content-type-json "application/json")
-(def ^:private mirror-content-type-html "text/html; charset=utf-8")
-(def ^:private mirror-http-ok-status 200)
-
-;; ── dual-source dashboard defaults + join seps ───────────────────────
+;; ── dashboard defaults + join seps ───────────────────────────────────
 
 (def short-hosted-cid-max-len
-  "Max chars for short-hosted-cid. Kotoba when ready."
-  (oracle-i64-const 'short-hosted-cid-max-len mirror-short-hosted-cid-max-len))
+  "Max chars for short-hosted-cid. Kotoba SSoT."
+  (oracle/i64->host (o 'short-hosted-cid-max-len [])))
 
 (def short-cid-max-len
-  "Max chars for alert/table short-cid. Kotoba when ready."
-  (oracle-i64-const 'short-cid-max-len mirror-short-cid-max-len))
+  "Max chars for alert/table short-cid. Kotoba SSoT."
+  (oracle/i64->host (o 'short-cid-max-len [])))
 
 (def hosted-join-sep
-  "Separator between hosted CIDs in hosted-summary. Kotoba when ready."
-  (oracle-str-const 'hosted-join-sep mirror-hosted-join-sep))
-
-(defn- mirror-join-append [acc sep next]
-  (if (str/blank? (str acc))
-    (str next)
-    (str acc sep next)))
-
-(defn- mirror-hosted-append [acc next]
-  (mirror-join-append acc mirror-hosted-join-sep next))
+  "Separator between hosted CIDs in hosted-summary. Kotoba SSoT."
+  (o 'hosted-join-sep []))
 
 (defn join-append
-  "Generic empty-first join fold step. Kotoba when ready."
+  "Generic empty-first join fold step."
   [acc sep next]
-  (try-oracle
-   #(o 'join-append [(str (or acc "")) (str sep) (str next)])
-   #(mirror-join-append acc sep next)))
+  (o 'join-append [(str (or acc "")) (str sep) (str next)]))
 
 (defn hosted-append
-  "Append one short-hosted-cid to hosted-summary acc. Kotoba when ready."
+  "Append one short-hosted-cid to hosted-summary acc."
   [acc next]
-  (try-oracle
-   #(o 'hosted-append [(str (or acc "")) (str next)])
-   #(mirror-hosted-append acc next)))
+  (o 'hosted-append [(str (or acc "")) (str next)]))
 
 (def default-dashboard-port
-  "Default dashboard HTTP port. Kotoba when ready."
-  (oracle-i64-const 'default-dashboard-port mirror-default-dashboard-port))
+  "Default dashboard HTTP port. Kotoba SSoT."
+  (oracle/i64->host (o 'default-dashboard-port [])))
 
 (def default-dashboard-interval
-  "Default snapshot interval seconds. Kotoba when ready."
-  (oracle-i64-const 'default-dashboard-interval mirror-default-dashboard-interval))
+  "Default snapshot interval seconds. Kotoba SSoT."
+  (oracle/i64->host (o 'default-dashboard-interval [])))
 
 (def default-dashboard-port-str
-  "CLI default port string when arg absent. Kotoba when ready."
-  (oracle-str-const 'default-dashboard-port-str mirror-default-dashboard-port-str))
+  "CLI default port string when arg absent. Kotoba SSoT."
+  (o 'default-dashboard-port-str []))
 
 (def default-dashboard-interval-str
-  "CLI default interval string when arg absent. Kotoba when ready."
-  (oracle-str-const 'default-dashboard-interval-str
-                    mirror-default-dashboard-interval-str))
-
-(def ^:private mirror-snapshot-record-type "com.murakumo.fleet.snapshot")
+  "CLI default interval string when arg absent. Kotoba SSoT."
+  (o 'default-dashboard-interval-str []))
 
 (def snapshot-record-type
-  "Atproto $type / collection NSID for fleet snapshot records. Kotoba when ready."
-  (oracle-str-const 'snapshot-record-type mirror-snapshot-record-type))
+  "Atproto $type / collection NSID for fleet snapshot records. Kotoba SSoT."
+  (o 'snapshot-record-type []))
 
-;; ── pure display helpers: kotoba dash_state_core SSoT when oracle ready ─
+;; ── pure display helpers ─────────────────────────────────────────────
 
 (defn short-hosted-cid
-  "CID abbreviation used in the dashboard hosted-components table.
-   Kotoba `short-hosted-cid` (cljs may soft-fall if KIR substring fails)."
+  "CID abbreviation used in the dashboard hosted-components table."
   [cid]
-  (let [s (str cid)]
-    (try-oracle
-     #(o 'short-hosted-cid [s])
-     #(mirror-short-hosted-cid s))))
+  (o 'short-hosted-cid [(str cid)]))
 
 (defn- short-cid [cid]
   (subs cid 0 (min short-cid-max-len (count cid))))
 
 (defn hosted-summary
-  "Dashboard table text for hosted component CIDs, or nil when none are hosted.
-   Join step dual-sourced via `hosted-append`; short-hosted-cid + walk stay host."
+  "Dashboard table text for hosted component CIDs, or nil when none are hosted."
   [node]
   (when (seq (:hosted node))
     (reduce (fn [acc cid]
@@ -212,55 +93,36 @@
             (:hosted node))))
 
 (defn health-class
-  "CSS class for a node health value.
-   Kotoba `health-class-of` on `:health` when oracle ready."
+  "CSS class for a node health value."
   [node]
-  (let [h (str (or (:health node) ""))]
-    (try-oracle
-     #(o 'health-class-of [h])
-     #(mirror-health-class h))))
+  (o 'health-class-of [(str (or (:health node) ""))]))
 
 (defn query-at
-  "Parse dashboard `at=N` query parameter. Returns nil if absent. The regex is
-  anchored to a key boundary (start-of-string or `?`/`&`, terminated by `&` or
-  end-of-string) so it matches the exact key `at`, not any longer key that
-  happens to END in \"at=<digits>\" as a substring (e.g. \"format=5\",
-  \"chat=5\", \"combat=12\" would otherwise all be misread as history offsets
-  5/5/12 -- selected-snapshot would silently serve stale history instead of
-  the live snapshot for any query string containing such a param)."
+  "Parse dashboard `at=N` query parameter. Returns nil if absent."
   [query-string]
   (some-> query-string (->> (re-find #"(?:^|[?&])at=(\d+)(?:&|$)")) second parse-int))
 
 (defn dashboard-options
-  "Parse dashboard CLI args into port/interval defaults.
-   Default strings dual-sourced via `default-dashboard-*-str`."
+  "Parse dashboard CLI args into port/interval defaults."
   [args]
   {:port (parse-int (or (first args) default-dashboard-port-str))
    :interval (parse-int (or (second args) default-dashboard-interval-str))})
 
 (defn interval-sleep-ms
-  "Milliseconds to sleep between dashboard snapshots.
-   Kotoba `interval-sleep-ms` when oracle ready."
+  "Milliseconds to sleep between dashboard snapshots."
   [seconds]
-  (try-oracle
-   #(oracle/i64->host (o 'interval-sleep-ms [(oracle/as-i64 seconds)]))
-   #(mirror-interval-sleep-ms seconds)))
+  (oracle/i64->host (o 'interval-sleep-ms [(oracle/as-i64 seconds)])))
 
 (defn clamp-at
-  "Clamp a requested history offset into the available history range.
-   Kotoba `clamp-at` when oracle ready (nil requested-at → 0)."
+  "Clamp a requested history offset into the available history range."
   [requested-at history-count]
-  (try-oracle
-   #(oracle/i64->host
-     (o 'clamp-at [(oracle/as-i64 (or requested-at 0))
-                   (oracle/as-i64 history-count)]))
-   #(mirror-clamp-at requested-at history-count)))
+  (oracle/i64->host
+   (o 'clamp-at [(oracle/as-i64 (or requested-at 0))
+                 (oracle/as-i64 history-count)])))
 
 (defn selected-snapshot
   "Select dashboard snapshot for a history offset.
-
-   at=0 is latest; history is stored oldest->newest. Falls back to cache when
-   history is empty."
+   at=0 is latest; history is stored oldest->newest."
   [history cache requested-at]
   (let [history-count (count history)
         at (clamp-at requested-at history-count)]
@@ -272,26 +134,20 @@
                  cache)}))
 
 (defn recent-alerts
-  "Newest dashboard alerts first, capped for display.
-   Cap `n` via kotoba `recent-take-n` when oracle ready (negative → default 6)."
+  "Newest dashboard alerts first, capped for display."
   ([alerts] (recent-alerts alerts 6))
   ([alerts n]
-   (let [take-n (try-oracle
-                 #(oracle/i64->host
-                   (o 'recent-take-n [(oracle/as-i64 n) (oracle/as-i64 6)]))
-                 #(mirror-recent-take-n n 6))]
+   (let [take-n (oracle/i64->host
+                 (o 'recent-take-n [(oracle/as-i64 n) (oracle/as-i64 6)]))]
      (take take-n (reverse alerts)))))
 
 (defn append-capped
-  "Append one item to a vector-like history, keeping only the newest cap items.
-   Start index via kotoba `take-last-start` when oracle ready; vector slice stays host."
+  "Append one item to a vector-like history, keeping only the newest cap items."
   [items cap item]
   (let [v (conj (vec items) item)
         len (count v)
-        start (try-oracle
-               #(oracle/i64->host
-                 (o 'take-last-start [(oracle/as-i64 len) (oracle/as-i64 cap)]))
-               #(mirror-take-last-start len cap))]
+        start (oracle/i64->host
+               (o 'take-last-start [(oracle/as-i64 len) (oracle/as-i64 cap)]))]
     (subvec v start)))
 
 (defn concat-capped
@@ -315,9 +171,7 @@
 
 (defn snapshot-record
   "Build the atproto record payload for a fleet snapshot.
-
-   `snapshot-json` is supplied by the host shell so this namespace stays free of
-   any JSON dependency. $type dual-sourced via `snapshot-record-type`."
+   `snapshot-json` is supplied by the host shell."
   [snapshot snapshot-json]
   {:$type snapshot-record-type
    :ts (:ts snapshot)
@@ -343,10 +197,7 @@
         nodes))
 
 (defn render-html
-  "Render the dashboard HTML for a selected snapshot.
-
-   The host shell passes persistence counters and alerts in explicitly so rendering
-   remains deterministic and testable."
+  "Render the dashboard HTML for a selected snapshot."
   [snapshot at total live? persisted-count alerts]
   (let [{:keys [ts nodes fleet]} snapshot]
     (str "<!doctype html><html><head><meta charset=utf-8><title>murakumo</title>"
@@ -380,47 +231,40 @@
          "</table></body></html>")))
 
 (def content-type-json
-  (oracle-str-const 'content-type-json mirror-content-type-json))
+  (o 'content-type-json []))
 
 (def content-type-html
-  (oracle-str-const 'content-type-html mirror-content-type-html))
+  (o 'content-type-html []))
 
 (def http-ok-status
-  (oracle-i64-const 'http-ok-status mirror-http-ok-status))
+  (oracle/i64->host (o 'http-ok-status [])))
 
 (defn json-response
-  "HTTP response map for JSON API bodies.
-   status + content-type via kotoba when ready."
+  "HTTP response map for JSON API bodies."
   [body]
   {:status http-ok-status
    :headers {"content-type" content-type-json}
    :body body})
 
 (defn html-response
-  "HTTP response map for dashboard HTML bodies.
-   status + content-type via kotoba when ready."
+  "HTTP response map for dashboard HTML bodies."
   [body]
   {:status http-ok-status
    :headers {"content-type" content-type-html}
    :body body})
 
 (defn- probe-line-key
-  "First character of an H:/L:/P: probe line. Kotoba when ready."
+  "First character of an H:/L:/P: probe line."
   [line]
-  (try-oracle
-   #(o 'probe-line-key [(str line)])
-   #(mirror-probe-line-key line)))
+  (o 'probe-line-key [(str line)]))
 
 (defn- probe-line-value
-  "Payload after the key colon. Kotoba when ready."
+  "Payload after the key colon."
   [line]
-  (try-oracle
-   #(o 'probe-line-value [(str line)])
-   #(mirror-probe-line-value line)))
+  (o 'probe-line-value [(str line)]))
 
 (defn probe-lines
-  "Parse the H:/L:/P: probe stdout into a map of string key -> value.
-   Per-line key/value pure via kotoba; line fold stays host."
+  "Parse the H:/L:/P: probe stdout into a map of string key -> value."
   [out]
   (into {}
         (for [line (str/split-lines (str out))
@@ -428,37 +272,22 @@
               :when (seq k)]
           [k (probe-line-value line)])))
 
-(defn- mirror-health-url [port]
-  (str "http://localhost:" port "/health"))
-
-(defn- mirror-mesh-log-path []
-  "~/.murakumo/mesh.log")
-
-(defn- mirror-probe-command [port]
-  (str "echo \"H:$(curl -s -m4 http://localhost:" port "/health 2>/dev/null)\"; echo \"L:$(grep 'peer connected' ~/.murakumo/mesh.log 2>/dev/null | grep -o '12D3[A-Za-z0-9]*' | sort -u | wc -l | tr -d ' ')\"; echo \"P:$(grep 'trigger: executed' ~/.murakumo/mesh.log 2>/dev/null | grep -oE 'bafy[a-z0-9]{40,}' | sort -u | tr '\\n' ',')\""))
-
 (defn health-url
-  "Local health URL for a control port. Kotoba `health-url` when ready."
+  "Local health URL for a control port."
   [port]
-  (try-oracle
-   #(o 'health-url [(oracle/as-i64 port)])
-   #(mirror-health-url port)))
+  (o 'health-url [(oracle/as-i64 port)]))
 
 (defn mesh-log-path
-  "Mesh log path used by probe L:/P: clauses. Kotoba when ready."
+  "Mesh log path used by probe L:/P: clauses."
   []
-  (try-oracle
-   #(o 'mesh-log-path [])
-   mirror-mesh-log-path))
+  (o 'mesh-log-path []))
 
 (defn probe-command
   "Remote shell command for one dashboard probe round-trip.
-   Kotoba `probe-command` when ready (pure shell string compose).
    SSH execution of this string stays host-forever."
   [port]
-  (try-oracle
-   #(o 'probe-command [(oracle/as-i64 port)])
-   #(mirror-probe-command port)))
+  (o 'probe-command [(oracle/as-i64 port)]))
+
 (defn parse-health
   "Decode health JSON with a host-supplied decoder, returning nil on failure."
   [decode-fn text]
@@ -475,12 +304,9 @@
    :p2p-port p2p-port})
 
 (defn parse-links
-  "Parse the L: value from probe output.
-   Kotoba `parse-links` (trim + digits → i64, 0 on bad) when ready."
+  "Parse the L: value from probe output."
   [s]
-  (try-oracle
-   #(oracle/i64->host (o 'parse-links [(str (or s ""))]))
-   #(mirror-parse-links s)))
+  (oracle/i64->host (o 'parse-links [(str (or s ""))])))
 
 (defn parse-hosted
   "Parse comma-separated hosted component CIDs from the P: value."
@@ -490,16 +316,12 @@
        vec))
 
 (defn health-from-present
-  "ok/down label from health-json presence. Kotoba when ready."
+  "ok/down label from health-json presence."
   [present?]
-  (try-oracle
-   #(o 'health-from-present [(oracle/as-i64 (if present? 1 0))])
-   #(mirror-health-from-present present?)))
+  (o 'health-from-present [(oracle/as-i64 (if present? 1 0))]))
 
 (defn probe-node
-  "Build a snapshot node from static node data and parsed probe values.
-
-   `health-json` is already decoded by the host shell or nil on failure."
+  "Build a snapshot node from static node data and parsed probe values."
   [node health-json lines p2p-port]
   {:name (:name node)
    :host (:host node)
@@ -519,11 +341,10 @@
    :health (health-from-present false)
    :links 0
    :hosted []})
+
 (defn diff-alerts
   "Compare two snapshots and surface liveness changes.
-
-   Alerts cover node down/recovery, complete link loss, link degradation, and
-   hosted component eviction. nil previous snapshot yields no alerts."
+   nil previous snapshot yields no alerts."
   [prev curr]
   (when prev
     (let [prev-by-name (into {} (map (juxt :name identity)) (:nodes prev))
