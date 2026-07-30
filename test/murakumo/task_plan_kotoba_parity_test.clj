@@ -12,7 +12,7 @@
 
 (def export-prefix
   (str "default-max-slots default-max-attempts default-timeout-ms slots failed? can-retry? "
-       "task-eligible? fill-milli better-fill? better-task-score? better-mem? "
+       "task-eligible? fill-milli better-fill? task-score-code better-mem? "
        "wave-of slot-of load-after-assign "
        "digit-char nat-str i64-str pad4 task-id "
        "pair-record pick-task-idx-2 assign-task-step-2 "
@@ -203,8 +203,8 @@
                  "s1" "(slot-of 5 4)"
                  "la" "(load-after-assign 3)"
                  "bf" "(if (better-fill? 250 500) 1 0)"
-                 "bs" "(better-task-score? 250 1 0 500 0)"
-                 "tie" "(better-task-score? 250 1 0 250 1)"
+                 "bs" "(task-score-code 250 1 0 500 0)"
+                 "tie" "(task-score-code 250 1 0 250 1)"
                  "bm" "(if (better-mem? -100 -50 0 1) 1 0)"
                  "bn" "(if (better-mem? -50 -50 0 1) 1 0)"})]
     (is (= 0 (get actual "f0")))

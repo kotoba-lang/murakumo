@@ -155,7 +155,7 @@
    :effects #{},
    :body (if (< fill0 fill1) true false),
    :param-types [:i64 :i64]}
-  {:name better-task-score?,
+  {:name task-score-code,
    :params [fill0 load0 _memneg0 fill1 load1],
    :result :i64,
    :effects #{},
@@ -297,7 +297,7 @@
       (= ok1 0)
       0
       (let
-       [b (better-task-score? fill0 load0 0 fill1 load1)]
+       [b (task-score-code fill0 load0 0 fill1 load1)]
        (if (= b 2) 0 (if (= b 1) 0 1)))))),
    :param-types [:i64 :i64 :i64 :i64 [:ref :task/pair]]}
   {:name assign-task-step-2,
@@ -318,7 +318,7 @@
        (= ok1 0)
        0
        (let
-        [b (better-task-score? fill0 load0 0 fill1 load1)]
+        [b (task-score-code fill0 load0 0 fill1 load1)]
         (if (= b 2) 0 (if (= b 1) 0 1)))))
      code
      (if (< p 0) 0 (+ p 1))
@@ -388,7 +388,7 @@
    :effects #{},
    :body
    (let
-    [b (better-task-score? fill-c load-c 0 fill-i load-i)]
+    [b (task-score-code fill-c load-c 0 fill-i load-i)]
     (if (= b 0) true false)),
    :param-types [:i64 :i64 :i64 :i64]}
   {:name assign-task-pick-3,
@@ -450,7 +450,7 @@
        (= ok1 0)
        0
        (let
-        [b (better-task-score? f0 l0 0 f1 l1)]
+        [b (task-score-code f0 l0 0 f1 l1)]
         (if (= b 2) 0 (if (= b 1) 0 1)))))
      fc
      (if (= p01 0) f0 (if (= p01 1) f1 0))
@@ -695,7 +695,7 @@
   task-eligible?
   fill-milli
   better-fill?
-  better-task-score?
+  task-score-code
   better-mem?
   wave-of
   slot-of

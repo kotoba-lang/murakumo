@@ -4,18 +4,18 @@
              :schedule/eligibility [:record :schedule/eligibility
                                     [[:has-engine :bool] [:has-checkpoint :bool]
                                      [:holds-checkpoint :bool] [:can-fetch :bool]]]
-             ;; 2-node assign context: warm flags + score preference
+             ;; 2-node assign context: warm flags + score preference (profile 5 bool)
              :schedule/better2 [:record :schedule/better2
-                                [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]]
+                                [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
              ;; 2-node assign result
              :schedule/assign2 [:record :schedule/assign2
                                 [[:code :i64] [:q0 :i64] [:q1 :i64]]]
              ;; 3-node queue / ok / warm triple (same shape, different roles)
              :schedule/triple [:record :schedule/triple
                                [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-             ;; 3-node pairwise better flags (01, 02, 12)
+             ;; 3-node pairwise better flags (01, 02, 12) — profile 5 bool
              :schedule/better3 [:record :schedule/better3
-                                [[:b01 :i64] [:b02 :i64] [:b12 :i64]]]
+                                [[:b01 :bool] [:b02 :bool] [:b12 :bool]]]
              ;; 3-node assign result
              :schedule/assign3 [:record :schedule/assign3
                                 [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]]})
@@ -79,15 +79,15 @@
 (defn holds-warm? [e [:ref :schedule/eligibility]] :bool
   (record-get e :holds-checkpoint))
 
-(defn prefer-warm-then-score [warm0 :i64 warm1 :i64 better01 :i64] :i64
-  ;; both eligible. Return 0 or 1. better01=1 ⇒ node0 score strictly better.
-  (if (if (= warm0 1) (if (= warm1 0) 1 0) 0)
+(defn prefer-warm-then-score [warm0 :bool warm1 :bool better01 :bool] :i64
+  ;; both eligible. Return 0 or 1. better01 true ⇒ node0 score strictly better.
+  (if (if warm0 (if warm1 false true) false)
     0
-    (if (if (= warm1 1) (if (= warm0 0) 1 0) 0)
+    (if (if warm1 (if warm0 false true) false)
       1
-      (if (= better01 1) 0 1))))
+      (if better01 0 1))))
 
-(defn pick-idx-2-full [ok0 :i64 ok1 :i64 warm0 :i64 warm1 :i64 better01 :i64] :i64
+(defn pick-idx-2-full [ok0 :i64 ok1 :i64 warm0 :bool warm1 :bool better01 :bool] :i64
   ;; Pure pick between two candidates. -1 if neither eligible.
   (if (= ok0 0)
     (if (= ok1 0) -1 1)
@@ -95,8 +95,8 @@
       0
       (prefer-warm-then-score warm0 warm1 better01))))
 
-(defn pick-idx-3-tournament [champ01 :i64 ok2 :i64 warm-champ :i64 warm2 :i64
-                             better-champ-2 :i64] :i64
+(defn pick-idx-3-tournament [champ01 :i64 ok2 :i64 warm-champ :bool warm2 :bool
+                             better-champ-2 :bool] :i64
   ;; champ01 ∈ {-1,0,1} from pick-idx-2-full on nodes 0/1.
   ;; Compare champion to node 2. Returns -1|0|1|2.
   (if (< champ01 0)
@@ -119,7 +119,7 @@
 
 ;; ── T5.3: assign packs → records ──────────────────────────────────────────
 
-(defn better2-record [warm0 :i64 warm1 :i64 better01 :i64] [:ref :schedule/better2]
+(defn better2-record [warm0 :bool warm1 :bool better01 :bool] [:ref :schedule/better2]
   (record-new [:ref :schedule/better2] warm0 warm1 better01))
 
 (defn assign-step-2 [q0 :i64 q1 :i64 ok0 :i64 ok1 :i64
@@ -142,12 +142,10 @@
 (defn assign-result-q1 [result [:ref :schedule/assign2]] :i64
   (record-get result :q1))
 
-(defn better-from-queues [q0 :i64 f0 :i64 q1 :i64 f1 :i64] :i64
-  ;; recompute better01 (0/1) after queue updates for better2-record packing
-  (if (better-score? (score-queue q0) (score-free f0)
-                     (score-queue q1) (score-free f1))
-    1
-    0))
+(defn better-from-queues [q0 :i64 f0 :i64 q1 :i64 f1 :i64] :bool
+  ;; recompute better01 after queue updates for better2-record packing
+  (better-score? (score-queue q0) (score-free f0)
+                 (score-queue q1) (score-free f1)))
 
 (defn triple-record [v0 :i64 v1 :i64 v2 :i64] [:ref :schedule/triple]
   (record-new [:ref :schedule/triple] v0 v1 v2))
@@ -161,15 +159,15 @@
 (defn triple-v2 [t [:ref :schedule/triple]] :i64
   (record-get t :v2))
 
-(defn better3-record [b01 :i64 b02 :i64 b12 :i64] [:ref :schedule/better3]
+(defn better3-record [b01 :bool b02 :bool b12 :bool] [:ref :schedule/better3]
   (record-new [:ref :schedule/better3] b01 b02 b12))
 
 (defn pick-code-3 [pick-idx :i64] :i64
   ;; -1|0|1|2 → 0=none, 1=node0, 2=node1, 3=node2
   (if (< pick-idx 0) 0 (+ pick-idx 1)))
 
-(defn better-pair [q-a :i64 f-a :i64 q-b :i64 f-b :i64] :i64
-  ;; 1 if a strictly better score than b
+(defn better-pair [q-a :i64 f-a :i64 q-b :i64 f-b :i64] :bool
+  ;; true if a strictly better score than b
   (better-from-queues q-a f-a q-b f-b))
 
 (defn assign-pick-3 [ok [:ref :schedule/triple]
@@ -179,16 +177,17 @@
   (let [ok0 (record-get ok :v0)
         ok1 (record-get ok :v1)
         ok2 (record-get ok :v2)
-        warm0 (record-get warm :v0)
-        warm1 (record-get warm :v1)
-        warm2 (record-get warm :v2)
+        ;; warm triple is still 0/1 i64 lanes; project to :bool for pick helpers
+        warm0 (if (= (record-get warm :v0) 1) true false)
+        warm1 (if (= (record-get warm :v1) 1) true false)
+        warm2 (if (= (record-get warm :v2) 1) true false)
         better01 (record-get better :b01)
         better02 (record-get better :b02)
         better12 (record-get better :b12)
         champ (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
         warm-champ (if (= champ 0)
                      warm0
-                     (if (= champ 1) warm1 0))
+                     (if (= champ 1) warm1 false))
         better-c2 (if (= champ 0)
                     better02
                     better12)]
@@ -229,8 +228,8 @@
 (defn assign-step-3-q2 [result [:ref :schedule/assign3]] :i64
   (record-get result :q2))
 
-(defn pick-fold-step [champ [:option :i64] ok-i :i64 warm-champ :i64 warm-i :i64
-                      better-c-i :i64] :i64
+(defn pick-fold-step [champ [:option :i64] ok-i :i64 warm-champ :bool warm-i :bool
+                      better-c-i :bool] :i64
   ;; Host folds candidates i=0..n-1.
   ;; Product Value ABI v1: optional champ presence (no has-champ sentinel).
   ;; Returns: 0 = no pick yet (no champ and ok-i=0)
