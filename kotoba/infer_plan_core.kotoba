@@ -1,9 +1,11 @@
 (ns infer-plan-core
+  (:schemas {:plan/model [:record :plan/model
+                          [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]})
   (:export [gib default-os-reserve default-headroom usable-bytes choose-strategy-name
             plan-lr-l0 plan-lr-l1 plan-lr-l2
             plan-fits-total? span-fits?
             uniform-layer-bytes dense-units-milli moe-layer-bytes
-            model-pack model-layers model-dense model-frac-milli
+            model-record model-layers model-dense model-frac-milli
             layer-byte-at layer-wsum partition-target
             advance-hi est-bytes-range partition-3-ends
             assignment-span plan-fits-3 ok-mark
@@ -33,7 +35,7 @@
 ;; integer quot (wsum * cum-usable / total) — matches cljc doubles when
 ;; layer bytes stay integer and targets align (uniform + typical MoE cases).
 ;;
-;; model-pack = pack3(layers, dense, dense-frac-milli), base 65536.
+;; model-record = [:ref :plan/model] {layers, dense, frac-milli} (T5.3).
 ;; partition-2-ends → pack3(hi0, hi1, 0) with hi1 = layers.
 ;; partition-3-ends → pack3(hi0, hi1, hi2) exclusive layer ends (last = layers).
 ;; partition-step: pack3(lo,acc,0)+cum+total → pack3(hi,new-acc,0); last uses partition-last.
@@ -64,7 +66,7 @@
         "pipeline"))))
 
 ;; lane-base / pack3 / lane-at survive as INTERNAL helpers for the
-;; model-pack, asg-row, partition-step and partition-*-ends lanes, which are
+;; asg-row, partition-step and partition-*-ends lanes, which are
 ;; separate slices. The plan-lr lane no longer packs (T5.3).
 (defn lane-base [] :i64 65536)
 
@@ -193,25 +195,27 @@
   (let [units (dense-units-milli layers dense dense-frac-milli)]
     (if (< units 1) 0 (quot (* weight-bytes 1000) units))))
 
-(defn model-pack [layers :i64 dense :i64 dense-frac-milli :i64] :i64
-  ;; pack3(layers, dense, dense-frac-milli)
-  (pack3 layers dense dense-frac-milli))
+(defn model-record [layers :i64 dense :i64 dense-frac-milli :i64] [:ref :plan/model]
+  ;; T5.3: the model shape is a named record, not pack3(layers, dense, frac).
+  ;; Threaded through 16 signatures as `mp [:ref :plan/model]` — a schema
+  ;; reference, so the descriptor is declared once on the ns form.
+  (record-new [:ref :plan/model] layers dense dense-frac-milli))
 
-(defn model-layers [mp :i64] :i64
-  (lane-at mp 0))
+(defn model-layers [mp [:ref :plan/model]] :i64
+  (record-get mp :layers))
 
-(defn model-dense [mp :i64] :i64
-  (lane-at mp 1))
+(defn model-dense [mp [:ref :plan/model]] :i64
+  (record-get mp :dense))
 
-(defn model-frac-milli [mp :i64] :i64
-  (lane-at mp 2))
+(defn model-frac-milli [mp [:ref :plan/model]] :i64
+  (record-get mp :frac-milli))
 
 (defn dense-layer-bytes [weight-bytes :i64 layers :i64 dense :i64 dense-frac-milli :i64] :i64
   ;; f * moe-bytes via milli: (moe * frac-milli) / 1000
   (let [moe (moe-layer-bytes weight-bytes layers dense dense-frac-milli)]
     (quot (* moe dense-frac-milli) 1000)))
 
-(defn layer-byte-at [weight-bytes :i64 mp :i64 i :i64] :i64
+(defn layer-byte-at [weight-bytes :i64 mp [:ref :plan/model] i :i64] :i64
   ;; integer form of (nth (layer-weights model) i)
   (let [layers (model-layers mp)
         dense (model-dense mp)
@@ -221,7 +225,7 @@
       (dense-layer-bytes weight-bytes layers dense frac)
       (moe-layer-bytes weight-bytes layers dense frac))))
 
-(defn layer-wsum [weight-bytes :i64 mp :i64] :i64
+(defn layer-wsum [weight-bytes :i64 mp [:ref :plan/model]] :i64
   ;; sum of integer layer-byte-at over all layers (closed form)
   (let [layers (model-layers mp)
         dense (model-dense mp)
@@ -247,7 +251,7 @@
 (defn clamp-nonneg [n :i64] :i64
   (if (< n 0) 0 n))
 
-(defn est-bytes-range [weight-bytes :i64 mp :i64 lo :i64 hi :i64] :i64
+(defn est-bytes-range [weight-bytes :i64 mp [:ref :plan/model] lo :i64 hi :i64] :i64
   ;; closed-form sum of layer-byte-at over [lo, hi) — dense then moe bands
   (let [layers (model-layers mp)
         dense (model-dense mp)
@@ -275,7 +279,7 @@
       (if (< hi-cap hi) hi-cap hi))
     lo))
 
-(defn advance-hi [weight-bytes :i64 mp :i64 lo :i64 acc :i64 target :i64] :i64
+(defn advance-hi [weight-bytes :i64 mp [:ref :plan/model] lo :i64 acc :i64 target :i64] :i64
   ;; two-band closed form matching cljc inner cut loop
   (let [layers (model-layers mp)
         dense (model-dense mp)
@@ -292,7 +296,7 @@
           (advance-in-band d layers moe acc-d target)))
       (advance-in-band lo0 layers moe acc target))))
 
-(defn partition-3-ends [weight-bytes :i64 mp :i64 u0 :i64 u1 :i64 u2 :i64] :i64
+(defn partition-3-ends [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64 u2 :i64] :i64
   ;; exclusive layer ends for 3 ring nodes (last end = layers).
   ;; Mirrors plan.cljc partition-layers loop for count(nodes)=3.
   (let [layers (model-layers mp)
@@ -311,7 +315,7 @@
 (defn assignment-span [lo :i64 hi :i64] :i64
   (if (< hi lo) 0 (- hi lo)))
 
-(defn plan-fits-3 [weight-bytes :i64 mp :i64 u0 :i64 u1 :i64 u2 :i64] :i64
+(defn plan-fits-3 [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64 u2 :i64] :i64
   ;; cljc plan :fits? for 3-node ring using integer partition-3-ends
   ;; total usable ≥ weights AND every positive-span assignment fits its usable
   (let [ends (partition-3-ends weight-bytes mp u0 u1 u2)
@@ -335,11 +339,11 @@
         total-ok (plan-fits-total? total weight-bytes)]
     (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)))
 
-(defn partition-1-end [mp :i64] :i64
+(defn partition-1-end [mp [:ref :plan/model]] :i64
   ;; single-node ring: exclusive end is always layers
   (model-layers mp))
 
-(defn plan-fits-1 [weight-bytes :i64 mp :i64 u0 :i64] :i64
+(defn plan-fits-1 [weight-bytes :i64 mp [:ref :plan/model] u0 :i64] :i64
   ;; cljc plan :fits? for 1-node (whole stack on one rank)
   (let [layers (partition-1-end mp)
         s0 (assignment-span 0 layers)
@@ -348,7 +352,7 @@
         total-ok (plan-fits-total? u0 weight-bytes)]
     (if (if (= total-ok 1) (if (= f0 1) 1 0) 0) 1 0)))
 
-(defn partition-2-ends [weight-bytes :i64 mp :i64 u0 :i64 u1 :i64] :i64
+(defn partition-2-ends [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64] :i64
   ;; exclusive layer ends for 2 ring nodes → pack3(hi0, layers, 0)
   (let [layers (model-layers mp)
         total (+ u0 u1)
@@ -360,7 +364,7 @@
             hi1 layers]
         (pack3 hi0 hi1 0)))))
 
-(defn plan-fits-2 [weight-bytes :i64 mp :i64 u0 :i64 u1 :i64] :i64
+(defn plan-fits-2 [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64] :i64
   ;; cljc plan :fits? for 2-node ring using integer partition-2-ends
   (let [ends (partition-2-ends weight-bytes mp u0 u1)
         hi0 (lane-at ends 0)
@@ -387,7 +391,7 @@
 (defn ends-hi [ends-pack :i64 idx :i64] :i64
   (lane-at ends-pack idx))
 
-(defn asg-row-pack [weight-bytes :i64 mp :i64 lo :i64 hi :i64 usable :i64] :i64
+(defn asg-row-pack [weight-bytes :i64 mp [:ref :plan/model] lo :i64 hi :i64 usable :i64] :i64
   ;; pure assignment numeric row: pack3(span, fits, 0). Host adds :node id.
   ;; est-bytes via est-bytes-range (may exceed pack lane).
   (let [sp (assignment-span lo hi)
@@ -405,7 +409,7 @@
   ;; state for partition-step host fold
   (pack3 lo acc 0))
 
-(defn partition-step [weight-bytes :i64 mp :i64 lo-acc :i64
+(defn partition-step [weight-bytes :i64 mp [:ref :plan/model] lo-acc :i64
                       cum-usable :i64 total-usable :i64] :i64
   ;; one non-last ring node: cut hi from lo/acc at cumulative target.
   ;; lo-acc = pack3(lo, acc, 0). → pack3(hi, new-acc, 0).
@@ -424,7 +428,7 @@
 (defn partition-step-acc [step-pack :i64] :i64
   (lane-at step-pack 1))
 
-(defn partition-last [mp :i64] :i64
+(defn partition-last [mp [:ref :plan/model]] :i64
   ;; last ring node exclusive end is always layers
   (model-layers mp))
 
