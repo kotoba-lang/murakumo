@@ -34,9 +34,9 @@
    :param-types [:string :i64]}
   {:name lease-expired?,
    :params [now-ms at-ms ttl-ms],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (< ttl-ms (- now-ms at-ms)) 1 0),
+   :body (if (< ttl-ms (- now-ms at-ms)) true false),
    :param-types [:i64 :i64 :i64]}
   {:name msg-idle,
    :params [],

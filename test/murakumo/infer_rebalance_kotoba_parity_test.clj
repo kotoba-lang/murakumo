@@ -275,9 +275,10 @@
 
 (deftest node-online-and-reason-names
   (let [online (compile-i64-cases
-                {"up" "(node-online? \"up\")"
-                 "down" "(node-online? \"down\")"
-                 "empty" "(node-online? \"\")"})
+                ;; Profile 5: node-online? is :bool
+                {"up" "(if (node-online? \"up\") 1 0)"
+                 "down" "(if (node-online? \"down\") 1 0)"
+                 "empty" "(if (node-online? \"\") 1 0)"})
         names (compile-string-cases
                {"n0" "(rebalance-reason-name 0)"
                 "n1" "(rebalance-reason-name 1)"

@@ -62,7 +62,8 @@
                            corpus))
         tm-cases (into {} (map-indexed
                            (fn [i [f r t]]
-                             [(str "tm_" i) (str "(target-met? " f " " r " " t ")")])
+                             [(str "tm_" i)
+                              (str "(if (target-met? " f " " r " " t ") 1 0)")])
                            corpus))
         fa (compile-i64-cases fa-cases)
         tm (compile-i64-cases tm-cases)]
@@ -96,7 +97,8 @@
         corpus [0 1 7 8 30]
         cases (into {} (map-indexed
                         (fn [i d]
-                          [(str "ce_" i) (str "(comfy-evictable? " d " " keep ")")])
+                          [(str "ce_" i)
+                           (str "(if (comfy-evictable? " d " " keep ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i d] (map-indexed vector corpus)]

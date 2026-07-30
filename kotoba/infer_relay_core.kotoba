@@ -25,9 +25,9 @@
 (defn make-id [prefix :string n :i64] :string
   (string-concat prefix (string-concat "-" (i64-str n))))
 
-(defn lease-expired? [now-ms :i64 at-ms :i64 ttl-ms :i64] :i64
+(defn lease-expired? [now-ms :i64 at-ms :i64 ttl-ms :i64] :bool
   ;; cljc: (> (- now-ms at-ms) ttl-ms)
-  (if (< ttl-ms (- now-ms at-ms)) 1 0))
+  (if (< ttl-ms (- now-ms at-ms)) true false))
 
 (defn msg-idle [] :string "idle")
 (defn msg-job [] :string "job")

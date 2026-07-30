@@ -1,1 +1,649 @@
-{:format :kotoba.kir/v4, :signature nil, :functions [{:name default-wasm, :params [], :result :string, :effects #{}, :body "/tmp/murakumo-deploy.wasm", :param-types []} {:name default-publish-node, :params [], :result :string, :effects #{}, :body "asher", :param-types []} {:name artifact-forward-port, :params [], :result :i64, :effects #{}, :body 18900, :param-types []} {:name publish-forward-port, :params [], :result :i64, :effects #{}, :body 18077, :param-types []} {:name forward-settle-ms, :params [], :result :i64, :effects #{}, :body 1300, :param-types []} {:name placement-wait-ms, :params [], :result :i64, :effects #{}, :body 75000, :param-types []} {:name digit-char, :params [d], :result :string, :effects #{}, :body (string-substring "0123456789" d (+ d 1)), :param-types [:i64]} {:name nat-str, :params [n], :result :string, :effects #{}, :body (if (< n 10) (digit-char n) (string-concat (nat-str (quot n 10)) (digit-char (- n (* (quot n 10) 10))))), :param-types [:i64]} {:name i64-str, :params [n], :result :string, :effects #{}, :body (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)), :param-types [:i64]} {:name path-sep, :params [], :result :string, :effects #{}, :body "/", :param-types []} {:name exec-count-prefix, :params [], :result :string, :effects #{}, :body "grep -c 'trigger: executed.*", :param-types []} {:name exec-count-suffix, :params [], :result :string, :effects #{}, :body "' ~/.murakumo/mesh.log 2>/dev/null", :param-types []} {:name pkill-f-prefix, :params [], :result :string, :effects #{}, :body "pkill -f '", :param-types []} {:name stop-forward-suffix, :params [], :result :string, :effects #{}, :body ":localhost' 2>/dev/null", :param-types []} {:name app-manifest-path, :params [manifest-dir app-manifest], :result :string, :effects #{}, :body (string-concat manifest-dir (string-concat (path-sep) app-manifest)), :param-types [:string :string]} {:name publish-selector, :params [selector], :result :string, :effects #{}, :body (if (string=? selector "") "asher" selector), :param-types [:string]} {:name argv-join-sep, :params [], :result :string, :effects #{}, :body " ", :param-types []} {:name localhost-url-prefix, :params [], :result :string, :effects #{}, :body "http://localhost:", :param-types []} {:name localhost-url, :params [port], :result :string, :effects #{}, :body (string-concat (localhost-url-prefix) (i64-str port)), :param-types [:i64]} {:name last-slash-index, :params [s i best], :result :i64, :effects #{}, :body (let [n (string-byte-length s)] (if (< i n) (if (string=? (string-substring s i (+ i 1)) (path-sep)) (last-slash-index s (+ i 1) i) (last-slash-index s (+ i 1) best)) best)), :param-types [:string :i64 :i64]} {:name manifest-dir, :params [manifest], :result :string, :effects #{}, :body (let [slash (last-slash-index manifest 0 -1)] (if (< slash 0) "." (string-substring manifest 0 slash))), :param-types [:string]} {:name ws?, :params [c], :result :bool, :effects #{}, :body (if (string=? c " ") true (if (string=? c "\n") true (if (string=? c "\t") true (if (string=? c "\r") true false)))), :param-types [:string]} {:name trim, :params [s], :result :string, :effects #{}, :body (let [n (string-byte-length s)] (if (= n 0) s (if (ws? (string-substring s 0 1)) (trim (string-substring s 1 n)) (if (ws? (string-substring s (- n 1) n)) (trim (string-substring s 0 (- n 1))) s)))), :param-types [:string]} {:name command-output, :params [out], :result :string, :effects #{}, :body (trim out), :param-types [:string]} {:name component-subcmd, :params [], :result :string, :effects #{}, :body "component", :param-types []} {:name build-subcmd, :params [], :result :string, :effects #{}, :body "build", :param-types []} {:name app-subcmd, :params [], :result :string, :effects #{}, :body "app", :param-types []} {:name deploy-subcmd, :params [], :result :string, :effects #{}, :body "deploy", :param-types []} {:name wit-dir-flag, :params [], :result :string, :effects #{}, :body "--wit-dir", :param-types []} {:name output-flag, :params [], :result :string, :effects #{}, :body "-o", :param-types []} {:name publish-flag, :params [], :result :string, :effects #{}, :body "--publish", :param-types []} {:name url-flag, :params [], :result :string, :effects #{}, :body "--url", :param-types []} {:name token-flag, :params [], :result :string, :effects #{}, :body "--token", :param-types []} {:name block-subcmd, :params [], :result :string, :effects #{}, :body "block", :param-types []} {:name put-subcmd, :params [], :result :string, :effects #{}, :body "put", :param-types []} {:name file-flag, :params [], :result :string, :effects #{}, :body "--file", :param-types []} {:name component-build-cmd, :params [kotoba src-path wit wasm], :result :string, :effects #{}, :body (string-concat kotoba (string-concat (argv-join-sep) (string-concat (component-subcmd) (string-concat (argv-join-sep) (string-concat (build-subcmd) (string-concat (argv-join-sep) (string-concat src-path (string-concat (argv-join-sep) (string-concat (wit-dir-flag) (string-concat (argv-join-sep) (string-concat wit (string-concat (argv-join-sep) (string-concat (output-flag) (string-concat (argv-join-sep) wasm)))))))))))))), :param-types [:string :string :string :string]} {:name app-deploy-cmd, :params [kotoba manifest wit port], :result :string, :effects #{}, :body (string-concat kotoba (string-concat (argv-join-sep) (string-concat (app-subcmd) (string-concat (argv-join-sep) (string-concat (deploy-subcmd) (string-concat (argv-join-sep) (string-concat manifest (string-concat (argv-join-sep) (string-concat (wit-dir-flag) (string-concat (argv-join-sep) (string-concat wit (string-concat (argv-join-sep) (string-concat (publish-flag) (string-concat (argv-join-sep) (string-concat (url-flag) (string-concat (argv-join-sep) (localhost-url port))))))))))))))))), :param-types [:string :string :string :i64]} {:name pin-bin-kotoba, :params [], :result :string, :effects #{}, :body "kotoba", :param-types []} {:name pin-bin-server, :params [], :result :string, :effects #{}, :body "kotoba-server", :param-types []} {:name release-wit-suffix, :params [], :result :string, :effects #{}, :body "/../../../crates/kotoba-runtime/wit", :param-types []} {:name blank?, :params [s], :result :bool, :effects #{}, :body (let [n (string-byte-length s)] (if (= n 0) true (if (ws? (string-substring s 0 1)) (blank? (string-substring s 1 n)) false))), :param-types [:string]} {:name trim-ws, :params [s], :result :string, :effects #{}, :body (trim s), :param-types [:string]} {:name digit-val?, :params [c], :result :i64, :effects #{}, :body (if (= (string-byte-length c) 1) (if (string-contains? "0123456789" c) 1 0) 0), :param-types [:string]} {:name digit-of-go, :params [digits c i], :result :i64, :effects #{}, :body (let [n (string-byte-length digits)] (if (< i n) (if (string=? (string-substring digits i (+ i 1)) c) i (digit-of-go digits c (+ i 1))) 0)), :param-types [:string :string :i64]} {:name digit-of, :params [c], :result :i64, :effects #{}, :body (digit-of-go "0123456789" c 0), :param-types [:string]} {:name parse-digits-go, :params [s acc], :result :i64, :effects #{}, :body (let [n (string-byte-length s)] (if (= n 0) acc (let [c (string-substring s 0 1)] (if (= (digit-val? c) 0) -1 (parse-digits-go (string-substring s 1 n) (+ (* acc 10) (digit-of c))))))), :param-types [:string :i64]} {:name parse-digits, :params [s], :result :i64, :effects #{}, :body (let [t (trim-ws s) n (string-byte-length t)] (if (= n 0) -1 (parse-digits-go t 0))), :param-types [:string]} {:name execution-observed?, :params [grep-count-out], :result :i64, :effects #{}, :body (let [n (parse-digits grep-count-out)] (if (< n 1) 0 1)), :param-types [:string]} {:name execution-count-command, :params [cid], :result :string, :effects #{}, :body (string-concat (exec-count-prefix) (string-concat cid (exec-count-suffix))), :param-types [:string]} {:name join-path, :params [a b], :result :string, :effects #{}, :body (string-concat a (string-concat (path-sep) b)), :param-types [:string :string]} {:name release-wit-path, :params [release-dir], :result :string, :effects #{}, :body (string-concat release-dir (release-wit-suffix)), :param-types [:string]} {:name stop-forward-command, :params [local-port], :result :string, :effects #{}, :body (string-concat (pkill-f-prefix) (string-concat (i64-str local-port) (stop-forward-suffix))), :param-types [:i64]} {:name absolute-unix-git-bin?, :params [p], :result :bool, :effects #{}, :body (if (blank? p) false (if (string=? p "git") false (if (< (string-byte-length p) 1) false (if (string=? (string-substring p 0 1) (path-sep)) true false)))), :param-types [:string]} {:name cp-bin, :params [], :result :string, :effects #{}, :body "cp", :param-types []} {:name rm-bin, :params [], :result :string, :effects #{}, :body "rm", :param-types []} {:name rm-rf-flag, :params [], :result :string, :effects #{}, :body "-rf", :param-types []} {:name cp-recursive-flag, :params [], :result :string, :effects #{}, :body "-R", :param-types []} {:name git-c-flag, :params [], :result :string, :effects #{}, :body "-C", :param-types []} {:name git-rev-parse, :params [], :result :string, :effects #{}, :body "rev-parse", :param-types []} {:name git-short-flag, :params [], :result :string, :effects #{}, :body "--short", :param-types []} {:name git-head-ref, :params [], :result :string, :effects #{}, :body "HEAD", :param-types []} {:name version-flag, :params [], :result :string, :effects #{}, :body "--version", :param-types []} {:name version-bin-path, :params [dest], :result :string, :effects #{}, :body (join-path dest (pin-bin-kotoba)), :param-types [:string]} {:name build-features, :params [], :result :string, :effects #{}, :body "p2p,realtime-wasm,webrtc", :param-types []} {:name missing-manifest?, :params [manifest], :result :bool, :effects #{}, :body (blank? manifest), :param-types [:string]} {:name missing-operator-seed?, :params [operator-seed], :result :bool, :effects #{}, :body (blank? operator-seed), :param-types [:string]} {:name pin-wit-dirname, :params [], :result :string, :effects #{}, :body "wit", :param-types []} {:name pin-wit-dest, :params [dest], :result :string, :effects #{}, :body (join-path dest (pin-wit-dirname)), :param-types [:string]}], :oracle-value nil, :schema-identities nil, :exports [default-wasm default-publish-node artifact-forward-port publish-forward-port forward-settle-ms placement-wait-ms digit-char nat-str i64-str app-manifest-path publish-selector localhost-url last-slash-index manifest-dir command-output component-build-cmd app-deploy-cmd digit-val? digit-of parse-digits-go parse-digits trim-ws execution-observed? execution-count-command release-wit-path stop-forward-command absolute-unix-git-bin? blank? pin-bin-kotoba pin-bin-server join-path release-wit-suffix pin-wit-dirname pin-wit-dest cp-bin rm-bin rm-rf-flag cp-recursive-flag git-c-flag git-rev-parse git-short-flag git-head-ref version-flag version-bin-path build-features missing-manifest? missing-operator-seed? component-subcmd build-subcmd app-subcmd deploy-subcmd wit-dir-flag output-flag publish-flag url-flag token-flag block-subcmd put-subcmd file-flag argv-join-sep localhost-url-prefix path-sep exec-count-prefix exec-count-suffix pkill-f-prefix stop-forward-suffix], :schemas nil, :effects #{}, :blocks [], :entry nil}
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-wasm,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/tmp/murakumo-deploy.wasm",
+   :param-types []}
+  {:name default-publish-node,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "asher",
+   :param-types []}
+  {:name artifact-forward-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 18900,
+   :param-types []}
+  {:name publish-forward-port,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 18077,
+   :param-types []}
+  {:name forward-settle-ms,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1300,
+   :param-types []}
+  {:name placement-wait-ms,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 75000,
+   :param-types []}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name path-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/",
+   :param-types []}
+  {:name exec-count-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "grep -c 'trigger: executed.*",
+   :param-types []}
+  {:name exec-count-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "' ~/.murakumo/mesh.log 2>/dev/null",
+   :param-types []}
+  {:name pkill-f-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "pkill -f '",
+   :param-types []}
+  {:name stop-forward-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":localhost' 2>/dev/null",
+   :param-types []}
+  {:name app-manifest-path,
+   :params [manifest-dir app-manifest],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    manifest-dir
+    (string-concat (path-sep) app-manifest)),
+   :param-types [:string :string]}
+  {:name publish-selector,
+   :params [selector],
+   :result :string,
+   :effects #{},
+   :body (if (string=? selector "") "asher" selector),
+   :param-types [:string]}
+  {:name argv-join-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " ",
+   :param-types []}
+  {:name localhost-url-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "http://localhost:",
+   :param-types []}
+  {:name localhost-url,
+   :params [port],
+   :result :string,
+   :effects #{},
+   :body (string-concat (localhost-url-prefix) (i64-str port)),
+   :param-types [:i64]}
+  {:name last-slash-index,
+   :params [s i best],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (< i n)
+     (if
+      (string=? (string-substring s i (+ i 1)) (path-sep))
+      (last-slash-index s (+ i 1) i)
+      (last-slash-index s (+ i 1) best))
+     best)),
+   :param-types [:string :i64 :i64]}
+  {:name manifest-dir,
+   :params [manifest],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [slash (last-slash-index manifest 0 -1)]
+    (if (< slash 0) "." (string-substring manifest 0 slash))),
+   :param-types [:string]}
+  {:name ws?,
+   :params [c],
+   :result :bool,
+   :effects #{},
+   :body
+   (if
+    (string=? c " ")
+    true
+    (if
+     (string=? c "\n")
+     true
+     (if (string=? c "\t") true (if (string=? c "\r") true false)))),
+   :param-types [:string]}
+  {:name trim,
+   :params [s],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     s
+     (if
+      (ws? (string-substring s 0 1))
+      (trim (string-substring s 1 n))
+      (if
+       (ws? (string-substring s (- n 1) n))
+       (trim (string-substring s 0 (- n 1)))
+       s)))),
+   :param-types [:string]}
+  {:name command-output,
+   :params [out],
+   :result :string,
+   :effects #{},
+   :body (trim out),
+   :param-types [:string]}
+  {:name component-subcmd,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "component",
+   :param-types []}
+  {:name build-subcmd,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "build",
+   :param-types []}
+  {:name app-subcmd,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "app",
+   :param-types []}
+  {:name deploy-subcmd,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "deploy",
+   :param-types []}
+  {:name wit-dir-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "--wit-dir",
+   :param-types []}
+  {:name output-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-o",
+   :param-types []}
+  {:name publish-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "--publish",
+   :param-types []}
+  {:name url-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "--url",
+   :param-types []}
+  {:name token-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "--token",
+   :param-types []}
+  {:name block-subcmd,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "block",
+   :param-types []}
+  {:name put-subcmd,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "put",
+   :param-types []}
+  {:name file-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "--file",
+   :param-types []}
+  {:name component-build-cmd,
+   :params [kotoba src-path wit wasm],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    kotoba
+    (string-concat
+     (argv-join-sep)
+     (string-concat
+      (component-subcmd)
+      (string-concat
+       (argv-join-sep)
+       (string-concat
+        (build-subcmd)
+        (string-concat
+         (argv-join-sep)
+         (string-concat
+          src-path
+          (string-concat
+           (argv-join-sep)
+           (string-concat
+            (wit-dir-flag)
+            (string-concat
+             (argv-join-sep)
+             (string-concat
+              wit
+              (string-concat
+               (argv-join-sep)
+               (string-concat
+                (output-flag)
+                (string-concat (argv-join-sep) wasm)))))))))))))),
+   :param-types [:string :string :string :string]}
+  {:name app-deploy-cmd,
+   :params [kotoba manifest wit port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    kotoba
+    (string-concat
+     (argv-join-sep)
+     (string-concat
+      (app-subcmd)
+      (string-concat
+       (argv-join-sep)
+       (string-concat
+        (deploy-subcmd)
+        (string-concat
+         (argv-join-sep)
+         (string-concat
+          manifest
+          (string-concat
+           (argv-join-sep)
+           (string-concat
+            (wit-dir-flag)
+            (string-concat
+             (argv-join-sep)
+             (string-concat
+              wit
+              (string-concat
+               (argv-join-sep)
+               (string-concat
+                (publish-flag)
+                (string-concat
+                 (argv-join-sep)
+                 (string-concat
+                  (url-flag)
+                  (string-concat
+                   (argv-join-sep)
+                   (localhost-url port))))))))))))))))),
+   :param-types [:string :string :string :i64]}
+  {:name pin-bin-kotoba,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "kotoba",
+   :param-types []}
+  {:name pin-bin-server,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "kotoba-server",
+   :param-types []}
+  {:name release-wit-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "/../../../crates/kotoba-runtime/wit",
+   :param-types []}
+  {:name blank?,
+   :params [s],
+   :result :bool,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     true
+     (if
+      (ws? (string-substring s 0 1))
+      (blank? (string-substring s 1 n))
+      false))),
+   :param-types [:string]}
+  {:name trim-ws,
+   :params [s],
+   :result :string,
+   :effects #{},
+   :body (trim s),
+   :param-types [:string]}
+  {:name digit-val?,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= (string-byte-length c) 1)
+    (if (string-contains? "0123456789" c) 1 0)
+    0),
+   :param-types [:string]}
+  {:name digit-of-go,
+   :params [digits c i],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length digits)]
+    (if
+     (< i n)
+     (if
+      (string=? (string-substring digits i (+ i 1)) c)
+      i
+      (digit-of-go digits c (+ i 1)))
+     0)),
+   :param-types [:string :string :i64]}
+  {:name digit-of,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body (digit-of-go "0123456789" c 0),
+   :param-types [:string]}
+  {:name parse-digits-go,
+   :params [s acc],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     acc
+     (let
+      [c (string-substring s 0 1)]
+      (if
+       (= (digit-val? c) 0)
+       -1
+       (parse-digits-go
+        (string-substring s 1 n)
+        (+ (* acc 10) (digit-of c))))))),
+   :param-types [:string :i64]}
+  {:name parse-digits,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [t (trim-ws s) n (string-byte-length t)]
+    (if (= n 0) -1 (parse-digits-go t 0))),
+   :param-types [:string]}
+  {:name execution-observed?,
+   :params [grep-count-out],
+   :result :bool,
+   :effects #{},
+   :body
+   (let [n (parse-digits grep-count-out)] (if (< n 1) false true)),
+   :param-types [:string]}
+  {:name execution-count-command,
+   :params [cid],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (exec-count-prefix)
+    (string-concat cid (exec-count-suffix))),
+   :param-types [:string]}
+  {:name join-path,
+   :params [a b],
+   :result :string,
+   :effects #{},
+   :body (string-concat a (string-concat (path-sep) b)),
+   :param-types [:string :string]}
+  {:name release-wit-path,
+   :params [release-dir],
+   :result :string,
+   :effects #{},
+   :body (string-concat release-dir (release-wit-suffix)),
+   :param-types [:string]}
+  {:name stop-forward-command,
+   :params [local-port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (pkill-f-prefix)
+    (string-concat (i64-str local-port) (stop-forward-suffix))),
+   :param-types [:i64]}
+  {:name absolute-unix-git-bin?,
+   :params [p],
+   :result :bool,
+   :effects #{},
+   :body
+   (if
+    (blank? p)
+    false
+    (if
+     (string=? p "git")
+     false
+     (if
+      (< (string-byte-length p) 1)
+      false
+      (if
+       (string=? (string-substring p 0 1) (path-sep))
+       true
+       false)))),
+   :param-types [:string]}
+  {:name cp-bin,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "cp",
+   :param-types []}
+  {:name rm-bin,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "rm",
+   :param-types []}
+  {:name rm-rf-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-rf",
+   :param-types []}
+  {:name cp-recursive-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-R",
+   :param-types []}
+  {:name git-c-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-C",
+   :param-types []}
+  {:name git-rev-parse,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "rev-parse",
+   :param-types []}
+  {:name git-short-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "--short",
+   :param-types []}
+  {:name git-head-ref,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "HEAD",
+   :param-types []}
+  {:name version-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "--version",
+   :param-types []}
+  {:name version-bin-path,
+   :params [dest],
+   :result :string,
+   :effects #{},
+   :body (join-path dest (pin-bin-kotoba)),
+   :param-types [:string]}
+  {:name build-features,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "p2p,realtime-wasm,webrtc",
+   :param-types []}
+  {:name missing-manifest?,
+   :params [manifest],
+   :result :bool,
+   :effects #{},
+   :body (blank? manifest),
+   :param-types [:string]}
+  {:name missing-operator-seed?,
+   :params [operator-seed],
+   :result :bool,
+   :effects #{},
+   :body (blank? operator-seed),
+   :param-types [:string]}
+  {:name pin-wit-dirname,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "wit",
+   :param-types []}
+  {:name pin-wit-dest,
+   :params [dest],
+   :result :string,
+   :effects #{},
+   :body (join-path dest (pin-wit-dirname)),
+   :param-types [:string]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-wasm
+  default-publish-node
+  artifact-forward-port
+  publish-forward-port
+  forward-settle-ms
+  placement-wait-ms
+  digit-char
+  nat-str
+  i64-str
+  app-manifest-path
+  publish-selector
+  localhost-url
+  last-slash-index
+  manifest-dir
+  command-output
+  component-build-cmd
+  app-deploy-cmd
+  digit-val?
+  digit-of
+  parse-digits-go
+  parse-digits
+  trim-ws
+  execution-observed?
+  execution-count-command
+  release-wit-path
+  stop-forward-command
+  absolute-unix-git-bin?
+  blank?
+  pin-bin-kotoba
+  pin-bin-server
+  join-path
+  release-wit-suffix
+  pin-wit-dirname
+  pin-wit-dest
+  cp-bin
+  rm-bin
+  rm-rf-flag
+  cp-recursive-flag
+  git-c-flag
+  git-rev-parse
+  git-short-flag
+  git-head-ref
+  version-flag
+  version-bin-path
+  build-features
+  missing-manifest?
+  missing-operator-seed?
+  component-subcmd
+  build-subcmd
+  app-subcmd
+  deploy-subcmd
+  wit-dir-flag
+  output-flag
+  publish-flag
+  url-flag
+  token-flag
+  block-subcmd
+  put-subcmd
+  file-flag
+  argv-join-sep
+  localhost-url-prefix
+  path-sep
+  exec-count-prefix
+  exec-count-suffix
+  pkill-f-prefix
+  stop-forward-suffix],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

@@ -271,10 +271,10 @@
       -1
       (parse-digits-go t 0))))
 
-(defn execution-observed? [grep-count-out :string] :i64
+(defn execution-observed? [grep-count-out :string] :bool
   ;; cljc: (pos? (Integer/parseInt (trim out))) catch false
   (let [n (parse-digits grep-count-out)]
-    (if (< n 1) 0 1)))
+    (if (< n 1) false true)))
 
 (defn execution-count-command [cid :string] :string
   (string-concat

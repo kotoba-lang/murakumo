@@ -85,7 +85,7 @@
         known (into {} (map-indexed
                         (fn [i n]
                           [(str "k_" i)
-                           (str "(known-secret-name? " (kotoba-literal n) ")")])
+                           (str "(if (known-secret-name? " (kotoba-literal n) ") 1 0)")])
                         names))
         actual (compile-string-cases cases)
         kn (compile-i64-cases known)]

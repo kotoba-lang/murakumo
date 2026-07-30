@@ -106,10 +106,10 @@
                                           (fn [e]
                                             (and (= :comfy-temp (:class e))
                                                  (try-oracle
-                                                  #(= 1 (oracle/i64->host
-                                                         (o 'comfy-evictable?
-                                                            [(oracle/as-i64 (or (:atime-days e) 0))
-                                                             (oracle/as-i64 comfy-keep-days)])))
+                                                  #(oracle/bool->host
+                                                    (o 'comfy-evictable?
+                                                       [(oracle/as-i64 (or (:atime-days e) 0))
+                                                        (oracle/as-i64 comfy-keep-days)]))
                                                   #(> (or (:atime-days e) 0)
                                                       comfy-keep-days))))
                                           entries))
@@ -130,11 +130,11 @@
                       (o 'free-after [(oracle/as-i64 free) (oracle/as-i64 reclaimed)]))
                     #(+ free reclaimed))
         target-met? (try-oracle
-                     #(= 1 (oracle/i64->host
-                            (o 'target-met?
-                               [(oracle/as-i64 free)
-                                (oracle/as-i64 reclaimed)
-                                (oracle/as-i64 target-free-bytes)])))
+                     #(oracle/bool->host
+                       (o 'target-met?
+                          [(oracle/as-i64 free)
+                           (oracle/as-i64 reclaimed)
+                           (oracle/as-i64 target-free-bytes)]))
                      #(>= free-after target-free-bytes))]
     {:evict (vec evict)
      :reclaim-bytes reclaimed

@@ -116,10 +116,10 @@
     (is (= "http://localhost:18077" (get actual "u")))))
 (deftest execution-and-pin-probe-pure-match
   (let [i (compile-i64-cases
-           {"e1" (str "(execution-observed? " (kotoba-literal "1\n") ")")
-            "e0" (str "(execution-observed? " (kotoba-literal "0\n") ")")
-            "ee" (str "(execution-observed? " (kotoba-literal "") ")")
-            "ex" (str "(execution-observed? " (kotoba-literal "x") ")")
+           {"e1" (str "(if (execution-observed? " (kotoba-literal "1\n") ") 1 0)")
+            "e0" (str "(if (execution-observed? " (kotoba-literal "0\n") ") 1 0)")
+            "ee" (str "(if (execution-observed? " (kotoba-literal "") ") 1 0)")
+            "ex" (str "(if (execution-observed? " (kotoba-literal "x") ") 1 0)")
             "ag" (str "(if (absolute-unix-git-bin? " (kotoba-literal "/usr/bin/git") ") 1 0)")
             "ab" (str "(if (absolute-unix-git-bin? " (kotoba-literal "git") ") 1 0)")
             "ae" (str "(if (absolute-unix-git-bin? " (kotoba-literal "") ") 1 0)")})
