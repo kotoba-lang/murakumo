@@ -1,9 +1,10 @@
 ;; murakumo.overlay.crypto — host-side frame sealing for murakumo-overlay.
 ;;
-;; W6 product-shell (ADR-260728-w6-cljs-clj-residual-dual):
-;; packaging constants + gates DELEGATE to kotoba/overlay_crypto_core when
-;; oracle is loadable (JVM classpath or cljs/nbb). AES-GCM Cipher,
-;; SecureRandom nonce, SHA-256 key material stay JVM host.
+;; W6 product-shell + T6.4 remainder (oracle-required on JVM):
+;; packaging constants + gates DELEGATE to kotoba/overlay_crypto_core.
+;; On :clj the shipped KIR is required. cljs keeps private mirrors as
+;; fail-closed fallback without preload. AES-GCM Cipher, SecureRandom nonce,
+;; SHA-256 key material stay JVM host.
 
 (ns murakumo.overlay.crypto
   (:require [clojure.string :as str]
@@ -16,99 +17,105 @@
 
 (def ^:private oid :overlay-crypto)
 
-(defn- o [export args]
-  (oracle/call oid export args))
-
 (defn- oracle-ready? []
   (oracle/ready? oid))
 
-(defn- try-oracle
-  "Run oracle body; on failure use mirror."
-  [thunk mirror-thunk]
-  (if (oracle-ready?)
-    (try
-      (thunk)
-      (catch #?(:clj Exception :cljs :default) _
-        (mirror-thunk)))
-    (mirror-thunk)))
+(defn- o
+  "Call a pure export. JVM requires the oracle artifact; cljs may fall back."
+  [export args]
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "overlay-crypto oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export export})))
+       (oracle/call oid export args))
+     :cljs
+     (if (oracle-ready?)
+       (try
+         (oracle/call oid export args)
+         (catch :default _
+           ::oracle-failed))
+       ::oracle-failed)))
 
-(defn- oracle-str-const [export mirror]
-  (try
-    (if (oracle/ready? oid)
-      (oracle/call oid export [])
-      mirror)
-    (catch #?(:clj Exception :cljs :default) _
-      mirror)))
+#?(:cljs
+   (do
+     (def ^:private mirror-alg-name "aes-256-gcm")
+     (def ^:private mirror-cipher-transform "AES/GCM/NoPadding")
+     (def ^:private mirror-nonce-bytes 12)
+     (def ^:private mirror-gcm-tag-bits 128)
+     (def ^:private mirror-field-alg :alg)
+     (def ^:private mirror-field-nonce :nonce)
+     (def ^:private mirror-field-ciphertext :ciphertext)
 
-(defn- oracle-i64-const [export mirror]
-  (try
-    (if (oracle/ready? oid)
-      (oracle/i64->host (oracle/call oid export []))
-      mirror)
-    (catch #?(:clj Exception :cljs :default) _
-      mirror)))
+     (defn- cljs-str [export mirror]
+       (let [v (o export [])]
+         (if (= v ::oracle-failed) mirror v)))
 
-;; ── host-mirror pure packaging ───────────────────────────────────────
+     (defn- cljs-i64 [export mirror]
+       (let [v (o export [])]
+         (if (= v ::oracle-failed) mirror (oracle/i64->host v))))
 
-(def ^:private mirror-alg-name "aes-256-gcm")
-(def ^:private mirror-cipher-transform "AES/GCM/NoPadding")
-(def ^:private mirror-nonce-bytes 12)
-(def ^:private mirror-gcm-tag-bits 128)
-(def ^:private mirror-field-alg :alg)
-(def ^:private mirror-field-nonce :nonce)
-(def ^:private mirror-field-ciphertext :ciphertext)
+     (defn- mirror-strip-b64-pad [s]
+       (str/replace (str s) "=" ""))
 
-(defn- mirror-strip-b64-pad [s]
-  (str/replace (str s) "=" ""))
+     (defn- mirror-sealed-alg-ok? [alg]
+       (or (= alg :aes-256-gcm)
+           (= (str alg) mirror-alg-name)
+           (= (name (keyword alg)) mirror-alg-name)))
 
-(defn- mirror-sealed-alg-ok? [alg]
-  (or (= alg :aes-256-gcm)
-      (= (str alg) mirror-alg-name)
-      (= (name (keyword alg)) mirror-alg-name)))
+     (defn- mirror-sealed-fields-present? [sealed]
+       (boolean (and (some? (get sealed mirror-field-alg))
+                     (some? (get sealed mirror-field-nonce))
+                     (some? (get sealed mirror-field-ciphertext)))))))
 
-(defn- mirror-sealed-fields-present? [sealed]
-  (boolean (and (some? (get sealed mirror-field-alg))
-                (some? (get sealed mirror-field-nonce))
-                (some? (get sealed mirror-field-ciphertext)))))
-
-;; ── dual-source pure packaging (kotoba SSoT when ready) ──────────────
+;; ── pure packaging (kotoba SSoT; JVM requires oracle) ────────────────
 
 (def alg-name
-  (oracle-str-const 'alg-name mirror-alg-name))
+  #?(:clj (o 'alg-name [])
+     :cljs (cljs-str 'alg-name mirror-alg-name)))
 
 (def cipher-transform
-  (oracle-str-const 'cipher-transform mirror-cipher-transform))
+  #?(:clj (o 'cipher-transform [])
+     :cljs (cljs-str 'cipher-transform mirror-cipher-transform)))
 
 (def nonce-bytes
-  (oracle-i64-const 'nonce-bytes mirror-nonce-bytes))
+  #?(:clj (oracle/i64->host (o 'nonce-bytes []))
+     :cljs (cljs-i64 'nonce-bytes mirror-nonce-bytes)))
 
 (def gcm-tag-bits
-  (oracle-i64-const 'gcm-tag-bits mirror-gcm-tag-bits))
+  #?(:clj (oracle/i64->host (o 'gcm-tag-bits []))
+     :cljs (cljs-i64 'gcm-tag-bits mirror-gcm-tag-bits)))
 
 (def field-alg
-  (keyword (oracle-str-const 'field-alg (name mirror-field-alg))))
+  (keyword #?(:clj (o 'field-alg [])
+              :cljs (cljs-str 'field-alg (name mirror-field-alg)))))
 
 (def field-nonce
-  (keyword (oracle-str-const 'field-nonce (name mirror-field-nonce))))
+  (keyword #?(:clj (o 'field-nonce [])
+              :cljs (cljs-str 'field-nonce (name mirror-field-nonce)))))
 
 (def field-ciphertext
-  (keyword (oracle-str-const 'field-ciphertext (name mirror-field-ciphertext))))
+  (keyword #?(:clj (o 'field-ciphertext [])
+              :cljs (cljs-str 'field-ciphertext (name mirror-field-ciphertext)))))
 
 (defn strip-b64-pad
-  "Strip '=' padding (kotoba `strip-b64-pad` when oracle ready)."
+  "Strip '=' padding (kotoba `strip-b64-pad`; JVM requires oracle)."
   [s]
-  (try-oracle
-   #(o 'strip-b64-pad [(str s)])
-   #(mirror-strip-b64-pad s)))
+  #?(:clj (o 'strip-b64-pad [(str s)])
+     :cljs (let [v (o 'strip-b64-pad [(str s)])]
+             (if (= v ::oracle-failed) (mirror-strip-b64-pad s) v))))
 
 (defn sealed-alg-ok?
   "True when sealed map carries the expected AES-GCM alg."
   [alg]
-  (try-oracle
-   #(oracle/bool->host
-     (o 'sealed-alg-ok?
-        [(if (keyword? alg) (name alg) (str alg))]))
-   #(mirror-sealed-alg-ok? alg)))
+  #?(:clj (oracle/bool->host
+           (o 'sealed-alg-ok?
+              [(if (keyword? alg) (name alg) (str alg))]))
+     :cljs (let [v (o 'sealed-alg-ok?
+                      [(if (keyword? alg) (name alg) (str alg))])]
+             (if (= v ::oracle-failed)
+               (mirror-sealed-alg-ok? alg)
+               (oracle/bool->host v)))))
 
 (defn- option-field
   "Product Value ABI optional sealed field: keyword → name string."
@@ -118,16 +125,20 @@
      (if (keyword? v) (name v) (str v)))))
 
 (defn sealed-fields-present?
-  "True when :alg :nonce :ciphertext are all present.
-   Kotoba `sealed-fields-present?` with Product Value ABI when oracle ready."
+  "True when :alg :nonce :ciphertext are all present."
   [sealed]
-  (try-oracle
-   #(oracle/bool->host
-     (o 'sealed-fields-present?
-        [(option-field (get sealed field-alg))
-         (option-field (get sealed field-nonce))
-         (option-field (get sealed field-ciphertext))]))
-   #(mirror-sealed-fields-present? sealed)))
+  #?(:clj (oracle/bool->host
+           (o 'sealed-fields-present?
+              [(option-field (get sealed field-alg))
+               (option-field (get sealed field-nonce))
+               (option-field (get sealed field-ciphertext))]))
+     :cljs (let [v (o 'sealed-fields-present?
+                      [(option-field (get sealed field-alg))
+                       (option-field (get sealed field-nonce))
+                       (option-field (get sealed field-ciphertext))])]
+             (if (= v ::oracle-failed)
+               (mirror-sealed-fields-present? sealed)
+               (oracle/bool->host v)))))
 
 (defn sealed-map-ok?
   "Live open gate: fields present + alg ok."
