@@ -4,172 +4,58 @@
 ;; contract is stable enough for the CLI runner, tests, and the later socket/relay
 ;; implementation to share.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-overlay-runtime-tokens-pure-oracle):
-;; default ports, known-adapter?, adapter-kind, scheme-prefix-host +
-;; scheme/kind/adapter tokens DELEGATE to precompiled kotoba/overlay_runtime_core
-;; when oracle is loadable (JVM classpath or cljs/nbb —
-;; ADR-260728-w6-cljs-oracle-load).
-;; Adapter registry maps and full URL regex parse stay host. cljs mirrors as fallback.
+;; W6 product-shell + T6.4: default ports, known-adapter?, adapter-kind,
+;; scheme-prefix-host + scheme/kind/adapter tokens require the shipped
+;; `:overlay-runtime` KIR on **every** platform. Host pure mirrors are gone —
+;; cljs/nbb must preload shipped KIR (resources/ via nbb cwd, register-kir!, or
+;; set-resource-loader!) before requiring this ns
+;; (ADR-260731-w6-t64-driver-runtime-mirror-delete).
+;; Adapter registry maps and full URL regex parse stay host.
 
 (ns murakumo.overlay.runtime
   (:require [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :overlay-runtime)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
 
-(defn- oracle-ready? []
-  (oracle/ready? oid))
+;; ── tokens + ports (oracle SSoT) ───────────────────────────────────────
 
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-(defn- oracle-i64-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/i64->host (oracle/call oid export [])))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/i64->host (oracle/call oid export []))
-         mirror)
-       (catch :default _
-         mirror))))
-
-(defn- oracle-str-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/call oid export []))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/call oid export [])
-         mirror)
-       (catch :default _
-         mirror))))
-
-(defn- oracle-str-call [export args mirror]
-  (try-oracle
-   #(o export args)
-   (fn [] mirror)))
-
-;; ── host-mirror pure helpers + dual-source tokens ────────────────────
-
-(def ^:private mirror-default-relay-port 4701)
-(def ^:private mirror-default-web-port 443)
-(def ^:private mirror-default-quic-port 4001)
-(def ^:private mirror-scheme-quic "quic://")
-(def ^:private mirror-scheme-webrtc "webrtc://")
-(def ^:private mirror-scheme-relay "relay://")
-(def ^:private mirror-scheme-webtransport "webtransport://")
-(def ^:private mirror-kind-quic "quic")
-(def ^:private mirror-kind-webrtc "webrtc")
-(def ^:private mirror-kind-webtransport "webtransport")
-(def ^:private mirror-kind-relay "relay")
-(def ^:private mirror-kind-other "other")
-(def ^:private mirror-adapter-relay "murakumo.runtime.relay")
-(def ^:private mirror-adapter-quic "murakumo.runtime.quic")
-(def ^:private mirror-adapter-webrtc "murakumo.runtime.webrtc")
-(def ^:private mirror-adapter-webtransport "murakumo.runtime.webtransport")
-(def ^:private mirror-adapter-relay-client "murakumo.runtime.relay-client")
-(def ^:private mirror-adapter-kind-relay-runtime "relay-runtime")
-(def ^:private mirror-adapter-kind-quic "quic")
-(def ^:private mirror-adapter-kind-webrtc "webrtc")
-(def ^:private mirror-adapter-kind-webtransport "webtransport")
-(def ^:private mirror-adapter-kind-relay "relay")
-
-(def scheme-quic (oracle-str-const 'scheme-quic mirror-scheme-quic))
-(def scheme-webrtc (oracle-str-const 'scheme-webrtc mirror-scheme-webrtc))
-(def scheme-relay (oracle-str-const 'scheme-relay mirror-scheme-relay))
-(def scheme-webtransport
-  (oracle-str-const 'scheme-webtransport mirror-scheme-webtransport))
-(def kind-quic (oracle-str-const 'kind-quic mirror-kind-quic))
-(def kind-webrtc (oracle-str-const 'kind-webrtc mirror-kind-webrtc))
-(def kind-webtransport
-  (oracle-str-const 'kind-webtransport mirror-kind-webtransport))
-(def kind-relay (oracle-str-const 'kind-relay mirror-kind-relay))
-(def kind-other (oracle-str-const 'kind-other mirror-kind-other))
-(def adapter-relay (oracle-str-const 'adapter-relay mirror-adapter-relay))
-(def adapter-quic (oracle-str-const 'adapter-quic mirror-adapter-quic))
-(def adapter-webrtc (oracle-str-const 'adapter-webrtc mirror-adapter-webrtc))
-(def adapter-webtransport
-  (oracle-str-const 'adapter-webtransport mirror-adapter-webtransport))
-(def adapter-relay-client
-  (oracle-str-const 'adapter-relay-client mirror-adapter-relay-client))
-(def adapter-kind-relay-runtime
-  (oracle-str-const 'adapter-kind-relay-runtime mirror-adapter-kind-relay-runtime))
-(def adapter-kind-quic
-  (oracle-str-const 'adapter-kind-quic mirror-adapter-kind-quic))
-(def adapter-kind-webrtc
-  (oracle-str-const 'adapter-kind-webrtc mirror-adapter-kind-webrtc))
-(def adapter-kind-webtransport
-  (oracle-str-const 'adapter-kind-webtransport mirror-adapter-kind-webtransport))
-(def adapter-kind-relay
-  (oracle-str-const 'adapter-kind-relay mirror-adapter-kind-relay))
-
-(defn- mirror-default-port-for-kind [kind]
-  (case (name kind)
-    "quic" mirror-default-quic-port
-    "relay" mirror-default-relay-port
-    ("webrtc" "webtransport") mirror-default-web-port
-    0))
-
-(defn- mirror-known-adapters []
-  #{adapter-relay adapter-quic adapter-webrtc adapter-webtransport
-    adapter-relay-client})
-
-(defn- mirror-adapter-kind [name]
-  (cond
-    (= name adapter-relay) adapter-kind-relay-runtime
-    (= name adapter-quic) adapter-kind-quic
-    (= name adapter-webrtc) adapter-kind-webrtc
-    (= name adapter-webtransport) adapter-kind-webtransport
-    (= name adapter-relay-client) adapter-kind-relay
-    :else ""))
-
-(defn- mirror-scheme-prefix-host [url]
-  (when-let [[_ host] (re-matches #"[a-zA-Z][a-zA-Z0-9+.-]*://([^/:]+).*"
-                                  (str url))]
-    host))
-
-;; ── dual-source constants ──────────────────────────────────────────────
+(def scheme-quic (o 'scheme-quic []))
+(def scheme-webrtc (o 'scheme-webrtc []))
+(def scheme-relay (o 'scheme-relay []))
+(def scheme-webtransport (o 'scheme-webtransport []))
+(def kind-quic (o 'kind-quic []))
+(def kind-webrtc (o 'kind-webrtc []))
+(def kind-webtransport (o 'kind-webtransport []))
+(def kind-relay (o 'kind-relay []))
+(def kind-other (o 'kind-other []))
+(def adapter-relay (o 'adapter-relay []))
+(def adapter-quic (o 'adapter-quic []))
+(def adapter-webrtc (o 'adapter-webrtc []))
+(def adapter-webtransport (o 'adapter-webtransport []))
+(def adapter-relay-client (o 'adapter-relay-client []))
+(def adapter-kind-relay-runtime (o 'adapter-kind-relay-runtime []))
+(def adapter-kind-quic (o 'adapter-kind-quic []))
+(def adapter-kind-webrtc (o 'adapter-kind-webrtc []))
+(def adapter-kind-webtransport (o 'adapter-kind-webtransport []))
+(def adapter-kind-relay (o 'adapter-kind-relay []))
 
 (def default-relay-port
-  (oracle-i64-const 'default-relay-port mirror-default-relay-port))
+  (oracle/i64->host (o 'default-relay-port [])))
 
 (def default-web-port
-  (oracle-i64-const 'default-web-port mirror-default-web-port))
+  (oracle/i64->host (o 'default-web-port [])))
 
 (def default-quic-port
-  (oracle-i64-const 'default-quic-port mirror-default-quic-port))
+  (oracle/i64->host (o 'default-quic-port [])))
 
 (defn- port-for-kind [kind]
-  (try-oracle
-   #(oracle/i64->host (o 'default-port-for-kind [(name kind)]))
-   #(mirror-default-port-for-kind kind)))
+  (oracle/i64->host (o 'default-port-for-kind [(name kind)])))
 
 (def default-port-by-kind
   {:quic (port-for-kind :quic)
@@ -178,10 +64,7 @@
    :relay (port-for-kind :relay)})
 
 (defn- adapter-kind-kw [name]
-  (keyword
-   (try-oracle
-    #(o 'adapter-kind [(str name)])
-    #(mirror-adapter-kind name))))
+  (keyword (o 'adapter-kind [(str name)])))
 
 (def adapters
   {adapter-relay
@@ -218,11 +101,9 @@
                (assoc spec :adapter name)))))
 
 (defn known-adapter?
-  "Kotoba `known-adapter?` when oracle ready."
+  "Kotoba `known-adapter?` (required)."
   [name]
-  (try-oracle
-   #(oracle/bool->host (o 'known-adapter? [(str name)]))
-   #(contains? (mirror-known-adapters) (str name))))
+  (oracle/bool->host (o 'known-adapter? [(str name)])))
 
 (defn parse-int [value]
   #?(:clj (Integer/parseInt value)
@@ -230,12 +111,10 @@
 
 (defn scheme-host
   "Host between `://` and next `:` or `/` or end.
-   Kotoba `scheme-prefix-host` when oracle ready."
+   Kotoba `scheme-prefix-host` (required)."
   [url]
   (let [s (str url)
-        host (try-oracle
-              #(o 'scheme-prefix-host [s])
-              #(or (mirror-scheme-prefix-host s) ""))]
+        host (o 'scheme-prefix-host [s])]
     (when (and (string? host) (seq host))
       host)))
 

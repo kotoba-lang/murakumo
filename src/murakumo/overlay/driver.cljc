@@ -4,12 +4,13 @@
 ;; validates a canonical `dial` argv and emits the session record a real stream or
 ;; packet driver will later use to open QUIC/WebRTC/WebTransport/relay paths.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-overlay-driver-tokens-pure-oracle):
-;; endpoint-kind / option-name / dial-ok-reason / blank? / command-is-dial?
-;; + scheme/kind/cmd/reason tokens DELEGATE to precompiled
-;; kotoba/overlay_driver_core when oracle is loadable
-;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
-;; Host remains: parse-argv loops + session maps. cljs mirrors as fallback.
+;; W6 product-shell + T6.4: endpoint-kind / option-name / dial-ok-reason / blank?
+;; / command-is-dial? + scheme/kind/cmd/reason tokens require the shipped
+;; `:overlay-driver` KIR on **every** platform. Host pure mirrors are gone —
+;; cljs/nbb must preload shipped KIR (resources/ via nbb cwd, register-kir!, or
+;; set-resource-loader!) before requiring this ns
+;; (ADR-260731-w6-t64-driver-runtime-mirror-delete).
+;; Host remains: parse-argv loops + session maps.
 
 (ns murakumo.overlay.driver
   (:require [clojure.string :as str]
@@ -17,117 +18,28 @@
 
 (def ^:private oid :overlay-driver)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
 
-(defn- oracle-ready? []
-  (oracle/ready? oid))
+;; ── tokens (oracle SSoT) ───────────────────────────────────────────────
 
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-(defn- oracle-str-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/call oid export []))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/call oid export [])
-         mirror)
-       (catch :default _
-         mirror))))
-
-;; ── host-mirror pure helpers + dual-source tokens ────────────────────
-
-(def ^:private mirror-scheme-quic "quic://")
-(def ^:private mirror-scheme-webrtc "webrtc://")
-(def ^:private mirror-scheme-https "https://")
-(def ^:private mirror-scheme-relay "relay://")
-(def ^:private mirror-kind-quic "quic")
-(def ^:private mirror-kind-webrtc "webrtc")
-(def ^:private mirror-kind-webtransport "webtransport")
-(def ^:private mirror-kind-relay "relay")
-(def ^:private mirror-kind-unknown "unknown")
-(def ^:private mirror-flag-dash-prefix "--")
-(def ^:private mirror-cmd-dial "dial")
-(def ^:private mirror-reason-ok "ok")
-(def ^:private mirror-reason-unknown-command "unknown-command")
-(def ^:private mirror-reason-missing-options "missing-options")
-
-(def scheme-quic
-  (oracle-str-const 'scheme-quic mirror-scheme-quic))
-(def scheme-webrtc
-  (oracle-str-const 'scheme-webrtc mirror-scheme-webrtc))
-(def scheme-https
-  (oracle-str-const 'scheme-https mirror-scheme-https))
-(def scheme-relay
-  (oracle-str-const 'scheme-relay mirror-scheme-relay))
-(def kind-quic
-  (oracle-str-const 'kind-quic mirror-kind-quic))
-(def kind-webrtc
-  (oracle-str-const 'kind-webrtc mirror-kind-webrtc))
-(def kind-webtransport
-  (oracle-str-const 'kind-webtransport mirror-kind-webtransport))
-(def kind-relay
-  (oracle-str-const 'kind-relay mirror-kind-relay))
-(def kind-unknown
-  (oracle-str-const 'kind-unknown mirror-kind-unknown))
-(def flag-dash-prefix
-  (oracle-str-const 'flag-dash-prefix mirror-flag-dash-prefix))
-(def cmd-dial
-  (oracle-str-const 'cmd-dial mirror-cmd-dial))
-(def reason-ok
-  (oracle-str-const 'reason-ok mirror-reason-ok))
-(def reason-unknown-command
-  (oracle-str-const 'reason-unknown-command mirror-reason-unknown-command))
-(def reason-missing-options
-  (oracle-str-const 'reason-missing-options mirror-reason-missing-options))
-
-(defn- mirror-option-name [flag]
-  (let [s (str flag)]
-    (if (str/starts-with? s flag-dash-prefix)
-      (subs s (count flag-dash-prefix))
-      s)))
-
-(defn- mirror-blank? [s]
-  (str/blank? (str s)))
-
-(defn- mirror-endpoint-kind [endpoint]
-  (let [endpoint (str endpoint)]
-    (cond
-      (str/starts-with? endpoint scheme-quic) kind-quic
-      (str/starts-with? endpoint scheme-webrtc) kind-webrtc
-      (str/starts-with? endpoint scheme-https) kind-webtransport
-      (str/starts-with? endpoint scheme-relay) kind-relay
-      :else kind-unknown)))
-
-(defn- mirror-command-is-dial? [command]
-  (= cmd-dial (str command)))
-
-(defn- mirror-dial-ok-reason [is-dial missing-count]
-  (cond
-    (not is-dial) reason-unknown-command
-    (pos? missing-count) reason-missing-options
-    :else reason-ok))
+(def scheme-quic (o 'scheme-quic []))
+(def scheme-webrtc (o 'scheme-webrtc []))
+(def scheme-https (o 'scheme-https []))
+(def scheme-relay (o 'scheme-relay []))
+(def kind-quic (o 'kind-quic []))
+(def kind-webrtc (o 'kind-webrtc []))
+(def kind-webtransport (o 'kind-webtransport []))
+(def kind-relay (o 'kind-relay []))
+(def kind-unknown (o 'kind-unknown []))
+(def flag-dash-prefix (o 'flag-dash-prefix []))
+(def cmd-dial (o 'cmd-dial []))
+(def reason-ok (o 'reason-ok []))
+(def reason-unknown-command (o 'reason-unknown-command []))
+(def reason-missing-options (o 'reason-missing-options []))
 
 (def required-dial-options
   [:overlay :node :name :from :to :capability :direct :transport])
@@ -142,12 +54,9 @@
 
 (defn keyword-option
   "Strip leading `--` from a flag and keywordize.
-   Kotoba `option-name` when oracle ready."
+   Kotoba `option-name` (required)."
   [flag]
-  (keyword
-   (try-oracle
-    #(o 'option-name [(str flag)])
-    #(mirror-option-name flag))))
+  (keyword (o 'option-name [(str flag)])))
 
 (defn split-option [flag]
   (let [[option value] (str/split (str flag) #"=" 2)]
@@ -177,23 +86,18 @@
 
 (defn missing-options
   "Options whose string form is blank.
-   Kotoba `blank?` when ready (empty string only); mirror uses str/blank?."
+   Kotoba `blank?` (required)."
   [required opts]
   (filterv (fn [k]
              (let [v (str (get opts k))]
-               (try-oracle
-                #(oracle/bool->host (o 'blank? [v]))
-                #(mirror-blank? v))))
+               (oracle/bool->host (o 'blank? [v]))))
            required))
 
 (defn endpoint-kind
   "Classify a dial endpoint scheme.
    Kotoba `endpoint-kind` → keyword (quic|webrtc|webtransport|relay|unknown)."
   [endpoint]
-  (keyword
-   (try-oracle
-    #(o 'endpoint-kind [(str endpoint)])
-    #(mirror-endpoint-kind endpoint))))
+  (keyword (o 'endpoint-kind [(str endpoint)])))
 
 (defn dial-session
   "Normalised session request for the native overlay driver."
@@ -216,18 +120,14 @@
 
 (defn dial-result
   "Validate parsed driver options and return an executable driver result.
-   Reason via kotoba `dial-ok-reason` with host-projected flags when ready."
+   Reason via kotoba `dial-ok-reason` (required)."
   [opts]
   (let [missing (missing-options required-dial-options opts)
         cmd-name (name (or (:command opts) :unknown))
-        is-dial (try-oracle
-                 #(oracle/bool->host (o 'command-is-dial? [cmd-name]))
-                 #(mirror-command-is-dial? cmd-name))
+        is-dial (oracle/bool->host (o 'command-is-dial? [cmd-name]))
         reason (keyword
-                (try-oracle
-                 #(o 'dial-ok-reason
-                     [(boolean is-dial) (oracle/as-i64 (count missing))])
-                 #(mirror-dial-ok-reason is-dial (count missing))))]
+                (o 'dial-ok-reason
+                   [(boolean is-dial) (oracle/as-i64 (count missing))]))]
     (case reason
       :unknown-command
       {:ok? false
