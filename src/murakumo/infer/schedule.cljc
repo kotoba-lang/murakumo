@@ -54,22 +54,12 @@
            (:node/can-fetch? node true))
        (>= (or free-bytes 0) (:model/min-free-bytes model 0))))
 
-(defn- guest-bool->host
-  "KIR :bool is a 0/1 word or a host boolean. Clojure's `boolean` treats 0 as
-  truthy, so never use it on a guest word — only nil/false are falsey in Clojure."
-  [v]
-  (cond
-    (true? v) true
-    (false? v) false
-    (number? v) (not (zero? #?(:clj (long v) :cljs v)))
-    :else (boolean v)))
-
 (defn eligible?
   "Can `node` run `model`? Kotoba eligible? with a bool eligibility record
   (T5.3 + language profile 5)."
   [node model]
   (try-oracle
-   #(guest-bool->host
+   #(oracle/bool->host
      (o 'eligible?
         [(oracle/record eligibility-schema (eligibility-fields node model))
          (oracle/as-i64 (or (:free-bytes node) 0))

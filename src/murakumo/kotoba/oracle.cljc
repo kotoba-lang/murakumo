@@ -169,6 +169,18 @@
   #?(:clj (long v)
      :cljs (js/Number v)))
 
+(defn bool->host
+  "KIR :bool result → host boolean.
+
+  Guest words are 0/1 (or true/false). Never use Clojure `boolean` on a guest
+  word: `(boolean 0)` is true because only nil/false are falsey in Clojure."
+  [v]
+  (cond
+    (true? v) true
+    (false? v) false
+    (number? v) (not (zero? #?(:clj (long v) :cljs v)))
+    :else (boolean v)))
+
 (defn option-i64
   "Optional i64: nil → none; otherwise some long/BigInt."
   [n]

@@ -213,42 +213,40 @@
      :opts (assoc opts :slots-by-node budgeted)}))
 
 (def ^:private eligibility-schema
-  "Guest descriptor for task_plan_core's eligibility record (T5.3).
-   Replaces five bits packed into one i64."
+  "Guest descriptor for task_plan_core's eligibility record (T5.3 + profile 5).
+   Five flags used to be packed into one i64; then T5.3 made them :i64 fields;
+   language profile 5 makes them :bool."
   [:record :task/eligibility
-   [[:online :i64] [:labels-ok :i64] [:roles-ok :i64]
-    [:not-excluded :i64] [:allowlist-ok :i64]]])
+   [[:online :bool] [:labels-ok :bool] [:roles-ok :bool]
+    [:not-excluded :bool] [:allowlist-ok :bool]]])
 
 (defn- eligibility-fields
-  "Host projects set/map membership into named eligibility fields."
+  "Host projects set/map membership into named :bool eligibility fields."
   [node {:keys [placement min-mem-bytes exclude-nodes nodes] :as _task}]
-  (let [{:keys [labels roles]} placement
-        online (if (false? (:online? node true)) 0 1)
-        labels-ok (if (every? (fn [[k v]] (= v (get (:labels node) k)))
-                              (or labels {}))
-                    1 0)
-        roles-ok (if (every? (set (or (:roles node) #{}))
-                             (or roles []))
-                   1 0)
-        not-ex (if (contains? (set (or exclude-nodes [])) (:name node)) 0 1)
-        allow (if (or (empty? (or nodes []))
-                      (contains? (set nodes) (:name node)))
-                1 0)]
-    {:online online :labels-ok labels-ok :roles-ok roles-ok
-     :not-excluded not-ex :allowlist-ok allow}))
+  (let [{:keys [labels roles]} placement]
+    {:online (not (false? (:online? node true)))
+     :labels-ok (boolean (every? (fn [[k v]] (= v (get (:labels node) k)))
+                                 (or labels {})))
+     :roles-ok (boolean (every? (set (or (:roles node) #{}))
+                                (or roles [])))
+     :not-excluded (not (contains? (set (or exclude-nodes [])) (:name node)))
+     :allowlist-ok (boolean (or (empty? (or nodes []))
+                                (contains? (set nodes) (:name node))))}))
 
 (defn eligible?
   "Can `node` run `task`? Same placement vocabulary as reconcile/plan.cljc
    (`:labels` all match, `:roles` all present) plus task-level resource and
    exclusion constraints.
 
-   JVM: kotoba `task-eligible?` with an eligibility record (T5.3)."
+   JVM: kotoba `task-eligible?` with a bool eligibility record
+   (T5.3 + language profile 5)."
   [node task]
   #?(:clj
-     (= 1 (o 'task-eligible?
-             [(oracle/record eligibility-schema (eligibility-fields node task))
-              (long (or (:mem-bytes node) 0))
-              (long (or (:min-mem-bytes task) 0))]))
+     (oracle/bool->host
+      (o 'task-eligible?
+         [(oracle/record eligibility-schema (eligibility-fields node task))
+          (long (or (:mem-bytes node) 0))
+          (long (or (:min-mem-bytes task) 0))]))
      :cljs (mirror-eligible? node task)))
 
 (defn node-score
