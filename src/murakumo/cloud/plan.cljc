@@ -5,19 +5,19 @@
 ;; packet plumbing; this namespace owns deterministic cloud records and routing
 ;; choices so the CLI can plan/publish them without an external VPN control plane.
 ;;
-;; W6 product-shell (ADR-260728-w6-cloud-cmd-tokens-pure-oracle +
-;; ADR-260728-w6-cloud-node-type-pure-oracle + parse-flags):
-;; defaults + endpoints + CLI presentation + summary lines + parse-flags
-;; classifiers + command/flag tokens + record $type + capability name tokens
-;; DELEGATE to kotoba cloud_plan_core when oracle is loadable
-;; (JVM classpath or cljs/nbb).
-;; Record assembly, choose-relay sort, width fmt / reduce fold stay host.
-;; cljs mirrors remain fallback.
+;; W6 product-shell + T6.4: defaults + endpoints + CLI presentation + summary
+;; lines + parse-flags classifiers + command/flag tokens + record $type +
+;; capability name tokens require the shipped `:cloud-plan` KIR on **every**
+;; platform. Host pure mirrors are gone — cljs/nbb must preload shipped KIR
+;; (resources/ via nbb cwd, register-kir!, or set-resource-loader!) before
+;; requiring this ns (ADR-260731-w6-t64-cloud-mirror-delete).
+;; Host remains: record assembly, choose-relay sort, width fmt, policy walk,
+;; argv/map assembly, reduce fold for parse-flags.
 
 (ns murakumo.cloud.plan
   "Portable murakumo.cloud overlay planning.
    W6 product-shell: defaults + endpoints + CLI lines + flag classifiers
-   + record types via cloud_plan_core when oracle ready."
+   + record types via cloud_plan_core (required)."
   (:require [clojure.string :as str]
             [murakumo.config :as config]
             [murakumo.fleet.inventory :as inv]
@@ -27,595 +27,332 @@
 
 (def ^:private oid :cloud-plan)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
 
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-(defn- oracle-str-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/call oid export []))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/call oid export [])
-         mirror)
-       (catch :default _
-         mirror))))
-
-(defn- oracle-i64-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/i64->host (oracle/call oid export [])))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/i64->host (oracle/call oid export []))
-         mirror)
-       (catch :default _
-         mirror))))
-
-;; ── host-mirror pure helpers ─────────────────────────────────────────
-
-(def ^:private mirror-default-driver "murakumo-overlay")
-(def ^:private mirror-node-record-type "cloud.murakumo.node")
-(def ^:private mirror-route-record-type "cloud.murakumo.route")
-(def ^:private mirror-relay-record-type "cloud.murakumo.relay")
-(def ^:private mirror-policy-record-type "cloud.murakumo.policy")
-(def ^:private mirror-bootstrap-record-type "cloud.murakumo.bootstrap")
-(def ^:private mirror-cap-ssh "ssh")
-(def ^:private mirror-cap-http "http")
-(def ^:private mirror-cap-gossip "gossip")
-(def ^:private mirror-cap-deploy "deploy")
-(def ^:private mirror-cap-reconcile "reconcile")
-(def ^:private mirror-default-cloud-name "murakumo.cloud")
-(def ^:private mirror-default-cloud-domain "murakumo.cloud")
-(def ^:private mirror-default-cloud-graph "murakumo-cloud")
-(def ^:private mirror-default-auth-key-env "MURAKUMO_OVERLAY_AUTH_KEY")
-(def ^:private mirror-overlay-version 1)
-
-(defn- mirror-node-region [node]
-  (or (get-in node [:labels :zone])
-      (get-in node [:labels :region])
-      (:region node)
-      "global"))
-
-(defn- mirror-relay-score [node relay]
-  (if (= (mirror-node-region node) (:region relay)) 0 1))
-
-(defn- mirror-overlay-id-input [cloud]
-  (or (:overlay/id cloud) (:cloud/name cloud) "murakumo.cloud"))
-
-(defn- mirror-node-id-input [overlay-cid node-name]
-  (str overlay-cid ":" node-name))
-
-(defn- mirror-quic-endpoint [host port]
-  (str "quic://" host ":" port))
-
-(defn- mirror-webrtc-endpoint [host p2p-port]
-  (str "webrtc://" host ":" (+ 100 p2p-port)))
-
-(defn- mirror-relay-endpoint-url [relay-url node-id]
-  (str relay-url "/" node-id))
-
-(defn- mirror-webtransport-endpoint [host http-port]
-  (str "https://" host ":" http-port "/.well-known/murakumo/webtransport"))
-
-(defn- mirror-transport-endpoint [scheme host]
-  (str scheme "://" host))
-
-(def ^:private mirror-dash-placeholder "-")
-(def ^:private mirror-summary-nodes-header
-  "  NODE           REGION     RELAY          DIRECT")
-(def ^:private mirror-routes-header
-  "  NODE           DIRECT                                      RELAY")
-(def ^:private mirror-direct-candidates-label "  direct candidates:")
-(def ^:private mirror-relays-section-label "  relays:")
-(def ^:private mirror-connects-section-label "  connects:")
-
-(defn- mirror-summary-title [domain overlay]
-  (str "murakumo.cloud " domain "  overlay " overlay))
-
-(defn- mirror-routes-title [overlay]
-  (str "murakumo.cloud routes overlay " overlay))
-
-(defn- mirror-bootstrap-title [overlay]
-  (str "murakumo.cloud bootstrap overlay " overlay))
-
-(defn- mirror-unknown-node-line [node-name]
-  (str "unknown murakumo.cloud node: " node-name))
-
-(defn- mirror-unknown-relay-line [relay-name]
-  (str "unknown murakumo.cloud relay: " relay-name))
-
-(defn- mirror-dial-denied-line [node-name]
-  (str "murakumo.cloud dial " node-name " denied by policy"))
-
-(defn- mirror-connect-denied-line [node-name]
-  (str "murakumo.cloud connect " node-name " denied by policy"))
-
-(defn- mirror-dial-ok-title [route-name node]
-  (str "murakumo.cloud dial " route-name "  node " node))
-
-(defn- mirror-connect-ok-title [node-name]
-  (str "murakumo.cloud connect " node-name))
-
-(defn- mirror-relay-ok-title [relay-name]
-  (str "murakumo.cloud relay " relay-name))
-
-(defn- mirror-from-to-cap-reason [from to capability reason]
-  (str "  from=" from " to=" to " capability=" capability " reason=" reason))
-
-(defn- mirror-authorized-line [from to capability]
-  (str "  authorized: from=" from " to=" to " capability=" capability))
-
-(defn- mirror-relay-fallback-line [endpoint]
-  (str "  relay fallback: " endpoint))
-
-(defn- mirror-reason-line [reason]
-  (str "  reason=" reason))
-
-(defn- mirror-indent-argv-line [argv-joined]
-  (str "  " argv-joined))
-
-(defn- mirror-address-family-line [af nodes relays]
-  (str "  address-family " af " ; nodes " nodes " ; relays " relays))
-
-(defn- mirror-policy-line [default allow-n]
-  (str "  policy default=" default " allow=" allow-n))
-
-(defn- mirror-skipped-reason-suffix [reason]
-  (str " skipped reason=" reason))
-
-(defn- mirror-starts-with? [s prefix]
-  (str/starts-with? (str s) (str prefix)))
-
-(defn- mirror-is-cmd [a cmd]
-  (= (str a) cmd))
-
-(defn- mirror-flag-value-after [a n]
-  (let [s (str a)]
-    (if (< (count s) n) "" (subs s n))))
-
-(def ^:private mirror-cmd-plan "plan")
-(def ^:private mirror-cmd-records "records")
-(def ^:private mirror-cmd-routes "routes")
-(def ^:private mirror-cmd-dial "dial")
-(def ^:private mirror-cmd-connect "connect")
-(def ^:private mirror-cmd-relay "relay")
-(def ^:private mirror-cmd-bootstrap "bootstrap")
-(def ^:private mirror-flag-dash-prefix "--")
-(def ^:private mirror-flag-cloud-prefix "--cloud=")
-(def ^:private mirror-flag-fleet-prefix "--fleet=")
-(def ^:private mirror-flag-target-prefix "--target=")
-(def ^:private mirror-flag-from-prefix "--from=")
-(def ^:private mirror-flag-to-prefix "--to=")
-(def ^:private mirror-flag-capability-prefix "--capability=")
-(def ^:private mirror-flag-driver-prefix "--driver=")
-(def ^:private mirror-flag-format-prefix "--format=")
-(def ^:private mirror-flag-auth-key-prefix "--auth-key=")
-
-(defn- mirror-command-token [a]
-  (cond
-    (mirror-is-cmd a mirror-cmd-plan) mirror-cmd-plan
-    (mirror-is-cmd a mirror-cmd-records) mirror-cmd-records
-    (mirror-is-cmd a mirror-cmd-routes) mirror-cmd-routes
-    (mirror-is-cmd a mirror-cmd-dial) mirror-cmd-dial
-    (mirror-is-cmd a mirror-cmd-connect) mirror-cmd-connect
-    (mirror-is-cmd a mirror-cmd-relay) mirror-cmd-relay
-    (mirror-is-cmd a mirror-cmd-bootstrap) mirror-cmd-bootstrap
-    :else ""))
-
-;; ── dual-source defaults ─────────────────────────────────────────────
+;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def default-cloud-path config/default-cloud-path)
 
 (def default-driver
-  (oracle-str-const 'default-driver mirror-default-driver))
+  (o 'default-driver []))
 
 (def node-record-type
-  "Record $type for node control-plane entries. Kotoba when ready."
-  (oracle-str-const 'node-record-type mirror-node-record-type))
+  "Record $type for node control-plane entries. Kotoba SSoT (required)."
+  (o 'node-record-type []))
 
 (def route-record-type
-  "Record $type for route entries. Kotoba when ready."
-  (oracle-str-const 'route-record-type mirror-route-record-type))
+  "Record $type for route entries. Kotoba SSoT (required)."
+  (o 'route-record-type []))
 
 (def relay-record-type
-  "Record $type for relay entries. Kotoba when ready."
-  (oracle-str-const 'relay-record-type mirror-relay-record-type))
+  "Record $type for relay entries. Kotoba SSoT (required)."
+  (o 'relay-record-type []))
 
 (def policy-record-type
-  "Record $type for policy entries. Kotoba when ready."
-  (oracle-str-const 'policy-record-type mirror-policy-record-type))
+  "Record $type for policy entries. Kotoba SSoT (required)."
+  (o 'policy-record-type []))
 
 (def bootstrap-record-type
-  "Record $type for bootstrap manifest. Kotoba when ready."
-  (oracle-str-const 'bootstrap-record-type mirror-bootstrap-record-type))
+  "Record $type for bootstrap manifest. Kotoba SSoT (required)."
+  (o 'bootstrap-record-type []))
 
 (def cap-ssh
-  "Default node capability name: ssh. Kotoba when ready."
-  (oracle-str-const 'cap-ssh mirror-cap-ssh))
+  "Default node capability name: ssh. Kotoba SSoT (required)."
+  (o 'cap-ssh []))
 
 (def cap-http
-  "Default node capability name: http. Kotoba when ready."
-  (oracle-str-const 'cap-http mirror-cap-http))
+  "Default node capability name: http. Kotoba SSoT (required)."
+  (o 'cap-http []))
 
 (def cap-gossip
-  "Default node capability name: gossip. Kotoba when ready."
-  (oracle-str-const 'cap-gossip mirror-cap-gossip))
+  "Default node capability name: gossip. Kotoba SSoT (required)."
+  (o 'cap-gossip []))
 
 (def cap-deploy
-  "Default node capability name: deploy. Kotoba when ready."
-  (oracle-str-const 'cap-deploy mirror-cap-deploy))
+  "Default node capability name: deploy. Kotoba SSoT (required)."
+  (o 'cap-deploy []))
 
 (def cap-reconcile
-  "Default node capability name: reconcile. Kotoba when ready."
-  (oracle-str-const 'cap-reconcile mirror-cap-reconcile))
+  "Default node capability name: reconcile. Kotoba SSoT (required)."
+  (o 'cap-reconcile []))
 
 (def default-node-capabilities
-  "Default node capability keywords (dual-sourced names)."
+  "Default node capability keywords (oracle SSoT names)."
   [(keyword cap-ssh) (keyword cap-http) (keyword cap-gossip)
    (keyword cap-deploy) (keyword cap-reconcile)])
 
 (def default-cloud
-  {:cloud/name (oracle-str-const 'default-cloud-name mirror-default-cloud-name)
-   :cloud/domain (oracle-str-const 'default-cloud-domain mirror-default-cloud-domain)
-   :cloud/graph (oracle-str-const 'default-cloud-graph mirror-default-cloud-graph)
-   :overlay/version (oracle-i64-const 'overlay-version mirror-overlay-version)
+  {:cloud/name (o 'default-cloud-name [])
+   :cloud/domain (o 'default-cloud-domain [])
+   :cloud/graph (o 'default-cloud-graph [])
+   :overlay/version (oracle/i64->host (o 'overlay-version []))
    :overlay/address-family :identity
    :overlay/direct [:quic :webrtc :webtransport]
    :overlay/relay [:murakumo-relay]
-   :overlay/auth-key-env (oracle-str-const 'default-auth-key-env mirror-default-auth-key-env)
+   :overlay/auth-key-env (o 'default-auth-key-env [])
    :overlay/auth-key-source :operator-seed
    :relays []
    :policy {:default :deny :allow []}})
 
-;; ── dual-source CLI presentation labels ──────────────────────────────
+;; ── oracle-required CLI presentation labels ──────────────────────────────
 
 (def dash-placeholder
-  (oracle-str-const 'dash-placeholder mirror-dash-placeholder))
+  (o 'dash-placeholder []))
 
 (def summary-nodes-header
-  (oracle-str-const 'summary-nodes-header mirror-summary-nodes-header))
+  (o 'summary-nodes-header []))
 
 (def routes-header
-  (oracle-str-const 'routes-header mirror-routes-header))
+  (o 'routes-header []))
 
 (def direct-candidates-label
-  (oracle-str-const 'direct-candidates-label mirror-direct-candidates-label))
+  (o 'direct-candidates-label []))
 
 (def relays-section-label
-  (oracle-str-const 'relays-section-label mirror-relays-section-label))
+  (o 'relays-section-label []))
 
 (def connects-section-label
-  (oracle-str-const 'connects-section-label mirror-connects-section-label))
+  (o 'connects-section-label []))
 
 (defn summary-title
-  "CLI title for plan summary. Kotoba `summary-title` when ready."
+  "CLI title for plan summary. Kotoba `summary-title` (required)."
   [domain overlay]
-  (try-oracle
-   #(o 'summary-title [(str domain) (str overlay)])
-   #(mirror-summary-title domain overlay)))
+  (o 'summary-title [(str domain) (str overlay)]))
 
 (defn routes-title
-  "CLI title for routes listing. Kotoba `routes-title` when ready."
+  "CLI title for routes listing. Kotoba `routes-title` (required)."
   [overlay]
-  (try-oracle
-   #(o 'routes-title [(str overlay)])
-   #(mirror-routes-title overlay)))
+  (o 'routes-title [(str overlay)]))
 
 (defn bootstrap-title
-  "CLI title for bootstrap listing. Kotoba `bootstrap-title` when ready."
+  "CLI title for bootstrap listing. Kotoba `bootstrap-title` (required)."
   [overlay]
-  (try-oracle
-   #(o 'bootstrap-title [(str overlay)])
-   #(mirror-bootstrap-title overlay)))
+  (o 'bootstrap-title [(str overlay)]))
 
 (defn unknown-node-line
-  "Unknown node error line. Kotoba `unknown-node-line` when ready."
+  "Unknown node error line. Kotoba `unknown-node-line` (required)."
   [node-name]
-  (try-oracle
-   #(o 'unknown-node-line [(str node-name)])
-   #(mirror-unknown-node-line node-name)))
+  (o 'unknown-node-line [(str node-name)]))
 
 (defn unknown-relay-line
-  "Unknown relay error line. Kotoba `unknown-relay-line` when ready."
+  "Unknown relay error line. Kotoba `unknown-relay-line` (required)."
   [relay-name]
-  (try-oracle
-   #(o 'unknown-relay-line [(str relay-name)])
-   #(mirror-unknown-relay-line relay-name)))
+  (o 'unknown-relay-line [(str relay-name)]))
 
 (defn dial-denied-line
-  "Dial policy-denied title. Kotoba `dial-denied-line` when ready."
+  "Dial policy-denied title. Kotoba `dial-denied-line` (required)."
   [node-name]
-  (try-oracle
-   #(o 'dial-denied-line [(str node-name)])
-   #(mirror-dial-denied-line node-name)))
+  (o 'dial-denied-line [(str node-name)]))
 
 (defn connect-denied-line
-  "Connect policy-denied title. Kotoba `connect-denied-line` when ready."
+  "Connect policy-denied title. Kotoba `connect-denied-line` (required)."
   [node-name]
-  (try-oracle
-   #(o 'connect-denied-line [(str node-name)])
-   #(mirror-connect-denied-line node-name)))
+  (o 'connect-denied-line [(str node-name)]))
 
 (defn dial-ok-title
-  "Dial authorized title. Kotoba `dial-ok-title` when ready."
+  "Dial authorized title. Kotoba `dial-ok-title` (required)."
   [route-name node]
-  (try-oracle
-   #(o 'dial-ok-title [(str route-name) (str node)])
-   #(mirror-dial-ok-title route-name node)))
+  (o 'dial-ok-title [(str route-name) (str node)]))
 
 (defn connect-ok-title
-  "Connect authorized title. Kotoba `connect-ok-title` when ready."
+  "Connect authorized title. Kotoba `connect-ok-title` (required)."
   [node-name]
-  (try-oracle
-   #(o 'connect-ok-title [(str node-name)])
-   #(mirror-connect-ok-title node-name)))
+  (o 'connect-ok-title [(str node-name)]))
 
 (defn relay-ok-title
-  "Relay ok title. Kotoba `relay-ok-title` when ready."
+  "Relay ok title. Kotoba `relay-ok-title` (required)."
   [relay-name]
-  (try-oracle
-   #(o 'relay-ok-title [(str relay-name)])
-   #(mirror-relay-ok-title relay-name)))
+  (o 'relay-ok-title [(str relay-name)]))
 
 (defn from-to-cap-reason
-  "from/to/capability/reason detail line. Kotoba when ready."
+  "from/to/capability/reason detail line. Kotoba SSoT (required)."
   [from to capability reason]
-  (try-oracle
-   #(o 'from-to-cap-reason [(str from) (str to) (str capability) (str reason)])
-   #(mirror-from-to-cap-reason from to capability reason)))
+  (o 'from-to-cap-reason [(str from) (str to) (str capability) (str reason)]))
 
 (defn authorized-line
-  "authorized from/to/capability line. Kotoba when ready."
+  "authorized from/to/capability line. Kotoba SSoT (required)."
   [from to capability]
-  (try-oracle
-   #(o 'authorized-line [(str from) (str to) (str capability)])
-   #(mirror-authorized-line from to capability)))
+  (o 'authorized-line [(str from) (str to) (str capability)]))
 
 (defn relay-fallback-line
-  "relay fallback detail line. Kotoba when ready."
+  "relay fallback detail line. Kotoba SSoT (required)."
   [endpoint]
-  (try-oracle
-   #(o 'relay-fallback-line [(str endpoint)])
-   #(mirror-relay-fallback-line endpoint)))
+  (o 'relay-fallback-line [(str endpoint)]))
 
 (defn reason-line
-  "reason= detail line. Kotoba when ready."
+  "reason= detail line. Kotoba SSoT (required)."
   [reason]
-  (try-oracle
-   #(o 'reason-line [(str reason)])
-   #(mirror-reason-line reason)))
+  (o 'reason-line [(str reason)]))
 
 (defn indent-argv-line
-  "Two-space indented argv join line. Kotoba when ready."
+  "Two-space indented argv join line. Kotoba SSoT (required)."
   [argv-joined]
-  (try-oracle
-   #(o 'indent-argv-line [(str argv-joined)])
-   #(mirror-indent-argv-line argv-joined)))
+  (o 'indent-argv-line [(str argv-joined)]))
 
 (defn address-family-line
-  "Summary address-family + node/relay counts. Kotoba when ready."
+  "Summary address-family + node/relay counts. Kotoba SSoT (required)."
   [af nodes relays]
-  (try-oracle
-   #(o 'address-family-line [(str af)
+  (o 'address-family-line [(str af)
                              (oracle/as-i64 nodes)
-                             (oracle/as-i64 relays)])
-   #(mirror-address-family-line af nodes relays)))
+                             (oracle/as-i64 relays)]))
 
 (defn policy-line
-  "Summary policy default + allow count. Kotoba when ready."
+  "Summary policy default + allow count. Kotoba SSoT (required)."
   [default allow-n]
-  (try-oracle
-   #(o 'policy-line [(str default) (oracle/as-i64 allow-n)])
-   #(mirror-policy-line default allow-n)))
+  (o 'policy-line [(str default) (oracle/as-i64 allow-n)]))
 
 (defn skipped-reason-suffix
   "Trailing ' skipped reason=…' fragment (name column padding stays host)."
   [reason]
-  (try-oracle
-   #(o 'skipped-reason-suffix [(str reason)])
-   #(mirror-skipped-reason-suffix reason)))
+  (o 'skipped-reason-suffix [(str reason)]))
 
-;; ── dual-source parse-flags tokens + classifiers ─────────────────────
+;; ── oracle-required parse-flags tokens + classifiers ─────────────────────
 
 (def cmd-plan
-  "CLI command token `plan`. Kotoba when ready."
-  (oracle-str-const 'cmd-plan mirror-cmd-plan))
+  "CLI command token `plan`. Kotoba SSoT (required)."
+  (o 'cmd-plan []))
 
 (def cmd-records
-  (oracle-str-const 'cmd-records mirror-cmd-records))
+  (o 'cmd-records []))
 
 (def cmd-routes
-  (oracle-str-const 'cmd-routes mirror-cmd-routes))
+  (o 'cmd-routes []))
 
 (def cmd-dial
-  (oracle-str-const 'cmd-dial mirror-cmd-dial))
+  (o 'cmd-dial []))
 
 (def cmd-connect
-  (oracle-str-const 'cmd-connect mirror-cmd-connect))
+  (o 'cmd-connect []))
 
 (def cmd-relay
-  (oracle-str-const 'cmd-relay mirror-cmd-relay))
+  (o 'cmd-relay []))
 
 (def cmd-bootstrap
-  (oracle-str-const 'cmd-bootstrap mirror-cmd-bootstrap))
+  (o 'cmd-bootstrap []))
 
 (def default-command-token
-  "Default parse-flags command token. Kotoba when ready."
-  (oracle-str-const 'default-command-token mirror-cmd-plan))
+  "Default parse-flags command token. Kotoba SSoT (required)."
+  (o 'default-command-token []))
 
 (def flag-dash-prefix
-  (oracle-str-const 'flag-dash-prefix mirror-flag-dash-prefix))
+  (o 'flag-dash-prefix []))
 
 (def flag-cloud-prefix
-  (oracle-str-const 'flag-cloud-prefix mirror-flag-cloud-prefix))
+  (o 'flag-cloud-prefix []))
 
 (def flag-fleet-prefix
-  (oracle-str-const 'flag-fleet-prefix mirror-flag-fleet-prefix))
+  (o 'flag-fleet-prefix []))
 
 (def flag-target-prefix
-  (oracle-str-const 'flag-target-prefix mirror-flag-target-prefix))
+  (o 'flag-target-prefix []))
 
 (def flag-from-prefix
-  (oracle-str-const 'flag-from-prefix mirror-flag-from-prefix))
+  (o 'flag-from-prefix []))
 
 (def flag-to-prefix
-  (oracle-str-const 'flag-to-prefix mirror-flag-to-prefix))
+  (o 'flag-to-prefix []))
 
 (def flag-capability-prefix
-  (oracle-str-const 'flag-capability-prefix mirror-flag-capability-prefix))
+  (o 'flag-capability-prefix []))
 
 (def flag-driver-prefix
-  (oracle-str-const 'flag-driver-prefix mirror-flag-driver-prefix))
+  (o 'flag-driver-prefix []))
 
 (def flag-format-prefix
-  (oracle-str-const 'flag-format-prefix mirror-flag-format-prefix))
+  (o 'flag-format-prefix []))
 
 (def flag-auth-key-prefix
-  (oracle-str-const 'flag-auth-key-prefix mirror-flag-auth-key-prefix))
-
-(defn- flag1
-  "Oracle :bool predicate dual-source (profile 5)."
-  [export a mirror-thunk]
-  (try-oracle
-   #(oracle/bool->host (o export [(str a)]))
-   mirror-thunk))
+  (o 'flag-auth-key-prefix []))
 
 (defn command-token
-  "Known CLI command name for argv token, or \"\". Kotoba when ready."
+  "Known CLI command name for argv token, or \"\". Kotoba SSoT (required)."
   [a]
-  (try-oracle
-   #(o 'command-token [(str a)])
-   #(mirror-command-token a)))
+  (o 'command-token [(str a)]))
 
 (defn- is-cmd-plan? [a]
-  (flag1 'is-cmd-plan? a #(mirror-is-cmd a cmd-plan)))
+  (oracle/bool->host (o 'is-cmd-plan? [(str a)])))
 
 (defn- is-cmd-records? [a]
-  (flag1 'is-cmd-records? a #(mirror-is-cmd a cmd-records)))
+  (oracle/bool->host (o 'is-cmd-records? [(str a)])))
 
 (defn- is-cmd-routes? [a]
-  (flag1 'is-cmd-routes? a #(mirror-is-cmd a cmd-routes)))
+  (oracle/bool->host (o 'is-cmd-routes? [(str a)])))
 
 (defn- is-cmd-dial? [a]
-  (flag1 'is-cmd-dial? a #(mirror-is-cmd a cmd-dial)))
+  (oracle/bool->host (o 'is-cmd-dial? [(str a)])))
 
 (defn- is-cmd-connect? [a]
-  (flag1 'is-cmd-connect? a #(mirror-is-cmd a cmd-connect)))
+  (oracle/bool->host (o 'is-cmd-connect? [(str a)])))
 
 (defn- is-cmd-relay? [a]
-  (flag1 'is-cmd-relay? a #(mirror-is-cmd a cmd-relay)))
+  (oracle/bool->host (o 'is-cmd-relay? [(str a)])))
 
 (defn- is-cmd-bootstrap? [a]
-  (flag1 'is-cmd-bootstrap? a #(mirror-is-cmd a cmd-bootstrap)))
+  (oracle/bool->host (o 'is-cmd-bootstrap? [(str a)])))
 
 (defn- is-flag-cloud? [a]
-  (flag1 'is-flag-cloud? a #(mirror-starts-with? a flag-cloud-prefix)))
+  (oracle/bool->host (o 'is-flag-cloud? [(str a)])))
 
 (defn- is-flag-fleet? [a]
-  (flag1 'is-flag-fleet? a #(mirror-starts-with? a flag-fleet-prefix)))
+  (oracle/bool->host (o 'is-flag-fleet? [(str a)])))
 
 (defn- is-flag-target? [a]
-  (flag1 'is-flag-target? a #(mirror-starts-with? a flag-target-prefix)))
+  (oracle/bool->host (o 'is-flag-target? [(str a)])))
 
 (defn- is-flag-from? [a]
-  (flag1 'is-flag-from? a #(mirror-starts-with? a flag-from-prefix)))
+  (oracle/bool->host (o 'is-flag-from? [(str a)])))
 
 (defn- is-flag-to? [a]
-  (flag1 'is-flag-to? a #(mirror-starts-with? a flag-to-prefix)))
+  (oracle/bool->host (o 'is-flag-to? [(str a)])))
 
 (defn- is-flag-capability? [a]
-  (flag1 'is-flag-capability? a #(mirror-starts-with? a flag-capability-prefix)))
+  (oracle/bool->host (o 'is-flag-capability? [(str a)])))
 
 (defn- is-flag-driver? [a]
-  (flag1 'is-flag-driver? a #(mirror-starts-with? a flag-driver-prefix)))
+  (oracle/bool->host (o 'is-flag-driver? [(str a)])))
 
 (defn- is-flag-format? [a]
-  (flag1 'is-flag-format? a #(mirror-starts-with? a flag-format-prefix)))
+  (oracle/bool->host (o 'is-flag-format? [(str a)])))
 
 (defn- is-flag-auth-key? [a]
-  (flag1 'is-flag-auth-key? a #(mirror-starts-with? a flag-auth-key-prefix)))
+  (oracle/bool->host (o 'is-flag-auth-key? [(str a)])))
 
 (defn- is-flag-dash? [a]
-  (flag1 'is-flag-dash? a #(mirror-starts-with? a flag-dash-prefix)))
+  (oracle/bool->host (o 'is-flag-dash? [(str a)])))
 
 (defn- is-positional-target? [a]
-  (flag1 'is-positional-target? a #(not (mirror-starts-with? a flag-dash-prefix))))
+  (oracle/bool->host (o 'is-positional-target? [(str a)])))
 
 (defn- flag-cloud-value [a]
-  (try-oracle
-   #(o 'flag-cloud-value [(str a)])
-   #(mirror-flag-value-after a (count flag-cloud-prefix))))
+  (o 'flag-cloud-value [(str a)]))
 
 (defn- flag-fleet-value [a]
-  (try-oracle
-   #(o 'flag-fleet-value [(str a)])
-   #(mirror-flag-value-after a (count flag-fleet-prefix))))
+  (o 'flag-fleet-value [(str a)]))
 
 (defn- flag-target-value [a]
-  (try-oracle
-   #(o 'flag-target-value [(str a)])
-   #(mirror-flag-value-after a (count flag-target-prefix))))
+  (o 'flag-target-value [(str a)]))
 
 (defn- flag-from-value [a]
-  (try-oracle
-   #(o 'flag-from-value [(str a)])
-   #(mirror-flag-value-after a (count flag-from-prefix))))
+  (o 'flag-from-value [(str a)]))
 
 (defn- flag-to-value [a]
-  (try-oracle
-   #(o 'flag-to-value [(str a)])
-   #(mirror-flag-value-after a (count flag-to-prefix))))
+  (o 'flag-to-value [(str a)]))
 
 (defn- flag-capability-value [a]
-  (try-oracle
-   #(o 'flag-capability-value [(str a)])
-   #(mirror-flag-value-after a (count flag-capability-prefix))))
+  (o 'flag-capability-value [(str a)]))
 
 (defn- flag-driver-value [a]
-  (try-oracle
-   #(o 'flag-driver-value [(str a)])
-   #(mirror-flag-value-after a (count flag-driver-prefix))))
+  (o 'flag-driver-value [(str a)]))
 
 (defn- flag-format-value [a]
-  (try-oracle
-   #(o 'flag-format-value [(str a)])
-   #(mirror-flag-value-after a (count flag-format-prefix))))
+  (o 'flag-format-value [(str a)]))
 
 (defn- flag-auth-key-value [a]
-  (try-oracle
-   #(o 'flag-auth-key-value [(str a)])
-   #(mirror-flag-value-after a (count flag-auth-key-prefix))))
+  (o 'flag-auth-key-value [(str a)]))
 
 (defn merge-defaults [cloud]
   (merge-with (fn [a b]
@@ -625,44 +362,36 @@
 
 (defn overlay-id
   "Stable CID for an overlay namespace.
-   Preimage via kotoba `overlay-id-input` when oracle ready."
+   Preimage via kotoba `overlay-id-input` (required)."
   [cloud]
   (identity/graph-cid
-   (try-oracle
-    #(o 'overlay-id-input
+   (o 'overlay-id-input
         [(str (or (:overlay/id cloud) ""))
-         (str (or (:cloud/name cloud) ""))])
-    #(mirror-overlay-id-input cloud))))
+         (str (or (:cloud/name cloud) ""))])))
 
 (defn node-id
   "Stable node CID inside an overlay.
-   Preimage via kotoba `node-id-input` when oracle ready."
+   Preimage via kotoba `node-id-input` (required)."
   [cloud node]
   (identity/graph-cid
-   (try-oracle
-    #(o 'node-id-input
-        [(str (overlay-id cloud)) (str (:name node))])
-    #(mirror-node-id-input (overlay-id cloud) (:name node)))))
+   (o 'node-id-input
+        [(str (overlay-id cloud)) (str (:name node))])))
 
 (defn node-region
-  "Kotoba `node-region` (zone / region-label / region / global) when ready."
+  "Kotoba `node-region` (zone / region-label / region / global) (required)."
   [node]
-  (try-oracle
-   #(o 'node-region
+  (o 'node-region
        [(str (or (get-in node [:labels :zone]) ""))
         (str (or (get-in node [:labels :region]) ""))
-        (str (or (:region node) ""))])
-   #(mirror-node-region node)))
+        (str (or (:region node) ""))]))
 
 (defn relay-score
-  "Kotoba `relay-score` when oracle ready."
+  "Kotoba `relay-score` (required)."
   [node relay]
-  (try-oracle
-   #(oracle/i64->host
+  (oracle/i64->host
      (o 'relay-score
         [(str (node-region node))
-         (str (or (:region relay) ""))]))
-   #(mirror-relay-score node relay)))
+         (str (or (:region relay) ""))])))
 
 (defn choose-relay
   "Choose a deterministic relay for node fallback."
@@ -671,7 +400,7 @@
 
 (defn node-record
   "Cloud control-plane record for one fleet node.
-   $type + default capabilities dual-sourced; map assembly stays host."
+   $type + default capabilities oracle SSoT; map assembly stays host."
   [cloud fleet node]
   (let [relay (choose-relay cloud node)]
     {:$type node-record-type
@@ -696,35 +425,24 @@
         http-port (inv/node-port fleet node)]
     (case transport
       :quic {:transport :quic
-             :endpoint (try-oracle
-                        #(o 'quic-endpoint [(str host) (oracle/as-i64 p2p-port)])
-                        #(mirror-quic-endpoint host p2p-port))}
+             :endpoint (o 'quic-endpoint [(str host) (oracle/as-i64 p2p-port)])}
       :webrtc {:transport :webrtc
-               :endpoint (try-oracle
-                          #(o 'webrtc-endpoint [(str host) (oracle/as-i64 p2p-port)])
-                          #(mirror-webrtc-endpoint host p2p-port))}
+               :endpoint (o 'webrtc-endpoint [(str host) (oracle/as-i64 p2p-port)])}
       :webtransport {:transport :webtransport
-                     :endpoint (try-oracle
-                                #(o 'webtransport-endpoint
-                                    [(str host) (oracle/as-i64 http-port)])
-                                #(mirror-webtransport-endpoint host http-port))}
+                     :endpoint (o 'webtransport-endpoint
+                                    [(str host) (oracle/as-i64 http-port)])}
       {:transport transport
-       :endpoint (try-oracle
-                  #(o 'transport-endpoint
-                      [(name transport) (str host)])
-                  #(mirror-transport-endpoint (name transport) host))})))
+       :endpoint (o 'transport-endpoint
+                      [(name transport) (str host)])})))
 
 (defn relay-endpoint
-  "Endpoint URL via kotoba `relay-endpoint-url` when ready."
+  "Endpoint URL via kotoba `relay-endpoint-url` (required)."
   [relay node-id]
   (when relay
     {:relay (:name relay)
      :transport (first (:transports relay))
-     :endpoint (try-oracle
-                #(o 'relay-endpoint-url
-                    [(str (:url relay)) (str node-id)])
-                #(mirror-relay-endpoint-url (:url relay) node-id))}))
-
+     :endpoint (o 'relay-endpoint-url
+                    [(str (:url relay)) (str node-id)])}))
 
 (defn- fmt
   "CLI line formatter. On JVM uses clojure.core/format; on cljs interpolates %s/%d left-to-right."
@@ -757,7 +475,7 @@
 
 (defn route-record
   "Identity-overlay route hints for one node: direct candidates plus relay fallback.
-   $type dual-sourced; map assembly stays host."
+   $type oracle SSoT; map assembly stays host."
   [cloud fleet node]
   (let [relay (choose-relay cloud node)
         node-id (node-id cloud node)]
@@ -922,7 +640,7 @@
 
 (defn bootstrap-manifest
   "Machine-readable bootstrap manifest for native overlay execution.
-   $type dual-sourced; phase assembly stays host."
+   $type oracle SSoT; phase assembly stays host."
   [plan opts]
   (let [{:keys [relays connects]} (bootstrap-plan plan opts)]
     {:$type bootstrap-record-type
@@ -1053,8 +771,8 @@
      :plan (summary-lines plan))))
 
 (defn parse-flags
-  "Parse cloud CLI argv. Command/flag tokens + classifiers dual-sourced via
-   cloud_plan_core; reduce fold + keyword mapping stay host."
+  "Parse cloud CLI argv. Command/flag tokens + classifiers oracle SSoT via
+   cloud_plan_core (required); reduce fold + keyword mapping stay host."
   [args]
   (reduce (fn [m arg]
             (let [cmd (command-token arg)]
