@@ -18,6 +18,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 (defn init
   "Empty relay state."
   []
@@ -94,10 +100,9 @@
   [state now-ms ttl-ms]
   (let [dead (for [[jid {:keys [at-ms job worker-id]}] (:assigned state)
                    :when (oracle/bool->host
-                          (o 'lease-expired?
-                             [(oracle/as-i64 now-ms)
-                              (oracle/as-i64 at-ms)
-                              (oracle/as-i64 ttl-ms)]))]
+                          (o-record 'lease-expired?
+                                    {:now-ms now-ms :at-ms at-ms :ttl-ms ttl-ms}
+                                    [[:now-ms :i64] [:at-ms :i64] [:ttl-ms :i64]]))]
                [jid job worker-id])]
     (reduce (fn [st [jid job wid]]
               (-> st

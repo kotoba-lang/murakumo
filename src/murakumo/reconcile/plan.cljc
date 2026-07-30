@@ -21,6 +21,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 (def flag-dry-run
   "CLI token for dry-run. Kotoba SSoT."
   (o 'flag-dry-run []))
@@ -89,23 +95,36 @@
        vec))
 
 (defn- desired-n
-  "Replica desired count — kotoba `desired` with Product Value ABI optional i64."
+  "Replica desired count — kotoba `desired` with Product Value ABI optional i64.
+   T5.2: structural map → call-record."
   [replicas]
-  (oracle/i64->host (o 'desired [(oracle/option-i64 replicas)])))
+  (oracle/i64->host
+   (o-record 'desired
+             {:replicas replicas}
+             [[:replicas :option-i64]])))
 
 (defn- deficit-n
+  "T5.2: structural map → call-record."
   [desired running-count]
   (oracle/i64->host
-   (o 'deficit [(oracle/as-i64 desired) (oracle/as-i64 running-count)])))
+   (o-record 'deficit
+             {:desired desired :running-count running-count}
+             [[:desired :i64] [:running-count :i64]])))
 
 (defn- action-kw
-  "Project reconcile-app inputs to kotoba `action-name` then keywordize."
+  "Project reconcile-app inputs to kotoba `action-name` then keywordize.
+   T5.2: structural map → call-record."
   [cid running-count desired free-candidates]
-  (keyword (o 'action-name
-              [(oracle/option-string cid)
-               (oracle/as-i64 running-count)
-               (oracle/as-i64 desired)
-               (oracle/as-i64 free-candidates)])))
+  (keyword
+   (o-record 'action-name
+             {:cid cid
+              :running-count running-count
+              :desired desired
+              :free-candidates free-candidates}
+             [[:cid :option-string]
+              [:running-count :i64]
+              [:desired :i64]
+              [:free-candidates :i64]])))
 
 (defn reconcile-app
   "Pure per-app reconciliation.
