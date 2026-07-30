@@ -87,25 +87,25 @@
       1
       (if better01 0 1))))
 
-(defn pick-idx-2-full [ok0 :i64 ok1 :i64 warm0 :bool warm1 :bool better01 :bool] :i64
+(defn pick-idx-2-full [ok0 :bool ok1 :bool warm0 :bool warm1 :bool better01 :bool] :i64
   ;; Pure pick between two candidates. -1 if neither eligible.
-  (if (= ok0 0)
-    (if (= ok1 0) -1 1)
-    (if (= ok1 0)
-      0
-      (prefer-warm-then-score warm0 warm1 better01))))
+  (if ok0
+    (if ok1
+      (prefer-warm-then-score warm0 warm1 better01)
+      0)
+    (if ok1 1 -1)))
 
-(defn pick-idx-3-tournament [champ01 :i64 ok2 :i64 warm-champ :bool warm2 :bool
+(defn pick-idx-3-tournament [champ01 :i64 ok2 :bool warm-champ :bool warm2 :bool
                              better-champ-2 :bool] :i64
   ;; champ01 ∈ {-1,0,1} from pick-idx-2-full on nodes 0/1.
   ;; Compare champion to node 2. Returns -1|0|1|2.
   (if (< champ01 0)
-    (if (= ok2 0) -1 2)
-    (if (= ok2 0)
-      champ01
+    (if ok2 2 -1)
+    (if ok2
       (if (= (prefer-warm-then-score warm-champ warm2 better-champ-2) 0)
         champ01
-        2))))
+        2)
+      champ01)))
 
 (defn queue-after-assign [queue :i64 picked :i64] :i64
   ;; cljc assign: (fnil inc 0) when node picked (picked 0/1)
@@ -122,7 +122,7 @@
 (defn better2-record [warm0 :bool warm1 :bool better01 :bool] [:ref :schedule/better2]
   (record-new [:ref :schedule/better2] warm0 warm1 better01))
 
-(defn assign-step-2 [q0 :i64 q1 :i64 ok0 :i64 ok1 :i64
+(defn assign-step-2 [q0 :i64 q1 :i64 ok0 :bool ok1 :bool
                      better [:ref :schedule/better2]] [:ref :schedule/assign2]
   (let [warm0 (record-get better :warm0)
         warm1 (record-get better :warm1)
@@ -174,10 +174,10 @@
                      warm [:ref :schedule/triple]
                      better [:ref :schedule/better3]] :i64
   ;; → pick idx −1|0|1|2
-  (let [ok0 (record-get ok :v0)
-        ok1 (record-get ok :v1)
-        ok2 (record-get ok :v2)
-        ;; warm triple is still 0/1 i64 lanes; project to :bool for pick helpers
+  (let [;; ok/warm triples are still 0/1 i64 lanes; project to :bool for pick helpers
+        ok0 (if (= (record-get ok :v0) 1) true false)
+        ok1 (if (= (record-get ok :v1) 1) true false)
+        ok2 (if (= (record-get ok :v2) 1) true false)
         warm0 (if (= (record-get warm :v0) 1) true false)
         warm1 (if (= (record-get warm :v1) 1) true false)
         warm2 (if (= (record-get warm :v2) 1) true false)
@@ -228,20 +228,20 @@
 (defn assign-step-3-q2 [result [:ref :schedule/assign3]] :i64
   (record-get result :q2))
 
-(defn pick-fold-step [champ [:option :i64] ok-i :i64 warm-champ :bool warm-i :bool
+(defn pick-fold-step [champ [:option :i64] ok-i :bool warm-champ :bool warm-i :bool
                       better-c-i :bool] :i64
   ;; Host folds candidates i=0..n-1.
   ;; Product Value ABI v1: optional champ presence (no has-champ sentinel).
-  ;; Returns: 0 = no pick yet (no champ and ok-i=0)
+  ;; Returns: 0 = no pick yet (no champ and not ok-i)
   ;;          1 = take challenger i as new champ
   ;;          2 = keep existing champ
   (if-some [_ champ]
-    (if (= ok-i 0)
-      2
+    (if ok-i
       (if (= (prefer-warm-then-score warm-champ warm-i better-c-i) 0)
         2
-        1))
-    (if (= ok-i 0) 0 1)))
+        1)
+      2)
+    (if ok-i 1 0)))
 
 (defn queue-inc-if [queue :i64 picked :i64] :i64
   ;; picked 0/1 — alias queue-after-assign for host fold clarity

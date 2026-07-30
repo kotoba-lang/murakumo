@@ -723,11 +723,12 @@
            (oracle/call :task-plan 'speedup-milli [300 150])))
     (let [champ (oracle/option-i64 1)
           none-c (oracle/option-i64 nil)]
-      (is (= (ir/execute live 'pick-task-fold-step [none-c 1 0])
-             (oracle/call :task-plan 'pick-task-fold-step [none-c 1 0])))
-      (is (= 1 (oracle/call :task-plan 'pick-task-fold-step [none-c 1 0])))
-      (is (= 2 (oracle/call :task-plan 'pick-task-fold-step [champ 1 0])))
-      (is (= 1 (oracle/call :task-plan 'pick-task-fold-step [champ 1 1]))))))
+      ;; Profile 5: ok-i / better-c-i are :bool
+      (is (= (ir/execute live 'pick-task-fold-step [none-c true false])
+             (oracle/call :task-plan 'pick-task-fold-step [none-c true false])))
+      (is (= 1 (oracle/call :task-plan 'pick-task-fold-step [none-c true false])))
+      (is (= 2 (oracle/call :task-plan 'pick-task-fold-step [champ true false])))
+      (is (= 1 (oracle/call :task-plan 'pick-task-fold-step [champ true true]))))))
 
 (deftest task-precompiled-kir-does-not-drift
   (is (= (task-live-kir) (task-resource-kir))

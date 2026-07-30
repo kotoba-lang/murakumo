@@ -181,8 +181,8 @@
                      can-fetch (if (false? (:node/can-fetch? node)) 0 1)]
                  (+ has-engine (* 2 has-ckpt) (* 4 holds) (* 8 can-fetch))))
         body2 (fn [n0 n1]
-                (let [ok0 (if (sched/eligible? n0 model) 1 0)
-                      ok1 (if (sched/eligible? n1 model) 1 0)
+                (let [ok0 (if (sched/eligible? n0 model) "true" "false")
+                      ok1 (if (sched/eligible? n1 model) "true" "false")
                       w0 (if (contains? (or (:checkpoints n0) #{}) (:model/checkpoint model)) 1 0)
                       w1 (if (contains? (or (:checkpoints n1) #{}) (:model/checkpoint model)) 1 0)
                       s0 (sched/score n0)
@@ -197,8 +197,8 @@
                        (if (= 1 (count nodes))
                          [(str "p_" i)
                           (let [n0 (first nodes)
-                                ok0 (if (sched/eligible? n0 model) 1 0)]
-                            (str "(pick-idx-2-full " ok0 " 0 false false false)"))]
+                                ok0 (if (sched/eligible? n0 model) "true" "false")]
+                            (str "(pick-idx-2-full " ok0 " false false false false)"))]
                          [(str "p_" i) (body2 (nodes 0) (nodes 1))]))
                      pairs))
         actual (compile-i64-cases
@@ -206,7 +206,7 @@
                        {"qa0" "(queue-after-assign 0 0)"
                         "qa1" "(queue-after-assign 0 1)"
                         "qa2" "(queue-after-assign 3 1)"
-                        "t3" "(pick-idx-3-tournament 0 1 true false true)"}))]
+                        "t3" "(pick-idx-3-tournament 0 true true false true)"}))]
     (doseq [[i [nodes expect]] (map-indexed vector pairs)]
       (let [got (get actual (str "p_" i))
             ;; map idx to name
@@ -235,9 +235,9 @@
         f1 (:free-bytes b)
         ;; T5.3: better2-record + assign2 field projections (no pack3)
         b0 (str "(if (better-from-queues 0 " f0 " 0 " f1 ") 1 0)")
-        s0 (str "(assign-step-2 0 0 1 1 (better2-record true false (better-from-queues 0 " f0 " 0 " f1 ")))")
+        s0 (str "(assign-step-2 0 0 true true (better2-record true false (better-from-queues 0 " f0 " 0 " f1 ")))")
         b1 (str "(if (better-from-queues 1 " f0 " 0 " f1 ") 1 0)")
-        s1 (str "(assign-step-2 1 0 1 1 (better2-record true false (better-from-queues 1 " f0 " 0 " f1 ")))")
+        s1 (str "(assign-step-2 1 0 true true (better2-record true false (better-from-queues 1 " f0 " 0 " f1 ")))")
         actual (compile-i64-cases
                 {"b0" b0
                  "s0c" (str "(assign-result-pick " s0 ")")
@@ -270,9 +270,9 @@
   (let [f (* 16 GiB)
         ;; both warm → score by queue; tie picks index 1 (#73 prefer-warm-then-score)
         b0 (str "(better-from-queues 0 " f " 0 " f ")")
-        s0 (str "(assign-step-2 0 0 1 1 (better2-record true true " b0 "))")
+        s0 (str "(assign-step-2 0 0 true true (better2-record true true " b0 "))")
         b1 (str "(better-from-queues 0 " f " 1 " f ")")
-        s1 (str "(assign-step-2 0 1 1 1 (better2-record true true " b1 "))")
+        s1 (str "(assign-step-2 0 1 true true (better2-record true true " b1 "))")
         actual (compile-i64-cases
                 {"s0c" (str "(assign-result-pick " s0 ")")
                  "s1c" (str "(assign-result-pick " s1 ")")})]
@@ -362,16 +362,16 @@
         frees [fa fb fc fd]
         ;; host fold: start no champ; all ok+warm
         ;; step i=0: has=0 ok=1 → take 0
-        f0 (str "(pick-fold-step " (opt-i64-form nil) " 1 false true false)")
+        f0 (str "(pick-fold-step " (opt-i64-form nil) " true false true false)")
         ;; champ=0 warm=1; vs i=1 better 0 vs 1: free a < b so a not better → better=false
         b01 (str "(if (better-pair 0 " fa " 0 " fb ") 1 0)")
-        f1 (str "(pick-fold-step " (opt-i64-form 1) " 1 true true (better-pair 0 " fa " 0 " fb "))")
+        f1 (str "(pick-fold-step " (opt-i64-form 1) " true true true (better-pair 0 " fa " 0 " fb "))")
         actual (compile-i64-cases
                 {"f0" f0
                  "b01" b01
                  "f1" f1
-                 "none" (str "(pick-fold-step " (opt-i64-form nil) " 0 false false false)")
-                 "keep" (str "(pick-fold-step " (opt-i64-form 1) " 0 true false false)")
+                 "none" (str "(pick-fold-step " (opt-i64-form nil) " false false false false)")
+                 "keep" (str "(pick-fold-step " (opt-i64-form 1) " false true false false)")
                  "qi0" "(queue-inc-if 0 0)"
                  "qi1" "(queue-inc-if 3 1)"})]
     (is (= 1 (get actual "f0")) "take first eligible")
@@ -383,11 +383,11 @@
     (is (= 4 (get actual "qi1")))
     ;; continue fold in second compile with b as champ vs c, d
     (let [b02 (str "(if (better-pair 0 " fb " 0 " fc ") 1 0)")
-          f2 (str "(pick-fold-step " (opt-i64-form 1) " 1 true true (better-pair 0 " fb " 0 " fc "))")
+          f2 (str "(pick-fold-step " (opt-i64-form 1) " true true true (better-pair 0 " fb " 0 " fc "))")
           act2 (compile-i64-cases {"b02" b02 "f2" f2})]
       (is (= 0 (get act2 "b02")))
       (is (= 1 (get act2 "f2")) "take c")
-      (let [f3 (str "(pick-fold-step " (opt-i64-form 1) " 1 true true (better-pair 0 " fc " 0 " fd "))")
+      (let [f3 (str "(pick-fold-step " (opt-i64-form 1) " true true true (better-pair 0 " fc " 0 " fd "))")
             act3 (compile-i64-cases {"f3" f3})]
         (is (= 1 (get act3 "f3")) "take d — largest free")
         (is (= "d" (:name cljc)))))))
