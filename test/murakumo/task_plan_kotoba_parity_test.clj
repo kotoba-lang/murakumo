@@ -19,7 +19,7 @@
        "assign-task-2-code assign-task-2-load0 assign-task-2-load1 "
        "attempt-next exclude-append-marker "
        "pick-task-fold-step load-inc-if challenger-wins? "
-       "triple-record assign-task-pick-3 apply-task-pick-3 assign-task-step-3 "
+       "triple-record flags3-record assign-task-pick-3 apply-task-pick-3 assign-task-step-3 "
        "assign-task-3-code assign-task-3-load0 assign-task-3-load1 assign-task-3-load2 "
        "nearest-rank-idx summary-retried speedup-milli max2 min2 clamp-nonneg "
        "unschedulable-detail exclude-join-sep "
@@ -255,7 +255,7 @@
     (is (= -1 (get actual "pn")))))
 
 (deftest assign-task-step-3-and-summary
-  (let [ok "(triple-record 1 1 1)"
+  (let [ok "(flags3-record true true true)"
         fill "(triple-record 0 0 0)"
         load0 "(triple-record 0 0 0)"
         s3 (str "(assign-task-step-3 " load0 " " ok " " fill ")")
