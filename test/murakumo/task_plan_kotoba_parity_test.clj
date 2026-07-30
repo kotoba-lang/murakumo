@@ -236,16 +236,16 @@
 
 (deftest assign-task-step-2-matches-assign-1
   (let [;; T5.3: fills/loads are pair records; results project field-wise
-        s0 "(assign-task-step-2 0 0 1 1 (pair-record 0 0))"
-        s1 "(assign-task-step-2 1 0 1 1 (pair-record 500 0))"
+        s0 "(assign-task-step-2 0 0 true true (pair-record 0 0))"
+        s1 "(assign-task-step-2 1 0 true true (pair-record 500 0))"
         actual (compile-i64-cases
                 {"s0c" (str "(assign-task-2-code " s0 ")")
                  "s0l0" (str "(assign-task-2-load0 " s0 ")")
                  "s0l1" (str "(assign-task-2-load1 " s0 ")")
                  "s1c" (str "(assign-task-2-code " s1 ")")
-                 "p0" "(pick-task-idx-2 1 1 0 0 (pair-record 0 0))"
-                 "p1" "(pick-task-idx-2 1 1 500 0 (pair-record 1 0))"
-                 "pn" "(pick-task-idx-2 0 0 0 0 (pair-record 0 0))"})]
+                 "p0" "(pick-task-idx-2 true true 0 0 (pair-record 0 0))"
+                 "p1" "(pick-task-idx-2 true true 500 0 (pair-record 1 0))"
+                 "pn" "(pick-task-idx-2 false false 0 0 (pair-record 0 0))"})]
     (is (= 1 (get actual "s0c")))
     (is (= 1 (get actual "s0l0")))
     (is (= 0 (get actual "s0l1")))
@@ -266,13 +266,13 @@
                  "s3l1" (str "(assign-task-3-load1 " s3 ")")
                  "s3l2" (str "(assign-task-3-load2 " s3 ")")
                  "fold0" (str "(pick-task-fold-step "
-                              (opt-i64-form nil) " 1 0)")
+                              (opt-i64-form nil) " true false)")
                  "fold1" (str "(pick-task-fold-step "
-                              (opt-i64-form 1) " 1 1)")
+                              (opt-i64-form 1) " true true)")
                  "fold2" (str "(pick-task-fold-step "
-                              (opt-i64-form 1) " 1 0)")
+                              (opt-i64-form 1) " true false)")
                  "foldn" (str "(pick-task-fold-step "
-                              (opt-i64-form nil) " 0 0)")
+                              (opt-i64-form nil) " false false)")
                  "nr50" "(nearest-rank-idx 10 500)"
                  "nr95" "(nearest-rank-idx 10 950)"
                  "nr0" "(nearest-rank-idx 0 500)"
