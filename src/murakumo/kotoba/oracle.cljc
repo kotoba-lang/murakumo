@@ -143,6 +143,27 @@
     (boolean (load-kir oracle-id))
     (catch #?(:clj Exception :cljs :default) _ false)))
 
+(defn require-ready!
+  "Throw unless `oracle-id` is loadable. Product shells that have deleted cljs
+   host mirrors call this instead of soft-falling back (T6.4).
+
+   Entry points should call `preload!` / `preload-catalog!` once so this is
+   cheap (cache hit) on the product path."
+  [oracle-id]
+  (when-not (ready? oracle-id)
+    (throw (ex-info "kotoba oracle not ready (T6.4 requires shipped KIR)"
+                    {:oracle-id oracle-id
+                     :hint "preload-catalog! / register-kir! / set-resource-loader!, or run nbb from repo root with resources/ present"})))
+  true)
+
+(defn preload!
+  "Load (and cache) each oracle-id. nbb/browser entrypoints call this once so
+   product shells can drop cljs host mirrors (T6.4 preload guarantee).
+   Returns the number of ids loaded."
+  [oracle-ids]
+  (doseq [id oracle-ids]
+    (load-kir id))
+  (count oracle-ids))
 
 (defn option-of
   "Host nil → option none; non-nil → option some (Product Value ABI v1).
@@ -302,3 +323,8 @@
   "Number of shipped product-shell oracle artifacts."
   []
   (count catalog))
+
+(defn preload-catalog!
+  "Load every catalog id into the cache. See `preload!`."
+  []
+  (preload! (catalog-ids)))

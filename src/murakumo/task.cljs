@@ -16,8 +16,13 @@
   (:require ["node:fs" :as fs]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [murakumo.task.exec :as exec]
-            [murakumo.task.plan :as plan]))
+            [murakumo.kotoba.oracle :as oracle]))
+
+;; T6.4: preload shipped KIR before product-shell requires (nbb from repo root).
+(oracle/preload! [:task-plan :fleet-inventory])
+
+(require '[murakumo.task.exec :as exec]
+         '[murakumo.task.plan :as plan])
 
 (def default-ledger ".murakumo-task-ledger.edn")
 
