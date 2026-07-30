@@ -510,8 +510,14 @@
 
 (deftest schedule-oracle-call-matches-live-compile
   (let [live (sched-live-kir)]
-    (is (= (ir/execute live 'eligible? [15 (* 16 1024 1024 1024) 0])
-           (oracle/call :infer-schedule 'eligible? [15 (* 16 1024 1024 1024) 0])))
+    ;; T5.3: eligibility is a record, not four packed bits.
+    (let [elig (oracle/record [:record :schedule/eligibility
+                               [[:has-engine :i64] [:has-checkpoint :i64]
+                                [:holds-checkpoint :i64] [:can-fetch :i64]]]
+                              {:has-engine 1 :has-checkpoint 1
+                               :holds-checkpoint 1 :can-fetch 1})]
+      (is (= (ir/execute live 'eligible? [elig (* 16 1024 1024 1024) 0])
+             (oracle/call :infer-schedule 'eligible? [elig (* 16 1024 1024 1024) 0]))))
     (is (= (ir/execute live 'score-queue [3])
            (oracle/call :infer-schedule 'score-queue [3])))
     (is (= (ir/execute live 'queue-inc-if [2 1])

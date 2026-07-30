@@ -16,8 +16,11 @@
 ;; assign-step-3 / assign-pick-3 / apply-pick-3: pure step for fixed 3 nodes.
 ;; pick-fold-step: host-fold tournament for n>3 (0=none, 1=take challenger, 2=keep champ).
 ;; queue-inc-if: host updates one node's queue after pick.
-;; Guest ABI max arity 5: eligibility flags bit-packed into one i64.
-;;   flags bits: 1 has-engine | 2 has-checkpoint | 4 holds-checkpoint | 8 can-fetch
+;; T5.3 (schedule): eligibility is a [:record :schedule/eligibility …] with
+;; named :has-engine / :has-checkpoint / :holds-checkpoint / :can-fetch fields,
+;; not four bits packed into one i64. Records cross the KIR wire in both
+;; directions, so the host builds the record and passes it positionally --
+;; arity is 3, well under the max of 5, and nothing is bit-packed.
 ;; score is two i64 keys (queue, -free); better-score? compares lexicographically.
 ;; assign-step-3 result = pick-code-3 + 4 * pack3(nq0,nq1,nq2).
 ;; Parity: test/murakumo/infer_schedule_kotoba_parity_test.clj
@@ -25,16 +28,13 @@
 (defn rem64 [a :i64 b :i64] :i64
   (- a (* (quot a b) b)))
 
-(defn bit? [flags :i64 mask :i64] :i64
-  (if (= 0 (rem64 (quot flags mask) 2))
-    0
-    1))
-
-(defn eligible? [flags :i64 free-bytes :i64 min-free :i64] :i64
-  (let [has-engine (bit? flags 1)
-        has-ckpt (bit? flags 2)
-        holds (bit? flags 4)
-        can-fetch (bit? flags 8)
+(defn eligible? [e [:record :schedule/eligibility
+                     [[:has-engine :i64] [:has-checkpoint :i64]
+                      [:holds-checkpoint :i64] [:can-fetch :i64]]] free-bytes :i64 min-free :i64] :i64
+  (let [has-engine (record-get e :has-engine)
+        has-ckpt (record-get e :has-checkpoint)
+        holds (record-get e :holds-checkpoint)
+        can-fetch (record-get e :can-fetch)
         ckpt-ok (if (= has-ckpt 0)
                   1
                   (if (= holds 1)
@@ -62,9 +62,8 @@
       0
       (if (< f1 f2) 1 0))))
 
-(defn holds-warm? [flags :i64] :i64
-  ;; bit 4 = holds-checkpoint
-  (bit? flags 4))
+(defn holds-warm? [e [:record :schedule/eligibility [[:has-engine :i64] [:has-checkpoint :i64] [:holds-checkpoint :i64] [:can-fetch :i64]]]] :i64
+  (record-get e :holds-checkpoint))
 
 (defn prefer-warm-then-score [warm0 :i64 warm1 :i64 better01 :i64] :i64
   ;; both eligible. Return 0 or 1. better01=1 ⇒ node0 score strictly better.

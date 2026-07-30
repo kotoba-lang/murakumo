@@ -28,7 +28,14 @@
 
 ;; flags: 1 has-engine | 2 has-checkpoint | 4 holds-checkpoint | 8 can-fetch
 
-(defn- eligibility-flags [node model]
+(def ^:private eligibility-schema
+  "Guest descriptor for infer_schedule_core's eligibility record (T5.3).
+   Replaces the four bits that used to be packed into one i64."
+  [:record :schedule/eligibility
+   [[:has-engine :i64] [:has-checkpoint :i64]
+    [:holds-checkpoint :i64] [:can-fetch :i64]]])
+
+(defn- eligibility-fields [node model]
   (let [engine (:model/engine model)
         ckpt (:model/checkpoint model)
         engines (or (:engines node) #{})
@@ -37,7 +44,8 @@
         has-ckpt (if (nil? ckpt) 0 1)
         holds (if (and ckpt (contains? checkpoints ckpt)) 1 0)
         can-fetch (if (false? (:node/can-fetch? node)) 0 1)]
-    (+ has-engine (* 2 has-ckpt) (* 4 holds) (* 8 can-fetch))))
+    {:has-engine has-engine :has-checkpoint has-ckpt
+     :holds-checkpoint holds :can-fetch can-fetch}))
 
 (defn- mirror-eligible?
   [{:keys [engines checkpoints free-bytes] :as node} model]
@@ -48,12 +56,12 @@
        (>= (or free-bytes 0) (:model/min-free-bytes model 0))))
 
 (defn eligible?
-  "Can `node` run `model`? Kotoba eligible? with projected flags when ready."
+  "Can `node` run `model`? Kotoba eligible? with an eligibility record (T5.3)."
   [node model]
   (try-oracle
    #(= 1 (oracle/i64->host
           (o 'eligible?
-             [(oracle/as-i64 (eligibility-flags node model))
+             [(oracle/record eligibility-schema (eligibility-fields node model))
               (oracle/as-i64 (or (:free-bytes node) 0))
               (oracle/as-i64 (:model/min-free-bytes model 0))])))
    #(mirror-eligible? node model)))
