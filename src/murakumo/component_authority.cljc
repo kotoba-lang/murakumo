@@ -127,10 +127,10 @@
   (if-not (string? x)
     false
     (try-oracle
-     #(= 1 (oracle/i64->host
-            (o 'identifier-len-ok?
-               [(oracle/as-i64 (if (str/blank? x) 1 0))
-                (oracle/as-i64 (utf8-len x))])))
+     #(oracle/bool->host
+       (o 'identifier-len-ok?
+          [(boolean (str/blank? x))
+           (oracle/as-i64 (utf8-len x))]))
      #(mirror-identifier? x))))
 
 (defn- reject [reason message data]

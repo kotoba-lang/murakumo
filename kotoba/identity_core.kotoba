@@ -17,22 +17,22 @@
 ;; trim matches clojure.string/trim for space/tab/newline/cr.
 ;; Parity: test/murakumo/identity_kotoba_parity_test.clj
 
-(defn ws? [c :string] :i64
+(defn ws? [c :string] :bool
   (if (string=? c " ")
-    1
+    true
     (if (string=? c "\n")
-      1
+      true
       (if (string=? c "\t")
-        1
-        (if (string=? c "\r") 1 0)))))
+        true
+        (if (string=? c "\r") true false)))))
 
 (defn trim [s :string] :string
   (let [n (string-byte-length s)]
     (if (= n 0)
       s
-      (if (= (ws? (string-substring s 0 1)) 1)
+      (if (ws? (string-substring s 0 1))
         (trim (string-substring s 1 n))
-        (if (= (ws? (string-substring s (- n 1) n)) 1)
+        (if (ws? (string-substring s (- n 1) n))
           (trim (string-substring s 0 (- n 1)))
           s)))))
 

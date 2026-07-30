@@ -72,11 +72,13 @@
     (string-concat "-" (nat-str (- 0 n)))
     (nat-str n)))
 
-(defn blank? [s :string] :i64
-  (if (string=? s "") 1 0))
+(defn blank? [s :string] :bool
+  ;; Profile 5: real :bool (empty string only).
+  (if (string=? s "") true false))
 
-(defn operator-seed-missing? [seed :string] :i64
+(defn operator-seed-missing? [seed :string] :bool
   ;; cljc: (str/blank? (str operator-seed)) — empty after str
+  ;; Profile 5: :bool via blank?
   (blank? seed))
 
 (defn resolve-p2p-port [node-port [:option :i64]
@@ -203,22 +205,22 @@
     (peer-id-body-pattern)
     "' | sort -u | wc -l")))
 
-(defn ws? [c :string] :i64
+(defn ws? [c :string] :bool
   (if (string=? c " ")
-    1
+    true
     (if (string=? c "\n")
-      1
+      true
       (if (string=? c "\t")
-        1
-        (if (string=? c "\r") 1 0)))))
+        true
+        (if (string=? c "\r") true false)))))
 
 (defn trim [s :string] :string
   (let [n (string-byte-length s)]
     (if (= n 0)
       s
-      (if (= (ws? (string-substring s 0 1)) 1)
+      (if (ws? (string-substring s 0 1))
         (trim (string-substring s 1 n))
-        (if (= (ws? (string-substring s (- n 1) n)) 1)
+        (if (ws? (string-substring s (- n 1) n))
           (trim (string-substring s 0 (- n 1)))
           s)))))
 

@@ -167,7 +167,7 @@
   (filterv (fn [k]
              (let [v (str (get opts k))]
                (try-oracle
-                #(= 1 (oracle/i64->host (o 'blank? [v])))
+                #(oracle/bool->host (o 'blank? [v]))
                 #(mirror-blank? v))))
            required))
 

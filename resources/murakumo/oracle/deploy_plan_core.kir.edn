@@ -151,16 +151,16 @@
    :param-types [:string]}
   {:name ws?,
    :params [c],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (string=? c " ")
-    1
+    true
     (if
      (string=? c "\n")
-     1
-     (if (string=? c "\t") 1 (if (string=? c "\r") 1 0)))),
+     true
+     (if (string=? c "\t") true (if (string=? c "\r") true false)))),
    :param-types [:string]}
   {:name trim,
    :params [s],
@@ -173,10 +173,10 @@
      (= n 0)
      s
      (if
-      (= (ws? (string-substring s 0 1)) 1)
+      (ws? (string-substring s 0 1))
       (trim (string-substring s 1 n))
       (if
-       (= (ws? (string-substring s (- n 1) n)) 1)
+       (ws? (string-substring s (- n 1) n))
        (trim (string-substring s 0 (- n 1)))
        s)))),
    :param-types [:string]}
@@ -350,18 +350,18 @@
    :param-types []}
   {:name blank?,
    :params [s],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (let
     [n (string-byte-length s)]
     (if
      (= n 0)
-     1
+     true
      (if
-      (= (ws? (string-substring s 0 1)) 1)
+      (ws? (string-substring s 0 1))
       (blank? (string-substring s 1 n))
-      0))),
+      false))),
    :param-types [:string]}
   {:name trim-ws,
    :params [s],
@@ -466,19 +466,22 @@
    :param-types [:i64]}
   {:name absolute-unix-git-bin?,
    :params [p],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
-    (= (blank? p) 1)
-    0
+    (blank? p)
+    false
     (if
      (string=? p "git")
-     0
+     false
      (if
       (< (string-byte-length p) 1)
-      0
-      (if (string=? (string-substring p 0 1) (path-sep)) 1 0)))),
+      false
+      (if
+       (string=? (string-substring p 0 1) (path-sep))
+       true
+       false)))),
    :param-types [:string]}
   {:name cp-bin,
    :params [],
@@ -548,13 +551,13 @@
    :param-types []}
   {:name missing-manifest?,
    :params [manifest],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (blank? manifest),
    :param-types [:string]}
   {:name missing-operator-seed?,
    :params [operator-seed],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (blank? operator-seed),
    :param-types [:string]}

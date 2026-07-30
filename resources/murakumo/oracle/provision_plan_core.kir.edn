@@ -64,13 +64,13 @@
    :param-types [:i64]}
   {:name blank?,
    :params [s],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (string=? s "") 1 0),
+   :body (if (string=? s "") true false),
    :param-types [:string]}
   {:name operator-seed-missing?,
    :params [seed],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (blank? seed),
    :param-types [:string]}
@@ -269,16 +269,16 @@
    :param-types []}
   {:name ws?,
    :params [c],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (string=? c " ")
-    1
+    true
     (if
      (string=? c "\n")
-     1
-     (if (string=? c "\t") 1 (if (string=? c "\r") 1 0)))),
+     true
+     (if (string=? c "\t") true (if (string=? c "\r") true false)))),
    :param-types [:string]}
   {:name trim,
    :params [s],
@@ -291,10 +291,10 @@
      (= n 0)
      s
      (if
-      (= (ws? (string-substring s 0 1)) 1)
+      (ws? (string-substring s 0 1))
       (trim (string-substring s 1 n))
       (if
-       (= (ws? (string-substring s (- n 1) n)) 1)
+       (ws? (string-substring s (- n 1) n))
        (trim (string-substring s 0 (- n 1)))
        s)))),
    :param-types [:string]}
@@ -615,8 +615,8 @@
     [n (string-byte-length s) p (string-byte-length prefix)]
     (if
      (let
-      [or-tmp__10890 (= p 0)]
-      (if or-tmp__10890 or-tmp__10890 (> (+ i p) n)))
+      [or-tmp__11154 (= p 0)]
+      (if or-tmp__11154 or-tmp__11154 (> (+ i p) n)))
      -1
      (if
       (string=? (string-substring s i (+ i p)) prefix)
