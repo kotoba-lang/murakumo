@@ -1,12 +1,13 @@
 ;; murakumo.config — portable path/config resolution helpers.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-config-path-suffixes-pure-oracle +
-;; ADR-260728-w6-tunnel-config-oracle-authority):
-;; pure path-string helpers + path-suffix tokens DELEGATE to precompiled
-;; kotoba/config_core.kotoba → resources/murakumo/oracle/config_core.kir.edn
-;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
+;; W6 product-shell + T6.4: pure path-string helpers + path-suffix tokens require
+;; the shipped `:config` KIR on **every** platform. Host pure mirrors are gone —
+;; cljs/nbb must preload shipped KIR (resources/ via nbb cwd, register-kir!, or
+;; set-resource-loader!) before requiring this ns
+;; (ADR-260731-w6-t64-config-mirror-delete).
 ;; Host remains: EDN parse/IO, env map folds, filesystem existence probes.
-;; JVM load-time constants require shipped KIR (T6.4); cljs mirrors remain fallback when not ready.
+;; Residual: pinned-exists? params still 0/1 i64 in resolve-local-bin / kotoba-bin /
+;; resolve-wit-dir guest ABI (follow-up optional :bool).
 
 (ns murakumo.config
   (:require #?(:clj [clojure.edn :as edn]
@@ -16,160 +17,44 @@
 
 (def ^:private oid :config)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
 
-(defn- oracle-ready? []
-  (oracle/ready? oid))
+;; ── residual path suffix tokens (oracle SSoT) ────────────────────────
 
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
+(def kotoba-dir-suffix (o 'kotoba-dir-suffix []))
+(def bin-suffix (o 'bin-suffix []))
+(def release-bin-suffix (o 'release-bin-suffix []))
+(def wit-suffix (o 'wit-suffix []))
+(def runtime-wit-suffix (o 'runtime-wit-suffix []))
+(def kotoba-server-suffix (o 'kotoba-server-suffix []))
+(def kotoba-cli-suffix (o 'kotoba-cli-suffix []))
+(def build-edn-suffix (o 'build-edn-suffix []))
 
-(defn- oracle-str-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/call oid export []))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/call oid export [])
-         mirror)
-       (catch :default _
-         mirror))))
+;; ── dual-source constants → oracle-required ──────────────────────────
 
-;; ── host-mirror pure helpers ───────────────────────────────────────────
-
-(def ^:private mirror-default-fleet-path "fleet.edn")
-(def ^:private mirror-default-connect-path "connect.edn")
-(def ^:private mirror-default-cloud-path "cloud.edn")
-(def ^:private mirror-peers-path ".murakumo-peers.edn")
-(def ^:private mirror-launchd-template-path "deploy/com.murakumo.kotoba-mesh.plist.tmpl")
-(def ^:private mirror-default-cloud-url "https://api.murakumo.cloud")
-(def ^:private mirror-default-api-url "https://api.murakumo.cloud")
-(def ^:private mirror-default-text-backend-url "http://localhost:11434")
-(def ^:private mirror-default-image-checkpoint "animagine-xl-4.0.safetensors")
-(def ^:private mirror-default-infer-local-url "http://localhost:11434/v1")
-(def ^:private mirror-default-kotoba-cli-bin "kotoba")
-(def ^:private mirror-kotoba-dir-suffix
-  "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba")
-(def ^:private mirror-bin-suffix "/bin")
-(def ^:private mirror-release-bin-suffix
-  "/target/aarch64-apple-darwin/release")
-(def ^:private mirror-wit-suffix "/wit")
-(def ^:private mirror-runtime-wit-suffix "/crates/kotoba-runtime/wit")
-(def ^:private mirror-kotoba-server-suffix "/kotoba-server")
-(def ^:private mirror-kotoba-cli-suffix "/kotoba")
-(def ^:private mirror-build-edn-suffix "/BUILD.edn")
-
-;; ── residual path suffix tokens ──────────────────────────────────────
-
-(def kotoba-dir-suffix
-  (oracle-str-const 'kotoba-dir-suffix mirror-kotoba-dir-suffix))
-(def bin-suffix
-  (oracle-str-const 'bin-suffix mirror-bin-suffix))
-(def release-bin-suffix
-  (oracle-str-const 'release-bin-suffix mirror-release-bin-suffix))
-(def wit-suffix
-  (oracle-str-const 'wit-suffix mirror-wit-suffix))
-(def runtime-wit-suffix
-  (oracle-str-const 'runtime-wit-suffix mirror-runtime-wit-suffix))
-(def kotoba-server-suffix
-  (oracle-str-const 'kotoba-server-suffix mirror-kotoba-server-suffix))
-(def kotoba-cli-suffix
-  (oracle-str-const 'kotoba-cli-suffix mirror-kotoba-cli-suffix))
-(def build-edn-suffix
-  (oracle-str-const 'build-edn-suffix mirror-build-edn-suffix))
-
-(defn- mirror-default-kotoba-dir [home]
-  (str home kotoba-dir-suffix))
-
-(defn- mirror-pinned-bin-dir [user-dir]
-  (str user-dir bin-suffix))
-
-(defn- mirror-release-bin-dir [kotoba-dir]
-  (str kotoba-dir release-bin-suffix))
-
-(defn- mirror-kotoba-server-bin [bin-dir]
-  (str bin-dir kotoba-server-suffix))
-
-(defn- mirror-local-kotoba-bin [bin-dir]
-  (str bin-dir kotoba-cli-suffix))
-
-(defn- mirror-pinned-wit-dir [user-dir]
-  (str (mirror-pinned-bin-dir user-dir) wit-suffix))
-
-(defn- mirror-runtime-wit-dir [kotoba-dir]
-  (str kotoba-dir runtime-wit-suffix))
-
-(defn- mirror-build-manifest-path [user-dir]
-  (str (mirror-pinned-bin-dir user-dir) build-edn-suffix))
-
-(defn- mirror-kotoba-bin [user-dir pinned-exists?]
-  (if pinned-exists?
-    (str (mirror-pinned-bin-dir user-dir) kotoba-cli-suffix)
-    mirror-default-kotoba-cli-bin))
-
-(defn- mirror-resolve-local-bin [env user-dir kotoba-dir pinned-exists?]
-  (cond
-    pinned-exists? (mirror-pinned-bin-dir user-dir)
-    (get env "MURAKUMO_BIN") (get env "MURAKUMO_BIN")
-    :else (mirror-release-bin-dir kotoba-dir)))
-
-(defn- mirror-resolve-wit-dir [user-dir kotoba-dir pinned-wit-exists?]
-  (if pinned-wit-exists?
-    (mirror-pinned-wit-dir user-dir)
-    (mirror-runtime-wit-dir kotoba-dir)))
-
-;; ── dual-source constants ──────────────────────────────────────────────
-
-(def default-fleet-path
-  (oracle-str-const 'default-fleet-path mirror-default-fleet-path))
-
-(def default-connect-path
-  (oracle-str-const 'default-connect-path mirror-default-connect-path))
-
-(def default-cloud-path
-  (oracle-str-const 'default-cloud-path mirror-default-cloud-path))
-
+(def default-fleet-path (o 'default-fleet-path []))
+(def default-connect-path (o 'default-connect-path []))
+(def default-cloud-path (o 'default-cloud-path []))
 (defn default-kotoba-dir
   "Default sibling kotoba checkout location under a user home.
-   Kotoba `default-kotoba-dir` when oracle ready."
+   Kotoba `default-kotoba-dir` (required)."
   [home]
-  (try-oracle
-   #(o 'default-kotoba-dir [(str (or home ""))])
-   #(mirror-default-kotoba-dir home)))
+  (o 'default-kotoba-dir [(str (or home ""))]))
 
 (defn kotoba-dir
   "Resolve the kotoba checkout directory from env.
-   Kotoba `kotoba-dir-from` when oracle ready.
+   Kotoba `kotoba-dir-from` (required).
    Uses oracle/call-record (T5.2 structural host map → positional guest args)."
   [env]
-  (try-oracle
-   #(oracle/call-record
-     oid 'kotoba-dir-from
-     env
-     [["MURAKUMO_KOTOBA_DIR" :string]
-      ["HOME" :string]])
-   #(or (get env "MURAKUMO_KOTOBA_DIR")
-        (mirror-default-kotoba-dir (get env "HOME")))))
+  (oracle/call-record
+   oid 'kotoba-dir-from
+   env
+   [["MURAKUMO_KOTOBA_DIR" :string]
+    ["HOME" :string]]))
 
 (defn operator-seed-env-keys
   "Env keys consulted for the fleet operator seed, in preference order."
@@ -282,86 +167,62 @@
   (env-values getenv runtime-env-keys))
 
 (defn pinned-bin-dir [user-dir]
-  (try-oracle
-   #(o 'pinned-bin-dir [(str user-dir)])
-   #(mirror-pinned-bin-dir user-dir)))
+  (o 'pinned-bin-dir [(str user-dir)]))
 
 (defn release-bin-dir [kotoba-dir]
-  (try-oracle
-   #(o 'release-bin-dir [(str kotoba-dir)])
-   #(mirror-release-bin-dir kotoba-dir)))
+  (o 'release-bin-dir [(str kotoba-dir)]))
 
 (defn resolve-local-bin
   "Resolve the binary dir preference order.
 
    `pinned-exists?` is supplied by the host shell after checking for the pinned
-   kotoba-server binary. Kotoba `resolve-local-bin` when oracle ready."
+   kotoba-server binary. Kotoba `resolve-local-bin` (required)."
   [env user-dir kotoba-dir pinned-exists?]
-  (try-oracle
-   #(o 'resolve-local-bin
-       [(str user-dir)
-        (str kotoba-dir)
-        (oracle/as-i64 (if pinned-exists? 1 0))
-        (str (or (get env "MURAKUMO_BIN") ""))])
-   #(mirror-resolve-local-bin env user-dir kotoba-dir pinned-exists?)))
+  (o 'resolve-local-bin
+     [(str user-dir)
+      (str kotoba-dir)
+      (oracle/as-i64 (if pinned-exists? 1 0))
+      (str (or (get env "MURAKUMO_BIN") ""))]))
 
 (defn kotoba-bin
   "kotoba CLI executable path, falling back to PATH lookup when no pinned binary exists.
-   Kotoba `kotoba-bin` when oracle ready."
+   Kotoba `kotoba-bin` (required)."
   [user-dir pinned-exists?]
-  (try-oracle
-   #(o 'kotoba-bin [(str user-dir) (oracle/as-i64 (if pinned-exists? 1 0))])
-   #(mirror-kotoba-bin user-dir pinned-exists?)))
+  (o 'kotoba-bin [(str user-dir) (oracle/as-i64 (if pinned-exists? 1 0))]))
 
 (defn kotoba-server-bin [bin-dir]
-  (try-oracle
-   #(o 'kotoba-server-bin [(str bin-dir)])
-   #(mirror-kotoba-server-bin bin-dir)))
+  (o 'kotoba-server-bin [(str bin-dir)]))
 
 (defn local-kotoba-bin [bin-dir]
-  (try-oracle
-   #(o 'local-kotoba-bin [(str bin-dir)])
-   #(mirror-local-kotoba-bin bin-dir)))
+  (o 'local-kotoba-bin [(str bin-dir)]))
 
 (defn pinned-wit-dir [user-dir]
-  (try-oracle
-   #(o 'pinned-wit-dir [(str user-dir)])
-   #(mirror-pinned-wit-dir user-dir)))
+  (o 'pinned-wit-dir [(str user-dir)]))
 
 (defn runtime-wit-dir [kotoba-dir]
-  (try-oracle
-   #(o 'runtime-wit-dir [(str kotoba-dir)])
-   #(mirror-runtime-wit-dir kotoba-dir)))
+  (o 'runtime-wit-dir [(str kotoba-dir)]))
 
 (defn resolve-wit-dir
   "Resolve deploy WIT dir from pinned WIT existence.
-   Kotoba `resolve-wit-dir` when oracle ready."
+   Kotoba `resolve-wit-dir` (required)."
   [user-dir kotoba-dir pinned-wit-exists?]
-  (try-oracle
-   #(o 'resolve-wit-dir
-       [(str user-dir)
-        (str kotoba-dir)
-        (oracle/as-i64 (if pinned-wit-exists? 1 0))])
-   #(mirror-resolve-wit-dir user-dir kotoba-dir pinned-wit-exists?)))
+  (o 'resolve-wit-dir
+     [(str user-dir)
+      (str kotoba-dir)
+      (oracle/as-i64 (if pinned-wit-exists? 1 0))]))
 
 (defn build-manifest-path [user-dir]
-  (try-oracle
-   #(o 'build-manifest-path [(str user-dir)])
-   #(mirror-build-manifest-path user-dir)))
+  (o 'build-manifest-path [(str user-dir)]))
 
 (defn peers-path
   "Control-plane peer-id cache path under the repo root."
   [_user-dir]
-  (try-oracle
-   #(o 'peers-path [])
-   (fn [] mirror-peers-path)))
+  (o 'peers-path []))
 
 (defn launchd-template-path
   "Resident LaunchDaemon template path under the repo root."
   [_user-dir]
-  (try-oracle
-   #(o 'launchd-template-path [])
-   (fn [] mirror-launchd-template-path)))
+  (o 'launchd-template-path []))
 
 (defn runtime-probe-paths
   "Paths the host shell should check before building a runtime-context."
@@ -429,37 +290,37 @@
 ;; Delivery residual shells: inject getenv for tests; process defaults use
 ;; System/getenv for exact names only (no ambient env dump). Secrets stay on
 ;; murakumo.secret named fetch. Policy: w6-secret-getenv-audit.md.
-;; Default URL/string constants dual-source via config_core (kotoba SSoT).
+;; Default URL/string constants via config_core (kotoba SSoT, required).
 
 (def default-cloud-url
   "Public murakumo cloud API base (config URL, not a secret).
-   Kotoba `default-cloud-url` when oracle ready."
-  (oracle-str-const 'default-cloud-url mirror-default-cloud-url))
+   Kotoba `default-cloud-url` (required)."
+  (o 'default-cloud-url []))
 
 (def default-api-url
   "Alias base for metrics/model-map push (same default as cloud-url).
-   Kotoba `default-api-url` when oracle ready."
-  (oracle-str-const 'default-api-url mirror-default-api-url))
+   Kotoba `default-api-url` (required)."
+  (o 'default-api-url []))
 
 (def default-text-backend-url
   "OpenAI-compatible text backend for infer gateway proxy.
-   Kotoba `default-text-backend-url` when oracle ready."
-  (oracle-str-const 'default-text-backend-url mirror-default-text-backend-url))
+   Kotoba `default-text-backend-url` (required)."
+  (o 'default-text-backend-url []))
 
 (def default-image-checkpoint
   "Default ComfyUI txt2img checkpoint filename.
-   Kotoba `default-image-checkpoint` when oracle ready."
-  (oracle-str-const 'default-image-checkpoint mirror-default-image-checkpoint))
+   Kotoba `default-image-checkpoint` (required)."
+  (o 'default-image-checkpoint []))
 
 (def default-infer-local-url
   "Local OpenAI-compatible base for infer join/relay-worker.
-   Kotoba `default-infer-local-url` when oracle ready."
-  (oracle-str-const 'default-infer-local-url mirror-default-infer-local-url))
+   Kotoba `default-infer-local-url` (required)."
+  (o 'default-infer-local-url []))
 
 (def default-kotoba-cli-bin
   "Bare kotoba CLI name for PATH hosts (prefer absolute pin).
-   Kotoba `default-kotoba-cli-bin` when oracle ready."
-  (oracle-str-const 'default-kotoba-cli-bin mirror-default-kotoba-cli-bin))
+   Kotoba `default-kotoba-cli-bin` (required)."
+  (o 'default-kotoba-cli-bin []))
 
 (def ops-config-keys
   "Exact env names read by residual ops shells (config only, not secrets)."
