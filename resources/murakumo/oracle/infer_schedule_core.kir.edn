@@ -1,1 +1,582 @@
-{:format :kotoba.kir/v4, :signature nil, :functions [{:name eligible?, :params [e free-bytes min-free], :result :bool, :effects #{}, :body (if (record-get [:record :schedule/eligibility [[:has-engine :bool] [:has-checkpoint :bool] [:holds-checkpoint :bool] [:can-fetch :bool]]] e :has-engine) (if (if (record-get [:record :schedule/eligibility [[:has-engine :bool] [:has-checkpoint :bool] [:holds-checkpoint :bool] [:can-fetch :bool]]] e :has-checkpoint) (if (record-get [:record :schedule/eligibility [[:has-engine :bool] [:has-checkpoint :bool] [:holds-checkpoint :bool] [:can-fetch :bool]]] e :holds-checkpoint) true (record-get [:record :schedule/eligibility [[:has-engine :bool] [:has-checkpoint :bool] [:holds-checkpoint :bool] [:can-fetch :bool]]] e :can-fetch)) true) (if (>= free-bytes min-free) true false) false) false), :param-types [[:ref :schedule/eligibility] :i64 :i64]} {:name score-queue, :params [queue], :result :i64, :effects #{}, :body (if (< queue 0) 0 queue), :param-types [:i64]} {:name score-free, :params [free-bytes], :result :i64, :effects #{}, :body (if (< free-bytes 0) 0 (- 0 free-bytes)), :param-types [:i64]} {:name better-score?, :params [q1 f1 q2 f2], :result :i64, :effects #{}, :body (if (< q1 q2) 1 (if (< q2 q1) 0 (if (< f1 f2) 1 0))), :param-types [:i64 :i64 :i64 :i64]} {:name holds-warm?, :params [e], :result :bool, :effects #{}, :body (record-get [:record :schedule/eligibility [[:has-engine :bool] [:has-checkpoint :bool] [:holds-checkpoint :bool] [:can-fetch :bool]]] e :holds-checkpoint), :param-types [[:ref :schedule/eligibility]]} {:name prefer-warm-then-score, :params [warm0 warm1 better01], :result :i64, :effects #{}, :body (if (if (= warm0 1) (if (= warm1 0) 1 0) 0) 0 (if (if (= warm1 1) (if (= warm0 0) 1 0) 0) 1 (if (= better01 1) 0 1))), :param-types [:i64 :i64 :i64]} {:name pick-idx-2-full, :params [ok0 ok1 warm0 warm1 better01], :result :i64, :effects #{}, :body (if (= ok0 0) (if (= ok1 0) -1 1) (if (= ok1 0) 0 (prefer-warm-then-score warm0 warm1 better01))), :param-types [:i64 :i64 :i64 :i64 :i64]} {:name pick-idx-3-tournament, :params [champ01 ok2 warm-champ warm2 better-champ-2], :result :i64, :effects #{}, :body (if (< champ01 0) (if (= ok2 0) -1 2) (if (= ok2 0) champ01 (if (= (prefer-warm-then-score warm-champ warm2 better-champ-2) 0) champ01 2))), :param-types [:i64 :i64 :i64 :i64 :i64]} {:name queue-after-assign, :params [queue picked], :result :i64, :effects #{}, :body (if (= picked 0) (if (< queue 0) 0 queue) (if (< queue 0) 1 (+ queue 1))), :param-types [:i64 :i64]} {:name pick-code, :params [pick-idx], :result :i64, :effects #{}, :body (if (< pick-idx 0) 0 (+ pick-idx 1)), :param-types [:i64]} {:name better2-record, :params [warm0 warm1 better01], :result [:ref :schedule/better2], :effects #{}, :body (record-new [:record :schedule/better2 [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]] warm0 warm1 better01), :param-types [:i64 :i64 :i64]} {:name assign-step-2, :params [q0 q1 ok0 ok1 better], :result [:ref :schedule/assign2], :effects #{}, :body (let [warm0 (record-get [:record :schedule/better2 [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]] better :warm0) warm1 (record-get [:record :schedule/better2 [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]] better :warm1) better01 (record-get [:record :schedule/better2 [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]] better :better01) p (pick-idx-2-full ok0 ok1 warm0 warm1 better01) code (pick-code p) nq0 (queue-after-assign q0 (if (= p 0) 1 0)) nq1 (queue-after-assign q1 (if (= p 1) 1 0))] (record-new [:record :schedule/assign2 [[:code :i64] [:q0 :i64] [:q1 :i64]]] code nq0 nq1)), :param-types [:i64 :i64 :i64 :i64 [:ref :schedule/better2]]} {:name assign-result-pick, :params [result], :result :i64, :effects #{}, :body (record-get [:record :schedule/assign2 [[:code :i64] [:q0 :i64] [:q1 :i64]]] result :code), :param-types [[:ref :schedule/assign2]]} {:name assign-result-q0, :params [result], :result :i64, :effects #{}, :body (record-get [:record :schedule/assign2 [[:code :i64] [:q0 :i64] [:q1 :i64]]] result :q0), :param-types [[:ref :schedule/assign2]]} {:name assign-result-q1, :params [result], :result :i64, :effects #{}, :body (record-get [:record :schedule/assign2 [[:code :i64] [:q0 :i64] [:q1 :i64]]] result :q1), :param-types [[:ref :schedule/assign2]]} {:name better-from-queues, :params [q0 f0 q1 f1], :result :i64, :effects #{}, :body (better-score? (score-queue q0) (score-free f0) (score-queue q1) (score-free f1)), :param-types [:i64 :i64 :i64 :i64]} {:name triple-record, :params [v0 v1 v2], :result [:ref :schedule/triple], :effects #{}, :body (record-new [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] v0 v1 v2), :param-types [:i64 :i64 :i64]} {:name triple-v0, :params [t], :result :i64, :effects #{}, :body (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] t :v0), :param-types [[:ref :schedule/triple]]} {:name triple-v1, :params [t], :result :i64, :effects #{}, :body (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] t :v1), :param-types [[:ref :schedule/triple]]} {:name triple-v2, :params [t], :result :i64, :effects #{}, :body (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] t :v2), :param-types [[:ref :schedule/triple]]} {:name better3-record, :params [b01 b02 b12], :result [:ref :schedule/better3], :effects #{}, :body (record-new [:record :schedule/better3 [[:b01 :i64] [:b02 :i64] [:b12 :i64]]] b01 b02 b12), :param-types [:i64 :i64 :i64]} {:name pick-code-3, :params [pick-idx], :result :i64, :effects #{}, :body (if (< pick-idx 0) 0 (+ pick-idx 1)), :param-types [:i64]} {:name better-pair, :params [q-a f-a q-b f-b], :result :i64, :effects #{}, :body (better-from-queues q-a f-a q-b f-b), :param-types [:i64 :i64 :i64 :i64]} {:name assign-pick-3, :params [ok warm better], :result :i64, :effects #{}, :body (let [ok0 (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] ok :v0) ok1 (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] ok :v1) ok2 (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] ok :v2) warm0 (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] warm :v0) warm1 (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] warm :v1) warm2 (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] warm :v2) better01 (record-get [:record :schedule/better3 [[:b01 :i64] [:b02 :i64] [:b12 :i64]]] better :b01) better02 (record-get [:record :schedule/better3 [[:b01 :i64] [:b02 :i64] [:b12 :i64]]] better :b02) better12 (record-get [:record :schedule/better3 [[:b01 :i64] [:b02 :i64] [:b12 :i64]]] better :b12) champ (pick-idx-2-full ok0 ok1 warm0 warm1 better01) warm-champ (if (= champ 0) warm0 (if (= champ 1) warm1 0)) better-c2 (if (= champ 0) better02 better12)] (pick-idx-3-tournament champ ok2 warm-champ warm2 better-c2)), :param-types [[:ref :schedule/triple] [:ref :schedule/triple] [:ref :schedule/better3]]} {:name apply-pick-3, :params [q pick], :result [:ref :schedule/triple], :effects #{}, :body (let [q0 (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] q :v0) q1 (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] q :v1) q2 (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] q :v2) nq0 (queue-after-assign q0 (if (= pick 0) 1 0)) nq1 (queue-after-assign q1 (if (= pick 1) 1 0)) nq2 (queue-after-assign q2 (if (= pick 2) 1 0))] (record-new [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] nq0 nq1 nq2)), :param-types [[:ref :schedule/triple] :i64]} {:name assign-step-3, :params [q ok warm better], :result [:ref :schedule/assign3], :effects #{}, :body (let [p (assign-pick-3 ok warm better) code (pick-code-3 p) nq (apply-pick-3 q p)] (record-new [:record :schedule/assign3 [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]] code (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] nq :v0) (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] nq :v1) (record-get [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]] nq :v2))), :param-types [[:ref :schedule/triple] [:ref :schedule/triple] [:ref :schedule/triple] [:ref :schedule/better3]]} {:name assign-step-3-code, :params [result], :result :i64, :effects #{}, :body (record-get [:record :schedule/assign3 [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]] result :code), :param-types [[:ref :schedule/assign3]]} {:name assign-step-3-q0, :params [result], :result :i64, :effects #{}, :body (record-get [:record :schedule/assign3 [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]] result :q0), :param-types [[:ref :schedule/assign3]]} {:name assign-step-3-q1, :params [result], :result :i64, :effects #{}, :body (record-get [:record :schedule/assign3 [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]] result :q1), :param-types [[:ref :schedule/assign3]]} {:name assign-step-3-q2, :params [result], :result :i64, :effects #{}, :body (record-get [:record :schedule/assign3 [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]] result :q2), :param-types [[:ref :schedule/assign3]]} {:name pick-fold-step, :params [champ ok-i warm-champ warm-i better-c-i], :result :i64, :effects #{}, :body (let [binding-some__1 champ] (if (option-some?-of [:option :i64] binding-some__1) (let [_ (option-value-of [:option :i64] binding-some__1 0)] (if (= ok-i 0) 2 (if (= (prefer-warm-then-score warm-champ warm-i better-c-i) 0) 2 1))) (if (= ok-i 0) 0 1))), :param-types [[:option :i64] :i64 :i64 :i64 :i64]} {:name queue-inc-if, :params [queue picked], :result :i64, :effects #{}, :body (queue-after-assign queue picked), :param-types [:i64 :i64]}], :oracle-value nil, :schema-identities #:schedule{:assign2 "d702a26b22201acb0b0c6d2e3b81c8b93d20865141f2eef773d62e639d65df00", :assign3 "2c6e69e0b545e5af5fed5d22e50a9b125522e2effc4dcafb71a8f4d51aa6511a", :better2 "fb88a88dc1f566dc13dfb669fc21e411601c0561a723700ecfc6141dd3b24795", :better3 "6c3b105384625cb123f6574b6bb9bd70493d83dd8b47a53554d35ecaa4f93964", :eligibility "bb60f3f7502734eb89021f3656c1d49c5e4b1c4bad91faf0f1fc7c91c5ab8975", :triple "39090f42b1133baf19170e0a5f6214451001a31da1002e561b378d528d7496da"}, :exports [eligible? score-queue score-free better-score? holds-warm? prefer-warm-then-score pick-idx-2-full pick-idx-3-tournament queue-after-assign pick-code better2-record assign-step-2 assign-result-pick assign-result-q0 assign-result-q1 better-from-queues triple-record triple-v0 triple-v1 triple-v2 better3-record pick-code-3 assign-pick-3 apply-pick-3 assign-step-3 assign-step-3-code assign-step-3-q0 assign-step-3-q1 assign-step-3-q2 better-pair pick-fold-step queue-inc-if], :schemas #:schedule{:eligibility [:record :schedule/eligibility [[:has-engine :bool] [:has-checkpoint :bool] [:holds-checkpoint :bool] [:can-fetch :bool]]], :better2 [:record :schedule/better2 [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]], :assign2 [:record :schedule/assign2 [[:code :i64] [:q0 :i64] [:q1 :i64]]], :triple [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]], :better3 [:record :schedule/better3 [[:b01 :i64] [:b02 :i64] [:b12 :i64]]], :assign3 [:record :schedule/assign3 [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]]}, :effects #{}, :blocks [], :entry nil}
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name eligible?,
+   :params [e free-bytes min-free],
+   :result :bool,
+   :effects #{},
+   :body
+   (if
+    (record-get
+     [:record
+      :schedule/eligibility
+      [[:has-engine :bool]
+       [:has-checkpoint :bool]
+       [:holds-checkpoint :bool]
+       [:can-fetch :bool]]]
+     e
+     :has-engine)
+    (if
+     (if
+      (record-get
+       [:record
+        :schedule/eligibility
+        [[:has-engine :bool]
+         [:has-checkpoint :bool]
+         [:holds-checkpoint :bool]
+         [:can-fetch :bool]]]
+       e
+       :has-checkpoint)
+      (if
+       (record-get
+        [:record
+         :schedule/eligibility
+         [[:has-engine :bool]
+          [:has-checkpoint :bool]
+          [:holds-checkpoint :bool]
+          [:can-fetch :bool]]]
+        e
+        :holds-checkpoint)
+       true
+       (record-get
+        [:record
+         :schedule/eligibility
+         [[:has-engine :bool]
+          [:has-checkpoint :bool]
+          [:holds-checkpoint :bool]
+          [:can-fetch :bool]]]
+        e
+        :can-fetch))
+      true)
+     (if (>= free-bytes min-free) true false)
+     false)
+    false),
+   :param-types [[:ref :schedule/eligibility] :i64 :i64]}
+  {:name score-queue,
+   :params [queue],
+   :result :i64,
+   :effects #{},
+   :body (if (< queue 0) 0 queue),
+   :param-types [:i64]}
+  {:name score-free,
+   :params [free-bytes],
+   :result :i64,
+   :effects #{},
+   :body (if (< free-bytes 0) 0 (- 0 free-bytes)),
+   :param-types [:i64]}
+  {:name better-score?,
+   :params [q1 f1 q2 f2],
+   :result :i64,
+   :effects #{},
+   :body (if (< q1 q2) 1 (if (< q2 q1) 0 (if (< f1 f2) 1 0))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name holds-warm?,
+   :params [e],
+   :result :bool,
+   :effects #{},
+   :body
+   (record-get
+    [:record
+     :schedule/eligibility
+     [[:has-engine :bool]
+      [:has-checkpoint :bool]
+      [:holds-checkpoint :bool]
+      [:can-fetch :bool]]]
+    e
+    :holds-checkpoint),
+   :param-types [[:ref :schedule/eligibility]]}
+  {:name prefer-warm-then-score,
+   :params [warm0 warm1 better01],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (if (= warm0 1) (if (= warm1 0) 1 0) 0)
+    0
+    (if
+     (if (= warm1 1) (if (= warm0 0) 1 0) 0)
+     1
+     (if (= better01 1) 0 1))),
+   :param-types [:i64 :i64 :i64]}
+  {:name pick-idx-2-full,
+   :params [ok0 ok1 warm0 warm1 better01],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= ok0 0)
+    (if (= ok1 0) -1 1)
+    (if (= ok1 0) 0 (prefer-warm-then-score warm0 warm1 better01))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name pick-idx-3-tournament,
+   :params [champ01 ok2 warm-champ warm2 better-champ-2],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< champ01 0)
+    (if (= ok2 0) -1 2)
+    (if
+     (= ok2 0)
+     champ01
+     (if
+      (= (prefer-warm-then-score warm-champ warm2 better-champ-2) 0)
+      champ01
+      2))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name queue-after-assign,
+   :params [queue picked],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= picked 0)
+    (if (< queue 0) 0 queue)
+    (if (< queue 0) 1 (+ queue 1))),
+   :param-types [:i64 :i64]}
+  {:name pick-code,
+   :params [pick-idx],
+   :result :i64,
+   :effects #{},
+   :body (if (< pick-idx 0) 0 (+ pick-idx 1)),
+   :param-types [:i64]}
+  {:name better2-record,
+   :params [warm0 warm1 better01],
+   :result [:ref :schedule/better2],
+   :effects #{},
+   :body
+   (record-new
+    [:record
+     :schedule/better2
+     [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]]
+    warm0
+    warm1
+    better01),
+   :param-types [:i64 :i64 :i64]}
+  {:name assign-step-2,
+   :params [q0 q1 ok0 ok1 better],
+   :result [:ref :schedule/assign2],
+   :effects #{},
+   :body
+   (let
+    [warm0
+     (record-get
+      [:record
+       :schedule/better2
+       [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]]
+      better
+      :warm0)
+     warm1
+     (record-get
+      [:record
+       :schedule/better2
+       [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]]
+      better
+      :warm1)
+     better01
+     (record-get
+      [:record
+       :schedule/better2
+       [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]]
+      better
+      :better01)
+     p
+     (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
+     code
+     (pick-code p)
+     nq0
+     (queue-after-assign q0 (if (= p 0) 1 0))
+     nq1
+     (queue-after-assign q1 (if (= p 1) 1 0))]
+    (record-new
+     [:record :schedule/assign2 [[:code :i64] [:q0 :i64] [:q1 :i64]]]
+     code
+     nq0
+     nq1)),
+   :param-types [:i64 :i64 :i64 :i64 [:ref :schedule/better2]]}
+  {:name assign-result-pick,
+   :params [result],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record :schedule/assign2 [[:code :i64] [:q0 :i64] [:q1 :i64]]]
+    result
+    :code),
+   :param-types [[:ref :schedule/assign2]]}
+  {:name assign-result-q0,
+   :params [result],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record :schedule/assign2 [[:code :i64] [:q0 :i64] [:q1 :i64]]]
+    result
+    :q0),
+   :param-types [[:ref :schedule/assign2]]}
+  {:name assign-result-q1,
+   :params [result],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record :schedule/assign2 [[:code :i64] [:q0 :i64] [:q1 :i64]]]
+    result
+    :q1),
+   :param-types [[:ref :schedule/assign2]]}
+  {:name better-from-queues,
+   :params [q0 f0 q1 f1],
+   :result :i64,
+   :effects #{},
+   :body
+   (better-score?
+    (score-queue q0)
+    (score-free f0)
+    (score-queue q1)
+    (score-free f1)),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name triple-record,
+   :params [v0 v1 v2],
+   :result [:ref :schedule/triple],
+   :effects #{},
+   :body
+   (record-new
+    [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+    v0
+    v1
+    v2),
+   :param-types [:i64 :i64 :i64]}
+  {:name triple-v0,
+   :params [t],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+    t
+    :v0),
+   :param-types [[:ref :schedule/triple]]}
+  {:name triple-v1,
+   :params [t],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+    t
+    :v1),
+   :param-types [[:ref :schedule/triple]]}
+  {:name triple-v2,
+   :params [t],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+    t
+    :v2),
+   :param-types [[:ref :schedule/triple]]}
+  {:name better3-record,
+   :params [b01 b02 b12],
+   :result [:ref :schedule/better3],
+   :effects #{},
+   :body
+   (record-new
+    [:record :schedule/better3 [[:b01 :i64] [:b02 :i64] [:b12 :i64]]]
+    b01
+    b02
+    b12),
+   :param-types [:i64 :i64 :i64]}
+  {:name pick-code-3,
+   :params [pick-idx],
+   :result :i64,
+   :effects #{},
+   :body (if (< pick-idx 0) 0 (+ pick-idx 1)),
+   :param-types [:i64]}
+  {:name better-pair,
+   :params [q-a f-a q-b f-b],
+   :result :i64,
+   :effects #{},
+   :body (better-from-queues q-a f-a q-b f-b),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name assign-pick-3,
+   :params [ok warm better],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [ok0
+     (record-get
+      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+      ok
+      :v0)
+     ok1
+     (record-get
+      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+      ok
+      :v1)
+     ok2
+     (record-get
+      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+      ok
+      :v2)
+     warm0
+     (record-get
+      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+      warm
+      :v0)
+     warm1
+     (record-get
+      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+      warm
+      :v1)
+     warm2
+     (record-get
+      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+      warm
+      :v2)
+     better01
+     (record-get
+      [:record :schedule/better3 [[:b01 :i64] [:b02 :i64] [:b12 :i64]]]
+      better
+      :b01)
+     better02
+     (record-get
+      [:record :schedule/better3 [[:b01 :i64] [:b02 :i64] [:b12 :i64]]]
+      better
+      :b02)
+     better12
+     (record-get
+      [:record :schedule/better3 [[:b01 :i64] [:b02 :i64] [:b12 :i64]]]
+      better
+      :b12)
+     champ
+     (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
+     warm-champ
+     (if (= champ 0) warm0 (if (= champ 1) warm1 0))
+     better-c2
+     (if (= champ 0) better02 better12)]
+    (pick-idx-3-tournament champ ok2 warm-champ warm2 better-c2)),
+   :param-types
+   [[:ref :schedule/triple]
+    [:ref :schedule/triple]
+    [:ref :schedule/better3]]}
+  {:name apply-pick-3,
+   :params [q pick],
+   :result [:ref :schedule/triple],
+   :effects #{},
+   :body
+   (let
+    [q0
+     (record-get
+      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+      q
+      :v0)
+     q1
+     (record-get
+      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+      q
+      :v1)
+     q2
+     (record-get
+      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+      q
+      :v2)
+     nq0
+     (queue-after-assign q0 (if (= pick 0) 1 0))
+     nq1
+     (queue-after-assign q1 (if (= pick 1) 1 0))
+     nq2
+     (queue-after-assign q2 (if (= pick 2) 1 0))]
+    (record-new
+     [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+     nq0
+     nq1
+     nq2)),
+   :param-types [[:ref :schedule/triple] :i64]}
+  {:name assign-step-3,
+   :params [q ok warm better],
+   :result [:ref :schedule/assign3],
+   :effects #{},
+   :body
+   (let
+    [p
+     (assign-pick-3 ok warm better)
+     code
+     (pick-code-3 p)
+     nq
+     (apply-pick-3 q p)]
+    (record-new
+     [:record
+      :schedule/assign3
+      [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]]
+     code
+     (record-get
+      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+      nq
+      :v0)
+     (record-get
+      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+      nq
+      :v1)
+     (record-get
+      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+      nq
+      :v2))),
+   :param-types
+   [[:ref :schedule/triple]
+    [:ref :schedule/triple]
+    [:ref :schedule/triple]
+    [:ref :schedule/better3]]}
+  {:name assign-step-3-code,
+   :params [result],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record
+     :schedule/assign3
+     [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]]
+    result
+    :code),
+   :param-types [[:ref :schedule/assign3]]}
+  {:name assign-step-3-q0,
+   :params [result],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record
+     :schedule/assign3
+     [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]]
+    result
+    :q0),
+   :param-types [[:ref :schedule/assign3]]}
+  {:name assign-step-3-q1,
+   :params [result],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record
+     :schedule/assign3
+     [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]]
+    result
+    :q1),
+   :param-types [[:ref :schedule/assign3]]}
+  {:name assign-step-3-q2,
+   :params [result],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record
+     :schedule/assign3
+     [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]]
+    result
+    :q2),
+   :param-types [[:ref :schedule/assign3]]}
+  {:name pick-fold-step,
+   :params [champ ok-i warm-champ warm-i better-c-i],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [binding-some__1 champ]
+    (if
+     (option-some?-of [:option :i64] binding-some__1)
+     (let
+      [_ (option-value-of [:option :i64] binding-some__1 0)]
+      (if
+       (= ok-i 0)
+       2
+       (if
+        (= (prefer-warm-then-score warm-champ warm-i better-c-i) 0)
+        2
+        1)))
+     (if (= ok-i 0) 0 1))),
+   :param-types [[:option :i64] :i64 :i64 :i64 :i64]}
+  {:name queue-inc-if,
+   :params [queue picked],
+   :result :i64,
+   :effects #{},
+   :body (queue-after-assign queue picked),
+   :param-types [:i64 :i64]}],
+ :oracle-value nil,
+ :schema-identities
+ #:schedule{:assign2
+            "d702a26b22201acb0b0c6d2e3b81c8b93d20865141f2eef773d62e639d65df00",
+            :assign3
+            "2c6e69e0b545e5af5fed5d22e50a9b125522e2effc4dcafb71a8f4d51aa6511a",
+            :better2
+            "fb88a88dc1f566dc13dfb669fc21e411601c0561a723700ecfc6141dd3b24795",
+            :better3
+            "6c3b105384625cb123f6574b6bb9bd70493d83dd8b47a53554d35ecaa4f93964",
+            :eligibility
+            "bb60f3f7502734eb89021f3656c1d49c5e4b1c4bad91faf0f1fc7c91c5ab8975",
+            :triple
+            "39090f42b1133baf19170e0a5f6214451001a31da1002e561b378d528d7496da"},
+ :exports
+ [eligible?
+  score-queue
+  score-free
+  better-score?
+  holds-warm?
+  prefer-warm-then-score
+  pick-idx-2-full
+  pick-idx-3-tournament
+  queue-after-assign
+  pick-code
+  better2-record
+  assign-step-2
+  assign-result-pick
+  assign-result-q0
+  assign-result-q1
+  better-from-queues
+  triple-record
+  triple-v0
+  triple-v1
+  triple-v2
+  better3-record
+  pick-code-3
+  assign-pick-3
+  apply-pick-3
+  assign-step-3
+  assign-step-3-code
+  assign-step-3-q0
+  assign-step-3-q1
+  assign-step-3-q2
+  better-pair
+  pick-fold-step
+  queue-inc-if],
+ :schemas
+ #:schedule{:eligibility
+            [:record
+             :schedule/eligibility
+             [[:has-engine :bool]
+              [:has-checkpoint :bool]
+              [:holds-checkpoint :bool]
+              [:can-fetch :bool]]],
+            :better2
+            [:record
+             :schedule/better2
+             [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]],
+            :assign2
+            [:record
+             :schedule/assign2
+             [[:code :i64] [:q0 :i64] [:q1 :i64]]],
+            :triple
+            [:record
+             :schedule/triple
+             [[:v0 :i64] [:v1 :i64] [:v2 :i64]]],
+            :better3
+            [:record
+             :schedule/better3
+             [[:b01 :i64] [:b02 :i64] [:b12 :i64]]],
+            :assign3
+            [:record
+             :schedule/assign3
+             [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]]},
+ :effects #{},
+ :blocks [],
+ :entry nil}

@@ -1,1 +1,220 @@
-{:format :kotoba.kir/v4, :signature nil, :functions [{:name ws?, :params [c], :result :bool, :effects #{}, :body (if (string=? c " ") true (if (string=? c "\n") true (if (string=? c "\t") true (if (string=? c "\r") true false)))), :param-types [:string]} {:name trim, :params [s], :result :string, :effects #{}, :body (let [n (string-byte-length s)] (if (= n 0) s (if (ws? (string-substring s 0 1)) (trim (string-substring s 1 n)) (if (ws? (string-substring s (- n 1) n)) (trim (string-substring s 0 (- n 1))) s)))), :param-types [:string]} {:name seed-sep, :params [], :result :string, :effects #{}, :body ":", :param-types []} {:name seed-p2p-suffix, :params [], :result :string, :effects #{}, :body ":p2p", :param-types []} {:name seed-x25519-suffix, :params [], :result :string, :effects #{}, :body ":x25519", :param-types []} {:name seed-overlay-suffix, :params [], :result :string, :effects #{}, :body ":murakumo-overlay-auth", :param-types []} {:name did-derive-subcmd, :params [], :result :string, :effects #{}, :body "did-derive", :param-types []} {:name jwt-seg-sep, :params [], :result :string, :effects #{}, :body ".", :param-types []} {:name argv-join-sep, :params [], :result :string, :effects #{}, :body " ", :param-types []} {:name seed-node, :params [operator-seed node-name], :result :string, :effects #{}, :body (string-concat operator-seed (string-concat (seed-sep) node-name)), :param-types [:string :string]} {:name seed-p2p, :params [operator-seed node-name], :result :string, :effects #{}, :body (string-concat (seed-node operator-seed node-name) (seed-p2p-suffix)), :param-types [:string :string]} {:name seed-x25519, :params [operator-seed], :result :string, :effects #{}, :body (string-concat operator-seed (seed-x25519-suffix)), :param-types [:string]} {:name seed-overlay, :params [operator-seed overlay-id], :result :string, :effects #{}, :body (string-concat operator-seed (string-concat (seed-sep) (string-concat overlay-id (seed-overlay-suffix)))), :param-types [:string :string]} {:name did-derive-cmd, :params [kotoba seed], :result :string, :effects #{}, :body (string-concat kotoba (string-concat (argv-join-sep) (string-concat (did-derive-subcmd) (string-concat (argv-join-sep) seed)))), :param-types [:string :string]} {:name did-from-output, :params [out], :result :string, :effects #{}, :body (trim out), :param-types [:string]} {:name jwt-header-json, :params [], :result :string, :effects #{}, :body "{\"alg\":\"HS256\",\"typ\":\"JWT\"}", :param-types []} {:name jwt-payload-sub-prefix, :params [], :result :string, :effects #{}, :body "{\"sub\":\"", :param-types []} {:name jwt-payload-exp-mid, :params [], :result :string, :effects #{}, :body "\",\"exp\":", :param-types []} {:name jwt-payload-exp-val, :params [], :result :string, :effects #{}, :body "9999999999", :param-types []} {:name jwt-payload-close, :params [], :result :string, :effects #{}, :body "}", :param-types []} {:name jwt-payload-json, :params [did], :result :string, :effects #{}, :body (string-concat (jwt-payload-sub-prefix) (string-concat did (string-concat (jwt-payload-exp-mid) (string-concat (jwt-payload-exp-val) (jwt-payload-close))))), :param-types [:string]} {:name op-token-sig-seg, :params [], :result :string, :effects #{}, :body "kotoba-cli-media", :param-types []} {:name cid-b-prefix, :params [], :result :string, :effects #{}, :body "b", :param-types []} {:name graph-name-fleet, :params [], :result :string, :effects #{}, :body "murakumo-fleet", :param-types []}], :oracle-value nil, :schema-identities nil, :exports [ws? trim seed-node seed-p2p seed-x25519 seed-overlay did-derive-cmd did-from-output jwt-header-json jwt-payload-json op-token-sig-seg cid-b-prefix graph-name-fleet seed-sep seed-p2p-suffix seed-x25519-suffix seed-overlay-suffix did-derive-subcmd jwt-seg-sep argv-join-sep jwt-payload-sub-prefix jwt-payload-exp-mid jwt-payload-exp-val jwt-payload-close], :schemas nil, :effects #{}, :blocks [], :entry nil}
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name ws?,
+   :params [c],
+   :result :bool,
+   :effects #{},
+   :body
+   (if
+    (string=? c " ")
+    true
+    (if
+     (string=? c "\n")
+     true
+     (if (string=? c "\t") true (if (string=? c "\r") true false)))),
+   :param-types [:string]}
+  {:name trim,
+   :params [s],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     s
+     (if
+      (ws? (string-substring s 0 1))
+      (trim (string-substring s 1 n))
+      (if
+       (ws? (string-substring s (- n 1) n))
+       (trim (string-substring s 0 (- n 1)))
+       s)))),
+   :param-types [:string]}
+  {:name seed-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":",
+   :param-types []}
+  {:name seed-p2p-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":p2p",
+   :param-types []}
+  {:name seed-x25519-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":x25519",
+   :param-types []}
+  {:name seed-overlay-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":murakumo-overlay-auth",
+   :param-types []}
+  {:name did-derive-subcmd,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "did-derive",
+   :param-types []}
+  {:name jwt-seg-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ".",
+   :param-types []}
+  {:name argv-join-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " ",
+   :param-types []}
+  {:name seed-node,
+   :params [operator-seed node-name],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat operator-seed (string-concat (seed-sep) node-name)),
+   :param-types [:string :string]}
+  {:name seed-p2p,
+   :params [operator-seed node-name],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (seed-node operator-seed node-name)
+    (seed-p2p-suffix)),
+   :param-types [:string :string]}
+  {:name seed-x25519,
+   :params [operator-seed],
+   :result :string,
+   :effects #{},
+   :body (string-concat operator-seed (seed-x25519-suffix)),
+   :param-types [:string]}
+  {:name seed-overlay,
+   :params [operator-seed overlay-id],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    operator-seed
+    (string-concat
+     (seed-sep)
+     (string-concat overlay-id (seed-overlay-suffix)))),
+   :param-types [:string :string]}
+  {:name did-derive-cmd,
+   :params [kotoba seed],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    kotoba
+    (string-concat
+     (argv-join-sep)
+     (string-concat
+      (did-derive-subcmd)
+      (string-concat (argv-join-sep) seed)))),
+   :param-types [:string :string]}
+  {:name did-from-output,
+   :params [out],
+   :result :string,
+   :effects #{},
+   :body (trim out),
+   :param-types [:string]}
+  {:name jwt-header-json,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "{\"alg\":\"HS256\",\"typ\":\"JWT\"}",
+   :param-types []}
+  {:name jwt-payload-sub-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "{\"sub\":\"",
+   :param-types []}
+  {:name jwt-payload-exp-mid,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "\",\"exp\":",
+   :param-types []}
+  {:name jwt-payload-exp-val,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "9999999999",
+   :param-types []}
+  {:name jwt-payload-close,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "}",
+   :param-types []}
+  {:name jwt-payload-json,
+   :params [did],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (jwt-payload-sub-prefix)
+    (string-concat
+     did
+     (string-concat
+      (jwt-payload-exp-mid)
+      (string-concat (jwt-payload-exp-val) (jwt-payload-close))))),
+   :param-types [:string]}
+  {:name op-token-sig-seg,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "kotoba-cli-media",
+   :param-types []}
+  {:name cid-b-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "b",
+   :param-types []}
+  {:name graph-name-fleet,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "murakumo-fleet",
+   :param-types []}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [ws?
+  trim
+  seed-node
+  seed-p2p
+  seed-x25519
+  seed-overlay
+  did-derive-cmd
+  did-from-output
+  jwt-header-json
+  jwt-payload-json
+  op-token-sig-seg
+  cid-b-prefix
+  graph-name-fleet
+  seed-sep
+  seed-p2p-suffix
+  seed-x25519-suffix
+  seed-overlay-suffix
+  did-derive-subcmd
+  jwt-seg-sep
+  argv-join-sep
+  jwt-payload-sub-prefix
+  jwt-payload-exp-mid
+  jwt-payload-exp-val
+  jwt-payload-close],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}
