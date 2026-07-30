@@ -16,10 +16,10 @@
   The signing secret (MURAKUMO_TOKEN_SECRET) is the operator's; it lives in the
   CLI's environment (to mint) and as a Worker secret (to verify).
 
-  W6 product-shell (ADR-260728-w6-token-seps-pure-oracle): pure helpers +
-  version/default-sub/scope/jwt seps DELEGATE to precompiled KIR when oracle is
-  loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
-  Host mirrors remain fallback when oracle is not ready. HMAC/base64url stay host."
+  W6 product-shell + T6.4 remainder (oracle-required on JVM): pure helpers +
+  version/default-sub/scope/jwt seps DELEGATE to precompiled KIR. On :clj the
+  shipped artifact is required; cljs keeps private mirrors as fail-closed
+  fallback without preload. HMAC/base64url stay host."
   (:require [clojure.string :as str]
             [murakumo.kotoba.oracle :as oracle])
   #?(:clj (:import [javax.crypto Mac]
@@ -32,85 +32,106 @@
 (defn- oracle-ready? []
   (oracle/ready? oid))
 
-(defn- o [export args]
-  (oracle/call oid export args))
+(defn- o
+  "Call a pure export. JVM requires the oracle artifact; cljs may fall back."
+  [export args]
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "token oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export export})))
+       (oracle/call oid export args))
+     :cljs
+     (if (oracle-ready?)
+       (try
+         (oracle/call oid export args)
+         (catch :default _
+           ::oracle-failed))
+       ::oracle-failed)))
 
 (defn- try-oracle
-  "Run oracle body; on failure use mirror."
+  "JVM: require oracle. cljs: oracle when ready, else mirror."
   [thunk mirror-thunk]
-  (if (oracle-ready?)
-    (try
-      (thunk)
-      (catch #?(:clj Exception :cljs :default) _
-        (mirror-thunk)))
-    (mirror-thunk)))
+  #?(:clj (thunk)
+     :cljs (if (oracle-ready?)
+             (try
+               (thunk)
+               (catch :default _
+                 (mirror-thunk)))
+             (mirror-thunk))))
 
-(defn- oracle-str-const [export mirror]
-  (try
-    (if (oracle/ready? oid)
-      (oracle/call oid export [])
-      mirror)
-    (catch #?(:clj Exception :cljs :default) _
-      mirror)))
+#?(:cljs
+   (do
+     (def ^:private mirror-version "mk1")
+     (def ^:private mirror-default-ttl 2592000)
+     (def ^:private mirror-default-sub "anonymous")
+     (def ^:private mirror-default-scope "all")
+     (def ^:private mirror-scope-all "all")
+     (def ^:private mirror-jwt-seg-sep ".")
+     (def ^:private mirror-json-sub-prefix "{\"sub\":\"")
+     (def ^:private mirror-json-scope-mid "\",\"scope\":\"")
+     (def ^:private mirror-json-iat-mid "\",\"iat\":")
+     (def ^:private mirror-json-exp-mid ",\"exp\":")
+     (def ^:private mirror-json-close "}")
 
-(defn- oracle-i64-const [export mirror]
-  (try
-    (if (oracle/ready? oid)
-      (oracle/i64->host (oracle/call oid export []))
-      mirror)
-    (catch #?(:clj Exception :cljs :default) _
-      mirror)))
+     (defn- cljs-str [export mirror]
+       (let [v (o export [])]
+         (if (= v ::oracle-failed) mirror v)))
 
-(def ^:private mirror-version "mk1")
-(def ^:private mirror-default-ttl 2592000)
-(def ^:private mirror-default-sub "anonymous")
-(def ^:private mirror-default-scope "all")
-(def ^:private mirror-scope-all "all")
-(def ^:private mirror-jwt-seg-sep ".")
-(def ^:private mirror-json-sub-prefix "{\"sub\":\"")
-(def ^:private mirror-json-scope-mid "\",\"scope\":\"")
-(def ^:private mirror-json-iat-mid "\",\"iat\":")
-(def ^:private mirror-json-exp-mid ",\"exp\":")
-(def ^:private mirror-json-close "}")
+     (defn- cljs-i64 [export mirror]
+       (let [v (o export [])]
+         (if (= v ::oracle-failed) mirror (oracle/i64->host v))))))
 
 (def version
-  "Wire version token. Kotoba when ready."
-  (oracle-str-const 'version mirror-version))
+  "Wire version token. Kotoba SSoT (JVM requires oracle)."
+  #?(:clj (o 'version [])
+     :cljs (cljs-str 'version mirror-version)))
 
 (def default-ttl
-  "Default exp offset seconds. Kotoba when ready."
-  (oracle-i64-const 'default-ttl mirror-default-ttl))
+  "Default exp offset seconds. Kotoba SSoT (JVM requires oracle)."
+  #?(:clj (oracle/i64->host (o 'default-ttl []))
+     :cljs (cljs-i64 'default-ttl mirror-default-ttl)))
 
 (def default-sub
-  "Default claim sub when absent. Kotoba when ready."
-  (oracle-str-const 'default-sub mirror-default-sub))
+  "Default claim sub when absent. Kotoba SSoT (JVM requires oracle)."
+  #?(:clj (o 'default-sub [])
+     :cljs (cljs-str 'default-sub mirror-default-sub)))
 
 (def default-scope
-  "Default claim scope when absent. Kotoba when ready."
-  (oracle-str-const 'default-scope mirror-default-scope))
+  "Default claim scope when absent. Kotoba SSoT (JVM requires oracle)."
+  #?(:clj (o 'default-scope [])
+     :cljs (cljs-str 'default-scope mirror-default-scope)))
 
 (def scope-all
-  "Wildcard scope token. Kotoba when ready."
-  (oracle-str-const 'scope-all mirror-scope-all))
+  "Wildcard scope token. Kotoba SSoT (JVM requires oracle)."
+  #?(:clj (o 'scope-all [])
+     :cljs (cljs-str 'scope-all mirror-scope-all)))
 
 (def jwt-seg-sep
-  "Separator between wire segments. Kotoba when ready."
-  (oracle-str-const 'jwt-seg-sep mirror-jwt-seg-sep))
+  "Separator between wire segments. Kotoba SSoT (JVM requires oracle)."
+  #?(:clj (o 'jwt-seg-sep [])
+     :cljs (cljs-str 'jwt-seg-sep mirror-jwt-seg-sep)))
 
 (def wire-sep
-  "Alias of jwt-seg-sep for wire-token. Kotoba when ready."
-  (oracle-str-const 'wire-sep mirror-jwt-seg-sep))
+  "Alias of jwt-seg-sep for wire-token. Kotoba SSoT (JVM requires oracle)."
+  #?(:clj (o 'wire-sep [])
+     :cljs (cljs-str 'wire-sep mirror-jwt-seg-sep)))
 
 (def json-sub-prefix
-  (oracle-str-const 'json-sub-prefix mirror-json-sub-prefix))
+  #?(:clj (o 'json-sub-prefix [])
+     :cljs (cljs-str 'json-sub-prefix mirror-json-sub-prefix)))
 (def json-scope-mid
-  (oracle-str-const 'json-scope-mid mirror-json-scope-mid))
+  #?(:clj (o 'json-scope-mid [])
+     :cljs (cljs-str 'json-scope-mid mirror-json-scope-mid)))
 (def json-iat-mid
-  (oracle-str-const 'json-iat-mid mirror-json-iat-mid))
+  #?(:clj (o 'json-iat-mid [])
+     :cljs (cljs-str 'json-iat-mid mirror-json-iat-mid)))
 (def json-exp-mid
-  (oracle-str-const 'json-exp-mid mirror-json-exp-mid))
+  #?(:clj (o 'json-exp-mid [])
+     :cljs (cljs-str 'json-exp-mid mirror-json-exp-mid)))
 (def json-close
-  (oracle-str-const 'json-close mirror-json-close))
+  #?(:clj (o 'json-close [])
+     :cljs (cljs-str 'json-close mirror-json-close)))
 
 ;; ── base64url (no padding) over raw bytes — host codec ──────────────
 ;; cljs: prefer Node Buffer (nbb); fall back to btoa/atob in browsers.
