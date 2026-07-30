@@ -360,13 +360,13 @@
    :param-types [:string]}
   {:name digit-val?,
    :params [c],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (= (string-byte-length c) 1)
-    (if (string-contains? "0123456789" c) 1 0)
-    0),
+    (if (string-contains? "0123456789" c) true false)
+    false),
    :param-types [:string]}
   {:name digit-of-go,
    :params [digits c i],
@@ -402,11 +402,11 @@
      (let
       [c (string-substring s 0 1)]
       (if
-       (= (digit-val? c) 0)
-       -1
+       (digit-val? c)
        (parse-digits-go
         (string-substring s 1 n)
-        (+ (* acc 10) (digit-of c))))))),
+        (+ (* acc 10) (digit-of c)))
+       -1)))),
    :param-types [:string :i64]}
   {:name parse-digits,
    :params [s],

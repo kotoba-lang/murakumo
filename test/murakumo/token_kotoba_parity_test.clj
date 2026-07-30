@@ -185,9 +185,9 @@
 
 (deftest constant-time-eq-matches
   (let [cases (compile-i64-cases
-               {"eq" "(constant-time-eq \"abc\" \"abc\")"
-                "ne" "(constant-time-eq \"abc\" \"abd\")"
-                "len" "(constant-time-eq \"ab\" \"abc\")"})]
+               {"eq" "(if (constant-time-eq \"abc\" \"abc\") 1 0)"
+                "ne" "(if (constant-time-eq \"abc\" \"abd\") 1 0)"
+                "len" "(if (constant-time-eq \"ab\" \"abc\") 1 0)"})]
     (is (= 1 (get cases "eq")))
     (is (= 0 (get cases "ne")))
     (is (= 0 (get cases "len")))

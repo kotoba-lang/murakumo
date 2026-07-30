@@ -76,11 +76,13 @@
   (- a (* (quot a b) b)))
 
 
-(defn weight-pos? [w :i64] :i64
-  (if (< 0 w) 1 0))
+(defn weight-pos? [w :i64] :bool
+  (if (< 0 w) true false))
 
 (defn count-active [wt :i64 wm :i64 wp :i64] :i64
-  (+ (weight-pos? wt) (+ (weight-pos? wm) (weight-pos? wp))))
+  (+ (if (weight-pos? wt) 1 0)
+     (+ (if (weight-pos? wm) 1 0)
+        (if (weight-pos? wp) 1 0))))
 
 (defn min2 [a :i64 b :i64] :i64
   (if (< a b) a b))
@@ -130,9 +132,9 @@
 
 (defn seats-record [total :i64 wt :i64 wm :i64 wp :i64 floor :i64]
   [:record :rebalance/lanes [[:text :i64] [:media :i64] [:postproc :i64]]]
-  (let [at (weight-pos? wt)
-        am (weight-pos? wm)
-        ap (weight-pos? wp)
+  (let [at (if (weight-pos? wt) 1 0)
+        am (if (weight-pos? wm) 1 0)
+        ap (if (weight-pos? wp) 1 0)
         n-active (count-active wt wm wp)]
     (if (if (= total 0) 1 (if (= n-active 0) 1 0))
       (record-new [:record :rebalance/lanes
@@ -336,9 +338,9 @@
   ;; capacity filter: status "up" only
   (if (string=? status "up") true false))
 
-(defn move-needed [from-pool :i64 to-pool :i64] :i64
+(defn move-needed [from-pool :i64 to-pool :i64] :bool
   ;; pool codes 0=text 1=media 2=postproc; one node placement diff
-  (if (= from-pool to-pool) 0 1))
+  (if (= from-pool to-pool) false true))
 
 ;; assigned-from-seats replaced by `seats-total` (T5.3) — it took a seat pack.
 

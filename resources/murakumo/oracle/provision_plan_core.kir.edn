@@ -605,15 +605,15 @@
    :param-types [:string :string :string]}
   {:name alnum-char?,
    :params [c],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (string-contains?
      "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
      c)
-    1
-    0),
+    true
+    false),
    :param-types [:string]}
   {:name find-prefix-at,
    :params [s prefix i],
@@ -624,8 +624,8 @@
     [n (string-byte-length s) p (string-byte-length prefix)]
     (if
      (let
-      [or-tmp__11148 (= p 0)]
-      (if or-tmp__11148 or-tmp__11148 (> (+ i p) n)))
+      [or-tmp__11154 (= p 0)]
+      (if or-tmp__11154 or-tmp__11154 (> (+ i p) n)))
      -1
      (if
       (string=? (string-substring s i (+ i p)) prefix)
@@ -645,7 +645,7 @@
      (let
       [c (string-substring s i (+ i 1))]
       (if
-       (= (alnum-char? c) 1)
+       (alnum-char? c)
        (take-alnum s (+ i 1) (string-concat acc c))
        acc)))),
    :param-types [:string :i64 :string]}

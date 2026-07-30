@@ -107,16 +107,16 @@
 (defn ok-for [active :i64 bumped :i64] :i64
   (if (if (= active 1) (if (= bumped 0) 1 0) 0) 1 0))
 
-(defn weight-pos? [w :i64] :i64
-  (if (< 0 w) 1 0))
+(defn weight-pos? [w :i64] :bool
+  (if (< 0 w) true false))
 
 (defn plan-lr-record [total :i64 w0 :i64 w1 :i64 w2 :i64]
   [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
   ;; plan.cljc largest-remainder without rebalance per-active floor:
   ;; floor(total*w_i/sumw) + remainder seats by fractional rank.
-  (let [a0 (weight-pos? w0)
-        a1 (weight-pos? w1)
-        a2 (weight-pos? w2)
+  (let [a0 (if (weight-pos? w0) 1 0)
+        a1 (if (weight-pos? w1) 1 0)
+        a2 (if (weight-pos? w2) 1 0)
         sumw (+ w0 (+ w1 w2))]
     (if (if (= total 0) 1 (if (= sumw 0) 1 0))
       (record-new [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]] 0 0 0)
