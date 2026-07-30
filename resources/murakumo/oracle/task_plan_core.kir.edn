@@ -74,34 +74,67 @@
    :effects #{},
    :body (if (< attempt max-attempts) 1 0),
    :param-types [:i64 :i64]}
-  {:name rem2,
-   :params [n],
-   :result :i64,
-   :effects #{},
-   :body (- n (* (quot n 2) 2)),
-   :param-types [:i64]}
-  {:name bit?-safe,
-   :params [flags mask],
-   :result :i64,
-   :effects #{},
-   :body (if (= 0 (rem2 (quot flags mask))) 0 1),
-   :param-types [:i64 :i64]}
   {:name task-eligible?,
-   :params [flags mem-bytes min-mem],
+   :params [e mem-bytes min-mem],
    :result :i64,
    :effects #{},
    :body
    (let
     [online
-     (bit?-safe flags 1)
+     (record-get
+      [:record
+       :task/eligibility
+       [[:online :i64]
+        [:labels-ok :i64]
+        [:roles-ok :i64]
+        [:not-excluded :i64]
+        [:allowlist-ok :i64]]]
+      e
+      :online)
      labels
-     (bit?-safe flags 2)
+     (record-get
+      [:record
+       :task/eligibility
+       [[:online :i64]
+        [:labels-ok :i64]
+        [:roles-ok :i64]
+        [:not-excluded :i64]
+        [:allowlist-ok :i64]]]
+      e
+      :labels-ok)
      roles
-     (bit?-safe flags 4)
+     (record-get
+      [:record
+       :task/eligibility
+       [[:online :i64]
+        [:labels-ok :i64]
+        [:roles-ok :i64]
+        [:not-excluded :i64]
+        [:allowlist-ok :i64]]]
+      e
+      :roles-ok)
      not-ex
-     (bit?-safe flags 8)
+     (record-get
+      [:record
+       :task/eligibility
+       [[:online :i64]
+        [:labels-ok :i64]
+        [:roles-ok :i64]
+        [:not-excluded :i64]
+        [:allowlist-ok :i64]]]
+      e
+      :not-excluded)
      allow
-     (bit?-safe flags 16)
+     (record-get
+      [:record
+       :task/eligibility
+       [[:online :i64]
+        [:labels-ok :i64]
+        [:roles-ok :i64]
+        [:not-excluded :i64]
+        [:allowlist-ok :i64]]]
+      e
+      :allowlist-ok)
      mem-ok
      (if (< mem-bytes min-mem) 0 1)]
     (if
@@ -114,7 +147,7 @@
        (= roles 0)
        0
        (if (= not-ex 0) 0 (if (= allow 0) 0 mem-ok)))))),
-   :param-types [:i64 :i64 :i64]}
+   :param-types [[:ref :task/eligibility] :i64 :i64]}
   {:name fill-milli,
    :params [assigned slots],
    :result :i64,
@@ -645,13 +678,15 @@
  :oracle-value nil,
  :schema-identities
  #:task{:assign2
-        "a113b555354c74c9fd499006ea32df67adf79aa7df7048cad58d2c1b0a864b06",
+        "4b75d601ac1f7daa5fb9a54dfbdf96731332d3c18b322c7cbe8bd4c9bb03df49",
         :assign3
-        "f29b8c1c5defdb87965c2903c6ad4c4cfe916effb88dcdaa371c1e941fdfd367",
+        "e7b55ee9be6801d838bdb7de132240326f29bebc539a354cd2a0ecb11abb549b",
+        :eligibility
+        "bf6c4c725014f1cead32d082a47b0238c19358f0dcd3ec78c85e8bd84ca27663",
         :pair
-        "98dd5550000375332a8220fd6b1cc76571e7424f6e8468025e6a54b15ab169ce",
+        "7b6509c56cd0eb96754bb754053178c7c0c7dbad3ce499fa75dcf2f60007b1d0",
         :triple
-        "c8793a2582eabbcba881f0c06a8859c1acfbe2ed503eb6594b641b02bda185a3"},
+        "79656b630760e15167d12b92cf089ae2bfb77652a21cfd3c0a93af6fddf1bdc5"},
  :exports
  [default-max-slots
   default-max-attempts
@@ -713,7 +748,15 @@
         :assign3
         [:record
          :task/assign3
-         [[:code :i64] [:load0 :i64] [:load1 :i64] [:load2 :i64]]]},
+         [[:code :i64] [:load0 :i64] [:load1 :i64] [:load2 :i64]]],
+        :eligibility
+        [:record
+         :task/eligibility
+         [[:online :i64]
+          [:labels-ok :i64]
+          [:roles-ok :i64]
+          [:not-excluded :i64]
+          [:allowlist-ok :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}
