@@ -10,6 +10,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [clojure.walk :as walk]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
             [kotoba.kir :as ir]
@@ -140,6 +141,77 @@
   (let [kir (gen/compile-kir source-path)]
     (is (map? kir))
     (is (= "authorized" (ir/execute kir 'parse-status-out ["authorized\n"])))))
+
+
+
+(defn- normalize-kir-gensyms
+  "Compiler gensyms (or-tmp__N / binding-some__N) are not stable across JVM
+   sessions. Normalize them so catalog-wide drift compares structure, not
+   counter values. Per-module focused tests may still use raw = when stable."
+  [kir]
+  (let [n (atom 0)
+        table (atom {})
+        rename (fn [x]
+                 (if (and (symbol? x)
+                          (re-find #"(?:__|G__)\d+$" (name x)))
+                   (or (get @table x)
+                       (let [g (symbol (str "g__" (swap! n inc)))]
+                         (swap! table assoc x g)
+                         g))
+                   x))]
+    (walk/postwalk rename kir)))
+
+(deftest t62-catalog-artifacts-match-kotoba-sources
+  "Every discovered core has a shipped KIR path (gen discover == resources)."
+  (let [arts (gen/discover-artifacts)
+        sources (set (map #(get % "source") arts))]
+    (is (pos? (count arts)) "discover-artifacts empty")
+    (is (= (count arts) (count sources)) "duplicate sources")
+    (doseq [{:strs [source out]} arts]
+      (is (.exists (io/file source)) (str "missing source " source))
+      (is (.exists (io/file out)) (str "missing shipped KIR " out
+                                       " — run: clojure -M:test -m murakumo.kotoba-oracle-gen"))
+      (is (str/starts-with? out "resources/murakumo/oracle/"))
+      (is (str/ends-with? out ".kir.edn")))))
+
+(deftest t62-catalog-oracle-ids-cover-all-shipped-kir
+  "Every catalog id is ready; every discovered KIR is on the classpath."
+  (let [arts (gen/discover-artifacts)]
+    (is (>= (oracle/catalog-count) 32)
+        (str "expected full product-shell catalog, got " (oracle/catalog-count)))
+    (is (= (oracle/catalog-count) (count arts))
+        "catalog-count must match discover-artifacts (1:1 product shells)")
+    (doseq [id (oracle/catalog-ids)]
+      (is (oracle/ready? id) (str "catalog id not ready: " id)))
+    (doseq [{:strs [out]} arts]
+      (let [cp (str/replace out #"^resources/" "")]
+        (is (some? (io/resource cp))
+            (str "classpath missing " cp))))))
+
+(deftest t62-all-product-shell-kir-do-not-drift
+  "Catalog-wide drift gate (T6.2). Live compile each core; compare to shipped
+   after gensym normalization. Fix: clojure -M:test -m murakumo.kotoba-oracle-gen"
+  (doseq [{:strs [source out]} (gen/discover-artifacts)]
+    (testing source
+      (let [live (normalize-kir-gensyms (gen/compile-kir source))
+            cp (str/replace out #"^resources/" "")
+            shipped (normalize-kir-gensyms
+                     (edn/read-string (slurp (io/resource cp))))]
+        (is (= live shipped)
+            (str "KIR drift: " source " ≠ " cp
+                 " — run: clojure -M:test -m murakumo.kotoba-oracle-gen"))))))
+
+(deftest t62-prod-deps-exclude-compiler
+  "T6.2: compiler must not be on the production classpath (only :test alias)."
+  (let [edn (edn/read-string (slurp "deps.edn"))
+        prod-deps (:deps edn)
+        test-extra (get-in edn [:aliases :test :extra-deps])]
+    (is (not (contains? prod-deps 'io.github.kotoba-lang/compiler))
+        "compiler leaked into :deps (prod)")
+    (is (contains? test-extra 'io.github.kotoba-lang/compiler)
+        "compiler missing from :test extra-deps (oracle-gen/parity need it)")
+    (is (contains? prod-deps 'io.github.kotoba-lang/kotoba-kir)
+        "kotoba-kir (KIR runner) must remain a prod dep")))
 
 
 (def ^:private token-source "kotoba/token_core.kotoba")
