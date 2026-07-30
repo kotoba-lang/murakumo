@@ -89,17 +89,17 @@
     (string-concat "-" (nat-str (- 0 n)))
     (nat-str n)))
 
-(defn digit-val? [c :string] :i64
-  (if (string=? c "0") 1
-    (if (string=? c "1") 1
-      (if (string=? c "2") 1
-        (if (string=? c "3") 1
-          (if (string=? c "4") 1
-            (if (string=? c "5") 1
-              (if (string=? c "6") 1
-                (if (string=? c "7") 1
-                  (if (string=? c "8") 1
-                    (if (string=? c "9") 1 0)))))))))))
+(defn digit-val? [c :string] :bool
+  (if (string=? c "0") true
+    (if (string=? c "1") true
+      (if (string=? c "2") true
+        (if (string=? c "3") true
+          (if (string=? c "4") true
+            (if (string=? c "5") true
+              (if (string=? c "6") true
+                (if (string=? c "7") true
+                  (if (string=? c "8") true
+                    (if (string=? c "9") true false)))))))))))
 
 (defn digit-of [c :string] :i64
   (if (string=? c "0") 0
@@ -128,10 +128,10 @@
     (if (= n 0)
       acc
       (let [c (string-substring s 0 1)]
-        (if (= (digit-val? c) 0)
-          -1
+        (if (digit-val? c)
           (parse-digits-go (string-substring s 1 n)
-                           (+ (* acc 10) (digit-of c))))))))
+                           (+ (* acc 10) (digit-of c)))
+          -1)))))
 
 (defn parse-digits [s :string] :i64
   ;; -1 if empty or non-digit

@@ -123,9 +123,9 @@
       (ct-scan a b (+ i 1) n nacc))
     acc))
 
-(defn constant-time-eq [a :string b :string] :i64
+(defn constant-time-eq [a :string b :string] :bool
   (let [na (string-length a)
         nb (string-length b)]
     (if (= na nb)
-      (if (= (ct-scan a b 0 na 0) 0) 1 0)
-      0)))
+      (if (= (ct-scan a b 0 na 0) 0) true false)
+      false)))

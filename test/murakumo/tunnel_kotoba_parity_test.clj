@@ -84,8 +84,8 @@
             "pdw" (str "(parse-digits " (kotoba-literal " 42 ") ")")
             "pdx" (str "(parse-digits " (kotoba-literal "x") ")")
             "pde" (str "(parse-digits " (kotoba-literal "") ")")
-            "dv1" (str "(digit-val? " (kotoba-literal "9") ")")
-            "dv0" (str "(digit-val? " (kotoba-literal "a") ")")})
+            "dv1" (str "(if (digit-val? " (kotoba-literal "9") ") 1 0)")
+            "dv0" (str "(if (digit-val? " (kotoba-literal "a") ") 1 0)")})
         s (compile-string-cases
            {"d" (str "(strip-marker-digits " (kotoba-literal "__murakumo_rc=7") ")")
             "bm" "(batch-mode-opt)"

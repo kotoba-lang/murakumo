@@ -231,12 +231,12 @@
    :param-types [:string :string :i64 :i64 :i64]}
   {:name constant-time-eq,
    :params [a b],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (let
     [na (string-byte-length a) nb (string-byte-length b)]
-    (if (= na nb) (if (= (ct-scan a b 0 na 0) 0) 1 0) 0)),
+    (if (= na nb) (if (= (ct-scan a b 0 na 0) 0) true false) false)),
    :param-types [:string :string]}
   {:name __kotoba_string_from_i64_nat,
    :params [n],

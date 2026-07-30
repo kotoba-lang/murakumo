@@ -121,9 +121,9 @@
    :param-types [:i64 :i64]}
   {:name weight-pos?,
    :params [w],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (< 0 w) 1 0),
+   :body (if (< 0 w) true false),
    :param-types [:i64]}
   {:name plan-lr-record,
    :params [total w0 w1 w2],
@@ -132,11 +132,11 @@
    :body
    (let
     [a0
-     (weight-pos? w0)
+     (if (weight-pos? w0) 1 0)
      a1
-     (weight-pos? w1)
+     (if (weight-pos? w1) 1 0)
      a2
-     (weight-pos? w2)
+     (if (weight-pos? w2) 1 0)
      sumw
      (+ w0 (+ w1 w2))]
     (if

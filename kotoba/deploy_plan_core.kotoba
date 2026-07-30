@@ -237,11 +237,11 @@
 (defn trim-ws [s :string] :string
   (trim s))
 
-(defn digit-val? [c :string] :i64
-  ;; 1 if single char is ASCII digit (tunnel_core pattern)
+(defn digit-val? [c :string] :bool
+  ;; true if single char is ASCII digit (tunnel_core pattern)
   (if (= (string-byte-length c) 1)
-    (if (string-contains? "0123456789" c) 1 0)
-    0))
+    (if (string-contains? "0123456789" c) true false)
+    false))
 
 (defn digit-of-go [digits :string c :string i :i64] :i64
   (let [n (string-byte-length digits)]
@@ -259,10 +259,10 @@
     (if (= n 0)
       acc
       (let [c (string-substring s 0 1)]
-        (if (= (digit-val? c) 0)
-          -1
+        (if (digit-val? c)
           (parse-digits-go (string-substring s 1 n)
-                           (+ (* acc 10) (digit-of c))))))))
+                           (+ (* acc 10) (digit-of c)))
+          -1)))))
 
 (defn parse-digits [s :string] :i64
   (let [t (trim-ws s)

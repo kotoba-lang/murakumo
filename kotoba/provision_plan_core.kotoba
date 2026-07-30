@@ -381,13 +381,13 @@
 
 ;; ── residual peer-id log extract + write-plist shell assembly ─────────
 
-(defn alnum-char? [c :string] :i64
+(defn alnum-char? [c :string] :bool
   ;; single-char ASCII letter or digit (libp2p PeerId body charset)
   (if (string-contains?
        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
        c)
-    1
-    0))
+    true
+    false))
 
 (defn find-prefix-at [s :string prefix :string i :i64] :i64
   ;; first index of prefix in s at/after i, or -1
@@ -405,7 +405,7 @@
     (if (>= i n)
       acc
       (let [c (string-substring s i (+ i 1))]
-        (if (= (alnum-char? c) 1)
+        (if (alnum-char? c)
           (take-alnum s (+ i 1) (string-concat acc c))
           acc)))))
 

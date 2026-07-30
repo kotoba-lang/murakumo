@@ -54,15 +54,18 @@
    :param-types [:i64 :i64]}
   {:name weight-pos?,
    :params [w],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (< 0 w) 1 0),
+   :body (if (< 0 w) true false),
    :param-types [:i64]}
   {:name count-active,
    :params [wt wm wp],
    :result :i64,
    :effects #{},
-   :body (+ (weight-pos? wt) (+ (weight-pos? wm) (weight-pos? wp))),
+   :body
+   (+
+    (if (weight-pos? wt) 1 0)
+    (+ (if (weight-pos? wm) 1 0) (if (weight-pos? wp) 1 0))),
    :param-types [:i64 :i64 :i64]}
   {:name min2,
    :params [a b],
@@ -156,11 +159,11 @@
    :body
    (let
     [at
-     (weight-pos? wt)
+     (if (weight-pos? wt) 1 0)
      am
-     (weight-pos? wm)
+     (if (weight-pos? wm) 1 0)
      ap
-     (weight-pos? wp)
+     (if (weight-pos? wp) 1 0)
      n-active
      (count-active wt wm wp)]
     (if
@@ -791,9 +794,9 @@
    :param-types [:string]}
   {:name move-needed,
    :params [from-pool to-pool],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (= from-pool to-pool) 0 1),
+   :body (if (= from-pool to-pool) false true),
    :param-types [:i64 :i64]}
   {:name rebalance-reason-code,
    :params [assigned-count move-count],

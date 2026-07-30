@@ -291,12 +291,13 @@
 
 (defn constant-time=
   "Full-scan string compare. Kotoba constant-time-eq when ready.
-   Falls back if KIR string-substring scan faults on some cljs builds."
+   Falls back if KIR string-substring scan faults on some cljs builds.
+   Profile 5: guest returns :bool."
   [a b]
   (try-oracle
    #(and (string? a) (string? b)
-         (= 1 (oracle/i64->host
-               (o 'constant-time-eq [(str a) (str b)]))))
+         (oracle/bool->host
+          (o 'constant-time-eq [(str a) (str b)])))
    #(mirror-constant-time= a b)))
 
 ;; ── HMAC host adapter (javax / WebCrypto) ───────────────────────────

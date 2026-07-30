@@ -102,34 +102,37 @@
    :param-types [:i64]}
   {:name digit-val?,
    :params [c],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (string=? c "0")
-    1
+    true
     (if
      (string=? c "1")
-     1
+     true
      (if
       (string=? c "2")
-      1
+      true
       (if
        (string=? c "3")
-       1
+       true
        (if
         (string=? c "4")
-        1
+        true
         (if
          (string=? c "5")
-         1
+         true
          (if
           (string=? c "6")
-          1
+          true
           (if
            (string=? c "7")
-           1
-           (if (string=? c "8") 1 (if (string=? c "9") 1 0)))))))))),
+           true
+           (if
+            (string=? c "8")
+            true
+            (if (string=? c "9") true false)))))))))),
    :param-types [:string]}
   {:name digit-of,
    :params [c],
@@ -193,11 +196,11 @@
      (let
       [c (string-substring s 0 1)]
       (if
-       (= (digit-val? c) 0)
-       -1
+       (digit-val? c)
        (parse-digits-go
         (string-substring s 1 n)
-        (+ (* acc 10) (digit-of c))))))),
+        (+ (* acc 10) (digit-of c)))
+       -1)))),
    :param-types [:string :i64]}
   {:name parse-digits,
    :params [s],

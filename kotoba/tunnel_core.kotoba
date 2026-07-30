@@ -87,11 +87,11 @@
 (defn control-master-opt [] :string
   "ControlMaster=auto")
 
-(defn digit-val? [c :string] :i64
-  ;; 1 if single char is ASCII digit
+(defn digit-val? [c :string] :bool
+  ;; true if single char is ASCII digit
   (if (= (string-byte-length c) 1)
-    (if (string-contains? "0123456789" c) 1 0)
-    0))
+    (if (string-contains? "0123456789" c) true false)
+    false))
 
 (defn digit-of [c :string] :i64
   (if (string=? c "0") 0

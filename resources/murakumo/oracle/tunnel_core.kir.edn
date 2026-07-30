@@ -142,13 +142,13 @@
    :param-types []}
   {:name digit-val?,
    :params [c],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (= (string-byte-length c) 1)
-    (if (string-contains? "0123456789" c) 1 0)
-    0),
+    (if (string-contains? "0123456789" c) true false)
+    false),
    :param-types [:string]}
   {:name digit-of,
    :params [c],
