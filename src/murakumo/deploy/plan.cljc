@@ -431,11 +431,11 @@
 
 (defn execution-observed?
   "True when a node log grep count indicates the component has executed there.
-   Kotoba `execution-observed?` when oracle ready."
+   Kotoba `execution-observed?` when oracle ready. Profile 5: guest :bool."
   [grep-count-out]
   (try-oracle
-   #(= 1 (oracle/i64->host
-          (o 'execution-observed? [(str grep-count-out)])))
+   #(oracle/bool->host
+     (o 'execution-observed? [(str grep-count-out)]))
    #(mirror-execution-observed? grep-count-out)))
 
 (defn execution-count-command

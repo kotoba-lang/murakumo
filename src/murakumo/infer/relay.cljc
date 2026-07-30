@@ -103,11 +103,11 @@
   [state now-ms ttl-ms]
   (let [dead (for [[jid {:keys [at-ms job worker-id]}] (:assigned state)
                    :when (try-oracle
-                          #(= 1 (oracle/i64->host
-                                 (o 'lease-expired?
-                                    [(oracle/as-i64 now-ms)
-                                     (oracle/as-i64 at-ms)
-                                     (oracle/as-i64 ttl-ms)])))
+                          #(oracle/bool->host
+                            (o 'lease-expired?
+                               [(oracle/as-i64 now-ms)
+                                (oracle/as-i64 at-ms)
+                                (oracle/as-i64 ttl-ms)]))
                           #(> (- now-ms at-ms) ttl-ms))]
                [jid job worker-id])]
     (reduce (fn [st [jid job wid]]

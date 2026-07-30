@@ -50,8 +50,9 @@
         cases (into {} (map-indexed
                         (fn [i [t inbound]]
                           [(str "nr_" i)
-                           (str "(needs-relay? " (tier-code t) " "
-                                (if inbound 1 0) ")")])
+                           ;; Profile 5: needs-relay? is :bool
+                           (str "(if (needs-relay? " (tier-code t) " "
+                                (if inbound 1 0) ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [t inbound]] (map-indexed vector corpus)]
@@ -68,8 +69,8 @@
         cases (into {} (map-indexed
                         (fn [i [t k]]
                           [(str "c_" i)
-                           (str "(can? " (tier-code t) " "
-                                (kotoba-literal (kind-name k)) ")")])
+                           (str "(if (can? " (tier-code t) " "
+                                (kotoba-literal (kind-name k)) ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [t k]] (map-indexed vector corpus)]
@@ -101,7 +102,10 @@
         cases (into {} (map-indexed
                         (fn [i [can maxr res]]
                           [(str "ew_" i)
-                           (str "(eligible-for-work? " can " " maxr " " res ")")])
+                           ;; Profile 5: can-kind is :bool
+                           (str "(if (eligible-for-work? "
+                                (if (= can 1) "true" "false")
+                                " " maxr " " res ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [can maxr res]] (map-indexed vector corpus)]
@@ -109,10 +113,8 @@
         (let [node {:node/can (when (= can 1) [:media-postproc])
                     :node/caps {:max-resident-bytes maxr}}
               job {:work-kind :media-postproc :resident-bytes res}
-              ;; project can-kind the way host would
-              can-kind (if (and (= can 1)
-                                (some #{:media-postproc} (:node/can node)))
-                         1 0)
+              can-kind (boolean (and (= can 1)
+                                     (some #{:media-postproc} (:node/can node))))
               expected (if (join/eligible-for-work?
                             (assoc node :node/can (if (= can 1)
                                                     [:media-postproc]
@@ -120,4 +122,4 @@
                             job)
                          1 0)]
           (is (= expected (get actual (str "ew_" i))))
-          (is (= can-kind can)))))))
+          (is (= can-kind (= can 1))))))))

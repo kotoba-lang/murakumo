@@ -23,31 +23,32 @@
       4294967296
       13958643712)))
 
-(defn needs-relay? [tier :i64 inbound :i64] :i64
+(defn needs-relay? [tier :i64 inbound :i64] :bool
   ;; cljc: browser/wasm always; native only when not inbound-reachable?
+  ;; inbound is host-projected 0/1 (inbound-reachable?).
   (if (< tier 2)
-    1
-    (if (= inbound 1) 0 1)))
+    true
+    (if (= inbound 1) false true)))
 
-(defn swarm-can? [kind :string] :i64
+(defn swarm-can? [kind :string] :bool
   (if (string=? kind "media-postproc")
-    1
+    true
     (if (string=? kind "small-shard")
-      1
+      true
       (if (string=? kind "embarrassingly-parallel")
-        1
-        (if (string=? kind "prompt-eval") 1 0)))))
+        true
+        (if (string=? kind "prompt-eval") true false)))))
 
-(defn native-can? [kind :string] :i64
+(defn native-can? [kind :string] :bool
   (if (string=? kind "host-large-model")
-    1
+    true
     (if (string=? kind "low-latency-pipeline")
-      1
+      true
       (if (string=? kind "media-generate")
-        1
-        (if (string=? kind "full-shard") 1 0)))))
+        true
+        (if (string=? kind "full-shard") true false)))))
 
-(defn can? [tier :i64 kind :string] :i64
+(defn can? [tier :i64 kind :string] :bool
   ;; cljc: (boolean (some #{kind} (:can (tier-of caps))))
   (if (< tier 2)
     (swarm-can? kind)
@@ -59,9 +60,9 @@
     tier-max
     (if (< mem tier-max) mem tier-max)))
 
-(defn eligible-for-work? [can-kind :i64 max-res :i64 resident :i64] :i64
+(defn eligible-for-work? [can-kind :bool max-res :i64 resident :i64] :bool
   ;; cljc: (and can? (<= resident max-resident-bytes))
-  ;; resident already 0 when nil; can-kind host-projected 0/1
-  (if (= can-kind 0)
-    0
-    (if (< max-res resident) 0 1)))
+  ;; can-kind is host-projected capability membership
+  (if can-kind
+    (if (< max-res resident) false true)
+    false))

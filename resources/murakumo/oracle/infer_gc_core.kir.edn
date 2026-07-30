@@ -29,9 +29,9 @@
    :body (+ free reclaimed)}
   {:name target-met?,
    :params [free reclaimed target],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (< (+ free reclaimed) target) 0 1)}
+   :body (if (< (+ free reclaimed) target) false true)}
   {:name rank-better?,
    :params [atime1 bytes1 atime2 bytes2],
    :result :i64,
@@ -43,9 +43,13 @@
     (if (< atime1 atime2) 0 (if (< bytes2 bytes1) 1 0)))}
   {:name comfy-evictable?,
    :params [atime-days keep-days],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (< atime-days 0) 0 (if (< keep-days atime-days) 1 0))}],
+   :body
+   (if
+    (< atime-days 0)
+    false
+    (if (< keep-days atime-days) true false))}],
  :oracle-value nil,
  :schema-identities nil,
  :exports

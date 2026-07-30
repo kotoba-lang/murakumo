@@ -24,8 +24,8 @@
 (defn free-after [free :i64 reclaimed :i64] :i64
   (+ free reclaimed))
 
-(defn target-met? [free :i64 reclaimed :i64 target :i64] :i64
-  (if (< (+ free reclaimed) target) 0 1))
+(defn target-met? [free :i64 reclaimed :i64 target :i64] :bool
+  (if (< (+ free reclaimed) target) false true))
 
 (defn rank-better? [atime1 :i64 bytes1 :i64 atime2 :i64 bytes2 :i64] :i64
   ;; cljc rank: [(- atime) (- bytes)]; lower tuple sorts first (evict sooner)
@@ -36,8 +36,8 @@
       0
       (if (< bytes2 bytes1) 1 0))))
 
-(defn comfy-evictable? [atime-days :i64 keep-days :i64] :i64
+(defn comfy-evictable? [atime-days :i64 keep-days :i64] :bool
   ;; cljc: (> (or atime-days 0) comfy-keep-days)
   (if (< atime-days 0)
-    0
-    (if (< keep-days atime-days) 1 0)))
+    false
+    (if (< keep-days atime-days) true false)))

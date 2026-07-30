@@ -77,22 +77,24 @@
   (get tiers (or (:tier caps) :native)))
 
 (defn can?
-  "Can a joiner with `caps` take work of `kind`?"
+  "Can a joiner with `caps` take work of `kind`?
+   Profile 5: guest returns :bool."
   [caps kind]
   (try-oracle
-   #(= 1 (oracle/i64->host
-          (o 'can? [(oracle/as-i64 (tier-code (:tier (tier-of caps))))
-                    (name kind)])))
+   #(oracle/bool->host
+     (o 'can? [(oracle/as-i64 (tier-code (:tier (tier-of caps))))
+               (name kind)]))
    #(boolean (some #{kind} (:can (tier-of caps))))))
 
 (defn needs-relay?
-  "Browser/wasm ALWAYS need a relay (no inbound). Native only when un-reachable."
+  "Browser/wasm ALWAYS need a relay (no inbound). Native only when un-reachable.
+   Profile 5: guest returns :bool."
   [caps]
   (try-oracle
-   #(= 1 (oracle/i64->host
-          (o 'needs-relay?
-             [(oracle/as-i64 (tier-code (:tier (tier-of caps))))
-              (oracle/as-i64 (if (true? (:inbound-reachable? caps)) 1 0))])))
+   #(oracle/bool->host
+     (o 'needs-relay?
+        [(oracle/as-i64 (tier-code (:tier (tier-of caps))))
+         (oracle/as-i64 (if (true? (:inbound-reachable? caps)) 1 0))]))
    #(or (contains? #{:browser :wasm} (:tier caps))
         (not (:inbound-reachable? caps)))))
 
@@ -120,18 +122,19 @@
      :node/can (:can t)}))
 
 (defn eligible-for-work?
-  "A node can take a job when its tier :can covers work-kind AND residency fits."
+  "A node can take a job when its tier :can covers work-kind AND residency fits.
+   Profile 5: can-kind arg and result are :bool."
   [node {:keys [work-kind resident-bytes] :as _job}]
   (try-oracle
    (fn []
-     (let [can-kind (if (some #{work-kind} (:node/can node)) 1 0)
+     (let [can-kind (boolean (some #{work-kind} (:node/can node)))
            max-res (or (get-in node [:node/caps :max-resident-bytes]) 0)
            res (or resident-bytes 0)]
-       (= 1 (oracle/i64->host
-             (o 'eligible-for-work?
-                [(oracle/as-i64 can-kind)
-                 (oracle/as-i64 max-res)
-                 (oracle/as-i64 res)])))))
+       (oracle/bool->host
+        (o 'eligible-for-work?
+           [can-kind
+            (oracle/as-i64 max-res)
+            (oracle/as-i64 res)]))))
    #(and (some #{work-kind} (:node/can node))
          (<= (or resident-bytes 0)
              (get-in node [:node/caps :max-resident-bytes] 0)))))

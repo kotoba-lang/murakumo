@@ -242,19 +242,19 @@
    :apps (mapv #(reconcile-app fleet snapshot connect-spec %) (:apps manifest))})
 
 (defn- action-is-satisfied?
-  "Kotoba `action-is-satisfied?` when ready."
+  "Kotoba `action-is-satisfied?` when ready. Profile 5: guest :bool."
   [action]
   (try-oracle
-   #(= 1 (oracle/i64->host
-          (o 'action-is-satisfied? [(name action)])))
+   #(oracle/bool->host
+     (o 'action-is-satisfied? [(name action)]))
    #(= (name action) action-satisfied)))
 
 (defn- action-is-place?
-  "Kotoba `action-is-place?` when ready."
+  "Kotoba `action-is-place?` when ready. Profile 5: guest :bool."
   [action]
   (try-oracle
-   #(= 1 (oracle/i64->host
-          (o 'action-is-place? [(name action)])))
+   #(oracle/bool->host
+     (o 'action-is-place? [(name action)]))
    #(= (name action) action-place)))
 
 (defn plan-converged?

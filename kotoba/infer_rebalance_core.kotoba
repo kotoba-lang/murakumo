@@ -332,9 +332,9 @@
   ;; cljc: (* usable text-n) for text pool pipeline
   (* usable-gb text-seats))
 
-(defn node-online? [status :string] :i64
+(defn node-online? [status :string] :bool
   ;; capacity filter: status "up" only
-  (if (string=? status "up") 1 0))
+  (if (string=? status "up") true false))
 
 (defn move-needed [from-pool :i64 to-pool :i64] :i64
   ;; pool codes 0=text 1=media 2=postproc; one node placement diff

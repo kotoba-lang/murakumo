@@ -194,9 +194,9 @@
   (let [i (compile-i64-cases
            {"mm0" (str "(if (missing-manifest? " (kotoba-literal "") ") 1 0)")
             "mm1" (str "(if (missing-manifest? " (kotoba-literal "app.edn") ") 1 0)")
-            "as" (str "(action-is-satisfied? " (kotoba-literal "satisfied") ")")
-            "ap" (str "(action-is-place? " (kotoba-literal "place") ")")
-            "ao" (str "(action-is-place? " (kotoba-literal "satisfied") ")")
+            "as" (str "(if (action-is-satisfied? " (kotoba-literal "satisfied") ") 1 0)")
+            "ap" (str "(if (action-is-place? " (kotoba-literal "place") ") 1 0)")
+            "ao" (str "(if (action-is-place? " (kotoba-literal "satisfied") ") 1 0)")
             "dw" "(default-watch-seconds)"
             ;; Profile 5: flag-is-* are :bool
             "fd" (str "(if (flag-is-dry-run? " (kotoba-literal "--dry-run") ") 1 0)")

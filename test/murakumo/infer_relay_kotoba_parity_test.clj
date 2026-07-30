@@ -54,7 +54,8 @@
                 [70000 1000 60000]]
         cases (into {} (map-indexed
                         (fn [i [now at ttl]]
-                          [(str "e_" i) (str "(lease-expired? " now " " at " " ttl ")")])
+                          [(str "e_" i)
+                           (str "(if (lease-expired? " now " " at " " ttl ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [now at ttl]] (map-indexed vector corpus)]
