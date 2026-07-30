@@ -69,7 +69,7 @@
    :effects #{},
    :body (let [B (lane-base)] (+ a (+ (* b B) (* c (* B B))))),
    :param-types [:i64 :i64 :i64]}
-  {:name plan-lr-pack-get,
+  {:name lane-at,
    :params [packed idx],
    :result :i64,
    :effects #{},
@@ -92,17 +92,26 @@
     (if (< rem-a rem-b) 0 (if (< idx-a idx-b) 1 0))),
    :param-types [:i64 :i64 :i64 :i64]}
   {:name pick-bump-3,
-   :params [ok-t ok-m ok-p rem-packed _pad],
+   :params [ok-t ok-m ok-p rems],
    :result :i64,
    :effects #{},
    :body
    (let
     [rt
-     (plan-lr-pack-get rem-packed 0)
+     (record-get
+      [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
+      rems
+      :l0)
      rm
-     (plan-lr-pack-get rem-packed 1)
+     (record-get
+      [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
+      rems
+      :l1)
      rp
-     (plan-lr-pack-get rem-packed 2)]
+     (record-get
+      [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
+      rems
+      :l2)]
     (if
      (= ok-t 0)
      (if
@@ -123,7 +132,11 @@
         (= ok-p 0)
         win-tm
         (if (= (better-bump? r-win i-win rp 2) 1) win-tm 2)))))),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+   :param-types
+   [:i64
+    :i64
+    :i64
+    [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]]}
   {:name ok-for,
    :params [active bumped],
    :result :i64,
@@ -136,9 +149,9 @@
    :effects #{},
    :body (if (< 0 w) 1 0),
    :param-types [:i64]}
-  {:name plan-lr-3,
+  {:name plan-lr-record,
    :params [total w0 w1 w2],
-   :result :i64,
+   :result [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]],
    :effects #{},
    :body
    (let
@@ -152,7 +165,11 @@
      (+ w0 (+ w1 w2))]
     (if
      (if (= total 0) 1 (if (= sumw 0) 1 0))
-     (pack3 0 0 0)
+     (record-new
+      [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
+      0
+      0
+      0)
      (let
       [p0
        (* total w0)
@@ -176,17 +193,16 @@
        (+ f0 (+ f1 f2))
        extra
        (- total assigned)
-       rem-packed
-       (pack3 r0 r1 r2)
+       rems
+       (record-new
+        [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
+        r0
+        r1
+        r2)
        b0
        (if
         (< 0 extra)
-        (pick-bump-3
-         (ok-for a0 0)
-         (ok-for a1 0)
-         (ok-for a2 0)
-         rem-packed
-         0)
+        (pick-bump-3 (ok-for a0 0) (ok-for a1 0) (ok-for a2 0) rems)
         -1)
        t0
        (if (= b0 0) 1 0)
@@ -201,8 +217,7 @@
          (ok-for a0 t0)
          (ok-for a1 m0)
          (ok-for a2 p0b)
-         rem-packed
-         0)
+         rems)
         -1)
        t1
        (if (= b1 0) 1 t0)
@@ -217,8 +232,7 @@
          (ok-for a0 t1)
          (ok-for a1 m1)
          (ok-for a2 p1b)
-         rem-packed
-         0)
+         rems)
         -1)
        bump0
        (if (if (= b0 0) 1 (if (= b1 0) 1 (if (= b2 0) 1 0))) 1 0)
@@ -226,7 +240,41 @@
        (if (if (= b0 1) 1 (if (= b1 1) 1 (if (= b2 1) 1 0))) 1 0)
        bump2
        (if (if (= b0 2) 1 (if (= b1 2) 1 (if (= b2 2) 1 0))) 1 0)]
-      (pack3 (+ f0 bump0) (+ f1 bump1) (+ f2 bump2))))),
+      (record-new
+       [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
+       (+ f0 bump0)
+       (+ f1 bump1)
+       (+ f2 bump2))))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name plan-lr-l0,
+   :params [total w0 w1 w2],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
+    (plan-lr-record total w0 w1 w2)
+    :l0),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name plan-lr-l1,
+   :params [total w0 w1 w2],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
+    (plan-lr-record total w0 w1 w2)
+    :l1),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name plan-lr-l2,
+   :params [total w0 w1 w2],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
+    (plan-lr-record total w0 w1 w2)
+    :l2),
    :param-types [:i64 :i64 :i64 :i64]}
   {:name plan-fits-total?,
    :params [total-usable weight-bytes],
@@ -277,19 +325,19 @@
    :params [mp],
    :result :i64,
    :effects #{},
-   :body (plan-lr-pack-get mp 0),
+   :body (lane-at mp 0),
    :param-types [:i64]}
   {:name model-dense,
    :params [mp],
    :result :i64,
    :effects #{},
-   :body (plan-lr-pack-get mp 1),
+   :body (lane-at mp 1),
    :param-types [:i64]}
   {:name model-frac-milli,
    :params [mp],
    :result :i64,
    :effects #{},
-   :body (plan-lr-pack-get mp 2),
+   :body (lane-at mp 2),
    :param-types [:i64]}
   {:name dense-layer-bytes,
    :params [weight-bytes layers dense dense-frac-milli],
@@ -494,11 +542,11 @@
     [ends
      (partition-3-ends weight-bytes mp u0 u1 u2)
      hi0
-     (plan-lr-pack-get ends 0)
+     (lane-at ends 0)
      hi1
-     (plan-lr-pack-get ends 1)
+     (lane-at ends 1)
      hi2
-     (plan-lr-pack-get ends 2)
+     (lane-at ends 2)
      lo0
      0
      lo1
@@ -588,9 +636,9 @@
     [ends
      (partition-2-ends weight-bytes mp u0 u1)
      hi0
-     (plan-lr-pack-get ends 0)
+     (lane-at ends 0)
      hi1
-     (plan-lr-pack-get ends 1)
+     (lane-at ends 1)
      lo0
      0
      lo1
@@ -619,13 +667,13 @@
    :params [ends-pack idx],
    :result :i64,
    :effects #{},
-   :body (if (= idx 0) 0 (plan-lr-pack-get ends-pack (- idx 1))),
+   :body (if (= idx 0) 0 (lane-at ends-pack (- idx 1))),
    :param-types [:i64 :i64]}
   {:name ends-hi,
    :params [ends-pack idx],
    :result :i64,
    :effects #{},
-   :body (plan-lr-pack-get ends-pack idx),
+   :body (lane-at ends-pack idx),
    :param-types [:i64 :i64]}
   {:name asg-row-pack,
    :params [weight-bytes mp lo hi usable],
@@ -645,13 +693,13 @@
    :params [row],
    :result :i64,
    :effects #{},
-   :body (plan-lr-pack-get row 0),
+   :body (lane-at row 0),
    :param-types [:i64]}
   {:name asg-row-fits,
    :params [row],
    :result :i64,
    :effects #{},
-   :body (plan-lr-pack-get row 1),
+   :body (lane-at row 1),
    :param-types [:i64]}
   {:name lo-acc-pack,
    :params [lo acc],
@@ -666,9 +714,9 @@
    :body
    (let
     [lo
-     (plan-lr-pack-get lo-acc 0)
+     (lane-at lo-acc 0)
      acc
-     (plan-lr-pack-get lo-acc 1)
+     (lane-at lo-acc 1)
      wsum
      (layer-wsum weight-bytes mp)
      target
@@ -683,13 +731,13 @@
    :params [step-pack],
    :result :i64,
    :effects #{},
-   :body (plan-lr-pack-get step-pack 0),
+   :body (lane-at step-pack 0),
    :param-types [:i64]}
   {:name partition-step-acc,
    :params [step-pack],
    :result :i64,
    :effects #{},
-   :body (plan-lr-pack-get step-pack 1),
+   :body (lane-at step-pack 1),
    :param-types [:i64]}
   {:name partition-last,
    :params [mp],
@@ -798,9 +846,9 @@
   default-headroom
   usable-bytes
   choose-strategy-name
-  lane-base
-  plan-lr-3
-  plan-lr-pack-get
+  plan-lr-l0
+  plan-lr-l1
+  plan-lr-l2
   plan-fits-total?
   span-fits?
   uniform-layer-bytes
