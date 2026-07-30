@@ -1,8 +1,9 @@
 (ns infer-schedule-core
   (:schemas {;; T5.3: assign pack families become named records (no base-65536).
+             ;; Profile 5: eligibility flags are real :bool fields (not 0/1 i64).
              :schedule/eligibility [:record :schedule/eligibility
-                                    [[:has-engine :i64] [:has-checkpoint :i64]
-                                     [:holds-checkpoint :i64] [:can-fetch :i64]]]
+                                    [[:has-engine :bool] [:has-checkpoint :bool]
+                                     [:holds-checkpoint :bool] [:can-fetch :bool]]]
              ;; 2-node assign context: warm flags + score preference
              :schedule/better2 [:record :schedule/better2
                                 [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]]
@@ -43,24 +44,22 @@
 ;; named records — base-65536 pack3 is deleted from this module.
 ;; score is two i64 keys (queue, -free); better-score? compares lexicographically.
 ;; T5.3 complete for this module: no base-65536 packing remains.
+;; Profile 5: eligibility fields and eligible?/holds-warm? are :bool (ADR 0191).
 ;; Parity: test/murakumo/infer_schedule_kotoba_parity_test.clj
 
-(defn eligible? [e [:ref :schedule/eligibility] free-bytes :i64 min-free :i64] :i64
-  (let [has-engine (record-get e :has-engine)
-        has-ckpt (record-get e :has-checkpoint)
-        holds (record-get e :holds-checkpoint)
-        can-fetch (record-get e :can-fetch)
-        ckpt-ok (if (= has-ckpt 0)
-                  1
-                  (if (= holds 1)
-                    1
-                    (if (= can-fetch 1) 1 0)))
-        mem-ok (if (< free-bytes min-free) 0 1)]
-    (if (= has-engine 0)
-      0
-      (if (= ckpt-ok 0)
-        0
-        mem-ok))))
+(defn eligible? [e [:ref :schedule/eligibility] free-bytes :i64 min-free :i64] :bool
+  ;; Nested `if` (not `and`/`or`) so the precompiled KIR is gensym-stable for
+  ;; the drift gate. Semantics match Clojure-shaped:
+  ;;   has-engine ∧ (¬has-checkpoint ∨ holds ∨ can-fetch) ∧ free≥min
+  (if (record-get e :has-engine)
+    (if (if (record-get e :has-checkpoint)
+          (if (record-get e :holds-checkpoint)
+            true
+            (record-get e :can-fetch))
+          true)
+      (if (>= free-bytes min-free) true false)
+      false)
+    false))
 
 (defn score-queue [queue :i64] :i64
   (if (< queue 0) 0 queue))
@@ -77,7 +76,7 @@
       0
       (if (< f1 f2) 1 0))))
 
-(defn holds-warm? [e [:ref :schedule/eligibility]] :i64
+(defn holds-warm? [e [:ref :schedule/eligibility]] :bool
   (record-get e :holds-checkpoint))
 
 (defn prefer-warm-then-score [warm0 :i64 warm1 :i64 better01 :i64] :i64

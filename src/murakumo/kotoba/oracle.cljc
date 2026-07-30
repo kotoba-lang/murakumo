@@ -276,6 +276,8 @@
                    (case field-type
                      :i64 (as-i64 v)
                      :string (str v)
+                     ;; Profile 5: record :bool fields are host/guest booleans.
+                     :bool (boolean v)
                      v))))
           fields)))
 

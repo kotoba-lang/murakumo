@@ -509,15 +509,19 @@
         (is (= "a" (:node (asg 1))))))))
 
 (deftest schedule-oracle-call-matches-live-compile
-  (let [live (sched-live-kir)]
-    ;; T5.3: eligibility is a record, not four packed bits.
-    (let [elig (oracle/record [:record :schedule/eligibility
-                               [[:has-engine :i64] [:has-checkpoint :i64]
-                                [:holds-checkpoint :i64] [:can-fetch :i64]]]
-                              {:has-engine 1 :has-checkpoint 1
-                               :holds-checkpoint 1 :can-fetch 1})]
-      (is (= (ir/execute live 'eligible? [elig (* 16 1024 1024 1024) 0])
-             (oracle/call :infer-schedule 'eligible? [elig (* 16 1024 1024 1024) 0]))))
+  (let [live (sched-live-kir)
+        elig (oracle/record [:record :schedule/eligibility
+                             [[:has-engine :bool] [:has-checkpoint :bool]
+                              [:holds-checkpoint :bool] [:can-fetch :bool]]]
+                            {:has-engine true :has-checkpoint true
+                             :holds-checkpoint true :can-fetch true})]
+    ;; T5.3 + profile 5: eligibility is a bool-field record.
+    ;; eligible? result is a :bool word (KIR 0/1 or host true/false).
+    (is (= (ir/execute live 'eligible? [elig (* 16 1024 1024 1024) 0])
+           (oracle/call :infer-schedule 'eligible? [elig (* 16 1024 1024 1024) 0])))
+    (is (contains? #{true 1}
+                   (oracle/call :infer-schedule 'eligible?
+                                [elig (* 16 1024 1024 1024) 0])))
     (is (= (ir/execute live 'score-queue [3])
            (oracle/call :infer-schedule 'score-queue [3])))
     (is (= (ir/execute live 'queue-inc-if [2 1])

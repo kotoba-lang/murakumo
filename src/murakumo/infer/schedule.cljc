@@ -26,26 +26,25 @@
         (mirror-thunk)))
     (mirror-thunk)))
 
-;; flags: 1 has-engine | 2 has-checkpoint | 4 holds-checkpoint | 8 can-fetch
+;; Profile 5: eligibility fields are real host/guest booleans (not 0/1 i64).
 
 (def ^:private eligibility-schema
-  "Guest descriptor for infer_schedule_core's eligibility record (T5.3).
-   Replaces the four bits that used to be packed into one i64."
+  "Guest descriptor for infer_schedule_core's eligibility record (T5.3 + profile 5).
+   Four flags used to be packed into one i64; then T5.3 made them :i64 fields;
+   language profile 5 makes them :bool."
   [:record :schedule/eligibility
-   [[:has-engine :i64] [:has-checkpoint :i64]
-    [:holds-checkpoint :i64] [:can-fetch :i64]]])
+   [[:has-engine :bool] [:has-checkpoint :bool]
+    [:holds-checkpoint :bool] [:can-fetch :bool]]])
 
 (defn- eligibility-fields [node model]
   (let [engine (:model/engine model)
         ckpt (:model/checkpoint model)
         engines (or (:engines node) #{})
-        checkpoints (or (:checkpoints node) #{})
-        has-engine (if (contains? engines engine) 1 0)
-        has-ckpt (if (nil? ckpt) 0 1)
-        holds (if (and ckpt (contains? checkpoints ckpt)) 1 0)
-        can-fetch (if (false? (:node/can-fetch? node)) 0 1)]
-    {:has-engine has-engine :has-checkpoint has-ckpt
-     :holds-checkpoint holds :can-fetch can-fetch}))
+        checkpoints (or (:checkpoints node) #{})]
+    {:has-engine (contains? engines engine)
+     :has-checkpoint (some? ckpt)
+     :holds-checkpoint (boolean (and ckpt (contains? checkpoints ckpt)))
+     :can-fetch (not (false? (:node/can-fetch? node)))}))
 
 (defn- mirror-eligible?
   [{:keys [engines checkpoints free-bytes] :as node} model]
@@ -55,15 +54,26 @@
            (:node/can-fetch? node true))
        (>= (or free-bytes 0) (:model/min-free-bytes model 0))))
 
+(defn- guest-bool->host
+  "KIR :bool is a 0/1 word or a host boolean. Clojure's `boolean` treats 0 as
+  truthy, so never use it on a guest word — only nil/false are falsey in Clojure."
+  [v]
+  (cond
+    (true? v) true
+    (false? v) false
+    (number? v) (not (zero? #?(:clj (long v) :cljs v)))
+    :else (boolean v)))
+
 (defn eligible?
-  "Can `node` run `model`? Kotoba eligible? with an eligibility record (T5.3)."
+  "Can `node` run `model`? Kotoba eligible? with a bool eligibility record
+  (T5.3 + language profile 5)."
   [node model]
   (try-oracle
-   #(= 1 (oracle/i64->host
-          (o 'eligible?
-             [(oracle/record eligibility-schema (eligibility-fields node model))
-              (oracle/as-i64 (or (:free-bytes node) 0))
-              (oracle/as-i64 (:model/min-free-bytes model 0))])))
+   #(guest-bool->host
+     (o 'eligible?
+        [(oracle/record eligibility-schema (eligibility-fields node model))
+         (oracle/as-i64 (or (:free-bytes node) 0))
+         (oracle/as-i64 (:model/min-free-bytes model 0))]))
    #(mirror-eligible? node model)))
 
 (defn score
