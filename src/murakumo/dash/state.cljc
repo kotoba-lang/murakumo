@@ -191,16 +191,12 @@
 
 (defn short-hosted-cid
   "CID abbreviation used in the dashboard hosted-components table.
-   Kotoba `short-hosted-cid` when oracle ready (falls back if KIR
-   string-substring bounds fail on a runtime — e.g. some cljs kir builds)."
+   Kotoba `short-hosted-cid` (cljs may soft-fall if KIR substring fails)."
   [cid]
   (let [s (str cid)]
-    (if (oracle-ready?)
-      (try
-        (o 'short-hosted-cid [s])
-        (catch #?(:clj Exception :cljs :default) _
-          (mirror-short-hosted-cid s)))
-      (mirror-short-hosted-cid s))))
+    (try-oracle
+     #(o 'short-hosted-cid [s])
+     #(mirror-short-hosted-cid s))))
 
 (defn- short-cid [cid]
   (subs cid 0 (min short-cid-max-len (count cid))))
@@ -220,9 +216,9 @@
    Kotoba `health-class-of` on `:health` when oracle ready."
   [node]
   (let [h (str (or (:health node) ""))]
-    (if (oracle-ready?)
-      (o 'health-class-of [h])
-      (mirror-health-class h))))
+    (try-oracle
+     #(o 'health-class-of [h])
+     #(mirror-health-class h))))
 
 (defn query-at
   "Parse dashboard `at=N` query parameter. Returns nil if absent. The regex is
@@ -246,19 +242,19 @@
   "Milliseconds to sleep between dashboard snapshots.
    Kotoba `interval-sleep-ms` when oracle ready."
   [seconds]
-  (if (oracle-ready?)
-    (oracle/i64->host (o 'interval-sleep-ms [(oracle/as-i64 seconds)]))
-    (mirror-interval-sleep-ms seconds)))
+  (try-oracle
+   #(oracle/i64->host (o 'interval-sleep-ms [(oracle/as-i64 seconds)]))
+   #(mirror-interval-sleep-ms seconds)))
 
 (defn clamp-at
   "Clamp a requested history offset into the available history range.
    Kotoba `clamp-at` when oracle ready (nil requested-at → 0)."
   [requested-at history-count]
-  (if (oracle-ready?)
-    (oracle/i64->host
+  (try-oracle
+   #(oracle/i64->host
      (o 'clamp-at [(oracle/as-i64 (or requested-at 0))
                    (oracle/as-i64 history-count)]))
-    (mirror-clamp-at requested-at history-count)))
+   #(mirror-clamp-at requested-at history-count)))
 
 (defn selected-snapshot
   "Select dashboard snapshot for a history offset.
@@ -280,10 +276,10 @@
    Cap `n` via kotoba `recent-take-n` when oracle ready (negative → default 6)."
   ([alerts] (recent-alerts alerts 6))
   ([alerts n]
-   (let [take-n (if (oracle-ready?)
-                  (oracle/i64->host
+   (let [take-n (try-oracle
+                 #(oracle/i64->host
                    (o 'recent-take-n [(oracle/as-i64 n) (oracle/as-i64 6)]))
-                  (mirror-recent-take-n n 6))]
+                 #(mirror-recent-take-n n 6))]
      (take take-n (reverse alerts)))))
 
 (defn append-capped
@@ -292,10 +288,10 @@
   [items cap item]
   (let [v (conj (vec items) item)
         len (count v)
-        start (if (oracle-ready?)
-                (oracle/i64->host
+        start (try-oracle
+               #(oracle/i64->host
                  (o 'take-last-start [(oracle/as-i64 len) (oracle/as-i64 cap)]))
-                (mirror-take-last-start len cap))]
+               #(mirror-take-last-start len cap))]
     (subvec v start)))
 
 (defn concat-capped

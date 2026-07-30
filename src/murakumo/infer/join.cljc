@@ -42,12 +42,20 @@
     2))
 
 (defn- max-res-for-tier [code mirror]
-  (try
-    (if (oracle/ready? oid)
-      (oracle/i64->host (oracle/call oid 'max-resident-bytes [(oracle/as-i64 code)]))
-      mirror)
-    (catch #?(:clj Exception :cljs :default) _
-      mirror)))
+  "JVM: require oracle. cljs: mirror fallback."
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export 'max-resident-bytes})))
+       (oracle/i64->host (oracle/call oid 'max-resident-bytes [(oracle/as-i64 code)])))
+     :cljs
+     (try
+       (if (oracle-ready?)
+         (oracle/i64->host (oracle/call oid 'max-resident-bytes [(oracle/as-i64 code)]))
+         mirror)
+       (catch :default _
+         mirror))))
 
 (def tiers
   "Participation tiers, widest-reach first."

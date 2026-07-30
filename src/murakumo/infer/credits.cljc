@@ -55,13 +55,44 @@
            (mirror-thunk)))
        (mirror-thunk))))
 
+(defn- oracle-i64-const [export mirror]
+  "JVM: require oracle. cljs: mirror fallback."
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export export})))
+       (oracle/i64->host (oracle/call oid export [])))
+     :cljs
+     (try
+       (if (oracle-ready?)
+         (oracle/i64->host (oracle/call oid export []))
+         mirror)
+       (catch :default _
+         mirror))))
+
+(defn- oracle-ratio-const
+  "Load-time ratio from two i64 exports. JVM require; cljs mirror."
+  [num-export den-export mirror]
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export [num-export den-export]})))
+       (/ (oracle/i64->host (oracle/call oid num-export []))
+          (oracle/i64->host (oracle/call oid den-export []))))
+     :cljs
+     (try
+       (if (oracle-ready?)
+         (/ (oracle/i64->host (oracle/call oid num-export []))
+            (oracle/i64->host (oracle/call oid den-export [])))
+         mirror)
+       (catch :default _
+         mirror))))
+
 (def default-per-token
-  (try
-    (if (oracle/ready? oid)
-      (oracle/i64->host (oracle/call oid 'default-per-token []))
-      1)
-    (catch #?(:clj Exception :cljs :default) _
-      1)))          ; credits per generated token
+  ;; credits per generated token
+  (oracle-i64-const 'default-per-token 1))
 ;; NOT ratio literals (1/10, 1/20): clojure.lang.Ratio is not a valid
 ;; ClojureScript compile-time constant ("failed compiling constant: 1/10")
 ;; -- this file's own docstring promises "runs identically in bb, the JVM,
@@ -70,23 +101,13 @@
 ;; optional. (/ 1 10) evaluates to the identical Clojure ratio value at
 ;; runtime on bb/JVM (arithmetic, not a literal, so it's fine there too) --
 ;; only the *literal syntax* is the problem.
-;; Numer/denom from kotoba head-num/head-den and protocol-num/protocol-den when ready.
+;; Numer/denom from kotoba head-num/head-den and protocol-num/protocol-den.
 (def default-head-frac
-  (try
-    (if (oracle/ready? oid)
-      (/ (oracle/i64->host (oracle/call oid 'head-num []))
-         (oracle/i64->host (oracle/call oid 'head-den [])))
-      (/ 1 10))
-    (catch #?(:clj Exception :cljs :default) _
-      (/ 1 10))))     ; conductor's cut
+  ;; conductor's cut
+  (oracle-ratio-const 'head-num 'head-den (/ 1 10)))
 (def default-protocol-frac
-  (try
-    (if (oracle/ready? oid)
-      (/ (oracle/i64->host (oracle/call oid 'protocol-num []))
-         (oracle/i64->host (oracle/call oid 'protocol-den [])))
-      (/ 1 20))
-    (catch #?(:clj Exception :cljs :default) _
-      (/ 1 20)))) ; fleet treasury (upgrade fund)
+  ;; fleet treasury (upgrade fund)
+  (oracle-ratio-const 'protocol-num 'protocol-den (/ 1 20)))
 
 (defn- memory-time
   "node → shard-bytes × duration-ms, the contribution weight of one run.

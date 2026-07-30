@@ -51,14 +51,25 @@
            (mirror-thunk)))
        (mirror-thunk))))
 
+(defn- oracle-i64-const [export mirror]
+  "JVM: require oracle. cljs: mirror fallback."
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export export})))
+       (oracle/i64->host (oracle/call oid export [])))
+     :cljs
+     (try
+       (if (oracle-ready?)
+         (oracle/i64->host (oracle/call oid export []))
+         mirror)
+       (catch :default _
+         mirror))))
+
 (def shard-ceiling-gb
   "16GB stability limit → ~10GB usable shard. Kotoba `shard-ceiling-gb` when ready."
-  (try
-    (if (oracle/ready? oid)
-      (oracle/i64->host (oracle/call oid 'shard-ceiling-gb []))
-      10)
-    (catch #?(:clj Exception :cljs :default) _
-      10)))
+  (oracle-i64-const 'shard-ceiling-gb 10))
 
 ;; ── capacity ────────────────────────────────────────────────────────────────
 

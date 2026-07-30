@@ -35,13 +35,24 @@
            (mirror-thunk)))
        (mirror-thunk))))
 
+(defn- oracle-i64-const [export mirror]
+  "JVM: require oracle. cljs: mirror fallback."
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export export})))
+       (oracle/i64->host (oracle/call oid export [])))
+     :cljs
+     (try
+       (if (oracle-ready?)
+         (oracle/i64->host (oracle/call oid export []))
+         mirror)
+       (catch :default _
+         mirror))))
+
 (def default-rpc-port
-  (try
-    (if (oracle/ready? oid)
-      (oracle/i64->host (oracle/call oid 'default-rpc-port []))
-      50052)
-    (catch #?(:clj Exception :cljs :default) _
-      50052)))
+  (oracle-i64-const 'default-rpc-port 50052))
 
 (defn- serving [plan] (filter (comp pos? :span) (:assignments plan)))
 
