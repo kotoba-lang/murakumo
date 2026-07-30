@@ -11,98 +11,52 @@
 ;; adapters (murakumo.infer.engine) turn a plan into concrete process commands
 ;; (llama.cpp --rpc/--tensor-split, mlx.launch ring, …).
 ;;
-;; W6 product-shell authority:
-;; GiB/defaults/usable-bytes/choose-strategy name DELEGATE to precompiled
-;; kotoba/infer_plan_core.kotoba when oracle loadable (JVM or cljs/nbb).
+;; W6 product-shell + T6.4: GiB/defaults/usable-bytes/choose-strategy name require
+;; the shipped `:infer-plan` KIR on **every** platform. Host pure mirrors are gone
+;; — cljs/nbb must preload shipped KIR (resources/ via nbb cwd, register-kir!, or
+;; set-resource-loader!) before requiring this ns
+;; (ADR-260731-w6-t64-infer-plan-credits-mirror-delete).
 ;; Partition walk and plan map assembly stay cljc (float/vector host path).
 
 (ns murakumo.infer.plan
-  "Shard planning. Pure helpers use kotoba/infer_plan_core when oracle ready."
+  "Shard planning. Pure helpers require kotoba/infer_plan_core (T6.4)."
   (:require [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :infer-plan)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
 
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-(defn- oracle-i64-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/i64->host (oracle/call oid export [])))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/i64->host (oracle/call oid export []))
-         mirror)
-       (catch :default _
-         mirror))))
-
-;; ── host-mirror constants + pure helpers ─────────────────────────────
-
-(def ^:private mirror-GiB (* 1024 1024 1024))
-(def ^:private mirror-os-reserve (long (* 7/2 mirror-GiB)))
-(def ^:private mirror-headroom (long (* 5/4 mirror-GiB)))
+;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def GiB
-  "Binary GiB in bytes. Kotoba `gib` when oracle ready."
-  (oracle-i64-const 'gib mirror-GiB))
+  "Binary GiB in bytes. Kotoba `gib` (requires oracle)."
+  (oracle/i64->host (o 'gib [])))
 
 (def default-os-reserve
-  "Default OS reserve bytes. Kotoba `default-os-reserve` when ready."
-  (oracle-i64-const 'default-os-reserve mirror-os-reserve))
+  "Default OS reserve bytes. Kotoba `default-os-reserve` (requires oracle)."
+  (oracle/i64->host (o 'default-os-reserve [])))
 
 (def default-headroom
-  "Default per-node headroom bytes. Kotoba `default-headroom` when ready."
-  (oracle-i64-const 'default-headroom mirror-headroom))
-
-(defn- mirror-usable-bytes
-  [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes]}]
-  (let [os-res (or os-reserve-bytes default-os-reserve)
-        head (or headroom-bytes default-headroom)
-        ceiling (- mem-bytes os-res)
-        ceiling (if wired-limit-bytes (min ceiling wired-limit-bytes) ceiling)]
-    (max 0 (long (- ceiling head)))))
+  "Default per-node headroom bytes. Kotoba `default-headroom` (requires oracle)."
+  (oracle/i64->host (o 'default-headroom [])))
 
 (defn usable-bytes
   "Bytes of weights a node can realistically hold resident.
-   Kotoba `usable-bytes` when ready (wired -1 = absent)."
-  [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes] :as node}]
-  (try-oracle
-   (fn []
-     (let [os (or os-reserve-bytes default-os-reserve)
-           head (or headroom-bytes default-headroom)
-           wired (if (some? wired-limit-bytes) wired-limit-bytes -1)]
-       (oracle/i64->host
-        (o 'usable-bytes
-           [(oracle/as-i64 mem-bytes)
-            (oracle/as-i64 os)
-            (oracle/as-i64 head)
-            (oracle/as-i64 wired)]))))
-   #(mirror-usable-bytes node)))
+   Kotoba `usable-bytes` (required; wired -1 = absent)."
+  [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes]}]
+  (let [os (or os-reserve-bytes default-os-reserve)
+        head (or headroom-bytes default-headroom)
+        wired (if (some? wired-limit-bytes) wired-limit-bytes -1)]
+    (oracle/i64->host
+     (o 'usable-bytes
+        [(oracle/as-i64 mem-bytes)
+         (oracle/as-i64 os)
+         (oracle/as-i64 head)
+         (oracle/as-i64 wired)]))))
 
 (defn- largest-remainder
   "Apportion `total` integer units over `quotas` (seq of non-negative reals that
@@ -184,33 +138,18 @@
    :expert "fast interconnect and enough experts for every rank to hold whole ones"
    :pipeline "GbE-class link: one activation handoff per boundary is all it can pay for"})
 
-(defn- mirror-choose-strategy
-  [{:keys [link-gbps ranks model]}]
-  (let [{:model/keys [experts kv-heads]} model
-        fast? (and link-gbps (>= (double link-gbps) 20.0))]
-    (cond
-      (and fast? kv-heads (pos? (or ranks 0)) (zero? (mod kv-heads ranks)))
-      {:strategy :tensor :why (:tensor strategy-why)}
-      (and fast? experts (> (or experts 0) (or ranks 1)))
-      {:strategy :expert :why (:expert strategy-why)}
-      :else
-      {:strategy :pipeline :why (:pipeline strategy-why)})))
-
 (defn choose-strategy
   "Pick the parallelism the interconnect can actually pay for.
-   Strategy name from kotoba `choose-strategy-name` when ready; :why from host table."
-  [{:keys [link-gbps ranks model] :as opts}]
-  (try-oracle
-   (fn []
-     (let [name (o 'choose-strategy-name
-                   [(oracle/as-i64 (or link-gbps 0))
-                    (oracle/as-i64 (or ranks 0))
-                    (oracle/as-i64 (or (:model/experts model) 0))
-                    (oracle/as-i64 (or (:model/kv-heads model) 0))])
-           strat (keyword name)]
-       {:strategy strat
-        :why (get strategy-why strat (:pipeline strategy-why))}))
-   #(mirror-choose-strategy opts)))
+   Strategy name from kotoba `choose-strategy-name` (required); :why from host table."
+  [{:keys [link-gbps ranks model]}]
+  (let [name (o 'choose-strategy-name
+                [(oracle/as-i64 (or link-gbps 0))
+                 (oracle/as-i64 (or ranks 0))
+                 (oracle/as-i64 (or (:model/experts model) 0))
+                 (oracle/as-i64 (or (:model/kv-heads model) 0))])
+        strat (keyword name)]
+    {:strategy strat
+     :why (get strategy-why strat (:pipeline strategy-why))}))
 
 (defn report
   "Human-oriented rows for the plan table (pure; printing is the caller's job)."

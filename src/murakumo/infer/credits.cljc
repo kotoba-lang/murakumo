@@ -24,109 +24,54 @@
 (ns murakumo.infer.credits
   "Inference economy pure ledger math.
 
-  W6 product-shell (ADR-260728-w6-identity-credits-oracle-authority):
-  defaults + memory-time weights + charge-allow? gate DELEGATE to
-  infer_credits_core.kir.edn when oracle loadable (JVM or cljs/nbb).
-  Float settle folds, transfer, balances remain host. cljs mirrors as fallback."
+  W6 product-shell + T6.4: defaults + memory-time weights + charge-allow? gate
+  require the shipped `:infer-credits` KIR on **every** platform. Host pure
+  mirrors are gone — cljs/nbb must preload shipped KIR (resources/ via nbb cwd,
+  register-kir!, or set-resource-loader!) before requiring this ns
+  (ADR-260731-w6-t64-infer-plan-credits-mirror-delete).
+  Float settle folds, transfer, balances remain host."
   (:require [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :infer-credits)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
-
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-(defn- oracle-i64-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/i64->host (oracle/call oid export [])))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/i64->host (oracle/call oid export []))
-         mirror)
-       (catch :default _
-         mirror))))
-
-(defn- oracle-ratio-const
-  "Load-time ratio from two i64 exports. JVM require; cljs mirror."
-  [num-export den-export mirror]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export [num-export den-export]})))
-       (/ (oracle/i64->host (oracle/call oid num-export []))
-          (oracle/i64->host (oracle/call oid den-export []))))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (/ (oracle/i64->host (oracle/call oid num-export []))
-            (oracle/i64->host (oracle/call oid den-export [])))
-         mirror)
-       (catch :default _
-         mirror))))
 
 (def default-per-token
   ;; credits per generated token
-  (oracle-i64-const 'default-per-token 1))
+  (oracle/i64->host (o 'default-per-token [])))
 ;; NOT ratio literals (1/10, 1/20): clojure.lang.Ratio is not a valid
 ;; ClojureScript compile-time constant ("failed compiling constant: 1/10")
 ;; -- this file's own docstring promises "runs identically in bb, the JVM,
 ;; the CF Worker (cloud-murakumo /infer/credits) and a kotoba WASM
 ;; component", so cljs portability is a real requirement here, not
-;; optional. (/ 1 10) evaluates to the identical Clojure ratio value at
-;; runtime on bb/JVM (arithmetic, not a literal, so it's fine there too) --
-;; only the *literal syntax* is the problem.
-;; Numer/denom from kotoba head-num/head-den and protocol-num/protocol-den.
+;; optional. (/ num den) from kotoba head-num/head-den and protocol-num/
+;; protocol-den (required oracle).
 (def default-head-frac
   ;; conductor's cut
-  (oracle-ratio-const 'head-num 'head-den (/ 1 10)))
+  (/ (oracle/i64->host (o 'head-num []))
+     (oracle/i64->host (o 'head-den []))))
 (def default-protocol-frac
   ;; fleet treasury (upgrade fund)
-  (oracle-ratio-const 'protocol-num 'protocol-den (/ 1 20)))
+  (/ (oracle/i64->host (o 'protocol-num []))
+     (oracle/i64->host (o 'protocol-den []))))
 
 (defn- memory-time
   "node → shard-bytes × duration-ms, the contribution weight of one run.
-   Kotoba memory-time-weight when ready (span < 1 → 0)."
+   Kotoba memory-time-weight (required; span < 1 → 0)."
   [assignments duration-ms]
   (into {}
         (for [{:keys [node est-bytes span]} assignments
-              :let [w (try-oracle
-                       #(oracle/i64->host
-                         (o 'memory-time-weight
-                            [(oracle/as-i64 (or est-bytes 0))
-                             (oracle/as-i64 (or duration-ms 0))
-                             (oracle/as-i64 (or span 0))]))
-                       #(if (pos? (or span 0))
-                          (* (double (or est-bytes 0)) duration-ms)
-                          0))]
+              :let [w (oracle/i64->host
+                       (o 'memory-time-weight
+                          [(oracle/as-i64 (or est-bytes 0))
+                           (oracle/as-i64 (or duration-ms 0))
+                           (oracle/as-i64 (or span 0))]))]
               :when (pos? w)]
           [(:name node) (double w)])))
-
 
 (def unit-prices
   "Media-first pricing keys (Civitai-Buzz-style per-job units) alongside
@@ -324,15 +269,13 @@
   (let [units (or units (when tokens {:tokens tokens}))
         cost (job-cost model units)
         bal (balance-of balances who)
-        ;; integer gate for whole balances/costs when oracle ready; float compare fallback
+        ;; integer gate for whole balances/costs when possible; float compare otherwise
         allow? (if (and (== (double (long bal)) (double bal))
                         (== (double (long cost)) (double cost)))
-                 (try-oracle
-                  #(oracle/bool->host
-                    (o 'charge-allow?
-                       [(oracle/as-i64 (long bal))
-                        (oracle/as-i64 (long cost))]))
-                  #(>= bal cost))
+                 (oracle/bool->host
+                  (o 'charge-allow?
+                     [(oracle/as-i64 (long bal))
+                      (oracle/as-i64 (long cost))]))
                  (>= bal cost))]
     (cond
       (and (= tier :sla) (not (availability-proof-ok? availability-verdicts)))
