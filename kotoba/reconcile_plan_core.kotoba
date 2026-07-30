@@ -1,9 +1,13 @@
 (ns reconcile-plan-core
   (:schemas {;; T5.3: placement pick result is a record, not a mixed radix pack.
              :reconcile/targets [:record :reconcile/targets
-                                 [[:first :i64] [:second :i64] [:count :i64]]]})
+                                 [[:first :i64] [:second :i64] [:count :i64]]]
+             ;; T5.3: 3-way pairwise name-order, not name-bits bit0/1/2.
+             :reconcile/name-order [:record :reconcile/name-order
+                                    [[:n01 :i64] [:n02 :i64] [:n12 :i64]]]})
   (:export [default-replicas desired deficit watch-sleep-ms action-name
             better-target? first-of-2 first-of-3
+            name-order-record
             pick-targets-2-record pick-targets-3-first
             targets-first targets-second targets-count
             blank? missing-manifest? action-is-satisfied? action-is-place?
@@ -26,8 +30,9 @@
 ;; reconcile-record-type: atproto $type / collection NSID for fleet reconcile records.
 ;; pick-targets: pure sort-by [load, name] for fixed 2/3 free candidates.
 ;; name order projected by host: name-a-before-b = 1 if name(a) <= name(b).
-;; For 3-way: name-bits bit0=n0<=n1, bit1=n0<=n2, bit2=n1<=n2 (values 1/2/4).
-;; T5.3: pick result is [:ref :reconcile/targets], not first|second*256|count*65536.
+;; For 3-way: name-order record {n01,n02,n12} = 1 if name(i) <= name(j).
+;; T5.3: pick result is [:ref :reconcile/targets]; name-bits bit-pack is gone.
+;; T5.3 complete for this module: no base-N / bit packs remain.
 ;; Parity: test/murakumo/reconcile_plan_kotoba_parity_test.clj
 
 (defn default-replicas [] :i64 1)
@@ -64,14 +69,6 @@
             (action-place))))
       (action-needs-build))))
 
-(defn rem64 [a :i64 b :i64] :i64
-  (- a (* (quot a b) b)))
-
-(defn bit? [flags :i64 mask :i64] :i64
-  (if (= 0 (rem64 (quot flags mask) 2))
-    0
-    1))
-
 (defn better-target? [load-a :i64 load-b :i64 name-a-before-b :i64] :i64
   ;; cljc sort-by (juxt load identity): lower load first; ties by name ascending
   ;; name-a-before-b=1 means name(a) <= name(b) so a wins ties
@@ -84,10 +81,14 @@
 (defn first-of-2 [load0 :i64 load1 :i64 name0-before-1 :i64] :i64
   (if (= (better-target? load0 load1 name0-before-1) 1) 0 1))
 
-(defn first-of-3 [load0 :i64 load1 :i64 load2 :i64 name-bits :i64] :i64
-  (let [n01 (bit? name-bits 1)
-        n02 (bit? name-bits 2)
-        n12 (bit? name-bits 4)
+(defn name-order-record [n01 :i64 n02 :i64 n12 :i64] [:ref :reconcile/name-order]
+  (record-new [:ref :reconcile/name-order] n01 n02 n12))
+
+(defn first-of-3 [load0 :i64 load1 :i64 load2 :i64
+                  names [:ref :reconcile/name-order]] :i64
+  (let [n01 (record-get names :n01)
+        n02 (record-get names :n02)
+        n12 (record-get names :n12)
         w01 (first-of-2 load0 load1 n01)]
     (if (= w01 0)
       (if (= (better-target? load0 load2 n02) 1) 0 2)
@@ -116,10 +117,11 @@
         (targets-record f 0 1)
         (targets-record f s 2)))))
 
-(defn pick-targets-3-first [load0 :i64 load1 :i64 load2 :i64 name-bits :i64] :i64
+(defn pick-targets-3-first [load0 :i64 load1 :i64 load2 :i64
+                            names [:ref :reconcile/name-order]] :i64
   ;; first target among 3 free candidates (n>=1). For n>1 host may re-call
   ;; on remaining pair via pick-targets-2-record.
-  (first-of-3 load0 load1 load2 name-bits))
+  (first-of-3 load0 load1 load2 names))
 
 (defn blank? [s :string] :i64
   (if (string=? s "") 1 0))
