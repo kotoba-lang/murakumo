@@ -609,15 +609,17 @@
                             [(oracle/option-i64 nil) 0 none-err])))
       (is (= 1 (oracle/call :task-plan 'failed?
                             [exit0 0 (oracle/option-string "x")]))))
-    ;; T5.3: eligibility is a record, not five packed bits (31 = all flags set).
+    ;; T5.3 + profile 5: eligibility is a bool-field record.
     (let [elig (oracle/record [:record :task/eligibility
-                               [[:online :i64] [:labels-ok :i64] [:roles-ok :i64]
-                                [:not-excluded :i64] [:allowlist-ok :i64]]]
-                              {:online 1 :labels-ok 1 :roles-ok 1
-                               :not-excluded 1 :allowlist-ok 1})]
+                               [[:online :bool] [:labels-ok :bool] [:roles-ok :bool]
+                                [:not-excluded :bool] [:allowlist-ok :bool]]]
+                              {:online true :labels-ok true :roles-ok true
+                               :not-excluded true :allowlist-ok true})]
       (is (= (ir/execute live 'task-eligible? [elig (* 16 1024 1024 1024) 0])
              (oracle/call :task-plan 'task-eligible? [elig (* 16 1024 1024 1024) 0])))
-      (is (= 1 (oracle/call :task-plan 'task-eligible? [elig (* 16 1024 1024 1024) 0]))))
+      (is (contains? #{true 1}
+                     (oracle/call :task-plan 'task-eligible?
+                                  [elig (* 16 1024 1024 1024) 0]))))
     (is (= (ir/execute live 'task-id [12])
            (oracle/call :task-plan 'task-id [12])))
     (is (= (ir/execute live 'unschedulable-detail ["nil" "a,b" "64"])

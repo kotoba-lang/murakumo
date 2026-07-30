@@ -137,25 +137,26 @@
                (get actual (str "r_" i))))))))
 
 (def ^:private eligibility-literal
-  "T5.3: guest eligibility record descriptor as source text."
+  "T5.3 + profile 5: guest eligibility record with :bool flags."
   (str "[:record :task/eligibility "
-       "[[:online :i64] [:labels-ok :i64] [:roles-ok :i64] "
-       "[:not-excluded :i64] [:allowlist-ok :i64]]]"))
+       "[[:online :bool] [:labels-ok :bool] [:roles-ok :bool] "
+       "[:not-excluded :bool] [:allowlist-ok :bool]]]"))
 
 (defn- task-elig-record-literal
-  "Set-membership projected as a record literal (not five packed bits)."
+  "Set-membership projected as a bool record literal (profile 5)."
   [node task]
-  (let [online (if (false? (:online? node true)) 0 1)
+  (let [online (if (false? (:online? node true)) "false" "true")
         labels (if (every? (fn [[k v]] (= v (get (:labels node) k)))
                            (or (get-in task [:placement :labels]) {}))
-                 1 0)
+                 "true" "false")
         roles (if (every? (set (or (:roles node) #{}))
                           (or (get-in task [:placement :roles]) []))
-                1 0)
-        not-ex (if (contains? (set (or (:exclude-nodes task) [])) (:name node)) 0 1)
+                "true" "false")
+        not-ex (if (contains? (set (or (:exclude-nodes task) [])) (:name node))
+                 "false" "true")
         allow (if (or (empty? (or (:nodes task) []))
                       (contains? (set (:nodes task)) (:name node)))
-                1 0)]
+                "true" "false")]
     (str "(record-new " eligibility-literal " "
          online " " labels " " roles " " not-ex " " allow ")")))
 
@@ -178,9 +179,10 @@
                     (map-indexed
                      (fn [i [n t]]
                        [(str "e_" i)
-                        (str "(task-eligible? " (task-elig-record-literal n t) " "
+                        ;; Profile 5: task-eligible? is :bool; wrap as 0/1.
+                        (str "(if (task-eligible? " (task-elig-record-literal n t) " "
                              (long (or (:mem-bytes n) 0)) " "
-                             (long (or (:min-mem-bytes t) 0)) ")")])
+                             (long (or (:min-mem-bytes t) 0)) ") 1 0)")])
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [n t]] (map-indexed vector corpus)]
