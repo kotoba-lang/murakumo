@@ -1,14 +1,14 @@
 ;; murakumo.overlay.crypto — host-side frame sealing for murakumo-overlay.
 ;;
-;; W6 product-shell + T6.4 remainder (oracle-required on JVM):
-;; packaging constants + gates DELEGATE to kotoba/overlay_crypto_core.
-;; On :clj the shipped KIR is required. cljs keeps private mirrors as
-;; fail-closed fallback without preload. AES-GCM Cipher, SecureRandom nonce,
-;; SHA-256 key material stay JVM host.
+;; W6 product-shell + T6.4: packaging constants + gates DELEGATE to
+;; kotoba/overlay_crypto_core and require the shipped `:overlay-crypto` KIR on
+;; **every** platform. Host pure mirrors are gone — cljs/nbb must preload
+;; shipped KIR (resources/ via nbb cwd, register-kir!, or set-resource-loader!)
+;; before requiring this ns (ADR-260731-w6-t64-crypto-stream-mirror-delete).
+;; AES-GCM Cipher, SecureRandom nonce, SHA-256 key material stay JVM host.
 
 (ns murakumo.overlay.crypto
-  (:require [clojure.string :as str]
-            [murakumo.identity :as identity]
+  (:require [murakumo.identity :as identity]
             [murakumo.kotoba.oracle :as oracle])
   #?(:clj (:import [java.security SecureRandom]
                    [java.util Base64]
@@ -17,105 +17,46 @@
 
 (def ^:private oid :overlay-crypto)
 
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
 (defn- o
-  "Call a pure export. JVM requires the oracle artifact; cljs may fall back."
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
   [export args]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "overlay-crypto oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/call oid export args))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (oracle/call oid export args)
-         (catch :default _
-           ::oracle-failed))
-       ::oracle-failed)))
+  (oracle/require-ready! oid)
+  (oracle/call oid export args))
 
-#?(:cljs
-   (do
-     (def ^:private mirror-alg-name "aes-256-gcm")
-     (def ^:private mirror-cipher-transform "AES/GCM/NoPadding")
-     (def ^:private mirror-nonce-bytes 12)
-     (def ^:private mirror-gcm-tag-bits 128)
-     (def ^:private mirror-field-alg :alg)
-     (def ^:private mirror-field-nonce :nonce)
-     (def ^:private mirror-field-ciphertext :ciphertext)
-
-     (defn- cljs-str [export mirror]
-       (let [v (o export [])]
-         (if (= v ::oracle-failed) mirror v)))
-
-     (defn- cljs-i64 [export mirror]
-       (let [v (o export [])]
-         (if (= v ::oracle-failed) mirror (oracle/i64->host v))))
-
-     (defn- mirror-strip-b64-pad [s]
-       (str/replace (str s) "=" ""))
-
-     (defn- mirror-sealed-alg-ok? [alg]
-       (or (= alg :aes-256-gcm)
-           (= (str alg) mirror-alg-name)
-           (= (name (keyword alg)) mirror-alg-name)))
-
-     (defn- mirror-sealed-fields-present? [sealed]
-       (boolean (and (some? (get sealed mirror-field-alg))
-                     (some? (get sealed mirror-field-nonce))
-                     (some? (get sealed mirror-field-ciphertext)))))))
-
-;; ── pure packaging (kotoba SSoT; JVM requires oracle) ────────────────
+;; ── pure packaging (kotoba SSoT; requires oracle) ────────────────────
 
 (def alg-name
-  #?(:clj (o 'alg-name [])
-     :cljs (cljs-str 'alg-name mirror-alg-name)))
+  (o 'alg-name []))
 
 (def cipher-transform
-  #?(:clj (o 'cipher-transform [])
-     :cljs (cljs-str 'cipher-transform mirror-cipher-transform)))
+  (o 'cipher-transform []))
 
 (def nonce-bytes
-  #?(:clj (oracle/i64->host (o 'nonce-bytes []))
-     :cljs (cljs-i64 'nonce-bytes mirror-nonce-bytes)))
+  (oracle/i64->host (o 'nonce-bytes [])))
 
 (def gcm-tag-bits
-  #?(:clj (oracle/i64->host (o 'gcm-tag-bits []))
-     :cljs (cljs-i64 'gcm-tag-bits mirror-gcm-tag-bits)))
+  (oracle/i64->host (o 'gcm-tag-bits [])))
 
 (def field-alg
-  (keyword #?(:clj (o 'field-alg [])
-              :cljs (cljs-str 'field-alg (name mirror-field-alg)))))
+  (keyword (o 'field-alg [])))
 
 (def field-nonce
-  (keyword #?(:clj (o 'field-nonce [])
-              :cljs (cljs-str 'field-nonce (name mirror-field-nonce)))))
+  (keyword (o 'field-nonce [])))
 
 (def field-ciphertext
-  (keyword #?(:clj (o 'field-ciphertext [])
-              :cljs (cljs-str 'field-ciphertext (name mirror-field-ciphertext)))))
+  (keyword (o 'field-ciphertext [])))
 
 (defn strip-b64-pad
-  "Strip '=' padding (kotoba `strip-b64-pad`; JVM requires oracle)."
+  "Strip '=' padding (kotoba `strip-b64-pad`; requires oracle)."
   [s]
-  #?(:clj (o 'strip-b64-pad [(str s)])
-     :cljs (let [v (o 'strip-b64-pad [(str s)])]
-             (if (= v ::oracle-failed) (mirror-strip-b64-pad s) v))))
+  (o 'strip-b64-pad [(str s)]))
 
 (defn sealed-alg-ok?
   "True when sealed map carries the expected AES-GCM alg."
   [alg]
-  #?(:clj (oracle/bool->host
-           (o 'sealed-alg-ok?
-              [(if (keyword? alg) (name alg) (str alg))]))
-     :cljs (let [v (o 'sealed-alg-ok?
-                      [(if (keyword? alg) (name alg) (str alg))])]
-             (if (= v ::oracle-failed)
-               (mirror-sealed-alg-ok? alg)
-               (oracle/bool->host v)))))
+  (oracle/bool->host
+   (o 'sealed-alg-ok?
+      [(if (keyword? alg) (name alg) (str alg))])))
 
 (defn- option-field
   "Product Value ABI optional sealed field: keyword → name string."
@@ -127,18 +68,11 @@
 (defn sealed-fields-present?
   "True when :alg :nonce :ciphertext are all present."
   [sealed]
-  #?(:clj (oracle/bool->host
-           (o 'sealed-fields-present?
-              [(option-field (get sealed field-alg))
-               (option-field (get sealed field-nonce))
-               (option-field (get sealed field-ciphertext))]))
-     :cljs (let [v (o 'sealed-fields-present?
-                      [(option-field (get sealed field-alg))
-                       (option-field (get sealed field-nonce))
-                       (option-field (get sealed field-ciphertext))])]
-             (if (= v ::oracle-failed)
-               (mirror-sealed-fields-present? sealed)
-               (oracle/bool->host v)))))
+  (oracle/bool->host
+   (o 'sealed-fields-present?
+      [(option-field (get sealed field-alg))
+       (option-field (get sealed field-nonce))
+       (option-field (get sealed field-ciphertext))])))
 
 (defn sealed-map-ok?
   "Live open gate: fields present + alg ok."
