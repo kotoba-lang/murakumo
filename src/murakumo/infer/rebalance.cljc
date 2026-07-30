@@ -21,67 +21,33 @@
   never holds a shard. The rest are split across pools proportional to demand,
   each with a floor so a live capability never drops to zero while any demand exists.
 
-  W6 product-shell: usable-gb / seats-of-* via kotoba infer_rebalance_core
-  when oracle loadable (JVM or cljs/nbb). Placement folds stay host."
-  (:require [clojure.string :as str]
-            [murakumo.kotoba.oracle :as oracle]))
+  W6 product-shell + T6.4: usable-gb / seats-of-* require the shipped
+  `:infer-rebalance` KIR on **every** platform. Host pure mirrors are gone —
+  cljs/nbb must preload shipped KIR before requiring this ns
+  (ADR-260731-w6-t64-infer-sched-rebal-engine-mirror-delete).
+  Placement folds stay host."
+  (:require [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :infer-rebalance)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
 
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-(defn- oracle-i64-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/i64->host (oracle/call oid export [])))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/i64->host (oracle/call oid export []))
-         mirror)
-       (catch :default _
-         mirror))))
-
 (def shard-ceiling-gb
-  "16GB stability limit → ~10GB usable shard. Kotoba `shard-ceiling-gb` when ready."
-  (oracle-i64-const 'shard-ceiling-gb 10))
+  "16GB stability limit → ~10GB usable shard. Kotoba `shard-ceiling-gb`."
+  (oracle/i64->host (o 'shard-ceiling-gb [])))
 
 ;; ── capacity ────────────────────────────────────────────────────────────────
 
 (defn node-capacity
   "One anonymized snapshot node → a capacity record. usable-gb is min(shard
-   ceiling, ram - OS/KV headroom).
-   Kotoba `usable-gb` when oracle ready."
+   ceiling, ram - OS/KV headroom). Kotoba `usable-gb`."
   [{:keys [id ram-gb disk-free roles status] :as n}]
   (let [ram (or ram-gb 0)
-        usable (try-oracle
-                #(oracle/i64->host (o 'usable-gb [(oracle/as-i64 ram)]))
-                #(min shard-ceiling-gb (max 0 (- ram 6))))]
+        usable (oracle/i64->host (o 'usable-gb [(oracle/as-i64 ram)]))]
     {:id id :status status :ram-gb ram :usable-gb usable
      :roles-capable (set (map keyword (or roles [])))
      :disk-free disk-free}))
@@ -127,45 +93,22 @@
 
 ;; ── allocation ────────────────────────────────────────────────────────────────
 
-(defn- mirror-largest-remainder
-  [total weights floor]
-  (let [active (into {} (filter (comp pos? val) weights))
-        sumw (reduce + 0 (vals active))]
-    (if (or (zero? total) (zero? sumw))
-      (zipmap (keys weights) (repeat 0))
-      (let [eff-floor (min floor (quot total (count active)))
-            base (into {} (map (fn [[k _]] [k eff-floor]) active))
-            left (- total (reduce + 0 (vals base)))
-            left (max 0 left)
-            ideal (into {} (map (fn [[k w]] [k (* left (/ (double w) sumw))]) active))
-            floors (into {} (map (fn [[k v]] [k (int v)]) ideal))
-            assigned (reduce + 0 (vals floors))
-            rema (->> ideal (map (fn [[k v]] [k (- v (int v))])) (sort-by (comp - second)))
-            extra (- left assigned)
-            bump (set (map first (take extra rema)))]
-        (merge (zipmap (keys weights) (repeat 0))
-               (into {} (map (fn [[k b]] [k (+ b (get floors k 0) (if (bump k) 1 0))]) base)))))))
-
 (defn- largest-remainder
   "Apportion `total` seats across `weights` (map k→w) by largest-remainder, with
    a floor of `floor` seats for any pool whose weight > 0. Deterministic.
    3-pool text/media/postproc: kotoba `seats-of-text/media/postproc` (T5.3 record)."
   [total weights floor]
-  (try-oracle
-   (fn []
-     ;; T5.3: three scalar lane projections. The guest builds a
-     ;; [:record :rebalance/lanes …] internally; no base-65536 seat pack
-     ;; crosses this boundary, and this is one call fewer than the old
-     ;; pack-then-unpack shape.
-     (let [args [(oracle/as-i64 total)
-                 (oracle/as-i64 (or (get weights :text-pool) 0))
-                 (oracle/as-i64 (or (get weights :media-pool) 0))
-                 (oracle/as-i64 (or (get weights :postproc-pool) 0))
-                 (oracle/as-i64 floor)]]
-       {:text-pool (oracle/i64->host (o 'seats-of-text args))
-        :media-pool (oracle/i64->host (o 'seats-of-media args))
-        :postproc-pool (oracle/i64->host (o 'seats-of-postproc args))}))
-   #(mirror-largest-remainder total weights floor)))
+  ;; T5.3: three scalar lane projections. The guest builds a
+  ;; [:record :rebalance/lanes …] internally; no base-65536 seat pack
+  ;; crosses this boundary.
+  (let [args [(oracle/as-i64 total)
+              (oracle/as-i64 (or (get weights :text-pool) 0))
+              (oracle/as-i64 (or (get weights :media-pool) 0))
+              (oracle/as-i64 (or (get weights :postproc-pool) 0))
+              (oracle/as-i64 floor)]]
+    {:text-pool (oracle/i64->host (o 'seats-of-text args))
+     :media-pool (oracle/i64->host (o 'seats-of-media args))
+     :postproc-pool (oracle/i64->host (o 'seats-of-postproc args))}))
 
 (defn target-allocation
   "capacity + demand → a placement plan:

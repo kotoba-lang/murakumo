@@ -1,8 +1,9 @@
 ;; murakumo.infer.schedule — job-parallel media scheduling (pure cljc).
 ;;
-;; W6 product-shell authority (ADR-260728-w6-schedule-oracle-authority):
-;; eligible? / score / queue-inc DELEGATE to precompiled
-;; kotoba/infer_schedule_core.kotoba when oracle loadable (JVM or cljs/nbb).
+;; W6 product-shell + T6.4: eligible? / score / queue-inc require the shipped
+;; `:infer-schedule` KIR on **every** platform. Host pure mirrors are gone —
+;; cljs/nbb must preload shipped KIR before requiring this ns
+;; (ADR-260731-w6-t64-infer-sched-rebal-engine-mirror-delete).
 ;; Host remains: set membership projection (engines/checkpoints), pick sort-by
 ;; (stable order on ties — differs from tournament later-index), assign atom fold.
 
@@ -11,28 +12,11 @@
 
 (def ^:private oid :infer-schedule)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
-
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
 
 ;; Profile 5: eligibility fields are real host/guest booleans (not 0/1 i64).
 
@@ -54,35 +38,21 @@
      :holds-checkpoint (boolean (and ckpt (contains? checkpoints ckpt)))
      :can-fetch (not (false? (:node/can-fetch? node)))}))
 
-(defn- mirror-eligible?
-  [{:keys [engines checkpoints free-bytes] :as node} model]
-  (and (contains? (or engines #{}) (:model/engine model))
-       (or (nil? (:model/checkpoint model))
-           (contains? (or checkpoints #{}) (:model/checkpoint model))
-           (:node/can-fetch? node true))
-       (>= (or free-bytes 0) (:model/min-free-bytes model 0))))
-
 (defn eligible?
   "Can `node` run `model`? Kotoba eligible? with a bool eligibility record
   (T5.3 + language profile 5)."
   [node model]
-  (try-oracle
-   #(oracle/bool->host
-     (o 'eligible?
-        [(oracle/record eligibility-schema (eligibility-fields node model))
-         (oracle/as-i64 (or (:free-bytes node) 0))
-         (oracle/as-i64 (:model/min-free-bytes model 0))]))
-   #(mirror-eligible? node model)))
+  (oracle/bool->host
+   (o 'eligible?
+      [(oracle/record eligibility-schema (eligibility-fields node model))
+       (oracle/as-i64 (or (:free-bytes node) 0))
+       (oracle/as-i64 (:model/min-free-bytes model 0))])))
 
 (defn score
-  "Lower is better: queue then -free-bytes. Kotoba score-queue + score-free when ready."
+  "Lower is better: queue then -free-bytes. Kotoba score-queue + score-free."
   [{:keys [queue free-bytes]}]
-  (try-oracle
-   (fn []
-     [(oracle/i64->host (o 'score-queue [(oracle/as-i64 (or queue 0))]))
-      (oracle/i64->host (o 'score-free [(oracle/as-i64 (or free-bytes 0))]))])
-   (fn []
-     [(or queue 0) (- (or free-bytes 0))])))
+  [(oracle/i64->host (o 'score-queue [(oracle/as-i64 (or queue 0))]))
+   (oracle/i64->host (o 'score-free [(oracle/as-i64 (or free-bytes 0))]))])
 
 (defn pick
   "Choose the node to run `model`, or nil if none eligible.
@@ -103,9 +73,6 @@
        (do (when n
              (swap! by-name update-in [(:name n) :queue]
                     (fn [q]
-                      (try-oracle
-                       (fn []
-                         (oracle/i64->host
-                          (o 'queue-inc-if [(oracle/as-i64 (or q 0)) (oracle/as-i64 1)])))
-                       (fn [] ((fnil inc 0) q))))))
+                      (oracle/i64->host
+                       (o 'queue-inc-if [(oracle/as-i64 (or q 0)) (oracle/as-i64 1)])))))
            {:job job :node (when n (:name n))})))))
