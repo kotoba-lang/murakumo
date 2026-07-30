@@ -65,14 +65,15 @@
         cases (into {} (map-indexed
                         (fn [i s]
                           [(str "id_" i)
-                           (str "(identifier? " (kotoba-literal s) ")")])
+                           ;; Profile 5: identifier? is :bool.
+                           (str "(if (identifier? " (kotoba-literal s) ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)
         ;; length bounds via host-projected blank/byte-len (no huge literals)
         lens (compile-i64-cases
-              {"ok4096" "(identifier-len-ok? 0 4096)"
-               "bad4097" "(identifier-len-ok? 0 4097)"
-               "blank" "(identifier-len-ok? 1 10)"})]
+              {"ok4096" "(if (identifier-len-ok? false 4096) 1 0)"
+               "bad4097" "(if (identifier-len-ok? false 4097) 1 0)"
+               "blank" "(if (identifier-len-ok? true 10) 1 0)"})]
     (doseq [[i s] (map-indexed vector corpus)]
       (testing (pr-str s)
         (is (= (if (cljc-identifier? s) 1 0)

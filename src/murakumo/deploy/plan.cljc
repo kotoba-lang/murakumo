@@ -594,8 +594,8 @@
            (boolean (re-matches #"[A-Za-z]:[\\/].*" p)))
     true
     (try-oracle
-     #(= 1 (oracle/i64->host
-            (o 'absolute-unix-git-bin? [(str (or p ""))])))
+     #(oracle/bool->host
+       (o 'absolute-unix-git-bin? [(str (or p ""))]))
      #(mirror-absolute-git-bin? p))))
 (defn git-short-sha-argv
   "argv for reading the pinned source git sha.
@@ -636,14 +636,14 @@
   [manifest operator-seed]
   (cond
     (try-oracle
-     #(= 1 (oracle/i64->host
-            (o 'missing-manifest? [(str (or manifest ""))])))
+     #(oracle/bool->host
+       (o 'missing-manifest? [(str (or manifest ""))]))
      #(mirror-missing-manifest? manifest))
     :missing-manifest
 
     (try-oracle
-     #(= 1 (oracle/i64->host
-            (o 'missing-operator-seed? [(str (or operator-seed ""))])))
+     #(oracle/bool->host
+       (o 'missing-operator-seed? [(str (or operator-seed ""))]))
      #(mirror-missing-operator-seed? operator-seed))
     :missing-operator-seed
 

@@ -142,23 +142,23 @@
   ;; cljc sh-result: (if (some? rc) rc exit)
   (if (= has-rc 1) rc ssh-exit))
 
-(defn err-ws? [c :string] :i64
+(defn err-ws? [c :string] :bool
   (if (string=? c " ")
-    1
-    (if (string=? c "\t")
-      1
-      (if (string=? c "\n")
-        1
-        (if (string=? c "\r") 1 0)))))
+    true
+    (if (string=? c "\n")
+      true
+      (if (string=? c "\t")
+        true
+        (if (string=? c "\r") true false)))))
 
 (defn trim-err [err :string] :string
   ;; host str/trim on err
   (let [n (string-byte-length err)]
     (if (= n 0)
       err
-      (if (= (err-ws? (string-substring err 0 1)) 1)
+      (if (err-ws? (string-substring err 0 1))
         (trim-err (string-substring err 1 n))
-        (if (= (err-ws? (string-substring err (- n 1) n)) 1)
+        (if (err-ws? (string-substring err (- n 1) n))
           (trim-err (string-substring err 0 (- n 1)))
           err)))))
 

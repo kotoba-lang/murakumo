@@ -123,10 +123,15 @@
   ;; on remaining pair via pick-targets-2-record.
   (first-of-3 load0 load1 load2 names))
 
-(defn blank? [s :string] :i64
-  (if (string=? s "") 1 0))
+(defn blank? [s :string] :bool
+  (let [n (string-byte-length s)]
+    (if (= n 0)
+      true
+      (if (ws? (string-substring s 0 1))
+        (blank? (string-substring s 1 n))
+        false))))
 
-(defn missing-manifest? [manifest :string] :i64
+(defn missing-manifest? [manifest :string] :bool
   ;; cljc: (str/blank? (str manifest)) — host passes "" for nil
   (blank? manifest))
 
@@ -170,22 +175,22 @@
 (defn flag-is-dash? [a :string] :i64
   (starts-with? a (flag-dash-prefix)))
 
-(defn ws? [c :string] :i64
+(defn ws? [c :string] :bool
   (if (string=? c " ")
-    1
+    true
     (if (string=? c "\n")
-      1
+      true
       (if (string=? c "\t")
-        1
-        (if (string=? c "\r") 1 0)))))
+        true
+        (if (string=? c "\r") true false)))))
 
 (defn trim-ws [s :string] :string
   (let [n (string-byte-length s)]
     (if (= n 0)
       s
-      (if (= (ws? (string-substring s 0 1)) 1)
+      (if (ws? (string-substring s 0 1))
         (trim-ws (string-substring s 1 n))
-        (if (= (ws? (string-substring s (- n 1) n)) 1)
+        (if (ws? (string-substring s (- n 1) n))
           (trim-ws (string-substring s 0 (- n 1)))
           s)))))
 
