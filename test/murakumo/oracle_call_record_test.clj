@@ -8,7 +8,10 @@
             [murakumo.provision.plan :as pplan]
             [murakumo.token :as token]
             [murakumo.report :as report]
-            [murakumo.tunnel :as tunnel]))
+            [murakumo.tunnel :as tunnel]
+            [murakumo.reconcile.plan :as rplan]
+            [murakumo.infer.relay :as relay]
+            [murakumo.cloud.plan :as cplan]))
 
 (deftest map->args-projects-kinds
   (is (= ["a" "b"]
@@ -134,4 +137,50 @@
       (is (= 255 (:ssh-exit r))))
     (let [r (tunnel/sh-result {:exit 7 :out "no sentinel\n" :err "  e  \n"})]
       (is (= 7 (:exit r)))
-      (is (= "e" (:err r))))))
+      (is (= "e" (:err r))))
+    (let [cmd (tunnel/ensure-forward-command 18077 8077 "asher")
+          via (oracle/call :tunnel 'ensure-forward-command
+                           [(oracle/as-i64 18077) (oracle/as-i64 8077) "asher"])]
+      (is (= via cmd))
+      (is (string? cmd)))
+    (let [cmd (tunnel/replace-forward-command 18900 8077 "gad")]
+      (is (string? cmd))
+      (is (re-find #"18900" cmd)))))
+
+(deftest call-record-reconcile-action-deficit
+  (when (oracle/ready? :reconcile-plan)
+    (let [fleet {:nodes [{:name "a" :labels {:zone "jp"} :roles #{"compute"}}
+                         {:name "b" :labels {:zone "jp"} :roles #{"compute"}}
+                         {:name "c" :labels {:zone "jp"} :roles #{"compute"}}]}
+          snap {:nodes [{:name "a" :hosted ["bafyHEART"]}
+                        {:name "b" :hosted []}
+                        {:name "c" :hosted []}]}
+          app {:name "heartbeat" :cid "bafyHEART" :replicas 2
+               :placement {:labels {:zone "jp"} :roles ["compute"]}}
+          r (rplan/reconcile-app fleet snap nil app)]
+      (is (map? r))
+      (is (= :place (:action r)))
+      (is (= 2 (:desired r)))
+      (is (= 1 (:deficit r))))))
+
+(deftest call-record-relay-lease-and-cloud-ids
+  (when (oracle/ready? :infer-relay)
+    (let [st (relay/init)
+          [wid st] (relay/on-hello st {:did "did:key:w" :tier :native :caps {:can #{:host-large-model}}})
+          [jid st] (relay/enqueue st {:kind :host-large-model :input "x" :price 1})
+          [_ st] (relay/on-ready st wid 1000)
+          st2 (relay/expire-leases st (+ 1000 60001) 60000)]
+      (is (nil? (get-in st2 [:assigned jid])))
+      (is (pos? (count (:queue st2))))))
+  (when (oracle/ready? :cloud-plan)
+    (let [cloud {:cloud/name "murakumo.cloud" :overlay/id "ov1"
+                 :relays [] :overlay/direct [] :policy {:default :deny :allow []}}
+          node {:name "asher" :labels {:zone "tyo" :region "jp"} :region "asia"}
+          oid (cplan/overlay-id cloud)
+          nid (cplan/node-id cloud node)
+          reg (cplan/node-region node)]
+      (is (string? oid))
+      (is (pos? (count oid)))
+      (is (string? nid))
+      (is (not= oid nid))
+      (is (= "tyo" reg)))))

@@ -33,6 +33,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def default-cloud-path config/default-cloud-path)
@@ -362,28 +368,35 @@
 
 (defn overlay-id
   "Stable CID for an overlay namespace.
-   Preimage via kotoba `overlay-id-input` (required)."
+   Preimage via kotoba `overlay-id-input` (required).
+   T5.2: structural cloud map → call-record."
   [cloud]
   (identity/graph-cid
-   (o 'overlay-id-input
-        [(str (or (:overlay/id cloud) ""))
-         (str (or (:cloud/name cloud) ""))])))
+   (o-record 'overlay-id-input
+             {:overlay/id (or (:overlay/id cloud) "")
+              :cloud/name (or (:cloud/name cloud) "")}
+             [[:overlay/id :string] [:cloud/name :string]])))
 
 (defn node-id
   "Stable node CID inside an overlay.
-   Preimage via kotoba `node-id-input` (required)."
+   Preimage via kotoba `node-id-input` (required).
+   T5.2: structural map → call-record."
   [cloud node]
   (identity/graph-cid
-   (o 'node-id-input
-        [(str (overlay-id cloud)) (str (:name node))])))
+   (o-record 'node-id-input
+             {:overlay-cid (overlay-id cloud)
+              :node-name (:name node)}
+             [[:overlay-cid :string] [:node-name :string]])))
 
 (defn node-region
-  "Kotoba `node-region` (zone / region-label / region / global) (required)."
+  "Kotoba `node-region` (zone / region-label / region / global) (required).
+   T5.2: structural map → call-record."
   [node]
-  (o 'node-region
-       [(str (or (get-in node [:labels :zone]) ""))
-        (str (or (get-in node [:labels :region]) ""))
-        (str (or (:region node) ""))]))
+  (o-record 'node-region
+            {:zone (or (get-in node [:labels :zone]) "")
+             :region-label (or (get-in node [:labels :region]) "")
+             :region (or (:region node) "")}
+            [[:zone :string] [:region-label :string] [:region :string]]))
 
 (defn relay-score
   "Kotoba `relay-score` (required)."

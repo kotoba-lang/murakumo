@@ -200,17 +200,21 @@
 
 (defn ensure-forward-command
   "Shell command that starts an SSH local forward only when an equivalent one is absent.
-   Kotoba `ensure-forward-command` (required)."
+   Kotoba `ensure-forward-command` (required).
+   T5.2: structural forward map → call-record."
   [local-port remote-port host]
-  (o 'ensure-forward-command
-     [(oracle/as-i64 local-port) (oracle/as-i64 remote-port) (str host)]))
+  (o-record 'ensure-forward-command
+            {:local-port local-port :remote-port remote-port :host host}
+            [[:local-port :i64] [:remote-port :i64] [:host :string]]))
 
 (defn replace-forward-command
   "Shell command that kills any forward on local-port, then starts a fresh one.
-   Kotoba `replace-forward-command` (required)."
+   Kotoba `replace-forward-command` (required).
+   T5.2: structural forward map → call-record."
   [local-port remote-port host]
-  (o 'replace-forward-command
-     [(oracle/as-i64 local-port) (oracle/as-i64 remote-port) (str host)]))
+  (o-record 'replace-forward-command
+            {:local-port local-port :remote-port remote-port :host host}
+            [[:local-port :i64] [:remote-port :i64] [:host :string]]))
 
 (defn remote-curl-command
   "Remote shell command for a bounded curl call from a node.
