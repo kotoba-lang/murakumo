@@ -338,14 +338,15 @@
 
 (defn failed?
   "A result is a failure when the process could not start, timed out, or exited
-   non-zero. Kotoba `failed?` when oracle ready (JVM or cljs/nbb load)."
+   non-zero. Kotoba `failed?` when oracle ready (JVM or cljs/nbb load).
+   Profile 5: guest returns :bool."
   [{:keys [exit timeout? error] :as r}]
   (if (oracle-ready?)
-    (= 1 (oracle/i64->host
-          (o 'failed?
-             [(oracle/option-i64 exit)
-              (oracle/as-i64 (if timeout? 1 0))
-              (oracle/option-string error)])))
+    (oracle/bool->host
+     (o 'failed?
+        [(oracle/option-i64 exit)
+         (boolean timeout?)
+         (oracle/option-string error)]))
     (mirror-failed? r)))
 
 (defn retry-tasks
@@ -353,15 +354,16 @@
    that just failed them. Empty when every failure has exhausted :max-attempts.
    This is Ray's task-retry semantics, NOT lineage re-execution: the task is
    re-run from its own spec, nothing upstream is replayed.
-   JVM: can-retry? + attempt-next via oracle."
+   JVM: can-retry? + attempt-next via oracle. Profile 5: can-retry? is :bool."
   [results opts]
   (let [{:keys [max-attempts]} (merge default-opts opts)]
     (->> results
          (filter failed?)
          (keep (fn [{:keys [task node]}]
                  (let [attempt (or (:attempt task) 1)
-                       can? #?(:clj (= 1 (o 'can-retry?
-                                            [(long attempt) (long max-attempts)]))
+                       can? #?(:clj (oracle/bool->host
+                                     (o 'can-retry?
+                                        [(long attempt) (long max-attempts)]))
                                :cljs (mirror-can-retry? attempt max-attempts))]
                    (when can?
                      (-> task
