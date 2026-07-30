@@ -139,9 +139,10 @@
       -1
       (parse-digits-go t 0))))
 
-(defn pick-exit [has-rc :i64 rc :i64 ssh-exit :i64] :i64
+(defn pick-exit [has-rc :bool rc :i64 ssh-exit :i64] :i64
   ;; cljc sh-result: (if (some? rc) rc exit)
-  (if (= has-rc 1) rc ssh-exit))
+  ;; Profile 5: has-rc is a real :bool presence flag (not 0/1 i64).
+  (if has-rc rc ssh-exit))
 
 (defn err-ws? [c :string] :bool
   (if (string=? c " ")

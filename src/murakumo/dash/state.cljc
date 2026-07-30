@@ -316,9 +316,9 @@
        vec))
 
 (defn health-from-present
-  "ok/down label from health-json presence."
+  "ok/down label from health-json presence. Profile 5: present? is guest :bool."
   [present?]
-  (o 'health-from-present [(oracle/as-i64 (if present? 1 0))]))
+  (o 'health-from-present [(boolean present?)]))
 
 (defn probe-node
   "Build a snapshot node from static node data and parsed probe values."

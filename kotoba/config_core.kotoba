@@ -16,7 +16,7 @@
 ;; EDN parse/file I/O and env map folds stay cljc/host.
 ;; Residual path-suffix tokens dual-source; path builders recompose.
 ;; kotoba-dir-from: empty override ⇒ default under home (cljc nil/absent env).
-;; pinned-exists / pinned-wit-exists: 0/1.
+;; pinned-exists / pinned-wit-exists: profile-5 :bool.
 ;; Ops residual default URL/string constants dual-source (post #147 inject).
 ;; Parity: test/murakumo/config_kotoba_parity_test.clj
 
@@ -108,22 +108,23 @@
 (defn launchd-template-path [] :string
   "deploy/com.murakumo.kotoba-mesh.plist.tmpl")
 
-(defn kotoba-bin [user-dir :string pinned-exists :i64] :string
-  (if (= pinned-exists 1)
+(defn kotoba-bin [user-dir :string pinned-exists :bool] :string
+  ;; Profile 5: pinned-exists is a real :bool (not 0/1 i64).
+  (if pinned-exists
     (string-concat (pinned-bin-dir user-dir) (kotoba-cli-suffix))
     (default-kotoba-cli-bin)))
 
 (defn resolve-local-bin [user-dir :string kotoba-dir :string
-                         pinned-exists :i64 murakumo-bin :string] :string
+                         pinned-exists :bool murakumo-bin :string] :string
   ;; cljc: pinned → MURAKUMO_BIN → release-bin-dir
-  (if (= pinned-exists 1)
+  (if pinned-exists
     (pinned-bin-dir user-dir)
     (if (string=? murakumo-bin "")
       (release-bin-dir kotoba-dir)
       murakumo-bin)))
 
 (defn resolve-wit-dir [user-dir :string kotoba-dir :string
-                       pinned-wit-exists :i64] :string
-  (if (= pinned-wit-exists 1)
+                       pinned-wit-exists :bool] :string
+  (if pinned-wit-exists
     (pinned-wit-dir user-dir)
     (runtime-wit-dir kotoba-dir)))

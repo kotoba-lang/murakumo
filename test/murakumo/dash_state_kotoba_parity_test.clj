@@ -165,8 +165,8 @@
   (let [actual-s (compile-string-cases
                   {"ctj" "(content-type-json)"
                    "cth" "(content-type-html)"
-                   "ho" "(health-from-present 1)"
-                   "hd" "(health-from-present 0)"
+                   "ho" "(health-from-present true)"
+                   "hd" "(health-from-present false)"
                    "ok" "(health-ok-label)"
                    "dn" "(health-down-label)"})
         actual-i (compile-i64-cases {"st" "(http-ok-status)"})]

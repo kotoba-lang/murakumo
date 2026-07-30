@@ -176,33 +176,33 @@
    :effects #{},
    :body
    (if
-    (= pinned-exists 1)
+    pinned-exists
     (string-concat (pinned-bin-dir user-dir) (kotoba-cli-suffix))
     (default-kotoba-cli-bin)),
-   :param-types [:string :i64]}
+   :param-types [:string :bool]}
   {:name resolve-local-bin,
    :params [user-dir kotoba-dir pinned-exists murakumo-bin],
    :result :string,
    :effects #{},
    :body
    (if
-    (= pinned-exists 1)
+    pinned-exists
     (pinned-bin-dir user-dir)
     (if
      (string=? murakumo-bin "")
      (release-bin-dir kotoba-dir)
      murakumo-bin)),
-   :param-types [:string :string :i64 :string]}
+   :param-types [:string :string :bool :string]}
   {:name resolve-wit-dir,
    :params [user-dir kotoba-dir pinned-wit-exists],
    :result :string,
    :effects #{},
    :body
    (if
-    (= pinned-wit-exists 1)
+    pinned-wit-exists
     (pinned-wit-dir user-dir)
     (runtime-wit-dir kotoba-dir)),
-   :param-types [:string :string :i64]}],
+   :param-types [:string :string :bool]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports

@@ -40,9 +40,9 @@
   (string-concat host (string-concat ":" (i64-str port))))
 
 (defn rpc-server-cmd [bin-dir :string port :i64 device :string
-                      cache :i64 cache-dir :string] :string
+                      cache :bool cache-dir :string] :string
   ;; cljc rpc-worker-cmds :cmd for one worker.
-  ;; cache 0/1; empty cache-dir ⇒ bare "-c", else "-c <dir>".
+  ;; Profile 5: cache is real :bool; empty cache-dir ⇒ bare "-c", else "-c <dir>".
   (let [base (string-concat
               bin-dir
               (string-concat
@@ -50,11 +50,11 @@
                (string-concat
                 (i64-str port)
                 (string-concat " -d " device))))]
-    (if (= cache 0)
-      base
+    (if cache
       (if (string=? cache-dir "")
         (string-concat base " -c")
-        (string-concat base (string-concat " -c " cache-dir))))))
+        (string-concat base (string-concat " -c " cache-dir)))
+      base)))
 
 (defn embed-head-front [bin-dir :string model-path :string
                         pooling :string ctx :i64] :string
@@ -95,18 +95,18 @@
      model-repo
      (string-concat " --host 0.0.0.0 --port " (i64-str port))))))
 
-(defn opt-i64-flag [flag :string val :i64 present :i64] :string
-  ;; present 0/1. flag includes leading space + name, e.g. " --capacity".
-  ;; cljc (when x (str flag " " x))
-  (if (= present 0)
-    ""
-    (string-concat flag (string-concat " " (i64-str val)))))
+(defn opt-i64-flag [flag :string val :i64 present :bool] :string
+  ;; Profile 5: present is real :bool. flag includes leading space + name,
+  ;; e.g. " --capacity". cljc (when x (str flag " " x))
+  (if present
+    (string-concat flag (string-concat " " (i64-str val)))
+    ""))
 
-(defn opt-str-flag [flag :string val :string present :i64] :string
-  ;; present 0/1. empty present ⇒ "".
-  (if (= present 0)
-    ""
-    (string-concat flag (string-concat " " val))))
+(defn opt-str-flag [flag :string val :string present :bool] :string
+  ;; Profile 5: present is real :bool. false ⇒ "".
+  (if present
+    (string-concat flag (string-concat " " val))
+    ""))
 
 (defn tensor-split-3 [s0 :i64 s1 :i64 s2 :i64] :string
   ;; cljc tensor-split for 2 workers + head: "a,b,c"

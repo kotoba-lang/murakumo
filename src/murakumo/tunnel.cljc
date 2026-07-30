@@ -216,11 +216,11 @@
 
 (defn- pick-exit
   "Prefer in-band rc when present. Kotoba `pick-exit` (required).
-   has-rc remains 0/1 i64 projection (numeric presence for pick-exit ABI)."
+   Profile 5: has-rc is guest :bool presence."
   [rc ssh-exit]
   (oracle/i64->host
    (o 'pick-exit
-      [(oracle/as-i64 (if (some? rc) 1 0))
+      [(boolean (some? rc))
        (oracle/as-i64 (or rc 0))
        (oracle/as-i64 (or ssh-exit 0))])))
 

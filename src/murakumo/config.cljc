@@ -6,8 +6,7 @@
 ;; set-resource-loader!) before requiring this ns
 ;; (ADR-260731-w6-t64-config-mirror-delete).
 ;; Host remains: EDN parse/IO, env map folds, filesystem existence probes.
-;; Residual: pinned-exists? params still 0/1 i64 in resolve-local-bin / kotoba-bin /
-;; resolve-wit-dir guest ABI (follow-up optional :bool).
+;; Profile 5: pinned-exists? / pinned-wit-exists? are real guest :bool.
 
 (ns murakumo.config
   (:require #?(:clj [clojure.edn :as edn]
@@ -181,14 +180,14 @@
   (o 'resolve-local-bin
      [(str user-dir)
       (str kotoba-dir)
-      (oracle/as-i64 (if pinned-exists? 1 0))
+      (boolean pinned-exists?)
       (str (or (get env "MURAKUMO_BIN") ""))]))
 
 (defn kotoba-bin
   "kotoba CLI executable path, falling back to PATH lookup when no pinned binary exists.
-   Kotoba `kotoba-bin` (required)."
+   Kotoba `kotoba-bin` (required). Profile 5: pinned-exists? is guest :bool."
   [user-dir pinned-exists?]
-  (o 'kotoba-bin [(str user-dir) (oracle/as-i64 (if pinned-exists? 1 0))]))
+  (o 'kotoba-bin [(str user-dir) (boolean pinned-exists?)]))
 
 (defn kotoba-server-bin [bin-dir]
   (o 'kotoba-server-bin [(str bin-dir)]))
@@ -209,7 +208,7 @@
   (o 'resolve-wit-dir
      [(str user-dir)
       (str kotoba-dir)
-      (oracle/as-i64 (if pinned-wit-exists? 1 0))]))
+      (boolean pinned-wit-exists?)]))
 
 (defn build-manifest-path [user-dir]
   (o 'build-manifest-path [(str user-dir)]))

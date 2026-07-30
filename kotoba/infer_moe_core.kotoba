@@ -33,15 +33,15 @@
     0
     (quot (* experts 1000) active)))
 
-(defn verdict-name [experts :i64 active :i64 shared :i64] :string
-  ;; shared 0/1; experts/active 0 ⇒ missing fields → unknown
-  (if (if (< experts 1) 1 (if (< active 1) 1 0))
+(defn verdict-name [experts :i64 active :i64 shared :bool] :string
+  ;; Profile 5: shared is real :bool; experts/active 0 ⇒ missing fields → unknown
+  (if (if (< experts 1) true (if (< active 1) true false))
     "unknown"
     (let [milli (expert-ratio-milli experts active)
-          high (if (< milli 10000) 0 1)]
-      (if (if (= high 1) (if (= shared 1) 1 0) 0)
+          high (if (< milli 10000) false true)]
+      (if (if high (if shared true false) false)
         "recommended"
-        (if (= shared 1)
+        (if shared
           "workable"
           "not-recommended")))))
 

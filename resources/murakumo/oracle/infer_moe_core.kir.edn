@@ -37,18 +37,18 @@
    :effects #{},
    :body
    (if
-    (if (< experts 1) 1 (if (< active 1) 1 0))
+    (if (< experts 1) true (if (< active 1) true false))
     "unknown"
     (let
      [milli
       (expert-ratio-milli experts active)
       high
-      (if (< milli 10000) 0 1)]
+      (if (< milli 10000) false true)]
      (if
-      (if (= high 1) (if (= shared 1) 1 0) 0)
+      (if high (if shared true false) false)
       "recommended"
-      (if (= shared 1) "workable" "not-recommended")))),
-   :param-types [:i64 :i64 :i64]}
+      (if shared "workable" "not-recommended")))),
+   :param-types [:i64 :i64 :bool]}
   {:name resident-est,
    :params [weight-bytes experts capacity],
    :result :i64,

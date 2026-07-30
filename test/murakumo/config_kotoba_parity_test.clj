@@ -74,19 +74,19 @@
                "pw" (str "(pinned-wit-dir " (kotoba-literal user) ")")
                "rw" (str "(runtime-wit-dir " (kotoba-literal kd) ")")
                "bm" (str "(build-manifest-path " (kotoba-literal user) ")")
-               "kb1" (str "(kotoba-bin " (kotoba-literal user) " 1)")
-               "kb0" (str "(kotoba-bin " (kotoba-literal user) " 0)")
+               "kb1" (str "(kotoba-bin " (kotoba-literal user) " true)")
+               "kb0" (str "(kotoba-bin " (kotoba-literal user) " false)")
                "rl1" (str "(resolve-local-bin " (kotoba-literal user) " "
-                          (kotoba-literal kd) " 1 " (kotoba-literal "") ")")
+                          (kotoba-literal kd) " true " (kotoba-literal "") ")")
                "rl2" (str "(resolve-local-bin " (kotoba-literal user) " "
-                          (kotoba-literal kd) " 0 "
+                          (kotoba-literal kd) " false "
                           (kotoba-literal "/custom/bin") ")")
                "rl3" (str "(resolve-local-bin " (kotoba-literal user) " "
-                          (kotoba-literal kd) " 0 " (kotoba-literal "") ")")
+                          (kotoba-literal kd) " false " (kotoba-literal "") ")")
                "rw1" (str "(resolve-wit-dir " (kotoba-literal user) " "
-                          (kotoba-literal kd) " 1)")
+                          (kotoba-literal kd) " true)")
                "rw0" (str "(resolve-wit-dir " (kotoba-literal user) " "
-                          (kotoba-literal kd) " 0)")}
+                          (kotoba-literal kd) " false)")}
         actual (compile-string-cases cases)]
     (is (= (config/default-kotoba-dir home) (get actual "dk")))
     (is (= (config/kotoba-dir {"HOME" home}) (get actual "kd0")))
@@ -126,8 +126,8 @@
             "pw" (str "(pinned-wit-dir " (kotoba-literal "/w") ")")
             "rw" (str "(runtime-wit-dir " (kotoba-literal "/k") ")")
             "bm" (str "(build-manifest-path " (kotoba-literal "/w") ")")
-            "kb1" (str "(kotoba-bin " (kotoba-literal "/w") " 1)")
-            "kb0" (str "(kotoba-bin " (kotoba-literal "/w") " 0)")})]
+            "kb1" (str "(kotoba-bin " (kotoba-literal "/w") " true)")
+            "kb0" (str "(kotoba-bin " (kotoba-literal "/w") " false)")})]
     (is (= config/kotoba-dir-suffix (get s "kds")))
     (is (= "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba" (get s "kds")))
     (is (= config/bin-suffix (get s "bs")))

@@ -53,7 +53,7 @@
         name (o 'verdict-name
                [(oracle/as-i64 (or (:model/experts model) 0))
                 (oracle/as-i64 (or (:model/active-experts model) 0))
-                (oracle/as-i64 (if shared? 1 0))])
+                (boolean shared?)])
         v (keyword name)]
     (case v
       :unknown
