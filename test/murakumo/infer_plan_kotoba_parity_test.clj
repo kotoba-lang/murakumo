@@ -24,8 +24,8 @@
        "digit-char nat-str i64-str bytes-to-gib-milli bytes-to-gib-floor layers-range-str "
        "mem-gib-milli usable-gib-milli est-gib-milli "
        "partition-1-end plan-fits-1 partition-2-ends plan-fits-2 "
-       "asg-row-pack asg-row-span asg-row-fits pick-max-idx-2 ends-lo ends-hi "
-       "lo-acc-pack partition-step partition-step-hi partition-step-acc "
+       "asg-row-record asg-row-span asg-row-fits pick-max-idx-2 ends-at ends-lo ends-hi "
+       "cut-state partition-step partition-step-hi partition-step-acc "
        "partition-last fits-and"))
 
 (defn- compile-i64-cases [cases]
@@ -60,10 +60,6 @@
         head (or (:headroom-bytes node) plan/default-headroom)
         wired (wired-arg node)]
     (str "(usable-bytes " (:mem-bytes node) " " os " " head " " wired ")")))
-
-(defn- unpack3 [packed]
-  (let [b 65536]
-    [(mod packed b) (mod (quot packed b) b) (quot packed (* b b))]))
 
 (deftest constants-match-plan-cljc
   (let [actual (compile-i64-cases
@@ -229,12 +225,16 @@
            {:name "c" :mem-bytes 0}]]]
         kotoba-cases
         (into {}
-              (map (fn [[label model nodes]]
+              (mapcat (fn [[label model nodes]]
                      (let [us (mapv plan/usable-bytes nodes)
                            mp (model-record-call model)
                            w (:model/weight-bytes model)]
-                       [label (str "(partition-3-ends " w " " mp " "
-                                   (us 0) " " (us 1) " " (us 2) ")")]))
+                       ;; T5.3: ends are [:ref :plan/ends]; one label per lane
+                       (let [call (str "(partition-3-ends " w " " mp " "
+                                       (us 0) " " (us 1) " " (us 2) ")")]
+                         [[(str label "-0") (str "(ends-at " call " 0)")]
+                          [(str label "-1") (str "(ends-at " call " 1)")]
+                          [(str label "-2") (str "(ends-at " call " 2)")]])))
                    cases))
         actual (compile-i64-cases
                 (merge kotoba-cases
@@ -249,7 +249,9 @@
     (is (= 400 (get actual "er")))
     (doseq [[label model nodes] cases]
       (let [want (cljc-ends model nodes)
-            got (unpack3 (get actual label))]
+            got [(get actual (str label "-0"))
+                 (get actual (str label "-1"))
+                 (get actual (str label "-2"))]]
         (testing label
           (is (= want got) (str label " want=" want " got=" got)))))))
 
@@ -260,6 +262,7 @@
                {:name "c" :mem-bytes (* 16 GiB)}]
         us (mapv plan/usable-bytes nodes)
         mp "(model-record 12 0 100)"
+        ends2 (fn [u0 u1] (str "(partition-2-ends 1200 " mp " " u0 " " u1 ")"))
         actual (compile-i64-cases
                 {"fit" (str "(plan-fits-3 1200 " mp " " (us 0) " " (us 1) " " (us 2) ")")
                  "nofit" (str "(plan-fits-3 999999999999 " mp " " (us 0) " " (us 1) " " (us 2) ")")
@@ -289,40 +292,47 @@
         us2u (mapv plan/usable-bytes n2uneq)
         us2z (mapv plan/usable-bytes n2zero)
         mp "(model-record 12 0 100)"
+        ends2 (fn [u0 u1] (str "(partition-2-ends 1200 " mp " " u0 " " u1 ")"))
         actual (compile-i64-cases
                 {"p1" (str "(partition-1-end " mp ")")
                  "f1" (str "(plan-fits-1 1200 " mp " " (us1 0) ")")
                  "f1n" (str "(plan-fits-1 999999999999 " mp " " (us1 0) ")")
-                 "p2" (str "(partition-2-ends 1200 " mp " " (us2 0) " " (us2 1) ")")
-                 "p2u" (str "(partition-2-ends 1200 " mp " " (us2u 0) " " (us2u 1) ")")
-                 "p2z" (str "(partition-2-ends 1200 " mp " " (us2z 0) " " (us2z 1) ")")
+                 ;; T5.3: ends are [:ref :plan/ends]; project inside the guest
+                 "p2-0" (str "(ends-at " (ends2 (us2 0) (us2 1)) " 0)")
+                 "p2-1" (str "(ends-at " (ends2 (us2 0) (us2 1)) " 1)")
+                 "p2u-0" (str "(ends-at " (ends2 (us2u 0) (us2u 1)) " 0)")
+                 "p2u-1" (str "(ends-at " (ends2 (us2u 0) (us2u 1)) " 1)")
+                 "p2z-0" (str "(ends-at " (ends2 (us2z 0) (us2z 1)) " 0)")
+                 "p2z-1" (str "(ends-at " (ends2 (us2z 0) (us2z 1)) " 1)")
                  "f2" (str "(plan-fits-2 1200 " mp " " (us2 0) " " (us2 1) ")")
                  "f2n" (str "(plan-fits-2 999999999999 " mp " " (us2 0) " " (us2 1) ")")
                  "f2u" (str "(plan-fits-2 1200 " mp " " (us2u 0) " " (us2u 1) ")")
                  "pm2a" "(pick-max-idx-2 10 5)"
                  "pm2b" "(pick-max-idx-2 5 10)"
                  "pm2t" "(pick-max-idx-2 10 10)"})
-        p2 (get actual "p2")
-        p2u (get actual "p2u")
-        [hi0 hi1 _] (unpack3 p2)
-        [hi0u hi1u _] (unpack3 p2u)
+        hi0 (get actual "p2-0")
+        hi1 (get actual "p2-1")
+        hi0u (get actual "p2u-0")
+        hi1u (get actual "p2u-1")
+        e2 (ends2 (us2 0) (us2 1))
+        row (fn [lo hi u] (str "(asg-row-record 1200 " mp " " lo " " hi " " u ")"))
         ;; asg rows from ends for n2eq — host would zip with node names
         asg-actual
         (compile-i64-cases
-         {"r0" (str "(asg-row-pack 1200 " mp " 0 " hi0 " " (us2 0) ")")
-          "r1" (str "(asg-row-pack 1200 " mp " " hi0 " " hi1 " " (us2 1) ")")
-          "elo0" (str "(ends-lo " p2 " 0)")
-          "elo1" (str "(ends-lo " p2 " 1)")
-          "ehi0" (str "(ends-hi " p2 " 0)")
-          "ehi1" (str "(ends-hi " p2 " 1)")
-          "sp0" (str "(asg-row-span (asg-row-pack 1200 " mp " 0 " hi0 " " (us2 0) "))")
-          "ft0" (str "(asg-row-fits (asg-row-pack 1200 " mp " 0 " hi0 " " (us2 0) "))")})]
+         {"elo0" (str "(ends-lo " e2 " 0)")
+          "elo1" (str "(ends-lo " e2 " 1)")
+          "ehi0" (str "(ends-hi " e2 " 0)")
+          "ehi1" (str "(ends-hi " e2 " 1)")
+          "sp0" (str "(asg-row-span " (row 0 hi0 (us2 0)) ")")
+          "ft0" (str "(asg-row-fits " (row 0 hi0 (us2 0)) ")")
+          "sp1" (str "(asg-row-span " (row hi0 hi1 (us2 1)) ")")
+          "ft1" (str "(asg-row-fits " (row hi0 hi1 (us2 1)) ")")})]
     (is (= 12 (get actual "p1")))
     (is (= (if (:fits? (plan/plan model n1)) 1 0) (get actual "f1")))
     (is (= 0 (get actual "f1n")))
     (is (= (cljc-ends n2eq) [hi0 hi1]))
     (is (= (cljc-ends n2uneq) [hi0u hi1u]))
-    (is (= [0 12 0] (unpack3 (get actual "p2z"))))
+    (is (= [0 12] [(get actual "p2z-0") (get actual "p2z-1")]))
     (is (= (if (:fits? (plan/plan model n2eq)) 1 0) (get actual "f2")))
     (is (= 0 (get actual "f2n")))
     (is (= (if (:fits? (plan/plan model n2uneq)) 1 0) (get actual "f2u")))
@@ -335,15 +345,11 @@
     (is (= hi1 (get asg-actual "ehi1")))
     (let [cljc (plan/partition-layers model n2eq)
           a0 (first cljc)
-          a1 (second cljc)
-          r0 (get asg-actual "r0")
-          r1 (get asg-actual "r1")]
+          a1 (second cljc)]
       (is (= (:span a0) (get asg-actual "sp0")))
       (is (= (if (:fits? a0) 1 0) (get asg-actual "ft0")))
-      (is (= (:span a0) (mod r0 65536)))
-      (is (= (if (:fits? a0) 1 0) (mod (quot r0 65536) 65536)))
-      (is (= (:span a1) (mod r1 65536)))
-      (is (= (if (:fits? a1) 1 0) (mod (quot r1 65536) 65536))))))
+      (is (= (:span a1) (get asg-actual "sp1")))
+      (is (= (if (:fits? a1) 1 0) (get asg-actual "ft1"))))))
 
 (deftest partition-step-fold-matches-n4-cljc
   "Host-fold partition-step for n=4 ring equals cljc partition-layers ends."
@@ -356,33 +362,34 @@
         total (reduce + us)
         mp "(model-record 20 0 100)"
         cljc-ends (mapv (fn [a] (second (:layers a))) (plan/partition-layers model nodes))
-        ;; step0: lo=0 acc=0 cum=u0
-        s0 (str "(partition-step 2000 " mp " (lo-acc-pack 0 0) " (us 0) " " total ")")
-        actual0 (compile-i64-cases {"s0" s0 "last" (str "(partition-last " mp ")")
+        ;; T5.3: the fold state is [:ref :plan/cut], so each step is nested as
+        ;; an expression instead of unpacking an integer on the host between
+        ;; steps. `:at` on the way out is `:at` on the way in.
+        step (fn [state cum] (str "(partition-step 2000 " mp " " state " " cum " " total ")"))
+        s0 (step "(cut-state 0 0)" (us 0))
+        s1 (step s0 (+ (us 0) (us 1)))
+        s2 (step s1 (+ (us 0) (us 1) (us 2)))
+        actual0 (compile-i64-cases {"hi0" (str "(partition-step-hi " s0 ")")
+                                    "hi1" (str "(partition-step-hi " s1 ")")
+                                    "hi2" (str "(partition-step-hi " s2 ")")
+                                    "last" (str "(partition-last " mp ")")
                                     "fa" "(fits-and 1 1)" "fb" "(fits-and 1 0)"})
-        hi0 (mod (get actual0 "s0") 65536)
-        acc0 (mod (quot (get actual0 "s0") 65536) 65536)
-        s1 (str "(partition-step 2000 " mp " (lo-acc-pack " hi0 " " acc0 ") "
-                (+ (us 0) (us 1)) " " total ")")
-        actual1 (compile-i64-cases {"s1" s1})
-        hi1 (mod (get actual1 "s1") 65536)
-        acc1 (mod (quot (get actual1 "s1") 65536) 65536)
-        s2 (str "(partition-step 2000 " mp " (lo-acc-pack " hi1 " " acc1 ") "
-                (+ (us 0) (us 1) (us 2)) " " total ")")
-        actual2 (compile-i64-cases {"s2" s2})
-        hi2 (mod (get actual2 "s2") 65536)
+        hi0 (get actual0 "hi0")
+        hi1 (get actual0 "hi1")
+        hi2 (get actual0 "hi2")
         hi3 (get actual0 "last")
         pure-ends [hi0 hi1 hi2 hi3]
         ;; fits fold over asg rows
+        row (fn [lo hi u] (str "(asg-row-record 2000 " mp " " lo " " hi " " u ")"))
         rows (compile-i64-cases
-              {"r0" (str "(asg-row-pack 2000 " mp " 0 " hi0 " " (us 0) ")")
-               "r1" (str "(asg-row-pack 2000 " mp " " hi0 " " hi1 " " (us 1) ")")
-               "r2" (str "(asg-row-pack 2000 " mp " " hi1 " " hi2 " " (us 2) ")")
-               "r3" (str "(asg-row-pack 2000 " mp " " hi2 " " hi3 " " (us 3) ")")})
-        f0 (mod (quot (get rows "r0") 65536) 65536)
-        f1 (mod (quot (get rows "r1") 65536) 65536)
-        f2 (mod (quot (get rows "r2") 65536) 65536)
-        f3 (mod (quot (get rows "r3") 65536) 65536)
+              {"f0" (str "(asg-row-fits " (row 0 hi0 (us 0)) ")")
+               "f1" (str "(asg-row-fits " (row hi0 hi1 (us 1)) ")")
+               "f2" (str "(asg-row-fits " (row hi1 hi2 (us 2)) ")")
+               "f3" (str "(asg-row-fits " (row hi2 hi3 (us 3)) ")")})
+        f0 (get rows "f0")
+        f1 (get rows "f1")
+        f2 (get rows "f2")
+        f3 (get rows "f3")
         fold (compile-i64-cases
               {"fall" (str "(fits-and (fits-and (fits-and " f0 " " f1 ") " f2 ") " f3 ")")
                "tot" (str "(plan-fits-total? " total " 2000)")})]

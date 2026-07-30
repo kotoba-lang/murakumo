@@ -1,6 +1,14 @@
 (ns infer-plan-core
   (:schemas {:plan/model [:record :plan/model
-                          [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]})
+                          [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]
+             ;; one assignment row: span of layers + whether it fits its node
+             :plan/row [:record :plan/row [[:span :i64] [:fits :i64]]]
+             ;; partition fold state. `:at` is the layer boundary — the previous
+             ;; cut on the way in, the new cut on the way out — so one record
+             ;; serves both directions of the host fold.
+             :plan/cut [:record :plan/cut [[:at :i64] [:acc :i64]]]
+             ;; exclusive layer ends for a 2- or 3-node ring (hi2 is 0 for 2)
+             :plan/ends [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]})
   (:export [gib default-os-reserve default-headroom usable-bytes choose-strategy-name
             plan-lr-l0 plan-lr-l1 plan-lr-l2
             plan-fits-total? span-fits?
@@ -15,9 +23,9 @@
             mem-gib-milli usable-gib-milli est-gib-milli
             partition-1-end plan-fits-1
             partition-2-ends plan-fits-2
-            asg-row-pack asg-row-span asg-row-fits
+            asg-row-record asg-row-span asg-row-fits
             pick-max-idx-2 ends-lo ends-hi
-            lo-acc-pack partition-step partition-step-hi partition-step-acc
+            cut-state partition-step partition-step-hi partition-step-acc
             partition-last fits-and]))
 
 ;; W6 pure-planner oracle — murakumo.infer.plan usable-bytes + choose-strategy
@@ -36,9 +44,9 @@
 ;; layer bytes stay integer and targets align (uniform + typical MoE cases).
 ;;
 ;; model-record = [:ref :plan/model] {layers, dense, frac-milli} (T5.3).
-;; partition-2-ends → pack3(hi0, hi1, 0) with hi1 = layers.
-;; partition-3-ends → pack3(hi0, hi1, hi2) exclusive layer ends (last = layers).
-;; partition-step: pack3(lo,acc,0)+cum+total → pack3(hi,new-acc,0); last uses partition-last.
+;; partition-2-ends / partition-3-ends → [:ref :plan/ends] exclusive layer ends.
+;; partition-step: [:ref :plan/cut] + cum + total → the next cut;
+;;   last node uses partition-last. (T5.3: records, no packs left here.)
 ;; Parity: test/murakumo/infer_plan_kotoba_parity_test.clj
 
 (defn gib [] :i64 1073741824)
@@ -65,23 +73,7 @@
         "expert"
         "pipeline"))))
 
-;; lane-base / pack3 / lane-at survive as INTERNAL helpers for the
-;; asg-row, partition-step and partition-*-ends lanes, which are
-;; separate slices. The plan-lr lane no longer packs (T5.3).
-(defn lane-base [] :i64 65536)
-
-(defn pack3 [a :i64 b :i64 c :i64] :i64
-  (let [B (lane-base)]
-    (+ a (+ (* b B) (* c (* B B))))))
-
-(defn lane-at [packed :i64 idx :i64] :i64
-  ;; idx 0|1|2
-  (let [B (lane-base)]
-    (if (= idx 0)
-      (rem64 packed B)
-      (if (= idx 1)
-        (rem64 (quot packed B) B)
-        (quot packed (* B B))))))
+;; T5.3 is complete for this module: no base-65536 packing remains.
 
 (defn better-bump? [rem-a :i64 idx-a :i64 rem-b :i64 idx-b :i64] :i64
   ;; higher rem wins; lower index wins ties (plan.cljc sort key [(- frac) i])
@@ -296,21 +288,22 @@
           (advance-in-band d layers moe acc-d target)))
       (advance-in-band lo0 layers moe acc target))))
 
-(defn partition-3-ends [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64 u2 :i64] :i64
+(defn partition-3-ends [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64 u2 :i64]
+  [:ref :plan/ends]
   ;; exclusive layer ends for 3 ring nodes (last end = layers).
   ;; Mirrors plan.cljc partition-layers loop for count(nodes)=3.
   (let [layers (model-layers mp)
         total (+ u0 (+ u1 u2))
         wsum (layer-wsum weight-bytes mp)]
     (if (= total 0)
-      (pack3 0 0 layers)
+      (record-new [:ref :plan/ends] 0 0 layers)
       (let [t0 (partition-target wsum u0 total)
             t1 (partition-target wsum (+ u0 u1) total)
             hi0 (advance-hi weight-bytes mp 0 0 t0)
             acc0 (est-bytes-range weight-bytes mp 0 hi0)
             hi1 (advance-hi weight-bytes mp hi0 acc0 t1)
             hi2 layers]
-        (pack3 hi0 hi1 hi2)))))
+        (record-new [:ref :plan/ends] hi0 hi1 hi2)))))
 
 (defn assignment-span [lo :i64 hi :i64] :i64
   (if (< hi lo) 0 (- hi lo)))
@@ -319,9 +312,9 @@
   ;; cljc plan :fits? for 3-node ring using integer partition-3-ends
   ;; total usable ≥ weights AND every positive-span assignment fits its usable
   (let [ends (partition-3-ends weight-bytes mp u0 u1 u2)
-        hi0 (lane-at ends 0)
-        hi1 (lane-at ends 1)
-        hi2 (lane-at ends 2)
+        hi0 (record-get ends :hi0)
+        hi1 (record-get ends :hi1)
+        hi2 (record-get ends :hi2)
         lo0 0
         lo1 hi0
         lo2 hi1
@@ -352,23 +345,24 @@
         total-ok (plan-fits-total? u0 weight-bytes)]
     (if (if (= total-ok 1) (if (= f0 1) 1 0) 0) 1 0)))
 
-(defn partition-2-ends [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64] :i64
-  ;; exclusive layer ends for 2 ring nodes → pack3(hi0, layers, 0)
+(defn partition-2-ends [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64]
+  [:ref :plan/ends]
+  ;; exclusive layer ends for 2 ring nodes; hi2 stays 0
   (let [layers (model-layers mp)
         total (+ u0 u1)
         wsum (layer-wsum weight-bytes mp)]
     (if (= total 0)
-      (pack3 0 layers 0)
+      (record-new [:ref :plan/ends] 0 layers 0)
       (let [t0 (partition-target wsum u0 total)
             hi0 (advance-hi weight-bytes mp 0 0 t0)
             hi1 layers]
-        (pack3 hi0 hi1 0)))))
+        (record-new [:ref :plan/ends] hi0 hi1 0)))))
 
 (defn plan-fits-2 [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64] :i64
   ;; cljc plan :fits? for 2-node ring using integer partition-2-ends
   (let [ends (partition-2-ends weight-bytes mp u0 u1)
-        hi0 (lane-at ends 0)
-        hi1 (lane-at ends 1)
+        hi0 (record-get ends :hi0)
+        hi1 (record-get ends :hi1)
         lo0 0
         lo1 hi0
         s0 (assignment-span lo0 hi0)
@@ -382,51 +376,55 @@
         total-ok (plan-fits-total? total weight-bytes)]
     (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)))
 
-(defn ends-lo [ends-pack :i64 idx :i64] :i64
-  ;; lo of assignment idx from packed exclusive ends (idx 0 → 0)
+(defn ends-at [ends [:ref :plan/ends] idx :i64] :i64
+  ;; exclusive end idx; fields are literal so the index is a small if-chain
   (if (= idx 0)
-    0
-    (lane-at ends-pack (- idx 1))))
+    (record-get ends :hi0)
+    (if (= idx 1) (record-get ends :hi1) (record-get ends :hi2))))
 
-(defn ends-hi [ends-pack :i64 idx :i64] :i64
-  (lane-at ends-pack idx))
+(defn ends-lo [ends [:ref :plan/ends] idx :i64] :i64
+  ;; lo of assignment idx (idx 0 → 0)
+  (if (= idx 0) 0 (ends-at ends (- idx 1))))
 
-(defn asg-row-pack [weight-bytes :i64 mp [:ref :plan/model] lo :i64 hi :i64 usable :i64] :i64
-  ;; pure assignment numeric row: pack3(span, fits, 0). Host adds :node id.
-  ;; est-bytes via est-bytes-range (may exceed pack lane).
+(defn ends-hi [ends [:ref :plan/ends] idx :i64] :i64
+  (ends-at ends idx))
+
+(defn asg-row-record [weight-bytes :i64 mp [:ref :plan/model] lo :i64 hi :i64 usable :i64]
+  [:ref :plan/row]
+  ;; pure assignment numeric row (T5.3: a record, not pack3). Host adds :node id.
   (let [sp (assignment-span lo hi)
         est (est-bytes-range weight-bytes mp lo hi)
         fit (if (= sp 0) 1 (span-fits? est usable))]
-    (pack3 sp fit 0)))
+    (record-new [:ref :plan/row] sp fit)))
 
-(defn asg-row-span [row :i64] :i64
-  (lane-at row 0))
+(defn asg-row-span [row [:ref :plan/row]] :i64
+  (record-get row :span))
 
-(defn asg-row-fits [row :i64] :i64
-  (lane-at row 1))
+(defn asg-row-fits [row [:ref :plan/row]] :i64
+  (record-get row :fits))
 
-(defn lo-acc-pack [lo :i64 acc :i64] :i64
-  ;; state for partition-step host fold
-  (pack3 lo acc 0))
+(defn cut-state [at :i64 acc :i64] [:ref :plan/cut]
+  ;; state for the partition-step host fold (T5.3: a record, not pack3)
+  (record-new [:ref :plan/cut] at acc))
 
-(defn partition-step [weight-bytes :i64 mp [:ref :plan/model] lo-acc :i64
-                      cum-usable :i64 total-usable :i64] :i64
-  ;; one non-last ring node: cut hi from lo/acc at cumulative target.
-  ;; lo-acc = pack3(lo, acc, 0). → pack3(hi, new-acc, 0).
+(defn partition-step [weight-bytes :i64 mp [:ref :plan/model] lo-acc [:ref :plan/cut]
+                      cum-usable :i64 total-usable :i64] [:ref :plan/cut]
+  ;; one non-last ring node: cut the next boundary from the current one.
+  ;; The result's `:at` is the next step's `:at` — same record either way.
   ;; Host: cum-usable = sum usable[0..i] inclusive; last node uses partition-last.
-  (let [lo (lane-at lo-acc 0)
-        acc (lane-at lo-acc 1)
+  (let [lo (record-get lo-acc :at)
+        acc (record-get lo-acc :acc)
         wsum (layer-wsum weight-bytes mp)
         target (partition-target wsum cum-usable total-usable)
         hi (advance-hi weight-bytes mp lo acc target)
         new-acc (+ acc (est-bytes-range weight-bytes mp lo hi))]
-    (pack3 hi new-acc 0)))
+    (record-new [:ref :plan/cut] hi new-acc)))
 
-(defn partition-step-hi [step-pack :i64] :i64
-  (lane-at step-pack 0))
+(defn partition-step-hi [step [:ref :plan/cut]] :i64
+  (record-get step :at))
 
-(defn partition-step-acc [step-pack :i64] :i64
-  (lane-at step-pack 1))
+(defn partition-step-acc [step [:ref :plan/cut]] :i64
+  (record-get step :acc))
 
 (defn partition-last [mp [:ref :plan/model]] :i64
   ;; last ring node exclusive end is always layers

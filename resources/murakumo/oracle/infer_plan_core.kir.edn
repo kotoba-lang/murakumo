@@ -57,30 +57,6 @@
       "expert"
       "pipeline"))),
    :param-types [:i64 :i64 :i64 :i64]}
-  {:name lane-base,
-   :params [],
-   :result :i64,
-   :effects #{},
-   :body 65536,
-   :param-types []}
-  {:name pack3,
-   :params [a b c],
-   :result :i64,
-   :effects #{},
-   :body (let [B (lane-base)] (+ a (+ (* b B) (* c (* B B))))),
-   :param-types [:i64 :i64 :i64]}
-  {:name lane-at,
-   :params [packed idx],
-   :result :i64,
-   :effects #{},
-   :body
-   (let
-    [B (lane-base)]
-    (if
-     (= idx 0)
-     (rem64 packed B)
-     (if (= idx 1) (rem64 (quot packed B) B) (quot packed (* B B))))),
-   :param-types [:i64 :i64]}
   {:name better-bump?,
    :params [rem-a idx-a rem-b idx-b],
    :result :i64,
@@ -524,7 +500,7 @@
    :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
   {:name partition-3-ends,
    :params [weight-bytes mp u0 u1 u2],
-   :result :i64,
+   :result [:ref :plan/ends],
    :effects #{},
    :body
    (let
@@ -536,7 +512,11 @@
      (layer-wsum weight-bytes mp)]
     (if
      (= total 0)
-     (pack3 0 0 layers)
+     (record-new
+      [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+      0
+      0
+      layers)
      (let
       [t0
        (partition-target wsum u0 total)
@@ -550,7 +530,11 @@
        (advance-hi weight-bytes mp hi0 acc0 t1)
        hi2
        layers]
-      (pack3 hi0 hi1 hi2)))),
+      (record-new
+       [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+       hi0
+       hi1
+       hi2)))),
    :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
   {:name assignment-span,
    :params [lo hi],
@@ -567,11 +551,20 @@
     [ends
      (partition-3-ends weight-bytes mp u0 u1 u2)
      hi0
-     (lane-at ends 0)
+     (record-get
+      [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+      ends
+      :hi0)
      hi1
-     (lane-at ends 1)
+     (record-get
+      [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+      ends
+      :hi1)
      hi2
-     (lane-at ends 2)
+     (record-get
+      [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+      ends
+      :hi2)
      lo0
      0
      lo1
@@ -630,7 +623,7 @@
    :param-types [:i64 [:ref :plan/model] :i64]}
   {:name partition-2-ends,
    :params [weight-bytes mp u0 u1],
-   :result :i64,
+   :result [:ref :plan/ends],
    :effects #{},
    :body
    (let
@@ -642,7 +635,11 @@
      (layer-wsum weight-bytes mp)]
     (if
      (= total 0)
-     (pack3 0 layers 0)
+     (record-new
+      [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+      0
+      layers
+      0)
      (let
       [t0
        (partition-target wsum u0 total)
@@ -650,7 +647,11 @@
        (advance-hi weight-bytes mp 0 0 t0)
        hi1
        layers]
-      (pack3 hi0 hi1 0)))),
+      (record-new
+       [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+       hi0
+       hi1
+       0)))),
    :param-types [:i64 [:ref :plan/model] :i64 :i64]}
   {:name plan-fits-2,
    :params [weight-bytes mp u0 u1],
@@ -661,9 +662,15 @@
     [ends
      (partition-2-ends weight-bytes mp u0 u1)
      hi0
-     (lane-at ends 0)
+     (record-get
+      [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+      ends
+      :hi0)
      hi1
-     (lane-at ends 1)
+     (record-get
+      [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+      ends
+      :hi1)
      lo0
      0
      lo1
@@ -688,21 +695,43 @@
      (plan-fits-total? total weight-bytes)]
     (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)),
    :param-types [:i64 [:ref :plan/model] :i64 :i64]}
+  {:name ends-at,
+   :params [ends idx],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= idx 0)
+    (record-get
+     [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+     ends
+     :hi0)
+    (if
+     (= idx 1)
+     (record-get
+      [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+      ends
+      :hi1)
+     (record-get
+      [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+      ends
+      :hi2))),
+   :param-types [[:ref :plan/ends] :i64]}
   {:name ends-lo,
-   :params [ends-pack idx],
+   :params [ends idx],
    :result :i64,
    :effects #{},
-   :body (if (= idx 0) 0 (lane-at ends-pack (- idx 1))),
-   :param-types [:i64 :i64]}
+   :body (if (= idx 0) 0 (ends-at ends (- idx 1))),
+   :param-types [[:ref :plan/ends] :i64]}
   {:name ends-hi,
-   :params [ends-pack idx],
+   :params [ends idx],
    :result :i64,
    :effects #{},
-   :body (lane-at ends-pack idx),
-   :param-types [:i64 :i64]}
-  {:name asg-row-pack,
+   :body (ends-at ends idx),
+   :param-types [[:ref :plan/ends] :i64]}
+  {:name asg-row-record,
    :params [weight-bytes mp lo hi usable],
-   :result :i64,
+   :result [:ref :plan/row],
    :effects #{},
    :body
    (let
@@ -712,36 +741,54 @@
      (est-bytes-range weight-bytes mp lo hi)
      fit
      (if (= sp 0) 1 (span-fits? est usable))]
-    (pack3 sp fit 0)),
+    (record-new
+     [:record :plan/row [[:span :i64] [:fits :i64]]]
+     sp
+     fit)),
    :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
   {:name asg-row-span,
    :params [row],
    :result :i64,
    :effects #{},
-   :body (lane-at row 0),
-   :param-types [:i64]}
+   :body
+   (record-get
+    [:record :plan/row [[:span :i64] [:fits :i64]]]
+    row
+    :span),
+   :param-types [[:ref :plan/row]]}
   {:name asg-row-fits,
    :params [row],
    :result :i64,
    :effects #{},
-   :body (lane-at row 1),
-   :param-types [:i64]}
-  {:name lo-acc-pack,
-   :params [lo acc],
-   :result :i64,
+   :body
+   (record-get
+    [:record :plan/row [[:span :i64] [:fits :i64]]]
+    row
+    :fits),
+   :param-types [[:ref :plan/row]]}
+  {:name cut-state,
+   :params [at acc],
+   :result [:ref :plan/cut],
    :effects #{},
-   :body (pack3 lo acc 0),
+   :body
+   (record-new [:record :plan/cut [[:at :i64] [:acc :i64]]] at acc),
    :param-types [:i64 :i64]}
   {:name partition-step,
    :params [weight-bytes mp lo-acc cum-usable total-usable],
-   :result :i64,
+   :result [:ref :plan/cut],
    :effects #{},
    :body
    (let
     [lo
-     (lane-at lo-acc 0)
+     (record-get
+      [:record :plan/cut [[:at :i64] [:acc :i64]]]
+      lo-acc
+      :at)
      acc
-     (lane-at lo-acc 1)
+     (record-get
+      [:record :plan/cut [[:at :i64] [:acc :i64]]]
+      lo-acc
+      :acc)
      wsum
      (layer-wsum weight-bytes mp)
      target
@@ -750,20 +797,25 @@
      (advance-hi weight-bytes mp lo acc target)
      new-acc
      (+ acc (est-bytes-range weight-bytes mp lo hi))]
-    (pack3 hi new-acc 0)),
-   :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
+    (record-new
+     [:record :plan/cut [[:at :i64] [:acc :i64]]]
+     hi
+     new-acc)),
+   :param-types [:i64 [:ref :plan/model] [:ref :plan/cut] :i64 :i64]}
   {:name partition-step-hi,
-   :params [step-pack],
+   :params [step],
    :result :i64,
    :effects #{},
-   :body (lane-at step-pack 0),
-   :param-types [:i64]}
+   :body
+   (record-get [:record :plan/cut [[:at :i64] [:acc :i64]]] step :at),
+   :param-types [[:ref :plan/cut]]}
   {:name partition-step-acc,
-   :params [step-pack],
+   :params [step],
    :result :i64,
    :effects #{},
-   :body (lane-at step-pack 1),
-   :param-types [:i64]}
+   :body
+   (record-get [:record :plan/cut [[:at :i64] [:acc :i64]]] step :acc),
+   :param-types [[:ref :plan/cut]]}
   {:name partition-last,
    :params [mp],
    :result :i64,
@@ -865,8 +917,14 @@
    :param-types [:i64]}],
  :oracle-value nil,
  :schema-identities
- #:plan{:model
-        "c5eb16734ebe12d2b01640a5f10b10194a65fed751dec39d207f3e796cec4be2"},
+ #:plan{:cut
+        "770ecb0db4dad8cf3f8042059c7b16b94362958b38568161377763ef8bc59019",
+        :ends
+        "2cf3eb757a278ea54207af27b0746994d7be2769f31a26331676f31c7e864ccf",
+        :model
+        "bf41a6bd53269fc6d3f9349b53f76b07a5e2cdef84cc0488860aefcf5230583b",
+        :row
+        "f989a7d6cac6ee26af0380e8d1a12abc189bf3a4847821f8056209ec8fbf3959"},
  :exports
  [gib
   default-os-reserve
@@ -909,13 +967,13 @@
   plan-fits-1
   partition-2-ends
   plan-fits-2
-  asg-row-pack
+  asg-row-record
   asg-row-span
   asg-row-fits
   pick-max-idx-2
   ends-lo
   ends-hi
-  lo-acc-pack
+  cut-state
   partition-step
   partition-step-hi
   partition-step-acc
@@ -925,7 +983,11 @@
  #:plan{:model
         [:record
          :plan/model
-         [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]},
+         [[:layers :i64] [:dense :i64] [:frac-milli :i64]]],
+        :row [:record :plan/row [[:span :i64] [:fits :i64]]],
+        :cut [:record :plan/cut [[:at :i64] [:acc :i64]]],
+        :ends
+        [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}
