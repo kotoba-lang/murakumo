@@ -1,60 +1,29 @@
 ;; murakumo.infer.gc — disk garbage collection policy (pure cljc).
 ;;
-;; W6 product-shell authority: GiB/defaults + need/free/target/rank/comfy
-;; DELEGATE to precompiled kotoba/infer_gc_core.kotoba when oracle loadable
-;; (JVM or cljs/nbb). Plan fold stays host.
+;; W6 product-shell + T6.4: GiB/defaults + need/free/target/rank/comfy require
+;; the shipped `:infer-gc` KIR on **every** platform. Host pure mirrors are
+;; gone — cljs/nbb must preload shipped KIR before requiring this ns
+;; (ADR-260731-w6-t64-infer-small-mirror-delete).
+;; Plan fold stays host.
 
 (ns murakumo.infer.gc
   (:require [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :infer-gc)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
 
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-(defn- oracle-i64-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/i64->host (oracle/call oid export [])))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/i64->host (oracle/call oid export []))
-         mirror)
-       (catch :default _
-         mirror))))
-
 (def GiB
-  (oracle-i64-const 'gib (* 1024 1024 1024)))
+  (oracle/i64->host (o 'gib [])))
 
 (def default-policy
-  {:target-free-bytes (oracle-i64-const 'default-target-free (* 20 GiB))
-   :comfy-keep-days (oracle-i64-const 'default-comfy-keep-days 7)
-   :hf-keep (oracle-i64-const 'default-hf-keep 2)
+  {:target-free-bytes (oracle/i64->host (o 'default-target-free []))
+   :comfy-keep-days (oracle/i64->host (o 'default-comfy-keep-days []))
+   :hf-keep (oracle/i64->host (o 'default-hf-keep []))
    :evict-order [:rpc-cache :comfy-temp :hf-stale]})
 
 (def reclaimable #{:rpc-cache :comfy-temp :hf-stale})
@@ -67,14 +36,12 @@
 (defn- rank-better?
   "True when entry1 should evict before entry2."
   [e1 e2]
-  (try-oracle
-   #(oracle/bool->host
-     (o 'rank-better?
-        [(oracle/as-i64 (or (:atime-days e1) 0))
-         (oracle/as-i64 (or (:bytes e1) 0))
-         (oracle/as-i64 (or (:atime-days e2) 0))
-         (oracle/as-i64 (or (:bytes e2) 0))]))
-   #(neg? (compare (rank e1) (rank e2)))))
+  (oracle/bool->host
+   (o 'rank-better?
+      [(oracle/as-i64 (or (:atime-days e1) 0))
+       (oracle/as-i64 (or (:bytes e1) 0))
+       (oracle/as-i64 (or (:atime-days e2) 0))
+       (oracle/as-i64 (or (:bytes e2) 0))])))
 
 (defn- hf-lru-evictable
   "Of the :hf-stale entries, mark the (count - keep) least-recently-used as
@@ -90,11 +57,9 @@
   (let [{:keys [target-free-bytes comfy-keep-days hf-keep evict-order]}
         (merge default-policy policy)
         free (or free-bytes 0)
-        need (try-oracle
-              #(oracle/i64->host
-                (o 'need-bytes
-                   [(oracle/as-i64 target-free-bytes) (oracle/as-i64 free)]))
-              #(max 0 (- target-free-bytes free)))
+        need (oracle/i64->host
+              (o 'need-bytes
+                 [(oracle/as-i64 target-free-bytes) (oracle/as-i64 free)]))
         candidates (reduce
                     (fn [acc cls]
                       (concat acc
@@ -106,13 +71,10 @@
                                          (filter
                                           (fn [e]
                                             (and (= :comfy-temp (:class e))
-                                                 (try-oracle
-                                                  #(oracle/bool->host
-                                                    (o 'comfy-evictable?
-                                                       [(oracle/as-i64 (or (:atime-days e) 0))
-                                                        (oracle/as-i64 comfy-keep-days)]))
-                                                  #(> (or (:atime-days e) 0)
-                                                      comfy-keep-days))))
+                                                 (oracle/bool->host
+                                                  (o 'comfy-evictable?
+                                                     [(oracle/as-i64 (or (:atime-days e) 0))
+                                                      (oracle/as-i64 comfy-keep-days)]))))
                                           entries))
                                 :hf-stale
                                 (sort-by rank (hf-lru-evictable
@@ -126,17 +88,13 @@
                     (reduced [ev got])
                     [(conj ev e) (+ got (or (:bytes e) 0))]))
                 [[] 0] candidates)
-        free-after (try-oracle
-                    #(oracle/i64->host
-                      (o 'free-after [(oracle/as-i64 free) (oracle/as-i64 reclaimed)]))
-                    #(+ free reclaimed))
-        target-met? (try-oracle
-                     #(oracle/bool->host
-                       (o 'target-met?
-                          [(oracle/as-i64 free)
-                           (oracle/as-i64 reclaimed)
-                           (oracle/as-i64 target-free-bytes)]))
-                     #(>= free-after target-free-bytes))]
+        free-after (oracle/i64->host
+                    (o 'free-after [(oracle/as-i64 free) (oracle/as-i64 reclaimed)]))
+        target-met? (oracle/bool->host
+                     (o 'target-met?
+                        [(oracle/as-i64 free)
+                         (oracle/as-i64 reclaimed)
+                         (oracle/as-i64 target-free-bytes)]))]
     {:evict (vec evict)
      :reclaim-bytes reclaimed
      :free-after free-after
