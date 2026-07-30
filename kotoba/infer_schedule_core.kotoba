@@ -1,13 +1,35 @@
 (ns infer-schedule-core
+  (:schemas {;; T5.3: assign pack families become named records (no base-65536).
+             :schedule/eligibility [:record :schedule/eligibility
+                                    [[:has-engine :i64] [:has-checkpoint :i64]
+                                     [:holds-checkpoint :i64] [:can-fetch :i64]]]
+             ;; 2-node assign context: warm flags + score preference
+             :schedule/better2 [:record :schedule/better2
+                                [[:warm0 :i64] [:warm1 :i64] [:better01 :i64]]]
+             ;; 2-node assign result
+             :schedule/assign2 [:record :schedule/assign2
+                                [[:code :i64] [:q0 :i64] [:q1 :i64]]]
+             ;; 3-node queue / ok / warm triple (same shape, different roles)
+             :schedule/triple [:record :schedule/triple
+                               [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+             ;; 3-node pairwise better flags (01, 02, 12)
+             :schedule/better3 [:record :schedule/better3
+                                [[:b01 :i64] [:b02 :i64] [:b12 :i64]]]
+             ;; 3-node assign result
+             :schedule/assign3 [:record :schedule/assign3
+                                [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]]})
   (:export [eligible? score-queue score-free better-score?
             holds-warm? prefer-warm-then-score pick-idx-2-full
             pick-idx-3-tournament queue-after-assign
-            lane-base pack3 pack-get queues-pack-2 pick-code
-            assign-step-2 assign-result-pick assign-result-q0 assign-result-q1
+            pick-code
+            better2-record assign-step-2
+            assign-result-pick assign-result-q0 assign-result-q1
             better-from-queues
-            queues-pack-3 pick-code-3
+            triple-record triple-v0 triple-v1 triple-v2
+            better3-record pick-code-3
             assign-pick-3 apply-pick-3
-            assign-step-3 assign-step-3-code assign-step-3-queues
+            assign-step-3 assign-step-3-code
+            assign-step-3-q0 assign-step-3-q1 assign-step-3-q2
             better-pair
             pick-fold-step queue-inc-if]))
 
@@ -16,21 +38,14 @@
 ;; assign-step-3 / assign-pick-3 / apply-pick-3: pure step for fixed 3 nodes.
 ;; pick-fold-step: host-fold tournament for n>3 (0=none, 1=take challenger, 2=keep champ).
 ;; queue-inc-if: host updates one node's queue after pick.
-;; T5.3 (schedule): eligibility is a [:record :schedule/eligibility …] with
-;; named :has-engine / :has-checkpoint / :holds-checkpoint / :can-fetch fields,
-;; not four bits packed into one i64. Records cross the KIR wire in both
-;; directions, so the host builds the record and passes it positionally --
-;; arity is 3, well under the max of 5, and nothing is bit-packed.
+;; T5.3 (schedule): eligibility is a named record (flags no longer bit-packed).
+;; T5.3 (schedule assign): queue/ok/warm/better triples and assign results are
+;; named records — base-65536 pack3 is deleted from this module.
 ;; score is two i64 keys (queue, -free); better-score? compares lexicographically.
-;; assign-step-3 result = pick-code-3 + 4 * pack3(nq0,nq1,nq2).
+;; T5.3 complete for this module: no base-65536 packing remains.
 ;; Parity: test/murakumo/infer_schedule_kotoba_parity_test.clj
 
-(defn rem64 [a :i64 b :i64] :i64
-  (- a (* (quot a b) b)))
-
-(defn eligible? [e [:record :schedule/eligibility
-                     [[:has-engine :i64] [:has-checkpoint :i64]
-                      [:holds-checkpoint :i64] [:can-fetch :i64]]] free-bytes :i64 min-free :i64] :i64
+(defn eligible? [e [:ref :schedule/eligibility] free-bytes :i64 min-free :i64] :i64
   (let [has-engine (record-get e :has-engine)
         has-ckpt (record-get e :has-checkpoint)
         holds (record-get e :holds-checkpoint)
@@ -62,7 +77,7 @@
       0
       (if (< f1 f2) 1 0))))
 
-(defn holds-warm? [e [:record :schedule/eligibility [[:has-engine :i64] [:has-checkpoint :i64] [:holds-checkpoint :i64] [:can-fetch :i64]]]] :i64
+(defn holds-warm? [e [:ref :schedule/eligibility]] :i64
   (record-get e :holds-checkpoint))
 
 (defn prefer-warm-then-score [warm0 :i64 warm1 :i64 better01 :i64] :i64
@@ -99,77 +114,76 @@
     (if (< queue 0) 0 queue)
     (if (< queue 0) 1 (+ queue 1))))
 
-(defn lane-base [] :i64 65536)
-
-(defn pack3 [a :i64 b :i64 c :i64] :i64
-  (let [B (lane-base)]
-    (+ a (+ (* b B) (* c (* B B))))))
-
-(defn pack-get [packed :i64 idx :i64] :i64
-  (let [B (lane-base)]
-    (if (= idx 0)
-      (rem64 packed B)
-      (if (= idx 1)
-        (rem64 (quot packed B) B)
-        (quot packed (* B B))))))
-
-(defn queues-pack-2 [q0 :i64 q1 :i64] :i64
-  (pack3 q0 q1 0))
-
 (defn pick-code [pick-idx :i64] :i64
   ;; -1|0|1 → 0=none, 1=node0, 2=node1
   (if (< pick-idx 0) 0 (+ pick-idx 1)))
 
+;; ── T5.3: assign packs → records ──────────────────────────────────────────
+
+(defn better2-record [warm0 :i64 warm1 :i64 better01 :i64] [:ref :schedule/better2]
+  (record-new [:ref :schedule/better2] warm0 warm1 better01))
+
 (defn assign-step-2 [q0 :i64 q1 :i64 ok0 :i64 ok1 :i64
-                     better-pack :i64] :i64
-  ;; better-pack = pack3(warm0, warm1, better01)
-  ;; → pack3(pick-code, nq0, nq1)
-  (let [warm0 (pack-get better-pack 0)
-        warm1 (pack-get better-pack 1)
-        better01 (pack-get better-pack 2)
+                     better [:ref :schedule/better2]] [:ref :schedule/assign2]
+  (let [warm0 (record-get better :warm0)
+        warm1 (record-get better :warm1)
+        better01 (record-get better :better01)
         p (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
         code (pick-code p)
         nq0 (queue-after-assign q0 (if (= p 0) 1 0))
         nq1 (queue-after-assign q1 (if (= p 1) 1 0))]
-    (pack3 code nq0 nq1)))
+    (record-new [:ref :schedule/assign2] code nq0 nq1)))
 
-(defn assign-result-pick [result-pack :i64] :i64
-  (pack-get result-pack 0))
+(defn assign-result-pick [result [:ref :schedule/assign2]] :i64
+  (record-get result :code))
 
-(defn assign-result-q0 [result-pack :i64] :i64
-  (pack-get result-pack 1))
+(defn assign-result-q0 [result [:ref :schedule/assign2]] :i64
+  (record-get result :q0))
 
-(defn assign-result-q1 [result-pack :i64] :i64
-  (pack-get result-pack 2))
+(defn assign-result-q1 [result [:ref :schedule/assign2]] :i64
+  (record-get result :q1))
 
 (defn better-from-queues [q0 :i64 f0 :i64 q1 :i64 f1 :i64] :i64
   ;; recompute better01 after queue updates (free-bytes fixed per node)
   (better-score? (score-queue q0) (score-free f0)
                  (score-queue q1) (score-free f1)))
 
-(defn queues-pack-3 [q0 :i64 q1 :i64 q2 :i64] :i64
-  (pack3 q0 q1 q2))
+(defn triple-record [v0 :i64 v1 :i64 v2 :i64] [:ref :schedule/triple]
+  (record-new [:ref :schedule/triple] v0 v1 v2))
+
+(defn triple-v0 [t [:ref :schedule/triple]] :i64
+  (record-get t :v0))
+
+(defn triple-v1 [t [:ref :schedule/triple]] :i64
+  (record-get t :v1))
+
+(defn triple-v2 [t [:ref :schedule/triple]] :i64
+  (record-get t :v2))
+
+(defn better3-record [b01 :i64 b02 :i64 b12 :i64] [:ref :schedule/better3]
+  (record-new [:ref :schedule/better3] b01 b02 b12))
 
 (defn pick-code-3 [pick-idx :i64] :i64
   ;; -1|0|1|2 → 0=none, 1=node0, 2=node1, 3=node2
   (if (< pick-idx 0) 0 (+ pick-idx 1)))
 
 (defn better-pair [q-a :i64 f-a :i64 q-b :i64 f-b :i64] :i64
-  ;; 1 if a strictly better score than b (alias for host pack assembly)
+  ;; 1 if a strictly better score than b
   (better-from-queues q-a f-a q-b f-b))
 
-(defn assign-pick-3 [ok-pack :i64 warm-pack :i64 better-pack :i64] :i64
-  ;; better-pack = pack3(better01, better02, better12)
+(defn assign-pick-3 [ok [:ref :schedule/triple]
+                     warm [:ref :schedule/triple]
+                     better [:ref :schedule/better3]] :i64
   ;; → pick idx −1|0|1|2
-  (let [ok0 (pack-get ok-pack 0)
-        ok1 (pack-get ok-pack 1)
-        ok2 (pack-get ok-pack 2)
-        warm0 (pack-get warm-pack 0)
-        warm1 (pack-get warm-pack 1)
-        warm2 (pack-get warm-pack 2)
-        better01 (pack-get better-pack 0)
-        better02 (pack-get better-pack 1)
-        better12 (pack-get better-pack 2)
+  (let [ok0 (record-get ok :v0)
+        ok1 (record-get ok :v1)
+        ok2 (record-get ok :v2)
+        warm0 (record-get warm :v0)
+        warm1 (record-get warm :v1)
+        warm2 (record-get warm :v2)
+        better01 (record-get better :b01)
+        better02 (record-get better :b02)
+        better12 (record-get better :b12)
         champ (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
         warm-champ (if (= champ 0)
                      warm0
@@ -179,29 +193,40 @@
                     better12)]
     (pick-idx-3-tournament champ ok2 warm-champ warm2 better-c2)))
 
-(defn apply-pick-3 [q-pack :i64 pick :i64] :i64
-  ;; → pack3(nq0, nq1, nq2) after assigning one job to pick (−1 = none)
-  (let [q0 (pack-get q-pack 0)
-        q1 (pack-get q-pack 1)
-        q2 (pack-get q-pack 2)
+(defn apply-pick-3 [q [:ref :schedule/triple] pick :i64] [:ref :schedule/triple]
+  ;; queues after assigning one job to pick (−1 = none)
+  (let [q0 (record-get q :v0)
+        q1 (record-get q :v1)
+        q2 (record-get q :v2)
         nq0 (queue-after-assign q0 (if (= pick 0) 1 0))
         nq1 (queue-after-assign q1 (if (= pick 1) 1 0))
         nq2 (queue-after-assign q2 (if (= pick 2) 1 0))]
-    (pack3 nq0 nq1 nq2)))
+    (record-new [:ref :schedule/triple] nq0 nq1 nq2)))
 
-(defn assign-step-3 [q-pack :i64 ok-pack :i64 warm-pack :i64 better-pack :i64] :i64
-  ;; one job pure assign for 3 nodes.
-  ;; result = pick-code-3 + 4 * pack3(nq0,nq1,nq2)
-  (let [p (assign-pick-3 ok-pack warm-pack better-pack)
+(defn assign-step-3 [q [:ref :schedule/triple]
+                     ok [:ref :schedule/triple]
+                     warm [:ref :schedule/triple]
+                     better [:ref :schedule/better3]] [:ref :schedule/assign3]
+  ;; one job pure assign for 3 nodes → named result record
+  (let [p (assign-pick-3 ok warm better)
         code (pick-code-3 p)
-        nq (apply-pick-3 q-pack p)]
-    (+ code (* 4 nq))))
+        nq (apply-pick-3 q p)]
+    (record-new [:ref :schedule/assign3] code
+                (record-get nq :v0)
+                (record-get nq :v1)
+                (record-get nq :v2))))
 
-(defn assign-step-3-code [result :i64] :i64
-  (rem64 result 4))
+(defn assign-step-3-code [result [:ref :schedule/assign3]] :i64
+  (record-get result :code))
 
-(defn assign-step-3-queues [result :i64] :i64
-  (quot result 4))
+(defn assign-step-3-q0 [result [:ref :schedule/assign3]] :i64
+  (record-get result :q0))
+
+(defn assign-step-3-q1 [result [:ref :schedule/assign3]] :i64
+  (record-get result :q1))
+
+(defn assign-step-3-q2 [result [:ref :schedule/assign3]] :i64
+  (record-get result :q2))
 
 (defn pick-fold-step [champ [:option :i64] ok-i :i64 warm-champ :i64 warm-i :i64
                       better-c-i :i64] :i64

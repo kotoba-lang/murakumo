@@ -12,10 +12,14 @@
 
 (def export-prefix (str "eligible? score-queue score-free better-score? holds-warm? "
                         "prefer-warm-then-score pick-idx-2-full pick-idx-3-tournament "
-                        "queue-after-assign lane-base pack3 pack-get queues-pack-2 pick-code "
-                        "assign-step-2 assign-result-pick assign-result-q0 assign-result-q1 "
-                        "better-from-queues queues-pack-3 pick-code-3 assign-pick-3 apply-pick-3 "
-                        "assign-step-3 assign-step-3-code assign-step-3-queues better-pair "
+                        "queue-after-assign pick-code "
+                        "better2-record assign-step-2 "
+                        "assign-result-pick assign-result-q0 assign-result-q1 "
+                        "better-from-queues triple-record triple-v0 triple-v1 triple-v2 "
+                        "better3-record pick-code-3 "
+                        "assign-pick-3 apply-pick-3 "
+                        "assign-step-3 assign-step-3-code "
+                        "assign-step-3-q0 assign-step-3-q1 assign-step-3-q2 better-pair "
                         "pick-fold-step queue-inc-if"))
 
 (def GiB (* 1024 1024 1024))
@@ -225,43 +229,36 @@
         cljc (sched/assign [a b] jobs)
         f0 (:free-bytes a)
         f1 (:free-bytes b)
-        ;; step0
+        ;; T5.3: better2-record + assign2 field projections (no pack3)
         b0 (str "(better-from-queues 0 " f0 " 0 " f1 ")")
-        s0 (str "(assign-step-2 0 0 1 1 (pack3 1 0 " b0 "))")
-        ;; after step0: q=(1,0); step1
+        s0 (str "(assign-step-2 0 0 1 1 (better2-record 1 0 " b0 "))")
         b1 (str "(better-from-queues 1 " f0 " 0 " f1 ")")
-        s1 (str "(assign-step-2 1 0 1 1 (pack3 1 0 " b1 "))")
+        s1 (str "(assign-step-2 1 0 1 1 (better2-record 1 0 " b1 "))")
         actual (compile-i64-cases
                 {"b0" b0
-                 "s0" s0
-                 "b1" b1
-                 "s1" s1
+                 "s0c" (str "(assign-result-pick " s0 ")")
+                 "s0q0" (str "(assign-result-q0 " s0 ")")
+                 "s0q1" (str "(assign-result-q1 " s0 ")")
+                 "s1c" (str "(assign-result-pick " s1 ")")
+                 "s1q0" (str "(assign-result-q0 " s1 ")")
+                 "s1q1" (str "(assign-result-q1 " s1 ")")
                  "pc" "(pick-code -1)"
                  "pc0" "(pick-code 0)"
                  "pc1" "(pick-code 1)"
-                 "qp" "(queues-pack-2 3 4)"
-                 "g0" "(pack-get (queues-pack-2 3 4) 0)"
-                 "g1" "(pack-get (queues-pack-2 3 4) 1)"})]
+                 "t0" "(triple-v0 (triple-record 3 4 0))"
+                 "t1" "(triple-v1 (triple-record 3 4 0))"})]
     (is (= 0 (get actual "pc")))
     (is (= 1 (get actual "pc0")))
     (is (= 2 (get actual "pc1")))
-    (is (= 3 (get actual "g0")))
-    (is (= 4 (get actual "g1")))
-    (let [s0v (get actual "s0")
-          code (mod s0v 65536)
-          nq0 (mod (quot s0v 65536) 65536)
-          nq1 (quot s0v (* 65536 65536))]
-      (is (= 1 code) "pick a (warm)")
-      (is (= 1 nq0))
-      (is (= 0 nq1)))
-    (let [s1v (get actual "s1")
-          code (mod s1v 65536)
-          nq0 (mod (quot s1v 65536) 65536)
-          nq1 (quot s1v (* 65536 65536))]
-      ;; warm preference still binds both jobs to a (cold b never enters warm set)
-      (is (= 1 code) "still pick warm a")
-      (is (= 2 nq0))
-      (is (= 0 nq1)))
+    (is (= 3 (get actual "t0")))
+    (is (= 4 (get actual "t1")))
+    (is (= 1 (get actual "s0c")) "pick a (warm)")
+    (is (= 1 (get actual "s0q0")))
+    (is (= 0 (get actual "s0q1")))
+    ;; warm preference still binds both jobs to a (cold b never enters warm set)
+    (is (= 1 (get actual "s1c")) "still pick warm a")
+    (is (= 2 (get actual "s1q0")))
+    (is (= 0 (get actual "s1q1")))
     (is (= "a" (:node (cljc 0))))
     (is (= "a" (:node (cljc 1))))))
 
@@ -269,21 +266,17 @@
   (let [f (* 16 GiB)
         ;; both warm → score by queue; tie picks index 1 (#73 prefer-warm-then-score)
         b0 (str "(better-from-queues 0 " f " 0 " f ")")
-        s0 (str "(assign-step-2 0 0 1 1 (pack3 1 1 " b0 "))")
-        ;; after pick node1: queues (0,1)
+        s0 (str "(assign-step-2 0 0 1 1 (better2-record 1 1 " b0 "))")
         b1 (str "(better-from-queues 0 " f " 1 " f ")")
-        s1 (str "(assign-step-2 0 1 1 1 (pack3 1 1 " b1 "))")
-        actual (compile-i64-cases {"s0" s0 "s1" s1})]
-    (let [c0 (mod (get actual "s0") 65536)
-          c1 (mod (get actual "s1") 65536)]
-      (is (= 2 c0))
-      (is (= 1 c1)))))
+        s1 (str "(assign-step-2 0 1 1 1 (better2-record 1 1 " b1 "))")
+        actual (compile-i64-cases
+                {"s0c" (str "(assign-result-pick " s0 ")")
+                 "s1c" (str "(assign-result-pick " s1 ")")})]
+    (is (= 2 (get actual "s0c")))
+    (is (= 1 (get actual "s1c")))))
 
 (deftest assign-step-3-matches-schedule-assign
-  (let [f (* 16 GiB)
-        B 65536
-        unpack3 (fn [p] [(mod p B) (mod (quot p B) B) (quot p (* B B))])
-        ;; unequal free so score is strict (avoids known tie→later-idx vs cljc first)
+  (let [;; unequal free so score is strict (avoids known tie→later-idx vs cljc first)
         fa (* 8 GiB)
         fb (* 16 GiB)
         fc (* 32 GiB)
@@ -299,45 +292,50 @@
         jobs (repeat 3 {:model model})
         cljc (sched/assign [a b c] jobs)
         ;; all warm; more free ⇒ better score (score-free = -free)
-        bp0 (str "(pack3 (better-pair 0 " fa " 0 " fb ") "
+        bp0 (str "(better3-record (better-pair 0 " fa " 0 " fb ") "
                  "(better-pair 0 " fa " 0 " fc ") "
                  "(better-pair 0 " fb " 0 " fc "))")
-        s0 (str "(assign-step-3 (queues-pack-3 0 0 0) (pack3 1 1 1) (pack3 1 1 1) " bp0 ")")
+        ok-warm "(triple-record 1 1 1)"
+        q0 "(triple-record 0 0 0)"
+        s0 (str "(assign-step-3 " q0 " " ok-warm " " ok-warm " " bp0 ")")
         actual0 (compile-i64-cases
-                 {"s0" s0
+                 {"s0c" (str "(assign-step-3-code " s0 ")")
+                  "s0q0" (str "(assign-step-3-q0 " s0 ")")
+                  "s0q1" (str "(assign-step-3-q1 " s0 ")")
+                  "s0q2" (str "(assign-step-3-q2 " s0 ")")
                   "pcn" "(pick-code-3 -1)"
                   "pc0" "(pick-code-3 0)"
                   "pc2" "(pick-code-3 2)"
-                  "ap" (str "(assign-pick-3 (pack3 1 1 1) (pack3 1 1 1) " bp0 ")")
-                  "aq" "(apply-pick-3 (queues-pack-3 0 0 0) 2)"})]
+                  "ap" (str "(assign-pick-3 " ok-warm " " ok-warm " " bp0 ")")
+                  "aq0" (str "(triple-v0 (apply-pick-3 " q0 " 2))")
+                  "aq1" (str "(triple-v1 (apply-pick-3 " q0 " 2))")
+                  "aq2" (str "(triple-v2 (apply-pick-3 " q0 " 2))")})]
     (is (= 0 (get actual0 "pcn")))
     (is (= 1 (get actual0 "pc0")))
     (is (= 3 (get actual0 "pc2")))
     (is (= 2 (get actual0 "ap")) "pick c — largest free")
-    (is (= [0 0 1] (unpack3 (get actual0 "aq"))))
-    (let [code (mod (get actual0 "s0") 4)
-          [nq0 nq1 nq2] (unpack3 (quot (get actual0 "s0") 4))]
-      (is (= 3 code) "pick-code for node2")
-      (is (= [0 0 1] [nq0 nq1 nq2]))
-      (is (= "c" (:node (nth cljc 0)))))
+    (is (= 0 (get actual0 "aq0")))
+    (is (= 0 (get actual0 "aq1")))
+    (is (= 1 (get actual0 "aq2")))
+    (is (= 3 (get actual0 "s0c")) "pick-code for node2")
+    (is (= [0 0 1] [(get actual0 "s0q0") (get actual0 "s0q1") (get actual0 "s0q2")]))
+    (is (= "c" (:node (nth cljc 0))))
     ;; step1: q=(0,0,1) — still prefer largest free among low queue
-    (let [bp1 (str "(pack3 (better-pair 0 " fa " 0 " fb ") "
+    (let [bp1 (str "(better3-record (better-pair 0 " fa " 0 " fb ") "
                    "(better-pair 0 " fa " 1 " fc ") "
                    "(better-pair 0 " fb " 1 " fc "))")
-          s1 (str "(assign-step-3 (queues-pack-3 0 0 1) (pack3 1 1 1) (pack3 1 1 1) " bp1 ")")
+          q1 "(triple-record 0 0 1)"
+          s1 (str "(assign-step-3 " q1 " " ok-warm " " ok-warm " " bp1 ")")
           actual1 (compile-i64-cases
-                   {"s1" s1
-                    "gc" (str "(assign-step-3-code " (get actual0 "s0") ")")
-                    "gq" (str "(assign-step-3-queues " (get actual0 "s0") ")")})]
-      (is (= 3 (get actual1 "gc")))
-      (is (= (quot (get actual0 "s0") 4) (get actual1 "gq")))
-      (let [code (mod (get actual1 "s1") 4)
-            [nq0 nq1 nq2] (unpack3 (quot (get actual1 "s1") 4))]
-        (is (= 2 code) "pick b — free 16GiB, queue 0 beats c queue 1")
-        (is (= [0 1 1] [nq0 nq1 nq2]))
-        (is (= "b" (:node (nth cljc 1))))
-        (is (= 3 (count cljc)))
-        (is (every? some? (map :node cljc)))))))
+                   {"s1c" (str "(assign-step-3-code " s1 ")")
+                    "s1q0" (str "(assign-step-3-q0 " s1 ")")
+                    "s1q1" (str "(assign-step-3-q1 " s1 ")")
+                    "s1q2" (str "(assign-step-3-q2 " s1 ")")})]
+      (is (= 2 (get actual1 "s1c")) "pick b — free 16GiB, queue 0 beats c queue 1")
+      (is (= [0 1 1] [(get actual1 "s1q0") (get actual1 "s1q1") (get actual1 "s1q2")]))
+      (is (= "b" (:node (nth cljc 1))))
+      (is (= 3 (count cljc)))
+      (is (every? some? (map :node cljc))))))
 
 (deftest pick-fold-step-n4-matches-schedule-pick
   "Host-fold pick-fold-step over 4 nodes equals cljc pick when free differs."
