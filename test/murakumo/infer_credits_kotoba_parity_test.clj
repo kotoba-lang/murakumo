@@ -83,7 +83,7 @@
   (let [corpus [[500 50] [50 50] [49 50] [0 1] [100 0]]
         cases (into {} (map-indexed
                         (fn [i [b c]]
-                          [(str "a_" i) (str "(charge-allow? " b " " c ")")])
+                          [(str "a_" i) (str "(if (charge-allow? " b " " c ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [b c]] (map-indexed vector corpus)]

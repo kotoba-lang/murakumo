@@ -83,8 +83,9 @@
         pl (pool total tr hd)]
     (share-record-2 pl w0 w1)))
 
-(defn charge-allow? [balance :i64 cost :i64] :i64
-  (if (< balance cost) 0 1))
+(defn charge-allow? [balance :i64 cost :i64] :bool
+  ;; Profile 5: balance gate as :bool.
+  (if (< balance cost) false true))
 
 (defn balance-after-spend [balance :i64 cost :i64] :i64
   (let [left (- balance cost)]

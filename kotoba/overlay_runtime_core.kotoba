@@ -64,16 +64,17 @@
         (default-web-port)
         0))))
 
-(defn known-adapter? [name :string] :i64
+(defn known-adapter? [name :string] :bool
+  ;; Profile 5: adapter membership as :bool.
   (if (string=? name (adapter-relay))
-    1
+    true
     (if (string=? name (adapter-quic))
-      1
+      true
       (if (string=? name (adapter-webrtc))
-        1
+        true
         (if (string=? name (adapter-webtransport))
-          1
-          (if (string=? name (adapter-relay-client)) 1 0))))))
+          true
+          (if (string=? name (adapter-relay-client)) true false))))))
 
 (defn adapter-kind [name :string] :string
   (if (string=? name (adapter-relay))

@@ -141,10 +141,10 @@
 
 (deftest plan-fits-and-layer-bytes
   (let [actual (compile-i64-cases
-                {"ft1" "(plan-fits-total? 100 80)"
-                 "ft0" "(plan-fits-total? 70 80)"
-                 "sf1" "(span-fits? 50 50)"
-                 "sf0" "(span-fits? 51 50)"
+                {"ft1" "(if (plan-fits-total? 100 80) 1 0)"
+                 "ft0" "(if (plan-fits-total? 70 80) 1 0)"
+                 "sf1" "(if (span-fits? 50 50) 1 0)"
+                 "sf0" "(if (span-fits? 51 50) 1 0)"
                  "ul" "(uniform-layer-bytes 1000 10)"
                  "du" "(dense-units-milli 78 3 100)"
                  "moe" "(moe-layer-bytes 1000000 78 3 100)"})]
@@ -392,7 +392,7 @@
         f3 (get rows "f3")
         fold (compile-i64-cases
               {"fall" (str "(fits-and (fits-and (fits-and " f0 " " f1 ") " f2 ") " f3 ")")
-               "tot" (str "(plan-fits-total? " total " 2000)")})]
+               "tot" (str "(if (plan-fits-total? " total " 2000) 1 0)")})]
     (is (= 20 (get actual0 "last")))
     (is (= 1 (get actual0 "fa")))
     (is (= 0 (get actual0 "fb")))

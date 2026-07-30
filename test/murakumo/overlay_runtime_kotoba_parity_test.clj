@@ -48,8 +48,8 @@
             "pq" (str "(default-port-for-kind " (kotoba-literal "quic") ")")
             "pr" (str "(default-port-for-kind " (kotoba-literal "relay") ")")
             "pw" (str "(default-port-for-kind " (kotoba-literal "webrtc") ")")
-            "k1" (str "(known-adapter? " (kotoba-literal "murakumo.runtime.quic") ")")
-            "k0" (str "(known-adapter? " (kotoba-literal "nope") ")")})
+            "k1" (str "(if (known-adapter? " (kotoba-literal "murakumo.runtime.quic") ") 1 0)")
+            "k0" (str "(if (known-adapter? " (kotoba-literal "nope") ") 1 0)")})
         s (compile-string-cases
            {"ak" (str "(adapter-kind " (kotoba-literal "murakumo.runtime.quic") ")")
             "ar" (str "(adapter-kind " (kotoba-literal "murakumo.runtime.relay") ")")

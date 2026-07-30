@@ -93,17 +93,17 @@
 
 (deftest sealed-shape-gates
   (let [alg-ok (compile-i64-cases
-                {"ok" "(sealed-alg-ok? \"aes-256-gcm\")"
-                 "bad" "(sealed-alg-ok? \"aes-128-gcm\")"
-                 "empty" "(sealed-alg-ok? \"\")"})
+                {"ok" "(if (sealed-alg-ok? \"aes-256-gcm\") 1 0)"
+                 "bad" "(if (sealed-alg-ok? \"aes-128-gcm\") 1 0)"
+                 "empty" "(if (sealed-alg-ok? \"\") 1 0)"})
         some-s (opt-str-form "x")
         none-s (opt-str-form nil)
         fields (compile-i64-cases
-                {"full" (str "(sealed-fields-present? " some-s " " some-s " " some-s ")")
-                 "no-alg" (str "(sealed-fields-present? " none-s " " some-s " " some-s ")")
-                 "no-n" (str "(sealed-fields-present? " some-s " " none-s " " some-s ")")
-                 "no-ct" (str "(sealed-fields-present? " some-s " " some-s " " none-s ")")
-                 "none" (str "(sealed-fields-present? " none-s " " none-s " " none-s ")")})
+                {"full" (str "(if (sealed-fields-present? " some-s " " some-s " " some-s ") 1 0)")
+                 "no-alg" (str "(if (sealed-fields-present? " none-s " " some-s " " some-s ") 1 0)")
+                 "no-n" (str "(if (sealed-fields-present? " some-s " " none-s " " some-s ") 1 0)")
+                 "no-ct" (str "(if (sealed-fields-present? " some-s " " some-s " " none-s ") 1 0)")
+                 "none" (str "(if (sealed-fields-present? " none-s " " none-s " " none-s ") 1 0)")})
         sealed (crypto/seal "k" "p")]
     (is (= 1 (get alg-ok "ok")))
     (is (= 0 (get alg-ok "bad")))

@@ -120,11 +120,11 @@
   [fleet sel]
   (let [nodes (:nodes fleet)]
     (if (oracle-ready?)
-      (if (= 1 (oracle/i64->host (o 'selector-is-all? [(str (or sel ""))])))
+      (if (oracle/bool->host (o 'selector-is-all? [(str (or sel ""))]))
         nodes
-        (filter #(= 1 (oracle/i64->host
-                       (o 'selector-wants-name?
-                          [(str sel) (str (:name %))])))
+        (filter #(oracle/bool->host
+                  (o 'selector-wants-name?
+                     [(str sel) (str (:name %))]))
                 nodes))
       (if (or (nil? sel) (= sel selector-all))
         nodes
@@ -146,8 +146,8 @@
               :when (>= (count cols) 4)]
           [(nth cols 1) {:ip (nth cols 0)
                          :online? (if (oracle-ready?)
-                                    (not= 1 (oracle/i64->host
-                                             (o 'line-has-offline? [(str line)])))
+                                    (not (oracle/bool->host
+                                          (o 'line-has-offline? [(str line)])))
                                     (not (str/includes? line offline-token)))}])))
 
 (defn tailscale-status-result

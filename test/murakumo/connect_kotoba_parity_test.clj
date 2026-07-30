@@ -83,9 +83,9 @@
                      (fn [i [node reach]]
                        (let [p (project-serves node reach)]
                          [(str "s_" i)
-                          (str "(serves-plane? " (kotoba-literal (:plane p)) " "
+                          (str "(if (serves-plane? " (kotoba-literal (:plane p)) " "
                                (opt-i64-form (:http? p)) " "
-                               (opt-i64-form (:common? p)) ")")]))
+                               (opt-i64-form (:common? p)) ") 1 0)")]))
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [node reach]] (map-indexed vector corpus)]

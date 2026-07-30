@@ -37,19 +37,22 @@
     (default-class-name default-class)
     node-class))
 
-(defn serves-read? [http? [:option :i64]] :i64
+(defn serves-read? [http? [:option :i64]] :bool
   ;; cljc :read plane — host projects presence of :http as some(1)
-  (if-some [_ http?] 1 0))
+  ;; Profile 5: :bool.
+  (if-some [_ http?] true false))
 
-(defn serves-live? [common? [:option :i64]] :i64
+(defn serves-live? [common? [:option :i64]] :bool
   ;; cljc :live — host projects non-empty live-transport intersection as some(1)
-  (if-some [_ common?] 1 0))
+  ;; Profile 5: :bool.
+  (if-some [_ common?] true false))
 
 (defn serves-plane? [plane :string
                      http? [:option :i64]
-                     common? [:option :i64]] :i64
+                     common? [:option :i64]] :bool
+  ;; Profile 5: plane gate as :bool.
   (if (string=? plane (plane-read))
     (serves-read? http?)
     (if (string=? plane (plane-live))
       (serves-live? common?)
-      0)))
+      false)))

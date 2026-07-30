@@ -166,22 +166,22 @@
    :param-types [:string]}
   {:name known-adapter?,
    :params [name],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (string=? name (adapter-relay))
-    1
+    true
     (if
      (string=? name (adapter-quic))
-     1
+     true
      (if
       (string=? name (adapter-webrtc))
-      1
+      true
       (if
        (string=? name (adapter-webtransport))
-       1
-       (if (string=? name (adapter-relay-client)) 1 0))))),
+       true
+       (if (string=? name (adapter-relay-client)) true false))))),
    :param-types [:string]}
   {:name adapter-kind,
    :params [name],

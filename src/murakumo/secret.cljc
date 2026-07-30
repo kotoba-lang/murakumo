@@ -177,7 +177,7 @@
    Tags/codes/messages via kotoba when ready."
   [class value]
   (if (try-oracle
-       #(= 1 (oracle/i64->host (o 'reply-is-value? [(str class)])))
+       #(oracle/bool->host (o 'reply-is-value? [(str class)]))
        #(= class class-value))
     {:tag :value :value (str value)}
     (let [code (try-oracle

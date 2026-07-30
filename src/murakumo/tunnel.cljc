@@ -247,7 +247,7 @@
         marker? (fn [l]
                   (let [t (str/trim (str l))]
                     (try-oracle
-                     #(= 1 (oracle/i64->host (o 'marker-prefix? [t])))
+                     #(oracle/bool->host (o 'marker-prefix? [t]))
                      #(mirror-marker-prefix? t))))
         rc-line (last (filter marker? lines))
         digits (when rc-line

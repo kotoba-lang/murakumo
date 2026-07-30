@@ -51,13 +51,13 @@
    :param-types [:string]}
   {:name sealed-alg-ok?,
    :params [alg],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (string=? alg (alg-name)) 1 0),
+   :body (if (string=? alg (alg-name)) true false),
    :param-types [:string]}
   {:name sealed-fields-present?,
    :params [alg nonce ct],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (let
@@ -78,10 +78,10 @@
            (option-some?-of [:option :string] binding-some__3)
            (let
             [_ (option-value-of [:option :string] binding-some__3 "")]
-            1)
-           0)))
-        0)))
-     0)),
+            true)
+           false)))
+        false)))
+     false)),
    :param-types
    [[:option :string] [:option :string] [:option :string]]}],
  :oracle-value nil,

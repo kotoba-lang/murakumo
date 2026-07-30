@@ -77,8 +77,8 @@
   (let [n (compile-i64-cases
            {"t" "(default-connect-timeout-s)"
             "p" "(default-control-persist-s)"
-            "mp" (str "(marker-prefix? " (kotoba-literal "__murakumo_rc=7") ")")
-            "mn" (str "(marker-prefix? " (kotoba-literal "partial") ")")
+            "mp" (str "(if (marker-prefix? " (kotoba-literal "__murakumo_rc=7") ") 1 0)")
+            "mn" (str "(if (marker-prefix? " (kotoba-literal "partial") ") 1 0)")
             "pd7" (str "(parse-digits " (kotoba-literal "7") ")")
             "pd0" (str "(parse-digits " (kotoba-literal "0") ")")
             "pdw" (str "(parse-digits " (kotoba-literal " 42 ") ")")

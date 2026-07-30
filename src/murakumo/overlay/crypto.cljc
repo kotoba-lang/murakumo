@@ -105,9 +105,9 @@
   "True when sealed map carries the expected AES-GCM alg."
   [alg]
   (try-oracle
-   #(= 1 (oracle/i64->host
-          (o 'sealed-alg-ok?
-             [(if (keyword? alg) (name alg) (str alg))])))
+   #(oracle/bool->host
+     (o 'sealed-alg-ok?
+        [(if (keyword? alg) (name alg) (str alg))]))
    #(mirror-sealed-alg-ok? alg)))
 
 (defn- option-field
@@ -122,11 +122,11 @@
    Kotoba `sealed-fields-present?` with Product Value ABI when oracle ready."
   [sealed]
   (try-oracle
-   #(= 1 (oracle/i64->host
-          (o 'sealed-fields-present?
-             [(option-field (get sealed field-alg))
-              (option-field (get sealed field-nonce))
-              (option-field (get sealed field-ciphertext))])))
+   #(oracle/bool->host
+     (o 'sealed-fields-present?
+        [(option-field (get sealed field-alg))
+         (option-field (get sealed field-nonce))
+         (option-field (get sealed field-ciphertext))]))
    #(mirror-sealed-fields-present? sealed)))
 
 (defn sealed-map-ok?

@@ -116,11 +116,11 @@
                             (set (class-transports connect class (keyword plane-live)))))
                   1)]
     (try-oracle
-     #(= 1 (oracle/i64->host
-            (o 'serves-plane?
-               [(name plane)
-                (oracle/option-i64 http?)
-                (oracle/option-i64 common?)])))
+     #(oracle/bool->host
+       (o 'serves-plane?
+          [(name plane)
+           (oracle/option-i64 http?)
+           (oracle/option-i64 common?)]))
      #(let [plane-name (name plane)]
         (cond
           (= plane-name plane-read)
