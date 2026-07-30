@@ -368,8 +368,8 @@
    Kotoba `missing-manifest?` when ready."
   [{:keys [manifest]}]
   (when (try-oracle
-         #(= 1 (oracle/i64->host
-                (o 'missing-manifest? [(str (or manifest ""))])))
+         #(oracle/bool->host
+           (o 'missing-manifest? [(str (or manifest ""))]))
          #(str/blank? (str manifest)))
     :missing-manifest))
 

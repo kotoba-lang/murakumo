@@ -117,22 +117,22 @@
       "."
       (string-substring manifest 0 slash))))
 
-(defn ws? [c :string] :i64
+(defn ws? [c :string] :bool
   (if (string=? c " ")
-    1
+    true
     (if (string=? c "\n")
-      1
+      true
       (if (string=? c "\t")
-        1
-        (if (string=? c "\r") 1 0)))))
+        true
+        (if (string=? c "\r") true false)))))
 
 (defn trim [s :string] :string
   (let [n (string-byte-length s)]
     (if (= n 0)
       s
-      (if (= (ws? (string-substring s 0 1)) 1)
+      (if (ws? (string-substring s 0 1))
         (trim (string-substring s 1 n))
-        (if (= (ws? (string-substring s (- n 1) n)) 1)
+        (if (ws? (string-substring s (- n 1) n))
           (trim (string-substring s 0 (- n 1)))
           s)))))
 
@@ -226,13 +226,13 @@
 (defn release-wit-suffix [] :string
   "/../../../crates/kotoba-runtime/wit")
 
-(defn blank? [s :string] :i64
+(defn blank? [s :string] :bool
   (let [n (string-byte-length s)]
     (if (= n 0)
-      1
-      (if (= (ws? (string-substring s 0 1)) 1)
+      true
+      (if (ws? (string-substring s 0 1))
         (blank? (string-substring s 1 n))
-        0))))
+        false))))
 
 (defn trim-ws [s :string] :string
   (trim s))
@@ -292,15 +292,15 @@
    (pkill-f-prefix)
    (string-concat (i64-str local-port) (stop-forward-suffix))))
 
-(defn absolute-unix-git-bin? [p :string] :i64
+(defn absolute-unix-git-bin? [p :string] :bool
   ;; Unix absolute path, non-blank, not bare "git". Windows drive letter stays host.
-  (if (= (blank? p) 1)
-    0
+  (if (blank? p)
+    false
     (if (string=? p "git")
-      0
+      false
       (if (< (string-byte-length p) 1)
-        0
-        (if (string=? (string-substring p 0 1) (path-sep)) 1 0)))))
+        false
+        (if (string=? (string-substring p 0 1) (path-sep)) true false)))))
 
 ;; ── residual pin/git argv fragments + deploy CLI gates ───────────────
 
@@ -323,10 +323,10 @@
 (defn build-features [] :string
   "p2p,realtime-wasm,webrtc")
 
-(defn missing-manifest? [manifest :string] :i64
+(defn missing-manifest? [manifest :string] :bool
   (blank? manifest))
 
-(defn missing-operator-seed? [operator-seed :string] :i64
+(defn missing-operator-seed? [operator-seed :string] :bool
   (blank? operator-seed))
 
 ;; ── residual pin-copy-plan path fragments ────────────────────────────

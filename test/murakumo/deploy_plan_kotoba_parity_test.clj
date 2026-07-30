@@ -120,9 +120,9 @@
             "e0" (str "(execution-observed? " (kotoba-literal "0\n") ")")
             "ee" (str "(execution-observed? " (kotoba-literal "") ")")
             "ex" (str "(execution-observed? " (kotoba-literal "x") ")")
-            "ag" (str "(absolute-unix-git-bin? " (kotoba-literal "/usr/bin/git") ")")
-            "ab" (str "(absolute-unix-git-bin? " (kotoba-literal "git") ")")
-            "ae" (str "(absolute-unix-git-bin? " (kotoba-literal "") ")")})
+            "ag" (str "(if (absolute-unix-git-bin? " (kotoba-literal "/usr/bin/git") ") 1 0)")
+            "ab" (str "(if (absolute-unix-git-bin? " (kotoba-literal "git") ") 1 0)")
+            "ae" (str "(if (absolute-unix-git-bin? " (kotoba-literal "") ") 1 0)")})
         s (compile-string-cases
            {"ec" (str "(execution-count-command " (kotoba-literal "bafyCID") ")")
             "rw" (str "(release-wit-path " (kotoba-literal "release") ")")
@@ -179,10 +179,10 @@
             "vp" (str "(version-bin-path " (kotoba-literal "bin") ")")
             "bf" "(build-features)"})
         i (compile-i64-cases
-           {"m1" (str "(missing-manifest? " (kotoba-literal "") ")")
-            "m0" (str "(missing-manifest? " (kotoba-literal "apps/x.edn") ")")
-            "s1" (str "(missing-operator-seed? " (kotoba-literal "") ")")
-            "s0" (str "(missing-operator-seed? " (kotoba-literal "seed") ")")})]
+           {"m1" (str "(if (missing-manifest? " (kotoba-literal "") ") 1 0)")
+            "m0" (str "(if (missing-manifest? " (kotoba-literal "apps/x.edn") ") 1 0)")
+            "s1" (str "(if (missing-operator-seed? " (kotoba-literal "") ") 1 0)")
+            "s0" (str "(if (missing-operator-seed? " (kotoba-literal "seed") ") 1 0)")})]
     (is (= plan/cp-bin (get s "cp")))
     (is (= plan/rm-bin (get s "rm")))
     (is (= plan/rm-rf-flag (get s "rf")))

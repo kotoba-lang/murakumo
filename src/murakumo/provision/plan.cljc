@@ -483,8 +483,8 @@
    Kotoba `operator-seed-missing?` when oracle ready."
   [operator-seed]
   (try-oracle
-   #(= 1 (oracle/i64->host
-          (o 'operator-seed-missing? [(str (or operator-seed ""))])))
+   #(oracle/bool->host
+     (o 'operator-seed-missing? [(str (or operator-seed ""))]))
    #(mirror-operator-seed-missing? operator-seed)))
 
 (defn provision-command-error

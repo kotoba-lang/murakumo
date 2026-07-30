@@ -71,8 +71,8 @@
             "wr" "(watchdog-reprovision-command)"})
         n (compile-i64-cases
            {"w" "(peer-advertise-wait-ms)" "d" "(default-p2p-port)"
-            "m0" (str "(operator-seed-missing? " (kotoba-literal "") ")")
-            "m1" (str "(operator-seed-missing? " (kotoba-literal "seed") ")")
+            "m0" (str "(if (operator-seed-missing? " (kotoba-literal "") ") 1 0)")
+            "m1" (str "(if (operator-seed-missing? " (kotoba-literal "seed") ") 1 0)")
             "p0" "(resolve-p2p-port (option-none-of [:option :i64]) (option-some-of [:option :i64] 4001))"
             "p1" "(resolve-p2p-port (option-some-of [:option :i64] 5001) (option-some-of [:option :i64] 4001))"
             "p2" "(resolve-p2p-port (option-none-of [:option :i64]) (option-none-of [:option :i64]))"

@@ -87,8 +87,9 @@
     (is (= driver/reason-unknown-command (get actual "ru")))
     (is (= driver/reason-missing-options (get actual "rm"))))
   (let [n (compile-i64-cases
-           {"b0" (str "(blank? " (kotoba-literal "") ")")
-            "b1" (str "(blank? " (kotoba-literal "x") ")")
+           ;; Profile 5: blank? is :bool — wrap as 0/1 for compile-i64-cases.
+           {"b0" (str "(if (blank? " (kotoba-literal "") ") 1 0)")
+            "b1" (str "(if (blank? " (kotoba-literal "x") ") 1 0)")
             "cd" (str "(command-is-dial? " (kotoba-literal "dial") ")")
             "cn" (str "(command-is-dial? " (kotoba-literal "relay") ")")
             "sw" (str "(starts-with? " (kotoba-literal "quic://a") " "

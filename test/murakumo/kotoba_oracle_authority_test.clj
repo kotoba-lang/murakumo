@@ -2175,6 +2175,7 @@
            (oracle/call :overlay-driver 'dial-ok-reason [1 0])))
     (is (= (ir/execute d 'blank? [""])
            (oracle/call :overlay-driver 'blank? [""])))
+    (is (contains? #{true 1} (oracle/call :overlay-driver 'blank? [""])))
     (is (= (ir/execute d 'scheme-quic [])
            (oracle/call :overlay-driver 'scheme-quic [])))
     (is (= (oracle/call :overlay-driver 'scheme-quic []) odriver/scheme-quic))

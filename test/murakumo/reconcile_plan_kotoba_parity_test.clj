@@ -192,8 +192,8 @@
 
 (deftest flag-and-action-pure-match
   (let [i (compile-i64-cases
-           {"mm0" (str "(missing-manifest? " (kotoba-literal "") ")")
-            "mm1" (str "(missing-manifest? " (kotoba-literal "app.edn") ")")
+           {"mm0" (str "(if (missing-manifest? " (kotoba-literal "") ") 1 0)")
+            "mm1" (str "(if (missing-manifest? " (kotoba-literal "app.edn") ") 1 0)")
             "as" (str "(action-is-satisfied? " (kotoba-literal "satisfied") ")")
             "ap" (str "(action-is-place? " (kotoba-literal "place") ")")
             "ao" (str "(action-is-place? " (kotoba-literal "satisfied") ")")

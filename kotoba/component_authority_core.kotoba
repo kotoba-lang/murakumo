@@ -40,32 +40,32 @@
 (defn event-revoked [] :string
   "revoked")
 
-(defn ws? [c :string] :i64
+(defn ws? [c :string] :bool
   (if (string=? c " ")
-    1
+    true
     (if (string=? c "\n")
-      1
+      true
       (if (string=? c "\t")
-        1
-        (if (string=? c "\r") 1 0)))))
+        true
+        (if (string=? c "\r") true false)))))
 
-(defn blank? [s :string] :i64
+(defn blank? [s :string] :bool
   (let [n (string-byte-length s)]
     (if (= n 0)
-      1
-      (if (= (ws? (string-substring s 0 1)) 1)
+      true
+      (if (ws? (string-substring s 0 1))
         (blank? (string-substring s 1 n))
-        0))))
+        false))))
 
-(defn identifier-len-ok? [is-blank :i64 byte-len :i64] :i64
+(defn identifier-len-ok? [is-blank :bool byte-len :i64] :bool
   ;; host projects blank? + UTF-8 byte length (avoids embedding huge literals)
-  (if (= is-blank 1)
-    0
+  (if is-blank
+    false
     (if (< (max-identifier-bytes) byte-len)
-      0
-      1)))
+      false
+      true)))
 
-(defn identifier? [s :string] :i64
+(defn identifier? [s :string] :bool
   ;; cljc: string? + not blank + count ≤ 4096
   (identifier-len-ok? (blank? s) (string-byte-length s)))
 
