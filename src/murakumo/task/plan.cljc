@@ -43,12 +43,20 @@
   (oracle/ready? oid))
 
 (defn- oracle-str-const [export mirror]
-  (try
-    (if (oracle/ready? oid)
-      (oracle/call oid export [])
-      mirror)
-    (catch #?(:clj Exception :cljs :default) _
-      mirror)))
+  "JVM: require oracle. cljs: mirror fallback."
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export export})))
+       (oracle/call oid export []))
+     :cljs
+     (try
+       (if (oracle-ready?)
+         (oracle/call oid export [])
+         mirror)
+       (catch :default _
+         mirror))))
 
 (def ^:private mirror-exclude-join-sep ",")
 (def ^:private mirror-unsched-placement-prefix "no node satisfies placement=")

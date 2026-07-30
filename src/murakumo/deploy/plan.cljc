@@ -30,30 +30,53 @@
   (oracle/ready? oid))
 
 (defn- try-oracle
-  "Run oracle body; on failure use mirror."
+  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
   [thunk mirror-thunk]
-  (if (oracle-ready?)
-    (try
-      (thunk)
-      (catch #?(:clj Exception :cljs :default) _
-        (mirror-thunk)))
-    (mirror-thunk)))
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid})))
+       (thunk))
+     :cljs
+     (if (oracle-ready?)
+       (try
+         (thunk)
+         (catch :default _
+           (mirror-thunk)))
+       (mirror-thunk))))
 
 (defn- oracle-str-const [export mirror]
-  (try
-    (if (oracle/ready? oid)
-      (oracle/call oid export [])
-      mirror)
-    (catch #?(:clj Exception :cljs :default) _
-      mirror)))
+  "JVM: require oracle. cljs: mirror fallback."
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export export})))
+       (oracle/call oid export []))
+     :cljs
+     (try
+       (if (oracle-ready?)
+         (oracle/call oid export [])
+         mirror)
+       (catch :default _
+         mirror))))
 
 (defn- oracle-i64-const [export mirror]
-  (try
-    (if (oracle/ready? oid)
-      (oracle/i64->host (oracle/call oid export []))
-      mirror)
-    (catch #?(:clj Exception :cljs :default) _
-      mirror)))
+  "JVM: require oracle. cljs: mirror fallback."
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export export})))
+       (oracle/i64->host (oracle/call oid export [])))
+     :cljs
+     (try
+       (if (oracle-ready?)
+         (oracle/i64->host (oracle/call oid export []))
+         mirror)
+       (catch :default _
+         mirror))))
 
 ;; ── host-mirror pure helpers ───────────────────────────────────────────
 
