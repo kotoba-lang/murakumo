@@ -29,6 +29,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def default-connect-timeout-s
@@ -216,13 +222,17 @@
 
 (defn- pick-exit
   "Prefer in-band rc when present. Kotoba `pick-exit` (required).
-   Profile 5: has-rc is guest :bool presence."
+   Profile 5: has-rc is guest :bool presence.
+   T5.2: structural exit map → call-record."
   [rc ssh-exit]
   (oracle/i64->host
-   (o 'pick-exit
-      [(boolean (some? rc))
-       (oracle/as-i64 (or rc 0))
-       (oracle/as-i64 (or ssh-exit 0))])))
+   (o-record 'pick-exit
+             {:has-rc (some? rc)
+              :rc (or rc 0)
+              :ssh-exit (or ssh-exit 0)}
+             [[:has-rc :bool]
+              [:rc :i64]
+              [:ssh-exit :i64]])))
 
 (defn- trim-err
   "Trim stderr. Kotoba `trim-err` (required)."

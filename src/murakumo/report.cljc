@@ -19,6 +19,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def report-csv-sep
@@ -94,20 +100,26 @@
 
 (defn status-row
   "Format one `murakumo status` row.
-   Health presence via Product Value ABI optional i64 when oracle ready."
+   Health presence via Product Value ABI optional i64.
+   T5.2: structural row map → call-record."
   [node health-json links p2p-port]
   (let [subsystems (:subsystems health-json)
         health? (when health-json 1)
         wasm (or (:wasm_executor subsystems) "?")
         links-str (if health-json (str links) "-")]
-    (o 'status-row
-       [(str (:name node))
-        (oracle/option-i64 health?)
-        (str wasm)
-        (str links-str)
-        (oracle/as-i64 p2p-port)])))
+    (o-record 'status-row
+              {:name (str (:name node))
+               :health health?
+               :wasm (str wasm)
+               :links (str links-str)
+               :p2p-port p2p-port}
+              [[:name :string]
+               [:health :option-i64]
+               [:wasm :string]
+               [:links :string]
+               [:p2p-port :i64]])))
 
-(defn status-row* [{:keys [node health-json links p2p-port]}]
+(defn status-row* [{:keys [node health-json links p2p-port] :as row}]
   (status-row node health-json links p2p-port))
 
 (defn deploy-observed-row [where publish-node]
