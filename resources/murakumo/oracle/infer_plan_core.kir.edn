@@ -89,14 +89,9 @@
       rems
       :l2)]
     (if
-     (= ok-t 0)
+     ok-t
      (if
-      (= ok-m 0)
-      (if (= ok-p 0) -1 2)
-      (if (= ok-p 0) 1 (if (better-bump? rm 1 rp 2) 1 2)))
-     (if
-      (= ok-m 0)
-      (if (= ok-p 0) 0 (if (better-bump? rt 0 rp 2) 0 2))
+      ok-m
       (let
        [win-tm
         (if (better-bump? rt 0 rm 1) 0 1)
@@ -104,21 +99,23 @@
         (if (= win-tm 0) rt rm)
         i-win
         win-tm]
-       (if
-        (= ok-p 0)
-        win-tm
-        (if (better-bump? r-win i-win rp 2) win-tm 2)))))),
+       (if ok-p (if (better-bump? r-win i-win rp 2) win-tm 2) win-tm))
+      (if ok-p (if (better-bump? rt 0 rp 2) 0 2) 0))
+     (if
+      ok-m
+      (if ok-p (if (better-bump? rm 1 rp 2) 1 2) 1)
+      (if ok-p 2 -1)))),
    :param-types
-   [:i64
-    :i64
-    :i64
+   [:bool
+    :bool
+    :bool
     [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]]}
   {:name ok-for,
    :params [active bumped],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (if (= active 1) (if (= bumped 0) 1 0) 0) 1 0),
-   :param-types [:i64 :i64]}
+   :body (if active (if bumped false true) false),
+   :param-types [:bool :bool]}
   {:name weight-pos?,
    :params [w],
    :result :bool,
@@ -132,11 +129,11 @@
    :body
    (let
     [a0
-     (if (weight-pos? w0) 1 0)
+     (weight-pos? w0)
      a1
-     (if (weight-pos? w1) 1 0)
+     (weight-pos? w1)
      a2
-     (if (weight-pos? w2) 1 0)
+     (weight-pos? w2)
      sumw
      (+ w0 (+ w1 w2))]
     (if
@@ -178,14 +175,18 @@
        b0
        (if
         (< 0 extra)
-        (pick-bump-3 (ok-for a0 0) (ok-for a1 0) (ok-for a2 0) rems)
+        (pick-bump-3
+         (ok-for a0 false)
+         (ok-for a1 false)
+         (ok-for a2 false)
+         rems)
         -1)
        t0
-       (if (= b0 0) 1 0)
+       (if (= b0 0) true false)
        m0
-       (if (= b0 1) 1 0)
+       (if (= b0 1) true false)
        p0b
-       (if (= b0 2) 1 0)
+       (if (= b0 2) true false)
        b1
        (if
         (< 1 extra)
@@ -196,11 +197,11 @@
          rems)
         -1)
        t1
-       (if (= b1 0) 1 t0)
+       (if (= b1 0) true t0)
        m1
-       (if (= b1 1) 1 m0)
+       (if (= b1 1) true m0)
        p1b
-       (if (= b1 2) 1 p0b)
+       (if (= b1 2) true p0b)
        b2
        (if
         (< 2 extra)
