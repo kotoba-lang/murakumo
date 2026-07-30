@@ -104,9 +104,13 @@
              (oracle/call :kekkai-gate 'parse-status-out args))
           (str "parse-status-out " (pr-str args))))
     (doseq [st ["authorized" "pending" "unknown"]]
-      (is (= (ir/execute live 'authorized? [st])
-             (oracle/call :kekkai-gate 'authorized? [st]))
-          (str "authorized? " st)))
+      ;; Profile 5: authorized? returns :bool (true/false or 0/1 word).
+      (let [live-v (ir/execute live 'authorized? [st])
+            ship-v (oracle/call :kekkai-gate 'authorized? [st])]
+        (is (= live-v ship-v) (str "authorized? " st))
+        (is (= (= st "authorized")
+               (oracle/bool->host ship-v))
+            (str "authorized? host bool " st))))
     (is (= (ir/execute live 'default-ledger-path [])
            (oracle/call :kekkai-gate 'default-ledger-path [])))
     (is (= (ir/execute live 'denial-line-of ["x" "revoked"])
@@ -1404,8 +1408,12 @@
            (oracle/call :persist 'repo-uri ["c" "k"])))
     (is (= (ir/execute live 'repo-write-url [18099])
            (oracle/call :persist 'repo-write-url [18099])))
-    (is (= (ir/execute live 'write-ok? ["{\"status\":\"ok\"}"])
-           (oracle/call :persist 'write-ok? ["{\"status\":\"ok\"}"])))
+    ;; Profile 5: write-ok? is :bool.
+    (let [ok (oracle/call :persist 'write-ok? ["{\"status\":\"ok\"}"])
+          bad (oracle/call :persist 'write-ok? ["error"])]
+      (is (= (ir/execute live 'write-ok? ["{\"status\":\"ok\"}"]) ok))
+      (is (contains? #{true 1} ok))
+      (is (contains? #{false 0} bad)))
     (is (= (ir/execute live 'operation-create [])
            (oracle/call :persist 'operation-create [])))
     (is (= (ir/execute live 'auth-header ["tok"])

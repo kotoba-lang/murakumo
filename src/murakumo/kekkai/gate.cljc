@@ -171,8 +171,8 @@
   (reduce (fn [acc n]
             (let [status (get status-by-name (:name n) status-unknown)
                   ok? (if (oracle-ready?)
-                        (= 1 (oracle/i64->host
-                              (o 'authorized? [(str status)])))
+                        (oracle/bool->host
+                         (o 'authorized? [(str status)]))
                         (mirror-authorized? status))]
               (if ok?
                 (update acc :admitted conj n)
