@@ -1,14 +1,23 @@
 (ns task-plan-core
+  (:schemas {;; T5.3: assign pack families become named records (no base-65536).
+             :task/pair [:record :task/pair [[:a :i64] [:b :i64]]]
+             :task/triple [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+             :task/assign2 [:record :task/assign2
+                            [[:code :i64] [:load0 :i64] [:load1 :i64]]]
+             :task/assign3 [:record :task/assign3
+                            [[:code :i64] [:load0 :i64] [:load1 :i64] [:load2 :i64]]]})
   (:export [default-max-slots default-max-attempts default-timeout-ms
             slots failed? can-retry?
             task-eligible? fill-milli better-fill?
             better-task-score? better-mem?
             wave-of slot-of load-after-assign
             digit-char nat-str i64-str pad4 task-id
-            pick-task-idx-2 assign-task-step-2
+            pair-record pick-task-idx-2 assign-task-step-2
+            assign-task-2-code assign-task-2-load0 assign-task-2-load1
             attempt-next exclude-append-marker
             pick-task-fold-step load-inc-if challenger-wins?
-            assign-task-pick-3 apply-task-pick-3 assign-task-step-3
+            triple-record assign-task-pick-3 apply-task-pick-3 assign-task-step-3
+            assign-task-3-code assign-task-3-load0 assign-task-3-load1 assign-task-3-load2
             nearest-rank-idx summary-retried speedup-milli
             max2 min2 clamp-nonneg
             unschedulable-detail
@@ -22,6 +31,7 @@
 ;; task-eligible? bit flags + better-task-score? + wave/slot: pure assign-1 core.
 ;; expand: task-id = "t-" + zero-pad-4 (cljc last-4 of "0000"+i for i≥10000).
 ;; assign-task-step-2/3 + pick-task-fold-step: pure assign reduce building blocks.
+;; T5.3: load/fill/ok triples and assign results are named records — base-65536 gone.
 ;; percentile: nearest-rank-idx; summary: retried/speedup-milli pure.
 ;; unschedulable-detail: pure reject detail string (host projects pr-str placement).
 ;; exclude-join-sep + unsched prefixes dual-source for host exclude CSV join.
@@ -166,13 +176,18 @@
   ;; host conj's node name; pure marker that retry path is active
   1)
 
+;; ── T5.3: assign packs → records ──────────────────────────────────────────
+
+(defn pair-record [a :i64 b :i64] [:ref :task/pair]
+  (record-new [:ref :task/pair] a b))
+
+(defn triple-record [v0 :i64 v1 :i64 v2 :i64] [:ref :task/triple]
+  (record-new [:ref :task/triple] v0 v1 v2))
+
 (defn pick-task-idx-2 [ok0 :i64 ok1 :i64 fill0 :i64 fill1 :i64
-                       load-pack :i64] :i64
-  ;; load-pack unused high: load0 + load1*65536 — actually pass load0 via fill...
-  ;; Arity 5: ok0 ok1 fill0 fill1 load-pack where load-pack = load0 + load1*B
-  (let [B 65536
-        load0 (rem64 load-pack B)
-        load1 (quot load-pack B)]
+                       loads [:ref :task/pair]] :i64
+  (let [load0 (record-get loads :a)
+        load1 (record-get loads :b)]
     (if (= ok0 0)
       (if (= ok1 0) -1 1)
       (if (= ok1 0)
@@ -183,13 +198,9 @@
             (if (= b 1) 0 1)))))))
 
 (defn assign-task-step-2 [load0 :i64 load1 :i64 ok0 :i64 ok1 :i64
-                          score-pack :i64] :i64
-  ;; score-pack = pack fill0 + fill1*B + (load0 already separate)
-  ;; Use score-pack = fill0 + fill1*B only; loads are load0/load1 args — arity 5!
-  ;; load0 load1 ok0 ok1 fill-pack (fill0 + fill1*B)
-  (let [B 65536
-        fill0 (rem64 score-pack B)
-        fill1 (quot score-pack B)
+                          fills [:ref :task/pair]] [:ref :task/assign2]
+  (let [fill0 (record-get fills :a)
+        fill1 (record-get fills :b)
         p (if (= ok0 0)
             (if (= ok1 0) -1 1)
             (if (= ok1 0)
@@ -199,8 +210,16 @@
         code (if (< p 0) 0 (+ p 1))
         n0 (if (= p 0) (+ load0 1) load0)
         n1 (if (= p 1) (+ load1 1) load1)]
-    ;; pack3: code + n0*B + n1*B*B
-    (+ code (+ (* n0 B) (* n1 (* B B))))))
+    (record-new [:ref :task/assign2] code n0 n1)))
+
+(defn assign-task-2-code [r [:ref :task/assign2]] :i64
+  (record-get r :code))
+
+(defn assign-task-2-load0 [r [:ref :task/assign2]] :i64
+  (record-get r :load0))
+
+(defn assign-task-2-load1 [r [:ref :task/assign2]] :i64
+  (record-get r :load1))
 
 (defn pick-task-fold-step [champ [:option :i64] ok-i :i64 better-c-i :i64] :i64
   ;; Host folds candidates. better-c-i=1 ⇒ challenger strictly better than champ.
@@ -220,18 +239,18 @@
   (let [b (better-task-score? fill-c load-c 0 fill-i load-i)]
     (if (= b 0) 1 0)))
 
-(defn assign-task-pick-3 [ok-pack :i64 fill-pack :i64 load-pack :i64] :i64
-  ;; packs of 3: ok/fill/load per node → pick idx −1|0|1|2
-  (let [B 65536
-        ok0 (rem64 ok-pack B)
-        ok1 (rem64 (quot ok-pack B) B)
-        ok2 (quot ok-pack (* B B))
-        f0 (rem64 fill-pack B)
-        f1 (rem64 (quot fill-pack B) B)
-        f2 (quot fill-pack (* B B))
-        l0 (rem64 load-pack B)
-        l1 (rem64 (quot load-pack B) B)
-        l2 (quot load-pack (* B B))
+(defn assign-task-pick-3 [ok [:ref :task/triple]
+                          fill [:ref :task/triple]
+                          load [:ref :task/triple]] :i64
+  (let [ok0 (record-get ok :v0)
+        ok1 (record-get ok :v1)
+        ok2 (record-get ok :v2)
+        f0 (record-get fill :v0)
+        f1 (record-get fill :v1)
+        f2 (record-get fill :v2)
+        l0 (record-get load :v0)
+        l1 (record-get load :v1)
+        l2 (record-get load :v2)
         p01 (if (= ok0 0)
               (if (= ok1 0) -1 1)
               (if (= ok1 0)
@@ -249,22 +268,37 @@
         p01
         (if (= win2 1) 2 p01)))))
 
-(defn apply-task-pick-3 [load-pack :i64 pick :i64] :i64
-  (let [B 65536
-        l0 (rem64 load-pack B)
-        l1 (rem64 (quot load-pack B) B)
-        l2 (quot load-pack (* B B))
+(defn apply-task-pick-3 [load [:ref :task/triple] pick :i64] [:ref :task/triple]
+  (let [l0 (record-get load :v0)
+        l1 (record-get load :v1)
+        l2 (record-get load :v2)
         n0 (load-inc-if l0 (if (= pick 0) 1 0))
         n1 (load-inc-if l1 (if (= pick 1) 1 0))
         n2 (load-inc-if l2 (if (= pick 2) 1 0))]
-    (+ n0 (+ (* n1 B) (* n2 (* B B))))))
+    (record-new [:ref :task/triple] n0 n1 n2)))
 
-(defn assign-task-step-3 [load-pack :i64 ok-pack :i64 fill-pack :i64] :i64
-  ;; result = pick-code (0..3) + 4 * new-load-pack
-  (let [p (assign-task-pick-3 ok-pack fill-pack load-pack)
+(defn assign-task-step-3 [load [:ref :task/triple]
+                          ok [:ref :task/triple]
+                          fill [:ref :task/triple]] [:ref :task/assign3]
+  (let [p (assign-task-pick-3 ok fill load)
         code (if (< p 0) 0 (+ p 1))
-        nload (apply-task-pick-3 load-pack p)]
-    (+ code (* 4 nload))))
+        nload (apply-task-pick-3 load p)]
+    (record-new [:ref :task/assign3] code
+                (record-get nload :v0)
+                (record-get nload :v1)
+                (record-get nload :v2))))
+
+(defn assign-task-3-code [r [:ref :task/assign3]] :i64
+  (record-get r :code))
+
+(defn assign-task-3-load0 [r [:ref :task/assign3]] :i64
+  (record-get r :load0))
+
+(defn assign-task-3-load1 [r [:ref :task/assign3]] :i64
+  (record-get r :load1))
+
+(defn assign-task-3-load2 [r [:ref :task/assign3]] :i64
+  (record-get r :load2))
 
 (defn nearest-rank-idx [n :i64 p-milli :i64] :i64
   ;; cljc percentile: (int (floor (* p (count v)))) clamped to [0, n-1]
