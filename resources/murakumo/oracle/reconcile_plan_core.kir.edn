@@ -83,18 +83,6 @@
          (if (< free-candidates 1) (action-blocked) (action-place)))))
       (action-needs-build)))),
    :param-types [[:option :string] :i64 :i64 :i64]}
-  {:name rem64,
-   :params [a b],
-   :result :i64,
-   :effects #{},
-   :body (- a (* (quot a b) b)),
-   :param-types [:i64 :i64]}
-  {:name bit?,
-   :params [flags mask],
-   :result :i64,
-   :effects #{},
-   :body (if (= 0 (rem64 (quot flags mask) 2)) 0 1),
-   :param-types [:i64 :i64]}
   {:name better-target?,
    :params [load-a load-b name-a-before-b],
    :result :i64,
@@ -108,25 +96,53 @@
    :effects #{},
    :body (if (= (better-target? load0 load1 name0-before-1) 1) 0 1),
    :param-types [:i64 :i64 :i64]}
+  {:name name-order-record,
+   :params [n01 n02 n12],
+   :result [:ref :reconcile/name-order],
+   :effects #{},
+   :body
+   (record-new
+    [:record
+     :reconcile/name-order
+     [[:n01 :i64] [:n02 :i64] [:n12 :i64]]]
+    n01
+    n02
+    n12),
+   :param-types [:i64 :i64 :i64]}
   {:name first-of-3,
-   :params [load0 load1 load2 name-bits],
+   :params [load0 load1 load2 names],
    :result :i64,
    :effects #{},
    :body
    (let
     [n01
-     (bit? name-bits 1)
+     (record-get
+      [:record
+       :reconcile/name-order
+       [[:n01 :i64] [:n02 :i64] [:n12 :i64]]]
+      names
+      :n01)
      n02
-     (bit? name-bits 2)
+     (record-get
+      [:record
+       :reconcile/name-order
+       [[:n01 :i64] [:n02 :i64] [:n12 :i64]]]
+      names
+      :n02)
      n12
-     (bit? name-bits 4)
+     (record-get
+      [:record
+       :reconcile/name-order
+       [[:n01 :i64] [:n02 :i64] [:n12 :i64]]]
+      names
+      :n12)
      w01
      (first-of-2 load0 load1 n01)]
     (if
      (= w01 0)
      (if (= (better-target? load0 load2 n02) 1) 0 2)
      (if (= (better-target? load1 load2 n12) 1) 1 2))),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [:i64 :i64 :i64 [:ref :reconcile/name-order]]}
   {:name targets-record,
    :params [first second count],
    :result [:ref :reconcile/targets],
@@ -189,11 +205,11 @@
      (if (= n 1) (targets-record f 0 1) (targets-record f s 2)))),
    :param-types [:i64 :i64 :i64 :i64]}
   {:name pick-targets-3-first,
-   :params [load0 load1 load2 name-bits],
+   :params [load0 load1 load2 names],
    :result :i64,
    :effects #{},
-   :body (first-of-3 load0 load1 load2 name-bits),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :body (first-of-3 load0 load1 load2 names),
+   :param-types [:i64 :i64 :i64 [:ref :reconcile/name-order]]}
   {:name blank?,
    :params [s],
    :result :i64,
@@ -435,8 +451,10 @@
    :param-types []}],
  :oracle-value nil,
  :schema-identities
- #:reconcile{:targets
-             "b2037812cd4704b22441a22788d8030f2641de84edb60461baccc69b84ab2969"},
+ #:reconcile{:name-order
+             "a757cd25394b07860eb47f33da76f53c55e6b3f6fd2438b9d087a9e596fa4aa3",
+             :targets
+             "42a4b23de2bed2e46ab3fb963cce73dce9630e4b2db4c28488631e2c4dbba677"},
  :exports
  [default-replicas
   desired
@@ -446,6 +464,7 @@
   better-target?
   first-of-2
   first-of-3
+  name-order-record
   pick-targets-2-record
   pick-targets-3-first
   targets-first
@@ -486,7 +505,11 @@
  #:reconcile{:targets
              [:record
               :reconcile/targets
-              [[:first :i64] [:second :i64] [:count :i64]]]},
+              [[:first :i64] [:second :i64] [:count :i64]]],
+             :name-order
+             [:record
+              :reconcile/name-order
+              [[:n01 :i64] [:n02 :i64] [:n12 :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

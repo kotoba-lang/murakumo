@@ -12,7 +12,7 @@
 
 (def export-prefix
   (str "default-replicas desired deficit watch-sleep-ms action-name "
-       "better-target? first-of-2 first-of-3 "
+       "better-target? first-of-2 first-of-3 name-order-record "
        "pick-targets-2-record pick-targets-3-first "
        "targets-first targets-second targets-count "
        "blank? missing-manifest? action-is-satisfied? action-is-place? "
@@ -153,15 +153,14 @@
 
 (deftest pick-targets-pure-matches-cljc
   (let [pick @#'r/pick-targets
-        ;; name order bits for ["c" "a" "b"]: indices 0=c,1=a,2=b
-        ;; name strings: a < b < c
-        ;; n01: c<=a? 0; n02: c<=b? 0; n12: a<=b? 1 → bits 0+0+4 = 4
-        name-bits-cab 4
+        ;; name order for ["c" "a" "b"]: indices 0=c,1=a,2=b; strings a < b < c
+        ;; n01: c<=a? 0; n02: c<=b? 0; n12: a<=b? 1
+        names-cab "(name-order-record 0 0 1)"
         actual (compile-i64-cases
                 {"f2" "(first-of-2 1 3 1)"  ;; load0=1 load1=3 name0 before → 0
                  "f2b" "(first-of-2 1 1 0)" ;; equal load, name0 after → 1
-                 "f3" (str "(first-of-3 1 3 1 " name-bits-cab ")")
-                 "t3" (str "(pick-targets-3-first 1 3 1 " name-bits-cab ")")
+                 "f3" (str "(first-of-3 1 3 1 " names-cab ")")
+                 "t3" (str "(pick-targets-3-first 1 3 1 " names-cab ")")
                  ;; T5.3: project record fields inside the guest
                  "pf" "(targets-first (pick-targets-2-record 1 3 1 2))"
                  "ps" "(targets-second (pick-targets-2-record 1 3 1 2))"
