@@ -1,7 +1,9 @@
 ;; murakumo.infer.relay — the work-dispatch protocol + queue as pure data (cljc).
 ;;
-;; W6 product-shell: make-id / lease-expired? / msg kind strings via kotoba
-;; infer_relay_core when oracle loadable (JVM or cljs/nbb).
+;; W6 product-shell + T6.4: make-id / lease-expired? / msg kind strings require
+;; the shipped `:infer-relay` KIR on **every** platform. Host pure mirrors are
+;; gone — cljs/nbb must preload shipped KIR before requiring this ns
+;; (ADR-260731-w6-t64-infer-small-mirror-delete).
 ;; Queue/worker map state machine stays host.
 
 (ns murakumo.infer.relay
@@ -10,28 +12,11 @@
 
 (def ^:private oid :infer-relay)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
-
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
 
 (defn init
   "Empty relay state."
@@ -44,9 +29,7 @@
 
 (defn- gen-id [state prefix]
   (let [n (:next state)
-        id (try-oracle
-            #(o 'make-id [(str prefix) (oracle/as-i64 n)])
-            #(str prefix "-" n))]
+        id (o 'make-id [(str prefix) (oracle/as-i64 n)])]
     [id (update state :next inc)]))
 
 (defn enqueue
@@ -72,8 +55,8 @@
    {:msg :idle}. Leases the job to the worker (at `now-ms`)."
   [state worker-id now-ms]
   (let [worker (get-in state [:workers worker-id])
-        job-kw (keyword (try-oracle #(o 'msg-job []) (fn [] "job")))
-        idle-kw (keyword (try-oracle #(o 'msg-idle []) (fn [] "idle")))]
+        job-kw (keyword (o 'msg-job []))
+        idle-kw (keyword (o 'msg-idle []))]
     (if-let [job (and worker (eligible-job state worker))]
       (let [jid (:job-id job)
             state (-> state
@@ -91,7 +74,7 @@
    for a stale/duplicate result."
   [state worker-id {:keys [job-id output ms]}]
   (let [assignment (get-in state [:assigned job-id])
-        settled-kw (keyword (try-oracle #(o 'msg-settled []) (fn [] "settled")))]
+        settled-kw (keyword (o 'msg-settled []))]
     (cond
       (contains? (:settled state) job-id) [nil state]
       (not= worker-id (:worker-id assignment)) [nil state]
@@ -110,13 +93,11 @@
   "Requeue jobs whose lease is older than `ttl-ms` (worker vanished)."
   [state now-ms ttl-ms]
   (let [dead (for [[jid {:keys [at-ms job worker-id]}] (:assigned state)
-                   :when (try-oracle
-                          #(oracle/bool->host
-                            (o 'lease-expired?
-                               [(oracle/as-i64 now-ms)
-                                (oracle/as-i64 at-ms)
-                                (oracle/as-i64 ttl-ms)]))
-                          #(> (- now-ms at-ms) ttl-ms))]
+                   :when (oracle/bool->host
+                          (o 'lease-expired?
+                             [(oracle/as-i64 now-ms)
+                              (oracle/as-i64 at-ms)
+                              (oracle/as-i64 ttl-ms)]))]
                [jid job worker-id])]
     (reduce (fn [st [jid job wid]]
               (-> st

@@ -1,8 +1,10 @@
 ;; murakumo.infer.moe — mlx-moe single-node MoE serving (pure cljc).
 ;;
-;; W6 product-shell: capacity-default / expert-ratio / verdict-name /
-;; resident-est DELEGATE to precompiled kotoba/infer_moe_core.kotoba when
-;; oracle loadable (JVM or cljs/nbb). Custom capacity tiers and plan ranking stay host.
+;; W6 product-shell + T6.4: capacity-default / expert-ratio / verdict-name /
+;; resident-est require the shipped `:infer-moe` KIR on **every** platform.
+;; Host pure mirrors are gone — cljs/nbb must preload shipped KIR before
+;; requiring this ns (ADR-260731-w6-t64-infer-small-mirror-delete).
+;; Custom capacity tiers and plan ranking stay host.
 
 (ns murakumo.infer.moe
   (:require [murakumo.infer.plan :as plan]
@@ -10,28 +12,11 @@
 
 (def ^:private oid :infer-moe)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
-
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
 
 (def ^:private capacity-tiers
   [[128 512] [64 432] [48 320] [32 208]])
@@ -44,11 +29,8 @@
 (defn capacity-for-usable
   "Usable bytes → mlx-moe capacity, or nil below the smallest measured tier."
   ([usable-bytes]
-   (try-oracle
-    (fn []
-      (let [c (oracle/i64->host (o 'capacity-default [(oracle/as-i64 usable-bytes)]))]
-        (when (pos? c) c)))
-    #(capacity-from-tiers capacity-tiers usable-bytes)))
+   (let [c (oracle/i64->host (o 'capacity-default [(oracle/as-i64 usable-bytes)]))]
+     (when (pos? c) c)))
   ([model usable-bytes]
    (if-let [custom (:model/mlx-moe-capacity-tiers model)]
      (capacity-from-tiers custom usable-bytes)
@@ -58,68 +40,42 @@
   "experts / active-experts (top-k)."
   [{:model/keys [experts active-experts]}]
   (when (and experts active-experts (pos? active-experts))
-    (try-oracle
-     (fn []
-       (let [milli (oracle/i64->host
-                    (o 'expert-ratio-milli
-                       [(oracle/as-i64 experts) (oracle/as-i64 active-experts)]))]
-         (when (pos? milli) (/ (double milli) 1000.0))))
-     #(/ (double experts) active-experts))))
-
-(defn- mirror-verdict [model ratio shared?]
-  (cond
-    (nil? ratio)
-    {:verdict :unknown :ratio nil
-     :why "registry entry has no :model/experts / :model/active-experts"}
-    (and (>= ratio 10) shared?)
-    {:verdict :recommended :ratio ratio
-     :why "expert ratio >=10x + shared expert — quality holds at reduced coverage"}
-    shared?
-    {:verdict :workable :ratio ratio
-     :why "shared expert but ratio <10x — needs high coverage, verify output quality"}
-    :else
-    {:verdict :not-recommended :ratio ratio
-     :why "no shared expert — quality likely degrades below ~75% coverage (README)"}))
+    (let [milli (oracle/i64->host
+                 (o 'expert-ratio-milli
+                    [(oracle/as-i64 experts) (oracle/as-i64 active-experts)]))]
+      (when (pos? milli) (/ (double milli) 1000.0)))))
 
 (defn verdict
   "mu-hashmi/mlx-moe 'which models benefit' heuristic as data."
   [model]
   (let [ratio (expert-ratio model)
-        shared? (boolean (:model/moe-shared-expert? model))]
-    (try-oracle
-     (fn []
-       (let [name (o 'verdict-name
-                     [(oracle/as-i64 (or (:model/experts model) 0))
-                      (oracle/as-i64 (or (:model/active-experts model) 0))
-                      (oracle/as-i64 (if shared? 1 0))])
-             v (keyword name)]
-         (case v
-           :unknown
-           {:verdict :unknown :ratio nil
-            :why "registry entry has no :model/experts / :model/active-experts"}
-           :recommended
-           {:verdict :recommended :ratio ratio
-            :why "expert ratio >=10x + shared expert — quality holds at reduced coverage"}
-           :workable
-           {:verdict :workable :ratio ratio
-            :why "shared expert but ratio <10x — needs high coverage, verify output quality"}
-           {:verdict :not-recommended :ratio ratio
-            :why "no shared expert — quality likely degrades below ~75% coverage (README)"})))
-     #(mirror-verdict model ratio shared?))))
+        shared? (boolean (:model/moe-shared-expert? model))
+        name (o 'verdict-name
+               [(oracle/as-i64 (or (:model/experts model) 0))
+                (oracle/as-i64 (or (:model/active-experts model) 0))
+                (oracle/as-i64 (if shared? 1 0))])
+        v (keyword name)]
+    (case v
+      :unknown
+      {:verdict :unknown :ratio nil
+       :why "registry entry has no :model/experts / :model/active-experts"}
+      :recommended
+      {:verdict :recommended :ratio ratio
+       :why "expert ratio >=10x + shared expert — quality holds at reduced coverage"}
+      :workable
+      {:verdict :workable :ratio ratio
+       :why "shared expert but ratio <10x — needs high coverage, verify output quality"}
+      {:verdict :not-recommended :ratio ratio
+       :why "no shared expert — quality likely degrades below ~75% coverage (README)"})))
 
 (defn resident-bytes-estimate
   "Approximate RAM mlx-moe holds resident at `capacity` experts/layer cached."
   [{:model/keys [weight-bytes experts]} capacity]
-  (try-oracle
-   #(oracle/i64->host
-     (o 'resident-est
-        [(oracle/as-i64 (or weight-bytes 0))
-         (oracle/as-i64 (or experts 0))
-         (oracle/as-i64 (or capacity 0))]))
-   (fn []
-     (if (and weight-bytes experts (pos? experts) capacity)
-       (long (* weight-bytes (/ (double capacity) experts)))
-       weight-bytes))))
+  (oracle/i64->host
+   (o 'resident-est
+      [(oracle/as-i64 (or weight-bytes 0))
+       (oracle/as-i64 (or experts 0))
+       (oracle/as-i64 (or capacity 0))])))
 
 (defn plan
   "Single-node mlx-moe plan for `model` over `nodes`."
