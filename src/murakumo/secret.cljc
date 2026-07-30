@@ -56,42 +56,48 @@
 (def ^:private mirror-quic-key-path-name "murakumo-quic-key-path")
 (def ^:private mirror-quic-key-path-env "MURAKUMO_QUIC_KEY")
 
-(defn- oracle-const
-  "Load-time constant from oracle export, or mirror string."
-  [export mirror]
-  (try
-    (if (oracle/ready? oid)
-      (oracle/call oid export [])
-      mirror)
-    (catch #?(:clj Exception :cljs :default) _
-      mirror)))
+(defn- oracle-str-const [export mirror]
+  "JVM: require oracle. cljs: mirror fallback."
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export export})))
+       (oracle/call oid export []))
+     :cljs
+     (try
+       (if (oracle-ready?)
+         (oracle/call oid export [])
+         mirror)
+       (catch :default _
+         mirror))))
 
 ;; ── named secrets (stable ids — kotoba SSoT when ready) ──────────────
 
 (def token-secret-name
-  (oracle-const 'token-secret-name mirror-token-secret-name))
+  (oracle-str-const 'token-secret-name mirror-token-secret-name))
 (def token-secret-env
-  (oracle-const 'token-secret-env mirror-token-secret-env))
+  (oracle-str-const 'token-secret-env mirror-token-secret-env))
 
 (def service-token-name
-  (oracle-const 'service-token-name mirror-service-token-name))
+  (oracle-str-const 'service-token-name mirror-service-token-name))
 (def service-token-env
-  (oracle-const 'service-token-env mirror-service-token-env))
+  (oracle-str-const 'service-token-env mirror-service-token-env))
 
 (def metrics-token-name
-  (oracle-const 'metrics-token-name mirror-metrics-token-name))
+  (oracle-str-const 'metrics-token-name mirror-metrics-token-name))
 (def metrics-token-env
-  (oracle-const 'metrics-token-env mirror-metrics-token-env))
+  (oracle-str-const 'metrics-token-env mirror-metrics-token-env))
 
 ;; Path refs: env holds absolute filesystem paths to PEM files (never PEM bodies).
 (def quic-cert-path-name
-  (oracle-const 'quic-cert-path-name mirror-quic-cert-path-name))
+  (oracle-str-const 'quic-cert-path-name mirror-quic-cert-path-name))
 (def quic-cert-path-env
-  (oracle-const 'quic-cert-path-env mirror-quic-cert-path-env))
+  (oracle-str-const 'quic-cert-path-env mirror-quic-cert-path-env))
 (def quic-key-path-name
-  (oracle-const 'quic-key-path-name mirror-quic-key-path-name))
+  (oracle-str-const 'quic-key-path-name mirror-quic-key-path-name))
 (def quic-key-path-env
-  (oracle-const 'quic-key-path-env mirror-quic-key-path-env))
+  (oracle-str-const 'quic-key-path-env mirror-quic-key-path-env))
 
 ;; ── residual reply class / error message / pem tokens ────────────────
 
@@ -109,28 +115,28 @@
 
 (def class-value
   "Kit success class token. Kotoba when ready."
-  (oracle-const 'class-value mirror-class-value))
+  (oracle-str-const 'class-value mirror-class-value))
 (def class-not-found
-  (oracle-const 'class-not-found mirror-class-not-found))
+  (oracle-str-const 'class-not-found mirror-class-not-found))
 (def class-empty
-  (oracle-const 'class-empty mirror-class-empty))
+  (oracle-str-const 'class-empty mirror-class-empty))
 (def class-fetch
-  (oracle-const 'class-fetch mirror-class-fetch))
+  (oracle-str-const 'class-fetch mirror-class-fetch))
 (def class-unknown
-  (oracle-const 'class-unknown mirror-class-unknown))
+  (oracle-str-const 'class-unknown mirror-class-unknown))
 (def error-code-prefix
-  (oracle-const 'error-code-prefix mirror-error-code-prefix))
+  (oracle-str-const 'error-code-prefix mirror-error-code-prefix))
 (def msg-empty
-  (oracle-const 'msg-empty mirror-msg-empty))
+  (oracle-str-const 'msg-empty mirror-msg-empty))
 (def msg-not-found
-  (oracle-const 'msg-not-found mirror-msg-not-found))
+  (oracle-str-const 'msg-not-found mirror-msg-not-found))
 (def msg-fetch
-  (oracle-const 'msg-fetch mirror-msg-fetch))
+  (oracle-str-const 'msg-fetch mirror-msg-fetch))
 (def msg-unknown
-  (oracle-const 'msg-unknown mirror-msg-unknown))
+  (oracle-str-const 'msg-unknown mirror-msg-unknown))
 (def pem-begin-marker
   "PEM body marker forbidden in path-refs. Kotoba when ready."
-  (oracle-const 'pem-begin-marker mirror-pem-begin-marker))
+  (oracle-str-const 'pem-begin-marker mirror-pem-begin-marker))
 
 (def known-env-secrets
   "Default ops mapping: secret-name → exact env var (never enumerated)."

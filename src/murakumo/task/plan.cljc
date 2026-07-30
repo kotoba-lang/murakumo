@@ -42,6 +42,23 @@
 (defn- oracle-ready? []
   (oracle/ready? oid))
 
+(defn- try-oracle
+  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
+  [thunk mirror-thunk]
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid})))
+       (thunk))
+     :cljs
+     (if (oracle-ready?)
+       (try
+         (thunk)
+         (catch :default _
+           (mirror-thunk)))
+       (mirror-thunk))))
+
 (defn- oracle-str-const [export mirror]
   "JVM: require oracle. cljs: mirror fallback."
   #?(:clj
@@ -284,12 +301,9 @@
                     (str/join exclude-join-sep (:exclude-nodes task))
                     "")
         min-mem (if-let [m (:min-mem-bytes task)] (str m) "")]
-    (if (oracle-ready?)
-      (try
-        (o 'unschedulable-detail [placement excluding min-mem])
-        (catch #?(:clj Exception :cljs :default) _
-          (mirror-why-unschedulable task)))
-      (mirror-why-unschedulable task))))
+    (try-oracle
+     #(o 'unschedulable-detail [placement excluding min-mem])
+     #(mirror-why-unschedulable task))))
 
 (defn- assign-1
   "Place one task onto the currently least-filled eligible node, threading the
@@ -349,13 +363,13 @@
    non-zero. Kotoba `failed?` when oracle ready (JVM or cljs/nbb load).
    Profile 5: guest returns :bool."
   [{:keys [exit timeout? error] :as r}]
-  (if (oracle-ready?)
-    (oracle/bool->host
+  (try-oracle
+   #(oracle/bool->host
      (o 'failed?
         [(oracle/option-i64 exit)
          (boolean timeout?)
          (oracle/option-string error)]))
-    (mirror-failed? r)))
+   #(mirror-failed? r)))
 
 (defn retry-tasks
   "Tasks to re-submit from `results`, one attempt later and excluding the node

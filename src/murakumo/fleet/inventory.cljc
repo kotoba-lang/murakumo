@@ -114,25 +114,21 @@
   "Resolve a node's control HTTP port, defaulting to the fleet port, then 8077.
    Kotoba `resolve-port` when oracle ready (Product Value ABI optional ports)."
   [fleet node]
-  (if (oracle-ready?)
-    (oracle/i64->host
+  (try-oracle
+   #(oracle/i64->host
      (o 'resolve-port
         [(oracle/option-i64 (:port node))
          (oracle/option-i64 (:fleet/port fleet))]))
-    (mirror-node-port fleet node)))
+   #(mirror-node-port fleet node)))
 
 (defn node-health-url
   "Node-local health URL for the control HTTP port.
-   Kotoba `health-url` when oracle ready (falls back if KIR string-from-i64
-   is unavailable on a runtime — e.g. some cljs kir builds)."
+   Kotoba `health-url` (cljs may still soft-fall if KIR string-from-i64 fails)."
   [fleet node]
   (let [port (node-port fleet node)]
-    (if (oracle-ready?)
-      (try
-        (o 'health-url [(oracle/as-i64 port)])
-        (catch #?(:clj Exception :cljs :default) _
-          (mirror-health-url port)))
-      (mirror-health-url port))))
+    (try-oracle
+     #(o 'health-url [(oracle/as-i64 port)])
+     #(mirror-health-url port))))
 
 (defn select
   "Resolve a node selector string to node maps.
@@ -142,17 +138,20 @@
    Kotoba selector helpers when oracle ready."
   [fleet sel]
   (let [nodes (:nodes fleet)]
-    (if (oracle-ready?)
-      (if (oracle/bool->host (o 'selector-is-all? [(str (or sel ""))]))
-        nodes
-        (filter #(oracle/bool->host
-                  (o 'selector-wants-name?
-                     [(str sel) (str (:name %))]))
-                nodes))
-      (if (or (nil? sel) (= sel selector-all))
-        nodes
-        (let [want (set (str/split sel #","))]
-          (filter #(want (:name %)) nodes))))))
+    (try-oracle
+     (fn []
+       (if (oracle/bool->host (o 'selector-is-all? [(str (or sel ""))]))
+         nodes
+         (filter (fn [node]
+                   (oracle/bool->host
+                    (o 'selector-wants-name?
+                       [(str sel) (str (:name node))])))
+                 nodes)))
+     (fn []
+       (if (or (nil? sel) (= sel selector-all))
+         nodes
+         (let [want (set (str/split sel #","))]
+           (filter (fn [node] (want (:name node))) nodes)))))))
 
 (defn node-named
   "Return the first node with `name`, or nil."
@@ -168,10 +167,10 @@
               :let [cols (str/split (str/trim line) #"\s+")]
               :when (>= (count cols) 4)]
           [(nth cols 1) {:ip (nth cols 0)
-                         :online? (if (oracle-ready?)
-                                    (not (oracle/bool->host
+                         :online? (try-oracle
+                                   #(not (oracle/bool->host
                                           (o 'line-has-offline? [(str line)])))
-                                    (not (str/includes? line offline-token)))}])))
+                                   #(not (str/includes? line offline-token)))}])))
 
 (defn tailscale-status-result
   "Normalise a `tailscale status` process result into inventory metadata."

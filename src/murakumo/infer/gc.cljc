@@ -32,36 +32,29 @@
            (mirror-thunk)))
        (mirror-thunk))))
 
+(defn- oracle-i64-const [export mirror]
+  "JVM: require oracle. cljs: mirror fallback."
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export export})))
+       (oracle/i64->host (oracle/call oid export [])))
+     :cljs
+     (try
+       (if (oracle-ready?)
+         (oracle/i64->host (oracle/call oid export []))
+         mirror)
+       (catch :default _
+         mirror))))
+
 (def GiB
-  (try
-    (if (oracle/ready? oid)
-      (oracle/i64->host (oracle/call oid 'gib []))
-      (* 1024 1024 1024))
-    (catch #?(:clj Exception :cljs :default) _
-      (* 1024 1024 1024))))
+  (oracle-i64-const 'gib (* 1024 1024 1024)))
 
 (def default-policy
-  {:target-free-bytes
-   (try
-     (if (oracle/ready? oid)
-       (oracle/i64->host (oracle/call oid 'default-target-free []))
-       (* 20 GiB))
-     (catch #?(:clj Exception :cljs :default) _
-       (* 20 GiB)))
-   :comfy-keep-days
-   (try
-     (if (oracle/ready? oid)
-       (oracle/i64->host (oracle/call oid 'default-comfy-keep-days []))
-       7)
-     (catch #?(:clj Exception :cljs :default) _
-       7))
-   :hf-keep
-   (try
-     (if (oracle/ready? oid)
-       (oracle/i64->host (oracle/call oid 'default-hf-keep []))
-       2)
-     (catch #?(:clj Exception :cljs :default) _
-       2))
+  {:target-free-bytes (oracle-i64-const 'default-target-free (* 20 GiB))
+   :comfy-keep-days (oracle-i64-const 'default-comfy-keep-days 7)
+   :hf-keep (oracle-i64-const 'default-hf-keep 2)
    :evict-order [:rpc-cache :comfy-temp :hf-stale]})
 
 (def reclaimable #{:rpc-cache :comfy-temp :hf-stale})

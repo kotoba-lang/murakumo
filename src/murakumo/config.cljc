@@ -6,7 +6,7 @@
 ;; kotoba/config_core.kotoba → resources/murakumo/oracle/config_core.kir.edn
 ;; when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
 ;; Host remains: EDN parse/IO, env map folds, filesystem existence probes.
-;; cljs mirrors remain fallback when oracle is not ready.
+;; JVM load-time constants require shipped KIR (T6.4); cljs mirrors remain fallback when not ready.
 
 (ns murakumo.config
   (:require #?(:clj [clojure.edn :as edn]
@@ -39,15 +39,21 @@
            (mirror-thunk)))
        (mirror-thunk))))
 
-(defn- oracle-const
-  "Load-time constant from oracle export, or mirror string."
-  [export mirror]
-  (try
-    (if (oracle/ready? oid)
-      (oracle/call oid export [])
-      mirror)
-    (catch #?(:clj Exception :cljs :default) _
-      mirror)))
+(defn- oracle-str-const [export mirror]
+  "JVM: require oracle. cljs: mirror fallback."
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid :export export})))
+       (oracle/call oid export []))
+     :cljs
+     (try
+       (if (oracle-ready?)
+         (oracle/call oid export [])
+         mirror)
+       (catch :default _
+         mirror))))
 
 ;; ── host-mirror pure helpers ───────────────────────────────────────────
 
@@ -76,21 +82,21 @@
 ;; ── residual path suffix tokens ──────────────────────────────────────
 
 (def kotoba-dir-suffix
-  (oracle-const 'kotoba-dir-suffix mirror-kotoba-dir-suffix))
+  (oracle-str-const 'kotoba-dir-suffix mirror-kotoba-dir-suffix))
 (def bin-suffix
-  (oracle-const 'bin-suffix mirror-bin-suffix))
+  (oracle-str-const 'bin-suffix mirror-bin-suffix))
 (def release-bin-suffix
-  (oracle-const 'release-bin-suffix mirror-release-bin-suffix))
+  (oracle-str-const 'release-bin-suffix mirror-release-bin-suffix))
 (def wit-suffix
-  (oracle-const 'wit-suffix mirror-wit-suffix))
+  (oracle-str-const 'wit-suffix mirror-wit-suffix))
 (def runtime-wit-suffix
-  (oracle-const 'runtime-wit-suffix mirror-runtime-wit-suffix))
+  (oracle-str-const 'runtime-wit-suffix mirror-runtime-wit-suffix))
 (def kotoba-server-suffix
-  (oracle-const 'kotoba-server-suffix mirror-kotoba-server-suffix))
+  (oracle-str-const 'kotoba-server-suffix mirror-kotoba-server-suffix))
 (def kotoba-cli-suffix
-  (oracle-const 'kotoba-cli-suffix mirror-kotoba-cli-suffix))
+  (oracle-str-const 'kotoba-cli-suffix mirror-kotoba-cli-suffix))
 (def build-edn-suffix
-  (oracle-const 'build-edn-suffix mirror-build-edn-suffix))
+  (oracle-str-const 'build-edn-suffix mirror-build-edn-suffix))
 
 (defn- mirror-default-kotoba-dir [home]
   (str home kotoba-dir-suffix))
@@ -135,13 +141,13 @@
 ;; ── dual-source constants ──────────────────────────────────────────────
 
 (def default-fleet-path
-  (oracle-const 'default-fleet-path mirror-default-fleet-path))
+  (oracle-str-const 'default-fleet-path mirror-default-fleet-path))
 
 (def default-connect-path
-  (oracle-const 'default-connect-path mirror-default-connect-path))
+  (oracle-str-const 'default-connect-path mirror-default-connect-path))
 
 (def default-cloud-path
-  (oracle-const 'default-cloud-path mirror-default-cloud-path))
+  (oracle-str-const 'default-cloud-path mirror-default-cloud-path))
 
 (defn default-kotoba-dir
   "Default sibling kotoba checkout location under a user home.
@@ -428,32 +434,32 @@
 (def default-cloud-url
   "Public murakumo cloud API base (config URL, not a secret).
    Kotoba `default-cloud-url` when oracle ready."
-  (oracle-const 'default-cloud-url mirror-default-cloud-url))
+  (oracle-str-const 'default-cloud-url mirror-default-cloud-url))
 
 (def default-api-url
   "Alias base for metrics/model-map push (same default as cloud-url).
    Kotoba `default-api-url` when oracle ready."
-  (oracle-const 'default-api-url mirror-default-api-url))
+  (oracle-str-const 'default-api-url mirror-default-api-url))
 
 (def default-text-backend-url
   "OpenAI-compatible text backend for infer gateway proxy.
    Kotoba `default-text-backend-url` when oracle ready."
-  (oracle-const 'default-text-backend-url mirror-default-text-backend-url))
+  (oracle-str-const 'default-text-backend-url mirror-default-text-backend-url))
 
 (def default-image-checkpoint
   "Default ComfyUI txt2img checkpoint filename.
    Kotoba `default-image-checkpoint` when oracle ready."
-  (oracle-const 'default-image-checkpoint mirror-default-image-checkpoint))
+  (oracle-str-const 'default-image-checkpoint mirror-default-image-checkpoint))
 
 (def default-infer-local-url
   "Local OpenAI-compatible base for infer join/relay-worker.
    Kotoba `default-infer-local-url` when oracle ready."
-  (oracle-const 'default-infer-local-url mirror-default-infer-local-url))
+  (oracle-str-const 'default-infer-local-url mirror-default-infer-local-url))
 
 (def default-kotoba-cli-bin
   "Bare kotoba CLI name for PATH hosts (prefer absolute pin).
    Kotoba `default-kotoba-cli-bin` when oracle ready."
-  (oracle-const 'default-kotoba-cli-bin mirror-default-kotoba-cli-bin))
+  (oracle-str-const 'default-kotoba-cli-bin mirror-default-kotoba-cli-bin))
 
 (def ops-config-keys
   "Exact env names read by residual ops shells (config only, not secrets)."
