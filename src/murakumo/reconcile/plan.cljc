@@ -127,7 +127,7 @@
   "Choose `n` placement targets, preferring least-loaded nodes, then name.
 
    Host projection: variable-length candidates still sort here. Oracle exposes
-   better-target?/pick-targets-2-pack/pick-targets-3-first for fixed 2/3
+   better-target?/pick-targets-2-record/pick-targets-3-first for fixed 2/3
    candidate tournaments (used by parity tests); product path keeps one sort."
   [candidates n load-by-node]
   (->> candidates
