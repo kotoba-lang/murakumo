@@ -17,7 +17,7 @@
   (str "gib default-os-reserve default-headroom usable-bytes choose-strategy-name "
        "plan-lr-l0 plan-lr-l1 plan-lr-l2 plan-fits-total? span-fits? "
        "uniform-layer-bytes dense-units-milli moe-layer-bytes "
-       "model-pack model-layers model-dense model-frac-milli "
+       "model-record model-layers model-dense model-frac-milli "
        "layer-byte-at layer-wsum partition-target "
        "advance-hi est-bytes-range partition-3-ends "
        "assignment-span plan-fits-3 ok-mark pick-max-idx-3 moe-capacity-ok "
@@ -164,8 +164,8 @@
 (defn- frac-milli [model]
   (long (* 1000 (double (or (:model/dense-layer-frac model) 1/10)))))
 
-(defn- model-pack-call [model]
-  (str "(model-pack " (:model/layers model) " "
+(defn- model-record-call [model]
+  (str "(model-record " (:model/layers model) " "
        (or (:model/dense-layers model) 0) " " (frac-milli model) ")"))
 
 (defn- cljc-ends [model nodes]
@@ -180,7 +180,7 @@
         cases (into {}
                     (mapcat
                      (fn [i model]
-                       (let [mp (model-pack-call model)
+                       (let [mp (model-record-call model)
                              w (:model/weight-bytes model)
                              L (:model/layers model)]
                          [[(str "w_" i) (str "(layer-wsum " w " " mp ")")]
@@ -231,7 +231,7 @@
         (into {}
               (map (fn [[label model nodes]]
                      (let [us (mapv plan/usable-bytes nodes)
-                           mp (model-pack-call model)
+                           mp (model-record-call model)
                            w (:model/weight-bytes model)]
                        [label (str "(partition-3-ends " w " " mp " "
                                    (us 0) " " (us 1) " " (us 2) ")")]))
@@ -240,9 +240,9 @@
                 (merge kotoba-cases
                        {"t0" "(partition-target 1200 100 300)"
                         "t1" "(partition-target 1200 0 0)"
-                        "ah" (str "(advance-hi 1200 (model-pack 12 0 100) 0 0 "
+                        "ah" (str "(advance-hi 1200 (model-record 12 0 100) 0 0 "
                                   (quot (* 1200 1) 3) ")")
-                        "er" "(est-bytes-range 1200 (model-pack 12 0 100) 0 4)"}))]
+                        "er" "(est-bytes-range 1200 (model-record 12 0 100) 0 4)"}))]
     (is (= 400 (get actual "t0")))
     (is (= 0 (get actual "t1")))
     (is (= 4 (get actual "ah")))
@@ -259,7 +259,7 @@
                {:name "b" :mem-bytes (* 16 GiB)}
                {:name "c" :mem-bytes (* 16 GiB)}]
         us (mapv plan/usable-bytes nodes)
-        mp "(model-pack 12 0 100)"
+        mp "(model-record 12 0 100)"
         actual (compile-i64-cases
                 {"fit" (str "(plan-fits-3 1200 " mp " " (us 0) " " (us 1) " " (us 2) ")")
                  "nofit" (str "(plan-fits-3 999999999999 " mp " " (us 0) " " (us 1) " " (us 2) ")")
@@ -288,7 +288,7 @@
         us2 (mapv plan/usable-bytes n2eq)
         us2u (mapv plan/usable-bytes n2uneq)
         us2z (mapv plan/usable-bytes n2zero)
-        mp "(model-pack 12 0 100)"
+        mp "(model-record 12 0 100)"
         actual (compile-i64-cases
                 {"p1" (str "(partition-1-end " mp ")")
                  "f1" (str "(plan-fits-1 1200 " mp " " (us1 0) ")")
@@ -354,7 +354,7 @@
                {:name "d" :mem-bytes (* 8 GiB)}]
         us (mapv plan/usable-bytes nodes)
         total (reduce + us)
-        mp "(model-pack 20 0 100)"
+        mp "(model-record 20 0 100)"
         cljc-ends (mapv (fn [a] (second (:layers a))) (plan/partition-layers model nodes))
         ;; step0: lo=0 acc=0 cum=u0
         s0 (str "(partition-step 2000 " mp " (lo-acc-pack 0 0) " (us 0) " " total ")")

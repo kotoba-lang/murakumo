@@ -315,30 +315,55 @@
     [units (dense-units-milli layers dense dense-frac-milli)]
     (if (< units 1) 0 (quot (* weight-bytes 1000) units))),
    :param-types [:i64 :i64 :i64 :i64]}
-  {:name model-pack,
+  {:name model-record,
    :params [layers dense dense-frac-milli],
-   :result :i64,
+   :result [:ref :plan/model],
    :effects #{},
-   :body (pack3 layers dense dense-frac-milli),
+   :body
+   (record-new
+    [:record
+     :plan/model
+     [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]
+    layers
+    dense
+    dense-frac-milli),
    :param-types [:i64 :i64 :i64]}
   {:name model-layers,
    :params [mp],
    :result :i64,
    :effects #{},
-   :body (lane-at mp 0),
-   :param-types [:i64]}
+   :body
+   (record-get
+    [:record
+     :plan/model
+     [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]
+    mp
+    :layers),
+   :param-types [[:ref :plan/model]]}
   {:name model-dense,
    :params [mp],
    :result :i64,
    :effects #{},
-   :body (lane-at mp 1),
-   :param-types [:i64]}
+   :body
+   (record-get
+    [:record
+     :plan/model
+     [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]
+    mp
+    :dense),
+   :param-types [[:ref :plan/model]]}
   {:name model-frac-milli,
    :params [mp],
    :result :i64,
    :effects #{},
-   :body (lane-at mp 2),
-   :param-types [:i64]}
+   :body
+   (record-get
+    [:record
+     :plan/model
+     [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]
+    mp
+    :frac-milli),
+   :param-types [[:ref :plan/model]]}
   {:name dense-layer-bytes,
    :params [weight-bytes layers dense dense-frac-milli],
    :result :i64,
@@ -366,7 +391,7 @@
      (< i d)
      (dense-layer-bytes weight-bytes layers dense frac)
      (moe-layer-bytes weight-bytes layers dense frac))),
-   :param-types [:i64 :i64 :i64]}
+   :param-types [:i64 [:ref :plan/model] :i64]}
   {:name layer-wsum,
    :params [weight-bytes mp],
    :result :i64,
@@ -388,7 +413,7 @@
      db
      (dense-layer-bytes weight-bytes layers dense frac)]
     (+ (* d db) (* rest moe))),
-   :param-types [:i64 :i64]}
+   :param-types [:i64 [:ref :plan/model]]}
   {:name partition-target,
    :params [wsum cum-usable total-usable],
    :result :i64,
@@ -449,7 +474,7 @@
      moe-n
      (clamp-nonneg (- moe-hi moe-lo))]
     (+ (* dense-n db) (* moe-n moe))),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [:i64 [:ref :plan/model] :i64 :i64]}
   {:name advance-in-band,
    :params [lo hi-cap layer-b acc target],
    :result :i64,
@@ -496,7 +521,7 @@
        (+ acc (est-bytes-range weight-bytes mp lo0 hi-d))]
       (if (< hi-d d) hi-d (advance-in-band d layers moe acc-d target)))
      (advance-in-band lo0 layers moe acc target))),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+   :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
   {:name partition-3-ends,
    :params [weight-bytes mp u0 u1 u2],
    :result :i64,
@@ -526,7 +551,7 @@
        hi2
        layers]
       (pack3 hi0 hi1 hi2)))),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+   :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
   {:name assignment-span,
    :params [lo hi],
    :result :i64,
@@ -578,13 +603,13 @@
      total-ok
      (plan-fits-total? total weight-bytes)]
     (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+   :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
   {:name partition-1-end,
    :params [mp],
    :result :i64,
    :effects #{},
    :body (model-layers mp),
-   :param-types [:i64]}
+   :param-types [[:ref :plan/model]]}
   {:name plan-fits-1,
    :params [weight-bytes mp u0],
    :result :i64,
@@ -602,7 +627,7 @@
      total-ok
      (plan-fits-total? u0 weight-bytes)]
     (if (if (= total-ok 1) (if (= f0 1) 1 0) 0) 1 0)),
-   :param-types [:i64 :i64 :i64]}
+   :param-types [:i64 [:ref :plan/model] :i64]}
   {:name partition-2-ends,
    :params [weight-bytes mp u0 u1],
    :result :i64,
@@ -626,7 +651,7 @@
        hi1
        layers]
       (pack3 hi0 hi1 0)))),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [:i64 [:ref :plan/model] :i64 :i64]}
   {:name plan-fits-2,
    :params [weight-bytes mp u0 u1],
    :result :i64,
@@ -662,7 +687,7 @@
      total-ok
      (plan-fits-total? total weight-bytes)]
     (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [:i64 [:ref :plan/model] :i64 :i64]}
   {:name ends-lo,
    :params [ends-pack idx],
    :result :i64,
@@ -688,7 +713,7 @@
      fit
      (if (= sp 0) 1 (span-fits? est usable))]
     (pack3 sp fit 0)),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+   :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
   {:name asg-row-span,
    :params [row],
    :result :i64,
@@ -726,7 +751,7 @@
      new-acc
      (+ acc (est-bytes-range weight-bytes mp lo hi))]
     (pack3 hi new-acc 0)),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+   :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
   {:name partition-step-hi,
    :params [step-pack],
    :result :i64,
@@ -744,7 +769,7 @@
    :result :i64,
    :effects #{},
    :body (model-layers mp),
-   :param-types [:i64]}
+   :param-types [[:ref :plan/model]]}
   {:name fits-and,
    :params [acc-fits row-fits],
    :result :i64,
@@ -839,7 +864,9 @@
    :body (bytes-to-gib-milli est-bytes),
    :param-types [:i64]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:plan{:model
+        "c5eb16734ebe12d2b01640a5f10b10194a65fed751dec39d207f3e796cec4be2"},
  :exports
  [gib
   default-os-reserve
@@ -854,7 +881,7 @@
   uniform-layer-bytes
   dense-units-milli
   moe-layer-bytes
-  model-pack
+  model-record
   model-layers
   model-dense
   model-frac-milli
@@ -894,7 +921,11 @@
   partition-step-acc
   partition-last
   fits-and],
- :schemas nil,
+ :schemas
+ #:plan{:model
+        [:record
+         :plan/model
+         [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}
