@@ -11,132 +11,75 @@
   Hosts with provider can inject `provider.secret-transport/env-fetch`,
   `fn-fetch` (kagi one-shot), or `keychain-fetch` as `:fetch`.
 
-  W6 product-shell (ADR-260728-w6-secret-reply-tokens-pure-oracle): pure
-  name/policy helpers + reply class/error tokens use kotoba/secret_core.kotoba
-  when oracle is loadable (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
-  Host mirrors remain fallback when oracle is not ready. env/map/kagi fetch stay host."
+  W6 product-shell + T6.4: pure name/policy helpers + reply class/error tokens
+  require the shipped `:secret` KIR on **every** platform. Host pure mirrors
+  are gone — cljs/nbb must preload shipped KIR (resources/ via nbb cwd,
+  register-kir!, or set-resource-loader!) before requiring this ns
+  (ADR-260731-w6-t64-secret-mirror-delete). env/map/kagi fetch stay host."
   (:require [clojure.string :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :secret)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
 
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-;; ── host-mirror constants ────────────────────────────────────────────
-
-(def ^:private mirror-token-secret-name "murakumo-token")
-(def ^:private mirror-token-secret-env "MURAKUMO_TOKEN_SECRET")
-(def ^:private mirror-service-token-name "murakumo-service-token")
-(def ^:private mirror-service-token-env "MURAKUMO_SERVICE_TOKEN")
-(def ^:private mirror-metrics-token-name "murakumo-metrics-token")
-(def ^:private mirror-metrics-token-env "MURAKUMO_METRICS_TOKEN")
-(def ^:private mirror-quic-cert-path-name "murakumo-quic-cert-path")
-(def ^:private mirror-quic-cert-path-env "MURAKUMO_QUIC_CERT")
-(def ^:private mirror-quic-key-path-name "murakumo-quic-key-path")
-(def ^:private mirror-quic-key-path-env "MURAKUMO_QUIC_KEY")
-
-(defn- oracle-str-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/call oid export []))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/call oid export [])
-         mirror)
-       (catch :default _
-         mirror))))
-
-;; ── named secrets (stable ids — kotoba SSoT when ready) ──────────────
+;; ── named secrets (stable ids — kotoba SSoT, requires oracle) ────────
 
 (def token-secret-name
-  (oracle-str-const 'token-secret-name mirror-token-secret-name))
+  (o 'token-secret-name []))
 (def token-secret-env
-  (oracle-str-const 'token-secret-env mirror-token-secret-env))
+  (o 'token-secret-env []))
 
 (def service-token-name
-  (oracle-str-const 'service-token-name mirror-service-token-name))
+  (o 'service-token-name []))
 (def service-token-env
-  (oracle-str-const 'service-token-env mirror-service-token-env))
+  (o 'service-token-env []))
 
 (def metrics-token-name
-  (oracle-str-const 'metrics-token-name mirror-metrics-token-name))
+  (o 'metrics-token-name []))
 (def metrics-token-env
-  (oracle-str-const 'metrics-token-env mirror-metrics-token-env))
+  (o 'metrics-token-env []))
 
 ;; Path refs: env holds absolute filesystem paths to PEM files (never PEM bodies).
 (def quic-cert-path-name
-  (oracle-str-const 'quic-cert-path-name mirror-quic-cert-path-name))
+  (o 'quic-cert-path-name []))
 (def quic-cert-path-env
-  (oracle-str-const 'quic-cert-path-env mirror-quic-cert-path-env))
+  (o 'quic-cert-path-env []))
 (def quic-key-path-name
-  (oracle-str-const 'quic-key-path-name mirror-quic-key-path-name))
+  (o 'quic-key-path-name []))
 (def quic-key-path-env
-  (oracle-str-const 'quic-key-path-env mirror-quic-key-path-env))
+  (o 'quic-key-path-env []))
 
 ;; ── residual reply class / error message / pem tokens ────────────────
 
-(def ^:private mirror-class-value "value")
-(def ^:private mirror-class-not-found "not-found")
-(def ^:private mirror-class-empty "empty")
-(def ^:private mirror-class-fetch "fetch")
-(def ^:private mirror-class-unknown "unknown")
-(def ^:private mirror-error-code-prefix "secret/")
-(def ^:private mirror-msg-empty "empty")
-(def ^:private mirror-msg-not-found "not found")
-(def ^:private mirror-msg-fetch "getter failed")
-(def ^:private mirror-msg-unknown "unknown")
-(def ^:private mirror-pem-begin-marker "-----BEGIN")
-
 (def class-value
-  "Kit success class token. Kotoba when ready."
-  (oracle-str-const 'class-value mirror-class-value))
+  "Kit success class token. Kotoba SSoT (requires oracle)."
+  (o 'class-value []))
 (def class-not-found
-  (oracle-str-const 'class-not-found mirror-class-not-found))
+  (o 'class-not-found []))
 (def class-empty
-  (oracle-str-const 'class-empty mirror-class-empty))
+  (o 'class-empty []))
 (def class-fetch
-  (oracle-str-const 'class-fetch mirror-class-fetch))
+  (o 'class-fetch []))
 (def class-unknown
-  (oracle-str-const 'class-unknown mirror-class-unknown))
+  (o 'class-unknown []))
 (def error-code-prefix
-  (oracle-str-const 'error-code-prefix mirror-error-code-prefix))
+  (o 'error-code-prefix []))
 (def msg-empty
-  (oracle-str-const 'msg-empty mirror-msg-empty))
+  (o 'msg-empty []))
 (def msg-not-found
-  (oracle-str-const 'msg-not-found mirror-msg-not-found))
+  (o 'msg-not-found []))
 (def msg-fetch
-  (oracle-str-const 'msg-fetch mirror-msg-fetch))
+  (o 'msg-fetch []))
 (def msg-unknown
-  (oracle-str-const 'msg-unknown mirror-msg-unknown))
+  (o 'msg-unknown []))
 (def pem-begin-marker
-  "PEM body marker forbidden in path-refs. Kotoba when ready."
-  (oracle-str-const 'pem-begin-marker mirror-pem-begin-marker))
+  "PEM body marker forbidden in path-refs. Kotoba SSoT (requires oracle)."
+  (o 'pem-begin-marker []))
 
 (def known-env-secrets
   "Default ops mapping: secret-name → exact env var (never enumerated)."
@@ -177,42 +120,25 @@
       {:tag :error :code :secret/not-found :message "no env mapping"})))
 
 (defn- classify-fetched
-  "Kotoba `classify-fetched` when ready: missing/blank → not-found|empty|value."
+  "Kotoba `classify-fetched`: missing/blank → not-found|empty|value.
+   Profile 5: missing/blank are :bool."
   [missing? blank?]
-  (try-oracle
-   #(o 'classify-fetched
-       [(oracle/as-i64 (if missing? 1 0))
-        (oracle/as-i64 (if blank? 1 0))])
-   #(cond missing? class-not-found blank? class-empty :else class-value)))
+  (o 'classify-fetched
+     [(boolean missing?) (boolean blank?)]))
 
 (defn- kit-reply-from-class
   "Build kit-shaped reply from classify class + optional value string.
-   Tags/codes/messages via kotoba when ready."
+   Tags/codes/messages via kotoba (required)."
   [class value]
-  (if (try-oracle
-       #(oracle/bool->host (o 'reply-is-value? [(str class)]))
-       #(= class class-value))
+  (if (oracle/bool->host (o 'reply-is-value? [(str class)]))
     {:tag :value :value (str value)}
-    (let [code (try-oracle
-                #(keyword (o 'secret-error-code [(str class)]))
-                #(keyword
-                  (cond
-                    (= class class-empty) (str error-code-prefix class-empty)
-                    (= class class-not-found) (str error-code-prefix class-not-found)
-                    (= class class-fetch) (str error-code-prefix class-fetch)
-                    :else (str error-code-prefix class-unknown))))
-          msg (try-oracle
-               #(o 'secret-error-message [(str class)])
-               #(cond
-                  (= class class-empty) msg-empty
-                  (= class class-not-found) msg-not-found
-                  (= class class-fetch) msg-fetch
-                  :else msg-unknown))]
+    (let [code (keyword (o 'secret-error-code [(str class)]))
+          msg (o 'secret-error-message [(str class)])]
       {:tag :error :code code :message msg})))
 
 (defn map-fetch
   "Sealed map fetch for tests / host-injected secrets.
-   Classification via kotoba `classify-fetched` when ready."
+   Classification via kotoba `classify-fetched` (required)."
   [m]
   (fn [{:keys [name]}]
     (let [missing? (not (contains? m name))
@@ -223,7 +149,7 @@
 
 (defn fn-fetch
   "Wrap a host one-shot getter `(fn [name] string-or-nil)` — kagi shape.
-   Classification via kotoba when ready."
+   Classification via kotoba (required)."
   [getter]
   (when-not (fn? getter)
     (throw (ex-info "murakumo.secret/fn-fetch requires a getter fn"
@@ -237,13 +163,9 @@
         (kit-reply-from-class class v))
       (catch #?(:clj Throwable :cljs :default) e
         (let [class class-fetch
-              code (try-oracle
-                    #(keyword (o 'secret-error-code [class]))
-                    (fn [] (keyword (str error-code-prefix class-fetch))))
+              code (keyword (o 'secret-error-code [class]))
               msg (or #?(:clj (.getMessage e) :cljs (.-message e))
-                      (try-oracle
-                       #(o 'secret-error-message [class])
-                       (fn [] msg-fetch)))]
+                      (o 'secret-error-message [class]))]
           {:tag :error :code code :message msg})))))
 
 (defn kagi-fetch
@@ -309,24 +231,13 @@
   ([] (resolve-metrics-token {}))
   ([opts] (resolve-secret metrics-token-name opts)))
 
-(defn- mirror-valid-env-var-name? [env-name]
-  (and (string? env-name)
-       (not (str/blank? env-name))
-       (not (str/includes? env-name "*"))
-       (not (str/includes? env-name "/"))
-       (not (str/includes? env-name "\\"))
-       (not (str/includes? env-name " "))
-       (<= (count env-name) 256)))
-
 (defn valid-env-var-name?
   "Reject blank, wildcard, and path-like env var names.
-   Kotoba `valid-env-var-name?` when oracle ready. Profile 5: guest :bool."
+   Kotoba `valid-env-var-name?` required. Profile 5: guest :bool."
   [env-name]
-  (try-oracle
-   #(boolean (and (string? env-name)
-                  (oracle/bool->host
-                   (o 'valid-env-var-name? [(str env-name)]))))
-   #(mirror-valid-env-var-name? env-name)))
+  (boolean (and (string? env-name)
+                (oracle/bool->host
+                 (o 'valid-env-var-name? [(str env-name)])))))
 
 (defn resolve-exact-env
   "Read one **exact** env var by name declared in config (e.g. overlay
@@ -341,28 +252,16 @@
            fetch (or fetch (env-fetch {alias env-name}))]
        (resolve-secret alias {:fetch fetch})))))
 
-(defn- mirror-valid-path-ref? [p]
-  (and (string? p)
-       (not (str/blank? p))
-       (not (str/includes? p "\0"))
-       (not (str/includes? p pem-begin-marker))
-       (not (str/includes? p "*"))
-       (or (str/starts-with? p "/")
-           (boolean (re-matches #"[A-Za-z]:[\\/].*" p)))
-       (<= (count p) 1024)))
-
 (defn valid-path-ref?
   "True when `p` is an absolute filesystem path, not a PEM body or dump.
   Env path refs must point at files under host custody — never inline PEM.
-   Kotoba `valid-path-ref-unix?` when ready (leading /); Windows host-only."
+   Kotoba `valid-path-ref-unix?` required (leading /); Windows host-only."
   [p]
-  (try-oracle
-   #(boolean (and (string? p)
-                  (or (oracle/bool->host
-                       (o 'valid-path-ref-unix? [(str p)]))
-                      ;; Windows absolute (drive letter) stays host-only
-                      (boolean (re-matches #"[A-Za-z]:[\\/].*" (str p))))))
-   #(mirror-valid-path-ref? p)))
+  (boolean (and (string? p)
+                (or (oracle/bool->host
+                     (o 'valid-path-ref-unix? [(str p)]))
+                    ;; Windows absolute (drive letter) stays host-only
+                    (boolean (re-matches #"[A-Za-z]:[\\/].*" (str p)))))))
 
 (defn resolve-path-ref
   "Resolve a named **path ref** secret (absolute path string to on-disk
