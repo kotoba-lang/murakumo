@@ -1,89 +1,45 @@
 ;; murakumo.overlay.peer — peer discovery and route selection state.
 ;;
-;; W6 product-shell (ADR-260728-w6-overlay-peer-tokens-pure-oracle):
-;; choose-via / health / via name tokens DELEGATE to kotoba overlay_peer_core
-;; when oracle loadable (JVM or cljs/nbb). Catalog/remember map folds stay host.
+;; W6 product-shell + T6.4: choose-via / health / via name tokens require the
+;; shipped `:overlay-peer` KIR on **every** platform. Host pure mirrors are
+;; gone — cljs/nbb must preload shipped KIR (resources/ via nbb cwd,
+;; register-kir!, or set-resource-loader!) before requiring this ns
+;; (ADR-260731-w6-t64-keyring-peer-mirror-delete).
+;; Catalog/remember map folds stay host.
 
 (ns murakumo.overlay.peer
   (:require [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :overlay-peer)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
 
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-(defn- oracle-str-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/call oid export []))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/call oid export [])
-         mirror)
-       (catch :default _
-         mirror))))
-
-(def ^:private mirror-health-unknown "unknown")
-(def ^:private mirror-health-seen "seen")
-(def ^:private mirror-health-down "down")
-(def ^:private mirror-via-direct "direct")
-(def ^:private mirror-via-relay "relay")
-
 (def health-unknown
-  "Peer health label: unknown. Kotoba when ready."
-  (oracle-str-const 'health-unknown mirror-health-unknown))
+  "Peer health label: unknown. Kotoba SSoT (requires oracle)."
+  (o 'health-unknown []))
 
 (def health-seen
-  "Peer health label: seen. Kotoba when ready."
-  (oracle-str-const 'health-seen mirror-health-seen))
+  "Peer health label: seen. Kotoba SSoT (requires oracle)."
+  (o 'health-seen []))
 
 (def health-down
-  "Peer health label: down. Kotoba when ready."
-  (oracle-str-const 'health-down mirror-health-down))
+  "Peer health label: down. Kotoba SSoT (requires oracle)."
+  (o 'health-down []))
 
 (def via-direct
-  "Path via direct. Kotoba when ready."
-  (oracle-str-const 'via-direct mirror-via-direct))
+  "Path via direct. Kotoba SSoT (requires oracle)."
+  (o 'via-direct []))
 
 (def via-relay
-  "Path via relay. Kotoba when ready."
-  (oracle-str-const 'via-relay mirror-via-relay))
+  "Path via relay. Kotoba SSoT (requires oracle)."
+  (o 'via-relay []))
 
 (defn- via-kw [s]
   (keyword s))
-
-(defn- mirror-choose-via [direct health relay]
-  (cond
-    (and direct (not= health health-down)) via-direct
-    (and direct relay) via-relay
-    (and direct (nil? relay)) ""
-    relay via-relay
-    :else ""))
 
 (defn peer-record [route]
   {:type "murakumo.overlay.peer"
@@ -123,7 +79,7 @@
 
 (defn choose-path
   "Prefer healthy direct paths, then relay fallback.
-   Kotoba `choose-via` when oracle ready (Product Value ABI options)."
+   Kotoba `choose-via` (Product Value ABI options)."
   [peer]
   (let [paths (candidate-paths peer)
         direct-kw (via-kw via-direct)
@@ -131,15 +87,10 @@
         direct? (boolean (some #(= direct-kw (:via %)) paths))
         relay? (boolean (some #(= relay-kw (:via %)) paths))
         health (name (or (:health peer) (via-kw health-unknown)))
-        via (try-oracle
-             #(o 'choose-via
-                 [(oracle/option-string (when direct? via-direct))
-                  health
-                  (oracle/option-string (when relay? via-relay))])
-             #(mirror-choose-via
-               (when direct? via-direct)
-               health
-               (when relay? via-relay)))]
+        via (o 'choose-via
+               [(oracle/option-string (when direct? via-direct))
+                health
+                (oracle/option-string (when relay? via-relay))])]
     (cond
       (= via via-direct) (first (filter #(= direct-kw (:via %)) paths))
       (= via via-relay) (first (filter #(= relay-kw (:via %)) paths))
