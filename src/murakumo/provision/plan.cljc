@@ -304,12 +304,17 @@
 
 (defn node-p2p-port
   "Resolve a node's p2p QUIC port, defaulting to fleet p2p port, then 4001.
-   Kotoba `resolve-p2p-port` with Product Value ABI optional ports (required)."
+   Kotoba `resolve-p2p-port` with Product Value ABI optional ports (required).
+   T5.2: structural host map → call-record."
   [fleet node]
+  (oracle/require-ready! oid)
   (oracle/i64->host
-   (o 'resolve-p2p-port
-      [(oracle/option-i64 (:p2p-port node))
-       (oracle/option-i64 (:fleet/p2p-port fleet))])))
+   (oracle/call-record
+    oid 'resolve-p2p-port
+    {:node-port (:p2p-port node)
+     :fleet-port (:fleet/p2p-port fleet)}
+    [[:node-port :option-i64]
+     [:fleet-port :option-i64]])))
 
 (defn multiaddr
   "Tailscale QUIC multiaddr for a node ip/port. Kotoba (required)."

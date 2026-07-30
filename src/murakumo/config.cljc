@@ -175,19 +175,32 @@
   "Resolve the binary dir preference order.
 
    `pinned-exists?` is supplied by the host shell after checking for the pinned
-   kotoba-server binary. Kotoba `resolve-local-bin` (required)."
+   kotoba-server binary. Kotoba `resolve-local-bin` (required).
+   T5.2: structural host map → call-record."
   [env user-dir kotoba-dir pinned-exists?]
-  (o 'resolve-local-bin
-     [(str user-dir)
-      (str kotoba-dir)
-      (boolean pinned-exists?)
-      (str (or (get env "MURAKUMO_BIN") ""))]))
+  (oracle/require-ready! oid)
+  (oracle/call-record
+   oid 'resolve-local-bin
+   {:user-dir user-dir
+    :kotoba-dir kotoba-dir
+    :pinned-exists? pinned-exists?
+    :murakumo-bin (or (get env "MURAKUMO_BIN") "")}
+   [[:user-dir :string]
+    [:kotoba-dir :string]
+    [:pinned-exists? :bool]
+    [:murakumo-bin :string]]))
 
 (defn kotoba-bin
   "kotoba CLI executable path, falling back to PATH lookup when no pinned binary exists.
-   Kotoba `kotoba-bin` (required). Profile 5: pinned-exists? is guest :bool."
+   Kotoba `kotoba-bin` (required). Profile 5: pinned-exists? is guest :bool.
+   T5.2: structural host map → call-record."
   [user-dir pinned-exists?]
-  (o 'kotoba-bin [(str user-dir) (boolean pinned-exists?)]))
+  (oracle/require-ready! oid)
+  (oracle/call-record
+   oid 'kotoba-bin
+   {:user-dir user-dir :pinned-exists? pinned-exists?}
+   [[:user-dir :string]
+    [:pinned-exists? :bool]]))
 
 (defn kotoba-server-bin [bin-dir]
   (o 'kotoba-server-bin [(str bin-dir)]))
@@ -203,12 +216,18 @@
 
 (defn resolve-wit-dir
   "Resolve deploy WIT dir from pinned WIT existence.
-   Kotoba `resolve-wit-dir` (required)."
+   Kotoba `resolve-wit-dir` (required).
+   T5.2: structural host map → call-record."
   [user-dir kotoba-dir pinned-wit-exists?]
-  (o 'resolve-wit-dir
-     [(str user-dir)
-      (str kotoba-dir)
-      (boolean pinned-wit-exists?)]))
+  (oracle/require-ready! oid)
+  (oracle/call-record
+   oid 'resolve-wit-dir
+   {:user-dir user-dir
+    :kotoba-dir kotoba-dir
+    :pinned-wit-exists? pinned-wit-exists?}
+   [[:user-dir :string]
+    [:kotoba-dir :string]
+    [:pinned-wit-exists? :bool]]))
 
 (defn build-manifest-path [user-dir]
   (o 'build-manifest-path [(str user-dir)]))

@@ -239,6 +239,7 @@
   kind:
     :string         — str of v (nil becomes empty string)
     :i64            — as-i64 (required number)
+    :bool           — host boolean (profile 5 guest :bool)
     :option-string  — Product Value ABI option string
     :option-i64     — Product Value ABI option i64
     :raw            — pass through unchanged
@@ -247,6 +248,7 @@
   (case kind
     :string (str (or v ""))
     :i64 (as-i64 v)
+    :bool (boolean v)
     :option-string (option-string v)
     :option-i64 (option-i64 v)
     :raw v
@@ -256,7 +258,7 @@
   "Structural host map to ordered guest arg vector (T5.2 positional projection).
 
   field-specs is a vector of keys or [key kind] pairs.
-  Kinds: :string :i64 :option-string :option-i64 :raw."
+  Kinds: :string :i64 :bool :option-string :option-i64 :raw."
   [m field-specs]
   (when-not (map? m)
     (throw (ex-info "map->args requires a host map"

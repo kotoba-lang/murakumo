@@ -46,16 +46,23 @@
 
 (defn usable-bytes
   "Bytes of weights a node can realistically hold resident.
-   Kotoba `usable-bytes` (required). Profile 5: wired-limit is [:option :i64]."
+   Kotoba `usable-bytes` (required). Profile 5: wired-limit is [:option :i64].
+   T5.2: structural node map → call-record (positional guest args)."
   [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes]}]
   (let [os (or os-reserve-bytes default-os-reserve)
         head (or headroom-bytes default-headroom)]
+    (oracle/require-ready! oid)
     (oracle/i64->host
-     (o 'usable-bytes
-        [(oracle/as-i64 mem-bytes)
-         (oracle/as-i64 os)
-         (oracle/as-i64 head)
-         (oracle/option-i64 wired-limit-bytes)]))))
+     (oracle/call-record
+      oid 'usable-bytes
+      {:mem-bytes mem-bytes
+       :os-reserve-bytes os
+       :headroom-bytes head
+       :wired-limit-bytes wired-limit-bytes}
+      [[:mem-bytes :i64]
+       [:os-reserve-bytes :i64]
+       [:headroom-bytes :i64]
+       [:wired-limit-bytes :option-i64]]))))
 
 (defn- largest-remainder
   "Apportion `total` integer units over `quotas` (seq of non-negative reals that
