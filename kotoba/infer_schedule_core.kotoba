@@ -53,18 +53,17 @@
 ;; Parity: test/murakumo/infer_schedule_kotoba_parity_test.clj
 
 (defn eligible? [e [:ref :schedule/eligibility] free-bytes :i64 min-free :i64] :bool
-  ;; Nested `if` (not `and`/`or`) so the precompiled KIR is gensym-stable for
-  ;; the drift gate. Semantics match Clojure-shaped:
-  ;;   has-engine ∧ (¬has-checkpoint ∨ holds ∨ can-fetch) ∧ free≥min
-  (if (record-get e :has-engine)
-    (if (if (record-get e :has-checkpoint)
-          (if (record-get e :holds-checkpoint)
-            true
-            (record-get e :can-fetch))
-          true)
-      (if (>= free-bytes min-free) true false)
-      false)
-    false))
+  ;; Written with and/or/not, which is what ADR 0191 shows and what the nested
+  ;; `if` above it stood in for. That workaround existed because the synthesized
+  ;; `and`/`or` temporaries were gensyms, so the precompiled KIR differed on
+  ;; every compile and the drift gate could not use them. compiler#453/#454 made
+  ;; every synthesized name deterministic, so the shape and the gate no longer
+  ;; disagree.
+  (and (record-get e :has-engine)
+       (or (not (record-get e :has-checkpoint))
+           (record-get e :holds-checkpoint)
+           (record-get e :can-fetch))
+       (>= free-bytes min-free)))
 
 (defn score-queue [queue :i64] :i64
   (if (< queue 0) 0 queue))

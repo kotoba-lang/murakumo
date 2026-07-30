@@ -144,23 +144,6 @@
 
 
 
-(defn- normalize-kir-gensyms
-  "Compiler gensyms (or-tmp__N / binding-some__N) are not stable across JVM
-   sessions. Normalize them so catalog-wide drift compares structure, not
-   counter values. Per-module focused tests may still use raw = when stable."
-  [kir]
-  (let [n (atom 0)
-        table (atom {})
-        rename (fn [x]
-                 (if (and (symbol? x)
-                          (re-find #"(?:__|G__)\d+$" (name x)))
-                   (or (get @table x)
-                       (let [g (symbol (str "g__" (swap! n inc)))]
-                         (swap! table assoc x g)
-                         g))
-                   x))]
-    (walk/postwalk rename kir)))
-
 (deftest t62-catalog-artifacts-match-kotoba-sources
   "Every discovered core has a shipped KIR path (gen discover == resources)."
   (let [arts (gen/discover-artifacts)
@@ -193,10 +176,16 @@
    after gensym normalization. Fix: clojure -M:test -m murakumo.kotoba-oracle-gen"
   (doseq [{:strs [source out]} (gen/discover-artifacts)]
     (testing source
-      (let [live (normalize-kir-gensyms (gen/compile-kir source))
+      ;; Compared raw. Every synthesized name the compiler emits is now
+      ;; deterministic (compiler#453 named the and/or/comparison temps by chain
+      ;; position, #454 put the other 30 on a per-compilation counter), so the
+      ;; same source yields the same KIR byte for byte. The normalization this
+      ;; replaces existed only to hide `or-tmp__N` / `binding-some__N` counter
+      ;; values, and hid real structural drift in those positions along with
+      ;; them.
+      (let [live (gen/compile-kir source)
             cp (str/replace out #"^resources/" "")
-            shipped (normalize-kir-gensyms
-                     (edn/read-string (slurp (io/resource cp))))]
+            shipped (edn/read-string (slurp (io/resource cp)))]
         (is (= live shipped)
             (str "KIR drift: " source " ≠ " cp
                  " — run: clojure -M:test -m murakumo.kotoba-oracle-gen"))))))
