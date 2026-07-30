@@ -4,13 +4,12 @@
 ;; deterministic local formatting used by multiple shells: SHA-256 hex, CIDv1
 ;; dag-cbor sha2-256 base32lower, and the operator bearer token shape.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-identity-jwt-frags-pure-oracle +
-;; ADR-260728-w6-identity-seps-pure-oracle +
-;; ADR-260728-w6-identity-credits-oracle-authority):
-;; pure seed preimages / JWT templates + payload frags / seps DELEGATE to
-;; precompiled kotoba/identity_core.kotoba KIR when oracle is loadable
-;; (JVM classpath or cljs/nbb — ADR-260728-w6-cljs-oracle-load).
-;; Host remains: SHA-256, base32 CID, b64url encode; mirrors stay fallback.
+;; W6 product-shell + T6.4: pure seed preimages / JWT templates + seps require
+;; the shipped `:identity` KIR on **every** platform. Host pure mirrors are gone
+;; — cljs/nbb must preload shipped KIR (resources/ via nbb cwd, register-kir!,
+;; or set-resource-loader!) before requiring this ns
+;; (ADR-260731-w6-t64-identity-mirror-delete).
+;; Host remains: SHA-256, base32 CID, b64url encode.
 ;; cljs: prefer Node crypto/Buffer (nbb); browser falls back to SubtleCrypto/btoa.
 
 (ns murakumo.identity
@@ -21,116 +20,68 @@
 
 (def ^:private oid :identity)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
 
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-(defn- oracle-str-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/call oid export []))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/call oid export [])
-         mirror)
-       (catch :default _
-         mirror))))
-
-(def ^:private mirror-seed-sep ":")
-(def ^:private mirror-seed-p2p-suffix ":p2p")
-(def ^:private mirror-seed-x25519-suffix ":x25519")
-(def ^:private mirror-seed-overlay-suffix ":murakumo-overlay-auth")
-(def ^:private mirror-did-derive-subcmd "did-derive")
-(def ^:private mirror-jwt-seg-sep ".")
-(def ^:private mirror-argv-join-sep " ")
+;; ── residual seed / JWT / CID tokens (oracle SSoT) ───────────────────
 
 (def seed-sep
-  "Separator in seed preimages. Kotoba when ready."
-  (oracle-str-const 'seed-sep mirror-seed-sep))
+  "Separator in seed preimages. Kotoba SSoT (requires oracle)."
+  (o 'seed-sep []))
 
 (def seed-p2p-suffix
-  "Suffix for p2p seed preimage. Kotoba when ready."
-  (oracle-str-const 'seed-p2p-suffix mirror-seed-p2p-suffix))
+  "Suffix for p2p seed preimage. Kotoba SSoT (requires oracle)."
+  (o 'seed-p2p-suffix []))
 
 (def seed-x25519-suffix
-  "Suffix for x25519 seed preimage. Kotoba when ready."
-  (oracle-str-const 'seed-x25519-suffix mirror-seed-x25519-suffix))
+  "Suffix for x25519 seed preimage. Kotoba SSoT (requires oracle)."
+  (o 'seed-x25519-suffix []))
 
 (def seed-overlay-suffix
-  "Suffix for overlay auth seed preimage. Kotoba when ready."
-  (oracle-str-const 'seed-overlay-suffix mirror-seed-overlay-suffix))
+  "Suffix for overlay auth seed preimage. Kotoba SSoT (requires oracle)."
+  (o 'seed-overlay-suffix []))
 
 (def did-derive-subcmd
-  "kotoba did-derive subcommand. Kotoba when ready."
-  (oracle-str-const 'did-derive-subcmd mirror-did-derive-subcmd))
+  "kotoba did-derive subcommand. Kotoba SSoT (requires oracle)."
+  (o 'did-derive-subcmd []))
 
 (def jwt-seg-sep
-  "JWT segment separator. Kotoba when ready."
-  (oracle-str-const 'jwt-seg-sep mirror-jwt-seg-sep))
+  "JWT segment separator. Kotoba SSoT (requires oracle)."
+  (o 'jwt-seg-sep []))
 
 (def argv-join-sep
-  "Space between argv tokens in did-derive-cmd. Kotoba when ready."
-  (oracle-str-const 'argv-join-sep mirror-argv-join-sep))
-
-(def ^:private mirror-jwt-header-json "{\"alg\":\"HS256\",\"typ\":\"JWT\"}")
-(def ^:private mirror-jwt-payload-sub-prefix "{\"sub\":\"")
-(def ^:private mirror-jwt-payload-exp-mid "\",\"exp\":")
-(def ^:private mirror-jwt-payload-exp-val "9999999999")
-(def ^:private mirror-jwt-payload-close "}")
-(def ^:private mirror-op-token-sig-seg "kotoba-cli-media")
-(def ^:private mirror-cid-b-prefix "b")
-(def ^:private mirror-graph-name-fleet "murakumo-fleet")
+  "Space between argv tokens in did-derive-cmd. Kotoba SSoT (requires oracle)."
+  (o 'argv-join-sep []))
 
 (def jwt-header-json
-  "JWT header preimage. Kotoba when ready."
-  (oracle-str-const 'jwt-header-json mirror-jwt-header-json))
+  "JWT header preimage. Kotoba SSoT (requires oracle)."
+  (o 'jwt-header-json []))
 
 (def jwt-payload-sub-prefix
-  (oracle-str-const 'jwt-payload-sub-prefix mirror-jwt-payload-sub-prefix))
+  (o 'jwt-payload-sub-prefix []))
 
 (def jwt-payload-exp-mid
-  (oracle-str-const 'jwt-payload-exp-mid mirror-jwt-payload-exp-mid))
+  (o 'jwt-payload-exp-mid []))
 
 (def jwt-payload-exp-val
-  (oracle-str-const 'jwt-payload-exp-val mirror-jwt-payload-exp-val))
+  (o 'jwt-payload-exp-val []))
 
 (def jwt-payload-close
-  (oracle-str-const 'jwt-payload-close mirror-jwt-payload-close))
+  (o 'jwt-payload-close []))
 
 (def op-token-sig-seg
-  "CLI media JWT sig segment marker. Kotoba when ready."
-  (oracle-str-const 'op-token-sig-seg mirror-op-token-sig-seg))
+  "CLI media JWT sig segment marker. Kotoba SSoT (requires oracle)."
+  (o 'op-token-sig-seg []))
 
 (def cid-b-prefix
-  "CIDv1 b-prefix. Kotoba when ready."
-  (oracle-str-const 'cid-b-prefix mirror-cid-b-prefix))
+  "CIDv1 b-prefix. Kotoba SSoT (requires oracle)."
+  (o 'cid-b-prefix []))
 
 (def ^:private graph-name-fleet-const
-  (oracle-str-const 'graph-name-fleet mirror-graph-name-fleet))
+  (o 'graph-name-fleet []))
 
 (def ^:private b32 "abcdefghijklmnopqrstuvwxyz234567")
 
@@ -182,28 +133,22 @@
 
 (defn node-seed
   "Deterministic per-node Ed25519 seed from the shared operator seed and node name.
-   Kotoba seed-node preimage then host SHA-256 when oracle ready."
+   Kotoba seed-node preimage then host SHA-256."
   [operator-seed node]
   (sha256-hex
-   (try-oracle
-    #(o 'seed-node [(str operator-seed) (str (:name node))])
-    #(str operator-seed seed-sep (:name node)))))
+   (o 'seed-node [(str operator-seed) (str (:name node))])))
 
 (defn node-p2p-seed
   "Deterministic per-node libp2p seed from the shared operator seed and node name."
   [operator-seed node]
   (sha256-hex
-   (try-oracle
-    #(o 'seed-p2p [(str operator-seed) (str (:name node))])
-    #(str operator-seed seed-sep (:name node) seed-p2p-suffix))))
+   (o 'seed-p2p [(str operator-seed) (str (:name node))])))
 
 (defn x25519-seed
   "Deterministic fleet x25519 seed derived from the shared operator seed."
   [operator-seed]
   (sha256-hex
-   (try-oracle
-    #(o 'seed-x25519 [(str operator-seed)])
-    #(str operator-seed seed-x25519-suffix))))
+   (o 'seed-x25519 [(str operator-seed)])))
 
 (defn overlay-auth-key
   "Deterministic per-overlay MAC key derived from the shared operator seed.
@@ -213,24 +158,18 @@
    cloud/driver argv contract."
   [operator-seed overlay-id]
   (sha256-hex
-   (try-oracle
-    #(o 'seed-overlay [(str operator-seed) (str overlay-id)])
-    #(str operator-seed seed-sep overlay-id seed-overlay-suffix))))
+   (o 'seed-overlay [(str operator-seed) (str overlay-id)])))
 
 (defn did-derive-argv
   "kotoba CLI argv for deriving a did:key from an Ed25519 seed.
-   Subcmd dual-sourced via did-derive-subcmd; vector assembly stays host."
+   Subcmd from oracle; vector assembly stays host."
   [kotoba seed]
-  (try-oracle
-   #(vec (str/split (o 'did-derive-cmd [(str kotoba) (str seed)]) #" " 3))
-   (fn [] [kotoba did-derive-subcmd seed])))
+  (vec (str/split (o 'did-derive-cmd [(str kotoba) (str seed)]) #" " 3)))
 
 (defn did-from-output
   "Normalise kotoba did-derive stdout."
   [out]
-  (try-oracle
-   #(o 'did-from-output [(str out)])
-   #(str/trim (str out))))
+  (o 'did-from-output [(str out)]))
 
 (defn did-from-command-result
   "Normalise a process result from did-derive."
@@ -252,7 +191,7 @@
 
 (defn graph-cid
   "KotobaCid::from_bytes(name): CIDv1 dag-cbor sha2-256, base32lower, b-prefix.
-   Kotoba b-prefix when ready; multihash bytes stay host."
+   Kotoba b-prefix; multihash bytes stay host."
   [name]
   (let [digest (seq (sha256-bytes name))
         raw (concat [0x01 0x71 0x12 0x20] digest)
@@ -278,19 +217,13 @@
 
 (defn op-token
   "Craft the operator Bearer JWT shape kotoba checks at the control-plane edge.
-   Header/payload/sig tokens dual-sourced; b64url + seg join host."
+   Header/payload/sig tokens from oracle; b64url + seg join host."
   [did]
-  (try-oracle
-   #(str (b64url (o 'jwt-header-json [])) jwt-seg-sep
-         (b64url (o 'jwt-payload-json [(str did)])) jwt-seg-sep
-         (o 'op-token-sig-seg []))
-   #(str (b64url jwt-header-json) jwt-seg-sep
-         (b64url (str jwt-payload-sub-prefix did jwt-payload-exp-mid
-                      jwt-payload-exp-val jwt-payload-close))
-         jwt-seg-sep
-         op-token-sig-seg)))
+  (str (b64url (o 'jwt-header-json [])) jwt-seg-sep
+       (b64url (o 'jwt-payload-json [(str did)])) jwt-seg-sep
+       (o 'op-token-sig-seg [])))
 
 (defn graph-name-fleet
-  "Common graph-cid input used by fleet/persist. Kotoba constant when ready."
+  "Common graph-cid input used by fleet/persist. Kotoba constant (requires oracle)."
   []
   graph-name-fleet-const)
