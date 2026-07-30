@@ -5,77 +5,42 @@
 ;; convenience for the bb/JVM CLI; callers that need strict portability can pass
 ;; the parsed connect map directly.
 ;;
-;; W6 product-shell (ADR-260728-w6-connect-plane-tokens-pure-oracle):
-;; class/plane pure helpers + class-native/plane-read/plane-live tokens DELEGATE
-;; to kotoba connect_core when oracle is loadable (JVM classpath or cljs/nbb —
-;; ADR-260728-w6-cljs-oracle-load). Host remains: class-transports lookup, set
-;; intersection projection. cljs mirrors remain fallback when not ready.
+;; W6 product-shell + T6.4: class/plane pure helpers + class-native/plane-read/
+;; plane-live tokens require the shipped `:connect` KIR on **every** platform.
+;; Host pure mirrors are gone — cljs/nbb must preload shipped KIR (resources/
+;; via nbb cwd, register-kir!, or set-resource-loader!) before requiring this ns
+;; (ADR-260731-w6-t64-connect-mirror-delete).
+;; Host remains: class-transports lookup, set intersection projection, load-connect.
 
 (ns murakumo.connect
   "Connectivity description helpers.
-   W6 product-shell: class/plane tokens + decision pure helpers via kotoba connect_core."
+   W6 product-shell: class/plane tokens + decision pure helpers via kotoba connect_core.
+   T6.4: shipped :connect KIR required on every platform (no cljs pure mirrors)."
   (:require [clojure.set :as set]
             [murakumo.config :as config]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :connect)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
-
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-(defn- oracle-str-const [export mirror]
-  "JVM: require oracle. cljs: mirror fallback."
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/call oid export []))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/call oid export [])
-         mirror)
-       (catch :default _
-         mirror))))
 
 ;; ── residual class / plane name tokens ───────────────────────────────
 
-(def ^:private mirror-class-native "native")
-(def ^:private mirror-plane-read "read")
-(def ^:private mirror-plane-live "live")
-
 (def class-native
-  "Default node class name token. Kotoba when ready."
-  (oracle-str-const 'class-native mirror-class-native))
+  "Default node class name token. Kotoba SSoT (requires oracle)."
+  (o 'class-native []))
 
 (def plane-read
-  "Read plane name token. Kotoba when ready."
-  (oracle-str-const 'plane-read mirror-plane-read))
+  "Read plane name token. Kotoba SSoT (requires oracle)."
+  (o 'plane-read []))
 
 (def plane-live
-  "Live plane name token. Kotoba when ready."
-  (oracle-str-const 'plane-live mirror-plane-live))
+  "Live plane name token. Kotoba SSoT (requires oracle)."
+  (o 'plane-live []))
 
 (defn load-connect
   "Read connect.edn (nil if absent — reach constraints then degrade to no-op).
@@ -88,21 +53,17 @@
                    (config/tx-data->map "connect-doc"))))
 
 (defn default-class
-  "Kotoba `default-class-name` → keyword when oracle ready."
+  "Kotoba `default-class-name` → keyword."
   [connect]
-  (try-oracle
-   #(keyword (o 'default-class-name
-                [(if-let [c (:default-class connect)] (name c) "")]))
-   #(or (:default-class connect) (keyword class-native))))
+  (keyword (o 'default-class-name
+              [(if-let [c (:default-class connect)] (name c) "")])))
 
 (defn node-class
-  "Kotoba `node-class-name` → keyword when oracle ready."
+  "Kotoba `node-class-name` → keyword."
   [connect node]
-  (try-oracle
-   #(keyword (o 'node-class-name
-                [(if-let [c (:class node)] (name c) "")
-                 (if-let [c (:default-class connect)] (name c) "")]))
-   #(or (:class node) (default-class connect))))
+  (keyword (o 'node-class-name
+              [(if-let [c (:class node)] (name c) "")
+               (if-let [c (:default-class connect)] (name c) "")])))
 
 (defn class-transports
   "Transports a node-class speaks on `plane` (:read | :live)."
@@ -121,7 +82,7 @@
   "Can `node` serve a client of `(:class reach)` on `(:plane reach)`?
      :read — node speaks :http (universal CID pull).
      :live — node and target client class share at least one live transport.
-   Kotoba `serves-plane?` when oracle ready (Product Value ABI optional flags)."
+   Kotoba `serves-plane?` (Product Value ABI optional flags)."
   [connect node reach]
   (let [{:keys [class plane]} (parse-reach reach)
         ncls (node-class connect node)
@@ -130,21 +91,11 @@
                             (set (class-transports connect ncls (keyword plane-live)))
                             (set (class-transports connect class (keyword plane-live)))))
                   1)]
-    (try-oracle
-     #(oracle/bool->host
-       (o 'serves-plane?
-          [(name plane)
-           (oracle/option-i64 http?)
-           (oracle/option-i64 common?)]))
-     #(let [plane-name (name plane)]
-        (cond
-          (= plane-name plane-read)
-          (boolean (some #{:http} (class-transports connect ncls (keyword plane-read))))
-          (= plane-name plane-live)
-          (boolean (seq (set/intersection
-                         (set (class-transports connect ncls (keyword plane-live)))
-                         (set (class-transports connect class (keyword plane-live))))))
-          :else false)))))
+    (oracle/bool->host
+     (o 'serves-plane?
+        [(name plane)
+         (oracle/option-i64 http?)
+         (oracle/option-i64 common?)]))))
 
 (defn serves-all?
   "True if `node` satisfies every reach requirement (empty => trivially true)."
