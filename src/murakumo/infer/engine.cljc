@@ -42,7 +42,7 @@
                      [(str bin-dir)
                       (oracle/as-i64 port)
                       (str dev)
-                      (oracle/as-i64 (if cache? 1 0))
+                      (boolean cache?)
                       (str (or cache-dir ""))])]]
     {:name (:name node)
      :host (:host node)
@@ -107,15 +107,15 @@
   (str (o 'mlx-moe-front
           [(str (or venv "")) (str model-repo) (oracle/as-i64 port)])
        (o 'opt-i64-flag
-          [" --capacity" (oracle/as-i64 (or capacity 0)) (oracle/as-i64 (if capacity 1 0))])
+          [" --capacity" (oracle/as-i64 (or capacity 0)) (boolean capacity)])
        (o 'opt-i64-flag
-          [" --pin-top-k" (oracle/as-i64 (or pin-top-k 0)) (oracle/as-i64 (if pin-top-k 1 0))])
+          [" --pin-top-k" (oracle/as-i64 (or pin-top-k 0)) (boolean pin-top-k)])
        (o 'opt-i64-flag
-          [" --kv-bits" (oracle/as-i64 (or kv-bits 0)) (oracle/as-i64 (if kv-bits 1 0))])
+          [" --kv-bits" (oracle/as-i64 (or kv-bits 0)) (boolean kv-bits)])
        (o 'opt-str-flag
-          [" --profile" (str (or profile "")) (oracle/as-i64 (if profile 1 0))])
+          [" --profile" (str (or profile "")) (boolean profile)])
        (o 'opt-str-flag
-          [" --warmup" (str (or warmup "")) (oracle/as-i64 (if warmup 1 0))])
+          [" --warmup" (str (or warmup "")) (boolean warmup)])
        (when (seq extra-args) (str " " (str/join " " extra-args)))))
 
 ;; ── llamacpp-embed ──────────────────────────────────────────────────────────

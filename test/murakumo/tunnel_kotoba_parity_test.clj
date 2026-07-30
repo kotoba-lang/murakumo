@@ -115,8 +115,8 @@
 
 (deftest pick-exit-and-trim-err-match
   (let [i (compile-i64-cases
-           {"p1" "(pick-exit 1 7 0)"
-            "p0" "(pick-exit 0 7 255)"})
+           {"p1" "(pick-exit true 7 0)"
+            "p0" "(pick-exit false 7 255)"})
         s (compile-string-cases
            {"te" (str "(trim-err " (kotoba-literal " connection refused\n") ")")
             "te0" (str "(trim-err " (kotoba-literal "") ")")})]

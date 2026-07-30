@@ -57,13 +57,13 @@
        "/rpc-server -H 0.0.0.0 -p "
        (string-concat (i64-str port) (string-concat " -d " device))))]
     (if
-     (= cache 0)
-     base
+     cache
      (if
       (string=? cache-dir "")
       (string-concat base " -c")
-      (string-concat base (string-concat " -c " cache-dir))))),
-   :param-types [:string :i64 :string :i64 :string]}
+      (string-concat base (string-concat " -c " cache-dir)))
+     base)),
+   :param-types [:string :i64 :string :bool :string]}
   {:name embed-head-front,
    :params [bin-dir model-path pooling ctx],
    :result :string,
@@ -121,17 +121,16 @@
    :effects #{},
    :body
    (if
-    (= present 0)
-    ""
-    (string-concat flag (string-concat " " (i64-str val)))),
-   :param-types [:string :i64 :i64]}
+    present
+    (string-concat flag (string-concat " " (i64-str val)))
+    ""),
+   :param-types [:string :i64 :bool]}
   {:name opt-str-flag,
    :params [flag val present],
    :result :string,
    :effects #{},
-   :body
-   (if (= present 0) "" (string-concat flag (string-concat " " val))),
-   :param-types [:string :string :i64]}
+   :body (if present (string-concat flag (string-concat " " val)) ""),
+   :param-types [:string :string :bool]}
   {:name tensor-split-3,
    :params [s0 s1 s2],
    :result :string,

@@ -171,9 +171,9 @@
 (defn health-ok-label [] :string "ok")
 (defn health-down-label [] :string "down")
 
-(defn health-from-present [present :i64] :string
-  ;; present 1 when health-json non-nil
-  (if (= present 1)
+(defn health-from-present [present :bool] :string
+  ;; present true when health-json non-nil. Profile 5: real :bool.
+  (if present
     (health-ok-label)
     (health-down-label)))
 

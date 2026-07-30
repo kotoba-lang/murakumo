@@ -95,10 +95,9 @@
                  :cache-dir "/var/cache/rpc"}]
         call (fn [{:keys [bin-dir port device node cache-dir]}]
                (let [cache? (not (false? (:rpc-cache? node)))
-                     cache (if cache? 1 0)
                      cdir (or cache-dir "")]
                  (str "(rpc-server-cmd " (kotoba-literal bin-dir) " " port " "
-                      (kotoba-literal device) " " cache " "
+                      (kotoba-literal device) " " (if cache? "true" "false") " "
                       (kotoba-literal cdir) ")")))
         cases (into {} (map-indexed (fn [i m] [(str "rpc_" i) (call m)]) corpus))
         actual (compile-string-cases cases)]
@@ -141,15 +140,15 @@
         front (str "(mlx-moe-front " (kotoba-literal v) " "
                    (kotoba-literal model-repo) " " port ")")
         flags [(str "(opt-i64-flag " (kotoba-literal " --capacity") " "
-                    (long (or capacity 0)) " " (if capacity 1 0) ")")
+                    (long (or capacity 0)) " " (if capacity "true" "false") ")")
                (str "(opt-i64-flag " (kotoba-literal " --pin-top-k") " "
-                    (long (or pin-top-k 0)) " " (if pin-top-k 1 0) ")")
+                    (long (or pin-top-k 0)) " " (if pin-top-k "true" "false") ")")
                (str "(opt-i64-flag " (kotoba-literal " --kv-bits") " "
-                    (long (or kv-bits 0)) " " (if kv-bits 1 0) ")")
+                    (long (or kv-bits 0)) " " (if kv-bits "true" "false") ")")
                (str "(opt-str-flag " (kotoba-literal " --profile") " "
-                    (kotoba-literal (or profile "")) " " (if profile 1 0) ")")
+                    (kotoba-literal (or profile "")) " " (if profile "true" "false") ")")
                (str "(opt-str-flag " (kotoba-literal " --warmup") " "
-                    (kotoba-literal (or warmup "")) " " (if warmup 1 0) ")")]
+                    (kotoba-literal (or warmup "")) " " (if warmup "true" "false") ")")]
         nest (reduce (fn [acc f] (str "(string-concat " acc " " f ")"))
                      front
                      flags)]

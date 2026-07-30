@@ -59,10 +59,10 @@
                   {"r" "(expert-ratio-milli 512 10)"
                    "r0" "(expert-ratio-milli 512 0)"})
         actual-s (compile-string-cases
-                  {"v1" "(verdict-name 512 10 1)"
-                   "v2" "(verdict-name 512 100 1)"
-                   "v3" "(verdict-name 512 10 0)"
-                   "v4" "(verdict-name 0 0 0)"})]
+                  {"v1" "(verdict-name 512 10 true)"
+                   "v2" "(verdict-name 512 100 true)"
+                   "v3" "(verdict-name 512 10 false)"
+                   "v4" "(verdict-name 0 0 false)"})]
     (is (= (long (* 1000 (moe/expert-ratio qwen))) (get actual-i "r")))
     (is (= 0 (get actual-i "r0")))
     (is (= (name (:verdict (moe/verdict qwen))) (get actual-s "v1")))
