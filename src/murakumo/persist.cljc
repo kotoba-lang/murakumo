@@ -1,10 +1,11 @@
 ;; murakumo.persist — portable Datom/atproto persistence data helpers.
 ;;
-;; W6 product-shell authority (ADR-260728-w6-persist-oracle-authority +
-;; ADR-260728-w6-persist-envelope-pure-oracle):
-;; constants + rkey/uri/url/write-ok? + curl/auth/operation field helpers DELEGATE
-;; to precompiled persist_core.kir.edn when oracle is loadable (JVM or cljs/nbb).
-;; Envelope maps + graph-cid hashing stay host. cljs mirrors remain fallback.
+;; W6 product-shell + T6.4: constants + rkey/uri/url/write-ok? + curl/auth/
+;; operation field helpers require the shipped `:persist` KIR on **every**
+;; platform. Host pure mirrors are gone — cljs/nbb must preload shipped KIR
+;; (resources/ via nbb cwd, register-kir!, or set-resource-loader!) before
+;; requiring this ns (ADR-260731-w6-t64-persist-mirror-delete).
+;; Envelope maps + graph-cid hashing stay host.
 
 (ns murakumo.persist
   (:require [murakumo.dash.state :as dash-state]
@@ -15,181 +16,83 @@
 
 (def ^:private oid :persist)
 
-(defn- o [export args]
+(defn- o
+  "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
+  [export args]
+  (oracle/require-ready! oid)
   (oracle/call oid export args))
 
-(defn- oracle-ready? []
-  (oracle/ready? oid))
-
-(defn- try-oracle
-  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror
-   (also used when cljs KIR i64-str substring faults)."
-  [thunk mirror-thunk]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid})))
-       (thunk))
-     :cljs
-     (if (oracle-ready?)
-       (try
-         (thunk)
-         (catch :default _
-           (mirror-thunk)))
-       (mirror-thunk))))
-
-(defn- oracle-const
-  "JVM: require oracle. cljs: mirror fallback."
-  [export mirror]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/call oid export []))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/call oid export [])
-         mirror)
-       (catch :default _
-         mirror))))
-
-(defn- oracle-i64-const
-  "JVM: require oracle. cljs: mirror fallback."
-  [export mirror]
-  #?(:clj
-     (do
-       (when-not (oracle-ready?)
-         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
-                         {:oracle-id oid :export export})))
-       (oracle/i64->host (oracle/call oid export [])))
-     :cljs
-     (try
-       (if (oracle-ready?)
-         (oracle/i64->host (oracle/call oid export []))
-         mirror)
-       (catch :default _
-         mirror))))
-
-;; ── host-mirror pure helpers ───────────────────────────────────────────
-
-(def ^:private mirror-repo-authority "did:web:etzhayyim.com:murakumo")
-(def ^:private mirror-fleet-graph-name "murakumo-fleet")
-(def ^:private mirror-snapshot-collection "com.murakumo.fleet.snapshot")
-(def ^:private mirror-reconcile-collection "com.murakumo.fleet.reconcile")
-(def ^:private mirror-snapshot-local-port 18099)
-(def ^:private mirror-reconcile-local-port 18098)
-(def ^:private mirror-forward-settle-ms 400)
-
-(defn- mirror-repo-uri [collection rkey]
-  (str "at://" mirror-repo-authority "/" collection "/" rkey))
-
-(defn- mirror-snapshot-rkey [millis sequence-number]
-  (str "snap-" millis "-" sequence-number))
-
-(defn- mirror-reconcile-rkey [millis sequence-number]
-  (str "rec-" millis "-" sequence-number))
-
-(defn- mirror-repo-write-url [local-port]
-  (str "http://localhost:" local-port
-       "/xrpc/com.etzhayyim.apps.kotoba.atproto.repo.write"))
-
-(defn- mirror-write-ok? [out]
-  (some? (re-find #"\"status\":\"ok\"" (str out))))
-
-(def ^:private mirror-operation-create "create")
-(def ^:private mirror-write-ok-marker "\"status\":\"ok\"")
-(def ^:private mirror-auth-bearer-prefix "Authorization: Bearer ")
-(def ^:private mirror-content-type-json-header "content-type: application/json")
-(def ^:private mirror-curl-timeout-s 6)
-(def ^:private mirror-curl-method-post "POST")
-(def ^:private mirror-xrpc-repo-write-path
-  "/xrpc/com.etzhayyim.apps.kotoba.atproto.repo.write")
-
-(defn- mirror-auth-header [token]
-  (str mirror-auth-bearer-prefix token))
-
-;; ── dual-source constants ──────────────────────────────────────────────
+;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def repo-authority
-  (oracle-const 'repo-authority mirror-repo-authority))
+  (o 'repo-authority []))
 
 (def fleet-graph-name
-  (oracle-const 'fleet-graph-name mirror-fleet-graph-name))
+  (o 'fleet-graph-name []))
 
 (def snapshot-collection
-  (oracle-const 'snapshot-collection mirror-snapshot-collection))
+  (o 'snapshot-collection []))
 
 (def reconcile-collection
-  (oracle-const 'reconcile-collection mirror-reconcile-collection))
+  (o 'reconcile-collection []))
 
 (def snapshot-local-port
-  (oracle-i64-const 'snapshot-local-port mirror-snapshot-local-port))
+  (oracle/i64->host (o 'snapshot-local-port [])))
 
 (def reconcile-local-port
-  (oracle-i64-const 'reconcile-local-port mirror-reconcile-local-port))
+  (oracle/i64->host (o 'reconcile-local-port [])))
 
 (def forward-settle-ms
-  (oracle-i64-const 'forward-settle-ms mirror-forward-settle-ms))
+  (oracle/i64->host (o 'forward-settle-ms [])))
 
 (def operation-create
-  (oracle-const 'operation-create mirror-operation-create))
+  (o 'operation-create []))
 
 (def write-ok-marker
-  (oracle-const 'write-ok-marker mirror-write-ok-marker))
+  (o 'write-ok-marker []))
 
 (def auth-bearer-prefix
-  (oracle-const 'auth-bearer-prefix mirror-auth-bearer-prefix))
+  (o 'auth-bearer-prefix []))
 
 (def content-type-json-header
-  (oracle-const 'content-type-json-header mirror-content-type-json-header))
+  (o 'content-type-json-header []))
 
 (def curl-timeout-s
-  (oracle-i64-const 'curl-timeout-s mirror-curl-timeout-s))
+  (oracle/i64->host (o 'curl-timeout-s [])))
 
 (def curl-method-post
-  (oracle-const 'curl-method-post mirror-curl-method-post))
+  (o 'curl-method-post []))
 
 (def xrpc-repo-write-path
-  (oracle-const 'xrpc-repo-write-path mirror-xrpc-repo-write-path))
+  (o 'xrpc-repo-write-path []))
 
 (defn auth-header
-  "Authorization Bearer header value. Kotoba `auth-header` when ready."
+  "Authorization Bearer header value. Kotoba `auth-header` (required)."
   [token]
-  (try-oracle
-   #(o 'auth-header [(str token)])
-   #(mirror-auth-header token)))
+  (o 'auth-header [(str token)]))
 
 (defn fleet-graph-cid []
   (identity/graph-cid fleet-graph-name))
 
 (defn repo-uri
   "Build the AT URI for an append-only murakumo record.
-   Kotoba `repo-uri` when oracle ready."
+   Kotoba `repo-uri` (required)."
   [collection rkey]
-  (try-oracle
-   #(o 'repo-uri [(str collection) (str rkey)])
-   #(mirror-repo-uri collection rkey)))
+  (o 'repo-uri [(str collection) (str rkey)]))
 
 (defn snapshot-rkey
-  "Kotoba `snapshot-rkey` when oracle ready (falls back if KIR i64-str fails on cljs)."
+  "Kotoba `snapshot-rkey` (required)."
   [millis sequence-number]
-  (try-oracle
-   #(o 'snapshot-rkey [(oracle/as-i64 millis) (oracle/as-i64 sequence-number)])
-   #(mirror-snapshot-rkey millis sequence-number)))
+  (o 'snapshot-rkey [(oracle/as-i64 millis) (oracle/as-i64 sequence-number)]))
 
 (defn reconcile-rkey
-  "Kotoba `reconcile-rkey` when oracle ready."
+  "Kotoba `reconcile-rkey` (required)."
   [millis sequence-number]
-  (try-oracle
-   #(o 'reconcile-rkey [(oracle/as-i64 millis) (oracle/as-i64 sequence-number)])
-   #(mirror-reconcile-rkey millis sequence-number)))
+  (o 'reconcile-rkey [(oracle/as-i64 millis) (oracle/as-i64 sequence-number)]))
 
 (defn repo-write-envelope
   "Build the pure repo.write payload before host-side JSON encoding.
-   `:operation` from kotoba `operation-create` when ready."
+   `:operation` from kotoba `operation-create`."
   [graph collection rkey record]
   {:graph graph
    :uri (repo-uri collection rkey)
@@ -231,15 +134,13 @@
 
 (defn repo-write-url
   "Local forwarded endpoint for kotoba atproto repo.write.
-   Kotoba `repo-write-url` when oracle ready (try/catch for cljs i64-str)."
+   Kotoba `repo-write-url` (required)."
   [local-port]
-  (try-oracle
-   #(o 'repo-write-url [(oracle/as-i64 local-port)])
-   #(mirror-repo-write-url local-port)))
+  (o 'repo-write-url [(oracle/as-i64 local-port)]))
 
 (defn repo-write-curl-argv
   "argv for POSTing a repo.write envelope through a local forward.
-   Method/timeout/headers via kotoba pure constants when ready."
+   Method/timeout/headers via kotoba pure constants."
   [local-port token body]
   ["curl" "-s" "-m" (str curl-timeout-s) "-X" curl-method-post
    (repo-write-url local-port)
@@ -259,8 +160,6 @@
 
 (defn write-ok?
   "True when repo.write stdout contains an ok status.
-   Kotoba `write-ok?` when oracle ready."
+   Kotoba `write-ok?` (required)."
   [out]
-  (try-oracle
-   #(oracle/bool->host (o 'write-ok? [(str out)]))
-   #(mirror-write-ok? out)))
+  (oracle/bool->host (o 'write-ok? [(str out)])))
