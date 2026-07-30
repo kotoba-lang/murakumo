@@ -212,9 +212,15 @@
      :skipped (into (vec skipped) dropped)
      :opts (assoc opts :slots-by-node budgeted)}))
 
-(defn- eligibility-flags
-  "1 online | 2 labels-ok | 4 roles-ok | 8 not-excluded | 16 allowlist-ok.
-   Host projects set/map membership; oracle evaluates pure bit+mem gates."
+(def ^:private eligibility-schema
+  "Guest descriptor for task_plan_core's eligibility record (T5.3).
+   Replaces five bits packed into one i64."
+  [:record :task/eligibility
+   [[:online :i64] [:labels-ok :i64] [:roles-ok :i64]
+    [:not-excluded :i64] [:allowlist-ok :i64]]])
+
+(defn- eligibility-fields
+  "Host projects set/map membership into named eligibility fields."
   [node {:keys [placement min-mem-bytes exclude-nodes nodes] :as _task}]
   (let [{:keys [labels roles]} placement
         online (if (false? (:online? node true)) 0 1)
@@ -228,18 +234,19 @@
         allow (if (or (empty? (or nodes []))
                       (contains? (set nodes) (:name node)))
                 1 0)]
-    (+ online (* 2 labels-ok) (* 4 roles-ok) (* 8 not-ex) (* 16 allow))))
+    {:online online :labels-ok labels-ok :roles-ok roles-ok
+     :not-excluded not-ex :allowlist-ok allow}))
 
 (defn eligible?
   "Can `node` run `task`? Same placement vocabulary as reconcile/plan.cljc
    (`:labels` all match, `:roles` all present) plus task-level resource and
    exclusion constraints.
 
-   JVM: kotoba `task-eligible?` with projected flags."
+   JVM: kotoba `task-eligible?` with an eligibility record (T5.3)."
   [node task]
   #?(:clj
      (= 1 (o 'task-eligible?
-             [(long (eligibility-flags node task))
+             [(oracle/record eligibility-schema (eligibility-fields node task))
               (long (or (:mem-bytes node) 0))
               (long (or (:min-mem-bytes task) 0))]))
      :cljs (mirror-eligible? node task)))

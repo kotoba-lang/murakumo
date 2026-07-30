@@ -5,7 +5,11 @@
              :task/assign2 [:record :task/assign2
                             [[:code :i64] [:load0 :i64] [:load1 :i64]]]
              :task/assign3 [:record :task/assign3
-                            [[:code :i64] [:load0 :i64] [:load1 :i64] [:load2 :i64]]]})
+                            [[:code :i64] [:load0 :i64] [:load1 :i64] [:load2 :i64]]]
+             ;; T5.3: eligibility flags are a record, not five bits in one i64.
+             :task/eligibility [:record :task/eligibility
+                                [[:online :i64] [:labels-ok :i64] [:roles-ok :i64]
+                                 [:not-excluded :i64] [:allowlist-ok :i64]]]})
   (:export [default-max-slots default-max-attempts default-timeout-ms
             slots failed? can-retry?
             task-eligible? fill-milli better-fill?
@@ -28,7 +32,8 @@
 ;; Product Value ABI v1 pure oracle — murakumo.task.plan integer + assign core.
 ;; failed? uses [:option :i64] exit + [:option :string] error (no has-*).
 ;; Full admit/prepare vector folds stay cljc.
-;; task-eligible? bit flags + better-task-score? + wave/slot: pure assign-1 core.
+;; task-eligible? takes [:ref :task/eligibility] + mem (T5.3: no flag bit-word).
+;; better-task-score? + wave/slot: pure assign-1 core.
 ;; expand: task-id = "t-" + zero-pad-4 (cljc last-4 of "0000"+i for i≥10000).
 ;; assign-task-step-2/3 + pick-task-fold-step: pure assign reduce building blocks.
 ;; T5.3: load/fill/ok triples and assign results are named records — base-65536 gone.
@@ -72,21 +77,14 @@
 (defn can-retry? [attempt :i64 max-attempts :i64] :i64
   (if (< attempt max-attempts) 1 0))
 
-(defn rem2 [n :i64] :i64
-  (- n (* (quot n 2) 2)))
+;; ── T5.3: eligibility is a record, not five bits packed into one i64 ──
 
-(defn bit?-safe [flags :i64 mask :i64] :i64
-  (if (= 0 (rem2 (quot flags mask)))
-    0
-    1))
-
-(defn task-eligible? [flags :i64 mem-bytes :i64 min-mem :i64] :i64
-  ;; flags: 1 online | 2 labels-ok | 4 roles-ok | 8 not-excluded | 16 allowlist-ok
-  (let [online (bit?-safe flags 1)
-        labels (bit?-safe flags 2)
-        roles (bit?-safe flags 4)
-        not-ex (bit?-safe flags 8)
-        allow (bit?-safe flags 16)
+(defn task-eligible? [e [:ref :task/eligibility] mem-bytes :i64 min-mem :i64] :i64
+  (let [online (record-get e :online)
+        labels (record-get e :labels-ok)
+        roles (record-get e :roles-ok)
+        not-ex (record-get e :not-excluded)
+        allow (record-get e :allowlist-ok)
         mem-ok (if (< mem-bytes min-mem) 0 1)]
     (if (= online 0)
       0

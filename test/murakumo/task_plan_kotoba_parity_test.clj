@@ -136,8 +136,14 @@
         (is (= (if (< a m) 1 0)
                (get actual (str "r_" i))))))))
 
-(defn- task-flags
-  "1 online | 2 labels | 4 roles | 8 not-excluded | 16 allowlist"
+(def ^:private eligibility-literal
+  "T5.3: guest eligibility record descriptor as source text."
+  (str "[:record :task/eligibility "
+       "[[:online :i64] [:labels-ok :i64] [:roles-ok :i64] "
+       "[:not-excluded :i64] [:allowlist-ok :i64]]]"))
+
+(defn- task-elig-record-literal
+  "Set-membership projected as a record literal (not five packed bits)."
   [node task]
   (let [online (if (false? (:online? node true)) 0 1)
         labels (if (every? (fn [[k v]] (= v (get (:labels node) k)))
@@ -150,7 +156,8 @@
         allow (if (or (empty? (or (:nodes task) []))
                       (contains? (set (:nodes task)) (:name node)))
                 1 0)]
-    (+ online (* 2 labels) (* 4 roles) (* 8 not-ex) (* 16 allow))))
+    (str "(record-new " eligibility-literal " "
+         online " " labels " " roles " " not-ex " " allow ")")))
 
 (deftest task-eligible-matches-cljc
   (let [nodes [{:name "a" :online? true :labels {:tier "gpu"} :roles #{:worker}
@@ -171,7 +178,7 @@
                     (map-indexed
                      (fn [i [n t]]
                        [(str "e_" i)
-                        (str "(task-eligible? " (task-flags n t) " "
+                        (str "(task-eligible? " (task-elig-record-literal n t) " "
                              (long (or (:mem-bytes n) 0)) " "
                              (long (or (:min-mem-bytes t) 0)) ")")])
                      corpus))
