@@ -102,7 +102,7 @@
         cases (into {} (map-indexed
                         (fn [i s]
                           [(str "v_" i)
-                           (str "(valid-env-var-name? " (kotoba-literal s) ")")])
+                           (str "(if (valid-env-var-name? " (kotoba-literal s) ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i s] (map-indexed vector corpus)]
@@ -121,7 +121,7 @@
         cases (into {} (map-indexed
                         (fn [i s]
                           [(str "p_" i)
-                           (str "(valid-path-ref-unix? " (kotoba-literal s) ")")])
+                           (str "(if (valid-path-ref-unix? " (kotoba-literal s) ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i s] (map-indexed vector corpus)]

@@ -311,8 +311,8 @@
   [env-name]
   (try-oracle
    #(boolean (and (string? env-name)
-                  (= 1 (oracle/i64->host
-                        (o 'valid-env-var-name? [(str env-name)])))))
+                  (oracle/bool->host
+                   (o 'valid-env-var-name? [(str env-name)]))))
    #(mirror-valid-env-var-name? env-name)))
 
 (defn resolve-exact-env
@@ -345,8 +345,8 @@
   [p]
   (try-oracle
    #(boolean (and (string? p)
-                  (or (= 1 (oracle/i64->host
-                            (o 'valid-path-ref-unix? [(str p)])))
+                  (or (oracle/bool->host
+                       (o 'valid-path-ref-unix? [(str p)]))
                       ;; Windows absolute (drive letter) stays host-only
                       (boolean (re-matches #"[A-Za-z]:[\\/].*" (str p))))))
    #(mirror-valid-path-ref? p)))
