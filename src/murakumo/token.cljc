@@ -36,6 +36,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── residual version / defaults / seps / json tokens ─────────────────
 
 (def version
@@ -122,23 +128,27 @@
 
 (defn claims
   "Build the token claim map. Pure claim fields use kotoba (claim-sub/scope/exp
-  via Product Value ABI options); map assembly stays host."
+  via Product Value ABI options); map assembly stays host.
+   T5.2: claim-exp uses call-record."
   [{:keys [sub scope now ttl]}]
   (let [sub' (o 'claim-sub [(oracle/option-string sub)])
         scope' (o 'claim-scope [(oracle/option-string scope)])
         exp' (oracle/i64->host
-              (o 'claim-exp [(oracle/as-i64 now) (oracle/option-i64 ttl)]))]
+              (o-record 'claim-exp
+                        {:now now :ttl ttl}
+                        [[:now :i64] [:ttl :option-i64]]))]
     {:sub sub'
      :scope scope'
      :iat (oracle/i64->host (oracle/as-i64 now))
      :exp exp'}))
 
 (defn encode-claims-json
-  "Fixed-key JSON. Kotoba oracle required (T6.4)."
-  [{:keys [sub scope iat exp]}]
-  (o 'encode-claims-json
-     [(str sub) (str scope)
-      (oracle/as-i64 iat) (oracle/as-i64 exp)]))
+  "Fixed-key JSON. Kotoba oracle required (T6.4).
+   T5.2: structural claims map → call-record."
+  [m]
+  (o-record 'encode-claims-json
+            m
+            [[:sub :string] [:scope :string] [:iat :i64] [:exp :i64]]))
 
 (defn encode-claims
   "b64url of fixed-key claims JSON (host b64 codec)."
@@ -158,12 +168,14 @@
     (catch #?(:clj Exception :cljs :default) _ nil)))
 
 (defn expired?
-  "True if claims are expired. Kotoba oracle (option exp). Profile 5: :bool."
+  "True if claims are expired. Kotoba oracle (option exp). Profile 5: :bool.
+   T5.2: claims map + now → call-record."
   [cl now]
   (oracle/bool->host
-   (o 'expired?
-      [(oracle/option-i64 (when (contains? cl :exp) (:exp cl)))
-       (oracle/as-i64 now)])))
+   (o-record 'expired?
+             {:exp (when (contains? cl :exp) (:exp cl))
+              :now now}
+             [[:exp :option-i64] [:now :i64]])))
 
 (defn signing-input
   "HMAC message: version + '.' + payloadSeg. Kotoba required."
@@ -179,16 +191,18 @@
   (oracle/bool->host (o 'version-ok? [(str v)])))
 
 (defn parts-present?
-  "All three wire segments present (non-blank). Profile 5: guest :bool."
+  "All three wire segments present (non-blank). Profile 5: guest :bool.
+   T5.2: structural segment map → call-record."
   [v payload sig]
   (let [seg (fn [x]
               (when (and x (not (str/blank? (str x))))
                 (str x)))]
     (oracle/bool->host
-     (o 'parts-present?
-        [(oracle/option-string (seg v))
-         (oracle/option-string (seg payload))
-         (oracle/option-string (seg sig))]))))
+     (o-record 'parts-present?
+               {:v (seg v) :payload (seg payload) :sig (seg sig)}
+               [[:v :option-string]
+                [:payload :option-string]
+                [:sig :option-string]]))))
 
 (defn constant-time=
   "Full-scan string compare via kotoba constant-time-eq. Profile 5: :bool."

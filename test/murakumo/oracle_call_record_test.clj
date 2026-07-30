@@ -5,7 +5,10 @@
             [murakumo.config :as config]
             [murakumo.infer.plan :as plan]
             [murakumo.fleet.inventory :as inv]
-            [murakumo.provision.plan :as pplan]))
+            [murakumo.provision.plan :as pplan]
+            [murakumo.token :as token]
+            [murakumo.report :as report]
+            [murakumo.tunnel :as tunnel]))
 
 (deftest map->args-projects-kinds
   (is (= ["a" "b"]
@@ -91,3 +94,44 @@
                  :nodes [{:name "a" :p2p-port 5001} {:name "b"}]}]
       (is (= 5001 (pplan/node-p2p-port fleet (first (:nodes fleet)))))
       (is (= 4001 (pplan/node-p2p-port fleet (second (:nodes fleet))))))))
+
+(deftest call-record-token-claims-and-wire
+  (when (oracle/ready? :token)
+    (let [cl (token/claims {:sub "alice" :scope "chat" :now 1000 :ttl 60})
+          json (token/encode-claims-json cl)
+          via-call (oracle/call :token 'encode-claims-json
+                                [(:sub cl) (:scope cl)
+                                 (oracle/as-i64 (:iat cl))
+                                 (oracle/as-i64 (:exp cl))])]
+      (is (= "alice" (:sub cl)))
+      (is (= 1060 (:exp cl)))
+      (is (= via-call json))
+      (is (string? json))
+      (is (re-find #"\"sub\":\"alice\"" json)))
+    (is (false? (token/expired? {:exp 2000} 1000)))
+    (is (true? (token/expired? {:exp 500} 1000)))
+    (is (true? (token/parts-present? "mk1" "pay" "sig")))
+    (is (false? (token/parts-present? "mk1" "" "sig")))))
+
+(deftest call-record-report-status-row
+  (when (oracle/ready? :report-core)
+    (let [node {:name "asher"}
+          row (report/status-row node {:subsystems {:wasm_executor "ok"}} 3 4001)
+          via-call (oracle/call :report-core 'status-row
+                                ["asher" (oracle/option-i64 1) "ok" "3"
+                                 (oracle/as-i64 4001)])]
+      (is (= via-call row))
+      (is (string? row))
+      (is (re-find #"asher" row)))
+    (let [down (report/status-row {:name "x"} nil nil 0)]
+      (is (string? down)))))
+
+(deftest call-record-tunnel-sh-result-pick-exit
+  (when (oracle/ready? :tunnel)
+    ;; In-band rc wins over ssh-exit (pick-exit via call-record).
+    (let [r (tunnel/sh-result {:exit 255 :out "ok\n__murakumo_rc=0\n" :err ""})]
+      (is (= 0 (:exit r)))
+      (is (= 255 (:ssh-exit r))))
+    (let [r (tunnel/sh-result {:exit 7 :out "no sentinel\n" :err "  e  \n"})]
+      (is (= 7 (:exit r)))
+      (is (= "e" (:err r))))))
