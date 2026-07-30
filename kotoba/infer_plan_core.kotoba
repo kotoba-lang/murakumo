@@ -83,29 +83,30 @@
       false
       (if (< idx-a idx-b) true false))))
 
-(defn pick-bump-3 [ok-t :i64 ok-m :i64 ok-p :i64 rems [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]] :i64
+(defn pick-bump-3 [ok-t :bool ok-m :bool ok-p :bool rems [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]] :i64
   (let [rt (record-get rems :l0)
         rm (record-get rems :l1)
         rp (record-get rems :l2)]
-    (if (= ok-t 0)
-      (if (= ok-m 0)
-        (if (= ok-p 0) -1 2)
-        (if (= ok-p 0)
-          1
-          (if (better-bump? rm 1 rp 2) 1 2)))
-      (if (= ok-m 0)
-        (if (= ok-p 0)
-          0
-          (if (better-bump? rt 0 rp 2) 0 2))
+    (if ok-t
+      (if ok-m
         (let [win-tm (if (better-bump? rt 0 rm 1) 0 1)
               r-win (if (= win-tm 0) rt rm)
               i-win win-tm]
-          (if (= ok-p 0)
-            win-tm
-            (if (better-bump? r-win i-win rp 2) win-tm 2)))))))
+          (if ok-p
+            (if (better-bump? r-win i-win rp 2) win-tm 2)
+            win-tm))
+        (if ok-p
+          (if (better-bump? rt 0 rp 2) 0 2)
+          0))
+      (if ok-m
+        (if ok-p
+          (if (better-bump? rm 1 rp 2) 1 2)
+          1)
+        (if ok-p 2 -1)))))
 
-(defn ok-for [active :i64 bumped :i64] :i64
-  (if (if (= active 1) (if (= bumped 0) 1 0) 0) 1 0))
+(defn ok-for [active :bool bumped :bool] :bool
+  ;; active lane with positive weight and not yet bumped this remainder pass
+  (if active (if bumped false true) false))
 
 (defn weight-pos? [w :i64] :bool
   (if (< 0 w) true false))
@@ -114,9 +115,9 @@
   [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
   ;; plan.cljc largest-remainder without rebalance per-active floor:
   ;; floor(total*w_i/sumw) + remainder seats by fractional rank.
-  (let [a0 (if (weight-pos? w0) 1 0)
-        a1 (if (weight-pos? w1) 1 0)
-        a2 (if (weight-pos? w2) 1 0)
+  (let [a0 (weight-pos? w0)
+        a1 (weight-pos? w1)
+        a2 (weight-pos? w2)
         sumw (+ w0 (+ w1 w2))]
     (if (if (= total 0) 1 (if (= sumw 0) 1 0))
       (record-new [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]] 0 0 0)
@@ -133,17 +134,17 @@
             extra (- total assigned)
             rems (record-new [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]] r0 r1 r2)
             b0 (if (< 0 extra)
-                 (pick-bump-3 (ok-for a0 0) (ok-for a1 0) (ok-for a2 0) rems)
+                 (pick-bump-3 (ok-for a0 false) (ok-for a1 false) (ok-for a2 false) rems)
                  -1)
-            t0 (if (= b0 0) 1 0)
-            m0 (if (= b0 1) 1 0)
-            p0b (if (= b0 2) 1 0)
+            t0 (if (= b0 0) true false)
+            m0 (if (= b0 1) true false)
+            p0b (if (= b0 2) true false)
             b1 (if (< 1 extra)
                  (pick-bump-3 (ok-for a0 t0) (ok-for a1 m0) (ok-for a2 p0b) rems)
                  -1)
-            t1 (if (= b1 0) 1 t0)
-            m1 (if (= b1 1) 1 m0)
-            p1b (if (= b1 2) 1 p0b)
+            t1 (if (= b1 0) true t0)
+            m1 (if (= b1 1) true m0)
+            p1b (if (= b1 2) true p0b)
             b2 (if (< 2 extra)
                  (pick-bump-3 (ok-for a0 t1) (ok-for a1 m1) (ok-for a2 p1b) rems)
                  -1)

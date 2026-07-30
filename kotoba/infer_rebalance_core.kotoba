@@ -100,7 +100,7 @@
 ;; Pick best among three optional candidates (ok=1 means eligible).
 ;; Returns 0|1|2 or -1. T5.3: the remainders arrive as a lanes record, so the
 ;; `_pad` argument that only existed to reach the old fixed shape is gone.
-(defn pick-bump-3 [ok-t :i64 ok-m :i64 ok-p :i64
+(defn pick-bump-3 [ok-t :bool ok-m :bool ok-p :bool
                    rems [:record :rebalance/lanes
                          [[:text :i64] [:media :i64] [:postproc :i64]]]] :i64
   (let [rt (record-get [:record :rebalance/lanes
@@ -109,71 +109,71 @@
                         [[:text :i64] [:media :i64] [:postproc :i64]]] rems :media)
         rp (record-get [:record :rebalance/lanes
                         [[:text :i64] [:media :i64] [:postproc :i64]]] rems :postproc)]
-    (if (= ok-t 0)
-      (if (= ok-m 0)
-        (if (= ok-p 0) -1 2)
-        (if (= ok-p 0)
-          1
-          (if (better-bump? rm 1 rp 2) 1 2)))
-      (if (= ok-m 0)
-        (if (= ok-p 0)
-          0
-          (if (better-bump? rt 0 rp 2) 0 2))
+    (if ok-t
+      (if ok-m
         (let [win-tm (if (better-bump? rt 0 rm 1) 0 1)
               r-win (if (= win-tm 0) rt rm)
               i-win win-tm]
-          (if (= ok-p 0)
-            win-tm
-            (if (better-bump? r-win i-win rp 2) win-tm 2)))))))
+          (if ok-p
+            (if (better-bump? r-win i-win rp 2) win-tm 2)
+            win-tm))
+        (if ok-p
+          (if (better-bump? rt 0 rp 2) 0 2)
+          0))
+      (if ok-m
+        (if ok-p
+          (if (better-bump? rm 1 rp 2) 1 2)
+          1)
+        (if ok-p 2 -1)))))
 
-(defn ok-for [active :i64 bumped :i64] :i64
-  ;; active and bumped are 0|1 flags
-  (if (if (= active 1) (if (= bumped 0) 1 0) 0) 1 0))
+(defn ok-for [active :bool bumped :bool] :bool
+  ;; active lane with positive weight and not yet bumped this remainder pass
+  (if active (if bumped false true) false))
 
 (defn seats-record [total :i64 wt :i64 wm :i64 wp :i64 floor :i64]
   [:record :rebalance/lanes [[:text :i64] [:media :i64] [:postproc :i64]]]
-  (let [at (if (weight-pos? wt) 1 0)
-        am (if (weight-pos? wm) 1 0)
-        ap (if (weight-pos? wp) 1 0)
+  (let [at (weight-pos? wt)
+        am (weight-pos? wm)
+        ap (weight-pos? wp)
         n-active (count-active wt wm wp)]
     (if (if (= total 0) 1 (if (= n-active 0) 1 0))
       (record-new [:record :rebalance/lanes
                    [[:text :i64] [:media :i64] [:postproc :i64]]] 0 0 0)
       (let [eff-floor (min2 floor (quot total n-active))
-            bt (if (= at 1) eff-floor 0)
-            bm (if (= am 1) eff-floor 0)
-            bp (if (= ap 1) eff-floor 0)
+            bt (if at eff-floor 0)
+            bm (if am eff-floor 0)
+            bp (if ap eff-floor 0)
             left0 (- total (+ bt (+ bm bp)))
             left (max2 0 left0)
-            sumw (+ (if (= at 1) wt 0)
-                    (+ (if (= am 1) wm 0)
-                       (if (= ap 1) wp 0)))
-            pt (if (= at 1) (* left wt) 0)
-            pm (if (= am 1) (* left wm) 0)
-            pp (if (= ap 1) (* left wp) 0)
-            ft (if (= at 1) (quot pt sumw) 0)
-            fm (if (= am 1) (quot pm sumw) 0)
-            fp (if (= ap 1) (quot pp sumw) 0)
-            rt (if (= at 1) (rem64 pt sumw) 0)
-            rm (if (= am 1) (rem64 pm sumw) 0)
-            rp (if (= ap 1) (rem64 pp sumw) 0)
+            sumw (+ (if at wt 0)
+                    (+ (if am wm 0)
+                       (if ap wp 0)))
+            pt (if at (* left wt) 0)
+            pm (if am (* left wm) 0)
+            pp (if ap (* left wp) 0)
+            ft (if at (quot pt sumw) 0)
+            fm (if am (quot pm sumw) 0)
+            fp (if ap (quot pp sumw) 0)
+            rt (if at (rem64 pt sumw) 0)
+            rm (if am (rem64 pm sumw) 0)
+            rp (if ap (rem64 pp sumw) 0)
             assigned (+ ft (+ fm fp))
             extra (- left assigned)
             rems (record-new [:record :rebalance/lanes
                               [[:text :i64] [:media :i64] [:postproc :i64]]] rt rm rp)
             ;; bump 0
             b0 (if (< 0 extra)
-                 (pick-bump-3 (ok-for at 0) (ok-for am 0) (ok-for ap 0) rems)
+                 (pick-bump-3 (ok-for at false) (ok-for am false) (ok-for ap false) rems)
                  -1)
-            bt0 (if (= b0 0) 1 0)
-            bm0 (if (= b0 1) 1 0)
-            bp0 (if (= b0 2) 1 0)
+            bt0 (if (= b0 0) true false)
+            bm0 (if (= b0 1) true false)
+            bp0 (if (= b0 2) true false)
             b1 (if (< 1 extra)
                  (pick-bump-3 (ok-for at bt0) (ok-for am bm0) (ok-for ap bp0) rems)
                  -1)
-            bt1 (if (= b1 0) 1 bt0)
-            bm1 (if (= b1 1) 1 bm0)
-            bp1 (if (= b1 2) 1 bp0)
+            bt1 (if (= b1 0) true bt0)
+            bm1 (if (= b1 1) true bm0)
+            bp1 (if (= b1 2) true bp0)
             b2 (if (< 2 extra)
                  (pick-bump-3 (ok-for at bt1) (ok-for am bm1) (ok-for ap bp1) rems)
                  -1)
