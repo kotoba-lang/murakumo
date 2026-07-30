@@ -85,16 +85,22 @@
    :param-types [[:option :string] :i64 :i64 :i64]}
   {:name better-target?,
    :params [load-a load-b name-a-before-b],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
-   (if (< load-a load-b) 1 (if (< load-b load-a) 0 name-a-before-b)),
+   (if
+    (< load-a load-b)
+    true
+    (if
+     (< load-b load-a)
+     false
+     (if (= name-a-before-b 1) true false))),
    :param-types [:i64 :i64 :i64]}
   {:name first-of-2,
    :params [load0 load1 name0-before-1],
    :result :i64,
    :effects #{},
-   :body (if (= (better-target? load0 load1 name0-before-1) 1) 0 1),
+   :body (if (better-target? load0 load1 name0-before-1) 0 1),
    :param-types [:i64 :i64 :i64]}
   {:name name-order-record,
    :params [n01 n02 n12],
@@ -140,8 +146,8 @@
      (first-of-2 load0 load1 n01)]
     (if
      (= w01 0)
-     (if (= (better-target? load0 load2 n02) 1) 0 2)
-     (if (= (better-target? load1 load2 n12) 1) 1 2))),
+     (if (better-target? load0 load2 n02) 0 2)
+     (if (better-target? load1 load2 n12) 1 2))),
    :param-types [:i64 :i64 :i64 [:ref :reconcile/name-order]]}
   {:name targets-record,
    :params [first second count],

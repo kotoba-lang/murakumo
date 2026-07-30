@@ -100,8 +100,8 @@
     0
     (quot (* assigned 1000) slots)))
 
-(defn better-fill? [fill0 :i64 fill1 :i64] :i64
-  (if (< fill0 fill1) 1 0))
+(defn better-fill? [fill0 :i64 fill1 :i64] :bool
+  (if (< fill0 fill1) true false))
 
 (defn better-task-score? [fill0 :i64 load0 :i64 _memneg0 :i64
                           fill1 :i64 load1 :i64] :i64
@@ -116,12 +116,12 @@
           0
           2)))))
 
-(defn better-mem? [memneg0 :i64 memneg1 :i64 name-ord0 :i64 name-ord1 :i64] :i64
+(defn better-mem? [memneg0 :i64 memneg1 :i64 name-ord0 :i64 name-ord1 :i64] :bool
   (if (< memneg0 memneg1)
-    1
+    true
     (if (< memneg1 memneg0)
-      0
-      (if (< name-ord0 name-ord1) 1 0))))
+      false
+      (if (< name-ord0 name-ord1) true false))))
 
 (defn wave-of [used :i64 slots :i64] :i64
   (if (< slots 1) 0 (quot used slots)))
@@ -229,10 +229,10 @@
 (defn load-inc-if [load :i64 picked :i64] :i64
   (if (= picked 0) load (+ load 1)))
 
-(defn challenger-wins? [fill-c :i64 load-c :i64 fill-i :i64 load-i :i64] :i64
-  ;; 1 if i better than champ (score lower). Tie → 0 (keep champ).
+(defn challenger-wins? [fill-c :i64 load-c :i64 fill-i :i64 load-i :i64] :bool
+  ;; true if i better than champ (score lower). Tie → false (keep champ).
   (let [b (better-task-score? fill-c load-c 0 fill-i load-i)]
-    (if (= b 0) 1 0)))
+    (if (= b 0) true false)))
 
 (defn assign-task-pick-3 [ok [:ref :task/triple]
                           fill [:ref :task/triple]
@@ -255,13 +255,13 @@
         fc (if (= p01 0) f0 (if (= p01 1) f1 0))
         lc (if (= p01 0) l0 (if (= p01 1) l1 0))
         win2 (if (< p01 0)
-               0
+               false
                (challenger-wins? fc lc f2 l2))]
     (if (< p01 0)
       (if (= ok2 0) -1 2)
       (if (= ok2 0)
         p01
-        (if (= win2 1) 2 p01)))))
+        (if win2 2 p01)))))
 
 (defn apply-task-pick-3 [load [:ref :task/triple] pick :i64] [:ref :task/triple]
   (let [l0 (record-get load :v0)

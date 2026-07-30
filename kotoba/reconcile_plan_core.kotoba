@@ -69,17 +69,17 @@
             (action-place))))
       (action-needs-build))))
 
-(defn better-target? [load-a :i64 load-b :i64 name-a-before-b :i64] :i64
+(defn better-target? [load-a :i64 load-b :i64 name-a-before-b :i64] :bool
   ;; cljc sort-by (juxt load identity): lower load first; ties by name ascending
   ;; name-a-before-b=1 means name(a) <= name(b) so a wins ties
   (if (< load-a load-b)
-    1
+    true
     (if (< load-b load-a)
-      0
-      name-a-before-b)))
+      false
+      (if (= name-a-before-b 1) true false))))
 
 (defn first-of-2 [load0 :i64 load1 :i64 name0-before-1 :i64] :i64
-  (if (= (better-target? load0 load1 name0-before-1) 1) 0 1))
+  (if (better-target? load0 load1 name0-before-1) 0 1))
 
 (defn name-order-record [n01 :i64 n02 :i64 n12 :i64] [:ref :reconcile/name-order]
   (record-new [:ref :reconcile/name-order] n01 n02 n12))
@@ -91,8 +91,8 @@
         n12 (record-get names :n12)
         w01 (first-of-2 load0 load1 n01)]
     (if (= w01 0)
-      (if (= (better-target? load0 load2 n02) 1) 0 2)
-      (if (= (better-target? load1 load2 n12) 1) 1 2))))
+      (if (better-target? load0 load2 n02) 0 2)
+      (if (better-target? load1 load2 n12) 1 2))))
 
 (defn targets-record [first :i64 second :i64 count :i64] [:ref :reconcile/targets]
   (record-new [:ref :reconcile/targets] first second count))

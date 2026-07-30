@@ -34,13 +34,13 @@
    :body (if (< (+ free reclaimed) target) false true)}
   {:name rank-better?,
    :params [atime1 bytes1 atime2 bytes2],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (< atime2 atime1)
-    1
-    (if (< atime1 atime2) 0 (if (< bytes2 bytes1) 1 0)))}
+    true
+    (if (< atime1 atime2) false (if (< bytes2 bytes1) true false)))}
   {:name comfy-evictable?,
    :params [atime-days keep-days],
    :result :bool,

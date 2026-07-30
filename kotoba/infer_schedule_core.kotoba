@@ -69,12 +69,12 @@
     0
     (- 0 free-bytes)))
 
-(defn better-score? [q1 :i64 f1 :i64 q2 :i64 f2 :i64] :i64
+(defn better-score? [q1 :i64 f1 :i64 q2 :i64 f2 :i64] :bool
   (if (< q1 q2)
-    1
+    true
     (if (< q2 q1)
-      0
-      (if (< f1 f2) 1 0))))
+      false
+      (if (< f1 f2) true false))))
 
 (defn holds-warm? [e [:ref :schedule/eligibility]] :bool
   (record-get e :holds-checkpoint))
@@ -143,9 +143,11 @@
   (record-get result :q1))
 
 (defn better-from-queues [q0 :i64 f0 :i64 q1 :i64 f1 :i64] :i64
-  ;; recompute better01 after queue updates (free-bytes fixed per node)
-  (better-score? (score-queue q0) (score-free f0)
-                 (score-queue q1) (score-free f1)))
+  ;; recompute better01 (0/1) after queue updates for better2-record packing
+  (if (better-score? (score-queue q0) (score-free f0)
+                     (score-queue q1) (score-free f1))
+    1
+    0))
 
 (defn triple-record [v0 :i64 v1 :i64 v2 :i64] [:ref :schedule/triple]
   (record-new [:ref :schedule/triple] v0 v1 v2))

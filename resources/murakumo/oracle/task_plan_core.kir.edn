@@ -151,9 +151,9 @@
    :param-types [:i64 :i64]}
   {:name better-fill?,
    :params [fill0 fill1],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (< fill0 fill1) 1 0),
+   :body (if (< fill0 fill1) true false),
    :param-types [:i64 :i64]}
   {:name better-task-score?,
    :params [fill0 load0 _memneg0 fill1 load1],
@@ -170,13 +170,16 @@
    :param-types [:i64 :i64 :i64 :i64 :i64]}
   {:name better-mem?,
    :params [memneg0 memneg1 name-ord0 name-ord1],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (< memneg0 memneg1)
-    1
-    (if (< memneg1 memneg0) 0 (if (< name-ord0 name-ord1) 1 0))),
+    true
+    (if
+     (< memneg1 memneg0)
+     false
+     (if (< name-ord0 name-ord1) true false))),
    :param-types [:i64 :i64 :i64 :i64]}
   {:name wave-of,
    :params [used slots],
@@ -381,12 +384,12 @@
    :param-types [:i64 :i64]}
   {:name challenger-wins?,
    :params [fill-c load-c fill-i load-i],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (let
     [b (better-task-score? fill-c load-c 0 fill-i load-i)]
-    (if (= b 0) 1 0)),
+    (if (= b 0) true false)),
    :param-types [:i64 :i64 :i64 :i64]}
   {:name assign-task-pick-3,
    :params [ok fill load],
@@ -454,11 +457,11 @@
      lc
      (if (= p01 0) l0 (if (= p01 1) l1 0))
      win2
-     (if (< p01 0) 0 (challenger-wins? fc lc f2 l2))]
+     (if (< p01 0) false (challenger-wins? fc lc f2 l2))]
     (if
      (< p01 0)
      (if (= ok2 0) -1 2)
-     (if (= ok2 0) p01 (if (= win2 1) 2 p01)))),
+     (if (= ok2 0) p01 (if win2 2 p01)))),
    :param-types
    [[:ref :task/triple] [:ref :task/triple] [:ref :task/triple]]}
   {:name apply-task-pick-3,

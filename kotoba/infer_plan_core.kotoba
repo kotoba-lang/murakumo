@@ -75,13 +75,13 @@
 
 ;; T5.3 is complete for this module: no base-65536 packing remains.
 
-(defn better-bump? [rem-a :i64 idx-a :i64 rem-b :i64 idx-b :i64] :i64
+(defn better-bump? [rem-a :i64 idx-a :i64 rem-b :i64 idx-b :i64] :bool
   ;; higher rem wins; lower index wins ties (plan.cljc sort key [(- frac) i])
   (if (< rem-b rem-a)
-    1
+    true
     (if (< rem-a rem-b)
-      0
-      (if (< idx-a idx-b) 1 0))))
+      false
+      (if (< idx-a idx-b) true false))))
 
 (defn pick-bump-3 [ok-t :i64 ok-m :i64 ok-p :i64 rems [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]] :i64
   (let [rt (record-get rems :l0)
@@ -92,17 +92,17 @@
         (if (= ok-p 0) -1 2)
         (if (= ok-p 0)
           1
-          (if (= (better-bump? rm 1 rp 2) 1) 1 2)))
+          (if (better-bump? rm 1 rp 2) 1 2)))
       (if (= ok-m 0)
         (if (= ok-p 0)
           0
-          (if (= (better-bump? rt 0 rp 2) 1) 0 2))
-        (let [win-tm (if (= (better-bump? rt 0 rm 1) 1) 0 1)
+          (if (better-bump? rt 0 rp 2) 0 2))
+        (let [win-tm (if (better-bump? rt 0 rm 1) 0 1)
               r-win (if (= win-tm 0) rt rm)
               i-win win-tm]
           (if (= ok-p 0)
             win-tm
-            (if (= (better-bump? r-win i-win rp 2) 1) win-tm 2)))))))
+            (if (better-bump? r-win i-win rp 2) win-tm 2)))))))
 
 (defn ok-for [active :i64 bumped :i64] :i64
   (if (if (= active 1) (if (= bumped 0) 1 0) 0) 1 0))
