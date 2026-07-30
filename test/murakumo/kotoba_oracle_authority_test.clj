@@ -602,13 +602,17 @@
            (oracle/call :task-plan 'slots [-1 4 -1 8 16])))
     (let [exit0 (oracle/option-i64 0)
           none-err (oracle/option-string nil)]
-      (is (= (ir/execute live 'failed? [exit0 0 none-err])
-             (oracle/call :task-plan 'failed? [exit0 0 none-err])))
-      (is (= 0 (oracle/call :task-plan 'failed? [exit0 0 none-err])))
-      (is (= 1 (oracle/call :task-plan 'failed?
-                            [(oracle/option-i64 nil) 0 none-err])))
-      (is (= 1 (oracle/call :task-plan 'failed?
-                            [exit0 0 (oracle/option-string "x")]))))
+      ;; Profile 5: timeout arg is :bool; result is :bool.
+      (is (= (ir/execute live 'failed? [exit0 false none-err])
+             (oracle/call :task-plan 'failed? [exit0 false none-err])))
+      (is (contains? #{false 0}
+                     (oracle/call :task-plan 'failed? [exit0 false none-err])))
+      (is (contains? #{true 1}
+                     (oracle/call :task-plan 'failed?
+                                  [(oracle/option-i64 nil) false none-err])))
+      (is (contains? #{true 1}
+                     (oracle/call :task-plan 'failed?
+                                  [exit0 false (oracle/option-string "x")]))))
     ;; T5.3 + profile 5: eligibility is a bool-field record.
     (let [elig (oracle/record [:record :task/eligibility
                                [[:online :bool] [:labels-ok :bool] [:roles-ok :bool]

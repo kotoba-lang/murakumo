@@ -30,7 +30,7 @@
             unsched-min-mem-prefix]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.task.plan integer + assign core.
-;; failed? uses [:option :i64] exit + [:option :string] error (no has-*).
+;; failed? uses [:option :i64] exit + :bool timeout + [:option :string] error (profile 5).
 ;; Full admit/prepare vector folds stay cljc.
 ;; task-eligible? takes [:ref :task/eligibility] + mem (T5.3 record; profile 5 :bool).
 ;; better-task-score? + wave/slot: pure assign-1 core.
@@ -63,19 +63,20 @@
       (if (< capped 1) 1 capped))
     budget-slots))
 
-(defn failed? [exit [:option :i64] timeout :i64 error [:option :string]] :i64
+(defn failed? [exit [:option :i64] timeout :bool error [:option :string]] :bool
   ;; Product Value ABI v1: optional exit code + optional error (no has-*).
+  ;; Profile 5: timeout is a real :bool; result is :bool (not 0/1 i64).
   ;; failed when error present, timeout, missing exit, or non-zero exit
   (if-some [_ error]
-    1
-    (if (= timeout 1)
-      1
+    true
+    (if timeout
+      true
       (if-some [e exit]
-        (if (= e 0) 0 1)
-        1))))
+        (if (= e 0) false true)
+        true))))
 
-(defn can-retry? [attempt :i64 max-attempts :i64] :i64
-  (if (< attempt max-attempts) 1 0))
+(defn can-retry? [attempt :i64 max-attempts :i64] :bool
+  (if (< attempt max-attempts) true false))
 
 ;; ── T5.3 + profile 5: eligibility is a :bool record ──
 

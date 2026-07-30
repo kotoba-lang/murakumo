@@ -114,9 +114,10 @@
                 {:exit 0 :error "x"}
                 {}]
         call (fn [{:keys [exit timeout? error]}]
-               (let [to (if timeout? 1 0)]
-                 (str "(failed? " (opt-i64-form exit) " " to " "
-                      (opt-str-form error) ")")))
+               ;; Profile 5: timeout is :bool; result is :bool → wrap as 0/1.
+               (let [to (if timeout? "true" "false")]
+                 (str "(if (failed? " (opt-i64-form exit) " " to " "
+                      (opt-str-form error) ") 1 0)")))
         cases (into {} (map-indexed (fn [i r] [(str "f_" i) (call r)]) corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i r] (map-indexed vector corpus)]
@@ -128,7 +129,8 @@
   (let [corpus [[1 2] [2 2] [1 1] [3 5] [0 2]]
         cases (into {} (map-indexed
                         (fn [i [a m]]
-                          [(str "r_" i) (str "(can-retry? " a " " m ")")])
+                          [(str "r_" i)
+                           (str "(if (can-retry? " a " " m ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [a m]] (map-indexed vector corpus)]
