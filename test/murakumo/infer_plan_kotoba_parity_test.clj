@@ -52,13 +52,15 @@
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
-(defn- wired-arg [node]
-  (if-let [w (:wired-limit-bytes node)] w -1))
+(defn- opt-i64-form [n]
+  (if (nil? n)
+    "(option-none-of [:option :i64])"
+    (str "(option-some-of [:option :i64] " (long n) ")")))
 
 (defn- usable-call [node]
   (let [os (or (:os-reserve-bytes node) plan/default-os-reserve)
         head (or (:headroom-bytes node) plan/default-headroom)
-        wired (wired-arg node)]
+        wired (opt-i64-form (:wired-limit-bytes node))]
     (str "(usable-bytes " (:mem-bytes node) " " os " " head " " wired ")")))
 
 (deftest constants-match-plan-cljc
@@ -431,7 +433,8 @@
                              hd plan/default-headroom
                              ub (plan/usable-bytes n)]
                          [[(str "m_" i) (str "(mem-gib-milli " (:mem-bytes n) ")")]
-                          [(str "u_" i) (str "(usable-gib-milli " (:mem-bytes n) " " os " " hd " -1)")]
+                          [(str "u_" i) (str "(usable-gib-milli " (:mem-bytes n) " " os " " hd " "
+                                             (opt-i64-form nil) ")")]
                           [(str "e_" i) (str "(est-gib-milli " ub ")")]]))
                      (range) nodes))
         actual (compile-i64-cases

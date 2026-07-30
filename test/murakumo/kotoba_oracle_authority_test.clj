@@ -404,7 +404,8 @@
       (is (pos? (plan/usable-bytes n)))
       (is (= (plan/usable-bytes n)
              (oracle/call :infer-plan 'usable-bytes
-                          [(* 16 plan/GiB) plan/default-os-reserve plan/default-headroom -1])))))
+                          [(* 16 plan/GiB) plan/default-os-reserve plan/default-headroom
+                           (oracle/option-i64 nil)])))))
   (testing "choose-strategy name via oracle"
     (is (= :pipeline (:strategy (plan/choose-strategy
                                  {:link-gbps 1 :ranks 4

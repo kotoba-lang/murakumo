@@ -58,9 +58,12 @@
 (defn rem64 [a :i64 b :i64] :i64
   (- a (* (quot a b) b)))
 
-(defn usable-bytes [mem :i64 os :i64 head :i64 wired :i64] :i64
+(defn usable-bytes [mem :i64 os :i64 head :i64 wired [:option :i64]] :i64
+  ;; Profile 5: wired is [:option :i64] (none = no wired cap). No -1 sentinel.
   (let [ceil0 (- mem os)
-        ceil1 (if (< wired 0) ceil0 (if (< wired ceil0) wired ceil0))
+        ceil1 (if-some [w wired]
+                (if (< w ceil0) w ceil0)
+                ceil0)
         left (- ceil1 head)]
     (if (< left 0) 0 left)))
 
@@ -493,8 +496,8 @@
   ;; cljc report :mem-gib
   (bytes-to-gib-milli mem-bytes))
 
-(defn usable-gib-milli [mem :i64 os :i64 head :i64 wired :i64] :i64
-  ;; usable-bytes then milli-GiB (arity 5)
+(defn usable-gib-milli [mem :i64 os :i64 head :i64 wired [:option :i64]] :i64
+  ;; usable-bytes then milli-GiB (arity 5). wired is [:option :i64].
   (bytes-to-gib-milli (usable-bytes mem os head wired)))
 
 (defn est-gib-milli [est-bytes :i64] :i64
