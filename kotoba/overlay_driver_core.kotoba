@@ -17,12 +17,12 @@
 (defn blank? [s :string] :bool
   (if (string=? s "") true false))
 
-(defn starts-with? [s :string prefix :string] :i64
+(defn starts-with? [s :string prefix :string] :bool
   (let [n (string-byte-length s)
         p (string-byte-length prefix)]
     (if (< n p)
-      0
-      (if (string=? (string-substring s 0 p) prefix) 1 0))))
+      false
+      (if (string=? (string-substring s 0 p) prefix) true false))))
 
 ;; ── residual scheme / kind / cmd / reason tokens ─────────────────────
 
@@ -47,13 +47,13 @@
 
 (defn endpoint-kind [endpoint :string] :string
   ;; cljc: quic|webrtc|https→webtransport|relay|unknown
-  (if (= (starts-with? endpoint (scheme-quic)) 1)
+  (if (starts-with? endpoint (scheme-quic))
     (kind-quic)
-    (if (= (starts-with? endpoint (scheme-webrtc)) 1)
+    (if (starts-with? endpoint (scheme-webrtc))
       (kind-webrtc)
-      (if (= (starts-with? endpoint (scheme-https)) 1)
+      (if (starts-with? endpoint (scheme-https))
         (kind-webtransport)
-        (if (= (starts-with? endpoint (scheme-relay)) 1)
+        (if (starts-with? endpoint (scheme-relay))
           (kind-relay)
           (kind-unknown))))))
 
@@ -63,17 +63,17 @@
         p (string-byte-length (flag-dash-prefix))]
     (if (< n p)
       ""
-      (if (= (starts-with? flag (flag-dash-prefix)) 1)
+      (if (starts-with? flag (flag-dash-prefix))
         (string-substring flag p n)
         flag))))
 
-(defn command-is-dial? [command :string] :i64
-  (if (string=? command (cmd-dial)) 1 0))
+(defn command-is-dial? [command :string] :bool
+  (if (string=? command (cmd-dial)) true false))
 
-(defn dial-ok-reason [is-dial :i64 missing-count :i64] :string
+(defn dial-ok-reason [is-dial :bool missing-count :i64] :string
   ;; cljc dial-result reasons
-  (if (= is-dial 0)
-    (reason-unknown-command)
+  (if is-dial
     (if (< 0 missing-count)
       (reason-missing-options)
-      (reason-ok))))
+      (reason-ok))
+    (reason-unknown-command)))

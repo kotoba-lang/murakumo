@@ -234,12 +234,12 @@
 
 ;; ── residual parse-flags command/flag tokens + classifiers ───────────
 
-(defn starts-with? [s :string prefix :string] :i64
+(defn starts-with? [s :string prefix :string] :bool
   (let [n (string-byte-length s)
         p (string-byte-length prefix)]
     (if (< n p)
-      0
-      (if (string=? (string-substring s 0 p) prefix) 1 0))))
+      false
+      (if (string=? (string-substring s 0 p) prefix) true false))))
 
 ;; command name tokens (host keyword mapping)
 
@@ -268,78 +268,78 @@
 (defn flag-format-prefix [] :string "--format=")
 (defn flag-auth-key-prefix [] :string "--auth-key=")
 
-(defn is-cmd-plan? [a :string] :i64
-  (if (string=? a (cmd-plan)) 1 0))
+(defn is-cmd-plan? [a :string] :bool
+  (if (string=? a (cmd-plan)) true false))
 
-(defn is-cmd-records? [a :string] :i64
-  (if (string=? a (cmd-records)) 1 0))
+(defn is-cmd-records? [a :string] :bool
+  (if (string=? a (cmd-records)) true false))
 
-(defn is-cmd-routes? [a :string] :i64
-  (if (string=? a (cmd-routes)) 1 0))
+(defn is-cmd-routes? [a :string] :bool
+  (if (string=? a (cmd-routes)) true false))
 
-(defn is-cmd-dial? [a :string] :i64
-  (if (string=? a (cmd-dial)) 1 0))
+(defn is-cmd-dial? [a :string] :bool
+  (if (string=? a (cmd-dial)) true false))
 
-(defn is-cmd-connect? [a :string] :i64
-  (if (string=? a (cmd-connect)) 1 0))
+(defn is-cmd-connect? [a :string] :bool
+  (if (string=? a (cmd-connect)) true false))
 
-(defn is-cmd-relay? [a :string] :i64
-  (if (string=? a (cmd-relay)) 1 0))
+(defn is-cmd-relay? [a :string] :bool
+  (if (string=? a (cmd-relay)) true false))
 
-(defn is-cmd-bootstrap? [a :string] :i64
-  (if (string=? a (cmd-bootstrap)) 1 0))
+(defn is-cmd-bootstrap? [a :string] :bool
+  (if (string=? a (cmd-bootstrap)) true false))
 
 (defn command-token [a :string] :string
   ;; pure command name if a is a known cmd, else ""
-  (if (= (is-cmd-plan? a) 1)
+  (if (is-cmd-plan? a)
     (cmd-plan)
-    (if (= (is-cmd-records? a) 1)
+    (if (is-cmd-records? a)
       (cmd-records)
-      (if (= (is-cmd-routes? a) 1)
+      (if (is-cmd-routes? a)
         (cmd-routes)
-        (if (= (is-cmd-dial? a) 1)
+        (if (is-cmd-dial? a)
           (cmd-dial)
-          (if (= (is-cmd-connect? a) 1)
+          (if (is-cmd-connect? a)
             (cmd-connect)
-            (if (= (is-cmd-relay? a) 1)
+            (if (is-cmd-relay? a)
               (cmd-relay)
-              (if (= (is-cmd-bootstrap? a) 1)
+              (if (is-cmd-bootstrap? a)
                 (cmd-bootstrap)
                 ""))))))))
 
-(defn is-flag-cloud? [a :string] :i64
+(defn is-flag-cloud? [a :string] :bool
   (starts-with? a (flag-cloud-prefix)))
 
-(defn is-flag-fleet? [a :string] :i64
+(defn is-flag-fleet? [a :string] :bool
   (starts-with? a (flag-fleet-prefix)))
 
-(defn is-flag-target? [a :string] :i64
+(defn is-flag-target? [a :string] :bool
   (starts-with? a (flag-target-prefix)))
 
-(defn is-flag-from? [a :string] :i64
+(defn is-flag-from? [a :string] :bool
   (starts-with? a (flag-from-prefix)))
 
-(defn is-flag-to? [a :string] :i64
+(defn is-flag-to? [a :string] :bool
   (starts-with? a (flag-to-prefix)))
 
-(defn is-flag-capability? [a :string] :i64
+(defn is-flag-capability? [a :string] :bool
   (starts-with? a (flag-capability-prefix)))
 
-(defn is-flag-driver? [a :string] :i64
+(defn is-flag-driver? [a :string] :bool
   (starts-with? a (flag-driver-prefix)))
 
-(defn is-flag-format? [a :string] :i64
+(defn is-flag-format? [a :string] :bool
   (starts-with? a (flag-format-prefix)))
 
-(defn is-flag-auth-key? [a :string] :i64
+(defn is-flag-auth-key? [a :string] :bool
   (starts-with? a (flag-auth-key-prefix)))
 
-(defn is-flag-dash? [a :string] :i64
+(defn is-flag-dash? [a :string] :bool
   (starts-with? a (flag-dash-prefix)))
 
-(defn is-positional-target? [a :string] :i64
+(defn is-positional-target? [a :string] :bool
   ;; not a --flag → free target token
-  (if (= (is-flag-dash? a) 1) 0 1))
+  (if (is-flag-dash? a) false true))
 
 (defn flag-value-after [a :string prefix-len :i64] :string
   (let [n (string-byte-length a)]

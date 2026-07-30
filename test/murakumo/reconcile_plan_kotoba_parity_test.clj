@@ -198,10 +198,11 @@
             "ap" (str "(action-is-place? " (kotoba-literal "place") ")")
             "ao" (str "(action-is-place? " (kotoba-literal "satisfied") ")")
             "dw" "(default-watch-seconds)"
-            "fd" (str "(flag-is-dry-run? " (kotoba-literal "--dry-run") ")")
-            "fa" (str "(flag-is-apply? " (kotoba-literal "--apply") ")")
-            "fw" (str "(flag-is-watch? " (kotoba-literal "--watch=5") ")")
-            "fs" (str "(flag-is-snapshot? " (kotoba-literal "--snapshot=x") ")")
+            ;; Profile 5: flag-is-* are :bool
+            "fd" (str "(if (flag-is-dry-run? " (kotoba-literal "--dry-run") ") 1 0)")
+            "fa" (str "(if (flag-is-apply? " (kotoba-literal "--apply") ") 1 0)")
+            "fw" (str "(if (flag-is-watch? " (kotoba-literal "--watch=5") ") 1 0)")
+            "fs" (str "(if (flag-is-snapshot? " (kotoba-literal "--snapshot=x") ") 1 0)")
             "ws" (str "(watch-seconds " (kotoba-literal "--watch") ")")
             "w5" (str "(watch-seconds " (kotoba-literal "--watch=5") ")")})
         s (compile-string-cases

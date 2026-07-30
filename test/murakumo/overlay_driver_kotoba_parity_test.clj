@@ -46,9 +46,9 @@
                  "r" (str "(endpoint-kind " (kotoba-literal "relay://jp/n") ")")
                  "u" (str "(endpoint-kind " (kotoba-literal "ftp://x") ")")
                  "oname" (str "(option-name " (kotoba-literal "--overlay") ")")
-                 "rok" (str "(dial-ok-reason 1 0)")
-                 "rmiss" (str "(dial-ok-reason 1 2)")
-                 "runk" (str "(dial-ok-reason 0 0)")
+                 "rok" (str "(dial-ok-reason true 0)")
+                 "rmiss" (str "(dial-ok-reason true 2)")
+                 "runk" (str "(dial-ok-reason false 0)")
                  "sq" "(scheme-quic)"
                  "sw" "(scheme-webrtc)"
                  "sh" "(scheme-https)"
@@ -87,13 +87,13 @@
     (is (= driver/reason-unknown-command (get actual "ru")))
     (is (= driver/reason-missing-options (get actual "rm"))))
   (let [n (compile-i64-cases
-           ;; Profile 5: blank? is :bool — wrap as 0/1 for compile-i64-cases.
+           ;; Profile 5: blank?/command-is-dial?/starts-with? are :bool.
            {"b0" (str "(if (blank? " (kotoba-literal "") ") 1 0)")
             "b1" (str "(if (blank? " (kotoba-literal "x") ") 1 0)")
-            "cd" (str "(command-is-dial? " (kotoba-literal "dial") ")")
-            "cn" (str "(command-is-dial? " (kotoba-literal "relay") ")")
-            "sw" (str "(starts-with? " (kotoba-literal "quic://a") " "
-                      (kotoba-literal "quic://") ")")})]
+            "cd" (str "(if (command-is-dial? " (kotoba-literal "dial") ") 1 0)")
+            "cn" (str "(if (command-is-dial? " (kotoba-literal "relay") ") 1 0)")
+            "sw" (str "(if (starts-with? " (kotoba-literal "quic://a") " "
+                      (kotoba-literal "quic://") ") 1 0)")})]
     (is (= 1 (get n "b0")))
     (is (= 0 (get n "b1")))
     (is (= 1 (get n "cd")))

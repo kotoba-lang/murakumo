@@ -113,7 +113,7 @@
    :param-types [:i64 [:option :i64]]}
   {:name expired?,
    :params [exp now],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (let
@@ -122,18 +122,18 @@
      (option-some?-of [:option :i64] binding-some__4)
      (let
       [e (option-value-of [:option :i64] binding-some__4 0)]
-      (if (< now e) 0 1))
-     1)),
+      (if (< now e) false true))
+     true)),
    :param-types [[:option :i64] :i64]}
   {:name scope-allows?,
    :params [token-scope required],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (string=? token-scope (scope-all))
-    1
-    (if (string=? token-scope required) 1 0)),
+    true
+    (if (string=? token-scope required) true false)),
    :param-types [:string :string]}
   {:name signing-input,
    :params [payload-seg],
@@ -177,13 +177,13 @@
    :param-types [:string :string]}
   {:name version-ok?,
    :params [v],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (string=? v (version)) 1 0),
+   :body (if (string=? v (version)) true false),
    :param-types [:string]}
   {:name parts-present?,
    :params [v p s],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (let
@@ -204,10 +204,10 @@
            (option-some?-of [:option :string] binding-some__7)
            (let
             [_ (option-value-of [:option :string] binding-some__7 "")]
-            1)
-           0)))
-        0)))
-     0)),
+            true)
+           false)))
+        false)))
+     false)),
    :param-types
    [[:option :string] [:option :string] [:option :string]]}
   {:name ct-scan,

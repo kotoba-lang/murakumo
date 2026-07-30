@@ -142,7 +142,7 @@
                                         (opt-i64-form (:exp cl))
                                         (opt-i64-form nil))]
                          [(str "x_" i)
-                          (str "(expired? " exp-form " " (long now) ")")]))
+                          (str "(if (expired? " exp-form " " (long now) ") 1 0)")]))
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [cl now]] (map-indexed vector corpus)]
@@ -161,7 +161,7 @@
                     (map-indexed
                      (fn [i [s r]]
                        [(str "sa_" i)
-                        (str "(scope-allows? " (kotoba-literal s) " " (kotoba-literal r) ")")])
+                        (str "(if (scope-allows? " (kotoba-literal s) " " (kotoba-literal r) ") 1 0)")])
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [s r]] (map-indexed vector corpus)]

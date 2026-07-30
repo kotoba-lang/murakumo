@@ -482,10 +482,10 @@
   (oracle-str-const 'flag-auth-key-prefix mirror-flag-auth-key-prefix))
 
 (defn- flag1
-  "Oracle 0/1 predicate dual-source."
+  "Oracle :bool predicate dual-source (profile 5)."
   [export a mirror-thunk]
   (try-oracle
-   #(= 1 (oracle/i64->host (o export [(str a)])))
+   #(oracle/bool->host (o export [(str a)]))
    mirror-thunk))
 
 (defn command-token

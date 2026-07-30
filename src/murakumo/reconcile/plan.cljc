@@ -323,27 +323,27 @@
 
 (defn- flag-is-dry-run? [a]
   (try-oracle
-   #(= 1 (oracle/i64->host (o 'flag-is-dry-run? [(str a)])))
+   #(oracle/bool->host (o 'flag-is-dry-run? [(str a)]))
    #(= (str a) flag-dry-run)))
 
 (defn- flag-is-apply? [a]
   (try-oracle
-   #(= 1 (oracle/i64->host (o 'flag-is-apply? [(str a)])))
+   #(oracle/bool->host (o 'flag-is-apply? [(str a)]))
    #(= (str a) flag-apply)))
 
 (defn- flag-is-watch? [a]
   (try-oracle
-   #(= 1 (oracle/i64->host (o 'flag-is-watch? [(str a)])))
+   #(oracle/bool->host (o 'flag-is-watch? [(str a)]))
    #(str/starts-with? (str a) flag-watch)))
 
 (defn- flag-is-snapshot? [a]
   (try-oracle
-   #(= 1 (oracle/i64->host (o 'flag-is-snapshot? [(str a)])))
+   #(oracle/bool->host (o 'flag-is-snapshot? [(str a)]))
    #(str/starts-with? (str a) flag-snapshot-prefix)))
 
 (defn- flag-is-dash? [a]
   (try-oracle
-   #(= 1 (oracle/i64->host (o 'flag-is-dash? [(str a)])))
+   #(oracle/bool->host (o 'flag-is-dash? [(str a)]))
    #(str/starts-with? (str a) flag-dash-prefix)))
 
 (defn parse-flags
