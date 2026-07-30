@@ -24,10 +24,17 @@
             ["node:fs" :as fs]
             [clojure.edn :as edn]
             [clojure.string :as str]
-            [murakumo.dash.state :as state]
-            [murakumo.fleet.inventory :as inv]
-            [murakumo.task.exec :as exec]
-            [murakumo.task.plan :as plan]))
+            [murakumo.kotoba.oracle :as oracle]))
+
+;; T6.4 preload guarantee: cache shipped KIR *before* product-shell requires so
+;; hosts that deleted cljs mirrors (and future deletes) load against oracle only.
+;; resources/ is resolved relative to process.cwd() (run nbb from repo root).
+(oracle/preload! [:dash-state :fleet-inventory :task-plan])
+
+(require '[murakumo.dash.state :as state]
+         '[murakumo.fleet.inventory :as inv]
+         '[murakumo.task.exec :as exec]
+         '[murakumo.task.plan :as plan])
 
 ;; --- probing ----------------------------------------------------------------
 

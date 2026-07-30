@@ -122,3 +122,14 @@
                      (oracle/call id exp [])))))))
       (finally
         (oracle/clear-cache!)))))
+
+(deftest t64-require-ready-and-preload-catalog
+  "T6.4 preload contract: require-ready! / preload-catalog! for entrypoints
+   that delete cljs host mirrors (kekkai pilot)."
+  (oracle/clear-cache!)
+  (is (true? (oracle/require-ready! :kekkai-gate)))
+  (oracle/clear-cache!)
+  (is (= 32 (oracle/preload-catalog!)))
+  (doseq [id (oracle/catalog-ids)]
+    (is (true? (oracle/require-ready! id)) (str "not ready after preload: " id)))
+  (is (= 3 (oracle/preload! [:dash-state :fleet-inventory :task-plan]))))
