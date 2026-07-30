@@ -6,51 +6,63 @@
    :result :bool,
    :effects #{},
    :body
-   (if
-    (record-get
-     [:record
-      :schedule/eligibility
-      [[:has-engine :bool]
-       [:has-checkpoint :bool]
-       [:holds-checkpoint :bool]
-       [:can-fetch :bool]]]
-     e
-     :has-engine)
+   (let
+    [__kotoba_and_3
+     (record-get
+      [:record
+       :schedule/eligibility
+       [[:has-engine :bool]
+        [:has-checkpoint :bool]
+        [:holds-checkpoint :bool]
+        [:can-fetch :bool]]]
+      e
+      :has-engine)]
     (if
-     (if
-      (record-get
-       [:record
-        :schedule/eligibility
-        [[:has-engine :bool]
-         [:has-checkpoint :bool]
-         [:holds-checkpoint :bool]
-         [:can-fetch :bool]]]
-       e
-       :has-checkpoint)
-      (if
-       (record-get
-        [:record
-         :schedule/eligibility
-         [[:has-engine :bool]
-          [:has-checkpoint :bool]
-          [:holds-checkpoint :bool]
-          [:can-fetch :bool]]]
-        e
-        :holds-checkpoint)
-       true
-       (record-get
-        [:record
-         :schedule/eligibility
-         [[:has-engine :bool]
-          [:has-checkpoint :bool]
-          [:holds-checkpoint :bool]
-          [:can-fetch :bool]]]
-        e
-        :can-fetch))
-      true)
-     (if (>= free-bytes min-free) true false)
-     false)
-    false),
+     __kotoba_and_3
+     (let
+      [__kotoba_and_2
+       (let
+        [__kotoba_or_3
+         (if
+          (record-get
+           [:record
+            :schedule/eligibility
+            [[:has-engine :bool]
+             [:has-checkpoint :bool]
+             [:holds-checkpoint :bool]
+             [:can-fetch :bool]]]
+           e
+           :has-checkpoint)
+          false
+          true)]
+        (if
+         __kotoba_or_3
+         __kotoba_or_3
+         (let
+          [__kotoba_or_2
+           (record-get
+            [:record
+             :schedule/eligibility
+             [[:has-engine :bool]
+              [:has-checkpoint :bool]
+              [:holds-checkpoint :bool]
+              [:can-fetch :bool]]]
+            e
+            :holds-checkpoint)]
+          (if
+           __kotoba_or_2
+           __kotoba_or_2
+           (record-get
+            [:record
+             :schedule/eligibility
+             [[:has-engine :bool]
+              [:has-checkpoint :bool]
+              [:holds-checkpoint :bool]
+              [:can-fetch :bool]]]
+            e
+            :can-fetch)))))]
+      (if __kotoba_and_2 (>= free-bytes min-free) __kotoba_and_2))
+     __kotoba_and_3)),
    :param-types [[:ref :schedule/eligibility] :i64 :i64]}
   {:name score-queue,
    :params [queue],
