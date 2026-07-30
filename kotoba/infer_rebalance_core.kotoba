@@ -1,31 +1,39 @@
 (ns infer-rebalance-core
+  (:schemas {;; T5.3 residual: remaining pack families become records.
+             :rebalance/lanes [:record :rebalance/lanes
+                               [[:text :i64] [:media :i64] [:postproc :i64]]]
+             :rebalance/demand [:record :rebalance/demand
+                                [[:text :i64] [:image :i64] [:video :i64]
+                                 [:audio :i64] [:postproc :i64]]]
+             :rebalance/order [:record :rebalance/order
+                               [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]})
   (:export [shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class
             seats-of-text seats-of-media seats-of-postproc seats-total
-            pool-demand-pack
+            pool-demand-record pool-weight-text pool-weight-media pool-weight-postproc
             pool-seats-of-text pool-seats-of-media pool-seats-of-postproc
             classify-run-flags
-            demand-base demand-empty
-            demand-text demand-image demand-video demand-audio demand-postproc
-            demand-inc demand-to-pool-pack
+            demand-empty demand-text demand-image demand-video demand-audio demand-postproc
+            demand-inc demand-to-pool-record
             workers-count seats-equal
             seats-for-online-text seats-for-online-media seats-for-online-postproc
             pipeline-effective-gb node-online?
             move-needed
             rebalance-reason-code rebalance-reason-name
             digit-char nat-str i64-str
-            pool-code pool-name seat-order-pack order-nth
+            pool-code pool-name seat-order-record order-nth
             take-end take-count pipeline-note rebalance-reason-detail]))
 
 ;; Product Value ABI v1 pure oracle — murakumo.infer.rebalance capacity + 3-pool.
 ;; classify-run-flags uses [:option :string] unit/kind tokens (no has-*).
 ;; largest-remainder seat apportionment (map-fold product vertical).
 ;; rebalance moves / capacity vector filters stay cljc.
-;; pool-demand-pack: class counts → packed pool weights (map-fold).
-;; pool-seats-of-*: total + packed weights + floor → one seat lane (compose LR).
+;; pool-demand-record: class counts → [:ref :rebalance/lanes] weights.
+;; pool-seats-of-*: total + pool weights record + floor → one seat lane.
 ;; classify-run-flags: one-run class tag for demand-from-runs building block.
-;; demand-*: class-count pack (base 4096, 5 lanes) + demand-inc reduce step
-;;   + demand-to-pool-pack → pool-demand-pack (demand-from-runs fold core).
-;; seat-order-pack / take-end: pure assignment order for node-id slice (vectors stay host).
+;; demand-*: [:ref :rebalance/demand] class counts + demand-inc reduce step
+;;   + demand-to-pool-record → pool weights (demand-from-runs fold core).
+;; seat-order-record / take-end: pure assignment order for node-id slice.
+;; T5.3 complete for this module: no base-N packing remains.
 
 ;;
 ;; seats-record: integer form of cljc `largest-remainder` for the
@@ -64,27 +72,9 @@
 ;; crosses the host boundary and the host makes 3 calls instead of 1 pack call
 ;; plus 3 unpack calls.
 ;;
-;; `lane-base` / `pack3` / `lane-0..2` survive as *internal* helpers for the
-;; pool-weight pack (`pool-demand-pack` / `demand-to-pool-pack`), which is a
-;; separate lane and a separate slice — see the note above that function.
-
-(defn lane-base [] :i64 65536)
-
 (defn rem64 [a :i64 b :i64] :i64
   (- a (* (quot a b) b)))
 
-(defn lane-0 [packed :i64] :i64
-  (rem64 packed (lane-base)))
-
-(defn lane-1 [packed :i64] :i64
-  (rem64 (quot packed (lane-base)) (lane-base)))
-
-(defn lane-2 [packed :i64] :i64
-  (quot packed (* (lane-base) (lane-base))))
-
-(defn pack3 [t :i64 m :i64 p :i64] :i64
-  (let [b (lane-base)]
-    (+ t (+ (* m b) (* p (* b b))))))
 
 (defn weight-pos? [w :i64] :i64
   (if (< 0 w) 1 0))
@@ -218,25 +208,33 @@
      (+ (seats-of-media total wt wm wp floor)
         (seats-of-postproc total wt wm wp floor))))
 
-(defn pool-demand-pack [text :i64 image :i64 video :i64 audio :i64 postproc :i64] :i64
+(defn pool-demand-record [text :i64 image :i64 video :i64 audio :i64 postproc :i64]
+  [:ref :rebalance/lanes]
   ;; cljc pool-demand: text→text-pool; image+video+audio→media-pool; postproc→postproc-pool
   (let [wt text
         wm (+ image (+ video audio))
         wp postproc]
-    (pack3 wt wm wp)))
+    (record-new [:record :rebalance/lanes [[:text :i64] [:media :i64] [:postproc :i64]]] wt wm wp)))
 
-;; Compose the seat apportionment over the (still packed) pool-weight lane.
-;; Scalar projections only — the seat pack is gone; the pool-weight pack is the
-;; next slice.
+(defn pool-weight-text [w [:ref :rebalance/lanes]] :i64
+  (record-get w :text))
 
-(defn pool-seats-of-text [total :i64 pool-pack :i64 floor :i64] :i64
-  (seats-of-text total (lane-0 pool-pack) (lane-1 pool-pack) (lane-2 pool-pack) floor))
+(defn pool-weight-media [w [:ref :rebalance/lanes]] :i64
+  (record-get w :media))
 
-(defn pool-seats-of-media [total :i64 pool-pack :i64 floor :i64] :i64
-  (seats-of-media total (lane-0 pool-pack) (lane-1 pool-pack) (lane-2 pool-pack) floor))
+(defn pool-weight-postproc [w [:ref :rebalance/lanes]] :i64
+  (record-get w :postproc))
 
-(defn pool-seats-of-postproc [total :i64 pool-pack :i64 floor :i64] :i64
-  (seats-of-postproc total (lane-0 pool-pack) (lane-1 pool-pack) (lane-2 pool-pack) floor))
+;; Compose the seat apportionment over pool-weight lanes (record).
+
+(defn pool-seats-of-text [total :i64 w [:ref :rebalance/lanes] floor :i64] :i64
+  (seats-of-text total (record-get w :text) (record-get w :media) (record-get w :postproc) floor))
+
+(defn pool-seats-of-media [total :i64 w [:ref :rebalance/lanes] floor :i64] :i64
+  (seats-of-media total (record-get w :text) (record-get w :media) (record-get w :postproc) floor))
+
+(defn pool-seats-of-postproc [total :i64 w [:ref :rebalance/lanes] floor :i64] :i64
+  (seats-of-postproc total (record-get w :text) (record-get w :media) (record-get w :postproc) floor))
 
 (defn classify-run-flags [images [:option :string]
                           video [:option :string]
@@ -258,68 +256,55 @@
             1
             0))))))
 
-;; ── demand-from-runs class pack (5 lanes @ base 4096) ────────────────
-;; pack = text + image*B + video*B^2 + audio*B^3 + postproc*B^4
+;; ── demand-from-runs class counts (record, not base-4096 pack) ───────
 
-(defn demand-base [] :i64 4096)
+(defn demand-empty [] [:ref :rebalance/demand]
+  (record-new [:record :rebalance/demand [[:text :i64] [:image :i64] [:video :i64] [:audio :i64] [:postproc :i64]]] 0 0 0 0 0))
 
-(defn demand-empty [] :i64 0)
+(defn demand-text [d [:ref :rebalance/demand]] :i64
+  (record-get d :text))
 
-(defn demand-text [pack :i64] :i64
-  (rem64 pack (demand-base)))
+(defn demand-image [d [:ref :rebalance/demand]] :i64
+  (record-get d :image))
 
-(defn demand-image [pack :i64] :i64
-  (let [b (demand-base)]
-    (rem64 (quot pack b) b)))
+(defn demand-video [d [:ref :rebalance/demand]] :i64
+  (record-get d :video))
 
-(defn demand-video [pack :i64] :i64
-  (let [b (demand-base)
-        b2 (* b b)]
-    (rem64 (quot pack b2) b)))
+(defn demand-audio [d [:ref :rebalance/demand]] :i64
+  (record-get d :audio))
 
-(defn demand-audio [pack :i64] :i64
-  (let [b (demand-base)
-        b3 (* b (* b b))]
-    (rem64 (quot pack b3) b)))
+(defn demand-postproc [d [:ref :rebalance/demand]] :i64
+  (record-get d :postproc))
 
-(defn demand-postproc [pack :i64] :i64
-  (let [b (demand-base)
-        b4 (* (* b b) (* b b))]
-    (quot pack b4)))
+(defn demand-record [t :i64 i :i64 v :i64 a :i64 p :i64] [:ref :rebalance/demand]
+  (record-new [:record :rebalance/demand [[:text :i64] [:image :i64] [:video :i64] [:audio :i64] [:postproc :i64]]] t i v a p))
 
-(defn demand-pack5 [t :i64 i :i64 v :i64 a :i64 p :i64] :i64
-  (let [b (demand-base)
-        b2 (* b b)
-        b3 (* b b2)
-        b4 (* b b3)]
-    (+ t (+ (* i b) (+ (* v b2) (+ (* a b3) (* p b4)))))))
-
-(defn demand-inc [pack :i64 class-code :i64] :i64
+(defn demand-inc [d [:ref :rebalance/demand] class-code :i64] [:ref :rebalance/demand]
   ;; one reduce step of demand-from-runs given classify-run-flags code
-  (let [t (demand-text pack)
-        i (demand-image pack)
-        v (demand-video pack)
-        a (demand-audio pack)
-        p (demand-postproc pack)]
+  (let [t (record-get d :text)
+        i (record-get d :image)
+        v (record-get d :video)
+        a (record-get d :audio)
+        p (record-get d :postproc)]
     (if (= class-code 1)
-      (demand-pack5 (+ t 1) i v a p)
+      (demand-record (+ t 1) i v a p)
       (if (= class-code 2)
-        (demand-pack5 t (+ i 1) v a p)
+        (demand-record t (+ i 1) v a p)
         (if (= class-code 3)
-          (demand-pack5 t i (+ v 1) a p)
+          (demand-record t i (+ v 1) a p)
           (if (= class-code 4)
-            (demand-pack5 t i v (+ a 1) p)
+            (demand-record t i v (+ a 1) p)
             (if (= class-code 5)
-              (demand-pack5 t i v a (+ p 1))
-              pack)))))))
+              (demand-record t i v a (+ p 1))
+              d)))))))
 
-(defn demand-to-pool-pack [pack :i64] :i64
+(defn demand-to-pool-record [d [:ref :rebalance/demand]] [:ref :rebalance/lanes]
   ;; cljc pool-demand after demand-from-runs
-  (pool-demand-pack (demand-text pack)
-                    (demand-image pack)
-                    (demand-video pack)
-                    (demand-audio pack)
-                    (demand-postproc pack)))
+  (pool-demand-record (record-get d :text)
+                      (record-get d :image)
+                      (record-get d :video)
+                      (record-get d :audio)
+                      (record-get d :postproc)))
 
 ;; ── placement pure layer (target-allocation / rebalance hysteresis) ──
 
@@ -330,14 +315,14 @@
 ;; pure core of target-allocation seat step (node id assignment stays cljc).
 ;; T5.3: three scalar lanes instead of one seat pack.
 
-(defn seats-for-online-text [online :i64 pool-pack :i64 floor :i64] :i64
-  (pool-seats-of-text (workers-count online) pool-pack floor))
+(defn seats-for-online-text [online :i64 w [:ref :rebalance/lanes] floor :i64] :i64
+  (pool-seats-of-text (workers-count online) w floor))
 
-(defn seats-for-online-media [online :i64 pool-pack :i64 floor :i64] :i64
-  (pool-seats-of-media (workers-count online) pool-pack floor))
+(defn seats-for-online-media [online :i64 w [:ref :rebalance/lanes] floor :i64] :i64
+  (pool-seats-of-media (workers-count online) w floor))
 
-(defn seats-for-online-postproc [online :i64 pool-pack :i64 floor :i64] :i64
-  (pool-seats-of-postproc (workers-count online) pool-pack floor))
+(defn seats-for-online-postproc [online :i64 w [:ref :rebalance/lanes] floor :i64] :i64
+  (pool-seats-of-postproc (workers-count online) w floor))
 
 (defn seats-equal [a :i64 b :i64] :i64
   ;; hysteresis: seat allocation unchanged?
@@ -414,24 +399,22 @@
         0
         (if (< ia ib) 1 0)))))
 
-(defn seat-order-pack [st :i64 sm :i64 sp :i64] :i64
-  ;; pack permutation of pool codes 0,1,2 as a0 + a1*4 + a2*16 (desc seats)
-  ;; bubble-sort three indices with before-pool?
+(defn seat-order-record [st :i64 sm :i64 sp :i64] [:ref :rebalance/order]
+  ;; permutation of pool codes 0,1,2 (desc seats); ties → lower index first
   (let [p0 (if (= (before-pool? 0 1 st sm sp) 1) 0 1)
         p1 (if (= (before-pool? 0 1 st sm sp) 1) 1 0)
-        ;; insert 2 after comparing with p1 then p0
         q1 (if (= (before-pool? p1 2 st sm sp) 1) p1 2)
         q2 (if (= (before-pool? p1 2 st sm sp) 1) 2 p1)
         r0 (if (= (before-pool? p0 q1 st sm sp) 1) p0 q1)
         r1 (if (= (before-pool? p0 q1 st sm sp) 1) q1 p0)]
-    (+ r0 (+ (* r1 4) (* q2 16)))))
+    (record-new [:record :rebalance/order [[:i0 :i64] [:i1 :i64] [:i2 :i64]]] r0 r1 q2)))
 
-(defn order-nth [order-pack :i64 n :i64] :i64
+(defn order-nth [ord [:ref :rebalance/order] n :i64] :i64
   (if (= n 0)
-    (rem64 order-pack 4)
+    (record-get ord :i0)
     (if (= n 1)
-      (rem64 (quot order-pack 4) 4)
-      (quot order-pack 16))))
+      (record-get ord :i1)
+      (record-get ord :i2))))
 
 (defn take-end [start :i64 k :i64 remaining :i64] :i64
   ;; exclusive end index for (take k rem) from start within [0, remaining)
