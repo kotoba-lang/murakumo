@@ -24,6 +24,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── scalars (oracle SSoT) ──────────────────────────────────────────────
 
 (def event-version
@@ -131,9 +137,14 @@
     (reject :invalid-placement "Component CID and node must be bounded identifiers"
             {:component-cid component-cid :node node}))
   (let [prev (long (or (get-in state [:epochs component-cid]) 0))
-        epoch (oracle/i64->host (o 'place-epoch [(oracle/as-i64 prev)]))
+        epoch (oracle/i64->host
+               (o-record 'place-epoch
+                         {:prev prev}
+                         [[:prev :i64]]))
         seq' (oracle/i64->host
-              (o 'next-sequence [(oracle/as-i64 (:sequence state))]))
+              (o-record 'next-sequence
+                        {:sequence (:sequence state)}
+                        [[:sequence :i64]]))
         kind (keyword (o 'event-kind [op-place]))
         state' (-> state
                    (assoc-in [:epochs component-cid] epoch)
@@ -146,15 +157,20 @@
 
   Advancing even when no placement is currently observed is intentional:
   delayed or partitioned hosts holding an older lease must still fence.
-  Epoch/sequence via kotoba (required)."
+  Epoch/sequence via kotoba (required). T5.2: call-record for epoch/seq."
   [state component-cid]
   (when-not (identifier? component-cid)
     (reject :invalid-component "Component CID must be a bounded identifier"
             {:component-cid component-cid}))
   (let [prev (long (or (get-in state [:epochs component-cid]) 0))
-        epoch (oracle/i64->host (o 'revoke-epoch [(oracle/as-i64 prev)]))
+        epoch (oracle/i64->host
+               (o-record 'revoke-epoch
+                         {:prev prev}
+                         [[:prev :i64]]))
         seq' (oracle/i64->host
-              (o 'next-sequence [(oracle/as-i64 (:sequence state))]))
+              (o-record 'next-sequence
+                        {:sequence (:sequence state)}
+                        [[:sequence :i64]]))
         kind (keyword (o 'event-kind [op-revoke]))
         state' (-> state
                    (assoc-in [:epochs component-cid] epoch)

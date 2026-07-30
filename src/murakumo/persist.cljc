@@ -22,6 +22,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def repo-authority
@@ -76,19 +82,25 @@
 
 (defn repo-uri
   "Build the AT URI for an append-only murakumo record.
-   Kotoba `repo-uri` (required)."
+   Kotoba `repo-uri` (required). T5.2: structural map → call-record."
   [collection rkey]
-  (o 'repo-uri [(str collection) (str rkey)]))
+  (o-record 'repo-uri
+            {:collection collection :rkey rkey}
+            [[:collection :string] [:rkey :string]]))
 
 (defn snapshot-rkey
-  "Kotoba `snapshot-rkey` (required)."
+  "Kotoba `snapshot-rkey` (required). T5.2: structural map → call-record."
   [millis sequence-number]
-  (o 'snapshot-rkey [(oracle/as-i64 millis) (oracle/as-i64 sequence-number)]))
+  (o-record 'snapshot-rkey
+            {:millis millis :sequence-number sequence-number}
+            [[:millis :i64] [:sequence-number :i64]]))
 
 (defn reconcile-rkey
-  "Kotoba `reconcile-rkey` (required)."
+  "Kotoba `reconcile-rkey` (required). T5.2: structural map → call-record."
   [millis sequence-number]
-  (o 'reconcile-rkey [(oracle/as-i64 millis) (oracle/as-i64 sequence-number)]))
+  (o-record 'reconcile-rkey
+            {:millis millis :sequence-number sequence-number}
+            [[:millis :i64] [:sequence-number :i64]]))
 
 (defn repo-write-envelope
   "Build the pure repo.write payload before host-side JSON encoding.
@@ -134,9 +146,11 @@
 
 (defn repo-write-url
   "Local forwarded endpoint for kotoba atproto repo.write.
-   Kotoba `repo-write-url` (required)."
+   Kotoba `repo-write-url` (required). T5.2: structural map → call-record."
   [local-port]
-  (o 'repo-write-url [(oracle/as-i64 local-port)]))
+  (o-record 'repo-write-url
+            {:local-port local-port}
+            [[:local-port :i64]]))
 
 (defn repo-write-curl-argv
   "argv for POSTing a repo.write envelope through a local forward.
