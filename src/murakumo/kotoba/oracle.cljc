@@ -246,11 +246,38 @@
   hand-built arity vectors when the natural host shape is a map/record
   (T5.1 structural-args policy).
 
-  Non-claim: does **not** yet pass a native guest `[:record …]` wire value —
-  that needs a KIR record-arg pilot (T5.2 remainder / T5.3). Positional
-  projection is the honest first bridge."
+  For a native guest `[:record …]` wire value use `record` (below) — measured
+  working on the KIR path 2026-07-29; this positional projection stays for
+  exports whose parameters are plain scalars."
   [oracle-id export host-map field-specs]
   (call oracle-id export (map->args host-map field-specs)))
+
+(defn record
+  "Build a native guest record argument for `call` (T5.2 remainder / T5.3).
+
+  `schema` is the guest descriptor `[:record :ns/name [[:field type] …]]` and
+  `host-map` supplies each declared field. The wire shape is the descriptor
+  followed by the field values in declared order — the same shape `ir/execute`
+  returns for a record result, so a value read out of one export can be passed
+  straight into another.
+
+  Measured on the KIR path (2026-07-29): a hand-built vector is accepted, and a
+  value of the wrong shape is rejected with `value is not the declared record
+  type`. This replaces the bit-packing that `max-parameters` 5 used to force —
+  a record counts as one argument no matter how many fields it carries."
+  [schema host-map]
+  (let [fields (nth schema 2)]
+    (into [schema]
+          (map (fn [[field field-type]]
+                 (let [v (get host-map field)]
+                   (when-not (contains? host-map field)
+                     (throw (ex-info "record field missing for guest schema"
+                                     {:schema (second schema) :field field})))
+                   (case field-type
+                     :i64 (as-i64 v)
+                     :string (str v)
+                     v))))
+          fields)))
 
 (defn catalog-ids
   "Known oracle ids shipped as product-shell artifacts."

@@ -38,9 +38,14 @@
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
-(defn- pack-flags
-  "Bit-pack set-membership into guest flags:
-   1 has-engine | 2 has-checkpoint | 4 holds-checkpoint | 8 can-fetch."
+(def ^:private eligibility-literal
+  "T5.3: the guest eligibility record descriptor, as source text."
+  (str "[:record :schedule/eligibility "
+       "[[:has-engine :i64] [:has-checkpoint :i64] "
+       "[:holds-checkpoint :i64] [:can-fetch :i64]]]"))
+
+(defn- eligibility-record-literal
+  "Set-membership as a record literal instead of four packed bits."
   [node model]
   (let [engine (:model/engine model)
         ckpt (:model/checkpoint model)
@@ -50,13 +55,11 @@
         has-ckpt (if (nil? ckpt) 0 1)
         holds (if (and ckpt (contains? checkpoints ckpt)) 1 0)
         can-fetch (if (false? (:node/can-fetch? node)) 0 1)]
-    (+ has-engine
-       (* 2 has-ckpt)
-       (* 4 holds)
-       (* 8 can-fetch))))
+    (str "(record-new " eligibility-literal " "
+         has-engine " " has-ckpt " " holds " " can-fetch ")")))
 
 (defn- eligible-call [node model]
-  (str "(eligible? " (pack-flags node model) " "
+  (str "(eligible? " (eligibility-record-literal node model) " "
        (long (or (:free-bytes node) 0)) " "
        (long (or (:model/min-free-bytes model) 0)) ")"))
 (defn- node

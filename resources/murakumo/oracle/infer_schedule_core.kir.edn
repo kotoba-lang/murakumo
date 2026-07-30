@@ -7,32 +7,66 @@
    :effects #{},
    :body (- a (* (quot a b) b)),
    :param-types [:i64 :i64]}
-  {:name bit?,
-   :params [flags mask],
-   :result :i64,
-   :effects #{},
-   :body (if (= 0 (rem64 (quot flags mask) 2)) 0 1),
-   :param-types [:i64 :i64]}
   {:name eligible?,
-   :params [flags free-bytes min-free],
+   :params [e free-bytes min-free],
    :result :i64,
    :effects #{},
    :body
    (let
     [has-engine
-     (bit? flags 1)
+     (record-get
+      [:record
+       :schedule/eligibility
+       [[:has-engine :i64]
+        [:has-checkpoint :i64]
+        [:holds-checkpoint :i64]
+        [:can-fetch :i64]]]
+      e
+      :has-engine)
      has-ckpt
-     (bit? flags 2)
+     (record-get
+      [:record
+       :schedule/eligibility
+       [[:has-engine :i64]
+        [:has-checkpoint :i64]
+        [:holds-checkpoint :i64]
+        [:can-fetch :i64]]]
+      e
+      :has-checkpoint)
      holds
-     (bit? flags 4)
+     (record-get
+      [:record
+       :schedule/eligibility
+       [[:has-engine :i64]
+        [:has-checkpoint :i64]
+        [:holds-checkpoint :i64]
+        [:can-fetch :i64]]]
+      e
+      :holds-checkpoint)
      can-fetch
-     (bit? flags 8)
+     (record-get
+      [:record
+       :schedule/eligibility
+       [[:has-engine :i64]
+        [:has-checkpoint :i64]
+        [:holds-checkpoint :i64]
+        [:can-fetch :i64]]]
+      e
+      :can-fetch)
      ckpt-ok
      (if (= has-ckpt 0) 1 (if (= holds 1) 1 (if (= can-fetch 1) 1 0)))
      mem-ok
      (if (< free-bytes min-free) 0 1)]
     (if (= has-engine 0) 0 (if (= ckpt-ok 0) 0 mem-ok))),
-   :param-types [:i64 :i64 :i64]}
+   :param-types
+   [[:record
+     :schedule/eligibility
+     [[:has-engine :i64]
+      [:has-checkpoint :i64]
+      [:holds-checkpoint :i64]
+      [:can-fetch :i64]]]
+    :i64
+    :i64]}
   {:name score-queue,
    :params [queue],
    :result :i64,
@@ -52,11 +86,26 @@
    :body (if (< q1 q2) 1 (if (< q2 q1) 0 (if (< f1 f2) 1 0))),
    :param-types [:i64 :i64 :i64 :i64]}
   {:name holds-warm?,
-   :params [flags],
+   :params [e],
    :result :i64,
    :effects #{},
-   :body (bit? flags 4),
-   :param-types [:i64]}
+   :body
+   (record-get
+    [:record
+     :schedule/eligibility
+     [[:has-engine :i64]
+      [:has-checkpoint :i64]
+      [:holds-checkpoint :i64]
+      [:can-fetch :i64]]]
+    e
+    :holds-checkpoint),
+   :param-types
+   [[:record
+     :schedule/eligibility
+     [[:has-engine :i64]
+      [:has-checkpoint :i64]
+      [:holds-checkpoint :i64]
+      [:can-fetch :i64]]]]}
   {:name prefer-warm-then-score,
    :params [warm0 warm1 better01],
    :result :i64,
