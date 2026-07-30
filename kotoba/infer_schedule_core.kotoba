@@ -10,9 +10,12 @@
              ;; 2-node assign result
              :schedule/assign2 [:record :schedule/assign2
                                 [[:code :i64] [:q0 :i64] [:q1 :i64]]]
-             ;; 3-node queue / ok / warm triple (same shape, different roles)
+             ;; 3-node queue triple (counts only — not flags)
              :schedule/triple [:record :schedule/triple
                                [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+             ;; 3-node ok / warm flag triple (profile 5 bool lanes)
+             :schedule/flags3 [:record :schedule/flags3
+                               [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
              ;; 3-node pairwise better flags (01, 02, 12) — profile 5 bool
              :schedule/better3 [:record :schedule/better3
                                 [[:b01 :bool] [:b02 :bool] [:b12 :bool]]]
@@ -27,6 +30,7 @@
             assign-result-pick assign-result-q0 assign-result-q1
             better-from-queues
             triple-record triple-v0 triple-v1 triple-v2
+            flags3-record flags3-v0 flags3-v1 flags3-v2
             better3-record pick-code-3
             assign-pick-3 apply-pick-3
             assign-step-3 assign-step-3-code
@@ -40,8 +44,9 @@
 ;; pick-fold-step: host-fold tournament for n>3 (0=none, 1=take challenger, 2=keep champ).
 ;; queue-inc-if: host updates one node's queue after pick.
 ;; T5.3 (schedule): eligibility is a named record (flags no longer bit-packed).
-;; T5.3 (schedule assign): queue/ok/warm/better triples and assign results are
+;; T5.3 (schedule assign): queue i64 triple + ok/warm flags3 + better3 are
 ;; named records — base-65536 pack3 is deleted from this module.
+;; Profile 5: flags3 holds bool ok/warm lanes (not multi-role i64 triple).
 ;; score is two i64 keys (queue, -free); better-score? compares lexicographically.
 ;; T5.3 complete for this module: no base-65536 packing remains.
 ;; Profile 5: eligibility fields and eligible?/holds-warm? are :bool (ADR 0191).
@@ -148,6 +153,7 @@
                  (score-queue q1) (score-free f1)))
 
 (defn triple-record [v0 :i64 v1 :i64 v2 :i64] [:ref :schedule/triple]
+  ;; queue / free / other i64 lanes only — use flags3-record for ok/warm
   (record-new [:ref :schedule/triple] v0 v1 v2))
 
 (defn triple-v0 [t [:ref :schedule/triple]] :i64
@@ -157,6 +163,18 @@
   (record-get t :v1))
 
 (defn triple-v2 [t [:ref :schedule/triple]] :i64
+  (record-get t :v2))
+
+(defn flags3-record [v0 :bool v1 :bool v2 :bool] [:ref :schedule/flags3]
+  (record-new [:ref :schedule/flags3] v0 v1 v2))
+
+(defn flags3-v0 [t [:ref :schedule/flags3]] :bool
+  (record-get t :v0))
+
+(defn flags3-v1 [t [:ref :schedule/flags3]] :bool
+  (record-get t :v1))
+
+(defn flags3-v2 [t [:ref :schedule/flags3]] :bool
   (record-get t :v2))
 
 (defn better3-record [b01 :bool b02 :bool b12 :bool] [:ref :schedule/better3]
@@ -170,17 +188,16 @@
   ;; true if a strictly better score than b
   (better-from-queues q-a f-a q-b f-b))
 
-(defn assign-pick-3 [ok [:ref :schedule/triple]
-                     warm [:ref :schedule/triple]
+(defn assign-pick-3 [ok [:ref :schedule/flags3]
+                     warm [:ref :schedule/flags3]
                      better [:ref :schedule/better3]] :i64
   ;; → pick idx −1|0|1|2
-  (let [;; ok/warm triples are still 0/1 i64 lanes; project to :bool for pick helpers
-        ok0 (if (= (record-get ok :v0) 1) true false)
-        ok1 (if (= (record-get ok :v1) 1) true false)
-        ok2 (if (= (record-get ok :v2) 1) true false)
-        warm0 (if (= (record-get warm :v0) 1) true false)
-        warm1 (if (= (record-get warm :v1) 1) true false)
-        warm2 (if (= (record-get warm :v2) 1) true false)
+  (let [ok0 (record-get ok :v0)
+        ok1 (record-get ok :v1)
+        ok2 (record-get ok :v2)
+        warm0 (record-get warm :v0)
+        warm1 (record-get warm :v1)
+        warm2 (record-get warm :v2)
         better01 (record-get better :b01)
         better02 (record-get better :b02)
         better12 (record-get better :b12)
@@ -204,8 +221,8 @@
     (record-new [:ref :schedule/triple] nq0 nq1 nq2)))
 
 (defn assign-step-3 [q [:ref :schedule/triple]
-                     ok [:ref :schedule/triple]
-                     warm [:ref :schedule/triple]
+                     ok [:ref :schedule/flags3]
+                     warm [:ref :schedule/flags3]
                      better [:ref :schedule/better3]] [:ref :schedule/assign3]
   ;; one job pure assign for 3 nodes → named result record
   (let [p (assign-pick-3 ok warm better)

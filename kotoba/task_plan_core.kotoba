@@ -1,7 +1,10 @@
 (ns task-plan-core
   (:schemas {;; T5.3: assign pack families become named records (no base-65536).
              :task/pair [:record :task/pair [[:a :i64] [:b :i64]]]
+             ;; fill / load counts only
              :task/triple [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
+             ;; ok eligibility flags (profile 5 bool lanes)
+             :task/flags3 [:record :task/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
              :task/assign2 [:record :task/assign2
                             [[:code :i64] [:load0 :i64] [:load1 :i64]]]
              :task/assign3 [:record :task/assign3
@@ -20,7 +23,8 @@
             assign-task-2-code assign-task-2-load0 assign-task-2-load1
             attempt-next exclude-append-marker
             pick-task-fold-step load-inc-if challenger-wins?
-            triple-record assign-task-pick-3 apply-task-pick-3 assign-task-step-3
+            triple-record flags3-record
+            assign-task-pick-3 apply-task-pick-3 assign-task-step-3
             assign-task-3-code assign-task-3-load0 assign-task-3-load1 assign-task-3-load2
             nearest-rank-idx summary-retried speedup-milli
             max2 min2 clamp-nonneg
@@ -178,7 +182,11 @@
   (record-new [:ref :task/pair] a b))
 
 (defn triple-record [v0 :i64 v1 :i64 v2 :i64] [:ref :task/triple]
+  ;; fill / load counts only — use flags3-record for ok eligibility
   (record-new [:ref :task/triple] v0 v1 v2))
+
+(defn flags3-record [v0 :bool v1 :bool v2 :bool] [:ref :task/flags3]
+  (record-new [:ref :task/flags3] v0 v1 v2))
 
 (defn pick-task-idx-2 [ok0 :bool ok1 :bool fill0 :i64 fill1 :i64
                        loads [:ref :task/pair]] :i64
@@ -235,13 +243,12 @@
   (let [b (task-score-code fill-c load-c 0 fill-i load-i)]
     (if (= b 0) true false)))
 
-(defn assign-task-pick-3 [ok [:ref :task/triple]
+(defn assign-task-pick-3 [ok [:ref :task/flags3]
                           fill [:ref :task/triple]
                           load [:ref :task/triple]] :i64
-  (let [;; ok triple is 0/1 i64 lanes; project to :bool for score helpers
-        ok0 (if (= (record-get ok :v0) 1) true false)
-        ok1 (if (= (record-get ok :v1) 1) true false)
-        ok2 (if (= (record-get ok :v2) 1) true false)
+  (let [ok0 (record-get ok :v0)
+        ok1 (record-get ok :v1)
+        ok2 (record-get ok :v2)
         f0 (record-get fill :v0)
         f1 (record-get fill :v1)
         f2 (record-get fill :v2)
@@ -275,7 +282,7 @@
     (record-new [:ref :task/triple] n0 n1 n2)))
 
 (defn assign-task-step-3 [load [:ref :task/triple]
-                          ok [:ref :task/triple]
+                          ok [:ref :task/flags3]
                           fill [:ref :task/triple]] [:ref :task/assign3]
   (let [p (assign-task-pick-3 ok fill load)
         code (if (< p 0) 0 (+ p 1))

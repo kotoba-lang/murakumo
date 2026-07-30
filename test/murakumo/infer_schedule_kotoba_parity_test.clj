@@ -16,6 +16,7 @@
                         "better2-record assign-step-2 "
                         "assign-result-pick assign-result-q0 assign-result-q1 "
                         "better-from-queues triple-record triple-v0 triple-v1 triple-v2 "
+                        "flags3-record flags3-v0 flags3-v1 flags3-v2 "
                         "better3-record pick-code-3 "
                         "assign-pick-3 apply-pick-3 "
                         "assign-step-3 assign-step-3-code "
@@ -299,7 +300,7 @@
         bp0 (str "(better3-record (better-pair 0 " fa " 0 " fb ") "
                  "(better-pair 0 " fa " 0 " fc ") "
                  "(better-pair 0 " fb " 0 " fc "))")
-        ok-warm "(triple-record 1 1 1)"
+        ok-warm "(flags3-record true true true)"
         q0 "(triple-record 0 0 0)"
         s0 (str "(assign-step-3 " q0 " " ok-warm " " ok-warm " " bp0 ")")
         actual0 (compile-i64-cases

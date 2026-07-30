@@ -274,6 +274,47 @@
     t
     :v2),
    :param-types [[:ref :schedule/triple]]}
+  {:name flags3-record,
+   :params [v0 v1 v2],
+   :result [:ref :schedule/flags3],
+   :effects #{},
+   :body
+   (record-new
+    [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+    v0
+    v1
+    v2),
+   :param-types [:bool :bool :bool]}
+  {:name flags3-v0,
+   :params [t],
+   :result :bool,
+   :effects #{},
+   :body
+   (record-get
+    [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+    t
+    :v0),
+   :param-types [[:ref :schedule/flags3]]}
+  {:name flags3-v1,
+   :params [t],
+   :result :bool,
+   :effects #{},
+   :body
+   (record-get
+    [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+    t
+    :v1),
+   :param-types [[:ref :schedule/flags3]]}
+  {:name flags3-v2,
+   :params [t],
+   :result :bool,
+   :effects #{},
+   :body
+   (record-get
+    [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+    t
+    :v2),
+   :param-types [[:ref :schedule/flags3]]}
   {:name better3-record,
    :params [b01 b02 b12],
    :result [:ref :schedule/better3],
@@ -306,65 +347,35 @@
    :body
    (let
     [ok0
-     (if
-      (=
-       (record-get
-        [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-        ok
-        :v0)
-       1)
-      true
-      false)
+     (record-get
+      [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+      ok
+      :v0)
      ok1
-     (if
-      (=
-       (record-get
-        [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-        ok
-        :v1)
-       1)
-      true
-      false)
+     (record-get
+      [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+      ok
+      :v1)
      ok2
-     (if
-      (=
-       (record-get
-        [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-        ok
-        :v2)
-       1)
-      true
-      false)
+     (record-get
+      [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+      ok
+      :v2)
      warm0
-     (if
-      (=
-       (record-get
-        [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-        warm
-        :v0)
-       1)
-      true
-      false)
+     (record-get
+      [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+      warm
+      :v0)
      warm1
-     (if
-      (=
-       (record-get
-        [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-        warm
-        :v1)
-       1)
-      true
-      false)
+     (record-get
+      [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+      warm
+      :v1)
      warm2
-     (if
-      (=
-       (record-get
-        [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-        warm
-        :v2)
-       1)
-      true
-      false)
+     (record-get
+      [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+      warm
+      :v2)
      better01
      (record-get
       [:record
@@ -394,8 +405,8 @@
      (if (= champ 0) better02 better12)]
     (pick-idx-3-tournament champ ok2 warm-champ warm2 better-c2)),
    :param-types
-   [[:ref :schedule/triple]
-    [:ref :schedule/triple]
+   [[:ref :schedule/flags3]
+    [:ref :schedule/flags3]
     [:ref :schedule/better3]]}
   {:name apply-pick-3,
    :params [q pick],
@@ -461,8 +472,8 @@
       :v2))),
    :param-types
    [[:ref :schedule/triple]
-    [:ref :schedule/triple]
-    [:ref :schedule/triple]
+    [:ref :schedule/flags3]
+    [:ref :schedule/flags3]
     [:ref :schedule/better3]]}
   {:name assign-step-3-code,
    :params [result],
@@ -541,17 +552,19 @@
  :oracle-value nil,
  :schema-identities
  #:schedule{:assign2
-            "e571ec6e39bae16c09d824628cc4505d7ef4743ea32d54be68574fdb941fd4ab",
+            "c76ea3a4d99a8bd91d18b405d4ee6491e108e49716645d275e02ba712fabfef0",
             :assign3
-            "d705263880b4869d781723d4c730260eacaff8bdfb55674de165617fc67978a9",
+            "79c0861de7bb2142a9b8e6186d9600113db9662e8a6a0df497012b7b4f525577",
             :better2
-            "2ab409b59abef80f783f416be77f09b6d6df8523a59e21d7dff8a92f696507f7",
+            "8c8ac5907a7e8f942e378b219f458f8336ceea98187e96e3491906c35682131e",
             :better3
-            "d277fa7587fd3aba8715ad0cec96c157a5d3fab6a1f09be3f410e227d141f38f",
+            "0769e14279ccb03b2614349f719600f4d64ab1bcd86aecaba29dbfc117369edc",
             :eligibility
-            "a25db29e1c21d413abbe880694efa6a81bf0fc74bf41507884eb2e9ec00b9166",
+            "53ef39e7660ad313ce24bf2826ccd2d4d493392f37781a6618d4c704904696a6",
+            :flags3
+            "5295d1f1c719c5867057bf79e5f7eb344fe5999328e54be959efc483fc6fea7d",
             :triple
-            "403cb55fc44dcd36fc9ee86644a7cf361ccf47480ad2e470d851ad0f381dd85d"},
+            "c4a473e8d77fc0f01249129b72c5ff12accc28ab28a9db957265a6b8cb2e4c80"},
  :exports
  [eligible?
   score-queue
@@ -573,6 +586,10 @@
   triple-v0
   triple-v1
   triple-v2
+  flags3-record
+  flags3-v0
+  flags3-v1
+  flags3-v2
   better3-record
   pick-code-3
   assign-pick-3
@@ -605,6 +622,10 @@
             [:record
              :schedule/triple
              [[:v0 :i64] [:v1 :i64] [:v2 :i64]]],
+            :flags3
+            [:record
+             :schedule/flags3
+             [[:v0 :bool] [:v1 :bool] [:v2 :bool]]],
             :better3
             [:record
              :schedule/better3

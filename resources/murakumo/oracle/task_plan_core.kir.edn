@@ -280,6 +280,17 @@
     v1
     v2),
    :param-types [:i64 :i64 :i64]}
+  {:name flags3-record,
+   :params [v0 v1 v2],
+   :result [:ref :task/flags3],
+   :effects #{},
+   :body
+   (record-new
+    [:record :task/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+    v0
+    v1
+    v2),
+   :param-types [:bool :bool :bool]}
   {:name pick-task-idx-2,
    :params [ok0 ok1 fill0 fill1 loads],
    :result :i64,
@@ -398,35 +409,20 @@
    :body
    (let
     [ok0
-     (if
-      (=
-       (record-get
-        [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-        ok
-        :v0)
-       1)
-      true
-      false)
+     (record-get
+      [:record :task/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+      ok
+      :v0)
      ok1
-     (if
-      (=
-       (record-get
-        [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-        ok
-        :v1)
-       1)
-      true
-      false)
+     (record-get
+      [:record :task/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+      ok
+      :v1)
      ok2
-     (if
-      (=
-       (record-get
-        [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-        ok
-        :v2)
-       1)
-      true
-      false)
+     (record-get
+      [:record :task/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
+      ok
+      :v2)
      f0
      (record-get
       [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
@@ -475,7 +471,7 @@
      (if (< p01 0) false (challenger-wins? fc lc f2 l2))]
     (if (< p01 0) (if ok2 2 -1) (if ok2 (if win2 2 p01) p01))),
    :param-types
-   [[:ref :task/triple] [:ref :task/triple] [:ref :task/triple]]}
+   [[:ref :task/flags3] [:ref :task/triple] [:ref :task/triple]]}
   {:name apply-task-pick-3,
    :params [load pick],
    :result [:ref :task/triple],
@@ -539,7 +535,7 @@
       nload
       :v2))),
    :param-types
-   [[:ref :task/triple] [:ref :task/triple] [:ref :task/triple]]}
+   [[:ref :task/triple] [:ref :task/flags3] [:ref :task/triple]]}
   {:name assign-task-3-code,
    :params [r],
    :result :i64,
@@ -688,15 +684,17 @@
  :oracle-value nil,
  :schema-identities
  #:task{:assign2
-        "f99c1bdeaad19a34bf13a8098483eb43c5b4209b26e3745a07ef21b8ce0cdd3a",
+        "a3e6964cbebb152bc341abffaabf9e21bd1969e1df6da039fda7cde61f9ee7d3",
         :assign3
-        "af4105286bf0f7cc0091bc40447b37777a9bce64981f5fa4914fdaf1f214bfdc",
+        "83392209145f03102a6d4dbefbea75f8e03b62f38b87eaeca151ffe8f0a50ce9",
         :eligibility
-        "1da80535524336df511aced5eb1885792164d71c69020cd3070cd2748081af68",
+        "24d3a0bbd8244dbe21a5e9df051892e38db3c0f516eb4a0208a964059d5c436b",
+        :flags3
+        "8c87e03eea569cf2bebc5fc951d091cb4f91fadf6f5d0ba82e599be54e9a4e76",
         :pair
-        "6f0a171b58c84ccfbc9aa37207d69e981d84e83e5bd1f21f02cfc252384500ba",
+        "778e179e716c1272d7c615f124e2e33007e1e12d0c970701faa5767fc3d96694",
         :triple
-        "eadbabcab608862cac0e7adafcef8756e68a8105f6aa7e4e20b4999c366b56ef"},
+        "9d758366d4c9b0235d7af5ee9ee8837f5c92a5ae496bd18f372f9415afe4547c"},
  :exports
  [default-max-slots
   default-max-attempts
@@ -729,6 +727,7 @@
   load-inc-if
   challenger-wins?
   triple-record
+  flags3-record
   assign-task-pick-3
   apply-task-pick-3
   assign-task-step-3
@@ -751,6 +750,8 @@
  #:task{:pair [:record :task/pair [[:a :i64] [:b :i64]]],
         :triple
         [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]],
+        :flags3
+        [:record :task/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]],
         :assign2
         [:record
          :task/assign2
