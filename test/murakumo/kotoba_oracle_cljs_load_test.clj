@@ -1,5 +1,10 @@
 ;; Optional cljs oracle load surface — exercisable on the JVM via register-kir!
 ;; and set-resource-loader! (same APIs nbb uses).
+;;
+;; T6.4 first slice: the *same* precompiled KIR product artifacts are the
+;; execution source for pure helpers on the cljs/nbb load path — not a second
+;; pure reimplementation. Host mirrors remain only as fail-closed fallback when
+;; oracle is not ready (resource missing / load error).
 
 (ns murakumo.kotoba-oracle-cljs-load-test
   (:require [clojure.edn :as edn]
@@ -19,7 +24,6 @@
     (is (= (ir/execute live 'default-max-slots [])
            (oracle/call :task-plan 'default-max-slots [])))
     (oracle/clear-cache!)
-    ;; classpath load still works after clear
     (is (oracle/ready? :task-plan))))
 
 (deftest set-resource-loader-injects-edn-text
@@ -54,3 +58,67 @@
   (is (= 32 (oracle/catalog-count)))
   (is (some #{:task-plan} (oracle/catalog-ids)))
   (is (some #{:fleet-inventory} (oracle/catalog-ids))))
+
+(defn- zero-arity-exports
+  "Export symbols with empty :params in a loaded KIR document."
+  [kir]
+  (let [by-name (into {} (map (juxt :name identity) (:functions kir)))]
+    (filterv (fn [sym]
+               (let [f (get by-name sym)]
+                 (and f (empty? (:params f)))))
+             (:exports kir))))
+
+(deftest t64-same-artifact-all-catalog-ids-ready
+  "T6.4: every product-shell catalog id loads its shipped KIR (same artifact
+   as JVM dual-source)."
+  (oracle/clear-cache!)
+  (is (= 32 (oracle/catalog-count)))
+  (doseq [id (sort (oracle/catalog-ids))]
+    (testing (str id)
+      (is (oracle/ready? id) (str "not ready: " id))
+      (let [kir (oracle/load-kir id)]
+        (is (map? kir))
+        (is (seq (:exports kir)) (str "no exports: " id))))))
+
+(deftest t64-same-artifact-zero-arity-exports-execute
+  "T6.4: for each catalog core, every 0-arity export matches via oracle/call
+   and ir/execute on the same loaded KIR document. Cores with only arity>0
+   exports (e.g. infer-schedule) are still load-checked above."
+  (oracle/clear-cache!)
+  (doseq [id (sort (oracle/catalog-ids))]
+    (testing (str id)
+      (let [kir (oracle/load-kir id)
+            zeros (zero-arity-exports kir)]
+        (doseq [exp zeros]
+          (testing (str exp)
+            (is (= (oracle/call id exp [])
+                   (ir/execute kir exp []))
+                (str id " " exp " call≠ir"))))))))
+
+(deftest t64-register-kir-full-catalog-injection
+  "T6.4 cljs bundler path: register-kir! injects full catalog so pure
+   execution uses the same KIR docs (simulates nbb/bundler preload).
+   Note: on JVM, classpath resources still satisfy ready? even with a
+   deny-loader — set-resource-loader! is the cljs inject point; this test
+   proves register-kir! round-trips the shipped artifacts."
+  (oracle/clear-cache!)
+  (let [docs (into {}
+                   (map (fn [id] [id (oracle/load-kir id)])
+                        (oracle/catalog-ids)))]
+    (oracle/clear-cache!)
+    (doseq [[id kir] docs]
+      (oracle/register-kir! id kir))
+    (try
+      (doseq [id (sort (oracle/catalog-ids))]
+        (testing (str id)
+          (is (oracle/ready? id) (str "register-kir missing " id))
+          (let [kir (get docs id)
+                zeros (zero-arity-exports kir)
+                exp (first zeros)]
+            (is (= kir (oracle/load-kir id))
+                (str "register-kir did not pin doc for " id))
+            (when exp
+              (is (= (ir/execute kir exp [])
+                     (oracle/call id exp [])))))))
+      (finally
+        (oracle/clear-cache!)))))
