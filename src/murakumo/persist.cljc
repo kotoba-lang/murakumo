@@ -239,5 +239,5 @@
    Kotoba `write-ok?` when oracle ready."
   [out]
   (try-oracle
-   #(= 1 (oracle/i64->host (o 'write-ok? [(str out)])))
+   #(oracle/bool->host (o 'write-ok? [(str out)]))
    #(mirror-write-ok? out)))

@@ -8,7 +8,8 @@
 
 ;; W6 pure-planner oracle cutover first slice (murakumo-pure-planners-v1).
 ;; Portable string core of murakumo.kekkai.gate. No capabilities.
-;; Guest profile: string=? / string-contains? yield :i64 (0/1), not :bool.
+;; Guest profile: string=? / string-contains? still yield :i64 (0/1) words
+;; interior; product predicates (authorized?) return profile-5 :bool.
 ;; Residual status/denial-line/dir tokens dual-source; helpers recompose.
 ;; cli-argv fragments dual-source for host vector assembly.
 ;; Parity: test/murakumo/kekkai_gate_kotoba_parity_test.clj
@@ -48,8 +49,9 @@
       (status-unknown)
       s)))
 
-(defn authorized? [status :string] :i64
-  (if (string=? status (status-authorized)) 1 0))
+(defn authorized? [status :string] :bool
+  ;; Profile 5: real :bool predicate (not 0/1 i64).
+  (if (string=? status (status-authorized)) true false))
 
 (defn denial-line-of [node-name :string status :string] :string
   (string-concat

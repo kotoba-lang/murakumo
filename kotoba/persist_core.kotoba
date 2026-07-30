@@ -78,5 +78,6 @@
     (i64-str local-port)
     (xrpc-repo-write-path))))
 
-(defn write-ok? [out :string] :i64
-  (if (string-contains? out (write-ok-marker)) 1 0))
+(defn write-ok? [out :string] :bool
+  ;; Profile 5: real :bool predicate (not 0/1 i64).
+  (if (string-contains? out (write-ok-marker)) true false))

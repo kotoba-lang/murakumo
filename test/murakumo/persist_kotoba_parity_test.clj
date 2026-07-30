@@ -57,8 +57,9 @@
            {"sp" "(snapshot-local-port)" "rp" "(reconcile-local-port)"
             "fs" "(forward-settle-ms)"
             "ctm" "(curl-timeout-s)"
-            "ok" (str "(write-ok? " (kotoba-literal "{\"status\":\"ok\"}") ")")
-            "bad" (str "(write-ok? " (kotoba-literal "{\"status\":\"err\"}") ")")})]
+            ;; Profile 5: write-ok? is :bool; wrap as 0/1 for i64 cases.
+            "ok" (str "(if (write-ok? " (kotoba-literal "{\"status\":\"ok\"}") ") 1 0)")
+            "bad" (str "(if (write-ok? " (kotoba-literal "{\"status\":\"err\"}") ") 1 0)")})]
     (is (= persist/repo-authority (get s "a")))
     (is (= persist/fleet-graph-name (get s "g")))
     (is (= persist/snapshot-collection (get s "sc")))
