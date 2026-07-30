@@ -13,8 +13,8 @@
 (def export-prefix
   (str "default-per-token head-num head-den protocol-num protocol-den token-cost cut pool "
        "memory-time-weight charge-allow? balance-after-spend "
-       "unit-cost job-cost-2 job-cost-3 share-floor share-pack-2 settle-pool-shares-2 "
-       "mt-sum-2 mt-sum-3"))
+       "unit-cost job-cost-2 job-cost-3 share-floor share-record-2 share-of-0 share-of-1 "
+       "settle-pool-shares-2 mt-sum-2 mt-sum-3"))
 
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
@@ -96,23 +96,22 @@
                  "j2" "(job-cost-2 2 100 5 4)"
                  "j3" "(job-cost-3 2 100 5 4 30)"
                  "sf" "(share-floor 100 3 10)"
-                 "sp" "(share-pack-2 100 3 7)"
-                 "ss" "(settle-pool-shares-2 200 1 1)"
+                 ;; T5.3: project record fields inside the guest (no host unpack)
+                 "s0" "(share-of-0 (share-record-2 100 3 7))"
+                 "s1" "(share-of-1 (share-record-2 100 3 7))"
+                 "ss0" "(share-of-0 (settle-pool-shares-2 200 1 1))"
+                 "ss1" "(share-of-1 (settle-pool-shares-2 200 1 1))"
                  "m2" "(mt-sum-2 10 20)"
-                 "m3" "(mt-sum-3 1 2 3)"})
-        s0 (mod (get actual "sp") 65536)
-        s1 (quot (get actual "sp") 65536)
-        ;; settle 200 → treasury 10 head 20 pool 170 → equal w → 85 each
-        ss0 (mod (get actual "ss") 65536)
-        ss1 (quot (get actual "ss") 65536)]
+                 "m3" "(mt-sum-3 1 2 3)"})]
     (is (= 20 (get actual "u1")))
     (is (= (+ 200 20) (get actual "j2")))
     (is (= (+ 200 20 30) (get actual "j3")))
     (is (= 30 (get actual "sf")))
-    (is (= 30 s0))
-    (is (= 70 s1))
-    (is (= 85 ss0))
-    (is (= 85 ss1))
+    (is (= 30 (get actual "s0")))
+    (is (= 70 (get actual "s1")))
+    ;; settle 200 → treasury 10 head 20 pool 170 → equal w → 85 each
+    (is (= 85 (get actual "ss0")))
+    (is (= 85 (get actual "ss1")))
     (is (= 30 (get actual "m2")))
     (is (= 6 (get actual "m3")))
     (testing "cljc job-cost multi-unit"
