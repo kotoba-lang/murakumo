@@ -13,10 +13,9 @@ Convert remaining **eligibility ok** parameters on pick/assign helpers from
    `pick-fold-step` take `ok*` as `:bool`.
 2. **task**: `pick-task-idx-2` / `assign-task-step-2` / `pick-task-fold-step`
    take `ok*` / `better-c-i` as `:bool`.
-3. Multi-role **triples** (`:schedule/triple`, `:task/triple`) stay `:i64` lanes
-   (queue counts + 0/1 flags share one shape). Call sites that need bools
-   project `(if (= v 1) true false)` at the pick boundary
-   (`assign-pick-3`, `assign-task-pick-3`).
+3. Multi-role **triples** for ok·warm: **closed** by
+   `ADR-260731-w6-flags3-bool` (`:schedule/flags3` / `:task/flags3` are
+   `:bool`; queue/fill/load stay `:i64` triples).
 
 ## Still numeric by design
 
