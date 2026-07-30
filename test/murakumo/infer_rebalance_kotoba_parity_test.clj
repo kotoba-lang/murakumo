@@ -9,18 +9,18 @@
 (def export-prefix
   (str "shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class "
        "seats-of-text seats-of-media seats-of-postproc seats-total "
-       "pool-demand-pack "
+       "pool-demand-record pool-weight-text pool-weight-media pool-weight-postproc "
        "pool-seats-of-text pool-seats-of-media pool-seats-of-postproc "
        "classify-run-flags "
-       "demand-base demand-empty demand-text demand-image demand-video "
-       "demand-audio demand-postproc demand-inc demand-to-pool-pack "
+       "demand-empty demand-text demand-image demand-video "
+       "demand-audio demand-postproc demand-inc demand-to-pool-record "
        "workers-count seats-equal "
        "seats-for-online-text seats-for-online-media seats-for-online-postproc "
        "pipeline-effective-gb "
        "node-online? move-needed "
        "rebalance-reason-code rebalance-reason-name "
        "digit-char nat-str i64-str pool-code pool-name "
-       "seat-order-pack order-nth take-end take-count "
+       "seat-order-record order-nth take-end take-count "
        "pipeline-note rebalance-reason-detail"))
 
 (def largest-remainder
@@ -52,11 +52,6 @@
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
-(defn- unpack [packed]
-  (let [b 65536]
-    {:text-pool (mod packed b)
-     :media-pool (mod (quot packed b) b)
-     :postproc-pool (quot packed (* b b))}))
 
 (deftest usable-gb-matches-node-capacity
   (let [actual (compile-i64-cases
@@ -122,21 +117,26 @@
                  :postproc-pool (get actual (str label "-p"))}]
         (is (= cljc got) (str label " cljc=" cljc " kotoba=" got))))))
 
-(deftest pool-demand-pack-matches-cljc
+(deftest pool-demand-record-matches-cljc
   (let [cases [["d0" 0 0 0 0 0]
                ["d1" 5 2 1 0 3]
                ["d2" 1 0 0 0 0]
                ["d3" 0 1 1 1 0]
                ["d4" 10 0 0 5 2]]
         kotoba-cases (into {}
-                           (map (fn [[label t i v a p]]
-                                  [label (str "(pool-demand-pack "
-                                              t " " i " " v " " a " " p ")")])
-                                cases))
+                           (mapcat (fn [[label t i v a p]]
+                                     (let [r (str "(pool-demand-record "
+                                                  t " " i " " v " " a " " p ")")]
+                                       [[(str label "-t") (str "(pool-weight-text " r ")")]
+                                        [(str label "-m") (str "(pool-weight-media " r ")")]
+                                        [(str label "-p") (str "(pool-weight-postproc " r ")")]]))
+                                   cases))
         actual (compile-i64-cases kotoba-cases)]
     (doseq [[label t i v a p] cases]
       (let [cljc (rb/pool-demand {:text t :image i :video v :audio a :postproc p})
-            got (unpack (get actual label))]
+            got {:text-pool (get actual (str label "-t"))
+                 :media-pool (get actual (str label "-m"))
+                 :postproc-pool (get actual (str label "-p"))}]
         (is (= cljc got) (str label " cljc=" cljc " kotoba=" got))))))
 
 (deftest pool-seats-of-composes-largest-remainder
@@ -144,7 +144,7 @@
                 (into {} (map (fn [[k lane]]
                                 [(str prefix "-" (name k))
                                  (str "(pool-seats-of-" lane " " total
-                                      " (pool-demand-pack " demand ") 1)")])
+                                      " (pool-demand-record " demand ") 1)")])
                               {:t "text" :m "media" :p "postproc"})))
         actual (compile-i64-cases
                 (merge (lanes "s1" 10 "5 2 1 0 3")
@@ -219,11 +219,11 @@
                  "v" (str "(demand-video " fold ")")
                  "a" (str "(demand-audio " fold ")")
                  "p" (str "(demand-postproc " fold ")")
-                 "pool" (str "(demand-to-pool-pack " fold ")")
-                 "base" "(demand-base)"})
+                 "pt" (str "(pool-weight-text (demand-to-pool-record " fold "))")
+                 "pm" (str "(pool-weight-media (demand-to-pool-record " fold "))")
+                 "pp" (str "(pool-weight-postproc (demand-to-pool-record " fold "))")})
         cljc (rb/demand-from-runs runs)
         pool (rb/pool-demand cljc)]
-    (is (= 4096 (get actual "base")))
     (is (= (:text cljc) (get actual "t")))
     (is (= (:image cljc) (get actual "i")))
     (is (= (:video cljc) (get actual "v")))
@@ -233,7 +233,9 @@
     (is (= 2 (get actual "i")))
     (is (= 1 (get actual "v")))
     (is (= 1 (get actual "p")))
-    (is (= pool (unpack (get actual "pool"))))))
+    (is (= pool {:text-pool (get actual "pt")
+                 :media-pool (get actual "pm")
+                 :postproc-pool (get actual "pp")}))))
 
 (deftest placement-pure-layer
   (let [actual (compile-i64-cases
@@ -250,9 +252,9 @@
                  "rc1" "(rebalance-reason-code 0 0)"
                  "rc2" "(rebalance-reason-code 3 2)"
                  ;; seats-for-online-*: 4 online → 3 workers; demand 5/2/0/0/1 → pool 5,2,1
-                 "sfo-t" "(seats-for-online-text 4 (pool-demand-pack 5 2 0 0 1) 1)"
-                 "sfo-m" "(seats-for-online-media 4 (pool-demand-pack 5 2 0 0 1) 1)"
-                 "sfo-p" "(seats-for-online-postproc 4 (pool-demand-pack 5 2 0 0 1) 1)"})
+                 "sfo-t" "(seats-for-online-text 4 (pool-demand-record 5 2 0 0 1) 1)"
+                 "sfo-m" "(seats-for-online-media 4 (pool-demand-record 5 2 0 0 1) 1)"
+                 "sfo-p" "(seats-for-online-postproc 4 (pool-demand-record 5 2 0 0 1) 1)"})
         lr @(var murakumo.infer.rebalance/largest-remainder)
         expected-seats (lr 3 (rb/pool-demand {:text 5 :image 2 :video 0 :audio 0 :postproc 1}) 1)]
     (is (= 0 (get actual "w0")))
@@ -297,17 +299,17 @@
 (deftest seat-order-and-take-slices
   (let [actual (compile-i64-cases
                 {;; seats text=5 media=3 post=2 → order 0,1,2
-                 "o0" "(order-nth (seat-order-pack 5 3 2) 0)"
-                 "o1" "(order-nth (seat-order-pack 5 3 2) 1)"
-                 "o2" "(order-nth (seat-order-pack 5 3 2) 2)"
+                 "o0" "(order-nth (seat-order-record 5 3 2) 0)"
+                 "o1" "(order-nth (seat-order-record 5 3 2) 1)"
+                 "o2" "(order-nth (seat-order-record 5 3 2) 2)"
                  ;; media heaviest
-                 "m0" "(order-nth (seat-order-pack 1 9 2) 0)"
-                 "m1" "(order-nth (seat-order-pack 1 9 2) 1)"
-                 "m2" "(order-nth (seat-order-pack 1 9 2) 2)"
+                 "m0" "(order-nth (seat-order-record 1 9 2) 0)"
+                 "m1" "(order-nth (seat-order-record 1 9 2) 1)"
+                 "m2" "(order-nth (seat-order-record 1 9 2) 2)"
                  ;; equal seats → stable index order text,media,post
-                 "e0" "(order-nth (seat-order-pack 2 2 2) 0)"
-                 "e1" "(order-nth (seat-order-pack 2 2 2) 1)"
-                 "e2" "(order-nth (seat-order-pack 2 2 2) 2)"
+                 "e0" "(order-nth (seat-order-record 2 2 2) 0)"
+                 "e1" "(order-nth (seat-order-record 2 2 2) 1)"
+                 "e2" "(order-nth (seat-order-record 2 2 2) 2)"
                  "te" "(take-end 0 2 5)"
                  "te2" "(take-end 2 3 5)"
                  "te3" "(take-end 4 3 5)"
@@ -336,7 +338,7 @@
     (is (= "text-pool" (get names "pn0")))
     (is (= "media-pool" (get names "pn1")))
     (is (= "postproc-pool" (get names "pn2")))
-    (testing "cljc sort-by order matches seat-order-pack"
+    (testing "cljc sort-by order matches seat-order-record"
       (let [seats {:text-pool 1 :media-pool 9 :postproc-pool 2}
             ordered (mapv first (sort-by (comp - val) seats))]
         (is (= [:media-pool :postproc-pool :text-pool] ordered))

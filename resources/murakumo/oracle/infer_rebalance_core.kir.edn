@@ -46,42 +46,12 @@
       "media-pool"
       "text-pool"))),
    :param-types [:string]}
-  {:name lane-base,
-   :params [],
-   :result :i64,
-   :effects #{},
-   :body 65536,
-   :param-types []}
   {:name rem64,
    :params [a b],
    :result :i64,
    :effects #{},
    :body (- a (* (quot a b) b)),
    :param-types [:i64 :i64]}
-  {:name lane-0,
-   :params [packed],
-   :result :i64,
-   :effects #{},
-   :body (rem64 packed (lane-base)),
-   :param-types [:i64]}
-  {:name lane-1,
-   :params [packed],
-   :result :i64,
-   :effects #{},
-   :body (rem64 (quot packed (lane-base)) (lane-base)),
-   :param-types [:i64]}
-  {:name lane-2,
-   :params [packed],
-   :result :i64,
-   :effects #{},
-   :body (quot packed (* (lane-base) (lane-base))),
-   :param-types [:i64]}
-  {:name pack3,
-   :params [t m p],
-   :result :i64,
-   :effects #{},
-   :body (let [b (lane-base)] (+ t (+ (* m b) (* p (* b b))))),
-   :param-types [:i64 :i64 :i64]}
   {:name weight-pos?,
    :params [w],
    :result :i64,
@@ -349,51 +319,138 @@
      (seats-of-media total wt wm wp floor)
      (seats-of-postproc total wt wm wp floor))),
    :param-types [:i64 :i64 :i64 :i64 :i64]}
-  {:name pool-demand-pack,
+  {:name pool-demand-record,
    :params [text image video audio postproc],
-   :result :i64,
+   :result [:ref :rebalance/lanes],
    :effects #{},
    :body
    (let
     [wt text wm (+ image (+ video audio)) wp postproc]
-    (pack3 wt wm wp)),
+    (record-new
+     [:record
+      :rebalance/lanes
+      [[:text :i64] [:media :i64] [:postproc :i64]]]
+     wt
+     wm
+     wp)),
    :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name pool-weight-text,
+   :params [w],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record
+     :rebalance/lanes
+     [[:text :i64] [:media :i64] [:postproc :i64]]]
+    w
+    :text),
+   :param-types [[:ref :rebalance/lanes]]}
+  {:name pool-weight-media,
+   :params [w],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record
+     :rebalance/lanes
+     [[:text :i64] [:media :i64] [:postproc :i64]]]
+    w
+    :media),
+   :param-types [[:ref :rebalance/lanes]]}
+  {:name pool-weight-postproc,
+   :params [w],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record
+     :rebalance/lanes
+     [[:text :i64] [:media :i64] [:postproc :i64]]]
+    w
+    :postproc),
+   :param-types [[:ref :rebalance/lanes]]}
   {:name pool-seats-of-text,
-   :params [total pool-pack floor],
+   :params [total w floor],
    :result :i64,
    :effects #{},
    :body
    (seats-of-text
     total
-    (lane-0 pool-pack)
-    (lane-1 pool-pack)
-    (lane-2 pool-pack)
+    (record-get
+     [:record
+      :rebalance/lanes
+      [[:text :i64] [:media :i64] [:postproc :i64]]]
+     w
+     :text)
+    (record-get
+     [:record
+      :rebalance/lanes
+      [[:text :i64] [:media :i64] [:postproc :i64]]]
+     w
+     :media)
+    (record-get
+     [:record
+      :rebalance/lanes
+      [[:text :i64] [:media :i64] [:postproc :i64]]]
+     w
+     :postproc)
     floor),
-   :param-types [:i64 :i64 :i64]}
+   :param-types [:i64 [:ref :rebalance/lanes] :i64]}
   {:name pool-seats-of-media,
-   :params [total pool-pack floor],
+   :params [total w floor],
    :result :i64,
    :effects #{},
    :body
    (seats-of-media
     total
-    (lane-0 pool-pack)
-    (lane-1 pool-pack)
-    (lane-2 pool-pack)
+    (record-get
+     [:record
+      :rebalance/lanes
+      [[:text :i64] [:media :i64] [:postproc :i64]]]
+     w
+     :text)
+    (record-get
+     [:record
+      :rebalance/lanes
+      [[:text :i64] [:media :i64] [:postproc :i64]]]
+     w
+     :media)
+    (record-get
+     [:record
+      :rebalance/lanes
+      [[:text :i64] [:media :i64] [:postproc :i64]]]
+     w
+     :postproc)
     floor),
-   :param-types [:i64 :i64 :i64]}
+   :param-types [:i64 [:ref :rebalance/lanes] :i64]}
   {:name pool-seats-of-postproc,
-   :params [total pool-pack floor],
+   :params [total w floor],
    :result :i64,
    :effects #{},
    :body
    (seats-of-postproc
     total
-    (lane-0 pool-pack)
-    (lane-1 pool-pack)
-    (lane-2 pool-pack)
+    (record-get
+     [:record
+      :rebalance/lanes
+      [[:text :i64] [:media :i64] [:postproc :i64]]]
+     w
+     :text)
+    (record-get
+     [:record
+      :rebalance/lanes
+      [[:text :i64] [:media :i64] [:postproc :i64]]]
+     w
+     :media)
+    (record-get
+     [:record
+      :rebalance/lanes
+      [[:text :i64] [:media :i64] [:postproc :i64]]]
+     w
+     :postproc)
     floor),
-   :param-types [:i64 :i64 :i64]}
+   :param-types [:i64 [:ref :rebalance/lanes] :i64]}
   {:name classify-run-flags,
    :params [images video audio swarm tokens],
    :result :i64,
@@ -440,100 +497,256 @@
     [:option :string]
     [:option :string]
     [:option :string]]}
-  {:name demand-base,
-   :params [],
-   :result :i64,
-   :effects #{},
-   :body 4096,
-   :param-types []}
   {:name demand-empty,
    :params [],
-   :result :i64,
+   :result [:ref :rebalance/demand],
    :effects #{},
-   :body 0,
+   :body
+   (record-new
+    [:record
+     :rebalance/demand
+     [[:text :i64]
+      [:image :i64]
+      [:video :i64]
+      [:audio :i64]
+      [:postproc :i64]]]
+    0
+    0
+    0
+    0
+    0),
    :param-types []}
   {:name demand-text,
-   :params [pack],
+   :params [d],
    :result :i64,
    :effects #{},
-   :body (rem64 pack (demand-base)),
-   :param-types [:i64]}
+   :body
+   (record-get
+    [:record
+     :rebalance/demand
+     [[:text :i64]
+      [:image :i64]
+      [:video :i64]
+      [:audio :i64]
+      [:postproc :i64]]]
+    d
+    :text),
+   :param-types [[:ref :rebalance/demand]]}
   {:name demand-image,
-   :params [pack],
+   :params [d],
    :result :i64,
    :effects #{},
-   :body (let [b (demand-base)] (rem64 (quot pack b) b)),
-   :param-types [:i64]}
+   :body
+   (record-get
+    [:record
+     :rebalance/demand
+     [[:text :i64]
+      [:image :i64]
+      [:video :i64]
+      [:audio :i64]
+      [:postproc :i64]]]
+    d
+    :image),
+   :param-types [[:ref :rebalance/demand]]}
   {:name demand-video,
-   :params [pack],
+   :params [d],
    :result :i64,
    :effects #{},
-   :body (let [b (demand-base) b2 (* b b)] (rem64 (quot pack b2) b)),
-   :param-types [:i64]}
+   :body
+   (record-get
+    [:record
+     :rebalance/demand
+     [[:text :i64]
+      [:image :i64]
+      [:video :i64]
+      [:audio :i64]
+      [:postproc :i64]]]
+    d
+    :video),
+   :param-types [[:ref :rebalance/demand]]}
   {:name demand-audio,
-   :params [pack],
+   :params [d],
    :result :i64,
    :effects #{},
    :body
-   (let [b (demand-base) b3 (* b (* b b))] (rem64 (quot pack b3) b)),
-   :param-types [:i64]}
+   (record-get
+    [:record
+     :rebalance/demand
+     [[:text :i64]
+      [:image :i64]
+      [:video :i64]
+      [:audio :i64]
+      [:postproc :i64]]]
+    d
+    :audio),
+   :param-types [[:ref :rebalance/demand]]}
   {:name demand-postproc,
-   :params [pack],
-   :result :i64,
-   :effects #{},
-   :body (let [b (demand-base) b4 (* (* b b) (* b b))] (quot pack b4)),
-   :param-types [:i64]}
-  {:name demand-pack5,
-   :params [t i v a p],
+   :params [d],
    :result :i64,
    :effects #{},
    :body
-   (let
-    [b (demand-base) b2 (* b b) b3 (* b b2) b4 (* b b3)]
-    (+ t (+ (* i b) (+ (* v b2) (+ (* a b3) (* p b4)))))),
+   (record-get
+    [:record
+     :rebalance/demand
+     [[:text :i64]
+      [:image :i64]
+      [:video :i64]
+      [:audio :i64]
+      [:postproc :i64]]]
+    d
+    :postproc),
+   :param-types [[:ref :rebalance/demand]]}
+  {:name demand-record,
+   :params [t i v a p],
+   :result [:ref :rebalance/demand],
+   :effects #{},
+   :body
+   (record-new
+    [:record
+     :rebalance/demand
+     [[:text :i64]
+      [:image :i64]
+      [:video :i64]
+      [:audio :i64]
+      [:postproc :i64]]]
+    t
+    i
+    v
+    a
+    p),
    :param-types [:i64 :i64 :i64 :i64 :i64]}
   {:name demand-inc,
-   :params [pack class-code],
-   :result :i64,
+   :params [d class-code],
+   :result [:ref :rebalance/demand],
    :effects #{},
    :body
    (let
     [t
-     (demand-text pack)
+     (record-get
+      [:record
+       :rebalance/demand
+       [[:text :i64]
+        [:image :i64]
+        [:video :i64]
+        [:audio :i64]
+        [:postproc :i64]]]
+      d
+      :text)
      i
-     (demand-image pack)
+     (record-get
+      [:record
+       :rebalance/demand
+       [[:text :i64]
+        [:image :i64]
+        [:video :i64]
+        [:audio :i64]
+        [:postproc :i64]]]
+      d
+      :image)
      v
-     (demand-video pack)
+     (record-get
+      [:record
+       :rebalance/demand
+       [[:text :i64]
+        [:image :i64]
+        [:video :i64]
+        [:audio :i64]
+        [:postproc :i64]]]
+      d
+      :video)
      a
-     (demand-audio pack)
+     (record-get
+      [:record
+       :rebalance/demand
+       [[:text :i64]
+        [:image :i64]
+        [:video :i64]
+        [:audio :i64]
+        [:postproc :i64]]]
+      d
+      :audio)
      p
-     (demand-postproc pack)]
+     (record-get
+      [:record
+       :rebalance/demand
+       [[:text :i64]
+        [:image :i64]
+        [:video :i64]
+        [:audio :i64]
+        [:postproc :i64]]]
+      d
+      :postproc)]
     (if
      (= class-code 1)
-     (demand-pack5 (+ t 1) i v a p)
+     (demand-record (+ t 1) i v a p)
      (if
       (= class-code 2)
-      (demand-pack5 t (+ i 1) v a p)
+      (demand-record t (+ i 1) v a p)
       (if
        (= class-code 3)
-       (demand-pack5 t i (+ v 1) a p)
+       (demand-record t i (+ v 1) a p)
        (if
         (= class-code 4)
-        (demand-pack5 t i v (+ a 1) p)
-        (if (= class-code 5) (demand-pack5 t i v a (+ p 1)) pack)))))),
-   :param-types [:i64 :i64]}
-  {:name demand-to-pool-pack,
-   :params [pack],
-   :result :i64,
+        (demand-record t i v (+ a 1) p)
+        (if (= class-code 5) (demand-record t i v a (+ p 1)) d)))))),
+   :param-types [[:ref :rebalance/demand] :i64]}
+  {:name demand-to-pool-record,
+   :params [d],
+   :result [:ref :rebalance/lanes],
    :effects #{},
    :body
-   (pool-demand-pack
-    (demand-text pack)
-    (demand-image pack)
-    (demand-video pack)
-    (demand-audio pack)
-    (demand-postproc pack)),
-   :param-types [:i64]}
+   (pool-demand-record
+    (record-get
+     [:record
+      :rebalance/demand
+      [[:text :i64]
+       [:image :i64]
+       [:video :i64]
+       [:audio :i64]
+       [:postproc :i64]]]
+     d
+     :text)
+    (record-get
+     [:record
+      :rebalance/demand
+      [[:text :i64]
+       [:image :i64]
+       [:video :i64]
+       [:audio :i64]
+       [:postproc :i64]]]
+     d
+     :image)
+    (record-get
+     [:record
+      :rebalance/demand
+      [[:text :i64]
+       [:image :i64]
+       [:video :i64]
+       [:audio :i64]
+       [:postproc :i64]]]
+     d
+     :video)
+    (record-get
+     [:record
+      :rebalance/demand
+      [[:text :i64]
+       [:image :i64]
+       [:video :i64]
+       [:audio :i64]
+       [:postproc :i64]]]
+     d
+     :audio)
+    (record-get
+     [:record
+      :rebalance/demand
+      [[:text :i64]
+       [:image :i64]
+       [:video :i64]
+       [:audio :i64]
+       [:postproc :i64]]]
+     d
+     :postproc)),
+   :param-types [[:ref :rebalance/demand]]}
   {:name workers-count,
    :params [online],
    :result :i64,
@@ -541,24 +754,23 @@
    :body (if (< online 1) 0 (- online 1)),
    :param-types [:i64]}
   {:name seats-for-online-text,
-   :params [online pool-pack floor],
+   :params [online w floor],
    :result :i64,
    :effects #{},
-   :body (pool-seats-of-text (workers-count online) pool-pack floor),
-   :param-types [:i64 :i64 :i64]}
+   :body (pool-seats-of-text (workers-count online) w floor),
+   :param-types [:i64 [:ref :rebalance/lanes] :i64]}
   {:name seats-for-online-media,
-   :params [online pool-pack floor],
+   :params [online w floor],
    :result :i64,
    :effects #{},
-   :body (pool-seats-of-media (workers-count online) pool-pack floor),
-   :param-types [:i64 :i64 :i64]}
+   :body (pool-seats-of-media (workers-count online) w floor),
+   :param-types [:i64 [:ref :rebalance/lanes] :i64]}
   {:name seats-for-online-postproc,
-   :params [online pool-pack floor],
+   :params [online w floor],
    :result :i64,
    :effects #{},
-   :body
-   (pool-seats-of-postproc (workers-count online) pool-pack floor),
-   :param-types [:i64 :i64 :i64]}
+   :body (pool-seats-of-postproc (workers-count online) w floor),
+   :param-types [:i64 [:ref :rebalance/lanes] :i64]}
   {:name seats-equal,
    :params [a b],
    :result :i64,
@@ -665,9 +877,9 @@
     [sa (seat-of ia st sm sp) sb (seat-of ib st sm sp)]
     (if (< sb sa) 1 (if (< sa sb) 0 (if (< ia ib) 1 0)))),
    :param-types [:i64 :i64 :i64 :i64 :i64]}
-  {:name seat-order-pack,
+  {:name seat-order-record,
    :params [st sm sp],
-   :result :i64,
+   :result [:ref :rebalance/order],
    :effects #{},
    :body
    (let
@@ -683,18 +895,34 @@
      (if (= (before-pool? p0 q1 st sm sp) 1) p0 q1)
      r1
      (if (= (before-pool? p0 q1 st sm sp) 1) q1 p0)]
-    (+ r0 (+ (* r1 4) (* q2 16)))),
+    (record-new
+     [:record :rebalance/order [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]
+     r0
+     r1
+     q2)),
    :param-types [:i64 :i64 :i64]}
   {:name order-nth,
-   :params [order-pack n],
+   :params [ord n],
    :result :i64,
    :effects #{},
    :body
    (if
     (= n 0)
-    (rem64 order-pack 4)
-    (if (= n 1) (rem64 (quot order-pack 4) 4) (quot order-pack 16))),
-   :param-types [:i64 :i64]}
+    (record-get
+     [:record :rebalance/order [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]
+     ord
+     :i0)
+    (if
+     (= n 1)
+     (record-get
+      [:record :rebalance/order [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]
+      ord
+      :i1)
+     (record-get
+      [:record :rebalance/order [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]
+      ord
+      :i2))),
+   :param-types [[:ref :rebalance/order] :i64]}
   {:name take-end,
    :params [start k remaining],
    :result :i64,
@@ -737,7 +965,13 @@
     (rebalance-reason-name code)),
    :param-types [:i64 :i64]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:rebalance{:demand
+             "fc2b7438daf24673bc1139980fc42c74ac2a98ce27f78c92f96d67b1083a8b4c",
+             :lanes
+             "86e19a06d328f02a730c88cbd8682ac387d8ec7be02cdf9d8198dfeb8cb7fd5e",
+             :order
+             "f225cf3b022ed1fecc609b4332eea359c8f5a802c2ecd0beae4464f6ae1fda4a"},
  :exports
  [shard-ceiling-gb
   os-kv-headroom-gb
@@ -747,12 +981,14 @@
   seats-of-media
   seats-of-postproc
   seats-total
-  pool-demand-pack
+  pool-demand-record
+  pool-weight-text
+  pool-weight-media
+  pool-weight-postproc
   pool-seats-of-text
   pool-seats-of-media
   pool-seats-of-postproc
   classify-run-flags
-  demand-base
   demand-empty
   demand-text
   demand-image
@@ -760,7 +996,7 @@
   demand-audio
   demand-postproc
   demand-inc
-  demand-to-pool-pack
+  demand-to-pool-record
   workers-count
   seats-equal
   seats-for-online-text
@@ -776,13 +1012,29 @@
   i64-str
   pool-code
   pool-name
-  seat-order-pack
+  seat-order-record
   order-nth
   take-end
   take-count
   pipeline-note
   rebalance-reason-detail],
- :schemas nil,
+ :schemas
+ #:rebalance{:lanes
+             [:record
+              :rebalance/lanes
+              [[:text :i64] [:media :i64] [:postproc :i64]]],
+             :demand
+             [:record
+              :rebalance/demand
+              [[:text :i64]
+               [:image :i64]
+               [:video :i64]
+               [:audio :i64]
+               [:postproc :i64]]],
+             :order
+             [:record
+              :rebalance/order
+              [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}
