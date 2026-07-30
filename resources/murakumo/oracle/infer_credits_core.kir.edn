@@ -1,72 +1,99 @@
-{:format :kotoba.kir/v3,
+{:format :kotoba.kir/v4,
  :signature nil,
  :functions
  [{:name default-per-token,
    :params [],
    :result :i64,
    :effects #{},
-   :body 1}
-  {:name head-num, :params [], :result :i64, :effects #{}, :body 1}
-  {:name head-den, :params [], :result :i64, :effects #{}, :body 10}
-  {:name protocol-num, :params [], :result :i64, :effects #{}, :body 1}
+   :body 1,
+   :param-types []}
+  {:name head-num,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1,
+   :param-types []}
+  {:name head-den,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 10,
+   :param-types []}
+  {:name protocol-num,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1,
+   :param-types []}
   {:name protocol-den,
    :params [],
    :result :i64,
    :effects #{},
-   :body 20}
+   :body 20,
+   :param-types []}
   {:name token-cost,
    :params [price tokens],
    :result :i64,
    :effects #{},
-   :body (* price tokens)}
+   :body (* price tokens),
+   :param-types [:i64 :i64]}
   {:name unit-cost,
    :params [price n],
    :result :i64,
    :effects #{},
-   :body (* price n)}
+   :body (* price n),
+   :param-types [:i64 :i64]}
   {:name job-cost-2,
    :params [p0 n0 p1 n1],
    :result :i64,
    :effects #{},
-   :body (+ (* p0 n0) (* p1 n1))}
+   :body (+ (* p0 n0) (* p1 n1)),
+   :param-types [:i64 :i64 :i64 :i64]}
   {:name job-cost-3,
    :params [p0 n0 p1 n1 p2n],
    :result :i64,
    :effects #{},
-   :body (+ (+ (* p0 n0) (* p1 n1)) p2n)}
+   :body (+ (+ (* p0 n0) (* p1 n1)) p2n),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
   {:name cut,
    :params [total num den],
    :result :i64,
    :effects #{},
-   :body (quot (* total num) den)}
+   :body (quot (* total num) den),
+   :param-types [:i64 :i64 :i64]}
   {:name pool,
    :params [total treasury head],
    :result :i64,
    :effects #{},
-   :body (- total (+ treasury head))}
+   :body (- total (+ treasury head)),
+   :param-types [:i64 :i64 :i64]}
   {:name memory-time-weight,
    :params [est-bytes duration-ms span],
    :result :i64,
    :effects #{},
-   :body (if (< span 1) 0 (* est-bytes duration-ms))}
+   :body (if (< span 1) 0 (* est-bytes duration-ms)),
+   :param-types [:i64 :i64 :i64]}
   {:name mt-sum-2,
    :params [w0 w1],
    :result :i64,
    :effects #{},
-   :body (+ w0 w1)}
+   :body (+ w0 w1),
+   :param-types [:i64 :i64]}
   {:name mt-sum-3,
    :params [w0 w1 w2],
    :result :i64,
    :effects #{},
-   :body (+ w0 (+ w1 w2))}
+   :body (+ w0 (+ w1 w2)),
+   :param-types [:i64 :i64 :i64]}
   {:name share-floor,
    :params [pool-amt w sumw],
    :result :i64,
    :effects #{},
-   :body (if (< sumw 1) 0 (quot (* pool-amt w) sumw))}
-  {:name share-pack-2,
+   :body (if (< sumw 1) 0 (quot (* pool-amt w) sumw)),
+   :param-types [:i64 :i64 :i64]}
+  {:name share-record-2,
    :params [pool-amt w0 w1],
-   :result :i64,
+   :result [:ref :credits/shares2],
    :effects #{},
    :body
    (let
@@ -75,30 +102,57 @@
      s0
      (share-floor pool-amt w0 sumw)
      s1
-     (share-floor pool-amt w1 sumw)
-     B
-     65536]
-    (+ s0 (* s1 B)))}
+     (share-floor pool-amt w1 sumw)]
+    (record-new
+     [:record :credits/shares2 [[:s0 :i64] [:s1 :i64]]]
+     s0
+     s1)),
+   :param-types [:i64 :i64 :i64]}
+  {:name share-of-0,
+   :params [shares],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record :credits/shares2 [[:s0 :i64] [:s1 :i64]]]
+    shares
+    :s0),
+   :param-types [[:ref :credits/shares2]]}
+  {:name share-of-1,
+   :params [shares],
+   :result :i64,
+   :effects #{},
+   :body
+   (record-get
+    [:record :credits/shares2 [[:s0 :i64] [:s1 :i64]]]
+    shares
+    :s1),
+   :param-types [[:ref :credits/shares2]]}
   {:name settle-pool-shares-2,
    :params [total w0 w1],
-   :result :i64,
+   :result [:ref :credits/shares2],
    :effects #{},
    :body
    (let
     [tr (cut total 1 20) hd (cut total 1 10) pl (pool total tr hd)]
-    (share-pack-2 pl w0 w1))}
+    (share-record-2 pl w0 w1)),
+   :param-types [:i64 :i64 :i64]}
   {:name charge-allow?,
    :params [balance cost],
    :result :i64,
    :effects #{},
-   :body (if (< balance cost) 0 1)}
+   :body (if (< balance cost) 0 1),
+   :param-types [:i64 :i64]}
   {:name balance-after-spend,
    :params [balance cost],
    :result :i64,
    :effects #{},
-   :body (let [left (- balance cost)] (if (< left 0) 0 left))}],
+   :body (let [left (- balance cost)] (if (< left 0) 0 left)),
+   :param-types [:i64 :i64]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:credits{:shares2
+           "f57a6ab85c30aaf351d3e4124797b7697fa96ab48b182787c7e21ffab69f5031"},
  :exports
  [default-per-token
   head-num
@@ -115,11 +169,15 @@
   job-cost-2
   job-cost-3
   share-floor
-  share-pack-2
+  share-record-2
+  share-of-0
+  share-of-1
   settle-pool-shares-2
   mt-sum-2
   mt-sum-3],
- :schemas nil,
+ :schemas
+ #:credits{:shares2
+           [:record :credits/shares2 [[:s0 :i64] [:s1 :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

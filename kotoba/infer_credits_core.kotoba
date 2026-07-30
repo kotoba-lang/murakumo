@@ -1,15 +1,20 @@
 (ns infer-credits-core
+  (:schemas {;; T5.3: two-lane floor shares are a record, not base-65536 pack.
+             :credits/shares2 [:record :credits/shares2
+                               [[:s0 :i64] [:s1 :i64]]]})
   (:export [default-per-token head-num head-den protocol-num protocol-den
             token-cost cut pool memory-time-weight
             charge-allow? balance-after-spend
             unit-cost job-cost-2 job-cost-3
-            share-floor share-pack-2 settle-pool-shares-2
+            share-floor share-record-2 share-of-0 share-of-1
+            settle-pool-shares-2
             mt-sum-2 mt-sum-3]))
 
 ;; W6 pure-planner oracle — murakumo.infer.credits integer core (medium).
 ;; Float share folds use floor quot; host may apply remainder policy.
 ;; multi-unit job-cost: sum of integer unit×price (throws stay host).
 ;; settle-pool-shares-2: floor shares of pool by memory-time weights.
+;; T5.3: share-pack-2 (s0 + s1*65536) → [:ref :credits/shares2].
 ;; Parity: test/murakumo/infer_credits_kotoba_parity_test.clj
 
 (defn default-per-token [] :i64 1)
@@ -30,8 +35,8 @@
   (+ (* p0 n0) (* p1 n1)))
 
 (defn job-cost-3 [p0 :i64 n0 :i64 p1 :i64 n1 :i64 p2n :i64] :i64
-  ;; p2n packs p2 + n2*B — too lossy. Use sum of two + third via unit-cost host-side.
-  ;; Arity 5: p0 n0 p1 n1 extra where extra = p2*n2 precomputed by host.
+  ;; Arity 5: p0 n0 p1 n1 extra where extra = p2*n2 precomputed by host
+  ;; (max-parameters 5; a 6th price/n pair would need a record of units).
   (+ (+ (* p0 n0) (* p1 n1)) p2n))
 
 (defn cut [total :i64 num :i64 den :i64] :i64
@@ -57,20 +62,26 @@
     0
     (quot (* pool-amt w) sumw)))
 
-(defn share-pack-2 [pool-amt :i64 w0 :i64 w1 :i64] :i64
+;; ── T5.3: two-lane shares are a record, not a base-65536 pack ────────────
+
+(defn share-record-2 [pool-amt :i64 w0 :i64 w1 :i64] [:ref :credits/shares2]
   (let [sumw (+ w0 w1)
         s0 (share-floor pool-amt w0 sumw)
-        s1 (share-floor pool-amt w1 sumw)
-        B 65536]
-    ;; pack s0 + s1*B — shares may exceed B for large pools; tests use small
-    (+ s0 (* s1 B))))
+        s1 (share-floor pool-amt w1 sumw)]
+    (record-new [:ref :credits/shares2] s0 s1)))
 
-(defn settle-pool-shares-2 [total :i64 w0 :i64 w1 :i64] :i64
+(defn share-of-0 [shares [:ref :credits/shares2]] :i64
+  (record-get shares :s0))
+
+(defn share-of-1 [shares [:ref :credits/shares2]] :i64
+  (record-get shares :s1))
+
+(defn settle-pool-shares-2 [total :i64 w0 :i64 w1 :i64] [:ref :credits/shares2]
   ;; default head 1/10 protocol 1/20 → pool, then floor shares
   (let [tr (cut total 1 20)
         hd (cut total 1 10)
         pl (pool total tr hd)]
-    (share-pack-2 pl w0 w1)))
+    (share-record-2 pl w0 w1)))
 
 (defn charge-allow? [balance :i64 cost :i64] :i64
   (if (< balance cost) 0 1))
