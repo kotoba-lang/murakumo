@@ -25,8 +25,8 @@ are unchanged by this mechanical pass.
 
 ## Non-claims
 
-- Load-time `def` constants that still use ad-hoc try/if in a few ns may still
-  soft-fallback until rewritten; runtime pure call path is the T6.4 gate.
+- Load-time `def` constants ad-hoc try/if: **closed** by
+  `ADR-260731-w6-t64-oracle-required-loadtime` (follow-up).
 - Wholesale deletion of cljs `mirror-*` bodies is still open.
 
 ## Evidence
