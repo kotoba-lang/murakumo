@@ -15,9 +15,12 @@
        "task-eligible? fill-milli better-fill? better-task-score? better-mem? "
        "wave-of slot-of load-after-assign "
        "digit-char nat-str i64-str pad4 task-id "
-       "pick-task-idx-2 assign-task-step-2 attempt-next exclude-append-marker "
+       "pair-record pick-task-idx-2 assign-task-step-2 "
+       "assign-task-2-code assign-task-2-load0 assign-task-2-load1 "
+       "attempt-next exclude-append-marker "
        "pick-task-fold-step load-inc-if challenger-wins? "
-       "assign-task-pick-3 apply-task-pick-3 assign-task-step-3 "
+       "triple-record assign-task-pick-3 apply-task-pick-3 assign-task-step-3 "
+       "assign-task-3-code assign-task-3-load0 assign-task-3-load1 assign-task-3-load2 "
        "nearest-rank-idx summary-retried speedup-milli max2 min2 clamp-nonneg "
        "unschedulable-detail exclude-join-sep "
        "unsched-placement-prefix unsched-excluding-prefix unsched-min-mem-prefix"))
@@ -221,42 +224,36 @@
     (is (= 3 (get attempts "a2")))))
 
 (deftest assign-task-step-2-matches-assign-1
-  (let [;; two identical eligible nodes, empty load → pick lower index 0
-        fill-pack (+ 0 (* 0 65536))
-        s0 "(assign-task-step-2 0 0 1 1 0)"
-        ;; after load0=1, fill would be higher on 0 if slots equal — use fill pack
-        ;; score-pack fill0=500 fill1=0 → prefer 1
-        s1 (str "(assign-task-step-2 1 0 1 1 " (+ 500 (* 0 65536)) ")")
+  (let [;; T5.3: fills/loads are pair records; results project field-wise
+        s0 "(assign-task-step-2 0 0 1 1 (pair-record 0 0))"
+        s1 "(assign-task-step-2 1 0 1 1 (pair-record 500 0))"
         actual (compile-i64-cases
-                {"s0" s0
-                 "s1" s1
-                 "p0" "(pick-task-idx-2 1 1 0 0 0)"
-                 "p1" (str "(pick-task-idx-2 1 1 500 0 " (+ 1 (* 0 65536)) ")")
-                 "pn" "(pick-task-idx-2 0 0 0 0 0)"})]
-    (let [r0 (get actual "s0")
-          code (mod r0 65536)
-          n0 (mod (quot r0 65536) 65536)
-          n1 (quot r0 (* 65536 65536))]
-      (is (= 1 code))
-      (is (= 1 n0))
-      (is (= 0 n1)))
-    (let [r1 (get actual "s1")
-          code (mod r1 65536)]
-      (is (= 2 code) "higher fill on node0 → pick node1"))
+                {"s0c" (str "(assign-task-2-code " s0 ")")
+                 "s0l0" (str "(assign-task-2-load0 " s0 ")")
+                 "s0l1" (str "(assign-task-2-load1 " s0 ")")
+                 "s1c" (str "(assign-task-2-code " s1 ")")
+                 "p0" "(pick-task-idx-2 1 1 0 0 (pair-record 0 0))"
+                 "p1" "(pick-task-idx-2 1 1 500 0 (pair-record 1 0))"
+                 "pn" "(pick-task-idx-2 0 0 0 0 (pair-record 0 0))"})]
+    (is (= 1 (get actual "s0c")))
+    (is (= 1 (get actual "s0l0")))
+    (is (= 0 (get actual "s0l1")))
+    (is (= 2 (get actual "s1c")) "higher fill on node0 → pick node1")
     (is (= 0 (get actual "p0")))
     (is (= 1 (get actual "p1")) "fill0=500 > fill1=0 → pick node1")
     (is (= -1 (get actual "pn")))))
 
 (deftest assign-task-step-3-and-summary
-  (let [B 65536
-        pack3 (fn [a b c] (+ a (* b B) (* c B B)))
-        ;; three equal empty nodes
-        ok (pack3 1 1 1)
-        fill (pack3 0 0 0)
-        load0 (pack3 0 0 0)
+  (let [ok "(triple-record 1 1 1)"
+        fill "(triple-record 0 0 0)"
+        load0 "(triple-record 0 0 0)"
+        s3 (str "(assign-task-step-3 " load0 " " ok " " fill ")")
         actual (compile-i64-cases
                 {"p3" (str "(assign-task-pick-3 " ok " " fill " " load0 ")")
-                 "s3" (str "(assign-task-step-3 " load0 " " ok " " fill ")")
+                 "s3c" (str "(assign-task-3-code " s3 ")")
+                 "s3l0" (str "(assign-task-3-load0 " s3 ")")
+                 "s3l1" (str "(assign-task-3-load1 " s3 ")")
+                 "s3l2" (str "(assign-task-3-load2 " s3 ")")
                  "fold0" (str "(pick-task-fold-step "
                               (opt-i64-form nil) " 1 0)")
                  "fold1" (str "(pick-task-fold-step "
@@ -274,16 +271,10 @@
                  "cw" "(challenger-wins? 500 1 0 0)"
                  "cw2" "(challenger-wins? 0 0 500 1)"})]
     (is (= 0 (get actual "p3")) "tie → lower index 0")
-    (let [r (get actual "s3")
-          code (mod r 4)
-          nload (quot r 4)
-          n0 (mod nload B)
-          n1 (mod (quot nload B) B)
-          n2 (quot nload (* B B))]
-      (is (= 1 code))
-      (is (= 1 n0))
-      (is (= 0 n1))
-      (is (= 0 n2)))
+    (is (= 1 (get actual "s3c")))
+    (is (= 1 (get actual "s3l0")))
+    (is (= 0 (get actual "s3l1")))
+    (is (= 0 (get actual "s3l2")))
     (is (= 1 (get actual "fold0")))
     (is (= 1 (get actual "fold1")))
     (is (= 2 (get actual "fold2")))
