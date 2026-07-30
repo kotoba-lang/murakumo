@@ -307,7 +307,7 @@
 
 (defn valid-env-var-name?
   "Reject blank, wildcard, and path-like env var names.
-   Kotoba `valid-env-var-name?` when oracle ready."
+   Kotoba `valid-env-var-name?` when oracle ready. Profile 5: guest :bool."
   [env-name]
   (try-oracle
    #(boolean (and (string? env-name)

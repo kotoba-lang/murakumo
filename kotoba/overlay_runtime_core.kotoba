@@ -22,12 +22,12 @@
 (defn default-web-port [] :i64 443)
 (defn default-quic-port [] :i64 4001)
 
-(defn starts-with? [s :string prefix :string] :i64
+(defn starts-with? [s :string prefix :string] :bool
   (let [n (string-byte-length s)
         p (string-byte-length prefix)]
     (if (< n p)
-      0
-      (if (string=? (string-substring s 0 p) prefix) 1 0))))
+      false
+      (if (string=? (string-substring s 0 p) prefix) true false))))
 
 ;; ── residual scheme / kind / adapter tokens ──────────────────────────
 
@@ -105,13 +105,13 @@
 
 (defn endpoint-kind [endpoint :string] :string
   ;; quic|webrtc|relay|webtransport|other from scheme prefix
-  (if (= (starts-with? endpoint (scheme-quic)) 1)
+  (if (starts-with? endpoint (scheme-quic))
     (kind-quic)
-    (if (= (starts-with? endpoint (scheme-webrtc)) 1)
+    (if (starts-with? endpoint (scheme-webrtc))
       (kind-webrtc)
-      (if (= (starts-with? endpoint (scheme-relay)) 1)
+      (if (starts-with? endpoint (scheme-relay))
         (kind-relay)
-        (if (= (starts-with? endpoint (scheme-webtransport)) 1)
+        (if (starts-with? endpoint (scheme-webtransport))
           (kind-webtransport)
           (kind-other))))))
 

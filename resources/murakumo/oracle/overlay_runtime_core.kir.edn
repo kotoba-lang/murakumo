@@ -21,15 +21,15 @@
    :param-types []}
   {:name starts-with?,
    :params [s prefix],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (let
     [n (string-byte-length s) p (string-byte-length prefix)]
     (if
      (< n p)
-     0
-     (if (string=? (string-substring s 0 p) prefix) 1 0))),
+     false
+     (if (string=? (string-substring s 0 p) prefix) true false))),
    :param-types [:string :string]}
   {:name scheme-quic,
    :params [],
@@ -236,16 +236,16 @@
    :effects #{},
    :body
    (if
-    (= (starts-with? endpoint (scheme-quic)) 1)
+    (starts-with? endpoint (scheme-quic))
     (kind-quic)
     (if
-     (= (starts-with? endpoint (scheme-webrtc)) 1)
+     (starts-with? endpoint (scheme-webrtc))
      (kind-webrtc)
      (if
-      (= (starts-with? endpoint (scheme-relay)) 1)
+      (starts-with? endpoint (scheme-relay))
       (kind-relay)
       (if
-       (= (starts-with? endpoint (scheme-webtransport)) 1)
+       (starts-with? endpoint (scheme-webtransport))
        (kind-webtransport)
        (kind-other))))),
    :param-types [:string]}

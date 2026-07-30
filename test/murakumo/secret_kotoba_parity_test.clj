@@ -102,6 +102,7 @@
         cases (into {} (map-indexed
                         (fn [i s]
                           [(str "v_" i)
+                           ;; Profile 5: valid-env-var-name? is :bool
                            (str "(if (valid-env-var-name? " (kotoba-literal s) ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]

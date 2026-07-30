@@ -246,13 +246,14 @@
     (catch #?(:clj Exception :cljs :default) _ nil)))
 
 (defn expired?
-  "True if claims are expired. Kotoba oracle (option exp) when ready."
+  "True if claims are expired. Kotoba oracle (option exp) when ready.
+   Profile 5: guest returns :bool."
   [cl now]
   (try-oracle
-   #(= 1 (oracle/i64->host
-          (o 'expired?
-             [(oracle/option-i64 (when (contains? cl :exp) (:exp cl)))
-              (oracle/as-i64 now)])))
+   #(oracle/bool->host
+     (o 'expired?
+        [(oracle/option-i64 (when (contains? cl :exp) (:exp cl)))
+         (oracle/as-i64 now)]))
    #(mirror-expired? cl now)))
 
 (defn signing-input
@@ -271,21 +272,21 @@
 
 (defn version-ok? [v]
   (try-oracle
-   #(= 1 (oracle/i64->host (o 'version-ok? [(str v)])))
+   #(oracle/bool->host (o 'version-ok? [(str v)]))
    #(mirror-version-ok? v)))
 
 (defn parts-present?
-  "All three wire segments present (non-blank)."
+  "All three wire segments present (non-blank). Profile 5: guest :bool."
   [v payload sig]
   (try-oracle
    #(let [seg (fn [x]
                 (when (and x (not (str/blank? (str x))))
                   (str x)))]
-      (= 1 (oracle/i64->host
-            (o 'parts-present?
-               [(oracle/option-string (seg v))
-                (oracle/option-string (seg payload))
-                (oracle/option-string (seg sig))]))))
+      (oracle/bool->host
+       (o 'parts-present?
+          [(oracle/option-string (seg v))
+           (oracle/option-string (seg payload))
+           (oracle/option-string (seg sig))])))
    #(mirror-parts-present? v payload sig)))
 
 (defn constant-time=
@@ -361,9 +362,10 @@
          (js/Promise.resolve nil)))))
 
 (defn scope-allows?
-  "Does a token's scope grant `required`? Kotoba when ready."
+  "Does a token's scope grant `required`? Kotoba when ready.
+   Profile 5: guest returns :bool."
   [token-scope required]
   (try-oracle
-   #(= 1 (oracle/i64->host
-          (o 'scope-allows? [(str token-scope) (str required)])))
+   #(oracle/bool->host
+     (o 'scope-allows? [(str token-scope) (str required)]))
    #(mirror-scope-allows? token-scope required)))

@@ -337,15 +337,15 @@
    :param-types [:string]}
   {:name starts-with?,
    :params [s prefix],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (let
     [n (string-byte-length s) p (string-byte-length prefix)]
     (if
      (< n p)
-     0
-     (if (string=? (string-substring s 0 p) prefix) 1 0))),
+     false
+     (if (string=? (string-substring s 0 p) prefix) true false))),
    :param-types [:string :string]}
   {:name cmd-plan,
    :params [],
@@ -457,45 +457,45 @@
    :param-types []}
   {:name is-cmd-plan?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-plan)) 1 0),
+   :body (if (string=? a (cmd-plan)) true false),
    :param-types [:string]}
   {:name is-cmd-records?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-records)) 1 0),
+   :body (if (string=? a (cmd-records)) true false),
    :param-types [:string]}
   {:name is-cmd-routes?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-routes)) 1 0),
+   :body (if (string=? a (cmd-routes)) true false),
    :param-types [:string]}
   {:name is-cmd-dial?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-dial)) 1 0),
+   :body (if (string=? a (cmd-dial)) true false),
    :param-types [:string]}
   {:name is-cmd-connect?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-connect)) 1 0),
+   :body (if (string=? a (cmd-connect)) true false),
    :param-types [:string]}
   {:name is-cmd-relay?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-relay)) 1 0),
+   :body (if (string=? a (cmd-relay)) true false),
    :param-types [:string]}
   {:name is-cmd-bootstrap?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-bootstrap)) 1 0),
+   :body (if (string=? a (cmd-bootstrap)) true false),
    :param-types [:string]}
   {:name command-token,
    :params [a],
@@ -503,90 +503,90 @@
    :effects #{},
    :body
    (if
-    (= (is-cmd-plan? a) 1)
+    (is-cmd-plan? a)
     (cmd-plan)
     (if
-     (= (is-cmd-records? a) 1)
+     (is-cmd-records? a)
      (cmd-records)
      (if
-      (= (is-cmd-routes? a) 1)
+      (is-cmd-routes? a)
       (cmd-routes)
       (if
-       (= (is-cmd-dial? a) 1)
+       (is-cmd-dial? a)
        (cmd-dial)
        (if
-        (= (is-cmd-connect? a) 1)
+        (is-cmd-connect? a)
         (cmd-connect)
         (if
-         (= (is-cmd-relay? a) 1)
+         (is-cmd-relay? a)
          (cmd-relay)
-         (if (= (is-cmd-bootstrap? a) 1) (cmd-bootstrap) ""))))))),
+         (if (is-cmd-bootstrap? a) (cmd-bootstrap) ""))))))),
    :param-types [:string]}
   {:name is-flag-cloud?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (starts-with? a (flag-cloud-prefix)),
    :param-types [:string]}
   {:name is-flag-fleet?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (starts-with? a (flag-fleet-prefix)),
    :param-types [:string]}
   {:name is-flag-target?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (starts-with? a (flag-target-prefix)),
    :param-types [:string]}
   {:name is-flag-from?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (starts-with? a (flag-from-prefix)),
    :param-types [:string]}
   {:name is-flag-to?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (starts-with? a (flag-to-prefix)),
    :param-types [:string]}
   {:name is-flag-capability?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (starts-with? a (flag-capability-prefix)),
    :param-types [:string]}
   {:name is-flag-driver?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (starts-with? a (flag-driver-prefix)),
    :param-types [:string]}
   {:name is-flag-format?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (starts-with? a (flag-format-prefix)),
    :param-types [:string]}
   {:name is-flag-auth-key?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (starts-with? a (flag-auth-key-prefix)),
    :param-types [:string]}
   {:name is-flag-dash?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body (starts-with? a (flag-dash-prefix)),
    :param-types [:string]}
   {:name is-positional-target?,
    :params [a],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (= (is-flag-dash? a) 1) 0 1),
+   :body (if (is-flag-dash? a) false true),
    :param-types [:string]}
   {:name flag-value-after,
    :params [a prefix-len],

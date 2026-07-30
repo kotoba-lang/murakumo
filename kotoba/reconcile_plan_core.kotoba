@@ -143,12 +143,12 @@
 
 (defn default-watch-seconds [] :i64 30)
 
-(defn starts-with? [s :string prefix :string] :i64
+(defn starts-with? [s :string prefix :string] :bool
   (let [n (string-byte-length s)
         p (string-byte-length prefix)]
     (if (< n p)
-      0
-      (if (string=? (string-substring s 0 p) prefix) 1 0))))
+      false
+      (if (string=? (string-substring s 0 p) prefix) true false))))
 
 ;; CLI flag tokens (SSoT for classifiers + value extract)
 
@@ -159,20 +159,20 @@
 (defn flag-snapshot-prefix [] :string "--snapshot=")
 (defn flag-dash-prefix [] :string "--")
 
-(defn flag-is-dry-run? [a :string] :i64
-  (if (string=? a (flag-dry-run)) 1 0))
+(defn flag-is-dry-run? [a :string] :bool
+  (if (string=? a (flag-dry-run)) true false))
 
-(defn flag-is-apply? [a :string] :i64
-  (if (string=? a (flag-apply)) 1 0))
+(defn flag-is-apply? [a :string] :bool
+  (if (string=? a (flag-apply)) true false))
 
-(defn flag-is-watch? [a :string] :i64
+(defn flag-is-watch? [a :string] :bool
   ;; bare --watch or --watch=N
   (starts-with? a (flag-watch)))
 
-(defn flag-is-snapshot? [a :string] :i64
+(defn flag-is-snapshot? [a :string] :bool
   (starts-with? a (flag-snapshot-prefix)))
 
-(defn flag-is-dash? [a :string] :i64
+(defn flag-is-dash? [a :string] :bool
   (starts-with? a (flag-dash-prefix)))
 
 (defn ws? [c :string] :bool
@@ -231,7 +231,7 @@
   ;; "--watch" → 30; "--watch=5" → 5; bad digits → 30 default
   (if (string=? a (flag-watch))
     (default-watch-seconds)
-    (if (= (starts-with? a (flag-watch-eq-prefix)) 1)
+    (if (starts-with? a (flag-watch-eq-prefix))
       (let [n (string-byte-length a)
             plen (string-byte-length (flag-watch-eq-prefix))
             v (parse-digits (string-substring a plen n))]
@@ -242,7 +242,7 @@
 
 (defn snapshot-value [a :string] :string
   ;; "--snapshot=PATH" → PATH; else ""
-  (if (= (starts-with? a (flag-snapshot-prefix)) 1)
+  (if (starts-with? a (flag-snapshot-prefix))
     (let [n (string-byte-length a)
           plen (string-byte-length (flag-snapshot-prefix))]
       (string-substring a plen n))

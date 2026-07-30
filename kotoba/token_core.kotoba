@@ -70,16 +70,16 @@
 (defn claim-exp [now :i64 ttl [:option :i64]] :i64
   (+ now (if-some [x ttl] x (default-ttl))))
 
-(defn expired? [exp [:option :i64] now :i64] :i64
-  ;; 1 expired, 0 live — missing exp => expired
+(defn expired? [exp [:option :i64] now :i64] :bool
+  ;; true when expired; missing exp => expired
   (if-some [e exp]
-    (if (< now e) 0 1)
-    1))
+    (if (< now e) false true)
+    true))
 
-(defn scope-allows? [token-scope :string required :string] :i64
+(defn scope-allows? [token-scope :string required :string] :bool
   (if (string=? token-scope (scope-all))
-    1
-    (if (string=? token-scope required) 1 0)))
+    true
+    (if (string=? token-scope required) true false)))
 
 (defn signing-input [payload-seg :string] :string
   (string-concat (version) (string-concat (jwt-seg-sep) payload-seg)))
@@ -104,15 +104,15 @@
      payload-seg
      (string-concat (wire-sep) sig)))))
 
-(defn version-ok? [v :string] :i64
-  (if (string=? v (version)) 1 0))
+(defn version-ok? [v :string] :bool
+  (if (string=? v (version)) true false))
 
-(defn parts-present? [v [:option :string] p [:option :string] s [:option :string]] :i64
+(defn parts-present? [v [:option :string] p [:option :string] s [:option :string]] :bool
   (if-some [_ v]
     (if-some [_ p]
-      (if-some [_ s] 1 0)
-      0)
-    0))
+      (if-some [_ s] true false)
+      false)
+    false))
 
 (defn ct-scan [a :string b :string i :i64 n :i64 acc :i64] :i64
   (if (< i n)

@@ -106,11 +106,11 @@
       :else kind-unknown)))
 
 (defn- mirror-command-is-dial? [command]
-  (if (= cmd-dial (str command)) 1 0))
+  (= cmd-dial (str command)))
 
 (defn- mirror-dial-ok-reason [is-dial missing-count]
   (cond
-    (zero? is-dial) reason-unknown-command
+    (not is-dial) reason-unknown-command
     (pos? missing-count) reason-missing-options
     :else reason-ok))
 
@@ -206,12 +206,12 @@
   (let [missing (missing-options required-dial-options opts)
         cmd-name (name (or (:command opts) :unknown))
         is-dial (try-oracle
-                 #(oracle/i64->host (o 'command-is-dial? [cmd-name]))
+                 #(oracle/bool->host (o 'command-is-dial? [cmd-name]))
                  #(mirror-command-is-dial? cmd-name))
         reason (keyword
                 (try-oracle
                  #(o 'dial-ok-reason
-                     [(oracle/as-i64 is-dial) (oracle/as-i64 (count missing))])
+                     [(boolean is-dial) (oracle/as-i64 (count missing))])
                  #(mirror-dial-ok-reason is-dial (count missing))))]
     (case reason
       :unknown-command
