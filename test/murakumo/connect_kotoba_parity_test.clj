@@ -20,11 +20,8 @@
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
-(defn- opt-i64-form [n]
-  (if (nil? n)
-    "(option-none-of [:option :i64])"
-    (str "(option-some-of [:option :i64] " (long n) ")")))
-
+(defn- bool-form [b]
+  (if b "true" "false"))
 
 (defn- compile-string-cases [cases]
   (let [defs (for [[name body] cases]
@@ -51,11 +48,12 @@
 (defn- project-serves [node reach]
   (let [{:keys [class plane]} (#'connect/parse-reach reach)
         ncls (connect/node-class connect-spec node)
-        http? (when (some #{:http} (connect/class-transports connect-spec ncls :read)) 1)
+        http? (boolean (some #{:http}
+                             (connect/class-transports connect-spec ncls :read)))
         common (set/intersection
                 (set (connect/class-transports connect-spec ncls :live))
                 (set (connect/class-transports connect-spec class :live)))
-        common? (when (seq common) 1)]
+        common? (boolean (seq common))]
     {:plane (name plane) :http? http? :common? common?
      :expected (if (connect/serves-reach? connect-spec node reach) 1 0)}))
 
@@ -84,8 +82,8 @@
                        (let [p (project-serves node reach)]
                          [(str "s_" i)
                           (str "(if (serves-plane? " (kotoba-literal (:plane p)) " "
-                               (opt-i64-form (:http? p)) " "
-                               (opt-i64-form (:common? p)) ") 1 0)")]))
+                               (bool-form (:http? p)) " "
+                               (bool-form (:common? p)) ") 1 0)")]))
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [node reach]] (map-indexed vector corpus)]

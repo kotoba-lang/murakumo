@@ -4,8 +4,8 @@
             class-native plane-read plane-live]))
 
 ;; W6 pure-planner oracle — murakumo.connect decision core (low priority).
-;; class-transports / set intersection stay host-projected into optional flags.
-;; Product Value ABI v1: optional i64 flags (no has-http / has-common sentinels).
+;; class-transports / set intersection stay host-projected into :bool flags.
+;; Profile 5: http?/common? are real :bool (not [:option :i64] presence).
 ;; Residual class/plane name tokens dual-source; helpers recompose.
 ;; empty default-class string ⇒ class-native. node-class empty ⇒ use default.
 ;; plane: plane-read | plane-live | other.
@@ -37,20 +37,18 @@
     (default-class-name default-class)
     node-class))
 
-(defn serves-read? [http? [:option :i64]] :bool
-  ;; cljc :read plane — host projects presence of :http as some(1)
-  ;; Profile 5: :bool.
-  (if-some [_ http?] true false))
+(defn serves-read? [http? :bool] :bool
+  ;; cljc :read plane — host projects presence of :http as real :bool.
+  http?)
 
-(defn serves-live? [common? [:option :i64]] :bool
-  ;; cljc :live — host projects non-empty live-transport intersection as some(1)
-  ;; Profile 5: :bool.
-  (if-some [_ common?] true false))
+(defn serves-live? [common? :bool] :bool
+  ;; cljc :live — host projects non-empty live-transport intersection as :bool.
+  common?)
 
 (defn serves-plane? [plane :string
-                     http? [:option :i64]
-                     common? [:option :i64]] :bool
-  ;; Profile 5: plane gate as :bool.
+                     http? :bool
+                     common? :bool] :bool
+  ;; Profile 5: plane gate; http?/common? are real :bool (not option-i64).
   (if (string=? plane (plane-read))
     (serves-read? http?)
     (if (string=? plane (plane-live))

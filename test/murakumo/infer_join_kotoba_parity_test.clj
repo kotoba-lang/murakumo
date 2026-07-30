@@ -78,20 +78,27 @@
         (is (= (if (join/can? {:tier t} k) 1 0)
                (get actual (str "c_" i))))))))
 
+(defn- opt-i64-form [n]
+  (if (nil? n)
+    "(option-none-of [:option :i64])"
+    (str "(option-some-of [:option :i64] " (long n) ")")))
+
 (deftest clamp-resident-matches-enrollment-min
   (let [tier-max (get-in join/tiers [:browser :max-resident-bytes])
+        ;; mem is [:option :i64]: nil = absent (use tier max).
         corpus [[(* 8 1024 1024 1024) tier-max]
                 [(* 1 1024 1024 1024) tier-max]
-                [-1 tier-max]
+                [nil tier-max]
                 [tier-max tier-max]]
         cases (into {} (map-indexed
                         (fn [i [mem tmax]]
-                          [(str "cr_" i) (str "(clamp-resident " mem " " tmax ")")])
+                          [(str "cr_" i)
+                           (str "(clamp-resident " (opt-i64-form mem) " " tmax ")")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [mem tmax]] (map-indexed vector corpus)]
       (testing (str mem)
-        (let [expected (if (neg? mem) tmax (min mem tmax))]
+        (let [expected (if (nil? mem) tmax (min mem tmax))]
           (is (= expected (get actual (str "cr_" i)))))))))
 
 (deftest eligible-for-work-matches-join

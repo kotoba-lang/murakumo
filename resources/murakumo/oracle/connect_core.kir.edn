@@ -39,30 +39,14 @@
    :params [http?],
    :result :bool,
    :effects #{},
-   :body
-   (let
-    [__kotoba_binding-some_1 http?]
-    (if
-     (option-some?-of [:option :i64] __kotoba_binding-some_1)
-     (let
-      [_ (option-value-of [:option :i64] __kotoba_binding-some_1 0)]
-      true)
-     false)),
-   :param-types [[:option :i64]]}
+   :body http?,
+   :param-types [:bool]}
   {:name serves-live?,
    :params [common?],
    :result :bool,
    :effects #{},
-   :body
-   (let
-    [__kotoba_binding-some_2 common?]
-    (if
-     (option-some?-of [:option :i64] __kotoba_binding-some_2)
-     (let
-      [_ (option-value-of [:option :i64] __kotoba_binding-some_2 0)]
-      true)
-     false)),
-   :param-types [[:option :i64]]}
+   :body common?,
+   :param-types [:bool]}
   {:name serves-plane?,
    :params [plane http? common?],
    :result :bool,
@@ -72,7 +56,7 @@
     (string=? plane (plane-read))
     (serves-read? http?)
     (if (string=? plane (plane-live)) (serves-live? common?) false)),
-   :param-types [:string [:option :i64] [:option :i64]]}],
+   :param-types [:string :bool :bool]}],
  :oracle-value nil,
  :schema-identities nil,
  :exports

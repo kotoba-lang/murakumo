@@ -82,20 +82,18 @@
   "Can `node` serve a client of `(:class reach)` on `(:plane reach)`?
      :read — node speaks :http (universal CID pull).
      :live — node and target client class share at least one live transport.
-   Kotoba `serves-plane?` (Product Value ABI optional flags)."
+   Kotoba `serves-plane?` (profile-5 :bool flags for http?/common?)."
   [connect node reach]
   (let [{:keys [class plane]} (parse-reach reach)
         ncls (node-class connect node)
-        http? (when (some #{:http} (class-transports connect ncls (keyword plane-read))) 1)
-        common? (when (seq (set/intersection
-                            (set (class-transports connect ncls (keyword plane-live)))
-                            (set (class-transports connect class (keyword plane-live)))))
-                  1)]
+        http? (boolean (some #{:http}
+                             (class-transports connect ncls (keyword plane-read))))
+        common? (boolean (seq (set/intersection
+                               (set (class-transports connect ncls (keyword plane-live)))
+                               (set (class-transports connect class (keyword plane-live))))))]
     (oracle/bool->host
      (o 'serves-plane?
-        [(name plane)
-         (oracle/option-i64 http?)
-         (oracle/option-i64 common?)]))))
+        [(name plane) http? common?]))))
 
 (defn serves-all?
   "True if `node` satisfies every reach requirement (empty => trivially true)."

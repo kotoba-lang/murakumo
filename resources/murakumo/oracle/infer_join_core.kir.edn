@@ -74,8 +74,16 @@
    :params [mem tier-max],
    :result :i64,
    :effects #{},
-   :body (if (< mem 0) tier-max (if (< mem tier-max) mem tier-max)),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [__kotoba_binding-some_1 mem]
+    (if
+     (option-some?-of [:option :i64] __kotoba_binding-some_1)
+     (let
+      [m (option-value-of [:option :i64] __kotoba_binding-some_1 0)]
+      (if (< m tier-max) m tier-max))
+     tier-max)),
+   :param-types [[:option :i64] :i64]}
   {:name eligible-for-work?,
    :params [can-kind max-res resident],
    :result :bool,
