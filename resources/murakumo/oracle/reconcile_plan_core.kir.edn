@@ -127,41 +127,66 @@
      (if (= (better-target? load0 load2 n02) 1) 0 2)
      (if (= (better-target? load1 load2 n12) 1) 1 2))),
    :param-types [:i64 :i64 :i64 :i64]}
-  {:name pack-targets,
+  {:name targets-record,
    :params [first second count],
-   :result :i64,
+   :result [:ref :reconcile/targets],
    :effects #{},
-   :body (+ first (+ (* second 256) (* count 65536))),
+   :body
+   (record-new
+    [:record
+     :reconcile/targets
+     [[:first :i64] [:second :i64] [:count :i64]]]
+    first
+    second
+    count),
    :param-types [:i64 :i64 :i64]}
-  {:name target-pack-first,
-   :params [pack],
+  {:name targets-first,
+   :params [t],
    :result :i64,
    :effects #{},
-   :body (rem64 pack 256),
-   :param-types [:i64]}
-  {:name target-pack-second,
-   :params [pack],
+   :body
+   (record-get
+    [:record
+     :reconcile/targets
+     [[:first :i64] [:second :i64] [:count :i64]]]
+    t
+    :first),
+   :param-types [[:ref :reconcile/targets]]}
+  {:name targets-second,
+   :params [t],
    :result :i64,
    :effects #{},
-   :body (rem64 (quot pack 256) 256),
-   :param-types [:i64]}
-  {:name target-pack-count,
-   :params [pack],
+   :body
+   (record-get
+    [:record
+     :reconcile/targets
+     [[:first :i64] [:second :i64] [:count :i64]]]
+    t
+    :second),
+   :param-types [[:ref :reconcile/targets]]}
+  {:name targets-count,
+   :params [t],
    :result :i64,
    :effects #{},
-   :body (quot pack 65536),
-   :param-types [:i64]}
-  {:name pick-targets-2-pack,
+   :body
+   (record-get
+    [:record
+     :reconcile/targets
+     [[:first :i64] [:second :i64] [:count :i64]]]
+    t
+    :count),
+   :param-types [[:ref :reconcile/targets]]}
+  {:name pick-targets-2-record,
    :params [load0 load1 name0-before-1 n],
-   :result :i64,
+   :result [:ref :reconcile/targets],
    :effects #{},
    :body
    (if
     (< n 1)
-    (pack-targets 0 0 0)
+    (targets-record 0 0 0)
     (let
      [f (first-of-2 load0 load1 name0-before-1) s (if (= f 0) 1 0)]
-     (if (= n 1) (pack-targets f 0 1) (pack-targets f s 2)))),
+     (if (= n 1) (targets-record f 0 1) (targets-record f s 2)))),
    :param-types [:i64 :i64 :i64 :i64]}
   {:name pick-targets-3-first,
    :params [load0 load1 load2 name-bits],
@@ -409,7 +434,9 @@
    :body "com.murakumo.fleet.reconcile",
    :param-types []}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:reconcile{:targets
+             "b2037812cd4704b22441a22788d8030f2641de84edb60461baccc69b84ab2969"},
  :exports
  [default-replicas
   desired
@@ -419,11 +446,11 @@
   better-target?
   first-of-2
   first-of-3
-  pick-targets-2-pack
+  pick-targets-2-record
   pick-targets-3-first
-  target-pack-first
-  target-pack-second
-  target-pack-count
+  targets-first
+  targets-second
+  targets-count
   blank?
   missing-manifest?
   action-is-satisfied?
@@ -455,7 +482,11 @@
   action-blocked
   action-needs-build
   reconcile-record-type],
- :schemas nil,
+ :schemas
+ #:reconcile{:targets
+             [:record
+              :reconcile/targets
+              [[:first :i64] [:second :i64] [:count :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

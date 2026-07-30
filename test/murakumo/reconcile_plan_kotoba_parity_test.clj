@@ -13,8 +13,8 @@
 (def export-prefix
   (str "default-replicas desired deficit watch-sleep-ms action-name "
        "better-target? first-of-2 first-of-3 "
-       "pick-targets-2-pack pick-targets-3-first "
-       "target-pack-first target-pack-second target-pack-count "
+       "pick-targets-2-record pick-targets-3-first "
+       "targets-first targets-second targets-count "
        "blank? missing-manifest? action-is-satisfied? action-is-place? "
        "default-watch-seconds starts-with? "
        "flag-is-dry-run? flag-is-apply? flag-is-watch? flag-is-snapshot? "
@@ -160,20 +160,18 @@
         actual (compile-i64-cases
                 {"f2" "(first-of-2 1 3 1)"  ;; load0=1 load1=3 name0 before → 0
                  "f2b" "(first-of-2 1 1 0)" ;; equal load, name0 after → 1
-                 "p2" "(pick-targets-2-pack 1 3 1 2)"
-                 "p2n1" "(pick-targets-2-pack 1 3 1 1)"
-                 "p2n0" "(pick-targets-2-pack 1 3 1 0)"
                  "f3" (str "(first-of-3 1 3 1 " name-bits-cab ")")
                  "t3" (str "(pick-targets-3-first 1 3 1 " name-bits-cab ")")
-                 "pf" "(target-pack-first (pick-targets-2-pack 1 3 1 2))"
-                 "ps" "(target-pack-second (pick-targets-2-pack 1 3 1 2))"
-                 "pc" "(target-pack-count (pick-targets-2-pack 1 3 1 2))"})
+                 ;; T5.3: project record fields inside the guest
+                 "pf" "(targets-first (pick-targets-2-record 1 3 1 2))"
+                 "ps" "(targets-second (pick-targets-2-record 1 3 1 2))"
+                 "pc" "(targets-count (pick-targets-2-record 1 3 1 2))"
+                 "p2n1c" "(targets-count (pick-targets-2-record 1 3 1 1))"
+                 "p2n0c" "(targets-count (pick-targets-2-record 1 3 1 0))"})
         ;; cljc: candidates c,a,b loads c=1,a=3,b=1 → sorted b,c,a
         cljc (pick ["c" "a" "b"] 2 {"c" 1 "a" 3 "b" 1})]
     (is (= 0 (get actual "f2")))
     (is (= 1 (get actual "f2b")))
-    ;; first of c(1) vs a(3) with c before a? c>a so name0-before=0... wait
-    ;; candidates order in call is c,a,b as indices 0,1,2
     ;; first-of-3 with loads 1,3,1: compare c vs a: load c better → w01=0
     ;; compare c vs b: loads equal 1,1, name c<=b? false → n02=0 → b wins → first=2 (b)
     (is (= 2 (get actual "f3")))
@@ -181,14 +179,17 @@
     (is (= 0 (get actual "pf")))  ;; first of two with load1=1,3 name0 before → 0
     (is (= 1 (get actual "ps")))
     (is (= 2 (get actual "pc")))
+    (is (= 1 (get actual "p2n1c")))
+    (is (= 0 (get actual "p2n0c")))
     (is (= ["b" "c"] cljc))
-    ;; two-pack: candidates order [b c] loads 1,1 names b before c
+    ;; two-record: candidates order [b c] loads 1,1 names b before c
     (let [p2 (compile-i64-cases
-              {"ord" "(pick-targets-2-pack 1 1 1 2)"})
-          pack (get p2 "ord")]
-      (is (= 0 (rem pack 256)))
-      (is (= 1 (rem (quot pack 256) 256)))
-      (is (= 2 (quot pack 65536))))))
+              {"ord0" "(targets-first (pick-targets-2-record 1 1 1 2))"
+               "ord1" "(targets-second (pick-targets-2-record 1 1 1 2))"
+               "ordc" "(targets-count (pick-targets-2-record 1 1 1 2))"})]
+      (is (= 0 (get p2 "ord0")))
+      (is (= 1 (get p2 "ord1")))
+      (is (= 2 (get p2 "ordc"))))))
 
 (deftest flag-and-action-pure-match
   (let [i (compile-i64-cases

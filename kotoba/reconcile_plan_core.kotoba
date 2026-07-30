@@ -1,8 +1,11 @@
 (ns reconcile-plan-core
+  (:schemas {;; T5.3: placement pick result is a record, not a mixed radix pack.
+             :reconcile/targets [:record :reconcile/targets
+                                 [[:first :i64] [:second :i64] [:count :i64]]]})
   (:export [default-replicas desired deficit watch-sleep-ms action-name
             better-target? first-of-2 first-of-3
-            pick-targets-2-pack pick-targets-3-first
-            target-pack-first target-pack-second target-pack-count
+            pick-targets-2-record pick-targets-3-first
+            targets-first targets-second targets-count
             blank? missing-manifest? action-is-satisfied? action-is-place?
             default-watch-seconds starts-with?
             flag-is-dry-run? flag-is-apply? flag-is-watch? flag-is-snapshot?
@@ -24,7 +27,7 @@
 ;; pick-targets: pure sort-by [load, name] for fixed 2/3 free candidates.
 ;; name order projected by host: name-a-before-b = 1 if name(a) <= name(b).
 ;; For 3-way: name-bits bit0=n0<=n1, bit1=n0<=n2, bit2=n1<=n2 (values 1/2/4).
-;; Pack: first | second*256 | count*65536 (indices 0..2, count 0..2).
+;; T5.3: pick result is [:ref :reconcile/targets], not first|second*256|count*65536.
 ;; Parity: test/murakumo/reconcile_plan_kotoba_parity_test.clj
 
 (defn default-replicas [] :i64 1)
@@ -90,31 +93,32 @@
       (if (= (better-target? load0 load2 n02) 1) 0 2)
       (if (= (better-target? load1 load2 n12) 1) 1 2))))
 
-(defn pack-targets [first :i64 second :i64 count :i64] :i64
-  (+ first (+ (* second 256) (* count 65536))))
+(defn targets-record [first :i64 second :i64 count :i64] [:ref :reconcile/targets]
+  (record-new [:ref :reconcile/targets] first second count))
 
-(defn target-pack-first [pack :i64] :i64
-  (rem64 pack 256))
+(defn targets-first [t [:ref :reconcile/targets]] :i64
+  (record-get t :first))
 
-(defn target-pack-second [pack :i64] :i64
-  (rem64 (quot pack 256) 256))
+(defn targets-second [t [:ref :reconcile/targets]] :i64
+  (record-get t :second))
 
-(defn target-pack-count [pack :i64] :i64
-  (quot pack 65536))
+(defn targets-count [t [:ref :reconcile/targets]] :i64
+  (record-get t :count))
 
-(defn pick-targets-2-pack [load0 :i64 load1 :i64 name0-before-1 :i64 n :i64] :i64
+(defn pick-targets-2-record [load0 :i64 load1 :i64 name0-before-1 :i64 n :i64]
+  [:ref :reconcile/targets]
   ;; take min(n,2) from two candidates sorted by load then name
   (if (< n 1)
-    (pack-targets 0 0 0)
+    (targets-record 0 0 0)
     (let [f (first-of-2 load0 load1 name0-before-1)
           s (if (= f 0) 1 0)]
       (if (= n 1)
-        (pack-targets f 0 1)
-        (pack-targets f s 2)))))
+        (targets-record f 0 1)
+        (targets-record f s 2)))))
 
 (defn pick-targets-3-first [load0 :i64 load1 :i64 load2 :i64 name-bits :i64] :i64
   ;; first target among 3 free candidates (n>=1). For n>1 host may re-call
-  ;; on remaining pair via pick-targets-2-pack.
+  ;; on remaining pair via pick-targets-2-record.
   (first-of-3 load0 load1 load2 name-bits))
 
 (defn blank? [s :string] :i64
