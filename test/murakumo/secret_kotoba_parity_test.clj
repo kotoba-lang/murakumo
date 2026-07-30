@@ -141,8 +141,8 @@
                  "cn" (str "(secret-error-code " (kotoba-literal "not-found") ")")
                  "me" (str "(secret-error-message " (kotoba-literal "empty") ")")})
         iv (compile-i64-cases
-            {"rv" (str "(reply-is-value? " (kotoba-literal "value") ")")
-             "rn" (str "(reply-is-value? " (kotoba-literal "empty") ")")})]
+            {"rv" (str "(if (reply-is-value? " (kotoba-literal "value") ") 1 0)")
+             "rn" (str "(if (reply-is-value? " (kotoba-literal "empty") ") 1 0)")})]
     (is (= "value" (get actual "v") (get actual "tv")))
     (is (= "empty" (get actual "e")))
     (is (= "not-found" (get actual "m") (get actual "tn")))

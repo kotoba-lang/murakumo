@@ -163,13 +163,15 @@
 (defn plan-lr-l2 [total :i64 w0 :i64 w1 :i64 w2 :i64] :i64
   (record-get (plan-lr-record total w0 w1 w2) :l2))
 
-(defn plan-fits-total? [total-usable :i64 weight-bytes :i64] :i64
+(defn plan-fits-total? [total-usable :i64 weight-bytes :i64] :bool
   ;; cljc plan :fits? partial — total usable ≥ model weights
-  (if (< total-usable weight-bytes) 0 1))
+  ;; Profile 5: :bool.
+  (if (< total-usable weight-bytes) false true))
 
-(defn span-fits? [est-bytes :i64 usable :i64] :i64
+(defn span-fits? [est-bytes :i64 usable :i64] :bool
   ;; cljc :fits? per assignment (<= est usable)
-  (if (< usable est-bytes) 0 1))
+  ;; Profile 5: :bool.
+  (if (< usable est-bytes) false true))
 
 (defn uniform-layer-bytes [weight-bytes :i64 layers :i64] :i64
   ;; dense-layers=0 case of layer-weights (each layer equal)
@@ -324,13 +326,13 @@
         e0 (est-bytes-range weight-bytes mp lo0 hi0)
         e1 (est-bytes-range weight-bytes mp lo1 hi1)
         e2 (est-bytes-range weight-bytes mp lo2 hi2)
-        f0 (if (= s0 0) 1 (span-fits? e0 u0))
-        f1 (if (= s1 0) 1 (span-fits? e1 u1))
-        f2 (if (= s2 0) 1 (span-fits? e2 u2))
-        spans-ok (if (if (= f0 1) (if (= f1 1) (if (= f2 1) 1 0) 0) 0) 1 0)
+        f0 (if (= s0 0) true (span-fits? e0 u0))
+        f1 (if (= s1 0) true (span-fits? e1 u1))
+        f2 (if (= s2 0) true (span-fits? e2 u2))
+        spans-ok (if f0 (if f1 (if f2 true false) false) false)
         total (+ u0 (+ u1 u2))
         total-ok (plan-fits-total? total weight-bytes)]
-    (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)))
+    (if (if total-ok (if spans-ok true false) false) 1 0)))
 
 (defn partition-1-end [mp [:ref :plan/model]] :i64
   ;; single-node ring: exclusive end is always layers
@@ -341,9 +343,9 @@
   (let [layers (partition-1-end mp)
         s0 (assignment-span 0 layers)
         e0 (est-bytes-range weight-bytes mp 0 layers)
-        f0 (if (= s0 0) 1 (span-fits? e0 u0))
+        f0 (if (= s0 0) true (span-fits? e0 u0))
         total-ok (plan-fits-total? u0 weight-bytes)]
-    (if (if (= total-ok 1) (if (= f0 1) 1 0) 0) 1 0)))
+    (if (if total-ok (if f0 true false) false) 1 0)))
 
 (defn partition-2-ends [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64]
   [:ref :plan/ends]
@@ -369,12 +371,12 @@
         s1 (assignment-span lo1 hi1)
         e0 (est-bytes-range weight-bytes mp lo0 hi0)
         e1 (est-bytes-range weight-bytes mp lo1 hi1)
-        f0 (if (= s0 0) 1 (span-fits? e0 u0))
-        f1 (if (= s1 0) 1 (span-fits? e1 u1))
-        spans-ok (if (if (= f0 1) (if (= f1 1) 1 0) 0) 1 0)
+        f0 (if (= s0 0) true (span-fits? e0 u0))
+        f1 (if (= s1 0) true (span-fits? e1 u1))
+        spans-ok (if f0 (if f1 true false) false)
         total (+ u0 u1)
         total-ok (plan-fits-total? total weight-bytes)]
-    (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)))
+    (if (if total-ok (if spans-ok true false) false) 1 0)))
 
 (defn ends-at [ends [:ref :plan/ends] idx :i64] :i64
   ;; exclusive end idx; fields are literal so the index is a small if-chain
@@ -394,7 +396,7 @@
   ;; pure assignment numeric row (T5.3: a record, not pack3). Host adds :node id.
   (let [sp (assignment-span lo hi)
         est (est-bytes-range weight-bytes mp lo hi)
-        fit (if (= sp 0) 1 (span-fits? est usable))]
+        fit (if (= sp 0) 1 (if (span-fits? est usable) 1 0))]
     (record-new [:ref :plan/row] sp fit)))
 
 (defn asg-row-span [row [:ref :plan/row]] :i64

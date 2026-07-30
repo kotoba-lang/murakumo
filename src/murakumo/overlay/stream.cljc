@@ -127,8 +127,8 @@
    :stream (:stream frame)
    :seq (:seq frame)
    :accepted? (try-oracle
-               #(= 1 (oracle/i64->host
-                      (o 'ack-accepted? [(oracle/as-i64 (if accepted? 1 0))])))
+               #(oracle/bool->host
+                 (o 'ack-accepted? [(boolean accepted?)]))
                #(boolean accepted?))})
 
 (defn close [stream reason]

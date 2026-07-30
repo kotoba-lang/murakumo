@@ -36,16 +36,17 @@
   ;; matches host Base64 URL encoder + (.replace "=" "") / str/replace "=" ""
   (string-replace-all s "=" ""))
 
-(defn sealed-alg-ok? [alg :string] :i64
-  (if (string=? alg (alg-name)) 1 0))
+(defn sealed-alg-ok? [alg :string] :bool
+  ;; Profile 5: alg name gate as :bool.
+  (if (string=? alg (alg-name)) true false))
 
 (defn sealed-fields-present? [alg [:option :string]
                               nonce [:option :string]
-                              ct [:option :string]] :i64
+                              ct [:option :string]] :bool
   ;; Product Value ABI v1: optional sealed fields (no has-* sentinels).
-  ;; host seal map always carries :alg :nonce :ciphertext; pure presence gate
+  ;; Profile 5: presence gate as :bool.
   (if-some [_ alg]
     (if-some [_ nonce]
-      (if-some [_ ct] 1 0)
-      0)
-    0))
+      (if-some [_ ct] true false)
+      false)
+    false))

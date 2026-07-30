@@ -35,8 +35,8 @@
                 {"w" "(default-window-size)"
                  "a0" "(advance-seq 0)"
                  "a1" "(advance-seq 1)"
-                 "t" "(ack-accepted? 1)"
-                 "f" "(ack-accepted? 0)"})
+                 "t" "(if (ack-accepted? true) 1 0)"
+                 "f" "(if (ack-accepted? false) 1 0)"})
         s (stream/open-stream {:overlay "o" :node "n" :name "x" :principal {}} "ssh" 0)]
     (is (= stream/default-window-size (get actual "w")))
     (is (= (:window s) (get actual "w")))

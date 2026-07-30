@@ -37,37 +37,37 @@
    :param-types [:string :string]}
   {:name serves-read?,
    :params [http?],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (let
     [binding-some__1 http?]
     (if
      (option-some?-of [:option :i64] binding-some__1)
-     (let [_ (option-value-of [:option :i64] binding-some__1 0)] 1)
-     0)),
+     (let [_ (option-value-of [:option :i64] binding-some__1 0)] true)
+     false)),
    :param-types [[:option :i64]]}
   {:name serves-live?,
    :params [common?],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (let
     [binding-some__2 common?]
     (if
      (option-some?-of [:option :i64] binding-some__2)
-     (let [_ (option-value-of [:option :i64] binding-some__2 0)] 1)
-     0)),
+     (let [_ (option-value-of [:option :i64] binding-some__2 0)] true)
+     false)),
    :param-types [[:option :i64]]}
   {:name serves-plane?,
    :params [plane http? common?],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (string=? plane (plane-read))
     (serves-read? http?)
-    (if (string=? plane (plane-live)) (serves-live? common?) 0)),
+    (if (string=? plane (plane-live)) (serves-live? common?) false)),
    :param-types [:string [:option :i64] [:option :i64]]}],
  :oracle-value nil,
  :schema-identities nil,

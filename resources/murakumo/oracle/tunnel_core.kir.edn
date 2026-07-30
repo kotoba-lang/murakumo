@@ -1,1 +1,519 @@
-{:format :kotoba.kir/v4, :signature nil, :functions [{:name default-connect-timeout-s, :params [], :result :i64, :effects #{}, :body 8, :param-types []} {:name default-control-persist-s, :params [], :result :i64, :effects #{}, :body 30, :param-types []} {:name rc-marker, :params [], :result :string, :effects #{}, :body "__murakumo_rc=", :param-types []} {:name digit-char, :params [d], :result :string, :effects #{}, :body (string-substring "0123456789" d (+ d 1)), :param-types [:i64]} {:name nat-str, :params [n], :result :string, :effects #{}, :body (if (< n 10) (digit-char n) (string-concat (nat-str (quot n 10)) (digit-char (- n (* (quot n 10) 10))))), :param-types [:i64]} {:name i64-str, :params [n], :result :string, :effects #{}, :body (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)), :param-types [:i64]} {:name wrap-cmd, :params [cmd], :result :string, :effects #{}, :body (let [a (string-concat "( " cmd) b (string-concat a "\n); __mrc=$?; echo \"") c (string-concat b (rc-marker))] (string-concat c "$__mrc\"")), :param-types [:string]} {:name connect-timeout-opt, :params [seconds], :result :string, :effects #{}, :body (string-concat "ConnectTimeout=" (i64-str seconds)), :param-types [:i64]} {:name control-path-opt, :params [path], :result :string, :effects #{}, :body (string-concat "ControlPath=" path), :param-types [:string]} {:name control-persist-opt, :params [seconds], :result :string, :effects #{}, :body (string-concat "ControlPersist=" (string-concat (i64-str seconds) "s")), :param-types [:i64]} {:name scp-dest, :params [host dest], :result :string, :effects #{}, :body (string-concat host (string-concat ":" dest)), :param-types [:string :string]} {:name close-master-control-opt, :params [control-path], :result :string, :effects #{}, :body (string-concat "ControlPath=" control-path), :param-types [:string]} {:name marker-prefix?, :params [line], :result :i64, :effects #{}, :body (let [m (rc-marker) n (string-byte-length m) ln (string-byte-length line)] (if (< ln n) 0 (if (string=? (string-substring line 0 n) m) 1 0))), :param-types [:string]} {:name strip-marker-digits, :params [line], :result :string, :effects #{}, :body (let [m (rc-marker) n (string-byte-length m) ln (string-byte-length line)] (if (< ln n) "" (string-substring line n ln))), :param-types [:string]} {:name batch-mode-opt, :params [], :result :string, :effects #{}, :body "BatchMode=yes", :param-types []} {:name strict-host-key-opt, :params [], :result :string, :effects #{}, :body "StrictHostKeyChecking=accept-new", :param-types []} {:name control-master-opt, :params [], :result :string, :effects #{}, :body "ControlMaster=auto", :param-types []} {:name digit-val?, :params [c], :result :i64, :effects #{}, :body (if (= (string-byte-length c) 1) (if (string-contains? "0123456789" c) 1 0) 0), :param-types [:string]} {:name digit-of, :params [c], :result :i64, :effects #{}, :body (if (string=? c "0") 0 (if (string=? c "1") 1 (if (string=? c "2") 2 (if (string=? c "3") 3 (if (string=? c "4") 4 (if (string=? c "5") 5 (if (string=? c "6") 6 (if (string=? c "7") 7 (if (string=? c "8") 8 (if (string=? c "9") 9 -1)))))))))), :param-types [:string]} {:name trim-ws, :params [s], :result :string, :effects #{}, :body (let [n (string-byte-length s)] (if (= n 0) s (let [c0 (string-substring s 0 1)] (if (if (string=? c0 " ") 1 (if (string=? c0 "\t") 1 0)) (trim-ws (string-substring s 1 n)) (let [c1 (string-substring s (- n 1) n)] (if (if (string=? c1 " ") 1 (if (string=? c1 "\t") 1 0)) (trim-ws (string-substring s 0 (- n 1))) s)))))), :param-types [:string]} {:name parse-digits-go, :params [s acc], :result :i64, :effects #{}, :body (let [n (string-byte-length s)] (if (= n 0) acc (let [c (string-substring s 0 1) d (digit-of c)] (if (< d 0) -1 (parse-digits-go (string-substring s 1 n) (+ (* acc 10) d)))))), :param-types [:string :i64]} {:name parse-digits, :params [s], :result :i64, :effects #{}, :body (let [t (trim-ws s) n (string-byte-length t)] (if (= n 0) -1 (parse-digits-go t 0))), :param-types [:string]} {:name pick-exit, :params [has-rc rc ssh-exit], :result :i64, :effects #{}, :body (if (= has-rc 1) rc ssh-exit), :param-types [:i64 :i64 :i64]} {:name err-ws?, :params [c], :result :bool, :effects #{}, :body (if (string=? c " ") true (if (string=? c "\n") true (if (string=? c "\t") true (if (string=? c "\r") true false)))), :param-types [:string]} {:name trim-err, :params [err], :result :string, :effects #{}, :body (let [n (string-byte-length err)] (if (= n 0) err (if (err-ws? (string-substring err 0 1)) (trim-err (string-substring err 1 n)) (if (err-ws? (string-substring err (- n 1) n)) (trim-err (string-substring err 0 (- n 1))) err)))), :param-types [:string]} {:name ssh-bin, :params [], :result :string, :effects #{}, :body "ssh", :param-types []} {:name scp-bin, :params [], :result :string, :effects #{}, :body "scp", :param-types []} {:name o-flag, :params [], :result :string, :effects #{}, :body "-o", :param-types []} {:name O-flag, :params [], :result :string, :effects #{}, :body "-O", :param-types []} {:name exit-ctl, :params [], :result :string, :effects #{}, :body "exit", :param-types []} {:name pgrep-bin, :params [], :result :string, :effects #{}, :body "pgrep", :param-types []} {:name pkill-bin, :params [], :result :string, :effects #{}, :body "pkill", :param-types []} {:name f-flag, :params [], :result :string, :effects #{}, :body "-f", :param-types []} {:name fN-flag, :params [], :result :string, :effects #{}, :body "-fN", :param-types []} {:name L-flag, :params [], :result :string, :effects #{}, :body "-L", :param-types []} {:name null-redirect, :params [], :result :string, :effects #{}, :body " >/dev/null 2>&1", :param-types []} {:name or-sep, :params [], :result :string, :effects #{}, :body " || ", :param-types []} {:name settle-sleep, :params [], :result :string, :effects #{}, :body "sleep 0.3; ", :param-types []} {:name pkill-suffix, :params [], :result :string, :effects #{}, :body " 2>/dev/null; ", :param-types []} {:name localhost-colon, :params [], :result :string, :effects #{}, :body ":localhost:", :param-types []} {:name curl-prefix, :params [], :result :string, :effects #{}, :body "curl -s -m 5 ", :param-types []} {:name curl-stderr-redirect, :params [], :result :string, :effects #{}, :body " 2>/dev/null", :param-types []} {:name forward-spec, :params [local-port remote-port], :result :string, :effects #{}, :body (string-concat (i64-str local-port) (string-concat (localhost-colon) (i64-str remote-port))), :param-types [:i64 :i64]} {:name ssh-forward-prefix, :params [], :result :string, :effects #{}, :body (string-concat (ssh-bin) (string-concat " " (string-concat (o-flag) (string-concat " " (string-concat (batch-mode-opt) (string-concat " " (string-concat (fN-flag) (string-concat " " (string-concat (L-flag) " "))))))))), :param-types []} {:name ensure-forward-command, :params [local-port remote-port host], :result :string, :effects #{}, :body (let [spec (forward-spec local-port remote-port) probe (string-concat (pgrep-bin) (string-concat " " (string-concat (f-flag) (string-concat " '" (string-concat spec (string-concat " " (string-concat host "'")))))))] (string-concat probe (string-concat (null-redirect) (string-concat (or-sep) (string-concat (ssh-forward-prefix) (string-concat spec (string-concat " " host))))))), :param-types [:i64 :i64 :string]} {:name replace-forward-command, :params [local-port remote-port host], :result :string, :effects #{}, :body (let [lp (i64-str local-port) spec (forward-spec local-port remote-port) kill (string-concat (pkill-bin) (string-concat " " (string-concat (f-flag) (string-concat " '" (string-concat lp ":localhost'")))))] (string-concat kill (string-concat (pkill-suffix) (string-concat (settle-sleep) (string-concat (ssh-forward-prefix) (string-concat spec (string-concat " " host))))))), :param-types [:i64 :i64 :string]} {:name remote-curl-command, :params [url], :result :string, :effects #{}, :body (string-concat (curl-prefix) (string-concat url (curl-stderr-redirect))), :param-types [:string]}], :oracle-value nil, :schema-identities nil, :exports [default-connect-timeout-s default-control-persist-s rc-marker digit-char nat-str i64-str wrap-cmd connect-timeout-opt control-path-opt control-persist-opt scp-dest close-master-control-opt ensure-forward-command replace-forward-command remote-curl-command marker-prefix? strip-marker-digits batch-mode-opt strict-host-key-opt control-master-opt digit-val? parse-digits trim-ws pick-exit trim-err err-ws? ssh-bin scp-bin o-flag O-flag exit-ctl pgrep-bin pkill-bin f-flag fN-flag L-flag null-redirect or-sep settle-sleep pkill-suffix localhost-colon curl-prefix curl-stderr-redirect forward-spec ssh-forward-prefix], :schemas nil, :effects #{}, :blocks [], :entry nil}
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name default-connect-timeout-s,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 8,
+   :param-types []}
+  {:name default-control-persist-s,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 30,
+   :param-types []}
+  {:name rc-marker,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "__murakumo_rc=",
+   :param-types []}
+  {:name digit-char,
+   :params [d],
+   :result :string,
+   :effects #{},
+   :body (string-substring "0123456789" d (+ d 1)),
+   :param-types [:i64]}
+  {:name nat-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (< n 10)
+    (digit-char n)
+    (string-concat
+     (nat-str (quot n 10))
+     (digit-char (- n (* (quot n 10) 10))))),
+   :param-types [:i64]}
+  {:name i64-str,
+   :params [n],
+   :result :string,
+   :effects #{},
+   :body
+   (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
+   :param-types [:i64]}
+  {:name wrap-cmd,
+   :params [cmd],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [a
+     (string-concat "( " cmd)
+     b
+     (string-concat a "\n); __mrc=$?; echo \"")
+     c
+     (string-concat b (rc-marker))]
+    (string-concat c "$__mrc\"")),
+   :param-types [:string]}
+  {:name connect-timeout-opt,
+   :params [seconds],
+   :result :string,
+   :effects #{},
+   :body (string-concat "ConnectTimeout=" (i64-str seconds)),
+   :param-types [:i64]}
+  {:name control-path-opt,
+   :params [path],
+   :result :string,
+   :effects #{},
+   :body (string-concat "ControlPath=" path),
+   :param-types [:string]}
+  {:name control-persist-opt,
+   :params [seconds],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    "ControlPersist="
+    (string-concat (i64-str seconds) "s")),
+   :param-types [:i64]}
+  {:name scp-dest,
+   :params [host dest],
+   :result :string,
+   :effects #{},
+   :body (string-concat host (string-concat ":" dest)),
+   :param-types [:string :string]}
+  {:name close-master-control-opt,
+   :params [control-path],
+   :result :string,
+   :effects #{},
+   :body (string-concat "ControlPath=" control-path),
+   :param-types [:string]}
+  {:name marker-prefix?,
+   :params [line],
+   :result :bool,
+   :effects #{},
+   :body
+   (let
+    [m
+     (rc-marker)
+     n
+     (string-byte-length m)
+     ln
+     (string-byte-length line)]
+    (if
+     (< ln n)
+     false
+     (if (string=? (string-substring line 0 n) m) true false))),
+   :param-types [:string]}
+  {:name strip-marker-digits,
+   :params [line],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [m
+     (rc-marker)
+     n
+     (string-byte-length m)
+     ln
+     (string-byte-length line)]
+    (if (< ln n) "" (string-substring line n ln))),
+   :param-types [:string]}
+  {:name batch-mode-opt,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "BatchMode=yes",
+   :param-types []}
+  {:name strict-host-key-opt,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "StrictHostKeyChecking=accept-new",
+   :param-types []}
+  {:name control-master-opt,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "ControlMaster=auto",
+   :param-types []}
+  {:name digit-val?,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= (string-byte-length c) 1)
+    (if (string-contains? "0123456789" c) 1 0)
+    0),
+   :param-types [:string]}
+  {:name digit-of,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (string=? c "0")
+    0
+    (if
+     (string=? c "1")
+     1
+     (if
+      (string=? c "2")
+      2
+      (if
+       (string=? c "3")
+       3
+       (if
+        (string=? c "4")
+        4
+        (if
+         (string=? c "5")
+         5
+         (if
+          (string=? c "6")
+          6
+          (if
+           (string=? c "7")
+           7
+           (if (string=? c "8") 8 (if (string=? c "9") 9 -1)))))))))),
+   :param-types [:string]}
+  {:name trim-ws,
+   :params [s],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     s
+     (let
+      [c0 (string-substring s 0 1)]
+      (if
+       (if (string=? c0 " ") 1 (if (string=? c0 "\t") 1 0))
+       (trim-ws (string-substring s 1 n))
+       (let
+        [c1 (string-substring s (- n 1) n)]
+        (if
+         (if (string=? c1 " ") 1 (if (string=? c1 "\t") 1 0))
+         (trim-ws (string-substring s 0 (- n 1)))
+         s)))))),
+   :param-types [:string]}
+  {:name parse-digits-go,
+   :params [s acc],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length s)]
+    (if
+     (= n 0)
+     acc
+     (let
+      [c (string-substring s 0 1) d (digit-of c)]
+      (if
+       (< d 0)
+       -1
+       (parse-digits-go (string-substring s 1 n) (+ (* acc 10) d)))))),
+   :param-types [:string :i64]}
+  {:name parse-digits,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [t (trim-ws s) n (string-byte-length t)]
+    (if (= n 0) -1 (parse-digits-go t 0))),
+   :param-types [:string]}
+  {:name pick-exit,
+   :params [has-rc rc ssh-exit],
+   :result :i64,
+   :effects #{},
+   :body (if (= has-rc 1) rc ssh-exit),
+   :param-types [:i64 :i64 :i64]}
+  {:name err-ws?,
+   :params [c],
+   :result :bool,
+   :effects #{},
+   :body
+   (if
+    (string=? c " ")
+    true
+    (if
+     (string=? c "\n")
+     true
+     (if (string=? c "\t") true (if (string=? c "\r") true false)))),
+   :param-types [:string]}
+  {:name trim-err,
+   :params [err],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [n (string-byte-length err)]
+    (if
+     (= n 0)
+     err
+     (if
+      (err-ws? (string-substring err 0 1))
+      (trim-err (string-substring err 1 n))
+      (if
+       (err-ws? (string-substring err (- n 1) n))
+       (trim-err (string-substring err 0 (- n 1)))
+       err)))),
+   :param-types [:string]}
+  {:name ssh-bin,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "ssh",
+   :param-types []}
+  {:name scp-bin,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "scp",
+   :param-types []}
+  {:name o-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-o",
+   :param-types []}
+  {:name O-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-O",
+   :param-types []}
+  {:name exit-ctl,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "exit",
+   :param-types []}
+  {:name pgrep-bin,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "pgrep",
+   :param-types []}
+  {:name pkill-bin,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "pkill",
+   :param-types []}
+  {:name f-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-f",
+   :param-types []}
+  {:name fN-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-fN",
+   :param-types []}
+  {:name L-flag,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "-L",
+   :param-types []}
+  {:name null-redirect,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " >/dev/null 2>&1",
+   :param-types []}
+  {:name or-sep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " || ",
+   :param-types []}
+  {:name settle-sleep,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "sleep 0.3; ",
+   :param-types []}
+  {:name pkill-suffix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " 2>/dev/null; ",
+   :param-types []}
+  {:name localhost-colon,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body ":localhost:",
+   :param-types []}
+  {:name curl-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body "curl -s -m 5 ",
+   :param-types []}
+  {:name curl-stderr-redirect,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body " 2>/dev/null",
+   :param-types []}
+  {:name forward-spec,
+   :params [local-port remote-port],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (i64-str local-port)
+    (string-concat (localhost-colon) (i64-str remote-port))),
+   :param-types [:i64 :i64]}
+  {:name ssh-forward-prefix,
+   :params [],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (ssh-bin)
+    (string-concat
+     " "
+     (string-concat
+      (o-flag)
+      (string-concat
+       " "
+       (string-concat
+        (batch-mode-opt)
+        (string-concat
+         " "
+         (string-concat
+          (fN-flag)
+          (string-concat " " (string-concat (L-flag) " "))))))))),
+   :param-types []}
+  {:name ensure-forward-command,
+   :params [local-port remote-port host],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [spec
+     (forward-spec local-port remote-port)
+     probe
+     (string-concat
+      (pgrep-bin)
+      (string-concat
+       " "
+       (string-concat
+        (f-flag)
+        (string-concat
+         " '"
+         (string-concat
+          spec
+          (string-concat " " (string-concat host "'")))))))]
+    (string-concat
+     probe
+     (string-concat
+      (null-redirect)
+      (string-concat
+       (or-sep)
+       (string-concat
+        (ssh-forward-prefix)
+        (string-concat spec (string-concat " " host))))))),
+   :param-types [:i64 :i64 :string]}
+  {:name replace-forward-command,
+   :params [local-port remote-port host],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [lp
+     (i64-str local-port)
+     spec
+     (forward-spec local-port remote-port)
+     kill
+     (string-concat
+      (pkill-bin)
+      (string-concat
+       " "
+       (string-concat
+        (f-flag)
+        (string-concat " '" (string-concat lp ":localhost'")))))]
+    (string-concat
+     kill
+     (string-concat
+      (pkill-suffix)
+      (string-concat
+       (settle-sleep)
+       (string-concat
+        (ssh-forward-prefix)
+        (string-concat spec (string-concat " " host))))))),
+   :param-types [:i64 :i64 :string]}
+  {:name remote-curl-command,
+   :params [url],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (curl-prefix)
+    (string-concat url (curl-stderr-redirect))),
+   :param-types [:string]}],
+ :oracle-value nil,
+ :schema-identities nil,
+ :exports
+ [default-connect-timeout-s
+  default-control-persist-s
+  rc-marker
+  digit-char
+  nat-str
+  i64-str
+  wrap-cmd
+  connect-timeout-opt
+  control-path-opt
+  control-persist-opt
+  scp-dest
+  close-master-control-opt
+  ensure-forward-command
+  replace-forward-command
+  remote-curl-command
+  marker-prefix?
+  strip-marker-digits
+  batch-mode-opt
+  strict-host-key-opt
+  control-master-opt
+  digit-val?
+  parse-digits
+  trim-ws
+  pick-exit
+  trim-err
+  err-ws?
+  ssh-bin
+  scp-bin
+  o-flag
+  O-flag
+  exit-ctl
+  pgrep-bin
+  pkill-bin
+  f-flag
+  fN-flag
+  L-flag
+  null-redirect
+  or-sep
+  settle-sleep
+  pkill-suffix
+  localhost-colon
+  curl-prefix
+  curl-stderr-redirect
+  forward-spec
+  ssh-forward-prefix],
+ :schemas nil,
+ :effects #{},
+ :blocks [],
+ :entry nil}

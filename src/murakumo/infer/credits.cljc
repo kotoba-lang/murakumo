@@ -299,10 +299,10 @@
         allow? (if (and (== (double (long bal)) (double bal))
                         (== (double (long cost)) (double cost)))
                  (try-oracle
-                  #(= 1 (oracle/i64->host
-                         (o 'charge-allow?
-                            [(oracle/as-i64 (long bal))
-                             (oracle/as-i64 (long cost))])))
+                  #(oracle/bool->host
+                    (o 'charge-allow?
+                       [(oracle/as-i64 (long bal))
+                        (oracle/as-i64 (long cost))]))
                   #(>= bal cost))
                  (>= bal cost))]
     (cond

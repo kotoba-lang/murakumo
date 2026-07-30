@@ -61,13 +61,14 @@
 (defn close-master-control-opt [control-path :string] :string
   (string-concat "ControlPath=" control-path))
 
-(defn marker-prefix? [line :string] :i64
+(defn marker-prefix? [line :string] :bool
+  ;; Profile 5: rc marker prefix gate as :bool.
   (let [m (rc-marker)
         n (string-byte-length m)
         ln (string-byte-length line)]
     (if (< ln n)
-      0
-      (if (string=? (string-substring line 0 n) m) 1 0))))
+      false
+      (if (string=? (string-substring line 0 n) m) true false))))
 
 (defn strip-marker-digits [line :string] :string
   (let [m (rc-marker)

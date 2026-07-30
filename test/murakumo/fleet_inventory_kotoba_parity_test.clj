@@ -95,7 +95,7 @@
         cases (into {} (map-indexed
                         (fn [i s]
                           [(str "sa_" i)
-                           (str "(selector-is-all? " (kotoba-literal s) ")")])
+                           (str "(if (selector-is-all? " (kotoba-literal s) ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i s] (map-indexed vector corpus)]
@@ -114,8 +114,7 @@
         cases (into {} (map-indexed
                         (fn [i [sel name]]
                           [(str "sw_" i)
-                           (str "(selector-wants-name? " (kotoba-literal sel) " "
-                                (kotoba-literal name) ")")])
+                           (str "(if (selector-wants-name? " (kotoba-literal sel) " " (kotoba-literal name) ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [sel name]] (map-indexed vector corpus)]
@@ -132,7 +131,7 @@
         cases (into {} (map-indexed
                         (fn [i line]
                           [(str "lo_" i)
-                           (str "(line-has-offline? " (kotoba-literal line) ")")])
+                           (str "(if (line-has-offline? " (kotoba-literal line) ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i line] (map-indexed vector corpus)]

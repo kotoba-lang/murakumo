@@ -90,14 +90,17 @@
    :param-types [:i64]}
   {:name selector-is-all?,
    :params [sel],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
-   (if (string=? sel "") 1 (if (string=? sel (selector-all)) 1 0)),
+   (if
+    (string=? sel "")
+    true
+    (if (string=? sel (selector-all)) true false)),
    :param-types [:string]}
   {:name selector-wants-name?,
    :params [sel name],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (let
@@ -106,14 +109,14 @@
      (string-contains?
       (string-concat sep (string-concat sel sep))
       (string-concat sep (string-concat name sep)))
-     1
-     0)),
+     true
+     false)),
    :param-types [:string :string]}
   {:name line-has-offline?,
    :params [line],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (string-contains? line (offline-token)) 1 0),
+   :body (if (string-contains? line (offline-token)) true false),
    :param-types [:string]}
   {:name __kotoba_string_from_i64_nat,
    :params [n],

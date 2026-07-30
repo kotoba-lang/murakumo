@@ -254,15 +254,15 @@
    :param-types [:i64 :i64 :i64 :i64]}
   {:name plan-fits-total?,
    :params [total-usable weight-bytes],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (< total-usable weight-bytes) 0 1),
+   :body (if (< total-usable weight-bytes) false true),
    :param-types [:i64 :i64]}
   {:name span-fits?,
    :params [est-bytes usable],
-   :result :i64,
+   :result :bool,
    :effects #{},
-   :body (if (< usable est-bytes) 0 1),
+   :body (if (< usable est-bytes) false true),
    :param-types [:i64 :i64]}
   {:name uniform-layer-bytes,
    :params [weight-bytes layers],
@@ -584,18 +584,18 @@
      e2
      (est-bytes-range weight-bytes mp lo2 hi2)
      f0
-     (if (= s0 0) 1 (span-fits? e0 u0))
+     (if (= s0 0) true (span-fits? e0 u0))
      f1
-     (if (= s1 0) 1 (span-fits? e1 u1))
+     (if (= s1 0) true (span-fits? e1 u1))
      f2
-     (if (= s2 0) 1 (span-fits? e2 u2))
+     (if (= s2 0) true (span-fits? e2 u2))
      spans-ok
-     (if (if (= f0 1) (if (= f1 1) (if (= f2 1) 1 0) 0) 0) 1 0)
+     (if f0 (if f1 (if f2 true false) false) false)
      total
      (+ u0 (+ u1 u2))
      total-ok
      (plan-fits-total? total weight-bytes)]
-    (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)),
+    (if (if total-ok (if spans-ok true false) false) 1 0)),
    :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
   {:name partition-1-end,
    :params [mp],
@@ -616,10 +616,10 @@
      e0
      (est-bytes-range weight-bytes mp 0 layers)
      f0
-     (if (= s0 0) 1 (span-fits? e0 u0))
+     (if (= s0 0) true (span-fits? e0 u0))
      total-ok
      (plan-fits-total? u0 weight-bytes)]
-    (if (if (= total-ok 1) (if (= f0 1) 1 0) 0) 1 0)),
+    (if (if total-ok (if f0 true false) false) 1 0)),
    :param-types [:i64 [:ref :plan/model] :i64]}
   {:name partition-2-ends,
    :params [weight-bytes mp u0 u1],
@@ -684,16 +684,16 @@
      e1
      (est-bytes-range weight-bytes mp lo1 hi1)
      f0
-     (if (= s0 0) 1 (span-fits? e0 u0))
+     (if (= s0 0) true (span-fits? e0 u0))
      f1
-     (if (= s1 0) 1 (span-fits? e1 u1))
+     (if (= s1 0) true (span-fits? e1 u1))
      spans-ok
-     (if (if (= f0 1) (if (= f1 1) 1 0) 0) 1 0)
+     (if f0 (if f1 true false) false)
      total
      (+ u0 u1)
      total-ok
      (plan-fits-total? total weight-bytes)]
-    (if (if (= total-ok 1) (if (= spans-ok 1) 1 0) 0) 1 0)),
+    (if (if total-ok (if spans-ok true false) false) 1 0)),
    :param-types [:i64 [:ref :plan/model] :i64 :i64]}
   {:name ends-at,
    :params [ends idx],
@@ -740,7 +740,7 @@
      est
      (est-bytes-range weight-bytes mp lo hi)
      fit
-     (if (= sp 0) 1 (span-fits? est usable))]
+     (if (= sp 0) 1 (if (span-fits? est usable) 1 0))]
     (record-new
      [:record :plan/row [[:span :i64] [:fits :i64]]]
      sp

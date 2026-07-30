@@ -63,22 +63,24 @@
    (health-url-prefix)
    (string-concat (string-from-i64 port) (health-url-path))))
 
-(defn selector-is-all? [sel :string] :i64
+(defn selector-is-all? [sel :string] :bool
   ;; cljc: (or (nil? sel) (= sel "all")) — empty string ≡ nil
+  ;; Profile 5: :bool.
   (if (string=? sel "")
-    1
-    (if (string=? sel (selector-all)) 1 0)))
+    true
+    (if (string=? sel (selector-all)) true false)))
 
-(defn selector-wants-name? [sel :string name :string] :i64
+(defn selector-wants-name? [sel :string name :string] :bool
   ;; Exact comma-token match: pad both sides so substrings can't false-hit.
-  ;; cljc: (contains? (set (str/split sel #",")) name)
+  ;; Profile 5: :bool.
   (let [sep (selector-join-sep)]
     (if (string-contains?
          (string-concat sep (string-concat sel sep))
          (string-concat sep (string-concat name sep)))
-      1
-      0)))
+      true
+      false)))
 
-(defn line-has-offline? [line :string] :i64
+(defn line-has-offline? [line :string] :bool
   ;; cljc parse-tailscale-status online?: (not (str/includes? line "offline"))
-  (if (string-contains? line (offline-token)) 1 0))
+  ;; Profile 5: :bool.
+  (if (string-contains? line (offline-token)) true false))

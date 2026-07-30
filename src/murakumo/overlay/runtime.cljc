@@ -198,7 +198,7 @@
   "Kotoba `known-adapter?` when oracle ready."
   [name]
   (try-oracle
-   #(= 1 (oracle/i64->host (o 'known-adapter? [(str name)])))
+   #(oracle/bool->host (o 'known-adapter? [(str name)]))
    #(contains? (mirror-known-adapters) (str name))))
 
 (defn parse-int [value]

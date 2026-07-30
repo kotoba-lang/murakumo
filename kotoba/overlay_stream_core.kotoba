@@ -26,6 +26,6 @@
   ;; cljc: (update stream :next-seq inc)
   (+ next-seq 1))
 
-(defn ack-accepted? [accepted :i64] :i64
-  ;; cljc: (boolean accepted?) — 0/1 in guest
-  (if (= accepted 0) 0 1))
+(defn ack-accepted? [accepted :bool] :bool
+  ;; Profile 5: identity on :bool (host projects real boolean).
+  accepted)
