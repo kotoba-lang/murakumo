@@ -357,8 +357,8 @@
    #(o 'nodes-row
        [(str (:name node))
         (str (or (:ip node) "?"))
-        (oracle/as-i64 (if (:online? node) 1 0))
-        (oracle/as-i64 (if ssh-ok 1 0))
+        (boolean (:online? node))
+        (boolean ssh-ok)
         (str mesh)])
    #(mirror-nodes-row node ssh-ok mesh)))
 
@@ -415,7 +415,7 @@
 
 (defn provision-result-line [peered?]
   (try-oracle
-   #(o 'provision-result-line [(oracle/as-i64 (if peered? 1 0))])
+   #(o 'provision-result-line [(boolean peered?)])
    #(mirror-provision-result-line peered?)))
 
 (defn launch-result-line
@@ -461,7 +461,7 @@
 (defn artifact-node-status [node result]
   (try-oracle
    #(o 'artifact-node-status
-       [(str (:name node)) (oracle/as-i64 (if (zero? (:exit result)) 1 0))])
+       [(str (:name node)) (zero? (:exit result))])
    #(mirror-artifact-node-status node result)))
 
 (defn deploy-start-line [manifest cid]
@@ -566,8 +566,8 @@
   (try-oracle
    #(if cid
       (o 'cid-display [(subs cid 0 (min cid-display-max-len (count cid)))
-                       (oracle/as-i64 1)])
-      (o 'cid-display ["" (oracle/as-i64 0)]))
+                       true])
+      (o 'cid-display ["" false]))
    #(mirror-fmt-cid cid)))
 
 (defn reconcile-lines
@@ -588,11 +588,11 @@
            (let [action (name (:action app))
                  targets-csv (csv-join (:targets app))
                  running-csv (csv-join (:running app))
-                 running-empty (if (seq (:running app)) 0 1)
+                 running-empty (empty? (:running app))
                  reason (str (or (:reason app) ""))
                  detail (o 'action-detail
                            [action targets-csv running-csv
-                            (oracle/as-i64 running-empty) reason])
+                            running-empty reason])
                  app14 (pad-field (:app app) 14)
                  cid10 (pad-field (fmt-cid (:cid app)) 10)
                  act9 (pad-field action 9)

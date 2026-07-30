@@ -2,9 +2,9 @@
   (:schemas {;; T5.3: placement pick result is a record, not a mixed radix pack.
              :reconcile/targets [:record :reconcile/targets
                                  [[:first :i64] [:second :i64] [:count :i64]]]
-             ;; T5.3: 3-way pairwise name-order, not name-bits bit0/1/2.
+             ;; T5.3 + profile 5: pairwise name-order flags are :bool (not 0/1 i64).
              :reconcile/name-order [:record :reconcile/name-order
-                                    [[:n01 :i64] [:n02 :i64] [:n12 :i64]]]})
+                                    [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]})
   (:export [default-replicas desired deficit watch-sleep-ms action-name
             better-target? first-of-2 first-of-3
             name-order-record
@@ -29,10 +29,11 @@
 ;; flag tokens + action name tokens SSoT; classifiers/value extract recompose.
 ;; reconcile-record-type: atproto $type / collection NSID for fleet reconcile records.
 ;; pick-targets: pure sort-by [load, name] for fixed 2/3 free candidates.
-;; name order projected by host: name-a-before-b = 1 if name(a) <= name(b).
-;; For 3-way: name-order record {n01,n02,n12} = 1 if name(i) <= name(j).
+;; name order projected by host: name-a-before-b true if name(a) <= name(b).
+;; For 3-way: name-order record {n01,n02,n12} :bool if name(i) <= name(j).
 ;; T5.3: pick result is [:ref :reconcile/targets]; name-bits bit-pack is gone.
 ;; T5.3 complete for this module: no base-N / bit packs remain.
+;; Profile 5: name-order / better-target? tie-break flags are :bool.
 ;; Parity: test/murakumo/reconcile_plan_kotoba_parity_test.clj
 
 (defn default-replicas [] :i64 1)
@@ -69,19 +70,19 @@
             (action-place))))
       (action-needs-build))))
 
-(defn better-target? [load-a :i64 load-b :i64 name-a-before-b :i64] :bool
+(defn better-target? [load-a :i64 load-b :i64 name-a-before-b :bool] :bool
   ;; cljc sort-by (juxt load identity): lower load first; ties by name ascending
-  ;; name-a-before-b=1 means name(a) <= name(b) so a wins ties
+  ;; name-a-before-b true means name(a) <= name(b) so a wins ties
   (if (< load-a load-b)
     true
     (if (< load-b load-a)
       false
-      (if (= name-a-before-b 1) true false))))
+      name-a-before-b)))
 
-(defn first-of-2 [load0 :i64 load1 :i64 name0-before-1 :i64] :i64
+(defn first-of-2 [load0 :i64 load1 :i64 name0-before-1 :bool] :i64
   (if (better-target? load0 load1 name0-before-1) 0 1))
 
-(defn name-order-record [n01 :i64 n02 :i64 n12 :i64] [:ref :reconcile/name-order]
+(defn name-order-record [n01 :bool n02 :bool n12 :bool] [:ref :reconcile/name-order]
   (record-new [:ref :reconcile/name-order] n01 n02 n12))
 
 (defn first-of-3 [load0 :i64 load1 :i64 load2 :i64
@@ -106,7 +107,7 @@
 (defn targets-count [t [:ref :reconcile/targets]] :i64
   (record-get t :count))
 
-(defn pick-targets-2-record [load0 :i64 load1 :i64 name0-before-1 :i64 n :i64]
+(defn pick-targets-2-record [load0 :i64 load1 :i64 name0-before-1 :bool n :i64]
   [:ref :reconcile/targets]
   ;; take min(n,2) from two candidates sorted by load then name
   (if (< n 1)

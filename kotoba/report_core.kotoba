@@ -91,8 +91,9 @@
 
 (defn unreachable-skipped-line [] :string "unreachable — skipped")
 
-(defn provision-result-line [peered :i64] :string
-  (if (= peered 1)
+(defn provision-result-line [peered :bool] :string
+  ;; Profile 5: peered is a real :bool (not 0/1 i64).
+  (if peered
     "provisioned + loaded (peered)"
     "provisioned + loaded"))
 
@@ -157,11 +158,11 @@
 (defn reconcile-persist-error-line [message :string] :string
   (string-concat "reconcile persist error: " message))
 
-(defn online-label [online :i64] :string
-  (if (= online 1) "yes" "no"))
+(defn online-label [online :bool] :string
+  (if online "yes" "no"))
 
-(defn ssh-label [ok :i64] :string
-  (if (= ok 1) "ok" "no"))
+(defn ssh-label [ok :bool] :string
+  (if ok "ok" "no"))
 
 (defn health-label [health? [:option :i64]] :string
   ;; Product Value ABI v1: optional health presence (no has-health sentinel).
@@ -187,11 +188,12 @@
     (i64-str count)
     (string-concat " PeerIds → " (string-concat peers-file " ──")))))
 
-(defn artifact-node-status [name :string ok :i64] :string
+(defn artifact-node-status [name :string ok :bool] :string
   ;; cljc: (format " %s%s" name (if (zero? exit) "✓" "✗"))
+  ;; Profile 5: ok is :bool (host projects zero-exit → true).
   (string-concat
    " "
-   (string-concat name (if (= ok 1) "✓" "✗"))))
+   (string-concat name (if ok "✓" "✗"))))
 
 (defn deploy-command-output [out :string err :string] :string
   ;; cljc: (str (str/trim (str out)) (str err))
@@ -324,8 +326,8 @@
   ;; trailing spaces after "down" in status-down-row format "%-10s %-8s"
   "down    ")
 
-(defn nodes-row [name :string ip :string online :i64 ssh-ok :i64 mesh :string] :string
-  ;; cljc nodes-row; host projects nil ip → "?" and online?/ssh as 0/1
+(defn nodes-row [name :string ip :string online :bool ssh-ok :bool mesh :string] :string
+  ;; cljc nodes-row; host projects nil ip → "?" and online?/ssh as :bool
   (string-concat
    (pad-to name 10)
    (string-concat
@@ -377,19 +379,20 @@
 (defn reconcile-col-header [] :string
   "  APP            CID        DESIRED RUNNING ACTION    DETAIL")
 
-(defn cid-display [cid :string present :i64] :string
-  ;; present 0 → em dash; 1 → host-truncated cid (≤16 like fmt-cid)
-  (if (= present 0)
-    "—"
-    cid))
+(defn cid-display [cid :string present :bool] :string
+  ;; present false → em dash; true → host-truncated cid (≤16 like fmt-cid)
+  (if present
+    cid
+    "—"))
 
 (defn action-detail [action :string targets-csv :string
-                     running-csv :string running-empty :i64
+                     running-csv :string running-empty :bool
                      reason :string] :string
+  ;; Profile 5: running-empty is :bool (no 0/1 i64).
   (if (string=? action "place")
     (string-concat "→ " targets-csv)
     (if (string=? action "satisfied")
-      (if (= running-empty 1)
+      (if running-empty
         ""
         (string-concat "on " running-csv))
       reason)))
