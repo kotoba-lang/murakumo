@@ -11,7 +11,11 @@
             [murakumo.tunnel :as tunnel]
             [murakumo.reconcile.plan :as rplan]
             [murakumo.infer.relay :as relay]
-            [murakumo.cloud.plan :as cplan]))
+            [murakumo.cloud.plan :as cplan]
+            [murakumo.overlay.keyring :as keyring]
+            [murakumo.persist :as persist]
+            [murakumo.overlay.peer :as peer]
+            [murakumo.component-authority :as cauth]))
 
 (deftest map->args-projects-kinds
   (is (= ["a" "b"]
@@ -184,3 +188,37 @@
       (is (string? nid))
       (is (not= oid nid))
       (is (= "tyo" reg)))))
+
+(deftest call-record-keyring-persist-peer-cauth
+  (when (oracle/ready? :overlay-keyring)
+    (let [e (keyring/epoch 1000 300)
+          kid (keyring/key-id "ov" e)
+          k (keyring/derive-key "seed" "ov" e)]
+      (is (number? e))
+      (is (string? kid))
+      (is (= 16 (count kid)))
+      (is (= e (:epoch k)))
+      (is (= kid (:kid k)))))
+  (when (oracle/ready? :persist)
+    (is (string? (persist/snapshot-rkey 1000 3)))
+    (is (string? (persist/reconcile-rkey 1000 3)))
+    (is (re-find #"at://" (persist/repo-uri "app.bsky.feed.post" "abc")))
+    (is (re-find #"18077" (persist/repo-write-url 18077))))
+  (when (oracle/ready? :overlay-peer)
+    (let [route {:overlay "bafyOverlay" :node "bafyNode" :name "asher"
+                 :direct [{:transport :quic :endpoint "quic://asher:4001"}]
+                 :relay {:relay "jp-1" :transport :quic :endpoint "relay://jp/bafyNode"}}
+          p (get (peer/catalog [route]) "bafyNode")
+          path (peer/choose-path p)]
+      (is (map? path))
+      (is (= :direct (:via path)))))
+  (when (oracle/ready? :component-authority)
+    (let [cid "bafyreicomponent"
+          [st2 ev] (cauth/place (cauth/initial-state) cid "edge-a")]
+      (is (= 1 (get-in st2 [:epochs cid])))
+      (is (= 1 (:sequence st2)))
+      (is (map? ev)))
+    (let [cid "bafyreistale"
+          [st2 _] (cauth/revoke (cauth/initial-state) cid)]
+      (is (= 1 (get-in st2 [:epochs cid])))
+      (is (nil? (get-in st2 [:placements cid]))))))

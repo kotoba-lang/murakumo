@@ -19,6 +19,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── residual preimage seps + type tokens ─────────────────────────────
 
 (def default-rotation-seconds
@@ -45,18 +51,26 @@
   (o 'type-rotation []))
 
 (defn epoch
+  "T5.2: structural map → call-record."
   ([seconds] (epoch seconds default-rotation-seconds))
   ([seconds rotation-seconds]
    (oracle/i64->host
-    (o 'epoch [(oracle/as-i64 seconds) (oracle/as-i64 rotation-seconds)]))))
+    (o-record 'epoch
+              {:seconds seconds :rotation-seconds rotation-seconds}
+              [[:seconds :i64] [:rotation-seconds :i64]]))))
 
-(defn key-id [overlay epoch]
+(defn key-id
+  "T5.2: structural map → call-record."
+  [overlay epoch]
   (subs (identity/sha256-hex
-         (o 'key-id-input [(str overlay) (oracle/as-i64 epoch)]))
+         (o-record 'key-id-input
+                   {:overlay overlay :epoch epoch}
+                   [[:overlay :string] [:epoch :i64]]))
         0 key-id-hex-len))
 
 (defn derive-key
-  "Derive per-overlay, per-epoch frame auth material."
+  "Derive per-overlay, per-epoch frame auth material.
+   T5.2: structural map → call-record for preimage."
   [operator-seed overlay epoch]
   {:type type-key
    :overlay overlay
@@ -64,8 +78,13 @@
    :kid (key-id overlay epoch)
    :alg :sha256-aes-gcm
    :key (identity/sha256-hex
-         (o 'derive-key-input
-            [(str operator-seed) (str overlay) (oracle/as-i64 epoch)]))})
+         (o-record 'derive-key-input
+                   {:operator-seed operator-seed
+                    :overlay overlay
+                    :epoch epoch}
+                   [[:operator-seed :string]
+                    [:overlay :string]
+                    [:epoch :i64]]))})
 
 (defn rotation-plan
   ([operator-seed overlay now-seconds]

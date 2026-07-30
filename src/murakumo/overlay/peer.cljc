@@ -18,6 +18,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 (def health-unknown
   "Peer health label: unknown. Kotoba SSoT (requires oracle)."
   (o 'health-unknown []))
@@ -87,10 +93,13 @@
         direct? (boolean (some #(= direct-kw (:via %)) paths))
         relay? (boolean (some #(= relay-kw (:via %)) paths))
         health (name (or (:health peer) (via-kw health-unknown)))
-        via (o 'choose-via
-               [(oracle/option-string (when direct? via-direct))
-                health
-                (oracle/option-string (when relay? via-relay))])]
+        via (o-record 'choose-via
+                      {:direct (when direct? via-direct)
+                       :health health
+                       :relay (when relay? via-relay)}
+                      [[:direct :option-string]
+                       [:health :string]
+                       [:relay :option-string]])]
     (cond
       (= via via-direct) (first (filter #(= direct-kw (:via %)) paths))
       (= via via-relay) (first (filter #(= relay-kw (:via %)) paths))
