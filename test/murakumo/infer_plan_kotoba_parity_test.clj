@@ -1,5 +1,5 @@
 ;; W6 pure-planner oracle: murakumo.infer.plan usable-bytes + choose-strategy
-;; + plan-lr-3 / fits gates + integer partition-layers walk
+;; + plan-lr lanes / fits gates + integer partition-layers walk
 ;; vs kotoba/infer_plan_core.kotoba.
 
 (ns murakumo.infer-plan-kotoba-parity-test
@@ -15,7 +15,7 @@
 
 (def export-prefix
   (str "gib default-os-reserve default-headroom usable-bytes choose-strategy-name "
-       "lane-base plan-lr-3 plan-lr-pack-get plan-fits-total? span-fits? "
+       "plan-lr-l0 plan-lr-l1 plan-lr-l2 plan-fits-total? span-fits? "
        "uniform-layer-bytes dense-units-milli moe-layer-bytes "
        "model-pack model-layers model-dense model-frac-milli "
        "layer-byte-at layer-wsum partition-target "
@@ -105,7 +105,7 @@
         (is (= (name (:strategy (plan/choose-strategy m)))
                (get actual (str "s_" i))))))))
 
-(deftest plan-lr-3-matches-cljc-largest-remainder
+(deftest plan-lr-lanes-match-cljc-largest-remainder
   (let [cases [["a" 10 5 3 2]
                ["b" 10 1 1 1]
                ["c" 5 5 0 0]
@@ -120,21 +120,27 @@
                    [0 0 0]
                    (let [qs (mapv #(* total (/ (double %) sumw)) [w0 w1 w2])]
                      (plan-lr total qs)))))
+        ;; T5.3: three scalar lane projections, no pack. One label per lane.
         kotoba-cases (into {}
-                           (map (fn [[label total w0 w1 w2]]
-                                  [label (str "(plan-lr-3 " total " " w0 " " w1 " " w2 ")")])
-                                cases))
+                           (mapcat (fn [[label total w0 w1 w2]]
+                                     (let [args (str total " " w0 " " w1 " " w2 ")")]
+                                       [[(str label "-0") (str "(plan-lr-l0 " args)]
+                                        [(str label "-1") (str "(plan-lr-l1 " args)]
+                                        [(str label "-2") (str "(plan-lr-l2 " args)]]))
+                                   cases))
         actual (compile-i64-cases
                 (merge kotoba-cases
-                       {"g0" "(plan-lr-pack-get (plan-lr-3 10 5 3 2) 0)"
-                        "g1" "(plan-lr-pack-get (plan-lr-3 10 5 3 2) 1)"
-                        "g2" "(plan-lr-pack-get (plan-lr-3 10 5 3 2) 2)"}))]
+                       {"g0" "(plan-lr-l0 10 5 3 2)"
+                        "g1" "(plan-lr-l1 10 5 3 2)"
+                        "g2" "(plan-lr-l2 10 5 3 2)"}))]
     (is (= 5 (get actual "g0")))
     (is (= 3 (get actual "g1")))
     (is (= 2 (get actual "g2")))
     (doseq [[label total w0 w1 w2] cases]
       (let [want (cljc total w0 w1 w2)
-            got (unpack3 (get actual label))]
+            got [(get actual (str label "-0"))
+                 (get actual (str label "-1"))
+                 (get actual (str label "-2"))]]
         (is (= want got) (str label " want=" want " got=" got))))))
 
 (deftest plan-fits-and-layer-bytes

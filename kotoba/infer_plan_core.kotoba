@@ -1,6 +1,6 @@
 (ns infer-plan-core
   (:export [gib default-os-reserve default-headroom usable-bytes choose-strategy-name
-            lane-base plan-lr-3 plan-lr-pack-get
+            plan-lr-l0 plan-lr-l1 plan-lr-l2
             plan-fits-total? span-fits?
             uniform-layer-bytes dense-units-milli moe-layer-bytes
             model-pack model-layers model-dense model-frac-milli
@@ -63,13 +63,16 @@
         "expert"
         "pipeline"))))
 
+;; lane-base / pack3 / lane-at survive as INTERNAL helpers for the
+;; model-pack, asg-row, partition-step and partition-*-ends lanes, which are
+;; separate slices. The plan-lr lane no longer packs (T5.3).
 (defn lane-base [] :i64 65536)
 
 (defn pack3 [a :i64 b :i64 c :i64] :i64
   (let [B (lane-base)]
     (+ a (+ (* b B) (* c (* B B))))))
 
-(defn plan-lr-pack-get [packed :i64 idx :i64] :i64
+(defn lane-at [packed :i64 idx :i64] :i64
   ;; idx 0|1|2
   (let [B (lane-base)]
     (if (= idx 0)
@@ -86,10 +89,10 @@
       0
       (if (< idx-a idx-b) 1 0))))
 
-(defn pick-bump-3 [ok-t :i64 ok-m :i64 ok-p :i64 rem-packed :i64 _pad :i64] :i64
-  (let [rt (plan-lr-pack-get rem-packed 0)
-        rm (plan-lr-pack-get rem-packed 1)
-        rp (plan-lr-pack-get rem-packed 2)]
+(defn pick-bump-3 [ok-t :i64 ok-m :i64 ok-p :i64 rems [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]] :i64
+  (let [rt (record-get rems :l0)
+        rm (record-get rems :l1)
+        rp (record-get rems :l2)]
     (if (= ok-t 0)
       (if (= ok-m 0)
         (if (= ok-p 0) -1 2)
@@ -113,7 +116,8 @@
 (defn weight-pos? [w :i64] :i64
   (if (< 0 w) 1 0))
 
-(defn plan-lr-3 [total :i64 w0 :i64 w1 :i64 w2 :i64] :i64
+(defn plan-lr-record [total :i64 w0 :i64 w1 :i64 w2 :i64]
+  [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
   ;; plan.cljc largest-remainder without rebalance per-active floor:
   ;; floor(total*w_i/sumw) + remainder seats by fractional rank.
   (let [a0 (weight-pos? w0)
@@ -121,7 +125,7 @@
         a2 (weight-pos? w2)
         sumw (+ w0 (+ w1 w2))]
     (if (if (= total 0) 1 (if (= sumw 0) 1 0))
-      (pack3 0 0 0)
+      (record-new [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]] 0 0 0)
       (let [p0 (* total w0)
             p1 (* total w1)
             p2 (* total w2)
@@ -133,26 +137,37 @@
             r2 (rem64 p2 sumw)
             assigned (+ f0 (+ f1 f2))
             extra (- total assigned)
-            rem-packed (pack3 r0 r1 r2)
+            rems (record-new [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]] r0 r1 r2)
             b0 (if (< 0 extra)
-                 (pick-bump-3 (ok-for a0 0) (ok-for a1 0) (ok-for a2 0) rem-packed 0)
+                 (pick-bump-3 (ok-for a0 0) (ok-for a1 0) (ok-for a2 0) rems)
                  -1)
             t0 (if (= b0 0) 1 0)
             m0 (if (= b0 1) 1 0)
             p0b (if (= b0 2) 1 0)
             b1 (if (< 1 extra)
-                 (pick-bump-3 (ok-for a0 t0) (ok-for a1 m0) (ok-for a2 p0b) rem-packed 0)
+                 (pick-bump-3 (ok-for a0 t0) (ok-for a1 m0) (ok-for a2 p0b) rems)
                  -1)
             t1 (if (= b1 0) 1 t0)
             m1 (if (= b1 1) 1 m0)
             p1b (if (= b1 2) 1 p0b)
             b2 (if (< 2 extra)
-                 (pick-bump-3 (ok-for a0 t1) (ok-for a1 m1) (ok-for a2 p1b) rem-packed 0)
+                 (pick-bump-3 (ok-for a0 t1) (ok-for a1 m1) (ok-for a2 p1b) rems)
                  -1)
             bump0 (if (if (= b0 0) 1 (if (= b1 0) 1 (if (= b2 0) 1 0))) 1 0)
             bump1 (if (if (= b0 1) 1 (if (= b1 1) 1 (if (= b2 1) 1 0))) 1 0)
             bump2 (if (if (= b0 2) 1 (if (= b1 2) 1 (if (= b2 2) 1 0))) 1 0)]
-        (pack3 (+ f0 bump0) (+ f1 bump1) (+ f2 bump2))))))
+        (record-new [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]] (+ f0 bump0) (+ f1 bump1) (+ f2 bump2))))))
+
+;; Public lane projections (T5.3). No pack crosses the boundary.
+
+(defn plan-lr-l0 [total :i64 w0 :i64 w1 :i64 w2 :i64] :i64
+  (record-get (plan-lr-record total w0 w1 w2) :l0))
+
+(defn plan-lr-l1 [total :i64 w0 :i64 w1 :i64 w2 :i64] :i64
+  (record-get (plan-lr-record total w0 w1 w2) :l1))
+
+(defn plan-lr-l2 [total :i64 w0 :i64 w1 :i64 w2 :i64] :i64
+  (record-get (plan-lr-record total w0 w1 w2) :l2))
 
 (defn plan-fits-total? [total-usable :i64 weight-bytes :i64] :i64
   ;; cljc plan :fits? partial — total usable ≥ model weights
@@ -183,13 +198,13 @@
   (pack3 layers dense dense-frac-milli))
 
 (defn model-layers [mp :i64] :i64
-  (plan-lr-pack-get mp 0))
+  (lane-at mp 0))
 
 (defn model-dense [mp :i64] :i64
-  (plan-lr-pack-get mp 1))
+  (lane-at mp 1))
 
 (defn model-frac-milli [mp :i64] :i64
-  (plan-lr-pack-get mp 2))
+  (lane-at mp 2))
 
 (defn dense-layer-bytes [weight-bytes :i64 layers :i64 dense :i64 dense-frac-milli :i64] :i64
   ;; f * moe-bytes via milli: (moe * frac-milli) / 1000
@@ -300,9 +315,9 @@
   ;; cljc plan :fits? for 3-node ring using integer partition-3-ends
   ;; total usable ≥ weights AND every positive-span assignment fits its usable
   (let [ends (partition-3-ends weight-bytes mp u0 u1 u2)
-        hi0 (plan-lr-pack-get ends 0)
-        hi1 (plan-lr-pack-get ends 1)
-        hi2 (plan-lr-pack-get ends 2)
+        hi0 (lane-at ends 0)
+        hi1 (lane-at ends 1)
+        hi2 (lane-at ends 2)
         lo0 0
         lo1 hi0
         lo2 hi1
@@ -348,8 +363,8 @@
 (defn plan-fits-2 [weight-bytes :i64 mp :i64 u0 :i64 u1 :i64] :i64
   ;; cljc plan :fits? for 2-node ring using integer partition-2-ends
   (let [ends (partition-2-ends weight-bytes mp u0 u1)
-        hi0 (plan-lr-pack-get ends 0)
-        hi1 (plan-lr-pack-get ends 1)
+        hi0 (lane-at ends 0)
+        hi1 (lane-at ends 1)
         lo0 0
         lo1 hi0
         s0 (assignment-span lo0 hi0)
@@ -367,10 +382,10 @@
   ;; lo of assignment idx from packed exclusive ends (idx 0 → 0)
   (if (= idx 0)
     0
-    (plan-lr-pack-get ends-pack (- idx 1))))
+    (lane-at ends-pack (- idx 1))))
 
 (defn ends-hi [ends-pack :i64 idx :i64] :i64
-  (plan-lr-pack-get ends-pack idx))
+  (lane-at ends-pack idx))
 
 (defn asg-row-pack [weight-bytes :i64 mp :i64 lo :i64 hi :i64 usable :i64] :i64
   ;; pure assignment numeric row: pack3(span, fits, 0). Host adds :node id.
@@ -381,10 +396,10 @@
     (pack3 sp fit 0)))
 
 (defn asg-row-span [row :i64] :i64
-  (plan-lr-pack-get row 0))
+  (lane-at row 0))
 
 (defn asg-row-fits [row :i64] :i64
-  (plan-lr-pack-get row 1))
+  (lane-at row 1))
 
 (defn lo-acc-pack [lo :i64 acc :i64] :i64
   ;; state for partition-step host fold
@@ -395,8 +410,8 @@
   ;; one non-last ring node: cut hi from lo/acc at cumulative target.
   ;; lo-acc = pack3(lo, acc, 0). → pack3(hi, new-acc, 0).
   ;; Host: cum-usable = sum usable[0..i] inclusive; last node uses partition-last.
-  (let [lo (plan-lr-pack-get lo-acc 0)
-        acc (plan-lr-pack-get lo-acc 1)
+  (let [lo (lane-at lo-acc 0)
+        acc (lane-at lo-acc 1)
         wsum (layer-wsum weight-bytes mp)
         target (partition-target wsum cum-usable total-usable)
         hi (advance-hi weight-bytes mp lo acc target)
@@ -404,10 +419,10 @@
     (pack3 hi new-acc 0)))
 
 (defn partition-step-hi [step-pack :i64] :i64
-  (plan-lr-pack-get step-pack 0))
+  (lane-at step-pack 0))
 
 (defn partition-step-acc [step-pack :i64] :i64
-  (plan-lr-pack-get step-pack 1))
+  (lane-at step-pack 1))
 
 (defn partition-last [mp :i64] :i64
   ;; last ring node exclusive end is always layers
