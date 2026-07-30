@@ -34,11 +34,18 @@
     [ceil0
      (- mem os)
      ceil1
-     (if (< wired 0) ceil0 (if (< wired ceil0) wired ceil0))
+     (let
+      [__kotoba_binding-some_1 wired]
+      (if
+       (option-some?-of [:option :i64] __kotoba_binding-some_1)
+       (let
+        [w (option-value-of [:option :i64] __kotoba_binding-some_1 0)]
+        (if (< w ceil0) w ceil0))
+       ceil0))
      left
      (- ceil1 head)]
     (if (< left 0) 0 left)),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [:i64 :i64 :i64 [:option :i64]]}
   {:name choose-strategy-name,
    :params [link-gbps ranks experts kv-heads],
    :result :string,
@@ -909,7 +916,7 @@
    :result :i64,
    :effects #{},
    :body (bytes-to-gib-milli (usable-bytes mem os head wired)),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [:i64 :i64 :i64 [:option :i64]]}
   {:name est-gib-milli,
    :params [est-bytes],
    :result :i64,
