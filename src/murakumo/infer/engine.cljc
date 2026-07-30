@@ -19,13 +19,21 @@
   (oracle/ready? oid))
 
 (defn- try-oracle
+  "JVM: require shipped KIR (T6.4). cljs: oracle when ready, else mirror."
   [thunk mirror-thunk]
-  (if (oracle-ready?)
-    (try
-      (thunk)
-      (catch #?(:clj Exception :cljs :default) _
-        (mirror-thunk)))
-    (mirror-thunk)))
+  #?(:clj
+     (do
+       (when-not (oracle-ready?)
+         (throw (ex-info "oracle not ready (JVM requires shipped KIR)"
+                         {:oracle-id oid})))
+       (thunk))
+     :cljs
+     (if (oracle-ready?)
+       (try
+         (thunk)
+         (catch :default _
+           (mirror-thunk)))
+       (mirror-thunk))))
 
 (def default-rpc-port
   (try
