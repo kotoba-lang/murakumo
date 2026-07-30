@@ -362,8 +362,8 @@
            (oracle/call :report-core 'reconcile-title ["f" "t"])))
     (is (= (ir/execute live 'reconcile-col-header [])
            (oracle/call :report-core 'reconcile-col-header [])))
-    (is (= (ir/execute live 'nodes-row ["x" "?" 0 0 "off"])
-           (oracle/call :report-core 'nodes-row ["x" "?" 0 0 "off"])))
+    (is (= (ir/execute live 'nodes-row ["x" "?" false false "off"])
+           (oracle/call :report-core 'nodes-row ["x" "?" false false "off"])))
     (is (= (ir/execute live 'status-row
                        ["asher" (oracle/option-i64 nil) "?" "-" 0])
            (oracle/call :report-core 'status-row
@@ -1365,8 +1365,8 @@
            (oracle/call :infer-join 'max-resident-bytes [0])))
     (is (= (ir/execute j 'can? [0 "media-postproc"])
            (oracle/call :infer-join 'can? [0 "media-postproc"])))
-    (is (= (ir/execute j 'needs-relay? [2 1])
-           (oracle/call :infer-join 'needs-relay? [2 1])))
+    (is (= (ir/execute j 'needs-relay? [2 true])
+           (oracle/call :infer-join 'needs-relay? [2 true])))
     (is (= (ir/execute g 'gib [])
            (oracle/call :infer-gc 'gib [])))
     (is (= (ir/execute g 'need-bytes [100 40])

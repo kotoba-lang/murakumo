@@ -110,7 +110,7 @@
    #(oracle/bool->host
      (o 'needs-relay?
         [(oracle/as-i64 (tier-code (:tier (tier-of caps))))
-         (oracle/as-i64 (if (true? (:inbound-reachable? caps)) 1 0))]))
+         (true? (:inbound-reachable? caps))]))
    #(or (contains? #{:browser :wasm} (:tier caps))
         (not (:inbound-reachable? caps)))))
 

@@ -52,7 +52,7 @@
                           [(str "nr_" i)
                            ;; Profile 5: needs-relay? is :bool
                            (str "(if (needs-relay? " (tier-code t) " "
-                                (if inbound 1 0) ") 1 0)")])
+                                (if inbound "true" "false") ") 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [t inbound]] (map-indexed vector corpus)]

@@ -66,8 +66,8 @@
                            (kotoba-literal "running") ")")
                  "np" (str "(node-prefix " (kotoba-literal "asher") ")")
                  "us" "(unreachable-skipped-line)"
-                 "p0" "(provision-result-line 0)"
-                 "p1" "(provision-result-line 1)"
+                 "p0" "(provision-result-line false)"
+                 "p1" "(provision-result-line true)"
                  "m1" "(mesh-pass1-line)"
                  "mw" "(mesh-wait-peerid-line)"
                  "m2" "(mesh-pass2-line)"
@@ -88,8 +88,8 @@
                            (kotoba-literal "abc") " " (kotoba-literal "1.0") ")")
                  "se" (str "(snapshot-error-line " (kotoba-literal "boom") ")")
                  "re" (str "(reconcile-persist-error-line " (kotoba-literal "nope") ")")
-                 "on" "(online-label 1)" "off" "(online-label 0)"
-                 "so" "(ssh-label 1)" "sn" "(ssh-label 0)"
+                 "on" "(online-label true)" "off" "(online-label false)"
+                 "so" "(ssh-label true)" "sn" "(ssh-label false)"
                  "ho" (str "(health-label " (opt-i64-form 1) ")") "hn" (str "(health-label " (opt-i64-form nil) ")")
                  "e1" (str "(command-error-line " (kotoba-literal "provision") " "
                            (kotoba-literal "missing-operator-seed-hex") ")")
@@ -140,8 +140,8 @@
                  "ro" (str "(rollout-line " (kotoba-literal "1.2.3") " "
                            (kotoba-literal "deadbeef") " " (kotoba-literal "quic") ")")
                  "cp" (str "(collected-peers-line 3 " (kotoba-literal ".peers") ")")
-                 "a1" (str "(artifact-node-status " (kotoba-literal "n1") " 1)")
-                 "a0" (str "(artifact-node-status " (kotoba-literal "n1") " 0)")
+                 "a1" (str "(artifact-node-status " (kotoba-literal "n1") " true)")
+                 "a0" (str "(artifact-node-status " (kotoba-literal "n1") " false)")
                  "dc" (str "(deploy-command-output " (kotoba-literal "  out  ") " "
                            (kotoba-literal "err") ")")
                  "al" (str "(alert-line " (kotoba-literal "warn") " "
@@ -192,10 +192,10 @@
                  "f10" (str "(field-10 " (kotoba-literal "NODE") " 6)")
                  "sdr" (str "(status-down-row " (kotoba-literal "asher") ")")
                  "nr" (str "(nodes-row " (kotoba-literal "asher") " "
-                           (kotoba-literal "100.1.2.3") " 1 1 "
+                           (kotoba-literal "100.1.2.3") " true true "
                            (kotoba-literal "up/running") ")")
                  "nrq" (str "(nodes-row " (kotoba-literal "x") " "
-                            (kotoba-literal "?") " 0 0 "
+                            (kotoba-literal "?") " false false "
                             (kotoba-literal "off") ")")
                  "sr" (str "(status-row " (kotoba-literal "asher") " "
                            (opt-i64-form 1) " "
@@ -231,19 +231,19 @@
          {"title" (str "(reconcile-title " (kotoba-literal "f1") " " (kotoba-literal "T") ")")
           "tdef" (str "(reconcile-title " (kotoba-literal "fleet") " " (kotoba-literal "t0") ")")
           "col" "(reconcile-col-header)"
-          "cid0" (str "(cid-display " (kotoba-literal "") " 0)")
-          "cid1" (str "(cid-display " (kotoba-literal "bafy1234567890ab") " 1)")
+          "cid0" (str "(cid-display " (kotoba-literal "") " false)")
+          "cid1" (str "(cid-display " (kotoba-literal "bafy1234567890ab") " true)")
           "dplace" (str "(action-detail " (kotoba-literal "place") " "
-                        (kotoba-literal "t1,t2") " " (kotoba-literal "") " 1 "
+                        (kotoba-literal "t1,t2") " " (kotoba-literal "") " true "
                         (kotoba-literal "") ")")
           "dsat" (str "(action-detail " (kotoba-literal "satisfied") " "
-                      (kotoba-literal "") " " (kotoba-literal "n1") " 0 "
+                      (kotoba-literal "") " " (kotoba-literal "n1") " false "
                       (kotoba-literal "") ")")
           "dsat0" (str "(action-detail " (kotoba-literal "satisfied") " "
-                       (kotoba-literal "") " " (kotoba-literal "") " 1 "
+                       (kotoba-literal "") " " (kotoba-literal "") " true "
                        (kotoba-literal "") ")")
           "drem" (str "(action-detail " (kotoba-literal "remove") " "
-                      (kotoba-literal "") " " (kotoba-literal "") " 1 "
+                      (kotoba-literal "") " " (kotoba-literal "") " true "
                       (kotoba-literal "gone") ")")
           "fi" "(field-i64-7 2)"
           "fi0" "(field-i64-7 0)"
@@ -257,7 +257,7 @@
                       act9 (str "(pad-right " (kotoba-literal act) " " (padn act 9) ")")
                       front (str "(reconcile-app-row " app14 " " cid10 " 2 1 " act9 ")")
                       detail (str "(action-detail " (kotoba-literal "satisfied") " "
-                                  (kotoba-literal "") " " (kotoba-literal "n1") " 0 "
+                                  (kotoba-literal "") " " (kotoba-literal "n1") " false "
                                   (kotoba-literal "") ")")]
                   (str "(reconcile-app-line " front " " detail ")"))})]
     (is (= (report/command-help) (get help "h")))

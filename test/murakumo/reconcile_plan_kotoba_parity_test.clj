@@ -155,18 +155,18 @@
   (let [pick @#'r/pick-targets
         ;; name order for ["c" "a" "b"]: indices 0=c,1=a,2=b; strings a < b < c
         ;; n01: c<=a? 0; n02: c<=b? 0; n12: a<=b? 1
-        names-cab "(name-order-record 0 0 1)"
+        names-cab "(name-order-record false false true)"
         actual (compile-i64-cases
-                {"f2" "(first-of-2 1 3 1)"  ;; load0=1 load1=3 name0 before → 0
-                 "f2b" "(first-of-2 1 1 0)" ;; equal load, name0 after → 1
+                {"f2" "(first-of-2 1 3 true)"  ;; load0=1 load1=3 name0 before → 0
+                 "f2b" "(first-of-2 1 1 false)" ;; equal load, name0 after → 1
                  "f3" (str "(first-of-3 1 3 1 " names-cab ")")
                  "t3" (str "(pick-targets-3-first 1 3 1 " names-cab ")")
                  ;; T5.3: project record fields inside the guest
-                 "pf" "(targets-first (pick-targets-2-record 1 3 1 2))"
-                 "ps" "(targets-second (pick-targets-2-record 1 3 1 2))"
-                 "pc" "(targets-count (pick-targets-2-record 1 3 1 2))"
-                 "p2n1c" "(targets-count (pick-targets-2-record 1 3 1 1))"
-                 "p2n0c" "(targets-count (pick-targets-2-record 1 3 1 0))"})
+                 "pf" "(targets-first (pick-targets-2-record 1 3 true 2))"
+                 "ps" "(targets-second (pick-targets-2-record 1 3 true 2))"
+                 "pc" "(targets-count (pick-targets-2-record 1 3 true 2))"
+                 "p2n1c" "(targets-count (pick-targets-2-record 1 3 true 1))"
+                 "p2n0c" "(targets-count (pick-targets-2-record 1 3 true 0))"})
         ;; cljc: candidates c,a,b loads c=1,a=3,b=1 → sorted b,c,a
         cljc (pick ["c" "a" "b"] 2 {"c" 1 "a" 3 "b" 1})]
     (is (= 0 (get actual "f2")))
@@ -183,9 +183,9 @@
     (is (= ["b" "c"] cljc))
     ;; two-record: candidates order [b c] loads 1,1 names b before c
     (let [p2 (compile-i64-cases
-              {"ord0" "(targets-first (pick-targets-2-record 1 1 1 2))"
-               "ord1" "(targets-second (pick-targets-2-record 1 1 1 2))"
-               "ordc" "(targets-count (pick-targets-2-record 1 1 1 2))"})]
+              {"ord0" "(targets-first (pick-targets-2-record 1 1 true 2))"
+               "ord1" "(targets-second (pick-targets-2-record 1 1 true 2))"
+               "ordc" "(targets-count (pick-targets-2-record 1 1 true 2))"})]
       (is (= 0 (get p2 "ord0")))
       (is (= 1 (get p2 "ord1")))
       (is (= 2 (get p2 "ordc"))))))

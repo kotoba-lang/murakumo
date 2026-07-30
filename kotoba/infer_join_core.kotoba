@@ -7,7 +7,7 @@
 ;; partition-work / enrollment map assembly stay cljc (vectors/maps).
 ;; Tier codes: 0 browser | 1 wasm | 2 native (default when unknown).
 ;; can? work-kind is a string name matching cljc keywords without ":".
-;; inbound-reachable: 0 false / 1 true (native only; browser/wasm always relay).
+;; inbound-reachable: profile-5 :bool (native only; browser/wasm always relay).
 ;; mem-bytes sentinel -1 = absent (use tier max only).
 ;; Parity: test/murakumo/infer_join_kotoba_parity_test.clj
 
@@ -23,12 +23,12 @@
       4294967296
       13958643712)))
 
-(defn needs-relay? [tier :i64 inbound :i64] :bool
+(defn needs-relay? [tier :i64 inbound :bool] :bool
   ;; cljc: browser/wasm always; native only when not inbound-reachable?
-  ;; inbound is host-projected 0/1 (inbound-reachable?).
+  ;; inbound is host-projected :bool (inbound-reachable?).
   (if (< tier 2)
     true
-    (if (= inbound 1) false true)))
+    (if inbound false true)))
 
 (defn swarm-can? [kind :string] :bool
   (if (string=? kind "media-postproc")

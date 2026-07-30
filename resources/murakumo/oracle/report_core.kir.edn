@@ -104,11 +104,8 @@
    :result :string,
    :effects #{},
    :body
-   (if
-    (= peered 1)
-    "provisioned + loaded (peered)"
-    "provisioned + loaded"),
-   :param-types [:i64]}
+   (if peered "provisioned + loaded (peered)" "provisioned + loaded"),
+   :param-types [:bool]}
   {:name mesh-pass1-line,
    :params [],
    :result :string,
@@ -241,14 +238,14 @@
    :params [online],
    :result :string,
    :effects #{},
-   :body (if (= online 1) "yes" "no"),
-   :param-types [:i64]}
+   :body (if online "yes" "no"),
+   :param-types [:bool]}
   {:name ssh-label,
    :params [ok],
    :result :string,
    :effects #{},
-   :body (if (= ok 1) "ok" "no"),
-   :param-types [:i64]}
+   :body (if ok "ok" "no"),
+   :param-types [:bool]}
   {:name health-label,
    :params [health?],
    :result :string,
@@ -297,9 +294,8 @@
    :params [name ok],
    :result :string,
    :effects #{},
-   :body
-   (string-concat " " (string-concat name (if (= ok 1) "✓" "✗"))),
-   :param-types [:string :i64]}
+   :body (string-concat " " (string-concat name (if ok "✓" "✗"))),
+   :param-types [:string :bool]}
   {:name deploy-command-output,
    :params [out err],
    :result :string,
@@ -532,7 +528,7 @@
          (string-concat
           (pad-to (ssh-label ssh-ok) 9)
           (string-concat " " mesh)))))))),
-   :param-types [:string :string :i64 :i64 :string]}
+   :param-types [:string :string :bool :bool :string]}
   {:name status-down-row,
    :params [name],
    :result :string,
@@ -590,8 +586,8 @@
    :params [cid present],
    :result :string,
    :effects #{},
-   :body (if (= present 0) "—" cid),
-   :param-types [:string :i64]}
+   :body (if present cid "—"),
+   :param-types [:string :bool]}
   {:name action-detail,
    :params [action targets-csv running-csv running-empty reason],
    :result :string,
@@ -602,9 +598,9 @@
     (string-concat "→ " targets-csv)
     (if
      (string=? action "satisfied")
-     (if (= running-empty 1) "" (string-concat "on " running-csv))
+     (if running-empty "" (string-concat "on " running-csv))
      reason)),
-   :param-types [:string :string :string :i64 :string]}
+   :param-types [:string :string :string :bool :string]}
   {:name nat-len,
    :params [n],
    :result :i64,

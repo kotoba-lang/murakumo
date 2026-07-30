@@ -91,17 +91,14 @@
    (if
     (< load-a load-b)
     true
-    (if
-     (< load-b load-a)
-     false
-     (if (= name-a-before-b 1) true false))),
-   :param-types [:i64 :i64 :i64]}
+    (if (< load-b load-a) false name-a-before-b)),
+   :param-types [:i64 :i64 :bool]}
   {:name first-of-2,
    :params [load0 load1 name0-before-1],
    :result :i64,
    :effects #{},
    :body (if (better-target? load0 load1 name0-before-1) 0 1),
-   :param-types [:i64 :i64 :i64]}
+   :param-types [:i64 :i64 :bool]}
   {:name name-order-record,
    :params [n01 n02 n12],
    :result [:ref :reconcile/name-order],
@@ -110,11 +107,11 @@
    (record-new
     [:record
      :reconcile/name-order
-     [[:n01 :i64] [:n02 :i64] [:n12 :i64]]]
+     [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]
     n01
     n02
     n12),
-   :param-types [:i64 :i64 :i64]}
+   :param-types [:bool :bool :bool]}
   {:name first-of-3,
    :params [load0 load1 load2 names],
    :result :i64,
@@ -125,21 +122,21 @@
      (record-get
       [:record
        :reconcile/name-order
-       [[:n01 :i64] [:n02 :i64] [:n12 :i64]]]
+       [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]
       names
       :n01)
      n02
      (record-get
       [:record
        :reconcile/name-order
-       [[:n01 :i64] [:n02 :i64] [:n12 :i64]]]
+       [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]
       names
       :n02)
      n12
      (record-get
       [:record
        :reconcile/name-order
-       [[:n01 :i64] [:n02 :i64] [:n12 :i64]]]
+       [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]
       names
       :n12)
      w01
@@ -209,7 +206,7 @@
     (let
      [f (first-of-2 load0 load1 name0-before-1) s (if (= f 0) 1 0)]
      (if (= n 1) (targets-record f 0 1) (targets-record f s 2)))),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [:i64 :i64 :bool :i64]}
   {:name pick-targets-3-first,
    :params [load0 load1 load2 names],
    :result :i64,
@@ -467,9 +464,9 @@
  :oracle-value nil,
  :schema-identities
  #:reconcile{:name-order
-             "a757cd25394b07860eb47f33da76f53c55e6b3f6fd2438b9d087a9e596fa4aa3",
+             "131140860bd7586be1f0ef6d4e65233921c1fba30371e6a04b64d9cbe68b4e36",
              :targets
-             "42a4b23de2bed2e46ab3fb963cce73dce9630e4b2db4c28488631e2c4dbba677"},
+             "88817a3fcbfb762c156237d3490f6ef2f5e44af0be60f36a20b0b6081a9e4e7c"},
  :exports
  [default-replicas
   desired
@@ -524,7 +521,7 @@
              :name-order
              [:record
               :reconcile/name-order
-              [[:n01 :i64] [:n02 :i64] [:n12 :i64]]]},
+              [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]},
  :effects #{},
  :blocks [],
  :entry nil}
