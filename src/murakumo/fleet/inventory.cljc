@@ -50,12 +50,17 @@
 
 (defn node-port
   "Resolve a node's control HTTP port, defaulting to the fleet port, then 8077.
-   Kotoba `resolve-port` (Product Value ABI optional ports)."
+   Kotoba `resolve-port` (Product Value ABI optional ports).
+   T5.2: structural host map → call-record."
   [fleet node]
+  (oracle/require-ready! oid)
   (oracle/i64->host
-   (o 'resolve-port
-      [(oracle/option-i64 (:port node))
-       (oracle/option-i64 (:fleet/port fleet))])))
+   (oracle/call-record
+    oid 'resolve-port
+    {:node-port (:port node)
+     :fleet-port (:fleet/port fleet)}
+    [[:node-port :option-i64]
+     [:fleet-port :option-i64]])))
 
 (defn node-health-url
   "Node-local health URL for the control HTTP port. Kotoba `health-url`."
