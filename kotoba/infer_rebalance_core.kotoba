@@ -90,12 +90,12 @@
 (defn max2 [a :i64 b :i64] :i64
   (if (< a b) b a))
 
-(defn better-bump? [rem-a :i64 idx-a :i64 rem-b :i64 idx-b :i64] :i64
+(defn better-bump? [rem-a :i64 idx-a :i64 rem-b :i64 idx-b :i64] :bool
   (if (< rem-b rem-a)
-    1
+    true
     (if (< rem-a rem-b)
-      0
-      (if (< idx-a idx-b) 1 0))))
+      false
+      (if (< idx-a idx-b) true false))))
 
 ;; Pick best among three optional candidates (ok=1 means eligible).
 ;; Returns 0|1|2 or -1. T5.3: the remainders arrive as a lanes record, so the
@@ -114,17 +114,17 @@
         (if (= ok-p 0) -1 2)
         (if (= ok-p 0)
           1
-          (if (= (better-bump? rm 1 rp 2) 1) 1 2)))
+          (if (better-bump? rm 1 rp 2) 1 2)))
       (if (= ok-m 0)
         (if (= ok-p 0)
           0
-          (if (= (better-bump? rt 0 rp 2) 1) 0 2))
-        (let [win-tm (if (= (better-bump? rt 0 rm 1) 1) 0 1)
+          (if (better-bump? rt 0 rp 2) 0 2))
+        (let [win-tm (if (better-bump? rt 0 rm 1) 0 1)
               r-win (if (= win-tm 0) rt rm)
               i-win win-tm]
           (if (= ok-p 0)
             win-tm
-            (if (= (better-bump? r-win i-win rp 2) 1) win-tm 2)))))))
+            (if (better-bump? r-win i-win rp 2) win-tm 2)))))))
 
 (defn ok-for [active :i64 bumped :i64] :i64
   ;; active and bumped are 0|1 flags
@@ -391,24 +391,24 @@
 (defn seat-of [code :i64 st :i64 sm :i64 sp :i64] :i64
   (if (= code 0) st (if (= code 1) sm sp)))
 
-(defn before-pool? [ia :i64 ib :i64 st :i64 sm :i64 sp :i64] :i64
+(defn before-pool? [ia :i64 ib :i64 st :i64 sm :i64 sp :i64] :bool
   ;; sort-by (comp - val): higher seats first; ties → lower index first (stable text<media<post)
   (let [sa (seat-of ia st sm sp)
         sb (seat-of ib st sm sp)]
     (if (< sb sa)
-      1
+      true
       (if (< sa sb)
-        0
-        (if (< ia ib) 1 0)))))
+        false
+        (if (< ia ib) true false)))))
 
 (defn seat-order-record [st :i64 sm :i64 sp :i64] [:ref :rebalance/order]
   ;; permutation of pool codes 0,1,2 (desc seats); ties → lower index first
-  (let [p0 (if (= (before-pool? 0 1 st sm sp) 1) 0 1)
-        p1 (if (= (before-pool? 0 1 st sm sp) 1) 1 0)
-        q1 (if (= (before-pool? p1 2 st sm sp) 1) p1 2)
-        q2 (if (= (before-pool? p1 2 st sm sp) 1) 2 p1)
-        r0 (if (= (before-pool? p0 q1 st sm sp) 1) p0 q1)
-        r1 (if (= (before-pool? p0 q1 st sm sp) 1) q1 p0)]
+  (let [p0 (if (before-pool? 0 1 st sm sp) 0 1)
+        p1 (if (before-pool? 0 1 st sm sp) 1 0)
+        q1 (if (before-pool? p1 2 st sm sp) p1 2)
+        q2 (if (before-pool? p1 2 st sm sp) 2 p1)
+        r0 (if (before-pool? p0 q1 st sm sp) p0 q1)
+        r1 (if (before-pool? p0 q1 st sm sp) q1 p0)]
     (record-new [:record :rebalance/order [[:i0 :i64] [:i1 :i64] [:i2 :i64]]] r0 r1 q2)))
 
 (defn order-nth [ord [:ref :rebalance/order] n :i64] :i64

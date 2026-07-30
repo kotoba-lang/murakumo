@@ -144,7 +144,7 @@
         cases (into {} (map-indexed
                         (fn [i [[q1 f1] [q2 f2]]]
                           [(str "b_" i)
-                           (str "(better-score? " q1 " " f1 " " q2 " " f2 ")")])
+                           (str "(if (better-score? " q1 " " f1 " " q2 " " f2 ") 1 0)")])
                         pairs))
         actual (compile-i64-cases cases)]
     (doseq [[i [a b]] (map-indexed vector pairs)]

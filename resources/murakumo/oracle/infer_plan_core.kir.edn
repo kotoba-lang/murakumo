@@ -59,13 +59,13 @@
    :param-types [:i64 :i64 :i64 :i64]}
   {:name better-bump?,
    :params [rem-a idx-a rem-b idx-b],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (< rem-b rem-a)
-    1
-    (if (< rem-a rem-b) 0 (if (< idx-a idx-b) 1 0))),
+    true
+    (if (< rem-a rem-b) false (if (< idx-a idx-b) true false))),
    :param-types [:i64 :i64 :i64 :i64]}
   {:name pick-bump-3,
    :params [ok-t ok-m ok-p rems],
@@ -93,13 +93,13 @@
      (if
       (= ok-m 0)
       (if (= ok-p 0) -1 2)
-      (if (= ok-p 0) 1 (if (= (better-bump? rm 1 rp 2) 1) 1 2)))
+      (if (= ok-p 0) 1 (if (better-bump? rm 1 rp 2) 1 2)))
      (if
       (= ok-m 0)
-      (if (= ok-p 0) 0 (if (= (better-bump? rt 0 rp 2) 1) 0 2))
+      (if (= ok-p 0) 0 (if (better-bump? rt 0 rp 2) 0 2))
       (let
        [win-tm
-        (if (= (better-bump? rt 0 rm 1) 1) 0 1)
+        (if (better-bump? rt 0 rm 1) 0 1)
         r-win
         (if (= win-tm 0) rt rm)
         i-win
@@ -107,7 +107,7 @@
        (if
         (= ok-p 0)
         win-tm
-        (if (= (better-bump? r-win i-win rp 2) 1) win-tm 2)))))),
+        (if (better-bump? r-win i-win rp 2) win-tm 2)))))),
    :param-types
    [:i64
     :i64

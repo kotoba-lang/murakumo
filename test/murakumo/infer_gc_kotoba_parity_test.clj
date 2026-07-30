@@ -82,7 +82,7 @@
         cases (into {} (map-indexed
                         (fn [i [a1 b1 a2 b2]]
                           [(str "r_" i)
-                           (str "(rank-better? " a1 " " b1 " " a2 " " b2 ")")])
+                           (str "(if (rank-better? " a1 " " b1 " " a2 " " b2 ") 1 0)")])
                         pairs))
         actual (compile-i64-cases cases)]
     (doseq [[i [a1 b1 a2 b2]] (map-indexed vector pairs)]

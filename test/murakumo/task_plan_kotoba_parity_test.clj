@@ -202,11 +202,11 @@
                  "s0" "(slot-of 0 4)"
                  "s1" "(slot-of 5 4)"
                  "la" "(load-after-assign 3)"
-                 "bf" "(better-fill? 250 500)"
+                 "bf" "(if (better-fill? 250 500) 1 0)"
                  "bs" "(better-task-score? 250 1 0 500 0)"
                  "tie" "(better-task-score? 250 1 0 250 1)"
-                 "bm" "(better-mem? -100 -50 0 1)"
-                 "bn" "(better-mem? -50 -50 0 1)"})]
+                 "bm" "(if (better-mem? -100 -50 0 1) 1 0)"
+                 "bn" "(if (better-mem? -50 -50 0 1) 1 0)"})]
     (is (= 0 (get actual "f0")))
     (is (= 500 (get actual "f1")))
     (is (= 1000 (get actual "f2")))
@@ -279,8 +279,8 @@
                  "ret" "(summary-retried 5 3)"
                  "sp" "(speedup-milli 4000 1000)"
                  "sp0" "(speedup-milli 0 1000)"
-                 "cw" "(challenger-wins? 500 1 0 0)"
-                 "cw2" "(challenger-wins? 0 0 500 1)"})]
+                 "cw" "(if (challenger-wins? 500 1 0 0) 1 0)"
+                 "cw2" "(if (challenger-wins? 0 0 500 1) 1 0)"})]
     (is (= 0 (get actual "p3")) "tie → lower index 0")
     (is (= 1 (get actual "s3c")))
     (is (= 1 (get actual "s3l0")))

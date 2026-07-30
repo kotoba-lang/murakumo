@@ -67,12 +67,12 @@
   "True when entry1 should evict before entry2."
   [e1 e2]
   (try-oracle
-   #(= 1 (oracle/i64->host
-          (o 'rank-better?
-             [(oracle/as-i64 (or (:atime-days e1) 0))
-              (oracle/as-i64 (or (:bytes e1) 0))
-              (oracle/as-i64 (or (:atime-days e2) 0))
-              (oracle/as-i64 (or (:bytes e2) 0))])))
+   #(oracle/bool->host
+     (o 'rank-better?
+        [(oracle/as-i64 (or (:atime-days e1) 0))
+         (oracle/as-i64 (or (:bytes e1) 0))
+         (oracle/as-i64 (or (:atime-days e2) 0))
+         (oracle/as-i64 (or (:bytes e2) 0))]))
    #(neg? (compare (rank e1) (rank e2)))))
 
 (defn- hf-lru-evictable

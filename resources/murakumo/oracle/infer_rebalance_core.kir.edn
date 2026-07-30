@@ -81,13 +81,13 @@
    :param-types [:i64 :i64]}
   {:name better-bump?,
    :params [rem-a idx-a rem-b idx-b],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (if
     (< rem-b rem-a)
-    1
-    (if (< rem-a rem-b) 0 (if (< idx-a idx-b) 1 0))),
+    true
+    (if (< rem-a rem-b) false (if (< idx-a idx-b) true false))),
    :param-types [:i64 :i64 :i64 :i64]}
   {:name pick-bump-3,
    :params [ok-t ok-m ok-p rems],
@@ -121,13 +121,13 @@
      (if
       (= ok-m 0)
       (if (= ok-p 0) -1 2)
-      (if (= ok-p 0) 1 (if (= (better-bump? rm 1 rp 2) 1) 1 2)))
+      (if (= ok-p 0) 1 (if (better-bump? rm 1 rp 2) 1 2)))
      (if
       (= ok-m 0)
-      (if (= ok-p 0) 0 (if (= (better-bump? rt 0 rp 2) 1) 0 2))
+      (if (= ok-p 0) 0 (if (better-bump? rt 0 rp 2) 0 2))
       (let
        [win-tm
-        (if (= (better-bump? rt 0 rm 1) 1) 0 1)
+        (if (better-bump? rt 0 rm 1) 0 1)
         r-win
         (if (= win-tm 0) rt rm)
         i-win
@@ -135,7 +135,7 @@
        (if
         (= ok-p 0)
         win-tm
-        (if (= (better-bump? r-win i-win rp 2) 1) win-tm 2)))))),
+        (if (better-bump? r-win i-win rp 2) win-tm 2)))))),
    :param-types
    [:i64
     :i64
@@ -873,12 +873,15 @@
    :param-types [:i64 :i64 :i64 :i64]}
   {:name before-pool?,
    :params [ia ib st sm sp],
-   :result :i64,
+   :result :bool,
    :effects #{},
    :body
    (let
     [sa (seat-of ia st sm sp) sb (seat-of ib st sm sp)]
-    (if (< sb sa) 1 (if (< sa sb) 0 (if (< ia ib) 1 0)))),
+    (if
+     (< sb sa)
+     true
+     (if (< sa sb) false (if (< ia ib) true false)))),
    :param-types [:i64 :i64 :i64 :i64 :i64]}
   {:name seat-order-record,
    :params [st sm sp],
@@ -887,17 +890,17 @@
    :body
    (let
     [p0
-     (if (= (before-pool? 0 1 st sm sp) 1) 0 1)
+     (if (before-pool? 0 1 st sm sp) 0 1)
      p1
-     (if (= (before-pool? 0 1 st sm sp) 1) 1 0)
+     (if (before-pool? 0 1 st sm sp) 1 0)
      q1
-     (if (= (before-pool? p1 2 st sm sp) 1) p1 2)
+     (if (before-pool? p1 2 st sm sp) p1 2)
      q2
-     (if (= (before-pool? p1 2 st sm sp) 1) 2 p1)
+     (if (before-pool? p1 2 st sm sp) 2 p1)
      r0
-     (if (= (before-pool? p0 q1 st sm sp) 1) p0 q1)
+     (if (before-pool? p0 q1 st sm sp) p0 q1)
      r1
-     (if (= (before-pool? p0 q1 st sm sp) 1) q1 p0)]
+     (if (before-pool? p0 q1 st sm sp) q1 p0)]
     (record-new
      [:record :rebalance/order [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]
      r0
