@@ -88,7 +88,7 @@
         tmax (:max-resident-bytes t)
         max-res (oracle/i64->host
                  (o 'clamp-resident
-                    [(oracle/as-i64 (if (some? mem-bytes) mem-bytes -1))
+                    [(oracle/option-i64 mem-bytes)
                      (oracle/as-i64 tmax)]))]
     {:node/name name
      :node/did did

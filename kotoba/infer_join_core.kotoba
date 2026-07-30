@@ -8,7 +8,7 @@
 ;; Tier codes: 0 browser | 1 wasm | 2 native (default when unknown).
 ;; can? work-kind is a string name matching cljc keywords without ":".
 ;; inbound-reachable: profile-5 :bool (native only; browser/wasm always relay).
-;; mem-bytes sentinel -1 = absent (use tier max only).
+;; mem-bytes: [:option :i64] (none ⇒ use tier max only). No -1 sentinel.
 ;; Parity: test/murakumo/infer_join_kotoba_parity_test.clj
 
 (defn tier-browser [] :i64 0)
@@ -54,11 +54,12 @@
     (swarm-can? kind)
     (native-can? kind)))
 
-(defn clamp-resident [mem :i64 tier-max :i64] :i64
+(defn clamp-resident [mem [:option :i64] tier-max :i64] :i64
   ;; cljc enrollment: (min (or mem-bytes tier-max) tier-max)
-  (if (< mem 0)
-    tier-max
-    (if (< mem tier-max) mem tier-max)))
+  ;; Profile 5: mem is [:option :i64] (none = absent), not -1 sentinel.
+  (if-some [m mem]
+    (if (< m tier-max) m tier-max)
+    tier-max))
 
 (defn eligible-for-work? [can-kind :bool max-res :i64 resident :i64] :bool
   ;; cljc: (and can? (<= resident max-resident-bytes))

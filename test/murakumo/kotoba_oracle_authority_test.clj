@@ -1682,9 +1682,9 @@
            (oracle/call :connect 'plane-read [])))
     (is (= (oracle/call :connect 'plane-live []) conn/plane-live))
     (is (= (ir/execute c 'serves-plane?
-                       ["read" (oracle/option-i64 1) (oracle/option-i64 nil)])
+                       ["read" true false])
            (oracle/call :connect 'serves-plane?
-                        ["read" (oracle/option-i64 1) (oracle/option-i64 nil)])))
+                        ["read" true false])))
     (is (= (ir/execute a 'place-epoch [0])
            (oracle/call :component-authority 'place-epoch [0])))
     (is (= (ir/execute a 'revoke-epoch [1])
