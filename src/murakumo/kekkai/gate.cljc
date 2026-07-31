@@ -33,6 +33,9 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private denial-schema
+  [:record :kekkai/denial [[:name :string] [:status :string]]])
+
 ;; ── residual status / denial / dir / cli tokens ──────────────────────
 
 (def status-authorized
@@ -139,8 +142,10 @@
           nodes))
 
 (defn denial-line
-  "T5.2: structural map → call-record."
+  "T5.2 native guest record wire: single :kekkai/denial argument."
   [node]
   (o-record 'denial-line-of
-            {:name (:name node) :status (:kekkai/status node)}
-            [[:name :string] [:status :string]]))
+            {:x (oracle/record denial-schema
+                               {:name (:name node)
+                                :status (:kekkai/status node)})}
+            [[:x :raw]]))

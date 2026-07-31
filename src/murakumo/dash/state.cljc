@@ -31,6 +31,15 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private join-schema
+  [:record :dash/join [[:acc :string] [:sep :string] [:next :string]]])
+(def ^:private hosted-schema
+  [:record :dash/hosted [[:acc :string] [:next :string]]])
+(def ^:private clamp-schema
+  [:record :dash/clamp [[:requested-at :i64] [:history-count :i64]]])
+(def ^:private pair-i64-schema
+  [:record :dash/pair-i64 [[:a :i64] [:b :i64]]])
+
 (defn- parse-int [s]
   #?(:clj (Integer/parseInt s)
      :cljs (js/parseInt s 10)))
@@ -51,25 +60,24 @@
 
 (defn join-append
   "Generic empty-first join fold step.
-   T5.2: structural acc/sep/next → call-record."
+   T5.2 native guest record wire: single :dash/join argument."
   [acc sep next]
   (o-record 'join-append
-            {:acc (str (or acc ""))
-             :sep (str sep)
-             :next (str next)}
-            [[:acc :string]
-             [:sep :string]
-             [:next :string]]))
+            {:x (oracle/record join-schema
+                               {:acc (str (or acc ""))
+                                :sep (str sep)
+                                :next (str next)})}
+            [[:x :raw]]))
 
 (defn hosted-append
   "Append one short-hosted-cid to hosted-summary acc.
-   T5.2: structural acc/next → call-record."
+   T5.2 native guest record wire: single :dash/hosted argument."
   [acc next]
   (o-record 'hosted-append
-            {:acc (str (or acc ""))
-             :next (str next)}
-            [[:acc :string]
-             [:next :string]]))
+            {:x (oracle/record hosted-schema
+                               {:acc (str (or acc ""))
+                                :next (str next)})}
+            [[:x :raw]]))
 
 (def default-dashboard-port
   "Default dashboard HTTP port. Kotoba SSoT."
@@ -143,14 +151,14 @@
 
 (defn clamp-at
   "Clamp a requested history offset into the available history range.
-   T5.2: structural requested-at/history-count → call-record."
+   T5.2 native guest record wire: single :dash/clamp argument."
   [requested-at history-count]
   (oracle/i64->host
    (o-record 'clamp-at
-             {:requested-at (or requested-at 0)
-              :history-count history-count}
-             [[:requested-at :i64]
-              [:history-count :i64]])))
+             {:x (oracle/record clamp-schema
+                                {:requested-at (or requested-at 0)
+                                 :history-count history-count})}
+             [[:x :raw]])))
 
 (defn selected-snapshot
   "Select dashboard snapshot for a history offset.
@@ -171,8 +179,9 @@
   ([alerts n]
    (let [take-n (oracle/i64->host
                  (o-record 'recent-take-n
-                           {:n n :default 6}
-                           [[:n :i64] [:default :i64]]))]
+                           {:x (oracle/record pair-i64-schema
+                                              {:a n :b 6})}
+                           [[:x :raw]]))]
      (take take-n (reverse alerts)))))
 
 (defn append-capped
@@ -182,8 +191,9 @@
         len (count v)
         start (oracle/i64->host
                (o-record 'take-last-start
-                         {:len len :cap cap}
-                         [[:len :i64] [:cap :i64]]))]
+                         {:x (oracle/record pair-i64-schema
+                                            {:a len :b cap})}
+                         [[:x :raw]]))]
     (subvec v start)))
 
 (defn concat-capped

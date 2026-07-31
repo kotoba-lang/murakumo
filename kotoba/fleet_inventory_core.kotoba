@@ -1,4 +1,7 @@
 (ns fleet-inventory-core
+  (:schemas {;; T5.2 native guest record wire
+             :fleet/selector-name [:record :fleet/selector-name
+                                   [[:sel :string] [:name :string]]]})
   (:export [default-control-port digit-char nat-str i64-str
             resolve-port health-url selector-is-all?
             selector-wants-name? line-has-offline?
@@ -10,6 +13,7 @@
 ;; resolve-port uses [:option :i64] (no has-node/has-fleet sentinels).
 ;; selector-is-all?: empty string ≡ cljc nil selector.
 ;; Residual selector/offline/health URL tokens dual-source; helpers recompose.
+;; T5.2: multi-scalar selector inputs take single guest records.
 ;; Parity: test/murakumo/fleet_inventory_kotoba_parity_test.clj
 
 (defn default-control-port [] :i64 8077)
@@ -70,10 +74,12 @@
     true
     (if (string=? sel (selector-all)) true false)))
 
-(defn selector-wants-name? [sel :string name :string] :bool
+(defn selector-wants-name? [x [:ref :fleet/selector-name]] :bool
   ;; Exact comma-token match: pad both sides so substrings can't false-hit.
-  ;; Profile 5: :bool.
-  (let [sep (selector-join-sep)]
+  ;; Profile 5: :bool. T5.2 native: sel+name.
+  (let [sel (record-get x :sel)
+        name (record-get x :name)
+        sep (selector-join-sep)]
     (if (string-contains?
          (string-concat sep (string-concat sel sep))
          (string-concat sep (string-concat name sep)))

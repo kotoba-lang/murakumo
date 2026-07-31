@@ -40,41 +40,79 @@
    :body (* 1000 seconds),
    :param-types [:i64]}
   {:name clamp-at,
-   :params [requested-at history-count],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [req
+    [requested-at
+     (record-get
+      [:record
+       :dash/clamp
+       [[:requested-at :i64] [:history-count :i64]]]
+      x
+      :requested-at)
+     history-count
+     (record-get
+      [:record
+       :dash/clamp
+       [[:requested-at :i64] [:history-count :i64]]]
+      x
+      :history-count)
+     req
      (if (< requested-at 0) 0 requested-at)
      hi
      (if (< history-count 1) 0 (- history-count 1))]
     (if (< req hi) req hi)),
-   :param-types [:i64 :i64]}
+   :param-types [[:ref :dash/clamp]]}
   {:name take-last-start,
-   :params [len cap],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (if (< cap 1) len (let [s (- len cap)] (if (< s 0) 0 s))),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [len
+     (record-get [:record :dash/pair-i64 [[:a :i64] [:b :i64]]] x :a)
+     cap
+     (record-get [:record :dash/pair-i64 [[:a :i64] [:b :i64]]] x :b)]
+    (if (< cap 1) len (let [s (- len cap)] (if (< s 0) 0 s)))),
+   :param-types [[:ref :dash/pair-i64]]}
   {:name append-new-len,
-   :params [len add],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (if (< add 0) len (+ len add)),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [len
+     (record-get [:record :dash/pair-i64 [[:a :i64] [:b :i64]]] x :a)
+     add
+     (record-get [:record :dash/pair-i64 [[:a :i64] [:b :i64]]] x :b)]
+    (if (< add 0) len (+ len add))),
+   :param-types [[:ref :dash/pair-i64]]}
   {:name cap-count,
-   :params [len cap],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (if (< cap 1) 0 (if (< len cap) len cap)),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [len
+     (record-get [:record :dash/pair-i64 [[:a :i64] [:b :i64]]] x :a)
+     cap
+     (record-get [:record :dash/pair-i64 [[:a :i64] [:b :i64]]] x :b)]
+    (if (< cap 1) 0 (if (< len cap) len cap))),
+   :param-types [[:ref :dash/pair-i64]]}
   {:name recent-take-n,
-   :params [n default-n],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (if (< n 0) default-n n),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [n
+     (record-get [:record :dash/pair-i64 [[:a :i64] [:b :i64]]] x :a)
+     default-n
+     (record-get [:record :dash/pair-i64 [[:a :i64] [:b :i64]]] x :b)]
+    (if (< n 0) default-n n)),
+   :param-types [[:ref :dash/pair-i64]]}
   {:name digit-char,
    :params [d],
    :result :string,
@@ -367,21 +405,57 @@
    :body "15",
    :param-types []}
   {:name join-append,
-   :params [acc sep next],
+   :params [x],
    :result :string,
    :effects #{},
    :body
-   (if
-    (string=? acc "")
-    next
-    (string-concat acc (string-concat sep next))),
-   :param-types [:string :string :string]}
+   (let
+    [acc
+     (record-get
+      [:record
+       :dash/join
+       [[:acc :string] [:sep :string] [:next :string]]]
+      x
+      :acc)
+     sep
+     (record-get
+      [:record
+       :dash/join
+       [[:acc :string] [:sep :string] [:next :string]]]
+      x
+      :sep)
+     next
+     (record-get
+      [:record
+       :dash/join
+       [[:acc :string] [:sep :string] [:next :string]]]
+      x
+      :next)]
+    (if
+     (string=? acc "")
+     next
+     (string-concat acc (string-concat sep next)))),
+   :param-types [[:ref :dash/join]]}
   {:name hosted-append,
-   :params [acc next],
+   :params [x],
    :result :string,
    :effects #{},
-   :body (join-append acc (hosted-join-sep) next),
-   :param-types [:string :string]}
+   :body
+   (join-append
+    (record-new
+     [:record
+      :dash/join
+      [[:acc :string] [:sep :string] [:next :string]]]
+     (record-get
+      [:record :dash/hosted [[:acc :string] [:next :string]]]
+      x
+      :acc)
+     (hosted-join-sep)
+     (record-get
+      [:record :dash/hosted [[:acc :string] [:next :string]]]
+      x
+      :next))),
+   :param-types [[:ref :dash/hosted]]}
   {:name snapshot-record-type,
    :params [],
    :result :string,
@@ -389,7 +463,15 @@
    :body "com.murakumo.fleet.snapshot",
    :param-types []}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:dash{:clamp
+        "627d2458e37147f2d42e6f40d603a14b2f844ddbbecae777e4f581026d62b692",
+        :hosted
+        "09f2e441e185b8cb20fc16449e75ba83bc9955d4a374a36aab31a4b8eff7fc96",
+        :join
+        "a0248eec1ae7eca6cbd10541da637dc4a017f544a86f3086e4233c8e06444bc0",
+        :pair-i64
+        "1cc0f5082f4bbab4471ee7689ff0abed7b2baebb3b2ca2e9e577a1faffe43210"},
  :exports
  [short-hosted-cid
   health-class-of
@@ -432,7 +514,18 @@
   join-append
   hosted-append
   snapshot-record-type],
- :schemas nil,
+ :schemas
+ #:dash{:join
+        [:record
+         :dash/join
+         [[:acc :string] [:sep :string] [:next :string]]],
+        :hosted
+        [:record :dash/hosted [[:acc :string] [:next :string]]],
+        :clamp
+        [:record
+         :dash/clamp
+         [[:requested-at :i64] [:history-count :i64]]],
+        :pair-i64 [:record :dash/pair-i64 [[:a :i64] [:b :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

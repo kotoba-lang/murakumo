@@ -28,6 +28,9 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private selector-name-schema
+  [:record :fleet/selector-name [[:sel :string] [:name :string]]])
+
 ;; ── residual selector / offline / health URL tokens ──────────────────
 
 (def default-control-port
@@ -87,8 +90,9 @@
       (filter (fn [node]
                 (oracle/bool->host
                  (o-record 'selector-wants-name?
-                           {:sel sel :name (:name node)}
-                           [[:sel :string] [:name :string]])))
+                           {:x (oracle/record selector-name-schema
+                                              {:sel sel :name (:name node)})}
+                           [[:x :raw]])))
               nodes))))
 
 (defn node-named
