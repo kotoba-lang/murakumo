@@ -598,32 +598,107 @@
     true),
    :param-types [[:ref :plan/pair]]}
   {:name uniform-layer-bytes,
-   :params [weight-bytes layers],
-   :result :i64,
-   :effects #{},
-   :body (if (< layers 1) 0 (quot weight-bytes layers)),
-   :param-types [:i64 :i64]}
-  {:name dense-units-milli,
-   :params [layers dense dense-frac-milli],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [d
+    [weight-bytes
+     (record-get
+      [:record :plan/ul [[:weight-bytes :i64] [:layers :i64]]]
+      x
+      :weight-bytes)
+     layers
+     (record-get
+      [:record :plan/ul [[:weight-bytes :i64] [:layers :i64]]]
+      x
+      :layers)]
+    (if (< layers 1) 0 (quot weight-bytes layers))),
+   :param-types [[:ref :plan/ul]]}
+  {:name dense-units-milli,
+   :params [x],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [layers
+     (record-get
+      [:record
+       :plan/dense-units
+       [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]
+      x
+      :layers)
+     dense
+     (record-get
+      [:record
+       :plan/dense-units
+       [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]
+      x
+      :dense)
+     dense-frac-milli
+     (record-get
+      [:record
+       :plan/dense-units
+       [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]
+      x
+      :frac-milli)
+     d
      (if (< dense 0) 0 (if (< layers dense) layers dense))
      rest
      (- layers d)]
     (+ (* d dense-frac-milli) (* rest 1000))),
-   :param-types [:i64 :i64 :i64]}
+   :param-types [[:ref :plan/dense-units]]}
   {:name moe-layer-bytes,
-   :params [weight-bytes layers dense dense-frac-milli],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [units (dense-units-milli layers dense dense-frac-milli)]
+    [weight-bytes
+     (record-get
+      [:record
+       :plan/wm
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]]]
+      x
+      :weight-bytes)
+     units
+     (dense-units-milli
+      (record-new
+       [:record
+        :plan/dense-units
+        [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]
+       (record-get
+        [:record
+         :plan/wm
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]]]
+        x
+        :layers)
+       (record-get
+        [:record
+         :plan/wm
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]]]
+        x
+        :dense)
+       (record-get
+        [:record
+         :plan/wm
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]]]
+        x
+        :frac-milli)))]
     (if (< units 1) 0 (quot (* weight-bytes 1000) units))),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [[:ref :plan/wm]]}
   {:name model-record,
    :params [layers dense dense-frac-milli],
    :result [:ref :plan/model],
@@ -674,74 +749,183 @@
     :frac-milli),
    :param-types [[:ref :plan/model]]}
   {:name dense-layer-bytes,
-   :params [weight-bytes layers dense dense-frac-milli],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [moe (moe-layer-bytes weight-bytes layers dense dense-frac-milli)]
+    [dense-frac-milli
+     (record-get
+      [:record
+       :plan/wm
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]]]
+      x
+      :frac-milli)
+     moe
+     (moe-layer-bytes x)]
     (quot (* moe dense-frac-milli) 1000)),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [[:ref :plan/wm]]}
   {:name layer-byte-at,
-   :params [weight-bytes mp i],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
     [layers
-     (model-layers mp)
+     (record-get
+      [:record
+       :plan/wm-i
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:i :i64]]]
+      x
+      :layers)
      dense
-     (model-dense mp)
+     (record-get
+      [:record
+       :plan/wm-i
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:i :i64]]]
+      x
+      :dense)
      frac
-     (model-frac-milli mp)
+     (record-get
+      [:record
+       :plan/wm-i
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:i :i64]]]
+      x
+      :frac-milli)
+     i
+     (record-get
+      [:record
+       :plan/wm-i
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:i :i64]]]
+      x
+      :i)
+     w
+     (record-new
+      [:record
+       :plan/wm
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]]]
+      (record-get
+       [:record
+        :plan/wm-i
+        [[:weight-bytes :i64]
+         [:layers :i64]
+         [:dense :i64]
+         [:frac-milli :i64]
+         [:i :i64]]]
+       x
+       :weight-bytes)
+      layers
+      dense
+      frac)
      d
      (if (< dense 0) 0 (if (< layers dense) layers dense))]
-    (if
-     (< i d)
-     (dense-layer-bytes weight-bytes layers dense frac)
-     (moe-layer-bytes weight-bytes layers dense frac))),
-   :param-types [:i64 [:ref :plan/model] :i64]}
+    (if (< i d) (dense-layer-bytes w) (moe-layer-bytes w))),
+   :param-types [[:ref :plan/wm-i]]}
   {:name layer-wsum,
-   :params [weight-bytes mp],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
     [layers
-     (model-layers mp)
+     (record-get
+      [:record
+       :plan/wm
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]]]
+      x
+      :layers)
      dense
-     (model-dense mp)
-     frac
-     (model-frac-milli mp)
+     (record-get
+      [:record
+       :plan/wm
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]]]
+      x
+      :dense)
      d
      (if (< dense 0) 0 (if (< layers dense) layers dense))
      rest
      (- layers d)
      moe
-     (moe-layer-bytes weight-bytes layers dense frac)
+     (moe-layer-bytes x)
      db
-     (dense-layer-bytes weight-bytes layers dense frac)]
+     (dense-layer-bytes x)]
     (+ (* d db) (* rest moe))),
-   :param-types [:i64 [:ref :plan/model]]}
+   :param-types [[:ref :plan/wm]]}
   {:name partition-target,
-   :params [wsum cum-usable total-usable],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
-   (if (< total-usable 1) 0 (quot (* wsum cum-usable) total-usable)),
-   :param-types [:i64 :i64 :i64]}
+   (let
+    [wsum
+     (record-get
+      [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]
+      x
+      :a)
+     cum-usable
+     (record-get
+      [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]
+      x
+      :b)
+     total-usable
+     (record-get
+      [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]
+      x
+      :c)]
+    (if (< total-usable 1) 0 (quot (* wsum cum-usable) total-usable))),
+   :param-types [[:ref :plan/triple]]}
   {:name min2,
-   :params [a b],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (if (< a b) a b),
-   :param-types [:i64 :i64]}
+   :body
+   (if
+    (<
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :a)
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :b))
+    (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :a)
+    (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :b)),
+   :param-types [[:ref :plan/pair]]}
   {:name max2,
-   :params [a b],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (if (< a b) b a),
-   :param-types [:i64 :i64]}
+   :body
+   (if
+    (<
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :a)
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :b))
+    (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :b)
+    (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :a)),
+   :param-types [[:ref :plan/pair]]}
   {:name clamp-nonneg,
    :params [n],
    :result :i64,
@@ -749,23 +933,101 @@
    :body (if (< n 0) 0 n),
    :param-types [:i64]}
   {:name est-bytes-range,
-   :params [weight-bytes mp lo hi],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [layers
-     (model-layers mp)
+    [weight-bytes
+     (record-get
+      [:record
+       :plan/wm-range
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]]]
+      x
+      :weight-bytes)
+     layers
+     (record-get
+      [:record
+       :plan/wm-range
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]]]
+      x
+      :layers)
      dense
-     (model-dense mp)
+     (record-get
+      [:record
+       :plan/wm-range
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]]]
+      x
+      :dense)
      frac
-     (model-frac-milli mp)
+     (record-get
+      [:record
+       :plan/wm-range
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]]]
+      x
+      :frac-milli)
+     lo
+     (record-get
+      [:record
+       :plan/wm-range
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]]]
+      x
+      :lo)
+     hi
+     (record-get
+      [:record
+       :plan/wm-range
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]]]
+      x
+      :hi)
+     w
+     (record-new
+      [:record
+       :plan/wm
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]]]
+      weight-bytes
+      layers
+      dense
+      frac)
      d
      (if (< dense 0) 0 (if (< layers dense) layers dense))
      moe
-     (moe-layer-bytes weight-bytes layers dense frac)
+     (moe-layer-bytes w)
      db
-     (dense-layer-bytes weight-bytes layers dense frac)
+     (dense-layer-bytes w)
      lo2
      (if (< lo 0) 0 lo)
      hi2
@@ -773,76 +1035,391 @@
      dense-lo
      lo2
      dense-hi
-     (min2 hi2 d)
+     (min2
+      (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] hi2 d))
      dense-n
      (clamp-nonneg (- dense-hi dense-lo))
      moe-lo
-     (max2 lo2 d)
+     (max2
+      (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] lo2 d))
      moe-hi
      hi2
      moe-n
      (clamp-nonneg (- moe-hi moe-lo))]
     (+ (* dense-n db) (* moe-n moe))),
-   :param-types [:i64 [:ref :plan/model] :i64 :i64]}
+   :param-types [[:ref :plan/wm-range]]}
   {:name advance-in-band,
-   :params [lo hi-cap layer-b acc target],
-   :result :i64,
-   :effects #{},
-   :body
-   (if
-    (if (< lo hi-cap) (if (< 0 layer-b) 1 0) 0)
-    (let
-     [room
-      (- target acc)
-      kmax
-      (if (< room 0) 0 (quot room layer-b))
-      hi
-      (+ lo kmax)]
-     (if (< hi-cap hi) hi-cap hi))
-    lo),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
-  {:name advance-hi,
-   :params [weight-bytes mp lo acc target],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [layers
-     (model-layers mp)
+    [lo
+     (record-get
+      [:record
+       :plan/band
+       [[:lo :i64]
+        [:hi-cap :i64]
+        [:layer-b :i64]
+        [:acc :i64]
+        [:target :i64]]]
+      x
+      :lo)
+     hi-cap
+     (record-get
+      [:record
+       :plan/band
+       [[:lo :i64]
+        [:hi-cap :i64]
+        [:layer-b :i64]
+        [:acc :i64]
+        [:target :i64]]]
+      x
+      :hi-cap)
+     layer-b
+     (record-get
+      [:record
+       :plan/band
+       [[:lo :i64]
+        [:hi-cap :i64]
+        [:layer-b :i64]
+        [:acc :i64]
+        [:target :i64]]]
+      x
+      :layer-b)
+     acc
+     (record-get
+      [:record
+       :plan/band
+       [[:lo :i64]
+        [:hi-cap :i64]
+        [:layer-b :i64]
+        [:acc :i64]
+        [:target :i64]]]
+      x
+      :acc)
+     target
+     (record-get
+      [:record
+       :plan/band
+       [[:lo :i64]
+        [:hi-cap :i64]
+        [:layer-b :i64]
+        [:acc :i64]
+        [:target :i64]]]
+      x
+      :target)]
+    (if
+     (if (< lo hi-cap) (if (< 0 layer-b) 1 0) 0)
+     (let
+      [room
+       (- target acc)
+       kmax
+       (if (< room 0) 0 (quot room layer-b))
+       hi
+       (+ lo kmax)]
+      (if (< hi-cap hi) hi-cap hi))
+     lo)),
+   :param-types [[:ref :plan/band]]}
+  {:name advance-hi,
+   :params [x],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [weight-bytes
+     (record-get
+      [:record
+       :plan/wm-adv
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:acc :i64]
+        [:target :i64]]]
+      x
+      :weight-bytes)
+     layers
+     (record-get
+      [:record
+       :plan/wm-adv
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:acc :i64]
+        [:target :i64]]]
+      x
+      :layers)
      dense
-     (model-dense mp)
+     (record-get
+      [:record
+       :plan/wm-adv
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:acc :i64]
+        [:target :i64]]]
+      x
+      :dense)
      frac
-     (model-frac-milli mp)
+     (record-get
+      [:record
+       :plan/wm-adv
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:acc :i64]
+        [:target :i64]]]
+      x
+      :frac-milli)
+     lo
+     (record-get
+      [:record
+       :plan/wm-adv
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:acc :i64]
+        [:target :i64]]]
+      x
+      :lo)
+     acc
+     (record-get
+      [:record
+       :plan/wm-adv
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:acc :i64]
+        [:target :i64]]]
+      x
+      :acc)
+     target
+     (record-get
+      [:record
+       :plan/wm-adv
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:acc :i64]
+        [:target :i64]]]
+      x
+      :target)
+     w
+     (record-new
+      [:record
+       :plan/wm
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]]]
+      weight-bytes
+      layers
+      dense
+      frac)
      d
      (if (< dense 0) 0 (if (< layers dense) layers dense))
      moe
-     (moe-layer-bytes weight-bytes layers dense frac)
+     (moe-layer-bytes w)
      db
-     (dense-layer-bytes weight-bytes layers dense frac)
+     (dense-layer-bytes w)
      lo0
      (if (< lo 0) 0 (if (< layers lo) layers lo))]
     (if
      (< lo0 d)
      (let
       [hi-d
-       (advance-in-band lo0 d db acc target)
+       (advance-in-band
+        (record-new
+         [:record
+          :plan/band
+          [[:lo :i64]
+           [:hi-cap :i64]
+           [:layer-b :i64]
+           [:acc :i64]
+           [:target :i64]]]
+         lo0
+         d
+         db
+         acc
+         target))
        acc-d
-       (+ acc (est-bytes-range weight-bytes mp lo0 hi-d))]
-      (if (< hi-d d) hi-d (advance-in-band d layers moe acc-d target)))
-     (advance-in-band lo0 layers moe acc target))),
-   :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
+       (+
+        acc
+        (est-bytes-range
+         (record-new
+          [:record
+           :plan/wm-range
+           [[:weight-bytes :i64]
+            [:layers :i64]
+            [:dense :i64]
+            [:frac-milli :i64]
+            [:lo :i64]
+            [:hi :i64]]]
+          weight-bytes
+          layers
+          dense
+          frac
+          lo0
+          hi-d)))]
+      (if
+       (< hi-d d)
+       hi-d
+       (advance-in-band
+        (record-new
+         [:record
+          :plan/band
+          [[:lo :i64]
+           [:hi-cap :i64]
+           [:layer-b :i64]
+           [:acc :i64]
+           [:target :i64]]]
+         d
+         layers
+         moe
+         acc-d
+         target))))
+     (advance-in-band
+      (record-new
+       [:record
+        :plan/band
+        [[:lo :i64]
+         [:hi-cap :i64]
+         [:layer-b :i64]
+         [:acc :i64]
+         [:target :i64]]]
+       lo0
+       layers
+       moe
+       acc
+       target)))),
+   :param-types [[:ref :plan/wm-adv]]}
   {:name partition-3-ends,
-   :params [weight-bytes mp u0 u1 u2],
+   :params [x],
    :result [:ref :plan/ends],
    :effects #{},
    :body
    (let
-    [layers
-     (model-layers mp)
+    [weight-bytes
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :weight-bytes)
+     layers
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :layers)
+     dense
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :dense)
+     frac
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :frac-milli)
+     u0
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :u0)
+     u1
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :u1)
+     u2
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :u2)
+     w
+     (record-new
+      [:record
+       :plan/wm
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]]]
+      weight-bytes
+      layers
+      dense
+      frac)
      total
      (+ u0 (+ u1 u2))
      wsum
-     (layer-wsum weight-bytes mp)]
+     (layer-wsum w)]
     (if
      (= total 0)
      (record-new
@@ -852,15 +1429,74 @@
       layers)
      (let
       [t0
-       (partition-target wsum u0 total)
+       (partition-target
+        (record-new
+         [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]
+         wsum
+         u0
+         total))
        t1
-       (partition-target wsum (+ u0 u1) total)
+       (partition-target
+        (record-new
+         [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]
+         wsum
+         (+ u0 u1)
+         total))
        hi0
-       (advance-hi weight-bytes mp 0 0 t0)
+       (advance-hi
+        (record-new
+         [:record
+          :plan/wm-adv
+          [[:weight-bytes :i64]
+           [:layers :i64]
+           [:dense :i64]
+           [:frac-milli :i64]
+           [:lo :i64]
+           [:acc :i64]
+           [:target :i64]]]
+         weight-bytes
+         layers
+         dense
+         frac
+         0
+         0
+         t0))
        acc0
-       (est-bytes-range weight-bytes mp 0 hi0)
+       (est-bytes-range
+        (record-new
+         [:record
+          :plan/wm-range
+          [[:weight-bytes :i64]
+           [:layers :i64]
+           [:dense :i64]
+           [:frac-milli :i64]
+           [:lo :i64]
+           [:hi :i64]]]
+         weight-bytes
+         layers
+         dense
+         frac
+         0
+         hi0))
        hi1
-       (advance-hi weight-bytes mp hi0 acc0 t1)
+       (advance-hi
+        (record-new
+         [:record
+          :plan/wm-adv
+          [[:weight-bytes :i64]
+           [:layers :i64]
+           [:dense :i64]
+           [:frac-milli :i64]
+           [:lo :i64]
+           [:acc :i64]
+           [:target :i64]]]
+         weight-bytes
+         layers
+         dense
+         frac
+         hi0
+         acc0
+         t1))
        hi2
        layers]
       (record-new
@@ -868,7 +1504,7 @@
        hi0
        hi1
        hi2)))),
-   :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
+   :param-types [[:ref :plan/wm-u3]]}
   {:name assignment-span,
    :params [p],
    :result :i64,
@@ -882,13 +1518,104 @@
     (if (< hi lo) 0 (- hi lo))),
    :param-types [[:ref :plan/pair]]}
   {:name plan-fits-3,
-   :params [weight-bytes mp u0 u1 u2],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [ends
-     (partition-3-ends weight-bytes mp u0 u1 u2)
+    [weight-bytes
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :weight-bytes)
+     layers
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :layers)
+     dense
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :dense)
+     frac
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :frac-milli)
+     u0
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :u0)
+     u1
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :u1)
+     u2
+     (record-get
+      [:record
+       :plan/wm-u3
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]
+        [:u2 :i64]]]
+      x
+      :u2)
+     ends
+     (partition-3-ends x)
      hi0
      (record-get
       [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
@@ -920,11 +1647,56 @@
      (assignment-span
       (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] lo2 hi2))
      e0
-     (est-bytes-range weight-bytes mp lo0 hi0)
+     (est-bytes-range
+      (record-new
+       [:record
+        :plan/wm-range
+        [[:weight-bytes :i64]
+         [:layers :i64]
+         [:dense :i64]
+         [:frac-milli :i64]
+         [:lo :i64]
+         [:hi :i64]]]
+       weight-bytes
+       layers
+       dense
+       frac
+       lo0
+       hi0))
      e1
-     (est-bytes-range weight-bytes mp lo1 hi1)
+     (est-bytes-range
+      (record-new
+       [:record
+        :plan/wm-range
+        [[:weight-bytes :i64]
+         [:layers :i64]
+         [:dense :i64]
+         [:frac-milli :i64]
+         [:lo :i64]
+         [:hi :i64]]]
+       weight-bytes
+       layers
+       dense
+       frac
+       lo1
+       hi1))
      e2
-     (est-bytes-range weight-bytes mp lo2 hi2)
+     (est-bytes-range
+      (record-new
+       [:record
+        :plan/wm-range
+        [[:weight-bytes :i64]
+         [:layers :i64]
+         [:dense :i64]
+         [:frac-milli :i64]
+         [:lo :i64]
+         [:hi :i64]]]
+       weight-bytes
+       layers
+       dense
+       frac
+       lo2
+       hi2))
      f0
      (if
       (= s0 0)
@@ -954,7 +1726,7 @@
        total
        weight-bytes))]
     (if (if total-ok (if spans-ok true false) false) 1 0)),
-   :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
+   :param-types [[:ref :plan/wm-u3]]}
   {:name partition-1-end,
    :params [mp],
    :result :i64,
@@ -962,18 +1734,99 @@
    :body (model-layers mp),
    :param-types [[:ref :plan/model]]}
   {:name plan-fits-1,
-   :params [weight-bytes mp u0],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [layers
+    [weight-bytes
+     (record-get
+      [:record
+       :plan/wm-u1
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]]]
+      x
+      :weight-bytes)
+     layers
+     (record-get
+      [:record
+       :plan/wm-u1
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]]]
+      x
+      :layers)
+     dense
+     (record-get
+      [:record
+       :plan/wm-u1
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]]]
+      x
+      :dense)
+     frac
+     (record-get
+      [:record
+       :plan/wm-u1
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]]]
+      x
+      :frac-milli)
+     u0
+     (record-get
+      [:record
+       :plan/wm-u1
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]]]
+      x
+      :u0)
+     mp
+     (record-new
+      [:record
+       :plan/model
+       [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]
+      layers
+      dense
+      frac)
+     nlayers
      (partition-1-end mp)
      s0
      (assignment-span
-      (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] 0 layers))
+      (record-new
+       [:record :plan/pair [[:a :i64] [:b :i64]]]
+       0
+       nlayers))
      e0
-     (est-bytes-range weight-bytes mp 0 layers)
+     (est-bytes-range
+      (record-new
+       [:record
+        :plan/wm-range
+        [[:weight-bytes :i64]
+         [:layers :i64]
+         [:dense :i64]
+         [:frac-milli :i64]
+         [:lo :i64]
+         [:hi :i64]]]
+       weight-bytes
+       layers
+       dense
+       frac
+       0
+       nlayers))
      f0
      (if
       (= s0 0)
@@ -987,19 +1840,101 @@
        u0
        weight-bytes))]
     (if (if total-ok (if f0 true false) false) 1 0)),
-   :param-types [:i64 [:ref :plan/model] :i64]}
+   :param-types [[:ref :plan/wm-u1]]}
   {:name partition-2-ends,
-   :params [weight-bytes mp u0 u1],
+   :params [x],
    :result [:ref :plan/ends],
    :effects #{},
    :body
    (let
-    [layers
-     (model-layers mp)
+    [weight-bytes
+     (record-get
+      [:record
+       :plan/wm-u2
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]]]
+      x
+      :weight-bytes)
+     layers
+     (record-get
+      [:record
+       :plan/wm-u2
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]]]
+      x
+      :layers)
+     dense
+     (record-get
+      [:record
+       :plan/wm-u2
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]]]
+      x
+      :dense)
+     frac
+     (record-get
+      [:record
+       :plan/wm-u2
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]]]
+      x
+      :frac-milli)
+     u0
+     (record-get
+      [:record
+       :plan/wm-u2
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]]]
+      x
+      :u0)
+     u1
+     (record-get
+      [:record
+       :plan/wm-u2
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]]]
+      x
+      :u1)
+     w
+     (record-new
+      [:record
+       :plan/wm
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]]]
+      weight-bytes
+      layers
+      dense
+      frac)
      total
      (+ u0 u1)
      wsum
-     (layer-wsum weight-bytes mp)]
+     (layer-wsum w)]
     (if
      (= total 0)
      (record-new
@@ -1009,9 +1944,31 @@
       0)
      (let
       [t0
-       (partition-target wsum u0 total)
+       (partition-target
+        (record-new
+         [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]
+         wsum
+         u0
+         total))
        hi0
-       (advance-hi weight-bytes mp 0 0 t0)
+       (advance-hi
+        (record-new
+         [:record
+          :plan/wm-adv
+          [[:weight-bytes :i64]
+           [:layers :i64]
+           [:dense :i64]
+           [:frac-milli :i64]
+           [:lo :i64]
+           [:acc :i64]
+           [:target :i64]]]
+         weight-bytes
+         layers
+         dense
+         frac
+         0
+         0
+         t0))
        hi1
        layers]
       (record-new
@@ -1019,15 +1976,87 @@
        hi0
        hi1
        0)))),
-   :param-types [:i64 [:ref :plan/model] :i64 :i64]}
+   :param-types [[:ref :plan/wm-u2]]}
   {:name plan-fits-2,
-   :params [weight-bytes mp u0 u1],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [ends
-     (partition-2-ends weight-bytes mp u0 u1)
+    [weight-bytes
+     (record-get
+      [:record
+       :plan/wm-u2
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]]]
+      x
+      :weight-bytes)
+     layers
+     (record-get
+      [:record
+       :plan/wm-u2
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]]]
+      x
+      :layers)
+     dense
+     (record-get
+      [:record
+       :plan/wm-u2
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]]]
+      x
+      :dense)
+     frac
+     (record-get
+      [:record
+       :plan/wm-u2
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]]]
+      x
+      :frac-milli)
+     u0
+     (record-get
+      [:record
+       :plan/wm-u2
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]]]
+      x
+      :u0)
+     u1
+     (record-get
+      [:record
+       :plan/wm-u2
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:u0 :i64]
+        [:u1 :i64]]]
+      x
+      :u1)
+     ends
+     (partition-2-ends x)
      hi0
      (record-get
       [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
@@ -1049,9 +2078,39 @@
      (assignment-span
       (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] lo1 hi1))
      e0
-     (est-bytes-range weight-bytes mp lo0 hi0)
+     (est-bytes-range
+      (record-new
+       [:record
+        :plan/wm-range
+        [[:weight-bytes :i64]
+         [:layers :i64]
+         [:dense :i64]
+         [:frac-milli :i64]
+         [:lo :i64]
+         [:hi :i64]]]
+       weight-bytes
+       layers
+       dense
+       frac
+       lo0
+       hi0))
      e1
-     (est-bytes-range weight-bytes mp lo1 hi1)
+     (est-bytes-range
+      (record-new
+       [:record
+        :plan/wm-range
+        [[:weight-bytes :i64]
+         [:layers :i64]
+         [:dense :i64]
+         [:frac-milli :i64]
+         [:lo :i64]
+         [:hi :i64]]]
+       weight-bytes
+       layers
+       dense
+       frac
+       lo1
+       hi1))
      f0
      (if
       (= s0 0)
@@ -1075,7 +2134,7 @@
        total
        weight-bytes))]
     (if (if total-ok (if spans-ok true false) false) 1 0)),
-   :param-types [:i64 [:ref :plan/model] :i64 :i64]}
+   :param-types [[:ref :plan/wm-u2]]}
   {:name ends-at,
    :params [ends idx],
    :result :i64,
@@ -1111,16 +2170,122 @@
    :body (ends-at ends idx),
    :param-types [[:ref :plan/ends] :i64]}
   {:name asg-row-record,
-   :params [weight-bytes mp lo hi usable],
+   :params [x],
    :result [:ref :plan/row],
    :effects #{},
    :body
    (let
-    [sp
+    [weight-bytes
+     (record-get
+      [:record
+       :plan/wm-asg
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]
+        [:usable :i64]]]
+      x
+      :weight-bytes)
+     layers
+     (record-get
+      [:record
+       :plan/wm-asg
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]
+        [:usable :i64]]]
+      x
+      :layers)
+     dense
+     (record-get
+      [:record
+       :plan/wm-asg
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]
+        [:usable :i64]]]
+      x
+      :dense)
+     frac
+     (record-get
+      [:record
+       :plan/wm-asg
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]
+        [:usable :i64]]]
+      x
+      :frac-milli)
+     lo
+     (record-get
+      [:record
+       :plan/wm-asg
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]
+        [:usable :i64]]]
+      x
+      :lo)
+     hi
+     (record-get
+      [:record
+       :plan/wm-asg
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]
+        [:usable :i64]]]
+      x
+      :hi)
+     usable
+     (record-get
+      [:record
+       :plan/wm-asg
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:lo :i64]
+        [:hi :i64]
+        [:usable :i64]]]
+      x
+      :usable)
+     sp
      (assignment-span
       (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] lo hi))
      est
-     (est-bytes-range weight-bytes mp lo hi)
+     (est-bytes-range
+      (record-new
+       [:record
+        :plan/wm-range
+        [[:weight-bytes :i64]
+         [:layers :i64]
+         [:dense :i64]
+         [:frac-milli :i64]
+         [:lo :i64]
+         [:hi :i64]]]
+       weight-bytes
+       layers
+       dense
+       frac
+       lo
+       hi))
      fit
      (if
       (= sp 0)
@@ -1137,7 +2302,7 @@
      [:record :plan/row [[:span :i64] [:fits :i64]]]
      sp
      fit)),
-   :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
+   :param-types [[:ref :plan/wm-asg]]}
   {:name asg-row-span,
    :params [row],
    :result :i64,
@@ -1159,41 +2324,197 @@
     :fits),
    :param-types [[:ref :plan/row]]}
   {:name cut-state,
-   :params [at acc],
+   :params [p],
    :result [:ref :plan/cut],
    :effects #{},
    :body
-   (record-new [:record :plan/cut [[:at :i64] [:acc :i64]]] at acc),
-   :param-types [:i64 :i64]}
+   (record-new
+    [:record :plan/cut [[:at :i64] [:acc :i64]]]
+    (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :a)
+    (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :b)),
+   :param-types [[:ref :plan/pair]]}
   {:name partition-step,
-   :params [weight-bytes mp lo-acc cum-usable total-usable],
+   :params [x],
    :result [:ref :plan/cut],
    :effects #{},
    :body
    (let
-    [lo
+    [weight-bytes
      (record-get
-      [:record :plan/cut [[:at :i64] [:acc :i64]]]
-      lo-acc
+      [:record
+       :plan/wm-step
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:at :i64]
+        [:acc :i64]
+        [:cum-usable :i64]
+        [:total-usable :i64]]]
+      x
+      :weight-bytes)
+     layers
+     (record-get
+      [:record
+       :plan/wm-step
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:at :i64]
+        [:acc :i64]
+        [:cum-usable :i64]
+        [:total-usable :i64]]]
+      x
+      :layers)
+     dense
+     (record-get
+      [:record
+       :plan/wm-step
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:at :i64]
+        [:acc :i64]
+        [:cum-usable :i64]
+        [:total-usable :i64]]]
+      x
+      :dense)
+     frac
+     (record-get
+      [:record
+       :plan/wm-step
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:at :i64]
+        [:acc :i64]
+        [:cum-usable :i64]
+        [:total-usable :i64]]]
+      x
+      :frac-milli)
+     lo
+     (record-get
+      [:record
+       :plan/wm-step
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:at :i64]
+        [:acc :i64]
+        [:cum-usable :i64]
+        [:total-usable :i64]]]
+      x
       :at)
      acc
      (record-get
-      [:record :plan/cut [[:at :i64] [:acc :i64]]]
-      lo-acc
+      [:record
+       :plan/wm-step
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:at :i64]
+        [:acc :i64]
+        [:cum-usable :i64]
+        [:total-usable :i64]]]
+      x
       :acc)
+     cum-usable
+     (record-get
+      [:record
+       :plan/wm-step
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:at :i64]
+        [:acc :i64]
+        [:cum-usable :i64]
+        [:total-usable :i64]]]
+      x
+      :cum-usable)
+     total-usable
+     (record-get
+      [:record
+       :plan/wm-step
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]
+        [:at :i64]
+        [:acc :i64]
+        [:cum-usable :i64]
+        [:total-usable :i64]]]
+      x
+      :total-usable)
+     w
+     (record-new
+      [:record
+       :plan/wm
+       [[:weight-bytes :i64]
+        [:layers :i64]
+        [:dense :i64]
+        [:frac-milli :i64]]]
+      weight-bytes
+      layers
+      dense
+      frac)
      wsum
-     (layer-wsum weight-bytes mp)
+     (layer-wsum w)
      target
-     (partition-target wsum cum-usable total-usable)
+     (partition-target
+      (record-new
+       [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]
+       wsum
+       cum-usable
+       total-usable))
      hi
-     (advance-hi weight-bytes mp lo acc target)
+     (advance-hi
+      (record-new
+       [:record
+        :plan/wm-adv
+        [[:weight-bytes :i64]
+         [:layers :i64]
+         [:dense :i64]
+         [:frac-milli :i64]
+         [:lo :i64]
+         [:acc :i64]
+         [:target :i64]]]
+       weight-bytes
+       layers
+       dense
+       frac
+       lo
+       acc
+       target))
      new-acc
-     (+ acc (est-bytes-range weight-bytes mp lo hi))]
+     (+
+      acc
+      (est-bytes-range
+       (record-new
+        [:record
+         :plan/wm-range
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]
+          [:lo :i64]
+          [:hi :i64]]]
+        weight-bytes
+        layers
+        dense
+        frac
+        lo
+        hi)))]
     (record-new
      [:record :plan/cut [[:at :i64] [:acc :i64]]]
      hi
      new-acc)),
-   :param-types [:i64 [:ref :plan/model] [:ref :plan/cut] :i64 :i64]}
+   :param-types [[:ref :plan/wm-step]]}
   {:name partition-step-hi,
    :params [step],
    :result :i64,
@@ -1349,30 +2670,54 @@
    :param-types [:i64]}],
  :oracle-value nil,
  :schema-identities
- #:plan{:bump-cmp
-        "881c3cb4fed91cc9f1f526c099657f6a44f0b02c9169679f5d60aac453deb35e",
+ #:plan{:band
+        "e21484e92d97e17364a3ad5007c4262277e75b8619c88d79fa03c7fa9a409d1c",
+        :bump-cmp
+        "30c3e098f1905b20bd964170ac0e89b87266e4bd7cc4b11918f52d2a75e92bba",
         :bump3-in
-        "56f2c90dfb9595f0e7ebad6b41a2e53c69894ee27bbc7a4bcb158b178384303c",
+        "1e01bb667e0fd289e78522927516d2958112e707513a23c66cb588587d90d3be",
         :cut
-        "4121e2e5290d47d6e31014c04090ec88bca86045c48677482181a1dc091d3c21",
+        "7aca13cfd8c08be04660b376a454ecd50e1ae264b05e837c5c0b882d3cc9b34b",
+        :dense-units
+        "3d0dd50544d0f4c8b91864997eb51698d23123492c499c1bc3b63365d9976e75",
         :ends
-        "363e461af6a6960d5521afc49d961f9e7df8d34eaa3eda67690978cb11e8bb2c",
+        "1b248a3ed46555373e6a19472d26f87cf5709419c0c06bc70759a0c866b77f03",
         :model
-        "f3bffef83838529b5b727735949a3ec867ef004a814ab3bf7ced52f6d72ec625",
+        "7333d8bd1a548b6515f5278bb187b8ac60b0de1d1111698652b62796c56d0295",
         :node-cap
-        "0a32f7a568c59ed0da09f278252f65920d9619a2d3204c1c89ae66648606e559",
+        "84e3812a38198e1b8c4e90d7abd86f87d36e536eef420acfd6d41baaec00b546",
         :ok-for
-        "70e885c4e6aba009febbd65d77b3091fbe003860097d823d94247e9334c36bc0",
+        "0744cfec1a255e95d633291b5c8ef28183ed33cc05caaed08d41c1b501475f9a",
         :pair
-        "3ff7d98bc0e2cb750f8755bdba874d2b8f15230317d262e9bb6f50b67b34e778",
+        "58827b664696d14a500c031e90fe43f1311076ac3b2c5a7cae059285d774493a",
         :row
-        "1f8323ce830d1bbd00169bf89711dc09d9bf7bf8414820ebbc6f68bce76ea3d0",
+        "9a7c2d285b92d44b75d514fb67f3f5ec61df627e5ec7359c1df61d714246869d",
         :strategy-in
-        "a2522473107f3b5b99b98e3f27c5feb910ab413e06b798749471ff8459febccd",
+        "bdb9432686fd785b25fff086dc8c7543065060e82b35c69b026f092adb5cd758",
         :triple
-        "1641c8198fe6a3c099a30d3a5bbb9866ec843f1f701e54c67b142c5fd43a17d9",
+        "ceefc9baad15756f81b7606f30553a80a71cacd421f8835f88cfa04e3c46e4b3",
+        :ul
+        "f7b5c94b57f06aa3f41df1757d755d58405e9b4964aa04b9e2950348e7182595",
         :weights3
-        "e1789459725371454d00a0a165cc4ebc9ec1fdf9000f941da830aca9499ccdec"},
+        "dc4b6eaddf9a13e53f54236ed80fd0b2707bfddba7a3ea9015e60c8fcc4db1f6",
+        :wm
+        "2308f1fd7accf93b298ecc9dad4bff83eb48b0c6db931cedad7f31156c211337",
+        :wm-adv
+        "7cb2a6e40a020da352f56d3c8b9fbd5fa0c4755e74b81e329bea1fd53c1d9ea8",
+        :wm-asg
+        "1efede38a07f0b104df400e2c6da8e1e96f189a23d7b3be8aa69e13cced884dd",
+        :wm-i
+        "707dcfdc2b873efd5313093919c21c6b7691a39820f169f234c82ac5ff101d54",
+        :wm-range
+        "ef2213a51cb96b21be4446ae436676a7e02fd32cd336ba8d125238a39541bbef",
+        :wm-step
+        "3bf9323f3152f0bdae980ead950a9b66f3ef914befa15d9b580c00a2b5648193",
+        :wm-u1
+        "487f8789ced9e9242cf3fd044277493b66539651a40aebc258bbf6a9f2d392e8",
+        :wm-u2
+        "a8c5ff43522a9b0f4c2599e216b28bb0fbe374c25861e46433364597406664fe",
+        :wm-u3
+        "9a307ab22bcc6ea2fe0d6c8b387dd8a86a1e6ab0e498c86076bd6b644a74df68"},
  :exports
  [gib
   default-os-reserve
@@ -1434,14 +2779,69 @@
          [[:total :i64] [:w0 :i64] [:w1 :i64] [:w2 :i64]]],
         :ends
         [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]],
+        :wm-step
+        [:record
+         :plan/wm-step
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]
+          [:at :i64]
+          [:acc :i64]
+          [:cum-usable :i64]
+          [:total-usable :i64]]],
         :triple [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]],
+        :wm
+        [:record
+         :plan/wm
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]]],
+        :wm-i
+        [:record
+         :plan/wm-i
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]
+          [:i :i64]]],
         :cut [:record :plan/cut [[:at :i64] [:acc :i64]]],
         :row [:record :plan/row [[:span :i64] [:fits :i64]]],
+        :wm-u3
+        [:record
+         :plan/wm-u3
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]
+          [:u0 :i64]
+          [:u1 :i64]
+          [:u2 :i64]]],
         :model
         [:record
          :plan/model
          [[:layers :i64] [:dense :i64] [:frac-milli :i64]]],
+        :wm-u2
+        [:record
+         :plan/wm-u2
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]
+          [:u0 :i64]
+          [:u1 :i64]]],
         :pair [:record :plan/pair [[:a :i64] [:b :i64]]],
+        :wm-adv
+        [:record
+         :plan/wm-adv
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]
+          [:lo :i64]
+          [:acc :i64]
+          [:target :i64]]],
         :bump3-in
         [:record
          :plan/bump3-in
@@ -1453,10 +2853,46 @@
           [:rp :i64]]],
         :ok-for
         [:record :plan/ok-for [[:active :bool] [:bumped :bool]]],
+        :band
+        [:record
+         :plan/band
+         [[:lo :i64]
+          [:hi-cap :i64]
+          [:layer-b :i64]
+          [:acc :i64]
+          [:target :i64]]],
         :bump-cmp
         [:record
          :plan/bump-cmp
          [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]],
+        :ul [:record :plan/ul [[:weight-bytes :i64] [:layers :i64]]],
+        :wm-asg
+        [:record
+         :plan/wm-asg
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]
+          [:lo :i64]
+          [:hi :i64]
+          [:usable :i64]]],
+        :wm-u1
+        [:record
+         :plan/wm-u1
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]
+          [:u0 :i64]]],
+        :wm-range
+        [:record
+         :plan/wm-range
+         [[:weight-bytes :i64]
+          [:layers :i64]
+          [:dense :i64]
+          [:frac-milli :i64]
+          [:lo :i64]
+          [:hi :i64]]],
         :strategy-in
         [:record
          :plan/strategy-in
@@ -1470,7 +2906,11 @@
          [[:mem :i64]
           [:os :i64]
           [:head :i64]
-          [:wired [:option :i64]]]]},
+          [:wired [:option :i64]]]],
+        :dense-units
+        [:record
+         :plan/dense-units
+         [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

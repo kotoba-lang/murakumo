@@ -40,6 +40,87 @@
 (defn- plan-fits-total-call [a b]
   (plan-pair-bool "plan-fits-total?" a b))
 
+(defn- frac-milli [model]
+  (long (* 1000 (double (or (:model/dense-layer-frac model) 1/10)))))
+
+(def ^:private wm-lit
+  "[:record :plan/wm [[:weight-bytes :i64] [:layers :i64] [:dense :i64] [:frac-milli :i64]]]")
+(def ^:private wm-i-lit
+  "[:record :plan/wm-i [[:weight-bytes :i64] [:layers :i64] [:dense :i64] [:frac-milli :i64] [:i :i64]]]")
+(def ^:private wm-range-lit
+  "[:record :plan/wm-range [[:weight-bytes :i64] [:layers :i64] [:dense :i64] [:frac-milli :i64] [:lo :i64] [:hi :i64]]]")
+(def ^:private wm-adv-lit
+  "[:record :plan/wm-adv [[:weight-bytes :i64] [:layers :i64] [:dense :i64] [:frac-milli :i64] [:lo :i64] [:acc :i64] [:target :i64]]]")
+(def ^:private wm-u1-lit
+  "[:record :plan/wm-u1 [[:weight-bytes :i64] [:layers :i64] [:dense :i64] [:frac-milli :i64] [:u0 :i64]]]")
+(def ^:private wm-u2-lit
+  "[:record :plan/wm-u2 [[:weight-bytes :i64] [:layers :i64] [:dense :i64] [:frac-milli :i64] [:u0 :i64] [:u1 :i64]]]")
+(def ^:private wm-u3-lit
+  "[:record :plan/wm-u3 [[:weight-bytes :i64] [:layers :i64] [:dense :i64] [:frac-milli :i64] [:u0 :i64] [:u1 :i64] [:u2 :i64]]]")
+(def ^:private wm-asg-lit
+  "[:record :plan/wm-asg [[:weight-bytes :i64] [:layers :i64] [:dense :i64] [:frac-milli :i64] [:lo :i64] [:hi :i64] [:usable :i64]]]")
+(def ^:private wm-step-lit
+  "[:record :plan/wm-step [[:weight-bytes :i64] [:layers :i64] [:dense :i64] [:frac-milli :i64] [:at :i64] [:acc :i64] [:cum-usable :i64] [:total-usable :i64]]]")
+(def ^:private ul-lit
+  "[:record :plan/ul [[:weight-bytes :i64] [:layers :i64]]]")
+(def ^:private dense-units-lit
+  "[:record :plan/dense-units [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]")
+
+(defn- model-fields [model]
+  [(:model/layers model)
+   (or (:model/dense-layers model) 0)
+   (frac-milli model)])
+
+(defn- wm-new [w layers dense frac]
+  (str "(record-new " wm-lit " " w " " layers " " dense " " frac ")"))
+
+(defn- wm-from-model [w model]
+  (let [[L d f] (model-fields model)]
+    (wm-new w L d f)))
+
+(defn- layer-wsum-call [w model]
+  (str "(layer-wsum " (wm-from-model w model) ")"))
+
+(defn- layer-byte-at-call [w model i]
+  (let [[L d f] (model-fields model)]
+    (str "(layer-byte-at (record-new " wm-i-lit " " w " " L " " d " " f " " i "))")))
+
+(defn- partition-3-ends-call [w model u0 u1 u2]
+  (let [[L d f] (model-fields model)]
+    (str "(partition-3-ends (record-new " wm-u3-lit " "
+         w " " L " " d " " f " " u0 " " u1 " " u2 "))")))
+
+(defn- partition-2-ends-call [w layers dense frac u0 u1]
+  (str "(partition-2-ends (record-new " wm-u2-lit " "
+       w " " layers " " dense " " frac " " u0 " " u1 "))"))
+
+(defn- plan-fits-3-call [w layers dense frac u0 u1 u2]
+  (str "(plan-fits-3 (record-new " wm-u3-lit " "
+       w " " layers " " dense " " frac " " u0 " " u1 " " u2 "))"))
+
+(defn- plan-fits-1-call [w layers dense frac u0]
+  (str "(plan-fits-1 (record-new " wm-u1-lit " "
+       w " " layers " " dense " " frac " " u0 "))"))
+
+(defn- plan-fits-2-call [w layers dense frac u0 u1]
+  (str "(plan-fits-2 (record-new " wm-u2-lit " "
+       w " " layers " " dense " " frac " " u0 " " u1 "))"))
+
+(defn- asg-row-call [w layers dense frac lo hi u]
+  (str "(asg-row-record (record-new " wm-asg-lit " "
+       w " " layers " " dense " " frac " " lo " " hi " " u "))"))
+
+(defn- partition-step-call [w layers dense frac state-expr cum total]
+  ;; state-expr is cut record expression; extract at/acc via partition-step-hi/acc
+  ;; Actually partition-step now takes flat at+acc fields. For nested fold we need
+  ;; to project :at/:acc from prior cut into wm-step fields.
+  (str "(partition-step (record-new " wm-step-lit " "
+       w " " layers " " dense " " frac " "
+       "(partition-step-hi " state-expr ") "
+       "(partition-step-acc " state-expr ") "
+       cum " " total "))"))
+
+
 (def GiB plan/GiB)
 (def plan-lr @(var murakumo.infer.plan/largest-remainder))
 
@@ -186,9 +267,9 @@
                  "ft0" (plan-fits-total-call 70 80)
                  "sf1" (plan-pair-bool "span-fits?" 50 50)
                  "sf0" (plan-pair-bool "span-fits?" 51 50)
-                 "ul" "(uniform-layer-bytes 1000 10)"
-                 "du" "(dense-units-milli 78 3 100)"
-                 "moe" "(moe-layer-bytes 1000000 78 3 100)"})]
+                 "ul" (str "(uniform-layer-bytes (record-new " ul-lit " 1000 10))")
+                 "du" (str "(dense-units-milli (record-new " dense-units-lit " 78 3 100))")
+                 "moe" (str "(moe-layer-bytes (record-new " wm-lit " 1000000 78 3 100))")})]
     (is (= 1 (get actual "ft1")))
     (is (= 0 (get actual "ft0")))
     (is (= 1 (get actual "sf1")))
@@ -198,8 +279,6 @@
     (is (= (+ (* 3 100) (* 75 1000)) (get actual "du")))
     (is (= (quot (* 1000000 1000) (+ (* 3 100) (* 75 1000))) (get actual "moe")))))
 
-(defn- frac-milli [model]
-  (long (* 1000 (double (or (:model/dense-layer-frac model) 1/10)))))
 
 (defn- model-record-call [model]
   (str "(model-record " (:model/layers model) " "
@@ -220,9 +299,9 @@
                        (let [mp (model-record-call model)
                              w (:model/weight-bytes model)
                              L (:model/layers model)]
-                         [[(str "w_" i) (str "(layer-wsum " w " " mp ")")]
-                          [(str "b0_" i) (str "(layer-byte-at " w " " mp " 0)")]
-                          [(str "bl_" i) (str "(layer-byte-at " w " " mp " " (dec L) ")")]]))
+                         [[(str "w_" i) (layer-wsum-call w model)]
+                          [(str "b0_" i) (layer-byte-at-call w model 0)]
+                          [(str "bl_" i) (layer-byte-at-call w model (dec L))]]))
                      (range) models))
         actual (compile-i64-cases cases)]
     (doseq [[i model] (map-indexed vector models)]
@@ -271,19 +350,18 @@
                            mp (model-record-call model)
                            w (:model/weight-bytes model)]
                        ;; T5.3: ends are [:ref :plan/ends]; one label per lane
-                       (let [call (str "(partition-3-ends " w " " mp " "
-                                       (us 0) " " (us 1) " " (us 2) ")")]
+                       (let [call (partition-3-ends-call w model (us 0) (us 1) (us 2))]
                          [[(str label "-0") (str "(ends-at " call " 0)")]
                           [(str label "-1") (str "(ends-at " call " 1)")]
                           [(str label "-2") (str "(ends-at " call " 2)")]])))
                    cases))
         actual (compile-i64-cases
                 (merge kotoba-cases
-                       {"t0" "(partition-target 1200 100 300)"
-                        "t1" "(partition-target 1200 0 0)"
-                        "ah" (str "(advance-hi 1200 (model-record 12 0 100) 0 0 "
-                                  (quot (* 1200 1) 3) ")")
-                        "er" "(est-bytes-range 1200 (model-record 12 0 100) 0 4)"}))]
+                       {"t0" (str "(partition-target (record-new " plan-triple-lit " 1200 100 300))")
+                        "t1" (str "(partition-target (record-new " plan-triple-lit " 1200 0 0))")
+                        "ah" (str "(advance-hi (record-new " wm-adv-lit " 1200 12 0 100 0 0 "
+                                  (quot (* 1200 1) 3) "))")
+                        "er" (str "(est-bytes-range (record-new " wm-range-lit " 1200 12 0 100 0 4))")}))]
     (is (= 400 (get actual "t0")))
     (is (= 0 (get actual "t1")))
     (is (= 4 (get actual "ah")))
@@ -302,11 +380,10 @@
                {:name "b" :mem-bytes (* 16 GiB)}
                {:name "c" :mem-bytes (* 16 GiB)}]
         us (mapv plan/usable-bytes nodes)
-        mp "(model-record 12 0 100)"
-        ends2 (fn [u0 u1] (str "(partition-2-ends 1200 " mp " " u0 " " u1 ")"))
+        ends2 (fn [u0 u1] (partition-2-ends-call 1200 12 0 100 u0 u1))
         actual (compile-i64-cases
-                {"fit" (str "(plan-fits-3 1200 " mp " " (us 0) " " (us 1) " " (us 2) ")")
-                 "nofit" (str "(plan-fits-3 999999999999 " mp " " (us 0) " " (us 1) " " (us 2) ")")
+                {"fit" (plan-fits-3-call 1200 12 0 100 (us 0) (us 1) (us 2))
+                 "nofit" (plan-fits-3-call 999999999999 12 0 100 (us 0) (us 1) (us 2))
                  "sp" (plan-pair-call "assignment-span" 2 7)
                  "sp0" (plan-pair-call "assignment-span" 5 5)})
         cljc-plan (plan/plan model nodes)]
@@ -333,11 +410,11 @@
         us2u (mapv plan/usable-bytes n2uneq)
         us2z (mapv plan/usable-bytes n2zero)
         mp "(model-record 12 0 100)"
-        ends2 (fn [u0 u1] (str "(partition-2-ends 1200 " mp " " u0 " " u1 ")"))
+        ends2 (fn [u0 u1] (partition-2-ends-call 1200 12 0 100 u0 u1))
         actual (compile-i64-cases
                 {"p1" (str "(partition-1-end " mp ")")
-                 "f1" (str "(plan-fits-1 1200 " mp " " (us1 0) ")")
-                 "f1n" (str "(plan-fits-1 999999999999 " mp " " (us1 0) ")")
+                 "f1" (plan-fits-1-call 1200 12 0 100 (us1 0))
+                 "f1n" (plan-fits-1-call 999999999999 12 0 100 (us1 0))
                  ;; T5.3: ends are [:ref :plan/ends]; project inside the guest
                  "p2-0" (str "(ends-at " (ends2 (us2 0) (us2 1)) " 0)")
                  "p2-1" (str "(ends-at " (ends2 (us2 0) (us2 1)) " 1)")
@@ -345,9 +422,9 @@
                  "p2u-1" (str "(ends-at " (ends2 (us2u 0) (us2u 1)) " 1)")
                  "p2z-0" (str "(ends-at " (ends2 (us2z 0) (us2z 1)) " 0)")
                  "p2z-1" (str "(ends-at " (ends2 (us2z 0) (us2z 1)) " 1)")
-                 "f2" (str "(plan-fits-2 1200 " mp " " (us2 0) " " (us2 1) ")")
-                 "f2n" (str "(plan-fits-2 999999999999 " mp " " (us2 0) " " (us2 1) ")")
-                 "f2u" (str "(plan-fits-2 1200 " mp " " (us2u 0) " " (us2u 1) ")")
+                 "f2" (plan-fits-2-call 1200 12 0 100 (us2 0) (us2 1))
+                 "f2n" (plan-fits-2-call 999999999999 12 0 100 (us2 0) (us2 1))
+                 "f2u" (plan-fits-2-call 1200 12 0 100 (us2u 0) (us2u 1))
                  "pm2a" (pick-max-2-call 10 5)
                  "pm2b" (pick-max-2-call 5 10)
                  "pm2t" (pick-max-2-call 10 10)})
@@ -356,7 +433,7 @@
         hi0u (get actual "p2u-0")
         hi1u (get actual "p2u-1")
         e2 (ends2 (us2 0) (us2 1))
-        row (fn [lo hi u] (str "(asg-row-record 1200 " mp " " lo " " hi " " u ")"))
+        row (fn [lo hi u] (asg-row-call 1200 12 0 100 lo hi u))
         ;; asg rows from ends for n2eq — host would zip with node names
         asg-actual
         (compile-i64-cases
@@ -401,19 +478,24 @@
                {:name "d" :mem-bytes (* 8 GiB)}]
         us (mapv plan/usable-bytes nodes)
         total (reduce + us)
-        mp "(model-record 20 0 100)"
         cljc-ends (mapv (fn [a] (second (:layers a))) (plan/partition-layers model nodes))
-        ;; T5.3: the fold state is [:ref :plan/cut], so each step is nested as
-        ;; an expression instead of unpacking an integer on the host between
-        ;; steps. `:at` on the way out is `:at` on the way in.
-        step (fn [state cum] (str "(partition-step 2000 " mp " " state " " cum " " total ")"))
-        s0 (step "(cut-state 0 0)" (us 0))
-        s1 (step s0 (+ (us 0) (us 1)))
-        s2 (step s1 (+ (us 0) (us 1) (us 2)))
+        ;; T5.2: partition-step takes one wm-step record (at/acc flat fields).
+        step0 (fn [cum]
+                (str "(partition-step (record-new " wm-step-lit
+                     " 2000 20 0 100 0 0 " cum " " total "))"))
+        stepn (fn [prev cum]
+                (str "(partition-step (record-new " wm-step-lit
+                     " 2000 20 0 100 "
+                     "(partition-step-hi " prev ") "
+                     "(partition-step-acc " prev ") "
+                     cum " " total "))"))
+        s0 (step0 (us 0))
+        s1 (stepn s0 (+ (us 0) (us 1)))
+        s2 (stepn s1 (+ (us 0) (us 1) (us 2)))
         actual0 (compile-i64-cases {"hi0" (str "(partition-step-hi " s0 ")")
                                     "hi1" (str "(partition-step-hi " s1 ")")
                                     "hi2" (str "(partition-step-hi " s2 ")")
-                                    "last" (str "(partition-last " mp ")")
+                                    "last" "(partition-last (model-record 20 0 100))"
                                     "fa" (fits-and-call 1 1) "fb" (fits-and-call 1 0)})
         hi0 (get actual0 "hi0")
         hi1 (get actual0 "hi1")
@@ -421,7 +503,7 @@
         hi3 (get actual0 "last")
         pure-ends [hi0 hi1 hi2 hi3]
         ;; fits fold over asg rows
-        row (fn [lo hi u] (str "(asg-row-record 2000 " mp " " lo " " hi " " u ")"))
+        row (fn [lo hi u] (asg-row-call 2000 20 0 100 lo hi u))
         rows (compile-i64-cases
               {"f0" (str "(asg-row-fits " (row 0 hi0 (us 0)) ")")
                "f1" (str "(asg-row-fits " (row hi0 hi1 (us 1)) ")")
