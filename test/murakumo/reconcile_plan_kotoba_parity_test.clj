@@ -103,8 +103,8 @@
                 {"dr" "(default-replicas)"
                  "d0" (str "(desired " (opt-i64-form nil) ")")
                  "d1" (str "(desired " (opt-i64-form 3) ")")
-                 "df" "(deficit 3 1)"
-                 "df0" "(deficit 1 3)"
+                 "df" "(deficit (record-new [:record :reconcile/deficit [[:desired :i64] [:running :i64]]] 3 1))"
+                 "df0" "(deficit (record-new [:record :reconcile/deficit [[:desired :i64] [:running :i64]]] 1 3))"
                  "sl" "(watch-sleep-ms 15)"})]
     (is (= 1 (get actual "dr")))
     (is (= 1 (get actual "d0")))

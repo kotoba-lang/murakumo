@@ -132,10 +132,10 @@
 
 (deftest classify-fetched-matches-map-fetch-shape
   (let [actual (compile-string-cases
-                {"v" "(classify-fetched false false)"
-                 "e" "(classify-fetched false true)"
-                 "m" "(classify-fetched true false)"
-                 "mb" "(classify-fetched true true)"
+                {"v" "(classify-fetched (record-new [:record :secret/fetched [[:missing :bool] [:blank :bool]]] false false))"
+                 "e" "(classify-fetched (record-new [:record :secret/fetched [[:missing :bool] [:blank :bool]]] false true))"
+                 "m" "(classify-fetched (record-new [:record :secret/fetched [[:missing :bool] [:blank :bool]]] true false))"
+                 "mb" "(classify-fetched (record-new [:record :secret/fetched [[:missing :bool] [:blank :bool]]] true true))"
                  "tv" (str "(reply-tag " (kotoba-literal "value") ")")
                  "tn" (str "(reply-tag " (kotoba-literal "not-found") ")")
                  "ce" (str "(secret-error-code " (kotoba-literal "empty") ")")
@@ -171,7 +171,7 @@
             "mf" "(msg-fetch)"
             "mu" "(msg-unknown)"
             "pb" "(pem-begin-marker)"
-            "cl" "(classify-fetched false false)"
+            "cl" "(classify-fetched (record-new [:record :secret/fetched [[:missing :bool] [:blank :bool]]] false false))"
             "sc" (str "(secret-error-code " (kotoba-literal "empty") ")")})]
     (is (= secret/class-value (get s "cv")))
     (is (= "value" (get s "cv")))
