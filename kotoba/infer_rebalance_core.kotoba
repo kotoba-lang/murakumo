@@ -271,12 +271,14 @@
      (+ (seats-of-media in)
         (seats-of-postproc in))))
 
-(defn pool-demand-record [text :i64 image :i64 video :i64 audio :i64 postproc :i64]
+(defn pool-demand-record [d [:ref :rebalance/demand]]
   [:ref :rebalance/lanes]
   ;; cljc pool-demand: text→text-pool; image+video+audio→media-pool; postproc→postproc-pool
-  (let [wt text
-        wm (+ image (+ video audio))
-        wp postproc]
+  ;; T5.2 residual: class counts on demand record (was max-arity 5 multi-scalar)
+  (let [wt (record-get d :text)
+        wm (+ (record-get d :image)
+              (+ (record-get d :video) (record-get d :audio)))
+        wp (record-get d :postproc)]
     (record-new [:record :rebalance/lanes [[:text :i64] [:media :i64] [:postproc :i64]]] wt wm wp)))
 
 (defn pool-weight-text [w [:ref :rebalance/lanes]] :i64
@@ -291,7 +293,8 @@
 ;; Compose the seat apportionment over pool-weight lanes (record).
 
 (defn pool-seats-of-text [s [:ref :rebalance/seats-in]] :i64
-  ;; T5.2 residual: same shape as seats-of-* inputs.
+  ;; same shape as seats-of-* inputs.
+  ;; seats-record stays multi-scalar (lowering budget: body is huge)
   (record-get [:record :rebalance/lanes
                [[:text :i64] [:media :i64] [:postproc :i64]]]
               (seats-record (record-get s :total)
@@ -382,11 +385,7 @@
 
 (defn demand-to-pool-record [d [:ref :rebalance/demand]] [:ref :rebalance/lanes]
   ;; cljc pool-demand after demand-from-runs
-  (pool-demand-record (record-get d :text)
-                      (record-get d :image)
-                      (record-get d :video)
-                      (record-get d :audio)
-                      (record-get d :postproc)))
+  (pool-demand-record d))
 
 ;; ── placement pure layer (target-allocation / rebalance hysteresis) ──
 
