@@ -35,7 +35,9 @@
 
 (defn- gen-id [state prefix]
   (let [n (:next state)
-        id (o 'make-id [(str prefix) (oracle/as-i64 n)])]
+        id (o-record 'make-id
+                     {:prefix prefix :n n}
+                     [[:prefix :string] [:n :i64]])]
     [id (update state :next inc)]))
 
 (defn enqueue

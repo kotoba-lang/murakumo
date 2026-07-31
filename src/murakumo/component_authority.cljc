@@ -68,14 +68,17 @@
 
 (defn- identifier?
   "Bounded non-blank identifier. Kotoba `identifier-len-ok?` (required).
-   Host projects blank + UTF-8 length."
+   Host projects blank + UTF-8 length.
+   T5.2: structural map → call-record."
   [x]
   (if-not (string? x)
     false
     (oracle/bool->host
-     (o 'identifier-len-ok?
-        [(boolean (str/blank? x))
-         (oracle/as-i64 (utf8-len x))]))))
+     (o-record 'identifier-len-ok?
+               {:blank? (str/blank? x)
+                :len (utf8-len x)}
+               [[:blank? :bool]
+                [:len :i64]]))))
 
 (defn- reject [reason message data]
   (throw (ex-info message (assoc data :murakumo.component/reason reason))))

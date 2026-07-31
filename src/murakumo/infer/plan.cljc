@@ -30,6 +30,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def GiB
@@ -146,13 +152,18 @@
 
 (defn choose-strategy
   "Pick the parallelism the interconnect can actually pay for.
-   Strategy name from kotoba `choose-strategy-name` (required); :why from host table."
+   Strategy name from kotoba `choose-strategy-name` (required); :why from host table.
+   T5.2: structural map → call-record."
   [{:keys [link-gbps ranks model]}]
-  (let [name (o 'choose-strategy-name
-                [(oracle/as-i64 (or link-gbps 0))
-                 (oracle/as-i64 (or ranks 0))
-                 (oracle/as-i64 (or (:model/experts model) 0))
-                 (oracle/as-i64 (or (:model/kv-heads model) 0))])
+  (let [name (o-record 'choose-strategy-name
+                       {:link-gbps (or link-gbps 0)
+                        :ranks (or ranks 0)
+                        :experts (or (:model/experts model) 0)
+                        :kv-heads (or (:model/kv-heads model) 0)}
+                       [[:link-gbps :i64]
+                        [:ranks :i64]
+                        [:experts :i64]
+                        [:kv-heads :i64]])
         strat (keyword name)]
     {:strategy strat
      :why (get strategy-why strat (:pipeline strategy-why))}))

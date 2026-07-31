@@ -183,9 +183,12 @@
   (o 'signing-input [(str payload-seg)]))
 
 (defn wire-token
-  "mk1.<payloadSeg>.<sig>. Kotoba required."
+  "mk1.<payloadSeg>.<sig>. Kotoba required.
+   T5.2: structural map → call-record."
   [payload-seg sig]
-  (o 'wire-token [(str payload-seg) (str sig)]))
+  (o-record 'wire-token
+            {:payload payload-seg :sig sig}
+            [[:payload :string] [:sig :string]]))
 
 (defn version-ok? [v]
   (oracle/bool->host (o 'version-ok? [(str v)])))
@@ -205,11 +208,14 @@
                 [:sig :option-string]]))))
 
 (defn constant-time=
-  "Full-scan string compare via kotoba constant-time-eq. Profile 5: :bool."
+  "Full-scan string compare via kotoba constant-time-eq. Profile 5: :bool.
+   T5.2: structural map → call-record."
   [a b]
   (and (string? a) (string? b)
        (oracle/bool->host
-        (o 'constant-time-eq [(str a) (str b)]))))
+        (o-record 'constant-time-eq
+                  {:a a :b b}
+                  [[:a :string] [:b :string]]))))
 
 ;; ── HMAC host adapter (javax / WebCrypto) ───────────────────────────
 
@@ -274,7 +280,10 @@
          (js/Promise.resolve nil)))))
 
 (defn scope-allows?
-  "Does a token's scope grant `required`? Kotoba required. Profile 5: :bool."
+  "Does a token's scope grant `required`? Kotoba required. Profile 5: :bool.
+   T5.2: structural map → call-record."
   [token-scope required]
   (oracle/bool->host
-   (o 'scope-allows? [(str token-scope) (str required)])))
+   (o-record 'scope-allows?
+             {:token-scope token-scope :required required}
+             [[:token-scope :string] [:required :string]])))

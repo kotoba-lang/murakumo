@@ -188,7 +188,9 @@
   ([host local dest] (scp-argv host local dest nil))
   ([host local dest opts]
    (vec (concat [scp-bin] (conn-opts opts)
-                [local (o 'scp-dest [(str host) (str dest)])]))))
+                [local (o-record 'scp-dest
+                                   {:host host :dest dest}
+                                   [[:host :string] [:dest :string]])]))))
 
 (defn close-master-argv
   "argv that shuts down a multiplexed connection's master socket. Run this when

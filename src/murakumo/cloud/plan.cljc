@@ -125,9 +125,12 @@
   (o 'connects-section-label []))
 
 (defn summary-title
-  "CLI title for plan summary. Kotoba `summary-title` (required)."
+  "CLI title for plan summary. Kotoba `summary-title` (required).
+   T5.2: structural map → call-record."
   [domain overlay]
-  (o 'summary-title [(str domain) (str overlay)]))
+  (o-record 'summary-title
+            {:domain domain :overlay overlay}
+            [[:domain :string] [:overlay :string]]))
 
 (defn routes-title
   "CLI title for routes listing. Kotoba `routes-title` (required)."
@@ -160,9 +163,12 @@
   (o 'connect-denied-line [(str node-name)]))
 
 (defn dial-ok-title
-  "Dial authorized title. Kotoba `dial-ok-title` (required)."
+  "Dial authorized title. Kotoba `dial-ok-title` (required).
+   T5.2: structural map → call-record."
   [route-name node]
-  (o 'dial-ok-title [(str route-name) (str node)]))
+  (o-record 'dial-ok-title
+            {:route-name route-name :node node}
+            [[:route-name :string] [:node :string]]))
 
 (defn connect-ok-title
   "Connect authorized title. Kotoba `connect-ok-title` (required)."
@@ -175,14 +181,21 @@
   (o 'relay-ok-title [(str relay-name)]))
 
 (defn from-to-cap-reason
-  "from/to/capability/reason detail line. Kotoba SSoT (required)."
+  "from/to/capability/reason detail line. Kotoba SSoT (required).
+   T5.2: structural map → call-record."
   [from to capability reason]
-  (o 'from-to-cap-reason [(str from) (str to) (str capability) (str reason)]))
+  (o-record 'from-to-cap-reason
+            {:from from :to to :capability capability :reason reason}
+            [[:from :string] [:to :string]
+             [:capability :string] [:reason :string]]))
 
 (defn authorized-line
-  "authorized from/to/capability line. Kotoba SSoT (required)."
+  "authorized from/to/capability line. Kotoba SSoT (required).
+   T5.2: structural map → call-record."
   [from to capability]
-  (o 'authorized-line [(str from) (str to) (str capability)]))
+  (o-record 'authorized-line
+            {:from from :to to :capability capability}
+            [[:from :string] [:to :string] [:capability :string]]))
 
 (defn relay-fallback-line
   "relay fallback detail line. Kotoba SSoT (required)."
@@ -200,16 +213,20 @@
   (o 'indent-argv-line [(str argv-joined)]))
 
 (defn address-family-line
-  "Summary address-family + node/relay counts. Kotoba SSoT (required)."
+  "Summary address-family + node/relay counts. Kotoba SSoT (required).
+   T5.2: structural map → call-record."
   [af nodes relays]
-  (o 'address-family-line [(str af)
-                             (oracle/as-i64 nodes)
-                             (oracle/as-i64 relays)]))
+  (o-record 'address-family-line
+            {:af af :nodes nodes :relays relays}
+            [[:af :string] [:nodes :i64] [:relays :i64]]))
 
 (defn policy-line
-  "Summary policy default + allow count. Kotoba SSoT (required)."
+  "Summary policy default + allow count. Kotoba SSoT (required).
+   T5.2: structural map → call-record."
   [default allow-n]
-  (o 'policy-line [(str default) (oracle/as-i64 allow-n)]))
+  (o-record 'policy-line
+            {:default default :allow-n allow-n}
+            [[:default :string] [:allow-n :i64]]))
 
 (defn skipped-reason-suffix
   "Trailing ' skipped reason=…' fragment (name column padding stays host)."
@@ -399,12 +416,14 @@
             [[:zone :string] [:region-label :string] [:region :string]]))
 
 (defn relay-score
-  "Kotoba `relay-score` (required)."
+  "Kotoba `relay-score` (required).
+   T5.2: structural map → call-record."
   [node relay]
   (oracle/i64->host
-     (o 'relay-score
-        [(str (node-region node))
-         (str (or (:region relay) ""))])))
+   (o-record 'relay-score
+             {:node-region (node-region node)
+              :relay-region (or (:region relay) "")}
+             [[:node-region :string] [:relay-region :string]])))
 
 (defn choose-relay
   "Choose a deterministic relay for node fallback."
@@ -438,15 +457,21 @@
         http-port (inv/node-port fleet node)]
     (case transport
       :quic {:transport :quic
-             :endpoint (o 'quic-endpoint [(str host) (oracle/as-i64 p2p-port)])}
+             :endpoint (o-record 'quic-endpoint
+                                 {:host host :port p2p-port}
+                                 [[:host :string] [:port :i64]])}
       :webrtc {:transport :webrtc
-               :endpoint (o 'webrtc-endpoint [(str host) (oracle/as-i64 p2p-port)])}
+               :endpoint (o-record 'webrtc-endpoint
+                                   {:host host :port p2p-port}
+                                   [[:host :string] [:port :i64]])}
       :webtransport {:transport :webtransport
-                     :endpoint (o 'webtransport-endpoint
-                                    [(str host) (oracle/as-i64 http-port)])}
+                     :endpoint (o-record 'webtransport-endpoint
+                                         {:host host :port http-port}
+                                         [[:host :string] [:port :i64]])}
       {:transport transport
-       :endpoint (o 'transport-endpoint
-                      [(name transport) (str host)])})))
+       :endpoint (o-record 'transport-endpoint
+                           {:transport (name transport) :host host}
+                           [[:transport :string] [:host :string]])})))
 
 (defn relay-endpoint
   "Endpoint URL via kotoba `relay-endpoint-url` (required)."
@@ -454,8 +479,9 @@
   (when relay
     {:relay (:name relay)
      :transport (first (:transports relay))
-     :endpoint (o 'relay-endpoint-url
-                    [(str (:url relay)) (str node-id)])}))
+     :endpoint (o-record 'relay-endpoint-url
+                           {:url (:url relay) :node-id node-id}
+                           [[:url :string] [:node-id :string]])}))
 
 (defn- fmt
   "CLI line formatter. On JVM uses clojure.core/format; on cljs interpolates %s/%d left-to-right."

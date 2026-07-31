@@ -22,6 +22,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── residual selector / offline / health URL tokens ──────────────────
 
 (def default-control-port
@@ -80,8 +86,9 @@
       nodes
       (filter (fn [node]
                 (oracle/bool->host
-                 (o 'selector-wants-name?
-                    [(str sel) (str (:name node))])))
+                 (o-record 'selector-wants-name?
+                           {:sel sel :name (:name node)}
+                           [[:sel :string] [:name :string]])))
               nodes))))
 
 (defn node-named

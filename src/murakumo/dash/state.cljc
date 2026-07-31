@@ -170,7 +170,9 @@
   ([alerts] (recent-alerts alerts 6))
   ([alerts n]
    (let [take-n (oracle/i64->host
-                 (o 'recent-take-n [(oracle/as-i64 n) (oracle/as-i64 6)]))]
+                 (o-record 'recent-take-n
+                           {:n n :default 6}
+                           [[:n :i64] [:default :i64]]))]
      (take take-n (reverse alerts)))))
 
 (defn append-capped
@@ -179,7 +181,9 @@
   (let [v (conj (vec items) item)
         len (count v)
         start (oracle/i64->host
-               (o 'take-last-start [(oracle/as-i64 len) (oracle/as-i64 cap)]))]
+               (o-record 'take-last-start
+                         {:len len :cap cap}
+                         [[:len :i64] [:cap :i64]]))]
     (subvec v start)))
 
 (defn concat-capped
