@@ -10,6 +10,36 @@
             [murakumo.infer.plan :as plan]))
 
 (def port-source (slurp "kotoba/infer_plan_core.kotoba"))
+
+(def ^:private weights3-lit
+  "[:record :plan/weights3 [[:total :i64] [:w0 :i64] [:w1 :i64] [:w2 :i64]]]")
+(def ^:private plan-pair-lit
+  "[:record :plan/pair [[:a :i64] [:b :i64]]]")
+(def ^:private plan-triple-lit
+  "[:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]")
+
+(defn- weights3-call [export total w0 w1 w2]
+  (str "(" export " (record-new " weights3-lit " "
+       total " " w0 " " w1 " " w2 "))"))
+
+(defn- plan-pair-call [export a b]
+  (str "(" export " (record-new " plan-pair-lit " " a " " b "))"))
+
+(defn- plan-pair-bool [export a b]
+  (str "(if " (plan-pair-call export a b) " 1 0)"))
+
+(defn- pick-max-2-call [a b]
+  (plan-pair-call "pick-max-idx-2" a b))
+
+(defn- pick-max-3-call [a b c]
+  (str "(pick-max-idx-3 (record-new " plan-triple-lit " " a " " b " " c "))"))
+
+(defn- fits-and-call [a b]
+  (plan-pair-call "fits-and" a b))
+
+(defn- plan-fits-total-call [a b]
+  (plan-pair-bool "plan-fits-total?" a b))
+
 (def GiB plan/GiB)
 (def plan-lr @(var murakumo.infer.plan/largest-remainder))
 
@@ -131,16 +161,15 @@
         ;; T5.3: three scalar lane projections, no pack. One label per lane.
         kotoba-cases (into {}
                            (mapcat (fn [[label total w0 w1 w2]]
-                                     (let [args (str total " " w0 " " w1 " " w2 ")")]
-                                       [[(str label "-0") (str "(plan-lr-l0 " args)]
-                                        [(str label "-1") (str "(plan-lr-l1 " args)]
-                                        [(str label "-2") (str "(plan-lr-l2 " args)]]))
+                                     [[(str label "-0") (weights3-call "plan-lr-l0" total w0 w1 w2)]
+                                        [(str label "-1") (weights3-call "plan-lr-l1" total w0 w1 w2)]
+                                        [(str label "-2") (weights3-call "plan-lr-l2" total w0 w1 w2)]])
                                    cases))
         actual (compile-i64-cases
                 (merge kotoba-cases
-                       {"g0" "(plan-lr-l0 10 5 3 2)"
-                        "g1" "(plan-lr-l1 10 5 3 2)"
-                        "g2" "(plan-lr-l2 10 5 3 2)"}))]
+                       {"g0" (weights3-call "plan-lr-l0" 10 5 3 2)
+                        "g1" (weights3-call "plan-lr-l1" 10 5 3 2)
+                        "g2" (weights3-call "plan-lr-l2" 10 5 3 2)}))]
     (is (= 5 (get actual "g0")))
     (is (= 3 (get actual "g1")))
     (is (= 2 (get actual "g2")))
@@ -153,10 +182,10 @@
 
 (deftest plan-fits-and-layer-bytes
   (let [actual (compile-i64-cases
-                {"ft1" "(if (plan-fits-total? 100 80) 1 0)"
-                 "ft0" "(if (plan-fits-total? 70 80) 1 0)"
-                 "sf1" "(if (span-fits? 50 50) 1 0)"
-                 "sf0" "(if (span-fits? 51 50) 1 0)"
+                {"ft1" (plan-fits-total-call 100 80)
+                 "ft0" (plan-fits-total-call 70 80)
+                 "sf1" (plan-pair-bool "span-fits?" 50 50)
+                 "sf0" (plan-pair-bool "span-fits?" 51 50)
                  "ul" "(uniform-layer-bytes 1000 10)"
                  "du" "(dense-units-milli 78 3 100)"
                  "moe" "(moe-layer-bytes 1000000 78 3 100)"})]
@@ -278,8 +307,8 @@
         actual (compile-i64-cases
                 {"fit" (str "(plan-fits-3 1200 " mp " " (us 0) " " (us 1) " " (us 2) ")")
                  "nofit" (str "(plan-fits-3 999999999999 " mp " " (us 0) " " (us 1) " " (us 2) ")")
-                 "sp" "(assignment-span 2 7)"
-                 "sp0" "(assignment-span 5 5)"})
+                 "sp" (plan-pair-call "assignment-span" 2 7)
+                 "sp0" (plan-pair-call "assignment-span" 5 5)})
         cljc-plan (plan/plan model nodes)]
     (is (= (if (:fits? cljc-plan) 1 0) (get actual "fit")))
     (is (= 0 (get actual "nofit")))
@@ -319,9 +348,9 @@
                  "f2" (str "(plan-fits-2 1200 " mp " " (us2 0) " " (us2 1) ")")
                  "f2n" (str "(plan-fits-2 999999999999 " mp " " (us2 0) " " (us2 1) ")")
                  "f2u" (str "(plan-fits-2 1200 " mp " " (us2u 0) " " (us2u 1) ")")
-                 "pm2a" "(pick-max-idx-2 10 5)"
-                 "pm2b" "(pick-max-idx-2 5 10)"
-                 "pm2t" "(pick-max-idx-2 10 10)"})
+                 "pm2a" (pick-max-2-call 10 5)
+                 "pm2b" (pick-max-2-call 5 10)
+                 "pm2t" (pick-max-2-call 10 10)})
         hi0 (get actual "p2-0")
         hi1 (get actual "p2-1")
         hi0u (get actual "p2u-0")
@@ -385,7 +414,7 @@
                                     "hi1" (str "(partition-step-hi " s1 ")")
                                     "hi2" (str "(partition-step-hi " s2 ")")
                                     "last" (str "(partition-last " mp ")")
-                                    "fa" "(fits-and 1 1)" "fb" "(fits-and 1 0)"})
+                                    "fa" (fits-and-call 1 1) "fb" (fits-and-call 1 0)})
         hi0 (get actual0 "hi0")
         hi1 (get actual0 "hi1")
         hi2 (get actual0 "hi2")
@@ -403,8 +432,11 @@
         f2 (get rows "f2")
         f3 (get rows "f3")
         fold (compile-i64-cases
-              {"fall" (str "(fits-and (fits-and (fits-and " f0 " " f1 ") " f2 ") " f3 ")")
-               "tot" (str "(if (plan-fits-total? " total " 2000) 1 0)")})]
+              {"fall" (str "(fits-and (record-new " plan-pair-lit " "
+                           "(fits-and (record-new " plan-pair-lit " "
+                           "(fits-and (record-new " plan-pair-lit " " f0 " " f1 ")) "
+                           f2 ")) " f3 "))")
+               "tot" (plan-fits-total-call total 2000)})]
     (is (= 20 (get actual0 "last")))
     (is (= 1 (get actual0 "fa")))
     (is (= 0 (get actual0 "fb")))
@@ -417,10 +449,10 @@
                {"ok" "(ok-mark 1)"
                 "bad" "(ok-mark 0)"})
         picks (compile-i64-cases
-               {"p0" "(pick-max-idx-3 10 5 5)"
-                "p1" "(pick-max-idx-3 5 10 5)"
-                "p2" "(pick-max-idx-3 5 5 10)"
-                "ptie" "(pick-max-idx-3 10 10 5)"
+               {"p0" (pick-max-3-call 10 5 5)
+                "p1" (pick-max-3-call 5 10 5)
+                "p2" (pick-max-3-call 5 5 10)
+                "ptie" (pick-max-3-call 10 10 5)
                 "c0" "(moe-capacity-ok 0)"
                 "c1" "(moe-capacity-ok 208)"})]
     (is (= "✓" (get marks "ok")))
@@ -455,8 +487,8 @@
                         "f16" (str "(bytes-to-gib-floor " (* 16 GiB) ")")
                         "f1k" "(bytes-to-gib-floor 1024)"}))
         marks (compile-string-cases
-               {"lr" "(layers-range-str 0 4)"
-                "lr2" "(layers-range-str 4 12)"})]
+               {"lr" (plan-pair-call "layers-range-str" 0 4)
+                "lr2" (plan-pair-call "layers-range-str" 4 12)})]
     (is (= 0 (get actual "b0")))
     (is (= 16000 (get actual "b16")))
     (is (= 16 (get actual "f16")))

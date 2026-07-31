@@ -198,12 +198,40 @@
    :body (if (< 0 w) true false),
    :param-types [:i64]}
   {:name plan-lr-record,
-   :params [total w0 w1 w2],
+   :params [w],
    :result [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]],
    :effects #{},
    :body
    (let
-    [a0
+    [total
+     (record-get
+      [:record
+       :plan/weights3
+       [[:total :i64] [:w0 :i64] [:w1 :i64] [:w2 :i64]]]
+      w
+      :total)
+     w0
+     (record-get
+      [:record
+       :plan/weights3
+       [[:total :i64] [:w0 :i64] [:w1 :i64] [:w2 :i64]]]
+      w
+      :w0)
+     w1
+     (record-get
+      [:record
+       :plan/weights3
+       [[:total :i64] [:w0 :i64] [:w1 :i64] [:w2 :i64]]]
+      w
+      :w1)
+     w2
+     (record-get
+      [:record
+       :plan/weights3
+       [[:total :i64] [:w0 :i64] [:w1 :i64] [:w2 :i64]]]
+      w
+      :w2)
+     a0
      (weight-pos? w0)
      a1
      (weight-pos? w1)
@@ -297,49 +325,61 @@
        (+ f0 bump0)
        (+ f1 bump1)
        (+ f2 bump2))))),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [[:ref :plan/weights3]]}
   {:name plan-lr-l0,
-   :params [total w0 w1 w2],
+   :params [w],
    :result :i64,
    :effects #{},
    :body
    (record-get
     [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
-    (plan-lr-record total w0 w1 w2)
+    (plan-lr-record w)
     :l0),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [[:ref :plan/weights3]]}
   {:name plan-lr-l1,
-   :params [total w0 w1 w2],
+   :params [w],
    :result :i64,
    :effects #{},
    :body
    (record-get
     [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
-    (plan-lr-record total w0 w1 w2)
+    (plan-lr-record w)
     :l1),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [[:ref :plan/weights3]]}
   {:name plan-lr-l2,
-   :params [total w0 w1 w2],
+   :params [w],
    :result :i64,
    :effects #{},
    :body
    (record-get
     [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
-    (plan-lr-record total w0 w1 w2)
+    (plan-lr-record w)
     :l2),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [[:ref :plan/weights3]]}
   {:name plan-fits-total?,
-   :params [total-usable weight-bytes],
+   :params [p],
    :result :bool,
    :effects #{},
-   :body (if (< total-usable weight-bytes) false true),
-   :param-types [:i64 :i64]}
+   :body
+   (if
+    (<
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :a)
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :b))
+    false
+    true),
+   :param-types [[:ref :plan/pair]]}
   {:name span-fits?,
-   :params [est-bytes usable],
+   :params [p],
    :result :bool,
    :effects #{},
-   :body (if (< usable est-bytes) false true),
-   :param-types [:i64 :i64]}
+   :body
+   (if
+    (<
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :b)
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :a))
+    false
+    true),
+   :param-types [[:ref :plan/pair]]}
   {:name uniform-layer-bytes,
    :params [weight-bytes layers],
    :result :i64,
@@ -613,11 +653,17 @@
        hi2)))),
    :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
   {:name assignment-span,
-   :params [lo hi],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (if (< hi lo) 0 (- hi lo)),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [lo
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :a)
+     hi
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :b)]
+    (if (< hi lo) 0 (- hi lo))),
+   :param-types [[:ref :plan/pair]]}
   {:name plan-fits-3,
    :params [weight-bytes mp u0 u1 u2],
    :result :i64,
@@ -648,11 +694,14 @@
      lo2
      hi1
      s0
-     (assignment-span lo0 hi0)
+     (assignment-span
+      (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] lo0 hi0))
      s1
-     (assignment-span lo1 hi1)
+     (assignment-span
+      (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] lo1 hi1))
      s2
-     (assignment-span lo2 hi2)
+     (assignment-span
+      (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] lo2 hi2))
      e0
      (est-bytes-range weight-bytes mp lo0 hi0)
      e1
@@ -660,17 +709,33 @@
      e2
      (est-bytes-range weight-bytes mp lo2 hi2)
      f0
-     (if (= s0 0) true (span-fits? e0 u0))
+     (if
+      (= s0 0)
+      true
+      (span-fits?
+       (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] e0 u0)))
      f1
-     (if (= s1 0) true (span-fits? e1 u1))
+     (if
+      (= s1 0)
+      true
+      (span-fits?
+       (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] e1 u1)))
      f2
-     (if (= s2 0) true (span-fits? e2 u2))
+     (if
+      (= s2 0)
+      true
+      (span-fits?
+       (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] e2 u2)))
      spans-ok
      (if f0 (if f1 (if f2 true false) false) false)
      total
      (+ u0 (+ u1 u2))
      total-ok
-     (plan-fits-total? total weight-bytes)]
+     (plan-fits-total?
+      (record-new
+       [:record :plan/pair [[:a :i64] [:b :i64]]]
+       total
+       weight-bytes))]
     (if (if total-ok (if spans-ok true false) false) 1 0)),
    :param-types [:i64 [:ref :plan/model] :i64 :i64 :i64]}
   {:name partition-1-end,
@@ -688,13 +753,22 @@
     [layers
      (partition-1-end mp)
      s0
-     (assignment-span 0 layers)
+     (assignment-span
+      (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] 0 layers))
      e0
      (est-bytes-range weight-bytes mp 0 layers)
      f0
-     (if (= s0 0) true (span-fits? e0 u0))
+     (if
+      (= s0 0)
+      true
+      (span-fits?
+       (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] e0 u0)))
      total-ok
-     (plan-fits-total? u0 weight-bytes)]
+     (plan-fits-total?
+      (record-new
+       [:record :plan/pair [[:a :i64] [:b :i64]]]
+       u0
+       weight-bytes))]
     (if (if total-ok (if f0 true false) false) 1 0)),
    :param-types [:i64 [:ref :plan/model] :i64]}
   {:name partition-2-ends,
@@ -752,23 +826,37 @@
      lo1
      hi0
      s0
-     (assignment-span lo0 hi0)
+     (assignment-span
+      (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] lo0 hi0))
      s1
-     (assignment-span lo1 hi1)
+     (assignment-span
+      (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] lo1 hi1))
      e0
      (est-bytes-range weight-bytes mp lo0 hi0)
      e1
      (est-bytes-range weight-bytes mp lo1 hi1)
      f0
-     (if (= s0 0) true (span-fits? e0 u0))
+     (if
+      (= s0 0)
+      true
+      (span-fits?
+       (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] e0 u0)))
      f1
-     (if (= s1 0) true (span-fits? e1 u1))
+     (if
+      (= s1 0)
+      true
+      (span-fits?
+       (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] e1 u1)))
      spans-ok
      (if f0 (if f1 true false) false)
      total
      (+ u0 u1)
      total-ok
-     (plan-fits-total? total weight-bytes)]
+     (plan-fits-total?
+      (record-new
+       [:record :plan/pair [[:a :i64] [:b :i64]]]
+       total
+       weight-bytes))]
     (if (if total-ok (if spans-ok true false) false) 1 0)),
    :param-types [:i64 [:ref :plan/model] :i64 :i64]}
   {:name ends-at,
@@ -812,11 +900,22 @@
    :body
    (let
     [sp
-     (assignment-span lo hi)
+     (assignment-span
+      (record-new [:record :plan/pair [[:a :i64] [:b :i64]]] lo hi))
      est
      (est-bytes-range weight-bytes mp lo hi)
      fit
-     (if (= sp 0) 1 (if (span-fits? est usable) 1 0))]
+     (if
+      (= sp 0)
+      1
+      (if
+       (span-fits?
+        (record-new
+         [:record :plan/pair [[:a :i64] [:b :i64]]]
+         est
+         usable))
+       1
+       0))]
     (record-new
      [:record :plan/row [[:span :i64] [:fits :i64]]]
      sp
@@ -899,11 +998,23 @@
    :body (model-layers mp),
    :param-types [[:ref :plan/model]]}
   {:name fits-and,
-   :params [acc-fits row-fits],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (if (if (= acc-fits 1) (if (= row-fits 1) 1 0) 0) 1 0),
-   :param-types [:i64 :i64]}
+   :body
+   (if
+    (if
+     (= (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :a) 1)
+     (if
+      (=
+       (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :b)
+       1)
+      1
+      0)
+     0)
+    1
+    0),
+   :param-types [[:ref :plan/pair]]}
   {:name ok-mark,
    :params [fits],
    :result :string,
@@ -911,18 +1022,40 @@
    :body (if (= fits 1) "✓" "✗"),
    :param-types [:i64]}
   {:name pick-max-idx-2,
-   :params [a b],
-   :result :i64,
-   :effects #{},
-   :body (if (< a b) 1 0),
-   :param-types [:i64 :i64]}
-  {:name pick-max-idx-3,
-   :params [a b c],
+   :params [p],
    :result :i64,
    :effects #{},
    :body
-   (if (if (< a b) 0 (if (< a c) 0 1)) 0 (if (if (< b c) 0 1) 1 2)),
-   :param-types [:i64 :i64 :i64]}
+   (if
+    (<
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :a)
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :b))
+    1
+    0),
+   :param-types [[:ref :plan/pair]]}
+  {:name pick-max-idx-3,
+   :params [t],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [a
+     (record-get
+      [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]
+      t
+      :a)
+     b
+     (record-get
+      [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]
+      t
+      :b)
+     c
+     (record-get
+      [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]
+      t
+      :c)]
+    (if (if (< a b) 0 (if (< a c) 0 1)) 0 (if (if (< b c) 0 1) 1 2))),
+   :param-types [[:ref :plan/triple]]}
   {:name moe-capacity-ok,
    :params [cap],
    :result :i64,
@@ -967,12 +1100,18 @@
    :body (if (< bytes 0) 0 (quot bytes (gib))),
    :param-types [:i64]}
   {:name layers-range-str,
-   :params [lo hi],
+   :params [p],
    :result :string,
    :effects #{},
    :body
-   (string-concat (i64-str lo) (string-concat ".." (i64-str hi))),
-   :param-types [:i64 :i64]}
+   (string-concat
+    (i64-str
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :a))
+    (string-concat
+     ".."
+     (i64-str
+      (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :b)))),
+   :param-types [[:ref :plan/pair]]}
   {:name mem-gib-milli,
    :params [mem-bytes],
    :result :i64,
@@ -994,17 +1133,23 @@
  :oracle-value nil,
  :schema-identities
  #:plan{:cut
-        "061cff4cbac1dbb735f519e8e86033d35d93c67de497f0802652d9ee76f9ae38",
+        "bee6af30869f624d0f7d493576efd082a870f6a1207dfba0754ee174253d9b43",
         :ends
-        "9e6c3034058f52e0c78f1be5e8d70f481e1d695bccf1ca9adc17587db32a5566",
+        "2062baea0c7cc4120e31ffec37eb3734d76830dc4cdd9f29573b64dbff2c12fe",
         :model
-        "c5c32ba43000503b8158368d482136b9fa36663090226fd542000698165cc3f2",
+        "1924628bae3f4b0f892f1a3cbed7c24b6ea71c6dfc82abf2a784ddfb7d9cbf73",
         :node-cap
-        "563c03511104900e795c6158081a9518e558194ecb7e68ef2b482f2e4a6cd628",
+        "487fcd461e524d57d5b63e2c9cd1efa7e56b01295eb4146e5fc4e92ba5a2f671",
+        :pair
+        "1aa597ef38f88fd8734cc0caf37e4a2480f34c3467f6538029c11d7292605962",
         :row
-        "caf8dff6a0c3117e167504095fc3f66b4a6118c27c894467864d4eb185fdb0f1",
+        "7d2ff8a50b7b056e25206640dab33d23eaa889d110b41d0812ac97b8f3ca7d98",
         :strategy-in
-        "7456a1d2df7560d60f2f52b7a9a5771f8bf2c63bfc887dce8b2902a6e56d9e3d"},
+        "cb317a132b58e87129d26ef7482d5fa1e4b708758e68587cc26135ce4fc2797a",
+        :triple
+        "d5fd6a27203d27dd24cfe9de4616ddeed573f7e45c75b42c7ef51dbd5458cfae",
+        :weights3
+        "27446fba3d0091eca0e02bf34c85d4163646d73974f4504fbe9376728c881de8"},
  :exports
  [gib
   default-os-reserve
@@ -1060,13 +1205,20 @@
   partition-last
   fits-and],
  :schemas
- #:plan{:node-cap
+ #:plan{:weights3
         [:record
-         :plan/node-cap
-         [[:mem :i64]
-          [:os :i64]
-          [:head :i64]
-          [:wired [:option :i64]]]],
+         :plan/weights3
+         [[:total :i64] [:w0 :i64] [:w1 :i64] [:w2 :i64]]],
+        :ends
+        [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]],
+        :triple [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]],
+        :cut [:record :plan/cut [[:at :i64] [:acc :i64]]],
+        :row [:record :plan/row [[:span :i64] [:fits :i64]]],
+        :model
+        [:record
+         :plan/model
+         [[:layers :i64] [:dense :i64] [:frac-milli :i64]]],
+        :pair [:record :plan/pair [[:a :i64] [:b :i64]]],
         :strategy-in
         [:record
          :plan/strategy-in
@@ -1074,14 +1226,13 @@
           [:ranks :i64]
           [:experts :i64]
           [:kv-heads :i64]]],
-        :model
+        :node-cap
         [:record
-         :plan/model
-         [[:layers :i64] [:dense :i64] [:frac-milli :i64]]],
-        :row [:record :plan/row [[:span :i64] [:fits :i64]]],
-        :cut [:record :plan/cut [[:at :i64] [:acc :i64]]],
-        :ends
-        [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]},
+         :plan/node-cap
+         [[:mem :i64]
+          [:os :i64]
+          [:head :i64]
+          [:wired [:option :i64]]]]},
  :effects #{},
  :blocks [],
  :entry nil}
