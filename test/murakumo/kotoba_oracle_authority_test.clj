@@ -737,19 +737,26 @@
                     {:budget -1 :node-slots 4 :slots-per -1 :max-slots 8 :cores 16})]
       (is (= (ir/execute live 'slots [slots-in])
              (oracle/call :task-plan 'slots [slots-in]))))
-    (let [exit0 (oracle/option-i64 0)
-          none-err (oracle/option-string nil)]
-      ;; Profile 5: timeout arg is :bool; result is :bool.
-      (is (= (ir/execute live 'failed? [exit0 false none-err])
-             (oracle/call :task-plan 'failed? [exit0 false none-err])))
+    (let [ok (oracle/record
+              [:record :task/failed
+               [[:exit [:option :i64]] [:timeout :bool] [:error [:option :string]]]]
+              {:exit 0 :timeout false :error nil})
+          bad-exit (oracle/record
+                    [:record :task/failed
+                     [[:exit [:option :i64]] [:timeout :bool] [:error [:option :string]]]]
+                    {:exit nil :timeout false :error nil})
+          bad-err (oracle/record
+                   [:record :task/failed
+                    [[:exit [:option :i64]] [:timeout :bool] [:error [:option :string]]]]
+                   {:exit 0 :timeout false :error "x"})]
+      (is (= (ir/execute live 'failed? [ok])
+             (oracle/call :task-plan 'failed? [ok])))
       (is (contains? #{false 0}
-                     (oracle/call :task-plan 'failed? [exit0 false none-err])))
+                     (oracle/call :task-plan 'failed? [ok])))
       (is (contains? #{true 1}
-                     (oracle/call :task-plan 'failed?
-                                  [(oracle/option-i64 nil) false none-err])))
+                     (oracle/call :task-plan 'failed? [bad-exit])))
       (is (contains? #{true 1}
-                     (oracle/call :task-plan 'failed?
-                                  [exit0 false (oracle/option-string "x")]))))
+                     (oracle/call :task-plan 'failed? [bad-err]))))
     ;; T5.2 native guest record: single-arg task-eligible? (mem on record).
     (let [elig (oracle/record [:record :task/eligibility
                                [[:online :bool] [:labels-ok :bool] [:roles-ok :bool]
@@ -1228,12 +1235,22 @@
              (oracle/call :reconcile-plan 'deficit [def-in]))))
     (is (= (ir/execute live 'watch-sleep-ms [15])
            (oracle/call :reconcile-plan 'watch-sleep-ms [15])))
-    (is (= (ir/execute live 'action-name [some-cid 1 3 2])
-           (oracle/call :reconcile-plan 'action-name [some-cid 1 3 2])))
-    (is (= "place" (oracle/call :reconcile-plan 'action-name [some-cid 1 3 2])))
-    (is (= (ir/execute live 'action-name [none-s 0 1 0])
-           (oracle/call :reconcile-plan 'action-name [none-s 0 1 0])))
-    (is (= "needs-build" (oracle/call :reconcile-plan 'action-name [none-s 0 1 0])))
+    (let [place (oracle/record
+                 [:record :reconcile/action-in
+                  [[:cid [:option :string]] [:running :i64]
+                   [:desired-n :i64] [:free-candidates :i64]]]
+                 {:cid "bafy" :running 1 :desired-n 3 :free-candidates 2})
+          needs (oracle/record
+                 [:record :reconcile/action-in
+                  [[:cid [:option :string]] [:running :i64]
+                   [:desired-n :i64] [:free-candidates :i64]]]
+                 {:cid nil :running 0 :desired-n 1 :free-candidates 0})]
+      (is (= (ir/execute live 'action-name [place])
+             (oracle/call :reconcile-plan 'action-name [place])))
+      (is (= "place" (oracle/call :reconcile-plan 'action-name [place])))
+      (is (= (ir/execute live 'action-name [needs])
+             (oracle/call :reconcile-plan 'action-name [needs])))
+      (is (= "needs-build" (oracle/call :reconcile-plan 'action-name [needs]))))
     (is (= (ir/execute live 'missing-manifest? [""])
            (oracle/call :reconcile-plan 'missing-manifest? [""])))
     (is (= (ir/execute live 'action-is-satisfied? ["satisfied"])
@@ -2162,14 +2179,25 @@
     (is (= (ir/execute k 'key-id-hex-len [])
            (oracle/call :overlay-keyring 'key-id-hex-len [])))
     (is (= (oracle/call :overlay-keyring 'key-id-hex-len []) okr/key-id-hex-len))
-    (let [direct (oracle/option-string "direct")
-          relay (oracle/option-string "relay")
-          none-s (oracle/option-string nil)]
-      (is (= (ir/execute pe 'choose-via [direct "unknown" relay])
-             (oracle/call :overlay-peer 'choose-via [direct "unknown" relay])))
-      (is (= "direct" (oracle/call :overlay-peer 'choose-via [direct "unknown" relay])))
-      (is (= "relay" (oracle/call :overlay-peer 'choose-via [direct "down" relay])))
-      (is (= "" (oracle/call :overlay-peer 'choose-via [none-s "unknown" none-s])))
+    (let [via-schema [:record :peer/via
+                      [[:direct [:option :string]]
+                       [:health :string]
+                       [:relay [:option :string]]]]
+          direct-ok (oracle/record via-schema
+                                   {:direct "direct" :health "unknown" :relay "relay"})
+          direct-down (oracle/record via-schema
+                                     {:direct "direct" :health "down" :relay "relay"})
+          none (oracle/record via-schema
+                              {:direct nil :health "unknown" :relay nil})
+          down-relay (oracle/record via-schema
+                                    {:direct "direct" :health opeer/health-down :relay "relay"})
+          seen (oracle/record via-schema
+                              {:direct "direct" :health opeer/health-seen :relay "relay"})]
+      (is (= (ir/execute pe 'choose-via [direct-ok])
+             (oracle/call :overlay-peer 'choose-via [direct-ok])))
+      (is (= "direct" (oracle/call :overlay-peer 'choose-via [direct-ok])))
+      (is (= "relay" (oracle/call :overlay-peer 'choose-via [direct-down])))
+      (is (= "" (oracle/call :overlay-peer 'choose-via [none])))
       (is (= (ir/execute pe 'health-down [])
              (oracle/call :overlay-peer 'health-down [])))
       (is (= (oracle/call :overlay-peer 'health-down []) opeer/health-down))
@@ -2179,11 +2207,9 @@
       (is (= (ir/execute pe 'via-relay [])
              (oracle/call :overlay-peer 'via-relay [])))
       (is (= (oracle/call :overlay-peer 'via-relay []) opeer/via-relay))
-      (is (= (oracle/call :overlay-peer 'choose-via
-                          [direct opeer/health-down relay])
+      (is (= (oracle/call :overlay-peer 'choose-via [down-relay])
              opeer/via-relay))
-      (is (= (oracle/call :overlay-peer 'choose-via
-                          [direct opeer/health-seen relay])
+      (is (= (oracle/call :overlay-peer 'choose-via [seen])
              opeer/via-direct)))
     (is (= (ir/execute s 'advance-seq [3])
            (oracle/call :overlay-stream 'advance-seq [3])))

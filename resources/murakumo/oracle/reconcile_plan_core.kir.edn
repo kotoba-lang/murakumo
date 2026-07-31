@@ -76,19 +76,58 @@
    :body "needs-build",
    :param-types []}
   {:name action-name,
-   :params [cid running desired-n free-candidates],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (let
-    [def-n
+    [running
+     (record-get
+      [:record
+       :reconcile/action-in
+       [[:cid [:option :string]]
+        [:running :i64]
+        [:desired-n :i64]
+        [:free-candidates :i64]]]
+      x
+      :running)
+     desired-n
+     (record-get
+      [:record
+       :reconcile/action-in
+       [[:cid [:option :string]]
+        [:running :i64]
+        [:desired-n :i64]
+        [:free-candidates :i64]]]
+      x
+      :desired-n)
+     free-candidates
+     (record-get
+      [:record
+       :reconcile/action-in
+       [[:cid [:option :string]]
+        [:running :i64]
+        [:desired-n :i64]
+        [:free-candidates :i64]]]
+      x
+      :free-candidates)
+     def-n
      (deficit
       (record-new
        [:record :reconcile/deficit [[:desired :i64] [:running :i64]]]
        desired-n
        running))]
     (let
-     [__kotoba_binding-some_2 cid]
+     [__kotoba_binding-some_2
+      (record-get
+       [:record
+        :reconcile/action-in
+        [[:cid [:option :string]]
+         [:running :i64]
+         [:desired-n :i64]
+         [:free-candidates :i64]]]
+       x
+       :cid)]
      (if
       (option-some?-of [:option :string] __kotoba_binding-some_2)
       (let
@@ -102,7 +141,7 @@
          (action-satisfied)
          (if (< free-candidates 1) (action-blocked) (action-place)))))
       (action-needs-build)))),
-   :param-types [[:option :string] :i64 :i64 :i64]}
+   :param-types [[:ref :reconcile/action-in]]}
   {:name better-target?,
    :params [load-a load-b name-a-before-b],
    :result :bool,
@@ -521,14 +560,16 @@
    :param-types []}],
  :oracle-value nil,
  :schema-identities
- #:reconcile{:deficit
-             "3213757363e21fb562a3c4623985a7b2fd4924a1709e43f47b099c7f1e0a82b9",
+ #:reconcile{:action-in
+             "c4fcd70554cf78f612742688bc4c4f365b76c2f66718d0e06c563ad69e833554",
+             :deficit
+             "515a1e2316f375930f70b70e3e1a007e516cfa081f52e3b9b4a4bb24e4e36913",
              :name-order
-             "147e65bd098af2aca972fc8c2e02e571bb0fa308d3ccf86988e7719179a7fe97",
+             "160a37afa4c8a7de1cfb7d5cf62cf4fa806f8c970b9e0e28ba31d9a06e2b6dee",
              :starts-with
-             "01b802c6352415a99e3613037d8a31ee95d9d89066aba0d3cbfa24c7aa2c149c",
+             "c92fadc5d83a4efdc7812ab378e42d4acdbb6f4fd96c502bd882a84fb86305dd",
              :targets
-             "b8851693a04629b3dadfb7e1e57c1cb78be35490b8b90cec028164a58ef71291"},
+             "30e5eecd463fb5f4929126f1935f8e796ddcccdce19a9d0a9706fa50b37f5f8c"},
  :exports
  [default-replicas
   desired
@@ -591,7 +632,14 @@
              :starts-with
              [:record
               :reconcile/starts-with
-              [[:s :string] [:prefix :string]]]},
+              [[:s :string] [:prefix :string]]],
+             :action-in
+             [:record
+              :reconcile/action-in
+              [[:cid [:option :string]]
+               [:running :i64]
+               [:desired-n :i64]
+               [:free-candidates :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

@@ -1,4 +1,9 @@
 (ns overlay-peer-core
+  (:schemas {;; T5.2 option-string-in-record
+             :peer/via [:record :peer/via
+                        [[:direct [:option :string]]
+                         [:health :string]
+                         [:relay [:option :string]]]]})
   (:export [choose-via health-unknown health-seen health-down
             via-direct via-relay]))
 
@@ -7,6 +12,7 @@
 ;; health/via name tokens dual-source; choose-via recomposes from tokens.
 ;; choose-via: optional direct/relay path tokens + health string (no has-*).
 ;;   prefer direct when present and health ≠ health-down; else relay if present; else "".
+;; T5.2: multi-scalar pure inputs take single guest records.
 ;; Parity: test/murakumo/overlay_peer_kotoba_parity_test.clj
 
 (defn health-unknown [] :string "unknown")
@@ -15,15 +21,13 @@
 (defn via-direct [] :string "direct")
 (defn via-relay [] :string "relay")
 
-(defn choose-via [direct [:option :string]
-                  health :string
-                  relay [:option :string]] :string
-  ;; Product Value ABI v1: optional path tokens (no has-direct/has-relay).
+(defn choose-via [x [:ref :peer/via]] :string
+  ;; Product Value ABI v1: optional path tokens on one record.
   ;; cljc choose-path: first direct if not :down health, else first relay
-  (if-some [_ direct]
-    (if (string=? health (health-down))
-      (if-some [_ relay] (via-relay) "")
+  (if-some [_ (record-get x :direct)]
+    (if (string=? (record-get x :health) (health-down))
+      (if-some [_ (record-get x :relay)] (via-relay) "")
       (via-direct))
-    (if-some [_ relay]
+    (if-some [_ (record-get x :relay)]
       (via-relay)
       "")))

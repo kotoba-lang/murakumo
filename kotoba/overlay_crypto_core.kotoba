@@ -1,4 +1,9 @@
 (ns overlay-crypto-core
+  (:schemas {;; T5.2 option-string-in-record
+             :crypto/sealed [:record :crypto/sealed
+                             [[:alg [:option :string]]
+                              [:nonce [:option :string]]
+                              [:ct [:option :string]]]]})
   (:export [alg-name cipher-transform nonce-bytes gcm-tag-bits
             field-alg field-nonce field-ciphertext
             strip-b64-pad sealed-alg-ok? sealed-fields-present?]))
@@ -8,6 +13,7 @@
 ;; Pure = alg name, nonce/tag sizes, sealed-map field names, b64url pad strip.
 ;; sealed-fields-present? uses [:option :string] (no has-* sentinels).
 ;; Host keyword :aes-256-gcm ⇔ string alg-name "aes-256-gcm".
+;; T5.2: multi-scalar pure inputs take single guest records.
 ;; Parity: test/murakumo/overlay_crypto_kotoba_parity_test.clj
 
 (defn alg-name [] :string
@@ -40,13 +46,11 @@
   ;; Profile 5: alg name gate as :bool.
   (if (string=? alg (alg-name)) true false))
 
-(defn sealed-fields-present? [alg [:option :string]
-                              nonce [:option :string]
-                              ct [:option :string]] :bool
-  ;; Product Value ABI v1: optional sealed fields (no has-* sentinels).
-  ;; Profile 5: presence gate as :bool.
-  (if-some [_ alg]
-    (if-some [_ nonce]
-      (if-some [_ ct] true false)
+(defn sealed-fields-present? [x [:ref :crypto/sealed]] :bool
+  ;; Product Value ABI v1: optional sealed fields on one record.
+  ;; Profile 5: presence gate as :bool. T5.2 native.
+  (if-some [_ (record-get x :alg)]
+    (if-some [_ (record-get x :nonce)]
+      (if-some [_ (record-get x :ct)] true false)
       false)
     false))

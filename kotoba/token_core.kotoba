@@ -11,6 +11,11 @@
                                [[:now :i64] [:ttl [:option :i64]]]]
              :token/expired [:record :token/expired
                              [[:exp [:option :i64]] [:now :i64]]]
+             ;; T5.2 option-string-in-record (compiler gap closed)
+             :token/parts [:record :token/parts
+                           [[:v [:option :string]]
+                            [:payload [:option :string]]
+                            [:sig [:option :string]]]]
 })
   (:export [version default-ttl claim-sub claim-scope claim-exp
             expired? scope-allows? signing-input
@@ -126,11 +131,12 @@
 (defn version-ok? [v :string] :bool
   (if (string=? v (version)) true false))
 
-(defn parts-present? [v [:option :string] p [:option :string] s [:option :string]] :bool
-  ;; option-string residual: stays positional (option-string-in-record gap)
-  (if-some [_ v]
-    (if-some [_ p]
-      (if-some [_ s] true false)
+(defn parts-present? [x [:ref :token/parts]] :bool
+  ;; T5.2 native: three option-string segments on one record
+  ;; (requires compiler if-some over record-get of [:option :string]).
+  (if-some [_ (record-get x :v)]
+    (if-some [_ (record-get x :payload)]
+      (if-some [_ (record-get x :sig)] true false)
       false)
     false))
 

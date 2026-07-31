@@ -32,21 +32,46 @@
    :body "relay",
    :param-types []}
   {:name choose-via,
-   :params [direct health relay],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (let
-    [__kotoba_binding-some_1 direct]
+    [__kotoba_binding-some_1
+     (record-get
+      [:record
+       :peer/via
+       [[:direct [:option :string]]
+        [:health :string]
+        [:relay [:option :string]]]]
+      x
+      :direct)]
     (if
      (option-some?-of [:option :string] __kotoba_binding-some_1)
      (let
       [_
        (option-value-of [:option :string] __kotoba_binding-some_1 "")]
       (if
-       (string=? health (health-down))
+       (string=?
+        (record-get
+         [:record
+          :peer/via
+          [[:direct [:option :string]]
+           [:health :string]
+           [:relay [:option :string]]]]
+         x
+         :health)
+        (health-down))
        (let
-        [__kotoba_binding-some_2 relay]
+        [__kotoba_binding-some_2
+         (record-get
+          [:record
+           :peer/via
+           [[:direct [:option :string]]
+            [:health :string]
+            [:relay [:option :string]]]]
+          x
+          :relay)]
         (if
          (option-some?-of [:option :string] __kotoba_binding-some_2)
          (let
@@ -59,7 +84,15 @@
          ""))
        (via-direct)))
      (let
-      [__kotoba_binding-some_3 relay]
+      [__kotoba_binding-some_3
+       (record-get
+        [:record
+         :peer/via
+         [[:direct [:option :string]]
+          [:health :string]
+          [:relay [:option :string]]]]
+        x
+        :relay)]
       (if
        (option-some?-of [:option :string] __kotoba_binding-some_3)
        (let
@@ -70,9 +103,11 @@
           "")]
         (via-relay))
        "")))),
-   :param-types [[:option :string] :string [:option :string]]}],
+   :param-types [[:ref :peer/via]]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:peer{:via
+        "e2d24ebb695bfdfdd9475667c6295c635b2fa912dc3d7b65e0b4c2baf748a486"},
  :exports
  [choose-via
   health-unknown
@@ -80,7 +115,13 @@
   health-down
   via-direct
   via-relay],
- :schemas nil,
+ :schemas
+ #:peer{:via
+        [:record
+         :peer/via
+         [[:direct [:option :string]]
+          [:health :string]
+          [:relay [:option :string]]]]},
  :effects #{},
  :blocks [],
  :entry nil}

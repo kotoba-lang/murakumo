@@ -99,11 +99,21 @@
         some-s (opt-str-form "x")
         none-s (opt-str-form nil)
         fields (compile-i64-cases
-                {"full" (str "(if (sealed-fields-present? " some-s " " some-s " " some-s ") 1 0)")
-                 "no-alg" (str "(if (sealed-fields-present? " none-s " " some-s " " some-s ") 1 0)")
-                 "no-n" (str "(if (sealed-fields-present? " some-s " " none-s " " some-s ") 1 0)")
-                 "no-ct" (str "(if (sealed-fields-present? " some-s " " some-s " " none-s ") 1 0)")
-                 "none" (str "(if (sealed-fields-present? " none-s " " none-s " " none-s ") 1 0)")})
+                {"full" (str "(if (sealed-fields-present? (record-new [:record :crypto/sealed "
+                             "[[:alg [:option :string]] [:nonce [:option :string]] "
+                             "[:ct [:option :string]]]] " some-s " " some-s " " some-s ")) 1 0)")
+                 "no-alg" (str "(if (sealed-fields-present? (record-new [:record :crypto/sealed "
+                               "[[:alg [:option :string]] [:nonce [:option :string]] "
+                               "[:ct [:option :string]]]] " none-s " " some-s " " some-s ")) 1 0)")
+                 "no-n" (str "(if (sealed-fields-present? (record-new [:record :crypto/sealed "
+                             "[[:alg [:option :string]] [:nonce [:option :string]] "
+                             "[:ct [:option :string]]]] " some-s " " none-s " " some-s ")) 1 0)")
+                 "no-ct" (str "(if (sealed-fields-present? (record-new [:record :crypto/sealed "
+                              "[[:alg [:option :string]] [:nonce [:option :string]] "
+                              "[:ct [:option :string]]]] " some-s " " some-s " " none-s ")) 1 0)")
+                 "none" (str "(if (sealed-fields-present? (record-new [:record :crypto/sealed "
+                             "[[:alg [:option :string]] [:nonce [:option :string]] "
+                             "[:ct [:option :string]]]] " none-s " " none-s " " none-s ")) 1 0)")})
         sealed (crypto/seal "k" "p")]
     (is (= 1 (get alg-ok "ok")))
     (is (= 0 (get alg-ok "bad")))

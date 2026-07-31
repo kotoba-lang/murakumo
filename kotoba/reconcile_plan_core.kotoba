@@ -9,7 +9,12 @@
                                     [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]
              ;; T5.2 native guest record wire
              :reconcile/starts-with [:record :reconcile/starts-with
-                                     [[:s :string] [:prefix :string]]]})
+                                     [[:s :string] [:prefix :string]]]
+             :reconcile/action-in [:record :reconcile/action-in
+                                   [[:cid [:option :string]]
+                                    [:running :i64]
+                                    [:desired-n :i64]
+                                    [:free-candidates :i64]]]})
   (:export [default-replicas desired deficit watch-sleep-ms action-name
             better-target? first-of-2 first-of-3
             name-order-record
@@ -64,10 +69,13 @@
 (defn action-blocked [] :string "blocked")
 (defn action-needs-build [] :string "needs-build")
 
-(defn action-name [cid [:option :string] running :i64 desired-n :i64
-                   free-candidates :i64] :string
-  (let [def-n (deficit (record-new [:ref :reconcile/deficit] desired-n running))]
-    (if-some [_ cid]
+(defn action-name [x [:ref :reconcile/action-in]] :string
+  ;; T5.2 native: cid option + counts on one record
+  (let [running (record-get x :running)
+        desired-n (record-get x :desired-n)
+        free-candidates (record-get x :free-candidates)
+        def-n (deficit (record-new [:ref :reconcile/deficit] desired-n running))]
+    (if-some [_ (record-get x :cid)]
       (if (< desired-n running)
         (action-over)
         (if (= def-n 0)
