@@ -81,8 +81,88 @@
       [(oracle/as-i64 (tier-code (:tier (tier-of caps))))
        (true? (:inbound-reachable? caps))])))
 
+;; ---------------------------------------------------------------------------
+;; Capability provenance (ADR-2607319500 D3)
+;;
+;; What a node ADVERTISES and what a node HAS are different facts, and the
+;; economy pays on the first. Measured 2026-07-31 against the live registry:
+;; all 45 enrolled nodes were tier :browser and 44 of them advertised
+;; :mem-bytes 34359738368 -- 32 GiB, byte-identical across every one. That is
+;; a compiled-in constant, not forty-four independent probes agreeing to the
+;; byte. Meanwhile the ten machines that actually run work
+;; (scripts/fleet-ci/nodes.edn, probed) were not enrolled here at all.
+;;
+;; This matters economically and not just cosmetically: credits/settle splits
+;; a run's pool by memory-time, so a registry where every node reports the
+;; same number makes every share identical and silently defeats
+;; credits.cljc's stated design ("the plan IS the cap table of the run").
+;; ---------------------------------------------------------------------------
+
+(def capability-sources
+  "Declared provenance of an advertised capability.
+     :measured  the joiner asserts it probed its own hardware
+     :declared  everything else, INCLUDING absent -- the safe default"
+  #{:measured :declared})
+
+(defn- caps-of
+  "Capability map from either an enrollment record (:node/caps), a planner
+   node (:caps), or a bare capability map."
+  [node]
+  (or (:node/caps node) (:caps node) node))
+
+(defn capability-provenance
+  "How this node's advertised capability was obtained -- :measured or :declared.
+
+   NEVER inferred from the value. ADR-2607259800's methodology rule (a property
+   is DECLARED, never guessed) applies here: 32 GiB is not evidence of a
+   fabrication and an odd-looking number is not evidence of a probe. Absent or
+   unrecognised provenance reads as :declared, so a node that says nothing is
+   treated as unmeasured rather than trusted by default.
+
+   The check that does NOT depend on the node's honesty is
+   `uniform-capability-cohorts`, which looks at the registry instead."
+  [node]
+  (let [s (:capability/source (caps-of node))]
+    (if (contains? capability-sources s) s :declared)))
+
+(defn measured-capability? [node]
+  (= :measured (capability-provenance node)))
+
+(defn uniform-capability-cohorts
+  "Groups of `min-cohort` (default 2) or more nodes advertising a
+   BYTE-IDENTICAL :mem-bytes. Returns data; never throws, never edits.
+
+   A constant is not a measurement. Independently probed hardware does not
+   agree to the byte -- the real fleet's own probe output shows :free-gb
+   spread across 1..56 GB on ten same-model machines. So a large cohort
+   sitting on one exact value is evidence the value was compiled in,
+   whatever the nodes declare about themselves.
+
+   `:declared-measured` counts how many of the cohort claim :measured. A
+   NON-ZERO count is the interesting case: the declaration and the detector
+   disagree, and ADR-2607300100's rule is to surface that divergence rather
+   than pick a winner silently."
+  ([nodes] (uniform-capability-cohorts nodes 2))
+  ([nodes min-cohort]
+   (->> nodes
+        (keep (fn [n] (when-let [m (:mem-bytes (caps-of n))] [m n])))
+        (group-by first)
+        (keep (fn [[m pairs]]
+                (when (>= (count pairs) min-cohort)
+                  {:mem-bytes m
+                   :count (count pairs)
+                   :nodes (mapv (fn [[_ n]] (or (:node/name n) (:name n))) pairs)
+                   :declared-measured (count (filter (fn [[_ n]] (measured-capability? n))
+                                                     pairs))})))
+        (sort-by (juxt (comp - :count) :mem-bytes))
+        vec)))
+
 (defn enrollment
-  "The record a joiner posts to /infer/nodes."
+  "The record a joiner posts to /infer/nodes.
+
+   `:capability/source` rides inside :node/caps so it travels with the numbers
+   it qualifies -- a capability separated from its provenance is how the live
+   registry ended up with 44 identical 32 GiB claims and no way to tell."
   [{:keys [name did tier mem-bytes link-gbps engine gpu] :as caps}]
   (let [t (tier-of caps)
         tmax (:max-resident-bytes t)
@@ -99,7 +179,8 @@
                  :mem-bytes mem-bytes
                  :max-resident-bytes max-res
                  :link-gbps link-gbps
-                 :gpu gpu}
+                 :gpu gpu
+                 :capability/source (capability-provenance caps)}
      :node/can (:can t)}))
 
 (defn eligible-for-work?

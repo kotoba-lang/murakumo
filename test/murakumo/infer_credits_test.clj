@@ -314,3 +314,93 @@
                                  (credits/transfer "n1" "seller" 4 {})])]
         (is (= 6.0 (get b "n1")))
         (is (= 4.0 (get b "seller")))))))
+
+;; ---------------------------------------------------------------------------
+;; Capability policy (ADR-2607319500 D3)
+;;
+;; Measured against the live registry 2026-07-31: 45 enrolled nodes, all tier
+;; :browser, 44 of them advertising a byte-identical :mem-bytes 34359738368
+;; (32 GiB), and none of the ten machines that actually run work. These tests
+;; pin what that does to a settlement and what :measured-only does instead.
+;; ---------------------------------------------------------------------------
+
+(def ^:private measured-node
+  {:name "judah" :caps {:mem-bytes 17179869184 :capability/source :measured}})
+
+(def ^:private declared-node
+  ;; the live shape: a browser tab asserting 32 GiB with no provenance
+  {:name "tab-03GbCM" :caps {:mem-bytes 34359738368}})
+
+(def ^:private mixed-run
+  {:model {:credit/per-token 2} :tokens 100 :duration-ms 60000
+   :plan {:assignments [{:node measured-node :span 10 :est-bytes 10000000000}
+                        {:node declared-node :span 10 :est-bytes 10000000000}]}})
+
+(deftest settle-default-is-byte-identical-to-history
+  (testing "the 1-arity fold stored feeds replay through is UNCHANGED except for
+            the always-0.0 :run/unallocated accounting key"
+    (is (= (dissoc (credits/settle run) :run/unallocated)
+           (dissoc (credits/settle run {:capability-policy :permissive})
+                   :run/unallocated))))
+  (testing ":permissive never leaves credits unallocated"
+    (is (= 0.0 (:run/unallocated (credits/settle run)))))
+  (testing "an unmeasured node is still paid under the default policy —
+            changing that retroactively would rewrite what past runs mean"
+    (is (pos? (get-in (credits/settle mixed-run) [:run/shares "tab-03GbCM"])))))
+
+(deftest measured-only-excludes-unmeasured-from-the-denominator
+  (let [permissive (credits/settle mixed-run)
+        strict (credits/settle mixed-run {:capability-policy :measured-only})]
+    (testing "equal est-bytes/span → the flat split that a constant produces"
+      (is (< (Math/abs (- (get-in permissive [:run/shares "judah"])
+                          (get-in permissive [:run/shares "tab-03GbCM"])))
+             1e-9)))
+    (testing "the unmeasured node is dropped, not zeroed into the denominator"
+      (is (nil? (get-in strict [:run/shares "tab-03GbCM"])))
+      (is (= 1 (count (:run/shares strict)))))
+    (testing "the whole pool goes to the one node whose capability was measured"
+      (is (< (Math/abs (- (get-in strict [:run/shares "judah"])
+                          (* 2.0 (get-in permissive [:run/shares "judah"]))))
+             1e-9)))
+    (testing "the exclusion is reported as data, with its reason"
+      (is (= [{:node "tab-03GbCM" :provenance :declared}]
+             (:run/capability-excluded strict))))))
+
+(deftest measured-only-with-nothing-measured-declines-to-allocate
+  (let [nobody {:model {:credit/per-token 2} :tokens 100 :duration-ms 60000
+                :plan {:assignments [{:node declared-node :span 10 :est-bytes 1e10}
+                                     {:node (assoc declared-node :name "tab-0BURfK")
+                                      :span 10 :est-bytes 1e10}]}}
+        strict (credits/settle nobody {:capability-policy :measured-only})
+        permissive (credits/settle nobody)]
+    (testing "unknown weights are NOT zero — nothing justifies paying anyone"
+      (is (= {} (:run/shares strict)))
+      (is (= 170.0 (:run/unallocated strict))))
+    (testing ":permissive pays the same two nodes an equal split — which is
+              exactly the failure mode: a compiled-in constant makes every
+              memory-time weight identical, so the split carries no information"
+      (is (= 2 (count (:run/shares permissive))))
+      (is (< (Math/abs (- 85.0 (get-in permissive [:run/shares "tab-03GbCM"]))) 1e-9))
+      (is (= 0.0 (:run/unallocated permissive))))
+    (testing "both excluded nodes are named"
+      (is (= 2 (count (:run/capability-excluded strict)))))))
+
+(deftest permissive-head-fallback-is-unchanged
+  ;; mt-sum = 0 (span 0 → weight 0) is the ONLY case that reaches the historical
+  ;; head fallback. Pinned separately so the :measured-only work above cannot
+  ;; quietly move it.
+  (let [no-weight {:model {:credit/per-token 2} :tokens 100 :duration-ms 60000
+                   :plan {:assignments [{:node {:name "head" :head? true}
+                                         :span 0 :est-bytes 1e10}]}}
+        r (credits/settle no-weight)]
+    (is (= 170.0 (get-in r [:run/shares "head"])))
+    (is (= 0.0 (:run/unallocated r)))))
+
+(deftest accounting-identity-holds-under-every-policy
+  (doseq [r [run mixed-run]
+          p [:permissive :measured-only]]
+    (let [{:run/keys [total treasury head shares unallocated]}
+          (credits/settle r {:capability-policy p})]
+      (is (< (Math/abs (- total (+ treasury head (reduce + 0.0 (vals shares)) unallocated)))
+             1e-9)
+          (str "total must equal treasury + head + shares + unallocated under " p)))))
