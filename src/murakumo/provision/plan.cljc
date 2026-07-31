@@ -38,6 +38,30 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private multiaddr-schema
+  [:record :provision/multiaddr [[:ip :string] [:port :i64]]])
+(def ^:private bin-path-schema
+  [:record :provision/bin-path [[:local-bin :string] [:bin :string]]])
+(def ^:private remote-dest-schema
+  [:record :provision/remote-dest [[:host :string] [:bin :string]]])
+(def ^:private label-kv-schema
+  [:record :provision/label-kv [[:k :string] [:v :string]]])
+(def ^:private peer-entry-schema
+  [:record :provision/peer-entry [[:peer-id :string] [:multiaddr :string]]])
+(def ^:private join-schema
+  [:record :provision/join [[:acc :string] [:sep :string] [:next :string]]])
+(def ^:private bootstrap-schema
+  [:record :provision/bootstrap [[:acc :string] [:entry :string]]])
+(def ^:private labels-schema
+  [:record :provision/labels [[:acc :string] [:pair :string]]])
+(def ^:private roles-schema
+  [:record :provision/roles [[:acc :string] [:role :string]]])
+(def ^:private plist-replace-schema
+  [:record :provision/plist-replace
+   [[:tmpl :string] [:ph :string] [:val :string]]])
+(def ^:private write-plist-schema
+  [:record :provision/write-plist [[:label :string] [:body :string]]])
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def launchctl-print-prefix
@@ -226,19 +250,21 @@
 
 (defn local-bin-path
   "Local pin path for one binary. Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [local-bin bin]
   (o-record 'local-bin-path
-            {:local-bin local-bin :bin bin}
-            [[:local-bin :string] [:bin :string]]))
+            {:p (oracle/record bin-path-schema
+                               {:local-bin local-bin :bin bin})}
+            [[:p :raw]]))
 
 (defn remote-bin-dest
   "Remote rsync dest for one binary. Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [host bin]
   (o-record 'remote-bin-dest
-            {:host host :bin bin}
-            [[:host :string] [:bin :string]]))
+            {:p (oracle/record remote-dest-schema
+                               {:host host :bin bin})}
+            [[:p :raw]]))
 
 (defn launchd-daemon-path
   "System LaunchDaemon path for label. Kotoba (required)."
@@ -252,19 +278,20 @@
 
 (defn label-kv
   "Single k=v label pair. Host joins with comma. Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [k v]
   (o-record 'label-kv
-            {:k k :v v}
-            [[:k :string] [:v :string]]))
+            {:p (oracle/record label-kv-schema {:k k :v v})}
+            [[:p :raw]]))
 
 (defn peer-entry
   "One bootstrap peer `peer-id@multiaddr`. Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [peer-id multiaddr]
   (o-record 'peer-entry
-            {:peer-id peer-id :multiaddr multiaddr}
-            [[:peer-id :string] [:multiaddr :string]]))
+            {:p (oracle/record peer-entry-schema
+                               {:peer-id peer-id :multiaddr multiaddr})}
+            [[:p :raw]]))
 
 (defn did-peer-id
   "DID URI for a mesh PeerId (`did:key:` + body). Kotoba (required)."
@@ -273,43 +300,48 @@
 
 (defn join-append
   "CSV-style fold step: empty acc ⇒ next only. Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [acc sep next]
   (o-record 'join-append
-            {:acc (or acc "") :sep sep :next next}
-            [[:acc :string] [:sep :string] [:next :string]]))
+            {:j (oracle/record join-schema
+                               {:acc (or acc "") :sep sep :next next})}
+            [[:j :raw]]))
 
 (defn bootstrap-append
   "Append one peer-entry to bootstrap-str acc. Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [acc entry]
   (o-record 'bootstrap-append
-            {:acc (or acc "") :entry entry}
-            [[:acc :string] [:entry :string]]))
+            {:b (oracle/record bootstrap-schema
+                               {:acc (or acc "") :entry entry})}
+            [[:b :raw]]))
 
 (defn labels-append
   "Append one label-kv pair to labels-env acc. Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [acc pair]
   (o-record 'labels-append
-            {:acc (or acc "") :pair pair}
-            [[:acc :string] [:pair :string]]))
+            {:l (oracle/record labels-schema
+                               {:acc (or acc "") :pair pair})}
+            [[:l :raw]]))
 
 (defn roles-append
   "Append one role name to roles CSV acc. Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [acc role]
   (o-record 'roles-append
-            {:acc (or acc "") :role role}
-            [[:acc :string] [:role :string]]))
+            {:r (oracle/record roles-schema
+                               {:acc (or acc "") :role role})}
+            [[:r :raw]]))
 
 (defn plist-replace
   "Substitute one placeholder token in a LaunchDaemon template. Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [tmpl ph val]
   (o-record 'plist-replace
-            {:tmpl tmpl :ph ph :val (or val "")}
-            [[:tmpl :string] [:ph :string] [:val :string]]))
+            {:p (oracle/record plist-replace-schema
+                               {:tmpl tmpl :ph ph :val (or val "")})}
+            [[:p :raw]]))
 
 (defn home-bin-path
   "Absolute `{{BIN}}` path under node home. Kotoba (required)."
@@ -351,11 +383,12 @@
 
 (defn multiaddr
   "Tailscale QUIC multiaddr for a node ip/port. Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [ip port]
   (o-record 'multiaddr
-            {:ip ip :port port}
-            [[:ip :string] [:port :i64]]))
+            {:m (oracle/record multiaddr-schema
+                               {:ip ip :port port})}
+            [[:m :raw]]))
 
 (defn node-webrtc-port
   "The /webrtc-direct UDP port for nodes whose class speaks :webrtc on :live.
@@ -453,11 +486,12 @@
 (defn write-plist-shell
   "Assemble sudo tee … <<'PLIST' shell for a LaunchDaemon label + body.
    Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [label body]
   (o-record 'write-plist-shell
-            {:label label :body body}
-            [[:label :string] [:body :string]]))
+            {:w (oracle/record write-plist-schema
+                               {:label label :body body})}
+            [[:w :raw]]))
 
 (defn write-plist-command
   "Remote shell command that writes plist content to the system LaunchDaemon path.

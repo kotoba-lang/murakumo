@@ -123,18 +123,27 @@
    :body "/quic-v1",
    :param-types []}
   {:name multiaddr,
-   :params [ip port],
+   :params [m],
    :result :string,
    :effects #{},
    :body
    (string-concat
     (multiaddr-ip4-prefix)
     (string-concat
-     ip
+     (record-get
+      [:record :provision/multiaddr [[:ip :string] [:port :i64]]]
+      m
+      :ip)
      (string-concat
       (multiaddr-udp-mid)
-      (string-concat (i64-str port) (multiaddr-quic-suffix))))),
-   :param-types [:string :i64]}
+      (string-concat
+       (i64-str
+        (record-get
+         [:record :provision/multiaddr [[:ip :string] [:port :i64]]]
+         m
+         :port))
+       (multiaddr-quic-suffix))))),
+   :param-types [[:ref :provision/multiaddr]]}
   {:name webrtc-port,
    :params [p2p-port],
    :result :i64,
@@ -403,17 +412,43 @@
    :body "-e",
    :param-types []}
   {:name local-bin-path,
-   :params [local-bin bin],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (string-concat local-bin (string-concat "/" bin)),
-   :param-types [:string :string]}
+   :body
+   (string-concat
+    (record-get
+     [:record
+      :provision/bin-path
+      [[:local-bin :string] [:bin :string]]]
+     p
+     :local-bin)
+    (string-concat
+     "/"
+     (record-get
+      [:record
+       :provision/bin-path
+       [[:local-bin :string] [:bin :string]]]
+      p
+      :bin))),
+   :param-types [[:ref :provision/bin-path]]}
   {:name remote-bin-dest,
-   :params [host bin],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (string-concat host (string-concat ":.murakumo/bin/" bin)),
-   :param-types [:string :string]}
+   :body
+   (string-concat
+    (record-get
+     [:record :provision/remote-dest [[:host :string] [:bin :string]]]
+     p
+     :host)
+    (string-concat
+     ":.murakumo/bin/"
+     (record-get
+      [:record :provision/remote-dest [[:host :string] [:bin :string]]]
+      p
+      :bin))),
+   :param-types [[:ref :provision/remote-dest]]}
   {:name launchd-daemon-path,
    :params [label],
    :result :string,
@@ -435,11 +470,22 @@
      " >/dev/null <<'PLIST'\n")),
    :param-types [:string]}
   {:name label-kv,
-   :params [k v],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (string-concat k (string-concat "=" v)),
-   :param-types [:string :string]}
+   :body
+   (string-concat
+    (record-get
+     [:record :provision/label-kv [[:k :string] [:v :string]]]
+     p
+     :k)
+    (string-concat
+     "="
+     (record-get
+      [:record :provision/label-kv [[:k :string] [:v :string]]]
+      p
+      :v))),
+   :param-types [[:ref :provision/label-kv]]}
   {:name plist-heredoc-footer,
    :params [],
    :result :string,
@@ -459,12 +505,26 @@
    :body ",",
    :param-types []}
   {:name peer-entry,
-   :params [peer-id multiaddr],
+   :params [p],
    :result :string,
    :effects #{},
    :body
-   (string-concat peer-id (string-concat (peer-at-sep) multiaddr)),
-   :param-types [:string :string]}
+   (string-concat
+    (record-get
+     [:record
+      :provision/peer-entry
+      [[:peer-id :string] [:multiaddr :string]]]
+     p
+     :peer-id)
+    (string-concat
+     (peer-at-sep)
+     (record-get
+      [:record
+       :provision/peer-entry
+       [[:peer-id :string] [:multiaddr :string]]]
+      p
+      :multiaddr))),
+   :param-types [[:ref :provision/peer-entry]]}
   {:name home-bin-suffix,
    :params [],
    :result :string,
@@ -574,39 +634,122 @@
    :body "{{WEBRTC}}",
    :param-types []}
   {:name join-append,
-   :params [acc sep next],
+   :params [j],
    :result :string,
    :effects #{},
    :body
-   (if
-    (string=? acc "")
-    next
-    (string-concat acc (string-concat sep next))),
-   :param-types [:string :string :string]}
+   (let
+    [acc
+     (record-get
+      [:record
+       :provision/join
+       [[:acc :string] [:sep :string] [:next :string]]]
+      j
+      :acc)
+     sep
+     (record-get
+      [:record
+       :provision/join
+       [[:acc :string] [:sep :string] [:next :string]]]
+      j
+      :sep)
+     next
+     (record-get
+      [:record
+       :provision/join
+       [[:acc :string] [:sep :string] [:next :string]]]
+      j
+      :next)]
+    (if
+     (string=? acc "")
+     next
+     (string-concat acc (string-concat sep next)))),
+   :param-types [[:ref :provision/join]]}
   {:name bootstrap-append,
-   :params [acc entry],
+   :params [b],
    :result :string,
    :effects #{},
-   :body (join-append acc (peer-join-sep) entry),
-   :param-types [:string :string]}
+   :body
+   (join-append
+    (record-new
+     [:record
+      :provision/join
+      [[:acc :string] [:sep :string] [:next :string]]]
+     (record-get
+      [:record :provision/bootstrap [[:acc :string] [:entry :string]]]
+      b
+      :acc)
+     (peer-join-sep)
+     (record-get
+      [:record :provision/bootstrap [[:acc :string] [:entry :string]]]
+      b
+      :entry))),
+   :param-types [[:ref :provision/bootstrap]]}
   {:name labels-append,
-   :params [acc pair],
+   :params [l],
    :result :string,
    :effects #{},
-   :body (join-append acc (label-join-sep) pair),
-   :param-types [:string :string]}
+   :body
+   (join-append
+    (record-new
+     [:record
+      :provision/join
+      [[:acc :string] [:sep :string] [:next :string]]]
+     (record-get
+      [:record :provision/labels [[:acc :string] [:pair :string]]]
+      l
+      :acc)
+     (label-join-sep)
+     (record-get
+      [:record :provision/labels [[:acc :string] [:pair :string]]]
+      l
+      :pair))),
+   :param-types [[:ref :provision/labels]]}
   {:name roles-append,
-   :params [acc role],
+   :params [r],
    :result :string,
    :effects #{},
-   :body (join-append acc (roles-join-sep) role),
-   :param-types [:string :string]}
+   :body
+   (join-append
+    (record-new
+     [:record
+      :provision/join
+      [[:acc :string] [:sep :string] [:next :string]]]
+     (record-get
+      [:record :provision/roles [[:acc :string] [:role :string]]]
+      r
+      :acc)
+     (roles-join-sep)
+     (record-get
+      [:record :provision/roles [[:acc :string] [:role :string]]]
+      r
+      :role))),
+   :param-types [[:ref :provision/roles]]}
   {:name plist-replace,
-   :params [tmpl ph val],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (string-replace-all tmpl ph val),
-   :param-types [:string :string :string]}
+   :body
+   (string-replace-all
+    (record-get
+     [:record
+      :provision/plist-replace
+      [[:tmpl :string] [:ph :string] [:val :string]]]
+     p
+     :tmpl)
+    (record-get
+     [:record
+      :provision/plist-replace
+      [[:tmpl :string] [:ph :string] [:val :string]]]
+     p
+     :ph)
+    (record-get
+     [:record
+      :provision/plist-replace
+      [[:tmpl :string] [:ph :string] [:val :string]]]
+     p
+     :val)),
+   :param-types [[:ref :provision/plist-replace]]}
   {:name alnum-char?,
    :params [c],
    :result :bool,
@@ -676,16 +819,51 @@
       (take-alnum rest 0 "")))),
    :param-types [:string]}
   {:name write-plist-shell,
-   :params [label body],
+   :params [w],
    :result :string,
    :effects #{},
    :body
    (string-concat
-    (tee-plist-prefix label)
-    (string-concat body (plist-heredoc-footer))),
-   :param-types [:string :string]}],
+    (tee-plist-prefix
+     (record-get
+      [:record
+       :provision/write-plist
+       [[:label :string] [:body :string]]]
+      w
+      :label))
+    (string-concat
+     (record-get
+      [:record
+       :provision/write-plist
+       [[:label :string] [:body :string]]]
+      w
+      :body)
+     (plist-heredoc-footer))),
+   :param-types [[:ref :provision/write-plist]]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:provision{:bin-path
+             "85face76846f2352c7e1bad3cd5d135731ce487edda0c28c945c0fd50c49445c",
+             :bootstrap
+             "01e08d4a8cbea5958af70a8030ee687a29cfc121cca8a6a7da4fa60cb4afbd0d",
+             :join
+             "59be7b1d576dee622c9922bc971106ed54ae6918386b48c736a1877be12f9d55",
+             :label-kv
+             "b7a8ff6448da6c0267fecdaa4227824063a1494974cbfca2a635cb6be41a4c97",
+             :labels
+             "bb5e2f749c37ab0de1f058403a71e0e2d320df0745462c687b97ee7bdc6fe2ba",
+             :multiaddr
+             "56c325532ada3e1ade83e059b640f6dd1fdda72f310bd190354e4d468fd9e79e",
+             :peer-entry
+             "a3bb5008eb36f64a38b0d00e36fab4f5f4767af7219025196974da4895cc8673",
+             :plist-replace
+             "b479a8272816d0c30cbef228710add90e7beaee96be936f308a71165c4f360c2",
+             :remote-dest
+             "a373ee24cc10d42be1e655f71e9e8cb8ecf582439c79d6b21487994a61c75d98",
+             :roles
+             "a5a4cd554c1bbe7bb5586cf0f704d165d6064b14cb86de2e7ec309a7e2e611fc",
+             :write-plist
+             "e1b700addce8049d930f0e701743294e3c3fbd7493779cc263066885c674bcae"},
  :exports
  [plist-label
   remote-bin
@@ -770,7 +948,49 @@
   launchctl-plist-quiet-true-semi
   launchd-daemons-dir
   plist-ext],
- :schemas nil,
+ :schemas
+ #:provision{:label-kv
+             [:record :provision/label-kv [[:k :string] [:v :string]]],
+             :write-plist
+             [:record
+              :provision/write-plist
+              [[:label :string] [:body :string]]],
+             :join
+             [:record
+              :provision/join
+              [[:acc :string] [:sep :string] [:next :string]]],
+             :bootstrap
+             [:record
+              :provision/bootstrap
+              [[:acc :string] [:entry :string]]],
+             :plist-replace
+             [:record
+              :provision/plist-replace
+              [[:tmpl :string] [:ph :string] [:val :string]]],
+             :remote-dest
+             [:record
+              :provision/remote-dest
+              [[:host :string] [:bin :string]]],
+             :bin-path
+             [:record
+              :provision/bin-path
+              [[:local-bin :string] [:bin :string]]],
+             :labels
+             [:record
+              :provision/labels
+              [[:acc :string] [:pair :string]]],
+             :peer-entry
+             [:record
+              :provision/peer-entry
+              [[:peer-id :string] [:multiaddr :string]]],
+             :multiaddr
+             [:record
+              :provision/multiaddr
+              [[:ip :string] [:port :i64]]],
+             :roles
+             [:record
+              :provision/roles
+              [[:acc :string] [:role :string]]]},
  :effects #{},
  :blocks [],
  :entry nil}

@@ -1,4 +1,27 @@
 (ns provision-plan-core
+  (:schemas {;; T5.2 native guest record wire
+             :provision/multiaddr [:record :provision/multiaddr
+                                   [[:ip :string] [:port :i64]]]
+             :provision/bin-path [:record :provision/bin-path
+                                  [[:local-bin :string] [:bin :string]]]
+             :provision/remote-dest [:record :provision/remote-dest
+                                     [[:host :string] [:bin :string]]]
+             :provision/label-kv [:record :provision/label-kv
+                                  [[:k :string] [:v :string]]]
+             :provision/peer-entry [:record :provision/peer-entry
+                                    [[:peer-id :string] [:multiaddr :string]]]
+             :provision/join [:record :provision/join
+                              [[:acc :string] [:sep :string] [:next :string]]]
+             :provision/bootstrap [:record :provision/bootstrap
+                                   [[:acc :string] [:entry :string]]]
+             :provision/labels [:record :provision/labels
+                                [[:acc :string] [:pair :string]]]
+             :provision/roles [:record :provision/roles
+                               [[:acc :string] [:role :string]]]
+             :provision/plist-replace [:record :provision/plist-replace
+                                       [[:tmpl :string] [:ph :string] [:val :string]]]
+             :provision/write-plist [:record :provision/write-plist
+                                     [[:label :string] [:body :string]]]})
   (:export [plist-label remote-bin remote-store ssh-rsync-options
             peer-advertise-wait-ms default-p2p-port
             digit-char nat-str i64-str
@@ -42,6 +65,7 @@
 ;; peer-id body/DID patterns dual-source; log/link grep commands recompose them.
 ;; render-plist placeholder tokens dual-source.
 ;; multiaddr path tokens dual-source; multiaddr recomposes from them.
+;; T5.2: multi-scalar pure inputs take single guest records (option residual stays positional).
 ;; launchctl shell tokens dual-source; status/up/down/reprovision/watchdog
 ;; cmds + launchd-daemon-path recompose from those SSoTs.
 ;; join-append / bootstrap-append / labels-append / roles-append: pure fold
@@ -108,15 +132,16 @@
   ;; Tailscale QUIC transport suffix after port
   "/quic-v1")
 
-(defn multiaddr [ip :string port :i64] :string
+(defn multiaddr [m [:ref :provision/multiaddr]] :string
   ;; recomposes from multiaddr path token SSoTs
+  ;; T5.2 native: ip+port.
   (string-concat
    (multiaddr-ip4-prefix)
    (string-concat
-    ip
+    (record-get m :ip)
     (string-concat
      (multiaddr-udp-mid)
-     (string-concat (i64-str port) (multiaddr-quic-suffix))))))
+     (string-concat (i64-str (record-get m :port)) (multiaddr-quic-suffix))))))
 
 (defn webrtc-port [p2p-port :i64] :i64
   (+ p2p-port 100))
@@ -281,13 +306,15 @@
 (defn rsync-az-flag [] :string "-az")
 (defn rsync-e-flag [] :string "-e")
 
-(defn local-bin-path [local-bin :string bin :string] :string
+(defn local-bin-path [p [:ref :provision/bin-path]] :string
   ;; cljc: (str local-bin "/" bin)
-  (string-concat local-bin (string-concat "/" bin)))
+  ;; T5.2 native.
+  (string-concat (record-get p :local-bin) (string-concat "/" (record-get p :bin))))
 
-(defn remote-bin-dest [host :string bin :string] :string
+(defn remote-bin-dest [p [:ref :provision/remote-dest]] :string
   ;; cljc: (str host ":.murakumo/bin/" bin)
-  (string-concat host (string-concat ":.murakumo/bin/" bin)))
+  ;; T5.2 native.
+  (string-concat (record-get p :host) (string-concat ":.murakumo/bin/" (record-get p :bin))))
 
 (defn launchd-daemon-path [label :string] :string
   ;; /Library/LaunchDaemons/{label}.plist — recomposes dir + ext SSoTs
@@ -303,9 +330,10 @@
     (launchd-daemon-path label)
     " >/dev/null <<'PLIST'\n")))
 
-(defn label-kv [k :string v :string] :string
+(defn label-kv [p [:ref :provision/label-kv]] :string
   ;; single launchd env pair; host joins with comma
-  (string-concat k (string-concat "=" v)))
+  ;; T5.2 native.
+  (string-concat (record-get p :k) (string-concat "=" (record-get p :v))))
 
 (defn plist-heredoc-footer [] :string
   "\nPLIST")
@@ -316,9 +344,11 @@
 
 (defn peer-join-sep [] :string ",")
 
-(defn peer-entry [peer-id :string multiaddr :string] :string
+(defn peer-entry [p [:ref :provision/peer-entry]] :string
   ;; cljc: (str peer-id "@" multiaddr)
-  (string-concat peer-id (string-concat (peer-at-sep) multiaddr)))
+  ;; T5.2 native.
+  (string-concat (record-get p :peer-id)
+                 (string-concat (peer-at-sep) (record-get p :multiaddr))))
 
 ;; ── residual render-plist path + join seps ───────────────────────────
 
@@ -357,27 +387,46 @@
 
 ;; ── residual fold steps (host still walks collections / chains steps) ─
 
-(defn join-append [acc :string sep :string next :string] :string
+(defn join-append [j [:ref :provision/join]] :string
   ;; empty acc ⇒ first item only (no leading sep)
-  (if (string=? acc "")
-    next
-    (string-concat acc (string-concat sep next))))
+  ;; T5.2 native: acc+sep+next.
+  (let [acc (record-get j :acc)
+        sep (record-get j :sep)
+        next (record-get j :next)]
+    (if (string=? acc "")
+      next
+      (string-concat acc (string-concat sep next)))))
 
-(defn bootstrap-append [acc :string entry :string] :string
+(defn bootstrap-append [b [:ref :provision/bootstrap]] :string
   ;; host reduce over peer-entry strings for bootstrap-str
-  (join-append acc (peer-join-sep) entry))
+  ;; T5.2 native.
+  (join-append (record-new [:ref :provision/join]
+                           (record-get b :acc)
+                           (peer-join-sep)
+                           (record-get b :entry))))
 
-(defn labels-append [acc :string pair :string] :string
+(defn labels-append [l [:ref :provision/labels]] :string
   ;; host reduce over label-kv pairs for labels-env
-  (join-append acc (label-join-sep) pair))
+  ;; T5.2 native.
+  (join-append (record-new [:ref :provision/join]
+                           (record-get l :acc)
+                           (label-join-sep)
+                           (record-get l :pair))))
 
-(defn roles-append [acc :string role :string] :string
+(defn roles-append [r [:ref :provision/roles]] :string
   ;; host reduce over role names for {{ROLES}} CSV
-  (join-append acc (roles-join-sep) role))
+  ;; T5.2 native.
+  (join-append (record-new [:ref :provision/join]
+                           (record-get r :acc)
+                           (roles-join-sep)
+                           (record-get r :role))))
 
-(defn plist-replace [tmpl :string ph :string val :string] :string
+(defn plist-replace [p [:ref :provision/plist-replace]] :string
   ;; one placeholder substitution; host chains render-plist / watchdog
-  (string-replace-all tmpl ph val))
+  ;; T5.2 native.
+  (string-replace-all (record-get p :tmpl)
+                      (record-get p :ph)
+                      (record-get p :val)))
 
 ;; ── residual peer-id log extract + write-plist shell assembly ─────────
 
@@ -421,9 +470,10 @@
             rest (string-substring out body-start n)]
         (take-alnum rest 0 "")))))
 
-(defn write-plist-shell [label :string body :string] :string
+(defn write-plist-shell [w [:ref :provision/write-plist]] :string
   ;; cljc: (str (tee-plist-prefix label) body plist-heredoc-footer)
   ;; body content is host-rendered plist XML; assembly is pure
+  ;; T5.2 native.
   (string-concat
-   (tee-plist-prefix label)
-   (string-concat body (plist-heredoc-footer))))
+   (tee-plist-prefix (record-get w :label))
+   (string-concat (record-get w :body) (plist-heredoc-footer))))
