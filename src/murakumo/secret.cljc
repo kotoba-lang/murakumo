@@ -27,6 +27,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── named secrets (stable ids — kotoba SSoT, requires oracle) ────────
 
 (def token-secret-name
@@ -121,19 +127,30 @@
 
 (defn- classify-fetched
   "Kotoba `classify-fetched`: missing/blank → not-found|empty|value.
-   Profile 5: missing/blank are :bool."
+   Profile 5: missing/blank are :bool.
+   T5.2: structural map → call-record."
   [missing? blank?]
-  (o 'classify-fetched
-     [(boolean missing?) (boolean blank?)]))
+  (o-record 'classify-fetched
+            {:missing? (boolean missing?) :blank? (boolean blank?)}
+            [[:missing? :bool] [:blank? :bool]]))
 
 (defn- kit-reply-from-class
   "Build kit-shaped reply from classify class + optional value string.
-   Tags/codes/messages via kotoba (required)."
+   Tags/codes/messages via kotoba (required).
+   T5.2: structural map → call-record."
   [class value]
-  (if (oracle/bool->host (o 'reply-is-value? [(str class)]))
+  (if (oracle/bool->host
+       (o-record 'reply-is-value?
+                 {:class class}
+                 [[:class :string]]))
     {:tag :value :value (str value)}
-    (let [code (keyword (o 'secret-error-code [(str class)]))
-          msg (o 'secret-error-message [(str class)])]
+    (let [code (keyword
+                (o-record 'secret-error-code
+                          {:class class}
+                          [[:class :string]]))
+          msg (o-record 'secret-error-message
+                        {:class class}
+                        [[:class :string]])]
       {:tag :error :code code :message msg})))
 
 (defn map-fetch
@@ -163,9 +180,14 @@
         (kit-reply-from-class class v))
       (catch #?(:clj Throwable :cljs :default) e
         (let [class class-fetch
-              code (keyword (o 'secret-error-code [class]))
+              code (keyword
+                    (o-record 'secret-error-code
+                              {:class class}
+                              [[:class :string]]))
               msg (or #?(:clj (.getMessage e) :cljs (.-message e))
-                      (o 'secret-error-message [class]))]
+                      (o-record 'secret-error-message
+                                {:class class}
+                                [[:class :string]]))]
           {:tag :error :code code :message msg})))))
 
 (defn kagi-fetch
@@ -233,11 +255,14 @@
 
 (defn valid-env-var-name?
   "Reject blank, wildcard, and path-like env var names.
-   Kotoba `valid-env-var-name?` required. Profile 5: guest :bool."
+   Kotoba `valid-env-var-name?` required. Profile 5: guest :bool.
+   T5.2: structural map → call-record."
   [env-name]
   (boolean (and (string? env-name)
                 (oracle/bool->host
-                 (o 'valid-env-var-name? [(str env-name)])))))
+                 (o-record 'valid-env-var-name?
+                           {:env-name env-name}
+                           [[:env-name :string]])))))
 
 (defn resolve-exact-env
   "Read one **exact** env var by name declared in config (e.g. overlay
@@ -259,7 +284,9 @@
   [p]
   (boolean (and (string? p)
                 (or (oracle/bool->host
-                     (o 'valid-path-ref-unix? [(str p)]))
+                     (o-record 'valid-path-ref-unix?
+                               {:path p}
+                               [[:path :string]]))
                     ;; Windows absolute (drive letter) stays host-only
                     (boolean (re-matches #"[A-Za-z]:[\\/].*" (str p)))))))
 
