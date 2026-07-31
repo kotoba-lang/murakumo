@@ -65,6 +65,17 @@
   "[:record :plan/ul [[:weight-bytes :i64] [:layers :i64]]]")
 (def ^:private dense-units-lit
   "[:record :plan/dense-units [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]")
+(def ^:private ends-idx-lit
+  "[:record :plan/ends-idx [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64] [:idx :i64]]]")
+
+(defn- ends-idx-call
+  "Project a [:ref :plan/ends] expression into ends-at/lo/hi guest record."
+  [export ends-expr idx]
+  (str "(" export " (record-new " ends-idx-lit
+       " (record-get " ends-expr " :hi0)"
+       " (record-get " ends-expr " :hi1)"
+       " (record-get " ends-expr " :hi2)"
+       " " idx "))"))
 
 (defn- model-fields [model]
   [(:model/layers model)
@@ -349,11 +360,11 @@
                      (let [us (mapv plan/usable-bytes nodes)
                            mp (model-record-call model)
                            w (:model/weight-bytes model)]
-                       ;; T5.3: ends are [:ref :plan/ends]; one label per lane
+                       ;; T5.3: ends are [:ref :plan/ends]; project via ends-idx (T5.2)
                        (let [call (partition-3-ends-call w model (us 0) (us 1) (us 2))]
-                         [[(str label "-0") (str "(ends-at " call " 0)")]
-                          [(str label "-1") (str "(ends-at " call " 1)")]
-                          [(str label "-2") (str "(ends-at " call " 2)")]])))
+                         [[(str label "-0") (ends-idx-call "ends-at" call 0)]
+                          [(str label "-1") (ends-idx-call "ends-at" call 1)]
+                          [(str label "-2") (ends-idx-call "ends-at" call 2)]])))
                    cases))
         actual (compile-i64-cases
                 (merge kotoba-cases
@@ -415,13 +426,13 @@
                 {"p1" (str "(partition-1-end " mp ")")
                  "f1" (plan-fits-1-call 1200 12 0 100 (us1 0))
                  "f1n" (plan-fits-1-call 999999999999 12 0 100 (us1 0))
-                 ;; T5.3: ends are [:ref :plan/ends]; project inside the guest
-                 "p2-0" (str "(ends-at " (ends2 (us2 0) (us2 1)) " 0)")
-                 "p2-1" (str "(ends-at " (ends2 (us2 0) (us2 1)) " 1)")
-                 "p2u-0" (str "(ends-at " (ends2 (us2u 0) (us2u 1)) " 0)")
-                 "p2u-1" (str "(ends-at " (ends2 (us2u 0) (us2u 1)) " 1)")
-                 "p2z-0" (str "(ends-at " (ends2 (us2z 0) (us2z 1)) " 0)")
-                 "p2z-1" (str "(ends-at " (ends2 (us2z 0) (us2z 1)) " 1)")
+                 ;; T5.2: ends+idx folded into :plan/ends-idx guest record
+                 "p2-0" (ends-idx-call "ends-at" (ends2 (us2 0) (us2 1)) 0)
+                 "p2-1" (ends-idx-call "ends-at" (ends2 (us2 0) (us2 1)) 1)
+                 "p2u-0" (ends-idx-call "ends-at" (ends2 (us2u 0) (us2u 1)) 0)
+                 "p2u-1" (ends-idx-call "ends-at" (ends2 (us2u 0) (us2u 1)) 1)
+                 "p2z-0" (ends-idx-call "ends-at" (ends2 (us2z 0) (us2z 1)) 0)
+                 "p2z-1" (ends-idx-call "ends-at" (ends2 (us2z 0) (us2z 1)) 1)
                  "f2" (plan-fits-2-call 1200 12 0 100 (us2 0) (us2 1))
                  "f2n" (plan-fits-2-call 999999999999 12 0 100 (us2 0) (us2 1))
                  "f2u" (plan-fits-2-call 1200 12 0 100 (us2u 0) (us2u 1))
@@ -437,10 +448,10 @@
         ;; asg rows from ends for n2eq — host would zip with node names
         asg-actual
         (compile-i64-cases
-         {"elo0" (str "(ends-lo " e2 " 0)")
-          "elo1" (str "(ends-lo " e2 " 1)")
-          "ehi0" (str "(ends-hi " e2 " 0)")
-          "ehi1" (str "(ends-hi " e2 " 1)")
+         {"elo0" (ends-idx-call "ends-lo" e2 0)
+          "elo1" (ends-idx-call "ends-lo" e2 1)
+          "ehi0" (ends-idx-call "ends-hi" e2 0)
+          "ehi1" (ends-idx-call "ends-hi" e2 1)
           "sp0" (str "(asg-row-span " (row 0 hi0 (us2 0)) ")")
           "ft0" (str "(asg-row-fits " (row 0 hi0 (us2 0)) ")")
           "sp1" (str "(asg-row-span " (row hi0 hi1 (us2 1)) ")")
