@@ -20,6 +20,19 @@
        "null-redirect or-sep settle-sleep pkill-suffix "
        "localhost-colon curl-prefix curl-stderr-redirect "
        "forward-spec ssh-forward-prefix"))
+
+(def ^:private scp-ty
+  "[:record :tunnel/scp [[:host :string] [:dest :string]]]")
+
+(def ^:private ports-ty
+  "[:record :tunnel/ports [[:local-port :i64] [:remote-port :i64]]]")
+
+(def ^:private forward-ty
+  "[:record :tunnel/forward [[:local-port :i64] [:remote-port :i64] [:host :string]]]")
+
+(def ^:private exit-ty
+  "[:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]]")
+
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -52,13 +65,14 @@
                  "ct" "(connect-timeout-opt 8)"
                  "cp" (str "(control-path-opt " (kotoba-literal "/tmp/m/%C") ")")
                  "cs" "(control-persist-opt 45)"
-                 "sd" (str "(scp-dest " (kotoba-literal "asher") " "
-                           (kotoba-literal ".murakumo/bin/kotoba") ")")
+                 "sd" (str "(scp-dest (record-new " scp-ty " "
+                           (kotoba-literal "asher") " "
+                           (kotoba-literal ".murakumo/bin/kotoba") "))")
                  "cm" (str "(close-master-control-opt " (kotoba-literal "/tmp/m/%C") ")")
-                 "ef" (str "(ensure-forward-command 18099 8077 "
-                           (kotoba-literal "asher") ")")
-                 "rf" (str "(replace-forward-command 18077 8077 "
-                           (kotoba-literal "asher") ")")
+                 "ef" (str "(ensure-forward-command (record-new " forward-ty " 18099 8077 "
+                           (kotoba-literal "asher") "))")
+                 "rf" (str "(replace-forward-command (record-new " forward-ty " 18077 8077 "
+                           (kotoba-literal "asher") "))")
                  "rc" (str "(remote-curl-command "
                            (kotoba-literal "http://localhost:8077/health") ")")})]
     (is (= tunnel/rc-marker (get actual "m")))
@@ -115,8 +129,8 @@
 
 (deftest pick-exit-and-trim-err-match
   (let [i (compile-i64-cases
-           {"p1" "(pick-exit true 7 0)"
-            "p0" "(pick-exit false 7 255)"})
+           {"p1" (str "(pick-exit (record-new " exit-ty " true 7 0))")
+            "p0" (str "(pick-exit (record-new " exit-ty " false 7 255))")})
         s (compile-string-cases
            {"te" (str "(trim-err " (kotoba-literal " connection refused\n") ")")
             "te0" (str "(trim-err " (kotoba-literal "") ")")})]
@@ -169,12 +183,12 @@
             "lc" "(localhost-colon)"
             "cp" "(curl-prefix)"
             "cr" "(curl-stderr-redirect)"
-            "fs" "(forward-spec 18099 8077)"
+            "fs" (str "(forward-spec (record-new " ports-ty " 18099 8077))")
             "sp" "(ssh-forward-prefix)"
-            "ef" (str "(ensure-forward-command 18099 8077 "
-                      (kotoba-literal "asher") ")")
-            "rf" (str "(replace-forward-command 18099 8077 "
-                      (kotoba-literal "asher") ")")
+            "ef" (str "(ensure-forward-command (record-new " forward-ty " 18099 8077 "
+                      (kotoba-literal "asher") "))")
+            "rf" (str "(replace-forward-command (record-new " forward-ty " 18099 8077 "
+                      (kotoba-literal "asher") "))")
             "rc" (str "(remote-curl-command "
                       (kotoba-literal "http://localhost:8077/health") ")")})]
     (is (= tunnel/pgrep-bin (get s "pg")))

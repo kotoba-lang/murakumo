@@ -27,11 +27,23 @@
    (if (= tier 0) 2147483648 (if (= tier 1) 4294967296 13958643712)),
    :param-types [:i64]}
   {:name needs-relay?,
-   :params [tier inbound],
+   :params [r],
    :result :bool,
    :effects #{},
-   :body (if (< tier 2) true (if inbound false true)),
-   :param-types [:i64 :bool]}
+   :body
+   (let
+    [tier
+     (record-get
+      [:record :join/relay [[:tier :i64] [:inbound :bool]]]
+      r
+      :tier)
+     inbound
+     (record-get
+      [:record :join/relay [[:tier :i64] [:inbound :bool]]]
+      r
+      :inbound)]
+    (if (< tier 2) true (if inbound false true))),
+   :param-types [[:ref :join/relay]]}
   {:name swarm-can?,
    :params [kind],
    :result :bool,
@@ -65,33 +77,87 @@
       (if (string=? kind "full-shard") true false)))),
    :param-types [:string]}
   {:name can?,
-   :params [tier kind],
+   :params [c],
    :result :bool,
    :effects #{},
-   :body (if (< tier 2) (swarm-can? kind) (native-can? kind)),
-   :param-types [:i64 :string]}
+   :body
+   (let
+    [tier
+     (record-get
+      [:record :join/can [[:tier :i64] [:kind :string]]]
+      c
+      :tier)
+     kind
+     (record-get
+      [:record :join/can [[:tier :i64] [:kind :string]]]
+      c
+      :kind)]
+    (if (< tier 2) (swarm-can? kind) (native-can? kind))),
+   :param-types [[:ref :join/can]]}
   {:name clamp-resident,
-   :params [mem tier-max],
+   :params [c],
    :result :i64,
    :effects #{},
    :body
    (let
-    [__kotoba_binding-some_1 mem]
-    (if
-     (option-some?-of [:option :i64] __kotoba_binding-some_1)
-     (let
-      [m (option-value-of [:option :i64] __kotoba_binding-some_1 0)]
-      (if (< m tier-max) m tier-max))
-     tier-max)),
-   :param-types [[:option :i64] :i64]}
+    [mem
+     (record-get
+      [:record :join/clamp [[:mem [:option :i64]] [:tmax :i64]]]
+      c
+      :mem)
+     tier-max
+     (record-get
+      [:record :join/clamp [[:mem [:option :i64]] [:tmax :i64]]]
+      c
+      :tmax)]
+    (let
+     [__kotoba_binding-some_1 mem]
+     (if
+      (option-some?-of [:option :i64] __kotoba_binding-some_1)
+      (let
+       [m (option-value-of [:option :i64] __kotoba_binding-some_1 0)]
+       (if (< m tier-max) m tier-max))
+      tier-max))),
+   :param-types [[:ref :join/clamp]]}
   {:name eligible-for-work?,
-   :params [can-kind max-res resident],
+   :params [w],
    :result :bool,
    :effects #{},
-   :body (if can-kind (if (< max-res resident) false true) false),
-   :param-types [:bool :i64 :i64]}],
+   :body
+   (let
+    [can-kind
+     (record-get
+      [:record
+       :join/work
+       [[:can-kind :bool] [:max-res :i64] [:res :i64]]]
+      w
+      :can-kind)
+     max-res
+     (record-get
+      [:record
+       :join/work
+       [[:can-kind :bool] [:max-res :i64] [:res :i64]]]
+      w
+      :max-res)
+     resident
+     (record-get
+      [:record
+       :join/work
+       [[:can-kind :bool] [:max-res :i64] [:res :i64]]]
+      w
+      :res)]
+    (if can-kind (if (< max-res resident) false true) false)),
+   :param-types [[:ref :join/work]]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:join{:can
+        "8539239fc7e39f134b8d943883de9fdd13713ded5df9dbb8be7d6ace251cdde1",
+        :clamp
+        "2171646be881792af126b197fea38650e6db72877270ec61e34cbdcd2d835e18",
+        :relay
+        "857e650d242a516f7b93af40930e4377a9f5506f90c5283077f2b2a771f4bfb5",
+        :work
+        "ee1f103a70c20d6a4cdd44dddb1df3763ef40684bf0103ebb234a7ef10e28674"},
  :exports
  [tier-browser
   tier-wasm
@@ -101,7 +167,15 @@
   can?
   clamp-resident
   eligible-for-work?],
- :schemas nil,
+ :schemas
+ #:join{:can [:record :join/can [[:tier :i64] [:kind :string]]],
+        :relay [:record :join/relay [[:tier :i64] [:inbound :bool]]],
+        :clamp
+        [:record :join/clamp [[:mem [:option :i64]] [:tmax :i64]]],
+        :work
+        [:record
+         :join/work
+         [[:can-kind :bool] [:max-res :i64] [:res :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

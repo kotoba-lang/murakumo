@@ -169,7 +169,9 @@
       (is (= "e" (:err r))))
     (let [cmd (tunnel/ensure-forward-command 18077 8077 "asher")
           via (oracle/call :tunnel 'ensure-forward-command
-                           [(oracle/as-i64 18077) (oracle/as-i64 8077) "asher"])]
+                           [(oracle/record [:record :tunnel/forward
+                                            [[:local-port :i64] [:remote-port :i64] [:host :string]]]
+                                           {:local-port 18077 :remote-port 8077 :host "asher"})])]
       (is (= via cmd))
       (is (string? cmd)))
     (let [cmd (tunnel/replace-forward-command 18900 8077 "gad")]

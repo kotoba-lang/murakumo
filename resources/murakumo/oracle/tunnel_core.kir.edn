@@ -80,11 +80,22 @@
     (string-concat (i64-str seconds) "s")),
    :param-types [:i64]}
   {:name scp-dest,
-   :params [host dest],
+   :params [s],
    :result :string,
    :effects #{},
-   :body (string-concat host (string-concat ":" dest)),
-   :param-types [:string :string]}
+   :body
+   (string-concat
+    (record-get
+     [:record :tunnel/scp [[:host :string] [:dest :string]]]
+     s
+     :host)
+    (string-concat
+     ":"
+     (record-get
+      [:record :tunnel/scp [[:host :string] [:dest :string]]]
+      s
+      :dest))),
+   :param-types [[:ref :tunnel/scp]]}
   {:name close-master-control-opt,
    :params [control-path],
    :result :string,
@@ -230,11 +241,30 @@
     (if (= n 0) -1 (parse-digits-go t 0))),
    :param-types [:string]}
   {:name pick-exit,
-   :params [has-rc rc ssh-exit],
+   :params [e],
    :result :i64,
    :effects #{},
-   :body (if has-rc rc ssh-exit),
-   :param-types [:bool :i64 :i64]}
+   :body
+   (if
+    (record-get
+     [:record
+      :tunnel/exit
+      [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]]
+     e
+     :has-rc)
+    (record-get
+     [:record
+      :tunnel/exit
+      [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]]
+     e
+     :rc)
+    (record-get
+     [:record
+      :tunnel/exit
+      [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]]
+     e
+     :ssh-exit)),
+   :param-types [[:ref :tunnel/exit]]}
   {:name err-ws?,
    :params [c],
    :result :bool,
@@ -369,14 +399,24 @@
    :body " 2>/dev/null",
    :param-types []}
   {:name forward-spec,
-   :params [local-port remote-port],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (string-concat
-    (i64-str local-port)
-    (string-concat (localhost-colon) (i64-str remote-port))),
-   :param-types [:i64 :i64]}
+    (i64-str
+     (record-get
+      [:record :tunnel/ports [[:local-port :i64] [:remote-port :i64]]]
+      p
+      :local-port))
+    (string-concat
+     (localhost-colon)
+     (i64-str
+      (record-get
+       [:record :tunnel/ports [[:local-port :i64] [:remote-port :i64]]]
+       p
+       :remote-port)))),
+   :param-types [[:ref :tunnel/ports]]}
   {:name ssh-forward-prefix,
    :params [],
    :result :string,
@@ -399,13 +439,38 @@
           (string-concat " " (string-concat (L-flag) " "))))))))),
    :param-types []}
   {:name ensure-forward-command,
-   :params [local-port remote-port host],
+   :params [f],
    :result :string,
    :effects #{},
    :body
    (let
-    [spec
-     (forward-spec local-port remote-port)
+    [local-port
+     (record-get
+      [:record
+       :tunnel/forward
+       [[:local-port :i64] [:remote-port :i64] [:host :string]]]
+      f
+      :local-port)
+     remote-port
+     (record-get
+      [:record
+       :tunnel/forward
+       [[:local-port :i64] [:remote-port :i64] [:host :string]]]
+      f
+      :remote-port)
+     host
+     (record-get
+      [:record
+       :tunnel/forward
+       [[:local-port :i64] [:remote-port :i64] [:host :string]]]
+      f
+      :host)
+     spec
+     (forward-spec
+      (record-new
+       [:record :tunnel/ports [[:local-port :i64] [:remote-port :i64]]]
+       local-port
+       remote-port))
      probe
      (string-concat
       (pgrep-bin)
@@ -427,17 +492,42 @@
        (string-concat
         (ssh-forward-prefix)
         (string-concat spec (string-concat " " host))))))),
-   :param-types [:i64 :i64 :string]}
+   :param-types [[:ref :tunnel/forward]]}
   {:name replace-forward-command,
-   :params [local-port remote-port host],
+   :params [f],
    :result :string,
    :effects #{},
    :body
    (let
-    [lp
+    [local-port
+     (record-get
+      [:record
+       :tunnel/forward
+       [[:local-port :i64] [:remote-port :i64] [:host :string]]]
+      f
+      :local-port)
+     remote-port
+     (record-get
+      [:record
+       :tunnel/forward
+       [[:local-port :i64] [:remote-port :i64] [:host :string]]]
+      f
+      :remote-port)
+     host
+     (record-get
+      [:record
+       :tunnel/forward
+       [[:local-port :i64] [:remote-port :i64] [:host :string]]]
+      f
+      :host)
+     lp
      (i64-str local-port)
      spec
-     (forward-spec local-port remote-port)
+     (forward-spec
+      (record-new
+       [:record :tunnel/ports [[:local-port :i64] [:remote-port :i64]]]
+       local-port
+       remote-port))
      kill
      (string-concat
       (pkill-bin)
@@ -455,7 +545,7 @@
        (string-concat
         (ssh-forward-prefix)
         (string-concat spec (string-concat " " host))))))),
-   :param-types [:i64 :i64 :string]}
+   :param-types [[:ref :tunnel/forward]]}
   {:name remote-curl-command,
    :params [url],
    :result :string,
@@ -466,7 +556,15 @@
     (string-concat url (curl-stderr-redirect))),
    :param-types [:string]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:tunnel{:exit
+          "f24afe35489d28d1d45ccef40862d3447b18ab27567ad36128f8b6c4ef902d3c",
+          :forward
+          "e1143e7f9aa95952a3e6341eb49e82a17b79d89bff0570180b9833c2c4dc03b4",
+          :ports
+          "d9ede3522a130dc0a089aadfcc949ec4d55a22882fb074031982a484d2ed4345",
+          :scp
+          "b090c4622d834a8d5c6411c24ee837eed3ee7b38408d64ce605ba856023d4781"},
  :exports
  [default-connect-timeout-s
   default-control-persist-s
@@ -513,7 +611,20 @@
   curl-stderr-redirect
   forward-spec
   ssh-forward-prefix],
- :schemas nil,
+ :schemas
+ #:tunnel{:scp [:record :tunnel/scp [[:host :string] [:dest :string]]],
+          :ports
+          [:record
+           :tunnel/ports
+           [[:local-port :i64] [:remote-port :i64]]],
+          :forward
+          [:record
+           :tunnel/forward
+           [[:local-port :i64] [:remote-port :i64] [:host :string]]],
+          :exit
+          [:record
+           :tunnel/exit
+           [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

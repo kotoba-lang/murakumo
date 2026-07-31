@@ -13,6 +13,18 @@
 (def export-prefix
   "tier-browser tier-wasm tier-native max-resident-bytes needs-relay? can? clamp-resident eligible-for-work?")
 
+(def ^:private can-ty
+  "[:record :join/can [[:tier :i64] [:kind :string]]]")
+
+(def ^:private relay-ty
+  "[:record :join/relay [[:tier :i64] [:inbound :bool]]]")
+
+(def ^:private clamp-ty
+  "[:record :join/clamp [[:mem [:option :i64]] [:tmax :i64]]]")
+
+(def ^:private work-ty
+  "[:record :join/work [[:can-kind :bool] [:max-res :i64] [:res :i64]]]")
+
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -50,9 +62,10 @@
         cases (into {} (map-indexed
                         (fn [i [t inbound]]
                           [(str "nr_" i)
-                           ;; Profile 5: needs-relay? is :bool
-                           (str "(if (needs-relay? " (tier-code t) " "
-                                (if inbound "true" "false") ") 1 0)")])
+                           ;; T5.2 native: single :join/relay record
+                           (str "(if (needs-relay? (record-new " relay-ty " "
+                                (tier-code t) " "
+                                (if inbound "true" "false") ")) 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [t inbound]] (map-indexed vector corpus)]
@@ -69,8 +82,9 @@
         cases (into {} (map-indexed
                         (fn [i [t k]]
                           [(str "c_" i)
-                           (str "(if (can? " (tier-code t) " "
-                                (kotoba-literal (kind-name k)) ") 1 0)")])
+                           (str "(if (can? (record-new " can-ty " "
+                                (tier-code t) " "
+                                (kotoba-literal (kind-name k)) ")) 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [t k]] (map-indexed vector corpus)]
@@ -93,7 +107,8 @@
         cases (into {} (map-indexed
                         (fn [i [mem tmax]]
                           [(str "cr_" i)
-                           (str "(clamp-resident " (opt-i64-form mem) " " tmax ")")])
+                           (str "(clamp-resident (record-new " clamp-ty " "
+                                (opt-i64-form mem) " " tmax "))")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [mem tmax]] (map-indexed vector corpus)]
@@ -109,10 +124,10 @@
         cases (into {} (map-indexed
                         (fn [i [can maxr res]]
                           [(str "ew_" i)
-                           ;; Profile 5: can-kind is :bool
-                           (str "(if (eligible-for-work? "
+                           ;; T5.2 native: single :join/work record
+                           (str "(if (eligible-for-work? (record-new " work-ty " "
                                 (if (= can 1) "true" "false")
-                                " " maxr " " res ") 1 0)")])
+                                " " maxr " " res ")) 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [can maxr res]] (map-indexed vector corpus)]

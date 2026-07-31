@@ -1,4 +1,12 @@
 (ns tunnel-core
+  (:schemas {;; T5.2 native guest record wire
+             :tunnel/scp [:record :tunnel/scp [[:host :string] [:dest :string]]]
+             :tunnel/ports [:record :tunnel/ports
+                            [[:local-port :i64] [:remote-port :i64]]]
+             :tunnel/forward [:record :tunnel/forward
+                              [[:local-port :i64] [:remote-port :i64] [:host :string]]]
+             :tunnel/exit [:record :tunnel/exit
+                           [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]]})
   (:export [default-connect-timeout-s default-control-persist-s rc-marker
             digit-char nat-str i64-str
             wrap-cmd connect-timeout-opt control-path-opt control-persist-opt
@@ -55,8 +63,8 @@
 (defn control-persist-opt [seconds :i64] :string
   (string-concat "ControlPersist=" (string-concat (i64-str seconds) "s")))
 
-(defn scp-dest [host :string dest :string] :string
-  (string-concat host (string-concat ":" dest)))
+(defn scp-dest [s [:ref :tunnel/scp]] :string
+  (string-concat (record-get s :host) (string-concat ":" (record-get s :dest))))
 
 (defn close-master-control-opt [control-path :string] :string
   (string-concat "ControlPath=" control-path))
@@ -139,10 +147,11 @@
       -1
       (parse-digits-go t 0))))
 
-(defn pick-exit [has-rc :bool rc :i64 ssh-exit :i64] :i64
+(defn pick-exit [e [:ref :tunnel/exit]] :i64
   ;; cljc sh-result: (if (some? rc) rc exit)
   ;; Profile 5: has-rc is a real :bool presence flag (not 0/1 i64).
-  (if has-rc rc ssh-exit))
+  ;; T5.2 native record.
+  (if (record-get e :has-rc) (record-get e :rc) (record-get e :ssh-exit)))
 
 (defn err-ws? [c :string] :bool
   (if (string=? c " ")
@@ -187,11 +196,12 @@
 (defn curl-prefix [] :string "curl -s -m 5 ")
 (defn curl-stderr-redirect [] :string " 2>/dev/null")
 
-(defn forward-spec [local-port :i64 remote-port :i64] :string
+(defn forward-spec [p [:ref :tunnel/ports]] :string
   ;; "{local}:localhost:{remote}"
+  ;; T5.2 native record.
   (string-concat
-   (i64-str local-port)
-   (string-concat (localhost-colon) (i64-str remote-port))))
+   (i64-str (record-get p :local-port))
+   (string-concat (localhost-colon) (i64-str (record-get p :remote-port)))))
 
 (defn ssh-forward-prefix [] :string
   ;; "ssh -o BatchMode=yes -fN -L "
@@ -213,9 +223,13 @@
           " "
           (string-concat (L-flag) " "))))))))))
 
-(defn ensure-forward-command [local-port :i64 remote-port :i64 host :string] :string
+(defn ensure-forward-command [f [:ref :tunnel/forward]] :string
   ;; pgrep -f '{spec} {host}' >/dev/null 2>&1 || ssh -o BatchMode=yes -fN -L {spec} {host}
-  (let [spec (forward-spec local-port remote-port)
+  ;; T5.2 native record.
+  (let [local-port (record-get f :local-port)
+        remote-port (record-get f :remote-port)
+        host (record-get f :host)
+        spec (forward-spec (record-new [:ref :tunnel/ports] local-port remote-port))
         probe (string-concat
                (pgrep-bin)
                (string-concat
@@ -239,10 +253,13 @@
         (ssh-forward-prefix)
         (string-concat spec (string-concat " " host))))))))
 
-(defn replace-forward-command [local-port :i64 remote-port :i64 host :string] :string
-  ;; pkill -f '{local}:localhost' 2>/dev/null; sleep 0.3; ssh -o BatchMode=yes -fN -L {spec} {host}
-  (let [lp (i64-str local-port)
-        spec (forward-spec local-port remote-port)
+(defn replace-forward-command [f [:ref :tunnel/forward]] :string
+  ;; pkill + sleep + ssh forward (see host). T5.2 native record.
+  (let [local-port (record-get f :local-port)
+        remote-port (record-get f :remote-port)
+        host (record-get f :host)
+        lp (i64-str local-port)
+        spec (forward-spec (record-new [:ref :tunnel/ports] local-port remote-port))
         kill (string-concat
               (pkill-bin)
               (string-concat

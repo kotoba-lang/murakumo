@@ -1,4 +1,11 @@
 (ns infer-join-core
+  (:schemas {;; T5.2 native guest record wire
+             :join/can [:record :join/can [[:tier :i64] [:kind :string]]]
+             :join/relay [:record :join/relay [[:tier :i64] [:inbound :bool]]]
+             :join/clamp [:record :join/clamp
+                          [[:mem [:option :i64]] [:tmax :i64]]]
+             :join/work [:record :join/work
+                         [[:can-kind :bool] [:max-res :i64] [:res :i64]]]})
   (:export [tier-browser tier-wasm tier-native
             max-resident-bytes needs-relay? can?
             clamp-resident eligible-for-work?]))
@@ -23,12 +30,14 @@
       4294967296
       13958643712)))
 
-(defn needs-relay? [tier :i64 inbound :bool] :bool
+(defn needs-relay? [r [:ref :join/relay]] :bool
   ;; cljc: browser/wasm always; native only when not inbound-reachable?
-  ;; inbound is host-projected :bool (inbound-reachable?).
-  (if (< tier 2)
-    true
-    (if inbound false true)))
+  ;; T5.2 native record: tier+inbound.
+  (let [tier (record-get r :tier)
+        inbound (record-get r :inbound)]
+    (if (< tier 2)
+      true
+      (if inbound false true))))
 
 (defn swarm-can? [kind :string] :bool
   (if (string=? kind "media-postproc")
@@ -48,22 +57,31 @@
         true
         (if (string=? kind "full-shard") true false)))))
 
-(defn can? [tier :i64 kind :string] :bool
+(defn can? [c [:ref :join/can]] :bool
   ;; cljc: (boolean (some #{kind} (:can (tier-of caps))))
-  (if (< tier 2)
-    (swarm-can? kind)
-    (native-can? kind)))
+  ;; T5.2 native record: tier+kind.
+  (let [tier (record-get c :tier)
+        kind (record-get c :kind)]
+    (if (< tier 2)
+      (swarm-can? kind)
+      (native-can? kind))))
 
-(defn clamp-resident [mem [:option :i64] tier-max :i64] :i64
+(defn clamp-resident [c [:ref :join/clamp]] :i64
   ;; cljc enrollment: (min (or mem-bytes tier-max) tier-max)
   ;; Profile 5: mem is [:option :i64] (none = absent), not -1 sentinel.
-  (if-some [m mem]
-    (if (< m tier-max) m tier-max)
-    tier-max))
+  ;; T5.2 native record: mem+tmax.
+  (let [mem (record-get c :mem)
+        tier-max (record-get c :tmax)]
+    (if-some [m mem]
+      (if (< m tier-max) m tier-max)
+      tier-max)))
 
-(defn eligible-for-work? [can-kind :bool max-res :i64 resident :i64] :bool
+(defn eligible-for-work? [w [:ref :join/work]] :bool
   ;; cljc: (and can? (<= resident max-resident-bytes))
-  ;; can-kind is host-projected capability membership
-  (if can-kind
-    (if (< max-res resident) false true)
-    false))
+  ;; T5.2 native record: can-kind/max-res/res.
+  (let [can-kind (record-get w :can-kind)
+        max-res (record-get w :max-res)
+        resident (record-get w :res)]
+    (if can-kind
+      (if (< max-res resident) false true)
+      false)))

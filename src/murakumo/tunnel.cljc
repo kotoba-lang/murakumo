@@ -35,6 +35,14 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private scp-schema
+  [:record :tunnel/scp [[:host :string] [:dest :string]]])
+(def ^:private forward-schema
+  [:record :tunnel/forward
+   [[:local-port :i64] [:remote-port :i64] [:host :string]]])
+(def ^:private exit-schema
+  [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]])
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def default-connect-timeout-s
@@ -189,8 +197,9 @@
   ([host local dest opts]
    (vec (concat [scp-bin] (conn-opts opts)
                 [local (o-record 'scp-dest
-                                   {:host host :dest dest}
-                                   [[:host :string] [:dest :string]])]))))
+                                   {:s (oracle/record scp-schema
+                                                      {:host host :dest dest})}
+                                   [[:s :raw]])]))))
 
 (defn close-master-argv
   "argv that shuts down a multiplexed connection's master socket. Run this when
@@ -206,8 +215,11 @@
    T5.2: structural forward map → call-record."
   [local-port remote-port host]
   (o-record 'ensure-forward-command
-            {:local-port local-port :remote-port remote-port :host host}
-            [[:local-port :i64] [:remote-port :i64] [:host :string]]))
+            {:f (oracle/record forward-schema
+                               {:local-port local-port
+                                :remote-port remote-port
+                                :host host})}
+            [[:f :raw]]))
 
 (defn replace-forward-command
   "Shell command that kills any forward on local-port, then starts a fresh one.
@@ -215,8 +227,11 @@
    T5.2: structural forward map → call-record."
   [local-port remote-port host]
   (o-record 'replace-forward-command
-            {:local-port local-port :remote-port remote-port :host host}
-            [[:local-port :i64] [:remote-port :i64] [:host :string]]))
+            {:f (oracle/record forward-schema
+                               {:local-port local-port
+                                :remote-port remote-port
+                                :host host})}
+            [[:f :raw]]))
 
 (defn remote-curl-command
   "Remote shell command for a bounded curl call from a node.
@@ -233,12 +248,11 @@
   [rc ssh-exit]
   (oracle/i64->host
    (o-record 'pick-exit
-             {:has-rc (some? rc)
-              :rc (or rc 0)
-              :ssh-exit (or ssh-exit 0)}
-             [[:has-rc :bool]
-              [:rc :i64]
-              [:ssh-exit :i64]])))
+             {:e (oracle/record exit-schema
+                                {:has-rc (some? rc)
+                                 :rc (or rc 0)
+                                 :ssh-exit (or ssh-exit 0)})}
+             [[:e :raw]])))
 
 (defn- trim-err
   "Trim stderr. Kotoba `trim-err` (required)."
