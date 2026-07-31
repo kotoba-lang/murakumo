@@ -243,12 +243,12 @@
 (defn launchd-daemon-path
   "System LaunchDaemon path for label. Kotoba (required)."
   [label]
-  (o 'launchd-daemon-path [(str label)]))
+  (o-record 'launchd-daemon-path {:label label} [[:label :string]]))
 
 (defn tee-plist-prefix
   "sudo tee … <<'PLIST'\\n prefix. Heredoc body stays host."
   [label]
-  (o 'tee-plist-prefix [(str label)]))
+  (o-record 'tee-plist-prefix {:label label} [[:label :string]]))
 
 (defn label-kv
   "Single k=v label pair. Host joins with comma. Kotoba (required).
@@ -269,7 +269,7 @@
 (defn did-peer-id
   "DID URI for a mesh PeerId (`did:key:` + body). Kotoba (required)."
   [peer-id]
-  (o 'did-peer-id [(str peer-id)]))
+  (o-record 'did-peer-id {:peer-id peer-id} [[:peer-id :string]]))
 
 (defn join-append
   "CSV-style fold step: empty acc ⇒ next only. Kotoba (required).
@@ -314,14 +314,14 @@
 (defn home-bin-path
   "Absolute `{{BIN}}` path under node home. Kotoba (required)."
   [home]
-  (o 'home-bin-path [(str home)]))
+  (o-record 'home-bin-path {:home home} [[:home :string]]))
 
 (defn operator-seed-missing?
   "True when a command requiring the fleet operator seed should fail.
    Kotoba (required)."
   [operator-seed]
   (oracle/bool->host
-   (o 'operator-seed-missing? [(str (or operator-seed ""))])))
+   (o-record 'operator-seed-missing? {:operator-seed operator-seed} [[:operator-seed :string]])))
 
 (defn provision-command-error
   "Validation error keyword for provision, or nil. Host branch."
@@ -369,7 +369,7 @@
                          (connect/node-class connect-spec node)
                          :live))))
     (let [p2p (node-p2p-port fleet node)]
-      (oracle/i64->host (o 'webrtc-port [(oracle/as-i64 p2p)])))))
+      (oracle/i64->host (o-record 'webrtc-port {:p2p p2p} [[:p2p :i64]])))))
 
 (defn bootstrap-str
   "Comma-list of `peerid@multiaddr` for every other node with a known PeerId.
@@ -390,7 +390,7 @@
   "Extract the libp2p PeerId from kotoba mesh log output containing `did:key:<peerid>`.
    Kotoba pure scan (required); blank → nil."
   [out]
-  (let [s (o 'peer-id-from-log [(str out)])]
+  (let [s (o-record 'peer-id-from-log {:out out} [[:out :string]])]
     (when-not (str/blank? (str s)) s)))
 
 (defn collected-peers
@@ -480,7 +480,7 @@
 (defn live-link-count-output
   "Normalise the stdout from live-link-count-command. Kotoba (required)."
   [out]
-  (o 'live-link-count-output [(str out)]))
+  (o-record 'live-link-count-output {:out out} [[:out :string]]))
 
 (defn labels-env
   "Render node labels as the launchd env string `k=v,k=v`.

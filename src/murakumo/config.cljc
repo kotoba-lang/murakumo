@@ -22,6 +22,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── residual path suffix tokens (oracle SSoT) ────────────────────────
 
 (def kotoba-dir-suffix (o 'kotoba-dir-suffix []))
@@ -42,7 +48,7 @@
   "Default sibling kotoba checkout location under a user home.
    Kotoba `default-kotoba-dir` (required)."
   [home]
-  (o 'default-kotoba-dir [(str (or home ""))]))
+  (o-record 'default-kotoba-dir {:home home} [[:home :string]]))
 
 (defn kotoba-dir
   "Resolve the kotoba checkout directory from env.
@@ -166,10 +172,10 @@
   (env-values getenv runtime-env-keys))
 
 (defn pinned-bin-dir [user-dir]
-  (o 'pinned-bin-dir [(str user-dir)]))
+  (o-record 'pinned-bin-dir {:user-dir user-dir} [[:user-dir :string]]))
 
 (defn release-bin-dir [kotoba-dir]
-  (o 'release-bin-dir [(str kotoba-dir)]))
+  (o-record 'release-bin-dir {:kotoba-dir kotoba-dir} [[:kotoba-dir :string]]))
 
 (defn resolve-local-bin
   "Resolve the binary dir preference order.
@@ -203,16 +209,16 @@
     [:pinned-exists? :bool]]))
 
 (defn kotoba-server-bin [bin-dir]
-  (o 'kotoba-server-bin [(str bin-dir)]))
+  (o-record 'kotoba-server-bin {:bin-dir bin-dir} [[:bin-dir :string]]))
 
 (defn local-kotoba-bin [bin-dir]
-  (o 'local-kotoba-bin [(str bin-dir)]))
+  (o-record 'local-kotoba-bin {:bin-dir bin-dir} [[:bin-dir :string]]))
 
 (defn pinned-wit-dir [user-dir]
-  (o 'pinned-wit-dir [(str user-dir)]))
+  (o-record 'pinned-wit-dir {:user-dir user-dir} [[:user-dir :string]]))
 
 (defn runtime-wit-dir [kotoba-dir]
-  (o 'runtime-wit-dir [(str kotoba-dir)]))
+  (o-record 'runtime-wit-dir {:kotoba-dir kotoba-dir} [[:kotoba-dir :string]]))
 
 (defn resolve-wit-dir
   "Resolve deploy WIT dir from pinned WIT existence.
@@ -230,7 +236,7 @@
     [:pinned-wit-exists? :bool]]))
 
 (defn build-manifest-path [user-dir]
-  (o 'build-manifest-path [(str user-dir)]))
+  (o-record 'build-manifest-path {:user-dir user-dir} [[:user-dir :string]]))
 
 (defn peers-path
   "Control-plane peer-id cache path under the repo root."

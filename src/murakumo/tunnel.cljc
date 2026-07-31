@@ -101,13 +101,13 @@
   (o 'control-master-opt []))
 
 (defn- connect-timeout-opt [seconds]
-  (o 'connect-timeout-opt [(oracle/as-i64 seconds)]))
+  (o-record 'connect-timeout-opt {:seconds seconds} [[:seconds :i64]]))
 
 (defn- control-path-opt [path]
-  (o 'control-path-opt [(str path)]))
+  (o-record 'control-path-opt {:path path} [[:path :string]]))
 
 (defn- control-persist-opt [seconds]
-  (o 'control-persist-opt [(oracle/as-i64 seconds)]))
+  (o-record 'control-persist-opt {:seconds seconds} [[:seconds :i64]]))
 
 (def ssh-opts
   [o-flag (batch-mode-opt)
@@ -146,7 +146,7 @@
    `parse-rc` extracts and strips.
    Kotoba `wrap-cmd` (required)."
   [cmd]
-  (o 'wrap-cmd [(str cmd)]))
+  (o-record 'wrap-cmd {:cmd cmd} [[:cmd :string]]))
 
 (defn parse-rc
   "Split captured stdout into [clean-stdout rc-or-nil]. rc is nil when the
@@ -158,13 +158,13 @@
   (let [lines (str/split-lines (str out))
         marker? (fn [l]
                   (let [t (str/trim (str l))]
-                    (oracle/bool->host (o 'marker-prefix? [t]))))
+                    (oracle/bool->host (o-record 'marker-prefix? {:t t} [[:t :string]]))))
         rc-line (last (filter marker? lines))
         digits (when rc-line
                  (let [t (str/trim (str rc-line))]
-                   (o 'strip-marker-digits [t])))
+                   (o-record 'strip-marker-digits {:t t} [[:t :string]])))
         rc (when digits
-             (let [v (oracle/i64->host (o 'parse-digits [(str digits)]))]
+             (let [v (oracle/i64->host (o-record 'parse-digits {:digits digits} [[:digits :string]]))]
                (when-not (neg? v) v)))]
     [(str/trim (str/join "\n" (remove marker? lines))) rc]))
 
@@ -197,7 +197,7 @@
    a batch finishes instead of leaving masters to expire on ControlPersist.
    Bin/flags via ssh-bin / o-flag / O-flag / exit-ctl."
   [host control-path]
-  [ssh-bin o-flag (o 'close-master-control-opt [(str control-path)])
+  [ssh-bin o-flag (o-record 'close-master-control-opt {:control-path control-path} [[:control-path :string]])
    O-flag exit-ctl host])
 
 (defn ensure-forward-command
@@ -222,7 +222,7 @@
   "Remote shell command for a bounded curl call from a node.
    Kotoba `remote-curl-command` (required)."
   [url]
-  (o 'remote-curl-command [(str url)]))
+  (o-record 'remote-curl-command {:url url} [[:url :string]]))
 
 ;; --- result shapes ----------------------------------------------------------
 
@@ -243,7 +243,7 @@
 (defn- trim-err
   "Trim stderr. Kotoba `trim-err` (required)."
   [err]
-  (o 'trim-err [(str (or err ""))]))
+  (o-record 'trim-err {:err err} [[:err :string]]))
 
 (defn sh-result
   "Normalise process output from an SSH command.

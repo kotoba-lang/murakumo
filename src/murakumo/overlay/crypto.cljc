@@ -55,7 +55,7 @@
 (defn strip-b64-pad
   "Strip '=' padding (kotoba `strip-b64-pad`; requires oracle)."
   [s]
-  (o 'strip-b64-pad [(str s)]))
+  (o-record 'strip-b64-pad {:s s} [[:s :string]]))
 
 (defn sealed-alg-ok?
   "True when sealed map carries the expected AES-GCM alg.

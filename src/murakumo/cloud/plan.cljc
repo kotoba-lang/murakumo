@@ -135,32 +135,32 @@
 (defn routes-title
   "CLI title for routes listing. Kotoba `routes-title` (required)."
   [overlay]
-  (o 'routes-title [(str overlay)]))
+  (o-record 'routes-title {:overlay overlay} [[:overlay :string]]))
 
 (defn bootstrap-title
   "CLI title for bootstrap listing. Kotoba `bootstrap-title` (required)."
   [overlay]
-  (o 'bootstrap-title [(str overlay)]))
+  (o-record 'bootstrap-title {:overlay overlay} [[:overlay :string]]))
 
 (defn unknown-node-line
   "Unknown node error line. Kotoba `unknown-node-line` (required)."
   [node-name]
-  (o 'unknown-node-line [(str node-name)]))
+  (o-record 'unknown-node-line {:node-name node-name} [[:node-name :string]]))
 
 (defn unknown-relay-line
   "Unknown relay error line. Kotoba `unknown-relay-line` (required)."
   [relay-name]
-  (o 'unknown-relay-line [(str relay-name)]))
+  (o-record 'unknown-relay-line {:relay-name relay-name} [[:relay-name :string]]))
 
 (defn dial-denied-line
   "Dial policy-denied title. Kotoba `dial-denied-line` (required)."
   [node-name]
-  (o 'dial-denied-line [(str node-name)]))
+  (o-record 'dial-denied-line {:node-name node-name} [[:node-name :string]]))
 
 (defn connect-denied-line
   "Connect policy-denied title. Kotoba `connect-denied-line` (required)."
   [node-name]
-  (o 'connect-denied-line [(str node-name)]))
+  (o-record 'connect-denied-line {:node-name node-name} [[:node-name :string]]))
 
 (defn dial-ok-title
   "Dial authorized title. Kotoba `dial-ok-title` (required).
@@ -173,12 +173,12 @@
 (defn connect-ok-title
   "Connect authorized title. Kotoba `connect-ok-title` (required)."
   [node-name]
-  (o 'connect-ok-title [(str node-name)]))
+  (o-record 'connect-ok-title {:node-name node-name} [[:node-name :string]]))
 
 (defn relay-ok-title
   "Relay ok title. Kotoba `relay-ok-title` (required)."
   [relay-name]
-  (o 'relay-ok-title [(str relay-name)]))
+  (o-record 'relay-ok-title {:relay-name relay-name} [[:relay-name :string]]))
 
 (defn from-to-cap-reason
   "from/to/capability/reason detail line. Kotoba SSoT (required).
@@ -200,17 +200,17 @@
 (defn relay-fallback-line
   "relay fallback detail line. Kotoba SSoT (required)."
   [endpoint]
-  (o 'relay-fallback-line [(str endpoint)]))
+  (o-record 'relay-fallback-line {:endpoint endpoint} [[:endpoint :string]]))
 
 (defn reason-line
   "reason= detail line. Kotoba SSoT (required)."
   [reason]
-  (o 'reason-line [(str reason)]))
+  (o-record 'reason-line {:reason reason} [[:reason :string]]))
 
 (defn indent-argv-line
   "Two-space indented argv join line. Kotoba SSoT (required)."
   [argv-joined]
-  (o 'indent-argv-line [(str argv-joined)]))
+  (o-record 'indent-argv-line {:argv-joined argv-joined} [[:argv-joined :string]]))
 
 (defn address-family-line
   "Summary address-family + node/relay counts. Kotoba SSoT (required).
@@ -231,7 +231,7 @@
 (defn skipped-reason-suffix
   "Trailing ' skipped reason=…' fragment (name column padding stays host)."
   [reason]
-  (o 'skipped-reason-suffix [(str reason)]))
+  (o-record 'skipped-reason-suffix {:reason reason} [[:reason :string]]))
 
 ;; ── oracle-required parse-flags tokens + classifiers ─────────────────────
 
@@ -294,88 +294,88 @@
 (defn command-token
   "Known CLI command name for argv token, or \"\". Kotoba SSoT (required)."
   [a]
-  (o 'command-token [(str a)]))
+  (o-record 'command-token {:a a} [[:a :string]]))
 
 (defn- is-cmd-plan? [a]
-  (oracle/bool->host (o 'is-cmd-plan? [(str a)])))
+  (oracle/bool->host (o-record 'is-cmd-plan? {:a a} [[:a :string]])))
 
 (defn- is-cmd-records? [a]
-  (oracle/bool->host (o 'is-cmd-records? [(str a)])))
+  (oracle/bool->host (o-record 'is-cmd-records? {:a a} [[:a :string]])))
 
 (defn- is-cmd-routes? [a]
-  (oracle/bool->host (o 'is-cmd-routes? [(str a)])))
+  (oracle/bool->host (o-record 'is-cmd-routes? {:a a} [[:a :string]])))
 
 (defn- is-cmd-dial? [a]
-  (oracle/bool->host (o 'is-cmd-dial? [(str a)])))
+  (oracle/bool->host (o-record 'is-cmd-dial? {:a a} [[:a :string]])))
 
 (defn- is-cmd-connect? [a]
-  (oracle/bool->host (o 'is-cmd-connect? [(str a)])))
+  (oracle/bool->host (o-record 'is-cmd-connect? {:a a} [[:a :string]])))
 
 (defn- is-cmd-relay? [a]
-  (oracle/bool->host (o 'is-cmd-relay? [(str a)])))
+  (oracle/bool->host (o-record 'is-cmd-relay? {:a a} [[:a :string]])))
 
 (defn- is-cmd-bootstrap? [a]
-  (oracle/bool->host (o 'is-cmd-bootstrap? [(str a)])))
+  (oracle/bool->host (o-record 'is-cmd-bootstrap? {:a a} [[:a :string]])))
 
 (defn- is-flag-cloud? [a]
-  (oracle/bool->host (o 'is-flag-cloud? [(str a)])))
+  (oracle/bool->host (o-record 'is-flag-cloud? {:a a} [[:a :string]])))
 
 (defn- is-flag-fleet? [a]
-  (oracle/bool->host (o 'is-flag-fleet? [(str a)])))
+  (oracle/bool->host (o-record 'is-flag-fleet? {:a a} [[:a :string]])))
 
 (defn- is-flag-target? [a]
-  (oracle/bool->host (o 'is-flag-target? [(str a)])))
+  (oracle/bool->host (o-record 'is-flag-target? {:a a} [[:a :string]])))
 
 (defn- is-flag-from? [a]
-  (oracle/bool->host (o 'is-flag-from? [(str a)])))
+  (oracle/bool->host (o-record 'is-flag-from? {:a a} [[:a :string]])))
 
 (defn- is-flag-to? [a]
-  (oracle/bool->host (o 'is-flag-to? [(str a)])))
+  (oracle/bool->host (o-record 'is-flag-to? {:a a} [[:a :string]])))
 
 (defn- is-flag-capability? [a]
-  (oracle/bool->host (o 'is-flag-capability? [(str a)])))
+  (oracle/bool->host (o-record 'is-flag-capability? {:a a} [[:a :string]])))
 
 (defn- is-flag-driver? [a]
-  (oracle/bool->host (o 'is-flag-driver? [(str a)])))
+  (oracle/bool->host (o-record 'is-flag-driver? {:a a} [[:a :string]])))
 
 (defn- is-flag-format? [a]
-  (oracle/bool->host (o 'is-flag-format? [(str a)])))
+  (oracle/bool->host (o-record 'is-flag-format? {:a a} [[:a :string]])))
 
 (defn- is-flag-auth-key? [a]
-  (oracle/bool->host (o 'is-flag-auth-key? [(str a)])))
+  (oracle/bool->host (o-record 'is-flag-auth-key? {:a a} [[:a :string]])))
 
 (defn- is-flag-dash? [a]
-  (oracle/bool->host (o 'is-flag-dash? [(str a)])))
+  (oracle/bool->host (o-record 'is-flag-dash? {:a a} [[:a :string]])))
 
 (defn- is-positional-target? [a]
-  (oracle/bool->host (o 'is-positional-target? [(str a)])))
+  (oracle/bool->host (o-record 'is-positional-target? {:a a} [[:a :string]])))
 
 (defn- flag-cloud-value [a]
-  (o 'flag-cloud-value [(str a)]))
+  (o-record 'flag-cloud-value {:a a} [[:a :string]]))
 
 (defn- flag-fleet-value [a]
-  (o 'flag-fleet-value [(str a)]))
+  (o-record 'flag-fleet-value {:a a} [[:a :string]]))
 
 (defn- flag-target-value [a]
-  (o 'flag-target-value [(str a)]))
+  (o-record 'flag-target-value {:a a} [[:a :string]]))
 
 (defn- flag-from-value [a]
-  (o 'flag-from-value [(str a)]))
+  (o-record 'flag-from-value {:a a} [[:a :string]]))
 
 (defn- flag-to-value [a]
-  (o 'flag-to-value [(str a)]))
+  (o-record 'flag-to-value {:a a} [[:a :string]]))
 
 (defn- flag-capability-value [a]
-  (o 'flag-capability-value [(str a)]))
+  (o-record 'flag-capability-value {:a a} [[:a :string]]))
 
 (defn- flag-driver-value [a]
-  (o 'flag-driver-value [(str a)]))
+  (o-record 'flag-driver-value {:a a} [[:a :string]]))
 
 (defn- flag-format-value [a]
-  (o 'flag-format-value [(str a)]))
+  (o-record 'flag-format-value {:a a} [[:a :string]]))
 
 (defn- flag-auth-key-value [a]
-  (o 'flag-auth-key-value [(str a)]))
+  (o-record 'flag-auth-key-value {:a a} [[:a :string]]))
 
 (defn merge-defaults [cloud]
   (merge-with (fn [a b]

@@ -246,7 +246,7 @@
    Header/payload/sig tokens from oracle; b64url + seg join host."
   [did]
   (str (b64url (o 'jwt-header-json [])) jwt-seg-sep
-       (b64url (o 'jwt-payload-json [(str did)])) jwt-seg-sep
+       (b64url (o-record 'jwt-payload-json {:did did} [[:did :string]])) jwt-seg-sep
        (o 'op-token-sig-seg [])))
 
 (defn graph-name-fleet

@@ -35,7 +35,7 @@
 (defn capacity-for-usable
   "Usable bytes → mlx-moe capacity, or nil below the smallest measured tier."
   ([usable-bytes]
-   (let [c (oracle/i64->host (o 'capacity-default [(oracle/as-i64 usable-bytes)]))]
+   (let [c (oracle/i64->host (o-record 'capacity-default {:usable-bytes usable-bytes} [[:usable-bytes :i64]]))]
      (when (pos? c) c)))
   ([model usable-bytes]
    (if-let [custom (:model/mlx-moe-capacity-tiers model)]

@@ -154,13 +154,18 @@
                                 (contains? (set nodes) (:name node))))}))
 
 (defn eligible?
-  "Can `node` run `task`? Kotoba `task-eligible?` with bool eligibility record."
+  "Can `node` run `task`? Kotoba `task-eligible?` with bool eligibility record.
+   T5.2: structural map → call-record (eligibility record as :raw)."
   [node task]
   (oracle/bool->host
-   (o 'task-eligible?
-      [(oracle/record eligibility-schema (eligibility-fields node task))
-       (long (or (:mem-bytes node) 0))
-       (long (or (:min-mem-bytes task) 0))])))
+   (o-record 'task-eligible?
+             {:eligibility (oracle/record eligibility-schema
+                                           (eligibility-fields node task))
+              :mem-bytes (or (:mem-bytes node) 0)
+              :min-mem (or (:min-mem-bytes task) 0)}
+             [[:eligibility :raw]
+              [:mem-bytes :i64]
+              [:min-mem :i64]])))
 
 (defn node-score
   "Lower is better. Fill ratio dominates; load1 / memory / name break ties."

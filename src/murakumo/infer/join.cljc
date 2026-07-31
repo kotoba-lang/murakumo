@@ -34,7 +34,7 @@
     2))
 
 (defn- max-res-for-tier [code]
-  (oracle/i64->host (o 'max-resident-bytes [(oracle/as-i64 code)])))
+  (oracle/i64->host (o-record 'max-resident-bytes {:code code} [[:code :i64]])))
 
 (def tiers
   "Participation tiers, widest-reach first."

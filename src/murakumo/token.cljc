@@ -131,8 +131,8 @@
   via Product Value ABI options); map assembly stays host.
    T5.2: claim-exp uses call-record."
   [{:keys [sub scope now ttl]}]
-  (let [sub' (o 'claim-sub [(oracle/option-string sub)])
-        scope' (o 'claim-scope [(oracle/option-string scope)])
+  (let [sub' (o-record 'claim-sub {:claim_sub (oracle/option-string sub)} [[:claim_sub :raw]])
+        scope' (o-record 'claim-scope {:claim_scope (oracle/option-string scope)} [[:claim_scope :raw]])
         exp' (oracle/i64->host
               (o-record 'claim-exp
                         {:now now :ttl ttl}
@@ -180,7 +180,7 @@
 (defn signing-input
   "HMAC message: version + '.' + payloadSeg. Kotoba required."
   [payload-seg]
-  (o 'signing-input [(str payload-seg)]))
+  (o-record 'signing-input {:payload-seg payload-seg} [[:payload-seg :string]]))
 
 (defn wire-token
   "mk1.<payloadSeg>.<sig>. Kotoba required.
@@ -191,7 +191,7 @@
             [[:payload :string] [:sig :string]]))
 
 (defn version-ok? [v]
-  (oracle/bool->host (o 'version-ok? [(str v)])))
+  (oracle/bool->host (o-record 'version-ok? {:v v} [[:v :string]])))
 
 (defn parts-present?
   "All three wire segments present (non-blank). Profile 5: guest :bool.
