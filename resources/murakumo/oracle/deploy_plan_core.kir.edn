@@ -138,27 +138,71 @@
    :body (string-concat (localhost-url-prefix) (i64-str port)),
    :param-types [:i64]}
   {:name last-slash-index,
-   :params [s i best],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [n (string-byte-length s)]
+    [s
+     (record-get
+      [:record
+       :deploy/last-slash
+       [[:s :string] [:i :i64] [:best :i64]]]
+      x
+      :s)
+     i
+     (record-get
+      [:record
+       :deploy/last-slash
+       [[:s :string] [:i :i64] [:best :i64]]]
+      x
+      :i)
+     best
+     (record-get
+      [:record
+       :deploy/last-slash
+       [[:s :string] [:i :i64] [:best :i64]]]
+      x
+      :best)
+     n
+     (string-byte-length s)]
     (if
      (< i n)
      (if
       (string=? (string-substring s i (+ i 1)) (path-sep))
-      (last-slash-index s (+ i 1) i)
-      (last-slash-index s (+ i 1) best))
+      (last-slash-index
+       (record-new
+        [:record
+         :deploy/last-slash
+         [[:s :string] [:i :i64] [:best :i64]]]
+        s
+        (+ i 1)
+        i))
+      (last-slash-index
+       (record-new
+        [:record
+         :deploy/last-slash
+         [[:s :string] [:i :i64] [:best :i64]]]
+        s
+        (+ i 1)
+        best)))
      best)),
-   :param-types [:string :i64 :i64]}
+   :param-types [[:ref :deploy/last-slash]]}
   {:name manifest-dir,
    :params [manifest],
    :result :string,
    :effects #{},
    :body
    (let
-    [slash (last-slash-index manifest 0 -1)]
+    [slash
+     (last-slash-index
+      (record-new
+       [:record
+        :deploy/last-slash
+        [[:s :string] [:i :i64] [:best :i64]]]
+       manifest
+       0
+       -1))]
     (if (< slash 0) "." (string-substring manifest 0 slash))),
    :param-types [:string]}
   {:name ws?,
@@ -474,33 +518,81 @@
     false),
    :param-types [:string]}
   {:name digit-of-go,
-   :params [digits c i],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [n (string-byte-length digits)]
+    [digits
+     (record-get
+      [:record
+       :deploy/digit-of-go
+       [[:digits :string] [:c :string] [:i :i64]]]
+      x
+      :digits)
+     c
+     (record-get
+      [:record
+       :deploy/digit-of-go
+       [[:digits :string] [:c :string] [:i :i64]]]
+      x
+      :c)
+     i
+     (record-get
+      [:record
+       :deploy/digit-of-go
+       [[:digits :string] [:c :string] [:i :i64]]]
+      x
+      :i)
+     n
+     (string-byte-length digits)]
     (if
      (< i n)
      (if
       (string=? (string-substring digits i (+ i 1)) c)
       i
-      (digit-of-go digits c (+ i 1)))
+      (digit-of-go
+       (record-new
+        [:record
+         :deploy/digit-of-go
+         [[:digits :string] [:c :string] [:i :i64]]]
+        digits
+        c
+        (+ i 1))))
      0)),
-   :param-types [:string :string :i64]}
+   :param-types [[:ref :deploy/digit-of-go]]}
   {:name digit-of,
    :params [c],
    :result :i64,
    :effects #{},
-   :body (digit-of-go "0123456789" c 0),
+   :body
+   (digit-of-go
+    (record-new
+     [:record
+      :deploy/digit-of-go
+      [[:digits :string] [:c :string] [:i :i64]]]
+     "0123456789"
+     c
+     0)),
    :param-types [:string]}
   {:name parse-digits-go,
-   :params [s acc],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [n (string-byte-length s)]
+    [s
+     (record-get
+      [:record :deploy/digits-go [[:s :string] [:acc :i64]]]
+      x
+      :s)
+     acc
+     (record-get
+      [:record :deploy/digits-go [[:s :string] [:acc :i64]]]
+      x
+      :acc)
+     n
+     (string-byte-length s)]
     (if
      (= n 0)
      acc
@@ -509,10 +601,12 @@
       (if
        (digit-val? c)
        (parse-digits-go
-        (string-substring s 1 n)
-        (+ (* acc 10) (digit-of c)))
+        (record-new
+         [:record :deploy/digits-go [[:s :string] [:acc :i64]]]
+         (string-substring s 1 n)
+         (+ (* acc 10) (digit-of c))))
        -1)))),
-   :param-types [:string :i64]}
+   :param-types [[:ref :deploy/digits-go]]}
   {:name parse-digits,
    :params [s],
    :result :i64,
@@ -520,7 +614,14 @@
    :body
    (let
     [t (trim-ws s) n (string-byte-length t)]
-    (if (= n 0) -1 (parse-digits-go t 0))),
+    (if
+     (= n 0)
+     -1
+     (parse-digits-go
+      (record-new
+       [:record :deploy/digits-go [[:s :string] [:acc :i64]]]
+       t
+       0)))),
    :param-types [:string]}
   {:name execution-observed?,
    :params [grep-count-out],
@@ -692,13 +793,19 @@
  :oracle-value nil,
  :schema-identities
  #:deploy{:app-deploy
-          "869d82009d5065f6bb2a1f72cc673fd99c20bdb401697e94fb1834ed3a3facef",
+          "ba55ebbc84ec9f27cd3c0a515ddf4fe1568ffa8ab30d19a698ab5a8cba5d89f7",
           :app-manifest
-          "dd78ecbdb9718f44776ac3f503f94b5f79b67b964f0bb9caab6493b72b787655",
+          "35539fca1dca53476f3b92c1a6408bfe20fda0e5e2b6f064366299b95bea1ef3",
           :component-build
-          "7020a4e57be3d3e93eabf20faf0259d8b1979a4e72fb4ce412dcb9279ba9b187",
+          "fce0a44e915a65a97b87b7192a98954592c1b2fd268be46d2bc6bdfdfd76e140",
+          :digit-of-go
+          "53459406d493d475b5e1f47b935c9e0c96da4f6bac1a87cc1d4e4687c04672c4",
+          :digits-go
+          "e47d718d8c08ff1be5e66af428ad56ea281125fd1f991cc58c8a930486d811b5",
           :join-path
-          "83745186a948cc49f71023fd09395b88487305cfec5fe873eceb474ac9670d61"},
+          "7b3ed07954b98c33b3b195aeb9983749166acbfa89da849e2aa347fda4b463a8",
+          :last-slash
+          "7a8e507e8659118363f19fb5dd00ee2975ae770bf6f44553a9d4e87de0cba7c2"},
  :exports
  [default-wasm
   default-publish-node
@@ -786,7 +893,17 @@
            [[:kotoba :string]
             [:manifest :string]
             [:wit :string]
-            [:port :i64]]]},
+            [:port :i64]]],
+          :last-slash
+          [:record
+           :deploy/last-slash
+           [[:s :string] [:i :i64] [:best :i64]]],
+          :digit-of-go
+          [:record
+           :deploy/digit-of-go
+           [[:digits :string] [:c :string] [:i :i64]]],
+          :digits-go
+          [:record :deploy/digits-go [[:s :string] [:acc :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

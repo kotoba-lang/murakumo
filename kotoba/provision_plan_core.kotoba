@@ -25,7 +25,12 @@
              :provision/plist-replace [:record :provision/plist-replace
                                        [[:tmpl :string] [:ph :string] [:val :string]]]
              :provision/write-plist [:record :provision/write-plist
-                                     [[:label :string] [:body :string]]]})
+                                     [[:label :string] [:body :string]]]
+             ;; T5.2 residual: string-scan multi-arg → single guest records
+             :provision/prefix-at [:record :provision/prefix-at
+                                   [[:s :string] [:prefix :string] [:i :i64]]]
+             :provision/take-alnum [:record :provision/take-alnum
+                                    [[:s :string] [:i :i64] [:acc :string]]]})
   (:export [plist-label remote-bin remote-store ssh-rsync-options
             peer-advertise-wait-ms default-p2p-port
             digit-char nat-str i64-str
@@ -441,37 +446,49 @@
     true
     false))
 
-(defn find-prefix-at [s :string prefix :string i :i64] :i64
+(defn find-prefix-at [x [:ref :provision/prefix-at]] :i64
   ;; first index of prefix in s at/after i, or -1
-  (let [n (string-byte-length s)
+  ;; T5.2 residual: s+prefix+i on one guest record
+  (let [s (record-get x :s)
+        prefix (record-get x :prefix)
+        i (record-get x :i)
+        n (string-byte-length s)
         p (string-byte-length prefix)]
     (if (or (= p 0) (> (+ i p) n))
       -1
       (if (string=? (string-substring s i (+ i p)) prefix)
         i
-        (find-prefix-at s prefix (+ i 1))))))
+        (find-prefix-at (record-new [:ref :provision/prefix-at]
+                                    s prefix (+ i 1)))))))
 
-(defn take-alnum [s :string i :i64 acc :string] :string
+(defn take-alnum [x [:ref :provision/take-alnum]] :string
   ;; consume [A-Za-z0-9]* from s[i..] into acc
-  (let [n (string-byte-length s)]
+  ;; T5.2 residual: s+i+acc on one guest record
+  (let [s (record-get x :s)
+        i (record-get x :i)
+        acc (record-get x :acc)
+        n (string-byte-length s)]
     (if (>= i n)
       acc
       (let [c (string-substring s i (+ i 1))]
         (if (alnum-char? c)
-          (take-alnum s (+ i 1) (string-concat acc c))
+          (take-alnum (record-new [:ref :provision/take-alnum]
+                                  s (+ i 1) (string-concat acc c)))
           acc)))))
 
 (defn peer-id-from-log [out :string] :string
   ;; cljc re-find did:key:(12D3[A-Za-z0-9]*) → capture group (body only)
   ;; empty string when no match (host maps blank → nil)
   (let [needle (string-concat (did-key-prefix) (peer-id-body-prefix))
-        idx (find-prefix-at out needle 0)]
+        idx (find-prefix-at (record-new [:ref :provision/prefix-at]
+                                        out needle 0))]
     (if (< idx 0)
       ""
       (let [body-start (+ idx (string-byte-length (did-key-prefix)))
             n (string-byte-length out)
             rest (string-substring out body-start n)]
-        (take-alnum rest 0 "")))))
+        (take-alnum (record-new [:ref :provision/take-alnum]
+                                rest 0 ""))))))
 
 (defn write-plist-shell [w [:ref :provision/write-plist]] :string
   ;; cljc: (str (tee-plist-prefix label) body plist-heredoc-footer)

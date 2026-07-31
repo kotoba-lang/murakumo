@@ -9,7 +9,14 @@
                                        [:wit :string] [:wasm :string]]]
              :deploy/app-deploy [:record :deploy/app-deploy
                                  [[:kotoba :string] [:manifest :string]
-                                  [:wit :string] [:port :i64]]]})
+                                  [:wit :string] [:port :i64]]]
+             ;; T5.2 residual: string-scan + digit-scanner multi-arg
+             :deploy/last-slash [:record :deploy/last-slash
+                                 [[:s :string] [:i :i64] [:best :i64]]]
+             :deploy/digit-of-go [:record :deploy/digit-of-go
+                                  [[:digits :string] [:c :string] [:i :i64]]]
+             :deploy/digits-go [:record :deploy/digits-go
+                                [[:s :string] [:acc :i64]]]})
   (:export [default-wasm default-publish-node
             artifact-forward-port publish-forward-port
             forward-settle-ms placement-wait-ms
@@ -115,18 +122,23 @@
 (defn localhost-url [port :i64] :string
   (string-concat (localhost-url-prefix) (i64-str port)))
 
-(defn last-slash-index [s :string i :i64 best :i64] :i64
+(defn last-slash-index [x [:ref :deploy/last-slash]] :i64
   ;; scan [0,n) for last path-sep; returns -1 if none
-  (let [n (string-byte-length s)]
+  ;; T5.2 residual: s+i+best on one guest record
+  (let [s (record-get x :s)
+        i (record-get x :i)
+        best (record-get x :best)
+        n (string-byte-length s)]
     (if (< i n)
       (if (string=? (string-substring s i (+ i 1)) (path-sep))
-        (last-slash-index s (+ i 1) i)
-        (last-slash-index s (+ i 1) best))
+        (last-slash-index (record-new [:ref :deploy/last-slash] s (+ i 1) i))
+        (last-slash-index (record-new [:ref :deploy/last-slash] s (+ i 1) best)))
       best)))
 
 (defn manifest-dir [manifest :string] :string
   ;; cljc: replace trailing /file → "" ; if unchanged → "."
-  (let [slash (last-slash-index manifest 0 -1)]
+  (let [slash (last-slash-index (record-new [:ref :deploy/last-slash]
+                                             manifest 0 -1))]
     (if (< slash 0)
       "."
       (string-substring manifest 0 slash))))
@@ -265,25 +277,34 @@
     (if (string-contains? "0123456789" c) true false)
     false))
 
-(defn digit-of-go [digits :string c :string i :i64] :i64
-  (let [n (string-byte-length digits)]
+(defn digit-of-go [x [:ref :deploy/digit-of-go]] :i64
+  ;; T5.2 residual: digits+c+i on one guest record
+  (let [digits (record-get x :digits)
+        c (record-get x :c)
+        i (record-get x :i)
+        n (string-byte-length digits)]
     (if (< i n)
       (if (string=? (string-substring digits i (+ i 1)) c)
         i
-        (digit-of-go digits c (+ i 1)))
+        (digit-of-go (record-new [:ref :deploy/digit-of-go]
+                                 digits c (+ i 1))))
       0)))
 
 (defn digit-of [c :string] :i64
-  (digit-of-go "0123456789" c 0))
+  (digit-of-go (record-new [:ref :deploy/digit-of-go] "0123456789" c 0)))
 
-(defn parse-digits-go [s :string acc :i64] :i64
-  (let [n (string-byte-length s)]
+(defn parse-digits-go [x [:ref :deploy/digits-go]] :i64
+  ;; T5.2 residual: s+acc on one guest record
+  (let [s (record-get x :s)
+        acc (record-get x :acc)
+        n (string-byte-length s)]
     (if (= n 0)
       acc
       (let [c (string-substring s 0 1)]
         (if (digit-val? c)
-          (parse-digits-go (string-substring s 1 n)
-                           (+ (* acc 10) (digit-of c)))
+          (parse-digits-go (record-new [:ref :deploy/digits-go]
+                                       (string-substring s 1 n)
+                                       (+ (* acc 10) (digit-of c))))
           -1)))))
 
 (defn parse-digits [s :string] :i64
@@ -291,7 +312,7 @@
         n (string-byte-length t)]
     (if (= n 0)
       -1
-      (parse-digits-go t 0))))
+      (parse-digits-go (record-new [:ref :deploy/digits-go] t 0)))))
 
 (defn execution-observed? [grep-count-out :string] :bool
   ;; cljc: (pos? (Integer/parseInt (trim out))) catch false

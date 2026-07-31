@@ -775,12 +775,36 @@
     false),
    :param-types [:string]}
   {:name find-prefix-at,
-   :params [s prefix i],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [n (string-byte-length s) p (string-byte-length prefix)]
+    [s
+     (record-get
+      [:record
+       :provision/prefix-at
+       [[:s :string] [:prefix :string] [:i :i64]]]
+      x
+      :s)
+     prefix
+     (record-get
+      [:record
+       :provision/prefix-at
+       [[:s :string] [:prefix :string] [:i :i64]]]
+      x
+      :prefix)
+     i
+     (record-get
+      [:record
+       :provision/prefix-at
+       [[:s :string] [:prefix :string] [:i :i64]]]
+      x
+      :i)
+     n
+     (string-byte-length s)
+     p
+     (string-byte-length prefix)]
     (if
      (let
       [__kotoba_or_2 (= p 0)]
@@ -789,15 +813,44 @@
      (if
       (string=? (string-substring s i (+ i p)) prefix)
       i
-      (find-prefix-at s prefix (+ i 1))))),
-   :param-types [:string :string :i64]}
+      (find-prefix-at
+       (record-new
+        [:record
+         :provision/prefix-at
+         [[:s :string] [:prefix :string] [:i :i64]]]
+        s
+        prefix
+        (+ i 1)))))),
+   :param-types [[:ref :provision/prefix-at]]}
   {:name take-alnum,
-   :params [s i acc],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (let
-    [n (string-byte-length s)]
+    [s
+     (record-get
+      [:record
+       :provision/take-alnum
+       [[:s :string] [:i :i64] [:acc :string]]]
+      x
+      :s)
+     i
+     (record-get
+      [:record
+       :provision/take-alnum
+       [[:s :string] [:i :i64] [:acc :string]]]
+      x
+      :i)
+     acc
+     (record-get
+      [:record
+       :provision/take-alnum
+       [[:s :string] [:i :i64] [:acc :string]]]
+      x
+      :acc)
+     n
+     (string-byte-length s)]
     (if
      (>= i n)
      acc
@@ -805,9 +858,16 @@
       [c (string-substring s i (+ i 1))]
       (if
        (alnum-char? c)
-       (take-alnum s (+ i 1) (string-concat acc c))
+       (take-alnum
+        (record-new
+         [:record
+          :provision/take-alnum
+          [[:s :string] [:i :i64] [:acc :string]]]
+         s
+         (+ i 1)
+         (string-concat acc c)))
        acc)))),
-   :param-types [:string :i64 :string]}
+   :param-types [[:ref :provision/take-alnum]]}
   {:name peer-id-from-log,
    :params [out],
    :result :string,
@@ -817,7 +877,14 @@
     [needle
      (string-concat (did-key-prefix) (peer-id-body-prefix))
      idx
-     (find-prefix-at out needle 0)]
+     (find-prefix-at
+      (record-new
+       [:record
+        :provision/prefix-at
+        [[:s :string] [:prefix :string] [:i :i64]]]
+       out
+       needle
+       0))]
     (if
      (< idx 0)
      ""
@@ -828,7 +895,14 @@
        (string-byte-length out)
        rest
        (string-substring out body-start n)]
-      (take-alnum rest 0 "")))),
+      (take-alnum
+       (record-new
+        [:record
+         :provision/take-alnum
+         [[:s :string] [:i :i64] [:acc :string]]]
+        rest
+        0
+        ""))))),
    :param-types [:string]}
   {:name write-plist-shell,
    :params [w],
@@ -855,29 +929,33 @@
  :oracle-value nil,
  :schema-identities
  #:provision{:bin-path
-             "56aa16deea9fea39258b41d7f3e2ddc963575830b6f7e6dcc4842b6e7ba78061",
+             "f6493807e5403e1043bcc04b1d246bce8310a1c920913974894a737d2df2a12e",
              :bootstrap
-             "682e1f6c954b69288f5ead605f881194441283d8ec919447c0bf8e4a54da9bb9",
+             "02f475a953b4b98c135b58b1e016c088e71e4ee2ae980471c56af9ecc6fe7000",
              :join
-             "4683517ae6fb2f3a97a062131cf2d297a10e89d3b19230b96191009700d9560f",
+             "82a27c61e967770094e5d4b835437dd32c3a13db793cb165b4eee8fd243a90cd",
              :label-kv
-             "43e8fac4514d330d541705bcc29902e53dc571b8bf9ca8db1f2226217a3016d4",
+             "da4d88faa3c65a8b3d8b7d7e175c6337eaafef988e1d2cf3153f025c76c1ca99",
              :labels
-             "70fee277a43896b4f36e694abccd3e7497614b0715c9ace64602218edc638862",
+             "e14b843b560bd9ca800286f38312860a370b61ad46bd178e6d7b5ef82f44754e",
              :multiaddr
-             "ea345a1b787cb0e039c0171029083a1617942eda5e68711b7a71f333bb576af0",
+             "570d7624947f3a35a2767d66230d01e5ee84275153e9b5f16d6c040624bd9a53",
              :p2p-ports
-             "7b936c3b3bd1647be6a3602508aab394eca2e39e646ae9292966d653af185d46",
+             "7ddcc9f7c930ea6ac2af8be33e5947a3151590c26a24437b0fdc5d878c6f4824",
              :peer-entry
-             "af339eb01e493f306c510962c13efbde74deacf79bbaf6ce46c281a78ceaba22",
+             "c46831c9cea6bfa07584737b47a91c8f4280812a1fc43e70ff6d528b8eac06df",
              :plist-replace
-             "ed9094a13668c18cb04f3fe78007c2521bd4cbadc02f2bd766ba518c0c290094",
+             "003206d0d5af61c34ca22f7afcec2ed78258c2aab49b13005002124f0baa4a63",
+             :prefix-at
+             "639697cdfe1ad3528c3c547e9ee2fd0cc3bc996d5d5fcdbb8a166d5bb4ce916f",
              :remote-dest
-             "e5183433f36f48e4c2f4a2e4450d9e732bce950541c492db65fe5cf21c1eaa32",
+             "634564dde85c2a00309fddca0af6a0255ecac1f4de3901c908de0bb0c11dbf60",
              :roles
-             "62b411e5afa436623d5d28f15faa41b208a0f59cca199b28c07defc911764e7b",
+             "62220da964b1ed784a80ffb16b88d15f1d59729dbede1ac4aa6e5cb04aa6bbe3",
+             :take-alnum
+             "5eeace0198d5497ea3c000c720b6c514a0f04698d9e53cbaf856d8b1755f319c",
              :write-plist
-             "87fcb62131052e65ce2673a240b74020ff7c25ba53cddb256249382633c597a2"},
+             "eabd85aa69528b8b201544128199a38d96e0ee669add6cb8cbb3819a2ced703d"},
  :exports
  [plist-label
   remote-bin
@@ -963,7 +1041,11 @@
   launchd-daemons-dir
   plist-ext],
  :schemas
- #:provision{:label-kv
+ #:provision{:prefix-at
+             [:record
+              :provision/prefix-at
+              [[:s :string] [:prefix :string] [:i :i64]]],
+             :label-kv
              [:record :provision/label-kv [[:k :string] [:v :string]]],
              :p2p-ports
              [:record
@@ -1002,6 +1084,10 @@
              [:record
               :provision/peer-entry
               [[:peer-id :string] [:multiaddr :string]]],
+             :take-alnum
+             [:record
+              :provision/take-alnum
+              [[:s :string] [:i :i64] [:acc :string]]],
              :multiaddr
              [:record
               :provision/multiaddr

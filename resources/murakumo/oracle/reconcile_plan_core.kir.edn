@@ -624,33 +624,81 @@
     false),
    :param-types [:string]}
   {:name digit-of-go,
-   :params [digits c i],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [n (string-byte-length digits)]
+    [digits
+     (record-get
+      [:record
+       :reconcile/digit-of-go
+       [[:digits :string] [:c :string] [:i :i64]]]
+      x
+      :digits)
+     c
+     (record-get
+      [:record
+       :reconcile/digit-of-go
+       [[:digits :string] [:c :string] [:i :i64]]]
+      x
+      :c)
+     i
+     (record-get
+      [:record
+       :reconcile/digit-of-go
+       [[:digits :string] [:c :string] [:i :i64]]]
+      x
+      :i)
+     n
+     (string-byte-length digits)]
     (if
      (< i n)
      (if
       (string=? (string-substring digits i (+ i 1)) c)
       i
-      (digit-of-go digits c (+ i 1)))
+      (digit-of-go
+       (record-new
+        [:record
+         :reconcile/digit-of-go
+         [[:digits :string] [:c :string] [:i :i64]]]
+        digits
+        c
+        (+ i 1))))
      0)),
-   :param-types [:string :string :i64]}
+   :param-types [[:ref :reconcile/digit-of-go]]}
   {:name digit-of,
    :params [c],
    :result :i64,
    :effects #{},
-   :body (digit-of-go "0123456789" c 0),
+   :body
+   (digit-of-go
+    (record-new
+     [:record
+      :reconcile/digit-of-go
+      [[:digits :string] [:c :string] [:i :i64]]]
+     "0123456789"
+     c
+     0)),
    :param-types [:string]}
   {:name parse-digits-go,
-   :params [s acc],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [n (string-byte-length s)]
+    [s
+     (record-get
+      [:record :reconcile/digits-go [[:s :string] [:acc :i64]]]
+      x
+      :s)
+     acc
+     (record-get
+      [:record :reconcile/digits-go [[:s :string] [:acc :i64]]]
+      x
+      :acc)
+     n
+     (string-byte-length s)]
     (if
      (= n 0)
      acc
@@ -659,10 +707,12 @@
       (if
        (digit-val? c)
        (parse-digits-go
-        (string-substring s 1 n)
-        (+ (* acc 10) (digit-of c)))
+        (record-new
+         [:record :reconcile/digits-go [[:s :string] [:acc :i64]]]
+         (string-substring s 1 n)
+         (+ (* acc 10) (digit-of c))))
        -1)))),
-   :param-types [:string :i64]}
+   :param-types [[:ref :reconcile/digits-go]]}
   {:name parse-digits,
    :params [s],
    :result :i64,
@@ -670,7 +720,14 @@
    :body
    (let
     [t (trim-ws s) n (string-byte-length t)]
-    (if (= n 0) -1 (parse-digits-go t 0))),
+    (if
+     (= n 0)
+     -1
+     (parse-digits-go
+      (record-new
+       [:record :reconcile/digits-go [[:s :string] [:acc :i64]]]
+       t
+       0)))),
    :param-types [:string]}
   {:name watch-seconds,
    :params [a],
@@ -726,23 +783,27 @@
  :oracle-value nil,
  :schema-identities
  #:reconcile{:action-in
-             "9815abf185881eac1c579f777d43b17f682430f50866c247135db62ca8fdee4f",
+             "e473b496e406da921ac6b6b59a1147874c5e15aaa6a0e8c58e84d17a1afe096f",
              :better-in
-             "ebee64c562b8bad7bfa4b66c79ec5448b820951bd0a769bfdee886db8678db11",
+             "4960c5f4378b05f9f736a304d5724a7f8035dbd4bc27ec6747155d1b5b738646",
              :deficit
-             "090c55efdf54949b646785989543b98ed9fd78bf2d6f3d8410b529039a7ad133",
+             "6a7a0fae7532bbb12f35d57c5aee129b5e4d9af6a8a742ce1f5a611ef70684ac",
+             :digit-of-go
+             "97020d64d893aab96f6d5eab9ce96a820a16cd781d416018d8b1f966becbab39",
+             :digits-go
+             "5e14aa84dc617efc1726280a86affd705d220c0d0a6345981384148d8dd70dd7",
              :first2
-             "033d9d1a649cf4fa504137cbd4817727c25d07c11c6e44e7fc13744b555c060c",
+             "55464e2d4774686e61974ea78bcba4043404ba849f93ebc4e17799de301df44f",
              :first3
-             "9a7b6d09257221976a8e07ae5b96171db8afe1af57c208d50c96294d4af2179b",
+             "1088db0047a0a9326fd79b38f1cd5078e0ebdf57cea2979128bf8458fe97c84c",
              :name-order
-             "61556eb5f8ce6b080a14195f9f485402351b25e0c44d9e72de98aa901fbd1a57",
+             "d988b669f2fb4ec3554df7507215ef3ae771764f426949491946c6a35bf8e09e",
              :pick2-in
-             "ba1e3bc36daccff4514fda95cf9bf09eb5e1ce42faa01d876915c4badbaa1d8f",
+             "dcdd9b46f72d5fb9de2610841fe5a2737156dcf7a1f283323789fabdfa6f3e9b",
              :starts-with
-             "ceef626acd60bd554e3557e1cbf48895da37576ab99b7c614daa56c6d32981e8",
+             "b1df02613624d8d70623bba0cbd60b81140cb833c8259188b12794425947f346",
              :targets
-             "dd24319d202e508e55eb9fb399ecc0920d0466fcda494e69d6dc110baa323f5a"},
+             "928fc2b5cd91b64de5bfaf5f087a82e9e3d15e12d082717ee233dfeae5ccff55"},
  :exports
  [default-replicas
   desired
@@ -800,6 +861,8 @@
               [[:load-a :i64]
                [:load-b :i64]
                [:name-a-before-b :bool]]],
+             :digits-go
+             [:record :reconcile/digits-go [[:s :string] [:acc :i64]]],
              :first2
              [:record
               :reconcile/first2
@@ -808,6 +871,10 @@
              [:record
               :reconcile/name-order
               [[:n01 :bool] [:n02 :bool] [:n12 :bool]]],
+             :digit-of-go
+             [:record
+              :reconcile/digit-of-go
+              [[:digits :string] [:c :string] [:i :i64]]],
              :deficit
              [:record
               :reconcile/deficit

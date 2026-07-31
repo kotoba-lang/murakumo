@@ -7,7 +7,10 @@
              :dash/clamp [:record :dash/clamp
                           [[:requested-at :i64] [:history-count :i64]]]
              :dash/pair-i64 [:record :dash/pair-i64
-                             [[:a :i64] [:b :i64]]]})
+                             [[:a :i64] [:b :i64]]]
+             ;; T5.2 residual: digit-scanner multi-arg
+             :dash/digits-go [:record :dash/digits-go
+                              [[:s :string] [:acc :i64]]]})
   (:export [short-hosted-cid health-class-of interval-sleep-ms clamp-at
             take-last-start append-new-len cap-count recent-take-n
             digit-char nat-str i64-str
@@ -144,14 +147,18 @@
           (trim-ws (string-substring s 0 (- n 1)))
           s)))))
 
-(defn parse-digits-go [s :string acc :i64] :i64
-  (let [n (string-byte-length s)]
+(defn parse-digits-go [x [:ref :dash/digits-go]] :i64
+  ;; T5.2 residual: s+acc on one guest record
+  (let [s (record-get x :s)
+        acc (record-get x :acc)
+        n (string-byte-length s)]
     (if (= n 0)
       acc
       (let [c (string-substring s 0 1)]
         (if (digit-val? c)
-          (parse-digits-go (string-substring s 1 n)
-                           (+ (* acc 10) (digit-of c)))
+          (parse-digits-go (record-new [:ref :dash/digits-go]
+                                       (string-substring s 1 n)
+                                       (+ (* acc 10) (digit-of c))))
           -1)))))
 
 (defn parse-digits [s :string] :i64
@@ -160,7 +167,7 @@
         n (string-byte-length t)]
     (if (= n 0)
       -1
-      (parse-digits-go t 0))))
+      (parse-digits-go (record-new [:ref :dash/digits-go] t 0)))))
 
 (defn parse-links [s :string] :i64
   ;; cljc: (try (Integer/parseInt (trim (or s "0"))) (catch _ 0))

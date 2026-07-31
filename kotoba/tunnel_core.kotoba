@@ -6,7 +6,10 @@
              :tunnel/forward [:record :tunnel/forward
                               [[:local-port :i64] [:remote-port :i64] [:host :string]]]
              :tunnel/exit [:record :tunnel/exit
-                           [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]]})
+                           [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]]
+             ;; T5.2 residual: digit-scanner multi-arg
+             :tunnel/digits-go [:record :tunnel/digits-go
+                                [[:s :string] [:acc :i64]]]})
   (:export [default-connect-timeout-s default-control-persist-s rc-marker
             digit-char nat-str i64-str
             wrap-cmd connect-timeout-opt control-path-opt control-persist-opt
@@ -129,15 +132,20 @@
               (trim-ws (string-substring s 0 (- n 1)))
               s)))))))
 
-(defn parse-digits-go [s :string acc :i64] :i64
-  (let [n (string-byte-length s)]
+(defn parse-digits-go [x [:ref :tunnel/digits-go]] :i64
+  ;; T5.2 residual: s+acc on one guest record
+  (let [s (record-get x :s)
+        acc (record-get x :acc)
+        n (string-byte-length s)]
     (if (= n 0)
       acc
       (let [c (string-substring s 0 1)
             d (digit-of c)]
         (if (< d 0)
           -1
-          (parse-digits-go (string-substring s 1 n) (+ (* acc 10) d)))))))
+          (parse-digits-go (record-new [:ref :tunnel/digits-go]
+                                       (string-substring s 1 n)
+                                       (+ (* acc 10) d))))))))
 
 (defn parse-digits [s :string] :i64
   ;; cljc Long/parseLong digits after marker; -1 if empty/non-digit
@@ -145,7 +153,7 @@
         n (string-byte-length t)]
     (if (= n 0)
       -1
-      (parse-digits-go t 0))))
+      (parse-digits-go (record-new [:ref :tunnel/digits-go] t 0)))))
 
 (defn pick-exit [e [:ref :tunnel/exit]] :i64
   ;; cljc sh-result: (if (some? rc) rc exit)

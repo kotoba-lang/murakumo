@@ -222,12 +222,23 @@
        s)))),
    :param-types [:string]}
   {:name parse-digits-go,
-   :params [s acc],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [n (string-byte-length s)]
+    [s
+     (record-get
+      [:record :dash/digits-go [[:s :string] [:acc :i64]]]
+      x
+      :s)
+     acc
+     (record-get
+      [:record :dash/digits-go [[:s :string] [:acc :i64]]]
+      x
+      :acc)
+     n
+     (string-byte-length s)]
     (if
      (= n 0)
      acc
@@ -236,10 +247,12 @@
       (if
        (digit-val? c)
        (parse-digits-go
-        (string-substring s 1 n)
-        (+ (* acc 10) (digit-of c)))
+        (record-new
+         [:record :dash/digits-go [[:s :string] [:acc :i64]]]
+         (string-substring s 1 n)
+         (+ (* acc 10) (digit-of c))))
        -1)))),
-   :param-types [:string :i64]}
+   :param-types [[:ref :dash/digits-go]]}
   {:name parse-digits,
    :params [s],
    :result :i64,
@@ -247,7 +260,14 @@
    :body
    (let
     [t (trim-ws s) n (string-byte-length t)]
-    (if (= n 0) -1 (parse-digits-go t 0))),
+    (if
+     (= n 0)
+     -1
+     (parse-digits-go
+      (record-new
+       [:record :dash/digits-go [[:s :string] [:acc :i64]]]
+       t
+       0)))),
    :param-types [:string]}
   {:name parse-links,
    :params [s],
@@ -465,13 +485,15 @@
  :oracle-value nil,
  :schema-identities
  #:dash{:clamp
-        "627d2458e37147f2d42e6f40d603a14b2f844ddbbecae777e4f581026d62b692",
+        "35ed2c17ea275bca51012f87b4b83620762dac4929ae0d51d13781b20401367f",
+        :digits-go
+        "106c210c46c6f1dc6c779307cc78369590e6e0524596572c22d6fd8a92d41f9d",
         :hosted
-        "09f2e441e185b8cb20fc16449e75ba83bc9955d4a374a36aab31a4b8eff7fc96",
+        "ae6ad5f60e6c505ec039f5a06dd38dfc5cb333836c20f1601d14ce555e61602c",
         :join
-        "a0248eec1ae7eca6cbd10541da637dc4a017f544a86f3086e4233c8e06444bc0",
+        "cc88f7a5662729ffcabb7bc790d141e81c2c521eee5069215dbe23616a9911bb",
         :pair-i64
-        "1cc0f5082f4bbab4471ee7689ff0abed7b2baebb3b2ca2e9e577a1faffe43210"},
+        "c0c4cb1c05064f5f5a534e77271368f8c62bb117cb188ed5919d022fd346bf41"},
  :exports
  [short-hosted-cid
   health-class-of
@@ -525,7 +547,9 @@
         [:record
          :dash/clamp
          [[:requested-at :i64] [:history-count :i64]]],
-        :pair-i64 [:record :dash/pair-i64 [[:a :i64] [:b :i64]]]},
+        :pair-i64 [:record :dash/pair-i64 [[:a :i64] [:b :i64]]],
+        :digits-go
+        [:record :dash/digits-go [[:s :string] [:acc :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}
