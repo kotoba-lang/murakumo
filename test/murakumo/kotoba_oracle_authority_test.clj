@@ -1617,10 +1617,15 @@
                [:record :rebalance/seats-in
                 [[:total :i64] [:text-w :i64] [:media-w :i64]
                  [:postproc-w :i64] [:floor :i64]]]
-               {:total 5 :text-w 3 :media-w 1 :postproc-w 1 :floor 1})]
-      (doseq [ex '[seats-of-text seats-of-media seats-of-postproc seats-total]]
-        (is (= (ir/execute r ex [sin])
-               (oracle/call :infer-rebalance ex [sin])))))
+               {:total 5 :text-w 3 :media-w 1 :postproc-w 1 :floor 1})
+          lanes-live (ir/execute r 'seats-record [sin])
+          lanes-ship (oracle/call :infer-rebalance 'seats-record [sin])]
+      (is (= lanes-live lanes-ship))
+      (doseq [ex '[seats-of-text seats-of-media seats-of-postproc]]
+        (is (= (ir/execute r ex [lanes-live])
+               (oracle/call :infer-rebalance ex [lanes-ship]))))
+      (is (= (ir/execute r 'seats-total [sin])
+             (oracle/call :infer-rebalance 'seats-total [sin]))))
     (let [run-schema [:record :rebalance/run-flags
                       [[:images [:option :string]]
                        [:video [:option :string]]

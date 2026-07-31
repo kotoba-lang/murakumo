@@ -39,6 +39,7 @@
              :rebalance/order-nth [:record :rebalance/order-nth
                                    [[:i0 :i64] [:i1 :i64] [:i2 :i64] [:n :i64]]]})
   (:export [shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class
+            seats-record
             seats-of-text seats-of-media seats-of-postproc seats-total
             pool-demand-record pool-weight-text pool-weight-media pool-weight-postproc
             pool-seats-of-text pool-seats-of-media pool-seats-of-postproc
@@ -46,7 +47,7 @@
             demand-empty demand-text demand-image demand-video demand-audio demand-postproc
             demand-inc demand-to-pool-record
             workers-count seats-equal
-            seats-for-online-text seats-for-online-media seats-for-online-postproc
+            seats-for-online-record
             pipeline-effective-gb node-online?
             move-needed
             rebalance-reason-code rebalance-reason-name
@@ -176,8 +177,10 @@
     (if (record-get x :bumped) false true)
     false))
 
-(defn seats-record [total :i64 wt :i64 wm :i64 wp :i64 floor :i64]
+(defn seats-record-go [total :i64 wt :i64 wm :i64 wp :i64 floor :i64]
   [:record :rebalance/lanes [[:text :i64] [:media :i64] [:postproc :i64]]]
+  ;; Internal multi-scalar largest-remainder (kept unexported). Public
+  ;; seats-record packs seats-in once — avoids 6× inlined copies of this body.
   (let [at (weight-pos? wt)
         am (weight-pos? wm)
         ap (weight-pos? wp)
@@ -205,9 +208,6 @@
             rp (if ap (rem64 (record-new [:ref :rebalance/pair] pp sumw)) 0)
             assigned (+ ft (+ fm fp))
             extra (- left assigned)
-            rems (record-new [:record :rebalance/lanes
-                              [[:text :i64] [:media :i64] [:postproc :i64]]] rt rm rp)
-            ;; bump 0
             b0 (if (< 0 extra)
                  (pick-bump-3 (record-new [:ref :rebalance/bump3-in] (ok-for (record-new [:ref :rebalance/ok-for] at false)) (ok-for (record-new [:ref :rebalance/ok-for] am false)) (ok-for (record-new [:ref :rebalance/ok-for] ap false)) rt rm rp))
                  -1)
@@ -232,44 +232,32 @@
         (record-new [:record :rebalance/lanes
                      [[:text :i64] [:media :i64] [:postproc :i64]]] st sm sp)))))
 
-;; Public seat API (T5.3). Three scalar projections; no pack crosses the host
-;; boundary. Replaces `largest-remainder-3` + `seats-text/media/postproc`.
+(defn seats-record [in [:ref :rebalance/seats-in]]
+  [:record :rebalance/lanes [[:text :i64] [:media :i64] [:postproc :i64]]]
+  ;; T5.2 public: seats-in → lanes. Body is seats-record-go (multi-scalar internal).
+  (seats-record-go (record-get in :total)
+                   (record-get in :text-w)
+                   (record-get in :media-w)
+                   (record-get in :postproc-w)
+                   (record-get in :floor)))
 
-(defn seats-of-text [in [:ref :rebalance/seats-in]] :i64
-  (record-get [:record :rebalance/lanes
-               [[:text :i64] [:media :i64] [:postproc :i64]]]
-              (seats-record (record-get in :total)
-                            (record-get in :text-w)
-                            (record-get in :media-w)
-                            (record-get in :postproc-w)
-                            (record-get in :floor))
-              :text))
+;; Public seat API: seats-record computes lanes; seats-of-* / pool-seats-of-*
+;; are field projections over lanes (host: seats-record once, then project).
 
-(defn seats-of-media [in [:ref :rebalance/seats-in]] :i64
-  (record-get [:record :rebalance/lanes
-               [[:text :i64] [:media :i64] [:postproc :i64]]]
-              (seats-record (record-get in :total)
-                            (record-get in :text-w)
-                            (record-get in :media-w)
-                            (record-get in :postproc-w)
-                            (record-get in :floor))
-              :media))
+(defn seats-of-text [lanes [:ref :rebalance/lanes]] :i64
+  (record-get lanes :text))
 
-(defn seats-of-postproc [in [:ref :rebalance/seats-in]] :i64
-  (record-get [:record :rebalance/lanes
-               [[:text :i64] [:media :i64] [:postproc :i64]]]
-              (seats-record (record-get in :total)
-                            (record-get in :text-w)
-                            (record-get in :media-w)
-                            (record-get in :postproc-w)
-                            (record-get in :floor))
-              :postproc))
+(defn seats-of-media [lanes [:ref :rebalance/lanes]] :i64
+  (record-get lanes :media))
+
+(defn seats-of-postproc [lanes [:ref :rebalance/lanes]] :i64
+  (record-get lanes :postproc))
 
 (defn seats-total [in [:ref :rebalance/seats-in]] :i64
-  ;; total workers assigned across three pools (was assigned-from-seats of a pack)
-  (+ (seats-of-text in)
-     (+ (seats-of-media in)
-        (seats-of-postproc in))))
+  (let [lanes (seats-record in)]
+    (+ (seats-of-text lanes)
+       (+ (seats-of-media lanes)
+          (seats-of-postproc lanes)))))
 
 (defn pool-demand-record [d [:ref :rebalance/demand]]
   [:ref :rebalance/lanes]
@@ -291,38 +279,16 @@
   (record-get w :postproc))
 
 ;; Compose the seat apportionment over pool-weight lanes (record).
+;; pool-seats-of-* are the same lane projections as seats-of-* (lanes in).
 
-(defn pool-seats-of-text [s [:ref :rebalance/seats-in]] :i64
-  ;; same shape as seats-of-* inputs.
-  ;; seats-record stays multi-scalar (lowering budget: body is huge)
-  (record-get [:record :rebalance/lanes
-               [[:text :i64] [:media :i64] [:postproc :i64]]]
-              (seats-record (record-get s :total)
-                            (record-get s :text-w)
-                            (record-get s :media-w)
-                            (record-get s :postproc-w)
-                            (record-get s :floor))
-              :text))
+(defn pool-seats-of-text [lanes [:ref :rebalance/lanes]] :i64
+  (seats-of-text lanes))
 
-(defn pool-seats-of-media [s [:ref :rebalance/seats-in]] :i64
-  (record-get [:record :rebalance/lanes
-               [[:text :i64] [:media :i64] [:postproc :i64]]]
-              (seats-record (record-get s :total)
-                            (record-get s :text-w)
-                            (record-get s :media-w)
-                            (record-get s :postproc-w)
-                            (record-get s :floor))
-              :media))
+(defn pool-seats-of-media [lanes [:ref :rebalance/lanes]] :i64
+  (seats-of-media lanes))
 
-(defn pool-seats-of-postproc [s [:ref :rebalance/seats-in]] :i64
-  (record-get [:record :rebalance/lanes
-               [[:text :i64] [:media :i64] [:postproc :i64]]]
-              (seats-record (record-get s :total)
-                            (record-get s :text-w)
-                            (record-get s :media-w)
-                            (record-get s :postproc-w)
-                            (record-get s :floor))
-              :postproc))
+(defn pool-seats-of-postproc [lanes [:ref :rebalance/lanes]] :i64
+  (seats-of-postproc lanes))
 
 (defn classify-run-flags [x [:ref :rebalance/run-flags]] :i64
   ;; Product Value ABI v1: optional unit/kind tokens on one record.
@@ -396,28 +362,12 @@
 ;; pure core of target-allocation seat step (node id assignment stays cljc).
 ;; T5.3: three scalar lanes instead of one seat pack.
 
-(defn seats-for-online-text [s [:ref :rebalance/seats-in]] :i64
-  ;; T5.2: online is projected into :total by host (or use workers-count of online field).
-  ;; Here :total is treated as the online worker count input (host passes online).
-  (pool-seats-of-text
-   (record-new [:ref :rebalance/seats-in]
-               (workers-count (record-get s :total))
-               (record-get s :text-w)
-               (record-get s :media-w)
-               (record-get s :postproc-w)
-               (record-get s :floor))))
-
-(defn seats-for-online-media [s [:ref :rebalance/seats-in]] :i64
-  (pool-seats-of-media
-   (record-new [:ref :rebalance/seats-in]
-               (workers-count (record-get s :total))
-               (record-get s :text-w)
-               (record-get s :media-w)
-               (record-get s :postproc-w)
-               (record-get s :floor))))
-
-(defn seats-for-online-postproc [s [:ref :rebalance/seats-in]] :i64
-  (pool-seats-of-postproc
+(defn seats-for-online-record [s [:ref :rebalance/seats-in]]
+  [:record :rebalance/lanes [[:text :i64] [:media :i64] [:postproc :i64]]]
+  ;; Single seats-record for online worker count (workers-count of :total).
+  ;; Project with seats-of-text/media/postproc — avoids 3× inlined largest-remainder
+  ;; (compiler lowering budget).
+  (seats-record
    (record-new [:ref :rebalance/seats-in]
                (workers-count (record-get s :total))
                (record-get s :text-w)
