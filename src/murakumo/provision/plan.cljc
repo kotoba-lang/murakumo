@@ -32,6 +32,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def launchctl-print-prefix
@@ -219,14 +225,20 @@
 ;; ── pure helpers → oracle-required ───────────────────────────────────
 
 (defn local-bin-path
-  "Local pin path for one binary. Kotoba (required)."
+  "Local pin path for one binary. Kotoba (required).
+   T5.2: structural map → call-record."
   [local-bin bin]
-  (o 'local-bin-path [(str local-bin) (str bin)]))
+  (o-record 'local-bin-path
+            {:local-bin local-bin :bin bin}
+            [[:local-bin :string] [:bin :string]]))
 
 (defn remote-bin-dest
-  "Remote rsync dest for one binary. Kotoba (required)."
+  "Remote rsync dest for one binary. Kotoba (required).
+   T5.2: structural map → call-record."
   [host bin]
-  (o 'remote-bin-dest [(str host) (str bin)]))
+  (o-record 'remote-bin-dest
+            {:host host :bin bin}
+            [[:host :string] [:bin :string]]))
 
 (defn launchd-daemon-path
   "System LaunchDaemon path for label. Kotoba (required)."
@@ -239,14 +251,20 @@
   (o 'tee-plist-prefix [(str label)]))
 
 (defn label-kv
-  "Single k=v label pair. Host joins with comma. Kotoba (required)."
+  "Single k=v label pair. Host joins with comma. Kotoba (required).
+   T5.2: structural map → call-record."
   [k v]
-  (o 'label-kv [(str k) (str v)]))
+  (o-record 'label-kv
+            {:k k :v v}
+            [[:k :string] [:v :string]]))
 
 (defn peer-entry
-  "One bootstrap peer `peer-id@multiaddr`. Kotoba (required)."
+  "One bootstrap peer `peer-id@multiaddr`. Kotoba (required).
+   T5.2: structural map → call-record."
   [peer-id multiaddr]
-  (o 'peer-entry [(str peer-id) (str multiaddr)]))
+  (o-record 'peer-entry
+            {:peer-id peer-id :multiaddr multiaddr}
+            [[:peer-id :string] [:multiaddr :string]]))
 
 (defn did-peer-id
   "DID URI for a mesh PeerId (`did:key:` + body). Kotoba (required)."
@@ -254,29 +272,44 @@
   (o 'did-peer-id [(str peer-id)]))
 
 (defn join-append
-  "CSV-style fold step: empty acc ⇒ next only. Kotoba (required)."
+  "CSV-style fold step: empty acc ⇒ next only. Kotoba (required).
+   T5.2: structural map → call-record."
   [acc sep next]
-  (o 'join-append [(str (or acc "")) (str sep) (str next)]))
+  (o-record 'join-append
+            {:acc (or acc "") :sep sep :next next}
+            [[:acc :string] [:sep :string] [:next :string]]))
 
 (defn bootstrap-append
-  "Append one peer-entry to bootstrap-str acc. Kotoba (required)."
+  "Append one peer-entry to bootstrap-str acc. Kotoba (required).
+   T5.2: structural map → call-record."
   [acc entry]
-  (o 'bootstrap-append [(str (or acc "")) (str entry)]))
+  (o-record 'bootstrap-append
+            {:acc (or acc "") :entry entry}
+            [[:acc :string] [:entry :string]]))
 
 (defn labels-append
-  "Append one label-kv pair to labels-env acc. Kotoba (required)."
+  "Append one label-kv pair to labels-env acc. Kotoba (required).
+   T5.2: structural map → call-record."
   [acc pair]
-  (o 'labels-append [(str (or acc "")) (str pair)]))
+  (o-record 'labels-append
+            {:acc (or acc "") :pair pair}
+            [[:acc :string] [:pair :string]]))
 
 (defn roles-append
-  "Append one role name to roles CSV acc. Kotoba (required)."
+  "Append one role name to roles CSV acc. Kotoba (required).
+   T5.2: structural map → call-record."
   [acc role]
-  (o 'roles-append [(str (or acc "")) (str role)]))
+  (o-record 'roles-append
+            {:acc (or acc "") :role role}
+            [[:acc :string] [:role :string]]))
 
 (defn plist-replace
-  "Substitute one placeholder token in a LaunchDaemon template. Kotoba (required)."
+  "Substitute one placeholder token in a LaunchDaemon template. Kotoba (required).
+   T5.2: structural map → call-record."
   [tmpl ph val]
-  (o 'plist-replace [(str tmpl) (str ph) (str (or val ""))]))
+  (o-record 'plist-replace
+            {:tmpl tmpl :ph ph :val (or val "")}
+            [[:tmpl :string] [:ph :string] [:val :string]]))
 
 (defn home-bin-path
   "Absolute `{{BIN}}` path under node home. Kotoba (required)."
@@ -317,9 +350,12 @@
      [:fleet-port :option-i64]])))
 
 (defn multiaddr
-  "Tailscale QUIC multiaddr for a node ip/port. Kotoba (required)."
+  "Tailscale QUIC multiaddr for a node ip/port. Kotoba (required).
+   T5.2: structural map → call-record."
   [ip port]
-  (o 'multiaddr [(str ip) (oracle/as-i64 port)]))
+  (o-record 'multiaddr
+            {:ip ip :port port}
+            [[:ip :string] [:port :i64]]))
 
 (defn node-webrtc-port
   "The /webrtc-direct UDP port for nodes whose class speaks :webrtc on :live.
@@ -416,9 +452,12 @@
 
 (defn write-plist-shell
   "Assemble sudo tee … <<'PLIST' shell for a LaunchDaemon label + body.
-   Kotoba (required)."
+   Kotoba (required).
+   T5.2: structural map → call-record."
   [label body]
-  (o 'write-plist-shell [(str label) (str body)]))
+  (o-record 'write-plist-shell
+            {:label label :body body}
+            [[:label :string] [:body :string]]))
 
 (defn write-plist-command
   "Remote shell command that writes plist content to the system LaunchDaemon path.

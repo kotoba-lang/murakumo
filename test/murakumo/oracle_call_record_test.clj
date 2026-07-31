@@ -469,3 +469,69 @@
       (is (some? (:head target)))
       (is (map? (:pool-seats target)))
       (is (pos? (get-in target [:pool-seats :text-pool] 0))))))
+
+(deftest call-record-cloud-provision-token-residual
+  "T5.2 wave 11: cloud lines/endpoints, provision folds, token residual,
+   plan strategy, relay ids, tunnel scp, dash/fleet residual, cauth id-len."
+  (when (oracle/ready? :cloud-plan)
+    (is (string? (cplan/summary-title "murakumo.cloud" "ov1")))
+    (is (string? (cplan/dial-ok-title "r1" "asher")))
+    (is (string? (cplan/from-to-cap-reason "a" "b" "deploy" "ok")))
+    (is (string? (cplan/authorized-line "a" "b" "deploy")))
+    (is (string? (cplan/address-family-line "ip4" 3 1)))
+    (is (string? (cplan/policy-line "deny" 2)))
+    (let [cloud {:cloud/name "murakumo.cloud" :overlay/id "ov1"
+                 :relays [{:name "jp" :region "asia" :url "https://relay/"}]
+                 :overlay/direct [:quic] :policy {:default :deny :allow []}}
+          fleet {:fleet/name "f" :fleet/p2p-port 4001 :fleet/port 8080
+                 :nodes [{:name "asher" :host "asher" :p2p-port 4001}]}
+          node {:name "asher" :host "asher" :labels {:zone "tyo" :region "jp"}
+                :region "asia" :roles #{"compute"}}
+          ep (cplan/direct-endpoint cloud fleet node :quic)]
+      (is (map? ep))
+      (is (string? (:endpoint ep)))
+      (is (number? (cplan/relay-score node (first (:relays cloud)))))))
+  (when (oracle/ready? :provision-plan)
+    (is (string? (pplan/local-bin-path "/opt/bin" "kotoba")))
+    (is (string? (pplan/remote-bin-dest "host" "kotoba")))
+    (is (string? (pplan/label-kv "zone" "tyo")))
+    (is (string? (pplan/peer-entry "pid" "/ip4/1.2.3.4/udp/4001/quic")))
+    (is (= "a,b" (pplan/join-append "a" "," "b")))
+    (is (= "b" (pplan/join-append "" "," "b")))
+    (is (string? (pplan/multiaddr "1.2.3.4" 4001)))
+    (is (string? (pplan/write-plist-shell "com.x" "<plist/>"))))
+  (when (oracle/ready? :token)
+    (is (string? (token/wire-token "pay" "sig")))
+    (is (true? (token/constant-time= "ab" "ab")))
+    (is (false? (token/constant-time= "ab" "ac")))
+    (is (true? (token/scope-allows? "chat" "chat")))
+    (is (false? (token/scope-allows? "chat" "admin"))))
+  (when (oracle/ready? :infer-plan)
+    (let [s (plan/choose-strategy
+             {:link-gbps 100 :ranks 4
+              :model {:model/experts 0 :model/kv-heads 8}})]
+      (is (map? s))
+      (is (keyword? (:strategy s)))))
+  (when (oracle/ready? :infer-relay)
+    (let [st (relay/init)
+          [jid st2] (relay/enqueue st {:kind :host-large-model :input "x" :price 1})]
+      (is (string? jid))
+      (is (map? st2))))
+  (when (oracle/ready? :tunnel)
+    (let [argv (tunnel/scp-argv "host" "/local" "/remote")]
+      (is (vector? argv))
+      (is (some #(= "host:/remote" %) argv))))
+  (when (oracle/ready? :dash-state)
+    (is (= 3 (count (dash/recent-alerts [{:a 1} {:a 2} {:a 3}] 10))))
+    (is (= [2 3] (dash/append-capped [1 2] 2 3))))
+  (when (oracle/ready? :fleet-inventory)
+    (let [fleet {:nodes [{:name "a"} {:name "b"} {:name "c"}]}]
+      (is (= 1 (count (inv/select fleet "a"))))
+      (is (= 3 (count (inv/select fleet "all"))))))
+  (when (oracle/ready? :component-authority)
+    ;; identifier-len-ok? is private; place uses it on placement target.
+    (let [[st2 ev] (cauth/place (cauth/initial-state) "bafyedge" "edge-a")]
+      (is (= 1 (get-in st2 [:epochs "bafyedge"])))
+      (is (map? ev)))
+    (is (thrown? Exception
+                 (cauth/place (cauth/initial-state) "bafyedge" "")))))
