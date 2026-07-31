@@ -84,20 +84,36 @@
       false))),
    :param-types [:string]}
   {:name identifier-len-ok?,
-   :params [is-blank byte-len],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (if
-    is-blank
+    (record-get
+     [:record :cauth/id-len [[:is-blank :bool] [:byte-len :i64]]]
+     x
+     :is-blank)
     false
-    (if (< (max-identifier-bytes) byte-len) false true)),
-   :param-types [:bool :i64]}
+    (if
+     (<
+      (max-identifier-bytes)
+      (record-get
+       [:record :cauth/id-len [[:is-blank :bool] [:byte-len :i64]]]
+       x
+       :byte-len))
+     false
+     true)),
+   :param-types [[:ref :cauth/id-len]]}
   {:name identifier?,
    :params [s],
    :result :bool,
    :effects #{},
-   :body (identifier-len-ok? (blank? s) (string-byte-length s)),
+   :body
+   (identifier-len-ok?
+    (record-new
+     [:record :cauth/id-len [[:is-blank :bool] [:byte-len :i64]]]
+     (blank? s)
+     (string-byte-length s))),
    :param-types [:string]}
   {:name place-epoch,
    :params [current-or-zero],
@@ -138,7 +154,9 @@
     (if (string=? op (op-revoke)) (event-revoked) (op-unknown))),
    :param-types [:string]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:cauth{:id-len
+         "b24e57cd0f5d6f4740cc57774de61f51667d72631a7b12c60edbe868825353a9"},
  :exports
  [event-version
   max-identifier-bytes
@@ -158,7 +176,9 @@
   op-unknown
   event-placed
   event-revoked],
- :schemas nil,
+ :schemas
+ #:cauth{:id-len
+         [:record :cauth/id-len [[:is-blank :bool] [:byte-len :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

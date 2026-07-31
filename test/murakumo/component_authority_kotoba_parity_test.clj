@@ -10,6 +10,11 @@
 
 (def port-source (slurp "kotoba/component_authority_core.kotoba"))
 
+(def ^:private id-len-lit
+  "[:record :cauth/id-len [[:is-blank :bool] [:byte-len :i64]]]")
+(defn- id-len-call [blank n]
+  (str "(if (identifier-len-ok? (record-new " id-len-lit " " blank " " n ")) 1 0)"))
+
 (def export-prefix
   (str "event-version max-identifier-bytes blank? ws? identifier? "
        "identifier-len-ok? place-epoch revoke-epoch next-sequence "
@@ -71,9 +76,9 @@
         actual (compile-i64-cases cases)
         ;; length bounds via host-projected blank/byte-len (no huge literals)
         lens (compile-i64-cases
-              {"ok4096" "(if (identifier-len-ok? false 4096) 1 0)"
-               "bad4097" "(if (identifier-len-ok? false 4097) 1 0)"
-               "blank" "(if (identifier-len-ok? true 10) 1 0)"})]
+              {"ok4096" (id-len-call "false" 4096)
+               "bad4097" (id-len-call "false" 4097)
+               "blank" (id-len-call "true" 10)})]
     (doseq [[i s] (map-indexed vector corpus)]
       (testing (pr-str s)
         (is (= (if (cljc-identifier? s) 1 0)

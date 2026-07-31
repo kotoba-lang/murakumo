@@ -80,72 +80,212 @@
    :body (if (< a b) b a),
    :param-types [:i64 :i64]}
   {:name better-bump?,
-   :params [rem-a idx-a rem-b idx-b],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
-   (if
-    (< rem-b rem-a)
-    true
-    (if (< rem-a rem-b) false (if (< idx-a idx-b) true false))),
-   :param-types [:i64 :i64 :i64 :i64]}
+   (let
+    [rem-a
+     (record-get
+      [:record
+       :rebalance/bump-cmp
+       [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+      x
+      :rem-a)
+     idx-a
+     (record-get
+      [:record
+       :rebalance/bump-cmp
+       [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+      x
+      :idx-a)
+     rem-b
+     (record-get
+      [:record
+       :rebalance/bump-cmp
+       [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+      x
+      :rem-b)
+     idx-b
+     (record-get
+      [:record
+       :rebalance/bump-cmp
+       [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+      x
+      :idx-b)]
+    (if
+     (< rem-b rem-a)
+     true
+     (if (< rem-a rem-b) false (if (< idx-a idx-b) true false)))),
+   :param-types [[:ref :rebalance/bump-cmp]]}
   {:name pick-bump-3,
-   :params [ok-t ok-m ok-p rems],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [rt
+    [ok-t
      (record-get
       [:record
-       :rebalance/lanes
-       [[:text :i64] [:media :i64] [:postproc :i64]]]
-      rems
-      :text)
+       :rebalance/bump3-in
+       [[:ok-t :bool]
+        [:ok-m :bool]
+        [:ok-p :bool]
+        [:rt :i64]
+        [:rm :i64]
+        [:rp :i64]]]
+      x
+      :ok-t)
+     ok-m
+     (record-get
+      [:record
+       :rebalance/bump3-in
+       [[:ok-t :bool]
+        [:ok-m :bool]
+        [:ok-p :bool]
+        [:rt :i64]
+        [:rm :i64]
+        [:rp :i64]]]
+      x
+      :ok-m)
+     ok-p
+     (record-get
+      [:record
+       :rebalance/bump3-in
+       [[:ok-t :bool]
+        [:ok-m :bool]
+        [:ok-p :bool]
+        [:rt :i64]
+        [:rm :i64]
+        [:rp :i64]]]
+      x
+      :ok-p)
+     rt
+     (record-get
+      [:record
+       :rebalance/bump3-in
+       [[:ok-t :bool]
+        [:ok-m :bool]
+        [:ok-p :bool]
+        [:rt :i64]
+        [:rm :i64]
+        [:rp :i64]]]
+      x
+      :rt)
      rm
      (record-get
       [:record
-       :rebalance/lanes
-       [[:text :i64] [:media :i64] [:postproc :i64]]]
-      rems
-      :media)
+       :rebalance/bump3-in
+       [[:ok-t :bool]
+        [:ok-m :bool]
+        [:ok-p :bool]
+        [:rt :i64]
+        [:rm :i64]
+        [:rp :i64]]]
+      x
+      :rm)
      rp
      (record-get
       [:record
-       :rebalance/lanes
-       [[:text :i64] [:media :i64] [:postproc :i64]]]
-      rems
-      :postproc)]
+       :rebalance/bump3-in
+       [[:ok-t :bool]
+        [:ok-m :bool]
+        [:ok-p :bool]
+        [:rt :i64]
+        [:rm :i64]
+        [:rp :i64]]]
+      x
+      :rp)]
     (if
      ok-t
      (if
       ok-m
       (let
        [win-tm
-        (if (better-bump? rt 0 rm 1) 0 1)
+        (if
+         (better-bump?
+          (record-new
+           [:record
+            :rebalance/bump-cmp
+            [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+           rt
+           0
+           rm
+           1))
+         0
+         1)
         r-win
         (if (= win-tm 0) rt rm)
         i-win
         win-tm]
-       (if ok-p (if (better-bump? r-win i-win rp 2) win-tm 2) win-tm))
-      (if ok-p (if (better-bump? rt 0 rp 2) 0 2) 0))
+       (if
+        ok-p
+        (if
+         (better-bump?
+          (record-new
+           [:record
+            :rebalance/bump-cmp
+            [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+           r-win
+           i-win
+           rp
+           2))
+         win-tm
+         2)
+        win-tm))
+      (if
+       ok-p
+       (if
+        (better-bump?
+         (record-new
+          [:record
+           :rebalance/bump-cmp
+           [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+          rt
+          0
+          rp
+          2))
+        0
+        2)
+       0))
      (if
       ok-m
-      (if ok-p (if (better-bump? rm 1 rp 2) 1 2) 1)
+      (if
+       ok-p
+       (if
+        (better-bump?
+         (record-new
+          [:record
+           :rebalance/bump-cmp
+           [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+          rm
+          1
+          rp
+          2))
+        1
+        2)
+       1)
       (if ok-p 2 -1)))),
-   :param-types
-   [:bool
-    :bool
-    :bool
-    [:record
-     :rebalance/lanes
-     [[:text :i64] [:media :i64] [:postproc :i64]]]]}
+   :param-types [[:ref :rebalance/bump3-in]]}
   {:name ok-for,
-   :params [active bumped],
+   :params [x],
    :result :bool,
    :effects #{},
-   :body (if active (if bumped false true) false),
-   :param-types [:bool :bool]}
+   :body
+   (if
+    (record-get
+     [:record :rebalance/ok-for [[:active :bool] [:bumped :bool]]]
+     x
+     :active)
+    (if
+     (record-get
+      [:record :rebalance/ok-for [[:active :bool] [:bumped :bool]]]
+      x
+      :bumped)
+     false
+     true)
+    false),
+   :param-types [[:ref :rebalance/ok-for]]}
   {:name seats-record,
    :params [total wt wm wp floor],
    :result
@@ -221,10 +361,39 @@
        (if
         (< 0 extra)
         (pick-bump-3
-         (ok-for at false)
-         (ok-for am false)
-         (ok-for ap false)
-         rems)
+         (record-new
+          [:record
+           :rebalance/bump3-in
+           [[:ok-t :bool]
+            [:ok-m :bool]
+            [:ok-p :bool]
+            [:rt :i64]
+            [:rm :i64]
+            [:rp :i64]]]
+          (ok-for
+           (record-new
+            [:record
+             :rebalance/ok-for
+             [[:active :bool] [:bumped :bool]]]
+            at
+            false))
+          (ok-for
+           (record-new
+            [:record
+             :rebalance/ok-for
+             [[:active :bool] [:bumped :bool]]]
+            am
+            false))
+          (ok-for
+           (record-new
+            [:record
+             :rebalance/ok-for
+             [[:active :bool] [:bumped :bool]]]
+            ap
+            false))
+          rt
+          rm
+          rp))
         -1)
        bt0
        (if (= b0 0) true false)
@@ -236,10 +405,39 @@
        (if
         (< 1 extra)
         (pick-bump-3
-         (ok-for at bt0)
-         (ok-for am bm0)
-         (ok-for ap bp0)
-         rems)
+         (record-new
+          [:record
+           :rebalance/bump3-in
+           [[:ok-t :bool]
+            [:ok-m :bool]
+            [:ok-p :bool]
+            [:rt :i64]
+            [:rm :i64]
+            [:rp :i64]]]
+          (ok-for
+           (record-new
+            [:record
+             :rebalance/ok-for
+             [[:active :bool] [:bumped :bool]]]
+            at
+            bt0))
+          (ok-for
+           (record-new
+            [:record
+             :rebalance/ok-for
+             [[:active :bool] [:bumped :bool]]]
+            am
+            bm0))
+          (ok-for
+           (record-new
+            [:record
+             :rebalance/ok-for
+             [[:active :bool] [:bumped :bool]]]
+            ap
+            bp0))
+          rt
+          rm
+          rp))
         -1)
        bt1
        (if (= b1 0) true bt0)
@@ -251,10 +449,39 @@
        (if
         (< 2 extra)
         (pick-bump-3
-         (ok-for at bt1)
-         (ok-for am bm1)
-         (ok-for ap bp1)
-         rems)
+         (record-new
+          [:record
+           :rebalance/bump3-in
+           [[:ok-t :bool]
+            [:ok-m :bool]
+            [:ok-p :bool]
+            [:rt :i64]
+            [:rm :i64]
+            [:rp :i64]]]
+          (ok-for
+           (record-new
+            [:record
+             :rebalance/ok-for
+             [[:active :bool] [:bumped :bool]]]
+            at
+            bt1))
+          (ok-for
+           (record-new
+            [:record
+             :rebalance/ok-for
+             [[:active :bool] [:bumped :bool]]]
+            am
+            bm1))
+          (ok-for
+           (record-new
+            [:record
+             :rebalance/ok-for
+             [[:active :bool] [:bumped :bool]]]
+            ap
+            bp1))
+          rt
+          rm
+          rp))
         -1)
        bump-t
        (if (if (= b0 0) 1 (if (= b1 0) 1 (if (= b2 0) 1 0))) 1 0)
@@ -1524,20 +1751,26 @@
    :param-types [[:ref :rebalance/pair]]}],
  :oracle-value nil,
  :schema-identities
- #:rebalance{:demand
-             "459baab88810ba539de5418fde68e63c2e57597f630277080e55f4b098be8e17",
+ #:rebalance{:bump-cmp
+             "726786210a31bfda30b99ee7397530a1d87e03bf0a403ad3d3646ac5ce682f4c",
+             :bump3-in
+             "3589887902063f41c8e9c6c1f1de57f052fe077fb664d7b1d572b891c0aa02c9",
+             :demand
+             "25d28cda6ea0575b65716341806035b2821c70b7bdd620e2d5e993ae496653f1",
              :lanes
-             "13369a2f7b59fc8c34e885022dbaba9443f3f20075fbd6e35f9d0c4e6da12e06",
+             "e23b6b6c9e7f0f681e13a03ba72f7575c5e256ce652002b137725c7277c273f1",
+             :ok-for
+             "219666d7832fd3c81420e05591f10889f644a5baa2ab11f2c1a585d9869c5dcc",
              :order
-             "f3f48297a9dce92fe622f66a02de480846c72ba514a19f4b3f7510597c5970d2",
+             "19fce984eeaa84b6602e9e14c8146e4f7750d3086ef2a862a2a5899f86e0800c",
              :pair
-             "cf54dfcc3306003577735a6433fffa126d18a3d153809e7983f695fef79a526b",
+             "01f3b713d0f45fe6732b1166d86e0a3c4eb5d01b27db1a276e2cce221eaf309e",
              :run-flags
-             "dec890fd8d64567a75328b5338c5b35a29209e040daf5d27ab907ab6bcdfdedb",
+             "502f8ca815487da803859ccac68d9b0bf7ed52c00266570b6d26c3b5f6682bd4",
              :seats-in
-             "08d79538e355a5d3dc88c93ae2b1cc37d097dbf93dea7c1ea17a70a26bdf21d4",
+             "f87aca98189ddf9cc6c3ba9ecb2064b82cbe811ac4b84c4070283988098b62e0",
              :triple
-             "768789a0d07764cc0e0d6edfa507525d1549f32a2c2261168abd1742329ee750"},
+             "023b3364b326573a2f29d7e4a6cd2fe828eabc4afc04cfb462ae010f4b4cdf1a"},
  :exports
  [shard-ceiling-gb
   os-kv-headroom-gb
@@ -1585,18 +1818,10 @@
   pipeline-note
   rebalance-reason-detail],
  :schemas
- #:rebalance{:seats-in
+ #:rebalance{:triple
              [:record
-              :rebalance/seats-in
-              [[:total :i64]
-               [:text-w :i64]
-               [:media-w :i64]
-               [:postproc-w :i64]
-               [:floor :i64]]],
-             :lanes
-             [:record
-              :rebalance/lanes
-              [[:text :i64] [:media :i64] [:postproc :i64]]],
+              :rebalance/triple
+              [[:a :i64] [:b :i64] [:c :i64]]],
              :demand
              [:record
               :rebalance/demand
@@ -1605,10 +1830,11 @@
                [:video :i64]
                [:audio :i64]
                [:postproc :i64]]],
-             :order
+             :lanes
              [:record
-              :rebalance/order
-              [[:i0 :i64] [:i1 :i64] [:i2 :i64]]],
+              :rebalance/lanes
+              [[:text :i64] [:media :i64] [:postproc :i64]]],
+             :pair [:record :rebalance/pair [[:a :i64] [:b :i64]]],
              :run-flags
              [:record
               :rebalance/run-flags
@@ -1617,11 +1843,38 @@
                [:audio [:option :string]]
                [:swarm [:option :string]]
                [:tokens [:option :string]]]],
-             :pair [:record :rebalance/pair [[:a :i64] [:b :i64]]],
-             :triple
+             :bump3-in
              [:record
-              :rebalance/triple
-              [[:a :i64] [:b :i64] [:c :i64]]]},
+              :rebalance/bump3-in
+              [[:ok-t :bool]
+               [:ok-m :bool]
+               [:ok-p :bool]
+               [:rt :i64]
+               [:rm :i64]
+               [:rp :i64]]],
+             :seats-in
+             [:record
+              :rebalance/seats-in
+              [[:total :i64]
+               [:text-w :i64]
+               [:media-w :i64]
+               [:postproc-w :i64]
+               [:floor :i64]]],
+             :ok-for
+             [:record
+              :rebalance/ok-for
+              [[:active :bool] [:bumped :bool]]],
+             :bump-cmp
+             [:record
+              :rebalance/bump-cmp
+              [[:rem-a :i64]
+               [:idx-a :i64]
+               [:rem-b :i64]
+               [:idx-b :i64]]],
+             :order
+             [:record
+              :rebalance/order
+              [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

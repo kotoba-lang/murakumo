@@ -133,64 +133,212 @@
       "pipeline"))),
    :param-types [[:ref :plan/strategy-in]]}
   {:name better-bump?,
-   :params [rem-a idx-a rem-b idx-b],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
-   (if
-    (< rem-b rem-a)
-    true
-    (if (< rem-a rem-b) false (if (< idx-a idx-b) true false))),
-   :param-types [:i64 :i64 :i64 :i64]}
+   (let
+    [rem-a
+     (record-get
+      [:record
+       :plan/bump-cmp
+       [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+      x
+      :rem-a)
+     idx-a
+     (record-get
+      [:record
+       :plan/bump-cmp
+       [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+      x
+      :idx-a)
+     rem-b
+     (record-get
+      [:record
+       :plan/bump-cmp
+       [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+      x
+      :rem-b)
+     idx-b
+     (record-get
+      [:record
+       :plan/bump-cmp
+       [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+      x
+      :idx-b)]
+    (if
+     (< rem-b rem-a)
+     true
+     (if (< rem-a rem-b) false (if (< idx-a idx-b) true false)))),
+   :param-types [[:ref :plan/bump-cmp]]}
   {:name pick-bump-3,
-   :params [ok-t ok-m ok-p rems],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [rt
+    [ok-t
      (record-get
-      [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
-      rems
-      :l0)
+      [:record
+       :plan/bump3-in
+       [[:ok-t :bool]
+        [:ok-m :bool]
+        [:ok-p :bool]
+        [:rt :i64]
+        [:rm :i64]
+        [:rp :i64]]]
+      x
+      :ok-t)
+     ok-m
+     (record-get
+      [:record
+       :plan/bump3-in
+       [[:ok-t :bool]
+        [:ok-m :bool]
+        [:ok-p :bool]
+        [:rt :i64]
+        [:rm :i64]
+        [:rp :i64]]]
+      x
+      :ok-m)
+     ok-p
+     (record-get
+      [:record
+       :plan/bump3-in
+       [[:ok-t :bool]
+        [:ok-m :bool]
+        [:ok-p :bool]
+        [:rt :i64]
+        [:rm :i64]
+        [:rp :i64]]]
+      x
+      :ok-p)
+     rt
+     (record-get
+      [:record
+       :plan/bump3-in
+       [[:ok-t :bool]
+        [:ok-m :bool]
+        [:ok-p :bool]
+        [:rt :i64]
+        [:rm :i64]
+        [:rp :i64]]]
+      x
+      :rt)
      rm
      (record-get
-      [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
-      rems
-      :l1)
+      [:record
+       :plan/bump3-in
+       [[:ok-t :bool]
+        [:ok-m :bool]
+        [:ok-p :bool]
+        [:rt :i64]
+        [:rm :i64]
+        [:rp :i64]]]
+      x
+      :rm)
      rp
      (record-get
-      [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
-      rems
-      :l2)]
+      [:record
+       :plan/bump3-in
+       [[:ok-t :bool]
+        [:ok-m :bool]
+        [:ok-p :bool]
+        [:rt :i64]
+        [:rm :i64]
+        [:rp :i64]]]
+      x
+      :rp)]
     (if
      ok-t
      (if
       ok-m
       (let
        [win-tm
-        (if (better-bump? rt 0 rm 1) 0 1)
+        (if
+         (better-bump?
+          (record-new
+           [:record
+            :plan/bump-cmp
+            [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+           rt
+           0
+           rm
+           1))
+         0
+         1)
         r-win
         (if (= win-tm 0) rt rm)
         i-win
         win-tm]
-       (if ok-p (if (better-bump? r-win i-win rp 2) win-tm 2) win-tm))
-      (if ok-p (if (better-bump? rt 0 rp 2) 0 2) 0))
+       (if
+        ok-p
+        (if
+         (better-bump?
+          (record-new
+           [:record
+            :plan/bump-cmp
+            [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+           r-win
+           i-win
+           rp
+           2))
+         win-tm
+         2)
+        win-tm))
+      (if
+       ok-p
+       (if
+        (better-bump?
+         (record-new
+          [:record
+           :plan/bump-cmp
+           [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+          rt
+          0
+          rp
+          2))
+        0
+        2)
+       0))
      (if
       ok-m
-      (if ok-p (if (better-bump? rm 1 rp 2) 1 2) 1)
+      (if
+       ok-p
+       (if
+        (better-bump?
+         (record-new
+          [:record
+           :plan/bump-cmp
+           [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]]
+          rm
+          1
+          rp
+          2))
+        1
+        2)
+       1)
       (if ok-p 2 -1)))),
-   :param-types
-   [:bool
-    :bool
-    :bool
-    [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]]}
+   :param-types [[:ref :plan/bump3-in]]}
   {:name ok-for,
-   :params [active bumped],
+   :params [x],
    :result :bool,
    :effects #{},
-   :body (if active (if bumped false true) false),
-   :param-types [:bool :bool]}
+   :body
+   (if
+    (record-get
+     [:record :plan/ok-for [[:active :bool] [:bumped :bool]]]
+     x
+     :active)
+    (if
+     (record-get
+      [:record :plan/ok-for [[:active :bool] [:bumped :bool]]]
+      x
+      :bumped)
+     false
+     true)
+    false),
+   :param-types [[:ref :plan/ok-for]]}
   {:name weight-pos?,
    :params [w],
    :result :bool,
@@ -279,10 +427,33 @@
        (if
         (< 0 extra)
         (pick-bump-3
-         (ok-for a0 false)
-         (ok-for a1 false)
-         (ok-for a2 false)
-         rems)
+         (record-new
+          [:record
+           :plan/bump3-in
+           [[:ok-t :bool]
+            [:ok-m :bool]
+            [:ok-p :bool]
+            [:rt :i64]
+            [:rm :i64]
+            [:rp :i64]]]
+          (ok-for
+           (record-new
+            [:record :plan/ok-for [[:active :bool] [:bumped :bool]]]
+            a0
+            false))
+          (ok-for
+           (record-new
+            [:record :plan/ok-for [[:active :bool] [:bumped :bool]]]
+            a1
+            false))
+          (ok-for
+           (record-new
+            [:record :plan/ok-for [[:active :bool] [:bumped :bool]]]
+            a2
+            false))
+          r0
+          r1
+          r2))
         -1)
        t0
        (if (= b0 0) true false)
@@ -294,10 +465,33 @@
        (if
         (< 1 extra)
         (pick-bump-3
-         (ok-for a0 t0)
-         (ok-for a1 m0)
-         (ok-for a2 p0b)
-         rems)
+         (record-new
+          [:record
+           :plan/bump3-in
+           [[:ok-t :bool]
+            [:ok-m :bool]
+            [:ok-p :bool]
+            [:rt :i64]
+            [:rm :i64]
+            [:rp :i64]]]
+          (ok-for
+           (record-new
+            [:record :plan/ok-for [[:active :bool] [:bumped :bool]]]
+            a0
+            t0))
+          (ok-for
+           (record-new
+            [:record :plan/ok-for [[:active :bool] [:bumped :bool]]]
+            a1
+            m0))
+          (ok-for
+           (record-new
+            [:record :plan/ok-for [[:active :bool] [:bumped :bool]]]
+            a2
+            p0b))
+          r0
+          r1
+          r2))
         -1)
        t1
        (if (= b1 0) true t0)
@@ -309,10 +503,33 @@
        (if
         (< 2 extra)
         (pick-bump-3
-         (ok-for a0 t1)
-         (ok-for a1 m1)
-         (ok-for a2 p1b)
-         rems)
+         (record-new
+          [:record
+           :plan/bump3-in
+           [[:ok-t :bool]
+            [:ok-m :bool]
+            [:ok-p :bool]
+            [:rt :i64]
+            [:rm :i64]
+            [:rp :i64]]]
+          (ok-for
+           (record-new
+            [:record :plan/ok-for [[:active :bool] [:bumped :bool]]]
+            a0
+            t1))
+          (ok-for
+           (record-new
+            [:record :plan/ok-for [[:active :bool] [:bumped :bool]]]
+            a1
+            m1))
+          (ok-for
+           (record-new
+            [:record :plan/ok-for [[:active :bool] [:bumped :bool]]]
+            a2
+            p1b))
+          r0
+          r1
+          r2))
         -1)
        bump0
        (if (if (= b0 0) 1 (if (= b1 0) 1 (if (= b2 0) 1 0))) 1 0)
@@ -1132,24 +1349,30 @@
    :param-types [:i64]}],
  :oracle-value nil,
  :schema-identities
- #:plan{:cut
-        "bee6af30869f624d0f7d493576efd082a870f6a1207dfba0754ee174253d9b43",
+ #:plan{:bump-cmp
+        "881c3cb4fed91cc9f1f526c099657f6a44f0b02c9169679f5d60aac453deb35e",
+        :bump3-in
+        "56f2c90dfb9595f0e7ebad6b41a2e53c69894ee27bbc7a4bcb158b178384303c",
+        :cut
+        "4121e2e5290d47d6e31014c04090ec88bca86045c48677482181a1dc091d3c21",
         :ends
-        "2062baea0c7cc4120e31ffec37eb3734d76830dc4cdd9f29573b64dbff2c12fe",
+        "363e461af6a6960d5521afc49d961f9e7df8d34eaa3eda67690978cb11e8bb2c",
         :model
-        "1924628bae3f4b0f892f1a3cbed7c24b6ea71c6dfc82abf2a784ddfb7d9cbf73",
+        "f3bffef83838529b5b727735949a3ec867ef004a814ab3bf7ced52f6d72ec625",
         :node-cap
-        "487fcd461e524d57d5b63e2c9cd1efa7e56b01295eb4146e5fc4e92ba5a2f671",
+        "0a32f7a568c59ed0da09f278252f65920d9619a2d3204c1c89ae66648606e559",
+        :ok-for
+        "70e885c4e6aba009febbd65d77b3091fbe003860097d823d94247e9334c36bc0",
         :pair
-        "1aa597ef38f88fd8734cc0caf37e4a2480f34c3467f6538029c11d7292605962",
+        "3ff7d98bc0e2cb750f8755bdba874d2b8f15230317d262e9bb6f50b67b34e778",
         :row
-        "7d2ff8a50b7b056e25206640dab33d23eaa889d110b41d0812ac97b8f3ca7d98",
+        "1f8323ce830d1bbd00169bf89711dc09d9bf7bf8414820ebbc6f68bce76ea3d0",
         :strategy-in
-        "cb317a132b58e87129d26ef7482d5fa1e4b708758e68587cc26135ce4fc2797a",
+        "a2522473107f3b5b99b98e3f27c5feb910ab413e06b798749471ff8459febccd",
         :triple
-        "d5fd6a27203d27dd24cfe9de4616ddeed573f7e45c75b42c7ef51dbd5458cfae",
+        "1641c8198fe6a3c099a30d3a5bbb9866ec843f1f701e54c67b142c5fd43a17d9",
         :weights3
-        "27446fba3d0091eca0e02bf34c85d4163646d73974f4504fbe9376728c881de8"},
+        "e1789459725371454d00a0a165cc4ebc9ec1fdf9000f941da830aca9499ccdec"},
  :exports
  [gib
   default-os-reserve
@@ -1219,6 +1442,21 @@
          :plan/model
          [[:layers :i64] [:dense :i64] [:frac-milli :i64]]],
         :pair [:record :plan/pair [[:a :i64] [:b :i64]]],
+        :bump3-in
+        [:record
+         :plan/bump3-in
+         [[:ok-t :bool]
+          [:ok-m :bool]
+          [:ok-p :bool]
+          [:rt :i64]
+          [:rm :i64]
+          [:rp :i64]]],
+        :ok-for
+        [:record :plan/ok-for [[:active :bool] [:bumped :bool]]],
+        :bump-cmp
+        [:record
+         :plan/bump-cmp
+         [[:rem-a :i64] [:idx-a :i64] [:rem-b :i64] [:idx-b :i64]]],
         :strategy-in
         [:record
          :plan/strategy-in

@@ -20,7 +20,16 @@
              :plan/weights3 [:record :plan/weights3
                              [[:total :i64] [:w0 :i64] [:w1 :i64] [:w2 :i64]]]
              :plan/pair [:record :plan/pair [[:a :i64] [:b :i64]]]
-             :plan/triple [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]})
+             :plan/triple [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]
+             ;; T5.2 residual: largest-remainder bump tournament
+             :plan/bump-cmp [:record :plan/bump-cmp
+                             [[:rem-a :i64] [:idx-a :i64]
+                              [:rem-b :i64] [:idx-b :i64]]]
+             :plan/ok-for [:record :plan/ok-for
+                           [[:active :bool] [:bumped :bool]]]
+             :plan/bump3-in [:record :plan/bump3-in
+                             [[:ok-t :bool] [:ok-m :bool] [:ok-p :bool]
+                              [:rt :i64] [:rm :i64] [:rp :i64]]]})
   (:export [gib default-os-reserve default-headroom usable-bytes choose-strategy-name
             plan-lr-l0 plan-lr-l1 plan-lr-l2
             plan-fits-total? span-fits?
@@ -100,38 +109,51 @@
 
 ;; T5.3 is complete for this module: no base-65536 packing remains.
 
-(defn better-bump? [rem-a :i64 idx-a :i64 rem-b :i64 idx-b :i64] :bool
+(defn better-bump? [x [:ref :plan/bump-cmp]] :bool
   ;; higher rem wins; lower index wins ties (plan.cljc sort key [(- frac) i])
-  (if (< rem-b rem-a)
-    true
-    (if (< rem-a rem-b)
-      false
-      (if (< idx-a idx-b) true false))))
+  (let [rem-a (record-get x :rem-a)
+        idx-a (record-get x :idx-a)
+        rem-b (record-get x :rem-b)
+        idx-b (record-get x :idx-b)]
+    (if (< rem-b rem-a)
+      true
+      (if (< rem-a rem-b)
+        false
+        (if (< idx-a idx-b) true false)))))
 
-(defn pick-bump-3 [ok-t :bool ok-m :bool ok-p :bool rems [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]] :i64
-  (let [rt (record-get rems :l0)
-        rm (record-get rems :l1)
-        rp (record-get rems :l2)]
+(defn pick-bump-3 [x [:ref :plan/bump3-in]] :i64
+  (let [ok-t (record-get x :ok-t)
+        ok-m (record-get x :ok-m)
+        ok-p (record-get x :ok-p)
+        rt (record-get x :rt)
+        rm (record-get x :rm)
+        rp (record-get x :rp)]
     (if ok-t
       (if ok-m
-        (let [win-tm (if (better-bump? rt 0 rm 1) 0 1)
+        (let [win-tm (if (better-bump?
+                          (record-new [:ref :plan/bump-cmp] rt 0 rm 1)) 0 1)
               r-win (if (= win-tm 0) rt rm)
               i-win win-tm]
           (if ok-p
-            (if (better-bump? r-win i-win rp 2) win-tm 2)
+            (if (better-bump?
+                 (record-new [:ref :plan/bump-cmp] r-win i-win rp 2)) win-tm 2)
             win-tm))
         (if ok-p
-          (if (better-bump? rt 0 rp 2) 0 2)
+          (if (better-bump?
+               (record-new [:ref :plan/bump-cmp] rt 0 rp 2)) 0 2)
           0))
       (if ok-m
         (if ok-p
-          (if (better-bump? rm 1 rp 2) 1 2)
+          (if (better-bump?
+               (record-new [:ref :plan/bump-cmp] rm 1 rp 2)) 1 2)
           1)
         (if ok-p 2 -1)))))
 
-(defn ok-for [active :bool bumped :bool] :bool
+(defn ok-for [x [:ref :plan/ok-for]] :bool
   ;; active lane with positive weight and not yet bumped this remainder pass
-  (if active (if bumped false true) false))
+  (if (record-get x :active)
+    (if (record-get x :bumped) false true)
+    false))
 
 (defn weight-pos? [w :i64] :bool
   (if (< 0 w) true false))
@@ -164,19 +186,19 @@
             extra (- total assigned)
             rems (record-new [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]] r0 r1 r2)
             b0 (if (< 0 extra)
-                 (pick-bump-3 (ok-for a0 false) (ok-for a1 false) (ok-for a2 false) rems)
+                 (pick-bump-3 (record-new [:ref :plan/bump3-in] (ok-for (record-new [:ref :plan/ok-for] a0 false)) (ok-for (record-new [:ref :plan/ok-for] a1 false)) (ok-for (record-new [:ref :plan/ok-for] a2 false)) r0 r1 r2))
                  -1)
             t0 (if (= b0 0) true false)
             m0 (if (= b0 1) true false)
             p0b (if (= b0 2) true false)
             b1 (if (< 1 extra)
-                 (pick-bump-3 (ok-for a0 t0) (ok-for a1 m0) (ok-for a2 p0b) rems)
+                 (pick-bump-3 (record-new [:ref :plan/bump3-in] (ok-for (record-new [:ref :plan/ok-for] a0 t0)) (ok-for (record-new [:ref :plan/ok-for] a1 m0)) (ok-for (record-new [:ref :plan/ok-for] a2 p0b)) r0 r1 r2))
                  -1)
             t1 (if (= b1 0) true t0)
             m1 (if (= b1 1) true m0)
             p1b (if (= b1 2) true p0b)
             b2 (if (< 2 extra)
-                 (pick-bump-3 (ok-for a0 t1) (ok-for a1 m1) (ok-for a2 p1b) rems)
+                 (pick-bump-3 (record-new [:ref :plan/bump3-in] (ok-for (record-new [:ref :plan/ok-for] a0 t1)) (ok-for (record-new [:ref :plan/ok-for] a1 m1)) (ok-for (record-new [:ref :plan/ok-for] a2 p1b)) r0 r1 r2))
                  -1)
             bump0 (if (if (= b0 0) 1 (if (= b1 0) 1 (if (= b2 0) 1 0))) 1 0)
             bump1 (if (if (= b0 1) 1 (if (= b1 1) 1 (if (= b2 1) 1 0))) 1 0)
