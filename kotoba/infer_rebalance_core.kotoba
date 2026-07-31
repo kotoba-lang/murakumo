@@ -29,7 +29,15 @@
                                 [[:active :bool] [:bumped :bool]]]
              :rebalance/bump3-in [:record :rebalance/bump3-in
                                   [[:ok-t :bool] [:ok-m :bool] [:ok-p :bool]
-                                   [:rt :i64] [:rm :i64] [:rp :i64]]]})
+                                   [:rt :i64] [:rm :i64] [:rp :i64]]]
+             ;; T5.2 residual: seat-order tournament
+             :rebalance/seat-of [:record :rebalance/seat-of
+                                 [[:code :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+             :rebalance/before-pool [:record :rebalance/before-pool
+                                     [[:ia :i64] [:ib :i64]
+                                      [:st :i64] [:sm :i64] [:sp :i64]]]
+             :rebalance/order-nth [:record :rebalance/order-nth
+                                   [[:i0 :i64] [:i1 :i64] [:i2 :i64] [:n :i64]]]})
   (:export [shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class
             seats-of-text seats-of-media seats-of-postproc seats-total
             pool-demand-record pool-weight-text pool-weight-media pool-weight-postproc
@@ -102,16 +110,21 @@
 (defn weight-pos? [w :i64] :bool
   (if (< 0 w) true false))
 
-(defn count-active [wt :i64 wm :i64 wp :i64] :i64
-  (+ (if (weight-pos? wt) 1 0)
-     (+ (if (weight-pos? wm) 1 0)
-        (if (weight-pos? wp) 1 0))))
+(defn count-active [t [:ref :rebalance/triple]] :i64
+  (let [wt (record-get t :a)
+        wm (record-get t :b)
+        wp (record-get t :c)]
+    (+ (if (weight-pos? wt) 1 0)
+       (+ (if (weight-pos? wm) 1 0)
+          (if (weight-pos? wp) 1 0)))))
 
-(defn min2 [a :i64 b :i64] :i64
-  (if (< a b) a b))
+(defn min2 [p [:ref :rebalance/pair]] :i64
+  (if (< (record-get p :a) (record-get p :b))
+    (record-get p :a) (record-get p :b)))
 
-(defn max2 [a :i64 b :i64] :i64
-  (if (< a b) b a))
+(defn max2 [p [:ref :rebalance/pair]] :i64
+  (if (< (record-get p :a) (record-get p :b))
+    (record-get p :b) (record-get p :a)))
 
 (defn better-bump? [x [:ref :rebalance/bump-cmp]] :bool
   (let [rem-a (record-get x :rem-a)
@@ -165,16 +178,16 @@
   (let [at (weight-pos? wt)
         am (weight-pos? wm)
         ap (weight-pos? wp)
-        n-active (count-active wt wm wp)]
+        n-active (count-active (record-new [:ref :rebalance/triple] wt wm wp))]
     (if (if (= total 0) 1 (if (= n-active 0) 1 0))
       (record-new [:record :rebalance/lanes
                    [[:text :i64] [:media :i64] [:postproc :i64]]] 0 0 0)
-      (let [eff-floor (min2 floor (quot total n-active))
+      (let [eff-floor (min2 (record-new [:ref :rebalance/pair] floor (quot total n-active)))
             bt (if at eff-floor 0)
             bm (if am eff-floor 0)
             bp (if ap eff-floor 0)
             left0 (- total (+ bt (+ bm bp)))
-            left (max2 0 left0)
+            left (max2 (record-new [:ref :rebalance/pair] 0 left0))
             sumw (+ (if at wt 0)
                     (+ (if am wm 0)
                        (if ap wp 0)))
@@ -475,44 +488,68 @@
       "media-pool"
       (if (= code 2) "postproc-pool" "unknown"))))
 
-(defn seat-of [code :i64 st :i64 sm :i64 sp :i64] :i64
-  (if (= code 0) st (if (= code 1) sm sp)))
+(defn seat-of [x [:ref :rebalance/seat-of]] :i64
+  (let [code (record-get x :code)
+        st (record-get x :st)
+        sm (record-get x :sm)
+        sp (record-get x :sp)]
+    (if (= code 0) st (if (= code 1) sm sp))))
 
-(defn before-pool? [ia :i64 ib :i64 st :i64 sm :i64 sp :i64] :bool
+(defn before-pool? [x [:ref :rebalance/before-pool]] :bool
   ;; sort-by (comp - val): higher seats first; ties → lower index first (stable text<media<post)
-  (let [sa (seat-of ia st sm sp)
-        sb (seat-of ib st sm sp)]
+  (let [ia (record-get x :ia)
+        ib (record-get x :ib)
+        st (record-get x :st)
+        sm (record-get x :sm)
+        sp (record-get x :sp)
+        sa (seat-of (record-new [:ref :rebalance/seat-of] ia st sm sp))
+        sb (seat-of (record-new [:ref :rebalance/seat-of] ib st sm sp))]
     (if (< sb sa)
       true
       (if (< sa sb)
         false
         (if (< ia ib) true false)))))
 
-(defn seat-order-record [st :i64 sm :i64 sp :i64] [:ref :rebalance/order]
+(defn seat-order-record [t [:ref :rebalance/triple]] [:ref :rebalance/order]
   ;; permutation of pool codes 0,1,2 (desc seats); ties → lower index first
-  (let [p0 (if (before-pool? 0 1 st sm sp) 0 1)
-        p1 (if (before-pool? 0 1 st sm sp) 1 0)
-        q1 (if (before-pool? p1 2 st sm sp) p1 2)
-        q2 (if (before-pool? p1 2 st sm sp) 2 p1)
-        r0 (if (before-pool? p0 q1 st sm sp) p0 q1)
-        r1 (if (before-pool? p0 q1 st sm sp) q1 p0)]
+  ;; T5.2: a=st b=sm c=sp
+  (let [st (record-get t :a)
+        sm (record-get t :b)
+        sp (record-get t :c)
+        p0 (if (before-pool?
+               (record-new [:ref :rebalance/before-pool] 0 1 st sm sp)) 0 1)
+        p1 (if (before-pool?
+               (record-new [:ref :rebalance/before-pool] 0 1 st sm sp)) 1 0)
+        q1 (if (before-pool?
+               (record-new [:ref :rebalance/before-pool] p1 2 st sm sp)) p1 2)
+        q2 (if (before-pool?
+               (record-new [:ref :rebalance/before-pool] p1 2 st sm sp)) 2 p1)
+        r0 (if (before-pool?
+               (record-new [:ref :rebalance/before-pool] p0 q1 st sm sp)) p0 q1)
+        r1 (if (before-pool?
+               (record-new [:ref :rebalance/before-pool] p0 q1 st sm sp)) q1 p0)]
     (record-new [:record :rebalance/order [[:i0 :i64] [:i1 :i64] [:i2 :i64]]] r0 r1 q2)))
 
-(defn order-nth [ord [:ref :rebalance/order] n :i64] :i64
-  (if (= n 0)
-    (record-get ord :i0)
-    (if (= n 1)
-      (record-get ord :i1)
-      (record-get ord :i2))))
+(defn order-nth [x [:ref :rebalance/order-nth]] :i64
+  (let [n (record-get x :n)]
+    (if (= n 0)
+      (record-get x :i0)
+      (if (= n 1)
+        (record-get x :i1)
+        (record-get x :i2)))))
 
 (defn take-end [t [:ref :rebalance/triple]] :i64
   ;; exclusive end index for (take k rem) from start within [0, remaining)
   ;; T5.2: a=start b=k c=remaining
-  (min2 (record-get t :c) (+ (record-get t :a) (record-get t :b))))
+  (min2 (record-new [:ref :rebalance/pair]
+                    (record-get t :c)
+                    (+ (record-get t :a) (record-get t :b)))))
 
 (defn take-count [p [:ref :rebalance/pair]] :i64
   ;; T5.2: a=start b=end
-  (max2 0 (- (record-get p :b) (record-get p :a))))
+  (max2 (record-new [:ref :rebalance/pair]
+                    0
+                    (- (record-get p :b) (record-get p :a)))))
 
 (defn pipeline-note [p [:ref :rebalance/pair]] :string
   ;; cljc target-allocation pipeline :note

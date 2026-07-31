@@ -22,6 +22,19 @@
 
 (defn- rebal-triple-call [export a b c]
   (str "(" export " (record-new " rebal-triple-lit " " a " " b " " c "))"))
+
+(def ^:private reb-triple-lit
+  "[:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]")
+(def ^:private reb-order-nth-lit
+  "[:record :rebalance/order-nth [[:i0 :i64] [:i1 :i64] [:i2 :i64] [:n :i64]]]")
+
+(defn- seat-order-call [st sm sp]
+  (str "(seat-order-record (record-new " reb-triple-lit " " st " " sm " " sp "))"))
+
+(defn- order-nth-call [st sm sp n]
+  (str "(let [o " (seat-order-call st sm sp) "] "
+       "(order-nth (record-new " reb-order-nth-lit " "
+       "(record-get o :i0) (record-get o :i1) (record-get o :i2) " n ")))"))
 (def export-prefix
   (str "shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class "
        "seats-of-text seats-of-media seats-of-postproc seats-total "
@@ -338,17 +351,17 @@
 (deftest seat-order-and-take-slices
   (let [actual (compile-i64-cases
                 {;; seats text=5 media=3 post=2 → order 0,1,2
-                 "o0" "(order-nth (seat-order-record 5 3 2) 0)"
-                 "o1" "(order-nth (seat-order-record 5 3 2) 1)"
-                 "o2" "(order-nth (seat-order-record 5 3 2) 2)"
+                 "o0" (order-nth-call 5 3 2 0)
+                 "o1" (order-nth-call 5 3 2 1)
+                 "o2" (order-nth-call 5 3 2 2)
                  ;; media heaviest
-                 "m0" "(order-nth (seat-order-record 1 9 2) 0)"
-                 "m1" "(order-nth (seat-order-record 1 9 2) 1)"
-                 "m2" "(order-nth (seat-order-record 1 9 2) 2)"
+                 "m0" (order-nth-call 1 9 2 0)
+                 "m1" (order-nth-call 1 9 2 1)
+                 "m2" (order-nth-call 1 9 2 2)
                  ;; equal seats → stable index order text,media,post
-                 "e0" "(order-nth (seat-order-record 2 2 2) 0)"
-                 "e1" "(order-nth (seat-order-record 2 2 2) 1)"
-                 "e2" "(order-nth (seat-order-record 2 2 2) 2)"
+                 "e0" (order-nth-call 2 2 2 0)
+                 "e1" (order-nth-call 2 2 2 1)
+                 "e2" (order-nth-call 2 2 2 2)
                  "te" (rebal-triple-call "take-end" 0 2 5)
                  "te2" (rebal-triple-call "take-end" 2 3 5)
                  "te3" (rebal-triple-call "take-end" 4 3 5)
