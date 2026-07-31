@@ -35,6 +35,18 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private join-path-schema
+  [:record :deploy/join-path [[:a :string] [:b :string]]])
+(def ^:private app-manifest-schema
+  [:record :deploy/app-manifest
+   [[:manifest-dir :string] [:manifest :string]]])
+(def ^:private component-build-schema
+  [:record :deploy/component-build
+   [[:kotoba :string] [:src-path :string] [:wit :string] [:wasm :string]]])
+(def ^:private app-deploy-schema
+  [:record :deploy/app-deploy
+   [[:kotoba :string] [:manifest :string] [:wit :string] [:port :i64]]])
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def argv-join-sep
@@ -193,11 +205,11 @@
 
 (defn join-path
   "Join two path segments with path-sep. Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :deploy/join-path argument."
   [a b]
   (o-record 'join-path
-            {:a a :b b}
-            [[:a :string] [:b :string]]))
+            {:x (oracle/record join-path-schema {:a a :b b})}
+            [[:x :raw]]))
 
 (defn pin-wit-dest
   "Pinned WIT directory path under dest. Kotoba (required).
@@ -237,11 +249,13 @@
 
 (defn app-manifest-path
   "Resolve an app manifest file relative to a desired-state manifest directory.
-   Kotoba (required). T5.2: structural map → call-record."
+   Kotoba (required). T5.2 native guest record wire: single :deploy/app-manifest."
   [manifest-dir app]
   (o-record 'app-manifest-path
-            {:manifest-dir manifest-dir :manifest (:manifest app)}
-            [[:manifest-dir :string] [:manifest :string]]))
+            {:x (oracle/record app-manifest-schema
+                               {:manifest-dir manifest-dir
+                                :manifest (:manifest app)})}
+            [[:x :raw]]))
 
 (defn publish-selector
   "Resolve the publish-node selector, defaulting to the fleet canary.
