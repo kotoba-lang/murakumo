@@ -44,6 +44,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 (def default-per-token
   ;; credits per generated token
   (oracle/i64->host (o 'default-per-token [])))
@@ -65,15 +71,19 @@
 
 (defn- memory-time
   "node → shard-bytes × duration-ms, the contribution weight of one run.
-   Kotoba memory-time-weight (required; span < 1 → 0)."
+   Kotoba memory-time-weight (required; span < 1 → 0).
+   T5.2: structural map → call-record."
   [assignments duration-ms]
   (into {}
         (for [{:keys [node est-bytes span]} assignments
               :let [w (oracle/i64->host
-                       (o 'memory-time-weight
-                          [(oracle/as-i64 (or est-bytes 0))
-                           (oracle/as-i64 (or duration-ms 0))
-                           (oracle/as-i64 (or span 0))]))]
+                       (o-record 'memory-time-weight
+                                 {:est-bytes (or est-bytes 0)
+                                  :duration-ms (or duration-ms 0)
+                                  :span (or span 0)}
+                                 [[:est-bytes :i64]
+                                  [:duration-ms :i64]
+                                  [:span :i64]]))]
               :when (pos? w)]
           [(:name node) (double w)])))
 
@@ -340,9 +350,9 @@
         allow? (if (and (== (double (long bal)) (double bal))
                         (== (double (long cost)) (double cost)))
                  (oracle/bool->host
-                  (o 'charge-allow?
-                     [(oracle/as-i64 (long bal))
-                      (oracle/as-i64 (long cost))]))
+                  (o-record 'charge-allow?
+                            {:balance (long bal) :cost (long cost)}
+                            [[:balance :i64] [:cost :i64]]))
                  (>= bal cost))]
     (cond
       (and (= tier :sla) (not (availability-proof-ok? availability-verdicts)))

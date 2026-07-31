@@ -30,7 +30,11 @@
             [murakumo.infer.join :as join]
             [murakumo.infer.gc :as gc]
             [murakumo.infer.engine :as eng]
-            [murakumo.infer.schedule :as sched]))
+            [murakumo.infer.schedule :as sched]
+            [murakumo.report :as report]
+            [murakumo.overlay.stream :as stream]
+            [murakumo.infer.credits :as credits]
+            [murakumo.infer.rebalance :as rebal]))
 
 (deftest map->args-projects-kinds
   (is (= ["a" "b"]
@@ -408,3 +412,60 @@
     (let [sm (task/summary [] 1000)]
       (is (map? sm))
       (is (number? (:retried sm))))))
+
+(deftest call-record-report-stream-credits-rebalance
+  "T5.2 wave 10: report multi-arg + stream/credits/rebalance NO-CR close-out."
+  (when (oracle/ready? :report-core)
+    (is (string? (report/nodes-row {:name "a" :ip "1.2.3.4" :online? true}
+                                   true "ok")))
+    (is (string? (report/mesh-status "installed" "running")))
+    (is (string? (report/launch-result-line {:name "a"} {:exit 0})))
+    (is (string? (report/csv-join ["x" "y"])))
+    (is (string? (report/dashboard-start-line 8080 30)))
+    (let [lines (report/reconcile-lines
+                 {:fleet "f" :ts "t0"
+                  :apps [{:app "app1" :cid "bafyabc" :desired 1
+                          :running ["n1"] :targets ["n1"]
+                          :action :satisfied :reason "ok"}]})]
+      (is (vector? lines))
+      (is (seq lines))))
+  (when (oracle/ready? :overlay-stream)
+    (let [s {:type stream/type-stream :id "s1" :next-seq stream/initial-next-seq
+             :window stream/default-window-size :closed? false
+             :overlay "o" :node "n" :name "a" :service "svc"}
+          s2 (stream/advance s)
+          fr (stream/frame s "payload")
+          a (stream/ack fr true)]
+      (is (= (inc (:next-seq s)) (:next-seq s2)))
+      (is (true? (:accepted? a)))))
+  (when (oracle/ready? :infer-credits)
+    (let [r (credits/charge {"alice" 100.0} "alice"
+                            {:model {:model/id "m" :credit/per-token 1}
+                             :tokens 10})]
+      (is (true? (:allow? r)))
+      (is (= 10.0 (:cost r))))
+    (let [settled (credits/settle
+                   {:model {:model/id "m" :credit/per-token 1}
+                    :tokens 100
+                    :duration-ms 1000
+                    :plan {:assignments
+                           [{:node {:name "w" :head? false}
+                             :est-bytes 1000 :span 1}
+                            {:node {:name "head" :head? true}
+                             :est-bytes 100 :span 1}]}})]
+      (is (map? settled))
+      (is (pos? (:run/total settled)))))
+  (when (oracle/ready? :infer-rebalance)
+    (let [cap (rebal/capacity
+               {:nodes [{:id "h" :ram-gb 64 :roles ["relay"] :status "up"
+                         :disk-free 100}
+                        {:id "w1" :ram-gb 32 :roles [] :status "up"
+                         :disk-free 50}
+                        {:id "w2" :ram-gb 32 :roles [] :status "up"
+                         :disk-free 50}]})
+          demand {:text 10 :image 2 :video 0 :audio 0 :postproc 1}
+          target (rebal/target-allocation cap demand)]
+      (is (map? target))
+      (is (some? (:head target)))
+      (is (map? (:pool-seats target)))
+      (is (pos? (get-in target [:pool-seats :text-pool] 0))))))
