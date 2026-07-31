@@ -1,4 +1,41 @@
 (ns report-core
+  (:schemas {;; T5.2 native guest record wire
+             :report/mesh [:record :report/mesh
+                           [[:binary :string] [:launch :string]]]
+             :report/pair-str [:record :report/pair-str
+                               [[:a :string] [:b :string]]]
+             :report/triple-str [:record :report/triple-str
+                                 [[:a :string] [:b :string] [:c :string]]]
+             :report/pad [:record :report/pad
+                          [[:s :string] [:pad :i64]]]
+             :report/pad-to [:record :report/pad-to
+                             [[:s :string] [:width :i64]]]
+             :report/count-file [:record :report/count-file
+                                 [[:count :i64] [:peers-file :string]]]
+             :report/name-ok [:record :report/name-ok
+                              [[:name :string] [:ok :bool]]]
+             :report/name-exit [:record :report/name-exit
+                                [[:name :string] [:exit-str :string]]]
+             :report/ports [:record :report/ports
+                            [[:port :i64] [:interval :i64]]]
+             :report/nodes-row [:record :report/nodes-row
+                                [[:name :string] [:ip :string]
+                                 [:online :bool] [:ssh-ok :bool] [:mesh :string]]]
+             :report/title [:record :report/title
+                            [[:fleet :string] [:ts :string]]]
+             :report/cid [:record :report/cid
+                          [[:cid :string] [:present :bool]]]
+             :report/action-detail [:record :report/action-detail
+                                    [[:action :string] [:targets :string]
+                                     [:running :string] [:running-empty :bool]
+                                     [:reason :string]]]
+             :report/app-row [:record :report/app-row
+                              [[:app :string] [:cid :string]
+                               [:desired :i64] [:running-n :i64] [:action :string]]]
+             :report/join [:record :report/join
+                           [[:acc :string] [:sep :string] [:next :string]]]
+             :report/csv [:record :report/csv
+                          [[:acc :string] [:next :string]]]})
   (:export [digit-char nat-str i64-str blank? ws? trim
             mesh-status node-prefix unreachable-skipped-line
             provision-result-line mesh-pass1-line mesh-wait-peerid-line
@@ -34,10 +71,8 @@
 ;; Column-padded tables: pad-to(width) + nodes-row / status-row pure (ASCII).
 ;; reconcile-lines: pure title/col-header/app-row/detail/reach/drift;
 ;; host still mapcats apps; CSV join fold steps dual-sourced.
-;; CSV join seps + cid-display max dual-source for host folds.
-;; join-append / csv-append / csv-spaced-append: pure reduce steps for
-;; targets/running/reach/misplaced and deploy-observed where lists.
-;; command-help: full CLI help as one pure string.
+;; T5.2: multi-scalar pure inputs take single guest records
+;; (status-row/health-label option residual stays positional).
 ;; Parity: test/murakumo/report_kotoba_parity_test.clj
 
 (defn digit-char [d :i64] :string
@@ -83,8 +118,10 @@
 
 (defn mesh-status-sep [] :string "/")
 
-(defn mesh-status [binary-status :string launch-status :string] :string
-  (string-concat binary-status (string-concat (mesh-status-sep) launch-status)))
+(defn mesh-status [m [:ref :report/mesh]] :string
+  ;; T5.2 native: binary+launch.
+  (string-concat (record-get m :binary)
+                 (string-concat (mesh-status-sep) (record-get m :launch))))
 
 (defn node-prefix [name :string] :string
   (string-concat "[" (string-concat name "] ")))
@@ -138,19 +175,23 @@
 (defn missing-binary-line [path :string] :string
   (string-concat "missing binary: " path))
 
-(defn deploy-start-line [manifest :string cid :string] :string
+(defn deploy-start-line [p [:ref :report/pair-str]] :string
+  ;; T5.2: a=manifest b=cid
   (string-concat
    "deploy "
-   (string-concat manifest (string-concat "  (component " (string-concat cid ")")))))
+   (string-concat (record-get p :a)
+                  (string-concat "  (component " (string-concat (record-get p :b) ")")))))
 
-(defn pin-success-line [src :string sha :string version :string] :string
+(defn pin-success-line [p [:ref :report/triple-str]] :string
+  ;; T5.2: a=src b=sha c=version
   (string-concat
    "pinned kotoba + kotoba-server → bin/  (src "
    (string-concat
-    src
+    (record-get p :a)
     (string-concat
      " @ "
-     (string-concat sha (string-concat ", " (string-concat version ")")))))))
+     (string-concat (record-get p :b)
+                    (string-concat ", " (string-concat (record-get p :c) ")")))))))
 
 (defn snapshot-error-line [message :string] :string
   (string-concat "snapshot error: " message))
@@ -168,64 +209,73 @@
   ;; Product Value ABI v1: optional health presence (no has-health sentinel).
   (if-some [_ health?] "ok" "no-resp"))
 
-(defn launch-result-line [name :string exit-str :string] :string
-  ;; cljc: (str (:name node) " " (:exit result)) — host projects exit as string
-  (string-concat name (string-concat " " exit-str)))
+(defn launch-result-line [p [:ref :report/name-exit]] :string
+  ;; T5.2 native.
+  (string-concat (record-get p :name)
+                 (string-concat " " (record-get p :exit-str))))
 
-(defn rollout-line [version :string sha :string features :string] :string
+(defn rollout-line [p [:ref :report/triple-str]] :string
+  ;; T5.2: a=version b=sha c=features
   (string-concat
    "rolling out kotoba "
    (string-concat
-    version
+    (record-get p :a)
     (string-concat
      " (sha "
-     (string-concat sha (string-concat ", " (string-concat features ")")))))))
+     (string-concat (record-get p :b)
+                    (string-concat ", " (string-concat (record-get p :c) ")")))))))
 
-(defn collected-peers-line [count :i64 peers-file :string] :string
+(defn collected-peers-line [p [:ref :report/count-file]] :string
+  ;; T5.2 native.
   (string-concat
    "── collected "
    (string-concat
-    (i64-str count)
-    (string-concat " PeerIds → " (string-concat peers-file " ──")))))
+    (i64-str (record-get p :count))
+    (string-concat " PeerIds → "
+                   (string-concat (record-get p :peers-file) " ──")))))
 
-(defn artifact-node-status [name :string ok :bool] :string
-  ;; cljc: (format " %s%s" name (if (zero? exit) "✓" "✗"))
-  ;; Profile 5: ok is :bool (host projects zero-exit → true).
+(defn artifact-node-status [p [:ref :report/name-ok]] :string
+  ;; Profile 5: ok is :bool. T5.2 native.
   (string-concat
    " "
-   (string-concat name (if ok "✓" "✗"))))
+   (string-concat (record-get p :name)
+                  (if (record-get p :ok) "✓" "✗"))))
 
-(defn deploy-command-output [out :string err :string] :string
-  ;; cljc: (str (str/trim (str out)) (str err))
-  (string-concat (trim out) err))
+(defn deploy-command-output [p [:ref :report/pair-str]] :string
+  ;; T5.2: a=out b=err
+  (string-concat (trim (record-get p :a)) (record-get p :b)))
 
-(defn alert-line [level :string node :string msg :string] :string
+(defn alert-line [p [:ref :report/triple-str]] :string
+  ;; T5.2: a=level b=node c=msg
   (string-concat
    "[alert/"
    (string-concat
-    level
+    (record-get p :a)
     (string-concat
      "] "
-     (string-concat node (string-concat " — " msg))))))
+     (string-concat (record-get p :b)
+                    (string-concat " — " (record-get p :c)))))))
 
-(defn dashboard-start-line [port :i64 interval :i64] :string
+(defn dashboard-start-line [p [:ref :report/ports]] :string
+  ;; T5.2 native.
   (string-concat
    "murakumo dashboard → http://localhost:"
    (string-concat
-    (i64-str port)
+    (i64-str (record-get p :port))
     (string-concat
      "  (snapshot every "
-     (string-concat (i64-str interval) "s → Datom log)")))))
+     (string-concat (i64-str (record-get p :interval)) "s → Datom log)")))))
 
-(defn apply-target-line [app :string target :string] :string
+(defn apply-target-line [p [:ref :report/pair-str]] :string
+  ;; T5.2: a=app b=target
   (string-concat
    "  applying "
    (string-concat
-    app
+    (record-get p :a)
     (string-concat
      " → deploy to "
      (string-concat
-      target
+      (record-get p :b)
       " (no cross-node auction; murakumo picks the target directly)")))))
 
 (defn watch-start-line [seconds :i64] :string
@@ -236,166 +286,179 @@
 (defn deploy-observed-empty-line [] :string
   "  ⚠ not yet observed running on any node (check `murakumo status` / node logs)")
 
-(defn deploy-observed-placed-line [where :string publish-name :string] :string
-  ;; host joins where nodes with ", "
+(defn deploy-observed-placed-line [p [:ref :report/pair-str]] :string
+  ;; T5.2: a=where b=publish-name
   (string-concat
    "  ✓ placed + running on: "
    (string-concat
-    where
-    (string-concat "  (deployed from " (string-concat publish-name ")")))))
+    (record-get p :a)
+    (string-concat "  (deployed from "
+                   (string-concat (record-get p :b) ")")))))
 
-(defn missing-pinned-binaries-line1 [version :string sha :string] :string
+(defn missing-pinned-binaries-line1 [p [:ref :report/pair-str]] :string
+  ;; T5.2: a=version b=sha
   (string-concat
    "fleet pins kotoba "
    (string-concat
-    version
+    (record-get p :a)
     (string-concat
      " (sha "
-     (string-concat sha ") but ./bin has no binaries.")))))
+     (string-concat (record-get p :b) ") but ./bin has no binaries.")))))
 
 (defn missing-pinned-binaries-line2 [] :string
   "Build that version and `murakumo pin <its release dir>` before provisioning.")
 
-(defn command-error-line [command :string error :string] :string
-  (if (if (string=? command "provision")
-        (if (string=? error "missing-operator-seed-hex") 1 0)
-        0)
-    (operator-seed-hex-required-line)
-    (if (if (string=? command "mesh")
-          (if (string=? error "missing-operator-seed") 1 0)
+(defn command-error-line [p [:ref :report/pair-str]] :string
+  ;; T5.2: a=command b=error
+  (let [command (record-get p :a)
+        error (record-get p :b)]
+    (if (if (string=? command "provision")
+          (if (string=? error "missing-operator-seed-hex") 1 0)
           0)
-      (operator-seed-required-line)
-      (if (if (string=? command "deploy")
-            (if (string=? error "missing-manifest") 1 0)
+      (operator-seed-hex-required-line)
+      (if (if (string=? command "mesh")
+            (if (string=? error "missing-operator-seed") 1 0)
             0)
-        (deploy-usage-line)
+        (operator-seed-required-line)
         (if (if (string=? command "deploy")
-              (if (string=? error "missing-operator-seed") 1 0)
+              (if (string=? error "missing-manifest") 1 0)
               0)
-          (operator-seed-required-line)
-          (if (if (string=? command "reconcile")
-                (if (string=? error "missing-manifest") 1 0)
+          (deploy-usage-line)
+          (if (if (string=? command "deploy")
+                (if (string=? error "missing-operator-seed") 1 0)
                 0)
-            (reconcile-usage-line)
-            (string-concat
-             "unknown "
-             (string-concat command (string-concat " error: " error)))))))))
+            (operator-seed-required-line)
+            (if (if (string=? command "reconcile")
+                  (if (string=? error "missing-manifest") 1 0)
+                  0)
+              (reconcile-usage-line)
+              (string-concat
+               "unknown "
+               (string-concat command (string-concat " error: " error))))))))))
 
 (defn spaces [n :i64] :string
   (if (< n 1)
     ""
     (string-concat " " (spaces (- n 1)))))
 
-(defn pad-right [s :string pad-n :i64] :string
-  ;; host supplies pad-n = max(0, width - (count s)); pure concat
-  (string-concat s (spaces pad-n)))
+(defn pad-right [p [:ref :report/pad]] :string
+  ;; T5.2 native.
+  (string-concat (record-get p :s) (spaces (record-get p :pad))))
 
-(defn pad-to [s :string width :i64] :string
-  ;; ASCII left-align to width (byte-length = char-length for CLI labels)
-  (let [n (string-byte-length s)
+(defn pad-to [p [:ref :report/pad-to]] :string
+  ;; ASCII left-align to width. T5.2 native.
+  (let [s (record-get p :s)
+        width (record-get p :width)
+        n (string-byte-length s)
         pad (- width n)]
-    (pad-right s (if (< pad 0) 0 pad))))
+    (pad-right (record-new [:ref :report/pad] s (if (< pad 0) 0 pad)))))
 
-(defn field-10 [s :string pad-n :i64] :string
-  (pad-right s pad-n))
+(defn field-10 [p [:ref :report/pad]] :string
+  (pad-right p))
 
-(defn field-16 [s :string pad-n :i64] :string
-  (pad-right s pad-n))
+(defn field-16 [p [:ref :report/pad]] :string
+  (pad-right p))
 
-(defn field-8 [s :string pad-n :i64] :string
-  (pad-right s pad-n))
+(defn field-8 [p [:ref :report/pad]] :string
+  (pad-right p))
 
-(defn field-9 [s :string pad-n :i64] :string
-  (pad-right s pad-n))
+(defn field-9 [p [:ref :report/pad]] :string
+  (pad-right p))
 
-(defn field-12 [s :string pad-n :i64] :string
-  (pad-right s pad-n))
+(defn field-12 [p [:ref :report/pad]] :string
+  (pad-right p))
 
-(defn field-6 [s :string pad-n :i64] :string
-  (pad-right s pad-n))
+(defn field-6 [p [:ref :report/pad]] :string
+  (pad-right p))
 
 (defn nodes-header [] :string
-  ;; cljc (format "%-10s %-16s %-8s %-9s %s" ...)
   "NODE       TAILSCALE-IP     ONLINE   SSH       MESH")
 
 (defn status-header [] :string
-  ;; cljc (format "%-10s %-8s %-12s %-6s %s" ...)
   "NODE       HEALTH   WASM-EXEC    LINKS  P2P-PORT")
 
 (defn status-down-suffix [] :string
-  ;; trailing spaces after "down" in status-down-row format "%-10s %-8s"
   "down    ")
 
-(defn nodes-row [name :string ip :string online :bool ssh-ok :bool mesh :string] :string
-  ;; cljc nodes-row; host projects nil ip → "?" and online?/ssh as :bool
-  (string-concat
-   (pad-to name 10)
-   (string-concat
-    " "
+(defn nodes-row [r [:ref :report/nodes-row]] :string
+  ;; T5.2 native.
+  (let [name (record-get r :name)
+        ip (record-get r :ip)
+        online (record-get r :online)
+        ssh-ok (record-get r :ssh-ok)
+        mesh (record-get r :mesh)]
     (string-concat
-     (pad-to ip 16)
+     (pad-to (record-new [:ref :report/pad-to] name 10))
      (string-concat
       " "
       (string-concat
-       (pad-to (online-label online) 8)
+       (pad-to (record-new [:ref :report/pad-to] ip 16))
        (string-concat
         " "
         (string-concat
-         (pad-to (ssh-label ssh-ok) 9)
-         (string-concat " " mesh)))))))))
+         (pad-to (record-new [:ref :report/pad-to] (online-label online) 8))
+         (string-concat
+          " "
+          (string-concat
+           (pad-to (record-new [:ref :report/pad-to] (ssh-label ssh-ok) 9))
+           (string-concat " " mesh))))))))))
 
 (defn status-down-row [name :string] :string
-  (string-concat (pad-to name 10) (string-concat " " (status-down-suffix))))
+  (string-concat (pad-to (record-new [:ref :report/pad-to] name 10))
+                 (string-concat " " (status-down-suffix))))
 
 (defn status-row [name :string health? [:option :i64] wasm-exec :string
                   links-str :string p2p-port :i64] :string
-  ;; host projects wasm "?" / links "-" when no health-json
-  ;; Product Value ABI v1: optional health? (no has-health sentinel)
+  ;; option residual: stays positional for this wave
   (string-concat
-   (pad-to name 10)
+   (pad-to (record-new [:ref :report/pad-to] name 10))
    (string-concat
     " "
     (string-concat
-     (pad-to (health-label health?) 8)
+     (pad-to (record-new [:ref :report/pad-to] (health-label health?) 8))
      (string-concat
       " "
       (string-concat
-       (pad-to wasm-exec 12)
+       (pad-to (record-new [:ref :report/pad-to] wasm-exec 12))
        (string-concat
         " "
         (string-concat
-         (pad-to links-str 6)
+         (pad-to (record-new [:ref :report/pad-to] links-str 6))
          (string-concat " " (i64-str p2p-port))))))))))
+
 (defn command-help [] :string
-  ;; cljc (str/join "\n" [...]) full operator help
   "murakumo — kotoba WASM mesh control plane\n\ncommands:\n  nodes                       fleet reachability + mesh presence\n  pin       [src-dir]         copy a consistent kotoba cli+server into ./bin (own it)\n  provision [node|all]        rsync binaries + install resident LaunchDaemon\n  mesh      [node|all]        form ONE gossipsub lattice (2-pass: peer-id + bootstrap)\n  up/down   [node|all]        start/stop the resident mesh node\n  status    [node|all]        fold /health across the fleet (PEERS = live links)\n  deploy    <app.edn> [node]  compile clj→WASM + distribute + publish to the lattice\n  reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]  declarative desired-state (wadm)\n  cloud     [plan|records|routes|dial|connect <node>|relay <name>|bootstrap]    plan murakumo.cloud identity overlay\n  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log\n  fleet     <datom-log.edn>    fold a kotoba-fleet Datom log into one coordination view\n  infer     probe|plan <model>|provision|up|down|ps|serve|generate  distributed inference (exo-style shard plan)\n  model     plan|setup|status <model> [node|all] [cache-dir]  Hugging Face model provisioning\n  revive    [node|all]        wake offline fleet Macs via a live LAN peer\n\nenv: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR")
 
-(defn reconcile-title [fleet :string ts :string] :string
-  ;; host passes "fleet" when plan :fleet is nil
+(defn reconcile-title [p [:ref :report/title]] :string
+  ;; T5.2 native.
   (string-concat
    "reconcile "
-   (string-concat fleet (string-concat "  @ " ts))))
+   (string-concat (record-get p :fleet)
+                  (string-concat "  @ " (record-get p :ts)))))
 
 (defn reconcile-col-header [] :string
   "  APP            CID        DESIRED RUNNING ACTION    DETAIL")
 
-(defn cid-display [cid :string present :bool] :string
-  ;; present false → em dash; true → host-truncated cid (≤16 like fmt-cid)
-  (if present
-    cid
+(defn cid-display [p [:ref :report/cid]] :string
+  ;; T5.2 native.
+  (if (record-get p :present)
+    (record-get p :cid)
     "—"))
 
-(defn action-detail [action :string targets-csv :string
-                     running-csv :string running-empty :bool
-                     reason :string] :string
-  ;; Profile 5: running-empty is :bool (no 0/1 i64).
-  (if (string=? action "place")
-    (string-concat "→ " targets-csv)
-    (if (string=? action "satisfied")
-      (if running-empty
-        ""
-        (string-concat "on " running-csv))
-      reason)))
+(defn action-detail [p [:ref :report/action-detail]] :string
+  ;; Profile 5: running-empty is :bool. T5.2 native.
+  (let [action (record-get p :action)
+        targets-csv (record-get p :targets)
+        running-csv (record-get p :running)
+        running-empty (record-get p :running-empty)
+        reason (record-get p :reason)]
+    (if (string=? action "place")
+      (string-concat "→ " targets-csv)
+      (if (string=? action "satisfied")
+        (if running-empty
+          ""
+          (string-concat "on " running-csv))
+        reason))))
 
 (defn nat-len [n :i64] :i64
   (if (< n 0)
@@ -405,75 +468,75 @@
       (+ 1 (nat-len (quot n 10))))))
 
 (defn field-i64-7 [n :i64] :string
-  ;; cljc %-7d left-aligned
   (let [s (i64-str n)
         pad (- 7 (nat-len n))]
-    (pad-right s (if (< pad 0) 0 pad))))
+    (pad-right (record-new [:ref :report/pad] s (if (< pad 0) 0 pad)))))
 
-(defn reconcile-app-row [app14 :string cid10 :string
-                         desired :i64 running-n :i64
-                         action9 :string] :string
-  ;; app14/cid10/action9 are host pad-right fields (widths 14/10/9).
-  ;; detail is joined by host after this front (arity 5).
+(defn reconcile-app-row [r [:ref :report/app-row]] :string
+  ;; T5.2 native.
   (string-concat
    "  "
    (string-concat
-    app14
+    (record-get r :app)
     (string-concat
      " "
      (string-concat
-      cid10
+      (record-get r :cid)
       (string-concat
        " "
        (string-concat
-        (field-i64-7 desired)
+        (field-i64-7 (record-get r :desired))
         (string-concat
          " "
          (string-concat
-          (field-i64-7 running-n)
-          (string-concat " " action9))))))))))
+          (field-i64-7 (record-get r :running-n))
+          (string-concat " " (record-get r :action)))))))))))
 
-(defn reconcile-app-line [front :string detail :string] :string
-  (string-concat front (string-concat " " detail)))
+(defn reconcile-app-line [p [:ref :report/pair-str]] :string
+  ;; T5.2: a=front b=detail
+  (string-concat (record-get p :a) (string-concat " " (record-get p :b))))
 
-(defn reach-line [reach-csv :string eligible-csv :string] :string
+(defn reach-line [p [:ref :report/pair-str]] :string
+  ;; T5.2: a=reach-csv b=eligible-csv
   (string-concat
    "                            reach: "
    (string-concat
-    reach-csv
-    (string-concat " → eligible(by transport)=" eligible-csv))))
+    (record-get p :a)
+    (string-concat " → eligible(by transport)=" (record-get p :b)))))
 
 (defn drift-line [misplaced-csv :string] :string
   (string-concat
    "                            drift: running on non-eligible node(s): "
    misplaced-csv))
 
-;; ── residual CSV join seps + cid display length ──────────────────────
-
 (defn report-csv-sep [] :string
-  ;; reconcile targets/running/reach/misplaced host join
   ",")
 
 (defn report-csv-spaced-sep [] :string
-  ;; deploy-observed where-list host join
   ", ")
 
 (defn cid-display-max-len [] :i64
-  ;; host fmt-cid truncates to this many chars before cid-display
   16)
 
-;; ── residual CSV join fold steps (host still walks item collections) ─
+(defn join-append [j [:ref :report/join]] :string
+  ;; T5.2 native.
+  (let [acc (record-get j :acc)
+        sep (record-get j :sep)
+        next (record-get j :next)]
+    (if (string=? acc "")
+      next
+      (string-concat acc (string-concat sep next)))))
 
-(defn join-append [acc :string sep :string next :string] :string
-  ;; empty acc ⇒ first item only (no leading sep)
-  (if (string=? acc "")
-    next
-    (string-concat acc (string-concat sep next))))
+(defn csv-append [c [:ref :report/csv]] :string
+  ;; T5.2 native.
+  (join-append (record-new [:ref :report/join]
+                           (record-get c :acc)
+                           (report-csv-sep)
+                           (record-get c :next))))
 
-(defn csv-append [acc :string next :string] :string
-  ;; host reduce over targets/running/reach/eligible/misplaced
-  (join-append acc (report-csv-sep) next))
-
-(defn csv-spaced-append [acc :string next :string] :string
-  ;; host reduce over deploy-observed where list
-  (join-append acc (report-csv-spaced-sep) next))
+(defn csv-spaced-append [c [:ref :report/csv]] :string
+  ;; T5.2 native.
+  (join-append (record-new [:ref :report/join]
+                           (record-get c :acc)
+                           (report-csv-spaced-sep)
+                           (record-get c :next))))

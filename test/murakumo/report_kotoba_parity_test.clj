@@ -29,6 +29,40 @@
        "report-csv-sep report-csv-spaced-sep mesh-status-sep cid-display-max-len "
        "join-append csv-append csv-spaced-append"))
 
+
+(def ^:private mesh-ty
+  "[:record :report/mesh [[:binary :string] [:launch :string]]]")
+(def ^:private pair-ty
+  "[:record :report/pair-str [[:a :string] [:b :string]]]")
+(def ^:private triple-ty
+  "[:record :report/triple-str [[:a :string] [:b :string] [:c :string]]]")
+(def ^:private pad-ty
+  "[:record :report/pad [[:s :string] [:pad :i64]]]")
+(def ^:private pad-to-ty
+  "[:record :report/pad-to [[:s :string] [:width :i64]]]")
+(def ^:private count-file-ty
+  "[:record :report/count-file [[:count :i64] [:peers-file :string]]]")
+(def ^:private name-ok-ty
+  "[:record :report/name-ok [[:name :string] [:ok :bool]]]")
+(def ^:private name-exit-ty
+  "[:record :report/name-exit [[:name :string] [:exit-str :string]]]")
+(def ^:private ports-ty
+  "[:record :report/ports [[:port :i64] [:interval :i64]]]")
+(def ^:private nodes-row-ty
+  "[:record :report/nodes-row [[:name :string] [:ip :string] [:online :bool] [:ssh-ok :bool] [:mesh :string]]]")
+(def ^:private title-ty
+  "[:record :report/title [[:fleet :string] [:ts :string]]]")
+(def ^:private cid-ty
+  "[:record :report/cid [[:cid :string] [:present :bool]]]")
+(def ^:private action-detail-ty
+  "[:record :report/action-detail [[:action :string] [:targets :string] [:running :string] [:running-empty :bool] [:reason :string]]]")
+(def ^:private app-row-ty
+  "[:record :report/app-row [[:app :string] [:cid :string] [:desired :i64] [:running-n :i64] [:action :string]]]")
+(def ^:private join-ty
+  "[:record :report/join [[:acc :string] [:sep :string] [:next :string]]]")
+(def ^:private csv-ty
+  "[:record :report/csv [[:acc :string] [:next :string]]]")
+
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -62,8 +96,9 @@
 
 (deftest constants-and-simple-lines-match
   (let [actual (compile-string-cases
-                {"ms" (str "(mesh-status " (kotoba-literal "installed") " "
-                           (kotoba-literal "running") ")")
+                {"ms" (str "(mesh-status (record-new " mesh-ty " "
+                           (kotoba-literal "installed") " "
+                           (kotoba-literal "running") "))")
                  "np" (str "(node-prefix " (kotoba-literal "asher") ")")
                  "us" "(unreachable-skipped-line)"
                  "p0" "(provision-result-line false)"
@@ -82,23 +117,29 @@
                  "rc" "(reconcile-converged-line)"
                  "rd" "(reconcile-dry-run-line)"
                  "mb" (str "(missing-binary-line " (kotoba-literal "/bin/kotoba") ")")
-                 "ds" (str "(deploy-start-line " (kotoba-literal "app.edn") " "
-                           (kotoba-literal "bafy1") ")")
-                 "ps" (str "(pin-success-line " (kotoba-literal "src") " "
-                           (kotoba-literal "abc") " " (kotoba-literal "1.0") ")")
+                 "ds" (str "(deploy-start-line (record-new " pair-ty " "
+                           (kotoba-literal "app.edn") " "
+                           (kotoba-literal "bafy1") "))")
+                 "ps" (str "(pin-success-line (record-new " triple-ty " "
+                           (kotoba-literal "src") " "
+                           (kotoba-literal "abc") " " (kotoba-literal "1.0") "))")
                  "se" (str "(snapshot-error-line " (kotoba-literal "boom") ")")
                  "re" (str "(reconcile-persist-error-line " (kotoba-literal "nope") ")")
                  "on" "(online-label true)" "off" "(online-label false)"
                  "so" "(ssh-label true)" "sn" "(ssh-label false)"
                  "ho" (str "(health-label " (opt-i64-form 1) ")") "hn" (str "(health-label " (opt-i64-form nil) ")")
-                 "e1" (str "(command-error-line " (kotoba-literal "provision") " "
-                           (kotoba-literal "missing-operator-seed-hex") ")")
-                 "e2" (str "(command-error-line " (kotoba-literal "deploy") " "
-                           (kotoba-literal "missing-manifest") ")")
-                 "e3" (str "(command-error-line " (kotoba-literal "mesh") " "
-                           (kotoba-literal "missing-operator-seed") ")")
-                 "e4" (str "(command-error-line " (kotoba-literal "foo") " "
-                           (kotoba-literal "bar") ")")})]
+                 "e1" (str "(command-error-line (record-new " pair-ty " "
+                           (kotoba-literal "provision") " "
+                           (kotoba-literal "missing-operator-seed-hex") "))")
+                 "e2" (str "(command-error-line (record-new " pair-ty " "
+                           (kotoba-literal "deploy") " "
+                           (kotoba-literal "missing-manifest") "))")
+                 "e3" (str "(command-error-line (record-new " pair-ty " "
+                           (kotoba-literal "mesh") " "
+                           (kotoba-literal "missing-operator-seed") "))")
+                 "e4" (str "(command-error-line (record-new " pair-ty " "
+                           (kotoba-literal "foo") " "
+                           (kotoba-literal "bar") "))")})]
     (is (= (report/mesh-status "installed" "running") (get actual "ms")))
     (is (= (report/node-prefix {:name "asher"}) (get actual "np")))
     (is (= report/unreachable-skipped-line (get actual "us")))
@@ -135,28 +176,36 @@
 
 (deftest extended-ops-lines-match
   (let [actual (compile-string-cases
-                {"lr" (str "(launch-result-line " (kotoba-literal "asher") " "
-                           (kotoba-literal "0") ")")
-                 "ro" (str "(rollout-line " (kotoba-literal "1.2.3") " "
-                           (kotoba-literal "deadbeef") " " (kotoba-literal "quic") ")")
-                 "cp" (str "(collected-peers-line 3 " (kotoba-literal ".peers") ")")
-                 "a1" (str "(artifact-node-status " (kotoba-literal "n1") " true)")
-                 "a0" (str "(artifact-node-status " (kotoba-literal "n1") " false)")
-                 "dc" (str "(deploy-command-output " (kotoba-literal "  out  ") " "
-                           (kotoba-literal "err") ")")
-                 "al" (str "(alert-line " (kotoba-literal "warn") " "
-                           (kotoba-literal "asher") " " (kotoba-literal "cpu high") ")")
-                 "ds" (str "(dashboard-start-line 8080 30)")
-                 "at" (str "(apply-target-line " (kotoba-literal "app1") " "
-                           (kotoba-literal "edge-a") ")")
+                {"lr" (str "(launch-result-line (record-new " name-exit-ty " "
+                           (kotoba-literal "asher") " "
+                           (kotoba-literal "0") "))")
+                 "ro" (str "(rollout-line (record-new " triple-ty " "
+                           (kotoba-literal "1.2.3") " "
+                           (kotoba-literal "deadbeef") " " (kotoba-literal "quic") "))")
+                 "cp" (str "(collected-peers-line (record-new " count-file-ty " 3 "
+                           (kotoba-literal ".peers") "))")
+                 "a1" (str "(artifact-node-status (record-new " name-ok-ty " "
+                           (kotoba-literal "n1") " true))")
+                 "a0" (str "(artifact-node-status (record-new " name-ok-ty " "
+                           (kotoba-literal "n1") " false))")
+                 "dc" (str "(deploy-command-output (record-new " pair-ty " "
+                           (kotoba-literal "  out  ") " "
+                           (kotoba-literal "err") "))")
+                 "al" (str "(alert-line (record-new " triple-ty " "
+                           (kotoba-literal "warn") " "
+                           (kotoba-literal "asher") " " (kotoba-literal "cpu high") "))")
+                 "ds" (str "(dashboard-start-line (record-new " ports-ty " 8080 30))")
+                 "at" (str "(apply-target-line (record-new " pair-ty " "
+                           (kotoba-literal "app1") " "
+                           (kotoba-literal "edge-a") "))")
                  "ws" (str "(watch-start-line 15)")
                  "de" "(deploy-observed-empty-line)"
-                 "dp" (str "(deploy-observed-placed-line "
+                 "dp" (str "(deploy-observed-placed-line (record-new " pair-ty " "
                            (kotoba-literal "a, b") " "
-                           (kotoba-literal "pub") ")")
-                 "mp1" (str "(missing-pinned-binaries-line1 "
+                           (kotoba-literal "pub") "))")
+                 "mp1" (str "(missing-pinned-binaries-line1 (record-new " pair-ty " "
                             (kotoba-literal "9.0") " "
-                            (kotoba-literal "abc123") ")")
+                            (kotoba-literal "abc123") "))")
                  "mp2" "(missing-pinned-binaries-line2)"})]
     (is (= (report/launch-result-line {:name "asher"} {:exit 0}) (get actual "lr")))
     (is (= (report/rollout-line {:version "1.2.3" :git-sha "deadbeef" :features "quic"})
@@ -187,16 +236,21 @@
                  "sd" "(status-down-suffix)"
                  "sp3" "(spaces 3)"
                  "sp0" "(spaces 0)"
-                 "pr" (str "(pad-right " (kotoba-literal "asher") " 5)")
-                 "pt" (str "(pad-to " (kotoba-literal "asher") " 10)")
-                 "f10" (str "(field-10 " (kotoba-literal "NODE") " 6)")
+                 "pr" (str "(pad-right (record-new " pad-ty " "
+                           (kotoba-literal "asher") " 5))")
+                 "pt" (str "(pad-to (record-new " pad-to-ty " "
+                           (kotoba-literal "asher") " 10))")
+                 "f10" (str "(field-10 (record-new " pad-ty " "
+                           (kotoba-literal "NODE") " 6))")
                  "sdr" (str "(status-down-row " (kotoba-literal "asher") ")")
-                 "nr" (str "(nodes-row " (kotoba-literal "asher") " "
+                 "nr" (str "(nodes-row (record-new " nodes-row-ty " "
+                           (kotoba-literal "asher") " "
                            (kotoba-literal "100.1.2.3") " true true "
-                           (kotoba-literal "up/running") ")")
-                 "nrq" (str "(nodes-row " (kotoba-literal "x") " "
+                           (kotoba-literal "up/running") "))")
+                 "nrq" (str "(nodes-row (record-new " nodes-row-ty " "
+                            (kotoba-literal "x") " "
                             (kotoba-literal "?") " false false "
-                            (kotoba-literal "off") ")")
+                            (kotoba-literal "off") "))")
                  "sr" (str "(status-row " (kotoba-literal "asher") " "
                            (opt-i64-form 1) " "
                            (kotoba-literal "ready") " "
@@ -228,38 +282,53 @@
         help (compile-string-cases {"h" "(command-help)"})
         actual
         (compile-string-cases
-         {"title" (str "(reconcile-title " (kotoba-literal "f1") " " (kotoba-literal "T") ")")
-          "tdef" (str "(reconcile-title " (kotoba-literal "fleet") " " (kotoba-literal "t0") ")")
+         {"title" (str "(reconcile-title (record-new " title-ty " "
+                        (kotoba-literal "f1") " " (kotoba-literal "T") "))")
+          "tdef" (str "(reconcile-title (record-new " title-ty " "
+                        (kotoba-literal "fleet") " " (kotoba-literal "t0") "))")
           "col" "(reconcile-col-header)"
-          "cid0" (str "(cid-display " (kotoba-literal "") " false)")
-          "cid1" (str "(cid-display " (kotoba-literal "bafy1234567890ab") " true)")
-          "dplace" (str "(action-detail " (kotoba-literal "place") " "
+          "cid0" (str "(cid-display (record-new " cid-ty " "
+                        (kotoba-literal "") " false))")
+          "cid1" (str "(cid-display (record-new " cid-ty " "
+                        (kotoba-literal "bafy1234567890ab") " true))")
+          "dplace" (str "(action-detail (record-new " action-detail-ty " "
+                        (kotoba-literal "place") " "
                         (kotoba-literal "t1,t2") " " (kotoba-literal "") " true "
-                        (kotoba-literal "") ")")
-          "dsat" (str "(action-detail " (kotoba-literal "satisfied") " "
+                        (kotoba-literal "") "))")
+          "dsat" (str "(action-detail (record-new " action-detail-ty " "
+                      (kotoba-literal "satisfied") " "
                       (kotoba-literal "") " " (kotoba-literal "n1") " false "
-                      (kotoba-literal "") ")")
-          "dsat0" (str "(action-detail " (kotoba-literal "satisfied") " "
+                      (kotoba-literal "") "))")
+          "dsat0" (str "(action-detail (record-new " action-detail-ty " "
+                       (kotoba-literal "satisfied") " "
                        (kotoba-literal "") " " (kotoba-literal "") " true "
-                       (kotoba-literal "") ")")
-          "drem" (str "(action-detail " (kotoba-literal "remove") " "
+                       (kotoba-literal "") "))")
+          "drem" (str "(action-detail (record-new " action-detail-ty " "
+                      (kotoba-literal "remove") " "
                       (kotoba-literal "") " " (kotoba-literal "") " true "
-                      (kotoba-literal "gone") ")")
+                      (kotoba-literal "gone") "))")
           "fi" "(field-i64-7 2)"
           "fi0" "(field-i64-7 0)"
-          "reach" (str "(reach-line " (kotoba-literal "r1") " " (kotoba-literal "e1") ")")
+          "reach" (str "(reach-line (record-new " pair-ty " "
+                        (kotoba-literal "r1") " " (kotoba-literal "e1") "))")
           "drift" (str "(drift-line " (kotoba-literal "m1") ")")
           "row" (let [app "a1"
                       cid "bafy1234567890ab"
                       act "satisfied"
-                      app14 (str "(pad-right " (kotoba-literal app) " " (padn app 14) ")")
-                      cid10 (str "(pad-right " (kotoba-literal cid) " " (padn cid 10) ")")
-                      act9 (str "(pad-right " (kotoba-literal act) " " (padn act 9) ")")
-                      front (str "(reconcile-app-row " app14 " " cid10 " 2 1 " act9 ")")
-                      detail (str "(action-detail " (kotoba-literal "satisfied") " "
+                      app14 (str "(pad-right (record-new " pad-ty " "
+                                            (kotoba-literal app) " " (padn app 14) "))")
+                      cid10 (str "(pad-right (record-new " pad-ty " "
+                                            (kotoba-literal cid) " " (padn cid 10) "))")
+                      act9 (str "(pad-right (record-new " pad-ty " "
+                                           (kotoba-literal act) " " (padn act 9) "))")
+                      front (str "(reconcile-app-row (record-new " app-row-ty " "
+                                            app14 " " cid10 " 2 1 " act9 "))")
+                      detail (str "(action-detail (record-new " action-detail-ty " "
+                                  (kotoba-literal "satisfied") " "
                                   (kotoba-literal "") " " (kotoba-literal "n1") " false "
-                                  (kotoba-literal "") ")")]
-                  (str "(reconcile-app-line " front " " detail ")"))})]
+                                  (kotoba-literal "") "))")]
+                  (str "(reconcile-app-line (record-new " pair-ty " "
+                                            front " " detail "))"))})]
     (is (= (report/command-help) (get help "h")))
     (is (= "reconcile f1  @ T" (get actual "title")))
     (is (= "reconcile fleet  @ t0" (get actual "tdef")))
@@ -290,18 +359,24 @@
            {"cs" "(report-csv-sep)"
             "ss" "(report-csv-spaced-sep)"
             "ms" "(mesh-status-sep)"
-            "ja" (str "(join-append " (kotoba-literal "") " "
-                      (kotoba-literal ",") " " (kotoba-literal "a") ")")
-            "jb" (str "(join-append " (kotoba-literal "a") " "
-                      (kotoba-literal ",") " " (kotoba-literal "b") ")")
-            "ca0" (str "(csv-append " (kotoba-literal "") " "
-                       (kotoba-literal "t1") ")")
-            "ca1" (str "(csv-append " (kotoba-literal "t1") " "
-                       (kotoba-literal "t2") ")")
-            "sa0" (str "(csv-spaced-append " (kotoba-literal "") " "
-                       (kotoba-literal "a") ")")
-            "sa1" (str "(csv-spaced-append " (kotoba-literal "a") " "
-                       (kotoba-literal "b") ")")})
+            "ja" (str "(join-append (record-new " join-ty " "
+                      (kotoba-literal "") " "
+                      (kotoba-literal ",") " " (kotoba-literal "a") "))")
+            "jb" (str "(join-append (record-new " join-ty " "
+                      (kotoba-literal "a") " "
+                      (kotoba-literal ",") " " (kotoba-literal "b") "))")
+            "ca0" (str "(csv-append (record-new " csv-ty " "
+                       (kotoba-literal "") " "
+                       (kotoba-literal "t1") "))")
+            "ca1" (str "(csv-append (record-new " csv-ty " "
+                       (kotoba-literal "t1") " "
+                       (kotoba-literal "t2") "))")
+            "sa0" (str "(csv-spaced-append (record-new " csv-ty " "
+                       (kotoba-literal "") " "
+                       (kotoba-literal "a") "))")
+            "sa1" (str "(csv-spaced-append (record-new " csv-ty " "
+                       (kotoba-literal "a") " "
+                       (kotoba-literal "b") "))")})
         n (compile-i64-cases
            {"cm" "(cid-display-max-len)"})]
     (is (= report/report-csv-sep (get s "cs")))

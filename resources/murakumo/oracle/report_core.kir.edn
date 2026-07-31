@@ -79,14 +79,22 @@
    :body "/",
    :param-types []}
   {:name mesh-status,
-   :params [binary-status launch-status],
+   :params [m],
    :result :string,
    :effects #{},
    :body
    (string-concat
-    binary-status
-    (string-concat (mesh-status-sep) launch-status)),
-   :param-types [:string :string]}
+    (record-get
+     [:record :report/mesh [[:binary :string] [:launch :string]]]
+     m
+     :binary)
+    (string-concat
+     (mesh-status-sep)
+     (record-get
+      [:record :report/mesh [[:binary :string] [:launch :string]]]
+      m
+      :launch))),
+   :param-types [[:ref :report/mesh]]}
   {:name node-prefix,
    :params [name],
    :result :string,
@@ -197,31 +205,60 @@
    :body (string-concat "missing binary: " path),
    :param-types [:string]}
   {:name deploy-start-line,
-   :params [manifest cid],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "deploy "
     (string-concat
-     manifest
-     (string-concat "  (component " (string-concat cid ")")))),
-   :param-types [:string :string]}
+     (record-get
+      [:record :report/pair-str [[:a :string] [:b :string]]]
+      p
+      :a)
+     (string-concat
+      "  (component "
+      (string-concat
+       (record-get
+        [:record :report/pair-str [[:a :string] [:b :string]]]
+        p
+        :b)
+       ")")))),
+   :param-types [[:ref :report/pair-str]]}
   {:name pin-success-line,
-   :params [src sha version],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "pinned kotoba + kotoba-server → bin/  (src "
     (string-concat
-     src
+     (record-get
+      [:record
+       :report/triple-str
+       [[:a :string] [:b :string] [:c :string]]]
+      p
+      :a)
      (string-concat
       " @ "
       (string-concat
-       sha
-       (string-concat ", " (string-concat version ")")))))),
-   :param-types [:string :string :string]}
+       (record-get
+        [:record
+         :report/triple-str
+         [[:a :string] [:b :string] [:c :string]]]
+        p
+        :b)
+       (string-concat
+        ", "
+        (string-concat
+         (record-get
+          [:record
+           :report/triple-str
+           [[:a :string] [:b :string] [:c :string]]]
+          p
+          :c)
+         ")")))))),
+   :param-types [[:ref :report/triple-str]]}
   {:name snapshot-error-line,
    :params [message],
    :result :string,
@@ -261,90 +298,194 @@
      "no-resp")),
    :param-types [[:option :i64]]}
   {:name launch-result-line,
-   :params [name exit-str],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (string-concat name (string-concat " " exit-str)),
-   :param-types [:string :string]}
+   :body
+   (string-concat
+    (record-get
+     [:record :report/name-exit [[:name :string] [:exit-str :string]]]
+     p
+     :name)
+    (string-concat
+     " "
+     (record-get
+      [:record :report/name-exit [[:name :string] [:exit-str :string]]]
+      p
+      :exit-str))),
+   :param-types [[:ref :report/name-exit]]}
   {:name rollout-line,
-   :params [version sha features],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "rolling out kotoba "
     (string-concat
-     version
+     (record-get
+      [:record
+       :report/triple-str
+       [[:a :string] [:b :string] [:c :string]]]
+      p
+      :a)
      (string-concat
       " (sha "
       (string-concat
-       sha
-       (string-concat ", " (string-concat features ")")))))),
-   :param-types [:string :string :string]}
+       (record-get
+        [:record
+         :report/triple-str
+         [[:a :string] [:b :string] [:c :string]]]
+        p
+        :b)
+       (string-concat
+        ", "
+        (string-concat
+         (record-get
+          [:record
+           :report/triple-str
+           [[:a :string] [:b :string] [:c :string]]]
+          p
+          :c)
+         ")")))))),
+   :param-types [[:ref :report/triple-str]]}
   {:name collected-peers-line,
-   :params [count peers-file],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "── collected "
     (string-concat
-     (i64-str count)
-     (string-concat " PeerIds → " (string-concat peers-file " ──")))),
-   :param-types [:i64 :string]}
+     (i64-str
+      (record-get
+       [:record
+        :report/count-file
+        [[:count :i64] [:peers-file :string]]]
+       p
+       :count))
+     (string-concat
+      " PeerIds → "
+      (string-concat
+       (record-get
+        [:record
+         :report/count-file
+         [[:count :i64] [:peers-file :string]]]
+        p
+        :peers-file)
+       " ──")))),
+   :param-types [[:ref :report/count-file]]}
   {:name artifact-node-status,
-   :params [name ok],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (string-concat " " (string-concat name (if ok "✓" "✗"))),
-   :param-types [:string :bool]}
+   :body
+   (string-concat
+    " "
+    (string-concat
+     (record-get
+      [:record :report/name-ok [[:name :string] [:ok :bool]]]
+      p
+      :name)
+     (if
+      (record-get
+       [:record :report/name-ok [[:name :string] [:ok :bool]]]
+       p
+       :ok)
+      "✓"
+      "✗"))),
+   :param-types [[:ref :report/name-ok]]}
   {:name deploy-command-output,
-   :params [out err],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (string-concat (trim out) err),
-   :param-types [:string :string]}
+   :body
+   (string-concat
+    (trim
+     (record-get
+      [:record :report/pair-str [[:a :string] [:b :string]]]
+      p
+      :a))
+    (record-get
+     [:record :report/pair-str [[:a :string] [:b :string]]]
+     p
+     :b)),
+   :param-types [[:ref :report/pair-str]]}
   {:name alert-line,
-   :params [level node msg],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "[alert/"
     (string-concat
-     level
+     (record-get
+      [:record
+       :report/triple-str
+       [[:a :string] [:b :string] [:c :string]]]
+      p
+      :a)
      (string-concat
       "] "
-      (string-concat node (string-concat " — " msg))))),
-   :param-types [:string :string :string]}
+      (string-concat
+       (record-get
+        [:record
+         :report/triple-str
+         [[:a :string] [:b :string] [:c :string]]]
+        p
+        :b)
+       (string-concat
+        " — "
+        (record-get
+         [:record
+          :report/triple-str
+          [[:a :string] [:b :string] [:c :string]]]
+         p
+         :c)))))),
+   :param-types [[:ref :report/triple-str]]}
   {:name dashboard-start-line,
-   :params [port interval],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "murakumo dashboard → http://localhost:"
     (string-concat
-     (i64-str port)
+     (i64-str
+      (record-get
+       [:record :report/ports [[:port :i64] [:interval :i64]]]
+       p
+       :port))
      (string-concat
       "  (snapshot every "
-      (string-concat (i64-str interval) "s → Datom log)")))),
-   :param-types [:i64 :i64]}
+      (string-concat
+       (i64-str
+        (record-get
+         [:record :report/ports [[:port :i64] [:interval :i64]]]
+         p
+         :interval))
+       "s → Datom log)")))),
+   :param-types [[:ref :report/ports]]}
   {:name apply-target-line,
-   :params [app target],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "  applying "
     (string-concat
-     app
+     (record-get
+      [:record :report/pair-str [[:a :string] [:b :string]]]
+      p
+      :a)
      (string-concat
       " → deploy to "
       (string-concat
-       target
+       (record-get
+        [:record :report/pair-str [[:a :string] [:b :string]]]
+        p
+        :b)
        " (no cross-node auction; murakumo picks the target directly)")))),
-   :param-types [:string :string]}
+   :param-types [[:ref :report/pair-str]]}
   {:name watch-start-line,
    :params [seconds],
    :result :string,
@@ -362,31 +503,47 @@
    "  ⚠ not yet observed running on any node (check `murakumo status` / node logs)",
    :param-types []}
   {:name deploy-observed-placed-line,
-   :params [where publish-name],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "  ✓ placed + running on: "
     (string-concat
-     where
+     (record-get
+      [:record :report/pair-str [[:a :string] [:b :string]]]
+      p
+      :a)
      (string-concat
       "  (deployed from "
-      (string-concat publish-name ")")))),
-   :param-types [:string :string]}
+      (string-concat
+       (record-get
+        [:record :report/pair-str [[:a :string] [:b :string]]]
+        p
+        :b)
+       ")")))),
+   :param-types [[:ref :report/pair-str]]}
   {:name missing-pinned-binaries-line1,
-   :params [version sha],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "fleet pins kotoba "
     (string-concat
-     version
+     (record-get
+      [:record :report/pair-str [[:a :string] [:b :string]]]
+      p
+      :a)
      (string-concat
       " (sha "
-      (string-concat sha ") but ./bin has no binaries.")))),
-   :param-types [:string :string]}
+      (string-concat
+       (record-get
+        [:record :report/pair-str [[:a :string] [:b :string]]]
+        p
+        :b)
+       ") but ./bin has no binaries.")))),
+   :param-types [[:ref :report/pair-str]]}
   {:name missing-pinned-binaries-line2,
    :params [],
    :result :string,
@@ -395,46 +552,57 @@
    "Build that version and `murakumo pin <its release dir>` before provisioning.",
    :param-types []}
   {:name command-error-line,
-   :params [command error],
+   :params [p],
    :result :string,
    :effects #{},
    :body
-   (if
-    (if
-     (string=? command "provision")
-     (if (string=? error "missing-operator-seed-hex") 1 0)
-     0)
-    (operator-seed-hex-required-line)
+   (let
+    [command
+     (record-get
+      [:record :report/pair-str [[:a :string] [:b :string]]]
+      p
+      :a)
+     error
+     (record-get
+      [:record :report/pair-str [[:a :string] [:b :string]]]
+      p
+      :b)]
     (if
      (if
-      (string=? command "mesh")
-      (if (string=? error "missing-operator-seed") 1 0)
+      (string=? command "provision")
+      (if (string=? error "missing-operator-seed-hex") 1 0)
       0)
-     (operator-seed-required-line)
+     (operator-seed-hex-required-line)
      (if
       (if
-       (string=? command "deploy")
-       (if (string=? error "missing-manifest") 1 0)
+       (string=? command "mesh")
+       (if (string=? error "missing-operator-seed") 1 0)
        0)
-      (deploy-usage-line)
+      (operator-seed-required-line)
       (if
        (if
         (string=? command "deploy")
-        (if (string=? error "missing-operator-seed") 1 0)
+        (if (string=? error "missing-manifest") 1 0)
         0)
-       (operator-seed-required-line)
+       (deploy-usage-line)
        (if
         (if
-         (string=? command "reconcile")
-         (if (string=? error "missing-manifest") 1 0)
+         (string=? command "deploy")
+         (if (string=? error "missing-operator-seed") 1 0)
          0)
-        (reconcile-usage-line)
-        (string-concat
-         "unknown "
+        (operator-seed-required-line)
+        (if
+         (if
+          (string=? command "reconcile")
+          (if (string=? error "missing-manifest") 1 0)
+          0)
+         (reconcile-usage-line)
          (string-concat
-          command
-          (string-concat " error: " error)))))))),
-   :param-types [:string :string]}
+          "unknown "
+          (string-concat
+           command
+           (string-concat " error: " error))))))))),
+   :param-types [[:ref :report/pair-str]]}
   {:name spaces,
    :params [n],
    :result :string,
@@ -442,56 +610,80 @@
    :body (if (< n 1) "" (string-concat " " (spaces (- n 1)))),
    :param-types [:i64]}
   {:name pad-right,
-   :params [s pad-n],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (string-concat s (spaces pad-n)),
-   :param-types [:string :i64]}
+   :body
+   (string-concat
+    (record-get [:record :report/pad [[:s :string] [:pad :i64]]] p :s)
+    (spaces
+     (record-get
+      [:record :report/pad [[:s :string] [:pad :i64]]]
+      p
+      :pad))),
+   :param-types [[:ref :report/pad]]}
   {:name pad-to,
-   :params [s width],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (let
-    [n (string-byte-length s) pad (- width n)]
-    (pad-right s (if (< pad 0) 0 pad))),
-   :param-types [:string :i64]}
+    [s
+     (record-get
+      [:record :report/pad-to [[:s :string] [:width :i64]]]
+      p
+      :s)
+     width
+     (record-get
+      [:record :report/pad-to [[:s :string] [:width :i64]]]
+      p
+      :width)
+     n
+     (string-byte-length s)
+     pad
+     (- width n)]
+    (pad-right
+     (record-new
+      [:record :report/pad [[:s :string] [:pad :i64]]]
+      s
+      (if (< pad 0) 0 pad)))),
+   :param-types [[:ref :report/pad-to]]}
   {:name field-10,
-   :params [s pad-n],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (pad-right s pad-n),
-   :param-types [:string :i64]}
+   :body (pad-right p),
+   :param-types [[:ref :report/pad]]}
   {:name field-16,
-   :params [s pad-n],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (pad-right s pad-n),
-   :param-types [:string :i64]}
+   :body (pad-right p),
+   :param-types [[:ref :report/pad]]}
   {:name field-8,
-   :params [s pad-n],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (pad-right s pad-n),
-   :param-types [:string :i64]}
+   :body (pad-right p),
+   :param-types [[:ref :report/pad]]}
   {:name field-9,
-   :params [s pad-n],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (pad-right s pad-n),
-   :param-types [:string :i64]}
+   :body (pad-right p),
+   :param-types [[:ref :report/pad]]}
   {:name field-12,
-   :params [s pad-n],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (pad-right s pad-n),
-   :param-types [:string :i64]}
+   :body (pad-right p),
+   :param-types [[:ref :report/pad]]}
   {:name field-6,
-   :params [s pad-n],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (pad-right s pad-n),
-   :param-types [:string :i64]}
+   :body (pad-right p),
+   :param-types [[:ref :report/pad]]}
   {:name nodes-header,
    :params [],
    :result :string,
@@ -511,33 +703,109 @@
    :body "down    ",
    :param-types []}
   {:name nodes-row,
-   :params [name ip online ssh-ok mesh],
+   :params [r],
    :result :string,
    :effects #{},
    :body
-   (string-concat
-    (pad-to name 10)
+   (let
+    [name
+     (record-get
+      [:record
+       :report/nodes-row
+       [[:name :string]
+        [:ip :string]
+        [:online :bool]
+        [:ssh-ok :bool]
+        [:mesh :string]]]
+      r
+      :name)
+     ip
+     (record-get
+      [:record
+       :report/nodes-row
+       [[:name :string]
+        [:ip :string]
+        [:online :bool]
+        [:ssh-ok :bool]
+        [:mesh :string]]]
+      r
+      :ip)
+     online
+     (record-get
+      [:record
+       :report/nodes-row
+       [[:name :string]
+        [:ip :string]
+        [:online :bool]
+        [:ssh-ok :bool]
+        [:mesh :string]]]
+      r
+      :online)
+     ssh-ok
+     (record-get
+      [:record
+       :report/nodes-row
+       [[:name :string]
+        [:ip :string]
+        [:online :bool]
+        [:ssh-ok :bool]
+        [:mesh :string]]]
+      r
+      :ssh-ok)
+     mesh
+     (record-get
+      [:record
+       :report/nodes-row
+       [[:name :string]
+        [:ip :string]
+        [:online :bool]
+        [:ssh-ok :bool]
+        [:mesh :string]]]
+      r
+      :mesh)]
     (string-concat
-     " "
+     (pad-to
+      (record-new
+       [:record :report/pad-to [[:s :string] [:width :i64]]]
+       name
+       10))
      (string-concat
-      (pad-to ip 16)
+      " "
       (string-concat
-       " "
+       (pad-to
+        (record-new
+         [:record :report/pad-to [[:s :string] [:width :i64]]]
+         ip
+         16))
        (string-concat
-        (pad-to (online-label online) 8)
+        " "
         (string-concat
-         " "
+         (pad-to
+          (record-new
+           [:record :report/pad-to [[:s :string] [:width :i64]]]
+           (online-label online)
+           8))
          (string-concat
-          (pad-to (ssh-label ssh-ok) 9)
-          (string-concat " " mesh)))))))),
-   :param-types [:string :string :bool :bool :string]}
+          " "
+          (string-concat
+           (pad-to
+            (record-new
+             [:record :report/pad-to [[:s :string] [:width :i64]]]
+             (ssh-label ssh-ok)
+             9))
+           (string-concat " " mesh))))))))),
+   :param-types [[:ref :report/nodes-row]]}
   {:name status-down-row,
    :params [name],
    :result :string,
    :effects #{},
    :body
    (string-concat
-    (pad-to name 10)
+    (pad-to
+     (record-new
+      [:record :report/pad-to [[:s :string] [:width :i64]]]
+      name
+      10))
     (string-concat " " (status-down-suffix))),
    :param-types [:string]}
   {:name status-row,
@@ -546,19 +814,35 @@
    :effects #{},
    :body
    (string-concat
-    (pad-to name 10)
+    (pad-to
+     (record-new
+      [:record :report/pad-to [[:s :string] [:width :i64]]]
+      name
+      10))
     (string-concat
      " "
      (string-concat
-      (pad-to (health-label health?) 8)
+      (pad-to
+       (record-new
+        [:record :report/pad-to [[:s :string] [:width :i64]]]
+        (health-label health?)
+        8))
       (string-concat
        " "
        (string-concat
-        (pad-to wasm-exec 12)
+        (pad-to
+         (record-new
+          [:record :report/pad-to [[:s :string] [:width :i64]]]
+          wasm-exec
+          12))
         (string-concat
          " "
          (string-concat
-          (pad-to links-str 6)
+          (pad-to
+           (record-new
+            [:record :report/pad-to [[:s :string] [:width :i64]]]
+            links-str
+            6))
           (string-concat " " (i64-str p2p-port))))))))),
    :param-types [:string [:option :i64] :string :string :i64]}
   {:name command-help,
@@ -569,14 +853,24 @@
    "murakumo — kotoba WASM mesh control plane\n\ncommands:\n  nodes                       fleet reachability + mesh presence\n  pin       [src-dir]         copy a consistent kotoba cli+server into ./bin (own it)\n  provision [node|all]        rsync binaries + install resident LaunchDaemon\n  mesh      [node|all]        form ONE gossipsub lattice (2-pass: peer-id + bootstrap)\n  up/down   [node|all]        start/stop the resident mesh node\n  status    [node|all]        fold /health across the fleet (PEERS = live links)\n  deploy    <app.edn> [node]  compile clj→WASM + distribute + publish to the lattice\n  reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]  declarative desired-state (wadm)\n  cloud     [plan|records|routes|dial|connect <node>|relay <name>|bootstrap]    plan murakumo.cloud identity overlay\n  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log\n  fleet     <datom-log.edn>    fold a kotoba-fleet Datom log into one coordination view\n  infer     probe|plan <model>|provision|up|down|ps|serve|generate  distributed inference (exo-style shard plan)\n  model     plan|setup|status <model> [node|all] [cache-dir]  Hugging Face model provisioning\n  revive    [node|all]        wake offline fleet Macs via a live LAN peer\n\nenv: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR",
    :param-types []}
   {:name reconcile-title,
-   :params [fleet ts],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "reconcile "
-    (string-concat fleet (string-concat "  @ " ts))),
-   :param-types [:string :string]}
+    (string-concat
+     (record-get
+      [:record :report/title [[:fleet :string] [:ts :string]]]
+      p
+      :fleet)
+     (string-concat
+      "  @ "
+      (record-get
+       [:record :report/title [[:fleet :string] [:ts :string]]]
+       p
+       :ts)))),
+   :param-types [[:ref :report/title]]}
   {:name reconcile-col-header,
    :params [],
    :result :string,
@@ -585,24 +879,90 @@
    "  APP            CID        DESIRED RUNNING ACTION    DETAIL",
    :param-types []}
   {:name cid-display,
-   :params [cid present],
-   :result :string,
-   :effects #{},
-   :body (if present cid "—"),
-   :param-types [:string :bool]}
-  {:name action-detail,
-   :params [action targets-csv running-csv running-empty reason],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (if
-    (string=? action "place")
-    (string-concat "→ " targets-csv)
+    (record-get
+     [:record :report/cid [[:cid :string] [:present :bool]]]
+     p
+     :present)
+    (record-get
+     [:record :report/cid [[:cid :string] [:present :bool]]]
+     p
+     :cid)
+    "—"),
+   :param-types [[:ref :report/cid]]}
+  {:name action-detail,
+   :params [p],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [action
+     (record-get
+      [:record
+       :report/action-detail
+       [[:action :string]
+        [:targets :string]
+        [:running :string]
+        [:running-empty :bool]
+        [:reason :string]]]
+      p
+      :action)
+     targets-csv
+     (record-get
+      [:record
+       :report/action-detail
+       [[:action :string]
+        [:targets :string]
+        [:running :string]
+        [:running-empty :bool]
+        [:reason :string]]]
+      p
+      :targets)
+     running-csv
+     (record-get
+      [:record
+       :report/action-detail
+       [[:action :string]
+        [:targets :string]
+        [:running :string]
+        [:running-empty :bool]
+        [:reason :string]]]
+      p
+      :running)
+     running-empty
+     (record-get
+      [:record
+       :report/action-detail
+       [[:action :string]
+        [:targets :string]
+        [:running :string]
+        [:running-empty :bool]
+        [:reason :string]]]
+      p
+      :running-empty)
+     reason
+     (record-get
+      [:record
+       :report/action-detail
+       [[:action :string]
+        [:targets :string]
+        [:running :string]
+        [:running-empty :bool]
+        [:reason :string]]]
+      p
+      :reason)]
     (if
-     (string=? action "satisfied")
-     (if running-empty "" (string-concat "on " running-csv))
-     reason)),
-   :param-types [:string :string :string :bool :string]}
+     (string=? action "place")
+     (string-concat "→ " targets-csv)
+     (if
+      (string=? action "satisfied")
+      (if running-empty "" (string-concat "on " running-csv))
+      reason))),
+   :param-types [[:ref :report/action-detail]]}
   {:name nat-len,
    :params [n],
    :result :i64,
@@ -620,48 +980,120 @@
    :body
    (let
     [s (i64-str n) pad (- 7 (nat-len n))]
-    (pad-right s (if (< pad 0) 0 pad))),
+    (pad-right
+     (record-new
+      [:record :report/pad [[:s :string] [:pad :i64]]]
+      s
+      (if (< pad 0) 0 pad)))),
    :param-types [:i64]}
   {:name reconcile-app-row,
-   :params [app14 cid10 desired running-n action9],
+   :params [r],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "  "
     (string-concat
-     app14
+     (record-get
+      [:record
+       :report/app-row
+       [[:app :string]
+        [:cid :string]
+        [:desired :i64]
+        [:running-n :i64]
+        [:action :string]]]
+      r
+      :app)
      (string-concat
       " "
       (string-concat
-       cid10
+       (record-get
+        [:record
+         :report/app-row
+         [[:app :string]
+          [:cid :string]
+          [:desired :i64]
+          [:running-n :i64]
+          [:action :string]]]
+        r
+        :cid)
        (string-concat
         " "
         (string-concat
-         (field-i64-7 desired)
+         (field-i64-7
+          (record-get
+           [:record
+            :report/app-row
+            [[:app :string]
+             [:cid :string]
+             [:desired :i64]
+             [:running-n :i64]
+             [:action :string]]]
+           r
+           :desired))
          (string-concat
           " "
           (string-concat
-           (field-i64-7 running-n)
-           (string-concat " " action9))))))))),
-   :param-types [:string :string :i64 :i64 :string]}
+           (field-i64-7
+            (record-get
+             [:record
+              :report/app-row
+              [[:app :string]
+               [:cid :string]
+               [:desired :i64]
+               [:running-n :i64]
+               [:action :string]]]
+             r
+             :running-n))
+           (string-concat
+            " "
+            (record-get
+             [:record
+              :report/app-row
+              [[:app :string]
+               [:cid :string]
+               [:desired :i64]
+               [:running-n :i64]
+               [:action :string]]]
+             r
+             :action)))))))))),
+   :param-types [[:ref :report/app-row]]}
   {:name reconcile-app-line,
-   :params [front detail],
+   :params [p],
    :result :string,
    :effects #{},
-   :body (string-concat front (string-concat " " detail)),
-   :param-types [:string :string]}
+   :body
+   (string-concat
+    (record-get
+     [:record :report/pair-str [[:a :string] [:b :string]]]
+     p
+     :a)
+    (string-concat
+     " "
+     (record-get
+      [:record :report/pair-str [[:a :string] [:b :string]]]
+      p
+      :b))),
+   :param-types [[:ref :report/pair-str]]}
   {:name reach-line,
-   :params [reach-csv eligible-csv],
+   :params [p],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "                            reach: "
     (string-concat
-     reach-csv
-     (string-concat " → eligible(by transport)=" eligible-csv))),
-   :param-types [:string :string]}
+     (record-get
+      [:record :report/pair-str [[:a :string] [:b :string]]]
+      p
+      :a)
+     (string-concat
+      " → eligible(by transport)="
+      (record-get
+       [:record :report/pair-str [[:a :string] [:b :string]]]
+       p
+       :b)))),
+   :param-types [[:ref :report/pair-str]]}
   {:name drift-line,
    :params [misplaced-csv],
    :result :string,
@@ -690,29 +1122,111 @@
    :body 16,
    :param-types []}
   {:name join-append,
-   :params [acc sep next],
+   :params [j],
    :result :string,
    :effects #{},
    :body
-   (if
-    (string=? acc "")
-    next
-    (string-concat acc (string-concat sep next))),
-   :param-types [:string :string :string]}
+   (let
+    [acc
+     (record-get
+      [:record
+       :report/join
+       [[:acc :string] [:sep :string] [:next :string]]]
+      j
+      :acc)
+     sep
+     (record-get
+      [:record
+       :report/join
+       [[:acc :string] [:sep :string] [:next :string]]]
+      j
+      :sep)
+     next
+     (record-get
+      [:record
+       :report/join
+       [[:acc :string] [:sep :string] [:next :string]]]
+      j
+      :next)]
+    (if
+     (string=? acc "")
+     next
+     (string-concat acc (string-concat sep next)))),
+   :param-types [[:ref :report/join]]}
   {:name csv-append,
-   :params [acc next],
+   :params [c],
    :result :string,
    :effects #{},
-   :body (join-append acc (report-csv-sep) next),
-   :param-types [:string :string]}
+   :body
+   (join-append
+    (record-new
+     [:record
+      :report/join
+      [[:acc :string] [:sep :string] [:next :string]]]
+     (record-get
+      [:record :report/csv [[:acc :string] [:next :string]]]
+      c
+      :acc)
+     (report-csv-sep)
+     (record-get
+      [:record :report/csv [[:acc :string] [:next :string]]]
+      c
+      :next))),
+   :param-types [[:ref :report/csv]]}
   {:name csv-spaced-append,
-   :params [acc next],
+   :params [c],
    :result :string,
    :effects #{},
-   :body (join-append acc (report-csv-spaced-sep) next),
-   :param-types [:string :string]}],
+   :body
+   (join-append
+    (record-new
+     [:record
+      :report/join
+      [[:acc :string] [:sep :string] [:next :string]]]
+     (record-get
+      [:record :report/csv [[:acc :string] [:next :string]]]
+      c
+      :acc)
+     (report-csv-spaced-sep)
+     (record-get
+      [:record :report/csv [[:acc :string] [:next :string]]]
+      c
+      :next))),
+   :param-types [[:ref :report/csv]]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:report{:action-detail
+          "ef328f5f9ccfdc59eadd0486b0ecac699828f947a5e53ede7dcc1479c781383a",
+          :app-row
+          "eac9b7e621b2c80d43b9cc1ea478af3b3948953390ca072490feefe039899866",
+          :cid
+          "3a84f2ff1b828fe4aa1a9b296abef3a3b990afbf58fcde80e8f1406c7a8d134f",
+          :count-file
+          "571bd61b5d16239241babaff249b199d16673d62d08e1e15989ffbfb0ad846c4",
+          :csv
+          "4a906a36f333fc281f816b75cd7f612c41d0800045ca0032c06882429caa8831",
+          :join
+          "71e0081b510c0b2b3013a056c756ed94b02d5a4b90078fe4c4bcc78971dd1d1b",
+          :mesh
+          "b369e2cf1aa667f668db5ecbf5e2de06f3d6a043d19424e64982e40dd66ec151",
+          :name-exit
+          "9e2afdca3ae6ffd55ee853698574e04a04111c652c1575318700d0ae03b1565c",
+          :name-ok
+          "fa986f1cf0bcc727459a3426e7bdab8b5bc96842e6f27f23a563258fac2baf74",
+          :nodes-row
+          "69aa5a57bd4ee4cf9d1d13956b0adc27cc54661c52d63ff16bfa210f7cb30c83",
+          :pad
+          "a7756eb2ae6c271f369db18212e6106027a1e241fd803c3d9a88b5225113493a",
+          :pad-to
+          "594b25c2b6e1539e6a26304fdc3dc04f62cd63d2883387d5da59313de417b8ac",
+          :pair-str
+          "253043a59d6ee868c77a0cbf91c04b42f469f7bafcd781baa4631b853f72342b",
+          :ports
+          "81b6984258c713ba2d8567a58e804b82fd43a428d1bb61a2d324b74122aefa5b",
+          :title
+          "b11ac025a1b6a087bf56f17147b794fdf8149a265875a7d17ad02978bf21f314",
+          :triple-str
+          "0ee2b68afd074f58e406f6879ce4b54ff35d23fec69fd95a5aa6654985f5c226"},
  :exports
  [digit-char
   nat-str
@@ -792,7 +1306,62 @@
   join-append
   csv-append
   csv-spaced-append],
- :schemas nil,
+ :schemas
+ #:report{:triple-str
+          [:record
+           :report/triple-str
+           [[:a :string] [:b :string] [:c :string]]],
+          :pair-str
+          [:record :report/pair-str [[:a :string] [:b :string]]],
+          :pad-to
+          [:record :report/pad-to [[:s :string] [:width :i64]]],
+          :name-exit
+          [:record
+           :report/name-exit
+           [[:name :string] [:exit-str :string]]],
+          :nodes-row
+          [:record
+           :report/nodes-row
+           [[:name :string]
+            [:ip :string]
+            [:online :bool]
+            [:ssh-ok :bool]
+            [:mesh :string]]],
+          :ports
+          [:record :report/ports [[:port :i64] [:interval :i64]]],
+          :pad [:record :report/pad [[:s :string] [:pad :i64]]],
+          :mesh
+          [:record :report/mesh [[:binary :string] [:launch :string]]],
+          :count-file
+          [:record
+           :report/count-file
+           [[:count :i64] [:peers-file :string]]],
+          :cid [:record :report/cid [[:cid :string] [:present :bool]]],
+          :join
+          [:record
+           :report/join
+           [[:acc :string] [:sep :string] [:next :string]]],
+          :action-detail
+          [:record
+           :report/action-detail
+           [[:action :string]
+            [:targets :string]
+            [:running :string]
+            [:running-empty :bool]
+            [:reason :string]]],
+          :name-ok
+          [:record :report/name-ok [[:name :string] [:ok :bool]]],
+          :title
+          [:record :report/title [[:fleet :string] [:ts :string]]],
+          :app-row
+          [:record
+           :report/app-row
+           [[:app :string]
+            [:cid :string]
+            [:desired :i64]
+            [:running-n :i64]
+            [:action :string]]],
+          :csv [:record :report/csv [[:acc :string] [:next :string]]]},
  :effects #{},
  :blocks [],
  :entry nil}

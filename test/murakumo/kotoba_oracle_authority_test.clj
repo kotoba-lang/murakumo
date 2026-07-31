@@ -349,25 +349,49 @@
          "a, b"))))
 
 (deftest report-oracle-call-matches-live-compile
-  (let [live (report-live-kir)]
+  (let [live (report-live-kir)
+        pad (oracle/record
+             [:record :report/pad [[:s :string] [:pad :i64]]]
+             {:s "asher" :pad 5})
+        pad-to (oracle/record
+                [:record :report/pad-to [[:s :string] [:width :i64]]]
+                {:s "asher" :width 10})
+        title (oracle/record
+               [:record :report/title [[:fleet :string] [:ts :string]]]
+               {:fleet "f" :ts "t"})
+        nrow (oracle/record
+              [:record :report/nodes-row
+               [[:name :string] [:ip :string] [:online :bool]
+                [:ssh-ok :bool] [:mesh :string]]]
+              {:name "x" :ip "?" :online false :ssh-ok false :mesh "off"})
+        ja (oracle/record
+            [:record :report/join
+             [[:acc :string] [:sep :string] [:next :string]]]
+            {:acc "" :sep "," :next "a"})
+        ca (oracle/record
+            [:record :report/csv [[:acc :string] [:next :string]]]
+            {:acc "t1" :next "t2"})
+        sa (oracle/record
+            [:record :report/csv [[:acc :string] [:next :string]]]
+            {:acc "a" :next "b"})]
     (is (= (ir/execute live 'nodes-header [])
            (oracle/call :report-core 'nodes-header [])))
     (is (= (ir/execute live 'status-header [])
            (oracle/call :report-core 'status-header [])))
     (is (= (ir/execute live 'spaces [3])
            (oracle/call :report-core 'spaces [3])))
-    (is (= (ir/execute live 'pad-right ["asher" 5])
-           (oracle/call :report-core 'pad-right ["asher" 5])))
-    (is (= (ir/execute live 'pad-to ["asher" 10])
-           (oracle/call :report-core 'pad-to ["asher" 10])))
+    (is (= (ir/execute live 'pad-right [pad])
+           (oracle/call :report-core 'pad-right [pad])))
+    (is (= (ir/execute live 'pad-to [pad-to])
+           (oracle/call :report-core 'pad-to [pad-to])))
     (is (= (ir/execute live 'command-help [])
            (oracle/call :report-core 'command-help [])))
-    (is (= (ir/execute live 'reconcile-title ["f" "t"])
-           (oracle/call :report-core 'reconcile-title ["f" "t"])))
+    (is (= (ir/execute live 'reconcile-title [title])
+           (oracle/call :report-core 'reconcile-title [title])))
     (is (= (ir/execute live 'reconcile-col-header [])
            (oracle/call :report-core 'reconcile-col-header [])))
-    (is (= (ir/execute live 'nodes-row ["x" "?" false false "off"])
-           (oracle/call :report-core 'nodes-row ["x" "?" false false "off"])))
+    (is (= (ir/execute live 'nodes-row [nrow])
+           (oracle/call :report-core 'nodes-row [nrow])))
     (is (= (ir/execute live 'status-row
                        ["asher" (oracle/option-i64 nil) "?" "-" 0])
            (oracle/call :report-core 'status-row
@@ -383,15 +407,15 @@
     (is (= (oracle/call :report-core 'report-csv-sep []) report/report-csv-sep))
     (is (= (oracle/call :report-core 'cid-display-max-len [])
            report/cid-display-max-len))
-    (is (= (ir/execute live 'join-append ["" "," "a"])
-           (oracle/call :report-core 'join-append ["" "," "a"])))
-    (is (= (ir/execute live 'csv-append ["t1" "t2"])
-           (oracle/call :report-core 'csv-append ["t1" "t2"])))
-    (is (= (ir/execute live 'csv-spaced-append ["a" "b"])
-           (oracle/call :report-core 'csv-spaced-append ["a" "b"])))
-    (is (= (oracle/call :report-core 'csv-append ["t1" "t2"])
+    (is (= (ir/execute live 'join-append [ja])
+           (oracle/call :report-core 'join-append [ja])))
+    (is (= (ir/execute live 'csv-append [ca])
+           (oracle/call :report-core 'csv-append [ca])))
+    (is (= (ir/execute live 'csv-spaced-append [sa])
+           (oracle/call :report-core 'csv-spaced-append [sa])))
+    (is (= (oracle/call :report-core 'csv-append [ca])
            (report/csv-append "t1" "t2")))
-    (is (= (oracle/call :report-core 'csv-spaced-append ["a" "b"])
+    (is (= (oracle/call :report-core 'csv-spaced-append [sa])
            (report/csv-spaced-append "a" "b")))
     (is (= "t1,t2" (report/csv-join ["t1" "t2"])))
     (is (= "a, b" (report/csv-spaced-join ["a" "b"])))))
