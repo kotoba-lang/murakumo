@@ -72,11 +72,23 @@
         true))))),
    :param-types [[:option :i64] :bool [:option :string]]}
   {:name can-retry?,
-   :params [attempt max-attempts],
+   :params [r],
    :result :bool,
    :effects #{},
-   :body (if (< attempt max-attempts) true false),
-   :param-types [:i64 :i64]}
+   :body
+   (if
+    (<
+     (record-get
+      [:record :task/retry [[:attempt :i64] [:max-attempts :i64]]]
+      r
+      :attempt)
+     (record-get
+      [:record :task/retry [[:attempt :i64] [:max-attempts :i64]]]
+      r
+      :max-attempts))
+    true
+    false),
+   :param-types [[:ref :task/retry]]}
   {:name task-eligible?,
    :params [e],
    :result :bool,
@@ -722,17 +734,19 @@
  :oracle-value nil,
  :schema-identities
  #:task{:assign2
-        "1dbebba31cdb79c302ed6e397066bd666434b492f67ba2126bf9daa057bc7375",
+        "0e80a73a37a21f7963d4c5697967d3215279981a309c854eb24b6f8d0201dcf2",
         :assign3
-        "292ef4d3e3679907921240f5db131705bf12992008a8231abee2980b09ed20c3",
+        "f2981c31ac2a8bf5bfd5350470c2c4c118fca54d6d30273534b8e6aaecb0a6ec",
         :eligibility
-        "dbf48d117d0d256ad976ab073841c0eeaa9304a8b78735b8b9476b3757f425e1",
+        "0a575704450bc0846041ce8006a201d621b6f48d052c0857d115b3699d1d9684",
         :flags3
-        "3ca182e446986dce85e7bd06e586c844f635369271edd748f822daf7a1de2c23",
+        "dd2a95a25b3f503f5547383de8fd25d39f76bc2d22c7a9765318a50d714a8766",
         :pair
-        "dbfeb1600152488d9afd4ea2962bc20ed387abdbbb4d5c48591fcee0fa990507",
+        "26aeef1114fe9455cc755e52e2fb538f7b28d18894cc3c19b0347bd557825a5c",
+        :retry
+        "cf14224e4c3ba1f20c8104fc3a0d28955a88715a8dcba5a2b0ae1a144711da1e",
         :triple
-        "04b84c4893f4073e6f2785012ad0542e20fe6dfb1e2d158f95635274908fe372"},
+        "e8f0c373e9e04c33ccd99c4da5c066b10cd26c27d96515c71928d54f5829bab8"},
  :exports
  [default-max-slots
   default-max-attempts
@@ -807,7 +821,9 @@
           [:not-excluded :bool]
           [:allowlist-ok :bool]
           [:mem-bytes :i64]
-          [:min-mem :i64]]]},
+          [:min-mem :i64]]],
+        :retry
+        [:record :task/retry [[:attempt :i64] [:max-attempts :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

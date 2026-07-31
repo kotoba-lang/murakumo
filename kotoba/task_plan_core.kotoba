@@ -13,7 +13,10 @@
              :task/eligibility [:record :task/eligibility
                                 [[:online :bool] [:labels-ok :bool] [:roles-ok :bool]
                                  [:not-excluded :bool] [:allowlist-ok :bool]
-                                 [:mem-bytes :i64] [:min-mem :i64]]]})
+                                 [:mem-bytes :i64] [:min-mem :i64]]]
+             ;; T5.2 native guest record wire expansion
+             :task/retry [:record :task/retry
+                          [[:attempt :i64] [:max-attempts :i64]]]})
   (:export [default-max-slots default-max-attempts default-timeout-ms
             slots failed? can-retry?
             task-eligible? fill-milli better-fill?
@@ -68,9 +71,7 @@
     budget-slots))
 
 (defn failed? [exit [:option :i64] timeout :bool error [:option :string]] :bool
-  ;; Product Value ABI v1: optional exit code + optional error (no has-*).
-  ;; Profile 5: timeout is a real :bool; result is :bool (not 0/1 i64).
-  ;; failed when error present, timeout, missing exit, or non-zero exit
+  ;; Product Value ABI v1: optional exit + error. (option-in-record deferred)
   (if-some [_ error]
     true
     (if timeout
@@ -79,8 +80,9 @@
         (if (= e 0) false true)
         true))))
 
-(defn can-retry? [attempt :i64 max-attempts :i64] :bool
-  (if (< attempt max-attempts) true false))
+(defn can-retry? [r [:ref :task/retry]] :bool
+  ;; T5.2 native: single retry record.
+  (if (< (record-get r :attempt) (record-get r :max-attempts)) true false))
 
 ;; ── T5.3 + profile 5: eligibility is a :bool record ──
 

@@ -54,6 +54,19 @@
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
+
+(def ^:private claims-record-ty
+  (str "[:record :token/claims [[:sub :string] [:scope :string] [:iat :i64] [:exp :i64]]]"))
+
+(def ^:private wire-record-ty
+  (str "[:record :token/wire [[:payload :string] [:sig :string]]]"))
+
+(def ^:private eq-record-ty
+  "[:record :token/eq [[:a :string] [:b :string]]]")
+
+(def ^:private scope-check-ty
+  "[:record :token/scope-check [[:token-scope :string] [:required :string]]]")
+
 (deftest version-and-default-ttl-match
   (let [s (compile-string-cases
            {"v" "(version)"
@@ -161,7 +174,8 @@
                     (map-indexed
                      (fn [i [s r]]
                        [(str "sa_" i)
-                        (str "(if (scope-allows? " (kotoba-literal s) " " (kotoba-literal r) ") 1 0)")])
+                        (str "(if (scope-allows? (record-new " scope-check-ty " "
+                             (kotoba-literal s) " " (kotoba-literal r) ")) 1 0)")])
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [s r]] (map-indexed vector corpus)]
@@ -173,11 +187,12 @@
   (let [cl (tok/claims {:sub "a" :scope "all" :now 10 :ttl 5})
         json (tok/encode-claims-json cl)
         cases (compile-string-cases
-               {"j" (str "(encode-claims-json "
+               {"j" (str "(encode-claims-json (record-new " claims-record-ty " "
                          (kotoba-literal (:sub cl)) " "
                          (kotoba-literal (:scope cl)) " "
-                         (:iat cl) " " (:exp cl) ")")
-                "w" (str "(wire-token " (kotoba-literal "pay") " " (kotoba-literal "sig") ")")
+                         (:iat cl) " " (:exp cl) "))")
+                "w" (str "(wire-token (record-new " wire-record-ty " "
+                         (kotoba-literal "pay") " " (kotoba-literal "sig") "))")
                 "si" (str "(signing-input " (kotoba-literal "pay") ")")})]
     (is (= json (get cases "j")))
     (is (= (tok/wire-token "pay" "sig") (get cases "w")))
@@ -185,9 +200,12 @@
 
 (deftest constant-time-eq-matches
   (let [cases (compile-i64-cases
-               {"eq" "(if (constant-time-eq \"abc\" \"abc\") 1 0)"
-                "ne" "(if (constant-time-eq \"abc\" \"abd\") 1 0)"
-                "len" "(if (constant-time-eq \"ab\" \"abc\") 1 0)"})]
+               {"eq" (str "(if (constant-time-eq (record-new " eq-record-ty
+                          " \"abc\" \"abc\")) 1 0)")
+                "ne" (str "(if (constant-time-eq (record-new " eq-record-ty
+                          " \"abc\" \"abd\")) 1 0)")
+                "len" (str "(if (constant-time-eq (record-new " eq-record-ty
+                           " \"ab\" \"abc\")) 1 0)")})]
     (is (= 1 (get cases "eq")))
     (is (= 0 (get cases "ne")))
     (is (= 0 (get cases "len")))

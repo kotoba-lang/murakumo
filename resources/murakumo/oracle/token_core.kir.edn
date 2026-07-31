@@ -134,15 +134,37 @@
      true)),
    :param-types [[:option :i64] :i64]}
   {:name scope-allows?,
-   :params [token-scope required],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (if
-    (string=? token-scope (scope-all))
+    (string=?
+     (record-get
+      [:record
+       :token/scope-check
+       [[:token-scope :string] [:required :string]]]
+      x
+      :token-scope)
+     (scope-all))
     true
-    (if (string=? token-scope required) true false)),
-   :param-types [:string :string]}
+    (if
+     (string=?
+      (record-get
+       [:record
+        :token/scope-check
+        [[:token-scope :string] [:required :string]]]
+       x
+       :token-scope)
+      (record-get
+       [:record
+        :token/scope-check
+        [[:token-scope :string] [:required :string]]]
+       x
+       :required))
+     true
+     false)),
+   :param-types [[:ref :token/scope-check]]}
   {:name signing-input,
    :params [payload-seg],
    :result :string,
@@ -151,29 +173,59 @@
    (string-concat (version) (string-concat (jwt-seg-sep) payload-seg)),
    :param-types [:string]}
   {:name encode-claims-json,
-   :params [sub scope iat exp],
+   :params [c],
    :result :string,
    :effects #{},
    :body
    (let
     [a
-     (string-concat (json-sub-prefix) sub)
+     (string-concat
+      (json-sub-prefix)
+      (record-get
+       [:record
+        :token/claims
+        [[:sub :string] [:scope :string] [:iat :i64] [:exp :i64]]]
+       c
+       :sub))
      b
      (string-concat a (json-scope-mid))
-     c
-     (string-concat b scope)
+     c1
+     (string-concat
+      b
+      (record-get
+       [:record
+        :token/claims
+        [[:sub :string] [:scope :string] [:iat :i64] [:exp :i64]]]
+       c
+       :scope))
      d
-     (string-concat c (json-iat-mid))
+     (string-concat c1 (json-iat-mid))
      e
-     (string-concat d (__kotoba_string_from_i64 iat))
+     (string-concat
+      d
+      (__kotoba_string_from_i64
+       (record-get
+        [:record
+         :token/claims
+         [[:sub :string] [:scope :string] [:iat :i64] [:exp :i64]]]
+        c
+        :iat)))
      f
      (string-concat e (json-exp-mid))
      g
-     (string-concat f (__kotoba_string_from_i64 exp))]
+     (string-concat
+      f
+      (__kotoba_string_from_i64
+       (record-get
+        [:record
+         :token/claims
+         [[:sub :string] [:scope :string] [:iat :i64] [:exp :i64]]]
+        c
+        :exp)))]
     (string-concat g (json-close))),
-   :param-types [:string :string :i64 :i64]}
+   :param-types [[:ref :token/claims]]}
   {:name wire-token,
-   :params [payload-seg sig],
+   :params [w],
    :result :string,
    :effects #{},
    :body
@@ -181,8 +233,18 @@
     (version)
     (string-concat
      (wire-sep)
-     (string-concat payload-seg (string-concat (wire-sep) sig)))),
-   :param-types [:string :string]}
+     (string-concat
+      (record-get
+       [:record :token/wire [[:payload :string] [:sig :string]]]
+       w
+       :payload)
+      (string-concat
+       (wire-sep)
+       (record-get
+        [:record :token/wire [[:payload :string] [:sig :string]]]
+        w
+        :sig))))),
+   :param-types [[:ref :token/wire]]}
   {:name version-ok?,
    :params [v],
    :result :bool,
@@ -247,14 +309,21 @@
     acc),
    :param-types [:string :string :i64 :i64 :i64]}
   {:name constant-time-eq,
-   :params [a b],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (let
-    [na (string-byte-length a) nb (string-byte-length b)]
+    [a
+     (record-get [:record :token/eq [[:a :string] [:b :string]]] x :a)
+     b
+     (record-get [:record :token/eq [[:a :string] [:b :string]]] x :b)
+     na
+     (string-byte-length a)
+     nb
+     (string-byte-length b)]
     (if (= na nb) (if (= (ct-scan a b 0 na 0) 0) true false) false)),
-   :param-types [:string :string]}
+   :param-types [[:ref :token/eq]]}
   {:name __kotoba_string_from_i64_nat,
    :params [n],
    :result :string,
@@ -281,7 +350,15 @@
     (__kotoba_string_from_i64_nat n)),
    :param-types [:i64]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:token{:claims
+         "f38bcfaab1d6dc141f7380f0255bef02e31a535f07ca15d55be8642518d25937",
+         :eq
+         "42b360fc7adcff33a3f02a1aff1aec6d9f48672ffeaad45bdd9bc58ff0ac9b37",
+         :scope-check
+         "ff0e2bd3d3693c43bcba941f8192f36321d4eb5268d1bc511c4dd6359685203d",
+         :wire
+         "fc0c457e80036683df6b1aeb24d14e7e47d1c2b7ab291a6d4c3f1a5a60ed1cd4"},
  :exports
  [version
   default-ttl
@@ -307,7 +384,18 @@
   json-iat-mid
   json-exp-mid
   json-close],
- :schemas nil,
+ :schemas
+ #:token{:claims
+         [:record
+          :token/claims
+          [[:sub :string] [:scope :string] [:iat :i64] [:exp :i64]]],
+         :wire
+         [:record :token/wire [[:payload :string] [:sig :string]]],
+         :eq [:record :token/eq [[:a :string] [:b :string]]],
+         :scope-check
+         [:record
+          :token/scope-check
+          [[:token-scope :string] [:required :string]]]},
  :effects #{},
  :blocks [],
  :entry nil}

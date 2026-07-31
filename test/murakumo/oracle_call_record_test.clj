@@ -125,10 +125,13 @@
   (when (oracle/ready? :token)
     (let [cl (token/claims {:sub "alice" :scope "chat" :now 1000 :ttl 60})
           json (token/encode-claims-json cl)
-          via-call (oracle/call :token 'encode-claims-json
-                                [(:sub cl) (:scope cl)
-                                 (oracle/as-i64 (:iat cl))
-                                 (oracle/as-i64 (:exp cl))])]
+          ;; T5.2 native guest record: single :token/claims arg
+          claims (oracle/record
+                  [:record :token/claims
+                   [[:sub :string] [:scope :string] [:iat :i64] [:exp :i64]]]
+                  {:sub (:sub cl) :scope (:scope cl)
+                   :iat (:iat cl) :exp (:exp cl)})
+          via-call (oracle/call :token 'encode-claims-json [claims])]
       (is (= "alice" (:sub cl)))
       (is (= 1060 (:exp cl)))
       (is (= via-call json))
