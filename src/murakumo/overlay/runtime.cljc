@@ -23,6 +23,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── tokens + ports (oracle SSoT) ───────────────────────────────────────
 
 (def scheme-quic (o 'scheme-quic []))
@@ -55,7 +61,10 @@
   (oracle/i64->host (o 'default-quic-port [])))
 
 (defn- port-for-kind [kind]
-  (oracle/i64->host (o 'default-port-for-kind [(name kind)])))
+  (oracle/i64->host
+   (o-record 'default-port-for-kind
+             {:kind (name kind)}
+             [[:kind :string]])))
 
 (def default-port-by-kind
   {:quic (port-for-kind :quic)
@@ -64,7 +73,9 @@
    :relay (port-for-kind :relay)})
 
 (defn- adapter-kind-kw [name]
-  (keyword (o 'adapter-kind [(str name)])))
+  (keyword (o-record 'adapter-kind
+                     {:name name}
+                     [[:name :string]])))
 
 (def adapters
   {adapter-relay
@@ -101,9 +112,12 @@
                (assoc spec :adapter name)))))
 
 (defn known-adapter?
-  "Kotoba `known-adapter?` (required)."
+  "Kotoba `known-adapter?` (required). T5.2: structural map → call-record."
   [name]
-  (oracle/bool->host (o 'known-adapter? [(str name)])))
+  (oracle/bool->host
+   (o-record 'known-adapter?
+             {:name name}
+             [[:name :string]])))
 
 (defn parse-int [value]
   #?(:clj (Integer/parseInt value)
@@ -114,7 +128,9 @@
    Kotoba `scheme-prefix-host` (required)."
   [url]
   (let [s (str url)
-        host (o 'scheme-prefix-host [s])]
+        host (o-record 'scheme-prefix-host
+                       {:url s}
+                       [[:url :string]])]
     (when (and (string? host) (seq host))
       host)))
 

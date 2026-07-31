@@ -27,6 +27,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── residual status / denial / dir / cli tokens ──────────────────────
 
 (def status-authorized
@@ -68,9 +74,12 @@
   (o 'default-ledger-path []))
 
 (defn default-kekkai-dir
-  "Default sibling kekkai checkout location under a user home."
+  "Default sibling kekkai checkout location under a user home.
+   T5.2: structural map → call-record."
   [home]
-  (o 'default-kekkai-dir-under [(str home)]))
+  (o-record 'default-kekkai-dir-under
+            {:home home}
+            [[:home :string]]))
 
 (defn ledger-path
   "Ledger file path: exact MURAKUMO_KEKKAI_LEDGER via config inject, else default.
@@ -106,7 +115,9 @@
 
    Requires kotoba oracle on all platforms (T6.4)."
   [{:keys [out]}]
-  (o 'parse-status-out [(str (or out ""))]))
+  (o-record 'parse-status-out
+            {:out (or out "")}
+            [[:out :string]]))
 
 (defn partition-nodes
   "Split `nodes` into {:admitted [...] :denied [...]} using an injected
@@ -118,13 +129,18 @@
   (reduce (fn [acc n]
             (let [status (get status-by-name (:name n) status-unknown)
                   ok? (oracle/bool->host
-                       (o 'authorized? [(str status)]))]
+                       (o-record 'authorized?
+                                 {:status status}
+                                 [[:status :string]]))]
               (if ok?
                 (update acc :admitted conj n)
                 (update acc :denied conj (assoc n :kekkai/status status)))))
           {:admitted [] :denied []}
           nodes))
 
-(defn denial-line [node]
-  (o 'denial-line-of
-     [(str (:name node)) (str (:kekkai/status node))]))
+(defn denial-line
+  "T5.2: structural map → call-record."
+  [node]
+  (o-record 'denial-line-of
+            {:name (:name node) :status (:kekkai/status node)}
+            [[:name :string] [:status :string]]))

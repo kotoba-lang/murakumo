@@ -21,7 +21,10 @@
             [murakumo.secret :as secret]
             [murakumo.connect :as connect]
             [murakumo.dash.state :as dash]
-            [murakumo.overlay.crypto :as crypto]))
+            [murakumo.overlay.crypto :as crypto]
+            [murakumo.kekkai.gate :as gate]
+            [murakumo.overlay.driver :as driver]
+            [murakumo.overlay.runtime :as runtime]))
 
 (deftest map->args-projects-kinds
   (is (= ["a" "b"]
@@ -294,3 +297,26 @@
                 {:alg :aes-256-gcm :nonce "n" :ciphertext "c"})))
     (is (false? (crypto/sealed-fields-present?
                  {:alg :aes-256-gcm :nonce "n"})))))
+
+(deftest call-record-kekkai-driver-runtime
+  "T5.2 wave 7: kekkai/driver/runtime (+ dash residual interval/cid)."
+  (when (oracle/ready? :dash-state)
+    (is (string? (dash/short-hosted-cid "bafyverylongcid0123456789")))
+    (is (number? (dash/interval-sleep-ms 5))))
+  (when (oracle/ready? :kekkai-gate)
+    (is (string? (gate/default-kekkai-dir "/home/demo")))
+    (is (string? (gate/parse-status {:out "authorized\n"})))
+    (let [part (gate/partition-nodes
+                [{:name "a"} {:name "b"}]
+                {"a" "authorized" "b" "pending"})]
+      (is (= 1 (count (:admitted part))))
+      (is (= 1 (count (:denied part))))
+      (is (string? (gate/denial-line (first (:denied part)))))))
+  (when (oracle/ready? :overlay-driver)
+    (is (= :overlay (driver/keyword-option "--overlay")))
+    (is (= :quic (driver/endpoint-kind "quic://host:4001")))
+    (is (vector? (driver/missing-options [:overlay] {:overlay ""}))))
+  (when (oracle/ready? :overlay-runtime)
+    (is (true? (runtime/known-adapter? runtime/adapter-quic)))
+    (is (string? (runtime/scheme-host "quic://asher:4001")))
+    (is (pos? (get runtime/default-port-by-kind :quic)))))

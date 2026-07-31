@@ -94,9 +94,12 @@
 ;; ── pure display helpers ─────────────────────────────────────────────
 
 (defn short-hosted-cid
-  "CID abbreviation used in the dashboard hosted-components table."
+  "CID abbreviation used in the dashboard hosted-components table.
+   T5.2: structural map → call-record."
   [cid]
-  (o 'short-hosted-cid [(str cid)]))
+  (o-record 'short-hosted-cid
+            {:cid cid}
+            [[:cid :string]]))
 
 (defn- short-cid [cid]
   (subs cid 0 (min short-cid-max-len (count cid))))
@@ -130,9 +133,13 @@
    :interval (parse-int (or (second args) default-dashboard-interval-str))})
 
 (defn interval-sleep-ms
-  "Milliseconds to sleep between dashboard snapshots."
+  "Milliseconds to sleep between dashboard snapshots.
+   T5.2: structural map → call-record."
   [seconds]
-  (oracle/i64->host (o 'interval-sleep-ms [(oracle/as-i64 seconds)])))
+  (oracle/i64->host
+   (o-record 'interval-sleep-ms
+             {:seconds seconds}
+             [[:seconds :i64]])))
 
 (defn clamp-at
   "Clamp a requested history offset into the available history range.
