@@ -281,57 +281,115 @@
        (kind-other))))),
    :param-types [:string]}
   {:name find-scheme-end,
-   :params [s i n],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (< (+ i 2) n)
+   (let
+    [s
+     (record-get
+      [:record :runtime/scan [[:s :string] [:i :i64] [:n :i64]]]
+      x
+      :s)
+     i
+     (record-get
+      [:record :runtime/scan [[:s :string] [:i :i64] [:n :i64]]]
+      x
+      :i)
+     n
+     (record-get
+      [:record :runtime/scan [[:s :string] [:i :i64] [:n :i64]]]
+      x
+      :n)]
     (if
+     (< (+ i 2) n)
      (if
-      (string=? (string-substring s i (+ i 1)) ":")
       (if
-       (string=? (string-substring s (+ i 1) (+ i 2)) "/")
-       (if (string=? (string-substring s (+ i 2) (+ i 3)) "/") 1 0)
+       (string=? (string-substring s i (+ i 1)) ":")
+       (if
+        (string=? (string-substring s (+ i 1) (+ i 2)) "/")
+        (if (string=? (string-substring s (+ i 2) (+ i 3)) "/") 1 0)
+        0)
        0)
-      0)
-     (+ i 3)
-     (find-scheme-end s (+ i 1) n))
-    -1),
-   :param-types [:string :i64 :i64]}
+      (+ i 3)
+      (find-scheme-end
+       (record-new
+        [:record :runtime/scan [[:s :string] [:i :i64] [:n :i64]]]
+        s
+        (+ i 1)
+        n)))
+     -1)),
+   :param-types [[:ref :runtime/scan]]}
   {:name find-host-end,
-   :params [s i n],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (< i n)
-    (let
-     [c (string-substring s i (+ i 1))]
-     (if
-      (if (string=? c ":") 1 (if (string=? c "/") 1 0))
-      i
-      (find-host-end s (+ i 1) n)))
-    n),
-   :param-types [:string :i64 :i64]}
+   (let
+    [s
+     (record-get
+      [:record :runtime/scan [[:s :string] [:i :i64] [:n :i64]]]
+      x
+      :s)
+     i
+     (record-get
+      [:record :runtime/scan [[:s :string] [:i :i64] [:n :i64]]]
+      x
+      :i)
+     n
+     (record-get
+      [:record :runtime/scan [[:s :string] [:i :i64] [:n :i64]]]
+      x
+      :n)]
+    (if
+     (< i n)
+     (let
+      [c (string-substring s i (+ i 1))]
+      (if
+       (if (string=? c ":") 1 (if (string=? c "/") 1 0))
+       i
+       (find-host-end
+        (record-new
+         [:record :runtime/scan [[:s :string] [:i :i64] [:n :i64]]]
+         s
+         (+ i 1)
+         n))))
+     n)),
+   :param-types [[:ref :runtime/scan]]}
   {:name scheme-prefix-host,
    :params [url],
    :result :string,
    :effects #{},
    :body
    (let
-    [n (string-byte-length url) start (find-scheme-end url 0 n)]
+    [n
+     (string-byte-length url)
+     start
+     (find-scheme-end
+      (record-new
+       [:record :runtime/scan [[:s :string] [:i :i64] [:n :i64]]]
+       url
+       0
+       n))]
     (if
      (< start 0)
      ""
      (let
-      [end (find-host-end url start n)]
+      [end
+       (find-host-end
+        (record-new
+         [:record :runtime/scan [[:s :string] [:i :i64] [:n :i64]]]
+         url
+         start
+         n))]
       (if (< start end) (string-substring url start end) "")))),
    :param-types [:string]}],
  :oracle-value nil,
  :schema-identities
- #:runtime{:starts-with
-           "ce0c0453933a841e15a963cb677c28754d62479bed510e2c4264682d696bdd7e"},
+ #:runtime{:scan
+           "05cd98834b6b144c96ab6ecf56fc3be7f77a17565be7deca41d68d03e90bec10",
+           :starts-with
+           "14d04fa85247e3fa353cb61f726282aa68498613d07885561f227ee7c1c27c76"},
  :exports
  [default-relay-port
   default-web-port
@@ -368,7 +426,9 @@
  #:runtime{:starts-with
            [:record
             :runtime/starts-with
-            [[:s :string] [:prefix :string]]]},
+            [[:s :string] [:prefix :string]]],
+           :scan
+           [:record :runtime/scan [[:s :string] [:i :i64] [:n :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

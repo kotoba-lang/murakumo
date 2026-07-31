@@ -1,7 +1,10 @@
 (ns overlay-runtime-core
   (:schemas {;; T5.2 native guest record wire
              :runtime/starts-with [:record :runtime/starts-with
-                                   [[:s :string] [:prefix :string]]]})
+                                   [[:s :string] [:prefix :string]]]
+             ;; T5.2 residual: URL scan multi-arg (scheme/host ends)
+             :runtime/scan [:record :runtime/scan
+                            [[:s :string] [:i :i64] [:n :i64]]]})
   (:export [default-relay-port default-web-port default-quic-port
             default-port-for-kind known-adapter? adapter-kind
             digit-char nat-str i64-str
@@ -122,32 +125,40 @@
           (kind-webtransport)
           (kind-other))))))
 
-(defn find-scheme-end [s :string i :i64 n :i64] :i64
+(defn find-scheme-end [x [:ref :runtime/scan]] :i64
   ;; index after "://" or -1
-  (if (< (+ i 2) n)
-    (if (if (string=? (string-substring s i (+ i 1)) ":")
-          (if (string=? (string-substring s (+ i 1) (+ i 2)) "/")
-            (if (string=? (string-substring s (+ i 2) (+ i 3)) "/") 1 0)
+  ;; T5.2 residual: s+i+n on one guest record
+  (let [s (record-get x :s)
+        i (record-get x :i)
+        n (record-get x :n)]
+    (if (< (+ i 2) n)
+      (if (if (string=? (string-substring s i (+ i 1)) ":")
+            (if (string=? (string-substring s (+ i 1) (+ i 2)) "/")
+              (if (string=? (string-substring s (+ i 2) (+ i 3)) "/") 1 0)
+              0)
             0)
-          0)
-      (+ i 3)
-      (find-scheme-end s (+ i 1) n))
-    -1))
+        (+ i 3)
+        (find-scheme-end (record-new [:ref :runtime/scan] s (+ i 1) n)))
+      -1)))
 
-(defn find-host-end [s :string i :i64 n :i64] :i64
-  (if (< i n)
-    (let [c (string-substring s i (+ i 1))]
-      (if (if (string=? c ":") 1 (if (string=? c "/") 1 0))
-        i
-        (find-host-end s (+ i 1) n)))
-    n))
+(defn find-host-end [x [:ref :runtime/scan]] :i64
+  ;; T5.2 residual: s+i+n on one guest record (same shape as scheme-end)
+  (let [s (record-get x :s)
+        i (record-get x :i)
+        n (record-get x :n)]
+    (if (< i n)
+      (let [c (string-substring s i (+ i 1))]
+        (if (if (string=? c ":") 1 (if (string=? c "/") 1 0))
+          i
+          (find-host-end (record-new [:ref :runtime/scan] s (+ i 1) n))))
+      n)))
 
 (defn scheme-prefix-host [url :string] :string
   (let [n (string-byte-length url)
-        start (find-scheme-end url 0 n)]
+        start (find-scheme-end (record-new [:ref :runtime/scan] url 0 n))]
     (if (< start 0)
       ""
-      (let [end (find-host-end url start n)]
+      (let [end (find-host-end (record-new [:ref :runtime/scan] url start n))]
         (if (< start end)
           (string-substring url start end)
           "")))))

@@ -330,24 +330,69 @@
      false)),
    :param-types [[:ref :token/parts]]}
   {:name ct-scan,
-   :params [a b i n acc],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (< i n)
-    (let
-     [ca
-      (string-substring a i (+ i 1))
-      cb
-      (string-substring b i (+ i 1))
-      ne
-      (if (string=? ca cb) 0 1)
-      nacc
-      (if (= acc 0) ne 1)]
-     (ct-scan a b (+ i 1) n nacc))
-    acc),
-   :param-types [:string :string :i64 :i64 :i64]}
+   (let
+    [a
+     (record-get
+      [:record
+       :token/ct-scan
+       [[:a :string] [:b :string] [:i :i64] [:n :i64] [:acc :i64]]]
+      x
+      :a)
+     b
+     (record-get
+      [:record
+       :token/ct-scan
+       [[:a :string] [:b :string] [:i :i64] [:n :i64] [:acc :i64]]]
+      x
+      :b)
+     i
+     (record-get
+      [:record
+       :token/ct-scan
+       [[:a :string] [:b :string] [:i :i64] [:n :i64] [:acc :i64]]]
+      x
+      :i)
+     n
+     (record-get
+      [:record
+       :token/ct-scan
+       [[:a :string] [:b :string] [:i :i64] [:n :i64] [:acc :i64]]]
+      x
+      :n)
+     acc
+     (record-get
+      [:record
+       :token/ct-scan
+       [[:a :string] [:b :string] [:i :i64] [:n :i64] [:acc :i64]]]
+      x
+      :acc)]
+    (if
+     (< i n)
+     (let
+      [ca
+       (string-substring a i (+ i 1))
+       cb
+       (string-substring b i (+ i 1))
+       ne
+       (if (string=? ca cb) 0 1)
+       nacc
+       (if (= acc 0) ne 1)]
+      (ct-scan
+       (record-new
+        [:record
+         :token/ct-scan
+         [[:a :string] [:b :string] [:i :i64] [:n :i64] [:acc :i64]]]
+        a
+        b
+        (+ i 1)
+        n
+        nacc)))
+     acc)),
+   :param-types [[:ref :token/ct-scan]]}
   {:name constant-time-eq,
    :params [x],
    :result :bool,
@@ -362,7 +407,24 @@
      (string-byte-length a)
      nb
      (string-byte-length b)]
-    (if (= na nb) (if (= (ct-scan a b 0 na 0) 0) true false) false)),
+    (if
+     (= na nb)
+     (if
+      (=
+       (ct-scan
+        (record-new
+         [:record
+          :token/ct-scan
+          [[:a :string] [:b :string] [:i :i64] [:n :i64] [:acc :i64]]]
+         a
+         b
+         0
+         na
+         0))
+       0)
+      true
+      false)
+     false)),
    :param-types [[:ref :token/eq]]}
   {:name __kotoba_string_from_i64_nat,
    :params [n],
@@ -392,19 +454,21 @@
  :oracle-value nil,
  :schema-identities
  #:token{:claim-exp
-         "9c91777096f3a5a0c3b7795d4f396baf8eaf85dfe0e8741619a394fc2c7d4c8a",
+         "37cfd851248f28ba734bfe3f1807a46f81b5ff12df6faf3da6db8f8582c8337f",
          :claims
-         "23c1fced9578dc98979441aa564022cc007f87ef3b9b9cc7e06cb63bb2b96c9a",
+         "0077a1136de8974ba357a2a90709465fe841afe5aa3df39e0cd698b444e32f86",
+         :ct-scan
+         "5fccb75ef270d65cddeec8331924c8985a6e787996d174a53bebb1b8e9cbee4b",
          :eq
-         "152835c37ebabd69c82a11bca798191f89f0da6e6fd95d70ed64cbf92a49dd46",
+         "9bff96b9f111e3dc6bc5e34ee46125418a730609890c0af315f099c2a8b15de5",
          :expired
-         "dafb624ded15a0d9255d49f855756c3cc0098b95d7e6632a172c2b1d76e100b9",
+         "95078200d03d61c8a48ac98a3a186788770f1e8266c068445a2684dc0d37e492",
          :parts
-         "72fbe4e99e109f52a41cb7b0be3b6629181b758689efc78e5a9c29e42d242b89",
+         "d3a31df7e30ecbb1b098bdaa4f06c9852ef75e41beb36ec9414a029dc8904d64",
          :scope-check
-         "5959e28e2fd228a3ecea679342110d0777fa35488dc209f0d7f9e04d5902fba4",
+         "8d5aafebfbaf5fdfd806aa23e20b5cbccf832fa6b7e8f6a8e3f26de8d1461a65",
          :wire
-         "a4cde8b8c613870227fbcbba1df8deae4a781a2ffc571b1e29c6144235267c26"},
+         "b652d68f6f8ef0365c2fa2a9bd54fec50d1dbc45761c12799cd358ce5393b8e1"},
  :exports
  [version
   default-ttl
@@ -453,7 +517,15 @@
           :token/parts
           [[:v [:option :string]]
            [:payload [:option :string]]
-           [:sig [:option :string]]]]},
+           [:sig [:option :string]]]],
+         :ct-scan
+         [:record
+          :token/ct-scan
+          [[:a :string]
+           [:b :string]
+           [:i :i64]
+           [:n :i64]
+           [:acc :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}
