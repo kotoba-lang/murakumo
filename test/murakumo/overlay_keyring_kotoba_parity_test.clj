@@ -7,6 +7,15 @@
             [murakumo.overlay.keyring :as keyring]))
 
 (def port-source (slurp "kotoba/overlay_keyring_core.kotoba"))
+
+(def ^:private epoch-in-ty
+  "[:record :keyring/epoch-in [[:seconds :i64] [:rotation-seconds :i64]]]")
+
+(def ^:private key-id-in-ty
+  "[:record :keyring/key-id-in [[:overlay :string] [:epoch :i64]]]")
+
+(def ^:private derive-in-ty
+  "[:record :keyring/derive-in [[:operator-seed :string] [:overlay :string] [:epoch :i64]]]")
 (def export-prefix
   (str "default-rotation-seconds epoch key-id-input derive-key-input "
        "digit-char nat-str i64-str seed-sep key-id-mid derive-key-mid "
@@ -40,12 +49,14 @@
 (deftest epoch-and-preimages-match
   (let [n (compile-i64-cases
            {"d" "(default-rotation-seconds)"
-            "e" "(epoch 259200 86400)"
-            "e0" "(epoch 0 86400)"})
+            "e" (str "(epoch (record-new " epoch-in-ty " 259200 86400))")
+            "e0" (str "(epoch (record-new " epoch-in-ty " 0 86400))")})
         s (compile-string-cases
-           {"k" (str "(key-id-input " (kotoba-literal "bafyOverlay") " 3)")
-            "dk" (str "(derive-key-input " (kotoba-literal "operator-seed") " "
-                      (kotoba-literal "bafyOverlay") " 3)")})]
+           {"k" (str "(key-id-input (record-new " key-id-in-ty " "
+                     (kotoba-literal "bafyOverlay") " 3))")
+            "dk" (str "(derive-key-input (record-new " derive-in-ty " "
+                      (kotoba-literal "operator-seed") " "
+                      (kotoba-literal "bafyOverlay") " 3))")})]
     (is (= keyring/default-rotation-seconds (get n "d")))
     (is (= (keyring/epoch (* 3 86400)) (get n "e")))
     (is (= (keyring/epoch 0) (get n "e0")))
@@ -63,9 +74,11 @@
             "dm" "(derive-key-mid)"
             "tk" "(type-key)"
             "tr" "(type-rotation)"
-            "ki" (str "(key-id-input " (kotoba-literal "ov") " 2)")
-            "di" (str "(derive-key-input " (kotoba-literal "seed") " "
-                      (kotoba-literal "ov") " 2)")})
+            "ki" (str "(key-id-input (record-new " key-id-in-ty " "
+                      (kotoba-literal "ov") " 2))")
+            "di" (str "(derive-key-input (record-new " derive-in-ty " "
+                      (kotoba-literal "seed") " "
+                      (kotoba-literal "ov") " 2))")})
         n (compile-i64-cases
            {"hl" "(key-id-hex-len)"
             "dr" "(default-rotation-seconds)"})]

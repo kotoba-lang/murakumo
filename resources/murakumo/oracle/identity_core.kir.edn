@@ -75,21 +75,32 @@
    :body " ",
    :param-types []}
   {:name seed-node,
-   :params [operator-seed node-name],
-   :result :string,
-   :effects #{},
-   :body
-   (string-concat operator-seed (string-concat (seed-sep) node-name)),
-   :param-types [:string :string]}
-  {:name seed-p2p,
-   :params [operator-seed node-name],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
-    (seed-node operator-seed node-name)
-    (seed-p2p-suffix)),
-   :param-types [:string :string]}
+    (record-get
+     [:record
+      :identity/node-seed
+      [[:operator-seed :string] [:node-name :string]]]
+     x
+     :operator-seed)
+    (string-concat
+     (seed-sep)
+     (record-get
+      [:record
+       :identity/node-seed
+       [[:operator-seed :string] [:node-name :string]]]
+      x
+      :node-name))),
+   :param-types [[:ref :identity/node-seed]]}
+  {:name seed-p2p,
+   :params [x],
+   :result :string,
+   :effects #{},
+   :body (string-concat (seed-node x) (seed-p2p-suffix)),
+   :param-types [[:ref :identity/node-seed]]}
   {:name seed-x25519,
    :params [operator-seed],
    :result :string,
@@ -97,29 +108,49 @@
    :body (string-concat operator-seed (seed-x25519-suffix)),
    :param-types [:string]}
   {:name seed-overlay,
-   :params [operator-seed overlay-id],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
-    operator-seed
+    (record-get
+     [:record
+      :identity/overlay-seed
+      [[:operator-seed :string] [:overlay-id :string]]]
+     x
+     :operator-seed)
     (string-concat
      (seed-sep)
-     (string-concat overlay-id (seed-overlay-suffix)))),
-   :param-types [:string :string]}
+     (string-concat
+      (record-get
+       [:record
+        :identity/overlay-seed
+        [[:operator-seed :string] [:overlay-id :string]]]
+       x
+       :overlay-id)
+      (seed-overlay-suffix)))),
+   :param-types [[:ref :identity/overlay-seed]]}
   {:name did-derive-cmd,
-   :params [kotoba seed],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
-    kotoba
+    (record-get
+     [:record :identity/did-cmd [[:kotoba :string] [:seed :string]]]
+     x
+     :kotoba)
     (string-concat
      (argv-join-sep)
      (string-concat
       (did-derive-subcmd)
-      (string-concat (argv-join-sep) seed)))),
-   :param-types [:string :string]}
+      (string-concat
+       (argv-join-sep)
+       (record-get
+        [:record :identity/did-cmd [[:kotoba :string] [:seed :string]]]
+        x
+        :seed))))),
+   :param-types [[:ref :identity/did-cmd]]}
   {:name did-from-output,
    :params [out],
    :result :string,
@@ -188,7 +219,13 @@
    :body "murakumo-fleet",
    :param-types []}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:identity{:did-cmd
+            "4f225c154f9156f0193096684b4c1cb17284ee4580a9f2b9e828da309dcc6ce0",
+            :node-seed
+            "6b2d55d0633ffb013d16351ddaf6d66296ab5d57d1b76c8a95e88cddd34a7f55",
+            :overlay-seed
+            "a9cfd8ea495d4439389e131e7ee66f9eb0e87bfd961772cb5503812adf32644d"},
  :exports
  [ws?
   trim
@@ -214,7 +251,19 @@
   jwt-payload-exp-mid
   jwt-payload-exp-val
   jwt-payload-close],
- :schemas nil,
+ :schemas
+ #:identity{:node-seed
+            [:record
+             :identity/node-seed
+             [[:operator-seed :string] [:node-name :string]]],
+            :overlay-seed
+            [:record
+             :identity/overlay-seed
+             [[:operator-seed :string] [:overlay-id :string]]],
+            :did-cmd
+            [:record
+             :identity/did-cmd
+             [[:kotoba :string] [:seed :string]]]},
  :effects #{},
  :blocks [],
  :entry nil}

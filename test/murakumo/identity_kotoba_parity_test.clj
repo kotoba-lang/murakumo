@@ -10,6 +10,15 @@
 
 (def port-source (slurp "kotoba/identity_core.kotoba"))
 
+(def ^:private node-seed-ty
+  "[:record :identity/node-seed [[:operator-seed :string] [:node-name :string]]]")
+
+(def ^:private overlay-seed-ty
+  "[:record :identity/overlay-seed [[:operator-seed :string] [:overlay-id :string]]]")
+
+(def ^:private did-cmd-ty
+  "[:record :identity/did-cmd [[:kotoba :string] [:seed :string]]]")
+
 (def export-prefix
   (str "ws? trim seed-node seed-p2p seed-x25519 seed-overlay "
        "did-derive-cmd did-from-output "
@@ -55,15 +64,16 @@
   (let [seed "operator"
         node "asher"
         overlay "bafyOverlay"
-        cases {"n" (str "(seed-node " (kotoba-literal seed) " "
-                        (kotoba-literal node) ")")
-               "p" (str "(seed-p2p " (kotoba-literal seed) " "
-                        (kotoba-literal node) ")")
+        cases {"n" (str "(seed-node (record-new " node-seed-ty " "
+                        (kotoba-literal seed) " " (kotoba-literal node) "))")
+               "p" (str "(seed-p2p (record-new " node-seed-ty " "
+                        (kotoba-literal seed) " " (kotoba-literal node) "))")
                "x" (str "(seed-x25519 " (kotoba-literal seed) ")")
-               "o" (str "(seed-overlay " (kotoba-literal seed) " "
-                        (kotoba-literal overlay) ")")
-               "cmd" (str "(did-derive-cmd " (kotoba-literal "/bin/kotoba") " "
-                          (kotoba-literal seed) ")")}
+               "o" (str "(seed-overlay (record-new " overlay-seed-ty " "
+                        (kotoba-literal seed) " " (kotoba-literal overlay) "))")
+               "cmd" (str "(did-derive-cmd (record-new " did-cmd-ty " "
+                          (kotoba-literal "/bin/kotoba") " "
+                          (kotoba-literal seed) "))")}
         actual (compile-string-cases cases)]
     (is (= (str seed ":" node) (get actual "n")))
     (is (= (id/node-seed seed {:name node})

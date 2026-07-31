@@ -137,24 +137,40 @@
 
 ;; ── pure seed preimages (oracle SSoT) ─────────────────────────────────
 
+(def ^:private node-seed-schema
+  "T5.2 native guest record for seed-node / seed-p2p."
+  [:record :identity/node-seed
+   [[:operator-seed :string] [:node-name :string]]])
+
+(def ^:private overlay-seed-schema
+  [:record :identity/overlay-seed
+   [[:operator-seed :string] [:overlay-id :string]]])
+
+(def ^:private did-cmd-schema
+  [:record :identity/did-cmd [[:kotoba :string] [:seed :string]]])
+
 (defn node-seed
   "Deterministic per-node Ed25519 seed from the shared operator seed and node name.
    Kotoba seed-node preimage then host SHA-256.
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :identity/node-seed argument."
   [operator-seed node]
   (sha256-hex
    (o-record 'seed-node
-             {:operator-seed operator-seed :node-name (:name node)}
-             [[:operator-seed :string] [:node-name :string]])))
+             {:seed (oracle/record node-seed-schema
+                                   {:operator-seed operator-seed
+                                    :node-name (:name node)})}
+             [[:seed :raw]])))
 
 (defn node-p2p-seed
   "Deterministic per-node libp2p seed from the shared operator seed and node name.
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :identity/node-seed argument."
   [operator-seed node]
   (sha256-hex
    (o-record 'seed-p2p
-             {:operator-seed operator-seed :node-name (:name node)}
-             [[:operator-seed :string] [:node-name :string]])))
+             {:seed (oracle/record node-seed-schema
+                                   {:operator-seed operator-seed
+                                    :node-name (:name node)})}
+             [[:seed :raw]])))
 
 (defn x25519-seed
   "Deterministic fleet x25519 seed derived from the shared operator seed.
@@ -171,22 +187,25 @@
    This is a transitional keyed-MAC material for murakumo-overlay frames; the
    later encrypted transport can replace the derivation without changing the
    cloud/driver argv contract.
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :identity/overlay-seed argument."
   [operator-seed overlay-id]
   (sha256-hex
    (o-record 'seed-overlay
-             {:operator-seed operator-seed :overlay-id overlay-id}
-             [[:operator-seed :string] [:overlay-id :string]])))
+             {:seed (oracle/record overlay-seed-schema
+                                   {:operator-seed operator-seed
+                                    :overlay-id overlay-id})}
+             [[:seed :raw]])))
 
 (defn did-derive-argv
   "kotoba CLI argv for deriving a did:key from an Ed25519 seed.
    Subcmd from oracle; vector assembly stays host.
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :identity/did-cmd argument."
   [kotoba seed]
   (vec (str/split
         (o-record 'did-derive-cmd
-                  {:kotoba kotoba :seed seed}
-                  [[:kotoba :string] [:seed :string]])
+                  {:cmd (oracle/record did-cmd-schema
+                                       {:kotoba kotoba :seed seed})}
+                  [[:cmd :raw]])
         #" " 3)))
 
 (defn did-from-output
