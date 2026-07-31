@@ -48,6 +48,35 @@
    [[:total :i64] [:text-w :i64] [:media-w :i64]
     [:postproc-w :i64] [:floor :i64]]])
 
+(def ^:private run-flags-schema
+  "Guest :rebalance/run-flags — T5.2 option-string-in-record classify inputs."
+  [:record :rebalance/run-flags
+   [[:images [:option :string]]
+    [:video [:option :string]]
+    [:audio [:option :string]]
+    [:swarm [:option :string]]
+    [:tokens [:option :string]]]])
+
+(def ^:private class-code->key
+  {0 nil 1 :text 2 :image 3 :video 4 :audio 5 :postproc})
+
+(defn- classify-run
+  "Project one run's unit/kind presence → guest class code (0–5)."
+  [run]
+  (let [u (or (:units run) (get run "units") {})
+        kind (or (:run/kind run) (get run "run/kind")
+                 (:model run) (get run "model"))]
+    (oracle/i64->host
+     (o-record 'classify-run-flags
+               {:x (oracle/record
+                    run-flags-schema
+                    {:images (when (or (:images u) (get u "images")) "images")
+                     :video (when (or (:video-seconds u) (get u "video-seconds")) "video")
+                     :audio (when (or (:audio-seconds u) (get u "audio-seconds")) "audio")
+                     :swarm (when (= "browser-swarm" (str kind)) "swarm")
+                     :tokens (when (or (:tokens u) (get u "tokens")) "tokens")})}
+               [[:x :raw]]))))
+
 (def shard-ceiling-gb
   "16GB stability limit → ~10GB usable shard. Kotoba `shard-ceiling-gb`."
   (oracle/i64->host (o 'shard-ceiling-gb [])))
@@ -80,19 +109,13 @@
 
 (defn demand-from-runs
   "Recent run ledger → request counts by capability class. `runs` is the
-   append-only feed; we bucket each run's units/kind. Pure."
+   append-only feed; we bucket each run's units/kind.
+   Class tag via kotoba `classify-run-flags` (T5.2 option-string record)."
   [runs]
   (reduce (fn [d run]
-            (let [u (or (:units run) (get run "units") {})
-                  kind (or (:run/kind run) (get run "run/kind")
-                           (:model run) (get run "model"))]
-              (cond
-                (or (:images u) (get u "images"))               (update d :image inc)
-                (or (:video-seconds u) (get u "video-seconds")) (update d :video inc)
-                (or (:audio-seconds u) (get u "audio-seconds")) (update d :audio inc)
-                (= "browser-swarm" (str kind))                  (update d :postproc inc)
-                (or (:tokens u) (get u "tokens"))               (update d :text inc)
-                :else d)))
+            (if-let [k (class-code->key (classify-run run))]
+              (update d k inc)
+              d))
           {:text 0 :image 0 :video 0 :audio 0 :postproc 0}
           runs))
 
