@@ -122,8 +122,11 @@
 
 (defn default-headroom [] :i64 1342177280)
 
-(defn rem64 [a :i64 b :i64] :i64
-  (- a (* (quot a b) b)))
+(defn rem64 [p [:ref :plan/pair]] :i64
+  ;; T5.2 residual: a+b multi-arg → :plan/pair (a rem b)
+  (let [a (record-get p :a)
+        b (record-get p :b)]
+    (- a (* (quot a b) b))))
 
 (defn usable-bytes [n [:ref :plan/node-cap]] :i64
   ;; Profile 5: wired is [:option :i64] (none = no wired cap). No -1 sentinel.
@@ -146,7 +149,7 @@
         experts (record-get s :experts)
         kv-heads (record-get s :kv-heads)
         fast (if (< link-gbps 20) 0 1)
-        div (if (< ranks 1) 0 (if (= 0 (rem64 kv-heads ranks)) 1 0))]
+        div (if (< ranks 1) 0 (if (= 0 (rem64 (record-new [:ref :plan/pair] kv-heads ranks))) 1 0))]
     (if (if (= fast 1) (if (= div 1) 1 0) 0)
       "tensor"
       (if (if (= fast 1) (if (< ranks experts) 1 0) 0)
@@ -225,9 +228,9 @@
             f0 (quot p0 sumw)
             f1 (quot p1 sumw)
             f2 (quot p2 sumw)
-            r0 (rem64 p0 sumw)
-            r1 (rem64 p1 sumw)
-            r2 (rem64 p2 sumw)
+            r0 (rem64 (record-new [:ref :plan/pair] p0 sumw))
+            r1 (rem64 (record-new [:ref :plan/pair] p1 sumw))
+            r2 (rem64 (record-new [:ref :plan/pair] p2 sumw))
             assigned (+ f0 (+ f1 f2))
             extra (- total assigned)
             rems (record-new [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]] r0 r1 r2)
