@@ -38,7 +38,11 @@
              :schedule/pick3-tour [:record :schedule/pick3-tour
                                     [[:champ01 :i64] [:ok2 :bool]
                                      [:warm-champ :bool] [:warm2 :bool]
-                                     [:better-champ-2 :bool]]]})
+                                     [:better-champ-2 :bool]]]
+             :schedule/fold-step [:record :schedule/fold-step
+                                  [[:champ [:option :i64]]
+                                   [:ok-i :bool] [:warm-champ :bool]
+                                   [:warm-i :bool] [:better-c-i :bool]]]})
   (:export [eligible? score-queue score-free better-score?
             holds-warm? prefer-warm-then-score pick-idx-2-full
             pick-idx-3-tournament queue-after-assign
@@ -280,23 +284,27 @@
 (defn assign-step-3-q2 [result [:ref :schedule/assign3]] :i64
   (record-get result :q2))
 
-(defn pick-fold-step [champ [:option :i64] ok-i :bool warm-champ :bool warm-i :bool
-                      better-c-i :bool] :i64
+(defn pick-fold-step [s [:ref :schedule/fold-step]] :i64
   ;; Host folds candidates i=0..n-1.
   ;; Product Value ABI v1: optional champ presence (no has-champ sentinel).
   ;; Returns: 0 = no pick yet (no champ and not ok-i)
   ;;          1 = take challenger i as new champ
   ;;          2 = keep existing champ
-  ;; prefer-warm takes better2 record; pick-fold residual still multi-arg + option.
-  (if-some [_ champ]
-    (if ok-i
-      (if (= (prefer-warm-then-score
-              (record-new [:ref :schedule/better2]
-                          warm-champ warm-i better-c-i)) 0)
-        2
-        1)
-      2)
-    (if ok-i 1 0)))
+  ;; T5.2 residual: single guest record (option champ + flags).
+  (let [champ (record-get s :champ)
+        ok-i (record-get s :ok-i)
+        warm-champ (record-get s :warm-champ)
+        warm-i (record-get s :warm-i)
+        better-c-i (record-get s :better-c-i)]
+    (if-some [_ champ]
+      (if ok-i
+        (if (= (prefer-warm-then-score
+                (record-new [:ref :schedule/better2]
+                            warm-champ warm-i better-c-i)) 0)
+          2
+          1)
+        2)
+      (if ok-i 1 0))))
 
 (defn queue-inc-if [s [:ref :schedule/queue-step]] :i64
   ;; picked 0/1 — alias queue-after-assign for host fold clarity
