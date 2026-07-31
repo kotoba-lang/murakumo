@@ -52,16 +52,15 @@
 
 (deftest call-record-config-kotoba-dir-from
   (when (oracle/ready? :config)
-    (let [via-call (oracle/call :config 'kotoba-dir-from ["" "/Users/demo"])
-          via-record (oracle/call-record
-                      :config 'kotoba-dir-from
-                      {"MURAKUMO_KOTOBA_DIR" ""
-                       "HOME" "/Users/demo"}
-                      [["MURAKUMO_KOTOBA_DIR" :string]
-                       ["HOME" :string]])]
-      (is (= via-call via-record))
-      (is (string? via-record))
-      (is (pos? (count via-record))))))
+    (let [rec (oracle/record
+               [:record :config/kotoba-dir [[:override :string] [:home :string]]]
+               {:override "" :home "/Users/demo"})
+          via-call (oracle/call :config 'kotoba-dir-from [rec])
+          via-host (config/kotoba-dir {"MURAKUMO_KOTOBA_DIR" ""
+                                       "HOME" "/Users/demo"})]
+      (is (= via-call via-host))
+      (is (string? via-host))
+      (is (pos? (count via-host))))))
 
 (deftest config-kotoba-dir-uses-call-record-path
   (let [env {"HOME" "/Users/demo"}
@@ -78,14 +77,28 @@
     (let [user "/u"
           kdir "/k"
           env {"MURAKUMO_BIN" "/custom/bin"}
-          via-call (oracle/call :config 'resolve-local-bin
-                                [user kdir true "/custom/bin"])
+          local (oracle/record
+                 [:record :config/local-bin
+                  [[:user-dir :string] [:kotoba-dir :string]
+                   [:pinned-exists :bool] [:murakumo-bin :string]]]
+                 {:user-dir user :kotoba-dir kdir
+                  :pinned-exists true :murakumo-bin "/custom/bin"})
+          via-call (oracle/call :config 'resolve-local-bin [local])
           via-host (config/resolve-local-bin env user kdir true)]
       (is (= via-call via-host)))
-    (let [via-call (oracle/call :config 'kotoba-bin ["/u" true])
+    (let [bin (oracle/record
+               [:record :config/kotoba-bin
+                [[:user-dir :string] [:pinned-exists :bool]]]
+               {:user-dir "/u" :pinned-exists true})
+          via-call (oracle/call :config 'kotoba-bin [bin])
           via-host (config/kotoba-bin "/u" true)]
       (is (= via-call via-host)))
-    (let [via-call (oracle/call :config 'resolve-wit-dir ["/u" "/k" false])
+    (let [wit (oracle/record
+               [:record :config/wit-dir
+                [[:user-dir :string] [:kotoba-dir :string]
+                 [:pinned-wit-exists :bool]]]
+               {:user-dir "/u" :kotoba-dir "/k" :pinned-wit-exists false})
+          via-call (oracle/call :config 'resolve-wit-dir [wit])
           via-host (config/resolve-wit-dir "/u" "/k" false)]
       (is (= via-call via-host)))))
 

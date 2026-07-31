@@ -11,6 +11,12 @@
   (str "default-class-name node-class-name serves-read? serves-live? serves-plane? "
        "class-native plane-read plane-live"))
 
+(def ^:private node-class-ty
+  "[:record :connect/node-class [[:node-class :string] [:default-class :string]]]")
+
+(def ^:private plane-ty
+  "[:record :connect/plane [[:plane :string] [:http? :bool] [:common? :bool]]]")
+
 (def connect-spec
   {:default-class :native
    :classes {:native {:read [:http] :live [:quic]}
@@ -61,10 +67,11 @@
   (let [actual (compile-string-cases
                 {"d0" (str "(default-class-name " (kotoba-literal "") ")")
                  "d1" (str "(default-class-name " (kotoba-literal "edge") ")")
-                 "n0" (str "(node-class-name " (kotoba-literal "") " "
-                           (kotoba-literal "") ")")
-                 "n1" (str "(node-class-name " (kotoba-literal "browser") " "
-                           (kotoba-literal "native") ")")})]
+                 "n0" (str "(node-class-name (record-new " node-class-ty " "
+                           (kotoba-literal "") " " (kotoba-literal "") "))")
+                 "n1" (str "(node-class-name (record-new " node-class-ty " "
+                           (kotoba-literal "browser") " "
+                           (kotoba-literal "native") "))")})]
     (is (= (name (connect/default-class {})) (get actual "d0")))
     (is (= "edge" (get actual "d1")))
     (is (= (name (connect/node-class {} {})) (get actual "n0")))
@@ -81,9 +88,10 @@
                      (fn [i [node reach]]
                        (let [p (project-serves node reach)]
                          [(str "s_" i)
-                          (str "(if (serves-plane? " (kotoba-literal (:plane p)) " "
+                          (str "(if (serves-plane? (record-new " plane-ty " "
+                               (kotoba-literal (:plane p)) " "
                                (bool-form (:http? p)) " "
-                               (bool-form (:common? p)) ") 1 0)")]))
+                               (bool-form (:common? p)) ")) 1 0)")]))
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [node reach]] (map-indexed vector corpus)]

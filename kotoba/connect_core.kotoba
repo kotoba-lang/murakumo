@@ -1,4 +1,9 @@
 (ns connect-core
+  (:schemas {;; T5.2 native guest record wire
+             :connect/node-class [:record :connect/node-class
+                                  [[:node-class :string] [:default-class :string]]]
+             :connect/plane [:record :connect/plane
+                             [[:plane :string] [:http? :bool] [:common? :bool]]]})
   (:export [default-class-name node-class-name
             serves-read? serves-live? serves-plane?
             class-native plane-read plane-live]))
@@ -9,6 +14,7 @@
 ;; Residual class/plane name tokens dual-source; helpers recompose.
 ;; empty default-class string ⇒ class-native. node-class empty ⇒ use default.
 ;; plane: plane-read | plane-live | other.
+;; T5.2: multi-scalar pure inputs take single guest records.
 ;; Parity: test/murakumo/connect_kotoba_parity_test.clj
 
 ;; ── residual class / plane name tokens ───────────────────────────────
@@ -31,11 +37,12 @@
     (class-native)
     default-class))
 
-(defn node-class-name [node-class :string default-class :string] :string
+(defn node-class-name [n [:ref :connect/node-class]] :string
   ;; cljc: (or (:class node) (default-class connect))
-  (if (string=? node-class "")
-    (default-class-name default-class)
-    node-class))
+  ;; T5.2 native: node-class+default-class.
+  (if (string=? (record-get n :node-class) "")
+    (default-class-name (record-get n :default-class))
+    (record-get n :node-class)))
 
 (defn serves-read? [http? :bool] :bool
   ;; cljc :read plane — host projects presence of :http as real :bool.
@@ -45,12 +52,14 @@
   ;; cljc :live — host projects non-empty live-transport intersection as :bool.
   common?)
 
-(defn serves-plane? [plane :string
-                     http? :bool
-                     common? :bool] :bool
+(defn serves-plane? [p [:ref :connect/plane]] :bool
   ;; Profile 5: plane gate; http?/common? are real :bool (not option-i64).
-  (if (string=? plane (plane-read))
-    (serves-read? http?)
-    (if (string=? plane (plane-live))
-      (serves-live? common?)
-      false)))
+  ;; T5.2 native: plane+http?+common?.
+  (let [plane (record-get p :plane)
+        http? (record-get p :http?)
+        common? (record-get p :common?)]
+    (if (string=? plane (plane-read))
+      (serves-read? http?)
+      (if (string=? plane (plane-live))
+        (serves-live? common?)
+        false))))
