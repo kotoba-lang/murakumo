@@ -42,6 +42,29 @@
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
+
+(def ^:private first2-lit
+  "[:record :reconcile/first2 [[:load0 :i64] [:load1 :i64] [:name0-before-1 :bool]]]")
+(def ^:private first3-lit
+  "[:record :reconcile/first3 [[:load0 :i64] [:load1 :i64] [:load2 :i64] [:n01 :bool] [:n02 :bool] [:n12 :bool]]]")
+(def ^:private pick2-in-lit
+  "[:record :reconcile/pick2-in [[:load0 :i64] [:load1 :i64] [:name0-before-1 :bool] [:n :i64]]]")
+
+(defn- first2-call [l0 l1 nameb]
+  (str "(first-of-2 (record-new " first2-lit " " l0 " " l1 " " nameb "))"))
+
+(defn- first3-call [l0 l1 l2 n01 n02 n12]
+  (str "(first-of-3 (record-new " first3-lit " "
+       l0 " " l1 " " l2 " " n01 " " n02 " " n12 "))"))
+
+(defn- pick2-in-call [l0 l1 nameb n]
+  (str "(pick-targets-2-record (record-new " pick2-in-lit " "
+       l0 " " l1 " " nameb " " n "))"))
+
+(defn- pick3-first-call [l0 l1 l2 n01 n02 n12]
+  (str "(pick-targets-3-first (record-new " first3-lit " "
+       l0 " " l1 " " l2 " " n01 " " n02 " " n12 "))"))
+
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
                (str "(defn " name " [] :i64 " body ")"))
@@ -160,16 +183,16 @@
         ;; n01: c<=a? 0; n02: c<=b? 0; n12: a<=b? 1
         names-cab "(name-order-record false false true)"
         actual (compile-i64-cases
-                {"f2" "(first-of-2 1 3 true)"  ;; load0=1 load1=3 name0 before → 0
-                 "f2b" "(first-of-2 1 1 false)" ;; equal load, name0 after → 1
-                 "f3" (str "(first-of-3 1 3 1 " names-cab ")")
-                 "t3" (str "(pick-targets-3-first 1 3 1 " names-cab ")")
+                {"f2" (first2-call 1 3 "true")  ;; load0=1 load1=3 name0 before → 0
+                 "f2b" (first2-call 1 1 "false") ;; equal load, name0 after → 1
+                 "f3" (first3-call 1 3 1 "false" "false" "true")
+                 "t3" (pick3-first-call 1 3 1 "false" "false" "true")
                  ;; T5.3: project record fields inside the guest
-                 "pf" "(targets-first (pick-targets-2-record 1 3 true 2))"
-                 "ps" "(targets-second (pick-targets-2-record 1 3 true 2))"
-                 "pc" "(targets-count (pick-targets-2-record 1 3 true 2))"
-                 "p2n1c" "(targets-count (pick-targets-2-record 1 3 true 1))"
-                 "p2n0c" "(targets-count (pick-targets-2-record 1 3 true 0))"})
+                 "pf" (str "(targets-first " (pick2-in-call 1 3 "true" 2) ")")
+                 "ps" (str "(targets-second " (pick2-in-call 1 3 "true" 2) ")")
+                 "pc" (str "(targets-count " (pick2-in-call 1 3 "true" 2) ")")
+                 "p2n1c" (str "(targets-count " (pick2-in-call 1 3 "true" 1) ")")
+                 "p2n0c" (str "(targets-count " (pick2-in-call 1 3 "true" 0) ")")})
         ;; cljc: candidates c,a,b loads c=1,a=3,b=1 → sorted b,c,a
         cljc (pick ["c" "a" "b"] 2 {"c" 1 "a" 3 "b" 1})]
     (is (= 0 (get actual "f2")))
@@ -186,9 +209,9 @@
     (is (= ["b" "c"] cljc))
     ;; two-record: candidates order [b c] loads 1,1 names b before c
     (let [p2 (compile-i64-cases
-              {"ord0" "(targets-first (pick-targets-2-record 1 1 true 2))"
-               "ord1" "(targets-second (pick-targets-2-record 1 1 true 2))"
-               "ordc" "(targets-count (pick-targets-2-record 1 1 true 2))"})]
+              {"ord0" (str "(targets-first " (pick2-in-call 1 1 "true" 2) ")")
+               "ord1" (str "(targets-second " (pick2-in-call 1 1 "true" 2) ")")
+               "ordc" (str "(targets-count " (pick2-in-call 1 1 "true" 2) ")")})]
       (is (= 0 (get p2 "ord0")))
       (is (= 1 (get p2 "ord1")))
       (is (= 2 (get p2 "ordc"))))))
