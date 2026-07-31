@@ -26,6 +26,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── residual seed / JWT / CID tokens (oracle SSoT) ───────────────────
 
 (def seed-sep
@@ -133,43 +139,63 @@
 
 (defn node-seed
   "Deterministic per-node Ed25519 seed from the shared operator seed and node name.
-   Kotoba seed-node preimage then host SHA-256."
+   Kotoba seed-node preimage then host SHA-256.
+   T5.2: structural map → call-record."
   [operator-seed node]
   (sha256-hex
-   (o 'seed-node [(str operator-seed) (str (:name node))])))
+   (o-record 'seed-node
+             {:operator-seed operator-seed :node-name (:name node)}
+             [[:operator-seed :string] [:node-name :string]])))
 
 (defn node-p2p-seed
-  "Deterministic per-node libp2p seed from the shared operator seed and node name."
+  "Deterministic per-node libp2p seed from the shared operator seed and node name.
+   T5.2: structural map → call-record."
   [operator-seed node]
   (sha256-hex
-   (o 'seed-p2p [(str operator-seed) (str (:name node))])))
+   (o-record 'seed-p2p
+             {:operator-seed operator-seed :node-name (:name node)}
+             [[:operator-seed :string] [:node-name :string]])))
 
 (defn x25519-seed
-  "Deterministic fleet x25519 seed derived from the shared operator seed."
+  "Deterministic fleet x25519 seed derived from the shared operator seed.
+   T5.2: structural map → call-record."
   [operator-seed]
   (sha256-hex
-   (o 'seed-x25519 [(str operator-seed)])))
+   (o-record 'seed-x25519
+             {:operator-seed operator-seed}
+             [[:operator-seed :string]])))
 
 (defn overlay-auth-key
   "Deterministic per-overlay MAC key derived from the shared operator seed.
 
    This is a transitional keyed-MAC material for murakumo-overlay frames; the
    later encrypted transport can replace the derivation without changing the
-   cloud/driver argv contract."
+   cloud/driver argv contract.
+   T5.2: structural map → call-record."
   [operator-seed overlay-id]
   (sha256-hex
-   (o 'seed-overlay [(str operator-seed) (str overlay-id)])))
+   (o-record 'seed-overlay
+             {:operator-seed operator-seed :overlay-id overlay-id}
+             [[:operator-seed :string] [:overlay-id :string]])))
 
 (defn did-derive-argv
   "kotoba CLI argv for deriving a did:key from an Ed25519 seed.
-   Subcmd from oracle; vector assembly stays host."
+   Subcmd from oracle; vector assembly stays host.
+   T5.2: structural map → call-record."
   [kotoba seed]
-  (vec (str/split (o 'did-derive-cmd [(str kotoba) (str seed)]) #" " 3)))
+  (vec (str/split
+        (o-record 'did-derive-cmd
+                  {:kotoba kotoba :seed seed}
+                  [[:kotoba :string] [:seed :string]])
+        #" " 3)))
 
 (defn did-from-output
-  "Normalise kotoba did-derive stdout."
+  "Normalise kotoba did-derive stdout.
+   T5.2: structural map → call-record."
   [out]
-  (o 'did-from-output [(str out)]))
+  (o-record 'did-from-output
+            {:out out}
+            [[:out :string]]))
 
 (defn did-from-command-result
   "Normalise a process result from did-derive."

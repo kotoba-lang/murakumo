@@ -29,6 +29,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def argv-join-sep
@@ -186,25 +192,36 @@
 ;; ── pure helpers → oracle-required ───────────────────────────────────
 
 (defn join-path
-  "Join two path segments with path-sep. Kotoba (required)."
+  "Join two path segments with path-sep. Kotoba (required).
+   T5.2: structural map → call-record."
   [a b]
-  (o 'join-path [(str a) (str b)]))
+  (o-record 'join-path
+            {:a a :b b}
+            [[:a :string] [:b :string]]))
 
 (defn pin-wit-dest
-  "Pinned WIT directory path under dest. Kotoba (required)."
+  "Pinned WIT directory path under dest. Kotoba (required).
+   T5.2: structural map → call-record."
   [dest]
-  (o 'pin-wit-dest [(str dest)]))
+  (o-record 'pin-wit-dest
+            {:dest dest}
+            [[:dest :string]]))
 
 (defn version-bin-path
-  "Pinned kotoba binary path under dest. Kotoba (required)."
+  "Pinned kotoba binary path under dest. Kotoba (required).
+   T5.2: structural map → call-record."
   [dest]
-  (o 'version-bin-path [(str dest)]))
+  (o-record 'version-bin-path
+            {:dest dest}
+            [[:dest :string]]))
 
 (defn manifest-dir
   "Directory portion of a manifest path. Bare filename → \".\".
-   Kotoba (required)."
+   Kotoba (required). T5.2: structural map → call-record."
   [manifest]
-  (o 'manifest-dir [(str manifest)]))
+  (o-record 'manifest-dir
+            {:manifest manifest}
+            [[:manifest :string]]))
 
 (defn manifest-src
   "Extract the first `:src \"...\"` value from a kotoba app manifest string.
@@ -220,15 +237,19 @@
 
 (defn app-manifest-path
   "Resolve an app manifest file relative to a desired-state manifest directory.
-   Kotoba (required)."
+   Kotoba (required). T5.2: structural map → call-record."
   [manifest-dir app]
-  (o 'app-manifest-path [(str manifest-dir) (str (:manifest app))]))
+  (o-record 'app-manifest-path
+            {:manifest-dir manifest-dir :manifest (:manifest app)}
+            [[:manifest-dir :string] [:manifest :string]]))
 
 (defn publish-selector
   "Resolve the publish-node selector, defaulting to the fleet canary.
-   Kotoba (required; empty ≡ nil)."
+   Kotoba (required; empty ≡ nil). T5.2: structural map → call-record."
   [selector]
-  (o 'publish-selector [(str (or selector ""))]))
+  (o-record 'publish-selector
+            {:selector (or selector "")}
+            [[:selector :string]]))
 
 (defn resolve-app-input
   "Pure deploy input summary from manifest path/text.

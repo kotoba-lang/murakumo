@@ -15,7 +15,10 @@
             [murakumo.overlay.keyring :as keyring]
             [murakumo.persist :as persist]
             [murakumo.overlay.peer :as peer]
-            [murakumo.component-authority :as cauth]))
+            [murakumo.component-authority :as cauth]
+            [murakumo.identity :as identity]
+            [murakumo.deploy.plan :as dplan]
+            [murakumo.secret :as secret]))
 
 (deftest map->args-projects-kinds
   (is (= ["a" "b"]
@@ -222,3 +225,43 @@
           [st2 _] (cauth/revoke (cauth/initial-state) cid)]
       (is (= 1 (get-in st2 [:epochs cid])))
       (is (nil? (get-in st2 [:placements cid]))))))
+
+(deftest call-record-identity-deploy-secret
+  "T5.2 wave 5: identity seeds, deploy paths, secret classify/reply."
+  (when (oracle/ready? :identity)
+    (let [node {:name "asher"}
+          ns (identity/node-seed "op" node)
+          ps (identity/node-p2p-seed "op" node)
+          xs (identity/x25519-seed "op")
+          ok (identity/overlay-auth-key "op" "ov1")
+          argv (identity/did-derive-argv "kotoba" "deadbeef")]
+      (is (string? ns))
+      (is (= 64 (count ns)))
+      (is (string? ps))
+      (is (not= ns ps))
+      (is (string? xs))
+      (is (string? ok))
+      (is (vector? argv))
+      (is (pos? (count argv)))
+      (is (= "ok" (identity/did-from-output "ok\n")))))
+  (when (oracle/ready? :deploy-plan)
+    (is (= "apps/foo.edn" (dplan/join-path "apps" "foo.edn")))
+    (is (string? (dplan/pin-wit-dest "/opt/murakumo")))
+    (is (string? (dplan/version-bin-path "/opt/murakumo")))
+    (is (= "." (dplan/manifest-dir "heartbeat.edn")))
+    (is (= "apps/heartbeat.edn"
+           (dplan/app-manifest-path "apps" {:manifest "heartbeat.edn"})))
+    (is (string? (dplan/publish-selector nil))))
+  (when (oracle/ready? :secret)
+    (let [fetch (secret/map-fetch {"murakumo-token" "s3cret"
+                                   "blank" ""})
+          ok (fetch {:name "murakumo-token"})
+          missing (fetch {:name "nope"})
+          blank (fetch {:name "blank"})]
+      (is (= :value (:tag ok)))
+      (is (= "s3cret" (:value ok)))
+      (is (= :error (:tag missing)))
+      (is (= :error (:tag blank)))
+      (is (true? (secret/valid-env-var-name? "MURAKUMO_TOKEN_SECRET")))
+      (is (false? (secret/valid-env-var-name? "")))
+      (is (true? (secret/valid-path-ref? "/etc/ssl/cert.pem"))))))
