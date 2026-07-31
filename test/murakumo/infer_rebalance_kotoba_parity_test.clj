@@ -80,6 +80,17 @@
     (doseq [[i c] (map-indexed vector classes)]
       (is (= (get expected c) (get actual (str "p_" i)))))))
 
+
+(def ^:private seats-in-literal
+  "T5.2 native: seats-of-* input record full descriptor."
+  (str "[:record :rebalance/seats-in "
+       "[[:total :i64] [:text-w :i64] [:media-w :i64] "
+       "[:postproc-w :i64] [:floor :i64]]]"))
+
+(defn- seats-in-call [export total wt wm wp floor]
+  (str "(" export " (record-new " seats-in-literal " "
+       total " " wt " " wm " " wp " " floor "))"))
+
 (deftest largest-remainder-3-matches-cljc-map-fold
   (let [cases [["a" 10 5 3 2 1]
                ["b" 7 1 1 1 1]
@@ -93,17 +104,16 @@
         ;; T5.3: three scalar lane projections, no pack. One label per lane.
         kotoba-cases (into {}
                            (mapcat (fn [[label total wt wm wp floor]]
-                                     (let [args (str total " " wt " " wm " " wp " " floor ")")]
-                                       [[(str label "-t") (str "(seats-of-text " args)]
-                                        [(str label "-m") (str "(seats-of-media " args)]
-                                        [(str label "-p") (str "(seats-of-postproc " args)]]))
+                                     [[(str label "-t") (seats-in-call "seats-of-text" total wt wm wp floor)]
+                                      [(str label "-m") (seats-in-call "seats-of-media" total wt wm wp floor)]
+                                      [(str label "-p") (seats-in-call "seats-of-postproc" total wt wm wp floor)]])
                                    cases))
         actual (compile-i64-cases
                 (merge kotoba-cases
-                       {"ut" "(seats-of-text 10 5 3 2 1)"
-                        "um" "(seats-of-media 10 5 3 2 1)"
-                        "up" "(seats-of-postproc 10 5 3 2 1)"
-                        "tot" "(seats-total 10 5 3 2 1)"}))]
+                       {"ut" (seats-in-call "seats-of-text" 10 5 3 2 1)
+                        "um" (seats-in-call "seats-of-media" 10 5 3 2 1)
+                        "up" (seats-in-call "seats-of-postproc" 10 5 3 2 1)
+                        "tot" (seats-in-call "seats-total" 10 5 3 2 1)}))]
     (is (= 5 (get actual "ut")))
     (is (= 3 (get actual "um")))
     (is (= 2 (get actual "up")))
@@ -245,7 +255,7 @@
                  "eq1" "(seats-equal 10 10)"
                  "eq0" "(seats-equal 10 11)"
                  "pipe" "(pipeline-effective-gb 10 3)"
-                 "asg" "(seats-total 4 2 1 1 1)"
+                 "asg" (seats-in-call "seats-total" 4 2 1 1 1)
                  "mn0" "(if (move-needed 0 0) 1 0)"
                  "mn1" "(if (move-needed 0 1) 1 0)"
                  "rc0" "(rebalance-reason-code 3 0)"

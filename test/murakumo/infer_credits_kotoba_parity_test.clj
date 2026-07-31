@@ -69,11 +69,25 @@
     (testing "integer conservation"
       (is (= total (+ (get actual "tr") (get actual "hd") (get actual "pl")))))))
 
+(def ^:private mt-work-literal
+  (str "[:record :credits/mt-work "
+       "[[:est-bytes :i64] [:duration-ms :i64] [:span :i64]]]"))
+(def ^:private charge-literal
+  (str "[:record :credits/charge "
+       "[[:balance :i64] [:cost :i64]]]"))
+
+(defn- mt-work-call [est dur span]
+  (str "(memory-time-weight (record-new " mt-work-literal " "
+       est " " dur " " span "))"))
+
+(defn- charge-allow-call [b c]
+  (str "(if (charge-allow? (record-new " charge-literal " " b " " c ")) 1 0)"))
+
 (deftest memory-time-weight-respects-span
   (let [est 11450000000 dur 60000
-        cases {"w1" (str "(memory-time-weight " est " " dur " 8)")
-               "w0" (str "(memory-time-weight " est " " dur " 0)")
-               "wn" (str "(memory-time-weight " est " " dur " -1)")}
+        cases {"w1" (mt-work-call est dur 8)
+               "w0" (mt-work-call est dur 0)
+               "wn" (mt-work-call est dur -1)}
         actual (compile-i64-cases cases)]
     (is (= (* est dur) (get actual "w1")))
     (is (= 0 (get actual "w0")))
@@ -83,7 +97,7 @@
   (let [corpus [[500 50] [50 50] [49 50] [0 1] [100 0]]
         cases (into {} (map-indexed
                         (fn [i [b c]]
-                          [(str "a_" i) (str "(if (charge-allow? " b " " c ") 1 0)")])
+                          [(str "a_" i) (charge-allow-call b c)])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [b c]] (map-indexed vector corpus)]

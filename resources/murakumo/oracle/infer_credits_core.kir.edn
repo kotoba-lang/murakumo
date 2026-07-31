@@ -68,11 +68,34 @@
    :body (- total (+ treasury head)),
    :param-types [:i64 :i64 :i64]}
   {:name memory-time-weight,
-   :params [est-bytes duration-ms span],
+   :params [w],
    :result :i64,
    :effects #{},
-   :body (if (< span 1) 0 (* est-bytes duration-ms)),
-   :param-types [:i64 :i64 :i64]}
+   :body
+   (let
+    [est-bytes
+     (record-get
+      [:record
+       :credits/mt-work
+       [[:est-bytes :i64] [:duration-ms :i64] [:span :i64]]]
+      w
+      :est-bytes)
+     duration-ms
+     (record-get
+      [:record
+       :credits/mt-work
+       [[:est-bytes :i64] [:duration-ms :i64] [:span :i64]]]
+      w
+      :duration-ms)
+     span
+     (record-get
+      [:record
+       :credits/mt-work
+       [[:est-bytes :i64] [:duration-ms :i64] [:span :i64]]]
+      w
+      :span)]
+    (if (< span 1) 0 (* est-bytes duration-ms))),
+   :param-types [[:ref :credits/mt-work]]}
   {:name mt-sum-2,
    :params [w0 w1],
    :result :i64,
@@ -138,21 +161,49 @@
     (share-record-2 pl w0 w1)),
    :param-types [:i64 :i64 :i64]}
   {:name charge-allow?,
-   :params [balance cost],
+   :params [c],
    :result :bool,
    :effects #{},
-   :body (if (< balance cost) false true),
-   :param-types [:i64 :i64]}
+   :body
+   (if
+    (<
+     (record-get
+      [:record :credits/charge [[:balance :i64] [:cost :i64]]]
+      c
+      :balance)
+     (record-get
+      [:record :credits/charge [[:balance :i64] [:cost :i64]]]
+      c
+      :cost))
+    false
+    true),
+   :param-types [[:ref :credits/charge]]}
   {:name balance-after-spend,
-   :params [balance cost],
+   :params [c],
    :result :i64,
    :effects #{},
-   :body (let [left (- balance cost)] (if (< left 0) 0 left)),
-   :param-types [:i64 :i64]}],
+   :body
+   (let
+    [left
+     (-
+      (record-get
+       [:record :credits/charge [[:balance :i64] [:cost :i64]]]
+       c
+       :balance)
+      (record-get
+       [:record :credits/charge [[:balance :i64] [:cost :i64]]]
+       c
+       :cost))]
+    (if (< left 0) 0 left)),
+   :param-types [[:ref :credits/charge]]}],
  :oracle-value nil,
  :schema-identities
- #:credits{:shares2
-           "f57a6ab85c30aaf351d3e4124797b7697fa96ab48b182787c7e21ffab69f5031"},
+ #:credits{:charge
+           "7cc2ea0f46057fca4549ea29fb17c1be1977aed7b317c880368d2f4d683e3108",
+           :mt-work
+           "3cc0ca2867b35fdb27fbe76c86c7f4ff158d66edae389d55257c696e4bcf303d",
+           :shares2
+           "3c7e4d82b2a6826f61c753d64e5e499ac0bcf021ef3a7ad1981f7433aad8b781"},
  :exports
  [default-per-token
   head-num
@@ -176,8 +227,13 @@
   mt-sum-2
   mt-sum-3],
  :schemas
- #:credits{:shares2
-           [:record :credits/shares2 [[:s0 :i64] [:s1 :i64]]]},
+ #:credits{:shares2 [:record :credits/shares2 [[:s0 :i64] [:s1 :i64]]],
+           :mt-work
+           [:record
+            :credits/mt-work
+            [[:est-bytes :i64] [:duration-ms :i64] [:span :i64]]],
+           :charge
+           [:record :credits/charge [[:balance :i64] [:cost :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

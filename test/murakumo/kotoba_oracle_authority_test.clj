@@ -1299,10 +1299,18 @@
            (oracle/call :infer-credits 'default-per-token [])))
     (is (= (ir/execute live 'head-num [])
            (oracle/call :infer-credits 'head-num [])))
-    (is (= (ir/execute live 'memory-time-weight [10 1000 2])
-           (oracle/call :infer-credits 'memory-time-weight [10 1000 2])))
-    (is (= (ir/execute live 'charge-allow? [100 50])
-           (oracle/call :infer-credits 'charge-allow? [100 50])))
+    (let [mt (oracle/record
+              [:record :credits/mt-work
+               [[:est-bytes :i64] [:duration-ms :i64] [:span :i64]]]
+              {:est-bytes 10 :duration-ms 1000 :span 2})
+          ch (oracle/record
+              [:record :credits/charge
+               [[:balance :i64] [:cost :i64]]]
+              {:balance 100 :cost 50})]
+      (is (= (ir/execute live 'memory-time-weight [mt])
+             (oracle/call :infer-credits 'memory-time-weight [mt])))
+      (is (= (ir/execute live 'charge-allow? [ch])
+             (oracle/call :infer-credits 'charge-allow? [ch]))))
     (is (= (ir/execute live 'token-cost [2 100])
            (oracle/call :infer-credits 'token-cost [2 100])))))
 
@@ -1413,9 +1421,14 @@
            (oracle/call :infer-moe 'verdict-name [128 8 true])))
     (is (= (ir/execute r 'usable-gb [16])
            (oracle/call :infer-rebalance 'usable-gb [16])))
-    (doseq [ex '[seats-of-text seats-of-media seats-of-postproc seats-total]]
-      (is (= (ir/execute r ex [5 3 1 1 1])
-             (oracle/call :infer-rebalance ex [5 3 1 1 1]))))
+    (let [sin (oracle/record
+               [:record :rebalance/seats-in
+                [[:total :i64] [:text-w :i64] [:media-w :i64]
+                 [:postproc-w :i64] [:floor :i64]]]
+               {:total 5 :text-w 3 :media-w 1 :postproc-w 1 :floor 1})]
+      (doseq [ex '[seats-of-text seats-of-media seats-of-postproc seats-total]]
+        (is (= (ir/execute r ex [sin])
+               (oracle/call :infer-rebalance ex [sin])))))
     (let [img (oracle/option-string "images")
           none-s (oracle/option-string nil)]
       (is (= (ir/execute r 'classify-run-flags [img none-s none-s none-s none-s])
