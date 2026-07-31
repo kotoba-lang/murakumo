@@ -1,9 +1,12 @@
 (ns infer-schedule-core
   (:schemas {;; T5.3: assign pack families become named records (no base-65536).
              ;; Profile 5: eligibility flags are real :bool fields (not 0/1 i64).
+             ;; T5.2 native guest record wire: free/min folded into eligibility
+             ;; (single-arg eligible?; host builds one oracle/record).
              :schedule/eligibility [:record :schedule/eligibility
                                     [[:has-engine :bool] [:has-checkpoint :bool]
-                                     [:holds-checkpoint :bool] [:can-fetch :bool]]]
+                                     [:holds-checkpoint :bool] [:can-fetch :bool]
+                                     [:free-bytes :i64] [:min-free :i64]]]
              ;; 2-node assign context: warm flags + score preference (profile 5 bool)
              :schedule/better2 [:record :schedule/better2
                                 [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
@@ -52,18 +55,15 @@
 ;; Profile 5: eligibility fields and eligible?/holds-warm? are :bool (ADR 0191).
 ;; Parity: test/murakumo/infer_schedule_kotoba_parity_test.clj
 
-(defn eligible? [e [:ref :schedule/eligibility] free-bytes :i64 min-free :i64] :bool
-  ;; Written with and/or/not, which is what ADR 0191 shows and what the nested
-  ;; `if` above it stood in for. That workaround existed because the synthesized
-  ;; `and`/`or` temporaries were gensyms, so the precompiled KIR differed on
-  ;; every compile and the drift gate could not use them. compiler#453/#454 made
-  ;; every synthesized name deterministic, so the shape and the gate no longer
-  ;; disagree.
+(defn eligible? [e [:ref :schedule/eligibility]] :bool
+  ;; T5.2 native guest record wire: free-bytes/min-free live on the eligibility
+  ;; record (single parameter). Written with and/or/not (ADR 0191); compiler
+  ;; #453/#454 keep synthesized and/or names deterministic for KIR drift gates.
   (and (record-get e :has-engine)
        (or (not (record-get e :has-checkpoint))
            (record-get e :holds-checkpoint)
            (record-get e :can-fetch))
-       (>= free-bytes min-free)))
+       (>= (record-get e :free-bytes) (record-get e :min-free))))
 
 (defn score-queue [queue :i64] :i64
   (if (< queue 0) 0 queue))

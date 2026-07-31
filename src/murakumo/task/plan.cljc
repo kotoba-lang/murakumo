@@ -138,11 +138,12 @@
   "Guest descriptor for task_plan_core's eligibility record (T5.3 + profile 5)."
   [:record :task/eligibility
    [[:online :bool] [:labels-ok :bool] [:roles-ok :bool]
-    [:not-excluded :bool] [:allowlist-ok :bool]]])
+    [:not-excluded :bool] [:allowlist-ok :bool]
+    [:mem-bytes :i64] [:min-mem :i64]]])
 
 (defn- eligibility-fields
-  "Host projects set/map membership into named :bool eligibility fields."
-  [node {:keys [placement min-mem-bytes exclude-nodes nodes] :as _task}]
+  "Host projects set/map membership + mem bounds into eligibility fields."
+  [node {:keys [placement min-mem-bytes exclude-nodes nodes] :as task}]
   (let [{:keys [labels roles]} placement]
     {:online (not (false? (:online? node true)))
      :labels-ok (boolean (every? (fn [[k v]] (= v (get (:labels node) k)))
@@ -151,21 +152,19 @@
                                 (or roles [])))
      :not-excluded (not (contains? (set (or exclude-nodes [])) (:name node)))
      :allowlist-ok (boolean (or (empty? (or nodes []))
-                                (contains? (set nodes) (:name node))))}))
+                                (contains? (set nodes) (:name node))))
+     :mem-bytes (or (:mem-bytes node) 0)
+     :min-mem (or min-mem-bytes 0)}))
 
 (defn eligible?
-  "Can `node` run `task`? Kotoba `task-eligible?` with bool eligibility record.
-   T5.2: structural map → call-record (eligibility record as :raw)."
+  "Can `node` run `task`? Kotoba `task-eligible?` with a single eligibility
+  record (T5.2 native guest record wire: mem bounds on the record)."
   [node task]
   (oracle/bool->host
    (o-record 'task-eligible?
              {:eligibility (oracle/record eligibility-schema
-                                           (eligibility-fields node task))
-              :mem-bytes (or (:mem-bytes node) 0)
-              :min-mem (or (:min-mem-bytes task) 0)}
-             [[:eligibility :raw]
-              [:mem-bytes :i64]
-              [:min-mem :i64]])))
+                                           (eligibility-fields node task))}
+             [[:eligibility :raw]])))
 
 (defn node-score
   "Lower is better. Fill ratio dominates; load1 / memory / name break ties."

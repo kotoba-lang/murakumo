@@ -78,7 +78,7 @@
    :body (if (< attempt max-attempts) true false),
    :param-types [:i64 :i64]}
   {:name task-eligible?,
-   :params [e mem-bytes min-mem],
+   :params [e],
    :result :bool,
    :effects #{},
    :body
@@ -90,7 +90,9 @@
        [:labels-ok :bool]
        [:roles-ok :bool]
        [:not-excluded :bool]
-       [:allowlist-ok :bool]]]
+       [:allowlist-ok :bool]
+       [:mem-bytes :i64]
+       [:min-mem :i64]]]
      e
      :online)
     (if
@@ -101,7 +103,9 @@
         [:labels-ok :bool]
         [:roles-ok :bool]
         [:not-excluded :bool]
-        [:allowlist-ok :bool]]]
+        [:allowlist-ok :bool]
+        [:mem-bytes :i64]
+        [:min-mem :i64]]]
       e
       :labels-ok)
      (if
@@ -112,7 +116,9 @@
          [:labels-ok :bool]
          [:roles-ok :bool]
          [:not-excluded :bool]
-         [:allowlist-ok :bool]]]
+         [:allowlist-ok :bool]
+         [:mem-bytes :i64]
+         [:min-mem :i64]]]
        e
        :roles-ok)
       (if
@@ -123,7 +129,9 @@
           [:labels-ok :bool]
           [:roles-ok :bool]
           [:not-excluded :bool]
-          [:allowlist-ok :bool]]]
+          [:allowlist-ok :bool]
+          [:mem-bytes :i64]
+          [:min-mem :i64]]]
         e
         :not-excluded)
        (if
@@ -134,16 +142,45 @@
            [:labels-ok :bool]
            [:roles-ok :bool]
            [:not-excluded :bool]
-           [:allowlist-ok :bool]]]
+           [:allowlist-ok :bool]
+           [:mem-bytes :i64]
+           [:min-mem :i64]]]
          e
          :allowlist-ok)
-        (if (>= mem-bytes min-mem) true false)
+        (if
+         (>=
+          (record-get
+           [:record
+            :task/eligibility
+            [[:online :bool]
+             [:labels-ok :bool]
+             [:roles-ok :bool]
+             [:not-excluded :bool]
+             [:allowlist-ok :bool]
+             [:mem-bytes :i64]
+             [:min-mem :i64]]]
+           e
+           :mem-bytes)
+          (record-get
+           [:record
+            :task/eligibility
+            [[:online :bool]
+             [:labels-ok :bool]
+             [:roles-ok :bool]
+             [:not-excluded :bool]
+             [:allowlist-ok :bool]
+             [:mem-bytes :i64]
+             [:min-mem :i64]]]
+           e
+           :min-mem))
+         true
+         false)
         false)
        false)
       false)
      false)
     false),
-   :param-types [[:ref :task/eligibility] :i64 :i64]}
+   :param-types [[:ref :task/eligibility]]}
   {:name fill-milli,
    :params [assigned slots],
    :result :i64,
@@ -685,17 +722,17 @@
  :oracle-value nil,
  :schema-identities
  #:task{:assign2
-        "a3e6964cbebb152bc341abffaabf9e21bd1969e1df6da039fda7cde61f9ee7d3",
+        "1dbebba31cdb79c302ed6e397066bd666434b492f67ba2126bf9daa057bc7375",
         :assign3
-        "83392209145f03102a6d4dbefbea75f8e03b62f38b87eaeca151ffe8f0a50ce9",
+        "292ef4d3e3679907921240f5db131705bf12992008a8231abee2980b09ed20c3",
         :eligibility
-        "24d3a0bbd8244dbe21a5e9df051892e38db3c0f516eb4a0208a964059d5c436b",
+        "dbf48d117d0d256ad976ab073841c0eeaa9304a8b78735b8b9476b3757f425e1",
         :flags3
-        "8c87e03eea569cf2bebc5fc951d091cb4f91fadf6f5d0ba82e599be54e9a4e76",
+        "3ca182e446986dce85e7bd06e586c844f635369271edd748f822daf7a1de2c23",
         :pair
-        "778e179e716c1272d7c615f124e2e33007e1e12d0c970701faa5767fc3d96694",
+        "dbfeb1600152488d9afd4ea2962bc20ed387abdbbb4d5c48591fcee0fa990507",
         :triple
-        "9d758366d4c9b0235d7af5ee9ee8837f5c92a5ae496bd18f372f9415afe4547c"},
+        "04b84c4893f4073e6f2785012ad0542e20fe6dfb1e2d158f95635274908fe372"},
  :exports
  [default-max-slots
   default-max-attempts
@@ -768,7 +805,9 @@
           [:labels-ok :bool]
           [:roles-ok :bool]
           [:not-excluded :bool]
-          [:allowlist-ok :bool]]]},
+          [:allowlist-ok :bool]
+          [:mem-bytes :i64]
+          [:min-mem :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}
