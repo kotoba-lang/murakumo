@@ -320,7 +320,7 @@
      true)
     false),
    :param-types [[:ref :rebalance/ok-for]]}
-  {:name seats-record,
+  {:name seats-record-go,
    :params [total wt wm wp floor],
    :result
    [:record
@@ -417,14 +417,6 @@
        (+ ft (+ fm fp))
        extra
        (- left assigned)
-       rems
-       (record-new
-        [:record
-         :rebalance/lanes
-         [[:text :i64] [:media :i64] [:postproc :i64]]]
-        rt
-        rm
-        rp)
        b0
        (if
         (< 0 extra)
@@ -571,8 +563,68 @@
        sm
        sp)))),
    :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name seats-record,
+   :params [in],
+   :result
+   [:record
+    :rebalance/lanes
+    [[:text :i64] [:media :i64] [:postproc :i64]]],
+   :effects #{},
+   :body
+   (seats-record-go
+    (record-get
+     [:record
+      :rebalance/seats-in
+      [[:total :i64]
+       [:text-w :i64]
+       [:media-w :i64]
+       [:postproc-w :i64]
+       [:floor :i64]]]
+     in
+     :total)
+    (record-get
+     [:record
+      :rebalance/seats-in
+      [[:total :i64]
+       [:text-w :i64]
+       [:media-w :i64]
+       [:postproc-w :i64]
+       [:floor :i64]]]
+     in
+     :text-w)
+    (record-get
+     [:record
+      :rebalance/seats-in
+      [[:total :i64]
+       [:text-w :i64]
+       [:media-w :i64]
+       [:postproc-w :i64]
+       [:floor :i64]]]
+     in
+     :media-w)
+    (record-get
+     [:record
+      :rebalance/seats-in
+      [[:total :i64]
+       [:text-w :i64]
+       [:media-w :i64]
+       [:postproc-w :i64]
+       [:floor :i64]]]
+     in
+     :postproc-w)
+    (record-get
+     [:record
+      :rebalance/seats-in
+      [[:total :i64]
+       [:text-w :i64]
+       [:media-w :i64]
+       [:postproc-w :i64]
+       [:floor :i64]]]
+     in
+     :floor)),
+   :param-types [[:ref :rebalance/seats-in]]}
   {:name seats-of-text,
-   :params [in],
+   :params [lanes],
    :result :i64,
    :effects #{},
    :body
@@ -580,61 +632,11 @@
     [:record
      :rebalance/lanes
      [[:text :i64] [:media :i64] [:postproc :i64]]]
-    (seats-record
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :total)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :text-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :media-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :postproc-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :floor))
+    lanes
     :text),
-   :param-types [[:ref :rebalance/seats-in]]}
+   :param-types [[:ref :rebalance/lanes]]}
   {:name seats-of-media,
-   :params [in],
+   :params [lanes],
    :result :i64,
    :effects #{},
    :body
@@ -642,61 +644,11 @@
     [:record
      :rebalance/lanes
      [[:text :i64] [:media :i64] [:postproc :i64]]]
-    (seats-record
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :total)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :text-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :media-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :postproc-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :floor))
+    lanes
     :media),
-   :param-types [[:ref :rebalance/seats-in]]}
+   :param-types [[:ref :rebalance/lanes]]}
   {:name seats-of-postproc,
-   :params [in],
+   :params [lanes],
    :result :i64,
    :effects #{},
    :body
@@ -704,67 +656,19 @@
     [:record
      :rebalance/lanes
      [[:text :i64] [:media :i64] [:postproc :i64]]]
-    (seats-record
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :total)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :text-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :media-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :postproc-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      in
-      :floor))
+    lanes
     :postproc),
-   :param-types [[:ref :rebalance/seats-in]]}
+   :param-types [[:ref :rebalance/lanes]]}
   {:name seats-total,
    :params [in],
    :result :i64,
    :effects #{},
    :body
-   (+
-    (seats-of-text in)
-    (+ (seats-of-media in) (seats-of-postproc in))),
+   (let
+    [lanes (seats-record in)]
+    (+
+     (seats-of-text lanes)
+     (+ (seats-of-media lanes) (seats-of-postproc lanes)))),
    :param-types [[:ref :rebalance/seats-in]]}
   {:name pool-demand-record,
    :params [d],
@@ -872,191 +776,23 @@
     :postproc),
    :param-types [[:ref :rebalance/lanes]]}
   {:name pool-seats-of-text,
-   :params [s],
+   :params [lanes],
    :result :i64,
    :effects #{},
-   :body
-   (record-get
-    [:record
-     :rebalance/lanes
-     [[:text :i64] [:media :i64] [:postproc :i64]]]
-    (seats-record
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :total)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :text-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :media-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :postproc-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :floor))
-    :text),
-   :param-types [[:ref :rebalance/seats-in]]}
+   :body (seats-of-text lanes),
+   :param-types [[:ref :rebalance/lanes]]}
   {:name pool-seats-of-media,
-   :params [s],
+   :params [lanes],
    :result :i64,
    :effects #{},
-   :body
-   (record-get
-    [:record
-     :rebalance/lanes
-     [[:text :i64] [:media :i64] [:postproc :i64]]]
-    (seats-record
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :total)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :text-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :media-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :postproc-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :floor))
-    :media),
-   :param-types [[:ref :rebalance/seats-in]]}
+   :body (seats-of-media lanes),
+   :param-types [[:ref :rebalance/lanes]]}
   {:name pool-seats-of-postproc,
-   :params [s],
+   :params [lanes],
    :result :i64,
    :effects #{},
-   :body
-   (record-get
-    [:record
-     :rebalance/lanes
-     [[:text :i64] [:media :i64] [:postproc :i64]]]
-    (seats-record
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :total)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :text-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :media-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :postproc-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :floor))
-    :postproc),
-   :param-types [[:ref :rebalance/seats-in]]}
+   :body (seats-of-postproc lanes),
+   :param-types [[:ref :rebalance/lanes]]}
   {:name classify-run-flags,
    :params [x],
    :result :i64,
@@ -1373,144 +1109,15 @@
    :effects #{},
    :body (if (< online 1) 0 (- online 1)),
    :param-types [:i64]}
-  {:name seats-for-online-text,
+  {:name seats-for-online-record,
    :params [s],
-   :result :i64,
+   :result
+   [:record
+    :rebalance/lanes
+    [[:text :i64] [:media :i64] [:postproc :i64]]],
    :effects #{},
    :body
-   (pool-seats-of-text
-    (record-new
-     [:record
-      :rebalance/seats-in
-      [[:total :i64]
-       [:text-w :i64]
-       [:media-w :i64]
-       [:postproc-w :i64]
-       [:floor :i64]]]
-     (workers-count
-      (record-get
-       [:record
-        :rebalance/seats-in
-        [[:total :i64]
-         [:text-w :i64]
-         [:media-w :i64]
-         [:postproc-w :i64]
-         [:floor :i64]]]
-       s
-       :total))
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :text-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :media-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :postproc-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :floor))),
-   :param-types [[:ref :rebalance/seats-in]]}
-  {:name seats-for-online-media,
-   :params [s],
-   :result :i64,
-   :effects #{},
-   :body
-   (pool-seats-of-media
-    (record-new
-     [:record
-      :rebalance/seats-in
-      [[:total :i64]
-       [:text-w :i64]
-       [:media-w :i64]
-       [:postproc-w :i64]
-       [:floor :i64]]]
-     (workers-count
-      (record-get
-       [:record
-        :rebalance/seats-in
-        [[:total :i64]
-         [:text-w :i64]
-         [:media-w :i64]
-         [:postproc-w :i64]
-         [:floor :i64]]]
-       s
-       :total))
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :text-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :media-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :postproc-w)
-     (record-get
-      [:record
-       :rebalance/seats-in
-       [[:total :i64]
-        [:text-w :i64]
-        [:media-w :i64]
-        [:postproc-w :i64]
-        [:floor :i64]]]
-      s
-      :floor))),
-   :param-types [[:ref :rebalance/seats-in]]}
-  {:name seats-for-online-postproc,
-   :params [s],
-   :result :i64,
-   :effects #{},
-   :body
-   (pool-seats-of-postproc
+   (seats-record
     (record-new
      [:record
       :rebalance/seats-in
@@ -2042,6 +1649,7 @@
   os-kv-headroom-gb
   usable-gb
   pool-for-class
+  seats-record
   seats-of-text
   seats-of-media
   seats-of-postproc
@@ -2064,9 +1672,7 @@
   demand-to-pool-record
   workers-count
   seats-equal
-  seats-for-online-text
-  seats-for-online-media
-  seats-for-online-postproc
+  seats-for-online-record
   pipeline-effective-gb
   node-online?
   move-needed

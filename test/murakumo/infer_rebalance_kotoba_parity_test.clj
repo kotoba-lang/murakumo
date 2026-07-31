@@ -37,14 +37,14 @@
        "(record-get o :i0) (record-get o :i1) (record-get o :i2) " n ")))"))
 (def export-prefix
   (str "shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class "
-       "seats-of-text seats-of-media seats-of-postproc seats-total "
+       "seats-record seats-of-text seats-of-media seats-of-postproc seats-total "
        "pool-demand-record pool-weight-text pool-weight-media pool-weight-postproc "
        "pool-seats-of-text pool-seats-of-media pool-seats-of-postproc "
        "classify-run-flags "
        "demand-empty demand-text demand-image demand-video "
        "demand-audio demand-postproc demand-inc demand-to-pool-record "
        "workers-count seats-equal "
-       "seats-for-online-text seats-for-online-media seats-for-online-postproc "
+       "seats-for-online-record "
        "pipeline-effective-gb "
        "node-online? move-needed "
        "rebalance-reason-code rebalance-reason-name "
@@ -111,14 +111,22 @@
 
 
 (def ^:private seats-in-literal
-  "T5.2 native: seats-of-* input record full descriptor."
+  "T5.2 native: seats-record input record full descriptor."
   (str "[:record :rebalance/seats-in "
        "[[:total :i64] [:text-w :i64] [:media-w :i64] "
        "[:postproc-w :i64] [:floor :i64]]]"))
 
+(defn- seats-in-form [total wt wm wp floor]
+  (str "(record-new " seats-in-literal " "
+       total " " wt " " wm " " wp " " floor ")"))
+
 (defn- seats-in-call [export total wt wm wp floor]
-  (str "(" export " (record-new " seats-in-literal " "
-       total " " wt " " wm " " wp " " floor "))"))
+  "seats-total / seats-for-online-* still take seats-in."
+  (str "(" export " " (seats-in-form total wt wm wp floor) ")"))
+
+(defn- seats-lane-call [export total wt wm wp floor]
+  "seats-of-* / pool-seats-of-* take lanes from seats-record."
+  (str "(" export " (seats-record " (seats-in-form total wt wm wp floor) "))"))
 
 (deftest largest-remainder-3-matches-cljc-map-fold
   (let [cases [["a" 10 5 3 2 1]
@@ -130,18 +138,18 @@
                ["g" 20 7 2 1 1]
                ["h" 4 1 1 1 2]
                ["i" 11 4 4 2 1]]
-        ;; T5.3: three scalar lane projections, no pack. One label per lane.
+        ;; T5.2: seats-record once → seats-of-* lane projections.
         kotoba-cases (into {}
                            (mapcat (fn [[label total wt wm wp floor]]
-                                     [[(str label "-t") (seats-in-call "seats-of-text" total wt wm wp floor)]
-                                      [(str label "-m") (seats-in-call "seats-of-media" total wt wm wp floor)]
-                                      [(str label "-p") (seats-in-call "seats-of-postproc" total wt wm wp floor)]])
+                                     [[(str label "-t") (seats-lane-call "seats-of-text" total wt wm wp floor)]
+                                      [(str label "-m") (seats-lane-call "seats-of-media" total wt wm wp floor)]
+                                      [(str label "-p") (seats-lane-call "seats-of-postproc" total wt wm wp floor)]])
                                    cases))
         actual (compile-i64-cases
                 (merge kotoba-cases
-                       {"ut" (seats-in-call "seats-of-text" 10 5 3 2 1)
-                        "um" (seats-in-call "seats-of-media" 10 5 3 2 1)
-                        "up" (seats-in-call "seats-of-postproc" 10 5 3 2 1)
+                       {"ut" (seats-lane-call "seats-of-text" 10 5 3 2 1)
+                        "um" (seats-lane-call "seats-of-media" 10 5 3 2 1)
+                        "up" (seats-lane-call "seats-of-postproc" 10 5 3 2 1)
                         "tot" (seats-in-call "seats-total" 10 5 3 2 1)}))]
     (is (= 5 (get actual "ut")))
     (is (= 3 (get actual "um")))
@@ -190,8 +198,8 @@
         lanes (fn [prefix total tw mw pw]
                 (into {} (map (fn [[k lane]]
                                 [(str prefix "-" (name k))
-                                 (seats-in-call (str "pool-seats-of-" lane)
-                                                total tw mw pw 1)])
+                                 (seats-lane-call (str "pool-seats-of-" lane)
+                                                  total tw mw pw 1)])
                               {:t "text" :m "media" :p "postproc"})))
         [t1 m1 p1] (pool-w 5 2 1 0 3)
         [t2 m2 p2] (pool-w 1 1 0 0 1)
@@ -308,10 +316,13 @@
                  "rc0" (rebal-pair-call "rebalance-reason-code" 3 0)
                  "rc1" (rebal-pair-call "rebalance-reason-code" 0 0)
                  "rc2" (rebal-pair-call "rebalance-reason-code" 3 2)
-                 ;; seats-for-online-*: 4 online → 3 workers; demand 5/2/0/0/1 → pool 5,2,1
-                 "sfo-t" (seats-in-call "seats-for-online-text" 4 5 2 1 1)
-                 "sfo-m" (seats-in-call "seats-for-online-media" 4 5 2 1 1)
-                 "sfo-p" (seats-in-call "seats-for-online-postproc" 4 5 2 1 1)})
+                 ;; seats-for-online-record: 4 online → 3 workers; demand 5/2/0/0/1 → pool 5,2,1
+                 "sfo-t" (str "(seats-of-text (seats-for-online-record "
+                              (seats-in-form 4 5 2 1 1) "))")
+                 "sfo-m" (str "(seats-of-media (seats-for-online-record "
+                              (seats-in-form 4 5 2 1 1) "))")
+                 "sfo-p" (str "(seats-of-postproc (seats-for-online-record "
+                              (seats-in-form 4 5 2 1 1) "))")})
         lr @(var murakumo.infer.rebalance/largest-remainder)
         expected-seats (lr 3 (rb/pool-demand {:text 5 :image 2 :video 0 :audio 0 :postproc 1}) 1)]
     (is (= 0 (get actual "w0")))
