@@ -24,6 +24,15 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private can-schema
+  [:record :join/can [[:tier :i64] [:kind :string]]])
+(def ^:private relay-schema
+  [:record :join/relay [[:tier :i64] [:inbound :bool]]])
+(def ^:private clamp-schema
+  [:record :join/clamp [[:mem [:option :i64]] [:tmax :i64]]])
+(def ^:private work-schema
+  [:record :join/work [[:can-kind :bool] [:max-res :i64] [:res :i64]]])
+
 (defn- tier-code
   "0 browser | 1 wasm | 2 native (default)."
   [tier]
@@ -77,10 +86,10 @@
   [caps kind]
   (oracle/bool->host
    (o-record 'can?
-             {:tier-code (tier-code (:tier (tier-of caps)))
-              :kind (name kind)}
-             [[:tier-code :i64]
-              [:kind :string]])))
+             {:c (oracle/record can-schema
+                                {:tier (tier-code (:tier (tier-of caps)))
+                                 :kind (name kind)})}
+             [[:c :raw]])))
 
 (defn needs-relay?
   "Browser/wasm ALWAYS need a relay (no inbound). Native only when un-reachable.
@@ -89,10 +98,10 @@
   [caps]
   (oracle/bool->host
    (o-record 'needs-relay?
-             {:tier-code (tier-code (:tier (tier-of caps)))
-              :inbound-reachable? (true? (:inbound-reachable? caps))}
-             [[:tier-code :i64]
-              [:inbound-reachable? :bool]])))
+             {:r (oracle/record relay-schema
+                                {:tier (tier-code (:tier (tier-of caps)))
+                                 :inbound (true? (:inbound-reachable? caps))})}
+             [[:r :raw]])))
 
 ;; ---------------------------------------------------------------------------
 ;; Capability provenance (ADR-2607319500 D3)
@@ -181,10 +190,9 @@
         tmax (:max-resident-bytes t)
         max-res (oracle/i64->host
                  (o-record 'clamp-resident
-                           {:mem-bytes mem-bytes
-                            :tmax tmax}
-                           [[:mem-bytes :option-i64]
-                            [:tmax :i64]]))]
+                           {:c (oracle/record clamp-schema
+                                              {:mem mem-bytes :tmax tmax})}
+                           [[:c :raw]]))]
     {:node/name name
      :node/did did
      :node/tier (:tier t)
@@ -208,12 +216,11 @@
         res (or resident-bytes 0)]
     (oracle/bool->host
      (o-record 'eligible-for-work?
-               {:can-kind can-kind
-                :max-res max-res
-                :res res}
-               [[:can-kind :bool]
-                [:max-res :i64]
-                [:res :i64]]))))
+               {:w (oracle/record work-schema
+                                  {:can-kind can-kind
+                                   :max-res max-res
+                                   :res res})}
+               [[:w :raw]]))))
 
 (defn partition-work
   "Route a batch of jobs across enrolled nodes by tier."

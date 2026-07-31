@@ -903,7 +903,10 @@
            (last (tunnel/scp-argv "asher" "bin/kotoba" ".murakumo/bin/kotoba"))))
     (is (= ["ssh" "-o" "ControlPath=/tmp/m/%C" "-O" "exit" "asher"]
            (tunnel/close-master-argv "asher" "/tmp/m/%C")))
-    (is (= (oracle/call :tunnel 'ensure-forward-command [18099 8077 "asher"])
+    (is (= (oracle/call :tunnel 'ensure-forward-command
+                        [(oracle/record [:record :tunnel/forward
+                                         [[:local-port :i64] [:remote-port :i64] [:host :string]]]
+                                        {:local-port 18099 :remote-port 8077 :host "asher"})])
            (tunnel/ensure-forward-command 18099 8077 "asher")))
     (is (= (oracle/call :tunnel 'remote-curl-command ["http://localhost:8077/health"])
            (tunnel/remote-curl-command "http://localhost:8077/health")))
@@ -953,22 +956,33 @@
     (is (= (ir/execute live 'exit-ctl [])
            (oracle/call :tunnel 'exit-ctl [])))
     (is (= (oracle/call :tunnel 'ssh-bin []) tunnel/ssh-bin))
-    (is (= (ir/execute live 'scp-dest ["h" "d"])
-           (oracle/call :tunnel 'scp-dest ["h" "d"])))
-    (is (= (ir/execute live 'ensure-forward-command [1 2 "h"])
-           (oracle/call :tunnel 'ensure-forward-command [1 2 "h"])))
-    (is (= (ir/execute live 'forward-spec [18099 8077])
-           (oracle/call :tunnel 'forward-spec [18099 8077])))
-    (is (= (ir/execute live 'ssh-forward-prefix [])
-           (oracle/call :tunnel 'ssh-forward-prefix [])))
-    (is (= (ir/execute live 'pgrep-bin [])
-           (oracle/call :tunnel 'pgrep-bin [])))
-    (is (= (ir/execute live 'curl-prefix [])
-           (oracle/call :tunnel 'curl-prefix [])))
-    (is (= (oracle/call :tunnel 'ensure-forward-command [18099 8077 "asher"])
-           (tunnel/ensure-forward-command 18099 8077 "asher")))
-    (is (= (oracle/call :tunnel 'replace-forward-command [1 2 "h"])
-           (tunnel/replace-forward-command 1 2 "h")))))
+    (let [scp (oracle/record [:record :tunnel/scp [[:host :string] [:dest :string]]]
+                             {:host "h" :dest "d"})
+          fwd1 (oracle/record [:record :tunnel/forward
+                               [[:local-port :i64] [:remote-port :i64] [:host :string]]]
+                              {:local-port 1 :remote-port 2 :host "h"})
+          ports (oracle/record [:record :tunnel/ports
+                                [[:local-port :i64] [:remote-port :i64]]]
+                               {:local-port 18099 :remote-port 8077})
+          fwd-a (oracle/record [:record :tunnel/forward
+                                [[:local-port :i64] [:remote-port :i64] [:host :string]]]
+                               {:local-port 18099 :remote-port 8077 :host "asher"})]
+      (is (= (ir/execute live 'scp-dest [scp])
+             (oracle/call :tunnel 'scp-dest [scp])))
+      (is (= (ir/execute live 'ensure-forward-command [fwd1])
+             (oracle/call :tunnel 'ensure-forward-command [fwd1])))
+      (is (= (ir/execute live 'forward-spec [ports])
+             (oracle/call :tunnel 'forward-spec [ports])))
+      (is (= (ir/execute live 'ssh-forward-prefix [])
+             (oracle/call :tunnel 'ssh-forward-prefix [])))
+      (is (= (ir/execute live 'pgrep-bin [])
+             (oracle/call :tunnel 'pgrep-bin [])))
+      (is (= (ir/execute live 'curl-prefix [])
+             (oracle/call :tunnel 'curl-prefix [])))
+      (is (= (oracle/call :tunnel 'ensure-forward-command [fwd-a])
+             (tunnel/ensure-forward-command 18099 8077 "asher")))
+      (is (= (oracle/call :tunnel 'replace-forward-command [fwd1])
+             (tunnel/replace-forward-command 1 2 "h"))))))
 
 (deftest tunnel-precompiled-kir-does-not-drift
   (let [live (:kir (compiler/compile-source (slurp "kotoba/tunnel_core.kotoba")
@@ -1411,10 +1425,14 @@
                                          :wasm32-kotoba-v1 {}))]
     (is (= (ir/execute j 'max-resident-bytes [0])
            (oracle/call :infer-join 'max-resident-bytes [0])))
-    (is (= (ir/execute j 'can? [0 "media-postproc"])
-           (oracle/call :infer-join 'can? [0 "media-postproc"])))
-    (is (= (ir/execute j 'needs-relay? [2 true])
-           (oracle/call :infer-join 'needs-relay? [2 true])))
+    (let [can (oracle/record [:record :join/can [[:tier :i64] [:kind :string]]]
+                             {:tier 0 :kind "media-postproc"})
+          relay (oracle/record [:record :join/relay [[:tier :i64] [:inbound :bool]]]
+                               {:tier 2 :inbound true})]
+      (is (= (ir/execute j 'can? [can])
+             (oracle/call :infer-join 'can? [can])))
+      (is (= (ir/execute j 'needs-relay? [relay])
+             (oracle/call :infer-join 'needs-relay? [relay]))))
     (is (= (ir/execute g 'gib [])
            (oracle/call :infer-gc 'gib [])))
     ;; T5.2 native guest record wire for gc pure inputs
