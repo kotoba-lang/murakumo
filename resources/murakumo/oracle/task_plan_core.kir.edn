@@ -505,18 +505,28 @@
    (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
    :param-types [:i64]}
   {:name rem64,
-   :params [a b],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (- a (* (quot a b) b)),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [a
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :a)
+     b
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :b)]
+    (- a (* (quot a b) b))),
+   :param-types [[:ref :task/pair]]}
   {:name pad4,
    :params [n],
    :result :string,
    :effects #{},
    :body
    (let
-    [m (if (< n 0) 0 n) d (rem64 m 10000)]
+    [m
+     (if (< n 0) 0 n)
+     d
+     (rem64
+      (record-new [:record :task/pair [[:a :i64] [:b :i64]]] m 10000))]
     (if
      (< d 10)
      (string-concat "000" (i64-str d))

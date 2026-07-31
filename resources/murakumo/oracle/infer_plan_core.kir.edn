@@ -20,11 +20,17 @@
    :body 1342177280,
    :param-types []}
   {:name rem64,
-   :params [a b],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (- a (* (quot a b) b)),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [a
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :a)
+     b
+     (record-get [:record :plan/pair [[:a :i64] [:b :i64]]] p :b)]
+    (- a (* (quot a b) b))),
+   :param-types [[:ref :plan/pair]]}
   {:name usable-bytes,
    :params [n],
    :result :i64,
@@ -123,7 +129,19 @@
      fast
      (if (< link-gbps 20) 0 1)
      div
-     (if (< ranks 1) 0 (if (= 0 (rem64 kv-heads ranks)) 1 0))]
+     (if
+      (< ranks 1)
+      0
+      (if
+       (=
+        0
+        (rem64
+         (record-new
+          [:record :plan/pair [[:a :i64] [:b :i64]]]
+          kv-heads
+          ranks)))
+       1
+       0))]
     (if
      (if (= fast 1) (if (= div 1) 1 0) 0)
      "tensor"
@@ -408,11 +426,23 @@
        f2
        (quot p2 sumw)
        r0
-       (rem64 p0 sumw)
+       (rem64
+        (record-new
+         [:record :plan/pair [[:a :i64] [:b :i64]]]
+         p0
+         sumw))
        r1
-       (rem64 p1 sumw)
+       (rem64
+        (record-new
+         [:record :plan/pair [[:a :i64] [:b :i64]]]
+         p1
+         sumw))
        r2
-       (rem64 p2 sumw)
+       (rem64
+        (record-new
+         [:record :plan/pair [[:a :i64] [:b :i64]]]
+         p2
+         sumw))
        assigned
        (+ f0 (+ f1 f2))
        extra

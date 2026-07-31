@@ -103,8 +103,11 @@
 ;; crosses the host boundary and the host makes 3 calls instead of 1 pack call
 ;; plus 3 unpack calls.
 ;;
-(defn rem64 [a :i64 b :i64] :i64
-  (- a (* (quot a b) b)))
+(defn rem64 [p [:ref :rebalance/pair]] :i64
+  ;; T5.2 residual: a+b multi-arg → :rebalance/pair (a rem b)
+  (let [a (record-get p :a)
+        b (record-get p :b)]
+    (- a (* (quot a b) b))))
 
 
 (defn weight-pos? [w :i64] :bool
@@ -197,9 +200,9 @@
             ft (if at (quot pt sumw) 0)
             fm (if am (quot pm sumw) 0)
             fp (if ap (quot pp sumw) 0)
-            rt (if at (rem64 pt sumw) 0)
-            rm (if am (rem64 pm sumw) 0)
-            rp (if ap (rem64 pp sumw) 0)
+            rt (if at (rem64 (record-new [:ref :rebalance/pair] pt sumw)) 0)
+            rm (if am (rem64 (record-new [:ref :rebalance/pair] pm sumw)) 0)
+            rp (if ap (rem64 (record-new [:ref :rebalance/pair] pp sumw)) 0)
             assigned (+ ft (+ fm fp))
             extra (- left assigned)
             rems (record-new [:record :rebalance/lanes
