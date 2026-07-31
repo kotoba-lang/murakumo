@@ -1,0 +1,157 @@
+(ns murakumo.apikey
+  "Issue and inspect murakumo API keys (`mk1` capability tokens) from a runtime
+  that actually runs today.
+
+  ## Why this namespace exists
+
+  The gateway's own 401 tells you to `bb murakumo token issue` — and that command
+  cannot be run: `murakumo.core/cmd-token` is a JVM/bb namespace requiring
+  `babashka.process`, and `bb.edn` was removed when babashka was retired
+  (ADR-2607173000). So the documented way to obtain a key had no working
+  entrypoint. This namespace is that entrypoint, on nbb.
+
+  It deliberately does NOT go through `murakumo.token`, which has since become
+  Kotoba-oracle-backed (`signing-input` etc. dispatch through
+  `murakumo.kotoba.oracle`) and drags that whole chain into a task whose only job
+  is one HMAC. Instead it implements the wire format directly against Node's
+  crypto, and `test/murakumo/apikey_parity_test.clj` proves byte-equality with
+  `cloud-murakumo.token` — the namespace that actually VERIFIES these tokens.
+  Compatibility is therefore tested, not asserted.
+
+  ## Wire format (must match cloud-murakumo.token)
+
+      mk1.<payloadSeg>.<sig>
+      payloadSeg = b64url(json {\"sub\":…,\"scope\":…,\"iat\":N,\"exp\":N})
+      sig        = b64url(HMAC-SHA256(secret, \"mk1.\" + payloadSeg))
+
+  b64url is RFC-4648 url-safe, unpadded. The gateway recomputes the signature over
+  the LITERAL received `mk1.<payloadSeg>` bytes, never a re-serialisation, so JSON
+  key order is not part of the contract — we still emit a fixed order so the same
+  inputs always produce the same token.
+
+  ## The secret
+
+  `$MURAKUMO_TOKEN_SECRET`, read by exact name — never an ambient env dump. It is
+  the operator's; it signs here and verifies on the gateway, and is never embedded
+  in a token. Absent ⇒ we refuse and say so. Minting is not something to do
+  half-configured: a token signed with the wrong secret fails at the gateway with
+  an indistinguishable 401."
+  (:require [clojure.string :as str]
+            #?@(:cljs [["node:crypto" :as node-crypto]]))
+  #?(:clj (:import [javax.crypto Mac]
+                   [javax.crypto.spec SecretKeySpec]
+                   [java.util Base64]
+                   [java.nio.charset StandardCharsets])))
+
+(def ^:const version "mk1")
+
+;; The scopes the gateway understands. Anything else would mint a key that
+;; silently authorises nothing useful, so it is rejected at issue time rather
+;; than discovered later against a 401.
+(def scopes #{"chat" "image" "all"})
+
+(def ^:const default-ttl 2592000)          ;; 30d, same default as the JVM CLI
+(def ^:const max-ttl (* 90 24 60 60))      ;; 90d ceiling — see `issue`
+
+(defn- b64url [^String s]
+  (-> s (str/replace "+" "-") (str/replace "/" "_") (str/replace "=" "")))
+
+(defn- b64url-utf8
+  "base64url of a UTF-8 string."
+  [s]
+  #?(:clj (b64url (.encodeToString (Base64/getEncoder)
+                                   (.getBytes ^String s StandardCharsets/UTF_8)))
+     :cljs (b64url (.toString (.from js/Buffer s "utf8") "base64"))))
+
+(defn- hmac-b64url
+  "base64url of HMAC-SHA256(secret, msg)."
+  [secret msg]
+  #?(:clj (let [mac (Mac/getInstance "HmacSHA256")]
+            (.init mac (SecretKeySpec. (.getBytes ^String secret StandardCharsets/UTF_8) "HmacSHA256"))
+            (b64url (.encodeToString (Base64/getEncoder)
+                                     (.doFinal mac (.getBytes ^String msg StandardCharsets/UTF_8)))))
+     :cljs (-> (node-crypto/createHmac "sha256" secret)
+               (.update msg "utf8")
+               (.digest "base64")
+               b64url)))
+
+(defn claims
+  "The claim map. Caller supplies the clock — this fn is pure."
+  [{:keys [sub scope now ttl]}]
+  {:sub (str (or sub "client"))
+   :scope (str (or scope "all"))
+   :iat (long now)
+   :exp (long (+ now (or ttl default-ttl)))})
+
+(defn encode-claims
+  "Claims → payloadSeg. Fixed key order (sub, scope, iat, exp) so the same inputs
+  always yield the same token; the gateway does not depend on the order."
+  [m]
+  (b64url-utf8 (str "{\"sub\":\"" (:sub m) "\",\"scope\":\"" (:scope m)
+                    "\",\"iat\":" (:iat m) ",\"exp\":" (:exp m) "}")))
+
+(defn sign
+  "Mint the wire token for `claims-map`."
+  [secret claims-map]
+  (let [payload (encode-claims claims-map)
+        signing-input (str version "." payload)]
+    (str signing-input "." (hmac-b64url secret signing-input))))
+
+(defn issue
+  "Issue an API key. -> {:ok true :token … :claims …} | {:ok false :error …}.
+
+  Returns a value rather than printing, so the CLI and the MCP tool share one
+  implementation and neither has to parse the other's output.
+
+  `ttl` is capped at `max-ttl`. A capability token cannot be revoked — the format
+  is stateless by design (no KV, no DB on the verify path), so its expiry IS the
+  revocation story, and an unbounded key would be permanent. Callers that want
+  longer re-issue."
+  [{:keys [secret sub scope ttl now]}]
+  (let [scope (or scope "all")
+        ttl (or ttl default-ttl)]
+    (cond
+      (str/blank? (str secret))
+      {:ok false
+       :error "MURAKUMO_TOKEN_SECRET is not set — export the same value the gateway verifies with"}
+
+      (not (contains? scopes scope))
+      {:ok false :error (str "unknown scope " (pr-str scope)
+                             " — expected one of " (str/join ", " (sort scopes)))}
+
+      (or (not (number? ttl)) (<= ttl 0))
+      {:ok false :error "ttl must be a positive number of seconds"}
+
+      (> ttl max-ttl)
+      {:ok false :error (str "ttl " ttl "s exceeds the " max-ttl "s (90d) ceiling — re-issue instead")}
+
+      :else
+      (let [cl (claims {:sub sub :scope scope :now now :ttl ttl})]
+        {:ok true :token (sign secret cl) :claims cl}))))
+
+(defn inspect
+  "Decode + verify a token. -> {:valid bool …}. Never throws on malformed input —
+  a bad key is an answer, not an error."
+  [{:keys [secret token now]}]
+  (let [[v payload sig] (str/split (str token) #"\." 3)]
+    (if (or (str/blank? (str secret)) (not= v version) (nil? payload) (nil? sig))
+      {:valid false :reason (if (str/blank? (str secret))
+                              "MURAKUMO_TOKEN_SECRET is not set"
+                              "malformed token")}
+      (let [expected (hmac-b64url secret (str version "." payload))]
+        (if-not (= expected sig)
+          {:valid false :reason "signature mismatch"}
+          (let [json #?(:clj (String. (.decode (Base64/getUrlDecoder)
+                                               ^String (str payload
+                                                            (case (mod (count payload) 4)
+                                                              2 "==" 3 "=" "")))
+                                      StandardCharsets/UTF_8)
+                        :cljs (.toString (.from js/Buffer payload "base64url") "utf8"))
+                get* (fn [re] (some-> (re-find re json) second))
+                exp (some-> (get* #"\"exp\":(\d+)") #?(:clj Long/parseLong :cljs js/parseInt))]
+            (if (and exp (>= (long now) (long exp)))
+              {:valid false :reason "expired" :exp exp}
+              {:valid true
+               :sub (get* #"\"sub\":\"([^\"]*)\"")
+               :scope (get* #"\"scope\":\"([^\"]*)\"")
+               :exp exp})))))))

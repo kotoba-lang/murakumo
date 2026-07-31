@@ -18,6 +18,61 @@ the nodes beyond the two kotoba binaries.
 > components (`run` / `on-http` / `on-tick` / `on-kse`). Different substrate, on the
 > same hardware.
 
+
+## API keys (`mk1` capability tokens)
+
+`api.murakumo.cloud` gates `/api/v1/*` on a capability token presented as
+`x-api-key` or `Authorization: Bearer`. Two ways to issue one — same
+implementation (`murakumo.apikey`), so they cannot drift.
+
+Both need `$MURAKUMO_TOKEN_SECRET`: the operator's signing secret, the same value
+the gateway verifies with. Unset ⇒ both refuse, rather than emitting a token that
+would fail at the gateway with an indistinguishable 401.
+
+### CLI
+
+```bash
+export MURAKUMO_TOKEN_SECRET=…                      # same value as the gateway
+nbb scripts/run-task.cljs token issue --sub laptop --scope chat --ttl 604800
+nbb scripts/run-task.cljs token verify mk1.…
+```
+
+The token alone goes to stdout, so it pipes (`… token issue | pbcopy`);
+guidance goes to stderr.
+
+### MCP
+
+```bash
+claude mcp add murakumo -- nbb \
+  --classpath "src:../org-anthropic-mcp/src" \
+  scripts/mcp-server.cljs
+```
+
+Tools: `murakumo.issue_api_key` (sub / scope / ttl_seconds) and
+`murakumo.verify_api_key` (token). Running it grants the client the ability to
+mint keys within the bounds below, for as long as the secret is in the
+environment.
+
+### Bounds, and why
+
+- **scope** must be one the gateway understands (`chat` | `image` | `all`). An
+  unknown scope is refused at issue time instead of surfacing later as a
+  confusing 401.
+- **ttl** is capped at 90 days (default 30). `mk1` is stateless by design — the
+  gateway verifies with no KV or DB round-trip, which also means there is no
+  revocation list. Expiry is the entire revocation story, so an unbounded key
+  would be a permanent one. Re-issue instead of minting long-lived keys.
+
+Compatibility with the verifying gateway is a test, not a claim:
+`nbb scripts/run-task.cljs test-apikey` asserts that keys minted here are
+byte-identical to, and accepted by, `cloud-murakumo.token`.
+
+> Historical note: the gateway's 401 says to run `bb murakumo token issue`. That
+> command has not been runnable since babashka was retired (ADR-2607173000) —
+> `murakumo.core` is `.clj` on `babashka.process` and `bb.edn` is gone. The
+> `token` task above is its nbb port.
+
+
 ## What it manages
 
 Operator policy is defined in [`RULES.md`](RULES.md). The liveness/model-placement

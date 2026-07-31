@@ -46,7 +46,13 @@
   ;; (quic-driver RPC + witness-transport) that bb.edn's portable `test`
   ;; task deliberately excludes, same reason quic-driver/quic-cert are
   ;; shelled to `clojure -M` instead of run under bb.
-  :test {:extra-paths ["test"]
+  :test {;; cloud-murakumo/src is TEST-ONLY, for the API-key parity gate
+         ;; (murakumo.apikey-parity-test): keys minted here must be byte-identical
+         ;; to, and accepted by, the namespace that actually VERIFIES them. A
+         ;; sibling path rather than a dep — if the checkout is absent tools.deps
+         ;; just skips it and the parity assertions skip loudly, which is right:
+         ;; a missing sibling is an environment gap, not a defect here.
+         :extra-paths ["test" "../../network-awai/cloud-murakumo/src"]
          ;; kotoba-lang/compiler is TEST-ONLY for the W6 pure-planner oracle
          ;; parity gate (kotoba/kekkai_gate_core.kotoba). Override abi to the
          ;; pin compiler expects so component/wit loads cleanly in the test JVM.

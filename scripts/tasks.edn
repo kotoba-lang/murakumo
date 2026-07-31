@@ -8,7 +8,14 @@
 ;; model/token/dash/cloud/overlay/test) were dropped and have NO runnable
 ;; entrypoint today — those namespaces are .clj on babashka.process/cheshire,
 ;; so they need an nbb port, not a re-added bb.edn. `task` is the first port.
-{:task {:cmd ["nbb" "src/murakumo/task.cljs"]
+{:token {:cmd ["nbb" "--classpath" "src" "src/murakumo/apikey_cli.cljs"]
+         :pass-args? true
+         :doc "Issue / verify murakumo API keys (mk1 capability tokens). The nbb port of the dropped bb `murakumo token` entrypoint — cloud-murakumo's 401 still tells callers to run `bb murakumo token issue`, which has not been runnable since babashka was retired. e.g. `nbb scripts/run-task.cljs token issue --sub laptop --scope chat --ttl 604800`. Needs $MURAKUMO_TOKEN_SECRET (the value the gateway verifies with)."}
+
+ :test-apikey {:cmd ["clojure" "-M:test" "-n" "murakumo.apikey-parity-test"]
+               :doc "Parity gate: keys minted by murakumo.apikey are byte-identical to, and verified by, cloud-murakumo.token (the gateway). Needs the cloud-murakumo sibling checkout on the classpath, else the parity assertions skip loudly."}
+
+ :task {:cmd ["nbb" "src/murakumo/task.cljs"]
         :pass-args? true
         :doc "Fleet task plane (k8s-Job / Ray-tasks shape): probe | plan | run | report. Fans a BATCH of short-lived tasks over the fleet via SSH and gathers the results. e.g. `nbb scripts/run-task.cljs task run --n 22 --cmd 'hostname'`."}
 
