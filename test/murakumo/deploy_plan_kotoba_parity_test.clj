@@ -29,6 +29,15 @@
        "argv-join-sep localhost-url-prefix "
        "path-sep exec-count-prefix exec-count-suffix "
        "pkill-f-prefix stop-forward-suffix"))
+
+(def ^:private join-path-ty
+  "[:record :deploy/join-path [[:a :string] [:b :string]]]")
+(def ^:private app-manifest-ty
+  "[:record :deploy/app-manifest [[:manifest-dir :string] [:manifest :string]]]")
+(def ^:private component-build-ty
+  "[:record :deploy/component-build [[:kotoba :string] [:src-path :string] [:wit :string] [:wasm :string]]]")
+(def ^:private app-deploy-ty
+  "[:record :deploy/app-deploy [[:kotoba :string] [:manifest :string] [:wit :string] [:port :i64]]]")
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -75,8 +84,9 @@
   (let [cases {"d1" (str "(manifest-dir " (kotoba-literal "apps/bot.edn") ")")
                "d2" (str "(manifest-dir " (kotoba-literal "bot.edn") ")")
                "d3" (str "(manifest-dir " (kotoba-literal "a/b/c.edn") ")")
-               "ap" (str "(app-manifest-path " (kotoba-literal "apps") " "
-                         (kotoba-literal "heartbeat.edn") ")")
+               "ap" (str "(app-manifest-path (record-new " app-manifest-ty " "
+                         (kotoba-literal "apps") " "
+                         (kotoba-literal "heartbeat.edn") "))")
                "ps0" (str "(publish-selector " (kotoba-literal "") ")")
                "ps1" (str "(publish-selector " (kotoba-literal "judah") ")")
                "co" (str "(command-output " (kotoba-literal "  bafyCID\n") ")")}
@@ -93,15 +103,15 @@
 (deftest argv-joined-cmds-match
   (let [build (plan/component-build-argv "/bin/kotoba" "apps/src/bot.clj" "wit" "/tmp/out.wasm")
         deploy (plan/app-deploy-argv "/bin/kotoba" "apps/bot.edn" "wit" 18077)
-        cases {"b" (str "(component-build-cmd "
+        cases {"b" (str "(component-build-cmd (record-new " component-build-ty " "
                         (kotoba-literal "/bin/kotoba") " "
                         (kotoba-literal "apps/src/bot.clj") " "
                         (kotoba-literal "wit") " "
-                        (kotoba-literal "/tmp/out.wasm") ")")
-               "d" (str "(app-deploy-cmd "
+                        (kotoba-literal "/tmp/out.wasm") "))")
+               "d" (str "(app-deploy-cmd (record-new " app-deploy-ty " "
                         (kotoba-literal "/bin/kotoba") " "
                         (kotoba-literal "apps/bot.edn") " "
-                        (kotoba-literal "wit") " 18077)")
+                        (kotoba-literal "wit") " 18077))")
                "u" "(localhost-url 18077)"
                "sep" "(argv-join-sep)"
                "lp" "(localhost-url-prefix)"}
@@ -134,8 +144,9 @@
             "es" "(exec-count-suffix)"
             "pf" "(pkill-f-prefix)"
             "ss" "(stop-forward-suffix)"
-            "jp" (str "(join-path " (kotoba-literal "a") " "
-                      (kotoba-literal "b") ")")})]
+            "jp" (str "(join-path (record-new " join-path-ty " "
+                      (kotoba-literal "a") " "
+                      (kotoba-literal "b") "))")})]
     (is (= 1 (get i "e1")))
     (is (= 0 (get i "e0")))
     (is (= 0 (get i "ee")))
@@ -210,8 +221,9 @@
 
 (deftest pin-path-fragments-match
   (let [s (compile-string-cases
-           {"jp" (str "(join-path " (kotoba-literal "src") " "
-                      (kotoba-literal "kotoba") ")")
+           {"jp" (str "(join-path (record-new " join-path-ty " "
+                      (kotoba-literal "src") " "
+                      (kotoba-literal "kotoba") "))")
             "wd" "(pin-wit-dirname)"
             "pw" (str "(pin-wit-dest " (kotoba-literal "bin") ")")
             "pk" "(pin-bin-kotoba)"

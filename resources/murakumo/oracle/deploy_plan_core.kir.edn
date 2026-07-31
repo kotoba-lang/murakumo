@@ -93,14 +93,26 @@
    :body ":localhost' 2>/dev/null",
    :param-types []}
   {:name app-manifest-path,
-   :params [manifest-dir app-manifest],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
-    manifest-dir
-    (string-concat (path-sep) app-manifest)),
-   :param-types [:string :string]}
+    (record-get
+     [:record
+      :deploy/app-manifest
+      [[:manifest-dir :string] [:manifest :string]]]
+     x
+     :manifest-dir)
+    (string-concat
+     (path-sep)
+     (record-get
+      [:record
+       :deploy/app-manifest
+       [[:manifest-dir :string] [:manifest :string]]]
+      x
+      :manifest))),
+   :param-types [[:ref :deploy/app-manifest]]}
   {:name publish-selector,
    :params [selector],
    :result :string,
@@ -259,77 +271,159 @@
    :body "--file",
    :param-types []}
   {:name component-build-cmd,
-   :params [kotoba src-path wit wasm],
+   :params [x],
    :result :string,
    :effects #{},
    :body
-   (string-concat
-    kotoba
+   (let
+    [kotoba
+     (record-get
+      [:record
+       :deploy/component-build
+       [[:kotoba :string]
+        [:src-path :string]
+        [:wit :string]
+        [:wasm :string]]]
+      x
+      :kotoba)
+     src-path
+     (record-get
+      [:record
+       :deploy/component-build
+       [[:kotoba :string]
+        [:src-path :string]
+        [:wit :string]
+        [:wasm :string]]]
+      x
+      :src-path)
+     wit
+     (record-get
+      [:record
+       :deploy/component-build
+       [[:kotoba :string]
+        [:src-path :string]
+        [:wit :string]
+        [:wasm :string]]]
+      x
+      :wit)
+     wasm
+     (record-get
+      [:record
+       :deploy/component-build
+       [[:kotoba :string]
+        [:src-path :string]
+        [:wit :string]
+        [:wasm :string]]]
+      x
+      :wasm)]
     (string-concat
-     (argv-join-sep)
+     kotoba
      (string-concat
-      (component-subcmd)
+      (argv-join-sep)
       (string-concat
-       (argv-join-sep)
+       (component-subcmd)
        (string-concat
-        (build-subcmd)
+        (argv-join-sep)
         (string-concat
-         (argv-join-sep)
+         (build-subcmd)
          (string-concat
-          src-path
+          (argv-join-sep)
           (string-concat
-           (argv-join-sep)
+           src-path
            (string-concat
-            (wit-dir-flag)
+            (argv-join-sep)
             (string-concat
-             (argv-join-sep)
+             (wit-dir-flag)
              (string-concat
-              wit
+              (argv-join-sep)
               (string-concat
-               (argv-join-sep)
+               wit
                (string-concat
-                (output-flag)
-                (string-concat (argv-join-sep) wasm)))))))))))))),
-   :param-types [:string :string :string :string]}
-  {:name app-deploy-cmd,
-   :params [kotoba manifest wit port],
-   :result :string,
-   :effects #{},
-   :body
-   (string-concat
-    kotoba
-    (string-concat
-     (argv-join-sep)
-     (string-concat
-      (app-subcmd)
-      (string-concat
-       (argv-join-sep)
-       (string-concat
-        (deploy-subcmd)
-        (string-concat
-         (argv-join-sep)
-         (string-concat
-          manifest
-          (string-concat
-           (argv-join-sep)
-           (string-concat
-            (wit-dir-flag)
-            (string-concat
-             (argv-join-sep)
-             (string-concat
-              wit
-              (string-concat
-               (argv-join-sep)
-               (string-concat
-                (publish-flag)
+                (argv-join-sep)
                 (string-concat
-                 (argv-join-sep)
+                 (output-flag)
+                 (string-concat (argv-join-sep) wasm))))))))))))))),
+   :param-types [[:ref :deploy/component-build]]}
+  {:name app-deploy-cmd,
+   :params [x],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [kotoba
+     (record-get
+      [:record
+       :deploy/app-deploy
+       [[:kotoba :string]
+        [:manifest :string]
+        [:wit :string]
+        [:port :i64]]]
+      x
+      :kotoba)
+     manifest
+     (record-get
+      [:record
+       :deploy/app-deploy
+       [[:kotoba :string]
+        [:manifest :string]
+        [:wit :string]
+        [:port :i64]]]
+      x
+      :manifest)
+     wit
+     (record-get
+      [:record
+       :deploy/app-deploy
+       [[:kotoba :string]
+        [:manifest :string]
+        [:wit :string]
+        [:port :i64]]]
+      x
+      :wit)
+     port
+     (record-get
+      [:record
+       :deploy/app-deploy
+       [[:kotoba :string]
+        [:manifest :string]
+        [:wit :string]
+        [:port :i64]]]
+      x
+      :port)]
+    (string-concat
+     kotoba
+     (string-concat
+      (argv-join-sep)
+      (string-concat
+       (app-subcmd)
+       (string-concat
+        (argv-join-sep)
+        (string-concat
+         (deploy-subcmd)
+         (string-concat
+          (argv-join-sep)
+          (string-concat
+           manifest
+           (string-concat
+            (argv-join-sep)
+            (string-concat
+             (wit-dir-flag)
+             (string-concat
+              (argv-join-sep)
+              (string-concat
+               wit
+               (string-concat
+                (argv-join-sep)
+                (string-concat
+                 (publish-flag)
                  (string-concat
-                  (url-flag)
+                  (argv-join-sep)
                   (string-concat
-                   (argv-join-sep)
-                   (localhost-url port))))))))))))))))),
-   :param-types [:string :string :string :i64]}
+                   (url-flag)
+                   (string-concat
+                    (argv-join-sep)
+                    (localhost-url port)))))))))))))))))),
+   :param-types [[:ref :deploy/app-deploy]]}
   {:name pin-bin-kotoba,
    :params [],
    :result :string,
@@ -445,11 +539,22 @@
     (string-concat cid (exec-count-suffix))),
    :param-types [:string]}
   {:name join-path,
-   :params [a b],
+   :params [x],
    :result :string,
    :effects #{},
-   :body (string-concat a (string-concat (path-sep) b)),
-   :param-types [:string :string]}
+   :body
+   (string-concat
+    (record-get
+     [:record :deploy/join-path [[:a :string] [:b :string]]]
+     x
+     :a)
+    (string-concat
+     (path-sep)
+     (record-get
+      [:record :deploy/join-path [[:a :string] [:b :string]]]
+      x
+      :b))),
+   :param-types [[:ref :deploy/join-path]]}
   {:name release-wit-path,
    :params [release-dir],
    :result :string,
@@ -542,7 +647,12 @@
    :params [dest],
    :result :string,
    :effects #{},
-   :body (join-path dest (pin-bin-kotoba)),
+   :body
+   (join-path
+    (record-new
+     [:record :deploy/join-path [[:a :string] [:b :string]]]
+     dest
+     (pin-bin-kotoba))),
    :param-types [:string]}
   {:name build-features,
    :params [],
@@ -572,10 +682,23 @@
    :params [dest],
    :result :string,
    :effects #{},
-   :body (join-path dest (pin-wit-dirname)),
+   :body
+   (join-path
+    (record-new
+     [:record :deploy/join-path [[:a :string] [:b :string]]]
+     dest
+     (pin-wit-dirname))),
    :param-types [:string]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:deploy{:app-deploy
+          "869d82009d5065f6bb2a1f72cc673fd99c20bdb401697e94fb1834ed3a3facef",
+          :app-manifest
+          "dd78ecbdb9718f44776ac3f503f94b5f79b67b964f0bb9caab6493b72b787655",
+          :component-build
+          "7020a4e57be3d3e93eabf20faf0259d8b1979a4e72fb4ce412dcb9279ba9b187",
+          :join-path
+          "83745186a948cc49f71023fd09395b88487305cfec5fe873eceb474ac9670d61"},
  :exports
  [default-wasm
   default-publish-node
@@ -643,7 +766,27 @@
   exec-count-suffix
   pkill-f-prefix
   stop-forward-suffix],
- :schemas nil,
+ :schemas
+ #:deploy{:join-path
+          [:record :deploy/join-path [[:a :string] [:b :string]]],
+          :app-manifest
+          [:record
+           :deploy/app-manifest
+           [[:manifest-dir :string] [:manifest :string]]],
+          :component-build
+          [:record
+           :deploy/component-build
+           [[:kotoba :string]
+            [:src-path :string]
+            [:wit :string]
+            [:wasm :string]]],
+          :app-deploy
+          [:record
+           :deploy/app-deploy
+           [[:kotoba :string]
+            [:manifest :string]
+            [:wit :string]
+            [:port :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

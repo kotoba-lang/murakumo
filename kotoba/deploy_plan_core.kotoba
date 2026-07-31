@@ -1,4 +1,15 @@
 (ns deploy-plan-core
+  (:schemas {;; T5.2 native guest record wire
+             :deploy/join-path [:record :deploy/join-path
+                                [[:a :string] [:b :string]]]
+             :deploy/app-manifest [:record :deploy/app-manifest
+                                   [[:manifest-dir :string] [:manifest :string]]]
+             :deploy/component-build [:record :deploy/component-build
+                                      [[:kotoba :string] [:src-path :string]
+                                       [:wit :string] [:wasm :string]]]
+             :deploy/app-deploy [:record :deploy/app-deploy
+                                 [[:kotoba :string] [:manifest :string]
+                                  [:wit :string] [:port :i64]]]})
   (:export [default-wasm default-publish-node
             artifact-forward-port publish-forward-port
             forward-settle-ms placement-wait-ms
@@ -34,6 +45,7 @@
 ;; and localhost-url recompose from fragment SSoTs.
 ;; path-sep + exec-count/stop-forward shell tokens dual-source;
 ;; join-path / app-manifest-path / execution-count / stop-forward recompose.
+;; T5.2: multi-scalar pure inputs take single guest records.
 ;; Parity: test/murakumo/deploy_plan_kotoba_parity_test.clj
 
 (defn default-wasm [] :string "/tmp/murakumo-deploy.wasm")
@@ -79,8 +91,10 @@
   ;; after local-port in stop-forward-command
   ":localhost' 2>/dev/null")
 
-(defn app-manifest-path [manifest-dir :string app-manifest :string] :string
-  (string-concat manifest-dir (string-concat (path-sep) app-manifest)))
+(defn app-manifest-path [x [:ref :deploy/app-manifest]] :string
+  ;; T5.2 native: manifest-dir + manifest file name
+  (string-concat (record-get x :manifest-dir)
+                 (string-concat (path-sep) (record-get x :manifest))))
 
 (defn publish-selector [selector :string] :string
   ;; empty string ≡ cljc nil
@@ -154,71 +168,79 @@
 (defn put-subcmd [] :string "put")
 (defn file-flag [] :string "--file")
 
-(defn component-build-cmd [kotoba :string src-path :string
-                           wit :string wasm :string] :string
+(defn component-build-cmd [x [:ref :deploy/component-build]] :string
   ;; space-joined form of component-build-argv; recomposes fragment SSoTs
-  (string-concat
-   kotoba
-   (string-concat
-    (argv-join-sep)
+  ;; T5.2 native: kotoba+src-path+wit+wasm
+  (let [kotoba (record-get x :kotoba)
+        src-path (record-get x :src-path)
+        wit (record-get x :wit)
+        wasm (record-get x :wasm)]
     (string-concat
-     (component-subcmd)
+     kotoba
      (string-concat
       (argv-join-sep)
       (string-concat
-       (build-subcmd)
+       (component-subcmd)
        (string-concat
         (argv-join-sep)
         (string-concat
-         src-path
+         (build-subcmd)
          (string-concat
           (argv-join-sep)
           (string-concat
-           (wit-dir-flag)
+           src-path
            (string-concat
             (argv-join-sep)
             (string-concat
-             wit
-             (string-concat
-              (argv-join-sep)
-              (string-concat (output-flag)
-                             (string-concat (argv-join-sep) wasm)))))))))))))))
-
-(defn app-deploy-cmd [kotoba :string manifest :string
-                      wit :string port :i64] :string
-  ;; space-joined form of app-deploy-argv; recomposes fragment SSoTs
-  (string-concat
-   kotoba
-   (string-concat
-    (argv-join-sep)
-    (string-concat
-     (app-subcmd)
-     (string-concat
-      (argv-join-sep)
-      (string-concat
-       (deploy-subcmd)
-       (string-concat
-        (argv-join-sep)
-        (string-concat
-         manifest
-         (string-concat
-          (argv-join-sep)
-          (string-concat
-           (wit-dir-flag)
-           (string-concat
-            (argv-join-sep)
-            (string-concat
-             wit
+             (wit-dir-flag)
              (string-concat
               (argv-join-sep)
               (string-concat
-               (publish-flag)
+               wit
+               (string-concat
+                (argv-join-sep)
+                (string-concat (output-flag)
+                               (string-concat (argv-join-sep) wasm))))))))))))))))
+
+(defn app-deploy-cmd [x [:ref :deploy/app-deploy]] :string
+  ;; space-joined form of app-deploy-argv; recomposes fragment SSoTs
+  ;; T5.2 native: kotoba+manifest+wit+port
+  (let [kotoba (record-get x :kotoba)
+        manifest (record-get x :manifest)
+        wit (record-get x :wit)
+        port (record-get x :port)]
+    (string-concat
+     kotoba
+     (string-concat
+      (argv-join-sep)
+      (string-concat
+       (app-subcmd)
+       (string-concat
+        (argv-join-sep)
+        (string-concat
+         (deploy-subcmd)
+         (string-concat
+          (argv-join-sep)
+          (string-concat
+           manifest
+           (string-concat
+            (argv-join-sep)
+            (string-concat
+             (wit-dir-flag)
+             (string-concat
+              (argv-join-sep)
+              (string-concat
+               wit
                (string-concat
                 (argv-join-sep)
                 (string-concat
-                 (url-flag)
-                 (string-concat (argv-join-sep)
-                                (localhost-url port))))))))))))))))))
+                 (publish-flag)
+                 (string-concat
+                  (argv-join-sep)
+                  (string-concat
+                   (url-flag)
+                   (string-concat (argv-join-sep)
+                                  (localhost-url port)))))))))))))))))))
 
 (defn pin-bin-kotoba [] :string "kotoba")
 (defn pin-bin-server [] :string "kotoba-server")
@@ -281,8 +303,10 @@
    (exec-count-prefix)
    (string-concat cid (exec-count-suffix))))
 
-(defn join-path [a :string b :string] :string
-  (string-concat a (string-concat (path-sep) b)))
+(defn join-path [x [:ref :deploy/join-path]] :string
+  ;; T5.2 native: path segments a+b
+  (string-concat (record-get x :a)
+                 (string-concat (path-sep) (record-get x :b))))
 
 (defn release-wit-path [release-dir :string] :string
   (string-concat release-dir (release-wit-suffix)))
@@ -318,7 +342,7 @@
 
 (defn version-bin-path [dest :string] :string
   ;; cljc: (str dest "/kotoba")
-  (join-path dest (pin-bin-kotoba)))
+  (join-path (record-new [:ref :deploy/join-path] dest (pin-bin-kotoba))))
 
 (defn build-features [] :string
   "p2p,realtime-wasm,webrtc")
@@ -337,4 +361,4 @@
 
 (defn pin-wit-dest [dest :string] :string
   ;; cljc: (str dest "/wit")
-  (join-path dest (pin-wit-dirname)))
+  (join-path (record-new [:ref :deploy/join-path] dest (pin-wit-dirname))))

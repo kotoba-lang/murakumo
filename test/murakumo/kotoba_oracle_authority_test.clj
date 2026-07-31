@@ -1749,14 +1749,35 @@
            (oracle/call :deploy-plan 'missing-operator-seed? ["seed"])))
     (is (= (oracle/call :deploy-plan 'cp-bin []) dplan/cp-bin))
     (is (= (oracle/call :deploy-plan 'build-features []) dplan/build-features))
-    (is (= (ir/execute d 'join-path ["a" "b"])
-           (oracle/call :deploy-plan 'join-path ["a" "b"])))
+    (let [jp (oracle/record [:record :deploy/join-path [[:a :string] [:b :string]]]
+                            {:a "a" :b "b"})
+          am (oracle/record [:record :deploy/app-manifest
+                             [[:manifest-dir :string] [:manifest :string]]]
+                            {:manifest-dir "apps" :manifest "foo.edn"})
+          cb (oracle/record [:record :deploy/component-build
+                             [[:kotoba :string] [:src-path :string]
+                              [:wit :string] [:wasm :string]]]
+                            {:kotoba "k" :src-path "s" :wit "w" :wasm "o"})
+          ad (oracle/record [:record :deploy/app-deploy
+                             [[:kotoba :string] [:manifest :string]
+                              [:wit :string] [:port :i64]]]
+                            {:kotoba "k" :manifest "m" :wit "w" :port 18077})]
+      (is (= (ir/execute d 'join-path [jp])
+             (oracle/call :deploy-plan 'join-path [jp])))
+      (is (= (oracle/call :deploy-plan 'join-path [jp])
+             (dplan/join-path "a" "b")))
+      (is (= (ir/execute d 'app-manifest-path [am])
+             (oracle/call :deploy-plan 'app-manifest-path [am])))
+      (is (= (oracle/call :deploy-plan 'app-manifest-path [am])
+             (dplan/app-manifest-path "apps" {:manifest "foo.edn"})))
+      (is (= (ir/execute d 'component-build-cmd [cb])
+             (oracle/call :deploy-plan 'component-build-cmd [cb])))
+      (is (= (ir/execute d 'app-deploy-cmd [ad])
+             (oracle/call :deploy-plan 'app-deploy-cmd [ad]))))
     (is (= (ir/execute d 'pin-wit-dirname [])
            (oracle/call :deploy-plan 'pin-wit-dirname [])))
     (is (= (ir/execute d 'pin-wit-dest ["bin"])
            (oracle/call :deploy-plan 'pin-wit-dest ["bin"])))
-    (is (= (oracle/call :deploy-plan 'join-path ["a" "b"])
-           (dplan/join-path "a" "b")))
     (is (= (oracle/call :deploy-plan 'pin-wit-dest ["bin"])
            (dplan/pin-wit-dest "bin")))
     (is (= (oracle/call :deploy-plan 'pin-bin-kotoba []) dplan/pin-bin-kotoba))
