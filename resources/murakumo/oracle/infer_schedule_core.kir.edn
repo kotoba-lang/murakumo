@@ -837,34 +837,90 @@
     :q2),
    :param-types [[:ref :schedule/assign3]]}
   {:name pick-fold-step,
-   :params [champ ok-i warm-champ warm-i better-c-i],
+   :params [s],
    :result :i64,
    :effects #{},
    :body
    (let
-    [__kotoba_binding-some_1 champ]
-    (if
-     (option-some?-of [:option :i64] __kotoba_binding-some_1)
-     (let
-      [_ (option-value-of [:option :i64] __kotoba_binding-some_1 0)]
-      (if
-       ok-i
+    [champ
+     (record-get
+      [:record
+       :schedule/fold-step
+       [[:champ [:option :i64]]
+        [:ok-i :bool]
+        [:warm-champ :bool]
+        [:warm-i :bool]
+        [:better-c-i :bool]]]
+      s
+      :champ)
+     ok-i
+     (record-get
+      [:record
+       :schedule/fold-step
+       [[:champ [:option :i64]]
+        [:ok-i :bool]
+        [:warm-champ :bool]
+        [:warm-i :bool]
+        [:better-c-i :bool]]]
+      s
+      :ok-i)
+     warm-champ
+     (record-get
+      [:record
+       :schedule/fold-step
+       [[:champ [:option :i64]]
+        [:ok-i :bool]
+        [:warm-champ :bool]
+        [:warm-i :bool]
+        [:better-c-i :bool]]]
+      s
+      :warm-champ)
+     warm-i
+     (record-get
+      [:record
+       :schedule/fold-step
+       [[:champ [:option :i64]]
+        [:ok-i :bool]
+        [:warm-champ :bool]
+        [:warm-i :bool]
+        [:better-c-i :bool]]]
+      s
+      :warm-i)
+     better-c-i
+     (record-get
+      [:record
+       :schedule/fold-step
+       [[:champ [:option :i64]]
+        [:ok-i :bool]
+        [:warm-champ :bool]
+        [:warm-i :bool]
+        [:better-c-i :bool]]]
+      s
+      :better-c-i)]
+    (let
+     [__kotoba_binding-some_1 champ]
+     (if
+      (option-some?-of [:option :i64] __kotoba_binding-some_1)
+      (let
+       [_ (option-value-of [:option :i64] __kotoba_binding-some_1 0)]
        (if
-        (=
-         (prefer-warm-then-score
-          (record-new
-           [:record
-            :schedule/better2
-            [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
-           warm-champ
-           warm-i
-           better-c-i))
-         0)
-        2
-        1)
-       2))
-     (if ok-i 1 0))),
-   :param-types [[:option :i64] :bool :bool :bool :bool]}
+        ok-i
+        (if
+         (=
+          (prefer-warm-then-score
+           (record-new
+            [:record
+             :schedule/better2
+             [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
+            warm-champ
+            warm-i
+            better-c-i))
+          0)
+         2
+         1)
+        2))
+      (if ok-i 1 0)))),
+   :param-types [[:ref :schedule/fold-step]]}
   {:name queue-inc-if,
    :params [s],
    :result :i64,
@@ -874,29 +930,31 @@
  :oracle-value nil,
  :schema-identities
  #:schedule{:assign2
-            "7114b29ee70a351ba6a93aeca548fdbdeeff8a891fbf90dbd6eb7797db5baa8e",
+            "6e32da260064cd14cf5fad9b334454009534b0d4a7669009930814cd7b5c5473",
             :assign3
-            "bf054451d12ff3c49662dea8073346f0e4a4c10ee6ffb1bb9fe5333550333ac5",
+            "c56484857ca14d69192ae370609b7d25ab22aace7ff7a05880b197cc46610a8e",
             :better2
-            "407d4dfb6240582df2b4bca6d607a27815736b73b85d5bbcd68904ceb41e9b31",
+            "3574477837669634b42750fcdb3776e5e9ff753e3ae1d7f2d9a9ab0c60284028",
             :better3
-            "74c0d6313f0ab58f4abde52d9b8676af3f834d1e27aa200cd3add7f23c14f5f1",
+            "7f81cb66488917ab0823217ce54d86cf4323a8e26dc7eef5616733624071b3dc",
             :eligibility
-            "c1d4b6954d276fc30d04281457a3e8c193aef2d3a30daca97c4e92db3de53029",
+            "5ab04d3a205bc13b7c460fdc3b13e7ad56dbab657cb29f8f2563340a81ff812b",
             :flags3
-            "90240d73f5a7ff71447f65c3a9839a49b025e2666500ae68deca758431c29f25",
+            "9ddea66fb57299f6a56be80c9550ec0b1f0e8f04347d0accddc95ee7adfde790",
+            :fold-step
+            "420754aa6752e2ae852904d1d68e76e2a41caf8614e341aa37a17c05d90dd8ff",
             :pick2
-            "4f8e9bf70660a9d6140279f38086dd1466c7581114906b7e1fe98f554cbb46b2",
+            "daee2e162d748213c7c836ad707672aed924fd0a747ba0e064d9dbfe0183f49b",
             :pick3-tour
-            "faf7832473a4bb5f8e6d15af017bd19f295d5fa76f51ce0b280649cfd19805b3",
+            "f2fefcb554b0b64b3dd86d1842c30d73c840f9c661d43894ed786a2525ef42a8",
             :queue-cmp
-            "561d6a0ecd37bab38e564bd9f6cd2686c6d1077063c918ca0cf4e6d78b44d14b",
+            "ed75abc5c0d9e6fcd774b44f59a1ab41a563372398364aa2c4eefe1ef9489698",
             :queue-step
-            "addc8c5fe7069e23bf833b11764cde49fa332b9c7e96438756100bde281629ed",
+            "d84a541afba1985b84df4f6b443b50cd9b95035f545e43ca1e3e4d589d2b72e2",
             :score-cmp
-            "a0ecfcc04aa9e5c9572803508b692077fc393802e349f262740209a90e79b04b",
+            "9005b8fd58b89660bbe6914b58535125c292e7c372c10732c384f959d7b3d72e",
             :triple
-            "a21e8eb706d835f39ab641fbd9353ba471055dae053727a6b349ef03b728b543"},
+            "c26c1567a25b5cbcbdf87bec1b1fc2ac33c30eb510f10ce882a6f2896a47e11c"},
  :exports
  [eligible?
   score-queue
@@ -961,6 +1019,14 @@
               [:can-fetch :bool]
               [:free-bytes :i64]
               [:min-free :i64]]],
+            :fold-step
+            [:record
+             :schedule/fold-step
+             [[:champ [:option :i64]]
+              [:ok-i :bool]
+              [:warm-champ :bool]
+              [:warm-i :bool]
+              [:better-c-i :bool]]],
             :better3
             [:record
              :schedule/better3

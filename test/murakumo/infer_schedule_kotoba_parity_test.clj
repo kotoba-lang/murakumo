@@ -73,6 +73,13 @@
   (str "(pick-idx-3-tournament (record-new " pick3-tour-lit " "
        champ " " ok2 " " wc " " w2 " " bc "))"))
 
+(def ^:private fold-step-lit
+  "[:record :schedule/fold-step [[:champ [:option :i64]] [:ok-i :bool] [:warm-champ :bool] [:warm-i :bool] [:better-c-i :bool]]]")
+
+(defn- fold-step-call [champ-form ok-i warm-c warm-i better-form]
+  (str "(pick-fold-step (record-new " fold-step-lit " "
+       champ-form " " ok-i " " warm-c " " warm-i " " better-form "))"))
+
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
                (str "(defn " name " [] :i64 " body ")"))
@@ -404,19 +411,19 @@
                {:name "d" :engines #{:comfyui} :checkpoints #{"c.safetensors"}
                 :free-bytes fd :queue 0}]
         cljc (sched/pick nodes model)
-        frees [fa fb fc fd]
         ;; host fold: start no champ; all ok+warm
         ;; step i=0: has=0 ok=1 → take 0
-        f0 (str "(pick-fold-step " (opt-i64-form nil) " true false true false)")
+        f0 (fold-step-call (opt-i64-form nil) "true" "false" "true" "false")
         ;; champ=0 warm=1; vs i=1 better 0 vs 1: free a < b so a not better → better=false
         b01 (better-pair-call 0 fa 0 fb)
-        f1 (str "(pick-fold-step " (opt-i64-form 1) " true true true " (better-pair-bool 0 fa 0 fb) ")")
+        f1 (fold-step-call (opt-i64-form 1) "true" "true" "true"
+                           (better-pair-bool 0 fa 0 fb))
         actual (compile-i64-cases
                 {"f0" f0
                  "b01" b01
                  "f1" f1
-                 "none" (str "(pick-fold-step " (opt-i64-form nil) " false false false false)")
-                 "keep" (str "(pick-fold-step " (opt-i64-form 1) " false true false false)")
+                 "none" (fold-step-call (opt-i64-form nil) "false" "false" "false" "false")
+                 "keep" (fold-step-call (opt-i64-form 1) "false" "true" "false" "false")
                  "qi0" (queue-step-call "queue-inc-if" 0 0)
                  "qi1" (queue-step-call "queue-inc-if" 3 1)})]
     (is (= 1 (get actual "f0")) "take first eligible")
@@ -428,11 +435,13 @@
     (is (= 4 (get actual "qi1")))
     ;; continue fold in second compile with b as champ vs c, d
     (let [b02 (better-pair-call 0 fb 0 fc)
-          f2 (str "(pick-fold-step " (opt-i64-form 1) " true true true " (better-pair-bool 0 fb 0 fc) ")")
+          f2 (fold-step-call (opt-i64-form 1) "true" "true" "true"
+                             (better-pair-bool 0 fb 0 fc))
           act2 (compile-i64-cases {"b02" b02 "f2" f2})]
       (is (= 0 (get act2 "b02")))
       (is (= 1 (get act2 "f2")) "take c")
-      (let [f3 (str "(pick-fold-step " (opt-i64-form 1) " true true true " (better-pair-bool 0 fc 0 fd) ")")
+      (let [f3 (fold-step-call (opt-i64-form 1) "true" "true" "true"
+                               (better-pair-bool 0 fc 0 fd))
             act3 (compile-i64-cases {"f3" f3})]
         (is (= 1 (get act3 "f3")) "take d — largest free")
         (is (= "d" (:name cljc)))))))
