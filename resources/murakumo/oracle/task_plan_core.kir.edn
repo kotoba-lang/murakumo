@@ -1176,17 +1176,29 @@
      (quot (* task-ms 1000) wall-ms))),
    :param-types [[:ref :task/pair]]}
   {:name max2,
-   :params [a b],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (if (< a b) b a),
-   :param-types [:i64 :i64]}
+   :body
+   (if
+    (<
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :a)
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :b))
+    (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :b)
+    (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :a)),
+   :param-types [[:ref :task/pair]]}
   {:name min2,
-   :params [a b],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (if (< a b) a b),
-   :param-types [:i64 :i64]}
+   :body
+   (if
+    (<
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :a)
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :b))
+    (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :a)
+    (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :b)),
+   :param-types [[:ref :task/pair]]}
   {:name clamp-nonneg,
    :params [n],
    :result :i64,

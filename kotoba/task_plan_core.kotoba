@@ -416,11 +416,16 @@
       0
       (quot (* task-ms 1000) wall-ms))))
 
-(defn max2 [a :i64 b :i64] :i64
-  (if (< a b) b a))
+(defn max2 [p [:ref :task/pair]] :i64
+  ;; T5.2 residual: a,b on pair record
+  (if (< (record-get p :a) (record-get p :b))
+    (record-get p :b)
+    (record-get p :a)))
 
-(defn min2 [a :i64 b :i64] :i64
-  (if (< a b) a b))
+(defn min2 [p [:ref :task/pair]] :i64
+  (if (< (record-get p :a) (record-get p :b))
+    (record-get p :a)
+    (record-get p :b)))
 
 (defn clamp-nonneg [n :i64] :i64
   (if (< n 0) 0 n))
