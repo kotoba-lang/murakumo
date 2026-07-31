@@ -730,8 +730,13 @@
   (let [live (task-live-kir)]
     (is (= (ir/execute live 'default-max-slots [])
            (oracle/call :task-plan 'default-max-slots [])))
-    (is (= (ir/execute live 'slots [-1 4 -1 8 16])
-           (oracle/call :task-plan 'slots [-1 4 -1 8 16])))
+    (let [slots-in (oracle/record
+                    [:record :task/slots
+                     [[:budget :i64] [:node-slots :i64] [:slots-per :i64]
+                      [:max-slots :i64] [:cores :i64]]]
+                    {:budget -1 :node-slots 4 :slots-per -1 :max-slots 8 :cores 16})]
+      (is (= (ir/execute live 'slots [slots-in])
+             (oracle/call :task-plan 'slots [slots-in]))))
     (let [exit0 (oracle/option-i64 0)
           none-err (oracle/option-string nil)]
       ;; Profile 5: timeout arg is :bool; result is :bool.
@@ -766,8 +771,12 @@
                      (oracle/call :task-plan 'can-retry? [retry]))))
     (is (= (ir/execute live 'task-id [12])
            (oracle/call :task-plan 'task-id [12])))
-    (is (= (ir/execute live 'unschedulable-detail ["nil" "a,b" "64"])
-           (oracle/call :task-plan 'unschedulable-detail ["nil" "a,b" "64"])))
+    (let [ud (oracle/record
+              [:record :task/unsched
+               [[:placement :string] [:excluding :string] [:min-mem-str :string]]]
+              {:placement "nil" :excluding "a,b" :min-mem-str "64"})]
+      (is (= (ir/execute live 'unschedulable-detail [ud])
+             (oracle/call :task-plan 'unschedulable-detail [ud]))))
     (is (= (ir/execute live 'exclude-join-sep [])
            (oracle/call :task-plan 'exclude-join-sep [])))
     (is (= (ir/execute live 'unsched-placement-prefix [])
@@ -779,20 +788,35 @@
     (is (= (oracle/call :task-plan 'exclude-join-sep []) task/exclude-join-sep))
     (is (= (oracle/call :task-plan 'unsched-placement-prefix [])
            task/unsched-placement-prefix))
-    (is (= (ir/execute live 'wave-of [5 2])
-           (oracle/call :task-plan 'wave-of [5 2])))
-    (is (= (ir/execute live 'nearest-rank-idx [10 500])
-           (oracle/call :task-plan 'nearest-rank-idx [10 500])))
-    (is (= (ir/execute live 'speedup-milli [300 150])
-           (oracle/call :task-plan 'speedup-milli [300 150])))
-    (let [champ (oracle/option-i64 1)
-          none-c (oracle/option-i64 nil)]
-      ;; Profile 5: ok-i / better-c-i are :bool
-      (is (= (ir/execute live 'pick-task-fold-step [none-c true false])
-             (oracle/call :task-plan 'pick-task-fold-step [none-c true false])))
-      (is (= 1 (oracle/call :task-plan 'pick-task-fold-step [none-c true false])))
-      (is (= 2 (oracle/call :task-plan 'pick-task-fold-step [champ true false])))
-      (is (= 1 (oracle/call :task-plan 'pick-task-fold-step [champ true true]))))))
+    (let [wave (oracle/record [:record :task/wave [[:used :i64] [:slots :i64]]]
+                              {:used 5 :slots 2})
+          pair-nr (oracle/record [:record :task/pair [[:a :i64] [:b :i64]]]
+                                 {:a 10 :b 500})
+          pair-sp (oracle/record [:record :task/pair [[:a :i64] [:b :i64]]]
+                                 {:a 300 :b 150})
+          fold0 (oracle/record
+                 [:record :task/pick-fold
+                  [[:champ [:option :i64]] [:ok-i :bool] [:better-c-i :bool]]]
+                 {:champ nil :ok-i true :better-c-i false})
+          fold1 (oracle/record
+                 [:record :task/pick-fold
+                  [[:champ [:option :i64]] [:ok-i :bool] [:better-c-i :bool]]]
+                 {:champ 1 :ok-i true :better-c-i false})
+          fold2 (oracle/record
+                 [:record :task/pick-fold
+                  [[:champ [:option :i64]] [:ok-i :bool] [:better-c-i :bool]]]
+                 {:champ 1 :ok-i true :better-c-i true})]
+      (is (= (ir/execute live 'wave-of [wave])
+             (oracle/call :task-plan 'wave-of [wave])))
+      (is (= (ir/execute live 'nearest-rank-idx [pair-nr])
+             (oracle/call :task-plan 'nearest-rank-idx [pair-nr])))
+      (is (= (ir/execute live 'speedup-milli [pair-sp])
+             (oracle/call :task-plan 'speedup-milli [pair-sp])))
+      (is (= (ir/execute live 'pick-task-fold-step [fold0])
+             (oracle/call :task-plan 'pick-task-fold-step [fold0])))
+      (is (= 1 (oracle/call :task-plan 'pick-task-fold-step [fold0])))
+      (is (= 2 (oracle/call :task-plan 'pick-task-fold-step [fold1])))
+      (is (= 1 (oracle/call :task-plan 'pick-task-fold-step [fold2]))))))
 
 (deftest task-precompiled-kir-does-not-drift
   (is (= (task-live-kir) (task-resource-kir))
@@ -1197,8 +1221,11 @@
     (is (= (ir/execute live 'desired [some-3])
            (oracle/call :reconcile-plan 'desired [some-3])))
     (is (= 3 (oracle/call :reconcile-plan 'desired [some-3])))
-    (is (= (ir/execute live 'deficit [3 1])
-           (oracle/call :reconcile-plan 'deficit [3 1])))
+    (let [def-in (oracle/record
+                  [:record :reconcile/deficit [[:desired :i64] [:running :i64]]]
+                  {:desired 3 :running 1})]
+      (is (= (ir/execute live 'deficit [def-in])
+             (oracle/call :reconcile-plan 'deficit [def-in]))))
     (is (= (ir/execute live 'watch-sleep-ms [15])
            (oracle/call :reconcile-plan 'watch-sleep-ms [15])))
     (is (= (ir/execute live 'action-name [some-cid 1 3 2])

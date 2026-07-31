@@ -1,5 +1,7 @@
 (ns reconcile-plan-core
   (:schemas {;; T5.3: placement pick result is a record, not a mixed radix pack.
+             :reconcile/deficit [:record :reconcile/deficit
+                                 [[:desired :i64] [:running :i64]]]
              :reconcile/targets [:record :reconcile/targets
                                  [[:first :i64] [:second :i64] [:count :i64]]]
              ;; T5.3 + profile 5: pairwise name-order flags are :bool (not 0/1 i64).
@@ -48,9 +50,10 @@
     r
     1))
 
-(defn deficit [desired-n :i64 running :i64] :i64
-  (let [d (- desired-n running)]
-    (if (< d 0) 0 d)))
+(defn deficit [d [:ref :reconcile/deficit]] :i64
+  ;; T5.2 native.
+  (let [gap (- (record-get d :desired) (record-get d :running))]
+    (if (< gap 0) 0 gap)))
 
 (defn watch-sleep-ms [seconds :i64] :i64
   (* 1000 seconds))
@@ -63,7 +66,7 @@
 
 (defn action-name [cid [:option :string] running :i64 desired-n :i64
                    free-candidates :i64] :string
-  (let [def-n (deficit desired-n running)]
+  (let [def-n (deficit (record-new [:ref :reconcile/deficit] desired-n running))]
     (if-some [_ cid]
       (if (< desired-n running)
         (action-over)

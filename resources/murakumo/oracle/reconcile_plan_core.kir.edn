@@ -22,11 +22,23 @@
      1)),
    :param-types [[:option :i64]]}
   {:name deficit,
-   :params [desired-n running],
+   :params [d],
    :result :i64,
    :effects #{},
-   :body (let [d (- desired-n running)] (if (< d 0) 0 d)),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [gap
+     (-
+      (record-get
+       [:record :reconcile/deficit [[:desired :i64] [:running :i64]]]
+       d
+       :desired)
+      (record-get
+       [:record :reconcile/deficit [[:desired :i64] [:running :i64]]]
+       d
+       :running))]
+    (if (< gap 0) 0 gap)),
+   :param-types [[:ref :reconcile/deficit]]}
   {:name watch-sleep-ms,
    :params [seconds],
    :result :i64,
@@ -69,7 +81,12 @@
    :effects #{},
    :body
    (let
-    [def-n (deficit desired-n running)]
+    [def-n
+     (deficit
+      (record-new
+       [:record :reconcile/deficit [[:desired :i64] [:running :i64]]]
+       desired-n
+       running))]
     (let
      [__kotoba_binding-some_2 cid]
      (if
@@ -504,12 +521,14 @@
    :param-types []}],
  :oracle-value nil,
  :schema-identities
- #:reconcile{:name-order
-             "0e65429f34ccaf081d5ae4b5f6dbd7fe36a4495096acdb5ae5da11ec18164f94",
+ #:reconcile{:deficit
+             "3213757363e21fb562a3c4623985a7b2fd4924a1709e43f47b099c7f1e0a82b9",
+             :name-order
+             "147e65bd098af2aca972fc8c2e02e571bb0fa308d3ccf86988e7719179a7fe97",
              :starts-with
-             "ccf48ae06263fcfb8482b8073f7bdbe340dcbb43798db70dd332bbf8b529ed57",
+             "01b802c6352415a99e3613037d8a31ee95d9d89066aba0d3cbfa24c7aa2c149c",
              :targets
-             "b251ef44ee9c55f6fe919844427e3a40604d17d2bb934b2f1c0d908bc4118258"},
+             "b8851693a04629b3dadfb7e1e57c1cb78be35490b8b90cec028164a58ef71291"},
  :exports
  [default-replicas
   desired
@@ -557,7 +576,11 @@
   action-needs-build
   reconcile-record-type],
  :schemas
- #:reconcile{:targets
+ #:reconcile{:deficit
+             [:record
+              :reconcile/deficit
+              [[:desired :i64] [:running :i64]]],
+             :targets
              [:record
               :reconcile/targets
               [[:first :i64] [:second :i64] [:count :i64]]],

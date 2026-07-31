@@ -25,6 +25,25 @@
        "unschedulable-detail exclude-join-sep "
        "unsched-placement-prefix unsched-excluding-prefix unsched-min-mem-prefix"))
 
+(def ^:private slots-ty
+  "[:record :task/slots [[:budget :i64] [:node-slots :i64] [:slots-per :i64] [:max-slots :i64] [:cores :i64]]]")
+(def ^:private wave-ty
+  "[:record :task/wave [[:used :i64] [:slots :i64]]]")
+(def ^:private pair-ty
+  "[:record :task/pair [[:a :i64] [:b :i64]]]")
+(def ^:private unsched-ty
+  "[:record :task/unsched [[:placement :string] [:excluding :string] [:min-mem-str :string]]]")
+(def ^:private pick-fold-ty
+  "[:record :task/pick-fold [[:champ [:option :i64]] [:ok-i :bool] [:better-c-i :bool]]]")
+(def ^:private score-ty
+  "[:record :task/score [[:fill0 :i64] [:load0 :i64] [:memneg0 :i64] [:fill1 :i64] [:load1 :i64]]]")
+(def ^:private challenger-ty
+  "[:record :task/challenger [[:fill-c :i64] [:load-c :i64] [:fill-i :i64] [:load-i :i64]]]")
+(def ^:private better-mem-ty
+  "[:record :task/better-mem [[:memneg0 :i64] [:memneg1 :i64] [:name-ord0 :i64] [:name-ord1 :i64]]]")
+
+(defn- kotoba-literal [s]
+  (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
 (defn- compile-string-cases [cases]
   (let [defs (for [[name body] cases]
@@ -62,7 +81,8 @@
         slots-per (opt-i64 (:slots-per-node merged))
         max-slots (long (or (:max-slots merged) 8))
         cores (opt-i64 (:cores node))]
-    (str "(slots " budget " " node-slots " " slots-per " " max-slots " " cores ")")))
+    (str "(slots (record-new " slots-ty " "
+         budget " " node-slots " " slots-per " " max-slots " " cores "))")))
 
 (deftest defaults-match-task-plan-cljc
   (let [actual (compile-i64-cases
@@ -201,19 +221,19 @@
 
 (deftest wave-slot-and-score-helpers
   (let [actual (compile-i64-cases
-                {"f0" "(fill-milli 0 4)"
-                 "f1" "(fill-milli 2 4)"
-                 "f2" "(fill-milli 4 4)"
-                 "w0" "(wave-of 0 4)"
-                 "w1" "(wave-of 5 4)"
-                 "s0" "(slot-of 0 4)"
-                 "s1" "(slot-of 5 4)"
+                {"f0" (str "(fill-milli (record-new " pair-ty " 0 4))")
+                 "f1" (str "(fill-milli (record-new " pair-ty " 2 4))")
+                 "f2" (str "(fill-milli (record-new " pair-ty " 4 4))")
+                 "w0" (str "(wave-of (record-new " wave-ty " 0 4))")
+                 "w1" (str "(wave-of (record-new " wave-ty " 5 4))")
+                 "s0" (str "(slot-of (record-new " wave-ty " 0 4))")
+                 "s1" (str "(slot-of (record-new " wave-ty " 5 4))")
                  "la" "(load-after-assign 3)"
-                 "bf" "(if (better-fill? 250 500) 1 0)"
-                 "bs" "(task-score-code 250 1 0 500 0)"
-                 "tie" "(task-score-code 250 1 0 250 1)"
-                 "bm" "(if (better-mem? -100 -50 0 1) 1 0)"
-                 "bn" "(if (better-mem? -50 -50 0 1) 1 0)"})]
+                 "bf" (str "(if (better-fill? (record-new " pair-ty " 250 500)) 1 0)")
+                 "bs" (str "(task-score-code (record-new " score-ty " 250 1 0 500 0))")
+                 "tie" (str "(task-score-code (record-new " score-ty " 250 1 0 250 1))")
+                 "bm" (str "(if (better-mem? (record-new " better-mem-ty " -100 -50 0 1)) 1 0)")
+                 "bn" (str "(if (better-mem? (record-new " better-mem-ty " -50 -50 0 1)) 1 0)")})]
     (is (= 0 (get actual "f0")))
     (is (= 500 (get actual "f1")))
     (is (= 1000 (get actual "f2")))
@@ -272,22 +292,22 @@
                  "s3l0" (str "(assign-task-3-load0 " s3 ")")
                  "s3l1" (str "(assign-task-3-load1 " s3 ")")
                  "s3l2" (str "(assign-task-3-load2 " s3 ")")
-                 "fold0" (str "(pick-task-fold-step "
-                              (opt-i64-form nil) " true false)")
-                 "fold1" (str "(pick-task-fold-step "
-                              (opt-i64-form 1) " true true)")
-                 "fold2" (str "(pick-task-fold-step "
-                              (opt-i64-form 1) " true false)")
-                 "foldn" (str "(pick-task-fold-step "
-                              (opt-i64-form nil) " false false)")
-                 "nr50" "(nearest-rank-idx 10 500)"
-                 "nr95" "(nearest-rank-idx 10 950)"
-                 "nr0" "(nearest-rank-idx 0 500)"
-                 "ret" "(summary-retried 5 3)"
-                 "sp" "(speedup-milli 4000 1000)"
-                 "sp0" "(speedup-milli 0 1000)"
-                 "cw" "(if (challenger-wins? 500 1 0 0) 1 0)"
-                 "cw2" "(if (challenger-wins? 0 0 500 1) 1 0)"})]
+                 "fold0" (str "(pick-task-fold-step (record-new " pick-fold-ty " "
+                              (opt-i64-form nil) " true false))")
+                 "fold1" (str "(pick-task-fold-step (record-new " pick-fold-ty " "
+                              (opt-i64-form 1) " true true))")
+                 "fold2" (str "(pick-task-fold-step (record-new " pick-fold-ty " "
+                              (opt-i64-form 1) " true false))")
+                 "foldn" (str "(pick-task-fold-step (record-new " pick-fold-ty " "
+                              (opt-i64-form nil) " false false))")
+                 "nr50" (str "(nearest-rank-idx (record-new " pair-ty " 10 500))")
+                 "nr95" (str "(nearest-rank-idx (record-new " pair-ty " 10 950))")
+                 "nr0" (str "(nearest-rank-idx (record-new " pair-ty " 0 500))")
+                 "ret" (str "(summary-retried (record-new " pair-ty " 5 3))")
+                 "sp" (str "(speedup-milli (record-new " pair-ty " 4000 1000))")
+                 "sp0" (str "(speedup-milli (record-new " pair-ty " 0 1000))")
+                 "cw" (str "(if (challenger-wins? (record-new " challenger-ty " 500 1 0 0)) 1 0)")
+                 "cw2" (str "(if (challenger-wins? (record-new " challenger-ty " 0 0 500 1)) 1 0)")})]
     (is (= 0 (get actual "p3")) "tie → lower index 0")
     (is (= 1 (get actual "s3c")))
     (is (= 1 (get actual "s3l0")))
@@ -313,10 +333,18 @@
 
 (deftest unschedulable-detail-parity
   (let [actual (compile-string-cases
-                {"u0" "(unschedulable-detail \"{:labels {\\\"gpu\\\" \\\"1\\\"}}\" \"\" \"\")"
-                 "u1" "(unschedulable-detail \"nil\" \"a,b\" \"\")"
-                 "u2" "(unschedulable-detail \"nil\" \"\" \"1073741824\")"
-                 "u3" "(unschedulable-detail \"{:roles [\\\"compute\\\"]}\" \"x\" \"64\")"
+                {"u0" (str "(unschedulable-detail (record-new " unsched-ty " "
+                           (kotoba-literal "{:labels {\"gpu\" \"1\"}}") " "
+                           (kotoba-literal "") " " (kotoba-literal "") "))")
+                 "u1" (str "(unschedulable-detail (record-new " unsched-ty " "
+                           (kotoba-literal "nil") " " (kotoba-literal "a,b") " "
+                           (kotoba-literal "") "))")
+                 "u2" (str "(unschedulable-detail (record-new " unsched-ty " "
+                           (kotoba-literal "nil") " " (kotoba-literal "") " "
+                           (kotoba-literal "1073741824") "))")
+                 "u3" (str "(unschedulable-detail (record-new " unsched-ty " "
+                           (kotoba-literal "{:roles [\"compute\"]}") " "
+                           (kotoba-literal "x") " " (kotoba-literal "64") "))")
                  "ej" "(exclude-join-sep)"
                  "pp" "(unsched-placement-prefix)"
                  "ep" "(unsched-excluding-prefix)"
@@ -341,3 +369,21 @@
           d (:detail (first (:unschedulable r)))]
       (is (string? d))
       (is (str/starts-with? d plan/unsched-placement-prefix)))))
+(def ^:private slots-ty
+  "[:record :task/slots [[:budget :i64] [:node-slots :i64] [:slots-per :i64] [:max-slots :i64] [:cores :i64]]]")
+(def ^:private wave-ty
+  "[:record :task/wave [[:used :i64] [:slots :i64]]]")
+(def ^:private pair-ty
+  "[:record :task/pair [[:a :i64] [:b :i64]]]")
+(def ^:private unsched-ty
+  "[:record :task/unsched [[:placement :string] [:excluding :string] [:min-mem-str :string]]]")
+(def ^:private pick-fold-ty
+  "[:record :task/pick-fold [[:champ [:option :i64]] [:ok-i :bool] [:better-c-i :bool]]]")
+(def ^:private score-ty
+  "[:record :task/score [[:fill0 :i64] [:load0 :i64] [:memneg0 :i64] [:fill1 :i64] [:load1 :i64]]]")
+(def ^:private challenger-ty
+  "[:record :task/challenger [[:fill-c :i64] [:load-c :i64] [:fill-i :i64] [:load-i :i64]]]")
+(def ^:private better-mem-ty
+  "[:record :task/better-mem [[:memneg0 :i64] [:memneg1 :i64] [:name-ord0 :i64] [:name-ord1 :i64]]]")
+
+

@@ -30,22 +30,78 @@
     node-slots),
    :param-types [:i64 :i64 :i64]}
   {:name slots,
-   :params [budget-slots node-slots slots-per max-slots cores],
+   :params [s],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (< budget-slots 0)
-    (let
-     [cap
-      (capacity node-slots slots-per cores)
-      m
-      (if (< max-slots 0) 8 max-slots)
-      capped
-      (if (< cap m) cap m)]
-     (if (< capped 1) 1 capped))
-    budget-slots),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+   (let
+    [budget-slots
+     (record-get
+      [:record
+       :task/slots
+       [[:budget :i64]
+        [:node-slots :i64]
+        [:slots-per :i64]
+        [:max-slots :i64]
+        [:cores :i64]]]
+      s
+      :budget)
+     node-slots
+     (record-get
+      [:record
+       :task/slots
+       [[:budget :i64]
+        [:node-slots :i64]
+        [:slots-per :i64]
+        [:max-slots :i64]
+        [:cores :i64]]]
+      s
+      :node-slots)
+     slots-per
+     (record-get
+      [:record
+       :task/slots
+       [[:budget :i64]
+        [:node-slots :i64]
+        [:slots-per :i64]
+        [:max-slots :i64]
+        [:cores :i64]]]
+      s
+      :slots-per)
+     max-slots
+     (record-get
+      [:record
+       :task/slots
+       [[:budget :i64]
+        [:node-slots :i64]
+        [:slots-per :i64]
+        [:max-slots :i64]
+        [:cores :i64]]]
+      s
+      :max-slots)
+     cores
+     (record-get
+      [:record
+       :task/slots
+       [[:budget :i64]
+        [:node-slots :i64]
+        [:slots-per :i64]
+        [:max-slots :i64]
+        [:cores :i64]]]
+      s
+      :cores)]
+    (if
+     (< budget-slots 0)
+     (let
+      [cap
+       (capacity node-slots slots-per cores)
+       m
+       (if (< max-slots 0) 8 max-slots)
+       capped
+       (if (< cap m) cap m)]
+      (if (< capped 1) 1 capped))
+     budget-slots)),
+   :param-types [[:ref :task/slots]]}
   {:name failed?,
    :params [exit timeout error],
    :result :bool,
@@ -194,55 +250,177 @@
     false),
    :param-types [[:ref :task/eligibility]]}
   {:name fill-milli,
-   :params [assigned slots],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (if (< slots 1) 0 (quot (* assigned 1000) slots)),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [assigned
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :a)
+     slots
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :b)]
+    (if (< slots 1) 0 (quot (* assigned 1000) slots))),
+   :param-types [[:ref :task/pair]]}
   {:name better-fill?,
-   :params [fill0 fill1],
-   :result :bool,
-   :effects #{},
-   :body (if (< fill0 fill1) true false),
-   :param-types [:i64 :i64]}
-  {:name task-score-code,
-   :params [fill0 load0 _memneg0 fill1 load1],
-   :result :i64,
-   :effects #{},
-   :body
-   (if
-    (< fill0 fill1)
-    1
-    (if
-     (< fill1 fill0)
-     0
-     (if (< load0 load1) 1 (if (< load1 load0) 0 2)))),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
-  {:name better-mem?,
-   :params [memneg0 memneg1 name-ord0 name-ord1],
+   :params [p],
    :result :bool,
    :effects #{},
    :body
    (if
-    (< memneg0 memneg1)
+    (<
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :a)
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :b))
     true
+    false),
+   :param-types [[:ref :task/pair]]}
+  {:name task-score-code,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [fill0
+     (record-get
+      [:record
+       :task/score
+       [[:fill0 :i64]
+        [:load0 :i64]
+        [:memneg0 :i64]
+        [:fill1 :i64]
+        [:load1 :i64]]]
+      s
+      :fill0)
+     load0
+     (record-get
+      [:record
+       :task/score
+       [[:fill0 :i64]
+        [:load0 :i64]
+        [:memneg0 :i64]
+        [:fill1 :i64]
+        [:load1 :i64]]]
+      s
+      :load0)
+     fill1
+     (record-get
+      [:record
+       :task/score
+       [[:fill0 :i64]
+        [:load0 :i64]
+        [:memneg0 :i64]
+        [:fill1 :i64]
+        [:load1 :i64]]]
+      s
+      :fill1)
+     load1
+     (record-get
+      [:record
+       :task/score
+       [[:fill0 :i64]
+        [:load0 :i64]
+        [:memneg0 :i64]
+        [:fill1 :i64]
+        [:load1 :i64]]]
+      s
+      :load1)]
     (if
-     (< memneg1 memneg0)
-     false
-     (if (< name-ord0 name-ord1) true false))),
-   :param-types [:i64 :i64 :i64 :i64]}
+     (< fill0 fill1)
+     1
+     (if
+      (< fill1 fill0)
+      0
+      (if (< load0 load1) 1 (if (< load1 load0) 0 2))))),
+   :param-types [[:ref :task/score]]}
+  {:name better-mem?,
+   :params [b],
+   :result :bool,
+   :effects #{},
+   :body
+   (let
+    [memneg0
+     (record-get
+      [:record
+       :task/better-mem
+       [[:memneg0 :i64]
+        [:memneg1 :i64]
+        [:name-ord0 :i64]
+        [:name-ord1 :i64]]]
+      b
+      :memneg0)
+     memneg1
+     (record-get
+      [:record
+       :task/better-mem
+       [[:memneg0 :i64]
+        [:memneg1 :i64]
+        [:name-ord0 :i64]
+        [:name-ord1 :i64]]]
+      b
+      :memneg1)
+     name-ord0
+     (record-get
+      [:record
+       :task/better-mem
+       [[:memneg0 :i64]
+        [:memneg1 :i64]
+        [:name-ord0 :i64]
+        [:name-ord1 :i64]]]
+      b
+      :name-ord0)
+     name-ord1
+     (record-get
+      [:record
+       :task/better-mem
+       [[:memneg0 :i64]
+        [:memneg1 :i64]
+        [:name-ord0 :i64]
+        [:name-ord1 :i64]]]
+      b
+      :name-ord1)]
+    (if
+     (< memneg0 memneg1)
+     true
+     (if
+      (< memneg1 memneg0)
+      false
+      (if (< name-ord0 name-ord1) true false)))),
+   :param-types [[:ref :task/better-mem]]}
   {:name wave-of,
-   :params [used slots],
+   :params [w],
    :result :i64,
    :effects #{},
-   :body (if (< slots 1) 0 (quot used slots)),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [used
+     (record-get
+      [:record :task/wave [[:used :i64] [:slots :i64]]]
+      w
+      :used)
+     slots
+     (record-get
+      [:record :task/wave [[:used :i64] [:slots :i64]]]
+      w
+      :slots)]
+    (if (< slots 1) 0 (quot used slots))),
+   :param-types [[:ref :task/wave]]}
   {:name slot-of,
-   :params [used slots],
+   :params [w],
    :result :i64,
    :effects #{},
-   :body (if (< slots 1) 0 (- used (* (quot used slots) slots))),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [used
+     (record-get
+      [:record :task/wave [[:used :i64] [:slots :i64]]]
+      w
+      :used)
+     slots
+     (record-get
+      [:record :task/wave [[:used :i64] [:slots :i64]]]
+      w
+      :slots)]
+    (if (< slots 1) 0 (- used (* (quot used slots) slots)))),
+   :param-types [[:ref :task/wave]]}
   {:name load-after-assign,
    :params [used],
    :result :i64,
@@ -356,7 +534,21 @@
      (if
       ok1
       (let
-       [b (task-score-code fill0 load0 0 fill1 load1)]
+       [b
+        (task-score-code
+         (record-new
+          [:record
+           :task/score
+           [[:fill0 :i64]
+            [:load0 :i64]
+            [:memneg0 :i64]
+            [:fill1 :i64]
+            [:load1 :i64]]]
+          fill0
+          load0
+          0
+          fill1
+          load1))]
        (if (= b 2) 0 (if (= b 1) 0 1)))
       0)
      (if ok1 1 -1))),
@@ -377,7 +569,21 @@
       (if
        ok1
        (let
-        [b (task-score-code fill0 load0 0 fill1 load1)]
+        [b
+         (task-score-code
+          (record-new
+           [:record
+            :task/score
+            [[:fill0 :i64]
+             [:load0 :i64]
+             [:memneg0 :i64]
+             [:fill1 :i64]
+             [:load1 :i64]]]
+           fill0
+           load0
+           0
+           fill1
+           load1))]
         (if (= b 2) 0 (if (= b 1) 0 1)))
        0)
       (if ok1 1 -1))
@@ -424,34 +630,95 @@
     :load1),
    :param-types [[:ref :task/assign2]]}
   {:name pick-task-fold-step,
-   :params [champ ok-i better-c-i],
+   :params [p],
    :result :i64,
    :effects #{},
    :body
    (let
-    [__kotoba_binding-some_3 champ]
-    (if
-     (option-some?-of [:option :i64] __kotoba_binding-some_3)
-     (let
-      [_ (option-value-of [:option :i64] __kotoba_binding-some_3 0)]
-      (if ok-i (if better-c-i 1 2) 2))
-     (if ok-i 1 0))),
-   :param-types [[:option :i64] :bool :bool]}
+    [ok-i
+     (record-get
+      [:record
+       :task/pick-fold
+       [[:champ [:option :i64]] [:ok-i :bool] [:better-c-i :bool]]]
+      p
+      :ok-i)
+     better-c-i
+     (record-get
+      [:record
+       :task/pick-fold
+       [[:champ [:option :i64]] [:ok-i :bool] [:better-c-i :bool]]]
+      p
+      :better-c-i)]
+    (let
+     [__kotoba_binding-some_3
+      (record-get
+       [:record
+        :task/pick-fold
+        [[:champ [:option :i64]] [:ok-i :bool] [:better-c-i :bool]]]
+       p
+       :champ)]
+     (if
+      (option-some?-of [:option :i64] __kotoba_binding-some_3)
+      (let
+       [_ (option-value-of [:option :i64] __kotoba_binding-some_3 0)]
+       (if ok-i (if better-c-i 1 2) 2))
+      (if ok-i 1 0)))),
+   :param-types [[:ref :task/pick-fold]]}
   {:name load-inc-if,
-   :params [load picked],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (if (= picked 0) load (+ load 1)),
-   :param-types [:i64 :i64]}
+   :body
+   (if
+    (= (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :b) 0)
+    (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :a)
+    (+
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :a)
+     1)),
+   :param-types [[:ref :task/pair]]}
   {:name challenger-wins?,
-   :params [fill-c load-c fill-i load-i],
+   :params [c],
    :result :bool,
    :effects #{},
    :body
    (let
-    [b (task-score-code fill-c load-c 0 fill-i load-i)]
+    [b
+     (task-score-code
+      (record-new
+       [:record
+        :task/score
+        [[:fill0 :i64]
+         [:load0 :i64]
+         [:memneg0 :i64]
+         [:fill1 :i64]
+         [:load1 :i64]]]
+       (record-get
+        [:record
+         :task/challenger
+         [[:fill-c :i64] [:load-c :i64] [:fill-i :i64] [:load-i :i64]]]
+        c
+        :fill-c)
+       (record-get
+        [:record
+         :task/challenger
+         [[:fill-c :i64] [:load-c :i64] [:fill-i :i64] [:load-i :i64]]]
+        c
+        :load-c)
+       0
+       (record-get
+        [:record
+         :task/challenger
+         [[:fill-c :i64] [:load-c :i64] [:fill-i :i64] [:load-i :i64]]]
+        c
+        :fill-i)
+       (record-get
+        [:record
+         :task/challenger
+         [[:fill-c :i64] [:load-c :i64] [:fill-i :i64] [:load-i :i64]]]
+        c
+        :load-i)))]
     (if (= b 0) true false)),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [[:ref :task/challenger]]}
   {:name assign-task-pick-3,
    :params [ok fill load],
    :result :i64,
@@ -509,7 +776,21 @@
       (if
        ok1
        (let
-        [b (task-score-code f0 l0 0 f1 l1)]
+        [b
+         (task-score-code
+          (record-new
+           [:record
+            :task/score
+            [[:fill0 :i64]
+             [:load0 :i64]
+             [:memneg0 :i64]
+             [:fill1 :i64]
+             [:load1 :i64]]]
+           f0
+           l0
+           0
+           f1
+           l1))]
         (if (= b 2) 0 (if (= b 1) 0 1)))
        0)
       (if ok1 1 -1))
@@ -518,7 +799,18 @@
      lc
      (if (= p01 0) l0 (if (= p01 1) l1 0))
      win2
-     (if (< p01 0) false (challenger-wins? fc lc f2 l2))]
+     (if
+      (< p01 0)
+      false
+      (challenger-wins?
+       (record-new
+        [:record
+         :task/challenger
+         [[:fill-c :i64] [:load-c :i64] [:fill-i :i64] [:load-i :i64]]]
+        fc
+        lc
+        f2
+        l2)))]
     (if (< p01 0) (if ok2 2 -1) (if ok2 (if win2 2 p01) p01))),
    :param-types
    [[:ref :task/flags3] [:ref :task/triple] [:ref :task/triple]]}
@@ -544,11 +836,23 @@
       load
       :v2)
      n0
-     (load-inc-if l0 (if (= pick 0) 1 0))
+     (load-inc-if
+      (record-new
+       [:record :task/pair [[:a :i64] [:b :i64]]]
+       l0
+       (if (= pick 0) 1 0)))
      n1
-     (load-inc-if l1 (if (= pick 1) 1 0))
+     (load-inc-if
+      (record-new
+       [:record :task/pair [[:a :i64] [:b :i64]]]
+       l1
+       (if (= pick 1) 1 0)))
      n2
-     (load-inc-if l2 (if (= pick 2) 1 0))]
+     (load-inc-if
+      (record-new
+       [:record :task/pair [[:a :i64] [:b :i64]]]
+       l2
+       (if (= pick 2) 1 0)))]
     (record-new
      [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
      n0
@@ -635,38 +939,54 @@
     :load2),
    :param-types [[:ref :task/assign3]]}
   {:name nearest-rank-idx,
-   :params [n p-milli],
+   :params [p],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (< n 1)
-    -1
-    (let
-     [raw
-      (quot (* p-milli n) 1000)
-      hi
-      (- n 1)
-      idx
-      (if (< raw 0) 0 raw)]
-     (if (< hi idx) hi idx))),
-   :param-types [:i64 :i64]}
+   (let
+    [n
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :a)
+     p-milli
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :b)]
+    (if
+     (< n 1)
+     -1
+     (let
+      [raw
+       (quot (* p-milli n) 1000)
+       hi
+       (- n 1)
+       idx
+       (if (< raw 0) 0 raw)]
+      (if (< hi idx) hi idx)))),
+   :param-types [[:ref :task/pair]]}
   {:name summary-retried,
-   :params [attempts finals],
-   :result :i64,
-   :effects #{},
-   :body (let [d (- attempts finals)] (if (< d 0) 0 d)),
-   :param-types [:i64 :i64]}
-  {:name speedup-milli,
-   :params [task-ms wall-ms],
+   :params [p],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (if (< wall-ms 1) 1 (if (< task-ms 1) 1 0))
-    0
-    (quot (* task-ms 1000) wall-ms)),
-   :param-types [:i64 :i64]}
+   (let
+    [d
+     (-
+      (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :a)
+      (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :b))]
+    (if (< d 0) 0 d)),
+   :param-types [[:ref :task/pair]]}
+  {:name speedup-milli,
+   :params [p],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [task-ms
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :a)
+     wall-ms
+     (record-get [:record :task/pair [[:a :i64] [:b :i64]]] p :b)]
+    (if
+     (if (< wall-ms 1) 1 (if (< task-ms 1) 1 0))
+     0
+     (quot (* task-ms 1000) wall-ms))),
+   :param-types [[:ref :task/pair]]}
   {:name max2,
    :params [a b],
    :result :i64,
@@ -710,12 +1030,39 @@
    :body " min-mem-bytes=",
    :param-types []}
   {:name unschedulable-detail,
-   :params [placement excluding min-mem-str],
+   :params [u],
    :result :string,
    :effects #{},
    :body
    (let
-    [base
+    [placement
+     (record-get
+      [:record
+       :task/unsched
+       [[:placement :string]
+        [:excluding :string]
+        [:min-mem-str :string]]]
+      u
+      :placement)
+     excluding
+     (record-get
+      [:record
+       :task/unsched
+       [[:placement :string]
+        [:excluding :string]
+        [:min-mem-str :string]]]
+      u
+      :excluding)
+     min-mem-str
+     (record-get
+      [:record
+       :task/unsched
+       [[:placement :string]
+        [:excluding :string]
+        [:min-mem-str :string]]]
+      u
+      :min-mem-str)
+     base
      (string-concat (unsched-placement-prefix) placement)
      with-ex
      (if
@@ -730,23 +1077,37 @@
      (string-concat
       with-ex
       (string-concat (unsched-min-mem-prefix) min-mem-str)))),
-   :param-types [:string :string :string]}],
+   :param-types [[:ref :task/unsched]]}],
  :oracle-value nil,
  :schema-identities
  #:task{:assign2
-        "0e80a73a37a21f7963d4c5697967d3215279981a309c854eb24b6f8d0201dcf2",
+        "c62882217fce96561041706428ddc79301c3342467d708f41d4a80ded7a8ac2d",
         :assign3
-        "f2981c31ac2a8bf5bfd5350470c2c4c118fca54d6d30273534b8e6aaecb0a6ec",
+        "aa96e9e055803a603edb549aadfc6ad5062bab442a7a10b5bbc9b3f09bc508f6",
+        :better-mem
+        "1efd6c53f7edb7279780df02a564c3fa96cf179e5f8acf7dffbafc0370f6ed9a",
+        :challenger
+        "782f5dd0e1765a329bea35540d71f9f1213efe87697e750ecae96e3cc1eb770b",
         :eligibility
-        "0a575704450bc0846041ce8006a201d621b6f48d052c0857d115b3699d1d9684",
+        "664860df6e37e0f3366a114e4fe2258e1db989c3261eb9fbc327107bad08a413",
         :flags3
-        "dd2a95a25b3f503f5547383de8fd25d39f76bc2d22c7a9765318a50d714a8766",
+        "e54c92df47dde5771e0dc5d49405c0926698f6aac7f056fae13dd6ee99f38cd9",
         :pair
-        "26aeef1114fe9455cc755e52e2fb538f7b28d18894cc3c19b0347bd557825a5c",
+        "8adc2d80cbefba92dbaa2a48c9e81f5f8742b804d528a13d1b9c28d039402eb2",
+        :pick-fold
+        "b47e7d77d093c219edc7d40b7838a5d1dad01ae2f947b83fd58eaa5f1f91750d",
         :retry
-        "cf14224e4c3ba1f20c8104fc3a0d28955a88715a8dcba5a2b0ae1a144711da1e",
+        "47c70261a34fe03fb55017f2db5103b414b9937c038e82294e366fb5b07017ad",
+        :score
+        "e1f5fa6fc3fa6826cb5419ebd91ac7a5f8622a69fd518ab2676590daf5ad10e4",
+        :slots
+        "4197ec5d87aa677f9f610b1537940dc165a5b1cd870fc74b65ba04e4bd586b8a",
         :triple
-        "e8f0c373e9e04c33ccd99c4da5c066b10cd26c27d96515c71928d54f5829bab8"},
+        "2b3d787ef7488e8dca432c3f47d0a0ae08e8d1cb61ff22466e840b744670571b",
+        :unsched
+        "7cb2a209eabe6491759f2df178f485c9327dcff055da4dd2b30adf89a0f5fc4b",
+        :wave
+        "c1ebe1113e7364ab5c74977b527d261f70577e8dec79b6312126a4f90d77e449"},
  :exports
  [default-max-slots
   default-max-attempts
@@ -799,19 +1160,43 @@
   unsched-excluding-prefix
   unsched-min-mem-prefix],
  :schemas
- #:task{:pair [:record :task/pair [[:a :i64] [:b :i64]]],
-        :triple
-        [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]],
+ #:task{:retry
+        [:record :task/retry [[:attempt :i64] [:max-attempts :i64]]],
+        :unsched
+        [:record
+         :task/unsched
+         [[:placement :string]
+          [:excluding :string]
+          [:min-mem-str :string]]],
+        :pair [:record :task/pair [[:a :i64] [:b :i64]]],
+        :score
+        [:record
+         :task/score
+         [[:fill0 :i64]
+          [:load0 :i64]
+          [:memneg0 :i64]
+          [:fill1 :i64]
+          [:load1 :i64]]],
         :flags3
         [:record :task/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]],
+        :challenger
+        [:record
+         :task/challenger
+         [[:fill-c :i64]
+          [:load-c :i64]
+          [:fill-i :i64]
+          [:load-i :i64]]],
         :assign2
         [:record
          :task/assign2
          [[:code :i64] [:load0 :i64] [:load1 :i64]]],
+        :triple
+        [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]],
         :assign3
         [:record
          :task/assign3
          [[:code :i64] [:load0 :i64] [:load1 :i64] [:load2 :i64]]],
+        :wave [:record :task/wave [[:used :i64] [:slots :i64]]],
         :eligibility
         [:record
          :task/eligibility
@@ -822,8 +1207,25 @@
           [:allowlist-ok :bool]
           [:mem-bytes :i64]
           [:min-mem :i64]]],
-        :retry
-        [:record :task/retry [[:attempt :i64] [:max-attempts :i64]]]},
+        :pick-fold
+        [:record
+         :task/pick-fold
+         [[:champ [:option :i64]] [:ok-i :bool] [:better-c-i :bool]]],
+        :better-mem
+        [:record
+         :task/better-mem
+         [[:memneg0 :i64]
+          [:memneg1 :i64]
+          [:name-ord0 :i64]
+          [:name-ord1 :i64]]],
+        :slots
+        [:record
+         :task/slots
+         [[:budget :i64]
+          [:node-slots :i64]
+          [:slots-per :i64]
+          [:max-slots :i64]
+          [:cores :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

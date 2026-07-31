@@ -1,6 +1,26 @@
 (ns task-plan-core
   (:schemas {;; T5.3: assign pack families become named records (no base-65536).
              :task/pair [:record :task/pair [[:a :i64] [:b :i64]]]
+             ;; T5.2 residual multi-arg pure (no option-string)
+             :task/slots [:record :task/slots
+                          [[:budget :i64] [:node-slots :i64] [:slots-per :i64]
+                           [:max-slots :i64] [:cores :i64]]]
+             :task/wave [:record :task/wave [[:used :i64] [:slots :i64]]]
+             :task/better-mem [:record :task/better-mem
+                               [[:memneg0 :i64] [:memneg1 :i64]
+                                [:name-ord0 :i64] [:name-ord1 :i64]]]
+             :task/unsched [:record :task/unsched
+                            [[:placement :string] [:excluding :string]
+                             [:min-mem-str :string]]]
+             :task/pick-fold [:record :task/pick-fold
+                              [[:champ [:option :i64]] [:ok-i :bool]
+                               [:better-c-i :bool]]]
+             :task/score [:record :task/score
+                          [[:fill0 :i64] [:load0 :i64] [:memneg0 :i64]
+                           [:fill1 :i64] [:load1 :i64]]]
+             :task/challenger [:record :task/challenger
+                               [[:fill-c :i64] [:load-c :i64]
+                                [:fill-i :i64] [:load-i :i64]]]
              :task/triple [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
              ;; ok flags for 3-node pick (profile 5 :bool — split from i64 triple)
              :task/flags3 [:record :task/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
@@ -62,13 +82,19 @@
       slots-per)
     node-slots))
 
-(defn slots [budget-slots :i64 node-slots :i64 slots-per :i64 max-slots :i64 cores :i64] :i64
-  (if (< budget-slots 0)
-    (let [cap (capacity node-slots slots-per cores)
-          m (if (< max-slots 0) 8 max-slots)
-          capped (if (< cap m) cap m)]
-      (if (< capped 1) 1 capped))
-    budget-slots))
+(defn slots [s [:ref :task/slots]] :i64
+  ;; T5.2 native: five capacity inputs on one record.
+  (let [budget-slots (record-get s :budget)
+        node-slots (record-get s :node-slots)
+        slots-per (record-get s :slots-per)
+        max-slots (record-get s :max-slots)
+        cores (record-get s :cores)]
+    (if (< budget-slots 0)
+      (let [cap (capacity node-slots slots-per cores)
+            m (if (< max-slots 0) 8 max-slots)
+            capped (if (< cap m) cap m)]
+        (if (< capped 1) 1 capped))
+      budget-slots)))
 
 (defn failed? [exit [:option :i64] timeout :bool error [:option :string]] :bool
   ;; Product Value ABI v1: optional exit + error. (option-in-record deferred)
@@ -103,40 +129,58 @@
       false)
     false))
 
-(defn fill-milli [assigned :i64 slots :i64] :i64
-  (if (< slots 1)
-    0
-    (quot (* assigned 1000) slots)))
-
-(defn better-fill? [fill0 :i64 fill1 :i64] :bool
-  (if (< fill0 fill1) true false))
-
-(defn task-score-code [fill0 :i64 load0 :i64 _memneg0 :i64
-                       fill1 :i64 load1 :i64] :i64
-  ;; Ordinal score code (not a pure bool): 1 if node0 better, 0 if node1 better,
-  ;; 2 if fill+load tie. Named without `?` so all `*?` predicates stay :bool.
-  (if (< fill0 fill1)
-    1
-    (if (< fill1 fill0)
+(defn fill-milli [p [:ref :task/pair]] :i64
+  ;; T5.2: a=assigned b=slots
+  (let [assigned (record-get p :a)
+        slots (record-get p :b)]
+    (if (< slots 1)
       0
-      (if (< load0 load1)
-        1
-        (if (< load1 load0)
-          0
-          2)))))
+      (quot (* assigned 1000) slots))))
 
-(defn better-mem? [memneg0 :i64 memneg1 :i64 name-ord0 :i64 name-ord1 :i64] :bool
-  (if (< memneg0 memneg1)
-    true
-    (if (< memneg1 memneg0)
-      false
-      (if (< name-ord0 name-ord1) true false))))
+(defn better-fill? [p [:ref :task/pair]] :bool
+  ;; T5.2: a=fill0 b=fill1
+  (if (< (record-get p :a) (record-get p :b)) true false))
 
-(defn wave-of [used :i64 slots :i64] :i64
-  (if (< slots 1) 0 (quot used slots)))
+(defn task-score-code [s [:ref :task/score]] :i64
+  ;; Ordinal score code (not a pure bool): 1 if node0 better, 0 if node1 better,
+  ;; 2 if fill+load tie. T5.2 native.
+  (let [fill0 (record-get s :fill0)
+        load0 (record-get s :load0)
+        fill1 (record-get s :fill1)
+        load1 (record-get s :load1)]
+    (if (< fill0 fill1)
+      1
+      (if (< fill1 fill0)
+        0
+        (if (< load0 load1)
+          1
+          (if (< load1 load0)
+            0
+            2))))))
 
-(defn slot-of [used :i64 slots :i64] :i64
-  (if (< slots 1) 0 (- used (* (quot used slots) slots))))
+(defn better-mem? [b [:ref :task/better-mem]] :bool
+  ;; T5.2 native.
+  (let [memneg0 (record-get b :memneg0)
+        memneg1 (record-get b :memneg1)
+        name-ord0 (record-get b :name-ord0)
+        name-ord1 (record-get b :name-ord1)]
+    (if (< memneg0 memneg1)
+      true
+      (if (< memneg1 memneg0)
+        false
+        (if (< name-ord0 name-ord1) true false)))))
+
+(defn wave-of [w [:ref :task/wave]] :i64
+  ;; T5.2 native.
+  (let [used (record-get w :used)
+        slots (record-get w :slots)]
+    (if (< slots 1) 0 (quot used slots))))
+
+(defn slot-of [w [:ref :task/wave]] :i64
+  ;; T5.2 native.
+  (let [used (record-get w :used)
+        slots (record-get w :slots)]
+    (if (< slots 1) 0 (- used (* (quot used slots) slots)))))
 
 (defn load-after-assign [used :i64] :i64
   (+ used 1))
@@ -197,7 +241,7 @@
         load1 (record-get loads :b)]
     (if ok0
       (if ok1
-        (let [b (task-score-code fill0 load0 0 fill1 load1)]
+        (let [b (task-score-code (record-new [:ref :task/score] fill0 load0 0 fill1 load1))]
           (if (= b 2)
             0
             (if (= b 1) 0 1)))
@@ -210,7 +254,7 @@
         fill1 (record-get fills :b)
         p (if ok0
             (if ok1
-              (let [b (task-score-code fill0 load0 0 fill1 load1)]
+              (let [b (task-score-code (record-new [:ref :task/score] fill0 load0 0 fill1 load1))]
                 (if (= b 2) 0 (if (= b 1) 0 1)))
               0)
             (if ok1 1 -1))
@@ -228,22 +272,34 @@
 (defn assign-task-2-load1 [r [:ref :task/assign2]] :i64
   (record-get r :load1))
 
-(defn pick-task-fold-step [champ [:option :i64] ok-i :bool better-c-i :bool] :i64
+(defn pick-task-fold-step [p [:ref :task/pick-fold]] :i64
   ;; Host folds candidates. better-c-i true ⇒ challenger strictly better than champ.
-  ;; Product Value ABI v1: optional champ presence (no has-champ sentinel).
+  ;; Product Value ABI v1: optional champ presence. T5.2 native (option-i64 in-record).
   ;; 0=none yet, 1=take i, 2=keep champ (incl. ties)
-  (if-some [_ champ]
-    (if ok-i
-      (if better-c-i 1 2)
-      2)
-    (if ok-i 1 0)))
+  (let [ok-i (record-get p :ok-i)
+        better-c-i (record-get p :better-c-i)]
+    (if-some [_ (record-get p :champ)]
+      (if ok-i
+        (if better-c-i 1 2)
+        2)
+      (if ok-i 1 0))))
 
-(defn load-inc-if [load :i64 picked :i64] :i64
-  (if (= picked 0) load (+ load 1)))
+(defn load-inc-if [p [:ref :task/pair]] :i64
+  ;; T5.2: a=load b=picked
+  (if (= (record-get p :b) 0)
+    (record-get p :a)
+    (+ (record-get p :a) 1)))
 
-(defn challenger-wins? [fill-c :i64 load-c :i64 fill-i :i64 load-i :i64] :bool
+(defn challenger-wins? [c [:ref :task/challenger]] :bool
   ;; true if i better than champ (score lower). Tie → false (keep champ).
-  (let [b (task-score-code fill-c load-c 0 fill-i load-i)]
+  ;; T5.2 native.
+  (let [b (task-score-code
+           (record-new [:ref :task/score]
+                       (record-get c :fill-c)
+                       (record-get c :load-c)
+                       0
+                       (record-get c :fill-i)
+                       (record-get c :load-i)))]
     (if (= b 0) true false)))
 
 (defn assign-task-pick-3 [ok [:ref :task/flags3]
@@ -260,7 +316,7 @@
         l2 (record-get load :v2)
         p01 (if ok0
               (if ok1
-                (let [b (task-score-code f0 l0 0 f1 l1)]
+                (let [b (task-score-code (record-new [:ref :task/score] f0 l0 0 f1 l1))]
                   (if (= b 2) 0 (if (= b 1) 0 1)))
                 0)
               (if ok1 1 -1))
@@ -268,7 +324,7 @@
         lc (if (= p01 0) l0 (if (= p01 1) l1 0))
         win2 (if (< p01 0)
                false
-               (challenger-wins? fc lc f2 l2))]
+               (challenger-wins? (record-new [:ref :task/challenger] fc lc f2 l2)))]
     (if (< p01 0)
       (if ok2 2 -1)
       (if ok2
@@ -279,9 +335,9 @@
   (let [l0 (record-get load :v0)
         l1 (record-get load :v1)
         l2 (record-get load :v2)
-        n0 (load-inc-if l0 (if (= pick 0) 1 0))
-        n1 (load-inc-if l1 (if (= pick 1) 1 0))
-        n2 (load-inc-if l2 (if (= pick 2) 1 0))]
+        n0 (load-inc-if (record-new [:ref :task/pair] l0 (if (= pick 0) 1 0)))
+        n1 (load-inc-if (record-new [:ref :task/pair] l1 (if (= pick 1) 1 0)))
+        n2 (load-inc-if (record-new [:ref :task/pair] l2 (if (= pick 2) 1 0)))]
     (record-new [:ref :task/triple] n0 n1 n2)))
 
 (defn assign-task-step-3 [load [:ref :task/triple]
@@ -307,24 +363,31 @@
 (defn assign-task-3-load2 [r [:ref :task/assign3]] :i64
   (record-get r :load2))
 
-(defn nearest-rank-idx [n :i64 p-milli :i64] :i64
+(defn nearest-rank-idx [p [:ref :task/pair]] :i64
   ;; cljc percentile: (int (floor (* p (count v)))) clamped to [0, n-1]
-  (if (< n 1)
-    -1
-    (let [raw (quot (* p-milli n) 1000)
-          hi (- n 1)
-          idx (if (< raw 0) 0 raw)]
-      (if (< hi idx) hi idx))))
+  ;; T5.2: a=n b=p-milli
+  (let [n (record-get p :a)
+        p-milli (record-get p :b)]
+    (if (< n 1)
+      -1
+      (let [raw (quot (* p-milli n) 1000)
+            hi (- n 1)
+            idx (if (< raw 0) 0 raw)]
+        (if (< hi idx) hi idx)))))
 
-(defn summary-retried [attempts :i64 finals :i64] :i64
-  (let [d (- attempts finals)]
+(defn summary-retried [p [:ref :task/pair]] :i64
+  ;; T5.2: a=attempts b=finals
+  (let [d (- (record-get p :a) (record-get p :b))]
     (if (< d 0) 0 d)))
 
-(defn speedup-milli [task-ms :i64 wall-ms :i64] :i64
+(defn speedup-milli [p [:ref :task/pair]] :i64
   ;; cljc (/ task-ms wall-ms) as milli; 0 when either non-positive
-  (if (if (< wall-ms 1) 1 (if (< task-ms 1) 1 0))
-    0
-    (quot (* task-ms 1000) wall-ms)))
+  ;; T5.2: a=task-ms b=wall-ms
+  (let [task-ms (record-get p :a)
+        wall-ms (record-get p :b)]
+    (if (if (< wall-ms 1) 1 (if (< task-ms 1) 1 0))
+      0
+      (quot (* task-ms 1000) wall-ms))))
 
 (defn max2 [a :i64 b :i64] :i64
   (if (< a b) b a))
@@ -350,12 +413,13 @@
 (defn unsched-min-mem-prefix [] :string
   " min-mem-bytes=")
 
-(defn unschedulable-detail [placement :string
-                            excluding :string
-                            min-mem-str :string] :string
+(defn unschedulable-detail [u [:ref :task/unsched]] :string
   ;; cljc why-unschedulable: host projects (pr-str placement), joined exclude names,
-  ;; and (str min-mem-bytes) or "" when absent.
-  (let [base (string-concat (unsched-placement-prefix) placement)
+  ;; and (str min-mem-bytes) or "" when absent. T5.2 native.
+  (let [placement (record-get u :placement)
+        excluding (record-get u :excluding)
+        min-mem-str (record-get u :min-mem-str)
+        base (string-concat (unsched-placement-prefix) placement)
         with-ex (if (string=? excluding "")
                   base
                   (string-concat base

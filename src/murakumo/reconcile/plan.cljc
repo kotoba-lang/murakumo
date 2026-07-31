@@ -103,13 +103,17 @@
              {:replicas replicas}
              [[:replicas :option-i64]])))
 
+(def ^:private deficit-schema
+  [:record :reconcile/deficit [[:desired :i64] [:running :i64]]])
+
 (defn- deficit-n
-  "T5.2: structural map → call-record."
+  "T5.2: native guest record wire."
   [desired running-count]
   (oracle/i64->host
    (o-record 'deficit
-             {:desired desired :running-count running-count}
-             [[:desired :i64] [:running-count :i64]])))
+             {:d (oracle/record deficit-schema
+                                {:desired desired :running running-count})}
+             [[:d :raw]])))
 
 (defn- action-kw
   "Project reconcile-app inputs to kotoba `action-name` then keywordize.

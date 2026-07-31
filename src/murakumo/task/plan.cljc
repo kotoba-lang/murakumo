@@ -54,9 +54,38 @@
    :timeout-ms (long (o 'default-timeout-ms []))
    :connect-timeout-s 8})
 
+(def ^:private eligibility-schema
+  "Guest descriptor for task_plan_core's eligibility record (T5.3 + profile 5)."
+  [:record :task/eligibility
+   [[:online :bool] [:labels-ok :bool] [:roles-ok :bool]
+    [:not-excluded :bool] [:allowlist-ok :bool]
+    [:mem-bytes :i64] [:min-mem :i64]]])
+
+(def ^:private retry-schema
+  "T5.2 native guest record for can-retry?."
+  [:record :task/retry [[:attempt :i64] [:max-attempts :i64]]])
+
+(def ^:private slots-schema
+  [:record :task/slots
+   [[:budget :i64] [:node-slots :i64] [:slots-per :i64]
+    [:max-slots :i64] [:cores :i64]]])
+(def ^:private wave-schema
+  [:record :task/wave [[:used :i64] [:slots :i64]]])
+(def ^:private better-mem-schema
+  [:record :task/better-mem
+   [[:memneg0 :i64] [:memneg1 :i64] [:name-ord0 :i64] [:name-ord1 :i64]]])
+(def ^:private unsched-schema
+  [:record :task/unsched
+   [[:placement :string] [:excluding :string] [:min-mem-str :string]]])
+(def ^:private pick-fold-schema
+  [:record :task/pick-fold
+   [[:champ [:option :i64]] [:ok-i :bool] [:better-c-i :bool]]])
+(def ^:private pair-schema
+  [:record :task/pair [[:a :i64] [:b :i64]]])
+
 (defn slots
   "Concurrent task capacity of `node`. Kotoba `slots` with projected i64s.
-   T5.2: structural capacity map → call-record."
+   T5.2: native guest record wire."
   [node opts]
   (let [merged (merge default-opts opts)
         budget (if (contains? (or (:slots-by-node opts) {}) (:name node))
@@ -67,16 +96,13 @@
         max-slots (long (or (:max-slots merged) 8))
         cores (opt-i64 (:cores node))]
     (long (o-record 'slots
-                    {:budget budget
-                     :node-slots node-slots
-                     :slots-per slots-per
-                     :max-slots max-slots
-                     :cores cores}
-                    [[:budget :i64]
-                     [:node-slots :i64]
-                     [:slots-per :i64]
-                     [:max-slots :i64]
-                     [:cores :i64]]))))
+                    {:s (oracle/record slots-schema
+                                       {:budget budget
+                                        :node-slots node-slots
+                                        :slots-per slots-per
+                                        :max-slots max-slots
+                                        :cores cores})}
+                    [[:s :raw]]))))
 
 (defn admit
   "Operational admission gate, applied BEFORE placement."
@@ -134,17 +160,6 @@
      :skipped (into (vec skipped) dropped)
      :opts (assoc opts :slots-by-node budgeted)}))
 
-(def ^:private eligibility-schema
-  "Guest descriptor for task_plan_core's eligibility record (T5.3 + profile 5)."
-  [:record :task/eligibility
-   [[:online :bool] [:labels-ok :bool] [:roles-ok :bool]
-    [:not-excluded :bool] [:allowlist-ok :bool]
-    [:mem-bytes :i64] [:min-mem :i64]]])
-
-(def ^:private retry-schema
-  "T5.2 native guest record for can-retry?."
-  [:record :task/retry [[:attempt :i64] [:max-attempts :i64]]])
-
 (defn- eligibility-fields
   "Host projects set/map membership + mem bounds into eligibility fields."
   [node {:keys [placement min-mem-bytes exclude-nodes nodes] :as task}]
@@ -180,19 +195,18 @@
 
 (defn- why-unschedulable [task]
   "Reject detail string via kotoba `unschedulable-detail`.
-   T5.2: structural detail map → call-record."
+   T5.2: native guest record wire."
   (let [placement (pr-str (:placement task))
         excluding (if (seq (:exclude-nodes task))
                     (str/join exclude-join-sep (:exclude-nodes task))
                     "")
         min-mem (if-let [m (:min-mem-bytes task)] (str m) "")]
     (o-record 'unschedulable-detail
-              {:placement placement
-               :excluding excluding
-               :min-mem min-mem}
-              [[:placement :string]
-               [:excluding :string]
-               [:min-mem :string]])))
+              {:u (oracle/record unsched-schema
+                                 {:placement placement
+                                  :excluding excluding
+                                  :min-mem-str min-mem})}
+              [[:u :raw]])))
 
 (defn- assign-1
   "Place one task onto the currently least-filled eligible node."
@@ -207,11 +221,13 @@
             used (get load k 0)
             s (slots n opts)
             wave (long (o-record 'wave-of
-                                  {:used used :slots s}
-                                  [[:used :i64] [:slots :i64]]))
+                                  {:w (oracle/record wave-schema
+                                                     {:used used :slots s})}
+                                  [[:w :raw]]))
             slot (long (o-record 'slot-of
-                                  {:used used :slots s}
-                                  [[:used :i64] [:slots :i64]]))
+                                  {:w (oracle/record wave-schema
+                                                     {:used used :slots s})}
+                                  [[:w :raw]]))
             a {:task task :node k :host (:host n)
                :wave wave :slot slot}
             next-load (long (o-record 'load-after-assign
@@ -281,9 +297,10 @@
   (let [v (vec (sort xs))]
     (when (seq v)
       (let [idx (long (o-record 'nearest-rank-idx
-                                  {:n (count v)
-                                   :p-milli (long (Math/floor (* p 1000)))}
-                                  [[:n :i64] [:p-milli :i64]]))]
+                                  {:p (oracle/record pair-schema
+                                                     {:a (count v)
+                                                      :b (long (Math/floor (* p 1000)))})}
+                                  [[:p :raw]]))]
         (nth v idx)))))
 
 (defn final-results
@@ -304,13 +321,15 @@
         durations (keep :duration-ms results)
         task-ms (reduce + 0 durations)
         retried (long (o-record 'summary-retried
-                                  {:results-n (count results)
-                                   :finals-n (count finals)}
-                                  [[:results-n :i64] [:finals-n :i64]]))
+                                  {:p (oracle/record pair-schema
+                                                     {:a (count results)
+                                                      :b (count finals)})}
+                                  [[:p :raw]]))
         speedup (let [milli (long (o-record 'speedup-milli
-                                             {:task-ms task-ms
-                                              :wall-ms (or wall-ms 0)}
-                                             [[:task-ms :i64] [:wall-ms :i64]]))]
+                                             {:p (oracle/record pair-schema
+                                                                {:a task-ms
+                                                                 :b (or wall-ms 0)})}
+                                             [[:p :raw]]))]
                   (when (pos? milli) (/ (double milli) 1000.0)))]
     {:tasks (count finals)
      :ok (count ok)

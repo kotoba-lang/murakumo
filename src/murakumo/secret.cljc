@@ -125,14 +125,19 @@
              :else {:tag :value :value (str v)})))
       {:tag :error :code :secret/not-found :message "no env mapping"})))
 
+(def ^:private fetched-schema
+  [:record :secret/fetched [[:missing :bool] [:blank :bool]]])
+
 (defn- classify-fetched
   "Kotoba `classify-fetched`: missing/blank → not-found|empty|value.
    Profile 5: missing/blank are :bool.
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [missing? blank?]
   (o-record 'classify-fetched
-            {:missing? (boolean missing?) :blank? (boolean blank?)}
-            [[:missing? :bool] [:blank? :bool]]))
+            {:f (oracle/record fetched-schema
+                               {:missing (boolean missing?)
+                                :blank (boolean blank?)})}
+            [[:f :raw]]))
 
 (defn- kit-reply-from-class
   "Build kit-shaped reply from classify class + optional value string.
