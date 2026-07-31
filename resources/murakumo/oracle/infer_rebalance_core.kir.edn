@@ -59,26 +59,54 @@
    :body (if (< 0 w) true false),
    :param-types [:i64]}
   {:name count-active,
-   :params [wt wm wp],
+   :params [t],
    :result :i64,
    :effects #{},
    :body
-   (+
-    (if (weight-pos? wt) 1 0)
-    (+ (if (weight-pos? wm) 1 0) (if (weight-pos? wp) 1 0))),
-   :param-types [:i64 :i64 :i64]}
+   (let
+    [wt
+     (record-get
+      [:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]
+      t
+      :a)
+     wm
+     (record-get
+      [:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]
+      t
+      :b)
+     wp
+     (record-get
+      [:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]
+      t
+      :c)]
+    (+
+     (if (weight-pos? wt) 1 0)
+     (+ (if (weight-pos? wm) 1 0) (if (weight-pos? wp) 1 0)))),
+   :param-types [[:ref :rebalance/triple]]}
   {:name min2,
-   :params [a b],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (if (< a b) a b),
-   :param-types [:i64 :i64]}
+   :body
+   (if
+    (<
+     (record-get [:record :rebalance/pair [[:a :i64] [:b :i64]]] p :a)
+     (record-get [:record :rebalance/pair [[:a :i64] [:b :i64]]] p :b))
+    (record-get [:record :rebalance/pair [[:a :i64] [:b :i64]]] p :a)
+    (record-get [:record :rebalance/pair [[:a :i64] [:b :i64]]] p :b)),
+   :param-types [[:ref :rebalance/pair]]}
   {:name max2,
-   :params [a b],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (if (< a b) b a),
-   :param-types [:i64 :i64]}
+   :body
+   (if
+    (<
+     (record-get [:record :rebalance/pair [[:a :i64] [:b :i64]]] p :a)
+     (record-get [:record :rebalance/pair [[:a :i64] [:b :i64]]] p :b))
+    (record-get [:record :rebalance/pair [[:a :i64] [:b :i64]]] p :b)
+    (record-get [:record :rebalance/pair [[:a :i64] [:b :i64]]] p :a)),
+   :param-types [[:ref :rebalance/pair]]}
   {:name better-bump?,
    :params [x],
    :result :bool,
@@ -302,7 +330,12 @@
      ap
      (weight-pos? wp)
      n-active
-     (count-active wt wm wp)]
+     (count-active
+      (record-new
+       [:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]
+       wt
+       wm
+       wp))]
     (if
      (if (= total 0) 1 (if (= n-active 0) 1 0))
      (record-new
@@ -314,7 +347,11 @@
       0)
      (let
       [eff-floor
-       (min2 floor (quot total n-active))
+       (min2
+        (record-new
+         [:record :rebalance/pair [[:a :i64] [:b :i64]]]
+         floor
+         (quot total n-active)))
        bt
        (if at eff-floor 0)
        bm
@@ -324,7 +361,11 @@
        left0
        (- total (+ bt (+ bm bp)))
        left
-       (max2 0 left0)
+       (max2
+        (record-new
+         [:record :rebalance/pair [[:a :i64] [:b :i64]]]
+         0
+         left0))
        sumw
        (+ (if at wt 0) (+ (if am wm 0) (if ap wp 0)))
        pt
@@ -1613,88 +1654,275 @@
      (if (= code 2) "postproc-pool" "unknown"))),
    :param-types [:i64]}
   {:name seat-of,
-   :params [code st sm sp],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (if (= code 0) st (if (= code 1) sm sp)),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :body
+   (let
+    [code
+     (record-get
+      [:record
+       :rebalance/seat-of
+       [[:code :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+      x
+      :code)
+     st
+     (record-get
+      [:record
+       :rebalance/seat-of
+       [[:code :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+      x
+      :st)
+     sm
+     (record-get
+      [:record
+       :rebalance/seat-of
+       [[:code :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+      x
+      :sm)
+     sp
+     (record-get
+      [:record
+       :rebalance/seat-of
+       [[:code :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+      x
+      :sp)]
+    (if (= code 0) st (if (= code 1) sm sp))),
+   :param-types [[:ref :rebalance/seat-of]]}
   {:name before-pool?,
-   :params [ia ib st sm sp],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (let
-    [sa (seat-of ia st sm sp) sb (seat-of ib st sm sp)]
+    [ia
+     (record-get
+      [:record
+       :rebalance/before-pool
+       [[:ia :i64] [:ib :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+      x
+      :ia)
+     ib
+     (record-get
+      [:record
+       :rebalance/before-pool
+       [[:ia :i64] [:ib :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+      x
+      :ib)
+     st
+     (record-get
+      [:record
+       :rebalance/before-pool
+       [[:ia :i64] [:ib :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+      x
+      :st)
+     sm
+     (record-get
+      [:record
+       :rebalance/before-pool
+       [[:ia :i64] [:ib :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+      x
+      :sm)
+     sp
+     (record-get
+      [:record
+       :rebalance/before-pool
+       [[:ia :i64] [:ib :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+      x
+      :sp)
+     sa
+     (seat-of
+      (record-new
+       [:record
+        :rebalance/seat-of
+        [[:code :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+       ia
+       st
+       sm
+       sp))
+     sb
+     (seat-of
+      (record-new
+       [:record
+        :rebalance/seat-of
+        [[:code :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+       ib
+       st
+       sm
+       sp))]
     (if
      (< sb sa)
      true
      (if (< sa sb) false (if (< ia ib) true false)))),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+   :param-types [[:ref :rebalance/before-pool]]}
   {:name seat-order-record,
-   :params [st sm sp],
+   :params [t],
    :result [:ref :rebalance/order],
    :effects #{},
    :body
    (let
-    [p0
-     (if (before-pool? 0 1 st sm sp) 0 1)
+    [st
+     (record-get
+      [:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]
+      t
+      :a)
+     sm
+     (record-get
+      [:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]
+      t
+      :b)
+     sp
+     (record-get
+      [:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]
+      t
+      :c)
+     p0
+     (if
+      (before-pool?
+       (record-new
+        [:record
+         :rebalance/before-pool
+         [[:ia :i64] [:ib :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+        0
+        1
+        st
+        sm
+        sp))
+      0
+      1)
      p1
-     (if (before-pool? 0 1 st sm sp) 1 0)
+     (if
+      (before-pool?
+       (record-new
+        [:record
+         :rebalance/before-pool
+         [[:ia :i64] [:ib :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+        0
+        1
+        st
+        sm
+        sp))
+      1
+      0)
      q1
-     (if (before-pool? p1 2 st sm sp) p1 2)
+     (if
+      (before-pool?
+       (record-new
+        [:record
+         :rebalance/before-pool
+         [[:ia :i64] [:ib :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+        p1
+        2
+        st
+        sm
+        sp))
+      p1
+      2)
      q2
-     (if (before-pool? p1 2 st sm sp) 2 p1)
+     (if
+      (before-pool?
+       (record-new
+        [:record
+         :rebalance/before-pool
+         [[:ia :i64] [:ib :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+        p1
+        2
+        st
+        sm
+        sp))
+      2
+      p1)
      r0
-     (if (before-pool? p0 q1 st sm sp) p0 q1)
+     (if
+      (before-pool?
+       (record-new
+        [:record
+         :rebalance/before-pool
+         [[:ia :i64] [:ib :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+        p0
+        q1
+        st
+        sm
+        sp))
+      p0
+      q1)
      r1
-     (if (before-pool? p0 q1 st sm sp) q1 p0)]
+     (if
+      (before-pool?
+       (record-new
+        [:record
+         :rebalance/before-pool
+         [[:ia :i64] [:ib :i64] [:st :i64] [:sm :i64] [:sp :i64]]]
+        p0
+        q1
+        st
+        sm
+        sp))
+      q1
+      p0)]
     (record-new
      [:record :rebalance/order [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]
      r0
      r1
      q2)),
-   :param-types [:i64 :i64 :i64]}
+   :param-types [[:ref :rebalance/triple]]}
   {:name order-nth,
-   :params [ord n],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (= n 0)
-    (record-get
-     [:record :rebalance/order [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]
-     ord
-     :i0)
+   (let
+    [n
+     (record-get
+      [:record
+       :rebalance/order-nth
+       [[:i0 :i64] [:i1 :i64] [:i2 :i64] [:n :i64]]]
+      x
+      :n)]
     (if
-     (= n 1)
+     (= n 0)
      (record-get
-      [:record :rebalance/order [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]
-      ord
-      :i1)
-     (record-get
-      [:record :rebalance/order [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]
-      ord
-      :i2))),
-   :param-types [[:ref :rebalance/order] :i64]}
+      [:record
+       :rebalance/order-nth
+       [[:i0 :i64] [:i1 :i64] [:i2 :i64] [:n :i64]]]
+      x
+      :i0)
+     (if
+      (= n 1)
+      (record-get
+       [:record
+        :rebalance/order-nth
+        [[:i0 :i64] [:i1 :i64] [:i2 :i64] [:n :i64]]]
+       x
+       :i1)
+      (record-get
+       [:record
+        :rebalance/order-nth
+        [[:i0 :i64] [:i1 :i64] [:i2 :i64] [:n :i64]]]
+       x
+       :i2)))),
+   :param-types [[:ref :rebalance/order-nth]]}
   {:name take-end,
    :params [t],
    :result :i64,
    :effects #{},
    :body
    (min2
-    (record-get
-     [:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]
-     t
-     :c)
-    (+
+    (record-new
+     [:record :rebalance/pair [[:a :i64] [:b :i64]]]
      (record-get
       [:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]
       t
-      :a)
-     (record-get
-      [:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]
-      t
-      :b))),
+      :c)
+     (+
+      (record-get
+       [:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]
+       t
+       :a)
+      (record-get
+       [:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]
+       t
+       :b)))),
    :param-types [[:ref :rebalance/triple]]}
   {:name take-count,
    :params [p],
@@ -1702,13 +1930,15 @@
    :effects #{},
    :body
    (max2
-    0
-    (-
-     (record-get [:record :rebalance/pair [[:a :i64] [:b :i64]]] p :b)
-     (record-get
-      [:record :rebalance/pair [[:a :i64] [:b :i64]]]
-      p
-      :a))),
+    (record-new
+     [:record :rebalance/pair [[:a :i64] [:b :i64]]]
+     0
+     (-
+      (record-get [:record :rebalance/pair [[:a :i64] [:b :i64]]] p :b)
+      (record-get
+       [:record :rebalance/pair [[:a :i64] [:b :i64]]]
+       p
+       :a)))),
    :param-types [[:ref :rebalance/pair]]}
   {:name pipeline-note,
    :params [p],
@@ -1751,26 +1981,32 @@
    :param-types [[:ref :rebalance/pair]]}],
  :oracle-value nil,
  :schema-identities
- #:rebalance{:bump-cmp
-             "726786210a31bfda30b99ee7397530a1d87e03bf0a403ad3d3646ac5ce682f4c",
+ #:rebalance{:before-pool
+             "aa4f44d9e7f1d29a8a166cff9dd1b306d00b10db31450e3c2021817d23b98e2b",
+             :bump-cmp
+             "f8231a6822fac57573e8e29febaa2f8932f200f6bcc336613febc686574fa9aa",
              :bump3-in
-             "3589887902063f41c8e9c6c1f1de57f052fe077fb664d7b1d572b891c0aa02c9",
+             "ead62b95c2e43c6516640acd5c32dbb1e37714e211822774d9406f8c8b8889dd",
              :demand
-             "25d28cda6ea0575b65716341806035b2821c70b7bdd620e2d5e993ae496653f1",
+             "fe6db02949bbe4e65df7e91bec2ae3d934a4aa667279c64d1c015fcb82e72a49",
              :lanes
-             "e23b6b6c9e7f0f681e13a03ba72f7575c5e256ce652002b137725c7277c273f1",
+             "ebc1e46cf69e31af157e92ba97c4a0ee7c283b726a1f84c40a7ecdee52a70ed6",
              :ok-for
-             "219666d7832fd3c81420e05591f10889f644a5baa2ab11f2c1a585d9869c5dcc",
+             "aa532edcb0aeb08d5d4c051e04779dc03b79eee5d9b03d6d07802e8a23683781",
              :order
-             "19fce984eeaa84b6602e9e14c8146e4f7750d3086ef2a862a2a5899f86e0800c",
+             "f9817bead03fcaf122e0a4a5af0eb189ed8682dff2830672be2887f6dd3664bb",
+             :order-nth
+             "1b1d83219cfc9e1574dfc3c41e4965727e471a4ae32de3bf4754ec9dd723643d",
              :pair
-             "01f3b713d0f45fe6732b1166d86e0a3c4eb5d01b27db1a276e2cce221eaf309e",
+             "161e1a5d76044ceb7b7e1850110fba15d0fd64acf01ebfdb8777523d7ff8e1a8",
              :run-flags
-             "502f8ca815487da803859ccac68d9b0bf7ed52c00266570b6d26c3b5f6682bd4",
+             "74887de6a3fe811dca04fe77a65540ec28019f420e731432480064d679de0b9a",
+             :seat-of
+             "a7f29c5b02e6edfc667e5d9ee2f359cb2eff81872efb4672bc1e849515a97a1c",
              :seats-in
-             "f87aca98189ddf9cc6c3ba9ecb2064b82cbe811ac4b84c4070283988098b62e0",
+             "e031bfde4edef83ffde58014c0fdc86d5e04ac68bf341fc962b5cae31028a258",
              :triple
-             "023b3364b326573a2f29d7e4a6cd2fe828eabc4afc04cfb462ae010f4b4cdf1a"},
+             "bb4b87c099441cf926b38d79dcf267171e54c05a3ddca771bab064e2944b54b6"},
  :exports
  [shard-ceiling-gb
   os-kv-headroom-gb
@@ -1818,7 +2054,19 @@
   pipeline-note
   rebalance-reason-detail],
  :schemas
- #:rebalance{:triple
+ #:rebalance{:order-nth
+             [:record
+              :rebalance/order-nth
+              [[:i0 :i64] [:i1 :i64] [:i2 :i64] [:n :i64]]],
+             :before-pool
+             [:record
+              :rebalance/before-pool
+              [[:ia :i64]
+               [:ib :i64]
+               [:st :i64]
+               [:sm :i64]
+               [:sp :i64]]],
+             :triple
              [:record
               :rebalance/triple
               [[:a :i64] [:b :i64] [:c :i64]]],
@@ -1834,6 +2082,10 @@
              [:record
               :rebalance/lanes
               [[:text :i64] [:media :i64] [:postproc :i64]]],
+             :seat-of
+             [:record
+              :rebalance/seat-of
+              [[:code :i64] [:st :i64] [:sm :i64] [:sp :i64]]],
              :pair [:record :rebalance/pair [[:a :i64] [:b :i64]]],
              :run-flags
              [:record
