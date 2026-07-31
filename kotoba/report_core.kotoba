@@ -35,7 +35,11 @@
              :report/join [:record :report/join
                            [[:acc :string] [:sep :string] [:next :string]]]
              :report/csv [:record :report/csv
-                          [[:acc :string] [:next :string]]]})
+                          [[:acc :string] [:next :string]]]
+             :report/status-row [:record :report/status-row
+                                 [[:name :string] [:health [:option :i64]]
+                                  [:wasm :string] [:links :string]
+                                  [:p2p-port :i64]]]})
   (:export [digit-char nat-str i64-str blank? ws? trim
             mesh-status node-prefix unreachable-skipped-line
             provision-result-line mesh-pass1-line mesh-wait-peerid-line
@@ -407,24 +411,31 @@
   (string-concat (pad-to (record-new [:ref :report/pad-to] name 10))
                  (string-concat " " (status-down-suffix))))
 
-(defn status-row [name :string health? [:option :i64] wasm-exec :string
-                  links-str :string p2p-port :i64] :string
-  ;; option residual: stays positional for this wave
-  (string-concat
-   (pad-to (record-new [:ref :report/pad-to] name 10))
-   (string-concat
-    " "
+(defn status-row [r [:ref :report/status-row]] :string
+  ;; T5.2 native: option health in-record.
+  (let [name (record-get r :name)
+        health? (record-get r :health)
+        wasm-exec (record-get r :wasm)
+        links-str (record-get r :links)
+        p2p-port (record-get r :p2p-port)
+        f-name (pad-to (record-new [:ref :report/pad-to] name 10))
+        f-health (pad-to (record-new [:ref :report/pad-to]
+                                     (health-label health?) 8))
+        f-wasm (pad-to (record-new [:ref :report/pad-to] wasm-exec 12))
+        f-links (pad-to (record-new [:ref :report/pad-to] links-str 6))]
     (string-concat
-     (pad-to (record-new [:ref :report/pad-to] (health-label health?) 8))
+     f-name
      (string-concat
       " "
       (string-concat
-       (pad-to (record-new [:ref :report/pad-to] wasm-exec 12))
+       f-health
        (string-concat
         " "
         (string-concat
-         (pad-to (record-new [:ref :report/pad-to] links-str 6))
-         (string-concat " " (i64-str p2p-port))))))))))
+         f-wasm
+         (string-concat
+          " "
+          (string-concat f-links (string-concat " " (i64-str p2p-port)))))))))))
 
 (defn command-help [] :string
   "murakumo — kotoba WASM mesh control plane\n\ncommands:\n  nodes                       fleet reachability + mesh presence\n  pin       [src-dir]         copy a consistent kotoba cli+server into ./bin (own it)\n  provision [node|all]        rsync binaries + install resident LaunchDaemon\n  mesh      [node|all]        form ONE gossipsub lattice (2-pass: peer-id + bootstrap)\n  up/down   [node|all]        start/stop the resident mesh node\n  status    [node|all]        fold /health across the fleet (PEERS = live links)\n  deploy    <app.edn> [node]  compile clj→WASM + distribute + publish to the lattice\n  reconcile <murakumo.app.edn> [--dry-run|--apply|--watch[=secs]]  declarative desired-state (wadm)\n  cloud     [plan|records|routes|dial|connect <node>|relay <name>|bootstrap]    plan murakumo.cloud identity overlay\n  dash      [port] [interval]  web dashboard + persist heartbeat/placement to the Datom log\n  fleet     <datom-log.edn>    fold a kotoba-fleet Datom log into one coordination view\n  infer     probe|plan <model>|provision|up|down|ps|serve|generate  distributed inference (exo-style shard plan)\n  model     plan|setup|status <model> [node|all] [cache-dir]  Hugging Face model provisioning\n  revive    [node|all]        wake offline fleet Macs via a live LAN peer\n\nenv: MURAKUMO_OPERATOR_SEED (32-byte hex), MURAKUMO_KOTOBA_DIR")

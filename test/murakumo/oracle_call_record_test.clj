@@ -162,9 +162,12 @@
   (when (oracle/ready? :report-core)
     (let [node {:name "asher"}
           row (report/status-row node {:subsystems {:wasm_executor "ok"}} 3 4001)
-          via-call (oracle/call :report-core 'status-row
-                                ["asher" (oracle/option-i64 1) "ok" "3"
-                                 (oracle/as-i64 4001)])]
+          rec (oracle/record
+               [:record :report/status-row
+                [[:name :string] [:health [:option :i64]]
+                 [:wasm :string] [:links :string] [:p2p-port :i64]]]
+               {:name "asher" :health 1 :wasm "ok" :links "3" :p2p-port 4001})
+          via-call (oracle/call :report-core 'status-row [rec])]
       (is (= via-call row))
       (is (string? row))
       (is (re-find #"asher" row)))

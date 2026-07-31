@@ -15,6 +15,9 @@
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :fleet-inventory)
+(def ^:private fleet-ports-schema
+  [:record :fleet/ports
+   [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]])
 
 (defn- o
   "Call a pure export. Requires the shipped oracle on every platform (T6.4)."
@@ -60,16 +63,14 @@
 (defn node-port
   "Resolve a node's control HTTP port, defaulting to the fleet port, then 8077.
    Kotoba `resolve-port` (Product Value ABI optional ports).
-   T5.2: structural host map → call-record."
+   T5.2: native guest record wire."
   [fleet node]
-  (oracle/require-ready! oid)
   (oracle/i64->host
-   (oracle/call-record
-    oid 'resolve-port
-    {:node-port (:port node)
-     :fleet-port (:fleet/port fleet)}
-    [[:node-port :option-i64]
-     [:fleet-port :option-i64]])))
+   (o-record 'resolve-port
+             {:x (oracle/record fleet-ports-schema
+                                {:node-port (:port node)
+                                 :fleet-port (:fleet/port fleet)})}
+             [[:x :raw]])))
 
 (defn node-health-url
   "Node-local health URL for the control HTTP port. Kotoba `health-url`."

@@ -104,35 +104,52 @@
      (default-scope))),
    :param-types [[:option :string]]}
   {:name claim-exp,
-   :params [now ttl],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (+
-    now
+    (record-get
+     [:record :token/claim-exp [[:now :i64] [:ttl [:option :i64]]]]
+     x
+     :now)
     (let
-     [__kotoba_binding-some_3 ttl]
+     [__kotoba_binding-some_3
+      (record-get
+       [:record :token/claim-exp [[:now :i64] [:ttl [:option :i64]]]]
+       x
+       :ttl)]
      (if
       (option-some?-of [:option :i64] __kotoba_binding-some_3)
       (let
-       [x (option-value-of [:option :i64] __kotoba_binding-some_3 0)]
-       x)
+       [ttl (option-value-of [:option :i64] __kotoba_binding-some_3 0)]
+       ttl)
       (default-ttl)))),
-   :param-types [:i64 [:option :i64]]}
+   :param-types [[:ref :token/claim-exp]]}
   {:name expired?,
-   :params [exp now],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (let
-    [__kotoba_binding-some_4 exp]
-    (if
-     (option-some?-of [:option :i64] __kotoba_binding-some_4)
-     (let
-      [e (option-value-of [:option :i64] __kotoba_binding-some_4 0)]
-      (if (< now e) false true))
-     true)),
-   :param-types [[:option :i64] :i64]}
+    [now
+     (record-get
+      [:record :token/expired [[:exp [:option :i64]] [:now :i64]]]
+      x
+      :now)]
+    (let
+     [__kotoba_binding-some_4
+      (record-get
+       [:record :token/expired [[:exp [:option :i64]] [:now :i64]]]
+       x
+       :exp)]
+     (if
+      (option-some?-of [:option :i64] __kotoba_binding-some_4)
+      (let
+       [e (option-value-of [:option :i64] __kotoba_binding-some_4 0)]
+       (if (< now e) false true))
+      true))),
+   :param-types [[:ref :token/expired]]}
   {:name scope-allows?,
    :params [x],
    :result :bool,
@@ -351,14 +368,18 @@
    :param-types [:i64]}],
  :oracle-value nil,
  :schema-identities
- #:token{:claims
-         "f38bcfaab1d6dc141f7380f0255bef02e31a535f07ca15d55be8642518d25937",
+ #:token{:claim-exp
+         "a74893f595078661641c2ff1417675bc272562b569c818843281cca8c8e24682",
+         :claims
+         "6e27eb3cfd9e82f65eea2bceaaa4185de226474eac1eed05a574b76ab5086437",
          :eq
-         "42b360fc7adcff33a3f02a1aff1aec6d9f48672ffeaad45bdd9bc58ff0ac9b37",
+         "ee04f41fd6f260b668b7dc214497fdfc5f5e9a0612d0ec826685253fe1369514",
+         :expired
+         "62eb4768fb4ec832e670820cd1991d62c08f8c409fef26c55a1c9a43325f2710",
          :scope-check
-         "ff0e2bd3d3693c43bcba941f8192f36321d4eb5268d1bc511c4dd6359685203d",
+         "dbcbdfbcc9f5e6d63c36f5ca87ec9928180ad65a2a8c36d9ca722baf74bfc31a",
          :wire
-         "fc0c457e80036683df6b1aeb24d14e7e47d1c2b7ab291a6d4c3f1a5a60ed1cd4"},
+         "56bff47e4ba4994755c2c2b0a4239d66109d5939ce19ef7fc7200fa414556fe3"},
  :exports
  [version
   default-ttl
@@ -395,7 +416,13 @@
          :scope-check
          [:record
           :token/scope-check
-          [[:token-scope :string] [:required :string]]]},
+          [[:token-scope :string] [:required :string]]],
+         :claim-exp
+         [:record
+          :token/claim-exp
+          [[:now :i64] [:ttl [:option :i64]]]],
+         :expired
+         [:record :token/expired [[:exp [:option :i64]] [:now :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

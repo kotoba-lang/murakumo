@@ -1,5 +1,9 @@
 (ns provision-plan-core
   (:schemas {;; T5.2 native guest record wire
+             :provision/p2p-ports [:record :provision/p2p-ports
+                                   [[:node-port [:option :i64]]
+                                    [:fleet-port [:option :i64]]]]
+
              :provision/multiaddr [:record :provision/multiaddr
                                    [[:ip :string] [:port :i64]]]
              :provision/bin-path [:record :provision/bin-path
@@ -108,13 +112,12 @@
   ;; cljc: (str/blank? (str operator-seed)) — empty after str
   (blank? seed))
 
-(defn resolve-p2p-port [node-port [:option :i64]
-                        fleet-port [:option :i64]] :i64
+(defn resolve-p2p-port [x [:ref :provision/p2p-ports]] :i64
   ;; Product Value ABI v1: optional ports (no has-* sentinels).
-  ;; cljc: (or (:p2p-port node) (:fleet/p2p-port fleet) 4001)
-  (if-some [p node-port]
+  ;; T5.2 native: option ports in-record.
+  (if-some [p (record-get x :node-port)]
     p
-    (if-some [f fleet-port]
+    (if-some [f (record-get x :fleet-port)]
       f
       4001)))
 

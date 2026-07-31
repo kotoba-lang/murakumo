@@ -63,26 +63,38 @@
    (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
    :param-types [:i64]}
   {:name resolve-port,
-   :params [node-port fleet-port],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [__kotoba_binding-some_1 node-port]
+    [__kotoba_binding-some_1
+     (record-get
+      [:record
+       :fleet/ports
+       [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]]
+      x
+      :node-port)]
     (if
      (option-some?-of [:option :i64] __kotoba_binding-some_1)
      (let
       [p (option-value-of [:option :i64] __kotoba_binding-some_1 0)]
       p)
      (let
-      [__kotoba_binding-some_2 fleet-port]
+      [__kotoba_binding-some_2
+       (record-get
+        [:record
+         :fleet/ports
+         [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]]
+        x
+        :fleet-port)]
       (if
        (option-some?-of [:option :i64] __kotoba_binding-some_2)
        (let
         [f (option-value-of [:option :i64] __kotoba_binding-some_2 0)]
         f)
        (default-control-port))))),
-   :param-types [[:option :i64] [:option :i64]]}
+   :param-types [[:ref :fleet/ports]]}
   {:name health-url,
    :params [port],
    :result :string,
@@ -160,8 +172,10 @@
    :param-types [:i64]}],
  :oracle-value nil,
  :schema-identities
- #:fleet{:selector-name
-         "00bdeadc0c8f5c716efbbd2fca0e718562c79cb279afe2e3bed4f0adc4657fc6"},
+ #:fleet{:ports
+         "44d55ad7a211037dd8c9307a17b9b5b9e529ef89d498e06cdf671e4c1b9de9e9",
+         :selector-name
+         "271a3e312883014557a9afda98b2a91686f79ea6361473f9b85b26c827083c30"},
  :exports
  [default-control-port
   digit-char
@@ -178,7 +192,11 @@
   health-url-path
   selector-join-sep],
  :schemas
- #:fleet{:selector-name
+ #:fleet{:ports
+         [:record
+          :fleet/ports
+          [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]],
+         :selector-name
          [:record
           :fleet/selector-name
           [[:sel :string] [:name :string]]]},

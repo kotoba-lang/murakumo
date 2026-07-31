@@ -397,10 +397,13 @@
            (oracle/call :report-core 'reconcile-col-header [])))
     (is (= (ir/execute live 'nodes-row [nrow])
            (oracle/call :report-core 'nodes-row [nrow])))
-    (is (= (ir/execute live 'status-row
-                       ["asher" (oracle/option-i64 nil) "?" "-" 0])
-           (oracle/call :report-core 'status-row
-                        ["asher" (oracle/option-i64 nil) "?" "-" 0])))
+    (let [srow (oracle/record
+                [:record :report/status-row
+                 [[:name :string] [:health [:option :i64]]
+                  [:wasm :string] [:links :string] [:p2p-port :i64]]]
+                {:name "asher" :health nil :wasm "?" :links "-" :p2p-port 0})]
+      (is (= (ir/execute live 'status-row [srow])
+             (oracle/call :report-core 'status-row [srow]))))
     (is (= (ir/execute live 'report-csv-sep [])
            (oracle/call :report-core 'report-csv-sep [])))
     (is (= (ir/execute live 'report-csv-spaced-sep [])
@@ -1277,14 +1280,18 @@
 (deftest fleet-inventory-oracle-call-matches-live
   (let [live (:kir (compiler/compile-source (slurp "kotoba/fleet_inventory_core.kotoba")
                                             :wasm32-kotoba-v1 {}))]
-    (is (= (ir/execute live 'resolve-port
-                       [(oracle/option-i64 nil) (oracle/option-i64 nil)])
-           (oracle/call :fleet-inventory 'resolve-port
-                        [(oracle/option-i64 nil) (oracle/option-i64 nil)])))
-    (is (= (ir/execute live 'resolve-port
-                       [(oracle/option-i64 9010) (oracle/option-i64 9000)])
-           (oracle/call :fleet-inventory 'resolve-port
-                        [(oracle/option-i64 9010) (oracle/option-i64 9000)])))
+    (let [ports0 (oracle/record
+                  [:record :fleet/ports
+                   [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]]
+                  {:node-port nil :fleet-port nil})
+          ports1 (oracle/record
+                  [:record :fleet/ports
+                   [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]]
+                  {:node-port 9010 :fleet-port 9000})]
+      (is (= (ir/execute live 'resolve-port [ports0])
+             (oracle/call :fleet-inventory 'resolve-port [ports0])))
+      (is (= (ir/execute live 'resolve-port [ports1])
+             (oracle/call :fleet-inventory 'resolve-port [ports1]))))
     (is (= (ir/execute live 'health-url [8077])
            (oracle/call :fleet-inventory 'health-url [8077])))
     (is (= (ir/execute live 'selector-is-all? [""])

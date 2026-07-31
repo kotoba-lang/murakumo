@@ -134,7 +134,9 @@
                     (map-indexed
                      (fn [i [now ttl]]
                        [(str "e_" i)
-                        (str "(claim-exp " (long now) " " (opt-i64-form ttl) ")")])
+                        (str "(claim-exp (record-new "
+                             "[:record :token/claim-exp [[:now :i64] [:ttl [:option :i64]]]] "
+                             (long now) " " (opt-i64-form ttl) "))")])
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [now ttl]] (map-indexed vector corpus)]
@@ -155,7 +157,9 @@
                                         (opt-i64-form (:exp cl))
                                         (opt-i64-form nil))]
                          [(str "x_" i)
-                          (str "(if (expired? " exp-form " " (long now) ") 1 0)")]))
+                          (str "(if (expired? (record-new "
+                               "[:record :token/expired [[:exp [:option :i64]] [:now :i64]]] "
+                               exp-form " " (long now) ")) 1 0)")]))
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [cl now]] (map-indexed vector corpus)]

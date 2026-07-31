@@ -809,42 +809,106 @@
     (string-concat " " (status-down-suffix))),
    :param-types [:string]}
   {:name status-row,
-   :params [name health? wasm-exec links-str p2p-port],
+   :params [r],
    :result :string,
    :effects #{},
    :body
-   (string-concat
-    (pad-to
-     (record-new
-      [:record :report/pad-to [[:s :string] [:width :i64]]]
-      name
-      10))
+   (let
+    [name
+     (record-get
+      [:record
+       :report/status-row
+       [[:name :string]
+        [:health [:option :i64]]
+        [:wasm :string]
+        [:links :string]
+        [:p2p-port :i64]]]
+      r
+      :name)
+     health?
+     (record-get
+      [:record
+       :report/status-row
+       [[:name :string]
+        [:health [:option :i64]]
+        [:wasm :string]
+        [:links :string]
+        [:p2p-port :i64]]]
+      r
+      :health)
+     wasm-exec
+     (record-get
+      [:record
+       :report/status-row
+       [[:name :string]
+        [:health [:option :i64]]
+        [:wasm :string]
+        [:links :string]
+        [:p2p-port :i64]]]
+      r
+      :wasm)
+     links-str
+     (record-get
+      [:record
+       :report/status-row
+       [[:name :string]
+        [:health [:option :i64]]
+        [:wasm :string]
+        [:links :string]
+        [:p2p-port :i64]]]
+      r
+      :links)
+     p2p-port
+     (record-get
+      [:record
+       :report/status-row
+       [[:name :string]
+        [:health [:option :i64]]
+        [:wasm :string]
+        [:links :string]
+        [:p2p-port :i64]]]
+      r
+      :p2p-port)
+     f-name
+     (pad-to
+      (record-new
+       [:record :report/pad-to [[:s :string] [:width :i64]]]
+       name
+       10))
+     f-health
+     (pad-to
+      (record-new
+       [:record :report/pad-to [[:s :string] [:width :i64]]]
+       (health-label health?)
+       8))
+     f-wasm
+     (pad-to
+      (record-new
+       [:record :report/pad-to [[:s :string] [:width :i64]]]
+       wasm-exec
+       12))
+     f-links
+     (pad-to
+      (record-new
+       [:record :report/pad-to [[:s :string] [:width :i64]]]
+       links-str
+       6))]
     (string-concat
-     " "
+     f-name
      (string-concat
-      (pad-to
-       (record-new
-        [:record :report/pad-to [[:s :string] [:width :i64]]]
-        (health-label health?)
-        8))
+      " "
       (string-concat
-       " "
+       f-health
        (string-concat
-        (pad-to
-         (record-new
-          [:record :report/pad-to [[:s :string] [:width :i64]]]
-          wasm-exec
-          12))
+        " "
         (string-concat
-         " "
+         f-wasm
          (string-concat
-          (pad-to
-           (record-new
-            [:record :report/pad-to [[:s :string] [:width :i64]]]
-            links-str
-            6))
-          (string-concat " " (i64-str p2p-port))))))))),
-   :param-types [:string [:option :i64] :string :string :i64]}
+          " "
+          (string-concat
+           f-links
+           (string-concat " " (i64-str p2p-port)))))))))),
+   :param-types [[:ref :report/status-row]]}
   {:name command-help,
    :params [],
    :result :string,
@@ -1196,37 +1260,39 @@
  :oracle-value nil,
  :schema-identities
  #:report{:action-detail
-          "ef328f5f9ccfdc59eadd0486b0ecac699828f947a5e53ede7dcc1479c781383a",
+          "1b117ba6aa4776cb69ff89d57aaafc2fcccdf0b80e4ba9c5b11ee8bcf5451b4c",
           :app-row
-          "eac9b7e621b2c80d43b9cc1ea478af3b3948953390ca072490feefe039899866",
+          "aed8b1380b6484f667f7857479ca7bdcf9c34932fd38667a6c11c142e8104ab7",
           :cid
-          "3a84f2ff1b828fe4aa1a9b296abef3a3b990afbf58fcde80e8f1406c7a8d134f",
+          "190624efdd6b32ce1a68ca0236c4dd9f7427301768c219f92f4978914e1ba5bf",
           :count-file
-          "571bd61b5d16239241babaff249b199d16673d62d08e1e15989ffbfb0ad846c4",
+          "8d9f1b5356bbe2a7a51beb5355cf14a45534ebf4d804534da4c3dd22216473e7",
           :csv
-          "4a906a36f333fc281f816b75cd7f612c41d0800045ca0032c06882429caa8831",
+          "6ce4085810d1a98b11085b3301f00b877108b6ecad46a33520aa2b4ac7d674df",
           :join
-          "71e0081b510c0b2b3013a056c756ed94b02d5a4b90078fe4c4bcc78971dd1d1b",
+          "9887b03303ab404bb8a5b572cc067ab687d04bb2bf7e7054f714f3a0cfdaad9a",
           :mesh
-          "b369e2cf1aa667f668db5ecbf5e2de06f3d6a043d19424e64982e40dd66ec151",
+          "2e2242b48e53b86835f3fafab56f624cfee1882d5a2e7bee4280a2f31d9d748e",
           :name-exit
-          "9e2afdca3ae6ffd55ee853698574e04a04111c652c1575318700d0ae03b1565c",
+          "25c1b99ba63ed86f38c967ab5de48a3caff58370f3355f6486c386222804a24d",
           :name-ok
-          "fa986f1cf0bcc727459a3426e7bdab8b5bc96842e6f27f23a563258fac2baf74",
+          "6baff8aa63e788370d5fe30ec1d87df65046d3c1b0103d1c456e7fb7bfc81d91",
           :nodes-row
-          "69aa5a57bd4ee4cf9d1d13956b0adc27cc54661c52d63ff16bfa210f7cb30c83",
+          "ffac98359b541af95970223408ff06cc3aa83269dadd4f0d779331e5431b3eba",
           :pad
-          "a7756eb2ae6c271f369db18212e6106027a1e241fd803c3d9a88b5225113493a",
+          "46bce2a0da76dec19f872f6da373db959b981c85aaa73215ba7bde0ac70713f0",
           :pad-to
-          "594b25c2b6e1539e6a26304fdc3dc04f62cd63d2883387d5da59313de417b8ac",
+          "8ad79b94c866240043b90c40e60330a3bbd13ae906f7004a41fdb990fd7e4791",
           :pair-str
-          "253043a59d6ee868c77a0cbf91c04b42f469f7bafcd781baa4631b853f72342b",
+          "574132b39ec73652c046ff6cc609a4d461347c001ebd1ae16f3d14488e923763",
           :ports
-          "81b6984258c713ba2d8567a58e804b82fd43a428d1bb61a2d324b74122aefa5b",
+          "3870acd865e1c669089982e09afb2d90d1d5f77202fcf54a67c7be530433b0a1",
+          :status-row
+          "31ddebd8d2c13b65df32fea736b9ec446157b13040f2adcfd6bdb8d6f3ac435e",
           :title
-          "b11ac025a1b6a087bf56f17147b794fdf8149a265875a7d17ad02978bf21f314",
+          "d36d6bad748fe4e625df08a28a907b927f9d4f5f31bb9c826d7bfcc05ba92046",
           :triple-str
-          "0ee2b68afd074f58e406f6879ce4b54ff35d23fec69fd95a5aa6654985f5c226"},
+          "0586ad970fc78433f76f706b99c6a9d56f19554efcc64006e78c8a07281f3499"},
  :exports
  [digit-char
   nat-str
@@ -1349,6 +1415,14 @@
             [:running :string]
             [:running-empty :bool]
             [:reason :string]]],
+          :status-row
+          [:record
+           :report/status-row
+           [[:name :string]
+            [:health [:option :i64]]
+            [:wasm :string]
+            [:links :string]
+            [:p2p-port :i64]]],
           :name-ok
           [:record :report/name-ok [[:name :string] [:ok :bool]]],
           :title
