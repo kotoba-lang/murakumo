@@ -1236,14 +1236,20 @@
 
 (deftest product-shell-identity-uses-oracle-results
   (testing "seed preimages via oracle then host sha"
-    (is (= (id/sha256-hex (oracle/call :identity 'seed-node ["op" "asher"]))
-           (id/node-seed "op" {:name "asher"})))
-    (is (= (id/sha256-hex (oracle/call :identity 'seed-p2p ["op" "asher"]))
-           (id/node-p2p-seed "op" {:name "asher"})))
-    (is (= (id/sha256-hex (oracle/call :identity 'seed-x25519 ["op"]))
-           (id/x25519-seed "op")))
-    (is (= (id/sha256-hex (oracle/call :identity 'seed-overlay ["op" "ov1"]))
-           (id/overlay-auth-key "op" "ov1"))))
+    (let [node (oracle/record [:record :identity/node-seed
+                               [[:operator-seed :string] [:node-name :string]]]
+                              {:operator-seed "op" :node-name "asher"})
+          ov (oracle/record [:record :identity/overlay-seed
+                             [[:operator-seed :string] [:overlay-id :string]]]
+                            {:operator-seed "op" :overlay-id "ov1"})]
+      (is (= (id/sha256-hex (oracle/call :identity 'seed-node [node]))
+             (id/node-seed "op" {:name "asher"})))
+      (is (= (id/sha256-hex (oracle/call :identity 'seed-p2p [node]))
+             (id/node-p2p-seed "op" {:name "asher"})))
+      (is (= (id/sha256-hex (oracle/call :identity 'seed-x25519 ["op"]))
+             (id/x25519-seed "op")))
+      (is (= (id/sha256-hex (oracle/call :identity 'seed-overlay [ov]))
+             (id/overlay-auth-key "op" "ov1")))))
   (testing "did-from-output + argv via oracle"
     (is (= "did:key:z" (id/did-from-output " did:key:z\n")))
     (is (= ["/bin/kotoba" "did-derive" "seedhex"]
@@ -1274,8 +1280,11 @@
 (deftest identity-oracle-call-matches-live-compile
   (let [live (:kir (compiler/compile-source (slurp "kotoba/identity_core.kotoba")
                                             :wasm32-kotoba-v1 {}))]
-    (is (= (ir/execute live 'seed-node ["a" "b"])
-           (oracle/call :identity 'seed-node ["a" "b"])))
+    (let [node (oracle/record [:record :identity/node-seed
+                               [[:operator-seed :string] [:node-name :string]]]
+                              {:operator-seed "a" :node-name "b"})]
+      (is (= (ir/execute live 'seed-node [node])
+             (oracle/call :identity 'seed-node [node]))))
     (is (= (ir/execute live 'did-from-output [" x\n"])
            (oracle/call :identity 'did-from-output [" x\n"])))
     (is (= (ir/execute live 'jwt-header-json [])
@@ -1404,10 +1413,16 @@
            (oracle/call :infer-join 'needs-relay? [2 true])))
     (is (= (ir/execute g 'gib [])
            (oracle/call :infer-gc 'gib [])))
-    (is (= (ir/execute g 'need-bytes [100 40])
-           (oracle/call :infer-gc 'need-bytes [100 40])))
-    (is (= (ir/execute g 'comfy-evictable? [10 7])
-           (oracle/call :infer-gc 'comfy-evictable? [10 7])))))
+    ;; T5.2 native guest record wire for gc pure inputs
+    (let [need (oracle/record [:record :gc/need [[:target :i64] [:free :i64]]]
+                              {:target 100 :free 40})
+          comfy (oracle/record [:record :gc/comfy
+                                [[:atime-days :i64] [:keep-days :i64]]]
+                               {:atime-days 10 :keep-days 7})]
+      (is (= (ir/execute g 'need-bytes [need])
+             (oracle/call :infer-gc 'need-bytes [need])))
+      (is (= (ir/execute g 'comfy-evictable? [comfy])
+             (oracle/call :infer-gc 'comfy-evictable? [comfy]))))))
 
 (deftest product-shell-moe-uses-oracle-results
   (testing "capacity-default via oracle"

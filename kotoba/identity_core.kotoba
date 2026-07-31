@@ -1,4 +1,11 @@
 (ns identity-core
+  (:schemas {;; T5.2 native guest record wire for multi-scalar seed/cmd preimages
+             :identity/node-seed [:record :identity/node-seed
+                                  [[:operator-seed :string] [:node-name :string]]]
+             :identity/overlay-seed [:record :identity/overlay-seed
+                                     [[:operator-seed :string] [:overlay-id :string]]]
+             :identity/did-cmd [:record :identity/did-cmd
+                                [[:kotoba :string] [:seed :string]]]})
   (:export [ws? trim seed-node seed-p2p seed-x25519 seed-overlay
             did-derive-cmd did-from-output
             jwt-header-json jwt-payload-json op-token-sig-seg
@@ -58,29 +65,32 @@
   ;; space between argv tokens in did-derive-cmd
   " ")
 
-(defn seed-node [operator-seed :string node-name :string] :string
-  ;; preimage for node-seed before sha256-hex
-  (string-concat operator-seed (string-concat (seed-sep) node-name)))
+(defn seed-node [x [:ref :identity/node-seed]] :string
+  ;; T5.2 native: single node-seed record. Preimage before sha256-hex.
+  (string-concat (record-get x :operator-seed)
+                 (string-concat (seed-sep) (record-get x :node-name))))
 
-(defn seed-p2p [operator-seed :string node-name :string] :string
-  (string-concat (seed-node operator-seed node-name) (seed-p2p-suffix)))
+(defn seed-p2p [x [:ref :identity/node-seed]] :string
+  ;; T5.2 native: same node-seed record as seed-node, + p2p suffix.
+  (string-concat (seed-node x) (seed-p2p-suffix)))
 
 (defn seed-x25519 [operator-seed :string] :string
   (string-concat operator-seed (seed-x25519-suffix)))
 
-(defn seed-overlay [operator-seed :string overlay-id :string] :string
+(defn seed-overlay [x [:ref :identity/overlay-seed]] :string
+  ;; T5.2 native: single overlay-seed record.
   (string-concat
-   operator-seed
+   (record-get x :operator-seed)
    (string-concat (seed-sep)
-                  (string-concat overlay-id (seed-overlay-suffix)))))
+                  (string-concat (record-get x :overlay-id) (seed-overlay-suffix)))))
 
-(defn did-derive-cmd [kotoba :string seed :string] :string
-  ;; space-joined argv for display/parity (cljc returns vector)
+(defn did-derive-cmd [x [:ref :identity/did-cmd]] :string
+  ;; T5.2 native: single did-cmd record. Space-joined argv (cljc → vector).
   (string-concat
-   kotoba
+   (record-get x :kotoba)
    (string-concat (argv-join-sep)
                   (string-concat (did-derive-subcmd)
-                                 (string-concat (argv-join-sep) seed)))))
+                                 (string-concat (argv-join-sep) (record-get x :seed))))))
 
 (defn did-from-output [out :string] :string
   (trim out))

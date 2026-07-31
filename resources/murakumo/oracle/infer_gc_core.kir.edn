@@ -1,57 +1,164 @@
-{:format :kotoba.kir/v3,
+{:format :kotoba.kir/v4,
  :signature nil,
  :functions
- [{:name gib, :params [], :result :i64, :effects #{}, :body 1073741824}
+ [{:name gib,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1073741824,
+   :param-types []}
   {:name default-target-free,
    :params [],
    :result :i64,
    :effects #{},
-   :body 21474836480}
+   :body 21474836480,
+   :param-types []}
   {:name default-comfy-keep-days,
    :params [],
    :result :i64,
    :effects #{},
-   :body 7}
+   :body 7,
+   :param-types []}
   {:name default-hf-keep,
    :params [],
    :result :i64,
    :effects #{},
-   :body 2}
+   :body 2,
+   :param-types []}
   {:name need-bytes,
-   :params [target free],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (let [d (- target free)] (if (< d 0) 0 d))}
+   :body
+   (let
+    [d
+     (-
+      (record-get
+       [:record :gc/need [[:target :i64] [:free :i64]]]
+       x
+       :target)
+      (record-get
+       [:record :gc/need [[:target :i64] [:free :i64]]]
+       x
+       :free))]
+    (if (< d 0) 0 d)),
+   :param-types [[:ref :gc/need]]}
   {:name free-after,
-   :params [free reclaimed],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (+ free reclaimed)}
+   :body
+   (+
+    (record-get
+     [:record :gc/free-after [[:free :i64] [:reclaimed :i64]]]
+     x
+     :free)
+    (record-get
+     [:record :gc/free-after [[:free :i64] [:reclaimed :i64]]]
+     x
+     :reclaimed)),
+   :param-types [[:ref :gc/free-after]]}
   {:name target-met?,
-   :params [free reclaimed target],
-   :result :bool,
-   :effects #{},
-   :body (if (< (+ free reclaimed) target) false true)}
-  {:name rank-better?,
-   :params [atime1 bytes1 atime2 bytes2],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (if
-    (< atime2 atime1)
-    true
-    (if (< atime1 atime2) false (if (< bytes2 bytes1) true false)))}
-  {:name comfy-evictable?,
-   :params [atime-days keep-days],
-   :result :bool,
-   :effects #{},
-   :body
-   (if
-    (< atime-days 0)
+    (<
+     (+
+      (record-get
+       [:record
+        :gc/target
+        [[:free :i64] [:reclaimed :i64] [:target :i64]]]
+       x
+       :free)
+      (record-get
+       [:record
+        :gc/target
+        [[:free :i64] [:reclaimed :i64] [:target :i64]]]
+       x
+       :reclaimed))
+     (record-get
+      [:record
+       :gc/target
+       [[:free :i64] [:reclaimed :i64] [:target :i64]]]
+      x
+      :target))
     false
-    (if (< keep-days atime-days) true false))}],
+    true),
+   :param-types [[:ref :gc/target]]}
+  {:name rank-better?,
+   :params [x],
+   :result :bool,
+   :effects #{},
+   :body
+   (let
+    [atime1
+     (record-get
+      [:record
+       :gc/rank
+       [[:atime1 :i64] [:bytes1 :i64] [:atime2 :i64] [:bytes2 :i64]]]
+      x
+      :atime1)
+     bytes1
+     (record-get
+      [:record
+       :gc/rank
+       [[:atime1 :i64] [:bytes1 :i64] [:atime2 :i64] [:bytes2 :i64]]]
+      x
+      :bytes1)
+     atime2
+     (record-get
+      [:record
+       :gc/rank
+       [[:atime1 :i64] [:bytes1 :i64] [:atime2 :i64] [:bytes2 :i64]]]
+      x
+      :atime2)
+     bytes2
+     (record-get
+      [:record
+       :gc/rank
+       [[:atime1 :i64] [:bytes1 :i64] [:atime2 :i64] [:bytes2 :i64]]]
+      x
+      :bytes2)]
+    (if
+     (< atime2 atime1)
+     true
+     (if (< atime1 atime2) false (if (< bytes2 bytes1) true false)))),
+   :param-types [[:ref :gc/rank]]}
+  {:name comfy-evictable?,
+   :params [x],
+   :result :bool,
+   :effects #{},
+   :body
+   (let
+    [atime-days
+     (record-get
+      [:record :gc/comfy [[:atime-days :i64] [:keep-days :i64]]]
+      x
+      :atime-days)
+     keep-days
+     (record-get
+      [:record :gc/comfy [[:atime-days :i64] [:keep-days :i64]]]
+      x
+      :keep-days)]
+    (if
+     (< atime-days 0)
+     false
+     (if (< keep-days atime-days) true false))),
+   :param-types [[:ref :gc/comfy]]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:gc{:comfy
+      "fe0bd36ffc9ede0ec50177f4c98050bc394c24ca432389a7c5b5dfb74e2c6e7a",
+      :free-after
+      "31a937a4f4277477f94d219658113968a1a8cd986886c88b842411e7d896d8b5",
+      :need
+      "c75db35f9c0b90bc5ad216486993b19c1807e5644d298f1f6c3b2763618960d0",
+      :rank
+      "e7886f5af4e7dd02f77ff5f33b5f05f802a4aabdc4471f862e081e5668f0a9cc",
+      :target
+      "6a39f6a0027d12b4795cc9b259e6065c36d607a34181e6019157681190404e45"},
  :exports
  [gib
   default-target-free
@@ -62,7 +169,20 @@
   target-met?
   rank-better?
   comfy-evictable?],
- :schemas nil,
+ :schemas
+ #:gc{:need [:record :gc/need [[:target :i64] [:free :i64]]],
+      :free-after
+      [:record :gc/free-after [[:free :i64] [:reclaimed :i64]]],
+      :target
+      [:record
+       :gc/target
+       [[:free :i64] [:reclaimed :i64] [:target :i64]]],
+      :rank
+      [:record
+       :gc/rank
+       [[:atime1 :i64] [:bytes1 :i64] [:atime2 :i64] [:bytes2 :i64]]],
+      :comfy
+      [:record :gc/comfy [[:atime-days :i64] [:keep-days :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}
