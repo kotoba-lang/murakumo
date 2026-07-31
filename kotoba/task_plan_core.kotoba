@@ -41,7 +41,18 @@
              :task/failed [:record :task/failed
                            [[:exit [:option :i64]]
                             [:timeout :bool]
-                            [:error [:option :string]]]]})
+                            [:error [:option :string]]]]
+             ;; T5.2 residual tournament multi-arg
+             :task/capacity-in [:record :task/capacity-in
+                                [[:node-slots :i64] [:slots-per :i64] [:cores :i64]]]
+             :task/pick2 [:record :task/pick2
+                          [[:ok0 :bool] [:ok1 :bool]
+                           [:fill0 :i64] [:fill1 :i64]
+                           [:load0 :i64] [:load1 :i64]]]
+             :task/assign2-in [:record :task/assign2-in
+                               [[:load0 :i64] [:load1 :i64]
+                                [:ok0 :bool] [:ok1 :bool]
+                                [:fill0 :i64] [:fill1 :i64]]]})
   (:export [default-max-slots default-max-attempts default-timeout-ms
             slots failed? can-retry?
             task-eligible? fill-milli better-fill?
@@ -80,12 +91,15 @@
 
 (defn default-timeout-ms [] :i64 120000)
 
-(defn capacity [node-slots :i64 slots-per :i64 cores :i64] :i64
-  (if (< node-slots 0)
-    (if (< slots-per 0)
-      (if (< cores 0) 1 cores)
-      slots-per)
-    node-slots))
+(defn capacity [c [:ref :task/capacity-in]] :i64
+  (let [node-slots (record-get c :node-slots)
+        slots-per (record-get c :slots-per)
+        cores (record-get c :cores)]
+    (if (< node-slots 0)
+      (if (< slots-per 0)
+        (if (< cores 0) 1 cores)
+        slots-per)
+      node-slots)))
 
 (defn slots [s [:ref :task/slots]] :i64
   ;; T5.2 native: five capacity inputs on one record.
@@ -95,7 +109,7 @@
         max-slots (record-get s :max-slots)
         cores (record-get s :cores)]
     (if (< budget-slots 0)
-      (let [cap (capacity node-slots slots-per cores)
+      (let [cap (capacity (record-new [:ref :task/capacity-in] node-slots slots-per cores))
             m (if (< max-slots 0) 8 max-slots)
             capped (if (< cap m) cap m)]
         (if (< capped 1) 1 capped))
@@ -240,26 +254,34 @@
 (defn flags3-record [v0 :bool v1 :bool v2 :bool] [:ref :task/flags3]
   (record-new [:ref :task/flags3] v0 v1 v2))
 
-(defn pick-task-idx-2 [ok0 :bool ok1 :bool fill0 :i64 fill1 :i64
-                       loads [:ref :task/pair]] :i64
-  (let [load0 (record-get loads :a)
-        load1 (record-get loads :b)]
+(defn pick-task-idx-2 [p [:ref :task/pick2]] :i64
+  (let [ok0 (record-get p :ok0)
+        ok1 (record-get p :ok1)
+        fill0 (record-get p :fill0)
+        fill1 (record-get p :fill1)
+        load0 (record-get p :load0)
+        load1 (record-get p :load1)]
     (if ok0
       (if ok1
-        (let [b (task-score-code (record-new [:ref :task/score] fill0 load0 0 fill1 load1))]
+        (let [b (task-score-code
+                 (record-new [:ref :task/score] fill0 load0 0 fill1 load1))]
           (if (= b 2)
             0
             (if (= b 1) 0 1)))
         0)
       (if ok1 1 -1))))
 
-(defn assign-task-step-2 [load0 :i64 load1 :i64 ok0 :bool ok1 :bool
-                          fills [:ref :task/pair]] [:ref :task/assign2]
-  (let [fill0 (record-get fills :a)
-        fill1 (record-get fills :b)
+(defn assign-task-step-2 [x [:ref :task/assign2-in]] [:ref :task/assign2]
+  (let [load0 (record-get x :load0)
+        load1 (record-get x :load1)
+        ok0 (record-get x :ok0)
+        ok1 (record-get x :ok1)
+        fill0 (record-get x :fill0)
+        fill1 (record-get x :fill1)
         p (if ok0
             (if ok1
-              (let [b (task-score-code (record-new [:ref :task/score] fill0 load0 0 fill1 load1))]
+              (let [b (task-score-code
+                       (record-new [:ref :task/score] fill0 load0 0 fill1 load1))]
                 (if (= b 2) 0 (if (= b 1) 0 1)))
               0)
             (if ok1 1 -1))
