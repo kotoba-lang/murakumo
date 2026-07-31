@@ -141,6 +141,10 @@
     [:not-excluded :bool] [:allowlist-ok :bool]
     [:mem-bytes :i64] [:min-mem :i64]]])
 
+(def ^:private retry-schema
+  "T5.2 native guest record for can-retry?."
+  [:record :task/retry [[:attempt :i64] [:max-attempts :i64]]])
+
 (defn- eligibility-fields
   "Host projects set/map membership + mem bounds into eligibility fields."
   [node {:keys [placement min-mem-bytes exclude-nodes nodes] :as task}]
@@ -238,7 +242,7 @@
 
 (defn failed?
   "Process could not start, timed out, or exited non-zero. Profile 5: :bool.
-   T5.2: structural result map → call-record."
+   T5.2: structural result map → call-record (option fields stay positional)."
   [{:keys [exit timeout? error] :as r}]
   (oracle/bool->host
    (o-record 'failed?
@@ -259,10 +263,10 @@
                  (let [attempt (or (:attempt task) 1)
                        can? (oracle/bool->host
                              (o-record 'can-retry?
-                                       {:attempt attempt
-                                        :max-attempts max-attempts}
-                                       [[:attempt :i64]
-                                        [:max-attempts :i64]]))]
+                                       {:retry (oracle/record retry-schema
+                                                              {:attempt attempt
+                                                               :max-attempts max-attempts})}
+                                       [[:retry :raw]]))]
                    (when can?
                      (-> task
                          (assoc :attempt (long (o-record 'attempt-next
