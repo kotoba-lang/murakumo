@@ -21,6 +21,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 (def exclude-join-sep
   "CSV join for :exclude-nodes in unschedulable detail. Kotoba SSoT."
   (o 'exclude-join-sep []))
@@ -49,7 +55,8 @@
    :connect-timeout-s 8})
 
 (defn slots
-  "Concurrent task capacity of `node`. Kotoba `slots` with projected i64s."
+  "Concurrent task capacity of `node`. Kotoba `slots` with projected i64s.
+   T5.2: structural capacity map → call-record."
   [node opts]
   (let [merged (merge default-opts opts)
         budget (if (contains? (or (:slots-by-node opts) {}) (:name node))
@@ -59,7 +66,17 @@
         slots-per (opt-i64 (:slots-per-node merged))
         max-slots (long (or (:max-slots merged) 8))
         cores (opt-i64 (:cores node))]
-    (long (o 'slots [budget node-slots slots-per max-slots cores]))))
+    (long (o-record 'slots
+                    {:budget budget
+                     :node-slots node-slots
+                     :slots-per slots-per
+                     :max-slots max-slots
+                     :cores cores}
+                    [[:budget :i64]
+                     [:node-slots :i64]
+                     [:slots-per :i64]
+                     [:max-slots :i64]
+                     [:cores :i64]]))))
 
 (defn admit
   "Operational admission gate, applied BEFORE placement."
@@ -154,13 +171,20 @@
    (str (:name node))])
 
 (defn- why-unschedulable [task]
-  "Reject detail string via kotoba `unschedulable-detail`."
+  "Reject detail string via kotoba `unschedulable-detail`.
+   T5.2: structural detail map → call-record."
   (let [placement (pr-str (:placement task))
         excluding (if (seq (:exclude-nodes task))
                     (str/join exclude-join-sep (:exclude-nodes task))
                     "")
         min-mem (if-let [m (:min-mem-bytes task)] (str m) "")]
-    (o 'unschedulable-detail [placement excluding min-mem])))
+    (o-record 'unschedulable-detail
+              {:placement placement
+               :excluding excluding
+               :min-mem min-mem}
+              [[:placement :string]
+               [:excluding :string]
+               [:min-mem :string]])))
 
 (defn- assign-1
   "Place one task onto the currently least-filled eligible node."
@@ -201,13 +225,17 @@
         (range n)))
 
 (defn failed?
-  "Process could not start, timed out, or exited non-zero. Profile 5: :bool."
+  "Process could not start, timed out, or exited non-zero. Profile 5: :bool.
+   T5.2: structural result map → call-record."
   [{:keys [exit timeout? error] :as r}]
   (oracle/bool->host
-   (o 'failed?
-      [(oracle/option-i64 exit)
-       (boolean timeout?)
-       (oracle/option-string error)])))
+   (o-record 'failed?
+             {:exit exit
+              :timeout? timeout?
+              :error error}
+             [[:exit :option-i64]
+              [:timeout? :bool]
+              [:error :option-string]])))
 
 (defn retry-tasks
   "Tasks to re-submit from `results`, one attempt later."
@@ -218,8 +246,11 @@
          (keep (fn [{:keys [task node]}]
                  (let [attempt (or (:attempt task) 1)
                        can? (oracle/bool->host
-                             (o 'can-retry?
-                                [(long attempt) (long max-attempts)]))]
+                             (o-record 'can-retry?
+                                       {:attempt attempt
+                                        :max-attempts max-attempts}
+                                       [[:attempt :i64]
+                                        [:max-attempts :i64]]))]
                    (when can?
                      (-> task
                          (assoc :attempt (long (o 'attempt-next [(long attempt)])))

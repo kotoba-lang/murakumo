@@ -18,6 +18,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 (defn- tier-code
   "0 browser | 1 wasm | 2 native (default)."
   [tier]
@@ -66,20 +72,27 @@
   (get tiers (or (:tier caps) :native)))
 
 (defn can?
-  "Can a joiner with `caps` take work of `kind`? Profile 5: guest :bool."
+  "Can a joiner with `caps` take work of `kind`? Profile 5: guest :bool.
+   T5.2: structural tier+kind → call-record."
   [caps kind]
   (oracle/bool->host
-   (o 'can? [(oracle/as-i64 (tier-code (:tier (tier-of caps))))
-             (name kind)])))
+   (o-record 'can?
+             {:tier-code (tier-code (:tier (tier-of caps)))
+              :kind (name kind)}
+             [[:tier-code :i64]
+              [:kind :string]])))
 
 (defn needs-relay?
   "Browser/wasm ALWAYS need a relay (no inbound). Native only when un-reachable.
-   Profile 5: guest :bool."
+   Profile 5: guest :bool.
+   T5.2: structural tier+reach → call-record."
   [caps]
   (oracle/bool->host
-   (o 'needs-relay?
-      [(oracle/as-i64 (tier-code (:tier (tier-of caps))))
-       (true? (:inbound-reachable? caps))])))
+   (o-record 'needs-relay?
+             {:tier-code (tier-code (:tier (tier-of caps)))
+              :inbound-reachable? (true? (:inbound-reachable? caps))}
+             [[:tier-code :i64]
+              [:inbound-reachable? :bool]])))
 
 ;; ---------------------------------------------------------------------------
 ;; Capability provenance (ADR-2607319500 D3)
@@ -167,9 +180,11 @@
   (let [t (tier-of caps)
         tmax (:max-resident-bytes t)
         max-res (oracle/i64->host
-                 (o 'clamp-resident
-                    [(oracle/option-i64 mem-bytes)
-                     (oracle/as-i64 tmax)]))]
+                 (o-record 'clamp-resident
+                           {:mem-bytes mem-bytes
+                            :tmax tmax}
+                           [[:mem-bytes :option-i64]
+                            [:tmax :i64]]))]
     {:node/name name
      :node/did did
      :node/tier (:tier t)
@@ -185,16 +200,20 @@
 
 (defn eligible-for-work?
   "A node can take a job when its tier :can covers work-kind AND residency fits.
-   Profile 5: can-kind arg and result are :bool."
+   Profile 5: can-kind arg and result are :bool.
+   T5.2: structural eligibility map → call-record."
   [node {:keys [work-kind resident-bytes] :as _job}]
   (let [can-kind (boolean (some #{work-kind} (:node/can node)))
         max-res (or (get-in node [:node/caps :max-resident-bytes]) 0)
         res (or resident-bytes 0)]
     (oracle/bool->host
-     (o 'eligible-for-work?
-        [can-kind
-         (oracle/as-i64 max-res)
-         (oracle/as-i64 res)]))))
+     (o-record 'eligible-for-work?
+               {:can-kind can-kind
+                :max-res max-res
+                :res res}
+               [[:can-kind :bool]
+                [:max-res :i64]
+                [:res :i64]]))))
 
 (defn partition-work
   "Route a batch of jobs across enrolled nodes by tier."

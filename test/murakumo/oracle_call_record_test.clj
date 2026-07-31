@@ -24,7 +24,11 @@
             [murakumo.overlay.crypto :as crypto]
             [murakumo.kekkai.gate :as gate]
             [murakumo.overlay.driver :as driver]
-            [murakumo.overlay.runtime :as runtime]))
+            [murakumo.overlay.runtime :as runtime]
+            [murakumo.task.plan :as task]
+            [murakumo.infer.moe :as moe]
+            [murakumo.infer.join :as join]
+            [murakumo.infer.gc :as gc]))
 
 (deftest map->args-projects-kinds
   (is (= ["a" "b"]
@@ -320,3 +324,54 @@
     (is (true? (runtime/known-adapter? runtime/adapter-quic)))
     (is (string? (runtime/scheme-host "quic://asher:4001")))
     (is (pos? (get runtime/default-port-by-kind :quic)))))
+
+(deftest call-record-task-infer-wave8
+  "T5.2 wave 8: task.plan / infer.moe|join|gc multi-arg + driver dial-ok-reason."
+  (when (oracle/ready? :task-plan)
+    (is (true? (task/failed? {:exit 1})))
+    (is (true? (task/failed? {:error "x"})))
+    (is (false? (task/failed? {:exit 0})))
+    (is (pos? (task/slots {:name "n" :cores 8 :slots 4} {})))
+    (let [rt (task/retry-tasks
+              [{:task {:id "t1" :attempt 1} :node "a" :exit 1}]
+              {:max-attempts 3})]
+      (is (= 1 (count rt)))
+      (is (= 2 (:attempt (first rt))))))
+  (when (oracle/ready? :infer-moe)
+    (let [qwen {:model/experts 512 :model/active-experts 10
+                :model/moe-shared-expert? true
+                :model/weight-bytes (* 10 1024 1024 1024)}
+          v (moe/verdict qwen)]
+      (is (= :recommended (:verdict v)))
+      (is (number? (moe/expert-ratio qwen)))
+      (is (pos? (moe/resident-bytes-estimate qwen 32)))))
+  (when (oracle/ready? :infer-join)
+    (is (true? (join/can? {:tier :native} :host-large-model)))
+    (is (false? (join/can? {:tier :browser} :host-large-model)))
+    (is (true? (join/needs-relay? {:tier :browser})))
+    (is (false? (join/needs-relay? {:tier :native :inbound-reachable? true})))
+    (let [en (join/enrollment {:name "a" :did "did:key:x" :tier :native
+                               :mem-bytes (* 16 1024 1024 1024)})]
+      (is (map? en))
+      (is (pos? (get-in en [:node/caps :max-resident-bytes])))
+      (is (true? (join/eligible-for-work?
+                  en {:work-kind :host-large-model :resident-bytes 1024})))))
+  (when (oracle/ready? :infer-gc)
+    (let [p (gc/plan
+             [{:path "/tmp/a" :class :rpc-cache :bytes 100 :atime-days 30}
+              {:path "/tmp/b" :class :comfy-temp :bytes 50 :atime-days 10}]
+             0
+             {:target-free-bytes 1000 :comfy-keep-days 3 :hf-keep 1
+              :evict-order [:rpc-cache :comfy-temp]})]
+      (is (map? p))
+      (is (vector? (:evict p)))
+      (is (boolean? (:target-met? p)))))
+  (when (oracle/ready? :overlay-driver)
+    (let [ok (driver/dial-result
+              {:command :dial :overlay "o" :node "n" :name "a"
+               :from "f" :to "t" :capability "c"
+               :direct "quic://h:1" :transport "quic"})
+          bad (driver/dial-result {:command :other})]
+      (is (true? (:ok? ok)))
+      (is (false? (:ok? bad)))
+      (is (= :unknown-command (:reason bad))))))

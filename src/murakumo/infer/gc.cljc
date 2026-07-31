@@ -17,6 +17,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 (def GiB
   (oracle/i64->host (o 'gib [])))
 
@@ -34,14 +40,19 @@
   [(- (or atime-days 0)) (- (or bytes 0))])
 
 (defn- rank-better?
-  "True when entry1 should evict before entry2."
+  "True when entry1 should evict before entry2.
+   T5.2: structural entry pair → call-record."
   [e1 e2]
   (oracle/bool->host
-   (o 'rank-better?
-      [(oracle/as-i64 (or (:atime-days e1) 0))
-       (oracle/as-i64 (or (:bytes e1) 0))
-       (oracle/as-i64 (or (:atime-days e2) 0))
-       (oracle/as-i64 (or (:bytes e2) 0))])))
+   (o-record 'rank-better?
+             {:atime1 (or (:atime-days e1) 0)
+              :bytes1 (or (:bytes e1) 0)
+              :atime2 (or (:atime-days e2) 0)
+              :bytes2 (or (:bytes e2) 0)}
+             [[:atime1 :i64]
+              [:bytes1 :i64]
+              [:atime2 :i64]
+              [:bytes2 :i64]])))
 
 (defn- hf-lru-evictable
   "Of the :hf-stale entries, mark the (count - keep) least-recently-used as
@@ -58,8 +69,9 @@
         (merge default-policy policy)
         free (or free-bytes 0)
         need (oracle/i64->host
-              (o 'need-bytes
-                 [(oracle/as-i64 target-free-bytes) (oracle/as-i64 free)]))
+              (o-record 'need-bytes
+                        {:target target-free-bytes :free free}
+                        [[:target :i64] [:free :i64]]))
         candidates (reduce
                     (fn [acc cls]
                       (concat acc
@@ -72,9 +84,11 @@
                                           (fn [e]
                                             (and (= :comfy-temp (:class e))
                                                  (oracle/bool->host
-                                                  (o 'comfy-evictable?
-                                                     [(oracle/as-i64 (or (:atime-days e) 0))
-                                                      (oracle/as-i64 comfy-keep-days)]))))
+                                                  (o-record 'comfy-evictable?
+                                                            {:atime-days (or (:atime-days e) 0)
+                                                             :keep-days comfy-keep-days}
+                                                            [[:atime-days :i64]
+                                                             [:keep-days :i64]]))))
                                           entries))
                                 :hf-stale
                                 (sort-by rank (hf-lru-evictable
@@ -89,12 +103,17 @@
                     [(conj ev e) (+ got (or (:bytes e) 0))]))
                 [[] 0] candidates)
         free-after (oracle/i64->host
-                    (o 'free-after [(oracle/as-i64 free) (oracle/as-i64 reclaimed)]))
+                    (o-record 'free-after
+                              {:free free :reclaimed reclaimed}
+                              [[:free :i64] [:reclaimed :i64]]))
         target-met? (oracle/bool->host
-                     (o 'target-met?
-                        [(oracle/as-i64 free)
-                         (oracle/as-i64 reclaimed)
-                         (oracle/as-i64 target-free-bytes)]))]
+                     (o-record 'target-met?
+                               {:free free
+                                :reclaimed reclaimed
+                                :target target-free-bytes}
+                               [[:free :i64]
+                                [:reclaimed :i64]
+                                [:target :i64]]))]
     {:evict (vec evict)
      :reclaim-bytes reclaimed
      :free-after free-after
