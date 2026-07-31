@@ -156,6 +156,13 @@
                  :postproc-pool (get actual (str label "-p"))}]
         (is (= cljc got) (str label " cljc=" cljc " kotoba=" got))))))
 
+(def ^:private demand-ty
+  "[:record :rebalance/demand [[:text :i64] [:image :i64] [:video :i64] [:audio :i64] [:postproc :i64]]]")
+
+(defn- pool-demand-call [t i v a p]
+  (str "(pool-demand-record (record-new " demand-ty " "
+       t " " i " " v " " a " " p "))"))
+
 (deftest pool-demand-record-matches-cljc
   (let [cases [["d0" 0 0 0 0 0]
                ["d1" 5 2 1 0 3]
@@ -164,8 +171,7 @@
                ["d4" 10 0 0 5 2]]
         kotoba-cases (into {}
                            (mapcat (fn [[label t i v a p]]
-                                     (let [r (str "(pool-demand-record "
-                                                  t " " i " " v " " a " " p ")")]
+                                     (let [r (pool-demand-call t i v a p)]
                                        [[(str label "-t") (str "(pool-weight-text " r ")")]
                                         [(str label "-m") (str "(pool-weight-media " r ")")]
                                         [(str label "-p") (str "(pool-weight-postproc " r ")")]]))

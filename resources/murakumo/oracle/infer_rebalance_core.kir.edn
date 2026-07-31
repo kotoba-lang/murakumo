@@ -767,12 +767,66 @@
     (+ (seats-of-media in) (seats-of-postproc in))),
    :param-types [[:ref :rebalance/seats-in]]}
   {:name pool-demand-record,
-   :params [text image video audio postproc],
+   :params [d],
    :result [:ref :rebalance/lanes],
    :effects #{},
    :body
    (let
-    [wt text wm (+ image (+ video audio)) wp postproc]
+    [wt
+     (record-get
+      [:record
+       :rebalance/demand
+       [[:text :i64]
+        [:image :i64]
+        [:video :i64]
+        [:audio :i64]
+        [:postproc :i64]]]
+      d
+      :text)
+     wm
+     (+
+      (record-get
+       [:record
+        :rebalance/demand
+        [[:text :i64]
+         [:image :i64]
+         [:video :i64]
+         [:audio :i64]
+         [:postproc :i64]]]
+       d
+       :image)
+      (+
+       (record-get
+        [:record
+         :rebalance/demand
+         [[:text :i64]
+          [:image :i64]
+          [:video :i64]
+          [:audio :i64]
+          [:postproc :i64]]]
+        d
+        :video)
+       (record-get
+        [:record
+         :rebalance/demand
+         [[:text :i64]
+          [:image :i64]
+          [:video :i64]
+          [:audio :i64]
+          [:postproc :i64]]]
+        d
+        :audio)))
+     wp
+     (record-get
+      [:record
+       :rebalance/demand
+       [[:text :i64]
+        [:image :i64]
+        [:video :i64]
+        [:audio :i64]
+        [:postproc :i64]]]
+      d
+      :postproc)]
     (record-new
      [:record
       :rebalance/lanes
@@ -780,7 +834,7 @@
      wt
      wm
      wp)),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+   :param-types [[:ref :rebalance/demand]]}
   {:name pool-weight-text,
    :params [w],
    :result :i64,
@@ -1311,58 +1365,7 @@
    :params [d],
    :result [:ref :rebalance/lanes],
    :effects #{},
-   :body
-   (pool-demand-record
-    (record-get
-     [:record
-      :rebalance/demand
-      [[:text :i64]
-       [:image :i64]
-       [:video :i64]
-       [:audio :i64]
-       [:postproc :i64]]]
-     d
-     :text)
-    (record-get
-     [:record
-      :rebalance/demand
-      [[:text :i64]
-       [:image :i64]
-       [:video :i64]
-       [:audio :i64]
-       [:postproc :i64]]]
-     d
-     :image)
-    (record-get
-     [:record
-      :rebalance/demand
-      [[:text :i64]
-       [:image :i64]
-       [:video :i64]
-       [:audio :i64]
-       [:postproc :i64]]]
-     d
-     :video)
-    (record-get
-     [:record
-      :rebalance/demand
-      [[:text :i64]
-       [:image :i64]
-       [:video :i64]
-       [:audio :i64]
-       [:postproc :i64]]]
-     d
-     :audio)
-    (record-get
-     [:record
-      :rebalance/demand
-      [[:text :i64]
-       [:image :i64]
-       [:video :i64]
-       [:audio :i64]
-       [:postproc :i64]]]
-     d
-     :postproc)),
+   :body (pool-demand-record d),
    :param-types [[:ref :rebalance/demand]]}
   {:name workers-count,
    :params [online],
