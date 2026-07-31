@@ -1391,10 +1391,16 @@
            (oracle/call :infer-join 'needs-relay? [2 true])))
     (is (= (ir/execute g 'gib [])
            (oracle/call :infer-gc 'gib [])))
-    (is (= (ir/execute g 'need-bytes [100 40])
-           (oracle/call :infer-gc 'need-bytes [100 40])))
-    (is (= (ir/execute g 'comfy-evictable? [10 7])
-           (oracle/call :infer-gc 'comfy-evictable? [10 7])))))
+    ;; T5.2 native guest record wire for gc pure inputs
+    (let [need (oracle/record [:record :gc/need [[:target :i64] [:free :i64]]]
+                              {:target 100 :free 40})
+          comfy (oracle/record [:record :gc/comfy
+                                [[:atime-days :i64] [:keep-days :i64]]]
+                               {:atime-days 10 :keep-days 7})]
+      (is (= (ir/execute g 'need-bytes [need])
+             (oracle/call :infer-gc 'need-bytes [need])))
+      (is (= (ir/execute g 'comfy-evictable? [comfy])
+             (oracle/call :infer-gc 'comfy-evictable? [comfy]))))))
 
 (deftest product-shell-moe-uses-oracle-results
   (testing "capacity-default via oracle"

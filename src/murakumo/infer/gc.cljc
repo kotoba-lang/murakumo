@@ -23,6 +23,23 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private need-schema
+  "T5.2 native guest record for need-bytes."
+  [:record :gc/need [[:target :i64] [:free :i64]]])
+
+(def ^:private free-after-schema
+  [:record :gc/free-after [[:free :i64] [:reclaimed :i64]]])
+
+(def ^:private target-schema
+  [:record :gc/target [[:free :i64] [:reclaimed :i64] [:target :i64]]])
+
+(def ^:private rank-schema
+  [:record :gc/rank
+   [[:atime1 :i64] [:bytes1 :i64] [:atime2 :i64] [:bytes2 :i64]]])
+
+(def ^:private comfy-schema
+  [:record :gc/comfy [[:atime-days :i64] [:keep-days :i64]]])
+
 (def GiB
   (oracle/i64->host (o 'gib [])))
 
@@ -41,18 +58,16 @@
 
 (defn- rank-better?
   "True when entry1 should evict before entry2.
-   T5.2: structural entry pair → call-record."
+   T5.2 native guest record wire: single :gc/rank argument."
   [e1 e2]
   (oracle/bool->host
    (o-record 'rank-better?
-             {:atime1 (or (:atime-days e1) 0)
-              :bytes1 (or (:bytes e1) 0)
-              :atime2 (or (:atime-days e2) 0)
-              :bytes2 (or (:bytes e2) 0)}
-             [[:atime1 :i64]
-              [:bytes1 :i64]
-              [:atime2 :i64]
-              [:bytes2 :i64]])))
+             {:pair (oracle/record rank-schema
+                                   {:atime1 (or (:atime-days e1) 0)
+                                    :bytes1 (or (:bytes e1) 0)
+                                    :atime2 (or (:atime-days e2) 0)
+                                    :bytes2 (or (:bytes e2) 0)})}
+             [[:pair :raw]])))
 
 (defn- hf-lru-evictable
   "Of the :hf-stale entries, mark the (count - keep) least-recently-used as
@@ -70,8 +85,10 @@
         free (or free-bytes 0)
         need (oracle/i64->host
               (o-record 'need-bytes
-                        {:target target-free-bytes :free free}
-                        [[:target :i64] [:free :i64]]))
+                        {:need (oracle/record need-schema
+                                              {:target target-free-bytes
+                                               :free free})}
+                        [[:need :raw]]))
         candidates (reduce
                     (fn [acc cls]
                       (concat acc
@@ -85,10 +102,12 @@
                                             (and (= :comfy-temp (:class e))
                                                  (oracle/bool->host
                                                   (o-record 'comfy-evictable?
-                                                            {:atime-days (or (:atime-days e) 0)
-                                                             :keep-days comfy-keep-days}
-                                                            [[:atime-days :i64]
-                                                             [:keep-days :i64]]))))
+                                                            {:comfy
+                                                             (oracle/record
+                                                              comfy-schema
+                                                              {:atime-days (or (:atime-days e) 0)
+                                                               :keep-days comfy-keep-days})}
+                                                            [[:comfy :raw]]))))
                                           entries))
                                 :hf-stale
                                 (sort-by rank (hf-lru-evictable
@@ -104,16 +123,17 @@
                 [[] 0] candidates)
         free-after (oracle/i64->host
                     (o-record 'free-after
-                              {:free free :reclaimed reclaimed}
-                              [[:free :i64] [:reclaimed :i64]]))
+                              {:state (oracle/record free-after-schema
+                                                     {:free free
+                                                      :reclaimed reclaimed})}
+                              [[:state :raw]]))
         target-met? (oracle/bool->host
                      (o-record 'target-met?
-                               {:free free
-                                :reclaimed reclaimed
-                                :target target-free-bytes}
-                               [[:free :i64]
-                                [:reclaimed :i64]
-                                [:target :i64]]))]
+                               {:check (oracle/record target-schema
+                                                      {:free free
+                                                       :reclaimed reclaimed
+                                                       :target target-free-bytes})}
+                               [[:check :raw]]))]
     {:evict (vec evict)
      :reclaim-bytes reclaimed
      :free-after free-after

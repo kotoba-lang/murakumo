@@ -1,4 +1,12 @@
 (ns infer-gc-core
+  (:schemas {;; T5.2 native guest record wire: multi-scalar pure inputs fold to records.
+             :gc/need [:record :gc/need [[:target :i64] [:free :i64]]]
+             :gc/free-after [:record :gc/free-after [[:free :i64] [:reclaimed :i64]]]
+             :gc/target [:record :gc/target
+                         [[:free :i64] [:reclaimed :i64] [:target :i64]]]
+             :gc/rank [:record :gc/rank
+                       [[:atime1 :i64] [:bytes1 :i64] [:atime2 :i64] [:bytes2 :i64]]]
+             :gc/comfy [:record :gc/comfy [[:atime-days :i64] [:keep-days :i64]]]})
   (:export [gib default-target-free default-comfy-keep-days default-hf-keep
             need-bytes free-after target-met? rank-better? comfy-evictable?]))
 
@@ -16,28 +24,40 @@
 
 (defn default-hf-keep [] :i64 2)
 
-(defn need-bytes [target :i64 free :i64] :i64
-  ;; cljc: (max 0 (- target-free-bytes free-bytes))
-  (let [d (- target free)]
+(defn need-bytes [x [:ref :gc/need]] :i64
+  ;; T5.2 native: single need record. cljc: (max 0 (- target free))
+  (let [d (- (record-get x :target) (record-get x :free))]
     (if (< d 0) 0 d)))
 
-(defn free-after [free :i64 reclaimed :i64] :i64
-  (+ free reclaimed))
+(defn free-after [x [:ref :gc/free-after]] :i64
+  ;; T5.2 native: single free-after record.
+  (+ (record-get x :free) (record-get x :reclaimed)))
 
-(defn target-met? [free :i64 reclaimed :i64 target :i64] :bool
-  (if (< (+ free reclaimed) target) false true))
+(defn target-met? [x [:ref :gc/target]] :bool
+  ;; T5.2 native: single target record (free + reclaimed vs target).
+  (if (< (+ (record-get x :free) (record-get x :reclaimed))
+         (record-get x :target))
+    false
+    true))
 
-(defn rank-better? [atime1 :i64 bytes1 :i64 atime2 :i64 bytes2 :i64] :bool
+(defn rank-better? [x [:ref :gc/rank]] :bool
+  ;; T5.2 native: single rank record (two entry snapshots).
   ;; cljc rank: [(- atime) (- bytes)]; lower tuple sorts first (evict sooner)
   ;; ⇒ higher atime wins; tie ⇒ higher bytes wins
-  (if (< atime2 atime1)
-    true
-    (if (< atime1 atime2)
-      false
-      (if (< bytes2 bytes1) true false))))
+  (let [atime1 (record-get x :atime1)
+        bytes1 (record-get x :bytes1)
+        atime2 (record-get x :atime2)
+        bytes2 (record-get x :bytes2)]
+    (if (< atime2 atime1)
+      true
+      (if (< atime1 atime2)
+        false
+        (if (< bytes2 bytes1) true false)))))
 
-(defn comfy-evictable? [atime-days :i64 keep-days :i64] :bool
-  ;; cljc: (> (or atime-days 0) comfy-keep-days)
-  (if (< atime-days 0)
-    false
-    (if (< keep-days atime-days) true false)))
+(defn comfy-evictable? [x [:ref :gc/comfy]] :bool
+  ;; T5.2 native: single comfy record. cljc: (> atime-days keep-days)
+  (let [atime-days (record-get x :atime-days)
+        keep-days (record-get x :keep-days)]
+    (if (< atime-days 0)
+      false
+      (if (< keep-days atime-days) true false))))
