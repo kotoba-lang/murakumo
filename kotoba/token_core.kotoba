@@ -16,6 +16,10 @@
                            [[:v [:option :string]]
                             [:payload [:option :string]]
                             [:sig [:option :string]]]]
+             ;; T5.2 residual: ct-scan multi-arg (hits max-arity 5)
+             :token/ct-scan [:record :token/ct-scan
+                             [[:a :string] [:b :string]
+                              [:i :i64] [:n :i64] [:acc :i64]]]
 })
   (:export [version default-ttl claim-sub claim-scope claim-exp
             expired? scope-allows? signing-input
@@ -140,14 +144,20 @@
       false)
     false))
 
-(defn ct-scan [a :string b :string i :i64 n :i64 acc :i64] :i64
-  (if (< i n)
-    (let [ca (string-substring a i (+ i 1))
-          cb (string-substring b i (+ i 1))
-          ne (if (string=? ca cb) 0 1)
-          nacc (if (= acc 0) ne 1)]
-      (ct-scan a b (+ i 1) n nacc))
-    acc))
+(defn ct-scan [x [:ref :token/ct-scan]] :i64
+  ;; T5.2 residual: a+b+i+n+acc on one guest record (was max-arity 5)
+  (let [a (record-get x :a)
+        b (record-get x :b)
+        i (record-get x :i)
+        n (record-get x :n)
+        acc (record-get x :acc)]
+    (if (< i n)
+      (let [ca (string-substring a i (+ i 1))
+            cb (string-substring b i (+ i 1))
+            ne (if (string=? ca cb) 0 1)
+            nacc (if (= acc 0) ne 1)]
+        (ct-scan (record-new [:ref :token/ct-scan] a b (+ i 1) n nacc)))
+      acc)))
 
 (defn constant-time-eq [x [:ref :token/eq]] :bool
   ;; T5.2 native: single eq record (a, b).
@@ -156,5 +166,6 @@
         na (string-length a)
         nb (string-length b)]
     (if (= na nb)
-      (if (= (ct-scan a b 0 na 0) 0) true false)
+      (if (= (ct-scan (record-new [:ref :token/ct-scan] a b 0 na 0)) 0)
+        true false)
       false)))
