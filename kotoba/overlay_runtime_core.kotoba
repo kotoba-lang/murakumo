@@ -1,4 +1,7 @@
 (ns overlay-runtime-core
+  (:schemas {;; T5.2 native guest record wire
+             :runtime/starts-with [:record :runtime/starts-with
+                                   [[:s :string] [:prefix :string]]]})
   (:export [default-relay-port default-web-port default-quic-port
             default-port-for-kind known-adapter? adapter-kind
             digit-char nat-str i64-str
@@ -16,14 +19,18 @@
 ;; scheme/kind/adapter name tokens dual-source; known-adapter?/adapter-kind/
 ;; endpoint-kind/default-port-for-kind recompose from tokens.
 ;; scheme-prefix-host: host between "://" and next ":" or "/" or end.
+;; T5.2: multi-scalar pure inputs take single guest records.
 ;; Parity: test/murakumo/overlay_runtime_kotoba_parity_test.clj
 
 (defn default-relay-port [] :i64 4701)
 (defn default-web-port [] :i64 443)
 (defn default-quic-port [] :i64 4001)
 
-(defn starts-with? [s :string prefix :string] :bool
-  (let [n (string-byte-length s)
+(defn starts-with? [x [:ref :runtime/starts-with]] :bool
+  ;; T5.2 native: s+prefix
+  (let [s (record-get x :s)
+        prefix (record-get x :prefix)
+        n (string-byte-length s)
         p (string-byte-length prefix)]
     (if (< n p)
       false
@@ -105,13 +112,13 @@
 
 (defn endpoint-kind [endpoint :string] :string
   ;; quic|webrtc|relay|webtransport|other from scheme prefix
-  (if (starts-with? endpoint (scheme-quic))
+  (if (starts-with? (record-new [:ref :runtime/starts-with] endpoint (scheme-quic)))
     (kind-quic)
-    (if (starts-with? endpoint (scheme-webrtc))
+    (if (starts-with? (record-new [:ref :runtime/starts-with] endpoint (scheme-webrtc)))
       (kind-webrtc)
-      (if (starts-with? endpoint (scheme-relay))
+      (if (starts-with? (record-new [:ref :runtime/starts-with] endpoint (scheme-relay)))
         (kind-relay)
-        (if (starts-with? endpoint (scheme-webtransport))
+        (if (starts-with? (record-new [:ref :runtime/starts-with] endpoint (scheme-webtransport)))
           (kind-webtransport)
           (kind-other))))))
 

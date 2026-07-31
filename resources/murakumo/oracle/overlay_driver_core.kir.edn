@@ -8,17 +8,30 @@
    :body (if (string=? s "") true false),
    :param-types [:string]}
   {:name starts-with?,
-   :params [s prefix],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (let
-    [n (string-byte-length s) p (string-byte-length prefix)]
+    [s
+     (record-get
+      [:record :driver/starts-with [[:s :string] [:prefix :string]]]
+      x
+      :s)
+     prefix
+     (record-get
+      [:record :driver/starts-with [[:s :string] [:prefix :string]]]
+      x
+      :prefix)
+     n
+     (string-byte-length s)
+     p
+     (string-byte-length prefix)]
     (if
      (< n p)
      false
      (if (string=? (string-substring s 0 p) prefix) true false))),
-   :param-types [:string :string]}
+   :param-types [[:ref :driver/starts-with]]}
   {:name scheme-quic,
    :params [],
    :result :string,
@@ -109,16 +122,32 @@
    :effects #{},
    :body
    (if
-    (starts-with? endpoint (scheme-quic))
+    (starts-with?
+     (record-new
+      [:record :driver/starts-with [[:s :string] [:prefix :string]]]
+      endpoint
+      (scheme-quic)))
     (kind-quic)
     (if
-     (starts-with? endpoint (scheme-webrtc))
+     (starts-with?
+      (record-new
+       [:record :driver/starts-with [[:s :string] [:prefix :string]]]
+       endpoint
+       (scheme-webrtc)))
      (kind-webrtc)
      (if
-      (starts-with? endpoint (scheme-https))
+      (starts-with?
+       (record-new
+        [:record :driver/starts-with [[:s :string] [:prefix :string]]]
+        endpoint
+        (scheme-https)))
       (kind-webtransport)
       (if
-       (starts-with? endpoint (scheme-relay))
+       (starts-with?
+        (record-new
+         [:record :driver/starts-with [[:s :string] [:prefix :string]]]
+         endpoint
+         (scheme-relay)))
        (kind-relay)
        (kind-unknown))))),
    :param-types [:string]}
@@ -136,7 +165,11 @@
      (< n p)
      ""
      (if
-      (starts-with? flag (flag-dash-prefix))
+      (starts-with?
+       (record-new
+        [:record :driver/starts-with [[:s :string] [:prefix :string]]]
+        flag
+        (flag-dash-prefix)))
       (string-substring flag p n)
       flag))),
    :param-types [:string]}
@@ -147,17 +180,34 @@
    :body (if (string=? command (cmd-dial)) true false),
    :param-types [:string]}
   {:name dial-ok-reason,
-   :params [is-dial missing-count],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (if
-    is-dial
-    (if (< 0 missing-count) (reason-missing-options) (reason-ok))
+    (record-get
+     [:record :driver/dial-reason [[:is-dial :bool] [:missing-n :i64]]]
+     x
+     :is-dial)
+    (if
+     (<
+      0
+      (record-get
+       [:record
+        :driver/dial-reason
+        [[:is-dial :bool] [:missing-n :i64]]]
+       x
+       :missing-n))
+     (reason-missing-options)
+     (reason-ok))
     (reason-unknown-command)),
-   :param-types [:bool :i64]}],
+   :param-types [[:ref :driver/dial-reason]]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:driver{:dial-reason
+          "e79471ef55e3427ecde2a871a74b2eefbed017efb5669ccd4489ce0e0e179b31",
+          :starts-with
+          "36a140e56697f1a326758da7d668edcb14559f9a9fda1cadf099811bcf361165"},
  :exports
  [endpoint-kind
   blank?
@@ -179,7 +229,15 @@
   reason-ok
   reason-unknown-command
   reason-missing-options],
- :schemas nil,
+ :schemas
+ #:driver{:starts-with
+          [:record
+           :driver/starts-with
+           [[:s :string] [:prefix :string]]],
+          :dial-reason
+          [:record
+           :driver/dial-reason
+           [[:is-dial :bool] [:missing-n :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

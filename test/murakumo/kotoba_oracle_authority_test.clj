@@ -2504,8 +2504,11 @@
            (oracle/call :overlay-driver 'endpoint-kind ["quic://a:1"])))
     (is (= (ir/execute d 'option-name ["--overlay"])
            (oracle/call :overlay-driver 'option-name ["--overlay"])))
-    (is (= (ir/execute d 'dial-ok-reason [true 0])
-           (oracle/call :overlay-driver 'dial-ok-reason [true 0])))
+    (let [dr (oracle/record [:record :driver/dial-reason
+                             [[:is-dial :bool] [:missing-n :i64]]]
+                            {:is-dial true :missing-n 0})]
+      (is (= (ir/execute d 'dial-ok-reason [dr])
+             (oracle/call :overlay-driver 'dial-ok-reason [dr]))))
     (is (= (ir/execute d 'blank? [""])
            (oracle/call :overlay-driver 'blank? [""])))
     (is (contains? #{true 1} (oracle/call :overlay-driver 'blank? [""])))

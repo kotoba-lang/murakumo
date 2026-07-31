@@ -46,9 +46,9 @@
                  "r" (str "(endpoint-kind " (kotoba-literal "relay://jp/n") ")")
                  "u" (str "(endpoint-kind " (kotoba-literal "ftp://x") ")")
                  "oname" (str "(option-name " (kotoba-literal "--overlay") ")")
-                 "rok" (str "(dial-ok-reason true 0)")
-                 "rmiss" (str "(dial-ok-reason true 2)")
-                 "runk" (str "(dial-ok-reason false 0)")
+                 "rok" (str "(dial-ok-reason (record-new [:record :driver/dial-reason [[:is-dial :bool] [:missing-n :i64]]] true 0))")
+                 "rmiss" (str "(dial-ok-reason (record-new [:record :driver/dial-reason [[:is-dial :bool] [:missing-n :i64]]] true 2))")
+                 "runk" (str "(dial-ok-reason (record-new [:record :driver/dial-reason [[:is-dial :bool] [:missing-n :i64]]] false 0))")
                  "sq" "(scheme-quic)"
                  "sw" "(scheme-webrtc)"
                  "sh" "(scheme-https)"
@@ -92,8 +92,9 @@
             "b1" (str "(if (blank? " (kotoba-literal "x") ") 1 0)")
             "cd" (str "(if (command-is-dial? " (kotoba-literal "dial") ") 1 0)")
             "cn" (str "(if (command-is-dial? " (kotoba-literal "relay") ") 1 0)")
-            "sw" (str "(if (starts-with? " (kotoba-literal "quic://a") " "
-                      (kotoba-literal "quic://") ") 1 0)")})]
+            "sw" (str "(if (starts-with? (record-new [:record :driver/starts-with [[:s :string] [:prefix :string]]] "
+                      (kotoba-literal "quic://a") " "
+                      (kotoba-literal "quic://") ")) 1 0)")})]
     (is (= 1 (get n "b0")))
     (is (= 0 (get n "b1")))
     (is (= 1 (get n "cd")))
