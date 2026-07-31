@@ -1,4 +1,17 @@
 (ns infer-engine-core
+  (:schemas {;; T5.2 native guest record wire for launch cmd inputs.
+             :engine/endpoint [:record :engine/endpoint
+                               [[:host :string] [:port :i64]]]
+             :engine/rpc-server [:record :engine/rpc-server
+                                 [[:bin-dir :string] [:port :i64] [:device :string]
+                                  [:cache :bool] [:cache-dir :string]]]
+             :engine/head-front [:record :engine/head-front
+                                 [[:bin-dir :string] [:model-path :string]]]
+             :engine/head-middle [:record :engine/head-middle
+                                  [[:rpc-csv :string] [:strategy :string]
+                                   [:tsplit :string]]]
+             :engine/head-tail [:record :engine/head-tail
+                                [[:ctx :i64] [:parallel :i64] [:port :i64]]]})
   (:export [default-rpc-port digit-char nat-str i64-str
             split-mode-name endpoint rpc-server-cmd
             embed-head-front embed-head-back
@@ -35,15 +48,22 @@
     "row"
     "layer"))
 
-(defn endpoint [host :string port :i64] :string
+(defn endpoint [e [:ref :engine/endpoint]] :string
   ;; cljc rpc-endpoints element: (str ip-or-host ":" port)
-  (string-concat host (string-concat ":" (i64-str port))))
+  ;; T5.2 native record: host+port.
+  (string-concat (record-get e :host)
+                 (string-concat ":" (i64-str (record-get e :port)))))
 
-(defn rpc-server-cmd [bin-dir :string port :i64 device :string
-                      cache :bool cache-dir :string] :string
+(defn rpc-server-cmd [c [:ref :engine/rpc-server]] :string
   ;; cljc rpc-worker-cmds :cmd for one worker.
   ;; Profile 5: cache is real :bool; empty cache-dir ⇒ bare "-c", else "-c <dir>".
-  (let [base (string-concat
+  ;; T5.2 native record: bin/port/device/cache/cache-dir.
+  (let [bin-dir (record-get c :bin-dir)
+        port (record-get c :port)
+        device (record-get c :device)
+        cache (record-get c :cache)
+        cache-dir (record-get c :cache-dir)
+        base (string-concat
               bin-dir
               (string-concat
                "/rpc-server -H 0.0.0.0 -p "
@@ -138,11 +158,13 @@
          model-repo
          (string-concat " --pipeline --max-tokens " (i64-str max-tokens))))))))))
 
-(defn head-cmd-front [bin-dir :string model-path :string] :string
-  ;; cljc head-cmd through "-m <model>"
-  (string-concat
-   bin-dir
-   (string-concat "/llama-server -m " model-path)))
+(defn head-cmd-front [h [:ref :engine/head-front]] :string
+  ;; cljc head-cmd through "-m <model>". T5.2 native record.
+  (let [bin-dir (record-get h :bin-dir)
+        model-path (record-get h :model-path)]
+    (string-concat
+     bin-dir
+     (string-concat "/llama-server -m " model-path))))
 
 (defn rpc-csv-2 [ep0 :string ep1 :string] :string
   ;; cljc rpc-endpoints join for 2 workers
@@ -151,27 +173,35 @@
 (defn rpc-csv-3 [ep0 :string ep1 :string ep2 :string] :string
   (string-concat ep0 (string-concat "," (rpc-csv-2 ep1 ep2))))
 
-(defn head-cmd-middle [rpc-csv :string strategy :string tensor-csv :string] :string
+(defn head-cmd-middle [h [:ref :engine/head-middle]] :string
   ;; " --rpc <csv> --split-mode <mode> --tensor-split <csv>"
-  (string-concat
-   " --rpc "
-   (string-concat
-    rpc-csv
+  ;; T5.2 native record.
+  (let [rpc-csv (record-get h :rpc-csv)
+        strategy (record-get h :strategy)
+        tensor-csv (record-get h :tsplit)]
     (string-concat
-     " --split-mode "
+     " --rpc "
      (string-concat
-      (split-mode-name strategy)
-      (string-concat " --tensor-split " tensor-csv))))))
+      rpc-csv
+      (string-concat
+       " --split-mode "
+       (string-concat
+        (split-mode-name strategy)
+        (string-concat " --tensor-split " tensor-csv)))))))
 
-(defn head-cmd-tail [ctx :i64 parallel :i64 port :i64] :string
+(defn head-cmd-tail [h [:ref :engine/head-tail]] :string
   ;; after optional -ot: " -ngl 999 -c … --parallel … --host 0.0.0.0 --port …"
-  (string-concat
-   " -ngl 999 -c "
-   (string-concat
-    (i64-str ctx)
+  ;; T5.2 native record.
+  (let [ctx (record-get h :ctx)
+        parallel (record-get h :parallel)
+        port (record-get h :port)]
     (string-concat
-     " --parallel "
+     " -ngl 999 -c "
      (string-concat
-      (i64-str parallel)
-      (string-concat " --host 0.0.0.0 --port " (i64-str port)))))))
+      (i64-str ctx)
+      (string-concat
+       " --parallel "
+       (string-concat
+        (i64-str parallel)
+        (string-concat " --host 0.0.0.0 --port " (i64-str port))))))))
 

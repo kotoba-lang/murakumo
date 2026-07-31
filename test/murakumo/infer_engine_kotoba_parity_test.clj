@@ -68,14 +68,40 @@
         (is (= (split-mode-cljc (keyword s))
                (get actual (str "sm_" i))))))))
 
+
+(def ^:private endpoint-literal
+  (str "[:record :engine/endpoint [[:host :string] [:port :i64]]]"))
+
+(def ^:private rpc-server-literal
+  (str "[:record :engine/rpc-server "
+       "[[:bin-dir :string] [:port :i64] [:device :string] "
+       "[:cache :bool] [:cache-dir :string]]]"))
+
+(def ^:private head-front-literal
+  (str "[:record :engine/head-front [[:bin-dir :string] [:model-path :string]]]"))
+
+(def ^:private head-middle-literal
+  (str "[:record :engine/head-middle "
+       "[[:rpc-csv :string] [:strategy :string] [:tsplit :string]]]"))
+
+(def ^:private head-tail-literal
+  (str "[:record :engine/head-tail [[:ctx :i64] [:parallel :i64] [:port :i64]]]"))
+
+(defn- endpoint-call [h p]
+  (str "(endpoint (record-new " endpoint-literal " " (kotoba-literal h) " " p "))"))
+
+(defn- rpc-server-call [bin-dir port device cache? cdir]
+  (str "(rpc-server-cmd (record-new " rpc-server-literal " "
+       (kotoba-literal bin-dir) " " port " " (kotoba-literal device) " "
+       (if cache? "true" "false") " " (kotoba-literal cdir) "))"))
+
 (deftest endpoint-matches-rpc-endpoints-element
   (let [corpus [["10.0.0.1" 50052]
                 ["host.local" 8080]
                 ["::1" 1]]
         cases (into {} (map-indexed
                         (fn [i [h p]]
-                          [(str "ep_" i)
-                           (str "(endpoint " (kotoba-literal h) " " p ")")])
+                          [(str "ep_" i) (endpoint-call h p)])
                         corpus))
         actual (compile-string-cases cases)]
     (doseq [[i [h p]] (map-indexed vector corpus)]
@@ -96,9 +122,7 @@
         call (fn [{:keys [bin-dir port device node cache-dir]}]
                (let [cache? (not (false? (:rpc-cache? node)))
                      cdir (or cache-dir "")]
-                 (str "(rpc-server-cmd " (kotoba-literal bin-dir) " " port " "
-                      (kotoba-literal device) " " (if cache? "true" "false") " "
-                      (kotoba-literal cdir) ")")))
+                 (rpc-server-call bin-dir port device cache? cdir)))
         cases (into {} (map-indexed (fn [i m] [(str "rpc_" i) (call m)]) corpus))
         actual (compile-string-cases cases)]
     (doseq [[i m] (map-indexed vector corpus)]
@@ -212,29 +236,29 @@
               :rpc-port 50052 :ctx 4096 :parallel 1 :strategy :pipeline}
         cljc (engine/head-cmd plan opts)
         actual (compile-string-cases
-                {"front" "(head-cmd-front \"/opt/llama\" \"/m.gguf\")"
-                 "ep0" "(endpoint \"10.0.0.1\" 50052)"
-                 "ep1" "(endpoint \"10.0.0.2\" 50052)"
-                 "rpc" "(rpc-csv-2 (endpoint \"10.0.0.1\" 50052) (endpoint \"10.0.0.2\" 50052))"
-                 "mid" (str "(head-cmd-middle "
-                            "(rpc-csv-2 (endpoint \"10.0.0.1\" 50052) (endpoint \"10.0.0.2\" 50052)) "
+                {"front" "(head-cmd-front (record-new [:record :engine/head-front [[:bin-dir :string] [:model-path :string]]] \"/opt/llama\" \"/m.gguf\"))"
+                 "ep0" "(endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.1\" 50052))"
+                 "ep1" "(endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.2\" 50052))"
+                 "rpc" "(rpc-csv-2 (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.1\" 50052)) (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.2\" 50052)))"
+                 "mid" (str "(head-cmd-middle (record-new [:record :engine/head-middle [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]] "
+                            "(rpc-csv-2 (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.1\" 50052)) (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.2\" 50052))) "
                             "\"pipeline\" "
-                            "(tensor-split-3 10 10 5))")
-                 "tail" "(head-cmd-tail 4096 1 8080)"
-                 "full" (str "(string-concat (head-cmd-front \"/opt/llama\" \"/m.gguf\") "
+                            "(tensor-split-3 10 10 5)))")
+                 "tail" "(head-cmd-tail (record-new [:record :engine/head-tail [[:ctx :i64] [:parallel :i64] [:port :i64]]] 4096 1 8080))"
+                 "full" (str "(string-concat (head-cmd-front (record-new [:record :engine/head-front [[:bin-dir :string] [:model-path :string]]] \"/opt/llama\" \"/m.gguf\")) "
                              "(string-concat "
-                             "(head-cmd-middle "
-                             "(rpc-csv-2 (endpoint \"10.0.0.1\" 50052) (endpoint \"10.0.0.2\" 50052)) "
+                             "(head-cmd-middle (record-new [:record :engine/head-middle [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]] "
+                             "(rpc-csv-2 (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.1\" 50052)) (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.2\" 50052))) "
                              "\"pipeline\" "
-                             "(tensor-split-3 10 10 5)) "
-                             "(head-cmd-tail 4096 1 8080)))")
-                 "tensor" (str "(string-concat (head-cmd-front \"/opt/llama\" \"/m.gguf\") "
+                             "(tensor-split-3 10 10 5))) "
+                             "(head-cmd-tail (record-new [:record :engine/head-tail [[:ctx :i64] [:parallel :i64] [:port :i64]]] 4096 1 8080))))")
+                 "tensor" (str "(string-concat (head-cmd-front (record-new [:record :engine/head-front [[:bin-dir :string] [:model-path :string]]] \"/opt/llama\" \"/m.gguf\")) "
                                "(string-concat "
-                               "(head-cmd-middle "
-                               "(rpc-csv-2 (endpoint \"10.0.0.1\" 50052) (endpoint \"10.0.0.2\" 50052)) "
+                               "(head-cmd-middle (record-new [:record :engine/head-middle [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]] "
+                               "(rpc-csv-2 (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.1\" 50052)) (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.2\" 50052))) "
                                "\"tensor\" "
-                               "(tensor-split-3 10 10 5)) "
-                               "(head-cmd-tail 4096 1 8080)))")})]
+                               "(tensor-split-3 10 10 5))) "
+                               "(head-cmd-tail (record-new [:record :engine/head-tail [[:ctx :i64] [:parallel :i64] [:port :i64]]] 4096 1 8080))))")})]
     (is (= "/opt/llama/llama-server -m /m.gguf" (get actual "front")))
     (is (= "10.0.0.1:50052,10.0.0.2:50052" (get actual "rpc")))
     (is (= cljc (get actual "full")))

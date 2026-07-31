@@ -96,12 +96,15 @@
                 :headroom-bytes plan/default-headroom
                 :wired-limit-bytes nil}
           via-host (plan/usable-bytes node)
+          cap (oracle/record
+               [:record :plan/node-cap
+                [[:mem :i64] [:os :i64] [:head :i64] [:wired [:option :i64]]]]
+               {:mem (:mem-bytes node)
+                :os plan/default-os-reserve
+                :head plan/default-headroom
+                :wired nil})
           via-call (oracle/i64->host
-                    (oracle/call :infer-plan 'usable-bytes
-                                 [(oracle/as-i64 (:mem-bytes node))
-                                  (oracle/as-i64 plan/default-os-reserve)
-                                  (oracle/as-i64 plan/default-headroom)
-                                  (oracle/option-i64 nil)]))]
+                    (oracle/call :infer-plan 'usable-bytes [cap]))]
       (is (= via-call via-host))
       (is (pos? via-host)))
     (let [node {:mem-bytes (* 32 plan/GiB)

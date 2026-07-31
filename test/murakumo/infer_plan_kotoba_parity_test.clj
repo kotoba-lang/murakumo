@@ -57,11 +57,20 @@
     "(option-none-of [:option :i64])"
     (str "(option-some-of [:option :i64] " (long n) ")")))
 
+(def ^:private node-cap-literal
+  (str "[:record :plan/node-cap "
+       "[[:mem :i64] [:os :i64] [:head :i64] [:wired [:option :i64]]]]"))
+
+(def ^:private strategy-in-literal
+  (str "[:record :plan/strategy-in "
+       "[[:link-gbps :i64] [:ranks :i64] [:experts :i64] [:kv-heads :i64]]]"))
+
 (defn- usable-call [node]
   (let [os (or (:os-reserve-bytes node) plan/default-os-reserve)
         head (or (:headroom-bytes node) plan/default-headroom)
         wired (opt-i64-form (:wired-limit-bytes node))]
-    (str "(usable-bytes " (:mem-bytes node) " " os " " head " " wired ")")))
+    (str "(usable-bytes (record-new " node-cap-literal " "
+         (:mem-bytes node) " " os " " head " " wired "))")))
 
 (deftest constants-match-plan-cljc
   (let [actual (compile-i64-cases
@@ -95,7 +104,8 @@
                      exp (long (or (:model/experts model) 0))
                      kv (long (or (:model/kv-heads model) 0))
                      r (long (or ranks 0))]
-                 (str "(choose-strategy-name " link " " r " " exp " " kv ")")))
+                 (str "(choose-strategy-name (record-new " strategy-in-literal " "
+                      link " " r " " exp " " kv "))")))
         cases (into {} (map-indexed (fn [i m] [(str "s_" i) (call m)]) corpus))
         actual (compile-string-cases cases)]
     (doseq [[i m] (map-indexed vector corpus)]
@@ -433,8 +443,9 @@
                              hd plan/default-headroom
                              ub (plan/usable-bytes n)]
                          [[(str "m_" i) (str "(mem-gib-milli " (:mem-bytes n) ")")]
-                          [(str "u_" i) (str "(usable-gib-milli " (:mem-bytes n) " " os " " hd " "
-                                             (opt-i64-form nil) ")")]
+                          [(str "u_" i) (str "(usable-gib-milli (record-new " node-cap-literal " "
+                                             (:mem-bytes n) " " os " " hd " "
+                                             (opt-i64-form nil) "))")]
                           [(str "e_" i) (str "(est-gib-milli " ub ")")]]))
                      (range) nodes))
         actual (compile-i64-cases

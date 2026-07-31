@@ -417,10 +417,15 @@
   (testing "usable-bytes via oracle"
     (let [n {:name "a" :mem-bytes (* 16 plan/GiB)}]
       (is (pos? (plan/usable-bytes n)))
-      (is (= (plan/usable-bytes n)
-             (oracle/call :infer-plan 'usable-bytes
-                          [(* 16 plan/GiB) plan/default-os-reserve plan/default-headroom
-                           (oracle/option-i64 nil)])))))
+      (let [cap (oracle/record
+                 [:record :plan/node-cap
+                  [[:mem :i64] [:os :i64] [:head :i64] [:wired [:option :i64]]]]
+                 {:mem (* 16 plan/GiB)
+                  :os plan/default-os-reserve
+                  :head plan/default-headroom
+                  :wired nil})]
+        (is (= (plan/usable-bytes n)
+               (oracle/call :infer-plan 'usable-bytes [cap]))))))
   (testing "choose-strategy name via oracle"
     (is (= :pipeline (:strategy (plan/choose-strategy
                                  {:link-gbps 1 :ranks 4
@@ -790,10 +795,18 @@
   (let [live (eng-live-kir)]
     (is (= (ir/execute live 'split-mode-name ["tensor"])
            (oracle/call :infer-engine 'split-mode-name ["tensor"])))
-    (is (= (ir/execute live 'endpoint ["h" 50052])
-           (oracle/call :infer-engine 'endpoint ["h" 50052])))
-    (is (= (ir/execute live 'rpc-server-cmd ["bin" 50052 "MTL0" true ""])
-           (oracle/call :infer-engine 'rpc-server-cmd ["bin" 50052 "MTL0" true ""])))
+    (let [ep (oracle/record
+              [:record :engine/endpoint [[:host :string] [:port :i64]]]
+              {:host "h" :port 50052})
+          rpc (oracle/record
+               [:record :engine/rpc-server
+                [[:bin-dir :string] [:port :i64] [:device :string]
+                 [:cache :bool] [:cache-dir :string]]]
+               {:bin-dir "bin" :port 50052 :device "MTL0" :cache true :cache-dir ""})]
+      (is (= (ir/execute live 'endpoint [ep])
+             (oracle/call :infer-engine 'endpoint [ep])))
+      (is (= (ir/execute live 'rpc-server-cmd [rpc])
+             (oracle/call :infer-engine 'rpc-server-cmd [rpc]))))
     (is (= (ir/execute live 'head-cmd-front ["bin" "m.gguf"])
            (oracle/call :infer-engine 'head-cmd-front ["bin" "m.gguf"])))))
 

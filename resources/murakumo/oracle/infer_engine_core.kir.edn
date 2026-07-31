@@ -39,18 +39,85 @@
    :body (if (string=? strategy "tensor") "row" "layer"),
    :param-types [:string]}
   {:name endpoint,
-   :params [host port],
+   :params [e],
    :result :string,
    :effects #{},
-   :body (string-concat host (string-concat ":" (i64-str port))),
-   :param-types [:string :i64]}
+   :body
+   (string-concat
+    (record-get
+     [:record :engine/endpoint [[:host :string] [:port :i64]]]
+     e
+     :host)
+    (string-concat
+     ":"
+     (i64-str
+      (record-get
+       [:record :engine/endpoint [[:host :string] [:port :i64]]]
+       e
+       :port)))),
+   :param-types [[:ref :engine/endpoint]]}
   {:name rpc-server-cmd,
-   :params [bin-dir port device cache cache-dir],
+   :params [c],
    :result :string,
    :effects #{},
    :body
    (let
-    [base
+    [bin-dir
+     (record-get
+      [:record
+       :engine/rpc-server
+       [[:bin-dir :string]
+        [:port :i64]
+        [:device :string]
+        [:cache :bool]
+        [:cache-dir :string]]]
+      c
+      :bin-dir)
+     port
+     (record-get
+      [:record
+       :engine/rpc-server
+       [[:bin-dir :string]
+        [:port :i64]
+        [:device :string]
+        [:cache :bool]
+        [:cache-dir :string]]]
+      c
+      :port)
+     device
+     (record-get
+      [:record
+       :engine/rpc-server
+       [[:bin-dir :string]
+        [:port :i64]
+        [:device :string]
+        [:cache :bool]
+        [:cache-dir :string]]]
+      c
+      :device)
+     cache
+     (record-get
+      [:record
+       :engine/rpc-server
+       [[:bin-dir :string]
+        [:port :i64]
+        [:device :string]
+        [:cache :bool]
+        [:cache-dir :string]]]
+      c
+      :cache)
+     cache-dir
+     (record-get
+      [:record
+       :engine/rpc-server
+       [[:bin-dir :string]
+        [:port :i64]
+        [:device :string]
+        [:cache :bool]
+        [:cache-dir :string]]]
+      c
+      :cache-dir)
+     base
      (string-concat
       bin-dir
       (string-concat
@@ -63,7 +130,7 @@
       (string-concat base " -c")
       (string-concat base (string-concat " -c " cache-dir)))
      base)),
-   :param-types [:string :i64 :string :bool :string]}
+   :param-types [[:ref :engine/rpc-server]]}
   {:name embed-head-front,
    :params [bin-dir model-path pooling ctx],
    :result :string,
@@ -166,14 +233,29 @@
            (i64-str max-tokens))))))))),
    :param-types [:string :string :string :i64]}
   {:name head-cmd-front,
-   :params [bin-dir model-path],
+   :params [h],
    :result :string,
    :effects #{},
    :body
-   (string-concat
-    bin-dir
-    (string-concat "/llama-server -m " model-path)),
-   :param-types [:string :string]}
+   (let
+    [bin-dir
+     (record-get
+      [:record
+       :engine/head-front
+       [[:bin-dir :string] [:model-path :string]]]
+      h
+      :bin-dir)
+     model-path
+     (record-get
+      [:record
+       :engine/head-front
+       [[:bin-dir :string] [:model-path :string]]]
+      h
+      :model-path)]
+    (string-concat
+     bin-dir
+     (string-concat "/llama-server -m " model-path))),
+   :param-types [[:ref :engine/head-front]]}
   {:name rpc-csv-2,
    :params [ep0 ep1],
    :result :string,
@@ -187,37 +269,91 @@
    :body (string-concat ep0 (string-concat "," (rpc-csv-2 ep1 ep2))),
    :param-types [:string :string :string]}
   {:name head-cmd-middle,
-   :params [rpc-csv strategy tensor-csv],
+   :params [h],
    :result :string,
    :effects #{},
    :body
-   (string-concat
-    " --rpc "
+   (let
+    [rpc-csv
+     (record-get
+      [:record
+       :engine/head-middle
+       [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]]
+      h
+      :rpc-csv)
+     strategy
+     (record-get
+      [:record
+       :engine/head-middle
+       [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]]
+      h
+      :strategy)
+     tensor-csv
+     (record-get
+      [:record
+       :engine/head-middle
+       [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]]
+      h
+      :tsplit)]
     (string-concat
-     rpc-csv
+     " --rpc "
      (string-concat
-      " --split-mode "
+      rpc-csv
       (string-concat
-       (split-mode-name strategy)
-       (string-concat " --tensor-split " tensor-csv))))),
-   :param-types [:string :string :string]}
+       " --split-mode "
+       (string-concat
+        (split-mode-name strategy)
+        (string-concat " --tensor-split " tensor-csv)))))),
+   :param-types [[:ref :engine/head-middle]]}
   {:name head-cmd-tail,
-   :params [ctx parallel port],
+   :params [h],
    :result :string,
    :effects #{},
    :body
-   (string-concat
-    " -ngl 999 -c "
+   (let
+    [ctx
+     (record-get
+      [:record
+       :engine/head-tail
+       [[:ctx :i64] [:parallel :i64] [:port :i64]]]
+      h
+      :ctx)
+     parallel
+     (record-get
+      [:record
+       :engine/head-tail
+       [[:ctx :i64] [:parallel :i64] [:port :i64]]]
+      h
+      :parallel)
+     port
+     (record-get
+      [:record
+       :engine/head-tail
+       [[:ctx :i64] [:parallel :i64] [:port :i64]]]
+      h
+      :port)]
     (string-concat
-     (i64-str ctx)
+     " -ngl 999 -c "
      (string-concat
-      " --parallel "
+      (i64-str ctx)
       (string-concat
-       (i64-str parallel)
-       (string-concat " --host 0.0.0.0 --port " (i64-str port)))))),
-   :param-types [:i64 :i64 :i64]}],
+       " --parallel "
+       (string-concat
+        (i64-str parallel)
+        (string-concat " --host 0.0.0.0 --port " (i64-str port))))))),
+   :param-types [[:ref :engine/head-tail]]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:engine{:endpoint
+          "58e0da25c968b0af43cd1049e7fdb4a12b8a5d85b7436e342c1adc4198c729c1",
+          :head-front
+          "e1fe9bab6962c719a698ba9f62f1d83c8134861d6611315f960e5f678547b145",
+          :head-middle
+          "33330641b1231ec9284b78bff129c55bb6834521d1ae176c442e0dd3c5ee651d",
+          :head-tail
+          "4d4e098f0d8ac5f4dba0c9367edc6d84eeb801329e9f164863eb18f6198c3614",
+          :rpc-server
+          "fcca6c6181d1a5c66e2b17ed0a7e9d1d83c3b84a17d45c8390d7968c98ad50f7"},
  :exports
  [default-rpc-port
   digit-char
@@ -239,7 +375,29 @@
   head-cmd-tail
   rpc-csv-2
   rpc-csv-3],
- :schemas nil,
+ :schemas
+ #:engine{:endpoint
+          [:record :engine/endpoint [[:host :string] [:port :i64]]],
+          :rpc-server
+          [:record
+           :engine/rpc-server
+           [[:bin-dir :string]
+            [:port :i64]
+            [:device :string]
+            [:cache :bool]
+            [:cache-dir :string]]],
+          :head-front
+          [:record
+           :engine/head-front
+           [[:bin-dir :string] [:model-path :string]]],
+          :head-middle
+          [:record
+           :engine/head-middle
+           [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]],
+          :head-tail
+          [:record
+           :engine/head-tail
+           [[:ctx :i64] [:parallel :i64] [:port :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

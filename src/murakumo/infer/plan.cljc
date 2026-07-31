@@ -36,6 +36,16 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private node-cap-schema
+  "Guest :plan/node-cap — T5.2 native record for usable-bytes."
+  [:record :plan/node-cap
+   [[:mem :i64] [:os :i64] [:head :i64] [:wired [:option :i64]]]])
+
+(def ^:private strategy-in-schema
+  "Guest :plan/strategy-in — T5.2 native record for choose-strategy-name."
+  [:record :plan/strategy-in
+   [[:link-gbps :i64] [:ranks :i64] [:experts :i64] [:kv-heads :i64]]])
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def GiB
@@ -53,22 +63,15 @@
 (defn usable-bytes
   "Bytes of weights a node can realistically hold resident.
    Kotoba `usable-bytes` (required). Profile 5: wired-limit is [:option :i64].
-   T5.2: structural node map → call-record (positional guest args)."
+   T5.2 native guest record: one :plan/node-cap arg."
   [{:keys [mem-bytes os-reserve-bytes headroom-bytes wired-limit-bytes]}]
   (let [os (or os-reserve-bytes default-os-reserve)
-        head (or headroom-bytes default-headroom)]
-    (oracle/require-ready! oid)
+        head (or headroom-bytes default-headroom)
+        cap (oracle/record
+             node-cap-schema
+             {:mem mem-bytes :os os :head head :wired wired-limit-bytes})]
     (oracle/i64->host
-     (oracle/call-record
-      oid 'usable-bytes
-      {:mem-bytes mem-bytes
-       :os-reserve-bytes os
-       :headroom-bytes head
-       :wired-limit-bytes wired-limit-bytes}
-      [[:mem-bytes :i64]
-       [:os-reserve-bytes :i64]
-       [:headroom-bytes :i64]
-       [:wired-limit-bytes :option-i64]]))))
+     (o-record 'usable-bytes {:node cap} [[:node :raw]]))))
 
 (defn- largest-remainder
   "Apportion `total` integer units over `quotas` (seq of non-negative reals that
@@ -153,17 +156,16 @@
 (defn choose-strategy
   "Pick the parallelism the interconnect can actually pay for.
    Strategy name from kotoba `choose-strategy-name` (required); :why from host table.
-   T5.2: structural map → call-record."
+   T5.2 native guest record: one :plan/strategy-in arg."
   [{:keys [link-gbps ranks model]}]
   (let [name (o-record 'choose-strategy-name
-                       {:link-gbps (or link-gbps 0)
-                        :ranks (or ranks 0)
-                        :experts (or (:model/experts model) 0)
-                        :kv-heads (or (:model/kv-heads model) 0)}
-                       [[:link-gbps :i64]
-                        [:ranks :i64]
-                        [:experts :i64]
-                        [:kv-heads :i64]])
+                       {:in (oracle/record
+                             strategy-in-schema
+                             {:link-gbps (or link-gbps 0)
+                              :ranks (or ranks 0)
+                              :experts (or (:model/experts model) 0)
+                              :kv-heads (or (:model/kv-heads model) 0)})}
+                       [[:in :raw]])
         strat (keyword name)]
     {:strategy strat
      :why (get strategy-why strat (:pipeline strategy-why))}))
