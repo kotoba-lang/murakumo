@@ -15,6 +15,21 @@
 
 (def G gc/GiB)
 
+(def ^:private need-ty
+  "[:record :gc/need [[:target :i64] [:free :i64]]]")
+
+(def ^:private free-after-ty
+  "[:record :gc/free-after [[:free :i64] [:reclaimed :i64]]]")
+
+(def ^:private target-ty
+  "[:record :gc/target [[:free :i64] [:reclaimed :i64] [:target :i64]]]")
+
+(def ^:private rank-ty
+  "[:record :gc/rank [[:atime1 :i64] [:bytes1 :i64] [:atime2 :i64] [:bytes2 :i64]]]")
+
+(def ^:private comfy-ty
+  "[:record :gc/comfy [[:atime-days :i64] [:keep-days :i64]]]")
+
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
                (str "(defn " name " [] :i64 " body ")"))
@@ -45,7 +60,8 @@
                 [0 0]]
         cases (into {} (map-indexed
                         (fn [i [t f]]
-                          [(str "n_" i) (str "(need-bytes " t " " f ")")])
+                          [(str "n_" i)
+                           (str "(need-bytes (record-new " need-ty " " t " " f "))")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [t f]] (map-indexed vector corpus)]
@@ -58,12 +74,15 @@
                 [(* 50 G) 0 (* 20 G)]]
         fa-cases (into {} (map-indexed
                            (fn [i [f r _]]
-                             [(str "fa_" i) (str "(free-after " f " " r ")")])
+                             [(str "fa_" i)
+                              (str "(free-after (record-new " free-after-ty
+                                   " " f " " r "))")])
                            corpus))
         tm-cases (into {} (map-indexed
                            (fn [i [f r t]]
                              [(str "tm_" i)
-                              (str "(if (target-met? " f " " r " " t ") 1 0)")])
+                              (str "(if (target-met? (record-new " target-ty
+                                   " " f " " r " " t ")) 1 0)")])
                            corpus))
         fa (compile-i64-cases fa-cases)
         tm (compile-i64-cases tm-cases)]
@@ -82,7 +101,8 @@
         cases (into {} (map-indexed
                         (fn [i [a1 b1 a2 b2]]
                           [(str "r_" i)
-                           (str "(if (rank-better? " a1 " " b1 " " a2 " " b2 ") 1 0)")])
+                           (str "(if (rank-better? (record-new " rank-ty " "
+                                a1 " " b1 " " a2 " " b2 ")) 1 0)")])
                         pairs))
         actual (compile-i64-cases cases)]
     (doseq [[i [a1 b1 a2 b2]] (map-indexed vector pairs)]
@@ -98,7 +118,8 @@
         cases (into {} (map-indexed
                         (fn [i d]
                           [(str "ce_" i)
-                           (str "(if (comfy-evictable? " d " " keep ") 1 0)")])
+                           (str "(if (comfy-evictable? (record-new " comfy-ty
+                                " " d " " keep ")) 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i d] (map-indexed vector corpus)]
