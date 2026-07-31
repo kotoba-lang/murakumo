@@ -30,7 +30,11 @@
   register-kir!, or set-resource-loader!) before requiring this ns
   (ADR-260731-w6-t64-infer-plan-credits-mirror-delete).
   Float settle folds, transfer, balances remain host."
-  (:require [murakumo.kotoba.oracle :as oracle]))
+  (:require [murakumo.kotoba.oracle :as oracle]
+            ;; capability provenance lives with the enrollment record it
+            ;; qualifies (join owns /infer/nodes); credits consumes it.
+            ;; One-way -- join does not know about credits.
+            [murakumo.infer.join :as join]))
 
 (def ^:private oid :infer-credits)
 
@@ -113,12 +117,55 @@
           0.0 units))
 
 
+;; ---------------------------------------------------------------------------
+;; Capability policy (ADR-2607319500 D3)
+;;
+;; memory-time weights come from what a node ADVERTISES. Measured 2026-07-31,
+;; 44 of the 45 enrolled nodes advertised a byte-identical 32 GiB, which makes
+;; every weight equal and quietly turns "the plan IS the cap table of the run"
+;; into a flat split. :measured-only lets a caller settle against probed
+;; capability only.
+;;
+;; DEFAULT IS :permissive, i.e. exactly the historical behaviour. `settle` is
+;; a pure fold that stored feeds replay through, so changing its default would
+;; retroactively rewrite what past runs mean -- the same reason `balances` was
+;; left permissive and `ledger-violations` added beside it rather than folded
+;; in (see the transfer/non-negative-balance work).
+;; ---------------------------------------------------------------------------
+
+(def capability-policies
+  "#{:permissive :measured-only}. :permissive weights every assignment
+   (historical behaviour). :measured-only weights only assignments whose node
+   declares :capability/source :measured."
+  #{:permissive :measured-only})
+
+(defn capability-exclusions
+  "Which assignments :measured-only would drop, and why. Pure; returns DATA so
+   a caller can report the gap without changing what anyone gets paid.
+
+   → [{:node name :provenance :declared}]"
+  [assignments]
+  (->> assignments
+       (remove #(join/measured-capability? (:node %)))
+       (mapv (fn [{:keys [node]}]
+               {:node (:name node)
+                :provenance (join/capability-provenance node)}))))
+
 (defn settle
   "One run → its credit distribution (pure).
    run: {:model {…prices…} (:tokens n | :units {:images 1 …}) :duration-ms ms
          :plan {:assignments [...]}}
+   opts: {:capability-policy :permissive|:measured-only} (default :permissive)
    → {:run/total t :run/treasury x :run/head y :run/head-name n
-      :run/shares {node credits}}
+      :run/shares {node credits} :run/unallocated u}
+
+   `:run/unallocated` closes the accounting identity in every case:
+     total = treasury + head + Σshares + unallocated
+   It is 0.0 whenever anything was distributable. It is the whole pool when
+   NO assignment carries measured capability under :measured-only -- that pool
+   is :uncomputable, not zero and not the head's. Handing it to the head (what
+   the mt-sum=0 fallback does) would pay the one node whose share is least
+   justified by measurement, so :measured-only declines to allocate instead.
    Shares are proportional to memory-time; the head's OWN layer share rides
    the same rule, PLUS it earns head-frac off the top for terminating the API
    — credited under :run/head-name, WHATEVER the :head? node's real :name is
@@ -127,26 +174,46 @@
    to — balances/1 must credit the SAME name settle reports here, not assume
    the literal string \"head\").
    Total is Σ units×price (job-cost) — text (:tokens) and media (:units) alike."
-  [{:keys [model tokens units duration-ms plan] :as _run}]
-  (let [head-frac (:credit/head-frac model default-head-frac)
-        proto-frac (:credit/protocol-frac model default-protocol-frac)
-        units (or units (when tokens {:tokens tokens}))
-        total (job-cost model units)
-        treasury (* total (double proto-frac))
-        head-cut (* total (double head-frac))
-        pool (- total treasury head-cut)
-        mt (memory-time (:assignments plan) (or duration-ms 1))
-        mt-sum (reduce + (vals mt))
-        head-name (or (some #(when (get-in % [:node :head?]) (get-in % [:node :name]))
-                            (:assignments plan))
-                      "head")]
-    {:run/total total
-     :run/treasury treasury
-     :run/head head-cut
-     :run/head-name head-name
-     :run/shares (if (pos? mt-sum)
-                   (into {} (map (fn [[n w]] [n (* pool (/ w mt-sum))]) mt))
-                   {head-name pool})}))
+  ([run] (settle run nil))
+  ([{:keys [model tokens units duration-ms plan] :as _run}
+    {:keys [capability-policy] :or {capability-policy :permissive}}]
+   (let [head-frac (:credit/head-frac model default-head-frac)
+         proto-frac (:credit/protocol-frac model default-protocol-frac)
+         units (or units (when tokens {:tokens tokens}))
+         total (job-cost model units)
+         treasury (* total (double proto-frac))
+         head-cut (* total (double head-frac))
+         pool (- total treasury head-cut)
+         assignments (:assignments plan)
+         measured-only? (= :measured-only capability-policy)
+         weighted (if measured-only?
+                    (filter #(join/measured-capability? (:node %)) assignments)
+                    assignments)
+         mt (memory-time weighted (or duration-ms 1))
+         mt-sum (reduce + (vals mt))
+         head-name (or (some #(when (get-in % [:node :head?]) (get-in % [:node :name]))
+                             assignments)
+                       "head")
+         ;; mt-sum = 0 has two different meanings and they must not be merged.
+         ;; :permissive -> nobody carried weight (zero span/bytes); the head
+         ;; conducted the run, so it keeps the pool. Historical behaviour.
+         ;; :measured-only -> nobody's capability was ever measured, so the
+         ;; weights are UNKNOWN, not zero. Nothing here justifies giving the
+         ;; pool to the head, so it goes unallocated and says so.
+         distributable? (pos? mt-sum)]
+     (cond-> {:run/total total
+              :run/treasury treasury
+              :run/head head-cut
+              :run/head-name head-name
+              :run/shares (cond
+                            distributable?
+                            (into {} (map (fn [[n w]] [n (* pool (/ w mt-sum))]) mt))
+                            measured-only? {}
+                            :else {head-name pool})
+              :run/unallocated (if (or distributable? (not measured-only?)) 0.0 pool)}
+       measured-only?
+       (assoc :run/capability-policy :measured-only
+              :run/capability-excluded (capability-exclusions assignments))))))
 
 (defn spend
   "A demand-side ledger entry: `who` redeems `credits` for inference. Same
