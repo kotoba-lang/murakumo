@@ -53,7 +53,9 @@
 (defn- resolve-call [fleet node]
   (let [node-port (when (contains? node :port) (:port node))
         fleet-port (when (contains? fleet :fleet/port) (:fleet/port fleet))]
-    (str "(resolve-port " (opt-i64-form node-port) " " (opt-i64-form fleet-port) ")")))
+    (str "(resolve-port (record-new "
+         "[:record :fleet/ports [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]] "
+         (opt-i64-form node-port) " " (opt-i64-form fleet-port) "))")))
 
 (deftest default-control-port-matches
   (let [actual (compile-i64-cases {"d" "(default-control-port)"})]

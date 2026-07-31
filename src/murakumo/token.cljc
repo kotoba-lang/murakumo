@@ -53,6 +53,10 @@
 
 (def ^:private eq-schema
   [:record :token/eq [[:a :string] [:b :string]]])
+(def ^:private claim-exp-schema
+  [:record :token/claim-exp [[:now :i64] [:ttl [:option :i64]]]])
+(def ^:private expired-schema
+  [:record :token/expired [[:exp [:option :i64]] [:now :i64]]])
 
 (def ^:private scope-check-schema
   [:record :token/scope-check [[:token-scope :string] [:required :string]]])
@@ -151,8 +155,9 @@
         scope' (o-record 'claim-scope {:claim_scope (oracle/option-string scope)} [[:claim_scope :raw]])
         exp' (oracle/i64->host
               (o-record 'claim-exp
-                        {:now now :ttl ttl}
-                        [[:now :i64] [:ttl :option-i64]]))]
+                        {:x (oracle/record claim-exp-schema
+                                           {:now now :ttl ttl})}
+                        [[:x :raw]]))]
     {:sub sub'
      :scope scope'
      :iat (oracle/i64->host (oracle/as-i64 now))
@@ -189,13 +194,14 @@
 
 (defn expired?
   "True if claims are expired. Kotoba oracle (option exp). Profile 5: :bool.
-   T5.2: claims map + now → call-record (option fields stay positional)."
+   T5.2: native guest record wire (option exp in-record)."
   [cl now]
   (oracle/bool->host
    (o-record 'expired?
-             {:exp (when (contains? cl :exp) (:exp cl))
-              :now now}
-             [[:exp :option-i64] [:now :i64]])))
+             {:x (oracle/record expired-schema
+                                {:exp (when (contains? cl :exp) (:exp cl))
+                                 :now now})}
+             [[:x :raw]])))
 
 (defn signing-input
   "HMAC message: version + '.' + payloadSeg. Kotoba required."
@@ -216,7 +222,7 @@
 
 (defn parts-present?
   "All three wire segments present (non-blank). Profile 5: guest :bool.
-   T5.2: structural segment map → call-record (options stay positional)."
+   option-string residual stays positional."
   [v payload sig]
   (let [seg (fn [x]
               (when (and x (not (str/blank? (str x))))

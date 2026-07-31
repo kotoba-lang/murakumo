@@ -1,5 +1,7 @@
 (ns fleet-inventory-core
-  (:schemas {;; T5.2 native guest record wire
+  (:schemas {:fleet/ports [:record :fleet/ports
+                          [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]]
+;; T5.2 native guest record wire
              :fleet/selector-name [:record :fleet/selector-name
                                    [[:sel :string] [:name :string]]]})
   (:export [default-control-port digit-char nat-str i64-str
@@ -52,12 +54,12 @@
     (string-concat "-" (nat-str (- 0 n)))
     (nat-str n)))
 
-(defn resolve-port [node-port [:option :i64]
-                    fleet-port [:option :i64]] :i64
+(defn resolve-port [x [:ref :fleet/ports]] :i64
   ;; cljc: (or (:port node) (:fleet/port fleet) 8077)
-  (if-some [p node-port]
+  ;; T5.2 native: option ports in-record.
+  (if-some [p (record-get x :node-port)]
     p
-    (if-some [f fleet-port]
+    (if-some [f (record-get x :fleet-port)]
       f
       (default-control-port))))
 

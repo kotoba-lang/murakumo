@@ -59,6 +59,10 @@
    [[:app :string] [:cid :string] [:desired :i64] [:running-n :i64] [:action :string]]])
 (def ^:private join-schema
   [:record :report/join [[:acc :string] [:sep :string] [:next :string]]])
+(def ^:private status-row-schema
+  [:record :report/status-row
+   [[:name :string] [:health [:option :i64]]
+    [:wasm :string] [:links :string] [:p2p-port :i64]]])
 (def ^:private csv-schema
   [:record :report/csv [[:acc :string] [:next :string]]])
 
@@ -161,23 +165,20 @@
 (defn status-row
   "Format one `murakumo status` row.
    Health presence via Product Value ABI optional i64.
-   T5.2: structural row map → call-record."
+   T5.2: native guest record wire (option health in-record)."
   [node health-json links p2p-port]
   (let [subsystems (:subsystems health-json)
         health? (when health-json 1)
         wasm (or (:wasm_executor subsystems) "?")
         links-str (if health-json (str links) "-")]
     (o-record 'status-row
-              {:name (str (:name node))
-               :health health?
-               :wasm (str wasm)
-               :links (str links-str)
-               :p2p-port p2p-port}
-              [[:name :string]
-               [:health :option-i64]
-               [:wasm :string]
-               [:links :string]
-               [:p2p-port :i64]])))
+              {:r (oracle/record status-row-schema
+                                 {:name (str (:name node))
+                                  :health health?
+                                  :wasm (str wasm)
+                                  :links (str links-str)
+                                  :p2p-port p2p-port})}
+              [[:r :raw]])))
 
 (defn status-row* [{:keys [node health-json links p2p-port] :as row}]
   (status-row node health-json links p2p-port))

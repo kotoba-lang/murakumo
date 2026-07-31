@@ -62,6 +62,8 @@
   "[:record :report/join [[:acc :string] [:sep :string] [:next :string]]]")
 (def ^:private csv-ty
   "[:record :report/csv [[:acc :string] [:next :string]]]")
+(def ^:private status-row-ty
+  "[:record :report/status-row [[:name :string] [:health [:option :i64]] [:wasm :string] [:links :string] [:p2p-port :i64]]]")
 
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -251,14 +253,16 @@
                             (kotoba-literal "x") " "
                             (kotoba-literal "?") " false false "
                             (kotoba-literal "off") "))")
-                 "sr" (str "(status-row " (kotoba-literal "asher") " "
+                 "sr" (str "(status-row (record-new " status-row-ty " "
+                           (kotoba-literal "asher") " "
                            (opt-i64-form 1) " "
                            (kotoba-literal "ready") " "
-                           (kotoba-literal "3") " 8077)")
-                 "srn" (str "(status-row " (kotoba-literal "asher") " "
+                           (kotoba-literal "3") " 8077))")
+                 "srn" (str "(status-row (record-new " status-row-ty " "
+                            (kotoba-literal "asher") " "
                             (opt-i64-form nil) " "
                             (kotoba-literal "?") " "
-                            (kotoba-literal "-") " 0)")})]
+                            (kotoba-literal "-") " 0))")})]
     (is (= (report/nodes-header) (get actual "nh")))
     (is (= (report/status-header) (get actual "sh")))
     (is (= "down    " (get actual "sd")))

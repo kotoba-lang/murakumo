@@ -84,26 +84,38 @@
    :body (blank? seed),
    :param-types [:string]}
   {:name resolve-p2p-port,
-   :params [node-port fleet-port],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [__kotoba_binding-some_1 node-port]
+    [__kotoba_binding-some_1
+     (record-get
+      [:record
+       :provision/p2p-ports
+       [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]]
+      x
+      :node-port)]
     (if
      (option-some?-of [:option :i64] __kotoba_binding-some_1)
      (let
       [p (option-value-of [:option :i64] __kotoba_binding-some_1 0)]
       p)
      (let
-      [__kotoba_binding-some_2 fleet-port]
+      [__kotoba_binding-some_2
+       (record-get
+        [:record
+         :provision/p2p-ports
+         [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]]
+        x
+        :fleet-port)]
       (if
        (option-some?-of [:option :i64] __kotoba_binding-some_2)
        (let
         [f (option-value-of [:option :i64] __kotoba_binding-some_2 0)]
         f)
        4001)))),
-   :param-types [[:option :i64] [:option :i64]]}
+   :param-types [[:ref :provision/p2p-ports]]}
   {:name multiaddr-ip4-prefix,
    :params [],
    :result :string,
@@ -843,27 +855,29 @@
  :oracle-value nil,
  :schema-identities
  #:provision{:bin-path
-             "85face76846f2352c7e1bad3cd5d135731ce487edda0c28c945c0fd50c49445c",
+             "56aa16deea9fea39258b41d7f3e2ddc963575830b6f7e6dcc4842b6e7ba78061",
              :bootstrap
-             "01e08d4a8cbea5958af70a8030ee687a29cfc121cca8a6a7da4fa60cb4afbd0d",
+             "682e1f6c954b69288f5ead605f881194441283d8ec919447c0bf8e4a54da9bb9",
              :join
-             "59be7b1d576dee622c9922bc971106ed54ae6918386b48c736a1877be12f9d55",
+             "4683517ae6fb2f3a97a062131cf2d297a10e89d3b19230b96191009700d9560f",
              :label-kv
-             "b7a8ff6448da6c0267fecdaa4227824063a1494974cbfca2a635cb6be41a4c97",
+             "43e8fac4514d330d541705bcc29902e53dc571b8bf9ca8db1f2226217a3016d4",
              :labels
-             "bb5e2f749c37ab0de1f058403a71e0e2d320df0745462c687b97ee7bdc6fe2ba",
+             "70fee277a43896b4f36e694abccd3e7497614b0715c9ace64602218edc638862",
              :multiaddr
-             "56c325532ada3e1ade83e059b640f6dd1fdda72f310bd190354e4d468fd9e79e",
+             "ea345a1b787cb0e039c0171029083a1617942eda5e68711b7a71f333bb576af0",
+             :p2p-ports
+             "7b936c3b3bd1647be6a3602508aab394eca2e39e646ae9292966d653af185d46",
              :peer-entry
-             "a3bb5008eb36f64a38b0d00e36fab4f5f4767af7219025196974da4895cc8673",
+             "af339eb01e493f306c510962c13efbde74deacf79bbaf6ce46c281a78ceaba22",
              :plist-replace
-             "b479a8272816d0c30cbef228710add90e7beaee96be936f308a71165c4f360c2",
+             "ed9094a13668c18cb04f3fe78007c2521bd4cbadc02f2bd766ba518c0c290094",
              :remote-dest
-             "a373ee24cc10d42be1e655f71e9e8cb8ecf582439c79d6b21487994a61c75d98",
+             "e5183433f36f48e4c2f4a2e4450d9e732bce950541c492db65fe5cf21c1eaa32",
              :roles
-             "a5a4cd554c1bbe7bb5586cf0f704d165d6064b14cb86de2e7ec309a7e2e611fc",
+             "62b411e5afa436623d5d28f15faa41b208a0f59cca199b28c07defc911764e7b",
              :write-plist
-             "e1b700addce8049d930f0e701743294e3c3fbd7493779cc263066885c674bcae"},
+             "87fcb62131052e65ce2673a240b74020ff7c25ba53cddb256249382633c597a2"},
  :exports
  [plist-label
   remote-bin
@@ -951,6 +965,11 @@
  :schemas
  #:provision{:label-kv
              [:record :provision/label-kv [[:k :string] [:v :string]]],
+             :p2p-ports
+             [:record
+              :provision/p2p-ports
+              [[:node-port [:option :i64]]
+               [:fleet-port [:option :i64]]]],
              :write-plist
              [:record
               :provision/write-plist

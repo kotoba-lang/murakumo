@@ -6,7 +6,12 @@
                           [[:payload :string] [:sig :string]]]
              :token/eq [:record :token/eq [[:a :string] [:b :string]]]
              :token/scope-check [:record :token/scope-check
-                                 [[:token-scope :string] [:required :string]]]})
+                                 [[:token-scope :string] [:required :string]]]
+             :token/claim-exp [:record :token/claim-exp
+                               [[:now :i64] [:ttl [:option :i64]]]]
+             :token/expired [:record :token/expired
+                             [[:exp [:option :i64]] [:now :i64]]]
+})
   (:export [version default-ttl claim-sub claim-scope claim-exp
             expired? scope-allows? signing-input
             encode-claims-json wire-token
@@ -75,15 +80,18 @@
     x
     (default-scope)))
 
-(defn claim-exp [now :i64 ttl [:option :i64]] :i64
-  (+ now (if-some [x ttl] x (default-ttl))))
+(defn claim-exp [x [:ref :token/claim-exp]] :i64
+  ;; T5.2 native: now+ttl option on one record.
+  (+ (record-get x :now)
+     (if-some [ttl (record-get x :ttl)] ttl (default-ttl))))
 
-(defn expired? [exp [:option :i64] now :i64] :bool
+(defn expired? [x [:ref :token/expired]] :bool
   ;; true when expired; missing exp => expired
-  ;; (option fields not yet folded into records — compiler option-in-record gap)
-  (if-some [e exp]
-    (if (< now e) false true)
-    true))
+  ;; T5.2 native: option exp in-record.
+  (let [now (record-get x :now)]
+    (if-some [e (record-get x :exp)]
+      (if (< now e) false true)
+      true)))
 
 (defn scope-allows? [x [:ref :token/scope-check]] :bool
   ;; T5.2 native: single scope-check record.
@@ -119,6 +127,7 @@
   (if (string=? v (version)) true false))
 
 (defn parts-present? [v [:option :string] p [:option :string] s [:option :string]] :bool
+  ;; option-string residual: stays positional (option-string-in-record gap)
   (if-some [_ v]
     (if-some [_ p]
       (if-some [_ s] true false)

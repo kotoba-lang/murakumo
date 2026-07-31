@@ -59,6 +59,9 @@
 (def ^:private plist-replace-schema
   [:record :provision/plist-replace
    [[:tmpl :string] [:ph :string] [:val :string]]])
+(def ^:private p2p-ports-schema
+  [:record :provision/p2p-ports
+   [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]])
 (def ^:private write-plist-schema
   [:record :provision/write-plist [[:label :string] [:body :string]]])
 
@@ -370,16 +373,14 @@
 (defn node-p2p-port
   "Resolve a node's p2p QUIC port, defaulting to fleet p2p port, then 4001.
    Kotoba `resolve-p2p-port` with Product Value ABI optional ports (required).
-   T5.2: structural host map → call-record."
+   T5.2: native guest record wire."
   [fleet node]
-  (oracle/require-ready! oid)
   (oracle/i64->host
-   (oracle/call-record
-    oid 'resolve-p2p-port
-    {:node-port (:p2p-port node)
-     :fleet-port (:fleet/p2p-port fleet)}
-    [[:node-port :option-i64]
-     [:fleet-port :option-i64]])))
+   (o-record 'resolve-p2p-port
+             {:x (oracle/record p2p-ports-schema
+                                {:node-port (:p2p-port node)
+                                 :fleet-port (:fleet/p2p-port fleet)})}
+             [[:x :raw]])))
 
 (defn multiaddr
   "Tailscale QUIC multiaddr for a node ip/port. Kotoba (required).

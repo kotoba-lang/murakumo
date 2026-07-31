@@ -97,9 +97,15 @@
            {"w" "(peer-advertise-wait-ms)" "d" "(default-p2p-port)"
             "m0" (str "(if (operator-seed-missing? " (kotoba-literal "") ") 1 0)")
             "m1" (str "(if (operator-seed-missing? " (kotoba-literal "seed") ") 1 0)")
-            "p0" "(resolve-p2p-port (option-none-of [:option :i64]) (option-some-of [:option :i64] 4001))"
-            "p1" "(resolve-p2p-port (option-some-of [:option :i64] 5001) (option-some-of [:option :i64] 4001))"
-            "p2" "(resolve-p2p-port (option-none-of [:option :i64]) (option-none-of [:option :i64]))"
+            "p0" (str "(resolve-p2p-port (record-new "
+                      "[:record :provision/p2p-ports [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]] "
+                      "(option-none-of [:option :i64]) (option-some-of [:option :i64] 4001)))")
+            "p1" (str "(resolve-p2p-port (record-new "
+                      "[:record :provision/p2p-ports [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]] "
+                      "(option-some-of [:option :i64] 5001) (option-some-of [:option :i64] 4001)))")
+            "p2" (str "(resolve-p2p-port (record-new "
+                      "[:record :provision/p2p-ports [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]] "
+                      "(option-none-of [:option :i64]) (option-none-of [:option :i64])))")
             "wp" "(webrtc-port 4001)"})]
     (is (= plan/plist-label (get s "pl")))
     (is (= plan/remote-bin (get s "rb")))
