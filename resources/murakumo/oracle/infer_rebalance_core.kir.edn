@@ -619,12 +619,22 @@
     :postproc),
    :param-types [:i64 [:ref :rebalance/lanes] :i64]}
   {:name classify-run-flags,
-   :params [images video audio swarm tokens],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [__kotoba_binding-some_1 images]
+    [__kotoba_binding-some_1
+     (record-get
+      [:record
+       :rebalance/run-flags
+       [[:images [:option :string]]
+        [:video [:option :string]]
+        [:audio [:option :string]]
+        [:swarm [:option :string]]
+        [:tokens [:option :string]]]]
+      x
+      :images)]
     (if
      (option-some?-of [:option :string] __kotoba_binding-some_1)
      (let
@@ -632,7 +642,17 @@
        (option-value-of [:option :string] __kotoba_binding-some_1 "")]
       2)
      (let
-      [__kotoba_binding-some_2 video]
+      [__kotoba_binding-some_2
+       (record-get
+        [:record
+         :rebalance/run-flags
+         [[:images [:option :string]]
+          [:video [:option :string]]
+          [:audio [:option :string]]
+          [:swarm [:option :string]]
+          [:tokens [:option :string]]]]
+        x
+        :video)]
       (if
        (option-some?-of [:option :string] __kotoba_binding-some_2)
        (let
@@ -643,7 +663,17 @@
           "")]
         3)
        (let
-        [__kotoba_binding-some_3 audio]
+        [__kotoba_binding-some_3
+         (record-get
+          [:record
+           :rebalance/run-flags
+           [[:images [:option :string]]
+            [:video [:option :string]]
+            [:audio [:option :string]]
+            [:swarm [:option :string]]
+            [:tokens [:option :string]]]]
+          x
+          :audio)]
         (if
          (option-some?-of [:option :string] __kotoba_binding-some_3)
          (let
@@ -654,7 +684,17 @@
             "")]
           4)
          (let
-          [__kotoba_binding-some_4 swarm]
+          [__kotoba_binding-some_4
+           (record-get
+            [:record
+             :rebalance/run-flags
+             [[:images [:option :string]]
+              [:video [:option :string]]
+              [:audio [:option :string]]
+              [:swarm [:option :string]]
+              [:tokens [:option :string]]]]
+            x
+            :swarm)]
           (if
            (option-some?-of [:option :string] __kotoba_binding-some_4)
            (let
@@ -665,7 +705,17 @@
               "")]
             5)
            (let
-            [__kotoba_binding-some_5 tokens]
+            [__kotoba_binding-some_5
+             (record-get
+              [:record
+               :rebalance/run-flags
+               [[:images [:option :string]]
+                [:video [:option :string]]
+                [:audio [:option :string]]
+                [:swarm [:option :string]]
+                [:tokens [:option :string]]]]
+              x
+              :tokens)]
             (if
              (option-some?-of
               [:option :string]
@@ -678,12 +728,7 @@
                 "")]
               1)
              0)))))))))),
-   :param-types
-   [[:option :string]
-    [:option :string]
-    [:option :string]
-    [:option :string]
-    [:option :string]]}
+   :param-types [[:ref :rebalance/run-flags]]}
   {:name demand-empty,
    :params [],
    :result [:ref :rebalance/demand],
@@ -1157,13 +1202,15 @@
  :oracle-value nil,
  :schema-identities
  #:rebalance{:demand
-             "a6e40476ca7c224549ed33855a4a8e1858274a33793e8e1fc3b3078a51233cdc",
+             "dac7553d55afb5cb97873bf9c2546b4c0b80b103225a867890c6d3a4414ddd03",
              :lanes
-             "9bd9efdcc5c147d89d3598b323ba53ed382b2a3acff088e2c69b66e8f36a903a",
+             "b746ef8a095b38716481d1f21259f4d5e5b230bca24ce764b9e77b81571341b6",
              :order
-             "a1ba8058f8be3faece89b0acb227136351a883d794005cd9051f03db526177db",
+             "10cf4952d61101487bc9e9f15c4503bd8a798a9a0d5cc34507f542c38707700a",
+             :run-flags
+             "6d9716994e8a7fdc0ccfcbf88a1666b95c1ee3e62697d07bc42b3ee3d53042d1",
              :seats-in
-             "a59ca9837044bc06d2feb3ca089c150f9b9ad2f45d5f02b0c47c38e4dd0e4979"},
+             "244cad1047aa7e4367b9e17b0c23292328e6eab589e53880d8185b2c58b9e6cb"},
  :exports
  [shard-ceiling-gb
   os-kv-headroom-gb
@@ -1234,7 +1281,15 @@
              :order
              [:record
               :rebalance/order
-              [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]},
+              [[:i0 :i64] [:i1 :i64] [:i2 :i64]]],
+             :run-flags
+             [:record
+              :rebalance/run-flags
+              [[:images [:option :string]]
+               [:video [:option :string]]
+               [:audio [:option :string]]
+               [:swarm [:option :string]]
+               [:tokens [:option :string]]]]},
  :effects #{},
  :blocks [],
  :entry nil}

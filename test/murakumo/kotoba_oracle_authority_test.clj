@@ -1615,15 +1615,22 @@
       (doseq [ex '[seats-of-text seats-of-media seats-of-postproc seats-total]]
         (is (= (ir/execute r ex [sin])
                (oracle/call :infer-rebalance ex [sin])))))
-    (let [img (oracle/option-string "images")
-          none-s (oracle/option-string nil)]
-      (is (= (ir/execute r 'classify-run-flags [img none-s none-s none-s none-s])
-             (oracle/call :infer-rebalance 'classify-run-flags
-                          [img none-s none-s none-s none-s])))
-      (is (= 2 (oracle/call :infer-rebalance 'classify-run-flags
-                            [img none-s none-s none-s none-s])))
-      (is (= 0 (oracle/call :infer-rebalance 'classify-run-flags
-                            [none-s none-s none-s none-s none-s]))))
+    (let [run-schema [:record :rebalance/run-flags
+                      [[:images [:option :string]]
+                       [:video [:option :string]]
+                       [:audio [:option :string]]
+                       [:swarm [:option :string]]
+                       [:tokens [:option :string]]]]
+          img-run (oracle/record run-schema
+                                 {:images "images" :video nil :audio nil
+                                  :swarm nil :tokens nil})
+          none-run (oracle/record run-schema
+                                  {:images nil :video nil :audio nil
+                                   :swarm nil :tokens nil})]
+      (is (= (ir/execute r 'classify-run-flags [img-run])
+             (oracle/call :infer-rebalance 'classify-run-flags [img-run])))
+      (is (= 2 (oracle/call :infer-rebalance 'classify-run-flags [img-run])))
+      (is (= 0 (oracle/call :infer-rebalance 'classify-run-flags [none-run]))))
     (let [id (oracle/record [:record :relay/id [[:prefix :string] [:n :i64]]]
                             {:prefix "job" :n 0})
           lease (oracle/record [:record :relay/lease

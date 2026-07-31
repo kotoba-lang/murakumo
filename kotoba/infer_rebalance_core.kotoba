@@ -10,7 +10,14 @@
                                 [[:text :i64] [:image :i64] [:video :i64]
                                  [:audio :i64] [:postproc :i64]]]
              :rebalance/order [:record :rebalance/order
-                               [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]})
+                               [[:i0 :i64] [:i1 :i64] [:i2 :i64]]]
+             ;; T5.2 option-string-in-record: one-run class flags
+             :rebalance/run-flags [:record :rebalance/run-flags
+                                   [[:images [:option :string]]
+                                    [:video [:option :string]]
+                                    [:audio [:option :string]]
+                                    [:swarm [:option :string]]
+                                    [:tokens [:option :string]]]]})
   (:export [shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class
             seats-of-text seats-of-media seats-of-postproc seats-total
             pool-demand-record pool-weight-text pool-weight-media pool-weight-postproc
@@ -269,23 +276,20 @@
                             (record-get w :postproc) floor)
               :postproc))
 
-(defn classify-run-flags [images [:option :string]
-                          video [:option :string]
-                          audio [:option :string]
-                          swarm [:option :string]
-                          tokens [:option :string]] :i64
-  ;; Product Value ABI v1: optional unit/kind tokens (no has-* sentinels).
+(defn classify-run-flags [x [:ref :rebalance/run-flags]] :i64
+  ;; Product Value ABI v1: optional unit/kind tokens on one record.
   ;; mirrors demand-from-runs cond order; returns class code:
   ;; 0 none, 1 text, 2 image, 3 video, 4 audio, 5 postproc
-  (if-some [_ images]
+  ;; T5.2 native guest record wire (option-string-in-record).
+  (if-some [_ (record-get x :images)]
     2
-    (if-some [_ video]
+    (if-some [_ (record-get x :video)]
       3
-      (if-some [_ audio]
+      (if-some [_ (record-get x :audio)]
         4
-        (if-some [_ swarm]
+        (if-some [_ (record-get x :swarm)]
           5
-          (if-some [_ tokens]
+          (if-some [_ (record-get x :tokens)]
             1
             0))))))
 

@@ -176,17 +176,24 @@
     "(option-none-of [:option :string])"
     (str "(option-some-of [:option :string] " (kotoba-literal s) ")")))
 
+(def ^:private run-flags-ty
+  "[:record :rebalance/run-flags [[:images [:option :string]] [:video [:option :string]] [:audio [:option :string]] [:swarm [:option :string]] [:tokens [:option :string]]]]")
+
+(defn- classify-call [img vid aud sw tok]
+  (str "(classify-run-flags (record-new " run-flags-ty " "
+       img " " vid " " aud " " sw " " tok "))"))
+
 (deftest classify-run-flags-matches-demand-cond-order
   (let [s (opt-str-form "x")
         n (opt-str-form nil)
         actual (compile-i64-cases
                 {;; priority: images > video > audio > swarm > tokens
-                 "c_img" (str "(classify-run-flags " s " " s " " s " " s " " s ")")
-                 "c_vid" (str "(classify-run-flags " n " " s " " s " " s " " s ")")
-                 "c_aud" (str "(classify-run-flags " n " " n " " s " " s " " s ")")
-                 "c_sw" (str "(classify-run-flags " n " " n " " n " " s " " s ")")
-                 "c_tok" (str "(classify-run-flags " n " " n " " n " " n " " s ")")
-                 "c_none" (str "(classify-run-flags " n " " n " " n " " n " " n ")")})]
+                 "c_img" (classify-call s s s s s)
+                 "c_vid" (classify-call n s s s s)
+                 "c_aud" (classify-call n n s s s)
+                 "c_sw" (classify-call n n n s s)
+                 "c_tok" (classify-call n n n n s)
+                 "c_none" (classify-call n n n n n)})]
     (is (= 2 (get actual "c_img")))
     (is (= 3 (get actual "c_vid")))
     (is (= 4 (get actual "c_aud")))
@@ -215,12 +222,13 @@
         fold (reduce (fn [expr run]
                        (let [[img vid aud sw tok] (run-flags run)]
                          (str "(demand-inc " expr
-                              " (classify-run-flags "
-                              (opt-str-form img) " "
-                              (opt-str-form vid) " "
-                              (opt-str-form aud) " "
-                              (opt-str-form sw) " "
-                              (opt-str-form tok) "))")))
+                              " "
+                              (classify-call (opt-str-form img)
+                                             (opt-str-form vid)
+                                             (opt-str-form aud)
+                                             (opt-str-form sw)
+                                             (opt-str-form tok))
+                              ")")))
                      "(demand-empty)"
                      runs)
         actual (compile-i64-cases
