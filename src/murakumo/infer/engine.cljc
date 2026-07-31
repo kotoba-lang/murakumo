@@ -42,6 +42,26 @@
 
 (def ^:private head-tail-schema
   [:record :engine/head-tail [[:ctx :i64] [:parallel :i64] [:port :i64]]])
+(def ^:private embed-front-schema
+  [:record :engine/embed-front
+   [[:bin-dir :string] [:model-path :string] [:pooling :string] [:ctx :i64]]])
+(def ^:private embed-back-schema
+  [:record :engine/embed-back [[:parallel :i64] [:port :i64]]])
+(def ^:private mlx-moe-schema
+  [:record :engine/mlx-moe
+   [[:venv :string] [:model-repo :string] [:port :i64]]])
+(def ^:private opt-i64-schema
+  [:record :engine/opt-i64
+   [[:flag :string] [:value :i64] [:present :bool]]])
+(def ^:private opt-str-schema
+  [:record :engine/opt-str
+   [[:flag :string] [:value :string] [:present :bool]]])
+(def ^:private tensor-3-schema
+  [:record :engine/tensor-3 [[:s0 :i64] [:s1 :i64] [:s2 :i64]]])
+(def ^:private mlx-launch-schema
+  [:record :engine/mlx-launch
+   [[:venv :string] [:hosts-file :string]
+    [:model-repo :string] [:max-tokens :i64]]])
 
 (def default-rpc-port
   (oracle/i64->host (o 'default-rpc-port [])))
@@ -137,14 +157,12 @@
   [plan {:keys [hosts-file venv model-repo prompt max-tokens]
          :or {max-tokens 128}}]
   (str (o-record 'mlx-launch-front
-                 {:venv venv
-                  :hosts-file hosts-file
-                  :model-repo model-repo
-                  :max-tokens max-tokens}
-                 [[:venv :string]
-                  [:hosts-file :string]
-                  [:model-repo :string]
-                  [:max-tokens :i64]])
+                 {:x (oracle/record mlx-launch-schema
+                                    {:venv venv
+                                     :hosts-file hosts-file
+                                     :model-repo model-repo
+                                     :max-tokens max-tokens})}
+                 [[:x :raw]])
        " --prompt " (pr-str (or prompt "Name three Japanese cities."))))
 
 ;; ── mlx-moe ─────────────────────────────────────────────────────────────────
@@ -154,35 +172,41 @@
   [{:keys [venv model-repo port capacity pin-top-k kv-bits profile warmup extra-args]
     :or {port 8080}}]
   (str (o-record 'mlx-moe-front
-                 {:venv (or venv "")
-                  :model-repo model-repo
-                  :port port}
-                 [[:venv :string] [:model-repo :string] [:port :i64]])
+                 {:x (oracle/record mlx-moe-schema
+                                    {:venv (or venv "")
+                                     :model-repo model-repo
+                                     :port port})}
+                 [[:x :raw]])
        (o-record 'opt-i64-flag
-                 {:flag " --capacity"
-                  :value (or capacity 0)
-                  :present? (boolean capacity)}
-                 [[:flag :string] [:value :i64] [:present? :bool]])
+                 {:x (oracle/record opt-i64-schema
+                                    {:flag " --capacity"
+                                     :value (or capacity 0)
+                                     :present (boolean capacity)})}
+                 [[:x :raw]])
        (o-record 'opt-i64-flag
-                 {:flag " --pin-top-k"
-                  :value (or pin-top-k 0)
-                  :present? (boolean pin-top-k)}
-                 [[:flag :string] [:value :i64] [:present? :bool]])
+                 {:x (oracle/record opt-i64-schema
+                                    {:flag " --pin-top-k"
+                                     :value (or pin-top-k 0)
+                                     :present (boolean pin-top-k)})}
+                 [[:x :raw]])
        (o-record 'opt-i64-flag
-                 {:flag " --kv-bits"
-                  :value (or kv-bits 0)
-                  :present? (boolean kv-bits)}
-                 [[:flag :string] [:value :i64] [:present? :bool]])
+                 {:x (oracle/record opt-i64-schema
+                                    {:flag " --kv-bits"
+                                     :value (or kv-bits 0)
+                                     :present (boolean kv-bits)})}
+                 [[:x :raw]])
        (o-record 'opt-str-flag
-                 {:flag " --profile"
-                  :value (or profile "")
-                  :present? (boolean profile)}
-                 [[:flag :string] [:value :string] [:present? :bool]])
+                 {:x (oracle/record opt-str-schema
+                                    {:flag " --profile"
+                                     :value (or profile "")
+                                     :present (boolean profile)})}
+                 [[:x :raw]])
        (o-record 'opt-str-flag
-                 {:flag " --warmup"
-                  :value (or warmup "")
-                  :present? (boolean warmup)}
-                 [[:flag :string] [:value :string] [:present? :bool]])
+                 {:x (oracle/record opt-str-schema
+                                    {:flag " --warmup"
+                                     :value (or warmup "")
+                                     :present (boolean warmup)})}
+                 [[:x :raw]])
        (when (seq extra-args) (str " " (str/join " " extra-args)))))
 
 ;; ── llamacpp-embed ──────────────────────────────────────────────────────────
@@ -192,17 +216,16 @@
   [{:keys [bin-dir model-path port ctx pooling parallel extra-args]
     :or {port 8091 ctx 8192 pooling "mean" parallel 4}}]
   (str (o-record 'embed-head-front
-                 {:bin-dir bin-dir
-                  :model-path model-path
-                  :pooling pooling
-                  :ctx ctx}
-                 [[:bin-dir :string]
-                  [:model-path :string]
-                  [:pooling :string]
-                  [:ctx :i64]])
+                 {:x (oracle/record embed-front-schema
+                                    {:bin-dir bin-dir
+                                     :model-path model-path
+                                     :pooling pooling
+                                     :ctx ctx})}
+                 [[:x :raw]])
        (o-record 'embed-head-back
-                 {:parallel parallel :port port}
-                 [[:parallel :i64] [:port :i64]])
+                 {:x (oracle/record embed-back-schema
+                                    {:parallel parallel :port port})}
+                 [[:x :raw]])
        (when (seq extra-args) (str " " (str/join " " extra-args)))))
 
 (defn commands

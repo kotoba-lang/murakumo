@@ -87,8 +87,40 @@
 (def ^:private head-tail-literal
   (str "[:record :engine/head-tail [[:ctx :i64] [:parallel :i64] [:port :i64]]]"))
 
+(def ^:private embed-front-literal
+  (str "[:record :engine/embed-front [[:bin-dir :string] [:model-path :string] "
+       "[:pooling :string] [:ctx :i64]]]"))
+
+(def ^:private embed-back-literal
+  (str "[:record :engine/embed-back [[:parallel :i64] [:port :i64]]]"))
+
+(def ^:private mlx-moe-literal
+  (str "[:record :engine/mlx-moe [[:venv :string] [:model-repo :string] [:port :i64]]]"))
+
+(def ^:private opt-i64-literal
+  (str "[:record :engine/opt-i64 [[:flag :string] [:value :i64] [:present :bool]]]"))
+
+(def ^:private opt-str-literal
+  (str "[:record :engine/opt-str [[:flag :string] [:value :string] [:present :bool]]]"))
+
+(def ^:private tensor-3-literal
+  (str "[:record :engine/tensor-3 [[:s0 :i64] [:s1 :i64] [:s2 :i64]]]"))
+
+(def ^:private mlx-launch-literal
+  (str "[:record :engine/mlx-launch [[:venv :string] [:hosts-file :string] "
+       "[:model-repo :string] [:max-tokens :i64]]]"))
+
+(def ^:private rpc-csv-2-literal
+  (str "[:record :engine/rpc-csv-2 [[:ep0 :string] [:ep1 :string]]]"))
+
 (defn- endpoint-call [h p]
   (str "(endpoint (record-new " endpoint-literal " " (kotoba-literal h) " " p "))"))
+
+(defn- rpc-csv-2-call [ep0-expr ep1-expr]
+  (str "(rpc-csv-2 (record-new " rpc-csv-2-literal " " ep0-expr " " ep1-expr "))"))
+
+(defn- tensor-3-call [a b c]
+  (str "(tensor-split-3 (record-new " tensor-3-literal " " a " " b " " c "))"))
 
 (defn- rpc-server-call [bin-dir port device cache? cdir]
   (str "(rpc-server-cmd (record-new " rpc-server-literal " "
@@ -145,10 +177,10 @@
                  :pooling "mean" :parallel 4}]
         call (fn [{:keys [bin-dir model-path port ctx pooling parallel]
                    :or {port 8091 ctx 8192 pooling "mean" parallel 4}}]
-               (str "(string-concat (embed-head-front "
+               (str "(string-concat (embed-head-front (record-new " embed-front-literal " "
                     (kotoba-literal bin-dir) " " (kotoba-literal model-path) " "
-                    (kotoba-literal pooling) " " ctx ") (embed-head-back "
-                    parallel " " port "))"))
+                    (kotoba-literal pooling) " " ctx ")) (embed-head-back (record-new "
+                    embed-back-literal " " parallel " " port ")))"))
         cases (into {} (map-indexed (fn [i m] [(str "em_" i) (call m)]) corpus))
         actual (compile-string-cases cases)]
     (doseq [[i m] (map-indexed vector corpus)]
@@ -161,18 +193,25 @@
   [{:keys [venv model-repo port capacity pin-top-k kv-bits profile warmup]
     :or {port 8080}}]
   (let [v (or venv "")
-        front (str "(mlx-moe-front " (kotoba-literal v) " "
-                   (kotoba-literal model-repo) " " port ")")
-        flags [(str "(opt-i64-flag " (kotoba-literal " --capacity") " "
-                    (long (or capacity 0)) " " (if capacity "true" "false") ")")
-               (str "(opt-i64-flag " (kotoba-literal " --pin-top-k") " "
-                    (long (or pin-top-k 0)) " " (if pin-top-k "true" "false") ")")
-               (str "(opt-i64-flag " (kotoba-literal " --kv-bits") " "
-                    (long (or kv-bits 0)) " " (if kv-bits "true" "false") ")")
-               (str "(opt-str-flag " (kotoba-literal " --profile") " "
-                    (kotoba-literal (or profile "")) " " (if profile "true" "false") ")")
-               (str "(opt-str-flag " (kotoba-literal " --warmup") " "
-                    (kotoba-literal (or warmup "")) " " (if warmup "true" "false") ")")]
+        front (str "(mlx-moe-front (record-new " mlx-moe-literal " "
+                   (kotoba-literal v) " " (kotoba-literal model-repo) " " port "))")
+        flags [(str "(opt-i64-flag (record-new " opt-i64-literal " "
+                    (kotoba-literal " --capacity") " " (long (or capacity 0)) " "
+                    (if capacity "true" "false") "))")
+               (str "(opt-i64-flag (record-new " opt-i64-literal " "
+                    (kotoba-literal " --pin-top-k") " " (long (or pin-top-k 0)) " "
+                    (if pin-top-k "true" "false") "))")
+               (str "(opt-i64-flag (record-new " opt-i64-literal " "
+                    (kotoba-literal " --kv-bits") " " (long (or kv-bits 0)) " "
+                    (if kv-bits "true" "false") "))")
+               (str "(opt-str-flag (record-new " opt-str-literal " "
+                    (kotoba-literal " --profile") " "
+                    (kotoba-literal (or profile "")) " "
+                    (if profile "true" "false") "))")
+               (str "(opt-str-flag (record-new " opt-str-literal " "
+                    (kotoba-literal " --warmup") " "
+                    (kotoba-literal (or warmup "")) " "
+                    (if warmup "true" "false") "))")]
         nest (reduce (fn [acc f] (str "(string-concat " acc " " f ")"))
                      front
                      flags)]
@@ -204,8 +243,8 @@
                {:span 1 :node {:name "h" :host "h" :head? true}}]}
         want (engine/tensor-split plan)
         actual (compile-string-cases
-                {"ts" "(tensor-split-3 3 2 1)"
-                 "ts0" "(tensor-split-3 0 0 5)"})]
+                {"ts" (tensor-3-call 3 2 1)
+                 "ts0" (tensor-3-call 0 0 5)})]
     (is (= want (get actual "ts")))
     (is (= "0,0,5" (get actual "ts0")))))
 
@@ -217,10 +256,10 @@
         full (engine/mlx-launch-cmd plan opts)
         prefix (subs full 0 (str/index-of full " --prompt "))
         actual (compile-string-cases
-                {"lf" (str "(mlx-launch-front "
+                {"lf" (str "(mlx-launch-front (record-new " mlx-launch-literal " "
                            (kotoba-literal "/opt/mlx") " "
                            (kotoba-literal "/tmp/hosts.json") " "
-                           (kotoba-literal "org/m") " 64)")
+                           (kotoba-literal "org/m") " 64))")
                  "bin" (str "(mlx-moe-bin " (kotoba-literal "") ")")
                  "bin2" (str "(mlx-moe-bin " (kotoba-literal "/x") ")")})]
     (is (= prefix (get actual "lf")))
@@ -239,26 +278,31 @@
                 {"front" "(head-cmd-front (record-new [:record :engine/head-front [[:bin-dir :string] [:model-path :string]]] \"/opt/llama\" \"/m.gguf\"))"
                  "ep0" "(endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.1\" 50052))"
                  "ep1" "(endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.2\" 50052))"
-                 "rpc" "(rpc-csv-2 (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.1\" 50052)) (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.2\" 50052)))"
-                 "mid" (str "(head-cmd-middle (record-new [:record :engine/head-middle [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]] "
-                            "(rpc-csv-2 (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.1\" 50052)) (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.2\" 50052))) "
-                            "\"pipeline\" "
-                            "(tensor-split-3 10 10 5)))")
+                 "rpc" (rpc-csv-2-call
+                        (endpoint-call "10.0.0.1" 50052)
+                        (endpoint-call "10.0.0.2" 50052))
+                 "mid" (str "(head-cmd-middle (record-new " head-middle-literal " "
+                            (rpc-csv-2-call (endpoint-call "10.0.0.1" 50052)
+                                            (endpoint-call "10.0.0.2" 50052))
+                            " \"pipeline\" "
+                            (tensor-3-call 10 10 5) "))")
                  "tail" "(head-cmd-tail (record-new [:record :engine/head-tail [[:ctx :i64] [:parallel :i64] [:port :i64]]] 4096 1 8080))"
-                 "full" (str "(string-concat (head-cmd-front (record-new [:record :engine/head-front [[:bin-dir :string] [:model-path :string]]] \"/opt/llama\" \"/m.gguf\")) "
+                 "full" (str "(string-concat (head-cmd-front (record-new " head-front-literal " \"/opt/llama\" \"/m.gguf\")) "
                              "(string-concat "
-                             "(head-cmd-middle (record-new [:record :engine/head-middle [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]] "
-                             "(rpc-csv-2 (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.1\" 50052)) (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.2\" 50052))) "
-                             "\"pipeline\" "
-                             "(tensor-split-3 10 10 5))) "
-                             "(head-cmd-tail (record-new [:record :engine/head-tail [[:ctx :i64] [:parallel :i64] [:port :i64]]] 4096 1 8080))))")
-                 "tensor" (str "(string-concat (head-cmd-front (record-new [:record :engine/head-front [[:bin-dir :string] [:model-path :string]]] \"/opt/llama\" \"/m.gguf\")) "
+                             "(head-cmd-middle (record-new " head-middle-literal " "
+                             (rpc-csv-2-call (endpoint-call "10.0.0.1" 50052)
+                                             (endpoint-call "10.0.0.2" 50052))
+                             " \"pipeline\" "
+                             (tensor-3-call 10 10 5) ")) "
+                             "(head-cmd-tail (record-new " head-tail-literal " 4096 1 8080))))")
+                 "tensor" (str "(string-concat (head-cmd-front (record-new " head-front-literal " \"/opt/llama\" \"/m.gguf\")) "
                                "(string-concat "
-                               "(head-cmd-middle (record-new [:record :engine/head-middle [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]] "
-                               "(rpc-csv-2 (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.1\" 50052)) (endpoint (record-new [:record :engine/endpoint [[:host :string] [:port :i64]]] \"10.0.0.2\" 50052))) "
-                               "\"tensor\" "
-                               "(tensor-split-3 10 10 5))) "
-                               "(head-cmd-tail (record-new [:record :engine/head-tail [[:ctx :i64] [:parallel :i64] [:port :i64]]] 4096 1 8080))))")})]
+                               "(head-cmd-middle (record-new " head-middle-literal " "
+                               (rpc-csv-2-call (endpoint-call "10.0.0.1" 50052)
+                                               (endpoint-call "10.0.0.2" 50052))
+                               " \"tensor\" "
+                               (tensor-3-call 10 10 5) ")) "
+                               "(head-cmd-tail (record-new " head-tail-literal " 4096 1 8080))))")})]
     (is (= "/opt/llama/llama-server -m /m.gguf" (get actual "front")))
     (is (= "10.0.0.1:50052,10.0.0.2:50052" (get actual "rpc")))
     (is (= cljc (get actual "full")))

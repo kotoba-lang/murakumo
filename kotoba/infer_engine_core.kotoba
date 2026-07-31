@@ -11,7 +11,27 @@
                                   [[:rpc-csv :string] [:strategy :string]
                                    [:tsplit :string]]]
              :engine/head-tail [:record :engine/head-tail
-                                [[:ctx :i64] [:parallel :i64] [:port :i64]]]})
+                                [[:ctx :i64] [:parallel :i64] [:port :i64]]]
+             :engine/embed-front [:record :engine/embed-front
+                                  [[:bin-dir :string] [:model-path :string]
+                                   [:pooling :string] [:ctx :i64]]]
+             :engine/embed-back [:record :engine/embed-back
+                                 [[:parallel :i64] [:port :i64]]]
+             :engine/mlx-moe [:record :engine/mlx-moe
+                              [[:venv :string] [:model-repo :string] [:port :i64]]]
+             :engine/opt-i64 [:record :engine/opt-i64
+                              [[:flag :string] [:value :i64] [:present :bool]]]
+             :engine/opt-str [:record :engine/opt-str
+                              [[:flag :string] [:value :string] [:present :bool]]]
+             :engine/tensor-3 [:record :engine/tensor-3
+                               [[:s0 :i64] [:s1 :i64] [:s2 :i64]]]
+             :engine/mlx-launch [:record :engine/mlx-launch
+                                 [[:venv :string] [:hosts-file :string]
+                                  [:model-repo :string] [:max-tokens :i64]]]
+             :engine/rpc-csv-2 [:record :engine/rpc-csv-2
+                                [[:ep0 :string] [:ep1 :string]]]
+             :engine/rpc-csv-3 [:record :engine/rpc-csv-3
+                                [[:ep0 :string] [:ep1 :string] [:ep2 :string]]]})
   (:export [default-rpc-port digit-char nat-str i64-str
             split-mode-name endpoint rpc-server-cmd
             embed-head-front embed-head-back
@@ -24,6 +44,7 @@
 ;; Plan-walking (workers/head-cmd over assignment vectors) stays cljc.
 ;; Guest ABI max arity 5: embed/mlx-moe cmds are front + optional flags joined
 ;; in parity tests. i64-str via digit table. No capabilities.
+;; T5.2: multi-scalar pure inputs take single guest records.
 ;; Parity: test/murakumo/infer_engine_kotoba_parity_test.clj
 
 (defn default-rpc-port [] :i64 50052)
@@ -76,27 +97,26 @@
         (string-concat base (string-concat " -c " cache-dir)))
       base)))
 
-(defn embed-head-front [bin-dir :string model-path :string
-                        pooling :string ctx :i64] :string
+(defn embed-head-front [x [:ref :engine/embed-front]] :string
   ;; cljc embed-head-cmd through "-c <ctx>" (before --parallel).
-  (string-concat
-   bin-dir
-   (string-concat
-    "/llama-server -m "
-    (string-concat
-     model-path
-     (string-concat
-      " --embedding --pooling "
-      (string-concat
-       pooling
-       (string-concat " -ngl 999 -c " (i64-str ctx))))))))
+  ;; T5.2 native record.
+  (let [bin-dir (record-get x :bin-dir)
+        model-path (record-get x :model-path)
+        pooling (record-get x :pooling)
+        ctx (record-get x :ctx)
+        a (string-concat " -ngl 999 -c " (i64-str ctx))
+        b (string-concat pooling a)
+        c (string-concat " --embedding --pooling " b)
+        d (string-concat model-path c)
+        e (string-concat "/llama-server -m " d)]
+    (string-concat bin-dir e)))
 
-(defn embed-head-back [parallel :i64 port :i64] :string
-  (string-concat
-   " --parallel "
-   (string-concat
-    (i64-str parallel)
-    (string-concat " --host 0.0.0.0 --port " (i64-str port)))))
+(defn embed-head-back [x [:ref :engine/embed-back]] :string
+  ;; T5.2 native: parallel+port
+  (let [mid (string-concat (i64-str (record-get x :parallel))
+                           (string-concat " --host 0.0.0.0 --port "
+                                          (i64-str (record-get x :port))))]
+    (string-concat " --parallel " mid)))
 
 (defn mlx-moe-bin [venv :string] :string
   ;; cljc: (if venv (str venv "/bin/mlx-moe") "mlx-moe")
@@ -105,58 +125,54 @@
     "mlx-moe"
     (string-concat venv "/bin/mlx-moe")))
 
-(defn mlx-moe-front [venv :string model-repo :string port :i64] :string
+(defn mlx-moe-front [x [:ref :engine/mlx-moe]] :string
   ;; cljc mlx-moe-cmd through "--port <port>" (before optional flags).
-  (string-concat
-   (mlx-moe-bin venv)
-   (string-concat
-    " serve "
-    (string-concat
-     model-repo
-     (string-concat " --host 0.0.0.0 --port " (i64-str port))))))
+  ;; T5.2 native record.
+  (let [tail (string-concat (record-get x :model-repo)
+                            (string-concat " --host 0.0.0.0 --port "
+                                           (i64-str (record-get x :port))))]
+    (string-concat (mlx-moe-bin (record-get x :venv))
+                   (string-concat " serve " tail))))
 
-(defn opt-i64-flag [flag :string val :i64 present :bool] :string
+(defn opt-i64-flag [x [:ref :engine/opt-i64]] :string
   ;; Profile 5: present is real :bool. flag includes leading space + name,
-  ;; e.g. " --capacity". cljc (when x (str flag " " x))
-  (if present
-    (string-concat flag (string-concat " " (i64-str val)))
+  ;; e.g. " --capacity". cljc (when x (str flag " " x)). T5.2 native.
+  (if (record-get x :present)
+    (string-concat (record-get x :flag)
+                   (string-concat " " (i64-str (record-get x :value))))
     ""))
 
-(defn opt-str-flag [flag :string val :string present :bool] :string
-  ;; Profile 5: present is real :bool. false ⇒ "".
-  (if present
-    (string-concat flag (string-concat " " val))
+(defn opt-str-flag [x [:ref :engine/opt-str]] :string
+  ;; Profile 5: present is real :bool. false ⇒ "". T5.2 native.
+  (if (record-get x :present)
+    (string-concat (record-get x :flag)
+                   (string-concat " " (record-get x :value)))
     ""))
 
-(defn tensor-split-3 [s0 :i64 s1 :i64 s2 :i64] :string
-  ;; cljc tensor-split for 2 workers + head: "a,b,c"
+(defn tensor-split-3 [x [:ref :engine/tensor-3]] :string
+  ;; cljc tensor-split for 2 workers + head: "a,b,c" — T5.2 native
   (string-concat
-   (i64-str s0)
+   (i64-str (record-get x :s0))
    (string-concat
     ","
-    (string-concat
-     (i64-str s1)
-     (string-concat "," (i64-str s2))))))
+    (string-concat (i64-str (record-get x :s1))
+                   (string-concat "," (i64-str (record-get x :s2)))))))
 
-(defn mlx-launch-front [venv :string hosts-file :string
-                        model-repo :string max-tokens :i64] :string
+(defn mlx-launch-front [x [:ref :engine/mlx-launch]] :string
   ;; cljc mlx-launch-cmd through --max-tokens (before --prompt).
-  ;; Prompt uses pr-str quoting — stays host.
-  (string-concat
-   venv
-   (string-concat
-    "/bin/mlx.launch --hosts "
-    (string-concat
-     hosts-file
-     (string-concat
-      " --backend ring "
-      (string-concat
-       venv
-       (string-concat
-        "/bin/mlx_lm.generate -- --model "
-        (string-concat
-         model-repo
-         (string-concat " --pipeline --max-tokens " (i64-str max-tokens))))))))))
+  ;; Prompt uses pr-str quoting — stays host. T5.2 native record.
+  (let [venv (record-get x :venv)
+        hosts-file (record-get x :hosts-file)
+        model-repo (record-get x :model-repo)
+        max-tokens (record-get x :max-tokens)
+        a (string-concat " --pipeline --max-tokens " (i64-str max-tokens))
+        b (string-concat model-repo a)
+        c (string-concat "/bin/mlx_lm.generate -- --model " b)
+        d (string-concat venv c)
+        e (string-concat " --backend ring " d)
+        f (string-concat hosts-file e)
+        g (string-concat "/bin/mlx.launch --hosts " f)]
+    (string-concat venv g)))
 
 (defn head-cmd-front [h [:ref :engine/head-front]] :string
   ;; cljc head-cmd through "-m <model>". T5.2 native record.
@@ -166,12 +182,19 @@
      bin-dir
      (string-concat "/llama-server -m " model-path))))
 
-(defn rpc-csv-2 [ep0 :string ep1 :string] :string
-  ;; cljc rpc-endpoints join for 2 workers
-  (string-concat ep0 (string-concat "," ep1)))
+(defn rpc-csv-2 [x [:ref :engine/rpc-csv-2]] :string
+  ;; cljc rpc-endpoints join for 2 workers — T5.2 native
+  (string-concat (record-get x :ep0)
+                 (string-concat "," (record-get x :ep1))))
 
-(defn rpc-csv-3 [ep0 :string ep1 :string ep2 :string] :string
-  (string-concat ep0 (string-concat "," (rpc-csv-2 ep1 ep2))))
+(defn rpc-csv-3 [x [:ref :engine/rpc-csv-3]] :string
+  (string-concat
+   (record-get x :ep0)
+   (string-concat
+    ","
+    (rpc-csv-2 (record-new [:ref :engine/rpc-csv-2]
+                           (record-get x :ep1)
+                           (record-get x :ep2))))))
 
 (defn head-cmd-middle [h [:ref :engine/head-middle]] :string
   ;; " --rpc <csv> --split-mode <mode> --tensor-split <csv>"
