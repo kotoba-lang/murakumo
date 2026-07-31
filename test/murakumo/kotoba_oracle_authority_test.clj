@@ -1041,12 +1041,25 @@
            (oracle/call :config 'release-bin-suffix [])))
     (is (= (ir/execute live 'default-kotoba-dir ["/h"])
            (oracle/call :config 'default-kotoba-dir ["/h"])))
-    (is (= (ir/execute live 'kotoba-dir-from ["" "/h"])
-           (oracle/call :config 'kotoba-dir-from ["" "/h"])))
-    (is (= (ir/execute live 'resolve-local-bin ["/u" "/k" false "/b"])
-           (oracle/call :config 'resolve-local-bin ["/u" "/k" false "/b"])))
-    (is (= (ir/execute live 'kotoba-bin ["/u" true])
-           (oracle/call :config 'kotoba-bin ["/u" true])))
+    (let [kd (oracle/record
+              [:record :config/kotoba-dir [[:override :string] [:home :string]]]
+              {:override "" :home "/h"})
+          local (oracle/record
+                 [:record :config/local-bin
+                  [[:user-dir :string] [:kotoba-dir :string]
+                   [:pinned-exists :bool] [:murakumo-bin :string]]]
+                 {:user-dir "/u" :kotoba-dir "/k"
+                  :pinned-exists false :murakumo-bin "/b"})
+          bin (oracle/record
+               [:record :config/kotoba-bin
+                [[:user-dir :string] [:pinned-exists :bool]]]
+               {:user-dir "/u" :pinned-exists true})]
+      (is (= (ir/execute live 'kotoba-dir-from [kd])
+             (oracle/call :config 'kotoba-dir-from [kd])))
+      (is (= (ir/execute live 'resolve-local-bin [local])
+             (oracle/call :config 'resolve-local-bin [local])))
+      (is (= (ir/execute live 'kotoba-bin [bin])
+             (oracle/call :config 'kotoba-bin [bin]))))
     (is (= (ir/execute live 'default-cloud-url [])
            (oracle/call :config 'default-cloud-url [])))
     (is (= (ir/execute live 'default-api-url [])
@@ -1788,10 +1801,12 @@
     (is (= (ir/execute c 'plane-read [])
            (oracle/call :connect 'plane-read [])))
     (is (= (oracle/call :connect 'plane-live []) conn/plane-live))
-    (is (= (ir/execute c 'serves-plane?
-                       ["read" true false])
-           (oracle/call :connect 'serves-plane?
-                        ["read" true false])))
+    (let [plane (oracle/record
+                 [:record :connect/plane
+                  [[:plane :string] [:http? :bool] [:common? :bool]]]
+                 {:plane "read" :http? true :common? false})]
+      (is (= (ir/execute c 'serves-plane? [plane])
+             (oracle/call :connect 'serves-plane? [plane]))))
     (is (= (ir/execute a 'place-epoch [0])
            (oracle/call :component-authority 'place-epoch [0])))
     (is (= (ir/execute a 'revoke-epoch [1])

@@ -1,4 +1,15 @@
 (ns config-core
+  (:schemas {;; T5.2 native guest record wire
+             :config/kotoba-dir [:record :config/kotoba-dir
+                                 [[:override :string] [:home :string]]]
+             :config/kotoba-bin [:record :config/kotoba-bin
+                                 [[:user-dir :string] [:pinned-exists :bool]]]
+             :config/local-bin [:record :config/local-bin
+                                [[:user-dir :string] [:kotoba-dir :string]
+                                 [:pinned-exists :bool] [:murakumo-bin :string]]]
+             :config/wit-dir [:record :config/wit-dir
+                              [[:user-dir :string] [:kotoba-dir :string]
+                               [:pinned-wit-exists :bool]]]})
   (:export [default-fleet-path default-connect-path default-cloud-path
             default-kotoba-dir pinned-bin-dir release-bin-dir
             kotoba-server-bin local-kotoba-bin pinned-wit-dir runtime-wit-dir
@@ -18,6 +29,7 @@
 ;; kotoba-dir-from: empty override ⇒ default under home (cljc nil/absent env).
 ;; pinned-exists / pinned-wit-exists: profile-5 :bool.
 ;; Ops residual default URL/string constants dual-source (post #147 inject).
+;; T5.2: multi-scalar path inputs take single guest records.
 ;; Parity: test/murakumo/config_kotoba_parity_test.clj
 
 (defn default-fleet-path [] :string "fleet.edn")
@@ -75,11 +87,12 @@
 (defn default-kotoba-dir [home :string] :string
   (string-concat home (kotoba-dir-suffix)))
 
-(defn kotoba-dir-from [override :string home :string] :string
+(defn kotoba-dir-from [x [:ref :config/kotoba-dir]] :string
   ;; cljc: (or MURAKUMO_KOTOBA_DIR (default-kotoba-dir HOME))
-  (if (string=? override "")
-    (default-kotoba-dir home)
-    override))
+  ;; T5.2 native: override+home on one record.
+  (if (string=? (record-get x :override) "")
+    (default-kotoba-dir (record-get x :home))
+    (record-get x :override)))
 
 (defn pinned-bin-dir [user-dir :string] :string
   (string-concat user-dir (bin-suffix)))
@@ -108,23 +121,24 @@
 (defn launchd-template-path [] :string
   "deploy/com.murakumo.kotoba-mesh.plist.tmpl")
 
-(defn kotoba-bin [user-dir :string pinned-exists :bool] :string
+(defn kotoba-bin [b [:ref :config/kotoba-bin]] :string
   ;; Profile 5: pinned-exists is a real :bool (not 0/1 i64).
-  (if pinned-exists
-    (string-concat (pinned-bin-dir user-dir) (kotoba-cli-suffix))
+  ;; T5.2 native: user-dir+pinned-exists.
+  (if (record-get b :pinned-exists)
+    (string-concat (pinned-bin-dir (record-get b :user-dir)) (kotoba-cli-suffix))
     (default-kotoba-cli-bin)))
 
-(defn resolve-local-bin [user-dir :string kotoba-dir :string
-                         pinned-exists :bool murakumo-bin :string] :string
+(defn resolve-local-bin [b [:ref :config/local-bin]] :string
   ;; cljc: pinned → MURAKUMO_BIN → release-bin-dir
-  (if pinned-exists
-    (pinned-bin-dir user-dir)
-    (if (string=? murakumo-bin "")
-      (release-bin-dir kotoba-dir)
-      murakumo-bin)))
+  ;; T5.2 native: single local-bin record.
+  (if (record-get b :pinned-exists)
+    (pinned-bin-dir (record-get b :user-dir))
+    (if (string=? (record-get b :murakumo-bin) "")
+      (release-bin-dir (record-get b :kotoba-dir))
+      (record-get b :murakumo-bin))))
 
-(defn resolve-wit-dir [user-dir :string kotoba-dir :string
-                       pinned-wit-exists :bool] :string
-  (if pinned-wit-exists
-    (pinned-wit-dir user-dir)
-    (runtime-wit-dir kotoba-dir)))
+(defn resolve-wit-dir [w [:ref :config/wit-dir]] :string
+  ;; T5.2 native: user-dir/kotoba-dir/pinned-wit-exists.
+  (if (record-get w :pinned-wit-exists)
+    (pinned-wit-dir (record-get w :user-dir))
+    (runtime-wit-dir (record-get w :kotoba-dir))))

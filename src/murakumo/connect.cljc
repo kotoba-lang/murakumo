@@ -34,6 +34,13 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private node-class-schema
+  [:record :connect/node-class
+   [[:node-class :string] [:default-class :string]]])
+(def ^:private plane-schema
+  [:record :connect/plane
+   [[:plane :string] [:http? :bool] [:common? :bool]]])
+
 ;; ── residual class / plane name tokens ───────────────────────────────
 
 (def class-native
@@ -69,14 +76,15 @@
 
 (defn node-class
   "Kotoba `node-class-name` → keyword.
-   T5.2: structural node+connect fields → call-record."
+   T5.2: native guest record wire (node-class+default-class)."
   [connect node]
   (keyword
    (o-record 'node-class-name
-             {:class (if-let [c (:class node)] (name c) "")
-              :default-class (if-let [c (:default-class connect)] (name c) "")}
-             [[:class :string]
-              [:default-class :string]])))
+             {:n (oracle/record node-class-schema
+                                {:node-class (if-let [c (:class node)] (name c) "")
+                                 :default-class (if-let [c (:default-class connect)]
+                                                  (name c) "")})}
+             [[:n :raw]])))
 
 (defn class-transports
   "Transports a node-class speaks on `plane` (:read | :live)."
@@ -96,7 +104,7 @@
      :read — node speaks :http (universal CID pull).
      :live — node and target client class share at least one live transport.
    Kotoba `serves-plane?` (profile-5 :bool flags for http?/common?).
-   T5.2: structural plane/http/common flags → call-record."
+   T5.2: native guest record wire (plane+http?+common?)."
   [connect node reach]
   (let [{:keys [class plane]} (parse-reach reach)
         ncls (node-class connect node)
@@ -107,12 +115,11 @@
                                (set (class-transports connect class (keyword plane-live))))))]
     (oracle/bool->host
      (o-record 'serves-plane?
-               {:plane (name plane)
-                :http? http?
-                :common? common?}
-               [[:plane :string]
-                [:http? :bool]
-                [:common? :bool]]))))
+               {:p (oracle/record plane-schema
+                                  {:plane (name plane)
+                                   :http? http?
+                                   :common? common?})}
+               [[:p :raw]]))))
 
 (defn serves-all?
   "True if `node` satisfies every reach requirement (empty => trivially true)."

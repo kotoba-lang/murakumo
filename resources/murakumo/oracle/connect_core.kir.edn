@@ -26,15 +26,33 @@
    :body (if (string=? default-class "") (class-native) default-class),
    :param-types [:string]}
   {:name node-class-name,
-   :params [node-class default-class],
+   :params [n],
    :result :string,
    :effects #{},
    :body
    (if
-    (string=? node-class "")
-    (default-class-name default-class)
-    node-class),
-   :param-types [:string :string]}
+    (string=?
+     (record-get
+      [:record
+       :connect/node-class
+       [[:node-class :string] [:default-class :string]]]
+      n
+      :node-class)
+     "")
+    (default-class-name
+     (record-get
+      [:record
+       :connect/node-class
+       [[:node-class :string] [:default-class :string]]]
+      n
+      :default-class))
+    (record-get
+     [:record
+      :connect/node-class
+      [[:node-class :string] [:default-class :string]]]
+     n
+     :node-class)),
+   :param-types [[:ref :connect/node-class]]}
   {:name serves-read?,
    :params [http?],
    :result :bool,
@@ -48,17 +66,43 @@
    :body common?,
    :param-types [:bool]}
   {:name serves-plane?,
-   :params [plane http? common?],
+   :params [p],
    :result :bool,
    :effects #{},
    :body
-   (if
-    (string=? plane (plane-read))
-    (serves-read? http?)
-    (if (string=? plane (plane-live)) (serves-live? common?) false)),
-   :param-types [:string :bool :bool]}],
+   (let
+    [plane
+     (record-get
+      [:record
+       :connect/plane
+       [[:plane :string] [:http? :bool] [:common? :bool]]]
+      p
+      :plane)
+     http?
+     (record-get
+      [:record
+       :connect/plane
+       [[:plane :string] [:http? :bool] [:common? :bool]]]
+      p
+      :http?)
+     common?
+     (record-get
+      [:record
+       :connect/plane
+       [[:plane :string] [:http? :bool] [:common? :bool]]]
+      p
+      :common?)]
+    (if
+     (string=? plane (plane-read))
+     (serves-read? http?)
+     (if (string=? plane (plane-live)) (serves-live? common?) false))),
+   :param-types [[:ref :connect/plane]]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:connect{:node-class
+           "060cd8ed572032a563e54af9816e4ada2861e00bae9778fc055c3b744cf03797",
+           :plane
+           "41c57d54a4f801370ddf468099f3623a4cf2fd7aaf3ef2a3f57b18923533fa48"},
  :exports
  [default-class-name
   node-class-name
@@ -68,7 +112,15 @@
   class-native
   plane-read
   plane-live],
- :schemas nil,
+ :schemas
+ #:connect{:node-class
+           [:record
+            :connect/node-class
+            [[:node-class :string] [:default-class :string]]],
+           :plane
+           [:record
+            :connect/plane
+            [[:plane :string] [:http? :bool] [:common? :bool]]]},
  :effects #{},
  :blocks [],
  :entry nil}

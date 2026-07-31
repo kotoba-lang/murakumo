@@ -110,12 +110,31 @@
    :body (string-concat home (kotoba-dir-suffix)),
    :param-types [:string]}
   {:name kotoba-dir-from,
-   :params [override home],
+   :params [x],
    :result :string,
    :effects #{},
    :body
-   (if (string=? override "") (default-kotoba-dir home) override),
-   :param-types [:string :string]}
+   (if
+    (string=?
+     (record-get
+      [:record
+       :config/kotoba-dir
+       [[:override :string] [:home :string]]]
+      x
+      :override)
+     "")
+    (default-kotoba-dir
+     (record-get
+      [:record
+       :config/kotoba-dir
+       [[:override :string] [:home :string]]]
+      x
+      :home))
+    (record-get
+     [:record :config/kotoba-dir [[:override :string] [:home :string]]]
+     x
+     :override)),
+   :param-types [[:ref :config/kotoba-dir]]}
   {:name pinned-bin-dir,
    :params [user-dir],
    :result :string,
@@ -171,40 +190,128 @@
    :body "deploy/com.murakumo.kotoba-mesh.plist.tmpl",
    :param-types []}
   {:name kotoba-bin,
-   :params [user-dir pinned-exists],
+   :params [b],
    :result :string,
    :effects #{},
    :body
    (if
-    pinned-exists
-    (string-concat (pinned-bin-dir user-dir) (kotoba-cli-suffix))
+    (record-get
+     [:record
+      :config/kotoba-bin
+      [[:user-dir :string] [:pinned-exists :bool]]]
+     b
+     :pinned-exists)
+    (string-concat
+     (pinned-bin-dir
+      (record-get
+       [:record
+        :config/kotoba-bin
+        [[:user-dir :string] [:pinned-exists :bool]]]
+       b
+       :user-dir))
+     (kotoba-cli-suffix))
     (default-kotoba-cli-bin)),
-   :param-types [:string :bool]}
+   :param-types [[:ref :config/kotoba-bin]]}
   {:name resolve-local-bin,
-   :params [user-dir kotoba-dir pinned-exists murakumo-bin],
+   :params [b],
    :result :string,
    :effects #{},
    :body
    (if
-    pinned-exists
-    (pinned-bin-dir user-dir)
+    (record-get
+     [:record
+      :config/local-bin
+      [[:user-dir :string]
+       [:kotoba-dir :string]
+       [:pinned-exists :bool]
+       [:murakumo-bin :string]]]
+     b
+     :pinned-exists)
+    (pinned-bin-dir
+     (record-get
+      [:record
+       :config/local-bin
+       [[:user-dir :string]
+        [:kotoba-dir :string]
+        [:pinned-exists :bool]
+        [:murakumo-bin :string]]]
+      b
+      :user-dir))
     (if
-     (string=? murakumo-bin "")
-     (release-bin-dir kotoba-dir)
-     murakumo-bin)),
-   :param-types [:string :string :bool :string]}
+     (string=?
+      (record-get
+       [:record
+        :config/local-bin
+        [[:user-dir :string]
+         [:kotoba-dir :string]
+         [:pinned-exists :bool]
+         [:murakumo-bin :string]]]
+       b
+       :murakumo-bin)
+      "")
+     (release-bin-dir
+      (record-get
+       [:record
+        :config/local-bin
+        [[:user-dir :string]
+         [:kotoba-dir :string]
+         [:pinned-exists :bool]
+         [:murakumo-bin :string]]]
+       b
+       :kotoba-dir))
+     (record-get
+      [:record
+       :config/local-bin
+       [[:user-dir :string]
+        [:kotoba-dir :string]
+        [:pinned-exists :bool]
+        [:murakumo-bin :string]]]
+      b
+      :murakumo-bin))),
+   :param-types [[:ref :config/local-bin]]}
   {:name resolve-wit-dir,
-   :params [user-dir kotoba-dir pinned-wit-exists],
+   :params [w],
    :result :string,
    :effects #{},
    :body
    (if
-    pinned-wit-exists
-    (pinned-wit-dir user-dir)
-    (runtime-wit-dir kotoba-dir)),
-   :param-types [:string :string :bool]}],
+    (record-get
+     [:record
+      :config/wit-dir
+      [[:user-dir :string]
+       [:kotoba-dir :string]
+       [:pinned-wit-exists :bool]]]
+     w
+     :pinned-wit-exists)
+    (pinned-wit-dir
+     (record-get
+      [:record
+       :config/wit-dir
+       [[:user-dir :string]
+        [:kotoba-dir :string]
+        [:pinned-wit-exists :bool]]]
+      w
+      :user-dir))
+    (runtime-wit-dir
+     (record-get
+      [:record
+       :config/wit-dir
+       [[:user-dir :string]
+        [:kotoba-dir :string]
+        [:pinned-wit-exists :bool]]]
+      w
+      :kotoba-dir))),
+   :param-types [[:ref :config/wit-dir]]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:config{:kotoba-bin
+          "a589dd929eb083c9e9db6981b7627e78ddc8468028ba4d7b958b0620e8b65d74",
+          :kotoba-dir
+          "688d623e1f5c0f69abafca544aff361c68a93582f3cfdb6d016db253fd0d65c0",
+          :local-bin
+          "4e4545061d0647ebfbe5e3c2bf9b22a85710dd43eaadc2e7186b69a61297febe",
+          :wit-dir
+          "90af86e920348557e54c3c01eb8ec181dc5a41aac0203929c905df27fa6d5e7b"},
  :exports
  [default-fleet-path
   default-connect-path
@@ -237,7 +344,28 @@
   kotoba-server-suffix
   kotoba-cli-suffix
   build-edn-suffix],
- :schemas nil,
+ :schemas
+ #:config{:kotoba-dir
+          [:record
+           :config/kotoba-dir
+           [[:override :string] [:home :string]]],
+          :kotoba-bin
+          [:record
+           :config/kotoba-bin
+           [[:user-dir :string] [:pinned-exists :bool]]],
+          :local-bin
+          [:record
+           :config/local-bin
+           [[:user-dir :string]
+            [:kotoba-dir :string]
+            [:pinned-exists :bool]
+            [:murakumo-bin :string]]],
+          :wit-dir
+          [:record
+           :config/wit-dir
+           [[:user-dir :string]
+            [:kotoba-dir :string]
+            [:pinned-wit-exists :bool]]]},
  :effects #{},
  :blocks [],
  :entry nil}

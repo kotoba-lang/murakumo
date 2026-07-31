@@ -28,6 +28,18 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private kotoba-dir-schema
+  [:record :config/kotoba-dir [[:override :string] [:home :string]]])
+(def ^:private kotoba-bin-schema
+  [:record :config/kotoba-bin [[:user-dir :string] [:pinned-exists :bool]]])
+(def ^:private local-bin-schema
+  [:record :config/local-bin
+   [[:user-dir :string] [:kotoba-dir :string]
+    [:pinned-exists :bool] [:murakumo-bin :string]]])
+(def ^:private wit-dir-schema
+  [:record :config/wit-dir
+   [[:user-dir :string] [:kotoba-dir :string] [:pinned-wit-exists :bool]]])
+
 ;; ── residual path suffix tokens (oracle SSoT) ────────────────────────
 
 (def kotoba-dir-suffix (o 'kotoba-dir-suffix []))
@@ -53,13 +65,14 @@
 (defn kotoba-dir
   "Resolve the kotoba checkout directory from env.
    Kotoba `kotoba-dir-from` (required).
-   Uses oracle/call-record (T5.2 structural host map → positional guest args)."
+   T5.2: native guest record wire (override+home)."
   [env]
-  (oracle/call-record
-   oid 'kotoba-dir-from
-   env
-   [["MURAKUMO_KOTOBA_DIR" :string]
-    ["HOME" :string]]))
+  (oracle/require-ready! oid)
+  (o-record 'kotoba-dir-from
+            {:x (oracle/record kotoba-dir-schema
+                               {:override (or (get env "MURAKUMO_KOTOBA_DIR") "")
+                                :home (or (get env "HOME") "")})}
+            [[:x :raw]]))
 
 (defn operator-seed-env-keys
   "Env keys consulted for the fleet operator seed, in preference order."
@@ -182,31 +195,26 @@
 
    `pinned-exists?` is supplied by the host shell after checking for the pinned
    kotoba-server binary. Kotoba `resolve-local-bin` (required).
-   T5.2: structural host map → call-record."
+   T5.2: native guest record wire."
   [env user-dir kotoba-dir pinned-exists?]
-  (oracle/require-ready! oid)
-  (oracle/call-record
-   oid 'resolve-local-bin
-   {:user-dir user-dir
-    :kotoba-dir kotoba-dir
-    :pinned-exists? pinned-exists?
-    :murakumo-bin (or (get env "MURAKUMO_BIN") "")}
-   [[:user-dir :string]
-    [:kotoba-dir :string]
-    [:pinned-exists? :bool]
-    [:murakumo-bin :string]]))
+  (o-record 'resolve-local-bin
+            {:b (oracle/record local-bin-schema
+                               {:user-dir user-dir
+                                :kotoba-dir kotoba-dir
+                                :pinned-exists (true? pinned-exists?)
+                                :murakumo-bin (or (get env "MURAKUMO_BIN") "")})}
+            [[:b :raw]]))
 
 (defn kotoba-bin
   "kotoba CLI executable path, falling back to PATH lookup when no pinned binary exists.
    Kotoba `kotoba-bin` (required). Profile 5: pinned-exists? is guest :bool.
-   T5.2: structural host map → call-record."
+   T5.2: native guest record wire."
   [user-dir pinned-exists?]
-  (oracle/require-ready! oid)
-  (oracle/call-record
-   oid 'kotoba-bin
-   {:user-dir user-dir :pinned-exists? pinned-exists?}
-   [[:user-dir :string]
-    [:pinned-exists? :bool]]))
+  (o-record 'kotoba-bin
+            {:b (oracle/record kotoba-bin-schema
+                               {:user-dir user-dir
+                                :pinned-exists (true? pinned-exists?)})}
+            [[:b :raw]]))
 
 (defn kotoba-server-bin [bin-dir]
   (o-record 'kotoba-server-bin {:bin-dir bin-dir} [[:bin-dir :string]]))
@@ -223,17 +231,14 @@
 (defn resolve-wit-dir
   "Resolve deploy WIT dir from pinned WIT existence.
    Kotoba `resolve-wit-dir` (required).
-   T5.2: structural host map → call-record."
+   T5.2: native guest record wire."
   [user-dir kotoba-dir pinned-wit-exists?]
-  (oracle/require-ready! oid)
-  (oracle/call-record
-   oid 'resolve-wit-dir
-   {:user-dir user-dir
-    :kotoba-dir kotoba-dir
-    :pinned-wit-exists? pinned-wit-exists?}
-   [[:user-dir :string]
-    [:kotoba-dir :string]
-    [:pinned-wit-exists? :bool]]))
+  (o-record 'resolve-wit-dir
+            {:w (oracle/record wit-dir-schema
+                               {:user-dir user-dir
+                                :kotoba-dir kotoba-dir
+                                :pinned-wit-exists (true? pinned-wit-exists?)})}
+            [[:w :raw]]))
 
 (defn build-manifest-path [user-dir]
   (o-record 'build-manifest-path {:user-dir user-dir} [[:user-dir :string]]))

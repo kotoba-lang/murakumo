@@ -18,6 +18,18 @@
        "default-kotoba-cli-bin kotoba-dir-suffix bin-suffix release-bin-suffix "
        "wit-suffix runtime-wit-suffix kotoba-server-suffix kotoba-cli-suffix build-edn-suffix"))
 
+(def ^:private kotoba-dir-ty
+  "[:record :config/kotoba-dir [[:override :string] [:home :string]]]")
+
+(def ^:private kotoba-bin-ty
+  "[:record :config/kotoba-bin [[:user-dir :string] [:pinned-exists :bool]]]")
+
+(def ^:private local-bin-ty
+  "[:record :config/local-bin [[:user-dir :string] [:kotoba-dir :string] [:pinned-exists :bool] [:murakumo-bin :string]]]")
+
+(def ^:private wit-dir-ty
+  "[:record :config/wit-dir [[:user-dir :string] [:kotoba-dir :string] [:pinned-wit-exists :bool]]]")
+
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -63,10 +75,11 @@
         user "/work/murakumo"
         kd "/kotoba"
         cases {"dk" (str "(default-kotoba-dir " (kotoba-literal home) ")")
-               "kd0" (str "(kotoba-dir-from " (kotoba-literal "") " "
-                          (kotoba-literal home) ")")
-               "kd1" (str "(kotoba-dir-from " (kotoba-literal "/custom/kotoba") " "
-                          (kotoba-literal home) ")")
+               "kd0" (str "(kotoba-dir-from (record-new " kotoba-dir-ty " "
+                          (kotoba-literal "") " " (kotoba-literal home) "))")
+               "kd1" (str "(kotoba-dir-from (record-new " kotoba-dir-ty " "
+                          (kotoba-literal "/custom/kotoba") " "
+                          (kotoba-literal home) "))")
                "pb" (str "(pinned-bin-dir " (kotoba-literal user) ")")
                "rb" (str "(release-bin-dir " (kotoba-literal kd) ")")
                "ks" (str "(kotoba-server-bin " (kotoba-literal "/bin") ")")
@@ -74,19 +87,23 @@
                "pw" (str "(pinned-wit-dir " (kotoba-literal user) ")")
                "rw" (str "(runtime-wit-dir " (kotoba-literal kd) ")")
                "bm" (str "(build-manifest-path " (kotoba-literal user) ")")
-               "kb1" (str "(kotoba-bin " (kotoba-literal user) " true)")
-               "kb0" (str "(kotoba-bin " (kotoba-literal user) " false)")
-               "rl1" (str "(resolve-local-bin " (kotoba-literal user) " "
-                          (kotoba-literal kd) " true " (kotoba-literal "") ")")
-               "rl2" (str "(resolve-local-bin " (kotoba-literal user) " "
-                          (kotoba-literal kd) " false "
-                          (kotoba-literal "/custom/bin") ")")
-               "rl3" (str "(resolve-local-bin " (kotoba-literal user) " "
-                          (kotoba-literal kd) " false " (kotoba-literal "") ")")
-               "rw1" (str "(resolve-wit-dir " (kotoba-literal user) " "
-                          (kotoba-literal kd) " true)")
-               "rw0" (str "(resolve-wit-dir " (kotoba-literal user) " "
-                          (kotoba-literal kd) " false)")}
+               "kb1" (str "(kotoba-bin (record-new " kotoba-bin-ty " "
+                          (kotoba-literal user) " true))")
+               "kb0" (str "(kotoba-bin (record-new " kotoba-bin-ty " "
+                          (kotoba-literal user) " false))")
+               "rl1" (str "(resolve-local-bin (record-new " local-bin-ty " "
+                          (kotoba-literal user) " " (kotoba-literal kd)
+                          " true " (kotoba-literal "") "))")
+               "rl2" (str "(resolve-local-bin (record-new " local-bin-ty " "
+                          (kotoba-literal user) " " (kotoba-literal kd)
+                          " false " (kotoba-literal "/custom/bin") "))")
+               "rl3" (str "(resolve-local-bin (record-new " local-bin-ty " "
+                          (kotoba-literal user) " " (kotoba-literal kd)
+                          " false " (kotoba-literal "") "))")
+               "rw1" (str "(resolve-wit-dir (record-new " wit-dir-ty " "
+                          (kotoba-literal user) " " (kotoba-literal kd) " true))")
+               "rw0" (str "(resolve-wit-dir (record-new " wit-dir-ty " "
+                          (kotoba-literal user) " " (kotoba-literal kd) " false))")}
         actual (compile-string-cases cases)]
     (is (= (config/default-kotoba-dir home) (get actual "dk")))
     (is (= (config/kotoba-dir {"HOME" home}) (get actual "kd0")))
@@ -126,8 +143,10 @@
             "pw" (str "(pinned-wit-dir " (kotoba-literal "/w") ")")
             "rw" (str "(runtime-wit-dir " (kotoba-literal "/k") ")")
             "bm" (str "(build-manifest-path " (kotoba-literal "/w") ")")
-            "kb1" (str "(kotoba-bin " (kotoba-literal "/w") " true)")
-            "kb0" (str "(kotoba-bin " (kotoba-literal "/w") " false)")})]
+            "kb1" (str "(kotoba-bin (record-new " kotoba-bin-ty " "
+                       (kotoba-literal "/w") " true))")
+            "kb0" (str "(kotoba-bin (record-new " kotoba-bin-ty " "
+                       (kotoba-literal "/w") " false))")})]
     (is (= config/kotoba-dir-suffix (get s "kds")))
     (is (= "/github/com-junkawasaki/orgs/com-junkawasaki/kotoba" (get s "kds")))
     (is (= config/bin-suffix (get s "bs")))
