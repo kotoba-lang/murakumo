@@ -25,6 +25,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 (defn- parse-int [s]
   #?(:clj (Integer/parseInt s)
      :cljs (js/parseInt s 10)))
@@ -44,14 +50,20 @@
   (o 'hosted-join-sep []))
 
 (defn join-append
-  "Generic empty-first join fold step."
+  "Generic empty-first join fold step.
+   T5.2: structural map → call-record."
   [acc sep next]
-  (o 'join-append [(str (or acc "")) (str sep) (str next)]))
+  (o-record 'join-append
+            {:acc (or acc "") :sep sep :next next}
+            [[:acc :string] [:sep :string] [:next :string]]))
 
 (defn hosted-append
-  "Append one short-hosted-cid to hosted-summary acc."
+  "Append one short-hosted-cid to hosted-summary acc.
+   T5.2: structural map → call-record."
   [acc next]
-  (o 'hosted-append [(str (or acc "")) (str next)]))
+  (o-record 'hosted-append
+            {:acc (or acc "") :next next}
+            [[:acc :string] [:next :string]]))
 
 (def default-dashboard-port
   "Default dashboard HTTP port. Kotoba SSoT."
@@ -76,9 +88,12 @@
 ;; ── pure display helpers ─────────────────────────────────────────────
 
 (defn short-hosted-cid
-  "CID abbreviation used in the dashboard hosted-components table."
+  "CID abbreviation used in the dashboard hosted-components table.
+   T5.2: structural map → call-record."
   [cid]
-  (o 'short-hosted-cid [(str cid)]))
+  (o-record 'short-hosted-cid
+            {:cid cid}
+            [[:cid :string]]))
 
 (defn- short-cid [cid]
   (subs cid 0 (min short-cid-max-len (count cid))))
@@ -93,9 +108,12 @@
             (:hosted node))))
 
 (defn health-class
-  "CSS class for a node health value."
+  "CSS class for a node health value.
+   T5.2: structural map → call-record."
   [node]
-  (o 'health-class-of [(str (or (:health node) ""))]))
+  (o-record 'health-class-of
+            {:health (or (:health node) "")}
+            [[:health :string]]))
 
 (defn query-at
   "Parse dashboard `at=N` query parameter. Returns nil if absent."
@@ -109,16 +127,23 @@
    :interval (parse-int (or (second args) default-dashboard-interval-str))})
 
 (defn interval-sleep-ms
-  "Milliseconds to sleep between dashboard snapshots."
+  "Milliseconds to sleep between dashboard snapshots.
+   T5.2: structural map → call-record."
   [seconds]
-  (oracle/i64->host (o 'interval-sleep-ms [(oracle/as-i64 seconds)])))
+  (oracle/i64->host
+   (o-record 'interval-sleep-ms
+             {:seconds seconds}
+             [[:seconds :i64]])))
 
 (defn clamp-at
-  "Clamp a requested history offset into the available history range."
+  "Clamp a requested history offset into the available history range.
+   T5.2: structural map → call-record."
   [requested-at history-count]
   (oracle/i64->host
-   (o 'clamp-at [(oracle/as-i64 (or requested-at 0))
-                 (oracle/as-i64 history-count)])))
+   (o-record 'clamp-at
+             {:requested-at (or requested-at 0)
+              :history-count history-count}
+             [[:requested-at :i64] [:history-count :i64]])))
 
 (defn selected-snapshot
   "Select dashboard snapshot for a history offset.

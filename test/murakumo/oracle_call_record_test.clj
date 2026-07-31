@@ -18,7 +18,11 @@
             [murakumo.component-authority :as cauth]
             [murakumo.identity :as identity]
             [murakumo.deploy.plan :as dplan]
-            [murakumo.secret :as secret]))
+            [murakumo.secret :as secret]
+            [murakumo.dash.state :as dash]
+            [murakumo.kekkai.gate :as gate]
+            [murakumo.overlay.driver :as driver]
+            [murakumo.overlay.runtime :as runtime]))
 
 (deftest map->args-projects-kinds
   (is (= ["a" "b"]
@@ -265,3 +269,30 @@
       (is (true? (secret/valid-env-var-name? "MURAKUMO_TOKEN_SECRET")))
       (is (false? (secret/valid-env-var-name? "")))
       (is (true? (secret/valid-path-ref? "/etc/ssl/cert.pem"))))))
+
+(deftest call-record-dash-kekkai-driver-runtime
+  "T5.2 wave 6: dash/kekkai/driver/runtime structural boundaries."
+  (when (oracle/ready? :dash-state)
+    (is (string? (dash/join-append "" "," "a")))
+    (is (string? (dash/hosted-append "" "cid1")))
+    (is (string? (dash/short-hosted-cid "bafyverylongcid0123456789")))
+    (is (string? (dash/health-class {:health "ok"})))
+    (is (number? (dash/interval-sleep-ms 5)))
+    (is (number? (dash/clamp-at 0 10))))
+  (when (oracle/ready? :kekkai-gate)
+    (is (string? (gate/default-kekkai-dir "/home/demo")))
+    (is (string? (gate/parse-status {:out "authorized\n"})))
+    (let [part (gate/partition-nodes
+                [{:name "a"} {:name "b"}]
+                {"a" "authorized" "b" "pending"})]
+      (is (= 1 (count (:admitted part))))
+      (is (= 1 (count (:denied part))))
+      (is (string? (gate/denial-line (first (:denied part)))))))
+  (when (oracle/ready? :overlay-driver)
+    (is (= :overlay (driver/keyword-option "--overlay")))
+    (is (= :quic (driver/endpoint-kind "quic://host:4001")))
+    (is (vector? (driver/missing-options [:overlay] {:overlay ""}))))
+  (when (oracle/ready? :overlay-runtime)
+    (is (true? (runtime/known-adapter? runtime/adapter-quic)))
+    (is (string? (runtime/scheme-host "quic://asher:4001")))
+    (is (pos? (get runtime/default-port-by-kind :quic)))))
