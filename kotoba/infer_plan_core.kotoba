@@ -1,5 +1,12 @@
 (ns infer-plan-core
-  (:schemas {:plan/model [:record :plan/model
+  (:schemas {;; T5.2 native guest record wire: multi-scalar node/strategy inputs.
+             :plan/node-cap [:record :plan/node-cap
+                             [[:mem :i64] [:os :i64] [:head :i64]
+                              [:wired [:option :i64]]]]
+             :plan/strategy-in [:record :plan/strategy-in
+                                [[:link-gbps :i64] [:ranks :i64]
+                                 [:experts :i64] [:kv-heads :i64]]]
+             :plan/model [:record :plan/model
                           [[:layers :i64] [:dense :i64] [:frac-milli :i64]]]
              ;; one assignment row: span of layers + whether it fits its node
              :plan/row [:record :plan/row [[:span :i64] [:fits :i64]]]
@@ -58,17 +65,27 @@
 (defn rem64 [a :i64 b :i64] :i64
   (- a (* (quot a b) b)))
 
-(defn usable-bytes [mem :i64 os :i64 head :i64 wired [:option :i64]] :i64
+(defn usable-bytes [n [:ref :plan/node-cap]] :i64
   ;; Profile 5: wired is [:option :i64] (none = no wired cap). No -1 sentinel.
-  (let [ceil0 (- mem os)
+  ;; T5.2 native guest record: mem/os/head/wired on one input.
+  (let [mem (record-get n :mem)
+        os (record-get n :os)
+        head (record-get n :head)
+        wired (record-get n :wired)
+        ceil0 (- mem os)
         ceil1 (if-some [w wired]
                 (if (< w ceil0) w ceil0)
                 ceil0)
         left (- ceil1 head)]
     (if (< left 0) 0 left)))
 
-(defn choose-strategy-name [link-gbps :i64 ranks :i64 experts :i64 kv-heads :i64] :string
-  (let [fast (if (< link-gbps 20) 0 1)
+(defn choose-strategy-name [s [:ref :plan/strategy-in]] :string
+  ;; T5.2 native guest record: link/ranks/experts/kv-heads on one input.
+  (let [link-gbps (record-get s :link-gbps)
+        ranks (record-get s :ranks)
+        experts (record-get s :experts)
+        kv-heads (record-get s :kv-heads)
+        fast (if (< link-gbps 20) 0 1)
         div (if (< ranks 1) 0 (if (= 0 (rem64 kv-heads ranks)) 1 0))]
     (if (if (= fast 1) (if (= div 1) 1 0) 0)
       "tensor"
@@ -496,9 +513,9 @@
   ;; cljc report :mem-gib
   (bytes-to-gib-milli mem-bytes))
 
-(defn usable-gib-milli [mem :i64 os :i64 head :i64 wired [:option :i64]] :i64
-  ;; usable-bytes then milli-GiB (arity 5). wired is [:option :i64].
-  (bytes-to-gib-milli (usable-bytes mem os head wired)))
+(defn usable-gib-milli [n [:ref :plan/node-cap]] :i64
+  ;; usable-bytes then milli-GiB. T5.2: same node-cap record.
+  (bytes-to-gib-milli (usable-bytes n)))
 
 (defn est-gib-milli [est-bytes :i64] :i64
   ;; cljc report :est-gib

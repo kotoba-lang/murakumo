@@ -26,12 +26,40 @@
    :body (- a (* (quot a b) b)),
    :param-types [:i64 :i64]}
   {:name usable-bytes,
-   :params [mem os head wired],
+   :params [n],
    :result :i64,
    :effects #{},
    :body
    (let
-    [ceil0
+    [mem
+     (record-get
+      [:record
+       :plan/node-cap
+       [[:mem :i64] [:os :i64] [:head :i64] [:wired [:option :i64]]]]
+      n
+      :mem)
+     os
+     (record-get
+      [:record
+       :plan/node-cap
+       [[:mem :i64] [:os :i64] [:head :i64] [:wired [:option :i64]]]]
+      n
+      :os)
+     head
+     (record-get
+      [:record
+       :plan/node-cap
+       [[:mem :i64] [:os :i64] [:head :i64] [:wired [:option :i64]]]]
+      n
+      :head)
+     wired
+     (record-get
+      [:record
+       :plan/node-cap
+       [[:mem :i64] [:os :i64] [:head :i64] [:wired [:option :i64]]]]
+      n
+      :wired)
+     ceil0
      (- mem os)
      ceil1
      (let
@@ -45,14 +73,54 @@
      left
      (- ceil1 head)]
     (if (< left 0) 0 left)),
-   :param-types [:i64 :i64 :i64 [:option :i64]]}
+   :param-types [[:ref :plan/node-cap]]}
   {:name choose-strategy-name,
-   :params [link-gbps ranks experts kv-heads],
+   :params [s],
    :result :string,
    :effects #{},
    :body
    (let
-    [fast
+    [link-gbps
+     (record-get
+      [:record
+       :plan/strategy-in
+       [[:link-gbps :i64]
+        [:ranks :i64]
+        [:experts :i64]
+        [:kv-heads :i64]]]
+      s
+      :link-gbps)
+     ranks
+     (record-get
+      [:record
+       :plan/strategy-in
+       [[:link-gbps :i64]
+        [:ranks :i64]
+        [:experts :i64]
+        [:kv-heads :i64]]]
+      s
+      :ranks)
+     experts
+     (record-get
+      [:record
+       :plan/strategy-in
+       [[:link-gbps :i64]
+        [:ranks :i64]
+        [:experts :i64]
+        [:kv-heads :i64]]]
+      s
+      :experts)
+     kv-heads
+     (record-get
+      [:record
+       :plan/strategy-in
+       [[:link-gbps :i64]
+        [:ranks :i64]
+        [:experts :i64]
+        [:kv-heads :i64]]]
+      s
+      :kv-heads)
+     fast
      (if (< link-gbps 20) 0 1)
      div
      (if (< ranks 1) 0 (if (= 0 (rem64 kv-heads ranks)) 1 0))]
@@ -63,7 +131,7 @@
       (if (= fast 1) (if (< ranks experts) 1 0) 0)
       "expert"
       "pipeline"))),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :param-types [[:ref :plan/strategy-in]]}
   {:name better-bump?,
    :params [rem-a idx-a rem-b idx-b],
    :result :bool,
@@ -912,11 +980,11 @@
    :body (bytes-to-gib-milli mem-bytes),
    :param-types [:i64]}
   {:name usable-gib-milli,
-   :params [mem os head wired],
+   :params [n],
    :result :i64,
    :effects #{},
-   :body (bytes-to-gib-milli (usable-bytes mem os head wired)),
-   :param-types [:i64 :i64 :i64 [:option :i64]]}
+   :body (bytes-to-gib-milli (usable-bytes n)),
+   :param-types [[:ref :plan/node-cap]]}
   {:name est-gib-milli,
    :params [est-bytes],
    :result :i64,
@@ -926,13 +994,17 @@
  :oracle-value nil,
  :schema-identities
  #:plan{:cut
-        "770ecb0db4dad8cf3f8042059c7b16b94362958b38568161377763ef8bc59019",
+        "061cff4cbac1dbb735f519e8e86033d35d93c67de497f0802652d9ee76f9ae38",
         :ends
-        "2cf3eb757a278ea54207af27b0746994d7be2769f31a26331676f31c7e864ccf",
+        "9e6c3034058f52e0c78f1be5e8d70f481e1d695bccf1ca9adc17587db32a5566",
         :model
-        "bf41a6bd53269fc6d3f9349b53f76b07a5e2cdef84cc0488860aefcf5230583b",
+        "c5c32ba43000503b8158368d482136b9fa36663090226fd542000698165cc3f2",
+        :node-cap
+        "563c03511104900e795c6158081a9518e558194ecb7e68ef2b482f2e4a6cd628",
         :row
-        "f989a7d6cac6ee26af0380e8d1a12abc189bf3a4847821f8056209ec8fbf3959"},
+        "caf8dff6a0c3117e167504095fc3f66b4a6118c27c894467864d4eb185fdb0f1",
+        :strategy-in
+        "7456a1d2df7560d60f2f52b7a9a5771f8bf2c63bfc887dce8b2902a6e56d9e3d"},
  :exports
  [gib
   default-os-reserve
@@ -988,7 +1060,21 @@
   partition-last
   fits-and],
  :schemas
- #:plan{:model
+ #:plan{:node-cap
+        [:record
+         :plan/node-cap
+         [[:mem :i64]
+          [:os :i64]
+          [:head :i64]
+          [:wired [:option :i64]]]],
+        :strategy-in
+        [:record
+         :plan/strategy-in
+         [[:link-gbps :i64]
+          [:ranks :i64]
+          [:experts :i64]
+          [:kv-heads :i64]]],
+        :model
         [:record
          :plan/model
          [[:layers :i64] [:dense :i64] [:frac-milli :i64]]],

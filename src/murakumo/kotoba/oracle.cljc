@@ -308,12 +308,14 @@
                    (when-not (contains? host-map field)
                      (throw (ex-info "record field missing for guest schema"
                                      {:schema (second schema) :field field})))
-                   (case field-type
-                     :i64 (as-i64 v)
-                     :string (str v)
+                   (cond
+                     (= field-type :i64) (as-i64 v)
+                     (= field-type :string) (str v)
                      ;; Profile 5: record :bool fields are host/guest booleans.
-                     :bool (boolean v)
-                     v))))
+                     (= field-type :bool) (boolean v)
+                     (= field-type [:option :i64]) (option-i64 v)
+                     (= field-type [:option :string]) (option-string v)
+                     :else v))))
           fields)))
 
 (defn catalog-ids

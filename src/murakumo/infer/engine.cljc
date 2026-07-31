@@ -25,6 +25,24 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private endpoint-schema
+  [:record :engine/endpoint [[:host :string] [:port :i64]]])
+
+(def ^:private rpc-server-schema
+  [:record :engine/rpc-server
+   [[:bin-dir :string] [:port :i64] [:device :string]
+    [:cache :bool] [:cache-dir :string]]])
+
+(def ^:private head-front-schema
+  [:record :engine/head-front [[:bin-dir :string] [:model-path :string]]])
+
+(def ^:private head-middle-schema
+  [:record :engine/head-middle
+   [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]])
+
+(def ^:private head-tail-schema
+  [:record :engine/head-tail [[:ctx :i64] [:parallel :i64] [:port :i64]]])
+
 (def default-rpc-port
   (oracle/i64->host (o 'default-rpc-port [])))
 
@@ -46,16 +64,14 @@
         :let [cache? (not (false? (:rpc-cache? node)))
               dev (or (:rpc-device node) device)
               cmd (o-record 'rpc-server-cmd
-                            {:bin-dir bin-dir
-                             :port port
-                             :device dev
-                             :cache? cache?
-                             :cache-dir (or cache-dir "")}
-                            [[:bin-dir :string]
-                             [:port :i64]
-                             [:device :string]
-                             [:cache? :bool]
-                             [:cache-dir :string]])]]
+                            {:cmd (oracle/record
+                                   rpc-server-schema
+                                   {:bin-dir bin-dir
+                                    :port port
+                                    :device dev
+                                    :cache cache?
+                                    :cache-dir (or cache-dir "")})}
+                            [[:cmd :raw]])]]
     {:name (:name node)
      :host (:host node)
      :ip (or (:rpc-ip node) (:ip node))
@@ -78,9 +94,11 @@
   (str/join ","
             (map (fn [w]
                    (o-record 'endpoint
-                             {:host (or (:ip w) (:host w))
-                              :port (:port w)}
-                             [[:host :string] [:port :i64]]))
+                             {:ep (oracle/record
+                                   endpoint-schema
+                                   {:host (or (:ip w) (:host w))
+                                    :port (:port w)})}
+                             [[:ep :raw]]))
                  worker-cmds)))
 
 (defn head-cmd
@@ -93,15 +111,18 @@
         rpc-csv (rpc-endpoints ws)
         tsplit (tensor-split plan)]
     (str (o-record 'head-cmd-front
-                   {:bin-dir bin-dir :model-path model-path}
-                   [[:bin-dir :string] [:model-path :string]])
+                   {:h (oracle/record head-front-schema
+                                      {:bin-dir bin-dir :model-path model-path})}
+                   [[:h :raw]])
          (o-record 'head-cmd-middle
-                   {:rpc-csv rpc-csv :strategy strat :tsplit tsplit}
-                   [[:rpc-csv :string] [:strategy :string] [:tsplit :string]])
+                   {:h (oracle/record head-middle-schema
+                                      {:rpc-csv rpc-csv :strategy strat :tsplit tsplit})}
+                   [[:h :raw]])
          (when moe-override (str " -ot " (pr-str moe-override)))
          (o-record 'head-cmd-tail
-                   {:ctx ctx :parallel parallel :port port}
-                   [[:ctx :i64] [:parallel :i64] [:port :i64]])
+                   {:h (oracle/record head-tail-schema
+                                      {:ctx ctx :parallel parallel :port port})}
+                   [[:h :raw]])
          (when (seq extra-args) (str " " (str/join " " extra-args))))))
 
 ;; ── mlx ring ────────────────────────────────────────────────────────────────
