@@ -94,12 +94,15 @@
         relay? (boolean (some #(= relay-kw (:via %)) paths))
         health (name (or (:health peer) (via-kw health-unknown)))
         via (o-record 'choose-via
-                      {:direct (when direct? via-direct)
-                       :health health
-                       :relay (when relay? via-relay)}
-                      [[:direct :option-string]
-                       [:health :string]
-                       [:relay :option-string]])]
+                      {:x (oracle/record
+                           [:record :peer/via
+                            [[:direct [:option :string]]
+                             [:health :string]
+                             [:relay [:option :string]]]]
+                           {:direct (when direct? via-direct)
+                            :health health
+                            :relay (when relay? via-relay)})}
+                      [[:x :raw]])]
     (cond
       (= via via-direct) (first (filter #(= direct-kw (:via %)) paths))
       (= via via-relay) (first (filter #(= relay-kw (:via %)) paths))

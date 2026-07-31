@@ -258,16 +258,19 @@
 
 (defn failed?
   "Process could not start, timed out, or exited non-zero. Profile 5: :bool.
-   T5.2: structural result map → call-record (option fields stay positional)."
+   T5.2 native guest record wire: single :task/failed argument."
   [{:keys [exit timeout? error] :as r}]
   (oracle/bool->host
    (o-record 'failed?
-             {:exit exit
-              :timeout? timeout?
-              :error error}
-             [[:exit :option-i64]
-              [:timeout? :bool]
-              [:error :option-string]])))
+             {:x (oracle/record
+                  [:record :task/failed
+                   [[:exit [:option :i64]]
+                    [:timeout :bool]
+                    [:error [:option :string]]]]
+                  {:exit exit
+                   :timeout (boolean timeout?)
+                   :error error})}
+             [[:x :raw]])))
 
 (defn retry-tasks
   "Tasks to re-submit from `results`, one attempt later."

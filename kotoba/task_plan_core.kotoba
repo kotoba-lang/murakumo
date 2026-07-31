@@ -36,7 +36,12 @@
                                  [:mem-bytes :i64] [:min-mem :i64]]]
              ;; T5.2 native guest record wire expansion
              :task/retry [:record :task/retry
-                          [[:attempt :i64] [:max-attempts :i64]]]})
+                          [[:attempt :i64] [:max-attempts :i64]]]
+             ;; T5.2 option-string-in-record (+ option-i64)
+             :task/failed [:record :task/failed
+                           [[:exit [:option :i64]]
+                            [:timeout :bool]
+                            [:error [:option :string]]]]})
   (:export [default-max-slots default-max-attempts default-timeout-ms
             slots failed? can-retry?
             task-eligible? fill-milli better-fill?
@@ -96,13 +101,13 @@
         (if (< capped 1) 1 capped))
       budget-slots)))
 
-(defn failed? [exit [:option :i64] timeout :bool error [:option :string]] :bool
-  ;; Product Value ABI v1: optional exit + error. (option-in-record deferred)
-  (if-some [_ error]
+(defn failed? [x [:ref :task/failed]] :bool
+  ;; Product Value ABI v1: optional exit + error on one record. T5.2 native.
+  (if-some [_ (record-get x :error)]
     true
-    (if timeout
+    (if (record-get x :timeout)
       true
-      (if-some [e exit]
+      (if-some [e (record-get x :exit)]
         (if (= e 0) false true)
         true))))
 

@@ -58,9 +58,12 @@
                      (fn [i peer]
                        (let [x (project-choose peer)]
                          [(str "c_" i)
-                          (str "(choose-via " (opt-str-form (:direct x)) " "
+                          (str "(choose-via (record-new [:record :peer/via "
+                               "[[:direct [:option :string]] [:health :string] "
+                               "[:relay [:option :string]]]] "
+                               (opt-str-form (:direct x)) " "
                                (kotoba-literal (:health x)) " "
-                               (opt-str-form (:relay x)) ")")]))
+                               (opt-str-form (:relay x)) "))")]))
                      corpus))
         actual (compile-string-cases cases)
         labels (compile-string-cases

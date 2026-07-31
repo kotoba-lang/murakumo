@@ -269,19 +269,35 @@
    :body (if (string=? v (version)) true false),
    :param-types [:string]}
   {:name parts-present?,
-   :params [v p s],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (let
-    [__kotoba_binding-some_5 v]
+    [__kotoba_binding-some_5
+     (record-get
+      [:record
+       :token/parts
+       [[:v [:option :string]]
+        [:payload [:option :string]]
+        [:sig [:option :string]]]]
+      x
+      :v)]
     (if
      (option-some?-of [:option :string] __kotoba_binding-some_5)
      (let
       [_
        (option-value-of [:option :string] __kotoba_binding-some_5 "")]
       (let
-       [__kotoba_binding-some_6 p]
+       [__kotoba_binding-some_6
+        (record-get
+         [:record
+          :token/parts
+          [[:v [:option :string]]
+           [:payload [:option :string]]
+           [:sig [:option :string]]]]
+         x
+         :payload)]
        (if
         (option-some?-of [:option :string] __kotoba_binding-some_6)
         (let
@@ -291,7 +307,15 @@
            __kotoba_binding-some_6
            "")]
          (let
-          [__kotoba_binding-some_7 s]
+          [__kotoba_binding-some_7
+           (record-get
+            [:record
+             :token/parts
+             [[:v [:option :string]]
+              [:payload [:option :string]]
+              [:sig [:option :string]]]]
+            x
+            :sig)]
           (if
            (option-some?-of [:option :string] __kotoba_binding-some_7)
            (let
@@ -304,8 +328,7 @@
            false)))
         false)))
      false)),
-   :param-types
-   [[:option :string] [:option :string] [:option :string]]}
+   :param-types [[:ref :token/parts]]}
   {:name ct-scan,
    :params [a b i n acc],
    :result :i64,
@@ -369,17 +392,19 @@
  :oracle-value nil,
  :schema-identities
  #:token{:claim-exp
-         "a74893f595078661641c2ff1417675bc272562b569c818843281cca8c8e24682",
+         "9c91777096f3a5a0c3b7795d4f396baf8eaf85dfe0e8741619a394fc2c7d4c8a",
          :claims
-         "6e27eb3cfd9e82f65eea2bceaaa4185de226474eac1eed05a574b76ab5086437",
+         "23c1fced9578dc98979441aa564022cc007f87ef3b9b9cc7e06cb63bb2b96c9a",
          :eq
-         "ee04f41fd6f260b668b7dc214497fdfc5f5e9a0612d0ec826685253fe1369514",
+         "152835c37ebabd69c82a11bca798191f89f0da6e6fd95d70ed64cbf92a49dd46",
          :expired
-         "62eb4768fb4ec832e670820cd1991d62c08f8c409fef26c55a1c9a43325f2710",
+         "dafb624ded15a0d9255d49f855756c3cc0098b95d7e6632a172c2b1d76e100b9",
+         :parts
+         "72fbe4e99e109f52a41cb7b0be3b6629181b758689efc78e5a9c29e42d242b89",
          :scope-check
-         "dbcbdfbcc9f5e6d63c36f5ca87ec9928180ad65a2a8c36d9ca722baf74bfc31a",
+         "5959e28e2fd228a3ecea679342110d0777fa35488dc209f0d7f9e04d5902fba4",
          :wire
-         "56bff47e4ba4994755c2c2b0a4239d66109d5939ce19ef7fc7200fa414556fe3"},
+         "a4cde8b8c613870227fbcbba1df8deae4a781a2ffc571b1e29c6144235267c26"},
  :exports
  [version
   default-ttl
@@ -422,7 +447,13 @@
           :token/claim-exp
           [[:now :i64] [:ttl [:option :i64]]]],
          :expired
-         [:record :token/expired [[:exp [:option :i64]] [:now :i64]]]},
+         [:record :token/expired [[:exp [:option :i64]] [:now :i64]]],
+         :parts
+         [:record
+          :token/parts
+          [[:v [:option :string]]
+           [:payload [:option :string]]
+           [:sig [:option :string]]]]},
  :effects #{},
  :blocks [],
  :entry nil}

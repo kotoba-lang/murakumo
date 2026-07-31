@@ -73,18 +73,27 @@
    (when (some? v)
      (if (keyword? v) (name v) (str v)))))
 
+(defn- sealed-str
+  "Bare string or nil for oracle/record option-string field encoding."
+  [v]
+  (when (some? v)
+    (if (keyword? v) (name v) (str v))))
+
 (defn sealed-fields-present?
   "True when :alg :nonce :ciphertext are all present.
-   T5.2: structural sealed fields → call-record (:raw option ABI)."
+   T5.2 native guest record wire: single :crypto/sealed argument."
   [sealed]
   (oracle/bool->host
    (o-record 'sealed-fields-present?
-             {:alg (option-field (get sealed field-alg))
-              :nonce (option-field (get sealed field-nonce))
-              :ciphertext (option-field (get sealed field-ciphertext))}
-             [[:alg :raw]
-              [:nonce :raw]
-              [:ciphertext :raw]])))
+             {:x (oracle/record
+                  [:record :crypto/sealed
+                   [[:alg [:option :string]]
+                    [:nonce [:option :string]]
+                    [:ct [:option :string]]]]
+                  {:alg (sealed-str (get sealed field-alg))
+                   :nonce (sealed-str (get sealed field-nonce))
+                   :ct (sealed-str (get sealed field-ciphertext))})}
+             [[:x :raw]])))
 
 (defn sealed-map-ok?
   "Live open gate: fields present + alg ok."

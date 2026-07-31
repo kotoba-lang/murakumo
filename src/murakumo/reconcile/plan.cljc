@@ -117,18 +117,21 @@
 
 (defn- action-kw
   "Project reconcile-app inputs to kotoba `action-name` then keywordize.
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :reconcile/action-in argument."
   [cid running-count desired free-candidates]
   (keyword
    (o-record 'action-name
-             {:cid cid
-              :running-count running-count
-              :desired desired
-              :free-candidates free-candidates}
-             [[:cid :option-string]
-              [:running-count :i64]
-              [:desired :i64]
-              [:free-candidates :i64]])))
+             {:x (oracle/record
+                  [:record :reconcile/action-in
+                   [[:cid [:option :string]]
+                    [:running :i64]
+                    [:desired-n :i64]
+                    [:free-candidates :i64]]]
+                  {:cid cid
+                   :running running-count
+                   :desired-n desired
+                   :free-candidates free-candidates})}
+             [[:x :raw]])))
 
 (defn reconcile-app
   "Pure per-app reconciliation.

@@ -103,12 +103,20 @@
      budget-slots)),
    :param-types [[:ref :task/slots]]}
   {:name failed?,
-   :params [exit timeout error],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (let
-    [__kotoba_binding-some_1 error]
+    [__kotoba_binding-some_1
+     (record-get
+      [:record
+       :task/failed
+       [[:exit [:option :i64]]
+        [:timeout :bool]
+        [:error [:option :string]]]]
+      x
+      :error)]
     (if
      (option-some?-of [:option :string] __kotoba_binding-some_1)
      (let
@@ -116,17 +124,32 @@
        (option-value-of [:option :string] __kotoba_binding-some_1 "")]
       true)
      (if
-      timeout
+      (record-get
+       [:record
+        :task/failed
+        [[:exit [:option :i64]]
+         [:timeout :bool]
+         [:error [:option :string]]]]
+       x
+       :timeout)
       true
       (let
-       [__kotoba_binding-some_2 exit]
+       [__kotoba_binding-some_2
+        (record-get
+         [:record
+          :task/failed
+          [[:exit [:option :i64]]
+           [:timeout :bool]
+           [:error [:option :string]]]]
+         x
+         :exit)]
        (if
         (option-some?-of [:option :i64] __kotoba_binding-some_2)
         (let
          [e (option-value-of [:option :i64] __kotoba_binding-some_2 0)]
          (if (= e 0) false true))
         true))))),
-   :param-types [[:option :i64] :bool [:option :string]]}
+   :param-types [[:ref :task/failed]]}
   {:name can-retry?,
    :params [r],
    :result :bool,
@@ -1081,33 +1104,35 @@
  :oracle-value nil,
  :schema-identities
  #:task{:assign2
-        "c62882217fce96561041706428ddc79301c3342467d708f41d4a80ded7a8ac2d",
+        "dec29d8cb1ac631ee2b5d598ff1422712fe64773c89432add77be60969097525",
         :assign3
-        "aa96e9e055803a603edb549aadfc6ad5062bab442a7a10b5bbc9b3f09bc508f6",
+        "1967827ff9d9b7f81ff3829de1510fe4ef2b1f5dcd5b8fcb53b7af992d4b8bac",
         :better-mem
-        "1efd6c53f7edb7279780df02a564c3fa96cf179e5f8acf7dffbafc0370f6ed9a",
+        "2f0867030d4c8410cb2c6b832015503384b66d298db6c6c821fd2aea5bbb9567",
         :challenger
-        "782f5dd0e1765a329bea35540d71f9f1213efe87697e750ecae96e3cc1eb770b",
+        "520d14a986ea985d5386286b1013b54b57c697f8634bf732ce565ef2007cfe3a",
         :eligibility
-        "664860df6e37e0f3366a114e4fe2258e1db989c3261eb9fbc327107bad08a413",
+        "db891935d59f0efd0c584fe7381f691e52618ddeafd1d3c1d863685d76290b2e",
+        :failed
+        "9bb804f636c87c82770809be1c543665c14fbdbfc46b67d914200aae04094567",
         :flags3
-        "e54c92df47dde5771e0dc5d49405c0926698f6aac7f056fae13dd6ee99f38cd9",
+        "2b5c60f30287a66da17a8927613b3cfdb5b807a7d1efa0db7ed6f4b1d32f2679",
         :pair
-        "8adc2d80cbefba92dbaa2a48c9e81f5f8742b804d528a13d1b9c28d039402eb2",
+        "19a5c987c2e330e063c4d4b457b06cd9ea55f17980b5d77d0417bab00189d7ad",
         :pick-fold
-        "b47e7d77d093c219edc7d40b7838a5d1dad01ae2f947b83fd58eaa5f1f91750d",
+        "16f2130824e23017633ae5ccfbdc2752779fd1c426f50809ba87b2a1239bc8f8",
         :retry
-        "47c70261a34fe03fb55017f2db5103b414b9937c038e82294e366fb5b07017ad",
+        "c0b640c9b275ee36184c64c1cc8be6d967c95f0f7f83b7de3c3c72c8e2526fbb",
         :score
-        "e1f5fa6fc3fa6826cb5419ebd91ac7a5f8622a69fd518ab2676590daf5ad10e4",
+        "74b0f886ce5761dcdfb1b6503a00c9426311863e5372cdfed5b10539f156d013",
         :slots
-        "4197ec5d87aa677f9f610b1537940dc165a5b1cd870fc74b65ba04e4bd586b8a",
+        "e8871a06946385df4665b930c693c299464bdae9b0897cdaf017261d3684e3f3",
         :triple
-        "2b3d787ef7488e8dca432c3f47d0a0ae08e8d1cb61ff22466e840b744670571b",
+        "2e841459927c961fda4e9327231eb1460cd856c2f14bda7605850b46fc3e10fb",
         :unsched
-        "7cb2a209eabe6491759f2df178f485c9327dcff055da4dd2b30adf89a0f5fc4b",
+        "2ad7860cd0172e357341483b06b3fe203b4c936d243847f19a4a6b82eb03c36e",
         :wave
-        "c1ebe1113e7364ab5c74977b527d261f70577e8dec79b6312126a4f90d77e449"},
+        "980cfb818ff9babaebf043c2d7381393ba09eec78a9574f4475a46baa165983f"},
  :exports
  [default-max-slots
   default-max-attempts
@@ -1207,6 +1232,12 @@
           [:allowlist-ok :bool]
           [:mem-bytes :i64]
           [:min-mem :i64]]],
+        :failed
+        [:record
+         :task/failed
+         [[:exit [:option :i64]]
+          [:timeout :bool]
+          [:error [:option :string]]]],
         :pick-fold
         [:record
          :task/pick-fold

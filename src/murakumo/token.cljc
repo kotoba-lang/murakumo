@@ -220,19 +220,26 @@
 (defn version-ok? [v]
   (oracle/bool->host (o-record 'version-ok? {:v v} [[:v :string]])))
 
+(def ^:private parts-schema
+  [:record :token/parts
+   [[:v [:option :string]]
+    [:payload [:option :string]]
+    [:sig [:option :string]]]])
+
 (defn parts-present?
   "All three wire segments present (non-blank). Profile 5: guest :bool.
-   option-string residual stays positional."
+   T5.2 native guest record wire: single :token/parts argument."
   [v payload sig]
   (let [seg (fn [x]
               (when (and x (not (str/blank? (str x))))
                 (str x)))]
     (oracle/bool->host
      (o-record 'parts-present?
-               {:v (seg v) :payload (seg payload) :sig (seg sig)}
-               [[:v :option-string]
-                [:payload :option-string]
-                [:sig :option-string]]))))
+               {:x (oracle/record parts-schema
+                                  {:v (seg v)
+                                   :payload (seg payload)
+                                   :sig (seg sig)})}
+               [[:x :raw]]))))
 
 (defn constant-time=
   "Full-scan string compare via kotoba constant-time-eq. Profile 5: :bool.

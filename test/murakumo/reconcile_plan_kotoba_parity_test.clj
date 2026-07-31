@@ -140,9 +140,12 @@
                      (fn [i [app sn]]
                        (let [p (project-action-args app sn)]
                          [(str "a_" i)
-                          (str "(action-name " (opt-str-form (:cid p)) " "
+                          (str "(action-name (record-new [:record :reconcile/action-in "
+                               "[[:cid [:option :string]] [:running :i64] "
+                               "[:desired-n :i64] [:free-candidates :i64]]] "
+                               (opt-str-form (:cid p)) " "
                                (:running p) " " (:desired p) " "
-                               (:free-candidates p) ")")]))
+                               (:free-candidates p) "))")]))
                      corpus))
         actual (compile-string-cases cases)]
     (doseq [[i [app sn]] (map-indexed vector corpus)]

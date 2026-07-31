@@ -56,19 +56,35 @@
    :body (if (string=? alg (alg-name)) true false),
    :param-types [:string]}
   {:name sealed-fields-present?,
-   :params [alg nonce ct],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (let
-    [__kotoba_binding-some_1 alg]
+    [__kotoba_binding-some_1
+     (record-get
+      [:record
+       :crypto/sealed
+       [[:alg [:option :string]]
+        [:nonce [:option :string]]
+        [:ct [:option :string]]]]
+      x
+      :alg)]
     (if
      (option-some?-of [:option :string] __kotoba_binding-some_1)
      (let
       [_
        (option-value-of [:option :string] __kotoba_binding-some_1 "")]
       (let
-       [__kotoba_binding-some_2 nonce]
+       [__kotoba_binding-some_2
+        (record-get
+         [:record
+          :crypto/sealed
+          [[:alg [:option :string]]
+           [:nonce [:option :string]]
+           [:ct [:option :string]]]]
+         x
+         :nonce)]
        (if
         (option-some?-of [:option :string] __kotoba_binding-some_2)
         (let
@@ -78,7 +94,15 @@
            __kotoba_binding-some_2
            "")]
          (let
-          [__kotoba_binding-some_3 ct]
+          [__kotoba_binding-some_3
+           (record-get
+            [:record
+             :crypto/sealed
+             [[:alg [:option :string]]
+              [:nonce [:option :string]]
+              [:ct [:option :string]]]]
+            x
+            :ct)]
           (if
            (option-some?-of [:option :string] __kotoba_binding-some_3)
            (let
@@ -91,10 +115,11 @@
            false)))
         false)))
      false)),
-   :param-types
-   [[:option :string] [:option :string] [:option :string]]}],
+   :param-types [[:ref :crypto/sealed]]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:crypto{:sealed
+          "1865db855e32d9e1cb2079a486f7bab97bf69378e05c5bf763b3b8264c320863"},
  :exports
  [alg-name
   cipher-transform
@@ -106,7 +131,13 @@
   strip-b64-pad
   sealed-alg-ok?
   sealed-fields-present?],
- :schemas nil,
+ :schemas
+ #:crypto{:sealed
+          [:record
+           :crypto/sealed
+           [[:alg [:option :string]]
+            [:nonce [:option :string]]
+            [:ct [:option :string]]]]},
  :effects #{},
  :blocks [],
  :entry nil}
