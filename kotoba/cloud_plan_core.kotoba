@@ -1,4 +1,34 @@
 (ns cloud-plan-core
+  (:schemas {;; T5.2 native guest record wire
+             :cloud/region-in [:record :cloud/region-in
+                               [[:zone :string] [:region-label :string] [:region :string]]]
+             :cloud/relay-score [:record :cloud/relay-score
+                                 [[:node-region :string] [:relay-region :string]]]
+             :cloud/overlay-id [:record :cloud/overlay-id
+                                [[:overlay-id :string] [:cloud-name :string]]]
+             :cloud/node-id [:record :cloud/node-id
+                             [[:overlay-cid :string] [:node-name :string]]]
+             :cloud/host-port [:record :cloud/host-port
+                               [[:host :string] [:port :i64]]]
+             :cloud/relay-url [:record :cloud/relay-url
+                               [[:url :string] [:node-id :string]]]
+             :cloud/transport [:record :cloud/transport
+                               [[:scheme :string] [:host :string]]]
+             :cloud/summary-title [:record :cloud/summary-title
+                                   [[:domain :string] [:overlay :string]]]
+             :cloud/dial-ok [:record :cloud/dial-ok
+                             [[:route-name :string] [:node :string]]]
+             :cloud/from-to-cap [:record :cloud/from-to-cap
+                                 [[:from :string] [:to :string]
+                                  [:capability :string] [:reason :string]]]
+             :cloud/authorized [:record :cloud/authorized
+                                [[:from :string] [:to :string] [:capability :string]]]
+             :cloud/address-family [:record :cloud/address-family
+                                    [[:af :string] [:nodes :i64] [:relays :i64]]]
+             :cloud/policy [:record :cloud/policy
+                            [[:default :string] [:allow-n :i64]]]
+             :cloud/starts-with [:record :cloud/starts-with
+                                 [[:s :string] [:prefix :string]]]})
   (:export [default-driver default-cloud-name default-cloud-domain
             default-cloud-graph default-auth-key-env overlay-version
             digit-char nat-str i64-str
@@ -45,6 +75,7 @@
 ;; command-token: pure cmd name from argv token ("" if not a command).
 ;; flag prefixes SSoT for is-flag-* and flag-*-value lengths.
 ;; record $type strings + default capability name tokens dual-source.
+;; T5.2: multi-scalar pure inputs take single guest records.
 ;; Parity: test/murakumo/cloud_plan_kotoba_parity_test.clj
 
 (defn default-driver [] :string "murakumo-overlay")
@@ -68,56 +99,67 @@
     (string-concat "-" (nat-str (- 0 n)))
     (nat-str n)))
 
-(defn node-region [zone :string region-label :string region :string] :string
-  (if (string=? zone "")
-    (if (string=? region-label "")
-      (if (string=? region "")
-        "global"
-        region)
-      region-label)
-    zone))
+(defn node-region [x [:ref :cloud/region-in]] :string
+  ;; T5.2 native: zone / region-label / region / global
+  (let [zone (record-get x :zone)
+        region-label (record-get x :region-label)
+        region (record-get x :region)]
+    (if (string=? zone "")
+      (if (string=? region-label "")
+        (if (string=? region "")
+          "global"
+          region)
+        region-label)
+      zone)))
 
-(defn relay-score [node-region :string relay-region :string] :i64
-  (if (string=? node-region relay-region) 0 1))
+(defn relay-score [x [:ref :cloud/relay-score]] :i64
+  (if (string=? (record-get x :node-region) (record-get x :relay-region)) 0 1))
 
-(defn overlay-id-input [overlay-id :string cloud-name :string] :string
-  ;; preimage for identity/graph-cid
-  (if (string=? overlay-id "")
-    (if (string=? cloud-name "")
-      "murakumo.cloud"
-      cloud-name)
-    overlay-id))
+(defn overlay-id-input [x [:ref :cloud/overlay-id]] :string
+  ;; preimage for identity/graph-cid — T5.2 native record
+  (let [overlay-id (record-get x :overlay-id)
+        cloud-name (record-get x :cloud-name)]
+    (if (string=? overlay-id "")
+      (if (string=? cloud-name "")
+        "murakumo.cloud"
+        cloud-name)
+      overlay-id)))
 
-(defn node-id-input [overlay-cid :string node-name :string] :string
-  (string-concat overlay-cid (string-concat ":" node-name)))
+(defn node-id-input [x [:ref :cloud/node-id]] :string
+  (string-concat (record-get x :overlay-cid)
+                 (string-concat ":" (record-get x :node-name))))
 
-(defn quic-endpoint [host :string port :i64] :string
+(defn quic-endpoint [x [:ref :cloud/host-port]] :string
   (string-concat
    "quic://"
-   (string-concat host (string-concat ":" (i64-str port)))))
+   (string-concat (record-get x :host)
+                  (string-concat ":" (i64-str (record-get x :port))))))
 
-(defn webrtc-endpoint [host :string p2p-port :i64] :string
+(defn webrtc-endpoint [x [:ref :cloud/host-port]] :string
   (string-concat
    "webrtc://"
-   (string-concat host (string-concat ":" (i64-str (+ p2p-port 100))))))
+   (string-concat (record-get x :host)
+                  (string-concat ":" (i64-str (+ (record-get x :port) 100))))))
 
-(defn relay-endpoint-url [relay-url :string node-id :string] :string
-  (string-concat relay-url (string-concat "/" node-id)))
+(defn relay-endpoint-url [x [:ref :cloud/relay-url]] :string
+  (string-concat (record-get x :url)
+                 (string-concat "/" (record-get x :node-id))))
 
-(defn webtransport-endpoint [host :string http-port :i64] :string
+(defn webtransport-endpoint [x [:ref :cloud/host-port]] :string
   ;; cljc: (str "https://" host ":" http-port "/.well-known/murakumo/webtransport")
   (string-concat
    "https://"
    (string-concat
-    host
+    (record-get x :host)
     (string-concat
      ":"
-     (string-concat (i64-str http-port)
+     (string-concat (i64-str (record-get x :port))
                     "/.well-known/murakumo/webtransport")))))
 
-(defn transport-endpoint [scheme :string host :string] :string
+(defn transport-endpoint [x [:ref :cloud/transport]] :string
   ;; cljc fallback: (str (name transport) "://" host)
-  (string-concat scheme (string-concat "://" host)))
+  (string-concat (record-get x :scheme)
+                 (string-concat "://" (record-get x :host))))
 
 ;; ── residual CLI presentation labels + line templates ────────────────
 
@@ -138,10 +180,11 @@
 (defn connects-section-label [] :string
   "  connects:")
 
-(defn summary-title [domain :string overlay :string] :string
+(defn summary-title [x [:ref :cloud/summary-title]] :string
   (string-concat
    "murakumo.cloud "
-   (string-concat domain (string-concat "  overlay " overlay))))
+   (string-concat (record-get x :domain)
+                  (string-concat "  overlay " (record-get x :overlay)))))
 
 (defn routes-title [overlay :string] :string
   (string-concat "murakumo.cloud routes overlay " overlay))
@@ -165,10 +208,11 @@
    "murakumo.cloud connect "
    (string-concat node-name " denied by policy")))
 
-(defn dial-ok-title [route-name :string node :string] :string
+(defn dial-ok-title [x [:ref :cloud/dial-ok]] :string
   (string-concat
    "murakumo.cloud dial "
-   (string-concat route-name (string-concat "  node " node))))
+   (string-concat (record-get x :route-name)
+                  (string-concat "  node " (record-get x :node)))))
 
 (defn connect-ok-title [node-name :string] :string
   (string-concat "murakumo.cloud connect " node-name))
@@ -176,30 +220,36 @@
 (defn relay-ok-title [relay-name :string] :string
   (string-concat "murakumo.cloud relay " relay-name))
 
-(defn from-to-cap-reason [from :string to :string
-                          capability :string reason :string] :string
+(defn from-to-cap-reason [x [:ref :cloud/from-to-cap]] :string
   ;; "  from=%s to=%s capability=%s reason=%s"
-  (string-concat
-   "  from="
-   (string-concat
-    from
+  (let [from (record-get x :from)
+        to (record-get x :to)
+        capability (record-get x :capability)
+        reason (record-get x :reason)]
     (string-concat
-     " to="
+     "  from="
      (string-concat
-      to
+      from
       (string-concat
-       " capability="
-       (string-concat capability (string-concat " reason=" reason))))))))
+       " to="
+       (string-concat
+        to
+        (string-concat
+         " capability="
+         (string-concat capability (string-concat " reason=" reason)))))))))
 
-(defn authorized-line [from :string to :string capability :string] :string
+(defn authorized-line [x [:ref :cloud/authorized]] :string
   ;; "  authorized: from=%s to=%s capability=%s"
-  (string-concat
-   "  authorized: from="
-   (string-concat
-    from
+  (let [from (record-get x :from)
+        to (record-get x :to)
+        capability (record-get x :capability)]
     (string-concat
-     " to="
-     (string-concat to (string-concat " capability=" capability))))))
+     "  authorized: from="
+     (string-concat
+      from
+      (string-concat
+       " to="
+       (string-concat to (string-concat " capability=" capability)))))))
 
 (defn relay-fallback-line [endpoint :string] :string
   (string-concat "  relay fallback: " endpoint))
@@ -210,23 +260,27 @@
 (defn indent-argv-line [argv-joined :string] :string
   (string-concat "  " argv-joined))
 
-(defn address-family-line [af :string nodes :i64 relays :i64] :string
+(defn address-family-line [x [:ref :cloud/address-family]] :string
   ;; "  address-family %s ; nodes %d ; relays %d"
-  (string-concat
-   "  address-family "
-   (string-concat
-    af
+  (let [af (record-get x :af)
+        nodes (record-get x :nodes)
+        relays (record-get x :relays)]
     (string-concat
-     " ; nodes "
+     "  address-family "
      (string-concat
-      (i64-str nodes)
-      (string-concat " ; relays " (i64-str relays)))))))
+      af
+      (string-concat
+       " ; nodes "
+       (string-concat
+        (i64-str nodes)
+        (string-concat " ; relays " (i64-str relays))))))))
 
-(defn policy-line [default :string allow-n :i64] :string
+(defn policy-line [x [:ref :cloud/policy]] :string
   ;; "  policy default=%s allow=%d"
   (string-concat
    "  policy default="
-   (string-concat default (string-concat " allow=" (i64-str allow-n)))))
+   (string-concat (record-get x :default)
+                  (string-concat " allow=" (i64-str (record-get x :allow-n))))))
 
 (defn skipped-reason-suffix [reason :string] :string
   ;; host pads name column; this is the trailing " skipped reason=…" fragment
@@ -234,8 +288,10 @@
 
 ;; ── residual parse-flags command/flag tokens + classifiers ───────────
 
-(defn starts-with? [s :string prefix :string] :bool
-  (let [n (string-byte-length s)
+(defn starts-with? [x [:ref :cloud/starts-with]] :bool
+  (let [s (record-get x :s)
+        prefix (record-get x :prefix)
+        n (string-byte-length s)
         p (string-byte-length prefix)]
     (if (< n p)
       false
@@ -308,34 +364,34 @@
                 ""))))))))
 
 (defn is-flag-cloud? [a :string] :bool
-  (starts-with? a (flag-cloud-prefix)))
+  (starts-with? (record-new [:ref :cloud/starts-with] a (flag-cloud-prefix))))
 
 (defn is-flag-fleet? [a :string] :bool
-  (starts-with? a (flag-fleet-prefix)))
+  (starts-with? (record-new [:ref :cloud/starts-with] a (flag-fleet-prefix))))
 
 (defn is-flag-target? [a :string] :bool
-  (starts-with? a (flag-target-prefix)))
+  (starts-with? (record-new [:ref :cloud/starts-with] a (flag-target-prefix))))
 
 (defn is-flag-from? [a :string] :bool
-  (starts-with? a (flag-from-prefix)))
+  (starts-with? (record-new [:ref :cloud/starts-with] a (flag-from-prefix))))
 
 (defn is-flag-to? [a :string] :bool
-  (starts-with? a (flag-to-prefix)))
+  (starts-with? (record-new [:ref :cloud/starts-with] a (flag-to-prefix))))
 
 (defn is-flag-capability? [a :string] :bool
-  (starts-with? a (flag-capability-prefix)))
+  (starts-with? (record-new [:ref :cloud/starts-with] a (flag-capability-prefix))))
 
 (defn is-flag-driver? [a :string] :bool
-  (starts-with? a (flag-driver-prefix)))
+  (starts-with? (record-new [:ref :cloud/starts-with] a (flag-driver-prefix))))
 
 (defn is-flag-format? [a :string] :bool
-  (starts-with? a (flag-format-prefix)))
+  (starts-with? (record-new [:ref :cloud/starts-with] a (flag-format-prefix))))
 
 (defn is-flag-auth-key? [a :string] :bool
-  (starts-with? a (flag-auth-key-prefix)))
+  (starts-with? (record-new [:ref :cloud/starts-with] a (flag-auth-key-prefix))))
 
 (defn is-flag-dash? [a :string] :bool
-  (starts-with? a (flag-dash-prefix)))
+  (starts-with? (record-new [:ref :cloud/starts-with] a (flag-dash-prefix))))
 
 (defn is-positional-target? [a :string] :bool
   ;; not a --flag → free target token

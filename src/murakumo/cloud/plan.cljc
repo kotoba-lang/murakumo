@@ -39,6 +39,40 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private region-in-schema
+  [:record :cloud/region-in
+   [[:zone :string] [:region-label :string] [:region :string]]])
+(def ^:private relay-score-schema
+  [:record :cloud/relay-score
+   [[:node-region :string] [:relay-region :string]]])
+(def ^:private overlay-id-schema
+  [:record :cloud/overlay-id
+   [[:overlay-id :string] [:cloud-name :string]]])
+(def ^:private node-id-schema
+  [:record :cloud/node-id
+   [[:overlay-cid :string] [:node-name :string]]])
+(def ^:private host-port-schema
+  [:record :cloud/host-port [[:host :string] [:port :i64]]])
+(def ^:private relay-url-schema
+  [:record :cloud/relay-url [[:url :string] [:node-id :string]]])
+(def ^:private transport-schema
+  [:record :cloud/transport [[:scheme :string] [:host :string]]])
+(def ^:private summary-title-schema
+  [:record :cloud/summary-title [[:domain :string] [:overlay :string]]])
+(def ^:private dial-ok-schema
+  [:record :cloud/dial-ok [[:route-name :string] [:node :string]]])
+(def ^:private from-to-cap-schema
+  [:record :cloud/from-to-cap
+   [[:from :string] [:to :string] [:capability :string] [:reason :string]]])
+(def ^:private authorized-schema
+  [:record :cloud/authorized
+   [[:from :string] [:to :string] [:capability :string]]])
+(def ^:private address-family-schema
+  [:record :cloud/address-family
+   [[:af :string] [:nodes :i64] [:relays :i64]]])
+(def ^:private policy-schema
+  [:record :cloud/policy [[:default :string] [:allow-n :i64]]])
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def default-cloud-path config/default-cloud-path)
@@ -126,11 +160,12 @@
 
 (defn summary-title
   "CLI title for plan summary. Kotoba `summary-title` (required).
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :cloud/summary-title argument."
   [domain overlay]
   (o-record 'summary-title
-            {:domain domain :overlay overlay}
-            [[:domain :string] [:overlay :string]]))
+            {:x (oracle/record summary-title-schema
+                               {:domain domain :overlay overlay})}
+            [[:x :raw]]))
 
 (defn routes-title
   "CLI title for routes listing. Kotoba `routes-title` (required)."
@@ -164,11 +199,12 @@
 
 (defn dial-ok-title
   "Dial authorized title. Kotoba `dial-ok-title` (required).
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :cloud/dial-ok argument."
   [route-name node]
   (o-record 'dial-ok-title
-            {:route-name route-name :node node}
-            [[:route-name :string] [:node :string]]))
+            {:x (oracle/record dial-ok-schema
+                               {:route-name route-name :node node})}
+            [[:x :raw]]))
 
 (defn connect-ok-title
   "Connect authorized title. Kotoba `connect-ok-title` (required)."
@@ -182,20 +218,22 @@
 
 (defn from-to-cap-reason
   "from/to/capability/reason detail line. Kotoba SSoT (required).
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :cloud/from-to-cap argument."
   [from to capability reason]
   (o-record 'from-to-cap-reason
-            {:from from :to to :capability capability :reason reason}
-            [[:from :string] [:to :string]
-             [:capability :string] [:reason :string]]))
+            {:x (oracle/record from-to-cap-schema
+                               {:from from :to to
+                                :capability capability :reason reason})}
+            [[:x :raw]]))
 
 (defn authorized-line
   "authorized from/to/capability line. Kotoba SSoT (required).
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :cloud/authorized argument."
   [from to capability]
   (o-record 'authorized-line
-            {:from from :to to :capability capability}
-            [[:from :string] [:to :string] [:capability :string]]))
+            {:x (oracle/record authorized-schema
+                               {:from from :to to :capability capability})}
+            [[:x :raw]]))
 
 (defn relay-fallback-line
   "relay fallback detail line. Kotoba SSoT (required)."
@@ -214,19 +252,21 @@
 
 (defn address-family-line
   "Summary address-family + node/relay counts. Kotoba SSoT (required).
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :cloud/address-family argument."
   [af nodes relays]
   (o-record 'address-family-line
-            {:af af :nodes nodes :relays relays}
-            [[:af :string] [:nodes :i64] [:relays :i64]]))
+            {:x (oracle/record address-family-schema
+                               {:af af :nodes nodes :relays relays})}
+            [[:x :raw]]))
 
 (defn policy-line
   "Summary policy default + allow count. Kotoba SSoT (required).
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :cloud/policy argument."
   [default allow-n]
   (o-record 'policy-line
-            {:default default :allow-n allow-n}
-            [[:default :string] [:allow-n :i64]]))
+            {:x (oracle/record policy-schema
+                               {:default default :allow-n allow-n})}
+            [[:x :raw]]))
 
 (defn skipped-reason-suffix
   "Trailing ' skipped reason=…' fragment (name column padding stays host)."
@@ -386,44 +426,48 @@
 (defn overlay-id
   "Stable CID for an overlay namespace.
    Preimage via kotoba `overlay-id-input` (required).
-   T5.2: structural cloud map → call-record."
+   T5.2 native guest record wire: single :cloud/overlay-id argument."
   [cloud]
   (identity/graph-cid
    (o-record 'overlay-id-input
-             {:overlay/id (or (:overlay/id cloud) "")
-              :cloud/name (or (:cloud/name cloud) "")}
-             [[:overlay/id :string] [:cloud/name :string]])))
+             {:x (oracle/record overlay-id-schema
+                                {:overlay-id (or (:overlay/id cloud) "")
+                                 :cloud-name (or (:cloud/name cloud) "")})}
+             [[:x :raw]])))
 
 (defn node-id
   "Stable node CID inside an overlay.
    Preimage via kotoba `node-id-input` (required).
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :cloud/node-id argument."
   [cloud node]
   (identity/graph-cid
    (o-record 'node-id-input
-             {:overlay-cid (overlay-id cloud)
-              :node-name (:name node)}
-             [[:overlay-cid :string] [:node-name :string]])))
+             {:x (oracle/record node-id-schema
+                                {:overlay-cid (overlay-id cloud)
+                                 :node-name (:name node)})}
+             [[:x :raw]])))
 
 (defn node-region
   "Kotoba `node-region` (zone / region-label / region / global) (required).
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :cloud/region-in argument."
   [node]
   (o-record 'node-region
-            {:zone (or (get-in node [:labels :zone]) "")
-             :region-label (or (get-in node [:labels :region]) "")
-             :region (or (:region node) "")}
-            [[:zone :string] [:region-label :string] [:region :string]]))
+            {:x (oracle/record region-in-schema
+                               {:zone (or (get-in node [:labels :zone]) "")
+                                :region-label (or (get-in node [:labels :region]) "")
+                                :region (or (:region node) "")})}
+            [[:x :raw]]))
 
 (defn relay-score
   "Kotoba `relay-score` (required).
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :cloud/relay-score argument."
   [node relay]
   (oracle/i64->host
    (o-record 'relay-score
-             {:node-region (node-region node)
-              :relay-region (or (:region relay) "")}
-             [[:node-region :string] [:relay-region :string]])))
+             {:x (oracle/record relay-score-schema
+                                {:node-region (node-region node)
+                                 :relay-region (or (:region relay) "")})}
+             [[:x :raw]])))
 
 (defn choose-relay
   "Choose a deterministic relay for node fallback."
@@ -458,20 +502,24 @@
     (case transport
       :quic {:transport :quic
              :endpoint (o-record 'quic-endpoint
-                                 {:host host :port p2p-port}
-                                 [[:host :string] [:port :i64]])}
+                                 {:x (oracle/record host-port-schema
+                                                    {:host host :port p2p-port})}
+                                 [[:x :raw]])}
       :webrtc {:transport :webrtc
                :endpoint (o-record 'webrtc-endpoint
-                                   {:host host :port p2p-port}
-                                   [[:host :string] [:port :i64]])}
+                                   {:x (oracle/record host-port-schema
+                                                      {:host host :port p2p-port})}
+                                   [[:x :raw]])}
       :webtransport {:transport :webtransport
                      :endpoint (o-record 'webtransport-endpoint
-                                         {:host host :port http-port}
-                                         [[:host :string] [:port :i64]])}
+                                         {:x (oracle/record host-port-schema
+                                                            {:host host :port http-port})}
+                                         [[:x :raw]])}
       {:transport transport
        :endpoint (o-record 'transport-endpoint
-                           {:transport (name transport) :host host}
-                           [[:transport :string] [:host :string]])})))
+                           {:x (oracle/record transport-schema
+                                              {:scheme (name transport) :host host})}
+                           [[:x :raw]])})))
 
 (defn relay-endpoint
   "Endpoint URL via kotoba `relay-endpoint-url` (required)."
@@ -480,8 +528,9 @@
     {:relay (:name relay)
      :transport (first (:transports relay))
      :endpoint (o-record 'relay-endpoint-url
-                           {:url (:url relay) :node-id node-id}
-                           [[:url :string] [:node-id :string]])}))
+                           {:x (oracle/record relay-url-schema
+                                              {:url (:url relay) :node-id node-id})}
+                           [[:x :raw]])}))
 
 (defn- fmt
   "CLI line formatter. On JVM uses clojure.core/format; on cljs interpolates %s/%d left-to-right."
