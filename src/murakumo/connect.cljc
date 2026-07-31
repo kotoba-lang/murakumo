@@ -28,6 +28,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── residual class / plane name tokens ───────────────────────────────
 
 (def class-native
@@ -53,17 +59,24 @@
                    (config/tx-data->map "connect-doc"))))
 
 (defn default-class
-  "Kotoba `default-class-name` → keyword."
+  "Kotoba `default-class-name` → keyword.
+   T5.2: connect map → call-record."
   [connect]
-  (keyword (o 'default-class-name
-              [(if-let [c (:default-class connect)] (name c) "")])))
+  (keyword
+   (o-record 'default-class-name
+             {:default-class (if-let [c (:default-class connect)] (name c) "")}
+             [[:default-class :string]])))
 
 (defn node-class
-  "Kotoba `node-class-name` → keyword."
+  "Kotoba `node-class-name` → keyword.
+   T5.2: structural node+connect fields → call-record."
   [connect node]
-  (keyword (o 'node-class-name
-              [(if-let [c (:class node)] (name c) "")
-               (if-let [c (:default-class connect)] (name c) "")])))
+  (keyword
+   (o-record 'node-class-name
+             {:class (if-let [c (:class node)] (name c) "")
+              :default-class (if-let [c (:default-class connect)] (name c) "")}
+             [[:class :string]
+              [:default-class :string]])))
 
 (defn class-transports
   "Transports a node-class speaks on `plane` (:read | :live)."
@@ -82,7 +95,8 @@
   "Can `node` serve a client of `(:class reach)` on `(:plane reach)`?
      :read — node speaks :http (universal CID pull).
      :live — node and target client class share at least one live transport.
-   Kotoba `serves-plane?` (profile-5 :bool flags for http?/common?)."
+   Kotoba `serves-plane?` (profile-5 :bool flags for http?/common?).
+   T5.2: structural plane/http/common flags → call-record."
   [connect node reach]
   (let [{:keys [class plane]} (parse-reach reach)
         ncls (node-class connect node)
@@ -92,8 +106,13 @@
                                (set (class-transports connect ncls (keyword plane-live)))
                                (set (class-transports connect class (keyword plane-live))))))]
     (oracle/bool->host
-     (o 'serves-plane?
-        [(name plane) http? common?]))))
+     (o-record 'serves-plane?
+               {:plane (name plane)
+                :http? http?
+                :common? common?}
+               [[:plane :string]
+                [:http? :bool]
+                [:common? :bool]]))))
 
 (defn serves-all?
   "True if `node` satisfies every reach requirement (empty => trivially true)."

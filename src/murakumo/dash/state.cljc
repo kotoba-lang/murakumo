@@ -25,6 +25,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 (defn- parse-int [s]
   #?(:clj (Integer/parseInt s)
      :cljs (js/parseInt s 10)))
@@ -44,14 +50,26 @@
   (o 'hosted-join-sep []))
 
 (defn join-append
-  "Generic empty-first join fold step."
+  "Generic empty-first join fold step.
+   T5.2: structural acc/sep/next → call-record."
   [acc sep next]
-  (o 'join-append [(str (or acc "")) (str sep) (str next)]))
+  (o-record 'join-append
+            {:acc (str (or acc ""))
+             :sep (str sep)
+             :next (str next)}
+            [[:acc :string]
+             [:sep :string]
+             [:next :string]]))
 
 (defn hosted-append
-  "Append one short-hosted-cid to hosted-summary acc."
+  "Append one short-hosted-cid to hosted-summary acc.
+   T5.2: structural acc/next → call-record."
   [acc next]
-  (o 'hosted-append [(str (or acc "")) (str next)]))
+  (o-record 'hosted-append
+            {:acc (str (or acc ""))
+             :next (str next)}
+            [[:acc :string]
+             [:next :string]]))
 
 (def default-dashboard-port
   "Default dashboard HTTP port. Kotoba SSoT."
@@ -93,9 +111,12 @@
             (:hosted node))))
 
 (defn health-class
-  "CSS class for a node health value."
+  "CSS class for a node health value.
+   T5.2: structural node health → call-record."
   [node]
-  (o 'health-class-of [(str (or (:health node) ""))]))
+  (o-record 'health-class-of
+            {:health (str (or (:health node) ""))}
+            [[:health :string]]))
 
 (defn query-at
   "Parse dashboard `at=N` query parameter. Returns nil if absent."
@@ -114,11 +135,15 @@
   (oracle/i64->host (o 'interval-sleep-ms [(oracle/as-i64 seconds)])))
 
 (defn clamp-at
-  "Clamp a requested history offset into the available history range."
+  "Clamp a requested history offset into the available history range.
+   T5.2: structural requested-at/history-count → call-record."
   [requested-at history-count]
   (oracle/i64->host
-   (o 'clamp-at [(oracle/as-i64 (or requested-at 0))
-                 (oracle/as-i64 history-count)])))
+   (o-record 'clamp-at
+             {:requested-at (or requested-at 0)
+              :history-count history-count}
+             [[:requested-at :i64]
+              [:history-count :i64]])))
 
 (defn selected-snapshot
   "Select dashboard snapshot for a history offset.

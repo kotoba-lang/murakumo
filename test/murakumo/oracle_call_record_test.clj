@@ -18,7 +18,10 @@
             [murakumo.component-authority :as cauth]
             [murakumo.identity :as identity]
             [murakumo.deploy.plan :as dplan]
-            [murakumo.secret :as secret]))
+            [murakumo.secret :as secret]
+            [murakumo.connect :as connect]
+            [murakumo.dash.state :as dash]
+            [murakumo.overlay.crypto :as crypto]))
 
 (deftest map->args-projects-kinds
   (is (= ["a" "b"]
@@ -265,3 +268,29 @@
       (is (true? (secret/valid-env-var-name? "MURAKUMO_TOKEN_SECRET")))
       (is (false? (secret/valid-env-var-name? "")))
       (is (true? (secret/valid-path-ref? "/etc/ssl/cert.pem"))))))
+
+(deftest call-record-connect-dash-crypto
+  "T5.2 wave 6: connect class/reach, dash join/clamp, crypto sealed map."
+  (when (oracle/ready? :connect)
+    (let [connect {:default-class :native
+                   :classes {:native {:read [:http]
+                                      :live [:quic]}
+                             :browser {:live [:quic]}}}
+          node {:class :native :name "a"}]
+      (is (= :native (connect/default-class connect)))
+      (is (= :native (connect/node-class connect node)))
+      (is (true? (connect/serves-reach? connect node :browser/live)))
+      (is (true? (connect/serves-reach? connect node :browser/read)))))
+  (when (oracle/ready? :dash-state)
+    (is (= "a,b" (dash/join-append "a" "," "b")))
+    (is (= "b" (dash/join-append "" "," "b")))
+    (is (= "a b" (dash/hosted-append "a" "b")))
+    (is (= "ok" (dash/health-class {:health "ok"})))
+    (is (= 0 (dash/clamp-at 0 5)))
+    (is (= 2 (dash/clamp-at 99 3))))
+  (when (oracle/ready? :overlay-crypto)
+    (is (true? (crypto/sealed-alg-ok? :aes-256-gcm)))
+    (is (true? (crypto/sealed-fields-present?
+                {:alg :aes-256-gcm :nonce "n" :ciphertext "c"})))
+    (is (false? (crypto/sealed-fields-present?
+                 {:alg :aes-256-gcm :nonce "n"})))))

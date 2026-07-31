@@ -23,6 +23,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── pure packaging (kotoba SSoT; requires oracle) ────────────────────
 
 (def alg-name
@@ -52,11 +58,13 @@
   (o 'strip-b64-pad [(str s)]))
 
 (defn sealed-alg-ok?
-  "True when sealed map carries the expected AES-GCM alg."
+  "True when sealed map carries the expected AES-GCM alg.
+   T5.2: structural alg → call-record."
   [alg]
   (oracle/bool->host
-   (o 'sealed-alg-ok?
-      [(if (keyword? alg) (name alg) (str alg))])))
+   (o-record 'sealed-alg-ok?
+             {:alg (if (keyword? alg) (name alg) (str alg))}
+             [[:alg :string]])))
 
 (defn- option-field
   "Product Value ABI optional sealed field: keyword → name string."
@@ -66,13 +74,17 @@
      (if (keyword? v) (name v) (str v)))))
 
 (defn sealed-fields-present?
-  "True when :alg :nonce :ciphertext are all present."
+  "True when :alg :nonce :ciphertext are all present.
+   T5.2: structural sealed fields → call-record (:raw option ABI)."
   [sealed]
   (oracle/bool->host
-   (o 'sealed-fields-present?
-      [(option-field (get sealed field-alg))
-       (option-field (get sealed field-nonce))
-       (option-field (get sealed field-ciphertext))])))
+   (o-record 'sealed-fields-present?
+             {:alg (option-field (get sealed field-alg))
+              :nonce (option-field (get sealed field-nonce))
+              :ciphertext (option-field (get sealed field-ciphertext))}
+             [[:alg :raw]
+              [:nonce :raw]
+              [:ciphertext :raw]])))
 
 (defn sealed-map-ok?
   "Live open gate: fields present + alg ok."
