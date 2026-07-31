@@ -75,7 +75,7 @@
 (defn auth-header
   "Authorization Bearer header value. Kotoba `auth-header` (required)."
   [token]
-  (o 'auth-header [(str token)]))
+  (o-record 'auth-header {:token token} [[:token :string]]))
 
 (defn fleet-graph-cid []
   (identity/graph-cid fleet-graph-name))
@@ -176,4 +176,4 @@
   "True when repo.write stdout contains an ok status.
    Kotoba `write-ok?` (required)."
   [out]
-  (oracle/bool->host (o 'write-ok? [(str out)])))
+  (oracle/bool->host (o-record 'write-ok? {:out out} [[:out :string]])))

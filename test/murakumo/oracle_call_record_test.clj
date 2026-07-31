@@ -535,3 +535,44 @@
       (is (map? ev)))
     (is (thrown? Exception
                  (cauth/place (cauth/initial-state) "bafyedge" "")))))
+
+(deftest call-record-wave12-closeout
+  "T5.2 wave 12: remaining single-arg residual + eligibility :raw close-out."
+  (when (oracle/ready? :cloud-plan)
+    (is (string? (cplan/routes-title "ov1")))
+    (is (string? (cplan/unknown-node-line "missing")))
+    (is (string? (cplan/connect-ok-title "asher")))
+    (is (string? (cplan/reason-line "denied"))))
+  (when (oracle/ready? :reconcile-plan)
+    (is (pos? (rplan/watch-sleep-ms 2))))
+  (when (oracle/ready? :tunnel)
+    (is (string? (tunnel/wrap-cmd "echo hi")))
+    (is (string? (tunnel/remote-curl-command "http://x"))))
+  (when (oracle/ready? :deploy-plan)
+    (is (string? (dplan/release-wit-path "/opt/release")))
+    (is (string? (dplan/command-output "ok"))))
+  (when (oracle/ready? :config)
+    (is (string? (config/default-kotoba-dir "/Users/demo")))
+    (is (string? (config/pinned-bin-dir "/Users/demo/.murakumo"))))
+  (when (oracle/ready? :provision-plan)
+    (is (string? (pplan/launchd-daemon-path "com.murakumo.node")))
+    (is (string? (pplan/home-bin-path "/Users/demo"))))
+  (when (oracle/ready? :dash-state)
+    (is (string? (dash/health-url 8080)))
+    (is (string? (dash/probe-command 8080))))
+  (when (oracle/ready? :infer-schedule)
+    (is (true? (sched/eligible?
+                {:engines #{:e} :checkpoints #{} :free-bytes 1e12
+                 :node/can-fetch? true}
+                {:model/engine :e :model/checkpoint nil :model/min-free-bytes 0})))
+    (is (false? (sched/eligible?
+                 {:engines #{:other} :checkpoints #{} :free-bytes 1e12
+                  :node/can-fetch? true}
+                 {:model/engine :e :model/checkpoint nil :model/min-free-bytes 0}))))
+  (when (oracle/ready? :task-plan)
+    (is (true? (task/eligible?
+                {:name "n" :roles #{} :mem-bytes 1e12}
+                {:roles #{} :min-mem-bytes 0})))
+    (is (false? (task/eligible?
+                 {:name "n" :roles #{} :mem-bytes 10}
+                 {:roles #{} :min-mem-bytes 1000})))))

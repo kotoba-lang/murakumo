@@ -190,13 +190,13 @@
   "Kotoba `action-is-satisfied?`. Profile 5: guest :bool."
   [action]
   (oracle/bool->host
-   (o 'action-is-satisfied? [(name action)])))
+   (o-record 'action-is-satisfied? {:action_is_satisfied (name action)} [[:action_is_satisfied :string]])))
 
 (defn- action-is-place?
   "Kotoba `action-is-place?`. Profile 5: guest :bool."
   [action]
   (oracle/bool->host
-   (o 'action-is-place? [(name action)])))
+   (o-record 'action-is-place? {:action_is_place (name action)} [[:action_is_place :string]])))
 
 (defn plan-converged?
   "True when every app is satisfied."
@@ -217,32 +217,32 @@
 (defn watch-sleep-ms
   "Milliseconds to sleep between reconcile watch iterations."
   [seconds]
-  (oracle/i64->host (o 'watch-sleep-ms [(oracle/as-i64 seconds)])))
+  (oracle/i64->host (o-record 'watch-sleep-ms {:seconds seconds} [[:seconds :i64]])))
 
 (defn- watch-seconds
   "Seconds for --watch / --watch=N."
   [a]
-  (oracle/i64->host (o 'watch-seconds [(str a)])))
+  (oracle/i64->host (o-record 'watch-seconds {:a a} [[:a :string]])))
 
 (defn- snapshot-value
   "Path after --snapshot=."
   [a]
-  (o 'snapshot-value [(str a)]))
+  (o-record 'snapshot-value {:a a} [[:a :string]]))
 
 (defn- flag-is-dry-run? [a]
-  (oracle/bool->host (o 'flag-is-dry-run? [(str a)])))
+  (oracle/bool->host (o-record 'flag-is-dry-run? {:a a} [[:a :string]])))
 
 (defn- flag-is-apply? [a]
-  (oracle/bool->host (o 'flag-is-apply? [(str a)])))
+  (oracle/bool->host (o-record 'flag-is-apply? {:a a} [[:a :string]])))
 
 (defn- flag-is-watch? [a]
-  (oracle/bool->host (o 'flag-is-watch? [(str a)])))
+  (oracle/bool->host (o-record 'flag-is-watch? {:a a} [[:a :string]])))
 
 (defn- flag-is-snapshot? [a]
-  (oracle/bool->host (o 'flag-is-snapshot? [(str a)])))
+  (oracle/bool->host (o-record 'flag-is-snapshot? {:a a} [[:a :string]])))
 
 (defn- flag-is-dash? [a]
-  (oracle/bool->host (o 'flag-is-dash? [(str a)])))
+  (oracle/bool->host (o-record 'flag-is-dash? {:a a} [[:a :string]])))
 
 (defn parse-flags
   "Parse reconcile CLI flags into data. Reduce fold stays host."
@@ -261,7 +261,7 @@
   "Validation error keyword for reconcile command flags, or nil."
   [{:keys [manifest]}]
   (when (oracle/bool->host
-         (o 'missing-manifest? [(str (or manifest ""))]))
+         (o-record 'missing-manifest? {:manifest manifest} [[:manifest :string]]))
     :missing-manifest))
 
 (defn reconcile-app-record

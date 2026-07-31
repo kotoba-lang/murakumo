@@ -72,7 +72,7 @@
   "Node-local health URL for the control HTTP port. Kotoba `health-url`."
   [fleet node]
   (let [port (node-port fleet node)]
-    (o 'health-url [(oracle/as-i64 port)])))
+    (o-record 'health-url {:port port} [[:port :i64]])))
 
 (defn select
   "Resolve a node selector string to node maps.
@@ -82,7 +82,7 @@
    Kotoba selector helpers required."
   [fleet sel]
   (let [nodes (:nodes fleet)]
-    (if (oracle/bool->host (o 'selector-is-all? [(str (or sel ""))]))
+    (if (oracle/bool->host (o-record 'selector-is-all? {:sel sel} [[:sel :string]]))
       nodes
       (filter (fn [node]
                 (oracle/bool->host
@@ -106,7 +106,7 @@
               :when (>= (count cols) 4)]
           [(nth cols 1) {:ip (nth cols 0)
                          :online? (not (oracle/bool->host
-                                        (o 'line-has-offline? [(str line)])))}])))
+                                        (o-record 'line-has-offline? {:line line} [[:line :string]])))}])))
 
 (defn tailscale-status-result
   "Normalise a `tailscale status` process result into inventory metadata."

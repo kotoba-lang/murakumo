@@ -292,12 +292,12 @@
 (defn- probe-line-key
   "First character of an H:/L:/P: probe line."
   [line]
-  (o 'probe-line-key [(str line)]))
+  (o-record 'probe-line-key {:line line} [[:line :string]]))
 
 (defn- probe-line-value
   "Payload after the key colon."
   [line]
-  (o 'probe-line-value [(str line)]))
+  (o-record 'probe-line-value {:line line} [[:line :string]]))
 
 (defn probe-lines
   "Parse the H:/L:/P: probe stdout into a map of string key -> value."
@@ -311,7 +311,7 @@
 (defn health-url
   "Local health URL for a control port."
   [port]
-  (o 'health-url [(oracle/as-i64 port)]))
+  (o-record 'health-url {:port port} [[:port :i64]]))
 
 (defn mesh-log-path
   "Mesh log path used by probe L:/P: clauses."
@@ -322,7 +322,7 @@
   "Remote shell command for one dashboard probe round-trip.
    SSH execution of this string stays host-forever."
   [port]
-  (o 'probe-command [(oracle/as-i64 port)]))
+  (o-record 'probe-command {:port port} [[:port :i64]]))
 
 (defn parse-health
   "Decode health JSON with a host-supplied decoder, returning nil on failure."
@@ -342,7 +342,7 @@
 (defn parse-links
   "Parse the L: value from probe output."
   [s]
-  (oracle/i64->host (o 'parse-links [(str (or s ""))])))
+  (oracle/i64->host (o-record 'parse-links {:s s} [[:s :string]])))
 
 (defn parse-hosted
   "Parse comma-separated hosted component CIDs from the P: value."
@@ -354,7 +354,7 @@
 (defn health-from-present
   "ok/down label from health-json presence. Profile 5: present? is guest :bool."
   [present?]
-  (o 'health-from-present [(boolean present?)]))
+  (o-record 'health-from-present {:present? present?} [[:present? :bool]]))
 
 (defn probe-node
   "Build a snapshot node from static node data and parsed probe values."

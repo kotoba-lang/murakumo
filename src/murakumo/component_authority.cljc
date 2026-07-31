@@ -148,7 +148,7 @@
               (o-record 'next-sequence
                         {:sequence (:sequence state)}
                         [[:sequence :i64]]))
-        kind (keyword (o 'event-kind [op-place]))
+        kind (keyword (o-record 'event-kind {:op-place op-place} [[:op-place :string]]))
         state' (-> state
                    (assoc-in [:epochs component-cid] epoch)
                    (update-in [:placements component-cid] (fnil conj #{}) node)
@@ -174,7 +174,7 @@
               (o-record 'next-sequence
                         {:sequence (:sequence state)}
                         [[:sequence :i64]]))
-        kind (keyword (o 'event-kind [op-revoke]))
+        kind (keyword (o-record 'event-kind {:op-revoke op-revoke} [[:op-revoke :string]]))
         state' (-> state
                    (assoc-in [:epochs component-cid] epoch)
                    (update :placements dissoc component-cid)

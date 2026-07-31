@@ -139,7 +139,7 @@
   [opts]
   (let [missing (missing-options required-dial-options opts)
         cmd-name (name (or (:command opts) :unknown))
-        is-dial (oracle/bool->host (o 'command-is-dial? [cmd-name]))
+        is-dial (oracle/bool->host (o-record 'command-is-dial? {:cmd-name cmd-name} [[:cmd-name :string]]))
         reason (keyword
                 (o-record 'dial-ok-reason
                           {:is-dial is-dial

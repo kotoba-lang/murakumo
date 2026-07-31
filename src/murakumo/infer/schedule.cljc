@@ -46,13 +46,18 @@
 
 (defn eligible?
   "Can `node` run `model`? Kotoba eligible? with a bool eligibility record
-  (T5.3 + language profile 5)."
+  (T5.3 + language profile 5).
+   T5.2: structural map → call-record (eligibility record as :raw)."
   [node model]
   (oracle/bool->host
-   (o 'eligible?
-      [(oracle/record eligibility-schema (eligibility-fields node model))
-       (oracle/as-i64 (or (:free-bytes node) 0))
-       (oracle/as-i64 (:model/min-free-bytes model 0))])))
+   (o-record 'eligible?
+             {:eligibility (oracle/record eligibility-schema
+                                           (eligibility-fields node model))
+              :free-bytes (or (:free-bytes node) 0)
+              :min-free (:model/min-free-bytes model 0)}
+             [[:eligibility :raw]
+              [:free-bytes :i64]
+              [:min-free :i64]])))
 
 (defn score
   "Lower is better: queue then -free-bytes. Kotoba score-queue + score-free.

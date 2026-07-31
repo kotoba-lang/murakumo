@@ -275,13 +275,13 @@
    Subcmd/flag fragments oracle SSoT; localhost URL via kotoba (required)."
   [kotoba manifest wit local-port]
   [kotoba app-subcmd deploy-subcmd manifest wit-dir-flag wit publish-flag url-flag
-   (o 'localhost-url [(oracle/as-i64 local-port)])])
+   (o-record 'localhost-url {:local-port local-port} [[:local-port :i64]])])
 
 (defn block-put-argv
   "argv for putting a WASM artifact into a node-local forwarded kotoba server.
    Flag/subcmd fragments oracle SSoT; vector assembly stays host."
   [kotoba token wasm local-port]
-  [kotoba url-flag (o 'localhost-url [(oracle/as-i64 local-port)])
+  [kotoba url-flag (o-record 'localhost-url {:local-port local-port} [[:local-port :i64]])
    token-flag token block-subcmd put-subcmd file-flag wasm])
 
 (defn artifact-node-plan
@@ -314,20 +314,20 @@
 (defn command-output
   "Trim stdout from command output used as a scalar value. Kotoba (required)."
   [out]
-  (o 'command-output [(str out)]))
+  (o-record 'command-output {:out out} [[:out :string]]))
 
 (defn execution-observed?
   "True when a node log grep count indicates the component has executed there.
    Kotoba (required). Profile 5: guest :bool."
   [grep-count-out]
   (oracle/bool->host
-   (o 'execution-observed? [(str grep-count-out)])))
+   (o-record 'execution-observed? {:grep-count-out grep-count-out} [[:grep-count-out :string]])))
 
 (defn execution-count-command
   "Remote shell command that counts execution log lines for a component CID.
    Kotoba (required)."
   [cid]
-  (o 'execution-count-command [(str cid)]))
+  (o-record 'execution-count-command {:cid cid} [[:cid :string]]))
 
 (defn observed-node
   "Return the node name when its execution count output proves placement.
@@ -368,13 +368,13 @@
 (defn stop-forward-command
   "Shell command that stops forwards bound to a local port. Kotoba (required)."
   [local-port]
-  (o 'stop-forward-command [(oracle/as-i64 local-port)]))
+  (o-record 'stop-forward-command {:local-port local-port} [[:local-port :i64]]))
 
 (defn release-wit-path
   "WIT path paired with a release dir (`target/<triple>/release`).
    Kotoba (required)."
   [release-dir]
-  (o 'release-wit-path [(str release-dir)]))
+  (o-record 'release-wit-path {:release-dir release-dir} [[:release-dir :string]]))
 
 (defn pin-copy-plan
   "Pure copy plan for pinning a kotoba release into murakumo's owned ./bin dir.
@@ -479,7 +479,7 @@
            (boolean (re-matches #"[A-Za-z]:[\\/].*" p)))
     true
     (oracle/bool->host
-     (o 'absolute-unix-git-bin? [(str (or p ""))]))))
+     (o-record 'absolute-unix-git-bin? {:p p} [[:p :string]]))))
 
 (defn git-short-sha-argv
   "argv for reading the pinned source git sha.
@@ -521,11 +521,11 @@
   [manifest operator-seed]
   (cond
     (oracle/bool->host
-     (o 'missing-manifest? [(str (or manifest ""))]))
+     (o-record 'missing-manifest? {:manifest manifest} [[:manifest :string]]))
     :missing-manifest
 
     (oracle/bool->host
-     (o 'missing-operator-seed? [(str (or operator-seed ""))]))
+     (o-record 'missing-operator-seed? {:operator-seed operator-seed} [[:operator-seed :string]]))
     :missing-operator-seed
 
     :else nil))
