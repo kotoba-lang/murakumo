@@ -28,6 +28,29 @@
    :nodes [{:name "asher" :ip "100.0.0.1"}
            {:name "judah" :ip "100.0.0.2" :p2p-port 5001}]})
 
+(def ^:private multiaddr-ty
+  "[:record :provision/multiaddr [[:ip :string] [:port :i64]]]")
+(def ^:private bin-path-ty
+  "[:record :provision/bin-path [[:local-bin :string] [:bin :string]]]")
+(def ^:private remote-dest-ty
+  "[:record :provision/remote-dest [[:host :string] [:bin :string]]]")
+(def ^:private label-kv-ty
+  "[:record :provision/label-kv [[:k :string] [:v :string]]]")
+(def ^:private peer-entry-ty
+  "[:record :provision/peer-entry [[:peer-id :string] [:multiaddr :string]]]")
+(def ^:private join-ty
+  "[:record :provision/join [[:acc :string] [:sep :string] [:next :string]]]")
+(def ^:private bootstrap-ty
+  "[:record :provision/bootstrap [[:acc :string] [:entry :string]]]")
+(def ^:private labels-ty
+  "[:record :provision/labels [[:acc :string] [:pair :string]]]")
+(def ^:private roles-ty
+  "[:record :provision/roles [[:acc :string] [:role :string]]]")
+(def ^:private plist-replace-ty
+  "[:record :provision/plist-replace [[:tmpl :string] [:ph :string] [:val :string]]]")
+(def ^:private write-plist-ty
+  "[:record :provision/write-plist [[:label :string] [:body :string]]]")
+
 (defn- kotoba-literal [s]
   (str \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -59,7 +82,8 @@
             "so" "(ssh-rsync-options)"
             "mb" "(mesh-binary-status-command)"
             "rc" "(remote-store-command)"
-            "ma" (str "(multiaddr " (kotoba-literal "100.0.0.1") " 4001)")
+            "ma" (str "(multiaddr (record-new " multiaddr-ty " "
+                      (kotoba-literal "100.0.0.1") " 4001))")
             "ls" "(launch-status-command)"
             "pi" "(peer-id-log-command)"
             "ll" "(live-link-count-command)"
@@ -114,13 +138,16 @@
            {"rb" "(rsync-bin)"
             "az" "(rsync-az-flag)"
             "ef" "(rsync-e-flag)"
-            "lp" (str "(local-bin-path " (kotoba-literal "/local/bin") " "
-                      (kotoba-literal "kotoba") ")")
-            "rd" (str "(remote-bin-dest " (kotoba-literal "asher") " "
-                      (kotoba-literal "kotoba") ")")
+            "lp" (str "(local-bin-path (record-new " bin-path-ty " "
+                      (kotoba-literal "/local/bin") " "
+                      (kotoba-literal "kotoba") "))")
+            "rd" (str "(remote-bin-dest (record-new " remote-dest-ty " "
+                      (kotoba-literal "asher") " "
+                      (kotoba-literal "kotoba") "))")
             "ld" (str "(launchd-daemon-path " (kotoba-literal "com.murakumo.kotoba-mesh") ")")
             "tp" (str "(tee-plist-prefix " (kotoba-literal "com.murakumo.kotoba-mesh") ")")
-            "kv" (str "(label-kv " (kotoba-literal "zone") " " (kotoba-literal "jp") ")")
+            "kv" (str "(label-kv (record-new " label-kv-ty " "
+                      (kotoba-literal "zone") " " (kotoba-literal "jp") "))")
             "ft" "(plist-heredoc-footer)"
             "dd" "(launchd-daemons-dir)"
             "pe" "(plist-ext)"
@@ -168,9 +195,11 @@
             "ip4" "(multiaddr-ip4-prefix)"
             "udp" "(multiaddr-udp-mid)"
             "quic" "(multiaddr-quic-suffix)"
-            "pe" (str "(peer-entry " (kotoba-literal "12D3peer") " "
-                      (kotoba-literal "/ip4/1.2.3.4/udp/4001/quic-v1") ")")
-            "ma" (str "(multiaddr " (kotoba-literal "1.2.3.4") " 4001)")})]
+            "pe" (str "(peer-entry (record-new " peer-entry-ty " "
+                      (kotoba-literal "12D3peer") " "
+                      (kotoba-literal "/ip4/1.2.3.4/udp/4001/quic-v1") "))")
+            "ma" (str "(multiaddr (record-new " multiaddr-ty " "
+                      (kotoba-literal "1.2.3.4") " 4001))")})]
     (is (= plan/peer-at-sep (get s "at")))
     (is (= plan/peer-join-sep (get s "js")))
     (is (= plan/did-key-prefix (get s "dk")))
@@ -197,24 +226,28 @@
 
 (deftest fold-steps-match
   (let [s (compile-string-cases
-           {"ja" (str "(join-append " (kotoba-literal "") " "
-                      (kotoba-literal ",") " " (kotoba-literal "a") ")")
-            "jb" (str "(join-append " (kotoba-literal "a") " "
-                      (kotoba-literal ",") " " (kotoba-literal "b") ")")
-            "ba0" (str "(bootstrap-append " (kotoba-literal "") " "
-                       (kotoba-literal "p@/m") ")")
-            "ba1" (str "(bootstrap-append " (kotoba-literal "p@/m") " "
-                       (kotoba-literal "q@/n") ")")
-            "la0" (str "(labels-append " (kotoba-literal "") " "
-                       (kotoba-literal "zone=jp") ")")
-            "la1" (str "(labels-append " (kotoba-literal "zone=jp") " "
-                       (kotoba-literal "role=compute") ")")
-            "ra0" (str "(roles-append " (kotoba-literal "") " "
-                       (kotoba-literal "compute") ")")
-            "ra1" (str "(roles-append " (kotoba-literal "compute") " "
-                       (kotoba-literal "pin") ")")
-            "pr" (str "(plist-replace " (kotoba-literal "x{{U}}y") " "
-                      (kotoba-literal "{{U}}") " " (kotoba-literal "ops") ")")})]
+           {"ja" (str "(join-append (record-new " join-ty " "
+                      (kotoba-literal "") " " (kotoba-literal ",") " "
+                      (kotoba-literal "a") "))")
+            "jb" (str "(join-append (record-new " join-ty " "
+                      (kotoba-literal "a") " " (kotoba-literal ",") " "
+                      (kotoba-literal "b") "))")
+            "ba0" (str "(bootstrap-append (record-new " bootstrap-ty " "
+                       (kotoba-literal "") " " (kotoba-literal "p@/m") "))")
+            "ba1" (str "(bootstrap-append (record-new " bootstrap-ty " "
+                       (kotoba-literal "p@/m") " " (kotoba-literal "q@/n") "))")
+            "la0" (str "(labels-append (record-new " labels-ty " "
+                       (kotoba-literal "") " " (kotoba-literal "zone=jp") "))")
+            "la1" (str "(labels-append (record-new " labels-ty " "
+                       (kotoba-literal "zone=jp") " "
+                       (kotoba-literal "role=compute") "))")
+            "ra0" (str "(roles-append (record-new " roles-ty " "
+                       (kotoba-literal "") " " (kotoba-literal "compute") "))")
+            "ra1" (str "(roles-append (record-new " roles-ty " "
+                       (kotoba-literal "compute") " " (kotoba-literal "pin") "))")
+            "pr" (str "(plist-replace (record-new " plist-replace-ty " "
+                      (kotoba-literal "x{{U}}y") " "
+                      (kotoba-literal "{{U}}") " " (kotoba-literal "ops") "))")})]
     (is (= (plan/join-append "" "," "a") (get s "ja")))
     (is (= "a" (get s "ja")))
     (is (= (plan/join-append "a" "," "b") (get s "jb")))
@@ -250,9 +283,9 @@
             "pn" (str "(peer-id-from-log " (kotoba-literal "did:key:zOther") ")")
             "pt" (str "(peer-id-from-log "
                       (kotoba-literal "noise\ndid:key:12D3KooWPeerId123 trailing\n") ")")
-            "ws" (str "(write-plist-shell "
+            "ws" (str "(write-plist-shell (record-new " write-plist-ty " "
                       (kotoba-literal "com.murakumo.kotoba-mesh") " "
-                      (kotoba-literal "<plist/>") ")")})]
+                      (kotoba-literal "<plist/>") "))")})]
     (is (= plan/peer-id-body-prefix (get s "bp")))
     (is (= "12D3" (get s "bp")))
     (is (= plan/peer-id-body-pattern (get s "bb")))

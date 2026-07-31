@@ -2181,8 +2181,43 @@
            (oracle/call :cloud-plan 'default-command-token [])))
     (is (= (oracle/call :cloud-plan 'default-command-token [])
            cplan/default-command-token))
-    (is (= (ir/execute pr 'multiaddr ["1.2.3.4" 4001])
-           (oracle/call :provision-plan 'multiaddr ["1.2.3.4" 4001])))
+    (let [ma (oracle/record
+              [:record :provision/multiaddr [[:ip :string] [:port :i64]]]
+              {:ip "1.2.3.4" :port 4001})
+          lp (oracle/record
+              [:record :provision/bin-path [[:local-bin :string] [:bin :string]]]
+              {:local-bin "/b" :bin "kotoba"})
+          lp-x (oracle/record
+                [:record :provision/bin-path [[:local-bin :string] [:bin :string]]]
+                {:local-bin "/b" :bin "x"})
+          rd (oracle/record
+              [:record :provision/remote-dest [[:host :string] [:bin :string]]]
+              {:host "h" :bin "kotoba"})
+          kv (oracle/record
+              [:record :provision/label-kv [[:k :string] [:v :string]]]
+              {:k "k" :v "v"})
+          pe (oracle/record
+              [:record :provision/peer-entry
+               [[:peer-id :string] [:multiaddr :string]]]
+              {:peer-id "p" :multiaddr "/ip4/1.1.1.1/udp/1/quic-v1"})
+          pe-m (oracle/record
+                [:record :provision/peer-entry
+                 [[:peer-id :string] [:multiaddr :string]]]
+                {:peer-id "p" :multiaddr "m"})]
+      (is (= (ir/execute pr 'multiaddr [ma])
+             (oracle/call :provision-plan 'multiaddr [ma])))
+      (is (= (ir/execute pr 'local-bin-path [lp])
+             (oracle/call :provision-plan 'local-bin-path [lp])))
+      (is (= (ir/execute pr 'remote-bin-dest [rd])
+             (oracle/call :provision-plan 'remote-bin-dest [rd])))
+      (is (= (ir/execute pr 'label-kv [kv])
+             (oracle/call :provision-plan 'label-kv [kv])))
+      (is (= (oracle/call :provision-plan 'local-bin-path [lp-x])
+             (pplan/local-bin-path "/b" "x")))
+      (is (= (ir/execute pr 'peer-entry [pe])
+             (oracle/call :provision-plan 'peer-entry [pe])))
+      (is (= (oracle/call :provision-plan 'peer-entry [pe-m])
+             (pplan/peer-entry "p" "m"))))
     (is (= (ir/execute pr 'multiaddr-ip4-prefix [])
            (oracle/call :provision-plan 'multiaddr-ip4-prefix [])))
     (is (= (oracle/call :provision-plan 'multiaddr-ip4-prefix [])
@@ -2224,25 +2259,13 @@
            (oracle/call :provision-plan 'watchdog-label [])))
     (is (= (ir/execute pr 'rsync-bin [])
            (oracle/call :provision-plan 'rsync-bin [])))
-    (is (= (ir/execute pr 'local-bin-path ["/b" "kotoba"])
-           (oracle/call :provision-plan 'local-bin-path ["/b" "kotoba"])))
-    (is (= (ir/execute pr 'remote-bin-dest ["h" "kotoba"])
-           (oracle/call :provision-plan 'remote-bin-dest ["h" "kotoba"])))
     (is (= (ir/execute pr 'tee-plist-prefix ["lab"])
            (oracle/call :provision-plan 'tee-plist-prefix ["lab"])))
-    (is (= (ir/execute pr 'label-kv ["k" "v"])
-           (oracle/call :provision-plan 'label-kv ["k" "v"])))
     (is (= (oracle/call :provision-plan 'rsync-bin []) pplan/rsync-bin))
-    (is (= (oracle/call :provision-plan 'local-bin-path ["/b" "x"])
-           (pplan/local-bin-path "/b" "x")))
-    (is (= (ir/execute pr 'peer-entry ["p" "/ip4/1.1.1.1/udp/1/quic-v1"])
-           (oracle/call :provision-plan 'peer-entry ["p" "/ip4/1.1.1.1/udp/1/quic-v1"])))
     (is (= (ir/execute pr 'peer-at-sep [])
            (oracle/call :provision-plan 'peer-at-sep [])))
     (is (= (ir/execute pr 'did-key-prefix [])
            (oracle/call :provision-plan 'did-key-prefix [])))
-    (is (= (oracle/call :provision-plan 'peer-entry ["p" "m"])
-           (pplan/peer-entry "p" "m")))
     (is (= (ir/execute pr 'peer-id-body-prefix [])
            (oracle/call :provision-plan 'peer-id-body-prefix [])))
     (is (= (ir/execute pr 'peer-id-body-pattern [])
@@ -2278,30 +2301,56 @@
     (is (= (oracle/call :provision-plan 'plist-ph-user []) pplan/plist-ph-user))
     (is (= (oracle/call :provision-plan 'plist-ph-bootstrap [])
            pplan/plist-ph-bootstrap))
-    (is (= (ir/execute pr 'join-append ["" "," "a"])
-           (oracle/call :provision-plan 'join-append ["" "," "a"])))
-    (is (= (ir/execute pr 'bootstrap-append ["" "p@/m"])
-           (oracle/call :provision-plan 'bootstrap-append ["" "p@/m"])))
-    (is (= (ir/execute pr 'bootstrap-append ["p@/m" "q@/n"])
-           (oracle/call :provision-plan 'bootstrap-append ["p@/m" "q@/n"])))
-    (is (= (oracle/call :provision-plan 'bootstrap-append ["" "p@/m"])
-           (pplan/bootstrap-append "" "p@/m")))
-    (is (= (oracle/call :provision-plan 'bootstrap-append ["p@/m" "q@/n"])
-           (pplan/bootstrap-append "p@/m" "q@/n")))
-    (is (= "p@/m,q@/n" (pplan/bootstrap-append "p@/m" "q@/n")))
-    (is (= (ir/execute pr 'labels-append ["zone=jp" "role=c"])
-           (oracle/call :provision-plan 'labels-append ["zone=jp" "role=c"])))
-    (is (= (oracle/call :provision-plan 'labels-append ["zone=jp" "role=c"])
-           (pplan/labels-append "zone=jp" "role=c")))
-    (is (= (ir/execute pr 'roles-append ["compute" "pin"])
-           (oracle/call :provision-plan 'roles-append ["compute" "pin"])))
-    (is (= (oracle/call :provision-plan 'roles-append ["compute" "pin"])
-           (pplan/roles-append "compute" "pin")))
-    (is (= (ir/execute pr 'plist-replace ["x{{U}}y" "{{U}}" "ops"])
-           (oracle/call :provision-plan 'plist-replace ["x{{U}}y" "{{U}}" "ops"])))
-    (is (= (oracle/call :provision-plan 'plist-replace ["x{{U}}y" "{{U}}" "ops"])
-           (pplan/plist-replace "x{{U}}y" "{{U}}" "ops")))
-    (is (= "xopsy" (pplan/plist-replace "x{{U}}y" "{{U}}" "ops")))
+    (let [ja (oracle/record
+              [:record :provision/join
+               [[:acc :string] [:sep :string] [:next :string]]]
+              {:acc "" :sep "," :next "a"})
+          ba0 (oracle/record
+               [:record :provision/bootstrap [[:acc :string] [:entry :string]]]
+               {:acc "" :entry "p@/m"})
+          ba1 (oracle/record
+               [:record :provision/bootstrap [[:acc :string] [:entry :string]]]
+               {:acc "p@/m" :entry "q@/n"})
+          la (oracle/record
+              [:record :provision/labels [[:acc :string] [:pair :string]]]
+              {:acc "zone=jp" :pair "role=c"})
+          ra (oracle/record
+              [:record :provision/roles [[:acc :string] [:role :string]]]
+              {:acc "compute" :role "pin"})
+          plr (oracle/record
+               [:record :provision/plist-replace
+                [[:tmpl :string] [:ph :string] [:val :string]]]
+               {:tmpl "x{{U}}y" :ph "{{U}}" :val "ops"})
+          ws (oracle/record
+              [:record :provision/write-plist
+               [[:label :string] [:body :string]]]
+              {:label "lab" :body "<b/>"})]
+      (is (= (ir/execute pr 'join-append [ja])
+             (oracle/call :provision-plan 'join-append [ja])))
+      (is (= (ir/execute pr 'bootstrap-append [ba0])
+             (oracle/call :provision-plan 'bootstrap-append [ba0])))
+      (is (= (ir/execute pr 'bootstrap-append [ba1])
+             (oracle/call :provision-plan 'bootstrap-append [ba1])))
+      (is (= (oracle/call :provision-plan 'bootstrap-append [ba0])
+             (pplan/bootstrap-append "" "p@/m")))
+      (is (= (oracle/call :provision-plan 'bootstrap-append [ba1])
+             (pplan/bootstrap-append "p@/m" "q@/n")))
+      (is (= "p@/m,q@/n" (pplan/bootstrap-append "p@/m" "q@/n")))
+      (is (= (ir/execute pr 'labels-append [la])
+             (oracle/call :provision-plan 'labels-append [la])))
+      (is (= (oracle/call :provision-plan 'labels-append [la])
+             (pplan/labels-append "zone=jp" "role=c")))
+      (is (= (ir/execute pr 'roles-append [ra])
+             (oracle/call :provision-plan 'roles-append [ra])))
+      (is (= (oracle/call :provision-plan 'roles-append [ra])
+             (pplan/roles-append "compute" "pin")))
+      (is (= (ir/execute pr 'plist-replace [plr])
+             (oracle/call :provision-plan 'plist-replace [plr])))
+      (is (= (oracle/call :provision-plan 'plist-replace [plr])
+             (pplan/plist-replace "x{{U}}y" "{{U}}" "ops")))
+      (is (= "xopsy" (pplan/plist-replace "x{{U}}y" "{{U}}" "ops")))
+      (is (= (ir/execute pr 'write-plist-shell [ws])
+             (oracle/call :provision-plan 'write-plist-shell [ws]))))
     (is (= (ir/execute pr 'peer-id-from-log ["did:key:12D3KooWPeerId123"])
            (oracle/call :provision-plan 'peer-id-from-log ["did:key:12D3KooWPeerId123"])))
     (is (= "12D3KooWPeerId123"
@@ -2309,11 +2358,12 @@
     (is (= "" (oracle/call :provision-plan 'peer-id-from-log ["did:key:zOther"])))
     (is (= (oracle/call :provision-plan 'peer-id-from-log ["did:key:12D3abc"])
            (pplan/peer-id-from-log "did:key:12D3abc")))
-    (is (= (ir/execute pr 'write-plist-shell ["lab" "<b/>"])
-           (oracle/call :provision-plan 'write-plist-shell ["lab" "<b/>"])))
-    (is (= (oracle/call :provision-plan 'write-plist-shell
-                        [pplan/plist-label "<b/>"])
-           (pplan/write-plist-command "<b/>")))))
+    (let [ws-cmd (oracle/record
+                  [:record :provision/write-plist
+                   [[:label :string] [:body :string]]]
+                  {:label pplan/plist-label :body "<b/>"})]
+      (is (= (oracle/call :provision-plan 'write-plist-shell [ws-cmd])
+             (pplan/write-plist-command "<b/>"))))))
 
 (deftest product-shell-overlay-driver-runtime-uses-oracle
   (testing "driver endpoint-kind + dial-result + option-name"
