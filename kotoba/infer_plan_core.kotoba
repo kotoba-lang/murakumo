@@ -72,7 +72,10 @@
                                  [:frac-milli :i64]]]
              :plan/band [:record :plan/band
                          [[:lo :i64] [:hi-cap :i64] [:layer-b :i64]
-                          [:acc :i64] [:target :i64]]]})
+                          [:acc :i64] [:target :i64]]]
+             ;; T5.2 residual: ends + idx multi-arg → single guest record
+             :plan/ends-idx [:record :plan/ends-idx
+                             [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64] [:idx :i64]]]})
   (:export [gib default-os-reserve default-headroom usable-bytes choose-strategy-name
             plan-lr-l0 plan-lr-l1 plan-lr-l2
             plan-fits-total? span-fits?
@@ -88,7 +91,7 @@
             partition-1-end plan-fits-1
             partition-2-ends plan-fits-2
             asg-row-record asg-row-span asg-row-fits
-            pick-max-idx-2 ends-lo ends-hi
+            pick-max-idx-2 ends-at ends-lo ends-hi
             cut-state partition-step partition-step-hi partition-step-acc
             partition-last fits-and]))
 
@@ -557,18 +560,26 @@
         total-ok (plan-fits-total? (record-new [:ref :plan/pair] total weight-bytes))]
     (if (if total-ok (if spans-ok true false) false) 1 0)))
 
-(defn ends-at [ends [:ref :plan/ends] idx :i64] :i64
-  ;; exclusive end idx; fields are literal so the index is a small if-chain
-  (if (= idx 0)
-    (record-get ends :hi0)
-    (if (= idx 1) (record-get ends :hi1) (record-get ends :hi2))))
+(defn ends-at [x [:ref :plan/ends-idx]] :i64
+  ;; exclusive end at idx; hi fields + idx on one guest record (T5.2 residual)
+  (let [idx (record-get x :idx)]
+    (if (= idx 0)
+      (record-get x :hi0)
+      (if (= idx 1) (record-get x :hi1) (record-get x :hi2)))))
 
-(defn ends-lo [ends [:ref :plan/ends] idx :i64] :i64
+(defn ends-lo [x [:ref :plan/ends-idx]] :i64
   ;; lo of assignment idx (idx 0 → 0)
-  (if (= idx 0) 0 (ends-at ends (- idx 1))))
+  (let [idx (record-get x :idx)]
+    (if (= idx 0)
+      0
+      (ends-at (record-new [:ref :plan/ends-idx]
+                           (record-get x :hi0)
+                           (record-get x :hi1)
+                           (record-get x :hi2)
+                           (- idx 1))))))
 
-(defn ends-hi [ends [:ref :plan/ends] idx :i64] :i64
-  (ends-at ends idx))
+(defn ends-hi [x [:ref :plan/ends-idx]] :i64
+  (ends-at x))
 
 (defn asg-row-record [x [:ref :plan/wm-asg]]
   [:ref :plan/row]

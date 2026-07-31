@@ -2136,39 +2136,88 @@
     (if (if total-ok (if spans-ok true false) false) 1 0)),
    :param-types [[:ref :plan/wm-u2]]}
   {:name ends-at,
-   :params [ends idx],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (= idx 0)
-    (record-get
-     [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
-     ends
-     :hi0)
+   (let
+    [idx
+     (record-get
+      [:record
+       :plan/ends-idx
+       [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64] [:idx :i64]]]
+      x
+      :idx)]
     (if
-     (= idx 1)
+     (= idx 0)
      (record-get
-      [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
-      ends
-      :hi1)
-     (record-get
-      [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
-      ends
-      :hi2))),
-   :param-types [[:ref :plan/ends] :i64]}
+      [:record
+       :plan/ends-idx
+       [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64] [:idx :i64]]]
+      x
+      :hi0)
+     (if
+      (= idx 1)
+      (record-get
+       [:record
+        :plan/ends-idx
+        [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64] [:idx :i64]]]
+       x
+       :hi1)
+      (record-get
+       [:record
+        :plan/ends-idx
+        [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64] [:idx :i64]]]
+       x
+       :hi2)))),
+   :param-types [[:ref :plan/ends-idx]]}
   {:name ends-lo,
-   :params [ends idx],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (if (= idx 0) 0 (ends-at ends (- idx 1))),
-   :param-types [[:ref :plan/ends] :i64]}
+   :body
+   (let
+    [idx
+     (record-get
+      [:record
+       :plan/ends-idx
+       [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64] [:idx :i64]]]
+      x
+      :idx)]
+    (if
+     (= idx 0)
+     0
+     (ends-at
+      (record-new
+       [:record
+        :plan/ends-idx
+        [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64] [:idx :i64]]]
+       (record-get
+        [:record
+         :plan/ends-idx
+         [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64] [:idx :i64]]]
+        x
+        :hi0)
+       (record-get
+        [:record
+         :plan/ends-idx
+         [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64] [:idx :i64]]]
+        x
+        :hi1)
+       (record-get
+        [:record
+         :plan/ends-idx
+         [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64] [:idx :i64]]]
+        x
+        :hi2)
+       (- idx 1))))),
+   :param-types [[:ref :plan/ends-idx]]}
   {:name ends-hi,
-   :params [ends idx],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (ends-at ends idx),
-   :param-types [[:ref :plan/ends] :i64]}
+   :body (ends-at x),
+   :param-types [[:ref :plan/ends-idx]]}
   {:name asg-row-record,
    :params [x],
    :result [:ref :plan/row],
@@ -2671,53 +2720,55 @@
  :oracle-value nil,
  :schema-identities
  #:plan{:band
-        "e21484e92d97e17364a3ad5007c4262277e75b8619c88d79fa03c7fa9a409d1c",
+        "61e6e5fd8d46f343802e1fc1170c8a58eb8b9bdfb40449f49305152a579df822",
         :bump-cmp
-        "30c3e098f1905b20bd964170ac0e89b87266e4bd7cc4b11918f52d2a75e92bba",
+        "8cb3c185bf210b5bf8444e445153f29f18fff2db5724139d8769c08eb62e3240",
         :bump3-in
-        "1e01bb667e0fd289e78522927516d2958112e707513a23c66cb588587d90d3be",
+        "c7137604e1d81df5a7bcccf35499391be80d0fba03686915a791f5a50b7cbe3d",
         :cut
-        "7aca13cfd8c08be04660b376a454ecd50e1ae264b05e837c5c0b882d3cc9b34b",
+        "11561d541195d4ce028722cc73b0e8a48c0e13f79f3f8257f009b36cff5b47d2",
         :dense-units
-        "3d0dd50544d0f4c8b91864997eb51698d23123492c499c1bc3b63365d9976e75",
+        "641faf80829102322e62ca10d167d4c617f26c8f19a5c33e0f4cd6d540f8fc69",
         :ends
-        "1b248a3ed46555373e6a19472d26f87cf5709419c0c06bc70759a0c866b77f03",
+        "de34f63d131b76d69ca93e7daa791e2629d574f47521ba41e7b635a1533c93fa",
+        :ends-idx
+        "e3269403f1a90ba14f1993d172b3e998c65957b995d536bf59eae24c56307e11",
         :model
-        "7333d8bd1a548b6515f5278bb187b8ac60b0de1d1111698652b62796c56d0295",
+        "9cf0d80f1abab0949f312bda7dc6c6c948fdf1c2fde1a8bd0d75df827b0a39b6",
         :node-cap
-        "84e3812a38198e1b8c4e90d7abd86f87d36e536eef420acfd6d41baaec00b546",
+        "ab84836f2cb9574bcc55f1de80a80291418478bd9e8fa93770b752df87aee1e6",
         :ok-for
-        "0744cfec1a255e95d633291b5c8ef28183ed33cc05caaed08d41c1b501475f9a",
+        "fb887d4a54b6379f78f7682b81c7e3d7292b2f7ae361e873d52aed0256b40d39",
         :pair
-        "58827b664696d14a500c031e90fe43f1311076ac3b2c5a7cae059285d774493a",
+        "f512a2d7e0fc2fb97c1ea2bb7166d8911fa8e46fc69acddbe766d0a360bb282c",
         :row
-        "9a7c2d285b92d44b75d514fb67f3f5ec61df627e5ec7359c1df61d714246869d",
+        "9716cb6aa31e1be056c14a34cb1862c506d08fe5d0e1edeb5a556986c68a39ca",
         :strategy-in
-        "bdb9432686fd785b25fff086dc8c7543065060e82b35c69b026f092adb5cd758",
+        "85a352356f4eb8b5462fa5a87259d7970a3aa0148ef6ea0f03f22153287f24f8",
         :triple
-        "ceefc9baad15756f81b7606f30553a80a71cacd421f8835f88cfa04e3c46e4b3",
+        "8c1e2ce4e2fe2cbdf6215af7f31c47543f26a313c53dbbc084ab19dddb64e7f4",
         :ul
-        "f7b5c94b57f06aa3f41df1757d755d58405e9b4964aa04b9e2950348e7182595",
+        "211197dab4cdb53b518394c23797430769cf62db4e252be906622b6b0be0cac1",
         :weights3
-        "dc4b6eaddf9a13e53f54236ed80fd0b2707bfddba7a3ea9015e60c8fcc4db1f6",
+        "762e5f54d368b95cf1af9c6b218cf61ace5ab96caa40eab4db7e0aebd7e83730",
         :wm
-        "2308f1fd7accf93b298ecc9dad4bff83eb48b0c6db931cedad7f31156c211337",
+        "689a824e1b95fc6abe656186d2d39eedf0c0bcb3645171f767ac920ce3524b70",
         :wm-adv
-        "7cb2a6e40a020da352f56d3c8b9fbd5fa0c4755e74b81e329bea1fd53c1d9ea8",
+        "1c070b70e03fa00498fc134183ee93fc4b2e73a62e01da1f6a00f5f739fdb009",
         :wm-asg
-        "1efede38a07f0b104df400e2c6da8e1e96f189a23d7b3be8aa69e13cced884dd",
+        "f38b17f61c6e98fe259e9e3d366c081d10537b80aa6890214e36c3043c3746b0",
         :wm-i
-        "707dcfdc2b873efd5313093919c21c6b7691a39820f169f234c82ac5ff101d54",
+        "c6138f1044cfd8d7edfa0ea0ef31059d9a947f803a6a6ca623f0ca3f68c9203d",
         :wm-range
-        "ef2213a51cb96b21be4446ae436676a7e02fd32cd336ba8d125238a39541bbef",
+        "029d118bb359db42187d766d11f1fc4630b998a91318592a71667404f57007f1",
         :wm-step
-        "3bf9323f3152f0bdae980ead950a9b66f3ef914befa15d9b580c00a2b5648193",
+        "f0d189d1855fc943b02d2b051a9925cfedf6f652dfb2ed975599d01c91c19d3e",
         :wm-u1
-        "487f8789ced9e9242cf3fd044277493b66539651a40aebc258bbf6a9f2d392e8",
+        "da6217959ef7fe9a95b58aa651e2f735f841f414c018ca8a201128044010bc7f",
         :wm-u2
-        "a8c5ff43522a9b0f4c2599e216b28bb0fbe374c25861e46433364597406664fe",
+        "47dc71565ab460682b35e4f208cf07df3c3fa43937ef78d5617cd8aa12f996f4",
         :wm-u3
-        "9a307ab22bcc6ea2fe0d6c8b387dd8a86a1e6ab0e498c86076bd6b644a74df68"},
+        "e598e7539ae65652a66931551fd325a85bbd3076117cf0dac7e4cc4040bb6c3b"},
  :exports
  [gib
   default-os-reserve
@@ -2764,6 +2815,7 @@
   asg-row-span
   asg-row-fits
   pick-max-idx-2
+  ends-at
   ends-lo
   ends-hi
   cut-state
@@ -2808,6 +2860,10 @@
           [:i :i64]]],
         :cut [:record :plan/cut [[:at :i64] [:acc :i64]]],
         :row [:record :plan/row [[:span :i64] [:fits :i64]]],
+        :ends-idx
+        [:record
+         :plan/ends-idx
+         [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64] [:idx :i64]]],
         :wm-u3
         [:record
          :plan/wm-u3
