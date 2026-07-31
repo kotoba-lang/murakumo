@@ -15,7 +15,12 @@
              ;; serves both directions of the host fold.
              :plan/cut [:record :plan/cut [[:at :i64] [:acc :i64]]]
              ;; exclusive layer ends for a 2- or 3-node ring (hi2 is 0 for 2)
-             :plan/ends [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]})
+             :plan/ends [:record :plan/ends [[:hi0 :i64] [:hi1 :i64] [:hi2 :i64]]]
+             ;; T5.2 residual multi-arg pure → single guest records
+             :plan/weights3 [:record :plan/weights3
+                             [[:total :i64] [:w0 :i64] [:w1 :i64] [:w2 :i64]]]
+             :plan/pair [:record :plan/pair [[:a :i64] [:b :i64]]]
+             :plan/triple [:record :plan/triple [[:a :i64] [:b :i64] [:c :i64]]]})
   (:export [gib default-os-reserve default-headroom usable-bytes choose-strategy-name
             plan-lr-l0 plan-lr-l1 plan-lr-l2
             plan-fits-total? span-fits?
@@ -131,11 +136,16 @@
 (defn weight-pos? [w :i64] :bool
   (if (< 0 w) true false))
 
-(defn plan-lr-record [total :i64 w0 :i64 w1 :i64 w2 :i64]
+(defn plan-lr-record [w [:ref :plan/weights3]]
   [:record :plan/lanes [[:l0 :i64] [:l1 :i64] [:l2 :i64]]]
   ;; plan.cljc largest-remainder without rebalance per-active floor:
   ;; floor(total*w_i/sumw) + remainder seats by fractional rank.
-  (let [a0 (weight-pos? w0)
+  ;; T5.2 residual: total+weights on one record.
+  (let [total (record-get w :total)
+        w0 (record-get w :w0)
+        w1 (record-get w :w1)
+        w2 (record-get w :w2)
+        a0 (weight-pos? w0)
         a1 (weight-pos? w1)
         a2 (weight-pos? w2)
         sumw (+ w0 (+ w1 w2))]
@@ -175,24 +185,24 @@
 
 ;; Public lane projections (T5.3). No pack crosses the boundary.
 
-(defn plan-lr-l0 [total :i64 w0 :i64 w1 :i64 w2 :i64] :i64
-  (record-get (plan-lr-record total w0 w1 w2) :l0))
+(defn plan-lr-l0 [w [:ref :plan/weights3]] :i64
+  (record-get (plan-lr-record w) :l0))
 
-(defn plan-lr-l1 [total :i64 w0 :i64 w1 :i64 w2 :i64] :i64
-  (record-get (plan-lr-record total w0 w1 w2) :l1))
+(defn plan-lr-l1 [w [:ref :plan/weights3]] :i64
+  (record-get (plan-lr-record w) :l1))
 
-(defn plan-lr-l2 [total :i64 w0 :i64 w1 :i64 w2 :i64] :i64
-  (record-get (plan-lr-record total w0 w1 w2) :l2))
+(defn plan-lr-l2 [w [:ref :plan/weights3]] :i64
+  (record-get (plan-lr-record w) :l2))
 
-(defn plan-fits-total? [total-usable :i64 weight-bytes :i64] :bool
+(defn plan-fits-total? [p [:ref :plan/pair]] :bool
   ;; cljc plan :fits? partial — total usable ≥ model weights
-  ;; Profile 5: :bool.
-  (if (< total-usable weight-bytes) false true))
+  ;; T5.2: a=total-usable b=weight-bytes. Profile 5: :bool.
+  (if (< (record-get p :a) (record-get p :b)) false true))
 
-(defn span-fits? [est-bytes :i64 usable :i64] :bool
+(defn span-fits? [p [:ref :plan/pair]] :bool
   ;; cljc :fits? per assignment (<= est usable)
-  ;; Profile 5: :bool.
-  (if (< usable est-bytes) false true))
+  ;; T5.2: a=est-bytes b=usable. Profile 5: :bool.
+  (if (< (record-get p :b) (record-get p :a)) false true))
 
 (defn uniform-layer-bytes [weight-bytes :i64 layers :i64] :i64
   ;; dense-layers=0 case of layer-weights (each layer equal)
@@ -328,8 +338,11 @@
             hi2 layers]
         (record-new [:ref :plan/ends] hi0 hi1 hi2)))))
 
-(defn assignment-span [lo :i64 hi :i64] :i64
-  (if (< hi lo) 0 (- hi lo)))
+(defn assignment-span [p [:ref :plan/pair]] :i64
+  ;; T5.2: a=lo b=hi
+  (let [lo (record-get p :a)
+        hi (record-get p :b)]
+    (if (< hi lo) 0 (- hi lo))))
 
 (defn plan-fits-3 [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64 u2 :i64] :i64
   ;; cljc plan :fits? for 3-node ring using integer partition-3-ends
@@ -341,18 +354,18 @@
         lo0 0
         lo1 hi0
         lo2 hi1
-        s0 (assignment-span lo0 hi0)
-        s1 (assignment-span lo1 hi1)
-        s2 (assignment-span lo2 hi2)
+        s0 (assignment-span (record-new [:ref :plan/pair] lo0 hi0))
+        s1 (assignment-span (record-new [:ref :plan/pair] lo1 hi1))
+        s2 (assignment-span (record-new [:ref :plan/pair] lo2 hi2))
         e0 (est-bytes-range weight-bytes mp lo0 hi0)
         e1 (est-bytes-range weight-bytes mp lo1 hi1)
         e2 (est-bytes-range weight-bytes mp lo2 hi2)
-        f0 (if (= s0 0) true (span-fits? e0 u0))
-        f1 (if (= s1 0) true (span-fits? e1 u1))
-        f2 (if (= s2 0) true (span-fits? e2 u2))
+        f0 (if (= s0 0) true (span-fits? (record-new [:ref :plan/pair] e0 u0)))
+        f1 (if (= s1 0) true (span-fits? (record-new [:ref :plan/pair] e1 u1)))
+        f2 (if (= s2 0) true (span-fits? (record-new [:ref :plan/pair] e2 u2)))
         spans-ok (if f0 (if f1 (if f2 true false) false) false)
         total (+ u0 (+ u1 u2))
-        total-ok (plan-fits-total? total weight-bytes)]
+        total-ok (plan-fits-total? (record-new [:ref :plan/pair] total weight-bytes))]
     (if (if total-ok (if spans-ok true false) false) 1 0)))
 
 (defn partition-1-end [mp [:ref :plan/model]] :i64
@@ -362,10 +375,10 @@
 (defn plan-fits-1 [weight-bytes :i64 mp [:ref :plan/model] u0 :i64] :i64
   ;; cljc plan :fits? for 1-node (whole stack on one rank)
   (let [layers (partition-1-end mp)
-        s0 (assignment-span 0 layers)
+        s0 (assignment-span (record-new [:ref :plan/pair] 0 layers))
         e0 (est-bytes-range weight-bytes mp 0 layers)
-        f0 (if (= s0 0) true (span-fits? e0 u0))
-        total-ok (plan-fits-total? u0 weight-bytes)]
+        f0 (if (= s0 0) true (span-fits? (record-new [:ref :plan/pair] e0 u0)))
+        total-ok (plan-fits-total? (record-new [:ref :plan/pair] u0 weight-bytes))]
     (if (if total-ok (if f0 true false) false) 1 0)))
 
 (defn partition-2-ends [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64]
@@ -388,15 +401,15 @@
         hi1 (record-get ends :hi1)
         lo0 0
         lo1 hi0
-        s0 (assignment-span lo0 hi0)
-        s1 (assignment-span lo1 hi1)
+        s0 (assignment-span (record-new [:ref :plan/pair] lo0 hi0))
+        s1 (assignment-span (record-new [:ref :plan/pair] lo1 hi1))
         e0 (est-bytes-range weight-bytes mp lo0 hi0)
         e1 (est-bytes-range weight-bytes mp lo1 hi1)
-        f0 (if (= s0 0) true (span-fits? e0 u0))
-        f1 (if (= s1 0) true (span-fits? e1 u1))
+        f0 (if (= s0 0) true (span-fits? (record-new [:ref :plan/pair] e0 u0)))
+        f1 (if (= s1 0) true (span-fits? (record-new [:ref :plan/pair] e1 u1)))
         spans-ok (if f0 (if f1 true false) false)
         total (+ u0 u1)
-        total-ok (plan-fits-total? total weight-bytes)]
+        total-ok (plan-fits-total? (record-new [:ref :plan/pair] total weight-bytes))]
     (if (if total-ok (if spans-ok true false) false) 1 0)))
 
 (defn ends-at [ends [:ref :plan/ends] idx :i64] :i64
@@ -415,9 +428,9 @@
 (defn asg-row-record [weight-bytes :i64 mp [:ref :plan/model] lo :i64 hi :i64 usable :i64]
   [:ref :plan/row]
   ;; pure assignment numeric row (T5.3: a record, not pack3). Host adds :node id.
-  (let [sp (assignment-span lo hi)
+  (let [sp (assignment-span (record-new [:ref :plan/pair] lo hi))
         est (est-bytes-range weight-bytes mp lo hi)
-        fit (if (= sp 0) 1 (if (span-fits? est usable) 1 0))]
+        fit (if (= sp 0) 1 (if (span-fits? (record-new [:ref :plan/pair] est usable)) 1 0))]
     (record-new [:ref :plan/row] sp fit)))
 
 (defn asg-row-span [row [:ref :plan/row]] :i64
@@ -453,25 +466,31 @@
   ;; last ring node exclusive end is always layers
   (model-layers mp))
 
-(defn fits-and [acc-fits :i64 row-fits :i64] :i64
+(defn fits-and [p [:ref :plan/pair]] :i64
   ;; fold positive-span fits across assignments
-  (if (if (= acc-fits 1) (if (= row-fits 1) 1 0) 0) 1 0))
+  ;; T5.2: a=acc-fits b=row-fits
+  (if (if (= (record-get p :a) 1) (if (= (record-get p :b) 1) 1 0) 0) 1 0))
 
 (defn ok-mark [fits :i64] :string
   ;; cljc report :ok
   (if (= fits 1) "✓" "✗"))
 
-(defn pick-max-idx-2 [a :i64 b :i64] :i64
+(defn pick-max-idx-2 [p [:ref :plan/pair]] :i64
   ;; highest first; ties keep earlier index
-  (if (< a b) 1 0))
+  ;; T5.2 residual: a,b on one record
+  (if (< (record-get p :a) (record-get p :b)) 1 0))
 
-(defn pick-max-idx-3 [a :i64 b :i64 c :i64] :i64
+(defn pick-max-idx-3 [t [:ref :plan/triple]] :i64
   ;; cljc sort-by (comp - :usable): highest first; ties keep earlier index
-  (if (if (< a b) 0 (if (< a c) 0 1))
-    0
-    (if (if (< b c) 0 1)
-      1
-      2)))
+  ;; T5.2 residual tournament multi-arg
+  (let [a (record-get t :a)
+        b (record-get t :b)
+        c (record-get t :c)]
+    (if (if (< a b) 0 (if (< a c) 0 1))
+      0
+      (if (if (< b c) 0 1)
+        1
+        2))))
 
 (defn moe-capacity-ok [cap :i64] :i64
   ;; cljc moe/plan :fits? (boolean cap) — nil/0 capacity ⇒ false
@@ -505,9 +524,11 @@
     0
     (quot bytes (gib))))
 
-(defn layers-range-str [lo :i64 hi :i64] :string
+(defn layers-range-str [p [:ref :plan/pair]] :string
   ;; display form for :layers [lo hi) — "lo..hi"
-  (string-concat (i64-str lo) (string-concat ".." (i64-str hi))))
+  ;; T5.2: a=lo b=hi
+  (string-concat (i64-str (record-get p :a))
+                 (string-concat ".." (i64-str (record-get p :b)))))
 
 (defn mem-gib-milli [mem-bytes :i64] :i64
   ;; cljc report :mem-gib
