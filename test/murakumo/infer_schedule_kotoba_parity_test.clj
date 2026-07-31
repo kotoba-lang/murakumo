@@ -69,6 +69,14 @@
 (defn- queue-step-call [export queue picked]
   (str "(" export " (record-new " queue-step-lit " " queue " " picked "))"))
 
+
+(def ^:private assign2-in-lit
+  "[:record :schedule/assign2-in [[:q0 :i64] [:q1 :i64] [:ok0 :bool] [:ok1 :bool] [:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]")
+
+(defn- assign2-in-call [q0 q1 ok0 ok1 warm0 warm1 better01]
+  (str "(assign-step-2 (record-new " assign2-in-lit " "
+       q0 " " q1 " " ok0 " " ok1 " " warm0 " " warm1 " " better01 "))"))
+
 (defn- pick3-tour-call [champ ok2 wc w2 bc]
   (str "(pick-idx-3-tournament (record-new " pick3-tour-lit " "
        champ " " ok2 " " wc " " w2 " " bc "))"))
@@ -287,9 +295,9 @@
         f1 (:free-bytes b)
         ;; T5.3: better2-record + assign2 field projections (no pack3)
         b0 (better-from-queues-call 0 f0 0 f1)
-        s0 (str "(assign-step-2 0 0 true true (better2-record true false " (better-from-queues-bool 0 f0 0 f1) "))")
+        s0 (str "(assign-step-2 (record-new " assign2-in-lit " 0 0 true true true false " (better-from-queues-bool 0 f0 0 f1) "))")
         b1 (better-from-queues-call 1 f0 0 f1)
-        s1 (str "(assign-step-2 1 0 true true (better2-record true false " (better-from-queues-bool 1 f0 0 f1) "))")
+        s1 (str "(assign-step-2 (record-new " assign2-in-lit " 1 0 true true true false " (better-from-queues-bool 1 f0 0 f1) "))")
         actual (compile-i64-cases
                 {"b0" b0
                  "s0c" (str "(assign-result-pick " s0 ")")
@@ -322,9 +330,9 @@
   (let [f (* 16 GiB)
         ;; both warm → score by queue; tie picks index 1 (#73 prefer-warm-then-score)
         b0 (better-from-queues-bool 0 f 0 f)
-        s0 (str "(assign-step-2 0 0 true true (better2-record true true " b0 "))")
+        s0 (str "(assign-step-2 (record-new " assign2-in-lit " 0 0 true true true true " b0 "))")
         b1 (better-from-queues-bool 0 f 1 f)
-        s1 (str "(assign-step-2 0 1 true true (better2-record true true " b1 "))")
+        s1 (str "(assign-step-2 (record-new " assign2-in-lit " 0 1 true true true true " b1 "))")
         actual (compile-i64-cases
                 {"s0c" (str "(assign-result-pick " s0 ")")
                  "s1c" (str "(assign-result-pick " s1 ")")})]

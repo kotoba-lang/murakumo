@@ -42,7 +42,12 @@
              :schedule/fold-step [:record :schedule/fold-step
                                   [[:champ [:option :i64]]
                                    [:ok-i :bool] [:warm-champ :bool]
-                                   [:warm-i :bool] [:better-c-i :bool]]]})
+                                   [:warm-i :bool] [:better-c-i :bool]]]
+             :schedule/assign2-in [:record :schedule/assign2-in
+                                   [[:q0 :i64] [:q1 :i64]
+                                    [:ok0 :bool] [:ok1 :bool]
+                                    [:warm0 :bool] [:warm1 :bool]
+                                    [:better01 :bool]]]})
   (:export [eligible? score-queue score-free better-score?
             holds-warm? prefer-warm-then-score pick-idx-2-full
             pick-idx-3-tournament queue-after-assign
@@ -163,11 +168,14 @@
 (defn better2-record [warm0 :bool warm1 :bool better01 :bool] [:ref :schedule/better2]
   (record-new [:ref :schedule/better2] warm0 warm1 better01))
 
-(defn assign-step-2 [q0 :i64 q1 :i64 ok0 :bool ok1 :bool
-                     better [:ref :schedule/better2]] [:ref :schedule/assign2]
-  (let [warm0 (record-get better :warm0)
-        warm1 (record-get better :warm1)
-        better01 (record-get better :better01)
+(defn assign-step-2 [x [:ref :schedule/assign2-in]] [:ref :schedule/assign2]
+  (let [q0 (record-get x :q0)
+        q1 (record-get x :q1)
+        ok0 (record-get x :ok0)
+        ok1 (record-get x :ok1)
+        warm0 (record-get x :warm0)
+        warm1 (record-get x :warm1)
+        better01 (record-get x :better01)
         p (pick-idx-2-full
            (record-new [:ref :schedule/pick2] ok0 ok1 warm0 warm1 better01))
         code (pick-code p)

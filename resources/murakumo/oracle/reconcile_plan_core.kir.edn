@@ -143,21 +143,69 @@
       (action-needs-build)))),
    :param-types [[:ref :reconcile/action-in]]}
   {:name better-target?,
-   :params [load-a load-b name-a-before-b],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
-   (if
-    (< load-a load-b)
-    true
-    (if (< load-b load-a) false name-a-before-b)),
-   :param-types [:i64 :i64 :bool]}
+   (let
+    [load-a
+     (record-get
+      [:record
+       :reconcile/better-in
+       [[:load-a :i64] [:load-b :i64] [:name-a-before-b :bool]]]
+      x
+      :load-a)
+     load-b
+     (record-get
+      [:record
+       :reconcile/better-in
+       [[:load-a :i64] [:load-b :i64] [:name-a-before-b :bool]]]
+      x
+      :load-b)
+     name-a-before-b
+     (record-get
+      [:record
+       :reconcile/better-in
+       [[:load-a :i64] [:load-b :i64] [:name-a-before-b :bool]]]
+      x
+      :name-a-before-b)]
+    (if
+     (< load-a load-b)
+     true
+     (if (< load-b load-a) false name-a-before-b))),
+   :param-types [[:ref :reconcile/better-in]]}
   {:name first-of-2,
-   :params [load0 load1 name0-before-1],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (if (better-target? load0 load1 name0-before-1) 0 1),
-   :param-types [:i64 :i64 :bool]}
+   :body
+   (if
+    (better-target?
+     (record-new
+      [:record
+       :reconcile/better-in
+       [[:load-a :i64] [:load-b :i64] [:name-a-before-b :bool]]]
+      (record-get
+       [:record
+        :reconcile/first2
+        [[:load0 :i64] [:load1 :i64] [:name0-before-1 :bool]]]
+       x
+       :load0)
+      (record-get
+       [:record
+        :reconcile/first2
+        [[:load0 :i64] [:load1 :i64] [:name0-before-1 :bool]]]
+       x
+       :load1)
+      (record-get
+       [:record
+        :reconcile/first2
+        [[:load0 :i64] [:load1 :i64] [:name0-before-1 :bool]]]
+       x
+       :name0-before-1)))
+    0
+    1),
+   :param-types [[:ref :reconcile/first2]]}
   {:name name-order-record,
    :params [n01 n02 n12],
    :result [:ref :reconcile/name-order],
@@ -172,39 +220,117 @@
     n12),
    :param-types [:bool :bool :bool]}
   {:name first-of-3,
-   :params [load0 load1 load2 names],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [n01
+    [load0
      (record-get
       [:record
-       :reconcile/name-order
-       [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]
-      names
+       :reconcile/first3
+       [[:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]
+        [:n01 :bool]
+        [:n02 :bool]
+        [:n12 :bool]]]
+      x
+      :load0)
+     load1
+     (record-get
+      [:record
+       :reconcile/first3
+       [[:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]
+        [:n01 :bool]
+        [:n02 :bool]
+        [:n12 :bool]]]
+      x
+      :load1)
+     load2
+     (record-get
+      [:record
+       :reconcile/first3
+       [[:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]
+        [:n01 :bool]
+        [:n02 :bool]
+        [:n12 :bool]]]
+      x
+      :load2)
+     n01
+     (record-get
+      [:record
+       :reconcile/first3
+       [[:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]
+        [:n01 :bool]
+        [:n02 :bool]
+        [:n12 :bool]]]
+      x
       :n01)
      n02
      (record-get
       [:record
-       :reconcile/name-order
-       [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]
-      names
+       :reconcile/first3
+       [[:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]
+        [:n01 :bool]
+        [:n02 :bool]
+        [:n12 :bool]]]
+      x
       :n02)
      n12
      (record-get
       [:record
-       :reconcile/name-order
-       [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]
-      names
+       :reconcile/first3
+       [[:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]
+        [:n01 :bool]
+        [:n02 :bool]
+        [:n12 :bool]]]
+      x
       :n12)
      w01
-     (first-of-2 load0 load1 n01)]
+     (first-of-2
+      (record-new
+       [:record
+        :reconcile/first2
+        [[:load0 :i64] [:load1 :i64] [:name0-before-1 :bool]]]
+       load0
+       load1
+       n01))]
     (if
      (= w01 0)
-     (if (better-target? load0 load2 n02) 0 2)
-     (if (better-target? load1 load2 n12) 1 2))),
-   :param-types [:i64 :i64 :i64 [:ref :reconcile/name-order]]}
+     (if
+      (better-target?
+       (record-new
+        [:record
+         :reconcile/better-in
+         [[:load-a :i64] [:load-b :i64] [:name-a-before-b :bool]]]
+        load0
+        load2
+        n02))
+      0
+      2)
+     (if
+      (better-target?
+       (record-new
+        [:record
+         :reconcile/better-in
+         [[:load-a :i64] [:load-b :i64] [:name-a-before-b :bool]]]
+        load1
+        load2
+        n12))
+      1
+      2))),
+   :param-types [[:ref :reconcile/first3]]}
   {:name targets-record,
    :params [first second count],
    :result [:ref :reconcile/targets],
@@ -255,23 +381,62 @@
     :count),
    :param-types [[:ref :reconcile/targets]]}
   {:name pick-targets-2-record,
-   :params [load0 load1 name0-before-1 n],
+   :params [x],
    :result [:ref :reconcile/targets],
    :effects #{},
    :body
-   (if
-    (< n 1)
-    (targets-record 0 0 0)
-    (let
-     [f (first-of-2 load0 load1 name0-before-1) s (if (= f 0) 1 0)]
-     (if (= n 1) (targets-record f 0 1) (targets-record f s 2)))),
-   :param-types [:i64 :i64 :bool :i64]}
+   (let
+    [load0
+     (record-get
+      [:record
+       :reconcile/pick2-in
+       [[:load0 :i64] [:load1 :i64] [:name0-before-1 :bool] [:n :i64]]]
+      x
+      :load0)
+     load1
+     (record-get
+      [:record
+       :reconcile/pick2-in
+       [[:load0 :i64] [:load1 :i64] [:name0-before-1 :bool] [:n :i64]]]
+      x
+      :load1)
+     name0-before-1
+     (record-get
+      [:record
+       :reconcile/pick2-in
+       [[:load0 :i64] [:load1 :i64] [:name0-before-1 :bool] [:n :i64]]]
+      x
+      :name0-before-1)
+     n
+     (record-get
+      [:record
+       :reconcile/pick2-in
+       [[:load0 :i64] [:load1 :i64] [:name0-before-1 :bool] [:n :i64]]]
+      x
+      :n)]
+    (if
+     (< n 1)
+     (targets-record 0 0 0)
+     (let
+      [f
+       (first-of-2
+        (record-new
+         [:record
+          :reconcile/first2
+          [[:load0 :i64] [:load1 :i64] [:name0-before-1 :bool]]]
+         load0
+         load1
+         name0-before-1))
+       s
+       (if (= f 0) 1 0)]
+      (if (= n 1) (targets-record f 0 1) (targets-record f s 2))))),
+   :param-types [[:ref :reconcile/pick2-in]]}
   {:name pick-targets-3-first,
-   :params [load0 load1 load2 names],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (first-of-3 load0 load1 load2 names),
-   :param-types [:i64 :i64 :i64 [:ref :reconcile/name-order]]}
+   :body (first-of-3 x),
+   :param-types [[:ref :reconcile/first3]]}
   {:name blank?,
    :params [s],
    :result :bool,
@@ -561,15 +726,23 @@
  :oracle-value nil,
  :schema-identities
  #:reconcile{:action-in
-             "c4fcd70554cf78f612742688bc4c4f365b76c2f66718d0e06c563ad69e833554",
+             "9815abf185881eac1c579f777d43b17f682430f50866c247135db62ca8fdee4f",
+             :better-in
+             "ebee64c562b8bad7bfa4b66c79ec5448b820951bd0a769bfdee886db8678db11",
              :deficit
-             "515a1e2316f375930f70b70e3e1a007e516cfa081f52e3b9b4a4bb24e4e36913",
+             "090c55efdf54949b646785989543b98ed9fd78bf2d6f3d8410b529039a7ad133",
+             :first2
+             "033d9d1a649cf4fa504137cbd4817727c25d07c11c6e44e7fc13744b555c060c",
+             :first3
+             "9a7b6d09257221976a8e07ae5b96171db8afe1af57c208d50c96294d4af2179b",
              :name-order
-             "160a37afa4c8a7de1cfb7d5cf62cf4fa806f8c970b9e0e28ba31d9a06e2b6dee",
+             "61556eb5f8ce6b080a14195f9f485402351b25e0c44d9e72de98aa901fbd1a57",
+             :pick2-in
+             "ba1e3bc36daccff4514fda95cf9bf09eb5e1ce42faa01d876915c4badbaa1d8f",
              :starts-with
-             "c92fadc5d83a4efdc7812ab378e42d4acdbb6f4fd96c502bd882a84fb86305dd",
+             "ceef626acd60bd554e3557e1cbf48895da37576ab99b7c614daa56c6d32981e8",
              :targets
-             "30e5eecd463fb5f4929126f1935f8e796ddcccdce19a9d0a9706fa50b37f5f8c"},
+             "dd24319d202e508e55eb9fb399ecc0920d0466fcda494e69d6dc110baa323f5a"},
  :exports
  [default-replicas
   desired
@@ -617,22 +790,48 @@
   action-needs-build
   reconcile-record-type],
  :schemas
- #:reconcile{:deficit
-             [:record
-              :reconcile/deficit
-              [[:desired :i64] [:running :i64]]],
-             :targets
+ #:reconcile{:targets
              [:record
               :reconcile/targets
               [[:first :i64] [:second :i64] [:count :i64]]],
+             :better-in
+             [:record
+              :reconcile/better-in
+              [[:load-a :i64]
+               [:load-b :i64]
+               [:name-a-before-b :bool]]],
+             :first2
+             [:record
+              :reconcile/first2
+              [[:load0 :i64] [:load1 :i64] [:name0-before-1 :bool]]],
              :name-order
              [:record
               :reconcile/name-order
               [[:n01 :bool] [:n02 :bool] [:n12 :bool]]],
+             :deficit
+             [:record
+              :reconcile/deficit
+              [[:desired :i64] [:running :i64]]],
+             :pick2-in
+             [:record
+              :reconcile/pick2-in
+              [[:load0 :i64]
+               [:load1 :i64]
+               [:name0-before-1 :bool]
+               [:n :i64]]],
              :starts-with
              [:record
               :reconcile/starts-with
               [[:s :string] [:prefix :string]]],
+             :first3
+             [:record
+              :reconcile/first3
+              [[:load0 :i64]
+               [:load1 :i64]
+               [:load2 :i64]
+               [:n01 :bool]
+               [:n02 :bool]
+               [:n12 :bool]]],
              :action-in
              [:record
               :reconcile/action-in

@@ -14,7 +14,20 @@
                                    [[:cid [:option :string]]
                                     [:running :i64]
                                     [:desired-n :i64]
-                                    [:free-candidates :i64]]]})
+                                    [:free-candidates :i64]]]
+             ;; T5.2 residual tournament multi-arg
+             :reconcile/better-in [:record :reconcile/better-in
+                                   [[:load-a :i64] [:load-b :i64]
+                                    [:name-a-before-b :bool]]]
+             :reconcile/first2 [:record :reconcile/first2
+                                [[:load0 :i64] [:load1 :i64]
+                                 [:name0-before-1 :bool]]]
+             :reconcile/first3 [:record :reconcile/first3
+                                [[:load0 :i64] [:load1 :i64] [:load2 :i64]
+                                 [:n01 :bool] [:n02 :bool] [:n12 :bool]]]
+             :reconcile/pick2-in [:record :reconcile/pick2-in
+                                  [[:load0 :i64] [:load1 :i64]
+                                   [:name0-before-1 :bool] [:n :i64]]]})
   (:export [default-replicas desired deficit watch-sleep-ms action-name
             better-target? first-of-2 first-of-3
             name-order-record
@@ -85,30 +98,44 @@
             (action-place))))
       (action-needs-build))))
 
-(defn better-target? [load-a :i64 load-b :i64 name-a-before-b :bool] :bool
+(defn better-target? [x [:ref :reconcile/better-in]] :bool
   ;; cljc sort-by (juxt load identity): lower load first; ties by name ascending
   ;; name-a-before-b true means name(a) <= name(b) so a wins ties
-  (if (< load-a load-b)
-    true
-    (if (< load-b load-a)
-      false
-      name-a-before-b)))
+  (let [load-a (record-get x :load-a)
+        load-b (record-get x :load-b)
+        name-a-before-b (record-get x :name-a-before-b)]
+    (if (< load-a load-b)
+      true
+      (if (< load-b load-a)
+        false
+        name-a-before-b))))
 
-(defn first-of-2 [load0 :i64 load1 :i64 name0-before-1 :bool] :i64
-  (if (better-target? load0 load1 name0-before-1) 0 1))
+(defn first-of-2 [x [:ref :reconcile/first2]] :i64
+  (if (better-target?
+       (record-new [:ref :reconcile/better-in]
+                   (record-get x :load0)
+                   (record-get x :load1)
+                   (record-get x :name0-before-1)))
+    0
+    1))
 
 (defn name-order-record [n01 :bool n02 :bool n12 :bool] [:ref :reconcile/name-order]
   (record-new [:ref :reconcile/name-order] n01 n02 n12))
 
-(defn first-of-3 [load0 :i64 load1 :i64 load2 :i64
-                  names [:ref :reconcile/name-order]] :i64
-  (let [n01 (record-get names :n01)
-        n02 (record-get names :n02)
-        n12 (record-get names :n12)
-        w01 (first-of-2 load0 load1 n01)]
+(defn first-of-3 [x [:ref :reconcile/first3]] :i64
+  (let [load0 (record-get x :load0)
+        load1 (record-get x :load1)
+        load2 (record-get x :load2)
+        n01 (record-get x :n01)
+        n02 (record-get x :n02)
+        n12 (record-get x :n12)
+        w01 (first-of-2
+             (record-new [:ref :reconcile/first2] load0 load1 n01))]
     (if (= w01 0)
-      (if (better-target? load0 load2 n02) 0 2)
-      (if (better-target? load1 load2 n12) 1 2))))
+      (if (better-target?
+           (record-new [:ref :reconcile/better-in] load0 load2 n02)) 0 2)
+      (if (better-target?
+           (record-new [:ref :reconcile/better-in] load1 load2 n12)) 1 2))))
 
 (defn targets-record [first :i64 second :i64 count :i64] [:ref :reconcile/targets]
   (record-new [:ref :reconcile/targets] first second count))
@@ -122,22 +149,26 @@
 (defn targets-count [t [:ref :reconcile/targets]] :i64
   (record-get t :count))
 
-(defn pick-targets-2-record [load0 :i64 load1 :i64 name0-before-1 :bool n :i64]
+(defn pick-targets-2-record [x [:ref :reconcile/pick2-in]]
   [:ref :reconcile/targets]
   ;; take min(n,2) from two candidates sorted by load then name
-  (if (< n 1)
-    (targets-record 0 0 0)
-    (let [f (first-of-2 load0 load1 name0-before-1)
-          s (if (= f 0) 1 0)]
-      (if (= n 1)
-        (targets-record f 0 1)
-        (targets-record f s 2)))))
+  (let [load0 (record-get x :load0)
+        load1 (record-get x :load1)
+        name0-before-1 (record-get x :name0-before-1)
+        n (record-get x :n)]
+    (if (< n 1)
+      (targets-record 0 0 0)
+      (let [f (first-of-2
+               (record-new [:ref :reconcile/first2] load0 load1 name0-before-1))
+            s (if (= f 0) 1 0)]
+        (if (= n 1)
+          (targets-record f 0 1)
+          (targets-record f s 2))))))
 
-(defn pick-targets-3-first [load0 :i64 load1 :i64 load2 :i64
-                            names [:ref :reconcile/name-order]] :i64
+(defn pick-targets-3-first [x [:ref :reconcile/first3]] :i64
   ;; first target among 3 free candidates (n>=1). For n>1 host may re-call
   ;; on remaining pair via pick-targets-2-record.
-  (first-of-3 load0 load1 load2 names))
+  (first-of-3 x))
 
 (defn blank? [s :string] :bool
   (let [n (string-byte-length s)]

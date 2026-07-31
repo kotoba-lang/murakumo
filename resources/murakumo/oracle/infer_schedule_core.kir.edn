@@ -408,31 +408,101 @@
     better01),
    :param-types [:bool :bool :bool]}
   {:name assign-step-2,
-   :params [q0 q1 ok0 ok1 better],
+   :params [x],
    :result [:ref :schedule/assign2],
    :effects #{},
    :body
    (let
-    [warm0
+    [q0
      (record-get
       [:record
-       :schedule/better2
-       [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
-      better
+       :schedule/assign2-in
+       [[:q0 :i64]
+        [:q1 :i64]
+        [:ok0 :bool]
+        [:ok1 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:better01 :bool]]]
+      x
+      :q0)
+     q1
+     (record-get
+      [:record
+       :schedule/assign2-in
+       [[:q0 :i64]
+        [:q1 :i64]
+        [:ok0 :bool]
+        [:ok1 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:better01 :bool]]]
+      x
+      :q1)
+     ok0
+     (record-get
+      [:record
+       :schedule/assign2-in
+       [[:q0 :i64]
+        [:q1 :i64]
+        [:ok0 :bool]
+        [:ok1 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:better01 :bool]]]
+      x
+      :ok0)
+     ok1
+     (record-get
+      [:record
+       :schedule/assign2-in
+       [[:q0 :i64]
+        [:q1 :i64]
+        [:ok0 :bool]
+        [:ok1 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:better01 :bool]]]
+      x
+      :ok1)
+     warm0
+     (record-get
+      [:record
+       :schedule/assign2-in
+       [[:q0 :i64]
+        [:q1 :i64]
+        [:ok0 :bool]
+        [:ok1 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:better01 :bool]]]
+      x
       :warm0)
      warm1
      (record-get
       [:record
-       :schedule/better2
-       [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
-      better
+       :schedule/assign2-in
+       [[:q0 :i64]
+        [:q1 :i64]
+        [:ok0 :bool]
+        [:ok1 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:better01 :bool]]]
+      x
       :warm1)
      better01
      (record-get
       [:record
-       :schedule/better2
-       [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
-      better
+       :schedule/assign2-in
+       [[:q0 :i64]
+        [:q1 :i64]
+        [:ok0 :bool]
+        [:ok1 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:better01 :bool]]]
+      x
       :better01)
      p
      (pick-idx-2-full
@@ -468,7 +538,7 @@
      code
      nq0
      nq1)),
-   :param-types [:i64 :i64 :bool :bool [:ref :schedule/better2]]}
+   :param-types [[:ref :schedule/assign2-in]]}
   {:name assign-result-pick,
    :params [result],
    :result :i64,
@@ -930,31 +1000,33 @@
  :oracle-value nil,
  :schema-identities
  #:schedule{:assign2
-            "6e32da260064cd14cf5fad9b334454009534b0d4a7669009930814cd7b5c5473",
+            "bafb47c1a77563f83c49b484f5038b27c583d575e0930299c4b2bd8f46372198",
+            :assign2-in
+            "da57f21eecb4580a2829bae4ea14bfd769f1cb44875b0f104cb44a4630617619",
             :assign3
-            "c56484857ca14d69192ae370609b7d25ab22aace7ff7a05880b197cc46610a8e",
+            "4b4ff4a7a57d0f77cc37fa0c216282a8326d696324115580568f6bf0e7b1671d",
             :better2
-            "3574477837669634b42750fcdb3776e5e9ff753e3ae1d7f2d9a9ab0c60284028",
+            "c3fb9a7cd29d21574eb2ae8147f3a6d9107673d03cd77519ed92b8a7c1312d9a",
             :better3
-            "7f81cb66488917ab0823217ce54d86cf4323a8e26dc7eef5616733624071b3dc",
+            "9d813d917bb7bdc131d78aa3b8b1662a3086268c109ce24f4b14e6c3d1a128fd",
             :eligibility
-            "5ab04d3a205bc13b7c460fdc3b13e7ad56dbab657cb29f8f2563340a81ff812b",
+            "fb465aa3b70adfb417485b11ad0389f6750bc12d6d00ade5a0940531b0c0ebb0",
             :flags3
-            "9ddea66fb57299f6a56be80c9550ec0b1f0e8f04347d0accddc95ee7adfde790",
+            "b481e0c16e60a5c6c9bc27fb7ea57df3b7f1b742b087b252c6c4c89216b10b9f",
             :fold-step
-            "420754aa6752e2ae852904d1d68e76e2a41caf8614e341aa37a17c05d90dd8ff",
+            "53b2614d95b860c8934af48720edf9a2a53eb1fe9b0c854e7d902ac60125a734",
             :pick2
-            "daee2e162d748213c7c836ad707672aed924fd0a747ba0e064d9dbfe0183f49b",
+            "fb9327688ccaa83f6e086a4b4bd49ae0306a8495dcfc7c88c4c0b9512c4f6b1f",
             :pick3-tour
-            "f2fefcb554b0b64b3dd86d1842c30d73c840f9c661d43894ed786a2525ef42a8",
+            "f5e731e480027297188de6e906ea10814856f453c545a32a88bde78a736c5f20",
             :queue-cmp
-            "ed75abc5c0d9e6fcd774b44f59a1ab41a563372398364aa2c4eefe1ef9489698",
+            "68dae6ae5200c4db659289a4f36c380e402a6f0965bea2f09f3904bdba2a81f5",
             :queue-step
-            "d84a541afba1985b84df4f6b443b50cd9b95035f545e43ca1e3e4d589d2b72e2",
+            "8f8b81842b7c2f1601061d510c3384c04bca832af3bcf88c768ae0859fc14937",
             :score-cmp
-            "9005b8fd58b89660bbe6914b58535125c292e7c372c10732c384f959d7b3d72e",
+            "4b60f218ac39750a3d356db681dd364058e806289d5a552aa8383298194038f0",
             :triple
-            "c26c1567a25b5cbcbdf87bec1b1fc2ac33c30eb510f10ce882a6f2896a47e11c"},
+            "7cd371d9518f3497d0aba607ce4d33c4e3cb8b74a9c7e7d60e1452b2ce65fb23"},
  :exports
  [eligible?
   score-queue
@@ -990,7 +1062,17 @@
   pick-fold-step
   queue-inc-if],
  :schemas
- #:schedule{:assign2
+ #:schedule{:assign2-in
+            [:record
+             :schedule/assign2-in
+             [[:q0 :i64]
+              [:q1 :i64]
+              [:ok0 :bool]
+              [:ok1 :bool]
+              [:warm0 :bool]
+              [:warm1 :bool]
+              [:better01 :bool]]],
+            :assign2
             [:record
              :schedule/assign2
              [[:code :i64] [:q0 :i64] [:q1 :i64]]],
