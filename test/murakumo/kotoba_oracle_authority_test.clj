@@ -1484,8 +1484,11 @@
              (oracle/call :infer-credits 'memory-time-weight [mt])))
       (is (= (ir/execute live 'charge-allow? [ch])
              (oracle/call :infer-credits 'charge-allow? [ch]))))
-    (is (= (ir/execute live 'token-cost [2 100])
-           (oracle/call :infer-credits 'token-cost [2 100])))))
+    (let [mul (oracle/record
+               [:record :credits/mul [[:price :i64] [:n :i64]]]
+               {:price 2 :n 100})]
+      (is (= (ir/execute live 'token-cost [mul])
+             (oracle/call :infer-credits 'token-cost [mul]))))))
 
 (deftest credits-precompiled-kir-does-not-drift
   (let [live (:kir (compiler/compile-source (slurp "kotoba/infer_credits_core.kotoba")

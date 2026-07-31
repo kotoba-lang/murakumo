@@ -28,6 +28,72 @@
         kir (:kir (compiler/compile-source src :wasm32-kotoba-v1 {}))]
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
+(def ^:private mt-work-literal
+  (str "[:record :credits/mt-work "
+       "[[:est-bytes :i64] [:duration-ms :i64] [:span :i64]]]"))
+(def ^:private charge-literal
+  (str "[:record :credits/charge "
+       "[[:balance :i64] [:cost :i64]]]"))
+(def ^:private mul-literal
+  "[:record :credits/mul [[:price :i64] [:n :i64]]]")
+(def ^:private cut-in-literal
+  "[:record :credits/cut-in [[:total :i64] [:num :i64] [:den :i64]]]")
+(def ^:private pool-in-literal
+  "[:record :credits/pool-in [[:total :i64] [:treasury :i64] [:head :i64]]]")
+(def ^:private mt-pair-literal
+  "[:record :credits/mt-pair [[:w0 :i64] [:w1 :i64]]]")
+(def ^:private mt-triple-literal
+  "[:record :credits/mt-triple [[:w0 :i64] [:w1 :i64] [:w2 :i64]]]")
+(def ^:private share-in-literal
+  "[:record :credits/share-in [[:pool-amt :i64] [:w :i64] [:sumw :i64]]]")
+(def ^:private job2-literal
+  "[:record :credits/job2 [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64]]]")
+(def ^:private job3-literal
+  "[:record :credits/job3 [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64] [:p2n :i64]]]")
+(def ^:private shares-w-literal
+  "[:record :credits/shares-w [[:pool-amt :i64] [:w0 :i64] [:w1 :i64]]]")
+(def ^:private settle-w-literal
+  "[:record :credits/settle-w [[:total :i64] [:w0 :i64] [:w1 :i64]]]")
+
+(defn- mt-work-call [est dur span]
+  (str "(memory-time-weight (record-new " mt-work-literal " "
+       est " " dur " " span "))"))
+
+(defn- charge-allow-call [b c]
+  (str "(if (charge-allow? (record-new " charge-literal " " b " " c ")) 1 0)"))
+
+(defn- mul-call [export price n]
+  (str "(" export " (record-new " mul-literal " " price " " n "))"))
+
+(defn- cut-call [total num den]
+  (str "(cut (record-new " cut-in-literal " " total " " num " " den "))"))
+
+(defn- pool-call [total tr hd]
+  (str "(pool (record-new " pool-in-literal " " total " " tr " " hd "))"))
+
+(defn- job2-call [p0 n0 p1 n1]
+  (str "(job-cost-2 (record-new " job2-literal " " p0 " " n0 " " p1 " " n1 "))"))
+
+(defn- job3-call [p0 n0 p1 n1 p2n]
+  (str "(job-cost-3 (record-new " job3-literal " "
+       p0 " " n0 " " p1 " " n1 " " p2n "))"))
+
+(defn- share-floor-call [pool w sumw]
+  (str "(share-floor (record-new " share-in-literal " " pool " " w " " sumw "))"))
+
+(defn- share-record-2-call [pool w0 w1]
+  (str "(share-record-2 (record-new " shares-w-literal " " pool " " w0 " " w1 "))"))
+
+(defn- settle-call [total w0 w1]
+  (str "(settle-pool-shares-2 (record-new " settle-w-literal " "
+       total " " w0 " " w1 "))"))
+
+(defn- mt-sum-2-call [w0 w1]
+  (str "(mt-sum-2 (record-new " mt-pair-literal " " w0 " " w1 "))"))
+
+(defn- mt-sum-3-call [w0 w1 w2]
+  (str "(mt-sum-3 (record-new " mt-triple-literal " " w0 " " w1 " " w2 "))"))
+
 (deftest defaults-match-credits-cljc
   (let [actual (compile-i64-cases
                 {"p" "(default-per-token)"
@@ -52,12 +118,12 @@
                                  :plan {:assignments
                                         [{:node {:name "head" :head? true}
                                           :span 1 :est-bytes 1}]}})
-        cases {"tc" (str "(token-cost " price " " tokens ")")
-               "tr" (str "(cut " total " 1 20)")
-               "hd" (str "(cut " total " 1 10)")
-               "pl" (str "(pool " total " "
-                         (long (:run/treasury settled)) " "
-                         (long (:run/head settled)) ")")}
+        cases {"tc" (mul-call "token-cost" price tokens)
+               "tr" (cut-call total 1 20)
+               "hd" (cut-call total 1 10)
+               "pl" (pool-call total
+                               (long (:run/treasury settled))
+                               (long (:run/head settled)))}
         actual (compile-i64-cases cases)]
     (is (= (long (:run/total settled)) (get actual "tc")))
     (is (= (long (:run/treasury settled)) (get actual "tr")))
@@ -68,20 +134,6 @@
            (get actual "pl")))
     (testing "integer conservation"
       (is (= total (+ (get actual "tr") (get actual "hd") (get actual "pl")))))))
-
-(def ^:private mt-work-literal
-  (str "[:record :credits/mt-work "
-       "[[:est-bytes :i64] [:duration-ms :i64] [:span :i64]]]"))
-(def ^:private charge-literal
-  (str "[:record :credits/charge "
-       "[[:balance :i64] [:cost :i64]]]"))
-
-(defn- mt-work-call [est dur span]
-  (str "(memory-time-weight (record-new " mt-work-literal " "
-       est " " dur " " span "))"))
-
-(defn- charge-allow-call [b c]
-  (str "(if (charge-allow? (record-new " charge-literal " " b " " c ")) 1 0)"))
 
 (deftest memory-time-weight-respects-span
   (let [est 11450000000 dur 60000
@@ -106,17 +158,17 @@
 
 (deftest multi-unit-and-shares
   (let [actual (compile-i64-cases
-                {"u1" "(unit-cost 5 4)"
-                 "j2" "(job-cost-2 2 100 5 4)"
-                 "j3" "(job-cost-3 2 100 5 4 30)"
-                 "sf" "(share-floor 100 3 10)"
+                {"u1" (mul-call "unit-cost" 5 4)
+                 "j2" (job2-call 2 100 5 4)
+                 "j3" (job3-call 2 100 5 4 30)
+                 "sf" (share-floor-call 100 3 10)
                  ;; T5.3: project record fields inside the guest (no host unpack)
-                 "s0" "(share-of-0 (share-record-2 100 3 7))"
-                 "s1" "(share-of-1 (share-record-2 100 3 7))"
-                 "ss0" "(share-of-0 (settle-pool-shares-2 200 1 1))"
-                 "ss1" "(share-of-1 (settle-pool-shares-2 200 1 1))"
-                 "m2" "(mt-sum-2 10 20)"
-                 "m3" "(mt-sum-3 1 2 3)"})]
+                 "s0" (str "(share-of-0 " (share-record-2-call 100 3 7) ")")
+                 "s1" (str "(share-of-1 " (share-record-2-call 100 3 7) ")")
+                 "ss0" (str "(share-of-0 " (settle-call 200 1 1) ")")
+                 "ss1" (str "(share-of-1 " (settle-call 200 1 1) ")")
+                 "m2" (mt-sum-2-call 10 20)
+                 "m3" (mt-sum-3-call 1 2 3)})]
     (is (= 20 (get actual "u1")))
     (is (= (+ 200 20) (get actual "j2")))
     (is (= (+ 200 20 30) (get actual "j3")))
@@ -131,4 +183,3 @@
     (testing "cljc job-cost multi-unit"
       (is (= 220.0 (credits/job-cost {:credit/per-token 2 :credit/per-image 5}
                                      {:tokens 100 :images 4}))))))
-

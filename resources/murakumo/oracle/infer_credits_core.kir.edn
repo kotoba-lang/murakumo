@@ -32,41 +32,154 @@
    :body 20,
    :param-types []}
   {:name token-cost,
-   :params [price tokens],
+   :params [m],
    :result :i64,
    :effects #{},
-   :body (* price tokens),
-   :param-types [:i64 :i64]}
+   :body
+   (*
+    (record-get
+     [:record :credits/mul [[:price :i64] [:n :i64]]]
+     m
+     :price)
+    (record-get
+     [:record :credits/mul [[:price :i64] [:n :i64]]]
+     m
+     :n)),
+   :param-types [[:ref :credits/mul]]}
   {:name unit-cost,
-   :params [price n],
+   :params [m],
    :result :i64,
    :effects #{},
-   :body (* price n),
-   :param-types [:i64 :i64]}
+   :body
+   (*
+    (record-get
+     [:record :credits/mul [[:price :i64] [:n :i64]]]
+     m
+     :price)
+    (record-get
+     [:record :credits/mul [[:price :i64] [:n :i64]]]
+     m
+     :n)),
+   :param-types [[:ref :credits/mul]]}
   {:name job-cost-2,
-   :params [p0 n0 p1 n1],
+   :params [j],
    :result :i64,
    :effects #{},
-   :body (+ (* p0 n0) (* p1 n1)),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :body
+   (+
+    (*
+     (record-get
+      [:record
+       :credits/job2
+       [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64]]]
+      j
+      :p0)
+     (record-get
+      [:record
+       :credits/job2
+       [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64]]]
+      j
+      :n0))
+    (*
+     (record-get
+      [:record
+       :credits/job2
+       [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64]]]
+      j
+      :p1)
+     (record-get
+      [:record
+       :credits/job2
+       [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64]]]
+      j
+      :n1))),
+   :param-types [[:ref :credits/job2]]}
   {:name job-cost-3,
-   :params [p0 n0 p1 n1 p2n],
+   :params [j],
    :result :i64,
    :effects #{},
-   :body (+ (+ (* p0 n0) (* p1 n1)) p2n),
-   :param-types [:i64 :i64 :i64 :i64 :i64]}
+   :body
+   (+
+    (+
+     (*
+      (record-get
+       [:record
+        :credits/job3
+        [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64] [:p2n :i64]]]
+       j
+       :p0)
+      (record-get
+       [:record
+        :credits/job3
+        [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64] [:p2n :i64]]]
+       j
+       :n0))
+     (*
+      (record-get
+       [:record
+        :credits/job3
+        [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64] [:p2n :i64]]]
+       j
+       :p1)
+      (record-get
+       [:record
+        :credits/job3
+        [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64] [:p2n :i64]]]
+       j
+       :n1)))
+    (record-get
+     [:record
+      :credits/job3
+      [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64] [:p2n :i64]]]
+     j
+     :p2n)),
+   :param-types [[:ref :credits/job3]]}
   {:name cut,
-   :params [total num den],
+   :params [c],
    :result :i64,
    :effects #{},
-   :body (quot (* total num) den),
-   :param-types [:i64 :i64 :i64]}
+   :body
+   (quot
+    (*
+     (record-get
+      [:record :credits/cut-in [[:total :i64] [:num :i64] [:den :i64]]]
+      c
+      :total)
+     (record-get
+      [:record :credits/cut-in [[:total :i64] [:num :i64] [:den :i64]]]
+      c
+      :num))
+    (record-get
+     [:record :credits/cut-in [[:total :i64] [:num :i64] [:den :i64]]]
+     c
+     :den)),
+   :param-types [[:ref :credits/cut-in]]}
   {:name pool,
-   :params [total treasury head],
+   :params [p],
    :result :i64,
    :effects #{},
-   :body (- total (+ treasury head)),
-   :param-types [:i64 :i64 :i64]}
+   :body
+   (-
+    (record-get
+     [:record
+      :credits/pool-in
+      [[:total :i64] [:treasury :i64] [:head :i64]]]
+     p
+     :total)
+    (+
+     (record-get
+      [:record
+       :credits/pool-in
+       [[:total :i64] [:treasury :i64] [:head :i64]]]
+      p
+      :treasury)
+     (record-get
+      [:record
+       :credits/pool-in
+       [[:total :i64] [:treasury :i64] [:head :i64]]]
+      p
+      :head))),
+   :param-types [[:ref :credits/pool-in]]}
   {:name memory-time-weight,
    :params [w],
    :result :i64,
@@ -97,40 +210,128 @@
     (if (< span 1) 0 (* est-bytes duration-ms))),
    :param-types [[:ref :credits/mt-work]]}
   {:name mt-sum-2,
-   :params [w0 w1],
+   :params [w],
    :result :i64,
    :effects #{},
-   :body (+ w0 w1),
-   :param-types [:i64 :i64]}
+   :body
+   (+
+    (record-get
+     [:record :credits/mt-pair [[:w0 :i64] [:w1 :i64]]]
+     w
+     :w0)
+    (record-get
+     [:record :credits/mt-pair [[:w0 :i64] [:w1 :i64]]]
+     w
+     :w1)),
+   :param-types [[:ref :credits/mt-pair]]}
   {:name mt-sum-3,
-   :params [w0 w1 w2],
+   :params [w],
    :result :i64,
    :effects #{},
-   :body (+ w0 (+ w1 w2)),
-   :param-types [:i64 :i64 :i64]}
+   :body
+   (+
+    (record-get
+     [:record :credits/mt-triple [[:w0 :i64] [:w1 :i64] [:w2 :i64]]]
+     w
+     :w0)
+    (+
+     (record-get
+      [:record :credits/mt-triple [[:w0 :i64] [:w1 :i64] [:w2 :i64]]]
+      w
+      :w1)
+     (record-get
+      [:record :credits/mt-triple [[:w0 :i64] [:w1 :i64] [:w2 :i64]]]
+      w
+      :w2))),
+   :param-types [[:ref :credits/mt-triple]]}
   {:name share-floor,
-   :params [pool-amt w sumw],
+   :params [s],
    :result :i64,
    :effects #{},
-   :body (if (< sumw 1) 0 (quot (* pool-amt w) sumw)),
-   :param-types [:i64 :i64 :i64]}
+   :body
+   (if
+    (<
+     (record-get
+      [:record
+       :credits/share-in
+       [[:pool-amt :i64] [:w :i64] [:sumw :i64]]]
+      s
+      :sumw)
+     1)
+    0
+    (quot
+     (*
+      (record-get
+       [:record
+        :credits/share-in
+        [[:pool-amt :i64] [:w :i64] [:sumw :i64]]]
+       s
+       :pool-amt)
+      (record-get
+       [:record
+        :credits/share-in
+        [[:pool-amt :i64] [:w :i64] [:sumw :i64]]]
+       s
+       :w))
+     (record-get
+      [:record
+       :credits/share-in
+       [[:pool-amt :i64] [:w :i64] [:sumw :i64]]]
+      s
+      :sumw))),
+   :param-types [[:ref :credits/share-in]]}
   {:name share-record-2,
-   :params [pool-amt w0 w1],
+   :params [s],
    :result [:ref :credits/shares2],
    :effects #{},
    :body
    (let
-    [sumw
+    [pool-amt
+     (record-get
+      [:record
+       :credits/shares-w
+       [[:pool-amt :i64] [:w0 :i64] [:w1 :i64]]]
+      s
+      :pool-amt)
+     w0
+     (record-get
+      [:record
+       :credits/shares-w
+       [[:pool-amt :i64] [:w0 :i64] [:w1 :i64]]]
+      s
+      :w0)
+     w1
+     (record-get
+      [:record
+       :credits/shares-w
+       [[:pool-amt :i64] [:w0 :i64] [:w1 :i64]]]
+      s
+      :w1)
+     sumw
      (+ w0 w1)
      s0
-     (share-floor pool-amt w0 sumw)
+     (share-floor
+      (record-new
+       [:record
+        :credits/share-in
+        [[:pool-amt :i64] [:w :i64] [:sumw :i64]]]
+       pool-amt
+       w0
+       sumw))
      s1
-     (share-floor pool-amt w1 sumw)]
+     (share-floor
+      (record-new
+       [:record
+        :credits/share-in
+        [[:pool-amt :i64] [:w :i64] [:sumw :i64]]]
+       pool-amt
+       w1
+       sumw))]
     (record-new
      [:record :credits/shares2 [[:s0 :i64] [:s1 :i64]]]
      s0
      s1)),
-   :param-types [:i64 :i64 :i64]}
+   :param-types [[:ref :credits/shares-w]]}
   {:name share-of-0,
    :params [shares],
    :result :i64,
@@ -152,14 +353,62 @@
     :s1),
    :param-types [[:ref :credits/shares2]]}
   {:name settle-pool-shares-2,
-   :params [total w0 w1],
+   :params [s],
    :result [:ref :credits/shares2],
    :effects #{},
    :body
    (let
-    [tr (cut total 1 20) hd (cut total 1 10) pl (pool total tr hd)]
-    (share-record-2 pl w0 w1)),
-   :param-types [:i64 :i64 :i64]}
+    [total
+     (record-get
+      [:record :credits/settle-w [[:total :i64] [:w0 :i64] [:w1 :i64]]]
+      s
+      :total)
+     w0
+     (record-get
+      [:record :credits/settle-w [[:total :i64] [:w0 :i64] [:w1 :i64]]]
+      s
+      :w0)
+     w1
+     (record-get
+      [:record :credits/settle-w [[:total :i64] [:w0 :i64] [:w1 :i64]]]
+      s
+      :w1)
+     tr
+     (cut
+      (record-new
+       [:record
+        :credits/cut-in
+        [[:total :i64] [:num :i64] [:den :i64]]]
+       total
+       1
+       20))
+     hd
+     (cut
+      (record-new
+       [:record
+        :credits/cut-in
+        [[:total :i64] [:num :i64] [:den :i64]]]
+       total
+       1
+       10))
+     pl
+     (pool
+      (record-new
+       [:record
+        :credits/pool-in
+        [[:total :i64] [:treasury :i64] [:head :i64]]]
+       total
+       tr
+       hd))]
+    (share-record-2
+     (record-new
+      [:record
+       :credits/shares-w
+       [[:pool-amt :i64] [:w0 :i64] [:w1 :i64]]]
+      pl
+      w0
+      w1))),
+   :param-types [[:ref :credits/settle-w]]}
   {:name charge-allow?,
    :params [c],
    :result :bool,
@@ -199,11 +448,31 @@
  :oracle-value nil,
  :schema-identities
  #:credits{:charge
-           "7cc2ea0f46057fca4549ea29fb17c1be1977aed7b317c880368d2f4d683e3108",
+           "e15ac643952453a70a86f550cbd5774a85a64a7a3c88cedd3350f037856498ec",
+           :cut-in
+           "d574d4b8b1589d5c9848a1d9c892c75de50f8e9dcf2509b2785c21205d8811cf",
+           :job2
+           "34ccd5a63252dd6316d8defc59c37c3870000757ec2b71962d36d083cdc6c8d7",
+           :job3
+           "f7482ecfb3f75de95b2b583d808a119efb41c9ed4622e062052ea57073f62810",
+           :mt-pair
+           "735cd3e949bf7d8d28b03e84a97acdd6e9f3329f25c44e6c3c4e23d2c0c9eeee",
+           :mt-triple
+           "aff6802a6eb6be180b10261cc91fe499392e840cffa9d789781e823d44cff5b7",
            :mt-work
-           "3cc0ca2867b35fdb27fbe76c86c7f4ff158d66edae389d55257c696e4bcf303d",
+           "00214231c3a7abc318b1d6aaf32a95dfe25e90a05a03be421eded847eb3e6e14",
+           :mul
+           "933183c548ab8d18c778d37abb76057b333c7e3492c4da304ccc10a1272738d8",
+           :pool-in
+           "caf099946bc2340f4e08aa258f9d1b8b76d64f0ca7ba827415f3386bb8f1badf",
+           :settle-w
+           "b43abb4fea2301a1e5eec4bcc784b7ef996591fe5960259f0eaf0d9a52e2fb5d",
+           :share-in
+           "2cd654a6f064d143672352f41ddb5e60ff4107c959dcfa692d3757004dc84f6c",
+           :shares-w
+           "193e6620e701ea7d8677ebc2e928b844dde14ad89f481b38c2b15d046c3a8a7c",
            :shares2
-           "3c7e4d82b2a6826f61c753d64e5e499ac0bcf021ef3a7ad1981f7433aad8b781"},
+           "4ec5c2cb3d540deed41a3884353324f5d4e251238c6622253f9dfbce0dd4bf85"},
  :exports
  [default-per-token
   head-num
@@ -227,13 +496,47 @@
   mt-sum-2
   mt-sum-3],
  :schemas
- #:credits{:shares2 [:record :credits/shares2 [[:s0 :i64] [:s1 :i64]]],
+ #:credits{:mt-triple
+           [:record
+            :credits/mt-triple
+            [[:w0 :i64] [:w1 :i64] [:w2 :i64]]],
+           :job3
+           [:record
+            :credits/job3
+            [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64] [:p2n :i64]]],
+           :job2
+           [:record
+            :credits/job2
+            [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64]]],
+           :mt-pair [:record :credits/mt-pair [[:w0 :i64] [:w1 :i64]]],
+           :charge
+           [:record :credits/charge [[:balance :i64] [:cost :i64]]],
+           :shares-w
+           [:record
+            :credits/shares-w
+            [[:pool-amt :i64] [:w0 :i64] [:w1 :i64]]],
+           :settle-w
+           [:record
+            :credits/settle-w
+            [[:total :i64] [:w0 :i64] [:w1 :i64]]],
+           :cut-in
+           [:record
+            :credits/cut-in
+            [[:total :i64] [:num :i64] [:den :i64]]],
+           :shares2 [:record :credits/shares2 [[:s0 :i64] [:s1 :i64]]],
+           :pool-in
+           [:record
+            :credits/pool-in
+            [[:total :i64] [:treasury :i64] [:head :i64]]],
            :mt-work
            [:record
             :credits/mt-work
             [[:est-bytes :i64] [:duration-ms :i64] [:span :i64]]],
-           :charge
-           [:record :credits/charge [[:balance :i64] [:cost :i64]]]},
+           :share-in
+           [:record
+            :credits/share-in
+            [[:pool-amt :i64] [:w :i64] [:sumw :i64]]],
+           :mul [:record :credits/mul [[:price :i64] [:n :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

@@ -6,7 +6,28 @@
              :credits/mt-work [:record :credits/mt-work
                                [[:est-bytes :i64] [:duration-ms :i64] [:span :i64]]]
              :credits/charge [:record :credits/charge
-                              [[:balance :i64] [:cost :i64]]]})
+                              [[:balance :i64] [:cost :i64]]]
+             ;; residual multi-arg pure → single-record inputs (Progress 31eo)
+             :credits/mul [:record :credits/mul
+                           [[:price :i64] [:n :i64]]]
+             :credits/cut-in [:record :credits/cut-in
+                              [[:total :i64] [:num :i64] [:den :i64]]]
+             :credits/pool-in [:record :credits/pool-in
+                               [[:total :i64] [:treasury :i64] [:head :i64]]]
+             :credits/mt-pair [:record :credits/mt-pair
+                               [[:w0 :i64] [:w1 :i64]]]
+             :credits/mt-triple [:record :credits/mt-triple
+                                 [[:w0 :i64] [:w1 :i64] [:w2 :i64]]]
+             :credits/share-in [:record :credits/share-in
+                                [[:pool-amt :i64] [:w :i64] [:sumw :i64]]]
+             :credits/job2 [:record :credits/job2
+                            [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64]]]
+             :credits/job3 [:record :credits/job3
+                            [[:p0 :i64] [:n0 :i64] [:p1 :i64] [:n1 :i64] [:p2n :i64]]]
+             :credits/shares-w [:record :credits/shares-w
+                                [[:pool-amt :i64] [:w0 :i64] [:w1 :i64]]]
+             :credits/settle-w [:record :credits/settle-w
+                                [[:total :i64] [:w0 :i64] [:w1 :i64]]]})
   (:export [default-per-token head-num head-den protocol-num protocol-den
             token-cost cut pool memory-time-weight
             charge-allow? balance-after-spend
@@ -20,6 +41,8 @@
 ;; multi-unit job-cost: sum of integer unit×price (throws stay host).
 ;; settle-pool-shares-2: floor shares of pool by memory-time weights.
 ;; T5.3: share-pack-2 (s0 + s1*65536) → [:ref :credits/shares2].
+;; T5.2 residual: token-cost/unit-cost/cut/pool/job-cost/mt-sum/share-floor/
+;; share-record-2/settle-pool-shares-2 take a single guest record each.
 ;; Parity: test/murakumo/infer_credits_kotoba_parity_test.clj
 
 (defn default-per-token [] :i64 1)
@@ -29,26 +52,31 @@
 (defn protocol-num [] :i64 1)
 (defn protocol-den [] :i64 20)
 
-(defn token-cost [price :i64 tokens :i64] :i64
-  (* price tokens))
+(defn token-cost [m [:ref :credits/mul]] :i64
+  (* (record-get m :price) (record-get m :n)))
 
-(defn unit-cost [price :i64 n :i64] :i64
+(defn unit-cost [m [:ref :credits/mul]] :i64
   ;; generic unit×price (images, video-seconds, …)
-  (* price n))
+  (* (record-get m :price) (record-get m :n)))
 
-(defn job-cost-2 [p0 :i64 n0 :i64 p1 :i64 n1 :i64] :i64
-  (+ (* p0 n0) (* p1 n1)))
+(defn job-cost-2 [j [:ref :credits/job2]] :i64
+  (+ (* (record-get j :p0) (record-get j :n0))
+     (* (record-get j :p1) (record-get j :n1))))
 
-(defn job-cost-3 [p0 :i64 n0 :i64 p1 :i64 n1 :i64 p2n :i64] :i64
-  ;; Arity 5: p0 n0 p1 n1 extra where extra = p2*n2 precomputed by host
+(defn job-cost-3 [j [:ref :credits/job3]] :i64
+  ;; Arity folded: p0 n0 p1 n1 + extra where extra = p2*n2 precomputed by host
   ;; (max-parameters 5; a 6th price/n pair would need a record of units).
-  (+ (+ (* p0 n0) (* p1 n1)) p2n))
+  (+ (+ (* (record-get j :p0) (record-get j :n0))
+        (* (record-get j :p1) (record-get j :n1)))
+     (record-get j :p2n)))
 
-(defn cut [total :i64 num :i64 den :i64] :i64
-  (quot (* total num) den))
+(defn cut [c [:ref :credits/cut-in]] :i64
+  (quot (* (record-get c :total) (record-get c :num))
+        (record-get c :den)))
 
-(defn pool [total :i64 treasury :i64 head :i64] :i64
-  (- total (+ treasury head)))
+(defn pool [p [:ref :credits/pool-in]] :i64
+  (- (record-get p :total)
+     (+ (record-get p :treasury) (record-get p :head))))
 
 (defn memory-time-weight [w [:ref :credits/mt-work]] :i64
   ;; T5.2 native guest record: est-bytes/duration-ms/span on one input record.
@@ -59,24 +87,28 @@
       0
       (* est-bytes duration-ms))))
 
-(defn mt-sum-2 [w0 :i64 w1 :i64] :i64
-  (+ w0 w1))
+(defn mt-sum-2 [w [:ref :credits/mt-pair]] :i64
+  (+ (record-get w :w0) (record-get w :w1)))
 
-(defn mt-sum-3 [w0 :i64 w1 :i64 w2 :i64] :i64
-  (+ w0 (+ w1 w2)))
+(defn mt-sum-3 [w [:ref :credits/mt-triple]] :i64
+  (+ (record-get w :w0) (+ (record-get w :w1) (record-get w :w2))))
 
-(defn share-floor [pool-amt :i64 w :i64 sumw :i64] :i64
+(defn share-floor [s [:ref :credits/share-in]] :i64
   ;; cljc (* pool (/ w sumw)) as floor for integer conservation lower bound
-  (if (< sumw 1)
+  (if (< (record-get s :sumw) 1)
     0
-    (quot (* pool-amt w) sumw)))
+    (quot (* (record-get s :pool-amt) (record-get s :w))
+          (record-get s :sumw))))
 
 ;; ── T5.3: two-lane shares are a record, not a base-65536 pack ────────────
 
-(defn share-record-2 [pool-amt :i64 w0 :i64 w1 :i64] [:ref :credits/shares2]
-  (let [sumw (+ w0 w1)
-        s0 (share-floor pool-amt w0 sumw)
-        s1 (share-floor pool-amt w1 sumw)]
+(defn share-record-2 [s [:ref :credits/shares-w]] [:ref :credits/shares2]
+  (let [pool-amt (record-get s :pool-amt)
+        w0 (record-get s :w0)
+        w1 (record-get s :w1)
+        sumw (+ w0 w1)
+        s0 (share-floor (record-new [:ref :credits/share-in] pool-amt w0 sumw))
+        s1 (share-floor (record-new [:ref :credits/share-in] pool-amt w1 sumw))]
     (record-new [:ref :credits/shares2] s0 s1)))
 
 (defn share-of-0 [shares [:ref :credits/shares2]] :i64
@@ -85,12 +117,15 @@
 (defn share-of-1 [shares [:ref :credits/shares2]] :i64
   (record-get shares :s1))
 
-(defn settle-pool-shares-2 [total :i64 w0 :i64 w1 :i64] [:ref :credits/shares2]
+(defn settle-pool-shares-2 [s [:ref :credits/settle-w]] [:ref :credits/shares2]
   ;; default head 1/10 protocol 1/20 → pool, then floor shares
-  (let [tr (cut total 1 20)
-        hd (cut total 1 10)
-        pl (pool total tr hd)]
-    (share-record-2 pl w0 w1)))
+  (let [total (record-get s :total)
+        w0 (record-get s :w0)
+        w1 (record-get s :w1)
+        tr (cut (record-new [:ref :credits/cut-in] total 1 20))
+        hd (cut (record-new [:ref :credits/cut-in] total 1 10))
+        pl (pool (record-new [:ref :credits/pool-in] total tr hd))]
+    (share-record-2 (record-new [:ref :credits/shares-w] pl w0 w1))))
 
 (defn charge-allow? [c [:ref :credits/charge]] :bool
   ;; Profile 5: balance gate as :bool. T5.2 native record: balance+cost.
