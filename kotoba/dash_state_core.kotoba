@@ -1,4 +1,13 @@
 (ns dash-state-core
+  (:schemas {;; T5.2 native guest record wire
+             :dash/join [:record :dash/join
+                         [[:acc :string] [:sep :string] [:next :string]]]
+             :dash/hosted [:record :dash/hosted
+                           [[:acc :string] [:next :string]]]
+             :dash/clamp [:record :dash/clamp
+                          [[:requested-at :i64] [:history-count :i64]]]
+             :dash/pair-i64 [:record :dash/pair-i64
+                             [[:a :i64] [:b :i64]]]})
   (:export [short-hosted-cid health-class-of interval-sleep-ms clamp-at
             take-last-start append-new-len cap-count recent-take-n
             digit-char nat-str i64-str
@@ -46,32 +55,44 @@
 (defn interval-sleep-ms [seconds :i64] :i64
   (* 1000 seconds))
 
-(defn clamp-at [requested-at :i64 history-count :i64] :i64
+(defn clamp-at [x [:ref :dash/clamp]] :i64
   ;; cljc: (min (max 0 (or requested-at 0)) (max 0 (dec history-count)))
-  ;; Callers pass 0 for nil requested-at.
-  (let [req (if (< requested-at 0) 0 requested-at)
+  ;; Callers pass 0 for nil requested-at. T5.2 native record.
+  (let [requested-at (record-get x :requested-at)
+        history-count (record-get x :history-count)
+        req (if (< requested-at 0) 0 requested-at)
         hi (if (< history-count 1) 0 (- history-count 1))]
     (if (< req hi) req hi)))
 
-(defn take-last-start [len :i64 cap :i64] :i64
+(defn take-last-start [x [:ref :dash/pair-i64]] :i64
   ;; start index for (take-last cap items) on a seq of length len
-  (if (< cap 1)
-    len
-    (let [s (- len cap)]
-      (if (< s 0) 0 s))))
+  ;; T5.2: a=len, b=cap
+  (let [len (record-get x :a)
+        cap (record-get x :b)]
+    (if (< cap 1)
+      len
+      (let [s (- len cap)]
+        (if (< s 0) 0 s)))))
 
-(defn append-new-len [len :i64 add :i64] :i64
-  (if (< add 0) len (+ len add)))
+(defn append-new-len [x [:ref :dash/pair-i64]] :i64
+  ;; T5.2: a=len, b=add
+  (let [len (record-get x :a)
+        add (record-get x :b)]
+    (if (< add 0) len (+ len add))))
 
-(defn cap-count [len :i64 cap :i64] :i64
-  ;; length after take-last cap
-  (if (< cap 1)
-    0
-    (if (< len cap) len cap)))
+(defn cap-count [x [:ref :dash/pair-i64]] :i64
+  ;; length after take-last cap — T5.2: a=len, b=cap
+  (let [len (record-get x :a)
+        cap (record-get x :b)]
+    (if (< cap 1)
+      0
+      (if (< len cap) len cap))))
 
-(defn recent-take-n [n :i64 default-n :i64] :i64
-  ;; cljc recent-alerts default 6
-  (if (< n 0) default-n n))
+(defn recent-take-n [x [:ref :dash/pair-i64]] :i64
+  ;; cljc recent-alerts default 6 — T5.2: a=n, b=default-n
+  (let [n (record-get x :a)
+        default-n (record-get x :b)]
+    (if (< n 0) default-n n)))
 
 ;; ── digit / parse-links (tunnel_core pattern; 0 on bad for links) ─────
 
@@ -237,15 +258,21 @@
 
 ;; ── residual hosted-summary join fold steps ──────────────────────────
 
-(defn join-append [acc :string sep :string next :string] :string
-  ;; empty acc ⇒ first item only (no leading sep)
-  (if (string=? acc "")
-    next
-    (string-concat acc (string-concat sep next))))
+(defn join-append [x [:ref :dash/join]] :string
+  ;; empty acc ⇒ first item only (no leading sep) — T5.2 native
+  (let [acc (record-get x :acc)
+        sep (record-get x :sep)
+        next (record-get x :next)]
+    (if (string=? acc "")
+      next
+      (string-concat acc (string-concat sep next)))))
 
-(defn hosted-append [acc :string next :string] :string
+(defn hosted-append [x [:ref :dash/hosted]] :string
   ;; host reduce over short-hosted-cid strings for hosted-summary
-  (join-append acc (hosted-join-sep) next))
+  (join-append (record-new [:ref :dash/join]
+                           (record-get x :acc)
+                           (hosted-join-sep)
+                           (record-get x :next))))
 
 ;; ── residual atproto collection / record $type ───────────────────────
 

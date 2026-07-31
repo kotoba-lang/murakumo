@@ -1,4 +1,7 @@
 (ns kekkai-gate-core
+  (:schemas {;; T5.2 native guest record wire
+             :kekkai/denial [:record :kekkai/denial
+                             [[:name :string] [:status :string]]]})
   (:export [default-ledger-path strip-trailing-newlines parse-status-out
             authorized? denial-line-of default-kekkai-dir-under
             cli-bin cli-alias-flag cli-main-flag cli-main-ns
@@ -12,6 +15,7 @@
 ;; interior; product predicates (authorized?) return profile-5 :bool.
 ;; Residual status/denial-line/dir tokens dual-source; helpers recompose.
 ;; cli-argv fragments dual-source for host vector assembly.
+;; T5.2: multi-scalar denial inputs take single guest records.
 ;; Parity: test/murakumo/kekkai_gate_kotoba_parity_test.clj
 
 (defn default-ledger-path [] :string
@@ -53,14 +57,15 @@
   ;; Profile 5: real :bool predicate (not 0/1 i64).
   (if (string=? status (status-authorized)) true false))
 
-(defn denial-line-of [node-name :string status :string] :string
+(defn denial-line-of [x [:ref :kekkai/denial]] :string
+  ;; T5.2 native: name+status
   (string-concat
    (denial-prefix)
    (string-concat
-    node-name
+    (record-get x :name)
     (string-concat
      (denial-mid)
-     (string-concat status (denial-suffix))))))
+     (string-concat (record-get x :status) (denial-suffix))))))
 
 (defn default-kekkai-dir-under [home :string] :string
   (string-concat home (kekkai-dir-suffix)))

@@ -15,6 +15,9 @@
        "selector-is-all? selector-wants-name? line-has-offline? "
        "selector-all offline-token health-url-prefix health-url-path selector-join-sep"))
 
+(def ^:private selector-name-ty
+  "[:record :fleet/selector-name [[:sel :string] [:name :string]]]")
+
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -114,7 +117,8 @@
         cases (into {} (map-indexed
                         (fn [i [sel name]]
                           [(str "sw_" i)
-                           (str "(if (selector-wants-name? " (kotoba-literal sel) " " (kotoba-literal name) ") 1 0)")])
+                           (str "(if (selector-wants-name? (record-new " selector-name-ty " "
+                                (kotoba-literal sel) " " (kotoba-literal name) ")) 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [sel name]] (map-indexed vector corpus)]

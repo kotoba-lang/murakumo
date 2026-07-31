@@ -23,6 +23,15 @@
        "default-dashboard-port-str default-dashboard-interval-str "
        "join-append hosted-append snapshot-record-type"))
 
+(def ^:private join-ty
+  "[:record :dash/join [[:acc :string] [:sep :string] [:next :string]]]")
+(def ^:private hosted-ty
+  "[:record :dash/hosted [[:acc :string] [:next :string]]]")
+(def ^:private clamp-ty
+  "[:record :dash/clamp [[:requested-at :i64] [:history-count :i64]]]")
+(def ^:private pair-i64-ty
+  "[:record :dash/pair-i64 [[:a :i64] [:b :i64]]]")
+
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -93,7 +102,8 @@
   (let [corpus [[-1 3] [0 3] [1 3] [2 3] [99 3] [0 0] [5 1] [0 1]]
         cases (into {} (map-indexed
                         (fn [i [at hc]]
-                          [(str "cl_" i) (str "(clamp-at " at " " hc ")")])
+                          [(str "cl_" i)
+                           (str "(clamp-at (record-new " clamp-ty " " at " " hc "))")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [at hc]] (map-indexed vector corpus)]
@@ -103,13 +113,13 @@
 
 (deftest cap-index-math-matches-append-capped
   (let [actual (compile-i64-cases
-                {"tls" "(take-last-start 10 6)"
-                 "tls0" "(take-last-start 3 6)"
-                 "anl" "(append-new-len 5 1)"
-                 "cc" "(cap-count 10 6)"
-                 "cc2" "(cap-count 3 6)"
-                 "rt" "(recent-take-n -1 6)"
-                 "rt2" "(recent-take-n 3 6)"})]
+                {"tls" (str "(take-last-start (record-new " pair-i64-ty " 10 6))")
+                 "tls0" (str "(take-last-start (record-new " pair-i64-ty " 3 6))")
+                 "anl" (str "(append-new-len (record-new " pair-i64-ty " 5 1))")
+                 "cc" (str "(cap-count (record-new " pair-i64-ty " 10 6))")
+                 "cc2" (str "(cap-count (record-new " pair-i64-ty " 3 6))")
+                 "rt" (str "(recent-take-n (record-new " pair-i64-ty " -1 6))")
+                 "rt2" (str "(recent-take-n (record-new " pair-i64-ty " 3 6))")})]
     (is (= 4 (get actual "tls")))
     (is (= 0 (get actual "tls0")))
     (is (= 6 (get actual "anl")))
@@ -203,14 +213,18 @@
            {"hj" "(hosted-join-sep)"
             "ps" "(default-dashboard-port-str)"
             "is" "(default-dashboard-interval-str)"
-            "ja" (str "(join-append " (kotoba-literal "") " "
-                      (kotoba-literal " ") " " (kotoba-literal "a") ")")
-            "jb" (str "(join-append " (kotoba-literal "a") " "
-                      (kotoba-literal " ") " " (kotoba-literal "b") ")")
-            "ha0" (str "(hosted-append " (kotoba-literal "") " "
-                       (kotoba-literal "bafyA") ")")
-            "ha1" (str "(hosted-append " (kotoba-literal "bafyA") " "
-                       (kotoba-literal "bafyB") ")")})
+            "ja" (str "(join-append (record-new " join-ty " "
+                      (kotoba-literal "") " "
+                      (kotoba-literal " ") " " (kotoba-literal "a") "))")
+            "jb" (str "(join-append (record-new " join-ty " "
+                      (kotoba-literal "a") " "
+                      (kotoba-literal " ") " " (kotoba-literal "b") "))")
+            "ha0" (str "(hosted-append (record-new " hosted-ty " "
+                       (kotoba-literal "") " "
+                       (kotoba-literal "bafyA") "))")
+            "ha1" (str "(hosted-append (record-new " hosted-ty " "
+                       (kotoba-literal "bafyA") " "
+                       (kotoba-literal "bafyB") "))")})
         n (compile-i64-cases
            {"hm" "(short-hosted-cid-max-len)"
             "cm" "(short-cid-max-len)"

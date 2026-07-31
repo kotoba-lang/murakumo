@@ -10,6 +10,9 @@
 
 (def port-source (slurp "kotoba/kekkai_gate_core.kotoba"))
 
+(def ^:private denial-ty
+  "[:record :kekkai/denial [[:name :string] [:status :string]]]")
+
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
 
@@ -56,8 +59,9 @@
         cases (into {} (map-indexed
                         (fn [i n]
                           [(str "dl_" i)
-                           (str "(denial-line-of " (kotoba-literal (:name n)) " "
-                                (kotoba-literal (:kekkai/status n)) ")")])
+                           (str "(denial-line-of (record-new " denial-ty " "
+                                (kotoba-literal (:name n)) " "
+                                (kotoba-literal (:kekkai/status n)) "))")])
                         nodes))
         actual (compile-cases cases)]
     (doseq [[i n] (map-indexed vector nodes)]
@@ -112,8 +116,9 @@
                  "dm" "(denial-mid)"
                  "ds" "(denial-suffix)"
                  "ks" "(kekkai-dir-suffix)"
-                 "dl" (str "(denial-line-of " (kotoba-literal "judah") " "
-                           (kotoba-literal "pending") ")")})]
+                 "dl" (str "(denial-line-of (record-new " denial-ty " "
+                           (kotoba-literal "judah") " "
+                           (kotoba-literal "pending") "))")})]
     (is (= gate/status-authorized (get actual "sa")))
     (is (= "authorized" (get actual "sa")))
     (is (= gate/status-unknown (get actual "su")))

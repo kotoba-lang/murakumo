@@ -65,18 +65,26 @@
    :body (if (string=? status (status-authorized)) true false),
    :param-types [:string]}
   {:name denial-line-of,
-   :params [node-name status],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
     (denial-prefix)
     (string-concat
-     node-name
+     (record-get
+      [:record :kekkai/denial [[:name :string] [:status :string]]]
+      x
+      :name)
      (string-concat
       (denial-mid)
-      (string-concat status (denial-suffix))))),
-   :param-types [:string :string]}
+      (string-concat
+       (record-get
+        [:record :kekkai/denial [[:name :string] [:status :string]]]
+        x
+        :status)
+       (denial-suffix))))),
+   :param-types [[:ref :kekkai/denial]]}
   {:name default-kekkai-dir-under,
    :params [home],
    :result :string,
@@ -108,7 +116,9 @@
    :body "kekkai.cli",
    :param-types []}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:kekkai{:denial
+          "dd2de53409d8cb7350f647eac51a2883dc72834564a7ee92032acf01a607b7f4"},
  :exports
  [default-ledger-path
   strip-trailing-newlines
@@ -126,7 +136,11 @@
   denial-mid
   denial-suffix
   kekkai-dir-suffix],
- :schemas nil,
+ :schemas
+ #:kekkai{:denial
+          [:record
+           :kekkai/denial
+           [[:name :string] [:status :string]]]},
  :effects #{},
  :blocks [],
  :entry nil}

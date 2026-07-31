@@ -114,8 +114,13 @@
             (str "authorized? host bool " st))))
     (is (= (ir/execute live 'default-ledger-path [])
            (oracle/call :kekkai-gate 'default-ledger-path [])))
-    (is (= (ir/execute live 'denial-line-of ["x" "revoked"])
-           (oracle/call :kekkai-gate 'denial-line-of ["x" "revoked"])))
+    (let [den (oracle/record [:record :kekkai/denial
+                              [[:name :string] [:status :string]]]
+                             {:name "x" :status "revoked"})]
+      (is (= (ir/execute live 'denial-line-of [den])
+             (oracle/call :kekkai-gate 'denial-line-of [den])))
+      (is (= (oracle/call :kekkai-gate 'denial-line-of [den])
+             (gate/denial-line {:name "x" :kekkai/status "revoked"}))))
     (is (= (ir/execute live 'default-kekkai-dir-under ["/h"])
            (oracle/call :kekkai-gate 'default-kekkai-dir-under ["/h"])))
     (is (= (ir/execute live 'status-authorized [])
@@ -540,12 +545,19 @@
            (oracle/call :dash-state 'health-class-of ["ok"])))
     (is (= (ir/execute live 'interval-sleep-ms [15])
            (oracle/call :dash-state 'interval-sleep-ms [15])))
-    (is (= (ir/execute live 'clamp-at [99 3])
-           (oracle/call :dash-state 'clamp-at [99 3])))
-    (is (= (ir/execute live 'take-last-start [10 6])
-           (oracle/call :dash-state 'take-last-start [10 6])))
-    (is (= (ir/execute live 'recent-take-n [-1 6])
-           (oracle/call :dash-state 'recent-take-n [-1 6])))
+    (let [cl (oracle/record [:record :dash/clamp
+                             [[:requested-at :i64] [:history-count :i64]]]
+                            {:requested-at 99 :history-count 3})
+          tl (oracle/record [:record :dash/pair-i64 [[:a :i64] [:b :i64]]]
+                            {:a 10 :b 6})
+          rt (oracle/record [:record :dash/pair-i64 [[:a :i64] [:b :i64]]]
+                            {:a -1 :b 6})]
+      (is (= (ir/execute live 'clamp-at [cl])
+             (oracle/call :dash-state 'clamp-at [cl])))
+      (is (= (ir/execute live 'take-last-start [tl])
+             (oracle/call :dash-state 'take-last-start [tl])))
+      (is (= (ir/execute live 'recent-take-n [rt])
+             (oracle/call :dash-state 'recent-take-n [rt]))))
     (is (= (ir/execute live 'parse-links ["2"])
            (oracle/call :dash-state 'parse-links ["2"])))
     (is (= (ir/execute live 'probe-line-key ["L:9"])
@@ -575,13 +587,19 @@
            dash/default-dashboard-port))
     (is (= (oracle/call :dash-state 'short-hosted-cid-max-len [])
            dash/short-hosted-cid-max-len))
-    (is (= (ir/execute live 'join-append ["" " " "a"])
-           (oracle/call :dash-state 'join-append ["" " " "a"])))
-    (is (= (ir/execute live 'hosted-append ["bafyA" "bafyB"])
-           (oracle/call :dash-state 'hosted-append ["bafyA" "bafyB"])))
-    (is (= (oracle/call :dash-state 'hosted-append ["bafyA" "bafyB"])
-           (dash/hosted-append "bafyA" "bafyB")))
-    (is (= "bafyA bafyB" (dash/hosted-append "bafyA" "bafyB")))
+    (let [ja (oracle/record [:record :dash/join
+                             [[:acc :string] [:sep :string] [:next :string]]]
+                            {:acc "" :sep " " :next "a"})
+          ha (oracle/record [:record :dash/hosted
+                             [[:acc :string] [:next :string]]]
+                            {:acc "bafyA" :next "bafyB"})]
+      (is (= (ir/execute live 'join-append [ja])
+             (oracle/call :dash-state 'join-append [ja])))
+      (is (= (ir/execute live 'hosted-append [ha])
+             (oracle/call :dash-state 'hosted-append [ha])))
+      (is (= (oracle/call :dash-state 'hosted-append [ha])
+             (dash/hosted-append "bafyA" "bafyB")))
+      (is (= "bafyA bafyB" (dash/hosted-append "bafyA" "bafyB"))))
     (is (= (ir/execute live 'snapshot-record-type [])
            (oracle/call :dash-state 'snapshot-record-type [])))
     (is (= (oracle/call :dash-state 'snapshot-record-type [])
@@ -1271,8 +1289,11 @@
            (oracle/call :fleet-inventory 'health-url [8077])))
     (is (= (ir/execute live 'selector-is-all? [""])
            (oracle/call :fleet-inventory 'selector-is-all? [""])))
-    (is (= (ir/execute live 'selector-wants-name? ["a,c" "a"])
-           (oracle/call :fleet-inventory 'selector-wants-name? ["a,c" "a"])))
+    (let [sw (oracle/record [:record :fleet/selector-name
+                             [[:sel :string] [:name :string]]]
+                            {:sel "a,c" :name "a"})]
+      (is (= (ir/execute live 'selector-wants-name? [sw])
+             (oracle/call :fleet-inventory 'selector-wants-name? [sw]))))
     (is (= (ir/execute live 'line-has-offline? ["x offline y"])
            (oracle/call :fleet-inventory 'line-has-offline? ["x offline y"])))
     (is (= (ir/execute live 'selector-all [])
