@@ -6,6 +6,22 @@
             [murakumo.infer.rebalance :as rb]))
 
 (def port-source (slurp "kotoba/infer_rebalance_core.kotoba"))
+
+(def ^:private rebal-pair-lit
+  "[:record :rebalance/pair [[:a :i64] [:b :i64]]]")
+(def ^:private rebal-triple-lit
+  "[:record :rebalance/triple [[:a :i64] [:b :i64] [:c :i64]]]")
+(def ^:private seats-in-lit
+  "[:record :rebalance/seats-in [[:total :i64] [:text-w :i64] [:media-w :i64] [:postproc-w :i64] [:floor :i64]]]")
+
+(defn- rebal-pair-call [export a b]
+  (str "(" export " (record-new " rebal-pair-lit " " a " " b "))"))
+
+(defn- rebal-pair-bool [export a b]
+  (str "(if " (rebal-pair-call export a b) " 1 0)"))
+
+(defn- rebal-triple-call [export a b c]
+  (str "(" export " (record-new " rebal-triple-lit " " a " " b " " c "))"))
 (def export-prefix
   (str "shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class "
        "seats-of-text seats-of-media seats-of-postproc seats-total "
@@ -150,16 +166,20 @@
         (is (= cljc got) (str label " cljc=" cljc " kotoba=" got))))))
 
 (deftest pool-seats-of-composes-largest-remainder
-  (let [lanes (fn [prefix total demand]
+  (let [;; demand class counts → pool weights (text, media=img+vid+aud, postproc)
+        pool-w (fn [t i v a p] [t (+ i v a) p])
+        lanes (fn [prefix total tw mw pw]
                 (into {} (map (fn [[k lane]]
                                 [(str prefix "-" (name k))
-                                 (str "(pool-seats-of-" lane " " total
-                                      " (pool-demand-record " demand ") 1)")])
+                                 (seats-in-call (str "pool-seats-of-" lane)
+                                                total tw mw pw 1)])
                               {:t "text" :m "media" :p "postproc"})))
+        [t1 m1 p1] (pool-w 5 2 1 0 3)
+        [t2 m2 p2] (pool-w 1 1 0 0 1)
         actual (compile-i64-cases
-                (merge (lanes "s1" 10 "5 2 1 0 3")
-                       (lanes "s2" 7 "1 1 0 0 1")
-                       (lanes "s3" 0 "5 2 1 0 3")))
+                (merge (lanes "s1" 10 t1 m1 p1)
+                       (lanes "s2" 7 t2 m2 p2)
+                       (lanes "s3" 0 t1 m1 p1)))
         got (fn [prefix] {:text-pool (get actual (str prefix "-t"))
                           :media-pool (get actual (str prefix "-m"))
                           :postproc-pool (get actual (str prefix "-p"))})]
@@ -260,19 +280,19 @@
                 {"w0" "(workers-count 0)"
                  "w1" "(workers-count 1)"
                  "w4" "(workers-count 4)"
-                 "eq1" "(seats-equal 10 10)"
-                 "eq0" "(seats-equal 10 11)"
-                 "pipe" "(pipeline-effective-gb 10 3)"
+                 "eq1" (rebal-pair-call "seats-equal" 10 10)
+                 "eq0" (rebal-pair-call "seats-equal" 10 11)
+                 "pipe" (rebal-pair-call "pipeline-effective-gb" 10 3)
                  "asg" (seats-in-call "seats-total" 4 2 1 1 1)
-                 "mn0" "(if (move-needed 0 0) 1 0)"
-                 "mn1" "(if (move-needed 0 1) 1 0)"
-                 "rc0" "(rebalance-reason-code 3 0)"
-                 "rc1" "(rebalance-reason-code 0 0)"
-                 "rc2" "(rebalance-reason-code 3 2)"
+                 "mn0" (rebal-pair-bool "move-needed" 0 0)
+                 "mn1" (rebal-pair-bool "move-needed" 0 1)
+                 "rc0" (rebal-pair-call "rebalance-reason-code" 3 0)
+                 "rc1" (rebal-pair-call "rebalance-reason-code" 0 0)
+                 "rc2" (rebal-pair-call "rebalance-reason-code" 3 2)
                  ;; seats-for-online-*: 4 online → 3 workers; demand 5/2/0/0/1 → pool 5,2,1
-                 "sfo-t" "(seats-for-online-text 4 (pool-demand-record 5 2 0 0 1) 1)"
-                 "sfo-m" "(seats-for-online-media 4 (pool-demand-record 5 2 0 0 1) 1)"
-                 "sfo-p" "(seats-for-online-postproc 4 (pool-demand-record 5 2 0 0 1) 1)"})
+                 "sfo-t" (seats-in-call "seats-for-online-text" 4 5 2 1 1)
+                 "sfo-m" (seats-in-call "seats-for-online-media" 4 5 2 1 1)
+                 "sfo-p" (seats-in-call "seats-for-online-postproc" 4 5 2 1 1)})
         lr @(var murakumo.infer.rebalance/largest-remainder)
         expected-seats (lr 3 (rb/pool-demand {:text 5 :image 2 :video 0 :audio 0 :postproc 1}) 1)]
     (is (= 0 (get actual "w0")))
@@ -301,9 +321,9 @@
                {"n0" "(rebalance-reason-name 0)"
                 "n1" "(rebalance-reason-name 1)"
                 "n2" "(rebalance-reason-name 2)"
-                "d2" "(rebalance-reason-detail 2 3)"
-                "d0" "(rebalance-reason-detail 0 0)"
-                "pn" "(pipeline-note 3 10)"})]
+                "d2" (rebal-pair-call "rebalance-reason-detail" 2 3)
+                "d0" (rebal-pair-call "rebalance-reason-detail" 0 0)
+                "pn" (rebal-pair-call "pipeline-note" 3 10)})]
     (is (= 1 (get online "up")))
     (is (= 0 (get online "down")))
     (is (= 0 (get online "empty")))
@@ -329,10 +349,10 @@
                  "e0" "(order-nth (seat-order-record 2 2 2) 0)"
                  "e1" "(order-nth (seat-order-record 2 2 2) 1)"
                  "e2" "(order-nth (seat-order-record 2 2 2) 2)"
-                 "te" "(take-end 0 2 5)"
-                 "te2" "(take-end 2 3 5)"
-                 "te3" "(take-end 4 3 5)"
-                 "tc" "(take-count 0 2)"
+                 "te" (rebal-triple-call "take-end" 0 2 5)
+                 "te2" (rebal-triple-call "take-end" 2 3 5)
+                 "te3" (rebal-triple-call "take-end" 4 3 5)
+                 "tc" (rebal-pair-call "take-count" 0 2)
                  "pc" (str "(pool-code \"media-pool\")")
                  "pc2" (str "(pool-code \"text-pool\")")})
         names (compile-string-cases

@@ -17,7 +17,11 @@
                                     [:video [:option :string]]
                                     [:audio [:option :string]]
                                     [:swarm [:option :string]]
-                                    [:tokens [:option :string]]]]})
+                                    [:tokens [:option :string]]]]
+             ;; T5.2 residual multi-arg pure → single guest records
+             :rebalance/pair [:record :rebalance/pair [[:a :i64] [:b :i64]]]
+             :rebalance/triple [:record :rebalance/triple
+                                [[:a :i64] [:b :i64] [:c :i64]]]})
   (:export [shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class
             seats-of-text seats-of-media seats-of-postproc seats-total
             pool-demand-record pool-weight-text pool-weight-media pool-weight-postproc
@@ -255,25 +259,35 @@
 
 ;; Compose the seat apportionment over pool-weight lanes (record).
 
-(defn pool-seats-of-text [total :i64 w [:ref :rebalance/lanes] floor :i64] :i64
+(defn pool-seats-of-text [s [:ref :rebalance/seats-in]] :i64
+  ;; T5.2 residual: same shape as seats-of-* inputs.
   (record-get [:record :rebalance/lanes
                [[:text :i64] [:media :i64] [:postproc :i64]]]
-              (seats-record total (record-get w :text) (record-get w :media)
-                            (record-get w :postproc) floor)
+              (seats-record (record-get s :total)
+                            (record-get s :text-w)
+                            (record-get s :media-w)
+                            (record-get s :postproc-w)
+                            (record-get s :floor))
               :text))
 
-(defn pool-seats-of-media [total :i64 w [:ref :rebalance/lanes] floor :i64] :i64
+(defn pool-seats-of-media [s [:ref :rebalance/seats-in]] :i64
   (record-get [:record :rebalance/lanes
                [[:text :i64] [:media :i64] [:postproc :i64]]]
-              (seats-record total (record-get w :text) (record-get w :media)
-                            (record-get w :postproc) floor)
+              (seats-record (record-get s :total)
+                            (record-get s :text-w)
+                            (record-get s :media-w)
+                            (record-get s :postproc-w)
+                            (record-get s :floor))
               :media))
 
-(defn pool-seats-of-postproc [total :i64 w [:ref :rebalance/lanes] floor :i64] :i64
+(defn pool-seats-of-postproc [s [:ref :rebalance/seats-in]] :i64
   (record-get [:record :rebalance/lanes
                [[:text :i64] [:media :i64] [:postproc :i64]]]
-              (seats-record total (record-get w :text) (record-get w :media)
-                            (record-get w :postproc) floor)
+              (seats-record (record-get s :total)
+                            (record-get s :text-w)
+                            (record-get s :media-w)
+                            (record-get s :postproc-w)
+                            (record-get s :floor))
               :postproc))
 
 (defn classify-run-flags [x [:ref :rebalance/run-flags]] :i64
@@ -352,40 +366,63 @@
 ;; pure core of target-allocation seat step (node id assignment stays cljc).
 ;; T5.3: three scalar lanes instead of one seat pack.
 
-(defn seats-for-online-text [online :i64 w [:ref :rebalance/lanes] floor :i64] :i64
-  (pool-seats-of-text (workers-count online) w floor))
+(defn seats-for-online-text [s [:ref :rebalance/seats-in]] :i64
+  ;; T5.2: online is projected into :total by host (or use workers-count of online field).
+  ;; Here :total is treated as the online worker count input (host passes online).
+  (pool-seats-of-text
+   (record-new [:ref :rebalance/seats-in]
+               (workers-count (record-get s :total))
+               (record-get s :text-w)
+               (record-get s :media-w)
+               (record-get s :postproc-w)
+               (record-get s :floor))))
 
-(defn seats-for-online-media [online :i64 w [:ref :rebalance/lanes] floor :i64] :i64
-  (pool-seats-of-media (workers-count online) w floor))
+(defn seats-for-online-media [s [:ref :rebalance/seats-in]] :i64
+  (pool-seats-of-media
+   (record-new [:ref :rebalance/seats-in]
+               (workers-count (record-get s :total))
+               (record-get s :text-w)
+               (record-get s :media-w)
+               (record-get s :postproc-w)
+               (record-get s :floor))))
 
-(defn seats-for-online-postproc [online :i64 w [:ref :rebalance/lanes] floor :i64] :i64
-  (pool-seats-of-postproc (workers-count online) w floor))
+(defn seats-for-online-postproc [s [:ref :rebalance/seats-in]] :i64
+  (pool-seats-of-postproc
+   (record-new [:ref :rebalance/seats-in]
+               (workers-count (record-get s :total))
+               (record-get s :text-w)
+               (record-get s :media-w)
+               (record-get s :postproc-w)
+               (record-get s :floor))))
 
-(defn seats-equal [a :i64 b :i64] :i64
+(defn seats-equal [p [:ref :rebalance/pair]] :i64
   ;; hysteresis: seat allocation unchanged?
-  (if (= a b) 1 0))
+  (if (= (record-get p :a) (record-get p :b)) 1 0))
 
-(defn pipeline-effective-gb [usable-gb :i64 text-seats :i64] :i64
+(defn pipeline-effective-gb [p [:ref :rebalance/pair]] :i64
   ;; cljc: (* usable text-n) for text pool pipeline
-  (* usable-gb text-seats))
+  ;; T5.2: a=usable-gb b=text-seats
+  (* (record-get p :a) (record-get p :b)))
 
 (defn node-online? [status :string] :bool
   ;; capacity filter: status "up" only
   (if (string=? status "up") true false))
 
-(defn move-needed [from-pool :i64 to-pool :i64] :bool
+(defn move-needed [p [:ref :rebalance/pair]] :bool
   ;; pool codes 0=text 1=media 2=postproc; one node placement diff
-  (if (= from-pool to-pool) false true))
+  ;; T5.2: a=from-pool b=to-pool
+  (if (= (record-get p :a) (record-get p :b)) false true))
 
 ;; assigned-from-seats replaced by `seats-total` (T5.3) — it took a seat pack.
 
-(defn rebalance-reason-code [assigned-count :i64 move-count :i64] :i64
+(defn rebalance-reason-code [p [:ref :rebalance/pair]] :i64
   ;; 0 stable, 1 initial placement, 2 demand-shift
-  ;; (cljc checks empty current assignment; empty? of missing nodes-of is always true
-  ;;  in current source — intended semantics: no assigned nodes ⇒ initial)
-  (if (= assigned-count 0)
-    1
-    (if (< 0 move-count) 2 0)))
+  ;; T5.2: a=assigned-count b=move-count
+  (let [assigned-count (record-get p :a)
+        move-count (record-get p :b)]
+    (if (= assigned-count 0)
+      1
+      (if (< 0 move-count) 2 0))))
 
 (defn rebalance-reason-name [code :i64] :string
   (if (= code 1)
@@ -453,30 +490,38 @@
       (record-get ord :i1)
       (record-get ord :i2))))
 
-(defn take-end [start :i64 k :i64 remaining :i64] :i64
+(defn take-end [t [:ref :rebalance/triple]] :i64
   ;; exclusive end index for (take k rem) from start within [0, remaining)
-  (min2 remaining (+ start k)))
+  ;; T5.2: a=start b=k c=remaining
+  (min2 (record-get t :c) (+ (record-get t :a) (record-get t :b))))
 
-(defn take-count [start :i64 end :i64] :i64
-  (max2 0 (- end start)))
+(defn take-count [p [:ref :rebalance/pair]] :i64
+  ;; T5.2: a=start b=end
+  (max2 0 (- (record-get p :b) (record-get p :a))))
 
-(defn pipeline-note [text-n :i64 usable :i64] :string
+(defn pipeline-note [p [:ref :rebalance/pair]] :string
   ;; cljc target-allocation pipeline :note
-  (string-concat
-   "text pool sharded as a "
-   (string-concat
-    (i64-str text-n)
+  ;; T5.2: a=text-n b=usable
+  (let [text-n (record-get p :a)
+        usable (record-get p :b)]
     (string-concat
-     "-way pipeline (~"
+     "text pool sharded as a "
      (string-concat
-      (i64-str (* usable text-n))
+      (i64-str text-n)
       (string-concat
-       "GB effective, ceiling "
-       (string-concat (i64-str (shard-ceiling-gb)) "GB/node)")))))))
+       "-way pipeline (~"
+       (string-concat
+        (i64-str (* usable text-n))
+        (string-concat
+         "GB effective, ceiling "
+         (string-concat (i64-str (shard-ceiling-gb)) "GB/node)"))))))))
 
-(defn rebalance-reason-detail [code :i64 move-count :i64] :string
+(defn rebalance-reason-detail [p [:ref :rebalance/pair]] :string
   ;; cljc: (str (count moves) " node(s) re-placed by demand shift")
-  (if (= code 2)
-    (string-concat (i64-str move-count) " node(s) re-placed by demand shift")
-    (rebalance-reason-name code)))
+  ;; T5.2: a=code b=move-count
+  (let [code (record-get p :a)
+        move-count (record-get p :b)]
+    (if (= code 2)
+      (string-concat (i64-str move-count) " node(s) re-placed by demand shift")
+      (rebalance-reason-name code))))
 
