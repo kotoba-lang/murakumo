@@ -25,6 +25,43 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private mesh-schema
+  [:record :report/mesh [[:binary :string] [:launch :string]]])
+(def ^:private pair-str-schema
+  [:record :report/pair-str [[:a :string] [:b :string]]])
+(def ^:private triple-str-schema
+  [:record :report/triple-str [[:a :string] [:b :string] [:c :string]]])
+(def ^:private pad-schema
+  [:record :report/pad [[:s :string] [:pad :i64]]])
+(def ^:private pad-to-schema
+  [:record :report/pad-to [[:s :string] [:width :i64]]])
+(def ^:private count-file-schema
+  [:record :report/count-file [[:count :i64] [:peers-file :string]]])
+(def ^:private name-ok-schema
+  [:record :report/name-ok [[:name :string] [:ok :bool]]])
+(def ^:private name-exit-schema
+  [:record :report/name-exit [[:name :string] [:exit-str :string]]])
+(def ^:private ports-schema
+  [:record :report/ports [[:port :i64] [:interval :i64]]])
+(def ^:private nodes-row-schema
+  [:record :report/nodes-row
+   [[:name :string] [:ip :string] [:online :bool] [:ssh-ok :bool] [:mesh :string]]])
+(def ^:private title-schema
+  [:record :report/title [[:fleet :string] [:ts :string]]])
+(def ^:private cid-schema
+  [:record :report/cid [[:cid :string] [:present :bool]]])
+(def ^:private action-detail-schema
+  [:record :report/action-detail
+   [[:action :string] [:targets :string] [:running :string]
+    [:running-empty :bool] [:reason :string]]])
+(def ^:private app-row-schema
+  [:record :report/app-row
+   [[:app :string] [:cid :string] [:desired :i64] [:running-n :i64] [:action :string]]])
+(def ^:private join-schema
+  [:record :report/join [[:acc :string] [:sep :string] [:next :string]]])
+(def ^:private csv-schema
+  [:record :report/csv [[:acc :string] [:next :string]]])
+
 ;; ── constants (oracle SSoT) ────────────────────────────────────────────
 
 (def report-csv-sep
@@ -45,27 +82,30 @@
 
 (defn join-append
   "CSV-style fold step: empty acc ⇒ next only. Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [acc sep next]
   (o-record 'join-append
-            {:acc (or acc "") :sep sep :next next}
-            [[:acc :string] [:sep :string] [:next :string]]))
+            {:j (oracle/record join-schema
+                               {:acc (or acc "") :sep sep :next next})}
+            [[:j :raw]]))
 
 (defn csv-append
   "Append one CSV cell (comma sep). Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [acc next]
   (o-record 'csv-append
-            {:acc (or acc "") :next next}
-            [[:acc :string] [:next :string]]))
+            {:c (oracle/record csv-schema
+                               {:acc (or acc "") :next next})}
+            [[:c :raw]]))
 
 (defn csv-spaced-append
   "Append one CSV cell (comma+space sep). Kotoba (required).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [acc next]
   (o-record 'csv-spaced-append
-            {:acc (or acc "") :next next}
-            [[:acc :string] [:next :string]]))
+            {:c (oracle/record csv-schema
+                               {:acc (or acc "") :next next})}
+            [[:c :raw]]))
 
 (defn csv-join
   "Join items with report-csv-sep via csv-append fold."
@@ -88,27 +128,25 @@
 
 (defn nodes-row
   "Format one `murakumo nodes` row (oracle nodes-row + host projection).
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [node ssh-ok mesh]
   (o-record 'nodes-row
-            {:name (:name node)
-             :ip (or (:ip node) "?")
-             :online? (boolean (:online? node))
-             :ssh-ok (boolean ssh-ok)
-             :mesh mesh}
-            [[:name :string]
-             [:ip :string]
-             [:online? :bool]
-             [:ssh-ok :bool]
-             [:mesh :string]]))
+            {:r (oracle/record nodes-row-schema
+                               {:name (:name node)
+                                :ip (or (:ip node) "?")
+                                :online (boolean (:online? node))
+                                :ssh-ok (boolean ssh-ok)
+                                :mesh mesh})}
+            [[:r :raw]]))
 
 (defn mesh-status
   "Render installed/running probe outputs into a compact mesh status.
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [binary-status launch-status]
   (o-record 'mesh-status
-            {:binary binary-status :launch launch-status}
-            [[:binary :string] [:launch :string]]))
+            {:m (oracle/record mesh-schema
+                               {:binary binary-status :launch launch-status})}
+            [[:m :raw]]))
 
 (defn status-header []
   (o 'status-header []))
@@ -145,13 +183,14 @@
   (status-row node health-json links p2p-port))
 
 (defn deploy-observed-row
-  "T5.2: structural map → call-record for placed line."
+  "T5.2: native guest record wire for placed line."
   [where publish-node]
   (if (seq where)
     (o-record 'deploy-observed-placed-line
-              {:where (csv-spaced-join where)
-               :publish-node (:name publish-node)}
-              [[:where :string] [:publish-node :string]])
+              {:p (oracle/record pair-str-schema
+                                 {:a (csv-spaced-join where)
+                                  :b (:name publish-node)})}
+              [[:p :raw]])
     (o 'deploy-observed-empty-line [])))
 
 (defn node-prefix
@@ -173,38 +212,41 @@
 
 (defn launch-result-line
   "Format one launchctl up/down result row.
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [node result]
   (o-record 'launch-result-line
-            {:name (:name node) :exit (:exit result)}
-            [[:name :string] [:exit :string]]))
+            {:p (oracle/record name-exit-schema
+                               {:name (:name node)
+                                :exit-str (str (:exit result))})}
+            [[:p :raw]]))
 
 (defn missing-pinned-binaries-lines
-  "T5.2: structural map → call-record for line1."
+  "T5.2: native guest record wire for line1."
   [build-manifest]
   [(o-record 'missing-pinned-binaries-line1
-             {:version (:version build-manifest)
-              :git-sha (:git-sha build-manifest)}
-             [[:version :string] [:git-sha :string]])
+             {:p (oracle/record pair-str-schema
+                                {:a (:version build-manifest)
+                                 :b (:git-sha build-manifest)})}
+             [[:p :raw]])
    (o 'missing-pinned-binaries-line2 [])])
 
 (defn rollout-line
-  "T5.2: structural map → call-record."
+  "T5.2: native guest record wire."
   [build-manifest]
   (o-record 'rollout-line
-            {:version (:version build-manifest)
-             :git-sha (:git-sha build-manifest)
-             :features (:features build-manifest)}
-            [[:version :string]
-             [:git-sha :string]
-             [:features :string]]))
+            {:p (oracle/record triple-str-schema
+                               {:a (:version build-manifest)
+                                :b (:git-sha build-manifest)
+                                :c (:features build-manifest)})}
+            [[:p :raw]]))
 
 (defn collected-peers-line
-  "T5.2: structural map → call-record."
+  "T5.2: native guest record wire."
   [count peers-file]
   (o-record 'collected-peers-line
-            {:count count :peers-file peers-file}
-            [[:count :i64] [:peers-file :string]]))
+            {:p (oracle/record count-file-schema
+                               {:count count :peers-file peers-file})}
+            [[:p :raw]]))
 
 (def mesh-pass1-line
   (o 'mesh-pass1-line []))
@@ -219,32 +261,37 @@
   (o 'mesh-forming-line []))
 
 (defn artifact-node-status
-  "T5.2: structural map → call-record."
+  "T5.2: native guest record wire."
   [node result]
   (o-record 'artifact-node-status
-            {:name (:name node) :ok? (zero? (:exit result))}
-            [[:name :string] [:ok? :bool]]))
+            {:p (oracle/record name-ok-schema
+                               {:name (:name node)
+                                :ok (zero? (:exit result))})}
+            [[:p :raw]]))
 
 (defn deploy-start-line
-  "T5.2: structural map → call-record."
+  "T5.2: native guest record wire."
   [manifest cid]
   (o-record 'deploy-start-line
-            {:manifest manifest :cid cid}
-            [[:manifest :string] [:cid :string]]))
+            {:p (oracle/record pair-str-schema
+                               {:a manifest :b cid})}
+            [[:p :raw]]))
 
 (defn deploy-command-output
-  "T5.2: structural map → call-record."
+  "T5.2: native guest record wire."
   [out err]
   (o-record 'deploy-command-output
-            {:out out :err err}
-            [[:out :string] [:err :string]]))
+            {:p (oracle/record pair-str-schema
+                               {:a (str out) :b (str err)})}
+            [[:p :raw]]))
 
 (defn pin-success-line
-  "T5.2: structural map → call-record."
+  "T5.2: native guest record wire."
   [src sha version]
   (o-record 'pin-success-line
-            {:src src :sha sha :version version}
-            [[:src :string] [:sha :string] [:version :string]]))
+            {:p (oracle/record triple-str-schema
+                               {:a src :b sha :c version})}
+            [[:p :raw]]))
 
 (defn missing-binary-line
   "T5.2: structural map → call-record."
@@ -257,13 +304,14 @@
   (o 'deploy-wait-placement-line []))
 
 (defn alert-line
-  "T5.2: structural map → call-record."
+  "T5.2: native guest record wire."
   [alert]
   (o-record 'alert-line
-            {:level (:level alert)
-             :node (:node alert)
-             :msg (:msg alert)}
-            [[:level :string] [:node :string] [:msg :string]]))
+            {:p (oracle/record triple-str-schema
+                               {:a (str (:level alert))
+                                :b (str (:node alert))
+                                :c (str (:msg alert))})}
+            [[:p :raw]]))
 
 (defn snapshot-error-line
   "T5.2: structural map → call-record."
@@ -280,18 +328,20 @@
             [[:message :string]]))
 
 (defn dashboard-start-line
-  "T5.2: structural map → call-record."
+  "T5.2: native guest record wire."
   [port interval]
   (o-record 'dashboard-start-line
-            {:port port :interval interval}
-            [[:port :i64] [:interval :i64]]))
+            {:p (oracle/record ports-schema
+                               {:port port :interval interval})}
+            [[:p :raw]]))
 
 (defn apply-target-line
-  "T5.2: structural map → call-record."
+  "T5.2: native guest record wire."
   [app target]
   (o-record 'apply-target-line
-            {:app (:app app) :target target}
-            [[:app :string] [:target :string]]))
+            {:p (oracle/record pair-str-schema
+                               {:a (:app app) :b target})}
+            [[:p :raw]]))
 
 (defn watch-start-line
   "T5.2: structural map → call-record."
@@ -314,11 +364,12 @@
 
 (defn command-error-line
   "Render a validation error keyword for a command.
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [command error]
   (o-record 'command-error-line
-            {:command (name command) :error (name error)}
-            [[:command :string] [:error :string]]))
+            {:p (oracle/record pair-str-schema
+                               {:a (name command) :b (name error)})}
+            [[:p :raw]]))
 
 (def dashboard-no-persistence-line
   (o 'dashboard-no-persistence-line []))
@@ -338,25 +389,27 @@
   "Left-align field via oracle pad-right; host supplies remaining pad from
   Clojure string count (not UTF-8 byte-length) so multi-byte glyphs like
   em-dash CID placeholder keep layout parity.
-   T5.2: structural map → call-record."
+   T5.2: native guest record wire."
   [s width]
   (let [s (str s)
         pad (max 0 (- width (count s)))]
     (o-record 'pad-right
-              {:s s :pad pad}
-              [[:s :string] [:pad :i64]])))
+              {:p (oracle/record pad-schema {:s s :pad pad})}
+              [[:p :raw]])))
 
 (defn- fmt-cid
-  "T5.2: structural map → call-record."
+  "T5.2: native guest record wire."
   [cid]
   (if cid
     (o-record 'cid-display
-              {:cid (subs cid 0 (min cid-display-max-len (count cid)))
-               :present? true}
-              [[:cid :string] [:present? :bool]])
+              {:p (oracle/record cid-schema
+                                 {:cid (subs cid 0 (min cid-display-max-len (count cid)))
+                                  :present true})}
+              [[:p :raw]])
     (o-record 'cid-display
-              {:cid "" :present? false}
-              [[:cid :string] [:present? :bool]])))
+              {:p (oracle/record cid-schema
+                                 {:cid "" :present false})}
+              [[:p :raw]])))
 
 (defn reconcile-lines
   "Render a reconcile plan as operator table lines.
@@ -364,9 +417,10 @@
    apps and CSV-joins targets/running/reach/misplaced via csv-append fold steps."
   [plan]
   (let [title (o-record 'reconcile-title
-                        {:fleet (or (:fleet plan) "fleet")
-                         :ts (:ts plan)}
-                        [[:fleet :string] [:ts :string]])
+                        {:p (oracle/record title-schema
+                                           {:fleet (or (:fleet plan) "fleet")
+                                            :ts (:ts plan)})}
+                        [[:p :raw]])
         col (o 'reconcile-col-header [])]
     (vec
      (concat
@@ -379,38 +433,34 @@
                running-empty (empty? (:running app))
                reason (str (or (:reason app) ""))
                detail (o-record 'action-detail
-                                {:action action
-                                 :targets targets-csv
-                                 :running running-csv
-                                 :running-empty running-empty
-                                 :reason reason}
-                                [[:action :string]
-                                 [:targets :string]
-                                 [:running :string]
-                                 [:running-empty :bool]
-                                 [:reason :string]])
+                                {:p (oracle/record action-detail-schema
+                                                   {:action action
+                                                    :targets targets-csv
+                                                    :running running-csv
+                                                    :running-empty running-empty
+                                                    :reason reason})}
+                                [[:p :raw]])
                app14 (pad-field (:app app) 14)
                cid10 (pad-field (fmt-cid (:cid app)) 10)
                act9 (pad-field action 9)
                front (o-record 'reconcile-app-row
-                               {:app app14
-                                :cid cid10
-                                :desired (:desired app)
-                                :running-n (count (:running app))
-                                :action act9}
-                               [[:app :string]
-                                [:cid :string]
-                                [:desired :i64]
-                                [:running-n :i64]
-                                [:action :string]])
+                               {:r (oracle/record app-row-schema
+                                                  {:app app14
+                                                   :cid cid10
+                                                   :desired (:desired app)
+                                                   :running-n (count (:running app))
+                                                   :action act9})}
+                               [[:r :raw]])
                base [(o-record 'reconcile-app-line
-                               {:front front :detail detail}
-                               [[:front :string] [:detail :string]])]
+                               {:p (oracle/record pair-str-schema
+                                                  {:a front :b detail})}
+                               [[:p :raw]])]
                reach (when (seq (:reach app))
                        [(o-record 'reach-line
-                                  {:reach (csv-join (map str (:reach app)))
-                                   :eligible (csv-join (:eligible app))}
-                                  [[:reach :string] [:eligible :string]])])
+                                  {:p (oracle/record pair-str-schema
+                                                     {:a (csv-join (map str (:reach app)))
+                                                      :b (csv-join (:eligible app))})}
+                                  [[:p :raw]])])
                misplaced (when (seq (:misplaced app))
                            [(o-record 'drift-line
                                       {:misplaced (csv-join (:misplaced app))}
