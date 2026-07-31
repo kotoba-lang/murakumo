@@ -215,12 +215,23 @@
          s)))))),
    :param-types [:string]}
   {:name parse-digits-go,
-   :params [s acc],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
-    [n (string-byte-length s)]
+    [s
+     (record-get
+      [:record :tunnel/digits-go [[:s :string] [:acc :i64]]]
+      x
+      :s)
+     acc
+     (record-get
+      [:record :tunnel/digits-go [[:s :string] [:acc :i64]]]
+      x
+      :acc)
+     n
+     (string-byte-length s)]
     (if
      (= n 0)
      acc
@@ -229,8 +240,12 @@
       (if
        (< d 0)
        -1
-       (parse-digits-go (string-substring s 1 n) (+ (* acc 10) d)))))),
-   :param-types [:string :i64]}
+       (parse-digits-go
+        (record-new
+         [:record :tunnel/digits-go [[:s :string] [:acc :i64]]]
+         (string-substring s 1 n)
+         (+ (* acc 10) d))))))),
+   :param-types [[:ref :tunnel/digits-go]]}
   {:name parse-digits,
    :params [s],
    :result :i64,
@@ -238,7 +253,14 @@
    :body
    (let
     [t (trim-ws s) n (string-byte-length t)]
-    (if (= n 0) -1 (parse-digits-go t 0))),
+    (if
+     (= n 0)
+     -1
+     (parse-digits-go
+      (record-new
+       [:record :tunnel/digits-go [[:s :string] [:acc :i64]]]
+       t
+       0)))),
    :param-types [:string]}
   {:name pick-exit,
    :params [e],
@@ -557,14 +579,16 @@
    :param-types [:string]}],
  :oracle-value nil,
  :schema-identities
- #:tunnel{:exit
-          "f24afe35489d28d1d45ccef40862d3447b18ab27567ad36128f8b6c4ef902d3c",
+ #:tunnel{:digits-go
+          "577145ad237d6a0bf44c4905342001104084add098b10ac721241380e099a4b1",
+          :exit
+          "2f65eff63ed3a0037638789339ad504f787f7ec16190933ab4ec0b4dbe10b7fb",
           :forward
-          "e1143e7f9aa95952a3e6341eb49e82a17b79d89bff0570180b9833c2c4dc03b4",
+          "e6d451fba07021cb80f3feb9f79bad83d72b2dd2339067ea088e8e17d0ac06f6",
           :ports
-          "d9ede3522a130dc0a089aadfcc949ec4d55a22882fb074031982a484d2ed4345",
+          "57d6cb519c1879dbab0595ed5e350a5f96ea96e085caa68b243aa6631cdf1b65",
           :scp
-          "b090c4622d834a8d5c6411c24ee837eed3ee7b38408d64ce605ba856023d4781"},
+          "69bd7ce6ccfd6f7f7e3ea726c6867999676d0f6234ccc3f67c3fe94d9c155a46"},
  :exports
  [default-connect-timeout-s
   default-control-persist-s
@@ -624,7 +648,9 @@
           :exit
           [:record
            :tunnel/exit
-           [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]]},
+           [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]],
+          :digits-go
+          [:record :tunnel/digits-go [[:s :string] [:acc :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

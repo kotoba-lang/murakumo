@@ -891,72 +891,123 @@
    :body (if (is-flag-dash? a) false true),
    :param-types [:string]}
   {:name flag-value-after,
-   :params [a prefix-len],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (let
-    [n (string-byte-length a)]
+    [a
+     (record-get
+      [:record :cloud/flag-after [[:a :string] [:prefix-len :i64]]]
+      x
+      :a)
+     prefix-len
+     (record-get
+      [:record :cloud/flag-after [[:a :string] [:prefix-len :i64]]]
+      x
+      :prefix-len)
+     n
+     (string-byte-length a)]
     (if (< n prefix-len) "" (string-substring a prefix-len n))),
-   :param-types [:string :i64]}
+   :param-types [[:ref :cloud/flag-after]]}
   {:name flag-cloud-value,
    :params [a],
    :result :string,
    :effects #{},
-   :body (flag-value-after a (string-byte-length (flag-cloud-prefix))),
+   :body
+   (flag-value-after
+    (record-new
+     [:record :cloud/flag-after [[:a :string] [:prefix-len :i64]]]
+     a
+     (string-byte-length (flag-cloud-prefix)))),
    :param-types [:string]}
   {:name flag-fleet-value,
    :params [a],
    :result :string,
    :effects #{},
-   :body (flag-value-after a (string-byte-length (flag-fleet-prefix))),
+   :body
+   (flag-value-after
+    (record-new
+     [:record :cloud/flag-after [[:a :string] [:prefix-len :i64]]]
+     a
+     (string-byte-length (flag-fleet-prefix)))),
    :param-types [:string]}
   {:name flag-target-value,
    :params [a],
    :result :string,
    :effects #{},
    :body
-   (flag-value-after a (string-byte-length (flag-target-prefix))),
+   (flag-value-after
+    (record-new
+     [:record :cloud/flag-after [[:a :string] [:prefix-len :i64]]]
+     a
+     (string-byte-length (flag-target-prefix)))),
    :param-types [:string]}
   {:name flag-from-value,
    :params [a],
    :result :string,
    :effects #{},
-   :body (flag-value-after a (string-byte-length (flag-from-prefix))),
+   :body
+   (flag-value-after
+    (record-new
+     [:record :cloud/flag-after [[:a :string] [:prefix-len :i64]]]
+     a
+     (string-byte-length (flag-from-prefix)))),
    :param-types [:string]}
   {:name flag-to-value,
    :params [a],
    :result :string,
    :effects #{},
-   :body (flag-value-after a (string-byte-length (flag-to-prefix))),
+   :body
+   (flag-value-after
+    (record-new
+     [:record :cloud/flag-after [[:a :string] [:prefix-len :i64]]]
+     a
+     (string-byte-length (flag-to-prefix)))),
    :param-types [:string]}
   {:name flag-capability-value,
    :params [a],
    :result :string,
    :effects #{},
    :body
-   (flag-value-after a (string-byte-length (flag-capability-prefix))),
+   (flag-value-after
+    (record-new
+     [:record :cloud/flag-after [[:a :string] [:prefix-len :i64]]]
+     a
+     (string-byte-length (flag-capability-prefix)))),
    :param-types [:string]}
   {:name flag-driver-value,
    :params [a],
    :result :string,
    :effects #{},
    :body
-   (flag-value-after a (string-byte-length (flag-driver-prefix))),
+   (flag-value-after
+    (record-new
+     [:record :cloud/flag-after [[:a :string] [:prefix-len :i64]]]
+     a
+     (string-byte-length (flag-driver-prefix)))),
    :param-types [:string]}
   {:name flag-format-value,
    :params [a],
    :result :string,
    :effects #{},
    :body
-   (flag-value-after a (string-byte-length (flag-format-prefix))),
+   (flag-value-after
+    (record-new
+     [:record :cloud/flag-after [[:a :string] [:prefix-len :i64]]]
+     a
+     (string-byte-length (flag-format-prefix)))),
    :param-types [:string]}
   {:name flag-auth-key-value,
    :params [a],
    :result :string,
    :effects #{},
    :body
-   (flag-value-after a (string-byte-length (flag-auth-key-prefix))),
+   (flag-value-after
+    (record-new
+     [:record :cloud/flag-after [[:a :string] [:prefix-len :i64]]]
+     a
+     (string-byte-length (flag-auth-key-prefix)))),
    :param-types [:string]}
   {:name node-record-type,
    :params [],
@@ -1021,33 +1072,35 @@
  :oracle-value nil,
  :schema-identities
  #:cloud{:address-family
-         "def8efaaec577cf2fb9df1e3da5df53233bcc3610632692726a76a1b7bc128a8",
+         "e6dde5cd147efc8bf16da81c2ced4e06844eeccc2061d61654e064b360ecaac4",
          :authorized
-         "1310576290213669d8a8d25f5df6785eb64207f56dff8f3edd695e190e3a4079",
+         "2e6bcd94d1881dfd2ab59666e620d6bd4392dd156e154e73718d6f2854e5efb2",
          :dial-ok
-         "364197e93bd89c9a6517139def450ebf9160c9078c31e50a9b2afb12f755421b",
+         "5d75be6646551254245f16aea55acd15a722993728c6a19a5d54c3bb777be836",
+         :flag-after
+         "27a868de0508d6bc2da874f4f56da608e5e94ad3b90dd3d289deca615eb52b2d",
          :from-to-cap
-         "cac53ad3fbeb357c8381a652d0f9282f847c2ff95dfb355f0c1bf5d489dc0bb5",
+         "c366a72be66fa42291c9e4e060cde92013699f9b25cb2c330664d3c9a84891ed",
          :host-port
-         "808d332dee78bc996628e0e695025e03cac0fe90d64b00d5365c9e6d1a1d90c3",
+         "553a776d806463b1c9a9095f2b4dddfca002b93714db5b85af0519110041695f",
          :node-id
-         "0b0c198f2730ec570f5b5387fa08bcf3797afcdfc2f65ee36894c2037b00d84c",
+         "19bfe2013ee6393d077aba8e1bf06e6e05c4c7e847f78de40b13f08c09564f52",
          :overlay-id
-         "d6274367ede38f3f10dfd8a2d8f73c3eefe560864cd9fca8d6ab54b65a026daa",
+         "1aeb4bf8ae9cece0b4495ee428710bd0d27fd657313d261b665f75233af7c284",
          :policy
-         "d16181cdbfb19e4ed3635f849f8d7aeec19d79b26e4e3dfe296ce970128ff867",
+         "1008b7147014f1a5b83c5dad9df29d343da65d3b0d026343603d8d024b00d7e6",
          :region-in
-         "2305763c84ddce4b5a01b42d4c29defd6f238aaf0fd0e5397aa0e2d0a9a1a125",
+         "12509431cf940242c69a894cc194bc9020ea72aaf53827ebb3c12b339e20df90",
          :relay-score
-         "2c4a85d1fa12aa635658be5d79321f7336c13c20241a53829bd1d30ac22137de",
+         "83f7738f23f53dae7f08178bdb55d273cc590756756a31b94ec540613015d406",
          :relay-url
-         "5cd0b44fc5dffc9b1b23a4b602a9ed589186b2ecb14d6e3595d88fa7b4a76181",
+         "f42da46a9d75d758ece63687b39c3183b12cd09fa71dbf2d1b5d13b16ff145f1",
          :starts-with
-         "f550c01e66fdf5ed9ea91cb1dba7e42a6d44a17e24281558489547e611d27921",
+         "ca0399ce599c02e945056a23f3aaa4691d89dfe82130ea1c6bb305fd9a6dde7f",
          :summary-title
-         "054a50df8fe5b5e7cc806f9f1f10f673ef316c1e5aad27f10bad7cbba6bec407",
+         "2f90af47a998db6ee2e337702775a1e97b1dc081bb2a4a84204f44549ec51ab8",
          :transport
-         "c8d2d349cb9088613573d79478bf2318fc4ba7a5c7845074c2e9d7444b4c1bb5"},
+         "b8b6977494bfff206000bf9f9051213fa6d322ba0ae36978370e2fbfdef26ff9"},
  :exports
  [default-driver
   default-cloud-name
@@ -1157,6 +1210,8 @@
          [:record
           :cloud/transport
           [[:scheme :string] [:host :string]]],
+         :flag-after
+         [:record :cloud/flag-after [[:a :string] [:prefix-len :i64]]],
          :relay-url
          [:record
           :cloud/relay-url

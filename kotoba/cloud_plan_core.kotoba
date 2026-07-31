@@ -28,7 +28,10 @@
              :cloud/policy [:record :cloud/policy
                             [[:default :string] [:allow-n :i64]]]
              :cloud/starts-with [:record :cloud/starts-with
-                                 [[:s :string] [:prefix :string]]]})
+                                 [[:s :string] [:prefix :string]]]
+             ;; T5.2 residual: string-scan multi-arg
+             :cloud/flag-after [:record :cloud/flag-after
+                                [[:a :string] [:prefix-len :i64]]]})
   (:export [default-driver default-cloud-name default-cloud-domain
             default-cloud-graph default-auth-key-env overlay-version
             digit-char nat-str i64-str
@@ -397,38 +400,50 @@
   ;; not a --flag → free target token
   (if (is-flag-dash? a) false true))
 
-(defn flag-value-after [a :string prefix-len :i64] :string
-  (let [n (string-byte-length a)]
+(defn flag-value-after [x [:ref :cloud/flag-after]] :string
+  ;; T5.2 residual: a+prefix-len on one guest record
+  (let [a (record-get x :a)
+        prefix-len (record-get x :prefix-len)
+        n (string-byte-length a)]
     (if (< n prefix-len)
       ""
       (string-substring a prefix-len n))))
 
 (defn flag-cloud-value [a :string] :string
-  (flag-value-after a (string-byte-length (flag-cloud-prefix))))
+  (flag-value-after (record-new [:ref :cloud/flag-after]
+                                a (string-byte-length (flag-cloud-prefix)))))
 
 (defn flag-fleet-value [a :string] :string
-  (flag-value-after a (string-byte-length (flag-fleet-prefix))))
+  (flag-value-after (record-new [:ref :cloud/flag-after]
+                                a (string-byte-length (flag-fleet-prefix)))))
 
 (defn flag-target-value [a :string] :string
-  (flag-value-after a (string-byte-length (flag-target-prefix))))
+  (flag-value-after (record-new [:ref :cloud/flag-after]
+                                a (string-byte-length (flag-target-prefix)))))
 
 (defn flag-from-value [a :string] :string
-  (flag-value-after a (string-byte-length (flag-from-prefix))))
+  (flag-value-after (record-new [:ref :cloud/flag-after]
+                                a (string-byte-length (flag-from-prefix)))))
 
 (defn flag-to-value [a :string] :string
-  (flag-value-after a (string-byte-length (flag-to-prefix))))
+  (flag-value-after (record-new [:ref :cloud/flag-after]
+                                a (string-byte-length (flag-to-prefix)))))
 
 (defn flag-capability-value [a :string] :string
-  (flag-value-after a (string-byte-length (flag-capability-prefix))))
+  (flag-value-after (record-new [:ref :cloud/flag-after]
+                                a (string-byte-length (flag-capability-prefix)))))
 
 (defn flag-driver-value [a :string] :string
-  (flag-value-after a (string-byte-length (flag-driver-prefix))))
+  (flag-value-after (record-new [:ref :cloud/flag-after]
+                                a (string-byte-length (flag-driver-prefix)))))
 
 (defn flag-format-value [a :string] :string
-  (flag-value-after a (string-byte-length (flag-format-prefix))))
+  (flag-value-after (record-new [:ref :cloud/flag-after]
+                                a (string-byte-length (flag-format-prefix)))))
 
 (defn flag-auth-key-value [a :string] :string
-  (flag-value-after a (string-byte-length (flag-auth-key-prefix))))
+  (flag-value-after (record-new [:ref :cloud/flag-after]
+                                a (string-byte-length (flag-auth-key-prefix)))))
 
 ;; ── residual record $type + default capability name tokens ───────────
 

@@ -27,7 +27,12 @@
                                  [:n01 :bool] [:n02 :bool] [:n12 :bool]]]
              :reconcile/pick2-in [:record :reconcile/pick2-in
                                   [[:load0 :i64] [:load1 :i64]
-                                   [:name0-before-1 :bool] [:n :i64]]]})
+                                   [:name0-before-1 :bool] [:n :i64]]]
+             ;; T5.2 residual: digit-scanner multi-arg
+             :reconcile/digit-of-go [:record :reconcile/digit-of-go
+                                     [[:digits :string] [:c :string] [:i :i64]]]
+             :reconcile/digits-go [:record :reconcile/digits-go
+                                   [[:s :string] [:acc :i64]]]})
   (:export [default-replicas desired deficit watch-sleep-ms action-name
             better-target? first-of-2 first-of-3
             name-order-record
@@ -249,25 +254,34 @@
     (if (string-contains? "0123456789" c) true false)
     false))
 
-(defn digit-of-go [digits :string c :string i :i64] :i64
-  (let [n (string-byte-length digits)]
+(defn digit-of-go [x [:ref :reconcile/digit-of-go]] :i64
+  ;; T5.2 residual: digits+c+i on one guest record
+  (let [digits (record-get x :digits)
+        c (record-get x :c)
+        i (record-get x :i)
+        n (string-byte-length digits)]
     (if (< i n)
       (if (string=? (string-substring digits i (+ i 1)) c)
         i
-        (digit-of-go digits c (+ i 1)))
+        (digit-of-go (record-new [:ref :reconcile/digit-of-go]
+                                 digits c (+ i 1))))
       0)))
 
 (defn digit-of [c :string] :i64
-  (digit-of-go "0123456789" c 0))
+  (digit-of-go (record-new [:ref :reconcile/digit-of-go] "0123456789" c 0)))
 
-(defn parse-digits-go [s :string acc :i64] :i64
-  (let [n (string-byte-length s)]
+(defn parse-digits-go [x [:ref :reconcile/digits-go]] :i64
+  ;; T5.2 residual: s+acc on one guest record
+  (let [s (record-get x :s)
+        acc (record-get x :acc)
+        n (string-byte-length s)]
     (if (= n 0)
       acc
       (let [c (string-substring s 0 1)]
         (if (digit-val? c)
-          (parse-digits-go (string-substring s 1 n)
-                           (+ (* acc 10) (digit-of c)))
+          (parse-digits-go (record-new [:ref :reconcile/digits-go]
+                                       (string-substring s 1 n)
+                                       (+ (* acc 10) (digit-of c))))
           -1)))))
 
 (defn parse-digits [s :string] :i64
@@ -275,7 +289,7 @@
         n (string-byte-length t)]
     (if (= n 0)
       -1
-      (parse-digits-go t 0))))
+      (parse-digits-go (record-new [:ref :reconcile/digits-go] t 0)))))
 
 (defn watch-seconds [a :string] :i64
   ;; "--watch" → 30; "--watch=5" → 5; bad digits → 30 default
