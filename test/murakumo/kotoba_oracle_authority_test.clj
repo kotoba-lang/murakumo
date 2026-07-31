@@ -2096,33 +2096,58 @@
     (is (= (ir/execute s 'initial-next-seq [])
            (oracle/call :overlay-stream 'initial-next-seq [])))
     (is (= (oracle/call :overlay-stream 'initial-next-seq []) ostream/initial-next-seq))
-    (is (= (ir/execute c 'node-region ["" "" ""])
-           (oracle/call :cloud-plan 'node-region ["" "" ""])))
-    (is (= (ir/execute c 'quic-endpoint ["h" 4001])
-           (oracle/call :cloud-plan 'quic-endpoint ["h" 4001])))
-    (is (= (ir/execute c 'webtransport-endpoint ["h" 8077])
-           (oracle/call :cloud-plan 'webtransport-endpoint ["h" 8077])))
-    (is (= (ir/execute c 'transport-endpoint ["custom" "h"])
-           (oracle/call :cloud-plan 'transport-endpoint ["custom" "h"])))
-    (is (= (ir/execute c 'dash-placeholder [])
-           (oracle/call :cloud-plan 'dash-placeholder [])))
-    (is (= (ir/execute c 'unknown-node-line ["asher"])
-           (oracle/call :cloud-plan 'unknown-node-line ["asher"])))
-    (is (= (ir/execute c 'from-to-cap-reason ["a" "b" "c" "d"])
-           (oracle/call :cloud-plan 'from-to-cap-reason ["a" "b" "c" "d"])))
-    (is (= (ir/execute c 'summary-title ["dom" "ov"])
-           (oracle/call :cloud-plan 'summary-title ["dom" "ov"])))
-    (is (= (ir/execute c 'address-family-line ["identity" 2 1])
-           (oracle/call :cloud-plan 'address-family-line ["identity" 2 1])))
-    (is (= (ir/execute c 'policy-line ["deny" 3])
-           (oracle/call :cloud-plan 'policy-line ["deny" 3])))
-    (is (= (ir/execute c 'skipped-reason-suffix ["x"])
-           (oracle/call :cloud-plan 'skipped-reason-suffix ["x"])))
-    (is (= (oracle/call :cloud-plan 'dash-placeholder []) cplan/dash-placeholder))
-    (is (= (oracle/call :cloud-plan 'unknown-node-line ["x"])
-           (cplan/unknown-node-line "x")))
-    (is (= (oracle/call :cloud-plan 'address-family-line ["identity" 0 0])
-           (cplan/address-family-line "identity" 0 0)))
+    (let [reg (oracle/record [:record :cloud/region-in
+                              [[:zone :string] [:region-label :string] [:region :string]]]
+                             {:zone "" :region-label "" :region ""})
+          hp (oracle/record [:record :cloud/host-port [[:host :string] [:port :i64]]]
+                            {:host "h" :port 4001})
+          wt (oracle/record [:record :cloud/host-port [[:host :string] [:port :i64]]]
+                            {:host "h" :port 8077})
+          tr (oracle/record [:record :cloud/transport [[:scheme :string] [:host :string]]]
+                            {:scheme "custom" :host "h"})
+          ftc (oracle/record [:record :cloud/from-to-cap
+                              [[:from :string] [:to :string]
+                               [:capability :string] [:reason :string]]]
+                             {:from "a" :to "b" :capability "c" :reason "d"})
+          st (oracle/record [:record :cloud/summary-title
+                             [[:domain :string] [:overlay :string]]]
+                            {:domain "dom" :overlay "ov"})
+          af (oracle/record [:record :cloud/address-family
+                             [[:af :string] [:nodes :i64] [:relays :i64]]]
+                            {:af "identity" :nodes 2 :relays 1})
+          pol (oracle/record [:record :cloud/policy
+                              [[:default :string] [:allow-n :i64]]]
+                             {:default "deny" :allow-n 3})
+          af0 (oracle/record [:record :cloud/address-family
+                              [[:af :string] [:nodes :i64] [:relays :i64]]]
+                             {:af "identity" :nodes 0 :relays 0})]
+      (is (= (ir/execute c 'node-region [reg])
+             (oracle/call :cloud-plan 'node-region [reg])))
+      (is (= (ir/execute c 'quic-endpoint [hp])
+             (oracle/call :cloud-plan 'quic-endpoint [hp])))
+      (is (= (ir/execute c 'webtransport-endpoint [wt])
+             (oracle/call :cloud-plan 'webtransport-endpoint [wt])))
+      (is (= (ir/execute c 'transport-endpoint [tr])
+             (oracle/call :cloud-plan 'transport-endpoint [tr])))
+      (is (= (ir/execute c 'dash-placeholder [])
+             (oracle/call :cloud-plan 'dash-placeholder [])))
+      (is (= (ir/execute c 'unknown-node-line ["asher"])
+             (oracle/call :cloud-plan 'unknown-node-line ["asher"])))
+      (is (= (ir/execute c 'from-to-cap-reason [ftc])
+             (oracle/call :cloud-plan 'from-to-cap-reason [ftc])))
+      (is (= (ir/execute c 'summary-title [st])
+             (oracle/call :cloud-plan 'summary-title [st])))
+      (is (= (ir/execute c 'address-family-line [af])
+             (oracle/call :cloud-plan 'address-family-line [af])))
+      (is (= (ir/execute c 'policy-line [pol])
+             (oracle/call :cloud-plan 'policy-line [pol])))
+      (is (= (ir/execute c 'skipped-reason-suffix ["x"])
+             (oracle/call :cloud-plan 'skipped-reason-suffix ["x"])))
+      (is (= (oracle/call :cloud-plan 'dash-placeholder []) cplan/dash-placeholder))
+      (is (= (oracle/call :cloud-plan 'unknown-node-line ["x"])
+             (cplan/unknown-node-line "x")))
+      (is (= (oracle/call :cloud-plan 'address-family-line [af0])
+             (cplan/address-family-line "identity" 0 0))))
     (is (= (ir/execute c 'node-record-type [])
            (oracle/call :cloud-plan 'node-record-type [])))
     (is (= (ir/execute c 'bootstrap-record-type [])

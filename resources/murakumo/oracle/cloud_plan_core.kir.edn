@@ -63,87 +63,206 @@
    (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
    :param-types [:i64]}
   {:name node-region,
-   :params [zone region-label region],
+   :params [x],
    :result :string,
    :effects #{},
    :body
-   (if
-    (string=? zone "")
+   (let
+    [zone
+     (record-get
+      [:record
+       :cloud/region-in
+       [[:zone :string] [:region-label :string] [:region :string]]]
+      x
+      :zone)
+     region-label
+     (record-get
+      [:record
+       :cloud/region-in
+       [[:zone :string] [:region-label :string] [:region :string]]]
+      x
+      :region-label)
+     region
+     (record-get
+      [:record
+       :cloud/region-in
+       [[:zone :string] [:region-label :string] [:region :string]]]
+      x
+      :region)]
     (if
-     (string=? region-label "")
-     (if (string=? region "") "global" region)
-     region-label)
-    zone),
-   :param-types [:string :string :string]}
+     (string=? zone "")
+     (if
+      (string=? region-label "")
+      (if (string=? region "") "global" region)
+      region-label)
+     zone)),
+   :param-types [[:ref :cloud/region-in]]}
   {:name relay-score,
-   :params [node-region relay-region],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (if (string=? node-region relay-region) 0 1),
-   :param-types [:string :string]}
+   :body
+   (if
+    (string=?
+     (record-get
+      [:record
+       :cloud/relay-score
+       [[:node-region :string] [:relay-region :string]]]
+      x
+      :node-region)
+     (record-get
+      [:record
+       :cloud/relay-score
+       [[:node-region :string] [:relay-region :string]]]
+      x
+      :relay-region))
+    0
+    1),
+   :param-types [[:ref :cloud/relay-score]]}
   {:name overlay-id-input,
-   :params [overlay-id cloud-name],
+   :params [x],
    :result :string,
    :effects #{},
    :body
-   (if
-    (string=? overlay-id "")
-    (if (string=? cloud-name "") "murakumo.cloud" cloud-name)
-    overlay-id),
-   :param-types [:string :string]}
+   (let
+    [overlay-id
+     (record-get
+      [:record
+       :cloud/overlay-id
+       [[:overlay-id :string] [:cloud-name :string]]]
+      x
+      :overlay-id)
+     cloud-name
+     (record-get
+      [:record
+       :cloud/overlay-id
+       [[:overlay-id :string] [:cloud-name :string]]]
+      x
+      :cloud-name)]
+    (if
+     (string=? overlay-id "")
+     (if (string=? cloud-name "") "murakumo.cloud" cloud-name)
+     overlay-id)),
+   :param-types [[:ref :cloud/overlay-id]]}
   {:name node-id-input,
-   :params [overlay-cid node-name],
+   :params [x],
    :result :string,
    :effects #{},
-   :body (string-concat overlay-cid (string-concat ":" node-name)),
-   :param-types [:string :string]}
+   :body
+   (string-concat
+    (record-get
+     [:record
+      :cloud/node-id
+      [[:overlay-cid :string] [:node-name :string]]]
+     x
+     :overlay-cid)
+    (string-concat
+     ":"
+     (record-get
+      [:record
+       :cloud/node-id
+       [[:overlay-cid :string] [:node-name :string]]]
+      x
+      :node-name))),
+   :param-types [[:ref :cloud/node-id]]}
   {:name quic-endpoint,
-   :params [host port],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "quic://"
-    (string-concat host (string-concat ":" (i64-str port)))),
-   :param-types [:string :i64]}
+    (string-concat
+     (record-get
+      [:record :cloud/host-port [[:host :string] [:port :i64]]]
+      x
+      :host)
+     (string-concat
+      ":"
+      (i64-str
+       (record-get
+        [:record :cloud/host-port [[:host :string] [:port :i64]]]
+        x
+        :port))))),
+   :param-types [[:ref :cloud/host-port]]}
   {:name webrtc-endpoint,
-   :params [host p2p-port],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "webrtc://"
     (string-concat
-     host
-     (string-concat ":" (i64-str (+ p2p-port 100))))),
-   :param-types [:string :i64]}
+     (record-get
+      [:record :cloud/host-port [[:host :string] [:port :i64]]]
+      x
+      :host)
+     (string-concat
+      ":"
+      (i64-str
+       (+
+        (record-get
+         [:record :cloud/host-port [[:host :string] [:port :i64]]]
+         x
+         :port)
+        100))))),
+   :param-types [[:ref :cloud/host-port]]}
   {:name relay-endpoint-url,
-   :params [relay-url node-id],
+   :params [x],
    :result :string,
    :effects #{},
-   :body (string-concat relay-url (string-concat "/" node-id)),
-   :param-types [:string :string]}
+   :body
+   (string-concat
+    (record-get
+     [:record :cloud/relay-url [[:url :string] [:node-id :string]]]
+     x
+     :url)
+    (string-concat
+     "/"
+     (record-get
+      [:record :cloud/relay-url [[:url :string] [:node-id :string]]]
+      x
+      :node-id))),
+   :param-types [[:ref :cloud/relay-url]]}
   {:name webtransport-endpoint,
-   :params [host http-port],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "https://"
     (string-concat
-     host
+     (record-get
+      [:record :cloud/host-port [[:host :string] [:port :i64]]]
+      x
+      :host)
      (string-concat
       ":"
       (string-concat
-       (i64-str http-port)
+       (i64-str
+        (record-get
+         [:record :cloud/host-port [[:host :string] [:port :i64]]]
+         x
+         :port))
        "/.well-known/murakumo/webtransport")))),
-   :param-types [:string :i64]}
+   :param-types [[:ref :cloud/host-port]]}
   {:name transport-endpoint,
-   :params [scheme host],
+   :params [x],
    :result :string,
    :effects #{},
-   :body (string-concat scheme (string-concat "://" host)),
-   :param-types [:string :string]}
+   :body
+   (string-concat
+    (record-get
+     [:record :cloud/transport [[:scheme :string] [:host :string]]]
+     x
+     :scheme)
+    (string-concat
+     "://"
+     (record-get
+      [:record :cloud/transport [[:scheme :string] [:host :string]]]
+      x
+      :host))),
+   :param-types [[:ref :cloud/transport]]}
   {:name dash-placeholder,
    :params [],
    :result :string,
@@ -182,14 +301,28 @@
    :body "  connects:",
    :param-types []}
   {:name summary-title,
-   :params [domain overlay],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "murakumo.cloud "
-    (string-concat domain (string-concat "  overlay " overlay))),
-   :param-types [:string :string]}
+    (string-concat
+     (record-get
+      [:record
+       :cloud/summary-title
+       [[:domain :string] [:overlay :string]]]
+      x
+      :domain)
+     (string-concat
+      "  overlay "
+      (record-get
+       [:record
+        :cloud/summary-title
+        [[:domain :string] [:overlay :string]]]
+       x
+       :overlay)))),
+   :param-types [[:ref :cloud/summary-title]]}
   {:name routes-title,
    :params [overlay],
    :result :string,
@@ -233,14 +366,24 @@
     (string-concat node-name " denied by policy")),
    :param-types [:string]}
   {:name dial-ok-title,
-   :params [route-name node],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "murakumo.cloud dial "
-    (string-concat route-name (string-concat "  node " node))),
-   :param-types [:string :string]}
+    (string-concat
+     (record-get
+      [:record :cloud/dial-ok [[:route-name :string] [:node :string]]]
+      x
+      :route-name)
+     (string-concat
+      "  node "
+      (record-get
+       [:record :cloud/dial-ok [[:route-name :string] [:node :string]]]
+       x
+       :node)))),
+   :param-types [[:ref :cloud/dial-ok]]}
   {:name connect-ok-title,
    :params [node-name],
    :result :string,
@@ -254,37 +397,102 @@
    :body (string-concat "murakumo.cloud relay " relay-name),
    :param-types [:string]}
   {:name from-to-cap-reason,
-   :params [from to capability reason],
+   :params [x],
    :result :string,
    :effects #{},
    :body
-   (string-concat
-    "  from="
+   (let
+    [from
+     (record-get
+      [:record
+       :cloud/from-to-cap
+       [[:from :string]
+        [:to :string]
+        [:capability :string]
+        [:reason :string]]]
+      x
+      :from)
+     to
+     (record-get
+      [:record
+       :cloud/from-to-cap
+       [[:from :string]
+        [:to :string]
+        [:capability :string]
+        [:reason :string]]]
+      x
+      :to)
+     capability
+     (record-get
+      [:record
+       :cloud/from-to-cap
+       [[:from :string]
+        [:to :string]
+        [:capability :string]
+        [:reason :string]]]
+      x
+      :capability)
+     reason
+     (record-get
+      [:record
+       :cloud/from-to-cap
+       [[:from :string]
+        [:to :string]
+        [:capability :string]
+        [:reason :string]]]
+      x
+      :reason)]
     (string-concat
-     from
+     "  from="
      (string-concat
-      " to="
+      from
       (string-concat
-       to
+       " to="
        (string-concat
-        " capability="
+        to
         (string-concat
-         capability
-         (string-concat " reason=" reason))))))),
-   :param-types [:string :string :string :string]}
+         " capability="
+         (string-concat
+          capability
+          (string-concat " reason=" reason)))))))),
+   :param-types [[:ref :cloud/from-to-cap]]}
   {:name authorized-line,
-   :params [from to capability],
+   :params [x],
    :result :string,
    :effects #{},
    :body
-   (string-concat
-    "  authorized: from="
+   (let
+    [from
+     (record-get
+      [:record
+       :cloud/authorized
+       [[:from :string] [:to :string] [:capability :string]]]
+      x
+      :from)
+     to
+     (record-get
+      [:record
+       :cloud/authorized
+       [[:from :string] [:to :string] [:capability :string]]]
+      x
+      :to)
+     capability
+     (record-get
+      [:record
+       :cloud/authorized
+       [[:from :string] [:to :string] [:capability :string]]]
+      x
+      :capability)]
     (string-concat
-     from
+     "  authorized: from="
      (string-concat
-      " to="
-      (string-concat to (string-concat " capability=" capability))))),
-   :param-types [:string :string :string]}
+      from
+      (string-concat
+       " to="
+       (string-concat
+        to
+        (string-concat " capability=" capability)))))),
+   :param-types [[:ref :cloud/authorized]]}
   {:name relay-fallback-line,
    :params [endpoint],
    :result :string,
@@ -304,31 +512,62 @@
    :body (string-concat "  " argv-joined),
    :param-types [:string]}
   {:name address-family-line,
-   :params [af nodes relays],
+   :params [x],
    :result :string,
    :effects #{},
    :body
-   (string-concat
-    "  address-family "
+   (let
+    [af
+     (record-get
+      [:record
+       :cloud/address-family
+       [[:af :string] [:nodes :i64] [:relays :i64]]]
+      x
+      :af)
+     nodes
+     (record-get
+      [:record
+       :cloud/address-family
+       [[:af :string] [:nodes :i64] [:relays :i64]]]
+      x
+      :nodes)
+     relays
+     (record-get
+      [:record
+       :cloud/address-family
+       [[:af :string] [:nodes :i64] [:relays :i64]]]
+      x
+      :relays)]
     (string-concat
-     af
+     "  address-family "
      (string-concat
-      " ; nodes "
+      af
       (string-concat
-       (i64-str nodes)
-       (string-concat " ; relays " (i64-str relays)))))),
-   :param-types [:string :i64 :i64]}
+       " ; nodes "
+       (string-concat
+        (i64-str nodes)
+        (string-concat " ; relays " (i64-str relays))))))),
+   :param-types [[:ref :cloud/address-family]]}
   {:name policy-line,
-   :params [default allow-n],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "  policy default="
     (string-concat
-     default
-     (string-concat " allow=" (i64-str allow-n)))),
-   :param-types [:string :i64]}
+     (record-get
+      [:record :cloud/policy [[:default :string] [:allow-n :i64]]]
+      x
+      :default)
+     (string-concat
+      " allow="
+      (i64-str
+       (record-get
+        [:record :cloud/policy [[:default :string] [:allow-n :i64]]]
+        x
+        :allow-n))))),
+   :param-types [[:ref :cloud/policy]]}
   {:name skipped-reason-suffix,
    :params [reason],
    :result :string,
@@ -336,17 +575,30 @@
    :body (string-concat " skipped reason=" reason),
    :param-types [:string]}
   {:name starts-with?,
-   :params [s prefix],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (let
-    [n (string-byte-length s) p (string-byte-length prefix)]
+    [s
+     (record-get
+      [:record :cloud/starts-with [[:s :string] [:prefix :string]]]
+      x
+      :s)
+     prefix
+     (record-get
+      [:record :cloud/starts-with [[:s :string] [:prefix :string]]]
+      x
+      :prefix)
+     n
+     (string-byte-length s)
+     p
+     (string-byte-length prefix)]
     (if
      (< n p)
      false
      (if (string=? (string-substring s 0 p) prefix) true false))),
-   :param-types [:string :string]}
+   :param-types [[:ref :cloud/starts-with]]}
   {:name cmd-plan,
    :params [],
    :result :string,
@@ -526,61 +778,111 @@
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-cloud-prefix)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :cloud/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-cloud-prefix))),
    :param-types [:string]}
   {:name is-flag-fleet?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-fleet-prefix)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :cloud/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-fleet-prefix))),
    :param-types [:string]}
   {:name is-flag-target?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-target-prefix)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :cloud/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-target-prefix))),
    :param-types [:string]}
   {:name is-flag-from?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-from-prefix)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :cloud/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-from-prefix))),
    :param-types [:string]}
   {:name is-flag-to?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-to-prefix)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :cloud/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-to-prefix))),
    :param-types [:string]}
   {:name is-flag-capability?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-capability-prefix)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :cloud/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-capability-prefix))),
    :param-types [:string]}
   {:name is-flag-driver?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-driver-prefix)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :cloud/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-driver-prefix))),
    :param-types [:string]}
   {:name is-flag-format?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-format-prefix)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :cloud/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-format-prefix))),
    :param-types [:string]}
   {:name is-flag-auth-key?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-auth-key-prefix)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :cloud/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-auth-key-prefix))),
    :param-types [:string]}
   {:name is-flag-dash?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-dash-prefix)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :cloud/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-dash-prefix))),
    :param-types [:string]}
   {:name is-positional-target?,
    :params [a],
@@ -717,7 +1019,35 @@
    :body "reconcile",
    :param-types []}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:cloud{:address-family
+         "def8efaaec577cf2fb9df1e3da5df53233bcc3610632692726a76a1b7bc128a8",
+         :authorized
+         "1310576290213669d8a8d25f5df6785eb64207f56dff8f3edd695e190e3a4079",
+         :dial-ok
+         "364197e93bd89c9a6517139def450ebf9160c9078c31e50a9b2afb12f755421b",
+         :from-to-cap
+         "cac53ad3fbeb357c8381a652d0f9282f847c2ff95dfb355f0c1bf5d489dc0bb5",
+         :host-port
+         "808d332dee78bc996628e0e695025e03cac0fe90d64b00d5365c9e6d1a1d90c3",
+         :node-id
+         "0b0c198f2730ec570f5b5387fa08bcf3797afcdfc2f65ee36894c2037b00d84c",
+         :overlay-id
+         "d6274367ede38f3f10dfd8a2d8f73c3eefe560864cd9fca8d6ab54b65a026daa",
+         :policy
+         "d16181cdbfb19e4ed3635f849f8d7aeec19d79b26e4e3dfe296ce970128ff867",
+         :region-in
+         "2305763c84ddce4b5a01b42d4c29defd6f238aaf0fd0e5397aa0e2d0a9a1a125",
+         :relay-score
+         "2c4a85d1fa12aa635658be5d79321f7336c13c20241a53829bd1d30ac22137de",
+         :relay-url
+         "5cd0b44fc5dffc9b1b23a4b602a9ed589186b2ecb14d6e3595d88fa7b4a76181",
+         :starts-with
+         "f550c01e66fdf5ed9ea91cb1dba7e42a6d44a17e24281558489547e611d27921",
+         :summary-title
+         "054a50df8fe5b5e7cc806f9f1f10f673ef316c1e5aad27f10bad7cbba6bec407",
+         :transport
+         "c8d2d349cb9088613573d79478bf2318fc4ba7a5c7845074c2e9d7444b4c1bb5"},
  :exports
  [default-driver
   default-cloud-name
@@ -818,7 +1148,60 @@
   flag-driver-prefix
   flag-format-prefix
   flag-auth-key-prefix],
- :schemas nil,
+ :schemas
+ #:cloud{:region-in
+         [:record
+          :cloud/region-in
+          [[:zone :string] [:region-label :string] [:region :string]]],
+         :transport
+         [:record
+          :cloud/transport
+          [[:scheme :string] [:host :string]]],
+         :relay-url
+         [:record
+          :cloud/relay-url
+          [[:url :string] [:node-id :string]]],
+         :address-family
+         [:record
+          :cloud/address-family
+          [[:af :string] [:nodes :i64] [:relays :i64]]],
+         :relay-score
+         [:record
+          :cloud/relay-score
+          [[:node-region :string] [:relay-region :string]]],
+         :starts-with
+         [:record :cloud/starts-with [[:s :string] [:prefix :string]]],
+         :from-to-cap
+         [:record
+          :cloud/from-to-cap
+          [[:from :string]
+           [:to :string]
+           [:capability :string]
+           [:reason :string]]],
+         :summary-title
+         [:record
+          :cloud/summary-title
+          [[:domain :string] [:overlay :string]]],
+         :overlay-id
+         [:record
+          :cloud/overlay-id
+          [[:overlay-id :string] [:cloud-name :string]]],
+         :host-port
+         [:record :cloud/host-port [[:host :string] [:port :i64]]],
+         :authorized
+         [:record
+          :cloud/authorized
+          [[:from :string] [:to :string] [:capability :string]]],
+         :policy
+         [:record :cloud/policy [[:default :string] [:allow-n :i64]]],
+         :dial-ok
+         [:record
+          :cloud/dial-ok
+          [[:route-name :string] [:node :string]]],
+         :node-id
+         [:record
+          :cloud/node-id
+          [[:overlay-cid :string] [:node-name :string]]]},
  :effects #{},
  :blocks [],
  :entry nil}

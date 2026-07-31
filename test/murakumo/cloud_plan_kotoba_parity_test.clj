@@ -44,6 +44,35 @@
        "flag-capability-prefix flag-driver-prefix flag-format-prefix "
        "flag-auth-key-prefix"))
 
+
+(def ^:private region-ty
+  "[:record :cloud/region-in [[:zone :string] [:region-label :string] [:region :string]]]")
+(def ^:private relay-score-ty
+  "[:record :cloud/relay-score [[:node-region :string] [:relay-region :string]]]")
+(def ^:private overlay-id-ty
+  "[:record :cloud/overlay-id [[:overlay-id :string] [:cloud-name :string]]]")
+(def ^:private node-id-ty
+  "[:record :cloud/node-id [[:overlay-cid :string] [:node-name :string]]]")
+(def ^:private host-port-ty
+  "[:record :cloud/host-port [[:host :string] [:port :i64]]]")
+(def ^:private relay-url-ty
+  "[:record :cloud/relay-url [[:url :string] [:node-id :string]]]")
+(def ^:private transport-ty
+  "[:record :cloud/transport [[:scheme :string] [:host :string]]]")
+(def ^:private summary-title-ty
+  "[:record :cloud/summary-title [[:domain :string] [:overlay :string]]]")
+(def ^:private dial-ok-ty
+  "[:record :cloud/dial-ok [[:route-name :string] [:node :string]]]")
+(def ^:private from-to-cap-ty
+  "[:record :cloud/from-to-cap [[:from :string] [:to :string] [:capability :string] [:reason :string]]]")
+(def ^:private authorized-ty
+  "[:record :cloud/authorized [[:from :string] [:to :string] [:capability :string]]]")
+(def ^:private address-family-ty
+  "[:record :cloud/address-family [[:af :string] [:nodes :i64] [:relays :i64]]]")
+(def ^:private policy-ty
+  "[:record :cloud/policy [[:default :string] [:allow-n :i64]]]")
+(def ^:private starts-with-ty
+  "[:record :cloud/starts-with [[:s :string] [:prefix :string]]]")
 (def fleet
   {:fleet/name "test-fleet"
    :fleet/p2p-port 4001
@@ -89,18 +118,18 @@
             "cd" "(default-cloud-domain)"
             "cg" "(default-cloud-graph)"
             "ae" "(default-auth-key-env)"
-            "r1" (str "(node-region " (kotoba-literal "jp") " "
-                      (kotoba-literal "") " " (kotoba-literal "") ")")
-            "r2" (str "(node-region " (kotoba-literal "") " "
-                      (kotoba-literal "us-west") " " (kotoba-literal "") ")")
-            "r3" (str "(node-region " (kotoba-literal "") " "
-                      (kotoba-literal "") " " (kotoba-literal "") ")")})
+            "r1" (str "(node-region (record-new " region-ty " " (kotoba-literal "jp") " "
+                      (kotoba-literal "") " " (kotoba-literal "") "))")
+            "r2" (str "(node-region (record-new " region-ty " " (kotoba-literal "") " "
+                      (kotoba-literal "us-west") " " (kotoba-literal "") "))")
+            "r3" (str "(node-region (record-new " region-ty " " (kotoba-literal "") " "
+                      (kotoba-literal "") " " (kotoba-literal "") "))")})
         n (compile-i64-cases
            {"ov" "(overlay-version)"
-            "sc0" (str "(relay-score " (kotoba-literal "jp") " "
-                       (kotoba-literal "jp") ")")
-            "sc1" (str "(relay-score " (kotoba-literal "jp") " "
-                       (kotoba-literal "us") ")")})]
+            "sc0" (str "(relay-score (record-new " relay-score-ty " " (kotoba-literal "jp") " "
+                       (kotoba-literal "jp") "))")
+            "sc1" (str "(relay-score (record-new " relay-score-ty " " (kotoba-literal "jp") " "
+                       (kotoba-literal "us") "))")})]
     (is (= cloud/default-driver (get s "drv")))
     (is (= (:cloud/name cloud/default-cloud) (get s "cn")))
     (is (= (:cloud/domain cloud/default-cloud) (get s "cd")))
@@ -122,20 +151,20 @@
         we (cloud/direct-endpoint spec fleet node :webrtc)
         re (cloud/relay-endpoint (first (:relays spec)) nid)
         actual (compile-string-cases
-                {"oi" (str "(overlay-id-input " (kotoba-literal "test-overlay") " "
-                           (kotoba-literal "murakumo.cloud") ")")
-                 "oi0" (str "(overlay-id-input " (kotoba-literal "") " "
-                            (kotoba-literal "") ")")
-                 "ni" (str "(node-id-input " (kotoba-literal oid) " "
-                           (kotoba-literal "asher") ")")
-                 "qe" (str "(quic-endpoint " (kotoba-literal "asher") " " p2p ")")
-                 "we" (str "(webrtc-endpoint " (kotoba-literal "asher") " " p2p ")")
-                 "ru" (str "(relay-endpoint-url " (kotoba-literal "relay://jp") " "
-                           (kotoba-literal nid) ")")
-                 "wt" (str "(webtransport-endpoint " (kotoba-literal "asher") " "
-                           (inv/node-port fleet node) ")")
-                 "te" (str "(transport-endpoint " (kotoba-literal "custom") " "
-                           (kotoba-literal "asher") ")")})]
+                {"oi" (str "(overlay-id-input (record-new " overlay-id-ty " " (kotoba-literal "test-overlay") " "
+                           (kotoba-literal "murakumo.cloud") "))")
+                 "oi0" (str "(overlay-id-input (record-new " overlay-id-ty " " (kotoba-literal "") " "
+                            (kotoba-literal "") "))")
+                 "ni" (str "(node-id-input (record-new " node-id-ty " " (kotoba-literal oid) " "
+                           (kotoba-literal "asher") "))")
+                 "qe" (str "(quic-endpoint (record-new " host-port-ty " " (kotoba-literal "asher") " " p2p "))")
+                 "we" (str "(webrtc-endpoint (record-new " host-port-ty " " (kotoba-literal "asher") " " p2p "))")
+                 "ru" (str "(relay-endpoint-url (record-new " relay-url-ty " " (kotoba-literal "relay://jp") " "
+                           (kotoba-literal nid) "))")
+                 "wt" (str "(webtransport-endpoint (record-new " host-port-ty " " (kotoba-literal "asher") " "
+                           (inv/node-port fleet node) "))")
+                 "te" (str "(transport-endpoint (record-new " transport-ty " " (kotoba-literal "custom") " "
+                           (kotoba-literal "asher") "))")})]
     (is (= "test-overlay" (get actual "oi")))
     (is (= (identity/graph-cid (get actual "oi")) oid))
     (is (= "murakumo.cloud" (get actual "oi0")))
@@ -157,23 +186,23 @@
             "dc" "(direct-candidates-label)"
             "rl" "(relays-section-label)"
             "cl" "(connects-section-label)"
-            "st" (str "(summary-title " (kotoba-literal "murakumo.cloud") " "
-                      (kotoba-literal "ov1") ")")
+            "st" (str "(summary-title (record-new " summary-title-ty " " (kotoba-literal "murakumo.cloud") " "
+                      (kotoba-literal "ov1") "))")
             "rt" (str "(routes-title " (kotoba-literal "ov1") ")")
             "bt" (str "(bootstrap-title " (kotoba-literal "ov1") ")")
             "un" (str "(unknown-node-line " (kotoba-literal "asher") ")")
             "ur" (str "(unknown-relay-line " (kotoba-literal "jp-1") ")")
             "dd" (str "(dial-denied-line " (kotoba-literal "asher") ")")
             "cd" (str "(connect-denied-line " (kotoba-literal "asher") ")")
-            "do" (str "(dial-ok-title " (kotoba-literal "r1") " "
-                      (kotoba-literal "asher") ")")
+            "do" (str "(dial-ok-title (record-new " dial-ok-ty " " (kotoba-literal "r1") " "
+                      (kotoba-literal "asher") "))")
             "co" (str "(connect-ok-title " (kotoba-literal "asher") ")")
             "ro" (str "(relay-ok-title " (kotoba-literal "jp-1") ")")
-            "ft" (str "(from-to-cap-reason " (kotoba-literal "browser") " "
+            "ft" (str "(from-to-cap-reason (record-new " from-to-cap-ty " " (kotoba-literal "browser") " "
                       (kotoba-literal "wasm") " " (kotoba-literal "read") " "
-                      (kotoba-literal "policy-denied") ")")
-            "al" (str "(authorized-line " (kotoba-literal "browser") " "
-                      (kotoba-literal "wasm") " " (kotoba-literal "read") ")")
+                      (kotoba-literal "policy-denied") "))")
+            "al" (str "(authorized-line (record-new " authorized-ty " " (kotoba-literal "browser") " "
+                      (kotoba-literal "wasm") " " (kotoba-literal "read") "))")
             "rf" (str "(relay-fallback-line " (kotoba-literal "relay://jp/n") ")")
             "rs" (str "(reason-line " (kotoba-literal "unknown") ")")
             "ia" (str "(indent-argv-line " (kotoba-literal "murakumo-overlay dial") ")")})]
@@ -207,8 +236,9 @@
 
 (deftest summary-address-policy-lines-match
   (let [s (compile-string-cases
-           {"af" (str "(address-family-line " (kotoba-literal "identity") " 2 1)")
-            "pl" (str "(policy-line " (kotoba-literal "deny") " 3)")
+           {"af" (str "(address-family-line (record-new " address-family-ty " "
+                      (kotoba-literal "identity") " 2 1))")
+            "pl" (str "(policy-line (record-new " policy-ty " " (kotoba-literal "deny") " 3))")
             "sk" (str "(skipped-reason-suffix " (kotoba-literal "unknown") ")")})
         lines (cloud/summary-lines
                {:domain "murakumo.cloud" :overlay "ov"
@@ -247,8 +277,8 @@
             "da" (str "(if (is-flag-dash? " (kotoba-literal "--unknown") ") 1 0)")
             "po" (str "(if (is-positional-target? " (kotoba-literal "asher") ") 1 0)")
             "pn" (str "(if (is-positional-target? " (kotoba-literal "--x") ") 1 0)")
-            "sw" (str "(if (starts-with? " (kotoba-literal "--cloud=x") " "
-                      (kotoba-literal "--cloud=") ") 1 0)")})
+            "sw" (str "(if (starts-with? (record-new " starts-with-ty " " (kotoba-literal "--cloud=x") " "
+                      (kotoba-literal "--cloud=") ")) 1 0)")})
         s (compile-string-cases
            {"vc" (str "(flag-cloud-value " (kotoba-literal "--cloud=prod.edn") ")")
             "vf" (str "(flag-fleet-value " (kotoba-literal "--fleet=fleet.edn") ")")
