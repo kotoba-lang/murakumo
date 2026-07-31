@@ -20,17 +20,30 @@
    :body 4001,
    :param-types []}
   {:name starts-with?,
-   :params [s prefix],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (let
-    [n (string-byte-length s) p (string-byte-length prefix)]
+    [s
+     (record-get
+      [:record :runtime/starts-with [[:s :string] [:prefix :string]]]
+      x
+      :s)
+     prefix
+     (record-get
+      [:record :runtime/starts-with [[:s :string] [:prefix :string]]]
+      x
+      :prefix)
+     n
+     (string-byte-length s)
+     p
+     (string-byte-length prefix)]
     (if
      (< n p)
      false
      (if (string=? (string-substring s 0 p) prefix) true false))),
-   :param-types [:string :string]}
+   :param-types [[:ref :runtime/starts-with]]}
   {:name scheme-quic,
    :params [],
    :result :string,
@@ -236,16 +249,34 @@
    :effects #{},
    :body
    (if
-    (starts-with? endpoint (scheme-quic))
+    (starts-with?
+     (record-new
+      [:record :runtime/starts-with [[:s :string] [:prefix :string]]]
+      endpoint
+      (scheme-quic)))
     (kind-quic)
     (if
-     (starts-with? endpoint (scheme-webrtc))
+     (starts-with?
+      (record-new
+       [:record :runtime/starts-with [[:s :string] [:prefix :string]]]
+       endpoint
+       (scheme-webrtc)))
      (kind-webrtc)
      (if
-      (starts-with? endpoint (scheme-relay))
+      (starts-with?
+       (record-new
+        [:record :runtime/starts-with [[:s :string] [:prefix :string]]]
+        endpoint
+        (scheme-relay)))
       (kind-relay)
       (if
-       (starts-with? endpoint (scheme-webtransport))
+       (starts-with?
+        (record-new
+         [:record
+          :runtime/starts-with
+          [[:s :string] [:prefix :string]]]
+         endpoint
+         (scheme-webtransport)))
        (kind-webtransport)
        (kind-other))))),
    :param-types [:string]}
@@ -298,7 +329,9 @@
       (if (< start end) (string-substring url start end) "")))),
    :param-types [:string]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:runtime{:starts-with
+           "ce0c0453933a841e15a963cb677c28754d62479bed510e2c4264682d696bdd7e"},
  :exports
  [default-relay-port
   default-web-port
@@ -331,7 +364,11 @@
   adapter-kind-webrtc
   adapter-kind-webtransport
   adapter-kind-relay],
- :schemas nil,
+ :schemas
+ #:runtime{:starts-with
+           [:record
+            :runtime/starts-with
+            [[:s :string] [:prefix :string]]]},
  :effects #{},
  :blocks [],
  :entry nil}

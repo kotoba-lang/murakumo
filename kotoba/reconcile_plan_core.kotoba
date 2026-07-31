@@ -4,7 +4,10 @@
                                  [[:first :i64] [:second :i64] [:count :i64]]]
              ;; T5.3 + profile 5: pairwise name-order flags are :bool (not 0/1 i64).
              :reconcile/name-order [:record :reconcile/name-order
-                                    [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]})
+                                    [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]
+             ;; T5.2 native guest record wire
+             :reconcile/starts-with [:record :reconcile/starts-with
+                                     [[:s :string] [:prefix :string]]]})
   (:export [default-replicas desired deficit watch-sleep-ms action-name
             better-target? first-of-2 first-of-3
             name-order-record
@@ -34,6 +37,7 @@
 ;; T5.3: pick result is [:ref :reconcile/targets]; name-bits bit-pack is gone.
 ;; T5.3 complete for this module: no base-N / bit packs remain.
 ;; Profile 5: name-order / better-target? tie-break flags are :bool.
+;; T5.2: multi-scalar pure inputs take single guest records.
 ;; Parity: test/murakumo/reconcile_plan_kotoba_parity_test.clj
 
 (defn default-replicas [] :i64 1)
@@ -144,8 +148,11 @@
 
 (defn default-watch-seconds [] :i64 30)
 
-(defn starts-with? [s :string prefix :string] :bool
-  (let [n (string-byte-length s)
+(defn starts-with? [x [:ref :reconcile/starts-with]] :bool
+  ;; T5.2 native: s+prefix
+  (let [s (record-get x :s)
+        prefix (record-get x :prefix)
+        n (string-byte-length s)
         p (string-byte-length prefix)]
     (if (< n p)
       false
@@ -168,13 +175,13 @@
 
 (defn flag-is-watch? [a :string] :bool
   ;; bare --watch or --watch=N
-  (starts-with? a (flag-watch)))
+  (starts-with? (record-new [:ref :reconcile/starts-with] a (flag-watch))))
 
 (defn flag-is-snapshot? [a :string] :bool
-  (starts-with? a (flag-snapshot-prefix)))
+  (starts-with? (record-new [:ref :reconcile/starts-with] a (flag-snapshot-prefix))))
 
 (defn flag-is-dash? [a :string] :bool
-  (starts-with? a (flag-dash-prefix)))
+  (starts-with? (record-new [:ref :reconcile/starts-with] a (flag-dash-prefix))))
 
 (defn ws? [c :string] :bool
   (if (string=? c " ")
@@ -232,7 +239,7 @@
   ;; "--watch" → 30; "--watch=5" → 5; bad digits → 30 default
   (if (string=? a (flag-watch))
     (default-watch-seconds)
-    (if (starts-with? a (flag-watch-eq-prefix))
+    (if (starts-with? (record-new [:ref :reconcile/starts-with] a (flag-watch-eq-prefix)))
       (let [n (string-byte-length a)
             plen (string-byte-length (flag-watch-eq-prefix))
             v (parse-digits (string-substring a plen n))]
@@ -243,7 +250,7 @@
 
 (defn snapshot-value [a :string] :string
   ;; "--snapshot=PATH" → PATH; else ""
-  (if (starts-with? a (flag-snapshot-prefix))
+  (if (starts-with? (record-new [:ref :reconcile/starts-with] a (flag-snapshot-prefix)))
     (let [n (string-byte-length a)
           plen (string-byte-length (flag-snapshot-prefix))]
       (string-substring a plen n))

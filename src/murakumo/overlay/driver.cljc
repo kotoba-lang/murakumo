@@ -142,10 +142,12 @@
         is-dial (oracle/bool->host (o-record 'command-is-dial? {:cmd-name cmd-name} [[:cmd-name :string]]))
         reason (keyword
                 (o-record 'dial-ok-reason
-                          {:is-dial is-dial
-                           :missing-n (count missing)}
-                          [[:is-dial :bool]
-                           [:missing-n :i64]]))]
+                          {:x (oracle/record
+                               [:record :driver/dial-reason
+                                [[:is-dial :bool] [:missing-n :i64]]]
+                               {:is-dial is-dial
+                                :missing-n (count missing)})}
+                          [[:x :raw]]))]
     (case reason
       :unknown-command
       {:ok? false

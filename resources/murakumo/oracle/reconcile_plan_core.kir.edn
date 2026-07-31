@@ -256,17 +256,30 @@
    :body 30,
    :param-types []}
   {:name starts-with?,
-   :params [s prefix],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (let
-    [n (string-byte-length s) p (string-byte-length prefix)]
+    [s
+     (record-get
+      [:record :reconcile/starts-with [[:s :string] [:prefix :string]]]
+      x
+      :s)
+     prefix
+     (record-get
+      [:record :reconcile/starts-with [[:s :string] [:prefix :string]]]
+      x
+      :prefix)
+     n
+     (string-byte-length s)
+     p
+     (string-byte-length prefix)]
     (if
      (< n p)
      false
      (if (string=? (string-substring s 0 p) prefix) true false))),
-   :param-types [:string :string]}
+   :param-types [[:ref :reconcile/starts-with]]}
   {:name flag-dry-run,
    :params [],
    :result :string,
@@ -319,19 +332,34 @@
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-watch)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :reconcile/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-watch))),
    :param-types [:string]}
   {:name flag-is-snapshot?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-snapshot-prefix)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :reconcile/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-snapshot-prefix))),
    :param-types [:string]}
   {:name flag-is-dash?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (starts-with? a (flag-dash-prefix)),
+   :body
+   (starts-with?
+    (record-new
+     [:record :reconcile/starts-with [[:s :string] [:prefix :string]]]
+     a
+     (flag-dash-prefix))),
    :param-types [:string]}
   {:name ws?,
    :params [c],
@@ -432,7 +460,13 @@
     (string=? a (flag-watch))
     (default-watch-seconds)
     (if
-     (starts-with? a (flag-watch-eq-prefix))
+     (starts-with?
+      (record-new
+       [:record
+        :reconcile/starts-with
+        [[:s :string] [:prefix :string]]]
+       a
+       (flag-watch-eq-prefix)))
      (let
       [n
        (string-byte-length a)
@@ -449,7 +483,11 @@
    :effects #{},
    :body
    (if
-    (starts-with? a (flag-snapshot-prefix))
+    (starts-with?
+     (record-new
+      [:record :reconcile/starts-with [[:s :string] [:prefix :string]]]
+      a
+      (flag-snapshot-prefix)))
     (let
      [n
       (string-byte-length a)
@@ -467,9 +505,11 @@
  :oracle-value nil,
  :schema-identities
  #:reconcile{:name-order
-             "131140860bd7586be1f0ef6d4e65233921c1fba30371e6a04b64d9cbe68b4e36",
+             "0e65429f34ccaf081d5ae4b5f6dbd7fe36a4495096acdb5ae5da11ec18164f94",
+             :starts-with
+             "ccf48ae06263fcfb8482b8073f7bdbe340dcbb43798db70dd332bbf8b529ed57",
              :targets
-             "88817a3fcbfb762c156237d3490f6ef2f5e44af0be60f36a20b0b6081a9e4e7c"},
+             "b251ef44ee9c55f6fe919844427e3a40604d17d2bb934b2f1c0d908bc4118258"},
  :exports
  [default-replicas
   desired
@@ -524,7 +564,11 @@
              :name-order
              [:record
               :reconcile/name-order
-              [[:n01 :bool] [:n02 :bool] [:n12 :bool]]]},
+              [[:n01 :bool] [:n02 :bool] [:n12 :bool]]],
+             :starts-with
+             [:record
+              :reconcile/starts-with
+              [[:s :string] [:prefix :string]]]},
  :effects #{},
  :blocks [],
  :entry nil}

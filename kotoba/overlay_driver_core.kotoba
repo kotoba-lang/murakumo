@@ -1,4 +1,9 @@
 (ns overlay-driver-core
+  (:schemas {;; T5.2 native guest record wire
+             :driver/starts-with [:record :driver/starts-with
+                                  [[:s :string] [:prefix :string]]]
+             :driver/dial-reason [:record :driver/dial-reason
+                                  [[:is-dial :bool] [:missing-n :i64]]]})
   (:export [endpoint-kind blank? option-name dial-ok-reason
             command-is-dial?
             starts-with?
@@ -12,13 +17,17 @@
 ;; parse-argv loop / session map assembly stay cljc.
 ;; endpoint scheme/kind + dial reason + cmd tokens dual-source;
 ;; endpoint-kind / dial-ok-reason / command-is-dial? / option-name recompose.
+;; T5.2: multi-scalar pure inputs take single guest records.
 ;; Parity: test/murakumo/overlay_driver_kotoba_parity_test.clj
 
 (defn blank? [s :string] :bool
   (if (string=? s "") true false))
 
-(defn starts-with? [s :string prefix :string] :bool
-  (let [n (string-byte-length s)
+(defn starts-with? [x [:ref :driver/starts-with]] :bool
+  ;; T5.2 native: s+prefix
+  (let [s (record-get x :s)
+        prefix (record-get x :prefix)
+        n (string-byte-length s)
         p (string-byte-length prefix)]
     (if (< n p)
       false
@@ -47,13 +56,13 @@
 
 (defn endpoint-kind [endpoint :string] :string
   ;; cljc: quic|webrtc|https→webtransport|relay|unknown
-  (if (starts-with? endpoint (scheme-quic))
+  (if (starts-with? (record-new [:ref :driver/starts-with] endpoint (scheme-quic)))
     (kind-quic)
-    (if (starts-with? endpoint (scheme-webrtc))
+    (if (starts-with? (record-new [:ref :driver/starts-with] endpoint (scheme-webrtc)))
       (kind-webrtc)
-      (if (starts-with? endpoint (scheme-https))
+      (if (starts-with? (record-new [:ref :driver/starts-with] endpoint (scheme-https)))
         (kind-webtransport)
-        (if (starts-with? endpoint (scheme-relay))
+        (if (starts-with? (record-new [:ref :driver/starts-with] endpoint (scheme-relay)))
           (kind-relay)
           (kind-unknown))))))
 
@@ -63,17 +72,17 @@
         p (string-byte-length (flag-dash-prefix))]
     (if (< n p)
       ""
-      (if (starts-with? flag (flag-dash-prefix))
+      (if (starts-with? (record-new [:ref :driver/starts-with] flag (flag-dash-prefix)))
         (string-substring flag p n)
         flag))))
 
 (defn command-is-dial? [command :string] :bool
   (if (string=? command (cmd-dial)) true false))
 
-(defn dial-ok-reason [is-dial :bool missing-count :i64] :string
-  ;; cljc dial-result reasons
-  (if is-dial
-    (if (< 0 missing-count)
+(defn dial-ok-reason [x [:ref :driver/dial-reason]] :string
+  ;; cljc dial-result reasons — T5.2 native: is-dial+missing-n
+  (if (record-get x :is-dial)
+    (if (< 0 (record-get x :missing-n))
       (reason-missing-options)
       (reason-ok))
     (reason-unknown-command)))
