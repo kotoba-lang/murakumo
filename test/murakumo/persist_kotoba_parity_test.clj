@@ -6,6 +6,12 @@
             [murakumo.persist :as persist]))
 
 (def port-source (slurp "kotoba/persist_core.kotoba"))
+
+(def ^:private rkey-ty
+  "[:record :persist/rkey [[:millis :i64] [:seq-n :i64]]]")
+
+(def ^:private uri-ty
+  "[:record :persist/uri [[:collection :string] [:rkey :string]]]")
 (def export-prefix
   (str "repo-authority fleet-graph-name snapshot-collection reconcile-collection "
        "snapshot-local-port reconcile-local-port forward-settle-ms "
@@ -42,9 +48,11 @@
   (let [s (compile-string-cases
            {"a" "(repo-authority)" "g" "(fleet-graph-name)"
             "sc" "(snapshot-collection)" "rc" "(reconcile-collection)"
-            "rk" "(snapshot-rkey 1000 1)" "rr" "(reconcile-rkey 1000 2)"
-            "u" (str "(repo-uri " (kotoba-literal "com.murakumo.fleet.snapshot") " "
-                     (kotoba-literal "snap-1") ")")
+            "rk" (str "(snapshot-rkey (record-new " rkey-ty " 1000 1))")
+            "rr" (str "(reconcile-rkey (record-new " rkey-ty " 1000 2))")
+            "u" (str "(repo-uri (record-new " uri-ty " "
+                 (kotoba-literal "com.murakumo.fleet.snapshot") " "
+                 (kotoba-literal "snap-1") "))")
             "w" "(repo-write-url 18099)"
             "op" "(operation-create)"
             "mk" "(write-ok-marker)"

@@ -80,27 +80,37 @@
 (defn fleet-graph-cid []
   (identity/graph-cid fleet-graph-name))
 
+(def ^:private rkey-schema
+  "T5.2 native guest record for snapshot/reconcile rkeys."
+  [:record :persist/rkey [[:millis :i64] [:seq-n :i64]]])
+
+(def ^:private uri-schema
+  [:record :persist/uri [[:collection :string] [:rkey :string]]])
+
 (defn repo-uri
   "Build the AT URI for an append-only murakumo record.
-   Kotoba `repo-uri` (required). T5.2: structural map → call-record."
+   Kotoba `repo-uri` (required). T5.2 native: single :persist/uri argument."
   [collection rkey]
   (o-record 'repo-uri
-            {:collection collection :rkey rkey}
-            [[:collection :string] [:rkey :string]]))
+            {:uri (oracle/record uri-schema
+                                 {:collection collection :rkey rkey})}
+            [[:uri :raw]]))
 
 (defn snapshot-rkey
-  "Kotoba `snapshot-rkey` (required). T5.2: structural map → call-record."
+  "Kotoba `snapshot-rkey` (required). T5.2 native: single :persist/rkey argument."
   [millis sequence-number]
   (o-record 'snapshot-rkey
-            {:millis millis :sequence-number sequence-number}
-            [[:millis :i64] [:sequence-number :i64]]))
+            {:rkey (oracle/record rkey-schema
+                                  {:millis millis :seq-n sequence-number})}
+            [[:rkey :raw]]))
 
 (defn reconcile-rkey
-  "Kotoba `reconcile-rkey` (required). T5.2: structural map → call-record."
+  "Kotoba `reconcile-rkey` (required). T5.2 native: single :persist/rkey argument."
   [millis sequence-number]
   (o-record 'reconcile-rkey
-            {:millis millis :sequence-number sequence-number}
-            [[:millis :i64] [:sequence-number :i64]]))
+            {:rkey (oracle/record rkey-schema
+                                  {:millis millis :seq-n sequence-number})}
+            [[:rkey :raw]]))
 
 (defn repo-write-envelope
   "Build the pure repo.write payload before host-side JSON encoding.

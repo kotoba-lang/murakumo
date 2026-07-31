@@ -6,6 +6,12 @@
             [murakumo.infer.relay :as relay]))
 
 (def port-source (slurp "kotoba/infer_relay_core.kotoba"))
+
+(def ^:private id-ty
+  "[:record :relay/id [[:prefix :string] [:n :i64]]]")
+
+(def ^:private lease-ty
+  "[:record :relay/lease [[:now-ms :i64] [:at-ms :i64] [:ttl-ms :i64]]]")
 (def export-prefix "digit-char nat-str i64-str make-id lease-expired? msg-idle msg-job msg-settled")
 
 (defn- kotoba-literal [s]
@@ -35,8 +41,8 @@
 
 (deftest make-id-matches-gen-id-shape
   (let [actual (compile-string-cases
-                {"j" (str "(make-id " (kotoba-literal "job") " 0)")
-                 "w" (str "(make-id " (kotoba-literal "w") " 3)")
+                {"j" (str "(make-id (record-new " id-ty " " (kotoba-literal "job") " 0))")
+                 "w" (str "(make-id (record-new " id-ty " " (kotoba-literal "w") " 3))")
                  "i" "(msg-idle)" "jo" "(msg-job)" "s" "(msg-settled)"})]
     (is (= "job-0" (get actual "j")))
     (is (= "w-3" (get actual "w")))
@@ -55,7 +61,8 @@
         cases (into {} (map-indexed
                         (fn [i [now at ttl]]
                           [(str "e_" i)
-                           (str "(if (lease-expired? " now " " at " " ttl ") 1 0)")])
+                           (str "(if (lease-expired? (record-new " lease-ty " "
+                                now " " at " " ttl ")) 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [now at ttl]] (map-indexed vector corpus)]

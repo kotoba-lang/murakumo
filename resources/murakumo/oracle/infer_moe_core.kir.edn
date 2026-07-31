@@ -26,47 +26,118 @@
        (if (< usable-bytes u128) 432 512))))),
    :param-types [:i64]}
   {:name expert-ratio-milli,
-   :params [experts active],
+   :params [x],
    :result :i64,
    :effects #{},
-   :body (if (< active 1) 0 (quot (* experts 1000) active)),
-   :param-types [:i64 :i64]}
+   :body
+   (let
+    [experts
+     (record-get
+      [:record :moe/ratio [[:experts :i64] [:active :i64]]]
+      x
+      :experts)
+     active
+     (record-get
+      [:record :moe/ratio [[:experts :i64] [:active :i64]]]
+      x
+      :active)]
+    (if (< active 1) 0 (quot (* experts 1000) active))),
+   :param-types [[:ref :moe/ratio]]}
   {:name verdict-name,
-   :params [experts active shared],
+   :params [x],
    :result :string,
    :effects #{},
    :body
-   (if
-    (if (< experts 1) true (if (< active 1) true false))
-    "unknown"
-    (let
-     [milli
-      (expert-ratio-milli experts active)
-      high
-      (if (< milli 10000) false true)]
-     (if
-      (if high (if shared true false) false)
-      "recommended"
-      (if shared "workable" "not-recommended")))),
-   :param-types [:i64 :i64 :bool]}
+   (let
+    [experts
+     (record-get
+      [:record
+       :moe/verdict
+       [[:experts :i64] [:active :i64] [:shared :bool]]]
+      x
+      :experts)
+     active
+     (record-get
+      [:record
+       :moe/verdict
+       [[:experts :i64] [:active :i64] [:shared :bool]]]
+      x
+      :active)
+     shared
+     (record-get
+      [:record
+       :moe/verdict
+       [[:experts :i64] [:active :i64] [:shared :bool]]]
+      x
+      :shared)]
+    (if
+     (if (< experts 1) true (if (< active 1) true false))
+     "unknown"
+     (let
+      [milli
+       (if (< active 1) 0 (quot (* experts 1000) active))
+       high
+       (if (< milli 10000) false true)]
+      (if
+       (if high (if shared true false) false)
+       "recommended"
+       (if shared "workable" "not-recommended"))))),
+   :param-types [[:ref :moe/verdict]]}
   {:name resident-est,
-   :params [weight-bytes experts capacity],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
-   (if
+   (let
+    [weight-bytes
+     (record-get
+      [:record
+       :moe/resident
+       [[:weight-bytes :i64] [:experts :i64] [:capacity :i64]]]
+      x
+      :weight-bytes)
+     experts
+     (record-get
+      [:record
+       :moe/resident
+       [[:weight-bytes :i64] [:experts :i64] [:capacity :i64]]]
+      x
+      :experts)
+     capacity
+     (record-get
+      [:record
+       :moe/resident
+       [[:weight-bytes :i64] [:experts :i64] [:capacity :i64]]]
+      x
+      :capacity)]
     (if
-     (< weight-bytes 1)
-     1
-     (if (< experts 1) 1 (if (< capacity 1) 1 0)))
-    weight-bytes
-    (quot (* weight-bytes capacity) experts)),
-   :param-types [:i64 :i64 :i64]}],
+     (if
+      (< weight-bytes 1)
+      1
+      (if (< experts 1) 1 (if (< capacity 1) 1 0)))
+     weight-bytes
+     (quot (* weight-bytes capacity) experts))),
+   :param-types [[:ref :moe/resident]]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:moe{:ratio
+       "04ed1ab46098d29df69d22e864cf6653e514929bb43117966b02509d8235be5d",
+       :resident
+       "06ecccda608ad8c5b87e4273eff5c735150e3a6bee82ddcfa958cec8d0a3782d",
+       :verdict
+       "25948ab86ae9f6cada1adf3da0a464ea288a437c7887481f337faadcef8852de"},
  :exports
  [gib capacity-default expert-ratio-milli verdict-name resident-est],
- :schemas nil,
+ :schemas
+ #:moe{:ratio [:record :moe/ratio [[:experts :i64] [:active :i64]]],
+       :verdict
+       [:record
+        :moe/verdict
+        [[:experts :i64] [:active :i64] [:shared :bool]]],
+       :resident
+       [:record
+        :moe/resident
+        [[:weight-bytes :i64] [:experts :i64] [:capacity :i64]]]},
  :effects #{},
  :blocks [],
  :entry nil}

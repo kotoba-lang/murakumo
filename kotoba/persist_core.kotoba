@@ -1,4 +1,8 @@
 (ns persist-core
+  (:schemas {;; T5.2 native guest record wire
+             :persist/rkey [:record :persist/rkey [[:millis :i64] [:seq-n :i64]]]
+             :persist/uri [:record :persist/uri
+                           [[:collection :string] [:rkey :string]]]})
   (:export [repo-authority fleet-graph-name snapshot-collection reconcile-collection
             snapshot-local-port reconcile-local-port forward-settle-ms
             digit-char nat-str i64-str
@@ -36,22 +40,29 @@
     (string-concat "-" (nat-str (- 0 n)))
     (nat-str n)))
 
-(defn snapshot-rkey [millis :i64 seq-n :i64] :string
+(defn snapshot-rkey [x [:ref :persist/rkey]] :string
+  ;; T5.2 native: single rkey record.
   (string-concat
    "snap-"
-   (string-concat (i64-str millis) (string-concat "-" (i64-str seq-n)))))
+   (string-concat (i64-str (record-get x :millis))
+                  (string-concat "-" (i64-str (record-get x :seq-n))))))
 
-(defn reconcile-rkey [millis :i64 seq-n :i64] :string
+(defn reconcile-rkey [x [:ref :persist/rkey]] :string
+  ;; T5.2 native: same rkey record shape as snapshot.
   (string-concat
    "rec-"
-   (string-concat (i64-str millis) (string-concat "-" (i64-str seq-n)))))
+   (string-concat (i64-str (record-get x :millis))
+                  (string-concat "-" (i64-str (record-get x :seq-n))))))
 
-(defn repo-uri [collection :string rkey :string] :string
+(defn repo-uri [x [:ref :persist/uri]] :string
+  ;; T5.2 native: single uri record.
   (string-concat
    "at://"
    (string-concat
     (repo-authority)
-    (string-concat "/" (string-concat collection (string-concat "/" rkey))))))
+    (string-concat "/"
+                   (string-concat (record-get x :collection)
+                                  (string-concat "/" (record-get x :rkey)))))))
 
 (defn operation-create [] :string "create")
 

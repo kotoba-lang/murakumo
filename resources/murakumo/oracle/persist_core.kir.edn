@@ -69,29 +69,49 @@
    (if (< n 0) (string-concat "-" (nat-str (- 0 n))) (nat-str n)),
    :param-types [:i64]}
   {:name snapshot-rkey,
-   :params [millis seq-n],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "snap-"
     (string-concat
-     (i64-str millis)
-     (string-concat "-" (i64-str seq-n)))),
-   :param-types [:i64 :i64]}
+     (i64-str
+      (record-get
+       [:record :persist/rkey [[:millis :i64] [:seq-n :i64]]]
+       x
+       :millis))
+     (string-concat
+      "-"
+      (i64-str
+       (record-get
+        [:record :persist/rkey [[:millis :i64] [:seq-n :i64]]]
+        x
+        :seq-n))))),
+   :param-types [[:ref :persist/rkey]]}
   {:name reconcile-rkey,
-   :params [millis seq-n],
+   :params [x],
    :result :string,
    :effects #{},
    :body
    (string-concat
     "rec-"
     (string-concat
-     (i64-str millis)
-     (string-concat "-" (i64-str seq-n)))),
-   :param-types [:i64 :i64]}
+     (i64-str
+      (record-get
+       [:record :persist/rkey [[:millis :i64] [:seq-n :i64]]]
+       x
+       :millis))
+     (string-concat
+      "-"
+      (i64-str
+       (record-get
+        [:record :persist/rkey [[:millis :i64] [:seq-n :i64]]]
+        x
+        :seq-n))))),
+   :param-types [[:ref :persist/rkey]]}
   {:name repo-uri,
-   :params [collection rkey],
+   :params [x],
    :result :string,
    :effects #{},
    :body
@@ -101,8 +121,18 @@
      (repo-authority)
      (string-concat
       "/"
-      (string-concat collection (string-concat "/" rkey))))),
-   :param-types [:string :string]}
+      (string-concat
+       (record-get
+        [:record :persist/uri [[:collection :string] [:rkey :string]]]
+        x
+        :collection)
+       (string-concat
+        "/"
+        (record-get
+         [:record :persist/uri [[:collection :string] [:rkey :string]]]
+         x
+         :rkey)))))),
+   :param-types [[:ref :persist/uri]]}
   {:name operation-create,
    :params [],
    :result :string,
@@ -167,7 +197,11 @@
    :body (if (string-contains? out (write-ok-marker)) true false),
    :param-types [:string]}],
  :oracle-value nil,
- :schema-identities nil,
+ :schema-identities
+ #:persist{:rkey
+           "379177916cc7dbb1e6f911d05961f5a68c8cf619a2655a9a795b560f9384a819",
+           :uri
+           "d56b343f02cd2a2d7ac32898891d2ce24d17bb8f2a2e235bc285d82baffc1f29"},
  :exports
  [repo-authority
   fleet-graph-name
@@ -192,7 +226,13 @@
   curl-method-post
   auth-header
   xrpc-repo-write-path],
- :schemas nil,
+ :schemas
+ #:persist{:rkey
+           [:record :persist/rkey [[:millis :i64] [:seq-n :i64]]],
+           :uri
+           [:record
+            :persist/uri
+            [[:collection :string] [:rkey :string]]]},
  :effects #{},
  :blocks [],
  :entry nil}
