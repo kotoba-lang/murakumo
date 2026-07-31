@@ -19,6 +19,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 (def default-rpc-port
   (oracle/i64->host (o 'default-rpc-port [])))
 
@@ -33,17 +39,23 @@
   (or (some #(when (get-in % [:node :head?]) (:span %)) (:assignments plan)) 0))
 
 (defn rpc-worker-cmds
-  "One `rpc-server` spec per serving worker node."
+  "One `rpc-server` spec per serving worker node.
+   T5.2: structural map → call-record for rpc-server-cmd."
   [plan {:keys [bin-dir port cache-dir device] :or {port default-rpc-port device "MTL0"}}]
   (for [{:keys [node]} (workers plan)
         :let [cache? (not (false? (:rpc-cache? node)))
               dev (or (:rpc-device node) device)
-              cmd (o 'rpc-server-cmd
-                     [(str bin-dir)
-                      (oracle/as-i64 port)
-                      (str dev)
-                      (boolean cache?)
-                      (str (or cache-dir ""))])]]
+              cmd (o-record 'rpc-server-cmd
+                            {:bin-dir bin-dir
+                             :port port
+                             :device dev
+                             :cache? cache?
+                             :cache-dir (or cache-dir "")}
+                            [[:bin-dir :string]
+                             [:port :i64]
+                             [:device :string]
+                             [:cache? :bool]
+                             [:cache-dir :string]])]]
     {:name (:name node)
      :host (:host node)
      :ip (or (:rpc-ip node) (:ip node))
@@ -57,15 +69,18 @@
     ;; host join; oracle has fixed tensor-split-3 for 3-way only / i64-str
     (str/join ","
               (map (fn [s]
-                     (o 'i64-str [(oracle/as-i64 s)]))
+                     (o-record 'i64-str
+                               {:n s}
+                               [[:n :i64]]))
                    spans))))
 
 (defn rpc-endpoints [worker-cmds]
   (str/join ","
             (map (fn [w]
-                   (o 'endpoint
-                      [(str (or (:ip w) (:host w)))
-                       (oracle/as-i64 (:port w))]))
+                   (o-record 'endpoint
+                             {:host (or (:ip w) (:host w))
+                              :port (:port w)}
+                             [[:host :string] [:port :i64]]))
                  worker-cmds)))
 
 (defn head-cmd
@@ -77,10 +92,16 @@
         strat (name (or strategy :pipeline))
         rpc-csv (rpc-endpoints ws)
         tsplit (tensor-split plan)]
-    (str (o 'head-cmd-front [(str bin-dir) (str model-path)])
-         (o 'head-cmd-middle [(str rpc-csv) (str strat) (str tsplit)])
+    (str (o-record 'head-cmd-front
+                   {:bin-dir bin-dir :model-path model-path}
+                   [[:bin-dir :string] [:model-path :string]])
+         (o-record 'head-cmd-middle
+                   {:rpc-csv rpc-csv :strategy strat :tsplit tsplit}
+                   [[:rpc-csv :string] [:strategy :string] [:tsplit :string]])
          (when moe-override (str " -ot " (pr-str moe-override)))
-         (o 'head-cmd-tail [(oracle/as-i64 ctx) (oracle/as-i64 parallel) (oracle/as-i64 port)])
+         (o-record 'head-cmd-tail
+                   {:ctx ctx :parallel parallel :port port}
+                   [[:ctx :i64] [:parallel :i64] [:port :i64]])
          (when (seq extra-args) (str " " (str/join " " extra-args))))))
 
 ;; ── mlx ring ────────────────────────────────────────────────────────────────
@@ -94,8 +115,15 @@
 (defn mlx-launch-cmd
   [plan {:keys [hosts-file venv model-repo prompt max-tokens]
          :or {max-tokens 128}}]
-  (str (o 'mlx-launch-front
-          [(str venv) (str hosts-file) (str model-repo) (oracle/as-i64 max-tokens)])
+  (str (o-record 'mlx-launch-front
+                 {:venv venv
+                  :hosts-file hosts-file
+                  :model-repo model-repo
+                  :max-tokens max-tokens}
+                 [[:venv :string]
+                  [:hosts-file :string]
+                  [:model-repo :string]
+                  [:max-tokens :i64]])
        " --prompt " (pr-str (or prompt "Name three Japanese cities."))))
 
 ;; ── mlx-moe ─────────────────────────────────────────────────────────────────
@@ -104,18 +132,36 @@
   "mu-hashmi/mlx-moe `serve` invocation (single-node)."
   [{:keys [venv model-repo port capacity pin-top-k kv-bits profile warmup extra-args]
     :or {port 8080}}]
-  (str (o 'mlx-moe-front
-          [(str (or venv "")) (str model-repo) (oracle/as-i64 port)])
-       (o 'opt-i64-flag
-          [" --capacity" (oracle/as-i64 (or capacity 0)) (boolean capacity)])
-       (o 'opt-i64-flag
-          [" --pin-top-k" (oracle/as-i64 (or pin-top-k 0)) (boolean pin-top-k)])
-       (o 'opt-i64-flag
-          [" --kv-bits" (oracle/as-i64 (or kv-bits 0)) (boolean kv-bits)])
-       (o 'opt-str-flag
-          [" --profile" (str (or profile "")) (boolean profile)])
-       (o 'opt-str-flag
-          [" --warmup" (str (or warmup "")) (boolean warmup)])
+  (str (o-record 'mlx-moe-front
+                 {:venv (or venv "")
+                  :model-repo model-repo
+                  :port port}
+                 [[:venv :string] [:model-repo :string] [:port :i64]])
+       (o-record 'opt-i64-flag
+                 {:flag " --capacity"
+                  :value (or capacity 0)
+                  :present? (boolean capacity)}
+                 [[:flag :string] [:value :i64] [:present? :bool]])
+       (o-record 'opt-i64-flag
+                 {:flag " --pin-top-k"
+                  :value (or pin-top-k 0)
+                  :present? (boolean pin-top-k)}
+                 [[:flag :string] [:value :i64] [:present? :bool]])
+       (o-record 'opt-i64-flag
+                 {:flag " --kv-bits"
+                  :value (or kv-bits 0)
+                  :present? (boolean kv-bits)}
+                 [[:flag :string] [:value :i64] [:present? :bool]])
+       (o-record 'opt-str-flag
+                 {:flag " --profile"
+                  :value (or profile "")
+                  :present? (boolean profile)}
+                 [[:flag :string] [:value :string] [:present? :bool]])
+       (o-record 'opt-str-flag
+                 {:flag " --warmup"
+                  :value (or warmup "")
+                  :present? (boolean warmup)}
+                 [[:flag :string] [:value :string] [:present? :bool]])
        (when (seq extra-args) (str " " (str/join " " extra-args)))))
 
 ;; ── llamacpp-embed ──────────────────────────────────────────────────────────
@@ -124,9 +170,18 @@
   "Single-node llama.cpp embedding server."
   [{:keys [bin-dir model-path port ctx pooling parallel extra-args]
     :or {port 8091 ctx 8192 pooling "mean" parallel 4}}]
-  (str (o 'embed-head-front
-          [(str bin-dir) (str model-path) (str pooling) (oracle/as-i64 ctx)])
-       (o 'embed-head-back [(oracle/as-i64 parallel) (oracle/as-i64 port)])
+  (str (o-record 'embed-head-front
+                 {:bin-dir bin-dir
+                  :model-path model-path
+                  :pooling pooling
+                  :ctx ctx}
+                 [[:bin-dir :string]
+                  [:model-path :string]
+                  [:pooling :string]
+                  [:ctx :i64]])
+       (o-record 'embed-head-back
+                 {:parallel parallel :port port}
+                 [[:parallel :i64] [:port :i64]])
        (when (seq extra-args) (str " " (str/join " " extra-args)))))
 
 (defn commands

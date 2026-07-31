@@ -28,7 +28,9 @@
             [murakumo.task.plan :as task]
             [murakumo.infer.moe :as moe]
             [murakumo.infer.join :as join]
-            [murakumo.infer.gc :as gc]))
+            [murakumo.infer.gc :as gc]
+            [murakumo.infer.engine :as eng]
+            [murakumo.infer.schedule :as sched]))
 
 (deftest map->args-projects-kinds
   (is (= ["a" "b"]
@@ -375,3 +377,34 @@
       (is (true? (:ok? ok)))
       (is (false? (:ok? bad)))
       (is (= :unknown-command (:reason bad))))))
+
+(deftest call-record-engine-schedule-task-residual
+  "T5.2 wave 9: engine cmd strings, schedule scores, task residual arith."
+  (when (oracle/ready? :infer-engine)
+    (let [plan {:assignments [{:node {:name "w" :host "h" :head? false :ip "10.0.0.1"}
+                               :span 1}
+                              {:node {:name "head" :host "h0" :head? true}
+                               :span 1}]}
+          ws (eng/rpc-worker-cmds plan {:bin-dir "/bin" :port 50052})
+          hc (eng/head-cmd plan {:bin-dir "/bin" :model-path "/m.gguf" :port 8080})]
+      (is (seq ws))
+      (is (string? (:cmd (first ws))))
+      (is (string? hc))
+      (is (string? (eng/tensor-split plan)))
+      (is (string? (eng/mlx-moe-cmd {:model-repo "org/m" :port 8080 :capacity 2})))
+      (is (string? (eng/embed-head-cmd {:bin-dir "/bin" :model-path "/e.gguf"})))))
+  (when (oracle/ready? :infer-schedule)
+    (is (vector? (sched/score {:queue 1 :free-bytes 1000})))
+    (is (= 2 (count (sched/score {:queue 0 :free-bytes 0}))))
+    (let [asg (sched/assign [{:name "n" :queue 0 :free-bytes 1e12
+                              :engines #{:e} :checkpoints #{}
+                              :node/can-fetch? true}]
+                            [{:model {:model/engine :e :model/checkpoint nil
+                                      :model/min-free-bytes 0}}])]
+      (is (vector? asg))))
+  (when (oracle/ready? :task-plan)
+    (is (vector? (task/expand 2 {:cmd ["echo"]})))
+    (is (= 2 (count (task/expand 2 {:cmd ["echo"]}))))
+    (let [sm (task/summary [] 1000)]
+      (is (map? sm))
+      (is (number? (:retried sm))))))
