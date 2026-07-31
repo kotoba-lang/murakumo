@@ -1023,7 +1023,7 @@
     p),
    :param-types [:i64 :i64 :i64 :i64 :i64]}
   {:name demand-inc,
-   :params [d class-code],
+   :params [x],
    :result [:ref :rebalance/demand],
    :effects #{},
    :body
@@ -1031,58 +1031,75 @@
     [t
      (record-get
       [:record
-       :rebalance/demand
+       :rebalance/demand-step
        [[:text :i64]
         [:image :i64]
         [:video :i64]
         [:audio :i64]
-        [:postproc :i64]]]
-      d
+        [:postproc :i64]
+        [:class-code :i64]]]
+      x
       :text)
      i
      (record-get
       [:record
-       :rebalance/demand
+       :rebalance/demand-step
        [[:text :i64]
         [:image :i64]
         [:video :i64]
         [:audio :i64]
-        [:postproc :i64]]]
-      d
+        [:postproc :i64]
+        [:class-code :i64]]]
+      x
       :image)
      v
      (record-get
       [:record
-       :rebalance/demand
+       :rebalance/demand-step
        [[:text :i64]
         [:image :i64]
         [:video :i64]
         [:audio :i64]
-        [:postproc :i64]]]
-      d
+        [:postproc :i64]
+        [:class-code :i64]]]
+      x
       :video)
      a
      (record-get
       [:record
-       :rebalance/demand
+       :rebalance/demand-step
        [[:text :i64]
         [:image :i64]
         [:video :i64]
         [:audio :i64]
-        [:postproc :i64]]]
-      d
+        [:postproc :i64]
+        [:class-code :i64]]]
+      x
       :audio)
      p
      (record-get
       [:record
-       :rebalance/demand
+       :rebalance/demand-step
        [[:text :i64]
         [:image :i64]
         [:video :i64]
         [:audio :i64]
-        [:postproc :i64]]]
-      d
-      :postproc)]
+        [:postproc :i64]
+        [:class-code :i64]]]
+      x
+      :postproc)
+     class-code
+     (record-get
+      [:record
+       :rebalance/demand-step
+       [[:text :i64]
+        [:image :i64]
+        [:video :i64]
+        [:audio :i64]
+        [:postproc :i64]
+        [:class-code :i64]]]
+      x
+      :class-code)]
     (if
      (= class-code 1)
      (demand-record (+ t 1) i v a p)
@@ -1095,8 +1112,11 @@
        (if
         (= class-code 4)
         (demand-record t i v (+ a 1) p)
-        (if (= class-code 5) (demand-record t i v a (+ p 1)) d)))))),
-   :param-types [[:ref :rebalance/demand] :i64]}
+        (if
+         (= class-code 5)
+         (demand-record t i v a (+ p 1))
+         (demand-record t i v a p))))))),
+   :param-types [[:ref :rebalance/demand-step]]}
   {:name demand-to-pool-record,
    :params [d],
    :result [:ref :rebalance/lanes],
@@ -1619,31 +1639,33 @@
  :oracle-value nil,
  :schema-identities
  #:rebalance{:before-pool
-             "aa4f44d9e7f1d29a8a166cff9dd1b306d00b10db31450e3c2021817d23b98e2b",
+             "73123e26c3525d9afd6e6fd796b62b949fd2865db0a512f78bb815a021baeea8",
              :bump-cmp
-             "f8231a6822fac57573e8e29febaa2f8932f200f6bcc336613febc686574fa9aa",
+             "f342bb4d2c5bcee935c3c998b371ff725651ff0b925b17a4438671823cab0c65",
              :bump3-in
-             "ead62b95c2e43c6516640acd5c32dbb1e37714e211822774d9406f8c8b8889dd",
+             "79c8747cac2caaa018479f3ac920ccc5f97f59442a33d7e9f4bcb3d5fc3becc3",
              :demand
-             "fe6db02949bbe4e65df7e91bec2ae3d934a4aa667279c64d1c015fcb82e72a49",
+             "71623275bca2c2d9ebfb0414577702af8a723ca4f58586a58fa09dcb59d6ad7f",
+             :demand-step
+             "6a1476b016c46cb63b271c36ef8a26640f3f6f354269bf6408149b09bdfbe9f0",
              :lanes
-             "ebc1e46cf69e31af157e92ba97c4a0ee7c283b726a1f84c40a7ecdee52a70ed6",
+             "9b92a2942b765d7d6ff03cfdc8d18866b60f23cf029c5a234617654cc09bb5d2",
              :ok-for
-             "aa532edcb0aeb08d5d4c051e04779dc03b79eee5d9b03d6d07802e8a23683781",
+             "2136d4f6af05efaa0bc9d62b16e1ef0f7c568626ad196d10afef2194d84d04b5",
              :order
-             "f9817bead03fcaf122e0a4a5af0eb189ed8682dff2830672be2887f6dd3664bb",
+             "ac76bf40021d336e14083de8c6ce1b1300afe8abb3a2d48272443c3af94c05fc",
              :order-nth
-             "1b1d83219cfc9e1574dfc3c41e4965727e471a4ae32de3bf4754ec9dd723643d",
+             "144796de5d661edcbd566a8d94dbdb7bb8b4a54bb91631405f57bec87321be75",
              :pair
-             "161e1a5d76044ceb7b7e1850110fba15d0fd64acf01ebfdb8777523d7ff8e1a8",
+             "2a1b292373ebe3d97934015143d3182e3a5df751680f86d460bf9c6dfc0fe1bf",
              :run-flags
-             "74887de6a3fe811dca04fe77a65540ec28019f420e731432480064d679de0b9a",
+             "e5e3f4d3fb08822fd999175e2838e462750eb9c3edd10ba0bce81870b845705d",
              :seat-of
-             "a7f29c5b02e6edfc667e5d9ee2f359cb2eff81872efb4672bc1e849515a97a1c",
+             "3c07c3752788505ee7213fef66050659bcae73fc236b901268a8afa9b74b3d5f",
              :seats-in
-             "e031bfde4edef83ffde58014c0fdc86d5e04ac68bf341fc962b5cae31028a258",
+             "001ec4d09c9572175e8d38d9a386faeeb0176b08652f19abb56b70571b3c459a",
              :triple
-             "bb4b87c099441cf926b38d79dcf267171e54c05a3ddca771bab064e2944b54b6"},
+             "3f87f64ddcd16dd900a52df676dc82753053e770c8b4a78a8038d9f5270c81e1"},
  :exports
  [shard-ceiling-gb
   os-kv-headroom-gb
@@ -1748,6 +1770,15 @@
                [:media-w :i64]
                [:postproc-w :i64]
                [:floor :i64]]],
+             :demand-step
+             [:record
+              :rebalance/demand-step
+              [[:text :i64]
+               [:image :i64]
+               [:video :i64]
+               [:audio :i64]
+               [:postproc :i64]
+               [:class-code :i64]]],
              :ok-for
              [:record
               :rebalance/ok-for

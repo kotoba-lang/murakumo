@@ -918,56 +918,146 @@
     (if (= b 0) true false)),
    :param-types [[:ref :task/challenger]]}
   {:name assign-task-pick-3,
-   :params [ok fill load],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
     [ok0
      (record-get
-      [:record :task/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
-      ok
-      :v0)
+      [:record
+       :task/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:fill0 :i64]
+        [:fill1 :i64]
+        [:fill2 :i64]
+        [:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]]]
+      x
+      :ok0)
      ok1
      (record-get
-      [:record :task/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
-      ok
-      :v1)
+      [:record
+       :task/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:fill0 :i64]
+        [:fill1 :i64]
+        [:fill2 :i64]
+        [:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]]]
+      x
+      :ok1)
      ok2
      (record-get
-      [:record :task/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
-      ok
-      :v2)
+      [:record
+       :task/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:fill0 :i64]
+        [:fill1 :i64]
+        [:fill2 :i64]
+        [:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]]]
+      x
+      :ok2)
      f0
      (record-get
-      [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-      fill
-      :v0)
+      [:record
+       :task/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:fill0 :i64]
+        [:fill1 :i64]
+        [:fill2 :i64]
+        [:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]]]
+      x
+      :fill0)
      f1
      (record-get
-      [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-      fill
-      :v1)
+      [:record
+       :task/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:fill0 :i64]
+        [:fill1 :i64]
+        [:fill2 :i64]
+        [:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]]]
+      x
+      :fill1)
      f2
      (record-get
-      [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-      fill
-      :v2)
+      [:record
+       :task/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:fill0 :i64]
+        [:fill1 :i64]
+        [:fill2 :i64]
+        [:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]]]
+      x
+      :fill2)
      l0
      (record-get
-      [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-      load
-      :v0)
+      [:record
+       :task/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:fill0 :i64]
+        [:fill1 :i64]
+        [:fill2 :i64]
+        [:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]]]
+      x
+      :load0)
      l1
      (record-get
-      [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-      load
-      :v1)
+      [:record
+       :task/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:fill0 :i64]
+        [:fill1 :i64]
+        [:fill2 :i64]
+        [:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]]]
+      x
+      :load1)
      l2
      (record-get
-      [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-      load
-      :v2)
+      [:record
+       :task/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:fill0 :i64]
+        [:fill1 :i64]
+        [:fill2 :i64]
+        [:load0 :i64]
+        [:load1 :i64]
+        [:load2 :i64]]]
+      x
+      :load2)
      p01
      (if
       ok0
@@ -1010,29 +1100,41 @@
         f2
         l2)))]
     (if (< p01 0) (if ok2 2 -1) (if ok2 (if win2 2 p01) p01))),
-   :param-types
-   [[:ref :task/flags3] [:ref :task/triple] [:ref :task/triple]]}
+   :param-types [[:ref :task/pick3-in]]}
   {:name apply-task-pick-3,
-   :params [load pick],
+   :params [x],
    :result [:ref :task/triple],
    :effects #{},
    :body
    (let
     [l0
      (record-get
-      [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-      load
+      [:record
+       :task/apply-pick3
+       [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]]
+      x
       :v0)
      l1
      (record-get
-      [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-      load
+      [:record
+       :task/apply-pick3
+       [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]]
+      x
       :v1)
      l2
      (record-get
-      [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-      load
+      [:record
+       :task/apply-pick3
+       [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]]
+      x
       :v2)
+     pick
+     (record-get
+      [:record
+       :task/apply-pick3
+       [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]]
+      x
+      :pick)
      n0
      (load-inc-if
       (record-new
@@ -1056,19 +1158,204 @@
      n0
      n1
      n2)),
-   :param-types [[:ref :task/triple] :i64]}
+   :param-types [[:ref :task/apply-pick3]]}
   {:name assign-task-step-3,
-   :params [load ok fill],
+   :params [x],
    :result [:ref :task/assign3],
    :effects #{},
    :body
    (let
     [p
-     (assign-task-pick-3 ok fill load)
+     (assign-task-pick-3
+      (record-new
+       [:record
+        :task/pick3-in
+        [[:ok0 :bool]
+         [:ok1 :bool]
+         [:ok2 :bool]
+         [:fill0 :i64]
+         [:fill1 :i64]
+         [:fill2 :i64]
+         [:load0 :i64]
+         [:load1 :i64]
+         [:load2 :i64]]]
+       (record-get
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]]
+        x
+        :ok0)
+       (record-get
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]]
+        x
+        :ok1)
+       (record-get
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]]
+        x
+        :ok2)
+       (record-get
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]]
+        x
+        :fill0)
+       (record-get
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]]
+        x
+        :fill1)
+       (record-get
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]]
+        x
+        :fill2)
+       (record-get
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]]
+        x
+        :load0)
+       (record-get
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]]
+        x
+        :load1)
+       (record-get
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]]
+        x
+        :load2)))
      code
      (if (< p 0) 0 (+ p 1))
      nload
-     (apply-task-pick-3 load p)]
+     (apply-task-pick-3
+      (record-new
+       [:record
+        :task/apply-pick3
+        [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]]
+       (record-get
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]]
+        x
+        :load0)
+       (record-get
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]]
+        x
+        :load1)
+       (record-get
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]]
+        x
+        :load2)
+       p))]
     (record-new
      [:record
       :task/assign3
@@ -1086,8 +1373,7 @@
       [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
       nload
       :v2))),
-   :param-types
-   [[:ref :task/triple] [:ref :task/flags3] [:ref :task/triple]]}
+   :param-types [[:ref :task/assign3-in]]}
   {:name assign-task-3-code,
    :params [r],
    :result :i64,
@@ -1290,42 +1576,48 @@
    :param-types [[:ref :task/unsched]]}],
  :oracle-value nil,
  :schema-identities
- #:task{:assign2
-        "e3839cf51b852240bb35d56db1b7844a63d7fda5778418d5c882ad25f1f396f4",
+ #:task{:apply-pick3
+        "7403a85ec6ac86077bda09a43bfd5a4d73f29cb8c084936cf5e17dce564749e3",
+        :assign2
+        "f7ef01d6ff52a872bfdd2411c5ef6c9eacf84f35ca6efd95102c7d0a11c811d8",
         :assign2-in
-        "3fa1be113c9c008145a45846c8b0cbc8ef69b1f881732ef26bd8f77c7ab12f23",
+        "22e2335c77abfd9dc4df5b9ad174bc4d92f41f022767ec083fa811acf53cd9c0",
         :assign3
-        "9272df9fb62af2399526cc072a7d174316d4ca85ecdfbda131468e6f3996a442",
+        "526da64e29c3ebe93d5a63265496edf2717215def9187ece1072c46bd2e3ae3a",
+        :assign3-in
+        "3a9027ba2c9f09cc4e2cd3d26190f131587d1fdf05c7dadaf7f3ef401f7c70c0",
         :better-mem
-        "567436220a8cf33ebd71ba04c206a54d8c44ba7436f26f559d4004aa9550f41c",
+        "e7953496683fc679d8231a7afc30226e374efefcf6a9924ec64f1f7f189b2463",
         :capacity-in
-        "da520d144cafc197aedf9791e1dde2faa1f25e6611ba3285f093a2ac0c4656e2",
+        "c176a9dfaa79a7e203b3932ae91907bcc3030b7e529c5c54b3c3b80d97a829df",
         :challenger
-        "81f0eed4b7b1c5e2e29dd20a122cce42d6448d687dae52303c1aaaa02a19efd0",
+        "c48a73897e66a1aed30a21d9b68e2fd66c0b25e9db73958c9686c0c69f0bd7ea",
         :eligibility
-        "5933f04d475b74329d189dfd850ed469687fe6f1afcefea0fcec957b684187b2",
+        "100c8f277729fa382c1a17cd4457f506848b9a40fd1aa1a4369e26ed4193c92f",
         :failed
-        "6f414a41ef4a2b41d2b876dde708f95d6687e55e15ab83004de1b08e3389b83d",
+        "fa13b7fd74176c3a9f9ce4f4a7da5734d1472c6b4a7d5e43ad4c3690651a0671",
         :flags3
-        "e76f0fc10e9db787631eb677fbcfd4b911d9c8dd22b235c29ac3bd7e8e17e75d",
+        "a365de2470ae73092f6b4110060f95d4885a92d197342a1e01a73d9f9c6fa28d",
         :pair
-        "dea11194e7c5520f7a6ca63c5341d26936a1358fe8253d3b3362532b9627e376",
+        "48e156f528e2f7afd92854660d7fe864b5172dcd9bab7f8b6d4cfbfbe032b4f2",
         :pick-fold
-        "9f4755f02444020c646b31c5e4791a1fa9fda7e71f6058be141f051a20f6f0c9",
+        "e06077054f2aec09198ef4f9b0de094e6e2f56a1d2806fcee3abfa42289dd60e",
         :pick2
-        "09ef4e7dd72859359ab1714aa42dbeceda88c534ffbaef0450420c607595c144",
+        "22c5d575ef379a7ceeb245a2290c5a7f0b202e0af90714965cc4fe6a24d6ace2",
+        :pick3-in
+        "77c7221234530ca49acba56c704ef27c93e79cb56f056b9006a27168c6812a09",
         :retry
-        "8d21b756a7287cee7281f9cd99824ff9022d0c3ac69eee0c64f496989ec53453",
+        "4e07e8a179e381e30e0df8980916777394bc80968f296491b237f26fbe2fbb40",
         :score
-        "00d9a03a05ef113adc20f9aa763afeb466ac7ebba37e8006e752d0d66bb1ef8a",
+        "754e80dd4e9f8701dbfd241d3940269ca6e763b92de9d983047ac23374e35047",
         :slots
-        "0e3cab8bff9fd22a4ff526af4e557c0f856a4d76ef94e62f290e0e1e749b5e2f",
+        "664391f5319fb28b45e39beb8e63fb028419442ae9f27c40c2036ea1890abd15",
         :triple
-        "c9e4d5e3eef619236c21e8a0c299ad110d988219501ca13d13a9ab87791f3f6d",
+        "8a382e02d2d12bebafc05abcdd5551279da09a06e7c9f1a038de93baa3c9601e",
         :unsched
-        "06e4bcf3a6dd44262a86b859f9e90e088086a64c26f7b0cd0e98aa4da8eef33c",
+        "cf00b621e0bab01344401a963bcea1ec6b07227c2c8b42a6fa709a6c05ab697e",
         :wave
-        "62da117c64156f2c92837f15d1f4ad1a77f87b8db577b4478f636a77c9310cd2"},
+        "d48ec756c7947989226ac5d48995fa2b22b6ad7d90415c490e5a37e42fac6ee7"},
  :exports
  [default-max-slots
   default-max-attempts
@@ -1428,11 +1720,27 @@
          [[:code :i64] [:load0 :i64] [:load1 :i64]]],
         :triple
         [:record :task/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]],
+        :pick3-in
+        [:record
+         :task/pick3-in
+         [[:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]
+          [:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]]],
         :assign3
         [:record
          :task/assign3
          [[:code :i64] [:load0 :i64] [:load1 :i64] [:load2 :i64]]],
         :wave [:record :task/wave [[:used :i64] [:slots :i64]]],
+        :apply-pick3
+        [:record
+         :task/apply-pick3
+         [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]],
         :eligibility
         [:record
          :task/eligibility
@@ -1443,6 +1751,18 @@
           [:allowlist-ok :bool]
           [:mem-bytes :i64]
           [:min-mem :i64]]],
+        :assign3-in
+        [:record
+         :task/assign3-in
+         [[:load0 :i64]
+          [:load1 :i64]
+          [:load2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:fill0 :i64]
+          [:fill1 :i64]
+          [:fill2 :i64]]],
         :failed
         [:record
          :task/failed

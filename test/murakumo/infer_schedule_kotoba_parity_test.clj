@@ -41,6 +41,28 @@
   "[:record :schedule/pick2 [[:ok0 :bool] [:ok1 :bool] [:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]")
 (def ^:private pick3-tour-lit
   "[:record :schedule/pick3-tour [[:champ01 :i64] [:ok2 :bool] [:warm-champ :bool] [:warm2 :bool] [:better-champ-2 :bool]]]")
+(def ^:private pick3-in-lit
+  "[:record :schedule/pick3-in [[:ok0 :bool] [:ok1 :bool] [:ok2 :bool] [:warm0 :bool] [:warm1 :bool] [:warm2 :bool] [:better01 :bool] [:better02 :bool] [:better12 :bool]]]")
+(def ^:private apply-pick3-lit
+  "[:record :schedule/apply-pick3 [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]]")
+(def ^:private assign3-in-lit
+  "[:record :schedule/assign3-in [[:q0 :i64] [:q1 :i64] [:q2 :i64] [:ok0 :bool] [:ok1 :bool] [:ok2 :bool] [:warm0 :bool] [:warm1 :bool] [:warm2 :bool] [:better01 :bool] [:better02 :bool] [:better12 :bool]]]")
+
+(defn- pick3-in-call
+  "All-warm ok/warm with better3 bool expressions."
+  [b01 b02 b12]
+  (str "(record-new " pick3-in-lit " true true true true true true "
+       b01 " " b02 " " b12 ")"))
+
+(defn- assign3-in-call [q0 q1 q2 b01 b02 b12]
+  (str "(record-new " assign3-in-lit " "
+       q0 " " q1 " " q2
+       " true true true true true true "
+       b01 " " b02 " " b12 ")"))
+
+(defn- apply-pick3-call [q0 q1 q2 pick]
+  (str "(apply-pick-3 (record-new " apply-pick3-lit " "
+       q0 " " q1 " " q2 " " pick "))"))
 
 (defn- better-score-call [q1 f1 q2 f2]
   (str "(if (better-score? (record-new " score-cmp-lit " "
@@ -356,12 +378,10 @@
         jobs (repeat 3 {:model model})
         cljc (sched/assign [a b c] jobs)
         ;; all warm; more free ⇒ better score (score-free = -free)
-        bp0 (str "(better3-record " (better-pair-bool 0 fa 0 fb) " "
-                (better-pair-bool 0 fa 0 fc) " "
-                (better-pair-bool 0 fb 0 fc) ")")
-        ok-warm "(flags3-record true true true)"
-        q0 "(triple-record 0 0 0)"
-        s0 (str "(assign-step-3 " q0 " " ok-warm " " ok-warm " " bp0 ")")
+        b01-0 (better-pair-bool 0 fa 0 fb)
+        b02-0 (better-pair-bool 0 fa 0 fc)
+        b12-0 (better-pair-bool 0 fb 0 fc)
+        s0 (str "(assign-step-3 " (assign3-in-call 0 0 0 b01-0 b02-0 b12-0) ")")
         actual0 (compile-i64-cases
                  {"s0c" (str "(assign-step-3-code " s0 ")")
                   "s0q0" (str "(assign-step-3-q0 " s0 ")")
@@ -370,10 +390,10 @@
                   "pcn" "(pick-code-3 -1)"
                   "pc0" "(pick-code-3 0)"
                   "pc2" "(pick-code-3 2)"
-                  "ap" (str "(assign-pick-3 " ok-warm " " ok-warm " " bp0 ")")
-                  "aq0" (str "(triple-v0 (apply-pick-3 " q0 " 2))")
-                  "aq1" (str "(triple-v1 (apply-pick-3 " q0 " 2))")
-                  "aq2" (str "(triple-v2 (apply-pick-3 " q0 " 2))")})]
+                  "ap" (str "(assign-pick-3 " (pick3-in-call b01-0 b02-0 b12-0) ")")
+                  "aq0" (str "(triple-v0 " (apply-pick3-call 0 0 0 2) ")")
+                  "aq1" (str "(triple-v1 " (apply-pick3-call 0 0 0 2) ")")
+                  "aq2" (str "(triple-v2 " (apply-pick3-call 0 0 0 2) ")")})]
     (is (= 0 (get actual0 "pcn")))
     (is (= 1 (get actual0 "pc0")))
     (is (= 3 (get actual0 "pc2")))
@@ -385,11 +405,10 @@
     (is (= [0 0 1] [(get actual0 "s0q0") (get actual0 "s0q1") (get actual0 "s0q2")]))
     (is (= "c" (:node (nth cljc 0))))
     ;; step1: q=(0,0,1) — still prefer largest free among low queue
-    (let [bp1 (str "(better3-record " (better-pair-bool 0 fa 0 fb) " "
-                (better-pair-bool 0 fa 1 fc) " "
-                (better-pair-bool 0 fb 1 fc) ")")
-          q1 "(triple-record 0 0 1)"
-          s1 (str "(assign-step-3 " q1 " " ok-warm " " ok-warm " " bp1 ")")
+    (let [b01-1 (better-pair-bool 0 fa 0 fb)
+          b02-1 (better-pair-bool 0 fa 1 fc)
+          b12-1 (better-pair-bool 0 fb 1 fc)
+          s1 (str "(assign-step-3 " (assign3-in-call 0 0 1 b01-1 b02-1 b12-1) ")")
           actual1 (compile-i64-cases
                    {"s1c" (str "(assign-step-3-code " s1 ")")
                     "s1q0" (str "(assign-step-3-q0 " s1 ")")

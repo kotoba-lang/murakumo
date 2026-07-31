@@ -686,62 +686,146 @@
    :body (better-from-queues x),
    :param-types [[:ref :schedule/queue-cmp]]}
   {:name assign-pick-3,
-   :params [ok warm better],
+   :params [x],
    :result :i64,
    :effects #{},
    :body
    (let
     [ok0
      (record-get
-      [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
-      ok
-      :v0)
+      [:record
+       :schedule/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:warm2 :bool]
+        [:better01 :bool]
+        [:better02 :bool]
+        [:better12 :bool]]]
+      x
+      :ok0)
      ok1
      (record-get
-      [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
-      ok
-      :v1)
+      [:record
+       :schedule/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:warm2 :bool]
+        [:better01 :bool]
+        [:better02 :bool]
+        [:better12 :bool]]]
+      x
+      :ok1)
      ok2
      (record-get
-      [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
-      ok
-      :v2)
+      [:record
+       :schedule/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:warm2 :bool]
+        [:better01 :bool]
+        [:better02 :bool]
+        [:better12 :bool]]]
+      x
+      :ok2)
      warm0
      (record-get
-      [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
-      warm
-      :v0)
+      [:record
+       :schedule/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:warm2 :bool]
+        [:better01 :bool]
+        [:better02 :bool]
+        [:better12 :bool]]]
+      x
+      :warm0)
      warm1
      (record-get
-      [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
-      warm
-      :v1)
+      [:record
+       :schedule/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:warm2 :bool]
+        [:better01 :bool]
+        [:better02 :bool]
+        [:better12 :bool]]]
+      x
+      :warm1)
      warm2
      (record-get
-      [:record :schedule/flags3 [[:v0 :bool] [:v1 :bool] [:v2 :bool]]]
-      warm
-      :v2)
+      [:record
+       :schedule/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:warm2 :bool]
+        [:better01 :bool]
+        [:better02 :bool]
+        [:better12 :bool]]]
+      x
+      :warm2)
      better01
      (record-get
       [:record
-       :schedule/better3
-       [[:b01 :bool] [:b02 :bool] [:b12 :bool]]]
-      better
-      :b01)
+       :schedule/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:warm2 :bool]
+        [:better01 :bool]
+        [:better02 :bool]
+        [:better12 :bool]]]
+      x
+      :better01)
      better02
      (record-get
       [:record
-       :schedule/better3
-       [[:b01 :bool] [:b02 :bool] [:b12 :bool]]]
-      better
-      :b02)
+       :schedule/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:warm2 :bool]
+        [:better01 :bool]
+        [:better02 :bool]
+        [:better12 :bool]]]
+      x
+      :better02)
      better12
      (record-get
       [:record
-       :schedule/better3
-       [[:b01 :bool] [:b02 :bool] [:b12 :bool]]]
-      better
-      :b12)
+       :schedule/pick3-in
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:ok2 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:warm2 :bool]
+        [:better01 :bool]
+        [:better02 :bool]
+        [:better12 :bool]]]
+      x
+      :better12)
      champ
      (pick-idx-2-full
       (record-new
@@ -775,31 +859,41 @@
       warm-champ
       warm2
       better-c2))),
-   :param-types
-   [[:ref :schedule/flags3]
-    [:ref :schedule/flags3]
-    [:ref :schedule/better3]]}
+   :param-types [[:ref :schedule/pick3-in]]}
   {:name apply-pick-3,
-   :params [q pick],
+   :params [x],
    :result [:ref :schedule/triple],
    :effects #{},
    :body
    (let
     [q0
      (record-get
-      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-      q
+      [:record
+       :schedule/apply-pick3
+       [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]]
+      x
       :v0)
      q1
      (record-get
-      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-      q
+      [:record
+       :schedule/apply-pick3
+       [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]]
+      x
       :v1)
      q2
      (record-get
-      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
-      q
+      [:record
+       :schedule/apply-pick3
+       [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]]
+      x
       :v2)
+     pick
+     (record-get
+      [:record
+       :schedule/apply-pick3
+       [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]]
+      x
+      :pick)
      nq0
      (queue-after-assign
       (record-new
@@ -823,19 +917,240 @@
      nq0
      nq1
      nq2)),
-   :param-types [[:ref :schedule/triple] :i64]}
+   :param-types [[:ref :schedule/apply-pick3]]}
   {:name assign-step-3,
-   :params [q ok warm better],
+   :params [x],
    :result [:ref :schedule/assign3],
    :effects #{},
    :body
    (let
     [p
-     (assign-pick-3 ok warm better)
+     (assign-pick-3
+      (record-new
+       [:record
+        :schedule/pick3-in
+        [[:ok0 :bool]
+         [:ok1 :bool]
+         [:ok2 :bool]
+         [:warm0 :bool]
+         [:warm1 :bool]
+         [:warm2 :bool]
+         [:better01 :bool]
+         [:better02 :bool]
+         [:better12 :bool]]]
+       (record-get
+        [:record
+         :schedule/assign3-in
+         [[:q0 :i64]
+          [:q1 :i64]
+          [:q2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:warm0 :bool]
+          [:warm1 :bool]
+          [:warm2 :bool]
+          [:better01 :bool]
+          [:better02 :bool]
+          [:better12 :bool]]]
+        x
+        :ok0)
+       (record-get
+        [:record
+         :schedule/assign3-in
+         [[:q0 :i64]
+          [:q1 :i64]
+          [:q2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:warm0 :bool]
+          [:warm1 :bool]
+          [:warm2 :bool]
+          [:better01 :bool]
+          [:better02 :bool]
+          [:better12 :bool]]]
+        x
+        :ok1)
+       (record-get
+        [:record
+         :schedule/assign3-in
+         [[:q0 :i64]
+          [:q1 :i64]
+          [:q2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:warm0 :bool]
+          [:warm1 :bool]
+          [:warm2 :bool]
+          [:better01 :bool]
+          [:better02 :bool]
+          [:better12 :bool]]]
+        x
+        :ok2)
+       (record-get
+        [:record
+         :schedule/assign3-in
+         [[:q0 :i64]
+          [:q1 :i64]
+          [:q2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:warm0 :bool]
+          [:warm1 :bool]
+          [:warm2 :bool]
+          [:better01 :bool]
+          [:better02 :bool]
+          [:better12 :bool]]]
+        x
+        :warm0)
+       (record-get
+        [:record
+         :schedule/assign3-in
+         [[:q0 :i64]
+          [:q1 :i64]
+          [:q2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:warm0 :bool]
+          [:warm1 :bool]
+          [:warm2 :bool]
+          [:better01 :bool]
+          [:better02 :bool]
+          [:better12 :bool]]]
+        x
+        :warm1)
+       (record-get
+        [:record
+         :schedule/assign3-in
+         [[:q0 :i64]
+          [:q1 :i64]
+          [:q2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:warm0 :bool]
+          [:warm1 :bool]
+          [:warm2 :bool]
+          [:better01 :bool]
+          [:better02 :bool]
+          [:better12 :bool]]]
+        x
+        :warm2)
+       (record-get
+        [:record
+         :schedule/assign3-in
+         [[:q0 :i64]
+          [:q1 :i64]
+          [:q2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:warm0 :bool]
+          [:warm1 :bool]
+          [:warm2 :bool]
+          [:better01 :bool]
+          [:better02 :bool]
+          [:better12 :bool]]]
+        x
+        :better01)
+       (record-get
+        [:record
+         :schedule/assign3-in
+         [[:q0 :i64]
+          [:q1 :i64]
+          [:q2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:warm0 :bool]
+          [:warm1 :bool]
+          [:warm2 :bool]
+          [:better01 :bool]
+          [:better02 :bool]
+          [:better12 :bool]]]
+        x
+        :better02)
+       (record-get
+        [:record
+         :schedule/assign3-in
+         [[:q0 :i64]
+          [:q1 :i64]
+          [:q2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:warm0 :bool]
+          [:warm1 :bool]
+          [:warm2 :bool]
+          [:better01 :bool]
+          [:better02 :bool]
+          [:better12 :bool]]]
+        x
+        :better12)))
      code
      (pick-code-3 p)
      nq
-     (apply-pick-3 q p)]
+     (apply-pick-3
+      (record-new
+       [:record
+        :schedule/apply-pick3
+        [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]]
+       (record-get
+        [:record
+         :schedule/assign3-in
+         [[:q0 :i64]
+          [:q1 :i64]
+          [:q2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:warm0 :bool]
+          [:warm1 :bool]
+          [:warm2 :bool]
+          [:better01 :bool]
+          [:better02 :bool]
+          [:better12 :bool]]]
+        x
+        :q0)
+       (record-get
+        [:record
+         :schedule/assign3-in
+         [[:q0 :i64]
+          [:q1 :i64]
+          [:q2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:warm0 :bool]
+          [:warm1 :bool]
+          [:warm2 :bool]
+          [:better01 :bool]
+          [:better02 :bool]
+          [:better12 :bool]]]
+        x
+        :q1)
+       (record-get
+        [:record
+         :schedule/assign3-in
+         [[:q0 :i64]
+          [:q1 :i64]
+          [:q2 :i64]
+          [:ok0 :bool]
+          [:ok1 :bool]
+          [:ok2 :bool]
+          [:warm0 :bool]
+          [:warm1 :bool]
+          [:warm2 :bool]
+          [:better01 :bool]
+          [:better02 :bool]
+          [:better12 :bool]]]
+        x
+        :q2)
+       p))]
     (record-new
      [:record
       :schedule/assign3
@@ -853,11 +1168,7 @@
       [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
       nq
       :v2))),
-   :param-types
-   [[:ref :schedule/triple]
-    [:ref :schedule/flags3]
-    [:ref :schedule/flags3]
-    [:ref :schedule/better3]]}
+   :param-types [[:ref :schedule/assign3-in]]}
   {:name assign-step-3-code,
    :params [result],
    :result :i64,
@@ -999,34 +1310,40 @@
    :param-types [[:ref :schedule/queue-step]]}],
  :oracle-value nil,
  :schema-identities
- #:schedule{:assign2
-            "bafb47c1a77563f83c49b484f5038b27c583d575e0930299c4b2bd8f46372198",
+ #:schedule{:apply-pick3
+            "5b96bf820cef8fd76b73d57acdd414aed67fdf2bfc3267ad620a5415566979b2",
+            :assign2
+            "8fbe9f0ee58f32c59129fa578a39d2589fe46faadcdf03c8d4aa6101382432cc",
             :assign2-in
-            "da57f21eecb4580a2829bae4ea14bfd769f1cb44875b0f104cb44a4630617619",
+            "0e78c36acef65a66e6812f1c2f5a9aa31ac27ee07216c037610ab4bc00194890",
             :assign3
-            "4b4ff4a7a57d0f77cc37fa0c216282a8326d696324115580568f6bf0e7b1671d",
+            "d59fcab86441e4ae79d1a5f376e3ef3e6b5d7cb32508a564329800168914dd08",
+            :assign3-in
+            "79d108b4707f32cbf34129b66a6d86b80c85a087ad8cfbd4f08f17d93694400d",
             :better2
-            "c3fb9a7cd29d21574eb2ae8147f3a6d9107673d03cd77519ed92b8a7c1312d9a",
+            "74a53c8c391a7baa845e42a71e0aefaec7a74f8e50e5d6b950ac10610fa2c662",
             :better3
-            "9d813d917bb7bdc131d78aa3b8b1662a3086268c109ce24f4b14e6c3d1a128fd",
+            "98ee9756292e570de72fa59d98088142507d2b9c0b1995b01c620ad061c98ad9",
             :eligibility
-            "fb465aa3b70adfb417485b11ad0389f6750bc12d6d00ade5a0940531b0c0ebb0",
+            "79dab8e5d8be6c6d0726bb3e924ad572ccd3cd656d58bb7eff389097b92d288f",
             :flags3
-            "b481e0c16e60a5c6c9bc27fb7ea57df3b7f1b742b087b252c6c4c89216b10b9f",
+            "c9c0a8e35ab643afb2a717c9fda791200e999517890f591f462b1a1a7ada6420",
             :fold-step
-            "53b2614d95b860c8934af48720edf9a2a53eb1fe9b0c854e7d902ac60125a734",
+            "a416768b3254351621d51e92be4473ea21a4cd55dfd1d4d6ef524d556b00983e",
             :pick2
-            "fb9327688ccaa83f6e086a4b4bd49ae0306a8495dcfc7c88c4c0b9512c4f6b1f",
+            "6547a841de24ac56b4f26faf8c5cc3d4f9c995363ba6aee020919809b5556ac5",
+            :pick3-in
+            "04aacf7421e19f1762ae3a69712fe288ac729b804190b6906942643189e232c9",
             :pick3-tour
-            "f5e731e480027297188de6e906ea10814856f453c545a32a88bde78a736c5f20",
+            "3062a1836e8ddb03fc774e0c0f597920e3e06a1574f1a358ef81b3cd8cd93f70",
             :queue-cmp
-            "68dae6ae5200c4db659289a4f36c380e402a6f0965bea2f09f3904bdba2a81f5",
+            "ad639837839f91ad2007efeae7f15426f7e2a75cb6a99aab479f244257d19005",
             :queue-step
-            "8f8b81842b7c2f1601061d510c3384c04bca832af3bcf88c768ae0859fc14937",
+            "b3c02e75a70fc593960f036a4c726e6e9d9a6d452fefb1d70bc70c02fb9e4c21",
             :score-cmp
-            "4b60f218ac39750a3d356db681dd364058e806289d5a552aa8383298194038f0",
+            "f192494ba0aafaa858d9bcf181c97347eb406c1a4e72ae9322f65bbf26d53a38",
             :triple
-            "7cd371d9518f3497d0aba607ce4d33c4e3cb8b74a9c7e7d60e1452b2ce65fb23"},
+            "1fb23c80b3035627ceabe1327bd123b4788529406ba88a08eb411ea976ebb663"},
  :exports
  [eligible?
   score-queue
@@ -1084,6 +1401,21 @@
             [:record
              :schedule/queue-step
              [[:queue :i64] [:picked :i64]]],
+            :assign3-in
+            [:record
+             :schedule/assign3-in
+             [[:q0 :i64]
+              [:q1 :i64]
+              [:q2 :i64]
+              [:ok0 :bool]
+              [:ok1 :bool]
+              [:ok2 :bool]
+              [:warm0 :bool]
+              [:warm1 :bool]
+              [:warm2 :bool]
+              [:better01 :bool]
+              [:better02 :bool]
+              [:better12 :bool]]],
             :pick3-tour
             [:record
              :schedule/pick3-tour
@@ -1109,6 +1441,10 @@
               [:warm-champ :bool]
               [:warm-i :bool]
               [:better-c-i :bool]]],
+            :apply-pick3
+            [:record
+             :schedule/apply-pick3
+             [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]],
             :better3
             [:record
              :schedule/better3
@@ -1125,6 +1461,18 @@
             [:record
              :schedule/flags3
              [[:v0 :bool] [:v1 :bool] [:v2 :bool]]],
+            :pick3-in
+            [:record
+             :schedule/pick3-in
+             [[:ok0 :bool]
+              [:ok1 :bool]
+              [:ok2 :bool]
+              [:warm0 :bool]
+              [:warm1 :bool]
+              [:warm2 :bool]
+              [:better01 :bool]
+              [:better02 :bool]
+              [:better12 :bool]]],
             :triple
             [:record
              :schedule/triple
