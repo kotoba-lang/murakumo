@@ -21,7 +21,15 @@
              ;; T5.2 residual multi-arg pure → single guest records
              :rebalance/pair [:record :rebalance/pair [[:a :i64] [:b :i64]]]
              :rebalance/triple [:record :rebalance/triple
-                                [[:a :i64] [:b :i64] [:c :i64]]]})
+                                [[:a :i64] [:b :i64] [:c :i64]]]
+             :rebalance/bump-cmp [:record :rebalance/bump-cmp
+                                  [[:rem-a :i64] [:idx-a :i64]
+                                   [:rem-b :i64] [:idx-b :i64]]]
+             :rebalance/ok-for [:record :rebalance/ok-for
+                                [[:active :bool] [:bumped :bool]]]
+             :rebalance/bump3-in [:record :rebalance/bump3-in
+                                  [[:ok-t :bool] [:ok-m :bool] [:ok-p :bool]
+                                   [:rt :i64] [:rm :i64] [:rp :i64]]]})
   (:export [shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class
             seats-of-text seats-of-media seats-of-postproc seats-total
             pool-demand-record pool-weight-text pool-weight-media pool-weight-postproc
@@ -105,45 +113,52 @@
 (defn max2 [a :i64 b :i64] :i64
   (if (< a b) b a))
 
-(defn better-bump? [rem-a :i64 idx-a :i64 rem-b :i64 idx-b :i64] :bool
-  (if (< rem-b rem-a)
-    true
-    (if (< rem-a rem-b)
-      false
-      (if (< idx-a idx-b) true false))))
+(defn better-bump? [x [:ref :rebalance/bump-cmp]] :bool
+  (let [rem-a (record-get x :rem-a)
+        idx-a (record-get x :idx-a)
+        rem-b (record-get x :rem-b)
+        idx-b (record-get x :idx-b)]
+    (if (< rem-b rem-a)
+      true
+      (if (< rem-a rem-b)
+        false
+        (if (< idx-a idx-b) true false)))))
 
 ;; Pick best among three optional candidates (ok=1 means eligible).
 ;; Returns 0|1|2 or -1. T5.3: the remainders arrive as a lanes record, so the
 ;; `_pad` argument that only existed to reach the old fixed shape is gone.
-(defn pick-bump-3 [ok-t :bool ok-m :bool ok-p :bool
-                   rems [:record :rebalance/lanes
-                         [[:text :i64] [:media :i64] [:postproc :i64]]]] :i64
-  (let [rt (record-get [:record :rebalance/lanes
-                        [[:text :i64] [:media :i64] [:postproc :i64]]] rems :text)
-        rm (record-get [:record :rebalance/lanes
-                        [[:text :i64] [:media :i64] [:postproc :i64]]] rems :media)
-        rp (record-get [:record :rebalance/lanes
-                        [[:text :i64] [:media :i64] [:postproc :i64]]] rems :postproc)]
+(defn pick-bump-3 [x [:ref :rebalance/bump3-in]] :i64
+  (let [ok-t (record-get x :ok-t)
+        ok-m (record-get x :ok-m)
+        ok-p (record-get x :ok-p)
+        rt (record-get x :rt)
+        rm (record-get x :rm)
+        rp (record-get x :rp)]
     (if ok-t
       (if ok-m
-        (let [win-tm (if (better-bump? rt 0 rm 1) 0 1)
+        (let [win-tm (if (better-bump?
+                          (record-new [:ref :rebalance/bump-cmp] rt 0 rm 1)) 0 1)
               r-win (if (= win-tm 0) rt rm)
               i-win win-tm]
           (if ok-p
-            (if (better-bump? r-win i-win rp 2) win-tm 2)
+            (if (better-bump?
+                 (record-new [:ref :rebalance/bump-cmp] r-win i-win rp 2)) win-tm 2)
             win-tm))
         (if ok-p
-          (if (better-bump? rt 0 rp 2) 0 2)
+          (if (better-bump?
+               (record-new [:ref :rebalance/bump-cmp] rt 0 rp 2)) 0 2)
           0))
       (if ok-m
         (if ok-p
-          (if (better-bump? rm 1 rp 2) 1 2)
+          (if (better-bump?
+               (record-new [:ref :rebalance/bump-cmp] rm 1 rp 2)) 1 2)
           1)
         (if ok-p 2 -1)))))
 
-(defn ok-for [active :bool bumped :bool] :bool
-  ;; active lane with positive weight and not yet bumped this remainder pass
-  (if active (if bumped false true) false))
+(defn ok-for [x [:ref :rebalance/ok-for]] :bool
+  (if (record-get x :active)
+    (if (record-get x :bumped) false true)
+    false))
 
 (defn seats-record [total :i64 wt :i64 wm :i64 wp :i64 floor :i64]
   [:record :rebalance/lanes [[:text :i64] [:media :i64] [:postproc :i64]]]
@@ -178,19 +193,19 @@
                               [[:text :i64] [:media :i64] [:postproc :i64]]] rt rm rp)
             ;; bump 0
             b0 (if (< 0 extra)
-                 (pick-bump-3 (ok-for at false) (ok-for am false) (ok-for ap false) rems)
+                 (pick-bump-3 (record-new [:ref :rebalance/bump3-in] (ok-for (record-new [:ref :rebalance/ok-for] at false)) (ok-for (record-new [:ref :rebalance/ok-for] am false)) (ok-for (record-new [:ref :rebalance/ok-for] ap false)) rt rm rp))
                  -1)
             bt0 (if (= b0 0) true false)
             bm0 (if (= b0 1) true false)
             bp0 (if (= b0 2) true false)
             b1 (if (< 1 extra)
-                 (pick-bump-3 (ok-for at bt0) (ok-for am bm0) (ok-for ap bp0) rems)
+                 (pick-bump-3 (record-new [:ref :rebalance/bump3-in] (ok-for (record-new [:ref :rebalance/ok-for] at bt0)) (ok-for (record-new [:ref :rebalance/ok-for] am bm0)) (ok-for (record-new [:ref :rebalance/ok-for] ap bp0)) rt rm rp))
                  -1)
             bt1 (if (= b1 0) true bt0)
             bm1 (if (= b1 1) true bm0)
             bp1 (if (= b1 2) true bp0)
             b2 (if (< 2 extra)
-                 (pick-bump-3 (ok-for at bt1) (ok-for am bm1) (ok-for ap bp1) rems)
+                 (pick-bump-3 (record-new [:ref :rebalance/bump3-in] (ok-for (record-new [:ref :rebalance/ok-for] at bt1)) (ok-for (record-new [:ref :rebalance/ok-for] am bm1)) (ok-for (record-new [:ref :rebalance/ok-for] ap bp1)) rt rm rp))
                  -1)
             bump-t (if (if (= b0 0) 1 (if (= b1 0) 1 (if (= b2 0) 1 0))) 1 0)
             bump-m (if (if (= b0 1) 1 (if (= b1 1) 1 (if (= b2 1) 1 0))) 1 0)

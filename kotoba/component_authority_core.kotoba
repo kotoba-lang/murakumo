@@ -1,4 +1,6 @@
 (ns component-authority-core
+  (:schemas {:cauth/id-len [:record :cauth/id-len
+                            [[:is-blank :bool] [:byte-len :i64]]]})
   (:export [event-version max-identifier-bytes
             blank? ws? identifier? identifier-len-ok?
             place-epoch revoke-epoch next-sequence
@@ -57,17 +59,18 @@
         (blank? (string-substring s 1 n))
         false))))
 
-(defn identifier-len-ok? [is-blank :bool byte-len :i64] :bool
+(defn identifier-len-ok? [x [:ref :cauth/id-len]] :bool
   ;; host projects blank? + UTF-8 byte length (avoids embedding huge literals)
-  (if is-blank
+  (if (record-get x :is-blank)
     false
-    (if (< (max-identifier-bytes) byte-len)
+    (if (< (max-identifier-bytes) (record-get x :byte-len))
       false
       true)))
 
 (defn identifier? [s :string] :bool
   ;; cljc: string? + not blank + count ≤ 4096
-  (identifier-len-ok? (blank? s) (string-byte-length s)))
+  (identifier-len-ok?
+   (record-new [:ref :cauth/id-len] (blank? s) (string-byte-length s))))
 
 (defn place-epoch [current-or-zero :i64] :i64
   ;; cljc place: (get-in state [:epochs cid] 1)

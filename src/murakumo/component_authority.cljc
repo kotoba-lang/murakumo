@@ -32,6 +32,11 @@
 
 ;; ── scalars (oracle SSoT) ──────────────────────────────────────────────
 
+(def ^:private id-len-schema
+  "Guest :cauth/id-len — T5.2 residual record for identifier-len-ok?."
+  [:record :cauth/id-len
+   [[:is-blank :bool] [:byte-len :i64]]])
+
 (def event-version
   (oracle/i64->host (o 'event-version [])))
 
@@ -75,10 +80,11 @@
     false
     (oracle/bool->host
      (o-record 'identifier-len-ok?
-               {:blank? (str/blank? x)
-                :len (utf8-len x)}
-               [[:blank? :bool]
-                [:len :i64]]))))
+               {:x (oracle/record
+                    id-len-schema
+                    {:is-blank (str/blank? x)
+                     :byte-len (utf8-len x)})}
+               [[:x :raw]]))))
 
 (defn- reject [reason message data]
   (throw (ex-info message (assoc data :murakumo.component/reason reason))))
