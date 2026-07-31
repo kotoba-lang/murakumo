@@ -25,6 +25,20 @@
        "unschedulable-detail exclude-join-sep "
        "unsched-placement-prefix unsched-excluding-prefix unsched-min-mem-prefix"))
 
+
+(def ^:private pick2-ty
+  "[:record :task/pick2 [[:ok0 :bool] [:ok1 :bool] [:fill0 :i64] [:fill1 :i64] [:load0 :i64] [:load1 :i64]]]")
+(def ^:private assign2-in-ty
+  "[:record :task/assign2-in [[:load0 :i64] [:load1 :i64] [:ok0 :bool] [:ok1 :bool] [:fill0 :i64] [:fill1 :i64]]]")
+
+(defn- pick2-call [ok0 ok1 fill0 fill1 load0 load1]
+  (str "(pick-task-idx-2 (record-new " pick2-ty " "
+       ok0 " " ok1 " " fill0 " " fill1 " " load0 " " load1 "))"))
+
+(defn- assign2-in-call [load0 load1 ok0 ok1 fill0 fill1]
+  (str "(assign-task-step-2 (record-new " assign2-in-ty " "
+       load0 " " load1 " " ok0 " " ok1 " " fill0 " " fill1 "))"))
+
 (def ^:private slots-ty
   "[:record :task/slots [[:budget :i64] [:node-slots :i64] [:slots-per :i64] [:max-slots :i64] [:cores :i64]]]")
 (def ^:private wave-ty
@@ -266,16 +280,16 @@
 
 (deftest assign-task-step-2-matches-assign-1
   (let [;; T5.3: fills/loads are pair records; results project field-wise
-        s0 "(assign-task-step-2 0 0 true true (pair-record 0 0))"
-        s1 "(assign-task-step-2 1 0 true true (pair-record 500 0))"
+        s0 (assign2-in-call 0 0 "true" "true" 0 0)
+        s1 (assign2-in-call 1 0 "true" "true" 500 0)
         actual (compile-i64-cases
                 {"s0c" (str "(assign-task-2-code " s0 ")")
                  "s0l0" (str "(assign-task-2-load0 " s0 ")")
                  "s0l1" (str "(assign-task-2-load1 " s0 ")")
                  "s1c" (str "(assign-task-2-code " s1 ")")
-                 "p0" "(pick-task-idx-2 true true 0 0 (pair-record 0 0))"
-                 "p1" "(pick-task-idx-2 true true 500 0 (pair-record 1 0))"
-                 "pn" "(pick-task-idx-2 false false 0 0 (pair-record 0 0))"})]
+                 "p0" (pick2-call "true" "true" 0 0 0 0)
+                 "p1" (pick2-call "true" "true" 500 0 1 0)
+                 "pn" (pick2-call "false" "false" 0 0 0 0)})]
     (is (= 1 (get actual "s0c")))
     (is (= 1 (get actual "s0l0")))
     (is (= 0 (get actual "s0l1")))
