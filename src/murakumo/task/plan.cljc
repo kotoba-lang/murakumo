@@ -42,10 +42,10 @@
 
 (def default-opts
   "Default planner opts. max-slots / max-attempts / timeout-ms from oracle."
-  {:max-slots (long (o 'default-max-slots []))
+  {:max-slots (oracle/i64->host (o 'default-max-slots []))
    :slots-per-node nil
-   :max-attempts (long (o 'default-max-attempts []))
-   :timeout-ms (long (o 'default-timeout-ms []))
+   :max-attempts (oracle/i64->host (o 'default-max-attempts []))
+   :timeout-ms (oracle/i64->host (o 'default-timeout-ms []))
    :connect-timeout-s 8})
 
 (defn slots
@@ -59,7 +59,7 @@
         slots-per (opt-i64 (:slots-per-node merged))
         max-slots (long (or (:max-slots merged) 8))
         cores (opt-i64 (:cores node))]
-    (long (o 'slots [budget node-slots slots-per max-slots cores]))))
+    (oracle/i64->host (o 'slots [budget node-slots slots-per max-slots cores]))))
 
 (defn admit
   "Operational admission gate, applied BEFORE placement."
@@ -174,11 +174,11 @@
             k (:name n)
             used (get load k 0)
             s (slots n opts)
-            wave (long (o 'wave-of [(long used) (long s)]))
-            slot (long (o 'slot-of [(long used) (long s)]))
+            wave (oracle/i64->host (o 'wave-of [(long used) (long s)]))
+            slot (oracle/i64->host (o 'slot-of [(long used) (long s)]))
             a {:task task :node k :host (:host n)
                :wave wave :slot slot}
-            next-load (long (o 'load-after-assign [(long used)]))]
+            next-load (oracle/i64->host (o 'load-after-assign [(long used)]))]
         (-> acc
             (update :assignments conj a)
             (assoc-in [:load k] next-load))))))
@@ -222,7 +222,7 @@
                                 [(long attempt) (long max-attempts)]))]
                    (when can?
                      (-> task
-                         (assoc :attempt (long (o 'attempt-next [(long attempt)])))
+                         (assoc :attempt (oracle/i64->host (o 'attempt-next [(long attempt)])))
                          (update :exclude-nodes (fnil conj []) node))))))
          vec)))
 
@@ -231,7 +231,7 @@
   [xs p]
   (let [v (vec (sort xs))]
     (when (seq v)
-      (let [idx (long (o 'nearest-rank-idx
+      (let [idx (oracle/i64->host (o 'nearest-rank-idx
                          [(long (count v))
                           (long (Math/floor (* p 1000)))]))]
         (nth v idx)))))
@@ -253,9 +253,9 @@
         ko (filter failed? finals)
         durations (keep :duration-ms results)
         task-ms (reduce + 0 durations)
-        retried (long (o 'summary-retried
+        retried (oracle/i64->host (o 'summary-retried
                          [(long (count results)) (long (count finals))]))
-        speedup (let [milli (long (o 'speedup-milli
+        speedup (let [milli (oracle/i64->host (o 'speedup-milli
                                      [(long task-ms) (long (or wall-ms 0))]))]
                   (when (pos? milli) (/ (double milli) 1000.0)))]
     {:tasks (count finals)
