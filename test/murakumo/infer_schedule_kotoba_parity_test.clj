@@ -43,13 +43,14 @@
     (into {} (map (fn [n] [n (ir/execute kir (symbol n) [])]) names))))
 
 (def ^:private eligibility-literal
-  "T5.3 + profile 5: guest eligibility record with :bool flags."
+  "T5.3 + profile 5 + T5.2 native: eligibility record includes free/min."
   (str "[:record :schedule/eligibility "
        "[[:has-engine :bool] [:has-checkpoint :bool] "
-       "[:holds-checkpoint :bool] [:can-fetch :bool]]]"))
+       "[:holds-checkpoint :bool] [:can-fetch :bool] "
+       "[:free-bytes :i64] [:min-free :i64]]]"))
 
 (defn- eligibility-record-literal
-  "Set-membership as a bool record literal (profile 5)."
+  "Set-membership + free/min as a single record literal (T5.2 native wire)."
   [node model]
   (let [engine (:model/engine model)
         ckpt (:model/checkpoint model)
@@ -58,15 +59,16 @@
         has-engine (if (contains? engines engine) "true" "false")
         has-ckpt (if (nil? ckpt) "false" "true")
         holds (if (and ckpt (contains? checkpoints ckpt)) "true" "false")
-        can-fetch (if (false? (:node/can-fetch? node)) "false" "true")]
+        can-fetch (if (false? (:node/can-fetch? node)) "false" "true")
+        free (long (or (:free-bytes node) 0))
+        minf (long (or (:model/min-free-bytes model) 0))]
     (str "(record-new " eligibility-literal " "
-         has-engine " " has-ckpt " " holds " " can-fetch ")")))
+         has-engine " " has-ckpt " " holds " " can-fetch " "
+         free " " minf ")")))
 
 (defn- eligible-call [node model]
   ;; Profile 5: eligible? is :bool; wrap as 0/1 so compile-i64-cases still works.
-  (str "(if (eligible? " (eligibility-record-literal node model) " "
-       (long (or (:free-bytes node) 0)) " "
-       (long (or (:model/min-free-bytes model) 0)) ") 1 0)"))
+  (str "(if (eligible? " (eligibility-record-literal node model) ") 1 0)"))
 
 (defn- node
   ([name] (node name {}))

@@ -2,7 +2,7 @@
  :signature nil,
  :functions
  [{:name eligible?,
-   :params [e free-bytes min-free],
+   :params [e],
    :result :bool,
    :effects #{},
    :body
@@ -14,7 +14,9 @@
        [[:has-engine :bool]
         [:has-checkpoint :bool]
         [:holds-checkpoint :bool]
-        [:can-fetch :bool]]]
+        [:can-fetch :bool]
+        [:free-bytes :i64]
+        [:min-free :i64]]]
       e
       :has-engine)]
     (if
@@ -30,7 +32,9 @@
             [[:has-engine :bool]
              [:has-checkpoint :bool]
              [:holds-checkpoint :bool]
-             [:can-fetch :bool]]]
+             [:can-fetch :bool]
+             [:free-bytes :i64]
+             [:min-free :i64]]]
            e
            :has-checkpoint)
           false
@@ -46,7 +50,9 @@
              [[:has-engine :bool]
               [:has-checkpoint :bool]
               [:holds-checkpoint :bool]
-              [:can-fetch :bool]]]
+              [:can-fetch :bool]
+              [:free-bytes :i64]
+              [:min-free :i64]]]
             e
             :holds-checkpoint)]
           (if
@@ -58,12 +64,39 @@
              [[:has-engine :bool]
               [:has-checkpoint :bool]
               [:holds-checkpoint :bool]
-              [:can-fetch :bool]]]
+              [:can-fetch :bool]
+              [:free-bytes :i64]
+              [:min-free :i64]]]
             e
             :can-fetch)))))]
-      (if __kotoba_and_2 (>= free-bytes min-free) __kotoba_and_2))
+      (if
+       __kotoba_and_2
+       (>=
+        (record-get
+         [:record
+          :schedule/eligibility
+          [[:has-engine :bool]
+           [:has-checkpoint :bool]
+           [:holds-checkpoint :bool]
+           [:can-fetch :bool]
+           [:free-bytes :i64]
+           [:min-free :i64]]]
+         e
+         :free-bytes)
+        (record-get
+         [:record
+          :schedule/eligibility
+          [[:has-engine :bool]
+           [:has-checkpoint :bool]
+           [:holds-checkpoint :bool]
+           [:can-fetch :bool]
+           [:free-bytes :i64]
+           [:min-free :i64]]]
+         e
+         :min-free))
+       __kotoba_and_2))
      __kotoba_and_3)),
-   :param-types [[:ref :schedule/eligibility] :i64 :i64]}
+   :param-types [[:ref :schedule/eligibility]]}
   {:name score-queue,
    :params [queue],
    :result :i64,
@@ -94,7 +127,9 @@
      [[:has-engine :bool]
       [:has-checkpoint :bool]
       [:holds-checkpoint :bool]
-      [:can-fetch :bool]]]
+      [:can-fetch :bool]
+      [:free-bytes :i64]
+      [:min-free :i64]]]
     e
     :holds-checkpoint),
    :param-types [[:ref :schedule/eligibility]]}
@@ -534,19 +569,19 @@
  :oracle-value nil,
  :schema-identities
  #:schedule{:assign2
-            "c76ea3a4d99a8bd91d18b405d4ee6491e108e49716645d275e02ba712fabfef0",
+            "f9b984bbacdeb45128fbc7d42d09a08f36d9abfb5e573b279d932f8ae69e42e0",
             :assign3
-            "79c0861de7bb2142a9b8e6186d9600113db9662e8a6a0df497012b7b4f525577",
+            "ba0635e7d65d8a1680d1eaf2e9600253872c4a1ff88d42797da72d21ed4676fb",
             :better2
-            "8c8ac5907a7e8f942e378b219f458f8336ceea98187e96e3491906c35682131e",
+            "d43e7dd07dcb05decb8b4bf1a5a0a32578f47e0081203bcd8e14b9e06261f3ae",
             :better3
-            "0769e14279ccb03b2614349f719600f4d64ab1bcd86aecaba29dbfc117369edc",
+            "1182479ed5512e54d9220e2c7b46b2e2f8eff414a1813528eb4f9d8df6ff3125",
             :eligibility
-            "53ef39e7660ad313ce24bf2826ccd2d4d493392f37781a6618d4c704904696a6",
+            "f8b5269e0fc76b5f9d5e4c380941e1f1b945c1d183d68fc2f49a67b6aad4821d",
             :flags3
-            "5295d1f1c719c5867057bf79e5f7eb344fe5999328e54be959efc483fc6fea7d",
+            "f1253c6a3cc337eb9221e768678e5f4d573809b77284481980feb7ae68130017",
             :triple
-            "c4a473e8d77fc0f01249129b72c5ff12accc28ab28a9db957265a6b8cb2e4c80"},
+            "4e92c7e5e8e1425b8f9547cb5803da864fcc37638ceb739d1695778b6260dad0"},
  :exports
  [eligible?
   score-queue
@@ -588,7 +623,9 @@
              [[:has-engine :bool]
               [:has-checkpoint :bool]
               [:holds-checkpoint :bool]
-              [:can-fetch :bool]]],
+              [:can-fetch :bool]
+              [:free-bytes :i64]
+              [:min-free :i64]]],
             :better2
             [:record
              :schedule/better2

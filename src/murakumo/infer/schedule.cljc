@@ -32,7 +32,8 @@
    language profile 5 makes them :bool."
   [:record :schedule/eligibility
    [[:has-engine :bool] [:has-checkpoint :bool]
-    [:holds-checkpoint :bool] [:can-fetch :bool]]])
+    [:holds-checkpoint :bool] [:can-fetch :bool]
+    [:free-bytes :i64] [:min-free :i64]]])
 
 (defn- eligibility-fields [node model]
   (let [engine (:model/engine model)
@@ -42,22 +43,19 @@
     {:has-engine (contains? engines engine)
      :has-checkpoint (some? ckpt)
      :holds-checkpoint (boolean (and ckpt (contains? checkpoints ckpt)))
-     :can-fetch (not (false? (:node/can-fetch? node)))}))
+     :can-fetch (not (false? (:node/can-fetch? node)))
+     :free-bytes (or (:free-bytes node) 0)
+     :min-free (:model/min-free-bytes model 0)}))
 
 (defn eligible?
-  "Can `node` run `model`? Kotoba eligible? with a bool eligibility record
-  (T5.3 + language profile 5).
-   T5.2: structural map → call-record (eligibility record as :raw)."
+  "Can `node` run `model`? Kotoba eligible? with a single eligibility record
+  (T5.3 + profile 5 + T5.2 native guest record wire: free/min on the record)."
   [node model]
   (oracle/bool->host
    (o-record 'eligible?
              {:eligibility (oracle/record eligibility-schema
-                                           (eligibility-fields node model))
-              :free-bytes (or (:free-bytes node) 0)
-              :min-free (:model/min-free-bytes model 0)}
-             [[:eligibility :raw]
-              [:free-bytes :i64]
-              [:min-free :i64]])))
+                                           (eligibility-fields node model))}
+             [[:eligibility :raw]])))
 
 (defn score
   "Lower is better: queue then -free-bytes. Kotoba score-queue + score-free.

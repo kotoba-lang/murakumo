@@ -139,13 +139,14 @@
                (get actual (str "r_" i))))))))
 
 (def ^:private eligibility-literal
-  "T5.3 + profile 5: guest eligibility record with :bool flags."
+  "T5.3 + profile 5 + T5.2 native: eligibility includes mem bounds."
   (str "[:record :task/eligibility "
        "[[:online :bool] [:labels-ok :bool] [:roles-ok :bool] "
-       "[:not-excluded :bool] [:allowlist-ok :bool]]]"))
+       "[:not-excluded :bool] [:allowlist-ok :bool] "
+       "[:mem-bytes :i64] [:min-mem :i64]]]"))
 
 (defn- task-elig-record-literal
-  "Set-membership projected as a bool record literal (profile 5)."
+  "Set-membership + mem bounds as a single record literal (T5.2 native wire)."
   [node task]
   (let [online (if (false? (:online? node true)) "false" "true")
         labels (if (every? (fn [[k v]] (= v (get (:labels node) k)))
@@ -158,9 +159,12 @@
                  "false" "true")
         allow (if (or (empty? (or (:nodes task) []))
                       (contains? (set (:nodes task)) (:name node)))
-                "true" "false")]
+                "true" "false")
+        mem (long (or (:mem-bytes node) 0))
+        minm (long (or (:min-mem-bytes task) 0))]
     (str "(record-new " eligibility-literal " "
-         online " " labels " " roles " " not-ex " " allow ")")))
+         online " " labels " " roles " " not-ex " " allow " "
+         mem " " minm ")")))
 
 (deftest task-eligible-matches-cljc
   (let [nodes [{:name "a" :online? true :labels {:tier "gpu"} :roles #{:worker}
@@ -182,9 +186,7 @@
                      (fn [i [n t]]
                        [(str "e_" i)
                         ;; Profile 5: task-eligible? is :bool; wrap as 0/1.
-                        (str "(if (task-eligible? " (task-elig-record-literal n t) " "
-                             (long (or (:mem-bytes n) 0)) " "
-                             (long (or (:min-mem-bytes t) 0)) ") 1 0)")])
+                        (str "(if (task-eligible? " (task-elig-record-literal n t) ") 1 0)")])
                      corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [n t]] (map-indexed vector corpus)]

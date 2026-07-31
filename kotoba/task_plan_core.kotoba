@@ -9,9 +9,11 @@
              :task/assign3 [:record :task/assign3
                             [[:code :i64] [:load0 :i64] [:load1 :i64] [:load2 :i64]]]
              ;; T5.3 + profile 5: eligibility flags are a :bool record.
+             ;; T5.2 native guest record wire: mem/min folded into eligibility.
              :task/eligibility [:record :task/eligibility
                                 [[:online :bool] [:labels-ok :bool] [:roles-ok :bool]
-                                 [:not-excluded :bool] [:allowlist-ok :bool]]]})
+                                 [:not-excluded :bool] [:allowlist-ok :bool]
+                                 [:mem-bytes :i64] [:min-mem :i64]]]})
   (:export [default-max-slots default-max-attempts default-timeout-ms
             slots failed? can-retry?
             task-eligible? fill-milli better-fill?
@@ -82,15 +84,17 @@
 
 ;; ── T5.3 + profile 5: eligibility is a :bool record ──
 
-(defn task-eligible? [e [:ref :task/eligibility] mem-bytes :i64 min-mem :i64] :bool
-  ;; Nested if (not and/or): desugar gensyms break precompiled KIR drift gates.
+(defn task-eligible? [e [:ref :task/eligibility]] :bool
+  ;; T5.2 native guest record wire: mem-bytes/min-mem on the eligibility record
+  ;; (single parameter). Nested if (not and/or): desugar gensyms break
+  ;; precompiled KIR drift gates.
   ;; Semantics: online ∧ labels ∧ roles ∧ not-excluded ∧ allowlist ∧ mem≥min.
   (if (record-get e :online)
     (if (record-get e :labels-ok)
       (if (record-get e :roles-ok)
         (if (record-get e :not-excluded)
           (if (record-get e :allowlist-ok)
-            (if (>= mem-bytes min-mem) true false)
+            (if (>= (record-get e :mem-bytes) (record-get e :min-mem)) true false)
             false)
           false)
         false)
