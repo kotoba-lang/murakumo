@@ -110,12 +110,57 @@
    :body (if (< free-bytes 0) 0 (- 0 free-bytes)),
    :param-types [:i64]}
   {:name better-score?,
-   :params [q1 f1 q2 f2],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
-   (if (< q1 q2) true (if (< q2 q1) false (if (< f1 f2) true false))),
-   :param-types [:i64 :i64 :i64 :i64]}
+   (if
+    (<
+     (record-get
+      [:record
+       :schedule/score-cmp
+       [[:q1 :i64] [:f1 :i64] [:q2 :i64] [:f2 :i64]]]
+      x
+      :q1)
+     (record-get
+      [:record
+       :schedule/score-cmp
+       [[:q1 :i64] [:f1 :i64] [:q2 :i64] [:f2 :i64]]]
+      x
+      :q2))
+    true
+    (if
+     (<
+      (record-get
+       [:record
+        :schedule/score-cmp
+        [[:q1 :i64] [:f1 :i64] [:q2 :i64] [:f2 :i64]]]
+       x
+       :q2)
+      (record-get
+       [:record
+        :schedule/score-cmp
+        [[:q1 :i64] [:f1 :i64] [:q2 :i64] [:f2 :i64]]]
+       x
+       :q1))
+     false
+     (if
+      (<
+       (record-get
+        [:record
+         :schedule/score-cmp
+         [[:q1 :i64] [:f1 :i64] [:q2 :i64] [:f2 :i64]]]
+        x
+        :f1)
+       (record-get
+        [:record
+         :schedule/score-cmp
+         [[:q1 :i64] [:f1 :i64] [:q2 :i64] [:f2 :i64]]]
+        x
+        :f2))
+      true
+      false))),
+   :param-types [[:ref :schedule/score-cmp]]}
   {:name holds-warm?,
    :params [e],
    :result :bool,
@@ -134,51 +179,215 @@
     :holds-checkpoint),
    :param-types [[:ref :schedule/eligibility]]}
   {:name prefer-warm-then-score,
-   :params [warm0 warm1 better01],
+   :params [b],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (if warm0 (if warm1 false true) false)
-    0
-    (if (if warm1 (if warm0 false true) false) 1 (if better01 0 1))),
-   :param-types [:bool :bool :bool]}
-  {:name pick-idx-2-full,
-   :params [ok0 ok1 warm0 warm1 better01],
-   :result :i64,
-   :effects #{},
-   :body
-   (if
-    ok0
-    (if ok1 (prefer-warm-then-score warm0 warm1 better01) 0)
-    (if ok1 1 -1)),
-   :param-types [:bool :bool :bool :bool :bool]}
-  {:name pick-idx-3-tournament,
-   :params [champ01 ok2 warm-champ warm2 better-champ-2],
-   :result :i64,
-   :effects #{},
-   :body
-   (if
-    (< champ01 0)
-    (if ok2 2 -1)
+   (let
+    [warm0
+     (record-get
+      [:record
+       :schedule/better2
+       [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
+      b
+      :warm0)
+     warm1
+     (record-get
+      [:record
+       :schedule/better2
+       [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
+      b
+      :warm1)
+     better01
+     (record-get
+      [:record
+       :schedule/better2
+       [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
+      b
+      :better01)]
     (if
-     ok2
-     (if
-      (= (prefer-warm-then-score warm-champ warm2 better-champ-2) 0)
-      champ01
-      2)
-     champ01)),
-   :param-types [:i64 :bool :bool :bool :bool]}
-  {:name queue-after-assign,
-   :params [queue picked],
+     (if warm0 (if warm1 false true) false)
+     0
+     (if (if warm1 (if warm0 false true) false) 1 (if better01 0 1)))),
+   :param-types [[:ref :schedule/better2]]}
+  {:name pick-idx-2-full,
+   :params [p],
    :result :i64,
    :effects #{},
    :body
-   (if
-    (= picked 0)
-    (if (< queue 0) 0 queue)
-    (if (< queue 0) 1 (+ queue 1))),
-   :param-types [:i64 :i64]}
+   (let
+    [ok0
+     (record-get
+      [:record
+       :schedule/pick2
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:better01 :bool]]]
+      p
+      :ok0)
+     ok1
+     (record-get
+      [:record
+       :schedule/pick2
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:better01 :bool]]]
+      p
+      :ok1)
+     warm0
+     (record-get
+      [:record
+       :schedule/pick2
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:better01 :bool]]]
+      p
+      :warm0)
+     warm1
+     (record-get
+      [:record
+       :schedule/pick2
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:better01 :bool]]]
+      p
+      :warm1)
+     better01
+     (record-get
+      [:record
+       :schedule/pick2
+       [[:ok0 :bool]
+        [:ok1 :bool]
+        [:warm0 :bool]
+        [:warm1 :bool]
+        [:better01 :bool]]]
+      p
+      :better01)]
+    (if
+     ok0
+     (if
+      ok1
+      (prefer-warm-then-score
+       (record-new
+        [:record
+         :schedule/better2
+         [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
+        warm0
+        warm1
+        better01))
+      0)
+     (if ok1 1 -1))),
+   :param-types [[:ref :schedule/pick2]]}
+  {:name pick-idx-3-tournament,
+   :params [t],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [champ01
+     (record-get
+      [:record
+       :schedule/pick3-tour
+       [[:champ01 :i64]
+        [:ok2 :bool]
+        [:warm-champ :bool]
+        [:warm2 :bool]
+        [:better-champ-2 :bool]]]
+      t
+      :champ01)
+     ok2
+     (record-get
+      [:record
+       :schedule/pick3-tour
+       [[:champ01 :i64]
+        [:ok2 :bool]
+        [:warm-champ :bool]
+        [:warm2 :bool]
+        [:better-champ-2 :bool]]]
+      t
+      :ok2)
+     warm-champ
+     (record-get
+      [:record
+       :schedule/pick3-tour
+       [[:champ01 :i64]
+        [:ok2 :bool]
+        [:warm-champ :bool]
+        [:warm2 :bool]
+        [:better-champ-2 :bool]]]
+      t
+      :warm-champ)
+     warm2
+     (record-get
+      [:record
+       :schedule/pick3-tour
+       [[:champ01 :i64]
+        [:ok2 :bool]
+        [:warm-champ :bool]
+        [:warm2 :bool]
+        [:better-champ-2 :bool]]]
+      t
+      :warm2)
+     better-champ-2
+     (record-get
+      [:record
+       :schedule/pick3-tour
+       [[:champ01 :i64]
+        [:ok2 :bool]
+        [:warm-champ :bool]
+        [:warm2 :bool]
+        [:better-champ-2 :bool]]]
+      t
+      :better-champ-2)]
+    (if
+     (< champ01 0)
+     (if ok2 2 -1)
+     (if
+      ok2
+      (if
+       (=
+        (prefer-warm-then-score
+         (record-new
+          [:record
+           :schedule/better2
+           [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
+          warm-champ
+          warm2
+          better-champ-2))
+        0)
+       champ01
+       2)
+      champ01))),
+   :param-types [[:ref :schedule/pick3-tour]]}
+  {:name queue-after-assign,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [queue
+     (record-get
+      [:record :schedule/queue-step [[:queue :i64] [:picked :i64]]]
+      s
+      :queue)
+     picked
+     (record-get
+      [:record :schedule/queue-step [[:queue :i64] [:picked :i64]]]
+      s
+      :picked)]
+    (if
+     (= picked 0)
+     (if (< queue 0) 0 queue)
+     (if (< queue 0) 1 (+ queue 1)))),
+   :param-types [[:ref :schedule/queue-step]]}
   {:name pick-code,
    :params [pick-idx],
    :result :i64,
@@ -226,13 +435,34 @@
       better
       :better01)
      p
-     (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
+     (pick-idx-2-full
+      (record-new
+       [:record
+        :schedule/pick2
+        [[:ok0 :bool]
+         [:ok1 :bool]
+         [:warm0 :bool]
+         [:warm1 :bool]
+         [:better01 :bool]]]
+       ok0
+       ok1
+       warm0
+       warm1
+       better01))
      code
      (pick-code p)
      nq0
-     (queue-after-assign q0 (if (= p 0) 1 0))
+     (queue-after-assign
+      (record-new
+       [:record :schedule/queue-step [[:queue :i64] [:picked :i64]]]
+       q0
+       (if (= p 0) 1 0)))
      nq1
-     (queue-after-assign q1 (if (= p 1) 1 0))]
+     (queue-after-assign
+      (record-new
+       [:record :schedule/queue-step [[:queue :i64] [:picked :i64]]]
+       q1
+       (if (= p 1) 1 0)))]
     (record-new
      [:record :schedule/assign2 [[:code :i64] [:q0 :i64] [:q1 :i64]]]
      code
@@ -270,16 +500,44 @@
     :q1),
    :param-types [[:ref :schedule/assign2]]}
   {:name better-from-queues,
-   :params [q0 f0 q1 f1],
+   :params [x],
    :result :bool,
    :effects #{},
    :body
    (better-score?
-    (score-queue q0)
-    (score-free f0)
-    (score-queue q1)
-    (score-free f1)),
-   :param-types [:i64 :i64 :i64 :i64]}
+    (record-new
+     [:record
+      :schedule/score-cmp
+      [[:q1 :i64] [:f1 :i64] [:q2 :i64] [:f2 :i64]]]
+     (score-queue
+      (record-get
+       [:record
+        :schedule/queue-cmp
+        [[:q0 :i64] [:f0 :i64] [:q1 :i64] [:f1 :i64]]]
+       x
+       :q0))
+     (score-free
+      (record-get
+       [:record
+        :schedule/queue-cmp
+        [[:q0 :i64] [:f0 :i64] [:q1 :i64] [:f1 :i64]]]
+       x
+       :f0))
+     (score-queue
+      (record-get
+       [:record
+        :schedule/queue-cmp
+        [[:q0 :i64] [:f0 :i64] [:q1 :i64] [:f1 :i64]]]
+       x
+       :q1))
+     (score-free
+      (record-get
+       [:record
+        :schedule/queue-cmp
+        [[:q0 :i64] [:f0 :i64] [:q1 :i64] [:f1 :i64]]]
+       x
+       :f1)))),
+   :param-types [[:ref :schedule/queue-cmp]]}
   {:name triple-record,
    :params [v0 v1 v2],
    :result [:ref :schedule/triple],
@@ -352,11 +610,11 @@
    :body (if (< pick-idx 0) 0 (+ pick-idx 1)),
    :param-types [:i64]}
   {:name better-pair,
-   :params [q-a f-a q-b f-b],
+   :params [x],
    :result :bool,
    :effects #{},
-   :body (better-from-queues q-a f-a q-b f-b),
-   :param-types [:i64 :i64 :i64 :i64]}
+   :body (better-from-queues x),
+   :param-types [[:ref :schedule/queue-cmp]]}
   {:name assign-pick-3,
    :params [ok warm better],
    :result :i64,
@@ -415,12 +673,38 @@
       better
       :b12)
      champ
-     (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
+     (pick-idx-2-full
+      (record-new
+       [:record
+        :schedule/pick2
+        [[:ok0 :bool]
+         [:ok1 :bool]
+         [:warm0 :bool]
+         [:warm1 :bool]
+         [:better01 :bool]]]
+       ok0
+       ok1
+       warm0
+       warm1
+       better01))
      warm-champ
      (if (= champ 0) warm0 (if (= champ 1) warm1 false))
      better-c2
      (if (= champ 0) better02 better12)]
-    (pick-idx-3-tournament champ ok2 warm-champ warm2 better-c2)),
+    (pick-idx-3-tournament
+     (record-new
+      [:record
+       :schedule/pick3-tour
+       [[:champ01 :i64]
+        [:ok2 :bool]
+        [:warm-champ :bool]
+        [:warm2 :bool]
+        [:better-champ-2 :bool]]]
+      champ
+      ok2
+      warm-champ
+      warm2
+      better-c2))),
    :param-types
    [[:ref :schedule/flags3]
     [:ref :schedule/flags3]
@@ -447,11 +731,23 @@
       q
       :v2)
      nq0
-     (queue-after-assign q0 (if (= pick 0) 1 0))
+     (queue-after-assign
+      (record-new
+       [:record :schedule/queue-step [[:queue :i64] [:picked :i64]]]
+       q0
+       (if (= pick 0) 1 0)))
      nq1
-     (queue-after-assign q1 (if (= pick 1) 1 0))
+     (queue-after-assign
+      (record-new
+       [:record :schedule/queue-step [[:queue :i64] [:picked :i64]]]
+       q1
+       (if (= pick 1) 1 0)))
      nq2
-     (queue-after-assign q2 (if (= pick 2) 1 0))]
+     (queue-after-assign
+      (record-new
+       [:record :schedule/queue-step [[:queue :i64] [:picked :i64]]]
+       q2
+       (if (= pick 2) 1 0)))]
     (record-new
      [:record :schedule/triple [[:v0 :i64] [:v1 :i64] [:v2 :i64]]]
      nq0
@@ -554,34 +850,53 @@
       (if
        ok-i
        (if
-        (= (prefer-warm-then-score warm-champ warm-i better-c-i) 0)
+        (=
+         (prefer-warm-then-score
+          (record-new
+           [:record
+            :schedule/better2
+            [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
+           warm-champ
+           warm-i
+           better-c-i))
+         0)
         2
         1)
        2))
      (if ok-i 1 0))),
    :param-types [[:option :i64] :bool :bool :bool :bool]}
   {:name queue-inc-if,
-   :params [queue picked],
+   :params [s],
    :result :i64,
    :effects #{},
-   :body (queue-after-assign queue picked),
-   :param-types [:i64 :i64]}],
+   :body (queue-after-assign s),
+   :param-types [[:ref :schedule/queue-step]]}],
  :oracle-value nil,
  :schema-identities
  #:schedule{:assign2
-            "f9b984bbacdeb45128fbc7d42d09a08f36d9abfb5e573b279d932f8ae69e42e0",
+            "7114b29ee70a351ba6a93aeca548fdbdeeff8a891fbf90dbd6eb7797db5baa8e",
             :assign3
-            "ba0635e7d65d8a1680d1eaf2e9600253872c4a1ff88d42797da72d21ed4676fb",
+            "bf054451d12ff3c49662dea8073346f0e4a4c10ee6ffb1bb9fe5333550333ac5",
             :better2
-            "d43e7dd07dcb05decb8b4bf1a5a0a32578f47e0081203bcd8e14b9e06261f3ae",
+            "407d4dfb6240582df2b4bca6d607a27815736b73b85d5bbcd68904ceb41e9b31",
             :better3
-            "1182479ed5512e54d9220e2c7b46b2e2f8eff414a1813528eb4f9d8df6ff3125",
+            "74c0d6313f0ab58f4abde52d9b8676af3f834d1e27aa200cd3add7f23c14f5f1",
             :eligibility
-            "f8b5269e0fc76b5f9d5e4c380941e1f1b945c1d183d68fc2f49a67b6aad4821d",
+            "c1d4b6954d276fc30d04281457a3e8c193aef2d3a30daca97c4e92db3de53029",
             :flags3
-            "f1253c6a3cc337eb9221e768678e5f4d573809b77284481980feb7ae68130017",
+            "90240d73f5a7ff71447f65c3a9839a49b025e2666500ae68deca758431c29f25",
+            :pick2
+            "4f8e9bf70660a9d6140279f38086dd1466c7581114906b7e1fe98f554cbb46b2",
+            :pick3-tour
+            "faf7832473a4bb5f8e6d15af017bd19f295d5fa76f51ce0b280649cfd19805b3",
+            :queue-cmp
+            "561d6a0ecd37bab38e564bd9f6cd2686c6d1077063c918ca0cf4e6d78b44d14b",
+            :queue-step
+            "addc8c5fe7069e23bf833b11764cde49fa332b9c7e96438756100bde281629ed",
+            :score-cmp
+            "a0ecfcc04aa9e5c9572803508b692077fc393802e349f262740209a90e79b04b",
             :triple
-            "4e92c7e5e8e1425b8f9547cb5803da864fcc37638ceb739d1695778b6260dad0"},
+            "a21e8eb706d835f39ab641fbd9353ba471055dae053727a6b349ef03b728b543"},
  :exports
  [eligible?
   score-queue
@@ -617,7 +932,27 @@
   pick-fold-step
   queue-inc-if],
  :schemas
- #:schedule{:eligibility
+ #:schedule{:assign2
+            [:record
+             :schedule/assign2
+             [[:code :i64] [:q0 :i64] [:q1 :i64]]],
+            :queue-cmp
+            [:record
+             :schedule/queue-cmp
+             [[:q0 :i64] [:f0 :i64] [:q1 :i64] [:f1 :i64]]],
+            :queue-step
+            [:record
+             :schedule/queue-step
+             [[:queue :i64] [:picked :i64]]],
+            :pick3-tour
+            [:record
+             :schedule/pick3-tour
+             [[:champ01 :i64]
+              [:ok2 :bool]
+              [:warm-champ :bool]
+              [:warm2 :bool]
+              [:better-champ-2 :bool]]],
+            :eligibility
             [:record
              :schedule/eligibility
              [[:has-engine :bool]
@@ -626,30 +961,38 @@
               [:can-fetch :bool]
               [:free-bytes :i64]
               [:min-free :i64]]],
-            :better2
-            [:record
-             :schedule/better2
-             [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]],
-            :assign2
-            [:record
-             :schedule/assign2
-             [[:code :i64] [:q0 :i64] [:q1 :i64]]],
-            :triple
-            [:record
-             :schedule/triple
-             [[:v0 :i64] [:v1 :i64] [:v2 :i64]]],
-            :flags3
-            [:record
-             :schedule/flags3
-             [[:v0 :bool] [:v1 :bool] [:v2 :bool]]],
             :better3
             [:record
              :schedule/better3
              [[:b01 :bool] [:b02 :bool] [:b12 :bool]]],
+            :score-cmp
+            [:record
+             :schedule/score-cmp
+             [[:q1 :i64] [:f1 :i64] [:q2 :i64] [:f2 :i64]]],
+            :better2
+            [:record
+             :schedule/better2
+             [[:warm0 :bool] [:warm1 :bool] [:better01 :bool]]],
+            :flags3
+            [:record
+             :schedule/flags3
+             [[:v0 :bool] [:v1 :bool] [:v2 :bool]]],
+            :triple
+            [:record
+             :schedule/triple
+             [[:v0 :i64] [:v1 :i64] [:v2 :i64]]],
             :assign3
             [:record
              :schedule/assign3
-             [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]]},
+             [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]],
+            :pick2
+            [:record
+             :schedule/pick2
+             [[:ok0 :bool]
+              [:ok1 :bool]
+              [:warm0 :bool]
+              [:warm1 :bool]
+              [:better01 :bool]]]},
  :effects #{},
  :blocks [],
  :entry nil}

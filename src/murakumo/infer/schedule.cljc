@@ -26,6 +26,12 @@
 
 ;; Profile 5: eligibility fields are real host/guest booleans (not 0/1 i64).
 
+
+(def ^:private queue-step-schema
+  "Guest :schedule/queue-step — T5.2 residual record for queue-inc-if."
+  [:record :schedule/queue-step
+   [[:queue :i64] [:picked :i64]]])
+
 (def ^:private eligibility-schema
   "Guest descriptor for infer_schedule_core's eligibility record (T5.3 + profile 5).
    Four flags used to be packed into one i64; then T5.3 made them :i64 fields;
@@ -91,6 +97,8 @@
                     (fn [q]
                       (oracle/i64->host
                        (o-record 'queue-inc-if
-                                 {:queue (or q 0) :delta 1}
-                                 [[:queue :i64] [:delta :i64]])))))
+                                 {:step (oracle/record
+                                         queue-step-schema
+                                         {:queue (or q 0) :picked 1})}
+                                 [[:step :raw]])))))
            {:job job :node (when n (:name n))})))))

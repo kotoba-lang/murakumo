@@ -30,6 +30,49 @@
     "(option-none-of [:option :i64])"
     (str "(option-some-of [:option :i64] " (long n) ")")))
 
+
+(def ^:private score-cmp-lit
+  "[:record :schedule/score-cmp [[:q1 :i64] [:f1 :i64] [:q2 :i64] [:f2 :i64]]]")
+(def ^:private queue-cmp-lit
+  "[:record :schedule/queue-cmp [[:q0 :i64] [:f0 :i64] [:q1 :i64] [:f1 :i64]]]")
+(def ^:private queue-step-lit
+  "[:record :schedule/queue-step [[:queue :i64] [:picked :i64]]]")
+(def ^:private pick2-lit
+  "[:record :schedule/pick2 [[:ok0 :bool] [:ok1 :bool] [:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]")
+(def ^:private pick3-tour-lit
+  "[:record :schedule/pick3-tour [[:champ01 :i64] [:ok2 :bool] [:warm-champ :bool] [:warm2 :bool] [:better-champ-2 :bool]]]")
+
+(defn- better-score-call [q1 f1 q2 f2]
+  (str "(if (better-score? (record-new " score-cmp-lit " "
+       q1 " " f1 " " q2 " " f2 ")) 1 0)"))
+
+(defn- better-from-queues-call [q0 f0 q1 f1]
+  (str "(if (better-from-queues (record-new " queue-cmp-lit " "
+       q0 " " f0 " " q1 " " f1 ")) 1 0)"))
+
+(defn- better-from-queues-bool [q0 f0 q1 f1]
+  (str "(better-from-queues (record-new " queue-cmp-lit " "
+       q0 " " f0 " " q1 " " f1 "))"))
+
+(defn- better-pair-call [qa fa qb fb]
+  (str "(if (better-pair (record-new " queue-cmp-lit " "
+       qa " " fa " " qb " " fb ")) 1 0)"))
+
+(defn- better-pair-bool [qa fa qb fb]
+  (str "(better-pair (record-new " queue-cmp-lit " "
+       qa " " fa " " qb " " fb "))"))
+
+(defn- pick2-call [ok0 ok1 warm0 warm1 better]
+  (str "(pick-idx-2-full (record-new " pick2-lit " "
+       ok0 " " ok1 " " warm0 " " warm1 " " better "))"))
+
+(defn- queue-step-call [export queue picked]
+  (str "(" export " (record-new " queue-step-lit " " queue " " picked "))"))
+
+(defn- pick3-tour-call [champ ok2 wc w2 bc]
+  (str "(pick-idx-3-tournament (record-new " pick3-tour-lit " "
+       champ " " ok2 " " wc " " w2 " " bc "))"))
+
 (defn- compile-i64-cases [cases]
   (let [defs (for [[name body] cases]
                (str "(defn " name " [] :i64 " body ")"))
@@ -146,7 +189,7 @@
         cases (into {} (map-indexed
                         (fn [i [[q1 f1] [q2 f2]]]
                           [(str "b_" i)
-                           (str "(if (better-score? " q1 " " f1 " " q2 " " f2 ") 1 0)")])
+                           (better-score-call q1 f1 q2 f2)])
                         pairs))
         actual (compile-i64-cases cases)]
     (doseq [[i [a b]] (map-indexed vector pairs)]
@@ -192,7 +235,7 @@
                       better (if (neg? (compare s0 s1)) "true" "false")
                       wb0 (if (= w0 1) "true" "false")
                       wb1 (if (= w1 1) "true" "false")]
-                  (str "(pick-idx-2-full " ok0 " " ok1 " " wb0 " " wb1 " " better ")")))
+                  (pick2-call ok0 ok1 wb0 wb1 better)))
         cases (into {}
                     (map-indexed
                      (fn [i [nodes _]]
@@ -200,15 +243,15 @@
                          [(str "p_" i)
                           (let [n0 (first nodes)
                                 ok0 (if (sched/eligible? n0 model) "true" "false")]
-                            (str "(pick-idx-2-full " ok0 " false false false false)"))]
+                            (pick2-call ok0 "false" "false" "false" "false"))]
                          [(str "p_" i) (body2 (nodes 0) (nodes 1))]))
                      pairs))
         actual (compile-i64-cases
                 (merge cases
-                       {"qa0" "(queue-after-assign 0 0)"
-                        "qa1" "(queue-after-assign 0 1)"
-                        "qa2" "(queue-after-assign 3 1)"
-                        "t3" "(pick-idx-3-tournament 0 true true false true)"}))]
+                       {"qa0" (queue-step-call "queue-after-assign" 0 0)
+                        "qa1" (queue-step-call "queue-after-assign" 0 1)
+                        "qa2" (queue-step-call "queue-after-assign" 3 1)
+                        "t3" (pick3-tour-call 0 "true" "true" "false" "true")}))]
     (doseq [[i [nodes expect]] (map-indexed vector pairs)]
       (let [got (get actual (str "p_" i))
             ;; map idx to name
@@ -236,10 +279,10 @@
         f0 (:free-bytes a)
         f1 (:free-bytes b)
         ;; T5.3: better2-record + assign2 field projections (no pack3)
-        b0 (str "(if (better-from-queues 0 " f0 " 0 " f1 ") 1 0)")
-        s0 (str "(assign-step-2 0 0 true true (better2-record true false (better-from-queues 0 " f0 " 0 " f1 ")))")
-        b1 (str "(if (better-from-queues 1 " f0 " 0 " f1 ") 1 0)")
-        s1 (str "(assign-step-2 1 0 true true (better2-record true false (better-from-queues 1 " f0 " 0 " f1 ")))")
+        b0 (better-from-queues-call 0 f0 0 f1)
+        s0 (str "(assign-step-2 0 0 true true (better2-record true false " (better-from-queues-bool 0 f0 0 f1) "))")
+        b1 (better-from-queues-call 1 f0 0 f1)
+        s1 (str "(assign-step-2 1 0 true true (better2-record true false " (better-from-queues-bool 1 f0 0 f1) "))")
         actual (compile-i64-cases
                 {"b0" b0
                  "s0c" (str "(assign-result-pick " s0 ")")
@@ -271,9 +314,9 @@
 (deftest assign-step-2-both-warm-load-balances
   (let [f (* 16 GiB)
         ;; both warm → score by queue; tie picks index 1 (#73 prefer-warm-then-score)
-        b0 (str "(better-from-queues 0 " f " 0 " f ")")
+        b0 (better-from-queues-bool 0 f 0 f)
         s0 (str "(assign-step-2 0 0 true true (better2-record true true " b0 "))")
-        b1 (str "(better-from-queues 0 " f " 1 " f ")")
+        b1 (better-from-queues-bool 0 f 1 f)
         s1 (str "(assign-step-2 0 1 true true (better2-record true true " b1 "))")
         actual (compile-i64-cases
                 {"s0c" (str "(assign-result-pick " s0 ")")
@@ -298,9 +341,9 @@
         jobs (repeat 3 {:model model})
         cljc (sched/assign [a b c] jobs)
         ;; all warm; more free ⇒ better score (score-free = -free)
-        bp0 (str "(better3-record (better-pair 0 " fa " 0 " fb ") "
-                 "(better-pair 0 " fa " 0 " fc ") "
-                 "(better-pair 0 " fb " 0 " fc "))")
+        bp0 (str "(better3-record " (better-pair-bool 0 fa 0 fb) " "
+                (better-pair-bool 0 fa 0 fc) " "
+                (better-pair-bool 0 fb 0 fc) ")")
         ok-warm "(flags3-record true true true)"
         q0 "(triple-record 0 0 0)"
         s0 (str "(assign-step-3 " q0 " " ok-warm " " ok-warm " " bp0 ")")
@@ -327,9 +370,9 @@
     (is (= [0 0 1] [(get actual0 "s0q0") (get actual0 "s0q1") (get actual0 "s0q2")]))
     (is (= "c" (:node (nth cljc 0))))
     ;; step1: q=(0,0,1) — still prefer largest free among low queue
-    (let [bp1 (str "(better3-record (better-pair 0 " fa " 0 " fb ") "
-                   "(better-pair 0 " fa " 1 " fc ") "
-                   "(better-pair 0 " fb " 1 " fc "))")
+    (let [bp1 (str "(better3-record " (better-pair-bool 0 fa 0 fb) " "
+                (better-pair-bool 0 fa 1 fc) " "
+                (better-pair-bool 0 fb 1 fc) ")")
           q1 "(triple-record 0 0 1)"
           s1 (str "(assign-step-3 " q1 " " ok-warm " " ok-warm " " bp1 ")")
           actual1 (compile-i64-cases
@@ -366,16 +409,16 @@
         ;; step i=0: has=0 ok=1 → take 0
         f0 (str "(pick-fold-step " (opt-i64-form nil) " true false true false)")
         ;; champ=0 warm=1; vs i=1 better 0 vs 1: free a < b so a not better → better=false
-        b01 (str "(if (better-pair 0 " fa " 0 " fb ") 1 0)")
-        f1 (str "(pick-fold-step " (opt-i64-form 1) " true true true (better-pair 0 " fa " 0 " fb "))")
+        b01 (better-pair-call 0 fa 0 fb)
+        f1 (str "(pick-fold-step " (opt-i64-form 1) " true true true " (better-pair-bool 0 fa 0 fb) ")")
         actual (compile-i64-cases
                 {"f0" f0
                  "b01" b01
                  "f1" f1
                  "none" (str "(pick-fold-step " (opt-i64-form nil) " false false false false)")
                  "keep" (str "(pick-fold-step " (opt-i64-form 1) " false true false false)")
-                 "qi0" "(queue-inc-if 0 0)"
-                 "qi1" "(queue-inc-if 3 1)"})]
+                 "qi0" (queue-step-call "queue-inc-if" 0 0)
+                 "qi1" (queue-step-call "queue-inc-if" 3 1)})]
     (is (= 1 (get actual "f0")) "take first eligible")
     (is (= 0 (get actual "b01")) "b better free")
     (is (= 1 (get actual "f1")) "take challenger b")
@@ -384,12 +427,12 @@
     (is (= 0 (get actual "qi0")))
     (is (= 4 (get actual "qi1")))
     ;; continue fold in second compile with b as champ vs c, d
-    (let [b02 (str "(if (better-pair 0 " fb " 0 " fc ") 1 0)")
-          f2 (str "(pick-fold-step " (opt-i64-form 1) " true true true (better-pair 0 " fb " 0 " fc "))")
+    (let [b02 (better-pair-call 0 fb 0 fc)
+          f2 (str "(pick-fold-step " (opt-i64-form 1) " true true true " (better-pair-bool 0 fb 0 fc) ")")
           act2 (compile-i64-cases {"b02" b02 "f2" f2})]
       (is (= 0 (get act2 "b02")))
       (is (= 1 (get act2 "f2")) "take c")
-      (let [f3 (str "(pick-fold-step " (opt-i64-form 1) " true true true (better-pair 0 " fc " 0 " fd "))")
+      (let [f3 (str "(pick-fold-step " (opt-i64-form 1) " true true true " (better-pair-bool 0 fc 0 fd) ")")
             act3 (compile-i64-cases {"f3" f3})]
         (is (= 1 (get act3 "f3")) "take d — largest free")
         (is (= "d" (:name cljc)))))))

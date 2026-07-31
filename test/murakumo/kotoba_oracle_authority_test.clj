@@ -656,8 +656,11 @@
                    (oracle/call :infer-schedule 'eligible? [elig])))
     (is (= (ir/execute live 'score-queue [3])
            (oracle/call :infer-schedule 'score-queue [3])))
-    (is (= (ir/execute live 'queue-inc-if [2 1])
-           (oracle/call :infer-schedule 'queue-inc-if [2 1])))))
+    (let [qs (oracle/record [:record :schedule/queue-step
+                             [[:queue :i64] [:picked :i64]]]
+                            {:queue 2 :picked 1})]
+      (is (= (ir/execute live 'queue-inc-if [qs])
+             (oracle/call :infer-schedule 'queue-inc-if [qs]))))))
 
 (deftest schedule-precompiled-kir-does-not-drift
   (is (= (sched-live-kir) (sched-resource-kir))

@@ -24,7 +24,21 @@
                                 [[:b01 :bool] [:b02 :bool] [:b12 :bool]]]
              ;; 3-node assign result
              :schedule/assign3 [:record :schedule/assign3
-                                [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]]})
+                                [[:code :i64] [:q0 :i64] [:q1 :i64] [:q2 :i64]]]
+             ;; T5.2 residual multi-arg pure → single-record inputs
+             :schedule/score-cmp [:record :schedule/score-cmp
+                                  [[:q1 :i64] [:f1 :i64] [:q2 :i64] [:f2 :i64]]]
+             :schedule/queue-cmp [:record :schedule/queue-cmp
+                                  [[:q0 :i64] [:f0 :i64] [:q1 :i64] [:f1 :i64]]]
+             :schedule/queue-step [:record :schedule/queue-step
+                                   [[:queue :i64] [:picked :i64]]]
+             :schedule/pick2 [:record :schedule/pick2
+                              [[:ok0 :bool] [:ok1 :bool]
+                               [:warm0 :bool] [:warm1 :bool] [:better01 :bool]]]
+             :schedule/pick3-tour [:record :schedule/pick3-tour
+                                    [[:champ01 :i64] [:ok2 :bool]
+                                     [:warm-champ :bool] [:warm2 :bool]
+                                     [:better-champ-2 :bool]]]})
   (:export [eligible? score-queue score-free better-score?
             holds-warm? prefer-warm-then-score pick-idx-2-full
             pick-idx-3-tournament queue-after-assign
@@ -47,6 +61,8 @@
 ;; pick-fold-step: host-fold tournament for n>3 (0=none, 1=take challenger, 2=keep champ).
 ;; queue-inc-if: host updates one node's queue after pick.
 ;; T5.3 (schedule): eligibility is a named record (flags no longer bit-packed).
+;; T5.2 residual: better-score?/better-from-queues/better-pair, prefer-warm-then-score,
+;; pick-idx-2-full/pick-idx-3-tournament, queue-after-assign/queue-inc-if take one record.
 ;; T5.3 (schedule assign): queue/ok/warm/better triples and assign results are
 ;; named records — base-65536 pack3 is deleted from this module.
 ;; Profile 5: ok/warm use :schedule/flags3 (:bool); queue stays :schedule/triple (:i64).
@@ -73,49 +89,66 @@
     0
     (- 0 free-bytes)))
 
-(defn better-score? [q1 :i64 f1 :i64 q2 :i64 f2 :i64] :bool
-  (if (< q1 q2)
+(defn better-score? [x [:ref :schedule/score-cmp]] :bool
+  (if (< (record-get x :q1) (record-get x :q2))
     true
-    (if (< q2 q1)
+    (if (< (record-get x :q2) (record-get x :q1))
       false
-      (if (< f1 f2) true false))))
+      (if (< (record-get x :f1) (record-get x :f2)) true false))))
 
 (defn holds-warm? [e [:ref :schedule/eligibility]] :bool
   (record-get e :holds-checkpoint))
 
-(defn prefer-warm-then-score [warm0 :bool warm1 :bool better01 :bool] :i64
+(defn prefer-warm-then-score [b [:ref :schedule/better2]] :i64
   ;; both eligible. Return 0 or 1. better01 true ⇒ node0 score strictly better.
-  (if (if warm0 (if warm1 false true) false)
-    0
-    (if (if warm1 (if warm0 false true) false)
-      1
-      (if better01 0 1))))
+  (let [warm0 (record-get b :warm0)
+        warm1 (record-get b :warm1)
+        better01 (record-get b :better01)]
+    (if (if warm0 (if warm1 false true) false)
+      0
+      (if (if warm1 (if warm0 false true) false)
+        1
+        (if better01 0 1)))))
 
-(defn pick-idx-2-full [ok0 :bool ok1 :bool warm0 :bool warm1 :bool better01 :bool] :i64
+(defn pick-idx-2-full [p [:ref :schedule/pick2]] :i64
   ;; Pure pick between two candidates. -1 if neither eligible.
-  (if ok0
-    (if ok1
-      (prefer-warm-then-score warm0 warm1 better01)
-      0)
-    (if ok1 1 -1)))
+  (let [ok0 (record-get p :ok0)
+        ok1 (record-get p :ok1)
+        warm0 (record-get p :warm0)
+        warm1 (record-get p :warm1)
+        better01 (record-get p :better01)]
+    (if ok0
+      (if ok1
+        (prefer-warm-then-score
+         (record-new [:ref :schedule/better2] warm0 warm1 better01))
+        0)
+      (if ok1 1 -1))))
 
-(defn pick-idx-3-tournament [champ01 :i64 ok2 :bool warm-champ :bool warm2 :bool
-                             better-champ-2 :bool] :i64
+(defn pick-idx-3-tournament [t [:ref :schedule/pick3-tour]] :i64
   ;; champ01 ∈ {-1,0,1} from pick-idx-2-full on nodes 0/1.
   ;; Compare champion to node 2. Returns -1|0|1|2.
-  (if (< champ01 0)
-    (if ok2 2 -1)
-    (if ok2
-      (if (= (prefer-warm-then-score warm-champ warm2 better-champ-2) 0)
-        champ01
-        2)
-      champ01)))
+  (let [champ01 (record-get t :champ01)
+        ok2 (record-get t :ok2)
+        warm-champ (record-get t :warm-champ)
+        warm2 (record-get t :warm2)
+        better-champ-2 (record-get t :better-champ-2)]
+    (if (< champ01 0)
+      (if ok2 2 -1)
+      (if ok2
+        (if (= (prefer-warm-then-score
+                (record-new [:ref :schedule/better2]
+                            warm-champ warm2 better-champ-2)) 0)
+          champ01
+          2)
+        champ01))))
 
-(defn queue-after-assign [queue :i64 picked :i64] :i64
+(defn queue-after-assign [s [:ref :schedule/queue-step]] :i64
   ;; cljc assign: (fnil inc 0) when node picked (picked 0/1)
-  (if (= picked 0)
-    (if (< queue 0) 0 queue)
-    (if (< queue 0) 1 (+ queue 1))))
+  (let [queue (record-get s :queue)
+        picked (record-get s :picked)]
+    (if (= picked 0)
+      (if (< queue 0) 0 queue)
+      (if (< queue 0) 1 (+ queue 1)))))
 
 (defn pick-code [pick-idx :i64] :i64
   ;; -1|0|1 → 0=none, 1=node0, 2=node1
@@ -131,10 +164,13 @@
   (let [warm0 (record-get better :warm0)
         warm1 (record-get better :warm1)
         better01 (record-get better :better01)
-        p (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
+        p (pick-idx-2-full
+           (record-new [:ref :schedule/pick2] ok0 ok1 warm0 warm1 better01))
         code (pick-code p)
-        nq0 (queue-after-assign q0 (if (= p 0) 1 0))
-        nq1 (queue-after-assign q1 (if (= p 1) 1 0))]
+        nq0 (queue-after-assign
+             (record-new [:ref :schedule/queue-step] q0 (if (= p 0) 1 0)))
+        nq1 (queue-after-assign
+             (record-new [:ref :schedule/queue-step] q1 (if (= p 1) 1 0)))]
     (record-new [:ref :schedule/assign2] code nq0 nq1)))
 
 (defn assign-result-pick [result [:ref :schedule/assign2]] :i64
@@ -146,10 +182,14 @@
 (defn assign-result-q1 [result [:ref :schedule/assign2]] :i64
   (record-get result :q1))
 
-(defn better-from-queues [q0 :i64 f0 :i64 q1 :i64 f1 :i64] :bool
+(defn better-from-queues [x [:ref :schedule/queue-cmp]] :bool
   ;; recompute better01 after queue updates for better2-record packing
-  (better-score? (score-queue q0) (score-free f0)
-                 (score-queue q1) (score-free f1)))
+  (better-score?
+   (record-new [:ref :schedule/score-cmp]
+               (score-queue (record-get x :q0))
+               (score-free (record-get x :f0))
+               (score-queue (record-get x :q1))
+               (score-free (record-get x :f1)))))
 
 (defn triple-record [v0 :i64 v1 :i64 v2 :i64] [:ref :schedule/triple]
   (record-new [:ref :schedule/triple] v0 v1 v2))
@@ -173,9 +213,9 @@
   ;; -1|0|1|2 → 0=none, 1=node0, 2=node1, 3=node2
   (if (< pick-idx 0) 0 (+ pick-idx 1)))
 
-(defn better-pair [q-a :i64 f-a :i64 q-b :i64 f-b :i64] :bool
+(defn better-pair [x [:ref :schedule/queue-cmp]] :bool
   ;; true if a strictly better score than b
-  (better-from-queues q-a f-a q-b f-b))
+  (better-from-queues x))
 
 (defn assign-pick-3 [ok [:ref :schedule/flags3]
                      warm [:ref :schedule/flags3]
@@ -190,23 +230,29 @@
         better01 (record-get better :b01)
         better02 (record-get better :b02)
         better12 (record-get better :b12)
-        champ (pick-idx-2-full ok0 ok1 warm0 warm1 better01)
+        champ (pick-idx-2-full
+               (record-new [:ref :schedule/pick2] ok0 ok1 warm0 warm1 better01))
         warm-champ (if (= champ 0)
                      warm0
                      (if (= champ 1) warm1 false))
         better-c2 (if (= champ 0)
                     better02
                     better12)]
-    (pick-idx-3-tournament champ ok2 warm-champ warm2 better-c2)))
+    (pick-idx-3-tournament
+     (record-new [:ref :schedule/pick3-tour]
+                 champ ok2 warm-champ warm2 better-c2))))
 
 (defn apply-pick-3 [q [:ref :schedule/triple] pick :i64] [:ref :schedule/triple]
   ;; queues after assigning one job to pick (−1 = none)
   (let [q0 (record-get q :v0)
         q1 (record-get q :v1)
         q2 (record-get q :v2)
-        nq0 (queue-after-assign q0 (if (= pick 0) 1 0))
-        nq1 (queue-after-assign q1 (if (= pick 1) 1 0))
-        nq2 (queue-after-assign q2 (if (= pick 2) 1 0))]
+        nq0 (queue-after-assign
+             (record-new [:ref :schedule/queue-step] q0 (if (= pick 0) 1 0)))
+        nq1 (queue-after-assign
+             (record-new [:ref :schedule/queue-step] q1 (if (= pick 1) 1 0)))
+        nq2 (queue-after-assign
+             (record-new [:ref :schedule/queue-step] q2 (if (= pick 2) 1 0)))]
     (record-new [:ref :schedule/triple] nq0 nq1 nq2)))
 
 (defn assign-step-3 [q [:ref :schedule/triple]
@@ -241,14 +287,17 @@
   ;; Returns: 0 = no pick yet (no champ and not ok-i)
   ;;          1 = take challenger i as new champ
   ;;          2 = keep existing champ
+  ;; prefer-warm takes better2 record; pick-fold residual still multi-arg + option.
   (if-some [_ champ]
     (if ok-i
-      (if (= (prefer-warm-then-score warm-champ warm-i better-c-i) 0)
+      (if (= (prefer-warm-then-score
+              (record-new [:ref :schedule/better2]
+                          warm-champ warm-i better-c-i)) 0)
         2
         1)
       2)
     (if ok-i 1 0)))
 
-(defn queue-inc-if [queue :i64 picked :i64] :i64
+(defn queue-inc-if [s [:ref :schedule/queue-step]] :i64
   ;; picked 0/1 — alias queue-after-assign for host fold clarity
-  (queue-after-assign queue picked))
+  (queue-after-assign s))
