@@ -250,17 +250,32 @@
       (is (= 2592000 (:exp cl))))))
 
 (deftest token-oracle-call-matches-live-compile
-  (let [live (token-live-kir)]
-    (is (= (ir/execute live 'encode-claims-json ["shinshi" "chat" 1 2])
-           (oracle/call :token 'encode-claims-json ["shinshi" "chat" 1 2])))
+  (let [live (token-live-kir)
+        claims (oracle/record
+                [:record :token/claims
+                 [[:sub :string] [:scope :string] [:iat :i64] [:exp :i64]]]
+                {:sub "shinshi" :scope "chat" :iat 1 :exp 2})
+        wire (oracle/record
+              [:record :token/wire [[:payload :string] [:sig :string]]]
+              {:payload "P" :sig "S"})
+        eq (oracle/record
+            [:record :token/eq [[:a :string] [:b :string]]]
+            {:a "ab" :b "ab"})
+        scope (oracle/record
+               [:record :token/scope-check
+                [[:token-scope :string] [:required :string]]]
+               {:token-scope "all" :required "x"})]
+    ;; T5.2 native guest record wire: single-arg record exports
+    (is (= (ir/execute live 'encode-claims-json [claims])
+           (oracle/call :token 'encode-claims-json [claims])))
     (is (= (ir/execute live 'signing-input ["P"])
            (oracle/call :token 'signing-input ["P"])))
-    (is (= (ir/execute live 'wire-token ["P" "S"])
-           (oracle/call :token 'wire-token ["P" "S"])))
-    (is (= (ir/execute live 'constant-time-eq ["ab" "ab"])
-           (oracle/call :token 'constant-time-eq ["ab" "ab"])))
-    (is (= (ir/execute live 'scope-allows? ["all" "x"])
-           (oracle/call :token 'scope-allows? ["all" "x"])))
+    (is (= (ir/execute live 'wire-token [wire])
+           (oracle/call :token 'wire-token [wire])))
+    (is (= (ir/execute live 'constant-time-eq [eq])
+           (oracle/call :token 'constant-time-eq [eq])))
+    (is (= (ir/execute live 'scope-allows? [scope])
+           (oracle/call :token 'scope-allows? [scope])))
     (is (= (ir/execute live 'version [])
            (oracle/call :token 'version [])))
     (is (= (oracle/call :token 'version []) tok/version))
@@ -578,16 +593,17 @@
   (let [live (sched-live-kir)
         elig (oracle/record [:record :schedule/eligibility
                              [[:has-engine :bool] [:has-checkpoint :bool]
-                              [:holds-checkpoint :bool] [:can-fetch :bool]]]
+                              [:holds-checkpoint :bool] [:can-fetch :bool]
+                              [:free-bytes :i64] [:min-free :i64]]]
                             {:has-engine true :has-checkpoint true
-                             :holds-checkpoint true :can-fetch true})]
-    ;; T5.3 + profile 5: eligibility is a bool-field record.
+                             :holds-checkpoint true :can-fetch true
+                             :free-bytes (* 16 1024 1024 1024) :min-free 0})]
+    ;; T5.2 native guest record: single-arg eligible? (free/min on record).
     ;; eligible? result is a :bool word (KIR 0/1 or host true/false).
-    (is (= (ir/execute live 'eligible? [elig (* 16 1024 1024 1024) 0])
-           (oracle/call :infer-schedule 'eligible? [elig (* 16 1024 1024 1024) 0])))
+    (is (= (ir/execute live 'eligible? [elig])
+           (oracle/call :infer-schedule 'eligible? [elig])))
     (is (contains? #{true 1}
-                   (oracle/call :infer-schedule 'eligible?
-                                [elig (* 16 1024 1024 1024) 0])))
+                   (oracle/call :infer-schedule 'eligible? [elig])))
     (is (= (ir/execute live 'score-queue [3])
            (oracle/call :infer-schedule 'score-queue [3])))
     (is (= (ir/execute live 'queue-inc-if [2 1])
@@ -679,17 +695,25 @@
       (is (contains? #{true 1}
                      (oracle/call :task-plan 'failed?
                                   [exit0 false (oracle/option-string "x")]))))
-    ;; T5.3 + profile 5: eligibility is a bool-field record.
+    ;; T5.2 native guest record: single-arg task-eligible? (mem on record).
     (let [elig (oracle/record [:record :task/eligibility
                                [[:online :bool] [:labels-ok :bool] [:roles-ok :bool]
-                                [:not-excluded :bool] [:allowlist-ok :bool]]]
+                                [:not-excluded :bool] [:allowlist-ok :bool]
+                                [:mem-bytes :i64] [:min-mem :i64]]]
                               {:online true :labels-ok true :roles-ok true
-                               :not-excluded true :allowlist-ok true})]
-      (is (= (ir/execute live 'task-eligible? [elig (* 16 1024 1024 1024) 0])
-             (oracle/call :task-plan 'task-eligible? [elig (* 16 1024 1024 1024) 0])))
+                               :not-excluded true :allowlist-ok true
+                               :mem-bytes (* 16 1024 1024 1024) :min-mem 0})
+          retry (oracle/record [:record :task/retry
+                                [[:attempt :i64] [:max-attempts :i64]]]
+                               {:attempt 1 :max-attempts 3})]
+      (is (= (ir/execute live 'task-eligible? [elig])
+             (oracle/call :task-plan 'task-eligible? [elig])))
       (is (contains? #{true 1}
-                     (oracle/call :task-plan 'task-eligible?
-                                  [elig (* 16 1024 1024 1024) 0]))))
+                     (oracle/call :task-plan 'task-eligible? [elig])))
+      (is (= (ir/execute live 'can-retry? [retry])
+             (oracle/call :task-plan 'can-retry? [retry])))
+      (is (contains? #{true 1}
+                     (oracle/call :task-plan 'can-retry? [retry]))))
     (is (= (ir/execute live 'task-id [12])
            (oracle/call :task-plan 'task-id [12])))
     (is (= (ir/execute live 'unschedulable-detail ["nil" "a,b" "64"])

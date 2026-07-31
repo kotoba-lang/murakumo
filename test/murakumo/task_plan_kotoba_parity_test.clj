@@ -104,6 +104,10 @@
          \" (-> (str s) (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"
          ")")))
 
+
+(def ^:private retry-record-ty
+  "[:record :task/retry [[:attempt :i64] [:max-attempts :i64]]]")
+
 (deftest failed-matches-task-plan-cljc
   (let [corpus [{:exit 1}
                 {:exit nil :timeout? true}
@@ -130,7 +134,8 @@
         cases (into {} (map-indexed
                         (fn [i [a m]]
                           [(str "r_" i)
-                           (str "(if (can-retry? " a " " m ") 1 0)")])
+                           (str "(if (can-retry? (record-new " retry-record-ty " "
+                                a " " m ")) 1 0)")])
                         corpus))
         actual (compile-i64-cases cases)]
     (doseq [[i [a m]] (map-indexed vector corpus)]

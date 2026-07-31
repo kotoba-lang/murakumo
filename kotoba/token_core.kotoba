@@ -1,4 +1,12 @@
 (ns token-core
+  (:schemas {;; T5.2 native guest record wire (expansion after eligibility pilot)
+             :token/claims [:record :token/claims
+                            [[:sub :string] [:scope :string] [:iat :i64] [:exp :i64]]]
+             :token/wire [:record :token/wire
+                          [[:payload :string] [:sig :string]]]
+             :token/eq [:record :token/eq [[:a :string] [:b :string]]]
+             :token/scope-check [:record :token/scope-check
+                                 [[:token-scope :string] [:required :string]]]})
   (:export [version default-ttl claim-sub claim-scope claim-exp
             expired? scope-allows? signing-input
             encode-claims-json wire-token
@@ -72,37 +80,40 @@
 
 (defn expired? [exp [:option :i64] now :i64] :bool
   ;; true when expired; missing exp => expired
+  ;; (option fields not yet folded into records — compiler option-in-record gap)
   (if-some [e exp]
     (if (< now e) false true)
     true))
 
-(defn scope-allows? [token-scope :string required :string] :bool
-  (if (string=? token-scope (scope-all))
+(defn scope-allows? [x [:ref :token/scope-check]] :bool
+  ;; T5.2 native: single scope-check record.
+  (if (string=? (record-get x :token-scope) (scope-all))
     true
-    (if (string=? token-scope required) true false)))
+    (if (string=? (record-get x :token-scope) (record-get x :required)) true false)))
 
 (defn signing-input [payload-seg :string] :string
   (string-concat (version) (string-concat (jwt-seg-sep) payload-seg)))
 
-(defn encode-claims-json [sub :string scope :string iat :i64 exp :i64] :string
-  ;; fixed-key claims JSON from pure fragments
-  (let [a (string-concat (json-sub-prefix) sub)
+(defn encode-claims-json [c [:ref :token/claims]] :string
+  ;; T5.2 native: single claims record. Fixed-key JSON from pure fragments.
+  (let [a (string-concat (json-sub-prefix) (record-get c :sub))
         b (string-concat a (json-scope-mid))
-        c (string-concat b scope)
-        d (string-concat c (json-iat-mid))
-        e (string-concat d (string-from-i64 iat))
+        c1 (string-concat b (record-get c :scope))
+        d (string-concat c1 (json-iat-mid))
+        e (string-concat d (string-from-i64 (record-get c :iat)))
         f (string-concat e (json-exp-mid))
-        g (string-concat f (string-from-i64 exp))]
+        g (string-concat f (string-from-i64 (record-get c :exp)))]
     (string-concat g (json-close))))
 
-(defn wire-token [payload-seg :string sig :string] :string
+(defn wire-token [w [:ref :token/wire]] :string
+  ;; T5.2 native: single wire record (payload + sig).
   (string-concat
    (version)
    (string-concat
     (wire-sep)
     (string-concat
-     payload-seg
-     (string-concat (wire-sep) sig)))))
+     (record-get w :payload)
+     (string-concat (wire-sep) (record-get w :sig))))))
 
 (defn version-ok? [v :string] :bool
   (if (string=? v (version)) true false))
@@ -123,8 +134,11 @@
       (ct-scan a b (+ i 1) n nacc))
     acc))
 
-(defn constant-time-eq [a :string b :string] :bool
-  (let [na (string-length a)
+(defn constant-time-eq [x [:ref :token/eq]] :bool
+  ;; T5.2 native: single eq record (a, b).
+  (let [a (record-get x :a)
+        b (record-get x :b)
+        na (string-length a)
         nb (string-length b)]
     (if (= na nb)
       (if (= (ct-scan a b 0 na 0) 0) true false)

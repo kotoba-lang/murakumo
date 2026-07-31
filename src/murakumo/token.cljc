@@ -42,6 +42,22 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private claims-schema
+  "T5.2 native guest record for encode-claims-json."
+  [:record :token/claims
+   [[:sub :string] [:scope :string] [:iat :i64] [:exp :i64]]])
+
+(def ^:private wire-schema
+  "T5.2 native guest record for wire-token."
+  [:record :token/wire [[:payload :string] [:sig :string]]])
+
+(def ^:private eq-schema
+  [:record :token/eq [[:a :string] [:b :string]]])
+
+(def ^:private scope-check-schema
+  [:record :token/scope-check [[:token-scope :string] [:required :string]]])
+
+
 ;; ── residual version / defaults / seps / json tokens ─────────────────
 
 (def version
@@ -144,11 +160,15 @@
 
 (defn encode-claims-json
   "Fixed-key JSON. Kotoba oracle required (T6.4).
-   T5.2: structural claims map → call-record."
+   T5.2 native guest record wire: single :token/claims argument."
   [m]
   (o-record 'encode-claims-json
-            m
-            [[:sub :string] [:scope :string] [:iat :i64] [:exp :i64]]))
+            {:claims (oracle/record claims-schema
+                                    {:sub (:sub m)
+                                     :scope (:scope m)
+                                     :iat (:iat m)
+                                     :exp (:exp m)})}
+            [[:claims :raw]]))
 
 (defn encode-claims
   "b64url of fixed-key claims JSON (host b64 codec)."
@@ -169,7 +189,7 @@
 
 (defn expired?
   "True if claims are expired. Kotoba oracle (option exp). Profile 5: :bool.
-   T5.2: claims map + now → call-record."
+   T5.2: claims map + now → call-record (option fields stay positional)."
   [cl now]
   (oracle/bool->host
    (o-record 'expired?
@@ -184,18 +204,19 @@
 
 (defn wire-token
   "mk1.<payloadSeg>.<sig>. Kotoba required.
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :token/wire argument."
   [payload-seg sig]
   (o-record 'wire-token
-            {:payload payload-seg :sig sig}
-            [[:payload :string] [:sig :string]]))
+            {:wire (oracle/record wire-schema
+                                  {:payload payload-seg :sig sig})}
+            [[:wire :raw]]))
 
 (defn version-ok? [v]
   (oracle/bool->host (o-record 'version-ok? {:v v} [[:v :string]])))
 
 (defn parts-present?
   "All three wire segments present (non-blank). Profile 5: guest :bool.
-   T5.2: structural segment map → call-record."
+   T5.2: structural segment map → call-record (options stay positional)."
   [v payload sig]
   (let [seg (fn [x]
               (when (and x (not (str/blank? (str x))))
@@ -209,13 +230,13 @@
 
 (defn constant-time=
   "Full-scan string compare via kotoba constant-time-eq. Profile 5: :bool.
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :token/eq argument."
   [a b]
   (and (string? a) (string? b)
        (oracle/bool->host
         (o-record 'constant-time-eq
-                  {:a a :b b}
-                  [[:a :string] [:b :string]]))))
+                  {:pair (oracle/record eq-schema {:a a :b b})}
+                  [[:pair :raw]]))))
 
 ;; ── HMAC host adapter (javax / WebCrypto) ───────────────────────────
 
@@ -281,9 +302,11 @@
 
 (defn scope-allows?
   "Does a token's scope grant `required`? Kotoba required. Profile 5: :bool.
-   T5.2: structural map → call-record."
+   T5.2 native guest record wire: single :token/scope-check argument."
   [token-scope required]
   (oracle/bool->host
    (o-record 'scope-allows?
-             {:token-scope token-scope :required required}
-             [[:token-scope :string] [:required :string]])))
+             {:check (oracle/record scope-check-schema
+                                    {:token-scope token-scope
+                                     :required required})}
+             [[:check :raw]])))
