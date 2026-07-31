@@ -20,6 +20,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── residual type tokens + scalars ───────────────────────────────────
 
 (def default-window-size
@@ -78,9 +84,13 @@
    :payload payload})
 
 (defn advance [stream]
+  "T5.2: structural map → call-record for advance-seq."
   (update stream :next-seq
           (fn [s]
-            (oracle/i64->host (o 'advance-seq [(oracle/as-i64 s)])))))
+            (oracle/i64->host
+             (o-record 'advance-seq
+                       {:seq s}
+                       [[:seq :i64]])))))
 
 (defn frames
   "Turn payloads into ordered frames and the advanced stream state."
@@ -92,12 +102,15 @@
           payloads))
 
 (defn ack
+  "T5.2: structural map → call-record for ack-accepted?."
   [frame accepted?]
   {:type type-ack
    :stream (:stream frame)
    :seq (:seq frame)
    :accepted? (oracle/bool->host
-               (o 'ack-accepted? [(boolean accepted?)]))})
+               (o-record 'ack-accepted?
+                         {:accepted? accepted?}
+                         [[:accepted? :bool]]))})
 
 (defn close [stream reason]
   (assoc stream :closed? true :close-reason reason))
