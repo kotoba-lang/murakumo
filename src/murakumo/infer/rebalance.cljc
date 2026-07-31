@@ -42,6 +42,12 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private seats-in-schema
+  "Guest :rebalance/seats-in — T5.2 native record for seats-of-* inputs."
+  [:record :rebalance/seats-in
+   [[:total :i64] [:text-w :i64] [:media-w :i64]
+    [:postproc-w :i64] [:floor :i64]]])
+
 (def shard-ceiling-gb
   "16GB stability limit → ~10GB usable shard. Kotoba `shard-ceiling-gb`."
   (oracle/i64->host (o 'shard-ceiling-gb [])))
@@ -107,24 +113,24 @@
   "Apportion `total` seats across `weights` (map k→w) by largest-remainder, with
    a floor of `floor` seats for any pool whose weight > 0. Deterministic.
    3-pool text/media/postproc: kotoba `seats-of-text/media/postproc` (T5.3 record).
-   T5.2: structural map → call-record for each lane projection."
+   T5.2 native guest record: one seats-in record per lane projection."
   [total weights floor]
   ;; T5.3: three scalar lane projections. The guest builds a
   ;; [:record :rebalance/lanes …] internally; no base-65536 seat pack
   ;; crosses this boundary.
-  (let [m {:total total
-           :text-w (or (get weights :text-pool) 0)
-           :media-w (or (get weights :media-pool) 0)
-           :postproc-w (or (get weights :postproc-pool) 0)
-           :floor floor}
-        specs [[:total :i64]
-               [:text-w :i64]
-               [:media-w :i64]
-               [:postproc-w :i64]
-               [:floor :i64]]]
-    {:text-pool (oracle/i64->host (o-record 'seats-of-text m specs))
-     :media-pool (oracle/i64->host (o-record 'seats-of-media m specs))
-     :postproc-pool (oracle/i64->host (o-record 'seats-of-postproc m specs))}))
+  (let [in (oracle/record
+            seats-in-schema
+            {:total total
+             :text-w (or (get weights :text-pool) 0)
+             :media-w (or (get weights :media-pool) 0)
+             :postproc-w (or (get weights :postproc-pool) 0)
+             :floor floor})]
+    {:text-pool (oracle/i64->host
+                 (o-record 'seats-of-text {:in in} [[:in :raw]]))
+     :media-pool (oracle/i64->host
+                  (o-record 'seats-of-media {:in in} [[:in :raw]]))
+     :postproc-pool (oracle/i64->host
+                     (o-record 'seats-of-postproc {:in in} [[:in :raw]]))}))
 
 (defn target-allocation
   "capacity + demand → a placement plan:

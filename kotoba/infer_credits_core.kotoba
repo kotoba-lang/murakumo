@@ -1,7 +1,12 @@
 (ns infer-credits-core
   (:schemas {;; T5.3: two-lane floor shares are a record, not base-65536 pack.
              :credits/shares2 [:record :credits/shares2
-                               [[:s0 :i64] [:s1 :i64]]]})
+                               [[:s0 :i64] [:s1 :i64]]]
+             ;; T5.2 native guest record wire: multi-scalar inputs fold to records.
+             :credits/mt-work [:record :credits/mt-work
+                               [[:est-bytes :i64] [:duration-ms :i64] [:span :i64]]]
+             :credits/charge [:record :credits/charge
+                              [[:balance :i64] [:cost :i64]]]})
   (:export [default-per-token head-num head-den protocol-num protocol-den
             token-cost cut pool memory-time-weight
             charge-allow? balance-after-spend
@@ -45,10 +50,14 @@
 (defn pool [total :i64 treasury :i64 head :i64] :i64
   (- total (+ treasury head)))
 
-(defn memory-time-weight [est-bytes :i64 duration-ms :i64 span :i64] :i64
-  (if (< span 1)
-    0
-    (* est-bytes duration-ms)))
+(defn memory-time-weight [w [:ref :credits/mt-work]] :i64
+  ;; T5.2 native guest record: est-bytes/duration-ms/span on one input record.
+  (let [est-bytes (record-get w :est-bytes)
+        duration-ms (record-get w :duration-ms)
+        span (record-get w :span)]
+    (if (< span 1)
+      0
+      (* est-bytes duration-ms))))
 
 (defn mt-sum-2 [w0 :i64 w1 :i64] :i64
   (+ w0 w1))
@@ -83,10 +92,10 @@
         pl (pool total tr hd)]
     (share-record-2 pl w0 w1)))
 
-(defn charge-allow? [balance :i64 cost :i64] :bool
-  ;; Profile 5: balance gate as :bool.
-  (if (< balance cost) false true))
+(defn charge-allow? [c [:ref :credits/charge]] :bool
+  ;; Profile 5: balance gate as :bool. T5.2 native record: balance+cost.
+  (if (< (record-get c :balance) (record-get c :cost)) false true))
 
-(defn balance-after-spend [balance :i64 cost :i64] :i64
-  (let [left (- balance cost)]
+(defn balance-after-spend [c [:ref :credits/charge]] :i64
+  (let [left (- (record-get c :balance) (record-get c :cost))]
     (if (< left 0) 0 left)))

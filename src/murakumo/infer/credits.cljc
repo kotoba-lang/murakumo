@@ -50,6 +50,16 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(def ^:private mt-work-schema
+  "Guest :credits/mt-work — T5.2 native record for memory-time-weight."
+  [:record :credits/mt-work
+   [[:est-bytes :i64] [:duration-ms :i64] [:span :i64]]])
+
+(def ^:private charge-schema
+  "Guest :credits/charge — T5.2 native record for charge-allow? / balance-after-spend."
+  [:record :credits/charge
+   [[:balance :i64] [:cost :i64]]])
+
 (def default-per-token
   ;; credits per generated token
   (oracle/i64->host (o 'default-per-token [])))
@@ -78,12 +88,12 @@
         (for [{:keys [node est-bytes span]} assignments
               :let [w (oracle/i64->host
                        (o-record 'memory-time-weight
-                                 {:est-bytes (or est-bytes 0)
-                                  :duration-ms (or duration-ms 0)
-                                  :span (or span 0)}
-                                 [[:est-bytes :i64]
-                                  [:duration-ms :i64]
-                                  [:span :i64]]))]
+                                 {:work (oracle/record
+                                         mt-work-schema
+                                         {:est-bytes (or est-bytes 0)
+                                          :duration-ms (or duration-ms 0)
+                                          :span (or span 0)})}
+                                 [[:work :raw]]))]
               :when (pos? w)]
           [(:name node) (double w)])))
 
@@ -351,8 +361,11 @@
                         (== (double (long cost)) (double cost)))
                  (oracle/bool->host
                   (o-record 'charge-allow?
-                            {:balance (long bal) :cost (long cost)}
-                            [[:balance :i64] [:cost :i64]]))
+                            {:charge (oracle/record
+                                      charge-schema
+                                      {:balance (long bal)
+                                       :cost (long cost)})}
+                            [[:charge :raw]]))
                  (>= bal cost))]
     (cond
       (and (= tier :sla) (not (availability-proof-ok? availability-verdicts)))
