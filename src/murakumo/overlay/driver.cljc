@@ -24,6 +24,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; ── tokens (oracle SSoT) ───────────────────────────────────────────────
 
 (def scheme-quic (o 'scheme-quic []))
@@ -54,9 +60,11 @@
 
 (defn keyword-option
   "Strip leading `--` from a flag and keywordize.
-   Kotoba `option-name` (required)."
+   Kotoba `option-name` (required). T5.2: structural map → call-record."
   [flag]
-  (keyword (o 'option-name [(str flag)])))
+  (keyword (o-record 'option-name
+                     {:flag flag}
+                     [[:flag :string]])))
 
 (defn split-option [flag]
   (let [[option value] (str/split (str flag) #"=" 2)]
@@ -90,14 +98,20 @@
   [required opts]
   (filterv (fn [k]
              (let [v (str (get opts k))]
-               (oracle/bool->host (o 'blank? [v]))))
+               (oracle/bool->host
+                (o-record 'blank?
+                          {:value v}
+                          [[:value :string]]))))
            required))
 
 (defn endpoint-kind
   "Classify a dial endpoint scheme.
-   Kotoba `endpoint-kind` → keyword (quic|webrtc|webtransport|relay|unknown)."
+   Kotoba `endpoint-kind` → keyword (quic|webrtc|webtransport|relay|unknown).
+   T5.2: structural map → call-record."
   [endpoint]
-  (keyword (o 'endpoint-kind [(str endpoint)])))
+  (keyword (o-record 'endpoint-kind
+                     {:endpoint endpoint}
+                     [[:endpoint :string]])))
 
 (defn dial-session
   "Normalised session request for the native overlay driver."
