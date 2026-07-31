@@ -29,7 +29,50 @@
                            [[:active :bool] [:bumped :bool]]]
              :plan/bump3-in [:record :plan/bump3-in
                              [[:ok-t :bool] [:ok-m :bool] [:ok-p :bool]
-                              [:rt :i64] [:rm :i64] [:rp :i64]]]})
+                              [:rt :i64] [:rm :i64] [:rp :i64]]]
+             ;; T5.2 residual: weight+model partition surface
+             :plan/wm [:record :plan/wm
+                       [[:weight-bytes :i64] [:layers :i64]
+                        [:dense :i64] [:frac-milli :i64]]]
+             :plan/wm-i [:record :plan/wm-i
+                         [[:weight-bytes :i64] [:layers :i64]
+                          [:dense :i64] [:frac-milli :i64] [:i :i64]]]
+             :plan/wm-range [:record :plan/wm-range
+                             [[:weight-bytes :i64] [:layers :i64]
+                              [:dense :i64] [:frac-milli :i64]
+                              [:lo :i64] [:hi :i64]]]
+             :plan/wm-adv [:record :plan/wm-adv
+                           [[:weight-bytes :i64] [:layers :i64]
+                            [:dense :i64] [:frac-milli :i64]
+                            [:lo :i64] [:acc :i64] [:target :i64]]]
+             :plan/wm-u1 [:record :plan/wm-u1
+                          [[:weight-bytes :i64] [:layers :i64]
+                           [:dense :i64] [:frac-milli :i64] [:u0 :i64]]]
+             :plan/wm-u2 [:record :plan/wm-u2
+                          [[:weight-bytes :i64] [:layers :i64]
+                           [:dense :i64] [:frac-milli :i64]
+                           [:u0 :i64] [:u1 :i64]]]
+             :plan/wm-u3 [:record :plan/wm-u3
+                          [[:weight-bytes :i64] [:layers :i64]
+                           [:dense :i64] [:frac-milli :i64]
+                           [:u0 :i64] [:u1 :i64] [:u2 :i64]]]
+             :plan/wm-asg [:record :plan/wm-asg
+                           [[:weight-bytes :i64] [:layers :i64]
+                            [:dense :i64] [:frac-milli :i64]
+                            [:lo :i64] [:hi :i64] [:usable :i64]]]
+             :plan/wm-step [:record :plan/wm-step
+                            [[:weight-bytes :i64] [:layers :i64]
+                             [:dense :i64] [:frac-milli :i64]
+                             [:at :i64] [:acc :i64]
+                             [:cum-usable :i64] [:total-usable :i64]]]
+             :plan/ul [:record :plan/ul
+                       [[:weight-bytes :i64] [:layers :i64]]]
+             :plan/dense-units [:record :plan/dense-units
+                                [[:layers :i64] [:dense :i64]
+                                 [:frac-milli :i64]]]
+             :plan/band [:record :plan/band
+                         [[:lo :i64] [:hi-cap :i64] [:layer-b :i64]
+                          [:acc :i64] [:target :i64]]]})
   (:export [gib default-os-reserve default-headroom usable-bytes choose-strategy-name
             plan-lr-l0 plan-lr-l1 plan-lr-l2
             plan-fits-total? span-fits?
@@ -226,20 +269,30 @@
   ;; T5.2: a=est-bytes b=usable. Profile 5: :bool.
   (if (< (record-get p :b) (record-get p :a)) false true))
 
-(defn uniform-layer-bytes [weight-bytes :i64 layers :i64] :i64
+(defn uniform-layer-bytes [x [:ref :plan/ul]] :i64
   ;; dense-layers=0 case of layer-weights (each layer equal)
-  (if (< layers 1) 0 (quot weight-bytes layers)))
+  (let [weight-bytes (record-get x :weight-bytes)
+        layers (record-get x :layers)]
+    (if (< layers 1) 0 (quot weight-bytes layers))))
 
-(defn dense-units-milli [layers :i64 dense :i64 dense-frac-milli :i64] :i64
+(defn dense-units-milli [x [:ref :plan/dense-units]] :i64
   ;; units = dense*frac + (layers-dense) in milli-layer units
   ;; dense-frac-milli = 100 → 0.1 default
-  (let [d (if (< dense 0) 0 (if (< layers dense) layers dense))
+  (let [layers (record-get x :layers)
+        dense (record-get x :dense)
+        dense-frac-milli (record-get x :frac-milli)
+        d (if (< dense 0) 0 (if (< layers dense) layers dense))
         rest (- layers d)]
     (+ (* d dense-frac-milli) (* rest 1000))))
 
-(defn moe-layer-bytes [weight-bytes :i64 layers :i64 dense :i64 dense-frac-milli :i64] :i64
+(defn moe-layer-bytes [x [:ref :plan/wm]] :i64
   ;; bytes per MoE-bearing layer (not dense): weight / units
-  (let [units (dense-units-milli layers dense dense-frac-milli)]
+  (let [weight-bytes (record-get x :weight-bytes)
+        units (dense-units-milli
+               (record-new [:ref :plan/dense-units]
+                           (record-get x :layers)
+                           (record-get x :dense)
+                           (record-get x :frac-milli)))]
     (if (< units 1) 0 (quot (* weight-bytes 1000) units))))
 
 (defn model-record [layers :i64 dense :i64 dense-frac-milli :i64] [:ref :plan/model]
@@ -257,106 +310,144 @@
 (defn model-frac-milli [mp [:ref :plan/model]] :i64
   (record-get mp :frac-milli))
 
-(defn dense-layer-bytes [weight-bytes :i64 layers :i64 dense :i64 dense-frac-milli :i64] :i64
+(defn dense-layer-bytes [x [:ref :plan/wm]] :i64
   ;; f * moe-bytes via milli: (moe * frac-milli) / 1000
-  (let [moe (moe-layer-bytes weight-bytes layers dense dense-frac-milli)]
+  (let [dense-frac-milli (record-get x :frac-milli)
+        moe (moe-layer-bytes x)]
     (quot (* moe dense-frac-milli) 1000)))
 
-(defn layer-byte-at [weight-bytes :i64 mp [:ref :plan/model] i :i64] :i64
+(defn layer-byte-at [x [:ref :plan/wm-i]] :i64
   ;; integer form of (nth (layer-weights model) i)
-  (let [layers (model-layers mp)
-        dense (model-dense mp)
-        frac (model-frac-milli mp)
+  (let [layers (record-get x :layers)
+        dense (record-get x :dense)
+        frac (record-get x :frac-milli)
+        i (record-get x :i)
+        w (record-new [:ref :plan/wm]
+                      (record-get x :weight-bytes) layers dense frac)
         d (if (< dense 0) 0 (if (< layers dense) layers dense))]
     (if (< i d)
-      (dense-layer-bytes weight-bytes layers dense frac)
-      (moe-layer-bytes weight-bytes layers dense frac))))
+      (dense-layer-bytes w)
+      (moe-layer-bytes w))))
 
-(defn layer-wsum [weight-bytes :i64 mp [:ref :plan/model]] :i64
+(defn layer-wsum [x [:ref :plan/wm]] :i64
   ;; sum of integer layer-byte-at over all layers (closed form)
-  (let [layers (model-layers mp)
-        dense (model-dense mp)
-        frac (model-frac-milli mp)
+  (let [layers (record-get x :layers)
+        dense (record-get x :dense)
         d (if (< dense 0) 0 (if (< layers dense) layers dense))
         rest (- layers d)
-        moe (moe-layer-bytes weight-bytes layers dense frac)
-        db (dense-layer-bytes weight-bytes layers dense frac)]
+        moe (moe-layer-bytes x)
+        db (dense-layer-bytes x)]
     (+ (* d db) (* rest moe))))
 
-(defn partition-target [wsum :i64 cum-usable :i64 total-usable :i64] :i64
+(defn partition-target [x [:ref :plan/triple]] :i64
   ;; cljc: (* wsum (/ (double cum) total)) as integer quot
-  (if (< total-usable 1)
-    0
-    (quot (* wsum cum-usable) total-usable)))
+  ;; T5.2: a=wsum b=cum-usable c=total-usable
+  (let [wsum (record-get x :a)
+        cum-usable (record-get x :b)
+        total-usable (record-get x :c)]
+    (if (< total-usable 1)
+      0
+      (quot (* wsum cum-usable) total-usable))))
 
-(defn min2 [a :i64 b :i64] :i64
-  (if (< a b) a b))
+(defn min2 [p [:ref :plan/pair]] :i64
+  (if (< (record-get p :a) (record-get p :b))
+    (record-get p :a) (record-get p :b)))
 
-(defn max2 [a :i64 b :i64] :i64
-  (if (< a b) b a))
+(defn max2 [p [:ref :plan/pair]] :i64
+  (if (< (record-get p :a) (record-get p :b))
+    (record-get p :b) (record-get p :a)))
 
 (defn clamp-nonneg [n :i64] :i64
   (if (< n 0) 0 n))
 
-(defn est-bytes-range [weight-bytes :i64 mp [:ref :plan/model] lo :i64 hi :i64] :i64
+(defn est-bytes-range [x [:ref :plan/wm-range]] :i64
   ;; closed-form sum of layer-byte-at over [lo, hi) — dense then moe bands
-  (let [layers (model-layers mp)
-        dense (model-dense mp)
-        frac (model-frac-milli mp)
+  (let [weight-bytes (record-get x :weight-bytes)
+        layers (record-get x :layers)
+        dense (record-get x :dense)
+        frac (record-get x :frac-milli)
+        lo (record-get x :lo)
+        hi (record-get x :hi)
+        w (record-new [:ref :plan/wm] weight-bytes layers dense frac)
         d (if (< dense 0) 0 (if (< layers dense) layers dense))
-        moe (moe-layer-bytes weight-bytes layers dense frac)
-        db (dense-layer-bytes weight-bytes layers dense frac)
+        moe (moe-layer-bytes w)
+        db (dense-layer-bytes w)
         lo2 (if (< lo 0) 0 lo)
         hi2 (if (< hi lo2) lo2 (if (< layers hi) layers hi))
         dense-lo lo2
-        dense-hi (min2 hi2 d)
+        dense-hi (min2 (record-new [:ref :plan/pair] hi2 d))
         dense-n (clamp-nonneg (- dense-hi dense-lo))
-        moe-lo (max2 lo2 d)
+        moe-lo (max2 (record-new [:ref :plan/pair] lo2 d))
         moe-hi hi2
         moe-n (clamp-nonneg (- moe-hi moe-lo))]
     (+ (* dense-n db) (* moe-n moe))))
 
-(defn advance-in-band [lo :i64 hi-cap :i64 layer-b :i64 acc :i64 target :i64] :i64
+(defn advance-in-band [x [:ref :plan/band]] :i64
   ;; closed-form: how far can we go in a constant-byte band [lo, hi-cap)
   ;; while keeping acc + layer-b * k <= target
-  (if (if (< lo hi-cap) (if (< 0 layer-b) 1 0) 0)
-    (let [room (- target acc)
-          kmax (if (< room 0) 0 (quot room layer-b))
-          hi (+ lo kmax)]
-      (if (< hi-cap hi) hi-cap hi))
-    lo))
+  (let [lo (record-get x :lo)
+        hi-cap (record-get x :hi-cap)
+        layer-b (record-get x :layer-b)
+        acc (record-get x :acc)
+        target (record-get x :target)]
+    (if (if (< lo hi-cap) (if (< 0 layer-b) 1 0) 0)
+      (let [room (- target acc)
+            kmax (if (< room 0) 0 (quot room layer-b))
+            hi (+ lo kmax)]
+        (if (< hi-cap hi) hi-cap hi))
+      lo)))
 
-(defn advance-hi [weight-bytes :i64 mp [:ref :plan/model] lo :i64 acc :i64 target :i64] :i64
+(defn advance-hi [x [:ref :plan/wm-adv]] :i64
   ;; two-band closed form matching cljc inner cut loop
-  (let [layers (model-layers mp)
-        dense (model-dense mp)
-        frac (model-frac-milli mp)
+  (let [weight-bytes (record-get x :weight-bytes)
+        layers (record-get x :layers)
+        dense (record-get x :dense)
+        frac (record-get x :frac-milli)
+        lo (record-get x :lo)
+        acc (record-get x :acc)
+        target (record-get x :target)
+        w (record-new [:ref :plan/wm] weight-bytes layers dense frac)
         d (if (< dense 0) 0 (if (< layers dense) layers dense))
-        moe (moe-layer-bytes weight-bytes layers dense frac)
-        db (dense-layer-bytes weight-bytes layers dense frac)
+        moe (moe-layer-bytes w)
+        db (dense-layer-bytes w)
         lo0 (if (< lo 0) 0 (if (< layers lo) layers lo))]
     (if (< lo0 d)
-      (let [hi-d (advance-in-band lo0 d db acc target)
-            acc-d (+ acc (est-bytes-range weight-bytes mp lo0 hi-d))]
+      (let [hi-d (advance-in-band
+                  (record-new [:ref :plan/band] lo0 d db acc target))
+            acc-d (+ acc (est-bytes-range
+                          (record-new [:ref :plan/wm-range]
+                                      weight-bytes layers dense frac lo0 hi-d)))]
         (if (< hi-d d)
           hi-d
-          (advance-in-band d layers moe acc-d target)))
-      (advance-in-band lo0 layers moe acc target))))
+          (advance-in-band
+           (record-new [:ref :plan/band] d layers moe acc-d target))))
+      (advance-in-band
+       (record-new [:ref :plan/band] lo0 layers moe acc target)))))
 
-(defn partition-3-ends [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64 u2 :i64]
+(defn partition-3-ends [x [:ref :plan/wm-u3]]
   [:ref :plan/ends]
   ;; exclusive layer ends for 3 ring nodes (last end = layers).
   ;; Mirrors plan.cljc partition-layers loop for count(nodes)=3.
-  (let [layers (model-layers mp)
+  (let [weight-bytes (record-get x :weight-bytes)
+        layers (record-get x :layers)
+        dense (record-get x :dense)
+        frac (record-get x :frac-milli)
+        u0 (record-get x :u0)
+        u1 (record-get x :u1)
+        u2 (record-get x :u2)
+        w (record-new [:ref :plan/wm] weight-bytes layers dense frac)
         total (+ u0 (+ u1 u2))
-        wsum (layer-wsum weight-bytes mp)]
+        wsum (layer-wsum w)]
     (if (= total 0)
       (record-new [:ref :plan/ends] 0 0 layers)
-      (let [t0 (partition-target wsum u0 total)
-            t1 (partition-target wsum (+ u0 u1) total)
-            hi0 (advance-hi weight-bytes mp 0 0 t0)
-            acc0 (est-bytes-range weight-bytes mp 0 hi0)
-            hi1 (advance-hi weight-bytes mp hi0 acc0 t1)
+      (let [t0 (partition-target (record-new [:ref :plan/triple] wsum u0 total))
+            t1 (partition-target (record-new [:ref :plan/triple] wsum (+ u0 u1) total))
+            hi0 (advance-hi (record-new [:ref :plan/wm-adv]
+                                        weight-bytes layers dense frac 0 0 t0))
+            acc0 (est-bytes-range (record-new [:ref :plan/wm-range]
+                                              weight-bytes layers dense frac 0 hi0))
+            hi1 (advance-hi (record-new [:ref :plan/wm-adv]
+                                        weight-bytes layers dense frac hi0 acc0 t1))
             hi2 layers]
         (record-new [:ref :plan/ends] hi0 hi1 hi2)))))
 
@@ -366,10 +457,17 @@
         hi (record-get p :b)]
     (if (< hi lo) 0 (- hi lo))))
 
-(defn plan-fits-3 [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64 u2 :i64] :i64
+(defn plan-fits-3 [x [:ref :plan/wm-u3]] :i64
   ;; cljc plan :fits? for 3-node ring using integer partition-3-ends
   ;; total usable ≥ weights AND every positive-span assignment fits its usable
-  (let [ends (partition-3-ends weight-bytes mp u0 u1 u2)
+  (let [weight-bytes (record-get x :weight-bytes)
+        layers (record-get x :layers)
+        dense (record-get x :dense)
+        frac (record-get x :frac-milli)
+        u0 (record-get x :u0)
+        u1 (record-get x :u1)
+        u2 (record-get x :u2)
+        ends (partition-3-ends x)
         hi0 (record-get ends :hi0)
         hi1 (record-get ends :hi1)
         hi2 (record-get ends :hi2)
@@ -379,9 +477,12 @@
         s0 (assignment-span (record-new [:ref :plan/pair] lo0 hi0))
         s1 (assignment-span (record-new [:ref :plan/pair] lo1 hi1))
         s2 (assignment-span (record-new [:ref :plan/pair] lo2 hi2))
-        e0 (est-bytes-range weight-bytes mp lo0 hi0)
-        e1 (est-bytes-range weight-bytes mp lo1 hi1)
-        e2 (est-bytes-range weight-bytes mp lo2 hi2)
+        e0 (est-bytes-range (record-new [:ref :plan/wm-range]
+                                        weight-bytes layers dense frac lo0 hi0))
+        e1 (est-bytes-range (record-new [:ref :plan/wm-range]
+                                        weight-bytes layers dense frac lo1 hi1))
+        e2 (est-bytes-range (record-new [:ref :plan/wm-range]
+                                        weight-bytes layers dense frac lo2 hi2))
         f0 (if (= s0 0) true (span-fits? (record-new [:ref :plan/pair] e0 u0)))
         f1 (if (= s1 0) true (span-fits? (record-new [:ref :plan/pair] e1 u1)))
         f2 (if (= s2 0) true (span-fits? (record-new [:ref :plan/pair] e2 u2)))
@@ -394,39 +495,61 @@
   ;; single-node ring: exclusive end is always layers
   (model-layers mp))
 
-(defn plan-fits-1 [weight-bytes :i64 mp [:ref :plan/model] u0 :i64] :i64
+(defn plan-fits-1 [x [:ref :plan/wm-u1]] :i64
   ;; cljc plan :fits? for 1-node (whole stack on one rank)
-  (let [layers (partition-1-end mp)
-        s0 (assignment-span (record-new [:ref :plan/pair] 0 layers))
-        e0 (est-bytes-range weight-bytes mp 0 layers)
+  (let [weight-bytes (record-get x :weight-bytes)
+        layers (record-get x :layers)
+        dense (record-get x :dense)
+        frac (record-get x :frac-milli)
+        u0 (record-get x :u0)
+        mp (record-new [:ref :plan/model] layers dense frac)
+        nlayers (partition-1-end mp)
+        s0 (assignment-span (record-new [:ref :plan/pair] 0 nlayers))
+        e0 (est-bytes-range (record-new [:ref :plan/wm-range]
+                                        weight-bytes layers dense frac 0 nlayers))
         f0 (if (= s0 0) true (span-fits? (record-new [:ref :plan/pair] e0 u0)))
         total-ok (plan-fits-total? (record-new [:ref :plan/pair] u0 weight-bytes))]
     (if (if total-ok (if f0 true false) false) 1 0)))
 
-(defn partition-2-ends [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64]
+(defn partition-2-ends [x [:ref :plan/wm-u2]]
   [:ref :plan/ends]
   ;; exclusive layer ends for 2 ring nodes; hi2 stays 0
-  (let [layers (model-layers mp)
+  (let [weight-bytes (record-get x :weight-bytes)
+        layers (record-get x :layers)
+        dense (record-get x :dense)
+        frac (record-get x :frac-milli)
+        u0 (record-get x :u0)
+        u1 (record-get x :u1)
+        w (record-new [:ref :plan/wm] weight-bytes layers dense frac)
         total (+ u0 u1)
-        wsum (layer-wsum weight-bytes mp)]
+        wsum (layer-wsum w)]
     (if (= total 0)
       (record-new [:ref :plan/ends] 0 layers 0)
-      (let [t0 (partition-target wsum u0 total)
-            hi0 (advance-hi weight-bytes mp 0 0 t0)
+      (let [t0 (partition-target (record-new [:ref :plan/triple] wsum u0 total))
+            hi0 (advance-hi (record-new [:ref :plan/wm-adv]
+                                        weight-bytes layers dense frac 0 0 t0))
             hi1 layers]
         (record-new [:ref :plan/ends] hi0 hi1 0)))))
 
-(defn plan-fits-2 [weight-bytes :i64 mp [:ref :plan/model] u0 :i64 u1 :i64] :i64
+(defn plan-fits-2 [x [:ref :plan/wm-u2]] :i64
   ;; cljc plan :fits? for 2-node ring using integer partition-2-ends
-  (let [ends (partition-2-ends weight-bytes mp u0 u1)
+  (let [weight-bytes (record-get x :weight-bytes)
+        layers (record-get x :layers)
+        dense (record-get x :dense)
+        frac (record-get x :frac-milli)
+        u0 (record-get x :u0)
+        u1 (record-get x :u1)
+        ends (partition-2-ends x)
         hi0 (record-get ends :hi0)
         hi1 (record-get ends :hi1)
         lo0 0
         lo1 hi0
         s0 (assignment-span (record-new [:ref :plan/pair] lo0 hi0))
         s1 (assignment-span (record-new [:ref :plan/pair] lo1 hi1))
-        e0 (est-bytes-range weight-bytes mp lo0 hi0)
-        e1 (est-bytes-range weight-bytes mp lo1 hi1)
+        e0 (est-bytes-range (record-new [:ref :plan/wm-range]
+                                        weight-bytes layers dense frac lo0 hi0))
+        e1 (est-bytes-range (record-new [:ref :plan/wm-range]
+                                        weight-bytes layers dense frac lo1 hi1))
         f0 (if (= s0 0) true (span-fits? (record-new [:ref :plan/pair] e0 u0)))
         f1 (if (= s1 0) true (span-fits? (record-new [:ref :plan/pair] e1 u1)))
         spans-ok (if f0 (if f1 true false) false)
@@ -447,11 +570,19 @@
 (defn ends-hi [ends [:ref :plan/ends] idx :i64] :i64
   (ends-at ends idx))
 
-(defn asg-row-record [weight-bytes :i64 mp [:ref :plan/model] lo :i64 hi :i64 usable :i64]
+(defn asg-row-record [x [:ref :plan/wm-asg]]
   [:ref :plan/row]
   ;; pure assignment numeric row (T5.3: a record, not pack3). Host adds :node id.
-  (let [sp (assignment-span (record-new [:ref :plan/pair] lo hi))
-        est (est-bytes-range weight-bytes mp lo hi)
+  (let [weight-bytes (record-get x :weight-bytes)
+        layers (record-get x :layers)
+        dense (record-get x :dense)
+        frac (record-get x :frac-milli)
+        lo (record-get x :lo)
+        hi (record-get x :hi)
+        usable (record-get x :usable)
+        sp (assignment-span (record-new [:ref :plan/pair] lo hi))
+        est (est-bytes-range (record-new [:ref :plan/wm-range]
+                                         weight-bytes layers dense frac lo hi))
         fit (if (= sp 0) 1 (if (span-fits? (record-new [:ref :plan/pair] est usable)) 1 0))]
     (record-new [:ref :plan/row] sp fit)))
 
@@ -461,21 +592,32 @@
 (defn asg-row-fits [row [:ref :plan/row]] :i64
   (record-get row :fits))
 
-(defn cut-state [at :i64 acc :i64] [:ref :plan/cut]
+(defn cut-state [p [:ref :plan/pair]] [:ref :plan/cut]
   ;; state for the partition-step host fold (T5.3: a record, not pack3)
-  (record-new [:ref :plan/cut] at acc))
+  ;; T5.2: a=at b=acc
+  (record-new [:ref :plan/cut] (record-get p :a) (record-get p :b)))
 
-(defn partition-step [weight-bytes :i64 mp [:ref :plan/model] lo-acc [:ref :plan/cut]
-                      cum-usable :i64 total-usable :i64] [:ref :plan/cut]
+(defn partition-step [x [:ref :plan/wm-step]] [:ref :plan/cut]
   ;; one non-last ring node: cut the next boundary from the current one.
   ;; The result's `:at` is the next step's `:at` — same record either way.
   ;; Host: cum-usable = sum usable[0..i] inclusive; last node uses partition-last.
-  (let [lo (record-get lo-acc :at)
-        acc (record-get lo-acc :acc)
-        wsum (layer-wsum weight-bytes mp)
-        target (partition-target wsum cum-usable total-usable)
-        hi (advance-hi weight-bytes mp lo acc target)
-        new-acc (+ acc (est-bytes-range weight-bytes mp lo hi))]
+  (let [weight-bytes (record-get x :weight-bytes)
+        layers (record-get x :layers)
+        dense (record-get x :dense)
+        frac (record-get x :frac-milli)
+        lo (record-get x :at)
+        acc (record-get x :acc)
+        cum-usable (record-get x :cum-usable)
+        total-usable (record-get x :total-usable)
+        w (record-new [:ref :plan/wm] weight-bytes layers dense frac)
+        wsum (layer-wsum w)
+        target (partition-target
+                (record-new [:ref :plan/triple] wsum cum-usable total-usable))
+        hi (advance-hi (record-new [:ref :plan/wm-adv]
+                                   weight-bytes layers dense frac lo acc target))
+        new-acc (+ acc (est-bytes-range
+                        (record-new [:ref :plan/wm-range]
+                                    weight-bytes layers dense frac lo hi)))]
     (record-new [:ref :plan/cut] hi new-acc)))
 
 (defn partition-step-hi [step [:ref :plan/cut]] :i64
