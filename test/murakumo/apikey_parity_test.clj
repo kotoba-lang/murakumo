@@ -46,8 +46,18 @@
     (let [r (apikey/issue {:secret "" :sub "x" :now now})]
       (is (false? (:ok r)))
       (is (re-find #"MURAKUMO_TOKEN_SECRET" (:error r)))))
-  (testing "unknown scope is rejected at issue time, not discovered as a 401 later"
-    (is (false? (:ok (apikey/issue {:secret secret :scope "root" :now now})))))
+  (testing "scope is OPEN, not an allowlist — the gateway does an exact string
+            compare with no fixed vocabulary, so `generation` (what
+            murakumo-generation.js mints with) and any future backend's scope
+            must issue rather than be refused"
+    (is (true? (:ok (apikey/issue {:secret secret :scope "generation" :now now}))))
+    (is (nil? (:warning (apikey/issue {:secret secret :scope "generation" :now now})))
+        "a scope we know about carries no warning")
+    (let [r (apikey/issue {:secret secret :scope "some-new-backend" :now now})]
+      (is (true? (:ok r)) "an unrecognised scope still issues")
+      (is (some? (:warning r)) "…but says so, to catch typos")))
+  (testing "a blank scope is still refused"
+    (is (false? (:ok (apikey/issue {:secret secret :scope "" :now now})))))
   (testing "ttl is bounded — a stateless token cannot be revoked, so it must expire"
     (is (false? (:ok (apikey/issue {:secret secret :ttl (* 365 24 60 60) :now now}))))
     (is (false? (:ok (apikey/issue {:secret secret :ttl 0 :now now}))))

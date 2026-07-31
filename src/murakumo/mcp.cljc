@@ -51,12 +51,13 @@
                          :ttl (or ttl apikey/default-ttl)
                          :now (now-s)})]
     (if (:ok r)
-      {:token (:token r)
+      (cond-> {:token (:token r)
        :sub (get-in r [:claims :sub])
        :scope (get-in r [:claims :scope])
        :expires_at (get-in r [:claims :exp])
        :usage "send as `x-api-key: <token>` or `Authorization: Bearer <token>`"
        :note "stateless capability token — it cannot be revoked, only expire"}
+        (:warning r) (assoc :warning (:warning r)))
       {:error (:error r)})))
 
 (defn verify-tool

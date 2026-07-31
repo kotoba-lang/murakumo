@@ -45,10 +45,18 @@
 
 (def ^:const version "mk1")
 
-;; The scopes the gateway understands. Anything else would mint a key that
-;; silently authorises nothing useful, so it is rejected at issue time rather
-;; than discovered later against a 401.
-(def scopes #{"chat" "image" "all"})
+;; Scopes seen in use. NOT an allowlist — the gateway's `scope-allows?` is
+;; `(or (= "all" scope) (= scope required))`, an exact string compare with no
+;; fixed vocabulary, so any string is a legitimate scope and the set of them is
+;; open. An earlier version of this namespace hard-refused anything outside
+;; #{chat image all}, which would have blocked `generation` — the scope
+;; murakumo-generation.js actually mints with — i.e. it invented a restriction
+;; the gateway does not have and would have refused a key the backend needs.
+;;
+;; Kept only to catch typos: an unrecognised scope still issues, with a warning,
+;; because a scope this list has not heard of is far more likely to be a new
+;; backend than a mistake.
+(def known-scopes #{"chat" "image" "generation" "all"})
 
 (def ^:const default-ttl 2592000)          ;; 30d, same default as the JVM CLI
 (def ^:const max-ttl (* 90 24 60 60))      ;; 90d ceiling — see `issue`
@@ -115,9 +123,8 @@
       {:ok false
        :error "MURAKUMO_TOKEN_SECRET is not set — export the same value the gateway verifies with"}
 
-      (not (contains? scopes scope))
-      {:ok false :error (str "unknown scope " (pr-str scope)
-                             " — expected one of " (str/join ", " (sort scopes)))}
+      (str/blank? scope)
+      {:ok false :error "scope must not be blank"}
 
       (or (not (number? ttl)) (<= ttl 0))
       {:ok false :error "ttl must be a positive number of seconds"}
@@ -127,7 +134,11 @@
 
       :else
       (let [cl (claims {:sub sub :scope scope :now now :ttl ttl})]
-        {:ok true :token (sign secret cl) :claims cl}))))
+        (cond-> {:ok true :token (sign secret cl) :claims cl}
+          (not (contains? known-scopes scope))
+          (assoc :warning (str "scope " (pr-str scope) " is not one this CLI has seen ("
+                               (str/join ", " (sort known-scopes))
+                               ") — issuing anyway, but check it against the gateway")))))))
 
 (defn inspect
   "Decode + verify a token. -> {:valid bool …}. Never throws on malformed input —
