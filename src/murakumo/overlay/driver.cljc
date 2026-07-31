@@ -134,14 +134,18 @@
 
 (defn dial-result
   "Validate parsed driver options and return an executable driver result.
-   Reason via kotoba `dial-ok-reason` (required)."
+   Reason via kotoba `dial-ok-reason` (required).
+   T5.2: structural dial flags → call-record."
   [opts]
   (let [missing (missing-options required-dial-options opts)
         cmd-name (name (or (:command opts) :unknown))
         is-dial (oracle/bool->host (o 'command-is-dial? [cmd-name]))
         reason (keyword
-                (o 'dial-ok-reason
-                   [(boolean is-dial) (oracle/as-i64 (count missing))]))]
+                (o-record 'dial-ok-reason
+                          {:is-dial is-dial
+                           :missing-n (count missing)}
+                          [[:is-dial :bool]
+                           [:missing-n :i64]]))]
     (case reason
       :unknown-command
       {:ok? false
