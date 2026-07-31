@@ -18,6 +18,12 @@
   (oracle/require-ready! oid)
   (oracle/call oid export args))
 
+(defn- o-record
+  "T5.2: structural host map → call-record (requires shipped oracle)."
+  [export host-map field-specs]
+  (oracle/require-ready! oid)
+  (oracle/call-record oid export host-map field-specs))
+
 ;; Profile 5: eligibility fields are real host/guest booleans (not 0/1 i64).
 
 (def ^:private eligibility-schema
@@ -49,10 +55,17 @@
        (oracle/as-i64 (:model/min-free-bytes model 0))])))
 
 (defn score
-  "Lower is better: queue then -free-bytes. Kotoba score-queue + score-free."
+  "Lower is better: queue then -free-bytes. Kotoba score-queue + score-free.
+   T5.2: structural map → call-record."
   [{:keys [queue free-bytes]}]
-  [(oracle/i64->host (o 'score-queue [(oracle/as-i64 (or queue 0))]))
-   (oracle/i64->host (o 'score-free [(oracle/as-i64 (or free-bytes 0))]))])
+  [(oracle/i64->host
+    (o-record 'score-queue
+              {:queue (or queue 0)}
+              [[:queue :i64]]))
+   (oracle/i64->host
+    (o-record 'score-free
+              {:free-bytes (or free-bytes 0)}
+              [[:free-bytes :i64]]))])
 
 (defn pick
   "Choose the node to run `model`, or nil if none eligible.
@@ -74,5 +87,7 @@
              (swap! by-name update-in [(:name n) :queue]
                     (fn [q]
                       (oracle/i64->host
-                       (o 'queue-inc-if [(oracle/as-i64 (or q 0)) (oracle/as-i64 1)])))))
+                       (o-record 'queue-inc-if
+                                 {:queue (or q 0) :delta 1}
+                                 [[:queue :i64] [:delta :i64]])))))
            {:job job :node (when n (:name n))})))))

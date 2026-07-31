@@ -198,11 +198,17 @@
             k (:name n)
             used (get load k 0)
             s (slots n opts)
-            wave (long (o 'wave-of [(long used) (long s)]))
-            slot (long (o 'slot-of [(long used) (long s)]))
+            wave (long (o-record 'wave-of
+                                  {:used used :slots s}
+                                  [[:used :i64] [:slots :i64]]))
+            slot (long (o-record 'slot-of
+                                  {:used used :slots s}
+                                  [[:used :i64] [:slots :i64]]))
             a {:task task :node k :host (:host n)
                :wave wave :slot slot}
-            next-load (long (o 'load-after-assign [(long used)]))]
+            next-load (long (o-record 'load-after-assign
+                                       {:used used}
+                                       [[:used :i64]]))]
         (-> acc
             (update :assignments conj a)
             (assoc-in [:load k] next-load))))))
@@ -219,7 +225,9 @@
   "Build `n` identical tasks from a template. Task ids via kotoba `task-id`."
   [n template]
   (mapv (fn [i]
-          (merge {:id (o 'task-id [(long i)])
+          (merge {:id (o-record 'task-id
+                                 {:i i}
+                                 [[:i :i64]])
                   :attempt 1}
                  template))
         (range n)))
@@ -253,7 +261,9 @@
                                         [:max-attempts :i64]]))]
                    (when can?
                      (-> task
-                         (assoc :attempt (long (o 'attempt-next [(long attempt)])))
+                         (assoc :attempt (long (o-record 'attempt-next
+                                                           {:attempt attempt}
+                                                           [[:attempt :i64]])))
                          (update :exclude-nodes (fnil conj []) node))))))
          vec)))
 
@@ -262,9 +272,10 @@
   [xs p]
   (let [v (vec (sort xs))]
     (when (seq v)
-      (let [idx (long (o 'nearest-rank-idx
-                         [(long (count v))
-                          (long (Math/floor (* p 1000)))]))]
+      (let [idx (long (o-record 'nearest-rank-idx
+                                  {:n (count v)
+                                   :p-milli (long (Math/floor (* p 1000)))}
+                                  [[:n :i64] [:p-milli :i64]]))]
         (nth v idx)))))
 
 (defn final-results
@@ -284,10 +295,14 @@
         ko (filter failed? finals)
         durations (keep :duration-ms results)
         task-ms (reduce + 0 durations)
-        retried (long (o 'summary-retried
-                         [(long (count results)) (long (count finals))]))
-        speedup (let [milli (long (o 'speedup-milli
-                                     [(long task-ms) (long (or wall-ms 0))]))]
+        retried (long (o-record 'summary-retried
+                                  {:results-n (count results)
+                                   :finals-n (count finals)}
+                                  [[:results-n :i64] [:finals-n :i64]]))
+        speedup (let [milli (long (o-record 'speedup-milli
+                                             {:task-ms task-ms
+                                              :wall-ms (or wall-ms 0)}
+                                             [[:task-ms :i64] [:wall-ms :i64]]))]
                   (when (pos? milli) (/ (double milli) 1000.0)))]
     {:tasks (count finals)
      :ok (count ok)
