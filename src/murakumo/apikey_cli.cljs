@@ -44,7 +44,7 @@
 (defn- issue! [args]
   (let [f (parse-flags args)
         ttl (some-> (get f "ttl") js/parseInt)
-        {:keys [ok token claims error]}
+        {:keys [ok token claims error warning]}
         (apikey/issue {:secret (secret)
                        :sub (get f "sub" "client")
                        :scope (get f "scope" "all")
@@ -55,6 +55,7 @@
       (do
         (println token)                                   ;; stdout: the key, alone
         (err "")
+        (when warning (err (str "# warning: " warning)))
         (err (str "# sub=" (:sub claims) " scope=" (:scope claims)
                   " expires=" (.toISOString (js/Date. (* 1000 (:exp claims))))))
         (err "# send it as `x-api-key: <token>` or `Authorization: Bearer <token>`.")
