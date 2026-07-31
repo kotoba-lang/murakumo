@@ -807,8 +807,12 @@
              (oracle/call :infer-engine 'endpoint [ep])))
       (is (= (ir/execute live 'rpc-server-cmd [rpc])
              (oracle/call :infer-engine 'rpc-server-cmd [rpc]))))
-    (is (= (ir/execute live 'head-cmd-front ["bin" "m.gguf"])
-           (oracle/call :infer-engine 'head-cmd-front ["bin" "m.gguf"])))))
+    (let [hf (oracle/record
+              [:record :engine/head-front
+               [[:bin-dir :string] [:model-path :string]]]
+              {:bin-dir "bin" :model-path "m.gguf"})]
+      (is (= (ir/execute live 'head-cmd-front [hf])
+             (oracle/call :infer-engine 'head-cmd-front [hf]))))))
 
 (deftest engine-precompiled-kir-does-not-drift
   (is (= (eng-live-kir) (eng-resource-kir))
@@ -1469,8 +1473,11 @@
                                          :wasm32-kotoba-v1 {}))]
     (is (= (ir/execute m 'capacity-default [(* 64 1024 1024 1024)])
            (oracle/call :infer-moe 'capacity-default [(* 64 1024 1024 1024)])))
-    (is (= (ir/execute m 'verdict-name [128 8 true])
-           (oracle/call :infer-moe 'verdict-name [128 8 true])))
+    (let [v (oracle/record [:record :moe/verdict
+                            [[:experts :i64] [:active :i64] [:shared :bool]]]
+                           {:experts 128 :active 8 :shared true})]
+      (is (= (ir/execute m 'verdict-name [v])
+             (oracle/call :infer-moe 'verdict-name [v]))))
     (is (= (ir/execute r 'usable-gb [16])
            (oracle/call :infer-rebalance 'usable-gb [16])))
     (let [sin (oracle/record
@@ -1490,10 +1497,15 @@
                             [img none-s none-s none-s none-s])))
       (is (= 0 (oracle/call :infer-rebalance 'classify-run-flags
                             [none-s none-s none-s none-s none-s]))))
-    (is (= (ir/execute y 'make-id ["job" 0])
-           (oracle/call :infer-relay 'make-id ["job" 0])))
-    (is (= (ir/execute y 'lease-expired? [2000 1000 100])
-           (oracle/call :infer-relay 'lease-expired? [2000 1000 100])))))
+    (let [id (oracle/record [:record :relay/id [[:prefix :string] [:n :i64]]]
+                            {:prefix "job" :n 0})
+          lease (oracle/record [:record :relay/lease
+                                [[:now-ms :i64] [:at-ms :i64] [:ttl-ms :i64]]]
+                               {:now-ms 2000 :at-ms 1000 :ttl-ms 100})]
+      (is (= (ir/execute y 'make-id [id])
+             (oracle/call :infer-relay 'make-id [id])))
+      (is (= (ir/execute y 'lease-expired? [lease])
+             (oracle/call :infer-relay 'lease-expired? [lease]))))))
 
 (deftest product-shell-persist-uses-oracle-results
   (is (= "did:web:etzhayyim.com:murakumo" persist/repo-authority))
@@ -1504,8 +1516,12 @@
   (is (= 400 persist/forward-settle-ms))
   (is (= "snap-1-2" (persist/snapshot-rkey 1 2)))
   (is (= "rec-3-4" (persist/reconcile-rkey 3 4)))
-  (is (= (oracle/call :persist 'repo-uri ["com.murakumo.fleet.snapshot" "snap-1-0"])
-         (persist/repo-uri "com.murakumo.fleet.snapshot" "snap-1-0")))
+  (let [uri (oracle/record [:record :persist/uri
+                            [[:collection :string] [:rkey :string]]]
+                           {:collection "com.murakumo.fleet.snapshot"
+                            :rkey "snap-1-0"})]
+    (is (= (oracle/call :persist 'repo-uri [uri])
+           (persist/repo-uri "com.murakumo.fleet.snapshot" "snap-1-0"))))
   (is (str/includes? (persist/repo-write-url 18099) "localhost:18099"))
   (is (true? (persist/write-ok? "{\"status\":\"ok\"}")))
   (is (false? (persist/write-ok? "error")))
@@ -1528,12 +1544,19 @@
                                             :wasm32-kotoba-v1 {}))]
     (is (= (ir/execute live 'repo-authority [])
            (oracle/call :persist 'repo-authority [])))
-    (is (= (ir/execute live 'snapshot-rkey [1 2])
-           (oracle/call :persist 'snapshot-rkey [1 2])))
-    (is (= (ir/execute live 'reconcile-rkey [3 4])
-           (oracle/call :persist 'reconcile-rkey [3 4])))
-    (is (= (ir/execute live 'repo-uri ["c" "k"])
-           (oracle/call :persist 'repo-uri ["c" "k"])))
+    (let [rk1 (oracle/record [:record :persist/rkey [[:millis :i64] [:seq-n :i64]]]
+                             {:millis 1 :seq-n 2})
+          rk2 (oracle/record [:record :persist/rkey [[:millis :i64] [:seq-n :i64]]]
+                             {:millis 3 :seq-n 4})
+          uri (oracle/record [:record :persist/uri
+                              [[:collection :string] [:rkey :string]]]
+                             {:collection "c" :rkey "k"})]
+      (is (= (ir/execute live 'snapshot-rkey [rk1])
+             (oracle/call :persist 'snapshot-rkey [rk1])))
+      (is (= (ir/execute live 'reconcile-rkey [rk2])
+             (oracle/call :persist 'reconcile-rkey [rk2])))
+      (is (= (ir/execute live 'repo-uri [uri])
+             (oracle/call :persist 'repo-uri [uri]))))
     (is (= (ir/execute live 'repo-write-url [18099])
            (oracle/call :persist 'repo-write-url [18099])))
     ;; Profile 5: write-ok? is :bool.

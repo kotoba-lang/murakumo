@@ -42,32 +42,42 @@
      (capacity-from-tiers custom usable-bytes)
      (capacity-for-usable usable-bytes))))
 
+(def ^:private ratio-schema
+  "T5.2 native guest record for expert-ratio-milli."
+  [:record :moe/ratio [[:experts :i64] [:active :i64]]])
+
+(def ^:private verdict-schema
+  [:record :moe/verdict [[:experts :i64] [:active :i64] [:shared :bool]]])
+
+(def ^:private resident-schema
+  [:record :moe/resident
+   [[:weight-bytes :i64] [:experts :i64] [:capacity :i64]]])
+
 (defn expert-ratio
   "experts / active-experts (top-k).
-   T5.2: structural expert counts → call-record."
+   T5.2 native guest record wire: single :moe/ratio argument."
   [{:model/keys [experts active-experts]}]
   (when (and experts active-experts (pos? active-experts))
     (let [milli (oracle/i64->host
                  (o-record 'expert-ratio-milli
-                           {:experts experts
-                            :active-experts active-experts}
-                           [[:experts :i64]
-                            [:active-experts :i64]]))]
+                           {:ratio (oracle/record ratio-schema
+                                                  {:experts experts
+                                                   :active active-experts})}
+                           [[:ratio :raw]]))]
       (when (pos? milli) (/ (double milli) 1000.0)))))
 
 (defn verdict
   "mu-hashmi/mlx-moe 'which models benefit' heuristic as data.
-   T5.2: structural model fields → call-record."
+   T5.2 native guest record wire: single :moe/verdict argument."
   [model]
   (let [ratio (expert-ratio model)
         shared? (boolean (:model/moe-shared-expert? model))
         name (o-record 'verdict-name
-                       {:experts (or (:model/experts model) 0)
-                        :active-experts (or (:model/active-experts model) 0)
-                        :shared? shared?}
-                       [[:experts :i64]
-                        [:active-experts :i64]
-                        [:shared? :bool]])
+                       {:v (oracle/record verdict-schema
+                                          {:experts (or (:model/experts model) 0)
+                                           :active (or (:model/active-experts model) 0)
+                                           :shared shared?})}
+                       [[:v :raw]])
         v (keyword name)]
     (case v
       :unknown
@@ -84,16 +94,15 @@
 
 (defn resident-bytes-estimate
   "Approximate RAM mlx-moe holds resident at `capacity` experts/layer cached.
-   T5.2: structural model+capacity → call-record."
+   T5.2 native guest record wire: single :moe/resident argument."
   [{:model/keys [weight-bytes experts]} capacity]
   (oracle/i64->host
    (o-record 'resident-est
-             {:weight-bytes (or weight-bytes 0)
-              :experts (or experts 0)
-              :capacity (or capacity 0)}
-             [[:weight-bytes :i64]
-              [:experts :i64]
-              [:capacity :i64]])))
+             {:r (oracle/record resident-schema
+                                {:weight-bytes (or weight-bytes 0)
+                                 :experts (or experts 0)
+                                 :capacity (or capacity 0)})}
+             [[:r :raw]])))
 
 (defn plan
   "Single-node mlx-moe plan for `model` over `nodes`."

@@ -33,11 +33,18 @@
    :settled #{}
    :next 0})
 
+(def ^:private id-schema
+  "T5.2 native guest record for make-id."
+  [:record :relay/id [[:prefix :string] [:n :i64]]])
+
+(def ^:private lease-schema
+  [:record :relay/lease [[:now-ms :i64] [:at-ms :i64] [:ttl-ms :i64]]])
+
 (defn- gen-id [state prefix]
   (let [n (:next state)
         id (o-record 'make-id
-                     {:prefix prefix :n n}
-                     [[:prefix :string] [:n :i64]])]
+                     {:id (oracle/record id-schema {:prefix prefix :n n})}
+                     [[:id :raw]])]
     [id (update state :next inc)]))
 
 (defn enqueue
@@ -103,8 +110,11 @@
   (let [dead (for [[jid {:keys [at-ms job worker-id]}] (:assigned state)
                    :when (oracle/bool->host
                           (o-record 'lease-expired?
-                                    {:now-ms now-ms :at-ms at-ms :ttl-ms ttl-ms}
-                                    [[:now-ms :i64] [:at-ms :i64] [:ttl-ms :i64]]))]
+                                    {:lease (oracle/record lease-schema
+                                                           {:now-ms now-ms
+                                                            :at-ms at-ms
+                                                            :ttl-ms ttl-ms})}
+                                    [[:lease :raw]]))]
                [jid job worker-id])]
     (reduce (fn [st [jid job wid]]
               (-> st

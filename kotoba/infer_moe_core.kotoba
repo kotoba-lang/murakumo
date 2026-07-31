@@ -1,4 +1,10 @@
 (ns infer-moe-core
+  (:schemas {;; T5.2 native guest record wire
+             :moe/ratio [:record :moe/ratio [[:experts :i64] [:active :i64]]]
+             :moe/verdict [:record :moe/verdict
+                           [[:experts :i64] [:active :i64] [:shared :bool]]]
+             :moe/resident [:record :moe/resident
+                            [[:weight-bytes :i64] [:experts :i64] [:capacity :i64]]]})
   (:export [gib capacity-default expert-ratio-milli verdict-name
             resident-est]))
 
@@ -27,26 +33,34 @@
             432
             512))))))
 
-(defn expert-ratio-milli [experts :i64 active :i64] :i64
-  ;; cljc: (/ experts active) as milli; active <= 0 → 0 (unknown)
-  (if (< active 1)
-    0
-    (quot (* experts 1000) active)))
+(defn expert-ratio-milli [x [:ref :moe/ratio]] :i64
+  ;; T5.2 native: single ratio record. active <= 0 → 0
+  (let [experts (record-get x :experts)
+        active (record-get x :active)]
+    (if (< active 1)
+      0
+      (quot (* experts 1000) active))))
 
-(defn verdict-name [experts :i64 active :i64 shared :bool] :string
-  ;; Profile 5: shared is real :bool; experts/active 0 ⇒ missing fields → unknown
-  (if (if (< experts 1) true (if (< active 1) true false))
-    "unknown"
-    (let [milli (expert-ratio-milli experts active)
-          high (if (< milli 10000) false true)]
-      (if (if high (if shared true false) false)
-        "recommended"
-        (if shared
-          "workable"
-          "not-recommended")))))
+(defn verdict-name [x [:ref :moe/verdict]] :string
+  ;; T5.2 native: single verdict record. experts/active 0 ⇒ unknown
+  (let [experts (record-get x :experts)
+        active (record-get x :active)
+        shared (record-get x :shared)]
+    (if (if (< experts 1) true (if (< active 1) true false))
+      "unknown"
+      (let [milli (if (< active 1) 0 (quot (* experts 1000) active))
+            high (if (< milli 10000) false true)]
+        (if (if high (if shared true false) false)
+          "recommended"
+          (if shared
+            "workable"
+            "not-recommended"))))))
 
-(defn resident-est [weight-bytes :i64 experts :i64 capacity :i64] :i64
-  ;; cljc: (long (* weight (/ capacity experts))) when all present; else weight
-  (if (if (< weight-bytes 1) 1 (if (< experts 1) 1 (if (< capacity 1) 1 0)))
-    weight-bytes
-    (quot (* weight-bytes capacity) experts)))
+(defn resident-est [x [:ref :moe/resident]] :i64
+  ;; T5.2 native: single resident record.
+  (let [weight-bytes (record-get x :weight-bytes)
+        experts (record-get x :experts)
+        capacity (record-get x :capacity)]
+    (if (if (< weight-bytes 1) 1 (if (< experts 1) 1 (if (< capacity 1) 1 0)))
+      weight-bytes
+      (quot (* weight-bytes capacity) experts))))

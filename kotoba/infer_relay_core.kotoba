@@ -1,4 +1,8 @@
 (ns infer-relay-core
+  (:schemas {;; T5.2 native guest record wire
+             :relay/id [:record :relay/id [[:prefix :string] [:n :i64]]]
+             :relay/lease [:record :relay/lease
+                           [[:now-ms :i64] [:at-ms :i64] [:ttl-ms :i64]]]})
   (:export [digit-char nat-str i64-str make-id lease-expired?
             msg-idle msg-job msg-settled]))
 
@@ -22,12 +26,17 @@
     (string-concat "-" (nat-str (- 0 n)))
     (nat-str n)))
 
-(defn make-id [prefix :string n :i64] :string
-  (string-concat prefix (string-concat "-" (i64-str n))))
+(defn make-id [x [:ref :relay/id]] :string
+  ;; T5.2 native: single id record.
+  (string-concat (record-get x :prefix)
+                 (string-concat "-" (i64-str (record-get x :n)))))
 
-(defn lease-expired? [now-ms :i64 at-ms :i64 ttl-ms :i64] :bool
-  ;; cljc: (> (- now-ms at-ms) ttl-ms)
-  (if (< ttl-ms (- now-ms at-ms)) true false))
+(defn lease-expired? [x [:ref :relay/lease]] :bool
+  ;; T5.2 native: single lease record. cljc: (> (- now at) ttl)
+  (if (< (record-get x :ttl-ms)
+         (- (record-get x :now-ms) (record-get x :at-ms)))
+    true
+    false))
 
 (defn msg-idle [] :string "idle")
 (defn msg-job [] :string "job")
