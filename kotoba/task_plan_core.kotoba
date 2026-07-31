@@ -52,7 +52,18 @@
              :task/assign2-in [:record :task/assign2-in
                                [[:load0 :i64] [:load1 :i64]
                                 [:ok0 :bool] [:ok1 :bool]
-                                [:fill0 :i64] [:fill1 :i64]]]})
+                                [:fill0 :i64] [:fill1 :i64]]]
+             ;; T5.2 residual: 3-node assign multi-record → single guest records
+             :task/pick3-in [:record :task/pick3-in
+                             [[:ok0 :bool] [:ok1 :bool] [:ok2 :bool]
+                              [:fill0 :i64] [:fill1 :i64] [:fill2 :i64]
+                              [:load0 :i64] [:load1 :i64] [:load2 :i64]]]
+             :task/apply-pick3 [:record :task/apply-pick3
+                                [[:v0 :i64] [:v1 :i64] [:v2 :i64] [:pick :i64]]]
+             :task/assign3-in [:record :task/assign3-in
+                               [[:load0 :i64] [:load1 :i64] [:load2 :i64]
+                                [:ok0 :bool] [:ok1 :bool] [:ok2 :bool]
+                                [:fill0 :i64] [:fill1 :i64] [:fill2 :i64]]]})
   (:export [default-max-slots default-max-attempts default-timeout-ms
             slots failed? can-retry?
             task-eligible? fill-milli better-fill?
@@ -332,18 +343,17 @@
                        (record-get c :load-i)))]
     (if (= b 0) true false)))
 
-(defn assign-task-pick-3 [ok [:ref :task/flags3]
-                          fill [:ref :task/triple]
-                          load [:ref :task/triple]] :i64
-  (let [ok0 (record-get ok :v0)
-        ok1 (record-get ok :v1)
-        ok2 (record-get ok :v2)
-        f0 (record-get fill :v0)
-        f1 (record-get fill :v1)
-        f2 (record-get fill :v2)
-        l0 (record-get load :v0)
-        l1 (record-get load :v1)
-        l2 (record-get load :v2)
+(defn assign-task-pick-3 [x [:ref :task/pick3-in]] :i64
+  ;; T5.2 residual: ok/fill/load on one guest record
+  (let [ok0 (record-get x :ok0)
+        ok1 (record-get x :ok1)
+        ok2 (record-get x :ok2)
+        f0 (record-get x :fill0)
+        f1 (record-get x :fill1)
+        f2 (record-get x :fill2)
+        l0 (record-get x :load0)
+        l1 (record-get x :load1)
+        l2 (record-get x :load2)
         p01 (if ok0
               (if ok1
                 (let [b (task-score-code (record-new [:ref :task/score] f0 l0 0 f1 l1))]
@@ -361,21 +371,35 @@
         (if win2 2 p01)
         p01))))
 
-(defn apply-task-pick-3 [load [:ref :task/triple] pick :i64] [:ref :task/triple]
-  (let [l0 (record-get load :v0)
-        l1 (record-get load :v1)
-        l2 (record-get load :v2)
+(defn apply-task-pick-3 [x [:ref :task/apply-pick3]] [:ref :task/triple]
+  ;; T5.2 residual: load triple + pick on one guest record
+  (let [l0 (record-get x :v0)
+        l1 (record-get x :v1)
+        l2 (record-get x :v2)
+        pick (record-get x :pick)
         n0 (load-inc-if (record-new [:ref :task/pair] l0 (if (= pick 0) 1 0)))
         n1 (load-inc-if (record-new [:ref :task/pair] l1 (if (= pick 1) 1 0)))
         n2 (load-inc-if (record-new [:ref :task/pair] l2 (if (= pick 2) 1 0)))]
     (record-new [:ref :task/triple] n0 n1 n2)))
 
-(defn assign-task-step-3 [load [:ref :task/triple]
-                          ok [:ref :task/flags3]
-                          fill [:ref :task/triple]] [:ref :task/assign3]
-  (let [p (assign-task-pick-3 ok fill load)
+(defn assign-task-step-3 [x [:ref :task/assign3-in]] [:ref :task/assign3]
+  ;; T5.2 residual: load+ok+fill on one guest record (mirrors assign2-in)
+  (let [p (assign-task-pick-3 (record-new [:ref :task/pick3-in]
+                                          (record-get x :ok0)
+                                          (record-get x :ok1)
+                                          (record-get x :ok2)
+                                          (record-get x :fill0)
+                                          (record-get x :fill1)
+                                          (record-get x :fill2)
+                                          (record-get x :load0)
+                                          (record-get x :load1)
+                                          (record-get x :load2)))
         code (if (< p 0) 0 (+ p 1))
-        nload (apply-task-pick-3 load p)]
+        nload (apply-task-pick-3 (record-new [:ref :task/apply-pick3]
+                                             (record-get x :load0)
+                                             (record-get x :load1)
+                                             (record-get x :load2)
+                                             p))]
     (record-new [:ref :task/assign3] code
                 (record-get nload :v0)
                 (record-get nload :v1)

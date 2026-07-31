@@ -30,6 +30,10 @@
   "[:record :task/pick2 [[:ok0 :bool] [:ok1 :bool] [:fill0 :i64] [:fill1 :i64] [:load0 :i64] [:load1 :i64]]]")
 (def ^:private assign2-in-ty
   "[:record :task/assign2-in [[:load0 :i64] [:load1 :i64] [:ok0 :bool] [:ok1 :bool] [:fill0 :i64] [:fill1 :i64]]]")
+(def ^:private pick3-in-ty
+  "[:record :task/pick3-in [[:ok0 :bool] [:ok1 :bool] [:ok2 :bool] [:fill0 :i64] [:fill1 :i64] [:fill2 :i64] [:load0 :i64] [:load1 :i64] [:load2 :i64]]]")
+(def ^:private assign3-in-ty
+  "[:record :task/assign3-in [[:load0 :i64] [:load1 :i64] [:load2 :i64] [:ok0 :bool] [:ok1 :bool] [:ok2 :bool] [:fill0 :i64] [:fill1 :i64] [:fill2 :i64]]]")
 
 (defn- pick2-call [ok0 ok1 fill0 fill1 load0 load1]
   (str "(pick-task-idx-2 (record-new " pick2-ty " "
@@ -38,6 +42,18 @@
 (defn- assign2-in-call [load0 load1 ok0 ok1 fill0 fill1]
   (str "(assign-task-step-2 (record-new " assign2-in-ty " "
        load0 " " load1 " " ok0 " " ok1 " " fill0 " " fill1 "))"))
+
+(defn- assign3-in-call [load0 load1 load2 ok0 ok1 ok2 fill0 fill1 fill2]
+  (str "(assign-task-step-3 (record-new " assign3-in-ty " "
+       load0 " " load1 " " load2 " "
+       ok0 " " ok1 " " ok2 " "
+       fill0 " " fill1 " " fill2 "))"))
+
+(defn- pick3-in-call [ok0 ok1 ok2 fill0 fill1 fill2 load0 load1 load2]
+  (str "(assign-task-pick-3 (record-new " pick3-in-ty " "
+       ok0 " " ok1 " " ok2 " "
+       fill0 " " fill1 " " fill2 " "
+       load0 " " load1 " " load2 "))"))
 
 (def ^:private slots-ty
   "[:record :task/slots [[:budget :i64] [:node-slots :i64] [:slots-per :i64] [:max-slots :i64] [:cores :i64]]]")
@@ -299,12 +315,9 @@
     (is (= -1 (get actual "pn")))))
 
 (deftest assign-task-step-3-and-summary
-  (let [ok "(flags3-record true true true)"
-        fill "(triple-record 0 0 0)"
-        load0 "(triple-record 0 0 0)"
-        s3 (str "(assign-task-step-3 " load0 " " ok " " fill ")")
+  (let [s3 (assign3-in-call 0 0 0 "true" "true" "true" 0 0 0)
         actual (compile-i64-cases
-                {"p3" (str "(assign-task-pick-3 " ok " " fill " " load0 ")")
+                {"p3" (pick3-in-call "true" "true" "true" 0 0 0 0 0 0)
                  "s3c" (str "(assign-task-3-code " s3 ")")
                  "s3l0" (str "(assign-task-3-load0 " s3 ")")
                  "s3l1" (str "(assign-task-3-load1 " s3 ")")

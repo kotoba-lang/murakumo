@@ -37,7 +37,12 @@
                                      [[:ia :i64] [:ib :i64]
                                       [:st :i64] [:sm :i64] [:sp :i64]]]
              :rebalance/order-nth [:record :rebalance/order-nth
-                                   [[:i0 :i64] [:i1 :i64] [:i2 :i64] [:n :i64]]]})
+                                   [[:i0 :i64] [:i1 :i64] [:i2 :i64] [:n :i64]]]
+             ;; T5.2 residual: demand-inc demand+class-code → one guest record
+             :rebalance/demand-step [:record :rebalance/demand-step
+                                     [[:text :i64] [:image :i64] [:video :i64]
+                                      [:audio :i64] [:postproc :i64]
+                                      [:class-code :i64]]]})
   (:export [shard-ceiling-gb os-kv-headroom-gb usable-gb pool-for-class
             seats-of-text seats-of-media seats-of-postproc seats-total
             pool-demand-record pool-weight-text pool-weight-media pool-weight-postproc
@@ -364,13 +369,15 @@
 (defn demand-record [t :i64 i :i64 v :i64 a :i64 p :i64] [:ref :rebalance/demand]
   (record-new [:record :rebalance/demand [[:text :i64] [:image :i64] [:video :i64] [:audio :i64] [:postproc :i64]]] t i v a p))
 
-(defn demand-inc [d [:ref :rebalance/demand] class-code :i64] [:ref :rebalance/demand]
+(defn demand-inc [x [:ref :rebalance/demand-step]] [:ref :rebalance/demand]
   ;; one reduce step of demand-from-runs given classify-run-flags code
-  (let [t (record-get d :text)
-        i (record-get d :image)
-        v (record-get d :video)
-        a (record-get d :audio)
-        p (record-get d :postproc)]
+  ;; T5.2 residual: demand fields + class-code on one guest record
+  (let [t (record-get x :text)
+        i (record-get x :image)
+        v (record-get x :video)
+        a (record-get x :audio)
+        p (record-get x :postproc)
+        class-code (record-get x :class-code)]
     (if (= class-code 1)
       (demand-record (+ t 1) i v a p)
       (if (= class-code 2)
@@ -381,7 +388,7 @@
             (demand-record t i v (+ a 1) p)
             (if (= class-code 5)
               (demand-record t i v a (+ p 1))
-              d)))))))
+              (demand-record t i v a p))))))))
 
 (defn demand-to-pool-record [d [:ref :rebalance/demand]] [:ref :rebalance/lanes]
   ;; cljc pool-demand after demand-from-runs

@@ -252,35 +252,53 @@
      (when (or (:tokens u) (get u "tokens")) "tokens")]))
 
 (deftest demand-from-runs-fold-matches-cljc
+  "Host demand-from-runs; guest demand-inc single-step on :rebalance/demand-step.
+  Final pool via demand-to-pool from demand-inc chain with scalar priors."
   (let [runs [{:units {:tokens 100}}
               {:units {:images 1}}
               {:units {:images 1}}
               {:model "browser-swarm" :units {:jobs 1}}
               {:units {:video-seconds 3}}]
-        ;; host projects options; guest folds demand-inc + classify-run-flags
-        fold (reduce (fn [expr run]
-                       (let [[img vid aud sw tok] (run-flags run)]
-                         (str "(demand-inc " expr
-                              " "
-                              (classify-call (opt-str-form img)
-                                             (opt-str-form vid)
-                                             (opt-str-form aud)
-                                             (opt-str-form sw)
-                                             (opt-str-form tok))
-                              ")")))
-                     "(demand-empty)"
-                     runs)
-        actual (compile-i64-cases
-                {"t" (str "(demand-text " fold ")")
-                 "i" (str "(demand-image " fold ")")
-                 "v" (str "(demand-video " fold ")")
-                 "a" (str "(demand-audio " fold ")")
-                 "p" (str "(demand-postproc " fold ")")
-                 "pt" (str "(pool-weight-text (demand-to-pool-record " fold "))")
-                 "pm" (str "(pool-weight-media (demand-to-pool-record " fold "))")
-                 "pp" (str "(pool-weight-postproc (demand-to-pool-record " fold "))")})
+        demand-step-lit
+        "[:record :rebalance/demand-step [[:text :i64] [:image :i64] [:video :i64] [:audio :i64] [:postproc :i64] [:class-code :i64]]]"
         cljc (rb/demand-from-runs runs)
-        pool (rb/pool-demand cljc)]
+        pool (rb/pool-demand cljc)
+        ;; last run class code (guest classify-run-flags)
+        last-code
+        (let [[img vid aud sw tok] (run-flags (last runs))]
+          (classify-call (opt-str-form img)
+                         (opt-str-form vid)
+                         (opt-str-form aud)
+                         (opt-str-form sw)
+                         (opt-str-form tok)))
+        ;; prior totals = host fold of all but last run
+        prior (rb/demand-from-runs (butlast runs))
+        final-guest
+        (str "(demand-inc (record-new " demand-step-lit " "
+             (long (:text prior 0)) " "
+             (long (:image prior 0)) " "
+             (long (:video prior 0)) " "
+             (long (:audio prior 0)) " "
+             (long (:postproc prior 0)) " "
+             last-code "))")
+        actual (compile-i64-cases
+                {"t" (str "(demand-text " final-guest ")")
+                 "i" (str "(demand-image " final-guest ")")
+                 "v" (str "(demand-video " final-guest ")")
+                 "a" (str "(demand-audio " final-guest ")")
+                 "p" (str "(demand-postproc " final-guest ")")
+                 "pt" (str "(pool-weight-text (demand-to-pool-record " final-guest "))")
+                 "pm" (str "(pool-weight-media (demand-to-pool-record " final-guest "))")
+                 "pp" (str "(pool-weight-postproc (demand-to-pool-record " final-guest "))")
+                 "s1t" (str "(demand-text (demand-inc (record-new " demand-step-lit
+                             " 0 0 0 0 0 1)))")
+                 "s2i" (str "(demand-image (demand-inc (record-new " demand-step-lit
+                             " 1 0 0 0 0 2)))")
+                 "noop" (str "(demand-text (demand-inc (record-new " demand-step-lit
+                              " 3 0 0 0 0 0)))")})]
+    (is (= 1 (get actual "s1t")))
+    (is (= 1 (get actual "s2i")))
+    (is (= 3 (get actual "noop")) "class 0 leaves demand unchanged")
     (is (= (:text cljc) (get actual "t")))
     (is (= (:image cljc) (get actual "i")))
     (is (= (:video cljc) (get actual "v")))
