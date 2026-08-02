@@ -1,0 +1,105 @@
+;; murakumo credits 掲示価格レジストリ（正本）
+;;
+;; ADR-2608026200（media: 掲示 = fal 実原価 × 2.0）
+;; ADR-2608026500（text: 容量固定・完全代替財なので price-taker。実勢の 17-20% 下）
+;;
+;; 単位: credits。ペグは $1 = 100 credits（ADR-2607030030、変更しない）。
+;;
+;; ⚠ このファイルが存在しなかった間、実際に効いていた価格は次の 2 つだけで、
+;;   どちらも桁が違っていた:
+;;     - text : kotoba oracle の default-per-token = :i64 1 → $0.01/token
+;;              = $10,000/Mtok = 実勢の 20,000 倍（誰も選んでいない。i64 の最小値）
+;;     - image: murakumo.infer.media/cmd-generate の即値 :credit/per-image 100
+;;              = $1.00/枚 = fal 原価 $0.03 の 33 倍
+;;   video / audio / 3D は価格が無く job-cost が例外を投げていた。
+;;
+;; 原価はすべて 2026-08-02 時点の fal 公開価格。実契約では未確認。
+;; :verified-at が :staleness-days を超えたら見積もりを拒否する（ADR-2608026000）。
+
+{:peg          {:credits-per-usd 100 :adr "2607030030"}
+ :verified-at  "2026-08-02"
+ :staleness-days 90
+ :source       "fal 公開価格 / OpenRouter・DeepInfra 公開価格。実契約未確認。"
+
+ ;; ---- text（price-taker。実勢 $0.12 in / $0.50 out の 17-20% 下）-------------
+ ;; 課金単位は :mtokens（100万トークン）。:tokens は使わない —— 整数で表現できず、
+ ;; oracle の i64 経由で最小値 1 が価格になる事故を再発させるため。
+ :text
+ {"murakumo-main"
+  {:model/id "murakumo-main"
+   :credit/per-mtoken-in  10     ; $0.10/Mtok（原価 ≈$0.0313 → 寄与率 67.3%）
+   :credit/per-mtoken-out 40     ; $0.40/Mtok（原価  $0.1276 → 寄与率 66.6%）
+   :cost/usd-per-mtoken-in  0.0313
+   :cost/usd-per-mtoken-out 0.1276
+   :market/usd-per-mtoken-in  0.12
+   :market/usd-per-mtoken-out 0.50
+   :market/comparable "Qwen3 30B A3B (OpenRouter / DeepInfra)"
+   :note "実勢を 17-20% 下回るのは単一 head・SLA なし・cold start の対価。冗長化したら実勢へ戻す"}}
+
+ ;; ---- video（掲示 = fal 原価 × 2.0）-----------------------------------------
+ :video
+ {"wan2.2-ti2v-5b"    {:credit/per-video-second 10  :cost/usd-per-second 0.05
+                       :tier :video/oss :engine :comfy}
+  "ltx-2.3"           {:credit/per-video-second 10  :cost/usd-per-second 0.05
+                       :tier :video/oss :engine :comfy}
+  "hunyuanvideo-1.5"  {:credit/per-video-second 10  :cost/usd-per-second 0.05
+                       :tier :video/oss :engine :comfy}
+
+  ;; Seedance 2.0（ADR-2607170500 で結線済みの唯一の hosted engine。
+  ;; reference-to-video は動画入力があると fal 側が ×0.6 する）
+  "seedance-2.0-ref"      {:credit/per-video-second 37  :cost/usd-per-second 0.1814
+                           :tier :video/frontier :engine :seedance
+                           :note "reference-to-video + 動画入力 720p（fal が ×0.6 を適用）"}
+  "seedance-2.0-fast"     {:credit/per-video-second 49  :cost/usd-per-second 0.2419
+                           :tier :video/frontier :engine :seedance}
+  "seedance-2.0"          {:credit/per-video-second 61  :cost/usd-per-second 0.3034
+                           :tier :video/frontier :engine :seedance :note "標準 720p"}
+  "seedance-2.0-1080p"    {:credit/per-video-second 137 :cost/usd-per-second 0.682
+                           :tier :video/frontier :engine :seedance}
+
+  ;; Veo 3.1 系（ADR-2608026200 §3-2）
+  "veo-3.1-fast"      {:credit/per-video-second 35  :cost/usd-per-second 0.18
+                       :tier :video/frontier-fast :engine :fal
+                       :note "Higgsfield $2.84/8秒 に対し $2.80 で勝ちつつ粗利 49%"}
+  "veo-3.1-silent"    {:credit/per-video-second 40  :cost/usd-per-second 0.20
+                       :tier :video/frontier :engine :fal}
+  "veo-3.1"           {:credit/per-video-second 80  :cost/usd-per-second 0.40
+                       :tier :video/frontier :engine :fal
+                       :promo/credit-per-video-second 35
+                       :promo/plan-credit-share 0.15
+                       :note "promo 35 は原価割れ。plan 月次 credits の 15% まで。top-up には適用しない"}}
+
+ ;; ---- image（掲示 = 原価 × 2.0）---------------------------------------------
+ :image
+ {"seedream-v4"       {:credit/per-image 6 :cost/usd-per-image 0.03 :engine :fal}
+  "animagine-xl-4.0"  {:credit/per-image 6 :cost/usd-per-image 0.03 :engine :comfy
+                       :note "旧即値 100cr（$1.00）を撤去。fal 同等品の原価×2.0 に合わせる"}
+  "flux.1-dev"        {:credit/per-image 6 :cost/usd-per-image 0.03 :engine :comfy}
+  "qwen-image"        {:credit/per-image 6 :cost/usd-per-image 0.03 :engine :comfy}
+  "sdxl-turbo"        {:credit/per-image 6 :cost/usd-per-image 0.03 :engine :comfy}}
+
+ ;; ---- 3D（fal Hunyuan3D 実価格。ADR-2608026200 の「保留」を解消）-------------
+ :model3d
+ {"hunyuan3d-v2-turbo" {:credit/per-asset 28 :cost/usd-per-asset 0.14  :engine :fal}
+  "hunyuan3d-rapid"    {:credit/per-asset 45 :cost/usd-per-asset 0.225 :engine :fal}
+  "hunyuan3d-geometry" {:credit/per-asset 45 :cost/usd-per-asset 0.225 :engine :fal}
+  "hunyuan3d-pro"      {:credit/per-asset 75 :cost/usd-per-asset 0.375 :engine :fal
+                        :credit/addon-pbr 30 :credit/addon-multiview 30
+                        :cost/usd-addon-pbr 0.15 :cost/usd-addon-multiview 0.15}
+  "hunyuan3d-lowpoly"  {:credit/per-asset 90 :cost/usd-per-asset 0.45  :engine :fal}
+  "trellis"            {:credit/per-asset 45 :cost/usd-per-asset 0.225 :engine :trellis
+                        :note "自前 TRELLIS。原価は fal の同等品を代理値として使用 —— 実測したら差し替える"}}
+
+ ;; ---- voice / music ---------------------------------------------------------
+ :voice
+ {"cosyvoice2" {:credit/per-ktext 2 :cost/usd-per-ktext 0.01 :engine :tts
+                :note "1,000 文字あたり"}
+  "kokoro"     {:credit/per-ktext 2 :cost/usd-per-ktext 0.01 :engine :tts}}
+
+ :music
+ {"ace-step"          {:credit/per-audio-second 0.1 :cost/usd-per-second 0.0002
+                       :credit/job-minimum 5 :engine :audio
+                       :note "単価が微小なのでジョブ最低額を置く"}
+  "stable-audio-open" {:credit/per-audio-second 0.1 :cost/usd-per-second 0.0002
+                       :credit/job-minimum 5 :engine :audio}
+  "elevenlabs-music"  {:credit/per-audio-second 3 :cost/usd-per-second 0.0133 :engine :fal}}}

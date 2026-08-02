@@ -101,6 +101,13 @@
   "Media-first pricing keys (Civitai-Buzz-style per-job units) alongside
    per-token text. A model's registry entry carries whichever apply."
   {:tokens :credit/per-token
+   ;; ADR-2608026500: text の課金単位は :mtokens（100万トークン）。:tokens は
+   ;; 整数で表現できず、kotoba oracle の i64 経由で最小値 1 がそのまま価格に
+   ;; なる事故（$10,000/Mtok = 実勢の 20,000 倍）を起こした。新規は :mtokens。
+   :mtokens-in :credit/per-mtoken-in
+   :mtokens-out :credit/per-mtoken-out
+   :ktext :credit/per-ktext
+   :assets :credit/per-asset
    :images :credit/per-image
    :video-seconds :credit/per-video-second
    :audio-seconds :credit/per-audio-second
