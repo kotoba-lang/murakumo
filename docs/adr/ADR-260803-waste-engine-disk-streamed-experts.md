@@ -114,7 +114,94 @@ Kotoba as a product-shell oracle.
   ranking, and the engine command strings.
 - Catalog is now 33 cores (`kotoba_oracle_cljs_load_test`).
 
-## Addendum: regenerating KIR
+## Addendum 1 (2026-08-03, same day): Kimi-Linear converted and run — the
+## analytic path is low across the board, not "within rounding"
+
+Kimi-Linear-48B-A3B-Instruct was downloaded (92 GB), converted (waste 0.6.3
+`tools/convert.py --jobs 3`, ~54 min on this M4, 26 layers × 651 MB + a
+1354 MB trunk) and run. **A claim in the original Evidence section was wrong
+and is corrected here.**
+
+Measured (`waste plan --json` at ctx 4096, byte-exact container listing):
+
+| | analytic | measured | error |
+|---|---:|---:|---:|
+| RAM floor | 1.18 GiB | **1.28 GiB** | −8% |
+| expert set on disk | 11.63 GiB | **16.53 GiB** | −30% |
+| working set / token | 0.36 GiB | **0.54 GiB** | −32% |
+| container | — | **19,171,317,244 B** | — |
+
+The original text said the analytic path lands "within ~1% on Kimi-Linear
+(1.27 GB against a documented 1.28)". That was a **unit error**: upstream's
+"1.28 GB minimum RAM" is GiB, and it was compared against 1.27 *decimal* GB.
+The real miss is 8%, and the two disk terms are out by ~30%.
+
+Two causes, both checkable:
+
+1. memplan.py assumes **2.12 bits/weight** for experts. The container
+   `convert.py` actually produced stores 682,622,976 B per layer for
+   256 × 3·2304·1024 params = **3.014 bits/weight**.
+2. waste leaves `embed_tokens` **on disk** (`src/waste.c` skips it when
+   summing the resident trunk) while memplan.py counts it — 383 MB here.
+   This is why the floor is only 8% off while the expert set is 30% off: the
+   two errors partly cancel.
+
+The direction does not generalise either: on K3 the same path is **low** on
+RAM (17.5 GiB vs 29.06 GB) and **high** on disk (1344 GB vs 982 GB).
+
+Consequences already applied: the registry entry carries the measured floor,
+expert set, working set, min expert cache and container size, plus
+`:model/expert-milli-bits 3014`; `memplan` reads `:model/trunk-milli-bits` /
+`:model/expert-milli-bits` / `:model/min-cache-bytes` so a family that has
+converted once informs the estimate for the next member. The port stays
+faithful to memplan.py — parity with it is a checkable property — and the
+measured-override mechanism is where accuracy comes from.
+
+### The saturating budget, measured
+
+Same prompt, same container, same machine (M4 / 32 GiB, container on a USB
+volume), `-n 48`:
+
+| budget | source | cache | hit | tok/s |
+|---|---|---:|---:|---:|
+| 2.89 GB | engine's own default | 1.65 GB | 78% | **0.13** |
+| 19.08 GB | `:saturating-budget-bytes` | 17.7 GB | 94% | **0.44** |
+
+**3.4×**, from a number the engine cannot choose for itself — its
+recommendation is `floor + 3` working sets and it stops there. This is the
+concrete answer to "why plan with murakumo instead of running `waste` by
+hand".
+
+### Why 0.44 and not upstream's 10.65
+
+`tools/diskbench` on the volumes involved:
+
+| volume | random read |
+|---|---:|
+| upstream test machine (M5 Pro internal) | 12.78 GB/s |
+| this Mac, internal SSD | 2.89 GB/s |
+| **this Mac, the USB volume holding the container** | **0.03 GB/s** |
+
+30 MB/s. The container had to go there because the internal disk has 15 GiB
+free against a 17.9 GiB container. That single number accounts for both runs:
+the default-budget run missed 2236 experts × 2.67 MB ≈ 6.0 GB → ~199 s at
+30 MB/s against 378 s measured (plus a 1.4 GB cold trunk read); the saturating
+run missed 599 × 2.67 MB ≈ 1.6 GB → ~53 s + 47 s trunk ≈ 100 s against 108 s
+measured. Both within ~10%. `time` confirms it: 84 CPU-seconds against 193 s
+wall — the machine was waiting, not computing.
+
+So Kimi-Linear on this node is **storage-bound by two orders of magnitude**,
+and the fix is not a bigger budget but ~3 GiB of free space on the internal
+SSD. Recorded rather than acted on: that is the operator's data to delete.
+
+One honest gap in the model: the Gate-5 hit curve predicted ~52% at the
+default budget's 9.3% cache fraction, and the run measured 78%. The prompt
+produced a degenerate repetitive continuation (no chat template ships for
+kimi-linear, so the CLI falls back to raw continuation), which gives
+unusually high expert locality. The curve is not wrong so much as measured on
+a different workload — it is an estimate and is labelled as one.
+
+## Addendum 2: regenerating KIR
 
 ADR-260731-w6-t62 documents `clojure -M:test -m murakumo.kotoba-oracle-gen`.
 That does not work — command-line main opts are appended to an alias's

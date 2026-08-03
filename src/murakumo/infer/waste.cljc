@@ -138,12 +138,18 @@
                   mla-layers]
      :as model}
     {:keys [ctx threads trunk-milli-bits expert-milli-bits]
-     :or {ctx default-ctx threads default-threads
-          trunk-milli-bits default-trunk-milli-bits
-          expert-milli-bits default-expert-milli-bits}}]
+     :or {ctx default-ctx threads default-threads}}]
    (let [dense (or first-dense 0)
          moe-layers (- layers dense)
          qlora (or q-lora-rank hidden)          ; null q_lora_rank ⇒ full width
+         ;; memplan.py's defaults are assumptions about what conversion WILL
+         ;; produce, and on Kimi-Linear the 2.12 default is 30% low against a
+         ;; converted container's measured 3.01 bits/weight. A registry entry
+         ;; that has measured its own family should say so.
+         trunk-milli-bits (or trunk-milli-bits (:model/trunk-milli-bits model)
+                              default-trunk-milli-bits)
+         expert-milli-bits (or expert-milli-bits (:model/expert-milli-bits model)
+                               default-expert-milli-bits)
          p-expert (i64 'expert-params {:hidden hidden :moe-inter moe-inter}
                        [[:hidden :i64] [:moe-inter :i64]])
          expert-rec (i64 'expert-rec-bytes
@@ -207,9 +213,10 @@
                        :threads threads}
                       [[:hidden :i64] [:moe-inter :i64] [:vocab :i64]
                        [:threads :i64]])
-         min-cache (i64 'min-cache-bytes
-                        {:top-k active-experts :expert-rec expert-rec}
-                        [[:top-k :i64] [:expert-rec :i64]])
+         min-cache (or (:model/min-cache-bytes model)
+                       (i64 'min-cache-bytes
+                            {:top-k active-experts :expert-rec expert-rec}
+                            [[:top-k :i64] [:expert-rec :i64]]))
          floor (i64 'floor-bytes
                     {:trunk trunk :state state :scratch scratch
                      :min-cache min-cache}
@@ -228,13 +235,31 @@
      ;; Measured values win over the analytic ones. This matters more than it
      ;; looks: memplan.py's own docstring notes that its accurate path reads
      ;; exact tensor sizes from the safetensors shard headers, and the
-     ;; analytic estimate here is the rough one. Checked against upstream's
-     ;; published figures — for Kimi-Linear it lands within a few percent
-     ;; (1.27 GB against a documented 1.28), but for K3 it says 17.5 GiB
-     ;; against a real 29.06 GB floor and 1344 GB of experts against a real
-     ;; 982 GB container. Analytic is for "which node should I even consider";
-     ;; `waste plan --json` on the converted container is the truth, and its
-     ;; numbers belong in the registry as the overrides read here.
+     ;; analytic estimate here is the rough one.
+     ;;
+     ;; Measured against a Kimi-Linear-48B container converted on this fleet
+     ;; (2026-08-03), the analytic path is low ACROSS THE BOARD, and by more
+     ;; than a rounding:
+     ;;
+     ;;   RAM floor    1.18 GiB analytic  vs  1.28 GiB measured   -8%
+     ;;   expert set  11.63 GiB analytic  vs 16.53 GiB measured  -30%
+     ;;   working set  0.36 GiB analytic  vs  0.54 GiB measured  -32%
+     ;;
+     ;; Two causes, both checkable. (1) memplan.py assumes 2.12 bits/weight
+     ;; for experts; the container convert.py actually produced stores
+     ;; 682,622,976 bytes per layer for 256 x 3*2304*1024 params = 3.01
+     ;; bits/weight. (2) waste leaves embed_tokens on disk (src/waste.c skips
+     ;; it when summing the resident trunk) while memplan.py counts it, worth
+     ;; 383 MB here — which is why the floor is only 8% off while the expert
+     ;; set is 30% off: the two errors partly cancel.
+     ;;
+     ;; On K3 the same path says 17.5 GiB against a real 29.06 GB floor and
+     ;; 1344 GB of experts against a real 982 GB container — there it is low
+     ;; on RAM and HIGH on disk, so the direction does not generalize either.
+     ;;
+     ;; Analytic is for "which node should I even consider". `waste plan
+     ;; --json` on the converted container is the truth, and its numbers
+     ;; belong in the registry as the overrides read here.
      {:trunk-bytes trunk
       :state-bytes state
       :scratch-bytes scratch

@@ -270,8 +270,27 @@
    :model/kda-head-dim 128
    :model/conv-kernel 4
    :model/staging-bytes 98253571658  ; published bf16 weights (HF file listing)
-   :model/container-bytes 19000000000 ; upstream README; replace with measured
-   :model/waste-container "/Volumes/260317/waste/kimi-linear-48b.waste"}
+   ;; ── MEASURED on this fleet 2026-08-03 (converted with waste 0.6.3
+   ;; tools/convert.py --jobs 3, ~54 min on the M4; `waste plan --json` for
+   ;; the RAM figures, byte-exact `ls` for the container). These override the
+   ;; analytic estimate, which is low by 8% / 30% / 32% respectively — see
+   ;; murakumo.infer.waste/memplan for why.
+   :model/container-bytes 19171317244
+   :model/ram-floor-bytes 1376453888      ; waste plan --json floor_bytes @ctx 4096
+   :model/expert-set-bytes 17748197376    ; 26 x 682,622,976
+   :model/working-set-bytes 575963136     ; (recommended - floor) / 3
+   :model/min-cache-bytes 42663936        ; waste plan --json min_expert_cache
+   ;; the container's real expert precision: 682,622,976 B / (256 experts x
+   ;; 3*2304*1024 params) = 3.0139 bits/weight, not memplan.py's 2.12 default
+   :model/expert-milli-bits 3014
+   :model/waste-container "/Volumes/260317/waste/kimi-linear-48b.waste"
+   ;; The container lives on a USB volume, not internal NVMe — 15 GiB free
+   ;; internally against a 17.9 GiB container. MEASURED with waste
+   ;; tools/diskbench: 30 MB/s random read, against 2890 MB/s on this Mac's
+   ;; internal SSD and 12780 on upstream's test machine. This one number is
+   ;; the whole throughput story on this node, and it is why the registry
+   ;; carries a per-model figure instead of inheriting waste's 12780 default.
+   :model/waste-disk-mb-s 30}
 
   "kimi-k3"
   {:model/id "kimi-k3"
