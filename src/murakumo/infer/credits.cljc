@@ -111,6 +111,11 @@
    :images :credit/per-image
    :video-seconds :credit/per-video-second
    :audio-seconds :credit/per-audio-second
+   ;; ADR-2608036900: ベンダが分単位・切り上げで課金する経路（fal の
+   ;; elevenlabs-music は "rounded up to the closest minute"）を、秒割りに
+   ;; 潰さないための単位。秒で値付けすると 60 秒ちょうど以外は必ずずれ、
+   ;; 短いジョブほど原価割れする。**課金する側の次元に合わせる。**
+   :audio-minutes :credit/per-audio-minute
    :training-steps :credit/per-training-step
    :gb-months :credit/per-gb-month})
 

@@ -81,13 +81,13 @@
 
 (deftest job-cost-uses-the-registry
   (testing "レジストリの map がそのまま job-cost に渡せる"
-    (let [m (p/price-for reg :image "seedream-v4")]
-      (is (== 24.0 (credits/job-cost m {:images 4})) "6cr × 4 枚"))
+    (let [m (p/price-for reg :image "seedream-v5-pro")]
+      (is (== 56.0 (credits/job-cost m {:images 4})) "14cr × 4 枚"))
     (let [m (p/price-for reg :video "wan2.2-ti2v-5b")]
       (is (== 50.0 (credits/job-cost m {:video-seconds 5})) "10cr × 5 秒")))
   (testing "価格の無い unit は job-cost が例外にする（既存の規律が生きている）"
     (is (thrown-with-msg? Exception #"missing price"
-                          (credits/job-cost (p/price-for reg :image "seedream-v4")
+                          (credits/job-cost (p/price-for reg :image "seedream-v5-pro")
                                             {:video-seconds 5})))))
 
 (deftest veo-promo-is-bounded
@@ -105,7 +105,7 @@
   (testing "課金経路は model id しか持たない。modality はレジストリが知っている"
     (is (= :video (:modality (p/find-model reg "seedance-2.0"))))
     (is (= :text (:modality (p/find-model reg "murakumo-main"))))
-    (is (= :image (:modality (p/find-model reg "seedream-v4")))))
+    (is (= :image (:modality (p/find-model reg "seedream-v5-pro")))))
   (testing "未登録は例外 —— 沈黙は『無料』にも『最小整数』にもなる"
     (is (thrown-with-msg? Exception #"no published price"
                           (p/find-model reg "model-nobody-priced"))))
@@ -120,7 +120,7 @@
   (testing "実際の課金と同じ経路で値が出る"
     (is (== 305.0 (p/quote-credits reg "seedance-2.0" {:video-seconds 5}))
         "61cr/秒 × 5 秒 = $3.05")
-    (is (== 24.0 (p/quote-credits reg "seedream-v4" {:images 4})))
+    (is (== 56.0 (p/quote-credits reg "seedream-v5-pro" {:images 4})))
     (is (== 53.0 (p/quote-credits reg "murakumo-main" {:mtokens-in 0.3 :mtokens-out 1.25}))
         "10×0.3 + 40×1.25 = 53cr = $0.53"))
   (testing "2026-08-02 まで本番に開いていた 3 つの穴が、いずれも例外になる"
@@ -138,3 +138,56 @@
   (testing "cljs 側の埋め込みと JVM 側の io/resource が同一 EDN を指す"
     (is (= (p/load-registry) reg)
         "load-registry が resources/murakumo/prices.edn を読んでいる")))
+
+;; ── 2026-08-03 の再検証で見つかった穴（ADR-2608036900）────────────────────────
+
+(deftest every-published-price-declares-a-cost
+  (testing "価格があって原価が無い entry を作らない。
+
+           below-floor は cost と price が両方そろった entry しか見ないので、
+           原価を書き忘れた entry は『合格』ではなく『未検査』になる ——
+           どちらも空リストに見えるのが危険で、区別できるようにした。"
+    (let [bad (p/uncosted reg)]
+      (is (empty? bad) (str "原価未宣言: " (pr-str (vec bad)))))))
+
+(deftest job-minimum-is-actually-applied
+  (testing "`:credit/job-minimum` は宣言されていたが誰も読んでいなかった。
+
+           単価 0.1cr/秒 の music は、最低額が効かないと 5 秒の生成が 0.5cr
+           = $0.005 で通る —— Stripe の固定費 $0.30 どころか、どんな決済手段の
+           手数料にも届かない。"
+    (is (== 5.0 (p/quote-credits reg "ace-step" {:audio-seconds 5}))
+        "0.1cr × 5秒 = 0.5cr だが、job-minimum 5cr に切り上がる")
+    (is (== 12.0 (p/quote-credits reg "ace-step" {:audio-seconds 120}))
+        "最低額を超えたら通常計算（0.1 × 120 = 12cr）")))
+
+(deftest vendor-billing-dimension-is-preserved
+  (testing "fal が分単位・切り上げで課金する music を、秒割りで値付けしない。
+
+           旧 entry は $0.0133/秒 という秒割り原価を宣言していたが、fal の実際は
+           $0.80/分の切り上げ。30 秒の出力は実原価 $0.80 なのに、秒割りモデルでは
+           $0.40 に見える。floor テストは『宣言された原価』しか見ないので、この
+           次元不一致は検査を素通りしていた。"
+    (let [m (p/price-for reg :music "elevenlabs-music")]
+      (is (nil? (:credit/per-audio-second m))
+          "秒単価を持たせない —— 持たせた瞬間に短いジョブが原価割れする")
+      (is (= 160 (:credit/per-audio-minute m)))
+      (is (= 60 (:cost/billing-granularity-seconds m))
+          "ベンダの課金粒度を明示する")
+      (is (== 160.0 (p/quote-credits reg "elevenlabs-music" {:audio-minutes 1}))
+          "30 秒の出力も 1 分として課金する（fal がそう課金するから）"))))
+
+(deftest measured-costs-match-the-vendor
+  (testing "2026-08-03 に fal カタログから再取得した実価格と一致する"
+    (is (== 0.10 (:cost/usd-per-second (p/price-for reg :video "veo-3.1-fast")))
+        "fal-ai/veo3.1/fast は音声なしで $0.10/秒。旧宣言 $0.18 は過大だった")
+    (is (== 0.40 (:cost/usd-per-second (p/price-for reg :video "veo-3.1")))
+        "fal-ai/veo3.1 は音声ありで $0.40/秒")
+    (is (== 0.2419 (:cost/usd-per-second (p/price-for reg :video "seedance-2.0-fast"))))
+    (is (== 0.0675 (:cost/usd-per-image (p/price-for reg :image "seedream-v5-pro")))
+        "現行は v5 pro。v4 は fal のカタログに存在しない"))
+  (testing "原価が下がっても掲示価格は据え置き、粗利として受け取る"
+    (let [m (p/price-for reg :video "veo-3.1-fast")]
+      (is (= 35 (:credit/per-video-second m)))
+      (is (> (p/contribution-rate reg 35 (:cost/usd-per-second m)) 0.65)
+          "原価訂正で寄与率は 49% → 70% 台へ"))))
