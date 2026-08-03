@@ -26,20 +26,25 @@
   `:staleness-days` を超えたレジストリで見積もりを出すのは『間違った数字を
   自信をもって返す』ことなので、`price-for` は例外を投げる（ADR-2608026000）。
   掲示価格そのものは固定でよいが、それが今も黒字かは原価の鮮度に依存する。"
+  #?(:cljs (:require-macros [murakumo.infer.prices-embed :refer [embedded-registry]]))
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
+            [murakumo.infer.credits :as credits]
             #?(:clj [clojure.java.io :as io])))
 
 (def resource-path "murakumo/prices.edn")
 
 (defn load-registry
-  "prices.edn を読む。引数で解析済み map を渡せる（cljs / テスト用）。"
+  "prices.edn を読む。引数で解析済み map を渡せる（テスト用）。
+
+  cljs では Cloudflare Worker にファイルシステムが無いので、`prices-embed` が
+  **コンパイル時に同じ EDN を読んで**リテラルへ展開したものを返す。写しではなく
+  同一ファイルなので、JVM と Worker で価格がずれることは構造的に起きない。"
   ([] (load-registry nil))
   ([parsed]
    (or parsed
        #?(:clj (some-> (io/resource resource-path) slurp edn/read-string)
-          :cljs (throw (ex-info "load-registry requires JVM; pass the parsed registry"
-                                {:path resource-path}))))))
+          :cljs (embedded-registry)))))
 
 (defn- days-between
   "ISO date 文字列 2 つの日数差（`from` → `to`）。時刻は持たない。"
@@ -91,6 +96,64 @@
          (throw (ex-info "model has no published price — refusing to quote"
                          {:modality modality :model model-id
                           :available (set (keys by-modality))}))))))
+
+(def ^:private modalities
+  "レジストリの中で『model id → 価格 map』を持つキー。`:peg` や `:verified-at`
+  のようなメタデータキーと区別するために列挙する —— `(remove keyword? ...)` の
+  ような構造推論だと、将来メタデータを足したときに黙って modality 扱いされる。"
+  [:text :video :image :model3d :voice :music])
+
+(defn find-model
+  "model id だけからレジストリ内の 1 件を引く（modality を呼び出し側に要求しない）。
+
+  → `{:modality kw :model-id s :price map}`
+
+  課金経路が持っているのは model id だけで、それがどの modality かは
+  レジストリしか知らない。**曖昧なら例外** —— 同じ id が 2 つの modality に
+  あるとき、片方を黙って選ぶと『動画のつもりが画像価格で課金される』が
+  無言で起きる。"
+  [registry model-id]
+  (let [hits (for [m modalities
+                   :let [entry (get-in registry [m model-id])]
+                   :when entry]
+               {:modality m :model-id model-id :price entry})]
+    (case (count hits)
+      1 (first hits)
+      0 (throw (ex-info "model has no published price — refusing to quote"
+                        {:model model-id
+                         :available (into (sorted-set)
+                                          (mapcat #(keys (get registry % {})) modalities))}))
+      (throw (ex-info "model id is ambiguous across modalities — refusing to guess"
+                      {:model model-id :modalities (mapv :modality hits)})))))
+
+(defn quote-credits
+  "model id + 課金単位 → credits。**沈黙で 0 にならない**唯一の見積もり経路。
+
+  `units` は `credits/job-cost` と同じ形（`{:mtokens-in 0.3 :mtokens-out 1.2}`、
+  `{:video-seconds 5}`、`{:images 4}` など）。
+
+  ── ここが fail-closed でなければならない理由 ──
+
+  本番の `/infer/spend` は 2026-08-02 まで、この関数の代わりに
+
+      per-token (double (or (:credit/per-token model) 1))
+      cost      (* per-token (double (or (:tokens body) 0)))
+
+  をインラインで持っていた。3 つの穴が同時に開いていた:
+
+  1. 価格が無い model は **1 credit/token**（= $10,000/Mtok）で課金された
+  2. `:tokens` 以外の単位が存在しないので、動画も画像も **0 credits**
+  3. `credits/job-cost` を通らないので、job-cost が守っていた
+     『価格キー欠落は例外』という規律の外にいた
+
+  戻り値は double。`assert-fresh!` は呼び出し側の責任（`today` を渡せる
+  `price-for` と違い、ここは課金のホットパスなので日付を毎回要求しない）。"
+  [registry model-id units]
+  (let [{:keys [price]} (find-model registry model-id)]
+    (when (empty? units)
+      (throw (ex-info "refusing to quote a job with no billing units"
+                      {:model model-id})))
+    (credits/job-cost price units)))
 
 (defn peg-credits-per-usd [registry]
   (get-in registry [:peg :credits-per-usd]))

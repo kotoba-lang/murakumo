@@ -116,14 +116,25 @@
 
 (defn job-cost
   "Σ units×price for a media/text job. `units` e.g. {:images 4} or
-   {:tokens 300} or {:video-seconds 5}. Unknown unit keys are an error --
-   silence would mean free inference. That same 'silence = free inference'
-   guard also applies to a KNOWN unit whose price key is simply absent from
-   this particular model's registry entry: :tokens alone has a documented
-   global default (default-per-token) since per-token pricing genuinely is
-   sane to default; every other unit (:images/:video-seconds/:audio-seconds/
-   :training-steps) has no sane universal default (prices vary wildly by
-   model) and must be configured explicitly or error, never silently 0."
+   {:mtokens-out 1.2} or {:video-seconds 5}. Unknown unit keys are an error --
+   silence would mean free inference. That same guard applies to a KNOWN unit
+   whose price key is absent from this model's registry entry: EVERY unit,
+   :tokens included, must be configured explicitly or error.
+
+   :tokens used to be exempt, on the reasoning that per-token pricing is 'sane
+   to default'. That reasoning was wrong in a way that only measurement showed.
+   The default came from the kotoba oracle as `(defn default-per-token [] :i64 1)`
+   -- 1 credit/token, i.e. $10,000 per million tokens, roughly 20,000x market.
+   Nobody chose that number: 1 is simply the smallest positive i64, and it
+   became the price of every model onboarded before its pricing was backfilled.
+   A default nobody picked is not a default; it is an accident with a fallback's
+   syntax. Prices now come from `murakumo.infer.prices` (resources/murakumo/
+   prices.edn), and text bills in :mtokens-in/:mtokens-out -- a unit whose
+   natural magnitude cannot be produced by an integer floor.
+
+   `default-per-token` is retained for the kotoba-oracle parity suite, which
+   asserts cljc/guest agreement on the exported constant. It is no longer a
+   price."
   [model units]
   (reduce (fn [acc [u n]]
             (let [price-key (or (unit-prices u)
@@ -135,11 +146,9 @@
                   ;; `contains?` short-circuits that.
                   price     (if (contains? model price-key)
                               (get model price-key)
-                              (if (= u :tokens)
-                                default-per-token
-                                (throw (ex-info "model missing price for billing unit"
-                                                {:unit u :price-key price-key
-                                                 :model (:model/id model)}))))]
+                              (throw (ex-info "model missing price for billing unit"
+                                              {:unit u :price-key price-key
+                                               :model (:model/id model)})))]
               (+ acc (* (double price) (double n)))))
           0.0 units))
 

@@ -174,7 +174,22 @@
     (throw (ex-info "plan has no rate limits — refusing to admit"
                     {:account (name account) :limits limits})))
   (let [st (status feed account limits now)
-        over (first (for [w [:short :week]
+        ;; 短窓より大きい 1 ジョブは、短窓では **待っても永久に入らない**。
+        ;; そこで 429 + retry-after を返すと、来ない回復を約束することになる。
+        ;;
+        ;; 実測（2026-08-03、この分岐が生まれた瞬間）: Plus は 1,140 unit/週 →
+        ;; 短窓 285 に対し、Seedance 2.0 の 5 秒動画が 61×5 = 305 unit。
+        ;; 短窓で弾くと **Plus 契約者は frontier 動画を 1 本も作れない**。
+        ;; 窓を結線して初めて出た欠陥で、窓の算数も plan の数値もそれぞれは
+        ;; 正しかった —— 分割不能なジョブが単位より大きい、という関係だけが
+        ;; どちらからも見えていなかった。
+        ;;
+        ;; 短窓の役割は『週を 1 バーストで焼かせない』こと。分割不能な 1 本に
+        ;; ついてはその役割が原理的に果たせないので、週窓に委ねる。通した後は
+        ;; 短窓が超過状態になるので、**次のジョブは普通に止まる** —— バースト
+        ;; 防止は 1 ジョブ分だけ緩む。
+        indivisible? (> units (get-in st [:window :short :limit] 0))
+        over (first (for [w (if indivisible? [:week] [:short :week])
                           :let [{:keys [remaining recovers-at]} (get-in st [:window w])]
                           :when (> units remaining)]
                       [w recovers-at]))]

@@ -98,3 +98,43 @@
       (is (< (p/credits->usd reg (:promo/credit-per-video-second m))
              (:cost/usd-per-second m))
           "promo は原価を下回る = 意図的な原価割れであることを固定する"))))
+
+;; ── 課金経路が実際に使う 2 つ（find-model / quote-credits）──────────────────
+
+(deftest find-model-refuses-to-guess
+  (testing "課金経路は model id しか持たない。modality はレジストリが知っている"
+    (is (= :video (:modality (p/find-model reg "seedance-2.0"))))
+    (is (= :text (:modality (p/find-model reg "murakumo-main"))))
+    (is (= :image (:modality (p/find-model reg "seedream-v4")))))
+  (testing "未登録は例外 —— 沈黙は『無料』にも『最小整数』にもなる"
+    (is (thrown-with-msg? Exception #"no published price"
+                          (p/find-model reg "model-nobody-priced"))))
+  (testing "同名が 2 modality にあるなら片方を黙って選ばない"
+    (let [ambiguous (-> reg
+                        (assoc-in [:image "collide"] {:credit/per-image 6})
+                        (assoc-in [:video "collide"] {:credit/per-video-second 10}))]
+      (is (thrown-with-msg? Exception #"ambiguous"
+                            (p/find-model ambiguous "collide"))))))
+
+(deftest quote-credits-is-the-fail-closed-path
+  (testing "実際の課金と同じ経路で値が出る"
+    (is (== 305.0 (p/quote-credits reg "seedance-2.0" {:video-seconds 5}))
+        "61cr/秒 × 5 秒 = $3.05")
+    (is (== 24.0 (p/quote-credits reg "seedream-v4" {:images 4})))
+    (is (== 53.0 (p/quote-credits reg "murakumo-main" {:mtokens-in 0.3 :mtokens-out 1.25}))
+        "10×0.3 + 40×1.25 = 53cr = $0.53"))
+  (testing "2026-08-02 まで本番に開いていた 3 つの穴が、いずれも例外になる"
+    (testing "(1) 未登録 model が 1 credit/token で課金される"
+      (is (thrown-with-msg? Exception #"no published price"
+                            (p/quote-credits reg "unpriced-model" {:tokens 300}))))
+    (testing "(2) 単位が無い動画ジョブが 0 credits になる"
+      (is (thrown? Exception (p/quote-credits reg "seedance-2.0" {}))))
+    (testing "(3) 登録済み text model に :tokens を投げると default 1 に落ちる"
+      (is (thrown-with-msg? Exception #"missing price"
+                            (p/quote-credits reg "murakumo-main" {:tokens 300}))
+          ":mtokens-in/:mtokens-out で課金する。:tokens には価格キーが無い"))))
+
+(deftest embedded-and-resource-registries-are-the-same-file
+  (testing "cljs 側の埋め込みと JVM 側の io/resource が同一 EDN を指す"
+    (is (= (p/load-registry) reg)
+        "load-registry が resources/murakumo/prices.edn を読んでいる")))
