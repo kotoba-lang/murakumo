@@ -114,3 +114,31 @@
            (w/plan-limits {:plan/units-per-week 3000 :plan/units-per-5h 999}))))
   (testing "週次が無ければ nil（credits 型の SKU は窓を持たない）"
     (is (nil? (w/plan-limits {:kind :credits})))))
+
+(deftest a-single-job-larger-than-the-short-window-is-not-deferred
+  (testing "短窓より大きい 1 ジョブは、待っても永久に入らない。
+            429 + retry-after は『来ない回復』を約束することになる。
+
+            実測（2026-08-03）: Plus 1,140/週 → 短窓 285 に対し、
+            Seedance 2.0 の 5 秒動画は 61×5 = 305 unit。短窓で弾くと
+            Plus 契約者は frontier 動画を 1 本も作れない。"
+    (let [limits (w/plan-limits {:plan/units-per-week 1140})
+          now 1785000000000]
+      (is (= 285 (:short limits)))
+      (testing "週に空きがあれば通す"
+        (is (:allow? (w/admit [] :acct 305 limits now))))
+      (testing "通した後は短窓が超過するので、次の普通のジョブは止まる
+                —— バースト防止が緩むのは 1 ジョブ分だけ"
+        (let [feed [(w/usage-event :acct 305 now {})]
+              v (w/admit feed :acct 100 limits now)]
+          (is (false? (:allow? v)))
+          (is (= :short (:window v)))))
+      (testing "週窓は緩めない。週を超える 1 ジョブは通らない"
+        (let [v (w/admit [] :acct 1200 limits now)]
+          (is (false? (:allow? v)))
+          (is (= :week (:window v)))))
+      (testing "短窓に収まるジョブは従来どおり短窓で止まる"
+        (let [feed [(w/usage-event :acct 250 now {})]
+              v (w/admit feed :acct 100 limits now)]
+          (is (false? (:allow? v)))
+          (is (= :short (:window v))))))))

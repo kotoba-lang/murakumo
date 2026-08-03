@@ -121,19 +121,26 @@
       (is (thrown? Exception (credits/job-cost sdxl {:pixels 1e6}))))))
 
 (deftest media-unit-missing-price-key-is-an-error-not-free
-  (testing "a KNOWN media unit (:images/:video-seconds) whose price key is
-            simply absent from this model's registry entry must error, same
-            as an unrecognized unit -- silently defaulting to 0 would mean
-            free inference for any model onboarded before its media pricing
-            is backfilled. Only :tokens has a documented global default"
+  (testing "a KNOWN unit whose price key is simply absent from this model's
+            registry entry must error, same as an unrecognized unit --
+            silently defaulting to 0 would mean free inference for any model
+            onboarded before its pricing is backfilled"
     (let [incomplete-model {:model/id "no-media-pricing-yet"}]
       (is (thrown? Exception (credits/job-cost incomplete-model {:images 500})))
       (is (thrown? Exception (credits/job-cost incomplete-model {:video-seconds 300})))
       (is (thrown? Exception (credits/job-cost incomplete-model {:audio-seconds 10})))
       (is (thrown? Exception (credits/job-cost incomplete-model {:training-steps 50})))
-      (testing "tokens alone still falls back to the documented default"
-        (is (= (double credits/default-per-token)
-               (credits/job-cost incomplete-model {:tokens 1}))))
+      (testing ":tokens is no longer exempt.
+
+                It was, until 2026-08-03, on the reasoning that per-token
+                pricing is 'sane to default'. But the default was the kotoba
+                oracle's `(defn default-per-token [] :i64 1)` = 1 credit/token
+                = $10,000/Mtok ~ 20,000x market, and nobody chose it -- 1 is
+                the smallest positive i64. Every model onboarded before its
+                price was backfilled silently carried that number. An exemption
+                that turns a missing price into a wrong price is worse than the
+                error it was avoiding, because the error is visible."
+        (is (thrown? Exception (credits/job-cost incomplete-model {:tokens 1}))))
       (testing "charge propagates the error too -- never silently approves at cost 0"
         (is (thrown? Exception (credits/charge {} "broke-user"
                                                 {:model incomplete-model :units {:images 500}})))))))
@@ -183,7 +190,13 @@
 
 (deftest degenerate-runs
   (testing "a run with no serving assignments pays the head, not /0"
-    (let [s (credits/settle {:model {} :tokens 10 :duration-ms 1 :plan {:assignments []}})]
+    ;; The model carries an explicit price because job-cost no longer defaults
+    ;; :tokens (see media-unit-missing-price-key-is-an-error-not-free). This
+    ;; test is about the /0 guard, not about pricing -- `{}` was only ever
+    ;; standing in for "a model", and it happened to exercise the accidental
+    ;; 1 credit/token default on the way past.
+    (let [s (credits/settle {:model {:credit/per-token 1} :tokens 10
+                             :duration-ms 1 :plan {:assignments []}})]
       (is (= 10.0 (:run/total s)))
       (is (pos? (get-in s [:run/shares "head"]))))))
 
