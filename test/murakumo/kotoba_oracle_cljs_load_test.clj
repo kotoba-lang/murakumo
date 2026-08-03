@@ -55,7 +55,7 @@
          (inv/node-health-url {} {:port 8080}))))
 
 (deftest catalog-still-complete
-  (is (= 32 (oracle/catalog-count)))
+  (is (= 33 (oracle/catalog-count)))
   (is (some #{:task-plan} (oracle/catalog-ids)))
   (is (some #{:fleet-inventory} (oracle/catalog-ids))))
 
@@ -72,7 +72,7 @@
   "T6.4: every product-shell catalog id loads its shipped KIR (same artifact
    as JVM dual-source)."
   (oracle/clear-cache!)
-  (is (= 32 (oracle/catalog-count)))
+  (is (= 33 (oracle/catalog-count)))
   (doseq [id (sort (oracle/catalog-ids))]
     (testing (str id)
       (is (oracle/ready? id) (str "not ready: " id))
@@ -129,7 +129,7 @@
   (oracle/clear-cache!)
   (is (true? (oracle/require-ready! :kekkai-gate)))
   (oracle/clear-cache!)
-  (is (= 32 (oracle/preload-catalog!)))
+  (is (= 33 (oracle/preload-catalog!)))
   (doseq [id (oracle/catalog-ids)]
     (is (true? (oracle/require-ready! id)) (str "not ready after preload: " id)))
   (is (= 3 (oracle/preload! [:dash-state :fleet-inventory :task-plan]))))

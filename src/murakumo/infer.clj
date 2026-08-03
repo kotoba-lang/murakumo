@@ -20,6 +20,12 @@
 ;; mlx-moe) skips the fleet-wide ring entirely: `plan`/`provision`/`serve` cut
 ;; over to murakumo.infer.moe's single-node planner instead of
 ;; murakumo.infer.plan's layer partition — see cmd-plan-moe / cmd-serve-moe.
+;;
+;; `:model/engine :waste` (sqliteai/waste) is the same single-node cut-over
+;; with the constraint inverted: mlx-moe is gated on RAM, waste on DISK. A
+;; K3-class container is ~1 TB and the experts are read from it every token,
+;; so cmd-plan-waste ranks candidates by free disk BEFORE memory and reports
+;; the disk-bound throughput ceiling — see murakumo.infer.waste.
 
 (ns murakumo.infer
   (:require [babashka.process :as p]
@@ -31,6 +37,7 @@
             [murakumo.infer.engine :as engine]
             [murakumo.infer.moe :as moe]
             [murakumo.infer.plan :as plan]
+            [murakumo.infer.waste :as waste]
             [murakumo.ssh :as ssh]))
 
 (def ^:private plan-file ".murakumo-infer-plan.edn")  ; last cut plan (control-plane state)
@@ -152,6 +159,8 @@
 
 (defn- moe? [model] (= :mlx-moe (:model/engine model)))
 
+(defn- waste? [model] (= :waste (:model/engine model)))
+
 (defn- moe-opt
   [cfg model k]
   (or (get model (keyword "model" (name k)))
@@ -177,6 +186,19 @@
    ring, so the :infer/head config doesn't apply here)."
   [cfg model]
   (probe-and-plan cfg model moe/plan))
+
+(defn- cut-plan-waste
+  "Same probe, murakumo.infer.waste/plan. The probe already collects
+   :disk-free-bytes (cmd-probe has printed it since the media-model gate);
+   this is the first planner that decides on it."
+  [cfg model]
+  (probe-and-plan cfg model
+                  (fn [m nodes]
+                    (waste/plan m nodes
+                                (cond-> {}
+                                  (:infer/ctx cfg) (assoc :ctx (:infer/ctx cfg))
+                                  (:model/waste-disk-mb-s m)
+                                  (assoc :disk-mb-s (:model/waste-disk-mb-s m)))))))
 
 (defn cmd-probe [_cfg-args]
   (let [cfg (load-config)
@@ -213,11 +235,63 @@
     (println (str "plan → " plan-file))
     (when-not (:fits? pl) (System/exit 2))))
 
+(defn- cmd-plan-waste
+  "waste plan report: one candidate node, what the engine will actually spend,
+   and the two numbers that decide whether this is usable — free disk against
+   the container, and the disk-bound throughput ceiling.
+
+   The recommended --budget is the point of running this rather than `waste
+   run` by hand. waste sizes itself to floor + 3 working sets and stops; on a
+   model smaller than the machine that leaves most of RAM idle while the
+   engine keeps reading experts off disk every token."
+  [cfg model]
+  (let [pl (cut-plan-waste cfg model)
+        {:keys [node] :as asg} (first (:assignments pl))
+        mp (:memplan pl)
+        b (:budget pl)
+        tp (:throughput pl)
+        {:keys [verdict why]} (:verdict pl)
+        gb #(/ (double (or % 0)) 1e9)]
+    (println (format "model %s  engine waste (single-node, disk-streamed experts)"
+                     (:model/id model)))
+    (println (format "container %.1f GB  floor %.2f GB  expert set %.1f GB  working set %.2f GB/token"
+                     (gb (:container-bytes pl)) (gb (:floor-bytes mp))
+                     (gb (:routed-disk-bytes mp)) (gb (:working-set-bytes mp))))
+    (if node
+      (do
+        (println (format "candidate %-10s usable %.1f GiB  disk-free %.0f GB  budget %.2f GB (cache %.2f GB)  %s"
+                         (:name node)
+                         (/ (double (:total-usable-bytes pl)) plan/GiB)
+                         (gb (:disk-free-bytes asg))
+                         (gb (:budget-bytes b)) (gb (:cache-bytes b))
+                         (if (:fits? pl) "FITS ✓" "DOES NOT FIT ✗")))
+        (println (format "default budget caches %.1f%% of the expert set → %.0f%% hits → %s"
+                         (/ (:cache-frac-milli tp 0) 10.0)
+                         (/ (:hit-rate-milli tp 0) 10.0)
+                         (if-let [t (:disk-bound-tok-s tp)]
+                           (format "%.2f tok/s disk-bound ceiling" t)
+                           "disk out of the decode loop")))
+        (if (pos? (:saturating-budget-bytes b 0))
+          (println (format "--budget %d caches the whole expert set (disk leaves the decode loop)"
+                           (:saturating-budget-bytes b)))
+          (println "the whole expert set cannot be cached under this node's OS cap — disk stays in the loop")))
+      (println "no candidate node — probe found nothing"))
+    (println (str "verdict: " (name verdict) " — " why))
+    (spit plan-file (pr-str pl))
+    (println (str "plan → " plan-file))
+    (when-not (:fits? pl) (System/exit 2))))
+
 (defn cmd-plan [[model-id]]
   (let [cfg (load-config)
         model (model-or-die cfg (or model-id "glm-5.2-reap50-q2k"))]
-    (if (moe? model)
+    (cond
+      (waste? model)
+      (cmd-plan-waste cfg model)
+
+      (moe? model)
       (cmd-plan-moe cfg model)
+
+      :else
       (let [pl (cut-plan cfg model)]
         (println (format "model %s  weights %.1f GiB  layers %d"
                          (:model/id model)
@@ -244,7 +318,12 @@
   [pl]
   (engine/workers pl))
 
-(defn- moe-node [pl] (:node (first (:assignments pl))))
+(defn- single-node
+  "The one node a single-node plan (mlx-moe, waste) assigned everything to."
+  [pl]
+  (:node (first (:assignments pl))))
+
+(def ^:private moe-node single-node)
 
 (defn- cmd-provision-moe
   "mlx-moe has no rpc-server/llama-server binary to push — it's a pip package.
@@ -362,6 +441,56 @@
         (println (format "[%s] %s — http://%s:%s/v1 (first launch downloads the model; watch /tmp/murakumo-moe.log)"
                          host out (api-host node) (:infer/api-port cfg 8080)))))))
 
+(defn- cmd-serve-waste
+  "Start waste's OpenAI-compatible server on the plan's chosen node.
+
+   Unlike mlx-moe there IS a local path: the container is a file tree on some
+   machine's NVMe, and when that machine is the operator's own there is no SSH
+   hop to make. The budget passed is the planner's saturating figure when the
+   whole expert set fits under the node's OS cap — the engine's own default
+   would leave that RAM idle and keep reading experts off disk every token."
+  [cfg model pl]
+  (cond
+    (not= :waste (:engine pl))
+    (println (str "stale/mismatched plan (last `plan` was not for a waste model) — "
+                  "run `bb murakumo infer plan " (:model/id model) "` first"))
+
+    (not (single-node pl))
+    (println "no candidate node in the plan — run `bb murakumo infer plan <waste-model>` first")
+
+    :else
+    (let [node (single-node pl)
+          wcfg (:infer/waste cfg)
+          port (:infer/api-port cfg 8080)
+          b (:budget pl)
+          budget (or (:model/waste-budget-bytes model)
+                     (when (pos? (:saturating-budget-bytes b 0))
+                       (:saturating-budget-bytes b)))
+          opts {:python (or (:model/waste-python model) (:python wcfg) "python3")
+                :container (or (:model/waste-container model) (:container wcfg))
+                :port port
+                :budget budget
+                :ctx (:infer/ctx cfg)
+                :threads (or (:model/waste-threads model) (:threads wcfg))
+                :verify? (:verify? wcfg)
+                :extra-args (:model/waste-extra-args model)}
+          cmd (engine/waste-serve-cmd opts)
+          ;; `python3 -m serve` resolves the module from waste's own checkout,
+          ;; and libwaste.dylib is built there too — so the command runs from
+          ;; that directory or not at all
+          dir (or (:model/waste-dir model) (:dir wcfg))
+          full (str (when dir (str "cd " dir " && ")) cmd)
+          {:keys [verdict why]} (:verdict pl)
+          host (:host node)]
+      (println full)
+      (println (str "verdict: " (name verdict) " — " why))
+      (if host
+        (let [{:keys [out]} (ssh/sh host
+                                    (format "pkill -f 'python3 -m serve' 2>/dev/null; sleep 0.3; nohup %s >/tmp/murakumo-waste.log 2>&1 & sleep 1; pgrep -f 'python3 -m serve' >/dev/null && echo serving || echo FAILED" full))]
+          (println (format "[%s] %s — http://%s:%s/v1 (cold open mmaps the trunk; watch /tmp/murakumo-waste.log)"
+                           host out (api-host node) port)))
+        (p/shell full)))))
+
 (defn- cmd-serve-ring
   "The original ring path: llama-server locally in the foreground, or — for a
    :remote? head — resident on the fleet node over SSH (the GGUF lives in the
@@ -388,15 +517,16 @@
       (p/shell cmd))))
 
 (defn cmd-serve
-  "Run the head: llama-server ring (default), or — for an mlx-moe model
-   (:model/engine :mlx-moe) — mlx-moe on the plan's single chosen node."
+  "Run the head: llama-server ring (default), or — for a single-node engine
+   (:model/engine :mlx-moe | :waste) — that engine on the plan's chosen node."
   [[model-id gguf-path]]
   (let [cfg (load-config)
         model (model-or-die cfg (or model-id "glm-5.2-reap50-q2k"))
         pl (load-plan)]
-    (if (moe? model)
-      (cmd-serve-moe cfg model pl)
-      (cmd-serve-ring cfg model pl gguf-path))))
+    (cond
+      (waste? model) (cmd-serve-waste cfg model pl)
+      (moe? model) (cmd-serve-moe cfg model pl)
+      :else (cmd-serve-ring cfg model pl gguf-path))))
 
 (defn cmd-serve-standalone
   "Single-node serving on the head ONLY — no RPC ring, no `plan` needed. Use

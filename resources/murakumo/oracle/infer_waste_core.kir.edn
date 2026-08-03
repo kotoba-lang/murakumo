@@ -1,0 +1,333 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name gib,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1073741824,
+   :param-types []}
+  {:name expert-params,
+   :params [hidden moe-inter],
+   :result :i64,
+   :effects #{},
+   :body (* 3 (* hidden moe-inter)),
+   :param-types [:i64 :i64]}
+  {:name expert-rec-bytes,
+   :params [hidden moe-inter expert-milli-bits],
+   :result :i64,
+   :effects #{},
+   :body
+   (quot (* (expert-params hidden moe-inter) expert-milli-bits) 8000),
+   :param-types [:i64 :i64 :i64]}
+  {:name emb-head-bytes,
+   :params [vocab hidden trunk-milli-bits tie],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [one (quot (* (* vocab hidden) trunk-milli-bits) 8000)]
+    (if tie one (* 2 one))),
+   :param-types [:i64 :i64 :i64 :bool]}
+  {:name mla-q-params,
+   :params [hidden qlora nheads qk],
+   :result :i64,
+   :effects #{},
+   :body (+ (* hidden qlora) (* qlora (* nheads qk))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name mla-kv-params,
+   :params [hidden kv-lora qk-rope nheads nope-plus-v],
+   :result :i64,
+   :effects #{},
+   :body
+   (+
+    (* hidden (+ kv-lora qk-rope))
+    (* kv-lora (* nheads nope-plus-v))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name mla-o-params,
+   :params [nheads v-head hidden],
+   :result :i64,
+   :effects #{},
+   :body (* nheads (* v-head hidden)),
+   :param-types [:i64 :i64 :i64]}
+  {:name attn-bytes,
+   :params [layers p-attn trunk-milli-bits],
+   :result :i64,
+   :effects #{},
+   :body (quot (* (* layers p-attn) trunk-milli-bits) 8000),
+   :param-types [:i64 :i64 :i64]}
+  {:name router-norms-bytes,
+   :params [moe-layers n-experts layers hidden],
+   :result :i64,
+   :effects #{},
+   :body
+   (+
+    (* moe-layers (* n-experts (* hidden 4)))
+    (* layers (* 4 (* hidden 4)))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name shared-bytes,
+   :params [moe-layers n-shared p-expert trunk-milli-bits],
+   :result :i64,
+   :effects #{},
+   :body
+   (quot
+    (* (* moe-layers (* n-shared p-expert)) trunk-milli-bits)
+    8000),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name dense-ffn-bytes,
+   :params [dense-layers hidden dense-inter trunk-milli-bits],
+   :result :i64,
+   :effects #{},
+   :body
+   (quot
+    (* (* dense-layers (* 3 (* hidden dense-inter))) trunk-milli-bits)
+    8000),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name trunk-bytes,
+   :params [emb-head attn router-norms shared dense-ffn],
+   :result :i64,
+   :effects #{},
+   :body (+ emb-head (+ attn (+ router-norms (+ shared dense-ffn)))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name kda-state-bytes,
+   :params [kda-layers heads dstate conv-k],
+   :result :i64,
+   :effects #{},
+   :body
+   (+
+    (* kda-layers (* heads (* dstate (* dstate 4))))
+    (* kda-layers (* 3 (* (- conv-k 1) (* heads (* dstate 4)))))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name mla-kv-bytes,
+   :params [mla-layers ctx kv-lora qk-rope],
+   :result :i64,
+   :effects #{},
+   :body (* mla-layers (* ctx (* (+ kv-lora qk-rope) 2))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name state-bytes,
+   :params [kda mla-kv],
+   :result :i64,
+   :effects #{},
+   :body (+ kda mla-kv),
+   :param-types [:i64 :i64]}
+  {:name scratch-bytes,
+   :params [hidden moe-inter vocab threads],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [t (if (< threads 1) 1 threads)]
+    (+
+     (* 16 (* hidden (* 4 t)))
+     (+ (* moe-inter (* 4 (* 8 t))) (+ (* vocab 4) (* 64 1048576))))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name min-cache-bytes,
+   :params [top-k expert-rec],
+   :result :i64,
+   :effects #{},
+   :body (* top-k (* expert-rec 2)),
+   :param-types [:i64 :i64]}
+  {:name floor-bytes,
+   :params [trunk state scratch min-cache],
+   :result :i64,
+   :effects #{},
+   :body (+ trunk (+ state (+ scratch min-cache))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name routed-disk-bytes,
+   :params [moe-layers n-experts p-expert expert-milli-bits],
+   :result :i64,
+   :effects #{},
+   :body
+   (quot
+    (* (* moe-layers (* n-experts p-expert)) expert-milli-bits)
+    8000),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name working-set-bytes,
+   :params [moe-layers top-k p-expert expert-milli-bits],
+   :result :i64,
+   :effects #{},
+   :body
+   (quot (* (* moe-layers (* top-k p-expert)) expert-milli-bits) 8000),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name os-cap-bytes,
+   :params [usable],
+   :result :i64,
+   :effects #{},
+   :body (- usable (quot usable 8)),
+   :param-types [:i64]}
+  {:name recommended-bytes,
+   :params [floor working-set],
+   :result :i64,
+   :effects #{},
+   :body (+ floor (* 3 working-set)),
+   :param-types [:i64 :i64]}
+  {:name resolve-budget,
+   :params [floor working-set cap],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [b3
+     (+ floor (* 3 working-set))
+     b2
+     (+ floor (* 2 working-set))
+     b1
+     (+ floor working-set)]
+    (if
+     (< cap 1)
+     b3
+     (if
+      (<= b3 cap)
+      b3
+      (if (<= b2 cap) b2 (if (<= b1 cap) b1 floor))))),
+   :param-types [:i64 :i64 :i64]}
+  {:name cache-bytes,
+   :params [budget floor min-cache],
+   :result :i64,
+   :effects #{},
+   :body (+ (- budget floor) min-cache),
+   :param-types [:i64 :i64 :i64]}
+  {:name saturating-budget,
+   :params [floor routed-disk min-cache cap],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [want (- (+ floor routed-disk) min-cache)]
+    (if (< cap 1) want (if (<= want cap) want 0))),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name hit-rate-milli,
+   :params [frac-milli],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [f
+     (if (< frac-milli 0) 0 (if (< 1000 frac-milli) 1000 frac-milli))]
+    (if
+     (<= f 30)
+     (quot (* f 132) 30)
+     (if
+      (<= f 60)
+      (+ 132 (quot (* (- f 30) 271) 30))
+      (if
+       (<= f 121)
+       (+ 403 (quot (* (- f 60) 216) 61))
+       (if
+        (<= f 242)
+        (+ 619 (quot (* (- f 121) 229) 121))
+        (if
+         (<= f 484)
+         (+ 848 (quot (* (- f 242) 91) 242))
+         (if
+          (<= f 968)
+          (+ 939 (quot (* (- f 484) 3) 484))
+          (+ 942 (quot (* (- f 968) 58) 32))))))))),
+   :param-types [:i64]}
+  {:name io-per-token-bytes,
+   :params [per-token-io hit-milli],
+   :result :i64,
+   :effects #{},
+   :body (quot (* per-token-io (- 1000 hit-milli)) 1000),
+   :param-types [:i64 :i64]}
+  {:name tok-per-s-milli,
+   :params [io-bytes disk-mb-s],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< io-bytes 1)
+    0
+    (quot (* (* disk-mb-s 1048576) 1000) io-bytes)),
+   :param-types [:i64 :i64]}
+  {:name fits?,
+   :params [floor usable],
+   :result :bool,
+   :effects #{},
+   :body (<= floor usable),
+   :param-types [:i64 :i64]}
+  {:name budget-over-cap?,
+   :params [budget cap],
+   :result :bool,
+   :effects #{},
+   :body (if (< cap 1) false (< cap budget)),
+   :param-types [:i64 :i64]}
+  {:name verdict-name,
+   :params [v],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [ram-ok
+     (record-get
+      [:record
+       :waste/verdict
+       [[:ram-ok :bool] [:disk-ok :bool] [:cap-ok :bool]]]
+      v
+      :ram-ok)
+     disk-ok
+     (record-get
+      [:record
+       :waste/verdict
+       [[:ram-ok :bool] [:disk-ok :bool] [:cap-ok :bool]]]
+      v
+      :disk-ok)
+     cap-ok
+     (record-get
+      [:record
+       :waste/verdict
+       [[:ram-ok :bool] [:disk-ok :bool] [:cap-ok :bool]]]
+      v
+      :cap-ok)]
+    (if
+     (if ram-ok false true)
+     "below-ram-floor"
+     (if
+      (if disk-ok false true)
+      "no-container-space"
+      (if (if cap-ok false true) "budget-over-os-cap" "fits")))),
+   :param-types [[:ref :waste/verdict]]}],
+ :oracle-value nil,
+ :schema-identities
+ #:waste{:verdict
+         "eb14f1d1baf3ae5258aa4cee424aee091afed86248d25f5a272c9365e37f1b6a"},
+ :exports
+ [gib
+  expert-params
+  expert-rec-bytes
+  emb-head-bytes
+  mla-q-params
+  mla-kv-params
+  mla-o-params
+  attn-bytes
+  router-norms-bytes
+  shared-bytes
+  dense-ffn-bytes
+  trunk-bytes
+  kda-state-bytes
+  mla-kv-bytes
+  state-bytes
+  scratch-bytes
+  min-cache-bytes
+  floor-bytes
+  routed-disk-bytes
+  working-set-bytes
+  os-cap-bytes
+  recommended-bytes
+  resolve-budget
+  cache-bytes
+  saturating-budget
+  hit-rate-milli
+  io-per-token-bytes
+  tok-per-s-milli
+  fits?
+  budget-over-cap?
+  verdict-name],
+ :schemas
+ #:waste{:verdict
+         [:record
+          :waste/verdict
+          [[:ram-ok :bool] [:disk-ok :bool] [:cap-ok :bool]]]},
+ :effects #{},
+ :blocks [],
+ :entry nil}

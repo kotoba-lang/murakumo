@@ -1,0 +1,232 @@
+(ns infer-waste-core
+  (:schemas {;; T5.2 native guest record wire
+             :waste/verdict [:record :waste/verdict
+                             [[:ram-ok :bool] [:disk-ok :bool] [:cap-ok :bool]]]})
+  (:export [gib
+            expert-params expert-rec-bytes emb-head-bytes
+            mla-q-params mla-kv-params mla-o-params attn-bytes
+            router-norms-bytes shared-bytes dense-ffn-bytes trunk-bytes
+            kda-state-bytes mla-kv-bytes state-bytes
+            scratch-bytes min-cache-bytes floor-bytes
+            routed-disk-bytes working-set-bytes
+            os-cap-bytes recommended-bytes resolve-budget cache-bytes
+            saturating-budget
+            hit-rate-milli io-per-token-bytes tok-per-s-milli
+            fits? budget-over-cap? verdict-name]))
+
+;; W6 pure-planner oracle — murakumo.infer.waste scalar core.
+;;
+;; Two independent models live here, both taken from sqliteai/waste rather
+;; than invented:
+;;
+;;   1. the PRE-FLIGHT floor, ported from tools/memplan.py — what a model
+;;      costs in RAM computed from HuggingFace config.json alone, before any
+;;      weights are downloaded or converted. murakumo plans before it
+;;      provisions, so it cannot use `waste plan`, which reads the converted
+;;      container's manifest.json and therefore only exists afterwards.
+;;
+;;   2. the ENGINE's own budget resolution, ported from src/waste.c
+;;      (waste_open). This is the part that decides whether a node runs well
+;;      or collapses: cap = usable - usable/8 (12% left to the OS), then the
+;;      recommended budget floor + 3*working-set is stepped DOWN one whole
+;;      working set at a time until it fits under cap. Feeding the cache the
+;;      remainder up to cap is what turns a cache hit into a page fault —
+;;      measured on K3 at 0.07 tok/s against 0.63 with a smaller cache.
+;;
+;; Bit widths arrive as milli-bits (trunk 4250 = 4.25 bits/weight, experts
+;; 2120 = 2.12) because the guest is integer-only; the reference is float.
+;; Parity: test/murakumo/infer_waste_kotoba_parity_test.clj
+;;
+;; Host keeps: config.json parsing, node ranking, plan map assembly.
+
+(defn gib [] :i64 1073741824)
+
+;; ── shape → bytes (tools/memplan.py plan()) ────────────────────────────
+
+(defn expert-params [hidden :i64 moe-inter :i64] :i64
+  ;; one routed expert: gate + up + down
+  (* 3 (* hidden moe-inter)))
+
+(defn expert-rec-bytes [hidden :i64 moe-inter :i64 expert-milli-bits :i64] :i64
+  ;; one expert as stored on disk (3-bit residual VQ ⇒ ~2.12 bits/weight)
+  (quot (* (expert-params hidden moe-inter) expert-milli-bits) 8000))
+
+(defn emb-head-bytes [vocab :i64 hidden :i64 trunk-milli-bits :i64 tie :bool] :i64
+  ;; embeddings, plus a separate lm head unless the two are tied
+  (let [one (quot (* (* vocab hidden) trunk-milli-bits) 8000)]
+    (if tie one (* 2 one))))
+
+(defn mla-q-params [hidden :i64 qlora :i64 nheads :i64 qk :i64] :i64
+  ;; q down-proj + q up-proj. qk = qk-nope + qk-rope. Callers pass
+  ;; qlora = hidden when config.json has q_lora_rank null.
+  (+ (* hidden qlora) (* qlora (* nheads qk))))
+
+(defn mla-kv-params [hidden :i64 kv-lora :i64 qk-rope :i64 nheads :i64
+                     nope-plus-v :i64] :i64
+  ;; kv down-proj + kv up-proj
+  (+ (* hidden (+ kv-lora qk-rope))
+     (* kv-lora (* nheads nope-plus-v))))
+
+(defn mla-o-params [nheads :i64 v-head :i64 hidden :i64] :i64
+  (* nheads (* v-head hidden)))
+
+(defn attn-bytes [layers :i64 p-attn :i64 trunk-milli-bits :i64] :i64
+  (quot (* (* layers p-attn) trunk-milli-bits) 8000))
+
+(defn router-norms-bytes [moe-layers :i64 n-experts :i64 layers :i64
+                          hidden :i64] :i64
+  ;; the two pieces that stay f32 whatever the trunk is quantized to
+  (+ (* moe-layers (* n-experts (* hidden 4)))
+     (* layers (* 4 (* hidden 4)))))
+
+(defn shared-bytes [moe-layers :i64 n-shared :i64 p-expert :i64
+                    trunk-milli-bits :i64] :i64
+  ;; shared experts are resident, and at trunk precision, not expert precision
+  (quot (* (* moe-layers (* n-shared p-expert)) trunk-milli-bits) 8000))
+
+(defn dense-ffn-bytes [dense-layers :i64 hidden :i64 dense-inter :i64
+                       trunk-milli-bits :i64] :i64
+  (quot (* (* dense-layers (* 3 (* hidden dense-inter))) trunk-milli-bits) 8000))
+
+(defn trunk-bytes [emb-head :i64 attn :i64 router-norms :i64 shared :i64
+                   dense-ffn :i64] :i64
+  (+ emb-head (+ attn (+ router-norms (+ shared dense-ffn)))))
+
+;; ── per-session state ──────────────────────────────────────────────────
+
+(defn kda-state-bytes [kda-layers :i64 heads :i64 dstate :i64 conv-k :i64] :i64
+  ;; KDA is O(1) in context: the recurrent state plus the short-conv rings
+  (+ (* kda-layers (* heads (* dstate (* dstate 4))))
+     (* kda-layers (* 3 (* (- conv-k 1) (* heads (* dstate 4)))))))
+
+(defn mla-kv-bytes [mla-layers :i64 ctx :i64 kv-lora :i64 qk-rope :i64] :i64
+  ;; MLA stores one f16 latent per position per full-attention layer
+  (* mla-layers (* ctx (* (+ kv-lora qk-rope) 2))))
+
+(defn state-bytes [kda :i64 mla-kv :i64] :i64
+  (+ kda mla-kv))
+
+(defn scratch-bytes [hidden :i64 moe-inter :i64 vocab :i64 threads :i64] :i64
+  ;; activations, dequant staging, per-thread buffers, logits, slabs
+  (let [t (if (< threads 1) 1 threads)]
+    (+ (* 16 (* hidden (* 4 t)))
+       (+ (* moe-inter (* 4 (* 8 t)))
+          (+ (* vocab 4) (* 64 1048576))))))
+
+(defn min-cache-bytes [top-k :i64 expert-rec :i64] :i64
+  ;; one layer's top-k, double-buffered — below this nothing can run
+  (* top-k (* expert-rec 2)))
+
+(defn floor-bytes [trunk :i64 state :i64 scratch :i64 min-cache :i64] :i64
+  (+ trunk (+ state (+ scratch min-cache))))
+
+;; ── what lives on disk ─────────────────────────────────────────────────
+
+(defn routed-disk-bytes [moe-layers :i64 n-experts :i64 p-expert :i64
+                         expert-milli-bits :i64] :i64
+  ;; the whole routed expert set — this is what the container mostly is
+  (quot (* (* moe-layers (* n-experts p-expert)) expert-milli-bits) 8000))
+
+(defn working-set-bytes [moe-layers :i64 top-k :i64 p-expert :i64
+                         expert-milli-bits :i64] :i64
+  ;; ONE token's experts. This is the engine's allocation quantum: a cache
+  ;; smaller than this keeps nothing alive to the next token, and the
+  ;; engine's default budget is floor + a whole multiple of it.
+  (quot (* (* moe-layers (* top-k p-expert)) expert-milli-bits) 8000))
+
+;; ── engine budget resolution (src/waste.c waste_open) ──────────────────
+
+(defn os-cap-bytes [usable :i64] :i64
+  ;; 7/8 of usable RAM; the last 12% belongs to the OS. Not physical RAM —
+  ;; inside a cgroup the two differ by the host/limit ratio.
+  (- usable (quot usable 8)))
+
+(defn recommended-bytes [floor :i64 working-set :i64] :i64
+  (+ floor (* 3 working-set)))
+
+(defn resolve-budget [floor :i64 working-set :i64 cap :i64] :i64
+  ;; Step down a whole working set at a time and take the largest that fits.
+  ;; cap 0 means "no cap known" and the recommendation stands. When not even
+  ;; floor + 1x fits, run at the floor.
+  (let [b3 (+ floor (* 3 working-set))
+        b2 (+ floor (* 2 working-set))
+        b1 (+ floor working-set)]
+    (if (< cap 1)
+      b3
+      (if (<= b3 cap)
+        b3
+        (if (<= b2 cap)
+          b2
+          (if (<= b1 cap) b1 floor))))))
+
+(defn cache-bytes [budget :i64 floor :i64 min-cache :i64] :i64
+  (+ (- budget floor) min-cache))
+
+(defn saturating-budget [floor :i64 routed-disk :i64 min-cache :i64
+                         cap :i64] :i64
+  ;; The budget at which the expert cache holds the ENTIRE routed set and
+  ;; disk leaves the decode loop. Returns 0 when that does not fit under
+  ;; cap — the engine's stepped default is then the right answer. This is
+  ;; the case the engine cannot reach on its own: its recommendation is
+  ;; floor + 3 working sets, which for a small model like Kimi-Linear is far
+  ;; below what the machine could actually hold.
+  (let [want (- (+ floor routed-disk) min-cache)]
+    (if (< cap 1)
+      want
+      (if (<= want cap) want 0))))
+
+;; ── hit rate and disk-bound throughput ─────────────────────────────────
+
+(defn hit-rate-milli [frac-milli :i64] :i64
+  ;; Gate 5 curve: LFRU hit rate vs cache fraction, MEASURED by the C
+  ;; engine's own cache (src/ecache.c) over 300 batch-1 decode tokens of
+  ;; Kimi-Linear-48B. Piecewise-linear, in milli. K3's 896-expert routing
+  ;; may differ — this is an estimate, not a promise.
+  (let [f (if (< frac-milli 0) 0 (if (< 1000 frac-milli) 1000 frac-milli))]
+    (if (<= f 30)
+      (quot (* f 132) 30)
+      (if (<= f 60)
+        (+ 132 (quot (* (- f 30) 271) 30))
+        (if (<= f 121)
+          (+ 403 (quot (* (- f 60) 216) 61))
+          (if (<= f 242)
+            (+ 619 (quot (* (- f 121) 229) 121))
+            (if (<= f 484)
+              (+ 848 (quot (* (- f 242) 91) 242))
+              (if (<= f 968)
+                (+ 939 (quot (* (- f 484) 3) 484))
+                (+ 942 (quot (* (- f 968) 58) 32))))))))))
+
+(defn io-per-token-bytes [per-token-io :i64 hit-milli :i64] :i64
+  (quot (* per-token-io (- 1000 hit-milli)) 1000))
+
+(defn tok-per-s-milli [io-bytes :i64 disk-mb-s :i64] :i64
+  ;; disk-bound ceiling only: bytes read per token against measured
+  ;; random-read bandwidth. 0 io ⇒ 0, meaning "disk is not in the loop";
+  ;; the host reports that as unbounded rather than as zero throughput.
+  (if (< io-bytes 1)
+    0
+    (quot (* (* disk-mb-s 1048576) 1000) io-bytes)))
+
+;; ── verdicts ───────────────────────────────────────────────────────────
+
+(defn fits? [floor :i64 usable :i64] :bool
+  (<= floor usable))
+
+(defn budget-over-cap? [budget :i64 cap :i64] :bool
+  (if (< cap 1) false (< cap budget)))
+
+(defn verdict-name [v [:ref :waste/verdict]] :string
+  ;; ram before disk before cap: a node that cannot open the model at all is
+  ;; not "storage-bound", and one with no container space never gets to
+  ;; discover its cache is too big.
+  (let [ram-ok (record-get v :ram-ok)
+        disk-ok (record-get v :disk-ok)
+        cap-ok (record-get v :cap-ok)]
+    (if (not ram-ok)
+      "below-ram-floor"
+      (if (not disk-ok)
+        "no-container-space"
+        (if (not cap-ok)
+          "budget-over-os-cap"
+          "fits")))))
