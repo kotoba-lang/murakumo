@@ -58,6 +58,12 @@
    [[:flag :string] [:value :string] [:present :bool]]])
 (def ^:private tensor-3-schema
   [:record :engine/tensor-3 [[:s0 :i64] [:s1 :i64] [:s2 :i64]]])
+(def ^:private waste-schema
+  [:record :engine/waste
+   [[:bin-dir :string] [:subcmd :string] [:container :string]]])
+(def ^:private waste-serve-schema
+  [:record :engine/waste-serve
+   [[:python :string] [:container :string] [:port :i64]]])
 (def ^:private mlx-launch-schema
   [:record :engine/mlx-launch
    [[:venv :string] [:hosts-file :string]
@@ -209,6 +215,93 @@
                  [[:x :raw]])
        (when (seq extra-args) (str " " (str/join " " extra-args)))))
 
+;; ── waste ───────────────────────────────────────────────────────────────────
+
+(defn waste-cmd
+  "sqliteai/waste CLI invocation (single-node, disk-streamed experts).
+
+   `budget` is passed in BYTES. waste's parse_size takes a bare number as
+   bytes, so the planner's resolved figure goes through exactly rather than
+   being rounded to whole GiB — and the whole point of passing it is that the
+   engine's own default is floor + 3 working sets, which on a model smaller
+   than the machine leaves most of RAM unused (murakumo.infer.waste/budget
+   :saturating-budget-bytes)."
+  [{:keys [bin-dir container subcmd prompt budget ctx max-tokens threads
+           learn? verify? json? extra-args]
+    :or {subcmd "run"}}]
+  (str (o-record 'waste-front
+                 {:x (oracle/record waste-schema
+                                    {:bin-dir (or bin-dir ".")
+                                     :subcmd subcmd
+                                     :container container})}
+                 [[:x :raw]])
+       (when (seq prompt) (str " " (pr-str prompt)))
+       (o-record 'opt-i64-flag
+                 {:x (oracle/record opt-i64-schema
+                                    {:flag " --budget" :value (or budget 0)
+                                     :present (boolean budget)})}
+                 [[:x :raw]])
+       (o-record 'opt-i64-flag
+                 {:x (oracle/record opt-i64-schema
+                                    {:flag " --ctx" :value (or ctx 0)
+                                     :present (boolean ctx)})}
+                 [[:x :raw]])
+       (o-record 'opt-i64-flag
+                 {:x (oracle/record opt-i64-schema
+                                    {:flag " -n" :value (or max-tokens 0)
+                                     :present (boolean max-tokens)})}
+                 [[:x :raw]])
+       (o-record 'opt-i64-flag
+                 {:x (oracle/record opt-i64-schema
+                                    {:flag " --threads" :value (or threads 0)
+                                     :present (boolean threads)})}
+                 [[:x :raw]])
+       ;; --learn records which experts a run used so the next open starts
+       ;; warm; --verify checksums every expert record as it is read, which
+       ;; is what you want on a container that just crossed a USB cable
+       (when learn? " --learn")
+       (when verify? " --verify")
+       (when json? " --json")
+       (when (seq extra-args) (str " " (str/join " " extra-args)))))
+
+(defn waste-serve-cmd
+  "waste's OpenAI-compatible server (serve/, a Python front end over
+   libwaste.dylib). Same /v1 surface the llama.cpp head serves, so the
+   gateway and the Anthropic bridge need no engine-specific branch.
+
+   `bind` defaults to 0.0.0.0 rather than serve/'s own 127.0.0.1: a head the
+   fleet cannot reach is not a head."
+  [{:keys [python container port bind budget ctx threads verify? extra-args]
+    :or {python "python3" port 8000 bind "0.0.0.0"}}]
+  (str (o-record 'waste-serve-front
+                 {:x (oracle/record waste-serve-schema
+                                    {:python python
+                                     :container container
+                                     :port port})}
+                 [[:x :raw]])
+       (o-record 'opt-str-flag
+                 {:x (oracle/record opt-str-schema
+                                    {:flag " --host" :value (or bind "")
+                                     :present (boolean (seq bind))})}
+                 [[:x :raw]])
+       (o-record 'opt-i64-flag
+                 {:x (oracle/record opt-i64-schema
+                                    {:flag " --budget" :value (or budget 0)
+                                     :present (boolean budget)})}
+                 [[:x :raw]])
+       (o-record 'opt-i64-flag
+                 {:x (oracle/record opt-i64-schema
+                                    {:flag " --ctx" :value (or ctx 0)
+                                     :present (boolean ctx)})}
+                 [[:x :raw]])
+       (o-record 'opt-i64-flag
+                 {:x (oracle/record opt-i64-schema
+                                    {:flag " --threads" :value (or threads 0)
+                                     :present (boolean threads)})}
+                 [[:x :raw]])
+       (when verify? " --verify")
+       (when (seq extra-args) (str " " (str/join " " extra-args)))))
+
 ;; ── llamacpp-embed ──────────────────────────────────────────────────────────
 
 (defn embed-head-cmd
@@ -237,4 +330,7 @@
     :mlx-ring {:hosts (mlx-hosts plan)
                :head {:cmd (mlx-launch-cmd plan opts)}}
     :mlx-moe {:head {:cmd (mlx-moe-cmd opts)}}
+    ;; waste is single-node by construction: the container is one file tree on
+    ;; one machine's NVMe and there is no ring to lay out
+    :waste {:head {:cmd (waste-serve-cmd opts)}}
     :llamacpp-embed {:head {:cmd (embed-head-cmd opts)}}))

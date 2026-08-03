@@ -254,6 +254,73 @@
        :venv))
      (string-concat " serve " tail))),
    :param-types [[:ref :engine/mlx-moe]]}
+  {:name waste-front,
+   :params [x],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [c
+     (string-concat
+      " "
+      (record-get
+       [:record
+        :engine/waste
+        [[:bin-dir :string] [:subcmd :string] [:container :string]]]
+       x
+       :container))
+     b
+     (string-concat
+      (record-get
+       [:record
+        :engine/waste
+        [[:bin-dir :string] [:subcmd :string] [:container :string]]]
+       x
+       :subcmd)
+      c)]
+    (string-concat
+     (record-get
+      [:record
+       :engine/waste
+       [[:bin-dir :string] [:subcmd :string] [:container :string]]]
+      x
+      :bin-dir)
+     (string-concat "/waste " b))),
+   :param-types [[:ref :engine/waste]]}
+  {:name waste-serve-front,
+   :params [x],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [p
+     (string-concat
+      " --port "
+      (i64-str
+       (record-get
+        [:record
+         :engine/waste-serve
+         [[:python :string] [:container :string] [:port :i64]]]
+        x
+        :port)))
+     c
+     (string-concat
+      (record-get
+       [:record
+        :engine/waste-serve
+        [[:python :string] [:container :string] [:port :i64]]]
+       x
+       :container)
+      p)]
+    (string-concat
+     (record-get
+      [:record
+       :engine/waste-serve
+       [[:python :string] [:container :string] [:port :i64]]]
+      x
+      :python)
+     (string-concat " -m serve " c))),
+   :param-types [[:ref :engine/waste-serve]]}
   {:name opt-i64-flag,
    :params [x],
    :result :string,
@@ -550,33 +617,37 @@
  :oracle-value nil,
  :schema-identities
  #:engine{:embed-back
-          "ea78c80cb58ef3bf99c0202189faf1de9063f60e36de5bbd02f4caa872ce564d",
+          "6ecf82ab54f7eba9c802446cf2b6594381d73ec91422782782f3ece4fae1c504",
           :embed-front
-          "269a0139df60f0a0b26fb9f1b0810db345fcfe29bc0ea332697fd63687520737",
+          "b68ba28e969674e3415db10358fcc3a77aad9175aa5f895eb1706a51fa879804",
           :endpoint
-          "88a9c05d81e37d066884829afce0f588e5317de8aeab7b46640e5d74aabb00ae",
+          "2057c3488bfa15929e7bca51b65aab12bac602d1462a1dcd579073b683e70973",
           :head-front
-          "fe09ca8e04ab58de2566e77daa2298a6f89607c6b4d4ce99ca709e561739863a",
+          "6eb6fc0f45acd4292b0e824cbdbe82da850a157754a3cbc4707bf2791aa55b13",
           :head-middle
-          "b6f696770aac466c1e0fdfc16bea303ea61e2eac5e48e04c8d13042338288ec7",
+          "eebfe804889e5bd541848cc10e00f73a7ecb1b1841a84b43fcf43d3b15b8caae",
           :head-tail
-          "d627478ba0681ffb4a4f8f690156d1a25ca1f0eaa3dd04e2524e78dd8affa279",
+          "11b7de39905b6a4fbfbc41ac50ed94789e68b5b9e3e38fea0b67f590119876c3",
           :mlx-launch
-          "db2e7f570bf071fc5bc1a2be742a278355369ac6cb7d16e167877dce8be60010",
+          "db40bff8d31b71b0854b58ea34efec02426105e12a19969c85a5471e6ca13900",
           :mlx-moe
-          "50f8a2ec2b5bfad17e4a42ef516c12e4d4b7f30b76455d810071ba33fa12063f",
+          "cf46e08e11b8af7152bf5979b758762f2d505ac3377c66c50e0dc6ad0c4a8f04",
           :opt-i64
-          "2635182bb29922b560ab137486a1436674c4233ae2f1518d58ae48d7d407d20a",
+          "00844f0bb81b3db6144850406d302dcc7379ecc258ed38c90d20a264d48db8fc",
           :opt-str
-          "1c5e9767fe2d50affd6f47d48e97b3a03e95013ca2a1c4ce8bd1d852123709a2",
+          "2b3e374f2b4eccc4eb73da873a751852e9bda201126278cb02abc56517818113",
           :rpc-csv-2
-          "85c9060e86545d1c4d9d4ff434119d8fc9a4bafb07159b695d3dcc3ae8536e38",
+          "0b6453cd37947cd862633c463541d64237c5a4144254bf429b495d3b6e368bd1",
           :rpc-csv-3
-          "7561ee1a4607fbddcc047709f7b03ea11b6efffbcb4e4d518a4ef6a5227fda03",
+          "ff9866b4bec8779355e6eedc7d8834e13a37b5471d23a68bdcfee89cc6bfff7f",
           :rpc-server
-          "1e3a7486d6c4d1dc97f3de6dcc60f503e5e76abb61680557132e863c882b127b",
+          "cf97c6adaca5f7e0770c374fb072b816c34f0d9cac41a50ccea716fc3bf26169",
           :tensor-3
-          "c11659c405ca4388d87d0ffb446532e3fd059a70ec95678a481a344eaeb01f1a"},
+          "51dd301662faf92bf7b22999beb65344dd3d9a64fc95455e6fbd12dcfc5b3595",
+          :waste
+          "069e6cd71b9e86966b89cd207b9040d2df54fb9e4541056a1573d27dfdc870c5",
+          :waste-serve
+          "bc86a670a5eed09472ce598c133fa8db3aea12183b4395df1c32b6c4291b790e"},
  :exports
  [default-rpc-port
   digit-char
@@ -591,6 +662,8 @@
   mlx-moe-front
   opt-i64-flag
   opt-str-flag
+  waste-front
+  waste-serve-front
   tensor-split-3
   mlx-launch-front
   head-cmd-front
@@ -634,6 +707,10 @@
           [:record
            :engine/head-tail
            [[:ctx :i64] [:parallel :i64] [:port :i64]]],
+          :waste-serve
+          [:record
+           :engine/waste-serve
+           [[:python :string] [:container :string] [:port :i64]]],
           :tensor-3
           [:record
            :engine/tensor-3
@@ -642,6 +719,12 @@
           [:record
            :engine/mlx-moe
            [[:venv :string] [:model-repo :string] [:port :i64]]],
+          :waste
+          [:record
+           :engine/waste
+           [[:bin-dir :string]
+            [:subcmd :string]
+            [:container :string]]],
           :rpc-csv-3
           [:record
            :engine/rpc-csv-3

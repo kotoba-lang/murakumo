@@ -69,6 +69,16 @@
  ;; pin-top-k, warmup, profile, or extra args when a measured profile exists.
  :infer/mlx-moe {:kv-bits 8 :warmup "none"}
 
+ ;; sqliteai/waste. `python3 -m serve` resolves the module out of waste's own
+ ;; checkout and dlopens libwaste.dylib built beside it, so :dir is where the
+ ;; command has to run from, not a preference.
+ :infer/waste {:dir "~/murakumo/waste"
+               :python "python3"
+               ;; checksum every expert record as it is read. ~5% on
+               ;; Kimi-Linear, ~1% on K3, and worth it for a container that
+               ;; has just crossed a USB cable.
+               :verify? true}
+
  :models
  {;; ── base text models (2026-07-04): glm-5.2-reap50-q2k doesn't fit the fleet
   ;; reliably right now (139GB, ~all of :total-usable-bytes) — these three are
@@ -213,6 +223,95 @@
    ;; prefill 6.1 / decode 4.68 tok/s。-ngl 44+ は linear-attention の
    ;; compute buffer で 16GB Mac が Metal OOM。
    :model/experts 512}
+
+  ;; ── waste (sqliteai/waste): trunk resident, experts streamed from a
+  ;; container on NVMe, the rest of RAM a bounded expert cache. Single-node
+  ;; like mlx-moe, but gated on DISK rather than RAM — the container IS the
+  ;; model and every token reads experts out of it. Shape keys are the
+  ;; HuggingFace config.json fields murakumo.infer.waste/config->shape emits;
+  ;; regenerate rather than hand-transcribe when a config changes.
+  ;;
+  ;; :model/container-bytes is the CONVERTED container (what the node must
+  ;; hold), :model/staging-bytes the published weights needed once to convert.
+  ;; :model/ram-floor-bytes overrides the analytic floor — set it from
+  ;; `waste plan --json` on a real container, because the analytic estimate is
+  ;; the rough path (memplan.py's accurate path reads safetensors headers) and
+  ;; on K3 it is out by 40%.
+  "kimi-linear-48b"
+  {:model/id "kimi-linear-48b"
+   :model/family "Kimi-Linear"
+   :model/format :waste
+   :model/engine :waste
+   :hf/repo "moonshotai/Kimi-Linear-48B-A3B-Instruct"
+   :model/params-b 48 :model/active-params-b 3
+   :model/context 1048576
+   :model/layers 27
+   :model/hidden 2304
+   :model/vocab 163840
+   :model/experts 256
+   :model/active-experts 8
+   :model/moe-shared-expert? true
+   :model/shared-experts 1
+   :model/moe-inter 1024
+   :model/dense-inter 9216
+   :model/first-dense 1
+   :model/tie-embeddings? false
+   :model/attn-heads 32
+   :model/kv-lora-rank 512
+   :model/q-lora-rank nil            ; null in config ⇒ q down-proj is full width
+   :model/qk-rope-dim 64
+   :model/qk-nope-dim 128
+   :model/v-head-dim 128
+   ;; 20 KDA layers + 7 full-attention: KDA state is O(1) in context, which is
+   ;; why a 1M-token context model has a 0.03 GB KV cache instead of 11 GB
+   :model/kda-layers 20
+   :model/mla-layers 7
+   :model/kda-heads 32
+   :model/kda-head-dim 128
+   :model/conv-kernel 4
+   :model/staging-bytes 98253571658  ; published bf16 weights (HF file listing)
+   :model/container-bytes 19000000000 ; upstream README; replace with measured
+   :model/waste-container "/Volumes/260317/waste/kimi-linear-48b.waste"}
+
+  "kimi-k3"
+  {:model/id "kimi-k3"
+   :model/family "Kimi-K3"
+   :model/format :waste
+   :model/engine :waste
+   :hf/repo "moonshotai/Kimi-K3"
+   :model/params-b 2780 :model/active-params-b 111
+   :model/layers 93
+   :model/hidden 7168
+   :model/vocab 163840
+   :model/experts 896
+   :model/active-experts 16
+   :model/moe-shared-expert? true
+   :model/shared-experts 2
+   :model/moe-inter 3072
+   :model/dense-inter 33792
+   :model/first-dense 1
+   :model/tie-embeddings? false
+   :model/attn-heads 96
+   :model/kv-lora-rank 512
+   :model/q-lora-rank 1536
+   :model/qk-rope-dim 64
+   :model/qk-nope-dim 128
+   :model/v-head-dim 128
+   :model/kda-layers 69
+   :model/mla-layers 24
+   :model/kda-heads 96
+   :model/kda-head-dim 128
+   :model/conv-kernel 4
+   :model/staging-bytes 1560998984390 ; 1.56 TB of published weights
+   :model/container-bytes 982000000000
+   ;; measured floor from upstream, NOT the analytic estimate — the analytic
+   ;; path says 17.5 GiB here against a real 29.06 GB, and a planner that
+   ;; believed it would green-light a 24 GB node that cannot open the model
+   :model/ram-floor-bytes 29060000000
+   ;; no node in this fleet has ~1 TB free: gad's NVMe is 466 GB and the Mac
+   ;; minis are 16 GB machines. Registered so `plan` reports that as a disk
+   ;; verdict with numbers rather than leaving K3 undescribed.
+   :model/waste-container "/mnt/nvme/waste/kimi-k3.waste"}
 
   ;; ── media (Civitai/HF 系。ジョブ並列 = 1 ノード完結、sharding 不要) ──
   "trellis-image-large"

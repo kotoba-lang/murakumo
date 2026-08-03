@@ -40,6 +40,15 @@
   :dev {:override-deps
         {io.github.kotoba-lang/witness-quorum {:local/root "../witness-quorum"}
          io.github.kotoba-lang/kekkai {:local/root "../kekkai"}}}
+  ;; Regenerate resources/murakumo/oracle/*.kir.edn from kotoba/*_core.kotoba:
+  ;;   clojure -M:test:gen
+  ;; ADR-260731-w6-t62 documents `-M:test -m murakumo.kotoba-oracle-gen`, which
+  ;; does not work: command-line main opts are APPENDED to an alias's
+  ;; :main-opts rather than replacing them, so the -m reaches
+  ;; cognitect.test-runner as an unknown option. A later alias's :main-opts
+  ;; does win, hence this one — it carries no deps of its own and must be
+  ;; combined with :test.
+  :gen {:main-opts ["-m" "murakumo.kotoba-oracle-gen"]}
   :quic-driver {:main-opts ["-m" "murakumo.overlay.quic-driver"]}
   :quic-cert {:main-opts ["-m" "murakumo.overlay.cert"]}
   ;; JVM-only test path for the kwik/witness-quorum-dependent overlay code

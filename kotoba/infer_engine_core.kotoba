@@ -31,11 +31,18 @@
              :engine/rpc-csv-2 [:record :engine/rpc-csv-2
                                 [[:ep0 :string] [:ep1 :string]]]
              :engine/rpc-csv-3 [:record :engine/rpc-csv-3
-                                [[:ep0 :string] [:ep1 :string] [:ep2 :string]]]})
+                                [[:ep0 :string] [:ep1 :string] [:ep2 :string]]]
+             :engine/waste [:record :engine/waste
+                            [[:bin-dir :string] [:subcmd :string]
+                             [:container :string]]]
+             :engine/waste-serve [:record :engine/waste-serve
+                                  [[:python :string] [:container :string]
+                                   [:port :i64]]]})
   (:export [default-rpc-port digit-char nat-str i64-str
             split-mode-name endpoint rpc-server-cmd
             embed-head-front embed-head-back
             mlx-moe-bin mlx-moe-front opt-i64-flag opt-str-flag
+            waste-front waste-serve-front
             tensor-split-3 mlx-launch-front
             head-cmd-front head-cmd-middle head-cmd-tail
             rpc-csv-2 rpc-csv-3]))
@@ -133,6 +140,22 @@
                                            (i64-str (record-get x :port))))]
     (string-concat (mlx-moe-bin (record-get x :venv))
                    (string-concat " serve " tail))))
+
+(defn waste-front [x [:ref :engine/waste]] :string
+  ;; cljc waste-cmd through the container path (before optional flags).
+  ;; "<bin-dir>/waste <subcmd> <container>" — run|chat|plan|bench|info.
+  ;; T5.2 native record.
+  (let [c (string-concat " " (record-get x :container))
+        b (string-concat (record-get x :subcmd) c)]
+    (string-concat (record-get x :bin-dir) (string-concat "/waste " b))))
+
+(defn waste-serve-front [x [:ref :engine/waste-serve]] :string
+  ;; waste's OpenAI-compatible server: a Python front end over libwaste.dylib,
+  ;; not the C CLI, so the binary here is the interpreter and the module is
+  ;; resolved from waste's own checkout. T5.2 native record.
+  (let [p (string-concat " --port " (i64-str (record-get x :port)))
+        c (string-concat (record-get x :container) p)]
+    (string-concat (record-get x :python) (string-concat " -m serve " c))))
 
 (defn opt-i64-flag [x [:ref :engine/opt-i64]] :string
   ;; Profile 5: present is real :bool. flag includes leading space + name,
