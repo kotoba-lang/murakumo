@@ -270,6 +270,73 @@
   {:run/spend {(name who) (double credits)}
    :run/spend-for for})
 
+(defn refund
+  "`spend` の反転。失敗したジョブに払われた credits を口座へ戻す。
+
+  ── なぜ transfer ではなく専用の事象なのか ──
+
+  『treasury から payer へ transfer する』でも数字は合うが、意味が違う。返金は
+  **第三者からの支払いではなく、起きなかった消費の取り消し**で、原資も要らない
+  （fal は自社エラーを課金しないので、murakumo は最初から払っていない）。
+  transfer で表すと、原資を持つ口座が必要になり、その口座が枯れた日に
+  『返金できない』が起きる —— 会計の形が運用の可用性に化ける。
+
+  ── mint ではないことを、どう保証するか ──
+
+  この関数は純粋な構成子なので、額の正しさは検査できない。**返金額が元の
+  spend を超えないことと、同じジョブが二度返金されないことは
+  `refundable` が台帳を畳んで判定する。** ここで額を自由に取れる以上、
+  呼び出し側が `refundable` を通さずに使えば、これは credits の mint 経路に
+  なる —— `transfer` の docstring が『ledger-violations を通さない呼び出しは
+  窃盗経路』と書いているのと同じ構図。"
+  [who credits {:keys [for reason] :as _meta}]
+  (when-not (pos? credits)
+    (throw (ex-info "refund amount must be positive" {:who (name who) :credits credits})))
+  {:run/refund {(name who) (double credits)}
+   :run/refund-for for
+   :run/refund-reason reason})
+
+(defn refundable
+  "台帳 + ジョブ id → `{:ok? true :who a :credits n}` か `{:ok? false :error kw ...}`。
+
+  **返金が mint にならない唯一の場所。** 3 つを台帳から確かめる:
+
+  1. そのジョブの spend が実在するか（`:run/spend-for` の `:job`）
+  2. 既に返金されていないか（`:run/refund-for` の `:job`）—— 冪等性はここ。
+     呼び出し側（Worker）は再試行するし、状態ポーリングは何度でも来るので、
+     『2 回目は拒否』を台帳側に置かないと、ポーリングの回数だけ credits が湧く
+  3. 額は **台帳が持っている spend そのもの**。呼び出し側に額を渡させない ——
+     渡させた瞬間、過大返金が API の引数になる"
+  [feed job-id]
+  (let [job-id (str job-id)
+        spend-of (fn [r] (or (:run/spend r) (get r "run/spend")))
+        for-of (fn [r k] (let [m (or (get r k) (get r (subs (str k) 1)))]
+                           (str (or (:job m) (get m "job")))))
+        spends (filter #(and (spend-of %) (= job-id (for-of % :run/spend-for))) feed)
+        refunds (filter #(and (or (:run/refund %) (get % "run/refund"))
+                              (= job-id (for-of % :run/refund-for)))
+                        feed)]
+    (cond
+      (empty? spends)
+      {:ok? false :error :no-such-spend :job job-id}
+
+      (seq refunds)
+      {:ok? false :error :already-refunded :job job-id
+       :refunded (reduce + 0.0 (mapcat vals (map #(or (:run/refund %) (get % "run/refund")) refunds)))}
+
+      :else
+      (let [entries (mapcat seq (map spend-of spends))
+            who (name (ffirst entries))
+            total (reduce + 0.0 (map second entries))]
+        (if (pos? total)
+          {:ok? true :who who :credits total}
+          {:ok? false :error :nothing-to-refund :job job-id})))))
+
+(defn refund?
+  "この台帳事象は返金か。"
+  [event]
+  (boolean (:run/refund event)))
+
 (defn balance-of [balances who]
   (get balances (name who) 0.0))
 
@@ -447,6 +514,12 @@
 
     (:run/spend run)
     (reduce (fn [a [n c]] (update a (name n) (fnil - 0.0) c)) acc (:run/spend run))
+
+    ;; 返金は spend の符号違い。同じ形にしてあるのは、fold が 2 つの別々の
+    ;; 解釈を持たないようにするため（`ledger-violations` はこの step を
+    ;; そのまま再生する）。
+    (:run/refund run)
+    (reduce (fn [a [n c]] (update a (name n) (fnil + 0.0) c)) acc (:run/refund run))
 
     :else
     ;; A PRE-SETTLED run carries whatever the writer put in it, and a feed

@@ -417,3 +417,44 @@
       (is (< (Math/abs (- total (+ treasury head (reduce + 0.0 (vals shares)) unallocated)))
              1e-9)
           (str "total must equal treasury + head + shares + unallocated under " p)))))
+
+;; ── 返金（ADR-2608037200）─────────────────────────────────────────────────────
+;; 守りたい性質は 1 つ: **返金が credits の mint 経路にならないこと。**
+;; 額を呼び出し側に渡させず台帳から引くこと、二度目を拒否すること、この 2 つが
+;; それを構成している。
+
+(deftest refund-reverses-a-spend
+  (let [feed [(credits/spend :alice 300 {:for {:job "job-1" :model "veo-3.1-fast"}})]
+        r (credits/refundable feed "job-1")]
+    (is (:ok? r))
+    (is (= "alice" (:who r)))
+    (is (== 300.0 (:credits r)))
+    (testing "fold すると残高が元に戻る"
+      (let [after (credits/balances (conj feed (credits/refund (:who r) (:credits r)
+                                                              {:for {:job "job-1"} :reason "upstream failed"})))]
+        (is (== 0.0 (credits/balance-of after "alice")))))))
+
+(deftest refund-is-idempotent-by-job
+  (testing "同じジョブは二度返金されない。状態ポーリングは何度でも来るので、
+            ここが緩むとポーリング回数ぶん credits が湧く"
+    (let [spend (credits/spend :alice 300 {:for {:job "job-1"}})
+          refunded (credits/refund "alice" 300 {:for {:job "job-1"}})
+          r (credits/refundable [spend refunded] "job-1")]
+      (is (false? (:ok? r)))
+      (is (= :already-refunded (:error r)))
+      (is (== 300.0 (:refunded r))))))
+
+(deftest refund-refuses-what-was-never-spent
+  (testing "存在しないジョブの返金は拒否 —— 通れば任意額の mint になる"
+    (let [r (credits/refundable [(credits/spend :alice 300 {:for {:job "job-1"}})] "job-does-not-exist")]
+      (is (false? (:ok? r)))
+      (is (= :no-such-spend (:error r))))))
+
+(deftest refund-amount-comes-from-the-ledger-not-the-caller
+  (testing "refundable は額を返す。呼び出し側が額を『指定』できる API 形に
+            しないことが、過大返金を引数にしないための構造"
+    (let [r (credits/refundable [(credits/spend :alice 42 {:for {:job "j"}})] "j")]
+      (is (== 42.0 (:credits r)))))
+  (testing "0 以下の返金は構成子が拒否する"
+    (is (thrown-with-msg? Exception #"must be positive"
+                          (credits/refund "alice" 0 {:for {:job "j"}})))))
