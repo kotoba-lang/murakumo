@@ -13,11 +13,12 @@
 ;;              = $1.00/枚 = fal 原価 $0.03 の 33 倍
 ;;   video / audio / 3D は価格が無く job-cost が例外を投げていた。
 ;;
-;; 原価はすべて 2026-08-02 時点の fal 公開価格。実契約では未確認。
+;; 原価はすべて 2026-08-03 に fal の公開カタログ（1,404 endpoint）から再取得した実価格。
+;; 実契約では未確認。この再検証で 3 件を訂正した（各エントリの :note を参照）。
 ;; :verified-at が :staleness-days を超えたら見積もりを拒否する（ADR-2608026000）。
 
 {:peg          {:credits-per-usd 100 :adr "2607030030"}
- :verified-at  "2026-08-02"
+ :verified-at  "2026-08-03"
  :staleness-days 90
  :source       "fal 公開価格 / OpenRouter・DeepInfra 公開価格。実契約未確認。"
 
@@ -58,9 +59,9 @@
                            :tier :video/frontier :engine :seedance}
 
   ;; Veo 3.1 系（ADR-2608026200 §3-2）
-  "veo-3.1-fast"      {:credit/per-video-second 35  :cost/usd-per-second 0.18
+  "veo-3.1-fast"      {:credit/per-video-second 35  :cost/usd-per-second 0.10
                        :tier :video/frontier-fast :engine :fal
-                       :note "Higgsfield $2.84/8秒 に対し $2.80 で勝ちつつ粗利 49%"}
+                       :note "2026-08-03 再測定で原価を 0.18 → 0.10 に訂正（fal-ai/veo3.1/fast は音声なし 720p/1080p で $0.10/秒、音声ありは $0.15/秒）。掲示 35cr は据え置く —— これは Higgsfield $2.84/8秒 に $2.80 で勝つために決めた価格で、原価が下がった分は粗利になる（49% → 71%）。音声つきを売るなら別 entry を立てること"}
   "veo-3.1-silent"    {:credit/per-video-second 40  :cost/usd-per-second 0.20
                        :tier :video/frontier :engine :fal}
   "veo-3.1"           {:credit/per-video-second 80  :cost/usd-per-second 0.40
@@ -71,7 +72,8 @@
 
  ;; ---- image（掲示 = 原価 × 2.0）---------------------------------------------
  :image
- {"seedream-v4"       {:credit/per-image 6 :cost/usd-per-image 0.03 :engine :fal}
+ {"seedream-v5-pro"   {:credit/per-image 14 :cost/usd-per-image 0.0675 :engine :fal
+                       :note "2026-08-03 訂正。旧 entry \"seedream-v4\" は fal のカタログに存在せず（現行は v5）、原価 $0.03 も実在しない値だった。bytedance/seedream/v5/pro/text-to-image は総面積 1536x1536 以下で $0.0675/枚、1536x1536〜2048x2048 で $0.135/枚 —— 大判を売るなら別 entry が要る"}
   "animagine-xl-4.0"  {:credit/per-image 6 :cost/usd-per-image 0.03 :engine :comfy
                        :note "旧即値 100cr（$1.00）を撤去。fal 同等品の原価×2.0 に合わせる"}
   "flux.1-dev"        {:credit/per-image 6 :cost/usd-per-image 0.03 :engine :comfy}
@@ -102,4 +104,14 @@
                        :note "単価が微小なのでジョブ最低額を置く"}
   "stable-audio-open" {:credit/per-audio-second 0.1 :cost/usd-per-second 0.0002
                        :credit/job-minimum 5 :engine :audio}
-  "elevenlabs-music"  {:credit/per-audio-second 3 :cost/usd-per-second 0.0133 :engine :fal}}}
+  ;; ⚠ 2026-08-03 訂正。fal は **出力 1 分単位・切り上げ** で課金する
+  ;; （"The audio will be rounded up to the closest minute. 30 seconds output
+  ;; will be billed as 1 minute"）。旧 entry は $0.0133/秒 という秒割り原価を
+  ;; 宣言していたが、これは出力がちょうど 60 秒のときしか正しくない。30 秒なら
+  ;; 実原価 $0.80 に対し売上 90cr = $0.90 で寄与 7%、10 秒なら売上 $0.30 で
+  ;; **赤字**。floor テストは『宣言された原価』しか見ないので、この次元不一致は
+  ;; 素通りした。**ベンダが課金する次元と同じ次元で値付けする** ことが唯一の
+  ;; 再発防止で、秒割りに戻さないこと。
+  "elevenlabs-music"  {:credit/per-audio-minute 160 :cost/usd-per-minute 0.80
+                       :cost/billing-granularity-seconds 60 :engine :fal
+                       :note "分単位・切り上げ課金。秒割りにしない"}}}

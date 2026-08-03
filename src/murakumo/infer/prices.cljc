@@ -146,6 +146,9 @@
   3. `credits/job-cost` を通らないので、job-cost が守っていた
      『価格キー欠落は例外』という規律の外にいた
 
+  `:credit/job-minimum` を持つ model は、算出額がそれを下回ったら最低額に
+  切り上げる（ADR-2608036900）。
+
   戻り値は double。`assert-fresh!` は呼び出し側の責任（`today` を渡せる
   `price-for` と違い、ここは課金のホットパスなので日付を毎回要求しない）。"
   [registry model-id units]
@@ -153,7 +156,17 @@
     (when (empty? units)
       (throw (ex-info "refusing to quote a job with no billing units"
                       {:model model-id})))
-    (credits/job-cost price units)))
+    (let [computed (credits/job-cost price units)
+          ;; `:credit/job-minimum` はレジストリに 2026-08-02 から書かれていたが、
+          ;; **どこからも読まれていなかった**（ace-step / stable-audio-open の
+          ;; 5cr）。単価が微小な modality はジョブ最低額が無いと、1 回の生成が
+          ;; 0.6cr のような、決済手数料にも届かない金額で通ってしまう ——
+          ;; 宣言はあるのに発火しない機構、というこの repo が繰り返し見つける
+          ;; 失敗そのものだった。ここで適用する。
+          minimum  (:credit/job-minimum price)]
+      (if (and (number? minimum) (< computed minimum))
+        (double minimum)
+        computed))))
 
 (defn peg-credits-per-usd [registry]
   (get-in registry [:peg :credits-per-usd]))
@@ -175,16 +188,42 @@
        (- 1.0 (/ (double cost-usd) (* price-usd (- 1.0 rev-side))))
        0.0))))
 
+(def cost-keys
+  "原価を宣言しているキー。**新しい課金次元を足したらここにも足すこと** ——
+  ここに無い次元は `below-floor` から見えず、寄与率の検査を素通りする。"
+  [:cost/usd-per-second :cost/usd-per-minute :cost/usd-per-image
+   :cost/usd-per-asset :cost/usd-per-ktext :cost/usd-per-mtoken-out])
+
+(def price-keys
+  "掲示価格を宣言しているキー。同上。"
+  [:credit/per-video-second :credit/per-audio-second :credit/per-audio-minute
+   :credit/per-image :credit/per-asset :credit/per-ktext :credit/per-mtoken-out])
+
+(defn uncosted
+  "**価格はあるのに原価が宣言されていない** entry を全部返す。
+
+  `below-floor` は cost と price が両方そろった entry だけを見るので、原価の
+  無い entry は『floor 割れではない』のではなく『検査されていない』。両者は
+  同じ結果（空リスト）に見えるので、区別できる関数を別に置く ——
+  沈黙が合格に見える構造を作らない、というのがこのレジストリ全体の規律。
+  → [{:modality m :model id :price c}]"
+  [registry]
+  (for [[modality models] registry
+        :when (map? models)
+        [model-id m] models
+        :when (map? m)
+        :let [price (some m price-keys)]
+        :when (and price (pos? price) (nil? (some m cost-keys)))]
+    {:modality modality :model model-id :price price}))
+
 (defn below-floor
   "floor（既定 0.30）を割る登録価格を全部返す。捏造ではなく機械検査で
   『赤字にならない』を保証するための関数（ADR-2608026200 §5-5 不変条件 1）。
   → [{:modality m :model id :price c :cost usd :contribution r}]"
   ([registry] (below-floor registry 0.30))
   ([registry floor]
-   (let [cost-keys [:cost/usd-per-second :cost/usd-per-image :cost/usd-per-asset
-                    :cost/usd-per-ktext :cost/usd-per-mtoken-out]
-         price-keys [:credit/per-video-second :credit/per-image :credit/per-asset
-                     :credit/per-ktext :credit/per-mtoken-out :credit/per-audio-second]]
+   (let [cost-keys  cost-keys
+         price-keys price-keys]
      (for [[modality models] registry
            :when (map? models)
            [model-id m] models
