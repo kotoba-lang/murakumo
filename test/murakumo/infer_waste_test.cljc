@@ -168,6 +168,70 @@
     (is (> (:saturating-budget-bytes b) (* 13 GB)))
     (is (< (:saturating-budget-bytes b) (:os-cap-bytes b)))))
 
+;; Converted on this fleet 2026-08-03 with waste 0.6.3 tools/convert.py
+;; (--jobs 3, ~54 min on an M4); RAM figures from `waste plan --json` at
+;; ctx 4096, container byte-exact from the file listing.
+(def kimi-linear-measured
+  (assoc kimi-linear
+         :model/container-bytes 19171317244
+         :model/ram-floor-bytes 1376453888
+         :model/expert-set-bytes 17748197376
+         :model/working-set-bytes 575963136
+         :model/min-cache-bytes 42663936
+         :model/expert-milli-bits 3014))
+
+(deftest analytic-is-low-across-the-board-not-within-rounding
+  ;; Recorded because the first reading of this got it wrong: upstream's
+  ;; "1.28 GB minimum RAM" is GiB, and comparing it to an analytic 1.27
+  ;; DECIMAL GB made an 8% miss look like agreement. The analytic path is
+  ;; low on every term here, and by 30%+ on the two disk ones.
+  (let [a (waste/memplan kimi-linear {:ctx 4096})
+        m (waste/memplan kimi-linear-measured {:ctx 4096})]
+    (is (< (:floor-bytes a) (:floor-bytes m)))
+    (is (< (:routed-disk-bytes a) (:routed-disk-bytes m)))
+    (is (< (:working-set-bytes a) (:working-set-bytes m)))
+    (is (= -8 (Math/round (* 100.0 (/ (- (:floor-bytes a) (:floor-bytes m))
+                                      (:floor-bytes m))))))
+    (is (= -30 (Math/round (* 100.0 (/ (- (:routed-disk-bytes a) (:routed-disk-bytes m))
+                                       (:routed-disk-bytes m))))))
+    (is (= -32 (Math/round (* 100.0 (/ (- (:working-set-bytes a) (:working-set-bytes m))
+                                       (:working-set-bytes m))))))
+    (is (= :measured (:floor-source m)))))
+
+(deftest measured-expert-bits-feed-the-analytic-path
+  ;; A family that has converted once knows its real expert precision, and
+  ;; the estimate for the next member should use it rather than memplan.py's
+  ;; 2.12 assumption. 3014 vs 2120 is a 42% difference in every disk term.
+  (let [with-bits (waste/memplan (assoc kimi-linear :model/expert-milli-bits 3014)
+                                 {:ctx 4096})
+        without (waste/memplan kimi-linear {:ctx 4096})
+        measured 17748197376]
+    (is (> (:routed-disk-bytes with-bits) (:routed-disk-bytes without)))
+    ;; not exact — milli-bits quantizes 3.013888… to 3.014 — but within a
+    ;; rounding rather than the 30% the default assumption was out by
+    (is (< (Math/abs (- (:routed-disk-bytes with-bits) measured))
+           (quot measured 1000))
+        "config + measured bits reproduces the measured expert set to <0.1%")
+    (testing "an explicit opt still wins over the registry"
+      (is (= (:routed-disk-bytes without)
+             (:routed-disk-bytes (waste/memplan
+                                  (assoc kimi-linear :model/expert-milli-bits 3014)
+                                  {:ctx 4096 :expert-milli-bits 2120})))))))
+
+(deftest measured-plan-matches-the-run-that-was-actually-made
+  ;; `waste run --budget 19081987328` on this machine: 0.44 tok/s at 94%
+  ;; hits, against 0.13 tok/s at 78% on the engine's own 2.89 GB default.
+  (let [pl (waste/plan kimi-linear-measured [(node "local" 32 906)]
+                       {:ctx 4096 :disk-mb-s 30})
+        b (:budget pl)]
+    (is (true? (:fits? pl)))
+    (is (= 3104343296 (:recommended-bytes b))
+        "matches `waste plan --json` recommended_bytes")
+    (is (= 19081987328 (:saturating-budget-bytes b))
+        "the budget the run was actually given")
+    (is (< (:saturating-budget-bytes b) (:os-cap-bytes b))
+        "and it is under the 7/8 cap, which is why it did not page")))
+
 (deftest engine-commands
   (testing "waste-cmd passes the budget in bytes (parse_size takes bare bytes)"
     (is (= "bin/waste run /m/k.waste \"hi\" --budget 13720000000 --ctx 4096 -n 32"
