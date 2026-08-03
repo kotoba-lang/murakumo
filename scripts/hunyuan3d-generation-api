@@ -10,6 +10,7 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 import uuid
 import wave
@@ -29,6 +30,11 @@ EFFECT_RUNNER = os.environ.get("MURAKUMO_EFFECT_RUNNER", "")
 SOUND_RUNNER = os.environ.get("MURAKUMO_SOUND_RUNNER", "")
 COMFY_URL = os.environ.get("MURAKUMO_COMFY_URL", "").rstrip("/")
 TOKEN = os.environ.get("MURAKUMO_GENERATION_TOKEN", "")
+# Hosted video provider (fal.ai). Absent key = the hosted models are simply not
+# offered; nothing falls back to the fleet, because a caller who asked for
+# Seedance and silently got LTX would be charged for a model they did not pick.
+SEEDANCE_API_KEY = os.environ.get("SEEDANCE_API_KEY", "")
+FAL_QUEUE_URL = os.environ.get("MURAKUMO_FAL_QUEUE_URL", "https://queue.fal.run").rstrip("/")
 PUBLIC_BASE = os.environ.get("MURAKUMO_GENERATION_PUBLIC_BASE", "http://127.0.0.1:8081").rstrip("/")
 jobs = {}
 lock = threading.Lock()
@@ -61,8 +67,25 @@ VIDEO_MODELS = {
                        # bf16 (32.9GB) loads+samples but dies at VAE decode on the
                        # 46GB APU; fp8 (~16GB, matches the verified 2026-07-17 run)
                        "weight_dtype": "fp8_e4m3fn"},
+    # Hosted on fal.ai — no fleet GPU, and the only route to a multi-shot
+    # reference-to-video model this fleet cannot run at all (CUDA-only weights
+    # are not a price problem, they are a "the hardware cannot" problem).
+    # Measured 2026-07-25 at $0.22/manga page on the fast endpoint
+    # (superproject ADR-2607252200/2607252400, resources/video-engine-comparison.edn).
+    # The endpoint path IS the price tier: /fast tops out at 720p.
+    "seedance-2.0": {"family": "seedance", "host": "fal",
+                     "endpoint": "/bytedance/seedance-2.0/reference-to-video",
+                     "resolutions": ("480p", "720p", "1080p", "4k")},
+    "seedance-2.0-fast": {"family": "seedance", "host": "fal",
+                          "endpoint": "/bytedance/seedance-2.0/fast/reference-to-video",
+                          "resolutions": ("480p", "720p")},
 }
 VIDEO_DEFAULT_MODEL = "ltx-2.3"
+# fal's reference-to-video input schema (queue OpenAPI, re-read 2026-08-03).
+# duration is a STRING enum — sending a number is a 422.
+SEEDANCE_DURATIONS = ("auto",) + tuple(str(n) for n in range(4, 16))
+SEEDANCE_ASPECT_RATIOS = ("auto", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16")
+SEEDANCE_MAX_REFS = 9
 VIDEO_SIDE_MIN, VIDEO_SIDE_MAX = 256, 1280
 VIDEO_FRAMES_MAX = 121  # LTX wants 8n+1 (also satisfies Wan's 4n+1); ~5s at 24fps
 VIDEO_IMAGE_MAX_BYTES = 25 * 1024 * 1024
@@ -752,10 +775,75 @@ def run_image_job(job_id, prompt, params):
             if job_id in cancelled_jobs: return
             jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
 
+def video_model_available(spec):
+    """A model is offered only when the thing that would run it is configured:
+    a hosted model needs its provider key, a fleet model needs ComfyUI. One
+    predicate for both the catalog and admission, so /healthz can never
+    advertise a model that a request would then be rejected for."""
+    if spec.get("host") == "fal":
+        return bool(SEEDANCE_API_KEY)
+    return bool(COMFY_URL)
+
+
+def validate_video_reference_urls(inputs):
+    """Reference images for reference-to-video: input.images (up to 9) or the
+    single input.image the i2v callers already send. fal fetches these itself,
+    so they must be http(s) URLs we do not have to proxy."""
+    images = inputs.get("images")
+    if images is None:
+        single = inputs.get("image")
+        images = [single] if single else []
+    if not isinstance(images, list):
+        raise ValueError("input.images must be a list of http(s) URLs")
+    if len(images) > SEEDANCE_MAX_REFS:
+        raise ValueError("input.images accepts at most %d reference images" % SEEDANCE_MAX_REFS)
+    for url in images:
+        if (not isinstance(url, str) or len(url) > 2048
+                or not (url.startswith("https://") or url.startswith("http://"))):
+            raise ValueError("input.images entries must be http(s) URLs")
+    return images
+
+
+def validate_seedance_params(params, spec):
+    """Hosted video params. Rejects rather than clamps: this call bills a third
+    party per second, so a request we cannot honour exactly must not be turned
+    into a different, cheaper-or-pricier one behind the caller's back."""
+    if not video_model_available(spec):
+        raise ValueError("hosted video (seedance) is not configured on this node")
+    resolution = params.get("resolution")
+    if resolution is not None and resolution not in spec["resolutions"]:
+        raise ValueError("params.resolution must be one of %s for this model"
+                         % ", ".join(spec["resolutions"]))
+    aspect = params.get("aspect_ratio")
+    if aspect is not None and aspect not in SEEDANCE_ASPECT_RATIOS:
+        raise ValueError("params.aspect_ratio must be one of %s"
+                         % ", ".join(SEEDANCE_ASPECT_RATIOS))
+    if "duration" in params:
+        duration = params["duration"]
+        if isinstance(duration, int) and not isinstance(duration, bool):
+            duration = str(duration)
+        if duration not in SEEDANCE_DURATIONS:
+            raise ValueError("params.duration must be auto or 4..15 seconds")
+        params["duration"] = duration
+    elif isinstance(params.get("duration_ms"), int) and not isinstance(params.get("duration_ms"), bool):
+        params["duration"] = str(min(15, max(4, round(params["duration_ms"] / 1000))))
+    if not isinstance(params.get("generate_audio", False), bool):
+        raise ValueError("params.generate_audio must be a boolean")
+
+
 def validate_video_request(inputs, params):
     prompt = inputs.get("prompt")
     if not isinstance(prompt, str) or not 1 <= len(prompt) <= 2000:
         raise ValueError("input.prompt must contain 1-2000 characters")
+    model = params.get("model", VIDEO_DEFAULT_MODEL)
+    if model not in VIDEO_MODELS:
+        raise ValueError("params.model is unsupported")
+    spec = VIDEO_MODELS[model]
+    # Hosted models run on someone else's GPU, so they need neither ComfyUI nor
+    # the fleet's graph-shaped geometry constraints (8n+1 frames, /32 sides).
+    if spec.get("host") == "fal":
+        validate_seedance_params(params, spec)
+        return {"prompt": prompt, "images": validate_video_reference_urls(inputs)}
     if not COMFY_URL:
         raise ValueError("video output requires the configured ComfyUI backend")
     image = inputs.get("image")
@@ -763,8 +851,6 @@ def validate_video_request(inputs, params):
         if (not isinstance(image, str) or len(image) > 2048
                 or not (image.startswith("https://") or image.startswith("http://"))):
             raise ValueError("input.image must be an http(s) URL (keyframe for image-to-video)")
-    if params.get("model", VIDEO_DEFAULT_MODEL) not in VIDEO_MODELS:
-        raise ValueError("params.model is unsupported")
     for side in ("width", "height"):
         value = params.get(side, 768 if side == "width" else 448)
         if (not isinstance(value, int) or isinstance(value, bool)
@@ -959,10 +1045,140 @@ def comfy_video_graph(prompt, params, ref_image=None):
     return builder(prompt, params, ref_image)
 
 
+def fal_json(method, url, body=None):
+    """fal queue call. Authorization is `Key <k>` — NOT Bearer; Bearer 401s."""
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(
+        url, method=method, data=data,
+        headers={"authorization": "Key " + SEEDANCE_API_KEY,
+                 "content-type": "application/json",
+                 "user-agent": "murakumo-generation/1.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            return json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:800]
+        except Exception:
+            pass
+        # The key itself is never in the message; the URL and fal's own error are.
+        raise RuntimeError("fal %s %s -> HTTP %d %s" % (method, urlparse(url).path,
+                                                        exc.code, detail)) from None
+
+
+def seedance_request_body(source, params, spec):
+    body = {"prompt": source["prompt"],
+            "duration": params.get("duration", "auto"),
+            # fal defaults this to True. We default it to False: generated audio
+            # has tripped the provider content filter and voided the whole
+            # output (partner_validation_failed), and no caller of this endpoint
+            # has asked for sound. Opt in explicitly to get it.
+            "generate_audio": bool(params.get("generate_audio", False))}
+    if source.get("images"):
+        body["image_urls"] = list(source["images"])
+    if params.get("resolution"):
+        body["resolution"] = params["resolution"]
+    if params.get("aspect_ratio"):
+        body["aspect_ratio"] = params["aspect_ratio"]
+    return body
+
+
+def run_seedance_video_job(job_id, source, params, spec, out):
+    """Hosted video through fal's queue API: submit -> poll status_url ->
+    read response_url -> download the mp4 ourselves.
+
+    The artifact is fetched, hashed and stored here rather than handing the
+    caller fal's expiring URL, so the job's contract (contentHash + our own
+    /artifact URL) is identical to the fleet's."""
+    submitted = fal_json("POST", FAL_QUEUE_URL + spec["endpoint"],
+                         seedance_request_body(source, params, spec))
+    request_id = submitted.get("request_id")
+    status_url = submitted.get("status_url")
+    response_url = submitted.get("response_url")
+    if not request_id or not status_url:
+        raise RuntimeError("fal did not return a queued request: "
+                           + json.dumps(submitted)[:800])
+    with lock:
+        if job_id in cancelled_jobs: return None
+        jobs[job_id].update(progress=15); save()
+    deadline = time.monotonic() + 1800
+    while True:
+        with lock:
+            if job_id in cancelled_jobs: return None
+        state = fal_json("GET", status_url)
+        status = state.get("status")
+        if status == "COMPLETED":
+            break
+        if status in ("ERROR", "FAILED"):
+            raise RuntimeError("fal job failed: " + json.dumps(state)[:800])
+        if time.monotonic() > deadline:
+            raise RuntimeError("timed out waiting for fal request " + request_id)
+        with lock:
+            if job_id in cancelled_jobs: return None
+            jobs[job_id].update(progress=min(90, jobs[job_id].get("progress", 15) + 3)); save()
+        time.sleep(5.0)
+    result = fal_json("GET", response_url or status_url.rsplit("/status", 1)[0])
+    video_url = (result.get("video") or {}).get("url")
+    if not video_url:
+        raise RuntimeError("fal completed with no video url: " + json.dumps(result)[:800])
+    # No Authorization on the CDN fetch: the key belongs to the API host only.
+    fetch = urllib.request.Request(video_url, headers={"user-agent": "murakumo-generation/1.0"})
+    with urllib.request.urlopen(fetch, timeout=600) as response:
+        data = response.read()
+    if len(data) < 1024:
+        raise RuntimeError("fal returned an implausibly small video artifact")
+    out.write_bytes(data)
+    return data
+
+
+def run_hosted_video_job(job_id, source, params, spec, folder, out):
+    """Same job lifecycle and artifact envelope as the fleet path — only the
+    place the pixels come from differs. The provider is deliberately absent
+    from `capabilities`: the customer bought a model at a price tier, and which
+    company's GPU served it is our routing decision, not part of the product
+    (superproject ADR-2608026100)."""
+    model = params.get("model", VIDEO_DEFAULT_MODEL)
+    try:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="running", progress=5); save()
+        data = run_seedance_video_job(job_id, source, params, spec, out)
+        if data is None:
+            return
+        artifact = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}/artifact"
+        generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        capabilities = ["video", "mp4", f"model:{model}"]
+        if source.get("images"):
+            capabilities.append("reference-to-video")
+        metadata = {"kind": "mp4", "url": artifact, "bytes": len(data),
+                    "contentHash": "sha256:" + hashlib.sha256(data).hexdigest(),
+                    "provenance": f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}",
+                    "license": params.get("license", "proprietary"),
+                    "generatedAt": generated_at,
+                    "resolution": params.get("resolution", "720p"),
+                    "duration": params.get("duration", "auto"),
+                    "model": model, "capabilities": capabilities}
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="done", progress=100, artifactUrl=artifact,
+                                outputKind="mp4", capabilities=capabilities,
+                                artifacts=[metadata]); save()
+    except JobCancelled:
+        return
+    except Exception as exc:
+        with lock:
+            if job_id in cancelled_jobs: return
+            jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
+
+
 def run_video_job(job_id, source, params):
     folder = ROOT / job_id
     folder.mkdir(parents=True, exist_ok=True)
     out = folder / "video.mp4"
+    spec = VIDEO_MODELS[params.get("model", VIDEO_DEFAULT_MODEL)]
+    if spec.get("host") == "fal":
+        return run_hosted_video_job(job_id, source, params, spec, folder, out)
     try:
         with lock:
             if job_id in cancelled_jobs: return
@@ -1117,9 +1333,18 @@ class Handler(BaseHTTPRequestHandler):
             if MOTION_RUNNER: capabilities.append("motion")
             if EFFECT_RUNNER: capabilities.append("effect")
             if SOUND_RUNNER: capabilities.append("sound")
-            if COMFY_URL: capabilities.append("image"); capabilities.append("video")
+            if COMFY_URL: capabilities.append("image")
+            # There was no way to ask this service which video models it accepts
+            # — callers had to guess and read a 400. Answer it here. Hosted
+            # models need no local GPU, so video can be offered on a node with
+            # no ComfyUI at all. The names are the product; which provider is
+            # behind each one is not (ADR-2608026100).
+            video_models = sorted(name for name, spec in VIDEO_MODELS.items()
+                                  if video_model_available(spec))
+            if video_models: capabilities.append("video")
             return self.send_json(200, {"status": "ok", "runtime": "murakumo-generation",
                                         "capabilities": capabilities,
+                                        "videoModels": video_models,
                                         "voiceLocales": sorted(VOICE_LOCALES) if TTS_RUNNER else []})
         if not self.authorized(): return self.send_json(401, {"error": "unauthorized"})
         parts = urlparse(self.path).path.strip("/").split("/")
