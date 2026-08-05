@@ -24,11 +24,12 @@
   "Factory: build the `:quorum-fn` that `cloud-murakumo.ledger.witness/
   witness-run` requires, backed by a REAL pre-commit witness quorum over
   murakumo's overlay QUIC transport (witness-write/write-record-with-
-  real-quorum!, reputation/stake updated from the outcome).
+  real-quorum!, reputation updated from the outcome -- stake is not
+  touched by a quorum verdict, ADR-2608055000 G1).
 
   `opts` — threaded through to write-record-with-real-quorum!:
     :fleet-edn / :session / :rule / :reputation-db / :stake-ledger /
-    :min-score / :min-observations / :slash-amount / :timeout-ms /
+    :min-score / :min-observations / :timeout-ms /
     :quorum-options   same contract as witness-write.
   plus two of its own:
     :write-fn     the quorum-write entry point. Default
@@ -38,7 +39,7 @@
     :on-outcome!  optional `(fn [result])` called with the FULL
                   write-record-with-real-quorum! result — the caller's
                   hook to persist :reputation-db' / :stake-ledger' /
-                  :slashed, which a bare quorum-state return cannot carry.
+                  :outcomes, which a bare quorum-state return cannot carry.
 
   The returned fn takes ledger.witness's `{:record-cid :record :fleet}`
   request and returns the quorum STATE ({:kind :witnessed|:rejected|
