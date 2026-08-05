@@ -5,10 +5,11 @@
 ;;
 ;;   1. `murakumo.overlay.witness-write/write-record-with-real-quorum!` --
 ;;      a REAL pre-commit witness quorum over murakumo's overlay QUIC
-;;      transport, drawn from real fleet.edn nodes, reputation/stake
-;;      updated from the outcome (ADR-2607110300 Phase 2/4, verified
-;;      working end-to-end: 16 tests/47 assertions across this repo's own
-;;      overlay-witness-* test suite).
+;;      transport, drawn from real fleet.edn nodes, reputation updated
+;;      from the outcome (ADR-2607110300 Phase 2/4, verified working
+;;      end-to-end across this repo's own overlay-witness-* test suite).
+;;      A verdict does NOT move stake -- ADR-2608055000 G1 removed that,
+;;      see witness-write.clj's header.
 ;;   2. `kekkai.governor`'s `:treasury/release` op -- deny-by-default value
 ;;      governance gated on a witness-quorum verdict, ALWAYS escalating to
 ;;      a human for real fund release (ADR-2607110300 Phase 3, verified
@@ -99,7 +100,7 @@
                        (select-keys opts [:fleet-edn :session :propose-fn :commit-fn
                                           :write-opts :rule :quorum-options
                                           :reputation-db :stake-ledger :min-score
-                                          :min-observations :slash-amount :timeout-ms]))
+                                          :min-observations :timeout-ms]))
         proposal (treasury-release-proposal
                   {:quorum-state (:state quorum-result) :amount amount :recipient recipient})]
     {:quorum quorum-result

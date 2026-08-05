@@ -19,14 +19,15 @@
         org.bouncycastle/bcpkix-jdk18on {:mvn/version "1.78.1"}
         ;; witness-quorum's pre-commit orchestrator, wired onto overlay QUIC
         ;; in murakumo.overlay.witness-transport (ADR-2607110300 Phase 2),
-        ;; plus reputation/stake (Phase 4). Pin advanced to witness-quorum's
-        ;; #4 merge (feat/reputation-stake-slashing) -- the previous pin
-        ;; (492ba889, #2) predates reputation.clj/stake.clj/slashing.clj,
-        ;; which murakumo.overlay.witness-write already requires; a fresh
-        ;; consumer without the :dev local-root override would fail to
-        ;; compile against the stale pin.
+        ;; plus reputation (Phase 4). Pin advanced to the ADR-2608055000 G1
+        ;; merge, which removed slashing.clj: a quorum verdict now moves
+        ;; reputation and never bond, `write-with-witnesses-precommit-and-slash`
+        ;; became `-and-record`, and the result carries `:outcomes` instead of
+        ;; `:slashed`. murakumo.overlay.witness-write is the only caller, and
+        ;; it is updated in the same change -- the previous pin (e6fe9b7, #4)
+        ;; still has the old names, so this pin and that file move together.
         io.github.kotoba-lang/witness-quorum
-        {:git/sha "e6fe9b7aa99a53d2fe162faa3f3f9e7330e52aa8"}
+        {:git/sha "73fef67a3c6ea7621a96c786fbfd998c12a730d0"}
         ;; kekkai's TailnetGovernor/CoordinationActor, for the treasury/
         ;; release + witness/dispute end-to-end glue (ADR-2607110300 Phase 3,
         ;; murakumo.overlay.witness-treasury). JVM-only, same as
