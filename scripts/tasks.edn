@@ -36,4 +36,9 @@
 
  :claude {:cmd ["tools/claude-murakumo/claude-murakumo"], :pass-args? true, :doc "Run Claude Code against murakumo.cloud instead of Anthropic's own models (tools/claude-murakumo — same shape as z.ai's claude-zai wrapper for GLM)."}
  :quic-cert {:cmd ["clojure" "-M:quic-cert"], :pass-args? true, :doc "Issue/ensure stored QUIC cert/key material under .murakumo/kagi/quic."}
- :quic-driver {:cmd ["clojure" "-M:quic-driver"], :pass-args? true, :doc "JVM Clojure QUIC transport driver. Args: check|dial|serve|serve-once --request-edn '<adapter-request>'."}}
+ :quic-driver {:cmd ["clojure" "-M:quic-driver"], :pass-args? true, :doc "JVM Clojure QUIC transport driver. Args: check|dial|serve|serve-once --request-edn '<adapter-request>'."}
+
+ :aiueos {:cmd ["nbb" "--classpath" "src:resources" "src/murakumo/aiueos.cljs"]
+          :pass-args? true
+          :doc "Bare-metal aiueos fleet nodes: image | verify | flash | enroll. An aiueos node has no Node/JVM/SSH surface, so murakumo's launchctl provisioning does not apply to it — what an operator can do is build and flash its medium and compute the enrollment record it would post. `enroll` calls murakumo.infer.join (not a reimplementation) and prints the wire arguments aiueos's own mirror of that decision receives; the two are checked across the full matrix by test/murakumo/aiueos_join_plan_parity_test.clj. Needs the aiueos checkout (--aiueos / $AIUEOS_ROOT / sibling). e.g. `nbb scripts/run-task.cljs aiueos enroll --tier native --mem-bytes 34359738368 --inbound`."}
+}
