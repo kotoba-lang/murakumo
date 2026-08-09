@@ -48,6 +48,12 @@ VRM_BONES = {"hips", "spine", "chest", "upperChest", "neck", "head",
              "rightUpperLeg", "rightLowerLeg", "rightFoot", "rightToes"}
 EFFECT_PRESETS = {"hearts", "sparkle", "burst", "confetti", "embers", "soft-rain"}
 SOUND_KINDS = {"sfx", "ambience", "music"}
+SOUND_MODELS = {
+    "ace-step": {"music"},
+    "musicgen-small": SOUND_KINDS,
+}
+SOUND_DEFAULT_MODELS = {"music": "ace-step", "ambience": "musicgen-small",
+                        "sfx": "musicgen-small"}
 IMAGE_MODELS = {"animagine-xl-4.0": "animagine-xl-4.0.safetensors"}
 IMAGE_DEFAULT_MODEL = "animagine-xl-4.0"
 IMAGE_SIZES = {512, 640, 768, 832, 896, 1024, 1152, 1216, 1280, 1344}
@@ -331,12 +337,24 @@ def validate_sound_request(inputs, params):
         raise ValueError("sound output requires the configured sound runner")
     if params.get("sound_kind") not in SOUND_KINDS:
         raise ValueError("params.sound_kind must be sfx, ambience or music")
+    kind = params["sound_kind"]
+    model = params.get("model", SOUND_DEFAULT_MODELS[kind])
+    if model not in SOUND_MODELS or kind not in SOUND_MODELS[model]:
+        raise ValueError(f"model {model!r} does not support sound_kind {kind!r}")
     duration = params.get("duration_ms", 2000)
     if not isinstance(duration, int) or isinstance(duration, bool) or not 100 <= duration <= 30000:
         raise ValueError("params.duration_ms must be an integer from 100 to 30000")
     loop = params.get("loop", False)
     if not isinstance(loop, bool) or (loop and params["sound_kind"] == "sfx"):
         raise ValueError("loop is allowed only for ambience or music")
+    seed = params.get("seed")
+    if seed is None:
+        seed = int.from_bytes(os.urandom(8), "big") % (2 ** 53)
+    if not isinstance(seed, int) or isinstance(seed, bool) or not 0 <= seed < 2 ** 53:
+        raise ValueError("params.seed must be a non-negative safe integer")
+    # Resolve all server defaults before the job is persisted. Status therefore
+    # reports the exact execution contract even while the runner is queued.
+    params.update(model=model, duration_ms=duration, loop=loop, seed=seed)
     return prompt
 
 
@@ -610,15 +628,20 @@ def run_sound_job(job_id, prompt, params):
     folder.mkdir(parents=True, exist_ok=True)
     out = folder / "sound.wav"
     kind, requested = params["sound_kind"], params.get("duration_ms", 2000)
+    model = params.get("model", SOUND_DEFAULT_MODELS[kind])
+    seed = params.get("seed")
+    if seed is None:
+        seed = int.from_bytes(os.urandom(8), "big") % (2 ** 53)
     looped = params.get("loop", False)
     try:
         with lock:
             if job_id in cancelled_jobs: return
             jobs[job_id].update(status="running", progress=10); save()
         command = [SOUND_RUNNER, "--prompt", prompt, "--kind", kind,
-                   "--duration-ms", str(requested), "--output", str(out)]
+                   "--model", model, "--duration-ms", str(requested),
+                   "--seed", str(seed), "--output", str(out)]
         if looped: command.append("--loop")
-        completed = run_process(job_id, command, 300)
+        completed = run_process(job_id, command, 1800)
         if completed.returncode:
             raise RuntimeError("sound generation failed: " + (completed.stderr[-4000:] or completed.stdout[-4000:]))
         data, duration_ms, channels, bit_depth, sample_rate = verified_wav(out, requested)
@@ -626,13 +649,14 @@ def run_sound_job(job_id, prompt, params):
         artifact = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}/artifact"
         content_hash = "sha256:" + hashlib.sha256(data).hexdigest()
         generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-        capabilities = ["sound", "wav", f"sound-kind:{kind}"] + (["loop"] if looped else [])
+        capabilities = ["sound", "wav", f"sound-kind:{kind}", f"model:{model}"] + (["loop"] if looped else [])
         metadata = {"kind": "sound-wav", "url": artifact, "bytes": len(data),
                     "contentHash": content_hash,
                     "provenance": f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}",
                     "license": params.get("license", "proprietary"),
                     "generatedAt": generated_at, "durationMs": duration_ms,
-                    "soundKind": kind, "loop": looped, "channels": channels,
+                    "soundKind": kind, "model": model, "seed": seed,
+                    "loop": looped, "channels": channels,
                     "bitDepth": bit_depth, "sampleRate": sample_rate,
                     "capabilities": capabilities}
         if looped:
@@ -641,7 +665,7 @@ def run_sound_job(job_id, prompt, params):
             if job_id in cancelled_jobs: return
             jobs[job_id].update(status="done", progress=100, artifactUrl=artifact,
                                 outputKind="sound-wav", soundKind=kind, durationMs=duration_ms,
-                                loop=looped, capabilities=capabilities,
+                                model=model, seed=seed, loop=looped, capabilities=capabilities,
                                 artifacts=[metadata]); save()
     except JobCancelled:
         return
@@ -1313,6 +1337,8 @@ class Handler(BaseHTTPRequestHandler):
                 output_kind = "effect-json"
                 target = run_effect_job
             else:
+                if "model" not in params and isinstance(body.get("model"), str):
+                    params["model"] = body["model"]
                 source = validate_sound_request(inputs, params)
                 output_kind = "sound-wav"
                 target = run_sound_job
@@ -1321,6 +1347,11 @@ class Handler(BaseHTTPRequestHandler):
             jobs[job_id] = {"jobId": job_id, "status": "queued", "progress": 1,
                             "statusUrl": status_url, "outputKind": output_kind,
                             "artifacts": []}; save()
+            if kind == "sound":
+                jobs[job_id].update(model=params["model"], seed=params["seed"],
+                                    durationMs=params["duration_ms"],
+                                    soundKind=params["sound_kind"], loop=params["loop"])
+                save()
             threading.Thread(target=target, args=(job_id, source, params), daemon=True).start()
             self.send_json(202, jobs[job_id])
         except Exception as exc: self.send_json(400, {"error": "invalid-request", "message": str(exc)})
@@ -1344,6 +1375,7 @@ class Handler(BaseHTTPRequestHandler):
             if video_models: capabilities.append("video")
             return self.send_json(200, {"status": "ok", "runtime": "murakumo-generation",
                                         "capabilities": capabilities,
+                                        "soundModels": sorted(SOUND_MODELS) if SOUND_RUNNER else [],
                                         "videoModels": video_models,
                                         "voiceLocales": sorted(VOICE_LOCALES) if TTS_RUNNER else []})
         if not self.authorized(): return self.send_json(401, {"error": "unauthorized"})

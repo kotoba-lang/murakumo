@@ -6,10 +6,9 @@ import json
 import math
 import os
 import pathlib
-import random
-import struct
 import subprocess
 import sys
+import tempfile
 import wave
 
 
@@ -33,6 +32,8 @@ def args_for(kind):
         if kind == "motion": parser.add_argument("--skeleton-profile", required=True)
         if kind == "sound":
             parser.add_argument("--kind", required=True, choices=("sfx", "ambience", "music"))
+            parser.add_argument("--model", required=True, choices=("ace-step", "musicgen-small"))
+            parser.add_argument("--seed", required=True, type=int)
             parser.add_argument("--loop", action="store_true")
     return parser.parse_args()
 
@@ -73,27 +74,45 @@ def effect(a):
         "durationMs": a.duration_ms, "intensity": .72, "particles": 16, "color": color}))
 
 
+def fit_pcm_wav(source, output, duration_ms, loop):
+    """Trim or extend a generated PCM WAV to the request's exact duration."""
+    with wave.open(str(source), "rb") as src:
+        params = src.getparams()
+        frames = src.readframes(params.nframes)
+    frame_bytes = params.nchannels * params.sampwidth
+    target_frames = max(1, round(params.framerate * duration_ms / 1000))
+    target_bytes = target_frames * frame_bytes
+    if not frames:
+        raise RuntimeError("audio model returned an empty WAV")
+    if len(frames) < target_bytes:
+        if loop:
+            frames = (frames * (target_bytes // len(frames) + 1))[:target_bytes]
+        else:
+            frames += bytes(target_bytes - len(frames))
+    else:
+        frames = frames[:target_bytes]
+    with wave.open(str(output), "wb") as out:
+        out.setparams(params._replace(nframes=target_frames))
+        out.writeframes(frames)
+
+
 def sound(a):
-    rate, frames = 24000, max(1, int(24000 * a.duration_ms / 1000))
-    seed = int.from_bytes(a.prompt.encode("utf-8")[:8].ljust(8, b"\0"), "little")
-    rng, phase, filtered = random.Random(seed), 0.0, 0.0
-    with wave.open(a.output, "wb") as out:
-        out.setnchannels(2); out.setsampwidth(2); out.setframerate(rate)
-        data = bytearray()
-        for i in range(frames):
-            t = i / rate
-            if a.kind == "ambience":
-                filtered = .985 * filtered + .015 * rng.uniform(-1, 1)
-                sample = filtered * .32 + rng.uniform(-.025, .025)
-            elif a.kind == "music":
-                notes = (220.0, 277.18, 329.63, 440.0)
-                sample = sum(math.sin(2 * math.pi * n * t) for n in notes) * .055
-            else:
-                env = math.exp(-7 * t / max(.1, a.duration_ms / 1000))
-                sample = (math.sin(2 * math.pi * (660 - 180 * t) * t) + rng.uniform(-.2, .2)) * .24 * env
-            value = max(-32767, min(32767, int(sample * 32767)))
-            data += struct.pack("<hh", value, value)
-        out.writeframes(data)
+    if a.model == "ace-step" and a.kind != "music":
+        raise SystemExit("ace-step supports only --kind music")
+    ace = os.environ.get("MURAKUMO_ACE_STEP_RUNNER", "/home/gad/bin/audio-gen-ace-run")
+    musicgen = os.environ.get("MURAKUMO_MUSICGEN_RUNNER", "/home/gad/bin/audio-gen")
+    runner = ace if a.model == "ace-step" else musicgen
+    # ACE-Step has a 30 second minimum. Generate its minimum, then fit the WAV
+    # to the public 100..30000 ms contract without changing the selected model.
+    seconds = max(30.0 if a.model == "ace-step" else 1.0, a.duration_ms / 1000.0)
+    output = pathlib.Path(a.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output.parent) as directory:
+        raw = pathlib.Path(directory) / "model.wav"
+        subprocess.run([runner, "--model", a.model, "--modality", a.kind,
+                        "--prompt", a.prompt, "--seconds", str(seconds),
+                        "--seed", str(a.seed), "--out", str(raw)], check=True)
+        fit_pcm_wav(raw, output, a.duration_ms, a.loop)
 
 
 def tts(a):
