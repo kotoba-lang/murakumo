@@ -29,6 +29,10 @@ MOTION_RUNNER = os.environ.get("MURAKUMO_MOTION_RUNNER", "")
 EFFECT_RUNNER = os.environ.get("MURAKUMO_EFFECT_RUNNER", "")
 SOUND_RUNNER = os.environ.get("MURAKUMO_SOUND_RUNNER", "")
 COMFY_URL = os.environ.get("MURAKUMO_COMFY_URL", "").rstrip("/")
+# MiniMax H3 needs ComfyUI >= 0.30 (comfy_extras/nodes_minimax_h3.py). The
+# fleet's long-lived render instance is older and drives the ltx/wan graphs,
+# so H3 gets its own instance rather than an in-place upgrade of the farm.
+COMFY_URL_MINIMAX = os.environ.get("MURAKUMO_COMFY_URL_MINIMAX", "").rstrip("/")
 TOKEN = os.environ.get("MURAKUMO_GENERATION_TOKEN", "")
 # Hosted video provider (fal.ai). Absent key = the hosted models are simply not
 # offered; nothing falls back to the fleet, because a caller who asked for
@@ -79,6 +83,16 @@ VIDEO_MODELS = {
     # Measured 2026-07-25 at $0.22/manga page on the fast endpoint
     # (superproject ADR-2607252200/2607252400, resources/video-engine-comparison.edn).
     # The endpoint path IS the price tier: /fast tops out at 720p.
+    # Open weights (MiniMax H3 Community License), run on the fleet's own GPU.
+    # ref2va is the reference-to-video pipeline: identity rides in the
+    # conditioning as <Picture i> tags, never as the first frame, which is what
+    # a multi-shot manga page needs (superproject ADR-2608033000).
+    "minimax-h3": {"family": "minimax",
+                   "unet": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+                   "text_encoder": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                   "vae": "minimax_h3_video_vae_fp16.safetensors",
+                   "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+                   "comfy": "minimax"},
     "seedance-2.0": {"family": "seedance", "host": "fal",
                      "endpoint": "/bytedance/seedance-2.0/reference-to-video",
                      "resolutions": ("480p", "720p", "1080p", "4k")},
@@ -86,7 +100,17 @@ VIDEO_MODELS = {
                           "endpoint": "/bytedance/seedance-2.0/fast/reference-to-video",
                           "resolutions": ("480p", "720p")},
 }
-VIDEO_DEFAULT_MODEL = "ltx-2.3"
+# Owner decision 2026-08-10: the fleet default is MiniMax-H3. It is the only
+# self-hosted model measured carrying a whole multi-shot page in one clip, and
+# it renders in-frame text (countdowns, signage) that the others smear. It is
+# also slow — roughly 40 min at the geometry defaulted below — so a caller on a
+# clock should name a faster model rather than take the default.
+#
+# Until now this line said "ltx-2.3", which ADR-2608036800 had already marked
+# :broken and moved off in resources/murakumo.edn. The spec changed; this file
+# never did, so every model-less call was still being routed to the model that
+# returns all-black frames.
+VIDEO_DEFAULT_MODEL = "minimax-h3"
 # fal's reference-to-video input schema (queue OpenAPI, re-read 2026-08-03).
 # duration is a STRING enum — sending a number is a 422.
 SEEDANCE_DURATIONS = ("auto",) + tuple(str(n) for n in range(4, 16))
@@ -724,9 +748,9 @@ def comfy_image_graph(prompt, params):
     }
 
 
-def comfy_json(method, path, payload=None, timeout=30):
+def comfy_json(method, path, payload=None, timeout=30, base=None):
     request = urllib.request.Request(
-        COMFY_URL + path, method=method,
+        (base or COMFY_URL) + path, method=method,
         data=json.dumps(payload).encode() if payload is not None else None,
         headers={"content-type": "application/json"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -799,6 +823,14 @@ def run_image_job(job_id, prompt, params):
             if job_id in cancelled_jobs: return
             jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
 
+def comfy_base(spec=None):
+    """The ComfyUI a model runs on. Only the MiniMax family is routed away from
+    the farm's own instance; everything else keeps COMFY_URL untouched."""
+    if spec and spec.get("comfy") == "minimax":
+        return COMFY_URL_MINIMAX
+    return COMFY_URL
+
+
 def video_model_available(spec):
     """A model is offered only when the thing that would run it is configured:
     a hosted model needs its provider key, a fleet model needs ComfyUI. One
@@ -806,7 +838,7 @@ def video_model_available(spec):
     advertise a model that a request would then be rejected for."""
     if spec.get("host") == "fal":
         return bool(SEEDANCE_API_KEY)
-    return bool(COMFY_URL)
+    return bool(comfy_base(spec))
 
 
 def validate_video_reference_urls(inputs):
@@ -868,8 +900,12 @@ def validate_video_request(inputs, params):
     if spec.get("host") == "fal":
         validate_seedance_params(params, spec)
         return {"prompt": prompt, "images": validate_video_reference_urls(inputs)}
-    if not COMFY_URL:
+    if not comfy_base(spec):
         raise ValueError("video output requires the configured ComfyUI backend")
+    if spec["family"] == "minimax":
+        # reference-to-video: identity comes from up to 9 stills, addressed from
+        # the prompt as <Picture 1>..<Picture 9>, never as a first frame.
+        return {"prompt": prompt, "images": validate_video_reference_urls(inputs)}
     image = inputs.get("image")
     if image is not None:
         if (not isinstance(image, str) or len(image) > 2048
@@ -896,7 +932,7 @@ def validate_video_request(inputs, params):
     return {"prompt": prompt, "image": image}
 
 
-def comfy_upload_image(url):
+def comfy_upload_image(url, base=None):
     """Fetch an http(s) keyframe and upload it to ComfyUI /upload/image
     (multipart, stdlib only). Returns the stored input name for LoadImage."""
     # default Python-urllib UA is blocked by Cloudflare on our own hosts (403)
@@ -919,7 +955,7 @@ def comfy_upload_image(url):
     parts.append(f"\r\n--{boundary}--\r\n".encode())
     body = b"".join(parts)
     request = urllib.request.Request(
-        COMFY_URL + "/upload/image", method="POST", data=body,
+        (base or COMFY_URL) + "/upload/image", method="POST", data=body,
         headers={"content-type": f"multipart/form-data; boundary={boundary}"})
     with urllib.request.urlopen(request, timeout=120) as response:
         info = json.loads(response.read().decode())
@@ -1062,10 +1098,67 @@ def wan_video_graph(prompt, params, ref_image=None):
     return g
 
 
+def minimax_frames(requested):
+    """H3 samples on a 17k+5 frame grid at 24 fps; anything else is rejected by
+    the node. Snap up rather than down so a caller never gets less than asked."""
+    n = max(5, int(requested))
+    while n % 17 != 5:
+        n += 1
+    return n
+
+
+def minimax_video_graph(prompt, params, ref_image=None):
+    """MiniMax H3 ref2va (API form of ComfyUI's video_minimax_h3_r2v template).
+
+    Guidance-distilled: a BasicGuider with no negative branch, res_multistep on
+    a simple schedule. Reference images enter as ref_images.ref_image_N and are
+    addressed from the prompt as <Picture N+1>."""
+    spec = VIDEO_MODELS[params.get("model", VIDEO_DEFAULT_MODEL)]
+    seed = params.get("seed", 0) or int.from_bytes(os.urandom(4), "big")
+    length = minimax_frames(params.get("frames", 124))
+    g = {
+        "127": {"class_type": "UNETLoader",
+                "inputs": {"unet_name": spec["unet"],
+                           "weight_dtype": spec.get("weight_dtype", "default")}},
+        "128": {"class_type": "CLIPLoader",
+                "inputs": {"clip_name": spec["text_encoder"], "type": "minimax",
+                           "device": "default"}},
+        "119": {"class_type": "VAELoader", "inputs": {"vae_name": spec["vae"]}},
+        "120": {"class_type": "VAELoader", "inputs": {"vae_name": spec["audio_vae"]}},
+        "136": {"class_type": "MiniMaxH3ReferenceToVideo",
+                "inputs": {"clip": ["128", 0], "vae": ["119", 0], "audio_vae": ["120", 0],
+                           "prompt": prompt, "width": params.get("width", 640),
+                           "height": params.get("height", 640), "length": length,
+                           "ref_image_size": "match"}},
+        "126": {"class_type": "BasicGuider",
+                "inputs": {"model": ["127", 0], "conditioning": ["136", 0]}},
+        "123": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "res_multistep"}},
+        "124": {"class_type": "BasicScheduler",
+                "inputs": {"model": ["127", 0], "scheduler": "simple",
+                           "steps": params.get("steps", 20), "denoise": 1.0}},
+        "129": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
+        "125": {"class_type": "SamplerCustomAdvanced",
+                "inputs": {"noise": ["129", 0], "guider": ["126", 0], "sampler": ["123", 0],
+                           "sigmas": ["124", 0], "latent_image": ["136", 1]}},
+        "122": {"class_type": "VAEDecode", "inputs": {"samples": ["125", 0], "vae": ["119", 0]}},
+        "121": {"class_type": "VAEDecodeAudio", "inputs": {"samples": ["125", 0], "vae": ["120", 0]}},
+        "130": {"class_type": "CreateVideo",
+                "inputs": {"images": ["122", 0], "audio": ["121", 0], "fps": 24.0}},
+        "92": {"class_type": "SaveVideo",
+               "inputs": {"video": ["130", 0], "filename_prefix": "murakumo-video",
+                          "format": "auto", "codec": "auto"}},
+    }
+    for i, name in enumerate(ref_image if isinstance(ref_image, list) else
+                             ([ref_image] if ref_image else [])):
+        g["137%d" % i] = {"class_type": "LoadImage", "inputs": {"image": name}}
+        g["136"]["inputs"]["ref_images.ref_image_%d" % i] = ["137%d" % i, 0]
+    return g
+
+
 def comfy_video_graph(prompt, params, ref_image=None):
     family = VIDEO_MODELS[params.get("model", VIDEO_DEFAULT_MODEL)]["family"]
     builder = {"ltx": ltx_video_graph, "wan": wan_video_graph,
-               "wan21": wan_video_graph}[family]
+               "wan21": wan_video_graph, "minimax": minimax_video_graph}[family]
     return builder(prompt, params, ref_image)
 
 
@@ -1207,15 +1300,19 @@ def run_video_job(job_id, source, params):
         with lock:
             if job_id in cancelled_jobs: return
             jobs[job_id].update(status="running", progress=5); save()
-        ref_image = None
-        if source.get("image"):
-            ref_image = comfy_upload_image(source["image"])
+        base = comfy_base(spec)
+        refs = source.get("images") or ([source["image"]] if source.get("image") else [])
+        ref_image = [comfy_upload_image(u, base) for u in refs] or None
+        if ref_image and spec["family"] != "minimax":
+            # every other fleet family takes a single start_image
+            ref_image = ref_image[0]
         with lock:
             if job_id in cancelled_jobs: return
             jobs[job_id].update(progress=10); save()
         submitted = comfy_json("POST", "/prompt",
                                {"prompt": comfy_video_graph(source["prompt"], params,
-                                                            ref_image)})
+                                                            ref_image)},
+                               base=base)
         prompt_id = submitted.get("prompt_id")
         if not prompt_id:
             raise RuntimeError("ComfyUI rejected the video graph: "
@@ -1225,7 +1322,7 @@ def run_video_job(job_id, source, params):
         while time.monotonic() < deadline:
             with lock:
                 if job_id in cancelled_jobs: return
-            entry = comfy_json("GET", f"/history/{prompt_id}").get(prompt_id) or {}
+            entry = comfy_json("GET", f"/history/{prompt_id}", base=base).get(prompt_id) or {}
             status = entry.get("status") or {}
             if status.get("status_str") == "error":
                 raise RuntimeError("ComfyUI video job failed")
@@ -1243,7 +1340,7 @@ def run_video_job(job_id, source, params):
         query = urlencode({"filename": first.get("filename", ""),
                            "subfolder": first.get("subfolder", ""),
                            "type": first.get("type", "output")})
-        with urllib.request.urlopen(COMFY_URL + "/view?" + query, timeout=300) as response:
+        with urllib.request.urlopen(base + "/view?" + query, timeout=300) as response:
             data = response.read()
         if len(data) < 1024:
             raise RuntimeError("ComfyUI returned an implausibly small video artifact")
