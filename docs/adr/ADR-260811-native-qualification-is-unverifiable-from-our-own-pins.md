@@ -101,7 +101,9 @@ covered by existing rather than by remembering to edit a list.
 Two things stay true and are worth keeping in view:
 
 - The sweep asks for *admission*, not execution. It proves the backends accept
-  these modules, not that a native process ran them.
+  these modules, not that a native process ran them. One core has now been
+  executed — see below — but the sweep does not do that on every run, and
+  nothing here does.
 - `abi` remains pinned behind amu's. That is a known, measured, deliberate hold
   — not an oversight — and closing it is its own change with its own evidence.
 
@@ -122,3 +124,40 @@ namespace's tests passed and without the full suite — which is exactly the gap
 a per-namespace run cannot see a repository-level invariant. The counts are now
 `(<= 35 …)` and a `preload == catalog-count` relation, so (4) no longer needs
 an edit per core; (2) and (3) still do.
+
+## Addendum, 2026-08-11 — one core has actually run, with no JVM present
+
+Admission is not execution, so it was worth checking that these modules do more
+than typecheck. `prices_core`'s `civil-days` was compiled, extracted and run as
+a real aarch64 process, using amu's own JDK-free path
+(`scripts/jdk-free-native-conformance.cljs` is the same four steps):
+
+```
+cc -std=c11 -O2 -Wall -Wextra -Werror tools/kexe_loader.c -o kexe-loader
+bin/kotoba -M compile      kotoba/prices_core.kotoba --target aarch64 --output prices.kexe
+bin/kotoba -M extract-native prices.kexe --symbol civil-days --output civil-days.bin
+./kexe-loader civil-days.bin <offset> 3 aarch64 - <y> <m> <d>
+```
+
+Run with `java`, `javac`, `clojure` and `clj` shadowed by scripts that log the
+call and `exit 127`, and `JAVA_HOME` pointed at a directory that does not
+exist. **The log stayed empty**: nothing in the chain reached for a JVM.
+
+Nine dates against Python's `datetime`, all matching — the epoch, 2000-02-29
+and 1900-03-01 (the 400-year rule overriding the 100-year one), 2100-03-01, and
+two pre-epoch dates returning negative day counts (`1969-12-31` → `-1`,
+`1600-01-01` → `-135140`), so the sign path is exercised and not assumed.
+
+Two corrections this forces:
+
+- **Native execution is not JVM-bound.** It was reported earlier in the day
+  that "native build is JDK-free, native execution is not". That is true only
+  of `kotoba -M run`, the signed-receipt pipeline, which falls through to
+  `clojure -M:native-run` because `kototama.native.executor` is a JVM plugin.
+  The loader path above has no such dependency and is what amu's own
+  conformance gate uses.
+- **This is a demonstration, not a capability.** It ran from a scratch
+  directory by hand. Nothing re-runs it. Making it repeatable is awkward
+  because the pieces live in two repositories — the loader source and the
+  driver are amu's, the cores are ours, and a fleet gate ships one repository's
+  tree — so it is named here as open rather than left implied.
