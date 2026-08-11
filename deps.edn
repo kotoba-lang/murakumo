@@ -97,4 +97,23 @@
                        ;; record-get of [:option :string] (T5.2 gap close).
                        :git/sha "e78241dca15000f6bb3976e97f493c70b0137dcf"}}
          :main-opts ["-m" "cognitect.test-runner"]
-         :exec-fn cognitect.test-runner.api/test}}}
+         :exec-fn cognitect.test-runner.api/test}
+  ;; The same cores, RUN on the host ISA rather than accepted by the backend.
+  ;; Combine with :test, which carries amu:
+  ;;
+  ;;   clojure -M:test:native
+  ;;
+  ;; Separate because it needs a C toolchain to build the measured loader and
+  ;; a few minutes to compile and execute every core -- a suite you run to
+  ;; qualify a change, not while making one. tender-native is a JVM host for
+  ;; kexe artifacts; `oracle/open-native!` resolves it at call time, so nothing
+  ;; that runs the interpreter inherits it.
+  :native {:extra-paths ["test-native"]
+           :extra-deps {io.github.kotoba-lang/tender-native
+                        {:git/url "https://github.com/kotoba-lang/tender-native.git"
+                         ;; 1915ee1 verifies once per session instead of once
+                         ;; per call (2-4 s -> tens of ms), which is what makes
+                         ;; a sweep over 700+ exports finish, and lets a host
+                         ;; outside amu name the reviewed loader source.
+                         :git/sha "1915ee10a0a2af7edd252e7a0ffd67c0d4c3a167"}}
+           :main-opts ["-m" "cognitect.test-runner" "-d" "test-native"]}}}
