@@ -12,6 +12,19 @@ the Tailscale/WireGuard dependency with DID/CID identity addressing, policy reco
 direct QUIC/WebRTC/WebTransport paths, and relay fallback. No agent is installed on
 the nodes beyond the two kotoba binaries.
 
+GitHub merge governance is also treated as desired state. The exact Actions
+permissions and app-bound, strict `main` check are versioned in
+[`ADR-260811-version-github-merge-governance.edn`](docs/adr/ADR-260811-version-github-merge-governance.edn)
+and audited against the live API with an administrator-authenticated `gh`:
+
+```bash
+npx nbb scripts/check-github-governance.cljs
+```
+
+The EDN is not proof of current enforcement; only a successful live readback is.
+The decision and blocked-canary evidence are in
+[`ADR-260811`](docs/adr/ADR-260811-version-github-merge-governance.md).
+
 > Not to be confused with the *etzhayyim* murakumo (k3s-on-Lima + Ansible control
 > plane for the religious-corp **LangGraph/Pregel cells**). This repo is the
 > **kotoba WASM mesh** layer — libp2p lattice nodes hosting content-addressed WASM
