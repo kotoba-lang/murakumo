@@ -16,7 +16,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+      - name: Check out the AIUEOS parity authority
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kotoba-lang/aiueos
+          ref: f68c22cf183f5b896ec758694afc91c28f099a30
+          path: aiueos
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: "21"
@@ -28,3 +35,5 @@ jobs:
       - run: >-
           clojure -M:test
           -r '^(?!murakumo\.overlay-(quic-driver-live|witness-ledger|witness-write)-test$).*-test$'
+        env:
+          AIUEOS_ROOT: ${{ github.workspace }}/aiueos
