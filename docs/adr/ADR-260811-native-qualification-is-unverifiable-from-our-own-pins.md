@@ -24,7 +24,7 @@ ADMISSION was, and nothing here asks the native backends anything.
 ## Why simply adding the test does not work
 
 `test/murakumo/kotoba_native_qualification_test.clj` (on
-`agent/native-qualification-gate`, unmerged) enumerates `kotoba/*.kotoba` from
+`agent/native-qualification-sweep`, unmerged) enumerates `kotoba/*.kotoba` from
 disk and compiles each for `:x86_64-kotoba-v1` and `:aarch64-kotoba-v1`.
 Against our pins it reports **0 of 35**, on both ISAs:
 
