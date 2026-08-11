@@ -192,23 +192,54 @@
      :mem-bytes (or (:mem-bytes node) 0)
      :min-mem (or min-mem-bytes 0)}))
 
+(defn- eligible-fields?
+  "Kotoba `task-eligible?` を eligibility fields から直に引く。"
+  [fields]
+  (oracle/bool->host
+   (o-record 'task-eligible?
+             {:eligibility (oracle/record eligibility-schema fields)}
+             [[:eligibility :raw]])))
+
 (defn eligible?
   "Can `node` run `task`? Kotoba `task-eligible?` with a single eligibility
   record (T5.2 native guest record wire: mem bounds on the record)."
   [node task]
-  (oracle/bool->host
-   (o-record 'task-eligible?
-             {:eligibility (oracle/record eligibility-schema
-                                           (eligibility-fields node task))}
-             [[:eligibility :raw]])))
+  (eligible-fields? (eligibility-fields node task)))
+
+(defn- eligible-memo?
+  "`eligible?` を eligibility fields で memo する。
+
+  **fields が同じなら答えは同じ —— これは定義そのもの**（`eligible?` は fields
+  だけを見て、他のどこも参照しない）。したがってこの memo は意味を変えない。
+
+  効くのは、fleet の batch が **placement を数種類しか持たない**ため。実測
+  2026-08-11（superproject fleet-ci の gate batch）: 101 task の placement は
+  `[\"node\"]` と `[\"jvm\"]` の 2 種だけで、`eligible?` の呼び出しは
+  ノード数 × task 数 = 808 回だったが、実際に異なる fields は 16 通りしかなかった。
+  1 回 3.2ms（KIR、warm）なので 2.6 秒が重複計算だった。"
+  [cache node task]
+  (let [k (eligibility-fields node task)]
+    (if-let [hit (find @cache k)]
+      (val hit)
+      (let [v (eligible-fields? k)]
+        (swap! cache assoc k v)
+        v))))
 
 (defn node-score
-  "Lower is better. Fill ratio dominates; load1 / memory / name break ties."
-  [node opts load]
-  [(/ (double (get load (:name node) 0)) (double (slots node opts)))
-   (double (or (:load1 node) 0))
-   (- (double (or (:mem-bytes node) 0)))
-   (str (:name node))])
+  "Lower is better. Fill ratio dominates; load1 / memory / name break ties.
+
+  `slots-fn` は (fn [node] → slots)。**fold の内側では 4-arity を使うこと。**
+  3-arity は毎回 `slots` を引き、それは KIR 呼び出しで実測 7.4ms かかる ——
+  `sort-by` の keyfn として task ごとに全候補ノードへ当たるので、
+  ノード数 × task 数 回の KIR 呼び出しになる（実測 2026-08-11: 101 task × 8 node で
+  約 6 秒がこれだけに消えていた）。**`slots` は task に依存しない**ので、
+  fold の外で 1 ノード 1 回でよい。"
+  ([node opts load] (node-score node opts load #(slots % opts)))
+  ([node opts load slots-fn]
+   [(/ (double (get load (:name node) 0)) (double (slots-fn node)))
+    (double (or (:load1 node) 0))
+    (- (double (or (:mem-bytes node) 0)))
+    (str (:name node))]))
 
 (defn- why-unschedulable [task]
   "Reject detail string via kotoba `unschedulable-detail`.
@@ -226,17 +257,23 @@
               [[:u :raw]])))
 
 (defn- assign-1
-  "Place one task onto the currently least-filled eligible node."
-  [acc task nodes opts]
+  "Place one task onto the currently least-filled eligible node.
+
+  `ctx` は `assign` が fold の外で 1 回だけ作る不変量:
+    :slots-of  node 名 → slots（task に依存しないので 1 ノード 1 回）
+    :elig      eligibility fields → bool の memo
+  どちらも純関数の memo であって、配置の意味は変わらない。"
+  [acc task nodes opts {:keys [slots-of elig] :as ctx}]
   (let [load (:load acc)
-        candidates (filterv #(eligible? % task) nodes)]
+        slots-fn (fn [n] (get slots-of (:name n)))
+        candidates (filterv #(eligible-memo? elig % task) nodes)]
     (if (empty? candidates)
       (update acc :unschedulable conj
               {:task task :reason :no-eligible-node :detail (why-unschedulable task)})
-      (let [n (first (sort-by #(node-score % opts load) candidates))
+      (let [n (first (sort-by #(node-score % opts load slots-fn) candidates))
             k (:name n)
             used (get load k 0)
-            s (slots n opts)
+            s (slots-fn n)
             wave (oi64 (o-record 'wave-of
                                   {:w (oracle/record wave-schema
                                                      {:used used :slots s})}
@@ -255,12 +292,23 @@
             (assoc-in [:load k] next-load))))))
 
 (defn assign
-  "Assign `tasks` to `nodes`, greedily least-loaded-first."
+  "Assign `tasks` to `nodes`, greedily least-loaded-first.
+
+  **task 不変量を fold の外で 1 回だけ引く。** `slots` は (node, opts) だけの関数で
+  task を見ないので、ノードごとに 1 回。`eligible?` は eligibility fields だけの
+  関数なので fields で memo する。どちらも純関数の memo で、配置の結果は変わらない
+  （`task_plan_kotoba_parity_test` が同一性を検査している）。
+
+  実測 2026-08-11（superproject fleet-ci の 101 gate × 8 node、warm）:
+  この 2 つの hoist で 12.6s → 下記 commit の測定値まで落ちた。落ちた分はすべて
+  **同じ引数で同じ答えを何百回も KIR に計算させていた**ぶんである。"
   ([{:keys [nodes tasks opts]}] (assign nodes tasks opts))
   ([nodes tasks opts]
-   (reduce (fn [acc task] (assign-1 acc task nodes opts))
-           {:assignments [] :unschedulable [] :load {}}
-           tasks)))
+   (let [ctx {:slots-of (into {} (map (fn [n] [(:name n) (slots n opts)])) nodes)
+              :elig (atom {})}]
+     (reduce (fn [acc task] (assign-1 acc task nodes opts ctx))
+             {:assignments [] :unschedulable [] :load {}}
+             tasks))))
 
 (defn expand
   "Build `n` identical tasks from a template. Task ids via kotoba `task-id`."
