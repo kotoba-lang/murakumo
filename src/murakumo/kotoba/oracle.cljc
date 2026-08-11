@@ -61,7 +61,8 @@
    :prices "murakumo/oracle/prices_core.kir.edn"
    :provision-plan "murakumo/oracle/provision_plan_core.kir.edn"
    :reconcile-plan "murakumo/oracle/reconcile_plan_core.kir.edn"
-   :tunnel "murakumo/oracle/tunnel_core.kir.edn"})
+   :tunnel "murakumo/oracle/tunnel_core.kir.edn"
+   :windows "murakumo/oracle/windows_core.kir.edn"})
 
 (def ^:private kir-cache
   "Atom map of oracle-id → loaded KIR document."
