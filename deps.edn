@@ -85,6 +85,18 @@
            :git/sha "34415ce9bf2b8d37d5bc8259ba7e00f5d091eb44"}}
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                      ;; tender-native is the JVM host for kexe artifacts. It
+                      ;; sits in :test rather than :native because the DEFAULT
+                      ;; suite now runs a one-core native canary
+                      ;; (murakumo.native-canary-test): measured 2026-08-12,
+                      ;; NOTHING invoked the opt-in alias -- this repo has no
+                      ;; entry in scripts/fleet-ci/gates.edn and ci.yml runs
+                      ;; `-M:test`. `oracle/open-native!` resolves it at call
+                      ;; time, so nothing that only runs the interpreter
+                      ;; inherits it. The full 735-export sweep stays opt-in.
+                      io.github.kotoba-lang/tender-native
+                      {:git/url "https://github.com/kotoba-lang/tender-native.git"
+                       :git/sha "1915ee10a0a2af7edd252e7a0ffd67c0d4c3a167"}
                       io.github.kotoba-lang/compiler
                       {:git/url "https://github.com/kotoba-lang/amu.git"
                        ;; Profile 5 (compiler#451): comparisons/predicates are
@@ -109,11 +121,4 @@
   ;; kexe artifacts; `oracle/open-native!` resolves it at call time, so nothing
   ;; that runs the interpreter inherits it.
   :native {:extra-paths ["test-native"]
-           :extra-deps {io.github.kotoba-lang/tender-native
-                        {:git/url "https://github.com/kotoba-lang/tender-native.git"
-                         ;; 1915ee1 verifies once per session instead of once
-                         ;; per call (2-4 s -> tens of ms), which is what makes
-                         ;; a sweep over 700+ exports finish, and lets a host
-                         ;; outside amu name the reviewed loader source.
-                         :git/sha "1915ee10a0a2af7edd252e7a0ffd67c0d4c3a167"}}
            :main-opts ["-m" "cognitect.test-runner" "-d" "test-native"]}}}
