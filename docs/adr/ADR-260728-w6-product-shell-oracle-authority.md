@@ -40,7 +40,7 @@ checked-in resource.
 ### Regenerating artifacts
 
 ```bash
-clojure -M:test -m murakumo.kotoba-oracle-gen
+clojure -M:test:gen
 ```
 
 CI drift test `murakumo.kotoba-oracle-authority-test` fails if the resource

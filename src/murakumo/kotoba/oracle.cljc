@@ -58,6 +58,7 @@
    :overlay-runtime "murakumo/oracle/overlay_runtime_core.kir.edn"
    :overlay-stream "murakumo/oracle/overlay_stream_core.kir.edn"
    :persist "murakumo/oracle/persist_core.kir.edn"
+   :prices "murakumo/oracle/prices_core.kir.edn"
    :provision-plan "murakumo/oracle/provision_plan_core.kir.edn"
    :reconcile-plan "murakumo/oracle/reconcile_plan_core.kir.edn"
    :tunnel "murakumo/oracle/tunnel_core.kir.edn"})

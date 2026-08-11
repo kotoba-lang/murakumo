@@ -1,8 +1,7 @@
 ;; murakumo.kotoba-oracle-gen — regenerate precompiled KIR product-shell artifacts.
 ;;
 ;; Run under :test (needs kotoba.compiler):
-;;   clojure -M:test -e '(require (quote murakumo.kotoba-oracle-gen))
-;;                       (run! println (murakumo.kotoba-oracle-gen/regenerate-all!))'
+;;   clojure -M:test:gen
 ;;
 ;; Discovers every kotoba/*_core.kotoba and writes
 ;; resources/murakumo/oracle/<name>.kir.edn using the same compile-source
