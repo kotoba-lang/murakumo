@@ -1,0 +1,71 @@
+(ns prices-core
+  (:schemas {;; A calendar span, both endpoints as (y m d). Six i64 fields
+             ;; because `days-between` needs both dates and a native function
+             ;; takes at most five parameters -- the record IS the argument
+             ;; list, boxed into one word (ADR-0219).
+             :prices/span [:record :prices/span
+                           [[:from-y :i64] [:from-m :i64] [:from-d :i64]
+                            [:to-y :i64] [:to-m :i64] [:to-d :i64]]]
+             ;; `elapsed` is what `days-between` returned; `limit` is the
+             ;; registry's `:staleness-days`. Presence of both stays cljc --
+             ;; a missing key is not a staleness judgement, it is a missing
+             ;; input, and the two must not collapse into the same answer.
+             :prices/staleness [:record :prices/staleness
+                                [[:elapsed :i64] [:limit :i64]]]})
+  (:export [civil-days days-between stale? epoch-shift]))
+
+;; Decision core for murakumo.infer.prices — the staleness judgement only.
+;;
+;; What is here: the calendar. `civil-days` is Howard Hinnant's days-from-civil,
+;; unchanged from the cljc `days-between`'s inner `->days`, and the comparison
+;; that decides whether a price registry may still be quoted from.
+;;
+;; What stays cljc, on purpose:
+;;   - splitting "2026-08-11" into three integers (string -> number)
+;;   - reading the registry EDN and looking keys up in it (maps)
+;;   - throwing. `assert-fresh!` raises; a decision core returns the judgement
+;;     and lets the caller decide what a false means (ADR-2608650000: explicit
+;;     errors are a permanent constraint, so nothing here throws)
+;;
+;; Every parameter and result is one native word, so this qualifies for
+;; :x86_64-kotoba-v1 / :aarch64-kotoba-v1 as written -- no word-typed
+;; workaround was needed and none should be added.
+;;
+;; Parity: test/murakumo/prices_kotoba_parity_test.clj
+
+(defn epoch-shift [] :i64
+  ;; days from 0000-03-01 to 1970-01-01. Named rather than inlined because it
+  ;; is the one constant in the algorithm that is not derivable by reading it.
+  719468)
+
+(defn civil-days [y :i64 m :i64 d :i64] :i64
+  ;; days-from-civil: proleptic Gregorian, correct across leap years and
+  ;; century rules, no calendar library. March is treated as month 0 so the
+  ;; leap day lands at the end of the year and the month-length pattern
+  ;; becomes the linear (153m + 2) / 5.
+  (let [y2 (if (<= m 2) (- y 1) y)
+        era (quot (if (>= y2 0) y2 (- y2 399)) 400)
+        yoe (- y2 (* era 400))
+        mp (if (> m 2) (- m 3) (+ m 9))
+        doy (+ (quot (+ (* 153 mp) 2) 5) (- d 1))
+        doe (+ (- (+ (* yoe 365) (quot yoe 4)) (quot yoe 100)) doy)]
+    (- (+ (* era 146097) doe) (epoch-shift))))
+
+(defn days-between [s [:ref :prices/span]] :i64
+  ;; from -> to. Negative when `to` precedes `from`; the caller decides whether
+  ;; a registry verified in the future is an input error.
+  (let [fy (record-get s :from-y)
+        fm (record-get s :from-m)
+        fd (record-get s :from-d)
+        ty (record-get s :to-y)
+        tm (record-get s :to-m)
+        td (record-get s :to-d)]
+    (- (civil-days ty tm td) (civil-days fy fm fd))))
+
+(defn stale? [r [:ref :prices/staleness]] :bool
+  ;; Strictly greater, matching the cljc `(> (days-between at today) limit)`:
+  ;; a registry verified exactly `limit` days ago is still fresh on its last
+  ;; day, not stale on it.
+  (let [elapsed (record-get r :elapsed)
+        limit (record-get r :limit)]
+    (> elapsed limit)))
