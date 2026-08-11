@@ -1,0 +1,139 @@
+(ns windows-core
+  (:schemas {;; The whole admission question in one word. Four fields because a
+             ;; native function takes at most five parameters and this is the
+             ;; shape the two-window rule actually needs -- not a flattening.
+             :windows/admit [:record :windows/admit
+                             [[:units :i64] [:short-limit :i64]
+                              [:short-remaining :i64] [:week-remaining :i64]]]})
+  (:export [short-window-code week-window-code
+            short-window-ms week-window-ms window-span-ms
+            short-units-from-week
+            window-cutoff in-window? recovers-at remaining
+            indivisible? admit-code
+            verdict-allow verdict-short verdict-week
+            retry-after-ms retry-after-seconds retry-after-minutes]))
+
+;; Decision core for murakumo.infer.windows — the rolling-window rate rule
+;; (ADR-2608026600). The arithmetic that decides whether a job is admitted, and
+;; when a blocked one recovers.
+;;
+;; What stays cljc: the feed. `consumed` folds a sequence of usage events and
+;; `recovers-at` takes a minimum over one — sequences, not judgements. cljc
+;; filters and sums, and hands the totals here.
+;;
+;; ── units are i64 here, and that is a backend gap, not a design choice ──
+;;
+;; The cljc side carries units as `double` (`:plan.usage/units (double units)`).
+;; A scalar `:f64` parameter is rejected by the frontend today -- measured
+;; 2026-08-11, `(defn over? [units :f64 remaining :f64] :bool (> units remaining))`
+;; on compiler 3050ee4 gives `expression type mismatch: expected i64, got f64`
+;; on both native targets. `:f64` is a live value family elsewhere
+;; (`:vector-f64`, document literals), so this is `:not-yet-implemented` in the
+;; scalar surface, NOT an intentional constraint (ADR-2608650000 requires
+;; saying which). **When scalar f64 lands, these signatures should become
+;; `:f64` and this paragraph should go.** Until then the caller rounds, and
+;; the parity test drives both sides with integral units.
+;;
+;; Nothing here throws. cljc's `admit` raises when a plan carries no limits;
+;; that is a missing input, not a rate decision, and it stays on that side --
+;; explicit errors are a permanent constraint (ADR-2608650000).
+;;
+;; Parity: test/murakumo/windows_kotoba_parity_test.clj
+
+(defn short-window-code [] :i64 0)
+(defn week-window-code [] :i64 1)
+
+(defn short-window-ms [] :i64
+  ;; 5 hours. The floor that stops one burst from eating the week.
+  18000000)
+
+(defn week-window-ms [] :i64
+  ;; 7 days. The actual budget.
+  604800000)
+
+(defn window-span-ms [window :i64] :i64
+  (if (= window 0) (short-window-ms) (week-window-ms)))
+
+(defn short-units-from-week [week :i64] :i64
+  ;; cljc: (long (+ 0.5 (* w short-window-share))) with share = 0.25.
+  ;; Round-half-up of w/4. Exact in i64: 0.25 is a power of two so the cljc
+  ;; product carries no rounding error to reproduce, and `long` truncates
+  ;; toward zero, which for a non-negative week matches integer division.
+  ;;
+  ;; ⚠ 0.25 is NOT a justified number (ADR-2608026600 risk 5) -- it is the
+  ;; simplest value meeting "don't let one burst eat the week". Do not quote
+  ;; it as optimal before the burst distribution is measured.
+  (quot (+ week 2) 4))
+
+(defn window-cutoff [now :i64 span :i64] :i64
+  ;; Rolling: everything at or before the cutoff has already recovered.
+  (- now span))
+
+(defn in-window? [at :i64 now :i64 span :i64] :bool
+  ;; Strictly after, matching cljc's `(> (at-of e) cutoff)`: a consumption
+  ;; exactly `span` ago has just fallen out.
+  (> at (window-cutoff now span)))
+
+(defn recovers-at [oldest :i64 span :i64] :i64
+  ;; When the oldest consumption still inside the window falls out. The 429
+  ;; must carry this -- a rolling window's recovery time is not guessable, and
+  ;; not answering it turns into a support ticket (risk 4).
+  (+ oldest span))
+
+(defn remaining [limit :i64 used :i64] :i64
+  ;; Never negative. Not a balance: this is "how much you may still use",
+  ;; and showing it as a balance is what turns a rate window into stored
+  ;; value (risk 1).
+  ;;
+  ;; Written as an `if` rather than `max`: `max` has no admitted lowering in
+  ;; this subset (measured 2026-08-11 -- `operation has no admitted lowering`),
+  ;; which is why every clamp in the shipped cores is spelled this way.
+  (let [d (- limit used)]
+    (if (< d 0) 0 d)))
+
+(defn indivisible? [units :i64 short-limit :i64] :bool
+  ;; A single job larger than the short window can NEVER enter it, no matter
+  ;; how long the caller waits. Returning 429 + retry-after there promises a
+  ;; recovery that does not come.
+  ;;
+  ;; Measured 2026-08-03: Plus is 1,140 unit/week -> 285 short, and one 5s
+  ;; Seedance 2.0 video is 61x5 = 305. Blocking on the short window means a
+  ;; Plus subscriber cannot make a single frontier video. Both the window
+  ;; arithmetic and the plan numbers were right on their own; only the
+  ;; relation between them was invisible from either side.
+  (> units short-limit))
+
+(defn verdict-allow [] :i64 0)
+(defn verdict-short [] :i64 1)
+(defn verdict-week [] :i64 2)
+
+(defn admit-code [a [:ref :windows/admit]] :i64
+  ;; 0 admit | 1 blocked by the 5-hour window | 2 blocked by the 7-day window.
+  ;;
+  ;; Both windows are checked, in that order: the short one alone cannot
+  ;; protect the week, and the week alone lets one burst consume it. An
+  ;; indivisible job skips the short window and is judged by the week -- once
+  ;; through, the short window is over its limit, so the NEXT job stops
+  ;; normally. Burst protection relaxes by exactly one job.
+  (let [units (record-get a :units)
+        short-limit (record-get a :short-limit)
+        short-remaining (record-get a :short-remaining)
+        week-remaining (record-get a :week-remaining)]
+    (if (indivisible? units short-limit)
+      (if (> units week-remaining) (verdict-week) (verdict-allow))
+      (if (> units short-remaining)
+        (verdict-short)
+        (if (> units week-remaining) (verdict-week) (verdict-allow))))))
+
+(defn retry-after-ms [recovers :i64 now :i64] :i64
+  (let [d (- recovers now)]
+    (if (< d 0) 0 d)))
+
+(defn retry-after-seconds [ms :i64] :i64
+  ;; cljc: (long (Math/ceil (/ (double ms) 1000.0))). `retry-after-ms` is
+  ;; already clamped at zero, so ceiling division is exact here.
+  (quot (+ ms 999) 1000))
+
+(defn retry-after-minutes [seconds :i64] :i64
+  ;; The "about N minutes" the 429 body prints.
+  (quot (+ seconds 59) 60))
