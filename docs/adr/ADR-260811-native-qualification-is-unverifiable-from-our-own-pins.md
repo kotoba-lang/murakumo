@@ -156,8 +156,29 @@ Two corrections this forces:
   `clojure -M:native-run` because `kototama.native.executor` is a JVM plugin.
   The loader path above has no such dependency and is what amu's own
   conformance gate uses.
-- **This is a demonstration, not a capability.** It ran from a scratch
-  directory by hand. Nothing re-runs it. Making it repeatable is awkward
-  because the pieces live in two repositories — the loader source and the
-  driver are amu's, the cores are ours, and a fleet gate ships one repository's
-  tree — so it is named here as open rather than left implied.
+- ~~**This is a demonstration, not a capability.**~~ **Closed the same day** by
+  `test/murakumo/kotoba_native_execution_test.clj`, which does the whole chain
+  on every run: builds the loader from amu's **pinned** checkout, compiles
+  `prices_core` for the host ISA, writes the artifact's `:code` (what
+  `extract-native` writes), and runs eleven dates through fresh native
+  processes against the cljc `days-between`. 37 assertions.
+
+  The two-repository problem turned out not to be one: amu is already a test
+  dependency here, so `tools/kexe_loader.c` is in the gitlibs checkout the pin
+  names. It is located by URL rather than by coordinate name — the repository
+  was renamed `compiler` → `amu` and the coordinate did not follow, so
+  `io.github.kotoba-lang/compiler` points at `amu.git` while tools.deps keys the
+  cache directory by coordinate. Looking either half up by a guessed name finds
+  the pin and the wrong directory, or nothing.
+
+  Verified to fail before being trusted: perturbing `epoch-shift` by one
+  (`719468` → `719467`) turns it red on every date — `"0"` vs `"1"`, `"11016"`
+  vs `"11017"`. A gate not seen failing is decoration.
+
+  It does **not** prove the JDK-free property — it runs inside a JVM and cannot
+  demonstrate the absence of one. That claim stays with amu's
+  `jdk-free-native-conformance`, which shadows `java`/`javac`/`clojure`/`clj`
+  and asserts none was called. Two claims, two places, neither standing in for
+  the other. A missing `cc` is a failure here rather than a skip: a native
+  execution test that does not execute has verified nothing, and skipping
+  quietly would leave a green suite asserting a property no one checked.
