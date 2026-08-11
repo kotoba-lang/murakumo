@@ -63,18 +63,27 @@
          ;; just skips it and the parity assertions skip loudly, which is right:
          ;; a missing sibling is an environment gap, not a defect here.
          :extra-paths ["test" "../../network-awai/cloud-murakumo/src"]
-         ;; kotoba-lang/compiler is TEST-ONLY for the W6 pure-planner oracle
-         ;; parity gate (kotoba/kekkai_gate_core.kotoba). Override abi to the
-         ;; pin compiler expects so component/wit loads cleanly in the test JVM.
+         ;; kotoba-lang/amu (formerly kotoba-lang/compiler) is TEST-ONLY: the
+         ;; W6 pure-planner oracle parity gate and the native qualification
+         ;; sweep. Both `abi` and `kotoba-kir` are overridden to the pins amu
+         ;; itself carries -- amu's namespaces are compiled against those, and
+         ;; the production pins below are older. Overriding is test-scope, so
+         ;; murakumo's own runtime keeps the pins it was built against.
          :override-deps
          {io.github.kotoba-lang/abi
           {:git/url "https://github.com/kotoba-lang/abi.git"
-           ;; Must match compiler's abi pin (not the compiler commit SHA).
-           :git/sha "34415ce9bf2b8d37d5bc8259ba7e00f5d091eb44"}}
+           ;; Must match amu's abi pin (not the amu commit SHA).
+           :git/sha "32ee84b2efc92478c846629c8d8319280eed506c"}
+          io.github.kotoba-lang/kotoba-kir
+          {:git/url "https://github.com/kotoba-lang/kotoba-kir.git"
+           ;; Must match amu's kir pin. The production pin (Profile 5,
+           ;; 767f2f2) predates `kotoba.kir.descriptor`, so amu's
+           ;; `kotoba.wasm.typed` cannot load against it at all.
+           :git/sha "d58972da61758584a5bec0e863bcb3ea6fdd6c64"}}
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}
                       io.github.kotoba-lang/compiler
-                      {:git/url "https://github.com/kotoba-lang/compiler.git"
+                      {:git/url "https://github.com/kotoba-lang/amu.git"
                        ;; Profile 5 (compiler#451): comparisons/predicates are
                        ;; :bool; record :bool fields + and/or/not compose.
                        ;; compiler#453/#454: every synthesized name is
@@ -83,6 +92,6 @@
                        ;; the shipped KIR carries __kotoba_binding-some_N.
                        ;; compiler option-string-in-record: if-some over
                        ;; record-get of [:option :string] (T5.2 gap close).
-                       :git/sha "98b56bdb6886236281b634cc3409088ed2fe72a4"}}
+                       :git/sha "e78241dca15000f6bb3976e97f493c70b0137dcf"}}
          :main-opts ["-m" "cognitect.test-runner"]
          :exec-fn cognitect.test-runner.api/test}}}
