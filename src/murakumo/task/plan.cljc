@@ -27,6 +27,23 @@
   (oracle/require-ready! oid)
   (oracle/call-record oid export host-map field-specs))
 
+(defn- oi64
+  "oracle の i64 結果 → host の整数。
+
+  **`long` に直接渡してはならない。** KIR は i64 を JVM では Long、cljs では
+  **BigInt** で返すので、cljs 側で `(long <BigInt>)` は
+  `Cannot convert a BigInt value to a number` で落ちる。実測 2026-08-11:
+  この ns は 11 箇所で素の `long` を使っており、**nbb では require した瞬間に
+  `default-opts` の評価で死んでいた** —— つまり `murakumo task plan/run/report`
+  （この ns の唯一の CLI）が nbb 上で 1 つも動かなかった。JVM では動くので
+  test が緑のまま通っていた。
+
+  `oracle/i64->host` はまさにこの変換のために在り、`murakumo.tunnel` /
+  `murakumo.persist` / `murakumo.component-authority` は既にこれを通している ——
+  この ns だけが例外だった。"
+  [v]
+  (long (oracle/i64->host v)))
+
 (def exclude-join-sep
   "CSV join for :exclude-nodes in unschedulable detail. Kotoba SSoT."
   (o 'exclude-join-sep []))
@@ -48,10 +65,10 @@
 
 (def default-opts
   "Default planner opts. max-slots / max-attempts / timeout-ms from oracle."
-  {:max-slots (long (o 'default-max-slots []))
+  {:max-slots (oi64 (o 'default-max-slots []))
    :slots-per-node nil
-   :max-attempts (long (o 'default-max-attempts []))
-   :timeout-ms (long (o 'default-timeout-ms []))
+   :max-attempts (oi64 (o 'default-max-attempts []))
+   :timeout-ms (oi64 (o 'default-timeout-ms []))
    :connect-timeout-s 8})
 
 (def ^:private eligibility-schema
@@ -95,7 +112,7 @@
         slots-per (opt-i64 (:slots-per-node merged))
         max-slots (long (or (:max-slots merged) 8))
         cores (opt-i64 (:cores node))]
-    (long (o-record 'slots
+    (oi64 (o-record 'slots
                     {:s (oracle/record slots-schema
                                        {:budget budget
                                         :node-slots node-slots
@@ -220,17 +237,17 @@
             k (:name n)
             used (get load k 0)
             s (slots n opts)
-            wave (long (o-record 'wave-of
+            wave (oi64 (o-record 'wave-of
                                   {:w (oracle/record wave-schema
                                                      {:used used :slots s})}
                                   [[:w :raw]]))
-            slot (long (o-record 'slot-of
+            slot (oi64 (o-record 'slot-of
                                   {:w (oracle/record wave-schema
                                                      {:used used :slots s})}
                                   [[:w :raw]]))
             a {:task task :node k :host (:host n)
                :wave wave :slot slot}
-            next-load (long (o-record 'load-after-assign
+            next-load (oi64 (o-record 'load-after-assign
                                        {:used used}
                                        [[:used :i64]]))]
         (-> acc
@@ -288,7 +305,7 @@
                                        [[:retry :raw]]))]
                    (when can?
                      (-> task
-                         (assoc :attempt (long (o-record 'attempt-next
+                         (assoc :attempt (oi64 (o-record 'attempt-next
                                                            {:attempt attempt}
                                                            [[:attempt :i64]])))
                          (update :exclude-nodes (fnil conj []) node))))))
@@ -299,7 +316,7 @@
   [xs p]
   (let [v (vec (sort xs))]
     (when (seq v)
-      (let [idx (long (o-record 'nearest-rank-idx
+      (let [idx (oi64 (o-record 'nearest-rank-idx
                                   {:p (oracle/record pair-schema
                                                      {:a (count v)
                                                       :b (long (Math/floor (* p 1000)))})}
@@ -323,12 +340,12 @@
         ko (filter failed? finals)
         durations (keep :duration-ms results)
         task-ms (reduce + 0 durations)
-        retried (long (o-record 'summary-retried
+        retried (oi64 (o-record 'summary-retried
                                   {:p (oracle/record pair-schema
                                                      {:a (count results)
                                                       :b (count finals)})}
                                   [[:p :raw]]))
-        speedup (let [milli (long (o-record 'speedup-milli
+        speedup (let [milli (oi64 (o-record 'speedup-milli
                                              {:p (oracle/record pair-schema
                                                                 {:a task-ms
                                                                  :b (or wall-ms 0)})}
