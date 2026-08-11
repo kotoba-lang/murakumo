@@ -1,6 +1,6 @@
 # ADR-260811 — Native qualification is not verifiable from our own pins
 
-- Status: accepted (statement of position; the migration it names is not done)
+- Status: accepted — the migration it named is done (2026-08-11, same day)
 - Date: 2026-08-11
 
 ## The claim that could not be checked here
@@ -41,21 +41,22 @@ that predates native records existing.
 
 ## What advancing it costs, measured
 
-Advancing the test-only compiler to amu `e78241d` needs `kotoba-kir` overridden
-to amu's `d58972d` as well: our production kir pin (`767f2f2`, Profile 5)
-predates `kotoba.kir.descriptor`, so amu's `kotoba.wasm.typed` cannot load at
-all against it. With both overridden, the qualification sweep passes **35/35 on
-both ISAs** — the first time this has been checkable here.
+Advancing the test-only compiler to amu `e78241d` needs the production
+`kotoba-kir` pin advanced with it, `767f2f2` → `d58972d`: the old Profile 5 pin
+predates `kotoba.kir.descriptor`, so amu's `kotoba.wasm.typed` cannot load
+against it at all. They are one unit.
 
-The full suite does not. Measured 2026-08-11, same host, back to back:
+With that pair, the qualification sweep passes **35/35 on both ISAs** — the
+first time this has been checkable here — and `clojure -M:test:gen` rewrites all
+35 shipped artifacts **byte-identically**. KIR emission did not move across 339
+commits of compiler.
 
-| | tests | failures | errors |
-|---|---|---|---|
-| `origin/main`, unchanged | 642 | 7 | 1 |
-| with the pins advanced | 644 | 20 | 4 |
+### The first attempt blamed the wrong thing
 
-Eight tests regress, all in `component_authority` and `overlay_witness`. They
-share one cause:
+A first pass also advanced the `abi` override to amu's own pin (`32ee84b`), on
+the strength of a comment in `deps.edn` saying it "must match compiler's abi
+pin". That pass regressed eight tests in `component_authority` and
+`overlay_witness`, all through:
 
 ```
 ExceptionInfo: Complete Component authority signing input is required
@@ -63,33 +64,46 @@ ExceptionInfo: Complete Component authority signing input is required
   at murakumo.component_authority/sign-event (component_authority.cljc:111)
 ```
 
-`sign-event` validates through `component_authority_core`'s **shipped** KIR.
-`resources/murakumo/oracle/*.kir.edn` was generated for Profile 5 kir and is
-being executed by a newer one. The artifacts and the interpreter are one unit,
-and the override splits them.
+This ADR originally recorded that as the shipped KIR being generated for one
+kir and executed by another. **That explanation was wrong** — the artifacts are
+byte-identical, so they cannot be the difference. Isolating it:
+
+| pins | `component_authority` |
+|---|---|
+| kir + amu + abi advanced | 2 failures, 2 errors |
+| kir + amu advanced, abi held | **0 failures, 0 errors** |
+
+It is the `abi` advance alone, through
+`abi/valid-component-authority-event?`. The comment was taken on trust rather
+than tested; held at `34415ce`, everything passes. Advancing `abi` is a
+separate migration nobody has done, and `deps.edn` now says so where the pin is.
+
+### Result
+
+Full suite, same host, against current `main`:
+
+| | tests | failures | errors |
+|---|---|---|---|
+| `origin/main` | 642 | 4 | 0 |
+| migrated | 644 | 4 | 0 |
+
+The failing sets are **identical** — `aiueos-object-source-is-present` and
+`ledger-quorum-fn-reaches-witnessed-over-real-quic`, both already failing on
+`main` and neither touched here.
 
 ## Position
 
-**Native qualification is a property we assert about ourselves and cannot
-currently check.** Do not quote 33/33 or 35/35 as a property of this repository
-until it reproduces from these pins.
+Native qualification **is** now checkable from these pins, and
+`kotoba_native_qualification_test` checks it on every run: every
+`kotoba/*.kotoba`, both ISAs, module list read from disk so a new core is
+covered by existing rather than by remembering to edit a list.
 
-The work is a migration, not a pin bump, and it is one change:
+Two things stay true and are worth keeping in view:
 
-1. advance the production `kotoba-kir` pin with the test-only compiler pin —
-   they are not independent
-2. regenerate every `resources/murakumo/oracle/*.kir.edn` against that pair
-   (`clojure -M:test:gen`)
-3. confirm the eight `component_authority` / `overlay_witness` tests come back
-4. then merge the qualification sweep, so the next regression is loud
-
-Doing (4) before (1)–(3) would land a red test; doing (1)–(3) without (4)
-leaves the hole open for the next `d7de271`.
-
-Until then the standing defence is kotoba-native's own
-`a-non-tail-record-of-another-schema-is-a-local-not-a-boundary`, which pins the
-rule that broke — in that repository, about that rule. It does not protect this
-repository's standing in the general property, and nothing here does.
+- The sweep asks for *admission*, not execution. It proves the backends accept
+  these modules, not that a native process ran them.
+- `abi` remains pinned behind amu's. That is a known, measured, deliberate hold
+  — not an oversight — and closing it is its own change with its own evidence.
 
 ## Also recorded: adding a core is four things, not one
 
