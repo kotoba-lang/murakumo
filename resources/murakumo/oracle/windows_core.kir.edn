@@ -1,0 +1,193 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name short-window-code,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 0,
+   :param-types []}
+  {:name week-window-code,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1,
+   :param-types []}
+  {:name short-window-ms,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 18000000,
+   :param-types []}
+  {:name week-window-ms,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 604800000,
+   :param-types []}
+  {:name window-span-ms,
+   :params [window],
+   :result :i64,
+   :effects #{},
+   :body (if (= window 0) (short-window-ms) (week-window-ms)),
+   :param-types [:i64]}
+  {:name short-units-from-week,
+   :params [week],
+   :result :i64,
+   :effects #{},
+   :body (quot (+ week 2) 4),
+   :param-types [:i64]}
+  {:name window-cutoff,
+   :params [now span],
+   :result :i64,
+   :effects #{},
+   :body (- now span),
+   :param-types [:i64 :i64]}
+  {:name in-window?,
+   :params [at now span],
+   :result :bool,
+   :effects #{},
+   :body (> at (window-cutoff now span)),
+   :param-types [:i64 :i64 :i64]}
+  {:name recovers-at,
+   :params [oldest span],
+   :result :i64,
+   :effects #{},
+   :body (+ oldest span),
+   :param-types [:i64 :i64]}
+  {:name remaining,
+   :params [limit used],
+   :result :i64,
+   :effects #{},
+   :body (let [d (- limit used)] (if (< d 0) 0 d)),
+   :param-types [:i64 :i64]}
+  {:name indivisible?,
+   :params [units short-limit],
+   :result :bool,
+   :effects #{},
+   :body (> units short-limit),
+   :param-types [:i64 :i64]}
+  {:name verdict-allow,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 0,
+   :param-types []}
+  {:name verdict-short,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1,
+   :param-types []}
+  {:name verdict-week,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 2,
+   :param-types []}
+  {:name admit-code,
+   :params [a],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [units
+     (record-get
+      [:record
+       :windows/admit
+       [[:units :i64]
+        [:short-limit :i64]
+        [:short-remaining :i64]
+        [:week-remaining :i64]]]
+      a
+      :units)
+     short-limit
+     (record-get
+      [:record
+       :windows/admit
+       [[:units :i64]
+        [:short-limit :i64]
+        [:short-remaining :i64]
+        [:week-remaining :i64]]]
+      a
+      :short-limit)
+     short-remaining
+     (record-get
+      [:record
+       :windows/admit
+       [[:units :i64]
+        [:short-limit :i64]
+        [:short-remaining :i64]
+        [:week-remaining :i64]]]
+      a
+      :short-remaining)
+     week-remaining
+     (record-get
+      [:record
+       :windows/admit
+       [[:units :i64]
+        [:short-limit :i64]
+        [:short-remaining :i64]
+        [:week-remaining :i64]]]
+      a
+      :week-remaining)]
+    (if
+     (indivisible? units short-limit)
+     (if (> units week-remaining) (verdict-week) (verdict-allow))
+     (if
+      (> units short-remaining)
+      (verdict-short)
+      (if (> units week-remaining) (verdict-week) (verdict-allow))))),
+   :param-types [[:ref :windows/admit]]}
+  {:name retry-after-ms,
+   :params [recovers now],
+   :result :i64,
+   :effects #{},
+   :body (let [d (- recovers now)] (if (< d 0) 0 d)),
+   :param-types [:i64 :i64]}
+  {:name retry-after-seconds,
+   :params [ms],
+   :result :i64,
+   :effects #{},
+   :body (quot (+ ms 999) 1000),
+   :param-types [:i64]}
+  {:name retry-after-minutes,
+   :params [seconds],
+   :result :i64,
+   :effects #{},
+   :body (quot (+ seconds 59) 60),
+   :param-types [:i64]}],
+ :oracle-value nil,
+ :schema-identities
+ #:windows{:admit
+           "eb2e84c2dc3e3df171a60d8931e356098e8271be879e45a1dc7647c6dc623864"},
+ :exports
+ [short-window-code
+  week-window-code
+  short-window-ms
+  week-window-ms
+  window-span-ms
+  short-units-from-week
+  window-cutoff
+  in-window?
+  recovers-at
+  remaining
+  indivisible?
+  admit-code
+  verdict-allow
+  verdict-short
+  verdict-week
+  retry-after-ms
+  retry-after-seconds
+  retry-after-minutes],
+ :schemas
+ #:windows{:admit
+           [:record
+            :windows/admit
+            [[:units :i64]
+             [:short-limit :i64]
+             [:short-remaining :i64]
+             [:week-remaining :i64]]]},
+ :effects #{},
+ :blocks [],
+ :entry nil}
