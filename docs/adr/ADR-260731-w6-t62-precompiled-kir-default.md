@@ -23,7 +23,7 @@ For **murakumo**, T6.2 is closed:
 Regenerate:
 
 ```bash
-clojure -M:test -m murakumo.kotoba-oracle-gen
+clojure -M:test:gen
 ```
 
 ## Non-claims

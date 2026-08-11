@@ -135,12 +135,12 @@
 
 (deftest precompiled-kir-does-not-drift-from-source
   "Fail CI when kotoba source changed but resource was not regenerated.
-   Fix: clojure -M:test -m murakumo.kotoba-oracle-gen"
+   Fix: clojure -M:test:gen"
   (let [live (live-kir)
         shipped (resource-kir)]
     (is (= live shipped)
         (str "KIR drift: " source-path " ≠ classpath:" resource-path
-             " — run: clojure -M:test -m murakumo.kotoba-oracle-gen"))))
+             " — run: clojure -M:test:gen"))))
 
 (deftest gen-compile-kir-roundtrip
   (let [kir (gen/compile-kir source-path)]
@@ -158,7 +158,7 @@
     (doseq [{:strs [source out]} arts]
       (is (.exists (io/file source)) (str "missing source " source))
       (is (.exists (io/file out)) (str "missing shipped KIR " out
-                                       " — run: clojure -M:test -m murakumo.kotoba-oracle-gen"))
+                                       " — run: clojure -M:test:gen"))
       (is (str/starts-with? out "resources/murakumo/oracle/"))
       (is (str/ends-with? out ".kir.edn")))))
 
@@ -178,7 +178,7 @@
 
 (deftest t62-all-product-shell-kir-do-not-drift
   "Catalog-wide drift gate (T6.2). Live compile each core; compare to shipped
-   after gensym normalization. Fix: clojure -M:test -m murakumo.kotoba-oracle-gen"
+   after gensym normalization. Fix: clojure -M:test:gen"
   (doseq [{:strs [source out]} (gen/discover-artifacts)]
     (testing source
       ;; Compared raw. Every synthesized name the compiler emits is now
@@ -193,7 +193,7 @@
             shipped (edn/read-string (slurp (io/resource cp)))]
         (is (= live shipped)
             (str "KIR drift: " source " ≠ " cp
-                 " — run: clojure -M:test -m murakumo.kotoba-oracle-gen"))))))
+                 " — run: clojure -M:test:gen"))))))
 
 (deftest t62-prod-deps-exclude-compiler
   "T6.2: compiler must not be on the production classpath (only :test alias)."
@@ -299,7 +299,7 @@
 
 (deftest token-precompiled-kir-does-not-drift
   (is (= (token-live-kir) (token-resource-kir))
-      "token KIR drift — run: clojure -M:test -m murakumo.kotoba-oracle-gen (or deps -M -m ...)"))
+      "token KIR drift — run: clojure -M:test:gen"))
 
 (def ^:private report-source "kotoba/report_core.kotoba")
 (def ^:private report-resource "murakumo/oracle/report_core.kir.edn")
@@ -430,7 +430,7 @@
 
 (deftest report-precompiled-kir-does-not-drift
   (is (= (report-live-kir) (report-resource-kir))
-      "report KIR drift — run: clojure -M:test -m murakumo.kotoba-oracle-gen"))
+      "report KIR drift — run: clojure -M:test:gen"))
 
 (def ^:private plan-source "kotoba/infer_plan_core.kotoba")
 (def ^:private plan-resource "murakumo/oracle/infer_plan_core.kir.edn")

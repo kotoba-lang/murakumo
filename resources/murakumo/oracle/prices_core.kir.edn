@@ -1,0 +1,149 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name epoch-shift,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 719468,
+   :param-types []}
+  {:name civil-days,
+   :params [y m d],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [y2
+     (if (<= m 2) (- y 1) y)
+     era
+     (quot (if (>= y2 0) y2 (- y2 399)) 400)
+     yoe
+     (- y2 (* era 400))
+     mp
+     (if (> m 2) (- m 3) (+ m 9))
+     doy
+     (+ (quot (+ (* 153 mp) 2) 5) (- d 1))
+     doe
+     (+ (- (+ (* yoe 365) (quot yoe 4)) (quot yoe 100)) doy)]
+    (- (+ (* era 146097) doe) (epoch-shift))),
+   :param-types [:i64 :i64 :i64]}
+  {:name days-between,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [fy
+     (record-get
+      [:record
+       :prices/span
+       [[:from-y :i64]
+        [:from-m :i64]
+        [:from-d :i64]
+        [:to-y :i64]
+        [:to-m :i64]
+        [:to-d :i64]]]
+      s
+      :from-y)
+     fm
+     (record-get
+      [:record
+       :prices/span
+       [[:from-y :i64]
+        [:from-m :i64]
+        [:from-d :i64]
+        [:to-y :i64]
+        [:to-m :i64]
+        [:to-d :i64]]]
+      s
+      :from-m)
+     fd
+     (record-get
+      [:record
+       :prices/span
+       [[:from-y :i64]
+        [:from-m :i64]
+        [:from-d :i64]
+        [:to-y :i64]
+        [:to-m :i64]
+        [:to-d :i64]]]
+      s
+      :from-d)
+     ty
+     (record-get
+      [:record
+       :prices/span
+       [[:from-y :i64]
+        [:from-m :i64]
+        [:from-d :i64]
+        [:to-y :i64]
+        [:to-m :i64]
+        [:to-d :i64]]]
+      s
+      :to-y)
+     tm
+     (record-get
+      [:record
+       :prices/span
+       [[:from-y :i64]
+        [:from-m :i64]
+        [:from-d :i64]
+        [:to-y :i64]
+        [:to-m :i64]
+        [:to-d :i64]]]
+      s
+      :to-m)
+     td
+     (record-get
+      [:record
+       :prices/span
+       [[:from-y :i64]
+        [:from-m :i64]
+        [:from-d :i64]
+        [:to-y :i64]
+        [:to-m :i64]
+        [:to-d :i64]]]
+      s
+      :to-d)]
+    (- (civil-days ty tm td) (civil-days fy fm fd))),
+   :param-types [[:ref :prices/span]]}
+  {:name stale?,
+   :params [r],
+   :result :bool,
+   :effects #{},
+   :body
+   (let
+    [elapsed
+     (record-get
+      [:record :prices/staleness [[:elapsed :i64] [:limit :i64]]]
+      r
+      :elapsed)
+     limit
+     (record-get
+      [:record :prices/staleness [[:elapsed :i64] [:limit :i64]]]
+      r
+      :limit)]
+    (> elapsed limit)),
+   :param-types [[:ref :prices/staleness]]}],
+ :oracle-value nil,
+ :schema-identities
+ #:prices{:span
+          "eecb44d14d3fd002612c5522a854304a2992a8d69b8f9a91e700b4a7c9bf0445",
+          :staleness
+          "9ccae49757a0f4aa54557de1ad51217528c61bbb6b0fb21557706e4c397e388e"},
+ :exports [civil-days days-between stale? epoch-shift],
+ :schemas
+ #:prices{:span
+          [:record
+           :prices/span
+           [[:from-y :i64]
+            [:from-m :i64]
+            [:from-d :i64]
+            [:to-y :i64]
+            [:to-m :i64]
+            [:to-d :i64]]],
+          :staleness
+          [:record :prices/staleness [[:elapsed :i64] [:limit :i64]]]},
+ :effects #{},
+ :blocks [],
+ :entry nil}
