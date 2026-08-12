@@ -71,6 +71,27 @@
 
 (def ^:private snap-seq (atom 0))
 
+(def ^:private trust-warned? (atom false))
+
+(defn- internal-trust!
+  "Read the internal-trust secret for this write, announcing ONCE per process when
+   it is unconfigured. This write is a background path whose only signal is a
+   boolean, so a silently missing credential is exactly the failure this warning
+   exists to prevent (ADR-2608124000)."
+  []
+  (let [trust (persist/internal-trust)]
+    (when (and (nil? trust) (compare-and-set! trust-warned? false true))
+      (binding [*out* *err*]
+        (println (str "WARN murakumo.dash: " persist/internal-trust-env
+                      " is unset — fleet snapshot writes carry NO "
+                      persist/internal-trust-header-name " header ("
+                      (name (persist/internal-trust-status trust))
+                      "). Harmless while kotoba-server's require_internal_trust"
+                      " gate is disabled fleet-wide (ADR-2608124000); the moment"
+                      " that gate is armed these background writes start failing"
+                      " and only the persisted counter would show it."))))
+    trust))
+
 (defn persist!
   "Write the snapshot as an atproto record into graph 'murakumo-fleet' on a node's
    Datom log — one tx per snapshot ⇒ tamper-evident, queryable as-of history."
@@ -84,7 +105,7 @@
     (p/sh "bash" "-c" (persist/write-forward-command write-plan (node-port fleet target) (:host target)))
     (Thread/sleep persist/forward-settle-ms)
     (let [body (json/generate-string (:envelope write-plan))
-          r (apply p/sh (persist/write-curl-argv write-plan token body))]
+          r (apply p/sh (persist/write-curl-argv write-plan token body (internal-trust!)))]
       (persist/write-ok? (:out r)))))
 
 ;; ── history + liveness alerts ────────────────────────────────────────────────
