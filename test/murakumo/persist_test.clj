@@ -1,7 +1,8 @@
 ;; murakumo.persist-test — offline tests for portable persistence helpers.
 
 (ns murakumo.persist-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is]]
             [murakumo.identity :as identity]
             [murakumo.persist :as persist]))
 
@@ -103,3 +104,59 @@
   (is (true? (persist/write-ok? "{\"status\":\"ok\"}")))
   (is (false? (persist/write-ok? "{\"status\":\"error\"}")))
   (is (false? (persist/write-ok? nil))))
+
+;; ── internal-trust header (ADR-2608124000, "clients first") ──────────────────
+;; kotoba-server's require_internal_trust gate returns success while
+;; KOTOBA_INTERNAL_SECRET is unset, and it is unset across this fleet — so
+;; sending the header today changes nothing on the wire. These tests pin the
+;; shape NOW so arming the server later is a one-variable decision rather than a
+;; fleet-wide outage that, on this background write path, would be silent.
+;; The values below are obviously synthetic; no real secret is read or generated.
+(def ^:private synthetic-trust "synthetic-internal-trust-not-a-real-secret")
+
+(deftest internal-trust-header-present-when-configured
+  (is (= "x-internal-trust" persist/internal-trust-header-name))
+  (is (= "KOTOBA_INTERNAL_SECRET" persist/internal-trust-env)
+      "the same variable the server and the Cloudflare gateway read")
+  (is (= (str "x-internal-trust: " synthetic-trust)
+         (persist/internal-trust-header synthetic-trust)))
+  (is (= ["curl" "-s" "-m" "6" "-X" "POST"
+          "http://localhost:18099/xrpc/com.etzhayyim.apps.kotoba.atproto.repo.write"
+          "-H" "Authorization: Bearer tok"
+          "-H" "content-type: application/json"
+          "-H" (str "x-internal-trust: " synthetic-trust)
+          "-d" "{\"ok\":true}"]
+         (persist/repo-write-curl-argv 18099 "tok" "{\"ok\":true}" synthetic-trust))
+      "trust header is appended; Authorization and content-type are untouched"))
+
+(deftest internal-trust-header-absent-when-unconfigured
+  (is (nil? (persist/internal-trust-header nil)))
+  (is (nil? (persist/internal-trust-header "")) "blank is absent, not an empty header")
+  (is (nil? (persist/internal-trust-header "   ")))
+  ;; the no-op property, asserted: with no secret the argv is byte-identical to
+  ;; the argv this code has always produced.
+  (let [expected ["curl" "-s" "-m" "6" "-X" "POST"
+                  "http://localhost:18099/xrpc/com.etzhayyim.apps.kotoba.atproto.repo.write"
+                  "-H" "Authorization: Bearer tok"
+                  "-H" "content-type: application/json"
+                  "-d" "{\"ok\":true}"]]
+    (is (= expected (persist/repo-write-curl-argv 18099 "tok" "{\"ok\":true}" nil)))
+    (is (= expected (persist/repo-write-curl-argv 18099 "tok" "{\"ok\":true}" "")))
+    (is (= expected (persist/repo-write-curl-argv 18099 "tok" "{\"ok\":true}"))
+        "3-arity keeps its historical shape, so existing assertions stay hermetic")
+    (is (not-any? #(str/includes? (str %) "x-internal-trust") expected))))
+
+(deftest internal-trust-absence-is-reported-not-silent
+  (is (= :unconfigured (persist/internal-trust-status nil)))
+  (is (= :unconfigured (persist/internal-trust-status "")))
+  (is (= :configured (persist/internal-trust-status synthetic-trust))))
+
+(deftest write-curl-argv-threads-trust-through
+  (let [snapshot {:ts "t" :nodes []}
+        plan (persist/snapshot-write-plan 1000 1 snapshot "{\"snapshot\":true}")]
+    ;; positive control: Authorization still built from the operator token
+    (is (= "Authorization: Bearer tok" (persist/auth-header "tok")))
+    (is (= (persist/repo-write-curl-argv 18099 "tok" "{\"ok\":true}" synthetic-trust)
+           (persist/write-curl-argv plan "tok" "{\"ok\":true}" synthetic-trust)))
+    (is (= (persist/repo-write-curl-argv 18099 "tok" "{\"ok\":true}" nil)
+           (persist/write-curl-argv plan "tok" "{\"ok\":true}")))))

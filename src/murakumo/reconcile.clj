@@ -58,6 +58,27 @@
 
 (def ^:private rec-seq (atom 0))
 
+(def ^:private trust-warned? (atom false))
+
+(defn- internal-trust!
+  "Read the internal-trust secret for this write, announcing ONCE per process when
+   it is unconfigured. `persist-plan!` is best-effort and swallows its own
+   exceptions into `false`, so an unconfigured credential would otherwise vanish
+   without trace (ADR-2608124000)."
+  []
+  (let [trust (persist/internal-trust)]
+    (when (and (nil? trust) (compare-and-set! trust-warned? false true))
+      (binding [*out* *err*]
+        (println (str "WARN murakumo.reconcile: " persist/internal-trust-env
+                      " is unset — reconcile-plan writes carry NO "
+                      persist/internal-trust-header-name " header ("
+                      (name (persist/internal-trust-status trust))
+                      "). Harmless while kotoba-server's require_internal_trust"
+                      " gate is disabled fleet-wide (ADR-2608124000); the moment"
+                      " that gate is armed these writes fail into the catch below"
+                      " and return false."))))
+    trust))
+
 (defn persist-plan!
   "Write the reconcile plan as an atproto record into 'murakumo-fleet' — one tx per
    reconcile ⇒ the fleet's desired-vs-observed history is itself a queryable Datom
@@ -74,7 +95,7 @@
       (p/sh "bash" "-c" (persist/write-forward-command write-plan port (:host target)))
       (Thread/sleep persist/forward-settle-ms)
       (let [body (json/generate-string (:envelope write-plan))
-            r (apply p/sh (persist/write-curl-argv write-plan token body))]
+            r (apply p/sh (persist/write-curl-argv write-plan token body (internal-trust!)))]
         (persist/write-ok? (:out r))))
     (catch Exception e
       (binding [*out* *err*]
