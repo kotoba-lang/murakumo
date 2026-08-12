@@ -30,6 +30,28 @@
 (def ^:private source-file
   (io/file aiueos-root "os" "aiueos" "kotoba" "murakumo-join-plan.kotoba"))
 
+(defn- source-available?
+  "Records a failure when the aiueos checkout is missing, and returns whether
+  the caller can proceed.
+
+  Every parity assertion here used to sit inside a bare `(when (.exists
+  source-file) ...)`. That is a skip wearing a pass: on a machine without the
+  sibling checkout -- a fleet node ships one repo's tree and nothing else --
+  three of these namespaces' tests reported green while asserting nothing, and
+  only the presence check went red. A reader counting green tests was told the
+  bare-metal node agreed with this namespace when nobody had asked it.
+
+  Failing in each test instead means the count of red tests is the count of
+  questions that could not be put, which is the honest number."
+  []
+  (let [present? (.exists source-file)]
+    (is present?
+        (str "aiueos checkout not found at " source-file
+             " -- set AIUEOS_ROOT to the kotoba-lang/aiueos checkout. This"
+             " namespace is the only thing checking the bare-metal node against"
+             " murakumo.infer.join, so it fails rather than skips."))
+    present?))
+
 ;; Authority: os/aiueos/contracts/murakumo-node-v1.edn :work-kinds.
 (def ^:private work-kind-codes
   {:media-postproc 1
@@ -75,14 +97,10 @@
 (def ^:private residents [0 1000 4294967296 13958643713])
 
 (deftest aiueos-object-source-is-present
-  (is (.exists source-file)
-      (str "aiueos checkout not found at " source-file
-           " -- set AIUEOS_ROOT to the kotoba-lang/aiueos checkout. This test is"
-           " the only thing checking the bare-metal node against this namespace,"
-           " so it fails rather than skips.")))
+  (source-available?))
 
 (deftest join-plan-matches-upstream
-  (when (.exists source-file)
+  (when (source-available?)
     (let [k (kir)]
       (doseq [tier tiers
               inbound? [true false]
@@ -97,7 +115,7 @@
 (deftest native-tier-answers-from-native-kinds-only
   ;; Pinned deliberately. This reads as a bug and is upstream's actual
   ;; behaviour, so the mirror must reproduce it rather than "fix" it.
-  (when (.exists source-file)
+  (when (source-available?)
     (let [k (kir)]
       (is (false? (:eligible? (aiueos-plan k :native true :media-postproc nil 1000))))
       (is (true? (:eligible? (aiueos-plan k :native true :media-generate nil 1000))))
@@ -107,7 +125,7 @@
 (deftest absent-memory-differs-from-zero-bytes
   ;; Upstream carries `[:option :i64]` precisely so "declared 0" and "declared
   ;; nothing" stay distinct; the packed encoding must not collapse them.
-  (when (.exists source-file)
+  (when (source-available?)
     (let [k (kir)]
       (is (not= (:clamped (aiueos-plan k :native true :media-generate nil 0))
                 (:clamped (aiueos-plan k :native true :media-generate 0 0))))
