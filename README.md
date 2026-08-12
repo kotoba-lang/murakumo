@@ -80,10 +80,16 @@ Compatibility with the verifying gateway is a test, not a claim:
 `nbb scripts/run-task.cljs test-apikey` asserts that keys minted here are
 byte-identical to, and accepted by, `cloud-murakumo.token`.
 
-> Historical note: the gateway's 401 says to run `bb murakumo token issue`. That
+> Historical note: the gateway's 401 used to say `bb murakumo token issue`. That
 > command has not been runnable since babashka was retired (ADR-2607173000) —
 > `murakumo.core` is `.clj` on `babashka.process` and `bb.edn` is gone. The
 > `token` task above is its nbb port.
+>
+> The 401 was corrected on 2026-08-13 (ADR-2608133200). It had been changed once
+> already, from `bb murakumo token issue` to `clojure -M:token issue`, but that
+> second command raised `ArityException` — `cloud-murakumo.cli/cmd-token` was
+> fixed-arity while the alias passes only `issue`. Both the arity and the message
+> are fixed now; the message names this repo's `token` task as the alternative.
 
 
 ## What it manages
@@ -111,22 +117,33 @@ Each fleet node runs `kotoba-server` as a **macOS LaunchAgent** (`RunAtLoad` +
 export MURAKUMO_OPERATOR_SEED=$(openssl rand -hex 32)   # the fleet operator identity (never commit)
 export MURAKUMO_KOTOBA_DIR=~/github/com-junkawasaki/orgs/com-junkawasaki/kotoba
 
-bb murakumo nodes                 # who's reachable, who has the mesh installed
-bb murakumo provision asher       # rsync binaries + install + load the LaunchAgent (canary first)
-bb murakumo status                # fold /health + lattice ps across the fleet
-bb murakumo deploy app.edn asher  # compile clj→WASM + publish to a node's lattice
-bb murakumo provision all         # roll out to the whole fleet once the canary is green
-bb murakumo mesh all              # form ONE gossipsub lattice (fleet-wide auction)
-bb reconcile murakumo.app.edn --dry-run   # declarative desired-state plan (wadm); --apply to converge
-bb cloud plan                     # plan murakumo.cloud overlay records from fleet.edn + cloud.edn
-bb cloud dial asher               # show direct identity-overlay dial hints + relay fallback
-bb cloud connect asher            # print canonical murakumo-overlay driver argv
-bb cloud relay jp-tyo-1           # print canonical murakumo-overlay relay argv
-bb cloud bootstrap                # print relays-first, nodes-second overlay bootstrap plan
-bb cloud bootstrap --format=edn   # machine-readable bootstrap manifest
-bb overlay dial --overlay ...     # validate/normalise a native overlay dial request
-bb overlay relay --overlay ...    # validate/normalise a native overlay relay request
+nbb scripts/run-task.cljs ops status    # fold /health + lattice ps across the fleet
+nbb scripts/run-task.cljs task run --n 22 --cmd 'hostname'   # fan a batch over the fleet
+nbb scripts/run-task.cljs token issue --scope chat           # mint a gateway API key
 ```
+
+> ### The rest of the control plane is unavailable
+>
+> This Quickstart used to list fifteen `bb …` commands. babashka was retired as
+> this workspace's script host by ADR-2607173000; `murakumo.core`, `cloud.clj`
+> and `overlay.clj` are `.clj` on `babashka.process`, and `bb.edn` is gone. The
+> Wave-3 conversion carried over only the shell-out tasks, so **sixteen named
+> entrypoints were dropped and have no runnable path today** (ADR-2608131600) —
+> `nodes`, `status`, `provision`, `mesh`, `deploy`, `reconcile`, `infer`,
+> `model`, `dash`, `cloud`, `overlay` among them. `scripts/tasks.edn` records
+> which.
+>
+> Three have been ported and are the commands above: `ops` (the nbb port of
+> `nodes` + `status`), `task` (the fleet task plane), and `token`. Everything
+> else needs a port — the bodies require `babashka.process`/`cheshire` under
+> SCI, so re-registering them is a decision about which of these commands should
+> still exist, not a mechanical conversion.
+>
+> Every `bb …` line remaining below in this README is in that dropped set. They
+> are left in place, rather than deleted, because they describe what this repo
+> is *for*; treat them as a specification of the missing surface, not as
+> instructions. `nbb scripts/run-task.cljs` with no argument lists what actually
+> resolves.
 
 ## Command surface
 
