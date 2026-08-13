@@ -108,11 +108,7 @@
    :params [sel],
    :result :bool,
    :effects #{},
-   :body
-   (if
-    (string=? sel "")
-    true
-    (if (string=? sel (selector-all)) true false)),
+   :body (if (string=? sel "") true (string=? sel (selector-all))),
    :param-types [:string]}
   {:name selector-wants-name?,
    :params [x],
@@ -132,18 +128,15 @@
       :name)
      sep
      (selector-join-sep)]
-    (if
-     (string-contains?
-      (string-concat sep (string-concat sel sep))
-      (string-concat sep (string-concat name sep)))
-     true
-     false)),
+    (string-contains?
+     (string-concat sep (string-concat sel sep))
+     (string-concat sep (string-concat name sep)))),
    :param-types [[:ref :fleet/selector-name]]}
   {:name line-has-offline?,
    :params [line],
    :result :bool,
    :effects #{},
-   :body (if (string-contains? line (offline-token)) true false),
+   :body (string-contains? line (offline-token)),
    :param-types [:string]}
   {:name __kotoba_string_from_i64_nat,
    :params [n],

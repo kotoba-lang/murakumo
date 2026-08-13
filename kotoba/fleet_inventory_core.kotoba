@@ -74,7 +74,7 @@
   ;; Profile 5: :bool.
   (if (string=? sel "")
     true
-    (if (string=? sel (selector-all)) true false)))
+    (string=? sel (selector-all))))
 
 (defn selector-wants-name? [x [:ref :fleet/selector-name]] :bool
   ;; Exact comma-token match: pad both sides so substrings can't false-hit.
@@ -82,13 +82,11 @@
   (let [sel (record-get x :sel)
         name (record-get x :name)
         sep (selector-join-sep)]
-    (if (string-contains?
+    (string-contains?
          (string-concat sep (string-concat sel sep))
-         (string-concat sep (string-concat name sep)))
-      true
-      false)))
+         (string-concat sep (string-concat name sep)))))
 
 (defn line-has-offline? [line :string] :bool
   ;; cljc parse-tailscale-status online?: (not (str/includes? line "offline"))
   ;; Profile 5: :bool.
-  (if (string-contains? line (offline-token)) true false))
+  (string-contains? line (offline-token)))

@@ -37,7 +37,7 @@
         p (string-byte-length prefix)]
     (if (< n p)
       false
-      (if (string=? (string-substring s 0 p) prefix) true false))))
+      (string=? (string-substring s 0 p) prefix))))
 
 ;; ── residual scheme / kind / adapter tokens ──────────────────────────
 
@@ -84,7 +84,7 @@
         true
         (if (string=? name (adapter-webtransport))
           true
-          (if (string=? name (adapter-relay-client)) true false))))))
+          (string=? name (adapter-relay-client)))))))
 
 (defn adapter-kind [name :string] :string
   (if (string=? name (adapter-relay))

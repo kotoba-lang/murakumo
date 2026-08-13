@@ -79,7 +79,7 @@
         ln (string-byte-length line)]
     (if (< ln n)
       false
-      (if (string=? (string-substring line 0 n) m) true false))))
+      (string=? (string-substring line 0 n) m))))
 
 (defn strip-marker-digits [line :string] :string
   (let [m (rc-marker)
@@ -101,7 +101,7 @@
 (defn digit-val? [c :string] :bool
   ;; true if single char is ASCII digit
   (if (= (string-byte-length c) 1)
-    (if (string-contains? "0123456789" c) true false)
+    (string-contains? "0123456789" c)
     false))
 
 (defn digit-of [c :string] :i64
@@ -168,7 +168,7 @@
       true
       (if (string=? c "\t")
         true
-        (if (string=? c "\r") true false)))))
+        (string=? c "\r")))))
 
 (defn trim-err [err :string] :string
   ;; host str/trim on err

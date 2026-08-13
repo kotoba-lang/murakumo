@@ -462,13 +462,13 @@
    :params [action],
    :result :bool,
    :effects #{},
-   :body (if (string=? action (action-satisfied)) true false),
+   :body (string=? action (action-satisfied)),
    :param-types [:string]}
   {:name action-is-place?,
    :params [action],
    :result :bool,
    :effects #{},
-   :body (if (string=? action (action-place)) true false),
+   :body (string=? action (action-place)),
    :param-types [:string]}
   {:name default-watch-seconds,
    :params [],
@@ -496,10 +496,7 @@
      (string-byte-length s)
      p
      (string-byte-length prefix)]
-    (if
-     (< n p)
-     false
-     (if (string=? (string-substring s 0 p) prefix) true false))),
+    (if (< n p) false (string=? (string-substring s 0 p) prefix))),
    :param-types [[:ref :reconcile/starts-with]]}
   {:name flag-dry-run,
    :params [],
@@ -541,13 +538,13 @@
    :params [a],
    :result :bool,
    :effects #{},
-   :body (if (string=? a (flag-dry-run)) true false),
+   :body (string=? a (flag-dry-run)),
    :param-types [:string]}
   {:name flag-is-apply?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (if (string=? a (flag-apply)) true false),
+   :body (string=? a (flag-apply)),
    :param-types [:string]}
   {:name flag-is-watch?,
    :params [a],
@@ -593,7 +590,7 @@
     (if
      (string=? c "\n")
      true
-     (if (string=? c "\t") true (if (string=? c "\r") true false)))),
+     (if (string=? c "\t") true (string=? c "\r")))),
    :param-types [:string]}
   {:name trim-ws,
    :params [s],
@@ -620,7 +617,7 @@
    :body
    (if
     (= (string-byte-length c) 1)
-    (if (string-contains? "0123456789" c) true false)
+    (string-contains? "0123456789" c)
     false),
    :param-types [:string]}
   {:name digit-of-go,

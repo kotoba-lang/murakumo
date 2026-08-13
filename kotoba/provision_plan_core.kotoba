@@ -248,7 +248,7 @@
       true
       (if (string=? c "\t")
         true
-        (if (string=? c "\r") true false)))))
+        (string=? c "\r")))))
 
 (defn trim [s :string] :string
   (let [n (string-byte-length s)]
@@ -440,11 +440,9 @@
 
 (defn alnum-char? [c :string] :bool
   ;; single-char ASCII letter or digit (libp2p PeerId body charset)
-  (if (string-contains?
+  (string-contains?
        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-       c)
-    true
-    false))
+       c))
 
 (defn find-prefix-at [x [:ref :provision/prefix-at]] :i64
   ;; first index of prefix in s at/after i, or -1

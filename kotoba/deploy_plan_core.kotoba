@@ -150,7 +150,7 @@
       true
       (if (string=? c "\t")
         true
-        (if (string=? c "\r") true false)))))
+        (string=? c "\r")))))
 
 (defn trim [s :string] :string
   (let [n (string-byte-length s)]
@@ -274,7 +274,7 @@
 (defn digit-val? [c :string] :bool
   ;; true if single char is ASCII digit (tunnel_core pattern)
   (if (= (string-byte-length c) 1)
-    (if (string-contains? "0123456789" c) true false)
+    (string-contains? "0123456789" c)
     false))
 
 (defn digit-of-go [x [:ref :deploy/digit-of-go]] :i64
@@ -345,7 +345,7 @@
       false
       (if (< (string-byte-length p) 1)
         false
-        (if (string=? (string-substring p 0 1) (path-sep)) true false)))))
+        (string=? (string-substring p 0 1) (path-sep))))))
 
 ;; ── residual pin/git argv fragments + deploy CLI gates ───────────────
 

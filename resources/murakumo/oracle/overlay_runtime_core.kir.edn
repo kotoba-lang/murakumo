@@ -39,10 +39,7 @@
      (string-byte-length s)
      p
      (string-byte-length prefix)]
-    (if
-     (< n p)
-     false
-     (if (string=? (string-substring s 0 p) prefix) true false))),
+    (if (< n p) false (string=? (string-substring s 0 p) prefix))),
    :param-types [[:ref :runtime/starts-with]]}
   {:name scheme-quic,
    :params [],
@@ -194,7 +191,7 @@
       (if
        (string=? name (adapter-webtransport))
        true
-       (if (string=? name (adapter-relay-client)) true false))))),
+       (string=? name (adapter-relay-client)))))),
    :param-types [:string]}
   {:name adapter-kind,
    :params [name],

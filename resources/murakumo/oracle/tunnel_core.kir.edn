@@ -114,10 +114,7 @@
      (string-byte-length m)
      ln
      (string-byte-length line)]
-    (if
-     (< ln n)
-     false
-     (if (string=? (string-substring line 0 n) m) true false))),
+    (if (< ln n) false (string=? (string-substring line 0 n) m))),
    :param-types [:string]}
   {:name strip-marker-digits,
    :params [line],
@@ -158,7 +155,7 @@
    :body
    (if
     (= (string-byte-length c) 1)
-    (if (string-contains? "0123456789" c) true false)
+    (string-contains? "0123456789" c)
     false),
    :param-types [:string]}
   {:name digit-of,
@@ -298,7 +295,7 @@
     (if
      (string=? c "\n")
      true
-     (if (string=? c "\t") true (if (string=? c "\r") true false)))),
+     (if (string=? c "\t") true (string=? c "\r")))),
    :param-types [:string]}
   {:name trim-err,
    :params [err],

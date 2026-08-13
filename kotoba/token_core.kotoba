@@ -106,7 +106,7 @@
   ;; T5.2 native: single scope-check record.
   (if (string=? (record-get x :token-scope) (scope-all))
     true
-    (if (string=? (record-get x :token-scope) (record-get x :required)) true false)))
+    (string=? (record-get x :token-scope) (record-get x :required))))
 
 (defn signing-input [payload-seg :string] :string
   (string-concat (version) (string-concat (jwt-seg-sep) payload-seg)))
@@ -133,7 +133,7 @@
      (string-concat (wire-sep) (record-get w :sig))))))
 
 (defn version-ok? [v :string] :bool
-  (if (string=? v (version)) true false))
+  (string=? v (version)))
 
 (defn parts-present? [x [:ref :token/parts]] :bool
   ;; T5.2 native: three option-string segments on one record

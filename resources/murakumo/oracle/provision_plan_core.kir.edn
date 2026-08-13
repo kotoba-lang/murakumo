@@ -312,7 +312,7 @@
     (if
      (string=? c "\n")
      true
-     (if (string=? c "\t") true (if (string=? c "\r") true false)))),
+     (if (string=? c "\t") true (string=? c "\r")))),
    :param-types [:string]}
   {:name trim,
    :params [s],
@@ -767,12 +767,9 @@
    :result :bool,
    :effects #{},
    :body
-   (if
-    (string-contains?
-     "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-     c)
-    true
-    false),
+   (string-contains?
+    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+    c),
    :param-types [:string]}
   {:name find-prefix-at,
    :params [x],

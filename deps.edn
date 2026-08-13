@@ -14,9 +14,7 @@
         io.github.kotoba-lang/kotoba-kir
         {:git/url "https://github.com/kotoba-lang/kotoba-kir.git"
          ;; Advanced with the test-only amu pin below: they are one unit.
-         ;; The old Profile 5 pin (767f2f2) predates kotoba.kir.descriptor,
-         ;; so amu's kotoba.wasm.typed cannot load against it at all.
-         :git/sha "d58972da61758584a5bec0e863bcb3ea6fdd6c64"}
+         :git/sha "6d08e3cffa09c003f8dbcdfaee964c4a1ea021ad"}
         tech.kwik/kwik {:mvn/version "0.10.10"}
         org.bouncycastle/bcpkix-jdk18on {:mvn/version "1.78.1"}
         ;; witness-quorum's pre-commit orchestrator, wired onto overlay QUIC
@@ -107,7 +105,9 @@
                        ;; the shipped KIR carries __kotoba_binding-some_N.
                        ;; compiler option-string-in-record: if-some over
                        ;; record-get of [:option :string] (T5.2 gap close).
-                       :git/sha "e78241dca15000f6bb3976e97f493c70b0137dcf"}}
+                       ;; amu 1e21a1f types string=? / string-contains? as
+                       ;; :bool (e78241d still typed them :i64).
+                       :git/sha "1e21a1f56613d7d4c7628af1945ebf1cf7862ff3"}}
          :main-opts ["-m" "cognitect.test-runner"]
          :exec-fn cognitect.test-runner.api/test}
   ;; The same cores, RUN on the host ISA rather than accepted by the backend.
