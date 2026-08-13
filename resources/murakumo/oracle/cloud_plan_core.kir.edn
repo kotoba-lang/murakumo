@@ -594,10 +594,7 @@
      (string-byte-length s)
      p
      (string-byte-length prefix)]
-    (if
-     (< n p)
-     false
-     (if (string=? (string-substring s 0 p) prefix) true false))),
+    (if (< n p) false (string=? (string-substring s 0 p) prefix))),
    :param-types [[:ref :cloud/starts-with]]}
   {:name cmd-plan,
    :params [],
@@ -711,43 +708,43 @@
    :params [a],
    :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-plan)) true false),
+   :body (string=? a (cmd-plan)),
    :param-types [:string]}
   {:name is-cmd-records?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-records)) true false),
+   :body (string=? a (cmd-records)),
    :param-types [:string]}
   {:name is-cmd-routes?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-routes)) true false),
+   :body (string=? a (cmd-routes)),
    :param-types [:string]}
   {:name is-cmd-dial?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-dial)) true false),
+   :body (string=? a (cmd-dial)),
    :param-types [:string]}
   {:name is-cmd-connect?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-connect)) true false),
+   :body (string=? a (cmd-connect)),
    :param-types [:string]}
   {:name is-cmd-relay?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-relay)) true false),
+   :body (string=? a (cmd-relay)),
    :param-types [:string]}
   {:name is-cmd-bootstrap?,
    :params [a],
    :result :bool,
    :effects #{},
-   :body (if (string=? a (cmd-bootstrap)) true false),
+   :body (string=? a (cmd-bootstrap)),
    :param-types [:string]}
   {:name command-token,
    :params [a],

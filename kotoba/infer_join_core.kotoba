@@ -46,7 +46,7 @@
       true
       (if (string=? kind "embarrassingly-parallel")
         true
-        (if (string=? kind "prompt-eval") true false)))))
+        (string=? kind "prompt-eval")))))
 
 (defn native-can? [kind :string] :bool
   (if (string=? kind "host-large-model")
@@ -55,7 +55,7 @@
       true
       (if (string=? kind "media-generate")
         true
-        (if (string=? kind "full-shard") true false)))))
+        (string=? kind "full-shard")))))
 
 (defn can? [c [:ref :join/can]] :bool
   ;; cljc: (boolean (some #{kind} (:can (tier-of caps))))

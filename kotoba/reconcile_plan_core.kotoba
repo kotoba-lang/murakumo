@@ -188,10 +188,10 @@
   (blank? manifest))
 
 (defn action-is-satisfied? [action :string] :bool
-  (if (string=? action (action-satisfied)) true false))
+  (string=? action (action-satisfied)))
 
 (defn action-is-place? [action :string] :bool
-  (if (string=? action (action-place)) true false))
+  (string=? action (action-place)))
 
 (defn default-watch-seconds [] :i64 30)
 
@@ -203,7 +203,7 @@
         p (string-byte-length prefix)]
     (if (< n p)
       false
-      (if (string=? (string-substring s 0 p) prefix) true false))))
+      (string=? (string-substring s 0 p) prefix))))
 
 ;; CLI flag tokens (SSoT for classifiers + value extract)
 
@@ -215,10 +215,10 @@
 (defn flag-dash-prefix [] :string "--")
 
 (defn flag-is-dry-run? [a :string] :bool
-  (if (string=? a (flag-dry-run)) true false))
+  (string=? a (flag-dry-run)))
 
 (defn flag-is-apply? [a :string] :bool
-  (if (string=? a (flag-apply)) true false))
+  (string=? a (flag-apply)))
 
 (defn flag-is-watch? [a :string] :bool
   ;; bare --watch or --watch=N
@@ -237,7 +237,7 @@
       true
       (if (string=? c "\t")
         true
-        (if (string=? c "\r") true false)))))
+        (string=? c "\r")))))
 
 (defn trim-ws [s :string] :string
   (let [n (string-byte-length s)]
@@ -251,7 +251,7 @@
 
 (defn digit-val? [c :string] :bool
   (if (= (string-byte-length c) 1)
-    (if (string-contains? "0123456789" c) true false)
+    (string-contains? "0123456789" c)
     false))
 
 (defn digit-of-go [x [:ref :reconcile/digit-of-go]] :i64

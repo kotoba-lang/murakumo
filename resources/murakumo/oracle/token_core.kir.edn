@@ -165,22 +165,19 @@
       :token-scope)
      (scope-all))
     true
-    (if
-     (string=?
-      (record-get
-       [:record
-        :token/scope-check
-        [[:token-scope :string] [:required :string]]]
-       x
-       :token-scope)
-      (record-get
-       [:record
-        :token/scope-check
-        [[:token-scope :string] [:required :string]]]
-       x
-       :required))
-     true
-     false)),
+    (string=?
+     (record-get
+      [:record
+       :token/scope-check
+       [[:token-scope :string] [:required :string]]]
+      x
+      :token-scope)
+     (record-get
+      [:record
+       :token/scope-check
+       [[:token-scope :string] [:required :string]]]
+      x
+      :required))),
    :param-types [[:ref :token/scope-check]]}
   {:name signing-input,
    :params [payload-seg],
@@ -266,7 +263,7 @@
    :params [v],
    :result :bool,
    :effects #{},
-   :body (if (string=? v (version)) true false),
+   :body (string=? v (version)),
    :param-types [:string]}
   {:name parts-present?,
    :params [x],
