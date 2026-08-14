@@ -88,12 +88,13 @@
   [plan {:keys [bin-dir port cache-dir device] :or {port default-rpc-port device "MTL0"}}]
   (for [{:keys [node]} (workers plan)
         :let [cache? (not (false? (:rpc-cache? node)))
+              node-port (or (:rpc-port node) port)
               dev (or (:rpc-device node) device)
               cmd (o-record 'rpc-server-cmd
                             {:cmd (oracle/record
                                    rpc-server-schema
                                    {:bin-dir bin-dir
-                                    :port port
+                                    :port node-port
                                     :device dev
                                     :cache cache?
                                     :cache-dir (or cache-dir "")})}
@@ -101,7 +102,7 @@
     {:name (:name node)
      :host (:host node)
      :ip (or (:rpc-ip node) (:ip node))
-     :port port
+     :port node-port
      :cmd cmd}))
 
 (defn tensor-split

@@ -27,6 +27,10 @@
        :pass-args? true
        :doc "Fleet read surface (nbb port of the bb-era `nodes` + `status`): one ssh round trip per node for /health, wasm_executor, peer links, hosted CIDs, mesh binary and LaunchAgent state. e.g. `nbb scripts/run-task.cljs ops status`."}
 
+ :infer {:cmd ["clojure" "-M" "-m" "murakumo.core" "infer"]
+         :pass-args? true
+         :doc "Distributed inference control plane: probe | plan <model> | provision | up | down | ps | serve <model> | generate <prompt>."}
+
  :test-worker {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/task_worker_test.cljs"]
                :doc "Offline tests for the resident-worker framing (no ssh)."}
  :test-tunnel {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/tunnel_test.cljc"]

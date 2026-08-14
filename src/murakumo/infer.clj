@@ -5,14 +5,14 @@
 ;; is the terminal operator: probe the fleet's live memory over SSH, cut the
 ;; memory-weighted shard plan, push binaries, run the ring, talk to the model.
 ;;
-;;   bb murakumo infer probe                 live mem/disk/GPU map of the fleet
-;;   bb murakumo infer plan  <model>         shard plan table + go/no-go gate
-;;   bb murakumo infer provision [sel]       rsync rpc-server + raise GPU wired limit
-;;   bb murakumo infer up|down|ps [sel]      start/stop/inspect the worker ring
-;;   bb murakumo infer serve <model> <gguf>  run the head (llama-server, OpenAI API)
-;;   bb murakumo infer generate "<prompt>"   one completion via the head's /v1 API
-;;   bb murakumo infer relay [port]          run a work-dispatch relay (murakumo.infer.relay-server)
-;;   bb murakumo infer join [url] --model m  join a relay as a :native worker, earn
+;;   npm run task -- infer probe                 live mem/disk/GPU map of the fleet
+;;   npm run task -- infer plan  <model>         shard plan table + go/no-go gate
+;;   npm run task -- infer provision [sel]       rsync rpc-server + raise GPU wired limit
+;;   npm run task -- infer up|down|ps [sel]      start/stop/inspect the worker ring
+;;   npm run task -- infer serve <model> <gguf>  run the head (llama-server, OpenAI API)
+;;   npm run task -- infer generate "<prompt>"   one completion via the head's /v1 API
+;;   npm run task -- infer relay [port]          run a work-dispatch relay (murakumo.infer.relay-server)
+;;   npm run task -- infer join [url] --model m  join a relay as a :native worker, earn
 ;;                                            credits for served completions (see
 ;;                                            murakumo.infer.relay-worker)
 ;;
@@ -61,6 +61,28 @@
         extra (:infer/extra-nodes cfg)]
     (concat (:nodes f) extra)))
 
+(defn same-physical-node?
+  "True when an inventory row is the configured inference head.
+
+   The fleet may name a machine (for example `gad`) while :infer/head reaches
+   the same machine as `root@100.x.y.z`.  Comparing :host strings alone counted
+   that physical host twice: once as an RPC worker and once as the conductor.
+   Prefer the explicit :node-name identity, then match the head's host (without
+   its SSH user) against the inventory host/IP surfaces."
+  [head node]
+  (let [host-only #(some-> % str (str/split #"@") last)
+        head-host (host-only (:host head))]
+    (or (and (:node-name head) (= (:node-name head) (:name node)))
+        (and head-host
+             (or (= head-host (host-only (:host node)))
+                 (= head-host (:ip node))
+                 (= head-host (:rpc-ip node)))))))
+
+(defn worker-nodes
+  "Inventory rows eligible for probing, with the physical head removed once."
+  [cfg nodes]
+  (remove #(same-physical-node? (:infer/head cfg) %) nodes))
+
 (defn- probe-node
   "SSH one node for its live memory/disk/GPU facts → plan-ready node map (nil if
    unreachable). One retry — a fleet-wide parallel sweep can transiently drop an
@@ -89,8 +111,7 @@
    LAN would otherwise put a WAN hop inside every token)."
   [cfg]
   (let [head-cfg (:infer/head cfg)
-        workers (->> (infer-nodes cfg)
-                     (remove #(= (:host %) (:host head-cfg)))   ; head serves, but not as an rpc worker
+        workers (->> (worker-nodes cfg (infer-nodes cfg))
                      (pmap #(probe-node cfg %))
                      (filter some?)
                      vec)
@@ -143,7 +164,27 @@
    (gemma :11434)と同じ運用。"
   [cmd]
   (str "[Unit]\n"
-       "Description=murakumo standalone llama-server (managed by `bb murakumo infer serve-standalone`)\n"
+       "Description=murakumo standalone llama-server (managed by `npm run task -- infer serve-standalone`)\n"
+       "After=network-online.target\n"
+       "Wants=network-online.target\n"
+       "\n"
+       "[Service]\n"
+       "Type=simple\n"
+       "User=gad\n"
+       "ExecStart=" cmd "\n"
+       "Restart=on-failure\n"
+       "RestartSec=5\n"
+       "\n"
+       "[Install]\n"
+       "WantedBy=multi-user.target\n"))
+
+(defn- ring-unit
+  "Boot-persistent distributed llama.cpp RPC head. The workers are deliberately
+   not managed by this unit: cmd-up owns them, while the head restarts without
+   killing unrelated llama-server instances (standalone fallback and embed)."
+  [cmd]
+  (str "[Unit]\n"
+       "Description=murakumo distributed llama.cpp RPC head\n"
        "After=network-online.target\n"
        "Wants=network-online.target\n"
        "\n"
@@ -310,7 +351,7 @@
 
 (defn- load-plan []
   (or (try (edn/read-string (slurp plan-file)) (catch Exception _ nil))
-      (do (println "no plan — run `bb murakumo infer plan <model>` first")
+      (do (println "no plan — run `npm run task -- infer plan <model>` first")
           (System/exit 1))))
 
 (defn- serving-workers
@@ -338,7 +379,7 @@
         (do (ssh/sh host "pip3 install -q -U mlx-moe")
             (let [check (ssh/sh host "mlx-moe --help >/dev/null 2>&1 && echo ok || echo FAILED")]
               (println (str "mlx-moe " (:out check)))))))
-    (println "no candidate node in the plan — run `bb murakumo infer plan <moe-model>` first")))
+    (println "no candidate node in the plan — run `npm run task -- infer plan <moe-model>` first")))
 
 (defn cmd-provision
   "Push rpc-server to each serving worker + raise the GPU wired limit (needs the
@@ -387,10 +428,11 @@
         want (when (and sel (not= sel "all")) (set (str/split sel #",")))]
     (doseq [{:keys [node]} (serving-workers pl)
             :when (or (nil? want) (want (:name node)))]
-      (let [cache (if (:rpc-cache? node) " -c" "")
+      (let [node-port (or (:rpc-port node) port)
+            cache (if (:rpc-cache? node) " -c" "")
             dev (or (:rpc-device node) (:infer/rpc-device cfg "MTL0"))
             cmd (format "pkill -f '%s/rpc-server' 2>/dev/null; sleep 0.2; nohup env %s%s/rpc-server -H 0.0.0.0 -p %d -d %s%s >/tmp/murakumo-rpc.log 2>&1 & sleep 0.3; pgrep -f rpc-server >/dev/null && echo up || echo FAILED"
-                        remote-bin remote-env remote-bin port dev cache)]
+                        remote-bin remote-env remote-bin node-port dev cache)]
         (println (format "[%s] %s" (:name node) (:out (ssh/sh (:host node) cmd))))))))
 
 (defn cmd-down [[sel]]
@@ -415,10 +457,10 @@
   (cond
     (not= :mlx-moe (:engine pl))
     (println (str "stale/mismatched plan (last `plan` was not for an mlx-moe model) — "
-                  "run `bb murakumo infer plan " (:model/id model) "` first"))
+                  "run `npm run task -- infer plan " (:model/id model) "` first"))
 
     (not (moe-node pl))
-    (println "no candidate node in the plan — run `bb murakumo infer plan <moe-model>` first")
+    (println "no candidate node in the plan — run `npm run task -- infer plan <moe-model>` first")
 
     :else
     (let [node (moe-node pl)
@@ -453,10 +495,10 @@
   (cond
     (not= :waste (:engine pl))
     (println (str "stale/mismatched plan (last `plan` was not for a waste model) — "
-                  "run `bb murakumo infer plan " (:model/id model) "` first"))
+                  "run `npm run task -- infer plan " (:model/id model) "` first"))
 
     (not (single-node pl))
-    (println "no candidate node in the plan — run `bb murakumo infer plan <waste-model>` first")
+    (println "no candidate node in the plan — run `npm run task -- infer plan <waste-model>` first")
 
     :else
     (let [node (single-node pl)
@@ -492,9 +534,10 @@
         (p/shell full)))))
 
 (defn- cmd-serve-ring
-  "The original ring path: llama-server locally in the foreground, or — for a
-   :remote? head — resident on the fleet node over SSH (the GGUF lives in the
-   head's :model-dir there; `provision` pushes the binary)."
+  "Run the distributed llama.cpp RPC head. A remote head is installed as a
+   boot-persistent systemd unit. Only explicitly configured services that own
+   the same API port are stopped; unrelated llama-server processes remain up.
+   If the ring cannot become active, the compatibility proxy is restored."
   [cfg model pl gguf-path]
   (let [head-cfg (:infer/head cfg)
         remote? (:remote? head-cfg)
@@ -510,10 +553,31 @@
         cmd (engine/head-cmd pl opts)]
     (println cmd)
     (if remote?
-      (let [{:keys [out]} (ssh/sh (:host head-cfg)
-                                  (format "pgrep -x llama-server | xargs -r kill 2>/dev/null || true; sleep 0.3; nohup %s >/tmp/murakumo-head.log 2>&1 & sleep 1; pgrep -x llama-server >/dev/null && echo serving || echo FAILED" cmd))]
-        (println (format "[%s] %s — http://%s:%s/v1 (load streams the shards; watch /tmp/murakumo-head.log)"
-                         (:host head-cfg) out (api-host head-cfg) (:infer/api-port cfg 8080))))
+      (let [unit (ring-unit cmd)
+            conflicts (or (:conflicting-units head-cfg) [])
+            stop-conflicts (apply str
+                                  (map #(str "systemctl disable --now " % " >/dev/null 2>&1 || true; ")
+                                       conflicts))
+            restore-unit (or (:fallback-unit head-cfg) "murakumo-infer-compat.socket")
+            script (str stop-conflicts
+                        "cat > /etc/systemd/system/murakumo-ring.service <<'MURAKUMO_UNIT'\n"
+                        unit
+                        "MURAKUMO_UNIT\n"
+                        "systemctl daemon-reload; "
+                        "systemctl enable murakumo-ring.service >/dev/null 2>&1; "
+                        "systemctl restart murakumo-ring.service; sleep 3; "
+                        "if systemctl is-active --quiet murakumo-ring.service; then "
+                        "echo active; "
+                        "else systemctl stop murakumo-ring.service >/dev/null 2>&1 || true; "
+                        "systemctl enable --now " restore-unit " >/dev/null 2>&1 || true; "
+                        "echo FAILED-restored-" restore-unit "; exit 1; fi")
+            {:keys [exit out err]} (ssh/sh (:host head-cfg) script)]
+        (println (format "[%s] ring unit %s — http://%s:%s/v1 (systemd: Restart=on-failure; fallback=%s)"
+                         (:host head-cfg) (str/trim (str out)) (api-host head-cfg)
+                         (:infer/api-port cfg 8080) restore-unit))
+        (when-not (zero? exit)
+          (throw (ex-info "distributed ring failed to start; fallback restored"
+                          {:host (:host head-cfg) :stderr err}))))
       (p/shell cmd))))
 
 (defn cmd-serve
@@ -712,4 +776,4 @@
     "serve-standalone" (cmd-serve-standalone args)
     "serve-embed" (cmd-serve-embed args)
     "generate" (cmd-generate args)
-    (println "usage: bb murakumo infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf] [parallel]|serve-embed [model]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|join [relay-url] --model <id> [--name <node>]|gateway [port]")))
+    (println "usage: npm run task -- infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf] [parallel]|serve-embed [model]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|join [relay-url] --model <id> [--name <node>]|gateway [port]")))

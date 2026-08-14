@@ -28,7 +28,9 @@
   {:name "dan"      :host "dan@dan"  :rpc-ip "192.168.1.18" :mac "1c:f6:4c:5a:34:d9" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp" :role "pdshost"}}
   {:name "benjamin" :host "benjamin" :rpc-ip "192.168.1.20" :mac "1c:f6:4c:53:5b:d4" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"}}
   ;; asher = replica/failover; also the canary (verified reachable first).
-  {:name "asher"    :host "asher"    :rpc-ip "192.168.1.22" :mac "1c:f6:4c:4f:46:5c" :roles ["pin" "compute" "relay"] :labels {:tier "edge" :zone "jp" :role "canary"}}
+  ;; Avoid macOS' 49152-65535 ephemeral range: tailscaled owns persistent
+  ;; outbound flows on this node whose source ports collided with 50052/50053.
+  {:name "asher"    :host "asher"    :rpc-ip "192.168.1.22" :rpc-port 40052 :mac "1c:f6:4c:4f:46:5c" :roles ["pin" "compute" "relay"] :labels {:tier "edge" :zone "jp" :role "canary"}}
   ;; gad — Linux/ROCm GPU box, NOT a 12-tribes Mac mini and not a kotoba P2P
   ;; mesh member (no :pin role, doesn't run kotoba-server). Compute-only:
   ;; murakumo.infer.media's ComfyUI render farm (animagine-xl-4.0 resident),

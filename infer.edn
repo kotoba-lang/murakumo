@@ -1,4 +1,4 @@
-;; infer.edn — murakumo distributed-inference config (SSoT for `bb murakumo infer`).
+;; infer.edn — murakumo distributed-inference config (SSoT for `npm run task -- infer`).
 ;;
 ;; The mesh fleet (fleet.edn) is reused as the inference fleet; :extra-nodes adds
 ;; machines that serve inference but are not kotoba-mesh members. The HEAD is the
@@ -53,10 +53,16 @@
  ;; machine is NOT on the fleet LAN (probe it: >5 ms RTT to workers ⇒ every
  ;; token pays it), promote a fleet node instead: :remote? true + :host, and
  ;; a modest os-reserve since it also mmaps the checkpoint while serving.
- :infer/head {:name "head" :host "root@100.82.98.110" :remote? true
+ :infer/head {:name "head" :node-name "gad" :host "root@100.82.98.110" :remote? true
               :os-reserve-gib 5
               :bin-dir "/home/gad/murakumo/llama.cpp/build-rpc-glm/bin"
               :model-dir "/home/gad/models/GLM-5.2-REAP50-Q2_K-GGUF"
+              ;; Only these units own the public chat origin (:8090). Keep the
+              ;; healthy standalone fallback on :11434 and embed on :8091 up.
+              :conflicting-units ["murakumo-standalone.service"
+                                  "murakumo-infer-compat.service"
+                                  "murakumo-infer-compat.socket"]
+              :fallback-unit "murakumo-infer-compat.socket"
               ;; GPU-backend build for `infer serve-standalone` (no RPC ring).
               ;; CPU-only :bin-dir above never engaged the head's Radeon 8060S
               ;; iGPU even at -ngl 999 — see cmd-serve-standalone docstring.
@@ -82,7 +88,7 @@
  :models
  {;; ── base text models (2026-07-04): glm-5.2-reap50-q2k doesn't fit the fleet
   ;; reliably right now (139GB, ~all of :total-usable-bytes) — these three are
-  ;; the new default `bb murakumo infer plan/provision/up` base text targets,
+  ;; the new default `npm run task -- infer plan/provision/up` base text targets,
   ;; small enough to fit a handful of edge nodes or the single GPU head alone.
   "qwen-agentworld-35b-a3b"
   {:model/id "qwen-agentworld-35b-a3b"
