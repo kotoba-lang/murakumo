@@ -46,6 +46,44 @@
   "hunyuanvideo-1.5"  {:credit/per-video-second 10  :cost/usd-per-second 0.05
                        :tier :video/oss :engine :comfy}
 
+  ;; MiniMax-H3 —— fleet の :video 既定（ADR-2608100600）。**2026-08-14 まで
+  ;; ここに entry が無く、課金プロキシが `model has no published price —
+  ;; refusing to quote` で 400 を返していた**。つまり既定モデルが公開経路から
+  ;; 一度も呼べていない（ADR-2608140400）。
+  ;;
+  ;; 掲示 8cr/s = $0.08/s。この行だけ「fal 原価 × 2.0」の規則で決めていない ——
+  ;; **self-host なので fal 原価が存在しない**。代わりに 2 つの錨を使った:
+  ;;
+  ;; ① 代替財の実勢（2026-08-14 実査）。うちが出しているのは 640×640(0.41MP)で、
+  ;;    768p(0.59MP)より下。同じ H3 を他所で買うと:
+  ;;      MiniMax 公式 / EvoLink   H3 768p  $0.076/s   ← うちの帯に最も近い
+  ;;      MiniMax 公式             H3 2K    $0.123/s
+  ;;      fal                      H3 2K    $0.26/s
+  ;;      fal  Hailuo 02 Std 768p           $0.045/s
+  ;;    周辺: Kling 3.0 / Seedance 2.0 $0.09-0.14、Sora 2 ~$0.10、
+  ;;    Runway Gen-4.5 ~$0.20、Veo 3.1 Standard $0.40-0.75、Wan 2.6 $0.05。
+  ;;    **同じモデルの同じ帯の実勢に合わせた**（$0.076 → 8cr）。自分の GPU を
+  ;;    持っていることを理由に frontier モデルを投げ売りしない。
+  ;;
+  ;; ② 実測原価。2026-08-14、640×640/124frames/20steps を gad で 38分04秒 =
+  ;;    2284 秒。出力は 5.17 秒なので **出力 1 秒あたり GPU 442 秒**（この比だけが
+  ;;    実測値）。電力を 120W と仮定すると約 $0.003/s、機体の償却を足して
+  ;;    $0.013/s 程度。**120W は実測していない仮定**なので、原価は桁の目安。
+  ;;
+  ;; ⚠ **本当の制約は価格ではなく容量**。442:1 なので、このノードは 1 時間に
+  ;;    約 8.1 秒しか作れない（8cr/s なら 1 時間の全出力で $0.65）。需要が来たら
+  ;;    値段ではなく queue が伸びる（入場キューは 2026-08-14 に入れた）。
+  ;;
+  ;; ⚠ **この行は、うちで最も質の高い video モデルを、より劣る 3 行より安く置く**。
+  ;;    それは H3 が安すぎるのではなく、上の 3 行の $0.05/s という原価が
+  ;;    一度も測られていないから。Wan 2.6 の実勢が $0.05 である以上、
+  ;;    wan2.2-5b / ltx-2.3 / hunyuanvideo-1.5 を 10cr(=$0.10/s) で掲示し続ける
+  ;;    根拠は薄い。**この 3 行の見直しは別の判断**なので、ここでは触っていない。
+  "minimax-h3"        {:credit/per-video-second 8   :cost/usd-per-second 0.013
+                       :tier :video/frontier-oss :engine :comfy
+                       :self-hosted? true
+                       :note "self-host。fal 原価が無いので代替財の実勢($0.076/s、MiniMax 公式 H3 768p)に合わせた。原価は実測 442 GPU秒/出力秒 + 電力 120W の仮定。1 時間に約 8.1 秒しか作れないので、制約は価格でなく容量"}
+
   ;; Seedance 2.0（ADR-2607170500 で結線済みの唯一の hosted engine。
   ;; reference-to-video は動画入力があると fal 側が ×0.6 する）
   "seedance-2.0-ref"      {:credit/per-video-second 37  :cost/usd-per-second 0.1814
