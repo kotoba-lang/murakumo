@@ -1036,8 +1036,16 @@ def _dispatch_loop():
 
 
 def queue_depth():
+    """Cancelled entries stay in the FIFO until the dispatcher reaches them, so
+    counting the raw list reports work that will never run. Measured on the
+    live node 2026-08-14: a cancelled probe kept the depth at 2."""
     with queue_cv:
-        return {k: len(v) for k, v in pending.items() if v}
+        out = {}
+        for k, v in pending.items():
+            n = sum(1 for (job_id, _t, _s, _p) in v if job_id not in cancelled_jobs)
+            if n:
+                out[k] = n
+        return out
 
 
 def reconcile_on_boot():
