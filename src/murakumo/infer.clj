@@ -549,6 +549,7 @@
               :rpc-port (:infer/rpc-port cfg engine/default-rpc-port)
               :port (:infer/api-port cfg 8080)
               :ctx (:infer/ctx cfg 4096)
+              :parallel (:infer/parallel cfg 1)
               :extra-args (:model/llama-extra-args model)}
         cmd (engine/head-cmd pl opts)]
     (println cmd)

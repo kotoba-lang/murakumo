@@ -120,6 +120,13 @@
       (is (re-find #"--rpc 100\.0\.0\.1:50052,100\.0\.0\.2:40052 " (:cmd head)))
       (is (re-find #"--tensor-split \d+,\d+,\d+ " (:cmd head))))))
 
+(deftest distributed-head-request-parallelism
+  (let [pl (plan/plan glm [(assoc (mini "a") :ip "100.0.0.1") head])
+        cmd (engine/head-cmd pl {:bin-dir "bin" :model-path "m.gguf"
+                                 :ctx 524288 :parallel 2})]
+    (testing "two slots preserve the model's 262144-token request window"
+      (is (re-find #"-c 524288 --parallel 2 " cmd)))))
+
 (deftest mlx-ring-commands
   (let [pl (plan/plan glm [(assoc (mini "a") :ip "100.0.0.1") head])
         {:keys [hosts head]} (engine/commands pl :mlx-ring
