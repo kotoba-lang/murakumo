@@ -823,12 +823,344 @@ def run_image_job(job_id, prompt, params):
             if job_id in cancelled_jobs: return
             jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
 
+
+# ---------------------------------------------------------------------------
+# Resource classes, admission queue, and the dispatcher.
+#
+# The node has things there is exactly one of. gad's APU shares memory between
+# CPU and GPU, so MiniMax-H3 (~43GB) and Wan 5B cannot both be resident. Until
+# 2026-08-14 that fact lived in two places and neither of them *said* it:
+# ComfyUI's own queue (which serialises by accident, one prompt at a time) and
+# comfy_yield_sibling (which restarts the sibling's systemd unit to reclaim
+# memory). Because nothing declared it, this service started a thread for every
+# accepted submit and let them all fight over the APU.
+#
+# The declaration is resources/murakumo/resource-classes.edn. This file only
+# reads it and counts — which model excludes which is not decided here.
+# ---------------------------------------------------------------------------
+
+CLASSES_PATH = pathlib.Path(os.environ.get(
+    "MURAKUMO_RESOURCE_CLASSES",
+    str(pathlib.Path(__file__).resolve().parent / "resource-classes.edn")))
+NODE_NAME = os.environ.get("MURAKUMO_NODE_NAME", os.uname().nodename)
+
+
+def read_edn(text):
+    """A reader for the restricted EDN this table uses: maps, keywords,
+    strings, integers, floats, booleans, nil, and ; comments. Decision-free —
+    it parses, it does not interpret. Anything richer is a parse error rather
+    than a silent partial read, because a table that half-loaded would admit
+    jobs it should have queued."""
+    i = 0
+    n = len(text)
+
+    def ws():
+        nonlocal i
+        while i < n:
+            c = text[i]
+            if c == ";":
+                while i < n and text[i] != "\n":
+                    i += 1
+            elif c in " \t\r\n,":
+                i += 1
+            else:
+                return
+
+    def value():
+        nonlocal i
+        ws()
+        if i >= n:
+            raise ValueError("unexpected end of EDN")
+        c = text[i]
+        if c == "{":
+            i += 1
+            out = {}
+            while True:
+                ws()
+                if i < n and text[i] == "}":
+                    i += 1
+                    return out
+                k = value()
+                v = value()
+                out[k] = v
+        if c == "[" or c == "(":
+            close = "]" if c == "[" else ")"
+            i += 1
+            out = []
+            while True:
+                ws()
+                if i < n and text[i] == close:
+                    i += 1
+                    return out
+                out.append(value())
+        if c == '"':
+            i += 1
+            buf = []
+            while i < n:
+                c = text[i]
+                if c == "\\":
+                    i += 1
+                    buf.append({"n": "\n", "t": "\t", "r": "\r"}.get(text[i], text[i]))
+                elif c == '"':
+                    i += 1
+                    return "".join(buf)
+                else:
+                    buf.append(c)
+                i += 1
+            raise ValueError("unterminated string")
+        start = i
+        while i < n and text[i] not in " \t\r\n,{}[]()\";":
+            i += 1
+        tok = text[start:i]
+        if not tok:
+            raise ValueError("unreadable EDN at offset %d" % start)
+        if tok == "true":
+            return True
+        if tok == "false":
+            return False
+        if tok == "nil":
+            return None
+        if tok.startswith(":"):
+            return tok            # keywords stay as ":ns/name" strings
+        try:
+            return int(tok)
+        except ValueError:
+            pass
+        try:
+            return float(tok)
+        except ValueError:
+            pass
+        return tok
+
+    v = value()
+    ws()
+    if i != n:
+        raise ValueError("trailing EDN at offset %d" % i)
+    return v
+
+
+def load_resource_classes():
+    """Fail closed. A missing or unreadable table is not 'no constraints' —
+    it is 'we cannot tell what is exclusive', and admitting on that basis is
+    how two video models end up on one APU."""
+    return read_edn(CLASSES_PATH.read_text())
+
+
+RESOURCE_CLASSES = load_resource_classes()
+
+
+def job_class(kind, params, spec=None):
+    """Which exclusive class this job occupies, or None. Hosted models run on
+    someone else's GPU and take nothing here."""
+    if kind != "video":
+        return None
+    if spec and spec.get("host") == "fal" and RESOURCE_CLASSES.get(":hosted-take-no-class"):
+        return None
+    return RESOURCE_CLASSES.get(":model-class", {}).get(params.get("model", VIDEO_DEFAULT_MODEL))
+
+
+def class_capacity(klass):
+    entry = RESOURCE_CLASSES.get(":classes", {}).get(klass) or {}
+    by_node = entry.get(":capacity-by-node") or {}
+    if NODE_NAME in by_node:
+        return int(by_node[NODE_NAME])
+    return int(entry.get(":capacity", 1))
+
+
+def video_deadline(params, spec=None):
+    """How long to wait for ComfyUI. 1800s was a constant the fleet's own
+    default model could not finish inside — measured 2284s at 640x640/124f
+    and 6038s at 175f (ADR-2608100600). Scale the measured point linearly.
+
+    Linear over-estimates (measured: 0.71x frames gave 0.39x per-step cost),
+    and for a timeout over-estimating is the safe direction. Do not quote this
+    as a speed estimate."""
+    d = RESOURCE_CLASSES.get(":deadline", {})
+    floor = int(d.get(":default-s", 1800))
+    entry = (d.get(":by-model") or {}).get(params.get("model", VIDEO_DEFAULT_MODEL))
+    if not entry:
+        return floor
+    ref_f = float(entry.get(":at-frames", 175)) or 175.0
+    ref_s = float(entry.get(":at-steps", 20)) or 20.0
+    scale = (float(params.get("frames", ref_f)) / ref_f) * (float(params.get("steps", ref_s)) / ref_s)
+    return max(floor, int(float(entry.get(":measured-s", floor)) * scale * float(entry.get(":safety", 2.0))))
+
+
+# Admission queue. One FIFO per class; jobs with no class run immediately.
+pending = {}                      # klass -> [ (job_id, target, source, params) ]
+running_in_class = {}             # klass -> count
+queue_cv = threading.Condition(lock)
+
+
+def enqueue_job(job_id, target, source, params, klass):
+    if klass is None:
+        threading.Thread(target=_run_and_release, args=(job_id, target, source, params, None),
+                         daemon=True).start()
+        return
+    with queue_cv:
+        pending.setdefault(klass, []).append((job_id, target, source, params))
+        queue_cv.notify_all()
+
+
+def _run_and_release(job_id, target, source, params, klass):
+    try:
+        target(job_id, source, params)
+    finally:
+        if klass is not None:
+            with queue_cv:
+                running_in_class[klass] = max(0, running_in_class.get(klass, 1) - 1)
+                queue_cv.notify_all()
+
+
+def _dispatch_loop():
+    while True:
+        with queue_cv:
+            started = False
+            for klass, waiting in pending.items():
+                if not waiting:
+                    continue
+                if running_in_class.get(klass, 0) >= class_capacity(klass):
+                    continue
+                job_id, target, source, params = waiting.pop(0)
+                if job_id in cancelled_jobs:
+                    continue
+                running_in_class[klass] = running_in_class.get(klass, 0) + 1
+                jobs[job_id].update(status="running", progress=2); save()
+                threading.Thread(target=_run_and_release,
+                                 args=(job_id, target, source, params, klass),
+                                 daemon=True).start()
+                started = True
+                break
+            if not started:
+                queue_cv.wait(timeout=2.0)
+
+
+def queue_depth():
+    """Cancelled entries stay in the FIFO until the dispatcher reaches them, so
+    counting the raw list reports work that will never run. Measured on the
+    live node 2026-08-14: a cancelled probe kept the depth at 2."""
+    with queue_cv:
+        out = {}
+        for k, v in pending.items():
+            n = sum(1 for (job_id, _t, _s, _p) in v if job_id not in cancelled_jobs)
+            if n:
+                out[k] = n
+        return out
+
+
+def reconcile_on_boot():
+    """Records survive a restart; threads do not. Anything left `queued` or
+    `running` in jobs.json has no execution behind it, so say so instead of
+    leaving it running forever — a job stuck at `running` is indistinguishable
+    from one that is genuinely still working."""
+    stranded = 0
+    for job_id, job in jobs.items():
+        if job.get("status") in ("queued", "running"):
+            job.update(status="failed", progress=100,
+                       error="interrupted by service restart; no execution survived")
+            stranded += 1
+    if stranded:
+        save()
+    print("reconciled %d stranded job(s) from jobs.json" % stranded, flush=True)
+    return stranded
+
 def comfy_base(spec=None):
     """The ComfyUI a model runs on. Only the MiniMax family is routed away from
     the farm's own instance; everything else keeps COMFY_URL untouched."""
     if spec and spec.get("comfy") == "minimax":
         return COMFY_URL_MINIMAX
     return COMFY_URL
+
+
+
+def comfy_queue_busy(base):
+    if not base:
+        return False
+    q = comfy_json("GET", "/queue", base=base)
+    return bool(q.get("queue_running") or q.get("queue_pending"))
+
+
+def comfy_free_models(base):
+    """Ask ComfyUI to drop loaded weights. Idle instances only process this
+    flag on the next queue tick, so this is best-effort; sibling restart is
+    the hard path when torch still holds tens of GB."""
+    if not base:
+        return
+    try:
+        comfy_json("POST", "/free", {"unload_models": True, "free_memory": True},
+                   base=base, timeout=60)
+    except Exception as exc:
+        print("comfy_free_models", base, exc)
+
+
+def comfy_unit(base):
+    """systemd unit for a ComfyUI listen URL on this host."""
+    if not base:
+        return None
+    if ":8191" in base:
+        return "comfyui-h3.service"
+    if ":8188" in base:
+        return "comfyui.service"
+    return None
+
+
+def comfy_torch_gb(base):
+    try:
+        stats = comfy_json("GET", "/system_stats", base=base)
+    except Exception:
+        return 0.0
+    devices = stats.get("devices") or []
+    if not devices:
+        return 0.0
+    return float(devices[0].get("torch_vram_total") or 0) / (1024.0 ** 3)
+
+
+def comfy_restart_unit(unit):
+    subprocess.run(["sudo", "-n", "systemctl", "restart", unit],
+                   check=True, timeout=90)
+
+
+def comfy_wait_up(base, seconds=45):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            comfy_json("GET", "/system_stats", base=base, timeout=5)
+            return
+        except Exception:
+            time.sleep(1.0)
+    raise RuntimeError("ComfyUI did not come back: " + str(base))
+
+
+def comfy_yield_sibling(keep_base):
+    """One APU cannot hold MiniMax-H3 (~43GB) and Wan 5B at once.
+    /free on an idle ComfyUI is a queue flag and often does not drop torch
+    allocations; restart the idle sibling unit instead."""
+    others = [u for u in (COMFY_URL, COMFY_URL_MINIMAX) if u and u != keep_base]
+    deadline = time.monotonic() + 120
+    for other in others:
+        while time.monotonic() < deadline:
+            try:
+                busy = comfy_queue_busy(other)
+            except Exception:
+                break
+            if busy:
+                time.sleep(2.0)
+                continue
+            held = comfy_torch_gb(other)
+            if held < 8.0:
+                break
+            unit = comfy_unit(other)
+            if not unit:
+                comfy_free_models(other)
+                break
+            print("yielding APU: restart", unit, "held_gb", round(held, 1))
+            comfy_restart_unit(unit)
+            comfy_wait_up(other)
+            break
+        else:
+            raise RuntimeError(
+                "sibling ComfyUI still has a running job; the APU cannot load "
+                "two video models at once (" + other + ")")
 
 
 def video_model_available(spec):
@@ -1301,6 +1633,7 @@ def run_video_job(job_id, source, params):
             if job_id in cancelled_jobs: return
             jobs[job_id].update(status="running", progress=5); save()
         base = comfy_base(spec)
+        comfy_yield_sibling(base)
         refs = source.get("images") or ([source["image"]] if source.get("image") else [])
         ref_image = [comfy_upload_image(u, base) for u in refs] or None
         if ref_image and spec["family"] != "minimax":
@@ -1317,7 +1650,7 @@ def run_video_job(job_id, source, params):
         if not prompt_id:
             raise RuntimeError("ComfyUI rejected the video graph: "
                                + json.dumps(submitted)[:2000])
-        deadline = time.monotonic() + 1800
+        deadline = time.monotonic() + video_deadline(params, spec)
         clips = None
         while time.monotonic() < deadline:
             with lock:
@@ -1325,7 +1658,8 @@ def run_video_job(job_id, source, params):
             entry = comfy_json("GET", f"/history/{prompt_id}", base=base).get(prompt_id) or {}
             status = entry.get("status") or {}
             if status.get("status_str") == "error":
-                raise RuntimeError("ComfyUI video job failed")
+                detail = json.dumps(status.get("messages") or status)[:2000]
+                raise RuntimeError("ComfyUI video job failed: " + detail)
             if status.get("completed"):
                 clips = [clip for node in (entry.get("outputs") or {}).values()
                          for key in ("video", "gifs", "images")
@@ -1449,7 +1783,17 @@ class Handler(BaseHTTPRequestHandler):
                                     durationMs=params["duration_ms"],
                                     soundKind=params["sound_kind"], loop=params["loop"])
                 save()
-            threading.Thread(target=target, args=(job_id, source, params), daemon=True).start()
+            # 資源クラスを取るジョブは入場キューへ。取らないジョブは即実行。
+            # **submit がスレッドを起こさない**ことがこの変更の本体で、
+            # ここが「受理 = 即実行」だったから APU の取り合いが起きていた。
+            klass = job_class(kind, params,
+                              VIDEO_MODELS.get(params.get("model", VIDEO_DEFAULT_MODEL))
+                              if kind == "video" else None)
+            if klass:
+                jobs[job_id]["resourceClass"] = klass
+                jobs[job_id]["queuePosition"] = len(pending.get(klass, [])) + 1
+                save()
+            enqueue_job(job_id, target, source, params, klass)
             self.send_json(202, jobs[job_id])
         except Exception as exc: self.send_json(400, {"error": "invalid-request", "message": str(exc)})
 
@@ -1474,7 +1818,11 @@ class Handler(BaseHTTPRequestHandler):
                                         "capabilities": capabilities,
                                         "soundModels": sorted(SOUND_MODELS) if SOUND_RUNNER else [],
                                         "videoModels": video_models,
-                                        "voiceLocales": sorted(VOICE_LOCALES) if TTS_RUNNER else []})
+                                        "voiceLocales": sorted(VOICE_LOCALES) if TTS_RUNNER else [],
+                                        "resourceClasses": {k: {"capacity": class_capacity(k),
+                                                               "running": running_in_class.get(k, 0)}
+                                                            for k in RESOURCE_CLASSES.get(":classes", {})},
+                                        "queueDepth": queue_depth()})
         if not self.authorized(): return self.send_json(401, {"error": "unauthorized"})
         parts = urlparse(self.path).path.strip("/").split("/")
         if len(parts) < 4 or parts[:3] != ["v1", "generation", "jobs"]:
@@ -1517,5 +1865,7 @@ if __name__ == "__main__":
     ROOT.mkdir(parents=True, exist_ok=True)
     try: jobs.update(json.loads((ROOT / "jobs.json").read_text()))
     except Exception: pass
+    reconcile_on_boot()
+    threading.Thread(target=_dispatch_loop, daemon=True).start()
     ThreadingHTTPServer((os.environ.get("MURAKUMO_GENERATION_HOST", "127.0.0.1"),
                          int(os.environ.get("MURAKUMO_GENERATION_PORT", "8081"))), Handler).serve_forever()
