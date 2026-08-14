@@ -157,14 +157,54 @@ check("the table asks for the external check",
 
 # A probe that cannot answer must read as busy: not knowing whether the APU is
 # free is not the same as it being free.
-m6.comfy_queue_busy = lambda base: (_ for _ in ()).throw(OSError("connection refused"))
 m6.class_external_bases = lambda k: ["http://127.0.0.1:9"]
-check("an unanswerable probe counts as busy", m6.class_externally_busy(":apu/video"), True)
 
-m6.comfy_queue_busy = lambda base: True
-check("a busy sibling counts as busy", m6.class_externally_busy(":apu/video"), True)
-m6.comfy_queue_busy = lambda base: False
-check("an idle sibling does not", m6.class_externally_busy(":apu/video"), False)
+def probe(mod, answer):
+    """Fresh probe — the result is cached, so clear it or you are asserting
+    against the previous question's answer."""
+    mod._external_busy_cache.clear()
+    if answer is Exception:
+        mod.comfy_queue_busy = lambda base: (_ for _ in ()).throw(OSError("refused"))
+    else:
+        mod.comfy_queue_busy = lambda base: answer
+    return mod.class_externally_busy(":apu/video")
+
+check("an unanswerable probe counts as busy", probe(m6, Exception), True)
+check("a busy sibling counts as busy", probe(m6, True), True)
+check("an idle sibling does not", probe(m6, False), False)
+
+# The cache is load-bearing: without it a waiting queue probes both ComfyUI
+# instances every couple of seconds, and each probe is a 30s-timeout request.
+calls = {"n": 0}
+def counting(base):
+    calls["n"] += 1
+    return False
+m6._external_busy_cache.clear()
+m6.comfy_queue_busy = counting
+m6.class_externally_busy(":apu/video")
+m6.class_externally_busy(":apu/video")
+m6.class_externally_busy(":apu/video")
+check("three calls inside the TTL probe once", calls["n"], 1)
+check("a call past the TTL probes again",
+      (m6.class_externally_busy(":apu/video", ttl=-1), calls["n"])[1], 2)
+
+# The probe must NOT be made while holding the queue lock: it is a 30s-timeout
+# HTTP call, and that lock is what submits and completions take.
+m6b = load()
+m6b.class_external_bases = lambda k: ["http://slow"]
+entered = threading.Event()
+def slow_probe(base):
+    entered.set()
+    time.sleep(1.5)
+    return True
+m6b.comfy_queue_busy = slow_probe
+threading.Thread(target=m6b._dispatch_loop, daemon=True).start()
+m6b.jobs["lk"] = {"jobId": "lk", "status": "queued", "progress": 1, "artifacts": []}
+m6b.enqueue_job("lk", lambda *a: None, {}, {}, ":apu/video")
+entered.wait(timeout=5)
+t0 = time.time()
+m6b.queue_depth()                     # would block for 1.5s if the probe held the lock
+check("the lock is free while the probe is in flight", (time.time() - t0) < 0.5, True)
 
 # And the dispatcher must actually hold on it — otherwise the check above is
 # true but nothing uses it.
@@ -180,7 +220,8 @@ m7.enqueue_job("held", _never, {}, {}, ":apu/video")
 time.sleep(1.2)
 check("a job is held while the class is externally busy", started["n"], 0)
 m7.comfy_queue_busy = lambda base: False
-time.sleep(2.5)
+m7._external_busy_cache.clear()
+time.sleep(3.0)
 check("and starts once the class frees up", started["n"], 1)
 
 # --- boot reconcile ---------------------------------------------------------
