@@ -149,6 +149,40 @@ peak2, fin2 = run_capacity_probe(m4, capacity=2)
 check("3 jobs all finish under capacity 2", fin2, 3)
 check("capacity 2 does run two at once (the probe can see concurrency)", peak2, 2)
 
+# --- the class can be held from outside this API -----------------------------
+
+m6 = load()
+check("the table asks for the external check",
+      m6.RESOURCE_CLASSES[":classes"][":apu/video"].get(":external-busy-check"), ":comfy-any")
+
+# A probe that cannot answer must read as busy: not knowing whether the APU is
+# free is not the same as it being free.
+m6.comfy_queue_busy = lambda base: (_ for _ in ()).throw(OSError("connection refused"))
+m6.class_external_bases = lambda k: ["http://127.0.0.1:9"]
+check("an unanswerable probe counts as busy", m6.class_externally_busy(":apu/video"), True)
+
+m6.comfy_queue_busy = lambda base: True
+check("a busy sibling counts as busy", m6.class_externally_busy(":apu/video"), True)
+m6.comfy_queue_busy = lambda base: False
+check("an idle sibling does not", m6.class_externally_busy(":apu/video"), False)
+
+# And the dispatcher must actually hold on it — otherwise the check above is
+# true but nothing uses it.
+m7 = load()
+m7.class_external_bases = lambda k: ["http://x"]
+m7.comfy_queue_busy = lambda base: True
+started = {"n": 0}
+def _never(job_id, source, params):
+    started["n"] += 1
+threading.Thread(target=m7._dispatch_loop, daemon=True).start()
+m7.jobs["held"] = {"jobId": "held", "status": "queued", "progress": 1, "artifacts": []}
+m7.enqueue_job("held", _never, {}, {}, ":apu/video")
+time.sleep(1.2)
+check("a job is held while the class is externally busy", started["n"], 0)
+m7.comfy_queue_busy = lambda base: False
+time.sleep(2.5)
+check("and starts once the class frees up", started["n"], 1)
+
 # --- boot reconcile ---------------------------------------------------------
 
 m5 = load()

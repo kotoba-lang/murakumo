@@ -39,6 +39,12 @@
          増えない —— 増やしたのが 2026-08-10 の 2 インスタンス並走で、
          そこで容量が 2 になったと誤解されうる形になった。"
    :capacity 1
+   ;; **この宣言が縛れるのは、この API を通ったジョブだけ。** ComfyUI へ直接
+   ;; 投げられた仕事（render farm はそう動かされている）は入場キューから見えない。
+   ;; 実測 2026-08-14: こちらの queue が空(running 0 / depth {})なのに submit が
+   ;; `sibling ComfyUI still has a running job` で落ちた。
+   ;; :comfy-any = 起動前に ComfyUI 側の busy も見る（拒否ではなく待ちにする）。
+   :external-busy-check :comfy-any
    ;; ノードごとに違うなら :capacity-by-node で上書きする。
    ;; 単一 GPU で VRAM に収まりきるノードが来たらここが 2 以上になる。
    :capacity-by-node {"gad" 1}}}
