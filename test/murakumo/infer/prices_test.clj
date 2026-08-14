@@ -7,7 +7,8 @@
 
   加えて、このレジストリが存在しなかった間に実際に効いていた 2 つの壊れた
   価格（text $10,000/Mtok、image $1.00/枚）が二度と通らないことを固定する。"
-  (:require [clojure.test :refer [deftest testing is]]
+  (:require [clojure.java.io :as io]
+            [clojure.test :refer [deftest testing is]]
             [murakumo.infer.prices :as p]
             [murakumo.infer.credits :as credits]))
 
@@ -78,6 +79,29 @@
   (testing "reference-to-video は fal の ×0.6 を反映して標準より安い"
     (is (< (:credit/per-video-second (p/price-for reg :video "seedance-2.0-ref"))
            (:credit/per-video-second (p/price-for reg :video "seedance-2.0"))))))
+
+(deftest the-serving-default-is-priced
+  (testing "配信している既定 video モデルに値段がある（ADR-2608140400）"
+    ;; 2026-08-14 の実害: catalog は minimax-h3 を :video の `default` かつ
+    ;; verified と宣言していたのに、価格表に entry が無く、課金プロキシが
+    ;; `model has no published price — refusing to quote` で 400 を返していた。
+    ;; **既定モデルが公開経路から一度も呼べていなかった。**
+    ;;
+    ;; ADR-2608100600 は follow-up に「spec と deployed な VIDEO_DEFAULT_MODEL の
+    ;; 一致を検査する」と書いた。ここでは同じ repo の中で閉じられる半分をやる ——
+    ;; **配信スクリプト自身が名乗る既定に、値段があるか**。
+    ;;
+    ;; 名前を直接書かないのは、既定が動いたときにこの検査が古い名前を守り続けて
+    ;; しまわないため。読み取れなかったら **落とす**（読めないことを合格にしない）。
+    (let [src   (slurp (io/file "scripts/hunyuan3d-generation-api"))
+          m     (re-find #"(?m)^VIDEO_DEFAULT_MODEL\s*=\s*\"([^\"]+)\"" src)
+          model (second m)]
+      (is (some? model)
+          "配信スクリプトから VIDEO_DEFAULT_MODEL を読み取れなかった")
+      (when model
+        (let [entry (p/price-for reg :video model)]
+          (is (pos? (:credit/per-video-second entry))
+              (str "既定モデル " model " に掲示価格が無い —— 公開経路から呼べない")))))))
 
 (deftest job-cost-uses-the-registry
   (testing "レジストリの map がそのまま job-cost に渡せる"
