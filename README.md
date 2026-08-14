@@ -641,6 +641,7 @@ being counted together as if `mlx-moe` were distributed.
 npm run task -- infer probe                    # live mem/disk/GPU map of the fleet
 npm run task -- infer plan glm-5.2-reap50-q2k  # shard plan + go/no-go gate (infer.edn registry)
 npm run task -- infer provision                # push rpc-server + raise iogpu.wired_limit_mb
+npm run task -- infer ha-provision             # adopt existing binaries into LaunchDaemon + HA key
 npm run task -- infer up                       # start the worker ring
 npm run task -- infer serve glm-5.2-reap50-q2k ~/models/GLM-5.2-…-00001-of-00004.gguf
 npm run task -- infer generate "叢雲とは何ですか"   # OpenAI API → the whole fleet answers
@@ -667,6 +668,18 @@ llama.cpp continuous batching therefore admits two concurrent request slots;
 the configured 524288-token total context gives each slot the model's full
 262144-token training window. Extra requests wait at the head rather than
 creating unbounded worker processes.
+
+`infer provision` also installs each macOS RPC worker as the system
+LaunchDaemon `com.murakumo.rpc-worker` (`RunAtLoad` + `KeepAlive`). On a remote
+head it creates a dedicated Ed25519 recovery key whose worker-side
+`authorized_keys` entry is restricted to exactly one forced command: kickstart
+that LaunchDaemon. The 30-second head watchdog probes `/slots`; after the
+420-second cold-load grace, a failed probe stops the head, restarts every RPC
+worker through that constrained capability, waits until every planned endpoint
+accepts TCP, and only then starts the head again. `ExecStartPre` repeats the
+all-endpoint check, so llama.cpp cannot silently come up with a partial rank
+set. Inspect with `systemctl status murakumo-ring-watchdog.timer` on the head and
+`sudo launchctl print system/com.murakumo.rpc-worker` on a Mac worker.
 
 ### Standalone (no RPC ring) — when the model fits on the head alone
 

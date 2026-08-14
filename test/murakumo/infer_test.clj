@@ -1,6 +1,7 @@
 ;; Offline unit tests for the pure inference planner/engine (no fleet, no SSH).
 (ns murakumo.infer-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [murakumo.infer :as infer]
             [murakumo.infer.engine :as engine]
             [murakumo.infer.plan :as plan]))
@@ -154,23 +155,52 @@
       (is (re-find #"User=gad" unit)))))
 
 (deftest distributed-ring-systemd-unit
-  (let [unit (#'infer/ring-unit "/opt/bin/llama-server -m /m.gguf --rpc 10.0.0.1:50052 --port 8090")]
+  (let [unit (#'infer/ring-unit
+              "/opt/bin/llama-server -m /m.gguf --rpc 10.0.0.1:50052 --port 8090"
+              [{:ip "10.0.0.1" :port 50052}])]
     (testing "persists and self-heals the exact distributed head command"
       (is (re-find #"ExecStart=/opt/bin/llama-server .*--rpc 10\.0\.0\.1:50052.*--port 8090\n" unit))
       (is (re-find #"Restart=on-failure" unit))
       (is (re-find #"WantedBy=multi-user\.target" unit)))
+    (testing "waits for every rank instead of accepting a partial ring"
+      (is (re-find #"ExecStartPre=.*nc -z -w 2 10\.0\.0\.1 50052" unit))
+      (is (re-find #"-ge 60 \]" unit)))
     (testing "runs as the model-owning gad user"
       (is (re-find #"User=gad" unit)))))
 
 (deftest distributed-ring-watchdog-unwedges-an-active-head
-  (let [unit (#'infer/ring-watchdog-unit 8090)
+  (let [specs [{:target "naphtali@10.0.0.1" :ip "10.0.0.1" :port 50052}
+               {:target "asher@10.0.0.2" :ip "10.0.0.2" :port 40052}]
+        unit (#'infer/ring-watchdog-unit 8090)
+        script (#'infer/ring-watchdog-script 8090 specs)
         timer (#'infer/ring-watchdog-timer)]
     (testing "probes the scheduler rather than trusting process-active"
-      (is (re-find #"http://127\.0\.0\.1:8090/slots" unit))
-      (is (re-find #"--max-time 10" unit))
-      (is (re-find #"restart murakumo-ring\.service" unit)))
+      (is (re-find #"/usr/local/sbin/murakumo-ring-watchdog" unit))
+      (is (re-find #"http://127\.0\.0\.1:8090/slots" script))
+      (is (re-find #"--max-time 10" script)))
     (testing "does not kill the measured four-minute cold load"
-      (is (re-find #"-lt 420" unit)))
+      (is (re-find #"-lt 420" script)))
+    (testing "rebuilds the complete RPC failure domain before the head"
+      (is (< (.indexOf script "systemctl stop murakumo-ring.service")
+             (.indexOf script "naphtali@10.0.0.1")
+             (.indexOf script "nc -z -w 2 10.0.0.1 50052")
+             (.indexOf script "systemctl start murakumo-ring.service")))
+      (is (re-find #"asher@10\.0\.0\.2" script))
+      (is (re-find #"rpc-ha-key" script)))
     (testing "runs repeatedly without an external cron"
       (is (re-find #"OnUnitActiveSec=30s" timer))
       (is (re-find #"WantedBy=timers\.target" timer)))))
+
+(deftest rpc-worker-launchd-service-is-resident-and-constrained
+  (let [plist (#'infer/rpc-worker-plist "asher" "/Users/asher" 40052 "MTL0" true)]
+    (is (re-find #"com\.murakumo\.rpc-worker" plist))
+    (is (re-find #"<key>UserName</key><string>asher</string>" plist))
+    (is (re-find #"/Users/asher/\.murakumo/bin/rpc-server" plist))
+    (is (re-find #"<string>-p</string><string>40052</string>" plist))
+    (is (re-find #"<string>-c</string>" plist))
+    (is (re-find #"<key>KeepAlive</key><true/>" plist)))
+  (let [entry (#'infer/rpc-ha-authorized-key
+               "ssh-ed25519 AAAATEST murakumo-rpc-ha")]
+    (is (str/starts-with? entry "restrict,command="))
+    (is (str/includes? entry "launchctl kickstart -k system/com.murakumo.rpc-worker"))
+    (is (str/ends-with? entry "ssh-ed25519 AAAATEST murakumo-rpc-ha"))))
