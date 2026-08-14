@@ -461,6 +461,12 @@
 (defn -main [& args]
   (let [[cmd & rest] args
         fleet (fleet/load-fleet)]
-    (if-let [f (get commands cmd)]
-      (f fleet rest)
-      (println (report/command-help)))))
+    (try
+      (if-let [f (get commands cmd)]
+        (f fleet rest)
+        (println (report/command-help)))
+      (finally
+        ;; probe/plan use pmap and HTTP clients. Their executor threads kept a
+        ;; completed CLI alive after it had printed its answer, which made the
+        ;; restored task entrypoint unusable from automation.
+        (shutdown-agents)))))

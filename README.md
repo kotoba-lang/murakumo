@@ -638,12 +638,12 @@ measured `capacity=4/8` tiers, so 16 GiB minis are rejected honestly instead of
 being counted together as if `mlx-moe` were distributed.
 
 ```bash
-bb murakumo infer probe                    # live mem/disk/GPU map of the fleet
-bb murakumo infer plan glm-5.2-reap50-q2k  # shard plan + go/no-go gate (infer.edn registry)
-bb murakumo infer provision                # push rpc-server + raise iogpu.wired_limit_mb
-bb murakumo infer up                       # start the worker ring
-bb murakumo infer serve glm-5.2-reap50-q2k ~/models/GLM-5.2-…-00001-of-00004.gguf
-bb murakumo infer generate "叢雲とは何ですか"   # OpenAI API → the whole fleet answers
+npm run task -- infer probe                    # live mem/disk/GPU map of the fleet
+npm run task -- infer plan glm-5.2-reap50-q2k  # shard plan + go/no-go gate (infer.edn registry)
+npm run task -- infer provision                # push rpc-server + raise iogpu.wired_limit_mb
+npm run task -- infer up                       # start the worker ring
+npm run task -- infer serve glm-5.2-reap50-q2k ~/models/GLM-5.2-…-00001-of-00004.gguf
+npm run task -- infer generate "叢雲とは何ですか"   # OpenAI API → the whole fleet answers
 
 # Hugging Face model cache setup over Tailscale SSH
 bb murakumo model plan trellis-image-large asher
@@ -652,14 +652,14 @@ bb murakumo model status trellis-image-large all
 bb murakumo revive all                             # Wake-on-LAN offline Macs via a live peer
 
 # :model/engine :mlx-moe — same verbs, single-node path (no ring/up/down):
-bb murakumo infer plan qwen3-coder-next-mlx-moe    # picks the best-memory node + capacity + verdict
-bb murakumo infer provision                        # pip install -U mlx-moe on that node
-bb murakumo infer serve qwen3-coder-next-mlx-moe   # nohup `mlx-moe serve` there, OpenAI-compatible /v1
-bb murakumo infer generate "叢雲とは何ですか"        # targets whichever host the last plan chose
+npm run task -- infer plan qwen3-coder-next-mlx-moe    # picks the best-memory node + capacity + verdict
+npm run task -- infer provision                        # pip install -U mlx-moe on that node
+npm run task -- infer serve qwen3-coder-next-mlx-moe   # nohup `mlx-moe serve` there, OpenAI-compatible /v1
+npm run task -- infer generate "叢雲とは何ですか"        # targets whichever host the last plan chose
 
 # Experimental GLM-5.2 mxfp4 hot-expert cache on one 32 GiB+ Apple node:
-bb murakumo infer plan glm-5.2-mxfp4-mlx-moe
-bb murakumo infer serve glm-5.2-mxfp4-mlx-moe      # capacity/pin-top-k/profile come from infer.edn
+npm run task -- infer plan glm-5.2-mxfp4-mlx-moe
+npm run task -- infer serve glm-5.2-mxfp4-mlx-moe      # capacity/pin-top-k/profile come from infer.edn
 ```
 
 ### Standalone (no RPC ring) — when the model fits on the head alone
@@ -672,8 +672,8 @@ fit in the head's own memory, skip the ring entirely and run a GPU-backend
 build standalone instead:
 
 ```bash
-bb murakumo infer down                                              # free the 6 RPC workers, not needed
-bb murakumo infer serve-standalone qwen-agentworld-35b-a3b \
+npm run task -- infer down                                              # free the RPC workers, not needed
+npm run task -- infer serve-standalone qwen-agentworld-35b-a3b \
   /home/gad/models/Qwen-AgentWorld-35B-A3B-GGUF/Qwen-AgentWorld-35B-A3B-UD-Q4_K_M.gguf
 ```
 

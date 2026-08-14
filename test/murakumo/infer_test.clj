@@ -15,6 +15,24 @@
 (def glm {:model/id "glm-5.2-reap50-q2k" :model/format :gguf
           :model/layers 78 :model/weight-bytes 139000000000})
 
+(deftest physical-head-is-not-an-rpc-worker
+  (let [head-cfg {:name "head" :node-name "gad"
+                  :host "root@100.82.98.110"}
+        nodes [{:name "asher" :host "asher" :ip "100.96.122.69"}
+               {:name "gad" :host "gad" :ip "100.82.98.110"}
+               {:name "alias" :host "root@100.82.98.110"}
+               {:name "xavier" :host "xavier" :ip "100.87.226.80"}]]
+    (testing "explicit inventory identity wins even when SSH names differ"
+      (is (#'infer/same-physical-node? head-cfg (second nodes))))
+    (testing "host/IP aliases of the same conductor are also excluded"
+      (is (#'infer/same-physical-node? (dissoc head-cfg :node-name) (second nodes)))
+      (is (#'infer/same-physical-node? (dissoc head-cfg :node-name) (nth nodes 2))))
+    (testing "only the physical head is removed from the worker probe set"
+      (is (= ["asher" "xavier"]
+             (mapv :name (#'infer/worker-nodes {:infer/head head-cfg} nodes)))))
+    (testing "missing optional identities do not make nil equal nil"
+      (is (not (#'infer/same-physical-node? {} {:name "worker"}))))))
+
 (deftest usable-memory
   (testing "16 GiB worker: 16 − 2.5 os − 1.25 headroom = 12.25 GiB"
     (is (= (* 49/4 GiB) (plan/usable-bytes (mini "a")))))
@@ -89,7 +107,7 @@
 
 (deftest llamacpp-rpc-commands
   (let [nodes [(assoc (mini "a") :ip "100.0.0.1")
-               (assoc (mini "b") :ip "100.0.0.2" :rpc-cache? false)
+               (assoc (mini "b") :ip "100.0.0.2" :rpc-cache? false :rpc-port 40052)
                head]
         pl (plan/plan glm nodes)
         {:keys [workers head]} (engine/commands pl :llamacpp-rpc
@@ -99,7 +117,7 @@
       (is (re-find #"-d MTL0 -c$" (:cmd (first workers))))
       (is (not (re-find #"-c$" (:cmd (second workers))))))
     (testing "head drives the ring: endpoints in order, tensor-split = workers + head last"
-      (is (re-find #"--rpc 100\.0\.0\.1:50052,100\.0\.0\.2:50052 " (:cmd head)))
+      (is (re-find #"--rpc 100\.0\.0\.1:50052,100\.0\.0\.2:40052 " (:cmd head)))
       (is (re-find #"--tensor-split \d+,\d+,\d+ " (:cmd head))))))
 
 (deftest mlx-ring-commands
@@ -126,4 +144,13 @@
       (is (re-find #"Restart=on-failure" unit))
       (is (re-find #"WantedBy=multi-user\.target" unit)))
     (testing "runs as the gad user like the existing llama-server.service"
+      (is (re-find #"User=gad" unit)))))
+
+(deftest distributed-ring-systemd-unit
+  (let [unit (#'infer/ring-unit "/opt/bin/llama-server -m /m.gguf --rpc 10.0.0.1:50052 --port 8090")]
+    (testing "persists and self-heals the exact distributed head command"
+      (is (re-find #"ExecStart=/opt/bin/llama-server .*--rpc 10\.0\.0\.1:50052.*--port 8090\n" unit))
+      (is (re-find #"Restart=on-failure" unit))
+      (is (re-find #"WantedBy=multi-user\.target" unit)))
+    (testing "runs as the model-owning gad user"
       (is (re-find #"User=gad" unit)))))
