@@ -164,7 +164,8 @@
       (is (re-find #"WantedBy=multi-user\.target" unit)))
     (testing "waits for every rank instead of accepting a partial ring"
       (is (re-find #"ExecStartPre=.*nc -z -w 2 10\.0\.0\.1 50052" unit))
-      (is (re-find #"-ge 60 \]" unit)))
+      (is (re-find #"-ge 60 \]" unit))
+      (is (re-find #"done; sleep 5;" unit)))
     (testing "runs as the model-owning gad user"
       (is (re-find #"User=gad" unit)))))
 

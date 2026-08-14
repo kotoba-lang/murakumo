@@ -187,7 +187,11 @@
               (for [{:keys [ip port]} endpoints]
                 (str "/usr/bin/nc -z -w 2 " ip " " port " || missing=1; ")))
        "[ \"$missing\" -eq 0 ] && break; i=$((i + 1)); "
-       "[ \"$i\" -ge 60 ] && exit 1; sleep 2; done; "))
+       "[ \"$i\" -ge 60 ] && exit 1; sleep 2; done; "
+       ;; rpc-server opens LISTEN before Metal/device initialization is fully
+       ;; ready to answer the first protocol exchange. A head launched in that
+       ;; gap can segfault or silently omit the rank despite a green TCP probe.
+       "sleep 5; "))
 
 (defn- ring-unit
   "Boot-persistent distributed llama.cpp RPC head. The workers are deliberately

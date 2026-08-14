@@ -678,7 +678,8 @@ that LaunchDaemon. The 30-second head watchdog probes `/slots`; after the
 worker through that constrained capability, waits until every planned endpoint
 accepts TCP, and only then starts the head again. `ExecStartPre` repeats the
 all-endpoint check, so llama.cpp cannot silently come up with a partial rank
-set. Inspect with `systemctl status murakumo-ring-watchdog.timer` on the head and
+set; it also gives the RPC protocol five seconds to settle after TCP starts
+listening. Inspect with `systemctl status murakumo-ring-watchdog.timer` on the head and
 `sudo launchctl print system/com.murakumo.rpc-worker` on a Mac worker.
 
 ### Standalone (no RPC ring) — when the model fits on the head alone
