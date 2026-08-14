@@ -16,7 +16,7 @@ import uuid
 import wave
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlencode, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 ROOT = pathlib.Path(os.environ.get("MURAKUMO_GENERATION_DIR", "/home/gad/.murakumo/generation"))
 RUNNER = os.environ.get("HUNYUAN3D_RUNNER", "/home/gad/.murakumo/bin/hunyuan3d-run-rocm")
@@ -959,6 +959,59 @@ def job_class(kind, params, spec=None):
     return RESOURCE_CLASSES.get(":model-class", {}).get(params.get("model", VIDEO_DEFAULT_MODEL))
 
 
+def class_external_bases(klass):
+    """Which ComfyUI instances this class's memory is actually held by.
+
+    The declaration says *what is exclusive*; which URLs this node happens to
+    run is the node's own topology, so it stays here."""
+    entry = RESOURCE_CLASSES.get(":classes", {}).get(klass) or {}
+    if entry.get(":external-busy-check") != ":comfy-any":
+        return []
+    return [b for b in (COMFY_URL, COMFY_URL_MINIMAX) if b]
+
+
+_external_busy_cache = {}
+
+
+def class_externally_busy(klass, ttl=5.0):
+    """True when something outside this service is holding the class.
+
+    **Never call this while holding `queue_cv`.** It makes an HTTP request with
+    a 30s timeout, and that condition wraps the global `lock` that submits,
+    status updates and job completion all take — a hung ComfyUI would freeze
+    the whole service, repeatedly, for as long as it stayed hung. The dispatcher
+    probes outside the lock and re-validates after re-acquiring.
+
+    Cached briefly so a queue that is waiting does not poll both ComfyUI
+    instances every couple of seconds.
+
+    **The declaration only governs jobs that come through this API.** Work
+    submitted straight to ComfyUI — which is how the render farm is driven —
+    is invisible to the admission queue. Measured 2026-08-14: with our own
+    queue empty (running 0, depth {}), a submit still died with `sibling
+    ComfyUI still has a running job`, because the farm was busy with a job we
+    never saw.
+
+    Checking here turns that hard failure into a wait. A probe that cannot
+    answer is treated as busy: not knowing whether the APU is free is not the
+    same as it being free."""
+    now = time.monotonic()
+    hit = _external_busy_cache.get(klass)
+    if hit and (now - hit[0]) < ttl:
+        return hit[1]
+    busy = False
+    for base in class_external_bases(klass):
+        try:
+            if comfy_queue_busy(base):
+                busy = True
+                break
+        except Exception:
+            busy = True
+            break
+    _external_busy_cache[klass] = (now, busy)
+    return busy
+
+
 def class_capacity(klass):
     entry = RESOURCE_CLASSES.get(":classes", {}).get(klass) or {}
     by_node = entry.get(":capacity-by-node") or {}
@@ -1013,26 +1066,37 @@ def _run_and_release(job_id, target, source, params, klass):
 
 
 def _dispatch_loop():
+    """Pick a candidate under the lock, probe the outside world WITHOUT it, then
+    re-acquire and re-check before starting. The probe is a 30s-timeout HTTP
+    call and this condition wraps the lock that submits, status updates and job
+    completion all take."""
     while True:
+        candidate = None
         with queue_cv:
-            started = False
             for klass, waiting in pending.items():
-                if not waiting:
-                    continue
-                if running_in_class.get(klass, 0) >= class_capacity(klass):
-                    continue
-                job_id, target, source, params = waiting.pop(0)
-                if job_id in cancelled_jobs:
-                    continue
-                running_in_class[klass] = running_in_class.get(klass, 0) + 1
-                jobs[job_id].update(status="running", progress=2); save()
-                threading.Thread(target=_run_and_release,
-                                 args=(job_id, target, source, params, klass),
-                                 daemon=True).start()
-                started = True
-                break
-            if not started:
+                if waiting and running_in_class.get(klass, 0) < class_capacity(klass):
+                    candidate = klass
+                    break
+            if candidate is None:
                 queue_cv.wait(timeout=2.0)
+                continue
+
+        held_outside = class_externally_busy(candidate)
+
+        with queue_cv:
+            waiting = pending.get(candidate) or []
+            # 状態は probe のあいだに動きうる。掴み直して確かめる。
+            if (not held_outside and waiting
+                    and running_in_class.get(candidate, 0) < class_capacity(candidate)):
+                job_id, target, source, params = waiting.pop(0)
+                if job_id not in cancelled_jobs:
+                    running_in_class[candidate] = running_in_class.get(candidate, 0) + 1
+                    jobs[job_id].update(status="running", progress=2); save()
+                    threading.Thread(target=_run_and_release,
+                                     args=(job_id, target, source, params, candidate),
+                                     daemon=True).start()
+                    continue
+            queue_cv.wait(timeout=2.0)
 
 
 def queue_depth():
@@ -1824,7 +1888,22 @@ class Handler(BaseHTTPRequestHandler):
                                                             for k in RESOURCE_CLASSES.get(":classes", {})},
                                         "queueDepth": queue_depth()})
         if not self.authorized(): return self.send_json(401, {"error": "unauthorized"})
-        parts = urlparse(self.path).path.strip("/").split("/")
+        parsed = urlparse(self.path)
+        parts = parsed.path.strip("/").split("/")
+        # A sweep. There is no completion callback anywhere in this stack — the
+        # billing plane can only observe a job when someone polls that exact
+        # job id (site_worker's refund-if-failed!). It therefore cannot learn
+        # about a job whose caller walked away. This lets a reconciler ask
+        # "what changed" without already knowing the ids.
+        if parts == ["v1", "generation", "jobs"]:
+            q = dict(parse_qsl(parsed.query))
+            want = set(filter(None, (q.get("status") or "").split(",")))
+            limit = max(1, min(1000, int(q.get("limit", "200"))))
+            rows = [j for j in jobs.values() if not want or j.get("status") in want]
+            return self.send_json(200, {"object": "list",
+                                        "total": len(rows),
+                                        "returned": min(len(rows), limit),
+                                        "data": rows[-limit:]})
         if len(parts) < 4 or parts[:3] != ["v1", "generation", "jobs"]:
             return self.send_json(404, {"error": "not-found"})
         if len(parts) not in (4, 5) or (len(parts) == 5 and parts[4] != "artifact"):
