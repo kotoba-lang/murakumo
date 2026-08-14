@@ -831,6 +831,97 @@ def comfy_base(spec=None):
     return COMFY_URL
 
 
+
+def comfy_queue_busy(base):
+    if not base:
+        return False
+    q = comfy_json("GET", "/queue", base=base)
+    return bool(q.get("queue_running") or q.get("queue_pending"))
+
+
+def comfy_free_models(base):
+    """Ask ComfyUI to drop loaded weights. Idle instances only process this
+    flag on the next queue tick, so this is best-effort; sibling restart is
+    the hard path when torch still holds tens of GB."""
+    if not base:
+        return
+    try:
+        comfy_json("POST", "/free", {"unload_models": True, "free_memory": True},
+                   base=base, timeout=60)
+    except Exception as exc:
+        print("comfy_free_models", base, exc)
+
+
+def comfy_unit(base):
+    """systemd unit for a ComfyUI listen URL on this host."""
+    if not base:
+        return None
+    if ":8191" in base:
+        return "comfyui-h3.service"
+    if ":8188" in base:
+        return "comfyui.service"
+    return None
+
+
+def comfy_torch_gb(base):
+    try:
+        stats = comfy_json("GET", "/system_stats", base=base)
+    except Exception:
+        return 0.0
+    devices = stats.get("devices") or []
+    if not devices:
+        return 0.0
+    return float(devices[0].get("torch_vram_total") or 0) / (1024.0 ** 3)
+
+
+def comfy_restart_unit(unit):
+    subprocess.run(["sudo", "-n", "systemctl", "restart", unit],
+                   check=True, timeout=90)
+
+
+def comfy_wait_up(base, seconds=45):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            comfy_json("GET", "/system_stats", base=base, timeout=5)
+            return
+        except Exception:
+            time.sleep(1.0)
+    raise RuntimeError("ComfyUI did not come back: " + str(base))
+
+
+def comfy_yield_sibling(keep_base):
+    """One APU cannot hold MiniMax-H3 (~43GB) and Wan 5B at once.
+    /free on an idle ComfyUI is a queue flag and often does not drop torch
+    allocations; restart the idle sibling unit instead."""
+    others = [u for u in (COMFY_URL, COMFY_URL_MINIMAX) if u and u != keep_base]
+    deadline = time.monotonic() + 120
+    for other in others:
+        while time.monotonic() < deadline:
+            try:
+                busy = comfy_queue_busy(other)
+            except Exception:
+                break
+            if busy:
+                time.sleep(2.0)
+                continue
+            held = comfy_torch_gb(other)
+            if held < 8.0:
+                break
+            unit = comfy_unit(other)
+            if not unit:
+                comfy_free_models(other)
+                break
+            print("yielding APU: restart", unit, "held_gb", round(held, 1))
+            comfy_restart_unit(unit)
+            comfy_wait_up(other)
+            break
+        else:
+            raise RuntimeError(
+                "sibling ComfyUI still has a running job; the APU cannot load "
+                "two video models at once (" + other + ")")
+
+
 def video_model_available(spec):
     """A model is offered only when the thing that would run it is configured:
     a hosted model needs its provider key, a fleet model needs ComfyUI. One
@@ -1301,6 +1392,7 @@ def run_video_job(job_id, source, params):
             if job_id in cancelled_jobs: return
             jobs[job_id].update(status="running", progress=5); save()
         base = comfy_base(spec)
+        comfy_yield_sibling(base)
         refs = source.get("images") or ([source["image"]] if source.get("image") else [])
         ref_image = [comfy_upload_image(u, base) for u in refs] or None
         if ref_image and spec["family"] != "minimax":
@@ -1325,7 +1417,8 @@ def run_video_job(job_id, source, params):
             entry = comfy_json("GET", f"/history/{prompt_id}", base=base).get(prompt_id) or {}
             status = entry.get("status") or {}
             if status.get("status_str") == "error":
-                raise RuntimeError("ComfyUI video job failed")
+                detail = json.dumps(status.get("messages") or status)[:2000]
+                raise RuntimeError("ComfyUI video job failed: " + detail)
             if status.get("completed"):
                 clips = [clip for node in (entry.get("outputs") or {}).values()
                          for key in ("video", "gifs", "images")
