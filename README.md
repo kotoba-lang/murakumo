@@ -662,6 +662,12 @@ npm run task -- infer plan glm-5.2-mxfp4-mlx-moe
 npm run task -- infer serve glm-5.2-mxfp4-mlx-moe      # capacity/pin-top-k/profile come from infer.edn
 ```
 
+The distributed head takes `:infer/parallel` from `infer.edn` (currently 2).
+llama.cpp continuous batching therefore admits two concurrent request slots;
+the configured 524288-token total context gives each slot the model's full
+262144-token training window. Extra requests wait at the head rather than
+creating unbounded worker processes.
+
 ### Standalone (no RPC ring) — when the model fits on the head alone
 
 The head (this fleet's: an AMD Ryzen AI MAX+ 395 "Strix Halo" APU, Radeon
