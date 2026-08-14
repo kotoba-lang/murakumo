@@ -584,6 +584,34 @@
                     (println "llama-server ✓ (head)"))
                 (println (str "scp failed: " err))))))))))
 
+(defn cmd-ha-provision
+  "Adopt already-provisioned RPC binaries into the resident HA control plane.
+   Unlike `provision`, this does not require a local bin/rpc-server build: it
+   verifies each remote binary, installs/kickstarts the LaunchDaemon, and grants
+   the head only the forced restart capability."
+  [[sel]]
+  (let [cfg (load-config)
+        pl (load-plan)
+        want (when (and sel (not= sel "all")) (set (str/split sel #",")))
+        assignments (filter (fn [{:keys [node]}]
+                              (or (nil? want) (want (:name node))))
+                            (serving-workers pl))]
+    (doseq [{:keys [node]} assignments]
+      (let [host (:host node)
+            check (ssh/sh host "test -x ~/.murakumo/bin/rpc-server")]
+        (when-not (zero? (:exit check))
+          (throw (ex-info "remote RPC binary is absent; run infer provision"
+                          {:node (:name node)})))
+        (let [svc (install-rpc-worker-service! cfg node)]
+          (when-not (zero? (:exit svc))
+            (throw (ex-info "RPC worker LaunchDaemon install failed"
+                            {:node (:name node) :stderr (:err svc)})))
+          (println (format "[%s] RPC LaunchDaemon managed" (:name node))))))
+    ;; Recovery must cover the complete plan even when a selector was used to
+    ;; repair one service; installing an idempotent authorized_keys line is cheap.
+    (provision-rpc-ha-key! (get-in cfg [:infer/head :host]) (worker-specs pl cfg))
+    (println "head recovery key constrained to RPC worker kickstart")))
+
 (defn cmd-up [[sel]]
   (let [cfg (load-config)
         pl (load-plan)
@@ -958,6 +986,7 @@
     "probe" (cmd-probe args)
     "plan" (cmd-plan args)
     "provision" (cmd-provision args)
+    "ha-provision" (cmd-ha-provision args)
     "up" (cmd-up args)
     "down" (cmd-down args)
     "ps" (cmd-ps args)
@@ -965,4 +994,4 @@
     "serve-standalone" (cmd-serve-standalone args)
     "serve-embed" (cmd-serve-embed args)
     "generate" (cmd-generate args)
-    (println "usage: npm run task -- infer probe|plan <model>|provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf] [parallel]|serve-embed [model]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|join [relay-url] --model <id> [--name <node>]|gateway [port]")))
+    (println "usage: npm run task -- infer probe|plan <model>|provision [sel]|ha-provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf] [parallel]|serve-embed [model]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|join [relay-url] --model <id> [--name <node>]|gateway [port]")))

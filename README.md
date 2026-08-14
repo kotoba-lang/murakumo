@@ -641,6 +641,7 @@ being counted together as if `mlx-moe` were distributed.
 npm run task -- infer probe                    # live mem/disk/GPU map of the fleet
 npm run task -- infer plan glm-5.2-reap50-q2k  # shard plan + go/no-go gate (infer.edn registry)
 npm run task -- infer provision                # push rpc-server + raise iogpu.wired_limit_mb
+npm run task -- infer ha-provision             # adopt existing binaries into LaunchDaemon + HA key
 npm run task -- infer up                       # start the worker ring
 npm run task -- infer serve glm-5.2-reap50-q2k ~/models/GLM-5.2-…-00001-of-00004.gguf
 npm run task -- infer generate "叢雲とは何ですか"   # OpenAI API → the whole fleet answers
