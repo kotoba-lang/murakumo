@@ -198,6 +198,34 @@
        "[Install]\n"
        "WantedBy=multi-user.target\n"))
 
+(def ^:private ring-watchdog-grace-seconds 420)
+
+(defn- ring-watchdog-unit
+  "Probe the slot scheduler, not merely the process. The RPC head can remain
+   systemd-active while every request and /slots hangs after a cancelled RPC
+   decode. Skip the cold-load window, then restart that wedged head."
+  [port]
+  (str "[Unit]\n"
+       "Description=murakumo distributed ring liveness watchdog\n"
+       "After=murakumo-ring.service\n"
+       "\n"
+       "[Service]\n"
+       "Type=oneshot\n"
+       "ExecStart=/bin/sh -ec 'started_us=$(/usr/bin/systemctl show murakumo-ring.service -p ActiveEnterTimestampMonotonic --value); now_s=$(/usr/bin/cut -d. -f1 /proc/uptime); started_s=$((started_us / 1000000)); if [ $((now_s - started_s)) -lt " ring-watchdog-grace-seconds " ]; then exit 0; fi; /usr/bin/curl -fsS --max-time 10 http://127.0.0.1:" port "/slots >/dev/null || /usr/bin/systemctl restart murakumo-ring.service'\n"))
+
+(defn- ring-watchdog-timer []
+  (str "[Unit]\n"
+       "Description=periodically verify murakumo distributed ring slots\n"
+       "\n"
+       "[Timer]\n"
+       "OnBootSec=30s\n"
+       "OnUnitActiveSec=30s\n"
+       "AccuracySec=5s\n"
+       "Unit=murakumo-ring-watchdog.service\n"
+       "\n"
+       "[Install]\n"
+       "WantedBy=timers.target\n"))
+
 (defn- moe? [model] (= :mlx-moe (:model/engine model)))
 
 (defn- waste? [model] (= :waste (:model/engine model)))
@@ -555,6 +583,8 @@
     (println cmd)
     (if remote?
       (let [unit (ring-unit cmd)
+            watchdog (ring-watchdog-unit (:infer/api-port cfg 8080))
+            watchdog-timer (ring-watchdog-timer)
             conflicts (or (:conflicting-units head-cfg) [])
             stop-conflicts (apply str
                                   (map #(str "systemctl disable --now " % " >/dev/null 2>&1 || true; ")
@@ -564,7 +594,14 @@
                         "cat > /etc/systemd/system/murakumo-ring.service <<'MURAKUMO_UNIT'\n"
                         unit
                         "MURAKUMO_UNIT\n"
+                        "cat > /etc/systemd/system/murakumo-ring-watchdog.service <<'MURAKUMO_WATCHDOG'\n"
+                        watchdog
+                        "MURAKUMO_WATCHDOG\n"
+                        "cat > /etc/systemd/system/murakumo-ring-watchdog.timer <<'MURAKUMO_WATCHDOG_TIMER'\n"
+                        watchdog-timer
+                        "MURAKUMO_WATCHDOG_TIMER\n"
                         "systemctl daemon-reload; "
+                        "systemctl enable --now murakumo-ring-watchdog.timer >/dev/null 2>&1; "
                         "systemctl enable murakumo-ring.service >/dev/null 2>&1; "
                         "systemctl restart murakumo-ring.service; sleep 3; "
                         "if systemctl is-active --quiet murakumo-ring.service; then "

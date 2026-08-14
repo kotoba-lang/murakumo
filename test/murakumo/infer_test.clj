@@ -161,3 +161,16 @@
       (is (re-find #"WantedBy=multi-user\.target" unit)))
     (testing "runs as the model-owning gad user"
       (is (re-find #"User=gad" unit)))))
+
+(deftest distributed-ring-watchdog-unwedges-an-active-head
+  (let [unit (#'infer/ring-watchdog-unit 8090)
+        timer (#'infer/ring-watchdog-timer)]
+    (testing "probes the scheduler rather than trusting process-active"
+      (is (re-find #"http://127\.0\.0\.1:8090/slots" unit))
+      (is (re-find #"--max-time 10" unit))
+      (is (re-find #"restart murakumo-ring\.service" unit)))
+    (testing "does not kill the measured four-minute cold load"
+      (is (re-find #"-lt 420" unit)))
+    (testing "runs repeatedly without an external cron"
+      (is (re-find #"OnUnitActiveSec=30s" timer))
+      (is (re-find #"WantedBy=timers\.target" timer)))))
