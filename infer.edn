@@ -1,4 +1,4 @@
-;; infer.edn — murakumo distributed-inference config (SSoT for `npm run task -- infer`).
+;; infer.edn — murakumo distributed-inference config (SSoT for `bb murakumo infer`).
 ;;
 ;; The mesh fleet (fleet.edn) is reused as the inference fleet; :extra-nodes adds
 ;; machines that serve inference but are not kotoba-mesh members. The HEAD is the
@@ -6,6 +6,12 @@
 ;; serves the OpenAI-compatible API.
 {:infer/rpc-port 50052
  :infer/api-port 8090
+ ;; Required by both chat and embedding llama-server processes. Provision one
+ ;; random key per line with mode 0600 on the AWAI-controlled head. The
+ ;; api.murakumo.cloud Worker presents the same value from its
+ ;; MURAKUMO_FLEET_ORIGIN_TOKEN secret; direct Tunnel requests without it get
+ ;; 401 at llama.cpp itself.
+ :infer/api-key-file "/etc/murakumo/fleet-origin.keys"
  ;; embedding engine head port (ADR-2607192200 2026-07-19 addendum) —
  ;; deliberately separate from :infer/api-port (the chat head) so the two
  ;; llama-server processes never collide and murakumo-main chat traffic is
@@ -29,21 +35,15 @@
  ;; the head's ~46GB unified RAM alongside the 20.6GB model.
  ;; 2026-07-25: measured on the head rather than reasoned about. This value is
  ;; the TOTAL passed as --ctx-size; what a request is measured against is the
- ;; per-slot window (total / --parallel), so at 2 slots this gives 262144 each.
+ ;; per-slot window (total / --parallel), so at 4 slots this gives 131072 each.
  ;; KV costs ~19 KiB per token of total context on this hybrid architecture
  ;; (10 of 40 layers full-attention): 262144 → 26 GiB VRAM, 524288 → 31 GiB,
  ;; 1048576 → 41 GiB of the 48 GiB carve-out. Prefill runs 856 tok/s, so a full
- ;; 262144-token window costs ~5 min before the first token. 262144 per slot is
- ;; the model's own n_ctx_train ceiling; per-slot values above that buy nothing.
- ;; See deploy/llama-server.service for the measurement table.
+ ;; 131072-token window costs ~2.5 min before the first token. 131072 per slot
+ ;; covers the Claude Code bridge's ~48k opening prompt with headroom; the
+ ;; model's own ceiling is n_ctx_train 262144 and per-slot values above that buy
+ ;; nothing. See deploy/llama-server.service for the measurement table.
  :infer/ctx 524288
- ;; Two concurrent llama-server slots. The total context is divided across
- ;; slots, so each request retains the model's full 262144-token window while
- ;; continuous batching can serve genuine concurrent demand instead of
- ;; serially queueing it. Four slots were rejected in live qualification: the
- ;; distributed RPC ring admitted all requests but produced no first token
- ;; within 120 seconds.
- :infer/parallel 2
  ;; auto-detect measured no different from explicit 'on' for this model (RADV
  ;; Vulkan backend, mostly-linear-attention arch limits how much FA can help)
  ;; — set explicitly so it's not silently 'auto'-disabled by a future build.
@@ -59,16 +59,10 @@
  ;; machine is NOT on the fleet LAN (probe it: >5 ms RTT to workers ⇒ every
  ;; token pays it), promote a fleet node instead: :remote? true + :host, and
  ;; a modest os-reserve since it also mmaps the checkpoint while serving.
- :infer/head {:name "head" :node-name "gad" :host "root@100.82.98.110" :remote? true
+ :infer/head {:name "head" :host "root@100.82.98.110" :remote? true
               :os-reserve-gib 5
               :bin-dir "/home/gad/murakumo/llama.cpp/build-rpc-glm/bin"
               :model-dir "/home/gad/models/GLM-5.2-REAP50-Q2_K-GGUF"
-              ;; Only these units own the public chat origin (:8090). Keep the
-              ;; healthy standalone fallback on :11434 and embed on :8091 up.
-              :conflicting-units ["murakumo-standalone.service"
-                                  "murakumo-infer-compat.service"
-                                  "murakumo-infer-compat.socket"]
-              :fallback-unit "murakumo-infer-compat.socket"
               ;; GPU-backend build for `infer serve-standalone` (no RPC ring).
               ;; CPU-only :bin-dir above never engaged the head's Radeon 8060S
               ;; iGPU even at -ngl 999 — see cmd-serve-standalone docstring.
@@ -94,7 +88,7 @@
  :models
  {;; ── base text models (2026-07-04): glm-5.2-reap50-q2k doesn't fit the fleet
   ;; reliably right now (139GB, ~all of :total-usable-bytes) — these three are
-  ;; the new default `npm run task -- infer plan/provision/up` base text targets,
+  ;; the new default `bb murakumo infer plan/provision/up` base text targets,
   ;; small enough to fit a handful of edge nodes or the single GPU head alone.
   "qwen-agentworld-35b-a3b"
   {:model/id "qwen-agentworld-35b-a3b"

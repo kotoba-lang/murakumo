@@ -1,7 +1,6 @@
 ;; Offline unit tests for the pure inference planner/engine (no fleet, no SSH).
 (ns murakumo.infer-test
-  (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is testing]]
             [murakumo.infer :as infer]
             [murakumo.infer.engine :as engine]
             [murakumo.infer.plan :as plan]))
@@ -15,24 +14,6 @@
 
 (def glm {:model/id "glm-5.2-reap50-q2k" :model/format :gguf
           :model/layers 78 :model/weight-bytes 139000000000})
-
-(deftest physical-head-is-not-an-rpc-worker
-  (let [head-cfg {:name "head" :node-name "gad"
-                  :host "root@100.82.98.110"}
-        nodes [{:name "asher" :host "asher" :ip "100.96.122.69"}
-               {:name "gad" :host "gad" :ip "100.82.98.110"}
-               {:name "alias" :host "root@100.82.98.110"}
-               {:name "xavier" :host "xavier" :ip "100.87.226.80"}]]
-    (testing "explicit inventory identity wins even when SSH names differ"
-      (is (#'infer/same-physical-node? head-cfg (second nodes))))
-    (testing "host/IP aliases of the same conductor are also excluded"
-      (is (#'infer/same-physical-node? (dissoc head-cfg :node-name) (second nodes)))
-      (is (#'infer/same-physical-node? (dissoc head-cfg :node-name) (nth nodes 2))))
-    (testing "only the physical head is removed from the worker probe set"
-      (is (= ["asher" "xavier"]
-             (mapv :name (#'infer/worker-nodes {:infer/head head-cfg} nodes)))))
-    (testing "missing optional identities do not make nil equal nil"
-      (is (not (#'infer/same-physical-node? {} {:name "worker"}))))))
 
 (deftest usable-memory
   (testing "16 GiB worker: 16 − 2.5 os − 1.25 headroom = 12.25 GiB"
@@ -104,11 +85,14 @@
     (is (re-find #"--split-mode row" (engine/head-cmd pl {:bin-dir "bin" :model-path "m" :strategy :tensor})))
     (is (re-find #"--split-mode layer" (engine/head-cmd pl {:bin-dir "bin" :model-path "m"})))
     (is (re-find #"-ot \"exps=CPU\"" (engine/head-cmd pl {:bin-dir "bin" :model-path "m"
-                                                          :strategy :expert :moe-override "exps=CPU"})))))
+                                                          :strategy :expert :moe-override "exps=CPU"})))
+    (is (re-find #"--api-key-file \"/run/secrets/fleet.keys\""
+                 (engine/head-cmd pl {:bin-dir "bin" :model-path "m"
+                                      :api-key-file "/run/secrets/fleet.keys"})))))
 
 (deftest llamacpp-rpc-commands
   (let [nodes [(assoc (mini "a") :ip "100.0.0.1")
-               (assoc (mini "b") :ip "100.0.0.2" :rpc-cache? false :rpc-port 40052)
+               (assoc (mini "b") :ip "100.0.0.2" :rpc-cache? false)
                head]
         pl (plan/plan glm nodes)
         {:keys [workers head]} (engine/commands pl :llamacpp-rpc
@@ -118,15 +102,8 @@
       (is (re-find #"-d MTL0 -c$" (:cmd (first workers))))
       (is (not (re-find #"-c$" (:cmd (second workers))))))
     (testing "head drives the ring: endpoints in order, tensor-split = workers + head last"
-      (is (re-find #"--rpc 100\.0\.0\.1:50052,100\.0\.0\.2:40052 " (:cmd head)))
+      (is (re-find #"--rpc 100\.0\.0\.1:50052,100\.0\.0\.2:50052 " (:cmd head)))
       (is (re-find #"--tensor-split \d+,\d+,\d+ " (:cmd head))))))
-
-(deftest distributed-head-request-parallelism
-  (let [pl (plan/plan glm [(assoc (mini "a") :ip "100.0.0.1") head])
-        cmd (engine/head-cmd pl {:bin-dir "bin" :model-path "m.gguf"
-                                 :ctx 524288 :parallel 2})]
-    (testing "two slots preserve the model's 262144-token request window"
-      (is (re-find #"-c 524288 --parallel 2 " cmd)))))
 
 (deftest mlx-ring-commands
   (let [pl (plan/plan glm [(assoc (mini "a") :ip "100.0.0.1") head])
@@ -153,65 +130,3 @@
       (is (re-find #"WantedBy=multi-user\.target" unit)))
     (testing "runs as the gad user like the existing llama-server.service"
       (is (re-find #"User=gad" unit)))))
-
-(deftest distributed-ring-systemd-unit
-  (let [unit (#'infer/ring-unit
-              "/opt/bin/llama-server -m /m.gguf --rpc 10.0.0.1:50052 --port 8090"
-              [{:ip "10.0.0.1" :port 50052}])]
-    (testing "persists and self-heals the exact distributed head command"
-      (is (re-find #"ExecStart=/opt/bin/llama-server .*--rpc 10\.0\.0\.1:50052.*--port 8090\n" unit))
-      (is (re-find #"Restart=on-failure" unit))
-      (is (re-find #"WantedBy=multi-user\.target" unit)))
-    (testing "waits for every rank instead of accepting a partial ring"
-      (is (re-find #"ExecStartPre=.*nc -z -w 2 10\.0\.0\.1 50052" unit))
-      (is (re-find #"-ge 60 \]" unit))
-      (is (re-find #"done; sleep 5;" unit)))
-    (testing "runs as the model-owning gad user"
-      (is (re-find #"User=gad" unit)))))
-
-(deftest distributed-ring-watchdog-unwedges-an-active-head
-  (let [specs [{:target "naphtali@10.0.0.1" :ip "10.0.0.1" :port 50052}
-               {:target "asher@10.0.0.2" :ip "10.0.0.2" :port 40052}]
-        unit (#'infer/ring-watchdog-unit 8090)
-        script (#'infer/ring-watchdog-script 8090 specs)
-        timer (#'infer/ring-watchdog-timer)]
-    (testing "probes the scheduler rather than trusting process-active"
-      (is (re-find #"/usr/local/sbin/murakumo-ring-watchdog" unit))
-      (is (re-find #"http://127\.0\.0\.1:8090/slots" script))
-      (is (re-find #"--max-time 10" script)))
-    (testing "does not mistake an active decode for an idle wedge"
-      (is (re-find #"ss -Htn state established '\( sport = :8090 \)'" script))
-      (is (re-find #"record busy" script))
-      (is (re-find #"sleep 5" script))
-      (is (= 2 (count (re-seq #"http://127\.0\.0\.1:8090/slots" script)))))
-    (testing "keeps a bounded machine-readable soak ledger"
-      (is (re-find #"ring-watchdog-events\.log" script))
-      (let [logrotate (#'infer/ring-watchdog-logrotate)]
-        (is (re-find #"weekly" logrotate))
-        (is (re-find #"rotate 12" logrotate))))
-    (testing "does not kill the measured four-minute cold load"
-      (is (re-find #"-lt 420" script)))
-    (testing "rebuilds the complete RPC failure domain before the head"
-      (is (< (.indexOf script "systemctl stop murakumo-ring.service")
-             (.indexOf script "naphtali@10.0.0.1")
-             (.indexOf script "nc -z -w 2 10.0.0.1 50052")
-             (.indexOf script "systemctl start murakumo-ring.service")))
-      (is (re-find #"asher@10\.0\.0\.2" script))
-      (is (re-find #"rpc-ha-key" script)))
-    (testing "runs repeatedly without an external cron"
-      (is (re-find #"OnUnitActiveSec=30s" timer))
-      (is (re-find #"WantedBy=timers\.target" timer)))))
-
-(deftest rpc-worker-launchd-service-is-resident-and-constrained
-  (let [plist (#'infer/rpc-worker-plist "asher" "/Users/asher" 40052 "MTL0" true)]
-    (is (re-find #"com\.murakumo\.rpc-worker" plist))
-    (is (re-find #"<key>UserName</key><string>asher</string>" plist))
-    (is (re-find #"/Users/asher/\.murakumo/bin/rpc-server" plist))
-    (is (re-find #"<string>-p</string><string>40052</string>" plist))
-    (is (re-find #"<string>-c</string>" plist))
-    (is (re-find #"<key>KeepAlive</key><true/>" plist)))
-  (let [entry (#'infer/rpc-ha-authorized-key
-               "ssh-ed25519 AAAATEST murakumo-rpc-ha")]
-    (is (str/starts-with? entry "restrict,command="))
-    (is (str/includes? entry "launchctl kickstart -k system/com.murakumo.rpc-worker"))
-    (is (str/ends-with? entry "ssh-ed25519 AAAATEST murakumo-rpc-ha"))))

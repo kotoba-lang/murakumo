@@ -88,13 +88,12 @@
   [plan {:keys [bin-dir port cache-dir device] :or {port default-rpc-port device "MTL0"}}]
   (for [{:keys [node]} (workers plan)
         :let [cache? (not (false? (:rpc-cache? node)))
-              node-port (or (:rpc-port node) port)
               dev (or (:rpc-device node) device)
               cmd (o-record 'rpc-server-cmd
                             {:cmd (oracle/record
                                    rpc-server-schema
                                    {:bin-dir bin-dir
-                                    :port node-port
+                                    :port port
                                     :device dev
                                     :cache cache?
                                     :cache-dir (or cache-dir "")})}
@@ -102,7 +101,7 @@
     {:name (:name node)
      :host (:host node)
      :ip (or (:rpc-ip node) (:ip node))
-     :port node-port
+     :port port
      :cmd cmd}))
 
 (defn tensor-split
@@ -130,7 +129,7 @@
 
 (defn head-cmd
   "The head's `llama-server` — loads GGUF, drives RPC ring, serves /v1."
-  [plan {:keys [bin-dir model-path port rpc-port ctx parallel strategy moe-override extra-args]
+  [plan {:keys [bin-dir model-path port rpc-port ctx parallel strategy moe-override api-key-file extra-args]
          :or {port 8080 rpc-port default-rpc-port ctx 4096 parallel 1
               strategy :pipeline}}]
   (let [ws (rpc-worker-cmds plan {:bin-dir bin-dir :port rpc-port})
@@ -150,6 +149,7 @@
                    {:h (oracle/record head-tail-schema
                                       {:ctx ctx :parallel parallel :port port})}
                    [[:h :raw]])
+         (when (seq api-key-file) (str " --api-key-file " (pr-str api-key-file)))
          (when (seq extra-args) (str " " (str/join " " extra-args))))))
 
 ;; ── mlx ring ────────────────────────────────────────────────────────────────
@@ -307,7 +307,7 @@
 
 (defn embed-head-cmd
   "Single-node llama.cpp embedding server."
-  [{:keys [bin-dir model-path port ctx pooling parallel extra-args]
+  [{:keys [bin-dir model-path port ctx pooling parallel api-key-file extra-args]
     :or {port 8091 ctx 8192 pooling "mean" parallel 4}}]
   (str (o-record 'embed-head-front
                  {:x (oracle/record embed-front-schema
@@ -320,6 +320,7 @@
                  {:x (oracle/record embed-back-schema
                                     {:parallel parallel :port port})}
                  [[:x :raw]])
+       (when (seq api-key-file) (str " --api-key-file " (pr-str api-key-file)))
        (when (seq extra-args) (str " " (str/join " " extra-args)))))
 
 (defn commands
