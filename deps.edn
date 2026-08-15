@@ -52,6 +52,15 @@
   :gen {:main-opts ["-m" "murakumo.kotoba-oracle-gen"]}
   :quic-driver {:main-opts ["-m" "murakumo.overlay.quic-driver"]}
   :quic-cert {:main-opts ["-m" "murakumo.overlay.cert"]}
+  ;; Fleet CI ships this repository without west siblings. Keep the HA gate
+  ;; focused on the distributed inference control plane and its generated
+  ;; systemd/watchdog artifacts; the broad :test suite remains the local
+  ;; integration qualification path.
+  :fleet-infer-test
+  {:extra-paths ["test"]
+   :extra-deps {io.github.cognitect-labs/test-runner
+                {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+   :main-opts ["-m" "cognitect.test-runner" "-n" "murakumo.infer-test"]}
   ;; JVM-only test path for the kwik/witness-quorum-dependent overlay code
   ;; (quic-driver RPC + witness-transport) that bb.edn's portable `test`
   ;; task deliberately excludes, same reason quic-driver/quic-cert are
