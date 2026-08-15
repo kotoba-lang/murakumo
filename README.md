@@ -208,6 +208,8 @@ nbb scripts/run-task.cljs token issue --scope chat           # mint a gateway AP
 | `src/murakumo/infer/plan.cljc` | **PURE exo-style planner**: memory-weighted contiguous layer partition + fits-gate (bb/JVM/cljs/WASM portable) |
 | `src/murakumo/infer/moe.cljc` | **PURE mlx-moe planner**: single best-memory-node pick, README capacity tiers, expert-ratio verdict heuristic |
 | `src/murakumo/infer/engine.cljc` | **PURE engine adapters**: plan → llama.cpp `--rpc/--tensor-split` cmds / `mlx.launch` ring cmds / `mlx-moe serve` cmd |
+| `src/murakumo/infer/topology.cljc` | **PURE interconnect evidence**: folds per-boundary link facts, and gates the `:link-gbps` `choose-strategy` is allowed to see (ADR-260815) |
+| `src/murakumo/infer/topology_probe.cljs` | the nbb feed: `discover` (tailscale + Bonjour vs `fleet.edn`) / `nominal` / `thunderbolt` / `measure` (receiver-verified transfers) |
 
 The authority receiver rollout is deliberately secret-free. Its default
 artifact source is the pinned sibling checkout at `../kototama`; callers may
@@ -687,6 +689,29 @@ machine-readable health/busy/recovery events to
 files. Inspect with `systemctl status murakumo-ring-watchdog.timer` on the head,
 `tail /var/lib/murakumo/ring-watchdog-events.log`, and
 `sudo launchctl print system/com.murakumo.rpc-worker` on a Mac worker.
+
+### Is the link fast enough for tensor parallel? — `topology_probe`
+
+`choose-strategy` returns `"tensor"` at 20 Gbps and above, and until
+2026-08-15 **nothing produced the number it reads** — every caller was a test
+passing a literal, and the production path spelled it `(or link-gbps 0)`, so
+an unmeasured fleet and a slow one were the same input (ADR-260815).
+
+```bash
+nbb src/murakumo/infer/topology_probe.cljs discover      # nodes from tailscale + Bonjour vs fleet.edn
+nbb src/murakumo/infer/topology_probe.cljs nominal       # what each NIC claims — cannot lift the gate
+nbb src/murakumo/infer/topology_probe.cljs thunderbolt   # bridge0 state: the cable-arrived detector
+nbb src/murakumo/infer/topology_probe.cljs measure --bytes-mib 128   # real transfers, counted at the receiver
+```
+
+The link number is **zero unless every rank boundary carries a verified
+transfer**, so no plan the fleet makes today changes; what changes is that
+`pipeline` now arrives with `:evidence :measured | :partial | :none |
+:unverified` instead of a zero meaning four different things. Measured
+2026-08-15: **933 Mbps** between minis (a saturated 1 GbE wire — pipeline
+parallel remains correct), and **27 idle Thunderbolt ports** already enrolled
+in `bridge0` on the nine reachable nodes, waiting on cables rather than on
+software.
 
 ### Standalone (no RPC ring) — when the model fits on the head alone
 

@@ -51,6 +51,7 @@
    :infer-moe "murakumo/oracle/infer_moe_core.kir.edn"
    :infer-rebalance "murakumo/oracle/infer_rebalance_core.kir.edn"
    :infer-relay "murakumo/oracle/infer_relay_core.kir.edn"
+   :infer-topology "murakumo/oracle/infer_topology_core.kir.edn"
    :infer-waste "murakumo/oracle/infer_waste_core.kir.edn"
    :overlay-driver "murakumo/oracle/overlay_driver_core.kir.edn"
    :overlay-keyring "murakumo/oracle/overlay_keyring_core.kir.edn"

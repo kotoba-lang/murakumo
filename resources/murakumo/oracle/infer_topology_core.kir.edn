@@ -1,0 +1,286 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name expected-links,
+   :params [r],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [ranks
+     (record-get
+      [:record :topology/ring [[:ranks :i64] [:closed :bool]]]
+      r
+      :ranks)
+     closed
+     (record-get
+      [:record :topology/ring [[:ranks :i64] [:closed :bool]]]
+      r
+      :closed)]
+    (if (< ranks 2) 0 (if closed ranks (- ranks 1)))),
+   :param-types [[:ref :topology/ring]]}
+  {:name evidence-measured,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 0,
+   :param-types []}
+  {:name evidence-partial,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1,
+   :param-types []}
+  {:name evidence-none,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 2,
+   :param-types []}
+  {:name evidence-unverified,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 3,
+   :param-types []}
+  {:name evidence-name,
+   :params [code],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= code 0)
+    "measured"
+    (if (= code 1) "partial" (if (= code 2) "none" "unverified"))),
+   :param-types [:i64]}
+  {:name coverage-complete?,
+   :params [f],
+   :result :bool,
+   :effects #{},
+   :body
+   (let
+    [observed
+     (record-get
+      [:record
+       :topology/fabric
+       [[:observed :i64]
+        [:expected :i64]
+        [:min-mbps :i64]
+        [:unverified :bool]]]
+      f
+      :observed)
+     expected
+     (record-get
+      [:record
+       :topology/fabric
+       [[:observed :i64]
+        [:expected :i64]
+        [:min-mbps :i64]
+        [:unverified :bool]]]
+      f
+      :expected)]
+    (>= observed expected)),
+   :param-types [[:ref :topology/fabric]]}
+  {:name evidence-code,
+   :params [f],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [expected
+     (record-get
+      [:record
+       :topology/fabric
+       [[:observed :i64]
+        [:expected :i64]
+        [:min-mbps :i64]
+        [:unverified :bool]]]
+      f
+      :expected)
+     observed
+     (record-get
+      [:record
+       :topology/fabric
+       [[:observed :i64]
+        [:expected :i64]
+        [:min-mbps :i64]
+        [:unverified :bool]]]
+      f
+      :observed)
+     unverified
+     (record-get
+      [:record
+       :topology/fabric
+       [[:observed :i64]
+        [:expected :i64]
+        [:min-mbps :i64]
+        [:unverified :bool]]]
+      f
+      :unverified)]
+    (if
+     (< expected 1)
+     (evidence-none)
+     (if
+      (< observed 1)
+      (evidence-none)
+      (if
+       (< observed expected)
+       (evidence-partial)
+       (if unverified (evidence-unverified) (evidence-measured)))))),
+   :param-types [[:ref :topology/fabric]]}
+  {:name wan-ceiling-mbps,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 500,
+   :param-types []}
+  {:name gbe-ceiling-mbps,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 5000,
+   :param-types []}
+  {:name class-unknown,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 0,
+   :param-types []}
+  {:name class-wan,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1,
+   :param-types []}
+  {:name class-gbe,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 2,
+   :param-types []}
+  {:name class-fast,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 3,
+   :param-types []}
+  {:name usable-link?,
+   :params [l],
+   :result :bool,
+   :effects #{},
+   :body
+   (let
+    [mbps
+     (record-get
+      [:record :topology/link [[:mbps :i64] [:observed :bool]]]
+      l
+      :mbps)
+     observed
+     (record-get
+      [:record :topology/link [[:mbps :i64] [:observed :bool]]]
+      l
+      :observed)]
+    (let
+     [__kotoba_and_2 observed]
+     (if __kotoba_and_2 (> mbps 0) __kotoba_and_2))),
+   :param-types [[:ref :topology/link]]}
+  {:name link-class-code,
+   :params [l],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [mbps
+     (record-get
+      [:record :topology/link [[:mbps :i64] [:observed :bool]]]
+      l
+      :mbps)]
+    (if
+     (usable-link? l)
+     (if
+      (< mbps (wan-ceiling-mbps))
+      (class-wan)
+      (if (< mbps (gbe-ceiling-mbps)) (class-gbe) (class-fast)))
+     (class-unknown))),
+   :param-types [[:ref :topology/link]]}
+  {:name link-class-name,
+   :params [code],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= code 1)
+    "wan"
+    (if (= code 2) "gbe" (if (= code 3) "fast" "unknown"))),
+   :param-types [:i64]}
+  {:name min-mbps-of,
+   :params [f],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [m
+     (record-get
+      [:record
+       :topology/fabric
+       [[:observed :i64]
+        [:expected :i64]
+        [:min-mbps :i64]
+        [:unverified :bool]]]
+      f
+      :min-mbps)]
+    (if (< m 0) 0 m)),
+   :param-types [[:ref :topology/fabric]]}
+  {:name strategy-link-gbps,
+   :params [f],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (= (evidence-code f) (evidence-measured))
+    (quot (+ (min-mbps-of f) 500) 1000)
+    0),
+   :param-types [[:ref :topology/fabric]]}],
+ :oracle-value nil,
+ :schema-identities
+ #:topology{:fabric
+            "ff1cade42d669297480390fdbd68ce0faebb0bf5a957b90b5ca649afc65817ad",
+            :link
+            "be64958165d56a433ff961ae39af193109eb588b5b73e569ae9c74ef7b798403",
+            :ring
+            "6e4d339981ed635bab50ce81f08fb74ee0a993ddaa468c74baabc6d7dae1b513"},
+ :exports
+ [expected-links
+  evidence-measured
+  evidence-partial
+  evidence-none
+  evidence-unverified
+  evidence-code
+  evidence-name
+  coverage-complete?
+  usable-link?
+  class-unknown
+  class-wan
+  class-gbe
+  class-fast
+  link-class-code
+  link-class-name
+  wan-ceiling-mbps
+  gbe-ceiling-mbps
+  min-mbps-of
+  strategy-link-gbps],
+ :schemas
+ #:topology{:fabric
+            [:record
+             :topology/fabric
+             [[:observed :i64]
+              [:expected :i64]
+              [:min-mbps :i64]
+              [:unverified :bool]]],
+            :link
+            [:record :topology/link [[:mbps :i64] [:observed :bool]]],
+            :ring
+            [:record :topology/ring [[:ranks :i64] [:closed :bool]]]},
+ :effects #{},
+ :blocks [],
+ :entry nil}

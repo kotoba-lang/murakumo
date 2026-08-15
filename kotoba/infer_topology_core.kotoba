@@ -1,0 +1,225 @@
+(ns infer-topology-core
+  (:schemas {;; A folded view of the interconnect between the ranks a plan
+             ;; actually chose. The host folds the per-pair link facts; this
+             ;; record is the totals, the same division of labour windows-core
+             ;; uses (cljc folds the sequence, the core judges the totals).
+             :topology/fabric [:record :topology/fabric
+                               [[:observed :i64]   ; boundaries we have a number for
+                                [:expected :i64]   ; boundaries the plan needs
+                                [:min-mbps :i64]   ; slowest observed boundary
+                                [:unverified :bool]]] ; not every number came from real traffic
+             ;; One rank boundary, before folding.
+             :topology/link [:record :topology/link
+                             [[:mbps :i64] [:observed :bool]]]
+             ;; Shape of the rank chain a plan produced.
+             :topology/ring [:record :topology/ring
+                             [[:ranks :i64] [:closed :bool]]]})
+  (:export [expected-links
+            evidence-measured evidence-partial evidence-none evidence-unverified
+            evidence-code evidence-name
+            coverage-complete? usable-link?
+            class-unknown class-wan class-gbe class-fast
+            link-class-code link-class-name
+            wan-ceiling-mbps gbe-ceiling-mbps
+            min-mbps-of strategy-link-gbps]))
+
+;; Decision core for murakumo.infer.topology — how much of the interconnect we
+;; actually MEASURED, and what link number the strategy chooser is allowed to
+;; see as a result.
+;;
+;; ── why this core exists ──────────────────────────────────────────────
+;;
+;; `infer-plan-core/choose-strategy-name` has been shipped and parity-tested
+;; since W6. It reads `:link-gbps` and returns "tensor" at >= 20 Gbps.
+;; Measured 2026-08-15: NOTHING in this repository produces that number. Every
+;; caller is a test passing a literal (1, 40, 100), and the one production
+;; path spells it `(or link-gbps 0)` -- so an unmeasured fleet and a measured
+;; 0.5 Gbps fleet arrive at the chooser as the same value.
+;;
+;; That is the shape ADR-2608136000 names: a check that could not run returns
+;; what a check that ran and found nothing wrong returns. Here it happens to
+;; fail safe (0 -> "pipeline", which is what a 1 GbE fleet wants anyway), so it
+;; has never been wrong. It has also never been right for a reason. The moment
+;; a Thunderbolt cable is plugged into this fleet, "we did not look" and "the
+;; link is slow" have to stop being the same answer, because they now imply
+;; opposite plans.
+;;
+;; So: this core does not decide the strategy. It decides whether we are
+;; entitled to an opinion about the link, and says which of the two it is.
+;;
+;; ── the fleet this was written against ────────────────────────────────
+;;
+;; Measured 2026-08-15 over Tailscale SSH, 9 of 10 Mac minis reachable
+;; (zebulun timed out): every one reports `en0 media: autoselect
+;; (1000baseT <full-duplex,...>)`. 1 GbE is real, not folklore -- ADR-2605300000
+;; picked pipeline parallel for a true reason and it still holds today.
+;;
+;; The same probe found something the ADR does not mention: each mini exposes
+;; THREE Thunderbolt ports (en2/en3/en4), already enrolled as members of
+;; `bridge0` by macOS default, and `bridge0` reports `status: inactive` on
+;; every node checked. Thirty Thunderbolt ports, zero cables. The fabric that
+;; would make "tensor" the right answer is one purchase away and needs no
+;; software on the node side -- which is exactly why the measurement has to
+;; exist BEFORE the cable does. Otherwise the cable arrives and nothing
+;; notices.
+;;
+;; ── what stays cljc ───────────────────────────────────────────────────
+;;
+;; Folding the per-boundary facts into `:topology/fabric` (a sequence), and
+;; running the probe (ssh, sockets, clocks). Both are feeds, not judgements.
+;;
+;; ── units ─────────────────────────────────────────────────────────────
+;;
+;; Mbit/s as :i64 throughout, not Gbit/s as a float. Scalar :f64 parameters are
+;; rejected by the frontend today (see windows-core for the measurement); this
+;; is not a workaround for that, though -- a link measured in whole Mbit/s is
+;; more precision than any decision here consumes, and the conversion to the
+;; Gbps the chooser wants is one `quot` at the boundary.
+;;
+;; Nothing here throws. A fabric with no measurements is a legitimate input
+;; with a legitimate answer ("none"), not an error (ADR-2608650000: explicit
+;; errors are a permanent constraint, and this is not an error).
+;;
+;; Parity: test/murakumo/infer_topology_kotoba_parity_test.clj
+
+;; ── how many boundaries a plan has to have measured ───────────────────
+
+(defn expected-links [r [:ref :topology/ring]] :i64
+  ;; A pipeline over N ranks hands activations across N-1 boundaries; a closed
+  ;; ring also carries the last rank back to the first, so N. One rank has no
+  ;; interconnect at all and needs no evidence about one.
+  (let [ranks (record-get r :ranks)
+        closed (record-get r :closed)]
+    (if (< ranks 2)
+      0
+      (if closed ranks (- ranks 1)))))
+
+;; ── evidence: which of the four situations we are in ──────────────────
+
+(defn evidence-measured [] :i64 0)     ; every boundary carries verified traffic numbers
+(defn evidence-partial [] :i64 1)      ; some boundaries were never observed at all
+(defn evidence-none [] :i64 2)         ; nothing was observed
+(defn evidence-unverified [] :i64 3)   ; complete coverage, but not all of it is evidence
+
+(defn evidence-name [code :i64] :string
+  (if (= code 0)
+    "measured"
+    (if (= code 1)
+      "partial"
+      (if (= code 2) "none" "unverified"))))
+
+(defn coverage-complete? [f [:ref :topology/fabric]] :bool
+  ;; `>=` and not `=`: a host that observed a boundary twice (both directions,
+  ;; say) has not observed LESS than it needed to.
+  (let [observed (record-get f :observed)
+        expected (record-get f :expected)]
+    (>= observed expected)))
+
+(defn evidence-code [f [:ref :topology/fabric]] :i64
+  ;; Ordered worst-first, so a fabric that is BOTH incomplete and unverified
+  ;; reports the incompleteness -- the bigger gap wins the label.
+  ;;
+  ;; A plan needing no boundaries (single rank) reports "none" rather than
+  ;; "measured": there is nothing to have measured, and claiming complete
+  ;; coverage of the empty set would let `strategy-link-gbps` hand out a link
+  ;; number derived from no observation at all.
+  ;;
+  ;; `unverified` is set by the host when ANY observed boundary failed to earn
+  ;; the name -- the number came from a NIC claim rather than a transfer, or
+  ;; the transfer's own byte count did not check out, or the instrument was
+  ;; measured to be the bottleneck rather than the wire. A fabric that is nine
+  ;; tenths measured and one tenth asserted lands here and is refused: a fabric
+  ;; is worth exactly its weakest boundary, in provenance as much as in speed.
+  (let [expected (record-get f :expected)
+        observed (record-get f :observed)
+        unverified (record-get f :unverified)]
+    (if (< expected 1)
+      (evidence-none)
+      (if (< observed 1)
+        (evidence-none)
+        (if (< observed expected)
+          (evidence-partial)
+          (if unverified (evidence-unverified) (evidence-measured)))))))
+
+;; ── classifying one boundary (labels only) ────────────────────────────
+;;
+;; These are for the report table. The number that decides tensor-vs-pipeline
+;; lives in infer-plan-core/choose-strategy-name (>= 20 Gbps) and is NOT
+;; restated here -- two copies of a threshold is one copy that drifts.
+
+(defn wan-ceiling-mbps [] :i64 500)
+(defn gbe-ceiling-mbps [] :i64 5000)
+
+(defn class-unknown [] :i64 0)
+(defn class-wan [] :i64 1)
+(defn class-gbe [] :i64 2)
+(defn class-fast [] :i64 3)
+
+(defn usable-link? [l [:ref :topology/link]] :bool
+  ;; Observed AND carrying traffic. `0 mbps` from a real attempt is an
+  ;; observation of a dead link, not an absence of one -- unusable either way,
+  ;; but the host keeps them apart because only one of them means "go look".
+  (let [mbps (record-get l :mbps)
+        observed (record-get l :observed)]
+    (and observed (> mbps 0))))
+
+(defn link-class-code [l [:ref :topology/link]] :i64
+  (let [mbps (record-get l :mbps)]
+    (if (usable-link? l)
+      (if (< mbps (wan-ceiling-mbps))
+        (class-wan)
+        (if (< mbps (gbe-ceiling-mbps)) (class-gbe) (class-fast)))
+      (class-unknown))))
+
+(defn link-class-name [code :i64] :string
+  (if (= code 1)
+    "wan"
+    (if (= code 2)
+      "gbe"
+      (if (= code 3) "fast" "unknown"))))
+
+;; ── the gate ──────────────────────────────────────────────────────────
+
+(defn min-mbps-of [f [:ref :topology/fabric]] :i64
+  ;; The slowest boundary is the whole fabric's speed: every token crosses all
+  ;; of them. Clamped at zero so a host that folded an empty sequence into a
+  ;; sentinel cannot make the fabric look negative.
+  (let [m (record-get f :min-mbps)]
+    (if (< m 0) 0 m)))
+
+(defn strategy-link-gbps [f [:ref :topology/fabric]] :i64
+  ;; What `choose-strategy` is allowed to see.
+  ;;
+  ;; Zero unless every boundary was measured with real traffic. Zero means
+  ;; "pipeline" downstream, which is the same conservative answer the current
+  ;; `(or link-gbps 0)` produces -- deliberately: this change must not alter
+  ;; any plan the fleet makes today. What it adds is that the caller can now
+  ;; ask WHY it got pipeline, and get "none"/"partial"/"unverified" instead of
+  ;; a zero that means four different things.
+  ;;
+  ;; Claimed numbers are refused on purpose. `1000baseT` is what the interface
+  ;; negotiated, not what two nodes achieved across a switch, and this fleet
+  ;; has already been bitten once by trusting an advertised capability: the
+  ;; browser-tier registry had 44 of 45 nodes reporting a byte-identical
+  ;; memory figure that turned out to be a compiled-in constant
+  ;; (murakumo.infer.join, measured 2026-07-31). Media speed is the same kind
+  ;; of claim.
+  ;;
+  ;; So are unchecked transfers, which is not a hypothetical: the first
+  ;; implementation of the probe (2026-08-15) used `nc` on both ends and
+  ;; reported 9,587-14,913 Mbps across a 1 GbE fleet -- 15x the physical
+  ;; ceiling. macOS `nc` abandons the connection when the send buffer fills,
+  ;; so 130 KB of a 16 MiB transfer arrived, the sender exited 0, and the
+  ;; elapsed time was the time to fail. Every part of that reported success.
+  ;; The probe now counts the bytes at the receiver and discards any boundary
+  ;; whose count does not match what was sent.
+  ;;
+  ;; Round-half-up, not truncate. A real 1 GbE boundary measures ~940 Mbps
+  ;; after framing, and `(quot 940 1000)` is 0 -- which would report a fully
+  ;; measured ethernet fleet with the same number as an unmeasured one, in the
+  ;; one field an operator is most likely to read. The chooser's threshold is
+  ;; 20 Gbps, so unit-level rounding cannot move a decision; it only stops the
+  ;; output from lying about which of the two situations produced it.
+  (if (= (evidence-code f) (evidence-measured))
+    (quot (+ (min-mbps-of f) 500) 1000)
+    0))
