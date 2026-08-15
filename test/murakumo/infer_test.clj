@@ -179,6 +179,16 @@
       (is (re-find #"/usr/local/sbin/murakumo-ring-watchdog" unit))
       (is (re-find #"http://127\.0\.0\.1:8090/slots" script))
       (is (re-find #"--max-time 10" script)))
+    (testing "does not mistake an active decode for an idle wedge"
+      (is (re-find #"ss -Htn state established '\( sport = :8090 \)'" script))
+      (is (re-find #"record busy" script))
+      (is (re-find #"sleep 5" script))
+      (is (= 2 (count (re-seq #"http://127\.0\.0\.1:8090/slots" script)))))
+    (testing "keeps a bounded machine-readable soak ledger"
+      (is (re-find #"ring-watchdog-events\.log" script))
+      (let [logrotate (#'infer/ring-watchdog-logrotate)]
+        (is (re-find #"weekly" logrotate))
+        (is (re-find #"rotate 12" logrotate))))
     (testing "does not kill the measured four-minute cold load"
       (is (re-find #"-lt 420" script)))
     (testing "rebuilds the complete RPC failure domain before the head"

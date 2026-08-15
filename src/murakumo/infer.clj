@@ -216,6 +216,7 @@
        "WantedBy=multi-user.target\n"))
 
 (def ^:private ring-watchdog-grace-seconds 420)
+(def ^:private ring-watchdog-event-log "/var/lib/murakumo/ring-watchdog-events.log")
 (def ^:private rpc-worker-label "com.murakumo.rpc-worker")
 (def ^:private rpc-ha-key "/etc/murakumo/rpc-ha-key")
 
@@ -272,18 +273,38 @@
 (defn- ring-watchdog-script
   "Recover the whole failure domain, in order: stop the head so stale RPC
    sessions close, force-restart every worker through a command-restricted SSH
-   key, wait for every endpoint, then start a full-rank head."
+   key, wait for every endpoint, then start a full-rank head.
+
+   llama.cpp can serialize /slots behind an active decode.  Treat established
+   client connections as busy, not wedged, and re-check them after each failed
+   probe to close the arrival race.  A genuinely idle wedge must fail two
+   probes separated by five seconds before recovery.  Every decision is
+   appended to a bounded, logrotate-managed soak ledger."
   [port specs]
   (let [targets (str/join " " (map :target specs))
         waits (endpoint-wait-command specs)]
     (str "#!/bin/sh\n"
          "set -eu\n"
+         "event_log=" ring-watchdog-event-log "\n"
+         "/usr/bin/install -d -m 0755 /var/lib/murakumo\n"
          "started_us=$(/usr/bin/systemctl show murakumo-ring.service -p ActiveEnterTimestampMonotonic --value)\n"
+         "pid=$(/usr/bin/systemctl show murakumo-ring.service -p MainPID --value)\n"
          "now_s=$(/usr/bin/cut -d. -f1 /proc/uptime)\n"
          "started_s=$((started_us / 1000000))\n"
          "if [ $((now_s - started_s)) -lt " ring-watchdog-grace-seconds " ]; then exit 0; fi\n"
-         "if /usr/bin/curl -fsS --max-time 10 http://127.0.0.1:" port "/slots >/dev/null; then exit 0; fi\n"
-         "/usr/bin/logger -t murakumo-ring-watchdog 'slot probe failed; rebuilding all RPC sessions'\n"
+         "record() { /usr/bin/printf 'ts=%s event=%s pid=%s started_us=%s clients=%s\\n' \"$(/usr/bin/date -u +%s)\" \"$1\" \"$pid\" \"$started_us\" \"${2:-0}\" >> \"$event_log\"; }\n"
+         "clients() { /usr/bin/ss -Htn state established '( sport = :" port " )' | /usr/bin/wc -l; }\n"
+         "active=$(clients)\n"
+         "if [ \"$active\" -gt 0 ]; then record busy \"$active\"; exit 0; fi\n"
+         "if /usr/bin/curl -fsS --max-time 10 http://127.0.0.1:" port "/slots >/dev/null; then record healthy; exit 0; fi\n"
+         "active=$(clients)\n"
+         "if [ \"$active\" -gt 0 ]; then record busy-after-probe \"$active\"; exit 0; fi\n"
+         "/usr/bin/sleep 5\n"
+         "if /usr/bin/curl -fsS --max-time 10 http://127.0.0.1:" port "/slots >/dev/null; then record recovered-probe; exit 0; fi\n"
+         "active=$(clients)\n"
+         "if [ \"$active\" -gt 0 ]; then record busy-after-confirmation \"$active\"; exit 0; fi\n"
+         "record rebuilding\n"
+         "/usr/bin/logger -t murakumo-ring-watchdog 'two idle slot probes failed; rebuilding all RPC sessions'\n"
          "/usr/bin/systemctl stop murakumo-ring.service\n"
          "failed=0\n"
          "for target in " targets "; do\n"
@@ -291,7 +312,20 @@
          "done\n"
          "[ \"$failed\" -eq 0 ] || exit 1\n"
          waits "\n"
-         "/usr/bin/systemctl start murakumo-ring.service\n")))
+         "/usr/bin/systemctl start murakumo-ring.service\n"
+         "pid=$(/usr/bin/systemctl show murakumo-ring.service -p MainPID --value)\n"
+         "started_us=$(/usr/bin/systemctl show murakumo-ring.service -p ActiveEnterTimestampMonotonic --value)\n"
+         "record rebuilt\n")))
+
+(defn- ring-watchdog-logrotate []
+  (str ring-watchdog-event-log " {\n"
+       "  weekly\n"
+       "  rotate 12\n"
+       "  compress\n"
+       "  missingok\n"
+       "  notifempty\n"
+       "  create 0644 root root\n"
+       "}\n"))
 
 (defn- ring-watchdog-unit
   "Probe the slot scheduler, not merely the process. The RPC head can remain
@@ -764,6 +798,7 @@
             watchdog (ring-watchdog-unit (:infer/api-port cfg 8080))
             watchdog-script (ring-watchdog-script (:infer/api-port cfg 8080) specs)
             watchdog-timer (ring-watchdog-timer)
+            watchdog-logrotate (ring-watchdog-logrotate)
             conflicts (or (:conflicting-units head-cfg) [])
             stop-conflicts (apply str
                                   (map #(str "systemctl disable --now " % " >/dev/null 2>&1 || true; ")
@@ -780,6 +815,9 @@
                         watchdog-script
                         "MURAKUMO_WATCHDOG_SCRIPT\n"
                         "chmod 755 /usr/local/sbin/murakumo-ring-watchdog; "
+                        "cat > /etc/logrotate.d/murakumo-ring-watchdog <<'MURAKUMO_WATCHDOG_LOGROTATE'\n"
+                        watchdog-logrotate
+                        "MURAKUMO_WATCHDOG_LOGROTATE\n"
                         "cat > /etc/systemd/system/murakumo-ring-watchdog.timer <<'MURAKUMO_WATCHDOG_TIMER'\n"
                         watchdog-timer
                         "MURAKUMO_WATCHDOG_TIMER\n"

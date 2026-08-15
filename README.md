@@ -674,12 +674,18 @@ LaunchDaemon `com.murakumo.rpc-worker` (`RunAtLoad` + `KeepAlive`). On a remote
 head it creates a dedicated Ed25519 recovery key whose worker-side
 `authorized_keys` entry is restricted to exactly one forced command: kickstart
 that LaunchDaemon. The 30-second head watchdog probes `/slots`; after the
-420-second cold-load grace, a failed probe stops the head, restarts every RPC
-worker through that constrained capability, waits until every planned endpoint
-accepts TCP, and only then starts the head again. `ExecStartPre` repeats the
-all-endpoint check, so llama.cpp cannot silently come up with a partial rank
-set; it also gives the RPC protocol five seconds to settle after TCP starts
-listening. Inspect with `systemctl status murakumo-ring-watchdog.timer` on the head and
+420-second cold-load grace it first checks for established client connections,
+because llama.cpp can serialize `/slots` behind a healthy long decode. A busy
+head is left alone. An idle head must fail two probes five seconds apart before
+the watchdog stops it, restarts every RPC worker through that constrained
+capability, waits until every planned endpoint accepts TCP, and only then starts
+the head again. `ExecStartPre` repeats the all-endpoint check, so llama.cpp
+cannot silently come up with a partial rank set; it also gives the RPC protocol
+five seconds to settle after TCP starts listening. The watchdog appends
+machine-readable health/busy/recovery events to
+`/var/lib/murakumo/ring-watchdog-events.log`; logrotate retains twelve weekly
+files. Inspect with `systemctl status murakumo-ring-watchdog.timer` on the head,
+`tail /var/lib/murakumo/ring-watchdog-events.log`, and
 `sudo launchctl print system/com.murakumo.rpc-worker` on a Mac worker.
 
 ### Standalone (no RPC ring) — when the model fits on the head alone
