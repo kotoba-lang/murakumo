@@ -182,3 +182,57 @@ checked — is the upgrade.
 
 Nothing here decides a strategy. It decides whether we are entitled to an
 opinion about the link, and says which.
+
+## Verification of record
+
+Run 2026-08-15, JVM suite on this workspace: **671 tests, 6070 assertions, 10
+failures.** The failures are in `aiueos-join-plan-parity`,
+`overlay-quic-driver-live` and `overlay-witness-ledger`, which produce **11 on a
+pristine `origin/main` worktree** — measured by checking out the untouched
+baseline and running the same three namespaces, not assumed. This change adds
+none. CI is green on both landing commits; `.github/workflows/ci.yml` explains
+the local failures independently, since it checks out `kotoba-lang/aiueos` at a
+pinned ref for `AIUEOS_ROOT` and excludes the three environment-sensitive
+namespaces by regex.
+
+`murakumo.infer-topology-test` is 11 tests / 42 assertions and exercises the
+gate in **both** directions — the refusals (claimed 40 Gbps, half-measured,
+one asserted hop) and the pass (verified 24 Gbps reaching `:tensor`). The three
+bugs it caught during development were real: nominal-only fabrics reported
+`:none` instead of `:unverified`, `(quot 940 1000)` reported a measured 1 GbE
+fleet as 0 Gbps (indistinguishable from unmeasured), and the same truncation hid
+the rounding boundary now pinned at 499/500.
+
+Live verification on the fleet: `discover`, `nominal`, `thunderbolt`, `measure`
+and `strategy` were each run against the real nodes. `strategy
+qwen-agentworld-35b-a3b` returns `:strategy :pipeline, :evidence :partial,
+:gated? true`, which is the intended end-to-end shape.
+
+## Where this stands
+
+Landed on `main`: kotoba-lang/murakumo#310 (the plane) and #311 (the coverage
+diagnosis). The superproject west pin was advanced to match, verified
+fast-forward both times.
+
+Not built, deliberately:
+
+1. **The tensor/expert engine adapter.** `choose-strategy` can now name
+   `:tensor` on evidence, but nothing turns that name into process commands.
+   Writing it today produces code no fleet can run, and this repository's rule
+   against gates that never fire applies equally to adapters that never execute.
+   The trigger is a measured fabric, which is the next item.
+2. **A peer-relayed control path.** It would close the coverage gap and is
+   blocked on credentials, not code — see the section above. That is a decision
+   about the fleet's trust topology, not a probe feature.
+
+Next, in the order that unblocks the most:
+
+- **Cables.** 27 Thunderbolt ports sit idle in `bridge0`. Plug two nodes
+  together, run `measure`, and the answer either clears 20 Gbps or does not —
+  for the first time that question has a procedure rather than an assumption.
+  Watch for `:method-limited`: above roughly 10 Gbps the python prober may be
+  the bottleneck, and `iperf3` (absent from every node checked) is the upgrade.
+- **`zebulun`'s Tailscale path.** The node is healthy; fixing the operator-side
+  reachability takes coverage from 7/10 to 9/10 with no code change.
+- **Credentials for `xavier`.** Its host key is verified and trusted; only
+  authentication is missing. That is the tenth boundary.
