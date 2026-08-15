@@ -118,12 +118,50 @@ as unverified instead of being given the speed at which they failed.
 
 Re-running on 40060 confirmed the diagnosis rather than assuming it:
 `benjamin → asher` went from unverified to **641 Mbps** and coverage from 6/10
-to 7/10. The three boundaries still unverified are the two touching `zebulun`,
-unreachable all day, and `asher → xavier`, the Jetson that `fleet.edn` already
-documents as needing a `ProxyCommand` rather than plain `ssh`. Coverage is
-partial, so the gate refuses, so the fleet plans pipeline — which is also what
-the measured 641-945 Mbps would have told it. The two agree today; the point is
-that the output now says which one it is.
+to 7/10. Coverage is partial, so the gate refuses, so the fleet plans pipeline —
+which is also what the measured 641-945 Mbps would have told it. The two agree
+today; the point is that the output now says which one it is.
+
+## Why coverage is partial, and what it is partial about
+
+The three boundaries still unverified touch `zebulun` (two) and `xavier` (one).
+Chasing them produced a finding about the instrument rather than the fleet, so
+it is recorded here rather than fixed in passing.
+
+**`zebulun` is not down.** From `judah` it answers ICMP 2/2 at 0.8 ms, its ARP
+entry matches the MAC in `fleet.edn`, and TCP 22 accepts — `nc -z` reports
+`succeeded`. What is broken is the path *from the operator*: its Tailscale peer
+shows `tx 85644 rx 0` over a `tok` relay, and `zebulun.tail110d8b.ts.net` fails
+MagicDNS resolution from this Mac **and from `judah`** — the same symptom
+`fleet.edn` already records for `xavier`.
+
+**And the operator cannot see the fleet LAN at all.** This machine is on Wi-Fi
+(`en0`, 192.168.1.3) while the minis are wired: 192.168.1.19, .21, .22 and .24
+are all 100% packet loss from here with incomplete ARP, while the minis reach
+each other in under a millisecond. Every fleet operation from this vantage point
+therefore rides Tailscale, and a node whose Tailscale path is broken is
+invisible to the operator while remaining perfectly healthy to its peers.
+
+That is worth stating plainly, because it is the same shape as everything else
+in this ADR: **the probe measures the fleet from somewhere, and where it stands
+bounds what it can learn.** The data path already avoids this — transfers run
+node-to-node over `:rpc-ip` — but the control path that starts them is
+operator-to-node. A peer-relayed control path would close the gap; it is not
+built here because node-to-node SSH over the raw LAN has no credentials
+(`Permission denied (publickey)` from `judah` to `zebulun`), and distributing
+keys to fix a measurement is a change to the fleet's trust topology, not a probe
+feature.
+
+`xavier`'s host key is now verified out of band and trusted: `ssh-keyscan` over
+`gad`'s wired LAN (192.168.1.28) and over the tailnet (100.87.226.80) return the
+identical `SHA256:iaNh9QmKQ2ajxibicJ5XyCQPvIv7L3jghu5SWRUO+8A`. There was no
+prior entry to conflict with — consistent with the JetPack reflash `fleet.edn`
+dates to 2026-07-15. It still declines this session's credentials, so it stays
+unmeasured.
+
+Both gaps are operations, not defects, and the plane reports them as `:partial`
+rather than as a fabric. Closing them is what turns this fleet's answer from
+"pipeline, unproven" into "pipeline, measured".
 
 ## Consequences
 
