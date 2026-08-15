@@ -8,6 +8,18 @@
         {:git/sha "848c035f7d1ac850ddc2391baa70a2f15e6c4401"}
         io.github.kotoba-lang/ed25519
         {:git/sha "fdcefb9f1b83461fee54d04b63e374fa301ee847"}
+        ;; Enrolment and release admission: murakumo is the fleet plane, so it
+        ;; consumes aiueos's decisions rather than restating them (aiueos's own
+        ;; rule -- enforcement layers import aiueos, never the reverse), names
+        ;; device keys with the library that owns the did:key envelope, and
+        ;; reads revocation with the library that owns the status-list format.
+        ;; None of the three is reimplemented here.
+        io.github.kotoba-lang/aiueos
+        {:git/sha "0bd6e3ab49a3679a72777edd3e465ff58713f5b5"}
+        io.github.kotoba-lang/org-w3-did
+        {:git/sha "c430e98024675a0873f49889049b4909e85fa860"}
+        io.github.kotoba-lang/org-w3-vc-bitstring-status-list
+        {:git/sha "9a1e874950674c2ba0ab3cfbb383098130f65fa4"}
         ;; W6 product-shell oracle authority: execute precompiled pure-planner
         ;; KIR (resources/murakumo/oracle/*.kir.edn). Compiler stays :test-only;
         ;; this is the thin runtime side of the dual-source cutover.
@@ -37,7 +49,13 @@
         io.github.kotoba-lang/kekkai
         {:git/sha "bb0c39c116fc26ead36c2428c46b9734053a49f5"}}
  :aliases
- {;; offline workspace dev — pin witness-quorum/kekkai to local checkouts
+ {;; Factory provisioning station -- issues per-device birth certificates so a
+  ;; fleet can reach :attested instead of shipping everything :tofu.
+  ;;   clojure -M:factory issue --serial SN-0001 --model "MK-1 Solo" \
+  ;;     --root-key factory-root.b64 --out units/
+  :factory {:main-opts ["-m" "murakumo.factory"]}
+
+  ;; offline workspace dev — pin witness-quorum/kekkai to local checkouts
   :dev {:override-deps
         {io.github.kotoba-lang/witness-quorum {:local/root "../witness-quorum"}
          io.github.kotoba-lang/kekkai {:local/root "../kekkai"}}}
