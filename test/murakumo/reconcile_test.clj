@@ -107,6 +107,29 @@
   (testing "no connect spec ⇒ reach is a no-op (degrades, never blocks)"
     (is (seq (r/eligible-nodes fleet {:roles ["compute"] :reach [:browser/live]} nil)))))
 
+(deftest a-skipped-reach-check-is-distinguishable-from-a-satisfied-one
+  ;; Degrading is deliberate. Degrading silently is not: without this, "these
+  ;; nodes serve browser-live" and "nobody checked whether they do" are the
+  ;; same list of names to every caller.
+  (testing "evaluated: the constraint was applied"
+    (let [report (r/eligible-report fleet {:roles ["compute"] :reach [:browser/read]} connect)]
+      (is (true? (:reach-requested? report)))
+      (is (true? (:reach-evaluated? report)))
+      (is (seq (:nodes report)))))
+  (testing "skipped: nodes came back, and the report says why"
+    (let [report (r/eligible-report fleet {:roles ["compute"] :reach [:browser/live]} nil)]
+      (is (true? (:reach-requested? report)))
+      (is (false? (:reach-evaluated? report))
+          "a reach requirement that was never checked must not read as checked")
+      (is (seq (:nodes report)))))
+  (testing "no reach asked for is evaluated, not skipped"
+    (let [report (r/eligible-report fleet {:roles ["compute"]} nil)]
+      (is (false? (:reach-requested? report)))
+      (is (true? (:reach-evaluated? report)))))
+  (testing "eligible-nodes still answers with just the names"
+    (is (= (:nodes (r/eligible-report fleet {:roles ["compute"] :reach [:browser/live]} connect))
+           (r/eligible-nodes fleet {:roles ["compute"] :reach [:browser/live]} connect)))))
+
 (deftest real-connect-edn-native-speaks-webrtc
   ;; Guard the 2026-06-27 flip: connect.edn :native :live now includes :webrtc, so
   ;; native fleet nodes are eligible for :reach :browser/live apps. Backed by

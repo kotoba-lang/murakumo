@@ -65,18 +65,46 @@
   "Atproto $type / collection NSID for fleet reconcile records. Kotoba SSoT."
   (o 'reconcile-record-type []))
 
-(defn eligible-nodes
-  "Node names whose labels/roles/reach satisfy an app's `:placement` constraint."
-  ([fleet placement] (eligible-nodes fleet placement nil))
+(defn eligible-report
+  "Node names whose labels/roles/reach satisfy an app's `:placement` constraint,
+   together with whether the reach requirement was actually evaluated.
+
+   Reach degrades rather than blocks: with no connect declaration to evaluate
+   against, every node passes. That is a deliberate availability choice, but on
+   its own it makes two different outcomes look identical -- \"these nodes
+   satisfy the requirement\" and \"nobody checked\" both come back as a list of
+   names. A caller that cares which one it got had no way to ask.
+
+   `:reach-evaluated?` is that way. It is false exactly when a reach constraint
+   was requested and skipped, so an operator placing browser-live work can tell
+   whether the nodes were chosen or merely not excluded.
+
+   ADR-2608170400 P3-5 wants placement to fail closed when the declaration and
+   the observed listener inventory disagree. That needs an observed inventory,
+   which does not exist yet; this is the half that can be true beforehand."
+  ([fleet placement] (eligible-report fleet placement nil))
   ([fleet {:keys [labels roles reach] :as _placement} connect-spec]
-   (->> (:nodes fleet)
-        (filter (fn [n]
-                  (and (every? (fn [[k v]] (= v (get (:labels n) k))) labels)
-                       (every? (set (:roles n)) roles)
-                       (or (empty? reach)
-                           (nil? connect-spec)
-                           (connect/serves-all? connect-spec n reach)))))
-        (mapv :name))))
+   (let [reach-requested? (boolean (seq reach))
+         evaluated? (and reach-requested? (some? connect-spec))]
+     {:nodes (->> (:nodes fleet)
+                  (filter (fn [n]
+                            (and (every? (fn [[k v]] (= v (get (:labels n) k))) labels)
+                                 (every? (set (:roles n)) roles)
+                                 (or (not reach-requested?)
+                                     (nil? connect-spec)
+                                     (connect/serves-all? connect-spec n reach)))))
+                  (mapv :name))
+      :reach-requested? reach-requested?
+      :reach-evaluated? (boolean (or (not reach-requested?) evaluated?))})))
+
+(defn eligible-nodes
+  "Node names whose labels/roles/reach satisfy an app's `:placement` constraint.
+
+   See `eligible-report` when the caller needs to know whether a reach
+   requirement was evaluated or skipped."
+  ([fleet placement] (eligible-nodes fleet placement nil))
+  ([fleet placement connect-spec]
+   (:nodes (eligible-report fleet placement connect-spec))))
 
 (defn observed-hosts
   "From a dash snapshot, build `cid -> #{node-name ...}` for hosted components."
