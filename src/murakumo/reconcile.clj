@@ -28,6 +28,7 @@
 ;; ── PURE core (offline-testable) ─────────────────────────────────────────────
 
 (def eligible-nodes plan/eligible-nodes)
+(def eligible-report plan/eligible-report)
 (def observed-hosts plan/observed-hosts)
 (def reconcile-app plan/reconcile-app)
 (def reconcile-plan plan/reconcile-plan)
