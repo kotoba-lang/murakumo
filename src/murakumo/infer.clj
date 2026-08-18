@@ -29,7 +29,7 @@
 
 (ns murakumo.infer
   (:require [babashka.process :as p]
-            [cheshire.core :as json]
+            [json.compat :as json]
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]

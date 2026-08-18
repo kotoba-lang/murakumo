@@ -10,7 +10,7 @@
 
 (ns murakumo.dash
   (:require [babashka.process :as p]
-            [cheshire.core :as json]
+            [json.compat :as json]
             [murakumo.config :as config]
             [murakumo.dash.state :as state]
             [murakumo.fleet :as fleet]

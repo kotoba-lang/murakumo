@@ -20,7 +20,7 @@
   (:require [murakumo.config :as config]
             [murakumo.infer.rebalance :as rb]
             [babashka.http-client :as http]
-            [cheshire.core :as json]))
+            [json.compat :as json]))
 
 (defn- cloud-url
   "Config URL (MURAKUMO_CLOUD). Injectable via config/cloud-url for tests."

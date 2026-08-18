@@ -65,7 +65,7 @@
 ;; renderer-mac's README documents for its own tunnel.
 (ns murakumo.infer.gateway
   (:require [babashka.http-client :as http-client]
-            [cheshire.core :as json]
+            [json.compat :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [murakumo.fleet :as fleet]

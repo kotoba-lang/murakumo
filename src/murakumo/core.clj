@@ -10,7 +10,7 @@
 
 (ns murakumo.core
   (:require [babashka.process :as p]
-            [cheshire.core :as json]
+            [json.compat :as json]
             [clojure.string :as str]
             [murakumo.config :as config]
             [murakumo.connect :as connect]

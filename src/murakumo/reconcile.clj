@@ -14,7 +14,7 @@
 
 (ns murakumo.reconcile
   (:require [babashka.process :as p]
-            [cheshire.core :as json]
+            [json.compat :as json]
             [murakumo.config :as config]
             [murakumo.connect :as connect]
             [murakumo.dash :as dash]
