@@ -26,3 +26,11 @@ murakumo-*.png
 
 # nbb dependency cache (jars + an embedded git checkout) — build output, not source
 .nbb/
+
+;; `amu compile --target js` の perf 成果物（.perf.mjs と、その inputs /
+;; manifest / provenance サイドカー）。source は kotoba/*.kotoba の方で、
+;; これは機械が吐いた出力。一度も commit されたことが無いのに untracked と
+;; して残り続け、cleanup の走査のたびに「未着地の新規ファイル」として
+;; 着地候補に上がっていた（2026-08-18 実測、5 件）。
+/kotoba/*.perf.mjs
+/kotoba/*.perf.mjs.*
