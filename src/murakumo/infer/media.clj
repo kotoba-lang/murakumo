@@ -19,7 +19,7 @@
 (ns murakumo.infer.media
   (:require [babashka.http-client :as http]
             [babashka.process :as p]
-            [cheshire.core :as json]
+            [json.compat :as json]
             [clojure.edn :as edn]
             [clojure.string :as str]
             [murakumo.fleet :as fleet]

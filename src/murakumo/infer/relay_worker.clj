@@ -33,7 +33,7 @@
   (:require [babashka.http-client :as http]
             [babashka.http-client.websocket :as ws]
             [babashka.process :as p]
-            [cheshire.core :as json]
+            [json.compat :as json]
             [clojure.string :as str]
             [murakumo.config :as config]
             [murakumo.fleet :as fleet]
