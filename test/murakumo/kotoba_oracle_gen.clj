@@ -10,6 +10,7 @@
 (ns murakumo.kotoba-oracle-gen
   (:require [clojure.java.io :as io]
             [clojure.pprint :as pp]
+            [kotoba.lang.edn :as kedn]
             [clojure.string :as str]
             [kotoba.compiler.core :as compiler])
   (:gen-class))
@@ -38,12 +39,39 @@
         (throw (ex-info "compile-source returned no :kir" {:source source-path})))))
 
 (defn write-artifact!
-  "Compile source and pretty-print KIR EDN to out-path. Returns out-path."
+  "Compile source and pretty-print KIR EDN to out-path. Returns out-path.
+
+  ## Why the pprint output is escaped before it is written
+
+  `clojure.pprint/pprint` emits raw control bytes, exactly as `pr-str` does:
+  measured 2026-08-19, `(with-out-str (pprint {:s \"a\\0b\"}))` is
+  `[123 58 115 32 34 97 0 98 34 125 10]`. One raw byte makes `file(1)`
+  classify the artefact as `data`, and grep then **skips it silently** --
+  `grep -c something <file>` prints nothing and exits 1, which is exactly
+  what a file not containing that string does.
+
+  Exactly one of the 36 artefacts here is affected, and it is the one you
+  would guess: `secret_core.kir.edn`, whose Kotoba source **rejects a NUL**
+  and therefore contains one. The artefact was binary for the most ordinary
+  of reasons.
+
+  It was escaped by hand elsewhere in this workspace on 2026-08-18 and the
+  generator put the bytes straight back on the next run. Fixing an artefact
+  does not hold while the generator can emit it, which is why the escaping
+  is here and not in a checker.
+
+  `kotoba.lang.edn/escape-controls` is the one definition of the rule --
+  reimplementing it here would be two that can disagree. It is idempotent,
+  so running the generator twice is a no-op, and it changes no value:
+  `\\u0000` reads back as the same character, so the parsed KIR is equal
+  either way and any digest over the VALUE is untouched. Layout whitespace
+  is left alone; escaping it would collapse the document and stop it
+  parsing, which is a mistake made and corrected upstream the same day."
   [{:strs [source out]}]
   (let [kir (compile-kir source)
         f (io/file out)]
     (io/make-parents f)
-    (spit f (with-out-str (pp/pprint kir)))
+    (spit f (kedn/escape-controls (with-out-str (pp/pprint kir))))
     out))
 
 (defn regenerate-all!
