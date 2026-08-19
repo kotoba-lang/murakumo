@@ -36,14 +36,40 @@
  ;; 262144-token window costs ~5 min before the first token. 262144 per slot is
  ;; the model's own n_ctx_train ceiling; per-slot values above that buy nothing.
  ;; See deploy/llama-server.service for the measurement table.
- :infer/ctx 524288
- ;; Two concurrent llama-server slots. The total context is divided across
- ;; slots, so each request retains the model's full 262144-token window while
- ;; continuous batching can serve genuine concurrent demand instead of
- ;; serially queueing it. Four slots were rejected in live qualification: the
- ;; distributed RPC ring admitted all requests but produced no first token
- ;; within 120 seconds.
- :infer/parallel 2
+ ;; ⚠ EVERYTHING ABOVE THIS LINE IS THE RETIRED Qwen3.6 MoE MEASUREMENT.
+ ;; `deploy/llama-server.service` withdrew it on 2026-08-15: "Dense Qwen3.8 has
+ ;; a different KV/memory profile from the retired Qwen3.6 MoE, so the old
+ ;; 524288 total-context measurement must not be carried forward as if it
+ ;; applied. Raise this only after a long-context memory and latency
+ ;; qualification run." That run has not happened.
+ ;;
+ ;; Measured on the head 2026-08-19: `--ctx-size 262144 --parallel 1`, which is
+ ;; a THIRD value -- the service unit says 32768 and this file said 524288. The
+ ;; live number is the one to trust; it is left unreconciled here rather than
+ ;; guessed at, and `/props` is how you read it:
+ ;;   curl -s https://infer.murakumo.cloud/props | jq '.default_generation_settings.n_ctx, .total_slots'
+ :infer/ctx 262144
+ ;; ONE slot, which is what production runs and what it decided to run.
+ ;;
+ ;; This said 2 until 2026-08-19, describing a qualification that had been
+ ;; withdrawn four days earlier, and it misled a reader that same day into
+ ;; treating the live single slot as a misconfiguration to be corrected. A
+ ;; config file that asserts a retired measurement is worse than one that says
+ ;; nothing: it is confident and wrong.
+ ;;
+ ;; What one slot costs, measured 2026-08-19 so the qualification run has a
+ ;; number to beat. Ten identical 16-token requests through the public
+ ;; endpoint: server compute was flat at 1.35-1.68s every time, while wall
+ ;; clock ranged 2.7s to 23.0s. All of the variance was queue -- 1.3s to
+ ;; 21.6s -- against a slot measured only 45% busy. That is head-of-line
+ ;; blocking, not saturation: one 24-second generation stalls every short
+ ;; request behind it. Downstream, half of cloud-itonami-app's resident ticks
+ ;; were exceeding its 120s request limit (ADR-2608190500 in that repo).
+ ;;
+ ;; Four slots were rejected in an earlier live qualification: the distributed
+ ;; RPC ring admitted all requests but produced no first token within 120s.
+ ;; Two has never been qualified on THIS model.
+ :infer/parallel 1
  ;; auto-detect measured no different from explicit 'on' for this model (RADV
  ;; Vulkan backend, mostly-linear-attention arch limits how much FA can help)
  ;; — set explicitly so it's not silently 'auto'-disabled by a future build.
