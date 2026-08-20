@@ -18,6 +18,9 @@ now also at concurrency 128 and with all-in cost accounting.
 
 **Serve it on H200 with MTP speculative decoding, and set `scaledown_window`
 to roughly the engine build time rather than reaching for `min_containers`.**
+MTP is worth 2.5–3.2x on every card measured, including the cheap ones; the
+cold start is ~7 minutes and four separate attempts failed to shorten it, so
+the answer to cold start is scheduling, not configuration.
 
 ```python
 @app.cls(
@@ -59,6 +62,99 @@ cards look better than they are.
 | H100 + MTP | $5.82 | $0.297 | 413 s | $0.53 |
 | **H200 + MTP** | **$5.43** | **$0.231** | 428 s | $0.62 |
 | B200 + MTP | $7.30 | $0.247 | **1,359 s** | **$2.60** |
+
+## MTP on every card, not just the fast ones
+
+MTP was run on all four cards. It helps everywhere, most where bandwidth is
+scarcest — it amortises one weight read across several tokens, so the
+bandwidth-starved cards gain the largest multiple:
+
+| card | single-stream, MTP off → on | x | best batched, off → on | x |
+|---|---|---|---|---|
+| L40S 48GB | 18.8 → **60.4** | **3.21** | 477 → 511 | 1.07 |
+| RTX PRO 6000 96GB | 45.5 → **114.6** | 2.52 | 1,600 → 2,670 | 1.67 |
+| H100 80GB | 78.2 → **218.8** | 2.80 | 2,705 → 4,280 | 1.58 |
+| H200 141GB | 93.9 → **264.4** | 2.82 | 4,461 → 6,232 | 1.40 |
+
+**The multiple inverts between the two regimes**, and that is the whole story:
+MTP spends compute to save bandwidth. At concurrency 1 every card is
+bandwidth-bound and everyone gains 2.5–3.2x. Under load the GDDR cards are
+already compute-saturated, so L40S gains **7%** and stops at a hard ~510 tok/s
+ceiling no matter what concurrency it is handed — while H200, with compute to
+spare, still gains 1.40x.
+
+So MTP does not reorder the ranking; it widens the useful range of the cheap
+cards at low concurrency and does nothing for them at high concurrency:
+
+| card, with MTP | $/Mtok @ 1 | best $/Mtok batched |
+|---|---|---|
+| L40S | $38.18 → **$11.89** | $1.51 → $1.40 |
+| RTX PRO 6000 | $22.37 → **$8.88** | $0.476 → $0.381 |
+| H100 | $16.28 → **$5.82** | $0.470 → $0.297 |
+| **H200** | $15.30 → **$5.43** | $0.322 → **$0.231** |
+
+If a deployment is genuinely single-user, MTP closes most of the gap that used
+to justify reaching for an H200 — L40S+MTP at $11.89 is cheaper per token than
+a *bare* H200 at $15.30. H200+MTP still wins; it just wins by 2.2x now instead
+of 7x.
+
+## Cold start cannot be meaningfully reduced (four attempts, all measured)
+
+The warm H200+MTP start is **428.1 s and 428.9 s** across two identical runs.
+Where it goes, read out of vLLM's own log on the warm run:
+
+| phase | seconds |
+|---|---|
+| container start, imports, weight load from Volume | ~144 |
+| **CUDA graph capture** | **126** |
+| multi-modal (vision) warmup | 30 |
+| profiling / warmup run | 26 |
+| torch.compile | 12 (cache hit; 133 s cold) |
+
+Four levers were tried against it:
+
+1. **GPU memory snapshot** — did not restore; `@modal.enter(snap=True)` re-ran.
+2. **`enforce_eager=True`** — removes compile and graph capture. Start falls to
+   322.5 s (−25%, saving $0.15) and **single-stream collapses from 260.8 to
+   44.6 tok/s**, cost from $5.51 to $32.22/Mtok. Concurrency 8 falls 11x.
+   MTP's draft-verify loop is many small forward passes, which is precisely
+   what CUDA graphs exist for. **Never do this with speculative decoding on.**
+3. **`cudagraph_capture_sizes` cut from 49 shapes to 8** — capture falls to
+   88–107 s, but changing `compilation_config` changes the compile cache key,
+   so the first run pays a full 149 s recompile. Steady state on the second
+   run: **450.6 s**, i.e. no improvement over the 428.9 s baseline.
+4. **Text-only (`limit_mm_per_prompt {"image": 0, "video": 0}`)**, to skip the
+   30 s vision warmup — **vLLM 0.27.1 crashes at engine init** with
+   `AttributeError: 'NoneType' object has no attribute 'size'`. Not available.
+
+**So do not try to make the cold start cheap. Arrange not to pay it.** Set
+`scaledown_window` to about one build time (~7 min on H200) so bursts inside a
+session do not re-wake, and accept the wake at session boundaries. Keeping a
+container resident costs **$5.17/hour**, so it only beats paying wakes if you
+would otherwise wake more than **8.3 times in that hour** — which agent traffic
+does not.
+
+The ~144 s of weight load and imports comes off a network Volume; baking
+weights and compile artifacts into an image layer instead might move it. **Not
+measured.**
+
+## Run-to-run variance, and what it means for reading these tables
+
+Four H200+MTP runs under identical settings gave:
+
+| | run 1 | run 2 | run 3 | run 4 |
+|---|---|---|---|---|
+| single-stream | 264.4 | 260.8 | 258.1 | 255.4 |
+| concurrency 8 | 1,283 | 954 | 1,196 | 762 |
+| concurrency 64 | 5,106 | 4,593 | 3,248 | 2,526 |
+| concurrency 128 | 6,232 | 6,123 | 6,027 | 4,677 |
+
+**Single-stream is tight (±2%); mid-concurrency swings ±40%.** These are shared
+containers on shared hardware. Every batched figure in this ADR is n=1, so
+**differences under about 30% at concurrency 8–128 are not resolvable here** —
+which is why attempt 3 above is written as "no improvement", not "worse". The
+conclusions that survive this noise are the large ones: MTP's 2.5–3.2x, the
+bandwidth ordering, eager's 6x collapse, and the cold-start floor.
 
 ## What decides it
 
@@ -115,6 +211,10 @@ in-process is faster.
 
 ## Not measured
 
+- **Repeats at mid concurrency.** See the variance table: n=1 at concurrency
+  8–128, so those cells carry ±40% and should not be read finely.
+- **Baking weights and compile cache into the image layer** instead of a
+  network Volume, against the ~144 s of load and imports.
 - **MTP at temperature > 0.** Every number here is greedy. Qwen recommends
   `temperature=1.0` for thinking mode, and speculative acceptance falls when
   the target samples. **The MTP gains above are an upper bound**, and the
