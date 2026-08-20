@@ -10,7 +10,13 @@
         http-kit/http-kit {:mvn/version "2.8.0"}
         io.github.kotoba-lang/abi
         {:git/sha "848c035f7d1ac850ddc2391baa70a2f15e6c4401"}
-        io.github.kotoba-lang/ed25519
+        ;; kotoba-lang/ed25519 was renamed to kotoba-lang/org-ietf-ed25519.
+        ;; The redirect kept the old coordinate resolving, but tools.deps
+        ;; dedupes by the coordinate SYMBOL -- and org-w3-did and
+        ;; org-w3-vc-bitstring-status-list already name the repository by its
+        ;; current name, so this file was putting ed25519.core on the classpath
+        ;; twice from two checkouts. Same sha: one repository, one revision.
+        io.github.kotoba-lang/org-ietf-ed25519
         {:git/sha "fdcefb9f1b83461fee54d04b63e374fa301ee847"}
         ;; Enrolment and release admission: murakumo is the fleet plane, so it
         ;; consumes aiueos's decisions rather than restating them (aiueos's own
