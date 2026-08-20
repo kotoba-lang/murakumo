@@ -18,9 +18,10 @@ now also at concurrency 128 and with all-in cost accounting.
 
 **Serve it on H200 with MTP speculative decoding, and set `scaledown_window`
 to roughly the engine build time rather than reaching for `min_containers`.**
-MTP is worth 2.5–3.2x on every card measured, including the cheap ones; the
-cold start is ~7 minutes and four separate attempts failed to shorten it, so
-the answer to cold start is scheduling, not configuration.
+MTP is worth 2.5–3.2x on every card measured, including the cheap ones. The
+cold start is ~7 minutes; we did not shorten it, but the documented
+snapshot path is **unresolved rather than refuted** — see the correction
+below. Until it is resolved, treat cold start as a scheduling problem.
 
 ```python
 @app.cls(
@@ -98,10 +99,25 @@ to justify reaching for an H200 — L40S+MTP at $11.89 is cheaper per token than
 a *bare* H200 at $15.30. H200+MTP still wins; it just wins by 2.2x now instead
 of 7x.
 
-## Cold start cannot be meaningfully reduced (four attempts, all measured)
+## Cold start: we did not reduce it, and the first attempt was invalid
+
+**Correction (2026-08-20, same day).** An earlier revision of this ADR reported
+that Modal's GPU memory snapshot "did not restore", and read that as a vLLM /
+`torch.compile` incompatibility. That was wrong. The run had printed
+
+    Memory snapshots are disabled for ephemeral apps.
+    Deploy your app with `modal deploy` to enable memory snapshots.
+
+`modal run` creates an ephemeral App. **Snapshots were never enabled**, and the
+harness reported `restored_from_snapshot: false` — a true statement about
+something that had not been attempted, in the same shape as a negative result.
+This is the exact failure this repository keeps naming, committed here by the
+check that was supposed to name it.
+
+### What is actually true
 
 The warm H200+MTP start is **428.1 s and 428.9 s** across two identical runs.
-Where it goes, read out of vLLM's own log on the warm run:
+Where it goes, from vLLM's own log on the warm run:
 
 | phase | seconds |
 |---|---|
@@ -111,32 +127,63 @@ Where it goes, read out of vLLM's own log on the warm run:
 | profiling / warmup run | 26 |
 | torch.compile | 12 (cache hit; 133 s cold) |
 
-Four levers were tried against it:
+**Three vLLM-side levers, all negative:**
 
-1. **GPU memory snapshot** — did not restore; `@modal.enter(snap=True)` re-ran.
-2. **`enforce_eager=True`** — removes compile and graph capture. Start falls to
-   322.5 s (−25%, saving $0.15) and **single-stream collapses from 260.8 to
-   44.6 tok/s**, cost from $5.51 to $32.22/Mtok. Concurrency 8 falls 11x.
-   MTP's draft-verify loop is many small forward passes, which is precisely
-   what CUDA graphs exist for. **Never do this with speculative decoding on.**
-3. **`cudagraph_capture_sizes` cut from 49 shapes to 8** — capture falls to
-   88–107 s, but changing `compilation_config` changes the compile cache key,
-   so the first run pays a full 149 s recompile. Steady state on the second
-   run: **450.6 s**, i.e. no improvement over the 428.9 s baseline.
-4. **Text-only (`limit_mm_per_prompt {"image": 0, "video": 0}`)**, to skip the
+1. **`enforce_eager=True`** — start falls to 322.5 s (−25%, saving $0.15) and
+   **single-stream collapses from 260.8 to 44.6 tok/s**, cost from $5.51 to
+   $32.22/Mtok; concurrency 8 falls 11x. MTP's draft-verify loop is many small
+   forward passes, which is precisely what CUDA graphs exist for. **Never with
+   speculative decoding on.**
+2. **`cudagraph_capture_sizes` 49 → 8 shapes** — capture falls to 88–107 s, but
+   changing `compilation_config` changes the compile cache key, so the first run
+   pays a 149 s recompile. Steady state on a second run: 450.6 s. No improvement.
+3. **Text-only (`limit_mm_per_prompt {"image": 0, "video": 0}`)** to skip the
    30 s vision warmup — **vLLM 0.27.1 crashes at engine init** with
-   `AttributeError: 'NoneType' object has no attribute 'size'`. Not available.
+   `AttributeError: 'NoneType' object has no attribute 'size'`.
 
-**So do not try to make the cold start cheap. Arrange not to pay it.** Set
-`scaledown_window` to about one build time (~7 min on H200) so bursts inside a
-session do not re-wake, and accept the wake at session boundaries. Keeping a
-container resident costs **$5.17/hour**, so it only beats paying wakes if you
-would otherwise wake more than **8.3 times in that hour** — which agent traffic
-does not.
+**The Modal-side lever, re-run properly and still unresolved.** Deployed with
+`modal deploy`, `enable_memory_snapshot=True`,
+`experimental_options={"enable_gpu_snapshot": True}`,
+`TORCHINDUCTOR_COMPILE_THREADS=1`, and vLLM sleep mode
+(`enable_sleep_mode=True`, `llm.sleep(level=1)` at the end of
+`@modal.enter(snap=True)`, `llm.wake_up()` in `@modal.enter(snap=False)`):
 
-The ~144 s of weight load and imports comes off a network Volume; baking
-weights and compile artifacts into an image layer instead might move it. **Not
-measured.**
+- Modal **does** create snapshots. Its logs carry `Creating GPU memory snapshot
+  for Function.` and `Snapshot created. Restoring Function from memory
+  snapshot.`
+- vLLM's half works and is cheap: **`wake_up()` takes 1.18–2.02 s.**
+- **But across four probe calls, no container was ever restored.** Each rebuilt
+  the engine — 312.3 s, 264.7 s, 244.0 s, 259.5 s. The values *differ*, which is
+  what proves a genuine rebuild: a restored container would report the one value
+  frozen into the snapshot.
+
+  (The harness's own `restored` flag was broken and is now labelled as such in
+  the source rather than deleted. It tested `build_seconds is None`, but
+  `build_seconds` is assigned inside `@modal.enter(snap=True)` and therefore
+  lives *inside* the snapshot, so it is present after a restore too. The
+  conclusion above rests on the differing values, not on that flag.)
+
+**So the honest state is "not reduced by us", not "cannot be reduced".** A
+published result exists — vLLM sleep mode plus Modal GPU snapshots taking a
+cold start from 460 s to ~70 s, 6.5x — and our implementation deviates from it
+in one identified way: it drives the in-process `LLM` class and `llm.sleep()`,
+where the published recipe runs `vllm serve --enable-sleep-mode` as a
+subprocess with `VLLM_SERVER_DEV_MODE=1` and hits the sleep/wake HTTP
+endpoints. We did not isolate whether that is the cause. Modal's docs also note
+snapshots are per worker type and need 2–3 invocations to materialise; four
+calls may simply not have been enough.
+
+### Until that is resolved, arrange not to pay the start
+
+Set `scaledown_window` to about one build time (~7 min on H200) so bursts inside
+a session do not re-wake. Residency costs **$5.17/hour** against **$0.62** a
+wake, so keeping a container only beats paying wakes above **8.3 wakes/hour**,
+which agent traffic does not reach.
+
+⚠ `scaledown_window=10` **races the snapshot machinery**: Modal restarts the
+container repeatedly while materialising a snapshot, and a 10 s window kills it
+again before the in-flight input finishes. A probe run at that setting never
+returned a single result in 55 minutes.
 
 ## Run-to-run variance, and what it means for reading these tables
 
@@ -215,6 +262,12 @@ in-process is faster.
   8–128, so those cells carry ±40% and should not be read finely.
 - **Baking weights and compile cache into the image layer** instead of a
   network Volume, against the ~144 s of load and imports.
+- **The published snapshot recipe as published**: `vllm serve
+  --enable-sleep-mode` as a subprocess with `VLLM_SERVER_DEV_MODE=1` and the
+  sleep/wake HTTP endpoints, rather than the in-process `LLM` class we drove.
+  Reported elsewhere at 460 s → ~70 s; **unverified here.**
+- **More than four snapshot invocations.** Modal snapshots per worker type and
+  says 2–3 invocations are needed; we stopped at four without a restore.
 - **MTP at temperature > 0.** Every number here is greedy. Qwen recommends
   `temperature=1.0` for thinking mode, and speculative acceptance falls when
   the target samples. **The MTP gains above are an upper bound**, and the
