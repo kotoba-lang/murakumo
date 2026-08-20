@@ -91,7 +91,9 @@ def _prompt(approx_tokens: int) -> str:
     return (unit * max(1, approx_tokens // 11)).strip()
 
 
-def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int) -> str:
+def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int,
+         eager: bool = False, capture_sizes: str = "",
+         text_only: bool = False) -> str:
     import torch
     from vllm import LLM, SamplingParams
 
@@ -102,6 +104,9 @@ def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int) -> str:
         "mtp": mtp,
         "max_model_len": max_model_len,
         "max_num_seqs": max_num_seqs,
+        "eager": eager,
+        "capture_sizes": capture_sizes,
+        "text_only": text_only,
         "configs": [],
     }
 
@@ -126,9 +131,22 @@ def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int) -> str:
         max_num_seqs=max_num_seqs,
         kv_cache_dtype="fp8",
         gpu_memory_utilization=0.92,
-        enforce_eager=False,
+        enforce_eager=eager,
         trust_remote_code=True,
     )
+    if text_only:
+        # Qwen3.8-27B is a VL model, and vLLM warms the vision tower on every
+        # start (~30 s of a 429 s warm start) plus an encoder cache budget.
+        # A text-only deployment does not need either.
+        kwargs["limit_mm_per_prompt"] = {"image": 0, "video": 0}
+    if capture_sizes:
+        # vLLM captures 49 CUDA-graph shapes by default; on a warm H200 that
+        # is 126 s of a 429 s start, the largest single phase once the compile
+        # cache hits.  Capturing only the batch sizes a deployment actually
+        # sees keeps the graphs where they pay and drops the rest.
+        kwargs["compilation_config"] = {
+            "cudagraph_capture_sizes": [int(x) for x in capture_sizes.split(",")]
+        }
     if mtp:
         kwargs["speculative_config"] = {
             "method": "mtp",
@@ -170,6 +188,23 @@ def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int) -> str:
             break
     load_s = time.time() - t0
     out["load"] = {"status": "measured", "seconds": round(load_s, 1)}
+    # vLLM logs its own start-time breakdown; capture it so "7 minutes" can be
+    # attacked at whichever phase actually owns the time, rather than as a lump.
+    try:
+        import subprocess
+        out["load"]["phases"] = subprocess.run(
+            ["bash", "-lc",
+             "grep -hoE '(init engine [^)]*\\)|torch.compile took [0-9.]+ s"
+             "|Loading .* took [0-9.]+ GiB and [0-9.]+ seconds"
+             "|Graph capturing finished in [0-9]+ secs[^,]*)' /proc/1/fd/1 "
+             "2>/dev/null | tail -8"],
+            capture_output=True, text=True, timeout=10).stdout.strip().split("\n")
+        if out["load"]["phases"] == [""]:
+            out["load"]["phases"] = ("could-not-measure: vLLM's phase lines go to "
+                                     "the container log, not to a file this "
+                                     "process can read; grep the modal run log")
+    except Exception as e:  # noqa: BLE001
+        out["load"]["phases"] = f"unavailable: {type(e).__name__}"
     out["kv_cache_gpu_blocks"] = str(
         getattr(getattr(llm.llm_engine, "cache_config", None), "num_gpu_blocks", None)
     )
@@ -280,33 +315,45 @@ _COMMON = dict(
 
 
 @app.function(gpu="L40S", **_COMMON)
-def bench_l40s(mtp: bool, max_model_len: int, max_num_seqs: int):
-    return _run("L40S", mtp, max_model_len, max_num_seqs)
+def bench_l40s(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
+               capture_sizes: str = "", text_only: bool = False):
+    return _run("L40S", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
+                text_only)
 
 
 @app.function(gpu="H100", **_COMMON)
-def bench_h100(mtp: bool, max_model_len: int, max_num_seqs: int):
-    return _run("H100", mtp, max_model_len, max_num_seqs)
+def bench_h100(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
+               capture_sizes: str = "", text_only: bool = False):
+    return _run("H100", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
+                text_only)
 
 
 @app.function(gpu="H200", **_COMMON)
-def bench_h200(mtp: bool, max_model_len: int, max_num_seqs: int):
-    return _run("H200", mtp, max_model_len, max_num_seqs)
+def bench_h200(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
+               capture_sizes: str = "", text_only: bool = False):
+    return _run("H200", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
+                text_only)
 
 
 @app.function(gpu="A100-80GB", **_COMMON)
-def bench_a100(mtp: bool, max_model_len: int, max_num_seqs: int):
-    return _run("A100-80GB", mtp, max_model_len, max_num_seqs)
+def bench_a100(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
+               capture_sizes: str = "", text_only: bool = False):
+    return _run("A100-80GB", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
+                text_only)
 
 
 @app.function(gpu="B200", **_COMMON)
-def bench_b200(mtp: bool, max_model_len: int, max_num_seqs: int):
-    return _run("B200", mtp, max_model_len, max_num_seqs)
+def bench_b200(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
+               capture_sizes: str = "", text_only: bool = False):
+    return _run("B200", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
+                text_only)
 
 
 @app.function(gpu="RTX-PRO-6000", **_COMMON)
-def bench_rtx_pro_6000(mtp: bool, max_model_len: int, max_num_seqs: int):
-    return _run("RTX-PRO-6000", mtp, max_model_len, max_num_seqs)
+def bench_rtx_pro_6000(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
+               capture_sizes: str = "", text_only: bool = False):
+    return _run("RTX-PRO-6000", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
+                text_only)
 
 
 _FNS = {
@@ -321,14 +368,15 @@ _FNS = {
 
 @app.local_entrypoint()
 def main(gpu: str = "L40S", mtp: bool = False, max_model_len: int = 65536,
-         max_num_seqs: int = 128, out: str = ""):
+         max_num_seqs: int = 128, eager: bool = False,
+         capture_sizes: str = "", text_only: bool = False, out: str = ""):
     fn = _FNS.get(gpu)
     if fn is None:
         print(f"unknown gpu {gpu!r}; known: {sorted(_FNS)}", file=sys.stderr)
         raise SystemExit(2)
-    print(f"== {gpu} mtp={mtp} len={max_model_len} seqs={max_num_seqs} ==", flush=True)
+    print(f"== {gpu} mtp={mtp} eager={eager} len={max_model_len} seqs={max_num_seqs} ==", flush=True)
     t = time.time()
-    res = json.loads(fn.remote(mtp, max_model_len, max_num_seqs))
+    res = json.loads(fn.remote(mtp, max_model_len, max_num_seqs, eager, capture_sizes, text_only))
     res["harness_wall_seconds"] = round(time.time() - t, 1)
     blob = json.dumps(res, indent=2, default=str)
     print(blob)
