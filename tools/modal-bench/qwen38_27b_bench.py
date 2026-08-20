@@ -93,13 +93,13 @@ def _prompt(approx_tokens: int) -> str:
 
 def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int,
          eager: bool = False, capture_sizes: str = "",
-         text_only: bool = False) -> str:
+         text_only: bool = False, model: str = MODEL) -> str:
     import torch
     from vllm import LLM, SamplingParams
 
     out = {
         "gpu": gpu,
-        "model": MODEL,
+        "model": model,
         "vllm": None,
         "mtp": mtp,
         "max_model_len": max_model_len,
@@ -120,7 +120,7 @@ def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int,
     )
 
     kwargs = dict(
-        model=MODEL,
+        model=model,
         max_model_len=max_model_len,
         # Gated DeltaNet keeps one recurrent ("Mamba") state block per decode
         # sequence, allocated out of the same pool as the KV cache.  vLLM's
@@ -316,44 +316,44 @@ _COMMON = dict(
 
 @app.function(gpu="L40S", **_COMMON)
 def bench_l40s(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
-               capture_sizes: str = "", text_only: bool = False):
+               capture_sizes: str = "", text_only: bool = False, model: str = MODEL):
     return _run("L40S", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
-                text_only)
+                text_only, model)
 
 
 @app.function(gpu="H100", **_COMMON)
 def bench_h100(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
-               capture_sizes: str = "", text_only: bool = False):
+               capture_sizes: str = "", text_only: bool = False, model: str = MODEL):
     return _run("H100", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
-                text_only)
+                text_only, model)
 
 
 @app.function(gpu="H200", **_COMMON)
 def bench_h200(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
-               capture_sizes: str = "", text_only: bool = False):
+               capture_sizes: str = "", text_only: bool = False, model: str = MODEL):
     return _run("H200", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
-                text_only)
+                text_only, model)
 
 
 @app.function(gpu="A100-80GB", **_COMMON)
 def bench_a100(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
-               capture_sizes: str = "", text_only: bool = False):
+               capture_sizes: str = "", text_only: bool = False, model: str = MODEL):
     return _run("A100-80GB", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
-                text_only)
+                text_only, model)
 
 
 @app.function(gpu="B200", **_COMMON)
 def bench_b200(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
-               capture_sizes: str = "", text_only: bool = False):
+               capture_sizes: str = "", text_only: bool = False, model: str = MODEL):
     return _run("B200", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
-                text_only)
+                text_only, model)
 
 
 @app.function(gpu="RTX-PRO-6000", **_COMMON)
 def bench_rtx_pro_6000(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
-               capture_sizes: str = "", text_only: bool = False):
+               capture_sizes: str = "", text_only: bool = False, model: str = MODEL):
     return _run("RTX-PRO-6000", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
-                text_only)
+                text_only, model)
 
 
 _FNS = {
@@ -369,14 +369,16 @@ _FNS = {
 @app.local_entrypoint()
 def main(gpu: str = "L40S", mtp: bool = False, max_model_len: int = 65536,
          max_num_seqs: int = 128, eager: bool = False,
-         capture_sizes: str = "", text_only: bool = False, out: str = ""):
+         capture_sizes: str = "", text_only: bool = False,
+         model: str = MODEL, out: str = ""):
     fn = _FNS.get(gpu)
     if fn is None:
         print(f"unknown gpu {gpu!r}; known: {sorted(_FNS)}", file=sys.stderr)
         raise SystemExit(2)
-    print(f"== {gpu} mtp={mtp} eager={eager} len={max_model_len} seqs={max_num_seqs} ==", flush=True)
+    print(f"== {model} on {gpu} mtp={mtp} len={max_model_len} seqs={max_num_seqs} ==", flush=True)
     t = time.time()
-    res = json.loads(fn.remote(mtp, max_model_len, max_num_seqs, eager, capture_sizes, text_only))
+    res = json.loads(fn.remote(mtp, max_model_len, max_num_seqs, eager, capture_sizes, text_only,
+                  model))
     res["harness_wall_seconds"] = round(time.time() - t, 1)
     blob = json.dumps(res, indent=2, default=str)
     print(blob)
