@@ -1,0 +1,79 @@
+{
+  "gpu": "H100",
+  "model": "Qwen/Qwen3.8-27B-FP8",
+  "vllm": "0.27.1",
+  "mtp": false,
+  "max_model_len": 65536,
+  "max_num_seqs": 128,
+  "configs": [
+    {
+      "label": "single-stream 256in/512out",
+      "status": "measured",
+      "concurrency": 1,
+      "prompt_tokens_each": 276,
+      "generated_tokens_total": 512,
+      "wall_seconds": 6.7,
+      "output_tok_per_s": 76.5,
+      "usd_per_mtok_output": 14.34
+    },
+    {
+      "label": "concurrency-8 256in/512out",
+      "status": "measured",
+      "concurrency": 8,
+      "prompt_tokens_each": 276,
+      "generated_tokens_total": 4096,
+      "wall_seconds": 16.68,
+      "output_tok_per_s": 245.6,
+      "usd_per_mtok_output": 4.467
+    },
+    {
+      "label": "concurrency-32 256in/512out",
+      "status": "measured",
+      "concurrency": 32,
+      "prompt_tokens_each": 276,
+      "generated_tokens_total": 16384,
+      "wall_seconds": 9.63,
+      "output_tok_per_s": 1700.8,
+      "usd_per_mtok_output": 0.645
+    },
+    {
+      "label": "concurrency-64 256in/512out",
+      "status": "measured",
+      "concurrency": 64,
+      "prompt_tokens_each": 276,
+      "generated_tokens_total": 32768,
+      "wall_seconds": 12.15,
+      "output_tok_per_s": 2696.2,
+      "usd_per_mtok_output": 0.407
+    },
+    {
+      "label": "long-prompt 4k-in/256out",
+      "status": "measured",
+      "concurrency": 1,
+      "prompt_tokens_each": 4464,
+      "generated_tokens_total": 256,
+      "wall_seconds": 3.62,
+      "output_tok_per_s": 70.7,
+      "usd_per_mtok_output": 15.516
+    },
+    {
+      "label": "long-prompt 32k-in/256out",
+      "status": "measured",
+      "concurrency": 1,
+      "prompt_tokens_each": 35736,
+      "generated_tokens_total": 256,
+      "wall_seconds": 6.15,
+      "output_tok_per_s": 41.7,
+      "usd_per_mtok_output": 26.307
+    }
+  ],
+  "torch": "2.13.0+cu130",
+  "device": "NVIDIA H100 80GB HBM3",
+  "vram_total_gib": 79.18,
+  "load": {
+    "status": "measured",
+    "seconds": 343.2
+  },
+  "kv_cache_gpu_blocks": "None",
+  "harness_wall_seconds": 435.3
+}
