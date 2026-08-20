@@ -26,6 +26,7 @@ Exit code 2 means "could not answer" (neither pass nor fail).
 
 import json
 import os
+import re
 import sys
 import time
 
@@ -42,8 +43,16 @@ GPU_USD_PER_SEC = {
     "H200": 0.001261,
     "A100-80GB": 0.000694,
     "B200": 0.001736,
+    "B300": 0.001972,
     "RTX-PRO-6000": 0.000842,
 }
+
+# Modal bills CPU and memory SEPARATELY from the GPU -- unlike a RunPod pod,
+# where the hourly rate is everything.  At the 8-core/32-GiB shape used here
+# that is +32% on top of an L40S and +16% on top of an H100, so a $/token
+# figure that counts only the GPU line is wrong on this vendor specifically.
+CPU_USD_PER_CORE_SEC = 0.0000131
+MEM_USD_PER_GIB_SEC = 0.00000222
 
 # A *devel* CUDA base, not debian_slim.  FlashInfer JIT-compiles its attention
 # and sampling kernels at engine init and calls nvcc to do it; debian_slim has
@@ -126,16 +135,39 @@ def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int) -> str:
             "num_speculative_tokens": 3,
         }
 
+    # vLLM names the Gated DeltaNet recurrent-state ceiling in the exception it
+    # raises when max_num_seqs exceeds it.  Ask for the moon, read the ceiling
+    # out of the refusal, then retry under it -- so the ceiling gets *reported*
+    # for each card instead of being a number someone has to know in advance.
     t0 = time.time()
-    try:
-        llm = LLM(**kwargs)
-    except Exception as e:  # noqa: BLE001 -- the reason is the payload
-        out["load"] = {
-            "status": "could-not-measure",
-            "reason": f"{type(e).__name__}: {e}"[:600],
-            "seconds": round(time.time() - t0, 1),
-        }
-        return json.dumps(out, default=str)
+    llm = None
+    for attempt_seqs in (max_num_seqs, None):
+        if attempt_seqs is None:
+            break
+        kwargs["max_num_seqs"] = attempt_seqs
+        try:
+            llm = LLM(**kwargs)
+            out["max_num_seqs_effective"] = attempt_seqs
+            break
+        except Exception as e:  # noqa: BLE001 -- the reason is the payload
+            m = re.search(r"available Mamba cache blocks \((\d+)\)", str(e))
+            if m and int(m.group(1)) < attempt_seqs:
+                out["mamba_cache_blocks"] = int(m.group(1))
+                out["retried_under_mamba_ceiling"] = True
+                kwargs["max_num_seqs"] = int(m.group(1))
+                try:
+                    llm = LLM(**kwargs)
+                    out["max_num_seqs_effective"] = int(m.group(1))
+                except Exception as e2:  # noqa: BLE001
+                    e = e2
+            if llm is None:
+                out["load"] = {
+                    "status": "could-not-measure",
+                    "reason": f"{type(e).__name__}: {e}"[:600],
+                    "seconds": round(time.time() - t0, 1),
+                }
+                return json.dumps(out, default=str)
+            break
     load_s = time.time() - t0
     out["load"] = {"status": "measured", "seconds": round(load_s, 1)}
     out["kv_cache_gpu_blocks"] = str(
@@ -188,6 +220,7 @@ def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int) -> str:
         ("concurrency-8 256in/512out", 8, 256, 512),
         ("concurrency-32 256in/512out", 32, 256, 512),
         ("concurrency-64 256in/512out", 64, 256, 512),
+        ("concurrency-128 256in/512out", 128, 256, 512),
         ("long-prompt 4k-in/256out", 1, 4096, 256),
         ("long-prompt 32k-in/256out", 1, 32768, 256),
     ]
@@ -205,13 +238,27 @@ def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int) -> str:
         out["configs"].append(r)
         print(f"  {label}: {r.get('output_tok_per_s', r.get('reason'))}", flush=True)
 
-    rate = GPU_USD_PER_SEC.get(gpu)
-    if rate:
+    gpu_rate = GPU_USD_PER_SEC.get(gpu)
+    side_rate = (
+        REQ_CPU * CPU_USD_PER_CORE_SEC
+        + (REQ_MEM_MIB / 1024) * MEM_USD_PER_GIB_SEC
+    )
+    out["usd_per_sec"] = {
+        "gpu": gpu_rate,
+        "cpu_and_memory": round(side_rate, 8),
+        "total": round((gpu_rate or 0) + side_rate, 8),
+    }
+    if gpu_rate:
         for c in out["configs"]:
             if c.get("status") == "measured" and c.get("output_tok_per_s"):
-                c["usd_per_mtok_output"] = round(
-                    rate / c["output_tok_per_s"] * 1_000_000, 3
-                )
+                tps = c["output_tok_per_s"]
+                c["usd_per_mtok_gpu_only"] = round(gpu_rate / tps * 1e6, 3)
+                c["usd_per_mtok_all_in"] = round((gpu_rate + side_rate) / tps * 1e6, 3)
+        # What one cold start costs, in the same currency as the tokens.
+        if out["load"].get("status") == "measured":
+            out["load"]["usd_all_in"] = round(
+                (gpu_rate + side_rate) * out["load"]["seconds"], 3
+            )
     return json.dumps(out, default=str)
 
 
@@ -220,12 +267,15 @@ def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int) -> str:
 # `serialized=True`, which then demands the local interpreter match the image's
 # Python -- 3.14 here vs 3.12 there).  Explicit is what actually deploys.
 
+REQ_CPU = 8
+REQ_MEM_MIB = 32768
+
 _COMMON = dict(
     image=vllm_image,
     volumes={"/root/.cache/huggingface": hf_cache, "/root/.cache/vllm": vllm_cache},
     timeout=60 * 60,
-    cpu=8,
-    memory=32768,
+    cpu=REQ_CPU,
+    memory=REQ_MEM_MIB,
 )
 
 
@@ -249,7 +299,19 @@ def bench_a100(mtp: bool, max_model_len: int, max_num_seqs: int):
     return _run("A100-80GB", mtp, max_model_len, max_num_seqs)
 
 
+@app.function(gpu="B200", **_COMMON)
+def bench_b200(mtp: bool, max_model_len: int, max_num_seqs: int):
+    return _run("B200", mtp, max_model_len, max_num_seqs)
+
+
+@app.function(gpu="RTX-PRO-6000", **_COMMON)
+def bench_rtx_pro_6000(mtp: bool, max_model_len: int, max_num_seqs: int):
+    return _run("RTX-PRO-6000", mtp, max_model_len, max_num_seqs)
+
+
 _FNS = {
+    "B200": bench_b200,
+    "RTX-PRO-6000": bench_rtx_pro_6000,
     "L40S": bench_l40s,
     "H100": bench_h100,
     "H200": bench_h200,

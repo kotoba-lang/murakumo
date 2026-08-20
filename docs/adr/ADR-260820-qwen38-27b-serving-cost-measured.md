@@ -3,6 +3,9 @@
 - Status: accepted
 - Date: 2026-08-20
 - Depends: RULES.md rule 8 (caching weights does not prove execution)
+- Superseded in part by: ADR-260820b — MTP, listed here as unmeasured, turns
+  out to be worth 2.8x on single-stream, and H200+MTP beats every configuration
+  named below. The measurements here stand; the recommendation does not.
 
 ## Context
 
