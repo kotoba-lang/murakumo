@@ -35,24 +35,13 @@ import modal
 MODEL = "Qwen/Qwen3.8-27B-FP8"
 MODEL_REVISION = None  # pinned at first run; see PIN below
 
-# Modal's published rates (modal.com/pricing, read 2026-08-20), $/second.
-# Used to turn wall-clock into $/Mtok without a second source of truth.
-GPU_USD_PER_SEC = {
-    "L40S": 0.000542,
-    "H100": 0.001097,
-    "H200": 0.001261,
-    "A100-80GB": 0.000694,
-    "B200": 0.001736,
-    "B300": 0.001972,
-    "RTX-PRO-6000": 0.000842,
-}
-
-# Modal bills CPU and memory SEPARATELY from the GPU -- unlike a RunPod pod,
-# where the hourly rate is everything.  At the 8-core/32-GiB shape used here
-# that is +32% on top of an L40S and +16% on top of an H100, so a $/token
-# figure that counts only the GPU line is wrong on this vendor specifically.
-CPU_USD_PER_CORE_SEC = 0.0000131
-MEM_USD_PER_GIB_SEC = 0.00000222
+# Rates, VRAM and bandwidth live in one place so the benchmark cannot price
+# tokens off a table that has drifted from the one humans read.
+from modal_gpu_reference import (  # noqa: E402
+    RATE_USD_PER_SEC as GPU_USD_PER_SEC,
+    CPU_USD_PER_CORE_SEC,
+    MEM_USD_PER_GIB_SEC,
+)
 
 # A *devel* CUDA base, not debian_slim.  FlashInfer JIT-compiles its attention
 # and sampling kernels at engine init and calls nvcc to do it; debian_slim has
@@ -76,6 +65,9 @@ vllm_image = (
             "FLASHINFER_CACHE_DIR": "/root/.cache/vllm/flashinfer",
         }
     )
+    # Local source must be added AFTER every build step: Modal refuses an
+    # image that runs a build step following add_local_*.
+    .add_local_python_source("modal_gpu_reference")
 )
 
 hf_cache = modal.Volume.from_name("qwen38-hf-cache", create_if_missing=True)
@@ -335,6 +327,27 @@ def bench_h200(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = F
                 text_only, model)
 
 
+@app.function(gpu="L4", **_COMMON)
+def bench_l4(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
+             capture_sizes: str = "", text_only: bool = False, model: str = MODEL):
+    return _run("L4", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
+                text_only, model)
+
+
+@app.function(gpu="A10", **_COMMON)
+def bench_a10(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
+              capture_sizes: str = "", text_only: bool = False, model: str = MODEL):
+    return _run("A10", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
+                text_only, model)
+
+
+@app.function(gpu="A100-40GB", **_COMMON)
+def bench_a100_40(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
+                  capture_sizes: str = "", text_only: bool = False, model: str = MODEL):
+    return _run("A100-40GB", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
+                text_only, model)
+
+
 @app.function(gpu="A100-80GB", **_COMMON)
 def bench_a100(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
                capture_sizes: str = "", text_only: bool = False, model: str = MODEL):
@@ -357,6 +370,9 @@ def bench_rtx_pro_6000(mtp: bool, max_model_len: int, max_num_seqs: int, eager: 
 
 
 _FNS = {
+    "L4": bench_l4,
+    "A10": bench_a10,
+    "A100-40GB": bench_a100_40,
     "B200": bench_b200,
     "RTX-PRO-6000": bench_rtx_pro_6000,
     "L40S": bench_l40s,
