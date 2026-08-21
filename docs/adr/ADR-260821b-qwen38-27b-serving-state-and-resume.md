@@ -3,10 +3,10 @@
 - Status: accepted
 - Date: 2026-08-21
 - Index for: ADR-260820, ADR-260820b, ADR-260820c, ADR-260820d, ADR-260821,
-  ADR-260821c, `docs/modal-gpu-reference.md`
+  ADR-260821c, ADR-260821d, `docs/modal-gpu-reference.md`
 - Reproduce with: `tools/modal-bench/qwen38_27b_bench.py`,
   `tools/modal-bench/qwen38_27b_snapshot.py`,
-  `tools/modal-bench/modal_gpu_reference.py`. **30 raw result files in
+  `tools/modal-bench/modal_gpu_reference.py`. **31 raw result files in
   `docs/adr/data/`**, 8 of which are `could-not-measure` and kept deliberately.
 
 ## The question, and what it cost to answer
@@ -108,11 +108,11 @@ registered and OTP-verified 2026-08-21, free tier. Key in kagi as
 `hyperstack@mail.murakumo.cloud` and was read through Resend, so **the whole
 verification loop is agent-operable** for the Hyperstack signup too.
 
-**4 — one smaller gap remains.** Whether `A100-40GB` FP8 beats W4A16 on
-Ampere is unanswerable so far because the FP8 run landed on a different card.
-The other two small gaps are closed in ADR-260821c: Modal documents H100→H200
-auto-upgrades as billed at H100 rates, and 2c/16GiB loaded and ran the full
-H100+MTP plan with no material throughput loss.
+The three smaller gaps are closed in ADR-260821c and ADR-260821d: Modal
+documents H100→H200 auto-upgrades as billed at H100 rates; 2c/16GiB loaded and
+ran the full H100+MTP plan with no material throughput loss; and a physical
+A100-40GB showed W4A16 beating FP8 by 1.56x single-stream and 2.88x at
+concurrency 128.
 
 ## Resume point
 

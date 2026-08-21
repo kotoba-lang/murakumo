@@ -42,8 +42,9 @@ MEM_USD_PER_GIB_SEC = 0.00000222
 ALIAS_UPGRADES = {
     "H100": "may auto-upgrade to H200 at the H100 price; write 'H100!' to pin "
             "the hardware for benchmarking (Modal GPU guide, read 2026-08-21).",
-    "A100": "bare 'A100' may auto-upgrade to the 80GB part; "
-            "write 'A100-40GB' to pin it.",
+    "A100": "bare 'A100' may auto-upgrade to the 80GB part. 'A100-40GB' "
+            "requests the 40GB part, but one measured request still got 80GB; "
+            "inspect the reported device and VRAM before comparing results.",
     "B200": "'B200+' may auto-upgrade to B300 and is billed as B200 -- "
             "the one upgrade that is free, so prefer 'B200+' over 'B200'.",
 }
