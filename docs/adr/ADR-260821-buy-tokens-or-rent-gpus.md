@@ -1,6 +1,7 @@
 # ADR-260821: burst-billed options for Qwen3.8-27B, and the one we had not priced
 
-- Status: accepted
+- Status: superseded in its recommendation by the owner's decision below; the
+  measurements stand
 - Date: 2026-08-21
 - Depends: ADR-260820b, ADR-260820c, ADR-260820d
 
@@ -66,13 +67,20 @@ for one operator's agent traffic it costs one to two orders of magnitude more.
 
 ## Decision
 
-**For internal agent traffic, buy tokens. Do not rent a GPU for it.**
+**Self-host. Owner's decision, 2026-08-21, after the numbers below were put in
+front of them.** The token route is not taken.
 
-The prior ADRs are not wrong about which GPU or which vendor; they answered
-"how do we self-host this well" and the answer stands. They never asked whether
-to self-host, and at this volume the answer is no.
+This ADR originally recommended buying tokens on cost. That recommendation is
+withdrawn, not because the arithmetic changed — at 3–10M output tokens a month
+renting is still 48–161x the API bill — but because cost was never the only
+axis, and two of the three counterweights below are decisive on their own:
+prompts stay in the building, and self-hosted latency is ~2.8x the best hosted
+provider. **The break-even table stays because it is the honest price of the
+decision, not an argument against it.**
 
-## When self-hosting still wins — three real reasons, one of them decisive here
+The concrete build follows in "Self-hosting: what to run and where".
+
+## Why self-hosting was chosen anyway — the three counterweights
 
 - **Latency.** Best throughput observed across the hosted providers is **94
   tok/s**; we measured **264 tok/s** on H200 with MTP. Self-hosting is ~2.8x
@@ -89,6 +97,70 @@ to self-host, and at this volume the answer is no.
   competitors already charge.** Which of the two this is has not been stated,
   and it changes the answer completely. This ADR assumes internal use; **if
   that assumption is wrong, re-read the tables as cost of goods.**
+
+## Self-hosting: what to run and where
+
+**Model: `Qwen/Qwen3.8-27B-FP8`, dense, with MTP.** Not the 35B-A3B MoE,
+despite the MoE being 2.2x faster single-stream and 2.7x batched on identical
+hardware (ADR-260820d) — third-party benchmarks put the dense model ahead by
+**11.1 points on Terminal-Bench**, which is the agentic multi-step work this
+workspace runs, and a failed task wastes every token it spent.
+
+**Config, every value of it measured (ADR-260820b, ADR-260820):**
+
+```python
+LLM(model="Qwen/Qwen3.8-27B-FP8",
+    kv_cache_dtype="fp8",
+    max_model_len=65536,
+    max_num_seqs=256,
+    gpu_memory_utilization=0.92,
+    speculative_config={"method": "mtp", "num_speculative_tokens": 3})
+```
+
+- **MTP is not optional.** It is worth 2.8x single-stream — more than any GPU
+  upgrade in the catalogue.
+- **Never `enforce_eager=True` with MTP on.** Measured: it saves 25% of start
+  time and costs 6x on every token.
+- **Base image must carry nvcc** (CUDA devel). FlashInfer JIT-compiles at three
+  sites and the engine will not start without it.
+- **Set `max_num_seqs` explicitly.** Gated DeltaNet takes one recurrent state
+  block per decode sequence out of the KV pool; vLLM's default 256 exceeds what
+  a 48 GiB card holds and the engine refuses to start rather than degrading.
+- vLLM 0.27.1.
+
+**Where — resident, priced with measured throughput:**
+
+| vendor | $/hr | ¥/mo | ≤¥300k | dense $/Mtok batched |
+|---|---|---|---|---|
+| Hyperstack H100 reserved −30% | 1.75 | **202,484** | ✓ | $0.189* |
+| RunPod H100 PCIe Community | 1.99 | 230,253 | ✓ | $0.215* |
+| Hyperstack H100 spot | 2.00 | 231,410 | ✓ | $0.216* |
+| Hyperstack H100 (PCIe) | 2.50 | 289,262 | ✓ | $0.270* |
+| **RunPod H100 NVL 94GB Comm.** | 2.59 | **299,676** | ✓ | **$0.145*** |
+| RunPod H100 SXM Community | 2.69 | 311,246 | ✗ | $0.175 |
+| Modal H100 SXM (all-in) | 4.17 | 482,490 | ✗ | $0.271 |
+
+\* Only the SXM rows use measured throughput. **PCIe is scaled ×0.60 and NVL
+×1.16 from bandwidth (2.0 and 3.9 against the measured 3.35 TB/s) — estimates,
+and this series has never run a single benchmark on RunPod or Hyperstack
+hardware.**
+
+**Pick: RunPod H100 NVL 94GB at ¥299,676**, if the estimate holds — best
+cost per token of anything under the ceiling, and 94 GB holds both the dense
+model and the MoE at once (28 + 37.5 GB) if task routing is wanted later.
+**Hyperstack reserved at ¥202,484 is the cheapest**, at the cost of a
+commitment and a slower PCIe part.
+
+**The one experiment that closes this.** Rent one H100 PCIe and one H100 NVL
+for an hour each and run the same harness. Every ¥ figure in the top four rows
+rests on a bandwidth ratio, and the whole point of this ADR series is that
+bandwidth ratios over-predict by 20–45% and over-predict *worse* on faster
+cards (ADR-260820b). **Until that is done the cheap rows are arithmetic, not
+measurement.**
+
+**Do not put this on the Mac fleet.** Dense 27B reads ~9x the bytes per token
+of the ~3B-active MoE the head runs today; the nameplate is smaller and it will
+be roughly an order of magnitude slower (ADR-260820).
 
 ## Not measured
 
