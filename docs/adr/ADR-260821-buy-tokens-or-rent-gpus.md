@@ -1,7 +1,7 @@
 # ADR-260821: burst-billed options for Qwen3.8-27B, and the one we had not priced
 
 - Status: superseded in its recommendation by the owner's decision below; the
-  measurements stand
+  measurements stand. ADR-260821e/f supersede the PCIe/NVL estimates below.
 - Date: 2026-08-21
 - Depends: ADR-260820b, ADR-260820c, ADR-260820d
 
@@ -157,6 +157,12 @@ rests on a bandwidth ratio, and the whole point of this ADR series is that
 bandwidth ratios over-predict by 20–45% and over-predict *worse* on faster
 cards (ADR-260820b). **Until that is done the cheap rows are arithmetic, not
 measurement.**
+
+**Follow-up, completed 2026-08-21.** ADR-260821e measured Hyperstack H100 PCIe
+at $0.200/Mtok c128. ADR-260821f measured RunPod H100 NVL at $0.316/Mtok on
+the available $3.19 Secure offer, or $0.256/Mtok when price-normalised to the
+out-of-stock $2.59 Community offer. The old $0.145 NVL estimate did not hold;
+Hyperstack is the measured resident value pick.
 
 **Do not put this on the Mac fleet.** Dense 27B reads ~9x the bytes per token
 of the ~3B-active MoE the head runs today; the nameplate is smaller and it will

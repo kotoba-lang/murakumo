@@ -3,11 +3,12 @@
 - Status: accepted
 - Date: 2026-08-21
 - Index for: ADR-260820, ADR-260820b, ADR-260820c, ADR-260820d, ADR-260821,
-  ADR-260821c, ADR-260821d, ADR-260821e, `docs/modal-gpu-reference.md`
+  ADR-260821c, ADR-260821d, ADR-260821e, ADR-260821f,
+  `docs/modal-gpu-reference.md`
 - Reproduce with: `tools/modal-bench/qwen38_27b_bench.py`,
   `tools/modal-bench/qwen38_27b_snapshot.py`,
   `tools/modal-bench/modal_gpu_reference.py`,
-  `tools/hyperstack-bench/qwen38_27b_bench.py`. **32 raw result files in
+  `tools/hyperstack-bench/qwen38_27b_bench.py`. **33 raw result files in
   `docs/adr/data/`**, 8 of which are `could-not-measure` and kept deliberately.
 
 ## The question, and what it cost to answer
@@ -80,25 +81,31 @@ asserted confidently first.**
    and loading bill identically, so the break-even for staying warm is exactly
    one build time.
 
-## Open, in priority order
+## Vendor comparison, now measured
 
-**1 — Hyperstack is measured; RunPod remains the load-bearing gap.** A physical
-Hyperstack H100 PCIe completed the full 64k/MTP plan at 151.2 tok/s single and
-2,787.5 tok/s at concurrency 128 (ADR-260821e). It costs $0.200/Mtok at c128,
-7.4% better than the old estimate. The only remaining vendor row that could
-beat it under the ceiling is the bandwidth-scaled RunPod H100 NVL estimate.
+**1 — Hyperstack remains the resident value pick after measuring RunPod.** A
+physical RunPod H100 NVL completed the same full 64k/MTP plan at 215.9 tok/s
+single and 2,804.9 tok/s at concurrency 128 (ADR-260821f). It is 42.8% faster
+than Hyperstack single-stream but only 0.6% faster at c128. At the available
+$3.19/hour Secure rate it costs $0.316/Mtok at c128 against Hyperstack's
+$0.200. Repriced at the unavailable $2.59 Community rate it is still
+$0.256/Mtok. The bandwidth-scaled $0.145 estimate was wrong.
 
 | candidate | ¥/mo | status |
 |---|---|---|
-| Hyperstack H100 spot | 231,410 | **measured: $0.200/Mtok c128** |
+| Hyperstack H100 spot | 231,410 | **measured: $0.200/Mtok c128; pick** |
 | RunPod H100 PCIe Community | 230,253 | **estimate** |
-| RunPod H100 NVL 94GB Community | 299,676 | **estimate**, best est. $/token |
+| RunPod H100 NVL 94GB Community | 299,676 | measured throughput, price-normalised: $0.256/Mtok c128; out of stock |
+| RunPod H100 NVL 94GB Secure | 369,099 | **measured: $0.316/Mtok c128; over ceiling** |
 | RunPod H100 SXM Community | 311,246 | **measured throughput**, 3.7% over ceiling |
 
-**2 — Hyperstack account work is complete.** The owner registered and funded
+**2 — Vendor account work is complete.** The owner registered and funded
 the account. One H100 spot VM was provisioned, measured, and destroyed for
 $0.66890681 total; its temporary SSH keypair was also deleted. The API key must
-still be rotated because it was passed through the task conversation.
+still be rotated because it was passed through the task conversation. One
+RunPod Secure H100 NVL was provisioned, measured, and terminated for about
+$0.5688; the subsequent Pod list was empty and current spend was $0/hour. Its
+API key must also be rotated.
 
 The three smaller gaps are closed in ADR-260821c and ADR-260821d: Modal
 documents H100→H200 auto-upgrades as billed at H100 rates; 2c/16GiB loaded and
@@ -109,11 +116,10 @@ concurrency 128.
 ## Resume point
 
 ```bash
-# Hyperstack is done; rotate the API key used for ADR-260821e.
-# To close the final vendor estimate, fund RunPod and run the same harness on:
-#   1. H100 NVL 94GB Community (decision-changing candidate)
-#   2. H100 PCIe Community only if NVL cannot be rented
-# Always copy the result first, then destroy the instance and its temporary key.
+# The vendor comparison is complete. Rotate the Hyperstack and RunPod API keys.
+# If revisiting it, only a materially cheaper RunPod Community NVL offer or a
+# repeated NVL run with NVCC >=12.9 could add evidence; neither can overturn
+# the measured c128 cost gap at current rates.
 ```
 
 ## Standing caveats
