@@ -50,7 +50,20 @@ dollar.** The GDDR cards, including the 96 GB RTX PRO 6000, sit at the bottom.
 - **`gpu="H100"` may hand you an H200.** `H100!` pins it. **Whether billing
   follows the upgrade is not documented and we have not verified it.** In three
   runs we always received `NVIDIA H100 80GB HBM3`.
-- **`gpu="A100"` may hand you the 80 GB part.** `A100-40GB` pins it.
+- **`gpu="A100"` may hand you the 80 GB part — and so may `gpu="A100-40GB"`.**
+  The docs say the suffix pins the variant. **Measured, it does not.** Three
+  requests returned three different physical cards:
+
+  | requested | `torch.cuda.get_device_name(0)` | observed VRAM |
+  |---|---|---|
+  | `A100-40GB` | `NVIDIA A100-SXM4-40GB` | 39.49 GiB |
+  | `A100-40GB` | **`NVIDIA A100-SXM4-80GB`** | 79.25 GiB |
+  | `A100-80GB` | **`NVIDIA A100 80GB PCIe`** | 79.25 GiB |
+
+  Three cards with three bandwidths — 1,555 / 2,039 / 1,935 GB/s — behind two
+  strings. **Whether the upgrade is billed at the 40GB rate is unverified.**
+  Anything benchmarked as "A100" on Modal must record the device string, or it
+  is not reproducible.
 - **`gpu="B200+"` may hand you a B300 and bills as B200.** The only free one —
   prefer `B200+` over `B200`.
 
@@ -123,6 +136,49 @@ topping out near 1,000–1,400 tok/s against an H100's 4,280. Per token they lan
 at $0.627–0.791 against H100's $0.297 and H200's $0.231 — **2–3x worse than
 cards that cost 1.6–1.8x more per hour.**
 
+## A100 40GB against H100, at identical settings
+
+The two are only comparable when the quantisation, context and `max_num_seqs`
+match, so the missing cell was measured rather than inferred:
+**W4A16 + MTP, 16k, `max_num_seqs=128`**, `A100-SXM4-40GB` against `H100 SXM`.
+
+| | A100 40GB | H100 | H100 faster | A100 $/Mtok | H100 $/Mtok | H100 cheaper |
+|---|---|---|---|---|---|---|
+| single stream | 108.1 | 234.4 | 2.17x | $5.96 | $4.94 | 1.21x |
+| concurrency 8 | 507.5 | 1,181.6 | 2.33x | $1.27 | $0.98 | 1.30x |
+| concurrency 32 | 959.1 | 3,370.8 | 3.51x | $0.67 | $0.34 | 1.96x |
+| concurrency 64 | 865.9 | **3,930.7** | **4.54x** | $0.74 | **$0.29** | **2.53x** |
+| concurrency 128 | 943.7 | 3,690.7 | 3.91x | $0.68 | $0.31 | 2.18x |
+| 4k prompt | 68.7 | 175.0 | 2.55x | $9.38 | $6.62 | 1.42x |
+
+| | A100 40GB | H100 |
+|---|---|---|
+| resident 730h | $1,694/mo · **¥268,550** | $3,045/mo · **¥482,651** |
+| best-batched capacity | 2.52 Btok/mo | **10.33 Btok/mo** |
+| tokens per ¥ | 9,386 | **21,402** |
+
+**H100 costs 1.80x and returns 2.17x single-stream and 3.9–4.5x batched, so it
+is cheaper per token in every regime measured** — by 1.2x at concurrency 1 and
+**2.5x at 64**.
+
+The shape of the gap says why. Single-stream is 2.17x against a bandwidth ratio
+of 2.15x: **at concurrency 1 the A100 is exactly as far behind as its memory
+bandwidth predicts, and nothing else matters.** Batched it falls to 3.9–4.5x,
+well past the bandwidth ratio, because Ampere has no FP8 tensor cores — under
+load the A100 is compute-bound where the H100 is not, and that penalty is on
+top of the bandwidth one.
+
+**But only the A100 fits ¥300,000 resident on Modal** (¥268,550 against
+¥482,651). If that ceiling is real, the A100 is the top of what Modal will
+host, and the 2.5x-per-token premium is the price of the ceiling.
+
+**Except it is not, because RunPod's H100 PCIe is ¥230,253/mo — cheaper than
+Modal's A100 40GB — and it is an H100.** That single line is the strongest
+argument in this document for not serving resident on Modal. ⚠ RunPod's PCIe
+part is ~2 TB/s against the SXM 3.35 TB/s measured here, so expect roughly 60%
+of these H100 numbers; **not measured**, and RunPod has never been measured in
+this series at all.
+
 ### FP4 does not rescue the 24 GB cards — it makes it worse
 
 Asked directly, and measured: `sakamakismile/Qwen3.8-27B-MTP-NVFP4`, MTP on,
@@ -146,6 +202,12 @@ embeddings 248,320 × 5,120 at BF16 ≈ 2.5 GB, `lm_head` another ≈ 2.5 GB, MT
 head plus vision tower ≈ 2.5 GB — **≈ 21.4 GB, against the 21.11 GiB
 observed.** A 248k vocabulary and a vision tower cost about 7 GiB that no
 weight-quantisation scheme in a public checkpoint touches.
+
+⚠ The A100 FP8 run (89.2 tok/s single, 1,234 at c128) is **not** a like-for-like
+against the W4A16 row above: it requested `A100-40GB` and received an
+`A100-SXM4-80GB`. Three A100 runs, three different cards — the FP8-versus-W4A16
+question on Ampere remains **unanswered**, and pretending otherwise would be
+comparing quantisations across silicon.
 
 ⚠ **vLLM did not reject NVFP4 on Ada or Ampere** — it accepted the checkpoint
 and died on memory during profiling. So this measurement says nothing about
