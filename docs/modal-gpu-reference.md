@@ -123,7 +123,47 @@ topping out near 1,000–1,400 tok/s against an H100's 4,280. Per token they lan
 at $0.627–0.791 against H100's $0.297 and H200's $0.231 — **2–3x worse than
 cards that cost 1.6–1.8x more per hour.**
 
-⚠ Two things not to over-read. The A100 figures are **W4A16**, while the
+### FP4 does not rescue the 24 GB cards — it makes it worse
+
+Asked directly, and measured: `sakamakismile/Qwen3.8-27B-MTP-NVFP4`, MTP on,
+8k context, `max_num_seqs=16`.
+
+| `gpu=` | W4A16 in use | NVFP4 in use | headroom left |
+|---|---|---|---|
+| `L4` | 21.11 GiB | **21.92 GiB** | 105 MiB |
+| `A10` | 21.11 GiB | **21.97 GiB** | 79 MiB |
+
+**NVFP4 used *more* memory than W4A16, not less**, and both OOM. Two reasons,
+and the second is the one that generalises:
+
+1. The NVFP4 checkpoint is **20.6 GB on disk against W4A16's 19.5 GB.**
+2. It keeps **MTP draft head, vision tower, `lm_head`, and DeltaNet `conv1d`
+   in BF16** — the same modules W4A16 preserves. Both formats put the 27.78B
+   transformer body at 4 bits, so **the body was never what did not fit.**
+
+The arithmetic that explains all of it: body 27.78B at 4 bits ≈ 13.9 GB,
+embeddings 248,320 × 5,120 at BF16 ≈ 2.5 GB, `lm_head` another ≈ 2.5 GB, MTP
+head plus vision tower ≈ 2.5 GB — **≈ 21.4 GB, against the 21.11 GiB
+observed.** A 248k vocabulary and a vision tower cost about 7 GiB that no
+weight-quantisation scheme in a public checkpoint touches.
+
+⚠ **vLLM did not reject NVFP4 on Ada or Ampere** — it accepted the checkpoint
+and died on memory during profiling. So this measurement says nothing about
+whether the FP4 *kernels* would have worked on sm_86/sm_89; we never reached a
+dispatch. NVFP4 is documented as Blackwell (SM100/SM120), but that is not what
+we observed failing.
+
+**It is known to be possible with patches.** `syv-ai/qwen38-27b-rtx3090` runs
+this model on a 24 GB RTX 3090 — the same ~22 GiB class, and Ampere like the
+A10 — at 114 tok/s with 150k context, using **calibrated int4 `lm_head`** and
+an own-output draft vocab: quantising exactly the modules public checkpoints
+preserve. That is a patched vLLM, not a checkpoint you can point `--model` at.
+
+**And it would not be worth it.** Scaling that 3090 result by bandwidth, an L4
+would reach ~36.5 tok/s and an A10 ~73 — **$7.76 and $5.03 per Mtok**, against
+a measured $0.672 for an A100 40GB at concurrency 32 and **$0.271 for an H100
+at 128**. The cheap cards are not a cheaper way to run this model; they are a
+more expensive one that also does not start. The A100 figures are **W4A16**, while the
 H100/H200/L40S figures elsewhere are **FP8** — different quantisation, so the
 quality is not the same and only the throughput is comparable. And the
 **A100 40GB measured *faster* single-stream than the A100 80GB** (108.1 vs
