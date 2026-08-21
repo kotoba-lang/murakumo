@@ -4,12 +4,14 @@
 - Date: 2026-08-21
 - Index for: ADR-260820, ADR-260820b, ADR-260820c, ADR-260820d, ADR-260821,
   ADR-260821c, ADR-260821d, ADR-260821e, ADR-260821f,
+  ADR-260822,
   `docs/modal-gpu-reference.md`
 - Reproduce with: `tools/modal-bench/qwen38_27b_bench.py`,
   `tools/modal-bench/qwen38_27b_snapshot.py`,
   `tools/modal-bench/modal_gpu_reference.py`,
-  `tools/hyperstack-bench/qwen38_27b_bench.py`. **33 raw result files in
-  `docs/adr/data/`**, 8 of which are `could-not-measure` and kept deliberately.
+  `tools/hyperstack-bench/qwen38_27b_bench.py`,
+  `tools/runpod-serverless-bench/`. **35 raw result files in
+  `docs/adr/data/`**, 9 of which are `could-not-measure` and kept deliberately.
 
 ## The question, and what it cost to answer
 
@@ -30,6 +32,10 @@ $40 of Modal compute over two days, all inside free credits.**
    elsewhere** (ADR-260820c, ADR-260820d).
 4. **Not on the Mac fleet.** Dense 27B reads ~9x the bytes per token of the
    ~3B-active MoE the head runs today (ADR-260820).
+5. **For bursty dense-27B work, use Modal rather than generic RunPod
+   Serverless Flex.** Their active H100 rates are effectively equal, but Modal
+   completed the full plan while the RunPod handler was still not ready at the
+   deliberate 25-minute limit (ADR-260822).
 
 ## Measured (all Modal, vLLM 0.27.1, FP8 unless noted)
 
@@ -113,13 +119,20 @@ ran the full H100+MTP plan with no material throughput loss; and a physical
 A100-40GB showed W4A16 beating FP8 by 1.56x single-stream and 2.88x at
 concurrency 128.
 
+ADR-260822 tested the remaining burst-provider question directly. A fresh
+right-sized Modal H100 run completed at 212.7 tok/s single and 4,204.6 tok/s at
+c128 after a 374.6-second load. RunPod Serverless Flex allocated a healthy H100
+worker, but its custom-image queue handler never became ready inside 1,500
+seconds and spent $1.7611 without generating a token. This negative result is
+kept; RunPod's proprietary cached-model path remains unmeasured.
+
 ## Resume point
 
 ```bash
 # The vendor comparison is complete. Rotate the Hyperstack and RunPod API keys.
-# If revisiting it, only a materially cheaper RunPod Community NVL offer or a
-# repeated NVL run with NVCC >=12.9 could add evidence; neither can overturn
-# the measured c128 cost gap at current rates.
+# If revisiting resident serving, only a materially cheaper RunPod Community
+# NVL offer or an NVL run with NVCC >=12.9 adds evidence. If revisiting burst,
+# test RunPod's console-configured cached-model mount; generic Flex is closed.
 ```
 
 ## Standing caveats

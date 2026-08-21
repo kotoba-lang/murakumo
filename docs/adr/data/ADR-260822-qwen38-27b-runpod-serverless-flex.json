@@ -1,0 +1,85 @@
+{
+  "status": "could-not-measure",
+  "provider": "RunPod Serverless Flex",
+  "date": "2026-08-22",
+  "model": "Qwen/Qwen3.8-27B-FP8",
+  "model_revision": "017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+  "image": "ghcr.io/kotoba-lang/murakumo-qwen38-runpod-serverless:260821g-v1",
+  "vllm": "0.27.1",
+  "runpod_sdk": "1.12.0",
+  "requested_gpu": "NVIDIA H100 80GB HBM3",
+  "requested_cuda_versions": [
+    "13.0",
+    "12.9",
+    "12.8"
+  ],
+  "mtp": true,
+  "max_model_len": 65536,
+  "max_num_seqs": 128,
+  "kv_cache_dtype": "fp8",
+  "workers_min": 0,
+  "workers_max": 1,
+  "idle_timeout_seconds": 30,
+  "scaler": {
+    "type": "REQUEST_COUNT",
+    "value": 1
+  },
+  "price": {
+    "usd_per_second_flex": 0.00116,
+    "usd_per_hour_equivalent": 4.176
+  },
+  "attempts": [
+    {
+      "scope": "US-TX-3",
+      "network_volume_gb": 50,
+      "result": "could-not-measure",
+      "reason": "The request remained queued for more than two minutes and the endpoint reported zero initializing, ready, or running workers. It was cancelled before execution and before GPU billing began."
+    },
+    {
+      "scope": "all RunPod Serverless regions",
+      "network_volume_gb": 0,
+      "result": "could-not-measure",
+      "reason": "A worker was allocated and remained running and healthy, but the queue handler did not become ready before the 1500-second wall limit. The job remained IN_QUEUE with no delayTime or executionTime and was cancelled deliberately to cap spend.",
+      "wall_limit_seconds": 1500,
+      "status_before_cancel": "IN_QUEUE",
+      "health_before_cancel": {
+        "jobs": {
+          "completed": 0,
+          "failed": 0,
+          "inProgress": 0,
+          "inQueue": 1,
+          "retried": 0
+        },
+        "workers": {
+          "idle": 0,
+          "initializing": 0,
+          "ready": 0,
+          "running": 1,
+          "throttled": 0,
+          "unhealthy": 0
+        }
+      }
+    }
+  ],
+  "billing": {
+    "balance_before_usd": 9.3343901559,
+    "balance_after_cleanup_usd": 7.5733225541,
+    "observed_spend_usd": 1.7610676018,
+    "current_spend_per_hour_after_cleanup_usd": 0
+  },
+  "cleanup": {
+    "queued_jobs_cancelled": true,
+    "endpoints_remaining": 0,
+    "temporary_template_deleted": true,
+    "temporary_network_volume_deleted": true,
+    "temporary_registry_auth_deleted": true
+  },
+  "not_measured": [
+    "physical GPU identity",
+    "vLLM engine load time",
+    "output throughput",
+    "warm-request latency",
+    "cold start from RunPod's proprietary cached-model mount"
+  ],
+  "credential_note": "No API key or registry credential is present in this file or Git history. The RunPod API key must still be rotated because it passed through the task conversation."
+}
