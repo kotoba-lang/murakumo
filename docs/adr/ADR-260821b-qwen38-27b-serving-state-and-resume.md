@@ -3,10 +3,11 @@
 - Status: accepted
 - Date: 2026-08-21
 - Index for: ADR-260820, ADR-260820b, ADR-260820c, ADR-260820d, ADR-260821,
-  ADR-260821c, ADR-260821d, `docs/modal-gpu-reference.md`
+  ADR-260821c, ADR-260821d, ADR-260821e, `docs/modal-gpu-reference.md`
 - Reproduce with: `tools/modal-bench/qwen38_27b_bench.py`,
   `tools/modal-bench/qwen38_27b_snapshot.py`,
-  `tools/modal-bench/modal_gpu_reference.py`. **31 raw result files in
+  `tools/modal-bench/modal_gpu_reference.py`,
+  `tools/hyperstack-bench/qwen38_27b_bench.py`. **32 raw result files in
   `docs/adr/data/`**, 8 of which are `could-not-measure` and kept deliberately.
 
 ## The question, and what it cost to answer
@@ -81,32 +82,23 @@ asserted confidently first.**
 
 ## Open, in priority order
 
-**1 — the load-bearing gap. Nothing has ever been measured on RunPod or
-Hyperstack hardware.** Every ¥ figure for them is a Modal measurement
-re-priced, and the cheapest options are **PCIe** parts scaled ×0.60 from
-bandwidth — by the very method item 3 above says over-predicts. Two rented
-hours close it.
+**1 — Hyperstack is measured; RunPod remains the load-bearing gap.** A physical
+Hyperstack H100 PCIe completed the full 64k/MTP plan at 151.2 tok/s single and
+2,787.5 tok/s at concurrency 128 (ADR-260821e). It costs $0.200/Mtok at c128,
+7.4% better than the old estimate. The only remaining vendor row that could
+beat it under the ceiling is the bandwidth-scaled RunPod H100 NVL estimate.
 
 | candidate | ¥/mo | status |
 |---|---|---|
-| Hyperstack H100 spot | 231,410 | **estimate** |
+| Hyperstack H100 spot | 231,410 | **measured: $0.200/Mtok c128** |
 | RunPod H100 PCIe Community | 230,253 | **estimate** |
 | RunPod H100 NVL 94GB Community | 299,676 | **estimate**, best est. $/token |
 | RunPod H100 SXM Community | 311,246 | **measured throughput**, 3.7% over ceiling |
 
-**2 — blocked on the owner, 2 steps.** Hyperstack signup and card. The safety
-floor forbids the agent entering passwords or card details, and permits
-purchases only against a payment method already on file; a new account has
-none. **This is a rule, not a judgement call, and the standing authorisation in
-CLAUDE.md explicitly does not override it.** Modal is currently the only GPU
-vendor with a payment method on file — `runpod`, `hyperstack` and `agentmail`
-were all absent from kagi and env when checked.
-
-**3 — asset ready for that signup.** `murakumo-gpu-bench@agentmail.to`,
-registered and OTP-verified 2026-08-21, free tier. Key in kagi as
-`AGENTMAIL_API_KEY` (compartment `personal`). Its OTP arrived at
-`hyperstack@mail.murakumo.cloud` and was read through Resend, so **the whole
-verification loop is agent-operable** for the Hyperstack signup too.
+**2 — Hyperstack account work is complete.** The owner registered and funded
+the account. One H100 spot VM was provisioned, measured, and destroyed for
+$0.66890681 total; its temporary SSH keypair was also deleted. The API key must
+still be rotated because it was passed through the task conversation.
 
 The three smaller gaps are closed in ADR-260821c and ADR-260821d: Modal
 documents H100→H200 auto-upgrades as billed at H100 rates; 2c/16GiB loaded and
@@ -117,12 +109,11 @@ concurrency 128.
 ## Resume point
 
 ```bash
-# after the owner has added a card to Hyperstack:
-#   1. poll murakumo-gpu-bench@agentmail.to for the verification mail
-#   2. issue an API key, store it in kagi as HYPERSTACK_API_KEY
-#   3. provision a spot H100 PCIe, port the harness off Modal, run it, DESTROY IT
-# if the card is not coming, the decision that needs no further measurement is:
-#   RunPod H100 SXM Community, ¥311,246/mo, 3.7% over the ceiling, no estimates
+# Hyperstack is done; rotate the API key used for ADR-260821e.
+# To close the final vendor estimate, fund RunPod and run the same harness on:
+#   1. H100 NVL 94GB Community (decision-changing candidate)
+#   2. H100 PCIe Community only if NVL cannot be rented
+# Always copy the result first, then destroy the instance and its temporary key.
 ```
 
 ## Standing caveats
@@ -133,7 +124,8 @@ concurrency 128.
 - **Batched figures are n=1 and vary ±40% at concurrency 8–64** on shared
   hardware (single-stream is ±2%). Differences under ~30% there are not
   resolvable from this data.
-- **Every price except Modal's and RunPod's is a published rate we read, not
-  one we were billed.**
+- **Hyperstack's $2.00672043/hour and $0.66890681 run total were returned by
+  its billing API.** Other non-Modal/non-RunPod prices remain published rates,
+  not bills.
 - **Concurrency-128 numbers are ceilings, not forecasts** — offline batches
   with every request present at t=0.
