@@ -14,9 +14,9 @@ workload, and costs less per generated token than Modal despite lower
 throughput. Use it when the priority is the lowest resident price. Keep Modal
 for burst because Hyperstack does not scale to zero.
 
-This removes the load-bearing H100 PCIe estimate. RunPod H100 NVL remains an
-estimate and is now the only vendor measurement that could still change the
-resident vendor choice.
+This removes the load-bearing H100 PCIe estimate. ADR-260821f subsequently
+measured RunPod H100 NVL and confirmed that it does not change the resident
+vendor choice.
 
 ## Measured hardware and configuration
 
@@ -90,14 +90,13 @@ The successful 446.4-second load reused the checkpoint downloaded by the first
 attempt, but rebuilt the CUDA 12.9 graphs and DeepGEMM warmup. It is comparable
 to the volume-backed Modal load, not a bare-machine provisioning time.
 
-## Cleanup and remaining gap
+## Cleanup and follow-up
 
 VM 996718 was deleted immediately after the result was copied; a subsequent
 VM list returned no instance. The temporary Hyperstack SSH keypair and local
 private/public key files were also deleted. No credential appears in this ADR,
 the harness, the result JSON, or Git history.
 
-RunPod H100 PCIe/NVL remains unmeasured. The NVL estimate is the only open row
-claiming better cost per token than this measured Hyperstack result under the
-¥300k ceiling, so one RunPod NVL run is the next experiment if that account is
-made available.
+ADR-260821f closes the remaining RunPod gap. H100 NVL reached 2,804.9 tok/s at
+c128, effectively tied with this PCIe result, and cost $0.316/Mtok at its
+available Secure rate. Hyperstack remains the resident value pick.

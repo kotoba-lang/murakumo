@@ -4,6 +4,10 @@
 - Date: 2026-08-20
 - Depends: ADR-260820b (Modal configuration), ADR-260820c (the $300 ceiling plan)
 
+Follow-up: ADR-260821e/f measured the previously proxied Hyperstack PCIe and
+RunPod NVL cards. Hyperstack remains the resident value pick; RunPod NVL does
+not deliver the bandwidth-scaled batched throughput assumed below.
+
 ## Context
 
 The ceiling moved: up to **¥300,000/month** (about **$1,893** at ¥158.5/USD),
