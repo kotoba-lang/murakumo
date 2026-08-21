@@ -1,8 +1,8 @@
 (ns murakumo.cd.capability
   "Short-lived, environment- and artifact-scoped deployment capabilities."
-  (:require [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
-            [kotoba-rad.sigref :as sigref]
+  (:require [bonsai.object :as object]
+            [bonsai.repo :as repo]
+            [nekko.sigref :as sigref]
             [murakumo.canonical :as canonical]))
 
 (defn document-cid [document]

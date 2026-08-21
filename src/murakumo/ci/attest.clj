@@ -1,10 +1,10 @@
 (ns murakumo.ci.attest
-  "Persist execution receipts in kotoba-git and sign runner-independent verdicts
-   with kotoba-rad sigrefs."
-  (:require [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
-            [kotoba-git.refs :as refs]
-            [kotoba-rad.sigref :as sigref]
+  "Persist execution receipts in bonsai and sign runner-independent verdicts
+   with nekko sigrefs."
+  (:require [bonsai.object :as object]
+            [bonsai.repo :as repo]
+            [bonsai.refs :as refs]
+            [nekko.sigref :as sigref]
             [murakumo.canonical :as canonical]))
 
 (def terminal-results #{:passed :failed :timed-out :cancelled})
@@ -77,7 +77,7 @@
        :sigref sr})))
 
 (defn canonical-verdict
-  "Threshold result over valid kotoba-rad sigrefs. Duplicate votes by one DID
+  "Threshold result over valid nekko sigrefs. Duplicate votes by one DID
    count once. Split quorum is rejected explicitly."
   [{:keys [rid run-id delegates threshold]} sigrefs]
   (when-not (and (pos-int? threshold) (<= threshold (count delegates)))

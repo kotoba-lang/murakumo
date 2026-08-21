@@ -1,7 +1,7 @@
 (ns murakumo.artifact-store-test
   (:require [clojure.test :refer [deftest is]]
-            [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
+            [bonsai.object :as object]
+            [bonsai.repo :as repo]
             [murakumo.artifact-store :as store]))
 
 (deftest verified-filesystem-cas-roundtrip

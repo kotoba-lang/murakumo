@@ -1,7 +1,7 @@
 (ns murakumo.cd-kotoba-ops-test
   (:require [clojure.test :refer [deftest is]]
-            [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
+            [bonsai.object :as object]
+            [bonsai.repo :as repo]
             [murakumo.canonical :as canonical]
             [murakumo.cd.bundle :as bundle]
             [murakumo.cd.kotoba-ops :as kotoba-ops]

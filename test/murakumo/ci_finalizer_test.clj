@@ -1,7 +1,7 @@
 (ns murakumo.ci-finalizer-test
   (:require [clojure.test :refer [deftest is]]
             [ed25519.core :as ed]
-            [kotoba-rad.sigref :as sigref]
+            [nekko.sigref :as sigref]
             [murakumo.ci.attest :as attest]
             [murakumo.ci.finalizer :as finalizer]
             [murakumo.ci.store :as store]))

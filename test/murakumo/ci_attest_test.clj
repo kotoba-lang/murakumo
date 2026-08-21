@@ -1,9 +1,9 @@
 (ns murakumo.ci-attest-test
   (:require [clojure.test :refer [deftest is]]
             [ed25519.core :as ed]
-            [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
-            [kotoba-git.refs :as refs]
+            [bonsai.object :as object]
+            [bonsai.repo :as repo]
+            [bonsai.refs :as refs]
             [murakumo.ci.attest :as attest]))
 
 (def seeds [(byte-array (repeat 32 (byte 1)))
@@ -39,7 +39,7 @@
                          (attest/receipt-ref "run-1" (nth dids 1)))))
     (let [store (atom {})
           snap (repo/persist! #(swap! store assoc %1 %2) (:db b) nil)
-          restored (repo/load #(get @store %) snap)]
+          restored (repo/restore #(get @store %) snap)]
       (is (= (:tree (object/read-commit (:db b) (:receipt-commit-cid b)))
              (:tree (object/read-commit restored (:receipt-commit-cid b))))))))
 

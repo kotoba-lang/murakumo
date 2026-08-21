@@ -1,7 +1,7 @@
 (ns murakumo.cd-release-test
   (:require [clojure.test :refer [deftest is]]
             [ed25519.core :as ed]
-            [kotoba-rad.sigref :as sigref]
+            [nekko.sigref :as sigref]
             [murakumo.cd.capability :as capability]
             [murakumo.cd.release :as release]
             [murakumo.ci.attest :as attest]))

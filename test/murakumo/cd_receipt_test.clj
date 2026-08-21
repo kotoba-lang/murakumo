@@ -1,9 +1,9 @@
 (ns murakumo.cd-receipt-test
   (:require [clojure.test :refer [deftest is]]
             [ed25519.core :as ed]
-            [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
-            [kotoba-git.refs :as refs]
+            [bonsai.object :as object]
+            [bonsai.repo :as repo]
+            [bonsai.refs :as refs]
             [murakumo.cd.receipt :as receipt]))
 
 (def seed (byte-array (repeat 32 (byte 6))))
@@ -23,7 +23,7 @@
            (refs/get-ref (:db a) "rid-ci" "refs/cd/deployments/capability")))
     (let [store (atom {})
           snapshot (repo/persist! #(swap! store assoc %1 %2) (:db a) nil)
-          restored (repo/load #(get @store %) snapshot)]
+          restored (repo/restore #(get @store %) snapshot)]
       (is (= (:tree (object/read-commit (:db a) (:receipt-commit-cid a)))
              (:tree (object/read-commit restored (:receipt-commit-cid a))))))
     (is (not (receipt/valid? {:rid "rid-ci" :executors #{"did:key:other"}} a)))))

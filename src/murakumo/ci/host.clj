@@ -1,8 +1,8 @@
 (ns murakumo.ci.host
   "JVM host adapter for executing a prepared sandbox plan without a shell."
   (:require [clojure.java.io :as io]
-            [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
+            [bonsai.object :as object]
+            [bonsai.repo :as repo]
             [murakumo.identity :as identity])
   (:import [java.nio.file Files LinkOption]
            [java.util.concurrent TimeUnit]))

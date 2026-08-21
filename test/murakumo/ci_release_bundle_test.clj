@@ -1,7 +1,7 @@
 (ns murakumo.ci-release-bundle-test
   (:require [clojure.test :refer [deftest is]]
-            [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
+            [bonsai.object :as object]
+            [bonsai.repo :as repo]
             [murakumo.cd.bundle :as bundle]
             [murakumo.ci.attest :as attest]
             [murakumo.ci.release-bundle :as release-bundle]))

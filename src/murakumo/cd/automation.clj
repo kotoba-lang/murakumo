@@ -11,7 +11,7 @@
             [murakumo.cd.release :as release]
             [murakumo.cd.rollout :as rollout]
             [murakumo.identity :as identity]
-            [kotoba-git.repo :as repo]))
+            [bonsai.repo :as repo]))
 
 (def state-bucket "murakumo-cd-environments")
 

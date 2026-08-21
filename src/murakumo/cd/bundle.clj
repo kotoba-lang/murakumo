@@ -3,8 +3,8 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
+            [bonsai.object :as object]
+            [bonsai.repo :as repo]
             [murakumo.canonical :as canonical])
   (:import [java.nio.charset StandardCharsets]
            [java.nio.file Files LinkOption StandardCopyOption]))

@@ -1,7 +1,7 @@
 (ns murakumo.ci-broker-service-test
   (:require [clojure.test :refer [deftest is]]
             [ed25519.core :as ed]
-            [kotoba-rad.sigref :as sigref]
+            [nekko.sigref :as sigref]
             [murakumo.ci.attest :as attest]
             [murakumo.ci.broker-service :as service]
             [murakumo.ci.file-store :as file-store]

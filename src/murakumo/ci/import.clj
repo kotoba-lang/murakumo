@@ -1,8 +1,8 @@
 (ns murakumo.ci.import
-  "Deterministic filesystem import into the kotoba-git CID object model."
+  "Deterministic filesystem import into the bonsai CID object model."
   (:require [clojure.java.io :as io]
-            [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo])
+            [bonsai.object :as object]
+            [bonsai.repo :as repo])
   (:import [java.nio.file Files LinkOption Path]))
 
 (defn- symlink? [file]
@@ -36,7 +36,7 @@
 
 (defn import-worktree
   "Import regular files and non-empty directories, excluding `.git` and all
-   symlinks. Returns the live kotoba-git db plus deterministic tree/commit CIDs.
+   symlinks. Returns the live bonsai db plus deterministic tree/commit CIDs.
    The wrapper commit uses ts=0; the source Git revision remains explicit in
    author/message instead of importing ambient filesystem timestamps."
   [root git-revision]

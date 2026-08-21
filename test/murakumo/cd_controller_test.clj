@@ -1,8 +1,8 @@
 (ns murakumo.cd-controller-test
   (:require [clojure.test :refer [deftest is]]
             [ed25519.core :as ed]
-            [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
+            [bonsai.object :as object]
+            [bonsai.repo :as repo]
             [murakumo.artifact-store :as artifact-store]
             [murakumo.canonical :as canonical]
             [murakumo.cd.bundle :as bundle]

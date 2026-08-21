@@ -5,7 +5,7 @@
             [murakumo.ci.artifact-upload :as artifact-upload]
             [murakumo.ci.protocol :as protocol]
             [murakumo.ci.store :as store]
-            [kotoba-rad.sigref :as sigref])
+            [nekko.sigref :as sigref])
   (:import [java.security SecureRandom]))
 
 (def default-lease-ttl-ms 60000)

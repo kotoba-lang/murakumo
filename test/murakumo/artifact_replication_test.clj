@@ -1,8 +1,8 @@
 (ns murakumo.artifact-replication-test
   (:require [clojure.test :refer [deftest is testing]]
             [ed25519.core :as ed]
-            [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
+            [bonsai.object :as object]
+            [bonsai.repo :as repo]
             [murakumo.artifact-protocol :as protocol]
             [murakumo.artifact-remote :as remote]
             [murakumo.artifact-replication :as replication]

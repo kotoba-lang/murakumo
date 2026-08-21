@@ -2,8 +2,8 @@
   "Host-side construction of deployable bundles from verified CI artifacts."
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
-            [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
+            [bonsai.object :as object]
+            [bonsai.repo :as repo]
             [murakumo.canonical :as canonical]
             [murakumo.cd.bundle :as bundle]
             [murakumo.ci.attest :as attest]))

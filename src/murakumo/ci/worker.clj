@@ -2,7 +2,7 @@
   "One remote runner's lease-to-signed-completion execution path."
   (:require [clojure.java.io :as io]
             [ed25519.core :as ed]
-            [kotoba-git.repo :as repo]
+            [bonsai.repo :as repo]
             [murakumo.artifact-store :as artifact-store]
             [murakumo.canonical :as canonical]
             [murakumo.ci.attest :as attest]

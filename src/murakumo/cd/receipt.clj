@@ -1,8 +1,8 @@
 (ns murakumo.cd.receipt
   "Persist and sign terminal rollout receipts."
-  (:require [kotoba-git.object :as object]
-            [kotoba-git.refs :as refs]
-            [kotoba-rad.sigref :as sigref]
+  (:require [bonsai.object :as object]
+            [bonsai.refs :as refs]
+            [nekko.sigref :as sigref]
             [murakumo.canonical :as canonical]))
 
 (defn attest

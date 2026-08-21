@@ -1,8 +1,8 @@
 (ns murakumo.ci-pipeline-import-test
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is]]
-            [kotoba-git.object :as object]
-            [kotoba-git.repo :as repo]
+            [bonsai.object :as object]
+            [bonsai.repo :as repo]
             [murakumo.ci.import :as import]
             [murakumo.ci.pipeline :as pipeline]))
 
@@ -42,7 +42,7 @@
           ib (import/import-worktree b revision)
           store (atom {})
           snapshot (repo/persist! #(swap! store assoc %1 %2) (:db ia) nil)
-          restored (repo/load #(get @store %) snapshot)]
+          restored (repo/restore #(get @store %) snapshot)]
       (is (= (:tree-cid ia) (:tree-cid ib)))
       (is (= (:commit-cid ia) (:commit-cid ib)))
       (is (= (:tree-cid ia) (:tree (object/read-commit restored (:commit-cid ia)))))
