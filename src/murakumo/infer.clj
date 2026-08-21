@@ -788,6 +788,7 @@
               :port (:infer/api-port cfg 8080)
               :ctx (:infer/ctx cfg 4096)
               :parallel (:infer/parallel cfg 1)
+              :api-key-file (:infer/api-key-file cfg)
               :extra-args (:model/llama-extra-args model)}
         cmd (engine/head-cmd pl opts)]
     (println cmd)
@@ -926,7 +927,9 @@
                  (when mmproj-path (str " --mmproj " mmproj-path))
                  " -ngl 999 -c " ctx " --parallel " parallel
                  (when fa (str " -fa " fa))
-                 " --host 0.0.0.0 --port " port)]
+                 " --host 0.0.0.0 --port " port
+                 (when-let [key-file (:infer/api-key-file cfg)]
+                   (str " --api-key-file " (pr-str key-file))))]
     (if-not bin-dir
       (println "no :infer/head :standalone-bin-dir configured in infer.edn — nothing to run")
       (do
@@ -977,6 +980,7 @@
               :port (:infer/embed-port cfg 8091)
               :ctx (:model/context model 8192)
               :pooling (:model/pooling model "mean")
+              :api-key-file (:infer/api-key-file cfg)
               :extra-args (:model/llama-extra-args model)}
         cmd (engine/embed-head-cmd opts)]
     (println cmd)
