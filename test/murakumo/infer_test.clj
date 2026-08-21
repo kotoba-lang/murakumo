@@ -104,7 +104,10 @@
     (is (re-find #"--split-mode row" (engine/head-cmd pl {:bin-dir "bin" :model-path "m" :strategy :tensor})))
     (is (re-find #"--split-mode layer" (engine/head-cmd pl {:bin-dir "bin" :model-path "m"})))
     (is (re-find #"-ot \"exps=CPU\"" (engine/head-cmd pl {:bin-dir "bin" :model-path "m"
-                                                          :strategy :expert :moe-override "exps=CPU"})))))
+                                                          :strategy :expert :moe-override "exps=CPU"})))
+    (is (re-find #"--api-key-file \"/run/secrets/fleet.keys\""
+                 (engine/head-cmd pl {:bin-dir "bin" :model-path "m"
+                                      :api-key-file "/run/secrets/fleet.keys"})))))
 
 (deftest llamacpp-rpc-commands
   (let [nodes [(assoc (mini "a") :ip "100.0.0.1")
