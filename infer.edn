@@ -6,6 +6,12 @@
 ;; serves the OpenAI-compatible API.
 {:infer/rpc-port 50052
  :infer/api-port 8090
+ ;; Required by both chat and embedding llama-server processes. Provision one
+ ;; random key per line with mode 0600 on the AWAI-controlled head. The
+ ;; api.murakumo.cloud Worker presents the same value from its
+ ;; MURAKUMO_FLEET_ORIGIN_TOKEN secret; direct Tunnel requests without it get
+ ;; 401 at llama.cpp itself.
+ :infer/api-key-file "/etc/murakumo/fleet-origin.keys"
  ;; embedding engine head port (ADR-2607192200 2026-07-19 addendum) —
  ;; deliberately separate from :infer/api-port (the chat head) so the two
  ;; llama-server processes never collide and murakumo-main chat traffic is

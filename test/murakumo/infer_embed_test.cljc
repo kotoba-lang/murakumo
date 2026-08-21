@@ -32,6 +32,11 @@
     (is (not (re-find #"\s$" (engine/embed-head-cmd {:bin-dir "bin" :model-path "m"}))))
     (is (not (re-find #"\s$" (engine/embed-head-cmd {:bin-dir "bin" :model-path "m" :extra-args []}))))))
 
+(deftest embed-head-requires-origin-key-when-configured
+  (is (re-find #"--api-key-file \"/run/secrets/fleet.keys\""
+               (engine/embed-head-cmd {:bin-dir "bin" :model-path "m"
+                                       :api-key-file "/run/secrets/fleet.keys"}))))
+
 (deftest commands-llamacpp-embed-dispatch
   (testing "commands dispatches :llamacpp-embed to embed-head-cmd, ignoring `plan`
             (single-node, no ring — same posture as :mlx-moe) and does not
