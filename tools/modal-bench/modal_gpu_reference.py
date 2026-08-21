@@ -40,8 +40,8 @@ MEM_USD_PER_GIB_SEC = 0.00000222
 # Silent substitutions. Each of these can hand you a different card than the
 # one you priced.
 ALIAS_UPGRADES = {
-    "H100": "may auto-upgrade to H200; write 'H100!' to pin it. "
-            "Whether billing follows the upgrade is NOT documented and NOT verified.",
+    "H100": "may auto-upgrade to H200 at the H100 price; write 'H100!' to pin "
+            "the hardware for benchmarking (Modal GPU guide, read 2026-08-21).",
     "A100": "bare 'A100' may auto-upgrade to the 80GB part; "
             "write 'A100-40GB' to pin it.",
     "B200": "'B200+' may auto-upgrade to B300 and is billed as B200 -- "

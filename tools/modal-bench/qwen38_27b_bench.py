@@ -85,7 +85,8 @@ def _prompt(approx_tokens: int) -> str:
 
 def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int,
          eager: bool = False, capture_sizes: str = "",
-         text_only: bool = False, model: str = MODEL) -> str:
+         text_only: bool = False, model: str = MODEL,
+         req_cpu: float = 8, req_mem_mib: int = 32768) -> str:
     import torch
     from vllm import LLM, SamplingParams
 
@@ -99,6 +100,8 @@ def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int,
         "eager": eager,
         "capture_sizes": capture_sizes,
         "text_only": text_only,
+        "requested_cpu": req_cpu,
+        "requested_memory_mib": req_mem_mib,
         "configs": [],
     }
 
@@ -267,8 +270,8 @@ def _run(gpu: str, mtp: bool, max_model_len: int, max_num_seqs: int,
 
     gpu_rate = GPU_USD_PER_SEC.get(gpu)
     side_rate = (
-        REQ_CPU * CPU_USD_PER_CORE_SEC
-        + (REQ_MEM_MIB / 1024) * MEM_USD_PER_GIB_SEC
+        req_cpu * CPU_USD_PER_CORE_SEC
+        + (req_mem_mib / 1024) * MEM_USD_PER_GIB_SEC
     )
     out["usd_per_sec"] = {
         "gpu": gpu_rate,
@@ -305,6 +308,14 @@ _COMMON = dict(
     memory=REQ_MEM_MIB,
 )
 
+_RIGHTSIZED = dict(
+    image=vllm_image,
+    volumes={"/root/.cache/huggingface": hf_cache, "/root/.cache/vllm": vllm_cache},
+    timeout=60 * 60,
+    cpu=2,
+    memory=16384,
+)
+
 
 @app.function(gpu="L40S", **_COMMON)
 def bench_l40s(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = False,
@@ -318,6 +329,14 @@ def bench_h100(mtp: bool, max_model_len: int, max_num_seqs: int, eager: bool = F
                capture_sizes: str = "", text_only: bool = False, model: str = MODEL):
     return _run("H100", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
                 text_only, model)
+
+
+@app.function(gpu="H100", **_RIGHTSIZED)
+def bench_h100_rightsized(mtp: bool, max_model_len: int, max_num_seqs: int,
+                          eager: bool = False, capture_sizes: str = "",
+                          text_only: bool = False, model: str = MODEL):
+    return _run("H100", mtp, max_model_len, max_num_seqs, eager, capture_sizes,
+                text_only, model, req_cpu=2, req_mem_mib=16384)
 
 
 @app.function(gpu="H200", **_COMMON)
@@ -377,6 +396,7 @@ _FNS = {
     "RTX-PRO-6000": bench_rtx_pro_6000,
     "L40S": bench_l40s,
     "H100": bench_h100,
+    "H100-2c16g": bench_h100_rightsized,
     "H200": bench_h200,
     "A100-80GB": bench_a100,
 }
