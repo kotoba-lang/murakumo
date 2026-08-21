@@ -1,0 +1,101 @@
+{
+  "gpu": "A100-40GB",
+  "model": "Qwen/Qwen3.8-27B-FP8",
+  "vllm": "0.27.1",
+  "mtp": true,
+  "max_model_len": 16384,
+  "max_num_seqs": 128,
+  "eager": false,
+  "capture_sizes": "",
+  "text_only": false,
+  "configs": [
+    {
+      "label": "single-stream 256in/512out",
+      "status": "measured",
+      "concurrency": 1,
+      "prompt_tokens_each": 276,
+      "generated_tokens_total": 512,
+      "wall_seconds": 5.74,
+      "output_tok_per_s": 89.2,
+      "usd_per_mtok_gpu_only": 6.536,
+      "usd_per_mtok_all_in": 8.507
+    },
+    {
+      "label": "concurrency-8 256in/512out",
+      "status": "measured",
+      "concurrency": 8,
+      "prompt_tokens_each": 276,
+      "generated_tokens_total": 4096,
+      "wall_seconds": 10.74,
+      "output_tok_per_s": 381.4,
+      "usd_per_mtok_gpu_only": 1.529,
+      "usd_per_mtok_all_in": 1.99
+    },
+    {
+      "label": "concurrency-32 256in/512out",
+      "status": "measured",
+      "concurrency": 32,
+      "prompt_tokens_each": 276,
+      "generated_tokens_total": 16384,
+      "wall_seconds": 14.58,
+      "output_tok_per_s": 1124.1,
+      "usd_per_mtok_gpu_only": 0.519,
+      "usd_per_mtok_all_in": 0.675
+    },
+    {
+      "label": "concurrency-64 256in/512out",
+      "status": "measured",
+      "concurrency": 64,
+      "prompt_tokens_each": 276,
+      "generated_tokens_total": 32768,
+      "wall_seconds": 29.51,
+      "output_tok_per_s": 1110.5,
+      "usd_per_mtok_gpu_only": 0.525,
+      "usd_per_mtok_all_in": 0.683
+    },
+    {
+      "label": "concurrency-128 256in/512out",
+      "status": "measured",
+      "concurrency": 128,
+      "prompt_tokens_each": 276,
+      "generated_tokens_total": 65536,
+      "wall_seconds": 53.1,
+      "output_tok_per_s": 1234.3,
+      "usd_per_mtok_gpu_only": 0.472,
+      "usd_per_mtok_all_in": 0.615
+    },
+    {
+      "label": "long-prompt 4k-in/256out",
+      "status": "measured",
+      "concurrency": 1,
+      "prompt_tokens_each": 4464,
+      "generated_tokens_total": 256,
+      "wall_seconds": 4.18,
+      "output_tok_per_s": 61.2,
+      "usd_per_mtok_gpu_only": 9.526,
+      "usd_per_mtok_all_in": 12.399
+    },
+    {
+      "label": "long-prompt 32k-in/256out",
+      "status": "skipped",
+      "reason": "prompt 32768 >= max_model_len 16384"
+    }
+  ],
+  "torch": "2.13.0+cu130",
+  "device": "NVIDIA A100-SXM4-80GB",
+  "vram_total_gib": 79.25,
+  "max_num_seqs_effective": 128,
+  "load": {
+    "status": "measured",
+    "seconds": 714.4,
+    "phases": "could-not-measure: vLLM's phase lines go to the container log, not to a file this process can read; grep the modal run log",
+    "usd_all_in": 0.542
+  },
+  "kv_cache_gpu_blocks": "None",
+  "usd_per_sec": {
+    "gpu": 0.000583,
+    "cpu_and_memory": 0.00017584,
+    "total": 0.00075884
+  },
+  "harness_wall_seconds": 940.6
+}
