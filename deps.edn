@@ -57,13 +57,26 @@
         ;; CLI path (bb.edn's test task excludes this, same reason as the
         ;; kwik/witness-quorum-dependent overlay code).
         io.github.kotoba-lang/kekkai
-        {:git/sha "bb0c39c116fc26ead36c2428c46b9734053a49f5"}}
+        {:git/sha "bb0c39c116fc26ead36c2428c46b9734053a49f5"}
+
+        ;; CI/CD subsystem (#301). kotoba-git and kotoba-rad were RENAMED to
+        ;; bonsai and nekko; the branch pinned the pre-rename shas, whose
+        ;; kotoba-git.* / kotoba-rad.* namespaces no longer exist upstream.
+        ;; Pinned here at each repo's current default-branch tip.
+        cheshire/cheshire {:mvn/version "5.13.0"}
+        io.github.kotoba-lang/ci     {:git/sha "31cf41887585087cb90469e949fbc3b6a34a27ea"}
+        io.github.kotoba-lang/bonsai {:git/sha "1ca96e5edca50166842e057bfe4604eef8d7c39a"}
+        io.github.kotoba-lang/nekko  {:git/sha "812824e9590f213ff8c87576d70dd9fdde6cf6b9"}}
  :aliases
  {;; Factory provisioning station -- issues per-device birth certificates so a
   ;; fleet can reach :attested instead of shipping everything :tofu.
   ;;   clojure -M:factory issue --serial SN-0001 --model "MK-1 Solo" \
   ;;     --root-key factory-root.b64 --out units/
   :factory {:main-opts ["-m" "murakumo.factory"]}
+
+  ;; CI/CD subsystem entry points (#301).
+  :cd-node {:main-opts ["-m" "murakumo.cd.node-daemon"]}
+  :artifact-import {:main-opts ["-m" "murakumo.artifact-import"]}
 
   ;; offline workspace dev — pin witness-quorum/kekkai to local checkouts
   :dev {:override-deps

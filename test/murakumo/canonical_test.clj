@@ -1,0 +1,15 @@
+(ns murakumo.canonical-test
+  (:require [clojure.test :refer [deftest is]]
+            [murakumo.canonical :as canonical]))
+
+(deftest encoding-is-independent-of-printer-thread-bindings
+  (let [document {:cd.capability/version 1
+                  :cd.capability/environment "prod"
+                  :nested {:source/revision "abc"}}
+        expanded (binding [*print-namespace-maps* false]
+                   (canonical/string document))
+        compact (binding [*print-namespace-maps* true]
+                  (canonical/string document))]
+    (is (= expanded compact))
+    (is (= expanded @(future (canonical/string document))))
+    (is (re-find #":cd.capability/version" expanded))))
