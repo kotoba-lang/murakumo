@@ -4,13 +4,13 @@
 - Date: 2026-08-21
 - Index for: ADR-260820, ADR-260820b, ADR-260820c, ADR-260820d, ADR-260821,
   ADR-260821c, ADR-260821d, ADR-260821e, ADR-260821f,
-  ADR-260822,
+  ADR-260822, ADR-260823,
   `docs/modal-gpu-reference.md`
 - Reproduce with: `tools/modal-bench/qwen38_27b_bench.py`,
   `tools/modal-bench/qwen38_27b_snapshot.py`,
   `tools/modal-bench/modal_gpu_reference.py`,
   `tools/hyperstack-bench/qwen38_27b_bench.py`,
-  `tools/runpod-serverless-bench/`. **35 raw result files in
+  `tools/runpod-serverless-bench/`. **36 raw result files in
   `docs/adr/data/`**, 9 of which are `could-not-measure` and kept deliberately.
 
 ## The question, and what it cost to answer
@@ -36,6 +36,11 @@ $40 of Modal compute over two days, all inside free credits.**
    Serverless Flex.** Their active H100 rates are effectively equal, but Modal
    completed the full plan while the RunPod handler was still not ready at the
    deliberate 25-minute limit (ADR-260822).
+6. **The public FastMTP GGUF route stays on Modal RTX PRO 6000 pending demand
+   data.** H100 improved a 256-token one-shot run by 24% but not a short run;
+   A100 40GB was the best derived warm single-request $/token but 18% slower
+   than RTX. Keep one llama.cpp slot per GPU and scale replicas for real
+   parallel latency (ADR-260823).
 
 ## Measured (all Modal, vLLM 0.27.1, FP8 unless noted)
 
@@ -126,6 +131,15 @@ worker, but its custom-image queue handler never became ready inside 1,500
 seconds and spent $1.7611 without generating a token. This negative result is
 kept; RunPod's proprietary cached-model path remains unmeasured.
 
+ADR-260823 records the subsequent production FastMTP path. The Q4_K_P target
+and FastMTP draft are exposed as `qwen3.8-27b-fastmtp-aggressive` through
+`api.murakumo.cloud`; the direct Modal origin requires a gateway-held secret.
+On the same llama.cpp stack, 256-token decode measured 63.5 tok/s on A100 40GB,
+77.5 on RTX PRO 6000, and 96.4 on H100. A100 two-slot execution reduced each
+request to about 33 tok/s and aggregate throughput to 60.9 tok/s, so production
+remains one slot per GPU. The five-minute idle-retention charge is materially
+larger than the approximately 17–22 second cold-load charge.
+
 ## Resume point
 
 ```bash
@@ -133,6 +147,8 @@ kept; RunPod's proprietary cached-model path remains unmeasured.
 # If revisiting resident serving, only a materially cheaper RunPod Community
 # NVL offer or an NVL run with NVCC >=12.9 adds evidence. If revisiting burst,
 # test RunPod's console-configured cached-model mount; generic Flex is closed.
+# For FastMTP Modal economics, first measure public request inter-arrival gaps;
+# then choose the warm window, A100 canary, or replica count from that trace.
 ```
 
 ## Standing caveats

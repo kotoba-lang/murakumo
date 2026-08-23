@@ -21,18 +21,33 @@
 ;; `recovers-at` takes a minimum over one — sequences, not judgements. cljc
 ;; filters and sums, and hands the totals here.
 ;;
-;; ── units are i64 here, and that is a backend gap, not a design choice ──
+;; ── units are i64 here, and the reason recorded here was wrong ──
 ;;
 ;; The cljc side carries units as `double` (`:plan.usage/units (double units)`).
-;; A scalar `:f64` parameter is rejected by the frontend today -- measured
-;; 2026-08-11, `(defn over? [units :f64 remaining :f64] :bool (> units remaining))`
-;; on compiler 3050ee4 gives `expression type mismatch: expected i64, got f64`
-;; on both native targets. `:f64` is a live value family elsewhere
-;; (`:vector-f64`, document literals), so this is `:not-yet-implemented` in the
-;; scalar surface, NOT an intentional constraint (ADR-2608650000 requires
-;; saying which). **When scalar f64 lands, these signatures should become
-;; `:f64` and this paragraph should go.** Until then the caller rounds, and
-;; the parity test drives both sides with integral units.
+;; This comment used to say scalar `:f64` was rejected by the frontend, citing
+;; a 2026-08-11 measurement: `(> units remaining)` on `:f64` parameters gives
+;; `expression type mismatch: expected i64, got f64`.
+;;
+;; That measurement is real and that conclusion does not follow. `>` is the
+;; i64 comparison. The float comparison is `f64-gt`, and scalar f64 is fully
+;; present -- amu's `frontend.cljc` carries an `f64-operations` table with
+;; `f64-add/sub/mul/div/min/max/neg/abs/sqrt`, `f64-eq/lt/le/gt/ge`,
+;; `i64-to-f64-rounded`, `f64-to-i64-truncating`, and bounded exp/log/trig.
+;; Measured 2026-08-13 on amu e8864273: every one of those compiles AND
+;; executes correctly through the KIR interpreter. ADR 0241 pins scalar f64
+;; through machine IR on x86-64 and AArch64 as well.
+;;
+;; What IS true, and is the reason these stay i64: `kotoba.kir/
+;; only-native-word-typed-features?` -- the walk this repo's native
+;; qualification sweep uses -- rejects f64 expressions. So a core written in
+;; f64 computes correctly everywhere and stops being native-word-typed. That
+;; is a live tradeoff to weigh, not an impossibility, and it is a gap in kir's
+;; admission walk rather than in the language (amu's own native backend has
+;; f64 pinned).
+;;
+;; **To move these to f64: spell the comparisons `f64-gt`/`f64-lt`, and decide
+;; whether this core needs to stay in the native sweep.** Until then the caller
+;; rounds and the parity test drives both sides with integral units.
 ;;
 ;; Nothing here throws. cljc's `admit` raises when a plan carries no limits;
 ;; that is a missing input, not a rate decision, and it stays on that side --
