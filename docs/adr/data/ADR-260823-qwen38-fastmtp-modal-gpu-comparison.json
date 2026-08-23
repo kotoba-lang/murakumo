@@ -1,0 +1,124 @@
+{
+  "date": "2026-08-22",
+  "provider": "Modal",
+  "serving_stack": "llama.cpp 4df29be4f plus HauhauCS FastMTP patch",
+  "model_id": "qwen3.8-27b-fastmtp-aggressive",
+  "target": {
+    "file": "Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-Q4_K_P.gguf",
+    "bytes_approx_gb": 17.9
+  },
+  "draft": {
+    "file": "Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-FastMTP-32K.gguf",
+    "bytes_approx_gb": 0.9,
+    "speculative_tokens": 3
+  },
+  "common": {
+    "context_tokens_total": 32768,
+    "cpu_physical_cores": 4,
+    "memory_gib": 32,
+    "batch_size": 2048,
+    "ubatch_size": 512,
+    "flash_attention": true,
+    "temperature": 0,
+    "ignore_eos_for_256_token_runs": true
+  },
+  "measurements": {
+    "rtx_pro_6000": {
+      "device": "NVIDIA RTX PRO 6000",
+      "production": true,
+      "short_41_output_tokens_tok_per_s_range": [95.63, 99.16],
+      "long_256": {
+        "prompt_tokens": 79,
+        "cached_prompt_tokens": 42,
+        "output_tokens": 256,
+        "decode_ms": 3291.448,
+        "output_tok_per_s": 77.47350102447312,
+        "draft_generated": 345,
+        "draft_accepted": 138
+      },
+      "observed_cold_request_seconds": 17.0
+    },
+    "h100_80gb": {
+      "device": "NVIDIA H100 80GB HBM3",
+      "production": false,
+      "one_shot_benchmark": true,
+      "load_seconds": 17.019,
+      "short_41": {
+        "output_tok_per_s": 98.12627870806942,
+        "client_wall_seconds": 0.711206299,
+        "draft_generated": 39,
+        "draft_accepted": 28
+      },
+      "long_256": {
+        "prompt_tokens": 79,
+        "cached_prompt_tokens": 42,
+        "output_tokens": 256,
+        "decode_ms": 2645.507,
+        "output_tok_per_s": 96.38984134232115,
+        "client_wall_seconds": 3.026775804,
+        "draft_generated": 306,
+        "draft_accepted": 152
+      }
+    },
+    "a100_40gb": {
+      "device": "NVIDIA A100-SXM4-40GB",
+      "vram_mib": 40960,
+      "production": false,
+      "one_shot_benchmark": true,
+      "cold_load_seconds": 21.66976334,
+      "single_long_256": {
+        "prompt_tokens": 79,
+        "output_tokens": 256,
+        "decode_ms": 4014.539,
+        "output_tok_per_s": 63.519123864533384,
+        "client_wall_seconds": 4.446094878,
+        "draft_generated": 271,
+        "draft_accepted": 164
+      },
+      "parallel_2": {
+        "context_tokens_per_slot": 16384,
+        "request_output_tokens_each": 256,
+        "request_output_tok_per_s": [33.04286709459123, 32.765606033291654],
+        "wall_seconds_for_both": 8.407236849,
+        "aggregate_output_tok_per_s": 60.899913871333354,
+        "draft_generated": [338, 339],
+        "draft_accepted": [142, 140]
+      }
+    }
+  },
+  "modal_rates_usd_per_second_observed_2026_08_22": {
+    "source": "https://modal.com/pricing",
+    "cpu_4_cores": 0.0000524,
+    "memory_32_gib": 0.00007104,
+    "a100_40gb_gpu": 0.000583,
+    "rtx_pro_6000_gpu": 0.000842,
+    "h100_gpu": 0.001097
+  },
+  "derived_all_in": {
+    "a100_40gb": {
+      "usd_per_hour": 2.543184,
+      "usd_per_cold_load": 0.01530839,
+      "usd_per_300_idle_seconds": 0.211932,
+      "usd_per_million_output_tokens_warm_single": 11.12169
+    },
+    "rtx_pro_6000": {
+      "usd_per_hour": 3.475584,
+      "usd_per_cold_load": 0.01641248,
+      "usd_per_300_idle_seconds": 0.289632,
+      "usd_per_million_output_tokens_warm_single": 12.461551
+    },
+    "h100": {
+      "usd_per_hour": 4.393584,
+      "usd_per_cold_load": 0.02077067,
+      "usd_per_300_idle_seconds": 0.366132,
+      "usd_per_million_output_tokens_warm_single": 12.6615
+    }
+  },
+  "caveats": [
+    "These are llama.cpp GGUF FastMTP measurements, not the vLLM FP8 measurements elsewhere in the ADR series.",
+    "H100 and A100 results are one-shot runs; draft acceptance varied and contributes to the observed GPU difference.",
+    "The A100 prompt included a request marker to distinguish concurrent calls; it had the same 79-token prompt length but was not byte-identical to the RTX/H100 prompt.",
+    "Output tok/s includes reasoning_content tokens and is not visible-text speed or end-to-end agent task speed.",
+    "Derived token costs exclude prompt processing, cold load, idle retention, network time, and failed requests."
+  ]
+}
