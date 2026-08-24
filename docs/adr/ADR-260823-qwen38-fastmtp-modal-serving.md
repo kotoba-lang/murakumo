@@ -11,8 +11,9 @@
 Expose `qwen3.8-27b-fastmtp-aggressive` through
 `https://api.murakumo.cloud/v1/chat/completions`, backed by a scale-to-zero
 Modal deployment. Keep the production GPU on RTX PRO 6000 for now. Do not
-switch to H100 for this approximately 19 GB Q4 target-plus-draft pair, and do
-not enable two llama.cpp slots merely to increase throughput.
+switch to H100 for this approximately 20 GB target-plus-draft-plus-projector
+deployment, and do not enable two llama.cpp slots merely to increase
+throughput.
 
 A100 40GB is the cost-first alternative if observed demand shows that lower
 single-request speed is acceptable. Here and in follow-up discussion,
@@ -23,6 +24,9 @@ The deployed boundary is:
 - public model id: `qwen3.8-27b-fastmtp-aggressive`;
 - target GGUF: Q4_K_P, approximately 17.9 GB;
 - FastMTP draft GGUF: approximately 0.9 GB, three speculative tokens;
+- BF16 multimodal projector: approximately 0.93 GB, checksum-pinned and passed
+  to llama.cpp with `--mmproj` so OpenAI-compatible `image_url` inputs reach
+  the model rather than being accepted by the gateway but dropped at serving;
 - llama.cpp pinned at `4df29be4f4c3673f428170fda944a5b19f743bb8`
   with the model author's pinned patch;
 - 32,768 total context tokens, one slot, four physical CPU cores, 32 GiB RAM;
