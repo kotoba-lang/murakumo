@@ -22,8 +22,9 @@
 #
 # Install:  scp deploy/llama-server.service root@<head>:/etc/systemd/system/ \
 #           && ssh root@<head> 'systemctl daemon-reload && systemctl restart llama-server'
-# Verify:   curl -s https://infer.murakumo.cloud/props \
-#             | jq '.default_generation_settings.n_ctx, .total_slots'
+# Verify through the sole public boundary:
+#           curl -s https://api.murakumo.cloud/ready \
+#             | jq '.inference.request-capacity'
 [Unit]
 Description=llama.cpp Vulkan server (Qwen3.8 27B dense multimodal — fleet API)
 After=network.target
@@ -33,7 +34,7 @@ Type=simple
 User=gad
 WorkingDirectory=/home/gad/llamacpp-vk
 Environment="LD_LIBRARY_PATH=/home/gad/llamacpp-vk"
-ExecStart=/home/gad/llamacpp-vk/llama-server -m /home/gad/models/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf --mmproj /home/gad/models/Qwen3.8-27B-GGUF/mmproj-Qwen3.8-27B-BF16.gguf --host 0.0.0.0 --port 11434 -ngl 999 --ctx-size 32768 --parallel 1 --jinja
+ExecStart=/home/gad/llamacpp-vk/llama-server -m /home/gad/models/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf --mmproj /home/gad/models/Qwen3.8-27B-GGUF/mmproj-Qwen3.8-27B-BF16.gguf --host 0.0.0.0 --port 11434 -ngl 999 --ctx-size 32768 --parallel 1 --jinja --api-key-file /etc/murakumo/fleet-origin.keys
 Restart=on-failure
 RestartSec=5
 

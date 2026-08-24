@@ -31,6 +31,15 @@ The decision and blocked-canary evidence are in
 > components (`run` / `on-http` / `on-tick` / `on-kse`). Different substrate, on the
 > same hardware.
 
+## Public API boundary
+
+Clients and applications use `https://api.murakumo.cloud` exclusively.
+`infer.murakumo.cloud` is the authenticated Cloudflare Tunnel origin behind
+that Worker, not a supported client endpoint. The Worker supplies
+`MURAKUMO_FLEET_ORIGIN_TOKEN`; llama.cpp reads the same value from
+`/etc/murakumo/fleet-origin.keys`. This keeps model routing, protocol
+translation, metering, and access policy at one public boundary.
+
 
 ## API keys (`mk1` capability tokens)
 
