@@ -896,6 +896,12 @@
    server side, not attempted here — it just accepts the queueing failure
    mode as preferable to the degraded-throughput-for-everyone one.
 
+   Superseded for the current dense Qwen3.8 27B service on 2026-08-24: with
+   total ctx 524288 and parallel 2, each slot retained n_ctx 262144, a single
+   request changed only 13.12 -> 12.82 tok/s, and two simultaneous public
+   requests completed in 3.559s and 4.993s. The historical result above still
+   warns against assuming that more slots always help; four remains rejected.
+
    :infer/head :standalone-bin-dir must point at that GPU-backend build on
    the head (get one: github.com/ggml-org/llama.cpp releases,
    `*-ubuntu-vulkan-x64.tar.gz` for this hardware). :infer/flash-attn

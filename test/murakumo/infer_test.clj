@@ -1,6 +1,7 @@
 ;; Offline unit tests for the pure inference planner/engine (no fleet, no SSH).
 (ns murakumo.infer-test
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [murakumo.infer :as infer]
             [murakumo.infer.engine :as engine]
@@ -15,6 +16,13 @@
 
 (def glm {:model/id "glm-5.2-reap50-q2k" :model/format :gguf
           :model/layers 78 :model/weight-bytes 139000000000})
+
+(deftest production-slots-preserve-the-native-request-window
+  (let [cfg (edn/read-string (slurp "infer.edn"))]
+    (is (= 2 (:infer/parallel cfg)))
+    (is (= 524288 (:infer/ctx cfg)))
+    (is (= 262144 (quot (:infer/ctx cfg) (:infer/parallel cfg)))
+        "each concurrent request keeps Qwen3.8's native maximum context")))
 
 (deftest physical-head-is-not-an-rpc-worker
   (let [head-cfg {:name "head" :node-name "gad"
