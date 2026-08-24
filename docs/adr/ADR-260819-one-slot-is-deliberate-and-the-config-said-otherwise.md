@@ -1,6 +1,6 @@
 # ADR-260819 — One slot is deliberate, and `infer.edn` said otherwise
 
-**Status:** accepted · **Date:** 2026-08-19
+**Status:** superseded by the 2026-08-24 qualification below · **Date:** 2026-08-19
 
 ## What happened
 
@@ -85,3 +85,27 @@ bring it back; the VRAM figures in this file do not reconcile with the 34.5 GiB
 of 48 observed in use; and the process was started deliberately at 10:19 the
 same morning. A qualification run is the way to answer this, with someone
 watching.
+
+## 2026-08-24 qualification: two slots accepted
+
+The missing qualification was performed against the live dense Qwen3.8 27B
+Vulkan service, using the guarded model-switch command that restores the prior
+drop-in if real generation does not recover. Production now runs total context
+524288 with `--parallel 2`; `/props` reports two slots with `n_ctx=262144` each,
+so increasing concurrency did not reduce the maximum request context.
+
+Observed before and after the switch:
+
+| evidence | one slot | two slots |
+|---|---:|---:|
+| single-request decode | 13.12 tok/s | 12.82 tok/s |
+| simultaneous request A | queued behind the only slot | HTTP 200 in 4.993s |
+| simultaneous request B | queued behind the only slot | HTTP 200 in 3.559s |
+| `/ready` request capacity | busy 1 / available 0 during load | idle 0 / available 2 after load |
+
+Both concurrent responses returned their exact requested canary text. The
+public model registry was updated to `parallel: 2`, `context: 262144`, with a
+fresh verification timestamp. This supersedes the one-slot operational choice;
+the earlier evidence remains here because it explains why the change required
+measurement rather than a configuration edit by assumption. Four slots remain
+unqualified and are not admitted by this decision.
