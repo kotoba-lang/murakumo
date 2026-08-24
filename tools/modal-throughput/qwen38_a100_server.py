@@ -74,7 +74,7 @@ def serve() -> None:
             "--port",
             "8001",
             "--max-model-len",
-            "16384",
+            "262144",
             "--max-num-seqs",
             "128",
             "--max-num-batched-tokens",
