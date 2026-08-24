@@ -24,8 +24,10 @@ HF_REPO = "HauhauCS/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF"
 HF_REVISION = "993a5971fda8f30dd1b7eb2654792ba4415c7460"
 TARGET_FILE = "Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-Q4_K_P.gguf"
 DRAFT_FILE = "Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-FastMTP-32K.gguf"
+VISION_FILE = "mmproj-Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-BF16.gguf"
 TARGET_SHA256 = "ba36dc3c2b2ff5e0aa5d71092a8894546996a6a119ae391803dda07cdc08516d"
 DRAFT_SHA256 = "115e618e1f73cb50817ed5856f0551c6bf9c3d94df96f440eaca78dc63b8968b"
+VISION_SHA256 = "5681b690bcb8eb10cd28d62d078cb4e01521a3ea4880a3fc7d54de72de2dd142"
 LLAMA_CPP_COMMIT = "4df29be4f4c3673f428170fda944a5b19f743bb8"
 PATCH_URL = (
     "https://huggingface.co/" + HF_REPO + "/resolve/" + HF_REVISION
@@ -84,10 +86,14 @@ def _sha256(path: Path) -> str:
     timeout=7200,
 )
 def download_models() -> dict[str, object]:
-    """Pin, download and checksum both GGUFs into the persistent Volume."""
+    """Pin, download and checksum target, draft, and vision GGUFs."""
     from huggingface_hub import hf_hub_download
 
-    expected = {TARGET_FILE: TARGET_SHA256, DRAFT_FILE: DRAFT_SHA256}
+    expected = {
+        TARGET_FILE: TARGET_SHA256,
+        DRAFT_FILE: DRAFT_SHA256,
+        VISION_FILE: VISION_SHA256,
+    }
     result = {}
     for filename, expected_sha in expected.items():
         downloaded = Path(
@@ -126,6 +132,7 @@ def serve() -> None:
         "/opt/llama.cpp/build/bin/llama-server",
         "--host", "0.0.0.0", "--port", "8000",
         "--model", str(MODEL_DIR / TARGET_FILE),
+        "--mmproj", str(MODEL_DIR / VISION_FILE),
         "--alias", MODEL_ID,
         "--api-key", api_key,
         "--n-gpu-layers", "all",
