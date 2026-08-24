@@ -40,6 +40,29 @@ The public model list and completion route were verified after merge. A cold
 public request was transparently retried by the gateway and returned HTTP 200
 in approximately 17 seconds.
 
+### Vision closure (2026-08-24)
+
+The original production command loaded only the target and FastMTP draft. The
+model repository publishes its multimodal projector as a separate GGUF, so an
+OpenAI-compatible `image_url` could reach the server without reaching the
+model. PR #326 closes that serving gap by checksum-pinning the projector,
+placing it in the existing Modal Volume, and passing it to llama.cpp with
+`--mmproj`.
+
+Production verification after deploy observed all three boundaries:
+
+1. the Modal Volume listed target, draft, and projector GGUFs;
+2. the production llama.cpp log reported `loaded multimodal model` with the
+   pinned projector path;
+3. an authenticated in-Modal probe sent a generated solid-red 64 x 64 PNG as
+   an OpenAI `image_url` and received HTTP 200, the expected model id, and the
+   visible answer `RED` with thinking disabled.
+
+The probe kept the origin credential inside Modal and emitted no secret. This
+proves the serving origin's image path. It does not by itself prove every
+desktop application's Screen Recording permission, Bot tool admission, or
+human handoff UI; those remain separate Cloud Itonami acceptance boundaries.
+
 ## Same-stack GPU measurement
 
 These results use the GGUF llama.cpp FastMTP stack above. They must not be
