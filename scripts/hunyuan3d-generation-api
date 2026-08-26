@@ -707,6 +707,7 @@ def run_comfy_music_job(job_id, prompt, model, duration_ms, seed, folder, out):
     if not base:
         raise RuntimeError("model %r needs a ComfyUI instance this node does not have" % model)
     comfy_yield_sibling(base)
+    comfy_make_room(base, model)
     submitted = comfy_json("POST", "/prompt",
                            {"prompt": comfy_music_graph(prompt, model, duration_ms, seed)},
                            base=base)
@@ -1313,6 +1314,34 @@ def comfy_free_models(base):
         print("comfy_free_models", base, exc)
 
 
+# What each instance loaded last, so a family switch can pay for an unload and
+# a repeat of the same model does not.
+_last_model_on_base = {}
+
+
+def comfy_make_room(base, model):
+    """Free the target instance's own weights when the model about to load is
+    not the one already resident.
+
+    comfy_yield_sibling frees the *other* instances; nothing freed the one we
+    are about to submit to. That was survivable while each instance hosted one
+    model family. The v0.34 instance hosts two -- MiniMax-Music3 (~12GB) and
+    10Eros-Max (~37GB with its text encoder) -- and on 2026-08-26 a music job
+    followed by a video job on this same instance died in
+    SamplerCustomAdvanced with `HIP out of memory ... tried to allocate
+    148.00 MiB`, having loaded every node before it. Re-running it against a
+    freshly restarted instance passed in 105s.
+
+    Conditional on the model changing, because an unconditional free would make
+    every repeat job reload tens of GB it already had."""
+    if not base:
+        return
+    previous = _last_model_on_base.get(base)
+    if previous is not None and previous != model:
+        comfy_free_models(base)
+    _last_model_on_base[base] = model
+
+
 def comfy_unit(base):
     """systemd unit for a ComfyUI listen URL on this host."""
     if not base:
@@ -1860,6 +1889,7 @@ def run_video_job(job_id, source, params):
             jobs[job_id].update(status="running", progress=5); save()
         base = comfy_base(spec)
         comfy_yield_sibling(base)
+        comfy_make_room(base, params.get("model", VIDEO_DEFAULT_MODEL))
         refs = source.get("images") or ([source["image"]] if source.get("image") else [])
         ref_image = [comfy_upload_image(u, base) for u in refs] or None
         if ref_image and spec["family"] != "minimax":
