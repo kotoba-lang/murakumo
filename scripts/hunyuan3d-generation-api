@@ -33,6 +33,21 @@ COMFY_URL = os.environ.get("MURAKUMO_COMFY_URL", "").rstrip("/")
 # fleet's long-lived render instance is older and drives the ltx/wan graphs,
 # so H3 gets its own instance rather than an in-place upgrade of the farm.
 COMFY_URL_MINIMAX = os.environ.get("MURAKUMO_COMFY_URL_MINIMAX", "").rstrip("/")
+# MiniMax-Music3 and the 10Eros-Max H3 finetune need ComfyUI >= 0.34
+# (comfy_extras/nodes_minimax_music.py), which itself needs comfy_kitchen
+# >= 0.2.31 for int8_attention_is_available. Upgrading the H3 instance in place
+# to reach that took the H3 instance down on 2026-08-26, so this is a third
+# instance rather than a second in-place upgrade. Same reason as the line
+# above, one ComfyUI version later.
+COMFY_URL_V034 = os.environ.get("MURAKUMO_COMFY_URL_V034", "").rstrip("/")
+# Which instance a model names in its `comfy` key. A model that names none runs
+# on the farm.
+COMFY_INSTANCES = {"minimax": COMFY_URL_MINIMAX, "v034": COMFY_URL_V034}
+# Every ComfyUI this process may be holding VRAM on. The busy-check and the
+# yield-before-load below both walk this list; an instance missing from it is
+# one that never gets asked to let go, and on a single 51GB APU that is an OOM
+# rather than a slowdown. Add an instance here when you add it above.
+COMFY_BASES = [u for u in (COMFY_URL, COMFY_URL_MINIMAX, COMFY_URL_V034) if u]
 TOKEN = os.environ.get("MURAKUMO_GENERATION_TOKEN", "")
 # Hosted video provider (fal.ai). Absent key = the hosted models are simply not
 # offered; nothing falls back to the fleet, because a caller who asked for
@@ -55,6 +70,17 @@ SOUND_KINDS = {"sfx", "ambience", "music"}
 SOUND_MODELS = {
     "ace-step": {"music"},
     "musicgen-small": SOUND_KINDS,
+    "minimax-music3": {"music"},
+}
+# Music models that are a ComfyUI graph rather than a SOUND_RUNNER CLI. The
+# runner emits WAV directly; ComfyUI has no WAV writer (flac/mp3/opus only), so
+# this path transcodes once on the way out and everything downstream --
+# verified_wav, the metadata, the artifact contract -- stays as it was.
+SOUND_COMFY_MODELS = {
+    "minimax-music3": {"unet": "minimax_music3_dit_int8_convrot.safetensors",
+                       "text_encoder": "minimax_music3_text_encoder_pruned_int8_convrot.safetensors",
+                       "vae": "minimax_music3_dav.safetensors",
+                       "comfy": "v034"},
 }
 SOUND_DEFAULT_MODELS = {"music": "ace-step", "ambience": "musicgen-small",
                         "sfx": "musicgen-small"}
@@ -93,6 +119,23 @@ VIDEO_MODELS = {
                    "vae": "minimax_h3_video_vae_fp16.safetensors",
                    "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
                    "comfy": "minimax"},
+    # TenStrip's finetune of that same H3 base, TURBO-hybrid: the step-count
+    # distillation is baked into the weights, so it samples at 8 steps where
+    # stock H3 wants 20. The graph is otherwise identical -- same text encoder,
+    # same two VAEs, same ref2va conditioning -- which is why it reuses the
+    # builder rather than getting one of its own. It is an adult-content model;
+    # nothing here relaxes any caller's content policy, and the club-shinshi
+    # catalog actor's CatalogGovernor still runs on whatever comes out.
+    # Measured on gad 2026-08-26 (ComfyUI v0.34.0 instance, ROCm/gfx1151):
+    # 512x512/39f/8steps in 135.2s, luma 54-57 across three sampled frames,
+    # inter-frame MAE 30.7, 32kHz stereo audio present. Not black, not frozen.
+    "10eros-max": {"family": "minimax",
+                   "unet": "10Eros_Max_h3_TURBO-hybrid_beta3_int8_convrot.safetensors",
+                   "text_encoder": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                   "vae": "minimax_h3_video_vae_fp16.safetensors",
+                   "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+                   "default_steps": 8,
+                   "comfy": "v034"},
     "seedance-2.0": {"family": "seedance", "host": "fal",
                      "endpoint": "/bytedance/seedance-2.0/reference-to-video",
                      "resolutions": ("480p", "720p", "1080p", "4k")},
@@ -357,20 +400,25 @@ def validate_sound_request(inputs, params):
     prompt = inputs.get("prompt")
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 500:
         raise ValueError("input.prompt must contain 1-500 characters")
-    if not SOUND_RUNNER:
-        raise ValueError("sound output requires the configured sound runner")
     if params.get("sound_kind") not in SOUND_KINDS:
         raise ValueError("params.sound_kind must be sfx, ambience or music")
     kind = params["sound_kind"]
     model = params.get("model", SOUND_DEFAULT_MODELS[kind])
     if model not in SOUND_MODELS or kind not in SOUND_MODELS[model]:
         raise ValueError(f"model {model!r} does not support sound_kind {kind!r}")
+    if not sound_model_available(model):
+        raise ValueError(f"model {model!r} is not served by this node")
     duration = params.get("duration_ms", 2000)
     if not isinstance(duration, int) or isinstance(duration, bool) or not 100 <= duration <= 30000:
         raise ValueError("params.duration_ms must be an integer from 100 to 30000")
     loop = params.get("loop", False)
     if not isinstance(loop, bool) or (loop and params["sound_kind"] == "sfx"):
         raise ValueError("loop is allowed only for ambience or music")
+    if loop and model in SOUND_COMFY_MODELS:
+        # The runner produces a loop deliberately; this graph does not, and
+        # labelling its ends loopStartMs/loopEndMs would assert a seam that was
+        # never made.
+        raise ValueError(f"model {model!r} does not produce loopable audio")
     seed = params.get("seed")
     if seed is None:
         seed = int.from_bytes(os.urandom(8), "big") % (2 ** 53)
@@ -647,6 +695,62 @@ def run_effect_job(job_id, prompt, params):
             jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
 
 
+def run_comfy_music_job(job_id, prompt, model, duration_ms, seed, folder, out):
+    """Submit the music graph, wait, fetch the FLAC, transcode to the WAV the
+    rest of the sound path is written against.
+
+    Nothing here reports success on ComfyUI's word alone: a job that ends with
+    no output node, or with an artifact too small to be audio, raises rather
+    than handing an empty file to verified_wav."""
+    spec = SOUND_COMFY_MODELS[model]
+    base = comfy_base(spec)
+    if not base:
+        raise RuntimeError("model %r needs a ComfyUI instance this node does not have" % model)
+    comfy_yield_sibling(base)
+    submitted = comfy_json("POST", "/prompt",
+                           {"prompt": comfy_music_graph(prompt, model, duration_ms, seed)},
+                           base=base)
+    prompt_id = submitted.get("prompt_id")
+    if not prompt_id:
+        raise RuntimeError("ComfyUI rejected the music graph: " + json.dumps(submitted)[:2000])
+    deadline = time.monotonic() + 1800
+    clips = None
+    while time.monotonic() < deadline:
+        with lock:
+            if job_id in cancelled_jobs:
+                raise JobCancelled()
+        entry = comfy_json("GET", f"/history/{prompt_id}", base=base).get(prompt_id) or {}
+        status = entry.get("status") or {}
+        if status.get("status_str") == "error":
+            raise RuntimeError("ComfyUI music job failed: "
+                               + json.dumps(status.get("messages") or status)[:2000])
+        if status.get("completed"):
+            clips = [c for node in (entry.get("outputs") or {}).values()
+                     for c in node.get("audio", [])]
+            break
+        time.sleep(2.0)
+    if clips is None:
+        raise RuntimeError("timed out waiting for ComfyUI music job")
+    if not clips:
+        raise RuntimeError("ComfyUI returned no audio output")
+    first = clips[0]
+    query = urlencode({"filename": first.get("filename", ""),
+                       "subfolder": first.get("subfolder", ""),
+                       "type": first.get("type", "output")})
+    with urllib.request.urlopen(base + "/view?" + query, timeout=300) as response:
+        data = response.read()
+    if len(data) < 1024:
+        raise RuntimeError("ComfyUI returned an implausibly small audio artifact")
+    src = folder / ("music" + os.path.splitext(first.get("filename", "x.flac"))[1])
+    src.write_bytes(data)
+    # ComfyUI writes flac/mp3/opus; the sound contract downstream is WAV.
+    completed = run_process(job_id, ["ffmpeg", "-nostdin", "-v", "error", "-y",
+                                     "-i", str(src), "-c:a", "pcm_s16le", str(out)], 300)
+    if completed.returncode or not out.exists():
+        raise RuntimeError("could not transcode ComfyUI audio to WAV: "
+                           + (completed.stderr[-2000:] or completed.stdout[-2000:]))
+
+
 def run_sound_job(job_id, prompt, params):
     folder = ROOT / job_id
     folder.mkdir(parents=True, exist_ok=True)
@@ -661,13 +765,16 @@ def run_sound_job(job_id, prompt, params):
         with lock:
             if job_id in cancelled_jobs: return
             jobs[job_id].update(status="running", progress=10); save()
-        command = [SOUND_RUNNER, "--prompt", prompt, "--kind", kind,
-                   "--model", model, "--duration-ms", str(requested),
-                   "--seed", str(seed), "--output", str(out)]
-        if looped: command.append("--loop")
-        completed = run_process(job_id, command, 1800)
-        if completed.returncode:
-            raise RuntimeError("sound generation failed: " + (completed.stderr[-4000:] or completed.stdout[-4000:]))
+        if model in SOUND_COMFY_MODELS:
+            run_comfy_music_job(job_id, prompt, model, requested, seed, folder, out)
+        else:
+            command = [SOUND_RUNNER, "--prompt", prompt, "--kind", kind,
+                       "--model", model, "--duration-ms", str(requested),
+                       "--seed", str(seed), "--output", str(out)]
+            if looped: command.append("--loop")
+            completed = run_process(job_id, command, 1800)
+            if completed.returncode:
+                raise RuntimeError("sound generation failed: " + (completed.stderr[-4000:] or completed.stdout[-4000:]))
         data, duration_ms, channels, bit_depth, sample_rate = verified_wav(out, requested)
         loop_start_ms, loop_end_ms = (0, duration_ms) if looped else (None, None)
         artifact = f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}/artifact"
@@ -967,7 +1074,7 @@ def class_external_bases(klass):
     entry = RESOURCE_CLASSES.get(":classes", {}).get(klass) or {}
     if entry.get(":external-busy-check") != ":comfy-any":
         return []
-    return [b for b in (COMFY_URL, COMFY_URL_MINIMAX) if b]
+    return list(COMFY_BASES)
 
 
 _external_busy_cache = {}
@@ -1129,12 +1236,61 @@ def reconcile_on_boot():
     return stranded
 
 def comfy_base(spec=None):
-    """The ComfyUI a model runs on. Only the MiniMax family is routed away from
-    the farm's own instance; everything else keeps COMFY_URL untouched."""
-    if spec and spec.get("comfy") == "minimax":
-        return COMFY_URL_MINIMAX
-    return COMFY_URL
+    """The ComfyUI a model runs on. A model names its instance in `comfy`; one
+    that names none runs on the farm's own instance.
 
+    A named instance that is not configured resolves to "" — which the two
+    callers below read as "this model is not offered" — and never falls back to
+    a different instance. A caller who asked for MiniMax and silently got Wan
+    would be told a model ran that did not."""
+    name = (spec or {}).get("comfy")
+    if not name:
+        return COMFY_URL
+    return COMFY_INSTANCES.get(name, "")
+
+
+
+def sound_model_available(model):
+    """A runner-backed model needs the runner; a ComfyUI-backed one needs its
+    instance. Neither substitutes for the other, so this is not `or`."""
+    spec = SOUND_COMFY_MODELS.get(model)
+    if spec is not None:
+        return bool(comfy_base(spec))
+    return bool(SOUND_RUNNER)
+
+
+def comfy_music_graph(prompt, model, duration_ms, seed):
+    """MiniMax-Music3 text-to-music (API form of ComfyUI's
+    audio_minimax_music_3 template, with its subgraph flattened).
+
+    The clip length is not a free parameter: the text encoder returns the
+    duration it actually planned as its second output, and that is what the
+    empty latent is sized from. Asking the latent for a different number of
+    seconds than the encoder planned desynchronises the two."""
+    spec = SOUND_COMFY_MODELS[model]
+    return {
+        "6": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": spec["unet"], "weight_dtype": "default"}},
+        "3": {"class_type": "CLIPLoader",
+              "inputs": {"clip_name": spec["text_encoder"], "type": "minimax"}},
+        "7": {"class_type": "VAELoader", "inputs": {"vae_name": spec["vae"]}},
+        "13": {"class_type": "MiniMaxMusic3TextEncode",
+               "inputs": {"clip": ["3", 0], "caption": prompt, "lyrics": "",
+                          "seed": seed % (2 ** 31), "max_duration": duration_ms / 1000.0,
+                          "cfg_scale": 1.7, "top_k": 50}},
+        "10": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["13", 0]}},
+        "15": {"class_type": "EmptyMiniMaxMusic3LatentAudio",
+               "inputs": {"seconds": ["13", 1], "batch_size": 1}},
+        "9": {"class_type": "KSampler",
+              "inputs": {"model": ["6", 0], "seed": seed % (2 ** 31), "steps": 30,
+                         "cfg": 1.7, "sampler_name": "euler", "scheduler": "simple",
+                         "positive": ["13", 0], "negative": ["10", 0],
+                         "latent_image": ["15", 0], "denoise": 1.0}},
+        "12": {"class_type": "VAEDecodeAudio",
+               "inputs": {"samples": ["9", 0], "vae": ["7", 0]}},
+        "35": {"class_type": "SaveAudio",
+               "inputs": {"audio": ["12", 0], "filename_prefix": "murakumo-music"}},
+    }
 
 
 def comfy_queue_busy(base):
@@ -1165,6 +1321,8 @@ def comfy_unit(base):
         return "comfyui-h3.service"
     if ":8188" in base:
         return "comfyui.service"
+    if ":8192" in base:
+        return "comfyui-034.service"
     return None
 
 
@@ -1199,7 +1357,7 @@ def comfy_yield_sibling(keep_base):
     """One APU cannot hold MiniMax-H3 (~43GB) and Wan 5B at once.
     /free on an idle ComfyUI is a queue flag and often does not drop torch
     allocations; restart the idle sibling unit instead."""
-    others = [u for u in (COMFY_URL, COMFY_URL_MINIMAX) if u and u != keep_base]
+    others = [u for u in COMFY_BASES if u != keep_base]
     deadline = time.monotonic() + 120
     for other in others:
         while time.monotonic() < deadline:
@@ -1531,7 +1689,11 @@ def minimax_video_graph(prompt, params, ref_image=None):
         "123": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "res_multistep"}},
         "124": {"class_type": "BasicScheduler",
                 "inputs": {"model": ["127", 0], "scheduler": "simple",
-                           "steps": params.get("steps", 20), "denoise": 1.0}},
+                           # Stock H3 needs 20; a step-distilled finetune needs
+                           # ~8 and produces mush at 20. The model knows which
+                           # it is, so the default comes off the spec.
+                           "steps": params.get("steps", spec.get("default_steps", 20)),
+                           "denoise": 1.0}},
         "129": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
         "125": {"class_type": "SamplerCustomAdvanced",
                 "inputs": {"noise": ["129", 0], "guider": ["126", 0], "sampler": ["123", 0],
@@ -1868,7 +2030,8 @@ class Handler(BaseHTTPRequestHandler):
             if TTS_RUNNER: capabilities.append("voice")
             if MOTION_RUNNER: capabilities.append("motion")
             if EFFECT_RUNNER: capabilities.append("effect")
-            if SOUND_RUNNER: capabilities.append("sound")
+            sound_models = sorted(m for m in SOUND_MODELS if sound_model_available(m))
+            if sound_models: capabilities.append("sound")
             if COMFY_URL: capabilities.append("image")
             # There was no way to ask this service which video models it accepts
             # — callers had to guess and read a 400. Answer it here. Hosted
@@ -1880,7 +2043,7 @@ class Handler(BaseHTTPRequestHandler):
             if video_models: capabilities.append("video")
             return self.send_json(200, {"status": "ok", "runtime": "murakumo-generation",
                                         "capabilities": capabilities,
-                                        "soundModels": sorted(SOUND_MODELS) if SOUND_RUNNER else [],
+                                        "soundModels": sound_models,
                                         "videoModels": video_models,
                                         "voiceLocales": sorted(VOICE_LOCALES) if TTS_RUNNER else [],
                                         "resourceClasses": {k: {"capacity": class_capacity(k),
