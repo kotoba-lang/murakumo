@@ -1332,13 +1332,28 @@ def comfy_make_room(base, model):
     148.00 MiB`, having loaded every node before it. Re-running it against a
     freshly restarted instance passed in 105s.
 
-    Conditional on the model changing, because an unconditional free would make
-    every repeat job reload tens of GB it already had."""
+    POST /free is not enough here, and comfy_free_models says so itself: it is
+    best-effort, and sibling restart is the hard path when torch still holds
+    tens of GB. Measured 2026-08-26 -- with the free in place, the same
+    music-then-video sequence failed identically (`27.37 GiB is free ... 18.42
+    GiB is allocated by PyTorch`, unable to place 148 MiB). Tens of gigabytes
+    reported free while a 148 MiB placement fails is not a shortage; it is a
+    unified-memory address space this process can no longer pack into. So this
+    takes the hard path on the target too, and falls back to the flag only when
+    the instance has no unit to restart.
+
+    Conditional on the model changing, because an unconditional restart would
+    make every repeat job reload tens of GB it already had."""
     if not base:
         return
     previous = _last_model_on_base.get(base)
     if previous is not None and previous != model:
-        comfy_free_models(base)
+        unit = comfy_unit(base)
+        if unit:
+            comfy_restart_unit(unit)
+            comfy_wait_up(base, 120)
+        else:
+            comfy_free_models(base)
     _last_model_on_base[base] = model
 
 
