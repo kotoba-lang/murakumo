@@ -123,9 +123,12 @@ Each fleet node runs `kotoba-server` as a **macOS LaunchAgent** (`RunAtLoad` +
 ## Quickstart
 
 ```bash
-export MURAKUMO_OPERATOR_SEED=$(openssl rand -hex 32)   # the fleet operator identity (never commit)
+# Generate the shared operator identity once (kotoba writes the XDG store, mode 0600).
+# murakumo reads that same file when MURAKUMO_OPERATOR_SEED is unset. Env still wins if set.
+kotoba identity new
 export MURAKUMO_KOTOBA_DIR=~/github/com-junkawasaki/orgs/com-junkawasaki/kotoba
 
+nbb scripts/run-task.cljs identity      # print the operator DID (never the seed)
 nbb scripts/run-task.cljs ops status    # fold /health + lattice ps across the fleet
 nbb scripts/run-task.cljs task run --n 22 --cmd 'hostname'   # fan a batch over the fleet
 nbb scripts/run-task.cljs token issue --scope chat           # mint a gateway API key
@@ -765,8 +768,31 @@ hardware tier (32 GiB usable memory). Plans, model registry, and run results
 
 ## Identity & no-server-key
 
-The fleet shares one **operator DID** derived from `MURAKUMO_OPERATOR_SEED` (32-byte
-hex, supplied via the env, **never committed**). Per-node identities are derived
+kotoba and murakumo share one local operator identity so both CLIs work on one
+machine without two env seeds.
+
+Generate once with kotoba (`kotoba identity new` / shared store). That writes
+
+```
+${XDG_DATA_HOME:-$HOME/.local/share}/kotoba/operator.seed
+```
+
+(mode **0600**, never committed, never echoed) — the exact kotoba-lang/kotoba#493
+contract. When `XDG_DATA_HOME` is unset that is `$HOME/.local/share/kotoba/operator.seed`.
+One path only; murakumo does not also look under `~/.kotoba/`.
+
+Resolution: `MURAKUMO_OPERATOR_SEED` (32-byte hex) if set, else that shared
+file. Missing both is the existing missing-seed error; murakumo does not invent
+a seed. `identity` / report commands print the **operator DID** only.
+
+```bash
+kotoba identity new                         # write the shared 0600 seed file
+nbb scripts/run-task.cljs identity          # same DID kotoba prints
+# optional override:
+# export MURAKUMO_OPERATOR_SEED=<32-byte hex>
+```
+
+The fleet shares that one **operator DID**. Per-node identities are derived
 deterministically (`sha256(operator-seed : node-name)`) so they are stable and
 reproducible without storing a secret per node. Autonomous component writes are
 attributed to the operator (or, with a member CACAO leash, to the consenting member —

@@ -14,7 +14,8 @@
 
 (ns murakumo.identity
   (:require [clojure.string :as str]
-            [murakumo.kotoba.oracle :as oracle])
+            [murakumo.kotoba.oracle :as oracle]
+            #?(:clj [ed25519.core :as ed25519]))
   #?(:clj (:import (java.security MessageDigest)
                    (java.util Base64))))
 
@@ -220,6 +221,33 @@
   "Normalise a process result from did-derive."
   [result]
   (did-from-output (:out result)))
+
+(defn seed-hex?
+  "True for a 32-byte hex Ed25519 seed (64 hex chars). Used to refuse a
+  partial seed rather than derive a colliding DID."
+  [hex]
+  (boolean (and (string? hex)
+                (= 64 (count hex))
+                (re-matches #"[0-9a-fA-F]{64}" hex))))
+
+(defn did-from-seed-hex
+  "Operator DID kotoba derives from a 32-byte hex Ed25519 seed.
+
+   Same function kotoba `codebase identity` uses (`ed25519/did-key-from-seed-hex`).
+   Returns nil when the seed is missing or not 64 hex chars. Never echoes the seed."
+  [hex]
+  (when (seed-hex? hex)
+    #?(:clj (ed25519/did-key-from-seed-hex hex)
+       :cljs (throw (ex-info "did-from-seed-hex is host-only" {:phase :identity})))))
+
+(defn identity-command-result
+  "Pure identity-command fold: print the operator DID, never the seed.
+
+   `{:ok? true :did did}` or `{:ok? false :error :missing-operator-seed-hex}`."
+  [hex]
+  (if-let [did (did-from-seed-hex hex)]
+    {:ok? true :did did}
+    {:ok? false :error :missing-operator-seed-hex}))
 
 (defn- as-byte-seq [bytes]
   #?(:clj (seq bytes)

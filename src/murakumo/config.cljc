@@ -5,7 +5,8 @@
 ;; cljs/nbb must preload shipped KIR (resources/ via nbb cwd, register-kir!, or
 ;; set-resource-loader!) before requiring this ns
 ;; (ADR-260731-w6-t64-config-mirror-delete).
-;; Host remains: EDN parse/IO, env map folds, filesystem existence probes.
+;; Host remains: EDN parse/IO, env map folds, filesystem existence probes,
+;; and the shared kotoba operator-seed file (never echoed, never invented).
 ;; Profile 5: pinned-exists? / pinned-wit-exists? are real guest :bool.
 
 (ns murakumo.config
@@ -97,16 +98,110 @@
   [getenv keys]
   (into {} (map (fn [k] [k (getenv k)])) keys))
 
+(def operator-seed-file-env-keys
+  "Env keys used only to locate the shared kotoba operator-seed file."
+  ["HOME" "XDG_DATA_HOME"])
+
+(defn operator-seed-file-path
+  "Shared kotoba/murakumo operator-seed path (kotoba-lang/kotoba#493).
+
+   Exact contract:
+     ${XDG_DATA_HOME:-$HOME/.local/share}/kotoba/operator.seed
+
+   Blank `XDG_DATA_HOME` is unset. One path only — no `~/.kotoba/` default."
+  [env]
+  (let [xdg (get env "XDG_DATA_HOME")
+        home (get env "HOME")
+        data-home (if (and (string? xdg) (not (str/blank? xdg)))
+                    xdg
+                    (when (and (string? home) (not (str/blank? home)))
+                      (str home "/.local/share")))]
+    (when data-home
+      (str data-home "/kotoba/operator.seed"))))
+
+(defn operator-seed-file-candidates
+  "The single shared-store path, when HOME or XDG_DATA_HOME can locate it."
+  [env]
+  (vec (remove nil? [(operator-seed-file-path env)])))
+
+(defn parse-operator-seed-file
+  "Trim a seed-file body. Trailing newline is accepted; the seed itself is
+  never returned in diagnostics. Blank content is treated as missing."
+  [raw]
+  (when (string? raw)
+    (let [s (str/trim raw)]
+      (when-not (str/blank? s) s))))
+
+(defn- default-seed-slurp
+  [path]
+  (try
+    #?(:clj (slurp path)
+       :cljs (when (exists? js/require)
+               (.readFileSync (js/require "fs") path "utf8")))
+    (catch #?(:clj Exception :cljs :default) _
+      nil)))
+
+(defn- default-seed-exists?
+  [path]
+  (try
+    #?(:clj (.exists (java.io.File. path))
+       :cljs (when (exists? js/require)
+               (boolean (.existsSync (js/require "fs") path))))
+    (catch #?(:clj Exception :cljs :default) _
+      false)))
+
+(defn operator-seed-file-io
+  "Host slurp/exists probes for the shared operator-seed file."
+  []
+  {:slurp default-seed-slurp
+   :exists? default-seed-exists?})
+
+(defn- as-seed-io
+  [file-io]
+  (let [io (or file-io (operator-seed-file-io))]
+    {:slurp (or (:slurp io) default-seed-slurp)
+     :exists? (or (:exists? io) default-seed-exists?)}))
+
+(defn operator-seed-from-file
+  "Read the first existing shared kotoba operator-seed file. Does not invent
+  a seed. File contents are never attached to thrown errors."
+  ([env] (operator-seed-from-file env (operator-seed-file-io)))
+  ([env file-io]
+   (let [{:keys [slurp exists?]} (as-seed-io file-io)]
+     (some (fn [path]
+             (when (exists? path)
+               (try
+                 (parse-operator-seed-file (slurp path))
+                 (catch #?(:clj Exception :cljs :default) _
+                   nil))))
+           (operator-seed-file-candidates env)))))
+
 (defn operator-seed-from-getenv
-  "Resolve the fleet operator seed with an injected getenv-like function."
-  [getenv fleet]
-  (operator-seed (env-values getenv (operator-seed-env-keys fleet)) fleet))
+  "Resolve the fleet operator seed: env wins, else the shared kotoba file.
+
+   Inject `getenv` and optional `file-io` (`{:slurp :exists?}`) for tests.
+   Missing both returns nil — callers keep the existing missing-seed error."
+  ([getenv fleet]
+   (operator-seed-from-getenv getenv fleet (operator-seed-file-io)))
+  ([getenv fleet file-io]
+   (let [env (env-values getenv (into (operator-seed-env-keys fleet)
+                                      operator-seed-file-env-keys))
+         from-env (let [s (operator-seed env fleet)]
+                    (when (and (string? s) (not (str/blank? s))) s))]
+     (or from-env (operator-seed-from-file env file-io)))))
 
 (defn current-operator-seed
-  "Resolve the fleet operator seed from the current host process env."
+  "Resolve the fleet operator seed from the current host process env, then
+   the shared kotoba local store. Never invents a seed."
   [fleet]
   #?(:clj (operator-seed-from-getenv #(System/getenv %) fleet)
-     :cljs (throw (ex-info "current-operator-seed is host-only" {}))))
+     :cljs (if (exists? js/process)
+             (operator-seed-from-getenv
+              (fn [k]
+                (let [v (aget (.-env js/process) k)]
+                  (when (some? v) (str v))))
+              fleet)
+             (throw (ex-info "current-operator-seed is host-only" {})))))
 
 (defn parse-edn [text]
   (edn/read-string text))
