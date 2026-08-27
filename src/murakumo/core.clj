@@ -40,7 +40,9 @@
 ;; ── identity ──────────────────────────────────────────────────────────────
 ;; Derive a deterministic per-node Ed25519 seed from the shared operator seed +
 ;; node name, so node identities are stable + reproducible without storing a
-;; secret per node. The operator seed itself comes from the env (never committed).
+;; secret per node. The operator seed comes from MURAKUMO_OPERATOR_SEED, else
+;; the shared kotoba local store (~/.kotoba/operator.seed). Never committed,
+;; never echoed.
 
 (defn- operator-seed [fleet]
   (config/current-operator-seed fleet))
@@ -451,12 +453,26 @@
       :else
       (println "usage: murakumo token issue [--sub L] [--scope chat|image|all] [--ttl secs] | verify <token>"))))
 
+(defn cmd-identity
+  "Print the fleet operator DID. The seed is never echoed.
+
+   Resolution: MURAKUMO_OPERATOR_SEED (env wins), else the shared kotoba
+   local store. Missing both is the existing missing-seed error."
+  [fleet _]
+  (let [result (identity/identity-command-result (operator-seed fleet))]
+    (if (:ok? result)
+      (println (:did result))
+      (do
+        (binding [*out* *err*]
+          (println (report/command-error-line :provision (:error result))))
+        (System/exit 2)))))
+
 (def ^:private commands
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
    "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin
    "dash" cmd-dash "reconcile" cmd-reconcile "fleet" cmd-fleet
    "cloud" cmd-cloud "infer" cmd-infer "model" cmd-model "revive" cmd-revive
-   "token" cmd-token})
+   "token" cmd-token "identity" cmd-identity})
 
 (defn -main [& args]
   (let [[cmd & rest] args

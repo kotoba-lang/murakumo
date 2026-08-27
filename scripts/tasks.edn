@@ -8,7 +8,11 @@
 ;; model/token/dash/cloud/overlay/test) were dropped and have NO runnable
 ;; entrypoint today — those namespaces are .clj on babashka.process/cheshire,
 ;; so they need an nbb port, not a re-added bb.edn. `task` is the first port.
-{:token {:cmd ["nbb" "--classpath" "src" "src/murakumo/apikey_cli.cljs"]
+{:identity {:cmd ["clojure" "-M" "-m" "murakumo.core" "identity"]
+            :pass-args? true
+            :doc "Print the fleet operator DID. Uses MURAKUMO_OPERATOR_SEED if set, else the shared kotoba store (~/.kotoba/operator.seed or $XDG_DATA_HOME/kotoba/operator.seed). Never echoes the seed. Missing both is the existing missing-seed error."}
+
+ :token {:cmd ["nbb" "--classpath" "src" "src/murakumo/apikey_cli.cljs"]
          :pass-args? true
          :doc "Issue / verify murakumo API keys (mk1 capability tokens). The nbb port of the dropped bb `murakumo token` entrypoint — cloud-murakumo's 401 still tells callers to run `bb murakumo token issue`, which has not been runnable since babashka was retired. e.g. `nbb scripts/run-task.cljs token issue --sub laptop --scope chat --ttl 604800`. Needs $MURAKUMO_TOKEN_SECRET (the value the gateway verifies with)."}
 
