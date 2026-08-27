@@ -56,22 +56,30 @@
    :slurp (fn [_] (throw (ex-info "seed file must not be read when missing" {})))})
 
 (deftest operator-seed-file-path-matches-shared-kotoba-store
-  (is (= "/home/jun/.kotoba/operator.seed"
-         (config/operator-seed-file-path {"HOME" "/home/jun"})))
-  (is (= ["/xdg/kotoba/operator.seed" "/home/jun/.kotoba/operator.seed"]
+  (is (= "/home/jun/.local/share/kotoba/operator.seed"
+         (config/operator-seed-file-path {"HOME" "/home/jun"}))
+      "XDG unset → $HOME/.local/share/kotoba/operator.seed (kotoba#493)")
+  (is (= ["/xdg/kotoba/operator.seed"]
          (config/operator-seed-file-candidates
           {"HOME" "/home/jun" "XDG_DATA_HOME" "/xdg"})))
   (is (= "/xdg/kotoba/operator.seed"
          (config/operator-seed-file-path
           {"HOME" "/home/jun" "XDG_DATA_HOME" "/xdg"})))
+  (is (= "/home/jun/.local/share/kotoba/operator.seed"
+         (config/operator-seed-file-path
+          {"HOME" "/home/jun" "XDG_DATA_HOME" "  "}))
+      "blank XDG_DATA_HOME is unset")
   (is (nil? (config/operator-seed-file-path {})))
+  (is (not= "/home/jun/.kotoba/operator.seed"
+            (config/operator-seed-file-path {"HOME" "/home/jun"}))
+      "no second default at ~/.kotoba/")
   (is (= "abc"
          (config/parse-operator-seed-file "abc\n"))
       "trailing newline from a 0600 seed file is accepted")
   (is (nil? (config/parse-operator-seed-file "  \n"))))
 
 (deftest operator-seed-prefers-env-then-shared-file
-  (let [home-path "/tmp/home/.kotoba/operator.seed"
+  (let [home-path "/tmp/home/.local/share/kotoba/operator.seed"
         xdg-path "/xdg/kotoba/operator.seed"
         slurp (fn [p] (get {home-path (str test-file-seed "\n")
                             xdg-path "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
@@ -94,7 +102,13 @@
                                               "XDG_DATA_HOME" "/xdg"}
                                              {}
                                              io))
-        "XDG_DATA_HOME store is preferred when that file exists")
+        "XDG_DATA_HOME store is the only file when that env is set")
+    (is (nil? (config/operator-seed-from-getenv
+               {"HOME" "/tmp/home"}
+               {}
+               {:slurp (fn [p] (get {"/tmp/home/.kotoba/operator.seed" test-file-seed} p))
+                :exists? #{"/tmp/home/.kotoba/operator.seed"}}))
+        "~/.kotoba/operator.seed is not a fallback")
     (is (nil? (config/operator-seed-from-getenv {} {} missing-seed-io))
         "missing both → no invented seed")
     (is (nil? (config/operator-seed-from-getenv {"HOME" "/tmp/empty"
@@ -107,7 +121,7 @@
   (let [home (doto (java.io.File. (str (System/getProperty "java.io.tmpdir")
                                        "/murakumo-seed-" (System/nanoTime)))
                .mkdirs)
-        dir (doto (java.io.File. home ".kotoba") .mkdirs)
+        dir (doto (java.io.File. home ".local/share/kotoba") .mkdirs)
         file (java.io.File. dir "operator.seed")]
     (try
       (spit file (str test-file-seed "\n"))
@@ -120,6 +134,8 @@
       (finally
         (.delete file)
         (.delete dir)
+        (.delete (java.io.File. home ".local/share"))
+        (.delete (java.io.File. home ".local"))
         (.delete home)))))
 
 (deftest binary-path-resolution-is-stable

@@ -41,7 +41,7 @@
 ;; Derive a deterministic per-node Ed25519 seed from the shared operator seed +
 ;; node name, so node identities are stable + reproducible without storing a
 ;; secret per node. The operator seed comes from MURAKUMO_OPERATOR_SEED, else
-;; the shared kotoba local store (~/.kotoba/operator.seed). Never committed,
+;; the shared kotoba store (${XDG_DATA_HOME:-$HOME/.local/share}/kotoba/operator.seed). Never committed,
 ;; never echoed.
 
 (defn- operator-seed [fleet]
@@ -456,8 +456,9 @@
 (defn cmd-identity
   "Print the fleet operator DID. The seed is never echoed.
 
-   Resolution: MURAKUMO_OPERATOR_SEED (env wins), else the shared kotoba
-   local store. Missing both is the existing missing-seed error."
+   Resolution: MURAKUMO_OPERATOR_SEED (env wins), else
+   ${XDG_DATA_HOME:-$HOME/.local/share}/kotoba/operator.seed.
+   Missing both is the existing missing-seed error."
   [fleet _]
   (let [result (identity/identity-command-result (operator-seed fleet))]
     (if (:ok? result)

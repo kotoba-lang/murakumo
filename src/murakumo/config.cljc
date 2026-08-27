@@ -102,24 +102,27 @@
   "Env keys used only to locate the shared kotoba operator-seed file."
   ["HOME" "XDG_DATA_HOME"])
 
-(defn operator-seed-file-candidates
-  "Shared local operator-seed paths, first existing file wins.
-
-   Documented store: `~/.kotoba/operator.seed` (mode 0600). When
-   `XDG_DATA_HOME` is set, `$XDG_DATA_HOME/kotoba/operator.seed` is
-   preferred so kotoba and murakumo can agree on one file."
-  [env]
-  (let [xdg (let [v (get env "XDG_DATA_HOME")]
-              (when (and (string? v) (not (str/blank? v))) v))
-        home (let [v (get env "HOME")]
-               (when (and (string? v) (not (str/blank? v))) v))]
-    (vec (remove nil? [(when xdg (str xdg "/kotoba/operator.seed"))
-                       (when home (str home "/.kotoba/operator.seed"))]))))
-
 (defn operator-seed-file-path
-  "Preferred shared-store path for this env (may not exist yet)."
+  "Shared kotoba/murakumo operator-seed path (kotoba-lang/kotoba#493).
+
+   Exact contract:
+     ${XDG_DATA_HOME:-$HOME/.local/share}/kotoba/operator.seed
+
+   Blank `XDG_DATA_HOME` is unset. One path only — no `~/.kotoba/` default."
   [env]
-  (first (operator-seed-file-candidates env)))
+  (let [xdg (get env "XDG_DATA_HOME")
+        home (get env "HOME")
+        data-home (if (and (string? xdg) (not (str/blank? xdg)))
+                    xdg
+                    (when (and (string? home) (not (str/blank? home)))
+                      (str home "/.local/share")))]
+    (when data-home
+      (str data-home "/kotoba/operator.seed"))))
+
+(defn operator-seed-file-candidates
+  "The single shared-store path, when HOME or XDG_DATA_HOME can locate it."
+  [env]
+  (vec (remove nil? [(operator-seed-file-path env)])))
 
 (defn parse-operator-seed-file
   "Trim a seed-file body. Trailing newline is accepted; the seed itself is

@@ -123,7 +123,7 @@ Each fleet node runs `kotoba-server` as a **macOS LaunchAgent** (`RunAtLoad` +
 ## Quickstart
 
 ```bash
-# Generate the shared operator identity once (kotoba writes ~/.kotoba/operator.seed, mode 0600).
+# Generate the shared operator identity once (kotoba writes the XDG store, mode 0600).
 # murakumo reads that same file when MURAKUMO_OPERATOR_SEED is unset. Env still wins if set.
 kotoba identity new
 export MURAKUMO_KOTOBA_DIR=~/github/com-junkawasaki/orgs/com-junkawasaki/kotoba
@@ -772,9 +772,14 @@ kotoba and murakumo share one local operator identity so both CLIs work on one
 machine without two env seeds.
 
 Generate once with kotoba (`kotoba identity new` / shared store). That writes
-**`~/.kotoba/operator.seed`** (mode **0600**, never committed, never echoed). When
-`XDG_DATA_HOME` is set, the store is **`$XDG_DATA_HOME/kotoba/operator.seed`**
-instead — same path both PRs should use.
+
+```
+${XDG_DATA_HOME:-$HOME/.local/share}/kotoba/operator.seed
+```
+
+(mode **0600**, never committed, never echoed) — the exact kotoba-lang/kotoba#493
+contract. When `XDG_DATA_HOME` is unset that is `$HOME/.local/share/kotoba/operator.seed`.
+One path only; murakumo does not also look under `~/.kotoba/`.
 
 Resolution: `MURAKUMO_OPERATOR_SEED` (32-byte hex) if set, else that shared
 file. Missing both is the existing missing-seed error; murakumo does not invent

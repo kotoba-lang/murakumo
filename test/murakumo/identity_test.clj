@@ -39,7 +39,7 @@
 
 (deftest operator-did-matches-kotoba-seed-derivation
   (testing "file present + env unset → same DID kotoba derives from that seed"
-    (let [path "/tmp/home/.kotoba/operator.seed"
+    (let [path "/tmp/home/.local/share/kotoba/operator.seed"
           seed kotoba-seed
           getenv {"HOME" "/tmp/home"}
           io {:exists? #{path}
@@ -54,7 +54,7 @@
       (is (not (str/includes? (str result) seed))
           "identity output never echoes the seed")))
   (testing "env set → env wins, DID follows the env seed"
-    (let [path "/tmp/home/.kotoba/operator.seed"
+    (let [path "/tmp/home/.local/share/kotoba/operator.seed"
           getenv {"HOME" "/tmp/home"
                   "MURAKUMO_OPERATOR_SEED" other-seed}
           io {:exists? #{path}
