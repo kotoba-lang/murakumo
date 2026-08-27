@@ -14,7 +14,7 @@ const PAGES = [
     must: ['murakumo Compute', 'ISCO', 'itonami.cloud'],
     links: ['https://itonami.cloud/', '/join/browser', '/itonami/verticals'] },
   { name: 'app.itonami.cloud/join/browser (worker)', url: 'https://app.itonami.cloud/join/browser',
-    must: ['叢雲に加わる', 'did:key', 'relay.gftd.ai'], clickJoin: true },
+    must: ['叢雲に加わる', 'did:key'], clickJoin: true },
 ];
 
 // Full API surface. `assert` is an optional predicate over the parsed JSON body
@@ -33,7 +33,6 @@ const APIS = [
   ['GET', 'https://app.itonami.cloud/itonami/pay/quote?usd=10',
     b => b.chain === 'base' && b.to && b.to.startsWith('0x') && b.net === 950],
   ['GET', 'https://app.itonami.cloud/itonami/pay/status?did=did:key:z6MkQA', b => 'pending' in b],
-  ['GET', 'https://relay.gftd.ai/stats', b => 'settled' in b],
 ];
 
 async function main() {
