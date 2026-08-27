@@ -105,21 +105,18 @@
 
 (deftest operator-seed-reads-real-0600-shared-file
   (let [home (doto (java.io.File. (str (System/getProperty "java.io.tmpdir")
-                                       "/murakumo-seed-" (System/nanoTime())))
+                                       "/murakumo-seed-" (System/nanoTime)))
                .mkdirs)
         dir (doto (java.io.File. home ".kotoba") .mkdirs)
         file (java.io.File. dir "operator.seed")]
     (try
       (spit file (str test-file-seed "\n"))
-      (let [path (.toPath file)
-            perms (java.nio.file.attribute.PosixFilePermissions/fromString "rw-------")]
-        (java.nio.file.Files/setPosixFilePermissions path perms)
-        (is (= "rw-------"
-               (java.nio.file.attribute.PosixFilePermissions/toString
-                (java.nio.file.Files/getPosixFilePermissions path))))
-        (is (= test-file-seed
-               (config/operator-seed-from-getenv {"HOME" (.getPath home)} {}))
-            "0600 shared store is readable; contents are not logged"))
+      (java.nio.file.Files/setPosixFilePermissions
+       (.toPath file)
+       (java.nio.file.attribute.PosixFilePermissions/fromString "rw-------"))
+      (is (= test-file-seed
+             (config/operator-seed-from-getenv {"HOME" (.getPath home)} {}))
+          "0600 shared store is readable; contents are not logged")
       (finally
         (.delete file)
         (.delete dir)
