@@ -702,6 +702,28 @@ files. Inspect with `systemctl status murakumo-ring-watchdog.timer` on the head,
 `tail /var/lib/murakumo/ring-watchdog-events.log`, and
 `sudo launchctl print system/com.murakumo.rpc-worker` on a Mac worker.
 
+### Resident node liveness and work polling
+
+An OpenAI-compatible server that fits a complete model can join the public
+queue without being mistaken for a live node merely because it enrolled once:
+
+```bash
+export MURAKUMO_NODE_CACAO=...       # device-issued CACAO; preferred
+export MURAKUMO_NODE_DID=did:key:... # must equal that CACAO's issuer
+# Existing operator-managed residents may instead use MURAKUMO_SERVICE_TOKEN.
+nbb scripts/run-task.cljs infer-join \
+  --name k16 --model <served-model-id> --local-url http://127.0.0.1:11434/v1
+```
+
+The resident probes `<local-url>/models` and reports to
+`POST /infer/nodes/<name>/heartbeat` every 30 seconds. The server receive time
+owns liveness; no heartbeat means `never`, a heartbeat older than two minutes
+means `stale`, and only a fresh model probe with a free resident slot means
+`ready?=true`. Claiming a job immediately reports zero free slots and finishing
+it reports the slot free again. `MURAKUMO_INFER_LOCAL_TOKEN` (or
+`VLLM_API_KEY`) authenticates only the local model server and is never reused as
+the Murakumo control-plane credential.
+
 ### Is the link fast enough for tensor parallel? — `topology_probe`
 
 `choose-strategy` returns `"tensor"` at 20 Gbps and above, and until

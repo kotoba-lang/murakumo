@@ -1,5 +1,6 @@
 (ns murakumo.infer-poll-worker-test
   (:require [cljs.test :refer [async deftest is run-tests testing]]
+            [clojure.string :as str]
             [murakumo.infer.poll-worker :as worker]))
 
 (deftest local-auth-token-precedence
@@ -22,6 +23,83 @@
   (is (= {"content-type" "application/json"
           "authorization" "Bearer secret"}
          (worker/local-auth-headers "secret"))))
+
+(deftest control-plane-auth-prefers-explicit-device-authority
+  (is (= {:kind :cacao :credential "device-cacao"}
+         (worker/control-auth {:cacao "device-cacao" :token "operator"}
+                              {"MURAKUMO_NODE_CACAO" "env-cacao"
+                               "MURAKUMO_SERVICE_TOKEN" "env-token"})))
+  (is (= {:kind :bearer :credential "operator"}
+         (worker/control-auth {:token "operator"}
+                              {"MURAKUMO_NODE_CACAO" "env-cacao"})))
+  (is (= {"content-type" "application/json"
+          "authorization" "CACAO device-cacao"}
+         (worker/control-auth-headers {:kind :cacao :credential "device-cacao"})))
+  (is (= {"content-type" "application/json"
+          "authorization" "Bearer operator"}
+         (worker/control-auth-headers {:kind :bearer :credential "operator"}))))
+
+(deftest device-cacao-uses-its-real-did
+  (is (= "did:key:z6MkDevice"
+         (worker/node-did {} {"MURAKUMO_NODE_DID" "did:key:z6MkDevice"} "k16")))
+  (is (= "did:key:z6MkArg"
+         (worker/node-did {:did "did:key:z6MkArg"}
+                          {"MURAKUMO_NODE_DID" "did:key:z6MkDevice"} "k16")))
+  (is (str/starts-with? (worker/node-did {} {} "k16") "did:key:pending-"))
+  (is (worker/valid-node-name? "k16-node_1.local"))
+  (is (false? (worker/valid-node-name? "bad/name"))))
+
+(deftest heartbeat-separates-liveness-readiness-and-capacity
+  (let [busy? (atom false)
+        config {:did "did:key:node" :model "m" :engine "openai-compatible"
+                :slots 1 :busy? busy? :memory-bytes (constantly 4096)}]
+    (is (= {:did "did:key:node"
+            :node/ready? true
+            :node/model "m"
+            :node/engine "openai-compatible"
+            :node/observed-at 1000
+            :node/capacity {:slots-total 1 :slots-free 1 :memory-bytes 4096}}
+           (worker/heartbeat-body config true 1000)))
+    (reset! busy? true)
+    (let [body (worker/heartbeat-body config true 1001)]
+      (is (false? (:node/ready? body)))
+      (is (= 0 (get-in body [:node/capacity :slots-free]))))))
+
+(deftest readiness-requires-the-requested-local-model
+  (is (worker/model-ready? "model-a" {:data [{:id "model-a"}]}))
+  (is (worker/model-ready? "model-a" {:models [{:name "model-a"}]}))
+  (is (false? (worker/model-ready? "model-a" {:data [{:id "model-b"}]})))
+  (is (false? (worker/model-ready? "model-a" {:data []}))))
+
+(deftest heartbeat-probes-model-and-sends-bounded-observation
+  (async done
+    (let [requests (atom [])
+          response (fn [status body]
+                     #js {:status status
+                          :text (fn [] (js/Promise.resolve (js/JSON.stringify (clj->js body))))})
+          fetch-fn (fn [url opts]
+                     (swap! requests conj [url opts])
+                     (js/Promise.resolve
+                      (if (str/ends-with? url "/models")
+                        (response 200 {:data [{:id "model-a"}]})
+                        (response 201 {:heartbeat/received-at 1000}))))
+          config {:base "https://api.example" :auth {:kind :cacao :credential "cap"}
+                  :did "did:key:node" :node-name "node-a" :model "model-a"
+                  :engine "openai-compatible" :slots 1 :busy? (atom false)
+                  :memory-bytes (constantly 2048)
+                  :local-url "http://local/v1" :local-token "local"}]
+      (-> (worker/heartbeat-with-fetch! fetch-fn config)
+          (.then (fn [{:keys [status probe]}]
+                   (is (= 201 status))
+                   (is (:ready? probe))
+                   (let [[url opts] (second @requests)
+                         body (js->clj (js/JSON.parse (.-body opts)) :keywordize-keys true)]
+                     (is (= "https://api.example/infer/nodes/node-a/heartbeat" url))
+                     (is (= "CACAO cap" (aget (.-headers opts) "authorization")))
+                     (is (true? (:node/ready? body)))
+                     (is (= 1 (get-in body [:node/capacity :slots-free]))))))
+          (.catch (fn [error] (is false (str error))))
+          (.finally done)))))
 
 (deftest completion-sends-local-bearer-and-rejects-http-errors
   (async done

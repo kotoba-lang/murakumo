@@ -35,11 +35,17 @@
          :pass-args? true
          :doc "Distributed inference control plane: probe | plan <model> | provision | up | down | ps | serve <model> | generate <prompt>."}
 
+ :infer-join {:cmd ["nbb" "--classpath" "src" "scripts/infer-join.cljs"]
+              :pass-args? true
+              :doc "Join one resident OpenAI-compatible model server to api.murakumo.cloud. Enrolls durable inventory, probes /models, sends authenticated liveness/readiness/capacity every 30s, polls work, and reports results."}
+ :test-infer-join {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/infer_poll_worker_test.cljs"]
+                   :doc "Offline tests for inference-node auth, local readiness probing, heartbeat capacity, and completion auth."}
+
  :test-worker {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/task_worker_test.cljs"]
                :doc "Offline tests for the resident-worker framing (no ssh)."}
  :test-tunnel {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/tunnel_test.cljc"]
                :doc "Offline tests for the fleet transport contract (in-band exit status, multiplexing, argv shapes)."}
- :test-tasks {:runs [:test-task :test-task-exec :test-worker :test-tunnel]
+ :test-tasks {:runs [:test-task :test-task-exec :test-worker :test-tunnel :test-infer-join]
               :doc "Every offline test that runs under nbb today."}
 
  :claude {:cmd ["tools/claude-murakumo/claude-murakumo"], :pass-args? true, :doc "Run Claude Code against murakumo.cloud instead of Anthropic's own models (tools/claude-murakumo — same shape as z.ai's claude-zai wrapper for GLM)."}
