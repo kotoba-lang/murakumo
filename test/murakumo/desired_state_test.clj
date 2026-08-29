@@ -93,12 +93,12 @@
         receipt (desired/pull roots (str (:desired/cid env) "@a")
                               (:receipt-authority-spki-b64 result)
                               {:kind desired/receipt-kind})]
-    (is (= :applied (:status result)))
+    (is (= :accepted (:status result)))
     (is (= 1 (count @calls)))
     (is (= ["/opt/kotoba" "app" "deploy"] (take 3 (first @calls))))
     (is (= (:desired/cid env)
            (get-in state [sut/default-subject :desired-cid])))
-    (is (= :applied (get-in receipt [:desired/payload :receipt/status])))
+    (is (= :accepted (get-in receipt [:desired/payload :receipt/status])))
     (testing "the same desired CID is idempotent"
       (is (= :unchanged
              (:status (sut/reconcile! {:roots roots :authority-spki-b64 authority
@@ -107,3 +107,56 @@
                                        :min-copies 2 :kotoba "/opt/kotoba" :wit-dir "/opt/wit"
                                        :url "http://127.0.0.1:8077"
                                        :run-fn #(throw (ex-info "must not run" {:argv %}))})))))))
+
+(deftest runtime-probe-is-required-for-an-applied-receipt
+  (let [operator (cacao/generate-identity)
+        authority (desired/authority-spki-b64 operator)
+        root (temp-dir)
+        payload {:murakumo/schema sut/schema :fleet/name "test"
+                 :apps [{:name "hello" :cid "bafyhello" :assignments ["a"]
+                         :manifest/text (pr-str {:components [{:cid "bafyhello"}]})
+                         :probe {:method "POST" :path "/mesh/http/hello"
+                                 :body "{}" :expect-status 200}}]}
+        env (desired/seal {:kind sut/kind :subject sut/default-subject
+                           :epoch 1 :previous-cid nil :payload payload} operator)
+        _ (desired/publish! [root] 1 env authority)
+        state-dir (temp-dir)
+        calls (atom [])
+        run-fn (fn [argv]
+                 (swap! calls conj argv)
+                 (if (= "curl" (first argv))
+                   {:exit 0 :out "200" :err ""}
+                   {:exit 0 :out "announced" :err ""}))
+        result (sut/reconcile! {:roots [root] :authority-spki-b64 authority
+                                :node "a" :state-dir (.getPath state-dir)
+                                :node-identity-path (.getPath (java.io.File. state-dir "node.edn"))
+                                :min-copies 1 :kotoba "/opt/kotoba" :wit-dir "/opt/wit"
+                                :url "http://127.0.0.1:8077" :run-fn run-fn})]
+    (is (= :applied (:status result)))
+    (is (= true (get-in result [:results 0 :probe :ok?])))
+    (is (= "curl" (first (second @calls))))))
+
+(deftest failed-runtime-probe-does-not-write-a-receipt
+  (let [operator (cacao/generate-identity)
+        authority (desired/authority-spki-b64 operator)
+        root (temp-dir)
+        payload {:murakumo/schema sut/schema :fleet/name "test"
+                 :apps [{:name "hello" :cid "bafyhello" :assignments ["a"]
+                         :manifest/text "{}"
+                         :probe {:path "/mesh/http/hello" :expect-status 200}}]}
+        env (desired/seal {:kind sut/kind :subject sut/default-subject
+                           :epoch 1 :previous-cid nil :payload payload} operator)
+        _ (desired/publish! [root] 1 env authority)
+        state-dir (temp-dir)]
+    (is (= :murakumo/local-reconcile-failed
+           (failure-type
+            #(sut/reconcile! {:roots [root] :authority-spki-b64 authority
+                              :node "a" :state-dir (.getPath state-dir)
+                              :node-identity-path (.getPath (java.io.File. state-dir "node.edn"))
+                              :min-copies 1 :kotoba "/opt/kotoba" :wit-dir "/opt/wit"
+                              :url "http://127.0.0.1:8077"
+                              :run-fn (fn [argv]
+                                        (if (= "curl" (first argv))
+                                          {:exit 0 :out "502" :err ""}
+                                          {:exit 0 :out "ok" :err ""}))}))))
+    (is (not (.exists (java.io.File. state-dir "state.edn"))))))
