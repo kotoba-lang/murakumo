@@ -319,6 +319,9 @@ Node receipt は deploy command の exit 0 だけでは `:applied` を名乗ら�
 desired state に持ち、node-local HTTP probe まで一致した場合だけ `:applied` になる。
 probe のない正常な announce は `:accepted`、probe 失敗は state/receipt を書かず失敗する。
 route 登録だけ成功して component block が無い状態を実行成功として記録しないためである。
+常駐化の正本は `deploy/com.murakumo.desired-agent.plist.tmpl` と
+`deploy/murakumo-desired-agent.sh.tmpl`。system LaunchDaemon が 60 秒ごとに local
+mirror を pull し、再起動後も同じ署名検証・previous-CID・runtime-probe gate を通す。
 
 mirror は filesystem namespace なので、別ディスク、別ホストの mount、object-store
 mount、閉域同期のいずれでもよい。mirror 自体は信頼しない。同 epoch の異なる CID、
