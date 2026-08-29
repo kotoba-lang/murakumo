@@ -254,9 +254,16 @@
   [did jobs]
   (sort-by #(sha256-hex (str did "\u0000" (:job-id %))) jobs))
 
-(defn- poll-once! [{:keys [base auth model] :as config}]
-  (-> (api! base auth :get
-            (str "/infer/queue?model=" (js/encodeURIComponent model)))
+(defn queue-path
+  "Request only jobs that this worker is currently eligible to claim.  The
+   control plane remains authoritative, but including the DID prevents a soft
+   cache-affinity job from being advertised to every edge worker first."
+  [model did]
+  (str "/infer/queue?model=" (js/encodeURIComponent model)
+       "&did=" (js/encodeURIComponent did)))
+
+(defn- poll-once! [{:keys [base auth model did] :as config}]
+  (-> (api! base auth :get (queue-path model did))
       (.then (fn [{:keys [body]}]
                (claim-first-available!
                 #(claim-and-run! config (select-keys % [:job-id :kind :input]))

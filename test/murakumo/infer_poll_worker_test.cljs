@@ -212,6 +212,10 @@
     (is (not= (mapv :job-id order-a) (mapv :job-id order-b)))
     (is (not= (:job-id (first order-a)) (:job-id (first order-b))))))
 
+(deftest queue-poll-identifies-the-worker-for-cache-affinity
+  (is (= "/infer/queue?model=murakumo-edge&did=did%3Akey%3Anode-a"
+         (worker/queue-path "murakumo-edge" "did:key:node-a"))))
+
 (defmethod cljs.test/report [:cljs.test/default :end-run-tests] [m]
   (println (str "\n" (:test m) " tests, " (:pass m) " assertions, "
                 (:fail m) " failures, " (:error m) " errors"))
