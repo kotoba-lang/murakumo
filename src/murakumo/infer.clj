@@ -35,6 +35,7 @@
             [clojure.string :as str]
             [murakumo.fleet :as fleet]
             [murakumo.infer.engine :as engine]
+            [murakumo.infer.expert-stream :as expert-stream]
             [murakumo.infer.moe :as moe]
             [murakumo.infer.plan :as plan]
             [murakumo.infer.waste :as waste]
@@ -357,6 +358,9 @@
 
 (defn- waste? [model] (= :waste (:model/engine model)))
 
+(defn- expert-stream? [model]
+  (= :expert-aware-nvme (:model/engine model)))
+
 (defn- moe-opt
   [cfg model k]
   (or (get model (keyword "model" (name k)))
@@ -395,6 +399,22 @@
                                   (:infer/ctx cfg) (assoc :ctx (:infer/ctx cfg))
                                   (:model/waste-disk-mb-s m)
                                   (assoc :disk-mb-s (:model/waste-disk-mb-s m)))))))
+
+(defn- cut-plan-expert-stream [cfg model]
+  (let [{:keys [workers head]} (probe-fleet cfg)
+        dir (:model/dir model)
+        with-artifact
+        (fn [node]
+          (let [result (when (and (:host node) dir)
+                         (ssh/sh (:host node)
+                                 (str "if test -d " dir "; then find " dir
+                                      " -type f -name '*.gguf' -exec stat -f %z {} \\; "
+                                      "| awk '{s+=$1} END {print s+0}'; else echo 0; fi")))
+                present (if (and result (zero? (:exit result)))
+                          (or (some-> (:out result) str/trim parse-long) 0)
+                          0)]
+            (assoc node :model-present-bytes present)))]
+    (expert-stream/plan model (mapv with-artifact (conj workers head)))))
 
 (defn cmd-probe [_cfg-args]
   (let [cfg (load-config)
@@ -477,10 +497,31 @@
     (println (str "plan → " plan-file))
     (when-not (:fits? pl) (System/exit 2))))
 
+(defn- cmd-plan-expert-stream [cfg model]
+  (let [pl (cut-plan-expert-stream cfg model)
+        node (:node pl)]
+    (println (format "model %s  engine expert-aware NVMe (lossless Qwen4Exp)"
+                     (:model/id model)))
+    (if node
+      (println (format "candidate %-10s memory %.1f GiB  disk-free %.1f GB  cache %d MiB  io %d  FITS ✓"
+                       (:name node) (/ (double (:mem-bytes node)) plan/GiB)
+                       (/ (double (:disk-free-bytes node)) 1e9)
+                       (:cache-mib pl) (:io-threads pl)))
+      (println (format "no node has model + %.0f GiB disk reserve and 16 GiB RAM — DOES NOT FIT ✗"
+                       (/ (double expert-stream/disk-reserve-bytes) plan/GiB))))
+    (println "lossless: top-10 unchanged, cold-drop=0, prefetch=0, MTP=off")
+    (println "macOS page-cache bypass: false (F_NOCACHE/O_DIRECT not active)")
+    (spit plan-file (pr-str pl))
+    (println (str "plan → " plan-file))
+    (when-not (:fits? pl) (System/exit 2))))
+
 (defn cmd-plan [[model-id]]
   (let [cfg (load-config)
         model (model-or-die cfg (or model-id "glm-5.2-reap50-q2k"))]
     (cond
+      (expert-stream? model)
+      (cmd-plan-expert-stream cfg model)
+
       (waste? model)
       (cmd-plan-waste cfg model)
 

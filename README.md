@@ -31,6 +31,30 @@ The decision and blocked-canary evidence are in
 > components (`run` / `on-http` / `on-tick` / `on-kse`). Different substrate, on the
 > same hardware.
 
+## Qwen3.8 Flash Next Expert-aware NVMe route
+
+`qwen3.8-flash-next-ud-iq3-xxs` is a single-node, lossless Qwen4Exp route for
+the 16 GiB M4 mini `dan`. Planning credits only GGUF bytes actually observed on
+that node and otherwise requires the complete 81,961,823,936-byte artifact plus
+an 8 GiB disk floor. The fixed comparison cell keeps the model's top-10,
+disables cold-expert dropping, temporal prefetch and MTP, and uses four read
+lanes. The qualified 16 GiB profile keeps the user-space expert cache at zero:
+the 2,000 MiB comparison cache displaced macOS page cache and reduced the
+8-token decode from 1.937 tok/s to 0.306/0.287 tok/s despite a 21.4% hit rate.
+The 32-token cell confirmed 3.615 tok/s at cache 0 versus 1.473 tok/s for
+ordinary mmap (2.45x decode; 1.46x including cold load and prefill). Actual
+token IDs matched across cache 0, two cache-on runs, and mmap. Evidence is in
+`verify/evidence/qwen38-expert-stream-m4-16g-20260829.json`.
+
+```sh
+clojure -M -m murakumo.infer plan qwen3.8-flash-next-ud-iq3-xxs
+```
+
+On macOS, Expert-aware reads are real but page-cache bypass is not: neither
+Linux `O_DIRECT` nor `F_NOCACHE` is active in the pinned native runtime. Fleet
+records therefore expose `:page-cache-bypassed? false` even if the upstream
+telemetry prints the requested `o_direct=1` flag.
+
 ## Public API boundary
 
 Clients and applications use `https://api.murakumo.cloud` exclusively.

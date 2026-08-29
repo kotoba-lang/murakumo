@@ -1,0 +1,85 @@
+{
+  "schema": "murakumo.qwen4exp.expert-stream-evidence/v1",
+  "measured_at": "2026-08-29",
+  "node": {"name": "dan", "soc": "Apple M4", "memory_gib": 16},
+  "model": {
+    "source": "unsloth/Qwen3.8-Flash-Next-GGUF",
+    "quant": "UD-IQ3_XXS",
+    "artifact_bytes": 81961823936,
+    "shard_bytes": [10946624, 49567921344, 32382955968],
+    "architecture": "qwen4exp",
+    "layers": 48,
+    "experts": 512,
+    "active_experts": 10
+  },
+  "runtime": {
+    "bigmoe_revision": "039b8f1e2f4abd40f167da8ca7879135a4dee429",
+    "llama_cpp_revision": "0e8c83e512b99ccf83e50798b86f0b0ec40a7b0a",
+    "token_id_telemetry_patch": "verify/bmoe-token-id-telemetry.patch",
+    "native_ctest": {"passed": 12, "failed": 0},
+    "hyper_connection_execution_observed": [
+      "fused DeepSeek V4 HC pre enabled",
+      "fused DeepSeek V4 HC comb enabled",
+      "fused DeepSeek V4 HC post enabled"
+    ],
+    "page_cache_bypassed": false,
+    "mtp_enabled": false
+  },
+  "cell": {
+    "prompt": "Explain why the sky is blue in one sentence.",
+    "seed": 42,
+    "temperature": 0,
+    "context_tokens": 2048,
+    "io_threads": 4,
+    "prefetch_layers": 0,
+    "cold_expert_drop": 0,
+    "top_k_reduction": false
+  },
+  "actual_token_parity": {
+    "output_tokens": 8,
+    "token_ids": [760, 12515, 7701, 6105, 1521, 33470, 303, 279],
+    "stream_cache0_equals_cache2000_a": true,
+    "stream_cache2000_a_equals_cache2000_b": true,
+    "stream_cache0_equals_mmap": true
+  },
+  "performance_32_tokens": {
+    "stream_cache0": {
+      "decode_tok_s": 3.615,
+      "model_load_s": 52.648,
+      "prefill_s": 5.765,
+      "cold_end_to_end_tok_s": 0.475645,
+      "read_mib_per_token": 911.37,
+      "major_faults_per_token": 391.62
+    },
+    "mmap_baseline": {
+      "decode_tok_s": 1.473,
+      "model_load_s": 44.810,
+      "prefill_s": 31.643,
+      "cold_end_to_end_tok_s": 0.325929,
+      "major_faults_per_token": 14783.97
+    },
+    "stream_cache2000_a": {
+      "decode_tok_s": 0.315,
+      "cold_end_to_end_tok_s": 0.198608,
+      "cache_hit_pct": 39.2,
+      "major_faults_per_token": 63543.62
+    },
+    "stream_cache2000_b": {
+      "decode_tok_s": 0.280,
+      "cold_end_to_end_tok_s": 0.183677,
+      "cache_hit_pct": 39.2,
+      "major_faults_per_token": 66324.44
+    },
+    "cache0_vs_mmap_decode_speedup": 2.454175,
+    "cache0_vs_mmap_cold_end_to_end_speedup": 1.459355
+  },
+  "qualification": {
+    "real_generation": true,
+    "actual_token_parity": true,
+    "deterministic": true,
+    "expert_stream_execution": true,
+    "expert_stream_speed": true,
+    "selected_cache_mib": 0,
+    "cache2000_rejected": "16 GiB memory pressure displaced file-backed pages and increased major faults"
+  }
+}
