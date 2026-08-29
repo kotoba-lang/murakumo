@@ -151,6 +151,31 @@
           (.catch (fn [error] (is false (str error))))
           (.finally done)))))
 
+(deftest promise-finally-runs-cleanup-on-both-arms
+  (async done
+    (let [cleanups (atom 0)]
+      (.then
+       (worker/promise-finally
+        (js/Promise.resolve 42)
+        #(swap! cleanups inc))
+       (fn [value]
+         (is (= 42 value))
+         (is (= 1 @cleanups))
+         (.then
+          (worker/promise-finally
+           (js/Promise.reject (js/Error. "expected"))
+           #(swap! cleanups inc))
+          (fn [_]
+            (is false "rejected promise unexpectedly resolved")
+            (done))
+          (fn [error]
+            (is (= "expected" (.-message error)))
+            (is (= 2 @cleanups))
+            (done))))
+       (fn [error]
+         (is false (str error))
+         (done))))))
+
 (defmethod cljs.test/report [:cljs.test/default :end-run-tests] [m]
   (println (str "\n" (:test m) " tests, " (:pass m) " assertions, "
                 (:fail m) " failures, " (:error m) " errors"))
