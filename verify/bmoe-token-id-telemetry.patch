@@ -1,0 +1,39 @@
+diff --git a/cli/main.cpp b/cli/main.cpp
+--- a/cli/main.cpp
++++ b/cli/main.cpp
+@@ -96,11 +96,11 @@ static void emit_progress_line(const TokenMetrics & m, ProgressDelta & st) {
+     const bool ext = is_extension(m.reasoning, st.reasoning) && is_extension(m.text, st.text);
+     const std::string d_reason = ext ? m.reasoning.substr(st.reasoning.size()) : m.reasoning;
+     const std::string d_text = ext ? m.text.substr(st.text.size()) : m.text;
+-    std::printf("BMOE_PROGRESS {\"step\":%d,\"steps\":%d,\"wall_ms\":%.1f,\"io_ms\":%.1f,"
++    std::printf("BMOE_PROGRESS {\"step\":%d,\"steps\":%d,\"token_id\":%d,\"wall_ms\":%.1f,\"io_ms\":%.1f,"
+                 "\"compute_ms\":%.1f,\"mgmt_ms\":%.1f,\"stall_ms\":%.1f,\"read_mb\":%.2f,"
+                 "\"cache_hit_pct\":%.1f,\"majflt\":%llu,\"cpu_ms\":%.1f,\"dense_resident_frac\":%.3f,"
+                 "%s\"delta_reasoning\":\"%s\",\"delta_text\":\"%s\"}\n",
+-                m.step, m.steps, m.wall_ms, m.io_ms, m.compute_ms, m.mgmt_ms, m.stall_ms,
++                m.step, m.steps, m.token_id, m.wall_ms, m.io_ms, m.compute_ms, m.mgmt_ms, m.stall_ms,
+                 m.read_bytes / (1024.0 * 1024.0), m.cache_hit_pct, (unsigned long long) m.majflt, m.cpu_ms,
+                 m.dense_resident_frac, ext ? "" : "\"reset\":1,", json_escape(d_reason).c_str(),
+                 json_escape(d_text).c_str());
+diff --git a/core/include/bmoe/metrics.h b/core/include/bmoe/metrics.h
+--- a/core/include/bmoe/metrics.h
++++ b/core/include/bmoe/metrics.h
+@@ -17,6 +17,7 @@ namespace bmoe {
+ struct TokenMetrics {
+     int step = 0;            // 1-based index of this token
+     int steps = 0;           // n_predict target
++    int32_t token_id = -1;   // exact emitted vocabulary row for parity evidence
+     double wall_ms = 0.0;    // total wall time for this token
+     double io_ms = 0.0;      // flash read time this token (serial: subset of wall; overlap: lane-busy sum)
+     double mgmt_ms = 0.0;    // cache-management time (vm commit + evict + LRU bookkeeping) this token
+diff --git a/core/src/engine/session.cpp b/core/src/engine/session.cpp
+--- a/core/src/engine/session.cpp
++++ b/core/src/engine/session.cpp
+@@ -1435,6 +1435,7 @@ RunResult Session::generate(const GenerateRequest & req,
+             TokenMetrics m;
+             m.step = n_gen;
+             m.steps = req.n_predict;
++            m.token_id = (int32_t) out;
+             m.mtp_batch = (int) confirmed.size();
+             m.loop_overhead_ms = e == 0 ? overhead * 1000.0 : 0.0;
+             // Charged to the group's first row like every other group cost. This is a SLICE of
