@@ -203,6 +203,15 @@
           (.catch (fn [error] (is false (str error))))
           (.finally done)))))
 
+(deftest claim-order-spreads-workers-without-dropping-jobs
+  (let [jobs (mapv #(hash-map :job-id (str "job-" %)) (range 12))
+        order-a (worker/claim-order "did:key:node-a" jobs)
+        order-b (worker/claim-order "did:key:node-b" jobs)]
+    (is (= (set jobs) (set order-a) (set order-b)))
+    (is (= order-a (worker/claim-order "did:key:node-a" jobs)))
+    (is (not= (mapv :job-id order-a) (mapv :job-id order-b)))
+    (is (not= (:job-id (first order-a)) (:job-id (first order-b))))))
+
 (defmethod cljs.test/report [:cljs.test/default :end-run-tests] [m]
   (println (str "\n" (:test m) " tests, " (:pass m) " assertions, "
                 (:fail m) " failures, " (:error m) " errors"))
