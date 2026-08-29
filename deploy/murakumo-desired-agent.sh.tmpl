@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+cd __HOME__/.murakumo/desired-agent/repo
+exec __CLOJURE__ -M:desired reconcile \
+  --roots=__MIRROR_ROOTS__ \
+  --authority=__AUTHORITY_SPKI__ \
+  --node=__NODE__ \
+  --state-dir=__HOME__/.murakumo/desired-agent/state \
+  --node-identity=__HOME__/.murakumo/desired-agent/node-identity.edn \
+  --min-copies=__MIN_COPIES__ \
+  --kotoba=__HOME__/.murakumo/bin/kotoba \
+  --wit-dir=__HOME__/.murakumo/desired-agent/wit \
+  --url=http://127.0.0.1:__PORT__
