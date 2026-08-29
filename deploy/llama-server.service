@@ -26,7 +26,7 @@
 #           curl -s https://api.murakumo.cloud/ready \
 #             | jq '.inference.request-capacity'
 [Unit]
-Description=llama.cpp Vulkan server (Qwen3.8 27B dense multimodal — fleet API)
+Description=Legacy standalone llama.cpp server (superseded by lightweight proxy)
 After=network.target
 
 [Service]
@@ -40,3 +40,7 @@ RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
+
+# The production head is murakumo-ring.service on :8090. Do not enable this
+# unit alongside murakumo-legacy-infer-proxy.service: doing so loads the same
+# dense 27B model twice. This unit remains as the immediate rollback target.

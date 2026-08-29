@@ -130,7 +130,7 @@
 
 (defn head-cmd
   "The head's `llama-server` — loads GGUF, drives RPC ring, serves /v1."
-  [plan {:keys [bin-dir model-path port rpc-port ctx parallel strategy moe-override api-key-file extra-args]
+  [plan {:keys [bin-dir model-path port rpc-port ctx parallel strategy moe-override api-key-file flash-attn extra-args]
          :or {port 8080 rpc-port default-rpc-port ctx 4096 parallel 1
               strategy :pipeline}}]
   (let [ws (rpc-worker-cmds plan {:bin-dir bin-dir :port rpc-port})
@@ -151,6 +151,7 @@
                                       {:ctx ctx :parallel parallel :port port})}
                    [[:h :raw]])
          (when (seq api-key-file) (str " --api-key-file " (pr-str api-key-file)))
+         (when flash-attn (str " --flash-attn " flash-attn))
          (when (seq extra-args) (str " " (str/join " " extra-args))))))
 
 ;; ── mlx ring ────────────────────────────────────────────────────────────────

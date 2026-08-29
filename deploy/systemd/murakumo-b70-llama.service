@@ -1,0 +1,24 @@
+[Unit]
+Description=Murakumo B70 Qwen3.8-27B latency server
+After=network-online.target tailscaled.service
+Wants=network-online.target
+Conflicts=murakumo-b70-flash-next.service murakumo-b70-vllm.service
+
+[Service]
+Type=simple
+User=jun
+Group=jun
+SupplementaryGroups=video render
+WorkingDirectory=/home/jun/murakumo/llama.cpp-sycl-src/build-sycl/bin
+Environment=LD_LIBRARY_PATH=/opt/intel/oneapi/tcm/1.5/lib:/opt/intel/oneapi/umf/1.1/lib:/opt/intel/oneapi/tbb/2023.1/lib/intel64/gcc4.8:/opt/intel/oneapi/mkl/2026.1/lib:/opt/intel/oneapi/dnnl/2026.0/lib:/opt/intel/oneapi/compiler/2026.1/opt/compiler/lib:/opt/intel/oneapi/compiler/2026.1/lib
+Environment=GGML_SYCL_FA_ONEDNN=0
+Environment=SYCL_UR_USE_LEVEL_ZERO_V2=0
+ExecStart=/home/jun/murakumo/llama.cpp-sycl-src/build-sycl/bin/llama-server --model /home/jun/models/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf --host 127.0.0.1 --port 8090 --gpu-layers 999 --ctx-size 32768 --parallel 1 --flash-attn on --batch-size 4096 --ubatch-size 2048 --spec-type draft-mtp --spec-draft-n-max 3 --reasoning off --alias qwen3.8-27b-throughput-b70
+Restart=always
+RestartSec=2
+TimeoutStartSec=0
+TimeoutStopSec=30
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target

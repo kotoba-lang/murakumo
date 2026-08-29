@@ -1,0 +1,25 @@
+[Unit]
+Description=Murakumo authenticated legacy inference proxy
+After=network-online.target murakumo-ring.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gad
+Group=gad
+Environment=MURAKUMO_PROXY_HOST=127.0.0.1
+Environment=MURAKUMO_PROXY_PORT=11434
+Environment=MURAKUMO_UPSTREAM_HOST=127.0.0.1
+Environment=MURAKUMO_UPSTREAM_PORT=8090
+Environment=MURAKUMO_ORIGIN_KEY_FILE=/etc/murakumo/fleet-origin.keys
+ExecStart=/usr/local/libexec/murakumo-legacy-infer-proxy
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target
