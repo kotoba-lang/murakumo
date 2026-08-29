@@ -169,8 +169,10 @@ nbb scripts/run-task.cljs token issue --scope chat           # mint a gateway AP
 > `model`, `dash`, `cloud`, `overlay` among them. `scripts/tasks.edn` records
 > which.
 >
-> Three have been ported and are the commands above: `ops` (the nbb port of
-> `nodes` + `status`), `task` (the fleet task plane), and `token`. Everything
+> Three have been ported to nbb and are the commands above: `ops` (the nbb port
+> of `nodes` + `status`), `task` (the fleet task plane), and `token`. In
+> addition, the JVM `:desired` entrypoint below restores distributed reconcile
+> without the old SSH-push shell. Everything
 > else needs a port — the bodies require `babashka.process`/`cheshire` under
 > SCI, so re-registering them is a decision about which of these commands should
 > still exist, not a mechanical conversion.
@@ -192,6 +194,7 @@ nbb scripts/run-task.cljs token issue --scope chat           # mint a gateway AP
 | `mesh [node\|all]` | 2-pass: provision with a fixed P2P port + stable PeerId, collect PeerIds, re-provision with `KOTOBA_BOOTSTRAP_PEERS` = the others ⇒ ONE gossipsub lattice (fleet-wide auction) |
 | `deploy <app.edn> [node]` | port-forward the node's kotoba port, then `kotoba app deploy --publish` (clj→WASM → lattice) |
 | `reconcile <murakumo.app.edn> [--dry-run\|--apply\|--watch[=secs]]` | **declarative desired-state (wadm)** — fold a fleet manifest vs live placement, report/converge the drift (see below) |
+| `clojure -M:desired publish\|pull\|reconcile` | signed CID desired state over independent mirrors; each node pulls and applies only its deterministic assignment, with no SSH/control-cloud dependency |
 | `cloud [plan\|records\|routes\|dial\|connect <node>\|relay <name>\|bootstrap] [--cloud=cloud.edn] [--fleet=fleet.edn]` | plan the `murakumo.cloud` identity overlay, route hints, driver argv, relay argv, bootstrap order, and control-plane records that replace an external VPN control plane |
 | `overlay dial\|relay --overlay ...` | native overlay driver shell: validate canonical dial/relay argv and emit the session record a real stream/packet driver will open |
 | `fleet <datom-log.edn> [now-ms]` | **coordination-plane view** — fold a [kotoba-fleet](https://github.com/kotoba-lang/kotoba-fleet) Datom log into one snapshot (per-work holders · active leases · pending proposals) via `kotoba.fleet.view/snapshot`. The `status` of the 20-agent coordination layer, next to the mesh `status`. |
@@ -286,6 +289,37 @@ content-addressed components the lattice placed there) — `murakumo status`, li
 in a browser, with history on the Datom log behind it.
 
 ## Declarative reconcile — murakumo's wadm
+
+### Pull 型の分散 reconcile（Cloudflare 非依存）
+
+従来の `reconcile --apply` は operator が node ごとに SSH して push する。新しい
+`:desired` 経路では、operator は immutable CID を持つ app だけを deterministic に
+配置し、Kekkai 共通 envelope（Ed25519 authority、CIDv1、epoch、previous CID）として
+複数の独立 mirror に発行する。node は authority を pin して pull し、自分の
+assignment だけを local Kotoba endpoint へ適用する。適用後は node 自身の鍵で署名した
+receipt を同じ content-addressed layout へ返す。
+
+```bash
+# operator: source build を含む app や CID 不明 app は拒否される
+clojure -M:desired publish murakumo.app.edn \
+  --fleet=fleet.edn --roots=/mnt/a,/mnt/b \
+  --identity=.murakumo/desired-authority.edn --epoch=1
+
+# node: authority/CID/signature/epoch/previous CID を検証して local apply
+clojure -M:desired reconcile \
+  --roots=/mnt/a,/mnt/b --authority="$MURAKUMO_DESIRED_AUTHORITY_SPKI" \
+  --node=asher --state-dir=/var/lib/murakumo/desired \
+  --node-identity=/var/lib/murakumo/node.edn \
+  --kotoba=/opt/murakumo/bin/kotoba --wit-dir=/opt/murakumo/wit \
+  --url=http://127.0.0.1:8077
+```
+
+mirror は filesystem namespace なので、別ディスク、別ホストの mount、object-store
+mount、閉域同期のいずれでもよい。mirror 自体は信頼しない。同 epoch の異なる CID、
+rollback、node が最後に適用した CID を親にしない更新は停止する。artifact 本体は CID
+で既に local store / mesh / gateway から取得可能である必要があり、この経路は node 上で
+source build しない。また現段階の apply は既存 reconcile と同じく converge-up のみで、
+削除・余剰 replica の自動停止は行わない。
 
 `deploy` is **imperative** (compile → distribute → publish, once). `reconcile` is the
 **declarative** half: you write a fleet manifest (`murakumo.app.edn`) that states

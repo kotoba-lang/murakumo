@@ -61,7 +61,7 @@
         ;; CLI path (bb.edn's test task excludes this, same reason as the
         ;; kwik/witness-quorum-dependent overlay code).
         io.github.kotoba-lang/kekkai
-        {:git/sha "bb0c39c116fc26ead36c2428c46b9734053a49f5"}}
+        {:git/sha "87a16440ce48d9fe6ee9645e452354181c97e5e5"}}
  :aliases
  {;; Factory provisioning station -- issues per-device birth certificates so a
   ;; fleet can reach :attested instead of shipping everything :tofu.
@@ -87,6 +87,9 @@
   :gen {:main-opts ["-m" "murakumo.kotoba-oracle-gen"]}
   :quic-driver {:main-opts ["-m" "murakumo.overlay.quic-driver"]}
   :quic-cert {:main-opts ["-m" "murakumo.overlay.cert"]}
+  ;; Cloud-provider-independent desired-state publisher / node pull agent.
+  ;; `clojure -M:desired -- help` for the explicit authority/mirror contract.
+  :desired {:main-opts ["-m" "murakumo.desired-state"]}
   ;; Fleet CI ships this repository without west siblings. Keep the HA gate
   ;; focused on the distributed inference control plane and its generated
   ;; systemd/watchdog artifacts; the broad :test suite remains the local
