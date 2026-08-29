@@ -143,7 +143,24 @@
         (is (thrown? Exception (credits/job-cost incomplete-model {:tokens 1}))))
       (testing "charge propagates the error too -- never silently approves at cost 0"
         (is (thrown? Exception (credits/charge {} "broke-user"
-                                                {:model incomplete-model :units {:images 500}})))))))
+                                                {:model incomplete-model :units {:images 500}}))))
+      (testing "EVERY unit in unit-prices, enumerated from the table itself.
+
+                The list above is hand-written, and on 2026-08-29 :gb-months --
+                the storage unit ADR-2608291009 defines YATA in terms of (1 YATA
+                = 1 GB-month) -- was in `unit-prices` and in none of these
+                assertions. Nothing was wrong with the guard; the guard was
+                simply not being asked about that unit, and a hand-written list
+                is exactly the thing that falls behind the table it mirrors.
+                Enumerating the table means the next unit someone adds is
+                covered on the commit that adds it, or this test fails."
+        (doseq [[unit price-key] credits/unit-prices]
+          (is (thrown? Exception (credits/job-cost incomplete-model {unit 1}))
+              (str "unit " unit " (" price-key ") did not refuse when its price "
+                   "was absent -- silence here is free service"))
+          (testing "and it bills at the configured price once one exists"
+            (is (= 7.0 (credits/job-cost (assoc incomplete-model price-key 7) {unit 1}))
+                (str "unit " unit " did not use " price-key))))))))
 
 (deftest receipts
   (let [sign-fn (fn [s] (str "sig" (hash s)))
