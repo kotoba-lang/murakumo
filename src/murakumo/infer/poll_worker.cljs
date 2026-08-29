@@ -227,8 +227,9 @@
                     (.catch (fn [error]
                               (println "[join] idle heartbeat error:" (str error))))))))))))))
 
-(defn- poll-once! [{:keys [base auth] :as config}]
-  (-> (api! base auth :get "/infer/queue")
+(defn- poll-once! [{:keys [base auth model] :as config}]
+  (-> (api! base auth :get
+            (str "/infer/queue?model=" (js/encodeURIComponent model)))
       (.then (fn [{:keys [body]}]
                (if-let [job (first body)]
                  (claim-and-run! config (select-keys job [:job-id :kind :input]))
