@@ -72,7 +72,7 @@
                     (throw (ex-info "node-local reconcile refuses source builds"
                                     {:type :murakumo/source-build-not-distributed
                                      :app (:name app) :manifest (.getPath path)})))
-                  (assoc (select-keys app [:name :cid :replicas :placement])
+                  (assoc (select-keys app [:name :cid :replicas :placement :probe])
                          :assignments (assignments (:nodes fleet) app)
                          :manifest/text text)))
               (:apps manifest))]
@@ -152,6 +152,23 @@
 (defn app-argv [{:keys [kotoba wit-dir url]} manifest-file]
   [kotoba "app" "deploy" manifest-file "--wit-dir" wit-dir "--publish" "--url" url])
 
+(defn probe-argv
+  "A bounded node-local post-apply probe. Desired state may request GET or
+  POST to the configured local Kotoba endpoint; arbitrary URLs and headers are
+  not accepted."
+  [url {:keys [method path body]}]
+  (let [method (str/upper-case (or method "GET"))]
+    (when-not (and (#{"GET" "POST"} method)
+                   (string? path) (str/starts-with? path "/")
+                   (not (str/starts-with? path "//")))
+      (throw (ex-info "invalid desired-state runtime probe"
+                      {:type :murakumo/invalid-runtime-probe})))
+    (cond-> ["curl" "-sS" "-o" "/dev/null" "-w" "%{http_code}"
+             "--max-time" "15" "-X" method
+             (str (str/replace url #"/+$" "") path)]
+      (and (= method "POST") (string? body))
+      (into ["-H" "content-type: application/json" "--data" body]))))
+
 (defn reconcile!
   "Pull, locally apply this node's assignment, and mirror a node-signed receipt.
   run-fn is injectable; its result must carry :exit, :out, and :err."
@@ -176,11 +193,24 @@
                        (let [file (io/file manifest-dir (str (:cid app) ".edn"))]
                          (spit file (:manifest/text app))
                          (let [result (run-fn (app-argv {:kotoba kotoba :wit-dir wit-dir :url url}
-                                                       (.getPath file)))]
+                                                       (.getPath file)))
+                               probe (:probe app)
+                               probe-result (when (and (zero? (:exit result)) probe)
+                                              (let [observed (run-fn (probe-argv url probe))
+                                                    expected (str (or (:expect-status probe) 200))]
+                                                {:exit (:exit observed)
+                                                 :status (str/trim (str (:out observed)))
+                                                 :expected expected
+                                                 :ok? (and (zero? (:exit observed))
+                                                           (= expected (str/trim (str (:out observed)))))}))]
                            {:app (:name app) :cid (:cid app) :exit (:exit result)
-                            :out (:out result) :err (:err result)})))
+                            :out (:out result) :err (:err result)
+                            :probe probe-result})))
                      (:apps plan))
-            ok? (every? #(zero? (:exit %)) results)]
+            deploy-ok? (every? #(zero? (:exit %)) results)
+            probes-ok? (every? #(or (nil? (:probe %)) (get-in % [:probe :ok?])) results)
+            runtime-verified? (and (seq results) (every? :probe results) probes-ok?)
+            ok? (and deploy-ok? probes-ok?)]
         (when-not ok?
           (throw (ex-info "one or more local app deployments failed"
                           {:type :murakumo/local-reconcile-failed
@@ -189,7 +219,7 @@
               observed-at (now)
               receipt (desired/receipt
                        {:node node :desired-cid (:desired-cid plan)
-                        :epoch (:epoch plan) :status :applied
+                        :epoch (:epoch plan) :status (if runtime-verified? :applied :accepted)
                         :observed-at observed-at
                         :detail {:apps (mapv #(select-keys % [:app :cid :exit]) results)}}
                        node-id)
@@ -199,7 +229,7 @@
                        (assoc state subject {:epoch (:epoch plan)
                                              :desired-cid (:desired-cid plan)
                                              :receipt-cid (:desired/cid receipt)}))
-          (assoc plan :status :applied :results results
+          (assoc plan :status (if runtime-verified? :applied :accepted) :results results
                  :receipt receipt-result
                  :receipt-authority-spki-b64 (desired/authority-spki-b64 node-id)))))))
 

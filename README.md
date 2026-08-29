@@ -314,6 +314,12 @@ clojure -M:desired reconcile \
   --url=http://127.0.0.1:8077
 ```
 
+Node receipt は deploy command の exit 0 だけでは `:applied` を名乗らない。app が
+`:probe {:method "POST" :path "/mesh/http/..." :body "{}" :expect-status 200}` を
+desired state に持ち、node-local HTTP probe まで一致した場合だけ `:applied` になる。
+probe のない正常な announce は `:accepted`、probe 失敗は state/receipt を書かず失敗する。
+route 登録だけ成功して component block が無い状態を実行成功として記録しないためである。
+
 mirror は filesystem namespace なので、別ディスク、別ホストの mount、object-store
 mount、閉域同期のいずれでもよい。mirror 自体は信頼しない。同 epoch の異なる CID、
 rollback、node が最後に適用した CID を親にしない更新は停止する。artifact 本体は CID
