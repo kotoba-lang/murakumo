@@ -13,6 +13,7 @@
     (is (re-find #"<key>UserName</key><string>asher</string>" (:plist server)))
     (is (re-find #"<key>UserName</key><string>asher</string>" (:plist join)))
     (is (re-find #"--ctx-size</string><string>65536" (:plist server)))
+    (is (not (re-find #"--spec-type" (:plist server))))
     (is (re-find #"murakumo-edge" (:plist server)))
     (is (re-find #"source /Users/asher/.murakumo/edge/join.env" (:plist join)))
     (is (not (re-find #"MURAKUMO_SERVICE_TOKEN=" (:plist join))))))

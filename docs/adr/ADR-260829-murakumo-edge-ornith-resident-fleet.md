@@ -82,6 +82,43 @@ The public jobs were observed in the new resident logs: Levi settled the text
 and vision jobs, and Joseph settled the tool-call job. This distinguishes real
 generation from catalog, health, or readiness-only evidence.
 
+## MTP canary amendment
+
+Ornith's one-layer MTP head is supported as an explicit
+`murakumo-edge-mtp-canary` profile, not as the resident production default.
+The five-layer ownership is:
+
+1. Amu compiles and extracts the native `mtp-admitted?` policy;
+2. `num` charges speculative-head and verification scratch bytes explicitly;
+3. `torch` emits full-offload llama.cpp `draft-mtp` argv only after admission;
+4. `inference` pins the MTP artifact and b10472 runtime separately from the
+   production Q4_K_M artifact;
+5. `murakumo` requires observed drafting, exact token parity, repeatability,
+   full offload, and end-to-end speed before promotion.
+
+The Asher M4/16 GiB canary used the same IQ4_XS artifact for MTP off and on,
+loaded the vision projector, retained the 65,536-token resident window, and
+generated 128 tokens at temperature 0 and seed 42. llama.cpp reported
+`qwen35.nextn_predict_layers=1`, `offloaded 34/34 layers to GPU`, and a live
+`draft-mtp` context. Each measured MTP run drafted 150 tokens and accepted 75.
+All off/on/repeat token arrays were identical; their canonical token-array
+SHA-256 is
+`61a1e907e9fb94fe83ef97b6ffbc59469a272e5feaa38b866b9fd341f4bc91e8`.
+
+Despite correct execution, MTP failed the speed gate:
+
+| metric (three runs) | MTP off | MTP on | on/off |
+|---|---:|---:|---:|
+| prefill tok/s | 106.11 | 98.26 | 0.926x |
+| decode tok/s | 18.35 | 11.84 | 0.645x |
+| end-to-end tok/s, including prefill | 17.66 | 11.56 | 0.655x |
+
+Resident RSS also rose from 7,356,176 KiB to 8,070,080 KiB. Therefore the MTP
+profile is implemented and execution-qualified, but `speed-qualified=false`;
+it is not assigned to fleet replicas and the existing `murakumo-edge`
+LaunchDaemons remain unchanged. The exact evidence record is
+[`docs/evidence/ornith-mtp-asher-260829.edn`](../evidence/ornith-mtp-asher-260829.edn).
+
 ## Failures found and closed
 
 - A user LaunchAgent cannot be relied on in a headless session. The plan now
