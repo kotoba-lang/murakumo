@@ -140,15 +140,19 @@
 (defn run-completion-with-fetch!
   "Run one local OpenAI-compatible completion. Resolves to a structured
    outcome for both HTTP and response-shape failures."
-  [fetch-fn local-url local-token model prompt max-tokens]
+  [fetch-fn local-url local-token model prompt max-tokens & [openai-request]]
   (let [t0 (js/Date.now)]
     (-> (fetch-fn (str local-url "/chat/completions")
                   #js {:method "POST"
                        :headers (clj->js (local-auth-headers local-token))
-                       :body (js/JSON.stringify
-                              #js {:model model
-                                   :messages #js [#js {:role "user" :content (str prompt)}]
-                                   :max_tokens (or max-tokens 512)})})
+                       :body (json-body
+                              (if (map? openai-request)
+                                (-> openai-request
+                                    (assoc :model model :stream false)
+                                    (update :max_tokens #(min 2048 (or % max-tokens 512))))
+                                {:model model
+                                 :messages [{:role "user" :content (str prompt)}]
+                                 :max_tokens (or max-tokens 512)}))})
         (.then response-body)
         (.then (fn [{:keys [status body]}]
                  (let [text (get-in body [:choices 0 :message :content])]
@@ -156,19 +160,23 @@
                      (not (<= 200 status 299))
                      {:ok false :error (str "local inference HTTP " status ": " (pr-str body)) :ms 0}
 
-                     text
-                     {:ok true :text text :ms (- (js/Date.now) t0)}
+                     (or text (seq (get-in body [:choices 0 :message :tool_calls])))
+                     {:ok true :text (or text "") :response body
+                      :ms (- (js/Date.now) t0)}
 
                      :else
                      {:ok false :error (str "no completion in response: " (pr-str body)) :ms 0})))))))
 
-(defn run-completion! [local-url local-token model prompt max-tokens]
-  (run-completion-with-fetch! js/fetch local-url local-token model prompt max-tokens))
+(defn run-completion! [local-url local-token model prompt max-tokens & [openai-request]]
+  (run-completion-with-fetch! js/fetch local-url local-token model prompt max-tokens openai-request))
 
 (defn- report-result! [base auth did job-id outcome ms]
   (api! base auth :post (str "/infer/queue/" job-id "/result")
         {:did did
-         :output (if (:ok outcome) {:text (:text outcome)} {:error (:error outcome)})
+         :output (if (:ok outcome)
+                   (cond-> {:text (:text outcome)}
+                     (:response outcome) (assoc :response (:response outcome)))
+                   {:error (:error outcome)})
          :ms ms}))
 
 (defn- claim-and-run! [{:keys [base auth did local-url local-token model busy?]
@@ -187,7 +195,8 @@
                    (.then (fn [_]
                             (run-completion! local-url local-token model
                                              (get-in job [:input :prompt])
-                                             (get-in job [:input :max-tokens]))))
+                                             (get-in job [:input :max-tokens])
+                                             (get-in job [:input :request]))))
                  (.then
                   (fn [outcome]
                     (-> (report-result! base auth did job-id outcome (:ms outcome 0))
