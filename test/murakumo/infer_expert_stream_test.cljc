@@ -21,6 +21,7 @@
     (is (= "dan" (get-in result [:node :name])))
     (is (= :expert-aware-nvme (:engine result)))
     (is (zero? (:cache-mib result)))
+    (is (zero? (:gpu-layers result)))
     (is (false? (:page-cache-bypassed? result)))
     (is (false? (:mtp-enabled? result)))))
 
@@ -38,6 +39,7 @@
         text (clojure.string/join " " argv)]
     (is (re-find #"--moe-stream" text))
     (is (re-find #"--cache-mb 0" text))
+    (is (re-find #"--gpu-layers 0" text))
     (is (not (re-find #"--drop-cold-experts" text)))
     (is (re-find #"--prefetch 0" text))
     (is (not (re-find #"--n-expert-used" text)))))

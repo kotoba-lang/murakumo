@@ -13,6 +13,7 @@
 ;; streaming enabled, but retain no user-space expert cache on this profile.
 (def default-cache-mib 0)
 (def default-io-threads 4)
+(def default-gpu-layers 0)
 (def disk-reserve-bytes (* 8 plan/GiB))
 
 (defn plan
@@ -43,6 +44,7 @@
                               (+ weight-bytes disk-reserve-bytes))
      :cache-mib (or (:model/expert-cache-mib model) default-cache-mib)
      :io-threads (or (:model/expert-io-threads model) default-io-threads)
+     :gpu-layers (or (:model/gpu-layers model) default-gpu-layers)
      :lossless? true
      :page-cache-bypassed? false
      :mtp-enabled? false
@@ -50,11 +52,13 @@
 
 (defn command
   "Build one reproducible bmoe-cli command as argv, never a shell string."
-  [{:keys [bin model-path prompt tokens cache-mib io-threads csv stream?]
+  [{:keys [bin model-path prompt tokens cache-mib io-threads gpu-layers csv stream?]
     :or {tokens 64 cache-mib default-cache-mib
-         io-threads default-io-threads stream? true}}]
+         io-threads default-io-threads gpu-layers default-gpu-layers
+         stream? true}}]
   (cond-> [bin "-m" model-path "-p" prompt "-n" (str tokens)
-           "--seed" "42" "--temp" "0" "-t" "4"]
+           "--seed" "42" "--temp" "0" "-t" "4"
+           "--gpu-layers" (str gpu-layers)]
     stream? (into ["--moe-stream"
                    "--cache-mb" (str cache-mib)
                    "--cache-ceil-mb" (str cache-mib)
