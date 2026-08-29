@@ -247,13 +247,20 @@
               (js/Promise.resolve false)))]
     (attempt jobs)))
 
+(defn claim-order
+  "Give each worker a stable, different queue permutation.  Atomic claims are
+   still authoritative; this only avoids making every idle worker begin with
+   the same CAS and then walk the same collision chain."
+  [did jobs]
+  (sort-by #(sha256-hex (str did "\u0000" (:job-id %))) jobs))
+
 (defn- poll-once! [{:keys [base auth model] :as config}]
   (-> (api! base auth :get
             (str "/infer/queue?model=" (js/encodeURIComponent model)))
       (.then (fn [{:keys [body]}]
                (claim-first-available!
                 #(claim-and-run! config (select-keys % [:job-id :kind :input]))
-                body)))
+                (claim-order (:did config) body))))
       (.catch (fn [error] (println "[join] poll error:" (str error))))))
 
 (defn- loop! [{:keys [poll-ms] :as config}]
