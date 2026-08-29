@@ -17,7 +17,7 @@
 ;; the image comes home over scp.
 
 (ns murakumo.infer.media
-  (:require [babashka.http-client :as http]
+  (:require [kotoba.lang.http.host.babashka :as http]
             [babashka.process :as p]
             [json.compat :as json]
             [clojure.edn :as edn]

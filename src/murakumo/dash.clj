@@ -19,7 +19,7 @@
             [murakumo.provision.plan :as provision]
             [murakumo.report :as report]
             [murakumo.ssh :as ssh]
-            [org.httpkit.server :as http]))
+            [kotoba.lang.http.host.httpkit :as http]))
 
 ;; ── identity / graph (kept self-contained — mirrors core's operator token) ────
 
