@@ -64,7 +64,7 @@
 ;; is an operational step the fleet owner takes separately, same as
 ;; renderer-mac's README documents for its own tunnel.
 (ns murakumo.infer.gateway
-  (:require [babashka.http-client :as http-client]
+  (:require [kotoba.lang.http.host.babashka :as http-client]
             [json.compat :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -72,7 +72,7 @@
             [murakumo.infer.media :as media]
             [murakumo.infer.schedule :as sched]
             [murakumo.config :as config]
-            [org.httpkit.server :as http]))
+            [kotoba.lang.http.host.httpkit :as http]))
 
 (defn- parse-size [size]
   (if-let [[_ w h] (and size (re-matches #"(\d+)x(\d+)" size))]

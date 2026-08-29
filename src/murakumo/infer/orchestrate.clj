@@ -19,7 +19,7 @@
   (murakumo.core reconcile) can then converge nodes toward."
   (:require [murakumo.config :as config]
             [murakumo.infer.rebalance :as rb]
-            [babashka.http-client :as http]
+            [kotoba.lang.http.host.babashka :as http]
             [json.compat :as json]))
 
 (defn- cloud-url

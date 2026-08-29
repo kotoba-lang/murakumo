@@ -30,7 +30,7 @@
 ;; fleet.edn.
 
 (ns murakumo.infer.relay-worker
-  (:require [babashka.http-client :as http]
+  (:require [kotoba.lang.http.host.babashka :as http]
             [babashka.http-client.websocket :as ws]
             [babashka.process :as p]
             [json.compat :as json]

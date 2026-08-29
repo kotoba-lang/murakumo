@@ -23,7 +23,7 @@
             [murakumo.infer.relay :as relay]
             [murakumo.config :as config]
             [murakumo.secret :as secret]
-            [org.httpkit.server :as http]))
+            [kotoba.lang.http.host.httpkit :as http]))
 
 (defonce ^:private state (atom (relay/init)))
 (defonce ^:private chans (atom {}))          ; worker-id → channel
