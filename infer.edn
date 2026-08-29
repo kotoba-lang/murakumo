@@ -291,6 +291,30 @@
    ;; compute buffer で 16GB Mac が Metal OOM。
    :model/experts 512}
 
+  "qwen3.8-flash-next-ud-iq3-xxs"
+  {:model/id "qwen3.8-flash-next-ud-iq3-xxs"
+   :model/family "Qwen3.8-Flash-Next (Qwen4Exp)"
+   :model/format :gguf
+   :model/engine :expert-aware-nvme
+   :hf/repo "unsloth/Qwen3.8-Flash-Next-GGUF"
+   :model/gguf "Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf"
+   :model/params-b 125 :model/active-params-b 6
+   :model/layers 48
+   :model/experts 512
+   :model/active-experts 10
+   :model/moe-shared-expert? true
+   ;; Exact sum of the three published UD-IQ3_XXS shard sizes. Streaming is
+   ;; lossless at the model's own top-10: no cold-expert drop or reduced top-k.
+   :model/weight-bytes 81961823936
+   ;; dan M4/16 GiB measured optimum: cache 0. A 2,000 MiB user cache caused
+   ;; page-cache pressure and was 5.5-6.8x slower in the lossless smoke cell.
+   :model/expert-cache-mib 0
+   :model/expert-io-threads 4
+   :model/target-node "dan"
+   :model/dir "/Users/dan/models/Qwen3.8-Flash-Next-UD-IQ3_XXS"
+   :model/runtime-revision "039b8f1e2f4abd40f167da8ca7879135a4dee429"
+   :model/mtp-enabled? false}
+
   ;; ── waste (sqliteai/waste): trunk resident, experts streamed from a
   ;; container on NVMe, the rest of RAM a bounded expert cache. Single-node
   ;; like mlx-moe, but gated on DISK rather than RAM — the container IS the
