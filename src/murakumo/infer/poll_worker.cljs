@@ -5,6 +5,37 @@
 
 (def job-kind "host-large-model")
 
+(def ^:private trust-tiers
+  "The two production trust domains (docs/adr-secure-community-cloud.md in
+  network-awai/cloud-murakumo). There is no `:any`, and placement requires an
+  exact match with no Secure-to-Community fallback."
+  #{"awai-secure" "community"})
+
+(defn node-trust-tier
+  "The tier this node enrolls under.
+
+  **Defaults to community, and that default is the ADR's, not a convenience.**
+  `local-murakumo.control-plane` reads `(or (:node/trust-tier body) :community)`
+  precisely so that an unauthenticated provider cannot become Secure by
+  omitting a field. Opting into Secure has to be an explicit act by whoever
+  operates the hardware.
+
+  Until 2026-08-29 this worker sent NO tier at all, so every node it enrolled
+  became Community. Workloads normalize the other way -- a missing declaration
+  is `:awai-secure`, keeping upgrades on the safer pool. Both defaults are
+  individually correct and together they deadlock: the ten `fleet.edn` Mac
+  minis serving `murakumo-edge` were `live? true / ready? true / slots-free 1`
+  and an admission state of pending, so `murakumo-edge` had zero admitted backends and
+  the public route answered 503 while the fleet looked healthy."
+  [opts env]
+  (let [t (or (:trust-tier opts) (get env "MURAKUMO_TRUST_TIER") "community")
+        t (str/trim (str t))]
+    (when-not (contains? trust-tiers t)
+      (println (str "--trust-tier must be one of " (str/join ", " (sort trust-tiers))
+                    " (got " (pr-str t) ")"))
+      (js/process.exit 1))
+    t))
+
 (defn parse-args [args]
   (loop [xs args, acc {}]
     (if-let [a (first xs)]
@@ -291,7 +322,8 @@
              "MURAKUMO_NODE_CACAO" (aget js/process.env "MURAKUMO_NODE_CACAO")
              "MURAKUMO_NODE_DID" (aget js/process.env "MURAKUMO_NODE_DID")
              "MURAKUMO_INFER_LOCAL_TOKEN" (aget js/process.env "MURAKUMO_INFER_LOCAL_TOKEN")
-             "VLLM_API_KEY" (aget js/process.env "VLLM_API_KEY")}
+             "VLLM_API_KEY" (aget js/process.env "VLLM_API_KEY")
+             "MURAKUMO_TRUST_TIER" (aget js/process.env "MURAKUMO_TRUST_TIER")}
         base (str/replace (or (:base opts) "https://api.murakumo.cloud") #"/+$" "")
         model (:model opts)
         node-name (or (:name opts) (some-> (.hostname os) (str/split #"\.") first) "murakumo-node")
@@ -308,7 +340,7 @@
                 :local-url local-url :local-token local-token
                 :poll-ms poll-ms :heartbeat-ms heartbeat-ms}]
     (when (str/blank? (str model))
-      (println "usage: nbb scripts/infer-join.cljs --model <id> [--base URL] [--name NODE] [--did DID] [--local-url URL] [--slots 1] [--poll-ms 5000] [--heartbeat-ms 30000]")
+      (println "usage: nbb scripts/infer-join.cljs --model <id> [--base URL] [--name NODE] [--did DID] [--local-url URL] [--slots 1] [--poll-ms 5000] [--heartbeat-ms 30000] [--trust-tier awai-secure|community]")
       (js/process.exit 1))
     (when-not (valid-node-name? node-name)
       (println "--name must contain only A-Z, a-z, 0-9, dot, underscore, or dash (max 128).")
@@ -323,10 +355,13 @@
     (println (str "[join] scope: own-fleet trust only -- no output verification for " job-kind " jobs."))
     (-> (api! base auth :post "/infer/nodes"
               {:node/did did :node/name node-name :node/tier "native"
+               :node/trust-tier (node-trust-tier opts env)
                :node/caps {:engine "openai-compatible" :model model}
                :node/can [job-kind "full-shard"]})
         (.then (fn [{:keys [status body]}]
-                 (println (str "[join] enrolled " node-name " (" did ") as native -> " base " -- status " status))
+                 (println (str "[join] enrolled " node-name " (" did ") as native/"
+                                    (node-trust-tier opts env)
+                                    " -> " base " -- status " status))
                  (when-not (#{200 201} status) (println "[join]   " (pr-str body)))
                  (when (#{200 201} status)
                    (heartbeat-loop! config)

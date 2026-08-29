@@ -47,6 +47,17 @@
                      nbb " --classpath " root "/src " root
                      "/scripts/infer-join.cljs --model " model-id
                      " --base https://api.murakumo.cloud --name " node-name
+                     ;; These are fleet.edn hardware operated by AWAI Network,
+                     ;; which is exactly what docs/adr-secure-community-cloud.md
+                     ;; calls :awai-secure. The join worker defaults to
+                     ;; community on purpose (an unauthenticated provider must
+                     ;; never become Secure by omission), so the operator of the
+                     ;; hardware has to say so here. Without it the ten resident
+                     ;; Ornith minis enrolled Community, workloads asked for
+                     ;; Secure, placement requires an exact tier match with no
+                     ;; fallback, and murakumo-edge answered 503 with every node
+                     ;; live, ready and idle.
+                     " --trust-tier awai-secure"
                      " --local-url http://127.0.0.1:" port "/v1 --slots 1 --poll-ms 1000")]
     {:label join-label
      :plist (plist join-label user ["/bin/zsh" "-lc" command]

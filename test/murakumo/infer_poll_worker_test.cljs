@@ -17,6 +17,22 @@
   (is (= "vllm" (worker/local-auth-token {} {"VLLM_API_KEY" "vllm"})))
   (is (nil? (worker/local-auth-token {} {}))))
 
+(deftest node-trust-tier-defaults-to-community
+  ;; The ADR's asymmetry, pinned in both directions: a node that says nothing
+  ;; is Community (an unauthenticated provider must not become Secure by
+  ;; omission), and Secure is reachable only by saying so.
+  (testing "omission is community, not secure"
+    (is (= "community" (worker/node-trust-tier {} {}))))
+  (testing "the environment can opt a node in"
+    (is (= "awai-secure"
+           (worker/node-trust-tier {} {"MURAKUMO_TRUST_TIER" "awai-secure"}))))
+  (testing "an explicit flag wins over the environment"
+    (is (= "community"
+           (worker/node-trust-tier {:trust-tier "community"}
+                                   {"MURAKUMO_TRUST_TIER" "awai-secure"}))))
+  (testing "surrounding whitespace does not create a third tier"
+    (is (= "awai-secure" (worker/node-trust-tier {:trust-tier " awai-secure "} {})))))
+
 (deftest local-auth-header-is-optional
   (is (= {"content-type" "application/json"}
          (worker/local-auth-headers nil)))
