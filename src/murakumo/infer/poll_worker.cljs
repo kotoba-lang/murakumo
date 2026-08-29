@@ -170,6 +170,18 @@
 (defn run-completion! [local-url local-token model prompt max-tokens & [openai-request]]
   (run-completion-with-fetch! js/fetch local-url local-token model prompt max-tokens openai-request))
 
+(defn promise-finally
+  "nbb-compatible Promise cleanup. Some fleet nbb runtimes do not expose the
+   JavaScript `finally` method through CLJS interop, so spell out both arms."
+  [promise cleanup]
+  (.then promise
+         (fn [value]
+           (cleanup)
+           value)
+         (fn [error]
+           (cleanup)
+           (js/Promise.reject error))))
+
 (defn- report-result! [base auth did job-id outcome ms]
   (api! base auth :post (str "/infer/queue/" job-id "/result")
         {:did did
@@ -182,37 +194,38 @@
 (defn- claim-and-run! [{:keys [base auth did local-url local-token model busy?]
                         :as config} job]
   (let [job-id (:job-id job)]
-    (-> (api! base auth :post (str "/infer/queue/" job-id "/claim") {:did did})
-        (.then
-         (fn [{:keys [status]}]
-           (if (not= 201 status)
-             (println (str "[join] job " job-id " already claimed, skipping"))
-             (do
-               (reset! busy? true)
-               (-> (heartbeat! config)
-                   (.catch (fn [error]
-                             (println "[join] busy heartbeat error:" (str error))))
-                   (.then (fn [_]
-                            (run-completion! local-url local-token model
-                                             (get-in job [:input :prompt])
-                                             (get-in job [:input :max-tokens])
-                                             (get-in job [:input :request]))))
-                 (.then
-                  (fn [outcome]
-                    (-> (report-result! base auth did job-id outcome (:ms outcome 0))
-                        (.then
-                         (fn [{:keys [status body]}]
-                           (println (str "[join] job " job-id " -> "
-                                         (if (:ok outcome) "ok" "error")
-                                         " (result status " status ")"))
-                           (when (= 201 status)
-                             (println "[join]   settled:" (pr-str (:shares body))))))))
-                   (.finally
-                    (fn []
-                      (reset! busy? false)
-                      (-> (heartbeat! config)
+    (.then
+     (api! base auth :post (str "/infer/queue/" job-id "/claim") {:did did})
+     (fn [{:keys [status]}]
+       (if (not= 201 status)
+         (println (str "[join] job " job-id " already claimed, skipping"))
+         (do
+           (reset! busy? true)
+           (let [work (-> (heartbeat! config)
                           (.catch (fn [error]
-                                    (println "[join] idle heartbeat error:" (str error))))))))))))))))
+                                    (println "[join] busy heartbeat error:" (str error))))
+                          (.then (fn [_]
+                                   (run-completion! local-url local-token model
+                                                    (get-in job [:input :prompt])
+                                                    (get-in job [:input :max-tokens])
+                                                    (get-in job [:input :request]))))
+                          (.then
+                           (fn [outcome]
+                             (.then
+                              (report-result! base auth did job-id outcome (:ms outcome 0))
+                              (fn [{:keys [status body]}]
+                                (println (str "[join] job " job-id " -> "
+                                              (if (:ok outcome) "ok" "error")
+                                              " (result status " status ")"))
+                                (when (= 201 status)
+                                  (println "[join]   settled:" (pr-str (:shares body)))))))))]
+             (promise-finally
+              work
+              (fn []
+                (reset! busy? false)
+                (-> (heartbeat! config)
+                    (.catch (fn [error]
+                              (println "[join] idle heartbeat error:" (str error))))))))))))))
 
 (defn- poll-once! [{:keys [base auth] :as config}]
   (-> (api! base auth :get "/infer/queue")
@@ -227,14 +240,15 @@
       (.then (fn [_] (js/setTimeout #(loop! config) poll-ms)))))
 
 (defn- heartbeat-loop! [{:keys [heartbeat-ms] :as config}]
-  (-> (heartbeat! config)
-      (.then (fn [{:keys [status probe]}]
-               (when-not (= 201 status)
-                 (println "[join] heartbeat rejected:" status))
-               (when-not (:ready? probe)
-                 (println "[join] local model not ready; advertised ready=false"))))
-      (.catch (fn [error] (println "[join] heartbeat error:" (str error))))
-      (.finally (fn [] (js/setTimeout #(heartbeat-loop! config) heartbeat-ms)))))
+  (promise-finally
+   (-> (heartbeat! config)
+       (.then (fn [{:keys [status probe]}]
+                (when-not (= 201 status)
+                  (println "[join] heartbeat rejected:" status))
+                (when-not (:ready? probe)
+                  (println "[join] local model not ready; advertised ready=false"))))
+       (.catch (fn [error] (println "[join] heartbeat error:" (str error)))))
+   (fn [] (js/setTimeout #(heartbeat-loop! config) heartbeat-ms))))
 
 (defn -main [& args]
   (let [opts (parse-args args)
