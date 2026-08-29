@@ -126,6 +126,31 @@
           (.catch (fn [error] (is false (str error))))
           (.finally done))))))
 
+(deftest completion-preserves-edge-openai-request
+  (async done
+    (let [captured (atom nil)
+          request {:messages [{:role "user" :content [{:type "image_url"
+                                                        :image_url {:url "https://example.test/a.png"}}]}]
+                   :tools [{:type "function" :function {:name "inspect"}}]
+                   :max_tokens 9999 :stream true}
+          fetch-fn (fn [_url opts]
+                     (reset! captured (js->clj (js/JSON.parse (.-body opts)) :keywordize-keys true))
+                     (js/Promise.resolve
+                      #js {:status 200
+                           :text (fn [] (js/Promise.resolve
+                                         (js/JSON.stringify
+                                          #js {:choices #js [#js {:message #js {:content "ok"}}]}))) }))]
+      (-> (worker/run-completion-with-fetch!
+           fetch-fn "http://local/v1" nil "murakumo-edge" nil nil request)
+          (.then (fn [outcome]
+                   (is (:ok outcome))
+                   (is (= (:messages request) (:messages @captured)))
+                   (is (= (:tools request) (:tools @captured)))
+                   (is (= 2048 (:max_tokens @captured)))
+                   (is (false? (:stream @captured)))))
+          (.catch (fn [error] (is false (str error))))
+          (.finally done)))))
+
 (defmethod cljs.test/report [:cljs.test/default :end-run-tests] [m]
   (println (str "\n" (:test m) " tests, " (:pass m) " assertions, "
                 (:fail m) " failures, " (:error m) " errors"))

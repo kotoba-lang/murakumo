@@ -110,7 +110,24 @@
                :verify? true}
 
  :models
- {;; ── base text models (2026-07-04): glm-5.2-reap50-q2k doesn't fit the fleet
+ {"murakumo-edge"
+  {:model/id "murakumo-edge"
+   :model/family "Ornith-1.5"
+   :model/format :gguf
+   :model/engine :edge-llamacpp
+   :hf/repo "ornith-ai/Ornith-1.5-9B-GGUF"
+   :hf/revision "abdd624b12ebf020b767fff532ff44fe552b28c3"
+   :model/params-b 9
+   :model/context 262144
+   :model/edge-context 65536
+   :model/gguf "Ornith-1.5-9B-Q4_K_M.gguf"
+   :model/mmproj "mmproj-Ornith-1.5-9B-BF16.gguf"
+   :model/snapshot-bytes 6701795488
+   :model/vision? true
+   :model/tool-calling? true
+   :model/replicas :all-edge-nodes}
+
+  ;; ── base text models (2026-07-04): glm-5.2-reap50-q2k doesn't fit the fleet
   ;; reliably right now (139GB, ~all of :total-usable-bytes) — these three are
   ;; the new default `npm run task -- infer plan/provision/up` base text targets,
   ;; small enough to fit a handful of edge nodes or the single GPU head alone.
