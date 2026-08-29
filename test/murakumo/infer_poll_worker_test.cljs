@@ -176,6 +176,33 @@
          (is false (str error))
          (done))))))
 
+(deftest claim-contention-falls-through-without-another-poll
+  (async done
+    (let [attempted (atom [])
+          outcomes (atom [false false true true])
+          jobs [{:job-id "first"} {:job-id "second"}
+                {:job-id "third"} {:job-id "must-not-run"}]
+          claim-fn (fn [job]
+                     (swap! attempted conj (:job-id job))
+                     (let [outcome (first @outcomes)]
+                       (swap! outcomes rest)
+                       (js/Promise.resolve outcome)))]
+      (-> (worker/claim-first-available! claim-fn jobs)
+          (.then (fn [claimed?]
+                   (is claimed?)
+                   (is (= ["first" "second" "third"] @attempted))
+                   (reset! attempted [])
+                   (worker/claim-first-available!
+                    (fn [job]
+                      (swap! attempted conj (:job-id job))
+                      (js/Promise.resolve false))
+                    (take 2 jobs))))
+          (.then (fn [claimed?]
+                   (is (false? claimed?))
+                   (is (= ["first" "second"] @attempted))))
+          (.catch (fn [error] (is false (str error))))
+          (.finally done)))))
+
 (defmethod cljs.test/report [:cljs.test/default :end-run-tests] [m]
   (println (str "\n" (:test m) " tests, " (:pass m) " assertions, "
                 (:fail m) " failures, " (:error m) " errors"))

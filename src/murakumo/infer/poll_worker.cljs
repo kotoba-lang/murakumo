@@ -194,46 +194,66 @@
 (defn- claim-and-run! [{:keys [base auth did local-url local-token model busy?]
                         :as config} job]
   (let [job-id (:job-id job)]
-    (.then
-     (api! base auth :post (str "/infer/queue/" job-id "/claim") {:did did})
-     (fn [{:keys [status]}]
-       (if (not= 201 status)
-         (println (str "[join] job " job-id " already claimed, skipping"))
-         (do
-           (reset! busy? true)
-           (let [work (-> (heartbeat! config)
-                          (.catch (fn [error]
-                                    (println "[join] busy heartbeat error:" (str error))))
-                          (.then (fn [_]
-                                   (run-completion! local-url local-token model
-                                                    (get-in job [:input :prompt])
-                                                    (get-in job [:input :max-tokens])
-                                                    (get-in job [:input :request]))))
-                          (.then
-                           (fn [outcome]
-                             (.then
-                              (report-result! base auth did job-id outcome (:ms outcome 0))
-                              (fn [{:keys [status body]}]
-                                (println (str "[join] job " job-id " -> "
-                                              (if (:ok outcome) "ok" "error")
-                                              " (result status " status ")"))
-                                (when (= 201 status)
-                                  (println "[join]   settled:" (pr-str (:shares body)))))))))]
-             (promise-finally
-              work
-              (fn []
-                (reset! busy? false)
-                (-> (heartbeat! config)
-                    (.catch (fn [error]
-                              (println "[join] idle heartbeat error:" (str error))))))))))))))
+    (-> (api! base auth :post (str "/infer/queue/" job-id "/claim") {:did did})
+        (.then
+         (fn [{:keys [status]}]
+           (if (not= 201 status)
+             (do
+               (println (str "[join] job " job-id " already claimed, trying next"))
+               false)
+             (do
+               (reset! busy? true)
+               (let [work (-> (heartbeat! config)
+                              (.catch (fn [error]
+                                        (println "[join] busy heartbeat error:" (str error))))
+                              (.then (fn [_]
+                                       (run-completion! local-url local-token model
+                                                        (get-in job [:input :prompt])
+                                                        (get-in job [:input :max-tokens])
+                                                        (get-in job [:input :request]))))
+                              (.then
+                               (fn [outcome]
+                                 (.then
+                                  (report-result! base auth did job-id outcome (:ms outcome 0))
+                                  (fn [{:keys [status body]}]
+                                    (println (str "[join] job " job-id " -> "
+                                                  (if (:ok outcome) "ok" "error")
+                                                  " (result status " status ")"))
+                                    (when (= 201 status)
+                                      (println "[join]   settled:"
+                                               (pr-str (:shares body)))))))))]
+                 (-> (promise-finally
+                      work
+                      (fn []
+                        (reset! busy? false)
+                        (-> (heartbeat! config)
+                            (.catch (fn [error]
+                                      (println "[join] idle heartbeat error:"
+                                               (str error)))))))
+                     (.then (fn [_] true)))))))))))
+
+(defn claim-first-available!
+  "Try jobs in queue order until one claim succeeds.  A fleet poll returns the
+   same first job to many idle workers; stopping after its expected 409 would
+   serialize fan-out at one worker per poll interval."
+  [claim-fn jobs]
+  (letfn [(attempt [remaining]
+            (if-let [job (first remaining)]
+              (-> (claim-fn job)
+                  (.then (fn [claimed?]
+                           (if claimed?
+                             true
+                             (attempt (next remaining))))))
+              (js/Promise.resolve false)))]
+    (attempt jobs)))
 
 (defn- poll-once! [{:keys [base auth model] :as config}]
   (-> (api! base auth :get
             (str "/infer/queue?model=" (js/encodeURIComponent model)))
       (.then (fn [{:keys [body]}]
-               (if-let [job (first body)]
-                 (claim-and-run! config (select-keys job [:job-id :kind :input]))
-                 (js/Promise.resolve nil))))
+               (claim-first-available!
+                #(claim-and-run! config (select-keys % [:job-id :kind :input]))
+                body)))
       (.catch (fn [error] (println "[join] poll error:" (str error))))))
 
 (defn- loop! [{:keys [poll-ms] :as config}]
