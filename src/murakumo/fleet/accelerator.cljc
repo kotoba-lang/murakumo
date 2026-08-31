@@ -143,3 +143,91 @@
      :usable usable
      :resident res
      :opportunistic opp}))
+
+
+;; ── demand (host measurement) ──────────────────────────────────────────
+;;
+;; Two commands, one per side of the contention on gad. Both answer counts,
+;; never rates: a rate needs a window to divide by, and the pure core compares
+;; the two sides, so a window silently changed on one side would change what
+;; the comparison means.
+
+(def chat-demand-command
+  "Completions served by an llama.cpp head in the window, plus what is busy.
+
+  `total time` prints exactly once per finished task, so this counts tasks and
+  not the four timing lines each one emits. Measured on gad 2026-08-31: 2985
+  in 24h, across a head that was restarting all day."
+  (fn [window-s]
+    (str "printf 'served\\t%s\\n' $(journalctl -u llama-server -u murakumo-ring"
+         " --no-pager -S '-" window-s "s' 2>/dev/null"
+         " | grep -cE 'total time'); "
+         "printf 'queued\\t%s\\n' $(curl -sS --max-time 4"
+         " http://127.0.0.1:8090/slots 2>/dev/null"
+         " | grep -o is_processing.:true | wc -l | tr -d ' ')")))
+
+(def generation-demand-command
+  "Generation requests accepted in the window, plus ComfyUI queue depth.
+
+  Measured on gad 2026-08-31: 97 in 24h, 1 in the last hour, and every one of
+  the five ComfyUI instances reporting an empty queue -- while that side held
+  81.77 GB of a 71.3 GB aperture."
+  (fn [window-s ports]
+    (str "printf 'served\\t%s\\n' $(journalctl -u murakumo-generation"
+         " --no-pager -S '-" window-s "s' 2>/dev/null"
+         " | grep -cE 'POST /v1/generation'); "
+         "q=0; for p in " (str/join " " ports) "; do "
+         "n=$(curl -sS --max-time 4 http://127.0.0.1:$p/queue 2>/dev/null"
+         " | grep -o queue_pending | wc -l); q=$((q + ${n:-0})); done; "
+         "printf 'queued\\t%s\\n' $q")))
+
+(defn parse-demand
+  "Demand command stdout → {:served :queued}.
+
+  An absent line stays `unmeasured`, and `demand-score` refuses to score an
+  unmeasured side rather than reading it as zero demand. Scoring a side we
+  could not read as idle is how a probe failure becomes an eviction."
+  [out]
+  (reduce (fn [acc line]
+            (let [[k v] (str/split line #"\t")]
+              (if-let [n (parse-long* (or v ""))]
+                (case k "served" (assoc acc :served n) "queued" (assoc acc :queued n) acc)
+                acc)))
+          {:served unmeasured :queued unmeasured}
+          (remove str/blank? (str/split-lines (or out "")))))
+
+(defn demand-score
+  "Weighted demand for one side. `nil` when either half is unmeasured.
+
+  Returning nil rather than 0 is the same discipline as the aperture sentinel:
+  a side we could not measure must not compare as having no demand, because
+  the comparison decides who keeps the accelerator."
+  ([d] (demand-score d (o "served-weight-default-milli" [])))
+  ([{:keys [queued served]} weight-milli]
+   (when (and (number? queued) (number? served) (nat-int? queued) (nat-int? served))
+     (o "demand-score" [queued served weight-milli]))))
+
+(defn lease
+  "Should the current holder keep the accelerator?
+
+  Returns {:revoke? :code :reason :holder-demand :challenger-demand}, or a
+  refusal to answer when either side is unmeasured -- `:reason
+  :unmeasured-demand`, which is NOT a revocation. An eviction decided from a
+  failed probe is worse than no eviction at all.
+
+  The caller keeps two counters, because the core is pure: `idle-count`, how
+  many consecutive prior decisions found the holder idle, and `loss-streak`,
+  how many consecutive decisions the challenger has lost. The second is what
+  stops a 31-to-1 demand ratio from meaning the loser never runs again."
+  [holder challenger idle-count loss-streak]
+  (let [h (demand-score holder)
+        c (demand-score challenger)
+        cq (:queued challenger)]
+    (if (or (nil? h) (nil? c))
+      {:revoke? false :code -1 :reason :unmeasured-demand
+       :holder-demand h :challenger-demand c}
+      (let [code (o "revoke-code" [h c cq idle-count loss-streak])]
+        {:revoke? (o "revoke?" [h c cq idle-count loss-streak])
+         :code code
+         :reason (keyword (o "revoke-name" [code]))
+         :holder-demand h :challenger-demand c}))))

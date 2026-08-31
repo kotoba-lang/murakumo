@@ -125,3 +125,109 @@
     (is (= 0 (:resident c)))
     (is (= (gb 30) (:opportunistic c))
         "an unknown holder must reduce what opportunistic work may take")))
+
+;; ── demand: who should be HOLDING the device, not just what fits ───────
+;;
+;; Measured on gad over the same 24 hours, 2026-08-31:
+;;
+;;   chat completions on the serving head   2985   (0 in the last hour: down)
+;;   POST /v1/generation                      97   (1 in the last hour)
+;;   ComfyUI queued, all five instances         0
+;;
+;; The side holding more than the entire aperture served about 3% of the
+;; requests and had nothing queued. These fixtures are those numbers.
+
+(def chat-24h {:served 2985 :queued 2})
+(def generation-24h {:served 97 :queued 0})
+(def generation-idle {:served 0 :queued 0})
+
+(deftest demand-is-measured-from-work-not-declared
+  (is (> (accel/demand-score chat-24h) (accel/demand-score generation-24h))
+      "31x the requests must score higher")
+  (testing "queued work outweighs an equal count of past completions"
+    ;; Something queued is demand that exists now; a completion is only
+    ;; evidence that demand recurs.
+    (is (> (accel/demand-score {:served 0 :queued 10})
+           (accel/demand-score {:served 10 :queued 0})))))
+
+(deftest an-unmeasured-side-is-never-scored-as-idle
+  ;; The same discipline as the aperture sentinel, and it matters more here:
+  ;; this comparison decides who KEEPS the accelerator, so reading a failed
+  ;; probe as zero demand would evict a healthy holder.
+  (doseq [broken [{:served accel/unmeasured :queued 0}
+                  {:served 5 :queued accel/unmeasured}
+                  (accel/parse-demand "")]]
+    (is (nil? (accel/demand-score broken)))
+    (let [d (accel/lease broken generation-24h 99 0)]
+      (is (false? (:revoke? d)) "an unmeasured holder must not be evicted")
+      (is (= :unmeasured-demand (:reason d))))))
+
+(deftest idle-hysteresis-protects-a-gap-not-an-empty-window
+  ;; The first version of this test asserted that ONE idle observation always
+  ;; protects the holder. It does not, and should not: `generation-idle` served
+  ;; nothing in the whole window and has nothing queued, while a challenger is
+  ;; waiting. Hysteresis is for a holder between two requests, not for one that
+  ;; did no work at all.
+  (testing "a holder still working keeps the device through a momentary gap"
+    (let [between-requests {:served 400 :queued 0}]
+      (is (false? (:revoke? (accel/lease between-requests {:served 420 :queued 0} 1 0))))))
+  (testing "a holder that did nothing in the window loses to a waiting challenger"
+    (let [d (accel/lease generation-idle chat-24h 1 0)]
+      (is (true? (:revoke? d)))))
+  (testing "three consecutive idle observations are a fact even with no challenger"
+    (let [d (accel/lease generation-idle {:served 0 :queued 0} 3 0)]
+      (is (= :revoke-idle (:reason d)))))
+  (testing "and an idle holder with nobody waiting and no streak simply keeps it"
+    ;; Nothing is gained by unloading a model when no one wants the device.
+    (let [d (accel/lease generation-idle {:served 0 :queued 0} 0 0)]
+      (is (false? (:revoke? d)))
+      (is (= :keep-no-challenger (:reason d))))))
+
+(deftest the-minority-workload-is-not-starved-forever
+  ;; This is what the first version of the rule got wrong, caught by a test
+  ;; written from gad's real 31-to-1 ratio: under a pure bid the generation
+  ;; side could never hold the accelerator again at any queue depth. A rule
+  ;; that always names the same winner is a hardcoded owner with arithmetic in
+  ;; front of it.
+  (let [busy-generation {:served 97 :queued 4}]
+    (testing "it does lose while the streak is short"
+      (is (= :revoke-outbid (:reason (accel/lease busy-generation chat-24h 0 0))))
+      ;; and with the roles swapped, the challenger loses early in its streak
+      (is (false? (:revoke? (accel/lease chat-24h busy-generation 0 1))))
+      (is (= :keep (:reason (accel/lease chat-24h busy-generation 0 1)))))
+    (testing "after enough consecutive losses its QUEUED work takes a turn"
+      (let [d (accel/lease chat-24h busy-generation 0 6)]
+        (is (true? (:revoke? d)))
+        (is (= :revoke-starved (:reason d)))))
+    (testing "but only when it actually has work queued"
+      ;; Aging must not accrue to a workload that is merely unpopular; only a
+      ;; queue means someone is waiting right now.
+      (let [d (accel/lease chat-24h {:served 97 :queued 0} 0 99)]
+        (is (false? (:revoke? d)))
+        (is (= :keep (:reason d)))))))
+
+(deftest a-busy-holder-keeps-the-device-unless-clearly-outbid
+  (testing "gad's real numbers: chat outbids generation by 31x"
+    (let [d (accel/lease generation-24h chat-24h 0 0)]
+      (is (true? (:revoke? d)))
+      (is (= :revoke-outbid (:reason d)))))
+  (testing "a challenger that merely ties does not take the device"
+    ;; Incumbency is the tie-break: moving costs a reload — an 18k-token prompt
+    ;; re-evaluated cold measured 83 s on this device — and staying costs
+    ;; nothing.
+    (is (false? (:revoke? (accel/lease chat-24h chat-24h 0 0)))))
+  (testing "and a challenger just under the margin does not either"
+    (is (false? (:revoke? (accel/lease {:served 100 :queued 0}
+                                       {:served 140 :queued 0} 0 0))))
+    (is (true? (:revoke? (accel/lease {:served 100 :queued 0}
+                                      {:served 200 :queued 0} 0 0))))))
+
+(deftest demand-parsing-tells-absent-from-zero
+  (let [p (accel/parse-demand "served\t97\nqueued\t0\n")]
+    (is (= 97 (:served p)))
+    (is (= 0 (:queued p)) "zero queued is a real measurement"))
+  (let [p (accel/parse-demand "served\t97\n")]
+    (is (= accel/unmeasured (:queued p)) "an absent line is not zero"))
+  (let [p (accel/parse-demand "served\tnot-a-number\nqueued\t3\n")]
+    (is (= accel/unmeasured (:served p)))
+    (is (nil? (accel/demand-score p)))))

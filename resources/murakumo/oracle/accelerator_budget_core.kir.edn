@@ -162,6 +162,135 @@
          (= code 5)
          "unknown-class"
          (if (= code 6) "non-positive-request" "unknown-code"))))))),
+   :param-types [:i64]}
+  {:name served-weight-default-milli,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 100,
+   :param-types []}
+  {:name demand-score,
+   :params [queued served-recent served-weight-milli],
+   :result :i64,
+   :effects #{},
+   :body (+ queued (quot (* served-recent served-weight-milli) 1000)),
+   :param-types [:i64 :i64 :i64]}
+  {:name demand-window-default-s,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 3600,
+   :param-types []}
+  {:name idle-samples-default,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 3,
+   :param-types []}
+  {:name margin-default-milli,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1500,
+   :param-types []}
+  {:name idle?,
+   :params [demand idle-count idle-threshold],
+   :result :bool,
+   :effects #{},
+   :body
+   (if
+    (> demand 0)
+    false
+    (if (>= idle-count idle-threshold) true false)),
+   :param-types [:i64 :i64 :i64]}
+  {:name challenger-wins?,
+   :params [challenger holder margin-milli],
+   :result :bool,
+   :effects #{},
+   :body
+   (if (> (* challenger 1000) (* holder margin-milli)) true false),
+   :param-types [:i64 :i64 :i64]}
+  {:name starvation-losses-default,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 6,
+   :param-types []}
+  {:name starved?,
+   :params [challenger-queued loss-streak],
+   :result :bool,
+   :effects #{},
+   :body
+   (if
+    (< challenger-queued 1)
+    false
+    (if (>= loss-streak (starvation-losses-default)) true false)),
+   :param-types [:i64 :i64]}
+  {:name revoke-code,
+   :params
+   [holder-demand
+    challenger-demand
+    challenger-queued
+    idle-count
+    loss-streak],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< challenger-demand 1)
+    (if (idle? holder-demand idle-count (idle-samples-default)) 1 3)
+    (if
+     (starved? challenger-queued loss-streak)
+     4
+     (if
+      (idle? holder-demand idle-count (idle-samples-default))
+      1
+      (if
+       (challenger-wins?
+        challenger-demand
+        holder-demand
+        (margin-default-milli))
+       2
+       0)))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name revoke?,
+   :params
+   [holder-demand
+    challenger-demand
+    challenger-queued
+    idle-count
+    loss-streak],
+   :result :bool,
+   :effects #{},
+   :body
+   (let
+    [c
+     (revoke-code
+      holder-demand
+      challenger-demand
+      challenger-queued
+      idle-count
+      loss-streak)]
+    (if (= c 0) false (if (= c 3) false true))),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name revoke-name,
+   :params [code],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= code 0)
+    "keep"
+    (if
+     (= code 1)
+     "revoke-idle"
+     (if
+      (= code 2)
+      "revoke-outbid"
+      (if
+       (= code 3)
+       "keep-no-challenger"
+       (if (= code 4) "revoke-starved" "unknown-code"))))),
    :param-types [:i64]}],
  :oracle-value nil,
  :schema-identities
@@ -183,7 +312,19 @@
   granted-bytes
   code-name
   over-aperture?
-  would-evict-resident?],
+  would-evict-resident?
+  demand-score
+  idle?
+  challenger-wins?
+  starved?
+  revoke-code
+  revoke?
+  revoke-name
+  starvation-losses-default
+  demand-window-default-s
+  idle-samples-default
+  margin-default-milli
+  served-weight-default-milli],
  :schemas
  #:accel{:verdict
          [:record
