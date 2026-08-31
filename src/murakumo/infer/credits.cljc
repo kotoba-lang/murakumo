@@ -397,6 +397,156 @@
   [event]
   (boolean (:run/transfer event)))
 
+
+;; ── credits hold / capture / release (ADR-2608291009 実装順 2)
+;;
+;; ここまでの需要側は `spend` 1 つで、失敗したら `refund` で戻す形だった。
+;; ADR-2608026100 がその形を名指しで否定している —— 60〜900 秒かかって失敗し
+;; うる非同期ジョブに対して「submit 時に引き落として、失敗したら返す」は
+;; authorize→capture より確実に悪い。理由は 3 つあり、どれも運用で刺さる:
+;;
+;;   1. 取り消しが「返金イベントが書かれること」に依存する。返金を書く経路が
+;;      落ちれば、使われなかった credits は口座に戻らない。hold なら
+;;      **capture が来ないこと自体が「消費されなかった」を意味する**
+;;   2. 実消費が見積より小さいときの差額が、返金という別種の事象になる。
+;;      capture なら同じ 1 事象の中で閉じる
+;;   3. 返金は `refundable` を通さないと mint 経路になる（その docstring が
+;;      自分でそう書いている）。hold は debit が先に立つので、過大な capture は
+;;      **構成子の時点で拒否でき**、台帳の上で起こせない
+;;
+;; ── `balances` の戻り値の形は変えない ──
+;;
+;; hold は **`spend` と同じ向きに debit する**。折り畳んだ数は今までどおり
+;; 「いま使える credits」を意味し、`ledger-violations` の overdraft 検査が
+;; hold にもそのまま効く。別に :held 面を足して戻り値の形を変えることはしない
+;; —— `ledger-violations` の docstring が「既に書かれた feed を遡って
+;; 読み替えることになる」として禁じているのと同じ理由。
+;;
+;; ── capture が 1 事象で完結する理由 ──
+;;
+;; `:run/capture` は held と captured の両方を 1 つの map に持つ。
+;; `:run/transfer` が from/to/credits を 1 map に持つのと同じ理由で、
+;; **途中で切れた feed に対しても fold が価値を失わず、発明もしない**。
+;; 差額 (held - captured) はその場で口座に戻る。
+
+(defn- event-job
+  "イベントの `<verb>-for` から job id を文字列で取り出す。feed は EDN でも
+   JSON 由来でも来るので、keyword キーと文字列キーの両方を見る
+   （`refundable` が既にやっている読み方をそのまま共有する）。"
+  [event k]
+  (let [m (or (get event k) (get event (subs (str k) 1)))]
+    (str (or (:job m) (get m "job")))))
+
+(defn- event-body
+  "`:run/hold` 等の内側 map を、keyword / 文字列どちらのキーでも読む。"
+  [event k]
+  (let [m (or (get event k) (get event (subs (str k) 1)))]
+    (when m
+      {:who (str (or (:who m) (get m "who")))
+       :credits (some-> (or (:credits m) (get m "credits")) double)
+       :held (some-> (or (:held m) (get m "held")) double)
+       :captured (some-> (or (:captured m) (get m "captured")) double)})))
+
+(defn hold
+  "非同期ジョブの見積額を **予約する**（authorize）。`spend` と同じ向きに口座を
+   引き落とすので、hold 中の credits は他のジョブから使えない。
+
+   これは消費ではない。消費が確定するのは `capture` で、その時に実消費との
+   差額が口座へ戻る。ジョブが失敗したら `release` で全額戻す。
+
+   純粋な構成子。呼び出し側が署名付き feed に追記する。残高は見ない ——
+   `transfer` と同じく、足りるかどうかは `ledger-violations` が畳んだ feed に
+   対して判定する。admission 経路はそれを必ず通すこと。"
+  [who credits {:keys [for] :as _meta}]
+  (when-not (pos? credits)
+    (throw (ex-info "hold amount must be positive"
+                    {:who (name who) :credits credits})))
+  {:run/hold {:who (name who) :credits (double credits)}
+   :run/hold-for for})
+
+(defn hold?
+  "この台帳事象は hold か。"
+  [event]
+  (boolean (:run/hold event)))
+
+(defn- holds-for [feed job-id k]
+  (filter #(and (or (get % k) (get % (subs (str k) 1)))
+                (= job-id (event-job % (keyword (str (subs (str k) 1) "-for")))))
+          feed))
+
+(defn outstanding-hold
+  "台帳 + ジョブ id → `{:ok? true :who w :held h}` か `{:ok? false :error kw}`。
+
+  **hold が二度消費されない唯一の場所。** `refundable` と同じ 3 つを確かめる:
+
+  1. そのジョブの hold が実在するか（`:run/hold-for` の `:job`）
+  2. 既に capture / release されていないか —— 冪等性はここ。呼び出し側は
+     再試行するし、ジョブの状態ポーリングは何度でも来るので、『2 回目は拒否』を
+     台帳側に置かないと、ポーリングの回数だけ credits が湧く
+  3. 額は **台帳が持っている hold そのもの**。呼び出し側に held を渡させない"
+  [feed job-id]
+  (let [job-id (str job-id)
+        holds (holds-for feed job-id :run/hold)
+        captures (holds-for feed job-id :run/capture)
+        releases (holds-for feed job-id :run/release)]
+    (cond
+      (empty? holds) {:ok? false :error :no-such-hold :job job-id}
+      (seq captures) {:ok? false :error :already-captured :job job-id}
+      (seq releases) {:ok? false :error :already-released :job job-id}
+      :else
+      (let [bodies (keep #(event-body % :run/hold) holds)
+            who (:who (first bodies))
+            total (reduce + 0.0 (keep :credits bodies))]
+        (if (pos? total)
+          {:ok? true :who who :held total :job job-id}
+          {:ok? false :error :nothing-to-capture :job job-id})))))
+
+(defn capture
+  "hold を実消費に確定させる。`held` は `outstanding-hold` が台帳から返した額、
+   `captured` は実際に使った額。差額 (held - captured) はこの 1 事象の中で
+   口座に戻る。
+
+   **`captured > held` はここで拒否する。** `refund` は額の正しさを検査できない
+   （台帳を持たない純関数だから）が、capture は held を同じ引数で受け取っている
+   ので、過大 capture は構成子の時点で構造的に不可能にできる。"
+  [who {:keys [for held captured] :as _meta}]
+  (let [held (double held) captured (double captured)]
+    (when-not (pos? held)
+      (throw (ex-info "capture requires a positive held amount"
+                      {:who (name who) :held held})))
+    (when (neg? captured)
+      (throw (ex-info "captured amount cannot be negative"
+                      {:who (name who) :captured captured})))
+    (when (> captured held)
+      (throw (ex-info "captured amount exceeds the hold"
+                      {:who (name who) :held held :captured captured})))
+    {:run/capture {:who (name who) :held held :captured captured}
+     :run/capture-for for}))
+
+(defn capture?
+  "この台帳事象は capture か。"
+  [event]
+  (boolean (:run/capture event)))
+
+(defn release
+  "hold を取り消して全額を口座へ戻す。ジョブが失敗した / 実行されなかった場合。
+
+   `refund` との違いは原資ではなく時点である。release は **まだ消費されて
+   いない予約**を解くだけなので、返す原資を持つ口座を必要としない。"
+  [who {:keys [for held reason] :as _meta}]
+  (let [held (double held)]
+    (when-not (pos? held)
+      (throw (ex-info "release requires a positive held amount"
+                      {:who (name who) :held held})))
+    {:run/release {:who (name who) :held held}
+     :run/release-for for
+     :run/release-reason reason}))
+
+(defn release?
+  "この台帳事象は release か。"
+  [event]
+  (boolean (:run/release event)))
+
 (defn accepting-sellers
   "The distinct accounts that have ever RECEIVED a credits transfer, i.e. the
    sellers who actually accept credits as payment.
@@ -520,6 +670,23 @@
     ;; そのまま再生する）。
     (:run/refund run)
     (reduce (fn [a [n c]] (update a (name n) (fnil + 0.0) c)) acc (:run/refund run))
+
+    ;; hold は spend と同じ向きの debit。予約された credits は「使える残高」から
+    ;; 外れるので、`ledger-violations` の overdraft 検査がそのまま効く。
+    (:run/hold run)
+    (let [{:keys [who credits]} (event-body run :run/hold)]
+      (update acc who (fnil - 0.0) credits))
+
+    ;; capture は差額だけを戻す。held と captured が同じ 1 事象に入っているので、
+    ;; 切り詰められた feed でも fold が価値を失わず、発明もしない
+    ;; （`:run/transfer` が借方と貸方を 1 事象に収めているのと同じ理由）。
+    (:run/capture run)
+    (let [{:keys [who held captured]} (event-body run :run/capture)]
+      (update acc who (fnil + 0.0) (- held captured)))
+
+    (:run/release run)
+    (let [{:keys [who held]} (event-body run :run/release)]
+      (update acc who (fnil + 0.0) held))
 
     :else
     ;; A PRE-SETTLED run carries whatever the writer put in it, and a feed

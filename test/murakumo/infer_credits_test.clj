@@ -475,3 +475,125 @@
   (testing "0 以下の返金は構成子が拒否する"
     (is (thrown-with-msg? Exception #"must be positive"
                           (credits/refund "alice" 0 {:for {:job "j"}})))))
+
+;; ── hold / capture / release (ADR-2608291009 実装順 2) ────────────────────────
+
+(def ^:private earned
+  "alice に 500 credits を稼がせた 1 事象。`balances-step` の pre-settled 分岐
+   （`:run/shares` を持つ run）をそのまま使う。"
+  {:run/shares {"alice" 500.0}})
+
+(deftest hold-debits-like-a-spend
+  (testing "hold は予約であって消費ではないが、使える残高からは外れる"
+    (let [feed [earned (credits/hold :alice 120 {:for {:job "j1"}})]]
+      (is (== 380.0 (credits/balance-of (credits/balances feed) :alice)))))
+  (testing "hold は settle 扱いに落ちない（分岐が :else より前にある）"
+    (let [b (credits/balances [(credits/hold :alice 10 {:for {:job "j1"}})])]
+      (is (= #{"alice"} (set (keys b)))))))
+
+(deftest capture-returns-the-unused-remainder
+  (testing "見積 120 で予約し 70 だけ使ったら、差額 50 は同じ事象で口座に戻る"
+    (let [feed [earned
+                (credits/hold :alice 120 {:for {:job "j1"}})
+                (credits/capture :alice {:for {:job "j1"} :held 120 :captured 70})]]
+      (is (== 430.0 (credits/balance-of (credits/balances feed) :alice)))))
+  (testing "実消費が見積どおりなら、hold+capture は spend と同じ残高に着く"
+    (let [via-hold [earned
+                    (credits/hold :alice 120 {:for {:job "j1"}})
+                    (credits/capture :alice {:for {:job "j1"} :held 120 :captured 120})]
+          via-spend [earned (credits/spend :alice 120 {:for {:job "j1"}})]]
+      (is (== (credits/balance-of (credits/balances via-spend) :alice)
+              (credits/balance-of (credits/balances via-hold) :alice))))))
+
+(deftest release-returns-the-whole-hold
+  (testing "ジョブが失敗したら予約は全額戻る。返す原資を持つ口座は要らない"
+    (let [feed [earned
+                (credits/hold :alice 120 {:for {:job "j1"}})
+                (credits/release :alice {:for {:job "j1"} :held 120 :reason "provider-error"})]]
+      (is (== 500.0 (credits/balance-of (credits/balances feed) :alice))))))
+
+(deftest outstanding-hold-is-the-only-place-a-hold-is-consumed
+  (let [held (credits/hold :alice 120 {:for {:job "j1"}})]
+    (testing "額は台帳が返す。呼び出し側に held を指定させない"
+      (let [r (credits/outstanding-hold [earned held] "j1")]
+        (is (true? (:ok? r)))
+        (is (= "alice" (:who r)))
+        (is (== 120.0 (:held r)))))
+    (testing "capture 済みの hold は二度 capture できない —— ポーリングの回数だけ credits が湧く形を台帳側で塞ぐ"
+      (let [feed [earned held (credits/capture :alice {:for {:job "j1"} :held 120 :captured 70})]
+            r (credits/outstanding-hold feed "j1")]
+        (is (false? (:ok? r)))
+        (is (= :already-captured (:error r)))))
+    (testing "release 済みの hold も同じ"
+      (let [feed [earned held (credits/release :alice {:for {:job "j1"} :held 120})]
+            r (credits/outstanding-hold feed "j1")]
+        (is (false? (:ok? r)))
+        (is (= :already-released (:error r)))))
+    (testing "存在しないジョブは拒否"
+      (let [r (credits/outstanding-hold [earned held] "no-such-job")]
+        (is (false? (:ok? r)))
+        (is (= :no-such-hold (:error r)))))))
+
+(deftest capture-cannot-exceed-the-hold
+  (testing "過大 capture は構成子が拒否する —— refund と違い held を同じ引数で
+            受け取っているので、ここで構造的に不可能にできる"
+    (is (thrown-with-msg? Exception #"exceeds the hold"
+                          (credits/capture :alice {:for {:job "j"} :held 100 :captured 100.01}))))
+  (testing "負の captured も拒否"
+    (is (thrown-with-msg? Exception #"cannot be negative"
+                          (credits/capture :alice {:for {:job "j"} :held 100 :captured -1}))))
+  (testing "0 以下の hold は拒否"
+    (is (thrown-with-msg? Exception #"must be positive"
+                          (credits/hold :alice 0 {:for {:job "j"}})))))
+
+(deftest hold-is-covered-by-the-overdraft-check
+  (testing "hold は debit なので ledger-violations がそのまま効く"
+    (let [v (credits/ledger-violations [earned (credits/hold :alice 501 {:for {:job "j1"}})])]
+      (is (= 1 (count v)))
+      (is (= "alice" (:account (first v))))))
+  (testing "残高の範囲内なら違反にならない"
+    (is (empty? (credits/ledger-violations
+                 [earned (credits/hold :alice 500 {:for {:job "j1"}})]))))
+  (testing "capture の差戻しは違反を作らない"
+    (is (empty? (credits/ledger-violations
+                 [earned
+                  (credits/hold :alice 500 {:for {:job "j1"}})
+                  (credits/capture :alice {:for {:job "j1"} :held 500 :captured 1})])))))
+
+(deftest ledger-checks-read-json-feeds-but-the-fold-does-not
+  ;; ⚠ これは私が入れた非対称ではない。**hold 以前から在る。** 実測:
+  ;;   (balances [{"run/shares" {"alice" 500.0}} {"run/spend" {"alice" 120.0}}])
+  ;;     => {head 0.0, :treasury 0.0}    ← alice の 500 も 120 の spend も消える
+  ;;   (refundable [{"run/spend" ... "run/spend-for" ...}] "j") => {:ok? true ...}
+  ;; `balances-step` は keyword キーしか見ないので、文字列キーの事象は :else に
+  ;; 落ちて **settle 済み run として読み替えられる**。`refundable` は両方読む。
+  ;; つまり『refundable が読めた feed が balances では別物に畳まれる』。
+  ;; 直すのは balances の意味を変える別の変更なので、この commit では触らない ——
+  ;; ここでは現在の契約を明示的に固定して、次に読む者が驚かないようにする。
+  (testing "outstanding-hold は refundable と同じく文字列キーの feed を読む"
+    (let [json [{"run/hold" {"who" "alice" "credits" 120.0}
+                 "run/hold-for" {"job" "j1"}}]
+          r (credits/outstanding-hold json "j1")]
+      (is (true? (:ok? r)))
+      (is (= "alice" (:who r)))
+      (is (== 120.0 (:held r)))))
+  (testing "balances は keyword キーの事象しか畳まない（hold も spend と同じ制約）"
+    (let [json [{"run/hold" {"who" "alice" "credits" 120.0}
+                 "run/hold-for" {"job" "j1"}}]]
+      (is (zero? (credits/balance-of (credits/balances json) :alice))
+          "この 0.0 は『hold が無かった』ではなく『事象を読めなかった』である")))
+  (testing "EDN 形なら hold / capture / release は正しく畳まれる"
+    (let [edn [earned
+               (credits/hold :alice 120 {:for {:job "j1"}})
+               (credits/capture :alice {:for {:job "j1"} :held 120 :captured 70})]]
+      (is (== 430.0 (credits/balance-of (credits/balances edn) :alice))))))
+
+(deftest hold-predicates-do-not-overlap
+  (let [h (credits/hold :alice 1 {:for {:job "j"}})
+        c (credits/capture :alice {:for {:job "j"} :held 1 :captured 1})
+        r (credits/release :alice {:for {:job "j"} :held 1})
+        s (credits/spend :alice 1 {:for {:job "j"}})]
+    (is (and (credits/hold? h) (not (credits/capture? h)) (not (credits/release? h))))
+    (is (and (credits/capture? c) (not (credits/hold? c))))
+    (is (and (credits/release? r) (not (credits/hold? r))))
+    (is (not (or (credits/hold? s) (credits/capture? s) (credits/release? s))))))
