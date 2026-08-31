@@ -6,7 +6,12 @@
             measured? class-known? resident-class opportunistic-class
             headroom-default-milli unmeasured
             admit-code admitted? granted-bytes code-name
-            over-aperture? would-evict-resident?]))
+            over-aperture? would-evict-resident?
+            demand-score idle? challenger-wins? starved?
+            revoke-code revoke? revoke-name
+            starvation-losses-default
+            demand-window-default-s idle-samples-default margin-default-milli
+            served-weight-default-milli]))
 
 ;; W6 pure-planner oracle — accelerator memory admission.
 ;;
@@ -163,3 +168,134 @@
           (if (= code 4) "would-evict-resident"
             (if (= code 5) "unknown-class"
               (if (= code 6) "non-positive-request" "unknown-code"))))))))
+
+
+;; ── demand: who should be holding this device right now ────────────────
+;;
+;; Admission answers "does it fit". It does not answer "should the holder
+;; still be holding it", and on gad that second question is the whole problem.
+;;
+;; Measured 2026-08-31 over the same 24 hours:
+;;
+;;   chat completions on the serving head   2985   (and 0 in the last hour,
+;;                                                  because it was down)
+;;   POST /v1/generation                      97   (1 in the last hour)
+;;   ComfyUI queued, all five instances         0
+;;
+;; So the workload holding more than the entire aperture served roughly 3% of
+;; the requests, had nothing queued, and had no mechanism that would ever ask
+;; it to let go. That is not a scheduling policy losing to another one -- it is
+;; the absence of any policy, and first-loader-wins is what fills the vacuum.
+;;
+;; A lease, then: holding the device requires demand, and demand is measured
+;; from work, not declared in a config.
+
+(defn served-weight-default-milli [] :i64
+  ;; Recent completions count, but less than something already queued: queued
+  ;; work is demand that exists NOW, while a completion is evidence that demand
+  ;; recurs. 1/10 makes 10 recent completions worth one queued job.
+  100)
+
+(defn demand-score [queued :i64 served-recent :i64 served-weight-milli :i64] :i64
+  ;; Deliberately not a rate. A rate needs a window length to divide by, and
+  ;; the two sides of this comparison measure over windows the host controls;
+  ;; keeping it a weighted count means the host cannot silently change the
+  ;; meaning by changing one window and not the other.
+  (+ queued (quot (* served-recent served-weight-milli) 1000)))
+
+(defn demand-window-default-s [] :i64
+  ;; One hour. Short enough that a device stops being held by yesterday, long
+  ;; enough that a workload with a few requests an hour is not called idle
+  ;; between them -- the generation side measured 4 per hour, so a ten-minute
+  ;; window would have called it idle most of the time and thrashed.
+  3600)
+
+(defn idle-samples-default [] :i64
+  ;; Consecutive idle observations before a lease may be revoked. One sample is
+  ;; not evidence: a workload between two requests looks exactly like a
+  ;; workload that has stopped.
+  3)
+
+(defn margin-default-milli [] :i64
+  ;; A challenger must beat the holder by 50%, not by one request. Reloading a
+  ;; model is not free -- an 18k-token prompt re-evaluated from a cold cache
+  ;; measured 83 s on this device -- so a device that changes hands on noise
+  ;; spends more time loading than serving.
+  1500)
+
+(defn idle? [demand :i64 idle-count :i64 idle-threshold :i64] :bool
+  ;; Idle is BOTH: nothing to do right now, and that has held for long enough
+  ;; to be a fact rather than a gap between two requests.
+  (if (> demand 0) false (if (>= idle-count idle-threshold) true false)))
+
+(defn challenger-wins? [challenger :i64 holder :i64 margin-milli :i64] :bool
+  ;; Strictly greater, by the margin. Equal demand leaves the device where it
+  ;; is -- incumbency is the tie-break, because moving costs a reload and
+  ;; staying costs nothing.
+  (if (> (* challenger 1000) (* holder margin-milli)) true false))
+
+(defn starvation-losses-default [] :i64
+  ;; How many consecutive decisions a workload may lose before its queued work
+  ;; takes the device regardless of the ratio.
+  ;;
+  ;; This exists because the first version of this rule did not have it, and a
+  ;; test written from gad's real numbers caught what that meant: chat outbids
+  ;; generation 31 to 1, so under a pure bid the generation side could never
+  ;; hold the accelerator again, at any queue depth, forever. A rule that
+  ;; always returns the same winner is not an allocation rule -- it is a
+  ;; hardcoded owner with extra arithmetic in front of it.
+  ;;
+  ;; On an indivisible device the answer is to take turns, not to split. Six
+  ;; losses against gad's hourly cadence is roughly a shift of the loser
+  ;; waiting, which is long enough that the majority workload is not
+  ;; interrupted for a trickle and short enough that a queued 3D job finishes
+  ;; the same day.
+  6)
+
+(defn starved? [challenger-queued :i64 loss-streak :i64] :bool
+  ;; Aging, and it is deliberately gated on QUEUED rather than on the demand
+  ;; score. Recent completions are evidence that demand recurs; only a queue
+  ;; means someone is waiting right now. A workload that is merely unpopular
+  ;; must not accumulate a claim on the device while it has nothing to run.
+  (if (< challenger-queued 1)
+    false
+    (if (>= loss-streak (starvation-losses-default)) true false)))
+
+(defn revoke-code
+  [holder-demand :i64 challenger-demand :i64 challenger-queued :i64
+   idle-count :i64 loss-streak :i64] :i64
+  ;; 0 keep / 1 revoke-idle / 2 revoke-outbid / 3 keep-no-challenger
+  ;; 4 revoke-starved
+  ;;
+  ;; Four reasons, kept apart because each calls for different operator
+  ;; action: an idle holder should release and stay released; an outbid holder
+  ;; should return when its demand does; a starved challenger is taking its
+  ;; turn and will give it back; and no-challenger means nobody is waiting at
+  ;; all, which is the only case where an idle holder may keep loading.
+  ;;
+  ;; Thresholds are read from this namespace rather than passed in, so two
+  ;; callers cannot compare the same two workloads under different policies.
+  (if (< challenger-demand 1)
+    (if (idle? holder-demand idle-count (idle-samples-default)) 1 3)
+    (if (starved? challenger-queued loss-streak)
+      4
+      (if (idle? holder-demand idle-count (idle-samples-default))
+        1
+        (if (challenger-wins? challenger-demand holder-demand
+                              (margin-default-milli))
+          2
+          0)))))
+
+(defn revoke?
+  [holder-demand :i64 challenger-demand :i64 challenger-queued :i64
+   idle-count :i64 loss-streak :i64] :bool
+  (let [c (revoke-code holder-demand challenger-demand challenger-queued
+                       idle-count loss-streak)]
+    (if (= c 0) false (if (= c 3) false true))))
+
+(defn revoke-name [code :i64] :string
+  (if (= code 0) "keep"
+    (if (= code 1) "revoke-idle"
+      (if (= code 2) "revoke-outbid"
+        (if (= code 3) "keep-no-challenger"
+          (if (= code 4) "revoke-starved" "unknown-code"))))))
