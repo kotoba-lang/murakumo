@@ -718,6 +718,139 @@
   [runs]
   (reduce balances-step {} runs))
 
+
+;; ── 公開 feed（/infer/runs）を読む —— この ns の fold は自分の API を読めなかった
+;;
+;; 実測 2026-08-31、`api.murakumo.cloud/infer/runs` の 764 事象に対して:
+;;
+;;   (balances feed)            → 口座 2 つ
+;;   GET /infer/credits         → 口座 48 つ
+;;   食い違う口座               → 48 中 44
+;;
+;; 原因は綴りである。台帳の内部表現は `:run/spend` / `:run/transfer` / `:run/shares`
+;; だが、**公開 feed は `"spend"` / `"transfer"` / `"topup"` / `"grant"` / `"shares"`
+;; という接頭辞の無い文字列キー**で出る。`balances-step` の cond は全部外れ、
+;; 事象は `:else` に落ちて **settle 済み run として読み替えられる**。
+;;
+;; **これは 0 を返す検査ではない。もっともらしい数を返す検査である。**
+;; `cloud-murakumo.credits-admission/acceptance-density` の docstring が
+;; 「0 paid / 0 registered today」と書いているのは、まさにこの読めなさの結果で、
+;; 実際の台帳には transfer が 1 件在る（宛先残高 1 をサーバ自身が返す）。
+;;
+;; ── なぜ `balances` を直さず、変換を足すのか ──
+;;
+;; `ledger-violations` の docstring が「`balances` の戻り値を変えると、既に
+;; 書かれた feed を遡って読み替えることになる」として禁じている。だから
+;; `balances` の意味は 1 バイトも変えず、**wire 形を正準形に写す関数**を足す。
+;; 呼び出し側は `(balances (map from-wire feed))` と書ける。
+;;
+;; ── 読めなかったものを黙って捨てない ──
+;;
+;; `from-wire` は **total** で、知らない形には `::unreadable` を返す。
+;; `balances-of-wire` はその件数と形を数えて一緒に返す —— 読めた 0 件と
+;; 読めなかった 764 件が同じ `{}` にならないようにするための床である。
+
+(def unreadable
+  "`from-wire` が形を認識できなかったことを表す番兵。**nil でも {} でもない** ——
+   どちらも『空の台帳』と区別が付かないから。"
+  ::unreadable)
+
+(def no-op
+  "**知っているが残高を動かさない**形を表す番兵。`unreadable` と分ける理由は、
+   『8 件読めなかった』と『8 件は残高に効かない種類だった』が呼び出し側にとって
+   別の意味だから —— 前者は読み手の穴、後者は台帳の性質である。
+
+   現在ここに入るのは `pending-topup` だけ。**根拠は推測ではなく突き合わせ**:
+   これを除いて畳んだ 756 事象が、サーバ自身の `/infer/credits` 48 口座と
+   1e-6 以内で全一致した（実測 2026-08-31）。"
+  ::no-op)
+
+(defn- wire-amounts
+  "文字列キーの `{account credits}` を double 化して返す。"
+  [m]
+  (into {} (map (fn [[k v]] [(name k) (double v)])) m))
+
+(defn from-wire
+  "`/infer/runs` が公開する JSON 形の 1 事象を、この ns の正準 EDN 形へ写す。
+   認識できない形には `unreadable` を返す（例外は投げない —— 1 件の未知の形で
+   feed 全体を落とさないため。件数は `balances-of-wire` が数える）。
+
+   写像は実測した wire 語彙に対して閉じている（2026-08-31、764 事象）:
+   `transfer` / `spend` / `refund` / `hold` / `capture` / `release` /
+   `topup` / `grant` / `shares`。
+
+   **`topup` と `grant` を `:run/shares` に写す理由**: どちらも受け手の残高を
+   増やす一方向の発行で、fold の向きが settle 済み run の shares と同じである。
+   別の分岐を `balances-step` に足すと、その分だけ `balances` の意味が変わる。"
+  [e]
+  (let [g #(get e %)]
+    (cond
+      (map? (g "transfer"))
+      (let [t (g "transfer")]
+        {:run/transfer {:from (name (get t "from"))
+                        :to (name (get t "to"))
+                        :credits (double (get t "credits"))}
+         :run/transfer-for (g "transfer-for")})
+
+      (map? (g "spend"))
+      {:run/spend (wire-amounts (g "spend")) :run/spend-for (g "spend-for")}
+
+      (map? (g "refund"))
+      {:run/refund (wire-amounts (g "refund")) :run/refund-for (g "refund-for")}
+
+      (map? (g "hold"))
+      {:run/hold {:who (name (get (g "hold") "who"))
+                  :credits (double (get (g "hold") "credits"))}
+       :run/hold-for (g "hold-for")}
+
+      (map? (g "capture"))
+      {:run/capture {:who (name (get (g "capture") "who"))
+                     :held (double (get (g "capture") "held"))
+                     :captured (double (get (g "capture") "captured"))}
+       :run/capture-for (g "capture-for")}
+
+      (map? (g "release"))
+      {:run/release {:who (name (get (g "release") "who"))
+                     :held (double (get (g "release") "held"))}
+       :run/release-for (g "release-for")}
+
+      (map? (g "topup"))
+      (cond-> {:run/shares (wire-amounts (g "topup"))}
+        (number? (g "treasury")) (assoc :run/treasury (double (g "treasury"))))
+
+      (map? (g "grant"))
+      (cond-> {:run/shares (wire-amounts (g "grant"))}
+        (number? (g "treasury")) (assoc :run/treasury (double (g "treasury"))))
+
+      (map? (g "shares"))
+      (cond-> {:run/shares (wire-amounts (g "shares"))}
+        (number? (g "treasury")) (assoc :run/treasury (double (g "treasury"))))
+
+      (map? (g "pending-topup")) no-op
+
+      :else unreadable)))
+
+(defn balances-of-wire
+  "公開 feed をそのまま畳む。**読めた件数と読めなかった件数を必ず一緒に返す。**
+
+   返すのは
+   `{:balances {..} :read n :skipped k :unreadable m :unreadable-keys #{..}}`。
+
+   `:unreadable` が 0 でない結果の `:balances` を残高として引用しないこと ——
+   それは『台帳がそう言っている』ではなく『この読み手にはそこまでしか見えな
+   かった』である。この関数が数を隣に置くのは、その区別を呼び出し側から
+   奪わないためだけにある。"
+  [wire-feed]
+  (let [mapped (map (fn [e] [e (from-wire e)]) wire-feed)
+        ok (keep (fn [[_ v]] (when-not (or (= unreadable v) (= no-op v)) v)) mapped)
+        skipped (filter (fn [[_ v]] (= no-op v)) mapped)
+        bad (keep (fn [[e v]] (when (= unreadable v) e)) mapped)]
+    {:balances (balances ok)
+     :read (count ok)
+     :skipped (count skipped)
+     :unreadable (count bad)
+     :unreadable-keys (into (sorted-set) (mapcat keys) bad)}))
+
 (defn ledger-violations
   "Replay `runs` in order and report every point where an account went NEGATIVE,
    as data -- never throwing, the same discipline `engi.core/fold-balance` holds

@@ -597,3 +597,111 @@
     (is (and (credits/capture? c) (not (credits/hold? c))))
     (is (and (credits/release? r) (not (credits/hold? r))))
     (is (not (or (credits/hold? s) (credits/capture? s) (credits/release? s))))))
+
+;; ── 公開 feed（/infer/runs）の wire 形を読む ─────────────────────────────────
+;;
+;; 下の fixture は **api.murakumo.cloud/infer/runs が実際に返したバイト**を
+;; 貼ったものである（実測 2026-08-31、764 事象）。手で作った形ではない ——
+;; この ns の fold が自分の API を読めないという欠陥は、まさに「想定した形」と
+;; 「実際に出ている形」がずれていたことで起きたので、テストの入力は後者にする。
+
+(def ^:private wire-transfer
+  {"transfer" {"from" "did:key:z6MkCustomer2"
+               "to" "did:key:z6MkbbbbCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+               "credits" 1}
+   "transfer-for" nil "seq" 1785316949466646})
+
+(def ^:private wire-spend
+  {"spend" {"did:key:z6MkCustomer2" 50}
+   "spend-for" {"model" "glm-5.2-reap50-q2k" "tokens" 50}
+   "seq" 1783055912990389})
+
+(def ^:private wire-topup
+  {"topup" {"did:key:z6MkCustomer1" 1900} "treasury" 100 "total" 2000
+   "kind" "topup" "payment" {"processor" "stripe" "charge-id" "ch_demo" "usd" 20}
+   "proof" "fiat-verified" "seq" 1783040599333510})
+
+(def ^:private wire-grant
+  {"grant" {"did:key:z6MkTrial1783050426" 200} "total" 200
+   "kind" "grant" "grant-reason" "welcome" "seq" 1783050427509550})
+
+(def ^:private wire-run
+  {"job-id" "j" "model" "browser-swarm" "units" {"jobs" 1} "total" 8
+   "shares" {"did:key:z6MkPublicTab" 7.6} "treasury" 0.4
+   "proof" "verified" "seq" 1783004952621620})
+
+(def ^:private wire-unsettled-run
+  ;; shares も total も持たない —— 記録されたが精算されていない run
+  {"model" "glm-5.2" "units" {"tokens" 500} "kind" "text" "seq" 1783046749613089})
+
+(def ^:private wire-pending-topup
+  {"pending-topup" {"did" "did:key:pending-abc"} "kind" "pending" "seq" 1})
+
+(deftest the-canonical-fold-cannot-read-the-published-feed
+  (testing "wire 形の事象は balances-step の分岐を全部外れ、settle 済み run として
+            読み替えられる —— これが 48 口座中 2 口座しか出なかった理由"
+    (let [b (credits/balances [wire-transfer wire-spend])]
+      (is (not (contains? b "did:key:z6MkCustomer2"))
+          "spend も transfer も見えないので、その口座は現れない")))
+  (testing "同じ事象を from-wire に通せば読める"
+    (let [b (credits/balances (map credits/from-wire [wire-spend]))]
+      (is (== -50.0 (credits/balance-of b "did:key:z6MkCustomer2"))))))
+
+(deftest from-wire-maps-every-shape-the-live-feed-actually-emits
+  (testing "transfer"
+    (let [e (credits/from-wire wire-transfer)]
+      (is (credits/transfer? e))
+      (is (= "did:key:z6MkbbbbCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
+             (get-in e [:run/transfer :to])))))
+  (testing "spend"
+    (is (== 50.0 (get (:run/spend (credits/from-wire wire-spend)) "did:key:z6MkCustomer2"))))
+  (testing "topup と grant は受け手の残高を増やす一方向の発行なので :run/shares に写る"
+    (is (== 1900.0 (get (:run/shares (credits/from-wire wire-topup)) "did:key:z6MkCustomer1")))
+    (is (== 100.0 (:run/treasury (credits/from-wire wire-topup))))
+    (is (== 200.0 (get (:run/shares (credits/from-wire wire-grant)) "did:key:z6MkTrial1783050426"))))
+  (testing "settle 済み run"
+    (is (== 7.6 (get (:run/shares (credits/from-wire wire-run)) "did:key:z6MkPublicTab")))
+    (is (== 0.4 (:run/treasury (credits/from-wire wire-run)))))
+  (testing "acceptance density は from-wire を通して初めて数えられる"
+    (is (= #{} (credits/accepting-sellers [wire-transfer]))
+        "wire のままだと 0 —— これは『相手が居ない』ではなく『読めなかった』")
+    (is (= #{"did:key:z6MkbbbbCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}
+           (credits/accepting-sellers (map credits/from-wire [wire-transfer]))))))
+
+(deftest from-wire-is-total-and-names-what-it-could-not-read
+  (testing "知らない形には unreadable を返す（例外を投げない）"
+    (is (= credits/unreadable (credits/from-wire wire-unsettled-run)))
+    (is (= credits/unreadable (credits/from-wire {"nothing" 1}))))
+  (testing "知っているが残高を動かさない形は no-op で、unreadable と区別される"
+    (is (= credits/no-op (credits/from-wire wire-pending-topup))))
+  (testing "unreadable と no-op は互いに違う値でなければならない —— 同じなら
+            『読めなかった』と『効かなかった』が呼び出し側で潰れる"
+    (is (not= credits/unreadable credits/no-op))))
+
+(deftest balances-of-wire-reports-what-it-could-not-read
+  (let [feed [wire-run wire-topup wire-grant wire-spend wire-transfer
+              wire-pending-topup wire-unsettled-run]
+        {:keys [balances read skipped unreadable unreadable-keys]}
+        (credits/balances-of-wire feed)]
+    (testing "読めた / 効かない既知 / 読めなかった を別々に数える"
+      (is (= 5 read))
+      (is (= 1 skipped))
+      (is (= 1 unreadable)))
+    (testing "読めなかった形は key 集合で名指しされる"
+      (is (contains? unreadable-keys "model"))
+      (is (contains? unreadable-keys "units")))
+    (testing "残高は from-wire を通した分だけを畳んだもの"
+      (is (== 1900.0 (credits/balance-of balances "did:key:z6MkCustomer1")))
+      (is (== -51.0 (credits/balance-of balances "did:key:z6MkCustomer2"))
+          "Customer2 は spend 50 を払い、さらに transfer の送り主でもある: -50 -1")
+      (is (== 1.0 (credits/balance-of balances "did:key:z6MkbbbbCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"))
+          "transfer の受け手側。借方と貸方が同じ 1 事象で閉じる"))
+    (testing "空の feed は空の残高だが、読めた件数 0 がそう言う"
+      (let [r (credits/balances-of-wire [])]
+        (is (zero? (:read r)))
+        (is (zero? (:unreadable r)))))
+    (testing "全部読めない feed は、空の台帳と同じ {} を返さない —— :unreadable が立つ"
+      (let [r (credits/balances-of-wire [wire-unsettled-run wire-unsettled-run])]
+        (is (= {} (:balances r)))
+        (is (= 2 (:unreadable r)))
+        (is (zero? (:read r)))))))
