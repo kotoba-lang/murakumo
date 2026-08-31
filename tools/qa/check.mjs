@@ -6,14 +6,22 @@ import { chromium } from 'playwright-core';
 const SHELL = process.env.PW_SHELL ||
   '/Users/junkawasaki/Library/Caches/ms-playwright/chromium_headless_shell-1217/chrome-headless-shell-mac-arm64/chrome-headless-shell';
 
+// These surfaces are checked on api.murakumo.cloud, not app.itonami.cloud.
+// The Worker serves these paths on either hostname, but the second one was
+// never this repo's: it is the itonami actor fleet's router, and a custom
+// domain attaches to exactly one script -- while the inference Worker held it,
+// every mount in the dispatch namespace answered 404. Repointed 2026-08-31 when
+// the hostname went back. Measured on api.murakumo.cloud that day: /itonami,
+// /itonami/plans, /itonami/verticals, /itonami/revenue, /itonami/funnel,
+// /itonami/models and /join/browser all 200.
 const PAGES = [
   { name: 'itonami.cloud (cockpit)', url: 'https://itonami.cloud/',
     must: ['Compute', '#compute', 'Open Business Registry'],
     navAnchors: ['#compute', '#open-business', '#proof'] },
-  { name: 'app.itonami.cloud/itonami (Compute console)', url: 'https://app.itonami.cloud/itonami',
+  { name: 'api.murakumo.cloud/itonami (Compute console)', url: 'https://api.murakumo.cloud/itonami',
     must: ['murakumo Compute', 'ISCO', 'itonami.cloud'],
     links: ['https://itonami.cloud/', '/join/browser', '/itonami/verticals'] },
-  { name: 'app.itonami.cloud/join/browser (worker)', url: 'https://app.itonami.cloud/join/browser',
+  { name: 'api.murakumo.cloud/join/browser (worker)', url: 'https://api.murakumo.cloud/join/browser',
     must: ['叢雲に加わる', 'did:key'], clickJoin: true },
 ];
 
@@ -25,14 +33,14 @@ const APIS = [
   ['GET', 'https://api.murakumo.cloud/join', b => !!b.tiers],
   ['GET', 'https://api.murakumo.cloud/infer/fleet', b => b['nodes-up'] >= 0],
   ['GET', 'https://api.murakumo.cloud/infer/placement'],
-  ['GET', 'https://app.itonami.cloud/itonami/plans', b => !!b.enterprise],
-  ['GET', 'https://app.itonami.cloud/itonami/verticals'],
-  ['GET', 'https://app.itonami.cloud/itonami/revenue', b => 'usd-in' in b],
-  ['GET', 'https://app.itonami.cloud/itonami/funnel', b => 'granted' in b],
-  ['GET', 'https://app.itonami.cloud/itonami/models', b => Array.isArray(b) && b.length >= 7],
-  ['GET', 'https://app.itonami.cloud/itonami/pay/quote?usd=10',
+  ['GET', 'https://api.murakumo.cloud/itonami/plans', b => !!b.enterprise],
+  ['GET', 'https://api.murakumo.cloud/itonami/verticals'],
+  ['GET', 'https://api.murakumo.cloud/itonami/revenue', b => 'usd-in' in b],
+  ['GET', 'https://api.murakumo.cloud/itonami/funnel', b => 'granted' in b],
+  ['GET', 'https://api.murakumo.cloud/itonami/models', b => Array.isArray(b) && b.length >= 7],
+  ['GET', 'https://api.murakumo.cloud/itonami/pay/quote?usd=10',
     b => b.chain === 'base' && b.to && b.to.startsWith('0x') && b.net === 950],
-  ['GET', 'https://app.itonami.cloud/itonami/pay/status?did=did:key:z6MkQA', b => 'pending' in b],
+  ['GET', 'https://api.murakumo.cloud/itonami/pay/status?did=did:key:z6MkQA', b => 'pending' in b],
 ];
 
 async function main() {
