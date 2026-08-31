@@ -1,0 +1,165 @@
+(ns accelerator-budget-core
+  (:schemas {;; T5.2 native guest record wire
+             :accel/verdict [:record :accel/verdict
+                             [[:admitted :bool] [:code :i64] [:granted :i64]]]})
+  (:export [aperture-bytes usable-bytes committed-bytes remaining-bytes
+            measured? class-known? resident-class opportunistic-class
+            headroom-default-milli unmeasured
+            admit-code admitted? granted-bytes code-name
+            over-aperture? would-evict-resident?]))
+
+;; W6 pure-planner oracle — accelerator memory admission.
+;;
+;; Why this exists, measured rather than reasoned (ADR-2608318500):
+;;
+;; gad's Radeon 8060S has an aperture of VRAM 48.0 + GTT 23.3 = 71.3 GB. On
+;; 2026-08-31 three claimants were measured against it: the inference head at
+;; 41.2 GB, a Hunyuan3D ComfyUI instance at 81.77 GB, and 0.89 GB of
+;; embeddings. The second exceeds the whole aperture ON ITS OWN, so it evicts
+;; whatever it is placed beside. The order of operations was
+;;
+;;   start -> allocate -> the driver dies -> core dump
+;;
+;; 262 times since 2026-08-14, with no test anywhere in it. `Restart=always`
+;; (added 2026-08-29) is retry without a test, which is why the count is 262
+;; and not a handful.
+;;
+;; This core is the missing test, and it runs BEFORE the allocation. It is a
+;; pure function of measured bytes: it reads nothing, starts nothing, and
+;; kills nothing. Deciding is separate from doing on purpose -- the thing that
+;; failed here was never the killing, it was that no one decided.
+;;
+;; ## The two invariants that are not obvious
+;;
+;; 1. **Unmeasured is not empty.** A device that could not be read reports -1,
+;;    never 0, because 0 is a real answer meaning "nothing is allocated". If
+;;    those two collapsed, a probe that failed would look like an idle
+;;    accelerator and admit everything -- the exact shape CLAUDE.md's first
+;;    question names ("入力が無いとき何を返すか。pass ならそれが欠陥").
+;;    `admit-code` therefore answers UNMEASURED, which is a refusal.
+;;
+;;    The sentinel PROPAGATES rather than being re-asked: `aperture-bytes` of
+;;    an unreadable device is -1, `usable-bytes` of -1 is -1, and `admit-code`
+;;    reads the sentinel off `usable`. There is exactly one place where the
+;;    unreadable case is decided, so no later argument can disagree with it.
+;;
+;; 2. **Two classes, asymmetric.** A resident is a serving head and is not
+;;    evictable, so opportunistic claims do not stand in its way. An
+;;    opportunistic claim is batch work and must fit in what is left after
+;;    everything. A third class is deliberately impossible (`class-known?`
+;;    refuses it): each added priority turns "who wins" back into a runtime
+;;    accident, which is the state this replaces.
+;;
+;; Host keeps: reading /sys/class/drm/*/device/mem_info_*, folding
+;; /proc/<pid>/fdinfo drm-total-vram, and acting on the verdict.
+;; Parity: test/murakumo/accelerator_budget_kotoba_parity_test.clj
+
+;; ── classes ────────────────────────────────────────────────────────────
+
+(defn resident-class [] :i64 0)
+(defn opportunistic-class [] :i64 1)
+
+(defn class-known? [klass :i64] :bool
+  (if (= klass 0) true (if (= klass 1) true false)))
+
+;; ── measurement ────────────────────────────────────────────────────────
+
+(defn measured? [vram-total :i64 gtt-total :i64] :bool
+  ;; -1 is the probe's "could not read". 0 is a real, different answer.
+  (if (< vram-total 0) false (if (< gtt-total 0) false true)))
+
+(defn unmeasured [] :i64 -1)
+
+(defn aperture-bytes [vram-total :i64 gtt-total :i64] :i64
+  ;; What the driver will actually hand out: the VRAM carve-out plus GTT.
+  ;; Measured on gad: 48.0 + 23.3 GB, and Vulkan independently reported
+  ;; 73052 MiB, which is the same number.
+  (if (measured? vram-total gtt-total) (+ vram-total gtt-total) -1))
+
+;; ── budget ─────────────────────────────────────────────────────────────
+
+(defn headroom-default-milli [] :i64
+  ;; 12% held back for the driver's own command submission and the compute
+  ;; buffers llama.cpp allocates outside the weights. The failure on gad was
+  ;; literally `Not enough memory for command submission!` -- an allocation
+  ;; that fits the weights and starves the driver still takes the device down.
+  ;; Same fraction waste.c uses (usable - usable/8); kept as a caller-supplied
+  ;; parameter everywhere else so a different device can be measured, not
+  ;; assumed.
+  120)
+
+(defn usable-bytes [aperture :i64 headroom-milli :i64] :i64
+  (if (< aperture 0) -1 (- aperture (quot (* aperture headroom-milli) 1000))))
+
+(defn committed-bytes [resident :i64 opportunistic :i64] :i64
+  (+ resident opportunistic))
+
+(defn remaining-bytes [usable :i64 resident :i64 opportunistic :i64] :i64
+  (- usable (committed-bytes resident opportunistic)))
+
+;; ── the questions a refusal has to be able to answer ───────────────────
+
+(defn over-aperture? [request :i64 usable :i64] :bool
+  ;; True when the request cannot be served by an EMPTY device. Distinct from
+  ;; "does not fit right now": no eviction, no waiting and no retry makes this
+  ;; one succeed, so a caller must shrink rather than queue. gad's Hunyuan3D
+  ;; instance at 81.77 GB is this case against a 71.3 GB aperture.
+  (if (> request usable) true false))
+
+(defn would-evict-resident? [klass :i64 request :i64 usable :i64 resident :i64] :bool
+  ;; An opportunistic claim that only fits by displacing a serving head.
+  (if (= klass 1)
+    (if (> (+ request resident) usable) true false)
+    false))
+
+;; ── verdict ────────────────────────────────────────────────────────────
+
+(defn admit-code
+  [klass :i64 request :i64 usable :i64 resident :i64 opportunistic :i64] :i64
+  ;; 0 admitted / 1 unmeasured / 2 over-aperture / 3 no-remaining
+  ;; 4 would-evict-resident / 5 unknown-class / 6 non-positive-request
+  ;;
+  ;; `usable` carries the sentinel: -1 means the device could not be read, and
+  ;; that is a REFUSAL, not an empty accelerator.
+  (if (>= usable 0)
+    (if (class-known? klass)
+      (if (< request 1)
+        6
+        (if (over-aperture? request usable)
+          2
+          (if (= klass 0)
+            ;; resident: opportunistic claims are evictable and do not block it
+            (if (> (+ request resident) usable) 3 0)
+            (if (would-evict-resident? klass request usable resident)
+              4
+              (if (> request (remaining-bytes usable resident opportunistic)) 3 0)))))
+      5)
+    1))
+
+(defn admitted?
+  [klass :i64 request :i64 usable :i64 resident :i64 opportunistic :i64] :bool
+  (if (= 0 (admit-code klass request usable resident opportunistic)) true false))
+
+(defn granted-bytes
+  [klass :i64 usable :i64 resident :i64 opportunistic :i64] :i64
+  ;; The largest request that WOULD be admitted for this class right now, so a
+  ;; caller can shrink instead of failing. Never negative, and never a guess:
+  ;; unmeasured grants nothing, because the honest answer to "how much is free"
+  ;; on a device we could not read is not a number.
+  (if (>= usable 0)
+    (if (class-known? klass)
+      (if (= klass 0)
+        (let [room (- usable resident)] (if (< room 0) 0 room))
+        (let [room (remaining-bytes usable resident opportunistic)]
+          (if (< room 0) 0 room)))
+      0)
+    0))
+
+(defn code-name [code :i64] :string
+  (if (= code 0) "admitted"
+    (if (= code 1) "unmeasured"
+      (if (= code 2) "over-aperture"
+        (if (= code 3) "no-remaining"
+          (if (= code 4) "would-evict-resident"
+            (if (= code 5) "unknown-class"
+              (if (= code 6) "non-positive-request" "unknown-code"))))))))
