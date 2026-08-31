@@ -33,7 +33,7 @@ jobs:
       # Deterministic unit gate. Real localhost-QUIC/witness qualification is
       # environment-sensitive and belongs in its own integration job.
       - run: >-
-          clojure -M:test
+          clojure -M:test:babashka-client-host:httpkit-host
           -r '^(?!murakumo\.overlay-(quic-driver-live|witness-ledger|witness-write)-test$).*-test$'
         env:
           AIUEOS_ROOT: ${{ github.workspace }}/aiueos

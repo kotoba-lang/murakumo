@@ -62,7 +62,28 @@
         io.github.kotoba-lang/kekkai
         {:git/sha "87a16440ce48d9fe6ee9645e452354181c97e5e5"}}
  :aliases
- {;; Factory provisioning station -- issues per-device birth certificates so a
+ {;; Outbound HTTP on a PLAIN JVM: kotoba-lang/http's babashka host expects
+  ;; `org.babashka/http-client` on the classpath but deliberately does not
+  ;; ship it top-level — Fleet CLIs get it bundled in Babashka itself, and
+  ;; everyone else must opt in through this alias (Layer 3 host injection,
+  ;; see kotoba/lang/http/host/babashka.cljc's docstring). Without it, any
+  ;; `clojure -M` load of kotoba.lang.http.host.babashka dies with
+  ;; FileNotFoundException: babashka/http_client (measured 2026-08-31, CI
+  ;; runs 33353379854/33356944424/33359825251).
+  ;;   clojure -M:test:babashka-client-host
+  :babashka-client-host
+  {:extra-deps {org.babashka/http-client {:mvn/version "0.4.23"}}}
+
+  ;; Inbound HTTP server on a plain JVM, same Layer 3 contract as
+  ;; :babashka-client-host above: kotoba-lang/http's httpkit host needs
+  ;; http-kit on the classpath and refuses to ship it top-level (see
+  ;; kotoba/lang/http/host/httpkit.cljc's docstring). The gateway suite
+  ;; loads kotoba.lang.http.host.httpkit, so the test alias chain carries
+  ;; both hosts.
+  :httpkit-host
+  {:extra-deps {http-kit/http-kit {:mvn/version "2.8.1"}}}
+
+  ;; Factory provisioning station -- issues per-device birth certificates so a
   ;; fleet can reach :attested instead of shipping everything :tofu.
   ;;   clojure -M:factory issue --serial SN-0001 --model "MK-1 Solo" \
   ;;     --root-key factory-root.b64 --out units/
