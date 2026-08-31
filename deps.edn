@@ -156,6 +156,31 @@
                        :git/sha "1e21a1f56613d7d4c7628af1945ebf1cf7862ff3"}}
          :main-opts ["-m" "cognitect.test-runner"]
          :exec-fn cognitect.test-runner.api/test}
+  ;; Host-injection alias for kotoba-lang/http's Layer 3 host adapters
+  ;; (kotoba.lang.http.host.babashka / .httpkit). 7c5c7b9 moved
+  ;; org.babashka/http-client and http-kit OUT of top-level :deps per the
+  ;; http repo's own contract: "Fleet CLIs run under Babashka, which bundles
+  ;; this client. On plain JVM, add org.babashka/http-client through
+  ;; :babashka-client-host — not top-level." (http @ 719a2103
+  ;; src/kotoba/lang/http/host/babashka.cljc line 1; the alias itself lives
+  ;; in that repo's deps.edn.) murakumo's CI (ci.yml) runs `clojure -M:test`
+  ;; on plain JVM, so without this alias every namespace that requires
+  ;; kotoba.lang.http.host.babashka (infer/gateway, infer/media,
+  ;; infer/relay_worker, infer/orchestrate) dies at load with
+  ;; FileNotFoundException: babashka/http_client — measured as the main-CI
+  ;; red chain from 2026-08-30 02:18 through run 33359825251 (08-31 05:14Z).
+  ;; http-kit host consumers (dash, relay_server) are only exercised through
+  ;; code paths the excluded overlay suites drive, but the adapter namespace
+  ;; is loadable the same way, so this alias carries both clients. Supply
+  ;; them with:
+  ;;
+  ;;   clojure -M:test:babashka-client-host
+  ;;
+  ;; NOT top-level: an injected host stays out of libraries that never open a
+  ;; socket, which is the point of the Layer 3 host-injection design.
+  :babashka-client-host
+  {:extra-deps {org.babashka/http-client {:mvn/version "0.4.23"}
+                http-kit/http-kit {:mvn/version "2.8.1"}}}
   ;; The same cores, RUN on the host ISA rather than accepted by the backend.
   ;; Combine with :test, which carries amu:
   ;;

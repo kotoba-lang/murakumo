@@ -32,8 +32,12 @@ jobs:
           cli: 1.12.5.1654
       # Deterministic unit gate. Real localhost-QUIC/witness qualification is
       # environment-sensitive and belongs in its own integration job.
+      # :babashka-client-host supplies org.babashka/http-client + http-kit,
+      # which kotoba-lang/http's host adapters require on plain JVM
+      # (kotoba.lang.http.host.babashka dies at load without them —
+      # FileNotFoundException: babashka/http_client since 7c5c7b9).
       - run: >-
-          clojure -M:test
+          clojure -M:test:babashka-client-host
           -r '^(?!murakumo\.overlay-(quic-driver-live|witness-ledger|witness-write)-test$).*-test$'
         env:
           AIUEOS_ROOT: ${{ github.workspace }}/aiueos
