@@ -38,6 +38,7 @@
    :secret "murakumo/oracle/secret_core.kir.edn"
    :overlay-crypto "murakumo/oracle/overlay_crypto_core.kir.edn"
    ;; bulk catalog (artifacts shipped; host wiring incremental)
+   :accelerator-budget "murakumo/oracle/accelerator_budget_core.kir.edn"
    :cloud-plan "murakumo/oracle/cloud_plan_core.kir.edn"
    :component-authority "murakumo/oracle/component_authority_core.kir.edn"
    :config "murakumo/oracle/config_core.kir.edn"

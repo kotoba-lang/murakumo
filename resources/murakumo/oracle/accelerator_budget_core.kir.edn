@@ -1,0 +1,194 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name resident-class,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 0,
+   :param-types []}
+  {:name opportunistic-class,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1,
+   :param-types []}
+  {:name class-known?,
+   :params [klass],
+   :result :bool,
+   :effects #{},
+   :body (if (= klass 0) true (if (= klass 1) true false)),
+   :param-types [:i64]}
+  {:name measured?,
+   :params [vram-total gtt-total],
+   :result :bool,
+   :effects #{},
+   :body (if (< vram-total 0) false (if (< gtt-total 0) false true)),
+   :param-types [:i64 :i64]}
+  {:name unmeasured,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body -1,
+   :param-types []}
+  {:name aperture-bytes,
+   :params [vram-total gtt-total],
+   :result :i64,
+   :effects #{},
+   :body
+   (if (measured? vram-total gtt-total) (+ vram-total gtt-total) -1),
+   :param-types [:i64 :i64]}
+  {:name headroom-default-milli,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 120,
+   :param-types []}
+  {:name usable-bytes,
+   :params [aperture headroom-milli],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (< aperture 0)
+    -1
+    (- aperture (quot (* aperture headroom-milli) 1000))),
+   :param-types [:i64 :i64]}
+  {:name committed-bytes,
+   :params [resident opportunistic],
+   :result :i64,
+   :effects #{},
+   :body (+ resident opportunistic),
+   :param-types [:i64 :i64]}
+  {:name remaining-bytes,
+   :params [usable resident opportunistic],
+   :result :i64,
+   :effects #{},
+   :body (- usable (committed-bytes resident opportunistic)),
+   :param-types [:i64 :i64 :i64]}
+  {:name over-aperture?,
+   :params [request usable],
+   :result :bool,
+   :effects #{},
+   :body (if (> request usable) true false),
+   :param-types [:i64 :i64]}
+  {:name would-evict-resident?,
+   :params [klass request usable resident],
+   :result :bool,
+   :effects #{},
+   :body
+   (if
+    (= klass 1)
+    (if (> (+ request resident) usable) true false)
+    false),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name admit-code,
+   :params [klass request usable resident opportunistic],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (>= usable 0)
+    (if
+     (class-known? klass)
+     (if
+      (< request 1)
+      6
+      (if
+       (over-aperture? request usable)
+       2
+       (if
+        (= klass 0)
+        (if (> (+ request resident) usable) 3 0)
+        (if
+         (would-evict-resident? klass request usable resident)
+         4
+         (if
+          (> request (remaining-bytes usable resident opportunistic))
+          3
+          0)))))
+     5)
+    1),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name admitted?,
+   :params [klass request usable resident opportunistic],
+   :result :bool,
+   :effects #{},
+   :body
+   (if
+    (= 0 (admit-code klass request usable resident opportunistic))
+    true
+    false),
+   :param-types [:i64 :i64 :i64 :i64 :i64]}
+  {:name granted-bytes,
+   :params [klass usable resident opportunistic],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (>= usable 0)
+    (if
+     (class-known? klass)
+     (if
+      (= klass 0)
+      (let [room (- usable resident)] (if (< room 0) 0 room))
+      (let
+       [room (remaining-bytes usable resident opportunistic)]
+       (if (< room 0) 0 room)))
+     0)
+    0),
+   :param-types [:i64 :i64 :i64 :i64]}
+  {:name code-name,
+   :params [code],
+   :result :string,
+   :effects #{},
+   :body
+   (if
+    (= code 0)
+    "admitted"
+    (if
+     (= code 1)
+     "unmeasured"
+     (if
+      (= code 2)
+      "over-aperture"
+      (if
+       (= code 3)
+       "no-remaining"
+       (if
+        (= code 4)
+        "would-evict-resident"
+        (if
+         (= code 5)
+         "unknown-class"
+         (if (= code 6) "non-positive-request" "unknown-code"))))))),
+   :param-types [:i64]}],
+ :oracle-value nil,
+ :schema-identities
+ #:accel{:verdict
+         "9daec682b8689e927e8edbb4a776f0abfe086a3db4d889830653b62a3bb0a0e0"},
+ :exports
+ [aperture-bytes
+  usable-bytes
+  committed-bytes
+  remaining-bytes
+  measured?
+  class-known?
+  resident-class
+  opportunistic-class
+  headroom-default-milli
+  unmeasured
+  admit-code
+  admitted?
+  granted-bytes
+  code-name
+  over-aperture?
+  would-evict-resident?],
+ :schemas
+ #:accel{:verdict
+         [:record
+          :accel/verdict
+          [[:admitted :bool] [:code :i64] [:granted :i64]]]},
+ :effects #{},
+ :blocks [],
+ :entry nil}
