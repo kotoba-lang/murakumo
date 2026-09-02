@@ -41,11 +41,17 @@
  :test-infer-join {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/infer_poll_worker_test.cljs"]
                    :doc "Offline tests for inference-node auth, local readiness probing, heartbeat capacity, and completion auth."}
 
+ :infer-submit {:cmd ["nbb" "--classpath" "src:../torch/src" "scripts/infer-submit.cljs"]
+                :pass-args? true
+                :doc "Enqueue one qwen38-generate job — a token-array prompt for a bare-metal AIUEOS device (device-P256 worker protocol v3; see docs/device-worker-v3.md in network-awai/cloud-murakumo-api). The device has no tokenizer, so the caller tokenises: `--tokens-file ids.edn`, or `--tokenize-with torch --vocab-file v.edn --prompt TEXT`. It cannot read a .gguf — torch.gguf is .clj (JVM only). Needs the torch sibling checkout on the classpath (nbb resolves aliases at analysis time, so the require cannot be made optional). e.g. `nbb scripts/run-task.cljs infer-submit --tokens-file ids.edn --target-did did:key:z... --wait 120`."}
+ :test-infer-submit {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/infer_submit_test.cljs"]
+                     :doc "Offline tests for the qwen38-generate submit command (no network, no torch — the tokenizer is injected)."}
+
  :test-worker {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/task_worker_test.cljs"]
                :doc "Offline tests for the resident-worker framing (no ssh)."}
  :test-tunnel {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/tunnel_test.cljc"]
                :doc "Offline tests for the fleet transport contract (in-band exit status, multiplexing, argv shapes)."}
- :test-tasks {:runs [:test-task :test-task-exec :test-worker :test-tunnel :test-infer-join]
+ :test-tasks {:runs [:test-task :test-task-exec :test-worker :test-tunnel :test-infer-join :test-infer-submit]
               :doc "Every offline test that runs under nbb today."}
 
  :claude {:cmd ["tools/claude-murakumo/claude-murakumo"], :pass-args? true, :doc "Run Claude Code against murakumo.cloud instead of Anthropic's own models (tools/claude-murakumo — same shape as z.ai's claude-zai wrapper for GLM)."}
