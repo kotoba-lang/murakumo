@@ -10,34 +10,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  kotoba-operator:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check out the AIUEOS parity authority
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: kotoba-lang/aiueos
-          ref: f68c22cf183f5b896ec758694afc91c28f099a30
-          path: aiueos
-          persist-credentials: false
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: "21"
-      - uses: DeLaGuardo/setup-clojure@4c7a6f613e5089821bb3bb2a33a3ee115578580d # 13.6.1
-        with:
-          cli: 1.12.5.1654
-      # Deterministic unit gate. Real localhost-QUIC/witness qualification is
-      # environment-sensitive and belongs in its own integration job.
-      # :babashka-client-host supplies org.babashka/http-client + http-kit,
-      # which kotoba-lang/http's host adapters require on plain JVM
-      # (kotoba.lang.http.host.babashka dies at load without them —
-      # FileNotFoundException: babashka/http_client since 7c5c7b9).
-      - run: >-
-          clojure -M:test:babashka-client-host
-          -r '^(?!murakumo\.overlay-(quic-driver-live|witness-ledger|witness-write)-test$).*-test$'
-        env:
-          AIUEOS_ROOT: ${{ github.workspace }}/aiueos
+      # Public compile/run uses the Release kotoba CLI. Language pin is
+      # kotoba-lang@48d7d3cb (kotoba-lang.pin.edn). This job does not claim
+      # compiler 8d9f3e8f. There is no kotoba -M and no clojure -M start.
+      - name: Install Release kotoba CLI
+        run: |
+          set -eu
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o /tmp/kotoba-linux-amd64.tar.gz \
+            "https://github.com/kotoba-lang/kotoba/releases/download/v0.7.3/kotoba-linux-amd64.tar.gz"
+          tar -xzf /tmp/kotoba-linux-amd64.tar.gz -C /tmp
+          bin=$(find /tmp -type f -name kotoba | head -n 1)
+          test -n "$bin"
+          install -m 755 "$bin" "$HOME/.local/bin/kotoba"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          test -x "$HOME/.local/bin/kotoba"
+      - name: kotoba compile (wasm and web)
+        run: sh scripts/kotoba-compile.sh
+      - name: prove artifacts exist before any emit claim
+        run: |
+          set -eu
+          for name in desired factory quic_driver quic_cert; do
+            test -s "target/kotoba/${name}.wasm"
+            test -s "target/kotoba/${name}.mjs"
+            echo "bytes ${name}.wasm=$(wc -c < target/kotoba/${name}.wasm)"
+            echo "bytes ${name}.mjs=$(wc -c < target/kotoba/${name}.mjs)"
+          done
+      - name: guest run (instantiateKotoba + exports)
+        run: sh scripts/kotoba-run.sh
+      - name: Linux kexe-verify is HOLD (exit 78, not fake ok)
+        run: |
+          set +e
+          sh scripts/amu-native.sh kotoba/desired.kotoba
+          test $? -eq 78

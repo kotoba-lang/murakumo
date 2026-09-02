@@ -7,8 +7,10 @@
 ;; (`clojure -M:test:native`) for good reasons: a C toolchain, and minutes.
 ;;
 ;; Measured 2026-08-12: **nothing invokes that alias.** This repository has no
-;; entry in `scripts/fleet-ci/gates.edn`, and `.github/workflows/ci.yml` runs
-;; `clojure -M:test`, not `-M:test:native`. So native execution was checked
+;; entry in `scripts/fleet-ci/gates.edn`. Default CI is job kotoba-operator
+;; (kotoba compile wasm+web, file-on-disk, guest-run), not clojure -M:test.
+;; Leftover JVM is leftover-jvm.yml, workflow_dispatch only. So native
+;; execution was checked
 ;; only when a person remembered to type it -- the shape this repository's own
 ;; runner docstring warns about: 走らないテストは緑と区別が付かない.
 ;;

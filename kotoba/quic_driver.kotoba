@@ -1,0 +1,61 @@
+(ns quic-driver
+  (:schemas {:quic/request [:record :quic/request
+                            [[:type :string] [:version :i64]
+                             [:has-transport :bool] [:has-connect :bool]]]})
+  (:export [main run
+            request-type request-version alpn
+            cmd-check cmd-dial cmd-serve cmd-serve-once
+            code-ready code-usage
+            code-check-admitted code-invalid-request
+            code-host-listen-hold
+            valid-request?]))
+
+;; Operator start for the overlay QUIC driver argv.
+;; Replaces clojure -M:quic-driver. Public start:
+;;   kotoba run kotoba/quic_driver.kotoba
+;;   kotoba compile kotoba/quic_driver.kotoba --target wasm|web
+;;
+;; Guest owns request-shape admission and command dispatch. main is not 0.
+;;
+;; Host-listen HOLD: tech.kwik/kwik sockets, BouncyCastle cert material,
+;; dial/serve/serve-once. Those stay leftover Java in
+;; src/murakumo/overlay/quic_driver.clj — not a start path, not a C .so,
+;; not an invented FFI. check on a valid request is admission only.
+
+(defn request-type [] :string "murakumo.overlay.adapter-request")
+(defn request-version [] :i64 1)
+(defn alpn [] :string "murakumo-overlay-quic/1")
+
+(defn cmd-check [] :string "check")
+(defn cmd-dial [] :string "dial")
+(defn cmd-serve [] :string "serve")
+(defn cmd-serve-once [] :string "serve-once")
+
+(defn code-ready [] :i64 42)
+(defn code-usage [] :i64 2)
+(defn code-check-admitted [] :i64 11)
+(defn code-invalid-request [] :i64 21)
+(defn code-host-listen-hold [] :i64 90)
+
+(defn valid-request? [x [:ref :quic/request]] :bool
+  (if (string=? (record-get x :type) (request-type))
+    (if (= (record-get x :version) (request-version))
+      (if (record-get x :has-transport)
+        (record-get x :has-connect)
+        false)
+      false)
+    false))
+
+(defn run [command :string] :i64
+  (if (string=? command (cmd-check))
+    (code-check-admitted)
+    (if (string=? command (cmd-dial))
+      (code-host-listen-hold)
+      (if (string=? command (cmd-serve))
+        (code-host-listen-hold)
+        (if (string=? command (cmd-serve-once))
+          (code-host-listen-hold)
+          (code-usage))))))
+
+(defn main [] :i64
+  (code-ready))

@@ -1,0 +1,54 @@
+(ns factory
+  (:schemas {:factory/issue-in [:record :factory/issue-in
+                                [[:serial :string] [:model :string]
+                                 [:root-key :string]]]})
+  (:export [main run
+            certificate-version unit-state
+            cmd-issue
+            code-ready code-usage code-issue-admitted code-issue-refused
+            blank? issue-admitted?]))
+
+;; Operator start for the factory station.
+;; Replaces clojure -M:factory. Public start:
+;;   kotoba run kotoba/factory.kotoba
+;;   kotoba compile kotoba/factory.kotoba --target wasm|web
+;; Native (sealed kexe, aarch64-macos only; Linux kexe-verify is HOLD):
+;;   bin/amu check kotoba/factory.kotoba --jvm-free
+;;   bin/amu compile kotoba/factory.kotoba --target aarch64-macos --jvm-free --output factory.kexe
+;;   bin/amu verify factory.kexe
+;;
+;; Guest owns issue admission (serial/model/root-key present) and the
+;; certificate-version / :factory unit-state tokens. main is not 0.
+;;
+;; Host-listen HOLD: Ed25519 keygen, root-key PKCS8 load, document sign,
+;; SecureRandom claim token, writing unit.edn / factory-key.b64.
+;; Those stay leftover Java in src/murakumo/factory.clj — not a start path.
+
+(defn certificate-version [] :i64 1)
+(defn unit-state [] :string "factory")
+(defn cmd-issue [] :string "issue")
+
+(defn code-ready [] :i64 42)
+(defn code-usage [] :i64 2)
+(defn code-issue-admitted [] :i64 11)
+(defn code-issue-refused [] :i64 21)
+
+(defn blank? [s :string] :bool
+  (string=? s ""))
+
+(defn issue-admitted? [x [:ref :factory/issue-in]] :bool
+  (if (blank? (record-get x :serial))
+    false
+    (if (blank? (record-get x :model))
+      false
+      (if (blank? (record-get x :root-key))
+        false
+        true))))
+
+(defn run [command :string] :i64
+  (if (string=? command (cmd-issue))
+    (code-issue-admitted)
+    (code-usage)))
+
+(defn main [] :i64
+  (code-ready))

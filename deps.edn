@@ -62,12 +62,15 @@
         io.github.kotoba-lang/kekkai
         {:git/sha "87a16440ce48d9fe6ee9645e452354181c97e5e5"}}
  :aliases
- {;; Factory provisioning station -- issues per-device birth certificates so a
-  ;; fleet can reach :attested instead of shipping everything :tofu.
-  ;;   clojure -M:factory issue --serial SN-0001 --model "MK-1 Solo" \
-  ;;     --root-key factory-root.b64 --out units/
-  :factory {:main-opts ["-m" "murakumo.factory"]}
-
+ {;; Operator start is Kotoba, not a Clojure alias:
+  ;;   kotoba run kotoba/desired.kotoba
+  ;;   kotoba run kotoba/factory.kotoba
+  ;;   kotoba run kotoba/quic_driver.kotoba
+  ;;   kotoba run kotoba/quic_cert.kotoba
+  ;; There is no kotoba -M. :desired / :factory / :quic-* aliases are gone.
+  ;; Leftover Java (kekkai seal, Ed25519 issue, kwik/BouncyCastle listen)
+  ;; stays in src/ as a library gap — not a start path.
+  ;;
   ;; offline workspace dev — pin witness-quorum/kekkai to local checkouts
   :dev {:override-deps
         {io.github.kotoba-lang/inference {:local/root "../inference"}
@@ -84,11 +87,8 @@
   ;; does win, hence this one — it carries no deps of its own and must be
   ;; combined with :test.
   :gen {:main-opts ["-m" "murakumo.kotoba-oracle-gen"]}
-  :quic-driver {:main-opts ["-m" "murakumo.overlay.quic-driver"]}
-  :quic-cert {:main-opts ["-m" "murakumo.overlay.cert"]}
-  ;; Cloud-provider-independent desired-state publisher / node pull agent.
-  ;; `clojure -M:desired -- help` for the explicit authority/mirror contract.
-  :desired {:main-opts ["-m" "murakumo.desired-state"]}
+  ;; :gen is leftover JVM KIR rewrite (clojure -M:test:gen). It is not Kotoba
+  ;; operator start and is not claimed as kotoba compile.
   ;; Fleet CI ships this repository without west siblings. Keep the HA gate
   ;; focused on the distributed inference control plane and its generated
   ;; systemd/watchdog artifacts; the broad :test suite remains the local
@@ -98,10 +98,9 @@
    :extra-deps {io.github.cognitect-labs/test-runner
                 {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
    :main-opts ["-m" "cognitect.test-runner" "-n" "murakumo.infer-test"]}
-  ;; JVM-only test path for the kwik/witness-quorum-dependent overlay code
-  ;; (quic-driver RPC + witness-transport) that bb.edn's portable `test`
-  ;; task deliberately excludes, same reason quic-driver/quic-cert are
-  ;; shelled to `clojure -M` instead of run under bb.
+  ;; Leftover JVM test path for the kwik/witness-quorum-dependent overlay
+  ;; library (not an operator start). Default CI is kotoba compile / kotoba
+  ;; run; this alias is leftover-jvm workflow_dispatch only.
   :test {;; cloud-murakumo/src is TEST-ONLY, for the API-key parity gate
          ;; (murakumo.apikey-parity-test): keys minted here must be byte-identical
          ;; to, and accepted by, the namespace that actually VERIFIES them. A
@@ -129,15 +128,19 @@
            :git/sha "34415ce9bf2b8d37d5bc8259ba7e00f5d091eb44"}}
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}
-                      ;; tender-native is the JVM host for kexe artifacts. It
-                      ;; sits in :test rather than :native because the DEFAULT
-                      ;; suite now runs a one-core native canary
-                      ;; (murakumo.native-canary-test): measured 2026-08-12,
-                      ;; NOTHING invoked the opt-in alias -- this repo has no
-                      ;; entry in scripts/fleet-ci/gates.edn and ci.yml runs
-                      ;; `-M:test`. `oracle/open-native!` resolves it at call
-                      ;; time, so nothing that only runs the interpreter
-                      ;; inherits it. The full 735-export sweep stays opt-in.
+                      ;; tender-native is the leftover JVM host for kexe
+                      ;; artifacts (not operator start). It sits in :test
+                      ;; rather than :native because a one-core canary
+                      ;; (murakumo.native-canary-test) used to ride the old
+                      ;; default suite: measured 2026-08-12, NOTHING invoked
+                      ;; the opt-in alias -- this repo has no entry in
+                      ;; scripts/fleet-ci/gates.edn. Default CI is now job
+                      ;; kotoba-operator (kotoba compile wasm+web, file-on-disk,
+                      ;; guest-run). Leftover JVM is leftover-jvm.yml,
+                      ;; workflow_dispatch only. `oracle/open-native!` resolves
+                      ;; it at call time, so nothing that only runs the
+                      ;; interpreter inherits it. The full 735-export sweep
+                      ;; stays opt-in.
                       io.github.kotoba-lang/tender-native
                       {:git/url "https://github.com/kotoba-lang/tender-native.git"
                        :git/sha "1915ee10a0a2af7edd252e7a0ffd67c0d4c3a167"}
@@ -164,8 +167,8 @@
   ;; :babashka-client-host — not top-level." (http @ 8642997efe — was 719a2103
   ;; whose httpkit host could not load: kotoba-lang/http#3)
   ;; src/kotoba/lang/http/host/babashka.cljc line 1; the alias itself lives
-  ;; in that repo's deps.edn.) murakumo's CI (ci.yml) runs `clojure -M:test`
-  ;; on plain JVM, so without this alias every namespace that requires
+  ;; in that repo's deps.edn.) Leftover JVM tests use this alias on
+  ;; workflow_dispatch only (not default CI). Without it every namespace that requires
   ;; kotoba.lang.http.host.babashka (infer/gateway, infer/media,
   ;; infer/relay_worker, infer/orchestrate) dies at load with
   ;; FileNotFoundException: babashka/http_client — measured as the main-CI
@@ -185,12 +188,12 @@
   ;; The same cores, RUN on the host ISA rather than accepted by the backend.
   ;; Combine with :test, which carries amu:
   ;;
-  ;;   clojure -M:test:native
+  ;;   leftover: clojure -M:test:native
   ;;
-  ;; Separate because it needs a C toolchain to build the measured loader and
-  ;; a few minutes to compile and execute every core -- a suite you run to
-  ;; qualify a change, not while making one. tender-native is a JVM host for
-  ;; kexe artifacts; `oracle/open-native!` resolves it at call time, so nothing
-  ;; that runs the interpreter inherits it.
+  ;; Not operator start. tender-native is a leftover JVM host for kexe
+  ;; artifacts in the oracle qualification sweep. Operator native, when
+  ;; emitted, is bin/amu compile --target aarch64-macos --jvm-free of
+  ;; kotoba/desired.kotoba or kotoba/factory.kotoba — not a *_core.kotoba.
+  ;; Linux kexe-verify is HOLD; this alias does not emit a release kexe.
   :native {:extra-paths ["test-native"]
            :main-opts ["-m" "cognitect.test-runner" "-d" "test-native"]}}}

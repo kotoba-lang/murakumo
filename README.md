@@ -4,8 +4,8 @@
 
 kotoba ships a single-node mesh runtime (`kotoba-server` with the `p2p,realtime-wasm`
 features) and a single-node status command (`kotoba lattice ps`) — but **no
-fleet-facing control surface**. `murakumo` is that surface: a thin **babashka/clj**
-operator that runs **from your terminal**, reaches every node over **Tailscale SSH**
+fleet-facing control surface**. `murakumo` is that surface: a **Kotoba** operator
+(`kotoba run` / `kotoba compile`) that runs **from your terminal**, reaches every node over **Tailscale SSH**
 today, installs a **resident** kotoba mesh node on each, and folds the whole fleet
 into one view. `murakumo.cloud` is the Murakumo-native overlay being built to replace
 the Tailscale/WireGuard dependency with DID/CID identity addressing, policy records,
@@ -47,7 +47,10 @@ token IDs matched across cache 0, two cache-on runs, and mmap. Evidence is in
 `verify/evidence/qwen38-expert-stream-m4-16g-20260829.json`.
 
 ```sh
-clojure -M -m murakumo.infer plan qwen3.8-flash-next-ud-iq3-xxs
+# leftover JVM library (not operator start; no :infer alias):
+#   clojure -M -m murakumo.infer plan qwen3.8-flash-next-ud-iq3-xxs
+kotoba compile kotoba/desired.kotoba --target wasm --output target/kotoba/desired.wasm
+kotoba run kotoba/desired.kotoba
 ```
 
 On macOS, Expert-aware reads are real but page-cache bypass is not: neither
@@ -156,6 +159,15 @@ nbb scripts/run-task.cljs identity      # print the operator DID (never the seed
 nbb scripts/run-task.cljs ops status    # fold /health + lattice ps across the fleet
 nbb scripts/run-task.cljs task run --n 22 --cmd 'hostname'   # fan a batch over the fleet
 nbb scripts/run-task.cljs token issue --scope chat           # mint a gateway API key
+
+# Operator start (whole-component entries — not kotoba/*_core.kotoba oracles)
+kotoba compile kotoba/desired.kotoba --target wasm --output target/kotoba/desired.wasm --json
+kotoba compile kotoba/desired.kotoba --target web --output target/kotoba/desired.mjs --json
+# Guest-run: instantiateKotoba on the web artifact and call main / run.
+# Release `kotoba run <entry>.kotoba` currently rejects typed forms; that is
+# a CLI source-run gap, not a host-predicate substitute.
+sh scripts/kotoba-compile.sh
+sh scripts/kotoba-run.sh
 ```
 
 > ### The rest of the control plane is unavailable
@@ -170,12 +182,12 @@ nbb scripts/run-task.cljs token issue --scope chat           # mint a gateway AP
 > which.
 >
 > Three have been ported to nbb and are the commands above: `ops` (the nbb port
-> of `nodes` + `status`), `task` (the fleet task plane), and `token`. In
-> addition, the JVM `:desired` entrypoint below restores distributed reconcile
-> without the old SSH-push shell. Everything
-> else needs a port — the bodies require `babashka.process`/`cheshire` under
-> SCI, so re-registering them is a decision about which of these commands should
-> still exist, not a mechanical conversion.
+> of `nodes` + `status`), `task` (the fleet task plane), and `token`. Operator
+> start for desired / factory / quic is `kotoba run kotoba/<entry>.kotoba`
+> (there is no `kotoba -M` and no `:desired` / `:factory` / `:quic-*` alias).
+> Everything else needs a port — the bodies require `babashka.process`/`cheshire`
+> under SCI, so re-registering them is a decision about which of these commands
+> should still exist, not a mechanical conversion.
 >
 > Every `bb …` line remaining below in this README is in that dropped set. They
 > are left in place, rather than deleted, because they describe what this repo
@@ -194,7 +206,7 @@ nbb scripts/run-task.cljs token issue --scope chat           # mint a gateway AP
 | `mesh [node\|all]` | 2-pass: provision with a fixed P2P port + stable PeerId, collect PeerIds, re-provision with `KOTOBA_BOOTSTRAP_PEERS` = the others ⇒ ONE gossipsub lattice (fleet-wide auction) |
 | `deploy <app.edn> [node]` | port-forward the node's kotoba port, then `kotoba app deploy --publish` (clj→WASM → lattice) |
 | `reconcile <murakumo.app.edn> [--dry-run\|--apply\|--watch[=secs]]` | **declarative desired-state (wadm)** — fold a fleet manifest vs live placement, report/converge the drift (see below) |
-| `clojure -M:desired publish\|pull\|reconcile` | signed CID desired state over independent mirrors; each node pulls and applies only its deterministic assignment, with no SSH/control-cloud dependency |
+| `kotoba run kotoba/desired.kotoba` | operator start for signed CID desired-state **admission** (CID charset, empty-reach, extension chain, publish/pull/reconcile dispatch). kekkai seal, mirror I/O, local apply, and runtime probe are host-listen HOLD |
 | `cloud [plan\|records\|routes\|dial\|connect <node>\|relay <name>\|bootstrap] [--cloud=cloud.edn] [--fleet=fleet.edn]` | plan the `murakumo.cloud` identity overlay, route hints, driver argv, relay argv, bootstrap order, and control-plane records that replace an external VPN control plane |
 | `overlay dial\|relay --overlay ...` | native overlay driver shell: validate canonical dial/relay argv and emit the session record a real stream/packet driver will open |
 | `fleet <datom-log.edn> [now-ms]` | **coordination-plane view** — fold a [kotoba-fleet](https://github.com/kotoba-lang/kotoba-fleet) Datom log into one snapshot (per-work holders · active leases · pending proposals) via `kotoba.fleet.view/snapshot`. The `status` of the 20-agent coordination layer, next to the mesh `status`. |
@@ -301,19 +313,22 @@ assignment だけを local Kotoba endpoint へ適用する。適用後は node �
 receipt を同じ content-addressed layout へ返す。
 
 ```bash
-# operator: source build を含む app や CID 不明 app は拒否される
-clojure -M:desired publish murakumo.app.edn \
-  --fleet=fleet.edn --roots=/mnt/a,/mnt/b \
-  --identity=.murakumo/desired-authority.edn --epoch=1
+# operator start (guest admission). There is no clojure -M:desired.
+kotoba compile kotoba/desired.kotoba --target wasm --output target/kotoba/desired.wasm
+kotoba run kotoba/desired.kotoba
+kotoba run kotoba/desired.kotoba --function run --arg '"publish"'
+kotoba run kotoba/desired.kotoba --function run --arg '"reconcile"'
 
-# node: authority/CID/signature/epoch/previous CID を検証して local apply
-clojure -M:desired reconcile \
-  --roots=/mnt/a,/mnt/b --authority="$MURAKUMO_DESIRED_AUTHORITY_SPKI" \
-  --node=asher --state-dir=/var/lib/murakumo/desired \
-  --node-identity=/var/lib/murakumo/node.edn \
-  --kotoba=/opt/murakumo/bin/kotoba --wit-dir=/opt/murakumo/wit \
-  --url=http://127.0.0.1:8077
+# Native sealed kexe is aarch64-macos only (Linux kexe-verify is HOLD):
+#   bin/amu check kotoba/desired.kotoba --jvm-free
+#   bin/amu compile kotoba/desired.kotoba --target aarch64-macos --jvm-free --output desired.kexe
+#   bin/amu verify desired.kexe
 ```
+
+kekkai seal, filesystem mirrors, node-local `kotoba app deploy`, and the
+runtime probe are **host-listen HOLD** in this guest. The leftover Java in
+`src/murakumo/desired_state.clj` still implements that I/O; it is not a start
+path and has no `:desired` alias.
 
 Node receipt は deploy command の exit 0 だけでは `:applied` を名乗らない。app が
 `:probe {:method "POST" :path "/mesh/http/..." :body "{}" :expect-status 200}` を
@@ -509,15 +524,15 @@ bb overlay adapter-plan --overlay ...                # build external QUIC/WebRT
 bb overlay adapter-check --overlay ...               # run the configured adapter check command
 bb overlay adapter-supervisor --overlay ...          # plan restart policy for a long-running adapter process
 MURAKUMO_QUIC_DRIVER="bb overlay-adapter" bb overlay adapter-check --overlay ... # use the bundled reference adapter
-bb quic-driver check --request-edn '{...}'        # JVM Clojure/Kwik QUIC driver
-bb quic-cert ensure --overlay=bafyOverlay --node=bafyNode --host=localhost # issue/ensure stored QUIC cert/key
+kotoba run kotoba/quic_driver.kotoba --function run --arg '"check"'   # guest admission
+kotoba run kotoba/quic_cert.kotoba --function run --arg '"ensure"'    # host-listen HOLD (BouncyCastle)
 bb quic-cert list                              # show active QUIC material generations/fingerprints
 bb quic-cert rotate --overlay=bafyOverlay --node=bafyNode --host=localhost # rotate active QUIC cert/key
 bb quic-cert verify                            # verify files, fingerprints, and audit hash chain
 bb quic-cert prune --keep=1                    # remove old non-active generations
 bb quic-driver serve --request-edn '{...}'       # QUIC listener; auto-issues cert/key if env is absent
 MURAKUMO_QUIC_CERT=cert.pem MURAKUMO_QUIC_KEY=key.pem bb quic-driver serve --request-edn '{...}' # explicit cert/key override
-MURAKUMO_QUIC_DRIVER="clojure -M:quic-driver" bb overlay adapter-check --overlay ... # real Clojure QUIC driver
+kotoba run kotoba/quic_driver.kotoba   # guest admission; kwik listen is host-listen HOLD
 bb overlay-adapter check --request-edn '{...}'       # reference external adapter driver entrypoint
 bb overlay dial-check --overlay ...                  # probe direct endpoint reachability
 bb overlay dial-check --via=relay --overlay ...      # connect to relay and exchange overlay hello/frame/ack
@@ -916,12 +931,9 @@ bb murakumo nodes    # nodes without :status "authorized" are now excluded,
   own, sufficient (that would make the governor a no-op).
 - **Process boundary, not an in-process dep.** kekkai rides langgraph/JVM;
   murakumo's own CLI runs on babashka. Status lookups shell out to
-  `clojure -M -m kekkai.cli <ledger> <node-id>` in the sibling kekkai checkout
-  (`$MURAKUMO_KEKKAI_DIR`, default
-  `~/github/com-junkawasaki/orgs/kotoba-lang/kekkai`) — the same
-  process-boundary shape murakumo already uses for the kotoba/tailscale/ssh/
-  quic-driver binaries, rather than requiring kekkai's StateGraph stack
-  in-process (a sci/babashka compatibility risk).
+  the sibling kekkai checkout (`$MURAKUMO_KEKKAI_DIR`) as a leftover process
+  boundary — not this repo's operator start, and not a `:desired`/`:factory`
+  alias. Default operator start is `kotoba run`.
 - **What this does NOT replace.** `cloud.edn`'s default-deny capability
   policy (`bb cloud dial ... capability=ssh`) still governs what a given
   *admitted* node may reach; kekkai gates fleet **membership** (is this node
@@ -934,12 +946,10 @@ bb murakumo nodes    # nodes without :status "authorized" are now excluded,
   is exercised manually against a real sibling kekkai checkout.
 - **Known cost (not yet optimized): one JVM spawn per node.** `apply-gate`
   shells out to `kekkai.cli` once per node in the selection (no batching), so
-  enabling the gate on a full fleet adds one `clojure -M` cold-start per node
-  to every command. Fine for occasional `provision`/`mesh`, noticeable on a
-  larger fleet or a tight loop. A batched `kekkai.cli <ledger> <node-id>...`
-  (one JVM, N statuses) would remove this — not done yet. A launch failure
-  (missing `clojure` on PATH, broken checkout) degrades that node to
-  `"unknown"` (denied) rather than crashing the command.
+  enabling the gate on a full fleet still pays one leftover JVM spawn per
+  node (kekkai sibling CLI). That is a named leftover, not murakumo operator
+  start. A launch failure (missing sibling, broken checkout) degrades that
+  node to `"unknown"` (denied) rather than crashing the command.
 
 ## Status (honest)
 

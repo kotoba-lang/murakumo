@@ -1,0 +1,25 @@
+;; Disk inventory for kotoba-amu / language-pin audits.
+;; Oracle cores are not operator start. Do not compile a *_core.kotoba as a kexe.
+{:kotoba-lang/pin "48d7d3cb6ccde4a0f8910bc6c7f4276de2b77fdd"
+ :operator-entries
+ ["kotoba/desired.kotoba"
+  "kotoba/factory.kotoba"
+  "kotoba/quic_driver.kotoba"
+  "kotoba/quic_cert.kotoba"]
+ :oracle-cores {:glob "kotoba/*_core.kotoba"
+                :count 37
+                :operator-start? false}
+ :kexe {:emitted []
+        :linux-verify :hold
+        :release-target "aarch64-macos"
+        :short-aarch64-not-release true
+        :invocation
+        ["bin/amu check <entry.kotoba> --jvm-free"
+         "bin/amu compile <entry.kotoba> --target aarch64-macos --jvm-free --output <name>.kexe"
+         "bin/amu verify <name>.kexe"]}
+ :not-operator-start
+ {:test-native "tender-native JVM host of kexe; leftover :test:native"
+  :test-amu-sha "1e21a1f56613d7d4c7628af1945ebf1cf7862ff3"
+  :test-amu-is-not-language-pin true
+  :do-not-wrap ["tech.kwik/kwik" "org.bouncycastle/bcpkix-jdk18on" "kekkai"
+                "Datalevin/LMDB JNI"]}}

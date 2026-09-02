@@ -1,0 +1,164 @@
+(ns desired
+  (:schemas {;; Whole-component operator entry (not an oracle *_core).
+             ;; Host projects per-node label/role strings; guest decides.
+             :desired/eligible-in [:record :desired/eligible-in
+                                   [[:reach :string]
+                                    [:want-zone :string] [:have-zone :string]
+                                    [:want-role :string] [:have-role :string]]]
+             :desired/place-in [:record :desired/place-in
+                                [[:cid :string] [:replicas :i64]
+                                 [:eligible-n :i64] [:reach :string]]]
+             :desired/extension-in [:record :desired/extension-in
+                                    [[:has-old :bool]
+                                     [:old-cid :string] [:old-epoch :i64]
+                                     [:new-cid :string] [:new-epoch :i64]
+                                     [:previous-cid :string]]]
+             :desired/starts-with [:record :desired/starts-with
+                                   [[:s :string] [:prefix :string]]]
+             :desired/scan [:record :desired/scan
+                            [[:s :string] [:c :string] [:i :i64] [:n :i64]]]})
+  (:export [main run
+            schema subject kind-name
+            cmd-publish cmd-pull cmd-reconcile
+            code-ready code-usage
+            code-publish code-pull code-reconcile
+            code-refuse-cid code-refuse-reach code-refuse-capacity
+            code-extend-accept code-extend-unchanged
+            code-extend-epoch code-extend-mismatch
+            blank? starts-with? cid-prefix cid-alphabet
+            cid-char-ok? cid-rest-ok? cid-ok?
+            eligible? place-status extension-status
+            replica-default]))
+
+;; Operator start for distributed desired-state.
+;; Replaces clojure -M:desired. Public start:
+;;   kotoba run kotoba/desired.kotoba
+;;   kotoba compile kotoba/desired.kotoba --target wasm|web
+;; Native (sealed kexe, aarch64-macos only; Linux kexe-verify is HOLD):
+;;   bin/amu check kotoba/desired.kotoba --jvm-free
+;;   bin/amu compile kotoba/desired.kotoba --target aarch64-macos --jvm-free --output desired.kexe
+;;   bin/amu verify desired.kexe
+;;
+;; Guest owns admission: CID charset, empty-reach, replica-vs-eligible,
+;; extension chain, command dispatch. main is not the constant 0.
+;;
+;; Host-listen HOLD (not implemented in this guest, not a fake ok):
+;; kekkai CACAO seal/publish, SHA-256 rendezvous sort, filesystem mirrors,
+;; node-local kotoba app deploy, curl runtime probe.
+
+(defn schema [] :string "murakumo.desired-apps/v1")
+(defn subject [] :string "murakumo/fleet/apps")
+(defn kind-name [] :string "murakumo/apps")
+
+(defn cmd-publish [] :string "publish")
+(defn cmd-pull [] :string "pull")
+(defn cmd-reconcile [] :string "reconcile")
+
+(defn code-ready [] :i64 42)
+(defn code-usage [] :i64 2)
+(defn code-publish [] :i64 11)
+(defn code-pull [] :i64 12)
+(defn code-reconcile [] :i64 13)
+(defn code-refuse-cid [] :i64 21)
+(defn code-refuse-reach [] :i64 22)
+(defn code-refuse-capacity [] :i64 23)
+(defn code-extend-accept [] :i64 31)
+(defn code-extend-unchanged [] :i64 32)
+(defn code-extend-epoch [] :i64 33)
+(defn code-extend-mismatch [] :i64 34)
+
+(defn replica-default [] :i64 1)
+
+(defn cid-prefix [] :string "b")
+(defn cid-alphabet [] :string "abcdefghijklmnopqrstuvwxyz234567")
+
+(defn blank? [s :string] :bool
+  (string=? s ""))
+
+(defn starts-with? [x [:ref :desired/starts-with]] :bool
+  (let [s (record-get x :s)
+        prefix (record-get x :prefix)
+        n (string-byte-length s)
+        p (string-byte-length prefix)]
+    (if (< n p)
+      false
+      (string=? (string-substring s 0 p) prefix))))
+
+(defn alphabet-has? [x [:ref :desired/scan]] :bool
+  (let [s (record-get x :s)
+        c (record-get x :c)
+        i (record-get x :i)
+        n (record-get x :n)]
+    (if (= i n)
+      false
+      (if (string=? (string-substring s i (+ i 1)) c)
+        true
+        (alphabet-has? (record-new [:ref :desired/scan] s c (+ i 1) n))))))
+
+(defn cid-char-ok? [c :string] :bool
+  (let [a (cid-alphabet)]
+    (alphabet-has? (record-new [:ref :desired/scan] a c 0 (string-byte-length a)))))
+
+(defn cid-rest-ok? [x [:ref :desired/scan]] :bool
+  (let [s (record-get x :s)
+        i (record-get x :i)
+        n (record-get x :n)]
+    (if (= i n)
+      true
+      (if (cid-char-ok? (string-substring s i (+ i 1)))
+        (cid-rest-ok? (record-new [:ref :desired/scan] s "" (+ i 1) n))
+        false))))
+
+(defn cid-ok? [cid :string] :bool
+  ;; clj: (re-matches #"b[a-z2-7]+" cid)
+  (let [n (string-byte-length cid)]
+    (if (< n 2)
+      false
+      (if (starts-with? (record-new [:ref :desired/starts-with] cid (cid-prefix)))
+        (cid-rest-ok? (record-new [:ref :desired/scan] cid "" 1 n))
+        false))))
+
+(defn eligible? [x [:ref :desired/eligible-in]] :bool
+  ;; empty reach; zone and role must match the wanted strings
+  (if (blank? (record-get x :reach))
+    (if (string=? (record-get x :want-zone) (record-get x :have-zone))
+      (string=? (record-get x :want-role) (record-get x :have-role))
+      false)
+    false))
+
+(defn place-status [x [:ref :desired/place-in]] :i64
+  ;; 21 missing/invalid CID; 22 unverified reach; 23 not enough eligible; 11 admitted
+  (if (cid-ok? (record-get x :cid))
+    (if (blank? (record-get x :reach))
+      (if (< (record-get x :eligible-n) (record-get x :replicas))
+        (code-refuse-capacity)
+        (code-publish))
+      (code-refuse-reach))
+    (code-refuse-cid)))
+
+(defn extension-status [x [:ref :desired/extension-in]] :i64
+  ;; Accept first statement, same CID+epoch idempotently, or a strictly newer
+  ;; epoch whose previous CID is the locally applied head.
+  (if (record-get x :has-old)
+    (if (string=? (record-get x :old-cid) (record-get x :new-cid))
+      (if (= (record-get x :old-epoch) (record-get x :new-epoch))
+        (code-extend-unchanged)
+        (code-extend-epoch))
+      (if (< (record-get x :old-epoch) (record-get x :new-epoch))
+        (if (string=? (record-get x :old-cid) (record-get x :previous-cid))
+          (code-extend-accept)
+          (code-extend-mismatch))
+        (code-extend-mismatch)))
+    (code-extend-accept)))
+
+(defn run [command :string] :i64
+  (if (string=? command (cmd-publish))
+    (code-publish)
+    (if (string=? command (cmd-pull))
+      (code-pull)
+      (if (string=? command (cmd-reconcile))
+        (code-reconcile)
+        (code-usage)))))
+
+(defn main [] :i64
+  (code-ready))
