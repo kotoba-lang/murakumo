@@ -201,6 +201,7 @@ nbb scripts/run-task.cljs token issue --scope chat           # mint a gateway AP
 | `infer probe\|plan <model>\|provision\|up\|down\|ps\|serve\|generate` | **distributed inference across the fleet, exo-style** — memory-weighted shard plan + pipeline-parallel ring (see below) |
 | `task probe\|plan\|run\|report` | **fleet task plane** — fan a BATCH of short-lived tasks over the fleet and gather the results (k8s-Job / Ray-tasks shape, next to `reconcile`'s k8s-Deployment shape). `nbb scripts/run-task.cljs task run --n 22 --cmd 'hostname'` (see below) |
 | `ops status [all\|a,b]` | **fleet read surface, restored on nbb** — one ssh round trip per node for `/health`, wasm_executor, peer links, hosted component CIDs, mesh binary presence and LaunchAgent state. This is the nbb port of the bb-era `nodes` + `status`, which have had no runnable entrypoint since the bb.edn removal. `nbb scripts/run-task.cljs ops status` |
+| `infer-submit --tokens-file ids.edn` | **give a bare-metal AIUEOS device a real prompt** — enqueue one `qwen38-generate` job (device-P256 worker protocol v3). The device has no tokenizer, so the caller tokenises and the caller detokenises: pass ids, or `--tokenize-with torch --vocab-file v.edn --prompt TEXT`. Add `--wait 120` to poll for the generated token array. Needs the `torch` sibling on the classpath; it cannot read a `.gguf` (`torch.gguf` is `.clj`, JVM only). |
 
 ## Layout
 
