@@ -88,10 +88,18 @@
   ;; datoms on-tick every 5m. Goals / approvals / every Bot turn stay OFF-MESH
   ;; on the JVM resident until `llm/infer` has an admitted guest provider
   ;; (capability-llm-infer is contract-only as of 2026-09-02).
-  ;; :cid deliberately absent — declared 2026-09-02, not yet deployed (the
-  ;; operator Mac's `kotoba` CLI pointed at a removed /tmp binary that day), so
-  ;; reconcile reports :needs-build rather than a placement nobody observed.
+  ;; representative CID = agent-profile (the http-serving component).
+  ;; Deployed 2026-09-02 with the kotoba CLI pinned from levi's
+  ;; ~/.murakumo/bin (the operator Mac's own copy pointed at a removed /tmp
+  ;; binary): `kotoba app deploy --publish` via levi:8077 gossiped PutRoutes to
+  ;; the lattice; the blocks were `block put` to levi / dan / joseph (the three
+  ;; nodes whose kotoba-server was up) with the operator op-token; then
+  ;; POST /mesh/http/itonami/profile answered HTTP 200 on all three. Before the
+  ;; block put the same call answered 502 "component unavailable" on levi and
+  ;; dan — the route-without-block state this file's README warns about.
+  ;; agent-heartbeat = bafyreifacuajgk7cz5jtizogvksuu54itf652nblnuz7dkibts7malcmtm.
   {:name      "itonami-agent"
    :manifest  "../../cloud-itonami/cloud-itonami-app/mesh/itonami.app.edn"
+   :cid       "bafyreiainzfv2ityp3owx3ax4jex6z6gw2ovm676srl62y6rdvcx6jpqwe"
    :replicas  2
    :placement {:labels {:tier "edge" :zone "jp"} :roles ["compute"]}}]}
