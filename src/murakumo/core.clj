@@ -112,6 +112,14 @@
                   fleet n {:user user :home home})]
           (ssh/sh host (provision/write-watchdog-plist-command wd))
           (ssh/sh host (provision/watchdog-reprovision-command)))
+        ;; kernel network baseline: widen the ephemeral port range so one
+        ;; misbehaving poller cannot take every outbound socket on the node
+        ;; with it (ADR-260902-fleet-outbound-hygiene).
+        (let [sb (provision/render-sysctl-baseline-plist
+                  (slurp "deploy/com.murakumo.sysctl-baseline.plist.tmpl")
+                  {:home home})]
+          (ssh/sh host (provision/write-sysctl-baseline-plist-command sb))
+          (ssh/sh host (provision/sysctl-baseline-reprovision-command)))
         (println (report/provision-result-line (seq (provision/bootstrap-str fleet peers n))))))))
 
 (defn- load-peers [] (config/read-edn-file-or peers-file {}))

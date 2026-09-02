@@ -2,12 +2,22 @@
 <!-- com.murakumo.kotoba-mesh-watchdog — HTTP-wedge watchdog for the resident
      kotoba mesh node. Rendered per-node by `murakumo provision` next to
      com.murakumo.kotoba-mesh. Every 60s it probes the node's own
-     http://127.0.0.1:{{PORT}}/health; TWO consecutive failures (a strike file
-     survives between runs) kill the kotoba-server process, and the mesh
-     daemon's KeepAlive brings it back. Motivated by the 2026-07-02 incident:
-     kotoba-server (pin 4f38b74a) kept its libp2p plane alive while the HTTP
-     surface wedged (accepts TCP, never responds) after days of uptime — the
-     process never crashes, so KeepAlive alone cannot heal it. -->
+     http://127.0.0.1:{{PORT}}/health.
+
+     It kills kotoba-server ONLY for the failure it was built for (2026-07-02,
+     pin 4f38b74a): the TCP listener accepts a connection but HTTP never
+     answers, twice in a row. Before it counts a strike it asks `nc` whether a
+     plain TCP connect works:
+       - "Can't assign requested address" → THIS HOST is out of ephemeral
+         ports (TIME_WAIT). The server is fine; killing it changes nothing and
+         the restart storm makes it worse. Measured 2026-09-02 on simeon: the
+         watchdog killed a healthy server every two minutes for hours
+         (ADR-260902-fleet-outbound-hygiene). Log it, clear the strike.
+       - connect refused / no listener → the process is gone or starting;
+         that is KeepAlive's job, not ours. Clear the strike.
+       - connect succeeded but /health failed → the wedge. Strike; kill on two.
+     The log line names which of the three it saw, so a reader can tell a
+     wedge from an exhausted node from a restart in progress. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>            <string>com.murakumo.kotoba-mesh-watchdog</string>
@@ -16,7 +26,7 @@
   <array>
     <string>/bin/sh</string>
     <string>-c</string>
-    <string>H="{{HOME}}"; M="$H/.murakumo/watchdog.strike"; if curl -sf -m 5 "http://127.0.0.1:{{PORT}}/health" >/dev/null 2>&#38;1; then rm -f "$M"; elif [ -f "$M" ]; then rm -f "$M"; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) health failed twice on :{{PORT}} — killing kotoba-server" >> "$H/.murakumo/watchdog.log"; pkill -f "$H/.murakumo/bin/kotoba-server"; else touch "$M"; fi</string>
+    <string>H="{{HOME}}"; P={{PORT}}; M="$H/.murakumo/watchdog.strike"; L="$H/.murakumo/watchdog.log"; T="$(date -u +%Y-%m-%dT%H:%M:%SZ)"; if curl -sf -m 5 "http://127.0.0.1:$P/health" &gt;/dev/null 2&gt;&#38;1; then rm -f "$M"; else R="$(nc -z -w 3 127.0.0.1 $P 2&gt;&#38;1)"; case "$R" in *"assign requested address"*) echo "$T probe on :$P failed with EADDRNOTAVAIL — this host is out of ephemeral ports (TIME_WAIT=$(netstat -an -p tcp 2&gt;/dev/null | grep -c TIME_WAIT)); kotoba-server NOT killed" &gt;&gt; "$L"; rm -f "$M";; *succeeded*) if [ -f "$M" ]; then rm -f "$M"; echo "$T TCP accepts but /health failed twice on :$P — HTTP wedge, killing kotoba-server" &gt;&gt; "$L"; pkill -f "$H/.murakumo/bin/kotoba-server"; else touch "$M"; fi;; *) echo "$T no listener on :$P ($R) — leaving restart to KeepAlive" &gt;&gt; "$L"; rm -f "$M";; esac; fi</string>
   </array>
   <key>StartInterval</key>    <integer>60</integer>
   <key>RunAtLoad</key>        <true/>

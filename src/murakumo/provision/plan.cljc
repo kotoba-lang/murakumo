@@ -611,6 +611,35 @@
   [plist]
   (write-plist-shell watchdog-label plist))
 
+;; ── kernel network baseline (com.murakumo.sysctl-baseline) ─────────────────
+;; ADR-260902-fleet-outbound-hygiene. A root LaunchDaemon (no UserName) that
+;; widens the ephemeral port range at boot. The label is a host literal for
+;; now — the plist family's labels live in kotoba/provision_plan_core.kotoba
+;; and are parity-tested; moving this one there is the recorded follow-up
+;; (it is a constant, not a decision).
+
+(def sysctl-baseline-label "com.murakumo.sysctl-baseline")
+
+(defn render-sysctl-baseline-plist
+  "Substitute the sysctl-baseline template's placeholders for one node."
+  [tmpl {:keys [home]}]
+  (plist-replace tmpl plist-ph-home home))
+
+(defn write-sysctl-baseline-plist-command
+  "Remote shell command that writes the sysctl-baseline plist to the system
+   LaunchDaemon path (same `sudo tee` shell as the other daemons)."
+  [plist]
+  (write-plist-shell sysctl-baseline-label plist))
+
+(defn sysctl-baseline-reprovision-command
+  "Load-or-reload the root daemon: bootout is tolerated when it was never
+   loaded, bootstrap is tolerated when already loaded, kickstart applies the
+   sysctl now rather than at next boot."
+  []
+  (str "sudo launchctl bootout system/" sysctl-baseline-label " 2>/dev/null; sleep 1; "
+       "sudo launchctl bootstrap system /Library/LaunchDaemons/" sysctl-baseline-label ".plist 2>/dev/null || true; "
+       "sudo launchctl kickstart -k system/" sysctl-baseline-label))
+
 (defn watchdog-reprovision-command
   "Reload + kickstart the watchdog (same bootout-settle-bootstrap dance as the mesh).
    Kotoba (required)."

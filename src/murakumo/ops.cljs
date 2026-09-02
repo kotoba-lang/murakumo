@@ -45,7 +45,21 @@
   [port]
   (str (state/probe-command port)
        "; echo \"B:$(test -x ~/.murakumo/bin/kotoba-server && echo yes || echo no)\""
-       "; echo \"A:$(launchctl list 2>/dev/null | grep -c com.murakumo.kotoba-mesh || echo 0)\""))
+       "; echo \"A:$(launchctl list 2>/dev/null | grep -c com.murakumo.kotoba-mesh || echo 0)\""
+       ;; Ephemeral-port pressure: TIME_WAIT sockets over the usable range.
+       ;; A node at 100% cannot open ANY outbound connection — its own
+       ;; health probe fails while kotoba-server is fine (2026-09-02,
+       ;; ADR-260902-fleet-outbound-hygiene). This is the column that tells a
+       ;; wedged server from an exhausted node.
+       "; echo \"T:$(netstat -an -p tcp 2>/dev/null | grep -c TIME_WAIT)/$(( $(sysctl -n net.inet.ip.portrange.last 2>/dev/null || echo 65535) - $(sysctl -n net.inet.ip.portrange.first 2>/dev/null || echo 49152) + 1 ))\""))
+
+(defn port-pressure
+  "\"<time-wait>/<range>\" → {:time-wait n :range n :percent n} or nil."
+  [text]
+  (when-let [[_ tw rg] (re-find #"^\s*(\d+)/(\d+)\s*$" (str text))]
+    (let [tw (js/parseInt tw) rg (js/parseInt rg)]
+      (when (pos? rg)
+        {:time-wait tw :range rg :percent (js/Math.round (* 100 (/ tw rg)))}))))
 
 (defn- decode-health [text]
   (state/parse-health (fn [t] (js->clj (.parse js/JSON t) :keywordize-keys true))
@@ -72,7 +86,8 @@
                          health (decode-health (get lines "H"))]
                      (merge (state/probe-node (assoc node :online? true) health lines p2p)
                             {:binary (get lines "B" "?")
-                             :agent (if (= "0" (str/trim (get lines "A" "0"))) "no" "yes")}))))))))
+                             :agent (if (= "0" (str/trim (get lines "A" "0"))) "no" "yes")
+                             :ports (port-pressure (get lines "T"))}))))))))
 
 ;; --- printing ---------------------------------------------------------------
 
@@ -96,14 +111,20 @@
            :p2p (or (:p2p n) "-")
            :binary (or (:binary n) "-")
            :agent (or (:agent n) "-")
+           :ports (if-let [{:keys [time-wait range percent]} (:ports n)]
+                    (str time-wait "/" range " " percent "%")
+                    "-")
            :hosted (let [h (:hosted n)]
                      (if (seq h) (str (count h) ": " (str/join "," (map #(subs % 0 (min 12 (count %))) (take 2 h))))
                          "-"))
-           :note (or (some-> (:error n) (str/replace #"\s+" " ") (subs 0 (min 48 (count (:error n))))) "")})
+           :note (let [err (some-> (:error n) (str/replace #"\s+" " ") (subs 0 (min 48 (count (:error n)))))
+                       pct (get-in n [:ports :percent])]
+                   (cond-> (or err "")
+                     (and pct (>= pct 90)) (str (when err " ") "PORT-EXHAUSTED: health=down is this node's client side, not kotoba-server")))})
         snap))
 
 (defn print-status [snap]
-  (print-rows [[:name "NODE"] [:ssh "SSH"] [:health "HEALTH"] [:wasm "WASM-EXEC"]
+  (print-rows [[:name "NODE"] [:ssh "SSH"] [:health "HEALTH"] [:ports "PORTS"] [:wasm "WASM-EXEC"]
                [:links "LINKS"] [:p2p "P2P"] [:binary "BINARY"] [:agent "AGENT"]
                [:hosted "HOSTED"] [:note "NOTE"]]
               (status-rows snap))
