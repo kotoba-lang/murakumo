@@ -128,15 +128,19 @@
            :git/sha "34415ce9bf2b8d37d5bc8259ba7e00f5d091eb44"}}
          :extra-deps {io.github.cognitect-labs/test-runner
                       {:git/tag "v0.5.1" :git/sha "dfb30dd"}
-                      ;; tender-native is the JVM host for kexe artifacts. It
-                      ;; sits in :test rather than :native because the DEFAULT
-                      ;; suite now runs a one-core native canary
-                      ;; (murakumo.native-canary-test): measured 2026-08-12,
-                      ;; NOTHING invoked the opt-in alias -- this repo has no
-                      ;; entry in scripts/fleet-ci/gates.edn and ci.yml runs
-                      ;; `-M:test`. `oracle/open-native!` resolves it at call
-                      ;; time, so nothing that only runs the interpreter
-                      ;; inherits it. The full 735-export sweep stays opt-in.
+                      ;; tender-native is the leftover JVM host for kexe
+                      ;; artifacts (not operator start). It sits in :test
+                      ;; rather than :native because a one-core canary
+                      ;; (murakumo.native-canary-test) used to ride the old
+                      ;; default suite: measured 2026-08-12, NOTHING invoked
+                      ;; the opt-in alias -- this repo has no entry in
+                      ;; scripts/fleet-ci/gates.edn. Default CI is now job
+                      ;; kotoba-operator (kotoba compile wasm+web, file-on-disk,
+                      ;; guest-run). Leftover JVM is leftover-jvm.yml,
+                      ;; workflow_dispatch only. `oracle/open-native!` resolves
+                      ;; it at call time, so nothing that only runs the
+                      ;; interpreter inherits it. The full 735-export sweep
+                      ;; stays opt-in.
                       io.github.kotoba-lang/tender-native
                       {:git/url "https://github.com/kotoba-lang/tender-native.git"
                        :git/sha "1915ee10a0a2af7edd252e7a0ffd67c0d4c3a167"}
