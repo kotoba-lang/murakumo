@@ -78,4 +78,20 @@
    ;; live on asher 2026-07-07 (POST /mesh/http/minidrama/profile → HTTP 200)
    :cid       "bafyreic2knpq3reapdplo4fqp3iztkydaubxxt7fr2pfzop7pffbdw6wci"
    :replicas  1
+   :placement {:labels {:tier "edge" :zone "jp"} :roles ["compute"]}}
+
+  ;; itonami cloud-agent (cloud-itonami/cloud-itonami-app ADR-0092, root
+  ;; ADR-2609021200) — ON-MESH surface only, kenchi / minidrama 同型:
+  ;; agent-profile serves the agent's identity record (residency, ingress, the
+  ;; models it speaks through murakumo: awai-network/basho, awai-network/hokusai)
+  ;; over on-http /itonami/profile; agent-heartbeat appends resident-liveness
+  ;; datoms on-tick every 5m. Goals / approvals / every Bot turn stay OFF-MESH
+  ;; on the JVM resident until `llm/infer` has an admitted guest provider
+  ;; (capability-llm-infer is contract-only as of 2026-09-02).
+  ;; :cid deliberately absent — declared 2026-09-02, not yet deployed (the
+  ;; operator Mac's `kotoba` CLI pointed at a removed /tmp binary that day), so
+  ;; reconcile reports :needs-build rather than a placement nobody observed.
+  {:name      "itonami-agent"
+   :manifest  "../../cloud-itonami/cloud-itonami-app/mesh/itonami.app.edn"
+   :replicas  2
    :placement {:labels {:tier "edge" :zone "jp"} :roles ["compute"]}}]}
