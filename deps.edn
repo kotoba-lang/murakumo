@@ -184,12 +184,12 @@
   ;; The same cores, RUN on the host ISA rather than accepted by the backend.
   ;; Combine with :test, which carries amu:
   ;;
-  ;;   clojure -M:test:native
+  ;;   leftover: clojure -M:test:native
   ;;
-  ;; Separate because it needs a C toolchain to build the measured loader and
-  ;; a few minutes to compile and execute every core -- a suite you run to
-  ;; qualify a change, not while making one. tender-native is a JVM host for
-  ;; kexe artifacts; `oracle/open-native!` resolves it at call time, so nothing
-  ;; that runs the interpreter inherits it.
+  ;; Not operator start. tender-native is a leftover JVM host for kexe
+  ;; artifacts in the oracle qualification sweep. Operator native, when
+  ;; emitted, is bin/amu compile --target aarch64-macos --jvm-free of
+  ;; kotoba/desired.kotoba or kotoba/factory.kotoba — not a *_core.kotoba.
+  ;; Linux kexe-verify is HOLD; this alias does not emit a release kexe.
   :native {:extra-paths ["test-native"]
            :main-opts ["-m" "cognitect.test-runner" "-d" "test-native"]}}}
