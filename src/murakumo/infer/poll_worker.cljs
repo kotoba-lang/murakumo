@@ -1,5 +1,6 @@
 (ns murakumo.infer.poll-worker
   (:require [clojure.string :as str]
+            [murakumo.infer.backoff :as backoff]
             ["node:crypto" :as crypto]
             ["node:os" :as os]))
 
@@ -298,23 +299,54 @@
       (.then (fn [{:keys [body]}]
                (claim-first-available!
                 #(claim-and-run! config (select-keys % [:job-id :kind :input]))
-                (claim-order (:did config) body))))
-      (.catch (fn [error] (println "[join] poll error:" (str error))))))
+                (claim-order (:did config) body))))))
 
-(defn- loop! [{:keys [poll-ms] :as config}]
+(defn- failure-facts
+  "What a fetch failure says about itself: undici hides the OS error under
+   `.cause.code`; an HTTP throw carries `:status`."
+  [error]
+  {:code (or (some-> error .-cause .-code) (some-> error .-code))
+   :message (str (or (some-> error .-message) error))
+   :status (some-> error ex-data :status)})
+
+(defn- schedule-after-failure!
+  "Classify, log, and wait. `failures` is the loop's consecutive-failure count.
+   A local-exhaustion failure (this node cannot open sockets) waits the whole
+   ceiling: retrying on cadence is exactly what kept benjamin's port range full
+   for 60 days (ADR-260902-fleet-outbound-hygiene)."
+  [label failures error base-ms next!]
+  (let [facts (failure-facts error)
+        kind (backoff/classify facts)
+        n (swap! failures inc)
+        policy (assoc backoff/default-policy :base-ms base-ms)
+        wait (backoff/delay-for policy kind n (js/Math.random))]
+    (println (str "[join] " label " error (" (name kind)
+                  (when-let [c (:code facts)] (str " " c))
+                  ", failure " n ", next in " (js/Math.round (/ wait 1000)) "s): "
+                  (:message facts)))
+    (js/setTimeout next! wait)))
+
+(defn- loop! [{:keys [poll-ms poll-failures] :as config}]
   (-> (poll-once! config)
-      (.then (fn [_] (js/setTimeout #(loop! config) poll-ms)))))
+      (.then (fn [_]
+               (reset! poll-failures 0)
+               (js/setTimeout #(loop! config) poll-ms)))
+      (.catch (fn [error]
+                (schedule-after-failure! "poll" poll-failures error poll-ms
+                                         #(loop! config))))))
 
-(defn- heartbeat-loop! [{:keys [heartbeat-ms] :as config}]
-  (promise-finally
-   (-> (heartbeat! config)
-       (.then (fn [{:keys [status probe]}]
-                (when-not (= 201 status)
-                  (println "[join] heartbeat rejected:" status))
-                (when-not (:ready? probe)
-                  (println "[join] local model not ready; advertised ready=false"))))
-       (.catch (fn [error] (println "[join] heartbeat error:" (str error)))))
-   (fn [] (js/setTimeout #(heartbeat-loop! config) heartbeat-ms))))
+(defn- heartbeat-loop! [{:keys [heartbeat-ms heartbeat-failures] :as config}]
+  (-> (heartbeat! config)
+      (.then (fn [{:keys [status probe]}]
+               (reset! heartbeat-failures 0)
+               (when-not (= 201 status)
+                 (println "[join] heartbeat rejected:" status))
+               (when-not (:ready? probe)
+                 (println "[join] local model not ready; advertised ready=false"))
+               (js/setTimeout #(heartbeat-loop! config) heartbeat-ms)))
+      (.catch (fn [error]
+                (schedule-after-failure! "heartbeat" heartbeat-failures error heartbeat-ms
+                                         #(heartbeat-loop! config))))))
 
 (defn -main [& args]
   (let [opts (parse-args args)
@@ -338,7 +370,8 @@
                 :engine "openai-compatible" :slots slots :busy? (atom false)
                 :memory-bytes #(.freemem os)
                 :local-url local-url :local-token local-token
-                :poll-ms poll-ms :heartbeat-ms heartbeat-ms}]
+                :poll-ms poll-ms :heartbeat-ms heartbeat-ms
+                :poll-failures (atom 0) :heartbeat-failures (atom 0)}]
     (when (str/blank? (str model))
       (println "usage: nbb scripts/infer-join.cljs --model <id> [--base URL] [--name NODE] [--did DID] [--local-url URL] [--slots 1] [--poll-ms 5000] [--heartbeat-ms 30000] [--trust-tier awai-secure|community]")
       (js/process.exit 1))

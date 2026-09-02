@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- com.murakumo.sysctl-baseline — kernel network baseline for a fleet node.
+     Rendered per-node by `murakumo provision` and loaded as a root
+     LaunchDaemon; runs once at boot (RunAtLoad) and again on every
+     re-provision. macOS has no /etc/sysctl.conf, so this IS the persistence.
+
+     Why (2026-09-02, ADR-260902-fleet-outbound-hygiene): a node's default
+     ephemeral range is 16,384 ports (49152-65535) or 32,768 after Big Sur
+     (32768-65535). A resident poller with no backoff plus a kernel that had
+     stopped reaping TIME_WAIT after 60 days of uptime filled that range on
+     benjamin and simeon; every outbound connect then failed with
+     EADDRNOTAVAIL, including the mesh watchdog's own health probe.
+     Lowering `first` to 16384 gives 49,152 ports — headroom, not a cure: the
+     cure is the poller's backoff and, for stuck TIME_WAIT, a reboot. The
+     `ops status` PORTS column shows the pressure so the reboot is measured. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>            <string>com.murakumo.sysctl-baseline</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/sbin/sysctl</string>
+    <string>-w</string>
+    <string>net.inet.ip.portrange.first=16384</string>
+    <string>net.inet.ip.portrange.hifirst=16384</string>
+  </array>
+  <key>RunAtLoad</key>        <true/>
+  <key>StandardOutPath</key>  <string>{{HOME}}/.murakumo/sysctl-baseline.log</string>
+  <key>StandardErrorPath</key><string>{{HOME}}/.murakumo/sysctl-baseline.log</string>
+</dict>
+</plist>
