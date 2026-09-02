@@ -1,0 +1,33 @@
+name: leftover-jvm
+
+# Leftover JVM library tests (kwik/BouncyCastle overlay, KIR :gen, oracle
+# parity). Not operator start. Default CI is kotoba compile / kotoba run.
+on:
+  workflow_dispatch:
+
+jobs:
+  leftover-jvm-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out the AIUEOS parity authority
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kotoba-lang/aiueos
+          ref: f68c22cf183f5b896ec758694afc91c28f099a30
+          path: aiueos
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: DeLaGuardo/setup-clojure@4c7a6f613e5089821bb3bb2a33a3ee115578580d # 13.6.1
+        with:
+          cli: 1.12.5.1654
+      - run: >-
+          clojure -M:test:babashka-client-host
+          -r '^(?!murakumo\.overlay-(quic-driver-live|witness-ledger|witness-write)-test$).*-test$'
+        env:
+          AIUEOS_ROOT: ${{ github.workspace }}/aiueos

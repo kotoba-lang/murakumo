@@ -1,0 +1,44 @@
+(ns quic-cert
+  (:export [main run
+            default-relpath
+            cmd-ensure cmd-list cmd-rotate cmd-verify cmd-prune
+            code-ready code-usage code-host-listen-hold]))
+
+;; Operator start for QUIC cert/key material commands.
+;; Replaces clojure -M:quic-cert. Public start:
+;;   kotoba run kotoba/quic_cert.kotoba
+;;   kotoba compile kotoba/quic_cert.kotoba --target wasm|web
+;;
+;; Guest owns command dispatch. main is not 0.
+;;
+;; Host-listen HOLD: BouncyCastle X.509 issue/rotate, PEM write, audit hash
+;; chain. Leftover Java in src/murakumo/overlay/cert.clj — not a start path,
+;; not a C .so, not an invented FFI.
+
+(defn default-relpath [] :string "quic")
+
+(defn cmd-ensure [] :string "ensure")
+(defn cmd-list [] :string "list")
+(defn cmd-rotate [] :string "rotate")
+(defn cmd-verify [] :string "verify")
+(defn cmd-prune [] :string "prune")
+
+(defn code-ready [] :i64 42)
+(defn code-usage [] :i64 2)
+(defn code-host-listen-hold [] :i64 90)
+
+(defn run [command :string] :i64
+  (if (string=? command (cmd-ensure))
+    (code-host-listen-hold)
+    (if (string=? command (cmd-list))
+      (code-host-listen-hold)
+      (if (string=? command (cmd-rotate))
+        (code-host-listen-hold)
+        (if (string=? command (cmd-verify))
+          (code-host-listen-hold)
+          (if (string=? command (cmd-prune))
+            (code-host-listen-hold)
+            (code-usage)))))))
+
+(defn main [] :i64
+  (code-ready))

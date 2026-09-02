@@ -20,9 +20,10 @@
 
   ## Usage
 
-      clojure -M:factory issue --serial SN-0001 --model \"MK-1 Solo\" \\
-        --endpoint https://murakumo.cloud/enroll --root-key factory-root.b64 \\
-        --out units/
+      kotoba run kotoba/factory.kotoba
+      ;; leftover Java library (not a start path): murakumo.factory/-main
+      ;; still issues keys when invoked as a namespace; do not add a
+      ;; :factory alias. Guest owns admission only — keygen is HOLD.
 
   The root private key is read from a file the operator supplies. This
   namespace never generates a root key and never writes one: root custody is an
@@ -164,5 +165,5 @@
       (println "The device generates its own operational key at first boot.")
       (println "The label can only be printed once that key is known."))
     (do (binding [*out* *err*]
-          (println "usage: clojure -M:factory issue --serial SN --model M --root-key FILE [--out DIR]"))
+          (println "usage: kotoba run kotoba/factory.kotoba"))
         (System/exit 2))))

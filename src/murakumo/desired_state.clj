@@ -288,8 +288,8 @@
                                  :min-copies (if-let [n (:min-copies opts)] (parse-long n) (count rs))
                                  :kotoba (:kotoba opts) :wit-dir (:wit-dir opts) :url (:url opts)})))))
 
-      (println (str "usage:\n"
-                    "  publish MANIFEST --fleet=FILE --roots=A,B --identity=KEY --epoch=N [--previous=CID]\n"
-                    "  pull --roots=A,B --authority=SPKI --node=NAME [--min-epoch=N]\n"
-                    "  reconcile --roots=A,B --authority=SPKI --node=NAME --state-dir=DIR "
-                    "--node-identity=KEY --kotoba=/abs/kotoba --wit-dir=DIR --url=http://127.0.0.1:8077")))))
+      (println (str "usage: kotoba run kotoba/desired.kotoba\n"
+                    "  kotoba run kotoba/desired.kotoba --function run --arg '\"publish\"'\n"
+                    "  kotoba run kotoba/desired.kotoba --function run --arg '\"pull\"'\n"
+                    "  kotoba run kotoba/desired.kotoba --function run --arg '\"reconcile\"'\n"
+                    "kekkai seal, mirror I/O, local apply, and runtime probe are host-listen HOLD."))))))

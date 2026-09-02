@@ -55,8 +55,21 @@
               :doc "Every offline test that runs under nbb today."}
 
  :claude {:cmd ["tools/claude-murakumo/claude-murakumo"], :pass-args? true, :doc "Run Claude Code against murakumo.cloud instead of Anthropic's own models (tools/claude-murakumo — same shape as z.ai's claude-zai wrapper for GLM)."}
- :quic-cert {:cmd ["clojure" "-M:quic-cert"], :pass-args? true, :doc "Issue/ensure stored QUIC cert/key material under .murakumo/kagi/quic."}
- :quic-driver {:cmd ["clojure" "-M:quic-driver"], :pass-args? true, :doc "JVM Clojure QUIC transport driver. Args: check|dial|serve|serve-once --request-edn '<adapter-request>'."}
+ :desired {:cmd ["kotoba" "run" "kotoba/desired.kotoba"]
+           :pass-args? true
+           :doc "Operator start for signed CID desired-state admission. kotoba run kotoba/desired.kotoba (not clojure -M:desired). Guest owns CID/reach/extension/command dispatch. kekkai seal, mirror I/O, local apply, and runtime probe are host-listen HOLD."}
+
+ :factory {:cmd ["kotoba" "run" "kotoba/factory.kotoba"]
+           :pass-args? true
+           :doc "Operator start for factory issue admission. kotoba run kotoba/factory.kotoba (not clojure -M:factory). Guest owns serial/model/root-key presence. Ed25519 keygen/sign and claim-token RNG are leftover Java, not a start path."}
+
+ :quic-cert {:cmd ["kotoba" "run" "kotoba/quic_cert.kotoba"]
+             :pass-args? true
+             :doc "Operator start for QUIC cert commands. kotoba run kotoba/quic_cert.kotoba (not clojure -M:quic-cert). BouncyCastle issue/rotate/PEM write is host-listen HOLD."}
+
+ :quic-driver {:cmd ["kotoba" "run" "kotoba/quic_driver.kotoba"]
+               :pass-args? true
+               :doc "Operator start for QUIC driver argv admission. kotoba run kotoba/quic_driver.kotoba (not clojure -M:quic-driver). kwik listen/dial is host-listen HOLD — not a C .so and not FFI."}
 
  :aiueos {:cmd ["nbb" "--classpath" "src:resources" "src/murakumo/aiueos.cljs"]
           :pass-args? true
