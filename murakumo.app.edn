@@ -97,9 +97,17 @@
   ;; POST /mesh/http/itonami/profile answered HTTP 200 on all three. Before the
   ;; block put the same call answered 502 "component unavailable" on levi and
   ;; dan — the route-without-block state this file's README warns about.
-  ;; agent-heartbeat = bafyreifacuajgk7cz5jtizogvksuu54itf652nblnuz7dkibts7malcmtm.
+  ;; Redeployed the same day as v3 after measuring that kotoba-server 0.1.0
+  ;; hands every trigger an EMPTY kqe snapshot (net_actor.rs invoke_trigger:
+  ;; `let snap = Vec::new()`), so a component's `kqe-query` can never read
+  ;; back what it or anyone asserted — v1/v2 answered HTTP 200 with
+  ;; content-length 0, the same shape as the kenchi / minidrama "HTTP 200"
+  ;; rows above. v3 carries the identity record as constants and returns it;
+  ;; the three nodes now answer the JSON record. The write side
+  ;; (`kqe-assert!` → quad_store.assert_datom) is real and kept.
+  ;; agent-heartbeat = bafyreicp5ashj2ewjjmpmkvs7swdzz4ajol6etmwnk7n7hlartc47g2kr4.
   {:name      "itonami-agent"
    :manifest  "../../cloud-itonami/cloud-itonami-app/mesh/itonami.app.edn"
-   :cid       "bafyreiainzfv2ityp3owx3ax4jex6z6gw2ovm676srl62y6rdvcx6jpqwe"
+   :cid       "bafyreig5thbb7i5i56l5m5ym7bp44ez3jvweblqeay3uiwliqkbr54wbxi"
    :replicas  2
    :placement {:labels {:tier "edge" :zone "jp"} :roles ["compute"]}}]}
