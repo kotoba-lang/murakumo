@@ -47,10 +47,12 @@ token IDs matched across cache 0, two cache-on runs, and mmap. Evidence is in
 `verify/evidence/qwen38-expert-stream-m4-16g-20260829.json`.
 
 ```sh
-# leftover JVM library (not operator start; no :infer alias):
-#   clojure -M -m murakumo.infer plan qwen3.8-flash-next-ud-iq3-xxs
+# leftover JVM infer planner still exists (not operator start; no :infer alias).
+# Operator start is kotoba compile + guest instantiateKotoba. There is no kotoba -M.
 kotoba compile kotoba/desired.kotoba --target wasm --output target/kotoba/desired.wasm
-kotoba run kotoba/desired.kotoba
+kotoba compile kotoba/desired.kotoba --target web --output target/kotoba/desired.mjs
+# Guest-run: instantiateKotoba on the web artifact (scripts/kotoba-run.sh).
+# Release `kotoba run <entry>.kotoba` currently rejects typed forms (CLI source-run gap).
 ```
 
 On macOS, Expert-aware reads are real but page-cache bypass is not: neither
