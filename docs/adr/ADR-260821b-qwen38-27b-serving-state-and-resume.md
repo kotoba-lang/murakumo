@@ -164,3 +164,25 @@ larger than the approximately 17–22 second cold-load charge.
   not bills.
 - **Concurrency-128 numbers are ceilings, not forecasts** — offline batches
   with every request present at t=0.
+  ADR-260822, ADR-260823, ADR-260824, ADR-260825,
+  `tools/runpod-serverless-bench/`. **40 raw result files in
+  `docs/adr/data/`**; `could-not-measure` attempts are kept deliberately.
+7. **For a resident 32k aggregate-throughput worker, use a RunPod Community RTX
+   5090 when a Driver 580 host is available.** Run the W4A16 GPTQ-Marlin profile
+   with at most 32 active requests and queue excess work. This does not replace
+   the model-native 262,144-token Modal profile: native context has not fit or
+   been verified on the 32 GB card (ADR-260825).
+ADR-260825 records a different RunPod path from the failed Serverless Flex
+experiment: a resident Community RTX 5090 Pod. With the same W4A16 checkpoint,
+vLLM 0.27.1+cu129 settings, 32,768-token window, and short-request workload used
+for the A100 throughput search, it peaked at 1,416.7 aggregate output tok/s at
+c32 and $0.135/M output tokens. That is 14.0% above the A100's 1,242.7 tok/s.
+The same RunPod test on RTX 6000 Ada peaked at 971.3 tok/s and $0.212/M output
+tokens. The 5090 result requires NVIDIA Driver 580.65.06; the earlier Driver 570
+incompatibility is not evidence against Driver 580 hosts.
+# For resident 32k aggregate throughput, provision a RunPod Community RTX 5090
+# only on Driver >=580, pin the measured vLLM+cu129 stack, cap active work at 32,
+# and queue excess requests. Do not cut the native 262k model over to this card
+# until that context fits and passes a real long-context request.
+# For burst, generic RunPod Flex remains closed; use Modal or separately test
+# RunPod's console-configured cached-model mount.
