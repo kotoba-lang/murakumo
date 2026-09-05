@@ -5,6 +5,7 @@
             [clojure.test :refer [deftest is testing]]
             [murakumo.infer :as infer]
             [murakumo.infer.engine :as engine]
+            [murakumo.infer.profile :as profile]
             [murakumo.infer.plan :as plan]))
 
 (def GiB plan/GiB)
@@ -115,7 +116,22 @@
                                                           :strategy :expert :moe-override "exps=CPU"})))
     (is (re-find #"--api-key-file \"/run/secrets/fleet.keys\""
                  (engine/head-cmd pl {:bin-dir "bin" :model-path "m"
-                                      :api-key-file "/run/secrets/fleet.keys"})))))
+                                      :api-key-file "/run/secrets/fleet.keys"})))
+    (is (re-find #"--flash-attn on"
+                 (engine/head-cmd pl {:bin-dir "bin" :model-path "m"
+                                      :flash-attn "on"})))))
+
+(deftest resident-node-serving-profiles
+  (is (= ["--ctx-size" "32768" "--parallel" "1"
+          "--flash-attn" "on" "--batch-size" "4096"
+          "--ubatch-size" "2048" "--spec-type" "draft-mtp"
+          "--spec-draft-n-max" "3"]
+         (profile/llama-args "b70")))
+  (is (= ["--ctx-size" "524288" "--parallel" "2"
+          "--flash-attn" "on" "--spec-type" "ngram-cache,ngram-simple"]
+         (profile/llama-args "gad")))
+  (is (= #{:max-performance-power-mode :locked-clocks}
+         (:kotodama/host-prerequisites (profile/serving-profile "xavier")))))
 
 (deftest llamacpp-rpc-commands
   (let [nodes [(assoc (mini "a") :ip "100.0.0.1")
@@ -160,7 +176,7 @@
   (let [unit (#'infer/standalone-unit "/opt/bin/llama-server -m /m.gguf --port 8090")]
     (testing "unit embeds the exact serve command and self-heals on crash"
       (is (re-find #"ExecStart=/opt/bin/llama-server -m /m\.gguf --port 8090\n" unit))
-      (is (re-find #"Restart=on-failure" unit))
+      (is (re-find #"Restart=always" unit))
       (is (re-find #"WantedBy=multi-user\.target" unit)))
     (testing "runs as the gad user like the existing llama-server.service"
       (is (re-find #"User=gad" unit)))))
@@ -171,7 +187,7 @@
               [{:ip "10.0.0.1" :port 50052}])]
     (testing "persists and self-heals the exact distributed head command"
       (is (re-find #"ExecStart=/opt/bin/llama-server .*--rpc 10\.0\.0\.1:50052.*--port 8090\n" unit))
-      (is (re-find #"Restart=on-failure" unit))
+      (is (re-find #"Restart=always" unit))
       (is (re-find #"WantedBy=multi-user\.target" unit)))
     (testing "waits for every rank instead of accepting a partial ring"
       (is (re-find #"ExecStartPre=.*nc -z -w 2 10\.0\.0\.1 50052" unit))

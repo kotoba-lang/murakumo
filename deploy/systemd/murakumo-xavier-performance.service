@@ -1,0 +1,12 @@
+[Unit]
+Description=Set Jetson AGX Xavier inference performance mode
+Before=murakumo-standalone-cuda.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nvpmodel -m 0
+ExecStart=/usr/bin/jetson_clocks
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
