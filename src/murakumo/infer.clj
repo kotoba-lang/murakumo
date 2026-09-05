@@ -173,7 +173,7 @@
        "Type=simple\n"
        "User=gad\n"
        "ExecStart=" cmd "\n"
-       "Restart=on-failure\n"
+       "Restart=always\n"
        "RestartSec=5\n"
        "\n"
        "[Install]\n"
@@ -210,7 +210,7 @@
        "User=gad\n"
        "ExecStartPre=/bin/sh -ec '" (endpoint-wait-command endpoints) "'\n"
        "ExecStart=" cmd "\n"
-       "Restart=on-failure\n"
+       "Restart=always\n"
        "RestartSec=5\n"
        "\n"
        "[Install]\n"
@@ -829,6 +829,7 @@
               :port (:infer/api-port cfg 8080)
               :ctx (:infer/ctx cfg 4096)
               :parallel (:infer/parallel cfg 1)
+              :flash-attn (:infer/flash-attn cfg)
               :api-key-file (:infer/api-key-file cfg)
               :extra-args (:model/llama-extra-args model)}
         cmd (engine/head-cmd pl opts)]
@@ -1070,6 +1071,8 @@
              (apply (resolve 'murakumo.infer.gc-op/-main) args))
     "bench" (do (require 'murakumo.infer.bench)
                 (apply (resolve 'murakumo.infer.bench/-main) args))
+    "profile" (do (require 'murakumo.infer.profile)
+                  (apply (resolve 'murakumo.infer.profile/-main) args))
     "relay" (do (require 'murakumo.infer.relay-server)
                 (apply (resolve 'murakumo.infer.relay-server/-main) args))
     "join" (do (require 'murakumo.infer.relay-worker)
@@ -1087,4 +1090,4 @@
     "serve-standalone" (cmd-serve-standalone args)
     "serve-embed" (cmd-serve-embed args)
     "generate" (cmd-generate args)
-    (println "usage: npm run task -- infer probe|plan <model>|provision [sel]|ha-provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf] [parallel]|serve-embed [model]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|join [relay-url] --model <id> [--name <node>]|gateway [port]")))
+    (println "usage: npm run task -- infer probe|profile [b70|gad|xavier]|plan <model>|provision [sel]|ha-provision [sel]|up|down|ps|serve <model> [gguf]|serve-standalone <model> [gguf] [parallel]|serve-embed [model]|generate \"<prompt>\"|media …|gc [--apply]|relay [port]|join [relay-url] --model <id> [--name <node>]|gateway [port]")))

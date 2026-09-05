@@ -1,0 +1,15 @@
+[Unit]
+Description=Murakumo Qwen3.8-27B fallback (CUDA, Jetson AGX Xavier)
+After=network-online.target murakumo-xavier-performance.service
+Wants=network-online.target murakumo-xavier-performance.service
+
+[Service]
+Type=simple
+User=xavier
+Environment=LD_LIBRARY_PATH=/mnt/nvme/llama.cpp/build-cuda/bin
+ExecStart=/mnt/nvme/llama.cpp/build-cuda/bin/llama-server -m /mnt/nvme/models/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf --mmproj /mnt/nvme/models/Qwen3.8-27B-GGUF/mmproj-Qwen3.8-27B-BF16.gguf -ngl 999 -c 8192 --parallel 1 -fa on --host 0.0.0.0 --port 8090 --jinja --reasoning off --alias qwen3.8-27b,murakumo-main
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -69,6 +69,26 @@ that Worker, not a supported client endpoint. The Worker supplies
 `/etc/murakumo/fleet-origin.keys`. This keeps model routing, protocol
 translation, metering, and access policy at one public boundary.
 
+The historical `gemma-gad.gftd.ai` and `gemma-fleet.gftd.ai` Tunnel aliases
+still arrive on gad's loopback port 11434. They must not keep a second copy of
+the dense 27B model resident. Install
+`deploy/murakumo-legacy-infer-proxy.py` as
+`/usr/local/libexec/murakumo-legacy-infer-proxy` and enable
+`deploy/murakumo-legacy-infer-proxy.service`; it injects the configured fleet
+origin token and streams requests to the single authenticated server on 8090.
+Keep `llama-server.service` disabled while the proxy is active. Rollback is
+the reverse: stop the proxy, then enable and start `llama-server.service`.
+
+`npm run task -- infer profile [b70|gad|xavier]` prints the governed serving
+profile and exact llama.cpp tuning arguments derived through
+`num → torch → inference → murakumo`. This keeps the live unit configuration
+auditable instead of copying unrelated tuning flags between devices.
+
+The matching resident units live under `deploy/systemd/`. Xavier has a separate
+root-owned performance oneshot because `nvpmodel -m 0` (MAXN) and
+`jetson_clocks` cannot run as the unprivileged model process. The inference unit
+declares that prerequisite instead of silently serving in 15W desktop mode.
+
 
 ## API keys (`mk1` capability tokens)
 
