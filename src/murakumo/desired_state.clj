@@ -292,4 +292,4 @@
                     "  kotoba run kotoba/desired.kotoba --function run --arg '\"publish\"'\n"
                     "  kotoba run kotoba/desired.kotoba --function run --arg '\"pull\"'\n"
                     "  kotoba run kotoba/desired.kotoba --function run --arg '\"reconcile\"'\n"
-                    "kekkai seal, mirror I/O, local apply, and runtime probe are host-listen HOLD."))))))
+                    "kekkai seal, mirror I/O, local apply, and runtime probe are host-listen HOLD.")))))

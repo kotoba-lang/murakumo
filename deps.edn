@@ -93,10 +93,28 @@
   ;; focused on the distributed inference control plane and its generated
   ;; systemd/watchdog artifacts; the broad :test suite remains the local
   ;; integration qualification path.
+  ;; The two injected host clients are folded in HERE (not left to a
+  ;; combined `-M:fleet-infer-test:babashka-client-host` invocation): the
+  ;; fleet gate runner asserts `grep ':fleet-infer-test' deps.edn` and runs
+  ;; exactly `-M:fleet-infer-test`, so an alias that needs another alias
+  ;; present can never be satisfied by this runner. Folding keeps ONE
+  ;; self-sufficient alias for both consumers (gh CI composes aliases, the
+  ;; fleet runs one).
+  ;;
+  ;; #357 also meant to name a second namespace here,
+  ;; murakumo.host-adapter-load-test. That file does not exist in this tree,
+  ;; and cognitect.test-runner accepts `-n` for a namespace it cannot find
+  ;; SILENTLY: measured 2026-09-06, `-n murakumo.infer-test` alone and
+  ;; `-n murakumo.infer-test -n murakumo.host-adapter-load-test` both print
+  ;; "Ran 17 tests containing 78 assertions. 0 failures, 0 errors." and both
+  ;; exit 0. Naming it would make this gate look like it covers the adapter
+  ;; smoke while covering nothing, so it is not named until the file lands.
   :fleet-infer-test
   {:extra-paths ["test"]
    :extra-deps {io.github.cognitect-labs/test-runner
-                {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                {:git/tag "v0.5.1" :git/sha "dfb30dd"}
+                org.babashka/http-client {:mvn/version "0.4.23"}
+                http-kit/http-kit {:mvn/version "2.8.1"}}
    :main-opts ["-m" "cognitect.test-runner" "-n" "murakumo.infer-test"]}
   ;; Leftover JVM test path for the kwik/witness-quorum-dependent overlay
   ;; library (not an operator start). Default CI is kotoba compile / kotoba
@@ -197,55 +215,3 @@
   ;; Linux kexe-verify is HOLD; this alias does not emit a release kexe.
   :native {:extra-paths ["test-native"]
            :main-opts ["-m" "cognitect.test-runner" "-d" "test-native"]}}}
- {;; Factory provisioning station -- issues per-device birth certificates so a
-  ;; fleet can reach :attested instead of shipping everything :tofu.
-  ;;   clojure -M:factory issue --serial SN-0001 --model "MK-1 Solo" \
-  ;;     --root-key factory-root.b64 --out units/
-  :factory {:main-opts ["-m" "murakumo.factory"]}
-
-  :quic-driver {:main-opts ["-m" "murakumo.overlay.quic-driver"]}
-  :quic-cert {:main-opts ["-m" "murakumo.overlay.cert"]}
-  ;; Cloud-provider-independent desired-state publisher / node pull agent.
-  ;; `clojure -M:desired -- help` for the explicit authority/mirror contract.
-  :desired {:main-opts ["-m" "murakumo.desired-state"]}
-  ;; The second namespace is the host-adapter load smoke
-  ;; (test/murakumo/host_adapter_load_test.clj): it requires every namespace
-  ;; that consumes a kotoba-lang/http host adapter, so a broken adapter
-  ;; (kotoba-lang/http#3/#4 class: a def of a var the client does not export)
-  ;; fails HERE on the fleet instead of only in the GitHub :test suite.
-  ;; The two injected host clients are folded in HERE (not left to a
-  ;; combined `-M:fleet-infer-test:babashka-client-host` invocation): the
-  ;; fleet gate runner asserts `grep ':fleet-infer-test' deps.edn` and runs
-  ;; exactly `-M:fleet-infer-test`, so an alias that needs another alias
-  ;; present can never be satisfied by this runner. Folding keeps ONE
-  ;; self-sufficient alias for both consumers (gh CI composes aliases, the
-  ;; fleet runs one). Measured 2026-08-31: without the clients the smoke
-  ;; fails with FileNotFoundException: babashka/http_client; with them,
-  ;; 23 tests / 84 assertions / 0 failures.
-                {:git/tag "v0.5.1" :git/sha "dfb30dd"}
-                org.babashka/http-client {:mvn/version "0.4.23"}
-                http-kit/http-kit {:mvn/version "2.8.1"}}
-   :main-opts ["-m" "cognitect.test-runner"
-               "-n" "murakumo.infer-test"
-               "-n" "murakumo.host-adapter-load-test"]}
-  ;; JVM-only test path for the kwik/witness-quorum-dependent overlay code
-  ;; (quic-driver RPC + witness-transport) that bb.edn's portable `test`
-  ;; task deliberately excludes, same reason quic-driver/quic-cert are
-  ;; shelled to `clojure -M` instead of run under bb.
-                      ;; tender-native is the JVM host for kexe artifacts. It
-                      ;; sits in :test rather than :native because the DEFAULT
-                      ;; suite now runs a one-core native canary
-                      ;; (murakumo.native-canary-test): measured 2026-08-12,
-                      ;; NOTHING invoked the opt-in alias -- this repo has no
-                      ;; entry in scripts/fleet-ci/gates.edn and ci.yml runs
-                      ;; `-M:test`. `oracle/open-native!` resolves it at call
-                      ;; time, so nothing that only runs the interpreter
-                      ;; inherits it. The full 735-export sweep stays opt-in.
-  ;; in that repo's deps.edn.) murakumo's CI (ci.yml) runs `clojure -M:test`
-  ;; on plain JVM, so without this alias every namespace that requires
-  ;;   clojure -M:test:native
-  ;; Separate because it needs a C toolchain to build the measured loader and
-  ;; a few minutes to compile and execute every core -- a suite you run to
-  ;; qualify a change, not while making one. tender-native is a JVM host for
-  ;; kexe artifacts; `oracle/open-native!` resolves it at call time, so nothing
-  ;; that runs the interpreter inherits it.
