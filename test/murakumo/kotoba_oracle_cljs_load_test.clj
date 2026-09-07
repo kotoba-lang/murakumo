@@ -7,7 +7,7 @@
 ;; oracle is not ready (resource missing / load error).
 
 (ns murakumo.kotoba-oracle-cljs-load-test
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
             [kotoba.kir :as ir]

@@ -7,7 +7,7 @@
 ;; the resource is the product artifact, host ns is the thin shell.
 
 (ns murakumo.kotoba-oracle-authority-test
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.walk :as walk]

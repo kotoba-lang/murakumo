@@ -20,7 +20,7 @@
 (ns murakumo.kotoba.oracle
   "Load precompiled kotoba KIR pure-planner artifacts and execute exports.
   Kotoba source is the authority; this ns is the product-shell call path."
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [kotoba.kir :as ir]
             #?(:clj [clojure.java.io :as io])))
 

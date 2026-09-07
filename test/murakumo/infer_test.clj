@@ -1,6 +1,6 @@
 ;; Offline unit tests for the pure inference planner/engine (no fleet, no SSH).
 (ns murakumo.infer-test
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [murakumo.infer :as infer]

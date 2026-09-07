@@ -1,6 +1,6 @@
 (ns murakumo.component-authority-store
   "Durable append-only outbox for signed Component authority envelopes."
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
             [kotoba.abi.contract :as abi]
             [murakumo.component-authority :as authority])

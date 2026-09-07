@@ -36,7 +36,7 @@
 (ns murakumo.infer.topology-probe
   (:require ["node:child_process" :as cp]
             ["node:fs" :as fs]
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             [clojure.string :as str]
             [murakumo.kotoba.oracle :as oracle]))
 

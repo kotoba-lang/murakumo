@@ -1,7 +1,7 @@
 ;; murakumo.overlay.adapter — reference external transport adapter driver.
 
 (ns murakumo.overlay.adapter
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.string :as str]
             [murakumo.overlay.transport :as transport])
   (:import [java.net InetAddress InetSocketAddress ServerSocket Socket SocketTimeoutException]))

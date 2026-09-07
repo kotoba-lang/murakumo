@@ -1,6 +1,6 @@
 (ns murakumo.component-authority-http
   "HTTP publisher for durable signed Component authority envelopes."
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [kotoba.abi.contract :as abi])
   (:import [java.net URI]
            [java.net.http HttpClient HttpRequest HttpRequest$BodyPublishers

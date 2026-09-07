@@ -17,7 +17,7 @@
 (ns murakumo.infer.relay-server
   (:require [babashka.process :as p]
             [json.compat :as json]
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             [murakumo.infer.credits :as credits]
             [murakumo.infer.postproc :as pp]
             [murakumo.infer.relay :as relay]

@@ -5,7 +5,7 @@
   `:datoms`, e.g. spat to EDN by an agent/governor node), hydrates a MemStore,
   and prints `kotoba.fleet.view/snapshot`: per-work holders, active leases,
   pending proposals."
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [kotoba.fleet.store :as store]
             [kotoba.fleet.view :as view]))
 

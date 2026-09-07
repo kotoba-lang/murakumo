@@ -10,7 +10,7 @@
 
 (ns murakumo.overlay-witness-http-transport-test
   (:require [clojure.test :refer [deftest is testing]]
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             [kotoba.lang.witness-quorum.attestation :as attestation]
             [kotoba.lang.witness-quorum.signer :as signer]
             [murakumo.overlay.witness-http-transport :as glue])

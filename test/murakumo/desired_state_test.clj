@@ -1,5 +1,5 @@
 (ns murakumo.desired-state-test
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.test :refer [deftest is testing]]
             [kekkai.cacao :as cacao]
             [kekkai.desired-state :as desired]

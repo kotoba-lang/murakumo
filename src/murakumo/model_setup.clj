@@ -1,6 +1,6 @@
 (ns murakumo.model-setup
   "Hugging Face model cache provisioning over the existing Tailscale SSH fleet."
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.string :as str]
             [murakumo.fleet :as fleet]
             [murakumo.ssh :as ssh]))

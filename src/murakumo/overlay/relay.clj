@@ -1,7 +1,7 @@
 ;; murakumo.overlay.relay — host-side relay listener process.
 
 (ns murakumo.overlay.relay
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [murakumo.identity :as identity]
             [murakumo.overlay.crypto :as crypto]
             [murakumo.overlay.runtime :as runtime])

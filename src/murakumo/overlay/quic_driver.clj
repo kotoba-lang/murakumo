@@ -1,7 +1,7 @@
 ;; murakumo.overlay.quic-driver — JVM Clojure QUIC transport driver.
 
 (ns murakumo.overlay.quic-driver
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
             [murakumo.overlay.cert :as cert]
             [murakumo.secret :as secret])

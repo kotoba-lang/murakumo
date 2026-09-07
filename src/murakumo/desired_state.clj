@@ -6,7 +6,7 @@
   a local Kotoba endpoint, and publish a node-signed receipt. No SSH or hosted
   control-plane request exists in the node path."
   (:require [babashka.process :as process]
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [kekkai.cacao :as cacao]
