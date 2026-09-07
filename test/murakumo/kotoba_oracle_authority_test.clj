@@ -204,7 +204,7 @@
         "compiler leaked into :deps (prod)")
     (is (contains? test-extra 'io.github.kotoba-lang/compiler)
         "compiler missing from :test extra-deps (oracle-gen/parity need it)")
-    (is (contains? prod-deps 'io.github.kotoba-lang/kotoba-kir)
+    (is (contains? prod-deps 'io.github.kotoba-lang/osaho)
         "kotoba-kir (KIR runner) must remain a prod dep")))
 
 
