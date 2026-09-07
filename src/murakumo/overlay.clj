@@ -1,7 +1,7 @@
 ;; murakumo.overlay — CLI shell for the native overlay driver.
 
 (ns murakumo.overlay
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.string :as str]
             [murakumo.overlay.dial :as dial]
             [murakumo.overlay.driver :as driver]

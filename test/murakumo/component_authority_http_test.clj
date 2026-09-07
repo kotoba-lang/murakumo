@@ -1,5 +1,5 @@
 (ns murakumo.component-authority-http-test
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.test :refer [deftest is]]
             [murakumo.component-authority :as authority]
             [murakumo.component-authority-http :as http]

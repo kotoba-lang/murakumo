@@ -10,7 +10,7 @@
 ;; Profile 5: pinned-exists? / pinned-wit-exists? are real guest :bool.
 
 (ns murakumo.config
-  (:require #?(:clj [clojure.edn :as edn]
+  (:require #?(:clj [kotoba.lang.edn :as edn]
                :cljs [cljs.reader :as edn])
             [clojure.string :as str]
             [murakumo.kotoba.oracle :as oracle]))

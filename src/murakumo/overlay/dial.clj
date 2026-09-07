@@ -1,7 +1,7 @@
 ;; murakumo.overlay.dial — host-side overlay dial reachability checks.
 
 (ns murakumo.overlay.dial
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.string :as str]
             [murakumo.identity :as identity]
             [murakumo.overlay.crypto :as crypto]

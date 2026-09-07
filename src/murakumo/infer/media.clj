@@ -20,7 +20,7 @@
   (:require [kotoba.lang.http.host.babashka :as http]
             [babashka.process :as p]
             [json.compat :as json]
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             [clojure.string :as str]
             [murakumo.fleet :as fleet]
             [murakumo.infer.credits :as credits]

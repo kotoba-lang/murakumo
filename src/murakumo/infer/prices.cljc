@@ -27,7 +27,7 @@
   自信をもって返す』ことなので、`price-for` は例外を投げる（ADR-2608026000）。
   掲示価格そのものは固定でよいが、それが今も黒字かは原価の鮮度に依存する。"
   #?(:cljs (:require-macros [murakumo.infer.prices-embed :refer [embedded-registry]]))
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.string :as str]
             [murakumo.infer.credits :as credits]
             #?(:clj [clojure.java.io :as io])))

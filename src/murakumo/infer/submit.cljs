@@ -30,7 +30,7 @@
   client runs on nbb. A JVM-free GGUF metadata reader is real work and is not
   in this command; until it exists, extract the vocabulary once with the JVM
   and keep the EDN."
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [clojure.string :as str]
             ["node:fs" :as fs]))
 

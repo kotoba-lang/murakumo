@@ -11,7 +11,7 @@
 ;;   bb murakumo infer bench audio [seconds=10]  Stable-Audio, single-node speed
 
 (ns murakumo.infer.bench
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [murakumo.fleet :as fleet]
             [murakumo.infer.media :as media]
             [murakumo.infer.schedule :as sched]))

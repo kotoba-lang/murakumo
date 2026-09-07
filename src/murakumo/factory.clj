@@ -32,7 +32,7 @@
   (:require [aiueos.key-lifecycle :as kl]
             [aiueos.provider.device :as device]
             [murakumo.enroll :as enroll]
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str])
   (:import [java.security KeyFactory SecureRandom]

@@ -30,7 +30,7 @@
 (ns murakumo.infer
   (:require [babashka.process :as p]
             [json.compat :as json]
-            [clojure.edn :as edn]
+            [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [murakumo.fleet :as fleet]
