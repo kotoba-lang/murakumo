@@ -1,3 +1,45 @@
+# Murakumo B70 head (jun@100.119.10.43, hostname ubuntu-server), SYCL build.
+#
+# ── Continuous batching, qualified on this head 2026-09-07 ──────────────────
+#
+# --parallel goes 1 -> 2 at an UNCHANGED --ctx-size, because in llama.cpp
+# --ctx-size is the TOTAL KV budget and each slot gets ctx/parallel. Two slots
+# at 32768 total is the same KV allocation as one slot at 32768; it is not a
+# request for more memory. That mattered here: this box has 15 GiB of system
+# RAM with ~4 GiB available and an iGPU carving out of it, so a config that
+# needed more memory would not have been admissible at all.
+#
+# What the halved per-slot window has to survive, measured over 3795 completed
+# requests in the 24h before the change:
+#
+#   prompt tokens   p50 941   p75 2050   p90 2342   p95 2570   p99 12951
+#   largest prompt observed          13289
+#   largest generation observed       1198
+#   worst case prompt+generation     14487  <  16384 per slot
+#   requests above 16384                 0  of 3795
+#
+# So the second slot costs no memory and truncates nothing that this head has
+# actually been asked to do. --parallel 4 would give 8192 per slot and would
+# cut the p99 traffic in half; it is not admitted by this measurement.
+#
+# Before / after, 2 simultaneous requests, n_predict=96, 4 trials each
+# (scripts/llama-concurrency-probe.cljs):
+#
+#   parallel 1   spread 3392-3788 ms (one full generation)   aggregate 25.5-27.0 tok/s
+#   parallel 2   see docs/adr/ADR-260907-continuous-batching-and-prefix-cache.md
+#
+# Prompt-prefix reuse is ALREADY ON and no flag was added for it. /slots shows
+# n_prompt_tokens_cache 0 on an IDLE slot, which reads like a cache that never
+# hits; the per-request figure is timings.cache_n in the completion response,
+# and it reused 10059 of 12111 tokens here. Do not "fix" the zero.
+#
+# Install:  scp deploy/systemd/murakumo-b70-llama.service jun@100.119.10.43:/tmp/ \
+#           && ssh jun@100.119.10.43 'sudo install -m644 /tmp/murakumo-b70-llama.service \
+#                /etc/systemd/system/ && sudo systemctl daemon-reload \
+#                && sudo systemctl restart murakumo-b70-llama'
+# Verify:   curl -s http://127.0.0.1:8090/props | jq '.default_generation_settings.n_ctx, .total_slots'
+#           curl -s https://api.murakumo.cloud/ready | jq '.inference.request-capacity'
+#
 [Unit]
 Description=Murakumo B70 Qwen3.8-27B latency server
 After=network-online.target tailscaled.service
@@ -13,7 +55,7 @@ WorkingDirectory=/home/jun/murakumo/llama.cpp-sycl-src/build-sycl/bin
 Environment=LD_LIBRARY_PATH=/opt/intel/oneapi/tcm/1.5/lib:/opt/intel/oneapi/umf/1.1/lib:/opt/intel/oneapi/tbb/2023.1/lib/intel64/gcc4.8:/opt/intel/oneapi/mkl/2026.1/lib:/opt/intel/oneapi/dnnl/2026.0/lib:/opt/intel/oneapi/compiler/2026.1/opt/compiler/lib:/opt/intel/oneapi/compiler/2026.1/lib
 Environment=GGML_SYCL_FA_ONEDNN=0
 Environment=SYCL_UR_USE_LEVEL_ZERO_V2=0
-ExecStart=/home/jun/murakumo/llama.cpp-sycl-src/build-sycl/bin/llama-server --model /home/jun/models/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf --host 127.0.0.1 --port 8090 --gpu-layers 999 --ctx-size 32768 --parallel 1 --flash-attn on --batch-size 4096 --ubatch-size 2048 --spec-type draft-mtp --spec-draft-n-max 3 --reasoning off --alias qwen3.8-27b-throughput-b70
+ExecStart=/home/jun/murakumo/llama.cpp-sycl-src/build-sycl/bin/llama-server --model /home/jun/models/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf --host 127.0.0.1 --port 8090 --gpu-layers 999 --ctx-size 32768 --parallel 2 --flash-attn on --batch-size 4096 --ubatch-size 2048 --spec-type draft-mtp --spec-draft-n-max 3 --reasoning off --alias qwen3.8-27b-throughput-b70
 Restart=always
 RestartSec=2
 TimeoutStartSec=0

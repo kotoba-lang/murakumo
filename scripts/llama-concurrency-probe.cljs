@@ -1,0 +1,102 @@
+#!/usr/bin/env nbb
+;; Does this head actually overlap concurrent requests?
+;;
+;; `--parallel N` is a claim about concurrency. The way to check a claim about
+;; concurrency is to issue concurrent requests and time them -- not to read the
+;; flag back out of /props, and not to infer it from aggregate throughput,
+;; which moves for a dozen reasons that have nothing to do with batching.
+;;
+;; Fires K identical-shaped requests simultaneously at one head and reports
+;; each one's wall time plus the aggregate. The signature to look for:
+;;
+;;   serialised (1 slot): wall times step up in units of one generation --
+;;                        the second request waits for the first
+;;   batched  (N slots):  wall times are all ~= the slowest single request
+;;
+;; The head is normally bound to 127.0.0.1, so reach it through a tunnel:
+;;   ssh -N -L 18090:127.0.0.1:8090 <user>@<head> &
+;;   nbb scripts/llama-concurrency-probe.cljs --base http://127.0.0.1:18090 --n 2
+;;
+;; Each request carries a distinct nonce so no request can be served out of
+;; another's prefix cache -- otherwise "fast" would measure the cache, not
+;; the batching.
+
+(ns llama-concurrency-probe
+  (:require [clojure.string :as str]))
+
+(def argv (vec (drop 2 (js->clj (aget js/process "argv")))))
+(defn flag [n d] (let [i (.indexOf argv n)] (if (neg? i) d (get argv (inc i) d))))
+
+(def base    (flag "--base" "http://127.0.0.1:18090"))
+(def k       (js/parseInt (flag "--n" "2") 10))
+(def npredict(js/parseInt (flag "--n-predict" "96") 10))
+(def ptok    (js/parseInt (flag "--prompt-lines" "60") 10))
+(def label   (flag "--label" "head"))
+
+(defn nonce [] (.toString (js/Math.floor (* (js/Math.random) 1e15)) 36))
+
+(defn body [i]
+  (let [nc (nonce)]
+    #js {:prompt (str "Session " nc " request " i
+                      ". You are a systems engineer. Notes follow.\n"
+                      (str/join "\n" (map #(str nc " note " % ": latency "
+                                                (mod (* % 7) 89) "ms")
+                                          (range ptok)))
+                      "\n\nWrite one paragraph about throughput.\nA:")
+         :n_predict npredict
+         :temperature 0
+         :cache_prompt true}))
+
+(defn fire [i]
+  (let [t0 (js/Date.now)]
+    (-> (js/fetch (str base "/completion")
+                  #js {:method "POST"
+                       :headers #js {"Content-Type" "application/json"}
+                       :body (js/JSON.stringify (body i))})
+        (.then #(.json %))
+        (.then (fn [r]
+                 (let [t (or (aget r "timings") #js {})]
+                   {:i i
+                    :wall-ms (- (js/Date.now) t0)
+                    :predicted-n (aget t "predicted_n")
+                    :predicted-tps (aget t "predicted_per_second")
+                    :prompt-n (aget t "prompt_n")
+                    :cache-n (aget t "cache_n")})))
+        (.catch (fn [e] {:i i :wall-ms (- (js/Date.now) t0) :error (str e)})))))
+
+(defn fmt [x] (if (number? x) (.toFixed x 1) (str x)))
+
+(def t0 (js/Date.now))
+
+(defn report [res]
+  (let [rs (sort-by :i (js->clj res :keywordize-keys true))
+        walls (sort (map :wall-ms rs))
+        total (- (js/Date.now) t0)
+        errs (filter :error rs)]
+    (println (str "=== " label " === " k " simultaneous requests, n_predict=" npredict))
+    (doseq [r rs]
+      (if (:error r)
+        (println (str "  req " (:i r) "  ERROR " (:error r)))
+        (println (str "  req " (:i r)
+                      "  wall " (fmt (:wall-ms r)) " ms"
+                      "  decoded " (:predicted-n r) " tok"
+                      " @ " (fmt (:predicted-tps r)) " tok/s"
+                      "  prompt_n " (:prompt-n r)
+                      "  cache_n " (:cache-n r)))))
+    (if (seq errs)
+      (do (println (str "  REFUSING a verdict: " (count errs) " of " k
+                        " requests failed. A failed request is not a fast one."))
+          (.exit js/process 2))
+      (let [spread (- (last walls) (first walls))
+            agg (/ (reduce + (map #(or (:predicted-n %) 0) rs)) (/ total 1000.0))]
+        (println (str "  wall: fastest " (fmt (first walls))
+                      "  slowest " (fmt (last walls))
+                      "  spread " (fmt spread) " ms"))
+        (println (str "  aggregate decode " (fmt agg) " tok/s across all "
+                      k " requests (total wall " (fmt total) " ms)"))
+        (println "  reading: spread ~= one full generation => SERIALISED;")
+        (println "           spread small vs slowest      => OVERLAPPED")))))
+
+(-> (js/Promise.all (into-array (map fire (range k))))
+    (.then report)
+    (.catch (fn [e] (println "probe failed:" (str e)) (.exit js/process 2))))
