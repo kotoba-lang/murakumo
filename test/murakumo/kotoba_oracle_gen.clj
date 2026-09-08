@@ -71,7 +71,9 @@
   (let [kir (compile-kir source)
         f (io/file out)]
     (io/make-parents f)
-    (spit f (kedn/escape-controls (with-out-str (pp/pprint kir))))
+    (spit f (kedn/escape-controls
+              (binding [*print-namespace-maps* false]
+                (with-out-str (pp/pprint kir)))))
     out))
 
 (defn regenerate-all!
