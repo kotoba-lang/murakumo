@@ -925,34 +925,34 @@
    :param-types [[:ref :provision/write-plist]]}],
  :oracle-value nil,
  :schema-identities
- #:provision{:bin-path
-             "f6493807e5403e1043bcc04b1d246bce8310a1c920913974894a737d2df2a12e",
-             :bootstrap
-             "02f475a953b4b98c135b58b1e016c088e71e4ee2ae980471c56af9ecc6fe7000",
-             :join
-             "82a27c61e967770094e5d4b835437dd32c3a13db793cb165b4eee8fd243a90cd",
-             :label-kv
-             "da4d88faa3c65a8b3d8b7d7e175c6337eaafef988e1d2cf3153f025c76c1ca99",
-             :labels
-             "e14b843b560bd9ca800286f38312860a370b61ad46bd178e6d7b5ef82f44754e",
-             :multiaddr
-             "570d7624947f3a35a2767d66230d01e5ee84275153e9b5f16d6c040624bd9a53",
-             :p2p-ports
-             "7ddcc9f7c930ea6ac2af8be33e5947a3151590c26a24437b0fdc5d878c6f4824",
-             :peer-entry
-             "c46831c9cea6bfa07584737b47a91c8f4280812a1fc43e70ff6d528b8eac06df",
-             :plist-replace
-             "003206d0d5af61c34ca22f7afcec2ed78258c2aab49b13005002124f0baa4a63",
-             :prefix-at
-             "639697cdfe1ad3528c3c547e9ee2fd0cc3bc996d5d5fcdbb8a166d5bb4ce916f",
-             :remote-dest
-             "634564dde85c2a00309fddca0af6a0255ecac1f4de3901c908de0bb0c11dbf60",
-             :roles
-             "62220da964b1ed784a80ffb16b88d15f1d59729dbede1ac4aa6e5cb04aa6bbe3",
-             :take-alnum
-             "5eeace0198d5497ea3c000c720b6c514a0f04698d9e53cbaf856d8b1755f319c",
-             :write-plist
-             "eabd85aa69528b8b201544128199a38d96e0ee669add6cb8cbb3819a2ced703d"},
+ {:provision/bin-path
+  "f6493807e5403e1043bcc04b1d246bce8310a1c920913974894a737d2df2a12e",
+  :provision/bootstrap
+  "02f475a953b4b98c135b58b1e016c088e71e4ee2ae980471c56af9ecc6fe7000",
+  :provision/join
+  "82a27c61e967770094e5d4b835437dd32c3a13db793cb165b4eee8fd243a90cd",
+  :provision/label-kv
+  "da4d88faa3c65a8b3d8b7d7e175c6337eaafef988e1d2cf3153f025c76c1ca99",
+  :provision/labels
+  "e14b843b560bd9ca800286f38312860a370b61ad46bd178e6d7b5ef82f44754e",
+  :provision/multiaddr
+  "570d7624947f3a35a2767d66230d01e5ee84275153e9b5f16d6c040624bd9a53",
+  :provision/p2p-ports
+  "7ddcc9f7c930ea6ac2af8be33e5947a3151590c26a24437b0fdc5d878c6f4824",
+  :provision/peer-entry
+  "c46831c9cea6bfa07584737b47a91c8f4280812a1fc43e70ff6d528b8eac06df",
+  :provision/plist-replace
+  "003206d0d5af61c34ca22f7afcec2ed78258c2aab49b13005002124f0baa4a63",
+  :provision/prefix-at
+  "639697cdfe1ad3528c3c547e9ee2fd0cc3bc996d5d5fcdbb8a166d5bb4ce916f",
+  :provision/remote-dest
+  "634564dde85c2a00309fddca0af6a0255ecac1f4de3901c908de0bb0c11dbf60",
+  :provision/roles
+  "62220da964b1ed784a80ffb16b88d15f1d59729dbede1ac4aa6e5cb04aa6bbe3",
+  :provision/take-alnum
+  "5eeace0198d5497ea3c000c720b6c514a0f04698d9e53cbaf856d8b1755f319c",
+  :provision/write-plist
+  "eabd85aa69528b8b201544128199a38d96e0ee669add6cb8cbb3819a2ced703d"},
  :exports
  [plist-label
   remote-bin
@@ -1038,61 +1038,46 @@
   launchd-daemons-dir
   plist-ext],
  :schemas
- #:provision{:prefix-at
-             [:record
-              :provision/prefix-at
-              [[:s :string] [:prefix :string] [:i :i64]]],
-             :label-kv
-             [:record :provision/label-kv [[:k :string] [:v :string]]],
-             :p2p-ports
-             [:record
-              :provision/p2p-ports
-              [[:node-port [:option :i64]]
-               [:fleet-port [:option :i64]]]],
-             :write-plist
-             [:record
-              :provision/write-plist
-              [[:label :string] [:body :string]]],
-             :join
-             [:record
-              :provision/join
-              [[:acc :string] [:sep :string] [:next :string]]],
-             :bootstrap
-             [:record
-              :provision/bootstrap
-              [[:acc :string] [:entry :string]]],
-             :plist-replace
-             [:record
-              :provision/plist-replace
-              [[:tmpl :string] [:ph :string] [:val :string]]],
-             :remote-dest
-             [:record
-              :provision/remote-dest
-              [[:host :string] [:bin :string]]],
-             :bin-path
-             [:record
-              :provision/bin-path
-              [[:local-bin :string] [:bin :string]]],
-             :labels
-             [:record
-              :provision/labels
-              [[:acc :string] [:pair :string]]],
-             :peer-entry
-             [:record
-              :provision/peer-entry
-              [[:peer-id :string] [:multiaddr :string]]],
-             :take-alnum
-             [:record
-              :provision/take-alnum
-              [[:s :string] [:i :i64] [:acc :string]]],
-             :multiaddr
-             [:record
-              :provision/multiaddr
-              [[:ip :string] [:port :i64]]],
-             :roles
-             [:record
-              :provision/roles
-              [[:acc :string] [:role :string]]]},
+ {:provision/prefix-at
+  [:record
+   :provision/prefix-at
+   [[:s :string] [:prefix :string] [:i :i64]]],
+  :provision/label-kv
+  [:record :provision/label-kv [[:k :string] [:v :string]]],
+  :provision/p2p-ports
+  [:record
+   :provision/p2p-ports
+   [[:node-port [:option :i64]] [:fleet-port [:option :i64]]]],
+  :provision/write-plist
+  [:record :provision/write-plist [[:label :string] [:body :string]]],
+  :provision/join
+  [:record
+   :provision/join
+   [[:acc :string] [:sep :string] [:next :string]]],
+  :provision/bootstrap
+  [:record :provision/bootstrap [[:acc :string] [:entry :string]]],
+  :provision/plist-replace
+  [:record
+   :provision/plist-replace
+   [[:tmpl :string] [:ph :string] [:val :string]]],
+  :provision/remote-dest
+  [:record :provision/remote-dest [[:host :string] [:bin :string]]],
+  :provision/bin-path
+  [:record :provision/bin-path [[:local-bin :string] [:bin :string]]],
+  :provision/labels
+  [:record :provision/labels [[:acc :string] [:pair :string]]],
+  :provision/peer-entry
+  [:record
+   :provision/peer-entry
+   [[:peer-id :string] [:multiaddr :string]]],
+  :provision/take-alnum
+  [:record
+   :provision/take-alnum
+   [[:s :string] [:i :i64] [:acc :string]]],
+  :provision/multiaddr
+  [:record :provision/multiaddr [[:ip :string] [:port :i64]]],
+  :provision/roles
+  [:record :provision/roles [[:acc :string] [:role :string]]]},
  :effects #{},
  :blocks [],
  :entry nil}
