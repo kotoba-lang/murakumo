@@ -36,7 +36,7 @@
   in a token. Absent ⇒ we refuse and say so. Minting is not something to do
   half-configured: a token signed with the wrong secret fails at the gateway with
   an indistinguishable 401."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             #?@(:cljs [["node:crypto" :as node-crypto]]))
   #?(:clj (:import [javax.crypto Mac]
                    [javax.crypto.spec SecretKeySpec]

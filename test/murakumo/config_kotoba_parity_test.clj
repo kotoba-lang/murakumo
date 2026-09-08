@@ -1,7 +1,7 @@
 ;; W6 pure-planner oracle: murakumo.config path core vs kotoba/config_core.kotoba.
 
 (ns murakumo.config-kotoba-parity-test
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
             [kotoba.kir :as ir]

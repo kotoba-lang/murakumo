@@ -10,7 +10,7 @@
 
 (ns murakumo.task.plan
   "Task pure helpers use kotoba/task_plan_core.kotoba authority (oracle required)."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :task-plan)

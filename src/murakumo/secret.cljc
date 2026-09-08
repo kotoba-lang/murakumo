@@ -16,7 +16,7 @@
   are gone — cljs/nbb must preload shipped KIR (resources/ via nbb cwd,
   register-kir!, or set-resource-loader!) before requiring this ns
   (ADR-260731-w6-t64-secret-mirror-delete). env/map/kagi fetch stay host."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :secret)

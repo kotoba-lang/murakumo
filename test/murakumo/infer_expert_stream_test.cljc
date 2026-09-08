@@ -1,5 +1,5 @@
 (ns murakumo.infer-expert-stream-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.lang.text] [clojure.test :refer [deftest is testing]]
             [murakumo.infer.expert-stream :as expert]
             [murakumo.infer.plan :as plan]))
 
@@ -36,7 +36,7 @@
 (deftest command-keeps-the-measured-cell-lossless
   (let [argv (expert/command {:bin "bmoe-cli" :model-path "/m/first.gguf"
                               :prompt "hello" :tokens 32 :csv "/tmp/a.csv"})
-        text (clojure.string/join " " argv)]
+        text (kotoba.lang.text/join " " argv)]
     (is (re-find #"--moe-stream" text))
     (is (re-find #"--cache-mb 0" text))
     (is (re-find #"--gpu-layers 0" text))

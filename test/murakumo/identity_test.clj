@@ -1,7 +1,7 @@
 ;; murakumo.identity-test — offline tests for portable identity formatting.
 
 (ns murakumo.identity-test
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [ed25519.core :as ed25519]
             [murakumo.config :as config]
@@ -87,7 +87,7 @@
 
 (deftest op-token-shape-is-stable
   (let [token (id/op-token "did:key:z-test")
-        parts (clojure.string/split token #"\.")]
+        parts (str/split token #"\.")]
     (is (= 3 (count parts)))
     (is (= "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" (first parts)))
     (is (= "kotoba-cli-media" (last parts)))

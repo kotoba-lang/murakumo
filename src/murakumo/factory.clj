@@ -34,7 +34,7 @@
             [murakumo.enroll :as enroll]
             [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str])
+            [kotoba.lang.text :as str])
   (:import [java.security KeyFactory SecureRandom]
            [java.security.spec PKCS8EncodedKeySpec]
            [java.util Base64]))
@@ -54,7 +54,7 @@
   ([^SecureRandom r]
    (let [b (byte-array 20)]
      (.nextBytes r b)
-     (str "T-" (str/upper-case (str/join (map #(format "%02x" (bit-and % 0xff)) b)))))))
+     (str "T-" (str/upper (str/join (map #(format "%02x" (bit-and % 0xff)) b)))))))
 
 (defn birth-certificate
   "The unsigned document. `:factory-public-key` is the per-device factory key's

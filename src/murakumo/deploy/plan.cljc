@@ -17,7 +17,7 @@
 (ns murakumo.deploy.plan
   "Portable deploy planning helpers.
    W6 product-shell: path/url + probe + argv flags + pin-path pure via deploy_plan_core."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.config :as config]
             [murakumo.kotoba.oracle :as oracle]))
 

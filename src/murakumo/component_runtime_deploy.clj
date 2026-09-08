@@ -4,7 +4,7 @@
   The receipt key is generated on the destination node and never crosses the
   operator boundary. The daemon binds loopback only; fleet access remains
   through the existing authenticated SSH transport."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.provision.plan :as provision]))
 
 (def label "com.murakumo.kototama-component")

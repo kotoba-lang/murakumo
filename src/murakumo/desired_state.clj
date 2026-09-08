@@ -8,7 +8,7 @@
   (:require [babashka.process :as process]
             [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [kekkai.cacao :as cacao]
             [kekkai.desired-state :as desired])
   (:import [java.nio.file Files StandardCopyOption]
@@ -157,7 +157,7 @@
   POST to the configured local Kotoba endpoint; arbitrary URLs and headers are
   not accepted."
   [url {:keys [method path body]}]
-  (let [method (str/upper-case (or method "GET"))]
+  (let [method (str/upper (or method "GET"))]
     (when-not (and (#{"GET" "POST"} method)
                    (string? path) (str/starts-with? path "/")
                    (not (str/starts-with? path "//")))

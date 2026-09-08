@@ -13,7 +13,7 @@
 ;; cljs: prefer Node crypto/Buffer (nbb); browser falls back to SubtleCrypto/btoa.
 
 (ns murakumo.identity
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]
             #?(:clj [ed25519.core :as ed25519]))
   #?(:clj (:import (java.security MessageDigest)

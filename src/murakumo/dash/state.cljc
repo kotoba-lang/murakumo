@@ -14,7 +14,7 @@
 (ns murakumo.dash.state
   "Dashboard pure helpers use kotoba/dash_state_core.kotoba (oracle required)."
   (:require [clojure.set :as set]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :dash-state)

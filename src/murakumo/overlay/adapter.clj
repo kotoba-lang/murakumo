@@ -2,7 +2,7 @@
 
 (ns murakumo.overlay.adapter
   (:require [kotoba.lang.edn :as edn]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.overlay.transport :as transport])
   (:import [java.net InetAddress InetSocketAddress ServerSocket Socket SocketTimeoutException]))
 

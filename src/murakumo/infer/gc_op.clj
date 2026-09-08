@@ -10,7 +10,7 @@
 ;;   bb murakumo infer gc --target 30 --apply    target 30 GiB free per node
 
 (ns murakumo.infer.gc-op
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.fleet :as fleet]
             [murakumo.infer.gc :as gc]
             [murakumo.ssh :as ssh]))

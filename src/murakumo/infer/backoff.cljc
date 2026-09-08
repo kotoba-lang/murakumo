@@ -15,7 +15,7 @@
     2. a failure is CLASSIFIED (`classify`), because the right response to
        'my own ports are exhausted' is to wait a long time and say so — not to
        treat it as the gateway being down."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def default-policy
   "`:base-ms` is the loop's normal cadence; `:max-ms` bounds the wait so a
@@ -52,7 +52,7 @@
      :http              the request completed with a non-2xx we chose to throw
      :unknown"
   [{:keys [code message status]}]
-  (let [c (some-> code str str/upper-case)]
+  (let [c (some-> code str str/upper)]
     (cond
       (contains? local-exhaustion-codes c) :local-exhaustion
       (contains? remote-unreachable-codes c) :remote-unreachable

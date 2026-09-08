@@ -11,7 +11,7 @@
   via nbb cwd, register-kir!, or set-resource-loader!) before requiring this ns
   (ADR-260731-w6-t64-cauth-mirror-delete).
   Event maps + ed25519 stay host."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kotoba.abi.contract :as abi]
             [murakumo.kotoba.oracle :as oracle]
             #?(:clj [ed25519.core :as ed])))

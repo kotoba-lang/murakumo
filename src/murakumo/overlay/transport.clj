@@ -1,7 +1,7 @@
 ;; murakumo.overlay.transport — transport adapter boundary.
 
 (ns murakumo.overlay.transport
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.config :as config]
             [murakumo.overlay.runtime :as runtime])
   (:import [java.io ByteArrayOutputStream]

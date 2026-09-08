@@ -28,7 +28,7 @@
   掲示価格そのものは固定でよいが、それが今も黒字かは原価の鮮度に依存する。"
   #?(:cljs (:require-macros [murakumo.infer.prices-embed :refer [embedded-registry]]))
   (:require [kotoba.lang.edn :as edn]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.infer.credits :as credits]
             #?(:clj [clojure.java.io :as io])))
 

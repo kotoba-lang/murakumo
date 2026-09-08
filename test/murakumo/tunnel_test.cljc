@@ -6,7 +6,7 @@
 (ns murakumo.tunnel-test
   (:require #?(:clj [clojure.test :refer [deftest is testing run-tests]]
                :cljs [cljs.test :refer [deftest is testing run-tests]])
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.tunnel :as tunnel]))
 
 (deftest connection-options-are-non-interactive

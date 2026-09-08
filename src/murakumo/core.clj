@@ -11,7 +11,7 @@
 (ns murakumo.core
   (:require [babashka.process :as p]
             [json.compat :as json]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.config :as config]
             [murakumo.connect :as connect]
             [murakumo.dash.state :as state]

@@ -67,7 +67,7 @@
   (:require [kotoba.lang.http.host.babashka :as http-client]
             [json.compat :as json]
             [clojure.java.io :as io]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.fleet :as fleet]
             [murakumo.infer.media :as media]
             [murakumo.infer.schedule :as sched]

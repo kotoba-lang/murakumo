@@ -32,7 +32,7 @@
             [json.compat :as json]
             [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.fleet :as fleet]
             [murakumo.infer.engine :as engine]
             [murakumo.infer.expert-stream :as expert-stream]

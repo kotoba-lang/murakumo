@@ -9,7 +9,7 @@
 
 (ns murakumo.reconcile.plan
   (:require [clojure.set :as set]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.connect :as connect]
             [murakumo.kotoba.oracle :as oracle]))
 

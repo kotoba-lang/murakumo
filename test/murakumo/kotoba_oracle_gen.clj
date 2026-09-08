@@ -11,7 +11,7 @@
   (:require [clojure.java.io :as io]
             [clojure.pprint :as pp]
             [kotoba.lang.edn :as kedn]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [kotoba.compiler.core :as compiler])
   (:gen-class))
 

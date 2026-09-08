@@ -21,7 +21,7 @@
             [babashka.process :as p]
             [json.compat :as json]
             [kotoba.lang.edn :as edn]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.fleet :as fleet]
             [murakumo.infer.credits :as credits]
             [murakumo.infer.schedule :as sched]
@@ -387,7 +387,7 @@
   [ckpt reg]
   (or (when-let [[id m] (first (filter (fn [[_ m]] (= ckpt (:model/checkpoint m))) reg))]
         {:model-id id :model-kind (:model/kind m) :match :exact})
-      (when-let [[kw id] (first (filter (fn [[kw _]] (str/includes? (str/lower-case ckpt) kw))
+      (when-let [[kw id] (first (filter (fn [[kw _]] (str/includes? (str/lower ckpt) kw))
                                         checkpoint-family-aliases))]
         {:model-id id :model-kind (:model/kind (get reg id)) :match :family-guess})
       {:model-id nil :model-kind nil :match :unregistered}))

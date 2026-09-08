@@ -18,7 +18,7 @@
   "Portable murakumo.cloud overlay planning.
    W6 product-shell: defaults + endpoints + CLI lines + flag classifiers
    + record types via cloud_plan_core (required)."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.config :as config]
             [murakumo.fleet.inventory :as inv]
             [murakumo.identity :as identity]

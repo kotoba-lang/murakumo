@@ -1,6 +1,6 @@
 (ns murakumo.model-setup-test
   (:require [clojure.test :refer [deftest is testing]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.model-setup :as setup]))
 
 (def model {:model/id "demo" :hf/repo "org/demo"

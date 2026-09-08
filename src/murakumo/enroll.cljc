@@ -16,7 +16,7 @@
   (:require [aiueos.enroll :as enroll]
             #?(:clj [aiueos.provider.device :as device])
             [did.core :as did]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 (def ^:private hex-digits (set "0123456789abcdefABCDEF"))
 

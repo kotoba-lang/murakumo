@@ -8,7 +8,7 @@
 ;; Envelope maps + graph-cid hashing stay host.
 
 (ns murakumo.persist
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.dash.state :as dash-state]
             [murakumo.identity :as identity]
             [murakumo.reconcile.plan :as reconcile-plan]

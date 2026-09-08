@@ -2,7 +2,7 @@
 ;; vs kotoba/dash_state_core.kotoba.
 
 (ns murakumo.dash-state-kotoba-parity-test
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
             [kotoba.kir :as ir]

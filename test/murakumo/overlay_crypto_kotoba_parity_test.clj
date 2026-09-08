@@ -2,7 +2,7 @@
 ;; vs kotoba/overlay_crypto_core.kotoba (AES-GCM seal/open stay host).
 
 (ns murakumo.overlay-crypto-kotoba-parity-test
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
             [kotoba.kir :as ir]

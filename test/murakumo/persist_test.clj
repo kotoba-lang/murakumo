@@ -1,7 +1,7 @@
 ;; murakumo.persist-test — offline tests for portable persistence helpers.
 
 (ns murakumo.persist-test
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is]]
             [murakumo.identity :as identity]
             [murakumo.persist :as persist]))

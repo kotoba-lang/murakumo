@@ -21,7 +21,7 @@
   shipped KIR (resources/ via nbb cwd, register-kir!, or set-resource-loader!)
   before requiring this ns or calling pure helpers
   (ADR-260731-w6-t64-token-mirror-delete)."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle])
   #?(:clj (:import [javax.crypto Mac]
                    [javax.crypto.spec SecretKeySpec]
