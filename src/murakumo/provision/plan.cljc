@@ -19,7 +19,7 @@
 (ns murakumo.provision.plan
   "Portable provision/mesh planning helpers.
    W6 product-shell: path/port + shell/rsync/peer-entry/plist/peer-id pure via provision_plan_core."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.connect :as connect]
             [murakumo.fleet.inventory :as inv]
             [murakumo.kotoba.oracle :as oracle]))

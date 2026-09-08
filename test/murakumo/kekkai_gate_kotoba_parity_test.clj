@@ -2,7 +2,7 @@
 ;; (cljc host oracle) and kotoba/kekkai_gate_core.kotoba (portable guest).
 
 (ns murakumo.kekkai-gate-kotoba-parity-test
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
             [kotoba.kir :as ir]

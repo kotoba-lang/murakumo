@@ -2,7 +2,7 @@
 
 (ns murakumo.overlay.cert
   (:require [clojure.java.io :as io]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.config :as config])
   (:import [java.io StringWriter]
            [java.math BigInteger]

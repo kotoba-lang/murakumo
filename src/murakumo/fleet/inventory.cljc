@@ -11,7 +11,7 @@
 ;; Vector folds stay host.
 
 (ns murakumo.fleet.inventory
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :fleet-inventory)

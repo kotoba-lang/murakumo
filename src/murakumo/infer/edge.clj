@@ -1,6 +1,6 @@
 (ns murakumo.infer.edge
   "Resident launchd plans for the Murakumo edge replica and queue worker."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [kotodama.inference.edge :as inference-edge]))
 
 (def model-id "murakumo-edge")

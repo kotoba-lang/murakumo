@@ -18,7 +18,7 @@
 ;; Host remains: line-split of parse-rc, argv vector assembly, SSH subprocess.
 
 (ns murakumo.tunnel
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :tunnel)

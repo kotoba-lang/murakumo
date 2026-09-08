@@ -1,5 +1,5 @@
 (ns murakumo.connect-kotoba-parity-test
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.set :as set]
             [kotoba.compiler.core :as compiler]

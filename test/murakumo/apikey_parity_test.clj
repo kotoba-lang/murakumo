@@ -10,7 +10,7 @@
   rather than fail when it is absent — a missing sibling is an environment gap,
   not a defect in this namespace. Everything that does not need the sibling is
   asserted unconditionally."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.lang.text] [clojure.test :refer [deftest is testing]]
             [murakumo.apikey :as apikey]))
 
 (def ^:private secret "test-secret-not-a-real-key")
@@ -25,7 +25,7 @@
 (deftest wire-format
   (testing "mk1.<payload>.<sig>, three dot-separated segments"
     (let [{:keys [ok token]} (apikey/issue {:secret secret :sub "cli" :scope "all" :now now})
-          parts (clojure.string/split token #"\." 3)]
+          parts (kotoba.lang.text/split token #"\." 3)]
       (is ok)
       (is (= 3 (count parts)))
       (is (= "mk1" (first parts)))

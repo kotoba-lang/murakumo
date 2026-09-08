@@ -2,7 +2,7 @@
 
 (ns murakumo.overlay.dial
   (:require [kotoba.lang.edn :as edn]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.identity :as identity]
             [murakumo.overlay.crypto :as crypto]
             [murakumo.overlay.runtime :as runtime])

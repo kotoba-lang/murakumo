@@ -1,7 +1,7 @@
 ;; murakumo.overlay.forward — local TCP forwarder over the relay stream contract.
 
 (ns murakumo.overlay.forward
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.overlay.dial :as dial])
   (:import [java.net InetAddress ServerSocket SocketTimeoutException]
            [java.util Base64]))

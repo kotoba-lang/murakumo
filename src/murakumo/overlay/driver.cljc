@@ -13,7 +13,7 @@
 ;; Host remains: parse-argv loops + session maps.
 
 (ns murakumo.overlay.driver
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :overlay-driver)

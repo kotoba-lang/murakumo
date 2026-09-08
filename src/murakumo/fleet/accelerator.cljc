@@ -20,7 +20,7 @@
 ;; Host keeps: ssh/exec, sysfs paths, /proc walking, string parsing.
 ;; Pure: every comparison and every byte of arithmetic.
 (ns murakumo.fleet.accelerator
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :accelerator-budget)

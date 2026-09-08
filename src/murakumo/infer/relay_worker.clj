@@ -34,7 +34,7 @@
             [babashka.http-client.websocket :as ws]
             [babashka.process :as p]
             [json.compat :as json]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.config :as config]
             [murakumo.fleet :as fleet]
             [murakumo.identity :as identity]

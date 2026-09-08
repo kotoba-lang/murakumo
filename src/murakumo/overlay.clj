@@ -2,7 +2,7 @@
 
 (ns murakumo.overlay
   (:require [kotoba.lang.edn :as edn]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.overlay.dial :as dial]
             [murakumo.overlay.driver :as driver]
             [murakumo.overlay.forward :as forward]

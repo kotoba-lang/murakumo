@@ -4,7 +4,7 @@
 ;; wiring, fails here rather than in a plan that quietly recommends a node
 ;; that cannot run the model.
 (ns murakumo.infer-waste-kotoba-parity-test
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
             [kotoba.kir :as ir]

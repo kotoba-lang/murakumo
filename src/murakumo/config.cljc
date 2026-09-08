@@ -12,7 +12,7 @@
 (ns murakumo.config
   (:require #?(:clj [kotoba.lang.edn :as edn]
                :cljs [cljs.reader :as edn])
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 (def ^:private oid :config)

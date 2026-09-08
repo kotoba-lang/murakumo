@@ -8,7 +8,7 @@
   The reasoning for what this measures, why it is differential rather than an
   oracle test, why generated inputs are the point, what \"agree\" means, and why
   refusals are counted rather than skipped, is in `murakumo.native-exec`."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is]]
             [murakumo.native-exec :as native]))
 

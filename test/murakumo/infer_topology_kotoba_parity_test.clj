@@ -9,7 +9,7 @@
 ;; out wrong on the fleet.
 
 (ns murakumo.infer-topology-kotoba-parity-test
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
             [kotoba.kir :as ir]

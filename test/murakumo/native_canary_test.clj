@@ -30,7 +30,7 @@
 ;; passing one. Every fleet node is a Mac with the Xcode command line tools.
 
 (ns murakumo.native-canary-test
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is]]
             [murakumo.native-exec :as native]))
 

@@ -4,7 +4,7 @@
   This is intentionally not the generic waste/mlx-moe planner. It pins the
   exact lossless Qwen3.8-Flash-Next recipe and records macOS page-cache limits
   instead of claiming Linux O_DIRECT semantics on Apple NVMe."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.infer.plan :as plan]))
 
 (def engine-revision "039b8f1e2f4abd40f167da8ca7879135a4dee429")

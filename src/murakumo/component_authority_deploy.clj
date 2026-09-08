@@ -1,6 +1,6 @@
 (ns murakumo.component-authority-deploy
   "Deterministic deployment plan for Kototama authority receivers."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.provision.plan :as provision]))
 
 (def authority-keys

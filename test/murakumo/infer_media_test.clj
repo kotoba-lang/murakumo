@@ -3,7 +3,7 @@
 ;; SSH connection per poll, ~28 connections for a single ~84s render, which
 ;; tripped intermittent 502/524s under back-to-back testing). No fleet, no SSH.
 (ns murakumo.infer-media-test
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [murakumo.infer.media :as media]
             [murakumo.ssh :as ssh]))

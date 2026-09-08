@@ -1,6 +1,6 @@
 (ns murakumo.token-test
   (:require [clojure.test :refer [deftest is testing]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.token :as tok]))
 
 (def secret "test-signing-secret-0123456789")
