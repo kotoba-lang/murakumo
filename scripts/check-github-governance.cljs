@@ -1,5 +1,5 @@
 #!/usr/bin/env nbb
-(require '[cljs.reader :as reader])
+(require '[kotoba.lang.text] '[cljs.reader :as reader])
 
 (def fs (js/require "node:fs"))
 (def path (js/require "node:path"))
@@ -16,7 +16,7 @@
     (when (.-error result) (throw (.-error result)))
     (when-not (zero? status)
       (throw (js/Error.
-              (str "command failed: " command " " (clojure.string/join " " args)
+              (str "command failed: " command " " (kotoba.lang.text/join " " args)
                    "\n" (or (.-stdout result) "") (or (.-stderr result) "")))))
     (or (.-stdout result) "")))
 

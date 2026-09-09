@@ -26,7 +26,7 @@
 
 (ns murakumo.task.worker
   (:require ["node:child_process" :as cp]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.tunnel :as tunnel]))
 
 (def end-marker "__murakumo_end=")

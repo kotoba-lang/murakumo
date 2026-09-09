@@ -29,7 +29,7 @@
 ;;   nbb scripts/llama-timing-percentiles.cljs --label b70 < saved-journal.txt
 
 (ns llama-timing-percentiles
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def argv (vec (drop 2 (js->clj (aget js/process "argv")))))
 

@@ -22,7 +22,7 @@
 ;; the batching.
 
 (ns llama-concurrency-probe
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def argv (vec (drop 2 (js->clj (aget js/process "argv")))))
 (defn flag [n d] (let [i (.indexOf argv n)] (if (neg? i) d (get argv (inc i) d))))

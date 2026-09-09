@@ -1,5 +1,5 @@
 (ns murakumo.infer.poll-worker
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.infer.backoff :as backoff]
             ["node:crypto" :as crypto]
             ["node:os" :as os]))

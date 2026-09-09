@@ -15,7 +15,7 @@
 (ns murakumo.task
   (:require ["node:fs" :as fs]
             [kotoba.lang.edn :as edn]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 ;; T6.4: preload shipped KIR before product-shell requires (nbb from repo root).

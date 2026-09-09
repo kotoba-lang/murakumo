@@ -37,7 +37,7 @@
   (:require ["node:child_process" :as cp]
             ["node:fs" :as fs]
             [kotoba.lang.edn :as edn]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 (oracle/preload! [:infer-topology :fleet-inventory :task-plan :infer-plan])
@@ -95,7 +95,7 @@
     (let [j (js/JSON.parse json-text)
           peers (js->clj (or (.-Peer j) #js {}) :keywordize-keys true)]
       (vec (for [[_ p] peers]
-             {:name (some-> (:HostName p) str/lower-case)
+             {:name (some-> (:HostName p) str/lower)
               :dns (:DNSName p)
               :ips (:TailscaleIPs p)
               :online? (true? (:Online p))
@@ -113,7 +113,7 @@
                (when-let [m (re-find #"Add\s+\S+\s+\d+\s+\S+\s+_\S+\._tcp\.\s+(.+)$" line)]
                  (str/trim (second m)))))
        distinct
-       (mapv (fn [n] {:name (str/lower-case n) :source :mdns}))))
+       (mapv (fn [n] {:name (str/lower n) :source :mdns}))))
 
 (defn discover
   "Node set from live signals, reconciled against the inventory.

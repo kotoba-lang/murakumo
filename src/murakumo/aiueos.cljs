@@ -22,7 +22,7 @@
 ;; is where the agreement gets used rather than merely asserted.
 
 (ns murakumo.aiueos
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.infer.join :as join]))
 
 (def fs (js/require "node:fs"))
