@@ -398,6 +398,36 @@
                                    fleet selector {:dry-run? dry?})))
       (println "usage: murakumo edge (install|baseline) [<node>|all] [--dry-run]"))))
 
+(defn cmd-access
+  "Whether each node has more than one way in.
+
+     murakumo access verify [<node>|all]
+     murakumo access repair [<node>|all]
+
+  `verify` OPENS the fallback connection rather than grepping authorized_keys:
+  a key can be present and still ignored, because sshd refuses the file when
+  the home directory is group-writable, and it refuses silently. See
+  murakumo.access."
+  [fleet [sub selector]]
+  (require 'murakumo.access)
+  (let [check! (resolve 'murakumo.access/check!)
+        repair! (resolve 'murakumo.access/repair!)
+        report (resolve 'murakumo.access/report)
+        risk? (resolve 'murakumo.access/stranded-risk?)]
+    (case (str sub)
+      "verify" (let [rs (check! fleet selector {})
+                     at-risk (filter #(risk? (:verdict %)) rs)]
+                 (println (report rs))
+                 (when (seq at-risk)
+                   (println (format "%d node(s) have exactly one way in: %s"
+                                    (count at-risk)
+                                    (clojure.string/join ", " (map :node at-risk))))))
+      "repair" (doseq [{:keys [node ok? count err]} (repair! fleet selector {})]
+                 (println (format "[%-10s] %s %s" node
+                                  (if ok? "key present" "FAILED")
+                                  (if ok? (str "(" count " match)") err))))
+      (println "usage: murakumo access (verify|repair) [<node>|all]"))))
+
 (defn cmd-model
   "Plan/download/inspect Hugging Face model caches on fleet nodes."
   [_ args]
@@ -500,7 +530,7 @@
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
    "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin
    "dash" cmd-dash "reconcile" cmd-reconcile "fleet" cmd-fleet
-   "cloud" cmd-cloud "infer" cmd-infer "edge" cmd-edge "model" cmd-model "revive" cmd-revive
+   "cloud" cmd-cloud "infer" cmd-infer "edge" cmd-edge "access" cmd-access "model" cmd-model "revive" cmd-revive
    "token" cmd-token "identity" cmd-identity})
 
 (defn -main [& args]
