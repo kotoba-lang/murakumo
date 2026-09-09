@@ -29,3 +29,28 @@
   (is (= 300000 (backoff/delay-for :local-exhaustion 1)))
   (is (= 10000 (backoff/delay-for :remote-unreachable 1)))
   (is (= 5000 (backoff/delay-for :unknown 0))))
+
+(deftest undici-transport-codes-are-not-a-mystery
+  ;; From benjamin's join log, 2026-09-10: both arrived as `unknown`, which
+  ;; reaches the same delay curve but tells an operator nothing. A gateway
+  ;; outage and a node fault must not print the same word.
+  (is (= :remote-unreachable (backoff/classify {:code "UND_ERR_HEADERS_TIMEOUT"})))
+  (is (= :remote-unreachable (backoff/classify {:code "UND_ERR_INFO"})))
+  (is (= :remote-unreachable (backoff/classify {:code "UND_ERR_BODY_TIMEOUT"})))
+  (testing "and the ones that mean THIS host is out of sockets still say so"
+    (is (= :local-exhaustion (backoff/classify {:code "EADDRNOTAVAIL"})))
+    (is (= :local-exhaustion (backoff/classify {:code "EMFILE"}))))
+  (testing "a genuinely unrecognised code is still unknown, not guessed at"
+    (is (= :unknown (backoff/classify {:code "UND_ERR_SOMETHING_NEW"})))))
+
+(deftest a-rejected-request-backs-off-like-a-failed-one
+  ;; Pairs with the poll_worker fix of the same day: its heartbeat loop reset
+  ;; the consecutive-failure counter on a non-201, so the wait never grew no
+  ;; matter how long the gateway kept saying no. This is the arithmetic half --
+  ;; an :http rejection has to ride the same geometric curve, or backing off
+  ;; correctly is impossible even once the counter is right.
+  (is (= (backoff/delay-for :http 3) (backoff/delay-for :remote-unreachable 3)))
+  (is (< (backoff/delay-for :http 1) (backoff/delay-for :http 4))
+      "consecutive rejections must wait longer, which is the whole point")
+  (testing "local exhaustion still jumps straight to the ceiling"
+    (is (= (:max-ms backoff/default-policy) (backoff/delay-for :local-exhaustion 1)))))
