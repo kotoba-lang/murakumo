@@ -1,5 +1,5 @@
 (ns murakumo.infer-edge-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is testing]]
             [murakumo.infer.edge :as edge]))
 
 (deftest renders-admitted-resident-plists
@@ -17,6 +17,39 @@
     (is (re-find #"murakumo-edge" (:plist server)))
     (is (re-find #"source /Users/asher/.murakumo/edge/join.env" (:plist join)))
     (is (not (re-find #"MURAKUMO_SERVICE_TOKEN=" (:plist join))))))
+
+(deftest the-resident-jobs-install-as-system-daemons-not-user-agents
+  ;; Measured 2026-09-09: every mini runs with no login session, so a
+  ;; LaunchAgent is never loaded and the jobs that were running were
+  ;; hand-started orphans -- 10d21h old on hosts that booted 24 days earlier.
+  ;; The cure for the exhausted nodes is a reboot, so supervision that does not
+  ;; survive one is the thing blocking the repair.
+  (let [join (edge/join-plan {:home "/Users/asher" :nbb "/opt/homebrew/bin/nbb"
+                              :node-name "asher"})
+        script (edge/install-script join)]
+    (is (re-find #"/Library/LaunchDaemons/com\.murakumo\.edge-join\.plist" script)
+        "the job must land in the system domain")
+    (is (re-find #"launchctl bootstrap system " script))
+    (is (not (re-find #"bootstrap gui/" script))
+        "nothing may bootstrap into a gui domain that does not exist on these hosts")
+    (testing "the LaunchAgent that could never load is removed, not just unloaded"
+      (is (re-find #"bootout gui/\$\(id -u\)/com\.murakumo\.edge-join" script))
+      (is (re-find #"rm -f /Users/asher/Library/LaunchAgents/com\.murakumo\.edge-join\.plist" script)))
+    (testing "the daemon still runs as the node user, because the model and join.env are in that home"
+      (is (re-find #"<key>UserName</key><string>asher</string>" (:plist join))))
+    (testing "the hand-started orphan is reaped, or bootstrap makes a second worker"
+      ;; bootout only touches launchd jobs. The workers on these nodes are not
+      ;; launchd jobs; installing without this would leave two edge-join
+      ;; processes claiming each other's queue jobs.
+      (is (re-find #"pkill -f 'murakumo/scripts/infer-join\.cljs'" script))
+      (is (< (.indexOf script "pkill") (.indexOf script "bootstrap system"))
+          "the orphan must die before the daemon starts, not after"))
+    (testing "install verifies the LOADED definition, not the file it wrote"
+      ;; launchd caches the definition it loaded; a written plist is not a
+      ;; loaded one, and `launchctl list` cannot tell the two apart.
+      (is (re-find #"launchctl print system/com\.murakumo\.edge-join" script))
+      (is (re-find #"MURAKUMO_EDGE_INSTALL_UNVERIFIED" script)
+          "an unverifiable install must fail loudly rather than report success"))))
 
 (deftest resident-fleet-joins-the-secure-pool
   ;; The ten fleet.edn minis are AWAI-operated hardware, which

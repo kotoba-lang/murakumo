@@ -378,6 +378,24 @@
   (require 'murakumo.infer)
   (apply (resolve 'murakumo.infer/-main) args))
 
+(defn cmd-edge
+  "Install the resident murakumo-edge daemons (server + join) on fleet nodes.
+
+     murakumo edge install [<node>|all] [--dry-run]
+
+  System LaunchDaemons, not LaunchAgents: measured 2026-09-09, no mini has a
+  login session, so the agents never loaded and the running workers were
+  hand-started orphans. See murakumo.edge-install."
+  [fleet [sub selector & flags]]
+  (require 'murakumo.edge-install)
+  (let [install! (resolve 'murakumo.edge-install/install!)
+        report (resolve 'murakumo.edge-install/report)
+        dry? (boolean (some #{"--dry-run"} (cons selector flags)))
+        selector (when (and selector (not= "--dry-run" selector)) selector)]
+    (case (str sub)
+      "install" (println (report (install! fleet selector {:dry-run? dry?})))
+      (println "usage: murakumo edge install [<node>|all] [--dry-run]"))))
+
 (defn cmd-model
   "Plan/download/inspect Hugging Face model caches on fleet nodes."
   [_ args]
@@ -480,7 +498,7 @@
   {"nodes" cmd-nodes "provision" cmd-provision "up" cmd-up "down" cmd-down
    "status" cmd-status "deploy" cmd-deploy "mesh" cmd-mesh "pin" cmd-pin
    "dash" cmd-dash "reconcile" cmd-reconcile "fleet" cmd-fleet
-   "cloud" cmd-cloud "infer" cmd-infer "model" cmd-model "revive" cmd-revive
+   "cloud" cmd-cloud "infer" cmd-infer "edge" cmd-edge "model" cmd-model "revive" cmd-revive
    "token" cmd-token "identity" cmd-identity})
 
 (defn -main [& args]

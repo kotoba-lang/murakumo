@@ -1,0 +1,143 @@
+(ns murakumo.edge-install
+  "Install the resident edge jobs on fleet nodes as system LaunchDaemons.
+
+  `murakumo.infer.edge` renders the plists. Until 2026-09-09 nothing installed
+  them: a workspace-wide grep for `edge-join` outside that namespace and its
+  test returned zero hits, while ten minis were running plists somebody had
+  placed by hand. A module with no reader is not a mechanism, and the fleet was
+  proving it -- the rendered plan said LaunchAgent, the nodes ran LaunchAgent,
+  and neither could survive a reboot, so the three exhausted nodes could not be
+  repaired by the one action that would have repaired them.
+
+  This namespace is that reader.
+
+  Two things it deliberately does NOT do:
+
+  - It does not reboot. The exhausted nodes need one, and `murakumo.cluster.cosci`
+    ranks guarded self-reboot into the winning design, but a reboot is only safe
+    once supervision survives it -- which is what this installs. Sequencing the
+    repair is the operator's call and the ADR records why.
+  - It does not enroll. Trust tier belongs to `fleet.edn` and the join worker
+    reads it; installing a daemon must not be a second place a tier can be set."
+  (:require [kotoba.lang.text :as str]
+            [murakumo.infer.edge :as edge]
+            [murakumo.ssh :as ssh]))
+
+(def ^:private probe
+  "One round trip that answers everything the plans need.
+
+  Values are printed one per line in a fixed order rather than parsed out of
+  free-form output, because a missing tool has to be distinguishable from a
+  tool at an unexpected path, and an empty line says which."
+  (str "echo \"$HOME\"; "
+       ;; nbb on these nodes is a vendored tree launched through node, not a
+       ;; binary on PATH -- measured 2026-09-09, the running worker's argv is
+       ;; `node $HOME/.murakumo/edge/nbb/lib/nbb_main.js`. A probe that only
+       ;; looked for `command -v nbb` reported every node unmeasurable, which
+       ;; was the right refusal and the wrong question.
+       "if [ -f \"$HOME/.murakumo/edge/nbb/lib/nbb_main.js\" ] && command -v node >/dev/null; "
+       "then echo \"$(command -v node) $HOME/.murakumo/edge/nbb/lib/nbb_main.js\"; "
+       "else command -v nbb || echo ''; fi; "
+       "ls \"$HOME/.murakumo/bin9334/llama-server\" 2>/dev/null "
+       "|| command -v llama-server || echo ''; "
+       "sysctl -n hw.memsize 2>/dev/null || echo ''"))
+
+(defn- parse-probe [out]
+  (let [[home nbb llama mem] (map str/trim (str/split (str out) #"\n"))]
+    {:home (when-not (str/blank? home) home)
+     :nbb (when-not (str/blank? nbb) nbb)
+     :llama-server (when-not (str/blank? llama) llama)
+     :memory-bytes (when-not (str/blank? mem)
+                     (try (Long/parseLong (str/trim mem))
+                          (catch Exception _ nil)))}))
+
+(defn node-facts
+  "Probe one node. Returns {:ok? …} — a node that cannot be measured is
+  reported as unmeasured rather than defaulted, because a default home or a
+  guessed llama-server path installs a daemon that fails at boot on a machine
+  nobody is watching."
+  [host]
+  (let [{:keys [exit out err]} (ssh/sh host probe)]
+    (if-not (zero? exit)
+      {:ok? false :reason :unreachable :detail (str/trim (str err))}
+      (let [f (parse-probe out)
+            missing (vec (keep (fn [k] (when (nil? (get f k)) k))
+                               [:home :nbb :llama-server :memory-bytes]))]
+        (if (seq missing)
+          {:ok? false :reason :incomplete :missing missing :facts f}
+          (assoc f :ok? true))))))
+
+(defn plans-for
+  "Both rendered plans for one probed node, or the reason there are none.
+
+  `server-plan` throws when murakumo-edge does not fit the node's memory; that
+  is a real answer for a 8 GB machine and is returned rather than raised, so a
+  fleet sweep reports it beside the nodes that installed."
+  [node-name facts]
+  (try
+    {:ok? true
+     :plans [(edge/server-plan (select-keys facts [:home :llama-server :memory-bytes]))
+             (edge/join-plan (assoc (select-keys facts [:home :nbb])
+                                    :node-name node-name))]}
+    (catch clojure.lang.ExceptionInfo e
+      {:ok? false :reason :does-not-fit :detail (ex-message e) :data (ex-data e)})))
+
+(defn install-node!
+  "Render and install both daemons on one node.
+
+  `dry-run?` prints the script instead of running it. The verification is
+  inside `edge/install-script` (it greps `launchctl print`, not the file it
+  wrote), so a non-zero exit here means the daemon is NOT loaded — this
+  function never reports success on an unverified install."
+  [{:keys [name host] :as _node} {:keys [dry-run?]}]
+  (let [facts (node-facts host)]
+    (if-not (:ok? facts)
+      (assoc facts :node name)
+      (let [{:keys [ok? plans] :as p} (plans-for name facts)]
+        (if-not ok?
+          (assoc p :node name)
+          (let [results
+                (mapv (fn [plan]
+                        (let [script (edge/install-script plan)]
+                          (if dry-run?
+                            {:label (:label plan) :dry-run true :script script}
+                            (let [{:keys [exit err]} (ssh/sh host script)]
+                              {:label (:label plan)
+                               :ok? (zero? exit)
+                               :exit exit
+                               :err (str/trim (str err))}))))
+                      plans)]
+            {:node name :ok? (or (boolean dry-run?) (every? :ok? results))
+             :results results}))))))
+
+(defn install!
+  "Install on every selected node. Returns one result per node, never throws for
+  a single node's failure: a fleet sweep that aborts on the first unreachable
+  machine leaves the reachable ones in an unknown state."
+  [{:keys [nodes]} selector opts]
+  (let [targets (if (or (nil? selector) (= "all" selector))
+                  nodes
+                  (filter #(= selector (:name %)) nodes))]
+    (when (empty? targets)
+      (throw (ex-info "no fleet node matched" {:selector selector})))
+    (mapv #(install-node! % opts) targets)))
+
+(defn report [results]
+  (str/join
+   "\n"
+   (map (fn [{:keys [node ok? reason missing detail results]}]
+          (cond
+            (= reason :unreachable) (format "[%-10s] unreachable %s" node (or detail ""))
+            (= reason :incomplete) (format "[%-10s] not measured: missing %s"
+                                           node (pr-str missing))
+            (= reason :does-not-fit) (format "[%-10s] murakumo-edge does not fit: %s"
+                                             node detail)
+            (:dry-run (first results)) (format "[%-10s] dry-run, %d daemons"
+                                               node (count results))
+            ok? (format "[%-10s] installed + verified: %s" node
+                        (str/join ", " (map :label results)))
+            :else (format "[%-10s] FAILED: %s" node
+                          (str/join "; " (map (fn [r] (str (:label r) " exit=" (:exit r)
+                                                           " " (:err r)))
+                                              (remove :ok? results))))))
+        results)))
