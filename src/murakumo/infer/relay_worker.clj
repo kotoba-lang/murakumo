@@ -9,9 +9,17 @@
 ;;
 ;;   bb murakumo infer join [relay-url=ws://localhost:8091/ws] --model <id> [--name <node>]
 ;;
-;; Requires a local OpenAI-compatible /v1/chat/completions server (Ollama by
-;; default) already serving `--model` -- this worker does not download models
-;; itself; use `bb murakumo model setup` (fleet/HF) or `ollama pull` first.
+;; Requires a local OpenAI-compatible /v1/chat/completions server already
+;; serving `--model`. WHAT IT REQUIRES IS THE PROTOCOL, NOT A PARTICULAR
+;; SERVER, and until 2026-09-09 this file said otherwise -- it named Ollama as
+;; the default and told the operator to `ollama pull`, and worse, it reported
+;; `engine: ollama` to the control plane no matter what was actually serving.
+;; A node running `kotoba-lang/inference`'s own Ollama-compatible surface, whose
+;; policy is Kotoba, enrolled as an Ollama node.
+;;
+;; The engine identity now comes from MURAKUMO_INFER_ENGINE and defaults to
+;; `openai-compatible`, which is the true requirement. This worker does not
+;; download models itself; use `bb murakumo model setup` (fleet/HF).
 ;;
 ;; SCOPE / KNOWN GAP (2026-07, own-fleet only): unlike media-postproc's
 ;; proof-of-compute check in relay-server.clj, there is NO output verification
@@ -136,16 +144,23 @@
     (when (str/blank? (str model))
       (println "usage: bb murakumo infer join [relay-url] --model <local-model-id> [--name <node>]")
       (println "  local-model-id must already be served at" (str local-url "/chat/completions")
-               "(MURAKUMO_INFER_LOCAL_URL to override) -- e.g. `ollama pull <model>` first.")
+               "by any OpenAI-compatible server (MURAKUMO_INFER_LOCAL_URL to override).")
       (System/exit 1))
     (let [did (resolve-did node-name)
           mem-bytes (local-mem-bytes)
+          ;; What the control plane is told, and it used to be the literal
+          ;; `ollama` in both places -- an enrolment that described the
+          ;; operator's software rather than reporting it. `join/enrollment`
+          ;; takes `(or engine (:runtime t))`, so nothing here was validating
+          ;; the string; it was simply asserted.
+          engine (or (config/config-string-or-nil "MURAKUMO_INFER_ENGINE")
+                     "openai-compatible")
           enroll (join/enrollment {:name node-name :did did :tier :native
-                                   :mem-bytes mem-bytes :engine :ollama})
+                                   :mem-bytes mem-bytes :engine (keyword engine)})
           caps {:can (mapv name (:node/can enroll))
                 :mem-bytes mem-bytes
                 :max-resident-bytes (get-in enroll [:node/caps :max-resident-bytes])
-                :engine "ollama" :model model}
+                :engine engine :model model}
           settled-total (atom 0.0)]
       (println (format "[join] %s (%s) — %s serving %s -> %s"
                        node-name did
