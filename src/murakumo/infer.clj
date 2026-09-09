@@ -221,7 +221,40 @@
 (def ^:private rpc-worker-label "com.murakumo.rpc-worker")
 (def ^:private rpc-ha-key "/etc/murakumo/rpc-ha-key")
 
+(def ^:private tailscaled-label
+  "The daemon whose loss makes a node unreachable.
+
+  Measured 2026-09-09 on dan and judah: homebrew installs tailscaled as
+  `/Library/LaunchDaemons/homebrew.mxcl.tailscale.plist`. Not
+  `com.tailscale.tailscaled` — `launchctl print` on that name reports nothing,
+  and a recovery command aimed at a label that does not exist fails in exactly
+  the way a recovery command aimed at a healthy node does."
+  "homebrew.mxcl.tailscale")
+
 (defn- rpc-ha-authorized-key
+  "The constrained recovery entry: a forced command, no shell, no arguments.
+
+  It kickstarts TWO daemons now, tailscaled first. Until 2026-09-09 it
+  kickstarted only the RPC worker, which meant the one key that exists for
+  recovering a node could not recover the one failure that makes a node
+  unrecoverable. levi proved it that day: swap death killed tailscaled, macOS
+  sshd kept answering on 22, no key authenticated, and this key — present and
+  working, verified the same hour against judah — could only have restarted a
+  daemon nobody needed.
+
+  Order is load-bearing. tailscaled restores the way in; if the second command
+  fails the first has already run. There is still no argument and still no
+  choice for the caller: connecting with this key runs exactly these two
+  kickstarts, which is the whole capability it grants."
+  [pub]
+  (str "restrict,command=\"sudo -n /bin/launchctl kickstart -k system/"
+       tailscaled-label
+       "; sudo -n /bin/launchctl kickstart -k system/"
+       rpc-worker-label "\" " (str/trim pub)))
+
+(defn- rpc-ha-legacy-authorized-key
+  "The entry this fleet installed before 2026-09-09, so a re-provision can
+  remove it rather than leave two forced commands for one key."
   [pub]
   (str "restrict,command=\"sudo -n /bin/launchctl kickstart -k system/"
        rpc-worker-label "\" " (str/trim pub)))
@@ -608,10 +641,20 @@
       (throw (ex-info "could not provision RPC recovery key on head" {:stderr err})))
     (let [entry (rpc-ha-authorized-key out)]
       (doseq [{:keys [host name]} specs]
-        (let [{:keys [exit err]}
+        (let [legacy (rpc-ha-legacy-authorized-key out)
+              {:keys [exit err]}
               (ssh/sh host
                       (str "mkdir -p ~/.ssh; chmod 700 ~/.ssh; touch ~/.ssh/authorized_keys; "
                            "chmod 600 ~/.ssh/authorized_keys; "
+                           ;; Drop the pre-2026-09-09 entry for this same key
+                           ;; first. Exact-line removal, so no other key in the
+                           ;; file can be caught by it: leaving both would give
+                           ;; one public key two forced commands, and sshd uses
+                           ;; whichever it reads first.
+                           "if grep -Fqx '" legacy "' ~/.ssh/authorized_keys; then "
+                           "grep -Fvx '" legacy "' ~/.ssh/authorized_keys > ~/.ssh/authorized_keys.new "
+                           "&& mv ~/.ssh/authorized_keys.new ~/.ssh/authorized_keys "
+                           "&& chmod 600 ~/.ssh/authorized_keys; fi; "
                            "grep -Fqx '" entry "' ~/.ssh/authorized_keys || "
                            "printf '%s\\n' '" entry "' >> ~/.ssh/authorized_keys"))]
           (when-not (zero? exit)

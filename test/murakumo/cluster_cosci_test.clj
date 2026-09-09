@@ -14,7 +14,8 @@
    :model-swap :in-place-restart
    :enrollment :hand-set-tier
    :reachability :egress-only
-   :unlock :console-only})              ; FileVault is On, measured 2026-09-09
+   :unlock :console-only               ; FileVault is On, measured 2026-09-09
+   :remote-access :tailnet-only})      ; and Tailscale SSH is the only way in
 
 (deftest the-fleet-as-it-runs-today-is-rejected-and-the-reasons-are-the-measured-ones
   (let [r (c/reflect todays-fleet)
@@ -38,12 +39,42 @@
   ;; Reporting one gate would make a design that misses one and a design that
   ;; misses five look like the same distance from admissible.
   (is (>= (count (:failed (c/reflect todays-fleet))) 5))
-  (is (= 2 (count (:failed (c/reflect (assoc todays-fleet
+  (is (= 3 (count (:failed (c/reflect (assoc todays-fleet
                                               :supervision :launch-daemon-system
                                               :transport :keep-alive-pool
                                               :port-recovery :guarded-self-reboot
                                               :model-swap :blue-green)))))
-      "still short an enrollment fix and an unattended unlock"))
+      "still short an enrollment fix, an unattended unlock, and a second way in"))
+
+(deftest recovery-that-has-to-reach-the-node-needs-more-than-one-way-in
+  ;; The gate this tournament did not have when it first ran, added after levi
+  ;; went unreachable the same day: swap death killed tailscaled, macOS sshd
+  ;; kept answering on 22, and no key authenticated.
+  (let [acts (assoc todays-fleet
+                    :supervision :launch-daemon-system
+                    :transport :keep-alive-pool
+                    :enrollment :derived-from-fleet-edn
+                    :model-swap :blue-green
+                    :unlock :authrestart-stored-key
+                    :port-recovery :headroom-and-guarded-self-reboot)]
+    (is (contains? (set (map :gate (:failed (c/reflect acts))))
+                   :remote-access-survives-daemon-loss))
+    (testing "a second SSH path clears it"
+      (is (:pass? (c/reflect (assoc acts :remote-access :tailnet-plus-native-sshd)))))
+    (testing "it does NOT bind a design that recovers by doing nothing"
+      ;; The asymmetry is the content: only recovery that must be DELIVERED to
+      ;; the node depends on being able to reach it.
+      (let [passive (assoc todays-fleet
+                           :port-recovery :headroom-sysctl
+                           :watchdog :none
+                           :model-swap :in-place-restart
+                           :remote-access :tailnet-only)]
+        (is (not (contains? (set (map :gate (:failed (c/reflect passive))))
+                            :remote-access-survives-daemon-loss)))))
+    (testing "and the cheap fix outranks the hardware one"
+      (is (< (c/dark-days (assoc acts :remote-access :tailnet-plus-native-sshd) c/cost-inputs)
+             (c/dark-days (assoc acts :remote-access :tailnet-plus-oob-power) c/cost-inputs))
+          "a PDU must not be bought to avoid writing one line into authorized_keys"))))
 
 (deftest a-self-reboot-on-a-locked-headless-mac-is-a-shutdown
   ;; The half of the loop that was never measured until 2026-09-09. Supervision
@@ -57,7 +88,12 @@
     (is (contains? (set (map :gate (:failed (c/reflect wants-reboot))))
                    :reboot-completes-unattended))
     (testing "and an unattended unlock admits the same design"
-      (is (:pass? (c/reflect (assoc wants-reboot :unlock :authrestart-stored-key)))))
+      ;; :remote-access is set here so this test keeps testing ITS gate. Left
+      ;; at :tailnet-only it would fail on the reachability gate instead, and
+      ;; pass or fail for a reason it never names.
+      (is (:pass? (c/reflect (assoc wants-reboot
+                                    :unlock :authrestart-stored-key
+                                    :remote-access :tailnet-plus-native-sshd)))))
     (testing "weakening disk encryption is priced, not free"
       (let [with-key (c/dark-days (assoc wants-reboot :unlock :authrestart-stored-key)
                                   c/cost-inputs)
@@ -99,7 +135,8 @@
                           :push-needs-overlay)))
       (is (:pass? (c/reflect (assoc pushed-without
                                     :reachability :kekkai-overlay
-                                    :unlock :authrestart-stored-key)))))))
+                                    :unlock :authrestart-stored-key
+                                    :remote-access :tailnet-plus-native-sshd)))))))
 
 (deftest the-winner-is-deterministic
   (is (= (dissoc (:winner (c/run-tournament)) :elo)

@@ -94,6 +94,24 @@
            exhausted nodes have 67-day uptimes: nobody can restart them
            remotely, and the repair they need is a restart."
     :gates [:reboot-completes-unattended]}
+   {:id :single-daemon-remote-access
+    :on "2026-09-09"
+    :what "levi went into swap death under a 27B load. The kernel still answers
+           ping and macOS sshd still accepts TCP on 22, and the node has been
+           unreachable since, because the only working way in was Tailscale SSH
+           and tailscaled was what died. `ssh -vv` names the two servers: a
+           tailnet connection answers `Tailscale`, a LAN connection to the same
+           host answers `OpenSSH_10.0`. The second had never been exercised.
+           The constrained recovery key could not help either -- its forced
+           command kickstarted only the RPC worker."
+    :gates [:remote-access-survives-daemon-loss]}
+   {:id :fallback-path-provable
+    :on "2026-09-09"
+    :what "The fallback is real where it has been set up: `ssh -i ~/.ssh/murakumo
+           -J dan judah@192.168.1.21` succeeded, and the head's constrained key
+           reached judah over the LAN while the identical command against levi
+           was refused. So the check is a control, not a belief."
+    :gates [:remote-access-survives-daemon-loss]}
    {:id :silent-model-substitution
     :on "2026-09-09"
     :what "POST /v1/itonami-bots/responses with model murakumo-edge returned 200
@@ -131,16 +149,24 @@
    ;; chosen: FileVault is on, so today this is :console-only on every mini.
    :unlock       [:console-only
                   :authrestart-stored-key   ; fdesetup authrestart, key on the node
-                  :filevault-off]})
+                  :filevault-off]
+   ;; How many independent ways in the node has. Measured, not chosen: on
+   ;; 2026-09-09 every mini was :tailnet-only in practice, and one of them
+   ;; proved what that means.
+   :remote-access [:tailnet-only
+                   :tailnet-plus-native-sshd
+                   :tailnet-plus-oob-power]})
 
 (defn generate-candidates
   ([] (generate-candidates dimensions))
   ([d]
    (for [s (:supervision d) t (:transport d) b (:backoff d)
          p (:port-recovery d) w (:watchdog d) m (:model-swap d)
-         e (:enrollment d) r (:reachability d) u (:unlock d)]
+         e (:enrollment d) r (:reachability d) u (:unlock d)
+         ra (:remote-access d)]
      {:supervision s :transport t :backoff b :port-recovery p
-      :watchdog w :model-swap m :enrollment e :reachability r :unlock u})))
+      :watchdog w :model-swap m :enrollment e :reachability r :unlock u
+      :remote-access ra})))
 
 ;; ---------------------------------------------------------------------------
 ;; Reflection — hard gates. Each returns nil when it passes, or the reason it
@@ -221,6 +247,25 @@
              (= :console-only (:unlock c)))
     "self-reboot on a FileVault node without an unattended unlock is a shutdown (obs :filevault-blocks-unattended-boot)"))
 
+(defn- gate-remote-access-survives-daemon-loss [c]
+  ;; The gate this tournament did not have when it ran the first time, and the
+  ;; omission had a cost the same day: every design it admitted assumed the
+  ;; operator could still reach the node, and none of them said why that would
+  ;; be true.
+  ;;
+  ;; It binds any design that recovers by ACTING on the node -- self-reboot, a
+  ;; watchdog that restarts something, a swap that has to be finished. All of
+  ;; those are instructions somebody has to deliver, and a single userland
+  ;; daemon carrying every instruction is not a recovery plan, it is the first
+  ;; thing that fails. Note that it does not bind designs which recover by
+  ;; doing nothing; that asymmetry is the real content.
+  (when (and (or (contains? #{:guarded-self-reboot :headroom-and-guarded-self-reboot}
+                            (:port-recovery c))
+                 (not= :none (:watchdog c))
+                 (not= :in-place-restart (:model-swap c)))
+             (= :tailnet-only (:remote-access c)))
+    "recovery has to reach the node, and one dead daemon takes every way in (obs :single-daemon-remote-access)"))
+
 (defn- gate-enrollment-derived [c]
   (when (= :hand-set-tier (:enrollment c))
     "a hand-set trust tier drifts and placement has no fallback (obs :tier-drift)"))
@@ -234,7 +279,8 @@
    [:enrollment-derived   gate-enrollment-derived]
    [:backoff-contract     gate-backoff-contract]
    [:push-needs-overlay   gate-push-needs-overlay]
-   [:reboot-completes-unattended gate-reboot-completes-unattended]])
+   [:reboot-completes-unattended gate-reboot-completes-unattended]
+   [:remote-access-survives-daemon-loss gate-remote-access-survives-daemon-loss]])
 
 (defn reflect
   "Hard pass/fail for one candidate. `:failed` is EVERY gate it fails, not the
@@ -274,7 +320,7 @@
   does not come back from, and an exhaustion event it cannot clear itself.
   Designs that fail a gate are not costed at all -- they are not on the board."
   [{:keys [supervision transport port-recovery watchdog model-swap reachability
-           unlock]
+           unlock remote-access]
     :as _c}
    {:keys [reboots-per-node-year measured-operator-lag-days
            operator-action-cost-days] :as _inputs}]
@@ -312,12 +358,20 @@
         ;; gated, because which is acceptable is the owner's call and not this
         ;; model's -- but it must not be free, or the tournament would
         ;; recommend disabling disk encryption to save a reboot.
+        ;; A second SSH path costs a key in a file. Out-of-band power costs
+        ;; hardware and a place to put it, and is priced above the thing it
+        ;; would replace so the tournament does not buy a PDU to avoid writing
+        ;; one line into authorized_keys.
+        access-cost (case remote-access
+                      :tailnet-plus-native-sshd 0.01
+                      :tailnet-plus-oob-power 0.20
+                      0.0)
         unlock-cost (case unlock
                       :authrestart-stored-key 0.15
                       :filevault-off 0.60
                       0.0)]
     (+ boots login-risk transport-cost recovery-cost watchdog-cost swap-cost
-       overlay-cost unlock-cost
+       overlay-cost unlock-cost access-cost
        (* 0 operator-action-cost-days))))
 
 (defn- elo-update [ra rb score-a k]
@@ -380,7 +434,7 @@
         crossed (when (and a b)
                   (for [k [:supervision :transport :backoff :port-recovery
                            :watchdog :model-swap :enrollment :reachability
-                           :unlock]]
+                           :unlock :remote-access]]
                     (assoc (dissoc a :cost :elo) k (get b k))))]
     (vec (distinct (concat (map #(dissoc % :cost :elo) elite) crossed)))))
 
@@ -443,12 +497,12 @@
      (str "winner  cost=" (:cost winner) " node-days dark / node-year")]
     (map (fn [k] (str "  " (name k) " = " (name (get winner k))))
          [:supervision :transport :backoff :port-recovery :watchdog
-          :model-swap :enrollment :reachability :unlock])
+          :model-swap :enrollment :reachability :unlock :remote-access])
     [""
      "top admitted:"]
     (map-indexed
      (fn [i c] (str "  " (inc i) ". cost=" (:cost c) "  "
                     (name (:supervision c)) " / " (name (:transport c)) " / "
                     (name (:reachability c)) " / " (name (:port-recovery c))
-                    " / " (name (:unlock c))))
+                    " / " (name (:unlock c)) " / " (name (:remote-access c))))
      (take 5 ranked)))))
