@@ -11,8 +11,29 @@
      benjamin and simeon; every outbound connect then failed with
      EADDRNOTAVAIL, including the mesh watchdog's own health probe.
      Lowering `first` to 16384 gives 49,152 ports — headroom, not a cure: the
-     cure is the poller's backoff and, for stuck TIME_WAIT, a reboot. The
-     `ops status` PORTS column shows the pressure so the reboot is measured. -->
+     cure is the poller's backoff. The `ops status` PORTS column shows the
+     pressure.
+
+     Amended 2026-09-09. "For stuck TIME_WAIT, a reboot" was too strong, and
+     believing it kept three nodes dark for weeks behind a reboot FileVault
+     would not let them finish. A reboot is what RECLAIMS the wedged sockets;
+     it is not what RESTORES SERVICE. Moving `first` BELOW the wedged block
+     does that immediately, because the stuck entries occupy a contiguous
+     range above the old floor. Measured that day: benjamin and simeon were at
+     first=16384 with 48,298 and 48,907 wedged (98% and 99.5%); setting
+     first=12000 gave 5,238 and 4,629 free ports and both rejoined the pool
+     within minutes, with no reboot. joseph had never received this daemon at
+     all and sat on the macOS default 49152 with 15,763 of its 16,384 stuck;
+     installing the baseline alone freed 33,389.
+
+     Two things were also measured NOT to work, so nobody repeats them:
+     lowering net.inet.tcp.msl (15000 -> 1000) does not expire the wedged
+     entries — benjamin's count was identical 45 s later — and neither does
+     stopping the producer.
+
+     The floor may only be lowered past a node's own fixed listeners. On these
+     minis the highest below the old floor is ollama at 11434, which is why
+     12000 is the value and not something rounder. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>            <string>com.murakumo.sysctl-baseline</string>

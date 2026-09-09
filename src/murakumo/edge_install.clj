@@ -21,6 +21,7 @@
     reads it; installing a daemon must not be a second place a tier can be set."
   (:require [kotoba.lang.text :as str]
             [murakumo.infer.edge :as edge]
+            [murakumo.provision.plan :as plan]
             [murakumo.ssh :as ssh]))
 
 (def ^:private probe
@@ -121,6 +122,55 @@
     (when (empty? targets)
       (throw (ex-info "no fleet node matched" {:selector selector})))
     (mapv #(install-node! % opts) targets)))
+
+;; ── kernel network baseline ────────────────────────────────────────────────
+;;
+;; The edge worker's health is not durable without it, and it was not there.
+;; Measured 2026-09-09: `com.murakumo.sysctl-baseline` is present on benjamin
+;; and simeon and ABSENT on dan, judah, levi and joseph -- exactly the two-node
+;; manual rollout ADR-2609021500 recorded, with its follow-up ("run provision
+;; across every macOS node") never done. joseph was still on the macOS default
+;; range of 16,384 ports and had 15,763 of them stuck in TIME_WAIT.
+;;
+;; It lives beside `install!` rather than inside `murakumo provision` because
+;; provision needs MURAKUMO_OPERATOR_SEED and pushes binaries and the mesh
+;; daemons -- a much larger action than "make this node able to open sockets".
+;; Nothing here is new mechanism: `murakumo.provision.plan` already renders the
+;; plist and already knows the load-or-reload dance.
+
+(defn baseline-node!
+  "Install the root sysctl LaunchDaemon on one node, or say why not.
+
+  `dry-run?` prints the commands. The reprovision kickstarts the daemon, so
+  the widened range applies immediately rather than at the next boot -- which
+  matters on precisely the nodes that cannot currently be rebooted."
+  [tmpl {:keys [name host] :as _node} {:keys [dry-run?]}]
+  (let [facts (node-facts host)]
+    (if-not (:ok? facts)
+      (assoc facts :node name)
+      (let [plist (plan/render-sysctl-baseline-plist tmpl {:home (:home facts)})
+            script (str (plan/write-sysctl-baseline-plist-command plist) "\n"
+                        (plan/sysctl-baseline-reprovision-command))]
+        (if dry-run?
+          {:node name :ok? true :results [{:label plan/sysctl-baseline-label
+                                           :dry-run true :script script}]}
+          (let [{:keys [exit err]} (ssh/sh host script)]
+            {:node name :ok? (zero? exit)
+             :results [{:label plan/sysctl-baseline-label
+                        :ok? (zero? exit) :exit exit :err (str/trim (str err))}]}))))))
+
+(defn baseline!
+  "Install the kernel network baseline on every selected node."
+  [{:keys [nodes]} selector opts]
+  ;; Same literal `murakumo.core` already slurps for this daemon. Not routed
+  ;; through `config/launchd-template-path`, which resolves the MESH template.
+  (let [tmpl (slurp "deploy/com.murakumo.sysctl-baseline.plist.tmpl")
+        targets (if (or (nil? selector) (= "all" selector))
+                  nodes
+                  (filter #(= selector (:name %)) nodes))]
+    (when (empty? targets)
+      (throw (ex-info "no fleet node matched" {:selector selector})))
+    (mapv #(baseline-node! tmpl % opts) targets)))
 
 (defn report [results]
   (str/join

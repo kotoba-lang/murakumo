@@ -394,7 +394,9 @@
         selector (when (and selector (not= "--dry-run" selector)) selector)]
     (case (str sub)
       "install" (println (report (install! fleet selector {:dry-run? dry?})))
-      (println "usage: murakumo edge install [<node>|all] [--dry-run]"))))
+      "baseline" (println (report ((resolve 'murakumo.edge-install/baseline!)
+                                   fleet selector {:dry-run? dry?})))
+      (println "usage: murakumo edge (install|baseline) [<node>|all] [--dry-run]"))))
 
 (defn cmd-model
   "Plan/download/inspect Hugging Face model caches on fleet nodes."
