@@ -13,7 +13,7 @@
             ["node:fs" :as fs]
             ["node:os" :as os]
             ["node:path" :as path]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.task.plan :as plan]
             [murakumo.task.worker :as worker]
             [murakumo.tunnel :as tunnel]))

@@ -23,7 +23,7 @@
   (:require ["node:child_process" :as cp]
             ["node:fs" :as fs]
             [kotoba.lang.edn :as edn]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
 ;; T6.4 preload guarantee: cache shipped KIR *before* product-shell requires so

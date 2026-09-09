@@ -17,7 +17,7 @@
 
   All logic lives in murakumo.apikey, shared with the MCP tool — so the two
   surfaces cannot drift, and neither parses the other's output."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [murakumo.apikey :as apikey]))
 
 (defn- parse-flags

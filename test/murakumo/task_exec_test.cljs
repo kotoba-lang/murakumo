@@ -6,7 +6,7 @@
 (ns murakumo.task-exec-test
   (:require ["node:fs" :as fs]
             [cljs.test :refer [deftest is testing run-tests]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.task.exec :as exec]))
 
 (deftest probe-command-is-portable-and-answers-both-questions

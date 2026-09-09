@@ -6,7 +6,7 @@
 
 (ns murakumo.task-worker-test
   (:require [cljs.test :refer [deftest is testing run-tests]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.task.worker :as worker]
             [murakumo.tunnel :as tunnel]))
 

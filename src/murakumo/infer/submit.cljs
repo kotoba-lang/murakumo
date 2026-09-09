@@ -31,7 +31,7 @@
   in this command; until it exists, extract the vocabulary once with the JVM
   and keep the EDN."
   (:require [kotoba.lang.edn :as edn]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             ["node:fs" :as fs]))
 
 (def job-kind "qwen38-generate")
@@ -124,7 +124,7 @@
   than crashing the command."
   [fetch base auth method path body]
   (-> (fetch (str base path)
-             (clj->js (cond-> {:method (str/upper-case (name method))
+             (clj->js (cond-> {:method (str/upper (name method))
                                :headers (auth-headers auth)}
                         body (assoc :body (js/JSON.stringify (clj->js body))))))
       (.then (fn [response]

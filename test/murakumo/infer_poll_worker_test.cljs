@@ -1,6 +1,6 @@
 (ns murakumo.infer-poll-worker-test
   (:require [cljs.test :refer [async deftest is run-tests testing]]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.infer.poll-worker :as worker]))
 
 (deftest local-auth-token-precedence
