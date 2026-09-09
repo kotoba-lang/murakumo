@@ -237,4 +237,18 @@
                 (:fail m) " failures, " (:error m) " errors"))
   (when-not (cljs.test/successful? m) (js/process.exit 1)))
 
+(deftest only-201-is-an-accepted-heartbeat
+  ;; Until 2026-09-10 the heartbeat loop reset its consecutive-failure counter
+  ;; on ANY resolved response, so a gateway answering 500 rode the same cadence
+  ;; as one answering 201. Measured on benjamin that day: `heartbeat rejected:
+  ;; 500` fifteen times, every retry logged `failure 1`, and free ephemeral
+  ;; ports fell 5,238 -> 2,069 while the backoff never grew.
+  (is (true? (worker/heartbeat-accepted? 201)))
+  (testing "every other status is a rejection, including 200"
+    ;; The contract is `201 Created` -- a row was written. A 200 means
+    ;; something else happened, and accepting it would keep a node enrolled in
+    ;; its own log while the registry had no record of it.
+    (doseq [s [200 202 400 403 409 429 500 502 503 nil]]
+      (is (false? (worker/heartbeat-accepted? s)) (str "status " s " must not count as accepted")))))
+
 (run-tests)

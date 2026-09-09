@@ -335,15 +335,57 @@
                 (schedule-after-failure! "poll" poll-failures error poll-ms
                                          #(loop! config))))))
 
-(defn- heartbeat-loop! [{:keys [heartbeat-ms heartbeat-failures] :as config}]
+(defn heartbeat-accepted?
+  "Did the control plane ACCEPT this heartbeat? 201, and nothing else.
+
+  Public and pure because the loop below cannot be unit-tested (it drives
+  timers and schedules itself), and the decision it got wrong for months is
+  exactly this one: it treated every resolved response as an acceptance and
+  reset the backoff counter, so a gateway answering 500 was indistinguishable
+  from one answering 201 as far as the retry cadence was concerned.
+
+  200 is rejected too, deliberately. The contract is `201 Created` -- an
+  enrolment row was written -- and a 200 means something else happened. A
+  heartbeat loop that accepted 200 would keep a node enrolled in its own logs
+  while the registry had no record of it."
+  [status]
+  (= 201 status))
+
+(defn- heartbeat-loop!
+  "A heartbeat the gateway REJECTED is a failure, and has to back off like one.
+
+  Until 2026-09-10 this reset the consecutive-failure counter on any resolved
+  promise, including a non-201. The rejection was printed and then forgotten:
+  the next attempt started again at `failure 1`, so the wait never grew past
+  the base cadence no matter how long the gateway kept saying no.
+
+  Measured on benjamin the same day, while the gateway was 500ing its
+  heartbeat: `heartbeat rejected: 500` fifteen times, every retry logged
+  `failure 1`, and the node's free ephemeral ports fell 5,238 -> 3,524 ->
+  2,069 over a few hours -- a node walking back into the exhaustion
+  ADR-2609021500 was written to end, through the one path that still retried
+  on cadence.
+
+  This is the shape this workspace keeps meeting, in its own recovery code: a
+  request that was refused returned the same value as one that succeeded, so
+  nothing downstream could tell them apart."
+  [{:keys [heartbeat-ms heartbeat-failures] :as config}]
   (-> (heartbeat! config)
       (.then (fn [{:keys [status probe]}]
-               (reset! heartbeat-failures 0)
-               (when-not (= 201 status)
-                 (println "[join] heartbeat rejected:" status))
-               (when-not (:ready? probe)
-                 (println "[join] local model not ready; advertised ready=false"))
-               (js/setTimeout #(heartbeat-loop! config) heartbeat-ms)))
+               (if-not (heartbeat-accepted? status)
+                 ;; Rejected. `ex-info` with :status so `classify` reads it as
+                 ;; :http rather than :unknown -- the code already distinguishes
+                 ;; "the gateway answered no" from "nothing answered", and this
+                 ;; is the first caller that gives it the chance.
+                 (schedule-after-failure!
+                  "heartbeat" heartbeat-failures
+                  (ex-info (str "heartbeat rejected: " status) {:status status})
+                  heartbeat-ms #(heartbeat-loop! config))
+                 (do
+                   (reset! heartbeat-failures 0)
+                   (when-not (:ready? probe)
+                     (println "[join] local model not ready; advertised ready=false"))
+                   (js/setTimeout #(heartbeat-loop! config) heartbeat-ms)))))
       (.catch (fn [error]
                 (schedule-after-failure! "heartbeat" heartbeat-failures error heartbeat-ms
                                          #(heartbeat-loop! config))))))

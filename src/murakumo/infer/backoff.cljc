@@ -42,7 +42,16 @@
 
 (def remote-unreachable-codes
   #{"ECONNREFUSED" "ECONNRESET" "ENOTFOUND" "EAI_AGAIN" "ETIMEDOUT"
-    "UND_ERR_CONNECT_TIMEOUT" "UND_ERR_SOCKET" "EHOSTUNREACH" "ENETUNREACH"})
+    "UND_ERR_CONNECT_TIMEOUT" "UND_ERR_SOCKET" "EHOSTUNREACH" "ENETUNREACH"
+    ;; Added 2026-09-10 from benjamin's log, where both were classified
+    ;; `unknown`. Neither is a mystery: undici raises HEADERS_TIMEOUT when the
+    ;; response headers do not arrive in time and INFO when the connection is
+    ;; torn down under it. Both mean the far end did not answer, which is what
+    ;; :remote-unreachable is for. `unknown` reached the same delay curve, so
+    ;; this changes no timing -- it changes what the log says the node is
+    ;; waiting on, and an operator reading `unknown` twice an hour cannot tell
+    ;; a gateway outage from a node fault.
+    "UND_ERR_HEADERS_TIMEOUT" "UND_ERR_BODY_TIMEOUT" "UND_ERR_INFO"})
 
 (defn classify
   "`{:code :message}` (the host pulls `error.cause.code` / `error.message` off
