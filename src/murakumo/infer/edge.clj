@@ -272,5 +272,13 @@
                      daemon-dir "/evicted-by-murakumo/" l ".plist || true; ")))
        ;; Report what is still loaded, so the caller can tell an eviction that
        ;; ran from one that was refused by a missing sudo grant.
+       ;;
+       ;; The sleep is not padding. Measured 2026-09-10 on simeon and dan, this
+       ;; count was taken the instant after the last `bootout` and reported 1
+       ;; and 2 jobs still loaded; both were 0 a few seconds later, with every
+       ;; plist parked. `bootout` returns before launchd has finished unloading,
+       ;; so a count taken immediately reports a failure the node does not have
+       ;; -- and a guard that cries wolf is a guard an operator learns to skip.
+       "sleep 5; "
        "echo MURAKUMO_STILL_LOADED=$(sudo -n /bin/launchctl list 2>/dev/null | "
        "grep -cE '" (str/join "|" labels) "')"))

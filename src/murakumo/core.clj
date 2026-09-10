@@ -420,7 +420,25 @@
                                    fleet selector model
                                    {:dry-run? dry?
                                     :evict? (boolean (some #{"--evict"} flags))}))))))
-      (println (str "usage: murakumo edge (install|baseline|models|sync) [<node>|all] [--dry-run]\n"
+      ;; Declared vs measured, for the whole fleet. `topology` reports;
+      ;; `topology --apply` evicts what a node is not for. It never STARTS a
+      ;; model -- that needs an admission check and a checkpoint, which
+      ;; `dedicate` owns.
+      "topology"
+      (let [apply? (boolean (some #{"--apply"} flags))
+            results ((resolve (quote murakumo.edge-install/topology!)) fleet selector)]
+        (println ((resolve (quote murakumo.edge-install/topology-report)) results))
+        (when apply?
+          (println "\n-- reconciling --")
+          (doseq [r ((resolve (quote murakumo.edge-install/topology-apply!))
+                     fleet selector {:dry-run? dry?})]
+            (println (format "  [%-10s] %s%s" (:node r) (name (:applied r))
+                             (cond (:why r) (str " -- " (:why r))
+                                   (seq (:evict-planes r))
+                                   (str " " (str/join ", " (map name (:evict-planes r))))
+                                   :else ""))))))
+      (println (str "usage: murakumo edge (install|baseline|models|sync|topology) [<node>|all] [--dry-run]\n"
+                    "       murakumo edge topology [<node>|all] [--apply] [--dry-run]\n"
                     "       murakumo edge dedicate <node> <model> [--evict] [--dry-run]")))))
 
 (defn cmd-access

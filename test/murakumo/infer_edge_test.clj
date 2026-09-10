@@ -133,4 +133,9 @@
     ;; is still there comes back, and comes back when nobody is watching.
     (is (re-find #"mv /Library/LaunchDaemons/com\.murakumo\.ollama\.plist /Library/LaunchDaemons/evicted-by-murakumo/"
                  script))
-    (is (re-find #"MURAKUMO_STILL_LOADED" script))))
+    (is (re-find #"MURAKUMO_STILL_LOADED" script))
+    ;; `bootout` returns before launchd finishes unloading. Measured the same
+    ;; day, counting immediately reported 1 and 2 still-loaded jobs that were
+    ;; both 0 seconds later, with every plist parked.
+    (is (re-find #"sleep 5; echo MURAKUMO_STILL_LOADED" script)
+        "the count must settle, or the guard cries wolf and gets ignored")))
