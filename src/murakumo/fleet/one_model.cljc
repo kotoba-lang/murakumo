@@ -64,7 +64,15 @@
   onto a node that is already full. `comfyui/main.py` and `ollama serve` carry
   the specificity that case-sensitivity was standing in for, without the miss.
 
-  `:daemons` are the launchd labels that RESTART the plane. Killing the
+  `:daemons` are launchd labels KNOWN to serve the plane. They are a hint for
+  reporting, NOT the eviction list -- see `discover-script` and
+  `labels-from-discovery`, which ask launchd what it actually starts. Measured
+  2026-09-10: benjamin serves the ad-hoc plane from `ai.gftd.ollama.benjamin`
+  while dan and simeon use `com.murakumo.ollama`, so an eviction driven by this
+  table left ollama running on benjamin and reported a clean sweep. A fixed
+  table cannot name a label that varies per node.
+
+  The original note stands for what these labels are FOR: Killing the
   process is not evicting the plane: measured on issachar 2026-09-10, all four
   planes were system LaunchDaemons with KeepAlive, so a `pkill` is undone in
   seconds and a `bootout` is undone by the next boot -- and the next boot is
@@ -139,6 +147,77 @@
     {:keep (or (first (filter #(= wanted (:plane %)) found))
                {:plane wanted :what "requested, not yet present"})
      :evict (vec (remove #(= wanted (:plane %)) found))}))
+
+(def discover-script
+  "Shell that asks launchd which job starts each model plane on THIS node.
+
+  Reads every plist's ProgramArguments and classifies by the executable path,
+  not by the label. That is the only check that worked in the 2026-09-09 gftd
+  cutover, and it is the same reason: a name tells you what somebody called a
+  job, and the argv tells you what the job runs. Prints `<plane> <label>` lines
+  and nothing else; an unreadable plist contributes nothing rather than a
+  guess."
+  (str "for d in /Library/LaunchDaemons /Library/LaunchAgents \"$HOME/Library/LaunchAgents\"; do\n"
+       "  [ -d \"$d\" ] || continue\n"
+       "  for p in \"$d\"/*.plist; do\n"
+       "    [ -f \"$p\" ] || continue\n"
+       "    a=$(sudo -n /usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$p\" 2>/dev/null | tr '\\n' ' ')\n"
+       "    case \"$a\" in\n"
+       "      *llama-server*)    echo \"text $(basename \"$p\" .plist)\" ;;\n"
+       "      *rpc-server*)      echo \"ring-member $(basename \"$p\" .plist)\" ;;\n"
+       "      *comfyui/main.py*|*ComfyUI/main.py*) echo \"media $(basename \"$p\" .plist)\" ;;\n"
+       "      *ollama*)          echo \"ad-hoc $(basename \"$p\" .plist)\" ;;\n"
+       "    esac\n"
+       "  done\n"
+       "done | sort -u"))
+
+(defn labels-from-discovery
+  "`discover-script` output -> {plane #{label ...}}.
+
+  A line naming a plane this table does not know is dropped rather than
+  guessed at: the classifier and this parser have to agree on the vocabulary,
+  and silently inventing a plane would put an unrecognised label into an
+  eviction."
+  [out]
+  (let [known (set (map :plane planes))]
+    (reduce (fn [acc line]
+              (let [[p l] (str/split (str/trim (str line)) #"\s+")
+                    kw (when p (keyword p))]
+                (if (and l (contains? known kw)) (update acc kw (fnil conj #{}) l) acc)))
+            {}
+            (str/split (str out) #"\n"))))
+
+(defn evict-labels
+  "The labels to evict so that only `keep-plane` is left.
+
+  Takes the MEASURED planes as well as the discovered labels, because without
+  them a missing label is ambiguous and the two meanings need opposite
+  responses:
+
+    running, and discovery found a label   -> evict it
+    not running                            -> nothing to evict, not a problem
+    RUNNING, and discovery found no label  -> refuse
+
+  The third case is not hypothetical. Measured 2026-09-10 on dan: a
+  `llama-server` holding 2.6 GB on :8094, parent PID 1, owned by no launchd
+  job at all. Nothing can evict it by label, and a tool that quietly reported
+  `nothing to evict` would have called that node tidy.
+
+  Without `hosting`, a plane that simply is not running looks identical to one
+  that could not be read, and every safe eviction gets refused -- which is how
+  the first version of this behaved on judah."
+  ([discovered keep-plane] (evict-labels discovered keep-plane nil))
+  ([discovered keep-plane hosting]
+   (let [hosting (when hosting (set hosting))
+         others (remove #(= keep-plane (:plane %)) planes)
+         ;; When the caller did not measure, fall back to "assume every other
+         ;; plane might be running" -- the conservative direction.
+         running (filter #(or (nil? hosting) (contains? hosting (:plane %))) others)
+         found (mapcat #(get discovered (:plane %)) running)
+         unowned (remove #(seq (get discovered (:plane %))) running)]
+     {:labels (vec (distinct found))
+      :guessed (vec (distinct (mapcat :daemons unowned)))
+      :planes-not-discovered (vec (map :plane unowned))})))
 
 (defn daemons-to-evict
   "The launchd labels an eviction of `planes-to-evict` has to stop.

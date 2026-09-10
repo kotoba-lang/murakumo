@@ -22,6 +22,7 @@
   (:require [kotodama.inference.edge :as artifacts]
             [kotoba.lang.text :as str]
             [murakumo.fleet.one-model :as one]
+            [murakumo.fleet.topology :as topo]
             [murakumo.infer.edge :as edge]
             [murakumo.provision.plan :as plan]
             [murakumo.ssh :as ssh]))
@@ -445,3 +446,109 @@
     (when (empty? targets)
       (throw (ex-info "dedicating a node needs one node by name" {:selector selector})))
     (mapv #(dedicate-node! % model opts) targets)))
+
+;; ── the fleet's topology: declared, measured, reconciled ───────────────────
+;;
+;; Owner instruction 2026-09-10: tidy the topology so the cluster runs
+;; efficiently and stably. Three functions, in the order an operator uses them:
+;; `topology-report!` says where the fleet is, `topology-plan` says what would
+;; change, and `topology-apply!` changes it. The plan is a value, so the thing
+;; that gets reviewed is the thing that runs.
+
+(defn discover-labels!
+  "Ask one node which launchd job starts each model plane.
+
+  Returns `{}` when the node cannot be read, and the caller must not treat that
+  as `nothing to evict` -- `one/evict-labels` marks the planes discovery did
+  not see, which is the difference between a node with no extras and a node
+  nobody could ask."
+  [{:keys [host]}]
+  (let [{:keys [exit out]} (ssh/sh host one/discover-script)]
+    (if (zero? exit) (one/labels-from-discovery out) {})))
+
+(defn topology-node!
+  "Declared vs measured for one node, with the labels a repair would need."
+  [{:keys [name] :as node}]
+  ;; The field is `:node/serves` in fleet.edn and survives the loader
+  ;; namespaced. Reading `:serves` here would find nil on every node and read
+  ;; the whole fleet as :unstated -- a confident answer, wrong about all of it.
+  (let [serves (:node/serves node)
+        m (model-hosts-node! node)
+        v (topo/verdict {:serves serves} m)]
+    (cond-> {:node name :measured m :verdict v :serves serves}
+      (= :drift (:verdict v))
+      (assoc :labels (one/evict-labels (discover-labels! node) (:plane v)
+                                       (map :plane (:hosts m)))))))
+
+(defn topology!
+  [{:keys [nodes]} selector]
+  (let [targets (if (or (nil? selector) (= "all" selector))
+                  nodes
+                  (filter #(= selector (:name %)) nodes))]
+    (when (empty? targets)
+      (throw (ex-info "no fleet node matched" {:selector selector})))
+    (mapv topology-node! targets)))
+
+(defn topology-report [results]
+  (let [summary (topo/fleet-summary (map :verdict results))]
+    (str/join
+     "\n"
+     (concat
+      (map (fn [{:keys [node serves measured verdict labels]}]
+             (str (topo/report-line node {:serves serves} measured)
+                  (when (seq (:guessed labels))
+                    (str "\n" (format "%-12s" "") "⚠ could not read "
+                         (str/join ", " (map clojure.core/name (:planes-not-discovered labels)))
+                         " from launchd; those labels are a guess, not a reading"))))
+           results)
+      [""
+       (str "fleet: "
+            (str/join "  "
+                      (for [k [:conformant :drift :unstated :unmeasured :invalid]
+                            :when (get summary k)]
+                        (str (clojure.core/name k) "=" (get summary k))))
+            ;; A fleet of :unstated nodes has zero drift and no topology. Say
+            ;; the second thing, because the first reads as health.
+            (when-let [u (:unstated summary)]
+              (str "  -- " u " node(s) have no :node/serves; that is not health, it is silence")))]))))
+
+(defn topology-plan
+  "What reconciling one node's drift would DO, as data.
+
+  Only ever proposes evictions. Starting a missing plane needs a model, a
+  checkpoint and (for text) an admission check, which `dedicate-node!` already
+  owns -- so a missing plane is reported and left, rather than half-started by
+  a function whose job is tidying."
+  [{:keys [node verdict labels] :as r}]
+  (let [{:keys [evict missing?]} verdict]
+    (cond-> {:node node :verdict (:verdict verdict)}
+      (seq evict) (assoc :evict-planes evict :evict-labels (:labels labels))
+      missing?    (assoc :missing-plane (:plane verdict)
+                         :note "start it with `murakumo edge dedicate` -- tidying does not start models")
+      (seq (:guessed labels))
+      (assoc :unreadable (:planes-not-discovered labels)))))
+
+(defn topology-apply!
+  "Evict the planes a node is not for. Refuses when the labels are a guess.
+
+  A node whose plists could not be read has an unknown set of jobs, and
+  evicting a guessed label there is how a fleet loses a service nobody
+  intended to touch."
+  [{:keys [nodes]} selector {:keys [dry-run?]}]
+  (let [results (topology! {:nodes nodes} selector)]
+    (mapv (fn [{:keys [node labels verdict] :as r}]
+            (let [plan (topology-plan r)
+                  host (:host (first (filter #(= node (:name %)) nodes)))]
+              (cond
+                (not= :drift (:verdict verdict)) (assoc plan :applied :nothing-to-do)
+                (seq (:guessed labels))
+                (assoc plan :applied :refused
+                       :why "launchd could not be read for some planes; evicting a guessed label is how a fleet loses a service nobody meant to touch")
+                (empty? (:evict-labels plan)) (assoc plan :applied :nothing-to-evict)
+                dry-run? (assoc plan :applied :dry-run
+                                :script (edge/evict-script (:evict-labels plan)))
+                :else
+                (let [{:keys [exit out err]} (ssh/sh host (edge/evict-script (:evict-labels plan)))]
+                  (assoc plan :applied (if (zero? exit) :evicted :failed)
+                         :exit exit :out (str/trim (str out)) :err (str/trim (str err)))))))
+          results)))
