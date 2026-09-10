@@ -125,7 +125,19 @@
                  (throw (ex-info "picked node not found in fleet.edn" {:node (:name node-info)})))
         hist (media/run-job! node :image (cond-> {:prompt prompt :width width :height height :ckpt ckpt}
                                            negative (assoc :negative negative)
-                                           seed (assoc :seed seed)))
+                                           ;; ⚠ A REQUEST WITHOUT A SEED MUST NOT INHERIT
+                                           ;; media.clj's fixed default. That default is right
+                                           ;; for the CLI -- `txt2img-workflow` is deterministic
+                                           ;; on purpose so a run is receipt-able -- but it makes
+                                           ;; the graph byte-identical across calls, and ComfyUI
+                                           ;; then reports `execution_cached` for every node and
+                                           ;; returns a history whose `outputs` is EMPTY.
+                                           ;; Measured 2026-09-10: that reads as "the render
+                                           ;; produced no output file", i.e. an identical prompt
+                                           ;; asked twice fails the second time, for a reason
+                                           ;; found nowhere in the error. Callers who want
+                                           ;; reproducibility still get it by passing :seed.
+                                           :always (assoc :seed (or seed (rand-int 2147483647)))))
         filename (image-filename hist)]
     (when-not filename
       (throw (ex-info "murakumo render produced no output file" {:history hist})))
