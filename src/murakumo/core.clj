@@ -396,6 +396,12 @@
       "install" (println (report (install! fleet selector {:dry-run? dry?})))
       "baseline" (println (report ((resolve 'murakumo.edge-install/baseline!)
                                    fleet selector {:dry-run? dry?})))
+      ;; One node, one model (owner instruction 2026-09-10). Measured from the
+      ;; node's own process list, not from fleet.edn: what a node declares and
+      ;; what it is running are different facts, and only one of them consumes
+      ;; the RAM.
+      "models" (println ((resolve 'murakumo.edge-install/model-hosts-report)
+                         ((resolve 'murakumo.edge-install/model-hosts!) fleet selector)))
       (println "usage: murakumo edge (install|baseline) [<node>|all] [--dry-run]"))))
 
 (defn cmd-access

@@ -20,6 +20,7 @@
   - It does not enroll. Trust tier belongs to `fleet.edn` and the join worker
     reads it; installing a daemon must not be a second place a tier can be set."
   (:require [kotoba.lang.text :as str]
+            [murakumo.fleet.one-model :as one]
             [murakumo.infer.edge :as edge]
             [murakumo.provision.plan :as plan]
             [murakumo.ssh :as ssh]))
@@ -82,6 +83,72 @@
                                     :node-name node-name))]}
     (catch clojure.lang.ExceptionInfo e
       {:ok? false :reason :does-not-fit :detail (ex-message e) :data (ex-data e)})))
+
+(def ^:private process-list-command
+  ;; Full command lines, because the plane a process serves is in its
+  ;; arguments and not in its name -- `llama-server` is this node's model and
+  ;; `rpc-server` is a shard of another node's.
+  "ps -Ao command")
+
+(defn model-hosts-node!
+  "How many model planes one node hosts, measured rather than declared."
+  [{:keys [name host] :as _node}]
+  (let [{:keys [exit out]} (ssh/sh host process-list-command)]
+    (if-not (zero? exit)
+      {:node name :verdict :unmeasured}
+      (assoc (one/verdict (str/split (str out) #"\n")) :node name))))
+
+(defn model-hosts!
+  "Check the whole fleet against the one-model rule."
+  [{:keys [nodes]} selector]
+  (let [targets (if (or (nil? selector) (= "all" selector))
+                  nodes
+                  (filter #(= selector (:name %)) nodes))]
+    (when (empty? targets)
+      (throw (ex-info "no fleet node matched" {:selector selector})))
+    (mapv model-hosts-node! targets)))
+
+(defn model-hosts-report [results]
+  (str/join
+   "\n"
+   (map (fn [{:keys [node verdict] :as r}]
+          (if (= :unmeasured verdict)
+            (format "[%-10s] unmeasured -- unreachable, which is not the same as hosting nothing" node)
+            (one/report-line node r)))
+        results)))
+
+(defn one-model-gate
+  "Refuse to add a model plane to a node that already hosts a different one.
+
+  Owner instruction 2026-09-10: one node, one model. Without a gate that is a
+  sentence in a document; with one it is a thing the fleet cannot do by
+  accident. Measured that day, every reachable node already broke it — five
+  minis hosting four planes each — so this gate refuses on the fleet as it
+  stands, which is the point. `:evict` is the operator saying which plane the
+  node is for.
+
+  Unmeasurable is a refusal, not a pass. A node whose process list could not
+  be read has an unknown number of models on it, and installing onto unknown
+  is how the fleet arrived at four."
+  [node wanted {:keys [evict?]}]
+  (let [{:keys [verdict] :as m} (model-hosts-node! node)]
+    (cond
+      (= :unmeasured verdict)
+      {:ok? false :reason :hosts-unmeasured
+       :detail "could not read the node's process list; installing onto an unknown node is how this fleet came to run four models on one mini"}
+
+      :else
+      (let [{:keys [evict]} (one/keeps (map :what (:hosts m)) wanted)
+            others (remove #(= wanted (:plane %)) (:hosts m))]
+        (cond
+          (empty? others) {:ok? true :hosts (:hosts m)}
+          evict? {:ok? true :hosts (:hosts m) :evicting (vec others)}
+          :else
+          {:ok? false :reason :already-hosts-another-model
+           :hosts (:hosts m)
+           :detail (str "hosts " (str/join ", " (map #(name (:plane %)) others))
+                        "; pass --evict to say this node is for " (name wanted)
+                        " instead")})))))
 
 (defn install-node!
   "Render and install both daemons on one node.
