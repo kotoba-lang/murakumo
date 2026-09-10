@@ -192,3 +192,58 @@ That is why hermes runs on judah+dan, which do hold 65,536.
 - `--verify` printed `usable for bots false` from a timed-out probe while still
   exiting 0 with "no findings". A probe that could not measure should be a
   finding, not a pass.
+
+---
+
+# Session close, 2026-09-10 — state and resume point
+
+## Landed on default branches
+
+| PR | repo | what |
+|----|------|------|
+| [kotoba-lang/murakumo#373](https://github.com/kotoba-lang/murakumo/pull/373) | murakumo | ComfyUI gateway made to run (6 defects) |
+| [kotoba-lang/murakumo#374](https://github.com/kotoba-lang/murakumo/pull/374) | murakumo | Qwen3.8-27B GSQ-RCO, context-as-data, infer-cluster |
+| [network-awai/cloud-murakumo-app#16](https://github.com/network-awai/cloud-murakumo-app/pull/16) | console | live actions, hosting column, constraining picker |
+| [com-junkawasaki/root#3077](https://github.com/com-junkawasaki/root/pull/3077) | root | hermes `--head cluster` contract |
+
+murakumo main: `c9ae23c`. Console main: `ee1f590`. Root main: `c60afbf`.
+
+## Running, and started by hand — none of this survives a reboot
+
+| what | where | started by |
+|------|-------|-----------|
+| llama-server, IQ3_XXS, 65,536 | judah:8094, dan:8094 | **hand** (plists exist, unbootstrappable over SSH) |
+| llama-server, IQ3_XXS-mtp, 32,768 x2 | b70:8090 | **systemd** — the only one that will come back |
+| `infer-cluster.cljs` | 127.0.0.1:8795 | **hand** |
+| `fleet-console-server.cljs` | 127.0.0.1:8899 | **hand** |
+| `murakumo.infer.gateway` | :8790 | **hand** |
+
+⚠ If this machine reboots, hermes loses its provider and falls to OpenRouter;
+if judah or dan reboots, that head does not return. b70 does.
+
+## Next, in the order I would do it
+
+1. **Fix the gateway's static b70 context** (reports 16,384; the head serves
+   32,768). It makes the pool steer requests off a head that can serve them.
+   Cheapest fix here, no restart, and it is a correctness bug in routing.
+2. **launchd for the cluster and the two mac heads.** The plists lint but
+   `launchctl bootstrap` fails over SSH (`Domain does not support specified
+   action`) — needs a console session or a LaunchDaemon.
+3. **xavier.** Unreachable for SSH as junkawasaki, root or ubuntu; only its
+   HTTP API answers. Still Q4_K_M at 8,192, the narrowest head in the pool.
+4. **A third cluster head** to get hermes capacity under 1.0x (it is 1.2x).
+   benjamin and simeon are ineligible on swap; this needs a new node or
+   benjamin's swap cleared.
+5. **`--verify` printed `usable for bots false` from a timed-out probe while
+   exiting 0 with "no findings".** A probe that could not measure should be a
+   finding. Same class as everything else this session turned up.
+
+## Not done, and why
+
+- **bge-m3 still serves on gad:8091 while removed from the model list** —
+  owner chose to handle the running service separately.
+- **`comfy_openai_bridge.py` still runs on gad**, now redundant with the
+  murakumo gateway, but it serves animeka/mangaka; cutting over means
+  repointing those first.
+- **gad's ComfyUI binds 0.0.0.0:8188** where media.clj's design says these
+  ports are loopback-only.
