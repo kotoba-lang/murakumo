@@ -163,7 +163,30 @@
    ssh-level failures (255) even where the remote status is not.
    Marker/digits classification via kotoba (required); line-split stays host."
   [out]
-  (let [lines (str/split-lines (str out))
+  (let [;; ⚠ The sentinel is only ITS OWN LINE when the remote command's stdout
+        ;; ended with a newline. `curl` against a JSON API does not end with
+        ;; one, so the sentinel glues onto the closing brace and the last line
+        ;; reads `{...}__murakumo_rc=0` -- which `marker?` does not match.
+        ;; Both halves of this function then fail at once, silently and in
+        ;; opposite directions:
+        ;;
+        ;;   :out  keeps the sentinel, so every JSON parse downstream throws
+        ;;         `trailing JSON input` (measured 2026-09-10: this is why
+        ;;         `murakumo.infer.media/comfy` could not read /system_stats,
+        ;;         and so why the ComfyUI gateway's /health returned an error)
+        ;;   rc    is nil, so `pick-exit` falls back to ssh's own code -- the
+        ;;         very code this function's docstring says is untrustworthy on
+        ;;         this fleet's macOS nodes, which report 0 regardless
+        ;;
+        ;; So a command whose output lacks a trailing newline loses its exit
+        ;; status AND corrupts its stdout, and reports success either way.
+        ;; Put a glued sentinel back on its own line before splitting.
+        raw (str out)
+        i (str/index-of raw rc-marker)
+        raw (if (and i (pos? i) (not= \newline (nth raw (dec i))))
+              (str (subs raw 0 i) "\n" (subs raw i))
+              raw)
+        lines (str/split-lines raw)
         marker? (fn [l]
                   (let [t (str/trim (str l))]
                     (oracle/bool->host (o-record 'marker-prefix? {:t t} [[:t :string]]))))

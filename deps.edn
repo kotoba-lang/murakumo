@@ -12,6 +12,18 @@
         io.github.kotoba-lang/http {:git/sha "2de805b4bb275e145437928081f7d0d80373b5f3"}
        org.clojure/clojure {:mvn/version "1.12.0"}
         babashka/process {:mvn/version "0.6.23"}
+        ;; `murakumo.infer.media` and `murakumo.infer.gateway` require
+        ;; `kotoba.lang.http.host.babashka`, which requires this. It is a
+        ;; BUILT-IN under bb, so the namespaces load there and nowhere else --
+        ;; and bb does not read deps.edn, so under bb the git deps above are
+        ;; missing instead. The result was a ComfyUI compatibility layer that
+        ;; could not start on either host: measured 2026-09-10, nothing was
+        ;; listening on :8790 anywhere in the fleet, while a stdlib-Python
+        ;; reimplementation of the same contract ran on gad instead.
+        org.babashka/http-client {:mvn/version "0.4.22"}
+        ;; The gateway SERVES http as well as calling it, through
+        ;; `kotoba.lang.http.host.httpkit`. Same gap, same reason.
+        http-kit/http-kit {:mvn/version "2.8.0"}
         ;; Edge model/protocol contract. The host kernel remains llama.cpp;
         ;; inference -> torch -> num owns wire/resource/byte admission.
         ;; b7fc5c04 is the first inference tip carrying

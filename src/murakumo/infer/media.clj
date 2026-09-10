@@ -17,7 +17,8 @@
 ;; the image comes home over scp.
 
 (ns murakumo.infer.media
-  (:require [kotoba.lang.http.host.babashka :as http]
+  (:require [clojure.java.io :as io]
+            [kotoba.lang.http.host.babashka :as http]
             [babashka.process :as p]
             [json.compat :as json]
             [kotoba.lang.edn :as edn]
@@ -27,7 +28,8 @@
             [murakumo.infer.schedule :as sched]
             [murakumo.config :as config]
             [murakumo.secret :as secret]
-            [murakumo.ssh :as ssh]))
+            [murakumo.ssh :as ssh]
+            [murakumo.tunnel :as tunnel]))
 
 (def ^:private comfy-port 8188)
 (def ^:private runs-file ".murakumo-infer-runs.edn")  ; local settled-run ledger
@@ -257,6 +259,63 @@
 (defn live-fleet [f]
   (->> (:nodes f) (pmap live-node) (filter some?) vec))
 
+(defn- fetch-artifact!
+  "Bring one rendered artifact home over the SAME ssh loopback curl that
+   dispatch and polling already ride, redirected straight into a local file.
+
+   ⚠ THIS REPLACED AN scp WHOSE PATH WAS RELATIVE TO THE LOGIN USER'S HOME.
+   The old line was `scp host:comfyui/output/<file> murakumo-<file>`, and
+   measured 2026-09-10: ssh to `gad` lands as **root** ($HOME=/root) while
+   ComfyUI lives in /home/gad, so `comfyui/output/` did not exist and the copy
+   failed every time. Its exit code was discarded, so `run-job!` returned a
+   history saying the render had succeeded -- while the local file kept
+   whatever an EARLIER run had left under that name. ComfyUI's output counter
+   had since restarted at 00001, so the names collided: the gateway base64'd
+   and served images dated two months earlier, at byte sizes matching no
+   render on the node. Three different prompts each returned a different
+   stale file, so even \"the bytes changed\" did not expose it.
+
+   A wrong image returned as success is worse than an error, so every failure
+   here throws. The node-side path is gone entirely -- /view is answered by
+   ComfyUI itself, which knows where its own output lives."
+  [host file local]
+  (let [enc  #(java.net.URLEncoder/encode (str %) "UTF-8")
+        q    (str "/view?filename=" (enc (:filename file))
+                  "&subfolder=" (enc (or (:subfolder file) ""))
+                  "&type=" (enc (or (:type file) "output")))
+        ;; ⚠ `:wrap? false` IS REQUIRED HERE. tunnel/ssh-argv normally wraps the
+        ;; remote command so it echoes an in-band `__murakumo_rc=<n>` sentinel,
+        ;; which the string path strips. Redirecting RAW BYTES leaves nowhere
+        ;; to strip it, so the sentinel is appended to the artifact: measured
+        ;; 2026-09-10, a 315,996-byte png arrived as 316,012 -- exactly 16
+        ;; bytes longer. PNG readers ignore trailing bytes after IEND, so the
+        ;; image still displays and only a checksum shows the corruption,
+        ;; which for a receipt-able render is the whole point. Unwrapped, ssh's
+        ;; own exit code is what we check -- correct here, because a transport
+        ;; failure is the only failure this call can have.
+        ;;
+        ;; ⚠ NOT base64-through-stdout. That was the first fix and it hit a
+        ;; different wall: `ssh/sh` returns its output as a STRING through the
+        ;; tunnel's result path, which caps a value at 65,536 bytes -- a
+        ;; 310 KB png is 413 KB of base64 and the call died with
+        ;; `string exceeds UTF-8 byte limit`. Raw bytes are redirected
+        ;; straight into the local file instead, so nothing image-sized ever
+        ;; becomes a string.
+        cmd  (str "curl -sS -m 300 'http://localhost:" comfy-port q "'")
+        ;; `apply`, matching murakumo.ssh's own call shape: ssh-argv returns
+        ;; the argv as a seq, and passing it as ONE argument makes the program
+        ;; name the literal string "[ssh".
+        {:keys [exit]} (apply p/sh {:out :write :out-file (io/file local)}
+                              (tunnel/ssh-argv host cmd {:wrap? false}))]
+    (when-not (zero? exit)
+      (throw (ex-info "artifact fetch failed on node"
+                      {:host host :file (:filename file) :exit exit})))
+    (let [f (io/file local)]
+      (when-not (and (.exists f) (pos? (.length f)))
+        (throw (ex-info "artifact fetch produced no bytes"
+                        {:host host :file (:filename file)})))
+      local)))
+
 (defn run-job!
   "Render ONE media job on `node` and return its ComfyUI history. `kind` ∈
    #{:image :video :audio}; `opts` are the workflow params. Blocking. Fetches
@@ -275,9 +334,7 @@
         out (get-in hist [:outputs out-node])
         file (or (get-in out [:images 0]) (get-in out [:gifs 0]) (get-in out [:audio 0]))]
     (when file
-      (let [remote (format "comfyui/output/%s" (:filename file))
-            local (str "murakumo-" (:filename file))]
-        (p/sh "scp" "-o" "BatchMode=yes" (str host ":" remote) local)))
+      (fetch-artifact! host file (str "murakumo-" (:filename file))))
     hist))
 
 (defn run-custom-workflow!
