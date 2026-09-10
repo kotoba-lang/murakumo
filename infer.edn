@@ -198,70 +198,7 @@
   ;; reliably right now (139GB, ~all of :total-usable-bytes) — these three are
   ;; the new default `npm run task -- infer plan/provision/up` base text targets,
   ;; small enough to fit a handful of edge nodes or the single GPU head alone.
-  "qwen-agentworld-35b-a3b"
-  {:model/id "qwen-agentworld-35b-a3b"
-   :model/kv {:layers 40 :kv-heads 2 :key-length 256 :value-length 256
-              :elements-per-token 40960}
-   :model/context-train 262144
-   :model/kv-measured-from "gad:/home/gad/models/Qwen-AgentWorld-35B-A3B-GGUF/Qwen-AgentWorld-35B-A3B-UD-Q4_K_M.gguf"
-   :model/kv-measured-at "2026-09-10"
-   :model/family "Qwen-AgentWorld"
-   :model/format :gguf
-   :hf/repo "unsloth/Qwen-AgentWorld-35B-A3B-GGUF"
-   :model/params-b 35 :model/active-params-b 3
-   :model/layers 40
-   :model/experts 256
-   :model/active-experts 9            ; 8 routed + 1 shared
-   :model/moe-shared-expert? true
-   :model/context 262144
-   :model/gguf "Qwen-AgentWorld-35B-A3B-UD-Q4_K_M.gguf"
-   ;; :infer/head :model-dir is a single global path (currently GLM's) — this
-   ;; model lives elsewhere on the head, so it needs its own :model/dir or
-   ;; cmd-serve-standalone/cmd-serve-ring build a path into GLM's directory
-   ;; instead (verified failure, 2026-07-15: gftdcojp/club-shinshi's chat
-   ;; gateway went down because of exactly this).
-   :model/dir "/home/gad/models/Qwen-AgentWorld-35B-A3B-GGUF"
-   ;; HF file-listing size (UD-Q4_K_M, 2026-07-04) — not yet probed on-disk,
-   ;; unlike the byte-exact entries below.
-   :model/weight-bytes 22100000000}
-
-  "qwen3.6-35b-a3b"
-  {:model/id "qwen3.6-35b-a3b"
-   :model/kv {:layers 40 :kv-heads 2 :key-length 256 :value-length 256
-              :elements-per-token 40960}
-   :model/context-train 262144
-   :model/kv-measured-from "gad:/home/gad/models/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-Q4_K_M.gguf"
-   :model/kv-measured-at "2026-09-10"
-   :model/family "Qwen3.6"
-   :model/format :gguf
-   :hf/repo "lmstudio-community/Qwen3.6-35B-A3B-GGUF"
-   :model/params-b 35 :model/active-params-b 3
-   :model/layers 40
-   :model/experts 256
-   :model/active-experts 9            ; 8 routed + 1 shared
-   :model/moe-shared-expert? true
-   :model/context 262144              ; extensible to 1,010,000 via YaRN
-   :model/gguf "Qwen3.6-35B-A3B-Q4_K_M.gguf"
-   ;; See qwen-agentworld-35b-a3b's :model/dir comment above — same reason.
-   :model/dir "/home/gad/models/Qwen3.6-35B-A3B-GGUF"
-   ;; byte-exact (2026-07-08: matches both the HF LFS listing and the file
-   ;; already resident at /home/gad/models/Qwen3.6-35B-A3B-GGUF/ on the head,
-   ;; downloaded 2026-07-05 for the standalone-GPU benchmark in catalog.cljc).
-   :model/weight-bytes 21166757728
-   ;; llama.cpp-native CLIP-in-GGUF vision projector, same HF repo as the text
-   ;; tower above (co-located, same quantizer/llama.cpp build — LM Studio team,
-   ;; llama.cpp release b8814). Confirmed llama.cpp/llama-server-compatible via
-   ;; unsloth's own `--mmproj unsloth/Qwen3.6-35B-A3B-GGUF/mmproj-F16.gguf`
-   ;; llama-server example for the SAME upstream Qwen3.6-35B-A3B checkpoint
-   ;; (unsloth.ai/docs/models/qwen3.6); this repo's mmproj is BF16, not yet
-   ;; downloaded to any fleet node. Pass via `llama-server --mmproj <path>`
-   ;; alongside :model/gguf — cmd-serve-standalone/cmd-serve-ring don't wire
-   ;; this through yet (2026-07-08: registry-only, no engine change in this
-   ;; commit — see ADR/deployment notes for the serve-time flag).
-   :model/mmproj "mmproj-Qwen3.6-35B-A3B-BF16.gguf"
-   :model/mmproj-bytes 902822016}
-
-  "qwen3.8-27b"
+      "qwen3.8-27b"
   {:model/id "qwen3.8-27b"
    :model/family "Qwen3.8"
    :model/format :gguf
@@ -798,25 +735,4 @@
   ;; path (this repo has not yet been pulled onto any fleet node — see
   ;; `bb murakumo model setup bge-m3-embed-gguf`), following the same
   ;; per-model-id directory convention as qwen-agentworld-35b-a3b above.
-  "bge-m3-embed-gguf"
-  {:model/id "bge-m3-embed-gguf"
-   ;; ⚠ AN ENCODER, NOT A DECODER. bge-m3 is BERT: it is not
-   ;; autoregressive and keeps no KV cache across tokens, so the geometry
-   ;; below is recorded for completeness and MUST NOT be fed to the
-   ;; context-fitting arithmetic -- doing so would reserve gigabytes for a
-   ;; cache that is never allocated.
-   :model/kv {:encoder? true :layers 24 :kv-heads 16
-              :key-length 64 :value-length 64}
-   :model/context-train 8192
-   :model/kv-measured-from "gad:/home/gad/models/bge-m3-embed-gguf/bge-m3-Q8_0.gguf"
-   :model/kv-measured-at "2026-09-10"
-   :model/family "BGE-M3"
-   :model/format :gguf
-   :model/engine :llamacpp-embed
-   :hf/repo "gpustack/bge-m3-GGUF"
-   :model/gguf "bge-m3-Q8_0.gguf"
-   :model/dir "/home/gad/models/bge-m3-embed-gguf"
-   :model/context 8192
-   :model/embedding-dim 1024
-   :model/pooling "mean"
-   :model/weight-bytes 635000000}}}   ; HF file-listing size (Q8_0, verified via HF API 2026-07-19)
+  }}   ; HF file-listing size (Q8_0, verified via HF API 2026-07-19)
