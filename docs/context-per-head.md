@@ -131,3 +131,64 @@ the caller.
 
 No SSH as junkawasaki, root, or ubuntu — only its HTTP API on :8090 answers.
 It serves Q4_K_M at 8,192 per slot and cannot be realigned from here.
+
+
+---
+
+# Applied 2026-09-10 — and two things the arithmetic missed
+
+All three heads now run **GSQ-RCO IQ3_XXS**:
+
+| head | weight | ctx/slot | slots | measured |
+|------|--------|----------|-------|----------|
+| judah | IQ3_XXS | 65,536 | 1 | 7.07 tok/s |
+| dan   | IQ3_XXS | 65,536 | 1 | 7.43 tok/s |
+| b70   | IQ3_XXS-**mtp** | 32,768 | 2 | serving, 0 restarts |
+
+## The Macs needed a sysctl, not a smaller context
+
+IQ3_XXS loaded on judah and then every request died with **"Compute error."** —
+at 65,536 and equally at 32,768, so it was never the context. Metal caps
+GPU-wired memory at roughly two thirds of RAM, ~10.6 GB on a 16 GB machine,
+and the weights alone are 10.09 GB. The model loads and then cannot compute,
+which reads like a broken quantization rather than a ceiling.
+
+    sudo sysctl -w iogpu.wired_limit_mb=13000
+
+made it work immediately. Persisted as
+`/Library/LaunchDaemons/com.murakumo.wired-limit.plist` on both Macs, because
+the setting resets on reboot and the failure it causes does not look like a
+memory problem.
+
+## b70 needed the -mtp weight, and crash-looped 91 times before I saw it
+
+b70's unit runs `--spec-type draft-mtp`. The repo publishes **two** files per
+quant and I fetched the plain one, which carries no MTP draft head:
+
+    E srv load_model: failed to create MTP context
+    murakumo-b70-llama.service: Scheduled restart job, restart counter is at 91
+
+`Restart=always` turned a config error into a silent crash loop. Fixed by
+fetching `Qwen3.8-27B-GSQ-RCO-IQ3_XXS-mtp.gguf` (10.44 GB, sha verified).
+
+## What the switch did for b70
+
+It ran **Q4_K_M: 16.81 GB of weights on a 15.2 GB box** — 1.6 GB over RAM
+before any cache — out of the 64 GB "host-memory safety swap" its unit
+provisions. On IQ3_XXS: available went 4.77 GB -> 12.3 GB and swap to
+essentially zero.
+
+b70 keeps 2 slots at 32,768 rather than 1 at 65,536: its own unit measured
+0 of 3795 requests above 16,384 and a largest observed prompt+generation of
+14,487, so concurrency is worth more to it than a window nothing asks for.
+That is why hermes runs on judah+dan, which do hold 65,536.
+
+## Still open
+
+- **The gateway reports b70 at ctx 16,384** — static, not probed. It was wrong
+  when the head served 32,768 and is wrong now.
+- **xavier is untouched.** No SSH as junkawasaki, root or ubuntu; only its HTTP
+  API answers. It still serves Q4_K_M at 8,192.
+- `--verify` printed `usable for bots false` from a timed-out probe while still
+  exiting 0 with "no findings". A probe that could not measure should be a
+  finding, not a pass.
