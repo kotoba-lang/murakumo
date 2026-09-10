@@ -1,0 +1,67 @@
+(ns murakumo.fleet.one-model-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [murakumo.fleet.one-model :as one]))
+
+(def issachar-2026-09-10
+  "Real lines from issachar, the day the rule was written. Four planes on one
+  16 GiB machine."
+  ["/Users/issachar/.murakumo/bin9334/llama-server --model /Users/issachar/.murakumo/models/murakumo-edge/Ornith-1.5-9B-Q4_K_M.gguf --alias murakumo-edge"
+   "/Users/issachar/.murakumo/bin/rpc-server -H 0.0.0.0 -p 50052"
+   "/Users/issachar/.local/share/murakumo-venv/bin/python3 /Users/issachar/comfyui/main.py --listen 0.0.0.0 --port 8188"
+   "/opt/homebrew/bin/ollama serve"])
+
+(deftest the-fleet-as-it-ran-breaks-the-rule-and-the-report-names-what-must-go
+  (let [v (one/verdict issachar-2026-09-10)]
+    (is (= :many (:verdict v)))
+    (is (= 4 (count (:hosts v))))
+    (testing "the node's own text model is what a node keeps by default"
+      (is (= #{:ring-member :media :ad-hoc} (set (map :plane (:extra v)))))
+      (is (not (contains? (set (map :plane (:extra v))) :text))))))
+
+(deftest one-plane-is-the-answer-and-none-is-not-a-failure
+  (is (= :one (:verdict (one/verdict [(first issachar-2026-09-10)]))))
+  (testing "a node hosting nothing is available, not broken"
+    ;; Reporting it as a violation would push an operator to fill it before
+    ;; deciding what it is for.
+    (is (= :none (:verdict (one/verdict []))))
+    (is (= :none (:verdict (one/verdict ["/usr/sbin/sshd -i" "/opt/homebrew/bin/tailscaled"]))))))
+
+(deftest two-processes-of-one-plane-are-one-model
+  ;; A server and its worker are one host, not two. The rule counts models.
+  (is (= :one (:verdict (one/verdict ["llama-server --model a.gguf"
+                                      "llama-server --model a.gguf --worker"])))))
+
+(deftest a-shard-of-somebody-elses-model-still-occupies-this-node
+  ;; rpc-server serves gad's ring. The model is not this node's, the RAM is.
+  (let [v (one/verdict ["/Users/x/.murakumo/bin/rpc-server -p 50052"])]
+    (is (= :one (:verdict v)))
+    (is (= :ring-member (:plane (first (:hosts v)))))))
+
+(deftest the-detector-spans-how-the-fleet-actually-spells-things
+  ;; Measured 2026-09-10: gad runs `ComfyUI/main.py`, the six minis run
+  ;; `comfyui/main.py`. The first version of this matcher was case-sensitive
+  ;; and reported the minis as hosting three planes when they hosted four --
+  ;; an under-report, which is the direction that lets an install proceed onto
+  ;; a full node.
+  (is (some? (one/classify-line "/Users/x/ComfyUI/main.py --listen")))
+  (is (some? (one/classify-line "/Users/x/comfyui/main.py --listen")))
+  (testing "and is still specific enough not to fire on prose"
+    ;; The specificity now lives in the signature (`comfyui/main.py`,
+    ;; `ollama serve`) rather than in the casing.
+    (is (nil? (one/classify-line "/Users/x/notes/comfyui-setup-guide.txt")))
+    (is (nil? (one/classify-line "/Users/x/docs/ollama-vs-llamacpp.md")))))
+
+(deftest what-to-keep-depends-on-what-the-node-is-for
+  (testing "installing the plane a node already hosts evicts nothing"
+    (let [{:keys [keep evict]} (one/keeps [(first issachar-2026-09-10)] :text)]
+      (is (= :text (:plane keep)))
+      (is (empty? evict))))
+  (testing "installing a different plane evicts the ones in the way"
+    (let [{:keys [keep evict]} (one/keeps issachar-2026-09-10 :media)]
+      (is (= :media (:plane keep)))
+      (is (= #{:text :ring-member :ad-hoc} (set (map :plane evict))))))
+  (testing "on an empty node the requested plane is named as not yet present"
+    (let [{:keys [keep evict]} (one/keeps [] :text)]
+      (is (= :text (:plane keep)))
+      (is (= "requested, not yet present" (:what keep)))
+      (is (empty? evict)))))
