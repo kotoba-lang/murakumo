@@ -34,6 +34,21 @@
 (def join-label "com.murakumo.edge-join")
 (def port 8092)
 
+(defn labels-for
+  "The launchd labels that serve `model` on a node.
+
+  murakumo-edge keeps the names it has had since these jobs existed; every
+  other model shares ONE pair, `com.murakumo.model-{server,join}`. That is not
+  an oversight to be tidied later -- it is the one-model rule expressed in
+  launchd. A node cannot hold two dedicated models because they would be the
+  same job, and installing the second is therefore replacing the first rather
+  than joining it. The edge pair is the same plane under an older name, so a
+  dedicated install boots the edge pair out by name (see `install-script`)."
+  [model]
+  (if (= model-id model)
+    {:server server-label :join join-label}
+    {:server "com.murakumo.model-server" :join "com.murakumo.model-join"}))
+
 (def daemon-dir "/Library/LaunchDaemons")
 
 (def legacy-agent-dir
@@ -80,20 +95,38 @@
        "<key>StandardErrorPath</key><string>" (xml stderr) "</string>\n"
        "</dict></plist>\n"))
 
-(defn server-plan
-  [{:keys [home llama-server memory-bytes]}]
+(defn model-server-plan
+  "The resident llama-server plan for one model on one node.
+
+  The port comes from the artifact, not from this namespace: murakumo-edge
+  serves 8092 and a dedicated model serves its own, so that a conversion can be
+  verified against the new plane before the old one is torn down, and so that
+  \"which plane answered\" is never a question about timing."
+  [model {:keys [home llama-server memory-bytes]}]
   (let [user (last (str/split home #"/"))
-        plan (inference-edge/replica-plan
-              {:home home :llama-server llama-server :port port
-               :memory-bytes memory-bytes})]
+        {:keys [server]} (labels-for model)
+        plan (inference-edge/plan-for-model
+              model {:home home :llama-server llama-server
+                     :memory-bytes memory-bytes})]
     (when-not (:admitted? plan)
-      (throw (ex-info "murakumo-edge does not fit this node" plan)))
-    (assoc plan :label server-label
+      (throw (ex-info (str model " does not fit this node") plan)))
+    (assoc plan :label server
            :home home
-           :orphan-pattern "murakumo/models/murakumo-edge"
-           :plist (plist server-label user (:argv plan)
-                         (str home "/.murakumo/edge/server.log")
-                         (str home "/.murakumo/edge/server.err.log")))))
+           :model model
+           :orphan-pattern (str "murakumo/models/" model)
+           :plist (plist server user (:argv plan)
+                         (str home "/.murakumo/edge/" model "-server.log")
+                         (str home "/.murakumo/edge/" model "-server.err.log")))))
+
+(defn server-plan
+  "The murakumo-edge replica plan. Log paths unchanged so an existing node's
+  files do not move underneath whoever is tailing them."
+  [{:keys [home llama-server memory-bytes] :as opts}]
+  (let [user (last (str/split home #"/"))
+        plan (model-server-plan model-id opts)]
+    (assoc plan :plist (plist server-label user (:argv plan)
+                              (str home "/.murakumo/edge/server.log")
+                              (str home "/.murakumo/edge/server.err.log")))))
 
 (defn install-script
   "Shell to install one rendered plan as a system LaunchDaemon on a node.
@@ -130,13 +163,20 @@
        "sudo -n /bin/launchctl print system/" label " | grep -F '" home "' >/dev/null "
        "|| { echo 'MURAKUMO_EDGE_INSTALL_UNVERIFIED " label "' >&2; exit 3; }"))
 
-(defn join-plan
-  [{:keys [home nbb node-name]}]
+(defn model-join-plan
+  "The queue worker for one model on one node.
+
+  Same worker, same env file, same trust tier as the edge join -- what changes
+  is which model it enrols for and which local port it executes against. The
+  two are one decision: a worker enrolled for murakumo-27b that points at 8092
+  claims 27B jobs and answers them with the 9B."
+  [model {:keys [home nbb node-name local-port]}]
   (let [user (last (str/split home #"/"))
+        {:keys [join]} (labels-for model)
         root (str home "/.murakumo/edge/murakumo")
         command (str "set -a; source " home "/.murakumo/edge/join.env; set +a; exec "
                      nbb " --classpath " root "/src " root
-                     "/scripts/infer-join.cljs --model " model-id
+                     "/scripts/infer-join.cljs --model " model
                      " --base https://api.murakumo.cloud --name " node-name
                      ;; These are fleet.edn hardware operated by AWAI Network,
                      ;; which is exactly what docs/adr-secure-community-cloud.md
@@ -149,10 +189,88 @@
                      ;; fallback, and murakumo-edge answered 503 with every node
                      ;; live, ready and idle.
                      " --trust-tier awai-secure"
-                     " --local-url http://127.0.0.1:" port "/v1 --slots 1 --poll-ms 1000")]
-    {:label join-label
+                     " --local-url http://127.0.0.1:" local-port "/v1 --slots 1 --poll-ms 1000")]
+    {:label join
      :home home
+     :model model
+     :argv ["/bin/zsh" "-lc" command]
      :orphan-pattern "murakumo/scripts/infer-join.cljs"
-     :plist (plist join-label user ["/bin/zsh" "-lc" command]
-                   (str home "/.murakumo/edge/join.log")
-                   (str home "/.murakumo/edge/join.err.log"))}))
+     :plist (plist join user ["/bin/zsh" "-lc" command]
+                   (str home "/.murakumo/edge/" model "-join.log")
+                   (str home "/.murakumo/edge/" model "-join.err.log"))}))
+
+(defn join-plan
+  "The murakumo-edge queue worker. Log paths unchanged, as with `server-plan`."
+  [{:keys [home] :as opts}]
+  (let [user (last (str/split home #"/"))
+        plan (model-join-plan model-id (assoc opts :local-port port))]
+    (assoc plan :plist
+           (plist join-label user (:argv plan)
+                  (str home "/.murakumo/edge/join.log")
+                  (str home "/.murakumo/edge/join.err.log")))))
+
+;; ── the wired-memory limit a dedicated node needs to survive a boot ────────
+;;
+;; `iogpu.wired_limit_mb` is how much unified memory Metal may wire. Measured
+;; on issachar 2026-09-10: the 27B wires 15,222 MiB while serving, and the
+;; node's own default is 13,312 -- below it. `murakumo infer provision` already
+;; raises the limit, with `sysctl -w`, which does not survive a boot. So the
+;; failure this daemon exists to prevent is the quiet one: the node reboots,
+;; the limit reverts, the model loads anyway on the CPU, llama-server reports
+;; healthy, the queue worker enrols, and every job is served at a fraction of
+;; the speed by a node that says nothing is wrong.
+
+(def wired-limit-label "com.murakumo.iogpu-wired-limit")
+
+(defn wired-limit-plist
+  [mb]
+  (when-not (and (integer? mb) (pos? mb))
+    (throw (ex-info "wired limit must be a positive whole number of MiB" {:mb mb})))
+  (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+       "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+       "<plist version=\"1.0\"><dict>\n"
+       "<key>Label</key><string>" wired-limit-label "</string>\n"
+       "<key>ProgramArguments</key><array>"
+       "<string>/usr/sbin/sysctl</string><string>-w</string>"
+       "<string>iogpu.wired_limit_mb=" mb "</string>"
+       "</array>\n<key>RunAtLoad</key><true/>\n"
+       "</dict></plist>\n"))
+
+(defn wired-limit-script
+  "Install the limit as a root LaunchDaemon and apply it now.
+
+  Verified by reading the sysctl back, not by the exit status of `launchctl`:
+  bootstrapping a job that runs `sysctl -w` succeeds whether or not the write
+  did, and a node that reports a successful install while sitting at 13,312 is
+  the exact failure the daemon is for."
+  [mb]
+  (str "sudo -n /usr/bin/tee " daemon-dir "/" wired-limit-label ".plist >/dev/null <<'MURAKUMO_WIRED_PLIST'\n"
+       (wired-limit-plist mb)
+       "MURAKUMO_WIRED_PLIST\n"
+       "sudo -n /usr/sbin/chown root:wheel " daemon-dir "/" wired-limit-label ".plist; "
+       "sudo -n /bin/chmod 644 " daemon-dir "/" wired-limit-label ".plist; "
+       "sudo -n /bin/launchctl bootout system/" wired-limit-label " >/dev/null 2>&1 || true; sleep 1; "
+       "sudo -n /bin/launchctl bootstrap system " daemon-dir "/" wired-limit-label ".plist; "
+       "sudo -n /bin/launchctl kickstart -k system/" wired-limit-label "; sleep 1; "
+       "got=$(sysctl -n iogpu.wired_limit_mb); "
+       "[ \"$got\" = \"" mb "\" ] || { echo \"MURAKUMO_WIRED_LIMIT_UNVERIFIED want=" mb " got=$got\" >&2; exit 3; }"))
+
+(defn evict-script
+  "Stop these launchd jobs and keep them stopped across a boot.
+
+  The plist is moved into `evicted-by-murakumo/` rather than deleted: launchd
+  only scans the top level of /Library/LaunchDaemons, so the job is durably
+  gone, and putting a node back is one `mv`. Deleting would make the eviction
+  the kind of destructive act that needs a decision behind it every time."
+  [labels]
+  (str "sudo -n /bin/mkdir -p " daemon-dir "/evicted-by-murakumo; "
+       (apply str
+              (for [l labels]
+                (str "sudo -n /bin/launchctl bootout system/" l " >/dev/null 2>&1 || true; "
+                     "[ -f " daemon-dir "/" l ".plist ] && "
+                     "sudo -n /bin/mv " daemon-dir "/" l ".plist "
+                     daemon-dir "/evicted-by-murakumo/" l ".plist || true; ")))
+       ;; Report what is still loaded, so the caller can tell an eviction that
+       ;; ran from one that was refused by a missing sudo grant.
+       "echo MURAKUMO_STILL_LOADED=$(sudo -n /bin/launchctl list 2>/dev/null | "
+       "grep -cE '" (str/join "|" labels) "')"))

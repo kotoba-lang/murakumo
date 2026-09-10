@@ -402,7 +402,26 @@
       ;; the RAM.
       "models" (println ((resolve 'murakumo.edge-install/model-hosts-report)
                          ((resolve 'murakumo.edge-install/model-hosts!) fleet selector)))
-      (println "usage: murakumo edge (install|baseline) [<node>|all] [--dry-run]"))))
+      ;; Push the worker's own source and restart it. It had no caller until
+      ;; now, which is how five nodes came to run two different versions of it.
+      "sync" (println (report ((resolve 'murakumo.edge-install/sync-source!)
+                               fleet selector {:dry-run? dry?})))
+      ;; Convert one node into a dedicated host for one model: gate, evict,
+      ;; raise the wired-memory limit as a resident daemon, install.
+      ;; --evict is the operator saying which plane the node is FOR; without it
+      ;; the gate refuses on any node that already hosts something else.
+      "dedicate"
+      (let [model (first (remove #(str/starts-with? (str %) "--") flags))]
+        (if-not model
+          (println "usage: murakumo edge dedicate <node> <model> [--evict] [--dry-run]")
+          (println (str/join "\n"
+                             (map (resolve 'murakumo.edge-install/dedicate-report)
+                                  ((resolve 'murakumo.edge-install/dedicate!)
+                                   fleet selector model
+                                   {:dry-run? dry?
+                                    :evict? (boolean (some #{"--evict"} flags))}))))))
+      (println (str "usage: murakumo edge (install|baseline|models|sync) [<node>|all] [--dry-run]\n"
+                    "       murakumo edge dedicate <node> <model> [--evict] [--dry-run]")))))
 
 (defn cmd-access
   "Whether each node has more than one way in.
