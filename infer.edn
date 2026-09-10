@@ -4,7 +4,44 @@
 ;; machines that serve inference but are not kotoba-mesh members. The HEAD is the
 ;; operator's own machine: it holds the checkpoint on disk, drives the ring, and
 ;; serves the OpenAI-compatible API.
-{:infer/rpc-port 50052
+{
+ ;; ── context is computed, not copied ────────────────────────────────────────
+ ;;
+ ;; ⚠ A MODEL'S DECLARED CONTEXT IS A PROPERTY OF THE WEIGHTS, NOT OF THE
+ ;; MACHINE. What a node can actually hold is decided by the KV cache, which
+ ;; grows linearly in context and does not appear in the download size.
+ ;; Measured 2026-09-10: Qwen3.8-27B-GSQ-RCO-IQ2_XS is 8.42 GB of weights and
+ ;; would want 36.5 GB of cache at its own declared 262144 -- the card's number
+ ;; does not fit this hardware at any quantization.
+ ;;
+ ;; So each model carries :model/kv, the GEOMETRY, which is fixed and
+ ;; measurable; the fitting context is COMPUTED against a node's budget rather
+ ;; than stored, because it changes with the node, the cache type, and what
+ ;; else that node is holding. `:model/context` is the value chosen for the
+ ;; fleet today; `:model/context-train` is what the model was trained for.
+ ;;
+ ;;   bytes/token = :elements-per-token * (:kv-cache/bytes-per-element <type>)
+ ;;
+ ;; Read the geometry out of a GGUF with:
+ ;;   nbb scripts/model-kv-geometry.cljs <node> <path.gguf>
+ ;;
+ ;; ⚠ Two shapes break the flat arithmetic and are flagged where they occur:
+ ;; per-layer KV heads (gemma4 alternates local/global attention, so the cache
+ ;; is a SUM over 48 differing layers) and sliding windows (windowed layers cap
+ ;; their cache regardless of context, making the flat figure an upper bound).
+ ;;
+ ;; ⚠ ONLY 6 OF THE 26 MODELS HERE HAVE MEASURED GEOMETRY -- the ones whose
+ ;; GGUF was reachable on the fleet on that date. The rest carry no :model/kv
+ ;; AT ALL, deliberately: absent means unmeasured, and a consumer must treat it
+ ;; as unknown rather than substituting a default. A plausible-looking default
+ ;; here would silently size every unmeasured model wrong.
+ :kv-cache/bytes-per-element
+ ;; q8_0 packs 32 values into 34 bytes (32 quants + an f16 scale), so 1.0625
+ ;; and not 1. The fleet's llama-server runs q8_0 for both K and V.
+ {:f32 4.0 :f16 2.0 :q8_0 1.0625 :q4_0 0.5625}
+
+ :kv-cache/fleet-default :q8_0
+:infer/rpc-port 50052
  :infer/api-port 8090
  ;; Required by both chat and embedding llama-server processes. Provision one
  ;; random key per line with mode 0600 on the AWAI-controlled head. The
@@ -112,6 +149,11 @@
  :models
  {"murakumo-edge"
   {:model/id "murakumo-edge"
+   :model/kv {:layers 33 :kv-heads 4 :key-length 256 :value-length 256
+              :elements-per-token 67584}
+   :model/context-train 262144
+   :model/kv-measured-from "dan:~/.murakumo/models/murakumo-edge/Ornith-1.5-9B-Q4_K_M.gguf"
+   :model/kv-measured-at "2026-09-10"
    :model/family "Ornith-1.5"
    :model/format :gguf
    :model/engine :edge-llamacpp
@@ -156,60 +198,7 @@
   ;; reliably right now (139GB, ~all of :total-usable-bytes) — these three are
   ;; the new default `npm run task -- infer plan/provision/up` base text targets,
   ;; small enough to fit a handful of edge nodes or the single GPU head alone.
-  "qwen-agentworld-35b-a3b"
-  {:model/id "qwen-agentworld-35b-a3b"
-   :model/family "Qwen-AgentWorld"
-   :model/format :gguf
-   :hf/repo "unsloth/Qwen-AgentWorld-35B-A3B-GGUF"
-   :model/params-b 35 :model/active-params-b 3
-   :model/layers 40
-   :model/experts 256
-   :model/active-experts 9            ; 8 routed + 1 shared
-   :model/moe-shared-expert? true
-   :model/context 262144
-   :model/gguf "Qwen-AgentWorld-35B-A3B-UD-Q4_K_M.gguf"
-   ;; :infer/head :model-dir is a single global path (currently GLM's) — this
-   ;; model lives elsewhere on the head, so it needs its own :model/dir or
-   ;; cmd-serve-standalone/cmd-serve-ring build a path into GLM's directory
-   ;; instead (verified failure, 2026-07-15: gftdcojp/club-shinshi's chat
-   ;; gateway went down because of exactly this).
-   :model/dir "/home/gad/models/Qwen-AgentWorld-35B-A3B-GGUF"
-   ;; HF file-listing size (UD-Q4_K_M, 2026-07-04) — not yet probed on-disk,
-   ;; unlike the byte-exact entries below.
-   :model/weight-bytes 22100000000}
-
-  "qwen3.6-35b-a3b"
-  {:model/id "qwen3.6-35b-a3b"
-   :model/family "Qwen3.6"
-   :model/format :gguf
-   :hf/repo "lmstudio-community/Qwen3.6-35B-A3B-GGUF"
-   :model/params-b 35 :model/active-params-b 3
-   :model/layers 40
-   :model/experts 256
-   :model/active-experts 9            ; 8 routed + 1 shared
-   :model/moe-shared-expert? true
-   :model/context 262144              ; extensible to 1,010,000 via YaRN
-   :model/gguf "Qwen3.6-35B-A3B-Q4_K_M.gguf"
-   ;; See qwen-agentworld-35b-a3b's :model/dir comment above — same reason.
-   :model/dir "/home/gad/models/Qwen3.6-35B-A3B-GGUF"
-   ;; byte-exact (2026-07-08: matches both the HF LFS listing and the file
-   ;; already resident at /home/gad/models/Qwen3.6-35B-A3B-GGUF/ on the head,
-   ;; downloaded 2026-07-05 for the standalone-GPU benchmark in catalog.cljc).
-   :model/weight-bytes 21166757728
-   ;; llama.cpp-native CLIP-in-GGUF vision projector, same HF repo as the text
-   ;; tower above (co-located, same quantizer/llama.cpp build — LM Studio team,
-   ;; llama.cpp release b8814). Confirmed llama.cpp/llama-server-compatible via
-   ;; unsloth's own `--mmproj unsloth/Qwen3.6-35B-A3B-GGUF/mmproj-F16.gguf`
-   ;; llama-server example for the SAME upstream Qwen3.6-35B-A3B checkpoint
-   ;; (unsloth.ai/docs/models/qwen3.6); this repo's mmproj is BF16, not yet
-   ;; downloaded to any fleet node. Pass via `llama-server --mmproj <path>`
-   ;; alongside :model/gguf — cmd-serve-standalone/cmd-serve-ring don't wire
-   ;; this through yet (2026-07-08: registry-only, no engine change in this
-   ;; commit — see ADR/deployment notes for the serve-time flag).
-   :model/mmproj "mmproj-Qwen3.6-35B-A3B-BF16.gguf"
-   :model/mmproj-bytes 902822016}
-
-  "qwen3.8-27b"
+      "qwen3.8-27b"
   {:model/id "qwen3.8-27b"
    :model/family "Qwen3.8"
    :model/format :gguf
@@ -228,6 +217,110 @@
    :model/weight-bytes 16810714336
    :model/mmproj "mmproj-Qwen3.8-27B-BF16.gguf"
    :model/mmproj-bytes 931145856}
+
+  ;; The 16 GB-node variant of Qwen3.8-27B.  The fleet's own Q4_K_M build of
+  ;; this model is 16.8 GB of weights and cannot be held by a 16 GB mac mini
+  ;; at all; this one is 8.42 GB and leaves real headroom for the KV cache.
+  ;;
+  ;; ⚠ THE QUANT NAME IS A SIZE BUDGET, NOT A FORMAT.  GSQ-RCO assigns a
+  ;; SEPARATE quantization type to every tensor by gradient search under a
+  ;; total-size budget, so "IQ2_XS" here names the budget the search was given
+  ;; and the file contains a mixture of types.  Do not read it as "every
+  ;; tensor is IQ2_XS", and do not infer from it which dequant kernels a
+  ;; reader needs -- read the tensor types out of the GGUF.
+  ;;
+  ;; The upstream card states the output is standard GGUF that runs unmodified
+  ;; in llama.cpp / Ollama / LM Studio.  Measured: TRUE for llama.cpp, and the
+  ;; file's 12 tensor types and `qwen35` architecture are all understood by
+  ;; the fleet's runtime -- but `ollama create` still fails on it, on disk
+  ;; grounds (see :model/served-by below).  "Runs unmodified" is a statement
+  ;; about the format, not about every tool's import path.
+  ;;
+  ;; Read out of the file itself rather than from the name (851 tensors):
+  ;;   F32 353, BF16 96, IQ2_XXS 70, IQ2_S 60, IQ2_XS 53, Q2_K 53, IQ3_S 47,
+  ;;   IQ3_XXS 37, IQ1_S 36, IQ1_M 31, IQ4_XS 11, Q4_K 4
+  ;; Only 53 of 851 tensors are IQ2_XS.  :model/weight-bytes is the HF blob
+  ;; size, which is what the console's loadability check measures against.
+  "qwen3.8-27b-gsq-iq2-xs"
+  {:model/id "qwen3.8-27b-gsq-iq2-xs"
+   :model/kv {:layers 64 :kv-heads 4 :key-length 256 :value-length 256
+              :elements-per-token 131072}
+   :model/context-train 262144
+   :model/kv-measured-from "judah:~/models/qwen38-27b-gsq/Qwen3.8-27B-GSQ-RCO-IQ2_XS.gguf"
+   :model/kv-measured-at "2026-09-10"
+   :model/family "Qwen3.8"
+   :model/format :gguf
+   :model/kind :text
+   :model/variant :gsq-rco-iq2-xs
+   :hf/source-repo "Qwen/Qwen3.8-27B"
+   :hf/repo "ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF"
+   :hf/commit "d562806dbafae37109975e970aae91b43e73b440"
+   :model/params-b 27 :model/active-params-b 27
+   :model/layers 64
+   :model/gguf "Qwen3.8-27B-GSQ-RCO-IQ2_XS.gguf"
+   :model/weight-bytes 8422841472
+   ;; sha256 of the GGUF as published by HF, verified on the node after
+   ;; download.  The byte count alone does not catch a truncated-but-padded
+   ;; file; this does.
+   :model/sha256 "f0ae5006da0ce6225935339e4e989369f94de95d2263cf969519f8420c9ae02c"
+   ;; ⚠ MEASURED ON A 16 GB NODE (judah), 2026-09-10 -- not projected.
+   ;;   loads in 21 s, wired 11.3 GB of 17.2, swap 1.5 GB, 30% free
+   ;;   7.69 / 7.75 / 7.78 tok/s predict over three consecutive runs
+   ;;   19.9 tok/s prompt, and neither wired nor swap moved across the runs
+   ;; The fleet's Q4_K_M build of the same model is 16.8 GB of weights and
+   ;; does not fit this hardware at all.
+   :model/verified-node "judah"
+   :model/verified-at "2026-09-10"
+   ;; ⚠ SERVED BY llama-server DIRECTLY, NOT THROUGH OLLAMA, and for a reason
+   ;; worth writing down: `ollama create` needs THREE copies on disk at once
+   ;; -- the source, the blob it copies into its store, and a full rewrite
+   ;; that its llama-quantize validation step emits -- so ~25 GB for an 8.4 GB
+   ;; model. judah had 20 GB free and the validation died with
+   ;; `ios_base::clear: unspecified iostream_category error`, which names an
+   ;; iostream failure and not the disk that caused it.
+   ;;
+   ;; That failure says nothing about the model: llama-quantize read all 851
+   ;; tensors first, so this runtime understands the architecture and every
+   ;; one of the 12 tensor types. Serving the GGUF in place is also what this
+   ;; fleet already does for murakumo-edge and murakumo-27b.
+   :model/served-by :llama-server
+   :model/port 8094
+   ;; The vision projector is published in the same repo and is NOT included
+   ;; in the 8.42 GB above.  Loading it costs another 0.93 GB.
+   :model/mmproj "mmproj-Qwen3.8-27B-BF16.gguf"
+   :model/mmproj-bytes 931145856
+   ;; ⚠ NOT the base model's declared 262144.  Context is what turns a model
+   ;; that fits into one that does not, and here the arithmetic is not close.
+   ;; From this file's own header -- 64 blocks, 4 KV heads, key/value length
+   ;; 256 -- the cache costs 64*4*(256+256) = 131,072 elements per token,
+   ;; which at q8_0 (34 bytes per 32 elements) is ~136 KiB/token:
+   ;;
+   ;;     ctx      KV q8_0     total with 8.42 GB of weights + ~0.5 GB buffers
+   ;;     8192      1.14 GB     10.06 GB   <- declared
+   ;;     16384     2.28 GB     11.20 GB   feasible on a 16 GB node
+   ;;     32768     4.56 GB     13.48 GB   no margin left
+   ;;     262144   36.51 GB     45.43 GB   impossible on this hardware
+   ;;
+   ;; So the model fits a 16 GB node at 8192 and the declared context of the
+   ;; base model does not fit at any quantization.  Raising this is a
+   ;; measurement, not a preference -- and it was measured, on judah:
+   ;;
+   ;;   ctx 8192    wired 11.3 GB, free 30%, 7.69/7.75/7.78 tok/s
+   ;;   ctx 32768   wired 12.2 GB, free 0.1 GB, 7.54 tok/s, swap UNMOVED
+   ;;
+   ;; Both serve, and at the same speed. 32768 is what
+   ;; `scripts/model-context-fit.cljs 13.8` computes as the maximum, so the
+   ;; arithmetic and the machine agree. It is set here because
+   ;; one-model-per-node means nothing else should be competing.
+   ;;
+   ;; ⚠ THE MARGIN AT 32768 IS 0.1 GB OF FREE MEMORY. That is enough while the
+   ;; node holds only this, and it is not enough for a node also doing
+   ;; anything else -- simeon is the standing example of what a 16 GB box does
+   ;; once it starts paging (18 GB of swap, 180 s for zero bytes). Drop to
+   ;; 8192 for any node that is not dedicated.
+   :model/context 32768
+   :model/context-conservative 8192
+   :model/min-ram-gib 16}
 
   "qwen3.8-27b-fastmtp-aggressive"
   {:model/id "qwen3.8-27b-fastmtp-aggressive"
@@ -269,6 +362,19 @@
 
   "gemma-4-12b-it"
   {:model/id "gemma-4-12b-it"
+   ;; ⚠ KV HEADS ARE PER-LAYER HERE, not one number: gemma4 alternates
+   ;; local and global attention, so the header carries 48 values and the
+   ;; cache is their SUM (328), not layers x heads. An average would be
+   ;; wrong for any model whose layers genuinely differ.
+   ;; ⚠ AND THE FIGURE IS AN UPPER BOUND: windowed layers cap their cache
+   ;; at :sliding-window tokens however long the context is. Which layers
+   ;; are windowed is not in the header, so the flat number stays.
+   :model/kv {:layers 48 :kv-heads-per-layer true :kv-heads-sum 328
+              :key-length 512 :value-length 512
+              :elements-per-token 335872 :sliding-window 1024}
+   :model/context-train 262144
+   :model/kv-measured-from "gad:/home/gad/models/gemma-4-12b-it-GGUF/gemma-4-12b-it-Q4_K_M.gguf"
+   :model/kv-measured-at "2026-09-10"
    :model/family "Gemma 4"
    :model/format :gguf
    :hf/repo "unsloth/gemma-4-12b-it-GGUF"
@@ -629,15 +735,4 @@
   ;; path (this repo has not yet been pulled onto any fleet node — see
   ;; `bb murakumo model setup bge-m3-embed-gguf`), following the same
   ;; per-model-id directory convention as qwen-agentworld-35b-a3b above.
-  "bge-m3-embed-gguf"
-  {:model/id "bge-m3-embed-gguf"
-   :model/family "BGE-M3"
-   :model/format :gguf
-   :model/engine :llamacpp-embed
-   :hf/repo "gpustack/bge-m3-GGUF"
-   :model/gguf "bge-m3-Q8_0.gguf"
-   :model/dir "/home/gad/models/bge-m3-embed-gguf"
-   :model/context 8192
-   :model/embedding-dim 1024
-   :model/pooling "mean"
-   :model/weight-bytes 635000000}}}   ; HF file-listing size (Q8_0, verified via HF API 2026-07-19)
+  }}   ; HF file-listing size (Q8_0, verified via HF API 2026-07-19)

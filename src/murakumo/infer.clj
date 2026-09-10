@@ -1057,7 +1057,20 @@
    which never passes that flag."
   [[model-id]]
   (let [cfg (load-config)
-        model (model-or-die cfg (or model-id "bge-m3-embed-gguf"))
+        ;; ⚠ NO DEFAULT MODEL HERE ANY MORE. This defaulted to
+        ;; "bge-m3-embed-gguf" until 2026-09-10, when that model was removed
+        ;; from infer.edn on owner instruction and no other :llamacpp-embed
+        ;; model was left to point at. A default naming a removed model is
+        ;; worse than none: `model-or-die` would System/exit 1 with "unknown
+        ;; model", which reads as a typo by the caller rather than as a fleet
+        ;; that declares no embedding model at all. Say the real thing.
+        model (if model-id
+                (model-or-die cfg model-id)
+                (do (println (str "infer serve-embed needs a model id: infer.edn "
+                                  "declares no embedding model to default to "
+                                  "(bge-m3-embed-gguf was removed 2026-09-10). "
+                                  "Declare one, or name a model explicitly."))
+                    (System/exit 2)))
         head-cfg (:infer/head cfg)
         remote? (:remote? head-cfg)
         bin-dir (if remote?
