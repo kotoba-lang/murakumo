@@ -1,5 +1,6 @@
 (ns murakumo.infer.poll-worker
-  (:require [kotoba.lang.text :as str]
+  (:require [murakumo.infer.image-job :as img]
+            [kotoba.lang.text :as str]
             [murakumo.infer.backoff :as backoff]
             ["node:crypto" :as crypto]
             ["node:os" :as os]))
@@ -219,9 +220,67 @@
         {:did did
          :output (if (:ok outcome)
                    (cond-> {:text (:text outcome)}
-                     (:response outcome) (assoc :response (:response outcome)))
+                     (:response outcome) (assoc :response (:response outcome))
+                     (:image outcome) (assoc :image (:image outcome)))
                    {:error (:error outcome)})
          :ms ms}))
+
+(defn- base64-of
+  "ArrayBuffer -> base64 string. Node's Buffer, because the worker runs on nbb
+  and `btoa` mangles bytes above 0xff."
+  [array-buffer]
+  (.toString (js/Buffer.from array-buffer) "base64"))
+
+(defn run-render-with-fetch!
+  "Execute one image job against this node's own ComfyUI.
+
+  Same contract as `run-completion-with-fetch!` -- returns `{:ok bool ...}` --
+  so `claim-and-run!` dispatches on the job's kind and nothing else changes.
+
+  Three failures this distinguishes, because each needs a different repair and
+  a single `render failed` sends an operator to the wrong one:
+
+    submit rejected    the graph or the checkpoint name is wrong
+    finished, no image the render ran and produced nothing
+    still running      keep waiting, up to the deadline"
+  [fetch-fn base-url input deadline-ms sleep-fn now-fn]
+  (let [wf (img/workflow input)]
+    (-> (fetch-fn (str base-url "/prompt")
+                  #js {:method "POST"
+                       :headers #js {"content-type" "application/json"}
+                       :body (js/JSON.stringify (clj->js {:prompt wf :client_id "hokusai"}))})
+        (.then (fn [r] (if (.-ok r)
+                         (.json r)
+                         (throw (ex-info "comfyui rejected the graph" {:status (.-status r)})))))
+        (.then (fn [j]
+                 (let [pid (.-prompt_id (js/Object.assign #js {} j))]
+                   (when-not (string? pid) (throw (ex-info "comfyui returned no prompt_id" {})))
+                   (letfn [(poll []
+                             (if (> (now-fn) deadline-ms)
+                               (js/Promise.resolve {:ok false :error "render timed out"})
+                               (-> (fetch-fn (str base-url "/history/" pid) #js {})
+                                   (.then (fn [r] (.json r)))
+                                   (.then (fn [h]
+                                            (let [hist (js->clj h :keywordize-keys true)]
+                                              (if-not (seq hist)
+                                                (.then (sleep-fn 3000) poll)
+                                                (if-let [f (img/image-from-history hist pid)]
+                                                  (-> (fetch-fn (str base-url (img/view-path f)) #js {})
+                                                      (.then (fn [r] (.arrayBuffer r)))
+                                                      (.then (fn [b]
+                                                               {:ok true
+                                                                :image {:filename (:filename f)
+                                                                        :b64 (base64-of b)}})))
+                                                  (js/Promise.resolve
+                                                   {:ok false
+                                                    :error "render finished with no image"})))))))))]
+                     (poll)))))
+        (.catch (fn [e] (js/Promise.resolve {:ok false :error (str e)}))))))
+
+(defn run-render! [base-url input deadline-ms]
+  (run-render-with-fetch! js/fetch base-url input deadline-ms
+                          (fn [ms] (js/Promise. (fn [res] (js/setTimeout res ms))))
+                          #(js/Date.now)))
 
 (defn- claim-and-run! [{:keys [base auth did local-url local-token model busy?]
                         :as config} job]
@@ -239,10 +298,19 @@
                               (.catch (fn [error]
                                         (println "[join] busy heartbeat error:" (str error))))
                               (.then (fn [_]
-                                       (run-completion! local-url local-token model
-                                                        (get-in job [:input :prompt])
-                                                        (get-in job [:input :max-tokens])
-                                                        (get-in job [:input :request]))))
+                                       ;; The queue already carried `:kind`;
+                                       ;; nothing read it. An image job runs
+                                       ;; against this node's own ComfyUI and
+                                       ;; returns the same {:ok ...} shape, so
+                                       ;; the reporting path below is untouched.
+                                       (if (= img/job-kind (:kind job))
+                                         (run-render! (str "http://127.0.0.1:" img/comfy-port)
+                                                      (:request (:input job))
+                                                      (+ (js/Date.now) 240000))
+                                         (run-completion! local-url local-token model
+                                                          (get-in job [:input :prompt])
+                                                          (get-in job [:input :max-tokens])
+                                                          (get-in job [:input :request])))))
                               (.then
                                (fn [outcome]
                                  (.then
