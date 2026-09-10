@@ -1,0 +1,128 @@
+#!/usr/bin/env nbb
+;; infer-cluster — one OpenAI-shaped endpoint in front of N murakumo heads.
+;;
+;;   nbb scripts/infer-cluster.cljs [--port 8790] [--heads ip:port,ip:port]
+;;
+;; ## Why this exists
+;;
+;; A 16 GB node runs ONE slot (`--parallel 1`): the KV cache for a second
+;; concurrent sequence is memory the machine does not have. Measured
+;; 2026-09-10, hermes needs ~208,900 job-seconds/day (770 runs at 2048
+;; max_tokens, 7.55 tok/s) and one slot supplies 86,400 -- 2.4x over. More
+;; slots therefore means more NODES, and something has to spread requests
+;; across them.
+;;
+;; api.murakumo.cloud already does this for heads registered in its KV, but
+;; it is a Cloudflare Worker and these heads are tailnet-only, so it has no
+;; route to them at all. This is the same boundary the fleet console hit.
+;;
+;; ## Least-in-flight, not round-robin
+;;
+;; With one slot per head, a request that arrives while a head is decoding
+;; QUEUES BEHIND IT for the length of a whole generation -- up to 271 s at
+;; 2048 tokens. Round-robin hands work to a busy head while an idle one
+;; waits, purely because it is that head's turn. In-flight counts are kept
+;; here rather than read from the heads: /slots is a poll, and a poll is
+;; always at least one request out of date at exactly the moment it matters.
+;;
+;; ## A head that is down must not be chosen, and must be able to come back
+;;
+;; Failures mark a head unhealthy; a probe returns it to service. A cluster
+;; that never re-admits a head degrades to one node after the first blip.
+
+(ns infer-cluster
+  (:require ["http" :as http] ["url" :as url] [clojure.string :as str]))
+
+(def argv (vec (drop 2 (js->clj (.-argv js/process)))))
+(defn- opt [f d] (or (second (drop-while #(not= f %) argv)) d))
+
+;; ⚠ NOT 8790. murakumo.infer.gateway (the ComfyUI front) already binds that
+;; port on all interfaces, and two listeners on one port do not error --
+;; measured: this process took 127.0.0.1:8790 while the gateway held *:8790,
+;; both reported success, and which one answered a request was left to the
+;; resolver. A silent split like that is worse than a refused bind.
+(def port (js/parseInt (opt "--port" "8795")))
+(def heads
+  (vec (for [h (str/split (opt "--heads" "100.113.200.45:8094,100.98.142.59:8094") #",")
+             :when (not (str/blank? h))]
+         (str/trim h))))
+
+;; head -> {:inflight n :healthy? bool :failures n :served n}
+(def state (atom (into {} (for [h heads] [h {:inflight 0 :healthy? true :failures 0 :served 0}]))))
+
+(defn- pick
+  "The healthy head with the fewest requests in flight. Ties go to the one
+  that has served least, so a cold cluster spreads instead of stacking."
+  []
+  (let [s @state
+        live (filter (fn [[_ v]] (:healthy? v)) s)]
+    (when (seq live)
+      (first (first (sort-by (fn [[_ v]] [(:inflight v) (:served v)]) live))))))
+
+(defn- mark! [h f] (swap! state update h f))
+
+(defn- probe!
+  "Return an unhealthy head to service when it answers /health again."
+  [h]
+  (let [[host p] (str/split h #":")
+        req (.request http #js {:host host :port (js/parseInt p) :path "/health"
+                                :method "GET" :timeout 5000}
+                      (fn [res]
+                        (when (= 200 (.-statusCode res))
+                          (mark! h #(assoc % :healthy? true :failures 0))
+                          (println (str "head " h " back in service")))
+                        (.resume res)))]
+    (.on req "error" (fn [_]))
+    (.on req "timeout" (fn [] (.destroy req)))
+    (.end req)))
+
+(js/setInterval
+  (fn [] (doseq [[h v] @state :when (not (:healthy? v))] (probe! h)))
+  30000)
+
+(defn- proxy! [req res]
+  (if-let [h (pick)]
+    (let [[host p] (str/split h #":")
+          _ (mark! h #(-> % (update :inflight inc) (update :served inc)))
+          done (atom false)
+          finish (fn [] (when-not @done
+                          (reset! done true)
+                          (mark! h #(update % :inflight dec))))
+          upstream (.request http
+                     #js {:host host :port (js/parseInt p) :path (.-url req)
+                          :method (.-method req) :headers (.-headers req)
+                          ;; Long, because one generation can legitimately take
+                          ;; minutes on these heads. A short timeout here would
+                          ;; kill work that was going to succeed.
+                          :timeout 900000}
+                     (fn [ures]
+                       (.setHeader res "x-murakumo-head" h)
+                       (.writeHead res (.-statusCode ures) (.-headers ures))
+                       ;; Piped, not buffered: hermes streams, and buffering a
+                       ;; stream turns a live response into a long silence.
+                       (.pipe ures res)
+                       (.on ures "end" finish)))]
+      (.on upstream "error"
+           (fn [e]
+             (finish)
+             (mark! h #(-> % (update :failures inc) (assoc :healthy? false)))
+             (println (str "head " h " failed: " (.-message e) " — out of service"))
+             (when-not (.-headersSent res)
+               (.writeHead res 502 #js {"content-type" "application/json"})
+               (.end res (js/JSON.stringify #js {:error "head unreachable" :head h})))))
+      (.on upstream "timeout" (fn [] (.destroy upstream)))
+      (.pipe req upstream))
+    (do (.writeHead res 503 #js {"content-type" "application/json"})
+        (.end res (js/JSON.stringify #js {:error "no healthy head in the cluster"})))))
+
+(defn- serve [req res]
+  (if (= "/cluster/status" (.-url req))
+    (do (.writeHead res 200 #js {"content-type" "application/json"})
+        (.end res (js/JSON.stringify (clj->js {:heads @state :port port}))))
+    (proxy! req res)))
+
+;; Loopback only: this fronts heads that answer with no authentication of
+;; their own, so it must not widen their reach.
+(.listen (http/createServer serve) port "127.0.0.1"
+         #(println (str "infer-cluster on http://127.0.0.1:" port
+                        "  heads: " (str/join ", " heads))))
