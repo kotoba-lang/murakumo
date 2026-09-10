@@ -15,6 +15,12 @@
     (is (re-find #"--ctx-size</string><string>65536" (:plist server)))
     (is (not (re-find #"--spec-type" (:plist server))))
     (is (re-find #"murakumo-edge" (:plist server)))
+    (testing "a crash loop is throttled to a minute, not launchd's five seconds"
+      ;; The worker exits when its startup enrolment fetch fails. At a
+      ;; five-second throttle that is ~720 restarts an hour, each opening a
+      ;; socket; simeon spent a 53,536-port range that way on 2026-09-10.
+      (is (re-find #"<key>ThrottleInterval</key><integer>60</integer>" (:plist server)))
+      (is (not (re-find #"<integer>5</integer>" (:plist server)))))
     (is (re-find #"source /Users/asher/.murakumo/edge/join.env" (:plist join)))
     (is (not (re-find #"MURAKUMO_SERVICE_TOKEN=" (:plist join))))))
 

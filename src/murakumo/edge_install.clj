@@ -172,6 +172,87 @@
       (throw (ex-info "no fleet node matched" {:selector selector})))
     (mapv #(baseline-node! tmpl % opts) targets)))
 
+(def worker-source-files
+  "Everything the resident join worker needs, and nothing else.
+
+  The node's `~/.murakumo/edge/murakumo` is not a checkout — it is a copied
+  subtree, and until 2026-09-10 nothing copied into it. Measured that day, the
+  five reachable macOS nodes carried TWO versions of the worker and neither was
+  current:
+
+    ba491d13  368 lines, no backoff   dan, judah, joseph
+    a45f78e7  401 lines, with backoff simeon, benjamin
+
+  The second pair is exactly the two nodes ADR-2609021500 says were provisioned
+  by hand; its own follow-up, to run provision across every macOS node, was
+  never done. So the fleet-wide backoff contract that ADR declared was live on
+  two nodes out of five, and every fix since has been stranded the same way.
+
+  `kotoba/lang/text.cljc` is vendored INTO `<root>/src` rather than added to a
+  classpath: the worker moved off `clojure.string` and the nodes have no
+  library path, so a worker copied without it does not start. Putting it under
+  the path the plist already names keeps the plist out of this change. It is a
+  single self-contained file with no requires of its own."
+  [{:src "scripts/infer-join.cljs" :dest "scripts/infer-join.cljs"}
+   {:src "src/murakumo/infer/poll_worker.cljs" :dest "src/murakumo/infer/poll_worker.cljs"}
+   {:src "src/murakumo/infer/backoff.cljc" :dest "src/murakumo/infer/backoff.cljc"}
+   {:src "../text/src/kotoba/lang/text.cljc" :dest "src/kotoba/lang/text.cljc"}])
+
+(defn- sha256-of [path]
+  (-> (java.security.MessageDigest/getInstance "SHA-256")
+      (.digest (java.nio.file.Files/readAllBytes (.toPath (java.io.File. path))))
+      ;; `bit-and 0xff` because a JVM byte is signed: without it a byte over
+      ;; 0x7f formats as `ffffffab` and no digest ever matches, so every sync
+      ;; would report a failure it did not have.
+      (->> (map #(format "%02x" (bit-and % 0xff))) (apply str))))
+
+(defn sync-source-node!
+  "Copy the worker's source onto one node and verify it arrived byte-identical.
+
+  Verification is a digest comparison, not a successful scp: scp reports its
+  own transfer, and a node that silently kept an older file would look the same
+  as one that took the new one — which is how five nodes came to run two
+  versions without anybody noticing."
+  [{:keys [name host] :as _node} {:keys [dry-run?]}]
+  (let [facts (node-facts host)]
+    (if-not (:ok? facts)
+      (assoc facts :node name)
+      (let [root (str (:home facts) "/.murakumo/edge/murakumo")
+            results
+            (vec (for [{:keys [src dest]} worker-source-files]
+                   (let [want (sha256-of src)]
+                     (if dry-run?
+                       {:file dest :dry-run true :sha want}
+                       (let [_ (ssh/sh host (str "mkdir -p " root "/" (str/join "/" (butlast (str/split dest #"/")))))
+                             cp (ssh/scp host src (str root "/" dest))
+                             got (str/trim (str (:out (ssh/sh host (str "shasum -a 256 " root "/" dest " | cut -d' ' -f1")))))]
+                         {:file dest :ok? (and (zero? (:exit cp 1)) (= want got))
+                          :sha want :got got})))))]
+        {:node name :ok? (or (boolean dry-run?) (every? :ok? results)) :results results
+         :root root}))))
+
+(defn sync-source!
+  "Sync every selected node, then restart the join worker so the new source runs.
+
+  Restart is part of the operation, not a follow-up: a node holding new source
+  and running the old process is the state this whole function exists to end,
+  and it is invisible from the registry."
+  [{:keys [nodes]} selector opts]
+  (let [targets (if (or (nil? selector) (= "all" selector))
+                  nodes
+                  (filter #(= selector (:name %)) nodes))]
+    (when (empty? targets)
+      (throw (ex-info "no fleet node matched" {:selector selector})))
+    (mapv (fn [n]
+            (let [r (sync-source-node! n opts)]
+              (if (and (:ok? r) (not (:dry-run? opts)))
+                (let [k (ssh/sh (:host n)
+                                (str "sudo -n /bin/launchctl kickstart -k system/"
+                                     edge/join-label))]
+                  (assoc r :restarted (zero? (:exit k 1))))
+                r)))
+          targets)))
+
 (defn report [results]
   (str/join
    "\n"
