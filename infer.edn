@@ -229,6 +229,90 @@
    :model/mmproj "mmproj-Qwen3.8-27B-BF16.gguf"
    :model/mmproj-bytes 931145856}
 
+  ;; The 16 GB-node variant of Qwen3.8-27B.  The fleet's own Q4_K_M build of
+  ;; this model is 16.8 GB of weights and cannot be held by a 16 GB mac mini
+  ;; at all; this one is 8.42 GB and leaves real headroom for the KV cache.
+  ;;
+  ;; ⚠ THE QUANT NAME IS A SIZE BUDGET, NOT A FORMAT.  GSQ-RCO assigns a
+  ;; SEPARATE quantization type to every tensor by gradient search under a
+  ;; total-size budget, so "IQ2_XS" here names the budget the search was given
+  ;; and the file contains a mixture of types.  Do not read it as "every
+  ;; tensor is IQ2_XS", and do not infer from it which dequant kernels a
+  ;; reader needs -- read the tensor types out of the GGUF.
+  ;;
+  ;; The upstream card states the output is standard GGUF that runs unmodified
+  ;; in llama.cpp / Ollama / LM Studio.  Measured: TRUE for llama.cpp, and the
+  ;; file's 12 tensor types and `qwen35` architecture are all understood by
+  ;; the fleet's runtime -- but `ollama create` still fails on it, on disk
+  ;; grounds (see :model/served-by below).  "Runs unmodified" is a statement
+  ;; about the format, not about every tool's import path.
+  ;;
+  ;; Read out of the file itself rather than from the name (851 tensors):
+  ;;   F32 353, BF16 96, IQ2_XXS 70, IQ2_S 60, IQ2_XS 53, Q2_K 53, IQ3_S 47,
+  ;;   IQ3_XXS 37, IQ1_S 36, IQ1_M 31, IQ4_XS 11, Q4_K 4
+  ;; Only 53 of 851 tensors are IQ2_XS.  :model/weight-bytes is the HF blob
+  ;; size, which is what the console's loadability check measures against.
+  "qwen3.8-27b-gsq-iq2-xs"
+  {:model/id "qwen3.8-27b-gsq-iq2-xs"
+   :model/family "Qwen3.8"
+   :model/format :gguf
+   :model/kind :text
+   :model/variant :gsq-rco-iq2-xs
+   :hf/source-repo "Qwen/Qwen3.8-27B"
+   :hf/repo "ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF"
+   :hf/commit "d562806dbafae37109975e970aae91b43e73b440"
+   :model/params-b 27 :model/active-params-b 27
+   :model/layers 64
+   :model/gguf "Qwen3.8-27B-GSQ-RCO-IQ2_XS.gguf"
+   :model/weight-bytes 8422841472
+   ;; sha256 of the GGUF as published by HF, verified on the node after
+   ;; download.  The byte count alone does not catch a truncated-but-padded
+   ;; file; this does.
+   :model/sha256 "f0ae5006da0ce6225935339e4e989369f94de95d2263cf969519f8420c9ae02c"
+   ;; ⚠ MEASURED ON A 16 GB NODE (judah), 2026-09-10 -- not projected.
+   ;;   loads in 21 s, wired 11.3 GB of 17.2, swap 1.5 GB, 30% free
+   ;;   7.69 / 7.75 / 7.78 tok/s predict over three consecutive runs
+   ;;   19.9 tok/s prompt, and neither wired nor swap moved across the runs
+   ;; The fleet's Q4_K_M build of the same model is 16.8 GB of weights and
+   ;; does not fit this hardware at all.
+   :model/verified-node "judah"
+   :model/verified-at "2026-09-10"
+   ;; ⚠ SERVED BY llama-server DIRECTLY, NOT THROUGH OLLAMA, and for a reason
+   ;; worth writing down: `ollama create` needs THREE copies on disk at once
+   ;; -- the source, the blob it copies into its store, and a full rewrite
+   ;; that its llama-quantize validation step emits -- so ~25 GB for an 8.4 GB
+   ;; model. judah had 20 GB free and the validation died with
+   ;; `ios_base::clear: unspecified iostream_category error`, which names an
+   ;; iostream failure and not the disk that caused it.
+   ;;
+   ;; That failure says nothing about the model: llama-quantize read all 851
+   ;; tensors first, so this runtime understands the architecture and every
+   ;; one of the 12 tensor types. Serving the GGUF in place is also what this
+   ;; fleet already does for murakumo-edge and murakumo-27b.
+   :model/served-by :llama-server
+   :model/port 8094
+   ;; The vision projector is published in the same repo and is NOT included
+   ;; in the 8.42 GB above.  Loading it costs another 0.93 GB.
+   :model/mmproj "mmproj-Qwen3.8-27B-BF16.gguf"
+   :model/mmproj-bytes 931145856
+   ;; ⚠ NOT the base model's declared 262144.  Context is what turns a model
+   ;; that fits into one that does not, and here the arithmetic is not close.
+   ;; From this file's own header -- 64 blocks, 4 KV heads, key/value length
+   ;; 256 -- the cache costs 64*4*(256+256) = 131,072 elements per token,
+   ;; which at q8_0 (34 bytes per 32 elements) is ~136 KiB/token:
+   ;;
+   ;;     ctx      KV q8_0     total with 8.42 GB of weights + ~0.5 GB buffers
+   ;;     8192      1.14 GB     10.06 GB   <- declared
+   ;;     16384     2.28 GB     11.20 GB   feasible on a 16 GB node
+   ;;     32768     4.56 GB     13.48 GB   no margin left
+   ;;     262144   36.51 GB     45.43 GB   impossible on this hardware
+   ;;
+   ;; So the model fits a 16 GB node at 8192 and the declared context of the
+   ;; base model does not fit at any quantization.  Raising this is a
+   ;; measurement, not a preference.
+   :model/context 8192
+   :model/min-ram-gib 16}
+
   "qwen3.8-27b-fastmtp-aggressive"
   {:model/id "qwen3.8-27b-fastmtp-aggressive"
    :model/family "Qwen3.8"
