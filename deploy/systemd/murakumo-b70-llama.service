@@ -9,13 +9,45 @@
 # RAM with ~4 GiB available and an iGPU carving out of it, so a config that
 # needed more memory would not have been admissible at all.
 #
+# ── 2026-09-10: --ctx-size 32768 -> 65536, i.e. 32768 per slot ─────────────
+#
+# ⚠ The paragraph above is about HOST ram, and reading it as the memory
+# budget is wrong. The model and KV live in this box's DISCRETE 32 GiB Intel
+# Arc Pro B70, which the paragraph never mentions. From dmesg:
+#
+#   xe 0000:03:00.0: [drm] VRAM[0]: Actual physical size 0x800000000 (32 GiB)
+#
+# Measured on this head 2026-09-10, per-process via /proc/<pid>/fdinfo
+# drm-resident-vram0:
+#
+#   --ctx-size 32768   20.4 GiB resident of 31.9      (16384 per slot)
+#   --ctx-size 65536   22.2 GiB resident of 31.9      (32768 per slot)
+#
+# So doubling total context cost 1.8 GiB -- about 57 KiB per token of KV --
+# and left 9.7 GiB free. The systemd "14.4G memory peak" figure is host RSS,
+# not VRAM; do not size this from it.
+#
+# The ceiling was found by hitting it, not by estimating. --ctx-size 262144
+# --parallel 1 was applied on this head and CRASHED ON LOAD
+# (code=dumped, status=6/ABRT): 262,144 tokens of KV is roughly 38 GiB
+# against a 32 GiB card already holding 15.7 GiB of weights. Reverted to the
+# line below. gad's two 262,144-token slots were the only ones in the pool
+# that ever reached that window, and gad became video-generation-only the
+# same day (root ADR adr-2609100500), so 262144 per slot now exists nowhere.
+#
+# ⚠ Raising this does NOT widen what callers can send. The pool's fit
+# decision reads a hand-maintained constant in cloud-murakumo-api
+# (src/local_murakumo/provider_catalog.cljc :members, capacity-measured-at
+# 2026-09-07) which still says this head is 16384. Until that is updated and
+# the Worker deployed, api.murakumo.cloud still rejects above ~15 KB.
+#
 # What the halved per-slot window has to survive, measured over 3795 completed
 # requests in the 24h before the change:
 #
 #   prompt tokens   p50 941   p75 2050   p90 2342   p95 2570   p99 12951
 #   largest prompt observed          13289
 #   largest generation observed       1198
-#   worst case prompt+generation     14487  <  16384 per slot
+#   worst case prompt+generation     14487  <  16384 per slot (now 32768)
 #   requests above 16384                 0  of 3795
 #
 # So the second slot costs no memory and truncates nothing that this head has
@@ -55,7 +87,7 @@ WorkingDirectory=/home/jun/murakumo/llama.cpp-sycl-src/build-sycl/bin
 Environment=LD_LIBRARY_PATH=/opt/intel/oneapi/tcm/1.5/lib:/opt/intel/oneapi/umf/1.1/lib:/opt/intel/oneapi/tbb/2023.1/lib/intel64/gcc4.8:/opt/intel/oneapi/mkl/2026.1/lib:/opt/intel/oneapi/dnnl/2026.0/lib:/opt/intel/oneapi/compiler/2026.1/opt/compiler/lib:/opt/intel/oneapi/compiler/2026.1/lib
 Environment=GGML_SYCL_FA_ONEDNN=0
 Environment=SYCL_UR_USE_LEVEL_ZERO_V2=0
-ExecStart=/home/jun/murakumo/llama.cpp-sycl-src/build-sycl/bin/llama-server --model /home/jun/models/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf --host 127.0.0.1 --port 8090 --gpu-layers 999 --ctx-size 32768 --parallel 2 --flash-attn on --batch-size 4096 --ubatch-size 2048 --spec-type draft-mtp --spec-draft-n-max 3 --reasoning off --alias qwen3.8-27b-throughput-b70
+ExecStart=/home/jun/murakumo/llama.cpp-sycl-src/build-sycl/bin/llama-server --model /home/jun/models/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf --host 127.0.0.1 --port 8090 --gpu-layers 999 --ctx-size 65536 --parallel 2 --flash-attn on --batch-size 4096 --ubatch-size 2048 --spec-type draft-mtp --spec-draft-n-max 3 --reasoning off --alias qwen3.8-27b-throughput-b70
 Restart=always
 RestartSec=2
 TimeoutStartSec=0
