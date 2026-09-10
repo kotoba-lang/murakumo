@@ -4,7 +4,44 @@
 ;; machines that serve inference but are not kotoba-mesh members. The HEAD is the
 ;; operator's own machine: it holds the checkpoint on disk, drives the ring, and
 ;; serves the OpenAI-compatible API.
-{:infer/rpc-port 50052
+{
+ ;; ── context is computed, not copied ────────────────────────────────────────
+ ;;
+ ;; ⚠ A MODEL'S DECLARED CONTEXT IS A PROPERTY OF THE WEIGHTS, NOT OF THE
+ ;; MACHINE. What a node can actually hold is decided by the KV cache, which
+ ;; grows linearly in context and does not appear in the download size.
+ ;; Measured 2026-09-10: Qwen3.8-27B-GSQ-RCO-IQ2_XS is 8.42 GB of weights and
+ ;; would want 36.5 GB of cache at its own declared 262144 -- the card's number
+ ;; does not fit this hardware at any quantization.
+ ;;
+ ;; So each model carries :model/kv, the GEOMETRY, which is fixed and
+ ;; measurable; the fitting context is COMPUTED against a node's budget rather
+ ;; than stored, because it changes with the node, the cache type, and what
+ ;; else that node is holding. `:model/context` is the value chosen for the
+ ;; fleet today; `:model/context-train` is what the model was trained for.
+ ;;
+ ;;   bytes/token = :elements-per-token * (:kv-cache/bytes-per-element <type>)
+ ;;
+ ;; Read the geometry out of a GGUF with:
+ ;;   nbb scripts/model-kv-geometry.cljs <node> <path.gguf>
+ ;;
+ ;; ⚠ Two shapes break the flat arithmetic and are flagged where they occur:
+ ;; per-layer KV heads (gemma4 alternates local/global attention, so the cache
+ ;; is a SUM over 48 differing layers) and sliding windows (windowed layers cap
+ ;; their cache regardless of context, making the flat figure an upper bound).
+ ;;
+ ;; ⚠ ONLY 6 OF THE 26 MODELS HERE HAVE MEASURED GEOMETRY -- the ones whose
+ ;; GGUF was reachable on the fleet on that date. The rest carry no :model/kv
+ ;; AT ALL, deliberately: absent means unmeasured, and a consumer must treat it
+ ;; as unknown rather than substituting a default. A plausible-looking default
+ ;; here would silently size every unmeasured model wrong.
+ :kv-cache/bytes-per-element
+ ;; q8_0 packs 32 values into 34 bytes (32 quants + an f16 scale), so 1.0625
+ ;; and not 1. The fleet's llama-server runs q8_0 for both K and V.
+ {:f32 4.0 :f16 2.0 :q8_0 1.0625 :q4_0 0.5625}
+
+ :kv-cache/fleet-default :q8_0
+:infer/rpc-port 50052
  :infer/api-port 8090
  ;; Required by both chat and embedding llama-server processes. Provision one
  ;; random key per line with mode 0600 on the AWAI-controlled head. The
@@ -112,6 +149,11 @@
  :models
  {"murakumo-edge"
   {:model/id "murakumo-edge"
+   :model/kv {:layers 33 :kv-heads 4 :key-length 256 :value-length 256
+              :elements-per-token 67584}
+   :model/context-train 262144
+   :model/kv-measured-from "dan:~/.murakumo/models/murakumo-edge/Ornith-1.5-9B-Q4_K_M.gguf"
+   :model/kv-measured-at "2026-09-10"
    :model/family "Ornith-1.5"
    :model/format :gguf
    :model/engine :edge-llamacpp
@@ -158,6 +200,11 @@
   ;; small enough to fit a handful of edge nodes or the single GPU head alone.
   "qwen-agentworld-35b-a3b"
   {:model/id "qwen-agentworld-35b-a3b"
+   :model/kv {:layers 40 :kv-heads 2 :key-length 256 :value-length 256
+              :elements-per-token 40960}
+   :model/context-train 262144
+   :model/kv-measured-from "gad:/home/gad/models/Qwen-AgentWorld-35B-A3B-GGUF/Qwen-AgentWorld-35B-A3B-UD-Q4_K_M.gguf"
+   :model/kv-measured-at "2026-09-10"
    :model/family "Qwen-AgentWorld"
    :model/format :gguf
    :hf/repo "unsloth/Qwen-AgentWorld-35B-A3B-GGUF"
@@ -180,6 +227,11 @@
 
   "qwen3.6-35b-a3b"
   {:model/id "qwen3.6-35b-a3b"
+   :model/kv {:layers 40 :kv-heads 2 :key-length 256 :value-length 256
+              :elements-per-token 40960}
+   :model/context-train 262144
+   :model/kv-measured-from "gad:/home/gad/models/Qwen3.6-35B-A3B-GGUF/Qwen3.6-35B-A3B-Q4_K_M.gguf"
+   :model/kv-measured-at "2026-09-10"
    :model/family "Qwen3.6"
    :model/format :gguf
    :hf/repo "lmstudio-community/Qwen3.6-35B-A3B-GGUF"
@@ -254,6 +306,11 @@
   ;; size, which is what the console's loadability check measures against.
   "qwen3.8-27b-gsq-iq2-xs"
   {:model/id "qwen3.8-27b-gsq-iq2-xs"
+   :model/kv {:layers 64 :kv-heads 4 :key-length 256 :value-length 256
+              :elements-per-token 131072}
+   :model/context-train 262144
+   :model/kv-measured-from "judah:~/models/qwen38-27b-gsq/Qwen3.8-27B-GSQ-RCO-IQ2_XS.gguf"
+   :model/kv-measured-at "2026-09-10"
    :model/family "Qwen3.8"
    :model/format :gguf
    :model/kind :text
@@ -309,8 +366,23 @@
    ;;
    ;; So the model fits a 16 GB node at 8192 and the declared context of the
    ;; base model does not fit at any quantization.  Raising this is a
-   ;; measurement, not a preference.
-   :model/context 8192
+   ;; measurement, not a preference -- and it was measured, on judah:
+   ;;
+   ;;   ctx 8192    wired 11.3 GB, free 30%, 7.69/7.75/7.78 tok/s
+   ;;   ctx 32768   wired 12.2 GB, free 0.1 GB, 7.54 tok/s, swap UNMOVED
+   ;;
+   ;; Both serve, and at the same speed. 32768 is what
+   ;; `scripts/model-context-fit.cljs 13.8` computes as the maximum, so the
+   ;; arithmetic and the machine agree. It is set here because
+   ;; one-model-per-node means nothing else should be competing.
+   ;;
+   ;; ⚠ THE MARGIN AT 32768 IS 0.1 GB OF FREE MEMORY. That is enough while the
+   ;; node holds only this, and it is not enough for a node also doing
+   ;; anything else -- simeon is the standing example of what a 16 GB box does
+   ;; once it starts paging (18 GB of swap, 180 s for zero bytes). Drop to
+   ;; 8192 for any node that is not dedicated.
+   :model/context 32768
+   :model/context-conservative 8192
    :model/min-ram-gib 16}
 
   "qwen3.8-27b-fastmtp-aggressive"
@@ -353,6 +425,19 @@
 
   "gemma-4-12b-it"
   {:model/id "gemma-4-12b-it"
+   ;; ⚠ KV HEADS ARE PER-LAYER HERE, not one number: gemma4 alternates
+   ;; local and global attention, so the header carries 48 values and the
+   ;; cache is their SUM (328), not layers x heads. An average would be
+   ;; wrong for any model whose layers genuinely differ.
+   ;; ⚠ AND THE FIGURE IS AN UPPER BOUND: windowed layers cap their cache
+   ;; at :sliding-window tokens however long the context is. Which layers
+   ;; are windowed is not in the header, so the flat number stays.
+   :model/kv {:layers 48 :kv-heads-per-layer true :kv-heads-sum 328
+              :key-length 512 :value-length 512
+              :elements-per-token 335872 :sliding-window 1024}
+   :model/context-train 262144
+   :model/kv-measured-from "gad:/home/gad/models/gemma-4-12b-it-GGUF/gemma-4-12b-it-Q4_K_M.gguf"
+   :model/kv-measured-at "2026-09-10"
    :model/family "Gemma 4"
    :model/format :gguf
    :hf/repo "unsloth/gemma-4-12b-it-GGUF"
@@ -715,6 +800,16 @@
   ;; per-model-id directory convention as qwen-agentworld-35b-a3b above.
   "bge-m3-embed-gguf"
   {:model/id "bge-m3-embed-gguf"
+   ;; ⚠ AN ENCODER, NOT A DECODER. bge-m3 is BERT: it is not
+   ;; autoregressive and keeps no KV cache across tokens, so the geometry
+   ;; below is recorded for completeness and MUST NOT be fed to the
+   ;; context-fitting arithmetic -- doing so would reserve gigabytes for a
+   ;; cache that is never allocated.
+   :model/kv {:encoder? true :layers 24 :kv-heads 16
+              :key-length 64 :value-length 64}
+   :model/context-train 8192
+   :model/kv-measured-from "gad:/home/gad/models/bge-m3-embed-gguf/bge-m3-Q8_0.gguf"
+   :model/kv-measured-at "2026-09-10"
    :model/family "BGE-M3"
    :model/format :gguf
    :model/engine :llamacpp-embed
