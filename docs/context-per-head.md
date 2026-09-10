@@ -70,3 +70,64 @@ cannot fit, so every request between 16,385 and 32,768 tokens is being steered
 away from a head that can serve it — toward gad, which reports 0 available.
 Measured on the same day as `degraded: ["fleet-incomplete",
 "primary-unavailable"]`.
+
+
+---
+
+# One weight across the fleet: IQ3_XXS, not IQ2_XS (2026-09-10)
+
+The fleet was running two different weights for the same model — Q4_K_M
+(16.81 GB) on b70/xavier/gad, GSQ-RCO IQ2_XS (8.42 GB) on judah/dan. Aligning
+them raised the obvious question of which, and the answer is neither of those.
+
+## The quality difference at IQ2_XS is real
+
+From ISTA-DASLab's own published evaluation, against the BF16 base:
+
+| variant | GB | AIME25 | GPQA-D | LiveCodeBench v6 |
+|---------|----|--------|--------|------------------|
+| BF16     | 53.8 | 100.00 | 89.90 | 85.71 |
+| IQ2_XS   |  8.4 |  96.67 | 84.85 | **76.57** |
+| IQ2_S    |  9.3 | 100.00 | 86.36 | 82.29 |
+| **IQ3_XXS** | **10.1** | **100.00** | **88.89** | **84.57** |
+| IQ3_S    | 11.8 | 100.00 | 89.39 | 85.71 |
+
+IQ2_XS gives up **9.14 points of LiveCodeBench** and 5.05 of GPQA-Diamond.
+IQ3_XXS recovers nearly all of it — matching the base model exactly on AIME25
+— for 1.7 GB more.
+
+## And IQ3_XXS still fits every node at hermes's floor
+
+q4_0 cache, one slot, largest context each node can hold:
+
+| node | IQ2_XS | **IQ3_XXS** | IQ3_S |
+|------|--------|-------------|-------|
+| judah / dan (17.18 GB) | 112,033 | **89,382** | 66,596 |
+| b70 (15.56 GB)         |  90,060 | **67,409** | 44,623 |
+
+IQ3_S is where it breaks: 44,623 on b70, under the 64,000 hermes requires. So
+IQ3_XXS is the highest-quality quant that is uniform across the fleet AND
+hermes-capable everywhere. That is why it, and not the one already deployed.
+
+## What this fixes on b70, incidentally
+
+b70 runs Q4_K_M today: **16.81 GB of weights on a 15.56 GB box — 1.75 GB over
+RAM before any cache at all.** It has been running out of the 64 GB
+"host-memory safety swap" the unit file provisions. IQ3_XXS at 10.09 GB makes
+the weights resident with 4.97 GB left for cache, which is a stability change,
+not just a quality one.
+
+## Standard config
+
+    --ctx-size 65536 --parallel 1 --cache-type-k q4_0 --cache-type-v q4_0
+
+65,536 clears hermes's 64,000 on every node with margin, and one slot is what
+buys it. b70 trades its second slot for that; the unit's own traffic
+measurement (0 of 3795 requests above 16,384) says general traffic does not
+need the window, so the slot is the better thing to spend where hermes is not
+the caller.
+
+## xavier is not covered
+
+No SSH as junkawasaki, root, or ubuntu — only its HTTP API on :8090 answers.
+It serves Q4_K_M at 8,192 per slot and cannot be realigned from here.
