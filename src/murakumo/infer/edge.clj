@@ -63,7 +63,19 @@
        "<key>ProgramArguments</key><array>"
        (apply str (map #(str "<string>" (xml %) "</string>") argv))
        "</array>\n<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>\n"
-       "<key>ThrottleInterval</key><integer>5</integer>\n"
+       ;; 60, not launchd's 5. Measured 2026-09-10 on simeon: the worker exits
+       ;; when its startup enrolment fetch fails, KeepAlive restarts it, and at
+       ;; a five-second throttle that is ~720 restarts an hour, each opening a
+       ;; socket. simeon burned through the 53,536-port range it had just been
+       ;; given -- 53,181 in TIME_WAIT -- and the crash loop, not the poller,
+       ;; was what spent them.
+       ;;
+       ;; This is a bound on the bleeding, not the cure. The cure is for
+       ;; enrolment to retry in-process under `murakumo.infer.backoff` like the
+       ;; poll and heartbeat loops already do, instead of exiting and letting
+       ;; launchd retry on a fixed cadence -- which is precisely the pattern
+       ;; ADR-2609021500 rule 1 forbids, arrived at from outside the process.
+       "<key>ThrottleInterval</key><integer>60</integer>\n"
        "<key>StandardOutPath</key><string>" (xml stdout) "</string>\n"
        "<key>StandardErrorPath</key><string>" (xml stderr) "</string>\n"
        "</dict></plist>\n"))
