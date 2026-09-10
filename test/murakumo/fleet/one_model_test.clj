@@ -65,3 +65,24 @@
       (is (= :text (:plane keep)))
       (is (= "requested, not yet present" (:what keep)))
       (is (empty? evict)))))
+
+(deftest an-eviction-names-the-launchd-job-not-the-process
+  (let [{:keys [extra]} (one/verdict ["a llama-server --model m" "b rpc-server -H"
+                                      "c python comfyui/main.py" "d ollama serve"])
+        plan (one/evict-plan extra)]
+    (is (= [:ring-member :media :ad-hoc] (mapv :plane (:planes plan))))
+    (is (= ["com.murakumo.rpc-worker" "com.murakumo.comfyui" "com.murakumo.ollama"]
+           (:daemons plan)))
+    (is (empty? (:unnamed plan)))))
+
+(deftest a-plane-with-no-known-job-is-reported-not-silently-evicted
+  ;; The shape CLAUDE.md forbids: a plane nothing can name a launchd job for
+  ;; cannot be evicted durably, and returning it as a clean eviction is a check
+  ;; that could not run returning the value of one that ran and found nothing.
+  (let [plan (one/evict-plan [{:plane :mystery :what "started by something else"}])]
+    (is (empty? (:daemons plan)))
+    (is (= [:mystery] (mapv :plane (:unnamed plan))))))
+
+(deftest every-plane-in-the-table-names-at-least-one-job
+  (doseq [p one/planes]
+    (is (seq (:daemons p)) (str (name (:plane p)) " has no launchd job"))))

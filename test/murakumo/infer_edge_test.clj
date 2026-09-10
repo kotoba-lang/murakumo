@@ -76,3 +76,61 @@
     ;; And it must not be smuggled in as a bare word that happens to appear:
     ;; the flag has to precede the value the join worker validates.
     (is (re-find #"--trust-tier awai-secure --local-url" (:plist join)))))
+
+;; ── a node dedicated to one model ──────────────────────────────────────────
+
+(deftest a-dedicated-model-gets-its-own-labels-port-and-batch
+  (let [server (edge/model-server-plan
+                "murakumo-27b"
+                {:home "/Users/issachar" :llama-server "/opt/llama-server"
+                 :memory-bytes 17179869184})
+        join (edge/model-join-plan
+              "murakumo-27b"
+              {:home "/Users/issachar" :nbb "/opt/nbb" :node-name "issachar"
+               :local-port 8093})]
+    (is (:admitted? server))
+    (is (= "com.murakumo.model-server" (:label server)))
+    (is (= "com.murakumo.model-join" (:label join)))
+    (is (re-find #"--port</string><string>8093" (:plist server)))
+    (is (re-find #"--batch-size</string><string>128" (:plist server)))
+    ;; The worker must enrol for THIS model and execute against THIS port.
+    ;; Split, they are the failure that looks like success: a worker enrolled
+    ;; for murakumo-27b pointed at 8092 claims 27B jobs and answers with the 9B.
+    (is (re-find #"--model murakumo-27b " (:plist join)))
+    (is (re-find #"--local-url http://127\.0\.0\.1:8093/v1" (:plist join)))))
+
+(deftest murakumo-edge-keeps-the-labels-ports-and-logs-it-has
+  ;; The registry must not rename the jobs five running nodes are supervised
+  ;; by: a renamed label is a second copy, not a replacement.
+  (let [server (edge/server-plan {:home "/Users/dan" :llama-server "/opt/llama-server"
+                                  :memory-bytes 17179869184})
+        join (edge/join-plan {:home "/Users/dan" :nbb "/opt/nbb" :node-name "dan"})]
+    (is (= "com.murakumo.edge-server" (:label server)))
+    (is (= "com.murakumo.edge-join" (:label join)))
+    (is (re-find #"--port</string><string>8092" (:plist server)))
+    (is (re-find #"/Users/dan/\.murakumo/edge/server\.log" (:plist server)))
+    (is (re-find #"/Users/dan/\.murakumo/edge/join\.log" (:plist join)))
+    (is (not-any? #{"--batch-size"} (:argv server)))))
+
+(deftest the-wired-limit-daemon-verifies-the-sysctl-not-launchctl
+  (let [script (edge/wired-limit-script 15360)]
+    (is (re-find #"iogpu\.wired_limit_mb=15360" script))
+    (is (re-find #"RunAtLoad" (edge/wired-limit-plist 15360)))
+    ;; Bootstrapping a job that runs `sysctl -w` succeeds whether or not the
+    ;; write did. Without the read-back, a node reporting a clean install can
+    ;; be sitting at the 13,312 default that puts a 15,222 MiB model on the CPU.
+    (is (re-find #"got=\$\(sysctl -n iogpu\.wired_limit_mb\)" script))
+    (is (re-find #"MURAKUMO_WIRED_LIMIT_UNVERIFIED" script))
+    (is (re-find #"exit 3" script)))
+  (is (thrown? Exception (edge/wired-limit-plist 0)))
+  (is (thrown? Exception (edge/wired-limit-plist nil))))
+
+(deftest eviction-parks-the-plist-because-bootout-does-not-survive-a-boot
+  (let [script (edge/evict-script ["com.murakumo.comfyui" "com.murakumo.ollama"])]
+    (is (re-find #"bootout system/com\.murakumo\.comfyui" script))
+    ;; The part that makes it an eviction rather than a restart: launchd
+    ;; rescans /Library/LaunchDaemons at boot, so a booted-out job whose plist
+    ;; is still there comes back, and comes back when nobody is watching.
+    (is (re-find #"mv /Library/LaunchDaemons/com\.murakumo\.ollama\.plist /Library/LaunchDaemons/evicted-by-murakumo/"
+                 script))
+    (is (re-find #"MURAKUMO_STILL_LOADED" script))))

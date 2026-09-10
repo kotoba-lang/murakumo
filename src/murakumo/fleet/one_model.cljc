@@ -40,10 +40,11 @@
 
   ## What this namespace is not
 
-  It does not decide which model a node should host, and it does not evict
-  anything. It answers one question — how many model planes are on this node,
-  and which — so that the installer can refuse to add a second and an operator
-  can see the ones that are already there."
+  It does not decide which model a node should host, and it does not perform
+  an eviction. It answers one question — how many model planes are on this
+  node, and which — and names the launchd jobs each plane is served by, so
+  that the installer can refuse to add a second and an eviction can be
+  reviewed before it is run."
   (:require [kotoba.lang.text :as str]))
 
 (def planes
@@ -61,15 +62,27 @@
   checker reported them as hosting three planes when they host four. An
   under-report is the dangerous direction here — it lets an install proceed
   onto a node that is already full. `comfyui/main.py` and `ollama serve` carry
-  the specificity that case-sensitivity was standing in for, without the miss."
+  the specificity that case-sensitivity was standing in for, without the miss.
+
+  `:daemons` are the launchd labels that RESTART the plane. Killing the
+  process is not evicting the plane: measured on issachar 2026-09-10, all four
+  planes were system LaunchDaemons with KeepAlive, so a `pkill` is undone in
+  seconds and a `bootout` is undone by the next boot -- and the next boot is
+  exactly when nobody is watching. An eviction that does not name the job is a
+  restart with extra steps."
   [{:plane :text        :match "llama-server"
-    :what "this node's own text model"}
+    :what "this node's own text model"
+    :daemons ["com.murakumo.edge-server" "com.murakumo.edge-join"
+              "com.murakumo.model-server" "com.murakumo.model-join"]}
    {:plane :ring-member :match "rpc-server"
-    :what "a shard of another node's model, over llama.cpp RPC"}
+    :what "a shard of another node's model, over llama.cpp RPC"
+    :daemons ["com.murakumo.rpc-worker"]}
    {:plane :media       :match "comfyui/main.py"
-    :what "image and video checkpoints"}
+    :what "image and video checkpoints"
+    :daemons ["com.murakumo.comfyui"]}
    {:plane :ad-hoc      :match "ollama serve"
-    :what "whatever ollama has pulled; a second text model by another name"}])
+    :what "whatever ollama has pulled; a second text model by another name"
+    :daemons ["com.murakumo.ollama"]}])
 
 (defn classify-line
   "The plane one process line hosts, or nil."
@@ -126,6 +139,28 @@
     {:keep (or (first (filter #(= wanted (:plane %)) found))
                {:plane wanted :what "requested, not yet present"})
      :evict (vec (remove #(= wanted (:plane %)) found))}))
+
+(defn daemons-to-evict
+  "The launchd labels an eviction of `planes-to-evict` has to stop.
+
+  Deduplicated and ordered as given. A plane whose daemon label is unknown to
+  this table contributes nothing here, which is why `evict-plan` reports the
+  planes it could not name a job for rather than reporting a clean eviction."
+  [planes-to-evict]
+  (vec (distinct (mapcat :daemons planes-to-evict))))
+
+(defn evict-plan
+  "What evicting these planes means, as data.
+
+  `:unnamed` is the point of the return shape. A plane this table has no
+  daemon label for cannot be evicted durably -- something outside launchd is
+  starting it -- and reporting that as a successful eviction is precisely the
+  shape CLAUDE.md forbids: a check that could not run returning the value of a
+  check that ran and found nothing wrong."
+  [planes-to-evict]
+  {:planes (vec planes-to-evict)
+   :daemons (daemons-to-evict planes-to-evict)
+   :unnamed (vec (remove (comp seq :daemons) planes-to-evict))})
 
 (defn report-line [node {:keys [verdict hosts extra]}]
   (str (format "[%-10s] %-5s " node (name verdict))

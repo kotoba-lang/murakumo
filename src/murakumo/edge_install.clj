@@ -19,7 +19,8 @@
     repair is the operator's call and the ADR records why.
   - It does not enroll. Trust tier belongs to `fleet.edn` and the join worker
     reads it; installing a daemon must not be a second place a tier can be set."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotodama.inference.edge :as artifacts]
+            [kotoba.lang.text :as str]
             [murakumo.fleet.one-model :as one]
             [murakumo.infer.edge :as edge]
             [murakumo.provision.plan :as plan]
@@ -339,3 +340,108 @@
                                                            " " (:err r)))
                                               (remove :ok? results))))))
         results)))
+
+;; ── dedicating a node to one model ─────────────────────────────────────────
+;;
+;; Owner instruction 2026-09-10, two of them, and they are the same
+;; instruction: "1 台を 27B 専用機にして待てる用途に使う" and "murakumo cloud
+;; fleet で, 基本的に1台当たり1つの model しか host しないように設計して".
+;; A 27B on a 16 GiB mini is not a node that happens to host one model; it is a
+;; node that CANNOT host two, and the conversion is therefore an eviction, not
+;; an addition.
+;;
+;; Four steps in this order, and the order is the content:
+;;
+;;   1. gate    -- refuse unless the operator said which plane the node is for
+;;   2. evict   -- durably, plists parked, not `pkill`
+;;   3. wire    -- raise iogpu.wired_limit_mb as a resident daemon
+;;   4. install -- server, then the queue worker enrolled for THIS model
+;;
+;; Wiring before installing because the limit is what makes the model fit on
+;; the GPU, and a server started under the old limit runs on the CPU and says
+;; it is healthy. Evicting before wiring because the limit is only meaningful
+;; once the memory it governs is not being spent by three other planes.
+
+(defn dedicate-node!
+  "Convert one node into a dedicated host for `model`.
+
+  Returns a step-by-step result. Stops at the first failed step rather than
+  continuing: a node that was evicted and then failed to install is a node
+  serving nothing, and reporting the later steps as skipped is how the operator
+  learns that from the output instead of from the fleet board."
+  [{:keys [name host] :as node} model {:keys [dry-run? evict?]}]
+  (let [artifact (artifacts/artifact model)
+        wired-mb (:wired-limit-mb artifact)
+        facts (node-facts host)]
+    (if-not (:ok? facts)
+      (assoc facts :node name :model model)
+      (let [gate (one-model-gate node :text {:evict? evict?})]
+        (if-not (:ok? gate)
+          {:node name :model model :ok? false :step :gate :gate gate}
+          (let [;; The gate's :evicting names the OTHER planes. It cannot name
+                ;; the text plane the node already runs, because that is the
+                ;; plane we are installing -- and on a conversion that plane is
+                ;; a different model under a different pair of labels. Left
+                ;; alone, murakumo-edge keeps its daemons, comes back at the
+                ;; next boot, and the "dedicated" node hosts two text models.
+                mine (set (vals (edge/labels-for model)))
+                stale-text (->> one/planes
+                                (filter #(= :text (:plane %)))
+                                (mapcat :daemons)
+                                (remove mine)
+                                vec)
+                evicting (update (one/evict-plan (:evicting gate)) :daemons
+                                 #(vec (distinct (concat % stale-text))))
+                steps (cond-> []
+                        (seq (:daemons evicting))
+                        (conj {:step :evict :script (edge/evict-script (:daemons evicting))})
+                        wired-mb
+                        (conj {:step :wired-limit :script (edge/wired-limit-script wired-mb)}))
+                plans [(edge/model-server-plan model (select-keys facts [:home :llama-server :memory-bytes]))
+                       (edge/model-join-plan model (assoc (select-keys facts [:home :nbb])
+                                                          :node-name name
+                                                          :local-port (:serve-port artifact)))]
+                steps (into steps (for [p plans]
+                                    {:step :install :label (:label p)
+                                     :script (edge/install-script p)}))]
+            (if dry-run?
+              {:node name :model model :ok? true :dry-run true :steps steps
+               :evicting (:daemons evicting) :unnamed (:unnamed evicting)}
+              (loop [[s & more] steps acc []]
+                (if-not s
+                  {:node name :model model :ok? true :steps acc
+                   :evicting (:daemons evicting) :unnamed (:unnamed evicting)}
+                  (let [{:keys [exit out err]} (ssh/sh host (:script s))
+                        r (assoc (dissoc s :script) :ok? (zero? exit) :exit exit
+                                 :out (str/trim (str out)) :err (str/trim (str err)))]
+                    (if (zero? exit)
+                      (recur more (conj acc r))
+                      {:node name :model model :ok? false :step (:step s)
+                       :steps (conj acc r)})))))))))))
+
+(defn dedicate-report [{:keys [node model ok? step gate steps unnamed dry-run]}]
+  (str/join
+   "\n"
+   (concat
+    [(format "[%-10s] %s %s" node model
+             (cond dry-run "dry-run"
+                   ok? "dedicated"
+                   :else (str "FAILED at " (clojure.core/name (or step :?)))))]
+    (when gate [(str "  refused: " (:detail gate))])
+    (for [s (or steps [])]
+      (format "  %-12s %s%s" (clojure.core/name (:step s)) (or (:label s) "")
+              (cond dry-run "" (:ok? s) "  ok"
+                    :else (str "  FAILED exit=" (:exit s) " " (:err s)))))
+    ;; A plane nothing can name a launchd job for was not evicted durably, and
+    ;; saying so here is the difference between an eviction and a restart.
+    (when (seq unnamed)
+      [(str "  WARNING: no launchd job known for "
+            (str/join ", " (map #(clojure.core/name (:plane %)) unnamed))
+            " -- stopped, but not kept stopped across a boot")]))))
+
+(defn dedicate!
+  [{:keys [nodes]} selector model opts]
+  (let [targets (filter #(= selector (:name %)) nodes)]
+    (when (empty? targets)
+      (throw (ex-info "dedicating a node needs one node by name" {:selector selector})))
+    (mapv #(dedicate-node! % model opts) targets)))
