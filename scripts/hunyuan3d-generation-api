@@ -1026,7 +1026,11 @@ def run_image_job(job_id, source, params):
         if not prompt_id:
             raise RuntimeError("ComfyUI rejected the image graph: "
                                + json.dumps(submitted)[:2000])
-        deadline = time.monotonic() + 300
+        # 600, not 300: gad's APU loads an SDXL checkpoint cold in ~6 min
+        # (measured 2026-09-11: "Prompt executed in 384.92 seconds" for the
+        # first waiREALMIX render, ComfyUI finished it AFTER this job had
+        # already been failed at 300 s). A warm render is ~1 min.
+        deadline = time.monotonic() + 600
         images = None
         while time.monotonic() < deadline:
             with lock:
