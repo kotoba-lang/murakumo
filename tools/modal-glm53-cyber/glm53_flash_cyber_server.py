@@ -53,6 +53,12 @@ image = (
             "HF_XET_HIGH_PERFORMANCE": "1",
             "HF_HUB_ENABLE_HF_TRANSFER": "1",
             "FLASHINFER_CACHE_DIR": "/root/.cache/vllm/flashinfer",
+            # The first cold start logged thousands of CUDACachingAllocator
+            # OOM-and-retry warnings during weight load (20 MiB allocations
+            # failing with 15 MiB free while the pool was fully reserved):
+            # fragmentation, which expandable segments is the documented fix
+            # for.  Measured effect is in ADR-260911.
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
         }
     )
     .add_local_file(

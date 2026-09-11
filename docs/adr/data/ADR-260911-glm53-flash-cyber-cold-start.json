@@ -54,5 +54,31 @@
   "H200": 4.54,
   "2xH200": 9.08
  },
- "cold_start_usd_at_list": 3.0
+ "cold_start_usd_at_list": 3.0,
+ "cold2": {
+  "request_jst": "12:00:41",
+  "first_200_jst": "12:26:17",
+  "elapsed_s": 1528.6,
+  "phases_s": {
+   "stage_volume_to_nvme": 323,
+   "vllm_start_to_load": 265,
+   "weight_load": 382,
+   "init_engine": 539
+  },
+  "stage_gb_per_s": 0.6,
+  "allocator_oom_retry_warnings": 0,
+  "env": {
+   "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"
+  },
+  "vllm_cache_volume_populated_before_run": [
+   "deep_gemm",
+   "flashinfer_autotune_cache"
+  ],
+  "note": "slower host; cache did not shorten engine init"
+ },
+ "downstream_budgets_s": {
+  "gateway_cold_start_budget": 2400,
+  "hermes_request_timeout": 2400,
+  "hermes_stale_timeout": 2400
+ }
 }

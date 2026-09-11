@@ -339,6 +339,27 @@
    :model/draft-weight-bytes 903453952
    :model/runtime :modal-llama-cpp-fastmtp}
 
+  "glm-5.3-flash-cybersecurity-w4a16"
+  {:model/id "glm-5.3-flash-cybersecurity-w4a16"
+   :model/family "GLM-5.3-Flash"
+   :model/format :safetensors
+   :model/variant :cybersecurity-crack-w4a16
+   :hf/repo "dealignai/GLM-5.3-Flash-CYBERSECURITY-W4A16"
+   :hf/commit "c95e33010569089226763057136edfcfba488065"
+   ;; glm5_next: 45 layers, 288 routed experts + 1 shared, 8 active, KDA
+   ;; linear attention on 34 layers and DeepSeek-sparse on 11, MTP head.
+   ;; params-b is the on-disk shape (int4 experts, bf16 attention), not a
+   ;; published count; active is the dense-equivalent per token, unmeasured.
+   :model/params-b 330
+   ;; vLLM --max-model-len on the origin. The checkpoint declares 1,048,576.
+   :model/context 131072
+   :model/weight-bytes 194700000000
+   ;; Not a fleet-node model: 195 GB does not fit any mac mini. Served from a
+   ;; Modal 2x H200 scale-to-zero origin behind api.murakumo.cloud; the
+   ;; runtime keyword names that so the fleet planner never tries to place it
+   ;; (ADR-260911, tools/modal-glm53-cyber/glm53_flash_cyber_server.py).
+   :model/runtime :modal-vllm}
+
   "qwen3-vl-30b-a3b"
   {:model/id "qwen3-vl-30b-a3b"
    :model/family "Qwen3-VL"

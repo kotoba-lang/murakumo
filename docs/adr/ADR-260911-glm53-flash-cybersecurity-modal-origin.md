@@ -89,10 +89,53 @@ Warm, 51 s later: **200 in 1.0 s for 77 completion tokens** (single
 request, MTP on, `reasoning_effort: "low"`, 0 reasoning tokens).  Both
 requests answered correctly; unauthenticated `GET /v1/models` → 401.
 
-Not measured: a *second* cold start.  `/root/.cache/vllm` is a Volume and
-now holds `deep_gemm` and `flashinfer_autotune_cache` from this run, so the
-361 s engine-init phase may shrink next time; there is no
-`torch_compile_cache` entry, so do not assume it does.
+### Second cold start, same day, with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+
+Request 12:00:41 JST, first 200 12:26:17 — **1,528 s ≈ 25.5 min**, i.e.
+*slower*, on a different (slower) Modal host.  Raw: same JSON, key `cold2`.
+
+| phase | run 1 | run 2 | note |
+|---|---|---|---|
+| stage Volume → NVMe | 221 | 323 | 0.88 → 0.60 GB/s: host variance, same code |
+| vLLM process start → `Loading model from scratch` | 110 | 265 | same image; slower host |
+| weight load | 480 | **382** | the allocator fix: 0 OOM-retry warnings (was thousands), 2.5 s/shard vs 3.8 |
+| `init engine` (CUDA graph capture) | 361 | 539 | the vLLM cache Volume (deep_gemm, flashinfer autotune) did **not** shorten it |
+
+So: the allocator fix is real and kept; the cache Volume is not a lever;
+and the honest cold-start number is a **range, 1,190–1,530 s**, set by
+which host Modal hands out.  Every downstream budget was sized from the
+slower one plus margin, not the faster one:
+
+- gateway (`cloud-murakumo-api` `src/modal_hosted_model.js`): holds the
+  caller's request through the origin's 503 "model loading" for up to
+  **2,400 s** (5 s poll), then 503 `model_loading` with `retry-after` —
+  never a hang.  A 1,500 s budget sized from run 1 would have missed run 2
+  by 29 s.
+- Hermes profile `glm53-cyber` (root `scripts/hermes-murakumo-api.cljk`,
+  `profile-overrides`): `request_timeout_seconds` and `stale_timeout_seconds`
+  **2,400**; the fleet contract's 900 would drop a cold request at the
+  client after paying for 15 minutes of GPU.
+
+## Public surface (2026-09-11)
+
+- `POST https://api.murakumo.cloud/v1/chat/completions` with
+  `"model": "glm-5.3-flash-cybersecurity-w4a16"` — routed from the JS entry
+  (the compiled worker.cljs cannot ship without a governed artifact refresh),
+  `reasoning_effort` defaulted to `"low"`, response headers
+  `x-murakumo-route-head: modal` and `x-murakumo-cold-wait-ms` (the load
+  wait, 0 when warm).  Verified warm end-to-end: 200, correct answer.
+- `GET /v1/models` lists it with `context_window 131072`,
+  `scale_to_zero true`, `cold_start_budget_seconds 2400`.
+- `GET /v1/token-limits?model=…` → 131072 / 16384, `serving-slot-default`.
+- Hermes: profile `glm53-cyber` (no cron), one real turn verified: the model
+  identified itself and answered with a tool call.
+- `infer.edn` carries the registry entry with `:model/runtime :modal-vllm`
+  so the fleet planner never tries to place 195 GB on a mac mini.
+
+**Anonymous, like every fleet-hosted id.** That is a cost exposure the
+qwen3.8 Modal profiles did not have at this size: one anonymous caller
+keeping the origin warm is ~$9/h at list.  Gating it behind a credential is
+a separate decision, not made here.
 
 ## Cost levers kept
 
