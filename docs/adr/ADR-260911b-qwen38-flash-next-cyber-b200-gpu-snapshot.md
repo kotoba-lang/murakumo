@@ -1,7 +1,9 @@
 # ADR-260911b — Qwen3.8-Flash-Next-CYBERSECURITY-NVFP4 on one B200 with GPU memory snapshots
 
-**Status:** accepted (measured 2026-09-11; cold-restore-from-zero number pending, see "Resume point")
-**Owner decision:** 2026-09-11 — "3.9 s なら十分 cold start で成り立つ. 5 分リクエストがなければ停止"
+**Status:** accepted (measured 2026-09-11, cold restore from zero included)
+**Owner decisions:** 2026-09-11 — "5 分リクエストがなければ停止"; after the cold-restore
+measurement, "今の 3 分を許容します" (a warm replica at ~$6.3/h and a smaller model were
+both declined; see "Why 30 s is not reachable")
 **Related:** ADR-260911 (GLM-5.3-Flash cyber on 2×H200; cold start 1,190–1,530 s), ADR-260821b
 (the first GPU-snapshot attempt on Qwen3.8-27B: created, never restored)
 
@@ -70,13 +72,37 @@ and Cloudflare's subrequest limit turned that into a 524 the gateway cannot poll
 v6: the proxy starts before staging (503 from the first seconds; its socket is in the
 snapshot, as vLLM's own is in Modal's example), and the gateway treats 524 like 503.
 
+## Steady state through `api.murakumo.cloud` (v6, 18:45–20:50)
+
+| state | n | end-to-end | origin log |
+|---|---|---|---|
+| cold, worker already has the snapshot | 2 | **189.6 s, 175.7 s** | `Restoring Function from memory snapshot` → 164–181 s → `wake_up … healthy after 3.0–4.4 s` |
+| cold, right after a snapshot was written on that host | 1 | — | restore 87 s + wake 4.4 s |
+| warm (< 5 min since last request) | 2 | **0.97 s** (curl), 2.0 s first token in hermes | cold-wait 0 |
+| cold, worker without a snapshot yet (first 2–3 after a deploy) | 3 | 958 s, 1,565 s, ~1,600 s | staging + load + sleep + 11–12 min snapshot write + restore |
+
+The gateway budget was raised 1,500 → 2,000 s after the 1,565 s case returned `503 model_loading`
+5 s before the origin could answer.  Hermes profile `qwen38-cyber` (root
+`scripts/hermes-murakumo-api.cljk`) carries 2,000 s the same way; one turn measured 2.0 s warm.
+
+## Why 30 s is not reachable with this model (owner asked; answered 2026-09-11 20:45)
+
+The cold path is Modal moving ~130 GB of snapshot (127 GiB of weights parked in CPU RAM by
+sleep level 1) back to the host: 164–181 s from remote, 87 s when the host still has it, i.e.
+0.8–1.5 GB/s.  30 s would need ≥ 4.5 GB/s.  Modal's guide says it directly: *"If the majority
+of your initialization latency is spent loading weights, GPU Memory Snapshots will generally
+not improve your cold start times."*  Its published wins are 0.5B–8B models (45 s → 5 s).
+Sleep level 2 (drop weights, reload from NVMe on wake) and snapshotting with the weights on
+the GPU move the same bytes.  The remaining levers each break a stated requirement: a ~20 GB
+model (no cyber build exists at that size), `min_containers=1` (~$6.3/h, not "only when a
+request comes"), or a predictive pre-ping from the client (hides, does not shorten).  The
+owner accepted 3 min.
+
 ## Standing caveats
 
-- The 3.9 s above is a restore **on the host that had just created the snapshot**.  The
-  number that matters for scale-to-zero — restore after the container count reached 0 —
-  was scheduled for 18:29 (600 s after the last request) and is recorded under "Resume
-  point" when it lands.  Until then this ADR claims restore *works*, not what an idle
-  cold start costs.
+- "3.9 s" is the vLLM wake at the end of a restore, not the cold start; the cold start is
+  the ~3 min table above.  The first report of the day said 3.9 s before the from-zero
+  number existed — corrected the same evening.
 - `scaledown_window=300` per the owner.  Every redeploy creates a **new snapshot** on its
   first start (~10 min to sleep + ~11 min to write), so config changes are not free.
 - The first start of any new deploy must reach `/sleep` within 30 min.  What keeps it
@@ -86,9 +112,9 @@ snapshot, as vLLM's own is in Modal's example), and the gateway treats 524 like 
 - Quality is unmeasured (same as the GLM one).  The model card's numbers are the author's.
   MTP + hybrid layers disables cross-request prefix caching (vLLM warning at start).
 - Routed on `api.murakumo.cloud` as `qwen3.8-flash-next-cybersecurity-nvfp4`
-  (network-awai/cloud-murakumo-api `src/modal_hosted_model.js`, `coldStartBudgetMs` 1,500 s
+  (network-awai/cloud-murakumo-api `src/modal_hosted_model.js`, `coldStartBudgetMs` 2,000 s
   to cover a snapshot-creating start; 303/524 treated as loading).  Anonymous, like the GLM
-  id — same cost exposure.  No hermes profile yet.
+  id — same cost exposure.  Hermes profile `qwen38-cyber` on this machine.
 - `modal run …::smoke` builds an ephemeral twin of the app and prints
   `Memory snapshots are disabled for ephemeral apps` — that line is about the twin, not the
   deployed origin the smoke talks to.
@@ -100,6 +126,7 @@ snapshot, as vLLM's own is in Modal's example), and the gateway treats 524 like 
 modal run tools/modal-qwen38-flash-next-cyber/qwen38_flash_next_cyber_server.py::smoke
 # container log: "Restoring Function from memory snapshot" + "post-snapshot enter: … healthy after N s"
 modal app logs murakumo-qwen38-flash-next-cyber --timestamps | grep -E "Restor|post-snapshot|snapshot-load"
-# next: gateway route (cloud-murakumo-api src/modal_hosted_model.js) + hermes profile, then a
-# 20-30 prompt quality comparison against glm-5.3-flash-cybersecurity-w4a16
+# one turn through hermes
+~/.hermes/hermes-agent/venv/bin/hermes -p qwen38-cyber chat -q "Which model are you?"
+# next: a 20-30 prompt quality comparison against glm-5.3-flash-cybersecurity-w4a16 (gap 2 of ADR-260911)
 ```
