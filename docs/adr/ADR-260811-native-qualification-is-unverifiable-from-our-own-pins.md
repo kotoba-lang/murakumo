@@ -47,7 +47,7 @@ predates `kotoba.kir.descriptor`, so amu's `kotoba.wasm.typed` cannot load
 against it at all. They are one unit.
 
 With that pair, the qualification sweep passes **35/35 on both ISAs** — the
-first time this has been checkable here — and `clojure -M:test:gen` rewrites all
+first time this has been checkable here — and `kbb -M:test:gen` rewrites all
 35 shipped artifacts **byte-identically**. KIR emission did not move across 339
 commits of compiler.
 
@@ -115,7 +115,7 @@ red. A core is:
 1. `kotoba/<name>_core.kotoba`
 2. its entry in `murakumo.kotoba.oracle`'s catalog
 3. its shipped `resources/murakumo/oracle/<name>_core.kir.edn`
-   (`clojure -M:test:gen`)
+   (`kbb -M:test:gen`)
 4. the catalog counts in `kotoba_oracle_cljs_load_test`
 
 `prices_core` (a021cbe) shipped only (1) and needed cf6012b; `windows_core`
@@ -153,7 +153,7 @@ Two corrections this forces:
 - **Native execution is not JVM-bound.** It was reported earlier in the day
   that "native build is JDK-free, native execution is not". That is true only
   of `kotoba -M run`, the signed-receipt pipeline, which falls through to
-  `clojure -M:native-run` because `kototama.native.executor` is a JVM plugin.
+  `kbb -M:native-run` because `kototama.native.executor` is a JVM plugin.
   The loader path above has no such dependency and is what amu's own
   conformance gate uses.
 - **This is a demonstration, not a capability.** It ran from a scratch

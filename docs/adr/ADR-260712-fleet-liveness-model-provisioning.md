@@ -25,7 +25,7 @@ CUDA workers for inference.
    they cannot power on a stopped host.
 4. Fleet Macs run `tailscaled` as a system LaunchDaemon. They use `sleep 0`,
    `womp 1`, and `powernap 1` so the control plane remains reachable and recoverable.
-5. `bb murakumo model setup` installs the Hugging Face CLI when needed and uses
+5. `kbb -M:murakumo model setup` installs the Hugging Face CLI when needed and uses
    resumable `hf download`. Authentication tokens are never embedded in generated
    commands or committed configuration.
 6. Model cache placement does not imply runtime compatibility. TRELLIS remains
@@ -60,9 +60,9 @@ Shape → Paint → rig/motion/morph with a single GPU job at a time.
 ## Verification
 
 ```bash
-bb murakumo nodes
-bb murakumo model plan trellis-image-large
-bb murakumo model status trellis-image-large all
-bb murakumo revive all
-bb test
+kbb -M:murakumo nodes
+kbb -M:murakumo model plan trellis-image-large
+kbb -M:murakumo model status trellis-image-large all
+kbb -M:murakumo revive all
+kbb -M:test
 ```

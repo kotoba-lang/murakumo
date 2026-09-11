@@ -23,7 +23,7 @@ An intentional policy change updates GitHub and the EDN in the same change,
 then runs:
 
 ```bash
-npx nbb scripts/check-github-governance.cljk
+kbb --backend sci scripts/check-github-governance.cljk
 ```
 
 The command requires `gh` authenticated with read access to repository

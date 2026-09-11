@@ -8,9 +8,9 @@
     rebalance/target    → placement plan + moves
     POST /infer/placement (record the decision — the fleet's desired state)
 
-  bb entrypoints:
-    bb murakumo infer orchestrate            one tick, print + publish
-    bb murakumo infer orchestrate --watch=N  loop every N seconds
+  kbb -M:entrypoints:
+    kbb -M:murakumo infer orchestrate            one tick, print + publish
+    kbb -M:murakumo infer orchestrate --watch=N  loop every N seconds
 
   This is I/O (HTTP) so it lives in a .clj (not the portable .cljc core). The
   decision itself is pure murakumo.infer.rebalance — this only wires it to live

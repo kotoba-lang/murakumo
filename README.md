@@ -78,7 +78,7 @@ permissions and app-bound, strict `main` check are versioned in
 and audited against the live API with an administrator-authenticated `gh`:
 
 ```bash
-npx nbb scripts/check-github-governance.cljk
+kbb --backend sci scripts/check-github-governance.cljk
 ```
 
 The EDN is not proof of current enforcement; only a successful live readback is.
@@ -164,8 +164,8 @@ would fail at the gateway with an indistinguishable 401.
 
 ```bash
 export MURAKUMO_TOKEN_SECRET=…                      # same value as the gateway
-nbb scripts/run-task.cljk token issue --sub laptop --scope chat --ttl 604800
-nbb scripts/run-task.cljk token verify mk1.…
+kbb --backend sci scripts/run-task.cljk token issue --sub laptop --scope chat --ttl 604800
+kbb --backend sci scripts/run-task.cljk token verify mk1.…
 ```
 
 The token alone goes to stdout, so it pipes (`… token issue | pbcopy`);
@@ -195,16 +195,16 @@ environment.
   would be a permanent one. Re-issue instead of minting long-lived keys.
 
 Compatibility with the verifying gateway is a test, not a claim:
-`nbb scripts/run-task.cljk test-apikey` asserts that keys minted here are
+`kbb --backend sci scripts/run-task.cljk test-apikey` asserts that keys minted here are
 byte-identical to, and accepted by, `cloud-murakumo.token`.
 
-> Historical note: the gateway's 401 used to say `bb murakumo token issue`. That
+> Historical note: the gateway's 401 used to say `kbb -M:murakumo token issue`. That
 > command has not been runnable since babashka was retired (ADR-2607173000) —
 > `murakumo.core` is `.clj` on `babashka.process` and `bb.edn` is gone. The
 > `token` task above is its nbb port.
 >
 > The 401 was corrected on 2026-08-13 (ADR-2608133200). It had been changed once
-> already, from `bb murakumo token issue` to `clojure -M:token issue`, but that
+> already, from `kbb -M:murakumo token issue` to `kbb -M:token issue`, but that
 > second command raised `ArityException` — `cloud-murakumo.cli/cmd-token` was
 > fixed-arity while the alias passes only `issue`. Both the arity and the message
 > are fixed now; the message names this repo's `token` task as the alternative.
@@ -237,10 +237,10 @@ Each fleet node runs `kotoba-server` as a **macOS LaunchAgent** (`RunAtLoad` +
 kotoba identity new
 export MURAKUMO_KOTOBA_DIR=~/github/com-junkawasaki/orgs/com-junkawasaki/kotoba
 
-nbb scripts/run-task.cljk identity      # print the operator DID (never the seed)
-nbb scripts/run-task.cljk ops status    # fold /health + lattice ps across the fleet
-nbb scripts/run-task.cljk task run --n 22 --cmd 'hostname'   # fan a batch over the fleet
-nbb scripts/run-task.cljk token issue --scope chat           # mint a gateway API key
+kbb --backend sci scripts/run-task.cljk identity      # print the operator DID (never the seed)
+kbb --backend sci scripts/run-task.cljk ops status    # fold /health + lattice ps across the fleet
+kbb --backend sci scripts/run-task.cljk task run --n 22 --cmd 'hostname'   # fan a batch over the fleet
+kbb --backend sci scripts/run-task.cljk token issue --scope chat           # mint a gateway API key
 
 # Operator start (whole-component entries — not kotoba/*_core.kotoba oracles)
 kotoba compile kotoba/desired.kotoba --target wasm --output target/kotoba/desired.wasm --json
@@ -274,7 +274,7 @@ sh scripts/kotoba-run.sh
 > Every `bb …` line remaining below in this README is in that dropped set. They
 > are left in place, rather than deleted, because they describe what this repo
 > is *for*; treat them as a specification of the missing surface, not as
-> instructions. `nbb scripts/run-task.cljk` with no argument lists what actually
+> instructions. `kbb --backend sci scripts/run-task.cljk` with no argument lists what actually
 > resolves.
 
 ## Command surface
@@ -293,8 +293,8 @@ sh scripts/kotoba-run.sh
 | `overlay dial\|relay --overlay ...` | native overlay driver shell: validate canonical dial/relay argv and emit the session record a real stream/packet driver will open |
 | `fleet <datom-log.edn> [now-ms]` | **coordination-plane view** — fold a [kotoba-fleet](https://github.com/kotoba-lang/kotoba-fleet) Datom log into one snapshot (per-work holders · active leases · pending proposals) via `kotoba.fleet.view/snapshot`. The `status` of the 20-agent coordination layer, next to the mesh `status`. |
 | `infer probe\|plan <model>\|provision\|up\|down\|ps\|serve\|generate` | **distributed inference across the fleet, exo-style** — memory-weighted shard plan + pipeline-parallel ring (see below) |
-| `task probe\|plan\|run\|report` | **fleet task plane** — fan a BATCH of short-lived tasks over the fleet and gather the results (k8s-Job / Ray-tasks shape, next to `reconcile`'s k8s-Deployment shape). `nbb scripts/run-task.cljk task run --n 22 --cmd 'hostname'` (see below) |
-| `ops status [all\|a,b]` | **fleet read surface, restored on nbb** — one ssh round trip per node for `/health`, wasm_executor, peer links, hosted component CIDs, mesh binary presence and LaunchAgent state. This is the nbb port of the bb-era `nodes` + `status`, which have had no runnable entrypoint since the bb.edn removal. `nbb scripts/run-task.cljk ops status` |
+| `task probe\|plan\|run\|report` | **fleet task plane** — fan a BATCH of short-lived tasks over the fleet and gather the results (k8s-Job / Ray-tasks shape, next to `reconcile`'s k8s-Deployment shape). `kbb --backend sci scripts/run-task.cljk task run --n 22 --cmd 'hostname'` (see below) |
+| `ops status [all\|a,b]` | **fleet read surface, restored on nbb** — one ssh round trip per node for `/health`, wasm_executor, peer links, hosted component CIDs, mesh binary presence and LaunchAgent state. This is the nbb port of the bb-era `nodes` + `status`, which have had no runnable entrypoint since the bb.edn removal. `kbb --backend sci scripts/run-task.cljk ops status` |
 | `infer-submit --tokens-file ids.edn` | **give a bare-metal AIUEOS device a real prompt** — enqueue one `qwen38-generate` job (device-P256 worker protocol v3). The device has no tokenizer, so the caller tokenises and the caller detokenises: pass ids, or `--tokenize-with torch --vocab-file v.edn --prompt TEXT`. Add `--wait 120` to poll for the generated token array. Needs the `torch` sibling on the classpath; it cannot read a `.gguf` (`torch.gguf` is `.clj`, JVM only). |
 
 ## Layout
@@ -311,9 +311,9 @@ sh scripts/kotoba-run.sh
 | `src/murakumo/component_authority_http.cljk` | HTTPS publisher connecting the durable authority outbox to Kototama’s bounded receiver |
 | `src/murakumo/component_authority_deploy.cljk` | secret-free per-node TLS receiver rollout plan, node audience binding, and overlap-first trusted-key rotation |
 | `src/murakumo/connect.cljk` | connect.edn loader + portable `serves-reach?` (pure: can a node reach a client class on a plane?) |
-| `src/murakumo/cloud.cljk` | `bb cloud` CLI shell: load fleet/cloud declarations and print plans or records |
+| `src/murakumo/cloud.cljk` | `kbb -M:cloud` CLI shell: load fleet/cloud declarations and print plans or records |
 | `src/murakumo/cloud/plan.cljk` | portable murakumo.cloud overlay planner: stable IDs, relay choice, node/relay/route/policy records |
-| `src/murakumo/overlay.cljk` | `bb overlay` CLI shell for the native overlay driver boundary |
+| `src/murakumo/overlay.cljk` | `kbb -M:overlay` CLI shell for the native overlay driver boundary |
 | `src/murakumo/overlay/forward.cljk` | local TCP forwarder over the sealed relay stream contract |
 | `src/murakumo/overlay/dial.cljk` | host-side dial reachability plus relay hello/frame checks |
 | `src/murakumo/overlay/driver.cljk` | portable overlay driver core: parse/validate canonical dial argv and emit session records |
@@ -335,7 +335,7 @@ sh scripts/kotoba-run.sh
 | `src/murakumo/dash.cljk` | snapshotter + web UI + Datom-log persistence around the `.cljc` state helpers |
 | `test/murakumo/cloud_plan_test.cljk` | offline unit tests for the murakumo.cloud overlay planner |
 | `test/murakumo/overlay_driver_test.cljk` | offline unit tests for the native overlay driver shell core |
-| `test/murakumo/reconcile_test.cljk` | offline unit tests for the pure reconcile core (`bb test`) |
+| `test/murakumo/reconcile_test.cljk` | offline unit tests for the pure reconcile core (`kbb -M:test`) |
 | `test/murakumo/smoke_test.cljk` | namespace-load smoke tests for CLI shell entrypoints |
 | `deploy/com.murakumo.kotoba-mesh.plist.tmpl` | the resident LaunchAgent template |
 | `infer.edn` | distributed-inference config: model registry + head/worker memory policy — the SSoT |
@@ -354,20 +354,20 @@ certificate plus a root-managed
 `/etc/kototama/component-authority.secret`. Neither TLS material nor passwords
 are copied by Murakumo.
 | `src/murakumo/infer.cljk` | the inference operator: SSH probe → plan → provision → ring up/down → serve/generate (mlx-moe models take the single-node path) |
-| `test/murakumo/infer_test.cljk` | offline unit tests for the pure planner/engine (`bb test`) |
+| `test/murakumo/infer_test.cljk` | offline unit tests for the pure planner/engine (`kbb -M:test`) |
 | `src/murakumo/task/plan.cljk` | **PURE task scheduler**: eligibility (labels/roles/memory/exclusions) → slot-aware least-filled placement → retry-elsewhere → honest speedup summary |
 | `src/murakumo/task/exec.cljk` | nbb execution shell: bounded-concurrency SSH fan-out, per-task timeout, in-band exit-code sentinel, node probing |
 | `src/murakumo/task/worker.cljk` | resident remote shells (`ssh host bash -s` per slot) with per-task framing, timeout-kill + respawn — the transport that removes the per-task ssh cost |
 | `src/murakumo/task.cljk` | the `task` CLI (nbb): `probe` / `plan` / `run` / `report` + run ledger |
 | `src/murakumo/ops.cljk` | the `ops status` CLI (nbb): the restored fleet read surface, built on the portable `dash/state.cljc` probe core |
-| `test/murakumo/task_plan_test.cljk` | offline unit tests for the pure scheduler (`nbb scripts/run-task.cljk test-task`) |
+| `test/murakumo/task_plan_test.cljk` | offline unit tests for the pure scheduler (`kbb --backend sci scripts/run-task.cljk test-task`) |
 | `test/murakumo/task_exec_test.cljk` | offline unit tests for the exec shell's pure helpers |
-| `test/murakumo/infer_moe_test.cljk` | offline unit tests for the pure mlx-moe planner (`bb test`) |
+| `test/murakumo/infer_moe_test.cljk` | offline unit tests for the pure mlx-moe planner (`kbb -M:test`) |
 
 ## Dashboard + Datom persistence
 
 ```bash
-bb dash [port=8899] [interval-s=15]   # → http://localhost:8899
+kbb -M:dash [port=8899] [interval-s=15]   # → http://localhost:8899
 ```
 
 `dash` runs a background snapshotter + a web UI (babashka's built-in http-kit):
@@ -395,7 +395,7 @@ assignment だけを local Kotoba endpoint へ適用する。適用後は node �
 receipt を同じ content-addressed layout へ返す。
 
 ```bash
-# operator start (guest admission). There is no clojure -M:desired.
+# operator start (guest admission). There is no kbb -M:desired.
 kotoba compile kotoba/desired.kotoba --target wasm --output target/kotoba/desired.wasm
 kotoba run kotoba/desired.kotoba
 kotoba run kotoba/desired.kotoba --function run --arg '"publish"'
@@ -444,10 +444,10 @@ live placement against it.
 ```
 
 ```bash
-bb reconcile murakumo.app.edn --dry-run     # print desired-vs-observed plan, do nothing
-bb reconcile murakumo.app.edn --apply       # re-publish under-replicated apps → auction converges
-bb reconcile murakumo.app.edn --watch=30    # keep it converged; record each plan to the Datom log
-bb reconcile murakumo.app.edn --dry-run --snapshot=snap.edn   # offline, against a recorded snapshot
+kbb -M:reconcile murakumo.app.edn --dry-run     # print desired-vs-observed plan, do nothing
+kbb -M:reconcile murakumo.app.edn --apply       # re-publish under-replicated apps → auction converges
+kbb -M:reconcile murakumo.app.edn --watch=30    # keep it converged; record each plan to the Datom log
+kbb -M:reconcile murakumo.app.edn --dry-run --snapshot=snap.edn   # offline, against a recorded snapshot
 ```
 
 A plan is per-app: `eligible` (label/role-matched nodes the auction may place on),
@@ -464,7 +464,7 @@ A plan is per-app: `eligible` (label/role-matched nodes the auction may place on
 
 This is the kotoba-mesh ADR's **L5** (`docs/ADR-kotoba-mesh-wasm-hosting.md`): desired
 state AND observed state are both **datoms**, so the reconciler is just their diff.
-The pure core (`desired/observed → plan`) is unit-tested offline — `bb test`, no fleet
+The pure core (`desired/observed → plan`) is unit-tested offline — `kbb -M:test`, no fleet
 or SSH needed. `--watch` writes each plan as a `com.murakumo.fleet.reconcile` record
 into the `murakumo-fleet` graph, so the fleet's desired-vs-observed history is itself a
 queryable as-of Datom chain (alongside `dash`'s heartbeat snapshots).
@@ -483,12 +483,12 @@ gathers the results — the k8s-Job / Ray-`.remote` shape that ADR-2607071400's
 equivalence table had no entry for (ADR-2607256000).
 
 ```bash
-nbb scripts/run-task.cljk task probe                       # cores / RAM / load1 / reachability, per node
-nbb scripts/run-task.cljk task plan  --n 22 --cmd 'hostname'   # pure placement preview, nothing executed
-nbb scripts/run-task.cljk task run   --n 22 --cmd 'hostname'   # place → execute over SSH → gather → retry
-nbb scripts/run-task.cljk task run   --tasks batch.edn         # heterogeneous batch from a file
-nbb scripts/run-task.cljk task run   --n 8 --labels tier=gpu --cmd './render.sh'
-nbb scripts/run-task.cljk task report --last 5                 # replay recorded runs from the ledger
+kbb --backend sci scripts/run-task.cljk task probe                       # cores / RAM / load1 / reachability, per node
+kbb --backend sci scripts/run-task.cljk task plan  --n 22 --cmd 'hostname'   # pure placement preview, nothing executed
+kbb --backend sci scripts/run-task.cljk task run   --n 22 --cmd 'hostname'   # place → execute over SSH → gather → retry
+kbb --backend sci scripts/run-task.cljk task run   --tasks batch.edn         # heterogeneous batch from a file
+kbb --backend sci scripts/run-task.cljk task run   --n 8 --labels tier=gpu --cmd './render.sh'
+kbb --backend sci scripts/run-task.cljk task report --last 5                 # replay recorded runs from the ledger
 ```
 
 - **Placement** reuses `reconcile`'s vocabulary — `--labels` (all must match),
@@ -587,48 +587,48 @@ overlay/node CIDs, the control plane is a Datom/atproto graph (`murakumo-cloud`)
 policy is expressed as records rather than ACLs in an external VPN product.
 
 ```bash
-bb cloud plan        # human summary: overlay CID, nodes, chosen relays, policy count
-bb cloud routes      # route table: direct transport candidates + relay fallback
-bb cloud dial asher  # policy-checked identity-overlay dial hints for one node
-bb cloud connect asher  # canonical murakumo-overlay driver argv for that dial
-bb cloud relay jp-tyo-1 # canonical murakumo-overlay relay argv for one relay
-bb cloud bootstrap      # relays first, then policy-authorized node connects
-bb cloud bootstrap --format=edn # cloud.murakumo.bootstrap manifest for runners
-bb cloud dial asher --from=browser --capability=ssh  # denied unless policy allows it
-bb overlay bootstrap --manifest-file bootstrap.edn   # validate every bootstrap step
-bb overlay run --manifest-file bootstrap.edn         # dry-run ordered overlay runner plan
-bb overlay dispatch --manifest-file bootstrap.edn    # attach runtime adapters to every step
-bb overlay execute --manifest-file bootstrap.edn     # execution-report contract through runtime adapters
-bb overlay adapters                                  # list runtime adapters and implementation status
-bb overlay transports                                # list transport adapters: native relay + external QUIC/WebRTC boundaries
-bb overlay transport-probe --overlay ...             # probe the selected direct transport socket boundary
-bb overlay adapter-plan --overlay ...                # build external QUIC/WebRTC adapter argv + EDN request
-bb overlay adapter-check --overlay ...               # run the configured adapter check command
-bb overlay adapter-supervisor --overlay ...          # plan restart policy for a long-running adapter process
-MURAKUMO_QUIC_DRIVER="bb overlay-adapter" bb overlay adapter-check --overlay ... # use the bundled reference adapter
+kbb -M:cloud plan        # human summary: overlay CID, nodes, chosen relays, policy count
+kbb -M:cloud routes      # route table: direct transport candidates + relay fallback
+kbb -M:cloud dial asher  # policy-checked identity-overlay dial hints for one node
+kbb -M:cloud connect asher  # canonical murakumo-overlay driver argv for that dial
+kbb -M:cloud relay jp-tyo-1 # canonical murakumo-overlay relay argv for one relay
+kbb -M:cloud bootstrap      # relays first, then policy-authorized node connects
+kbb -M:cloud bootstrap --format=edn # cloud.murakumo.bootstrap manifest for runners
+kbb -M:cloud dial asher --from=browser --capability=ssh  # denied unless policy allows it
+kbb -M:overlay bootstrap --manifest-file bootstrap.edn   # validate every bootstrap step
+kbb -M:overlay run --manifest-file bootstrap.edn         # dry-run ordered overlay runner plan
+kbb -M:overlay dispatch --manifest-file bootstrap.edn    # attach runtime adapters to every step
+kbb -M:overlay execute --manifest-file bootstrap.edn     # execution-report contract through runtime adapters
+kbb -M:overlay adapters                                  # list runtime adapters and implementation status
+kbb -M:overlay transports                                # list transport adapters: native relay + external QUIC/WebRTC boundaries
+kbb -M:overlay transport-probe --overlay ...             # probe the selected direct transport socket boundary
+kbb -M:overlay adapter-plan --overlay ...                # build external QUIC/WebRTC adapter argv + EDN request
+kbb -M:overlay adapter-check --overlay ...               # run the configured adapter check command
+kbb -M:overlay adapter-supervisor --overlay ...          # plan restart policy for a long-running adapter process
+MURAKUMO_QUIC_DRIVER="kbb -M:overlay-adapter" bb overlay adapter-check --overlay ... # use the bundled reference adapter
 kotoba run kotoba/quic_driver.kotoba --function run --arg '"check"'   # guest admission
 kotoba run kotoba/quic_cert.kotoba --function run --arg '"ensure"'    # host-listen HOLD (BouncyCastle)
-bb quic-cert list                              # show active QUIC material generations/fingerprints
-bb quic-cert rotate --overlay=bafyOverlay --node=bafyNode --host=localhost # rotate active QUIC cert/key
-bb quic-cert verify                            # verify files, fingerprints, and audit hash chain
-bb quic-cert prune --keep=1                    # remove old non-active generations
-bb quic-driver serve --request-edn '{...}'       # QUIC listener; auto-issues cert/key if env is absent
+kbb -M:quic-cert list                              # show active QUIC material generations/fingerprints
+kbb -M:quic-cert rotate --overlay=bafyOverlay --node=bafyNode --host=localhost # rotate active QUIC cert/key
+kbb -M:quic-cert verify                            # verify files, fingerprints, and audit hash chain
+kbb -M:quic-cert prune --keep=1                    # remove old non-active generations
+kbb -M:quic-driver serve --request-edn '{...}'       # QUIC listener; auto-issues cert/key if env is absent
 MURAKUMO_QUIC_CERT=cert.pem MURAKUMO_QUIC_KEY=key.pem bb quic-driver serve --request-edn '{...}' # explicit cert/key override
 kotoba run kotoba/quic_driver.kotoba   # guest admission; kwik listen is host-listen HOLD
-bb overlay-adapter check --request-edn '{...}'       # reference external adapter driver entrypoint
-bb overlay dial-check --overlay ...                  # probe direct endpoint reachability
-bb overlay dial-check --via=relay --overlay ...      # connect to relay and exchange overlay hello/frame/ack
-bb overlay dial-check --via=relay --frames=a,b,c ... # stream ordered frames through the relay contract
-bb overlay dial-check --auth-key ... --via=relay ... # stream frames with keyed MAC validation
-bb overlay relay-check --overlay ...                 # prove a relay listener can bind locally
-bb overlay serve-relay --auth-key ... --require-auth true --max-frame-bytes 65536 --overlay ... # hardened relay listener
-bb overlay service-plan --listen 127.0.0.1:18022 --service ssh --auth-key ... --via=relay ... # persistent service proxy plan
-bb overlay service-proxy --listen 127.0.0.1:18022 --service ssh --auth-key ... --via=relay ... # persistent byte proxy
-bb overlay local-forward --listen 127.0.0.1:18022 --auth-key ... --via=relay ... # local TCP lines over sealed relay stream
-bb overlay local-forward-bytes --listen 127.0.0.1:18023 --auth-key ... --via=relay ... # local TCP byte chunks over sealed relay stream
+kbb -M:overlay-adapter check --request-edn '{...}'       # reference external adapter driver entrypoint
+kbb -M:overlay dial-check --overlay ...                  # probe direct endpoint reachability
+kbb -M:overlay dial-check --via=relay --overlay ...      # connect to relay and exchange overlay hello/frame/ack
+kbb -M:overlay dial-check --via=relay --frames=a,b,c ... # stream ordered frames through the relay contract
+kbb -M:overlay dial-check --auth-key ... --via=relay ... # stream frames with keyed MAC validation
+kbb -M:overlay relay-check --overlay ...                 # prove a relay listener can bind locally
+kbb -M:overlay serve-relay --auth-key ... --require-auth true --max-frame-bytes 65536 --overlay ... # hardened relay listener
+kbb -M:overlay service-plan --listen 127.0.0.1:18022 --service ssh --auth-key ... --via=relay ... # persistent service proxy plan
+kbb -M:overlay service-proxy --listen 127.0.0.1:18022 --service ssh --auth-key ... --via=relay ... # persistent byte proxy
+kbb -M:overlay local-forward --listen 127.0.0.1:18022 --auth-key ... --via=relay ... # local TCP lines over sealed relay stream
+kbb -M:overlay local-forward-bytes --listen 127.0.0.1:18023 --auth-key ... --via=relay ... # local TCP byte chunks over sealed relay stream
 MURAKUMO_OVERLAY_AUTH_KEY=... bb cloud bootstrap --format=edn # inject auth-key into driver argv
 MURAKUMO_OPERATOR_SEED=... bb cloud bootstrap --format=edn     # derive overlay auth-key if no explicit key is set
-bb cloud records     # EDN records ready to persist/publish into the cloud graph
+kbb -M:cloud records     # EDN records ready to persist/publish into the cloud graph
 ```
 
 The current implementation is the deterministic control-plane layer:
@@ -640,26 +640,26 @@ The current implementation is the deterministic control-plane layer:
   records.
 - Relay fallback is deterministic and region-aware (`:labels {:zone ...}` /
   `:region`), while direct paths prefer QUIC/WebRTC/WebTransport.
-- `bb cloud dial <node>` is policy-aware: it defaults to
+- `kbb -M:cloud dial <node>` is policy-aware: it defaults to
   `from=operator to=fleet capability=ssh`, emits direct/relay candidates only when
   `cloud.edn` allows that capability, and otherwise returns a policy denial instead
   of a route.
-- `bb cloud connect <node>` turns the authorized dial plan into the canonical
+- `kbb -M:cloud connect <node>` turns the authorized dial plan into the canonical
   `murakumo-overlay dial ...` argv that a native stream/packet driver can execute.
-- `bb cloud relay <name>` turns a relay control record into the canonical
+- `kbb -M:cloud relay <name>` turns a relay control record into the canonical
   `murakumo-overlay relay ...` argv for starting a relay process.
-- `bb overlay transports` exposes the adapter boundary: relay is native today;
+- `kbb -M:overlay transports` exposes the adapter boundary: relay is native today;
   QUIC/WebRTC/WebTransport are executable external-adapter slots
   (`MURAKUMO_QUIC_DRIVER`, `MURAKUMO_WEBRTC_DRIVER`,
   `MURAKUMO_WEBTRANSPORT_DRIVER`) until a JVM/babashka-safe transport is linked.
-- `bb overlay adapter-plan` and `bb overlay adapter-check` implement the external
+- `kbb -M:overlay adapter-plan` and `kbb -M:overlay adapter-check` implement the external
   driver protocol: the configured command receives
   `<action> --request-edn '<murakumo.overlay.adapter-request>'`, and murakumo records
   exit code, stdout, stderr, timeout, and missing-adapter failures as EDN.
-- `bb overlay adapter-supervisor` produces the long-running process supervision
+- `kbb -M:overlay adapter-supervisor` produces the long-running process supervision
   plan for QUIC/WebRTC/WebTransport drivers, including restart policy and max
   restart count.
-- `bb overlay-adapter` is a bundled reference external driver. It implements
+- `kbb -M:overlay-adapter` is a bundled reference external driver. It implements
   `check`, `dial`, `serve`, and `serve-once` against the same EDN request contract,
   so real `murakumo-quic-driver` / `murakumo-webrtc-driver` binaries can be tested
   against a known protocol shape.
@@ -667,12 +667,12 @@ The current implementation is the deterministic control-plane layer:
   JVM Clojure using the pure-Java Kwik QUIC stack. It performs QUIC `check`,
   `dial`, `serve`, and `serve-once`, opens a QUIC stream, and exchanges the same
   `adapter-hello` / `adapter-ack` records used by the reference adapter.
-- `bb quic-cert` issues, lists, and rotates QUIC certificate material under
+- `kbb -M:quic-cert` issues, lists, and rotates QUIC certificate material under
   `.murakumo/kagi/quic` by default (`MURAKUMO_KAGI_DIR` overrides the path). Files
   are written owner-only (`0600`), indexed in `index.edn`, and tracked by
   overlay/node/host generation, active generation, fingerprint, and expiry.
   Issue/rotate/prune operations append to a hash-chained audit log, and
-  `bb quic-cert verify` checks both material fingerprints and that audit chain.
+  `kbb -M:quic-cert verify` checks both material fingerprints and that audit chain.
   `MURAKUMO_QUIC_CERT` and `MURAKUMO_QUIC_KEY` still override the stored material
   when supplied.
 - `murakumo.overlay.stream` models ordered logical streams, so multiple service
@@ -681,61 +681,61 @@ The current implementation is the deterministic control-plane layer:
   from `cloud.murakumo.route` records.
 - `murakumo.overlay.keyring` derives per-overlay, per-epoch key material for key
   rotation while accepting previous/current/next key ids during rollover.
-- `bb overlay service-proxy` is the persistent service-proxy entrypoint over the
+- `kbb -M:overlay service-proxy` is the persistent service-proxy entrypoint over the
   relay byte stream; `local-forward*` remains the lower-level debug surface.
 - Relay hardening now includes optional auth-required mode and max frame byte
   limits; rejected frames are not counted as successful dial checks.
-- `bb cloud bootstrap` prints the fleet-wide overlay boot sequence: relay processes
+- `kbb -M:cloud bootstrap` prints the fleet-wide overlay boot sequence: relay processes
   first, then policy-authorized node dial argv.
-- `bb cloud bootstrap --format=edn` emits the same sequence as a
+- `kbb -M:cloud bootstrap --format=edn` emits the same sequence as a
   `cloud.murakumo.bootstrap` manifest with explicit phases and executable argv.
-- `bb overlay bootstrap --manifest-file <file>` reads that manifest and validates
+- `kbb -M:overlay bootstrap --manifest-file <file>` reads that manifest and validates
   every phase step through the same `dial` / `relay` driver contracts before a
   future runtime opens sockets.
-- `bb overlay run --manifest-file <file>` turns a validated bootstrap manifest into
+- `kbb -M:overlay run --manifest-file <file>` turns a validated bootstrap manifest into
   a dry-run `murakumo.overlay.run-plan`, preserving phase order and marking every
   step as `:run` or `:blocked`.
-- `bb overlay dispatch --manifest-file <file>` attaches runtime adapter names
+- `kbb -M:overlay dispatch --manifest-file <file>` attaches runtime adapter names
   (`murakumo.runtime.quic`, `murakumo.runtime.relay`, etc.) to each runnable step.
-- `bb overlay execute --manifest-file <file>` preserves the same ordering and emits
+- `kbb -M:overlay execute --manifest-file <file>` preserves the same ordering and emits
   a `murakumo.overlay.execution-report`. `murakumo.overlay.runtime` owns the adapter
   registry (`relay`, `quic`, `webrtc`, `webtransport`, relay-client) and currently
   returns explicit `:would-run` execution records; the real socket/relay runtime
   plugs into this boundary.
-- `bb overlay adapters` lists those runtime adapters and their current
+- `kbb -M:overlay adapters` lists those runtime adapters and their current
   implementation status.
-- `bb overlay dial-check ...` opens a host socket to the planned direct endpoint,
+- `kbb -M:overlay dial-check ...` opens a host socket to the planned direct endpoint,
   proving the dial target is reachable before full QUIC/WebRTC framing exists.
-- `bb overlay dial-check --via=relay ...` connects to the relay endpoint and
+- `kbb -M:overlay dial-check --via=relay ...` connects to the relay endpoint and
   exchanges minimal EDN `relay-hello`, `relay-ack`, `relay-frame`, and
   `relay-frame-ack` records carrying overlay, node, principal identity, target, and
   a small payload.
-- `bb overlay dial-check --via=relay --frames=a,b,c ...` streams multiple ordered
+- `kbb -M:overlay dial-check --via=relay --frames=a,b,c ...` streams multiple ordered
   frames over the same relay connection and verifies one digest-checked ack per
   frame.
 - `--auth-key <secret>` on both `serve-relay` and `dial-check` adds a keyed frame
   MAC; relay acks expose `:mac-ok?` and reject frames with a bad MAC.
 - With `--auth-key`, relay frame payloads are sealed with AES-GCM on the wire;
   acks expose `:open-ok?` / `:sealed?` after successful decrypt-and-verify.
-- `bb overlay local-forward ...` opens a local TCP listener and forwards client
+- `kbb -M:overlay local-forward ...` opens a local TCP listener and forwards client
   input lines as sealed relay stream frames, returning acknowledged payload lines
   to the local client. This is the first host-side tunnel boundary; byte-stream
   framing and service proxying can replace the line codec next.
-- `bb overlay local-forward-bytes ...` uses the same sealed relay stream but frames
+- `kbb -M:overlay local-forward-bytes ...` uses the same sealed relay stream but frames
   raw local TCP bytes as base64url chunks, then decodes acknowledged chunks back to
   bytes for the local client.
-- `cloud.edn` declares `:overlay/auth-key-env` so `bb cloud connect`, `relay`, and
+- `cloud.edn` declares `:overlay/auth-key-env` so `kbb -M:cloud connect`, `relay`, and
   `bootstrap` can inject `--auth-key` into executable driver argv from the local
   environment without storing the secret in control-plane records.
 - If no explicit overlay auth key is set, `:overlay/auth-key-source :operator-seed`
   derives the driver MAC key from `MURAKUMO_OPERATOR_SEED` and the overlay CID.
   The derived key is still only placed in executable argv, not records.
-- `bb overlay relay-check ...` opens and closes the relay listener, proving the
+- `kbb -M:overlay relay-check ...` opens and closes the relay listener, proving the
   host can bind the requested port.
-- `bb overlay serve-relay ...` starts the minimal host relay process. It accepts
+- `kbb -M:overlay serve-relay ...` starts the minimal host relay process. It accepts
   TCP connections and returns an identity-aware ack while transport framing is
   still being implemented.
-- `bb overlay dial ...` / `bb overlay relay ...` are the repo-local driver shell for
+- `kbb -M:overlay dial ...` / `kbb -M:overlay relay ...` are the repo-local driver shell for
   those canonical argv. They do not open sockets yet; they validate requests and emit
   `murakumo.overlay.session` / `murakumo.overlay.relay` records so the next
   implementation layer has a stable executable contract.
@@ -763,9 +763,9 @@ out-of-band. To bump the fleet version:
 
 ```bash
 # build the new kotoba (cli+server, p2p,realtime-wasm), then:
-bb murakumo pin <its release dir>     # copies binaries → ./bin, rewrites bin/BUILD.edn
+kbb -M:murakumo pin <its release dir>     # copies binaries → ./bin, rewrites bin/BUILD.edn
 git commit bin/BUILD.edn -m "bump fleet kotoba → <sha>"   # the auditable version pin
-bb murakumo provision all             # roll it out
+kbb -M:murakumo provision all             # roll it out
 ```
 
 `provision`/`mesh` print the pinned version on rollout and refuse if `bin/BUILD.edn`
@@ -826,10 +826,10 @@ npm run task -- infer serve glm-5.2-reap50-q2k ~/models/GLM-5.2-…-00001-of-000
 npm run task -- infer generate "叢雲とは何ですか"   # OpenAI API → the whole fleet answers
 
 # Hugging Face model cache setup over Tailscale SSH
-bb murakumo model plan trellis-image-large asher
-bb murakumo model setup trellis-image-large        # auto: live non-canary node; asher is fallback
-bb murakumo model status trellis-image-large all
-bb murakumo revive all                             # Wake-on-LAN offline Macs via a live peer
+kbb -M:murakumo model plan trellis-image-large asher
+kbb -M:murakumo model setup trellis-image-large        # auto: live non-canary node; asher is fallback
+kbb -M:murakumo model status trellis-image-large all
+kbb -M:murakumo revive all                             # Wake-on-LAN offline Macs via a live peer
 
 # :model/engine :mlx-moe — same verbs, single-node path (no ring/up/down):
 npm run task -- infer plan qwen3-coder-next-mlx-moe    # picks the best-memory node + capacity + verdict
@@ -876,7 +876,7 @@ queue without being mistaken for a live node merely because it enrolled once:
 export MURAKUMO_NODE_CACAO=...       # device-issued CACAO; preferred
 export MURAKUMO_NODE_DID=did:key:... # must equal that CACAO's issuer
 # Existing operator-managed residents may instead use MURAKUMO_SERVICE_TOKEN.
-nbb scripts/run-task.cljk infer-join \
+kbb --backend sci scripts/run-task.cljk infer-join \
   --name k16 --model <served-model-id> --local-url http://127.0.0.1:11434/v1
 ```
 
@@ -897,10 +897,10 @@ passing a literal, and the production path spelled it `(or link-gbps 0)`, so
 an unmeasured fleet and a slow one were the same input (ADR-260815).
 
 ```bash
-nbb src/murakumo/infer/topology_probe.cljk discover      # nodes from tailscale + Bonjour vs fleet.edn
-nbb src/murakumo/infer/topology_probe.cljk nominal       # what each NIC claims — cannot lift the gate
-nbb src/murakumo/infer/topology_probe.cljk thunderbolt   # bridge0 state: the cable-arrived detector
-nbb src/murakumo/infer/topology_probe.cljk measure --bytes-mib 128   # real transfers, counted at the receiver
+kbb --backend sci src/murakumo/infer/topology_probe.cljk discover      # nodes from tailscale + Bonjour vs fleet.edn
+kbb --backend sci src/murakumo/infer/topology_probe.cljk nominal       # what each NIC claims — cannot lift the gate
+kbb --backend sci src/murakumo/infer/topology_probe.cljk thunderbolt   # bridge0 state: the cable-arrived detector
+kbb --backend sci src/murakumo/infer/topology_probe.cljk measure --bytes-mib 128   # real transfers, counted at the receiver
 ```
 
 The link number is **zero unless every rank boundary carries a verified
@@ -943,7 +943,7 @@ runs for GLM. `tools/claude-murakumo` sets `ANTHROPIC_BASE_URL`/
 `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_MODEL` and launches the real `claude` binary:
 
 ```bash
-bb claude                 # or ./tools/claude-murakumo/claude-murakumo
+kbb -M:claude                 # or ./tools/claude-murakumo/claude-murakumo
 ```
 
 The go/no-go gate is honest about the memory math: `plan` exits non-zero when the
@@ -974,7 +974,7 @@ a seed. `identity` / report commands print the **operator DID** only.
 
 ```bash
 kotoba identity new                         # write the shared 0600 seed file
-nbb scripts/run-task.cljk identity          # same DID kotoba prints
+kbb --backend sci scripts/run-task.cljk identity          # same DID kotoba prints
 # optional override:
 # export MURAKUMO_OPERATOR_SEED=<32-byte hex>
 ```
@@ -999,7 +999,7 @@ TailnetGovernor, admission always routed to a human, append-only ledger).
 ```bash
 cp kekkai-tailnet.edn.example kekkai-tailnet.edn   # opt in
 # edit :status per node ("authorized" | "pending" | "expired" | "revoked")
-bb murakumo nodes    # nodes without :status "authorized" are now excluded,
+kbb -M:murakumo nodes    # nodes without :status "authorized" are now excluded,
                       # reported to stderr: "[kekkai] <name>: not authorized (<status>) — excluded from fleet ops"
 ```
 
@@ -1017,14 +1017,14 @@ bb murakumo nodes    # nodes without :status "authorized" are now excluded,
   boundary — not this repo's operator start, and not a `:desired`/`:factory`
   alias. Default operator start is `kotoba run`.
 - **What this does NOT replace.** `cloud.edn`'s default-deny capability
-  policy (`bb cloud dial ... capability=ssh`) still governs what a given
+  policy (`kbb -M:cloud dial ... capability=ssh`) still governs what a given
   *admitted* node may reach; kekkai gates fleet **membership** (is this node
   operable at all), a layer below that. Real admission (`"pending"` →
   `"authorized"`) happens through kekkai's own CoordinationActor elsewhere —
   this ledger file is the ground-fact snapshot murakumo reads, not the
   admission flow itself.
 - Pure logic (`murakumo.kekkai.gate`, env resolution + node partitioning) is
-  unit-tested offline in `bb test`; the subprocess shell (`murakumo.kekkai`)
+  unit-tested offline in `kbb -M:test`; the subprocess shell (`murakumo.kekkai`)
   is exercised manually against a real sibling kekkai checkout.
 - **Known cost (not yet optimized): one JVM spawn per node.** `apply-gate`
   shells out to `kekkai.cli` once per node in the selection (no batching), so
@@ -1035,7 +1035,7 @@ bb murakumo nodes    # nodes without :status "authorized" are now excluded,
 
 ## Status (honest)
 
-> **Measured fleet state, 2026-07-25** (`nbb scripts/run-task.cljk ops status`, cross-checked
+> **Measured fleet state, 2026-07-25** (`kbb --backend sci scripts/run-task.cljk ops status`, cross-checked
 > with a `task run` over all 11 reachable nodes). The claims in this section describe what the
 > CODE does; here is what the FLEET currently looks like:
 >
@@ -1079,7 +1079,7 @@ bb murakumo nodes    # nodes without :status "authorized" are now excluded,
   - **durable mesh-state projection + dashboard + liveness alerts** (`dash`): heartbeat
     snapshots persisted to the Datom log, web UI, drift alerts.
   - **`wadm` layer (declarative)**: `reconcile` desired-vs-observed plan + `--apply`
-    convergence + `--watch` with as-of history. Pure core unit-tested offline (`bb test`).
+    convergence + `--watch` with as-of history. Pure core unit-tested offline (`kbb -M:test`).
   - **kekkai fleet-admission gate** (opt-in): `select` filters to
     kekkai-`"authorized"` nodes once `kekkai-tailnet.edn` is configured.
 - **Next**:
@@ -1091,7 +1091,7 @@ bb murakumo nodes    # nodes without :status "authorized" are now excluded,
   - reconcile reads observed placement from node logs (`trigger: executed … <cid>`);
     a first-class `lattice ps --json` on `kotoba-server` would replace the log grep.
   - `:mlx-moe`: the planner/engine/CLI path is implemented and unit-tested
-    (`bb test`), but **not yet run against the live fleet** — today's minis are
+    (`kbb -M:test`), but **not yet run against the live fleet** — today's minis are
     16 GiB each, below mlx-moe's smallest measured 32 GiB tier, so `infer plan
     qwen3-coder-next-mlx-moe` currently reports `DOES NOT FIT` honestly on this
     exact hardware until a ≥32 GiB node (fleet or `:infer/extra-nodes`) joins.

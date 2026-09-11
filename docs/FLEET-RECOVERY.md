@@ -5,22 +5,22 @@
 Omit the node to choose a live non-canary node with the most free disk:
 
 ```bash
-bb murakumo model plan trellis-image-large
-bb murakumo model setup trellis-image-large
-bb murakumo model status trellis-image-large all
+kbb -M:murakumo model plan trellis-image-large
+kbb -M:murakumo model setup trellis-image-large
+kbb -M:murakumo model status trellis-image-large all
 ```
 
 Use an explicit node only when placement is intentional:
 
 ```bash
-bb murakumo model setup hunyuan3d-2.1 issachar
+kbb -M:murakumo model setup hunyuan3d-2.1 issachar
 ```
 
 ## Recover an offline node
 
 ```bash
-bb murakumo revive levi
-bb murakumo revive all
+kbb -M:murakumo revive levi
+kbb -M:murakumo revive all
 ```
 
 `revive` sends Wake-on-LAN through a currently reachable LAN peer. After wake,

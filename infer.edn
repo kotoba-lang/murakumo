@@ -23,7 +23,7 @@
  ;;   bytes/token = :elements-per-token * (:kv-cache/bytes-per-element <type>)
  ;;
  ;; Read the geometry out of a GGUF with:
- ;;   nbb scripts/model-kv-geometry.cljk <node> <path.gguf>
+ ;;   kbb --backend sci scripts/model-kv-geometry.cljk <node> <path.gguf>
  ;;
  ;; ⚠ Two shapes break the flat arithmetic and are flagged where they occur:
  ;; per-layer KV heads (gemma4 alternates local/global attention, so the cache
@@ -842,6 +842,6 @@
   ;; way next to the chat head's tens-of-GB checkpoint — there is no capacity
   ;; pressure pushing toward a smaller quant here. :model/dir is a projected
   ;; path (this repo has not yet been pulled onto any fleet node — see
-  ;; `bb murakumo model setup bge-m3-embed-gguf`), following the same
+  ;; `kbb -M:murakumo model setup bge-m3-embed-gguf`), following the same
   ;; per-model-id directory convention as qwen-agentworld-35b-a3b above.
   }}   ; HF file-listing size (Q8_0, verified via HF API 2026-07-19)

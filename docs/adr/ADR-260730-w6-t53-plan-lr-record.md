@@ -52,7 +52,7 @@ Suites:
 
 - `murakumo.infer-plan-kotoba-parity-test` — 12 tests, 100 assertions, 0 failures
 - `murakumo.kotoba-oracle-authority-test` — 66 tests, 1174 assertions, 0 failures
-- Full `clojure -M:test` — 12 failures, all `…-over-real-quic` live-transport
+- Full `kbb -M:test` — 12 failures, all `…-over-real-quic` live-transport
   cases. Across five runs on four trees (including pristine `main`) that suite
   has failed 5 / 6 / 3 / 7 / 12 assertions with a **different subset each
   time**, and it touches neither plan, schedule nor rebalance.

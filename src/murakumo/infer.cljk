@@ -1,4 +1,4 @@
-;; murakumo.infer — fleet distributed inference, exo-style (bb command layer).
+;; murakumo.infer — fleet distributed inference, exo-style (kbb -M:command layer).
 ;;
 ;; The pure planning/engine core lives in murakumo.infer.plan / .engine (cljc —
 ;; portable into the JVM tests, cloud-murakumo, and kotoba WASM). This namespace
@@ -1091,7 +1091,7 @@
     (if remote?
       (let [{:keys [out]} (ssh/sh (:host head-cfg)
                                   (format "pkill -f 'llama-server .*--embedding' 2>/dev/null || true; sleep 0.3; nohup %s >/tmp/murakumo-embed.log 2>&1 & sleep 1; pgrep -f 'llama-server .*--embedding' >/dev/null && echo serving || echo FAILED" cmd))]
-        (println (format "[%s] %s — http://%s:%s/v1 (first launch downloads-free — model must already be on disk via `bb murakumo model setup`; watch /tmp/murakumo-embed.log)"
+        (println (format "[%s] %s — http://%s:%s/v1 (first launch downloads-free — model must already be on disk via `kbb -M:murakumo model setup`; watch /tmp/murakumo-embed.log)"
                          (:host head-cfg) out (api-host head-cfg) (:infer/embed-port cfg 8091))))
       (p/shell cmd))))
 

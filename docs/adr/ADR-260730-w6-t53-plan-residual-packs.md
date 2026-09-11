@@ -62,7 +62,7 @@ which is closer to how a host actually uses it. `unpack3` is deleted.
 
 - `murakumo.infer-plan-kotoba-parity-test` — 12 tests, 98 assertions, 0 failures
 - `murakumo.kotoba-oracle-authority-test` — 66 tests, 1174 assertions, 0 failures
-- Full `clojure -M:test` — 539 tests, 4 failures, all
+- Full `kbb -M:test` — 539 tests, 4 failures, all
   `live-rpc-round-trip-over-real-quic`. That live-transport suite has now failed
   5 / 6 / 3 / 7 / 12 / 3 / 4 assertions across seven runs on six trees
   (including pristine `main`), a different subset each time.

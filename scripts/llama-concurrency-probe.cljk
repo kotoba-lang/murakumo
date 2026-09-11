@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; Does this head actually overlap concurrent requests?
 ;;
 ;; `--parallel N` is a claim about concurrency. The way to check a claim about
@@ -15,7 +15,7 @@
 ;;
 ;; The head is normally bound to 127.0.0.1, so reach it through a tunnel:
 ;;   ssh -N -L 18090:127.0.0.1:8090 <user>@<head> &
-;;   nbb scripts/llama-concurrency-probe.cljk --base http://127.0.0.1:18090 --n 2
+;;   kbb --backend sci scripts/llama-concurrency-probe.cljk --base http://127.0.0.1:18090 --n 2
 ;;
 ;; Each request carries a distinct nonce so no request can be served out of
 ;; another's prefix cache -- otherwise "fast" would measure the cache, not

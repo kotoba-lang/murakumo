@@ -80,7 +80,7 @@ Suites:
 - `murakumo.kotoba-oracle-authority-test` — 66 tests, 1174 assertions, 0 failures
 - `murakumo.infer-schedule-test` — 6 tests, 14 assertions, 0 failures
 - `murakumo.oracle-call-record-test` — 3 tests, 11 assertions, 0 failures
-- Full `clojure -M:test` — 539 tests, 7 failures, all `…-over-real-quic`
+- Full `kbb -M:test` — 539 tests, 7 failures, all `…-over-real-quic`
   live-transport cases. Those pick a different subset every run (5 / 6 / 3 / 7
   across four runs on three different trees, including pristine `main`) and
   touch neither schedule nor rebalance.

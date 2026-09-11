@@ -189,11 +189,11 @@ Numbers above are from 2026-09-07 and are *not* to be quoted as current. Re-run:
 # distributions from a head's own journal (never one sample)
 ssh jun@100.119.10.43 'journalctl -u murakumo-b70-llama.service --since "24 hours ago" --no-pager' \
   > /tmp/b70.log
-nbb scripts/llama-timing-percentiles.cljk --label b70 < /tmp/b70.log
+kbb --backend sci scripts/llama-timing-percentiles.cljk --label b70 < /tmp/b70.log
 
 # does this head overlap concurrent requests?
 ssh -N -f -L 18090:127.0.0.1:8090 jun@100.119.10.43
-nbb scripts/llama-concurrency-probe.cljk --base http://127.0.0.1:18090 --n 2 --n-predict 96
+kbb --backend sci scripts/llama-concurrency-probe.cljk --base http://127.0.0.1:18090 --n 2 --n-predict 96
 
 # what the slot window has to survive
 grep -oE 'prompt eval time =[^/]*/ *[0-9]+ tokens' /tmp/b70.log \

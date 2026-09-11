@@ -25,9 +25,9 @@ Run it:
 ```sh
 L=<superproject>/scripts/cljk-classpath.cljk
 MCP=$(nbb $L "src:<superproject>/orgs/kotoba-lang/text/src")
-nbb --classpath "$MCP" scripts/capacity-plan.cljk            # summary + EDN
-nbb --classpath "$MCP" scripts/capacity-plan.cljk --write    # resources/murakumo/capacity-plan.edn
-nbb --classpath "$MCP" scripts/capacity-plan.cljk --publish  # + POST /infer/placement
+kbb --backend sci --classpath "$MCP" scripts/capacity-plan.cljk            # summary + EDN
+kbb --backend sci --classpath "$MCP" scripts/capacity-plan.cljk --write    # resources/murakumo/capacity-plan.edn
+kbb --backend sci --classpath "$MCP" scripts/capacity-plan.cljk --publish  # + POST /infer/placement
 ```
 
 ## 2026-09-11 — the plan that came out, and what it changed

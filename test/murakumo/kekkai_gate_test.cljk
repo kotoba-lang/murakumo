@@ -17,7 +17,7 @@
            (gate/kekkai-dir #(when (= "MURAKUMO_KEKKAI_DIR" %) "/opt/kekkai"))))))
 
 (deftest cli-argv-and-status-parsing
-  (is (= ["clojure" "-M" "-m" "kekkai.cli" "ledger.edn" "asher"]
+  (is (= ["kbb" "-M" "-m" "kekkai.cli" "ledger.edn" "asher"]
          (gate/cli-argv "ledger.edn" "asher")))
   (is (= "authorized" (gate/parse-status {:exit 0 :out "authorized\n"})))
   (testing "kekkai.cli exits 1 for non-authorized statuses but still prints the real status"
