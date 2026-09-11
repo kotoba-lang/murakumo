@@ -1,0 +1,96 @@
+(ns murakumo.node-cli
+  "Distribution entry for the existing nbb resident; not a native runtime migration."
+  (:require [murakumo.infer.poll-worker :as worker]
+            [cacao.edge.mint :as mint]
+            [kotoba.lang.text :as str]
+            ["node:fs" :as fs] ["node:path" :as path]
+            ["node:os" :as os] ["node:crypto" :as crypto]))
+
+(defn help []
+  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\nNode.js 22+, a running OpenAI-compatible model server and network access are required.\nInstallation does not download models or start a service. Community enrollment\nmay remain pending admission; a heartbeat alone does not prove job eligibility."))
+
+(defn identity-path []
+  (.join path (or (aget js/process.env "MURAKUMO_NODE_HOME")
+                 (.join path (.homedir os) ".local" "share" "murakumo-node")) "identity.json"))
+(defn identity []
+  (let [p (identity-path)]
+    (when (.existsSync fs p)
+      (let [st (.lstatSync fs p)]
+        (when (or (.isSymbolicLink st) (not= 0 (bit-and (.-mode st) 63)))
+          (throw (js/Error. "Device identity must be a private regular file (chmod 600).")))
+        (try (js/JSON.parse (.readFileSync fs p "utf8"))
+             (catch :default _ (throw (js/Error. "Device identity file is invalid; restore your private backup."))))))))
+(defn init! []
+  (if-let [id (identity)]
+    (println "Identity already exists:" (.-did id))
+    (let [kp (.generateKeyPairSync crypto "ed25519")
+          pub (.export (.-publicKey kp) #js {:format "der" :type "spki"})
+          raw (.subarray pub (- (.-length pub) 32))
+          did (mint/did-key-from-raw-ed25519-pub raw)
+          pem (.export (.-privateKey kp) #js {:format "pem" :type "pkcs8"})
+          p (identity-path)]
+      (.mkdirSync fs (.dirname path p) #js {:recursive true :mode 448})
+      (.writeFileSync fs p (js/JSON.stringify #js {:did did :privateKey pem}) #js {:mode 384 :flag "wx"})
+      (println "Device identity created:" did)
+      (println "Private key stays on this PC. Next: murakumo node doctor --model <served-model-id>"))))
+(defn utc [ms] (.replace (.toISOString (js/Date. ms)) #"\.\d{3}Z$" "Z"))
+(defn mint! [id base]
+  (mint/mint (.-did id)
+             #(js/Promise.resolve (.sign crypto nil % (.-privateKey id)))
+             {:domain (.-host (js/URL. base)) :aud base
+              :nonce (.randomUUID crypto) :iat (utc (js/Date.now))
+              :exp (utc (+ (js/Date.now) 3600000))}))
+(defn fail! [message] (println message) (set! (.-exitCode js/process) 1))
+(defn options [args]
+  (when (or (odd? (count args))
+            (some (fn [[k v]] (or (not (contains? #{"--model" "--name" "--local-url" "--base" "--trust-tier"} k))
+                                 (str/starts-with? v "--"))) (partition 2 args)))
+    (throw (js/Error. "Unknown option or missing value. Use murakumo node --help.")))
+  (worker/parse-args args))
+(defn run! [command opts]
+  (let [base (or (:base opts) "https://api.murakumo.cloud")
+        local (str/replace (or (:local-url opts) "http://127.0.0.1:11434/v1") #"/+$" "")
+        model (:model opts)
+        id (identity)
+        env (js->clj js/process.env)
+        auth (worker/control-auth opts env)]
+    (when-not (and (string? model) (not (str/blank? model)))
+      (throw (js/Error. "Specify --model exactly as returned by the local /v1/models endpoint.")))
+    (let [u (js/URL. base)]
+      (when-not (or (= "https:" (.-protocol u))
+                    (and (= "http:" (.-protocol u)) (contains? #{"localhost" "127.0.0.1" "[::1]"} (.-hostname u))))
+        (throw (js/Error. "The control plane must use HTTPS (HTTP is allowed only on loopback)."))))
+    (-> (worker/probe-readiness-with-fetch! js/fetch local (worker/local-auth-token opts env) model)
+        (.then (fn [probe]
+                 (println "Local model:" (if (:ready? probe) "ready" "not ready") "(HTTP" (:status probe) ")")
+                 (println "Device authentication:" (if (or auth id) "configured" "missing; run murakumo node init"))
+                 (cond
+                   (not (:ready? probe)) (fail! "Start the local model server and use its exact model ID before joining.")
+                   (not (or auth id)) (fail! "Run murakumo node init, then repeat this command.")
+                   (= command "doctor") (println "Preflight passed. No registration or inference was performed.")
+                   :else
+                   (let [opts (assoc opts :base base :local-url local :check (= command "check"))]
+                     (if auth
+                       (worker/-main opts)
+                       (-> (mint! id base)
+                           (.then (fn [token]
+                                    (let [current (atom (:cacao-b64 token))]
+                                      (when (= command "join")
+                                        (.unref (js/setInterval
+                                                 #(-> (mint! id base)
+                                                      (.then (fn [t] (reset! current (:cacao-b64 t))))
+                                                      (.catch (fn [_] (println "Device session renewal failed."))))
+                                                 1800000)))
+                                      (worker/-main (assoc opts :did (.-did id) :cacao #(deref current)))))))))))))))
+
+(let [[prefix command & args] (vec (array-seq (.slice js/process.argv 2)))]
+  (try
+    (cond
+      (or (nil? prefix) (= prefix "--help") (= command "--help")) (help)
+      (not= prefix "node") (fail! "Use: murakumo node --help")
+      (= command "init") (init!)
+      (contains? #{"doctor" "check" "join"} command)
+      (-> (run! command (options args))
+          (.catch (fn [_] (fail! "Node operation failed. Check the local server, network and device identity; no credentials are printed."))))
+      :else (fail! "Unknown command. Use: murakumo node --help"))
+    (catch :default e (fail! (.-message e)))))

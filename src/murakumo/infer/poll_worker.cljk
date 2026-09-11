@@ -80,7 +80,7 @@
     (= :bearer (:kind auth))
     (assoc "authorization" (str "Bearer " (:credential auth)))
     (= :cacao (:kind auth))
-    (assoc "authorization" (str "CACAO " (:credential auth)))))
+    (assoc "authorization" (str "CACAO " (let [c (:credential auth)] (if (fn? c) (c) c))))))
 
 (defn valid-node-name? [node-name]
   (boolean (and (string? node-name)
@@ -115,7 +115,8 @@
   (-> (fetch-fn (str base path)
                 (clj->js
                  (cond-> {:method (name method)
-                          :headers (control-auth-headers auth)}
+                          :headers (control-auth-headers auth)
+                          :signal (js/AbortSignal.timeout 30000)}
                    body (assoc :body (json-body body)))))
       (.then response-body)))
 
@@ -134,7 +135,8 @@
   [fetch-fn local-url local-token model]
   (-> (fetch-fn (str local-url "/models")
                 #js {:method "GET"
-                     :headers (clj->js (local-auth-headers local-token))})
+                     :headers (clj->js (local-auth-headers local-token))
+                     :signal (js/AbortSignal.timeout 10000)})
       (.then response-body)
       (.then (fn [{:keys [status body]}]
                {:ready? (and (<= 200 status 299) (model-ready? model body))
@@ -459,7 +461,7 @@
                                          #(heartbeat-loop! config))))))
 
 (defn -main [& args]
-  (let [opts (parse-args args)
+  (let [opts (if (map? (first args)) (first args) (parse-args args))
         env {"MURAKUMO_SERVICE_TOKEN" (aget js/process.env "MURAKUMO_SERVICE_TOKEN")
              "MURAKUMO_NODE_CACAO" (aget js/process.env "MURAKUMO_NODE_CACAO")
              "MURAKUMO_NODE_DID" (aget js/process.env "MURAKUMO_NODE_DID")
@@ -502,10 +504,18 @@
                :node/caps {:engine "openai-compatible" :model model}
                :node/can [job-kind "full-shard"]})
         (.then (fn [{:keys [status body]}]
-                 (println (str "[join] enrolled " node-name " (" did ") as native/"
+                 (println (str "[join] registration " node-name " (" did ") as native/"
                                     (node-trust-tier opts env)
                                     " -> " base " -- status " status))
-                 (when-not (#{200 201} status) (println "[join]   " (pr-str body)))
+                 (when-not (#{200 201} status)
+                   (println "[join] Enrollment refused; check identity, name and authorization.")
+                   (set! (.-exitCode js/process) 1))
                  (when (#{200 201} status)
-                   (heartbeat-loop! config)
-                   (loop! config)))))))
+                   (println "[join] admission:" (or (:node/admission body) (:admission body) "unknown") "; registration alone does not prove job eligibility.")
+                   (if (:check opts)
+                     (-> (heartbeat! (assoc config :busy? (atom true)))
+                         (.then (fn [{:keys [status probe]}]
+                                  (println "[check] heartbeat HTTP" status "; local model ready:" (:ready? probe))
+                                  (when-not (and (= 201 status) (:ready? probe))
+                                    (set! (.-exitCode js/process) 1)))))
+                     (do (heartbeat-loop! config) (loop! config)))))))))
