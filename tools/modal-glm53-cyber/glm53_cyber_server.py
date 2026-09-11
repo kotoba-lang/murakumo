@@ -1,5 +1,12 @@
 """Self-host dealignai/GLM-5.3-CYBERSECURITY-FP8 on Modal (TP8, 8x H200).
 
+NOT DEPLOYED (2026-09-11).  The owner chose the Flash-W4A16 sibling on
+2x H200 instead (glm53_flash_cyber_server.py, ADR-260911).  This file has
+never been run past `modal deploy`: the download, serve and cost figures in
+it are sized from the Hub, not measured.  If it is ever used, port the
+NVMe-staging subprocess and the thread-launched serve from the Flash file
+first — the Volume read path here is the one measured at 0.11 GB/s.
+
     # 1. pull the 755 GB of safetensors onto a Volume once, on a CPU container
     modal run tools/modal-glm53-cyber/glm53_cyber_server.py::download
     # 2. deploy the scale-to-zero vLLM origin
