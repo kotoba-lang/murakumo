@@ -19,7 +19,7 @@ HMAC-SHA256 + base64url codecs remain host (live adapter #87).
 ### Regenerate
 
 ```bash
-clojure -Sdeps '{…compiler + kir…}' -M -m murakumo.kotoba-oracle-gen
+kbb -Sdeps '{…compiler + kir…}' -M -m murakumo.kotoba-oracle-gen
 ```
 
 CI: `token-precompiled-kir-does-not-drift` + existing gate drift tests.

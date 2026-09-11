@@ -19,8 +19,8 @@ elements-per-token — which is fixed and measurable, plus
 stored, because it changes with the node, the cache type, and what else that
 node is holding.
 
-    nbb scripts/model-kv-geometry.cljk <node> <path.gguf>   # read geometry from a GGUF
-    nbb scripts/model-context-fit.cljk 13.8                 # what fits in 13.8 GB
+    kbb --backend sci scripts/model-kv-geometry.cljk <node> <path.gguf>   # read geometry from a GGUF
+    kbb --backend sci scripts/model-context-fit.cljk 13.8                 # what fits in 13.8 GB
 
 **The tool was validated against something it did not know.** It computes
 65,536 as murakumo-edge's maximum on a 13.8 GB budget; that is exactly the

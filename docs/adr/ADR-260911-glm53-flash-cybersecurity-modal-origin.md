@@ -254,7 +254,7 @@ NOT DEPLOYED.
    at a decode-speed cost.  Measure before choosing; the vLLM cache
    Volume already proved not to be one.
 5. **fleet-manifest is not updated.** Its `verify-manifest.kotoba` calls
-   `nbb build-manifest.cljs` (renamed away in its PR #1) and the committed
+   `kbb --backend sci build-manifest.cljk` (renamed away in its PR #1) and the committed
    `fleet.edn` is 130 profiles behind the machine.  `glm53-cyber` is on
    this machine only until that repo is repaired and rebuilt.
 6. **Root nbb scripts requiring `scripts.nbb-compat` are broken** since
@@ -274,6 +274,6 @@ curl -s -D - https://api.murakumo.cloud/v1/chat/completions -H 'content-type: ap
 # Origin directly (bearer stays inside Modal), cold or warm
 modal run tools/modal-glm53-cyber/glm53_flash_cyber_server.py::smoke
 # Conformance of the hermes fleet incl. the .env timeout (0 clean / 1 findings / 2 could-not-measure)
-nbb scripts/hermes-murakumo-api.cljk --findings --no-probe
+kbb --backend sci scripts/hermes-murakumo-api.cljk --findings --no-probe
 # Next measurement: gap 2 (quality), then gap 3/4 (keep-alive during load; a warm-window trial)
 ```

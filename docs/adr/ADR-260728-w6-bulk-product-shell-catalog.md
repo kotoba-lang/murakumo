@@ -25,7 +25,7 @@ persist, provision-plan, reconcile-plan, tunnel — plus prior fully-wired ids
 ### Regeneration
 
 ```bash
-clojure -M:test -e '(require (quote murakumo.kotoba-oracle-gen))
+kbb -M:test -e '(require (quote murakumo.kotoba-oracle-gen))
                     (run! println (murakumo.kotoba-oracle-gen/regenerate-all!))'
 ```
 

@@ -77,7 +77,7 @@ Suites:
 - `murakumo.infer-rebalance-kotoba-parity-test` — 10 tests, 92 assertions, 0 failures
 - `murakumo.kotoba-oracle-authority-test` — 66 tests, 1174 assertions, 0 failures
 - `murakumo.infer-rebalance-test` — 8 tests, 27 assertions, 0 failures
-- Full `clojure -M:test` — 538 tests. The only failures are `…-over-real-quic`
+- Full `kbb -M:test` — 538 tests. The only failures are `…-over-real-quic`
   live-transport cases, and three runs produced three different failing sets:
 
   | Run | Tree | Failures | Namespace |
@@ -88,7 +88,7 @@ Suites:
 
   Different namespaces and counts each run, none touching rebalance. Flaky live
   transport, not this change. Noted separately: while the live-QUIC suite fails
-  3–6 assertions per run regardless of the tree, `clojure -M:test` cannot serve
+  3–6 assertions per run regardless of the tree, `kbb -M:test` cannot serve
   as a merge gate in this repo.
 
 `resources/murakumo/oracle/infer_rebalance_core.kir.edn` regenerated via

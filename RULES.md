@@ -21,5 +21,5 @@ These rules govern operator actions against `fleet.edn`.
 8. Do not schedule CUDA-only models on Apple Silicon. Caching weights does not prove
    execution. Hunyuan3D Shape and official Paint are explicit exceptions verified on `gad`
    (ROCm/Radeon 8060S); its paint pipeline remains unverified.
-9. Run `bb test` and `git diff --check` after CLI, inventory, or policy changes.
+9. Run `kbb -M:test` and `git diff --check` after CLI, inventory, or policy changes.
 10. Preserve unrelated worktree changes, including generated inference plans.

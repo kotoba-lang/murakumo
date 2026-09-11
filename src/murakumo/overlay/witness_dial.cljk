@@ -15,13 +15,13 @@
 ;; only, not a JVM, to act as witness-rpc clients (ADR-2607110300
 ;; addendum, 2026-07-10).
 ;;
-;; Run as a standalone CLI: nbb -m murakumo.overlay.witness-dial <url> <edn-payload>
-;;   e.g. nbb -m murakumo.overlay.witness-dial http://100.86.235.122:28700/witness \
+;; Run as a standalone CLI: kbb --backend sci -m murakumo.overlay.witness-dial <url> <edn-payload>
+;;   e.g. kbb --backend sci -m murakumo.overlay.witness-dial http://100.86.235.122:28700/witness \
 ;;          '{:inv {:job/id "j1"} :claimed-cids ["bafy-x" "bafy-y"]}'
 ;;   or on a fresh fleet node with no local nbb install:
-;;     npx --yes nbb -m murakumo.overlay.witness-dial <url> <edn-payload>
+;;     npx --yes kbb --backend sci -m murakumo.overlay.witness-dial <url> <edn-payload>
 ;;
-;; `-main` is invoked ONLY via `nbb -m` (which calls a namespace's -main
+;; `-main` is invoked ONLY via `kbb --backend sci -m` (which calls a namespace's -main
 ;; with the trailing argv), not via a top-level call in this file --
 ;; that top-level-call pattern is exactly what murakumo.overlay.
 ;; witness-dial-attest's real-network test caught: requiring this ns as
@@ -61,5 +61,5 @@
                    (println (pr-str result))
                    (js/process.exit (if (:ok? result) 0 1))))
           (.catch (fn [e] (println "FATAL:" (.-message e)) (js/process.exit 2))))
-      (do (println "usage: nbb -m murakumo.overlay.witness-dial <url> <edn-payload>")
+      (do (println "usage: kbb --backend sci -m murakumo.overlay.witness-dial <url> <edn-payload>")
           (js/process.exit 1)))))

@@ -203,12 +203,12 @@ a different workload — it is an estimate and is labelled as one.
 
 ## Addendum 2: regenerating KIR
 
-ADR-260731-w6-t62 documents `clojure -M:test -m murakumo.kotoba-oracle-gen`.
+ADR-260731-w6-t62 documents `kbb -M:test -m murakumo.kotoba-oracle-gen`.
 That does not work — command-line main opts are appended to an alias's
 `:main-opts`, not substituted, so the `-m` reaches `cognitect.test-runner` as
 an unknown option and exits 1. A later alias's `:main-opts` does win, so
 `deps.edn` gains a deps-free `:gen` alias and the command is:
 
 ```bash
-clojure -M:test:gen
+kbb -M:test:gen
 ```

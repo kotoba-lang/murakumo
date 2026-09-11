@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; Distribution of llama.cpp server decode/prefill rates from a journal dump.
 ;;
 ;; llama-server prints one pair of lines per completed task:
@@ -24,9 +24,9 @@
 ;; Usage (the head does the grepping; this does the arithmetic):
 ;;
 ;;   ssh <head> 'journalctl -u <unit> --since "24 hours ago" --no-pager' \
-;;     | nbb scripts/llama-timing-percentiles.cljk --label <head>
+;;     | kbb --backend sci scripts/llama-timing-percentiles.cljk --label <head>
 ;;
-;;   nbb scripts/llama-timing-percentiles.cljk --label b70 < saved-journal.txt
+;;   kbb --backend sci scripts/llama-timing-percentiles.cljk --label b70 < saved-journal.txt
 
 (ns llama-timing-percentiles
   (:require [kotoba.lang.text :as str]))

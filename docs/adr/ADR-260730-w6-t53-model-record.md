@@ -67,7 +67,7 @@ Suites:
 
 - `murakumo.infer-plan-kotoba-parity-test` — 12 tests, 100 assertions, 0 failures
 - `murakumo.kotoba-oracle-authority-test` — 66 tests, 1174 assertions, 0 failures
-- Full `clojure -M:test` — 539 tests, 3 failures, all
+- Full `kbb -M:test` — 539 tests, 3 failures, all
   `ledger-quorum-fn-reaches-witnessed-over-real-quic`. That live-transport suite
   has now failed 5 / 6 / 3 / 7 / 12 / 3 assertions across six runs on five trees
   (including pristine `main`), a different subset each time.

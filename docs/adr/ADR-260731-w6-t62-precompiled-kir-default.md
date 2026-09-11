@@ -23,7 +23,7 @@ For **murakumo**, T6.2 is closed:
 Regenerate:
 
 ```bash
-clojure -M:test:gen
+kbb -M:test:gen
 ```
 
 ## Non-claims

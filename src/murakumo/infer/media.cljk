@@ -8,7 +8,7 @@
 ;;
 ;; The workflow wire format is ComfyUI's API JSON — the same shape
 ;; comfyui-clj (kotoba-lang/comfyui) models as portable cljc data, so this
-;; bb operator can later hand graphs to that engine unchanged.
+;; kbb -M:operator can later hand graphs to that engine unchanged.
 ;;
 ;;   bb murakumo infer media nodes                  which nodes serve which checkpoints
 ;;   bb murakumo infer media generate <node> "<prompt>" [neg] [WxH] [steps]
@@ -473,7 +473,7 @@
       (catch Exception e {:model-id nil :status :unreachable :error (.getMessage e) :node (:name head)}))))
 
 (defn cmd-model-map
-  "bb murakumo infer media model-map [--push]
+  "kbb -M:murakumo infer media model-map [--push]
    Prints (and, with --push, POSTs to MURAKUMO_API_URL's /infer/model-map,
    same Bearer-token gate as tools/hwmetrics-report's /infer/hwmetrics) a
    fleet-wide snapshot of what's loaded where, across text/image/video/audio

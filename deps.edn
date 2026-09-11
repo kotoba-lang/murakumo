@@ -102,7 +102,7 @@
          io.github.kotoba-lang/witness-quorum {:local/root "../witness-quorum"}
          io.github.kotoba-lang/kekkai {:local/root "../kekkai"}}}
   ;; Regenerate resources/murakumo/oracle/*.kir.edn from kotoba/*_core.kotoba:
-  ;;   clojure -M:test:gen
+  ;;   kbb -M:test:gen
   ;; ADR-260731-w6-t62 documents `-M:test -m murakumo.kotoba-oracle-gen`, which
   ;; does not work: command-line main opts are APPENDED to an alias's
   ;; :main-opts rather than replacing them, so the -m reaches
@@ -110,7 +110,7 @@
   ;; does win, hence this one — it carries no deps of its own and must be
   ;; combined with :test.
   :gen {:main-opts ["-m" "murakumo.kotoba-oracle-gen"]}
-  ;; :gen is leftover JVM KIR rewrite (clojure -M:test:gen). It is not Kotoba
+  ;; :gen is leftover JVM KIR rewrite (kbb -M:test:gen). It is not Kotoba
   ;; operator start and is not claimed as kotoba compile.
   ;; Fleet CI ships this repository without west siblings. Keep the HA gate
   ;; focused on the distributed inference control plane and its generated
@@ -219,7 +219,7 @@
   ;; is loadable the same way, so this alias carries both clients. Supply
   ;; them with:
   ;;
-  ;;   clojure -M:test:babashka-client-host
+  ;;   kbb -M:test:babashka-client-host
   ;;
   ;; NOT top-level: an injected host stays out of libraries that never open a
   ;; socket, which is the point of the Layer 3 host-injection design.
@@ -229,7 +229,7 @@
   ;; The same cores, RUN on the host ISA rather than accepted by the backend.
   ;; Combine with :test, which carries amu:
   ;;
-  ;;   leftover: clojure -M:test:native
+  ;;   leftover: kbb -M:test:native
   ;;
   ;; Not operator start. tender-native is a leftover JVM host for kexe
   ;; artifacts in the oracle qualification sweep. Operator native, when

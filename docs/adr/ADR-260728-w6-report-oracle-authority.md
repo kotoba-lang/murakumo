@@ -41,7 +41,7 @@ string/pad/header helpers:
 ### Regenerate
 
 ```bash
-clojure -M:test:gen
+kbb -M:test:gen
 ```
 
 CI: `report-precompiled-kir-does-not-drift` + existing gate/token drift tests.

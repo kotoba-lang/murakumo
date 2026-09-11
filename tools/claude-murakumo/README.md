@@ -11,7 +11,7 @@ actually serving on the murakumo distributed fleet.
 
 ```bash
 ./claude-murakumo                      # same args as `claude`
-bb claude                              # equivalent, via the bb task
+kbb -M:claude                              # equivalent, via the bb task
 ```
 
 Or add it to your shell so `claude-murakumo` is just a command:
@@ -58,5 +58,5 @@ binary directly, so the murakumo env vars actually take effect.
   worth trying on the fleet.
 - Only one model serves at a time across the fleet's shared 7-node ring —
   `MURAKUMO_CLAUDE_MODEL` picking a different registered model than what's
-  currently `bb murakumo infer up`/`serve`'d will fail to reach an endpoint,
+  currently `kbb -M:murakumo infer up`/`serve`'d will fail to reach an endpoint,
   not silently fall back.

@@ -158,7 +158,7 @@
     (do
       (when-not encode
         (println "--tokenize-with torch needs torch on the classpath")
-        (println "  nbb --classpath src:../torch/src scripts/infer-submit.cljk …")
+        (println "  kbb --backend sci --classpath src:../torch/src scripts/infer-submit.cljk …")
         (js/process.exit 1))
       (when-not (:vocab-file opts)
         (println "--tokenize-with torch needs --vocab-file <edn> ({:tokens [...] :merges [...]}).")
@@ -172,7 +172,7 @@
     :else nil))
 
 (def usage
-  (str "usage: nbb --classpath src:../torch/src scripts/infer-submit.cljk \\\n"
+  (str "usage: kbb --backend sci --classpath src:../torch/src scripts/infer-submit.cljk \\\n"
        "         (--tokens-file ids.edn | --tokenize-with torch --vocab-file v.edn --prompt TEXT) \\\n"
        "         [--max-tokens 64] [--stop-tokens 248046,...] [--price 1] \\\n"
        "         [--target-did did:key:z...] [--base https://api.murakumo.cloud] \\\n"
