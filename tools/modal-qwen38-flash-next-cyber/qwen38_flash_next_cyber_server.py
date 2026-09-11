@@ -24,8 +24,16 @@ starts it, waits for /health, warms it, and POSTs /sleep?level=1 so the
 weights sit in CPU memory where the snapshot captures them; Modal snapshots;
 `@modal.enter(snap=False)` POSTs /wake_up on restore.  The gateway-facing
 proxy (origin_proxy.py, bearer-gated, 503 while vLLM is not listening) is
-started by the web_server method AFTER the enter hooks, so no listening
-socket of ours is in the snapshot.
+started FIRST, before staging, so a starting container answers 503 from its
+first seconds; its listening socket lives in the snapshot, like vLLM's own
+in Modal's example.  (Started after the enter hooks, as the first version
+did, Modal held the gateway's request open for 125 s and Cloudflare turned
+that into a 524 -- measured 2026-09-11 18:41.)
+
+Snapshots are per WORKER TYPE and "GPU Functions need 2-3 snapshots per GPU
+type" (Modal docs): the first 2-3 cold starts after a deploy each build a
+snapshot (~10 min to sleep + ~11 min to write) before restores become the
+norm.  A config change is therefore not free; deploy rarely.
 
 What this repository already knows about this lever, so it is not re-learned:
 - 2026-08-20/21 (tools/modal-bench/qwen38_27b_snapshot.py, ADR-260821b):
@@ -219,6 +227,18 @@ class Origin:
 
         if not os.environ.get("MURAKUMO_MODAL_ORIGIN_TOKEN"):
             raise RuntimeError("MURAKUMO_MODAL_ORIGIN_TOKEN is required")
+        # The proxy FIRST, before staging, so that from the first seconds of a
+        # snapshot-creating start the origin answers 503 "model loading"
+        # (vLLM not listening) instead of Modal holding the connection open:
+        # measured 2026-09-11 18:41, with the proxy started only after the
+        # enter hooks, api.murakumo.cloud's fetch to this origin sat for 125 s
+        # and came back as Cloudflare's 524, not a 503 the gateway would poll.
+        # A listening socket in the snapshot is fine -- Modal's own vLLM
+        # snapshot example snapshots with vLLM itself listening.
+        self.proxy = subprocess.Popen(
+            ["python", "-m", "uvicorn", "origin_proxy:app", "--app-dir", "/root",
+             "--host", "0.0.0.0", "--port", "8000"]
+        )
         t0 = time.monotonic()
         subprocess.run(
             [sys.executable, "-c", STAGE_SCRIPT, SNAPSHOT, LOCAL_MODEL, str(STAGE_WORKERS)],
@@ -271,16 +291,22 @@ class Origin:
 
     @modal.web_server(port=8000, startup_timeout=120, label=LABEL)
     def serve(self) -> None:
-        subprocess.Popen(
-            ["python", "-m", "uvicorn", "origin_proxy:app", "--app-dir", "/root",
-             "--host", "0.0.0.0", "--port", "8000"]
-        )
+        # The proxy was started in load() and lives in the snapshot; a restored
+        # container still has it.  Only a container whose enter hooks somehow
+        # ran without it gets a fresh one.
+        p = getattr(self, "proxy", None)
+        if p is None or p.poll() is not None:
+            self.proxy = subprocess.Popen(
+                ["python", "-m", "uvicorn", "origin_proxy:app", "--app-dir", "/root",
+                 "--host", "0.0.0.0", "--port", "8000"]
+            )
 
     @modal.exit()
     def stop(self) -> None:
-        p = getattr(self, "vllm", None)
-        if p is not None:
-            p.terminate()
+        for name in ("vllm", "proxy"):
+            p = getattr(self, name, None)
+            if p is not None:
+                p.terminate()
 
 
 @app.function(image=image, secrets=[origin_secret], timeout=3600)

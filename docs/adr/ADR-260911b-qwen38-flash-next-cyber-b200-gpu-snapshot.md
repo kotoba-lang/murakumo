@@ -28,7 +28,7 @@ tail: **`scaledown_window=300`** (owner: stop after 5 min without a request).
    vLLM subprocess with `--enable-sleep-mode` + `VLLM_SERVER_DEV_MODE=1`;
    `@modal.enter(snap=True)` starts it, waits for `/health`, warms, POSTs `/sleep?level=1`;
    `@modal.enter(snap=False)` POSTs `/wake_up`.  The bearer-gated proxy (origin_proxy.py)
-   starts in the `@modal.web_server` method after the enter hooks.
+   starts first, before staging, so a starting container answers 503 at once (v6; see below).
 
 ## What it took to get a snapshot (four failed starts, each a real B200 bill)
 
@@ -55,6 +55,21 @@ Numbers of the successful start, container log:
 **Restore → serving: 3.9 s** (weights back from CPU, KV re-created).  The whole smoke was
 3,148 s only because it had been waiting through the failed start and the snapshot creation.
 
+## Cold restore from zero (18:29 onward)
+
+The 18:29 request, 13 min after the last one, did **not** restore: the container built a
+second snapshot from scratch (staging + load again).  Modal's guide says why: *"Memory
+Snapshots are specific to the underlying worker type that created them … GPU Functions need
+2–3 snapshots per GPU type."*  The first 2–3 cold starts after any deploy each cost ~21 min
+of B200; only then do restores become the norm.  A redeploy resets this.
+
+Through `api.murakumo.cloud` (gateway route landed 18:37, Worker `63e3d22a`) the first cold
+request came back **524 after 125 s**: with the proxy started only after the enter hooks,
+nothing answered on the port during a snapshot-creating start, Modal held the connection,
+and Cloudflare's subrequest limit turned that into a 524 the gateway cannot poll.  Fixed in
+v6: the proxy starts before staging (503 from the first seconds; its socket is in the
+snapshot, as vLLM's own is in Modal's example), and the gateway treats 524 like 503.
+
 ## Standing caveats
 
 - The 3.9 s above is a restore **on the host that had just created the snapshot**.  The
@@ -70,10 +85,10 @@ Numbers of the successful start, container log:
   ~1,780 s and will be killed — recreate the cache with a plain (non-snapshot) run first.
 - Quality is unmeasured (same as the GLM one).  The model card's numbers are the author's.
   MTP + hybrid layers disables cross-request prefix caching (vLLM warning at start).
-- Not yet routed on `api.murakumo.cloud`: the gateway's `modal_hosted_model.js` needs an
-  entry for `qwen3.8-flash-next-cybersecurity-nvfp4` with a `coldStartBudgetMs` sized from
-  the measured restore, and hermes `profile-overrides` a matching profile.  Until then the
-  origin is reachable only with the origin bearer (from inside Modal via `smoke`).
+- Routed on `api.murakumo.cloud` as `qwen3.8-flash-next-cybersecurity-nvfp4`
+  (network-awai/cloud-murakumo-api `src/modal_hosted_model.js`, `coldStartBudgetMs` 1,500 s
+  to cover a snapshot-creating start; 303/524 treated as loading).  Anonymous, like the GLM
+  id — same cost exposure.  No hermes profile yet.
 - `modal run …::smoke` builds an ephemeral twin of the app and prints
   `Memory snapshots are disabled for ephemeral apps` — that line is about the twin, not the
   deployed origin the smoke talks to.
