@@ -82,6 +82,8 @@ class StubFal(BaseHTTPRequestHandler):
 
 def load_api(root, fal_url, key=KEY, comfy_url=""):
     os.environ["MURAKUMO_GENERATION_DIR"] = str(root)
+    os.environ.setdefault("MURAKUMO_RESOURCE_CLASSES", str(
+        pathlib.Path(__file__).parents[1] / "resources" / "murakumo" / "resource-classes.edn"))
     for runner in ("TTS", "MOTION", "EFFECT", "SOUND", "VISEME"):
         os.environ["MURAKUMO_%s_RUNNER" % runner] = ""
     os.environ["MURAKUMO_COMFY_URL"] = comfy_url

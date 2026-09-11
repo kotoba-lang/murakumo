@@ -15,6 +15,8 @@ SCRIPT = pathlib.Path(__file__).parents[1] / "scripts" / "hunyuan3d-generation-a
 
 def load_api(root, sound_runner):
     os.environ["MURAKUMO_GENERATION_DIR"] = str(root)
+    os.environ.setdefault("MURAKUMO_RESOURCE_CLASSES", str(
+        pathlib.Path(__file__).parents[1] / "resources" / "murakumo" / "resource-classes.edn"))
     os.environ["MURAKUMO_SOUND_RUNNER"] = str(sound_runner)
     os.environ["MURAKUMO_GENERATION_TOKEN"] = ""
     loader = importlib.machinery.SourceFileLoader(
