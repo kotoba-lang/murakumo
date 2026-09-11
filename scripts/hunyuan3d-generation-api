@@ -84,8 +84,23 @@ SOUND_COMFY_MODELS = {
 }
 SOUND_DEFAULT_MODELS = {"music": "ace-step", "ambience": "musicgen-small",
                         "sfx": "musicgen-small"}
+# The static entry is a FALLBACK for a node whose ComfyUI cannot be asked.
+# `image_models()` asks ComfyUI which checkpoints are on disk this minute and
+# derives the bare id from the filename, so a checkpoint dropped into
+# models/checkpoints is offered without a release here (ADR-2607173100: a
+# concrete model id is never the hardcoded truth).
 IMAGE_MODELS = {"animagine-xl-4.0": "animagine-xl-4.0.safetensors"}
 IMAGE_DEFAULT_MODEL = "animagine-xl-4.0"
+IMAGE_CKPT_EXTS = (".safetensors", ".ckpt", ".sft")
+IMAGE_MODELS_TTL_S = 60.0
+IMAGE_DEADLINE_S = int(os.environ.get("MURAKUMO_IMAGE_DEADLINE_S", "1200"))
+# Face reference (input.face): IP-Adapter conditioning on ONE portrait. Two
+# graphs, chosen by params.face_mode. "plus-face" needs only the ViT-H
+# ip-adapter-plus-face weight; "faceid" needs insightface + the FaceID v2
+# weight + its LoRA and is offered only when the node advertises the loader.
+IMAGE_FACE_MODES = ("plus-face", "faceid")
+IMAGE_FACE_DEFAULT_MODE = "plus-face"
+IMAGE_FACE_WEIGHT_MIN, IMAGE_FACE_WEIGHT_MAX, IMAGE_FACE_WEIGHT_DEFAULT = 0.1, 1.5, 0.85
 IMAGE_SIZES = {512, 640, 768, 832, 896, 1024, 1152, 1216, 1280, 1344}
 IMAGE_DEFAULT_NEGATIVE = "lowres, bad anatomy, bad hands, worst quality"
 VIDEO_MODELS = {
@@ -814,11 +829,35 @@ def validate_image_request(inputs, params):
         raise ValueError("input.prompt must contain 1-2000 characters")
     if not COMFY_URL:
         raise ValueError("image output requires the configured ComfyUI backend")
-    if params.get("model", IMAGE_DEFAULT_MODEL) not in IMAGE_MODELS:
+    if params.get("model", IMAGE_DEFAULT_MODEL) not in image_models():
         raise ValueError("params.model is unsupported")
     for side in ("width", "height"):
         if params.get(side, 1024) not in IMAGE_SIZES:
             raise ValueError(f"params.{side} is unsupported")
+    face = inputs.get("face")
+    if face is not None:
+        if not (isinstance(face, str)
+                and face.startswith(("data:image/png;base64,", "data:image/jpeg;base64,",
+                                     "data:image/webp;base64,"))
+                and len(face) <= ((VIDEO_IMAGE_MAX_BYTES * 4 // 3) + 128)):
+            raise ValueError("input.face must be a bounded PNG/JPEG/WebP data URI")
+        try:
+            decoded = base64.b64decode(face.split(",", 1)[1], validate=True)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("input.face contains invalid base64 image data") from exc
+        if not decoded or len(decoded) > VIDEO_IMAGE_MAX_BYTES:
+            raise ValueError("input.face is empty or exceeds %d bytes" % VIDEO_IMAGE_MAX_BYTES)
+        mode = params.get("face_mode", IMAGE_FACE_DEFAULT_MODE)
+        if mode not in IMAGE_FACE_MODES:
+            raise ValueError("params.face_mode must be plus-face or faceid")
+        if mode not in image_face_modes():
+            raise ValueError(f"params.face_mode {mode} is not available on this node")
+        weight = params.get("face_weight", IMAGE_FACE_WEIGHT_DEFAULT)
+        if (not isinstance(weight, (int, float)) or isinstance(weight, bool)
+                or not IMAGE_FACE_WEIGHT_MIN <= weight <= IMAGE_FACE_WEIGHT_MAX):
+            raise ValueError("params.face_weight must be a number from %s to %s"
+                             % (IMAGE_FACE_WEIGHT_MIN, IMAGE_FACE_WEIGHT_MAX))
+        return {"prompt": prompt, "face": face}
     steps = params.get("steps", 25)
     if not isinstance(steps, int) or isinstance(steps, bool) or not 1 <= steps <= 50:
         raise ValueError("params.steps must be an integer from 1 to 50")
@@ -831,12 +870,112 @@ def validate_image_request(inputs, params):
     return prompt
 
 
-def comfy_image_graph(prompt, params):
+_image_models_cache = {"at": 0.0, "models": None}
+_comfy_nodes_cache = {"at": 0.0, "nodes": None}
+
+
+def image_models():
+    """{bare id: checkpoint filename} for THIS node, asked of ComfyUI and cached
+    for IMAGE_MODELS_TTL_S. The bare id is the filename minus its extension —
+    the same derivation comfy_openai_bridge.normalize_ckpt inverts — so a
+    caller who reads `/v1/generation/image-models` and sends an id back gets
+    the file it named. Falls back to the static table when ComfyUI cannot be
+    asked, and says so through `image_models_source()`."""
+    now = time.monotonic()
+    if _image_models_cache["models"] is not None and now - _image_models_cache["at"] < IMAGE_MODELS_TTL_S:
+        return _image_models_cache["models"]
+    models = None
+    if COMFY_URL:
+        try:
+            info = comfy_json("GET", "/object_info/CheckpointLoaderSimple", timeout=10)
+            names = info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0]
+            models = {}
+            for name in names:
+                if not isinstance(name, str) or not name.endswith(IMAGE_CKPT_EXTS):
+                    continue
+                bare = name.rsplit(".", 1)[0]
+                models[bare] = name
+        except Exception:
+            models = None
+    _image_models_cache["at"] = now
+    _image_models_cache["models"] = models if models else dict(IMAGE_MODELS)
+    _image_models_cache["live"] = bool(models)
+    return _image_models_cache["models"]
+
+
+def image_models_source():
+    image_models()
+    return "comfyui" if _image_models_cache.get("live") else "static-fallback"
+
+
+def comfy_node_classes():
+    """The node classes the node's ComfyUI advertises (cached). Empty when it
+    cannot be asked — which reads as 'no face modes', never as an error."""
+    now = time.monotonic()
+    if _comfy_nodes_cache["nodes"] is not None and now - _comfy_nodes_cache["at"] < IMAGE_MODELS_TTL_S:
+        return _comfy_nodes_cache["nodes"]
+    nodes = set()
+    if COMFY_URL:
+        try:
+            nodes = set(comfy_json("GET", "/object_info", timeout=20).keys())
+        except Exception:
+            nodes = set()
+    _comfy_nodes_cache["at"] = now
+    _comfy_nodes_cache["nodes"] = nodes
+    return nodes
+
+
+def image_face_modes():
+    """Which of IMAGE_FACE_MODES this node can run. A mode is offered only when
+    every node class its graph names is advertised — a graph that names a
+    missing class is a ComfyUI 400 the caller could not have predicted."""
+    nodes = comfy_node_classes()
+    modes = []
+    if {"LoadImage", "IPAdapterUnifiedLoader", "IPAdapter"} <= nodes:
+        modes.append("plus-face")
+    if ({"LoadImage", "IPAdapterUnifiedLoaderFaceID", "IPAdapterFaceID"} <= nodes
+            and os.environ.get("MURAKUMO_IMAGE_FACEID", "") == "1"):
+        modes.append("faceid")
+    return modes
+
+
+def comfy_image_graph(prompt, params, face_image=None, job_id=None):
     """The same minimal CheckpointLoader/KSampler/VAEDecode graph cloud-murakumo's
-    engine.cljc and gad's comfy_openai_bridge.py use — kept boring on purpose."""
-    ckpt = IMAGE_MODELS[params.get("model", IMAGE_DEFAULT_MODEL)]
+    engine.cljc and gad's comfy_openai_bridge.py use — kept boring on purpose.
+
+    With `face_image` (a ComfyUI input name from comfy_upload_image) the MODEL
+    edge into the sampler is rerouted through an IP-Adapter: the portrait's
+    identity conditions the render, nothing is pasted onto pixels. `end_at`
+    stops the conditioning before the last ~10% of steps so the checkpoint's
+    own style finishes the face."""
+    ckpt = image_models()[params.get("model", IMAGE_DEFAULT_MODEL)]
     seed = params.get("seed", 0) or int.from_bytes(os.urandom(4), "big")
-    return {
+    model_edge = ["4", 0]
+    face_nodes = {}
+    if face_image:
+        weight = float(params.get("face_weight", IMAGE_FACE_WEIGHT_DEFAULT))
+        face_nodes["10"] = {"class_type": "LoadImage", "inputs": {"image": face_image}}
+        if params.get("face_mode", IMAGE_FACE_DEFAULT_MODE) == "faceid":
+            face_nodes["11"] = {"class_type": "IPAdapterUnifiedLoaderFaceID",
+                                "inputs": {"model": ["4", 0], "preset": "FACEID PLUS V2",
+                                           "lora_strength": 0.6, "provider": "CPU"}}
+            face_nodes["12"] = {"class_type": "IPAdapterFaceID",
+                                "inputs": {"model": ["11", 0], "ipadapter": ["11", 1],
+                                           "image": ["10", 0], "weight": weight,
+                                           "weight_faceidv2": min(2.0, weight * 1.5),
+                                           "weight_type": "linear", "combine_embeds": "concat",
+                                           "start_at": 0.0, "end_at": 0.9,
+                                           "embeds_scaling": "V only"}}
+        else:
+            face_nodes["11"] = {"class_type": "IPAdapterUnifiedLoader",
+                                "inputs": {"model": ["4", 0], "preset": "PLUS FACE (portraits)"}}
+            face_nodes["12"] = {"class_type": "IPAdapter",
+                                "inputs": {"model": ["11", 0], "ipadapter": ["11", 1],
+                                           "image": ["10", 0], "weight": weight,
+                                           "start_at": 0.0, "end_at": 0.9,
+                                           "weight_type": "standard"}}
+        model_edge = ["12", 0]
+    graph = {
         "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": ckpt}},
         "5": {"class_type": "EmptyLatentImage",
               "inputs": {"width": params.get("width", 1024),
@@ -848,12 +987,22 @@ def comfy_image_graph(prompt, params):
         "3": {"class_type": "KSampler",
               "inputs": {"seed": seed, "steps": params.get("steps", 25), "cfg": 5.0,
                          "sampler_name": "euler_ancestral", "scheduler": "normal",
-                         "denoise": 1.0, "model": ["4", 0], "positive": ["6", 0],
+                         "denoise": 1.0, "model": model_edge, "positive": ["6", 0],
                          "negative": ["7", 0], "latent_image": ["5", 0]}},
         "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+        # The job id in the prefix makes the SaveImage node unique per job.
+        # ComfyUI caches by node inputs: a graph identical to one it already
+        # ran (same prompt, same seed — a retry, a re-render) is served
+        # entirely from cache and its history entry has NO outputs, which
+        # this service read as "ComfyUI returned no images" (measured
+        # 2026-09-11, prompt 7ddbbd20: execution_cached for every node).
+        # Sampling may stay cached; the save must run.
         "9": {"class_type": "SaveImage",
-              "inputs": {"filename_prefix": "murakumo-gen", "images": ["8", 0]}},
+              "inputs": {"filename_prefix": "murakumo-gen-" + (job_id or "x")[:12],
+                         "images": ["8", 0]}},
     }
+    graph.update(face_nodes)
+    return graph
 
 
 def comfy_json(method, path, payload=None, timeout=30, base=None):
@@ -865,7 +1014,13 @@ def comfy_json(method, path, payload=None, timeout=30, base=None):
         return json.loads(response.read().decode())
 
 
-def run_image_job(job_id, prompt, params):
+def run_image_job(job_id, source, params):
+    """`source` is the validated prompt string, or {"prompt", "face"} when the
+    request carried a face reference (validate_image_request returns both
+    shapes; the plain string is the pre-face contract, kept so the older
+    callers' expectations in test/ stay literal)."""
+    prompt = source["prompt"] if isinstance(source, dict) else source
+    face = source.get("face") if isinstance(source, dict) else None
     folder = ROOT / job_id
     folder.mkdir(parents=True, exist_ok=True)
     out = folder / "image.png"
@@ -873,13 +1028,23 @@ def run_image_job(job_id, prompt, params):
         with lock:
             if job_id in cancelled_jobs: return
             jobs[job_id].update(status="running", progress=10); save()
+        face_image = comfy_upload_image(face) if face else None
         submitted = comfy_json("POST", "/prompt",
-                               {"prompt": comfy_image_graph(prompt, params)})
+                               {"prompt": comfy_image_graph(prompt, params, face_image, job_id)})
         prompt_id = submitted.get("prompt_id")
         if not prompt_id:
             raise RuntimeError("ComfyUI rejected the image graph: "
                                + json.dumps(submitted)[:2000])
-        deadline = time.monotonic() + 300
+        # Not 300: gad's APU loads an SDXL checkpoint cold in ~6 min
+        # (measured 2026-09-11: "Prompt executed in 384.92 seconds" for the
+        # first waiREALMIX render, ComfyUI finished it AFTER this job had
+        # already been failed at 300 s), and a face-referenced render with
+        # the SDXL weights partially offloaded (CLIP-ViT-H resident, the
+        # sibling ComfyUI instances holding APU memory) sampled for ~12 min
+        # and then VAE-decoded tiled. A warm, uncontended render is ~1 min.
+        # Failing the job while ComfyUI is still going to finish it wastes
+        # the render; the ceiling is for a hung ComfyUI, not a slow one.
+        deadline = time.monotonic() + IMAGE_DEADLINE_S
         images = None
         while time.monotonic() < deadline:
             with lock:
@@ -911,6 +1076,8 @@ def run_image_job(job_id, prompt, params):
         generated_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         model = params.get("model", IMAGE_DEFAULT_MODEL)
         capabilities = ["image", "png", f"model:{model}"]
+        if face:
+            capabilities.append("face-reference:" + params.get("face_mode", IMAGE_FACE_DEFAULT_MODE))
         metadata = {"kind": "png", "url": artifact, "bytes": len(data),
                     "contentHash": content_hash,
                     "provenance": f"{PUBLIC_BASE}/v1/generation/jobs/{job_id}",
@@ -1439,7 +1606,7 @@ def video_model_available(spec):
     return bool(comfy_base(spec))
 
 
-def validate_video_reference_urls(inputs):
+def validate_video_reference_urls(inputs, allow_data=False):
     """Reference images for reference-to-video: input.images (up to 9) or the
     single input.image the i2v callers already send. fal fetches these itself,
     so they must be http(s) URLs we do not have to proxy."""
@@ -1452,9 +1619,24 @@ def validate_video_reference_urls(inputs):
     if len(images) > SEEDANCE_MAX_REFS:
         raise ValueError("input.images accepts at most %d reference images" % SEEDANCE_MAX_REFS)
     for url in images:
-        if (not isinstance(url, str) or len(url) > 2048
-                or not (url.startswith("https://") or url.startswith("http://"))):
-            raise ValueError("input.images entries must be http(s) URLs")
+        is_http = (isinstance(url, str) and len(url) <= 2048
+                   and (url.startswith("https://") or url.startswith("http://")))
+        is_data = (allow_data and isinstance(url, str)
+                   and url.startswith(("data:image/png;base64,",
+                                       "data:image/jpeg;base64,",
+                                       "data:image/webp;base64,"))
+                   and len(url) <= ((VIDEO_IMAGE_MAX_BYTES * 4 // 3) + 128))
+        if not (is_http or is_data):
+            allowed = "http(s) URLs or bounded PNG/JPEG/WebP data URIs" if allow_data else "http(s) URLs"
+            raise ValueError("input.images entries must be " + allowed)
+        if is_data:
+            try:
+                decoded = base64.b64decode(url.split(",", 1)[1], validate=True)
+            except (ValueError, TypeError) as exc:
+                raise ValueError("input.images contains invalid base64 image data") from exc
+            if not decoded or len(decoded) > VIDEO_IMAGE_MAX_BYTES:
+                raise ValueError("input.images data URI is empty or exceeds %d bytes"
+                                 % VIDEO_IMAGE_MAX_BYTES)
     return images
 
 
@@ -1503,12 +1685,27 @@ def validate_video_request(inputs, params):
     if spec["family"] == "minimax":
         # reference-to-video: identity comes from up to 9 stills, addressed from
         # the prompt as <Picture 1>..<Picture 9>, never as a first frame.
-        return {"prompt": prompt, "images": validate_video_reference_urls(inputs)}
+        return {"prompt": prompt, "images": validate_video_reference_urls(inputs, allow_data=True)}
     image = inputs.get("image")
     if image is not None:
-        if (not isinstance(image, str) or len(image) > 2048
-                or not (image.startswith("https://") or image.startswith("http://"))):
-            raise ValueError("input.image must be an http(s) URL (keyframe for image-to-video)")
+        is_http = (isinstance(image, str) and len(image) <= 2048
+                   and (image.startswith("https://") or image.startswith("http://")))
+        is_data = (isinstance(image, str)
+                   and image.startswith(("data:image/png;base64,",
+                                         "data:image/jpeg;base64,",
+                                         "data:image/webp;base64,"))
+                   and len(image) <= ((VIDEO_IMAGE_MAX_BYTES * 4 // 3) + 128))
+        if not (is_http or is_data):
+            raise ValueError("input.image must be an http(s) URL or bounded PNG/JPEG/WebP data URI "
+                             "(keyframe for image-to-video)")
+        if is_data:
+            try:
+                decoded = base64.b64decode(image.split(",", 1)[1], validate=True)
+            except (ValueError, TypeError) as exc:
+                raise ValueError("input.image contains invalid base64 image data") from exc
+            if not decoded or len(decoded) > VIDEO_IMAGE_MAX_BYTES:
+                raise ValueError("input.image data URI is empty or exceeds %d bytes"
+                                 % VIDEO_IMAGE_MAX_BYTES)
     for side in ("width", "height"):
         value = params.get(side, 768 if side == "width" else 448)
         if (not isinstance(value, int) or isinstance(value, bool)
@@ -1531,12 +1728,18 @@ def validate_video_request(inputs, params):
 
 
 def comfy_upload_image(url, base=None):
-    """Fetch an http(s) keyframe and upload it to ComfyUI /upload/image
+    """Read a bounded http(s) or raster data-URI keyframe and upload it to ComfyUI /upload/image
     (multipart, stdlib only). Returns the stored input name for LoadImage."""
-    # default Python-urllib UA is blocked by Cloudflare on our own hosts (403)
-    fetch = urllib.request.Request(url, headers={"user-agent": "murakumo-generation/1.0"})
-    with urllib.request.urlopen(fetch, timeout=60) as response:
-        data = response.read(VIDEO_IMAGE_MAX_BYTES + 1)
+    if url.startswith("data:"):
+        try:
+            data = base64.b64decode(url.split(",", 1)[1], validate=True)
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("keyframe data URI contains invalid base64") from exc
+    else:
+        # default Python-urllib UA is blocked by Cloudflare on our own hosts (403)
+        fetch = urllib.request.Request(url, headers={"user-agent": "murakumo-generation/1.0"})
+        with urllib.request.urlopen(fetch, timeout=60) as response:
+            data = response.read(VIDEO_IMAGE_MAX_BYTES + 1)
     if len(data) > VIDEO_IMAGE_MAX_BYTES:
         raise RuntimeError("keyframe image exceeds %d bytes" % VIDEO_IMAGE_MAX_BYTES)
     if not data:
@@ -2069,6 +2272,19 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc: self.send_json(400, {"error": "invalid-request", "message": str(exc)})
 
     def do_GET(self):
+        if self.path == "/v1/generation/image-models":
+            # What `type: image` accepts on THIS node, asked of ComfyUI, so a
+            # picker in front of the fleet offers the checkpoints that are here
+            # rather than the ones another mini reports to /infer/model-map.
+            if not self.authorized(): return self.send_json(401, {"error": "unauthorized"})
+            if not COMFY_URL: return self.send_json(404, {"error": "image output is not configured"})
+            models = image_models()
+            return self.send_json(200, {"source": image_models_source(),
+                                        "default": IMAGE_DEFAULT_MODEL if IMAGE_DEFAULT_MODEL in models
+                                        else sorted(models)[0],
+                                        "models": [{"id": bare, "file": name} for bare, name in sorted(models.items())],
+                                        "faceModes": image_face_modes(),
+                                        "sizes": sorted(IMAGE_SIZES)})
         if self.path == "/healthz":
             capabilities = ["model3d"]
             if POSTPROCESSOR: capabilities.append("vrm")
@@ -2078,6 +2294,8 @@ class Handler(BaseHTTPRequestHandler):
             sound_models = sorted(m for m in SOUND_MODELS if sound_model_available(m))
             if sound_models: capabilities.append("sound")
             if COMFY_URL: capabilities.append("image")
+            face_modes = image_face_modes() if COMFY_URL else []
+            if face_modes: capabilities.append("image-face")
             # There was no way to ask this service which video models it accepts
             # — callers had to guess and read a 400. Answer it here. Hosted
             # models need no local GPU, so video can be offered on a node with
@@ -2090,6 +2308,8 @@ class Handler(BaseHTTPRequestHandler):
                                         "capabilities": capabilities,
                                         "soundModels": sound_models,
                                         "videoModels": video_models,
+                                        "imageModels": sorted(image_models()) if COMFY_URL else [],
+                                        "imageFaceModes": face_modes,
                                         "voiceLocales": sorted(VOICE_LOCALES) if TTS_RUNNER else [],
                                         "resourceClasses": {k: {"capacity": class_capacity(k),
                                                                "running": running_in_class.get(k, 0)}
