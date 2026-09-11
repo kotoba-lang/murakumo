@@ -168,6 +168,28 @@ a separate decision, not made here.
   than the cold starts a workload actually incurs.  That decision needs a
   request inter-arrival trace, which does not exist yet.
 
+### Stability through hermes, after the timeout fix (2026-09-11 14:24–14:47)
+
+Driver: a scratch nbb script running `hermes -p glm53-cyber chat -Q -q`;
+one row per call, exit code and wall seconds recorded.  Origin had been
+reaped (idle > 120 s) before the first call.
+
+| phase | calls | ok | seconds |
+|---|---|---|---|
+| cold, one held call | 1 | 1 | **1,347.9** (third cold start measured; inside the 1,190–1,530 range) |
+| warm, sequential, 8 distinct prompts | 8 | 8 | 3.8–5.2 |
+| warm, gateway direct (curl control) | 1 | 1 | 1.25, `x-murakumo-cold-wait-ms: 0` |
+| warm, 3 hermes in parallel | 3 | 3 | 5.0 / 8.4 / 8.4 |
+| **total** | **13** | **13** | |
+
+`Stream stale` and `Fallback activated` in the profile log during the
+window: 0.  Answers matched the prompts (`READY`, `42`, `STABLE`,
+`PARALLEL0..2`, one-sentence CVE/nmap/SQLi/CVSS).  Of hermes's ~4 s warm
+turn, ~1.2 s is the model; the rest is hermes's own startup and its ~13k
+token fixed prefix.  This measures the `glm53-cyber` profile only; a
+`/model` switch inside another profile (the `itonami` session that
+surfaced the bug) still runs at hermes's 180 s default.
+
 ## Standing caveats
 
 - **Quality was not measured.**  The model card's HarmBench / MMLU figures
@@ -191,6 +213,9 @@ Landed on default branches, all verified live:
 | network-awai/cloud-murakumo-api | `933ba2c` (PR #251 + 2 API merges) | gateway route, catalogue entry, token limits, 2,400 s hold; `npm run deploy` repaired on main; **deployed**, Worker version `6f06bedb` |
 | com-junkawasaki/root | `6b804c67` (API merge) | `scripts/hermes-murakumo-api.cljk` `profile-overrides`; fleet `--apply`'d, profile `glm53-cyber` rendered |
 | root west pins | `b8657111` (murakumo), `6b87316a` (cloud-murakumo-api) | |
+| com-junkawasaki/root | `8548efa3` (PR #3097, API merge) | `.env` timeout carried by the script; `profile-env-timeout` finding; applied on this machine |
+| kotoba-lang/murakumo | `db7cacc4` (PR #378) + this update | ADR correction, gap 3, stability table |
+| root west pin (murakumo) | `58f641e4` → advanced again after this merge | |
 
 Modal: app `murakumo-glm53-flash-cyber` deployed; Volumes
 `glm53-flash-cyber-hf-cache` (195 GB, v1) and `glm53-flash-cyber-vllm-cache`;
@@ -248,5 +273,7 @@ curl -s -D - https://api.murakumo.cloud/v1/chat/completions -H 'content-type: ap
 ~/.hermes/hermes-agent/venv/bin/hermes -p glm53-cyber chat -q "Which model are you?"
 # Origin directly (bearer stays inside Modal), cold or warm
 modal run tools/modal-glm53-cyber/glm53_flash_cyber_server.py::smoke
-# Next measurement: gap 2 (quality), then gap 3 (a warm-window trial)
+# Conformance of the hermes fleet incl. the .env timeout (0 clean / 1 findings / 2 could-not-measure)
+nbb scripts/hermes-murakumo-api.cljk --findings --no-probe
+# Next measurement: gap 2 (quality), then gap 3/4 (keep-alive during load; a warm-window trial)
 ```
