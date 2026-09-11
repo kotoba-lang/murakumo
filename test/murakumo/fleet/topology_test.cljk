@@ -103,3 +103,24 @@
 
 (deftest an-unknown-plane-in-discovery-output-is-dropped
   (is (= {} (one/labels-from-discovery "quantum some.label"))))
+
+;; ---- the declared exception (gad: three ComfyUI instances) ----------------
+
+(deftest a-vector-declaration-is-an-exception-that-is-reported-not-reconciled
+  (let [v (topo/verdict {:serves ["10eros-max" "wai-realmix-v11"]}
+                        (measured :media :text))]
+    (is (= :exception (:verdict v)))
+    (is (= ["10eros-max" "wai-realmix-v11"] (:models v)))
+    (is (= [:media :text] (:hosts v)))
+    (testing "an exception never carries an eviction list"
+      (is (nil? (:evict v))))))
+
+(deftest an-audio-declaration-is-conformant-only-with-the-audio-plane
+  (let [lines ["/x/python3 -m mlx_audio.server --port 8093"]
+        ok (topo/verdict {:serves {:plane :audio :model "qwen3-tts"}} (one/verdict lines))
+        drift (topo/verdict {:serves {:plane :audio :model "qwen3-tts"}} (measured :text))]
+    (is (= :conformant (:verdict ok)))
+    (is (= "qwen3-tts" (:model ok)))
+    (is (= :drift (:verdict drift)))
+    (is (true? (:missing? drift)))
+    (is (= [:text] (:evict drift)))))

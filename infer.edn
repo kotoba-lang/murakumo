@@ -647,6 +647,94 @@
    :model/engine :comfyui
    :credit/per-image 100}
 
+  ;; ── the oppai.fans studio lanes (ADR-2609117000 in com-junkawasaki/root) ──
+  ;; Each id below is what a node DECLARES in fleet.edn `:node/serves`, or
+  ;; the checkpoint filename it resolves to. Sizes are `du -sh` on the file as
+  ;; found on the fleet 2026-09-11; absent numbers are unmeasured, not zero.
+  "wai-realmix-v11"
+  {:model/id "wai-realmix-v11"
+   :model/kind :image
+   :model/family "SDXL"
+   :model/checkpoint "waiREALMIX_v11.safetensors"
+   :model/checkpoint-bytes 6938040682  ; stat on gad 2026-09-11 (same bytes on benjamin / simeon / dan)
+   :model/engine :comfyui
+   :model/rating :explicit
+   :credit/per-image 100}
+
+  "wai-realcn-v150"
+  {:model/id "wai-realcn-v150"
+   :model/kind :image
+   :model/family "SDXL"
+   :model/checkpoint "waiREALCN_v150.safetensors"
+   :model/checkpoint-bytes 6938040682  ; stat on gad 2026-09-11
+   :model/engine :comfyui
+   :model/rating :explicit
+   :credit/per-image 100}
+
+  "illustrious-xl-v2.0"
+  {:model/id "illustrious-xl-v2.0"
+   :model/kind :image
+   :model/family "SDXL (Illustrious)"
+   :hf/repo "OnomaAIResearch/Illustrious-XL-v2.0"
+   :model/checkpoint "Illustrious-XL-v2.0.safetensors"
+   :model/engine :comfyui
+   :model/rating :explicit
+   :credit/per-image 100}
+
+  ;; The LTX distilled 0.9.6 that three minis actually hold. The generation
+  ;; API's model-map matched it to "ltxv-2b-0.9.1" by family-guess; this entry
+  ;; lets a node declare the file it has instead of the file it is guessed as.
+  "ltxv-2b-0.9.6-distilled"
+  {:model/id "ltxv-2b-0.9.6-distilled"
+   :model/kind :ltx-video
+   :model/family "LTX-Video 2B (DiT), distilled"
+   :hf/repo "Lightricks/LTX-Video"
+   :model/checkpoint "ltxv-2b-0.9.6-distilled-04-25.safetensors"
+   :model/engine :comfyui
+   :model/min-free-bytes 5368709120
+   :credit/per-video-second 30}
+
+  ;; 10Eros-Max: TenStrip's TURBO-hybrid finetune of MiniMax-H3 (ref2va video,
+  ;; adult-content model). 20 GiB int8 UNET + a 32B nvfp4 text encoder — it
+  ;; does not fit a 16 GiB mini at any quantisation on disk, so it is a gad-only
+  ;; lane and is NOT what "H3 on the minis" could ever mean. Graph, steps and
+  ;; the measured 2026-08-26 render live in scripts/hunyuan3d-generation-api
+  ;; (VIDEO_MODELS "10eros-max", comfy instance v034 on :8192).
+  "10eros-max"
+  {:model/id "10eros-max"
+   :model/kind :video
+   :model/family "MiniMax-H3 (10Eros-Max TURBO-hybrid)"
+   :model/unet "10Eros_Max_h3_TURBO-hybrid_beta3_int8_convrot.safetensors"
+   :model/unet-bytes 20975924960        ; stat on gad 2026-09-11
+   :model/text-encoder "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+   :model/engine :comfyui
+   :model/comfy-instance :v034
+   :model/runtime :rocm
+   :model/verified-node "gad"
+   :model/rating :explicit
+   :model/default-steps 8
+   :credit/per-video-second 40}
+
+  ;; Qwen3-TTS through mlx-audio on a 16 GiB mini: the audio lane the oppai
+  ;; studio wants on judah and levi. ⚠ NOT YET MEASURED ON THIS FLEET: no
+  ;; snapshot bytes, no seconds-per-utterance. `:model/provisioning` names the
+  ;; step that turns this entry from a wish into a measurement; a scheduler
+  ;; must treat a node declaring it as :provisioning, not :serving.
+  "qwen3-tts"
+  {:model/id "qwen3-tts"
+   :model/kind :audio
+   :model/family "Qwen3-TTS"
+   ;; Upstream weights are Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice; the MLX
+   ;; conversion the minis load is the mlx-community bf16 (HF API 200 on both,
+   ;; 2026-09-11). 1.7B bf16 ≈ 3.4 GB of weights, well inside a 16 GiB node
+   ;; that serves nothing else — which is the whole point of the eviction.
+   :hf/repo "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+   :model/mlx-repo "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-bf16"
+   :model/engine :mlx-audio
+   :model/runtime :mlx
+   :model/provisioning "python3 -m pip install mlx-audio; python3 -m mlx_audio.tts.generate --model <mlx-repo> --text <ja> (measure: seconds, bytes, resident)"
+   :credit/per-audio-second 8}
+
   "ltxv-2b-0.9.1"
   {:model/id "ltxv-2b-0.9.1"
    :model/kind :ltx-video

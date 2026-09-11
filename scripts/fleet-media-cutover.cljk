@@ -1,0 +1,297 @@
+#!/usr/bin/env kbb
+;; fleet-media-cutover — reconcile every Mac mini to the ONE plane fleet.edn
+;; says it is for, by evicting the launchd jobs of every other plane.
+;;
+;; Owner instruction 2026-09-11: the 16 GiB minis leave text inference and
+;; work 24h on image / audio / video for oppai.fans (ADR-2609117000 in
+;; com-junkawasaki/root). The declaration is fleet.edn `:node/serves`; this
+;; script is the reconciler for it.
+;;
+;; ⚠ WHY THIS EXISTS NEXT TO `murakumo edge topology --apply`. That JVM command
+;; (src/murakumo/edge_install.cljk, 2707889e) does exactly this, but the repo's
+;; Clojure source was renamed to .cljk on 2026-09-11 with no compatibility
+;; mirror, so `clojure -M -m murakumo.core` cannot load it today. The discover
+;; and evict shell below is COPIED from murakumo.fleet.one-model/discover-script
+;; and murakumo.infer.edge/evict-script — same mkdir/bootout/mv/sleep-5 shape —
+;; and must be folded back into that CLI when it runs again. Two copies of an
+;; eviction is one too many; this one is dated so the fold-back is findable.
+;;
+;; What it will NOT do:
+;;   - start a plane. A node whose declared plane is not running is reported
+;;     as MISSING; starting ComfyUI / mlx-audio needs a checkpoint and a plist
+;;     and is its own step (scripts/fleet-media-provision.cljk).
+;;   - evict on a guessed label. A plane seen in `ps` whose launchd job could
+;;     not be discovered is REFUSED for that node (exit 2), because evicting a
+;;     guessed label is how a fleet loses a service nobody meant to touch.
+;;   - touch a node declared with a vector (the one-model exception: gad) or
+;;     :unstated / :none, or a node with no launchd (linux).
+;;
+;; usage:
+;;   kbb --backend sci scripts/fleet-media-cutover.cljk [--apply] [--only a,b] [--fleet fleet.edn]
+;;
+;; exit: 0 every selected node conformant (after --apply, re-measured)
+;;       1 drift remains (plan mode: drift exists; apply mode: still there)
+;;       2 could not answer for at least one node (ssh / discovery refused)
+
+(ns fleet-media-cutover
+  (:require [clojure.string :as str]
+            [cljs.reader :as reader]))
+
+(def fs (js/require "node:fs"))
+(def cp (js/require "node:child_process"))
+
+(def argv (vec *command-line-args*))
+(defn- flag? [f] (boolean (some #{f} argv)))
+(defn- opt [n] (let [i (.indexOf argv n)]
+                 (when (and (>= i 0) (< (inc i) (count argv))) (nth argv (inc i)))))
+
+(def fleet-file (or (opt "--fleet") "fleet.edn"))
+(def apply? (flag? "--apply"))
+(def only (some-> (opt "--only") (str/split #",") set))
+
+;; ---------------------------------------------------------------- planes
+;; Mirror of murakumo.fleet.one-model/planes. Order matters: first match wins.
+(def planes
+  [{:plane :text :match "llama-server"}
+   {:plane :ring-member :match "rpc-server"}
+   {:plane :media :match "comfyui/main.py"}
+   {:plane :ad-hoc :match "ollama serve"}
+   {:plane :audio :match "mlx_audio"}])
+
+(defn classify-line [line]
+  (let [l (str/lower-case (str line))]
+    (some (fn [{:keys [plane match]}] (when (str/includes? l match) plane)) planes)))
+
+(defn hosts [lines] (vec (distinct (keep classify-line lines))))
+
+;; ---------------------------------------------------------------- shell
+(def daemon-dir "/Library/LaunchDaemons")
+
+(def discover-script
+  (str "for d in /Library/LaunchDaemons /Library/LaunchAgents \"$HOME/Library/LaunchAgents\"; do\n"
+       "  [ -d \"$d\" ] || continue\n"
+       "  for p in \"$d\"/*.plist; do\n"
+       "    [ -f \"$p\" ] || continue\n"
+       "    a=$(sudo -n /usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$p\" 2>/dev/null | tr '\\n' ' ')\n"
+       "    case \"$a\" in\n"
+       "      *llama-server*)    echo \"text $(basename \"$p\" .plist) $p\" ;;\n"
+       "      *rpc-server*)      echo \"ring-member $(basename \"$p\" .plist) $p\" ;;\n"
+       "      *comfyui/main.py*|*ComfyUI/main.py*) echo \"media $(basename \"$p\" .plist) $p\" ;;\n"
+       "      *ollama*)          echo \"ad-hoc $(basename \"$p\" .plist) $p\" ;;\n"
+       "      *mlx_audio*)       echo \"audio $(basename \"$p\" .plist) $p\" ;;\n"
+       "    esac\n"
+       "  done\n"
+       "done | sort -u\n"
+       ;; A plist already parked by an earlier eviction whose PROCESS outlived
+       ;; the bootout (measured 2026-09-11 on simeon / benjamin / issachar:
+       ;; ollama pid 1002, parent launchd, no loaded job, plist in
+       ;; evicted-by-murakumo/). Nothing restarts it, so the repair is a kill,
+       ;; not a bootout — but only when the parked plist proves the job is gone.
+       "for p in /Library/LaunchDaemons/evicted-by-murakumo/*.plist /Library/LaunchAgents/evicted-by-murakumo/*.plist \"$HOME/Library/LaunchAgents/evicted-by-murakumo\"/*.plist; do\n"
+       "  [ -f \"$p\" ] || continue\n"
+       "  a=$(sudo -n /usr/libexec/PlistBuddy -c 'Print :ProgramArguments' \"$p\" 2>/dev/null | tr '\\n' ' ')\n"
+       "  case \"$a\" in\n"
+       "    *llama-server*)    echo \"parked:text $(basename \"$p\" .plist)\" ;;\n"
+       "    *rpc-server*)      echo \"parked:ring-member $(basename \"$p\" .plist)\" ;;\n"
+       "    *comfyui/main.py*|*ComfyUI/main.py*) echo \"parked:media $(basename \"$p\" .plist)\" ;;\n"
+       "    *ollama*)          echo \"parked:ad-hoc $(basename \"$p\" .plist)\" ;;\n"
+       "    *mlx_audio*)       echo \"parked:audio $(basename \"$p\" .plist)\" ;;\n"
+       "  esac\n"
+       "done"))
+
+(def kill-patterns
+  "pkill -f pattern per plane, for orphans only (see discover-script)."
+  {:text "llama-server" :ring-member "rpc-server" :media "comfyui/main.py"
+   :ad-hoc "ollama serve" :audio "mlx_audio"})
+
+(defn orphan-kill-script [planes]
+  (str (apply str (for [pl planes]
+                    (str "sudo -n /usr/bin/pkill -f '" (get kill-patterns pl) "' || true; ")))
+       "sleep 3; "
+       "echo MURAKUMO_STILL_RUNNING=$(ps -Ao command | grep -cE '"
+       (str/join "|" (map #(get kill-patterns %) planes)) "' | awk '{print $1-1}')"))
+
+(defn evict-script
+  "Stop these launchd jobs and keep them stopped across a boot.
+
+  A job is booted out of every domain it could live in (system, user/UID,
+  gui/UID — measured 2026-09-11: judah's qwen38 job answered to none of them
+  yet its llama-server was a child of launchd), and its plist is moved into
+  an `evicted-by-murakumo/` sibling of wherever it was found, never deleted:
+  launchd scans only the top level, so the job is durably gone and putting a
+  node back is one `mv`. Then any process of an evicted PLANE still alive is
+  killed — with its plist parked nothing restarts it, and a bootout that
+  could not reach the job's domain leaves exactly such a process behind."
+  [jobs planes]
+  (str "uid=$(id -u); "
+       (apply str
+              (for [{:keys [label path]} jobs]
+                (str "for dom in system user/$uid gui/$uid; do "
+                     "sudo -n /bin/launchctl bootout $dom/" label " >/dev/null 2>&1 || true; done; "
+                     "d=$(dirname '" path "'); "
+                     "[ -f '" path "' ] && sudo -n /bin/mkdir -p \"$d/evicted-by-murakumo\" && "
+                     "sudo -n /bin/mv '" path "' \"$d/evicted-by-murakumo/\" || true; ")))
+       "sleep 5; "
+       (apply str (for [pl planes]
+                    (str "sudo -n /usr/bin/pkill -f '" (get kill-patterns pl) "' || true; ")))
+       "sleep 3; "
+       "echo MURAKUMO_STILL_LOADED=$(sudo -n /bin/launchctl list 2>/dev/null | "
+       "grep -cE '" (str/join "|" (map :label jobs)) "'); "
+       "echo MURAKUMO_STILL_RUNNING=$(ps -Ao command | grep -cE '"
+       (str/join "|" (map #(get kill-patterns %) planes)) "' | awk '{print $1-1}')"))
+
+;; The edge-join worker is not a model plane (no llama-server in its argv) but
+;; it is the text plane's registrar: it keeps polling api.murakumo.cloud for
+;; work and answering from :8092, which no longer exists after the eviction.
+;; It rides with :text. Same for the parked, already-evicted `edge-server`.
+(def text-companions ["com.murakumo.edge-join" "com.murakumo.model-join"])
+
+(defn ssh
+  "Run `cmd` on `host` under /bin/sh, fed on stdin.
+
+  Measured 2026-09-11: the minis' login shell is zsh, and a zsh glob with no
+  match (`/Library/LaunchAgents/*.plist` on a node where that directory is
+  empty) is a fatal error, not an empty loop — so the discovery script sent as
+  an ssh argument silently stopped after the first directory on four nodes and
+  reported their ollama as unowned. `sh -s` is the shell the script was written
+  for, whatever the node's login shell is."
+  [host cmd]
+  (try
+    (let [out (.execFileSync cp "ssh"
+                             (clj->js ["-o" "BatchMode=yes" "-o" "ConnectTimeout=10" host "/bin/sh -s"])
+                             ;; #js literals nest as cljs vectors; the stdio triple must be a JS array
+                             (js-obj "encoding" "utf8" "input" cmd
+                                     "stdio" (array "pipe" "pipe" "pipe") "timeout" 90000))]
+      {:exit 0 :out (str out)})
+    (catch :default e
+      {:exit (or (.-status e) 1) :out (str (.-stdout e)) :err (str (.-stderr e))})))
+
+(defn labels-from-discovery
+  "-> {:labels {plane #{label}} :parked {plane #{label}}}"
+  [out]
+  (reduce (fn [m line]
+            (let [[plane label] (str/split (str/trim line) #"\s+" 2)]
+              (cond
+                (not (and plane label)) m
+                (str/starts-with? plane "parked:")
+                (update-in m [:parked (keyword (subs plane 7))] (fnil conj #{}) label)
+                :else (let [[label path] (str/split label #"\s+" 2)]
+                        (update-in m [:labels (keyword plane)] (fnil conj #{})
+                                   {:label label :path path})))))
+          {:labels {} :parked {}}
+          (remove str/blank? (str/split-lines (str out)))))
+
+;; ---------------------------------------------------------------- per node
+(defn declared [serves]
+  (cond
+    (or (nil? serves) (= :unstated serves)) {:state :unstated}
+    (= :none serves) {:state :none}
+    (vector? serves) {:state :exception}
+    (map? serves) {:state :declared :plane (:plane serves) :model (:model serves)}
+    (string? serves) {:state :declared :plane :text :model serves}
+    :else {:state :invalid}))
+
+(defn measure! [{:keys [name host]}]
+  (let [ps (ssh host "ps -Ao command")]
+    (if-not (zero? (:exit ps))
+      {:node name :verdict :unmeasured :why (str "ssh exit " (:exit ps) " " (str/trim (str (:err ps))))}
+      (let [disc (ssh host discover-script)
+            d (when (zero? (:exit disc)) (labels-from-discovery (:out disc)))]
+        {:node name
+         :hosts (hosts (str/split-lines (:out ps)))
+         :labels (:labels d)
+         :parked (:parked d)
+         :discovered? (zero? (:exit disc))}))))
+
+(defn plan [{:keys [name] :as node} {:keys [verdict hosts labels parked discovered?] :as m}]
+  (let [d (declared (:node/serves node))]
+    (cond
+      (= :unmeasured verdict) (assoc m :verdict :unmeasured)
+      (not= :declared (:state d)) (assoc m :verdict :skip :why (str "declared " (clojure.core/name (:state d))))
+      :else
+      (let [want (:plane d)
+            extra (vec (remove #{want} hosts))
+            missing? (not (some #{want} hosts))
+            named (vec (filter #(seq (get labels %)) extra))
+            ;; a plane with no loaded job but a parked plist is an orphan process
+            orphans (vec (filter #(and (empty? (get labels %)) (seq (get parked %))) extra))
+            unnamed (vec (remove (set (concat named orphans)) extra))
+            evict-jobs (vec (mapcat #(get labels % []) named))
+            evict-jobs (if (some #{:text} named)
+                         (into evict-jobs (map (fn [l] {:label l :path (str daemon-dir "/" l ".plist")})
+                                               text-companions))
+                         evict-jobs)]
+        (cond
+          (and (empty? extra) (not missing?))
+          (assoc m :verdict :conformant :plane want :model (:model d))
+          (and (seq extra) (or (not discovered?) (seq unnamed)))
+          (assoc m :verdict :refused :plane want :extra extra :unnamed unnamed
+                 :why "a hosted plane has no discovered launchd label (loaded or parked); evicting a guess is refused")
+          :else
+          (assoc m :verdict :drift :plane want :model (:model d)
+                 :extra extra :missing? missing? :evict-jobs evict-jobs :orphans orphans))))))
+
+(defn apply! [{:keys [host]} {:keys [evict-jobs orphans extra] :as p}]
+  (let [p (if (empty? evict-jobs)
+            p
+            (let [r (ssh host (evict-script evict-jobs (vec (remove (set orphans) extra))))
+                  still (some->> (re-find #"MURAKUMO_STILL_LOADED=(\d+)" (str (:out r))) second js/parseInt)
+                  running (some->> (re-find #"MURAKUMO_STILL_RUNNING=(-?\d+)" (str (:out r))) second js/parseInt)]
+              (assoc p :applied (if (and (zero? (:exit r)) (= 0 still) (and running (<= running 0))) :evicted :incomplete)
+                     :still-loaded still :still-running running :evict-exit (:exit r))))
+        p (if (empty? orphans)
+            p
+            (let [r (ssh host (orphan-kill-script orphans))
+                  still (some->> (re-find #"MURAKUMO_STILL_RUNNING=(-?\d+)" (str (:out r))) second js/parseInt)]
+              (assoc p :orphans-killed (if (and (zero? (:exit r)) still (<= still 0)) :killed :incomplete)
+                     :orphans-still-running still)))]
+    (if (and (empty? evict-jobs) (empty? orphans))
+      (assoc p :applied :nothing-to-evict)
+      p)))
+
+(defn line [{:keys [node verdict plane model extra missing? evict-jobs orphans orphans-killed why applied hosts]}]
+  (str (.padEnd (str "[" node "]") 12)
+       (.padEnd (name verdict) 12)
+       (when plane (str " for " (name plane)))
+       (when model (str " (" model ")"))
+       (when (seq extra) (str "  extra: " (str/join ", " (map name extra))))
+       (when missing? "  MISSING the plane it is for")
+       (when (seq evict-jobs) (str "  evict: " (str/join ", " (map :label evict-jobs))))
+       (when (seq orphans) (str "  orphan(kill): " (str/join ", " (map name orphans))))
+       (when applied (str "  -> " (name applied)))
+       (when orphans-killed (str "  orphans -> " (name orphans-killed)))
+       (when (and (seq hosts) (not plane)) (str "  hosting: " (str/join ", " (map name hosts))))
+       (when why (str "  -- " why))))
+
+(defn -main []
+  (let [fleet (reader/read-string (.readFileSync fs fleet-file "utf8"))
+        nodes (cond->> (:nodes fleet)
+                only (filter #(only (:name %)))
+                ;; linux / non-launchd nodes are not this script's to touch
+                true (remove #(#{"gad" "xavier"} (:name %))))
+        _ (when (empty? nodes) (println "REFUSED  no node selected") (js/process.exit 2))
+        before (mapv (fn [n] [n (plan n (measure! n))]) nodes)
+        _ (println (str "SCANNED\t" (count before) " nodes  mode=" (if apply? "apply" "plan")))
+        _ (doseq [[_ p] before] (println "  " (line p)))
+        after (if apply?
+                (do (println "\n-- reconciling --")
+                    (mapv (fn [[n p]]
+                            (let [p2 (if (= :drift (:verdict p)) (apply! n p) p)]
+                              (println "  " (line p2))
+                              [n p2]))
+                          before))
+                before)
+        ;; after an apply, the only measurement that counts is the second one
+        final (if apply?
+                (do (println "\n-- re-measured --")
+                    (mapv (fn [[n _]] (let [p (plan n (measure! n))] (println "  " (line p)) p)) after))
+                (mapv second after))
+        counts (frequencies (map :verdict final))]
+    (println (str "\nSUMMARY " (pr-str counts)))
+    (js/process.exit
+     (cond
+       (some #{:unmeasured :refused} (map :verdict final)) 2
+       (some #{:drift} (map :verdict final)) 1
+       :else 0))))
+
+(-main)

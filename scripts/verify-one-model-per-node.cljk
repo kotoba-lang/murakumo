@@ -22,9 +22,22 @@
 ;;
 ;; `:node/serves` is one of:
 ;;   "model-id"   exactly one model, which must exist in infer.edn's :models
+;;   {:plane :media :model "x.safetensors"}
+;;                the declaration `murakumo.fleet.topology` reads (2026-09-10):
+;;                one plane, and for :text/:media/:audio one model, named either
+;;                by its :models id or by the :model/checkpoint filename a node
+;;                actually has on disk. {:plane :ring-member} / {:plane :ad-hoc}
+;;                carry no model and are conformant as a plane.
 ;;   :none        deliberately serves nothing (head/relay, cache-only)
 ;;   :unstated    not yet described — NOT conformant, and counted separately
 ;;   ["a" "b"]    an exception, valid only with :node/serves-exception
+;;
+;; ⚠ The map form landed in fleet.edn (2707889e) after this checker did, and
+;; until 2026-09-11 the checker reported every map as `unrecognised` — six
+;; VIOLATIONs on a fleet whose declarations were the ones the reconciler reads.
+;; A checker and a reader that disagree about the vocabulary make the tree lie
+;; in both directions; the plane set below mirrors `murakumo.fleet.one-model/planes`
+;; and must move with it (nbb cannot `require` that .cljk, so it is a copy).
 ;;
 ;; Exit codes are four different answers and must not be collapsed:
 ;;   0  every node stated, none violating
@@ -44,11 +57,17 @@
 
 (defn- today [] (.toISOString (js/Date.)))
 
+(def known-planes
+  "Copy of murakumo.fleet.one-model/planes (+ :audio, added 2026-09-11)."
+  #{:text :ring-member :media :ad-hoc :audio})
+
 (defn- classify
-  "One node's standing. `models` is the set of defined model ids."
-  [node models]
+  "One node's standing. `models` is the set of defined model ids, `checkpoints`
+  the set of :model/checkpoint filenames those models name."
+  [node models checkpoints]
   (let [serves (:node/serves node)
-        exc (:node/serves-exception node)]
+        exc (:node/serves-exception node)
+        defined? (fn [m] (or (contains? models m) (contains? checkpoints m)))]
     (cond
       (nil? serves)      {:kind :unstated :why "no :node/serves key at all"}
       (= :unstated serves) {:kind :unstated :why "declared :unstated"}
@@ -57,6 +76,20 @@
                            {:kind :ok :why serves}
                            {:kind :violation
                             :why (str "serves \"" serves "\" which no :models entry defines")})
+      (map? serves)
+      (let [{:keys [plane model]} serves]
+        (cond
+          (not (contains? known-planes plane))
+          {:kind :violation :why (str "plane " (pr-str plane) " is not one this fleet can measure")}
+          (nil? model)
+          (if (contains? #{:ring-member :ad-hoc} plane)
+            {:kind :ok :why (str (name plane) " (no model of its own)")}
+            {:kind :violation :why (str (name plane) " plane declared with no :model")})
+          (not (string? model))
+          {:kind :violation :why (str ":model must be a string, got " (pr-str model))}
+          (defined? model) {:kind :ok :why (str (name plane) " " model)}
+          :else {:kind :violation
+                 :why (str "serves " model " which no :models entry defines by id or :model/checkpoint")}))
       (vector? serves)
       (cond
         (< (count serves) 2)
@@ -70,7 +103,7 @@
         (neg? (compare (str (:until exc)) (subs (today) 0 10)))
         {:kind :violation
          :why (str "exception expired on " (:until exc))}
-        (some #(not (contains? models %)) serves)
+        (some #(not (defined? %)) serves)
         {:kind :violation :why "an exception may not name an undefined model"}
         :else {:kind :ok :why (str "exception until " (:until exc) ": " (:reason exc))})
       :else {:kind :violation :why (str "unrecognised :node/serves " (pr-str serves))})))
@@ -98,7 +131,8 @@
                                   (when (contains? m :model/replicas)
                                     [id (:model/replicas m)]))
                                 (:models infer)))
-        rows (mapv (fn [n] [(:name n) (classify n models)]) nodes)
+        checkpoints (set (keep :model/checkpoint (vals (:models infer))))
+        rows (mapv (fn [n] [(:name n) (classify n models checkpoints)]) nodes)
         by (fn [k] (filterv #(= k (:kind (second %))) rows))
         violations (by :violation)
         unstated (by :unstated)]

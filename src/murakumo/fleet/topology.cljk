@@ -28,6 +28,8 @@
     :none                                      deliberately idle
     {:plane :text        :model \"murakumo-edge\"}
     {:plane :media       :model \"waiREALMIX_v11.safetensors\"}
+    {:plane :audio       :model \"qwen3-tts\"}
+    [\"10eros-max\" \"wai-realmix-v11\"]        a declared exception (with :node/serves-exception)
     {:plane :ring-member}                      lends this node to another's ring
     {:plane :ad-hoc}                           whatever ollama holds
 
@@ -58,12 +60,19 @@
     ;; it as text, because that is the only plane a bare model id can mean, and
     ;; say that it was inferred so a reader can tighten it.
     (string? serves) {:state :declared :plane :text :model serves :inferred-plane? true}
+    ;; A vector is the one-model rule's DECLARED exception (ADR-260910: gad's
+    ;; three ComfyUI instances). The reconciler never evicts on such a node —
+    ;; which planes it keeps is the exception's text, not this table's — so the
+    ;; verdict reports what it hosts and nothing else. Whether the exception is
+    ;; well-formed and unexpired is verify-one-model-per-node's question.
+    (vector? serves) {:state :exception :models serves}
     :else {:state :invalid :detail (pr-str serves)}))
 
 (defn verdict
   "Declared vs measured, for one node.
 
     :unstated    nobody decided; nothing to reconcile
+    :exception   a declared many-model node; reported, never evicted
     :unmeasured  the node could not be read -- NOT conformant
     :conformant  it hosts exactly what it is for, and nothing else
     :drift       it hosts something else as well, or instead
@@ -85,6 +94,12 @@
       (= :unmeasured verdict)
       {:verdict :unmeasured
        :detail "the node's process list could not be read; unmeasured is not conformant"}
+
+      (= :exception (:state d))
+      {:verdict :exception
+       :models (:models d)
+       :hosts (mapv :plane hosts)
+       :detail "declared exception to the one-model rule; reported, never reconciled"}
 
       (= :none (:state d))
       (if (empty? hosts)

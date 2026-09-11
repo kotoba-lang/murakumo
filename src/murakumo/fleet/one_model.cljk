@@ -90,7 +90,14 @@
     :daemons ["com.murakumo.comfyui"]}
    {:plane :ad-hoc      :match "ollama serve"
     :what "whatever ollama has pulled; a second text model by another name"
-    :daemons ["com.murakumo.ollama"]}])
+    :daemons ["com.murakumo.ollama"]}
+   ;; The audio lane (2026-09-11, oppai studio): Qwen3-TTS served by mlx-audio's
+   ;; own server (`python -m mlx_audio.server`). Matched on the module path the
+   ;; way :media is matched on `comfyui/main.py` — the interpreter is the same
+   ;; venv python that runs ComfyUI, so the executable name says nothing.
+   {:plane :audio       :match "mlx_audio"
+    :what "a speech / audio generation model over mlx-audio"
+    :daemons ["com.murakumo.mlx-audio"]}])
 
 (defn classify-line
   "The plane one process line hosts, or nil."
@@ -167,6 +174,7 @@
        "      *rpc-server*)      echo \"ring-member $(basename \"$p\" .plist)\" ;;\n"
        "      *comfyui/main.py*|*ComfyUI/main.py*) echo \"media $(basename \"$p\" .plist)\" ;;\n"
        "      *ollama*)          echo \"ad-hoc $(basename \"$p\" .plist)\" ;;\n"
+       "      *mlx_audio*)       echo \"audio $(basename \"$p\" .plist)\" ;;\n"
        "    esac\n"
        "  done\n"
        "done | sort -u"))
