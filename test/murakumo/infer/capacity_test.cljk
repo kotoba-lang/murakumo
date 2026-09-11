@@ -1,0 +1,156 @@
+(ns murakumo.infer.capacity-test
+  "The plan is computed from the corpus, so the tests are the corpus' own
+  numbers: what fell out on 2026-09-11, pinned, plus the boundaries the
+  formulas turn on."
+  (:require [clojure.test :refer [deftest testing is]]
+            [murakumo.infer.capacity :as cap]))
+
+(def prompt {:p50 5416 :p90 8107 :p99 13608 :max 14516})
+(def completion {:p50 471 :p90 1929 :p99 2618 :max 3014})
+(def b70 {:engine :llama-server :ctx-total 32768 :parallel 2 :slot-ctx 16384
+          :overhead-tokens 1024 :tok-s 53})
+(def deployed-admission {:estimator :bytes-over-divisor :divisor 2 :usable-tokens 15360})
+
+(deftest cdf-interpolates-between-measured-points
+  (is (== 0.0 (cap/cdf prompt 0)))
+  (is (== 0.5 (cap/cdf prompt 5416)) "a measured point is exact")
+  (is (== 0.9 (cap/cdf prompt 8107)))
+  (is (== 1.0 (cap/cdf prompt 14516)) "the max is the last point")
+  (is (== 1.0 (cap/cdf prompt 99999)))
+  (is (< 0.5 (cap/cdf prompt 6000) 0.9)))
+
+(deftest output-ceiling-is-the-power-of-two-above-1p5-p99
+  (is (= 4096 (cap/output-ceiling completion)) "1.5 × 2618 = 3927 → 4096")
+  (is (= 1024 (cap/output-ceiling {:p99 100})) "never below the floor")
+  (testing "boundary: exactly 1.5×p99 = 2048 stays at 2048"
+    (is (= 2048 (cap/output-ceiling {:p99 (/ 2048 1.5)}))))
+  (testing "16384 would need a p99 above 5461 — five times what was measured"
+    (is (= 16384 (cap/output-ceiling {:p99 5462})))))
+
+(deftest fit-share-at-the-slot
+  (testing "16384 asked of a 16384 slot: nothing fits — the 2026-09-11 failure"
+    (is (== 0.0 (cap/fit-share prompt 16384 1024 16384))))
+  (testing "4096: 16384 − 1024 − 4096 = 11264 → between p90 and p99"
+    (let [f (cap/fit-share prompt 16384 1024 4096)]
+      (is (< 0.9 f 0.99))
+      (is (< 0.94 f 0.96))))
+  (testing "one slot of 32768 takes every measured prompt at 4096"
+    (is (== 1.0 (cap/fit-share prompt 32768 1024 4096)))))
+
+(deftest text-plan-chooses-by-served-calls
+  (let [p (cap/text-plan b70 {:prompt-tokens prompt :completion-tokens completion} 3000)]
+    (is (= 4096 (:max-tokens p)))
+    (is (= 2048 (:retry-max-tokens p)))
+    (is (= 3 (inc (count (:rejected p)))) "three geometries were scored")
+    (testing "the retry recovers the prompts between the two thresholds (visible on the 16k slot)"
+      (let [g (first (filter #(= 2 (:parallel %)) (cons (:chosen p) (:rejected p))))]
+        (is (> (:fit-share-with-retry g) (:fit-share g)))
+        (is (> (:fit-share-with-retry g) 0.98))))
+    (is (contains? #{1 2} (get-in p [:chosen :parallel])))
+    (testing "a tie keeps the current geometry — a change is a restart"
+      (let [tied (cap/text-plan b70 {:prompt-tokens prompt :completion-tokens completion} 4853
+                                {:admission deployed-admission :bytes-per-token 6.4})]
+        (is (= 2 (get-in tied [:chosen :parallel])))
+        (is (true? (get-in tied [:chosen :kept-current?])))))
+    (testing "the rejected options carry their scores, so the choice is checkable"
+      (is (every? :served-calls-per-day (:rejected p))))
+    (testing "the prefill assumption is stated when unmeasured"
+      (is (some #(re-find #"prefill" %) (:assumptions p))))
+    (testing "at low demand a single 32k slot serves every call, 2% more than two slots — over the 1% bar, so the change is recommended"
+      (let [low (cap/text-plan b70 {:prompt-tokens prompt :completion-tokens completion} 500)
+            two (first (filter #(= 2 (:parallel %)) (:rejected low)))]
+        (is (= 1 (get-in low [:chosen :parallel])))
+        (is (false? (get-in low [:chosen :kept-current?])))
+        (is (== 1.0 (get-in low [:chosen :fit-share])))
+        (is (< 0.97 (/ (:served-calls-per-day two) (get-in low [:chosen :served-calls-per-day])) 0.99))))
+    (testing "at demand beyond two slots, parallel 2 wins despite the 6% it drops"
+      (let [high (cap/text-plan b70 {:prompt-tokens prompt :completion-tokens completion} 20000)]
+        (is (>= (get-in high [:chosen :parallel]) 2))))))
+
+(def gad {:node/id "gad" :node/memory-gb 46 :node/headroom-gb 4})
+(def gad-models
+  [{:model/id "sdxl-image-set" :model/footprint-gb 8.8 :model/warm-s 60}
+   {:model/id "ltx-2.3-22b-fp8" :model/footprint-gb 22 :model/warm-s 140}
+   {:model/id "minimax-h3" :model/footprint-gb 43 :model/exclusive? true :model/warm-s 2284}
+   {:model/id "qwen3.8-27b-ring" :model/footprint-gb 20.6 :model/process? true}])
+
+(deftest residency-is-density-greedy-under-the-budget
+  (let [r (cap/residency-plan gad gad-models {"sdxl-image-set" 83 "minimax-h3" 5 "qwen3.8-27b-ring" 170})]
+    (is (= 42 (:budget-gb r)))
+    (is (= ["sdxl-image-set"] (:resident r)) "the ring would fit (8.8 + 20.6 ≤ 42) but 170 calls/day < 5 preemptions × 50")
+    (is (= "qwen3.8-27b-ring" (:model (first (:refused r)))))
+    (is (= 250 (:floor (first (:refused r)))))
+    (is (= ["ltx-2.3-22b-fp8"] (:on-demand r)))
+    (is (= "minimax-h3" (:model (first (:preempting r)))))
+    (is (< 3.1 (:hours-per-day (first (:preempting r))) 3.2) "5 × 2284 s ≈ 3.17 h/day of preemption")
+    (testing "at the floor exactly, the ring is resident — the boundary is inside"
+      (let [at (cap/residency-plan gad gad-models {"sdxl-image-set" 83 "minimax-h3" 5 "qwen3.8-27b-ring" 250})]
+        (is (= ["qwen3.8-27b-ring" "sdxl-image-set"] (:resident at)) "250/20.6 = 12.1 > 83/8.8 = 9.4, so it is placed first")
+        (is (empty? (:refused at))))
+      (let [under (cap/residency-plan gad gad-models {"sdxl-image-set" 83 "minimax-h3" 5 "qwen3.8-27b-ring" 249})]
+        (is (= ["sdxl-image-set"] (:resident under)))))
+    (testing "with no preemptor on the node the floor does not apply"
+      (let [r (cap/residency-plan gad (remove :model/exclusive? gad-models) {"sdxl-image-set" 83 "qwen3.8-27b-ring" 10})]
+        (is (= ["sdxl-image-set" "qwen3.8-27b-ring"] (:resident r)))))
+    (testing "zero demand earns no residency even when it fits"
+      (let [none (cap/residency-plan gad gad-models {"sdxl-image-set" 83 "minimax-h3" 5 "qwen3.8-27b-ring" 0})]
+        (is (= ["sdxl-image-set"] (:resident none)))
+        (is (= ["ltx-2.3-22b-fp8"] (:on-demand none))))
+      (let [one (cap/residency-plan gad gad-models {"sdxl-image-set" 83 "minimax-h3" 5 "ltx-2.3-22b-fp8" 1})]
+        (is (= ["sdxl-image-set" "ltx-2.3-22b-fp8"] (:resident one)) "one request a day and it stays: the budget has room")))
+    (testing "boundary: a model exactly at the remaining budget is resident"
+      (let [r (cap/residency-plan {:node/memory-gb 30 :node/headroom-gb 0}
+                                  [{:model/id "a" :model/footprint-gb 10} {:model/id "b" :model/footprint-gb 20}]
+                                  {"a" 10 "b" 5})]
+        (is (= ["a" "b"] (:resident r))))
+      (let [r (cap/residency-plan {:node/memory-gb 30 :node/headroom-gb 1}
+                                  [{:model/id "a" :model/footprint-gb 10} {:model/id "b" :model/footprint-gb 20}]
+                                  {"a" 10 "b" 5})]
+        (is (= ["a"] (:resident r)) "one GB over and it is on-demand")))))
+
+(def workforce {:bots 156 :max-active 2 :run-s {:p50 174 :p90 3721}
+                :roles-by-class {:probe 27 :ops 41 :strategy 88}
+                :outcomes-last-50 {:completed 12 :invalid-input 30 :not-configured 8}})
+
+(deftest workforce-cadence-scales-to-capacity
+  (let [w (cap/workforce-plan workforce)]
+    (is (< 690 (:capacity-runs-per-day w) 700) "2 × 86400/174 × 0.7 ≈ 695")
+    (is (< 3900 (:requested-runs-per-day w) 4000) "27×96 + 41×24 + 88×4 = 3928")
+    (is (< 5.6 (:scale w) 5.7))
+    (is (= {:probe 85 :ops 340 :strategy 2035} (:cadence-minutes w)))
+    (is (<= (:resulting-runs-per-day w) (:capacity-runs-per-day w)))
+    (is (> (:wasted-share w) 0.7))
+    (is (re-find #"invalid-input" (:note w))))
+  (testing "boundary: demand exactly at capacity scales by 1"
+    (let [w (cap/workforce-plan {:max-active 1 :run-s {:p50 86400} :roles-by-class {:probe 1} :outcomes-last-50 nil}
+                                {:utilisation 1.0})]
+      ;; capacity 1 run/day; probe base 15 min = 96 runs/day → scale 96
+      (is (== 96.0 (:scale w))))
+    (let [w (cap/workforce-plan {:max-active 96 :run-s {:p50 86400} :roles-by-class {:probe 1} :outcomes-last-50 nil}
+                                {:utilisation 1.0})]
+      (is (== 1.0 (:scale w)) "96 slots for 96 requested runs: k = 1 exactly")
+      (is (= 15 (get-in w [:cadence-minutes :probe]))))))
+
+(deftest the-gateway-admits-by-bytes-and-that-is-the-binding-bound
+  (testing "bytes/2 as tokens, 6.4 real bytes per token: (15360 − 4096) × 2 / 6.4 = 3520 admitted prompt tokens"
+    (is (== 3520.0 (cap/admitted-prompt-tokens deployed-admission 6.4 4096))))
+  (testing "which the slot would hold (11264) but the gateway refuses — the outage"
+    (let [slot-only (cap/fit-share prompt 16384 1024 4096)
+          admitted (cap/admitted-share prompt deployed-admission 6.4 16384 1024 4096)]
+      (is (> slot-only 0.94))
+      (is (< admitted 0.4))
+      (is (> admitted 0.2))))
+  (testing "an estimator that matches the measured ratio restores the slot bound"
+    (let [fixed (assoc deployed-admission :divisor 6.4)]
+      (is (== (cap/fit-share prompt 16384 1024 4096)
+              (cap/admitted-share prompt fixed 6.4 16384 1024 4096)))))
+  (testing "boundary: a prompt exactly at the admitted size is admitted"
+    (let [adm {:estimator :bytes-over-divisor :divisor 1 :usable-tokens 1000}]
+      (is (== 500.0 (cap/admitted-prompt-tokens adm 1 500)))
+      (is (== (cap/cdf prompt 500) (cap/admitted-share prompt adm 1 100000 0 500))))))
+
+(deftest text-plan-under-deployed-admission-reports-the-fix-value
+  (let [p (cap/text-plan b70 {:prompt-tokens prompt :completion-tokens completion} 4853
+                         {:admission deployed-admission :bytes-per-token 6.4})]
+    (is (= deployed-admission (:admission p)))
+    (is (< (get-in p [:chosen :fit-share-with-retry]) 0.6) "under bytes/2 most calls are refused whatever the geometry")))
