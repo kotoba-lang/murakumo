@@ -1,5 +1,65 @@
 # murakumo 叢雲
 
+## Join the inference network (macOS / Linux)
+
+Install the node CLI with **Node.js 22+ and npm** already available:
+
+```sh
+curl -fsSL https://murakumo.cloud/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+murakumo node init
+```
+
+The installer verifies the release file checksums and installs a pinned runtime
+under `~/.local/share/murakumo-cli`, with a launcher in `~/.local/bin`.
+It needs no sudo, Git, Java or globally installed nbb. It does not download a
+model, register a node, change your shell profile or start a background service.
+You can inspect [the installer](release/install.sh) before running it.
+Set `MURAKUMO_INSTALL_DIR` and `MURAKUMO_BIN_DIR` to choose other destinations.
+
+Start your own OpenAI-compatible model server (for example, Ollama or llama.cpp).
+Use the **exact model ID** returned by its `/v1/models` endpoint:
+
+```sh
+curl -fsS http://127.0.0.1:11434/v1/models
+murakumo node doctor --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1
+murakumo node check --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1
+murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1
+```
+
+- `init` creates a private device key on this PC (mode 0600) and leaves an existing
+  identity untouched. Keep `~/.local/share/murakumo-node/identity.json` private;
+  it is not a billing-account export. `MURAKUMO_NODE_HOME` changes this location.
+- `doctor` checks the local model and identity without writing to the network.
+- `check` enrolls and sends one signed heartbeat with **zero free slots**; it
+  never claims jobs. HTTP 201 for that heartbeat proves acceptance, not inference.
+- `join` serves jobs in the foreground until Ctrl-C. Device sessions renew while
+  it runs. Restart the command after reboot; no persistent service is installed.
+
+**Community enrollment starts pending admission.** Registration and a fresh
+heartbeat do not grant AWAI Secure membership, guarantee job placement or prove
+that a paid request has executed. Contact [node support](mailto:support@murakumo.cloud)
+with your node name and public DID if admission is pending; never send the private
+identity file. Existing operator credentials (`MURAKUMO_NODE_CACAO` +
+`MURAKUMO_NODE_DID`, or `MURAKUMO_SERVICE_TOKEN`) are still supported.
+A local server credential goes in `MURAKUMO_INFER_LOCAL_TOKEN` / `VLLM_API_KEY`,
+separately from network authentication.
+
+If diagnosis fails, confirm the server is running and the model ID matches.
+Missing flags, registration refusal and failed heartbeat checks exit nonzero.
+The [live network view](https://murakumo.cloud/) distinguishes connected nodes,
+ready reports and hosted-server responses. This public CLI packages the existing
+nbb resident; it is not a claim of native Kotoba runtime migration.
+
+### Verified on 2026-09-11
+
+A clean device identity on macOS, an isolated Ollama server and `smollm2:135m`
+completed local inference, Community enrollment (201) and authenticated heartbeat
+acceptance (201). The check did not advertise free slots or fetch the work queue.
+Community job placement and a paid end-to-end request were not exercised.
+
+## Fleet operator tooling
+
 **Control plane for the kotoba WASM lattice/mesh across the Mac-mini fleet.**
 
 kotoba ships a single-node mesh runtime (`kotoba-server` with the `p2p,realtime-wasm`
