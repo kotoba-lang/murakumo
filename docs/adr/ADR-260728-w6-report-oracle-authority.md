@@ -50,8 +50,8 @@ CI: `report-precompiled-kir-does-not-drift` + existing gate/token drift tests.
 
 - `src/murakumo/report.clj` (JVM oracle delegation)
 - `resources/murakumo/oracle/report_core.kir.edn`
-- `test/murakumo/kotoba_oracle_authority_test.clj` (report suite)
-- Existing parity: `test/murakumo/report_kotoba_parity_test.clj`
+- `test/murakumo/kotoba_oracle_authority_test.cljk` (report suite)
+- Existing parity: `test/murakumo/report_kotoba_parity_test.cljk`
 
 ## Related
 

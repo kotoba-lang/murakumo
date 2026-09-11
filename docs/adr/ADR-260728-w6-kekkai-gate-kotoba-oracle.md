@@ -24,7 +24,7 @@ cljc oracle:
 
 ## Evidence
 
-- `test/murakumo/kekkai_gate_kotoba_parity_test.clj`
+- `test/murakumo/kekkai_gate_kotoba_parity_test.cljk`
 - Offline + parity: 9 tests / 28 assertions green
 
 ## Related

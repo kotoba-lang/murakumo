@@ -32,8 +32,8 @@ Status: accepted after engine head-cmd (#71)
 
 ## Evidence
 
-- `test/murakumo/infer_plan_kotoba_parity_test.clj`
-- `test/murakumo/report_kotoba_parity_test.clj`
+- `test/murakumo/infer_plan_kotoba_parity_test.cljk`
+- `test/murakumo/report_kotoba_parity_test.cljk`
 
 ## Related
 

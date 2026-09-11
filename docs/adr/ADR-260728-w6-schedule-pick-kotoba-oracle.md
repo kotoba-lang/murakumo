@@ -23,4 +23,4 @@ Host projects eligibility/warm/score keys; guest applies pure selection.
 
 ## Evidence
 
-- `test/murakumo/infer_schedule_kotoba_parity_test.clj` (4 tests / 29 assertions)
+- `test/murakumo/infer_schedule_kotoba_parity_test.cljk` (4 tests / 29 assertions)

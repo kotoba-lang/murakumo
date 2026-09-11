@@ -24,4 +24,4 @@ Name order projected by host (`name-a-before-b` / name-bits).
 
 ## Evidence
 
-- `test/murakumo/reconcile_plan_kotoba_parity_test.clj` (3 tests / 22 assertions)
+- `test/murakumo/reconcile_plan_kotoba_parity_test.cljk` (3 tests / 22 assertions)

@@ -1,6 +1,6 @@
 ;; Originally generated from bb.edn (ADR-2607173000 Wave 3); hand-maintained
 ;; since — bb.edn is gone, so this file is the entrypoint registry.
-;;   nbb scripts/run-task.cljs <task> [args…]
+;;   nbb scripts/run-task.cljk <task> [args…]
 ;;
 ;; NOTE (2026-07-25, ADR-2607256000): the Wave-3 conversion carried over only
 ;; the three shell-out tasks at the bottom. The bb-hosted control-plane
@@ -12,44 +12,44 @@
             :pass-args? true
             :doc "Print the fleet operator DID. Uses MURAKUMO_OPERATOR_SEED if set, else the shared kotoba store ${XDG_DATA_HOME:-$HOME/.local/share}/kotoba/operator.seed. Never echoes the seed. Missing both is the existing missing-seed error."}
 
- :token {:cmd ["nbb" "--classpath" "src" "src/murakumo/apikey_cli.cljs"]
+ :token {:cmd ["nbb" "--classpath" "src" "src/murakumo/apikey_cli.cljk"]
          :pass-args? true
-         :doc "Issue / verify murakumo API keys (mk1 capability tokens). The nbb port of the dropped bb `murakumo token` entrypoint — cloud-murakumo's 401 still tells callers to run `bb murakumo token issue`, which has not been runnable since babashka was retired. e.g. `nbb scripts/run-task.cljs token issue --sub laptop --scope chat --ttl 604800`. Needs $MURAKUMO_TOKEN_SECRET (the value the gateway verifies with)."}
+         :doc "Issue / verify murakumo API keys (mk1 capability tokens). The nbb port of the dropped bb `murakumo token` entrypoint — cloud-murakumo's 401 still tells callers to run `bb murakumo token issue`, which has not been runnable since babashka was retired. e.g. `nbb scripts/run-task.cljk token issue --sub laptop --scope chat --ttl 604800`. Needs $MURAKUMO_TOKEN_SECRET (the value the gateway verifies with)."}
 
  :test-apikey {:cmd ["clojure" "-M:test" "-n" "murakumo.apikey-parity-test"]
                :doc "Parity gate: keys minted by murakumo.apikey are byte-identical to, and verified by, cloud-murakumo.token (the gateway). Needs the cloud-murakumo sibling checkout on the classpath, else the parity assertions skip loudly."}
 
- :task {:cmd ["nbb" "src/murakumo/task.cljs"]
+ :task {:cmd ["nbb" "src/murakumo/task.cljk"]
         :pass-args? true
-        :doc "Fleet task plane (k8s-Job / Ray-tasks shape): probe | plan | run | report. Fans a BATCH of short-lived tasks over the fleet via SSH and gathers the results. e.g. `nbb scripts/run-task.cljs task run --n 22 --cmd 'hostname'`."}
+        :doc "Fleet task plane (k8s-Job / Ray-tasks shape): probe | plan | run | report. Fans a BATCH of short-lived tasks over the fleet via SSH and gathers the results. e.g. `nbb scripts/run-task.cljk task run --n 22 --cmd 'hostname'`."}
 
- :test-task {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/task_plan_test.cljs"]
+ :test-task {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/task_plan_test.cljk"]
              :doc "Offline unit tests for the pure task scheduler (no SSH)."}
- :test-task-exec {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/task_exec_test.cljs"]
+ :test-task-exec {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/task_exec_test.cljk"]
                   :doc "Offline unit tests for the exec shell's pure helpers (no SSH)."}
- :ops {:cmd ["nbb" "src/murakumo/ops.cljs"]
+ :ops {:cmd ["nbb" "src/murakumo/ops.cljk"]
        :pass-args? true
-       :doc "Fleet read surface (nbb port of the bb-era `nodes` + `status`): one ssh round trip per node for /health, wasm_executor, peer links, hosted CIDs, mesh binary and LaunchAgent state. e.g. `nbb scripts/run-task.cljs ops status`."}
+       :doc "Fleet read surface (nbb port of the bb-era `nodes` + `status`): one ssh round trip per node for /health, wasm_executor, peer links, hosted CIDs, mesh binary and LaunchAgent state. e.g. `nbb scripts/run-task.cljk ops status`."}
 
  :infer {:cmd ["clojure" "-M" "-m" "murakumo.core" "infer"]
          :pass-args? true
          :doc "Distributed inference control plane: probe | plan <model> | provision | up | down | ps | serve <model> | generate <prompt>."}
 
- :infer-join {:cmd ["nbb" "--classpath" "src" "scripts/infer-join.cljs"]
+ :infer-join {:cmd ["nbb" "--classpath" "src" "scripts/infer-join.cljk"]
               :pass-args? true
               :doc "Join one resident OpenAI-compatible model server to api.murakumo.cloud. Enrolls durable inventory, probes /models, sends authenticated liveness/readiness/capacity every 30s, polls work, and reports results."}
- :test-infer-join {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/infer_poll_worker_test.cljs"]
+ :test-infer-join {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/infer_poll_worker_test.cljk"]
                    :doc "Offline tests for inference-node auth, local readiness probing, heartbeat capacity, and completion auth."}
 
- :infer-submit {:cmd ["nbb" "--classpath" "src:../torch/src" "scripts/infer-submit.cljs"]
+ :infer-submit {:cmd ["nbb" "--classpath" "src:../torch/src" "scripts/infer-submit.cljk"]
                 :pass-args? true
-                :doc "Enqueue one qwen38-generate job — a token-array prompt for a bare-metal AIUEOS device (device-P256 worker protocol v3; see docs/device-worker-v3.md in network-awai/cloud-murakumo-api). The device has no tokenizer, so the caller tokenises: `--tokens-file ids.edn`, or `--tokenize-with torch --vocab-file v.edn --prompt TEXT`. It cannot read a .gguf — torch.gguf is .clj (JVM only). Needs the torch sibling checkout on the classpath (nbb resolves aliases at analysis time, so the require cannot be made optional). e.g. `nbb scripts/run-task.cljs infer-submit --tokens-file ids.edn --target-did did:key:z... --wait 120`."}
- :test-infer-submit {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/infer_submit_test.cljs"]
+                :doc "Enqueue one qwen38-generate job — a token-array prompt for a bare-metal AIUEOS device (device-P256 worker protocol v3; see docs/device-worker-v3.md in network-awai/cloud-murakumo-api). The device has no tokenizer, so the caller tokenises: `--tokens-file ids.edn`, or `--tokenize-with torch --vocab-file v.edn --prompt TEXT`. It cannot read a .gguf — torch.gguf is .clj (JVM only). Needs the torch sibling checkout on the classpath (nbb resolves aliases at analysis time, so the require cannot be made optional). e.g. `nbb scripts/run-task.cljk infer-submit --tokens-file ids.edn --target-did did:key:z... --wait 120`."}
+ :test-infer-submit {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/infer_submit_test.cljk"]
                      :doc "Offline tests for the qwen38-generate submit command (no network, no torch — the tokenizer is injected)."}
 
- :test-worker {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/task_worker_test.cljs"]
+ :test-worker {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/task_worker_test.cljk"]
                :doc "Offline tests for the resident-worker framing (no ssh)."}
- :test-tunnel {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/tunnel_test.cljc"]
+ :test-tunnel {:cmd ["nbb" "--classpath" "src:test" "test/murakumo/tunnel_test.cljk"]
                :doc "Offline tests for the fleet transport contract (in-band exit status, multiplexing, argv shapes)."}
  :test-tasks {:runs [:test-task :test-task-exec :test-worker :test-tunnel :test-infer-join :test-infer-submit]
               :doc "Every offline test that runs under nbb today."}
@@ -71,7 +71,7 @@
                :pass-args? true
                :doc "Operator start for QUIC driver argv admission. kotoba run kotoba/quic_driver.kotoba (not clojure -M:quic-driver). kwik listen/dial is host-listen HOLD — not a C .so and not FFI."}
 
- :aiueos {:cmd ["nbb" "--classpath" "src:resources" "src/murakumo/aiueos.cljs"]
+ :aiueos {:cmd ["nbb" "--classpath" "src:resources" "src/murakumo/aiueos.cljk"]
           :pass-args? true
-          :doc "Bare-metal aiueos fleet nodes: image | verify | flash | enroll. An aiueos node has no Node/JVM/SSH surface, so murakumo's launchctl provisioning does not apply to it — what an operator can do is build and flash its medium and compute the enrollment record it would post. `enroll` calls murakumo.infer.join (not a reimplementation) and prints the wire arguments aiueos's own mirror of that decision receives; the two are checked across the full matrix by test/murakumo/aiueos_join_plan_parity_test.clj. Needs the aiueos checkout (--aiueos / $AIUEOS_ROOT / sibling). e.g. `nbb scripts/run-task.cljs aiueos enroll --tier native --mem-bytes 34359738368 --inbound`."}
+          :doc "Bare-metal aiueos fleet nodes: image | verify | flash | enroll. An aiueos node has no Node/JVM/SSH surface, so murakumo's launchctl provisioning does not apply to it — what an operator can do is build and flash its medium and compute the enrollment record it would post. `enroll` calls murakumo.infer.join (not a reimplementation) and prints the wire arguments aiueos's own mirror of that decision receives; the two are checked across the full matrix by test/murakumo/aiueos_join_plan_parity_test.cljk. Needs the aiueos checkout (--aiueos / $AIUEOS_ROOT / sibling). e.g. `nbb scripts/run-task.cljk aiueos enroll --tier native --mem-bytes 34359738368 --inbound`."}
 }

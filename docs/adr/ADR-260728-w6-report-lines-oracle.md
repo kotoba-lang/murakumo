@@ -29,4 +29,4 @@ and multi-line `command-help`.
 
 ## Evidence
 
-- `test/murakumo/report_kotoba_parity_test.clj`
+- `test/murakumo/report_kotoba_parity_test.cljk`

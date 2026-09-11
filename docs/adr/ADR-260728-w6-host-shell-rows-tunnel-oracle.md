@@ -28,8 +28,8 @@ Close remaining **pure** fragments of ops/host shells (SSH still host-forever):
 
 ## Evidence
 
-- `test/murakumo/report_kotoba_parity_test.clj`
-- `test/murakumo/tunnel_kotoba_parity_test.clj`
+- `test/murakumo/report_kotoba_parity_test.cljk`
+- `test/murakumo/tunnel_kotoba_parity_test.cljk`
 
 ## Related
 

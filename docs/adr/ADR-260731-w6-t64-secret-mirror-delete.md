@@ -26,4 +26,4 @@
 ## Evidence
 
 - `secret-test` + `secret-kotoba-parity-test` + `secret-kagi-test` green
-- No `mirror-*` / `try-oracle` remain in `src/murakumo/secret.cljc`
+- No `mirror-*` / `try-oracle` remain in `src/murakumo/secret.cljk`

@@ -28,8 +28,8 @@ Node set algebra (`eligible-nodes`, `pick-targets`) stays cljc; host projects co
 
 ## Evidence
 
-- `test/murakumo/infer_credits_kotoba_parity_test.clj`
-- `test/murakumo/reconcile_plan_kotoba_parity_test.clj`
+- `test/murakumo/infer_credits_kotoba_parity_test.cljk`
+- `test/murakumo/reconcile_plan_kotoba_parity_test.cljk`
 
 ## Related
 

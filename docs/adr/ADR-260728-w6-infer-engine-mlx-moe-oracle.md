@@ -25,7 +25,7 @@ Optional flags compose via `string-concat` in parity (ABI max arity 5).
 
 ## Evidence
 
-- `test/murakumo/infer_engine_kotoba_parity_test.clj`
+- `test/murakumo/infer_engine_kotoba_parity_test.cljk`
 
 ## Related
 

@@ -24,4 +24,4 @@
 ## Evidence
 
 - `persist-test` + `persist-kotoba-parity-test` + focused authority green
-- No `mirror-*` / `try-oracle` remain in `src/murakumo/persist.cljc`
+- No `mirror-*` / `try-oracle` remain in `src/murakumo/persist.cljk`

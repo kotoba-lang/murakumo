@@ -22,7 +22,7 @@ Packing reuses base-65536 digits (`text + media*B + postproc*B²`).
 
 ## Evidence
 
-- `test/murakumo/infer_rebalance_kotoba_parity_test.clj`
+- `test/murakumo/infer_rebalance_kotoba_parity_test.cljk`
 
 ## Related
 

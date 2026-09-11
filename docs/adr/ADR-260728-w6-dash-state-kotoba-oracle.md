@@ -22,7 +22,7 @@ Port the string/integer display helpers of `murakumo.dash.state` to
 
 ## Evidence
 
-- `test/murakumo/dash_state_kotoba_parity_test.clj`
+- `test/murakumo/dash_state_kotoba_parity_test.cljk`
 - Equality against `murakumo.dash.state` offline unit corpus
 
 ## Related

@@ -21,7 +21,7 @@ Extend `infer_plan_core.kotoba` beyond usable-bytes / choose-strategy with:
 
 ## Evidence
 
-- `test/murakumo/infer_plan_kotoba_parity_test.clj`
+- `test/murakumo/infer_plan_kotoba_parity_test.cljk`
 
 ## Related
 

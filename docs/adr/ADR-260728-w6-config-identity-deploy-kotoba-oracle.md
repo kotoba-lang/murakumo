@@ -20,9 +20,9 @@ Port pure string/path cores for three medium-priority modules:
 
 ## Evidence
 
-- `test/murakumo/config_kotoba_parity_test.clj`
-- `test/murakumo/identity_kotoba_parity_test.clj`
-- `test/murakumo/deploy_plan_kotoba_parity_test.clj`
+- `test/murakumo/config_kotoba_parity_test.cljk`
+- `test/murakumo/identity_kotoba_parity_test.cljk`
+- `test/murakumo/deploy_plan_kotoba_parity_test.cljk`
 
 ## Related
 

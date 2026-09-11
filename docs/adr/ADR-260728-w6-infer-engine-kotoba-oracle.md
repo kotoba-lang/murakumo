@@ -24,7 +24,7 @@ Port the pure string/cmd assembly core of `murakumo.infer.engine` to
 
 ## Evidence
 
-- `test/murakumo/infer_engine_kotoba_parity_test.clj`
+- `test/murakumo/infer_engine_kotoba_parity_test.cljk`
 - Equality against `murakumo.infer.engine` offline unit corpus
 
 ## Related

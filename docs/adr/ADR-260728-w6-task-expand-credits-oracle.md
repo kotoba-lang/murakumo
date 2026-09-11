@@ -24,8 +24,8 @@ Remainder redistribution and unknown-unit throws stay cljc/host.
 
 ## Evidence
 
-- `test/murakumo/task_plan_kotoba_parity_test.clj`
-- `test/murakumo/infer_credits_kotoba_parity_test.clj`
+- `test/murakumo/task_plan_kotoba_parity_test.cljk`
+- `test/murakumo/infer_credits_kotoba_parity_test.cljk`
 - Combined run: 13 tests / 99 assertions
 
 ## Related

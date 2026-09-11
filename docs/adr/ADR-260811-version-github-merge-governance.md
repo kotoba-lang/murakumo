@@ -6,7 +6,7 @@
 ## Decision
 
 Record the expected GitHub Actions and `main` branch-protection state in the
-adjacent EDN file. `scripts/check-github-governance.cljs` reads the live GitHub
+adjacent EDN file. `scripts/check-github-governance.cljk` reads the live GitHub
 API and requires an exact match after normalization. The required `test` check
 is bound to the GitHub Actions application, strict status checks and
 administrator enforcement are enabled, resolved conversations are required,
@@ -23,7 +23,7 @@ An intentional policy change updates GitHub and the EDN in the same change,
 then runs:
 
 ```bash
-npx nbb scripts/check-github-governance.cljs
+npx nbb scripts/check-github-governance.cljk
 ```
 
 The command requires `gh` authenticated with read access to repository

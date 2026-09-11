@@ -27,4 +27,4 @@
 ## Evidence
 
 - `cloud-plan-test` + `cloud-plan-kotoba-parity-test` green (17 tests / 183 assertions)
-- No `mirror-*` / `try-oracle` remain in `src/murakumo/cloud/plan.cljc`
+- No `mirror-*` / `try-oracle` remain in `src/murakumo/cloud/plan.cljk`

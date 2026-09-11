@@ -54,7 +54,7 @@ separate act with its own cutover and is NOT done here.
 
 ## Enforcement
 
-`scripts/verify-one-model-per-node.cljs`. Four exit codes, four different
+`scripts/verify-one-model-per-node.cljk`. Four exit codes, four different
 answers, deliberately not collapsed:
 
     0  every node stated, none violating

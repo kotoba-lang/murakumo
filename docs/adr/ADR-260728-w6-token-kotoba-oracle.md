@@ -25,7 +25,7 @@ Port the pure claims/scope core of `murakumo.token` to
 
 ## Evidence
 
-- `test/murakumo/token_kotoba_parity_test.clj`
+- `test/murakumo/token_kotoba_parity_test.cljk`
 - Equality against `murakumo.token` offline unit corpus
 
 ## Related

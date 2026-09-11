@@ -26,4 +26,4 @@
 ## Evidence
 
 - `config-test` + `config-kotoba-parity-test` + focused authority green
-- No `mirror-*` / `try-oracle` remain in `src/murakumo/config.cljc`
+- No `mirror-*` / `try-oracle` remain in `src/murakumo/config.cljk`

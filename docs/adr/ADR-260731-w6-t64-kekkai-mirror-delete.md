@@ -26,4 +26,4 @@
 ## Evidence
 
 - `kekkai-gate-test` + `kekkai-gate-kotoba-parity-test` + focused oracle authority green
-- No `#?(:cljs` mirror bodies remain in `src/murakumo/kekkai/gate.cljc`
+- No `#?(:cljs` mirror bodies remain in `src/murakumo/kekkai/gate.cljk`

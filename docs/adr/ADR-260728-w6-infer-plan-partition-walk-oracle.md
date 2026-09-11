@@ -28,7 +28,7 @@ typical MoE fixtures.
 
 ## Evidence
 
-- `test/murakumo/infer_plan_kotoba_parity_test.clj`
+- `test/murakumo/infer_plan_kotoba_parity_test.cljk`
 
 ## Related
 

@@ -26,7 +26,7 @@ Host still mapcats apps and joins CSV for targets/running/reach/misplaced.
 
 ## Evidence
 
-- `test/murakumo/report_kotoba_parity_test.clj` (4 tests / 71 assertions)
+- `test/murakumo/report_kotoba_parity_test.cljk` (4 tests / 71 assertions)
 
 ## Related
 

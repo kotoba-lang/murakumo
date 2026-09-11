@@ -13,5 +13,5 @@ SSH execution stays host-forever; pure argv/shell contract is still oracle-eligi
 
 ## Evidence
 
-- `test/murakumo/tunnel_kotoba_parity_test.clj`
-- `test/murakumo/report_kotoba_parity_test.clj`
+- `test/murakumo/tunnel_kotoba_parity_test.cljk`
+- `test/murakumo/report_kotoba_parity_test.cljk`

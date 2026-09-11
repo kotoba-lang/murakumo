@@ -108,9 +108,9 @@ Kotoba as a product-shell oracle.
 - `memplan` reproduces `tools/memplan.py` to its printed precision for both
   Kimi-Linear (TRUNK 1.01, FLOOR 1.18, experts 12, working set 0.4 GiB) and
   K3 (TRUNK 16.38, FLOOR 17.51, experts 1344, working set 24.0 GiB).
-- `test/murakumo/infer_waste_kotoba_parity_test.clj` — fresh compile of the
+- `test/murakumo/infer_waste_kotoba_parity_test.cljk` — fresh compile of the
   `.kotoba` source vs the host path executing the shipped KIR.
-- `test/murakumo/infer_waste_test.cljc` — upstream goldens, the disk-before-RAM
+- `test/murakumo/infer_waste_test.cljk` — upstream goldens, the disk-before-RAM
   ranking, and the engine command strings.
 - Catalog is now 33 cores (`kotoba_oracle_cljs_load_test`).
 

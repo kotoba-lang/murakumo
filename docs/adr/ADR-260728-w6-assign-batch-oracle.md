@@ -29,8 +29,8 @@ Flags: 1 online \| 2 labels \| 4 roles \| 8 not-excluded \| 16 allowlist.
 
 ## Evidence
 
-- `test/murakumo/infer_schedule_kotoba_parity_test.clj`
-- `test/murakumo/task_plan_kotoba_parity_test.clj`
+- `test/murakumo/infer_schedule_kotoba_parity_test.cljk`
+- `test/murakumo/task_plan_kotoba_parity_test.cljk`
 - Combined: 12 tests / 94 assertions
 
 ## Related

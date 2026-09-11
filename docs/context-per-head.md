@@ -5,8 +5,8 @@ Qwen3.8-27B's KV geometry, read out of the GGUF: 64 blocks x 4 KV heads x
 136 KiB at q8_0, 72 KiB at q4_0. Everything below follows from that number and
 the weights, and nothing below is copied from a model card.
 
-    nbb scripts/model-kv-geometry.cljs <node> <path.gguf>
-    nbb scripts/model-context-fit.cljs <budget-GB>
+    nbb scripts/model-kv-geometry.cljk <node> <path.gguf>
+    nbb scripts/model-context-fit.cljk <budget-GB>
 
 ## What a 32 GB node can hold (Q4_K_M, 16.81 GB of weights)
 

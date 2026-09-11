@@ -27,7 +27,7 @@ used by `target-allocation` and `rebalance` without node-id vectors:
 
 ## Evidence
 
-- `test/murakumo/infer_rebalance_kotoba_parity_test.clj` (9 tests / 69 assertions)
+- `test/murakumo/infer_rebalance_kotoba_parity_test.cljk` (9 tests / 69 assertions)
 
 ## Related
 

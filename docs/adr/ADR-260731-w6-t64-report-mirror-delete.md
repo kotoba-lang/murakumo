@@ -25,4 +25,4 @@
 ## Evidence
 
 - `report-test` + `report-kotoba-parity-test` + focused authority green
-- No `mirror-*` / `try-oracle` remain in `src/murakumo/report.cljc`
+- No `mirror-*` / `try-oracle` remain in `src/murakumo/report.cljk`

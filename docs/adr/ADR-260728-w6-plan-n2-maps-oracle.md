@@ -24,7 +24,7 @@ outside the guest:
 
 ## Evidence
 
-- `test/murakumo/infer_plan_kotoba_parity_test.clj` (`partition-n-neq-3-and-asg-row-maps`)
+- `test/murakumo/infer_plan_kotoba_parity_test.cljk` (`partition-n-neq-3-and-asg-row-maps`)
 
 ## Related
 

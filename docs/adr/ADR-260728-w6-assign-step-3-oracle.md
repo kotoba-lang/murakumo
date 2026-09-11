@@ -21,7 +21,7 @@ Host projects ok/warm flags and pairwise better-pack
 
 ## Evidence
 
-- `test/murakumo/infer_schedule_kotoba_parity_test.clj` (`assign-step-3-matches-schedule-assign`)
+- `test/murakumo/infer_schedule_kotoba_parity_test.cljk` (`assign-step-3-matches-schedule-assign`)
 
 ## Related
 

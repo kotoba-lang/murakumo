@@ -176,7 +176,7 @@
         root (str home "/.murakumo/edge/murakumo")
         command (str "set -a; source " home "/.murakumo/edge/join.env; set +a; exec "
                      nbb " --classpath " root "/src " root
-                     "/scripts/infer-join.cljs --model " model
+                     "/scripts/infer-join.cljk --model " model
                      " --base https://api.murakumo.cloud --name " node-name
                      ;; These are fleet.edn hardware operated by AWAI Network,
                      ;; which is exactly what docs/adr-secure-community-cloud.md
@@ -194,7 +194,7 @@
      :home home
      :model model
      :argv ["/bin/zsh" "-lc" command]
-     :orphan-pattern "murakumo/scripts/infer-join.cljs"
+     :orphan-pattern "murakumo/scripts/infer-join.cljk"
      :plist (plist join user ["/bin/zsh" "-lc" command]
                    (str home "/.murakumo/edge/" model "-join.log")
                    (str home "/.murakumo/edge/" model "-join.err.log"))}))
