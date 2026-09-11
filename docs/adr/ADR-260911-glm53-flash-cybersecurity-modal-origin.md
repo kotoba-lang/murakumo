@@ -159,3 +159,60 @@ a separate decision, not made here.
   log and probably slows loading.
 - The ephemeral disk is 512 GiB because that is Modal's minimum for the
   option; the model needs 195 GB of it.
+
+## Where this stands (session close, 2026-09-11)
+
+Landed on default branches, all verified live:
+
+| repo | commit | what |
+|---|---|---|
+| kotoba-lang/murakumo | `36534da` (PR #377 + API merge) | origin server, download/stage/smoke, allocator fix, `infer.edn` entry, this ADR |
+| network-awai/cloud-murakumo-api | `933ba2c` (PR #251 + 2 API merges) | gateway route, catalogue entry, token limits, 2,400 s hold; `npm run deploy` repaired on main; **deployed**, Worker version `6f06bedb` |
+| com-junkawasaki/root | `6b804c67` (API merge) | `scripts/hermes-murakumo-api.cljk` `profile-overrides`; fleet `--apply`'d, profile `glm53-cyber` rendered |
+| root west pins | `b8657111` (murakumo), `6b87316a` (cloud-murakumo-api) | |
+
+Modal: app `murakumo-glm53-flash-cyber` deployed; Volumes
+`glm53-flash-cyber-hf-cache` (195 GB, v1) and `glm53-flash-cyber-vllm-cache`;
+the v2 Volume trial was deleted.  The 753B FP8 file is committed and marked
+NOT DEPLOYED.
+
+## Open gaps, in priority order
+
+1. **Anonymous access to a $9/h origin.** Same policy as the other
+   fleet-hosted ids, but the exposure is 4x theirs.  Decision needed:
+   gate `glm-5.3-flash-cybersecurity-w4a16` behind a Murakumo credential
+   (the gateway already verifies passkey/Biscuit on the chat route), or
+   accept.  Until decided, watch Modal spend.
+2. **Quality is unmeasured.**  Nothing here says the Flash model answers
+   the owner's tasks as well as the 753B FP8 would; the owner chose it on
+   cost.  A 20–30 prompt comparison through the same gateway is the
+   next measurement, and it costs one cold start per model.
+3. **Cold start is 20–25 min and host-dependent.**  The levers still
+   untried, in order of expected effect: (a) keep one container warm
+   during working hours (`min_containers=1` on a schedule; $9/h while
+   warm), (b) Modal GPU memory snapshots (experimental; unproven with
+   vLLM TP=2), (c) `--enforce-eager` to skip the 361–539 s graph capture
+   at a decode-speed cost.  Measure before choosing; the vLLM cache
+   Volume already proved not to be one.
+4. **fleet-manifest is not updated.** Its `verify-manifest.kotoba` calls
+   `nbb build-manifest.cljs` (renamed away in its PR #1) and the committed
+   `fleet.edn` is 130 profiles behind the machine.  `glm53-cyber` is on
+   this machine only until that repo is repaired and rebuilt.
+5. **Root nbb scripts requiring `scripts.nbb-compat` are broken** since
+   the `.cljk` rename (`root-worktree`, `west-pin-put`, …): nbb resolves
+   `.cljs`/`.cljc`, not `.cljk`.  This session worked around it with a
+   temporary `.cljs` copy on the classpath.  Not this ADR's to fix.
+
+## Resume point
+
+```bash
+# Is it still up and routed?  (warm: 200 in ~1 s; cold: expect up to 25 min)
+curl -s -D - https://api.murakumo.cloud/v1/chat/completions -H 'content-type: application/json' \
+  -d '{"model":"glm-5.3-flash-cybersecurity-w4a16","messages":[{"role":"user","content":"Say OK."}],"max_tokens":8}' \
+  | grep -i 'x-murakumo-cold-wait-ms\|"content"'
+# Hermes, one turn on the profile
+~/.hermes/hermes-agent/venv/bin/hermes -p glm53-cyber chat -q "Which model are you?"
+# Origin directly (bearer stays inside Modal), cold or warm
+modal run tools/modal-glm53-cyber/glm53_flash_cyber_server.py::smoke
+# Next measurement: gap 2 (quality), then gap 3 (a warm-window trial)
+```
