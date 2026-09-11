@@ -938,7 +938,7 @@ def image_face_modes():
     return modes
 
 
-def comfy_image_graph(prompt, params, face_image=None):
+def comfy_image_graph(prompt, params, face_image=None, job_id=None):
     """The same minimal CheckpointLoader/KSampler/VAEDecode graph cloud-murakumo's
     engine.cljc and gad's comfy_openai_bridge.py use — kept boring on purpose.
 
@@ -989,8 +989,16 @@ def comfy_image_graph(prompt, params, face_image=None):
                          "denoise": 1.0, "model": model_edge, "positive": ["6", 0],
                          "negative": ["7", 0], "latent_image": ["5", 0]}},
         "8": {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+        # The job id in the prefix makes the SaveImage node unique per job.
+        # ComfyUI caches by node inputs: a graph identical to one it already
+        # ran (same prompt, same seed — a retry, a re-render) is served
+        # entirely from cache and its history entry has NO outputs, which
+        # this service read as "ComfyUI returned no images" (measured
+        # 2026-09-11, prompt 7ddbbd20: execution_cached for every node).
+        # Sampling may stay cached; the save must run.
         "9": {"class_type": "SaveImage",
-              "inputs": {"filename_prefix": "murakumo-gen", "images": ["8", 0]}},
+              "inputs": {"filename_prefix": "murakumo-gen-" + (job_id or "x")[:12],
+                         "images": ["8", 0]}},
     }
     graph.update(face_nodes)
     return graph
@@ -1021,7 +1029,7 @@ def run_image_job(job_id, source, params):
             jobs[job_id].update(status="running", progress=10); save()
         face_image = comfy_upload_image(face) if face else None
         submitted = comfy_json("POST", "/prompt",
-                               {"prompt": comfy_image_graph(prompt, params, face_image)})
+                               {"prompt": comfy_image_graph(prompt, params, face_image, job_id)})
         prompt_id = submitted.get("prompt_id")
         if not prompt_id:
             raise RuntimeError("ComfyUI rejected the image graph: "

@@ -195,6 +195,8 @@ class ImageGenerationTest(unittest.TestCase):
             self.assertEqual(artifact["width"], 832)
             self.assertTrue(artifact["contentHash"].startswith("sha256:"))
             graph = StubComfy.prompts["last-graph"]
+            self.assertEqual(graph["9"]["inputs"]["filename_prefix"], "murakumo-gen-" + job_id[:12],
+                             "unique per job, so a repeated graph is not served from cache with no outputs")
             self.assertEqual(graph["4"]["inputs"]["ckpt_name"], "animagine-xl-4.0.safetensors")
             self.assertEqual(graph["5"]["inputs"]["width"], 832)
             self.assertEqual(graph["3"]["inputs"]["seed"], 7)
