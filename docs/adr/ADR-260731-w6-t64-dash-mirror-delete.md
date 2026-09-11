@@ -24,4 +24,4 @@
 ## Evidence
 
 - dash-state host + kotoba parity suites green
-- No dual-source mirror bodies remain in `src/murakumo/dash/state.cljc`
+- No dual-source mirror bodies remain in `src/murakumo/dash/state.cljk`

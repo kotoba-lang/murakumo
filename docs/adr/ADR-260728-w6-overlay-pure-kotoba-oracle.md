@@ -12,6 +12,6 @@ Status: accepted low-priority overlay pure cutover slice
 
 ## Evidence
 
-- `test/murakumo/overlay_keyring_kotoba_parity_test.clj`
-- `test/murakumo/overlay_stream_kotoba_parity_test.clj`
-- `test/murakumo/overlay_runtime_kotoba_parity_test.clj`
+- `test/murakumo/overlay_keyring_kotoba_parity_test.cljk`
+- `test/murakumo/overlay_stream_kotoba_parity_test.cljk`
+- `test/murakumo/overlay_runtime_kotoba_parity_test.cljk`

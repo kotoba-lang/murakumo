@@ -22,7 +22,7 @@ Port the tier/eligibility integer core of `murakumo.infer.join` to
 
 ## Evidence
 
-- `test/murakumo/infer_join_kotoba_parity_test.clj`
+- `test/murakumo/infer_join_kotoba_parity_test.cljk`
 
 ## Related
 

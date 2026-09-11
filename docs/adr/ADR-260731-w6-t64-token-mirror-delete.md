@@ -26,4 +26,4 @@
 ## Evidence
 
 - `token-test` + `token-kotoba-parity-test` + focused authority green
-- No `#?(:cljs` mirror bodies remain in `src/murakumo/token.cljc`
+- No `#?(:cljs` mirror bodies remain in `src/murakumo/token.cljk`

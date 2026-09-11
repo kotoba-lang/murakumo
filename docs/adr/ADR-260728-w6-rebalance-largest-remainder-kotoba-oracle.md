@@ -23,7 +23,7 @@ Packed `i64`: `text | (media << 16) | (postproc << 32)`.
 
 ## Evidence
 
-- `test/murakumo/infer_rebalance_kotoba_parity_test.clj` (usable-gb + pool-for-class + largest-remainder-3)
+- `test/murakumo/infer_rebalance_kotoba_parity_test.cljk` (usable-gb + pool-for-class + largest-remainder-3)
 
 ## Related
 

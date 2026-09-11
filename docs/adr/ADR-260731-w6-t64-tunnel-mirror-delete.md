@@ -25,4 +25,4 @@
 ## Evidence
 
 - `tunnel-test` + `tunnel-kotoba-parity-test` + focused authority green
-- No `mirror-*` / `try-oracle` remain in `src/murakumo/tunnel.cljc`
+- No `mirror-*` / `try-oracle` remain in `src/murakumo/tunnel.cljk`

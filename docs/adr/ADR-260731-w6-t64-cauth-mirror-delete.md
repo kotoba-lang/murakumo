@@ -24,4 +24,4 @@
 ## Evidence
 
 - `component-authority-test` + parity + focused authority green
-- No `mirror-*` / `try-oracle` remain in `src/murakumo/component_authority.cljc`
+- No `mirror-*` / `try-oracle` remain in `src/murakumo/component_authority.cljk`

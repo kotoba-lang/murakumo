@@ -23,7 +23,7 @@
  ;;   bytes/token = :elements-per-token * (:kv-cache/bytes-per-element <type>)
  ;;
  ;; Read the geometry out of a GGUF with:
- ;;   nbb scripts/model-kv-geometry.cljs <node> <path.gguf>
+ ;;   nbb scripts/model-kv-geometry.cljk <node> <path.gguf>
  ;;
  ;; ⚠ Two shapes break the flat arithmetic and are flagged where they occur:
  ;; per-layer KV heads (gemma4 alternates local/global attention, so the cache
@@ -309,7 +309,7 @@
    ;;   ctx 32768   wired 12.2 GB, free 0.1 GB, 7.54 tok/s, swap UNMOVED
    ;;
    ;; Both serve, and at the same speed. 32768 is what
-   ;; `scripts/model-context-fit.cljs 13.8` computes as the maximum, so the
+   ;; `scripts/model-context-fit.cljk 13.8` computes as the maximum, so the
    ;; arithmetic and the machine agree. It is set here because
    ;; one-model-per-node means nothing else should be competing.
    ;;

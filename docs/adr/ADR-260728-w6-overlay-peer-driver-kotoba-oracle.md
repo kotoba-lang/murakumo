@@ -13,5 +13,5 @@ catalog/remember maps and parse-argv loop stay cljc.
 
 ## Evidence
 
-- `test/murakumo/overlay_peer_kotoba_parity_test.clj`
-- `test/murakumo/overlay_driver_kotoba_parity_test.clj`
+- `test/murakumo/overlay_peer_kotoba_parity_test.cljk`
+- `test/murakumo/overlay_driver_kotoba_parity_test.cljk`

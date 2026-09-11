@@ -31,5 +31,5 @@ is a follow-up once every cljs entrypoint guarantees preload.
 
 ## Evidence
 
-- `test/murakumo/kotoba_oracle_cljs_load_test.clj` — `t64-*` tests
+- `test/murakumo/kotoba_oracle_cljs_load_test.cljk` — `t64-*` tests
 - `kotoba-kir` pin advanced for bool execute boundary (#27)

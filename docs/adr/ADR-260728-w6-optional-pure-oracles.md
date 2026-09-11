@@ -22,10 +22,10 @@ Port remaining portable-pure scalar/string cores:
 
 ## Evidence
 
-- `test/murakumo/persist_kotoba_parity_test.clj`
-- `test/murakumo/infer_moe_kotoba_parity_test.clj`
-- `test/murakumo/infer_rebalance_kotoba_parity_test.clj`
-- `test/murakumo/infer_relay_kotoba_parity_test.clj`
+- `test/murakumo/persist_kotoba_parity_test.cljk`
+- `test/murakumo/infer_moe_kotoba_parity_test.cljk`
+- `test/murakumo/infer_rebalance_kotoba_parity_test.cljk`
+- `test/murakumo/infer_relay_kotoba_parity_test.cljk`
 
 ## Related
 

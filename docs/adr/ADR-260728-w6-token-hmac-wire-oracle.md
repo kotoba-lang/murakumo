@@ -21,7 +21,7 @@ HMAC-SHA256 and base64url over raw bytes stay host (javax / WebCrypto).
 
 ## Evidence
 
-- `test/murakumo/token_kotoba_parity_test.clj`
+- `test/murakumo/token_kotoba_parity_test.cljk`
 
 ## Related
 

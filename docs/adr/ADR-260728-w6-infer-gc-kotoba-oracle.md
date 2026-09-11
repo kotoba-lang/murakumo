@@ -21,7 +21,7 @@ Port the policy constants and scalar math of `murakumo.infer.gc` to
 
 ## Evidence
 
-- `test/murakumo/infer_gc_kotoba_parity_test.clj`
+- `test/murakumo/infer_gc_kotoba_parity_test.cljk`
 
 ## Related
 

@@ -23,7 +23,7 @@ Port the integer/string core of `murakumo.fleet.inventory` to
 
 ## Evidence
 
-- `test/murakumo/fleet_inventory_kotoba_parity_test.clj`
+- `test/murakumo/fleet_inventory_kotoba_parity_test.cljk`
 - Equality against `murakumo.fleet.inventory` on the offline unit corpus
 
 ## Related

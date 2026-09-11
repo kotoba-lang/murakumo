@@ -23,4 +23,4 @@ Parity joins front+middle+tail against full cljc `head-cmd` for fixed 2-worker r
 
 ## Evidence
 
-- `test/murakumo/infer_engine_kotoba_parity_test.clj` (9 tests / 32 assertions)
+- `test/murakumo/infer_engine_kotoba_parity_test.cljk` (9 tests / 32 assertions)

@@ -22,7 +22,7 @@ Port the integer-arithmetic core of `murakumo.task.plan` to
 
 ## Evidence
 
-- `test/murakumo/task_plan_kotoba_parity_test.clj`
+- `test/murakumo/task_plan_kotoba_parity_test.cljk`
 - Equality against `murakumo.task.plan` offline unit corpus
 
 ## Related

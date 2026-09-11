@@ -32,8 +32,8 @@ Token wire JSON + constant-time eq already landed in murakumo#83
 
 ## Evidence
 
-- `test/murakumo/identity_kotoba_parity_test.clj`
-- `test/murakumo/overlay_crypto_kotoba_parity_test.clj`
+- `test/murakumo/identity_kotoba_parity_test.cljk`
+- `test/murakumo/overlay_crypto_kotoba_parity_test.cljk`
 
 ## Related
 

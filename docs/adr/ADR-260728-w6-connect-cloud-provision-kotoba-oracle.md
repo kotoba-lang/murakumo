@@ -18,6 +18,6 @@ Status: accepted low-priority cutover slice after optional pure oracles
 
 ## Evidence
 
-- `test/murakumo/connect_kotoba_parity_test.clj`
-- `test/murakumo/cloud_plan_kotoba_parity_test.clj`
-- `test/murakumo/provision_plan_kotoba_parity_test.clj`
+- `test/murakumo/connect_kotoba_parity_test.cljk`
+- `test/murakumo/cloud_plan_kotoba_parity_test.cljk`
+- `test/murakumo/provision_plan_kotoba_parity_test.cljk`

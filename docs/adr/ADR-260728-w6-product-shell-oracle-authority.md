@@ -57,12 +57,12 @@ differs from a live compile of the `.kotoba` source.
 
 ## Evidence
 
-- `src/murakumo/kotoba/oracle.cljc`
-- `src/murakumo/kekkai/gate.cljc` (JVM oracle delegation)
+- `src/murakumo/kotoba/oracle.cljk`
+- `src/murakumo/kekkai/gate.cljk` (JVM oracle delegation)
 - `resources/murakumo/oracle/kekkai_gate_core.kir.edn`
-- `test/murakumo/kotoba_oracle_authority_test.clj`
-- `test/murakumo/kotoba_oracle_gen.clj`
-- Existing parity: `test/murakumo/kekkai_gate_kotoba_parity_test.clj`
+- `test/murakumo/kotoba_oracle_authority_test.cljk`
+- `test/murakumo/kotoba_oracle_gen.cljk`
+- Existing parity: `test/murakumo/kekkai_gate_kotoba_parity_test.cljk`
 
 ## Consequences
 

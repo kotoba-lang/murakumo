@@ -27,4 +27,4 @@
 ## Evidence
 
 - `provision-plan-test` + `provision-plan-kotoba-parity-test` + focused authority green
-- No `mirror-*` / `try-oracle` remain in `src/murakumo/provision/plan.cljc`
+- No `mirror-*` / `try-oracle` remain in `src/murakumo/provision/plan.cljk`

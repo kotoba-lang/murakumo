@@ -22,4 +22,4 @@ Compose pure plan go/no-go and mlx-moe pick helpers on `infer_plan_core.kotoba`:
 
 ## Evidence
 
-- `test/murakumo/infer_plan_kotoba_parity_test.clj` (9 tests / 58 assertions)
+- `test/murakumo/infer_plan_kotoba_parity_test.cljk` (9 tests / 58 assertions)

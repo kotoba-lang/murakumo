@@ -26,4 +26,4 @@
 ## Evidence
 
 - `deploy-plan-test` + `deploy-plan-kotoba-parity-test` + focused authority green
-- No `mirror-*` / `try-oracle` remain in `src/murakumo/deploy/plan.cljc`
+- No `mirror-*` / `try-oracle` remain in `src/murakumo/deploy/plan.cljk`

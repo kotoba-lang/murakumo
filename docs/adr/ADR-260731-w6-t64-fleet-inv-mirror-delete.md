@@ -26,4 +26,4 @@
 ## Evidence
 
 - fleet-inventory host + kotoba parity green
-- No dual-source mirror bodies remain in `src/murakumo/fleet/inventory.cljc`
+- No dual-source mirror bodies remain in `src/murakumo/fleet/inventory.cljk`

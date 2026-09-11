@@ -30,4 +30,4 @@ Port to `kotoba/component_authority_core.kotoba`:
 
 ## Evidence
 
-- `test/murakumo/component_authority_kotoba_parity_test.clj`
+- `test/murakumo/component_authority_kotoba_parity_test.cljk`

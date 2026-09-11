@@ -18,7 +18,7 @@ permissions and app-bound, strict `main` check are versioned in
 and audited against the live API with an administrator-authenticated `gh`:
 
 ```bash
-npx nbb scripts/check-github-governance.cljs
+npx nbb scripts/check-github-governance.cljk
 ```
 
 The EDN is not proof of current enforcement; only a successful live readback is.
@@ -104,8 +104,8 @@ would fail at the gateway with an indistinguishable 401.
 
 ```bash
 export MURAKUMO_TOKEN_SECRET=…                      # same value as the gateway
-nbb scripts/run-task.cljs token issue --sub laptop --scope chat --ttl 604800
-nbb scripts/run-task.cljs token verify mk1.…
+nbb scripts/run-task.cljk token issue --sub laptop --scope chat --ttl 604800
+nbb scripts/run-task.cljk token verify mk1.…
 ```
 
 The token alone goes to stdout, so it pipes (`… token issue | pbcopy`);
@@ -116,7 +116,7 @@ guidance goes to stderr.
 ```bash
 claude mcp add murakumo -- nbb \
   --classpath "src:../org-anthropic-mcp/src" \
-  scripts/mcp-server.cljs
+  scripts/mcp-server.cljk
 ```
 
 Tools: `murakumo.issue_api_key` (sub / scope / ttl_seconds) and
@@ -135,7 +135,7 @@ environment.
   would be a permanent one. Re-issue instead of minting long-lived keys.
 
 Compatibility with the verifying gateway is a test, not a claim:
-`nbb scripts/run-task.cljs test-apikey` asserts that keys minted here are
+`nbb scripts/run-task.cljk test-apikey` asserts that keys minted here are
 byte-identical to, and accepted by, `cloud-murakumo.token`.
 
 > Historical note: the gateway's 401 used to say `bb murakumo token issue`. That
@@ -177,10 +177,10 @@ Each fleet node runs `kotoba-server` as a **macOS LaunchAgent** (`RunAtLoad` +
 kotoba identity new
 export MURAKUMO_KOTOBA_DIR=~/github/com-junkawasaki/orgs/com-junkawasaki/kotoba
 
-nbb scripts/run-task.cljs identity      # print the operator DID (never the seed)
-nbb scripts/run-task.cljs ops status    # fold /health + lattice ps across the fleet
-nbb scripts/run-task.cljs task run --n 22 --cmd 'hostname'   # fan a batch over the fleet
-nbb scripts/run-task.cljs token issue --scope chat           # mint a gateway API key
+nbb scripts/run-task.cljk identity      # print the operator DID (never the seed)
+nbb scripts/run-task.cljk ops status    # fold /health + lattice ps across the fleet
+nbb scripts/run-task.cljk task run --n 22 --cmd 'hostname'   # fan a batch over the fleet
+nbb scripts/run-task.cljk token issue --scope chat           # mint a gateway API key
 
 # Operator start (whole-component entries — not kotoba/*_core.kotoba oracles)
 kotoba compile kotoba/desired.kotoba --target wasm --output target/kotoba/desired.wasm --json
@@ -214,7 +214,7 @@ sh scripts/kotoba-run.sh
 > Every `bb …` line remaining below in this README is in that dropped set. They
 > are left in place, rather than deleted, because they describe what this repo
 > is *for*; treat them as a specification of the missing surface, not as
-> instructions. `nbb scripts/run-task.cljs` with no argument lists what actually
+> instructions. `nbb scripts/run-task.cljk` with no argument lists what actually
 > resolves.
 
 ## Command surface
@@ -233,8 +233,8 @@ sh scripts/kotoba-run.sh
 | `overlay dial\|relay --overlay ...` | native overlay driver shell: validate canonical dial/relay argv and emit the session record a real stream/packet driver will open |
 | `fleet <datom-log.edn> [now-ms]` | **coordination-plane view** — fold a [kotoba-fleet](https://github.com/kotoba-lang/kotoba-fleet) Datom log into one snapshot (per-work holders · active leases · pending proposals) via `kotoba.fleet.view/snapshot`. The `status` of the 20-agent coordination layer, next to the mesh `status`. |
 | `infer probe\|plan <model>\|provision\|up\|down\|ps\|serve\|generate` | **distributed inference across the fleet, exo-style** — memory-weighted shard plan + pipeline-parallel ring (see below) |
-| `task probe\|plan\|run\|report` | **fleet task plane** — fan a BATCH of short-lived tasks over the fleet and gather the results (k8s-Job / Ray-tasks shape, next to `reconcile`'s k8s-Deployment shape). `nbb scripts/run-task.cljs task run --n 22 --cmd 'hostname'` (see below) |
-| `ops status [all\|a,b]` | **fleet read surface, restored on nbb** — one ssh round trip per node for `/health`, wasm_executor, peer links, hosted component CIDs, mesh binary presence and LaunchAgent state. This is the nbb port of the bb-era `nodes` + `status`, which have had no runnable entrypoint since the bb.edn removal. `nbb scripts/run-task.cljs ops status` |
+| `task probe\|plan\|run\|report` | **fleet task plane** — fan a BATCH of short-lived tasks over the fleet and gather the results (k8s-Job / Ray-tasks shape, next to `reconcile`'s k8s-Deployment shape). `nbb scripts/run-task.cljk task run --n 22 --cmd 'hostname'` (see below) |
+| `ops status [all\|a,b]` | **fleet read surface, restored on nbb** — one ssh round trip per node for `/health`, wasm_executor, peer links, hosted component CIDs, mesh binary presence and LaunchAgent state. This is the nbb port of the bb-era `nodes` + `status`, which have had no runnable entrypoint since the bb.edn removal. `nbb scripts/run-task.cljk ops status` |
 | `infer-submit --tokens-file ids.edn` | **give a bare-metal AIUEOS device a real prompt** — enqueue one `qwen38-generate` job (device-P256 worker protocol v3). The device has no tokenizer, so the caller tokenises and the caller detokenises: pass ids, or `--tokenize-with torch --vocab-file v.edn --prompt TEXT`. Add `--wait 120` to poll for the generated token array. Needs the `torch` sibling on the classpath; it cannot read a `.gguf` (`torch.gguf` is `.clj`, JVM only). |
 
 ## Layout
@@ -245,45 +245,45 @@ sh scripts/kotoba-run.sh
 | `connect.edn` | **single connectivity description** (read=HTTP-by-CID / live=libp2p multi-transport); node-class → transports |
 | `cloud.edn` | **murakumo.cloud overlay declaration**: domain, relay set, direct transports, and policy |
 | `murakumo.app.edn` | **declarative desired state** (wadm manifest): apps × replicas × placement (incl. `:reach`) |
-| `src/murakumo/config.cljc` | portable config/path/runtime resolution helpers |
-| `src/murakumo/component_authority.cljc` | Component placement/revocation authority: monotonic epochs and exact events consumed by Kototama hosts |
-| `src/murakumo/component_authority_store.clj` | fsync-backed signed authority outbox: enqueue-before-state, ordered retry, acknowledge-after-delivery |
-| `src/murakumo/component_authority_http.clj` | HTTPS publisher connecting the durable authority outbox to Kototama’s bounded receiver |
-| `src/murakumo/component_authority_deploy.clj` | secret-free per-node TLS receiver rollout plan, node audience binding, and overlap-first trusted-key rotation |
-| `src/murakumo/connect.cljc` | connect.edn loader + portable `serves-reach?` (pure: can a node reach a client class on a plane?) |
-| `src/murakumo/cloud.clj` | `bb cloud` CLI shell: load fleet/cloud declarations and print plans or records |
-| `src/murakumo/cloud/plan.cljc` | portable murakumo.cloud overlay planner: stable IDs, relay choice, node/relay/route/policy records |
-| `src/murakumo/overlay.clj` | `bb overlay` CLI shell for the native overlay driver boundary |
-| `src/murakumo/overlay/forward.clj` | local TCP forwarder over the sealed relay stream contract |
-| `src/murakumo/overlay/dial.clj` | host-side dial reachability plus relay hello/frame checks |
-| `src/murakumo/overlay/driver.cljc` | portable overlay driver core: parse/validate canonical dial argv and emit session records |
-| `src/murakumo/overlay/relay.clj` | host-side relay listener process with identity-aware ack and frame handling |
-| `src/murakumo/overlay/runtime.cljc` | portable overlay runtime adapter registry and execution-report placeholder contract |
-| `src/murakumo/deploy/plan.cljc` | portable deploy/pin helpers: app manifest parsing, kotoba command argv shapes, placement observation, pinned binary copy plans |
-| `src/murakumo/identity.cljc` | portable identity formatting helpers: SHA-256 hex, graph CID, operator token |
-| `src/murakumo/persist.cljc` | portable Datom/atproto repo.write envelope helpers |
-| `src/murakumo/ssh.clj` | Tailscale-SSH transport (BatchMode, fast-fail, scp/curl-on-node) |
-| `src/murakumo/fleet/inventory.cljc` | portable fleet inventory helpers: node port defaults + selector semantics |
-| `src/murakumo/fleet.clj` | inventory load + `tailscale status` enrichment around the `.cljc` inventory helpers |
-| `src/murakumo/provision/plan.cljc` | portable provision/mesh helpers: p2p ports, bootstrap peers, plist rendering, rsync argv, launch commands |
-| `src/murakumo/report.cljc` | portable CLI report formatting for nodes/status/deploy/reconcile/help |
-| `src/murakumo/tunnel.cljc` | **THE transport contract** (portable): ssh connection options, the in-band exit-status sentinel every remote command is wrapped in, optional ControlMaster multiplexing, local-forward command shapes |
-| `src/murakumo/core.clj` | the command implementations + per-node identity derivation |
-| `src/murakumo/reconcile/plan.cljc` | portable wadm planner — PURE desired/observed→plan core |
-| `src/murakumo/reconcile.clj` | the wadm CLI shell — collect/apply/watch/persist around the `.cljc` planner |
-| `src/murakumo/dash/state.cljc` | portable dashboard state helpers: snapshot record shape + liveness alert diffs |
-| `src/murakumo/dash.clj` | snapshotter + web UI + Datom-log persistence around the `.cljc` state helpers |
-| `test/murakumo/cloud_plan_test.clj` | offline unit tests for the murakumo.cloud overlay planner |
-| `test/murakumo/overlay_driver_test.clj` | offline unit tests for the native overlay driver shell core |
-| `test/murakumo/reconcile_test.clj` | offline unit tests for the pure reconcile core (`bb test`) |
-| `test/murakumo/smoke_test.clj` | namespace-load smoke tests for CLI shell entrypoints |
+| `src/murakumo/config.cljk` | portable config/path/runtime resolution helpers |
+| `src/murakumo/component_authority.cljk` | Component placement/revocation authority: monotonic epochs and exact events consumed by Kototama hosts |
+| `src/murakumo/component_authority_store.cljk` | fsync-backed signed authority outbox: enqueue-before-state, ordered retry, acknowledge-after-delivery |
+| `src/murakumo/component_authority_http.cljk` | HTTPS publisher connecting the durable authority outbox to Kototama’s bounded receiver |
+| `src/murakumo/component_authority_deploy.cljk` | secret-free per-node TLS receiver rollout plan, node audience binding, and overlap-first trusted-key rotation |
+| `src/murakumo/connect.cljk` | connect.edn loader + portable `serves-reach?` (pure: can a node reach a client class on a plane?) |
+| `src/murakumo/cloud.cljk` | `bb cloud` CLI shell: load fleet/cloud declarations and print plans or records |
+| `src/murakumo/cloud/plan.cljk` | portable murakumo.cloud overlay planner: stable IDs, relay choice, node/relay/route/policy records |
+| `src/murakumo/overlay.cljk` | `bb overlay` CLI shell for the native overlay driver boundary |
+| `src/murakumo/overlay/forward.cljk` | local TCP forwarder over the sealed relay stream contract |
+| `src/murakumo/overlay/dial.cljk` | host-side dial reachability plus relay hello/frame checks |
+| `src/murakumo/overlay/driver.cljk` | portable overlay driver core: parse/validate canonical dial argv and emit session records |
+| `src/murakumo/overlay/relay.cljk` | host-side relay listener process with identity-aware ack and frame handling |
+| `src/murakumo/overlay/runtime.cljk` | portable overlay runtime adapter registry and execution-report placeholder contract |
+| `src/murakumo/deploy/plan.cljk` | portable deploy/pin helpers: app manifest parsing, kotoba command argv shapes, placement observation, pinned binary copy plans |
+| `src/murakumo/identity.cljk` | portable identity formatting helpers: SHA-256 hex, graph CID, operator token |
+| `src/murakumo/persist.cljk` | portable Datom/atproto repo.write envelope helpers |
+| `src/murakumo/ssh.cljk` | Tailscale-SSH transport (BatchMode, fast-fail, scp/curl-on-node) |
+| `src/murakumo/fleet/inventory.cljk` | portable fleet inventory helpers: node port defaults + selector semantics |
+| `src/murakumo/fleet.cljk` | inventory load + `tailscale status` enrichment around the `.cljc` inventory helpers |
+| `src/murakumo/provision/plan.cljk` | portable provision/mesh helpers: p2p ports, bootstrap peers, plist rendering, rsync argv, launch commands |
+| `src/murakumo/report.cljk` | portable CLI report formatting for nodes/status/deploy/reconcile/help |
+| `src/murakumo/tunnel.cljk` | **THE transport contract** (portable): ssh connection options, the in-band exit-status sentinel every remote command is wrapped in, optional ControlMaster multiplexing, local-forward command shapes |
+| `src/murakumo/core.cljk` | the command implementations + per-node identity derivation |
+| `src/murakumo/reconcile/plan.cljk` | portable wadm planner — PURE desired/observed→plan core |
+| `src/murakumo/reconcile.cljk` | the wadm CLI shell — collect/apply/watch/persist around the `.cljc` planner |
+| `src/murakumo/dash/state.cljk` | portable dashboard state helpers: snapshot record shape + liveness alert diffs |
+| `src/murakumo/dash.cljk` | snapshotter + web UI + Datom-log persistence around the `.cljc` state helpers |
+| `test/murakumo/cloud_plan_test.cljk` | offline unit tests for the murakumo.cloud overlay planner |
+| `test/murakumo/overlay_driver_test.cljk` | offline unit tests for the native overlay driver shell core |
+| `test/murakumo/reconcile_test.cljk` | offline unit tests for the pure reconcile core (`bb test`) |
+| `test/murakumo/smoke_test.cljk` | namespace-load smoke tests for CLI shell entrypoints |
 | `deploy/com.murakumo.kotoba-mesh.plist.tmpl` | the resident LaunchAgent template |
 | `infer.edn` | distributed-inference config: model registry + head/worker memory policy — the SSoT |
-| `src/murakumo/infer/plan.cljc` | **PURE exo-style planner**: memory-weighted contiguous layer partition + fits-gate (bb/JVM/cljs/WASM portable) |
-| `src/murakumo/infer/moe.cljc` | **PURE mlx-moe planner**: single best-memory-node pick, README capacity tiers, expert-ratio verdict heuristic |
-| `src/murakumo/infer/engine.cljc` | **PURE engine adapters**: plan → llama.cpp `--rpc/--tensor-split` cmds / `mlx.launch` ring cmds / `mlx-moe serve` cmd |
-| `src/murakumo/infer/topology.cljc` | **PURE interconnect evidence**: folds per-boundary link facts, and gates the `:link-gbps` `choose-strategy` is allowed to see (ADR-260815) |
-| `src/murakumo/infer/topology_probe.cljs` | the nbb feed: `discover` (tailscale + Bonjour vs `fleet.edn`) / `nominal` / `thunderbolt` / `measure` (receiver-verified transfers) |
+| `src/murakumo/infer/plan.cljk` | **PURE exo-style planner**: memory-weighted contiguous layer partition + fits-gate (bb/JVM/cljs/WASM portable) |
+| `src/murakumo/infer/moe.cljk` | **PURE mlx-moe planner**: single best-memory-node pick, README capacity tiers, expert-ratio verdict heuristic |
+| `src/murakumo/infer/engine.cljk` | **PURE engine adapters**: plan → llama.cpp `--rpc/--tensor-split` cmds / `mlx.launch` ring cmds / `mlx-moe serve` cmd |
+| `src/murakumo/infer/topology.cljk` | **PURE interconnect evidence**: folds per-boundary link facts, and gates the `:link-gbps` `choose-strategy` is allowed to see (ADR-260815) |
+| `src/murakumo/infer/topology_probe.cljk` | the nbb feed: `discover` (tailscale + Bonjour vs `fleet.edn`) / `nominal` / `thunderbolt` / `measure` (receiver-verified transfers) |
 
 The authority receiver rollout is deliberately secret-free. Its default
 artifact source is the pinned sibling checkout at `../kototama`; callers may
@@ -293,16 +293,16 @@ installed at `/opt/kototama`, and that the node already has a readable PKCS#12
 certificate plus a root-managed
 `/etc/kototama/component-authority.secret`. Neither TLS material nor passwords
 are copied by Murakumo.
-| `src/murakumo/infer.clj` | the inference operator: SSH probe → plan → provision → ring up/down → serve/generate (mlx-moe models take the single-node path) |
-| `test/murakumo/infer_test.clj` | offline unit tests for the pure planner/engine (`bb test`) |
-| `src/murakumo/task/plan.cljc` | **PURE task scheduler**: eligibility (labels/roles/memory/exclusions) → slot-aware least-filled placement → retry-elsewhere → honest speedup summary |
-| `src/murakumo/task/exec.cljs` | nbb execution shell: bounded-concurrency SSH fan-out, per-task timeout, in-band exit-code sentinel, node probing |
-| `src/murakumo/task/worker.cljs` | resident remote shells (`ssh host bash -s` per slot) with per-task framing, timeout-kill + respawn — the transport that removes the per-task ssh cost |
-| `src/murakumo/task.cljs` | the `task` CLI (nbb): `probe` / `plan` / `run` / `report` + run ledger |
-| `src/murakumo/ops.cljs` | the `ops status` CLI (nbb): the restored fleet read surface, built on the portable `dash/state.cljc` probe core |
-| `test/murakumo/task_plan_test.cljs` | offline unit tests for the pure scheduler (`nbb scripts/run-task.cljs test-task`) |
-| `test/murakumo/task_exec_test.cljs` | offline unit tests for the exec shell's pure helpers |
-| `test/murakumo/infer_moe_test.cljc` | offline unit tests for the pure mlx-moe planner (`bb test`) |
+| `src/murakumo/infer.cljk` | the inference operator: SSH probe → plan → provision → ring up/down → serve/generate (mlx-moe models take the single-node path) |
+| `test/murakumo/infer_test.cljk` | offline unit tests for the pure planner/engine (`bb test`) |
+| `src/murakumo/task/plan.cljk` | **PURE task scheduler**: eligibility (labels/roles/memory/exclusions) → slot-aware least-filled placement → retry-elsewhere → honest speedup summary |
+| `src/murakumo/task/exec.cljk` | nbb execution shell: bounded-concurrency SSH fan-out, per-task timeout, in-band exit-code sentinel, node probing |
+| `src/murakumo/task/worker.cljk` | resident remote shells (`ssh host bash -s` per slot) with per-task framing, timeout-kill + respawn — the transport that removes the per-task ssh cost |
+| `src/murakumo/task.cljk` | the `task` CLI (nbb): `probe` / `plan` / `run` / `report` + run ledger |
+| `src/murakumo/ops.cljk` | the `ops status` CLI (nbb): the restored fleet read surface, built on the portable `dash/state.cljc` probe core |
+| `test/murakumo/task_plan_test.cljk` | offline unit tests for the pure scheduler (`nbb scripts/run-task.cljk test-task`) |
+| `test/murakumo/task_exec_test.cljk` | offline unit tests for the exec shell's pure helpers |
+| `test/murakumo/infer_moe_test.cljk` | offline unit tests for the pure mlx-moe planner (`bb test`) |
 
 ## Dashboard + Datom persistence
 
@@ -349,7 +349,7 @@ kotoba run kotoba/desired.kotoba --function run --arg '"reconcile"'
 
 kekkai seal, filesystem mirrors, node-local `kotoba app deploy`, and the
 runtime probe are **host-listen HOLD** in this guest. The leftover Java in
-`src/murakumo/desired_state.clj` still implements that I/O; it is not a start
+`src/murakumo/desired_state.cljk` still implements that I/O; it is not a start
 path and has no `:desired` alias.
 
 Node receipt は deploy command の exit 0 だけでは `:applied` を名乗らない。app が
@@ -423,12 +423,12 @@ gathers the results — the k8s-Job / Ray-`.remote` shape that ADR-2607071400's
 equivalence table had no entry for (ADR-2607256000).
 
 ```bash
-nbb scripts/run-task.cljs task probe                       # cores / RAM / load1 / reachability, per node
-nbb scripts/run-task.cljs task plan  --n 22 --cmd 'hostname'   # pure placement preview, nothing executed
-nbb scripts/run-task.cljs task run   --n 22 --cmd 'hostname'   # place → execute over SSH → gather → retry
-nbb scripts/run-task.cljs task run   --tasks batch.edn         # heterogeneous batch from a file
-nbb scripts/run-task.cljs task run   --n 8 --labels tier=gpu --cmd './render.sh'
-nbb scripts/run-task.cljs task report --last 5                 # replay recorded runs from the ledger
+nbb scripts/run-task.cljk task probe                       # cores / RAM / load1 / reachability, per node
+nbb scripts/run-task.cljk task plan  --n 22 --cmd 'hostname'   # pure placement preview, nothing executed
+nbb scripts/run-task.cljk task run   --n 22 --cmd 'hostname'   # place → execute over SSH → gather → retry
+nbb scripts/run-task.cljk task run   --tasks batch.edn         # heterogeneous batch from a file
+nbb scripts/run-task.cljk task run   --n 8 --labels tier=gpu --cmd './render.sh'
+nbb scripts/run-task.cljk task report --last 5                 # replay recorded runs from the ledger
 ```
 
 - **Placement** reuses `reconcile`'s vocabulary — `--labels` (all must match),
@@ -816,7 +816,7 @@ queue without being mistaken for a live node merely because it enrolled once:
 export MURAKUMO_NODE_CACAO=...       # device-issued CACAO; preferred
 export MURAKUMO_NODE_DID=did:key:... # must equal that CACAO's issuer
 # Existing operator-managed residents may instead use MURAKUMO_SERVICE_TOKEN.
-nbb scripts/run-task.cljs infer-join \
+nbb scripts/run-task.cljk infer-join \
   --name k16 --model <served-model-id> --local-url http://127.0.0.1:11434/v1
 ```
 
@@ -837,10 +837,10 @@ passing a literal, and the production path spelled it `(or link-gbps 0)`, so
 an unmeasured fleet and a slow one were the same input (ADR-260815).
 
 ```bash
-nbb src/murakumo/infer/topology_probe.cljs discover      # nodes from tailscale + Bonjour vs fleet.edn
-nbb src/murakumo/infer/topology_probe.cljs nominal       # what each NIC claims — cannot lift the gate
-nbb src/murakumo/infer/topology_probe.cljs thunderbolt   # bridge0 state: the cable-arrived detector
-nbb src/murakumo/infer/topology_probe.cljs measure --bytes-mib 128   # real transfers, counted at the receiver
+nbb src/murakumo/infer/topology_probe.cljk discover      # nodes from tailscale + Bonjour vs fleet.edn
+nbb src/murakumo/infer/topology_probe.cljk nominal       # what each NIC claims — cannot lift the gate
+nbb src/murakumo/infer/topology_probe.cljk thunderbolt   # bridge0 state: the cable-arrived detector
+nbb src/murakumo/infer/topology_probe.cljk measure --bytes-mib 128   # real transfers, counted at the receiver
 ```
 
 The link number is **zero unless every rank boundary carries a verified
@@ -914,7 +914,7 @@ a seed. `identity` / report commands print the **operator DID** only.
 
 ```bash
 kotoba identity new                         # write the shared 0600 seed file
-nbb scripts/run-task.cljs identity          # same DID kotoba prints
+nbb scripts/run-task.cljk identity          # same DID kotoba prints
 # optional override:
 # export MURAKUMO_OPERATOR_SEED=<32-byte hex>
 ```
@@ -975,7 +975,7 @@ bb murakumo nodes    # nodes without :status "authorized" are now excluded,
 
 ## Status (honest)
 
-> **Measured fleet state, 2026-07-25** (`nbb scripts/run-task.cljs ops status`, cross-checked
+> **Measured fleet state, 2026-07-25** (`nbb scripts/run-task.cljk ops status`, cross-checked
 > with a `task run` over all 11 reachable nodes). The claims in this section describe what the
 > CODE does; here is what the FLEET currently looks like:
 >

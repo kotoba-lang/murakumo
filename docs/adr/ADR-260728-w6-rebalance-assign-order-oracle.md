@@ -27,4 +27,4 @@ Worker id vectors / concrete take+drop assignment / moves-between maps.
 
 ## Evidence
 
-- `test/murakumo/infer_rebalance_kotoba_parity_test.clj`
+- `test/murakumo/infer_rebalance_kotoba_parity_test.cljk`

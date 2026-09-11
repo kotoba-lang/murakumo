@@ -29,4 +29,4 @@ Port to `kotoba/secret_core.kotoba`:
 
 ## Evidence
 
-- `test/murakumo/secret_kotoba_parity_test.clj`
+- `test/murakumo/secret_kotoba_parity_test.cljk`

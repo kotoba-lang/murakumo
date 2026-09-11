@@ -21,7 +21,7 @@ Port the integer-arithmetic core of `murakumo.infer.plan` to
 
 ## Evidence
 
-- `test/murakumo/infer_plan_kotoba_parity_test.clj`
+- `test/murakumo/infer_plan_kotoba_parity_test.cljk`
 - Equality against `murakumo.infer.plan` on the offline unit corpus
 
 ## Related

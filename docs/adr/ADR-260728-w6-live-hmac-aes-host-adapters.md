@@ -27,8 +27,8 @@ Fixed-key claims JSON on **both** JVM and cljs (drops cljs `JSON.stringify` orde
 
 ## Evidence
 
-- `test/murakumo/token_test.cljc` (`live-hmac-adapter-uses-pure-wire`)
-- `test/murakumo/overlay_crypto_test.clj` (`live-aes-adapter-packaging-gates`)
+- `test/murakumo/token_test.cljk` (`live-hmac-adapter-uses-pure-wire`)
+- `test/murakumo/overlay_crypto_test.cljk` (`live-aes-adapter-packaging-gates`)
 - Existing kotoba parity suites for token_core + overlay_crypto_core
 
 ## Related

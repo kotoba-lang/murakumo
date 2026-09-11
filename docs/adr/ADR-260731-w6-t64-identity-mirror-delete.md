@@ -23,4 +23,4 @@
 ## Evidence
 
 - `identity-test` + `identity-kotoba-parity-test` + focused authority green
-- No dual-source mirror bodies remain in `src/murakumo/identity.cljc`
+- No dual-source mirror bodies remain in `src/murakumo/identity.cljk`

@@ -26,4 +26,4 @@
 ## Evidence
 
 - connect-kotoba-parity + reconcile serve/eligible suites green
-- No dual-source mirror bodies remain in `src/murakumo/connect.cljc`
+- No dual-source mirror bodies remain in `src/murakumo/connect.cljk`

@@ -28,4 +28,4 @@ Host projects unit/kind presence flags; guest owns classify + demand-inc fold.
 
 ## Evidence
 
-- `test/murakumo/infer_rebalance_kotoba_parity_test.clj`
+- `test/murakumo/infer_rebalance_kotoba_parity_test.cljk`

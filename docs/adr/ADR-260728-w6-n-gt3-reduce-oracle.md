@@ -30,8 +30,8 @@ Host projects ok/warm/better per candidate and holds champ index outside guest.
 
 ## Evidence
 
-- `test/murakumo/infer_plan_kotoba_parity_test.clj` (`partition-step-fold-matches-n4-cljc`)
-- `test/murakumo/infer_schedule_kotoba_parity_test.clj` (`pick-fold-step-n4-matches-schedule-pick`)
+- `test/murakumo/infer_plan_kotoba_parity_test.cljk` (`partition-step-fold-matches-n4-cljc`)
+- `test/murakumo/infer_schedule_kotoba_parity_test.cljk` (`pick-fold-step-n4-matches-schedule-pick`)
 
 ## Related
 

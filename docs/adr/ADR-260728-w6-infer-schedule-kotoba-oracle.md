@@ -22,7 +22,7 @@ the pure and/or/memory rule so the same logic can run in WASM without sets.
 
 ## Evidence
 
-- `test/murakumo/infer_schedule_kotoba_parity_test.clj`
+- `test/murakumo/infer_schedule_kotoba_parity_test.cljk`
 - Equality against `murakumo.infer.schedule` offline corpus
 
 ## Related

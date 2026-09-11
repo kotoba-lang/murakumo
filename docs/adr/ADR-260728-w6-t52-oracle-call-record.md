@@ -40,7 +40,7 @@ host bridge that accepts a structural map without inventing guest packs.
 
 ## Evidence
 
-- `test/murakumo/oracle_call_record_test.clj`
+- `test/murakumo/oracle_call_record_test.cljk`
 - config/kotoba-dir dual-source still green via existing config tests
 
 ## Related

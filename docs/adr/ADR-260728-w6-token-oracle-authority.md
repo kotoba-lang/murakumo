@@ -26,8 +26,8 @@ CI: `token-precompiled-kir-does-not-drift` + existing gate drift tests.
 
 ## Evidence
 
-- `test/murakumo/kotoba_oracle_authority_test.clj` (token suite)
-- `test/murakumo/token_test.cljc` / token_kotoba_parity
+- `test/murakumo/kotoba_oracle_authority_test.cljk` (token suite)
+- `test/murakumo/token_test.cljk` / token_kotoba_parity
 - 21 tests / 113 assertions combined with token suites
 
 ## Related

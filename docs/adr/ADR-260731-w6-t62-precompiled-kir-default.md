@@ -36,4 +36,4 @@ clojure -M:test:gen
 - `deps.edn`: compiler only under `:aliases :test`
 - 32× `*_core.kotoba` ↔ 32× `*.kir.edn`
 - Catalog-wide drift + completeness tests in
-  `test/murakumo/kotoba_oracle_authority_test.clj`
+  `test/murakumo/kotoba_oracle_authority_test.cljk`
