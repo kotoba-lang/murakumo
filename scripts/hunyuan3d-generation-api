@@ -93,6 +93,7 @@ IMAGE_MODELS = {"animagine-xl-4.0": "animagine-xl-4.0.safetensors"}
 IMAGE_DEFAULT_MODEL = "animagine-xl-4.0"
 IMAGE_CKPT_EXTS = (".safetensors", ".ckpt", ".sft")
 IMAGE_MODELS_TTL_S = 60.0
+IMAGE_DEADLINE_S = int(os.environ.get("MURAKUMO_IMAGE_DEADLINE_S", "1200"))
 # Face reference (input.face): IP-Adapter conditioning on ONE portrait. Two
 # graphs, chosen by params.face_mode. "plus-face" needs only the ViT-H
 # ip-adapter-plus-face weight; "faceid" needs insightface + the FaceID v2
@@ -1034,11 +1035,16 @@ def run_image_job(job_id, source, params):
         if not prompt_id:
             raise RuntimeError("ComfyUI rejected the image graph: "
                                + json.dumps(submitted)[:2000])
-        # 600, not 300: gad's APU loads an SDXL checkpoint cold in ~6 min
+        # Not 300: gad's APU loads an SDXL checkpoint cold in ~6 min
         # (measured 2026-09-11: "Prompt executed in 384.92 seconds" for the
         # first waiREALMIX render, ComfyUI finished it AFTER this job had
-        # already been failed at 300 s). A warm render is ~1 min.
-        deadline = time.monotonic() + 600
+        # already been failed at 300 s), and a face-referenced render with
+        # the SDXL weights partially offloaded (CLIP-ViT-H resident, the
+        # sibling ComfyUI instances holding APU memory) sampled for ~12 min
+        # and then VAE-decoded tiled. A warm, uncontended render is ~1 min.
+        # Failing the job while ComfyUI is still going to finish it wastes
+        # the render; the ceiling is for a hung ComfyUI, not a slow one.
+        deadline = time.monotonic() + IMAGE_DEADLINE_S
         images = None
         while time.monotonic() < deadline:
             with lock:
