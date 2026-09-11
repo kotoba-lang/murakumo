@@ -86,3 +86,15 @@
 (deftest every-plane-in-the-table-names-at-least-one-job
   (doseq [p one/planes]
     (is (seq (:daemons p)) (str (name (:plane p)) " has no launchd job"))))
+
+;; ---- the audio plane (2026-09-11, oppai studio: Qwen3-TTS over mlx-audio) ----
+
+(deftest an-mlx-audio-server-is-the-audio-plane
+  (is (= :audio (:plane (one/classify-line
+                         "/Users/levi/.local/share/murakumo-venv/bin/python3 -m mlx_audio.server --port 8093"))))
+  (testing "the same venv python running ComfyUI is still :media, not :audio"
+    (is (= :media (:plane (one/classify-line
+                           "/Users/levi/.local/share/murakumo-venv/bin/python3 /Users/levi/comfyui/main.py --listen"))))))
+
+(deftest the-discovery-script-names-an-audio-daemon
+  (is (clojure.string/includes? one/discover-script "*mlx_audio*)       echo \"audio ")))

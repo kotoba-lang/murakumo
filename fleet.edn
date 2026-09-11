@@ -13,24 +13,31 @@
  :fleet/p2p-port 4001                  ; default libp2p QUIC port (fixed → predictable multiaddr)
  :fleet/operator-seed-env "MURAKUMO_OPERATOR_SEED"  ; 32-byte hex; shared operator DID across the fleet
 
+ ;; 2026-09-11 (owner instruction; ADR-2609117000 in com-junkawasaki/root): the ten
+ ;; 16 GiB minis leave text inference and serve one media / audio lane each for
+ ;; the oppai.fans studio bot, 24h. Reconciled the same day with
+ ;; scripts/fleet-media-cutover.cljk (text / ring-member / ad-hoc planes evicted,
+ ;; plists parked in evicted-by-murakumo/). The :audio plane is CLI-per-job
+ ;; today (mlx_audio.server needs webrtcvad), so the reconciler reports it
+ ;; MISSING while idle — that is the honest state, not drift to repair.
  :nodes
- [{:name "naphtali" :host "naphtali" :rpc-ip "192.168.1.25" :mac "1c:f6:4c:35:21:a5" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves :unstated}
+ [{:name "naphtali" :host "naphtali" :rpc-ip "192.168.1.25" :mac "1c:f6:4c:35:21:a5" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :media :model "ltxv-2b-0.9.6-distilled-04-25.safetensors"}}
   ;; simeon is the ipfs-pinner — its IPFS daemon owns UDP 4001, so give the mesh
   ;; node a different libp2p port (4001 default would fail swarm init).
   {:name "simeon"   :host "simeon@simeon" :rpc-ip "192.168.1.24" :mac "1c:f6:4c:51:5e:ec" :p2p-port 4003 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :media :model "waiREALMIX_v11.safetensors"}}
-  {:name "judah"    :host "judah"    :rpc-ip "192.168.1.21" :mac "1c:f6:4c:56:a9:52" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :text :model "murakumo-edge"}}
-  {:name "zebulun"  :host "zebulun"  :rpc-ip "192.168.1.19" :mac "1c:f6:4c:57:c8:4d" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves :unstated}
-  {:name "levi"     :host "levi@levi" :rpc-ip "192.168.1.26" :mac "1c:f6:4c:62:84:7d" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves :unstated}
-  {:name "joseph"   :host "joseph@joseph" :rpc-ip "192.168.1.17" :mac "1c:f6:4c:4e:b9:2b" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves :unstated}
+  {:name "judah"    :host "judah"    :rpc-ip "192.168.1.21" :mac "1c:f6:4c:56:a9:52" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :audio :model "qwen3-tts"}}
+  {:name "zebulun"  :host "zebulun"  :rpc-ip "192.168.1.19" :mac "1c:f6:4c:57:c8:4d" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :media :model "waiIllustriousSDXL_v150.safetensors"}}
+  {:name "levi"     :host "levi@levi" :rpc-ip "192.168.1.26" :mac "1c:f6:4c:62:84:7d" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :audio :model "qwen3-tts"}}
+  {:name "joseph"   :host "joseph@joseph" :rpc-ip "192.168.1.17" :mac "1c:f6:4c:4e:b9:2b" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :media :model "waiREALCN_v150.safetensors"}}
   ;; issachar already runs a kotoba-server on :8077 (yabai CTI persistence) — give
   ;; the murakumo mesh node its own ports so the two coexist.
-  {:name "issachar" :host "issachar" :rpc-ip "192.168.1.23" :mac "1c:f6:4c:55:db:4b" :port 8076 :p2p-port 4002 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :text :model "murakumo-27b"}}
-  {:name "dan"      :host "dan@dan"  :rpc-ip "192.168.1.18" :mac "1c:f6:4c:5a:34:d9" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp" :role "pdshost"} :node/serves {:plane :media :model "waiREALMIX_v11.safetensors"}}
+  {:name "issachar" :host "issachar" :rpc-ip "192.168.1.23" :mac "1c:f6:4c:55:db:4b" :port 8076 :p2p-port 4002 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :media :model "ltxv-2b-0.9.6-distilled-04-25.safetensors"}}
+  {:name "dan"      :host "dan@dan"  :rpc-ip "192.168.1.18" :mac "1c:f6:4c:5a:34:d9" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp" :role "pdshost"} :node/serves {:plane :media :model "waiREALCN_v150.safetensors"}}
   {:name "benjamin" :host "benjamin" :rpc-ip "192.168.1.20" :mac "1c:f6:4c:53:5b:d4" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :media :model "waiREALMIX_v11.safetensors"}}
   ;; asher = replica/failover; also the canary (verified reachable first).
   ;; Avoid macOS' 49152-65535 ephemeral range: tailscaled owns persistent
   ;; outbound flows on this node whose source ports collided with 50052/50053.
-  {:name "asher"    :host "asher"    :rpc-ip "192.168.1.22" :rpc-port 40052 :mac "1c:f6:4c:4f:46:5c" :roles ["pin" "compute" "relay"] :labels {:tier "edge" :zone "jp" :role "canary"} :node/serves :unstated}
+  {:name "asher"    :host "asher"    :rpc-ip "192.168.1.22" :rpc-port 40052 :mac "1c:f6:4c:4f:46:5c" :roles ["pin" "compute" "relay"] :labels {:tier "edge" :zone "jp" :role "canary"} :node/serves {:plane :media :model "svd_xt.safetensors"}}
   ;; gad — Linux/ROCm GPU box, NOT a 12-tribes Mac mini and not a kotoba P2P
   ;; mesh member (no :pin role, doesn't run kotoba-server). Compute-only:
   ;; murakumo.infer.media's ComfyUI render farm (animagine-xl-4.0 resident),
@@ -38,7 +45,17 @@
   ;; discrete GPU + unified-memory-free VRAM vs Mac mini shared memory —
   ;; verified 2026-07-13, ai-gftd-mangaka session). Reachable as `ssh gad`
   ;; (Tailscale, ~/.ssh/config alias → 100.82.98.110).
-  {:name "gad" :host "gad" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "comfy-render"} :node/serves {:plane :media :model "waiREALMIX_v11.safetensors"}}
+  {:name "gad" :host "gad" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "comfy-render"}
+   ;; gad is the one node that legitimately serves more than one: three ComfyUI
+   ;; instances (:8188 farm / :8191 MiniMax-H3 / :8192 v0.34) share the 51 GB
+   ;; APU and the generation API yields between them (comfy_yield_sibling).
+   ;; 10eros-max is the lane nothing else can hold; waiREALMIX_v11 stays here for
+   ;; the IP-Adapter face reference (the only node with the loader). Declared
+   ;; as the exception the one-model rule requires, not as an implicit one.
+   :node/serves ["10eros-max" "wai-realmix-v11"]
+   :node/serves-exception {:reason "three ComfyUI instances on one 51 GB APU; 10eros-max (20 GiB UNET + 32B text encoder) fits no other node, and the IP-Adapter face graph exists only here"
+                           :adr "adr-2609117000-oppai-studio-bot-and-fleet-media-placement"
+                           :until "2027-03-31"}}
   ;; xavier — NVIDIA Jetson AGX Xavier devkit (32GB LPDDR4x, 512-core Volta
   ;; GPU, 8-core Carmel), NOT a 12-tribes Mac mini and not a kotoba P2P mesh
   ;; member (no :pin role, doesn't run kotoba-server). Physically on gad's
