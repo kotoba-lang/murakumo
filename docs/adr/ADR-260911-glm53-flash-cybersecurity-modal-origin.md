@@ -116,6 +116,27 @@ slower one plus margin, not the faster one:
   **2,400**; the fleet contract's 900 would drop a cold request at the
   client after paying for 15 minutes of GPU.
 
+  ⚠ **Corrected 2026-09-11, the same day.** Those two YAML keys were never
+  in force.  Hermes resolves them by `agent.provider`, which for a
+  `providers:` entry that is not a built-in is the literal `custom`
+  (`provider=custom` on every log line), so `providers.murakumo.*` is never
+  read and the stream stale detector runs at its **180 s** env default
+  (`HERMES_STREAM_STALE_TIMEOUT`).  Measured by running the profile against
+  a cold origin: killed at 180 s, retried, killed at 180 s, fell back to
+  `z-ai/glm-5.3-flash` on `openrouter-free`, and surfaced
+  `HTTP 401: Missing Authentication header` to the user — the error the
+  owner reported.  The 12:28 "verified" run had hit a warm origin (first
+  token at 40 s) and could not have told.  Fix: the override now carries
+  `:env {"HERMES_STREAM_STALE_TIMEOUT" 2400}`, rendered into the profile's
+  `.env` (loaded with override=True before the agent starts) and checked by
+  `--verify` as finding `profile-env-timeout`.  Re-measured with it in
+  place, same cold origin: hermes held **232.6 s** to first token (past
+  the 180 s that had killed it) and answered; a plain curl through the
+  gateway on the same load reported `x-murakumo-cold-wait-ms: 472203`
+  and 200.  The same is true of the
+  fleet contract's 600/900: every profile has run at 180 s since the
+  cutover.  That is a fleet-wide change and is left for its own measurement.
+
 ## Public surface (2026-09-11)
 
 - `POST https://api.murakumo.cloud/v1/chat/completions` with
@@ -187,18 +208,31 @@ NOT DEPLOYED.
    the owner's tasks as well as the 753B FP8 would; the owner chose it on
    cost.  A 20–30 prompt comparison through the same gateway is the
    next measurement, and it costs one cold start per model.
-3. **Cold start is 20–25 min and host-dependent.**  The levers still
+3. **A client that gives up mid-load kills the load.**  The gateway polls
+   the origin only while the caller's request is attached; once the caller
+   disconnects (hermes at 180 s, curl at its `-m`), no input reaches the
+   origin and `scaledown_window=120` reaps the container **while vLLM is
+   still loading**, so the next call starts the 20–25 min from zero.  The
+   shape was on the table 2026-09-11 (an `itonami` session's attempts at
+   12:34, 12:43 and 13:27 each fell back within 9 min, and the origin was
+   still loading shards at 13:50); whether the container was reaped
+   between them was **not measured** — the origin log the CLI returns is
+   the last ~100 lines.  The client-side fix above closes it for the
+   profile; the
+   origin-side lever — keep the container alive until the first `/health`
+   200 regardless of inputs, or a larger `scaledown_window` — is untried.
+4. **Cold start is 20–25 min and host-dependent.**  The levers still
    untried, in order of expected effect: (a) keep one container warm
    during working hours (`min_containers=1` on a schedule; $9/h while
    warm), (b) Modal GPU memory snapshots (experimental; unproven with
    vLLM TP=2), (c) `--enforce-eager` to skip the 361–539 s graph capture
    at a decode-speed cost.  Measure before choosing; the vLLM cache
    Volume already proved not to be one.
-4. **fleet-manifest is not updated.** Its `verify-manifest.kotoba` calls
+5. **fleet-manifest is not updated.** Its `verify-manifest.kotoba` calls
    `nbb build-manifest.cljs` (renamed away in its PR #1) and the committed
    `fleet.edn` is 130 profiles behind the machine.  `glm53-cyber` is on
    this machine only until that repo is repaired and rebuilt.
-5. **Root nbb scripts requiring `scripts.nbb-compat` are broken** since
+6. **Root nbb scripts requiring `scripts.nbb-compat` are broken** since
    the `.cljk` rename (`root-worktree`, `west-pin-put`, …): nbb resolves
    `.cljs`/`.cljc`, not `.cljk`.  This session worked around it with a
    temporary `.cljs` copy on the classpath.  Not this ADR's to fix.
