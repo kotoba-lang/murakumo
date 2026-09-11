@@ -155,7 +155,27 @@ def stage_weights() -> None:
     secrets=[origin_secret],
     min_containers=0,
     max_containers=1,
-    scaledown_window=120,
+    # 1800, not 120 (2026-09-11).  Two reasons, both measured.  (1) Warm
+    # turns through hermes are 4-8 s and a cold one is 1,190-1,530 s, so a
+    # conversation with a gap of more than two minutes paid 20+ min per gap;
+    # 30 min of idle tail costs at most ~$4.5 at list, less than one avoided
+    # cold start.  (2) The window counts from the LAST INPUT, and while vLLM
+    # loads every input is a sub-second 503 from the proxy: a caller that
+    # gave up at 180 s (hermes's default stale timeout, ADR-260911) left no
+    # input pending and the container was reaped mid-load, so the next call
+    # started the 20 min over.  1800 is above the slowest measured load; the
+    # keep-alive in serve() closes the gap independently of this number.
+    #
+    # The lever that would have removed the cold start altogether is not
+    # available to this model: `enable_memory_snapshot=True` +
+    # `experimental_options={"enable_gpu_snapshot": True}` on this class of
+    # container is refused at deploy time (2026-09-11, modal 1.4.3):
+    #   GPU memory snapshots are not supported for Functions with more than
+    #   one GPU.
+    # 194.7 GB of weights do not fit one H200 (141 GB) or one B200 (180 GB),
+    # so TP=2 is not optional and the snapshot path is closed until Modal
+    # lifts that limit or a smaller checkpoint exists.
+    scaledown_window=1800,
     timeout=3600,
 )
 @modal.concurrent(max_inputs=128, target_inputs=128)
@@ -216,6 +236,51 @@ def serve() -> None:
         )
 
     threading.Thread(target=stage_then_serve, daemon=True).start()
+    threading.Thread(target=keep_alive_until_healthy, daemon=True).start()
+
+
+def keep_alive_until_healthy(period_s: float = 60.0, budget_s: float = 2400.0) -> None:
+    """Keep this container counted as busy until vLLM answers /health.
+
+    Modal reaps a container `scaledown_window` after its last input, and
+    during the load every input is a sub-second 503 from the proxy.  So a
+    load that nobody is polling is a load that gets reaped: the only thing
+    that kept the container alive was the gateway holding a caller's request
+    and re-POSTing every 5 s, and the day the caller hung up at 180 s the
+    2x H200 were released with the weights half loaded (ADR-260911 gap 3).
+
+    An input has to arrive through Modal's ingress to count, so this pings
+    the deployed function's own public URL with the origin bearer -- with
+    max_containers=1 that request lands here -- once a minute until vLLM is
+    up, then stops: from there the ordinary window applies.  Bounded by
+    `budget_s` so a load that never comes up does not keep paying forever.
+    """
+    import time
+
+    import httpx
+
+    token = os.environ["MURAKUMO_MODAL_ORIGIN_TOKEN"]
+    try:
+        url = modal.Function.from_name(APP_NAME, "serve").get_web_url()
+    except Exception as e:  # ephemeral `modal run` twin: nothing deployed to name
+        print(f"keep-alive: no deployed URL ({type(e).__name__}); relying on scaledown_window")
+        return
+    t0 = time.monotonic()
+    with httpx.Client(timeout=30) as client:
+        while time.monotonic() - t0 < budget_s:
+            try:
+                if client.get("http://127.0.0.1:8001/health").status_code == 200:
+                    print(f"keep-alive: vLLM healthy after {time.monotonic() - t0:.0f} s; stopping")
+                    return
+            except httpx.HTTPError:
+                pass
+            try:
+                r = client.get(f"{url}/health", headers={"authorization": f"Bearer {token}"})
+                print(f"keep-alive: self-ping {r.status_code} at {time.monotonic() - t0:.0f} s")
+            except httpx.HTTPError as e:
+                print(f"keep-alive: self-ping failed: {type(e).__name__}")
+            time.sleep(period_s)
+    print(f"keep-alive: budget of {budget_s:.0f} s exhausted without a healthy vLLM; stopping")
 
 
 @app.function(image=image, secrets=[origin_secret], timeout=3600)
