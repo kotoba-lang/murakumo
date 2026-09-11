@@ -60,6 +60,15 @@ class StubComfy(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def do_GET(self):
+        if self.path.startswith("/queue"):
+            # image jobs take the APU class since 2026-09-11, so the dispatcher
+            # probes ComfyUI's queue before starting one; an idle stub says so.
+            payload = json.dumps({"queue_running": [], "queue_pending": []}).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(payload)))
+            self.end_headers()
+            return self.wfile.write(payload)
         if self.path == "/object_info/CheckpointLoaderSimple":
             payload = json.dumps({"CheckpointLoaderSimple": {"input": {"required": {
                 "ckpt_name": [list(StubComfy.checkpoints)]}}}}).encode()
@@ -118,6 +127,9 @@ def load_api(root, comfy_url):
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
+    # The service starts its dispatcher in __main__; classed jobs (image since
+    # 2026-09-11) wait in the admission queue until it runs.
+    threading.Thread(target=module._dispatch_loop, daemon=True).start()
     return module
 
 

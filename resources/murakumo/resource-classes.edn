@@ -57,7 +57,28 @@
   "wan2.2-ti2v-5b"    :apu/video
   "wan-dancer-14b"    :apu/video
   "ltx-2.3"           :apu/video
-  "hunyuanvideo-1.5"  :apu/video}
+  "hunyuanvideo-1.5"  :apu/video
+  ;; image checkpoints take the SAME class (2026-09-11, capacity plan
+  ;; ADR-2609111400): the APU runs one generation job at a time. Measured
+  ;; before this line: a face-referenced SDXL render sampled for 12 min
+  ;; with its weights partially offloaded because a video model was
+  ;; resident beside it, then VAE-decoded tiled. Serialising image with
+  ;; video costs an image job a wait; running them together costs both.
+  "animagine-xl-4.0"    :apu/video
+  "Illustrious-XL-v2.0" :apu/video
+  "waiREALMIX_v11"      :apu/video
+  "waiREALCN_v150"      :apu/video}
+
+ ;; Units a model's job must PREEMPT while it runs: stopped before the job,
+ ;; started after. The capacity plan keeps the text ring resident on gad
+ ;; (18 GB) beside SDXL; MiniMax-H3 (~43 GB) cannot share the APU with it,
+ ;; so an H3 job takes the ring down for its duration and hands it back.
+ ;; The plan budgets this at 5 preemptions/day x ~38 min (3.2 h/day of ring
+ ;; downtime) and admits the ring only because 3,449 unfit calls/day clear
+ ;; the 50-calls-per-preemption floor. Mechanism is decision-free: the node
+ ;; stops what this table names, nothing else.
+ :preempts
+ {"minimax-h3" ["murakumo-ring.service"]}
 
  ;; hosted なモデルは他人の GPU で走るので、こちらの資源を取らない。
  ;; （`spec["host"] == "fal"` はノード側で判定する。ここは名前を持たない）

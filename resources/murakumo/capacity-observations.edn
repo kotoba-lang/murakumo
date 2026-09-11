@@ -1,0 +1,97 @@
+;; capacity-observations.edn — what the fleet MEASURED, as data the planner reads.
+;;
+;; THIS FILE IS EVIDENCE, NOT POLICY. Every number carries :at and :how. The
+;; planner (murakumo.infer.capacity) derives residency, slot geometry, output
+;; ceilings and workforce cadence from these; nothing in it is a tuning knob
+;; someone chose. When a number here goes stale, re-measure and replace the
+;; row -- do not edit the plan.
+;;
+;; Units: bytes for memory (measured), seconds for time, tokens for context.
+;; :footprint-gb is what the model holds RESIDENT (weights + working set as the
+;; engine reports it), not the file size.
+
+{:capacity/version 1
+ :measured-on "2026-09-11"
+
+ :nodes
+ [{:node/id "gad"
+   :node/role :head
+   :node/memory-gb 46          ; free -g total, 2026-09-11 02:50 UTC
+   :node/memory-shared? true   ; Radeon 8060S APU: CPU and GPU share the 46 GB
+   :node/backend :rocm
+   :node/headroom-gb 4         ; what the OS + tunnels + ipfs + tts kept in the same measurement
+   :restart-floor-calls 50     ; see :policy below
+   :node/comfyui-reserve-vram-gb 24 ; --reserve-vram written into comfyui.service.d/capacity-plan.conf 2026-09-11; ComfyUI fell from 38 GB to 8 GB
+   :node/serves #{:image :video :text}
+   :node/text-engine {:engine :llama-server :ctx-total 65536 :parallel 2 :slot-ctx 32768
+                      :overhead-tokens 1024 :kv-cache "q8_0"
+                      :unit "murakumo-ring.service"
+                      :tok-s 3.4 :prefill-tok-s 146
+                      :note "2026-09-11 03:38 UTC, first request after the restart: prompt eval 7607 tokens in 52.2 s (146 tok/s), decode 3 tokens at 293 ms each (3.4 tok/s). ctx 65536 = 2 slots x 32768, derived from bot prompt p99 13,608 + max_tokens 4,096 + overhead 1,024 rounded to a power of two; the unit's own 524,288 needed a KV cache the shared APU cannot hold (14 crash loops, vk ErrorDeviceLost, 03:30-03:35)"}}
+  {:node/id "b70"
+   :node/role :head
+   :node/backend :intel-arc-b70
+   :node/serves #{:text}
+   :node/text-engine {:engine :llama-server :ctx-total 32768 :parallel 2 :slot-ctx 16384
+                      :overhead-tokens 1024 :tok-s 53 :prompt-eval-ms-per-char 4
+                      :note "slot-context 16384 reported by /ready since --parallel 2 (2026-09-07); 53 tok/s decode (config.edn 2026-08-29)"}}
+  {:node/id "mini-media" :node/count 4 :node/role :media
+   :node/memory-gb 16 :node/backend :metal
+   :node/serves #{:image}
+   :node/note "zebulun / naphtali / issachar / asher: /infer/model-map 2026-09-11, queue 0 on all four, free 4.2-9.4 GB"}]
+
+ :models
+ [{:model/id "sdxl-image-set" :model/kind :image :model/node "gad"
+   :model/footprint-gb 8.8
+   :model/how "ComfyUI journal 2026-09-11: SDXL 4897 MB + SDXLClipModel 1561 + CLIPVision 1208 + IPAdapter plus-face 850 + VAE 160; one checkpoint resident"
+   :model/extra-checkpoint-gb 4.9 :model/checkpoints 4
+   :model/warm-s 60 :model/cold-s 385 :model/contended-s 720
+   :model/how-timing "warm 60-100 s (net-oppai-gen README, 2026-07); cold 384.92 s and contended face render 12 min (journal 2026-09-11)"}
+  {:model/id "ltx-2.3-22b-fp8" :model/kind :video :model/node "gad" :model/footprint-gb 22
+   :model/how "file size ltx-2.3-22b-distilled-fp8.safetensors; not separately measured resident"
+   :model/warm-s 140 :model/how-timing "cloud-murakumo video-engine-comparison.edn"}
+  {:model/id "minimax-h3" :model/kind :video :model/node "gad" :model/footprint-gb 43
+   :model/exclusive? true
+   :model/how "resource-classes.edn: ~43 GB, cannot co-reside with Wan 5B (2026-08-14)"
+   :model/warm-s 2284 :model/how-timing "640x640/124f 2284 s (2026-08-14)"}
+  {:model/id "qwen3.8-27b-ring" :model/kind :text :model/node "gad" :model/footprint-gb 18.1
+   :model/process? true
+   :model/how "systemd MemoryCurrent 18,054,508,544 B with ctx 65536 x 2 slots, KV q8_0, weights Qwen3.8-27B-Q4_K_M 16.8 GB (2026-09-11 03:37). The earlier 20.6 GB was the memory PEAK of a start that failed (2026-09-10 02:06) — a number about a crash, not about serving; it is why the first plan under-budgeted nothing but the corpus had to be re-measured"}]
+
+ ;; The one policy constant. A resident engine process that an exclusive
+ ;; model preempts is worth keeping only if it serves this many calls per
+ ;; preemption; the rally it replaces cost 45 restarts/24h, 1-2 min each
+ ;; (ring-watchdog note, 2026-09-06/07). Dispute the number, not the plan.
+ :policy {:restart-floor-calls 50}
+
+ :demand
+ {:window-h 24
+  :image {:requests 83 :how "journalctl -u comfyui.service --since -24h | grep -c 'got prompt' (2026-09-11)"}
+  :video {:requests 5 :how "comfyui-h3.service, same window"}
+  :video-034 {:requests 0 :how "comfyui-034.service, same window (restarted 28 min before the count)"}
+  :text-calls {:per-run-p50 7 :per-run-p90 71
+               :prompt-tokens {:p50 5416 :p90 8107 :p99 13608 :max 14516}
+               :completion-tokens {:p50 471 :p90 1929 :p99 2618 :max 3014}
+               :how "cloud-itonami-app data/state.edn, 375 runs with :turn/usage / :turn/turn-count (per-call = run total / turns), 2026-09-11"}}
+
+ :workforce
+ {:bots 156 :max-active 2
+  :run-s {:p50 174 :p90 3721 :how "workforce.edn note, measured 2026-08-29"}
+  :outcomes-last-50 {:completed 12 :invalid-input 30 :not-configured 8 :how "workforce_status 2026-09-11 02:40Z"}
+  :roles-by-class {:probe 27 :ops 41 :strategy 88
+                   :how "loop-yakuwari workforce projection 2026-09-11: probe = supporter + trust-safety + kaizen; ops = engineer + qa + product-manager + work-steward; strategy = the rest"}}
+
+ :gateway
+ {:non-streaming-timeout-s 300 :streaming-timeout-s 600
+  ;; The admission rule AS DEPLOYED, measured by bisection on 2026-09-11
+  ;; (JP prose, max_tokens 16: 30493 B -> 200, 30877 B -> 502; max_tokens
+  ;; 4096: 21279 B -> 200, 23199 B -> 502; 120 B prompt: max_tokens 15000 ->
+  ;; 200, 15500 -> 502). Every point fits `bytes/2 + max_tokens <= 15360`;
+  ;; the source in the checkout says `bytes + max_tokens`, which fits none
+  ;; of the first four. The deployed rule is the one the planner must use.
+  :admission {:estimator :bytes-over-divisor :divisor 2 :usable-tokens 15360
+              :source-says "readiness/b70-request-eligible?: request-bytes + max_tokens <= 15360 (cloud-murakumo-api checkout 75aee0a)"}
+  ;; What a byte actually is in tokens on b70 (usage.prompt_tokens / request bytes):
+  :bytes-per-token {:jp-prose 8.7 :json-tool-schema 4.1 :bot-request-mix 8.5
+                    :how "2026-09-11: 23197 B JP -> 2656 tokens; 3543 B JSON tools -> 871 tokens; the 64571 B Trust&Safety-shaped request -> 7607 prompt tokens on gad (8.5 B/token, MEASURED — replaces the 6.4 estimate)"}
+  :how "cloud-murakumo-api readiness.cljc + live bisection 2026-09-11; a declined request is routed to gad, whose ring is stopped -> 502 connection_refused"}}

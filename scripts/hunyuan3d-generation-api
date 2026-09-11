@@ -1226,12 +1226,65 @@ RESOURCE_CLASSES = load_resource_classes()
 
 def job_class(kind, params, spec=None):
     """Which exclusive class this job occupies, or None. Hosted models run on
-    someone else's GPU and take nothing here."""
-    if kind != "video":
+    someone else's GPU and take nothing here. Image jobs consult the same
+    table since 2026-09-11 (a checkpoint listed there shares the APU with the
+    video models; one not listed takes no class, as before)."""
+    if kind not in ("video", "image"):
         return None
     if spec and spec.get("host") == "fal" and RESOURCE_CLASSES.get(":hosted-take-no-class"):
         return None
-    return RESOURCE_CLASSES.get(":model-class", {}).get(params.get("model", VIDEO_DEFAULT_MODEL))
+    default = VIDEO_DEFAULT_MODEL if kind == "video" else IMAGE_DEFAULT_MODEL
+    return RESOURCE_CLASSES.get(":model-class", {}).get(params.get("model", default))
+
+
+def preempt_units(params):
+    """Systemd units this job's model preempts (resource-classes.edn :preempts),
+    or []. The table decides; this only reads it."""
+    return list(RESOURCE_CLASSES.get(":preempts", {}).get(params.get("model", ""), []))
+
+
+PREEMPT_LOG = pathlib.Path(os.environ.get("MURAKUMO_PREEMPT_LOG",
+                                          "/var/lib/murakumo/generation-preempt.log"))
+
+
+def _systemctl(action, unit):
+    """`sudo -n systemctl <action> <unit>`; the operator granted this user
+    NOPASSWD systemctl. Failure to stop is fatal for the job (the memory the
+    job needs is not free); failure to start is logged, never hidden."""
+    return subprocess.run(["sudo", "-n", "systemctl", action, unit],
+                          capture_output=True, text=True, timeout=120)
+
+
+PREEMPT_RUNNER = _systemctl  # tests inject a fake
+
+
+def _preempt_log(event, unit, job_id):
+    try:
+        PREEMPT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with PREEMPT_LOG.open("a") as f:
+            f.write("ts=%d event=%s unit=%s job=%s\n" % (time.time(), event, unit, job_id))
+    except OSError:
+        pass
+
+
+def preempt_for(job_id, params):
+    """Stop the units this job preempts. Returns the list stopped so the
+    caller can hand them back; raises if one refuses to stop."""
+    stopped = []
+    for unit in preempt_units(params):
+        r = PREEMPT_RUNNER("stop", unit)
+        if r.returncode != 0:
+            _preempt_log("stop-failed", unit, job_id)
+            raise RuntimeError("could not preempt %s: %s" % (unit, (r.stderr or "").strip()[:200]))
+        _preempt_log("stopped", unit, job_id)
+        stopped.append(unit)
+    return stopped
+
+
+def hand_back(job_id, units):
+    for unit in units:
+        r = PREEMPT_RUNNER("start", unit)
+        _preempt_log("started" if r.returncode == 0 else "start-failed", unit, job_id)
 
 
 def class_external_bases(klass):
@@ -1331,9 +1384,18 @@ def enqueue_job(job_id, target, source, params, klass):
 
 
 def _run_and_release(job_id, target, source, params, klass):
+    handed = []
     try:
+        try:
+            handed = preempt_for(job_id, params)
+        except Exception as exc:
+            with lock:
+                if job_id not in cancelled_jobs:
+                    jobs[job_id].update(status="failed", progress=100, error=str(exc)); save()
+            return
         target(job_id, source, params)
     finally:
+        hand_back(job_id, handed)
         if klass is not None:
             with queue_cv:
                 running_in_class[klass] = max(0, running_in_class.get(klass, 1) - 1)
