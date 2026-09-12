@@ -1,13 +1,15 @@
 (ns murakumo.node-cli
   "Distribution entry for the existing nbb resident; not a native runtime migration."
   (:require [murakumo.infer.poll-worker :as worker]
+            [murakumo.bench :as bench]
             [cacao.edge.mint :as mint]
             [kotoba.lang.text :as str]
             ["node:fs" :as fs] ["node:path" :as path]
             ["node:os" :as os] ["node:crypto" :as crypto]))
 
 (defn help []
-  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\nNode.js 22+, a running OpenAI-compatible model server and network access are required.\nInstallation does not download models or start a service. Community enrollment\nmay remain pending admission; a heartbeat alone does not prove job eligibility."))
+  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\nNode.js 22+, a running OpenAI-compatible model server and network access are required.\nInstallation does not download models or start a service. Community enrollment\nmay remain pending admission; a heartbeat alone does not prove job eligibility.")
+  (println "\n  murakumo bench nodes                    List tailnet nodes (name, ip, online)\n  murakumo bench run --node N --model P --engine llama|diffuse\n  murakumo bench ledger [--limit N]       Show the append-only measurement ledger\n\nMeasurements record argv, the model's bytes and hash, the host's memory and the\nengine's own output. Nothing here enrols a node or publishes a number.\n  murakumo bench --help"))
 
 (defn identity-path []
   (.join path (or (aget js/process.env "MURAKUMO_NODE_HOME")
@@ -86,8 +88,16 @@
 (let [[prefix command & args] (vec (array-seq (.slice js/process.argv 2)))]
   (try
     (cond
-      (or (nil? prefix) (= prefix "--help") (= command "--help")) (help)
-      (not= prefix "node") (fail! "Use: murakumo node --help")
+      (or (nil? prefix) (= prefix "--help")) (help)
+      ;; `bench` is measured-only and never enrols: it dispatches into its own
+      ;; namespace so a bench run cannot reach the node's identity or the
+      ;; control plane. Its exit code is the command's, not this dispatcher's.
+      (= prefix "bench")
+      (let [code (bench/run-command command args)]
+        (when (not= 0 code) (set! (.-exitCode js/process) code))
+        (when (nil? command) (set! (.-exitCode js/process) 1)))
+      (= command "--help") (help)
+      (not= prefix "node") (fail! "Use: murakumo node --help or murakumo bench --help")
       (= command "init") (init!)
       (contains? #{"doctor" "check" "join"} command)
       (-> (run! command (options args))
