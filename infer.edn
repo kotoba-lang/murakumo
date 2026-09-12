@@ -592,6 +592,57 @@
    ;; verdict with numbers rather than leaving K3 undescribed.
    :model/waste-container "/mnt/nvme/waste/kimi-k3.waste"}
 
+  "ling-3.0-tiny"
+  {:model/id "ling-3.0-tiny"
+   ;; 3:1 KDA/MLA stacking, read from the GGUF header itself as per-layer KV
+   ;; heads: [0 0 0 1] x 6 -- the 18 KDA layers hold O(1) state (like
+   ;; kimi-linear-48b above, which is why that registry entry says KDA is
+   ;; absent from the per-token figure), so only the 6 MLA layers cost
+   ;; per-token cache: sum(1) x (576+128) = 4224 elements/token.
+   :model/kv {:layers 24 :kv-heads-per-layer true :kv-heads-sum 6
+              :key-length 576 :value-length 128
+              :elements-per-token 4224}
+   :model/context-train 131072
+   :model/kv-measured-from "k16:/root/models/Ling-3.0-tiny-Q4_K_M.gguf"
+   :model/kv-measured-at "2026-09-12"
+   :model/family "Ling 3.0"
+   :model/format :gguf
+   :model/kind :text
+   ;; InclusionAI publishes BF16/FP8/INT4 safetensors only; the GGUF the fleet
+   ;; serves is bloomer010's conversion (the repo PR #26608 names as its
+   ;; reference GGUF). inclusionAI/Ling-3.0-tiny verified to exist 2026-09-12.
+   :hf/source-repo "inclusionAI/Ling-3.0-tiny"
+   :hf/repo "bloomer010/Ling-3.0-tiny-GGUF"
+   :hf/commit "56a85ebe2d6d9d2ad6ad00a5014b13667153e236"
+   :model/params-b 8 :model/active-params-b 1
+   :model/layers 24
+   :model/experts 128
+   :model/gguf "Ling-3.0-tiny-Q4_K_M.gguf"
+   :model/weight-bytes 4823895104
+   :model/sha256 "a21f717779203d86b53996239c4903941858b938c50e85b036a981132b5621a"
+   ;; ⚠ MEASURED ON k16 (Ryzen 5 6600HS, 22 GiB, RADV REMBRANDT iGPU),
+   ;; 2026-09-12 -- not projected. Runtime is the stock llama.cpp b10919
+   ;; prebuilt; PR #26608 (merged 2026-08-17) is what makes bailingmoe3 load
+   ;; at all. llama-bench -p 512 -n 128 -r 3 -t 12:
+   ;;   CPU-only + fa on (the k16 default): tg128 24.70 tok/s / pp512 143.76
+   ;;   E2E warm stream 42.9 tok/s, TTFT 0.06 s
+   ;;   full GPU -ngl 99 + fa on: tg128 7.68 -- KDA compute is 3.2x SLOWER
+   ;;   on RADV Vulkan than the CPU path, the INVERSE of Ling-mini-2.0
+   ;;   (bailingmoe2) on the same box
+   ;; So the serving configuration is CPU-only, and CPU-only needs
+   ;; GGML_VK_VISIBLE_DEVICES="" -- -ngl 0 alone leaves the Vulkan backend
+   ;; initialized and it dies on the first submit. Full protocol in
+   ;; adr-2609121325.
+   :model/verified-node "k16"
+   :model/verified-at "2026-09-12"
+   ;; Served by llama-server directly, as this file's other gguf entries are.
+   :model/served-by :llama-server
+   :model/port 8099
+   ;; KV is negligible at any context this node can use (32768 -> ~0.14 GB at
+   ;; q8_0), so 4096 is not a cache limit -- it is what the measured unit
+   ;; serves today. Raising it is a qualification run on k16, not arithmetic.
+   :model/context 4096}
+
   ;; ── media (Civitai/HF 系。ジョブ並列 = 1 ノード完結、sharding 不要) ──
   "trellis-image-large"
   {:model/id "trellis-image-large"
