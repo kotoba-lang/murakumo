@@ -324,6 +324,9 @@ run options:
   --steps 32            diffuse only: denoising steps per block
   --temp 0
   --timeout-s 3600      kill the remote run after this many seconds
+  --env K=V             export one variable in the remote shell before the run
+                        (e.g. --env DIFFUSE_MMAP_MADV=willneed; the tool exists to
+                        compare policies, so the policy has to be a parameter)
   --label TEXT          written into the ledger row for later grepping
   --no-record           print the row, do not append it
 
@@ -397,7 +400,11 @@ publishes a number."))
                                               :timeout-s timeout-s})
                    (throw (js/Error. (str "bench: unknown engine " engine))))
           t0 (js/Date.now)
-          r (sh (ssh-argv user (:ip node) remote (+ timeout-s 120)))
+          ;; `export K=V;` and not a bare `K=V cmd` prefix: the remote command
+          ;; starts with `cd`, and `K=V cd /dir` scopes the variable to the
+          ;; builtin, not to the engine that runs after it.
+          remote-cmd (if-let [e (:env opts)] (str "export " e "; " remote) remote)
+          r (sh (ssh-argv user (:ip node) remote-cmd (+ timeout-s 120)))
           elapsed (/ (- (js/Date.now) t0) 1000.0)
           parsed (assoc (case engine
                           "llama" (parse-llama-bench (:stdout r))
@@ -415,7 +422,7 @@ publishes a number."))
                       :engine (if (= engine "llama") "llama-bench" "diffuse-cli")
                       :bin (or (:bin opts) ".")
                       :model (:model opts)
-                      :remote remote
+                      :remote remote-cmd
                       :metrics metrics
                       :out (sha8 (:stdout r))
                       :extra {:bytes (some-> (:model_bytes host) js/parseInt)
