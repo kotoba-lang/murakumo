@@ -339,14 +339,28 @@ The ledger is append-only JSONL ($MURAKUMO_BENCH_LEDGER or
 ~/.local/share/murakumo/bench-ledger.jsonl). Nothing here enrols a node or
 publishes a number."))
 
-(defn parse-args [args]
-  (when (odd? (count args))
-    (throw (js/Error. "bench: missing value for the last option")))
-  (reduce (fn [m [k v]]
-            (let [k (str/replace k #"^--" "")]
-              (assoc m (keyword k) v)))
-          {}
-          (partition 2 args)))
+(defn parse-args
+  "Boolean flags carry no value. `--no-record` (and nothing else today) means
+  true by its presence; everything else is --key value and an odd remainder is
+  a missing value, which is refused rather than guessed."
+  [args]
+  (let [bools #{"--no-record"}
+        pairs (loop [rest args acc []]
+                (if (empty? rest)
+                  (seq acc)
+                  (let [k (first rest)]
+                    (if (contains? bools k)
+                      (recur (next rest) (conj acc [k "true"]))
+                      (do (when (< (count rest) 2)
+                            (throw (js/Error. (str "bench: missing value for " k))))
+                          (recur (drop 2 rest) (conj acc [(first rest) (second rest)])))))))]
+    (when (nil? pairs)
+      (throw (js/Error. "bench: no options")))
+    (reduce (fn [m [k v]]
+              (let [k (str/replace k #"^--" "")]
+                (assoc m (keyword k) v)))
+            {}
+            pairs)))
 
 (defn- num [v d] (if (nil? v) d (js/parseInt v)))
 
