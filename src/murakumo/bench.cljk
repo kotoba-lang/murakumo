@@ -207,11 +207,15 @@
       tg (assoc :tg128 tg))))
 
 (defn diffuse-remote
-  "Runs diffuse-cli under GNU time so wall clock, peak RSS and major faults all
-  come from the kernel rather than from a stopwatch in this process. The engine's
-  own stderr is kept (it carries the denoising step counter) and the \\r progress
-  line is turned into one line per step."
-  [{:keys [bin binname model prompt n steps t temp timeout-s] :or {n 96 steps 32 t 4 temp 0}}]
+  "Build the diffuse-cli argv and the wrapper that runs it under GNU time.
+
+  `threshold` is the confidence needed to commit a token (default 0.95): LOWER
+  values commit earlier and cut denoising steps, which is the first lever to try
+  when tok/s is disk-bound — but it trades quality, so a threshold row and a 0.95
+  row are not the same configuration, and the ledger must carry the threshold in
+  argv (it does)."
+  [{:keys [bin binname model prompt n steps t temp threshold timeout-s]
+    :or {n 96 steps 32 t 4 temp 0}}]
   (let [tag "murakumo-bench"
         dir (or bin ".")
         binname (or binname "diffuse-cli")]
@@ -221,6 +225,7 @@
          " -m " (q model)
          " -p " (q prompt)
          " -n " n " -s " steps " -t " t " --temp " temp
+         (when threshold (str " --threshold " threshold))
          " > /tmp/" tag ".out 2> /tmp/" tag ".err; echo RC=$?;"
          " echo ===TIME; cat /tmp/" tag ".time 2>/dev/null;"
          " echo ===STEPS; tr '\\r' '\\n' < /tmp/" tag ".err 2>/dev/null | grep -c 'block ' ;"
@@ -395,6 +400,8 @@ publishes a number."))
                                                           "Explain why the sky appears blue, in two or three sentences.")
                                               :n (num (:n opts) 96)
                                               :steps (num (:steps opts) 32)
+                                              :threshold (when (:threshold opts)
+                                                           (js/parseFloat (:threshold opts)))
                                               :t (num (:t opts) threads)
                                               :temp (or (:temp opts) 0)
                                               :timeout-s timeout-s})
