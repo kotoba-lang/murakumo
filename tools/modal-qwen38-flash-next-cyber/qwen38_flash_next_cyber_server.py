@@ -205,11 +205,13 @@ def _vllm_health(client) -> bool:
     secrets=[origin_secret],
     min_containers=0,
     max_containers=1,
-    # Owner decision 2026-09-11: stop after 5 min without a request.  A
-    # restore is ~4 s (ADR-260911b), so the idle tail is the whole cost.
-    # (2026-08-20 on the 27B experiment: a 10 s window raced the snapshot
-    # machinery; 300 is far from that.)
-    scaledown_window=300,
+    # Owner decisions: 2026-09-11 stop after 5 min without a request;
+    # 2026-09-12 raised to 15 min -- hourly consumers were paying a 150-190 s
+    # restore on nearly every call once the 5 min tail expired.  A restore is
+    # ~4 s (ADR-260911b), so the idle tail is the whole cost.  (2026-08-20 on
+    # the 27B experiment: a 10 s window raced the snapshot machinery; 900 is
+    # far from that.)
+    scaledown_window=900,
     timeout=3600,
     startup_timeout=3600,
     enable_memory_snapshot=True,
