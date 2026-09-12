@@ -7,6 +7,8 @@ trap 'rm -rf .node-build' EXIT HUP INT TERM
 for name in poll_worker image_job backoff; do
   cp "src/murakumo/infer/$name.cljk" ".node-build/src/murakumo/infer/$name.cljs"
 done
+mkdir -p .node-build/src/murakumo
+cp src/murakumo/bench.cljk .node-build/src/murakumo/bench.cljs
 cp nbb.edn .node-build/nbb.edn
 (cd .node-build && kbb --backend sci -e nil)
 mkdir -p .node-build/src/cacao/edge
