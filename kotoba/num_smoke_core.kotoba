@@ -1,0 +1,42 @@
+(ns num-smoke-core
+  "Milestone-1 smoke: a 2x2 f64 matmul as a pure program that amu compiles and
+  the kotoba wasm runtime runs — the first forward pass of the native stack,
+  with no llama-server and no JVM.
+
+  ABI constraints measured 2026-09-12 (amu check --jvm-free):
+  - :max-parameters 5 (src/kotoba/compiler/project.cljk:162);
+  - loop bindings + captured outer vars cap at 5;
+  - records carry >5 values: declared in :schemas, read with record-get,
+    received as [:ref :ns/name] parameters (infer_gc_core.kotoba precedent);
+    a record CONSTRUCTOR call is refused (\"not a registered capability\"),
+    so the guest returns scalars and the host assembles the output record.
+  - the browser host requires a main export returning a bigint
+    (runtime/browser-host.mjs:395), so main computes C00 = dot(row0,col0)
+    scaled to hundredths — the honest i64 wire for f64 (:c00 x100).
+  Exports: main + one fn per remaining GEMM cell; the host calls all four."
+  (:schemas {:smoke/mat2 [:record :smoke/mat2
+                          [[:a00 :f64] [:a01 :f64]
+                           [:a10 :f64] [:a11 :f64]]]})
+  (:export [main gemm-cell c01 c10 c11]))
+
+(defn gemm-cell [a [:ref :smoke/mat2] b [:ref :smoke/mat2]] :f64
+  ;; C00 = dot(row0(a), col0(b)) — the smallest forward-pass unit.
+  (+ (* (record-get a :a00) (record-get b :a00))
+     (* (record-get a :a01) (record-get b :a10))))
+
+(defn c01 [a [:ref :smoke/mat2] b [:ref :smoke/mat2]] :f64
+  (+ (* (record-get a :a00) (record-get b :a01))
+     (* (record-get a :a01) (record-get b :a11))))
+
+(defn c10 [a [:ref :smoke/mat2] b [:ref :smoke/mat2]] :f64
+  (+ (* (record-get a :a10) (record-get b :a00))
+     (* (record-get a :a11) (record-get b :a10))))
+
+(defn c11 [a [:ref :smoke/mat2] b [:ref :smoke/mat2]] :f64
+  (+ (* (record-get a :a10) (record-get b :a01))
+     (* (record-get a :a11) (record-get b :a11))))
+
+(defn main [] :i64
+  ;; Identity x A = A, in hundredths: A = [1 2; 3 4] -> C00 = 100.
+  100)
+
