@@ -153,3 +153,18 @@ qwen3` unchanged. kotoba.cloud's authority also converts the text form itself
 right place. The smoke gained `--tools` and reports `tool_calls` /
 `xml_in_content`; the post-deploy measurement is recorded below the resume
 point once the snapshot-rebuilding cold start completes.
+
+Post-deploy (deployed 21:31:47 JST, `modal run …::smoke --tools` from 21:31:53):
+
+```
+snapshot-load: staged 127 s, healthy at 334 s, asleep at 348 s; snapshot follows
+{'status': 200, 'elapsed_s': 765.7, 'content': None, 'finish_reason': 'tool_calls',
+ 'tool_calls': [{'id': 'chatcmpl-tool-af8d2235ec4ef1d8', 'type': 'function',
+                 'function': {'name': 'write_file', 'arguments': '{"path": "hello.txt", "content": "hi"}'}}],
+ 'xml_in_content': False}
+```
+
+Through `api.kotoba.cloud` the same request answers with the origin's id
+(`chatcmpl-tool-…`, not the authority's recovered `call_…`), and a hermes coding
+task ran three calls on the provider with `write_file` / `terminal` executed on
+the agent's machine and no fallback.
