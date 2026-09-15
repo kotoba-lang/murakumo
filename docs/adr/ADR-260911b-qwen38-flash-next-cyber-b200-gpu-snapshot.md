@@ -130,3 +130,26 @@ modal app logs murakumo-qwen38-flash-next-cyber --timestamps | grep -E "Restor|p
 ~/.hermes/hermes-agent/venv/bin/hermes -p qwen38-cyber chat -q "Which model are you?"
 # next: a 20-30 prompt quality comparison against glm-5.3-flash-cybersecurity-w4a16 (gap 2 of ADR-260911)
 ```
+
+## 2026-09-15 — tool-call parser: `hermes` → `qwen3_xml`
+
+Measured through `api.kotoba.cloud` (hermes agent, native tools) and then at
+the origin with `modal run …::smoke --tools`: with `--tool-call-parser hermes`
+the model's tool calls came back as **text** —
+
+```
+content: "\n\n<tool_call>\n<function=write_file>\n<parameter=path>\nhello.txt\n</parameter>…"
+tool_calls: None   finish_reason: stop   xml_in_content: True
+```
+
+— because this model emits Qwen3-Coder XML (`<function=NAME><parameter=KEY>`),
+not the `<tool_call>{json}</tool_call>` the hermes parser reads. An agent that
+only reads native `tool_calls` saw an empty answer and fell back to another
+provider. The vLLM nightly this image pins (`e7edf17c…`) registers `qwen3_xml`
+and `qwen3_coder`, both `Qwen3EngineToolParser` with
+`structural_tag_model = "qwen_3_coder"`. Switched to `qwen3_xml`; `--reasoning-parser
+qwen3` unchanged. kotoba.cloud's authority also converts the text form itself
+(app-kotoba-cloud PR #196) so either side alone would do; the origin is the
+right place. The smoke gained `--tools` and reports `tool_calls` /
+`xml_in_content`; the post-deploy measurement is recorded below the resume
+point once the snapshot-rebuilding cold start completes.

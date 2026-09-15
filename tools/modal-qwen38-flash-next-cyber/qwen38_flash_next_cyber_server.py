@@ -173,7 +173,14 @@ VLLM_ARGS = [
     # headroom for the snapshot machinery itself (prior experiment used 0.85)
     "--gpu-memory-utilization", "0.88",
     "--reasoning-parser", "qwen3",
-    "--tool-call-parser", "hermes",
+    # NOT hermes: this model emits Qwen3-Coder XML tool calls
+    # (<tool_call><function=NAME><parameter=KEY>…), which the hermes parser
+    # (json inside <tool_call>) leaves in `content` as text -- measured
+    # 2026-09-15 through api.kotoba.cloud: an agent saw an empty answer and
+    # fell back to another provider. qwen3_xml (= Qwen3EngineToolParser,
+    # structural_tag_model qwen_3_coder, present at this nightly) returns
+    # native `tool_calls`.
+    "--tool-call-parser", "qwen3_xml",
     "--enable-auto-tool-choice",
     "--enable-prefix-caching",
     "--enable-sleep-mode",
@@ -312,8 +319,12 @@ class Origin:
 
 
 @app.function(image=image, secrets=[origin_secret], timeout=3600)
-def smoke(prompt: str = "In one sentence, what does nmap -sV do?") -> dict:
+def smoke(prompt: str = "In one sentence, what does nmap -sV do?", tools: bool = False) -> dict:
     """One request through the deployed origin, timed end to end, bearer inside Modal.
+
+    `--tools` sends one function definition and reports whether the answer
+    carries NATIVE `tool_calls` (the parser did its job) or the XML as text
+    (it did not) -- the check behind the qwen3_xml parser change.
 
     Read the container log too: `post-snapshot enter: ... healthy after N s`
     is the restore number; `snapshot-load: ...` means this start built from
@@ -330,6 +341,14 @@ def smoke(prompt: str = "In one sentence, what does nmap -sV do?") -> dict:
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 256,
     }
+    if tools:
+        body["tools"] = [{"type": "function", "function": {
+            "name": "write_file", "description": "Write content to a file.",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"},
+                                                            "content": {"type": "string"}},
+                           "required": ["path", "content"]}}}]
+        body["tool_choice"] = "auto"
+        body["messages"] = [{"role": "user", "content": "Create hello.txt containing exactly: hi"}]
     t0 = time.monotonic()
     with httpx.Client(timeout=None) as client:
         while True:
@@ -348,6 +367,10 @@ def smoke(prompt: str = "In one sentence, what does nmap -sV do?") -> dict:
         out["content"] = msg.get("content")
         out["reasoning_chars"] = len(msg.get("reasoning") or msg.get("reasoning_content") or "")
         out["usage"] = j.get("usage")
+        if tools:
+            out["finish_reason"] = j["choices"][0].get("finish_reason")
+            out["tool_calls"] = msg.get("tool_calls")
+            out["xml_in_content"] = "<tool_call>" in (msg.get("content") or "")
     else:
         out["body"] = r.text[:500]
     print(out, flush=True)
