@@ -1,0 +1,24 @@
+# Completion-probe watchdog for the K16 llama-servers (root ADR adr-2609151900
+# gap 1). A Vulkan llama-server that hit `vk::Queue::submit: ErrorDeviceLost`
+# keeps answering GET /health {status ok} and fails every completion with 500;
+# Restart=always never fires because the process never exits. This timer asks
+# each IDLE server for one token and restarts the unit when that fails.
+# deploy/k16/llama_watchdog.cljs has the decision table; its negative path was
+# exercised against a fake device-lost server (restart) and a fake busy slot
+# (skip) before landing.
+#
+# Install:  scp deploy/k16/llama_watchdog.cljs deploy/systemd/murakumo-k16-llama-watchdog.{service,timer} aiueos@100.66.205.17:/tmp/ \
+#           && tailscale ssh root@100.66.205.17 'install -m644 /tmp/llama_watchdog.cljs /opt/murakumo/ \
+#                && install -m644 /tmp/murakumo-k16-llama-watchdog.service /tmp/murakumo-k16-llama-watchdog.timer /etc/systemd/system/ \
+#                && systemctl daemon-reload && systemctl enable --now murakumo-k16-llama-watchdog.timer'
+# Verify:   systemctl list-timers murakumo-k16-llama-watchdog.timer ; journalctl -u murakumo-k16-llama-watchdog -n 5
+[Unit]
+Description=Completion-probe watchdog for the K16 llama-servers
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=NODE_OPTIONS=--dns-result-order=ipv4first
+ExecStart=/usr/local/bin/nbb /opt/murakumo/llama_watchdog.cljs --timeout-ms 90000
+# exit 1 = a restart was issued (worth seeing in the journal, not a unit failure)
+SuccessExitStatus=1

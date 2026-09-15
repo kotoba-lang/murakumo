@@ -603,7 +603,12 @@
               :key-length 576 :value-length 128
               :elements-per-token 4224}
    :model/context-train 131072
-   :model/kv-measured-from "k16:/root/models/Ling-3.0-tiny-Q4_K_M.gguf"
+   ;; ⚠ "k16" in the two lines below is the 6600HS box (aiueos-6600hs,
+   ;; 100.92.201.91, Ryzen 5 6600HS, 22 GiB) that root ADR adr-2609121325
+   ;; called "k16" -- NOT the GMKtec K16 (aiueos-node-260910, 100.66.205.17)
+   ;; that qwen3.8-27b-uncensored and the usagi replica run on. Name mapping
+   ;; fixed by root ADR adr-2609151900; the measured values stand.
+   :model/kv-measured-from "aiueos-6600hs:/root/models/Ling-3.0-tiny-Q4_K_M.gguf"
    :model/kv-measured-at "2026-09-12"
    :model/family "Ling 3.0"
    :model/format :gguf
@@ -620,7 +625,7 @@
    :model/gguf "Ling-3.0-tiny-Q4_K_M.gguf"
    :model/weight-bytes 4823895104
    :model/sha256 "a21f717779203d86b53996239c4903941858b938c50e85b036a981132b5621a"
-   ;; ⚠ MEASURED ON k16 (Ryzen 5 6600HS, 22 GiB, RADV REMBRANDT iGPU),
+   ;; ⚠ MEASURED ON THE 6600HS BOX (aiueos-6600hs; Ryzen 5 6600HS, 22 GiB, RADV REMBRANDT iGPU),
    ;; 2026-09-12 -- not projected. Runtime is the stock llama.cpp b10919
    ;; prebuilt; PR #26608 (merged 2026-08-17) is what makes bailingmoe3 load
    ;; at all. llama-bench -p 512 -n 128 -r 3 -t 12:
@@ -633,7 +638,7 @@
    ;; GGML_VK_VISIBLE_DEVICES="" -- -ngl 0 alone leaves the Vulkan backend
    ;; initialized and it dies on the first submit. Full protocol in
    ;; adr-2609121325.
-   :model/verified-node "k16"
+   :model/verified-node "aiueos-6600hs"
    :model/verified-at "2026-09-12"
    ;; Served by llama-server directly, as this file's other gguf entries are.
    :model/served-by :llama-server
