@@ -697,7 +697,11 @@
    ;; path here anyway, root ADR-2609121325), usagi is back at its 65536
    ;; window beside this model, and the concurrent probe passed with 0
    ;; DeviceLost (27B decode 2.28 under contention, 2.5 alone). The box swaps
-   ;; ~3.5 GiB with all three up. Unit:
+   ;; ~3.5 GiB with all three up.
+   ;; --reasoning-budget 256 (server.env): reasoning-first, and at 2.5 tok/s a
+   ;; 480-token essay request through the gateway spent ALL 480 tokens in
+   ;; reasoning_content with content "" (finish length). With the budget the
+   ;; same prompt answers in 639 tokens: 323-word essay, finish stop. Unit:
    ;; deploy/systemd/murakumo-k16-qwen38u-llama.service (+ -join); root ADR
    ;; adr-2609151900.
    :model/verified-node "k16"
