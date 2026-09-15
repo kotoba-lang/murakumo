@@ -1,0 +1,48 @@
+# Nex-N2.5-mini-Uncensored (orcarouter GGUF, IQ4_XS + F16 mmproj; arch
+# qwen35moe, Qwen3.5-MoE family, vision) on the Jetson AGX Xavier
+# (32 GiB LPDDR4x unified, Volta sm72, llama.cpp CUDA build a582222 at
+# /mnt/nvme/llama.cpp/build-cuda). Owner instruction 2026-09-15: host
+# huggingface.co/orcarouter/Nex-N2.5-mini-Uncensored-GGUF on xavier.
+#
+# Replaces murakumo-xavier-qwen38.service on :8090 (Conflicts=). The two do
+# not fit together: qwen38 Q4_K_M holds ~17 GiB of the 31 GiB and this model
+# is 17.4 GiB + 0.84 GiB mmproj. The qwen38 unit and its weights stay on the
+# box for rollback (same policy as the qwen3.6 -> qwen3-vl -> qwen3.8 swaps
+# recorded in fleet.edn): `systemctl disable --now murakumo-xavier-nex-n25-mini
+# && systemctl enable --now murakumo-xavier-qwen38`.
+#
+# Quant: IQ4_XS is the largest quant in the repo that fits (Q6_K is 26.6 GiB).
+# --reasoning off is carried over from the qwen38 unit (the Qwen3.5 template
+# opens <think> at the generation prompt). Measured 2026-09-15 with it: content
+# is populated and correct (finish=stop) AND reasoning_content is still filled
+# beside it, so on this build the flag does not stop thinking -- it only keeps
+# the answer out of the think block. Budget for that in max_tokens.
+#
+# Measured 2026-09-15 (temp 0): load ~59 s, prefill 59.1 tok/s, decode
+# 18.3 tok/s (157 tokens), vision via image_url OK. Details in infer.edn.
+#
+# Install:  scp deploy/systemd/murakumo-xavier-nex-n25-mini.service xavier@100.87.226.80:/tmp/ \
+#           && ssh xavier@100.87.226.80 'sudo install -m644 /tmp/murakumo-xavier-nex-n25-mini.service /etc/systemd/system/ \
+#                && sudo mkdir -p /etc/systemd/system/murakumo-xavier-nex-n25-mini.service.d \
+#                && sudo cp /etc/systemd/system/murakumo-xavier-qwen38.service.d/nvme.conf /etc/systemd/system/murakumo-xavier-nex-n25-mini.service.d/ \
+#                && sudo systemctl daemon-reload \
+#                && sudo systemctl disable --now murakumo-xavier-qwen38 \
+#                && sudo systemctl enable --now murakumo-xavier-nex-n25-mini'
+# Verify:   curl -s http://127.0.0.1:8090/health ; curl -s http://127.0.0.1:8090/v1/models
+[Unit]
+Description=Murakumo Nex-N2.5-mini-Uncensored IQ4_XS (CUDA, Jetson AGX Xavier)
+After=network-online.target murakumo-xavier-performance.service
+Wants=network-online.target murakumo-xavier-performance.service
+Conflicts=murakumo-xavier-qwen38.service murakumo-standalone-cuda.service
+
+[Service]
+Type=simple
+User=xavier
+Environment=LD_LIBRARY_PATH=/mnt/nvme/llama.cpp/build-cuda/bin
+EnvironmentFile=/mnt/nvme/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/server.env
+ExecStart=/mnt/nvme/llama.cpp/build-cuda/bin/llama-server -m /mnt/nvme/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/Nex-N2.5-mini-Uncensored-IQ4_XS.gguf --mmproj /mnt/nvme/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/mmproj-Nex-N2.5-mini-Uncensored-F16.gguf --parallel 1 -fa on --host 0.0.0.0 --port 8090 --jinja --alias nex-n2.5-mini-uncensored $SERVER_ARGS
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

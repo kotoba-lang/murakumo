@@ -97,6 +97,16 @@
   ;; A3B active-param class, expect a similar ratio — flagged as unverified
   ;; here, do not treat as measured).
   ;;
+  ;; 2026-09-15: **switched to nex-n2.5-mini-uncensored** (owner instruction —
+  ;; host orcarouter/Nex-N2.5-mini-Uncensored-GGUF on xavier). Between the
+  ;; qwen3-vl note above and this line the head had moved on to the stock
+  ;; Qwen3.8-27B Q4_K_M (murakumo-xavier-qwen38.service, alias
+  ;; qwen3.8-27b,murakumo-main) without this file being updated; that unit is
+  ;; now disabled and kept with its weights for rollback. Serving unit:
+  ;; deploy/systemd/murakumo-xavier-nex-n25-mini.service on the same :8090.
+  ;; Measured 2026-09-15: prefill 59.1 / decode 18.3 tok/s, vision OK
+  ;; (details beside the infer.edn entry).
+  ;;
   ;; Registered in api.murakumo.cloud as node `head-xavier` / model
   ;; `qwen3-vl-30b-a3b-xavier-cuda`, endpoint is Tailscale-only (no public
   ;; Cloudflare Tunnel route set up yet). Reachable as `ssh xavier`
@@ -108,4 +118,4 @@
   ;; `ssh -o "ProxyCommand=tailscale nc %h %p" xavier@xavier.tail110d8b.ts.net`
   ;; (or the raw Tailscale IP with the same ProxyCommand) as a working
   ;; fallback when `ssh xavier` / `tailscale ssh xavier` fail to resolve.
-  {:name "xavier" :host "xavier" :rpc-ip "192.168.1.28" :mac "48:b0:2d:18:4d:16" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "cuda-infer"} :node/serves "qwen3-vl-30b-a3b"}]}
+  {:name "xavier" :host "xavier" :rpc-ip "192.168.1.28" :mac "48:b0:2d:18:4d:16" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "cuda-infer"} :node/serves "nex-n2.5-mini-uncensored"}]}
