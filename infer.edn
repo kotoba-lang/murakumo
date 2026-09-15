@@ -643,6 +643,109 @@
    ;; serves today. Raising it is a qualification run on k16, not arithmetic.
    :model/context 4096}
 
+  ;; ── orcarouter "Uncensored" (abliterated) GGUFs, owner instruction 2026-09-15:
+  ;; "それぞれ murakumo の k16, xavier で host して". Both HF repos are
+  ;; gated=auto (a token that accepted the terms is needed to download).
+  "qwen3.8-27b-uncensored"
+  {:model/id "qwen3.8-27b-uncensored"
+   ;; Read out of the file header (scripts/model-kv-geometry.cljk): the tool
+   ;; counts 65 blocks where the lmstudio build above says 64 -- the extra
+   ;; block is the NextN/MTP layer this conversion carries; it is not offloaded
+   ;; KV in practice, so treat the flat figure as an upper bound.
+   :model/kv {:layers 65 :kv-heads 4 :key-length 256 :value-length 256
+              :elements-per-token 133120}
+   :model/context-train 262144
+   :model/kv-measured-from "k16:~/models/orcarouter/Qwen3.8-27B-Uncensored-GGUF/Qwen3.8-27B-Uncensored-Q4_K_M.gguf"
+   :model/kv-measured-at "2026-09-15"
+   :model/family "Qwen3.8"
+   :model/format :gguf
+   :model/kind :text
+   :model/variant :abliterated
+   :hf/source-repo "Qwen/Qwen3.8-27B"
+   :hf/repo "orcarouter/Qwen3.8-27B-Uncensored-GGUF"
+   :hf/commit "a855f377abf5cbda99a278414466743f427e97c8"
+   :model/params-b 27 :model/active-params-b 27
+   :model/layers 64
+   :model/gguf "Qwen3.8-27B-Uncensored-Q4_K_M.gguf"
+   :model/weight-bytes 16810714496
+   ;; sha256 computed on the node after download, equal to the HF LFS oid.
+   :model/sha256 "3445102e9cde5d562508642c100a2f5ac3368a5a3f748442811d7a95daee3bec"
+   :model/mmproj "mmproj-Qwen3.8-27B-Uncensored-f16.gguf"
+   :model/mmproj-bytes 931145984
+   :model/mmproj-sha256 "add205b7bfdb3f71f6da36b0a82aa20928dd829a920878c602628cdfbebc5288"
+   ;; ⚠ MEASURED ON THE aiueos K16 (aiueos-node-260910: Ryzen 7 7735HS,
+   ;; 27.4 GiB MemTotal after the 5 GiB UMA carve-out, Radeon 680M gfx1035 via
+   ;; RADV Vulkan, GTT 13 GiB), 2026-09-15, llama.cpp build 10883 (the box's
+   ;; murakumo-edge build). llama-bench -p 256 -n 32 -fa 1 -t 8 -r 2:
+   ;;   CPU-only (GGML_VK_VISIBLE_DEVICES="")   pp256 12.21   tg32 1.56
+   ;;   Vulkan -ngl 24                          pp256 28.98   tg32 1.75
+   ;;   Vulkan -ngl 99                          pp256 59.73   tg32 2.53
+   ;; -ngl 0 WITHOUT hiding the Vulkan device aborts (same footgun as the
+   ;; 6600HS box, root ADR adr-2609121325). Full offload fits: 15.65 GiB of
+   ;; weights + 1.16 GB q8_0 KV at 8192 inside the 18 GiB the GPU sees, no
+   ;; DeviceLost. Serving E2E (llama-server, temp 0, 160 tokens): prefill
+   ;; 24.4 tok/s, decode 2.49 tok/s -- the box is bandwidth-bound (LPDDR5-6400
+   ;; shared with the iGPU), so this is the ceiling of the dense 27B here.
+   ;; The usagi replica (ling-3.0-tiny, 65536 window, ~9.8 GiB) was evicted to
+   ;; make room; murakumo-edge (:8092) stays. Unit:
+   ;; deploy/systemd/murakumo-k16-qwen38u-llama.service (+ -join).
+   :model/verified-node "k16"
+   :model/verified-at "2026-09-15"
+   :model/served-by :llama-server
+   :model/port 8097
+   :model/context 8192}
+
+  "nex-n2.5-mini-uncensored"
+  {:model/id "nex-n2.5-mini-uncensored"
+   ;; Qwen3.5-MoE shape (config.json of nex-agi/Nex-N2.5-mini): 40 layers of
+   ;; which 30 are linear attention (gated delta net, O(1) state) and 10 are
+   ;; full attention every 4th layer. The flat figure below is what
+   ;; scripts/model-kv-geometry.cljk reads from the header (40 x 2 x 512); the
+   ;; per-token cache is really the 10 full-attention layers only, 10240
+   ;; elements/token -- same caveat as kimi-linear-48b above.
+   :model/kv {:layers 40 :kv-heads 2 :key-length 256 :value-length 256
+              :elements-per-token 40960
+              :full-attention-layers 10 :elements-per-token-full-only 10240}
+   :model/context-train 262144
+   :model/kv-measured-from "xavier:/mnt/nvme/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/Nex-N2.5-mini-Uncensored-IQ4_XS.gguf"
+   :model/kv-measured-at "2026-09-15"
+   :model/family "Nex-N2.5 (Qwen3.5-MoE)"
+   :model/format :gguf
+   :model/kind :text
+   :model/variant :abliterated
+   :hf/source-repo "nex-agi/Nex-N2.5-mini"
+   :hf/source-commit "87420286149d9cce9bd46cd335ef9bda33c37c1b"
+   :hf/repo "orcarouter/Nex-N2.5-mini-Uncensored-GGUF"
+   :hf/commit "59f36a2cd1e5c64139e271b5b406a014b68109ef"
+   :model/params-b 35 :model/active-params-b 3
+   :model/layers 40
+   :model/experts 256
+   :model/active-experts 8
+   ;; IQ4_XS is the largest quant in the repo that fits the Xavier's 31 GiB
+   ;; next to the OS (Q6_K is 26.6 GiB); there is no Q4_K_M in this repo.
+   :model/gguf "Nex-N2.5-mini-Uncensored-IQ4_XS.gguf"
+   :model/weight-bytes 18728777856
+   :model/sha256 "95f3de13a3c41e004fa14b8b413005d5a6c25d6ff9bffe103970f88a90a70642"
+   :model/mmproj "mmproj-Nex-N2.5-mini-Uncensored-F16.gguf"
+   :model/mmproj-bytes 902822016
+   :model/mmproj-sha256 "4dbb59feb35bad1e510f32f3789c17f0f3d1cafe66fc4bfd73d8fcc5edb6c144"
+   ;; Serving node: Jetson AGX Xavier (:8090, CUDA sm72 build a582222),
+   ;; replacing the stock Qwen3.8-27B fallback unit there (kept on disk for
+   ;; rollback). Unit: deploy/systemd/murakumo-xavier-nex-n25-mini.service.
+   ;; ⚠ MEASURED ON xavier 2026-09-15 (llama-server -ngl 999 -c 8192 -fa on
+   ;; --reasoning off, temp 0): cold model+mmproj load ~59 s; E2E prefill
+   ;; 59.1 tok/s, decode 18.3 tok/s over 157 generated tokens (short prompt:
+   ;; 20.6); finish=stop, content correct and reasoning_content still
+   ;; populated alongside it. Vision: a synthetic 64x64 red PNG through
+   ;; image_url answered "Red" (30 prompt tokens). RAM after load: 19 GiB
+   ;; used of 30, 9 GiB available. This is the A3B MoE class the Xavier
+   ;; already served as qwen3.6-35b-a3b (11.5 tok/s decode then) -- faster
+   ;; here because IQ4_XS reads fewer bytes per active expert than that
+   ;; Q4_K_M did.
+   :model/served-by :llama-server
+   :model/port 8090
+   :model/context 8192}
+
   ;; ── media (Civitai/HF 系。ジョブ並列 = 1 ノード完結、sharding 不要) ──
   "trellis-image-large"
   {:model/id "trellis-image-large"
