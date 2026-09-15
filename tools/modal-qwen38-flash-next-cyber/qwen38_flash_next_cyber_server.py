@@ -9,6 +9,30 @@
 
 Run from the repository root (origin_proxy.py is added by a relative path).
 
+DEPLOYING WHILE THE ORIGIN IS IN USE: rotate slots, never redeploy in place
+(2026-09-15).  `modal deploy` of the serving app invalidates its GPU snapshot
+and replaces its container: measured 12:31Z -> 12:44:45Z, thirteen and a
+half minutes in which every request was answered by Modal itself (303/502/
+504 after ~2 min of holding -- the proxy below may be listening, but Modal
+does not route to the port until the enter hooks have finished and the
+snapshot is written).  An agent's first call landed in that window and its
+fixed opening prompt was a terminal failure for every later session.  So:
+
+    # a. deploy the NEW build to the other slot (a distinct app + URL label)
+    QWEN38_CYBER_SLOT=-b modal deploy tools/modal-qwen38-flash-next-cyber/qwen38_flash_next_cyber_server.py
+    # b. warm it -- polls 303/502/503/504 until the first 200 (the snapshot-
+    #    creating start; ~14 min); repeat once after >15 min idle to see a
+    #    restore, not a rebuild
+    QWEN38_CYBER_SLOT=-b modal run tools/modal-qwen38-flash-next-cyber/qwen38_flash_next_cyber_server.py::smoke
+    # c. point the gateway at it (the research authority's MODAL_INFERENCE_URL
+    #    secret in kotoba-lang/app-kotoba-cloud, wrangler.research.jsonc):
+    #    https://junkawasakicom--qwen38-flash-next-cyber-b.modal.run/v1/chat/completions
+    # d. leave the old slot deployed until the new one has served a restore;
+    #    it scales to zero and costs nothing idle. Then `modal app stop` it.
+
+The slot is baked into the image env so `smoke` inside the container sees
+the same label as the deploy command did.
+
 Why this model and this card (2026-09-11).  The GLM-5.3-Flash cyber origin
 (tools/modal-glm53-cyber) is 194.7 GB and needs 2x H200; its cold start is
 1,190-1,530 s, and Modal refuses GPU memory snapshots for any function with
@@ -65,8 +89,11 @@ import subprocess
 
 import modal
 
-APP_NAME = "murakumo-qwen38-flash-next-cyber"
-LABEL = "qwen38-flash-next-cyber"
+# "" (the original app) or a suffix such as "-b": one deployed app per slot,
+# so a new build warms beside the serving one instead of replacing it.
+SLOT = os.environ.get("QWEN38_CYBER_SLOT", "")
+APP_NAME = "murakumo-qwen38-flash-next-cyber" + SLOT
+LABEL = "qwen38-flash-next-cyber" + SLOT
 MODEL_ID = "qwen3.8-flash-next-cybersecurity-nvfp4"
 MODEL = "dealignai/Qwen3.8-Flash-Next-CYBERSECURITY-NVFP4"
 MODEL_REVISION = "15ef113c7090844f97f355f400169791dc76c2e3"
@@ -105,6 +132,8 @@ image = (
             # Modal's snapshot guidance: inductor's worker pool does not
             # survive a snapshot.
             "TORCHINDUCTOR_COMPILE_THREADS": "1",
+            # the slot this image was deployed to (see SLOT)
+            "QWEN38_CYBER_SLOT": SLOT,
         }
     )
     .add_local_file("tools/modal-throughput/origin_proxy.py", "/root/origin_proxy.py")
@@ -236,14 +265,19 @@ class Origin:
 
         if not os.environ.get("MURAKUMO_MODAL_ORIGIN_TOKEN"):
             raise RuntimeError("MURAKUMO_MODAL_ORIGIN_TOKEN is required")
-        # The proxy FIRST, before staging, so that from the first seconds of a
-        # snapshot-creating start the origin answers 503 "model loading"
-        # (vLLM not listening) instead of Modal holding the connection open:
-        # measured 2026-09-11 18:41, with the proxy started only after the
-        # enter hooks, api.murakumo.cloud's fetch to this origin sat for 125 s
-        # and came back as Cloudflare's 524, not a 503 the gateway would poll.
-        # A listening socket in the snapshot is fine -- Modal's own vLLM
-        # snapshot example snapshots with vLLM itself listening.
+        # The proxy FIRST, before staging.  Intended so that from the first
+        # seconds of a snapshot-creating start the origin answers 503 "model
+        # loading" instead of Modal holding the connection open (2026-09-11
+        # 18:41: with the proxy started after the enter hooks, the gateway's
+        # fetch sat 125 s and came back as Cloudflare's 524).  Measured again
+        # 2026-09-15 12:38-12:40Z: it does NOT reach that far -- Modal routes
+        # nothing to the port until the enter hooks return and the snapshot
+        # is written, so a request during a snapshot-creating start is held
+        # ~2 min by Modal and answered 303/502/504, never by this proxy.  The
+        # gateway (app-kotoba-cloud research authority) now polls those
+        # statuses for up to 13 min, and a deploy goes to the other slot (see
+        # the module docstring).  The early start still helps every RESTORED
+        # container: its listening socket is in the snapshot.
         self.proxy = subprocess.Popen(
             ["python", "-m", "uvicorn", "origin_proxy:app", "--app-dir", "/root",
              "--host", "0.0.0.0", "--port", "8000"]
