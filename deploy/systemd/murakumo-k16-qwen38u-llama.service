@@ -5,11 +5,19 @@
 # huggingface.co/orcarouter/Qwen3.8-27B-Uncensored-GGUF on k16.
 #
 # Sibling of murakumo-edge-usagi-llama.service (same llama.cpp build
-# llama-b10883, same box). The 15.66 GiB Q4_K_M does NOT fit next to the
-# usagi replica (65536-window Ling-3.0-tiny, ~9.8 GiB resident): MemAvailable
-# was 10.9 GiB with both Ling replicas up. So this unit Conflicts= with usagi
-# and the install stops usagi first; murakumo-edge (Ornith, :8092, 0.9 GiB)
-# stays.
+# llama-b10883, same box). First landed with Conflicts= against usagi: the
+# 15.66 GiB Q4_K_M did not fit next to the usagi replica as it WAS (Vulkan0
+# -ngl 99, 65536 window, ~9.8 GiB resident; MemAvailable 10.9 GiB). Then,
+# same day: llama-b10883 auto-offloads to Vulkan0 when no -ngl is given, so
+# murakumo-edge (:8092) was on the GPU too, and a request there during a 27B
+# generation reproduced `vk::Queue::submit: ErrorDeviceLost` on :8097 twice out
+# of two -- and the 27B's llama-server keeps answering /health "ok" after the
+# device is lost while every completion fails, so systemd never restarts it.
+# Both Ling replicas are now pinned to CPU by drop-ins
+# (/etc/systemd/system/murakumo-edge-{,usagi-}llama.service.d/cpu-only.conf;
+# CPU is the faster path for Ling on this box anyway, root ADR-2609121325),
+# usagi keeps its 65536 window, and Conflicts= is gone: this unit has the GPU
+# to itself, the two Ling replicas share one page-cached file on the CPU.
 #
 # The ExecStart line is split: the fixed part lives here, the tunable part
 # (--device / -ngl / -t / --ctx-size) lives in server.env owned by aiueos, so
@@ -18,16 +26,14 @@
 # recorded in infer.edn beside the model entry, not here.
 #
 # Install:  scp deploy/systemd/murakumo-k16-qwen38u-*.service aiueos@100.66.205.17:/tmp/ \
-#           && ssh aiueos@100.66.205.17 'sudo install -m644 /tmp/murakumo-k16-qwen38u-*.service /etc/systemd/system/ \
-#                && sudo systemctl daemon-reload \
-#                && sudo systemctl disable --now murakumo-edge-usagi-join murakumo-edge-usagi-llama \
-#                && sudo systemctl enable --now murakumo-k16-qwen38u-llama murakumo-k16-qwen38u-join'
+#           && tailscale ssh root@100.66.205.17 'install -m644 /tmp/murakumo-k16-qwen38u-*.service /etc/systemd/system/ \
+#                && systemctl daemon-reload \
+#                && systemctl enable --now murakumo-k16-qwen38u-llama murakumo-k16-qwen38u-join'
 # Verify:   curl -s http://127.0.0.1:8097/health ; curl -s http://127.0.0.1:8097/v1/models
 [Unit]
 Description=Qwen3.8-27B-Uncensored Q4_K_M (orcarouter) on the aiueos K16
 After=network-online.target tailscaled.service
 Wants=network-online.target
-Conflicts=murakumo-edge-usagi-llama.service
 
 [Service]
 Type=simple

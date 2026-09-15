@@ -107,6 +107,13 @@
   ;; Measured 2026-09-15: prefill 59.1 / decode 18.3 tok/s, vision OK
   ;; (details beside the infer.edn entry).
   ;;
+  ;; 2026-09-15 (later): Tailscale SSH server enabled on xavier
+  ;; (`tailscale set --ssh`, RunSSH persisted), so `tailscale ssh
+  ;; root@100.87.226.80` works and no password is needed for systemd. The
+  ;; MagicDNS note below still holds on the operator Mac; the fix there is a
+  ;; ~/.ssh/config Host block mapping the .ts.net names to the IPs with
+  ;; `ProxyCommand tailscale nc %h %p` (root ADR adr-2609151900).
+  ;;
   ;; Registered in api.murakumo.cloud as node `head-xavier` / model
   ;; `qwen3-vl-30b-a3b-xavier-cuda`, endpoint is Tailscale-only (no public
   ;; Cloudflare Tunnel route set up yet). Reachable as `ssh xavier`
