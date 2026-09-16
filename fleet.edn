@@ -172,4 +172,7 @@
   ;; on both joins (k16 polls at 1000). GuC firmware is 70.44.1 where 70.54.0
   ;; is recommended (Ubuntu linux-firmware 20240318) -- not measured as a
   ;; cost. Root ADR adr-2609161500.
-  {:name "aiueos-6600hs-1" :host "root@100.98.24.37" :rpc-ip "192.168.1.2" :mac "9c:6b:00:cf:ad:55" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "vulkan-infer"} :node/serves ["qwen3.8-27b-uncensored" "nex-n2.5-mini-uncensored"]}]}
+  {:name "aiueos-6600hs-1" :host "root@100.98.24.37" :rpc-ip "192.168.1.2" :mac "9c:6b:00:cf:ad:55" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "vulkan-infer"} :node/serves ["qwen3.8-27b-uncensored" "nex-n2.5-mini-uncensored"]
+   :node/serves-exception {:reason "owner instruction 2026-09-16 names both models for this box; the 32 GiB BMG G31 is the only Vulkan node that runs the dense 27B above 10 tok/s, and Nex still beats xavier's CUDA decode with 20 expert layers on CPU. Declared, not implicit: one-model rule."
+                           :adr "adr-2609161500-aiueos-6600hs-1-bmg-g31-qwen38u-nex-mini-hosting"
+                           :until "2026-12-31"}}]}
