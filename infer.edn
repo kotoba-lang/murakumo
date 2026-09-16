@@ -709,11 +709,13 @@
    ;; same prompt answers in 639 tokens: 323-word essay, finish stop. Unit:
    ;; deploy/systemd/murakumo-k16-qwen38u-llama.service (+ -join); root ADR
    ;; adr-2609151900.
-   ;; 2026-09-16: also served by aiueos-6600hs-1 (Intel BMG G31 32 GiB, Vulkan
-   ;; -ngl 99, :8097, same Q4_K_M + mmproj): llama-bench pp512 407.1 / tg128
-   ;; 11.62 alone, E2E decode 10.7-10.8 tok/s -- 4.3x k16. Both nodes sit in
-   ;; the same edge queue for this id; fleet.edn has the numbers and the
-   ;; cache-affinity caveat. verified-node stays k16 (first verification).
+   ;; 2026-09-16: was also served by aiueos-6600hs-1 (Intel Arc Pro B70 32 GiB,
+   ;; Vulkan) for part of the day: llama-bench pp512 407.1 / tg128 11.62, E2E
+   ;; decode 10.7 without and 17.2-18.0 WITH --spec-type draft-mtp (this GGUF
+   ;; carries the mtp tensors; 4.3x-7x k16). Owner then made that box nex-only,
+   ;; so k16 is again the only edge-queue node for this id. The speculative
+   ;; flags are the transferable finding: they would apply on any node with
+   ;; the VRAM. fleet.edn has the cache-affinity caveat for probing.
    :model/verified-node "k16"
    :model/verified-at "2026-09-15"
    :model/served-by :llama-server
@@ -806,11 +808,13 @@
    :model/snapshot-bytes 14909683275
    :model/engine :hunyuan3d
    :model/runtime :rocm
-   ;; 2026-09-16: also loaded on aiueos-6600hs-1 (Intel BMG G31 32 GiB,
-   ;; Vulkan): alone -ngl 99 llama-bench pp512 908.0 / tg128 50.11 (2.7x
-   ;; xavier); in the shipped split (Qwen3.8 resident, --n-cpu-moe 20, ctx
-   ;; 65536) E2E decode 20.4 tok/s. The gateway still routes this id to xavier
-   ;; by name, so that node's join is enrolled but idle (fleet.edn).
+   ;; 2026-09-16: also served by aiueos-6600hs-1 (Intel Arc Pro B70 32 GiB,
+   ;; Vulkan, :8090, the card to itself since the owner's "nex だけにして"):
+   ;; llama-bench pp512 908.0 / tg128 50.11; E2E 60.3 tok/s single, 48.2 +
+   ;; 48.2 with 2 slots busy, 6291-token prefill 831 tok/s -- 3.3x xavier.
+   ;; 2 slots x 65536. The gateway still routes this id to xavier by name
+   ;; (x-murakumo-route-head: xavier), so that node's join is enrolled but
+   ;; idle until cloud-murakumo-api points ao/usagi's draft at it (fleet.edn).
    :model/verified-node "gad"
    :model/shape-only? false
    :model/paint true

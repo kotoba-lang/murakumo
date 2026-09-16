@@ -186,7 +186,14 @@
   ;; What was carried over: the same MTP speculative flags on the Vulkan build
   ;; lift qwen38u here from 10.7 to 17.2-18.0 tok/s E2E (2 slots x 16384,
   ;; q8_0 KV, default batch; VRAM budget left beside Nex ~857 MiB).
-  {:name "aiueos-6600hs-1" :host "root@100.98.24.37" :rpc-ip "192.168.1.2" :mac "9c:6b:00:cf:ad:55" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "vulkan-infer"} :node/serves ["qwen3.8-27b-uncensored" "nex-n2.5-mini-uncensored"]
-   :node/serves-exception {:reason "owner instruction 2026-09-16 names both models for this box; the 32 GiB BMG G31 is the only Vulkan node that runs the dense 27B above 10 tok/s, and Nex still beats xavier's CUDA decode with 20 expert layers on CPU. Declared, not implicit: one-model rule."
-                           :adr "adr-2609161500-aiueos-6600hs-1-bmg-g31-qwen38u-nex-mini-hosting"
-                           :until "2026-12-31"}}]}
+  ;;
+  ;; 2026-09-16 (owner: "nex だけにして ok"): Qwen3.8 dropped from this box, so
+  ;; the one-model rule holds without an exception. The qwen38u units stay on
+  ;; the box DISABLED with their weights (same rollback convention as xavier's
+  ;; murakumo-xavier-qwen38.service); their deploy/systemd copies are removed.
+  ;; Nex now has the whole card: -ngl 999, 2 slots x 65536 (--ctx-size 131072).
+  ;; Measured: E2E 60.3 / 58.8 tok/s single, 48.2 + 48.2 with both slots busy,
+  ;; 6291-token prompt prefill 831 tok/s / decode 49.1, VRAM budget left
+  ;; 9.45 GiB. The b70 role (murakumo-main) is NOT restored by this; see the
+  ;; paragraph above and root ADR adr-2609161500.
+  {:name "aiueos-6600hs-1" :host "root@100.98.24.37" :rpc-ip "192.168.1.2" :mac "9c:6b:00:cf:ad:55" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "vulkan-infer"} :node/serves "nex-n2.5-mini-uncensored"}]}
