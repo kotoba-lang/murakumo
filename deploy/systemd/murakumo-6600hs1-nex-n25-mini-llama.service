@@ -1,0 +1,27 @@
+# Nex-N2.5-mini-Uncensored (orcarouter GGUF, IQ4_XS + F16 mmproj) on
+# aiueos-6600hs-1 (Intel Arc BMG G31 32 GiB, Vulkan). Shares the GPU with
+# murakumo-6600hs1-qwen38u-llama: 15.65 + 17.43 GiB of weights do not both fit,
+# so this unit keeps 20 of 40 MoE layers' experts on CPU (--n-cpu-moe 20 in
+# server.env). Measured 2026-09-16: alone -ngl 99 tg128 50.1 tok/s; in this
+# split E2E decode 20.4 tok/s (xavier CUDA: 18.3). Window 65536 to match
+# xavier / the ao/usagi draft.
+[Unit]
+Description=Nex-N2.5-mini-Uncensored IQ4_XS (orcarouter) on aiueos-6600hs-1 (Intel BMG G31, Vulkan)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aiueos
+Group=aiueos
+WorkingDirectory=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883
+Environment=LD_LIBRARY_PATH=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883
+EnvironmentFile=/home/aiueos/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/server.env
+ExecStart=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883/llama-server --model /home/aiueos/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/Nex-N2.5-mini-Uncensored-IQ4_XS.gguf --mmproj /home/aiueos/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/mmproj-Nex-N2.5-mini-Uncensored-F16.gguf --alias nex-n2.5-mini-uncensored --host 127.0.0.1 --port 8090 --parallel 1 --flash-attn on --jinja --no-webui $SERVER_ARGS
+Restart=always
+RestartSec=5
+TimeoutStartSec=0
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

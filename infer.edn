@@ -709,6 +709,11 @@
    ;; same prompt answers in 639 tokens: 323-word essay, finish stop. Unit:
    ;; deploy/systemd/murakumo-k16-qwen38u-llama.service (+ -join); root ADR
    ;; adr-2609151900.
+   ;; 2026-09-16: also served by aiueos-6600hs-1 (Intel BMG G31 32 GiB, Vulkan
+   ;; -ngl 99, :8097, same Q4_K_M + mmproj): llama-bench pp512 407.1 / tg128
+   ;; 11.62 alone, E2E decode 10.7-10.8 tok/s -- 4.3x k16. Both nodes sit in
+   ;; the same edge queue for this id; fleet.edn has the numbers and the
+   ;; cache-affinity caveat. verified-node stays k16 (first verification).
    :model/verified-node "k16"
    :model/verified-at "2026-09-15"
    :model/served-by :llama-server
@@ -801,6 +806,11 @@
    :model/snapshot-bytes 14909683275
    :model/engine :hunyuan3d
    :model/runtime :rocm
+   ;; 2026-09-16: also loaded on aiueos-6600hs-1 (Intel BMG G31 32 GiB,
+   ;; Vulkan): alone -ngl 99 llama-bench pp512 908.0 / tg128 50.11 (2.7x
+   ;; xavier); in the shipped split (Qwen3.8 resident, --n-cpu-moe 20, ctx
+   ;; 65536) E2E decode 20.4 tok/s. The gateway still routes this id to xavier
+   ;; by name, so that node's join is enrolled but idle (fleet.edn).
    :model/verified-node "gad"
    :model/shape-only? false
    :model/paint true
