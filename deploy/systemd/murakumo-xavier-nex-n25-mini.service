@@ -21,6 +21,11 @@
 # Measured 2026-09-15 (temp 0): load ~59 s, prefill 59.1 tok/s, decode
 # 18.3 tok/s (157 tokens), vision via image_url OK. Details in infer.edn.
 #
+# The window lives in server.env (SERVER_ARGS -c): 8192 on 2026-09-15,
+# 65536 since 2026-09-16 when this head became the ao/usagi draft member
+# (cloud-murakumo-api PR #268). 21 GiB used of 30 at either value; needle
+# probes at 10k and 40k prompt tokens pass at 65536 (infer.edn).
+#
 # Install:  scp deploy/systemd/murakumo-xavier-nex-n25-mini.service xavier@100.87.226.80:/tmp/ \
 #           && ssh xavier@100.87.226.80 'sudo install -m644 /tmp/murakumo-xavier-nex-n25-mini.service /etc/systemd/system/ \
 #                && sudo mkdir -p /etc/systemd/system/murakumo-xavier-nex-n25-mini.service.d \

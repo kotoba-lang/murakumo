@@ -762,9 +762,23 @@
    ;; already served as qwen3.6-35b-a3b (11.5 tok/s decode then) -- faster
    ;; here because IQ4_XS reads fewer bytes per active expert than that
    ;; Q4_K_M did.
+   ;; 2026-09-16 (owner instruction "nex mini が usagi に対応する様に"): this
+   ;; model is now the ao/usagi draft member on api.murakumo.cloud
+   ;; (cloud-murakumo-api PR #268, src/xavier_hosted_model.js -- routed from
+   ;; the JS entry through the MURAKUMO_XAVIER_PRIVATE Workers-VPC binding,
+   ;; NOT the edge queue; xavier has no node/nbb for a join worker), so the
+   ;; window was raised to the usagi replica's 65536 (server.env `-c 65536`)
+   ;; and re-measured the same day: load 56 s; 21 GiB used of 30 after load,
+   ;; unchanged from 8192 within rounding (only the 10 full-attention layers
+   ;; hold per-token cache, ~20 KiB/token at f16 -> ~1.3 GiB); needle probes
+   ;; (temp 0, needle "2099" mid-prompt) at 10,091 prompt tokens -> finish
+   ;; stop, correct, prefill 162.6 / decode 19.8 tok/s, wall 62.6 s, and at
+   ;; 40,263 prompt tokens -> finish stop, correct, prefill 131.3 / decode
+   ;; 17.7, wall 308 s. Catalog: PUT /infer/models/nex-n2.5-mini-uncensored
+   ;; (context 65536, serving/fresh). Root ADR adr-2609161000.
    :model/served-by :llama-server
    :model/port 8090
-   :model/context 8192}
+   :model/context 65536}
 
   ;; ── media (Civitai/HF 系。ジョブ並列 = 1 ノード完結、sharding 不要) ──
   "trellis-image-large"
