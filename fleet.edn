@@ -172,6 +172,20 @@
   ;; on both joins (k16 polls at 1000). GuC firmware is 70.44.1 where 70.54.0
   ;; is recommended (Ubuntu linux-firmware 20240318) -- not measured as a
   ;; cost. Root ADR adr-2609161500.
+  ;;
+  ;; 2026-09-16 (later): THIS BOX WAS b70. deploy/systemd/murakumo-b70-llama.service
+  ;; names jun@100.119.10.43 / hostname ubuntu-server -- the same machine before
+  ;; the reinstall -- and that head led the murakumo-main pool (SYCL build,
+  ;; stock Qwen3.8-27B Q4_K_M, --spec-type draft-mtp, decode 16.8-28 tok/s,
+  ;; 2 slots x 32768). The reinstall removed the SYCL build, the stock weights,
+  ;; the cloudflared tunnel behind MURAKUMO_B70_PRIVATE and the b70 join, so
+  ;; /ready now reports pool-available {gad 0, b70 0, xavier 0} and a
+  ;; model=murakumo-main request hung 120 s (http 000). Nothing here restores
+  ;; that role: the uncensored 27B is not the stock model the pool probe
+  ;; asserts, and stock + uncensored + Nex do not fit 32 GiB. Owner decision.
+  ;; What was carried over: the same MTP speculative flags on the Vulkan build
+  ;; lift qwen38u here from 10.7 to 17.2-18.0 tok/s E2E (2 slots x 16384,
+  ;; q8_0 KV, default batch; VRAM budget left beside Nex ~857 MiB).
   {:name "aiueos-6600hs-1" :host "root@100.98.24.37" :rpc-ip "192.168.1.2" :mac "9c:6b:00:cf:ad:55" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "vulkan-infer"} :node/serves ["qwen3.8-27b-uncensored" "nex-n2.5-mini-uncensored"]
    :node/serves-exception {:reason "owner instruction 2026-09-16 names both models for this box; the 32 GiB BMG G31 is the only Vulkan node that runs the dense 27B above 10 tok/s, and Nex still beats xavier's CUDA decode with 20 expert layers on CPU. Declared, not implicit: one-model rule."
                            :adr "adr-2609161500-aiueos-6600hs-1-bmg-g31-qwen38u-nex-mini-hosting"
