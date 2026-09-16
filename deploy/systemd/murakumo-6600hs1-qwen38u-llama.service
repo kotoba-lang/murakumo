@@ -1,0 +1,29 @@
+# Qwen3.8-27B-Uncensored (orcarouter GGUF, Q4_K_M + f16 mmproj) on
+# aiueos-6600hs-1 (Ryzen 5 7500F, 15 GiB DDR5, Intel Arc BMG G31 32 GiB VRAM
+# via Mesa ANV Vulkan, HWE kernel 7.0.0-31). Owner instruction 2026-09-16:
+# host qwen3.8 uncensored + nex2 mini on the reinstalled ubuntu-server box.
+# Same llama.cpp build as k16 (llama-b10883 Vulkan). Full offload; the tunable
+# tail is $SERVER_ARGS in the model dir's server.env (aiueos-owned), which
+# also carries the llama-bench numbers. Sibling: murakumo-6600hs1-nex-n25-mini-llama
+# (Nex keeps 20 expert layers on CPU so this model can stay fully resident;
+# numbers beside the fleet.edn entry).
+[Unit]
+Description=Qwen3.8-27B-Uncensored Q4_K_M (orcarouter) on aiueos-6600hs-1 (Intel BMG G31, Vulkan)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aiueos
+Group=aiueos
+WorkingDirectory=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883
+Environment=LD_LIBRARY_PATH=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883
+EnvironmentFile=/home/aiueos/models/orcarouter/Qwen3.8-27B-Uncensored-GGUF/server.env
+ExecStart=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883/llama-server --model /home/aiueos/models/orcarouter/Qwen3.8-27B-Uncensored-GGUF/Qwen3.8-27B-Uncensored-Q4_K_M.gguf --mmproj /home/aiueos/models/orcarouter/Qwen3.8-27B-Uncensored-GGUF/mmproj-Qwen3.8-27B-Uncensored-f16.gguf --alias qwen3.8-27b-uncensored --host 127.0.0.1 --port 8097 --parallel 1 --flash-attn on --jinja --no-webui $SERVER_ARGS
+Restart=always
+RestartSec=5
+TimeoutStartSec=0
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

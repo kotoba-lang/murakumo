@@ -133,4 +133,43 @@
   ;; `ssh -o "ProxyCommand=tailscale nc %h %p" xavier@xavier.tail110d8b.ts.net`
   ;; (or the raw Tailscale IP with the same ProxyCommand) as a working
   ;; fallback when `ssh xavier` / `tailscale ssh xavier` fail to resolve.
-  {:name "xavier" :host "xavier" :rpc-ip "192.168.1.28" :mac "48:b0:2d:18:4d:16" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "cuda-infer"} :node/serves "nex-n2.5-mini-uncensored"}]}
+  {:name "xavier" :host "xavier" :rpc-ip "192.168.1.28" :mac "48:b0:2d:18:4d:16" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "cuda-infer"} :node/serves "nex-n2.5-mini-uncensored"}
+
+  ;; aiueos-6600hs-1 -- the box that used to be the tailnet node `ubuntu-server`,
+  ;; reinstalled 2026-09-16 (Ubuntu 24.04.4). The name is the owner's; the
+  ;; hardware is NOT a 6600HS: Ryzen 5 7500F (6C/12T, no iGPU), 15 GiB DDR5,
+  ;; and an ASRock Intel Arc **BMG G31** (PCI 8086:e223, 32 GiB VRAM). The GA
+  ;; 6.8 kernel has no xe id for e223; the HWE 7.0.0-31 kernel binds it and
+  ;; Mesa 25.2.8 ANV exposes it as Vulkan 1.4 with KHR_coopmat (fp16 1, bf16 1,
+  ;; int dot 1). Tailscale SSH policy admits root@ only (same as k16/xavier).
+  ;; Same llama.cpp build as k16 (llama-b10883 Vulkan, rsync'd from k16) and
+  ;; the same /opt/murakumo join scripts + /etc/murakumo/join.env.
+  ;;
+  ;; Serves BOTH orcarouter models at once (units in deploy/systemd/
+  ;; murakumo-6600hs1-{qwen38u,nex-n25-mini}-{llama,join}.service):
+  ;;   :8097 qwen3.8-27b-uncensored  Q4_K_M + f16 mmproj, -ngl 99, ctx 8192 q8_0 KV
+  ;;   :8090 nex-n2.5-mini-uncensored IQ4_XS + F16 mmproj, -ngl 999 --n-cpu-moe 20, ctx 65536
+  ;; Why that split: weights are 15.65 + 17.43 GiB, so both cannot be fully
+  ;; resident in 32 GiB. Measured 2026-09-16 (llama-bench -p 512 -n 128 -fa 1
+  ;; -r 3, tok/s):
+  ;;   Qwen alone -ngl 99 ............ pp512 407.1  tg128 11.62
+  ;;   Nex  alone -ngl 99 ............ pp512 908.0  tg128 50.11
+  ;;   Nex resident, Qwen -ngl 36/40 . pp512 297/307 tg128 3.36/3.50  (rejected)
+  ;;   Qwen resident, Nex n-cpu-moe 24 pp512 200.7  tg128 25.2
+  ;;   Qwen resident, Nex n-cpu-moe 20 pp512 139.7  tg128 27.6   (chosen)
+  ;; E2E llama-server streaming (256 max_tokens, temp 0): Nex 20.4 tok/s TTFT
+  ;; 0.40 s; Qwen 10.7 tok/s TTFT 0.47 s; both at once 15.4 / 9.3, 0 DeviceLost,
+  ;; VRAM budget left 2.96 GiB. Through api.murakumo.cloud a 400-token qwen
+  ;; job took 61.8 s wall (node-side 38.3 s = 10.77 tok/s decode) vs 175-267 s
+  ;; on k16. Compare k16 qwen38u decode 2.5 and xavier nex decode 18.3.
+  ;;
+  ;; Routing today: qwen38u jobs come through the edge queue (this node and
+  ;; k16 race; the gateway's soft cache-affinity sends a repeated prompt back
+  ;; to whoever served it, so identical probes all landed on k16 -- probe with
+  ;; distinct prompts). nex is routed by name to xavier over the Workers-VPC
+  ;; binding (x-murakumo-route-head: xavier), so the nex join here is enrolled
+  ;; but receives nothing until cloud-murakumo-api routes it. --poll-ms 250
+  ;; on both joins (k16 polls at 1000). GuC firmware is 70.44.1 where 70.54.0
+  ;; is recommended (Ubuntu linux-firmware 20240318) -- not measured as a
+  ;; cost. Root ADR adr-2609161500.
+  {:name "aiueos-6600hs-1" :host "root@100.98.24.37" :rpc-ip "192.168.1.2" :mac "9c:6b:00:cf:ad:55" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "vulkan-infer"} :node/serves ["qwen3.8-27b-uncensored" "nex-n2.5-mini-uncensored"]}]}
