@@ -1,0 +1,52 @@
+{:evidence/schema :murakumo.qwen38-flash-next-mtp/v1
+ :observed-at "2026-09-16T03:33Z"
+ :why "app-kotoba-cloud ADR 2609160940 left MTP decode unmeasured because the production endpoint's image tracks llama.cpp master, which has no draft-mtp path. Owner direction 2026-09-16: keep the production node at 4 slots and measure MTP on a separate node."
+ :node {:provider "modal" :gpu "RTX-PRO-6000" :vram-bytes 103079215104 :cpu 16 :memory-mib 65536
+        :app "murakumo-qwen38-flash-next-mtp-bench" :run "ap-F3VuQB5PynsagPeLDiUjEX"
+        :same-card-as-production? true}
+ :artifact
+ {:repo "orcarouter/Qwen3.8-Flash-Next-Uncensored-GGUF"
+  :revision "0434906af7b5202b676d43f108cf4f73d25691ef"
+  :quant "IQ4_XS"
+  :shards ["Qwen3.8-Flash-Next-Uncensored-IQ4_XS-00001-of-00003.gguf" "Qwen3.8-Flash-Next-Uncensored-IQ4_XS-00002-of-00003.gguf" "Qwen3.8-Flash-Next-Uncensored-IQ4_XS-00003-of-00003.gguf"]
+  :shard-sha256 ["28a99b125cb905fc3bdc06baf6266a56b0cbd1b27e833b9142acc2017b673704" "2a309e0b112fde96ba3bcba5a6b58cc05e5df7bb7fad5a990eaa51df335b0e43" "ebc43c58e2eaeba1d5bdf62c8cb1f0eac198c4dc01941f771921edeebf574bc3"]
+  :draft "Qwen3.8-Flash-Next-Uncensored-MTP-draft.gguf"
+  :draft-sha256 "ff803fb437e90567c27991fecae2537ea1ed63e8842b0399aa53820f02ae8882"
+  :volume "qwen38-flash-next-uncensored-gguf"}
+ :runtime
+ {:llama-pr 28243
+  :llama-pr-branch "danielhanchen/llama.cpp qwen4exp/mtp"
+  :llama-revision "d1a92352cbd417fd840b4e765c0b82f5fe3d1d89"
+  :mergeable-on-observed-date? false
+  :cuda "12.8.1" :cuda-arch "120a-real"
+  :context 131072 :parallel 1 :batch 4096 :ubatch 2048 :threads 16
+  :kv-cache :f16 :flash-attention :auto :reasoning-budget 1024
+  :spec {:type "draft-mtp" :draft-n-max 3 :draft-p-min 0 :draft-ngl "all"}}
+ :method "Same container, same GPU: llama-server started without spec, six probes, stopped; restarted with draft-mtp, the same six probes. Prompts are llama.cpp's own sources (common/arg.cpp, src/llama-model.cpp, tools/server/README.md ...), cut to ~14k and ~60k tokens; each context probed greedy (temperature 0, top_k 1) and sampled (the file's defaults: temp 1.0, top_p 0.95, top_k 20), 256 generated tokens with ignore_eos. The sampled probe of each context reuses the greedy probe's prompt cache (prompt-tokens 4), so its decode number is the clean one. Numbers are llama-server's own timings. short/greedy of the baseline is the first request after load (CUDA warm-up) and is not a decode measurement."
+ :baseline
+ {:status :measured :load-s 43.0
+  :probes
+[ {:label "short/greedy" :prompt-tokens 68 :cached? false :generated-tokens 256 :prefill-tps 14.3 :decode-tps 53.4 :reasoning-chars 1221 :content-chars 0}
+ {:label "short/sampled" :prompt-tokens 4 :cached? true :generated-tokens 256 :prefill-tps 52.2 :decode-tps 91.3 :reasoning-chars 437 :content-chars 649}
+ {:label "ctx~14000/greedy" :prompt-tokens 13395 :cached? false :generated-tokens 256 :prefill-tps 3299.7 :decode-tps 85.3 :reasoning-chars 1270 :content-chars 0}
+ {:label "ctx~14000/sampled" :prompt-tokens 4 :cached? true :generated-tokens 256 :prefill-tps 50.9 :decode-tps 85.8 :reasoning-chars 1177 :content-chars 0}
+ {:label "ctx~60000/greedy" :prompt-tokens 46663 :cached? false :generated-tokens 256 :prefill-tps 2853.6 :decode-tps 66.4 :reasoning-chars 1283 :content-chars 0}
+ {:label "ctx~60000/sampled" :prompt-tokens 4 :cached? true :generated-tokens 256 :prefill-tps 44.6 :decode-tps 65.3 :reasoning-chars 1167 :content-chars 0}]}
+ :draft-mtp
+ {:status :measured :load-s 18.0
+  :probes
+[ {:label "short/greedy" :prompt-tokens 68 :cached? false :generated-tokens 256 :prefill-tps 113.1 :decode-tps 99.6 :draft-tokens 318 :draft-accepted 148 :acceptance 0.465 :reasoning-chars 1222 :content-chars 0}
+ {:label "short/sampled" :prompt-tokens 4 :cached? true :generated-tokens 256 :prefill-tps 50.3 :decode-tps 88.0 :draft-tokens 395 :draft-accepted 122 :acceptance 0.309 :reasoning-chars 1221 :content-chars 0}
+ {:label "ctx~14000/greedy" :prompt-tokens 13395 :cached? false :generated-tokens 256 :prefill-tps 2904.4 :decode-tps 103.0 :draft-tokens 292 :draft-accepted 157 :acceptance 0.538 :reasoning-chars 1300 :content-chars 0}
+ {:label "ctx~14000/sampled" :prompt-tokens 4 :cached? true :generated-tokens 256 :prefill-tps 41.2 :decode-tps 98.6 :draft-tokens 315 :draft-accepted 149 :acceptance 0.473 :reasoning-chars 1284 :content-chars 0}
+ {:label "ctx~60000/greedy" :prompt-tokens 46663 :cached? false :generated-tokens 256 :prefill-tps 2430.5 :decode-tps 89.5 :draft-tokens 269 :draft-accepted 165 :acceptance 0.613 :reasoning-chars 1263 :content-chars 0}
+ {:label "ctx~60000/sampled" :prompt-tokens 4 :cached? true :generated-tokens 256 :prefill-tps 25.1 :decode-tps 78.1 :draft-tokens 310 :draft-accepted 151 :acceptance 0.487 :reasoning-chars 1251 :content-chars 0}]}
+ :speedup
+[ {:label "short/greedy" :baseline-tps 53.4 :mtp-tps 99.6 :speedup 1.87 :acceptance 0.465}
+ {:label "short/sampled" :baseline-tps 91.3 :mtp-tps 88.0 :speedup 0.96 :acceptance 0.309}
+ {:label "ctx~14000/greedy" :baseline-tps 85.3 :mtp-tps 103.0 :speedup 1.21 :acceptance 0.538}
+ {:label "ctx~14000/sampled" :baseline-tps 85.8 :mtp-tps 98.6 :speedup 1.15 :acceptance 0.473}
+ {:label "ctx~60000/greedy" :baseline-tps 66.4 :mtp-tps 89.5 :speedup 1.35 :acceptance 0.613}
+ {:label "ctx~60000/sampled" :baseline-tps 65.3 :mtp-tps 78.1 :speedup 1.2 :acceptance 0.487}]
+ :reading "draft-mtp with n-max 3: 1.15-1.21x at 14k, 1.20-1.35x at 60k, ~1.0x on a short prompt with sampling; acceptance 0.31-0.61 (greedy higher, sampling at temp 1.0 lower). The model card's 1.3-2x / 67 percent is the greedy upper edge. Production samples at temp 1.0, so expect ~1.2x when the PR lands in master. Not worth a custom image from an unmerged branch."
+ :tool "tools/modal-bench/qwen38_flash_next_mtp_bench.py"}
