@@ -1,10 +1,11 @@
 # Nex-N2.5-mini-Uncensored (orcarouter GGUF, IQ4_XS + F16 mmproj) on
-# aiueos-6600hs-1 (Intel Arc BMG G31 32 GiB, Vulkan). Shares the GPU with
-# murakumo-6600hs1-qwen38u-llama: 15.65 + 17.43 GiB of weights do not both fit,
-# so this unit keeps 20 of 40 MoE layers' experts on CPU (--n-cpu-moe 20 in
-# server.env). Measured 2026-09-16: alone -ngl 99 tg128 50.1 tok/s; in this
-# split E2E decode 20.4 tok/s (xavier CUDA: 18.3). Window 65536 to match
-# xavier / the ao/usagi draft.
+# aiueos-6600hs-1 (Intel Arc Pro B70 / BMG G31 32 GiB, Vulkan/ANV on the HWE 7.0
+# kernel). Owner 2026-09-16: "nex だけにして ok" -- this is the only model on the
+# card (the qwen38u units are disabled on the box, weights kept for rollback).
+# Full offload, 2 slots x 65536 (--ctx-size 131072 is the TOTAL). Measured
+# 2026-09-16: E2E 60.3 tok/s single, 48.2 + 48.2 with both slots busy,
+# 6291-token prompt prefill 831 tok/s / decode 49.1, VRAM budget left 9.45 GiB
+# (xavier CUDA: 18.3). Tunables live in the model dir's server.env.
 [Unit]
 Description=Nex-N2.5-mini-Uncensored IQ4_XS (orcarouter) on aiueos-6600hs-1 (Intel BMG G31, Vulkan)
 After=network-online.target tailscaled.service
