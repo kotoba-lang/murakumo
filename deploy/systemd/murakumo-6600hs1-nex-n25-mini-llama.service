@@ -2,10 +2,15 @@
 # aiueos-6600hs-1 (Intel Arc Pro B70 / BMG G31 32 GiB, Vulkan/ANV on the HWE 7.0
 # kernel). Owner 2026-09-16: "nex だけにして ok" -- this is the only model on the
 # card (the qwen38u units are disabled on the box, weights kept for rollback).
-# Full offload, 2 slots x 65536 (--ctx-size 131072 is the TOTAL). Measured
-# 2026-09-16: E2E 60.3 tok/s single, 48.2 + 48.2 with both slots busy,
-# 6291-token prompt prefill 831 tok/s / decode 49.1, VRAM budget left 9.45 GiB
-# (xavier CUDA: 18.3). Tunables live in the model dir's server.env.
+# Full offload. 2026-09-16: 2 slots x 65536, E2E 60.3 tok/s single, 48.2 +
+# 48.2 with both slots busy, 6291-token prompt prefill 831 tok/s / decode
+# 49.1, VRAM budget left 9.45 GiB (xavier CUDA: 18.3). 2026-09-18: 4 slots x
+# 65536 (--ctx-size 262144 is the TOTAL; per slot = total / --parallel) after
+# the --parallel sweep in fleet.edn (ceiling ~130-137 tok/s aggregate from 4
+# slots up, 16 slots collapses). --host 0.0.0.0: the gateway reaches :8090 on
+# 192.168.1.2 over the gad tunnel (Workers-VPC service murakumo-6600hs1-chat),
+# LAN + tailnet only, no public route. Tunables live in the model dir's
+# server.env; --host and --parallel there override the ones on this line.
 [Unit]
 Description=Nex-N2.5-mini-Uncensored IQ4_XS (orcarouter) on aiueos-6600hs-1 (Intel BMG G31, Vulkan)
 After=network-online.target tailscaled.service
@@ -18,7 +23,7 @@ Group=aiueos
 WorkingDirectory=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883
 Environment=LD_LIBRARY_PATH=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883
 EnvironmentFile=/home/aiueos/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/server.env
-ExecStart=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883/llama-server --model /home/aiueos/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/Nex-N2.5-mini-Uncensored-IQ4_XS.gguf --mmproj /home/aiueos/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/mmproj-Nex-N2.5-mini-Uncensored-F16.gguf --alias nex-n2.5-mini-uncensored --host 127.0.0.1 --port 8090 --parallel 1 --flash-attn on --jinja --no-webui $SERVER_ARGS
+ExecStart=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883/llama-server --model /home/aiueos/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/Nex-N2.5-mini-Uncensored-IQ4_XS.gguf --mmproj /home/aiueos/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/mmproj-Nex-N2.5-mini-Uncensored-F16.gguf --alias nex-n2.5-mini-uncensored --host 0.0.0.0 --port 8090 --parallel 4 --flash-attn on --jinja --no-webui $SERVER_ARGS
 Restart=always
 RestartSec=5
 TimeoutStartSec=0

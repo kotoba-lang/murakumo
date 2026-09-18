@@ -166,9 +166,13 @@
   ;; Routing today: qwen38u jobs come through the edge queue (this node and
   ;; k16 race; the gateway's soft cache-affinity sends a repeated prompt back
   ;; to whoever served it, so identical probes all landed on k16 -- probe with
-  ;; distinct prompts). nex is routed by name to xavier over the Workers-VPC
-  ;; binding (x-murakumo-route-head: xavier), so the nex join here is enrolled
-  ;; but receives nothing until cloud-murakumo-api routes it. --poll-ms 250
+  ;; distinct prompts). nex: since 2026-09-18 cloud-murakumo-api routes the id
+  ;; by name to THIS node first over the Workers-VPC binding
+  ;; MURAKUMO_6600HS1_PRIVATE (VPC service murakumo-6600hs1-chat, 192.168.1.2:8090
+  ;; over the gad tunnel; x-murakumo-route-head: 6600hs1), xavier only when this
+  ;; node is unreachable (cloud-murakumo-api PR #272, deploy de109263). The nex
+  ;; join here is still enrolled in the edge queue but nex never flows through
+  ;; the queue, so it stays idle by design. --poll-ms 250
   ;; on both joins (k16 polls at 1000). GuC firmware is 70.44.1 where 70.54.0
   ;; is recommended (Ubuntu linux-firmware 20240318) -- not measured as a
   ;; cost. Root ADR adr-2609161500.
@@ -191,9 +195,19 @@
   ;; the one-model rule holds without an exception. The qwen38u units stay on
   ;; the box DISABLED with their weights (same rollback convention as xavier's
   ;; murakumo-xavier-qwen38.service); their deploy/systemd copies are removed.
-  ;; Nex now has the whole card: -ngl 999, 2 slots x 65536 (--ctx-size 131072).
-  ;; Measured: E2E 60.3 / 58.8 tok/s single, 48.2 + 48.2 with both slots busy,
-  ;; 6291-token prompt prefill 831 tok/s / decode 49.1, VRAM budget left
-  ;; 9.45 GiB. The b70 role (murakumo-main) is NOT restored by this; see the
-  ;; paragraph above and root ADR adr-2609161500.
+  ;; Nex has the whole card: -ngl 999. 2026-09-16: 2 slots x 65536, E2E 60.3 /
+  ;; 58.8 tok/s single, 48.2 + 48.2 with both slots busy, 6291-token prompt
+  ;; prefill 831 tok/s / decode 49.1, VRAM budget left 9.45 GiB.
+  ;; 2026-09-18 (owner: "最大 toks, concurrency を 6600hs-1 で計測して"), 256-token
+  ;; generations, temp 0.7, N concurrent, llama-server timings:
+  ;;   --parallel 2  x 65536: N=1 60.6 | N=2 48.7+49.3 (aggregate 91)
+  ;;   --parallel 4  x 65536: N=4 ~35 each (aggregate 128) | N=8 queued, same aggregate
+  ;;   --parallel 6  x 65536: N=6 23.5 each (aggregate 131) | N=12 24.2 each (135)
+  ;;   --parallel 8  x 65536: N=8 18.1 each (aggregate 137) | N=16 18.4 each (132)
+  ;;   --parallel 16 x 32768: N=16 4.7 each (aggregate 73)  -- collapses, do not ship
+  ;; Ceiling ~130-137 tok/s aggregate from 4 slots up; shipped --parallel 4 x
+  ;; 65536 (--ctx-size 262144, --host 0.0.0.0 so the LAN binding reaches it)
+  ;; so every admitted stream keeps >= 35 tok/s (xavier's single slot: 18.5).
+  ;; The b70 role (murakumo-main) is NOT restored by this; see the paragraph
+  ;; above and root ADR adr-2609161500 / adr-2609181200.
   {:name "aiueos-6600hs-1" :host "root@100.98.24.37" :rpc-ip "192.168.1.2" :mac "9c:6b:00:cf:ad:55" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "vulkan-infer"} :node/serves "nex-n2.5-mini-uncensored"}]}
