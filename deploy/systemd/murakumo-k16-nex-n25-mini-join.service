@@ -1,0 +1,25 @@
+# Edge-queue join for nex-n2.5-mini-uncensored from the aiueos K16. Same
+# shape as the 6600hs-1 and qwen38u joins: enrolled, idle in practice because
+# api.murakumo.cloud routes this model id by name through its HEADS list
+# (Workers-VPC bindings), not through the edge queue. Kept so a routing change
+# on the gateway needs nothing on the node.
+[Unit]
+Description=Join Murakumo Cloud from the aiueos K16 as nex-n2.5-mini-uncensored
+After=network-online.target tailscaled.service murakumo-k16-nex-n25-mini-llama.service
+Wants=network-online.target
+Requires=murakumo-k16-nex-n25-mini-llama.service
+
+[Service]
+Type=simple
+TimeoutStartSec=0
+User=aiueos
+Group=aiueos
+EnvironmentFile=/etc/murakumo/join.env
+Environment=NODE_OPTIONS=--dns-result-order=ipv4first
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 600); do /usr/bin/curl -fsS http://127.0.0.1:8097/health >/dev/null && exit 0; sleep 2; done; exit 1'
+ExecStart=/usr/local/bin/nbb --classpath /opt/murakumo/src /opt/murakumo/infer-join.cljs --model nex-n2.5-mini-uncensored --base https://api.murakumo.cloud --name aiueos-node-260910-nex-n25-mini --trust-tier awai-secure --local-url http://127.0.0.1:8097/v1 --slots 1 --poll-ms 1000
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target

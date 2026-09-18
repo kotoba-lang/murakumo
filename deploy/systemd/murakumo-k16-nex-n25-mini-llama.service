@@ -1,0 +1,48 @@
+# Nex-N2.5-mini-Uncensored (orcarouter GGUF, IQ4_XS + F16 mmproj; qwen35moe,
+# 35B-A3B, vision) on the aiueos K16 (aiueos-node-260910, Ryzen 7 7735HS
+# 8C/16T, 26.8 GiB usable RAM, Radeon 680M gfx1035 via RADV Vulkan, GTT 13 GiB).
+# Owner instruction 2026-09-18: 「ひとまず k16, b70, xavier で vllm で nex を
+# host, ring する様にして」 -> "do it" after the report that vLLM cannot run
+# on this box (gfx1035 has no ROCm/vLLM kernels; the CPU backend has no int4
+# path and BF16 does not fit), so this is the llama.cpp head for K16.
+#
+# Replaces murakumo-k16-qwen38u-llama.service (Conflicts=): the 17.4 GiB
+# IQ4_XS + 0.84 GiB mmproj does not fit beside the 15.66 GiB Q4_K_M and the
+# Ling usagi replica (5.3 GiB RSS, CPU) in 26.8 GiB. The qwen38u unit and its
+# weights stay on the box for rollback (`systemctl disable --now
+# murakumo-k16-nex-n25-mini-llama && systemctl enable --now murakumo-k16-qwen38u-llama`).
+#
+# Same port :8097 as qwen38u so the join and any local probes keep working.
+# --host 0.0.0.0 so the gateway can reach 192.168.1.6:8097 over the gad tunnel
+# (Workers-VPC service, LAN + tailnet only, no public route) -- the third
+# head of nex-n2.5-mini-uncensored after 6600hs1 (vLLM) and xavier.
+#
+# The shape (--device / -ngl / -t / --ctx-size) lives in server.env owned by
+# aiueos (same split as the qwen38u unit). Whatever is in server.env at start
+# is what serves; the measurement that chose it goes to fleet.edn.
+#
+# Install:  scp deploy/systemd/murakumo-k16-nex-n25-mini-*.service root@100.66.205.17:/tmp/ \
+#           && ssh root@100.66.205.17 'install -m644 /tmp/murakumo-k16-nex-n25-mini-*.service /etc/systemd/system/ && systemctl daemon-reload'
+# Switch:   ssh root@100.66.205.17 'systemctl disable --now murakumo-k16-qwen38u-llama murakumo-k16-qwen38u-join; systemctl enable --now murakumo-k16-nex-n25-mini-llama murakumo-k16-nex-n25-mini-join'
+# Verify:   curl -s http://127.0.0.1:8097/health ; curl -s http://127.0.0.1:8097/v1/models
+[Unit]
+Description=Nex-N2.5-mini-Uncensored IQ4_XS (orcarouter) on the aiueos K16 (RADV Vulkan / CPU)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+Conflicts=murakumo-k16-qwen38u-llama.service
+
+[Service]
+Type=simple
+User=aiueos
+Group=aiueos
+WorkingDirectory=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883
+Environment=LD_LIBRARY_PATH=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883
+EnvironmentFile=/home/aiueos/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/server.env
+ExecStart=/home/aiueos/murakumo/llama.cpp/build-vulkan/llama-b10883/llama-server --model /home/aiueos/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/Nex-N2.5-mini-Uncensored-IQ4_XS.gguf --mmproj /home/aiueos/models/orcarouter/Nex-N2.5-mini-Uncensored-GGUF/mmproj-Nex-N2.5-mini-Uncensored-F16.gguf --alias nex-n2.5-mini-uncensored --host 0.0.0.0 --port 8097 --parallel 1 --flash-attn on --jinja --no-webui $SERVER_ARGS
+Restart=always
+RestartSec=5
+TimeoutStartSec=0
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
