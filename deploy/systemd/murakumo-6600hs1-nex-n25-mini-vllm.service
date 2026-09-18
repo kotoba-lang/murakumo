@@ -1,0 +1,61 @@
+# Nex-N2.5-mini-Uncensored, int4 W4A16 AutoRound safetensors
+# (huggingface.co/com-kotobalabs/Nex-N2.5-mini-Uncensored-W4A16-AutoRound,
+# generated 2026-09-18 from orcarouter's BF16 with quant-mind's recipe, root
+# ADR-2609181615) served by vLLM XPU on aiueos-6600hs-1 (Intel Arc Pro B70 /
+# BMG G31 32 GiB). Owner instruction 2026-09-18: 「ひとまず k16, b70, xavier で
+# vllm で nex を host, ring する様にして」.
+#
+# Replaces murakumo-6600hs1-nex-n25-mini-llama.service on :8090 (Conflicts=):
+# the two do not fit on the card together (llama-server IQ4_XS ~22 GiB
+# resident, vLLM 0.90 of 32 GiB). The llama unit and the GGUF stay on the box
+# for rollback: `systemctl disable --now murakumo-6600hs1-nex-n25-mini-vllm
+# && systemctl enable --now murakumo-6600hs1-nex-n25-mini-llama`.
+#
+# Same port, same served model id, same /v1/chat/completions -> the gateway's
+# Workers-VPC binding MURAKUMO_6600HS1_PRIVATE (192.168.1.2:8090) and the join
+# unit need nothing. Measured 2026-09-18 with the STOCK W4A16 on this image
+# (vllm/vllm-openai-xpu:latest = vLLM 0.29.0, torch 2.13+xpu), XPU graph ON,
+# max-num-seqs 64: N=1 108 tok/s, N=8 68.5 each, aggregate ~1,128 at N=32,
+# prefill ~7,500 tok/s; KV cache 201,498 tokens (3.07 x 65536). Without
+# VLLM_XPU_ENABLE_XPU_GRAPH=1 a single stream is 32 tok/s -- slower than
+# llama.cpp -- so the variable is not optional. --reasoning-parser qwen3 keeps
+# the <think> block out of `content` (without it the thinking leaked as
+# content, measured). Re-measure with THIS checkpoint after the first start
+# and put the numbers in fleet.edn; until then the stock numbers above are the
+# expectation, not the record.
+#
+# docker: the image is pulled (16.4 GB) and the container is --rm'd on stop
+# so a restart is a clean start. --network=host so :8090 is the node's own
+# port (LAN + tailnet, no public route). --shm-size 8g for the engine's IPC.
+#
+# Install:  scp deploy/systemd/murakumo-6600hs1-nex-n25-mini-{vllm,join}.service root@100.98.24.37:/tmp/ \
+#           && ssh root@100.98.24.37 'install -m644 /tmp/murakumo-6600hs1-nex-n25-mini-vllm.service /tmp/murakumo-6600hs1-nex-n25-mini-join.service /etc/systemd/system/ && systemctl daemon-reload'
+# Switch:   ssh root@100.98.24.37 'systemctl disable --now murakumo-6600hs1-nex-n25-mini-llama; systemctl enable --now murakumo-6600hs1-nex-n25-mini-vllm murakumo-6600hs1-nex-n25-mini-join'
+[Unit]
+Description=Nex-N2.5-mini-Uncensored W4A16 (com-kotobalabs) on aiueos-6600hs-1 via vLLM XPU (docker)
+After=network-online.target docker.service tailscaled.service
+Wants=network-online.target
+Requires=docker.service
+Conflicts=murakumo-6600hs1-nex-n25-mini-llama.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/home/aiueos/models/hf/Nex-N2.5-mini-Uncensored-W4A16-AutoRound/server.env
+ExecStartPre=-/usr/bin/docker rm -f murakumo-nex-vllm
+ExecStart=/usr/bin/docker run --rm --name murakumo-nex-vllm --network=host --device /dev/dri:/dev/dri --shm-size 8g \
+  -e VLLM_XPU_ENABLE_XPU_GRAPH=1 \
+  -v /home/aiueos/models/hf:/models \
+  vllm/vllm-openai-xpu:latest \
+  --model /models/Nex-N2.5-mini-Uncensored-W4A16-AutoRound \
+  --served-model-name nex-n2.5-mini-uncensored \
+  --host 0.0.0.0 --port 8090 \
+  --max-model-len 65536 --max-num-seqs 64 --gpu-memory-utilization 0.90 \
+  --reasoning-parser qwen3 --trust-remote-code $VLLM_ARGS
+ExecStop=/usr/bin/docker stop -t 20 murakumo-nex-vllm
+Restart=always
+RestartSec=10
+TimeoutStartSec=0
+TimeoutStopSec=40
+
+[Install]
+WantedBy=multi-user.target

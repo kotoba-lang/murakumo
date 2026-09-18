@@ -1,12 +1,15 @@
 # Edge-queue join for nex-n2.5-mini-uncensored from aiueos-6600hs-1. Enrolled
-# 2026-09-16 but idle: api.murakumo.cloud routes this model id by name to
-# xavier (Workers-VPC binding, x-murakumo-route-head: xavier), not through the
-# edge queue. Kept so a routing change on the gateway needs nothing on the node.
+# 2026-09-16 but idle: api.murakumo.cloud routes this model id by name to the
+# HEADS list (6600hs1 > xavier, Workers-VPC bindings), not through the edge
+# queue. Kept so a routing change on the gateway needs nothing on the node.
+# 2026-09-18: the local server behind :8090 is the vLLM unit (Requires= below);
+# it answers /health and /v1 exactly like llama-server did. To roll back to
+# llama.cpp, point Requires=/After= at the -llama unit again.
 [Unit]
 Description=Join Murakumo Cloud from aiueos-6600hs-1 as nex-n2.5-mini-uncensored
-After=network-online.target tailscaled.service murakumo-6600hs1-nex-n25-mini-llama.service
+After=network-online.target tailscaled.service murakumo-6600hs1-nex-n25-mini-vllm.service
 Wants=network-online.target
-Requires=murakumo-6600hs1-nex-n25-mini-llama.service
+Requires=murakumo-6600hs1-nex-n25-mini-vllm.service
 
 [Service]
 Type=simple
