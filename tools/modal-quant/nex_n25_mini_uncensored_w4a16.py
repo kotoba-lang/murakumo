@@ -12,10 +12,12 @@ so the two checkpoints differ in the base weights only.
 
 Run (owner-billed Modal compute; H100 for the quantize step):
   modal run tools/modal-quant/nex_n25_mini_uncensored_w4a16.py
-  modal run tools/modal-quant/nex_n25_mini_uncensored_w4a16.py --upload-repo com-junkawasaki/Nex-N2.5-mini-Uncensored-W4A16-AutoRound
+  modal run tools/modal-quant/nex_n25_mini_uncensored_w4a16.py --upload-repo com-kotobalabs/Nex-N2.5-mini-Uncensored-W4A16-AutoRound --public
+  (publish-only, after a finished quantize):  ... --skip-quant --upload-repo <repo> --public
 
-Output lands on the Volume nex-n25-mini-uncensored-w4a16 under /vol/out, and with
---upload-repo in a PRIVATE HF repo (making it public is an owner decision).
+Output lands on the Volume nex-n25-mini-uncensored-w4a16 under /vol/out; --upload-repo
+pushes it to HF (private unless --public; owner instruction 2026-09-18: publish under
+https://huggingface.co/com-kotobalabs).
 """
 import modal
 
@@ -80,23 +82,94 @@ def quantize(model_path: str, iters: int = 200, nsamples: int = 128, seqlen: int
     return {"rc": rc, "wall_s": round(time.time() - t0), "produced": produced}
 
 
+MODEL_CARD = """---
+license: apache-2.0
+base_model: orcarouter/Nex-N2.5-mini-Uncensored
+tags:
+- auto-round
+- w4a16
+- int4
+- gptq
+- vllm
+- qwen3_5_moe
+- uncensored
+- abliterated
+pipeline_tag: text-generation
+---
+
+# Nex-N2.5-mini-Uncensored-W4A16-AutoRound
+
+W4A16 (INT4 weights, group size 128, symmetric, BF16 activations) quantization of
+[orcarouter/Nex-N2.5-mini-Uncensored](https://huggingface.co/orcarouter/Nex-N2.5-mini-Uncensored)
+(the abliterated Nex-N2.5-mini, a Qwen3.5-MoE 35B-A3B vision-language model) in
+`auto_gptq` format, loadable by vLLM (Marlin / XPU) and SGLang.
+
+## Why this exists
+
+orcarouter publishes the Uncensored weights as BF16 (65 GiB), FP8 (34 GiB, Hopper+),
+NVFP4 (22 GiB, Blackwell only), MLX (Apple) and GGUF (llama.cpp). None of those loads
+in vLLM on a 32 GiB non-Blackwell card. [quant-mind/Nex-N2.5-mini-W4A16-AutoRound]
+(https://huggingface.co/quant-mind/Nex-N2.5-mini-W4A16-AutoRound) filled that gap for
+the STOCK model; this repository applies the same published recipe to the Uncensored
+weights, so the two differ in base weights only. Built for the murakumo fleet's
+Intel Arc Pro B70 (32 GiB) head, where vLLM XPU + XPU graph measured ~1,128 tok/s
+aggregate on the stock W4A16 checkpoint vs ~137 tok/s for llama.cpp IQ4_XS on the same
+card (root ADR-2609181615, com-junkawasaki/root).
+
+## Recipe (identical to quant-mind's config.json)
+
+- Intel AutoRound 0.15.1, `--scheme W4A16 --group_size 128` (sym), `--iters 200`,
+  `--nsamples 128 --seqlen 2048`, calibration `NeelNanda/pile-10k`, `--low_gpu_mem_usage`
+- Kept in BF16: `mlp.gate` (router), `mlp.shared_expert_gate`, `mtp`, `lm_head`,
+  embeddings, the visual tower
+- Quantized: `linear_attn.*_proj`, `self_attn.{q,k,v,o}_proj`, all 256 `mlp.experts.*`,
+  `mlp.shared_expert.*`
+- Export format: `auto_gptq`
+- Built on Modal (H100) by the job `tools/modal-quant/nex_n25_mini_uncensored_w4a16.py`
+  in kotoba-lang/murakumo.
+
+## Use
+
+```bash
+vllm serve com-kotobalabs/Nex-N2.5-mini-Uncensored-W4A16-AutoRound \
+    --reasoning-parser qwen3 --max-model-len 65536 --gpu-memory-utilization 0.90
+```
+
+The model thinks before answering; without `--reasoning-parser qwen3` the reasoning
+leaks into `content`.
+
+## Caveats
+
+- Abliterated / uncensored derivative: it will not refuse. Deploy behind your own policy
+  layer; the murakumo gateway runs it only behind governed organisms.
+- Quality vs the BF16 source is not evaluated here beyond a coherence probe; the
+  quantization error profile is the one AutoRound publishes for this recipe.
+- License follows the base: Apache-2.0 (nex-agi/Nex-N2.5-mini) as relicensed by orcarouter.
+"""
+
+
 @app.function(image=image, volumes={"/vol": vol}, secrets=[hf_secret],
               cpu=8, memory=32 * 1024, timeout=3 * 3600)
-def upload(repo: str) -> str:
+def upload(repo: str, public: bool = False) -> str:
     import os
     from huggingface_hub import HfApi
     dirs = [d for d in sorted(os.listdir(OUT_ROOT)) if os.path.isdir(os.path.join(OUT_ROOT, d))]
     if len(dirs) != 1:
         raise SystemExit(f"expected exactly one output dir under {OUT_ROOT}, found {dirs}")
+    src = os.path.join(OUT_ROOT, dirs[0])
+    with open(os.path.join(src, "README.md"), "w") as f:
+        f.write(MODEL_CARD)
     api = HfApi()
-    api.create_repo(repo, private=True, exist_ok=True)
-    api.upload_large_folder(repo_id=repo, folder_path=os.path.join(OUT_ROOT, dirs[0]), repo_type="model")
-    return f"https://huggingface.co/{repo} (private) <- {dirs[0]}"
+    api.create_repo(repo, private=not public, exist_ok=True)
+    api.upload_large_folder(repo_id=repo, folder_path=src, repo_type="model")
+    if public:
+        api.update_repo_settings(repo_id=repo, private=False)
+    return f"https://huggingface.co/{repo} ({'public' if public else 'private'}) <- {dirs[0]}"
 
 
 @app.local_entrypoint()
 def main(upload_repo: str = "", iters: int = 200, nsamples: int = 128, seqlen: int = 2048,
-         skip_quant: bool = False):
+         skip_quant: bool = False, public: bool = False):
     import json
     src = download.remote()
     print("source at", src)
@@ -106,4 +179,4 @@ def main(upload_repo: str = "", iters: int = 200, nsamples: int = 128, seqlen: i
         if r["rc"] != 0:
             raise SystemExit(f"auto-round exited {r['rc']}")
     if upload_repo:
-        print(upload.remote(upload_repo))
+        print(upload.remote(upload_repo, public=public))
