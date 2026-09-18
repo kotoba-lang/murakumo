@@ -159,6 +159,11 @@ def upload(repo: str, public: bool = False) -> str:
     src = os.path.join(OUT_ROOT, dirs[0])
     with open(os.path.join(src, "README.md"), "w") as f:
         f.write(MODEL_CARD)
+    # upload_large_folder keeps its progress in <src>/.cache/huggingface and would treat a second
+    # target repo as already uploaded (measured 2026-09-18: the public repo received only
+    # README + .gitattributes). Drop the marker so every target gets the full folder.
+    import shutil
+    shutil.rmtree(os.path.join(src, ".cache"), ignore_errors=True)
     api = HfApi()
     api.create_repo(repo, private=not public, exist_ok=True)
     api.upload_large_folder(repo_id=repo, folder_path=src, repo_type="model")
