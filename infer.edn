@@ -783,6 +783,9 @@
    ;; 40,263 prompt tokens -> finish stop, correct, prefill 131.3 / decode
    ;; 17.7, wall 308 s. Catalog: PUT /infer/models/nex-n2.5-mini-uncensored
    ;; (context 65536, serving/fresh). Root ADR adr-2609161000.
+   ;; 2026-09-18: xavier is now the FALLBACK head; aiueos-6600hs-1 (4 slots x
+   ;; 65536, 60.5 tok/s alone) is primary -- see the 6600hs-1 note further down
+   ;; and fleet.edn. Root ADR adr-2609181200.
    :model/served-by :llama-server
    :model/port 8090
    :model/context 65536}
@@ -812,9 +815,10 @@
    ;; Vulkan, :8090, the card to itself since the owner's "nex だけにして"):
    ;; llama-bench pp512 908.0 / tg128 50.11; E2E 60.3 tok/s single, 48.2 +
    ;; 48.2 with 2 slots busy, 6291-token prefill 831 tok/s -- 3.3x xavier.
-   ;; 2 slots x 65536. The gateway still routes this id to xavier by name
-   ;; (x-murakumo-route-head: xavier), so that node's join is enrolled but
-   ;; idle until cloud-murakumo-api points ao/usagi's draft at it (fleet.edn).
+   ;; 2026-09-18: primary head for this id (cloud-murakumo-api PR #272,
+   ;; x-murakumo-route-head: 6600hs1; xavier is the unreachable-fallback),
+   ;; 4 slots x 65536; ceiling ~130-137 tok/s aggregate (fleet.edn has the
+   ;; --parallel sweep). Gateway probe: 60.5 tok/s alone, 4 x ~35 concurrent.
    :model/verified-node "gad"
    :model/shape-only? false
    :model/paint true
