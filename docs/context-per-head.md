@@ -1,5 +1,53 @@
 # Optimal context per head, measured 2026-09-10
 
+## Mishima PTQ1 on Apple Silicon, measured 2026-09-20
+
+`Ternary-Bonsai-2-27B-PTQ1_0.gguf` declares a native training context of
+262,144 tokens. This is not a RoPE extrapolation. The model is a 64-layer
+Qwen3.5 hybrid with 16 full-attention layers, 4 KV heads and 256-element K/V
+heads. The runtime measurement is authoritative because the flat 64-layer KV
+arithmetic below does not account for the 48 recurrent layers.
+
+On the 32 GiB M1 Max, Prism llama.cpp candidate `239413b3e` loaded these two
+configurations with `--fit off`:
+
+| slots | context per slot | KV | Metal allocation | result |
+|---:|---:|---|---:|---|
+| 1 | 262,144 | q8_0 K/V | 15,913 MiB | server loaded |
+| 2 | 262,144 | q4_0 K/V | 17,623 MiB | server loaded; both slots generated concurrently |
+
+The two-slot command needs a total context of 524,288 because llama.cpp divides
+`--ctx-size` by `--parallel`. Two simultaneous 64-token generations completed
+inside the server in 28.296 s: 2.31 tok/s per slot and 4.52 aggregate tok/s.
+One HTTP response then failed the model's Content-only output parser, so this is
+a scheduler/kernel concurrency measurement, not two successful formatted API
+responses. Full 262K prompt ingestion latency and answer quality at the boundary
+remain unmeasured.
+
+Recommended M1 Max profiles:
+
+    # one native window; preferred for conversation throughput
+    --ctx-size 262144 --parallel 1 \
+      --cache-type-k q8_0 --cache-type-v q8_0 --cache-ram 0
+
+    # two native windows; capacity-first, lower per-request decode
+    --ctx-size 524288 --parallel 2 \
+      --cache-type-k q4_0 --cache-type-v q4_0 --cache-ram 0
+
+The 16 GiB M4 minis are not qualified for 256K. A single q4 profile projects to
+about 11.8 GiB of Metal allocation before macOS and co-resident fleet services;
+the live canary already showed pageouts at its 8K profile. Two 256K slots need
+17.6 GiB of Metal allocation and exceed physical RAM outright. Keep those nodes
+at 8K with compaction; use the M1 Max with one slot when a native 256K request is
+required.
+
+The same qualification measured the PTQ1 dense Metal row tile change in
+[PrismML-Eng/llama.cpp PR #225](https://github.com/PrismML-Eng/llama.cpp/pull/225):
+M1 Max TG128 improved 10.300 to 11.505 tok/s, with 45/45 `MUL_MAT` and
+75/75 `MUL_MAT_ID` backend cases passing. The contributor fork default branch
+contains merge `53ece469d4010ac43b69a8c77e294b789b025896`; upstream merge requires
+a PrismML-Eng maintainer.
+
 Qwen3.8-27B's KV geometry, read out of the GGUF: 64 blocks x 4 KV heads x
 (256+256) = **131,072 elements per token**. Per token that is 256 KiB at f16,
 136 KiB at q8_0, 72 KiB at q4_0. Everything below follows from that number and

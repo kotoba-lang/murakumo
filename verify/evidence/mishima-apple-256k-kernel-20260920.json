@@ -1,0 +1,87 @@
+{
+  "schema": "murakumo.mishima-apple-256k-kernel/v1",
+  "measured_at": "2026-09-20T21:00:00+09:00",
+  "model": {
+    "id": "mishima",
+    "artifact": "Ternary-Bonsai-2-27B-PTQ1_0.gguf",
+    "sha256": "53107f530aa52eb00912263ab1ee29bd199261c87cd7b4ad4ca1318c1fe33ee3",
+    "architecture": "qwen35",
+    "parameters": 26900000000,
+    "layers": 64,
+    "full_attention_layers": 16,
+    "native_context": 262144,
+    "kv_heads": 4,
+    "key_length": 256,
+    "value_length": 256
+  },
+  "runtime": {
+    "repository": "PrismML-Eng/llama.cpp",
+    "base_commit": "9a9394a895b96003ca842a6041cb28ac49a108f7",
+    "candidate_commit": "239413b3ec1f4e99309780ae20bd7024e1e3d361",
+    "fork_default_merge": "53ece469d4010ac43b69a8c77e294b789b025896",
+    "upstream_pr": "https://github.com/PrismML-Eng/llama.cpp/pull/225",
+    "upstream_pr_state_at_recording": "open-mergeable-maintainer-permission-required"
+  },
+  "kernel": {
+    "change": "dense PTQ1 Metal output-row tile 4 to 5; MUL_MAT_ID remains 4",
+    "m1_max_tg128_before_tok_s": 10.300194,
+    "m1_max_tg128_after_tok_s": 11.505439,
+    "speedup": 1.1170128436,
+    "mul_mat_tests": {"passed": 45, "total": 45},
+    "mul_mat_id_tests": {"passed": 75, "total": 75},
+    "rejected": [
+      "six-row and eight-row variants failed numerical backend tests",
+      "floor-to-trunc preserved correctness but reduced measured decode throughput"
+    ]
+  },
+  "m1_max_32g": {
+    "hardware_memory_bytes": 34359738368,
+    "concurrency_1": {
+      "command_profile": "--ctx-size 262144 --parallel 1 --cache-type-k q8_0 --cache-type-v q8_0 --cache-ram 0 --fit off",
+      "context_per_slot": 262144,
+      "server_loaded": true,
+      "metal_total_mib": 15913,
+      "metal_model_mib": 5664,
+      "metal_context_mib": 8853,
+      "metal_compute_mib": 1395,
+      "metal_free_mib": 9645
+    },
+    "concurrency_2": {
+      "command_profile": "--ctx-size 524288 --parallel 2 --cache-type-k q4_0 --cache-type-v q4_0 --cache-ram 0 --fit off",
+      "context_per_slot": 262144,
+      "server_loaded": true,
+      "metal_total_mib": 17623,
+      "metal_model_mib": 5664,
+      "metal_context_mib": 9515,
+      "metal_compute_mib": 2443,
+      "metal_free_mib": 7934,
+      "concurrent_probe": {
+        "requests": 2,
+        "generated_tokens_per_request": 64,
+        "server_wall_s": 28.29649,
+        "per_slot_tok_s": 2.31,
+        "aggregate_tok_s": 4.52,
+        "inference_completed": 2,
+        "formatted_http_successes": 1,
+        "boundary": "one response failed after generation because random ignore-eos output did not match the Content-only parser"
+      }
+    }
+  },
+  "m4_mini_16g": {
+    "native_256k_concurrency_1_qualified": false,
+    "native_256k_concurrency_2_qualified": false,
+    "projected_single_slot_q4_metal_mib": 11817,
+    "two_slot_q4_metal_mib": 17623,
+    "observed_live_condition": "the asher canary pageout counter increased and free-memory percentage fell to 11 percent while serving the 8K profile with co-resident services",
+    "decision": "keep 8192 context with compaction; do not deploy 256K on the 16 GiB fleet"
+  },
+  "qualification": {
+    "native_context_metadata_verified": true,
+    "m1_concurrency_1_loaded": true,
+    "m1_concurrency_2_loaded": true,
+    "m1_two_slot_scheduler_exercised": true,
+    "full_256k_prompt_prefill_measured": false,
+    "quality_at_256k_boundary_measured": false,
+    "recommended_profile": "M1 Max concurrency 1 with q8_0 KV"
+  }
+}
