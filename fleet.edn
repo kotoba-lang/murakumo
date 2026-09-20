@@ -212,8 +212,21 @@
   ;; so every admitted stream keeps >= 35 tok/s (xavier's single slot: 18.5).
   ;; The b70 role (murakumo-main) is NOT restored by this; see the paragraph
   ;; above and root ADR adr-2609161500 / adr-2609181615.
+  ;; 2026-09-20 owner retired Nex and ended co-residency. Nex join/vLLM units
+  ;; remain disabled with weights retained for rollback. This node now serves
+  ;; only Mishima through Prism llama.cpp Vulkan at one 131072-token q4 KV
+  ;; slot. Measured exact-PTQ1 prompts: 10,054 tokens at 152.31 prompt tok/s
+  ;; (66.0 s), 31,054 at 90.47 tok/s (343.3 s). It is therefore a normal and
+  ;; long head, not an ultra head; >30K stays pinned to gad.
   {:name "aiueos-6600hs-1" :host "root@100.98.24.37" :rpc-ip "192.168.1.2" :mac "9c:6b:00:cf:ad:55" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "vulkan-infer"}
-   :node/serves ["nex-n2.5-mini-uncensored" "mishima"]
-   :node/serves-exception {:reason "Nex remains the fast compaction head while native Mishima uses the card's remaining measured capacity"
-                           :adr "verify/evidence/mishima-fleet-aggregate-20260920.json"
-                           :until "2027-03-31"}}]}
+   :node/serves ["mishima"]}
+
+  ;; aiueos K16 (Ryzen 7 7735HS / Radeon 680M, 26 GiB usable RAM). 2026-09-20
+  ;; owner retired Nex and Ling and ended co-residency. Their joins, llama
+  ;; units, and watchdog timer remain disabled; weights are retained. The
+  ;; portable Prism Vulkan build recognizes PTQ1 type 143 and keeps one
+  ;; 131072-token q4 KV Mishima slot active. A 10,054-token prompt completed
+  ;; at 25.13 prompt tok/s (400.1 s), so this is a warm standby and is not in
+  ;; the public router until latency is improved.
+  {:name "aiueos-k16" :host "root@100.66.205.17" :roles ["compute"] :labels {:tier "edge" :zone "jp" :role "vulkan-infer-standby"}
+   :node/serves ["mishima"]}]}

@@ -1,0 +1,23 @@
+[Unit]
+Description=Murakumo Mishima Ternary Bonsai 2 27B inference on K16
+After=network-online.target tailscaled.service
+Wants=network-online.target
+Conflicts=murakumo-edge-usagi-llama.service murakumo-k16-nex-n25-mini-llama.service murakumo-k16-qwen38u-llama.service
+
+[Service]
+Type=simple
+User=aiueos
+Group=aiueos
+SupplementaryGroups=video render
+WorkingDirectory=/home/aiueos/murakumo/prism-llama-b10709
+# K16 is a Mishima-only node. Nex and Ling remain disabled so this single
+# 128K q4 KV slot owns the unified-memory budget.
+ExecStart=/home/aiueos/murakumo/prism-llama-b10709/llama-server --model /home/aiueos/models/mishima/Ternary-Bonsai-2-27B-PTQ1_0.gguf --alias prism-ml/Ternary-Bonsai-2-27B-PTQ1_0 --host 100.66.205.17 --port 8094 --parallel 1 --ctx-size 131072 --cache-type-k q4_0 --cache-type-v q4_0 --flash-attn on -ngl 99 --no-webui
+Restart=always
+RestartSec=3
+TimeoutStartSec=0
+TimeoutStopSec=30
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
