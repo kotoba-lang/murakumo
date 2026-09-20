@@ -1,0 +1,14 @@
+[Unit]
+Description=Murakumo Mishima Ternary Bonsai 2 27B CUDA inference
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/nvme/prism-llama.cpp/build-cuda114/bin
+ExecStart=/mnt/nvme/prism-llama.cpp/build-cuda114/bin/llama-server -m /mnt/nvme/models/mishima/Ternary-Bonsai-2-27B-PTQ1_0.gguf -ngl 99 -fa off -c 32768 --parallel 1 --host 100.87.226.80 --port 8094 --alias mishima --no-webui
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
