@@ -21,23 +21,23 @@
  ;; today (mlx_audio.server needs webrtcvad), so the reconciler reports it
  ;; MISSING while idle — that is the honest state, not drift to repair.
  :nodes
- [{:name "naphtali" :host "naphtali" :rpc-ip "192.168.1.25" :mac "1c:f6:4c:35:21:a5" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :media :model "ltxv-2b-0.9.6-distilled-04-25.safetensors"}}
+ [{:name "naphtali" :host "naphtali" :rpc-ip "192.168.1.25" :mac "1c:f6:4c:35:21:a5" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves ["ltxv-2b-0.9.6-distilled-04-25.safetensors" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared media plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}
   ;; simeon is the ipfs-pinner — its IPFS daemon owns UDP 4001, so give the mesh
   ;; node a different libp2p port (4001 default would fail swarm init).
-  {:name "simeon"   :host "simeon@simeon" :rpc-ip "192.168.1.24" :mac "1c:f6:4c:51:5e:ec" :p2p-port 4003 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :media :model "waiREALMIX_v11.safetensors"}}
-  {:name "judah"    :host "judah"    :rpc-ip "192.168.1.21" :mac "1c:f6:4c:56:a9:52" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :audio :model "qwen3-tts"}}
-  {:name "zebulun"  :host "zebulun"  :rpc-ip "192.168.1.19" :mac "1c:f6:4c:57:c8:4d" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :media :model "waiIllustriousSDXL_v150.safetensors"}}
-  {:name "levi"     :host "levi@levi" :rpc-ip "192.168.1.26" :mac "1c:f6:4c:62:84:7d" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :audio :model "qwen3-tts"}}
-  {:name "joseph"   :host "joseph@joseph" :rpc-ip "192.168.1.17" :mac "1c:f6:4c:4e:b9:2b" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :media :model "waiREALCN_v150.safetensors"}}
+  {:name "simeon"   :host "simeon@simeon" :rpc-ip "192.168.1.24" :mac "1c:f6:4c:51:5e:ec" :p2p-port 4003 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves ["waiREALMIX_v11.safetensors" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared media plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}
+  {:name "judah"    :host "judah"    :rpc-ip "192.168.1.21" :mac "1c:f6:4c:56:a9:52" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves ["qwen3-tts" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared audio plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}
+  {:name "zebulun"  :host "zebulun"  :rpc-ip "192.168.1.19" :mac "1c:f6:4c:57:c8:4d" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves ["waiIllustriousSDXL_v150.safetensors" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared media plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}
+  {:name "levi"     :host "levi@levi" :rpc-ip "192.168.1.26" :mac "1c:f6:4c:62:84:7d" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves ["qwen3-tts" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared audio plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}
+  {:name "joseph"   :host "joseph@joseph" :rpc-ip "192.168.1.17" :mac "1c:f6:4c:4e:b9:2b" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves ["waiREALCN_v150.safetensors" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared media plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}
   ;; issachar already runs a kotoba-server on :8077 (yabai CTI persistence) — give
   ;; the murakumo mesh node its own ports so the two coexist.
-  {:name "issachar" :host "issachar" :rpc-ip "192.168.1.23" :mac "1c:f6:4c:55:db:4b" :port 8076 :p2p-port 4002 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :media :model "ltxv-2b-0.9.6-distilled-04-25.safetensors"}}
-  {:name "dan"      :host "dan@dan"  :rpc-ip "192.168.1.18" :mac "1c:f6:4c:5a:34:d9" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp" :role "pdshost"} :node/serves {:plane :media :model "waiREALCN_v150.safetensors"}}
-  {:name "benjamin" :host "benjamin" :rpc-ip "192.168.1.20" :mac "1c:f6:4c:53:5b:d4" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves {:plane :media :model "waiREALMIX_v11.safetensors"}}
+  {:name "issachar" :host "issachar" :rpc-ip "192.168.1.23" :mac "1c:f6:4c:55:db:4b" :port 8076 :p2p-port 4002 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves ["ltxv-2b-0.9.6-distilled-04-25.safetensors" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared media plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}
+  {:name "dan"      :host "dan@dan"  :rpc-ip "192.168.1.18" :mac "1c:f6:4c:5a:34:d9" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp" :role "pdshost"} :node/serves ["waiREALCN_v150.safetensors" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared media plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}
+  {:name "benjamin" :host "benjamin" :rpc-ip "192.168.1.20" :mac "1c:f6:4c:53:5b:d4" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves ["waiREALMIX_v11.safetensors" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared media plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}
   ;; asher = replica/failover; also the canary (verified reachable first).
   ;; Avoid macOS' 49152-65535 ephemeral range: tailscaled owns persistent
   ;; outbound flows on this node whose source ports collided with 50052/50053.
-  {:name "asher"    :host "asher"    :rpc-ip "192.168.1.22" :rpc-port 40052 :mac "1c:f6:4c:4f:46:5c" :roles ["pin" "compute" "relay"] :labels {:tier "edge" :zone "jp" :role "canary"} :node/serves {:plane :media :model "ltxv-2b-0.9.6-distilled-04-25.safetensors"}}
+  {:name "asher"    :host "asher"    :rpc-ip "192.168.1.22" :rpc-port 40052 :mac "1c:f6:4c:4f:46:5c" :roles ["pin" "compute" "relay"] :labels {:tier "edge" :zone "jp" :role "canary"} :node/serves ["ltxv-2b-0.9.6-distilled-04-25.safetensors" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared media plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}
   ;; gad — Linux/ROCm GPU box, NOT a 12-tribes Mac mini and not a kotoba P2P
   ;; mesh member (no :pin role, doesn't run kotoba-server). Compute-only:
   ;; murakumo.infer.media's ComfyUI render farm (animagine-xl-4.0 resident),
@@ -210,4 +210,8 @@
   ;; so every admitted stream keeps >= 35 tok/s (xavier's single slot: 18.5).
   ;; The b70 role (murakumo-main) is NOT restored by this; see the paragraph
   ;; above and root ADR adr-2609161500 / adr-2609181615.
-  {:name "aiueos-6600hs-1" :host "root@100.98.24.37" :rpc-ip "192.168.1.2" :mac "9c:6b:00:cf:ad:55" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "vulkan-infer"} :node/serves "nex-n2.5-mini-uncensored"}]}
+  {:name "aiueos-6600hs-1" :host "root@100.98.24.37" :rpc-ip "192.168.1.2" :mac "9c:6b:00:cf:ad:55" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "vulkan-infer"}
+   :node/serves ["nex-n2.5-mini-uncensored" "mishima"]
+   :node/serves-exception {:reason "Nex remains the fast compaction head while native Mishima uses the card's remaining measured capacity"
+                           :adr "verify/evidence/mishima-fleet-aggregate-20260920.json"
+                           :until "2027-03-31"}}]}

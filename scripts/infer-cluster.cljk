@@ -1,7 +1,7 @@
 #!/usr/bin/env kbb
 ;; infer-cluster — one OpenAI-shaped endpoint in front of N murakumo heads.
 ;;
-;;   kbb --backend sci scripts/infer-cluster.cljk [--port 8790] [--heads ip:port,ip:port]
+;;   kbb --backend sci scripts/infer-cluster.cljk [--bind 127.0.0.1] [--port 8795] [--heads ip:port,ip:port]
 ;;
 ;; ## Why this exists
 ;;
@@ -42,6 +42,7 @@
 ;; both reported success, and which one answered a request was left to the
 ;; resolver. A silent split like that is worse than a refused bind.
 (def port (js/parseInt (opt "--port" "8795")))
+(def bind (opt "--bind" "127.0.0.1"))
 (def heads
   (vec (for [h (str/split (opt "--heads" "100.113.200.45:8094,100.98.142.59:8094") #",")
              :when (not (str/blank? h))]
@@ -123,6 +124,6 @@
 
 ;; Loopback only: this fronts heads that answer with no authentication of
 ;; their own, so it must not widen their reach.
-(.listen (http/createServer serve) port "127.0.0.1"
-         #(println (str "infer-cluster on http://127.0.0.1:" port
+(.listen (http/createServer serve) port bind
+         #(println (str "infer-cluster on http://" bind ":" port
                         "  heads: " (str/join ", " heads))))

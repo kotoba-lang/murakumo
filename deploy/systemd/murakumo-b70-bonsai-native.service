@@ -1,0 +1,19 @@
+[Unit]
+Description=Murakumo native Ternary Bonsai 2 27B inference
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/kgpu
+Environment=NEX_GGUF=/root/kgpu/models/Ternary-Bonsai-2-27B-PTQ1_0.gguf
+Environment=NEX_MODEL_ID=prism-ml/Ternary-Bonsai-2-27B-PTQ1_0
+Environment=NEX_CONTEXT=8192
+# 8092 is the stable Workers-VPC address and now belongs to the fleet router.
+# The B70 native head stays private behind that router on loopback 8093.
+ExecStart=/usr/bin/node /opt/kbb-engine/cli.js /root/kgpu/serve_http.cljk /root/kgpu/kexe-loader-gpu /root/kgpu/bonsai64.raw 13778 x86_64 8093 42,41,37,39 400000
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
