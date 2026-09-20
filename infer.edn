@@ -189,7 +189,21 @@
    :model/kv {:layers 64 :kv-heads 4 :key-length 256 :value-length 256
               :elements-per-token 131072}
    :model/kv-measured-from "Qwen3.8-27B architecture; 32768-token slots verified on gad and Xavier, 8192-token slots on the ten M4 heads and B70"
-   :model/kv-measured-at "2026-09-20"}
+   :model/kv-measured-at "2026-09-20"
+   ;; The GGUF declares native 262144 context. Apple qualification is separate
+   ;; from the fleet serving window: M1 Max 32 GiB loaded one native window with
+   ;; q8 KV and two native windows with q4 KV. The 16 GiB M4 fleet remains at
+   ;; 8192 because even one projected q4 256K allocation leaves too little OS
+   ;; headroom on nodes that already page out at the current serving profile.
+   :model/apple-context-qualified {:hardware "Apple M1 Max 32 GiB"
+                                   :context-per-slot 262144
+                                   :max-concurrency 2
+                                   :concurrency-1-kv :q8_0
+                                   :concurrency-2-kv :q4_0
+                                   :m4-16g-qualified? false}
+   :model/runtime-revision "PrismML-Eng/llama.cpp PR #225; candidate 239413b3ec1f4e99309780ae20bd7024e1e3d361; fork prism merge 53ece469d4010ac43b69a8c77e294b789b025896"
+   :model/evidence ["verify/evidence/mishima-fleet-aggregate-20260920.json"
+                    "verify/evidence/mishima-apple-256k-kernel-20260920.json"]}
 
   ;; MacBook canary only. This pack requires its bundled Hadamard-aware runtime;
   ;; generic MLX loaders do not implement the packed affine transform. The
