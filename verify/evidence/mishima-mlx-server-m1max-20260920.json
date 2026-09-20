@@ -1,0 +1,77 @@
+{
+  "schema": "murakumo.mishima-mlx-server-smoke/v1",
+  "health": {
+    "ok": true,
+    "model": "mishima",
+    "backend": "mlx-vlm-hadamard",
+    "slots": 1,
+    "load_seconds": 3.6047874170180876
+  },
+  "rows": [
+    {
+      "concurrency": 1,
+      "wall_seconds": 12.403835041011916,
+      "completion_tokens": 128,
+      "aggregate_completion_tok_s": 10.319389090292,
+      "requests": [
+        {
+          "http_status": 200,
+          "wall_seconds": 12.399772875010967,
+          "usage": {
+            "prompt_tokens": 144,
+            "completion_tokens": 128,
+            "total_tokens": 272
+          },
+          "timings": {
+            "prompt_per_second": 82.73829274631052,
+            "predicted_per_second": 12.034140951897971,
+            "wall_seconds": 12.39747024999815,
+            "peak_memory_gb": 10.154658428
+          },
+          "finish_reason": "length"
+        }
+      ]
+    },
+    {
+      "concurrency": 2,
+      "wall_seconds": 32.02065637501073,
+      "completion_tokens": 256,
+      "aggregate_completion_tok_s": 7.994839237579939,
+      "requests": [
+        {
+          "http_status": 200,
+          "wall_seconds": 16.161040417006006,
+          "usage": {
+            "prompt_tokens": 144,
+            "completion_tokens": 128,
+            "total_tokens": 272
+          },
+          "timings": {
+            "prompt_per_second": 40.69248578992742,
+            "predicted_per_second": 10.158869440055147,
+            "wall_seconds": 16.158596665976802,
+            "peak_memory_gb": 10.154658428
+          },
+          "finish_reason": "length"
+        },
+        {
+          "http_status": 200,
+          "wall_seconds": 32.02006079201237,
+          "usage": {
+            "prompt_tokens": 144,
+            "completion_tokens": 128,
+            "total_tokens": 272
+          },
+          "timings": {
+            "prompt_per_second": 40.78296591400721,
+            "predicted_per_second": 10.399217039446368,
+            "wall_seconds": 32.01759583299281,
+            "peak_memory_gb": 10.154658428
+          },
+          "finish_reason": "length"
+        }
+      ]
+    }
+  ],
+  "interpretation": "The canary exposes one serialized MLX slot; concurrency two measures queueing, not continuous batching."
+}
