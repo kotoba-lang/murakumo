@@ -52,9 +52,9 @@
    ;; 10eros-max is the lane nothing else can hold; waiREALMIX_v11 stays here for
    ;; the IP-Adapter face reference (the only node with the loader). Declared
    ;; as the exception the one-model rule requires, not as an implicit one.
-   :node/serves ["10eros-max" "wai-realmix-v11"]
-   :node/serves-exception {:reason "three ComfyUI instances on one 51 GB APU; 10eros-max (20 GiB UNET + 32B text encoder) fits no other node, and the IP-Adapter face graph exists only here"
-                           :adr "adr-2609117000-oppai-studio-bot-and-fleet-media-placement"
+   :node/serves ["10eros-max" "wai-realmix-v11" "mishima"]
+   :node/serves-exception {:reason "three ComfyUI instances and one measured Mishima slot share the 51 GB APU; Mishima PTQ1 decode remained 20.57 tok/s with the existing workloads resident"
+                           :adr "verify/evidence/mishima-fleet-aggregate-20260920.json"
                            :until "2027-03-31"}}
   ;; xavier — NVIDIA Jetson AGX Xavier devkit (32GB LPDDR4x, 512-core Volta
   ;; GPU, 8-core Carmel), NOT a 12-tribes Mac mini and not a kotoba P2P mesh
@@ -133,7 +133,9 @@
   ;; `ssh -o "ProxyCommand=tailscale nc %h %p" xavier@xavier.tail110d8b.ts.net`
   ;; (or the raw Tailscale IP with the same ProxyCommand) as a working
   ;; fallback when `ssh xavier` / `tailscale ssh xavier` fail to resolve.
-  {:name "xavier" :host "xavier" :rpc-ip "192.168.1.28" :mac "48:b0:2d:18:4d:16" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "cuda-infer"} :node/serves "nex-n2.5-mini-uncensored"}
+  ;; 2026-09-20 owner retired Nex on Xavier. The unit and weights remain as a
+  ;; disabled rollback; the released slot now serves Mishima at 8,192 context.
+  {:name "xavier" :host "xavier" :rpc-ip "192.168.1.28" :mac "48:b0:2d:18:4d:16" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "cuda-infer"} :node/serves "mishima"}
 
   ;; aiueos-6600hs-1 -- the box that used to be the tailnet node `ubuntu-server`,
   ;; reinstalled 2026-09-16 (Ubuntu 24.04.4). The name is the owner's; the

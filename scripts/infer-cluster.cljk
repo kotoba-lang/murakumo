@@ -47,6 +47,10 @@
   (vec (for [h (str/split (opt "--heads" "100.113.200.45:8094,100.98.142.59:8094") #",")
              :when (not (str/blank? h))]
          (str/trim h))))
+(def long-heads
+  (set (for [h (str/split (opt "--long-heads" "") #",")
+             :when (not (str/blank? h))]
+         (str/trim h))))
 
 ;; head -> {:inflight n :healthy? bool :failures n :served n}
 (def state (atom (into {} (for [h heads] [h {:inflight 0 :healthy? true :failures 0 :served 0}]))))
@@ -54,9 +58,10 @@
 (defn- pick
   "The healthy head with the fewest requests in flight. Ties go to the one
   that has served least, so a cold cluster spreads instead of stacking."
-  []
+  [long?]
   (let [s @state
-        live (filter (fn [[_ v]] (:healthy? v)) s)]
+        live (filter (fn [[h v]] (and (:healthy? v)
+                                      (or (not long?) (contains? long-heads h)))) s)]
     (when (seq live)
       (first (first (sort-by (fn [[_ v]] [(:inflight v) (:served v)]) live))))))
 
@@ -82,7 +87,8 @@
   30000)
 
 (defn- proxy! [req res]
-  (if-let [h (pick)]
+  (let [long? (= "32768" (aget (.-headers req) "x-murakumo-required-context"))]
+  (if-let [h (pick long?)]
     (let [[host p] (str/split h #":")
           _ (mark! h #(-> % (update :inflight inc) (update :served inc)))
           done (atom false)
@@ -114,7 +120,8 @@
       (.on upstream "timeout" (fn [] (.destroy upstream)))
       (.pipe req upstream))
     (do (.writeHead res 503 #js {"content-type" "application/json"})
-        (.end res (js/JSON.stringify #js {:error "no healthy head in the cluster"})))))
+        (.end res (js/JSON.stringify #js {:error "no healthy head in the cluster"
+                                          :required_context (if long? 32768 8192)}))))))
 
 (defn- serve [req res]
   (if (= "/cluster/status" (.-url req))
@@ -126,4 +133,5 @@
 ;; their own, so it must not widen their reach.
 (.listen (http/createServer serve) port bind
          #(println (str "infer-cluster on http://" bind ":" port
-                        "  heads: " (str/join ", " heads))))
+                        "  heads: " (str/join ", " heads)
+                        "  long heads: " (str/join ", " long-heads))))

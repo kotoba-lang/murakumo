@@ -1,0 +1,16 @@
+[Unit]
+Description=Murakumo Mishima Ternary Bonsai 2 27B ROCm inference
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gad
+WorkingDirectory=/home/gad/murakumo/prism-llama/llama-prism-b10709-9a9394a
+Environment=LD_LIBRARY_PATH=/opt/rocm/core-7.13/lib:/home/gad/murakumo/prism-llama/llama-prism-b10709-9a9394a
+ExecStart=/home/gad/murakumo/prism-llama/llama-prism-b10709-9a9394a/llama-server -m /home/gad/models/mishima/Ternary-Bonsai-2-27B-PTQ1_0.gguf -ngl 99 -fa on -c 32768 --parallel 1 --host 100.82.98.110 --port 8094 --alias mishima --no-webui
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
