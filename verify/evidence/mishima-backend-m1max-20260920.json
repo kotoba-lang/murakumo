@@ -1,0 +1,60 @@
+{
+  "schema": "murakumo.mishima-backend-comparison/v1",
+  "hardware": {
+    "machine": "arm64",
+    "chip": "Apple M1 Max",
+    "memory_bytes": 34359738368
+  },
+  "model_identity": "Ternary Bonsai 2 27B; same source weights, different packing/runtime",
+  "mlx": {
+    "artifact": "MLX affine 2-bit group-128 with Hadamard runtime",
+    "artifact_bytes": 8595477990,
+    "decode_128_tok_s": 10.576808836775742,
+    "decode_samples_tok_s": [
+      11.062280553092922,
+      10.474196647788224,
+      10.193949309446083
+    ],
+    "prefill_prompt_tokens": 512,
+    "prefill_tok_s": 50.02811377453647,
+    "prefill_samples_tok_s": [
+      49.03347804364296,
+      49.40403666923837,
+      51.64682661072808
+    ],
+    "peak_memory_gb": 10.170146821333335
+  },
+  "gguf": {
+    "artifact": "PTQ1_0 1.75 bpw with Prism llama.cpp Metal",
+    "artifact_bytes": 5935527936,
+    "decode_128_tok_s": 9.326857,
+    "decode_samples_tok_s": [
+      9.45678,
+      9.75091,
+      8.77288
+    ],
+    "prefill_prompt_tokens": 512,
+    "prefill_tok_s": 71.469975,
+    "prefill_samples_tok_s": [
+      74.2017,
+      75.6223,
+      64.5859
+    ]
+  },
+  "ratios": {
+    "mlx_over_gguf_decode": 1.1340164041086662,
+    "mlx_over_gguf_prefill": 0.6999878448892205,
+    "mlx_over_gguf_artifact_bytes": 1.448140432103258
+  },
+  "qualification": {
+    "decode_improves": true,
+    "prefill_improves": false,
+    "recommended_for_short_chat": true,
+    "recommended_for_hermes_long_prompts": false
+  },
+  "boundaries": [
+    "MLX prefill used exactly 512 prompt tokens plus one generated token; llama-bench pp used 512 prompt tokens and no generation.",
+    "Decode comparison is 128 generated tokens on both runtimes after warmup.",
+    "Concurrency is qualified separately by mishima-mlx-server-m1max-20260920.json."
+  ]
+}

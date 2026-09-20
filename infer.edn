@@ -191,6 +191,36 @@
    :model/kv-measured-from "Qwen3.8-27B architecture; 32768-token slots verified on gad and Xavier, 8192-token slots on the ten M4 heads and B70"
    :model/kv-measured-at "2026-09-20"}
 
+  ;; MacBook canary only. This pack requires its bundled Hadamard-aware runtime;
+  ;; generic MLX loaders do not implement the packed affine transform. The
+  ;; uncensor layer is an explicit runtime system policy, not modified weights.
+  ;; Same-host M1 Max evidence found faster decode but slower prompt processing,
+  ;; so this does not replace the fleet-wide GGUF `mishima` alias.
+  "mishima-mlx-canary"
+  {:model/id "mishima-mlx-canary"
+   :model/family "Ternary Bonsai 2 / Qwen3.8"
+   :model/format :mlx
+   :model/engine :mlx-vlm-hadamard
+   :model/kind :text
+   :model/variant :affine-2bit-hadamard-runtime-policy
+   :hf/repo "prism-ml/Ternary-Bonsai-2-27B-mlx-2bit"
+   :hf/revision "3f926b415992eaa2ae9dd7b573706494d6bbf787"
+   :model/params-b 27.36
+   :model/layers 64
+   :model/context-train 262144
+   :model/context 8192
+   :model/checkpoint "model.safetensors"
+   :model/weight-bytes 8595477990
+   :model/sha256 "130de5925082c168b7866b2e91b52e44abbafc99017e3ca352b77b5b55a269ed"
+   :model/runtime-policy "deploy/mishima-uncensor-system.txt"
+   :model/uncensor-kind :runtime-system-policy
+   :model/weights-modified? false
+   :model/max-concurrency 1
+   :model/replicas []
+   :model/evidence ["verify/evidence/mishima-mlx-throughput-m1max-20260920.json"
+                    "verify/evidence/mishima-backend-m1max-20260920.json"
+                    "verify/evidence/mishima-mlx-server-m1max-20260920.json"]}
+
   "murakumo-edge-mtp-canary"
   {:model/id "murakumo-edge-mtp-canary"
    :model/family "Ornith-1.5"
