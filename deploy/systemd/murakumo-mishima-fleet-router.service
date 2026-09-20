@@ -1,0 +1,14 @@
+[Unit]
+Description=Murakumo Mishima least-in-flight fleet router
+After=network-online.target murakumo-b70-bonsai-native.service
+Wants=network-online.target murakumo-b70-bonsai-native.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/murakumo/mishima
+ExecStart=/usr/bin/npx --yes nbb /opt/murakumo/mishima/infer-cluster.cljk --bind 0.0.0.0 --port 8092 --heads 127.0.0.1:8093,100.101.27.85:8094,100.81.66.86:8094,100.113.200.45:8094,100.66.28.79:8094,100.102.78.81:8094,100.82.123.35:8094,100.89.204.30:8094,100.98.142.59:8094,100.75.169.8:8094,100.96.122.69:8094
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

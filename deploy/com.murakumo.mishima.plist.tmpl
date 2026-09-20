@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- One Mishima slot on a 16 GiB Apple Silicon fleet node.
+
+     The listener binds the node's Tailscale address, never every interface.
+     The model and Prism llama.cpp runtime are content-checked by the provisioner
+     before this daemon is bootstrapped.  One slot is intentional: concurrent
+     sequences reduce aggregate decode throughput on these 16 GiB M4 minis. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.murakumo.mishima</string>
+  <key>UserName</key><string>__USER__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/env</string>
+    <string>DYLD_LIBRARY_PATH=/Users/Shared/murakumo/mishima/bin</string>
+    <string>/Users/Shared/murakumo/mishima/bin/llama-server</string>
+    <string>-m</string><string>/Users/Shared/murakumo/mishima/model/Ternary-Bonsai-2-27B-PTQ1_0.gguf</string>
+    <string>--host</string><string>__BIND_IP__</string>
+    <string>--port</string><string>8094</string>
+    <string>--ctx-size</string><string>8192</string>
+    <string>--parallel</string><string>1</string>
+    <string>-ngl</string><string>999</string>
+    <string>--no-webui</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/Shared/murakumo/mishima/bin</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>15</integer>
+  <key>StandardOutPath</key><string>/Users/Shared/murakumo/mishima/server.log</string>
+  <key>StandardErrorPath</key><string>/Users/Shared/murakumo/mishima/server.log</string>
+</dict>
+</plist>
