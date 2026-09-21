@@ -66,7 +66,7 @@
 (defn- cmd-verify [args]
   (let [root (aiueos-root args)]
     (.exit js/process
-           (run! "nbb" [(.join path root "os" "aiueos" "scripts" "smoke-qemu-usb-boot.cljs")]
+           (run! "nbb" [(.join path root "os" "aiueos" "scripts" "smoke-qemu-usb-boot.cljk")]
                  {:cwd root}))))
 
 (defn- cmd-flash [args]
@@ -76,7 +76,7 @@
   (let [root (aiueos-root args)
         passthrough (remove #{"flash"} args)]
     (.exit js/process
-           (run! "nbb" (into [(.join path root "os" "aiueos" "scripts" "flash-usb.cljs")]
+           (run! "nbb" (into [(.join path root "os" "aiueos" "scripts" "flash-usb.cljk")]
                              passthrough)
                  {:cwd root}))))
 
