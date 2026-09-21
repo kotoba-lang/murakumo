@@ -1,0 +1,119 @@
+{
+  "schema": "murakumo/serving-experiment-evidence-v1",
+  "date_jst": "2026-09-21",
+  "model": "inclusionAI/LLaDA2.2-flash",
+  "hardware": {
+    "gpu": "NVIDIA B300 SXM6 AC",
+    "memory_mib": 275040,
+    "driver": "580.95.05",
+    "torch": "2.13.0+cu130",
+    "cuda_runtime": "13.0",
+    "compute_capability": "10.3"
+  },
+  "qualified_configuration": {
+    "backend": "SGLang v0.5.20 JointThreshold",
+    "precision": "BF16",
+    "cuda_graph": false,
+    "block_size": 32,
+    "threshold": 0.5,
+    "editing_threshold": 0.0,
+    "max_post_edit_steps": 16,
+    "output_tokens": 64,
+    "repetitions": 3,
+    "operating_concurrency": 8
+  },
+  "base_bf16": [
+    {"concurrency": 1, "aggregate_tokens_per_second": 79.10, "per_request_tokens_per_second": 79.10},
+    {"concurrency": 2, "aggregate_tokens_per_second": 157.60, "per_request_tokens_per_second": 78.80},
+    {"concurrency": 4, "aggregate_tokens_per_second": 323.34, "per_request_tokens_per_second": 80.83},
+    {"concurrency": 8, "aggregate_tokens_per_second": 687.20, "per_request_tokens_per_second": 85.90},
+    {"concurrency": 16, "aggregate_tokens_per_second": 643.00, "per_request_tokens_per_second": 40.19}
+  ],
+  "same_process_lora_ab": {
+    "backend": "SGLang v0.5.20 CSGMV, experimental dLLM-LoRA guard bypass",
+    "base": [
+      {"concurrency": 1, "aggregate_tokens_per_second": 81.0669220653},
+      {"concurrency": 2, "aggregate_tokens_per_second": 149.4219861448},
+      {"concurrency": 4, "aggregate_tokens_per_second": 331.1399151384},
+      {"concurrency": 8, "aggregate_tokens_per_second": 681.5220004886},
+      {"concurrency": 16, "aggregate_tokens_per_second": 643.2482642299}
+    ],
+    "lora": [
+      {"concurrency": 1, "aggregate_tokens_per_second": 84.3629916655, "per_request_tokens_per_second": 84.3629916655},
+      {"concurrency": 2, "aggregate_tokens_per_second": 160.7765036867, "per_request_tokens_per_second": 80.3882518433},
+      {"concurrency": 4, "aggregate_tokens_per_second": 348.3602135672, "per_request_tokens_per_second": 87.0900533918},
+      {"concurrency": 8, "aggregate_tokens_per_second": 713.4877159008, "per_request_tokens_per_second": 89.1859644876},
+      {"concurrency": 16, "aggregate_tokens_per_second": 630.1243536197, "per_request_tokens_per_second": 39.3827721012}
+    ]
+  },
+  "online_fp8": [
+    {"concurrency": 1, "aggregate_tokens_per_second": 98.4861240830},
+    {"concurrency": 2, "aggregate_tokens_per_second": 156.5291125023},
+    {"concurrency": 4, "aggregate_tokens_per_second": 309.6279973579},
+    {"concurrency": 8, "aggregate_tokens_per_second": 339.4819522118}
+  ],
+  "quality": {
+    "dependency_reference_baseline": {
+      "n": 1024,
+      "bf16_correct": 503,
+      "bf16_accuracy": 0.4912109375,
+      "fp8_correct": 496,
+      "fp8_accuracy": 0.484375,
+      "uniform_random_expected_accuracy": 0.394970703125
+    },
+    "lora_training": {
+      "rank": 8,
+      "alpha": 16,
+      "steps": 10,
+      "trainable_parameters": 4456448,
+      "validation_loss_before": 5.53097,
+      "validation_loss_after": 2.68317
+    },
+    "executable_held_out": {
+      "base_passed": 0,
+      "lora_passed": 0,
+      "measured_tasks": 2,
+      "frozen_test_tasks": 4
+    }
+  },
+  "cuda_graph": {
+    "capture_completed_for_batch_sizes": [1, 2, 4, 8],
+    "qualified": false,
+    "failure": "NVIDIA Xid 31/MMU fault and illegal memory access during replay"
+  },
+  "external_diffusiongemma": {
+    "status": "approximate values digitized from Figure 12, not a numeric table",
+    "hardware": "one NVIDIA H100",
+    "precision": "FP8",
+    "input_tokens": 4096,
+    "output_tokens": 1024,
+    "tokens_per_forward": 16,
+    "aggregate_tokens_per_second": {
+      "1": "about 1300",
+      "2": "about 1650",
+      "4": "about 2100",
+      "8": "about 2500-2550",
+      "16": "about 2850-2950",
+      "32": "not numerically published"
+    },
+    "source": "https://arxiv.org/pdf/2608.00146#page=18"
+  },
+  "retained_volumes": [
+    "llada22-flash-bf16-cache",
+    "llada22-optimization-results",
+    "llada22-quantized-checkpoints",
+    "llada22-kotoba-training-data",
+    "llada22-kotoba-train-data-v1",
+    "llada22-kotoba-eval-data-v1",
+    "llada22-kotoba-adapters",
+    "llada2-flash-bf16-cache",
+    "llada2-optimization-results"
+  ],
+  "source_artifact_sha256": {
+    "llada22-b300-sglang-v0520-result.json": "055915f5b1ef36e2763704ec7e45d27d7763e12db410712a326d303f92d1edcb",
+    "llada22-b300-sglang-v0520-eager-fp8-result.json": "eeed04eb90dd9fde350e4505313f3fd67ff0498a350851d5a644bc971ec06fe5",
+    "llada22-b300-sglang-lora-csgmv-ab-result.json": "691b75dada517ad385d3eae6dd33699cf66269237411bfe482fc5dc7df87cdca",
+    "llada22-kotoba-lora-v1-r8-steps10.json": "0f5ea4873fb778ebec9d45183f820f62b42166bdc3e80fcdf9458a565d04c5eb",
+    "llada22-kotoba-exec-v1-base-vs-lora.json": "0aba2f392a38f1b05b1f23776b9bc912b72070d3e03340590a7c3827f721cda7"
+  }
+}
