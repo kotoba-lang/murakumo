@@ -1,5 +1,6 @@
 (ns murakumo.infer.mishima-decode-cosci-test
   (:require [clojure.test :refer [deftest is testing]]
+            [kotodama.inference.ptq1 :as ptq1]
             [murakumo.infer.mishima-decode-cosci :as c]))
 
 (deftest measured-hard-gates-not-jev-select-the-winner
@@ -28,3 +29,18 @@
   (is (every? #(re-matches #"\d{4}-\d{2}-\d{2}" (:on %)) c/observations))
   (is (some #(= :integer-dot-correctness (:id %)) c/observations))
   (is (true? (:semantic-check? (:winner (c/run-tournament))))))
+
+(deftest production-selection-resolves-through-the-shared-ptq1-library
+  (let [runtime (c/production-runtime)]
+    (is (= "PrismML-Eng/llama.cpp" (:runtime/repository runtime)))
+    (is (= "3ae4f51087d8d9292eda16ee00cec54e798ea576"
+           (:runtime/revision runtime)))
+    (is (= :production-k16 (:runtime/qualification runtime)))
+    (is (= 5.875882 (:candidate/decode-tok-s runtime)))))
+
+(deftest metal-remains-an-explicit-canary-not-a-production-inference
+  (is (= :kernel-parity-m1-max
+         (:runtime/qualification (c/metal-canary-runtime))))
+  (is (thrown-with-msg? #?(:clj Exception :cljs js/Error)
+                        #"not production-qualified"
+                        (ptq1/host-runtime :prism-metal-row5 true))))
