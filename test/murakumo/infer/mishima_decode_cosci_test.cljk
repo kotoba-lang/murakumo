@@ -1,0 +1,30 @@
+(ns murakumo.infer.mishima-decode-cosci-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [murakumo.infer.mishima-decode-cosci :as c]))
+
+(deftest measured-hard-gates-not-jev-select-the-winner
+  (let [t (c/run-tournament)]
+    (is (= :experiment-order-only (:jev-authority t)))
+    (is (= :prism-3ae4f510-sdk357-intdot (get-in t [:winner :id])))
+    (is (= 5.875882 (get-in t [:winner :decode-tok-s])))
+    (is (not= :cpu-only-t16 (get-in t [:winner :id]))
+        "Jev's first experiment was measured and rejected, not promoted as truth")))
+
+(deftest every-rejected-candidate-names-the-gate
+  (doseq [r (:rejected (c/run-tournament))]
+    (is (false? (:pass? r)))
+    (is (seq (:failed r)))
+    (is (every? #(and (:gate %) (:field %)) (:failed r)))))
+
+(deftest failure-is-not-equivalent-to-a-slow-result
+  (testing "a timeout has no throughput to rank"
+    (let [r (c/reflect (first (filter #(= :dspark-draft (:id %)) c/candidates)))]
+      (is (false? (:pass? r)))
+      (is (contains? (set (map :gate (:failed r))) :finite-output))))
+  (testing "the deployed control remains admitted"
+    (is (:pass? (c/reflect (first c/candidates))))))
+
+(deftest observations-are-dated-and-the-winner-has-independent-correctness
+  (is (every? #(re-matches #"\d{4}-\d{2}-\d{2}" (:on %)) c/observations))
+  (is (some #(= :integer-dot-correctness (:id %)) c/observations))
+  (is (true? (:semantic-check? (:winner (c/run-tournament))))))

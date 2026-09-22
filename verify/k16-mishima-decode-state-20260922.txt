@@ -1,0 +1,21 @@
+Objective: improve Mishima Ternary-Bonsai-2-27B PTQ1 decode throughput on the aiueos K16 without changing model weights or output semantics.
+
+Measured baseline on 2026-09-22:
+- K16 hardware: Ryzen 7 7735HS, Radeon 680M RADV Vulkan, 26 GiB usable RAM.
+- Server: Prism llama.cpp b10709, one 131072-token q4_0 KV slot, flash attention on, n_gpu_layers=99.
+- Two independent 128-token generations: 1.202206 and 1.202204 decode tokens/s; 105.639 s decode each.
+- Long prompt: 10054 tokens at 25.13 prompt tokens/s.
+- Current idle allocation: 8.98 GB GTT used but only 21 MB VRAM used; model file is 5.94 GB and configured VRAM aperture is 5 GiB.
+- The server logs: failed to fit params to free device memory because n_gpu_layers was forced to 99.
+- The public api.murakumo.cloud router deliberately excludes K16; it is a warm standby, so bounded experiments may restart only this node.
+
+Closed candidate catalog:
+- cpu_only_t8: hide Vulkan, n_gpu_layers=0, 8 CPU threads.
+- cpu_only_t16: hide Vulkan, n_gpu_layers=0, 16 CPU threads.
+- vulkan_full_fa_on: current full Vulkan offload, flash attention on.
+- vulkan_full_fa_off: full Vulkan offload, flash attention off.
+- vulkan_hybrid_32: offload 32 of 64 transformer layers, remainder on CPU.
+- vulkan_hybrid_48: offload 48 of 64 transformer layers, remainder on CPU.
+- vulkan_weights_cpu_kv: full weight offload but KV cache on CPU.
+
+Hard gates: model must load; generate 32 tokens; output must be finite; no OOM/device loss; peak resident plus GPU allocation must stay within K16 capacity. Ranking metric after gates: measured median decode tokens/s, not a predicted score. Jev only prioritizes experiment order.
