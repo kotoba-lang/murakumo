@@ -1,0 +1,24 @@
+{
+  "first_experiment": {
+    "type": "choice",
+    "instructions": "Choose the single candidate most likely to improve decode throughput enough to test first, using the measured RADV GTT/VRAM and forced-offload evidence. Do not invent a candidate.",
+    "criteria": {
+      "cpu_only_t8": "Disable Vulkan and run all layers on the 8-thread CPU.",
+      "cpu_only_t16": "Disable Vulkan and run all layers on 16 CPU threads.",
+      "vulkan_full_fa_on": "Retest the deployed full-offload configuration.",
+      "vulkan_full_fa_off": "Keep full Vulkan offload but disable flash attention.",
+      "vulkan_hybrid_32": "Offload 32 transformer layers and run the rest on CPU.",
+      "vulkan_hybrid_48": "Offload 48 transformer layers and run the rest on CPU.",
+      "vulkan_weights_cpu_kv": "Keep weights on Vulkan and move the KV cache to CPU."
+    }
+  },
+  "cpu_path_promising": {
+    "type": "noul",
+    "instructions": "Given the measurements, is a CPU-only candidate more likely than the deployed full-Vulkan candidate to improve token generation throughput?"
+  },
+  "confidence_level": {
+    "type": "score",
+    "instructions": "Rate confidence that the first selected candidate will beat 1.2022 decode tokens/s on the real K16.",
+    "criteria": ["very_low", "low", "medium", "high", "very_high"]
+  }
+}

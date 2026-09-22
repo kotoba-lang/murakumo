@@ -1,0 +1,45 @@
+{
+  "node": "aiueos-k16",
+  "model": "prism-ml/Ternary-Bonsai-2-27B-PTQ1_0",
+  "measured_at": "2026-09-22",
+  "baseline": {
+    "public_direct_decode_tok_s": [1.202206, 1.202204],
+    "post_restart_api_decode_tok_s": 1.254625,
+    "post_restart_bench_decode_tok_s": 1.276394
+  },
+  "jev": {
+    "role": "experiment_order_only",
+    "model": "typesafe/jev-1.13-20260917",
+    "first_choice": "cpu_only_t16",
+    "choice_probability": 0.40,
+    "confidence": 0.29,
+    "measured_decode_tok_s": 0.634665,
+    "adopted": false
+  },
+  "winner": {
+    "source_commit": "3ae4f51087d8d9292eda16ee00cec54e798ea576",
+    "build_number": 10725,
+    "vulkan_sdk": "1.4.357.1",
+    "integer_dot": true,
+    "backend_correctness": "16/16",
+    "bench_decode_tok_s": 5.875882,
+    "api_decode_tok_s": [5.792924, 5.794020],
+    "deployed_smoke_decode_tok_s": 5.776477,
+    "speedup_vs_post_restart_bench": 4.603499,
+    "old_greedy_text_sha256": "02aec5a3d6a3c72368092e9f2fc9c457a8ebb596dc72e96327a1d892278d4402",
+    "new_greedy_text_sha256": "02aec5a3d6a3c72368092e9f2fc9c457a8ebb596dc72e96327a1d892278d4402",
+    "greedy_text_equal": true,
+    "deployed_service": "murakumo-k16-mishima.service",
+    "deployed_path": "/home/aiueos/murakumo/prism-llama-b10725-3ae4f510-sdk357",
+    "public_router_admitted": false,
+    "public_router_reason": "decode improvement does not qualify 128K long-running stability or concurrency"
+  },
+  "rejected": [
+    {"candidate": "vulkan_hybrid_32", "decode_tok_s": 0.742751},
+    {"candidate": "vulkan_hybrid_48", "decode_tok_s": 0.907460},
+    {"candidate": "prism_3ae4f510_system_glslc", "decode_tok_s": 1.266106, "reason": "integer_dot_disabled"},
+    {"candidate": "prism_3ae4f510_force_mmvq_without_integer_dot", "decode_tok_s": 1.254628},
+    {"candidate": "fastmtp_draft", "reason": "model_load_shape_mismatch"},
+    {"candidate": "dspark_draft", "reason": "no_response_within_240_seconds"}
+  ]
+}

@@ -1,0 +1,89 @@
+(ns murakumo.infer.mishima-decode-cosci)
+
+;; A closed, deterministic experiment harness. Jev chooses what to measure
+;; next; measurements and hard gates decide what may run in the fleet.
+
+(def observations
+  [{:id :public-baseline
+    :on "2026-09-22"
+    :what "Two direct 128-token K16 runs decoded at 1.202206 and 1.202204 tok/s."}
+   {:id :post-restart-control
+    :on "2026-09-22"
+    :what "The deployed b10709 build decoded at 1.2546 tok/s through the API and 1.2764 tok/s in llama-bench."}
+   {:id :jev-first-choice
+    :on "2026-09-22"
+    :what "Jev chose cpu-only t16 first with probability 0.40 and confidence 0.29; the measured result was 0.6347 tok/s."}
+   {:id :integer-dot-build
+    :on "2026-09-22"
+    :what "Prism 3ae4f510 built with Vulkan SDK 1.4.357.1 enabled integer-dot on the Radeon 680M."}
+   {:id :integer-dot-correctness
+    :on "2026-09-22"
+    :what "PTQ1 Bonsai-shape backend tests passed 16/16 and a 32-token greedy API response matched b10709 byte-for-byte."}
+   {:id :integer-dot-speed
+    :on "2026-09-22"
+    :what "Three llama-bench tg32 samples averaged 5.875882 tok/s; API decode measured 5.792924 and 5.794020 tok/s."}])
+
+(def candidates
+  [{:id :deployed-b10709
+    :load? true :finite-output? true :no-device-loss? true :capacity-ok? true
+    :semantic-check? true :decode-tok-s 1.276394
+    :jev-priority 3}
+   {:id :cpu-only-t16
+    :load? true :finite-output? true :no-device-loss? true :capacity-ok? true
+    :semantic-check? false :decode-tok-s 0.634665
+    :jev-priority 1}
+   {:id :vulkan-hybrid-32
+    :load? true :finite-output? true :no-device-loss? true :capacity-ok? true
+    :semantic-check? false :decode-tok-s 0.742751
+    :jev-priority 4}
+   {:id :vulkan-hybrid-48
+    :load? true :finite-output? true :no-device-loss? true :capacity-ok? true
+    :semantic-check? false :decode-tok-s 0.907460
+    :jev-priority 2}
+   {:id :fastmtp-draft
+    :load? false :finite-output? false :no-device-loss? true :capacity-ok? true
+    :semantic-check? false :decode-tok-s nil
+    :jev-priority 6}
+   {:id :dspark-draft
+    :load? true :finite-output? false :no-device-loss? true :capacity-ok? true
+    :semantic-check? false :decode-tok-s nil
+    :jev-priority 7}
+   {:id :prism-3ae4f510-system-glslc
+    :load? true :finite-output? true :no-device-loss? true :capacity-ok? true
+    :semantic-check? false :decode-tok-s 1.266106
+    :jev-priority 5}
+   {:id :prism-3ae4f510-sdk357-intdot
+    :load? true :finite-output? true :no-device-loss? true :capacity-ok? true
+    :semantic-check? true :decode-tok-s 5.875882
+    :jev-priority 8}])
+
+(def gates
+  [[:load :load?]
+   [:finite-output :finite-output?]
+   [:no-device-loss :no-device-loss?]
+   [:capacity :capacity-ok?]
+   [:semantic-check :semantic-check?]])
+
+(defn reflect [candidate]
+  (let [failed (->> gates
+                    (keep (fn [[gate field]]
+                            (when-not (true? (get candidate field))
+                              {:gate gate :field field})))
+                    vec)]
+    {:pass? (empty? failed) :failed failed :candidate candidate}))
+
+(defn run-tournament
+  ([] (run-tournament candidates))
+  ([xs]
+   (let [reflected (mapv reflect xs)
+         ranked (->> reflected
+                     (filter :pass?)
+                     (map :candidate)
+                     (sort-by (juxt (comp - :decode-tok-s) :id))
+                     vec)]
+     {:question-shape [:choice :noul :score]
+      :jev-authority :experiment-order-only
+      :adoption-authority :hard-gates-then-measured-decode
+      :ranked ranked
+      :rejected (->> reflected (remove :pass?) vec)
+      :winner (first ranked)})))

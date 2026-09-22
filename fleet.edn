@@ -224,9 +224,11 @@
   ;; aiueos K16 (Ryzen 7 7735HS / Radeon 680M, 26 GiB usable RAM). 2026-09-20
   ;; owner retired Nex and Ling and ended co-residency. Their joins, llama
   ;; units, and watchdog timer remain disabled; weights are retained. The
-  ;; portable Prism Vulkan build recognizes PTQ1 type 143 and keeps one
-  ;; 131072-token q4 KV Mishima slot active. A 10,054-token prompt completed
-  ;; at 25.13 prompt tok/s (400.1 s), so this is a warm standby and is not in
-  ;; the public router until latency is improved.
+  ;; Prism 3ae4f510, built with Vulkan SDK 1.4.357.1 so RADV integer-dot is
+  ;; enabled, recognizes PTQ1 type 143 and keeps one 131072-token q4 KV Mishima
+  ;; slot active. Decode improved from 1.25 to 5.78 tok/s with byte-identical
+  ;; greedy output. A 10,054-token prompt previously completed at 25.13 prompt
+  ;; tok/s (400.1 s). This remains a warm standby outside the public router
+  ;; until 128K long-running stability and concurrency are qualified.
   {:name "aiueos-k16" :host "root@100.66.205.17" :roles ["compute"] :labels {:tier "edge" :zone "jp" :role "vulkan-infer-standby"}
    :node/serves ["mishima"]}]}
