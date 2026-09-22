@@ -58,7 +58,82 @@
   },
   "comparison": {
     "speed_gate_passed": false,
-    "reason": "Asher regressed and the lower-pressure Levi repeat reached parity, not an improvement."
+    "reason": "Asher regressed and the lower-pressure Levi repeat reached parity with the existing production runtime, not an improvement. A later parent/exact-commit A/B isolated about 1.13% fusion benefit, but the exact fusion revision failed four raw-gates correctness cases and still did not exceed the measured production baseline."
+  },
+  "feature_ablation_m4_levi": {
+    "revision": "bdc23b56b4458b9f1655aec5287f3ab56ee8daaa",
+    "method": "Same binary and model, three 128-token decode repetitions per condition; production launchd service stopped for the run and restored by trap.",
+    "baseline_1": {
+      "samples_tok_s": [9.94898, 9.93891, 9.93444],
+      "mean_tok_s": 9.940779
+    },
+    "raw_gates_disabled": {
+      "samples_tok_s": [9.91311, 9.90419, 9.8995],
+      "mean_tok_s": 9.905599
+    },
+    "write_fold_disabled": {
+      "samples_tok_s": [9.92711, 9.92889, 9.93387],
+      "mean_tok_s": 9.929957
+    },
+    "all_metal_fusions_disabled": {
+      "samples_tok_s": [9.82873, 9.82038, 9.8198],
+      "mean_tok_s": 9.822968
+    },
+    "baseline_2": {
+      "samples_tok_s": [9.92767, 9.91522, 9.90933],
+      "mean_tok_s": 9.917406
+    },
+    "bracket_baseline_mean_tok_s": 9.929093,
+    "interpretation": {
+      "all_metal_fusions_enabled_delta_percent": 1.080369,
+      "raw_gates_enabled_delta_percent": 0.237626,
+      "write_fold_enabled_delta_percent": -0.008702,
+      "boundary": "The grouped Metal fusion path is beneficial on M4; this ablation does not prove that the whole bdc23b56 candidate is faster than production."
+    }
+  },
+  "exact_commit_ab_m4_levi": {
+    "parent_revision": "1bc46a8a70bdbaf3e2e458a30b219800bb4e6f2b",
+    "fusion_revision": "00e8187618590ca52e6737f97d38173087458ebf",
+    "method": "Parent, exact fusion revision with GGML_GDN_RAW_GATES_DISABLE=1, then parent; each run generated 128 tokens with three repetitions. Medians are primary because one sample in each of the first two runs was an observed low outlier.",
+    "parent_runs": [
+      {
+        "samples_tok_s": [9.82791, 9.81941, 8.6108],
+        "mean_tok_s": 9.419373
+      },
+      {
+        "samples_tok_s": [9.83039, 9.81141, 9.80711],
+        "mean_tok_s": 9.816307
+      }
+    ],
+    "fusion_raw_gates_disabled_run": {
+      "samples_tok_s": [7.86283, 9.9331, 9.92592],
+      "mean_tok_s": 9.240621
+    },
+    "parent_all_samples_median_tok_s": 9.81541,
+    "fusion_samples_median_tok_s": 9.92592,
+    "fusion_over_parent_median_percent": 1.125883,
+    "correctness": {
+      "parent_metal_mul_mat": {"passed": 1251, "total": 1251},
+      "parent_metal_gated_delta_net": {"passed": 39, "total": 39},
+      "fusion_ptq1_mul_mat": {"passed": 45, "total": 45},
+      "fusion_metal_gated_delta_net": {"passed": 39, "total": 43},
+      "fusion_raw_gates_failures": 4,
+      "raw_gates_disable_boundary": "The environment switch avoids raw gates in the model graph, but the backend test explicitly exercises the raw-gates path and still fails four cases."
+    },
+    "decision": "correctness rejected; do not admit the exact fusion revision"
+  },
+  "rebuild_reproducibility_m4_levi": {
+    "revision": "bdc23b56b4458b9f1655aec5287f3ab56ee8daaa",
+    "retained_canary": {
+      "libggml_metal_sha256": "febc204c378f9053522629c04bcc9c07803fa7d6ae294ee50fd627abb8df079a",
+      "metal_gated_delta_net": {"passed": 43, "total": 43}
+    },
+    "fresh_rebuild": {
+      "libggml_metal_sha256": "cfebc1a5bda0389fcc2890293d163216955b7c0e069a057ff8adf9ef1766b689",
+      "metal_gated_delta_net": {"passed": 39, "total": 43},
+      "raw_gates_failures": 4
+    },
+    "boundary": "The retained canary's passing raw-gates result did not reproduce from a fresh build of the same revision. The original build cache/configuration was not retained, so its binary hash and passing result remain evidence for that artifact only, not a reproducible source qualification."
   },
   "deployment": {
     "candidate_directories": {
@@ -76,6 +151,9 @@
     "This is single-request 128-token decode, not fleet concurrency or aggregate-throughput qualification.",
     "The final warm Levi control is used because its first two samples were unstable; all raw samples are retained.",
     "Correctness passed on both Apple generations, but correctness alone does not authorize production admission.",
-    "DFlash2 remains an unselected option and was not changed by this experiment."
+    "DFlash2 remains an unselected option and was not changed by this experiment.",
+    "The graph fusions themselves improve M4 decode by about 1.1%; the rejected result is the candidate as a production unit, not the optimization idea.",
+    "A fresh bdc23b56 rebuild failed the same four raw-gates cases; the earlier 43/43 result is artifact-specific and not reproducible from the retained source revision alone.",
+    "The production Levi service was restored after each benchmark and returned status ok on 100.102.78.81:8094."
   ]
 }
