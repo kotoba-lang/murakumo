@@ -25,6 +25,7 @@
         executable (option args "--executable" "/Users/junkawasaki/.local/bin/mishima-fast")
         receipt-path (option args "--receipt" nil)
         ceiling (js/parseInt (option args "--max-prompt-tokens" "8000") 10)
+        wall-ceiling (js/parseInt (option args "--max-wall-ms" "90000") 10)
         tmp (.mkdtempSync fs (.join path (.tmpdir os) "mishima-fast-"))
         usage-path (.join path tmp "usage.json")
         started (.now js/Date)
@@ -36,16 +37,18 @@
         stdout (str/trim (or (.-stdout proc) ""))
         measured? (.existsSync fs usage-path)
         usage (when measured? (json-read usage-path))
-        contract (assoc fast/profile-contract :max-prompt-tokens ceiling)
+        contract (assoc fast/profile-contract
+                        :max-prompt-tokens ceiling
+                        :max-wall-ms wall-ceiling)
         qualification (if measured?
-                        (fast/qualify contract usage (= expected stdout))
+                        (fast/qualify-run contract usage (= expected stdout) elapsed)
                         {:pass? false
                          :prompt-tokens nil
                          :failed [{:gate :usage-receipt
                                    :field :usage-file
                                    :observed :missing
                                    :expected :measured}]})
-        receipt {:schema "murakumo.mishima-hermes-fast/v1"
+        receipt {:schema "murakumo.mishima-hermes-fast/v2"
                  :observed-at (.toISOString (js/Date.))
                  :profile (:profile contract)
                  :expected expected
@@ -68,7 +71,7 @@
   (set! (.-exitCode js/process) (run! *command-line-args*))
   (catch :default e
     (println (js/JSON.stringify
-              #js {:schema "murakumo.mishima-hermes-fast/v1"
+              #js {:schema "murakumo.mishima-hermes-fast/v2"
                    :qualification #js {:pass? false}
                    :error (or (.-message e) (str e))}))
     (set! (.-exitCode js/process) 2)))

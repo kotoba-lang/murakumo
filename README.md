@@ -1100,15 +1100,17 @@ kbb -M:murakumo nodes    # nodes without :status "authorized" are now excluded,
 
 `mishima-fast` is a primary-only Hermes profile for short interactive turns.
 It disables project-rule and memory injection, fallback providers, and automatic
-title generation; output is capped at 256 tokens. Hermes one-shot currently
-requires a valid explicit toolset to suppress its configured default set, so the
-profile exposes only `clarify` rather than the full CLI tool catalog. It is deliberately
-not the profile for repository work that needs `AGENTS.md`, skills, or tools.
+title generation; output is capped at 256 tokens. The patched Hermes one-shot
+uses `--toolsets none`, so it does not construct tool schemas or wait for MCP
+discovery. It is deliberately not the profile for repository work that needs
+`AGENTS.md`, skills, or tools.
 
 The runtime gate uses Hermes's per-request `--usage-file` receipt instead of the
 static `prompt-size` estimate. Cached prefix tokens still count toward the 8,000
 token prompt ceiling. A missing receipt, a fallback model, more than one API
-call, an incomplete turn, or a wrong canary response is a measured failure.
+call, an incomplete turn, a wall time over 90 seconds, or a wrong canary
+response is a measured failure. The deadline is a per-request safety bound; a
+small passing canary window does not establish a production percentile SLO.
 
 ```sh
 kbb --backend sci scripts/mishima-hermes-fast.cljk
