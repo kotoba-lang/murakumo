@@ -8,6 +8,7 @@
    :model "mishima"
    :max-prompt-tokens 8000
    :max-output-tokens 256
+   :max-wall-ms 90000
    :max-api-calls 1
    :fallback-providers []})
 
@@ -70,3 +71,28 @@
      {:pass? (empty? failures)
       :prompt-tokens pt
       :failed failures})))
+
+(defn qualify-run
+  "Qualify one measured run, including the wall-clock deadline. The existing
+  `qualify` function remains useful for stored usage receipts that do not carry
+  process timing; live harnesses should use this stricter boundary."
+  ([usage response-ok? wall-ms]
+   (qualify-run profile-contract usage response-ok? wall-ms))
+  ([contract usage response-ok? wall-ms]
+   (let [usage-result (qualify contract usage response-ok?)
+         latency-failures
+         (cond
+           (or (not (number? wall-ms)) (neg? wall-ms))
+           [(failure :measured-wall-time :wall-ms wall-ms
+                     "non-negative numeric wall-ms")]
+
+           (> wall-ms (:max-wall-ms contract))
+           [(failure :wall-deadline :wall-ms wall-ms
+                     (str "<= " (:max-wall-ms contract)))]
+
+           :else [])
+         failures (into (:failed usage-result) latency-failures)]
+     (assoc usage-result
+            :pass? (empty? failures)
+            :wall-ms wall-ms
+            :failed failures))))
