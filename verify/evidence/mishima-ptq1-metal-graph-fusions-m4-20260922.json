@@ -1,0 +1,81 @@
+{
+  "schema": "murakumo.mishima-ptq1-metal-graph-fusions-canary/v1",
+  "measured_at": "2026-09-22",
+  "model": {
+    "artifact": "Ternary-Bonsai-2-27B-PTQ1_0.gguf",
+    "format": "PTQ1_0 group 128"
+  },
+  "candidate": {
+    "repository": "PrismML-Eng/llama.cpp",
+    "revision": "bdc23b56b4458b9f1655aec5287f3ab56ee8daaa",
+    "build_number": 10728,
+    "change": "six hybrid-attention decode graph fusions",
+    "sha256": {
+      "llama_bench": "d2c80378dd6f8b18107fbc6aeb57bdd9b0842ef8a45439456cdb38db7c181ac6",
+      "test_backend_ops": "8127eb18c8b6362d9b9349fcbb3df13d1c58daf99db7ad2fe663020d6307c425",
+      "libggml_metal": "febc204c378f9053522629c04bcc9c07803fa7d6ae294ee50fd627abb8df079a"
+    }
+  },
+  "correctness": {
+    "m1_max": {
+      "metal_mul_mat": {"passed": 93, "total": 93},
+      "metal_mul_mat_id": {"passed": 83, "total": 83},
+      "metal_mul_mat_hadamard": {"passed": 24, "total": 24},
+      "metal_gated_delta_net": {"passed": 43, "total": 43},
+      "metal_ssm_conv": {"passed": 45, "total": 45}
+    },
+    "m4_asher": {
+      "metal_mul_mat": {"passed": 93, "total": 93},
+      "metal_mul_mat_id": {"passed": 83, "total": 83},
+      "metal_mul_mat_hadamard": {"passed": 24, "total": 24},
+      "metal_gated_delta_net": {"passed": 43, "total": 43},
+      "metal_ssm_conv": {"passed": 45, "total": 45}
+    },
+    "m4_levi_partial_repeat": {
+      "metal_mul_mat": {"passed": 93, "total": 93},
+      "metal_gated_delta_net": {"passed": 43, "total": 43}
+    }
+  },
+  "measurements": {
+    "m1_max": {
+      "candidate_decode_samples_tok_s": [8.42189, 8.34831, 8.38448],
+      "candidate_decode_mean_tok_s": 8.384890
+    },
+    "m4_asher": {
+      "candidate_decode_samples_tok_s": [3.05901, 4.57567, 9.83209],
+      "control_decode_samples_tok_s": [11.7137, 11.5738, 11.5529],
+      "candidate_stable_over_control": 0.84661,
+      "boundary": "The host had severe cumulative swap/pageout pressure and co-resident ComfyUI; fusion-disable samples were unstable and are inconclusive."
+    },
+    "m4_levi": {
+      "candidate_decode_samples_tok_s": [9.93477, 9.92194, 9.91362],
+      "candidate_decode_mean_tok_s": 9.923444,
+      "candidate_decode_stddev_tok_s": 0.010656,
+      "control_decode_samples_tok_s": [8.59431, 8.40664, 9.92816],
+      "candidate_over_final_warm_control": 0.999525,
+      "candidate_delta_percent": -0.047508
+    }
+  },
+  "comparison": {
+    "speed_gate_passed": false,
+    "reason": "Asher regressed and the lower-pressure Levi repeat reached parity, not an improvement."
+  },
+  "deployment": {
+    "candidate_directories": {
+      "asher": "/Users/Shared/murakumo/mishima/candidates/prism-bdc23b56-graph-fusions/bin",
+      "levi": "/Users/Shared/murakumo/mishima/candidates/prism-bdc23b56-graph-fusions/bin"
+    },
+    "server_binary_built": false,
+    "server_build_boundary": "The local server UI archive build stopped for insufficient disk after llama-bench and test-backend-ops had built successfully.",
+    "launchd_switched": false,
+    "production_admitted": false,
+    "decision": "retain versioned canary; keep the existing production runtime",
+    "post_measurement_health": {"asher": "ok", "levi": "ok"}
+  },
+  "boundaries": [
+    "This is single-request 128-token decode, not fleet concurrency or aggregate-throughput qualification.",
+    "The final warm Levi control is used because its first two samples were unstable; all raw samples are retained.",
+    "Correctness passed on both Apple generations, but correctness alone does not authorize production admission.",
+    "DFlash2 remains an unselected option and was not changed by this experiment."
+  ]
+}

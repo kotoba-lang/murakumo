@@ -202,11 +202,12 @@
                                    :concurrency-2-kv :q4_0
                                    :m4-16g-qualified? false}
    :model/kernel-library {:repository "kotoba-lang/inference"
-                          :revision "20d009b95a046e17a22b1520caa33359efc358ad"
+                          :revision "2450dd458a4b6290129c4e8884851d9ab5dcf77b"
                           :catalog "kotodama.inference.ptq1"
                           :kernel-set :kotodama/ptq1-v1}
    :model/runtime-revisions {:k16-production "3ae4f51087d8d9292eda16ee00cec54e798ea576"
-                             :metal-canary "239413b3ec1f4e99309780ae20bd7024e1e3d361"}
+                             :metal-canary "239413b3ec1f4e99309780ae20bd7024e1e3d361"
+                             :metal-graph-fusions-canary "bdc23b56b4458b9f1655aec5287f3ab56ee8daaa"}
    :model/metal-canary {:hardware "Apple M4 16 GiB"
                         :correctness {:mul-mat [45 45]
                                       :mul-mat-id [75 75]}
@@ -216,9 +217,18 @@
                         :speed-gate-pass? false
                         :production-admitted? false
                         :decision :retain-canary-do-not-deploy}
+   :model/metal-graph-fusions-canary
+   {:hardware ["Apple M4 16 GiB (Asher)" "Apple M4 16 GiB (Levi)"]
+    :levi-candidate-decode-mean-tok-s 9.923444
+    :levi-candidate-over-final-warm-control 0.999525
+    :asher-stable-candidate-over-control 0.84661
+    :speed-gate-pass? false
+    :production-admitted? false
+    :decision :retain-canary-do-not-deploy}
    :model/evidence ["verify/evidence/mishima-fleet-aggregate-20260920.json"
                     "verify/evidence/mishima-apple-256k-kernel-20260920.json"
-                    "verify/evidence/mishima-ptq1-metal-row5-m4-20260922.json"]}
+                    "verify/evidence/mishima-ptq1-metal-row5-m4-20260922.json"
+                    "verify/evidence/mishima-ptq1-metal-graph-fusions-m4-20260922.json"]}
 
   ;; MacBook canary only. This pack requires its bundled Hadamard-aware runtime;
   ;; generic MLX loaders do not implement the packed affine transform. The
