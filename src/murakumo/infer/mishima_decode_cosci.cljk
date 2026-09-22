@@ -1,4 +1,5 @@
-(ns murakumo.infer.mishima-decode-cosci)
+(ns murakumo.infer.mishima-decode-cosci
+  (:require [kotodama.inference.ptq1 :as ptq1]))
 
 ;; A closed, deterministic experiment harness. Jev chooses what to measure
 ;; next; measurements and hard gates decide what may run in the fleet.
@@ -53,6 +54,7 @@
     :semantic-check? false :decode-tok-s 1.266106
     :jev-priority 5}
    {:id :prism-3ae4f510-sdk357-intdot
+    :runtime-id :prism-vulkan-int-dot
     :load? true :finite-output? true :no-device-loss? true :capacity-ok? true
     :semantic-check? true :decode-tok-s 5.875882
     :jev-priority 8}])
@@ -87,3 +89,19 @@
       :ranked ranked
       :rejected (->> reflected (remove :pass?) vec)
       :winner (first ranked)})))
+
+(defn production-runtime
+  "Resolve the measured winner through inference's shared PTQ1 catalog.
+  A candidate without a catalog identity, or a kernel-only runtime, is not a
+  deployable answer even when its local benchmark fields happen to pass."
+  ([] (production-runtime (:winner (run-tournament))))
+  ([candidate]
+   (when-not (:runtime-id candidate)
+     (throw (ex-info "Mishima candidate has no shared PTQ1 runtime identity"
+                     {:candidate/id (:id candidate)})))
+   (assoc (ptq1/host-runtime (:runtime-id candidate) true)
+          :candidate/id (:id candidate)
+          :candidate/decode-tok-s (:decode-tok-s candidate))))
+
+(defn metal-canary-runtime []
+  (ptq1/host-runtime :prism-metal-row5 false))
