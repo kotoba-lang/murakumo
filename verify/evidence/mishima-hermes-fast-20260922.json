@@ -1,0 +1,80 @@
+{
+  "schema": "murakumo.mishima-hermes-fast/v1",
+  "measured_at": "2026-09-22T08:48:37Z",
+  "endpoint": "https://api.murakumo.cloud/v1",
+  "profile": {
+    "name": "mishima-fast",
+    "configured_provider": "murakumo",
+    "receipt_provider": "custom",
+    "model": "mishima",
+    "fallback_providers": [],
+    "reasoning_effort": "low",
+    "max_output_tokens": 256,
+    "explicit_toolsets": ["clarify"],
+    "memory_enabled": false,
+    "user_profile_enabled": false,
+    "title_generation_enabled": false
+  },
+  "gate": {
+    "max_prompt_tokens": 8000,
+    "required_api_calls": 1,
+    "exact_response": "MISHIMA_FAST_OK",
+    "missing_usage_receipt": "refuse"
+  },
+  "rejected_control": {
+    "description": "Empty --toolsets was normalized to the configured full CLI catalog",
+    "wall_seconds": 164.017,
+    "input_tokens": 10045,
+    "cache_read_tokens": 0,
+    "output_tokens": 24,
+    "api_calls": 1,
+    "exact_response": true,
+    "failed_gate": "prompt-ceiling"
+  },
+  "admitted_canaries": [
+    {
+      "id": 1,
+      "wall_seconds": 65.756,
+      "input_tokens": 1824,
+      "cache_read_tokens": 0,
+      "output_tokens": 20,
+      "api_calls": 1,
+      "exact_response": true
+    },
+    {
+      "id": 2,
+      "wall_seconds": 47.263,
+      "input_tokens": 1824,
+      "cache_read_tokens": 0,
+      "output_tokens": 26,
+      "api_calls": 1,
+      "exact_response": true
+    },
+    {
+      "id": 3,
+      "wall_seconds": 87.475,
+      "input_tokens": 1824,
+      "cache_read_tokens": 0,
+      "output_tokens": 35,
+      "api_calls": 1,
+      "exact_response": true
+    }
+  ],
+  "aggregate": {
+    "primary_only_successes": 3,
+    "primary_only_attempts": 3,
+    "prompt_tokens_each": 1824,
+    "prompt_reduction_vs_rejected_control": 0.8184,
+    "mean_wall_seconds": 66.831,
+    "median_wall_seconds": 65.756,
+    "max_wall_seconds": 87.475,
+    "prefix_cache_observed": false
+  },
+  "verdict": {
+    "short_primary_only_lane_qualified": true,
+    "under_8k_prompt_gate": true,
+    "long_context_qualified": false,
+    "latency_slo_qualified": false,
+    "reason": "All three reduced-profile calls returned the exact response in one fallback-free API call with 1,824 prompt tokens. Latency remained variable and no prefix cache read was observed, so this qualifies prompt overhead and correctness, not a latency SLO."
+  }
+}
