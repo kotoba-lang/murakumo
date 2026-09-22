@@ -1096,6 +1096,26 @@ kbb -M:murakumo nodes    # nodes without :status "authorized" are now excluded,
     qwen3-coder-next-mlx-moe` currently reports `DOES NOT FIT` honestly on this
     exact hardware until a ≥32 GiB node (fleet or `:infer/extra-nodes`) joins.
 
+## Mishima fast interactive lane
+
+`mishima-fast` is a primary-only Hermes profile for short interactive turns.
+It disables project-rule and memory injection, fallback providers, and automatic
+title generation; output is capped at 256 tokens. Hermes one-shot currently
+requires a valid explicit toolset to suppress its configured default set, so the
+profile exposes only `clarify` rather than the full CLI tool catalog. It is deliberately
+not the profile for repository work that needs `AGENTS.md`, skills, or tools.
+
+The runtime gate uses Hermes's per-request `--usage-file` receipt instead of the
+static `prompt-size` estimate. Cached prefix tokens still count toward the 8,000
+token prompt ceiling. A missing receipt, a fallback model, more than one API
+call, an incomplete turn, or a wrong canary response is a measured failure.
+
+```sh
+kbb --backend sci scripts/mishima-hermes-fast.cljk
+kbb --backend sci scripts/mishima-hermes-fast.cljk \
+  --receipt evidence/mishima-fast.json
+```
+
 ## License
 
 Apache-2.0.

@@ -1,0 +1,74 @@
+#!/usr/bin/env kbb
+(ns mishima-hermes-fast
+  (:require ["child_process" :as cp]
+            ["fs" :as fs]
+            ["os" :as os]
+            ["path" :as path]
+            [clojure.string :as str]
+            [murakumo.infer.hermes-fast :as fast]))
+
+(defn- option [args flag default]
+  (if-let [i (first (keep-indexed #(when (= %2 flag) %1) args))]
+    (or (nth args (inc i) nil) default)
+    default))
+
+(defn- json-read [p]
+  (js->clj (js/JSON.parse (.readFileSync fs p "utf8")) :keywordize-keys true))
+
+(defn- json-write! [p value]
+  (.mkdirSync fs (.dirname path p) #js {:recursive true})
+  (.writeFileSync fs p (str (js/JSON.stringify (clj->js value) nil 2) "\n") "utf8"))
+
+(defn- run! [args]
+  (let [expected (option args "--expected" "MISHIMA_FAST_OK")
+        prompt (option args "--prompt" (str "Reply with exactly " expected " and nothing else."))
+        executable (option args "--executable" "/Users/junkawasaki/.local/bin/mishima-fast")
+        receipt-path (option args "--receipt" nil)
+        ceiling (js/parseInt (option args "--max-prompt-tokens" "8000") 10)
+        tmp (.mkdtempSync fs (.join path (.tmpdir os) "mishima-fast-"))
+        usage-path (.join path tmp "usage.json")
+        started (.now js/Date)
+        proc (.spawnSync cp executable
+                         (to-array ["-z" prompt "--usage-file" usage-path])
+                         #js {:encoding "utf8" :timeout 600000 :maxBuffer 1048576})
+        elapsed (- (.now js/Date) started)
+        status (if (number? (.-status proc)) (.-status proc) -1)
+        stdout (str/trim (or (.-stdout proc) ""))
+        measured? (.existsSync fs usage-path)
+        usage (when measured? (json-read usage-path))
+        contract (assoc fast/profile-contract :max-prompt-tokens ceiling)
+        qualification (if measured?
+                        (fast/qualify contract usage (= expected stdout))
+                        {:pass? false
+                         :prompt-tokens nil
+                         :failed [{:gate :usage-receipt
+                                   :field :usage-file
+                                   :observed :missing
+                                   :expected :measured}]})
+        receipt {:schema "murakumo.mishima-hermes-fast/v1"
+                 :observed-at (.toISOString (js/Date.))
+                 :profile (:profile contract)
+                 :expected expected
+                 :response stdout
+                 :process {:exit-code status
+                           :wall-ms elapsed
+                           :signal (.-signal proc)
+                           :error (some-> (.-error proc) .-message)}
+                 :usage usage
+                 :qualification qualification}]
+    (when receipt-path (json-write! receipt-path receipt))
+    (println (js/JSON.stringify (clj->js receipt) nil 2))
+    (.rmSync fs tmp #js {:recursive true :force true})
+    (cond
+      (not measured?) 2
+      (and (zero? status) (:pass? qualification)) 0
+      :else 1)))
+
+(try
+  (set! (.-exitCode js/process) (run! *command-line-args*))
+  (catch :default e
+    (println (js/JSON.stringify
+              #js {:schema "murakumo.mishima-hermes-fast/v1"
+                   :qualification #js {:pass? false}
+                   :error (or (.-message e) (str e))}))
+    (set! (.-exitCode js/process) 2)))
