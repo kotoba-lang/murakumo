@@ -1,0 +1,59 @@
+{
+  "schema": "murakumo.mishima-ptq1-metal-canary/v1",
+  "measured_at": "2026-09-22T14:49:31+09:00",
+  "host": {
+    "fleet_name": "asher",
+    "chip": "Apple M4",
+    "memory_gib": 16
+  },
+  "model": {
+    "artifact": "Ternary-Bonsai-2-27B-PTQ1_0.gguf",
+    "model_size": 5935527936,
+    "parameters": 26895998464,
+    "format": "PTQ1_0 group 128"
+  },
+  "control": {
+    "repository": "PrismML-Eng/llama.cpp",
+    "revision": "9a9394a895b96003ca842a6041cb28ac49a108f7",
+    "build_number": 10709,
+    "decode_samples_tok_s": [5.04335, 11.7023, 11.6495],
+    "cold_first_sample": true,
+    "warm_samples_tok_s": [11.7023, 11.6495],
+    "warm_mean_tok_s": 11.6759
+  },
+  "candidate": {
+    "repository": "PrismML-Eng/llama.cpp",
+    "revision": "239413b3ec1f4e99309780ae20bd7024e1e3d361",
+    "build_number": 10710,
+    "change": "PTQ1 Metal dense output-row tile 4 to 5",
+    "decode_samples_tok_s": [9.78313, 9.92754, 9.85047],
+    "decode_mean_tok_s": 9.853713,
+    "sha256": {
+      "llama_bench": "b3ba51ce3f51f09c27f37c3062dd14b32e44c97a0d16faf5fca9cf975765c5c2",
+      "llama_server": "ecb337d24cafc0a821ee557d2b244395751ca8757cae4d26a9cdfec5ce826b8d",
+      "test_backend_ops": "92bc72b8ed4b430d1ab8db52f2d253efd10cfd1498f9523c22e2e2afa7936f25",
+      "libggml_metal": "546a81f632ad3e56b5cbb3259cd9d8db4ed2902dd30d6131bf16d606ba12d1f4"
+    }
+  },
+  "correctness": {
+    "metal_mul_mat": {"passed": 45, "total": 45},
+    "metal_mul_mat_id": {"passed": 75, "total": 75}
+  },
+  "comparison": {
+    "candidate_over_warm_control": 0.843936056,
+    "candidate_regression_percent": 15.606394,
+    "speed_gate_passed": false
+  },
+  "deployment": {
+    "candidate_directory": "/Users/Shared/murakumo/mishima/candidates/prism-239413b3-row5/bin",
+    "launchd_switched": false,
+    "production_admitted": false,
+    "decision": "retain versioned canary; keep b10709 production",
+    "post_measurement_health": {"status": "ok"}
+  },
+  "boundaries": [
+    "The control first sample was cold and excluded from the warm-state comparison; both subsequent control samples are retained verbatim.",
+    "This is single-request 128-token decode on one M4 head, not fleet concurrency or aggregate throughput qualification.",
+    "Correctness passed, but the measured speed gate failed; correctness alone does not authorize production admission."
+  ]
+}

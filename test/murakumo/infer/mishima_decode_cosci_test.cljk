@@ -39,8 +39,13 @@
     (is (= 5.875882 (:candidate/decode-tok-s runtime)))))
 
 (deftest metal-remains-an-explicit-canary-not-a-production-inference
-  (is (= :kernel-parity-m1-max
-         (:runtime/qualification (c/metal-canary-runtime))))
+  (let [runtime (c/metal-canary-runtime)]
+    (is (= :kernel-parity-m1-max (:runtime/qualification runtime)))
+    (is (= [45 45] (get-in runtime [:correctness :mul-mat])))
+    (is (= [75 75] (get-in runtime [:correctness :mul-mat-id])))
+    (is (false? (:speed-gate-pass? runtime)))
+    (is (false? (:production-admitted? runtime)))
+    (is (= :retain-canary-do-not-deploy (:decision runtime))))
   (is (thrown-with-msg? #?(:clj Exception :cljs js/Error)
                         #"not production-qualified"
                         (ptq1/host-runtime :prism-metal-row5 true))))

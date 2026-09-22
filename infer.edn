@@ -207,8 +207,18 @@
                           :kernel-set :kotodama/ptq1-v1}
    :model/runtime-revisions {:k16-production "3ae4f51087d8d9292eda16ee00cec54e798ea576"
                              :metal-canary "239413b3ec1f4e99309780ae20bd7024e1e3d361"}
+   :model/metal-canary {:hardware "Apple M4 16 GiB"
+                        :correctness {:mul-mat [45 45]
+                                      :mul-mat-id [75 75]}
+                        :control-warm-decode-tok-s 11.6759
+                        :candidate-decode-tok-s 9.853713
+                        :candidate-over-control 0.843936056
+                        :speed-gate-pass? false
+                        :production-admitted? false
+                        :decision :retain-canary-do-not-deploy}
    :model/evidence ["verify/evidence/mishima-fleet-aggregate-20260920.json"
-                    "verify/evidence/mishima-apple-256k-kernel-20260920.json"]}
+                    "verify/evidence/mishima-apple-256k-kernel-20260920.json"
+                    "verify/evidence/mishima-ptq1-metal-row5-m4-20260922.json"]}
 
   ;; MacBook canary only. This pack requires its bundled Hadamard-aware runtime;
   ;; generic MLX loaders do not implement the packed affine transform. The
