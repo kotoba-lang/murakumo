@@ -49,3 +49,19 @@
   (is (thrown-with-msg? #?(:clj Exception :cljs js/Error)
                         #"not production-qualified"
                         (ptq1/host-runtime :prism-metal-row5 true))))
+
+(deftest metal-graph-fusions-pass-correctness-but-fail-the-speed-gate
+  (let [runtime (c/metal-graph-fusion-canary-runtime)]
+    (is (= "bdc23b56b4458b9f1655aec5287f3ab56ee8daaa"
+           (:runtime/revision runtime)))
+    (is (= :kernel-parity-m1-m4-speed-rejected
+           (:runtime/qualification runtime)))
+    (is (= [93 93] (get-in runtime [:correctness :m4-asher :mul-mat])))
+    (is (= [43 43] (get-in runtime [:correctness :m4-asher :gated-delta-net])))
+    (is (= 0.999525 (get-in runtime [:levi :candidate-over-final-warm-control])))
+    (is (false? (:speed-gate-pass? runtime)))
+    (is (false? (:production-admitted? runtime)))
+    (is (= :retain-canary-do-not-deploy (:decision runtime))))
+  (is (thrown-with-msg? #?(:clj Exception :cljs js/Error)
+                        #"not production-qualified"
+                        (ptq1/host-runtime :prism-metal-graph-fusions true))))

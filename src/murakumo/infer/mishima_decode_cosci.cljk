@@ -28,7 +28,10 @@
     :what "The exact 239413b3 candidate passed PTQ1 Metal MUL_MAT 45/45 and MUL_MAT_ID 75/75 on Apple M4."}
    {:id :metal-row5-m4-speed
     :on "2026-09-22"
-    :what "On the Asher M4, row5 decoded at 9.78313, 9.92754, and 9.85047 tok/s; the warmed b10709 control decoded at 11.7023 and 11.6495 tok/s, so row5 was 15.606% slower and was not deployed."}])
+    :what "On the Asher M4, row5 decoded at 9.78313, 9.92754, and 9.85047 tok/s; the warmed b10709 control decoded at 11.7023 and 11.6495 tok/s, so row5 was 15.606% slower and was not deployed."}
+   {:id :metal-graph-fusions-m4-speed
+    :on "2026-09-22"
+    :what "Prism bdc23b56 passed the Metal kernel suite, but Asher regressed and the stable Levi canary was only parity with its final warm control (9.923444 versus 9.92816 tok/s); it was not deployed."}])
 
 (def metal-canary-measurement
   {:runtime-id :prism-metal-row5
@@ -46,6 +49,32 @@
    :production-admitted? false
    :decision :retain-canary-do-not-deploy
    :evidence "verify/evidence/mishima-ptq1-metal-row5-m4-20260922.json"})
+
+(def metal-graph-fusion-measurement
+  {:runtime-id :prism-metal-graph-fusions
+   :hardware ["Apple M4 16 GiB (Asher)" "Apple M4 16 GiB (Levi)"]
+   :correctness {:m1-max {:mul-mat [93 93]
+                          :mul-mat-id [83 83]
+                          :mul-mat-hadamard [24 24]
+                          :gated-delta-net [43 43]
+                          :ssm-conv [45 45]}
+                 :m4-asher {:mul-mat [93 93]
+                            :mul-mat-id [83 83]
+                            :mul-mat-hadamard [24 24]
+                            :gated-delta-net [43 43]
+                            :ssm-conv [45 45]}}
+   :asher {:candidate-decode-samples-tok-s [3.05901 4.57567 9.83209]
+           :control-decode-samples-tok-s [11.7137 11.5738 11.5529]
+           :stable-candidate-over-control 0.84661
+           :measurement-pressure :swap-and-pageout}
+   :levi {:candidate-decode-samples-tok-s [9.93477 9.92194 9.91362]
+          :candidate-decode-mean-tok-s 9.923444
+          :control-decode-samples-tok-s [8.59431 8.40664 9.92816]
+          :candidate-over-final-warm-control 0.999525}
+   :speed-gate-pass? false
+   :production-admitted? false
+   :decision :retain-canary-do-not-deploy
+   :evidence "verify/evidence/mishima-ptq1-metal-graph-fusions-m4-20260922.json"})
 
 (def candidates
   [{:id :deployed-b10709
@@ -129,3 +158,7 @@
 (defn metal-canary-runtime []
   (merge (ptq1/host-runtime :prism-metal-row5 false)
          metal-canary-measurement))
+
+(defn metal-graph-fusion-canary-runtime []
+  (merge (ptq1/host-runtime :prism-metal-graph-fusions false)
+         metal-graph-fusion-measurement))
