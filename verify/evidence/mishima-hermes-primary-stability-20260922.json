@@ -1,0 +1,149 @@
+{
+  "schema": "murakumo.mishima-hermes-primary-stability/v1",
+  "measured_at": "2026-09-22T07:42:16Z",
+  "endpoint": "https://api.murakumo.cloud",
+  "profile": {
+    "name": "default",
+    "reported_model": "mishima",
+    "gateway_status": "running",
+    "base_url": "https://api.murakumo.cloud/v1",
+    "fallback_providers": [],
+    "reasoning_effort": "low",
+    "request_timeout_seconds": 900,
+    "stale_timeout_seconds": 600,
+    "configured_context_length": 131072,
+    "configured_max_tokens": 1024
+  },
+  "control_plane": {
+    "health": {
+      "http_status": 200,
+      "seconds": 0.638397
+    },
+    "ready": {
+      "http_status": 200,
+      "seconds": 1.002134
+    },
+    "models": {
+      "http_status": 200,
+      "seconds": 0.066495,
+      "catalog_count": 9,
+      "mishima_entries": 1
+    }
+  },
+  "prompt": {
+    "platform": "desktop",
+    "system_prompt_chars": 39345,
+    "system_prompt_bytes": 55761,
+    "context_section_chars": 29390,
+    "context_section_bytes": 45027,
+    "memory_chars": 2298,
+    "user_profile_chars": 1278,
+    "tool_count": 3,
+    "tool_json_bytes": 3091
+  },
+  "canaries": [
+    {
+      "id": 1,
+      "working_directory": "/Users/junkawasaki/github/com-junkawasaki",
+      "expected_response": "MISHIMA_CLOSING_OK_1",
+      "exact_response": true,
+      "exit_code": 0,
+      "wall_seconds": 349.39,
+      "session_id": "20260922_163118_6a951b",
+      "model": "mishima",
+      "provider": "custom",
+      "main_api_calls": 1,
+      "input_tokens": 17083,
+      "cache_read_tokens": 0,
+      "output_tokens": 41,
+      "completed": true,
+      "partial": false,
+      "interrupted": false,
+      "failed": false,
+      "turn_exit_reason": "text_response(finish_reason=stop)",
+      "path_class": "cold-prefix root-context"
+    },
+    {
+      "id": 2,
+      "working_directory": "/tmp",
+      "expected_response": "MISHIMA_CLOSING_OK_2",
+      "exact_response": true,
+      "exit_code": 0,
+      "wall_seconds": 37.99,
+      "session_id": "20260922_163746_dd8be1",
+      "model": "mishima",
+      "provider": "custom",
+      "main_api_calls": 1,
+      "input_tokens": 23,
+      "cache_read_tokens": 17060,
+      "output_tokens": 94,
+      "completed": true,
+      "partial": false,
+      "interrupted": false,
+      "failed": false,
+      "turn_exit_reason": "text_response(finish_reason=stop)",
+      "path_class": "warm-prefix short-turn"
+    },
+    {
+      "id": 3,
+      "working_directory": "/tmp",
+      "expected_response": "MISHIMA_CLOSING_OK_3",
+      "exact_response": true,
+      "exit_code": 0,
+      "wall_seconds": 26.32,
+      "session_id": "20260922_163931_ad90f4",
+      "model": "mishima",
+      "provider": "custom",
+      "main_api_calls": 1,
+      "input_tokens": 23,
+      "cache_read_tokens": 17060,
+      "output_tokens": 48,
+      "completed": true,
+      "partial": false,
+      "interrupted": false,
+      "failed": false,
+      "turn_exit_reason": "text_response(finish_reason=stop)",
+      "path_class": "warm-prefix short-turn"
+    },
+    {
+      "id": 4,
+      "working_directory": "/tmp",
+      "expected_response": "MISHIMA_CLOSING_OK_4",
+      "exact_response": true,
+      "exit_code": 0,
+      "wall_seconds": 37.24,
+      "session_id": "20260922_164002_88a28a",
+      "model": "mishima",
+      "provider": "custom",
+      "main_api_calls": 1,
+      "input_tokens": 23,
+      "cache_read_tokens": 17060,
+      "output_tokens": 93,
+      "completed": true,
+      "partial": false,
+      "interrupted": false,
+      "failed": false,
+      "turn_exit_reason": "text_response(finish_reason=stop)",
+      "path_class": "warm-prefix short-turn"
+    }
+  ],
+  "aggregate": {
+    "primary_only_successes": 4,
+    "primary_only_attempts": 4,
+    "warm_short_turn_successes": 3,
+    "warm_short_turn_attempts": 3,
+    "warm_short_turn_mean_seconds": 33.85,
+    "warm_short_turn_median_seconds": 37.24,
+    "warm_short_turn_max_seconds": 37.99
+  },
+  "verdict": {
+    "control_plane_healthy": true,
+    "mishima_primary_reachable": true,
+    "warm_short_turn_repeatable": true,
+    "cold_root_context_latency_stable": false,
+    "long_context_qualified": false,
+    "overall": "partially-qualified",
+    "reason": "All four fallback-free Hermes calls completed with exact responses, but the cold 17,083-token root-context call took 349.39 seconds. The three 26.32-37.99 second repeats each reused 17,060 cached prefix tokens, so they qualify the warm short-turn path only and do not erase the cold-tail result or qualify long-context stability."
+  },
+  "next_action": "Profile and reduce the cold 17k-token prefill/tail path, then repeat an uncached multi-run canary and a near-window primary-only qualification before declaring Mishima fully stable."
+}
