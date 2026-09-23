@@ -3,11 +3,11 @@
 # keeps answering GET /health {status ok} and fails every completion with 500;
 # Restart=always never fires because the process never exits. This timer asks
 # each IDLE server for one token and restarts the unit when that fails.
-# deploy/k16/llama_watchdog.cljs has the decision table; its negative path was
+# deploy/k16/llama_watchdog.cljk has the decision table; its negative path was
 # exercised against a fake device-lost server (restart) and a fake busy slot
 # (skip) before landing.
 #
-# Install:  scp deploy/k16/llama_watchdog.cljs deploy/systemd/murakumo-k16-llama-watchdog.{service,timer} aiueos@100.66.205.17:/tmp/ \
+# Install:  scp deploy/k16/llama_watchdog.cljk deploy/systemd/murakumo-k16-llama-watchdog.{service,timer} aiueos@100.66.205.17:/tmp/ \
 #           && tailscale ssh root@100.66.205.17 'install -m644 /tmp/llama_watchdog.cljs /opt/murakumo/ \
 #                && install -m644 /tmp/murakumo-k16-llama-watchdog.service /tmp/murakumo-k16-llama-watchdog.timer /etc/systemd/system/ \
 #                && systemctl daemon-reload && systemctl enable --now murakumo-k16-llama-watchdog.timer'
