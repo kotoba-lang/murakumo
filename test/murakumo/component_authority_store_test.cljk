@@ -1,8 +1,7 @@
 (ns murakumo.component-authority-store-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.io :as kio] [kotoba.test :refer [deftest is]]
             [murakumo.component-authority :as authority]
-            [murakumo.component-authority-store :as store])
-  (:import [java.nio.file Files]))
+            [murakumo.component-authority-store :as store]))
 
 (def signing
   {:seed (byte-array (range 32))
@@ -12,9 +11,8 @@
    :issued-at-ms 1785000000000})
 
 (defn temp-journal []
-  (.toFile (Files/createTempFile
-            "murakumo-component-authority-" ".edn"
-            (make-array java.nio.file.attribute.FileAttribute 0))))
+  (kio/temp-file
+            "murakumo-component-authority-" ".edn"))
 
 (deftest failed-delivery-remains-durable-and-retries-in-order
   (let [journal (temp-journal)
@@ -35,7 +33,7 @@
         (is (empty? (store/pending journal)))
         (is (= @state (store/recover-state journal))))
       (finally
-        (Files/deleteIfExists (.toPath journal))))))
+        (kio/delete-if-exists journal)))))
 
 (deftest journal-corruption-fails-closed
   (let [journal (temp-journal)]
@@ -44,4 +42,4 @@
       (is (thrown? clojure.lang.ExceptionInfo
                    (store/pending journal)))
       (finally
-        (Files/deleteIfExists (.toPath journal))))))
+        (kio/delete-if-exists journal)))))

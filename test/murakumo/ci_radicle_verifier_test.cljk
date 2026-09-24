@@ -1,5 +1,5 @@
 (ns murakumo.ci-radicle-verifier-test
-  (:require [json.compat :as json]
+  (:require [kotoba.bytes :as kbytes] [json.compat :as json]
             [kotoba.test :refer [deftest is]]
             [ed25519.core :as ed]
             [murakumo.ci.radicle-verifier :as verifier]))
@@ -10,7 +10,7 @@
         raw (json/generate-string {:rid "rad:zRepo" :commit "abc"
                                    :ref "refs/heads/main" :signer signer
                                    :timestamp 1000})
-        signature (str "ed25519=" (ed/hexify (ed/sign seed (.getBytes raw "UTF-8"))))
+        signature (str "ed25519=" (ed/hexify (ed/sign seed (kbytes/utf8-bytes raw))))
         verify? (verifier/create {:authorized-signers {"rad:zRepo" #{signer}}
                                   :clock-seconds (constantly 1001)})]
     (is (verify? {:raw raw :signature signature}))

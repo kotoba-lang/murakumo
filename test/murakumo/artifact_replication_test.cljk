@@ -1,5 +1,5 @@
 (ns murakumo.artifact-replication-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.test :refer [deftest is testing]]
             [ed25519.core :as ed]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
@@ -12,7 +12,7 @@
             [murakumo.cd.capability :as capability]))
 
 (defn blob [text]
-  (let [bytes (.getBytes text java.nio.charset.StandardCharsets/UTF_8)]
+  (let [bytes (kbytes/utf8-bytes text)]
     [(second (object/write-blob (repo/empty-repo) bytes)) bytes]))
 
 (deftest signed-release-is-chunked-and-replicated-to-remote-cas
@@ -32,9 +32,8 @@
                             :revision "v2" :previous-revision "v2"
                             :now 10 :ttl 20 :nonce "replicate"})
         source {bundle-cid bundle-bytes component-cid component-bytes}
-        root (str (java.nio.file.Files/createTempDirectory
-                   "murakumo-remote-cas"
-                   (make-array java.nio.file.attribute.FileAttribute 0)))
+        root (str (kio/temp-dir
+                   "murakumo-remote-cas"))
         cas (store/adapter root)
         handler (remote/handler
                  {:node-id "node-a" :rid "rid" :issuers #{issuer}
@@ -85,9 +84,8 @@
         handler (remote/handler
                  {:node-id "n" :rid "rid" :issuers #{(ed/did-key-from-seed seed)}
                   :clock-fn (constantly 3)
-                  :temp-dir (str (java.nio.file.Files/createTempDirectory
-                                  "expired-transfer"
-                                  (make-array java.nio.file.attribute.FileAttribute 0)))
+                  :temp-dir (str (kio/temp-dir
+                                  "expired-transfer"))
                   :put! (fn [& _]) :get-bytes (constantly nil)})
         response (handler
                   (protocol/request

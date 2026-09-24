@@ -1,6 +1,6 @@
 (ns murakumo.ci-host-test
   (:require [kotoba.test :refer [deftest is]]
-            [clojure.java.io :as io]
+            [kotoba.io :as io]
             [murakumo.ci.host :as host]))
 
 (deftest process-adapter-executes-argv-without-shell
@@ -18,9 +18,8 @@
     (is (true? (:timed-out? result)))))
 
 (deftest host-hashes-and-persists-declared-artifact-bytes
-  (let [dir (str (java.nio.file.Files/createTempDirectory
-                  "murakumo-ci-artifacts"
-                  (make-array java.nio.file.attribute.FileAttribute 0)))
+  (let [dir (str (io/temp-dir
+                  "murakumo-ci-artifacts"))
         _ (spit (io/file dir "app.wasm") "real-wasm-bytes")
         stored (atom {})
         artifacts (host/collect-artifacts!
@@ -37,9 +36,8 @@
                    :sandbox/store-artifact! (fn [& _])})))))
 
 (deftest successful-step-with-declared-artifact-fails-without-store
-  (let [dir (str (java.nio.file.Files/createTempDirectory
-                  "murakumo-ci-no-store"
-                  (make-array java.nio.file.attribute.FileAttribute 0)))
+  (let [dir (str (io/temp-dir
+                  "murakumo-ci-no-store"))
         file (str (io/file dir "out"))
         result (host/execute! {:sandbox/argv ["/usr/bin/touch" file]
                                :sandbox/timeout-ms 1000 :sandbox/output-dir dir
@@ -49,13 +47,12 @@
     (is (= :artifact-store-required (get-in result [:artifact-error :reason])))))
 
 (deftest dirty-step-output-is-rejected-before-command-executes
-  (let [dir (str (java.nio.file.Files/createTempDirectory
-                  "murakumo-ci-dirty"
-                  (make-array java.nio.file.attribute.FileAttribute 0)))
+  (let [dir (str (io/temp-dir
+                  "murakumo-ci-dirty"))
         marker (io/file dir "stale")
         _ (spit marker "old")
         touched (str (io/file dir "executed"))
         result (host/execute! {:sandbox/argv ["/usr/bin/touch" touched]
                                :sandbox/timeout-ms 1000 :sandbox/output-dir dir})]
     (is (= :dirty-output-directory (get-in result [:artifact-error :reason])))
-    (is (false? (.exists (io/file touched))))))
+    (is (false? (io/exists? (io/file touched))))))

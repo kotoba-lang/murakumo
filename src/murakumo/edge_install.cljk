@@ -19,7 +19,7 @@
     repair is the operator's call and the ADR records why.
   - It does not enroll. Trust tier belongs to `fleet.edn` and the join worker
     reads it; installing a daemon must not be a second place a tier can be set."
-  (:require [kotodama.inference.edge :as artifacts]
+  (:require [kotoba.io :as kio] [kotodama.inference.edge :as artifacts]
             [kotoba.lang.text :as str]
             [murakumo.fleet.one-model :as one]
             [murakumo.fleet.topology :as topo]
@@ -269,7 +269,7 @@
 
 (defn- sha256-of [path]
   (-> (java.security.MessageDigest/getInstance "SHA-256")
-      (.digest (java.nio.file.Files/readAllBytes (.toPath (java.io.File. path))))
+      (.digest (kio/read-all-bytes (java.io.File. path)))
       ;; `bit-and 0xff` because a JVM byte is signed: without it a byte over
       ;; 0x7f formats as `ffffffab` and no digest ever matches, so every sync
       ;; would report a failure it did not have.

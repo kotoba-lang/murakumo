@@ -1,12 +1,11 @@
 (ns murakumo.component-authority-http-test
-  (:require [kotoba.lang.edn :as edn]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.lang.edn :as edn]
             [kotoba.test :refer [deftest is]]
             [murakumo.component-authority :as authority]
             [murakumo.component-authority-http :as http]
             [murakumo.component-authority-store :as store])
   (:import [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
-           [java.net InetSocketAddress]
-           [java.nio.file Files]))
+           [java.net InetSocketAddress]))
 
 (def signing
   {:seed (byte-array (range 32))
@@ -25,12 +24,11 @@
          (let [^HttpExchange exchange exchange
                envelope (edn/read-string (slurp (.getRequestBody exchange)))
                _ (reset! received envelope)
-               bytes (.getBytes
+               bytes (kbytes/utf8-bytes
                       (pr-str {:ok? true
                                :sequence
                                (get-in envelope
-                                       [:event :murakumo.component/sequence])})
-                      "UTF-8")]
+                                       [:event :murakumo.component/sequence])}))]
            (.sendResponseHeaders exchange 202 (alength bytes))
            (with-open [output (.getResponseBody exchange)]
              (.write output bytes))
@@ -39,10 +37,8 @@
     server))
 
 (deftest durable-outbox-acks-only-after-real-http-delivery
-  (let [journal (.toFile
-                 (Files/createTempFile
-                  "murakumo-authority-http-" ".edn"
-                  (make-array java.nio.file.attribute.FileAttribute 0)))
+  (let [journal (kio/temp-file
+                  "murakumo-authority-http-" ".edn")
         received (atom nil)
         server (receiver! received)]
     (try
@@ -63,7 +59,7 @@
         (is (empty? (store/pending journal))))
       (finally
         (.stop server 0)
-        (Files/deleteIfExists (.toPath journal))))))
+        (kio/delete-if-exists journal)))))
 
 (deftest insecure-remote-http-is-rejected-before-connect
   (is (thrown? clojure.lang.ExceptionInfo

@@ -29,15 +29,14 @@
   namespace never generates a root key and never writes one: root custody is an
   operator decision, and a tool that silently created a root would make it
   ambiguous which root a fleet trusts."
-  (:require [aiueos.key-lifecycle :as kl]
+  (:require [kotoba.bytes :as kbytes] [aiueos.key-lifecycle :as kl]
             [aiueos.provider.device :as device]
             [murakumo.enroll :as enroll]
             [kotoba.lang.edn :as edn]
-            [clojure.java.io :as io]
+            [kotoba.io :as io]
             [kotoba.lang.text :as str])
   (:import [java.security KeyFactory SecureRandom]
-           [java.security.spec PKCS8EncodedKeySpec]
-           [java.util Base64]))
+           [java.security.spec PKCS8EncodedKeySpec]))
 
 (def certificate-version 1)
 (def signature-key :murakumo.factory/signature)
@@ -96,7 +95,7 @@
      :model model
      :token (draw-token)
      :factory-public-key pub
-     :factory-private-key-b64 (.encodeToString (Base64/getEncoder)
+     :factory-private-key-b64 (kbytes/base64-encode
                                                (.getEncoded (.getPrivate kp)))
      :certificate cert
      :issued-ms issued-ms}))
@@ -131,7 +130,7 @@
 (defn- read-private-key [path]
   (let [b64 (str/trim (slurp path))]
     (.generatePrivate (KeyFactory/getInstance "Ed25519")
-                      (PKCS8EncodedKeySpec. (.decode (Base64/getDecoder) b64)))))
+                      (PKCS8EncodedKeySpec. (kbytes/base64-decode-bytes b64)))))
 
 (defn- arg [args flag] (second (drop-while #(not= flag %) args)))
 

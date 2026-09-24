@@ -1,5 +1,5 @@
 (ns murakumo.cd-node-ops-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.io :as kio] [kotoba.test :refer [deftest is testing]]
             [ed25519.core :as ed]
             [murakumo.cd.capability :as capability]
             [murakumo.cd.node-ops :as node-ops]
@@ -7,9 +7,8 @@
             [murakumo.cd.service :as service]))
 
 (defn temp-state []
-  (str (java.nio.file.Files/createTempDirectory
-        "murakumo-cd-node-ops"
-        (make-array java.nio.file.attribute.FileAttribute 0))
+  (str (kio/temp-dir
+        "murakumo-cd-node-ops")
        "/active.edn"))
 
 (defn successful-exec [calls]

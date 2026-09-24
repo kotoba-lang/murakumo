@@ -1,12 +1,12 @@
 (ns murakumo.ci-webhook-test
-  (:require [json.compat :as json]
+  (:require [kotoba.bytes :as kbytes] [json.compat :as json]
             [kotoba.test :refer [deftest is]]
             [murakumo.ci.broker :as broker]
             [murakumo.ci.webhook :as webhook]))
 
 (defn request [uri body headers]
   {:request-method :post :uri uri :headers headers
-   :body (java.io.ByteArrayInputStream. (.getBytes body "UTF-8"))})
+   :body (java.io.ByteArrayInputStream. (kbytes/utf8-bytes body))})
 
 (deftest authenticated-github-ingress-enqueues
   (let [state (atom (broker/empty-broker))

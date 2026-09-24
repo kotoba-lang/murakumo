@@ -1,6 +1,6 @@
 (ns murakumo.ci.git
   "Native Git ingress restricted to one immutable revision and isolated worktree."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (defn valid-revision? [revision]
   (boolean (re-matches #"[0-9a-fA-F]{40,64}" (str revision))))
@@ -45,8 +45,8 @@
                                         {:reason :git-failed :result r
                                          :step (count out)}))))
                     out))
-        actual (str/lower-case (str/trim (:stdout (last results))))]
-    (when-not (= (str/lower-case revision) actual)
+        actual (str/lower (str/trim (:stdout (last results))))]
+    (when-not (= (str/lower revision) actual)
       (throw (ex-info "murakumo-ci: fetched revision mismatch"
                       {:reason :revision-mismatch :expected revision :actual actual})))
     {:workspace workspace :revision actual :commands (count results)}))

@@ -1,5 +1,5 @@
 (ns murakumo.artifact-import-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is]]
             [multiformats.core :as multiformats]
             [murakumo.artifact-import :as artifact-import]
             [murakumo.artifact-store :as artifact-store]))
@@ -9,7 +9,7 @@
                    "murakumo-import-cas"
                    (make-array java.nio.file.attribute.FileAttribute 0)))
         file (java.io.File/createTempFile "murakumo-import" ".bin")
-        bytes (.getBytes "bootstrap" "UTF-8")
+        bytes (kbytes/utf8-bytes "bootstrap")
         cid (multiformats/cidv1-raw bytes)]
     (java.nio.file.Files/write (.toPath file) bytes
                                (make-array java.nio.file.OpenOption 0))

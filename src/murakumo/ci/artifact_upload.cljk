@@ -2,9 +2,9 @@
   "Lease-authorized runner uploads into the coordinator CAS. The lease bearer
    only grants staging while its run is active; content identity is still
    independently verified by the CAS at commit."
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [clojure.java.io :as io]
             [murakumo.ci.protocol :as protocol])
-  (:import [java.util Base64 UUID]))
+  (:import [java.util UUID]))
 
 (def default-chunk-bytes (* 48 1024))
 (def default-max-object-bytes (* 512 1024 1024))
@@ -97,7 +97,7 @@
                                        (<= (count encoded)
                                            (+ 4 (* 4 (long (Math/ceil
                                                            (/ max-chunk-bytes 3.0)))))))
-                              (.decode (Base64/getDecoder) ^String encoded))]
+                              (kbytes/base64-decode-bytes ^String encoded))]
                   (if-not (and (= object-cid cid)
                                (= run-id (:ci.lease/run-id lease))
                                (= runner-id (:ci.lease/runner-id lease))
@@ -122,7 +122,7 @@
                              (= runner-id (:ci.lease/runner-id lease))
                              (= token (:ci.lease/token lease)))
                   (do (cleanup! id) (deny :incomplete-transfer))
-                  (let [bytes (java.nio.file.Files/readAllBytes (.toPath file))]
+                  (let [bytes (kio/read-all-bytes file)]
                     (put! cid bytes)
                     (cleanup! id)
                     (response operation {:ok? true :status :stored :cid cid})))
@@ -163,6 +163,6 @@
                 chunk (java.util.Arrays/copyOfRange bytes offset end)]
             (call :ci/artifact-chunk
                   {:sequence sequence
-                   :data (.encodeToString (Base64/getEncoder) chunk)})))
+                   :data (kbytes/base64-encode chunk)})))
         (call :ci/artifact-commit {}))
       cid)))

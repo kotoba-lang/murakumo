@@ -1,10 +1,9 @@
 ;; murakumo.overlay.forward — local TCP forwarder over the relay stream contract.
 
 (ns murakumo.overlay.forward
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [murakumo.overlay.dial :as dial])
-  (:import [java.net InetAddress ServerSocket SocketTimeoutException]
-           [java.util Base64]))
+  (:import [java.net InetAddress ServerSocket SocketTimeoutException]))
 
 (def default-bind-host "127.0.0.1")
 (def default-chunk-size 4096)
@@ -42,11 +41,11 @@
   (.flush writer))
 
 (defn b64url-encode [bytes]
-  (-> (.encodeToString (Base64/getUrlEncoder) bytes)
+  (-> (kbytes/base64url-encode bytes)
       (.replace "=" "")))
 
 (defn b64url-decode [text]
-  (.decode (Base64/getUrlDecoder) (str text)))
+  (kbytes/base64url-decode-bytes (str text)))
 
 (defn read-client-lines [socket]
   (let [reader (socket-reader socket)]

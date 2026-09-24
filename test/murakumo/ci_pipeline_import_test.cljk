@@ -1,5 +1,5 @@
 (ns murakumo.ci-pipeline-import-test
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.io :as io]
             [kotoba.test :refer [deftest is]]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
@@ -16,9 +16,9 @@
                                  :ci/image-digest image-digest
                                  :ci/argv ["clojure" "-M:test"]}]}}})
 
-(defn temp-dir [] (.toFile (java.nio.file.Files/createTempDirectory "murakumo-ci" (make-array java.nio.file.attribute.FileAttribute 0))))
+(defn temp-dir [] (io/temp-dir "murakumo-ci"))
 (defn write! [root path value]
-  (let [f (io/file root path)] (.mkdirs (.getParentFile f)) (spit f value) f))
+  (let [f (io/file root path)] (io/mkdirs (io/parent-file f)) (spit f value) f))
 
 (deftest pipeline-loads-validates-plans-and-digests
   (let [root (temp-dir)]

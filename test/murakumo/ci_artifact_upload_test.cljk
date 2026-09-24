@@ -1,13 +1,13 @@
 (ns murakumo.ci-artifact-upload-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.test :refer [deftest is]]
             [multiformats.core :as multiformats]
             [murakumo.artifact-store :as artifact-store]
             [murakumo.ci.artifact-upload :as upload]
             [murakumo.ci.protocol :as protocol]))
 
 (defn temp-dir [prefix]
-  (str (java.nio.file.Files/createTempDirectory
-        prefix (make-array java.nio.file.attribute.FileAttribute 0))))
+  (str (kio/temp-dir
+        prefix)))
 
 (def lease {:ci.lease/run-id "run.0" :ci.lease/runner-id "did:key:runner"
             :ci.lease/token "token" :ci.lease/expires-at 1000})
@@ -27,7 +27,7 @@
         rpc server
         put! (upload/uploader {:rpc rpc :lease-fn (constantly lease)
                                :chunk-bytes 4})
-        bytes (.getBytes "verified artifact" "UTF-8")
+        bytes (kbytes/utf8-bytes "verified artifact")
         cid (multiformats/cidv1-raw bytes)]
     (is (= cid (put! cid bytes)))
     (is (= (seq bytes) (seq ((:get cas) cid))))
@@ -40,7 +40,7 @@
                                 :clock-ms (constantly 1000)
                                 :temp-dir (str root "/tmp")
                                 :put! (:put! cas) :get-bytes (:get cas)})
-        bytes (.getBytes "x" "UTF-8")
+        bytes (kbytes/utf8-bytes "x")
         cid (multiformats/cidv1-raw bytes)
         result (get-in (server (protocol/message
                                 :ci/artifact-begin
@@ -57,7 +57,7 @@
         server (upload/handler {:broker-state (running-state) :clock-ms #(deref now)
                                 :transfer-ttl-ms 5 :temp-dir (str root "/tmp")
                                 :put! (:put! cas) :get-bytes (:get cas)})
-        bytes (.getBytes "x" "UTF-8")
+        bytes (kbytes/utf8-bytes "x")
         cid (multiformats/cidv1-raw bytes)
         fields {:lease lease :transfer-id "fedcba9876543210"
                 :object-cid cid}]

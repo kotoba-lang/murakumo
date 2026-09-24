@@ -1,5 +1,5 @@
 (ns murakumo.cd-controller-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.test :refer [deftest is]]
             [ed25519.core :as ed]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
@@ -12,7 +12,7 @@
             [murakumo.cd.service :as service]))
 
 (defn blob [text]
-  (let [bytes (.getBytes text java.nio.charset.StandardCharsets/UTF_8)]
+  (let [bytes (kbytes/utf8-bytes text)]
     [(second (object/write-blob (repo/empty-repo) bytes)) bytes]))
 
 (deftest controller-stages-each-node-before-canary-and-promotion
@@ -43,9 +43,8 @@
         handlers
         (into {}
               (for [node nodes
-                    :let [root (str (java.nio.file.Files/createTempDirectory
-                                     (str "controller-" node)
-                                     (make-array java.nio.file.attribute.FileAttribute 0)))
+                    :let [root (str (kio/temp-dir
+                                     (str "controller-" node)))
                           cas (artifact-store/adapter (str root "/cas"))
                           operations
                           {:deploy-fn (fn [{:keys [artifact-cid]}]

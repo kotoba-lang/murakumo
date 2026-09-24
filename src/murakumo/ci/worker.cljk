@@ -1,6 +1,6 @@
 (ns murakumo.ci.worker
   "One remote runner's lease-to-signed-completion execution path."
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.io :as io]
             [ed25519.core :as ed]
             [bonsai.repo :as repo]
             [murakumo.artifact-store :as artifact-store]
@@ -121,7 +121,7 @@
       (throw (ex-info "murakumo-ci: unsafe broker run id" {:reason :unsafe-run-id})))
     (when-not (re-matches #"[A-Za-z0-9._-]+" attempt-id)
       (throw (ex-info "murakumo-ci: unsafe lease token" {:reason :unsafe-lease-token})))
-    (.mkdirs (io/file workspace))
+    (io/mkdirs (io/file workspace))
     (rpc (protocol/message :ci/run-started {:lease lease}))
     (let [stop-heartbeat! (start-heartbeat! rpc current-lease heartbeat-ms)
           execution

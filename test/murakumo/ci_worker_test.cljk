@@ -1,5 +1,5 @@
 (ns murakumo.ci-worker-test
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.io :as io]
             [kotoba.test :refer [deftest is]]
             [ed25519.core :as ed]
             [murakumo.artifact-store :as artifact-store]
@@ -10,8 +10,8 @@
             [murakumo.settle :refer [settle]]))
 
 (defn temp-dir [prefix]
-  (str (java.nio.file.Files/createTempDirectory
-        prefix (make-array java.nio.file.attribute.FileAttribute 0))))
+  (str (io/temp-dir
+        prefix)))
 
 (defn execution [run runner-id]
   (let [receipt {:receipt/version 1 :receipt/run-id (:ci.run/id run)

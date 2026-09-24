@@ -1,12 +1,11 @@
 (ns murakumo.component-authority-store
   "Durable append-only outbox for signed Component authority envelopes."
-  (:require [kotoba.lang.edn :as edn]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.edn :as edn]
             [clojure.java.io :as io]
             [kotoba.abi.contract :as abi]
             [murakumo.component-authority :as authority])
   (:import [java.nio ByteBuffer]
            [java.nio.channels FileChannel]
-           [java.nio.charset StandardCharsets]
            [java.nio.file Files LinkOption Path StandardOpenOption]
            [java.nio.file.attribute PosixFilePermissions]))
 
@@ -37,7 +36,7 @@
   "Append one EDN record and force it to stable storage before returning."
   [path record]
   (let [path (.toPath (io/file path))
-        bytes (.getBytes (str (pr-str record) "\n") StandardCharsets/UTF_8)]
+        bytes (kbytes/utf8-bytes (str (pr-str record) "\n"))]
     (when (> (count bytes) max-record-bytes)
       (reject :oversize-record "Component authority journal record is too large"
               {:bytes (count bytes)}))
@@ -75,7 +74,7 @@
       (with-open [reader (io/reader file)]
         (mapv
          (fn [line]
-           (when (> (count (.getBytes ^String line StandardCharsets/UTF_8))
+           (when (> (count (kbytes/utf8-bytes ^String line))
                     max-record-bytes)
              (reject :oversize-record "Component authority journal record is too large" {}))
            (let [record (try

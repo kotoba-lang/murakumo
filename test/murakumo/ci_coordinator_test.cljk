@@ -1,5 +1,5 @@
 (ns murakumo.ci-coordinator-test
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.io :as kio] [clojure.edn :as edn]
             [kotoba.test :refer [deftest is]]
             [murakumo.ci.coordinator :as coordinator]))
 
@@ -19,9 +19,8 @@
     :connect {:host "0.0.0.0" :port 4443}}})
 
 (deftest config-composes-durable-broker-and-both-ingress-verifiers
-  (let [root (str (java.nio.file.Files/createTempDirectory
-                   "murakumo-coordinator"
-                   (make-array java.nio.file.attribute.FileAttribute 0)))
+  (let [root (str (kio/temp-dir
+                   "murakumo-coordinator"))
         built (coordinator/build (config root) {"GITHUB_SECRET" "secret"})]
     (is (fn? (get-in built [:broker :handler])))
     (is (fn? (get-in built [:http-options :submit!])))
@@ -46,9 +45,8 @@
               :ci.coordinator/public-base-url "https://murakumo.cloud"))))
 
 (deftest deployment-policy-requires-valid-shape-and-environment-seed
-  (let [root (str (java.nio.file.Files/createTempDirectory
-                   "murakumo-coordinator-cd"
-                   (make-array java.nio.file.attribute.FileAttribute 0)))
+  (let [root (str (kio/temp-dir
+                   "murakumo-coordinator-cd"))
         policy {:environment "prod" :deploy-refs #{"refs/heads/main"}
                 :targets ["canary"]
                 :nodes {"canary" {:host "canary.internal" :port 4433}}

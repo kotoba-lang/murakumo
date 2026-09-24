@@ -1,16 +1,16 @@
 (ns murakumo.ci.webhook
   "Authenticated HTTP ingress for GitHub and Radicle CI events."
-  (:require [json.compat :as json]
-            [clojure.string :as str]
+  (:require [kotoba.bytes :as kbytes] [json.compat :as json]
+            [kotoba.lang.text :as str]
             [murakumo.ci.broker :as broker]
             [murakumo.ci.source :as source]
             #?(:clj [kotoba.lang.http.host.httpkit :as http]))
-  (:import [java.nio.charset StandardCharsets]
+  (:import
            [java.security MessageDigest]
            [javax.crypto Mac]
            [javax.crypto.spec SecretKeySpec]))
 
-(defn- utf8-bytes [s] (.getBytes (str s) StandardCharsets/UTF_8))
+(defn- utf8-bytes [s] (kbytes/utf8-bytes (str s)))
 (defn- hex [bs] (apply str (map #(format "%02x" (bit-and (int %) 0xff)) bs)))
 
 (defn github-signature [secret raw-body]

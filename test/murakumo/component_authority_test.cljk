@@ -1,5 +1,5 @@
 (ns murakumo.component-authority-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is testing]]
             [ed25519.core :as ed]
             [kotoba.abi.contract :as abi]
             [murakumo.component-authority :as authority]))
@@ -62,8 +62,8 @@
           :issuer "did:key:murakumo"
           :audience "did:key:kototama-edge-a"
           :issued-at-ms 1785000000000})
-        payload (.getBytes
-                 (abi/component-authority-signing-payload envelope) "UTF-8")]
+        payload (kbytes/utf8-bytes
+                 (abi/component-authority-signing-payload envelope))]
     (is (= [envelope] @published))
     (is (abi/valid-component-authority-envelope? envelope))
     (is (ed/verify (ed/pubkey-from-seed seed)
@@ -71,8 +71,7 @@
                    (unhex (:signature envelope))))
     (is (not (ed/verify
               (ed/pubkey-from-seed seed)
-              (.getBytes
+              (kbytes/utf8-bytes
                (abi/component-authority-signing-payload
-                (assoc envelope :audience "did:key:attacker"))
-               "UTF-8")
+                (assoc envelope :audience "did:key:attacker")))
               (unhex (:signature envelope)))))))

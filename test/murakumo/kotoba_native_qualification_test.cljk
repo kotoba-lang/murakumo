@@ -27,7 +27,7 @@
 ;; the shipped set by definition, so a new core is covered by existing.
 
 (ns murakumo.kotoba-native-qualification-test
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.io :as io]
             [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]))
@@ -38,8 +38,8 @@
   [:x86_64-kotoba-v1 :aarch64-kotoba-v1])
 
 (defn- core-sources []
-  (->> (.listFiles (io/file "kotoba"))
-       (map #(.getName ^java.io.File %))
+  (->> (io/list-files (io/file "kotoba"))
+       (map #(io/file-name %))
        (filter #(str/ends-with? % ".kotoba"))
        sort
        vec))
