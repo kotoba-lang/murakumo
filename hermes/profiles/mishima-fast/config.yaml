@@ -1,0 +1,35 @@
+# Host-local blocks (command_allowlist, onboarding, secrets, skills, terminal) are kept on the host and omitted here.
+model:
+  provider: murakumo
+  default: mishima
+  context_length: 131072
+  max_tokens: 256
+  base_url: https://api.murakumo.cloud/v1
+providers:
+  murakumo:
+    base_url: https://api.murakumo.cloud/v1
+    api_mode: chat_completions
+    models:
+      mishima:
+        context_length: 131072
+        max_tokens: 256
+    stale_timeout_seconds: 600
+    request_timeout_seconds: 900
+    extra_headers:
+      HTTP-Referer: https://itonami.cloud
+      X-OpenRouter-Title: Itonami By KotobaLabs
+      X-Title: Itonami By KotobaLabs
+plugins:
+  enabled: []
+_config_version: 45
+fallback_providers: []
+agent:
+  max_turns: 8
+  run_budget_seconds: 600
+  reasoning_effort: low
+memory:
+  memory_enabled: false
+  user_profile_enabled: false
+auxiliary:
+  title_generation:
+    enabled: false
