@@ -1301,6 +1301,12 @@ def class_external_bases(klass):
 _external_busy_cache = {}
 
 
+def comfy_refused(exc):
+    """True only for a TCP connection refused (no listener on that port)."""
+    reason = getattr(exc, "reason", exc)
+    return isinstance(reason, ConnectionRefusedError)
+
+
 def class_externally_busy(klass, ttl=5.0):
     """True when something outside this service is holding the class.
 
@@ -1333,7 +1339,15 @@ def class_externally_busy(klass, ttl=5.0):
             if comfy_queue_busy(base):
                 busy = True
                 break
-        except Exception:
+        except Exception as exc:
+            # Connection REFUSED is an answer, not a failed probe: no process is
+            # listening, so nothing there holds the APU. Measured 2026-09-24:
+            # comfyui-034 (:8192) was SIGTERMed 2026-09-14 and never restarted,
+            # and treating its refusal as busy parked every :apu/video job on
+            # gad for ten days with ComfyUI :8188/:8191 idle. A timeout or any
+            # other error still cannot tell, and stays busy.
+            if comfy_refused(exc):
+                continue
             busy = True
             break
     _external_busy_cache[klass] = (now, busy)
