@@ -1,0 +1,38 @@
+(ns murakumo.cd-receipt-test
+  (:require [clojure.test :refer [deftest is]]
+            [ed25519.core :as ed]
+            [bonsai.object :as object]
+            [bonsai.repo :as repo]
+            [bonsai.refs :as refs]
+            [murakumo.blob :as blob]
+            [murakumo.cd.receipt :as receipt]
+            [murakumo.settle :refer [settle]]))
+
+(def seed (byte-array (repeat 32 (byte 6))))
+(def executor (ed/did-key-from-seed seed))
+(def rollout-result
+  {:receipt-cid "logical-cid"
+   :ref "refs/cd/deployments/capability"
+   :receipt {:cd.receipt/version 1 :cd.rollout/state :succeeded
+             :cd.rollout/capability-cid "capability"
+             :cd.rollout/artifact-cid "artifact"
+             :cd.rollout/events []}})
+
+(deftest terminal-receipt-is-stored-signed-and-restorable
+  (let [a (receipt/attest (repo/empty-repo) "rid-ci" seed rollout-result 10)]
+    (is (receipt/valid? {:rid "rid-ci" :executors #{executor}} a))
+    (is (= (:receipt-commit-cid a)
+           (refs/get-ref (:db a) "rid-ci" "refs/cd/deployments/capability")))
+    (is (not (receipt/valid? {:rid "rid-ci" :executors #{"did:key:other"}} a)))
+    (let [store (atom {})
+          restored (blob/then (blob/persist! #(swap! store assoc %1 %2) (:db a) (:blobs a) nil)
+                              #(repo/restore (fn [cid] (get @store cid)) %))]
+      (settle restored
+              (fn [restored]
+                ;; The receipt bytes live in the store under their CID, not in the db.
+                (is (= [(:receipt-blob-cid a)] (keys (:blobs a))))
+                (is (= (vec (get (:blobs a) (:receipt-blob-cid a)))
+                       (vec (get @store (:receipt-blob-cid a)))))
+                (is (nil? (object/read-blob (:db a) (:receipt-blob-cid a))))
+                (is (= (:tree (object/read-commit (:db a) (:receipt-commit-cid a)))
+                       (:tree (object/read-commit restored (:receipt-commit-cid a))))))))))
