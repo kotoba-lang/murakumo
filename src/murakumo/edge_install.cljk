@@ -269,7 +269,7 @@
 
 (defn- sha256-of [path]
   (-> (java.security.MessageDigest/getInstance "SHA-256")
-      (.digest (kio/read-all-bytes (java.io.File. path)))
+      (.digest (kio/read-all-bytes (kio/file path)))
       ;; `bit-and 0xff` because a JVM byte is signed: without it a byte over
       ;; 0x7f formats as `ffffffab` and no digest ever matches, so every sync
       ;; would report a failure it did not have.
