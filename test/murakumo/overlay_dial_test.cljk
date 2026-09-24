@@ -1,7 +1,7 @@
 ;; murakumo.overlay-dial-test — host dial reachability checks.
 
 (ns murakumo.overlay-dial-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is]]
             [murakumo.overlay.dial :as dial]
             [murakumo.overlay.relay :as relay])
   (:import [java.net ServerSocket SocketTimeoutException]))
@@ -13,7 +13,7 @@
       (try
         (with-open [socket (.accept server)]
           (.write (.getOutputStream socket)
-                  (.getBytes "murakumo test\n" "UTF-8")))
+                  (kbytes/utf8-bytes "murakumo test\n")))
         (catch SocketTimeoutException _ nil)
         (finally
           (.close server))))

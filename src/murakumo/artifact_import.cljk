@@ -1,6 +1,6 @@
 (ns murakumo.artifact-import
   "Offline, CID-verifying bootstrap import for coordinator CAS objects."
-  (:require [clojure.string :as str]
+  (:require [kotoba.io :as kio] [kotoba.lang.text :as str]
             [murakumo.artifact-store :as artifact-store]))
 
 (defn import! [root specification]
@@ -12,7 +12,7 @@
         (throw (ex-info "murakumo-artifact: import source is not a file"
                         {:reason :invalid-import-source :path path})))
       (artifact-store/put! root cid
-                           (java.nio.file.Files/readAllBytes (.toPath file)))
+                           (kio/read-all-bytes file))
       {:cid cid :path (.getCanonicalPath file)})))
 
 (defn -main [& [root & specifications]]

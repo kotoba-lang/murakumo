@@ -31,7 +31,7 @@
   (:require [babashka.process :as p]
             [json.compat :as json]
             [kotoba.lang.edn :as edn]
-            [clojure.java.io :as io]
+            [kotoba.io :as io]
             [kotoba.lang.text :as str]
             [murakumo.fleet :as fleet]
             [murakumo.infer.engine :as engine]
@@ -683,8 +683,8 @@
                   (let [{:keys [exit err]} (ssh/scp host "bin/rpc-server" ".murakumo/bin/rpc-server")]
                     (if-not (zero? exit)
                       (println (str "scp failed: " err))
-                      (let [_ (doseq [lib (->> (file-seq (io/file "bin"))
-                                               (map #(.getName %))
+                      (let [_ (doseq [lib (->> (io/file-seq (io/file "bin"))
+                                               (map #(io/file-name %))
                                                (filter #(str/ends-with? % ".dylib")))]
                                 (ssh/scp host (str "bin/" lib) (str ".murakumo/bin/" lib)))
                             _ (ssh/sh host "chmod +x .murakumo/bin/rpc-server")

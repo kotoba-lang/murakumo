@@ -9,7 +9,7 @@
 ;; signature actually verifies.
 
 (ns murakumo.overlay-witness-http-transport-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is testing]]
             [kotoba.lang.edn :as edn]
             [kotoba.lang.witness-quorum.attestation :as attestation]
             [kotoba.lang.witness-quorum.signer :as signer]
@@ -31,8 +31,8 @@
                 body (slurp (.getRequestBody ex))
                 envelope (edn/read-string body)
                 response (handler (:payload envelope))
-                resp-bytes (.getBytes (pr-str {:type "cloud-murakumo.witness-rpc-response"
-                                               :version 1 :payload response}) "UTF-8")]
+                resp-bytes (kbytes/utf8-bytes (pr-str {:type "cloud-murakumo.witness-rpc-response"
+                                               :version 1 :payload response}))]
             (.sendResponseHeaders ex 200 (alength resp-bytes))
             (with-open [os (.getResponseBody ex)]
               (.write os resp-bytes))))))

@@ -1,5 +1,5 @@
 (ns murakumo.desired-state-test
-  (:require [kotoba.lang.edn :as edn]
+  (:require [kotoba.io :as kio] [kotoba.lang.edn :as edn]
             [kotoba.test :refer [deftest is testing]]
             [kekkai.cacao :as cacao]
             [kekkai.desired-state :as desired]
@@ -11,9 +11,8 @@
    {:name "c" :roles ["pin"] :labels {:zone "us"}}])
 
 (defn- temp-dir []
-  (.toFile (java.nio.file.Files/createTempDirectory
-            "murakumo-desired-"
-            (make-array java.nio.file.attribute.FileAttribute 0))))
+  (kio/temp-dir
+            "murakumo-desired-"))
 
 (defn- failure-type [f]
   (try (f) nil

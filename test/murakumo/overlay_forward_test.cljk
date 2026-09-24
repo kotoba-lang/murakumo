@@ -1,7 +1,7 @@
 ;; murakumo.overlay-forward-test — local forwarder checks.
 
 (ns murakumo.overlay-forward-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is]]
             [murakumo.overlay.forward :as forward]
             [murakumo.overlay.relay :as relay])
   (:import [java.net Socket]))
@@ -113,7 +113,7 @@
       (with-open [client (Socket. "127.0.0.1" forward-port)]
         (let [out (.getOutputStream client)
               in (.getInputStream client)
-              payload (.getBytes "abc\ndef\u0000ghi" "UTF-8")
+              payload (kbytes/utf8-bytes "abc\ndef\u0000ghi")
               received (byte-array (alength ^bytes payload))]
           (.write out payload)
           (.flush out)

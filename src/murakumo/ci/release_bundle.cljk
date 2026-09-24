@@ -1,7 +1,7 @@
 (ns murakumo.ci.release-bundle
   "Host-side construction of deployable bundles from verified CI artifacts."
-  (:require [clojure.edn :as edn]
-            [clojure.string :as str]
+  (:require [kotoba.bytes :as kbytes] [clojure.edn :as edn]
+            [kotoba.lang.text :as str]
             [murakumo.blob :as blob]
             [murakumo.canonical :as canonical]
             [murakumo.cd.bundle :as bundle]
@@ -26,7 +26,7 @@
       (when-not (and manifest-bytes (verify-bytes (:cid manifest-artifact) manifest-bytes))
         (throw (ex-info "murakumo-ci: resolved app manifest unavailable or corrupt"
                         {:reason :release-manifest-corrupt})))
-      (let [manifest (String. ^bytes manifest-bytes java.nio.charset.StandardCharsets/UTF_8)
+      (let [manifest (kbytes/utf8-string ^bytes manifest-bytes)
             parsed (try (edn/read-string manifest) (catch Exception _ nil))
             manifest-cids (set (keep #(or (:cid %) (:kotoba.component/cid %))
                                      (:kotoba.app/components parsed)))

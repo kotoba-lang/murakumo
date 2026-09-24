@@ -16,7 +16,7 @@
 ;; is the authority for that encoding, including the work-kind codes checked here.
 
 (ns murakumo.aiueos-join-plan-parity-test
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.io :as io]
             [kotoba.test :refer [deftest is testing]]
             [kotoba.compiler.core :as compiler]
             [kotoba.kir :as ir]
@@ -44,7 +44,7 @@
   Failing in each test instead means the count of red tests is the count of
   questions that could not be put, which is the honest number."
   []
-  (let [present? (.exists source-file)]
+  (let [present? (io/exists? source-file)]
     (is present?
         (str "aiueos checkout not found at " source-file
              " -- set AIUEOS_ROOT to the kotoba-lang/aiueos checkout. This"

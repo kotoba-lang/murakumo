@@ -17,7 +17,7 @@
 ;; the image comes home over scp.
 
 (ns murakumo.infer.media
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.http.form-urlencoded :as form-urlencoded] [kotoba.io :as io]
             [kotoba.lang.http.host.babashka :as http]
             [babashka.process :as p]
             [json.compat :as json]
@@ -279,7 +279,7 @@
    here throws. The node-side path is gone entirely -- /view is answered by
    ComfyUI itself, which knows where its own output lives."
   [host file local]
-  (let [enc  #(java.net.URLEncoder/encode (str %) "UTF-8")
+  (let [enc  #(form-urlencoded/form-encode (str %))
         q    (str "/view?filename=" (enc (:filename file))
                   "&subfolder=" (enc (or (:subfolder file) ""))
                   "&type=" (enc (or (:type file) "output")))
@@ -311,7 +311,7 @@
       (throw (ex-info "artifact fetch failed on node"
                       {:host host :file (:filename file) :exit exit})))
     (let [f (io/file local)]
-      (when-not (and (.exists f) (pos? (.length f)))
+      (when-not (and (io/exists? f) (pos? (io/length f)))
         (throw (ex-info "artifact fetch produced no bytes"
                         {:host host :file (:filename file)})))
       local)))

@@ -1,9 +1,8 @@
 (ns murakumo.ci.file-store
   "Crash-safe local IStore adapter for broker snapshots and event streams."
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.bytes :as kbytes] [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [murakumo.durable-file :as durable-file])
-  (:import [java.nio.charset StandardCharsets]))
+            [murakumo.durable-file :as durable-file]))
 
 (defn- safe-name [value]
   (when-not (and (string? value) (re-matches #"[A-Za-z0-9._-]+" value))
@@ -16,7 +15,7 @@
     (edn/read-string (slurp file))))
 
 (defn- atomic-write! [file value]
-  (durable-file/write! file (.getBytes (pr-str value) StandardCharsets/UTF_8))
+  (durable-file/write! file (kbytes/utf8-bytes (pr-str value)))
   value)
 
 (defn create [root]

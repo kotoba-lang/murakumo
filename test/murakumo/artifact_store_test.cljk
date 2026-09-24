@@ -1,13 +1,12 @@
 (ns murakumo.artifact-store-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.io :as kio] [kotoba.test :refer [deftest is]]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
             [murakumo.artifact-store :as store]))
 
 (deftest verified-filesystem-cas-roundtrip
-  (let [root (str (java.nio.file.Files/createTempDirectory
-                   "murakumo-cas"
-                   (make-array java.nio.file.attribute.FileAttribute 0)))
+  (let [root (str (kio/temp-dir
+                   "murakumo-cas"))
         bytes (.getBytes "artifact")
         cid (second (object/write-blob (repo/empty-repo) bytes))
         cas (store/adapter root)]

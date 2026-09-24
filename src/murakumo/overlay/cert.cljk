@@ -1,7 +1,7 @@
 ;; murakumo.overlay.cert — kagi-compatible local QUIC certificate material store.
 
 (ns murakumo.overlay.cert
-  (:require [clojure.java.io :as io]
+  (:require [kotoba.bytes :as kbytes] [clojure.java.io :as io]
             [kotoba.lang.text :as str]
             [murakumo.config :as config])
   (:import [java.io StringWriter]
@@ -162,7 +162,7 @@
     :else x))
 
 (defn hash-event [event]
-  (sha256-hex (.getBytes (pr-str (canonical (dissoc event :hash))) "UTF-8")))
+  (sha256-hex (kbytes/utf8-bytes (pr-str (canonical (dissoc event :hash))))))
 
 (defn append-audit [idx op material-key record extra]
   (let [prev (last (:audit idx))
@@ -188,7 +188,7 @@
     (str writer)))
 
 (defn pkcs8-private-key-pem [private-key]
-  (let [encoded (.encodeToString (Base64/getMimeEncoder 64 (.getBytes "\n" "UTF-8"))
+  (let [encoded (.encodeToString (Base64/getMimeEncoder 64 (kbytes/utf8-bytes "\n"))
                                  (.getEncoded private-key))]
     (str "-----BEGIN PRIVATE KEY-----\n"
          encoded
@@ -265,8 +265,8 @@
    :cert (.getPath (:cert paths))
    :key (.getPath (:key paths))
    :fingerprint (:fingerprint issued)
-   :cert-pem-sha256 (sha256-hex (.getBytes (:cert-pem issued) "UTF-8"))
-   :key-pem-sha256 (sha256-hex (.getBytes (:key-pem issued) "UTF-8"))
+   :cert-pem-sha256 (sha256-hex (kbytes/utf8-bytes (:cert-pem issued)))
+   :key-pem-sha256 (sha256-hex (kbytes/utf8-bytes (:key-pem issued)))
    :not-after (str (.toInstant ^Date (:not-after issued)))
    :issued-at (str (Instant/now))})
 

@@ -64,7 +64,7 @@
 ;; is an operational step the fleet owner takes separately, same as
 ;; renderer-mac's README documents for its own tunnel.
 (ns murakumo.infer.gateway
-  (:require [kotoba.lang.http.host.babashka :as http-client]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.http.host.babashka :as http-client]
             [json.compat :as json]
             [clojure.java.io :as io]
             [kotoba.lang.text :as str]
@@ -143,7 +143,7 @@
       (throw (ex-info "murakumo render produced no output file" {:history hist})))
     (let [local (str "murakumo-" filename)
           bytes (.readAllBytes (io/input-stream local))]
-      {:data [{:b64_json (.encodeToString (java.util.Base64/getEncoder) bytes)}]
+      {:data [{:b64_json (kbytes/base64-encode bytes)}]
        :murakumo {:node (:name node-info) :width width :height height :n (or n 1)}})))
 
 (defn pick-any-node!
@@ -177,7 +177,7 @@
     (when-not local
       (throw (ex-info "murakumo workflow produced no output file" {:output-node output-node :output-key output-key})))
     (let [bytes (.readAllBytes (io/input-stream local))]
-      {:b64_json (.encodeToString (java.util.Base64/getEncoder) bytes)
+      {:b64_json (kbytes/base64-encode bytes)
        :filename local})))
 
 (def default-text-backend-url

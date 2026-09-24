@@ -1,12 +1,11 @@
 (ns murakumo.artifact-remote
   "Remote, chunked CAS receiver. Only objects belonging to the capability's
    signed release bundle are accepted."
-  (:require [clojure.java.io :as io]
-            [clojure.string :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [clojure.java.io :as io]
+            [kotoba.lang.text :as str]
             [murakumo.artifact-protocol :as protocol]
             [murakumo.cd.bundle :as bundle]
-            [murakumo.cd.capability :as capability])
-  (:import [java.util Base64]))
+            [murakumo.cd.capability :as capability]))
 
 (def default-max-object-bytes (* 512 1024 1024))
 (def default-max-chunk-bytes (* 48 1024))
@@ -103,7 +102,7 @@
                       bytes (when (and (string? encoded)
                                        (<= (count encoded)
                                            (+ 4 (* 4 (long (Math/ceil (/ max-chunk-bytes 3.0)))))))
-                              (.decode (Base64/getDecoder) ^String encoded))]
+                              (kbytes/base64-decode-bytes ^String encoded))]
                   (if-not (and (= object-cid (:murakumo.artifact/object-cid request))
                                (= next-seq sequence) bytes
                                (<= (alength ^bytes bytes) max-chunk-bytes)
@@ -123,7 +122,7 @@
                 (if-not (and (= object-cid (:murakumo.artifact/object-cid request))
                              (= size received))
                   (do (cleanup! id) (respond (denied :incomplete-transfer)))
-                  (let [bytes (java.nio.file.Files/readAllBytes (.toPath ^java.io.File file))]
+                  (let [bytes (kio/read-all-bytes ^java.io.File file)]
                     (put! object-cid bytes)
                     (cleanup! id)
                     (respond {:ok? true :status :stored :cid object-cid})))

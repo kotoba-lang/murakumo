@@ -1,5 +1,5 @@
 (ns murakumo.cd-node-daemon-test
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.io :as kio] [clojure.edn :as edn]
             [kotoba.test :refer [deftest is]]
             [murakumo.cd.node-daemon :as daemon]))
 
@@ -19,9 +19,8 @@
                     :health-url "http://127.0.0.1:8077/health"}})
 
 (deftest production-config-builds-one-multiplexed-handler
-  (let [root (str (java.nio.file.Files/createTempDirectory
-                   "murakumo-node-daemon"
-                   (make-array java.nio.file.attribute.FileAttribute 0)))
+  (let [root (str (kio/temp-dir
+                   "murakumo-node-daemon"))
         built (daemon/build (config root) {"TOKEN" "secret"})]
     (is (= {:host "0.0.0.0" :port 4433}
            (get-in built [:overlay-request :connect])))

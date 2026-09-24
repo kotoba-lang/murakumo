@@ -9,7 +9,7 @@
 ;; lattice participation into one view.
 
 (ns murakumo.core
-  (:require [babashka.process :as p]
+  (:require [kotoba.io :as kio] [babashka.process :as p]
             [json.compat :as json]
             [kotoba.lang.text :as str]
             [murakumo.config :as config]
@@ -136,7 +136,7 @@
   (let [bm (build-manifest)]
     (when (deploy/missing-pinned-binaries?
            bm
-           (.exists (java.io.File. (config/kotoba-server-bin local-bin))))
+           (kio/exists? (kio/file (config/kotoba-server-bin local-bin))))
       (binding [*out* *err*]
         (doseq [line (report/missing-pinned-binaries-lines bm)]
           (println line)))
@@ -314,8 +314,8 @@
   (let [src (deploy/pin-source src kotoba-dir)
         dest (config/pinned-bin-dir user-dir)
         pin (deploy/pin-copy-plan src dest)]
-    (.mkdirs (java.io.File. dest))
-    (doseq [{:keys [src]} (deploy/missing-pin-binaries pin #(.exists (java.io.File. %)))]
+    (kio/mkdirs (kio/file dest))
+    (doseq [{:keys [src]} (deploy/missing-pin-binaries pin #(kio/exists? (kio/file %)))]
       (binding [*out* *err*] (println (report/missing-binary-line src)))
       (System/exit 2))
     (doseq [argv (deploy/pin-binary-copy-argvs pin)]
@@ -323,7 +323,7 @@
     ;; pin the WIT alongside the binary (a release dir is target/<triple>/release,
     ;; so its WIT is ../../../crates/kotoba-runtime/wit) — deploy compiles against
     ;; the SAME WIT version the binary expects (avoids world-name skew).
-    (doseq [argv (deploy/pin-wit-argvs pin (.exists (java.io.File. (get-in pin [:wit :src]))))]
+    (doseq [argv (deploy/pin-wit-argvs pin (kio/exists? (kio/file (get-in pin [:wit :src]))))]
       (apply p/sh argv))
     (let [git-bin (deploy/resolve-git-bin
                    {:git-bin (config/git-bin-override)})

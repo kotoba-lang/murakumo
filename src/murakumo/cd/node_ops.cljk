@@ -2,12 +2,11 @@
   "Node-local deploy operations backed by locally configured argv builders.
    The wire request can select signed release values, but can never supply an
    executable or shell fragment. Successful activation is durably recorded."
-  (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
-            [clojure.string :as str]
+  (:require [kotoba.bytes :as kbytes] [clojure.edn :as edn]
+            [kotoba.io :as io]
+            [kotoba.lang.text :as str]
             [murakumo.ci.host :as host]
-            [murakumo.durable-file :as durable-file])
-  (:import [java.nio.charset StandardCharsets]))
+            [murakumo.durable-file :as durable-file]))
 
 (defn valid-argv? [argv]
   (and (vector? argv)
@@ -16,14 +15,14 @@
 
 (defn read-active [state-file]
   (let [file (io/file state-file)]
-    (when (.isFile file)
+    (when (io/file? file)
       (edn/read-string (slurp file)))))
 
 (defn write-active!
   "Atomically replace the active-release record, including fsync of its temp
    file. ATOMIC_MOVE is used where supported and safely falls back to replace."
   [state-file state]
-  (durable-file/write! (io/file state-file) (.getBytes (pr-str state) StandardCharsets/UTF_8))
+  (durable-file/write! (io/file state-file) (kbytes/utf8-bytes (pr-str state)))
   state)
 
 (defn- execute-one [exec-fn argv timeout-ms]

@@ -1,12 +1,12 @@
 (ns murakumo.cd-bundle-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.test :refer [deftest is testing]]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
             [murakumo.canonical :as canonical]
             [murakumo.cd.bundle :as bundle]))
 
 (defn blob [s]
-  (let [bytes (.getBytes s java.nio.charset.StandardCharsets/UTF_8)]
+  (let [bytes (kbytes/utf8-bytes s)]
     [(second (object/write-blob (repo/empty-repo) bytes)) bytes]))
 
 (defn manifest [cid]
@@ -31,9 +31,8 @@
         document (bundle/create {:revision "sha-123" :manifest (manifest component-cid)
                                  :components [{:path "components/demo.wasm" :cid component-cid}]})
         bundle-cid (bundle/cid document)
-        root (str (java.nio.file.Files/createTempDirectory
-                   "murakumo-release"
-                   (make-array java.nio.file.attribute.FileAttribute 0)))
+        root (str (kio/temp-dir
+                   "murakumo-release"))
         first-result (bundle/materialize! {component-cid component-bytes}
                                           root bundle-cid document)
         second-result (bundle/materialize! {component-cid component-bytes}

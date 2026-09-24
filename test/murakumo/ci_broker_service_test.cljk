@@ -1,5 +1,5 @@
 (ns murakumo.ci-broker-service-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.io :as kio] [kotoba.test :refer [deftest is]]
             [ed25519.core :as ed]
             [nekko.sigref :as sigref]
             [murakumo.ci.attest :as attest]
@@ -15,9 +15,8 @@
 
 (deftest persistent-rpc-service-drives-full-lease-lifecycle
   (let [now (atom 100)
-        root (str (java.nio.file.Files/createTempDirectory
-                   "murakumo-broker"
-                   (make-array java.nio.file.attribute.FileAttribute 0)))
+        root (str (kio/temp-dir
+                   "murakumo-broker"))
         persistent (file-store/create root)
         coordinator (service/create {:store persistent :clock-ms #(long @now)
                                      :lease-ttl-ms 50 :token-fn (constantly "token")})

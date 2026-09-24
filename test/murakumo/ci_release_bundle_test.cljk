@@ -1,5 +1,5 @@
 (ns murakumo.ci-release-bundle-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is]]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
             [murakumo.cd.bundle :as bundle]
@@ -7,7 +7,7 @@
             [murakumo.ci.release-bundle :as release-bundle]))
 
 (defn put! [store text]
-  (let [bytes (.getBytes text java.nio.charset.StandardCharsets/UTF_8)
+  (let [bytes (kbytes/utf8-bytes text)
         cid (second (object/write-blob (repo/empty-repo) bytes))]
     (swap! store assoc cid bytes)
     {:cid cid :size (alength bytes)}))

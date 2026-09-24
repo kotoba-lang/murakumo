@@ -1,5 +1,5 @@
 (ns murakumo.cd-automation-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.test :refer [deftest is]]
             [ed25519.core :as ed]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
@@ -14,7 +14,7 @@
             [murakumo.settle :refer [settle]]))
 
 (defn blob [text]
-  (let [bytes (.getBytes text "UTF-8")]
+  (let [bytes (kbytes/utf8-bytes text)]
     [(second (object/write-blob (repo/empty-repo) bytes)) bytes]))
 
 (deftest canonical-action-replicates-rolls-out-and-advances-environment-once
@@ -39,9 +39,8 @@
         handlers
         (into {}
               (for [node nodes
-                    :let [root (str (java.nio.file.Files/createTempDirectory
-                                     (str "automation-" node)
-                                     (make-array java.nio.file.attribute.FileAttribute 0)))
+                    :let [root (str (kio/temp-dir
+                                     (str "automation-" node)))
                           cas (artifact-store/adapter (str root "/cas"))]]
                 [node (service/create-node-handler-with-operations
                        {:node-id node :rid "rid" :issuers #{issuer}

@@ -1,9 +1,8 @@
 (ns murakumo.ci.radicle-verifier
   "Raw-body Ed25519 verification and RID-scoped signer authorization."
-  (:require [json.compat :as json]
-            [clojure.string :as str]
-            [ed25519.core :as ed])
-  (:import [java.nio.charset StandardCharsets]))
+  (:require [kotoba.bytes :as kbytes] [json.compat :as json]
+            [kotoba.lang.text :as str]
+            [ed25519.core :as ed]))
 
 (def default-max-clock-skew-seconds 300)
 
@@ -25,6 +24,6 @@
                   max-clock-skew-seconds)
               (string? signature)
               (ed/verify-did signer
-                             (.getBytes raw StandardCharsets/UTF_8)
+                             (kbytes/utf8-bytes raw)
                              (ed/unhex signature)))))
       (catch Throwable _ false))))

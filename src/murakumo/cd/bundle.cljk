@@ -1,12 +1,12 @@
 (ns murakumo.cd.bundle
   "Content-addressed, deployable Kotoba release bundles."
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.bytes :as kbytes] [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [murakumo.blob :as blob]
             [murakumo.canonical :as canonical]
             [murakumo.durable-file :as durable-file])
-  (:import [java.nio.charset StandardCharsets]
+  (:import
            [java.nio.file Files LinkOption]))
 
 (def version 1)
@@ -82,7 +82,7 @@
                (blob/cid bytes))
     (throw (ex-info "murakumo-cd: release bundle CID mismatch"
                     {:reason :bundle-cid-mismatch :expected expected-cid})))
-  (let [bundle (edn/read-string (String. ^bytes bytes StandardCharsets/UTF_8))]
+  (let [bundle (edn/read-string (kbytes/utf8-string ^bytes bytes))]
     (when-not (valid? bundle)
       (throw (ex-info "murakumo-cd: invalid release bundle"
                       {:reason :invalid-release-bundle})))
@@ -138,10 +138,10 @@
                                          (make-array java.nio.file.attribute.FileAttribute 0))
                 (Files/write dest bytes (make-array java.nio.file.OpenOption 0))))
             (Files/write (.resolve tmp "kotoba.app.edn")
-                         (.getBytes (:cd.bundle/manifest bundle) StandardCharsets/UTF_8)
+                         (kbytes/utf8-bytes (:cd.bundle/manifest bundle))
                          (make-array java.nio.file.OpenOption 0))
             (Files/write (.resolve tmp "bundle.cid")
-                         (.getBytes (str bundle-cid "\n") StandardCharsets/UTF_8)
+                         (kbytes/utf8-bytes (str bundle-cid "\n"))
                          (make-array java.nio.file.OpenOption 0))
             (durable-file/move! tmp target)
             {:release-dir (str target) :manifest-path (str (.resolve target "kotoba.app.edn"))

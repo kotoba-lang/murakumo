@@ -1,5 +1,5 @@
 (ns murakumo.cd-kotoba-ops-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.test :refer [deftest is]]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
             [murakumo.canonical :as canonical]
@@ -8,7 +8,7 @@
             [murakumo.cd.node-ops :as node-ops]))
 
 (defn blob [s]
-  (let [bytes (.getBytes s java.nio.charset.StandardCharsets/UTF_8)]
+  (let [bytes (kbytes/utf8-bytes s)]
     [(second (object/write-blob (repo/empty-repo) bytes)) bytes]))
 
 (deftest verified-bundle-is-put-published-health-checked-and-rollbackable
@@ -28,9 +28,8 @@
         store {v2-cid v2-bytes v1-cid v1-bytes
                v2-bundle-cid (canonical/encode-bytes v2)
                v1-bundle-cid (canonical/encode-bytes v1)}
-        root (str (java.nio.file.Files/createTempDirectory
-                   "murakumo-kotoba-ops"
-                   (make-array java.nio.file.attribute.FileAttribute 0)))
+        root (str (kio/temp-dir
+                   "murakumo-kotoba-ops"))
         state-file (str root "/active.edn")
         commands (atom [])
         ops (kotoba-ops/operation-set

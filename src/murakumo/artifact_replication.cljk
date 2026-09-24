@@ -1,9 +1,9 @@
 (ns murakumo.artifact-replication
   "Controller-side chunked replication of signed release objects over QUIC."
-  (:require [clojure.string :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [murakumo.artifact-protocol :as protocol]
             [murakumo.cd.bundle :as bundle])
-  (:import [java.util Base64 UUID]))
+  (:import [java.util UUID]))
 
 (def default-chunk-bytes (* 48 1024))
 (def default-timeout-ms 10000)
@@ -59,7 +59,7 @@
                                       (assoc fields
                                              :murakumo.artifact/sequence sequence
                                              :murakumo.artifact/data
-                                             (.encodeToString (Base64/getEncoder) ^bytes chunk)))]
+                                             (kbytes/base64-encode ^bytes chunk)))]
                       (if (:ok? result)
                         (recur (rest remaining))
                         result))
