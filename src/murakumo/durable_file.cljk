@@ -1,0 +1,117 @@
+(ns murakumo.durable-file
+  "Crash-safe whole-file replacement for the CI/CD stores (artifact CAS,
+   broker file store, active-release record, release bundles).
+
+   One write is: bytes to a temp file in the target's directory, fsync the
+   temp file, rename it over the target, then fsync the directory so the new
+   entry survives a crash. Readers therefore see either the old file or the
+   complete new one, never a torn write.
+
+   The host split is the fsync. On the JVM it is FileChannel.force; on kbb
+   (node) the java.nio shim has no FileChannel, so the same sequence goes
+   through node:fs directly. Both sides rename within one directory, which is
+   atomic on POSIX filesystems."
+  (:require #?(:cljs ["node:fs" :as fs])
+            #?(:cljs ["node:path" :as node-path]))
+  #?(:clj (:import [java.nio ByteBuffer]
+                   [java.nio.channels FileChannel]
+                   [java.nio.file AtomicMoveNotSupportedException Files Path Paths
+                    StandardCopyOption StandardOpenOption]
+                   [java.nio.file.attribute FileAttribute])))
+
+#?(:clj
+   (defn- ->path ^Path [p] (Paths/get (str p) (make-array String 0))))
+
+#?(:clj
+   (defn- fsync-dir! [^Path dir]
+     ;; Some platforms refuse a directory channel; the renamed file is still
+     ;; complete there, only the directory-entry durability is weaker.
+     (try
+       (with-open [channel (FileChannel/open dir (into-array StandardOpenOption
+                                                             [StandardOpenOption/READ]))]
+         (.force channel true))
+       (catch Exception _ nil))))
+
+#?(:cljs
+   (defn- fsync-dir! [dir]
+     (try
+       (let [fd (fs/openSync dir "r")]
+         (try (fs/fsyncSync fd) (finally (fs/closeSync fd))))
+       (catch :default _ nil))))
+
+#?(:cljs
+   (defn- ->buffer [bytes]
+     (if (js/ArrayBuffer.isView bytes)
+       (js/Buffer.from (.-buffer bytes) (.-byteOffset bytes) (.-byteLength bytes))
+       (js/Buffer.from (clj->js (vec bytes))))))
+
+(defn move!
+  "Rename `src` to `dst` (files or directories), atomically where the host
+   filesystem allows it, replacing an existing `dst` file."
+  [src dst]
+  #?(:clj
+     (let [a (->path src) b (->path dst)]
+       (try
+         (Files/move a b (into-array StandardCopyOption
+                                     [StandardCopyOption/ATOMIC_MOVE
+                                      StandardCopyOption/REPLACE_EXISTING]))
+         (catch AtomicMoveNotSupportedException _
+           (Files/move a b (into-array StandardCopyOption
+                                       [StandardCopyOption/REPLACE_EXISTING]))))
+       (str dst))
+     :cljs
+     (do (fs/renameSync (str src) (str dst))
+         (str dst))))
+
+(defn write!
+  "Replace the file at `path` with `bytes` (a byte array), creating parent
+   directories. Returns the path string."
+  [path bytes]
+  #?(:clj
+     (let [target (->path path)
+           parent (.getParent target)
+           _ (Files/createDirectories parent (make-array FileAttribute 0))
+           tmp (Files/createTempFile parent ".durable-" ".tmp" (make-array FileAttribute 0))]
+       (try
+         (with-open [channel (FileChannel/open tmp (into-array StandardOpenOption
+                                                               [StandardOpenOption/WRITE
+                                                                StandardOpenOption/TRUNCATE_EXISTING]))]
+           (let [buffer (ByteBuffer/wrap ^bytes bytes)]
+             (while (.hasRemaining buffer) (.write channel buffer)))
+           (.force channel true))
+         (move! tmp target)
+         (fsync-dir! parent)
+         (str target)
+         (finally (Files/deleteIfExists tmp))))
+     :cljs
+     (let [target (str path)
+           parent (node-path/dirname target)
+           _ (fs/mkdirSync parent #js {:recursive true})
+           tmp (node-path/join parent (str ".durable-" (random-uuid) ".tmp"))
+           buf (->buffer bytes)]
+       (try
+         (let [fd (fs/openSync tmp "wx")]
+           (try
+             (loop [off 0]
+               (when (< off (.-length buf))
+                 (recur (+ off (fs/writeSync fd buf off (- (.-length buf) off))))))
+             (fs/fsyncSync fd)
+             (finally (fs/closeSync fd))))
+         (move! tmp target)
+         (fsync-dir! parent)
+         target
+         (finally
+           (when (fs/existsSync tmp) (fs/unlinkSync tmp)))))))
+
+(defn delete-tree!
+  "Remove `path` and everything under it, if it exists. Symlinks are removed,
+   never followed."
+  [path]
+  #?(:clj
+     (let [root (->path path)]
+       (when (Files/exists root (make-array java.nio.file.LinkOption 0))
+         (doseq [file (reverse (file-seq (.toFile root)))]
+           (Files/deleteIfExists (.toPath ^java.io.File file)))))
+     :cljs
+     (fs/rmSync (str path) #js {:recursive true :force true}))
+  nil)
