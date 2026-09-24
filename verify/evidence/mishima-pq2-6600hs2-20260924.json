@@ -1,0 +1,57 @@
+{
+  "schema": "murakumo.mishima-hosting/v1",
+  "measured_at": "2026-09-24T14:16:34Z",
+  "node": {
+    "name": "aiueos-6600hs-2",
+    "tailscale_ip": "100.84.134.120",
+    "lan_ip": "192.168.1.10",
+    "cpu": "AMD Ryzen 7 7735HS",
+    "gpu": "AMD Radeon 680M",
+    "ram_gib": 24,
+    "os": "Ubuntu 24.04",
+    "kernel": "6.8.0-142-generic"
+  },
+  "model": {
+    "id": "mishima",
+    "repo": "prism-ml/Ternary-Bonsai-2-27B-gguf",
+    "artifact": "Ternary-Bonsai-2-27B-PQ2_0.gguf",
+    "format": "PQ2_0, 2.13 bpw, group 128",
+    "bytes": 7206168928,
+    "sha256": "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1"
+  },
+  "runtime": {
+    "engine": "PrismML llama.cpp Vulkan",
+    "build": "b10735, 842b18804",
+    "gpu_layers_requested": 99,
+    "threads": 16,
+    "parallel_slots": 1,
+    "context_tokens": 65536,
+    "kv_cache": "q4_0 for K and V",
+    "flash_attention": true,
+    "systemd_user_service": "mishima.service",
+    "systemd_enabled": true,
+    "user_linger": true,
+    "api_bind": "127.0.0.1:8094",
+    "murakumo_join_service": "murakumo-mishima-join.service"
+  },
+  "verification": {
+    "service_active": true,
+    "model_metadata": "mishima reports PQ2_0 - 2.13 bpw, model size 7195047936",
+    "local_openai_chat_smoke": {
+      "prompt": "Reply with the number only: what is 7 times 6?",
+      "answer": "42",
+      "finish_reason": "stop",
+      "prompt_tokens": 26,
+      "completion_tokens": 3
+    },
+    "gpu_busy_peak_during_smoke_percent": 100,
+    "murakumo_registration_http": 200,
+    "murakumo_admission": "pending",
+    "public_job_eligibility": "not established while admission is pending"
+  },
+  "limits": [
+    "The GPU activity sample proves GPU work during the smoke request; it does not establish that every layer was offloaded.",
+    "The Murakumo node is registered and heartbeating, but pending admission means public community-job eligibility is not yet proven.",
+    "The API is bound to loopback; the local server API key is disabled because the node CLI preflight returned HTTP 401 with that key configured. No non-loopback listener is configured."
+  ]
+}

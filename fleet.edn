@@ -219,7 +219,14 @@
   ;; (66.0 s), 31,054 at 90.47 tok/s (343.3 s). It is therefore a normal and
   ;; long head, not an ultra head; >30K stays pinned to gad.
   {:name "aiueos-6600hs-1" :host "root@100.98.24.37" :rpc-ip "192.168.1.2" :mac "9c:6b:00:cf:ad:55" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "vulkan-infer"}
-   :node/serves ["mishima"]}
+   :node/serves "mishima"}
+
+  ;; aiueos-6600hs-2 (Ryzen 7 7735HS / Radeon 680M, 24 GB RAM). Mishima
+  ;; currently runs the experimental PQ2_0 artifact on Prism Vulkan, one slot;
+  ;; the Murakumo Community registration is live but admission is still pending
+  ;; (see verify/evidence/mishima-pq2-6600hs2-20260924.json).
+  {:name "aiueos-6600hs-2" :host "root@100.84.134.120" :rpc-ip "192.168.1.10" :mac "0c:47:a9:60:9d:34" :roles ["compute"] :labels {:tier "edge" :zone "jp" :role "vulkan-infer"}
+   :node/serves "mishima"}
 
   ;; aiueos K16 (Ryzen 7 7735HS / Radeon 680M, 26 GiB usable RAM). 2026-09-20
   ;; owner retired Nex and Ling and ended co-residency. Their joins, llama
@@ -231,4 +238,4 @@
   ;; tok/s (400.1 s). This remains a warm standby outside the public router
   ;; until 128K long-running stability and concurrency are qualified.
   {:name "aiueos-k16" :host "root@100.66.205.17" :roles ["compute"] :labels {:tier "edge" :zone "jp" :role "vulkan-infer-standby"}
-   :node/serves ["mishima"]}]}
+   :node/serves "mishima"}]}
