@@ -95,5 +95,46 @@ class PreemptTest(unittest.TestCase):
             self.assertEqual([], calls)
 
 
+class ExternalBusyProbeTest(unittest.TestCase):
+    """A stopped sibling ComfyUI (connection refused) holds nothing; a probe that
+    cannot answer (timeout, garbage) is still busy."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.api = load_api(pathlib.Path(self.tmp.name))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _with_bases(self, bases):
+        self.api.COMFY_BASES[:] = bases
+        self.api._external_busy_cache.clear()
+        return self.api.class_externally_busy(":apu/video")
+
+    def _closed_port(self):
+        import socket
+        s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+        return "http://127.0.0.1:%d" % port
+
+    def test_a_refused_sibling_is_not_busy(self):
+        self.assertFalse(self._with_bases([self._closed_port()]))
+
+    def test_an_unanswerable_probe_is_still_busy(self):
+        import socket
+        srv = socket.socket(); srv.bind(("127.0.0.1", 0)); srv.listen(1)
+        base = "http://127.0.0.1:%d" % srv.getsockname()[1]
+        orig = self.api.comfy_json
+        self.api.comfy_json = lambda *a, **k: orig(*a, **{**k, "timeout": 0.3})
+        try:
+            self.assertTrue(self._with_bases([base]), "accepted but never answered = cannot tell")
+        finally:
+            self.api.comfy_json = orig
+            srv.close()
+
+    def test_refused_plus_a_busy_sibling_is_busy(self):
+        self.api.comfy_queue_busy = lambda base: base == "http://busy"
+        self.assertTrue(self._with_bases([self._closed_port(), "http://busy"]))
+
+
 if __name__ == "__main__":
     unittest.main()
