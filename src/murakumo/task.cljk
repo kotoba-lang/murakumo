@@ -62,13 +62,15 @@
              [(keyword k) v])))
 
 (defn- edn-out? [f] (= "edn" (get f "format")))
+(defn- json-out? [f] (= "json" (get f "format")))
 
 (defn- emit
   "Print either the human table (via `table-fn`) or a machine-readable EDN map."
   [f data table-fn]
-  (if (edn-out? f)
-    (println (pr-str data))
-    (table-fn data)))
+  (cond
+    (edn-out? f) (println (pr-str data))
+    (json-out? f) (println (.stringify js/JSON (clj->js data)))
+    :else (table-fn data)))
 
 ;; --- io ---------------------------------------------------------------------
 
@@ -208,6 +210,10 @@
 
 (defn- plan-report [nodes skipped p opts]
   {:by-node (plan/plan-table p nodes opts)
+   :placements (mapv (fn [a] {:task-id (get-in a [:task :id])
+                              :node (:node a)
+                              :host (:host a)})
+                     (:assignments p))
    :skipped (vec skipped)
    :assigned (count (:assignments p))
    :unschedulable (mapv (fn [u] {:id (get-in u [:task :id]) :detail (:detail u)})
@@ -225,6 +231,9 @@
 
 (defn cmd-plan [f]
   (let [fleet (load-fleet f)
+        fleet (if-let [wanted (some-> (get f "nodes") csv set)]
+                (update fleet :nodes (fn [nodes] (filterv #(contains? wanted (:name %)) nodes)))
+                fleet)
         tasks (tasks-from f)
         opts0 (opts-from f fleet)
         finish (fn [nodes]
