@@ -9,6 +9,7 @@ for name in poll_worker image_job backoff; do
 done
 mkdir -p .node-build/src/murakumo
 cp src/murakumo/bench.cljk .node-build/src/murakumo/bench.cljs
+cp src/murakumo/fleet_ps.cljk .node-build/src/murakumo/fleet_ps.cljs
 cp nbb.edn .node-build/nbb.edn
 (cd .node-build && kbb --backend sci -e nil)
 mkdir -p .node-build/src/cacao/edge

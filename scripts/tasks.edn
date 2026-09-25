@@ -23,6 +23,11 @@
         :pass-args? true
         :doc "Fleet task plane (k8s-Job / Ray-tasks shape): probe | plan | run | report. Fans a BATCH of short-lived tasks over the fleet via SSH and gathers the results. e.g. `kbb --backend sci scripts/run-task.cljk task run --n 22 --cmd 'hostname'`."}
 
+ :fleet-ps {:cmd ["kbb" "--backend" "sci" "--classpath" "src" "scripts/node-cli.cljk" "fleet" "ps"]
+            :pass-args? true
+            :doc "What each fleet node runs: model servers (ctx, KV cache, slots), co-resident processes with their launchd unit, running units. Read-only."}
+ :test-fleet-ps {:cmd ["kbb" "--backend" "sci" "--classpath" "src:test" "test/murakumo/fleet_ps_test.cljk"]
+                 :doc "Offline tests for fleet ps parsing, on probe output captured from the M4 heads (no SSH)."}
  :test-task {:cmd ["kbb" "--backend" "sci" "--classpath" "src:test" "test/murakumo/task_plan_test.cljk"]
              :doc "Offline unit tests for the pure task scheduler (no SSH)."}
  :test-task-exec {:cmd ["kbb" "--backend" "sci" "--classpath" "src:test" "test/murakumo/task_exec_test.cljk"]
