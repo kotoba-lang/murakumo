@@ -36,12 +36,10 @@
   in a token. Absent ⇒ we refuse and say so. Minting is not something to do
   half-configured: a token signed with the wrong secret fails at the gateway with
   an indistinguishable 401."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             #?@(:cljs [["node:crypto" :as node-crypto]]))
   #?(:clj (:import [javax.crypto Mac]
-                   [javax.crypto.spec SecretKeySpec]
-                   [java.util Base64]
-                   [java.nio.charset StandardCharsets])))
+                   [javax.crypto.spec SecretKeySpec])))
 
 (def ^:const version "mk1")
 
@@ -67,17 +65,17 @@
 (defn- b64url-utf8
   "base64url of a UTF-8 string."
   [s]
-  #?(:clj (b64url (.encodeToString (Base64/getEncoder)
-                                   (.getBytes ^String s StandardCharsets/UTF_8)))
+  #?(:clj (b64url (kbytes/base64-encode
+                                   (kbytes/utf8-bytes ^String s)))
      :cljs (b64url (.toString (.from js/Buffer s "utf8") "base64"))))
 
 (defn- hmac-b64url
   "base64url of HMAC-SHA256(secret, msg)."
   [secret msg]
   #?(:clj (let [mac (Mac/getInstance "HmacSHA256")]
-            (.init mac (SecretKeySpec. (.getBytes ^String secret StandardCharsets/UTF_8) "HmacSHA256"))
-            (b64url (.encodeToString (Base64/getEncoder)
-                                     (.doFinal mac (.getBytes ^String msg StandardCharsets/UTF_8)))))
+            (.init mac (SecretKeySpec. (kbytes/utf8-bytes ^String secret) "HmacSHA256"))
+            (b64url (kbytes/base64-encode
+                                     (.doFinal mac (kbytes/utf8-bytes ^String msg)))))
      :cljs (-> (node-crypto/createHmac "sha256" secret)
                (.update msg "utf8")
                (.digest "base64")
@@ -152,11 +150,10 @@
       (let [expected (hmac-b64url secret (str version "." payload))]
         (if-not (= expected sig)
           {:valid false :reason "signature mismatch"}
-          (let [json #?(:clj (String. (.decode (Base64/getUrlDecoder)
+          (let [json #?(:clj (kbytes/utf8-string (kbytes/base64url-decode-bytes
                                                ^String (str payload
                                                             (case (mod (count payload) 4)
-                                                              2 "==" 3 "=" "")))
-                                      StandardCharsets/UTF_8)
+                                                              2 "==" 3 "=" ""))))
                         :cljs (.toString (.from js/Buffer payload "base64url") "utf8"))
                 get* (fn [re] (some-> (re-find re json) second))
                 exp (some-> (get* #"\"exp\":(\d+)") #?(:clj Long/parseLong :cljs js/parseInt))]

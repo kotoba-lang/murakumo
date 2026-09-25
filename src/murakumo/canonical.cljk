@@ -1,5 +1,6 @@
 (ns murakumo.canonical
-  "Deterministic EDN encoding for content identities and signatures.")
+  "Deterministic EDN encoding for content identities and signatures."
+  (:require [kotoba.bytes :as kbytes]))
 
 (defn value [x]
   (cond
@@ -24,7 +25,7 @@
        (pr-str (value x)))))
 
 (defn encode-bytes [x]
-  #?(:clj (.getBytes (string x) java.nio.charset.StandardCharsets/UTF_8)
+  #?(:clj (kbytes/utf8-bytes (string x))
      ;; kbb represents byte[] as a signed Int8Array; same UTF-8 bytes as the JVM.
      :cljs (let [u8 (.encode (js/TextEncoder.) (string x))]
              (js/Int8Array. (.-buffer u8) (.-byteOffset u8) (.-byteLength u8)))))

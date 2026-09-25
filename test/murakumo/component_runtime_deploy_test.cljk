@@ -1,5 +1,5 @@
 (ns murakumo.component-runtime-deploy-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is testing]]
             [murakumo.component-runtime-deploy :as deploy]))
 
 (def template
@@ -41,7 +41,7 @@
                  (assoc input :capability-config
                         {:local "/tmp/capabilities.json" :sha256 "bad"})
                  (assoc input :template "<plist/>")]]
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (deploy/deployment-plan bad))))))
 
 (deftest effectful-rollout-pins-and-copies-the-capability-config

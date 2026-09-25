@@ -8,7 +8,7 @@
 
 (ns murakumo.kotoba-oracle-authority-test
   (:require [kotoba.lang.edn :as edn]
-            [clojure.java.io :as io]
+            [kotoba.io :as io]
             [kotoba.lang.text :as str]
             [kotoba.lang.coll :as walk]
             [kotoba.test :refer [deftest is testing]]
@@ -156,8 +156,8 @@
     (is (pos? (count arts)) "discover-artifacts empty")
     (is (= (count arts) (count sources)) "duplicate sources")
     (doseq [{:strs [source out]} arts]
-      (is (.exists (io/file source)) (str "missing source " source))
-      (is (.exists (io/file out)) (str "missing shipped KIR " out
+      (is (io/exists? (io/file source)) (str "missing source " source))
+      (is (io/exists? (io/file out)) (str "missing shipped KIR " out
                                        " — run: kbb -M:test:gen"))
       (is (str/starts-with? out "resources/murakumo/oracle/"))
       (is (str/ends-with? out ".kir.edn")))))

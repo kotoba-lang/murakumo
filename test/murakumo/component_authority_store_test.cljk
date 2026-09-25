@@ -1,5 +1,5 @@
 (ns murakumo.component-authority-store-test
-  (:require [kotoba.io :as kio] [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.io :as kio] [kotoba.test :refer [deftest is]]
             [murakumo.component-authority :as authority]
             [murakumo.component-authority-store :as store]))
 
@@ -18,7 +18,7 @@
   (let [journal (temp-journal)
         state (atom (authority/initial-state))]
     (try
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (store/apply-durable-command!
                     state journal
                     #(throw (ex-info "partition" {:envelope %}))
@@ -39,7 +39,7 @@
   (let [journal (temp-journal)]
     (try
       (spit journal "{:op :enqueue :id [:forged]}\n")
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (store/pending journal)))
       (finally
         (kio/delete-if-exists journal)))))

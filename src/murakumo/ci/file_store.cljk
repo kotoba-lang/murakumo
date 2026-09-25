@@ -1,7 +1,7 @@
 (ns murakumo.ci.file-store
   "Crash-safe local IStore adapter for broker snapshots and event streams."
   (:require [kotoba.bytes :as kbytes] [clojure.edn :as edn]
-            [clojure.java.io :as io]
+            [kotoba.io :as io]
             [murakumo.durable-file :as durable-file]))
 
 (defn- safe-name [value]
@@ -11,7 +11,7 @@
   value)
 
 (defn- read-edn [file]
-  (when (.isFile ^java.io.File file)
+  (when (io/file? file)
     (edn/read-string (slurp file))))
 
 (defn- atomic-write! [file value]

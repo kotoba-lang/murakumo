@@ -1,5 +1,5 @@
 (ns murakumo.ci-release-bundle-test
-  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is]]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
             [murakumo.cd.bundle :as bundle]
@@ -43,6 +43,6 @@
                  :receipt/jobs [{:ci.job/steps [{:ci.step/artifacts
                                                  [(assoc manifest :path "kotoba.app.edn")
                                                   (assoc other :path "other.wasm")]}]}]}]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a verified artifact"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"not a verified artifact"
                           (release-bundle/build! receipt "kotoba.app.edn"
                                                  #(get @store %) (fn [& _]))))))

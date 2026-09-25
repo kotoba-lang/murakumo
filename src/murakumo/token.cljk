@@ -21,12 +21,10 @@
   shipped KIR (resources/ via nbb cwd, register-kir!, or set-resource-loader!)
   before requiring this ns or calling pure helpers
   (ADR-260731-w6-t64-token-mirror-delete)."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle])
   #?(:clj (:import [javax.crypto Mac]
-                   [javax.crypto.spec SecretKeySpec]
-                   [java.util Base64]
-                   [java.nio.charset StandardCharsets])))
+                   [javax.crypto.spec SecretKeySpec])))
 
 (def ^:private oid :token)
 
@@ -132,16 +130,16 @@
      (-> b64 (str/replace "+" "-") (str/replace "/" "_") (str/replace "=" ""))))
 
 (defn b64url-bytes [bytes]
-  #?(:clj  (-> (.encodeToString (.withoutPadding (Base64/getUrlEncoder)) bytes))
+  #?(:clj  (-> (kbytes/base64url-encode bytes {:pad? false}))
      :cljs (cljs-b64url (cljs-b64-encode bytes))))
 
 (defn- b64url-decode->str [s]
-  #?(:clj  (String. (.decode (Base64/getUrlDecoder) ^String s) StandardCharsets/UTF_8)
+  #?(:clj  (kbytes/utf8-string (kbytes/base64url-decode-bytes ^String s))
      :cljs (let [b64 (-> s (str/replace "-" "+") (str/replace "_" "/"))]
              (cljs-b64-decode-str b64))))
 
 (defn b64url-str [s]
-  #?(:clj  (b64url-bytes (.getBytes ^String s StandardCharsets/UTF_8))
+  #?(:clj  (b64url-bytes (kbytes/utf8-bytes ^String s))
      :cljs (cljs-b64url (cljs-b64-encode s))))
 
 ;; ── pure claims / wire — kotoba/token_core.kotoba is SSoT ────────────
@@ -256,8 +254,8 @@
 #?(:clj
    (defn- hmac-b64url [secret msg]
      (let [mac (Mac/getInstance "HmacSHA256")]
-       (.init mac (SecretKeySpec. (.getBytes ^String secret StandardCharsets/UTF_8) "HmacSHA256"))
-       (b64url-bytes (.doFinal mac (.getBytes ^String msg StandardCharsets/UTF_8))))))
+       (.init mac (SecretKeySpec. (kbytes/utf8-bytes ^String secret) "HmacSHA256"))
+       (b64url-bytes (.doFinal mac (kbytes/utf8-bytes ^String msg))))))
 
 #?(:cljs
    (defn- hmac-b64url

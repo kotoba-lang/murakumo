@@ -1,5 +1,5 @@
 (ns murakumo.ci-host-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is]]
             [kotoba.io :as io]
             [murakumo.ci.host :as host]))
 
@@ -29,7 +29,7 @@
         cid (:cid (first artifacts))]
     (is (= [{:path "app.wasm" :cid cid :size 15}] artifacts))
     (is (= "real-wasm-bytes" (String. ^bytes (get @stored cid))))
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (host/collect-artifacts!
                   {:sandbox/output-dir dir :sandbox/artifacts ["missing"]
                    :sandbox/max-artifact-bytes 1024

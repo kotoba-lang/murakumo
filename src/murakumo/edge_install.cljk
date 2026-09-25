@@ -19,7 +19,7 @@
     repair is the operator's call and the ADR records why.
   - It does not enroll. Trust tier belongs to `fleet.edn` and the join worker
     reads it; installing a daemon must not be a second place a tier can be set."
-  (:require [kotoba.io :as kio] [kotodama.inference.edge :as artifacts]
+  (:require [kotoba.lang.error :as kerror] [kotoba.io :as kio] [kotodama.inference.edge :as artifacts]
             [kotoba.lang.text :as str]
             [murakumo.fleet.one-model :as one]
             [murakumo.fleet.topology :as topo]
@@ -83,7 +83,7 @@
      :plans [(edge/server-plan (select-keys facts [:home :llama-server :memory-bytes]))
              (edge/join-plan (assoc (select-keys facts [:home :nbb])
                                     :node-name node-name))]}
-    (catch clojure.lang.ExceptionInfo e
+    (catch kerror/ExceptionInfo e
       {:ok? false :reason :does-not-fit :detail (ex-message e) :data (ex-data e)})))
 
 (def ^:private process-list-command

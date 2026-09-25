@@ -1,5 +1,5 @@
 (ns murakumo.component-authority-http-test
-  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.lang.edn :as edn]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.lang.edn :as edn]
             [kotoba.test :refer [deftest is]]
             [murakumo.component-authority :as authority]
             [murakumo.component-authority-http :as http]
@@ -62,7 +62,7 @@
         (kio/delete-if-exists journal)))))
 
 (deftest insecure-remote-http-is-rejected-before-connect
-  (is (thrown? clojure.lang.ExceptionInfo
+  (is (thrown? kerror/ExceptionInfo
                (http/publish!
                 "http://example.com/v1/component-authority"
                 (authority/sign-event

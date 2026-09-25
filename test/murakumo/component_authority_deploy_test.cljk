@@ -1,5 +1,5 @@
 (ns murakumo.component-authority-deploy-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is]]
             [murakumo.component-authority-deploy :as deploy]))
 
 (def authority
@@ -35,7 +35,7 @@
 (deftest deployment-stops-before-config-when-secret-prerequisite-fails
   (let [plan (deploy/deployment-plan authority node)
         remote-calls (atom [])]
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (deploy/apply-deployment!
                   plan
                   (constantly {:exit 0})
@@ -51,7 +51,7 @@
            (nth (first (:copies plan)) 4)))))
 
 (deftest invalid-key-rotation-config-fails-closed
-  (is (thrown? clojure.lang.ExceptionInfo
+  (is (thrown? kerror/ExceptionInfo
                (deploy/deployment-plan
                 (assoc-in authority [:trusted-keys "next" :issuer]
                           "did:key:attacker")

@@ -13,11 +13,10 @@
 ;; cljs: prefer Node crypto/Buffer (nbb); browser falls back to SubtleCrypto/btoa.
 
 (ns murakumo.identity
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]
             #?(:clj [ed25519.core :as ed25519]))
-  #?(:clj (:import (java.security MessageDigest)
-                   (java.util Base64))))
+  #?(:clj (:import (java.security MessageDigest))))
 
 (def ^:private oid :identity)
 
@@ -96,7 +95,7 @@
 
 #?(:clj
    (defn- utf8-bytes [s]
-     (.getBytes (str s) "UTF-8")))
+     (kbytes/utf8-bytes (str s))))
 
 #?(:cljs
    (defn- utf8-bytes [s]
@@ -274,7 +273,7 @@
 (defn b64url-bytes
   "Base64url without padding for byte arrays."
   [bytes]
-  #?(:clj (-> (.encodeToString (Base64/getUrlEncoder) bytes)
+  #?(:clj (-> (kbytes/base64url-encode bytes)
               (str/replace "=" ""))
      :cljs
      (let [b64 (if (exists? js/Buffer)

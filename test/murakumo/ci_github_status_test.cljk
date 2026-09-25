@@ -1,5 +1,5 @@
 (ns murakumo.ci-github-status-test
-  (:require [json.compat :as json]
+  (:require [kotoba.lang.error :as kerror] [json.compat :as json]
             [kotoba.test :refer [deftest is]]
             [murakumo.ci.github-status :as status]))
 
@@ -15,13 +15,13 @@
     (is (= "success" (:state body)))
     (is (= "murakumo.cloud/ci" (:context body)))
     (is (= "2026-03-10" (get-in r [:opts :headers "x-github-api-version"]))))
-  (is (thrown? clojure.lang.ExceptionInfo
+  (is (thrown? kerror/ExceptionInfo
                (status/request {:repo "bad/repo/extra" :sha sha :result :passed} "t"))))
 
 (deftest publish-requires-created-response
   (is (= {:ok? true :run-id "r" :state "failure"}
          (status/publish! (fn [_ _] {:status 201})
                           {:repo "o/r" :sha sha :result :failed :run-id "r"} "t")))
-  (is (thrown? clojure.lang.ExceptionInfo
+  (is (thrown? kerror/ExceptionInfo
                (status/publish! (fn [_ _] {:status 403})
                                 {:repo "o/r" :sha sha :result :passed} "t"))))

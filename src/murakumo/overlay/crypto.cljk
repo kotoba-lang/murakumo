@@ -8,10 +8,9 @@
 ;; AES-GCM Cipher, SecureRandom nonce, SHA-256 key material stay JVM host.
 
 (ns murakumo.overlay.crypto
-  (:require [murakumo.identity :as identity]
+  (:require [kotoba.bytes :as kbytes] [murakumo.identity :as identity]
             [murakumo.kotoba.oracle :as oracle])
   #?(:clj (:import [java.security SecureRandom]
-                   [java.util Base64]
                    [javax.crypto Cipher]
                    [javax.crypto.spec GCMParameterSpec SecretKeySpec])))
 
@@ -112,10 +111,10 @@
        (identity/sha256-bytes s))
 
      (defn- b64url-encode [bytes]
-       (strip-b64-pad (.encodeToString (Base64/getUrlEncoder) bytes)))
+       (strip-b64-pad (kbytes/base64url-encode bytes)))
 
      (defn- b64url-decode [s]
-       (.decode (Base64/getUrlDecoder) (str s)))
+       (kbytes/base64url-decode-bytes (str s)))
 
      (defn- random-nonce []
        (let [bytes (byte-array nonce-bytes)]
@@ -135,7 +134,7 @@
              c (cipher Cipher/ENCRYPT_MODE auth-key nonce)]
          {field-alg :aes-256-gcm
           field-nonce (b64url-encode nonce)
-          field-ciphertext (b64url-encode (.doFinal c (.getBytes (str payload) "UTF-8")))}))
+          field-ciphertext (b64url-encode (.doFinal c (kbytes/utf8-bytes (str payload))))}))
 
      (defn open
        "Decrypt a sealed payload. Throws if packaging gate or authentication fails."
@@ -148,4 +147,4 @@
        (let [nonce (b64url-decode (get sealed field-nonce))
              ciphertext (b64url-decode (get sealed field-ciphertext))
              c (cipher Cipher/DECRYPT_MODE auth-key nonce)]
-         (String. (.doFinal c ciphertext) "UTF-8")))))
+         (kbytes/utf8-string (.doFinal c ciphertext))))))

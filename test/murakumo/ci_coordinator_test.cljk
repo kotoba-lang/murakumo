@@ -1,5 +1,5 @@
 (ns murakumo.ci-coordinator-test
-  (:require [kotoba.io :as kio] [clojure.edn :as edn]
+  (:require [kotoba.lang.error :as kerror] [kotoba.io :as kio] [clojure.edn :as edn]
             [kotoba.test :refer [deftest is]]
             [murakumo.ci.coordinator :as coordinator]))
 
@@ -28,7 +28,7 @@
     (is (= 4443 (get-in built [:overlay-request :connect :port])))))
 
 (deftest coordinator-requires-secret-from-environment
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"secret unavailable"
+  (is (thrown-with-msg? kerror/ExceptionInfo #"secret unavailable"
                         (coordinator/build (config "/tmp/store") (constantly nil)))))
 
 (deftest checked-in-coordinator-example-is-valid
@@ -56,7 +56,7 @@
         configured (assoc (config root) :ci.coordinator/deployments {"o/r" policy})
         seed-hex (apply str (repeat 32 "01"))]
     (is (coordinator/valid-config? configured))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"issuer seed unavailable"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"issuer seed unavailable"
                           (coordinator/build configured {"GITHUB_SECRET" "secret"})))
     (is (map? (coordinator/build configured
                                  {"GITHUB_SECRET" "secret" "CD_SEED" seed-hex})))))

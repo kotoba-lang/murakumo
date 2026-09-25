@@ -10,7 +10,7 @@
 ;; Profile 5: pinned-exists? / pinned-wit-exists? are real guest :bool.
 
 (ns murakumo.config
-  (:require #?(:clj [kotoba.lang.edn :as edn]
+  (:require [kotoba.io :as kio] #?(:clj [kotoba.lang.edn :as edn]
                :cljs [cljs.reader :as edn])
             [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
@@ -144,7 +144,7 @@
 (defn- default-seed-exists?
   [path]
   (try
-    #?(:clj (.exists (java.io.File. path))
+    #?(:clj (kio/exists? (kio/file path))
        :cljs (when (exists? js/require)
                (boolean (.existsSync (js/require "fs") path))))
     (catch #?(:clj Exception :cljs :default) _
@@ -407,7 +407,7 @@
   #?(:clj (let [user-dir (System/getProperty "user.dir")]
             (runtime-context-from-getenv #(System/getenv %)
                                          user-dir
-                                         #(.exists (java.io.File. %))))
+                                         #(kio/exists? (kio/file %))))
      :cljs (throw (ex-info "current-runtime-context is host-only" {}))))
 
 ;; ── Ops config (non-secret exact-name getenv) ──────────────────────────
