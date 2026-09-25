@@ -18,8 +18,18 @@
     <string>-m</string><string>/Users/Shared/murakumo/mishima/model/Ternary-Bonsai-2-27B-PTQ1_0.gguf</string>
     <string>--host</string><string>__BIND_IP__</string>
     <string>--port</string><string>8094</string>
-    <string>--ctx-size</string><string>8192</string>
+    <!-- 32K context with an 8-bit KV cache (2026-09-25). Bonsai 2 27B is qwen35:
+         64 blocks, only 16 of them full attention (full_attention_interval 4),
+         4 KV heads x 256 dims, so KV is 64 KiB/token at f16 and half that at
+         q8_0: 32K = 1 GiB. Measured on naphtali (M4 16 GB), 22,278-token
+         prompt: f16 prefill 45.4 / decode 6.9 tok/s, 15% memory free; q8_0
+         prefill 45.1 / decode 8.2 tok/s, 21% free, correct answer. One slot:
+         the fleet router sends each head one request at a time. -->
+    <string>--ctx-size</string><string>32768</string>
     <string>--parallel</string><string>1</string>
+    <string>-fa</string><string>on</string>
+    <string>-ctk</string><string>q8_0</string>
+    <string>-ctv</string><string>q8_0</string>
     <string>-ngl</string><string>999</string>
     <string>--no-webui</string>
   </array>
