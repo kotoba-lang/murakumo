@@ -85,6 +85,37 @@ The EDN is not proof of current enforcement; only a successful live readback is.
 The decision and blocked-canary evidence are in
 [`ADR-260811`](docs/adr/ADR-260811-version-github-merge-governance.md).
 
+### What is each node running? — `murakumo fleet ps`
+
+One read-only command answers "which model is loaded where, with which context
+and KV cache, is it busy, and what else shares the node's memory":
+
+```bash
+murakumo fleet ps                    # every online macOS node
+murakumo fleet ps --node joseph      # one node (name or tailnet IP, prefix ok)
+murakumo fleet ps --all --json       # every online node, machine-readable
+kbb --backend sci scripts/run-task.cljk fleet-ps --node joseph   # from a checkout
+```
+
+```
+joseph (100.82.123.35)  Darwin  16 GB  free 74%  swap 30.6 GB
+  model   llama-server pid 32640  2.6 GB  Ternary-Bonsai-2-27B-PTQ1_0.gguf  ctx 32768  kv q8_0/q8_0  fa on  parallel 1  100.82.123.35:8094  slots 0/1 busy
+  shares  2.3 GB  kotoba-server  [com.murakumo.kotoba-mesh]
+  shares  0.9 GB  node /Users/joseph/.inga/releases/inga-origin-20260911/engine/cl  [com.gftd.inga.reservation.20260911.w4]
+  units   com.gftd.inga-node.read-audit.w4, com.gftd.inga.reservation.20260911.w4, com.murakumo.comfyui, com.murakumo.kotoba-mesh, com.murakumo.mishima  (+11 not running)
+```
+
+`model` rows come from the server's own argv plus a live `/slots` read (the
+`ctx` shown is what the server reports). `shares` rows are the other processes
+over 200 MB, each with the launchd / systemd unit that owns it (by pid or
+parent pid, so a node process started by `npm exec` under a job is attributed
+to the job). The probe runs under `/bin/sh -s` on stdin, never the login shell
+(the nodes' zsh does not word-split and aborts on unmatched globs), needs no
+sudo and writes nothing. A node it cannot read is printed as `UNREACHABLE` with
+the reason; exit 0 all read, 1 some unreachable, 2 no node matched. Tests:
+`kbb --backend sci scripts/run-task.cljk test-fleet-ps` (fixture captured from
+joseph).
+
 > Not to be confused with the *etzhayyim* murakumo (k3s-on-Lima + Ansible control
 > plane for the religious-corp **LangGraph/Pregel cells**). This repo is the
 > **kotoba WASM mesh** layer — libp2p lattice nodes hosting content-addressed WASM

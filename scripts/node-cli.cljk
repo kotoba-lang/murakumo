@@ -2,6 +2,7 @@
   "Distribution entry for the existing nbb resident; not a native runtime migration."
   (:require [murakumo.infer.poll-worker :as worker]
             [murakumo.bench :as bench]
+            [murakumo.fleet-ps :as fleet-ps]
             [cacao.edge.mint :as mint]
             [kotoba.lang.text :as str]
             ["node:fs" :as fs] ["node:path" :as path]
@@ -9,6 +10,8 @@
 
 (defn help []
   (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\nNode.js 22+, a running OpenAI-compatible model server and network access are required.\nInstallation does not download models or start a service. Community enrollment\nmay remain pending admission; a heartbeat alone does not prove job eligibility.")
+  (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
+                                          (ctx, KV, slots), co-resident processes, units")
   (println "\n  murakumo bench nodes                    List tailnet nodes (name, ip, online)\n  murakumo bench run --node N --model P --engine llama|diffuse\n  murakumo bench ledger [--limit N]       Show the append-only measurement ledger\n\nMeasurements record argv, the model's bytes and hash, the host's memory and the\nengine's own output. Nothing here enrols a node or publishes a number.\n  murakumo bench --help"))
 
 (defn identity-path []
@@ -85,7 +88,11 @@
                                                  1800000)))
                                       (worker/-main (assoc opts :did (.-did id) :cacao #(deref current)))))))))))))))
 
-(let [[prefix command & args] (vec (array-seq (.slice js/process.argv 2)))]
+(let [;; kbb passes the script's own args as *command-line-args* (process.argv
+      ;; still holds kbb's --classpath and the script path); the bundled release
+      ;; (`node node.mjs …`) has none, and its args start at argv[2].
+      argv (vec (or (seq *command-line-args*) (array-seq (.slice js/process.argv 2))))
+      [prefix command & args] argv]
   (try
     (cond
       (or (nil? prefix) (= prefix "--help")) (help)
@@ -96,6 +103,10 @@
       (let [code (bench/run-command command args)]
         (when (not= 0 code) (set! (.-exitCode js/process) code))
         (when (nil? command) (set! (.-exitCode js/process) 1)))
+      ;; `fleet` is read-only: it ssh-reads each node and never enrols or writes.
+      (= prefix "fleet")
+      (-> (fleet-ps/run-command command args)
+          (.then (fn [code] (when (not= 0 code) (set! (.-exitCode js/process) code)))))
       (= command "--help") (help)
       (not= prefix "node") (fail! "Use: murakumo node --help or murakumo bench --help")
       (= command "init") (init!)
