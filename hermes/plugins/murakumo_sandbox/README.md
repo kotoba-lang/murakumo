@@ -23,6 +23,7 @@ profile's `config.yaml`:
 ```yaml
 terminal:
   backend: murakumo_sandbox
+  cwd: /tmp
   container_cpu: 1
   container_memory: 512
 ```
@@ -35,8 +36,10 @@ MURAKUMO_SANDBOX_NODES=aiueos-6600hs-1
 MURAKUMO_SANDBOX_IMAGE=debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
 ```
 
-Leave `terminal.cwd` at the profile's local default; the sandbox command
-directory is `/workspace`. Hermes also checks `terminal.cwd` on the gateway.
+Set `terminal.cwd` to `/tmp`, which exists on the gateway and in the sandbox.
+Hermes checks the path locally and then prepends `cd` inside the container;
+the profile's local default can resolve to `/root`, which the unprivileged
+container user cannot enter. `/workspace` remains available for session files.
 
 `MURAKUMO_SANDBOX_NODES` is an explicit inventory-name allowlist. An optional
 `MURAKUMO_SANDBOX_LABELS=tier=...` adds Murakumo placement constraints. A
