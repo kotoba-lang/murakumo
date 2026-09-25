@@ -1,5 +1,5 @@
 (ns murakumo.desired-state-test
-  (:require [kotoba.io :as kio] [kotoba.lang.edn :as edn]
+  (:require [kotoba.lang.error :as kerror] [kotoba.io :as kio] [kotoba.lang.edn :as edn]
             [kotoba.test :refer [deftest is testing]]
             [kekkai.cacao :as cacao]
             [kekkai.desired-state :as desired]
@@ -16,7 +16,7 @@
 
 (defn- failure-type [f]
   (try (f) nil
-       (catch clojure.lang.ExceptionInfo e (:type (ex-data e)))))
+       (catch kerror/ExceptionInfo e (:type (ex-data e)))))
 
 (deftest placement-is-stable-and-fails-closed
   (let [app {:name "hello" :cid "bafyhello" :replicas 2

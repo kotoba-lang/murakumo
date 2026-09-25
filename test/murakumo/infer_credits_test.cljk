@@ -1,6 +1,6 @@
 ;; Offline unit tests for the pure inference-credit ledger math.
 (ns murakumo.infer-credits-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is testing]]
             [murakumo.infer.credits :as credits]))
 
 (def plan
@@ -250,11 +250,11 @@
 
 (deftest transfer-rejects-nonsense-eagerly
   (testing "non-positive amounts are refused at construction, not folded silently"
-    (is (thrown? clojure.lang.ExceptionInfo (credits/transfer "a" "b" 0 {})))
-    (is (thrown? clojure.lang.ExceptionInfo (credits/transfer "a" "b" -5 {}))))
+    (is (thrown? kerror/ExceptionInfo (credits/transfer "a" "b" 0 {})))
+    (is (thrown? kerror/ExceptionInfo (credits/transfer "a" "b" -5 {}))))
   (testing "a self-transfer is not a transfer -- it would be a no-op that still
             shows up in the acceptance-density count"
-    (is (thrown? clojure.lang.ExceptionInfo (credits/transfer "a" "a" 5 {})))))
+    (is (thrown? kerror/ExceptionInfo (credits/transfer "a" "a" 5 {})))))
 
 (deftest overdraft-is-reported-as-data
   (testing "credits are a PREPAID claim, not a credit line -- this is exactly

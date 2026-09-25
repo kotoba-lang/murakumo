@@ -11,7 +11,7 @@
   via nbb cwd, register-kir!, or set-resource-loader!) before requiring this ns
   (ADR-260731-w6-t64-cauth-mirror-delete).
   Event maps + ed25519 stay host."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [kotoba.abi.contract :as abi]
             [murakumo.kotoba.oracle :as oracle]
             #?(:clj [ed25519.core :as ed])))
@@ -68,7 +68,7 @@
   {:epochs {} :placements {} :sequence 0})
 
 (defn- utf8-len [s]
-  #?(:clj (count (.getBytes ^String s "UTF-8"))
+  #?(:clj (count (kbytes/utf8-bytes ^String s))
      :cljs (count s)))
 
 (defn- identifier?
@@ -119,9 +119,8 @@
                      :audience audience
                      :issued-at-ms issued-at-ms
                      :event event}
-           payload (.getBytes
-                    ^String (abi/component-authority-signing-payload unsigned)
-                    "UTF-8")
+           payload (kbytes/utf8-bytes
+                    ^String (abi/component-authority-signing-payload unsigned))
            envelope (assoc unsigned :signature (hex (ed/sign seed payload)))]
        (when-not (abi/valid-component-authority-envelope? envelope)
          (reject :invalid-envelope "Signed authority envelope is invalid" {}))

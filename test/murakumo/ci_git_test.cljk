@@ -1,5 +1,5 @@
 (ns murakumo.ci-git-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is]]
             [murakumo.ci.git :as git]))
 
 (def sha "0123456789abcdef0123456789abcdef01234567")
@@ -12,9 +12,9 @@
     (is (some #{sha} (nth argvs 2)))
     (is (some #{"--detach"} (nth argvs 3)))
     (is (every? #(= "0" (get-in % [:env "GIT_TERMINAL_PROMPT"])) plans)))
-  (is (thrown? clojure.lang.ExceptionInfo
+  (is (thrown? kerror/ExceptionInfo
                (git/checkout-plan "file:///etc" sha "/tmp/work")))
-  (is (thrown? clojure.lang.ExceptionInfo
+  (is (thrown? kerror/ExceptionInfo
                (git/checkout-plan "https://github.com/o/r" "main" "/tmp/work"))))
 
 (deftest checkout-verifies-resolved-head

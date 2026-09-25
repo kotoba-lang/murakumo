@@ -1,5 +1,5 @@
 (ns murakumo.cd-bundle-test
-  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.io :as kio] [kotoba.test :refer [deftest is testing]]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
             [murakumo.canonical :as canonical]
@@ -41,29 +41,29 @@
     (is (true? (:reused? second-result)))
     (is (= "wasm-component" (slurp (str (:release-dir first-result) "/components/demo.wasm"))))
     (is (= (manifest component-cid) (slurp (:manifest-path first-result))))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"CID mismatch"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"CID mismatch"
                           (bundle/materialize! {component-cid (.getBytes "tampered")}
                                                (str root "-other") bundle-cid document)))))
 
 (deftest unsafe-and-colliding-paths-are-rejected
   (let [[cid _] (blob "x")]
     (doseq [path ["../escape" "/absolute" "a/../../b" "a\\b" "a//b"]]
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (bundle/create {:revision "v1" :manifest (manifest cid)
                                    :components [{:path path :cid cid}]}))))
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (bundle/create {:revision "v1" :manifest (manifest cid)
                                  :components [{:path "a" :cid cid}
                                               {:path "a" :cid cid}]})))))
 
 (deftest source-manifests-and-unbound-components-are-rejected
   (let [[cid _] (blob "x")]
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (bundle/create
                   {:revision "v1"
                    :manifest (pr-str {:kotoba.app/components [{:name "x" :src "x.clj"}]})
                    :components [{:path "x.wasm" :cid cid}]})))
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (bundle/create
                   {:revision "v1" :manifest (manifest "another-cid")
                    :components [{:path "x.wasm" :cid cid}]})))))

@@ -1,5 +1,5 @@
 (ns murakumo.ci-pipeline-import-test
-  (:require [kotoba.io :as io]
+  (:require [kotoba.lang.error :as kerror] [kotoba.io :as io]
             [kotoba.test :refer [deftest is]]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
@@ -30,7 +30,7 @@
     (write! root ".murakumo/pipeline.edn"
             (pr-str (assoc-in pipeline-data [:ci/jobs "test" :ci/steps 0]
                               {:ci/run "curl example.com"})))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid pipeline"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"invalid pipeline"
                           (pipeline/load-pipeline root)))))
 
 (deftest worktree-import-is-deterministic-and-restorable

@@ -1,5 +1,5 @@
 (ns murakumo.ci-runner-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is testing]]
             [murakumo.ci.broker :as broker]
             [murakumo.ci.runner :as runner]
             [murakumo.ci.sandbox :as sandbox]))
@@ -19,7 +19,7 @@
     (is (some #{"no-new-privileges"} argv))
     (is (some #{"docker.io/library/clojure:temurin-21-tools-deps@sha256:image"} argv))
     (is (= ["clojure" "-M:test"] (vec (take-last 2 argv)))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid sandbox step"
+  (is (thrown-with-msg? kerror/ExceptionInfo #"invalid sandbox step"
                         (sandbox/plan (assoc step :ci/argv "rm -rf /") context))))
 
 (deftest runner-fails-fast-and-builds-stable-receipt

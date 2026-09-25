@@ -1,5 +1,5 @@
 (ns murakumo.artifact-import-test
-  (:require [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.bytes :as kbytes] [kotoba.test :refer [deftest is]]
             [multiformats.core :as multiformats]
             [murakumo.artifact-import :as artifact-import]
             [murakumo.artifact-store :as artifact-store]))
@@ -15,5 +15,5 @@
                                (make-array java.nio.file.OpenOption 0))
     (is (= cid (:cid (artifact-import/import! root (str cid "=" file)))))
     (is (= (seq bytes) (seq (artifact-store/get-bytes root cid))))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"CID mismatch"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"CID mismatch"
                           (artifact-import/import! root (str "bafybad=" file))))))

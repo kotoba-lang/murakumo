@@ -3,7 +3,7 @@
 ;; SSH connection per poll, ~28 connections for a single ~84s render, which
 ;; tripped intermittent 502/524s under back-to-back testing). No fleet, no SSH.
 (ns murakumo.infer-media-test
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.lang.error :as kerror] [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest is testing]]
             [murakumo.infer.media :as media]
             [murakumo.ssh :as ssh]))
@@ -64,7 +64,7 @@
     (with-redefs [ssh/curl-local-raw (fn [_host _url] {:exit 7 :out ""})
                   media/fast-interval-s 0
                   media/slow-interval-s 0]
-      (is (thrown? clojure.lang.ExceptionInfo
+      (is (thrown? kerror/ExceptionInfo
                    (await-history "dead-host" "pid-1" 600))))))
 
 (deftest await-history-keeps-polling-a-live-still-queued-node
@@ -119,5 +119,5 @@
                       {:exit 0 :out "{}"}))
                   media/fast-interval-s 0
                   media/slow-interval-s 0]
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"vanished"
+      (is (thrown-with-msg? kerror/ExceptionInfo #"vanished"
                             (await-history "respawned-host" "pid-1" 600))))))

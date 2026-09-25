@@ -2,7 +2,7 @@
 
 (ns murakumo.overlay.quic-driver
   (:require [kotoba.lang.edn :as edn]
-            [clojure.java.io :as io]
+            [kotoba.io :as io]
             [murakumo.overlay.cert :as cert]
             [murakumo.secret :as secret])
   (:import [java.io BufferedReader InputStreamReader OutputStreamWriter]
@@ -146,7 +146,7 @@
         key (secret/resolve-quic-key-path)
         cert-f (when cert (io/file cert))
         key-f (when key (io/file key))]
-    (if (and cert-f key-f (.isFile cert-f) (.isFile key-f))
+    (if (and cert-f key-f (io/file? cert-f) (io/file? key-f))
       [cert-f key-f]
       (let [material (cert/ensure-quic-material! request)]
         [(:cert material) (:key material)]))))

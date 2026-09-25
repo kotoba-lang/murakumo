@@ -1,5 +1,5 @@
 (ns murakumo.artifact-store-test
-  (:require [kotoba.io :as kio] [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.io :as kio] [kotoba.test :refer [deftest is]]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
             [murakumo.artifact-store :as store]))
@@ -13,5 +13,5 @@
     (is (= cid ((:put! cas) cid bytes)))
     (is (= "artifact" (String. ^bytes ((:get cas) cid))))
     (is (= cid ((:put! cas) cid bytes)))
-    (is (thrown? clojure.lang.ExceptionInfo ((:put! cas) cid (.getBytes "tampered"))))
-    (is (thrown? clojure.lang.ExceptionInfo (store/path root "../../escape")))))
+    (is (thrown? kerror/ExceptionInfo ((:put! cas) cid (.getBytes "tampered"))))
+    (is (thrown? kerror/ExceptionInfo (store/path root "../../escape")))))

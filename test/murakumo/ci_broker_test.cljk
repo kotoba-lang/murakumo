@@ -1,5 +1,5 @@
 (ns murakumo.ci-broker-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is testing]]
             [murakumo.ci.broker :as broker]))
 
 (def runner {:runner/id "did:key:zRunner" :runner/capabilities #{:linux :clojure}})
@@ -31,5 +31,5 @@
         b3 (broker/expire b2 10)]
     (is (= :queued (get-in b3 [:murakumo.ci/runs "run-1" :ci.run/state])))
     (is (= ["run-1"] (:murakumo.ci/queue b3)))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"stale or unknown lease"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"stale or unknown lease"
                           (broker/complete b3 lease 5 :passed "bad")))))

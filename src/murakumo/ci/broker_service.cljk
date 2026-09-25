@@ -1,6 +1,6 @@
 (ns murakumo.ci.broker-service
   "Persistent, versioned broker RPC service for remote Murakumo runners."
-  (:require [murakumo.ci.broker :as broker]
+  (:require [kotoba.lang.error :as kerror] [murakumo.ci.broker :as broker]
             [murakumo.ci.attest :as attest]
             [murakumo.ci.artifact-upload :as artifact-upload]
             [murakumo.ci.protocol :as protocol]
@@ -176,7 +176,7 @@
 
                   (protocol/message :ci/error {:reason :unsupported-message
                                                :type type})))))
-            (catch clojure.lang.ExceptionInfo e
+            (catch kerror/ExceptionInfo e
               (protocol/message :ci/error
                                 (merge {:reason :transition-rejected}
                                        (ex-data e))))

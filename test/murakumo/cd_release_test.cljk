@@ -1,5 +1,5 @@
 (ns murakumo.cd-release-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is]]
             [ed25519.core :as ed]
             [nekko.sigref :as sigref]
             [murakumo.cd.capability :as capability]
@@ -25,19 +25,19 @@
     (is (= :pending (:state pending)))
     (is (= :canonical (:state final)))
     (is (= :running (:result (release/github-status pending "o/r" "sha" "run-1" "url"))))
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (release/issue-deployment issuer-seed "rid-ci" pending
                                            {:artifact-cid "bafy-artifact" :environment "prod"
                                             :previous-artifact-cid "bafy-previous"
                                             :revision "v2" :previous-revision "v1"
                                             :now 10 :ttl 10 :nonce "n"})))
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (release/issue-deployment issuer-seed "rid-ci" final
                                            {:artifact-cid "other" :environment "prod"
                                             :previous-artifact-cid "bafy-previous"
                                             :revision "v2" :previous-revision "v1"
                                             :now 10 :ttl 10 :nonce "n"})))
-    (is (thrown? clojure.lang.ExceptionInfo
+    (is (thrown? kerror/ExceptionInfo
                  (release/issue-deployment
                   issuer-seed "rid-ci"
                   (assoc-in final [:verdict :verdict/artifacts]

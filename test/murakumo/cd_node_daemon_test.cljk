@@ -1,5 +1,5 @@
 (ns murakumo.cd-node-daemon-test
-  (:require [kotoba.io :as kio] [clojure.edn :as edn]
+  (:require [kotoba.lang.error :as kerror] [kotoba.io :as kio] [clojure.edn :as edn]
             [kotoba.test :refer [deftest is]]
             [murakumo.cd.node-daemon :as daemon]))
 
@@ -30,7 +30,7 @@
   (let [root "/tmp/murakumo-node"
         cfg (config root)]
     (is (false? (daemon/valid-config? (assoc-in cfg [:cd.node/kotoba :token] "leak"))))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"token is unavailable"
+    (is (thrown-with-msg? kerror/ExceptionInfo #"token is unavailable"
                           (daemon/build cfg (constantly nil))))))
 
 (deftest checked-in-example-is-structurally-valid

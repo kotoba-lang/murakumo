@@ -1,5 +1,5 @@
 (ns murakumo.ci-attest-test
-  (:require [kotoba.test :refer [deftest is]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is]]
             [ed25519.core :as ed]
             [bonsai.object :as object]
             [bonsai.repo :as repo]
@@ -60,7 +60,7 @@
                [(:sigref a) (:sigref b)])))))
 
 (deftest signer-must-match-receipt-runner
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not own signing key"
+  (is (thrown-with-msg? kerror/ExceptionInfo #"does not own signing key"
                         (attest/attest (repo/empty-repo) "rid-ci" (first seeds)
                                        (execution (second dids) "artifact") 1))))
 
@@ -72,7 +72,7 @@
                                             (execution (nth four-dids idx) artifact) idx))
                            (range 4) ["a" "a" "b" "b"])]
     (is (thrown-with-msg?
-         clojure.lang.ExceptionInfo #"split verdict quorum"
+         kerror/ExceptionInfo #"split verdict quorum"
          (attest/canonical-verdict
           {:rid "rid-ci" :run-id "run-1" :delegates (set four-dids) :threshold 2}
           (mapv :sigref attestations))))))

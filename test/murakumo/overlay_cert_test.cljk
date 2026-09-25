@@ -13,7 +13,7 @@
 ;; material provenance -- worth pinning independently.
 
 (ns murakumo.overlay-cert-test
-  (:require [kotoba.test :refer [deftest is testing]]
+  (:require [kotoba.lang.error :as kerror] [kotoba.test :refer [deftest is testing]]
             [murakumo.overlay.cert :as cert]))
 
 ;; ── naming / path derivation ──────────────────────────────────────────
@@ -157,9 +157,9 @@
              {:path-ref {:root :murakumo/kagi :path "quic"}
               :root-dirs {:murakumo/kagi root}})]
     (is (= (str root "/quic") (.getPath dir))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"absolute"
+  (is (thrown-with-msg? kerror/ExceptionInfo #"absolute"
         (cert/resolve-store-dir {:store-dir "relative/nope"})))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"missing absolute root"
+  (is (thrown-with-msg? kerror/ExceptionInfo #"missing absolute root"
         (cert/resolve-store-dir {:path-ref {:root :murakumo/kagi :path "quic"}
                                  :root-dirs {}}))))
 
