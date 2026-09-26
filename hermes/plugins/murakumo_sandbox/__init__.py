@@ -48,12 +48,13 @@ def remote(host: str, args: list[str], *, timeout: int = 20) -> str:
     return result.stdout.strip()
 
 
-def select_host(task_root: Path, nodes: str, labels: str = "") -> tuple[str, str]:
+def select_host(task_root: Path, nodes: str, labels: str = "", max_per_node: int = 2) -> tuple[str, str]:
     allowed_nodes = nodes.split(",")
     if not nodes or not all(re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9-]*", n) for n in allowed_nodes):
         raise ValueError("MURAKUMO_SANDBOX_NODES must be a comma-separated inventory node allowlist")
     args = ["kbb", "--backend", "sci", "scripts/run-task.cljk", "task", "plan",
-            "--n", "1", "--cmd", "true", "--nodes", nodes, "--format", "json"]
+            "--n", str(len(allowed_nodes)), "--cmd", "true", "--nodes", nodes,
+            "--max-inflight", str(len(allowed_nodes)), "--format", "json"]
     if labels:
         args += ["--labels", labels]
     try:
@@ -66,13 +67,27 @@ def select_host(task_root: Path, nodes: str, labels: str = "") -> tuple[str, str
     try:
         plan = json.loads(result.stdout.strip().splitlines()[-1])
         placements = plan["placements"]
-        if plan["assigned"] != 1 or len(placements) != 1 or plan["unschedulable"]:
-            raise ValueError("no unique eligible sandbox node")
-        node, host = placements[0]["node"], placements[0]["host"]
-        if node not in allowed_nodes:
-            raise ValueError("placement escaped the node allowlist")
-        if not HOST_RE.fullmatch(host) or host.startswith("-"):
-            raise ValueError("invalid host in placement")
+        if plan["assigned"] < 1 or not placements:
+            raise ValueError("no eligible sandbox node")
+        candidates = {}
+        for placement in placements:
+            node, host = placement["node"], placement["host"]
+            if node not in allowed_nodes or not HOST_RE.fullmatch(host) or host.startswith("-"):
+                raise ValueError("placement escaped the node allowlist")
+            candidates[node] = host
+        available = []
+        for node, host in candidates.items():
+            try:
+                running = remote(host, ["docker", "ps", "--filter", "label=hermes.murakumo.sandbox=1",
+                                        "--format", "{{.ID}}"], timeout=15)
+                count = len(running.splitlines()) if running else 0
+                if count < max_per_node:
+                    available.append((count, uuid.uuid4().hex, node, host))
+            except (EnvironmentConnectionError, subprocess.TimeoutExpired) as exc:
+                LOG.warning("Murakumo sandbox candidate %s unavailable: %s", node, exc)
+        if not available:
+            raise ValueError("no Docker-capable sandbox node below its concurrency limit")
+        _, _, node, host = min(available)
         return node, host
     except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise EnvironmentConnectionError(f"Murakumo placement returned no usable node: {exc}") from exc
@@ -93,6 +108,7 @@ class MurakumoEnvironment(BaseEnvironment):
         super().__init__(cwd="/workspace", timeout=timeout)
         remote(host, ["docker", "version", "--format", "{{.Server.Version}}"], timeout=15)
         args = ["docker", "run", "--rm", "-d", "--name", self.name,
+                "--label", "hermes.murakumo.sandbox=1",
                 "--network", "none", "--read-only", "--cap-drop", "ALL",
                 "--security-opt", "no-new-privileges", "--pids-limit", "128",
                 "--cpus", str(max(0.25, min(float(cpu), 4.0))),
@@ -157,7 +173,10 @@ class MurakumoSandboxProvider(TerminalEnvironmentProvider):
         selected_image = setting("MURAKUMO_SANDBOX_IMAGE", DEFAULT_IMAGE)
         if not (root / "scripts/run-task.cljk").is_file():
             raise EnvironmentConnectionError("MURAKUMO_TASK_ROOT is not a Murakumo checkout")
-        node, host = select_host(root, nodes, labels)
+        max_per_node = int(setting("MURAKUMO_SANDBOX_MAX_PER_NODE", "2"))
+        if not 1 <= max_per_node <= 16:
+            raise EnvironmentConnectionError("MURAKUMO_SANDBOX_MAX_PER_NODE must be 1..16")
+        node, host = select_host(root, nodes, labels, max_per_node)
         LOG.info("Murakumo sandbox placement: task=%s node=%s", task_id, node)
         resources = container_config or {}
         return MurakumoEnvironment(host=host, image=selected_image, task_id=task_id,
