@@ -32,7 +32,8 @@ Set these names in that profile's `.env` (values shown contain no secrets):
 
 ```text
 MURAKUMO_TASK_ROOT=/absolute/path/to/murakumo
-MURAKUMO_SANDBOX_NODES=aiueos-6600hs-1
+MURAKUMO_SANDBOX_NODES=aiueos-6600hs-1,gad
+MURAKUMO_SANDBOX_MAX_PER_NODE=2
 MURAKUMO_SANDBOX_IMAGE=debian@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
 ```
 
@@ -41,7 +42,12 @@ Hermes checks the path locally and then prepends `cd` inside the container;
 the profile's local default can resolve to `/root`, which the unprivileged
 container user cannot enter. `/workspace` remains available for session files.
 
-`MURAKUMO_SANDBOX_NODES` is an explicit inventory-name allowlist. An optional
+`MURAKUMO_SANDBOX_NODES` is an explicit inventory-name allowlist. Placement
+plans one candidate per allowed node, then chooses among reachable Docker hosts
+with the fewest live Hermes sandbox containers. Equal counts are randomized.
+The per-node limit defaults to 2; a full or unreachable fleet fails closed.
+The limit is an admission check, not an atomic reservation across controllers.
+An optional
 `MURAKUMO_SANDBOX_LABELS=tier=...` adds Murakumo placement constraints. A
 missing or refused placement stops execution. A failed remote container never
 falls back to the gateway host. SSH authentication stays on the controller;
