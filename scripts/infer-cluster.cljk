@@ -26,6 +26,8 @@
 ;; comment heartbeats while it waits for a head's first token. This keeps the
 ;; VPC and caller connection active; it does not shorten queue or prefill.
 ;; Ordinary JSON callers retain the existing admission and HTTP error status.
+;; A queued request expires at its TTFT budget even if its estimated head
+;; becomes unavailable; heartbeats cannot keep an impossible wait alive.
 ;; Input tokens: x-murakumo-input-tokens, else body length / 4.
 ;;
 ;; Affinity. An agent resends the same long prefix every turn, and a head
@@ -58,7 +60,7 @@
 ;; Priors until a head has measured itself: gad's 260 tok/s prefill, and a
 ;; 1024-token answer at ~17 tok/s.
 (def prior-ms-per-token (/ 1000 260))
-(def prior-decode-ms 60000)
+(def prior-decode-ms (js/parseInt (opt "--prior-decode-ms" "60000")))
 ;; Prefill speed is learned only from prompts at least this long: below it the
 ;; fixed per-request overhead, divided by a handful of tokens, reads as a head
 ;; 1000x slower than it is and would bar it from every long request.
@@ -230,12 +232,12 @@
     (.writeHead res status (clj->js (merge {"content-type" "application/json"} headers)))
     (.end res (js/JSON.stringify (clj->js body)))))
 
-(defn- sse-error! [res status]
+(defn- sse-error! [res code message]
   (when-not (.-writableEnded res)
     (.write res (str "event: error\ndata: " (js/JSON.stringify
                               (clj->js {:error {:type "api_error"
-                                                :code "mishima_upstream_error"
-                                                :message (str "Mishima head returned HTTP " status)}})) "\n\n"))
+                                                :code code
+                                                :message message}})) "\n\n"))
     (.end res "data: [DONE]\n\n")))
 
 (defn- start-heartbeat! [{:keys [res heartbeat]}]
@@ -277,7 +279,7 @@
                          (.setHeader res "x-murakumo-queue-ms" (str (- t-dispatch t0)))
                          (.writeHead res (.-statusCode ures) (.-headers ures)))
                        (if (and prelude? (not= 200 (.-statusCode ures)))
-                         (do (.on ures "end" (fn [] (sse-error! res (.-statusCode ures)) (finish)))
+                         (do (.on ures "end" (fn [] (sse-error! res "mishima_upstream_error" (str "Mishima head returned HTTP " (.-statusCode ures))) (finish)))
                              (.resume ures))
                          (do
                            (.once ures "data"
@@ -308,7 +310,7 @@
            (when-not @abandoned
              (mark! h #(-> % (update :failures inc) (assoc :healthy? false)))
              (if (.-headersSent res)
-               (sse-error! res 502)
+               (sse-error! res "mishima_upstream_error" "Mishima head unreachable")
                (json-reply res 502 {} {:error "head unreachable" :head h :detail (.-message e)})))
            (finish)))
     (.on upstream "timeout" (fn [] (.destroy upstream)))
@@ -320,6 +322,9 @@
                 (finish)
                 (println (str "abandoned by caller: " h " after " (- (js/Date.now) t-dispatch)
                               " ms (queued " (- t-dispatch t0) " ms)")))))
+    (when-let [timer @(:deadline entry)]
+      (js/clearTimeout timer)
+      (reset! (:deadline entry) nil))
     (.end upstream body)))
 
 (defn- choose-head
@@ -392,7 +397,7 @@
         stream? (boolean (some-> parsed .-stream))
         entry {:id (swap! seq-no inc) :req req :res res :body body :required required
                :tokens tokens :budget budget :stream? stream? :max-out max-out
-               :client-stream? client-stream? :heartbeat (atom nil)
+               :client-stream? client-stream? :heartbeat (atom nil) :deadline (atom nil)
                :key (header req "x-murakumo-affinity")
                :t0 (js/Date.now) :cancel (atom nil)}
         {:keys [heads wait-ms prefill-ms ttft-ms]} (estimate-ttft-ms entry)]
@@ -424,9 +429,25 @@
       :else
       (do (when (and client-stream? stream? (> budget default-budget-ms))
             (start-heartbeat! entry))
+          (reset! (:deadline entry)
+                  (js/setTimeout
+                   (fn []
+                     (when (some #(= (:id %) (:id entry)) @queue)
+                       (swap! queue (fn [q] (vec (remove #(= (:id %) (:id entry)) q))))
+                       (when-let [timer @(:heartbeat entry)] (js/clearInterval timer))
+                       (println (str "expired in queue: required " required " tokens " tokens
+                                     " after " (- (js/Date.now) (:t0 entry)) " ms"))
+                       (if (.-headersSent res)
+                         (sse-error! res "mishima_queue_timeout" "Mishima could not start this request before its TTFT budget expired")
+                         (json-reply res 429 {"retry-after" "5"}
+                                     {:error {:type "rate_limit_error" :code "mishima_queue_timeout"
+                                              :message "Mishima could not start this request before its TTFT budget expired"
+                                              :retry_after 5}}))))
+                   (max 1 budget)))
           (.on res "close"
                (fn []
                  (when-let [timer @(:heartbeat entry)] (js/clearInterval timer))
+                 (when-let [timer @(:deadline entry)] (js/clearTimeout timer))
                  (if-let [cancel @(:cancel entry)]
                    (cancel)
                    (swap! queue (fn [q] (vec (remove #(= (:id %) (:id entry)) q)))))))
@@ -441,6 +462,7 @@
    :affinity-keys (count @affinity)
    :long-heads long-heads :ultra-heads ultra-heads
    :ttft-budget-ms default-budget-ms
+   :stream-budget-cap-ms stream-budget-cap-ms :heartbeat-ms heartbeat-ms
    :est-ratio @est-ratio})
 
 (defn- serve [req res]

@@ -25,7 +25,7 @@ test("stream heartbeat bridges a long prefill while ordinary admission still ref
           res.writeHead(200, { "content-type": "text/event-stream" });
           res.end('data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n');
         }
-      }, 800);
+      }, body.messages[0].content === "hold" ? 2000 : 800);
     });
   });
   const headPort = await listen(head);
@@ -39,7 +39,7 @@ test("stream heartbeat bridges a long prefill while ordinary admission still ref
   const router = spawn("kbb", ["--backend", "sci", "scripts/infer-cluster.cljk",
     "--bind", "127.0.0.1", "--port", String(probePort), "--heads", host,
     "--long-heads", host, "--ultra-heads", host,
-    "--ttft-budget-ms", "100", "--heartbeat-ms", "100",
+    "--ttft-budget-ms", "100", "--heartbeat-ms", "100", "--prior-decode-ms", "50",
     "--prefill-tok-s", `${host}=100`], { stdio: ["ignore", "pipe", "pipe"] });
   let stderr = "";
   router.stderr.on("data", (chunk) => { stderr += chunk; });
@@ -87,4 +87,21 @@ test("stream heartbeat bridges a long prefill while ordinary admission still ref
   const failure = await failed.text();
   assert.match(failure, /"code":"mishima_upstream_error"/);
   assert.match(failure, /data: \[DONE\]/);
+
+  // The first request holds the only head beyond the queue estimate. A
+  // second request is admitted, then must expire instead of waiting forever.
+  const holding = await ask("hold", true);
+  const queued = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-murakumo-input-tokens": "1",
+      "x-murakumo-caller-stream": "1", "x-murakumo-ttft-budget-ms": "1200" },
+    body: JSON.stringify({ model: "mishima", stream: true, max_tokens: 8,
+      messages: [{ role: "user", content: "queued" }] }),
+  });
+  assert.equal(queued.status, 200);
+  const expired = await queued.text();
+  assert.match(expired, /: murakumo waiting/);
+  assert.match(expired, /"code":"mishima_queue_timeout"/);
+  assert.doesNotMatch(expired, /"content":"OK"/);
+  await holding.text();
 });
