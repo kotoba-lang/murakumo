@@ -1,82 +1,214 @@
 #!/usr/bin/env kbb
-;; infer-cluster — one OpenAI-shaped endpoint in front of N murakumo heads.
+;; infer-cluster — one OpenAI-shaped endpoint in front of the Mishima heads.
 ;;
-;;   kbb --backend sci scripts/infer-cluster.cljk [--bind 127.0.0.1] [--port 8795] [--heads ip:port,ip:port]
+;; Every head runs ONE slot (llama-server --parallel 1). Owner direction
+;; 2026-09-25: at most one request in flight per head. A second request sent
+;; to a busy head only waits inside it, where nobody can see or cancel it; on
+;; 2026-09-25 the three long heads held 12/11/11 requests that way while the
+;; callers had long since given up. So requests wait HERE, in one queue, and a
+;; head gets the next one only when it is idle.
 ;;
-;; ## Why this exists
+;; Admission, not timeouts. Measured 2026-09-25 on gad: prefill 260 tok/s,
+;; decode 17 tok/s, so a 20K-token agent turn needs ~77 s before its first
+;; token. The caller (hermes) kills a stream that shows no token for its stale
+;; timeout (180 s by default). A request that cannot get a first token inside
+;; its budget is refused at once with 429 + Retry-After instead of being
+;; queued to fail: a refusal costs nothing, a request that times out costs a
+;; head's minutes and is retried into the same queue.
 ;;
-;; A 16 GB node runs ONE slot (`--parallel 1`): the KV cache for a second
-;; concurrent sequence is memory the machine does not have. Measured
-;; 2026-09-10, hermes needs ~208,900 job-seconds/day (770 runs at 2048
-;; max_tokens, 7.55 tok/s) and one slot supplies 86,400 -- 2.4x over. More
-;; slots therefore means more NODES, and something has to spread requests
-;; across them.
+;;   estimated TTFT = queue wait + own prefill
+;;   queue wait     = predicted remaining work on eligible heads
+;;   own prefill    = input tokens * measured or seeded ms/token
 ;;
-;; api.murakumo.cloud already does this for heads registered in its KV, but
-;; it is a Cloudflare Worker and these heads are tailnet-only, so it has no
-;; route to them at all. This is the same boundary the fleet console hit.
+;; Budget: x-murakumo-ttft-budget-ms (default --ttft-budget-ms, 150000).
+;; Input tokens: x-murakumo-input-tokens, else body length / 4.
 ;;
-;; ## Least-in-flight, not round-robin
+;; Affinity. An agent resends the same long prefix every turn, and a head
+;; keeps the last prompt's KV cache (llama-server cache_prompt). A request
+;; carrying x-murakumo-affinity goes back to the head that served that key
+;; last when that head is idle -- prefill then only covers the new suffix. It
+;; never waits for that head: an idle head is never left idle for affinity.
 ;;
-;; With one slot per head, a request that arrives while a head is decoding
-;; QUEUES BEHIND IT for the length of a whole generation -- up to 271 s at
-;; 2048 tokens. Round-robin hands work to a busy head while an idle one
-;; waits, purely because it is that head's turn. In-flight counts are kept
-;; here rather than read from the heads: /slots is a poll, and a poll is
-;; always at least one request out of date at exactly the moment it matters.
+;; Heads are chosen smallest-capable first, so an 8K request does not take a
+;; 128K head that a long request is waiting for.
 ;;
-;; ## A head that is down must not be chosen, and must be able to come back
-;;
-;; Failures mark a head unhealthy; a probe returns it to service. A cluster
-;; that never re-admits a head degrades to one node after the first blip.
-
+;; A caller that hangs up while queued leaves the queue; one that hangs up
+;; while its request runs cancels the head's work (res "close").
 (ns infer-cluster
-  (:require ["http" :as http] ["url" :as url] [clojure.string :as str]))
+  (:require ["http" :as http] [clojure.string :as str]))
 
 (def argv (vec (drop 2 (js->clj (.-argv js/process)))))
 (defn- opt [f d] (or (second (drop-while #(not= f %) argv)) d))
+(defn- addresses [flag]
+  (set (for [h (str/split (opt flag "") #",") :when (not (str/blank? h))] (str/trim h))))
 
-;; ⚠ NOT 8790. murakumo.infer.gateway (the ComfyUI front) already binds that
-;; port on all interfaces, and two listeners on one port do not error --
-;; measured: this process took 127.0.0.1:8790 while the gateway held *:8790,
-;; both reported success, and which one answered a request was left to the
-;; resolver. A silent split like that is worse than a refused bind.
 (def port (js/parseInt (opt "--port" "8795")))
 (def bind (opt "--bind" "127.0.0.1"))
-(def heads
-  (vec (for [h (str/split (opt "--heads" "100.113.200.45:8094,100.98.142.59:8094") #",")
-             :when (not (str/blank? h))]
-         (str/trim h))))
-(def long-heads
-  (set (for [h (str/split (opt "--long-heads" "") #",")
-             :when (not (str/blank? h))]
-         (str/trim h))))
+(def heads (vec (addresses "--heads")))
+(def long-heads (addresses "--long-heads"))
+(def ultra-heads (addresses "--ultra-heads"))
+(def default-budget-ms (js/parseInt (opt "--ttft-budget-ms" "150000")))
+;; Priors until a head has measured itself: gad's 260 tok/s prefill, and a
+;; 1024-token answer at ~17 tok/s.
+(def prior-ms-per-token (/ 1000 260))
+(def prior-decode-ms 60000)
+;; Prefill speed is learned only from prompts at least this long: below it the
+;; fixed per-request overhead, divided by a handful of tokens, reads as a head
+;; 1000x slower than it is and would bar it from every long request.
+(def learn-min-tokens 2000)
+(def alpha 0.3)
+(def affinity-cap 4096)
+;; --prefill-tok-s host:port=rate,... : measured prefill speed per head, used
+;; until the router has measured the head itself. 2026-09-25: gad 260 tok/s,
+;; aiueos-node-260910 28.5 tok/s -- a 10x spread that a single prior hides.
+(defn- rate-seeds [flag]
+  (into {} (for [kv (str/split (opt flag "") #",")
+                 :let [[h r] (str/split kv #"=")]
+                 :when (and h r (not (str/blank? r)))]
+             [(str/trim h) (js/parseFloat r)])))
+(def prefill-seeds (rate-seeds "--prefill-tok-s"))
+;; --decode-tok-s host:port=rate,... : measured decode speed, used to rank
+;; heads until each head's own timings.predicted_per_second is learned.
+;; 2026-09-26: a 3,000-token answer took 684 s (~4.4 tok/s) because the class's
+;; heads were ranked by prefill speed alone, and xavier (prefill 69, decode
+;; 4.1) outranks an M4 (prefill 51, decode 9.9).
+(def decode-seeds (rate-seeds "--decode-tok-s"))
+(def prior-decode-tok-s 9.0)
+;; Output tokens reserved when choosing the class: the request's max_tokens,
+;; at most 8192 (hermes asks 8192). Mishima allows 32768 out (2026-09-26); a
+;; longer answer on a 32K head stops where the head's context ends instead of
+;; forcing every request onto the three 128K heads.
+(def output-reserve-cap 8192)
 
-;; head -> {:inflight n :healthy? bool :failures n :served n}
-(def state (atom (into {} (for [h heads] [h {:inflight 0 :healthy? true :failures 0 :served 0}]))))
+(def state
+  (atom (into {} (for [h heads]
+                   [h {:inflight 0 :healthy? true :failures 0 :served 0
+                       :ms-per-real-token nil :ms-per-token-warm nil
+                       :decode-ms nil :expected-end nil}]))))
+(def queue (atom []))          ; entries, FIFO
+(def affinity (atom {}))       ; affinity key -> head that served it last
+(def seq-no (atom 0))
 
-(defn- pick
-  "The healthy head with the fewest requests in flight. Ties go to the one
-  that has served least, so a cold cluster spreads instead of stacking."
-  [long?]
-  (let [s @state
-        live (filter (fn [[h v]] (and (:healthy? v)
-                                      (or (not long?) (contains? long-heads h)))) s)]
-    (when (seq live)
-      (first (first (sort-by (fn [[_ v]] [(:inflight v) (:served v)]) live))))))
+(declare pump!)
 
+(defn- ewma [old x] (if (nil? old) x (+ (* alpha x) (* (- 1 alpha) old))))
 (defn- mark! [h f] (swap! state update h f))
 
-(defn- probe!
-  "Return an unhealthy head to service when it answers /health again."
-  [h]
+(defn- capability [h] (cond (contains? ultra-heads h) 2 (contains? long-heads h) 1 :else 0))
+
+(defn- eligible? [required h]
+  (case required
+    131072 (contains? ultra-heads h)
+    32768 (or (contains? long-heads h) (contains? ultra-heads h))
+    true))
+
+(defn- live-eligible [required]
+  (filter (fn [[h v]] (and (:healthy? v) (eligible? required h))) @state))
+
+;; Calibration from the head's own accounting. llama-server ends every answer
+;; with timings {prompt_n, cache_n, prompt_ms}: prompt_n tokens were computed,
+;; cache_n reused from the KV cache. x-murakumo-input-tokens is the Worker's
+;; upper-bound estimate (JSON punctuation counts a token per character), so:
+;;   est-ratio          = (prompt_n + cache_n) / estimated tokens  (global)
+;;   :ms-per-real-token = prompt_ms / prompt_n                      (per head)
+;; A cold prefill is then  estimated tokens * est-ratio * ms-per-real-token,
+;; the same unit as the --prefill-tok-s seeds (measured real tokens). Without
+;; this the seeds were read against inflated counts: 2026-09-25 the ten M4
+;; heads (45 tok/s) never fitted a cold 240 s budget and served 0 requests
+;; while two requests queued for the fast heads.
+(def est-ratio (atom 1.0))
+
+(defn- learn-timings! [h tail tokens]
+  (when-let [[_ t] (re-find #"\"timings\"\s*:\s*(\{[^}]*\})" tail)]
+    (let [num (fn [k] (some->> (re-find (re-pattern (str "\"" k "\"\\s*:\\s*([0-9.]+)")) t) second js/parseFloat))
+          pn (num "prompt_n") cn (or (num "cache_n") 0) pms (num "prompt_ms")]
+      (when (and pn (pos? tokens) (>= (+ pn cn) learn-min-tokens))
+        (swap! est-ratio ewma (/ (+ pn cn) tokens)))
+      (when (and pn pms (>= pn learn-min-tokens))
+        (mark! h #(update % :ms-per-real-token ewma (/ pms pn))))
+      (let [pps (num "predicted_per_second") pdn (num "predicted_n")]
+        (when (and pps (pos? pps) pdn (>= pdn 64))
+          (mark! h #(update % :decode-tok-s ewma pps)))))))
+
+(defn- decode-tok-s [h v]
+  (or (:decode-tok-s v) (get decode-seeds h) prior-decode-tok-s))
+
+(defn- warm?
+  "Did this head serve this conversation last? Then its KV cache still holds
+  the conversation's prefix and prefill only covers the new suffix."
+  [key h]
+  (boolean (and key (= h (get @affinity key)))))
+
+(defn- per-token-ms
+  "Prefill ms/token on head h, learned separately for warm (KV cache hit) and
+  cold requests. 2026-09-25: one EWMA over both read xavier at 1.93 ms/token
+  (cache hits) while a cold prompt runs at 14.5 (69 tok/s), so cold requests
+  were admitted that could not reach a first token in time. Cold falls back to
+  the --prefill-tok-s seed, then the prior; warm never estimates slower than
+  cold."
+  [h v warm]
+  (let [cold (* @est-ratio
+                (or (:ms-per-real-token v)
+                    (some->> (get prefill-seeds h) (/ 1000))
+                    prior-ms-per-token))]
+    (if warm (min cold (or (:ms-per-token-warm v) cold)) cold)))
+
+(defn- decode-ms [v] (or (:decode-ms v) prior-decode-ms))
+
+(defn- job-ms
+  "Expected head time for a request of `tokens` on head h: prefill + decode."
+  [h tokens key]
+  (let [v (get @state h)] (+ (* tokens (per-token-ms h v (warm? key h))) (decode-ms v))))
+
+(def cold-margin
+  ;; A cold prefill is admitted only with 25% to spare: the M4 heads share
+  ;; their 16 GB with fleet services and swap (up to 34 GB measured
+  ;; 2026-09-25), so a cold prompt can run slower than the measured seed.
+  1.25)
+
+(defn- fits?
+  "Can this head finish the prefill inside the time left?"
+  [h v tokens budget-left key]
+  (let [warm (warm? key h)]
+    (<= (* tokens (per-token-ms h v warm) (if warm 1 cold-margin)) budget-left)))
+
+(defn- estimate-ttft-ms
+  "When the first token would come: hand the queue ahead to the heads in the
+  order they free up (remaining = service time - elapsed), then start this
+  request on whichever fitting head gives the earliest first token."
+  [{:keys [required tokens budget key]}]
+  (let [now (js/Date.now)
+        live (filter (fn [[h v]] (fits? h v tokens budget key)) (live-eligible required))
+        free0 (into {} (for [[h v] live]
+                         [h (if (pos? (:inflight v))
+                              (max 0 (- (or (:expected-end v) now) now)) 0)]))
+        ahead (filter #(some (fn [[h _]] (eligible? (:required %) h)) live) @queue)
+        free (reduce (fn [free queued]
+                       ;; A queued 128K request cannot occupy an 8K/32K head.
+                       ;; Assigning it to the earliest free head regardless of
+                       ;; context made the next short request appear to wait
+                       ;; behind work that head could never receive.
+                       (if-let [[h t] (first (sort-by val
+                                                       (filter (fn [[h _]]
+                                                                 (eligible? (:required queued) h)) free)))]
+                         (assoc free h (+ t (job-ms h (:tokens queued) (:key queued))))
+                         free))
+                     free0 ahead)
+        best (first (sort-by :ttft (for [[h t] free
+                                         :let [w (warm? key h)
+                                               pre (* tokens (per-token-ms h (get @state h) w) (if w 1 cold-margin))]]
+                                     {:h h :wait t :prefill pre :ttft (+ t pre)})))]
+    {:heads (count live) :wait-ms (or (:wait best) 0) :prefill-ms (or (:prefill best) 0)
+     :ttft-ms (if best (:ttft best) js/Infinity)}))
+
+(defn- probe! [h]
   (let [[host p] (str/split h #":")
         req (.request http #js {:host host :port (js/parseInt p) :path "/health"
                                 :method "GET" :timeout 5000}
                       (fn [res]
                         (when (= 200 (.-statusCode res))
                           (mark! h #(assoc % :healthy? true :failures 0))
-                          (println (str "head " h " back in service")))
+                          (js/setTimeout pump! 0))
                         (.resume res)))]
     (.on req "error" (fn [_]))
     (.on req "timeout" (fn [] (.destroy req)))
@@ -86,52 +218,222 @@
   (fn [] (doseq [[h v] @state :when (not (:healthy? v))] (probe! h)))
   30000)
 
-(defn- proxy! [req res]
-  (let [long? (= "32768" (aget (.-headers req) "x-murakumo-required-context"))]
-  (if-let [h (pick long?)]
-    (let [[host p] (str/split h #":")
-          _ (mark! h #(-> % (update :inflight inc) (update :served inc)))
-          done (atom false)
-          finish (fn [] (when-not @done
-                          (reset! done true)
-                          (mark! h #(update % :inflight dec))))
-          upstream (.request http
-                     #js {:host host :port (js/parseInt p) :path (.-url req)
-                          :method (.-method req) :headers (.-headers req)
-                          ;; Long, because one generation can legitimately take
-                          ;; minutes on these heads. A short timeout here would
-                          ;; kill work that was going to succeed.
-                          :timeout 900000}
-                     (fn [ures]
-                       (.setHeader res "x-murakumo-head" h)
-                       (.writeHead res (.-statusCode ures) (.-headers ures))
-                       ;; Piped, not buffered: hermes streams, and buffering a
-                       ;; stream turns a live response into a long silence.
-                       (.pipe ures res)
-                       (.on ures "end" finish)))]
-      (.on upstream "error"
-           (fn [e]
-             (finish)
+(defn- json-reply [res status headers body]
+  (when-not (.-headersSent res)
+    (.writeHead res status (clj->js (merge {"content-type" "application/json"} headers)))
+    (.end res (js/JSON.stringify (clj->js body)))))
+
+(defn- dispatch! [entry h]
+  (let [{:keys [req res body tokens stream? key t0]} entry
+        [host p] (str/split h #":")
+        t-dispatch (js/Date.now)
+        was-warm (warm? key h)
+        t-first (atom nil)
+        tail (atom "")
+        done (atom false)
+        abandoned (atom false)
+        finish (fn []
+                 (when-not @done
+                   (reset! done true)
+                   (mark! h #(update % :inflight dec))
+                   (pump!)))
+        upstream (.request http
+                   #js {:host host :port (js/parseInt p) :path (.-url req)
+                        :method (.-method req) :headers (.-headers req) :timeout 900000}
+                   (fn [ures]
+                     (.setHeader res "x-murakumo-head" h)
+                     (.setHeader res "x-murakumo-queue-ms" (str (- t-dispatch t0)))
+                     (.writeHead res (.-statusCode ures) (.-headers ures))
+                     (.once ures "data"
+                            (fn [_]
+                              ;; first chunk of a stream = queue-free prefill time
+                              (reset! t-first (js/Date.now))
+                              ;; warm only: cold prefill is learned from the head's timings
+                              (when (and stream? was-warm (>= tokens learn-min-tokens) (= 200 (.-statusCode ures)))
+                                (mark! h #(update % :ms-per-token-warm ewma (/ (- @t-first t-dispatch) tokens))))))
+                     (.on ures "data"
+                          (fn [c]
+                            ;; keep the tail: timings arrive in the last chunk
+                            (let [t (str @tail (.toString c "utf8"))]
+                              (reset! tail (subs t (max 0 (- (count t) 4096)))))))
+                     (.pipe ures res)
+                     (.on ures "end"
+                          (fn []
+                            (when (= 200 (.-statusCode ures))
+                              (learn-timings! h @tail tokens))
+                            (when (and stream? @t-first (= 200 (.-statusCode ures)))
+                              (mark! h #(update % :decode-ms ewma (- (js/Date.now) @t-first))))
+                            (finish)))))]
+    (mark! h #(-> % (update :inflight inc) (update :served inc) (assoc :expected-end (+ t-dispatch (job-ms h tokens key)))))
+    (when key
+      (swap! affinity (fn [m] (assoc (if (>= (count m) affinity-cap) {} m) key h))))
+    (.on upstream "error"
+         (fn [e]
+           (when-not @abandoned
              (mark! h #(-> % (update :failures inc) (assoc :healthy? false)))
-             (println (str "head " h " failed: " (.-message e) " — out of service"))
-             (when-not (.-headersSent res)
-               (.writeHead res 502 #js {"content-type" "application/json"})
-               (.end res (js/JSON.stringify #js {:error "head unreachable" :head h})))))
-      (.on upstream "timeout" (fn [] (.destroy upstream)))
-      (.pipe req upstream))
-    (do (.writeHead res 503 #js {"content-type" "application/json"})
-        (.end res (js/JSON.stringify #js {:error "no healthy head in the cluster"
-                                          :required_context (if long? 32768 8192)}))))))
+             (json-reply res 502 {} {:error "head unreachable" :head h :detail (.-message e)}))
+           (finish)))
+    (.on upstream "timeout" (fn [] (.destroy upstream)))
+    (reset! (:cancel entry)
+            (fn []
+              (when-not @done
+                (reset! abandoned true)
+                (.destroy upstream)
+                (finish)
+                (println (str "abandoned by caller: " h " after " (- (js/Date.now) t-dispatch)
+                              " ms (queued " (- t-dispatch t0) " ms)")))))
+    (.end upstream body)))
+
+(defn- choose-head
+  "An idle, healthy head for this entry whose prefill fits the time the entry
+  has left: its affinity head if among them, else the least capable one
+  (keeps long heads free for long requests), then the fastest."
+  [entry idle]
+  (let [left (- (:budget entry) (- (js/Date.now) (:t0 entry)))
+        cands (filter #(and (eligible? (:required entry) %)
+                            (fits? % (get @state %) (:tokens entry) left (:key entry))) idle)
+        sticky (get @affinity (:key entry))]
+    (when (seq cands)
+      (if (and sticky (some #{sticky} cands))
+        sticky
+        ;; within the smallest capable class, the head expected to FINISH
+        ;; first: cold prefill + the answer at that head's decode speed
+        (let [out (min (or (:max-out entry) 1024) output-reserve-cap)
+              finish-ms (fn [h] (let [v (get @state h)]
+                                  (+ (* (:tokens entry) (per-token-ms h v false))
+                                     (/ (* 1000 out) (decode-tok-s h v)))))]
+          (first (sort-by (fn [h] [(capability h) (finish-ms h)]) cands)))))))
+
+(defn pump! []
+  (loop []
+    (let [idle (set (keep (fn [[h v]] (when (and (:healthy? v) (zero? (:inflight v))) h)) @state))
+          pick (when (seq idle)
+                 (some (fn [e] (when-let [h (choose-head e idle)] [e h])) @queue))]
+      (when-let [[e h] pick]
+        (swap! queue (fn [q] (vec (remove #(= (:id %) (:id e)) q))))
+        (dispatch! e h)
+        (recur)))))
+
+(defn- header [req k] (aget (.-headers req) k))
+
+(defn- required-context [req]
+  (case (header req "x-murakumo-required-context")
+    "131072" 131072
+    "32768" 32768
+    8192))
+
+
+(defn effective-class
+  "The context class a request really needs. The Worker labels a request by its
+  upper-bound token estimate (> 30000 -> 131072, > 6000 -> 32768), which reads
+  ~1.8x the real count (est-ratio learned 0.56-0.6 on 2026-09-25). A
+  conversation that grew past that label left the M4 head holding its KV cache
+  (32K) for the three 128K heads, arrived there cold and was refused: 31 of 36
+  refusals in one hour were 131072-labelled requests with a median of ~20K real
+  tokens. Classify by estimated real tokens + the output cap, keeping 15% for
+  the spread of est-ratio around its mean."
+  [labelled tokens max-out]
+  (let [need (+ (* tokens @est-ratio) (min (or max-out output-reserve-cap) output-reserve-cap))]
+    (cond (<= need (* 0.85 8192)) 8192
+          (<= need (* 0.85 32768)) 32768
+          :else (max labelled 131072))))
+
+(defn- admit! [req res body]
+  (let [labelled (required-context req)
+        tokens (or (some-> (header req "x-murakumo-input-tokens") js/parseInt
+                           (as-> n (when-not (js/isNaN n) n)))
+                   (js/Math.round (/ (.-length body) 4)))
+        parsed (try (js/JSON.parse (.toString body "utf8")) (catch :default _ nil))
+        max-out (some-> parsed (aget "max_tokens") js/parseInt (as-> n (when-not (js/isNaN n) n)))
+        required (effective-class labelled tokens max-out)
+        budget (or (some-> (header req "x-murakumo-ttft-budget-ms") js/parseInt
+                           (as-> n (when-not (js/isNaN n) n)))
+                   default-budget-ms)
+        stream? (boolean (some-> parsed .-stream))
+        entry {:id (swap! seq-no inc) :req req :res res :body body :required required
+               :tokens tokens :budget budget :stream? stream? :max-out max-out
+               :key (header req "x-murakumo-affinity")
+               :t0 (js/Date.now) :cancel (atom nil)}
+        {:keys [heads wait-ms prefill-ms ttft-ms]} (estimate-ttft-ms entry)]
+    (cond
+      (empty? (live-eligible required))
+      (json-reply res 503 {} {:error "no healthy head in the cluster" :required_context required})
+
+      (zero? heads)
+      (json-reply res 429 {"retry-after" "300"}
+                  {:error {:type "rate_limit_error" :code "mishima_too_long"
+                           :message (str "no Mishima head can prefill " tokens " tokens inside "
+                                         (js/Math.round (/ budget 1000)) " s")
+                           :retry_after 300}})
+
+      (> ttft-ms budget)
+      (let [retry-s (max 5 (js/Math.ceil (/ (- ttft-ms budget) 1000)))]
+        (println (str "refused: required " required " tokens " tokens " est-ttft " (js/Math.round ttft-ms)
+                      " ms > budget " budget " (queue " (count @queue) ")"))
+        (json-reply res 429 {"retry-after" (str retry-s)}
+                    {:error {:type "rate_limit_error" :code "mishima_busy"
+                             :message (str "Mishima cannot start this request within its "
+                                           (js/Math.round (/ budget 1000)) " s budget (estimated "
+                                           (js/Math.round (/ ttft-ms 1000)) " s: queue "
+                                           (js/Math.round (/ wait-ms 1000)) " s + prefill "
+                                           (js/Math.round (/ prefill-ms 1000)) " s). Retry after "
+                                           retry-s " s.")
+                             :retry_after retry-s}}))
+
+      :else
+      (do (.on res "close"
+               (fn []
+                 (if-let [cancel @(:cancel entry)]
+                   (cancel)
+                   (swap! queue (fn [q] (vec (remove #(= (:id %) (:id entry)) q)))))))
+          (swap! queue conj entry)
+          (pump!)))))
+
+(defn- status []
+  {:port port
+   :heads @state
+   :queue (frequencies (map :required @queue))
+   :queue-length (count @queue)
+   :affinity-keys (count @affinity)
+   :long-heads long-heads :ultra-heads ultra-heads
+   :ttft-budget-ms default-budget-ms
+   :est-ratio @est-ratio})
 
 (defn- serve [req res]
   (if (= "/cluster/status" (.-url req))
-    (do (.writeHead res 200 #js {"content-type" "application/json"})
-        (.end res (js/JSON.stringify (clj->js {:heads @state :port port}))))
-    (proxy! req res)))
+    (json-reply res 200 {} (status))
+    (let [chunks #js []]
+      (.on req "data" (fn [c] (.push chunks c)))
+      (.on req "end" (fn [] (admit! req res (js/Buffer.concat chunks)))))))
 
-;; Loopback only: this fronts heads that answer with no authentication of
-;; their own, so it must not widen their reach.
-(.listen (http/createServer serve) port bind
-         #(println (str "infer-cluster on http://" bind ":" port
-                        "  heads: " (str/join ", " heads)
-                        "  long heads: " (str/join ", " long-heads))))
+(if (some #{"--self-test"} argv)
+  (let [short (first (remove ultra-heads heads))
+        wide (first (filter ultra-heads heads))]
+    (when-not (and short wide (= 2 (count heads)))
+      (throw (js/Error. "self-test needs two heads, one of them ultra")))
+    (swap! state assoc wide (assoc (get @state wide)
+                              :inflight 1 :expected-end (+ (js/Date.now) 120000)))
+    (reset! queue [{:required 131072 :tokens 1000 :key nil}])
+    (let [short-est (estimate-ttft-ms
+                      {:required 8192 :tokens 1000 :budget 240000 :key nil})
+          wide-est (estimate-ttft-ms
+                     {:required 131072 :tokens 1000 :budget 240000 :key nil})
+          ;; An idle short head must remain available when an ultra job waits.
+          short-prefill (* 1000 (per-token-ms short (get @state short) false) cold-margin)
+          short-fits (fits? short (get @state short) 1000 short-prefill nil)]
+      (when-not (and (= 0 (:wait-ms short-est))
+                     (>= (:wait-ms wide-est) 120000)
+                     short-fits
+                     (not (fits? short (get @state short) 1000 (dec short-prefill) nil))
+                     (= 8192 (effective-class 8192 6963 0))
+                     (= 32768 (effective-class 8192 6964 0)))
+        (throw (js/Error. (str "queue, budget, or context boundary failed: "
+                               (pr-str [short-est wide-est short-fits])))))
+      (println "SELF-TEST\t6 queue, budget, and context assertions passed")
+      (js/process.exit 0)))
+  (.listen (http/createServer serve) port bind
+           #(println (str "infer-cluster on http://" bind ":" port
+                          " heads=" (count heads)
+                          " long=" (count long-heads)
+                          " ultra=" (count ultra-heads)
+                          " per-head-concurrency=1 ttft-budget-ms=" default-budget-ms))))
