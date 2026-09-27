@@ -17,15 +17,19 @@ test("stream heartbeat bridges a long prefill while ordinary admission still ref
     req.on("data", (chunk) => chunks.push(chunk));
     req.on("end", () => {
       const body = JSON.parse(Buffer.concat(chunks).toString());
-      setTimeout(() => {
-        if (body.messages[0].content === "error") {
+      if (body.messages[0].content === "error") {
+        setTimeout(() => {
           res.writeHead(503, { "content-type": "application/json" });
           res.end('{"error":"head unavailable"}');
-        } else {
-          res.writeHead(200, { "content-type": "text/event-stream" });
-          res.end('data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n');
-        }
-      }, body.messages[0].content === "hold" ? 2000 : 800);
+        }, 800);
+      } else {
+        // A real llama head flushes HTTP headers immediately, then spends
+        // prefill time without producing any SSE data.
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.flushHeaders();
+        setTimeout(() => res.end('data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n'),
+          body.messages[0].content === "hold" ? 2000 : 800);
+      }
     });
   });
   const headPort = await listen(head);

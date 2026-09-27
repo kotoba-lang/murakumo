@@ -270,9 +270,12 @@
                    #js {:host host :port (js/parseInt p) :path (.-url req)
                         :method (.-method req) :headers (.-headers req) :timeout 900000}
                    (fn [ures]
-                     (when-let [timer @(:heartbeat entry)]
-                       (js/clearInterval timer)
-                       (reset! (:heartbeat entry) nil))
+                     ;; llama-server flushes HTTP headers before prefill. Keep
+                     ;; heartbeats running until its first SSE body chunk.
+                     (when (not= 200 (.-statusCode ures))
+                       (when-let [timer @(:heartbeat entry)]
+                         (js/clearInterval timer)
+                         (reset! (:heartbeat entry) nil)))
                      (let [prelude? (.-headersSent res)]
                        (when-not prelude?
                          (.setHeader res "x-murakumo-head" h)
@@ -284,6 +287,9 @@
                          (do
                            (.once ures "data"
                                   (fn [_]
+                                    (when-let [timer @(:heartbeat entry)]
+                                      (js/clearInterval timer)
+                                      (reset! (:heartbeat entry) nil))
                                     ;; first chunk of a stream = queue-free prefill time
                                     (reset! t-first (js/Date.now))
                                     ;; warm only: cold prefill is learned from the head's timings
