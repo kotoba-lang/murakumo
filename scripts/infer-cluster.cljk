@@ -21,6 +21,11 @@
 ;;   own prefill    = input tokens * measured or seeded ms/token
 ;;
 ;; Budget: x-murakumo-ttft-budget-ms (default --ttft-budget-ms, 150000).
+;; A caller that actually requested SSE can opt into a longer bounded TTFT:
+;; the Worker marks it x-murakumo-caller-stream=1, and the router sends SSE
+;; comment heartbeats while it waits for a head's first token. This keeps the
+;; VPC and caller connection active; it does not shorten queue or prefill.
+;; Ordinary JSON callers retain the existing admission and HTTP error status.
 ;; Input tokens: x-murakumo-input-tokens, else body length / 4.
 ;;
 ;; Affinity. An agent resends the same long prefix every turn, and a head
@@ -48,6 +53,8 @@
 (def long-heads (addresses "--long-heads"))
 (def ultra-heads (addresses "--ultra-heads"))
 (def default-budget-ms (js/parseInt (opt "--ttft-budget-ms" "150000")))
+(def stream-budget-cap-ms 480000)
+(def heartbeat-ms (max 100 (js/parseInt (opt "--heartbeat-ms" "15000"))))
 ;; Priors until a head has measured itself: gad's 260 tok/s prefill, and a
 ;; 1024-token answer at ~17 tok/s.
 (def prior-ms-per-token (/ 1000 260))
@@ -223,6 +230,25 @@
     (.writeHead res status (clj->js (merge {"content-type" "application/json"} headers)))
     (.end res (js/JSON.stringify (clj->js body)))))
 
+(defn- sse-error! [res status]
+  (when-not (.-writableEnded res)
+    (.write res (str "event: error\ndata: " (js/JSON.stringify
+                              (clj->js {:error {:type "api_error"
+                                                :code "mishima_upstream_error"
+                                                :message (str "Mishima head returned HTTP " status)}})) "\n\n"))
+    (.end res "data: [DONE]\n\n")))
+
+(defn- start-heartbeat! [{:keys [res heartbeat]}]
+  (reset! heartbeat
+          (js/setInterval
+           (fn []
+             (when-not (.-writableEnded res)
+               (when-not (.-headersSent res)
+                 (.writeHead res 200 #js {"content-type" "text/event-stream; charset=utf-8"
+                                         "cache-control" "no-cache"}))
+               (.write res ": murakumo waiting\n\n")))
+           heartbeat-ms)))
+
 (defn- dispatch! [entry h]
   (let [{:keys [req res body tokens stream? key t0]} entry
         [host p] (str/split h #":")
@@ -235,35 +261,45 @@
         finish (fn []
                  (when-not @done
                    (reset! done true)
+                   (when-let [timer @(:heartbeat entry)] (js/clearInterval timer))
                    (mark! h #(update % :inflight dec))
                    (pump!)))
         upstream (.request http
                    #js {:host host :port (js/parseInt p) :path (.-url req)
                         :method (.-method req) :headers (.-headers req) :timeout 900000}
                    (fn [ures]
-                     (.setHeader res "x-murakumo-head" h)
-                     (.setHeader res "x-murakumo-queue-ms" (str (- t-dispatch t0)))
-                     (.writeHead res (.-statusCode ures) (.-headers ures))
-                     (.once ures "data"
-                            (fn [_]
-                              ;; first chunk of a stream = queue-free prefill time
-                              (reset! t-first (js/Date.now))
-                              ;; warm only: cold prefill is learned from the head's timings
-                              (when (and stream? was-warm (>= tokens learn-min-tokens) (= 200 (.-statusCode ures)))
-                                (mark! h #(update % :ms-per-token-warm ewma (/ (- @t-first t-dispatch) tokens))))))
-                     (.on ures "data"
-                          (fn [c]
-                            ;; keep the tail: timings arrive in the last chunk
-                            (let [t (str @tail (.toString c "utf8"))]
-                              (reset! tail (subs t (max 0 (- (count t) 4096)))))))
-                     (.pipe ures res)
-                     (.on ures "end"
-                          (fn []
-                            (when (= 200 (.-statusCode ures))
-                              (learn-timings! h @tail tokens))
-                            (when (and stream? @t-first (= 200 (.-statusCode ures)))
-                              (mark! h #(update % :decode-ms ewma (- (js/Date.now) @t-first))))
-                            (finish)))))]
+                     (when-let [timer @(:heartbeat entry)]
+                       (js/clearInterval timer)
+                       (reset! (:heartbeat entry) nil))
+                     (let [prelude? (.-headersSent res)]
+                       (when-not prelude?
+                         (.setHeader res "x-murakumo-head" h)
+                         (.setHeader res "x-murakumo-queue-ms" (str (- t-dispatch t0)))
+                         (.writeHead res (.-statusCode ures) (.-headers ures)))
+                       (if (and prelude? (not= 200 (.-statusCode ures)))
+                         (do (.on ures "end" (fn [] (sse-error! res (.-statusCode ures)) (finish)))
+                             (.resume ures))
+                         (do
+                           (.once ures "data"
+                                  (fn [_]
+                                    ;; first chunk of a stream = queue-free prefill time
+                                    (reset! t-first (js/Date.now))
+                                    ;; warm only: cold prefill is learned from the head's timings
+                                    (when (and stream? was-warm (>= tokens learn-min-tokens) (= 200 (.-statusCode ures)))
+                                      (mark! h #(update % :ms-per-token-warm ewma (/ (- @t-first t-dispatch) tokens))))))
+                           (.on ures "data"
+                                (fn [c]
+                                  ;; keep the tail: timings arrive in the last chunk
+                                  (let [t (str @tail (.toString c "utf8"))]
+                                    (reset! tail (subs t (max 0 (- (count t) 4096)))))))
+                           (.pipe ures res)
+                           (.on ures "end"
+                                (fn []
+                                  (when (= 200 (.-statusCode ures))
+                                    (learn-timings! h @tail tokens))
+                                  (when (and stream? @t-first (= 200 (.-statusCode ures)))
+                                    (mark! h #(update % :decode-ms ewma (- (js/Date.now) @t-first))))
+                                  (finish))))))))]
     (mark! h #(-> % (update :inflight inc) (update :served inc) (assoc :expected-end (+ t-dispatch (job-ms h tokens key)))))
     (when key
       (swap! affinity (fn [m] (assoc (if (>= (count m) affinity-cap) {} m) key h))))
@@ -271,7 +307,9 @@
          (fn [e]
            (when-not @abandoned
              (mark! h #(-> % (update :failures inc) (assoc :healthy? false)))
-             (json-reply res 502 {} {:error "head unreachable" :head h :detail (.-message e)}))
+             (if (.-headersSent res)
+               (sse-error! res 502)
+               (json-reply res 502 {} {:error "head unreachable" :head h :detail (.-message e)})))
            (finish)))
     (.on upstream "timeout" (fn [] (.destroy upstream)))
     (reset! (:cancel entry)
@@ -340,18 +378,21 @@
 
 (defn- admit! [req res body]
   (let [labelled (required-context req)
+        client-stream? (= "1" (header req "x-murakumo-caller-stream"))
         tokens (or (some-> (header req "x-murakumo-input-tokens") js/parseInt
                            (as-> n (when-not (js/isNaN n) n)))
                    (js/Math.round (/ (.-length body) 4)))
         parsed (try (js/JSON.parse (.toString body "utf8")) (catch :default _ nil))
         max-out (some-> parsed (aget "max_tokens") js/parseInt (as-> n (when-not (js/isNaN n) n)))
         required (effective-class labelled tokens max-out)
-        budget (or (some-> (header req "x-murakumo-ttft-budget-ms") js/parseInt
-                           (as-> n (when-not (js/isNaN n) n)))
-                   default-budget-ms)
+        requested-budget (or (some-> (header req "x-murakumo-ttft-budget-ms") js/parseInt
+                                     (as-> n (when-not (js/isNaN n) n)))
+                             default-budget-ms)
+        budget (if client-stream? (min requested-budget stream-budget-cap-ms) requested-budget)
         stream? (boolean (some-> parsed .-stream))
         entry {:id (swap! seq-no inc) :req req :res res :body body :required required
                :tokens tokens :budget budget :stream? stream? :max-out max-out
+               :client-stream? client-stream? :heartbeat (atom nil)
                :key (header req "x-murakumo-affinity")
                :t0 (js/Date.now) :cancel (atom nil)}
         {:keys [heads wait-ms prefill-ms ttft-ms]} (estimate-ttft-ms entry)]
@@ -381,8 +422,11 @@
                              :retry_after retry-s}}))
 
       :else
-      (do (.on res "close"
+      (do (when (and client-stream? stream? (> budget default-budget-ms))
+            (start-heartbeat! entry))
+          (.on res "close"
                (fn []
+                 (when-let [timer @(:heartbeat entry)] (js/clearInterval timer))
                  (if-let [cancel @(:cancel entry)]
                    (cancel)
                    (swap! queue (fn [q] (vec (remove #(= (:id %) (:id entry)) q)))))))
