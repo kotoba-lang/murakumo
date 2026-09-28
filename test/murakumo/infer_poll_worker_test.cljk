@@ -81,6 +81,16 @@
       (is (false? (:node/ready? body)))
       (is (= 0 (get-in body [:node/capacity :slots-free]))))))
 
+(deftest idle-only-node-withholds-capacity-while-the-host-is-busy
+  (let [config {:did "did:key:node" :model "m" :slots 1
+                :memory-bytes (constantly 4096) :idle? (constantly false)}
+        body (worker/heartbeat-body config true 1000)]
+    (is (false? (:node/ready? body)))
+    (is (= 0 (get-in body [:node/capacity :slots-free]))))
+  (is (worker/host-idle? 2 8 3000000000 24000000000))
+  (is (false? (worker/host-idle? 6 8 3000000000 24000000000)))
+  (is (false? (worker/host-idle? 2 8 500000000 24000000000))))
+
 (deftest readiness-requires-the-requested-local-model
   (is (worker/model-ready? "model-a" {:data [{:id "model-a"}]}))
   (is (worker/model-ready? "model-a" {:models [{:name "model-a"}]}))
@@ -215,7 +225,16 @@
                     (take 2 jobs))))
           (.then (fn [claimed?]
                    (is (false? claimed?))
-                   (is (= ["first" "second"] @attempted))))
+                   (is (= ["first" "second"] @attempted))
+                   (reset! attempted [])
+                   (worker/claim-first-available!
+                    (fn [job]
+                      (swap! attempted conj (:job-id job))
+                      (js/Promise.resolve :stop))
+                    jobs)))
+          (.then (fn [claimed?]
+                   (is (false? claimed?))
+                   (is (= ["first"] @attempted))))
           (.catch (fn [error] (is false (str error))))
           (.finally done)))))
 

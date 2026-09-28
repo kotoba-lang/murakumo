@@ -9,7 +9,7 @@
             ["node:os" :as os] ["node:crypto" :as crypto]))
 
 (defn help []
-  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\nNode.js 22+, a running OpenAI-compatible model server and network access are required.\nInstallation does not download models or start a service. Community enrollment\nmay remain pending admission; a heartbeat alone does not prove job eligibility.")
+  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+, a running OpenAI-compatible model server and network access are required.\nInstallation does not download models or start a service. Community enrollment\nmay remain pending admission; a heartbeat alone does not prove job eligibility.")
   (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
                                           (ctx, KV, slots), co-resident processes, units")
   (println "\n  murakumo bench nodes                    List tailnet nodes (name, ip, online)\n  murakumo bench run --node N --model P --engine llama|diffuse\n  murakumo bench ledger [--limit N]       Show the append-only measurement ledger\n\nMeasurements record argv, the model's bytes and hash, the host's memory and the\nengine's own output. Nothing here enrols a node or publishes a number.\n  murakumo bench --help"))
@@ -78,11 +78,13 @@
                :resources resources})))
 (defn fail! [message] (println message) (set! (.-exitCode js/process) 1))
 (defn options [args]
+  (let [idle-only? (some #{"--idle-only"} args)
+        args (vec (remove #{"--idle-only"} args))]
   (when (or (odd? (count args))
             (some (fn [[k v]] (or (not (contains? #{"--model" "--name" "--local-url" "--base" "--trust-tier"} k))
                                  (str/starts-with? v "--"))) (partition 2 args)))
     (throw (js/Error. "Unknown option or missing value. Use murakumo node --help.")))
-  (worker/parse-args args))
+  (assoc (worker/parse-args args) :idle-only (boolean idle-only?))))
 (defn control-base [value]
   (let [base (str/replace (or value "https://api.murakumo.cloud") #"/+$" "")
         u (js/URL. base)]

@@ -32,6 +32,7 @@ try{
  assert.equal((await run('init')).code,0);assert.equal(readFileSync(path.join(home,'identity.json'),'utf8'),original);
  const flags=['--model','test-model','--local-url',base+'/v1','--base',base,'--name','test-node'];
  let doctor=await run('doctor',...flags);assert.equal(doctor.code,0,doctor.out);assert.equal(calls.filter(x=>x.url.startsWith('/infer/')).length,0);
+ doctor=await run('doctor',...flags,'--idle-only');assert.equal(doctor.code,0,doctor.out);
  assert.notEqual((await run('doctor','--model','wrong','--local-url',base+'/v1')).code,0);
  assert.notEqual((await run('doctor','--model')).code,0);
  let result=await run('check',...flags);assert.equal(result.code,0,result.out);assert.match(result.out,/heartbeat HTTP 201/);assert.match(result.out,/pending/);

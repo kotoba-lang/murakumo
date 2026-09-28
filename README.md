@@ -42,6 +42,13 @@ murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0
   never claims jobs. HTTP 201 for that heartbeat proves acceptance, not inference.
 - `join` serves jobs in the foreground until Ctrl-C. Device sessions renew while
   it runs. Restart the command after reboot; no persistent service is installed.
+- Add `--idle-only` to `join` for voluntary spare-capacity participation. The
+  node takes no new job while its one-minute CPU load exceeds half its core
+  count or free RAM falls below 1 GiB/10% of installed RAM; heartbeats advertise
+  zero free slots in that state. A job already claimed finishes and reports its
+  result. The host check cannot see every GPU-only workload, so validate it on
+  the actual machine before using it as the buyer's idle policy. The NixOS USB
+  installer offers an explicit, default-off systemd option for this mode.
 
 **Community enrollment starts pending admission.** Registration and a fresh
 heartbeat do not grant AWAI Secure membership, guarantee job placement or prove

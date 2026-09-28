@@ -147,16 +147,19 @@
 (defn heartbeat-body
   "Build one bounded liveness observation.  `ready?` is a fresh local model
   probe; a busy single-slot worker remains live but advertises zero free slots."
-  [{:keys [did model engine slots busy? memory-bytes]} ready? observed-at]
+  [{:keys [did model engine slots busy? memory-bytes idle?]} ready? observed-at]
   (let [total (max 1 (or slots 1))
-        used (if (and busy? @busy?) 1 0)]
+        used (if (and busy? @busy?) 1 0)
+        available? (and (or (nil? idle?) (try (boolean (idle?))
+                                              (catch :default _ false)))
+                        (< used total))]
     {:did did
-     :node/ready? (boolean (and ready? (< used total)))
+     :node/ready? (boolean (and ready? available?))
      :node/model model
      :node/engine (or engine "openai-compatible")
      :node/observed-at observed-at
      :node/capacity {:slots-total total
-                     :slots-free (max 0 (- total used))
+                     :slots-free (if available? (max 0 (- total used)) 0)
                      :memory-bytes (max 0 (long (memory-bytes)))}}))
 
 (defn heartbeat-with-fetch!
@@ -343,9 +346,10 @@
             (if-let [job (first remaining)]
               (-> (claim-fn job)
                   (.then (fn [claimed?]
-                           (if claimed?
-                             true
-                             (attempt (next remaining))))))
+                           (cond
+                             (= :stop claimed?) false
+                             claimed? true
+                             :else (attempt (next remaining))))))
               (js/Promise.resolve false)))]
     (attempt jobs)))
 
@@ -364,12 +368,39 @@
   (str "/infer/queue?model=" (js/encodeURIComponent model)
        "&did=" (js/encodeURIComponent did)))
 
-(defn- poll-once! [{:keys [base auth model did] :as config}]
-  (-> (api! base auth :get (queue-path model did))
-      (.then (fn [{:keys [body]}]
-               (claim-first-available!
-                #(claim-and-run! config (select-keys % [:job-id :kind :input]))
-                (claim-order (:did config) body))))))
+(defn- poll-once! [{:keys [base auth model did idle?] :as config}]
+  ;; An idle-only node must not fetch or claim a new job while the buyer uses
+  ;; the machine. A job already claimed is allowed to finish and report.
+  (if (and idle? (not (try (boolean (idle?))
+                          (catch :default _ false))))
+    (js/Promise.resolve nil)
+    (-> (api! base auth :get (queue-path model did))
+        (.then (fn [{:keys [body]}]
+                 (if (and idle? (not (try (boolean (idle?))
+                                         (catch :default _ false))))
+                   nil
+                   (claim-first-available!
+                    #(if (and idle? (not (try (boolean (idle?))
+                                              (catch :default _ false))))
+                       (js/Promise.resolve :stop)
+                       (claim-and-run! config (select-keys % [:job-id :kind :input])))
+                    (claim-order (:did config) body))))))))
+
+(defn host-idle?
+  "Conservative, read-only host gate for voluntary Community participation.
+  Linux load average includes local CPU work; free memory avoids starting a
+  remote job while the buyer has most RAM occupied. This cannot observe every
+  GPU workload, so physical qualification still has to test coexistence."
+  [load-one cpu-count free-bytes total-bytes]
+  (and (number? load-one) (number? cpu-count)
+       (number? free-bytes) (number? total-bytes)
+       (pos? cpu-count) (pos? total-bytes)
+       (<= load-one (* 0.5 cpu-count))
+       (>= free-bytes (max 1073741824 (* 0.1 total-bytes)))))
+
+(defn local-host-idle? []
+  (host-idle? (aget (.loadavg os) 0) (.-length (.cpus os))
+              (.freemem os) (.totalmem os)))
 
 (defn- failure-facts
   "What a fetch failure says about itself: undici hides the OS error under
@@ -480,6 +511,7 @@
         did (node-did opts env node-name)
         config {:base base :auth auth :did did :node-name node-name :model model
                 :engine "openai-compatible" :slots slots :busy? (atom false)
+                :idle? (when (:idle-only opts) local-host-idle?)
                 :memory-bytes #(.freemem os)
                 :local-url local-url :local-token local-token
                 :poll-ms poll-ms :heartbeat-ms heartbeat-ms
