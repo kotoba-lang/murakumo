@@ -1,5 +1,5 @@
 import {spawn} from 'node:child_process';
-import {mkdtempSync,readFileSync,statSync,rmSync} from 'node:fs';
+import {mkdtempSync,readFileSync,statSync,rmSync,writeFileSync,symlinkSync,chmodSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -17,13 +17,15 @@ const server=http.createServer(async(req,res)=>{
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base=`http://127.0.0.1:${server.address().port}`;
-const run=(...args)=>new Promise(resolve=>{
- const p=spawn(process.execPath,['release/node.mjs','node',...args],{env:{...process.env,MURAKUMO_NODE_HOME:home,MURAKUMO_NODE_CACAO:'',MURAKUMO_NODE_DID:'',MURAKUMO_SERVICE_TOKEN:''}});
+const runWithEnv=(extra,...args)=>new Promise(resolve=>{
+ const p=spawn(process.execPath,['release/node.mjs','node',...args],{env:{...process.env,MURAKUMO_NODE_HOME:home,MURAKUMO_NODE_CACAO:'',MURAKUMO_NODE_DID:'',MURAKUMO_SERVICE_TOKEN:'',...extra}});
  let out='';p.stdout.on('data',d=>out+=d);p.stderr.on('data',d=>out+=d);
  p.on('close',code=>resolve({code,out}));
 });
+const run=(...args)=>runWithEnv({},...args);
 try{
  assert.equal((await run('init')).code,0);const original=readFileSync(path.join(home,'identity.json'),'utf8');
+ const current=JSON.parse(original);
  assert.equal(statSync(path.join(home,'identity.json')).mode&0o777,0o600);
  assert.equal((await run('init')).code,0);assert.equal(readFileSync(path.join(home,'identity.json'),'utf8'),original);
  const flags=['--model','test-model','--local-url',base+'/v1','--base',base,'--name','test-node'];
@@ -33,6 +35,25 @@ try{
  let result=await run('check',...flags);assert.equal(result.code,0,result.out);assert.match(result.out,/heartbeat HTTP 201/);assert.match(result.out,/pending/);
  const hb=calls.find(x=>x.url.endsWith('/heartbeat'));assert.match(hb.auth,/^CACAO /);assert.equal(hb.body['node/ready?'],false);assert.equal(hb.body['node/capacity']['slots-free'],0);
  assert(!calls.some(x=>x.url.includes('/queue')));assert(!result.out.includes('PRIVATE KEY'));
+ const factory=path.join(home,'factory-identity.json');
+ writeFileSync(factory,JSON.stringify({version:1,did:current.did,model:'Murakumo 2609',
+  origin:'https://murakumo.cloud',token:'factory-secret',privateKeyPem:current.privateKey}),{mode:0o600});
+ const external={MURAKUMO_NODE_IDENTITY_FILE:factory};
+ assert.notEqual((await runWithEnv(external,'init')).code,0);
+ result=await runWithEnv(external,'check',...flags);
+ assert.equal(result.code,0,result.out);
+ const enrollment=calls.filter(x=>x.url==='/infer/nodes').at(-1);
+ assert.equal(enrollment.body['node/did'],current.did);
+ assert.match(enrollment.auth,/^CACAO /);
+ assert(!result.out.includes('factory-secret'));
+ chmodSync(factory,0o644);
+ assert.notEqual((await runWithEnv(external,'check',...flags)).code,0);
+ chmodSync(factory,0o600);
+ writeFileSync(factory,JSON.stringify({did:current.did+'wrong',privateKeyPem:current.privateKey}),{mode:0o600});
+ assert.notEqual((await runWithEnv(external,'check',...flags)).code,0);
+ const link=path.join(home,'identity-link.json');symlinkSync(path.join(home,'identity.json'),link);
+ assert.notEqual((await runWithEnv({MURAKUMO_NODE_IDENTITY_FILE:link},'check',...flags)).code,0);
+ assert.notEqual((await runWithEnv({MURAKUMO_NODE_IDENTITY_FILE:'identity.json'},'check',...flags)).code,0);
  denied=true;assert.notEqual((await run('check',...flags)).code,0);
- console.log('Packaged CLI: private identity, idempotent init, read-only diagnosis, signed heartbeat, no job claim, and refusal exits passed.');
+ console.log('Packaged CLI: private identity, factory key reuse with one DID, idempotent init, signed heartbeat, no job claim, and refusal exits passed.');
 }finally{server.close();rmSync(home,{recursive:true,force:true});}

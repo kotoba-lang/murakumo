@@ -30,6 +30,13 @@ murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0
 - `init` creates a private device key on this PC (mode 0600) and leaves an existing
   identity untouched. Keep `~/.local/share/murakumo-node/identity.json` private;
   it is not a billing-account export. `MURAKUMO_NODE_HOME` changes this location.
+- A factory-provisioned Murakumo NixOS unit can use its existing
+  `/var/lib/murakumo/device-identity.json` by setting
+  `MURAKUMO_NODE_IDENTITY_FILE` to that absolute path for `doctor`, `check`
+  and `join`. Run as a user permitted to read the private file (normally root).
+  The CLI verifies that the Ed25519 key matches its DID and does not copy the
+  key. Do not run `init` for that unit. Its buyer claim and Community node then
+  use the same device DID; payout authority for the buyer is a separate step.
 - `doctor` checks the local model and identity without writing to the network.
 - `check` enrolls and sends one signed heartbeat with **zero free slots**; it
   never claims jobs. HTTP 201 for that heartbeat proves acceptance, not inference.

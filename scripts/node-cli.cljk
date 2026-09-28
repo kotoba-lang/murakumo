@@ -15,17 +15,45 @@
   (println "\n  murakumo bench nodes                    List tailnet nodes (name, ip, online)\n  murakumo bench run --node N --model P --engine llama|diffuse\n  murakumo bench ledger [--limit N]       Show the append-only measurement ledger\n\nMeasurements record argv, the model's bytes and hash, the host's memory and the\nengine's own output. Nothing here enrols a node or publishes a number.\n  murakumo bench --help"))
 
 (defn identity-path []
-  (.join path (or (aget js/process.env "MURAKUMO_NODE_HOME")
-                 (.join path (.homedir os) ".local" "share" "murakumo-node")) "identity.json"))
+  (or (aget js/process.env "MURAKUMO_NODE_IDENTITY_FILE")
+      (.join path (or (aget js/process.env "MURAKUMO_NODE_HOME")
+                      (.join path (.homedir os) ".local" "share" "murakumo-node"))
+             "identity.json")))
+(defn- checked-identity [raw]
+  (let [pem (or (.-privateKey raw) (.-privateKeyPem raw))
+        did (.-did raw)]
+    (when-not (and (string? pem) (string? did))
+      (throw (js/Error. "Device identity is missing its DID or private key.")))
+    (let [private (.createPrivateKey crypto pem)
+          _ (when-not (= "ed25519" (.-asymmetricKeyType private))
+              (throw (js/Error. "Device identity key must be Ed25519.")))
+          public (.export (.createPublicKey crypto private)
+                          #js {:format "der" :type "spki"})
+          raw-public (.subarray public (- (.-length public) 32))]
+      (when-not (= did (mint/did-key-from-raw-ed25519-pub raw-public))
+        (throw (js/Error. "Device identity DID does not match its private key."))))
+    #js {:did did :privateKey pem}))
 (defn identity []
   (let [p (identity-path)]
+    (when (and (aget js/process.env "MURAKUMO_NODE_IDENTITY_FILE")
+               (not (.isAbsolute path p)))
+      (throw (js/Error. "MURAKUMO_NODE_IDENTITY_FILE must be absolute.")))
+    (when (and (aget js/process.env "MURAKUMO_NODE_IDENTITY_FILE")
+               (not (.existsSync fs p)))
+      (throw (js/Error. "Externally provisioned device identity is missing.")))
     (when (.existsSync fs p)
-      (let [st (.lstatSync fs p)]
-        (when (or (.isSymbolicLink st) (not= 0 (bit-and (.-mode st) 63)))
-          (throw (js/Error. "Device identity must be a private regular file (chmod 600).")))
-        (try (js/JSON.parse (.readFileSync fs p "utf8"))
-             (catch :default _ (throw (js/Error. "Device identity file is invalid; restore your private backup."))))))))
+      (let [fd (.openSync fs p (bit-or (.-O_RDONLY (.-constants fs))
+                                     (.-O_NOFOLLOW (.-constants fs))))]
+        (try
+          (let [st (.fstatSync fs fd)]
+            (when (or (not (.isFile st)) (not= 0 (bit-and (.-mode st) 63)))
+              (throw (js/Error. "Device identity must be a private regular file (chmod 600).")))
+            (try (checked-identity (js/JSON.parse (.readFileSync fs fd "utf8")))
+                 (catch :default _ (throw (js/Error. "Device identity file is invalid or does not match its DID; restore your private backup.")))))
+          (finally (.closeSync fs fd)))))))
 (defn init! []
+  (when (aget js/process.env "MURAKUMO_NODE_IDENTITY_FILE")
+    (throw (js/Error. "Externally provisioned identity is managed by the installer; do not run node init.")))
   (if-let [id (identity)]
     (println "Identity already exists:" (.-did id))
     (let [kp (.generateKeyPairSync crypto "ed25519")
