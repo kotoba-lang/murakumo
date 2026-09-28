@@ -368,13 +368,14 @@
   (str "/infer/queue?model=" (js/encodeURIComponent model)
        "&did=" (js/encodeURIComponent did)))
 
-(defn- poll-once! [{:keys [base auth model did idle?] :as config}]
+(defn poll-once-with-fetch!
+  [fetch-fn {:keys [base auth model did idle?] :as config}]
   ;; An idle-only node must not fetch or claim a new job while the buyer uses
   ;; the machine. A job already claimed is allowed to finish and report.
   (if (and idle? (not (try (boolean (idle?))
                           (catch :default _ false))))
     (js/Promise.resolve nil)
-    (-> (api! base auth :get (queue-path model did))
+    (-> (api-with-fetch! fetch-fn base auth :get (queue-path model did))
         (.then (fn [{:keys [body]}]
                  (if (and idle? (not (try (boolean (idle?))
                                          (catch :default _ false))))
@@ -385,6 +386,9 @@
                        (js/Promise.resolve :stop)
                        (claim-and-run! config (select-keys % [:job-id :kind :input])))
                     (claim-order (:did config) body))))))))
+
+(defn- poll-once! [config]
+  (poll-once-with-fetch! js/fetch config))
 
 (defn host-idle?
   "Conservative, read-only host gate for voluntary Community participation.

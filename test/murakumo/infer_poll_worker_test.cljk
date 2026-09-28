@@ -91,6 +91,30 @@
   (is (false? (worker/host-idle? 6 8 3000000000 24000000000)))
   (is (false? (worker/host-idle? 2 8 500000000 24000000000))))
 
+(deftest idle-only-node-does-not-claim-after-local-activity-starts
+  (async done
+    (let [idle (atom false)
+          requests (atom [])
+          fetch-fn (fn [url _]
+                     (swap! requests conj url)
+                     (reset! idle false)
+                     (js/Promise.resolve
+                      #js {:status 200
+                           :text (fn [] (js/Promise.resolve
+                                          "[{\"job-id\":\"job-1\"}]"))}))
+          config {:base "https://api.example" :model "m" :did "did:key:node"
+                  :idle? #(deref idle)}]
+      (-> (worker/poll-once-with-fetch! fetch-fn config)
+          (.then (fn [_]
+                   (is (empty? @requests))
+                   (reset! idle true)
+                   (worker/poll-once-with-fetch! fetch-fn config)))
+          (.then (fn [_]
+                   (is (= ["https://api.example/infer/queue?model=m&did=did%3Akey%3Anode"]
+                          @requests))))
+          (.catch (fn [error] (is false (str error))))
+          (.finally done)))))
+
 (deftest readiness-requires-the-requested-local-model
   (is (worker/model-ready? "model-a" {:data [{:id "model-a"}]}))
   (is (worker/model-ready? "model-a" {:models [{:name "model-a"}]}))
