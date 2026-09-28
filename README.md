@@ -52,6 +52,17 @@ identity file. Existing operator credentials (`MURAKUMO_NODE_CACAO` +
 A local server credential goes in `MURAKUMO_INFER_LOCAL_TOKEN` / `VLLM_API_KEY`,
 separately from network authentication.
 
+After the node has served an accepted paid job, `murakumo node earnings` reads
+its earned and payable credit totals by device DID. To request withdrawal of
+earned credits, run `murakumo node payout --credits 5000 --to 0x...` with your
+full 20-byte Base-compatible wallet address. The CLI signs the request with the
+same private device key. The server enforces the current minimum and available
+earned balance. A successful request **debits the credits and awaits operator
+approval**; it does not transfer USDC. Check the address carefully before
+submitting. Factory units must set `MURAKUMO_NODE_IDENTITY_FILE` for these
+commands too. The buyer's site account is not yet payout authority for this
+device DID.
+
 If diagnosis fails, confirm the server is running and the model ID matches.
 Missing flags, registration refusal and failed heartbeat checks exit nonzero.
 The [live network view](https://murakumo.cloud/) distinguishes connected nodes,
