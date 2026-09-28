@@ -13,7 +13,7 @@ const server=http.createServer(async(req,res)=>{
  if(req.url==='/v1/models')return res.end(JSON.stringify({data:[{id:'test-model'}]}));
  if(req.url==='/infer/nodes'){res.statusCode=denied?401:201;return res.end(JSON.stringify({'node/admission':'pending'}));}
  if(req.url.endsWith('/heartbeat')){res.statusCode=201;return res.end('{}');}
- if(req.url.startsWith('/infer/payout?did='))return res.end(JSON.stringify({policy:{'payout/minimum-credits':5000},account:{'payout/earned':6000,'payout/payable':6000}}));
+ if(req.url.startsWith('/infer/payout?did='))return res.end(JSON.stringify({policy:{'minimum-credits':5000},account:{earned:6000,payable:6000}}));
  if(req.url==='/infer/payout/request'){res.statusCode=payoutDenied?402:201;return res.end(JSON.stringify(payoutDenied?{error:'insufficient-earned-credits'}:{'payout-id':'po-test'}));}
  res.statusCode=404;res.end('{}');
 });
@@ -50,7 +50,9 @@ try{
  assert(!result.out.includes('factory-secret'));
  result=await runWithEnv(external,'earnings','--base',base);
  assert.equal(result.code,0,result.out);
+ assert.match(result.out,/Earned credits: 6000/);
  assert.match(result.out,/Payable credits: 6000/);
+ assert.match(result.out,/Minimum request: 5000/);
  assert(calls.some(x=>x.url==='/infer/payout?did='+encodeURIComponent(current.did)));
  const destination='0x1111111111111111111111111111111111111111';
  const payoutArgs=['--base',base,'--credits','5000','--to',destination];

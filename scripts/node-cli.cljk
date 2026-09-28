@@ -121,9 +121,9 @@
                                   (let [account (.-account body)
                                         policy (.-policy body)]
                                     (println "Device DID:" (.-did id))
-                                    (println "Earned credits:" (aget account "payout/earned"))
-                                    (println "Payable credits:" (aget account "payout/payable"))
-                                    (println "Minimum request:" (aget policy "payout/minimum-credits"))))))
+                                    (println "Earned credits:" (aget account "earned"))
+                                    (println "Payable credits:" (aget account "payable"))
+                                    (println "Minimum request:" (aget policy "minimum-credits"))))))
                      (fail! (str "Earnings lookup refused (HTTP " (.-status response) ")."))))))
       (let [credits-text (:credits opts)
             credits (when (and (string? credits-text)
