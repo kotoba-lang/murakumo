@@ -528,6 +528,32 @@
   [event]
   (boolean (:run/capture event)))
 
+(defn funded-capture
+  "One atomic ledger event: consume a buyer's held credits and distribute the
+  same amount to a provider and protocol treasury. The caller must verify the
+  buyer's acceptance and the outstanding hold against the latest ledger feed
+  before appending this event."
+  [buyer provider {:keys [job-id funding-id held treasury]}]
+  (let [held (double held)
+        treasury (double treasury)
+        provider-share (- held treasury)]
+    (when-not (and (string? job-id) (seq job-id)
+                   (string? funding-id) (seq funding-id)
+                   (not= (name buyer) (name provider))
+                   (pos? held) (<= 0.0 treasury held))
+      (throw (ex-info "invalid funded capture" {:job-id job-id
+                                                   :funding-id funding-id
+                                                   :held held :treasury treasury})))
+    {:model "native-relay-funded"
+     :run/capture {:who (name buyer) :held held :captured held}
+     :run/capture-for {:job funding-id}
+     :run/shares {(name provider) provider-share}
+     :run/treasury treasury
+     :run/total held
+     :run/funding-id funding-id
+     :run/job-id job-id
+     :run/proof :buyer-accepted}))
+
 (defn release
   "hold を取り消して全額を口座へ戻す。ジョブが失敗した / 実行されなかった場合。
 
@@ -680,6 +706,20 @@
     ;; capture は差額だけを戻す。held と captured が同じ 1 事象に入っているので、
     ;; 切り詰められた feed でも fold が価値を失わず、発明もしない
     ;; （`:run/transfer` が借方と貸方を 1 事象に収めているのと同じ理由）。
+    (and (:run/capture run) (:run/funding-id run) (:run/shares run))
+    (let [{:keys [who held captured]} (event-body run :run/capture)
+          shares (:run/shares run)
+          treasury (double (or (:run/treasury run) 0.0))]
+      (when-not (and (== held captured)
+                     (< (#?(:clj Math/abs :cljs js/Math.abs)
+                         (- captured (+ treasury (reduce + 0.0 (vals shares))))) 1.0e-8))
+        (throw (ex-info "funded capture is not conserved" {:run run})))
+      (cond-> (reduce (fn [a [provider amount]]
+                        (update a (name provider) (fnil + 0.0) amount))
+                      (update acc who (fnil + 0.0) (- held captured))
+                      shares)
+        (pos? treasury) (update :treasury (fnil + 0.0) treasury)))
+
     (:run/capture run)
     (let [{:keys [who held captured]} (event-body run :run/capture)]
       (update acc who (fnil + 0.0) (- held captured)))
