@@ -728,6 +728,10 @@
     (let [{:keys [who held]} (event-body run :run/release)]
       (update acc who (fnil + 0.0) held))
 
+    ;; Delivery is proof of a reported result, not an accepted charge.
+    ;; An expired-job marker can likewise accompany a release without minting.
+    (or (:run/funded-result run) (:run/expired-job-id run)) acc
+
     :else
     ;; A PRE-SETTLED run carries whatever the writer put in it, and a feed
     ;; written before head/treasury were split out (or by any producer that

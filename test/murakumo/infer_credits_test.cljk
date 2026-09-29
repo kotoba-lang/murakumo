@@ -532,6 +532,17 @@
       (is (thrown-with-msg? Exception #"not conserved"
                             (credits/balances [earned bad]))))))
 
+(deftest funded-delivery-receipt-does-not-mint-credits
+  (let [hold (credits/hold :alice 120 {:for {:job "purchase-1"}})
+        receipt {:model "native-relay-funded-result"
+                 :run/funded-result {:job-id "queue-1" :text "done"}}
+        before (credits/balances [earned hold])
+        after (credits/balances [earned hold receipt])]
+    (is (= before after))
+    (is (nil? (get after "provider")))
+    (is (= before (credits/balances [earned hold
+                                     {:run/expired-job-id "queue-2"}])))))
+
 (deftest outstanding-hold-is-the-only-place-a-hold-is-consumed
   (let [held (credits/hold :alice 120 {:for {:job "j1"}})]
     (testing "額は台帳が返す。呼び出し側に held を指定させない"
