@@ -66,7 +66,8 @@
   logs.  A device CACAO is preferred when explicitly supplied; the service
   token remains supported for existing operator-managed residents."
   [opts env]
-  (let [candidates [[:cacao (:cacao opts)]
+  (let [candidates [[:biscuit (:biscuit opts)]
+                    [:cacao (:cacao opts)]
                     [:bearer (:token opts)]
                     [:cacao (get env "MURAKUMO_NODE_CACAO")]
                     [:bearer (get env "MURAKUMO_SERVICE_TOKEN")]]]
@@ -77,6 +78,8 @@
 
 (defn control-auth-headers [auth]
   (cond-> {"content-type" "application/json"}
+    (= :biscuit (:kind auth))
+    (assoc "authorization" (str "Biscuit " (let [c (:credential auth)] (if (fn? c) (c) c))))
     (= :bearer (:kind auth))
     (assoc "authorization" (str "Bearer " (:credential auth)))
     (= :cacao (:kind auth))

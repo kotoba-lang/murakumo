@@ -5,13 +5,19 @@ import path from 'node:path';
 import http from 'node:http';
 import assert from 'node:assert/strict';
 const home=mkdtempSync(path.join(tmpdir(),'murakumo-node-test-'));
-let denied=false,payoutDenied=false;const calls=[];
+let denied=false,payoutDenied=false,authnDenied=false,deviceDid;const calls=[];
 const server=http.createServer(async(req,res)=>{
  let body='';for await(const c of req)body+=c;
  calls.push({url:req.url,auth:req.headers.authorization,
   ownerAuth:req.headers['x-murakumo-owner-payout'],body:body?JSON.parse(body):null});
  res.setHeader('content-type','application/json');
  if(req.url==='/v1/models')return res.end(JSON.stringify({data:[{id:'test-model'}]}));
+ if(req.url==='/v1/murakumo/node-token'){
+  res.statusCode=authnDenied?401:201;
+  return res.end(JSON.stringify(authnDenied?{error:'invalid_node_proof'}:{
+   token:'A'.repeat(100),tokenType:'Biscuit',holder:deviceDid,
+   expiresAt:new Date(Date.now()+15*60*1000).toISOString()}));
+ }
  if(req.url==='/infer/nodes'){res.statusCode=denied?401:201;return res.end(JSON.stringify({'node/admission':'pending'}));}
  if(req.url.endsWith('/heartbeat')){res.statusCode=201;return res.end('{}');}
  if(req.url.startsWith('/infer/payout?did='))return res.end(JSON.stringify({policy:{'minimum-credits':5000},account:{earned:6000,payable:6000}}));
@@ -29,15 +35,19 @@ const run=(...args)=>runWithEnv({},...args);
 try{
  assert.equal((await run('init')).code,0);const original=readFileSync(path.join(home,'identity.json'),'utf8');
  const current=JSON.parse(original);
+ deviceDid=current.did;
  assert.equal(statSync(path.join(home,'identity.json')).mode&0o777,0o600);
  assert.equal((await run('init')).code,0);assert.equal(readFileSync(path.join(home,'identity.json'),'utf8'),original);
- const flags=['--model','test-model','--local-url',base+'/v1','--base',base,'--name','test-node'];
+ const flags=['--model','test-model','--local-url',base+'/v1','--base',base,
+  '--authn',base,'--name','test-node'];
  let doctor=await run('doctor',...flags);assert.equal(doctor.code,0,doctor.out);assert.equal(calls.filter(x=>x.url.startsWith('/infer/')).length,0);
  doctor=await run('doctor',...flags,'--idle-only');assert.equal(doctor.code,0,doctor.out);
  assert.notEqual((await run('doctor','--model','wrong','--local-url',base+'/v1')).code,0);
  assert.notEqual((await run('doctor','--model')).code,0);
  let result=await run('check',...flags);assert.equal(result.code,0,result.out);assert.match(result.out,/heartbeat HTTP 201/);assert.match(result.out,/pending/);
- const hb=calls.find(x=>x.url.endsWith('/heartbeat'));assert.match(hb.auth,/^CACAO /);assert.equal(hb.body['node/ready?'],false);assert.equal(hb.body['node/capacity']['slots-free'],0);
+ const hb=calls.find(x=>x.url.endsWith('/heartbeat'));assert.match(hb.auth,/^Biscuit /);assert.equal(hb.body['node/ready?'],false);assert.equal(hb.body['node/capacity']['slots-free'],0);
+ const exchange=calls.find(x=>x.url==='/v1/murakumo/node-token');
+ assert(Buffer.from(exchange.body.cacao_b64,'base64').toString('utf8').includes('murakumo://node-token'));
  assert(!calls.some(x=>x.url.includes('/queue')));assert(!result.out.includes('PRIVATE KEY'));
  const factory=path.join(home,'factory-identity.json');
  writeFileSync(factory,JSON.stringify({version:1,did:current.did,model:'Murakumo 2609',
@@ -48,7 +58,7 @@ try{
  assert.equal(result.code,0,result.out);
  const enrollment=calls.filter(x=>x.url==='/infer/nodes').at(-1);
  assert.equal(enrollment.body['node/did'],current.did);
- assert.match(enrollment.auth,/^CACAO /);
+ assert.match(enrollment.auth,/^Biscuit /);
  assert(!result.out.includes('factory-secret'));
  result=await runWithEnv(external,'earnings','--base',base);
  assert.equal(result.code,0,result.out);
@@ -91,6 +101,8 @@ try{
  const link=path.join(home,'identity-link.json');symlinkSync(path.join(home,'identity.json'),link);
  assert.notEqual((await runWithEnv({MURAKUMO_NODE_IDENTITY_FILE:link},'check',...flags)).code,0);
  assert.notEqual((await runWithEnv({MURAKUMO_NODE_IDENTITY_FILE:'identity.json'},'check',...flags)).code,0);
+ authnDenied=true;assert.notEqual((await run('check',...flags)).code,0);
+ authnDenied=false;
  denied=true;assert.notEqual((await run('check',...flags)).code,0);
  console.log('Packaged CLI: factory DID reuse, signed Community enrollment, earned-credit view, signed payout request, and refusal exits passed.');
 }finally{server.close();rmSync(home,{recursive:true,force:true});}

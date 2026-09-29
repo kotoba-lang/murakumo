@@ -41,6 +41,11 @@
          (worker/local-auth-headers "secret"))))
 
 (deftest control-plane-auth-prefers-explicit-device-authority
+  (is (= {:kind :biscuit :credential "device-biscuit"}
+         (worker/control-auth {:biscuit "device-biscuit" :cacao "legacy"} {})))
+  (is (= {"content-type" "application/json"
+          "authorization" "Biscuit device-biscuit"}
+         (worker/control-auth-headers {:kind :biscuit :credential (constantly "device-biscuit")})))
   (is (= {:kind :cacao :credential "device-cacao"}
          (worker/control-auth {:cacao "device-cacao" :token "operator"}
                               {"MURAKUMO_NODE_CACAO" "env-cacao"
