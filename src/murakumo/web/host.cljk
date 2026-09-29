@@ -94,3 +94,33 @@
           :now-ms (fn [] (js/Date.now)) :node-did node-did
           :sign! (:sign! (signer seed-hex))}
          (dir-store store-dir)))
+
+(defn searxng
+  "Backend over a SearXNG `/search?format=json` endpoint. `base-url` is OPERATOR
+  config (it may be an internal host) and must never come from a job. The query
+  is sent to that instance, and through it to third-party engines."
+  [{:keys [name base-url max-time-s] :or {max-time-s 15}}]
+  {:name name
+   :search!
+   (fn [{:keys [query k]}]
+     (if-not (re-find #"^https?://" (str base-url))
+       {:error :backend/bad-base-url}
+       (let [r (run "curl" ["-sS" "-G" "--max-time" (str max-time-s) "--max-filesize" "2097152"
+                            "--proto" "=http,https" "--max-redirs" "0"
+                            "-w" "\n%{http_code}"
+                            "--data-urlencode" (str "q=" query) "--data-urlencode" "format=json"
+                            (str (.replace base-url #"/+$" "") "/search")]
+                    {})]
+         (if-not (zero? (:status r))
+           {:error (keyword "curl" (str "exit-" (:status r)))}
+           (let [out (.toString (:stdout r))
+                 i (.lastIndexOf out "\n")
+                 code (js/parseInt (subs out (inc i)) 10)]
+             (if (not= 200 code)
+               {:error (keyword "backend" (str "http-" code))}
+               (try
+                 (let [doc (js->clj (js/JSON.parse (subs out 0 i)) :keywordize-keys true)]
+                   {:results (into [] (comp (take k)
+                                            (map (fn [x] {:url (:url x) :title (:title x) :snippet (:content x)})))
+                                   (:results doc))})
+                 (catch :default _ {:error :backend/bad-json})))))))) })
