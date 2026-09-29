@@ -15,6 +15,12 @@
             [murakumo.web.worker :as w]))
 
 (def max-robots-delay-ms 60000)
+
+(def default-deadline-ms
+  "Wall-clock budget for one crawl. Below the dispatch timeout so a slow crawl
+  ends itself, stores its manifest and reports :deadline-exhausted? instead of
+  being killed with nothing saved."
+  600000)
 (def max-skipped-recorded 1000)
 
 ;; --- URL normalisation / resolution ------------------------------------------
@@ -121,7 +127,7 @@
   "job {:job-id :plan} -> {:ok {:manifest-cid :manifest :receipt :signature}} | {:refused ..}
   opts {:limits ...} lets the OPERATOR raise plan ceilings; a bot's plan cannot."
   ([env job] (crawl! env job nil))
-  ([{:keys [put! sign! now-ms node-did] :as env} {:keys [job-id plan]} {:keys [limits]}]
+  ([{:keys [put! sign! now-ms node-did] :as env} {:keys [job-id plan]} {:keys [limits deadline-ms] :or {deadline-ms default-deadline-ms}}]
    (let [valid (if limits (web/validate-plan plan limits) (web/validate-plan plan))]
      (if (:refused valid)
        {:refused :job/invalid :detail (:refused valid)}
@@ -139,6 +145,9 @@
              (cond
                (>= (:fetched stats) max-pages)
                (finish env job-id plan started pages skipped (assoc stats :budget-exhausted? true) cache)
+
+               (>= (- (now-ms) started) deadline-ms)
+               (finish env job-id plan started pages skipped (assoc stats :deadline-exhausted? true) cache)
 
                (>= i (count queue))
                (finish env job-id plan started pages skipped stats cache)

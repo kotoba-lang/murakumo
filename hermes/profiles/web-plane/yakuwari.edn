@@ -1,0 +1,16 @@
+;; web-plane permission table. Unlisted capabilities are :blocked.
+{:yakuwari/capabilities
+ [{:capability :read_evidence          :decision :ok}
+  {:capability :read_node_health       :decision :ok}
+  {:capability :propose_crawl_plan     :decision :ok}
+  ;; a host already in web-nodes.edn's admitted crawl list, inside plan ceilings
+  {:capability :submit_plan_known_host :decision :ok}
+  {:capability :crawl_new_host         :decision :owner-approval}
+  {:capability :deploy_bundle          :decision :owner-approval}
+  {:capability :run_gc                 :decision :owner-approval}
+  {:capability :raise_budget           :decision :blocked}
+  {:capability :change_egress_policy   :decision :blocked}
+  {:capability :relabel_zone           :decision :blocked}
+  {:capability :authenticated_crawl    :decision :blocked}
+  {:capability :publish                :decision :blocked}
+  {:capability :send_outbound          :decision :blocked}]}

@@ -22,25 +22,42 @@
 (defn- remote-command [home]
   (str "MURAKUMO_WEB_HOME=\"$HOME/" home "\" nbb -cp \"$HOME/" home "/bundle\" \"$HOME/" home "/bundle/web_node.cljs\""))
 
+(defn- call-once [{:keys [host home timeout-ms]} op job]
+  (let [r (.spawnSync cp "ssh"
+                      #js ["-o" "BatchMode=yes" "-o" "ConnectTimeout=8" host (remote-command home)]
+                      #js {:input (pr-str {:op op :job job}) :timeout timeout-ms
+                           :maxBuffer (* 64 1024 1024) :encoding "utf8"})]
+    (cond
+      (.-error r) {:refused :dispatch/spawn-failed :detail (str (.-message (.-error r)))}
+      (not (zero? (.-status r)))
+      {:refused :dispatch/ssh-failed
+       :transient? (= 255 (.-status r))                     ; ssh's own connection failure
+       :detail {:status (.-status r)
+                :stderr (subs (str (.-stderr r)) 0 (min 300 (count (str (.-stderr r)))))}}
+      :else
+      (let [line (last (remove empty? (.split (str (.-stdout r)) "\n")))]
+        (try (reader/read-string line)
+             (catch :default _ {:refused :dispatch/bad-reply}))))))
+
+(def idempotent-ops
+  "Ops safe to repeat after a transport failure: content-addressed, no side
+  effect beyond an identical store write. :gc and :sync are never auto-retried."
+  #{:whoami :health :fetch :extract :search :index :index-search :get :crawl})
+
 (defn call!
-  "Run one op on `host`. Returns the node's EDN result, or {:refused :dispatch/...}."
-  [{:keys [host home timeout-ms] :or {home default-home timeout-ms default-timeout-ms}} op job]
+  "Run one op on `host`. Returns the node's EDN result, or {:refused :dispatch/...}.
+  A transient ssh failure (exit 255) on an idempotent op is retried once."
+  [{:keys [host home timeout-ms] :or {home default-home timeout-ms default-timeout-ms} :as cfg} op job]
   (cond
     (not (safe-token? host)) {:refused :dispatch/bad-host}
     (not (safe-token? home)) {:refused :dispatch/bad-home}
     :else
-    (let [r (.spawnSync cp "ssh"
-                        #js ["-o" "BatchMode=yes" "-o" "ConnectTimeout=8" host (remote-command home)]
-                        #js {:input (pr-str {:op op :job job}) :timeout timeout-ms
-                             :maxBuffer (* 64 1024 1024) :encoding "utf8"})]
-      (cond
-        (.-error r) {:refused :dispatch/spawn-failed :detail (str (.-message (.-error r)))}
-        (not (zero? (.-status r))) {:refused :dispatch/ssh-failed :detail {:status (.-status r)
-                                                                             :stderr (subs (str (.-stderr r)) 0 (min 300 (count (str (.-stderr r)))))}}
-        :else
-        (let [line (last (remove empty? (.split (str (.-stdout r)) "\n")))]
-          (try (reader/read-string line)
-               (catch :default _ {:refused :dispatch/bad-reply})))))))
+    (let [cfg (assoc cfg :home home :timeout-ms timeout-ms)
+          r (call-once cfg op job)]
+      (if (and (:transient? r) (idempotent-ops op))
+        (let [r2 (call-once cfg op job)]
+          (cond-> r2 (:refused r2) (assoc :retried? true)))
+        r))))
 
 (defn remote-node
   "Node map for verify-fetch!. `zone` is the OPERATOR's declaration in the

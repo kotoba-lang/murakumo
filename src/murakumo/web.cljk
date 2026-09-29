@@ -8,7 +8,7 @@
   Refusals are typed values, never empty results (fail closed)."
   (:require [murakumo.canonical :as canonical]))
 
-(def job-kinds #{:web/fetch :web/extract :web/crawl :web/search})
+(def job-kinds #{:web/fetch :web/extract :web/crawl :web/search :web/index})
 
 (def extract-formats #{:markdown :edn :json-schema})
 
@@ -129,6 +129,12 @@
 
             :web/crawl
             (if-let [r (:refused (validate-plan (:plan job)))] r [])
+
+            :web/index
+            (cond-> []
+              (not (string? (:manifest-cid job))) (conj :job/manifest-cid)
+              (and (contains? job :shards)
+                   (not (and (integer? (:shards job)) (<= 1 (:shards job) 256)))) (conj :job/shards))
 
             :web/search
             (cond-> []

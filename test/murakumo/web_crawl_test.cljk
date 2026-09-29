@@ -127,3 +127,16 @@
     (is (= :job/invalid (:refused (crawl/crawl! env {:job-id "c" :plan big}))))
     (is (:ok (crawl/crawl! env {:job-id "c" :plan big}
                            {:limits (assoc web/plan-limits :max-pages 50000)})))))
+
+(deftest a-slow-crawl-ends-itself-and-still-stores-its-manifest
+  (let [pages (into {"https://a.example/robots.txt" (text-page 404 "")
+                     "https://a.example/" (html-page "/1" "/2" "/3" "/4" "/5")}
+                    (map (fn [i] [(str "https://a.example/" i) (html-page)]) (range 1 6)))
+        {:keys [env store clock]} (site pages)
+        ;; 1s delay per page: a 2.5s deadline cannot cover six pages
+        r (crawl/crawl! env {:job-id "c" :plan plan} {:deadline-ms 2500})
+        m (:manifest (:ok r))]
+    (is (true? (get-in m [:stats :deadline-exhausted?])))
+    (is (< (count (:pages m)) 6))
+    (is (pos? (count (:pages m))))
+    (is (contains? @store (get-in r [:ok :manifest-cid])))))

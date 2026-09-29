@@ -12,6 +12,7 @@
             [murakumo.web :as web]
             [murakumo.web.crawl :as crawl]
             [murakumo.web.host :as host]
+            [murakumo.web.index :as index]
             [murakumo.web.search :as search]
             [murakumo.web.worker :as w]))
 
@@ -97,6 +98,8 @@
       :extract (w/extract! env job)
       :crawl (crawl/crawl! env job)
       :search (search/search! env job)
+      :index (index/index-crawl! env job)
+      :index-search (index/search-index! env job)
       :get (let [bs ((:get-bytes! env) (:cid job))]
              (cond (nil? bs) {:refused :get/not-found}
                    (> (w/byte-count bs) max-get-bytes) {:refused :get/too-large}

@@ -1,0 +1,14 @@
+;; web-nodes.edn — the web plane's node registry (ADR-260929). Operator config.
+;;
+;; :host is an ssh name (fleet.edn's Tailscale MagicDNS names). :zone is the
+;; operator's DECLARATION of where the node's traffic exits to the internet;
+;; dual-zone verification (murakumo.web.verify) refuses to run unless the
+;; requested replicas sit in DISTINCT zones. Every fleet node today shares one
+;; public egress address, so they are all honestly "jp" and verification cannot
+;; pass. A node with a different egress (a VPS or cloud function in another
+;; region running the same bundle) is what adds a zone — do not relabel a node
+;; to satisfy the check.
+;;
+;; No secrets belong here.
+{:nodes [{:host "benjamin" :zone "jp"}
+         {:host "gad" :zone "jp"}]}

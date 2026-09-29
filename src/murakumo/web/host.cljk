@@ -161,8 +161,14 @@
       s)
     (let [seed (.toString (.randomBytes crypto 32) "hex")]
       (.mkdirSync fs (.dirname path path-str) #js {:recursive true :mode 0700})
-      (.writeFileSync fs path-str (str seed "\n") #js {:mode 0600 :flag "wx"})
-      seed)))
+      (try
+        (.writeFileSync fs path-str (str seed "\n") #js {:mode 0600 :flag "wx"})
+        seed
+        ;; two first-run processes raced: the winner's key is the node's key
+        (catch :default e
+          (if (= "EEXIST" (.-code e))
+            (.trim (.readFileSync fs path-str "utf8"))
+            (throw e)))))))
 
 ;; --- store housekeeping -------------------------------------------------------
 
