@@ -1,5 +1,13 @@
 # murakumo 叢雲
 
+**An inference node platform.** murakumo turns ordinary machines — Mac minis, PCs,
+Linux boxes, GPU servers — into *inference nodes* and joins them into one network
+that serves models through an OpenAI-compatible `/v1` API. A node brings its own
+model server (Ollama, llama.cpp, vLLM, MLX, …); murakumo provides identity,
+enrollment, heartbeat, job placement, distributed (multi-node) inference and
+fleet operations. The runtime is **not tied to WebAssembly**: WASM components are
+one optional workload a node can host, alongside inference.
+
 ## Join the inference network (macOS / Linux)
 
 Install the node CLI with **Node.js 22+ and npm** already available:
@@ -60,7 +68,10 @@ Community job placement and a paid end-to-end request were not exercised.
 
 ## Fleet operator tooling
 
-**Control plane for the kotoba WASM lattice/mesh across the Mac-mini fleet.**
+**Control plane for the murakumo inference-node fleet (Mac-mini fleet today), including the optional kotoba mesh workload layer.**
+
+Inference is the primary workload; the kotoba mesh layer described below is an
+optional, additional workload runtime on the same nodes.
 
 kotoba ships a single-node mesh runtime (`kotoba-server` with the `p2p,realtime-wasm`
 features) and a single-node status command (`kotoba lattice ps`) — but **no
@@ -85,11 +96,43 @@ The EDN is not proof of current enforcement; only a successful live readback is.
 The decision and blocked-canary evidence are in
 [`ADR-260811`](docs/adr/ADR-260811-version-github-merge-governance.md).
 
+### What is each node running? — `murakumo fleet ps`
+
+One read-only command answers "which model is loaded where, with which context
+and KV cache, is it busy, and what else shares the node's memory":
+
+```bash
+murakumo fleet ps                    # every online macOS node
+murakumo fleet ps --node joseph      # one node (name or tailnet IP, prefix ok)
+murakumo fleet ps --all --json       # every online node, machine-readable
+kbb --backend sci scripts/run-task.cljk fleet-ps --node joseph   # from a checkout
+```
+
+```
+joseph (100.82.123.35)  Darwin  16 GB  free 74%  swap 30.6 GB
+  model   llama-server pid 32640  2.6 GB  Ternary-Bonsai-2-27B-PTQ1_0.gguf  ctx 32768  kv q8_0/q8_0  fa on  parallel 1  100.82.123.35:8094  slots 0/1 busy
+  shares  2.3 GB  kotoba-server  [com.murakumo.kotoba-mesh]
+  shares  0.9 GB  node /Users/joseph/.inga/releases/inga-origin-20260911/engine/cl  [com.gftd.inga.reservation.20260911.w4]
+  units   com.gftd.inga-node.read-audit.w4, com.gftd.inga.reservation.20260911.w4, com.murakumo.comfyui, com.murakumo.kotoba-mesh, com.murakumo.mishima  (+11 not running)
+```
+
+`model` rows come from the server's own argv plus a live `/slots` read (the
+`ctx` shown is what the server reports). `shares` rows are the other processes
+over 200 MB, each with the launchd / systemd unit that owns it (by pid or
+parent pid, so a node process started by `npm exec` under a job is attributed
+to the job). The probe runs under `/bin/sh -s` on stdin, never the login shell
+(the nodes' zsh does not word-split and aborts on unmatched globs), needs no
+sudo and writes nothing. A node it cannot read is printed as `UNREACHABLE` with
+the reason; exit 0 all read, 1 some unreachable, 2 no node matched. Tests:
+`kbb --backend sci scripts/run-task.cljk test-fleet-ps` (fixture captured from
+joseph).
+
 > Not to be confused with the *etzhayyim* murakumo (k3s-on-Lima + Ansible control
 > plane for the religious-corp **LangGraph/Pregel cells**). This repo is the
-> **kotoba WASM mesh** layer — libp2p lattice nodes hosting content-addressed WASM
-> components (`run` / `on-http` / `on-tick` / `on-kse`). Different substrate, on the
-> same hardware.
+> **inference node platform** — nodes serving models (single-node and pipeline-parallel
+> across nodes), with an optional kotoba mesh layer (libp2p lattice nodes hosting
+> content-addressed WASM components: `run` / `on-http` / `on-tick` / `on-kse`).
+> Different substrate, on the same hardware.
 
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
@@ -224,7 +267,7 @@ Each fleet node runs `kotoba-server` as a **macOS LaunchAgent** (`RunAtLoad` +
 
 - forms a libp2p **gossipsub lattice** and advertises a **Heartbeat** (roles, labels,
   free-gas, hosted components);
-- **hosts WASM components** placed by the lattice auction and fires their cron
+- **hosts workloads** — inference and, optionally, WASM components — placed by the lattice auction and fires their cron
   (`on-tick`), HTTP (`on-http`), and KSE (`on-kse`) triggers;
 - **persists** the components' `kqe-assert!` output to its kotoba Datom log — i.e. the
   node is a real PDS/graph writer, not a sandbox.
@@ -774,7 +817,7 @@ declares a version but `./bin` is empty (clone murakumo → `pin` the declared s
 
 ## Distributed inference — `infer` (the fleet as one model host, exo-style)
 
-The same fleet that hosts WASM components can serve **one LLM too large for any
+The same fleet (which can also host optional WASM components) can serve **one LLM too large for any
 single node**, [exo](https://github.com/exo-explore/exo)-style: probe every node's
 live memory, cut a **memory-weighted contiguous layer partition** (each node's slice
 ∝ its usable RAM), and run a pipeline-parallel ring over it. Pipeline parallel is
