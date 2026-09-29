@@ -6,7 +6,8 @@
   size cap; DNS is Node's resolver in a child process. The store is a local
   content-addressed directory: the yataverse/IPFS put is a later transport
   (ADR-2607023100) and is NOT claimed here."
-  (:require [murakumo.web.worker :as w]))
+  (:require [murakumo.web.backends :as backends]
+            [murakumo.web.worker :as w]))
 
 (def ^:private cp (js/require "child_process"))
 (def ^:private fs (js/require "fs"))
@@ -301,3 +302,54 @@
     (.writeFileSync fs pending-file (apply str (map #(str % "\n") keep)))
     {:synced (count done) :remaining (count keep)
      :errors (frequencies (map #(:error (second %)) failed))}))
+
+;; --- real backends with fixed public endpoints ---------------------------------
+
+(defn- get-json!
+  "GET `url` with query params (curl -G, url-encoded), decoded JSON or {:error kw}."
+  [url params max-time-s]
+  (let [r (run "curl" (into ["-sS" "-g" "--noproxy" "*" "-G" "--max-time" (str max-time-s)
+                             "--max-filesize" "2097152" "--proto" "=https" "--max-redirs" "0"
+                             "-A" "murakumo-web/0 (+https://murakumo.cloud)" "-w" "\n%{http_code}"]
+                            (into (vec (mapcat (fn [[k v]] ["--data-urlencode" (str k "=" v)]) params))
+                                  [url]))
+               {})]
+    (if-not (zero? (:status r))
+      {:error (keyword "curl" (str "exit-" (:status r)))}
+      (let [out (.toString (:stdout r))
+            i (.lastIndexOf out "\n")
+            code (js/parseInt (subs out (inc i)) 10)]
+        (if (not= 200 code)
+          {:error (keyword "backend" (str "http-" code))}
+          (try {:doc (js->clj (js/JSON.parse (subs out 0 i)) :keywordize-keys true)}
+               (catch :default _ {:error :backend/bad-json})))))))
+
+(defn wikipedia
+  "MediaWiki search on `<lang>.wikipedia.org` (a real, keyless search index)."
+  [{:keys [name lang] :or {lang "en"}}]
+  {:name name
+   :search! (fn [{:keys [query k]}]
+              (if-not (re-matches #"[a-z]{2,3}" (str lang))
+                {:error :backend/bad-lang}
+                (let [r (get-json! (str "https://" lang ".wikipedia.org/w/api.php")
+                                   {"action" "query" "list" "search" "srsearch" query
+                                    "srlimit" (str (min k 50)) "format" "json" "utf8" "1"} 15)]
+                  (if (:error r) r {:results (backends/wikipedia-results (:doc r) lang)}))))})
+
+(defn hn-algolia
+  "Hacker News full-text search via Algolia (keyless)."
+  [{:keys [name]}]
+  {:name name
+   :search! (fn [{:keys [query k]}]
+              (let [r (get-json! "https://hn.algolia.com/api/v1/search"
+                                 {"query" query "hitsPerPage" (str (min k 50)) "tags" "story"} 15)]
+                (if (:error r) r {:results (backends/hn-results (:doc r))})))})
+
+(defn backend-from-config
+  "backends.edn entry -> backend. :kind :searxng (default, needs :base-url), :wikipedia, :hn."
+  [{:keys [kind] :as cfg}]
+  (case (or kind :searxng)
+    :searxng (searxng cfg)
+    :wikipedia (wikipedia cfg)
+    :hn (hn-algolia cfg)
+    {:name (:name cfg) :search! (fn [_] {:error :backend/unknown-kind})}))

@@ -46,11 +46,29 @@ python3 hermes/profiles/web-plane/scripts/web_plane_evidence.py   # same, three-
 `:search/no-backends-configured` and `:put/no-remote-configured` are notes, not
 outages (fetch/crawl/index do not need them).
 
+## The Modal node (second egress zone)
+
+`deploy/modal/web_node.py` runs the same bundle on Modal from a different network
+(measured: Brussels, GCP). It has **no public URL**: it is called through Modal's
+authenticated API with your own Modal credentials (`scripts/modal_call.py`). State
+(`node.key`, `store/`) is on the Volume `murakumo-web-node-state`.
+
+```sh
+scripts/web-bundle.sh build/web-bundle
+MURAKUMO_WEB_BUNDLE=build/web-bundle modal deploy deploy/modal/web_node.py   # (re)deploy
+modal app stop murakumo-web-node                                             # turn it off
+```
+
+Redeploy after any change to the web sources (the bundle is baked into the image).
+Cost is per invocation (CPU seconds, cold start ~ tens of seconds); nothing runs
+when idle. Check its address with the `:egress` op before trusting a zone label.
+
 ## Optional configuration
 
 - **Search backends** (operator-only; the query is sent to these and, through
-  them, to third-party engines):
-  `echo '[{:name :searx :base-url "http://127.0.0.1:8080"}]' > ~/.murakumo-web/backends.edn`
+  them, to third-party engines). Kinds: `:searxng` (needs `:base-url`), `:wikipedia`
+  (`:lang`, default `"en"`), `:hn`:
+  `echo '[{:kind :wikipedia :name :wp} {:kind :hn :name :hn}]' > ~/.murakumo-web/backends.edn`
 - **yataverse / kotobase put**: write the gateway URL to `~/.murakumo-web/kotobase.url`
   (e.g. `https://ipfs.kotobase.net`) and the *pre-minted* Authorization value to
   `~/.murakumo-web/kotobase.auth` (`chmod 600`). `MURAKUMO_KOTOBASE_URL` /
@@ -84,11 +102,13 @@ outages (fetch/crawl/index do not need them).
 
 ## Known limits (honest list)
 
-- **One egress zone today.** benjamin and gad share a public address; dual-zone
-  verification is implemented and tested but cannot pass on this fleet.
+- **Fleet nodes share one egress** (Tokyo); the second zone is the Modal node.
+  Zone labels must match measured egress.
 - Yataverse block put is implemented against a local fake server only; the real
   gateway needs a minted Authorization.
-- Index is lexical BM25 (CJK bigrams), not semantic. Recall against Phase 1
-  federated search has not been measured on a real query set.
-- Search has only been exercised against local fake SearXNG servers.
+- Index is lexical BM25 (CJK bigrams), not semantic. The recall comparison
+  (`docs/evidence/web-recall-20260929.edn`) is n=24 on a closed corpus; see the ADR
+  before quoting it.
+- Search runs live against Wikipedia and Hacker News; a SearXNG instance has only
+  been exercised as a local fake (`searxng.gftd.ai` is unreachable from here).
 - JS rendering, authenticated crawling and JVM hosts are not implemented.

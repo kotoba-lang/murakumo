@@ -1,14 +1,23 @@
 ;; web-nodes.edn — the web plane's node registry (ADR-260929). Operator config.
 ;;
-;; :host is an ssh name (fleet.edn's Tailscale MagicDNS names). :zone is the
-;; operator's DECLARATION of where the node's traffic exits to the internet;
-;; dual-zone verification (murakumo.web.verify) refuses to run unless the
-;; requested replicas sit in DISTINCT zones. Every fleet node today shares one
-;; public egress address, so they are all honestly "jp" and verification cannot
-;; pass. A node with a different egress (a VPS or cloud function in another
-;; region running the same bundle) is what adds a zone — do not relabel a node
-;; to satisfy the check.
+;; :zone is the operator's DECLARATION of where a node's traffic exits to the
+;; internet, and it is checked against the node's measured egress (the `:egress`
+;; op) when it is registered. Dual-zone verification (murakumo.web.verify)
+;; refuses to run unless the requested replicas sit in DISTINCT zones. Do not
+;; relabel a node to satisfy the check.
+;;
+;; Two transports:
+;;   {:host "name"}                       ssh (BatchMode) to a fleet node
+;;   {:transport :modal :app "..." :fn-name "run"}   a Modal function, invoked with
+;;                                        the operator's own Modal credentials; it has
+;;                                        no public URL (deploy/modal/web_node.py)
+;;
+;; Measured 2026-09-29:
+;;   fleet nodes  220.146.170.114  Tokyo, AS4685 Asahi Net
+;;   modal node    34.14.33.155    Brussels, AS396982 Google LLC
 ;;
 ;; No secrets belong here.
-{:nodes [{:host "benjamin" :zone "jp"}
-         {:host "gad" :zone "jp"}]}
+{:nodes [{:host "benjamin" :zone "jp-tokyo-as4685"}
+         {:host "gad" :zone "jp-tokyo-as4685"}
+         {:transport :modal :app "murakumo-web-node" :fn-name "run"
+          :zone "eu-brussels-gcp-as396982" :timeout-ms 300000}]}

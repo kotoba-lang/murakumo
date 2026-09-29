@@ -7,13 +7,13 @@
 (let [fs (js/require "fs")
       file (or (first *command-line-args*) "web-nodes.edn")
       nodes (:nodes (reader/read-string (.readFileSync fs file "utf8")))
-      rows (mapv (fn [{:keys [host zone] :as cfg}]
+      rows (mapv (fn [{:keys [host app zone] :as cfg}]
                    (let [r (d/call! cfg :health {})]
                      (if-let [ok (:ok r)]
-                       {:host host :zone zone :healthy? (:healthy? ok) :did (:node-did ok)
+                       {:host (or host app) :zone zone :healthy? (:healthy? ok) :did (:node-did ok)
                         :store (:store ok) :free-gib (some-> (:free-bytes ok) (/ 1073741824.0) (js/Math.floor))
                         :pending (:pending-puts ok) :problems (:problems ok)}
-                       {:host host :zone zone :healthy? false :error (or (:refused r) :unknown) :detail (:detail r)})))
+                       {:host (or host app) :zone zone :healthy? false :error (or (:refused r) :unknown) :detail (:detail r)})))
                  nodes)]
   (doseq [r rows] (println (pr-str r)))
   (let [bad (remove :healthy? rows)]

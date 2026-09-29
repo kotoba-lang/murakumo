@@ -62,7 +62,7 @@
 (defn- make-env [{:keys [seed node-did public-key-hex]}]
   (let [zone (:zone (read-edn-file (.join path (home) "zone.edn")))
         backends (some->> (read-edn-file (.join path (home) "backends.edn"))
-                          (mapv host/searxng))
+                          (mapv host/backend-from-config))
         base (host/env {:store-dir (.join path (home) "store") :seed-hex seed :node-did node-did})
         tee (host/tee-store (.join path (home) "store") (pending-file) (remote-put-config))]
     (-> base
@@ -101,6 +101,15 @@
       :whoami {:ok {:version version :node-did (:node-did ident)
                     :public-key-hex (:public-key-hex ident) :zone (:zone env)}}
       :health (health ident env)
+      ;; the address this node's traffic actually exits from (zone declarations are
+      ;; checked against this, not asserted); asks a third-party echo service
+      :egress (let [r (.spawnSync (js/require "child_process") "curl"
+                                  #js ["-sS" "-g" "--noproxy" "*" "-m" "8" "https://ifconfig.me/ip"]
+                                  #js {:encoding "utf8"})
+                    ip (some-> (.-stdout r) .trim)]
+                (if (and ip (re-matches #"[0-9a-fA-F:.]{3,45}" ip))
+                  {:ok {:ip ip}}
+                  {:refused :egress/unavailable}))
       ;; exercises host primitives that need no network; run under STOCK nbb by
       ;; scripts/web-test-all.sh, because the kbb tests do not run on that engine
       :selftest (let [{:keys [sign! public-key-hex]} (host/signer (:seed ident))

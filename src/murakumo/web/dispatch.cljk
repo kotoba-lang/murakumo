@@ -28,16 +28,36 @@
 (defn- remote-command [home]
   (str "MURAKUMO_WEB_HOME=\"$HOME/" home "\" nbb -cp \"$HOME/" home "/bundle\" \"$HOME/" home "/bundle/web_node.cljs\""))
 
-(defn- call-once [{:keys [host home timeout-ms]} op job]
-  (let [r (.spawnSync cp "ssh"
-                      #js ["-o" "BatchMode=yes" "-o" "ConnectTimeout=8" "--" host (remote-command home)]
-                      #js {:input (pr-str {:op op :job job}) :timeout timeout-ms
-                           :maxBuffer (* 64 1024 1024) :encoding "utf8"})]
+(defn- modal-python
+  "The Python that has `modal` installed: the interpreter on the `modal` shim's
+  shebang, or $MURAKUMO_MODAL_PYTHON."
+  []
+  (or (.. js/process -env -MURAKUMO_MODAL_PYTHON)
+      (let [r (.spawnSync cp "sh" #js ["-c" "head -1 \"$(command -v modal)\""] #js {:encoding "utf8"})
+            line (some-> (.-stdout r) .trim)]
+        (when (and line (.startsWith line "#!")) (subs line 2)))))
+
+(defn- script-path [name]
+  (.join (js/require "path") (or (.. js/process -env -MURAKUMO_REPO) ".") "scripts" name))
+
+(defn- call-once [{:keys [host home timeout-ms transport app fn-name]} op job]
+  (let [modal? (= transport :modal)
+        py (when modal? (modal-python))
+        r (if modal?
+            (if py
+              (.spawnSync cp py #js [(script-path "modal_call.py") app (or fn-name "run")]
+                          #js {:input (pr-str {:op op :job job}) :timeout timeout-ms
+                               :maxBuffer (* 64 1024 1024) :encoding "utf8"})
+              #js {:error (js/Error. "no python with modal found")})
+            (.spawnSync cp "ssh"
+                        #js ["-o" "BatchMode=yes" "-o" "ConnectTimeout=8" "--" host (remote-command home)]
+                        #js {:input (pr-str {:op op :job job}) :timeout timeout-ms
+                             :maxBuffer (* 64 1024 1024) :encoding "utf8"}))]
     (cond
       (.-error r) {:refused :dispatch/spawn-failed :detail (str (.-message (.-error r)))}
       (not (zero? (.-status r)))
-      {:refused :dispatch/ssh-failed
-       :transient? (= 255 (.-status r))                     ; ssh's own connection failure
+      {:refused (if modal? :dispatch/modal-failed :dispatch/ssh-failed)
+       :transient? (and (not modal?) (= 255 (.-status r)))  ; ssh's own connection failure
        :detail {:status (.-status r)
                 :stderr (subs (str (.-stderr r)) 0 (min 300 (count (str (.-stderr r)))))}}
       :else
@@ -55,7 +75,9 @@
   A transient ssh failure (exit 255) on an idempotent op is retried once."
   [{:keys [host home timeout-ms] :or {home default-home timeout-ms default-timeout-ms} :as cfg} op job]
   (cond
-    (not (safe-token? host)) {:refused :dispatch/bad-host}
+    (and (= :modal (:transport cfg)) (not (and (safe-token? (:app cfg)) (safe-token? (or (:fn-name cfg) "run")))))
+    {:refused :dispatch/bad-modal-target}
+    (and (not= :modal (:transport cfg)) (not (safe-token? host))) {:refused :dispatch/bad-host}
     (not (safe-token? home)) {:refused :dispatch/bad-home}
     :else
     (let [cfg (assoc cfg :home home :timeout-ms timeout-ms)
@@ -71,7 +93,7 @@
   [{:keys [host zone] :as cfg}]
   (let [who (call! cfg :whoami {})]
     (when-let [ok (:ok who)]
-      {:host host :zone zone :node-did (:node-did ok) :public-key-hex (:public-key-hex ok)
+      {:host (or host (:app cfg)) :zone zone :node-did (:node-did ok) :public-key-hex (:public-key-hex ok)
        :cfg cfg
        ;; only receipts signed by THIS node's key, naming this node's did, count
        :receipt-valid? (fn [receipt signature]

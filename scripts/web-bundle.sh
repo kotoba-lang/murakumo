@@ -12,7 +12,7 @@ bytes_sha=d5259f35ab7c4f5a66e63ca29ed4dcf7ba3f1ac5
 rm -rf "$out"; mkdir -p "$out/murakumo/web" "$out/kotoba/lang"
 cp "$here/src/murakumo/canonical.cljk" "$out/murakumo/canonical.cljc"
 cp "$here/src/murakumo/web.cljk" "$out/murakumo/web.cljc"
-for f in worker host robots crawl search verify index; do
+for f in worker host robots crawl search verify index backends; do
   cp "$here/src/murakumo/web/$f.cljk" "$out/murakumo/web/$f.cljc"
 done
 cp "$libs/text/$text_sha/src/kotoba/lang/text.cljc" "$out/kotoba/lang/text.cljc"
