@@ -27,8 +27,14 @@
       _ (when-not (:ok ix) (println "INDEX REFUSED" (pr-str ix)) (.exit js/process 2))
       root (get-in ix [:ok :root-cid])
       seed (.toString (.randomBytes (js/require "crypto") 32) "hex")
-      penv (assoc (host/env {:store-dir (str (.tmpdir (js/require "os")) "/mw-recall") :seed-hex seed :node-did "did:local:bench"})
-                  :backends [(host/wikipedia {:name :wikipedia-en}) (host/hn-algolia {:name :hn})])
+      base-env (host/env {:store-dir (str (.tmpdir (js/require "os")) "/mw-recall") :seed-hex seed :node-did "did:local:bench"})
+      ;; Phase 1 backend sets compared: real keyless indexes, a private SearXNG, and both
+      p1-sets {:wiki+hn [(host/wikipedia {:name :wikipedia-en}) (host/hn-algolia {:name :hn})]
+               :searxng [(host/modal-searxng {:name :searxng})]
+               :all [(host/wikipedia {:name :wikipedia-en}) (host/hn-algolia {:name :hn})
+                     (host/modal-searxng {:name :searxng})]}
+      p1-key (keyword (or (nth *command-line-args* 2 nil) "wiki+hn"))
+      penv (assoc base-env :backends (get p1-sets p1-key))
       rows (mapv (fn [[q expected-title]]
                    (let [expected (url-of expected-title)
                          p2 (d/call! cfg :index-search {:job-id "recall-q" :root-cid root :query q :k 10})
@@ -42,7 +48,7 @@
                  (:queries data))
       n (count rows)
       avg (fn [ph k] (/ (reduce + (map #(get-in % [ph k]) rows)) (double n)))
-      summary {:n n :corpus-pages (get-in ix [:ok :docs]) :index-counts (get-in ix [:ok :counts])
+      summary {:p1-backends p1-key :n n :corpus-pages (get-in ix [:ok :docs]) :index-counts (get-in ix [:ok :counts])
                :p1 (into {} (map (fn [k] [k (avg :p1 k)]) [:r1 :r3 :r5 :rr]))
                :p2 (into {} (map (fn [k] [k (avg :p2 k)]) [:r1 :r3 :r5 :rr]))
                :p1-errors (count (filter :p1-error rows)) :p2-errors (count (filter :p2-error rows))}]

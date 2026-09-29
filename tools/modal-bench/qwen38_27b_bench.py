@@ -14,7 +14,7 @@ amu's `tools/kexe_loader.c`: a mechanism layer for a platform that offers no
 other entry point.  No decision lives here; the script measures and prints.
 
 Every configuration reports one of three statuses, and they are distinguishable
-on purpose (CLAUDE.md: a measurement that could not run must not return the
+on purpose (AGENTS.md: a measurement that could not run must not return the
 same value as a measurement that ran and found nothing wrong):
 
     measured           -- it ran, the numbers below are real

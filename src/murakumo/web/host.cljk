@@ -360,6 +360,32 @@
                                  {"query" query "hitsPerPage" (str (min k 50)) "tags" "story"} 15)]
                 (if (:error r) r {:results (backends/hn-results (:doc r))})))})
 
+(defn modal-searxng
+  "A private SearXNG on Modal (deploy/modal/searxng.py), called through Modal's
+  authenticated API by the operator's coordinator — nodes have no Modal credentials,
+  so this backend is for coordinator-side runs. No public URL exists."
+  [{:keys [name app fn-name] :or {app "murakumo-searxng" fn-name "search"}}]
+  {:name name
+   :search!
+   (fn [{:keys [query k]}]
+     (let [sh (run "sh" ["-c" "head -1 \"$(command -v modal)\""] {:encoding "utf8"})
+           line (some-> (:stdout sh) .toString .trim)
+           py (or (.. js/process -env -MURAKUMO_MODAL_PYTHON) (when (and line (.startsWith line "#!")) (subs line 2)))
+           script (.join path (or (.. js/process -env -MURAKUMO_REPO) ".") "scripts" "modal_call.py")]
+       (if-not py
+         {:error :backend/no-modal-python}
+         (let [r (run py [script app fn-name]
+                      {:input (js/JSON.stringify #js {:q query :k k}) :timeout 180000 :encoding "utf8"})]
+           (if-not (zero? (:status r))
+             {:error :backend/modal-failed}
+             (try
+               (let [doc (js->clj (js/JSON.parse (last (remove empty? (.split (.toString (:stdout r)) "\n"))))
+                                  :keywordize-keys true)]
+                 (if (:error doc)
+                   {:error (keyword "backend" (str (:error doc)))}
+                   {:results (mapv (fn [x] {:url (:url x) :title (:title x) :snippet (:content x)}) (:results doc))}))
+               (catch :default _ {:error :backend/bad-json})))))))})
+
 (defn backend-from-config
   "backends.edn entry -> backend. :kind :searxng (default, needs :base-url), :wikipedia, :hn."
   [{:keys [kind] :as cfg}]
@@ -367,4 +393,5 @@
     :searxng (searxng cfg)
     :wikipedia (wikipedia cfg)
     :hn (hn-algolia cfg)
+    :modal-searxng (modal-searxng cfg)
     {:name (:name cfg) :search! (fn [_] {:error :backend/unknown-kind})}))

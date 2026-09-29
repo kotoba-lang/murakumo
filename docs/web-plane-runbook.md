@@ -62,6 +62,15 @@ Redeploy after any change to the web sources (the bundle is baked into the image
 Cost is per invocation (CPU seconds, cold start ~ tens of seconds); nothing runs
 when idle. Check its address with the `:egress` op before trusting a zone label.
 
+## The private SearXNG (Phase 1 backend, coordinator side)
+
+`deploy/modal/searxng.py` runs SearXNG in-process on Modal behind the same
+authenticated call path (no public URL). Use it as a backend with
+`{:kind :modal-searxng :name :searxng}` in coordinator-side runs (nodes have no
+Modal credentials). `modal app stop murakumo-searxng` turns it off. Datacenter
+addresses are rate-limited by some engines: the function returns per-engine
+counts and unresponsive engines so that shows up rather than being hidden.
+
 ## Optional configuration
 
 - **Search backends** (operator-only; the query is sent to these and, through
