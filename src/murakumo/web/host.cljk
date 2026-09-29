@@ -230,40 +230,55 @@
   (when (re-find #"[\r\n]" (str v)) (throw (ex-info "control character in curl config value" {:key k})))
   (str k " = \"" (.replace (.replace (str v) "\\" "\\\\") "\"" "\\\"") "\"\n"))
 
+(defn auth-from-command
+  "Run the operator's minter (argv vector, NO shell) and return its stdout as the
+  Authorization value, or nil. kotobase authorizations are short-lived CACAOs with
+  single-use nonces, so a value must be minted per write, never cached in a file."
+  [argv]
+  (when (and (vector? argv) (seq argv) (every? string? argv))
+    (let [r (run (first argv) (vec (rest argv)) {:timeout 30000 :encoding "utf8"})
+          out (some-> (:stdout r) .toString .trim)]
+      (when (and (zero? (:status r)) (seq out) (not (re-find #"[\r\n]" out))) out))))
+
 (defn put-block!
-  "PUT bytes at `<base-url>/ipfs/<cid>` then GET them back and re-derive the CID.
-  The Authorization value travels on curl's stdin config, never in argv (ps).
-  Returns {:ok true} | {:error kw}; never throws. `authorization` is a pre-minted
-  value: this code mints none."
-  [{:keys [base-url authorization max-time-s] :or {max-time-s 60}} cid bs]
-  (cond
-    (not (valid-cid? cid)) {:error :put/bad-cid}
-    (not (re-find #"^https?://" (str base-url))) {:error :put/bad-base-url}
-    (empty? (str authorization)) {:error :put/no-authorization}
-    :else
-    (let [url (str (.replace base-url #"/+$" "") "/ipfs/" cid)
-          tmp (str (.tmpdir (js/require "os")) "/murakumo-put-" (.toString (.randomBytes crypto 6) "hex"))
-          curl (fn [args opts] (run "curl" (into ["-sS" "-g" "--noproxy" "*" "--max-time" (str max-time-s)
-                                                  "--proto" "=http,https" "--max-redirs" "0"] args) opts))]
-      (try
-        (.writeFileSync fs tmp (js/Buffer.from bs) #js {:mode 0600})
-        (let [cfg (str (curl-config-line "header" (str "Authorization: " authorization))
-                       (curl-config-line "header" "Content-Type: application/octet-stream"))
-              put (curl ["-X" "PUT" "--data-binary" (str "@" tmp) "-o" "/dev/null" "-w" "%{http_code}"
-                         "--config" "-" url]
-                        {:input cfg})]
-          (if-not (zero? (:status put))
-            {:error (keyword "curl" (str "exit-" (:status put)))}
-            (let [code (js/parseInt (.toString (:stdout put)) 10)]
-              (if-not (<= 200 code 299)
-                {:error (keyword "put" (str "http-" code))}
-                (let [got (curl [url] {})]
-                  (cond
-                    (not (zero? (:status got))) {:error :put/verify-unreachable}
-                    (not= cid (w/raw-cid (js/Uint8Array. (:stdout got)))) {:error :put/verify-mismatch}
-                    :else {:ok true}))))))
-        (catch :default _ {:error :put/local-failure})
-        (finally (when (.existsSync fs tmp) (.unlinkSync fs tmp)))))))
+  "PUT bytes at `<base-url><path-prefix><cid>` (default prefix /ipfs/) then GET them
+  back and re-derive the CID. Authorization is `:authorization` (a string) or
+  `:authorization-fn` (0-arg, called per attempt: the form CACAOs need). It travels
+  on curl's stdin config, never in argv (ps). Returns {:ok true} | {:error kw};
+  never throws. This code mints no credentials."
+  [{:keys [base-url authorization authorization-fn path-prefix max-time-s]
+    :or {max-time-s 60 path-prefix "/ipfs/"}} cid bs]
+  (let [auth (if authorization-fn (authorization-fn) authorization)]
+    (cond
+      (not (valid-cid? cid)) {:error :put/bad-cid}
+      (not (re-find #"^https?://" (str base-url))) {:error :put/bad-base-url}
+      (or (not (re-matches #"/[A-Za-z0-9._/-]*/" (str path-prefix)))
+          (re-find #"\.\." (str path-prefix))) {:error :put/bad-path-prefix}
+      (empty? (str auth)) {:error :put/no-authorization}
+      :else
+      (let [url (str (.replace base-url #"/+$" "") path-prefix cid)
+            tmp (str (.tmpdir (js/require "os")) "/murakumo-put-" (.toString (.randomBytes crypto 6) "hex"))
+            curl (fn [args opts] (run "curl" (into ["-sS" "-g" "--noproxy" "*" "--max-time" (str max-time-s)
+                                                    "--proto" "=http,https" "--max-redirs" "0"] args) opts))]
+        (try
+          (.writeFileSync fs tmp (js/Buffer.from bs) #js {:mode 0600})
+          (let [cfg (str (curl-config-line "header" (str "Authorization: " auth))
+                         (curl-config-line "header" "Content-Type: application/vnd.ipld.raw"))
+                put (curl ["-X" "PUT" "--data-binary" (str "@" tmp) "-o" "/dev/null" "-w" "%{http_code}"
+                           "--config" "-" url]
+                          {:input cfg})]
+            (if-not (zero? (:status put))
+              {:error (keyword "curl" (str "exit-" (:status put)))}
+              (let [code (js/parseInt (.toString (:stdout put)) 10)]
+                (if-not (<= 200 code 299)
+                  {:error (keyword "put" (str "http-" code))}
+                  (let [got (curl [url] {})]
+                    (cond
+                      (not (zero? (:status got))) {:error :put/verify-unreachable}
+                      (not= cid (w/raw-cid (js/Uint8Array. (:stdout got)))) {:error :put/verify-mismatch}
+                      :else {:ok true}))))))
+          (catch :default _ {:error :put/local-failure})
+          (finally (when (.existsSync fs tmp) (.unlinkSync fs tmp))))))))
 
 (defn tee-store
   "Local dir store first (durable, authoritative for the job), then a remote put.

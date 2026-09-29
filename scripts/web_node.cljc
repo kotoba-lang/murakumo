@@ -44,18 +44,26 @@
     {:seed seed :public-key-hex public-key-hex :node-did (host/did-key public-key-hex)}))
 
 (defn- remote-put-config
-  "Optional yataverse/kotobase put. URL from the file kotobase.url (or
-  $MURAKUMO_KOTOBASE_URL); the pre-minted Authorization value from the 0600 file
-  kotobase.auth (or $MURAKUMO_KOTOBASE_AUTH). ssh runs a non-login shell, so the
-  files are the reliable path. Absent either -> local store only."
+  "Optional yataverse/kotobase put. Files under the node home (ssh is a non-login
+  shell, so env vars are unreliable):
+    kotobase.url         gateway base URL
+    kotobase.prefix      optional path prefix, default /ipfs/ (the datom plane is /ipld/)
+    kotobase.auth-cmd    EDN argv vector of the operator's MINTER, run per write
+                         (kotobase authorizations are short-lived CACAOs with
+                         single-use nonces — a stored value works once at best)
+    kotobase.auth        static value, only for a gateway that accepts one (0600)
+  Absent url or any authorization -> local store only."
   []
-  (let [url-file (.join path (home) "kotobase.url")
-        url (or (.. js/process -env -MURAKUMO_KOTOBASE_URL)
-                (when (.existsSync fs url-file) (.trim (.readFileSync fs url-file "utf8"))))
-        auth-file (.join path (home) "kotobase.auth")
-        auth (or (.. js/process -env -MURAKUMO_KOTOBASE_AUTH)
-                 (when (.existsSync fs auth-file) (.trim (.readFileSync fs auth-file "utf8"))))]
-    (when (and (seq url) (seq auth)) {:base-url url :authorization auth})))
+  (let [rd (fn [f] (let [p (.join path (home) f)] (when (.existsSync fs p) (.trim (.readFileSync fs p "utf8")))))
+        url (or (.. js/process -env -MURAKUMO_KOTOBASE_URL) (rd "kotobase.url"))
+        prefix (rd "kotobase.prefix")
+        cmd (some-> (rd "kotobase.auth-cmd") reader/read-string)
+        static (or (.. js/process -env -MURAKUMO_KOTOBASE_AUTH) (rd "kotobase.auth"))]
+    (when (and (seq url) (or cmd (seq static)))
+      (cond-> {:base-url url}
+        (seq prefix) (assoc :path-prefix prefix)
+        cmd (assoc :authorization-fn #(host/auth-from-command cmd))
+        (and (not cmd) (seq static)) (assoc :authorization static)))))
 
 (defn- pending-file [] (.join path (home) "pending-put.txt"))
 

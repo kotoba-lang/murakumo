@@ -19,8 +19,7 @@ for the design; this is what to run.
   | `store/` | content-addressed bytes (fetched pages, extracts, manifests, index shards) | |
   | `zone.edn` | optional `{:zone "..."}` | |
   | `backends.edn` | optional vector of `{:name :kw :base-url "http://..."}` SearXNG endpoints for `:web/search` | |
-  | `kotobase.url` | optional gateway base URL for the block put | |
-  | `kotobase.auth` | optional pre-minted `Authorization` value for the block put | 0600 |
+  | `kotobase.url`, `kotobase.prefix`, `kotobase.auth-cmd`, `kotobase.auth` | optional block-put config (see below) | `kotobase.auth` 0600 |
   | `pending-put.txt` | CIDs whose remote put failed, retried by `:sync` | |
 
 ## Deploy / update
@@ -69,14 +68,23 @@ when idle. Check its address with the `:egress` op before trusting a zone label.
   them, to third-party engines). Kinds: `:searxng` (needs `:base-url`), `:wikipedia`
   (`:lang`, default `"en"`), `:hn`:
   `echo '[{:kind :wikipedia :name :wp} {:kind :hn :name :hn}]' > ~/.murakumo-web/backends.edn`
-- **yataverse / kotobase put**: write the gateway URL to `~/.murakumo-web/kotobase.url`
-  (e.g. `https://ipfs.kotobase.net`) and the *pre-minted* Authorization value to
-  `~/.murakumo-web/kotobase.auth` (`chmod 600`). `MURAKUMO_KOTOBASE_URL` /
-  `MURAKUMO_KOTOBASE_AUTH` also work but ssh runs a non-login shell, so the files
-  are the reliable path. Writing needs a CACAO minted by the authority; this code
-  mints none. Every put is read back and its CID recomputed. A failed put never
-  fails the job: the CID is queued, then `:sync` drains it. `:health` shows
-  `:put/no-remote-configured` until both values are present.
+- **yataverse / kotobase put** (files in `~/.murakumo-web/`; ssh runs a non-login
+  shell so env vars are unreliable):
+
+  | file | content |
+  |---|---|
+  | `kotobase.url` | gateway base URL, e.g. `https://ipfs.kotobase.net` |
+  | `kotobase.prefix` | optional, default `/ipfs/` (archive plane); the datom plane is `/ipld/` |
+  | `kotobase.auth-cmd` | EDN argv vector of **your minter**, e.g. `["/usr/local/bin/mint-cacao" "--aud" "ipfs.kotobase.net"]`; run without a shell **before every write**, stdout is the `Authorization` value |
+  | `kotobase.auth` | a static value — only for a gateway that accepts one (`chmod 600`) |
+
+  Why a command: kotobase authorizations are short-lived CACAOs with single-use
+  nonces (`kotobase.blocks` says so), so a stored value works once at best (there
+  is a test for exactly that). This code mints no credentials. Each put is sent
+  as `application/vnd.ipld.raw`, then read back and its CID recomputed. A failed
+  put never fails the job: the CID is queued, then `:sync` drains it.
+  `:health` shows `:put/no-remote-configured` until url and one authorization
+  source are present.
 
 ## Routine ops (via `murakumo.web.dispatch/call!`)
 

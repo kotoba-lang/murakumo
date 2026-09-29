@@ -17,7 +17,11 @@
      const chunks=[]; q.on('data',c=>chunks.push(c)); q.on('end',()=>{
        fs.appendFileSync(log, JSON.stringify({m:q.method,u:q.url,auth:q.headers.authorization||null})+'\\n');
        if(mode==='down'){r.writeHead(503);return r.end();}
-       if(q.method==='PUT'){ if(q.headers.authorization!=='Bearer good'){r.writeHead(401);return r.end();}
+       if(q.method==='PUT'){
+         if(q.headers['content-type']!=='application/vnd.ipld.raw'){r.writeHead(415);return r.end();}
+         if(mode==='nonce'){ const a=q.headers.authorization||''; if(!a.startsWith('CACAO ')||global.used&&global.used.has(a)){r.writeHead(401);return r.end();}
+           (global.used=global.used||new Set()).add(a); blobs[q.url]=Buffer.concat(chunks); r.writeHead(201); return r.end(); }
+         if(q.headers.authorization!=='Bearer good'){r.writeHead(401);return r.end();}
          blobs[q.url]=Buffer.concat(chunks); r.writeHead(201); return r.end(); }
        if(q.method==='GET'){ let b=blobs[q.url]; if(!b){r.writeHead(404);return r.end();}
          if(mode==='corrupt') b=Buffer.from('tampered'); r.writeHead(200); return r.end(b); }
@@ -131,3 +135,37 @@
         did (host/did-key (:public-key-hex (host/signer seed)))]
     (is (re-find #"^did:key:z6Mk" did))
     (is (= did (host/did-key (:public-key-hex (host/signer seed)))))))
+
+(deftest cacao-style-single-use-authorization-needs-a-per-write-minter
+  ;; kotobase authorizations are single-use: a stored value works once, a minter always works
+  (let [log (tmp ".log") srv (start-server! 18905 "nonce" log)
+        n (atom 0)
+        b1 (w/utf8-bytes "block one") b2 (w/utf8-bytes "block two")
+        base {:base-url "http://127.0.0.1:18905"}]
+    (try
+      (let [static (assoc base :authorization "CACAO fixed")]
+        (is (= {:ok true} (host/put-block! static (w/raw-cid b1) b1)))
+        (is (= {:error :put/http-401} (host/put-block! static (w/raw-cid b2) b2))))   ; nonce reused
+      (let [minted (assoc base :authorization-fn (fn [] (str "CACAO nonce-" (swap! n inc))))]
+        (is (= {:ok true} (host/put-block! minted (w/raw-cid b1) b1)))
+        (is (= {:ok true} (host/put-block! minted (w/raw-cid b2) b2)))
+        (is (= 2 @n)))
+      (is (= {:error :put/no-authorization}
+             (host/put-block! (assoc base :authorization-fn (fn [] nil)) (w/raw-cid b1) b1)))
+      (finally (.kill srv)))))
+
+(deftest auth-from-command-runs-argv-without-a-shell
+  (is (= "CACAO abc" (host/auth-from-command ["printf" "CACAO abc"])))
+  (is (nil? (host/auth-from-command ["false"])))
+  (is (nil? (host/auth-from-command ["printf" "two\nlines"])))
+  (is (nil? (host/auth-from-command ["printf" ""])))
+  (is (nil? (host/auth-from-command "echo hi")))                  ; a string is never run
+  (is (= "a;echo pwned" (host/auth-from-command ["printf" "a;echo pwned"]))))  ; metacharacters stay data
+
+(deftest path-prefix-is-validated
+  (is (= {:error :put/bad-path-prefix}
+         (host/put-block! {:base-url "http://127.0.0.1:1" :authorization "x" :path-prefix "/../"}
+                          (w/raw-cid (w/utf8-bytes "x")) (w/utf8-bytes "x"))))
+  (is (= {:error :put/bad-path-prefix}
+         (host/put-block! {:base-url "http://127.0.0.1:1" :authorization "x" :path-prefix "ipld"}
+                          (w/raw-cid (w/utf8-bytes "x")) (w/utf8-bytes "x")))))
