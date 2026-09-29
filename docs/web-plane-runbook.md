@@ -84,23 +84,33 @@ kotobase.
   them, to third-party engines). Kinds: `:searxng` (needs `:base-url`), `:wikipedia`
   (`:lang`, default `"en"`), `:hn`:
   `echo '[{:kind :wikipedia :name :wp} {:kind :hn :name :hn}]' > ~/.murakumo-web/backends.edn`
-- **yataverse put** (files in `~/.murakumo-web/`; ssh runs a non-login
-  shell so env vars are unreliable):
+- **yataverse put** (files in `~/.murakumo-web/`; ssh runs a non-login shell so
+  env vars are unreliable). The write route, probed 2026-09-29, is
+  `PUT https://kotobase.net/ipfs/<cid>` (401 without a valid credential); the
+  read side is `https://ipfs.yataverse.com/ipfs/<cid>` (301 to the per-CID
+  subdomain, which the read-back follows). Other candidates were 405 or did not resolve.
 
   | file | content |
   |---|---|
-  | `yataverse.url` | gateway base URL, e.g. `https://ipfs.yataverse.com` |
-  | `yataverse.prefix` | optional, default `/ipfs/` (archive plane); the datom plane is `/ipld/` |
-  | `yataverse.auth-cmd` | EDN argv vector of **your minter**, e.g. `["/usr/local/bin/mint-cacao" "--aud" "ipfs.kotobase.net"]`; run without a shell **before every write**, stdout is the `Authorization` value |
-  | `yataverse.auth` | a static value — only for a gateway that accepts one (`chmod 600`) |
+  | `yataverse.url` | write base URL: `https://kotobase.net` |
+  | `yataverse.prefix` | `/ipfs/` (default) |
+  | `yataverse.authn.edn` | `{:tenant-id "t_..." :storage "..." :permissions [...]}` |
+  | `yataverse.sa-token` | a **tenant service-account secret** `kb_sa_...` issued by a tenant admin (`chmod 600`) |
+  | `yataverse.auth-cmd` | alternative: EDN argv of your own minter, run per write |
+  | `yataverse.auth` | alternative: a static value, only for a gateway that accepts one |
 
-  Why a command: kotobase authorizations are short-lived CACAOs with single-use
-  nonces (`kotobase.blocks` says so), so a stored value works once at best (there
-  is a test for exactly that). This code mints no credentials. Each put is sent
-  as `application/vnd.ipld.raw`, then read back and its CID recomputed. A failed
-  put never fails the job: the CID is queued, then `:sync` drains it.
-  `:health` shows `:put/no-remote-configured` until url and one authorization
-  source are present.
+  Current auth (superproject ADR-2609241800): a CACAO only proves who signed and
+  authorizes nothing; writes carry `Authorization: Biscuit ...`, a 15-minute token
+  Authn issues **only to a member of a tenant**. With `authn.edn` + `sa-token` the node
+  exchanges the secret at `auth.kotoba.cloud` for a Biscuit (cached until 60 s before
+  expiry) and sends it with each put. The secret is sent only to `auth.kotoba.cloud`,
+  on curl's stdin, never in argv. **Self-signed CACAOs are refused** (three attempts on
+  2026-09-29, all 401, nothing written), and a fresh `did:key` has no membership, so a
+  credential cannot be minted from nothing — a tenant admin has to issue the secret
+  (or add a node's `did:key`, shown by `:whoami`, as a member).
+  Each put is `application/vnd.ipld.raw`, read back and its CID recomputed. A failed
+  put never fails the job: the CID is queued, then `:sync` drains it. `:health`
+  shows `:put/no-remote-configured` until url and one authorization source exist.
 
 ## Routine ops (via `murakumo.web.dispatch/call!`)
 

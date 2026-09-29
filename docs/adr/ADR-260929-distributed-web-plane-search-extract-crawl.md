@@ -231,3 +231,23 @@ shares the base host's parent domain; the authenticated PUT never follows a
 redirect (regression tests for both). Reading a known block through the real
 gateway works end to end. Writing still needs the operator's minter
 (`yataverse.auth-cmd`); nothing has been written to the real gateway.
+
+## The yataverse write path, probed (2026-09-29)
+
+With the owner's permission to issue the authorization myself, the write route and
+auth were probed instead of assumed:
+
+- `PUT https://kotobase.net/ipfs/<cid>` answers 401; `PUT https://ipfs.yataverse.com/ipfs/`
+  and `https://yataverse.com/ipld|ipfs/` answer 405; `kotobase.net/ipld` 308s to
+  `graph.kotoba.cloud`, which does not resolve.
+- A self-signed CACAO from a throwaway key (the mechanism `kotobase.live-blocks`
+  used on 2026-09-06) is now refused: three scopes tried, three 401s, nothing written.
+- Current auth is Authn -> Biscuit, granted only to a tenant member (`kotobase.authn`).
+  Signing a throwaway `did:key` in would create an account, which is not mine to do,
+  and it would hold no membership anyway.
+
+So "issue the authorization" reduces to what a tenant admin can hand over: a
+`kb_sa_...` service-account secret (or membership for a node's `did:key`). The node
+now consumes that secret directly (`host/biscuit-from-service-account`, tested
+against a fake Authn incl. the refusals). Until it exists, puts stay in the local
+store and the queue.

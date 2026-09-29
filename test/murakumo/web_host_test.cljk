@@ -17,6 +17,12 @@
      const chunks=[]; q.on('data',c=>chunks.push(c)); q.on('end',()=>{
        fs.appendFileSync(log, JSON.stringify({m:q.method,u:q.url,auth:q.headers.authorization||null})+'\\n');
        if(mode==='down'){r.writeHead(503);return r.end();}
+       if(q.method==='POST' && q.url==='/v1/biscuit/token'){
+         const ok=q.headers.authorization==='Bearer kb_sa_good' && q.headers['content-type']==='application/json';
+         let b={}; try{b=JSON.parse(Buffer.concat(chunks).toString());}catch(e){}
+         if(!ok||b.tenantId!=='t_abc'){r.writeHead(401);return r.end('{\"error\":\"unauthorized\"}');}
+         r.writeHead(201,{'content-type':'application/json'});
+         return r.end(JSON.stringify({token:'tok123',authorization:'Biscuit tok123',expiresIn:900,storage:b.storage||null}));}
        if(q.method==='PUT'){
          if(q.headers['content-type']!=='application/vnd.ipld.raw'){r.writeHead(415);return r.end();}
          if(mode==='nonce'){ const a=q.headers.authorization||''; if(!a.startsWith('CACAO ')||global.used&&global.used.has(a)){r.writeHead(401);return r.end();}
@@ -191,3 +197,28 @@
     ;; the PUT goes through `curl` with --max-redirs 0; only readback! passes -L
     (is (re-find #"\"--max-redirs\" \"0\"" put-part))
     (is (= 1 (count (re-seq #"\"-L\"" src))))))
+
+(deftest service-account-secret-is-exchanged-for-a-biscuit-only-at-allowed-hosts
+  (let [log (tmp ".log") srv (start-server! 18908 "ok" log)
+        cfg {:endpoint "http://127.0.0.1:18908" :authn-hosts #{"127.0.0.1"} :tenant-id "t_abc"
+             :storage "blocks" :sa-token "kb_sa_good"}]
+    (try
+      ;; the fake Authn is plain http on 127.0.0.1, so the https-only rule is what blocks it
+      (is (nil? (host/biscuit-from-service-account cfg)) "http endpoints are refused")
+      (let [t (assoc cfg :insecure-http-for-tests true)]
+        (is (= "Biscuit tok123" (host/biscuit-from-service-account t)))
+        (is (nil? (host/biscuit-from-service-account (assoc t :sa-token "kb_sa_wrong"))) "Authn 401 -> nil")
+        (is (nil? (host/biscuit-from-service-account (assoc t :tenant-id "t_other"))) "not a member -> nil"))
+      (is (nil? (host/biscuit-from-service-account (assoc cfg :endpoint "https://evil.example"))) "host not in the allow-list")
+      (is (nil? (host/biscuit-from-service-account (assoc cfg :sa-token "not-a-sa-secret"))))
+      (is (nil? (host/biscuit-from-service-account (assoc cfg :tenant-id "abc"))))
+      (is (nil? (host/biscuit-from-service-account (dissoc cfg :sa-token))))
+      (finally (.kill srv)))))
+
+(deftest the-service-account-secret-never-goes-in-argv
+  (let [src (.readFileSync fs "src/murakumo/web/host.cljk" "utf8")
+        part (subs src (.indexOf src "(defn biscuit-from-service-account") (.indexOf src "(defn put-block!"))]
+    (is (re-find #"\"--config\" \"-\"" part))
+    (is (re-find #"\"--proto\" proto" part))
+    (is (re-find #"insecure-http-for-tests \"=http,https\" \"=https\"" part))
+    (is (not (re-find #"\"-H\"" part)))))

@@ -48,7 +48,7 @@
 
 (defn curl-transport
   "Default transport: (fn [{:keys [method path body]}]) -> {:status n :body
-  Uint8Array-or-nil}. status 0 means the request itself failed (:error set)."
+  Buffer-or-nil}. status 0 means the request itself failed (:error set)."
   [{:keys [url token-file timeout-s]}]
   (fn [{:keys [method path body]}]
     (let [dir (.mkdtempSync fs (.join nodepath (.tmpdir os) "mkfc-"))
@@ -72,8 +72,11 @@
                                                          (.trim (str (.-stderr r))))}
             (js/isNaN status) {:status 0 :error "no http status"}
             :else {:status status
+                   ;; A Node Buffer, not `(js/Uint8Array. ...)`: murakumo's hashing
+                   ;; rejects a Uint8Array built inside the kbb sandbox
+                   ;; ("Uint8Array expected"), and readFileSync's Buffer is accepted.
                    :body (when (.existsSync fs out-file)
-                           (js/Uint8Array. (.readFileSync fs out-file)))}))
+                           (.readFileSync fs out-file))}))
         (catch :default e {:status 0 :error (.-message e)})
         (finally (.rmSync fs dir #js {:recursive true :force true}))))))
 

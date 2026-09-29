@@ -53,6 +53,10 @@
                          (write authorizations are short-lived CACAOs with
                          single-use nonces — a stored value works once at best)
     yataverse.auth       static value, only for a gateway that accepts one (0600)
+    yataverse.authn.edn  {:tenant-id "t_..." :storage "..." :permissions [...]} with
+    yataverse.sa-token   a tenant service-account secret (kb_sa_..., 0600): the node
+                         exchanges it at auth.kotoba.cloud for a 15-minute Biscuit
+                         (cached until 60 s before expiry) — the current auth flow
   Absent url or any authorization -> local store only."
   []
   (let [rd (fn [base] (let [try-file (fn [n] (let [p (.join path (home) n)]
@@ -62,12 +66,24 @@
         url (or (env "MURAKUMO_YATAVERSE_URL" "MURAKUMO_KOTOBASE_URL") (rd "url"))
         prefix (rd "prefix")
         cmd (some-> (rd "auth-cmd") reader/read-string)
-        static (or (env "MURAKUMO_YATAVERSE_AUTH" "MURAKUMO_KOTOBASE_AUTH") (rd "auth"))]
-    (when (and (seq url) (or cmd (seq static)))
+        static (or (env "MURAKUMO_YATAVERSE_AUTH" "MURAKUMO_KOTOBASE_AUTH") (rd "auth"))
+        authn (some-> (rd "authn.edn") reader/read-string)
+        sa (rd "sa-token")
+        biscuit? (and (map? authn) (seq sa))
+        cache (atom nil)
+        biscuit-fn (fn []
+                     (let [{:keys [value at]} @cache]
+                       (if (and value (< (- (js/Date.now) at) (* 14 60 1000)))
+                         value
+                         (when-let [v (host/biscuit-from-service-account (assoc authn :sa-token sa))]
+                           (reset! cache {:value v :at (js/Date.now)})
+                           v))))]
+    (when (and (seq url) (or cmd biscuit? (seq static)))
       (cond-> {:base-url url}
         (seq prefix) (assoc :path-prefix prefix)
         cmd (assoc :authorization-fn #(host/auth-from-command cmd))
-        (and (not cmd) (seq static)) (assoc :authorization static)))))
+        (and (not cmd) biscuit?) (assoc :authorization-fn biscuit-fn)
+        (and (not cmd) (not biscuit?) (seq static)) (assoc :authorization static)))))
 
 (defn- pending-file [] (.join path (home) "pending-put.txt"))
 

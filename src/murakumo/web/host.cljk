@@ -269,6 +269,49 @@
       {:error :put/verify-redirected-off-domain}
       :else {:bytes (js/Uint8Array. (.readFileSync fs out-file))})))
 
+(def authn-hosts
+  "The only hosts a service-account secret may be sent to (kotobase.authn does the
+  same). Tests extend it explicitly through :authn-hosts."
+  #{"auth.kotoba.cloud"})
+
+(defn biscuit-from-service-account
+  "Exchange a tenant service-account secret (`kb_sa_...`, issued by a tenant admin)
+  for a short-lived Biscuit at Authn: POST <endpoint>/v1/biscuit/token with
+  `Authorization: Bearer <secret>` (kotobase.authn, superproject ADR-2609241800).
+  The secret goes on curl's stdin config, never in argv, and only to `authn-hosts`.
+  cfg: {:endpoint :tenant-id :storage :permissions :sa-token :authn-hosts :max-time-s}.
+  Returns the Authorization value (\"Biscuit ...\") or nil. Mints no credential of
+  its own: without a tenant admin's secret there is nothing to exchange."
+  [{:keys [endpoint tenant-id storage permissions sa-token max-time-s insecure-http-for-tests]
+    hosts :authn-hosts
+    :or {endpoint "https://auth.kotoba.cloud" max-time-s 30}}]
+  (let [host (host-of endpoint)
+        ;; plain http exists ONLY for the test fake; web_node never passes the flag
+        proto (if insecure-http-for-tests "=http,https" "=https")]
+    (when (and (re-find (if insecure-http-for-tests #"^https?://" #"^https://") (str endpoint)) host
+               (contains? (or hosts authn-hosts) host)
+               (re-matches #"kb_sa_[A-Za-z0-9._-]+" (str sa-token))
+               (re-matches #"t_[A-Za-z0-9_-]+" (str tenant-id)))
+      (let [body (js/JSON.stringify
+                  (clj->js (cond-> {:tenantId tenant-id}
+                             storage (assoc :storage storage)
+                             (seq permissions) (assoc :permissions permissions))))
+            cfg (str (curl-config-line "header" (str "Authorization: Bearer " sa-token))
+                     (curl-config-line "header" "Content-Type: application/json"))
+            r (run "curl" ["-sS" "-g" "--noproxy" "*" "--max-time" (str max-time-s) "--proto" proto
+                           "--max-redirs" "0" "-X" "POST" "--data" body "-w" "\n%{http_code}"
+                           "--config" "-" (str (.replace endpoint #"/+$" "") "/v1/biscuit/token")]
+                   {:input cfg})]
+        (when (zero? (:status r))
+          (let [out (.toString (:stdout r))
+                i (.lastIndexOf out "\n")]
+            (when (= 201 (js/parseInt (subs out (inc i)) 10))
+              (try
+                (let [j (js->clj (js/JSON.parse (subs out 0 i)) :keywordize-keys true)
+                      a (or (:authorization j) (when (:token j) (str "Biscuit " (:token j))))]
+                  (when (and (string? a) (not (re-find #"[\r\n]" a))) a))
+                (catch :default _ nil)))))))))
+
 (defn put-block!
   "PUT bytes at `<base-url><path-prefix><cid>` (default prefix /ipfs/) then GET them
   back and re-derive the CID. Authorization is `:authorization` (a string) or
