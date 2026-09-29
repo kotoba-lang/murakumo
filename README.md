@@ -1,5 +1,13 @@
 # murakumo 叢雲
 
+**An inference node platform.** murakumo turns ordinary machines — Mac minis, PCs,
+Linux boxes, GPU servers — into *inference nodes* and joins them into one network
+that serves models through an OpenAI-compatible `/v1` API. A node brings its own
+model server (Ollama, llama.cpp, vLLM, MLX, …); murakumo provides identity,
+enrollment, heartbeat, job placement, distributed (multi-node) inference and
+fleet operations. The runtime is **not tied to WebAssembly**: WASM components are
+one optional workload a node can host, alongside inference.
+
 ## Join the inference network (macOS / Linux)
 
 Install the node CLI with **Node.js 22+ and npm** already available:
@@ -60,7 +68,10 @@ Community job placement and a paid end-to-end request were not exercised.
 
 ## Fleet operator tooling
 
-**Control plane for the kotoba WASM lattice/mesh across the Mac-mini fleet.**
+**Control plane for the murakumo inference-node fleet (Mac-mini fleet today), including the optional kotoba mesh workload layer.**
+
+Inference is the primary workload; the kotoba mesh layer described below is an
+optional, additional workload runtime on the same nodes.
 
 kotoba ships a single-node mesh runtime (`kotoba-server` with the `p2p,realtime-wasm`
 features) and a single-node status command (`kotoba lattice ps`) — but **no
@@ -118,9 +129,10 @@ joseph).
 
 > Not to be confused with the *etzhayyim* murakumo (k3s-on-Lima + Ansible control
 > plane for the religious-corp **LangGraph/Pregel cells**). This repo is the
-> **kotoba WASM mesh** layer — libp2p lattice nodes hosting content-addressed WASM
-> components (`run` / `on-http` / `on-tick` / `on-kse`). Different substrate, on the
-> same hardware.
+> **inference node platform** — nodes serving models (single-node and pipeline-parallel
+> across nodes), with an optional kotoba mesh layer (libp2p lattice nodes hosting
+> content-addressed WASM components: `run` / `on-http` / `on-tick` / `on-kse`).
+> Different substrate, on the same hardware.
 
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
@@ -255,7 +267,7 @@ Each fleet node runs `kotoba-server` as a **macOS LaunchAgent** (`RunAtLoad` +
 
 - forms a libp2p **gossipsub lattice** and advertises a **Heartbeat** (roles, labels,
   free-gas, hosted components);
-- **hosts WASM components** placed by the lattice auction and fires their cron
+- **hosts workloads** — inference and, optionally, WASM components — placed by the lattice auction and fires their cron
   (`on-tick`), HTTP (`on-http`), and KSE (`on-kse`) triggers;
 - **persists** the components' `kqe-assert!` output to its kotoba Datom log — i.e. the
   node is a real PDS/graph writer, not a sandbox.
@@ -270,6 +282,7 @@ export MURAKUMO_KOTOBA_DIR=~/github/com-junkawasaki/orgs/com-junkawasaki/kotoba
 
 kbb --backend sci scripts/run-task.cljk identity      # print the operator DID (never the seed)
 kbb --backend sci scripts/run-task.cljk ops status    # fold /health + lattice ps across the fleet
+kbb --backend sci scripts/run-task.cljk health check --canary   # verdict + score for the fleet and gateway; see docs/FLEET-HEALTH.md
 kbb --backend sci scripts/run-task.cljk task run --n 22 --cmd 'hostname'   # fan a batch over the fleet
 kbb --backend sci scripts/run-task.cljk token issue --scope chat           # mint a gateway API key
 
@@ -804,7 +817,7 @@ declares a version but `./bin` is empty (clone murakumo → `pin` the declared s
 
 ## Distributed inference — `infer` (the fleet as one model host, exo-style)
 
-The same fleet that hosts WASM components can serve **one LLM too large for any
+The same fleet (which can also host optional WASM components) can serve **one LLM too large for any
 single node**, [exo](https://github.com/exo-explore/exo)-style: probe every node's
 live memory, cut a **memory-weighted contiguous layer partition** (each node's slice
 ∝ its usable RAM), and run a pipeline-parallel ring over it. Pipeline parallel is
