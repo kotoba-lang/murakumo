@@ -70,12 +70,13 @@
 (defn utc [ms] (.replace (.toISOString (js/Date. ms)) #"\.\d{3}Z$" "Z"))
 (defn mint!
   ([id base] (mint! id base []))
-  ([id base resources]
+  ([id base resources] (mint! id base resources 3600000))
+  ([id base resources ttl-ms]
    (mint/mint (.-did id)
               #(js/Promise.resolve (.sign crypto nil % (.-privateKey id)))
               {:domain (.-host (js/URL. base)) :aud base
                :nonce (.randomUUID crypto) :iat (utc (js/Date.now))
-               :exp (utc (+ (js/Date.now) 3600000))
+               :exp (utc (+ (js/Date.now) ttl-ms))
                :resources resources})))
 (defn fail! [message] (println message) (set! (.-exitCode js/process) 1))
 (defn options [args]
@@ -99,7 +100,7 @@
       (throw (js/Error. "The control plane base must contain only a scheme and host.")))
     base))
 (defn- fetch-node-grant! [id authn-base]
-  (-> (mint! id authn-base ["murakumo://node-token"])
+  (-> (mint! id authn-base ["murakumo://node-token"] 240000)
       (.then (fn [proof]
                (js/fetch (str authn-base "/v1/murakumo/node-token")
                          #js {:method "POST"

@@ -22,7 +22,7 @@ for file in node.mjs package.json package-lock.json; do
 done
 node - "$staging" <<'JS'
 const fs=require('fs'),path=require('path'),crypto=require('crypto');
-const hashes={"node.mjs":"a60e04e3657f7d49afd8bd3b0f7917c1ae6f21721e1bd6c8f13d228eccce76ad","package.json":"a786286a30b67227ef0e73381fddf4f35c51df4361c34ce68cc4a8c7947dcacc","package-lock.json":"22456888066745a55fae40e659fb7455b4afed3cf7eda5a39be97c7e85789c4a"};
+const hashes={"node.mjs":"a111c2d494fdf0f20a71b958247805e43d6ed0b88ec4fff2dc5c9e6e2df2f24e","package.json":"a786286a30b67227ef0e73381fddf4f35c51df4361c34ce68cc4a8c7947dcacc","package-lock.json":"22456888066745a55fae40e659fb7455b4afed3cf7eda5a39be97c7e85789c4a"};
 for(const [file,want] of Object.entries(hashes)){
  const got=crypto.createHash('sha256').update(fs.readFileSync(path.join(process.argv[2],file))).digest('hex');
  if(got!==want){console.error('Release checksum mismatch for '+file+'. Retry with the latest installer.');process.exit(1);}
@@ -41,7 +41,7 @@ exec node "$(cd "$(dirname "$self")" && pwd)/node.mjs" "$@"
 LAUNCHER
 chmod +x "$staging/murakumo"
 "$staging/murakumo" node --help >/dev/null
-release_dir="$install_dir/release-a60e04e3657f7d49"
+release_dir="$install_dir/release-a111c2d494fdf0f2"
 if [ ! -d "$release_dir" ]; then mv "$staging" "$release_dir"; fi
 # Update only the installer's own links; never replace an existing directory.
 [ ! -e "$install_dir/current" ] || [ -L "$install_dir/current" ] || { echo 'Refusing to replace current directory.' >&2; exit 1; }
