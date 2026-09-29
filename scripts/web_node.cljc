@@ -44,11 +44,14 @@
     {:seed seed :public-key-hex public-key-hex :node-did (host/did-key public-key-hex)}))
 
 (defn- remote-put-config
-  "Optional yataverse/kotobase put. URL from $MURAKUMO_KOTOBASE_URL; the
-  pre-minted Authorization value from $MURAKUMO_KOTOBASE_AUTH or the 0600 file
-  kotobase.auth. Absent either -> local store only."
+  "Optional yataverse/kotobase put. URL from the file kotobase.url (or
+  $MURAKUMO_KOTOBASE_URL); the pre-minted Authorization value from the 0600 file
+  kotobase.auth (or $MURAKUMO_KOTOBASE_AUTH). ssh runs a non-login shell, so the
+  files are the reliable path. Absent either -> local store only."
   []
-  (let [url (.. js/process -env -MURAKUMO_KOTOBASE_URL)
+  (let [url-file (.join path (home) "kotobase.url")
+        url (or (.. js/process -env -MURAKUMO_KOTOBASE_URL)
+                (when (.existsSync fs url-file) (.trim (.readFileSync fs url-file "utf8"))))
         auth-file (.join path (home) "kotobase.auth")
         auth (or (.. js/process -env -MURAKUMO_KOTOBASE_AUTH)
                  (when (.existsSync fs auth-file) (.trim (.readFileSync fs auth-file "utf8"))))]
