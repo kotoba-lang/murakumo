@@ -541,6 +541,9 @@
     (is (= before after))
     (is (nil? (get after "provider")))
     (is (= before (credits/balances [earned hold
+                                     {:run/funded-dispute
+                                      {:job-id "queue-1" :reason "wrong answer"}}])))
+    (is (= before (credits/balances [earned hold
                                      {:run/expired-job-id "queue-2"}])))))
 
 (deftest outstanding-hold-is-the-only-place-a-hold-is-consumed
