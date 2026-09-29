@@ -239,6 +239,7 @@ export MURAKUMO_KOTOBA_DIR=~/github/com-junkawasaki/orgs/com-junkawasaki/kotoba
 
 kbb --backend sci scripts/run-task.cljk identity      # print the operator DID (never the seed)
 kbb --backend sci scripts/run-task.cljk ops status    # fold /health + lattice ps across the fleet
+kbb --backend sci scripts/run-task.cljk health check --canary   # verdict + score for the fleet and gateway; see docs/FLEET-HEALTH.md
 kbb --backend sci scripts/run-task.cljk task run --n 22 --cmd 'hostname'   # fan a batch over the fleet
 kbb --backend sci scripts/run-task.cljk token issue --scope chat           # mint a gateway API key
 

@@ -1,0 +1,8 @@
+;; murakumo health — fleet health / SLO / guarded heal from a checkout.
+;;   kbb --backend sci --classpath src scripts/health.cljk check --canary
+;; Same implementation as `murakumo health` in the node CLI and the MCP tools.
+(require '[murakumo.health :as health])
+
+(let [args (vec *command-line-args*)
+      code (health/run-command (first args) (rest args))]
+  (when (number? code) (set! (.-exitCode js/process) code)))

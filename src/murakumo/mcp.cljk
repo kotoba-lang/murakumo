@@ -32,6 +32,7 @@
             [mcp.ports :as ports]
             [kotoba.lang.text :as str]
             [murakumo.bench :as bench]
+            [murakumo.health :as health]
             [murakumo.apikey :as apikey]))
 
 (defn- secret []
@@ -123,12 +124,63 @@
                                     :bench/model-sha8 :bench/metrics])
                    (take-last limit rows))}))
 
+;; ── fleet health ──────────────────────────────────────────────────────────────
+;; Same `murakumo.health` the `murakumo health` CLI calls, so an agent's verdict
+;; and an operator's are the same verdict, appended to the same ledger.
+
+(defn- check-args [args]
+  {:fleet (get args "fleet") :nodes (get args "nodes")
+   :canary (true? (get args "canary"))
+   :record (not (false? (get args "record")))
+   :model (get args "model")})
+
+(defn fleet-health-tool
+  "args: fleet, nodes, canary, record. Probes every node in parallel over ssh and
+  the public gateway, and returns the verdict, 0-100 score and per-node findings.
+  Records one ledger row unless `record: false`."
+  [args]
+  (try (dissoc (health/run-check! (check-args args)) :rows)
+       (catch :default e {:error (.-message e)})))
+
+(defn fleet-slo-tool
+  "args: window (checks, default 50). Availability per node, flapping nodes,
+  gateway availability and the canary baseline, all from the ledger."
+  [args]
+  (try
+    (let [snaps (health/snapshots (:rows (health/read-ledger (health/ledger-path))))]
+      (if (empty? snaps)
+        {:error "no health checks recorded yet — call murakumo.fleet_health first"}
+        (health/slo snaps (or (some-> (get args "window") js/parseInt) 50))))
+    (catch :default e {:error (.-message e)})))
+
+(defn fleet-heal-tool
+  "args: fleet, nodes, node, apply. Re-checks the fleet, then plans. With
+  `apply: true` it runs ONLY restart commands a node declares as
+  `:health/restart-cmd` in fleet.edn, and never inside a cooldown or a correlated
+  outage. Everything else comes back as advice."
+  [args]
+  (try
+    (let [a (health/run-check! (check-args args))
+          p (health/ledger-path)
+          now (js/Date.now)
+          plan (health/heal-plan a (health/heals (:rows (health/read-ledger p))) now)
+          apply? (true? (get args "apply"))
+          plan (if apply?
+                 (health/apply-heal! (health/load-fleet (get args "fleet")) plan
+                                     {:only (get args "node") :ledger p :now now})
+                 plan)]
+      {:verdict (:verdict a) :score (:score a) :applied apply? :plan plan})
+    (catch :default e {:error (.-message e)})))
+
 (def ^:private tool-fns
   {"murakumo.issue_api_key" issue-tool
    "murakumo.verify_api_key" verify-tool
    "murakumo.bench_nodes" bench-nodes-tool
    "murakumo.bench_run" bench-run-tool
-   "murakumo.bench_ledger" bench-ledger-tool})
+   "murakumo.bench_ledger" bench-ledger-tool
+   "murakumo.fleet_health" fleet-health-tool
+   "murakumo.fleet_slo" fleet-slo-tool
+   "murakumo.fleet_heal" fleet-heal-tool})
 
 (defrecord MurakumoTools []
   ports/ITool
@@ -209,4 +261,46 @@
                         "its length.")
                    :input-schema
                    {:type "object"
-                    :properties {"limit" {:type "integer" :description "rows to return (default 20)"}}}})))
+                    :properties {"limit" {:type "integer" :description "rows to return (default 20)"}}}})
+      (m/add-tool "murakumo.fleet_health"
+                  {:description
+                   (str "Check the whole murakumo fleet right now: ssh every node in fleet.edn in "
+                        "parallel (load per core, disk, ephemeral-port pressure, the mesh, and the "
+                        "resident mishima llama-server's own /health) plus the public gateway. "
+                        "Returns verdict healthy|degraded|critical, a 0-100 score, and findings per "
+                        "node. `canary: true` also sends one tiny completion through the gateway to "
+                        "measure tok/s against the ledger's median baseline; it spends real inference "
+                        "capacity, so it is opt-in. Appends one row to the append-only health ledger "
+                        "unless `record: false`. Read-only on the nodes.")
+                   :input-schema
+                   {:type "object"
+                    :properties
+                    {"nodes" {:type "string" :description "comma-separated node names, or \"all\" (default)"}
+                     "canary" {:type "boolean" :description "send one tiny completion through the gateway (default false)"}
+                     "record" {:type "boolean" :description "append to the health ledger (default true)"}
+                     "model" {:type "string" :description "canary model (default mishima)"}
+                     "fleet" {:type "string" :description "path to fleet.edn (default $MURAKUMO_FLEET, then ./fleet.edn)"}}}})
+      (m/add-tool "murakumo.fleet_slo"
+                  {:description
+                   (str "Stability over time, from the health ledger: per-node availability, nodes "
+                        "that FLAP (alternate ok/crit — a steady outage is not flapping), gateway "
+                        "availability, fleet score median/min and the canary tok/s baseline. Use it "
+                        "to judge whether the fleet is stable; one fleet_health call cannot.")
+                   :input-schema
+                   {:type "object"
+                    :properties {"window" {:type "integer" :description "most recent N checks (default 50)"}}}})
+      (m/add-tool "murakumo.fleet_heal"
+                  {:description
+                   (str "Re-check the fleet and plan self-healing. Default is plan only. With "
+                        "`apply: true` it runs ONLY a restart command that a node's own fleet.edn "
+                        "entry declares as :health/restart-cmd; it never guesses one, refuses inside "
+                        "a 30-minute per-node cooldown, and refuses when a third or more of the "
+                        "expected nodes are down together (a shared cause). Unreachable nodes, port "
+                        "exhaustion, load and disk come back as advice and are never acted on.")
+                   :input-schema
+                   {:type "object"
+                    :properties
+                    {"apply" {:type "boolean" :description "run the unblocked declared restarts (default false = plan only)"}
+                     "node" {:type "string" :description "with apply, restrict to this one node"}
+                     "nodes" {:type "string" :description "probe only these nodes"}
+                     "fleet" {:type "string" :description "path to fleet.edn"}}}})))
