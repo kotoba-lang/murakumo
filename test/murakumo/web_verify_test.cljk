@@ -89,3 +89,23 @@
 (deftest default-is-two-replicas
   (let [{:keys [env]} (coord [(node "did:a" "jp" same) (node "did:b" "us" same)])]
     (is (= :agree (get-in (verify/verify-fetch! env (dissoc job :verify-replicas)) [:ok :verdict :status])))))
+
+(deftest replicas-whose-receipts-do-not-verify-are-errors-not-evidence
+  (let [ok-node (node "did:a" "jp" same)
+        forged (assoc (node "did:b" "us" same) :receipt-valid? (fn [_ _] false))
+        honest (assoc ok-node :receipt-valid? (fn [_ sig] (= sig "sig-did:a")))
+        {:keys [env]} (coord [honest forged])
+        v (:verdict (:ok (verify/verify-fetch! env job)))]
+    (is (= :insufficient-replicas (:status v)))
+    (is (= [{:node-did "did:b" :zone "us" :error :receipt/bad-signature}] (:errors v)))))
+
+(deftest a-receipt-naming-a-different-node-does-not-count
+  (let [impostor (assoc (node "did:x" "us" same) :node-did "did:claimed" :receipt-valid? (fn [_ _] true))
+        {:keys [env]} (coord [(assoc (node "did:a" "jp" same) :receipt-valid? (fn [_ _] true)) impostor])
+        v (:verdict (:ok (verify/verify-fetch! env job)))]
+    (is (= :insufficient-replicas (:status v)))))
+
+(deftest nodes-without-a-verifier-are-marked-unauthenticated
+  (let [{:keys [env]} (coord [(node "did:a" "jp" same) (node "did:b" "us" same)])
+        ok (:ok (verify/verify-fetch! env job))]
+    (is (every? :unauthenticated (get-in ok [:record :replicas])))))

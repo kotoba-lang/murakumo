@@ -56,7 +56,7 @@
 
 (defn- pending-file [] (.join path (home) "pending-put.txt"))
 
-(defn- make-env [{:keys [seed node-did]}]
+(defn- make-env [{:keys [seed node-did public-key-hex]}]
   (let [zone (:zone (read-edn-file (.join path (home) "zone.edn")))
         backends (some->> (read-edn-file (.join path (home) "backends.edn"))
                           (mapv host/searxng))
@@ -64,7 +64,11 @@
         tee (host/tee-store (.join path (home) "store") (pending-file) (remote-put-config))]
     (-> base
         (merge tee)
-        (assoc :sleep! sleep! :backends backends :zone zone))))
+        (assoc :sleep! sleep! :backends backends :zone zone
+               ;; true only for receipts THIS node signed (index-crawl! trusts nothing else)
+               :receipt-valid? (fn [r sig]
+                                 (and (= (:node-did r) node-did)
+                                      (boolean (host/verify? public-key-hex (web/receipt-signing-string r) sig))))))))
 
 (defn- b64 [bs] (.toString (js/Buffer.from bs) "base64"))
 
@@ -94,6 +98,18 @@
       :whoami {:ok {:version version :node-did (:node-did ident)
                     :public-key-hex (:public-key-hex ident) :zone (:zone env)}}
       :health (health ident env)
+      ;; exercises host primitives that need no network; run under STOCK nbb by
+      ;; scripts/web-test-all.sh, because the kbb tests do not run on that engine
+      :selftest (let [{:keys [sign! public-key-hex]} (host/signer (:seed ident))
+                      sig (sign! "selftest")
+                      cid (w/raw-cid (w/utf8-bytes "selftest"))]
+                  {:ok {:resolve-localhost (host/resolve! "localhost")
+                        :resolve-dash (host/resolve! "--inspect=0.0.0.0")
+                        :sign-verify (boolean (host/verify? public-key-hex "selftest" sig))
+                        :cid cid
+                        :traversal-blocked (nil? ((:get-bytes! env) "../node.key"))
+                        :ipv6-private (web/private-address? "::ffff:7f00:1")
+                        :markdown (w/html->markdown "<h1>t</h1><p>a &amp;lt; b</p>")}})
       :fetch (w/fetch! env job)
       :extract (w/extract! env job)
       :crawl (crawl/crawl! env job)

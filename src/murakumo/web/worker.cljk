@@ -101,9 +101,13 @@
             (if (:error attempt) (refuse :fetch/transport (:error attempt)) attempt)))))))
 
 (defn fetch!
-  "job {:job-id :url [:max-bytes]} -> {:ok {:receipt :signature :output-cid}} | {:refused ..}"
+  "job {:job-id :url [:max-bytes] [:follow-redirects? true]} -> {:ok {:receipt :signature :output-cid}} | {:refused ..}
+  With :follow-redirects? false a 3xx is returned as an ordinary result whose
+  evidence carries the absolute :location, so a caller that owns policy (the crawl
+  coordinator: robots, scope, dedupe) decides whether to follow."
   [{:keys [put! sign! now-ms node-did] :as env} {:keys [job-id url max-bytes] :as job}]
-  (let [valid (web/validate-job (assoc job :kind :web/fetch))]
+  (let [valid (web/validate-job (assoc job :kind :web/fetch))
+        follow? (not (false? (:follow-redirects? job)))]
     (if (:refused valid)
       (refuse :job/invalid (:refused valid))
       (let [started (now-ms)
@@ -112,77 +116,174 @@
           (let [h (hop env current cap)]
             (if (:refused h)
               h
-              (let [{:keys [status headers body]} (:response h)]
+              (let [{:keys [status headers body]} (:response h)
+                    location (when (redirect? status) (resolve-location current (get headers "location" "")))]
                 (cond
-                  (redirect? status)
-                  (let [next-url (resolve-location current (get headers "location" ""))]
-                    (cond
-                      (nil? next-url) (refuse :fetch/bad-redirect (get headers "location"))
-                      (>= n max-redirects) (refuse :fetch/too-many-redirects current)
-                      :else (recur next-url (conj chain current) (inc n))))
+                  (and (redirect? status) follow?)
+                  (cond
+                    (nil? location) (refuse :fetch/bad-redirect (get headers "location"))
+                    (>= n max-redirects) (refuse :fetch/too-many-redirects current)
+                    :else (recur location (conj chain current) (inc n)))
 
-                  (nil? body) (refuse :fetch/no-body status)
-                  (> (byte-count body) cap) (refuse :fetch/too-large (byte-count body))
+                  (and (nil? body) (not (redirect? status))) (refuse :fetch/no-body status)
+                  (> (byte-count (or body (utf8-bytes ""))) cap) (refuse :fetch/too-large (byte-count body))
 
                   :else
-                  (let [cid (raw-cid body)]
+                  (let [body (or body (utf8-bytes ""))
+                        cid (raw-cid body)]
                     (if-not (put! cid body)
                       (refuse :store/put-failed cid)
                       (let [r (web/receipt
                                {:job-id job-id :kind :web/fetch :input-cids []
                                 :output-cid cid :node-did node-did
                                 :started-at started :finished-at (max started (now-ms))
-                                :evidence {:status status :final-url current
-                                           :redirects chain
-                                           :content-type (get headers "content-type")
-                                           :bytes (byte-count body)
-                                           :content-hash (content-hash body)}})]
+                                :evidence (cond-> {:status status :final-url current
+                                                   :redirects chain
+                                                   :content-type (get headers "content-type")
+                                                   :bytes (byte-count body)
+                                                   :content-hash (content-hash body)}
+                                            (and (redirect? status) location) (assoc :location location))})]
                         {:ok {:receipt r
                               :signature (sign! (web/receipt-signing-string r))
                               :output-cid cid}}))))))))))))
 
 ;; --- extract ------------------------------------------------------------------
+;;
+;; A single forward scan, no lazy-regex-with-backreference over the whole page:
+;; the earlier regexes went quadratic on unclosed tags (a 5 MB page of "<h1>"
+;; hung extract for minutes). Every search below moves forward only.
+
+(def max-extract-chars
+  "Pages longer than this are cut before scanning (bounded work)."
+  (* 3 1024 1024))
+(def max-tag-chars 4096)
 
 (defn- js-int [s] #?(:clj (Long/parseLong s) :cljs (js/parseInt s 10)))
 
-(def ^:private entities
-  {"&amp;" "&" "&lt;" "<" "&gt;" ">" "&quot;" "\"" "&#39;" "'" "&nbsp;" " "})
+(defn- ascii-lower
+  "ASCII-only lower-casing: same length as the input (String.toLowerCase is not,
+  e.g. for U+0130), so indexes found in the copy are valid in the original."
+  [s]
+  (text/replace s #"[A-Z]" (fn [m] (text/lower m))))
 
-(defn- decode-entities [s]
-  (reduce (fn [acc [k v]] (text/replace acc k v)) s entities))
+(def ^:private named-entities
+  {"amp" "&" "lt" "<" "gt" ">" "quot" "\"" "apos" "'" "nbsp" " "})
 
-(defn- strip-blocks [html]
-  (-> html
-      (text/replace #"<!--[\s\S]*?-->" "")
-      (text/replace #"(?i)<(script|style|noscript|template|head)[\s\S]*?</\1>" "")))
+(defn- code-point->str [n]
+  (if (and (pos? n) (<= n 0x10FFFF) (not (<= 0xD800 n 0xDFFF)))
+    #?(:clj (String. (Character/toChars n)) :cljs (js/String.fromCodePoint n))
+    "�"))
 
-(def ^:private href-re
-  ;; quoted (" or ') or unquoted attribute values
-  "(?i)<a\\s[^>]*?href=(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+(defn decode-entities
+  "One pass: `&amp;lt;` becomes `&lt;` (text), never `<`."
+  [s]
+  (text/replace s #"&(#[xX][0-9a-fA-F]{1,6}|#[0-9]{1,7}|[a-zA-Z]{2,6});"
+                (fn [[whole body]]
+                  (cond
+                    (re-find #"^#[xX]" body) (code-point->str #?(:clj (Long/parseLong (subs body 2) 16)
+                                                                :cljs (js/parseInt (subs body 2) 16)))
+                    (= \# (first body)) (code-point->str (js-int (subs body 1)))
+                    :else (get named-entities body whole)))))
+
+(def ^:private skip-elements #{"script" "style" "noscript" "template" "head"})
+
+(defn- tag-at
+  "At index i (a '<'), parse the tag. Returns {:name :close? :end :raw} or nil when
+  it is not a tag or is not closed within max-tag-chars (then it is plain text)."
+  [s i n]
+  (let [close-at (.indexOf s ">" i)]
+    (when (and (pos? (inc close-at)) (<= (- close-at i) max-tag-chars) (< (inc i) n))
+      (let [raw (subs s (inc i) close-at)
+            closing? (text/starts-with? raw "/")
+            body (if closing? (subs raw 1) raw)
+            [_ tname] (re-find #"^([a-zA-Z][a-zA-Z0-9]*)" body)]
+        (when tname
+          {:name (text/lower tname) :close? closing? :end (inc close-at) :raw body})))))
+
+(defn- href-of [raw]
+  (when-let [[_ q1 q2 bare] (re-find #"(?i)\shref\s*=\s*(?:\"([^\"]*)\"|'([^']*)'|([^\s>]+))" (str " " raw))]
+    (decode-entities (or q1 q2 bare))))
+
+(defn scan
+  "Walk the page once. Calls (emit-text s), (emit-open tag) and (emit-close tag).
+  Skips comments and script/style/noscript/template/head bodies."
+  [html emit-text emit-open emit-close]
+  (let [html (if (> (count html) max-extract-chars) (subs html 0 max-extract-chars) html)
+        lc (ascii-lower html)
+        n (count html)]
+    (loop [i 0]
+      (when (< i n)
+        (let [lt (.indexOf html "<" i)]
+          (if (neg? lt)
+            (emit-text (subs html i))
+            (do
+              (when (> lt i) (emit-text (subs html i lt)))
+              (cond
+                (text/starts-with? (subs lc lt (min n (+ lt 4))) "<!--")
+                (let [e (.indexOf html "-->" (+ lt 4))]
+                  (recur (if (neg? e) n (+ e 3))))
+
+                ;; <!doctype ...>, <![CDATA[...]]>, <?xml ...?> declarations: drop to the next '>'
+                (and (< (inc lt) n) (contains? #{"!" "?"} (subs html (inc lt) (+ lt 2))))
+                (let [e (.indexOf html ">" lt)]
+                  (recur (if (neg? e) n (inc e))))
+
+                :else
+                (if-let [{:keys [name close? end raw] :as tag} (tag-at html lt n)]
+                  (if (and (not close?) (skip-elements name))
+                    (let [e (.indexOf lc (str "</" name) end)
+                          gt (when-not (neg? e) (.indexOf html ">" e))]
+                      (recur (if (or (neg? e) (neg? gt)) n (inc gt))))
+                    (do (if close? (emit-close tag) (emit-open tag))
+                        (recur end)))
+                  (do (emit-text "<") (recur (inc lt))))))))))))
 
 (defn title-of [html]
-  (some-> (re-find #"(?i)<title[^>]*>([\s\S]*?)</title>" html) second text/trim decode-entities))
+  (let [lc (ascii-lower html)
+        i (.indexOf lc "<title")]
+    (when-not (neg? i)
+      (let [gt (.indexOf html ">" i)
+            e (when-not (neg? gt) (.indexOf lc "</title" gt))]
+        (when (and e (not (neg? e)))
+          (text/trim (decode-entities (subs html (inc gt) e))))))))
 
 (defn html->markdown
-  "Best-effort, dependency-free. Headings, paragraphs, list items, links."
+  "Best-effort, dependency-free, linear. Headings, paragraphs, list items, links."
   [html]
-  (-> (strip-blocks html)
-      (text/replace #"(?i)<h([1-6])[^>]*>([\s\S]*?)</h\1>"
-                    (fn [[_ n body]] (str "\n\n" (apply str (repeat (js-int n) "#")) " " body "\n\n")))
-      (text/replace (re-pattern (str href-re "[^>]*>([\\s\\S]*?)</a>"))
-                    (fn [[_ q1 q2 bare body]] (str "[" body "](" (or q1 q2 bare) ")")))
-      (text/replace #"(?i)<li(\s[^>]*)?>" "\n- ")
-      (text/replace #"(?i)<(br|/p|/div|/tr)[^>]*>" "\n\n")
-      (text/replace #"<[^>]+>" "")
-      decode-entities
-      (text/replace #"[ \t]+" " ")
-      (text/replace #"\n[ \t]+" "\n")
-      (text/replace #"\n{3,}" "\n\n")
-      text/trim))
+  (let [out (atom []) hrefs (atom [])
+        put (fn [x] (swap! out conj x))]
+    (scan html
+          (fn [t] (put (decode-entities t)))
+          (fn [{:keys [name raw]}]
+            (case name
+              ("h1" "h2" "h3" "h4" "h5" "h6")
+              (put (str "\n\n" (apply str (repeat (js-int (subs name 1)) "#")) " "))
+              "a" (do (swap! hrefs conj (href-of raw)) (put (if (peek @hrefs) "[" "")))
+              "li" (put "\n- ")
+              "br" (put "\n\n")
+              nil))
+          (fn [{:keys [name]}]
+            (case name
+              ("h1" "h2" "h3" "h4" "h5" "h6") (put "\n\n")
+              "a" (let [h (peek @hrefs)]
+                    (swap! hrefs #(if (seq %) (pop %) %))
+                    (when h (put (str "](" h ")"))))
+              ("p" "div" "tr") (put "\n\n")
+              nil)))
+    (-> (apply str @out)
+        (text/replace #"[ \t]+" " ")
+        (text/replace #"\n[ \t]+" "\n")
+        (text/replace #"\n{3,}" "\n\n")
+        text/trim)))
 
-(defn links-of [html]
-  (vec (distinct (map (fn [[_ q1 q2 bare]] (or q1 q2 bare))
-                      (re-seq (re-pattern href-re) (strip-blocks html))))))
+(defn links-of
+  "Distinct raw href values of <a> tags, in document order, entities decoded."
+  [html]
+  (let [acc (atom [])]
+    (scan html (fn [_] nil)
+          (fn [{:keys [name raw]}] (when (= name "a") (when-let [h (href-of raw)] (swap! acc conj h))))
+          (fn [_] nil))
+    (vec (distinct @acc))))
 
 (defn extract!
   "job {:job-id :fetch-cid :format} -> {:ok {:receipt :signature :output-cid}} | {:refused ..}

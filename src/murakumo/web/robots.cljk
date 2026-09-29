@@ -25,7 +25,8 @@
   "text -> [{:agents #{lower-token} :rules [{:allow? b :pattern s}] :delay-s n-or-nil}]
   A run of consecutive user-agent lines opens one group."
   [body]
-  (let [lines (keep parse-line (text/split-lines (str body)))]
+  (let [body (text/replace (str body) #"^\uFEFF" "")
+        lines (keep parse-line (text/split-lines body))]
     (loop [ls lines groups [] cur nil last-was-agent? false]
       (if-let [[field value] (first ls)]
         (cond
@@ -43,7 +44,9 @@
           (recur (rest ls) groups
                  (assoc cur :delay-s (let [n (js-num value)] (when (and n (>= n 0)) n))) false)
 
-          :else (recur (rest ls) groups cur false))
+          ;; Sitemap:, Host:, unknown fields: RFC 9309 ignores them; they neither
+          ;; end a run of user-agent lines nor start a group
+          :else (recur (rest ls) groups cur last-was-agent?))
         (cond-> groups cur (conj cur))))))
 
 (def ^:private regex-specials (set (map str ".\\+?^${}()|[]/-")))
@@ -65,7 +68,9 @@
   "Merge the rules of every group naming our token; else those of `*`."
   [groups token]
   (let [token (text/lower token)
-        named (filter #(some (fn [a] (and (not= a "*") (text/includes? token a))) (:agents %)) groups)
+        ;; RFC 9309: the product token matches its group case-insensitively and
+        ;; exactly. An empty or partial value ("", "web", "m") is not us.
+        named (filter #(contains? (:agents %) token) groups)
         chosen (if (seq named) named (filter #(contains? (:agents %) "*") groups))]
     {:rules (vec (mapcat :rules chosen))
      :delay-s (some :delay-s chosen)}))

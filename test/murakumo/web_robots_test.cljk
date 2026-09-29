@@ -44,3 +44,21 @@
   (is (true? (robots/allowed? (:groups (robots/for-status 403 "")) "/a")))
   (is (false? (robots/allowed? (:groups (robots/for-status 503 "")) "/a")))
   (is (false? (robots/allowed? (:groups (robots/for-status nil "")) "/a"))))
+
+(deftest unknown-lines-do-not-end-a-user-agent-run
+  ;; previously a Sitemap line emptied our group and everything became allowed
+  (let [g (robots/parse "User-agent: murakumo-web\nSitemap: https://x/s.xml\nUser-agent: other\nDisallow: /\n")]
+    (is (false? (robots/allowed? g "/a")))))
+
+(deftest only-the-exact-product-token-names-our-group
+  (let [g (robots/parse "User-agent: web\nDisallow: /partial\n\nUser-agent:\nDisallow: /empty\n\nUser-agent: *\nDisallow: /star\n")]
+    (is (true? (robots/allowed? g "/partial")))
+    (is (true? (robots/allowed? g "/empty")))
+    (is (false? (robots/allowed? g "/star"))))
+  (let [g (robots/parse "USER-AGENT: Murakumo-Web\nDisallow: /me\n\nUser-agent: *\nDisallow: /star\n")]
+    (is (false? (robots/allowed? g "/me")))
+    (is (true? (robots/allowed? g "/star")))))       ; our named group replaces *
+
+(deftest a-leading-bom-does-not_drop_the_first_group
+  (let [g (robots/parse "﻿User-agent: *\nDisallow: /x\n")]
+    (is (false? (robots/allowed? g "/x")))))

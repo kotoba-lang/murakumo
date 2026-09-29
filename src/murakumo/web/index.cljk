@@ -111,9 +111,28 @@
 
 ;; --- query -----------------------------------------------------------------------
 
+(def ^:private ln2 0.6931471805599453)
+
+(defn ln
+  "Natural log from + - * / only. IEEE-754 basic operations are exactly rounded on
+  every host, so this returns bit-identical doubles everywhere, unlike Math.log /
+  Math/log whose last bit may differ between V8 and the JVM (and that would let a
+  score or a tie flip, changing shard-independent result order and CIDs)."
+  [x]
+  (loop [x (double x) e 0]
+    (cond
+      (>= x 1.5) (recur (/ x 2.0) (inc e))
+      (< x 0.75) (recur (* x 2.0) (dec e))
+      :else
+      (let [t (/ (- x 1.0) (+ x 1.0)) t2 (* t t)]
+        (+ (* e ln2)
+           (* 2.0 (loop [k 0 term t acc 0.0]
+                    (if (= k 40) acc
+                        (recur (inc k) (* term t2) (+ acc (/ term (+ (* 2.0 k) 1.0))))))))))))
+
 (defn- idf [n-docs df]
-  ;; BM25+ style non-negative idf, scaled: ln(1 + (N - df + 0.5)/(df + 0.5))
-  (Math/log (+ 1.0 (/ (+ (- n-docs df) 0.5) (+ df 0.5)))))
+  ;; BM25+ style non-negative idf: ln(1 + (N - df + 0.5)/(df + 0.5))
+  (ln (+ 1.0 (/ (+ (- n-docs df) 0.5) (+ df 0.5)))))
 
 (defn- bm25 [n-docs avg-len len df tf]
   (let [avg (/ avg-len (double score-scale))
@@ -166,41 +185,65 @@
 
 (defn- html-content? [ct] (boolean (and ct (re-find #"(?i)html" ct))))
 
+(defn- page-authentic?
+  "A page enters the index only with a signed :web/fetch receipt from THIS node
+  that names exactly this page. A manifest handed in from elsewhere (for example
+  a fetched web page that happens to be EDN) carries no such receipts."
+  [receipt-valid? {:keys [url cid status receipt signature]}]
+  (let [ev (:evidence receipt)]
+    (boolean
+     (and (= :web/fetch (:kind receipt))
+          (= cid (:output-cid receipt))
+          (integer? status) (<= 200 status 299) (= status (:status ev))
+          (= url (:final-url ev))
+          (html-content? (:content-type ev))
+          (string? signature)
+          (receipt-valid? receipt signature)))))
+
 (defn index-crawl!
   "job {:job-id :manifest-cid [:shards]} -> {:ok {:root-cid :docs n :receipt :signature}} | {:refused ..}
-  Reads a crawl manifest and its HTML pages from this node's store; pages the
-  store no longer holds are counted in :skipped-pages, not silently dropped."
-  [{:keys [get-bytes! put! sign! now-ms node-did]} {:keys [job-id manifest-cid shards] :as job}]
+  env needs :receipt-valid? (fn [receipt signature] -> bool), true only for receipts
+  this node signed. Reads a crawl manifest and its HTML pages from this node's
+  store. Pages that are missing, unauthentic or non-2xx are counted, and a build
+  that indexes nothing is a refusal, not an empty success."
+  [{:keys [get-bytes! put! sign! now-ms node-did receipt-valid?]} {:keys [job-id manifest-cid shards] :as job}]
   (let [valid (web/validate-job (assoc job :kind :web/index))]
     (if (:refused valid)
       {:refused :job/invalid :detail (:refused valid)}
       (let [started (now-ms)
             mbs (get-bytes! manifest-cid)]
         (cond
+          (nil? receipt-valid?) {:refused :index/no-receipt-verifier}
           (nil? mbs) {:refused :index/manifest-missing :detail manifest-cid}
           (not= manifest-cid (w/raw-cid mbs)) {:refused :index/manifest-cid-mismatch}
           :else
-          (let [manifest (read-edn mbs)
-                pages (filter #(html-content? (get-in % [:receipt :evidence :content-type])) (:pages manifest))
-                loaded (keep (fn [{:keys [cid url]}]
-                               (when-let [bs (get-bytes! cid)]
-                                 (when (= cid (w/raw-cid bs))
-                                   (let [html (w/utf8-string bs)]
-                                     {:cid cid :url url :title (or (w/title-of html) "")
-                                      :text (w/html->markdown html)}))))
-                             pages)
-                root-cid (store! put! (build loaded (or shards default-shards)))]
-            (if-not root-cid
-              {:refused :store/put-failed}
-              (let [r (web/receipt {:job-id job-id :kind :web/index
-                                    :input-cids (into [manifest-cid] (map :cid loaded))
-                                    :output-cid root-cid :node-did node-did
-                                    :started-at started :finished-at (max started (now-ms))
-                                    :evidence {:docs (count loaded)
-                                               :skipped-pages (- (count pages) (count loaded))
-                                               :shards (or shards default-shards)}})]
-                {:ok {:root-cid root-cid :docs (count loaded) :receipt r
-                      :signature (sign! (web/receipt-signing-string r))}}))))))))
+          (let [manifest (try (read-edn mbs) (catch #?(:clj Throwable :cljs :default) _ nil))]
+            (if-not (and (map? manifest) (string? (:crawl-id manifest)) (vector? (:pages manifest)))
+              {:refused :index/not-a-crawl-manifest}
+              (let [pages (:pages manifest)
+                    authentic (filterv #(page-authentic? receipt-valid? %) pages)
+                    loaded (into [] (keep (fn [{:keys [cid url]}]
+                                            (when-let [bs (get-bytes! cid)]
+                                              (when (= cid (w/raw-cid bs))
+                                                (let [html (w/utf8-string bs)]
+                                                  {:cid cid :url url :title (or (w/title-of html) "")
+                                                   :text (w/html->markdown html)})))))
+                                 authentic)
+                    counts {:pages (count pages) :rejected (- (count pages) (count authentic))
+                            :missing (- (count authentic) (count loaded))}]
+                (if (empty? loaded)
+                  {:refused :index/no-documents :detail counts}
+                  (let [root-cid (store! put! (build loaded (or shards default-shards)))]
+                    (if-not root-cid
+                      {:refused :store/put-failed}
+                      (let [r (web/receipt {:job-id job-id :kind :web/index
+                                            :input-cids (into [manifest-cid] (map :cid loaded))
+                                            :output-cid root-cid :node-did node-did
+                                            :started-at started :finished-at (max started (now-ms))
+                                            :evidence (assoc counts :docs (count loaded)
+                                                             :shards (or shards default-shards))})]
+                        {:ok {:root-cid root-cid :docs (count loaded) :counts counts :receipt r
+                              :signature (sign! (web/receipt-signing-string r))}}))))))))))))
 
 (defn search-index!
   "job {:job-id :root-cid :query :k} against shards in this node's store."
@@ -210,6 +253,7 @@
         rbs (when (string? root-cid) (get-bytes! root-cid))]
     (cond
       (:refused valid) {:refused :job/invalid :detail (:refused valid)}
+      (empty? (tokenize (str query-string))) {:refused :job/invalid :detail [:job/query-no-tokens]}
       (nil? rbs) {:refused :index/root-missing :detail root-cid}
       (not= root-cid (w/raw-cid rbs)) {:refused :index/root-cid-mismatch}
       :else

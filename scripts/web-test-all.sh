@@ -9,4 +9,14 @@ for ns in web web-worker web-robots web-crawl web-search web-verify web-index we
   echo "$ns: ${line:-NO RESULT}"
   case "$line" in *" 0 fail, 0 error"*) ;; *) fail=1; printf '%s\n' "$out" | tail -25 ;; esac
 done
+# The nodes run STOCK nbb, which the kbb tests above do not exercise. Build the
+# bundle and run the selftest op on it (no network needed).
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+scripts/web-bundle.sh "$tmp/bundle" >/dev/null
+out=$(cd "$tmp/bundle" && MURAKUMO_WEB_HOME="$tmp/home" sh -c 'echo "{:op :selftest}" | nbb -cp . web_node.cljs' 2>&1 | tail -1)
+case "$out" in
+  *":resolve-localhost [\""*":resolve-dash []"*":sign-verify true"*":traversal-blocked true"*":ipv6-private true"*)
+    echo "stock-nbb selftest: ok" ;;
+  *) echo "stock-nbb selftest: FAILED: $out"; fail=1 ;;
+esac
 exit $fail

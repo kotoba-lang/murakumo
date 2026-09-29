@@ -16,8 +16,12 @@
   same-zone replicas (which would prove nothing about origin honesty).
 
   A node is {:node-did s :zone s :fetch! (fn [job] -> worker result)
-             :extract! (fn [job] -> worker result)}; dispatching to a remote node
-  is the caller's transport. The output receipt attests the COMPARISON; the
+             :extract! (fn [job] -> worker result)
+             :receipt-valid? (fn [receipt signature] -> bool)}; dispatching to a
+  remote node is the caller's transport. When :receipt-valid? is present, a
+  replica whose receipt does not verify against that node's key, or whose
+  receipt names a different node-did, is an ERROR (:receipt/bad-signature), not
+  evidence; a node without it is marked :unauthenticated in the record. The output receipt attests the COMPARISON; the
   per-node receipts inside the record are the evidence and stay independently
   signed."
   (:require [murakumo.canonical :as canonical]
@@ -76,16 +80,24 @@
       :else
       (if-let [chosen (select-nodes nodes n)]
         (let [started (now-ms)
-              runs (mapv (fn [{:keys [node-did zone fetch! extract!]}]
-                           (let [r (fetch! {:job-id (str job-id "/" zone) :url url})]
+              runs (mapv (fn [{:keys [node-did zone fetch! extract! receipt-valid?]}]
+                           (let [r (fetch! {:job-id (str job-id "/" zone) :url url})
+                                 authentic? (if receipt-valid?
+                                              (boolean (and (:ok r)
+                                                            (= node-did (get-in r [:ok :receipt :node-did]))
+                                                            (receipt-valid? (get-in r [:ok :receipt]) (get-in r [:ok :signature]))))
+                                              true)]
+                             (if (and (:ok r) (not authentic?))
+                               {:node-did node-did :zone zone :error :receipt/bad-signature}
                              (if-let [ok (:ok r)]
                                (let [ex (when extract!
                                           (extract! {:job-id (str job-id "/" zone "/x")
                                                      :fetch-cid (:output-cid ok) :format :markdown}))]
-                                 {:node-did node-did :zone zone :fetch-cid (:output-cid ok)
-                                  :receipt (:receipt ok) :signature (:signature ok)
-                                  :extract (:ok ex)})
-                               {:node-did node-did :zone zone :error (:refused r) :detail (:detail r)})))
+                                 (cond-> {:node-did node-did :zone zone :fetch-cid (:output-cid ok)
+                                          :receipt (:receipt ok) :signature (:signature ok)
+                                          :extract (:ok ex)}
+                                   (not receipt-valid?) (assoc :unauthenticated true)))
+                               {:node-did node-did :zone zone :error (:refused r) :detail (:detail r)}))))
                          chosen)
               good (filterv :receipt runs)
               verdict (if (= n (count good))

@@ -94,14 +94,37 @@
 
 (deftest gc-removes-oldest-first-and-usage-counts
   (let [dir (tmp "-gc")
-        {:keys [put!]} (host/dir-store dir)]
-    (put! "a" (w/utf8-bytes "1234567890"))
+        {:keys [put!]} (host/dir-store dir)
+        a (w/utf8-bytes "1234567890") b (w/utf8-bytes "abcdefghij")
+        ca (w/raw-cid a) cb (w/raw-cid b)]
+    (put! ca a)
     (.wait js/Atomics (js/Int32Array. (js/SharedArrayBuffer. 4)) 0 0 50)
-    (put! "b" (w/utf8-bytes "1234567890"))
+    (put! cb b)
     (is (= {:files 2 :bytes 20} (host/store-usage dir)))
     (is (= {:removed 1 :bytes-after 10} (host/store-gc! dir 10)))
-    (is (nil? ((:get-bytes! (host/dir-store dir)) "a")))
-    (is (some? ((:get-bytes! (host/dir-store dir)) "b")))))
+    (is (nil? ((:get-bytes! (host/dir-store dir)) ca)))
+    (is (some? ((:get-bytes! (host/dir-store dir)) cb)))))
+
+(deftest store-keys-must-be-cids-so-nothing_outside_the_store_is_reachable
+  (let [root (tmp "-root") dir (str root "/store")
+        {:keys [put! get-bytes!]} (host/dir-store dir)]
+    (.writeFileSync fs (str root "/node.key") "SECRETSEED")
+    (doseq [k ["../node.key" "/etc/passwd" "..%2fnode.key" "a/../../node.key" "" nil "bAAAA"
+               (str "b" (apply str (repeat 200 "a")))]]
+      (is (nil? (get-bytes! k)) (str "read of " (pr-str k) " must be refused")))
+    (is (thrown? js/Error (put! "../evil" (w/utf8-bytes "x"))))
+    (is (not (.existsSync fs (str root "/evil"))))
+    (is (false? (host/valid-cid? "../node.key")))
+    (is (true? (host/valid-cid? (w/raw-cid (w/utf8-bytes "x")))))))
+
+(deftest a-hostname-starting-with-a-dash-is-never-resolved
+  (is (= [] (host/resolve! "--inspect=0.0.0.0")))
+  (is (= [] (host/resolve! "-x.example")))
+  (is (= [] (host/resolve! ""))))
+
+(deftest put-block-refuses-bad-cids-without-touching-the-network
+  (is (= {:error :put/bad-cid}
+         (host/put-block! {:base-url "http://127.0.0.1:1" :authorization "x"} "../x" (w/utf8-bytes "x")))))
 
 (deftest did-key-is-the-standard-ed25519-form
   (let [seed (.toString (.randomBytes crypto 32) "hex")

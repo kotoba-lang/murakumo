@@ -150,3 +150,34 @@
         env (assoc env :resolve! (fn [_] ["93.184.216.34" "93.184.216.35"])
                    :http-get! (fn [_] {:error :curl/exit-7}))]
     (is (= :fetch/transport (:refused (w/fetch! env {:job-id "j" :url "https://example.com/"}))))))
+
+(defn- millis [thunk] (let [t (.now js/Date)] (thunk) (- (.now js/Date) t)))
+
+(deftest extraction-is-linear-on-hostile-markup
+  ;; each of these hung the earlier regex version (quadratic); 1 MB must be quick
+  (doseq [unit ["<h1>x" "<script>" "<a href=\"x\">" "<title>" "<!--" "<li>" "<" "&amp;"]]
+    (let [html (apply str (repeat 150000 unit))
+          ms (millis #(do (w/html->markdown html) (w/links-of html) (w/title-of html)))]
+      (is (< ms 6000) (str "too slow for " unit ": " ms "ms")))))
+
+(deftest entities-are-decoded-once-and-numerically
+  (is (= "&lt;script&gt;" (w/decode-entities "&amp;lt;script&amp;gt;")))
+  (is (= "A B<" (w/decode-entities "&#65;&#x20;B&lt;")))
+  (is (= "&unknown;" (w/decode-entities "&unknown;")))
+  (is (= "�" (w/decode-entities "&#0;")))
+  (is (= "�" (w/decode-entities "&#xD800;")))
+  (is (= ["https://x.example/?a=1&b=2"] (w/links-of "<a href=\"https://x.example/?a=1&amp;b=2\">x</a>"))))
+
+(deftest header-and-script-lookalikes-are-not-skipped
+  (is (= "kept" (w/html->markdown "<header>kept</header>")))
+  (is (= "kept" (w/html->markdown "<scripting>kept</scripting>")))
+  (is (= "kept" (w/html->markdown "<script>gone()</script>kept")))
+  (is (= "" (w/html->markdown "<head>gone"))))
+
+(deftest no-follow-returns-the-redirect-with-its-absolute-location
+  (let [{:keys [env]} (make-env {"https://example.com/a"
+                                 {:status 302 :headers {"location" "/b"} :body (w/utf8-bytes "")}}
+                                {"example.com" ["93.184.216.34"]})
+        ok (:ok (w/fetch! env {:job-id "j" :url "https://example.com/a" :follow-redirects? false}))]
+    (is (= 302 (get-in ok [:receipt :evidence :status])))
+    (is (= "https://example.com/b" (get-in ok [:receipt :evidence :location])))))

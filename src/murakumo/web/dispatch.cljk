@@ -9,7 +9,9 @@
 
   A node map returned by `remote-node` plugs straight into
   `murakumo.web.verify/verify-fetch!`."
-  (:require [cljs.reader :as reader]))
+  (:require [cljs.reader :as reader]
+            [murakumo.web :as web]
+            [murakumo.web.host :as host]))
 
 (def ^:private cp (js/require "child_process"))
 
@@ -17,14 +19,18 @@
 (def default-timeout-ms 120000)
 (def crawl-timeout-ms 900000)
 
-(defn- safe-token? [s] (boolean (and (string? s) (re-matches #"[A-Za-z0-9._@:/~-]+" s))))
+(defn- safe-token?
+  "Operator-config host/path: a strict character set, and never a leading '-'
+  (that would read as an ssh option)."
+  [s]
+  (boolean (and (string? s) (re-matches #"[A-Za-z0-9._@:/~-]+" s) (not (= \- (first s))))))
 
 (defn- remote-command [home]
   (str "MURAKUMO_WEB_HOME=\"$HOME/" home "\" nbb -cp \"$HOME/" home "/bundle\" \"$HOME/" home "/bundle/web_node.cljs\""))
 
 (defn- call-once [{:keys [host home timeout-ms]} op job]
   (let [r (.spawnSync cp "ssh"
-                      #js ["-o" "BatchMode=yes" "-o" "ConnectTimeout=8" host (remote-command home)]
+                      #js ["-o" "BatchMode=yes" "-o" "ConnectTimeout=8" "--" host (remote-command home)]
                       #js {:input (pr-str {:op op :job job}) :timeout timeout-ms
                            :maxBuffer (* 64 1024 1024) :encoding "utf8"})]
     (cond
@@ -67,6 +73,10 @@
     (when-let [ok (:ok who)]
       {:host host :zone zone :node-did (:node-did ok) :public-key-hex (:public-key-hex ok)
        :cfg cfg
+       ;; only receipts signed by THIS node's key, naming this node's did, count
+       :receipt-valid? (fn [receipt signature]
+                         (boolean (and (string? signature)
+                                       (host/verify? (:public-key-hex ok) (web/receipt-signing-string receipt) signature))))
        :fetch! #(call! cfg :fetch %)
        :extract! #(call! cfg :extract %)
        :crawl! #(call! (assoc cfg :timeout-ms crawl-timeout-ms) :crawl %)

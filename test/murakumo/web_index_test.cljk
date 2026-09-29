@@ -87,36 +87,80 @@
 (def ^:private page-html
   (fn [title body] (str "<html><head><title>" title "</title></head><body><p>" body "</p></body></html>")))
 
+(defn- signed-page [put! [url title body]]
+  (let [bs (w/utf8-bytes (page-html title body)) cid (w/raw-cid bs)]
+    (put! cid bs)
+    {:url url :cid cid :status 200 :signature "sig-ok"
+     :receipt {:kind :web/fetch :output-cid cid :node-did "did:key:znode"
+               :evidence {:status 200 :final-url url :content-type "text/html"}}}))
+
+(defn- node-env [put! store]
+  {:get-bytes! (fn [cid] (get @store cid)) :put! put! :sign! (fn [_] "sig")
+   :now-ms (let [t (atom 0)] (fn [] (swap! t inc))) :node-did "did:key:znode"
+   :receipt-valid? (fn [r sig] (and (= sig "sig-ok") (= (:node-did r) "did:key:znode")))})
+
+(defn- put-manifest! [put! m]
+  (let [bs (w/utf8-bytes (pr-str m)) cid (w/raw-cid bs)] (put! cid bs) cid))
+
+(def ^:private crawl-pages
+  [["https://a.example/1" "Kotoba" "kotoba is a lisp"]
+   ["https://a.example/2" "Murakumo" "murakumo serves inference nodes"]])
+
 (deftest index-a-crawl-then-search-it-end-to-end
   (let [{:keys [put! store]} (store-and-fetcher)
-        get-bytes! (fn [cid] (get @store cid))
-        env {:get-bytes! get-bytes! :put! put! :sign! (fn [_] "sig")
-             :now-ms (let [t (atom 0)] (fn [] (swap! t inc))) :node-did "did:key:znode"}
-        pages (mapv (fn [[url title body]]
-                      (let [bs (w/utf8-bytes (page-html title body)) cid (w/raw-cid bs)]
-                        (put! cid bs)
-                        {:url url :cid cid :status 200
-                         :receipt {:evidence {:content-type "text/html"}}}))
-                    [["https://a.example/1" "Kotoba" "kotoba is a lisp"]
-                     ["https://a.example/2" "Murakumo" "murakumo serves inference nodes"]])
-        manifest (w/utf8-bytes (pr-str {:pages (conj pages {:url "https://a.example/img" :cid "x"
-                                                            :receipt {:evidence {:content-type "image/png"}}})}))
-        mcid (w/raw-cid manifest)
-        _ (put! mcid manifest)
+        env (node-env put! store)
+        pages (mapv #(signed-page put! %) crawl-pages)
+        img {:url "https://a.example/img" :cid "x" :status 200 :signature "sig-ok"
+             :receipt {:kind :web/fetch :output-cid "x" :evidence {:status 200 :final-url "https://a.example/img" :content-type "image/png"}}}
+        mcid (put-manifest! put! {:crawl-id "c" :plan {} :pages (conj pages img)})
         built (:ok (index/index-crawl! env {:job-id "i1" :manifest-cid mcid :shards 4}))
         found (:ok (index/search-index! env {:job-id "q1" :root-cid (:root-cid built) :query "inference" :k 5}))]
     (is (= 2 (:docs built)))                                   ; the image page is not indexed
+    (is (= 1 (get-in built [:counts :rejected])))
     (is (= :web/index (get-in built [:receipt :kind])))
     (is (:ok (web/validate-receipt (:receipt built))))
     (is (= ["https://a.example/2"] (mapv :url (get-in found [:results :results]))))
     (is (:ok (web/validate-receipt (:receipt found))))
     (is (= :index (get-in found [:receipt :evidence :source])))))
 
-(deftest index-jobs-refuse-missing-or-tampered-inputs
+(deftest a-manifest-without-this-nodes-signed-receipts-indexes-nothing
+  ;; index poisoning: an attacker page that is itself a plausible manifest
   (let [{:keys [put! store]} (store-and-fetcher)
-        env {:get-bytes! (fn [cid] (get @store cid)) :put! put! :sign! (fn [_] "s")
-             :now-ms (fn [] 1) :node-did "d"}]
+        env (node-env put! store)
+        good (signed-page put! (first crawl-pages))
+        forged (fn [f] (put-manifest! put! {:crawl-id "c" :pages [(f good)]}))]
+    (doseq [[label f] [["bad signature" #(assoc % :signature "forged")]
+                       ["other node" #(assoc-in % [:receipt :node-did] "did:key:zother")]
+                       ["url not the receipt's" #(assoc % :url "http://bank.example/")]
+                       ["cid not the receipt's" #(assoc % :cid "bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+                       ["non-2xx" #(-> % (assoc :status 404) (assoc-in [:receipt :evidence :status] 404))]]]
+      (is (= :index/no-documents (:refused (index/index-crawl! env {:job-id "i" :manifest-cid (forged f)})))
+          label))))
+
+(deftest index-jobs-refuse-missing-tampered-or-foreign-inputs
+  (let [{:keys [put! store]} (store-and-fetcher)
+        env (node-env put! store)]
     (is (= :index/manifest-missing (:refused (index/index-crawl! env {:job-id "i" :manifest-cid "nope"}))))
     (swap! store assoc "bad" (w/utf8-bytes "{:pages []}"))
     (is (= :index/manifest-cid-mismatch (:refused (index/index-crawl! env {:job-id "i" :manifest-cid "bad"}))))
+    (is (= :index/not-a-crawl-manifest
+           (:refused (index/index-crawl! env {:job-id "i" :manifest-cid (put-manifest! put! {:hello "world"})}))))
+    (is (= :index/not-a-crawl-manifest
+           (:refused (index/index-crawl! env {:job-id "i" :manifest-cid (put-manifest! put! [1 2 3])}))))
+    (is (= :index/no-receipt-verifier
+           (:refused (index/index-crawl! (dissoc env :receipt-valid?) {:job-id "i" :manifest-cid "x"}))))
     (is (= :index/root-missing (:refused (index/search-index! env {:job-id "q" :root-cid "nope" :query "x" :k 3}))))))
+
+(deftest a-query-with-no-tokens-is-refused
+  (let [{:keys [put! store]} (store-and-fetcher)
+        env (node-env put! store)
+        mcid (put-manifest! put! {:crawl-id "c" :pages [(signed-page put! (first crawl-pages))]})
+        root (:root-cid (:ok (index/index-crawl! env {:job-id "i" :manifest-cid mcid})))]
+    (is (= [:job/query-no-tokens]
+           (:detail (index/search-index! env {:job-id "q" :root-cid root :query " ,.; " :k 3}))))))
+
+(deftest ln-matches-math-log-and-is-monotone
+  (doseq [x [0.1 0.5 0.75 1.0 1.49 1.5 2.0 2.718281828 10.0 137.5 1e6]]
+    (is (< (Math/abs (- (index/ln x) (Math/log x))) 1e-12) (str "ln " x)))
+  (is (= 0.0 (index/ln 1.0)))
+  (is (< (index/ln 2.0) (index/ln 3.0))))

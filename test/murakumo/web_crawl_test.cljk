@@ -140,3 +140,70 @@
     (is (< (count (:pages m)) 6))
     (is (pos? (count (:pages m))))
     (is (contains? @store (get-in r [:ok :manifest-cid])))))
+
+(defn- redirect [loc] {:status 302 :headers {"location" loc} :body (w/utf8-bytes "")})
+
+(deftest redirects-go-back-through-robots-scope-and-dedupe
+  (let [{:keys [env fetched]} (site {"https://a.example/robots.txt" (text-page 404 "")
+                                     "https://a.example/" (html-page "/go" "/off" "/priv")
+                                     "https://a.example/go" (redirect "/landed")
+                                     "https://a.example/landed" (html-page)
+                                     "https://a.example/off" (redirect "https://evil.example/x")
+                                     "https://a.example/priv" (redirect "/secret/y")
+                                     "https://a.example/secret/y" (html-page)})
+        _ (swap! (:store (site {})) identity)
+        pages (assoc {} :x 1)
+        plan* (assoc plan :seeds ["https://a.example/"])
+        r (crawl/crawl! (assoc env :http-get!
+                               (let [orig (:http-get! env)]
+                                 (fn [req]
+                                   (if (= "https://a.example/robots.txt" (:url req))
+                                     (text-page 200 "User-agent: *\nDisallow: /secret\n")
+                                     (orig req)))))
+                        {:job-id "c" :plan plan*})
+        m (:manifest (:ok r))
+        fetched-urls (map first @fetched)]
+    (is (= ["https://a.example/" "https://a.example/landed"] (urls m)))
+    (is (not-any? #{"https://evil.example/x" "https://evil.example/robots.txt"} fetched-urls)) ; off-scope target never fetched
+    (is (not-any? #{"https://a.example/secret/y"} fetched-urls))       ; robots-disallowed target never fetched
+    (is (= 1 (get-in m [:stats :out-of-scope])))
+    (is (some #(= :http/redirect (:reason %)) (:skipped m)))))
+
+(deftest non-2xx-pages-are-skipped-not-indexed-and-do-not-follow-links
+  (let [{:keys [env]} (site {"https://a.example/robots.txt" (text-page 404 "")
+                             "https://a.example/" (html-page "/gone" "/ok")
+                             "https://a.example/gone" {:status 404 :headers {"content-type" "text/html"}
+                                                       :body (w/utf8-bytes "<a href=\"/from-404\">x</a>")}
+                             "https://a.example/ok" (html-page)
+                             "https://a.example/from-404" (html-page)})
+        m (:manifest (:ok (crawl/crawl! env {:job-id "c" :plan plan})))]
+    (is (= ["https://a.example/" "https://a.example/ok"] (urls m)))
+    (is (some #(= :http/status-404 (:reason %)) (:skipped m)))
+    (is (= 3 (get-in m [:stats :attempts])))
+    (is (= 2 (get-in m [:stats :fetched])))))
+
+(deftest attempts-not-successes-consume-the-budget
+  (let [pages (into {"https://a.example/robots.txt" (text-page 404 "")
+                     "https://a.example/" (html-page "/1" "/2" "/3" "/4")}
+                    (map (fn [i] [(str "https://a.example/" i) {:status 500 :headers {} :body (w/utf8-bytes "")}]) (range 1 5)))
+        {:keys [env]} (site pages)
+        m (:manifest (:ok (crawl/crawl! env {:job-id "c" :plan (assoc plan :max-pages 3)})))]
+    (is (= 3 (get-in m [:stats :attempts])))
+    (is (true? (get-in m [:stats :budget-exhausted?])))))
+
+(deftest duplicate-seeds-are-fetched-once-and-the-first-hit-waits-after-robots
+  (let [{:keys [env fetched]} (site {"https://a.example/robots.txt" (text-page 404 "")
+                                     "https://a.example/" (html-page)})
+        _ (crawl/crawl! env {:job-id "c" :plan (assoc plan :seeds ["https://a.example/" "https://A.example:443/" "https://a.example/#f"])})
+        page-hits (filter #(= "https://a.example/" (first %)) @fetched)
+        robots-hit (first (filter #(= "https://a.example/robots.txt" (first %)) @fetched))]
+    (is (= 1 (count page-hits)))
+    (is (>= (- (second (first page-hits)) (second robots-hit)) 1000))))
+
+(deftest budget-exhausted-is-only-reported-when-work-remained
+  (let [{:keys [env]} (site {"https://a.example/robots.txt" (text-page 404 "")
+                             "https://a.example/" (html-page "/1")
+                             "https://a.example/1" (html-page)})
+        m (:manifest (:ok (crawl/crawl! env {:job-id "c" :plan (assoc plan :max-pages 2)})))]
+    (is (= 2 (count (:pages m))))
+    (is (nil? (get-in m [:stats :budget-exhausted?])))))
