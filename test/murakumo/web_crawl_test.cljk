@@ -1,0 +1,129 @@
+(ns murakumo.web-crawl-test
+  (:require [kotoba.test :refer [deftest is]]
+            [murakumo.web :as web]
+            [murakumo.web.crawl :as crawl]
+            [murakumo.web.worker :as w]))
+
+(defn- html-page [& hrefs]
+  {:status 200 :headers {"content-type" "text/html"}
+   :body (w/utf8-bytes (str "<html><body>" (apply str (map #(str "<a href=\"" % "\">x</a>") hrefs)) "</body></html>"))})
+
+(defn- text-page [status s]
+  {:status status :headers {"content-type" "text/plain"} :body (w/utf8-bytes s)})
+
+(defn- site
+  "Fake fleet node over `pages` (url -> response). Records fetch times."
+  [pages]
+  (let [store (atom {}) clock (atom 0) fetched (atom [])]
+    {:store store :clock clock :fetched fetched
+     :env {:resolve! (fn [_] ["93.184.216.34"])
+           :http-get! (fn [{:keys [url]}]
+                        (swap! fetched conj [url @clock])
+                        (get pages url (text-page 404 "")))
+           :put! (fn [cid bs] (swap! store assoc cid bs) true)
+           :get-bytes! (fn [cid] (get @store cid))
+           :sign! (fn [s] "sig")
+           :now-ms (fn [] @clock)
+           :sleep! (fn [ms] (swap! clock + ms))
+           :node-did "did:key:znode"}}))
+
+(def plan {:seeds ["https://a.example/"] :max-pages 50 :max-depth 3 :delay-ms 1000 :scope :same-host})
+
+(defn- urls [manifest] (mapv :url (:pages manifest)))
+
+(deftest resolves-and-normalises-links
+  (is (= "https://a.example/x/y" (crawl/resolve-url "https://a.example/x/z" "y")))
+  (is (= "https://a.example/y" (crawl/resolve-url "https://a.example/x/z" "../y")))
+  (is (= "https://a.example/y?q=1" (crawl/resolve-url "https://a.example/x/z" "/y?q=1#f")))
+  (is (= "https://a.example/x/z?q=2" (crawl/resolve-url "https://a.example/x/z?q=1" "?q=2")))
+  (is (= "https://b.example/" (crawl/resolve-url "https://a.example/" "//B.example")))
+  (is (= "https://a.example/" (crawl/normalize-url "HTTPS://A.example:443")))
+  (is (nil? (crawl/resolve-url "https://a.example/" "mailto:x@y.z")))
+  (is (nil? (crawl/resolve-url "https://a.example/" "JavaScript:void(0)")))
+  (is (nil? (crawl/resolve-url "https://a.example/" "#top"))))
+
+(deftest crawls-in-scope-pages-breadth-first-and-signs-a-manifest
+  (let [{:keys [env store]} (site {"https://a.example/robots.txt" (text-page 404 "")
+                                   "https://a.example/" (html-page "/p1" "/p2" "https://other.example/x" "/p1#dup")
+                                   "https://a.example/p1" (html-page "/p3")
+                                   "https://a.example/p2" (html-page)
+                                   "https://a.example/p3" (html-page)})
+        r (crawl/crawl! env {:job-id "c1" :plan plan})
+        ok (:ok r)]
+    (is ok)
+    (is (= ["https://a.example/" "https://a.example/p1" "https://a.example/p2" "https://a.example/p3"]
+           (urls (:manifest ok))))
+    (is (= 1 (get-in ok [:manifest :stats :out-of-scope])))
+    (is (contains? @store (:manifest-cid ok)))
+    (is (= :web/crawl (get-in ok [:receipt :kind])))
+    (is (= (sort (map :cid (:pages (:manifest ok)))) (get-in ok [:receipt :input-cids])))
+    (is (:ok (web/validate-receipt (:receipt ok))))))
+
+(deftest robots-disallow-is-honoured-and-recorded
+  (let [{:keys [env fetched]} (site {"https://a.example/robots.txt" (text-page 200 "User-agent: *\nDisallow: /secret\n")
+                                     "https://a.example/" (html-page "/secret/x" "/ok")
+                                     "https://a.example/ok" (html-page)})
+        m (:manifest (:ok (crawl/crawl! env {:job-id "c" :plan plan})))]
+    (is (= ["https://a.example/" "https://a.example/ok"] (urls m)))
+    (is (not-any? #(= "https://a.example/secret/x" (first %)) @fetched))
+    (is (= :parsed (get-in m [:robots "https://a.example" :basis])))))
+
+(deftest robots-5xx-disallows-the-whole-host
+  (let [{:keys [env fetched]} (site {"https://a.example/robots.txt" (text-page 503 "")
+                                     "https://a.example/" (html-page "/ok")})
+        m (:manifest (:ok (crawl/crawl! env {:job-id "c" :plan plan})))]
+    (is (empty? (:pages m)))
+    (is (= [{:url "https://a.example/" :reason :robots/unreachable}] (:skipped m)))
+    (is (= ["https://a.example/robots.txt"] (map first @fetched)))))
+
+(deftest per-host-delay-uses-the-larger-of-plan-and-crawl-delay
+  (let [{:keys [env fetched]} (site {"https://a.example/robots.txt" (text-page 200 "User-agent: *\nCrawl-delay: 5\n")
+                                     "https://a.example/" (html-page "/p1")
+                                     "https://a.example/p1" (html-page)})
+        _ (crawl/crawl! env {:job-id "c" :plan plan})
+        times (mapv second (filter #(not= "https://a.example/robots.txt" (first %)) @fetched))]
+    (is (>= (- (second times) (first times)) 5000))))
+
+(deftest excessive-crawl-delay-skips-the-host
+  (let [{:keys [env]} (site {"https://a.example/robots.txt" (text-page 200 "User-agent: *\nCrawl-delay: 3600\n")
+                             "https://a.example/" (html-page)})
+        m (:manifest (:ok (crawl/crawl! env {:job-id "c" :plan plan})))]
+    (is (= :robots/crawl-delay-too-long (:reason (first (:skipped m)))))))
+
+(deftest budget-and-depth-are-enforced
+  (let [pages {"https://a.example/robots.txt" (text-page 404 "")
+               "https://a.example/" (html-page "/1" "/2" "/3")
+               "https://a.example/1" (html-page "/deep") "https://a.example/2" (html-page)
+               "https://a.example/3" (html-page) "https://a.example/deep" (html-page)}
+        {:keys [env]} (site pages)
+        capped (:manifest (:ok (crawl/crawl! env {:job-id "c" :plan (assoc plan :max-pages 2)})))
+        {env2 :env} (site pages)
+        shallow (:manifest (:ok (crawl/crawl! env2 {:job-id "c" :plan (assoc plan :max-depth 1)})))]
+    (is (= 2 (count (:pages capped))))
+    (is (true? (get-in capped [:stats :budget-exhausted?])))
+    (is (not-any? #(= "https://a.example/deep" %) (urls shallow)))))
+
+(deftest same-domain-includes-subdomains-but-not-siblings
+  (let [{:keys [env]} (site {"https://a.example/robots.txt" (text-page 404 "")
+                             "https://www.a.example/robots.txt" (text-page 404 "")
+                             "https://a.example/" (html-page "https://www.a.example/x" "https://b.example/y" "https://nota.example/z")
+                             "https://www.a.example/x" (html-page)})
+        m (:manifest (:ok (crawl/crawl! env {:job-id "c" :plan (assoc plan :scope :same-domain)})))]
+    (is (= ["https://a.example/" "https://www.a.example/x"] (urls m)))
+    (is (= 2 (get-in m [:stats :out-of-scope])))))
+
+(deftest private-links-and-invalid-plans-are-refused
+  (let [{:keys [env fetched]} (site {"https://a.example/robots.txt" (text-page 404 "")
+                                     "https://a.example/" (html-page "http://127.0.0.1/admin")})]
+    (is (= ["https://a.example/"] (urls (:manifest (:ok (crawl/crawl! env {:job-id "c" :plan plan}))))))
+    (is (not-any? #(re-find #"127.0.0.1" (first %)) @fetched))
+    (is (= :job/invalid (:refused (crawl/crawl! env {:job-id "c" :plan (assoc plan :delay-ms 1)}))))
+    (is (= :job/invalid (:refused (crawl/crawl! env {:job-id "c" :plan (assoc plan :seeds ["http://localhost/"])}))))))
+
+(deftest only-the-operator-can-raise-plan-limits
+  (let [{:keys [env]} (site {"https://a.example/robots.txt" (text-page 404 "")
+                             "https://a.example/" (html-page)})
+        big (assoc plan :max-pages 20000)]
+    (is (= :job/invalid (:refused (crawl/crawl! env {:job-id "c" :plan big}))))
+    (is (:ok (crawl/crawl! env {:job-id "c" :plan big}
+                           {:limits (assoc web/plan-limits :max-pages 50000)})))))

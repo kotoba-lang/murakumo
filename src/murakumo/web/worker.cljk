@@ -174,7 +174,7 @@
       (text/replace #"\n{3,}" "\n\n")
       text/trim))
 
-(defn- links-of [html]
+(defn links-of [html]
   (vec (distinct (map (fn [[_ q1 q2 bare]] (or q1 q2 bare))
                       (re-seq (re-pattern href-re) (strip-blocks html))))))
 

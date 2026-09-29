@@ -163,7 +163,7 @@ existing bots.
 |---|---|---|
 | M0 | pure spec: job schemas + receipt shape (`src/murakumo/web.cljk`), refusal cases | `test/murakumo/web_test.cljk` (9 tests / 53 assertions, kbb) — **done 2026-09-29** |
 | M1 | `:web/fetch` + `:web/extract` on 2 nodes, CID out, receipt signed | **partial 2026-09-29**: worker (`src/murakumo/web/worker.cljk`, 12 tests / 33 assertions) + nbb host (`web/host.cljk`, curl pinned to the vetted IP, redirects re-validated per hop, local CID store, ed25519 receipt signature verified) run live against a public URL on the operator machine. **Not done**: run on two fleet nodes; yataverse/IPFS put (local dir store only); `:json-schema` extract (typed refusal); JVM host. |
-| M2 | `:web/crawl` coordinator with robots/rate limits, budget | crawl of an owned test site |
+| M2 | `:web/crawl` coordinator with robots/rate limits, budget | **done 2026-09-29** (`web/crawl.cljk`, `web/robots.cljk`; 10 + 6 tests, 35 + 19 assertions): RFC 9309 robots (longest match, allow wins ties, `*`/`$`, crawl-delay; 4xx = allow, 5xx/unreachable = disallow all), per-host delay = max(plan, crawl-delay), page/depth budget, scope filter, manifest CID + signed crawl receipt. Live run on `example.com` from the operator machine only; **not** run against an owned multi-page site or on a fleet node. Sequential per crawl; `:same-domain` = seed host and its subdomains (no public-suffix list). |
 | M3 | `:web/search` Phase 1 federated, replaces the SearXNG single host | comparison vs SearXNG |
 | M4 | dual-zone fetch verification | forced-disagreement test |
 | M5 | Phase 2 sharded index | recall vs Phase 1 on a fixed query set |

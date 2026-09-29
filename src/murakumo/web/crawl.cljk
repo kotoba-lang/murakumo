@@ -1,0 +1,204 @@
+(ns murakumo.web.crawl
+  "M2 of ADR-260929: the `:web/crawl` coordinator. It owns only the frontier,
+  the budget and the politeness rules; every byte still goes through
+  `murakumo.web.worker/fetch!`, so URL policy, redirect checks and receipts are
+  the ones M1 already enforces.
+
+  Sequential by design (one page at a time per crawl): per-host delay is then a
+  plain wait, not a scheduler. Parallelism belongs to running many crawls.
+
+  env = the worker env plus  :sleep! (fn [ms] -> nil)."
+  (:require [kotoba.lang.text :as text]
+            [murakumo.canonical :as canonical]
+            [murakumo.web :as web]
+            [murakumo.web.robots :as robots]
+            [murakumo.web.worker :as w]))
+
+(def max-robots-delay-ms 60000)
+(def max-skipped-recorded 1000)
+
+;; --- URL normalisation / resolution ------------------------------------------
+
+(def ^:private url-parts-re
+  #"(?i)^(https?)://([^/?#:]+)(?::(\d+))?([^?#]*)(\?[^#]*)?(?:#.*)?$")
+
+(defn parse-url [url]
+  (when-let [[_ scheme host port path query] (re-matches url-parts-re (str url))]
+    {:scheme (text/lower scheme) :host (text/lower host) :port port
+     :path (if (empty? path) "/" path) :query (or query "")}))
+
+(defn- render [{:keys [scheme host port path query]}]
+  (let [default? (or (nil? port) (empty? port)
+                     (and (= scheme "http") (= port "80"))
+                     (and (= scheme "https") (= port "443")))]
+    (str scheme "://" host (when-not default? (str ":" port)) path query)))
+
+(defn normalize-url
+  "Lowercase scheme/host, drop fragment and default port, default path to /."
+  [url]
+  (some-> (parse-url url) render))
+
+(defn- dot-segments [path]
+  (let [segs (text/split path #"/" -1)
+        out (reduce (fn [acc s]
+                      (cond (= s ".") acc
+                            (= s "..") (if (> (count acc) 1) (pop acc) acc)
+                            :else (conj acc s)))
+                    [] segs)
+        out (if (contains? #{"." ".."} (last segs)) (conj out "") out)]
+    (text/join "/" out)))
+
+(def ^:private skipped-schemes #"(?i)^(mailto|javascript|tel|data|ftp|file|sms):")
+
+(defn resolve-url
+  "Resolve `href` against the absolute `base`. nil for fragments-only, non-web
+  schemes, or anything that does not end up an http(s) URL."
+  [base href]
+  (let [href (text/trim (str href))
+        b (parse-url base)]
+    (cond
+      (or (nil? b) (empty? href) (text/starts-with? href "#")
+          (re-find skipped-schemes href)) nil
+      (re-find #"(?i)^https?://" href) (normalize-url href)
+      (text/starts-with? href "//") (normalize-url (str (:scheme b) ":" href))
+      :else
+      (let [origin (render (assoc b :path "" :query ""))
+            [_ href-path rest-part] (re-matches #"^([^?#]*)([?#].*)?$" href)
+            rest-part (or rest-part "")]
+        (normalize-url
+         (cond
+           (text/starts-with? href "/") (str origin (dot-segments href-path) rest-part)
+           (empty? href-path) (str origin (:path b) (if (text/starts-with? rest-part "?") rest-part (:query b)))
+           :else (let [dir (subs (:path b) 0 (inc (.lastIndexOf (:path b) "/")))]
+                   (str origin (dot-segments (str dir href-path)) rest-part))))))))
+
+(defn in-scope?
+  "`root-host` is the host of the seed a URL was discovered from. :same-domain
+  means that host and its subdomains — not sibling domains (no public-suffix list)."
+  [scope root-host host]
+  (case scope
+    :same-host (= host root-host)
+    :same-domain (or (= host root-host) (text/ends-with? host (str "." root-host)))
+    false))
+
+;; --- politeness ---------------------------------------------------------------
+
+(defn- html? [content-type]
+  (boolean (and content-type (re-find #"(?i)html" content-type))))
+
+(defn- origin [url] (let [p (parse-url url)] (render (assoc p :path "" :query ""))))
+
+(defn- robots-policy!
+  "Fetch (once per origin) and cache robots.txt. Returns {:groups :basis :cid :status}."
+  [env cache crawl-id url]
+  (let [o (origin url)]
+    (or (get @cache o)
+        (let [r (w/fetch! env {:job-id (str crawl-id "/robots") :url (str o "/robots.txt")})
+              status (get-in r [:ok :receipt :evidence :status])
+              cid (get-in r [:ok :output-cid])
+              body (when (and cid status (<= 200 status 299))
+                     (some-> ((:get-bytes! env) cid) w/utf8-string))
+              policy (assoc (robots/for-status status body) :cid cid :status status)]
+          (swap! cache assoc o policy)
+          policy))))
+
+(defn- wait! [{:keys [sleep! now-ms]} last-fetch host delay-ms]
+  (let [wait (- (+ (get @last-fetch host 0) delay-ms) (now-ms))]
+    (when (pos? wait) (sleep! wait))))
+
+;; --- crawl ----------------------------------------------------------------------
+
+(defn- link-urls [env page-cid final-url]
+  (some->> ((:get-bytes! env) page-cid)
+           w/utf8-string
+           w/links-of
+           (keep #(resolve-url final-url %))
+           distinct))
+
+(declare finish)
+
+(defn crawl!
+  "job {:job-id :plan} -> {:ok {:manifest-cid :manifest :receipt :signature}} | {:refused ..}
+  opts {:limits ...} lets the OPERATOR raise plan ceilings; a bot's plan cannot."
+  ([env job] (crawl! env job nil))
+  ([{:keys [put! sign! now-ms node-did] :as env} {:keys [job-id plan]} {:keys [limits]}]
+   (let [valid (if limits (web/validate-plan plan limits) (web/validate-plan plan))]
+     (if (:refused valid)
+       {:refused :job/invalid :detail (:refused valid)}
+       (let [{:keys [seeds max-pages max-depth delay-ms scope]} plan
+             started (now-ms)
+             cache (atom {}) last-fetch (atom {})
+             roots (into {} (map (fn [u] [(normalize-url u) (:host (parse-url u))]) seeds))
+             init (mapv (fn [u] {:url (normalize-url u) :depth 0 :root (get roots (normalize-url u))}) seeds)]
+         (loop [queue init i 0 seen (set (map :url init))
+                pages [] skipped [] stats {:fetched 0 :out-of-scope 0 :skipped 0}]
+           (let [skip (fn [entry reason]
+                        [(if (< (count skipped) max-skipped-recorded)
+                           (conj skipped {:url (:url entry) :reason reason}) skipped)
+                         (update stats :skipped inc)])]
+             (cond
+               (>= (:fetched stats) max-pages)
+               (finish env job-id plan started pages skipped (assoc stats :budget-exhausted? true) cache)
+
+               (>= i (count queue))
+               (finish env job-id plan started pages skipped stats cache)
+
+               :else
+               (let [{:keys [url depth root] :as entry} (nth queue i)
+                     p (parse-url url)
+                     policy (robots-policy! env cache job-id url)
+                     rd (robots/crawl-delay-ms (:groups policy))]
+                 (cond
+                   (not (robots/allowed? (:groups policy) (str (:path p) (:query p))))
+                   (let [[sk st] (skip entry (if (= :unreachable-disallow-all (:basis policy))
+                                               :robots/unreachable :robots/disallowed))]
+                     (recur queue (inc i) seen pages sk st))
+
+                   (and rd (> rd max-robots-delay-ms))
+                   (let [[sk st] (skip entry :robots/crawl-delay-too-long)]
+                     (recur queue (inc i) seen pages sk st))
+
+                   :else
+                   (do
+                     (wait! env last-fetch (:host p) (max delay-ms (or rd 0)))
+                     (let [r (w/fetch! env {:job-id (str job-id "/" i) :url url})]
+                       (swap! last-fetch assoc (:host p) (now-ms))
+                       (if (:refused r)
+                         (let [[sk st] (skip entry (:refused r))]
+                           (recur queue (inc i) seen pages sk st))
+                         (let [{:keys [receipt signature output-cid]} (:ok r)
+                               ev (:evidence receipt)
+                               page {:url url :depth depth :cid output-cid :status (:status ev)
+                                     :final-url (:final-url ev) :receipt receipt :signature signature}
+                               found (when (and (< depth max-depth) (html? (:content-type ev)))
+                                       (link-urls env output-cid (:final-url ev)))
+                               [fresh out-n]
+                               (reduce (fn [[acc out] u]
+                                         (let [h (:host (parse-url u))]
+                                           (cond
+                                             (contains? seen u) [acc out]
+                                             (not (in-scope? scope root h)) [acc (inc out)]
+                                             (:refused (web/check-url u)) [acc out]
+                                             :else [(conj acc {:url u :depth (inc depth) :root root}) out])))
+                                       [[] 0] found)]
+                           (recur (into queue fresh) (inc i)
+                                  (into seen (map :url fresh))
+                                  (conj pages page) skipped
+                                  (-> stats (update :fetched inc)
+                                      (update :out-of-scope + out-n)))))))))))))))))
+
+(defn- finish [{:keys [put! sign! now-ms node-did]} job-id plan started pages skipped stats cache]
+  (let [manifest {:crawl-id job-id :plan plan :pages pages :skipped skipped :stats stats
+                  :robots (into (sorted-map)
+                                (map (fn [[o p]] [o (select-keys p [:basis :cid :status])]))
+                                @cache)}
+        bs (w/utf8-bytes (canonical/string manifest))
+        cid (w/raw-cid bs)]
+    (if-not (put! cid bs)
+      {:refused :store/put-failed :detail cid}
+      (let [r (web/receipt {:job-id job-id :kind :web/crawl
+                            :input-cids (mapv :cid pages) :output-cid cid :node-did node-did
+                            :started-at started :finished-at (max started (now-ms))
+                            :evidence (assoc stats :pages (count pages))})]
+        {:ok {:manifest-cid cid :manifest manifest :receipt r
+              :signature (sign! (web/receipt-signing-string r))}}))))
