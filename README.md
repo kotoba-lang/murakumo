@@ -61,14 +61,19 @@ separately from network authentication.
 
 After the node has served an accepted paid job, `murakumo node earnings` reads
 its earned and payable credit totals by device DID. To request withdrawal of
-earned credits, run `murakumo node payout --credits 5000 --to 0x...` with your
-full 20-byte Base-compatible wallet address. The CLI signs the request with the
-same private device key. The server enforces the current minimum and available
-earned balance. A successful request **debits the credits and awaits operator
-approval**; it does not transfer USDC. Check the address carefully before
-submitting. Factory units must set `MURAKUMO_NODE_IDENTITY_FILE` for these
-commands too. The buyer's site account is not yet payout authority for this
-device DID.
+earned credits, sign in to the buyer's device page, select the claimed node,
+enter the exact amount and full 20-byte Base wallet address, and authorize it.
+The site checks current ownership and issues a capability valid for two minutes.
+Save that capability in a private file on the node (`chmod 600`), then run
+`murakumo node payout --credits 5000 --to 0x... --owner-token-file /absolute/path`
+with the **same** amount and address. The CLI also signs the exact request with
+the private device key. It rejects a missing or publicly readable buyer token
+file and never prints the token. The API requires both proofs and enforces the
+minimum and earned balance without publishing the buyer DID in the ledger. A
+successful request **debits the credits and awaits operator approval**; it does
+not transfer USDC. Factory units must set `MURAKUMO_NODE_IDENTITY_FILE` for
+these commands too. This is a manual pilot flow; the owner token and device
+signature are not a receipt for completed settlement.
 
 If diagnosis fails, confirm the server is running and the model ID matches.
 Missing flags, registration refusal and failed heartbeat checks exit nonzero.

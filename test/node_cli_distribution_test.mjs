@@ -8,7 +8,8 @@ const home=mkdtempSync(path.join(tmpdir(),'murakumo-node-test-'));
 let denied=false,payoutDenied=false;const calls=[];
 const server=http.createServer(async(req,res)=>{
  let body='';for await(const c of req)body+=c;
- calls.push({url:req.url,auth:req.headers.authorization,body:body?JSON.parse(body):null});
+ calls.push({url:req.url,auth:req.headers.authorization,
+  ownerAuth:req.headers['x-murakumo-owner-payout'],body:body?JSON.parse(body):null});
  res.setHeader('content-type','application/json');
  if(req.url==='/v1/models')return res.end(JSON.stringify({data:[{id:'test-model'}]}));
  if(req.url==='/infer/nodes'){res.statusCode=denied?401:201;return res.end(JSON.stringify({'node/admission':'pending'}));}
@@ -56,18 +57,28 @@ try{
  assert.match(result.out,/Minimum request: 5000/);
  assert(calls.some(x=>x.url==='/infer/payout?did='+encodeURIComponent(current.did)));
  const destination='0x1111111111111111111111111111111111111111';
- const payoutArgs=['--base',base,'--credits','5000','--to',destination];
+ const ownerTokenFile=path.join(home,'buyer-authorization.txt');
+ writeFileSync(ownerTokenFile,'mk1.e30.signature',{mode:0o600});
+ const payoutArgs=['--base',base,'--credits','5000','--to',destination,
+  '--owner-token-file',ownerTokenFile];
+ assert.notEqual((await runWithEnv(external,'payout','--base',base,'--credits','5000',
+  '--to',destination)).code,0);
+ assert.equal(calls.filter(x=>x.url==='/infer/payout/request').length,0);
  result=await runWithEnv(external,'payout',...payoutArgs);
  assert.equal(result.code,0,result.out);
  assert.match(result.out,/Awaiting operator approval/);
  const request=calls.filter(x=>x.url==='/infer/payout/request').at(-1);
  assert.deepEqual(request.body,{did:current.did,credits:5000,to:destination});
  assert.match(request.auth,/^CACAO /);
+ assert.equal(request.ownerAuth,'mk1.e30.signature');
+ assert(!result.out.includes('mk1.e30.signature'));
  assert(Buffer.from(request.auth.slice(6),'base64').toString('utf8').includes(
   `murakumo:payout?to=${destination}&credits=5000`));
  assert.equal(calls.filter(x=>x.url==='/infer/payout/request').length,1);
- assert.notEqual((await runWithEnv(external,'payout','--base',base,'--credits','0','--to',destination)).code,0);
- assert.notEqual((await runWithEnv(external,'payout','--base',base,'--credits','5000','--to','not-a-wallet')).code,0);
+ assert.notEqual((await runWithEnv(external,'payout','--base',base,'--credits','0','--to',destination,
+  '--owner-token-file',ownerTokenFile)).code,0);
+ assert.notEqual((await runWithEnv(external,'payout','--base',base,'--credits','5000','--to','not-a-wallet',
+  '--owner-token-file',ownerTokenFile)).code,0);
  assert.equal(calls.filter(x=>x.url==='/infer/payout/request').length,1);
  payoutDenied=true;
  assert.notEqual((await runWithEnv(external,'payout',...payoutArgs)).code,0);

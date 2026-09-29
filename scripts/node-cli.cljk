@@ -12,6 +12,7 @@
   (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+, a running OpenAI-compatible model server and network access are required.\nInstallation does not download models or start a service. Community enrollment\nmay remain pending admission; a heartbeat alone does not prove job eligibility.")
   (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
                                           (ctx, KV, slots), co-resident processes, units")
+  (println "  Payout also requires --owner-token-file /absolute/private/path from the buyer's device page.")
   (println "\n  murakumo bench nodes                    List tailnet nodes (name, ip, online)\n  murakumo bench run --node N --model P --engine llama|diffuse\n  murakumo bench ledger [--limit N]       Show the append-only measurement ledger\n\nMeasurements record argv, the model's bytes and hash, the host's memory and the\nengine's own output. Nothing here enrols a node or publishes a number.\n  murakumo bench --help"))
 
 (defn identity-path []
@@ -99,13 +100,26 @@
     base))
 (defn payout-options [args command]
   (let [allowed (if (= command "earnings") #{"--base"}
-                    #{"--base" "--credits" "--to"})]
+                    #{"--base" "--credits" "--to" "--owner-token-file"})]
     (when (or (odd? (count args))
               (some (fn [[k v]]
                       (or (not (contains? allowed k)) (str/starts-with? v "--")))
                     (partition 2 args)))
       (throw (js/Error. "Unknown payout option or missing value.")))
     (worker/parse-args args)))
+(defn- owner-payout-token [file]
+  (when-not (and (string? file) (.isAbsolute path file))
+    (throw (js/Error. "--owner-token-file must be an absolute path to a private file.")))
+  (let [fd (.openSync fs file (bit-or (.-O_RDONLY (.-constants fs))
+                                  (.-O_NOFOLLOW (.-constants fs))))]
+    (try
+      (let [st (.fstatSync fs fd)
+            token (str/trim (.readFileSync fs fd "utf8"))]
+        (when-not (and (.isFile st) (= 0 (bit-and (.-mode st) 63))
+                       (re-matches #"mk1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+" token))
+          (throw (js/Error. "Owner authorization file must be private (chmod 600) and contain a valid token.")))
+        token)
+      (finally (.closeSync fs fd)))))
 (defn payout-command! [command args]
   (let [opts (payout-options args command)
         base (control-base (:base opts))
@@ -131,7 +145,8 @@
             credits (when (and (string? credits-text)
                                (re-matches #"[1-9][0-9]*" credits-text))
                       (js/Number credits-text))
-            to (:to opts)]
+            to (:to opts)
+            owner-token (owner-payout-token (:owner-token-file opts))]
         (when-not (and (js/Number.isSafeInteger credits) (pos? credits))
           (throw (js/Error. "--credits must be a positive whole number of credits.")))
         (when-not (and (string? to) (re-matches #"0x[0-9a-fA-F]{40}" to))
@@ -142,7 +157,8 @@
                      (js/fetch (str base "/infer/payout/request")
                                #js {:method "POST"
                                     :headers #js {"content-type" "application/json"
-                                                  "authorization" (str "CACAO " (:cacao-b64 session))}
+                                                  "authorization" (str "CACAO " (:cacao-b64 session))
+                                                  "x-murakumo-owner-payout" owner-token}
                                     :body (js/JSON.stringify
                                            #js {:did (.-did id) :credits credits :to to})
                                     :signal (js/AbortSignal.timeout 30000)})))
