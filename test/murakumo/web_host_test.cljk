@@ -1,0 +1,110 @@
+(ns murakumo.web-host-test
+  "Host adapters against a real (local) HTTP server in a child process."
+  (:require [kotoba.test :refer [deftest is]]
+            [murakumo.web.host :as host]
+            [murakumo.web.worker :as w]))
+
+(def cp (js/require "child_process"))
+(def fs (js/require "fs"))
+(def os (js/require "os"))
+(def crypto (js/require "crypto"))
+
+(def server-src
+  "const http=require('http'),fs=require('fs');
+   const [port,mode,log]=[+process.argv[1],process.argv[2],process.argv[3]];
+   const blobs={};
+   http.createServer((q,r)=>{
+     const chunks=[]; q.on('data',c=>chunks.push(c)); q.on('end',()=>{
+       fs.appendFileSync(log, JSON.stringify({m:q.method,u:q.url,auth:q.headers.authorization||null})+'\\n');
+       if(mode==='down'){r.writeHead(503);return r.end();}
+       if(q.method==='PUT'){ if(q.headers.authorization!=='Bearer good'){r.writeHead(401);return r.end();}
+         blobs[q.url]=Buffer.concat(chunks); r.writeHead(201); return r.end(); }
+       if(q.method==='GET'){ let b=blobs[q.url]; if(!b){r.writeHead(404);return r.end();}
+         if(mode==='corrupt') b=Buffer.from('tampered'); r.writeHead(200); return r.end(b); }
+       r.writeHead(405); r.end(); }); }).listen(port,'127.0.0.1');")
+
+(defn- tmp [suffix] (str (.tmpdir os) "/murakumo-host-test-" (.toString (.randomBytes crypto 5) "hex") suffix))
+
+(defn- start-server! [port mode log]
+  (let [child (.spawn cp "node" #js ["-e" server-src (str port) mode log] #js {:stdio "ignore"})]
+    ;; wait until it answers
+    (loop [n 0]
+      (let [r (.spawnSync cp "curl" #js ["-s" "-o" "/dev/null" "-m" "1" (str "http://127.0.0.1:" port "/")])]
+        (when (and (pos? (.-status r)) (< n 40))
+          (.wait js/Atomics (js/Int32Array. (js/SharedArrayBuffer. 4)) 0 0 100)
+          (recur (inc n)))))
+    child))
+
+(defn- log-lines
+  "Server log minus the readiness probe (GET /)."
+  [log]
+  (if (.existsSync fs log)
+    (vec (filter #(re-find #"/ipfs/" %) (remove empty? (.split (.readFileSync fs log "utf8") "\n"))))
+    []))
+
+(def bs (w/utf8-bytes "hello block"))
+(def cid (w/raw-cid bs))
+
+(deftest put-block-writes-verifies-and-authorises
+  (let [log (tmp ".log") srv (start-server! 18901 "ok" log)]
+    (try
+      (let [base {:base-url "http://127.0.0.1:18901" :authorization "Bearer good"}]
+        (is (= {:ok true} (host/put-block! base cid bs)))
+        (let [lines (log-lines log)]
+          (is (re-find #"\"m\":\"PUT\"" (first lines)))
+          (is (re-find #"Bearer good" (first lines)))     ; header arrived via stdin config
+          (is (re-find #"\"m\":\"GET\"" (second lines))))
+        (is (= {:error :put/http-401} (host/put-block! (assoc base :authorization "Bearer bad") cid bs)))
+        (is (= {:error :put/no-authorization} (host/put-block! (dissoc base :authorization) cid bs)))
+        (is (= {:error :put/bad-base-url} (host/put-block! (assoc base :base-url "ftp://x") cid bs))))
+      (finally (.kill srv)))))
+
+(deftest a-server-that-returns-other-bytes-fails-verification
+  (let [log (tmp ".log") srv (start-server! 18902 "corrupt" log)]
+    (try
+      (is (= {:error :put/verify-mismatch}
+             (host/put-block! {:base-url "http://127.0.0.1:18902" :authorization "Bearer good"} cid bs)))
+      (finally (.kill srv)))))
+
+(deftest authorization-never-appears-in-the-process-arguments
+  ;; put-block! passes it on stdin; the log proves the server got it, and the
+  ;; source must not put it in argv. Guard the invariant on the source text.
+  (let [src (.readFileSync fs "src/murakumo/web/host.cljk" "utf8")
+        put-fn (subs src (.indexOf src "(defn put-block!"))]
+    (is (re-find #"\"--config\" \"-\"" put-fn))
+    (is (not (re-find #"\"-H\"" put-fn)))))
+
+(deftest tee-store-keeps-local-bytes-and-queues-failed-remote-puts
+  (let [dir (tmp "-store") pending (tmp "-pending") log (tmp ".log")
+        down (start-server! 18903 "down" log)]
+    (try
+      (let [store (host/tee-store dir pending {:base-url "http://127.0.0.1:18903" :authorization "Bearer good"})]
+        (is (true? ((:put! store) cid bs)))                       ; the job still succeeds
+        (is (= (w/utf8-string bs) (w/utf8-string ((:get-bytes! store) cid))))
+        (is (= (str cid "\n") (.readFileSync fs pending "utf8"))))
+      (finally (.kill down)))
+    ;; remote comes back: sync drains the queue
+    ;; a fresh port: reusing 18903 races the killed server's socket
+    (let [up (start-server! 18904 "ok" log)]
+      (try
+        (is (= {:synced 1 :remaining 0 :errors {}}
+               (host/sync-pending! dir pending {:base-url "http://127.0.0.1:18904" :authorization "Bearer good"})))
+        (is (= "" (.readFileSync fs pending "utf8")))
+        (finally (.kill up))))))
+
+(deftest gc-removes-oldest-first-and-usage-counts
+  (let [dir (tmp "-gc")
+        {:keys [put!]} (host/dir-store dir)]
+    (put! "a" (w/utf8-bytes "1234567890"))
+    (.wait js/Atomics (js/Int32Array. (js/SharedArrayBuffer. 4)) 0 0 50)
+    (put! "b" (w/utf8-bytes "1234567890"))
+    (is (= {:files 2 :bytes 20} (host/store-usage dir)))
+    (is (= {:removed 1 :bytes-after 10} (host/store-gc! dir 10)))
+    (is (nil? ((:get-bytes! (host/dir-store dir)) "a")))
+    (is (some? ((:get-bytes! (host/dir-store dir)) "b")))))
+
+(deftest did-key-is-the-standard-ed25519-form
+  (let [seed (.toString (.randomBytes crypto 32) "hex")
+        did (host/did-key (:public-key-hex (host/signer seed)))]
+    (is (re-find #"^did:key:z6Mk" did))
+    (is (= did (host/did-key (:public-key-hex (host/signer seed)))))))

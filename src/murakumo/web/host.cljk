@@ -199,3 +199,73 @@
     (when (zero? (:status r))
       (some-> (.toString (:stdout r)) (.split "\n") (aget 1) (.split #"\s+") (aget 3)
               (js/parseInt 10) (* 1024)))))
+
+;; --- yataverse / kotobase block put ---------------------------------------------
+
+(defn- curl-config-line [k v]
+  ;; curl --config syntax; values are quoted, `\\` and `"` escaped, newlines rejected
+  (when (re-find #"[\r\n]" (str v)) (throw (ex-info "control character in curl config value" {:key k})))
+  (str k " = \"" (.replace (.replace (str v) "\\" "\\\\") "\"" "\\\"") "\"\n"))
+
+(defn put-block!
+  "PUT bytes at `<base-url>/ipfs/<cid>` then GET them back and re-derive the CID.
+  The Authorization value travels on curl's stdin config, never in argv (ps).
+  Returns {:ok true} | {:error kw}. `authorization` is a pre-minted value: this
+  code mints none."
+  [{:keys [base-url authorization max-time-s] :or {max-time-s 60}} cid bs]
+  (cond
+    (not (re-find #"^https?://" (str base-url))) {:error :put/bad-base-url}
+    (empty? (str authorization)) {:error :put/no-authorization}
+    :else
+    (let [url (str (.replace base-url #"/+$" "") "/ipfs/" cid)
+          tmp (str (.tmpdir (js/require "os")) "/murakumo-put-" (.randomBytes crypto 6))]
+      (try
+        (.writeFileSync fs tmp (js/Buffer.from bs) #js {:mode 0600})
+        (let [cfg (str (curl-config-line "header" (str "Authorization: " authorization))
+                       (curl-config-line "header" "Content-Type: application/octet-stream"))
+              put (run "curl" ["-sS" "--max-time" (str max-time-s) "--proto" "=http,https" "--max-redirs" "0"
+                               "-X" "PUT" "--data-binary" (str "@" tmp) "-o" "/dev/null" "-w" "%{http_code}"
+                               "--config" "-" url]
+                       {:input cfg})]
+          (if-not (zero? (:status put))
+            {:error (keyword "curl" (str "exit-" (:status put)))}
+            (let [code (js/parseInt (.toString (:stdout put)) 10)]
+              (if-not (<= 200 code 299)
+                {:error (keyword "put" (str "http-" code))}
+                (let [get (run "curl" ["-sS" "--max-time" (str max-time-s) "--proto" "=http,https" "--max-redirs" "0" url] {})]
+                  (cond
+                    (not (zero? (:status get))) {:error :put/verify-unreachable}
+                    (not= cid (w/raw-cid (js/Uint8Array. (:stdout get)))) {:error :put/verify-mismatch}
+                    :else {:ok true}))))))
+        (finally (when (.existsSync fs tmp) (.unlinkSync fs tmp)))))))
+
+(defn tee-store
+  "Local dir store first (durable, authoritative for the job), then a remote put.
+  A failed remote put never fails the job: the CID is appended to `pending-file`
+  for `sync-pending!` to retry. `remote` is nil when no put is configured."
+  [dir pending-file remote]
+  (let [{:keys [put! get-bytes!]} (dir-store dir)]
+    {:get-bytes! get-bytes!
+     :put! (fn [cid bs]
+             (put! cid bs)
+             (when remote
+               (when-not (:ok (put-block! remote cid bs))
+                 (.appendFileSync fs pending-file (str cid "\n"))))
+             true)}))
+
+(defn sync-pending!
+  "Retry queued CIDs. Returns {:synced n :remaining n :errors {kw n}}."
+  [dir pending-file remote]
+  (let [{:keys [get-bytes!]} (dir-store dir)
+        cids (if (.existsSync fs pending-file)
+               (vec (distinct (remove empty? (.split (.readFileSync fs pending-file "utf8") "\n"))))
+               [])
+        results (map (fn [cid]
+                       (if-let [bs (get-bytes! cid)]
+                         [cid (put-block! remote cid bs)]
+                         [cid {:error :local/missing}]))
+                     cids)
+        failed (filter #(:error (second %)) results)]
+    (.writeFileSync fs pending-file (apply str (map #(str (first %) "\n") failed)))
+    {:synced (- (count cids) (count failed)) :remaining (count failed)
+     :errors (frequencies (map #(:error (second %)) failed))}))

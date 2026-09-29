@@ -42,11 +42,27 @@
         {:keys [public-key-hex]} (host/signer seed)]
     {:seed seed :public-key-hex public-key-hex :node-did (host/did-key public-key-hex)}))
 
+(defn- remote-put-config
+  "Optional yataverse/kotobase put. URL from $MURAKUMO_KOTOBASE_URL; the
+  pre-minted Authorization value from $MURAKUMO_KOTOBASE_AUTH or the 0600 file
+  kotobase.auth. Absent either -> local store only."
+  []
+  (let [url (.. js/process -env -MURAKUMO_KOTOBASE_URL)
+        auth-file (.join path (home) "kotobase.auth")
+        auth (or (.. js/process -env -MURAKUMO_KOTOBASE_AUTH)
+                 (when (.existsSync fs auth-file) (.trim (.readFileSync fs auth-file "utf8"))))]
+    (when (and (seq url) (seq auth)) {:base-url url :authorization auth})))
+
+(defn- pending-file [] (.join path (home) "pending-put.txt"))
+
 (defn- make-env [{:keys [seed node-did]}]
   (let [zone (:zone (read-edn-file (.join path (home) "zone.edn")))
         backends (some->> (read-edn-file (.join path (home) "backends.edn"))
-                          (mapv host/searxng))]
-    (-> (host/env {:store-dir (.join path (home) "store") :seed-hex seed :node-did node-did})
+                          (mapv host/searxng))
+        base (host/env {:store-dir (.join path (home) "store") :seed-hex seed :node-did node-did})
+        tee (host/tee-store (.join path (home) "store") (pending-file) (remote-put-config))]
+    (-> base
+        (merge tee)
         (assoc :sleep! sleep! :backends backends :zone zone))))
 
 (defn- b64 [bs] (.toString (js/Buffer.from bs) "base64"))
@@ -59,11 +75,16 @@
         problems (cond-> []
                    (not curl?) (conj :curl/missing)
                    (and free (< free min-free-bytes)) (conj :disk/low)
-                   (empty? (:backends env)) (conj :search/no-backends-configured))]
+                   (empty? (:backends env)) (conj :search/no-backends-configured)
+                   (not (remote-put-config)) (conj :put/no-remote-configured))
+        pending (if (.existsSync fs (pending-file))
+                  (count (remove empty? (.split (.readFileSync fs (pending-file) "utf8") "\n")))
+                  0)
+        problems (cond-> problems (pos? pending) (conj :put/pending))]
     {:ok {:version version :node-did (:node-did ident) :zone (:zone env)
-          :store usage :free-bytes free :problems problems
+          :store usage :free-bytes free :pending-puts pending :problems problems
           ;; no backends is a config note, not an outage for fetch/crawl
-          :healthy? (empty? (remove #{:search/no-backends-configured} problems))}}))
+          :healthy? (empty? (remove #{:search/no-backends-configured :put/no-remote-configured} problems))}}))
 
 (defn handle [{:keys [op job]}]
   (let [ident (identity-info)
@@ -80,6 +101,9 @@
              (cond (nil? bs) {:refused :get/not-found}
                    (> (w/byte-count bs) max-get-bytes) {:refused :get/too-large}
                    :else {:ok {:cid (:cid job) :bytes (w/byte-count bs) :base64 (b64 bs)}}))
+      :sync (if-let [remote (remote-put-config)]
+              {:ok (host/sync-pending! (.join path (home) "store") (pending-file) remote)}
+              {:refused :sync/no-remote-configured})
       :gc (let [free (host/free-bytes (home))]
             {:ok (host/store-gc! (.join path (home) "store") (or (:max-bytes job) (* 2 1024 1024 1024)))})
       {:refused :op/unknown :detail op})))
