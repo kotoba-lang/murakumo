@@ -3,6 +3,7 @@
   (:require [murakumo.infer.poll-worker :as worker]
             [murakumo.bench :as bench]
             [murakumo.fleet-ps :as fleet-ps]
+            [murakumo.health :as health]
             [cacao.edge.mint :as mint]
             [kotoba.lang.text :as str]
             ["node:fs" :as fs] ["node:path" :as path]
@@ -13,7 +14,8 @@
   (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
                                           (ctx, KV, slots), co-resident processes, units")
   (println "  Payout also requires --owner-token-file /absolute/private/path from the buyer's device page.")
-  (println "\n  murakumo bench nodes                    List tailnet nodes (name, ip, online)\n  murakumo bench run --node N --model P --engine llama|diffuse\n  murakumo bench ledger [--limit N]       Show the append-only measurement ledger\n\nMeasurements record argv, the model's bytes and hash, the host's memory and the\nengine's own output. Nothing here enrols a node or publishes a number.\n  murakumo bench --help"))
+  (println "\n  murakumo bench nodes                    List tailnet nodes (name, ip, online)\n  murakumo bench run --node N --model P --engine llama|diffuse\n  murakumo bench ledger [--limit N]       Show the append-only measurement ledger\n\nMeasurements record argv, the model's bytes and hash, the host's memory and the\nengine's own output. Nothing here enrols a node or publishes a number.\n  murakumo bench --help")
+  (println "\n  murakumo health check [--canary]        Probe every fleet node + the gateway, score it, record it\n  murakumo health slo | history            Availability, flapping and canary drift from the ledger\n  murakumo health heal [--apply]           Plan (or run) the one guarded self-heal\n  murakumo health --help"))
 
 (defn identity-path []
   (or (aget js/process.env "MURAKUMO_NODE_IDENTITY_FILE")
@@ -260,8 +262,13 @@
       (= prefix "fleet")
       (-> (fleet-ps/run-command command args)
           (.then (fn [code] (when (not= 0 code) (set! (.-exitCode js/process) code)))))
+      ;; `health` probes and assesses the fleet; its one write is a guarded mesh
+      ;; restart behind --apply, and it has no path to the node identity either.
+      (= prefix "health")
+      (let [code (health/run-command command args)]
+        (when (and (number? code) (not= 0 code)) (set! (.-exitCode js/process) code)))
       (= command "--help") (help)
-      (not= prefix "node") (fail! "Use: murakumo node --help or murakumo bench --help")
+      (not= prefix "node") (fail! "Use: murakumo node, bench, fleet or health --help")
       (= command "init") (init!)
       (contains? #{"earnings" "payout"} command)
       (-> (payout-command! command args)
