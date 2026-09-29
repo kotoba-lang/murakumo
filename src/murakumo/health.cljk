@@ -105,6 +105,14 @@
                              " (pass --fleet PATH or set MURAKUMO_FLEET)"))))
     (edn/read-string (.readFileSync fs p "utf8"))))
 
+(defn valid-host?
+  "A :host that starts with '-' would be parsed by ssh as an OPTION
+  (`-oProxyCommand=…` runs a local command). Whitespace/control chars have no
+  legitimate place in a host either."
+  [h]
+  (boolean (and (string? h) (seq h) (not (str/starts-with? h "-"))
+                (re-matches #"[A-Za-z0-9_.@:\[\]%-]+" h))))
+
 (defn select-nodes
   "nil / \"all\" -> every node; \"a,b\" -> those (unknown names are an error, not a
   silent no-op that would report a healthy empty fleet)."
@@ -114,6 +122,8 @@
         known (set (map :name nodes))
         bad (remove known want)]
     (when (seq bad) (throw (js/Error. (str "unknown node(s): " (str/join "," bad)))))
+    (when-let [n (first (remove #(valid-host? (:host %)) (if want (filter #(contains? (set want) (:name %)) nodes) nodes)))]
+      (throw (js/Error. (str "refusing node " (:name n) ": :host " (pr-str (:host n)) " is not a plain ssh host"))))
     (vec (if want (filter #(contains? (set want) (:name %)) nodes) nodes))))
 
 (defn node-port [fleet node]
@@ -149,7 +159,8 @@
        " echo PLIST=$(ls $HOME/Library/LaunchAgents 2>/dev/null | grep -c murakumo-mesh);"
        " a=$( (lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk -v p=" serve-port " \"\\$9 ~ (\\\":\\\" p \\\"\\$\\\") {print \\$9; exit}\") );"
        " [ -z \"$a\" ] && a=$(ss -ltn 2>/dev/null | awk -v p=" serve-port " \"\\$4 ~ (\\\":\\\" p \\\"\\$\\\") {print \\$4; exit}\");"
-       " echo LLAMA_PROCS=$(pgrep -f llama-server 2>/dev/null | wc -l | tr -d \" \");"
+       " a=$(echo \"$a\" | sed \"s/^\\*:/127.0.0.1:/; s/^0\\.0\\.0\\.0:/127.0.0.1:/; s/^\\[::\\]:/127.0.0.1:/\");"
+       " echo LLAMA_PROCS=$(pgrep -f \"[l]lama-server\" 2>/dev/null | wc -l | tr -d \" \");"
        " if [ -n \"$a\" ]; then echo SERVE=$(curl -s -m 4 -o /dev/null -w %{http_code} http://$a/health); fi;"
        " true"))
 
@@ -165,7 +176,7 @@
         "\n"
         (for [{:keys [name host cmd]} entries]
           (str "( R=" (sq cmd) "; "
-               "out=$(ssh -o BatchMode=yes -o ConnectTimeout=$T -o StrictHostKeyChecking=accept-new "
+               "out=$(ssh -o BatchMode=yes -o ConnectTimeout=$T -o StrictHostKeyChecking=accept-new -- "
                (sq host) " \"$R\" 2>&1); rc=$?; "
                "printf '%s\\n' \"$out\" | sed " (sq (str "s/^/N:" name ":/")) "; "
                "echo " (sq (str "N:" name ":RC=")) "$rc ) &")))
@@ -199,7 +210,8 @@
   (let [ok? (= 0 rc)]
     {:name (:name node)
      :reachable ok?
-     :error (when-not ok? (or (first raw) (str "ssh exit " rc)))
+     :error (when-not ok? (or (first (remove #(str/includes? % "Permanently added") raw))
+                              (str "ssh exit " rc)))
      :serves (serves-mishima? node)
      :mesh-expected (or (boolean (:health/expect-mesh node))
                         (boolean (some-> (:plist kv) num* pos?)))
@@ -309,6 +321,8 @@
          (if-not reachable
            [(f :crit :unreachable (str "ssh failed: " (or error "no answer")))]
            (cond-> []
+             (and (nil? load) (nil? ncpu))
+             (conj (f :warn :probe-empty "ssh worked but the probe returned no data (non-POSIX login shell?) — this node is NOT verified healthy"))
              (and lpc (>= lpc (:load-per-core-crit th)))
              (conj (f :crit :load (str "load " load " on " ncpu " cores")))
              (and lpc (< lpc (:load-per-core-crit th)) (>= lpc (:load-per-core-warn th)))
@@ -400,8 +414,14 @@
          raw (if (zero? n) 0 (* 100 (/ (+ (cnt :ok) (* 0.5 (cnt :warn))) n)))
          pen (case (:status gw) :crit 25 :warn 10 0)
          score (max 0 (min 100 (js/Math.round (- raw pen))))
+         serving (filter :serves rows)
+         serving-ok (count (filter (fn [r] (let [a (first (filter #(= (:name r) (:node %)) nodes))]
+                                             (and (:reachable r)
+                                                  (not-any? #(contains? #{:serving-down :probe-empty} (:code %)) (:findings a)))))
+                                   serving))
          verdict (cond
-                   (or (= :crit (:status gw)) (and (pos? n) (< (/ reach n) 0.6))) :critical
+                   (or (= :crit (:status gw)) (and (pos? n) (< (/ reach n) 0.6))
+                       (and (seq serving) (zero? serving-ok))) :critical
                    (or (pos? (cnt :crit)) (pos? (cnt :warn)) (= :warn (:status gw))) :degraded
                    :else :healthy)]
      {:verdict verdict
@@ -418,7 +438,7 @@
   "Availability, flapping and canary drift over the last `window` snapshots.
 
   A node is 'available' in a sample when its status is not crit. Flapping is
-  counted on status TRANSITIONS: a node that is crit for ten samples in a row is
+  counted on transitions ACROSS the crit boundary (ok<->warn is not an outage): a node that is crit for ten samples in a row is
   down (availability shows it); one that alternates ok/crit is unstable, and the
   availability number alone would hide that as ~50%."
   ([snaps window] (slo default-thresholds snaps window))
@@ -431,7 +451,7 @@
                 (let [seq* (keep #(get-in % [:health/nodes nm]) w)
                       sts (mapv keyword seq*)
                       up (count (remove #{:crit} sts))
-                      changes (count (filter true? (map not= sts (rest sts))))]
+                      changes (count (filter true? (map (fn [a b] (not= (= :crit a) (= :crit b))) sts (rest sts))))]
                   {:node (name nm)
                    :samples (count sts)
                    :availability (when (pos? (count sts)) (round1 (* 100 (/ up (count sts)))))
@@ -491,9 +511,13 @@
    (let [cmds (into {} (map (fn [r] [(:name r) (:restart-cmd r)]) (:rows a)))
          fixable #{:mesh-down :serving-down}
          wedged (filter (fn [x] (some #(contains? fixable (:code %)) (:findings x))) (:nodes a))
-         affected (count (filter #(or (:mesh-expected %) (:serves %)) (:rows a)))
-         correlated? (and (pos? affected) (> (count wedged) 1)
-                          (>= (/ (count wedged) affected) (:heal-correlated-fraction th)))]
+         unreachable (filter (fn [x] (some #(= :unreachable (:code %)) (:findings x))) (:nodes a))
+         ;; unreachable nodes are affected too (their expectations are unknown),
+         ;; so 6 dark nodes + 2 wedged ones is a shared cause, not two local ones
+         affected (count (filter #(or (:mesh-expected %) (:serves %) (not (:reachable %))) (:rows a)))
+         down (+ (count wedged) (count unreachable))
+         correlated? (and (pos? affected) (> down 1)
+                          (>= (/ down affected) (:heal-correlated-fraction th)))]
      (vec
       (concat
        (for [x wedged
@@ -506,7 +530,7 @@
            {:node (:node x) :action :restart :executable true :reason msg :command cmd
             :blocked (cond
                        correlated?
-                       (str (count wedged) " of " affected " expected nodes are down together — a shared cause; "
+                       (str down " of " affected " expected nodes are down together — a shared cause; "
                             "restarting each would erase the evidence and the surviving capacity")
                        (and since (< since (:heal-cooldown-s th)))
                        (str "healed " (long since) "s ago (cooldown " (:heal-cooldown-s th) "s) — "
@@ -529,8 +553,9 @@
     (mapv
      (fn [p]
        (if (and (:executable p) (nil? (:blocked p))
+                (valid-host? (get hosts (:node p)))
                 (or (nil? only) (= only (:node p))))
-         (let [r (bench/sh ["ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=8"
+         (let [r (bench/sh ["ssh" "-o" "BatchMode=yes" "-o" "ConnectTimeout=8" "--"
                             (get hosts (:node p)) (:command p)]
                            {:timeout-ms 40000})
                ok? (zero? (:status r))]
@@ -637,7 +662,9 @@ refuses during a correlated outage or inside a 30-minute per-node cooldown."))
         (recur (rest xs) acc))
       acc)))
 
-(defn- int* [v d] (if (string? v) (js/parseInt v 10) d))
+(defn- int* [v d]
+  (let [n (if (string? v) (js/parseInt v 10) v)]
+    (if (and (number? n) (not (js/isNaN n)) (pos? n)) n d)))
 
 (defn- check-opts [o]
   {:fleet (get o "fleet") :nodes (get o "nodes") :canary (boolean (get o "canary"))
@@ -674,7 +701,8 @@ refuses during a correlated outage or inside a 30-minute per-node cooldown."))
     0))
 
 (defn cmd-heal [o]
-  (let [a (run-check! (assoc (check-opts o) :record true))
+  ;; heal judges the WHOLE fleet: a subset probe would hide a correlated outage
+  (let [a (run-check! (assoc (check-opts o) :record true :nodes nil))
         p (ledger-path)
         plan (heal-plan (assoc a :rows (:rows a)) (heals (:rows (read-ledger p))) (js/Date.now))
         plan (if (get o "apply")

@@ -171,3 +171,35 @@
       ;; JSON keys come back as keywords; slo must work on the series as READ, not as built
       (is (= "ok" (get-in (first (h/snapshots rows)) [:health/nodes :a])))
       (is (= 100.0 (:availability (first (:nodes (h/slo (h/snapshots rows) 10)))))))))
+
+(deftest review-fixes
+  (testing "a host ssh would parse as an option is refused"
+    (is (true? (h/valid-host? "root@100.98.24.37")))
+    (is (true? (h/valid-host? "naphtali")))
+    (is (false? (h/valid-host? "-oProxyCommand=touch /tmp/x")))
+    (is (false? (h/valid-host? "a b")))
+    (is (thrown? js/Error (h/select-nodes {:nodes [{:name "x" :host "-oProxyCommand=id"}]} "all"))))
+  (testing "the fan-out script ends ssh option parsing before the host"
+    (is (str/includes? (h/fanout-script [{:name "x" :host "h" :cmd "c"}] 5) "accept-new -- 'h'")))
+  (testing "a reachable node that returned nothing is not reported healthy"
+    (let [a (h/assess-node (row {:load nil :ncpu nil :serves false :mesh-expected false}))]
+      (is (= :warn (:status a))) (is (contains? (codes a) :probe-empty))))
+  (testing "serving wiped out fleet-wide is critical even when ssh and the gateway are fine"
+    (let [rows [(row {:name "a" :serve nil :llama-procs 0}) (row {:name "b" :serve "000"})]
+          a (h/assess-fleet rows good-gw [])]
+      (is (= :critical (:verdict a)))))
+  (testing "unreachable nodes count toward a correlated outage"
+    (let [rows (concat [(row {:name "w1" :mesh "000" :restart-cmd "x"})
+                        (row {:name "w2" :mesh "000" :restart-cmd "x"})]
+                       (map #(row {:name (str "ok" %)}) (range 8))
+                       (map #(row {:name (str "dark" %) :reachable false :error "t"}) (range 5)))
+          a (assoc (h/assess-fleet (vec rows) good-gw []) :rows (vec rows))
+          r (filter #(= :restart (:action %)) (h/heal-plan a [] 2000000000000))]
+      (is (= 2 (count r))) (is (every? :blocked r))))
+  (testing "flapping counts crossings of the crit boundary, not ok<->warn"
+    (let [snaps (mapv (fn [i st] (snap (str "t" i) {"a" st} "ok"))
+                      (range) ["ok" "warn" "ok" "warn" "ok" "warn"])]
+      (is (empty? (:flapping (h/slo snaps 50)))))
+    (let [snaps (mapv (fn [i st] (snap (str "t" i) {"a" st} "ok"))
+                      (range) ["ok" "crit" "ok" "crit" "ok"])]
+      (is (= ["a"] (:flapping (h/slo snaps 50)))))))
