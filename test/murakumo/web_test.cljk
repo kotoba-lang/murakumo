@@ -1,0 +1,103 @@
+(ns murakumo.web-test
+  (:require [kotoba.test :refer [deftest is]]
+            [murakumo.web :as web]))
+
+(defn- refused [url] (:refused (web/check-url url)))
+
+(deftest public-urls-are-accepted
+  (is (= {:url "https://Example.com/a?b=1" :scheme "https" :host "example.com" :port 443}
+         (:ok (web/check-url "https://Example.com/a?b=1"))))
+  (is (= 8080 (get-in (web/check-url "http://example.org:8080/") [:ok :port])))
+  (is (= 80 (get-in (web/check-url "http://example.org") [:ok :port]))))
+
+(deftest ssrf-targets-are-refused
+  (is (= :url/scheme (refused "file:///etc/passwd")))
+  (is (= :url/scheme (refused "ftp://example.com/")))
+  (is (= :url/userinfo (refused "https://user:pw@example.com/")))
+  (is (= :url/private-address (refused "http://127.0.0.1/")))
+  (is (= :url/private-address (refused "http://10.1.2.3/")))
+  (is (= :url/private-address (refused "http://192.168.1.1/")))
+  (is (= :url/private-address (refused "http://172.16.0.1/")))
+  (is (= :url/private-address (refused "http://169.254.169.254/latest/meta-data")))
+  (is (= :url/private-address (refused "http://100.64.0.1/")))
+  (is (= :url/private-address (refused "http://[::1]/")))
+  (is (= :url/private-address (refused "http://[fe80::1]/")))
+  (is (= :url/internal-name (refused "http://localhost/")))
+  (is (= :url/internal-name (refused "http://printer.local/")))
+  (is (= :url/internal-name (refused "http://intranet/")))
+  (is (= :url/obfuscated-host (refused "http://2130706433/")))
+  (is (= :url/obfuscated-host (refused "http://0x7f000001/")))
+  (is (= :url/malformed (refused "not a url")))
+  (is (= :url/not-a-string (refused nil))))
+
+(deftest public-172-and-100-ranges-are-not-overblocked
+  (is (:ok (web/check-url "http://172.32.0.1/")))
+  (is (:ok (web/check-url "http://100.63.0.1/"))))
+
+(def good-plan
+  {:seeds ["https://example.com/"] :max-pages 100 :max-depth 2
+   :delay-ms 1500 :scope :same-host})
+
+(deftest plans-are-bounded
+  (is (= good-plan (:ok (web/validate-plan good-plan))))
+  (is (= [:plan/max-pages] (:refused (web/validate-plan (assoc good-plan :max-pages 10001)))))
+  (is (= [:plan/delay-below-floor]
+         (:refused (web/validate-plan (assoc good-plan :delay-ms 10)))))
+  (is (= [:plan/scope] (:refused (web/validate-plan (assoc good-plan :scope :any)))))
+  (is (= [:plan/no-seeds] (:refused (web/validate-plan (assoc good-plan :seeds [])))))
+  (is (some #{:url/private-address}
+            (:refused (web/validate-plan (assoc good-plan :seeds ["http://127.0.0.1/"]))))))
+
+(deftest a-bot-cannot-raise-the-ceiling-by-passing-limits-itself
+  ;; the 1-arity uses the hard ceilings; only operator config supplies a 2nd arg
+  (is (:refused (web/validate-plan (assoc good-plan :max-pages 1000000)))))
+
+(deftest jobs-validate-per-kind
+  (is (:ok (web/validate-job {:kind :web/fetch :url "https://example.com/"})))
+  (is (= [:url/scheme] (:refused (web/validate-job {:kind :web/fetch :url "gopher://x.com/"}))))
+  (is (= [:job/verify-replicas]
+         (:refused (web/validate-job {:kind :web/fetch :url "https://example.com/"
+                                      :verify-replicas 9}))))
+  (is (:ok (web/validate-job {:kind :web/extract :fetch-cid "bafyabc" :format :markdown})))
+  (is (= [:job/format] (:refused (web/validate-job {:kind :web/extract :fetch-cid "bafyabc"
+                                                    :format :html}))))
+  (is (:ok (web/validate-job {:kind :web/crawl :plan good-plan})))
+  (is (:ok (web/validate-job {:kind :web/search :query "kotoba" :k 10})))
+  (is (= [:job/k] (:refused (web/validate-job {:kind :web/search :query "x" :k 0}))))
+  (is (= [:job/unknown-kind] (:refused (web/validate-job {:kind :web/screenshot})))))
+
+(def r1
+  (web/receipt {:job-id "j1" :kind :web/fetch :input-cids ["b" "a"]
+                :output-cid "bafyout" :node-did "did:key:z1"
+                :started-at 10 :finished-at 12
+                :evidence {:status 200 :content-hash "h1"}}))
+
+(deftest receipt-signing-string-is-deterministic
+  (is (= ["a" "b"] (:input-cids r1)))
+  (is (= (web/receipt-signing-string r1)
+         (web/receipt-signing-string (into (sorted-map) (reverse (seq r1))))))
+  (is (:ok (web/validate-receipt r1)))
+  (is (= [:receipt/times] (:refused (web/validate-receipt (assoc r1 :started-at 99))))))
+
+(deftest replica-comparison-reports-disagreement
+  (let [r2 (assoc r1 :node-did "did:key:z2")
+        r3 (assoc-in r2 [:evidence :content-hash] "h2")]
+    (is (= :insufficient-replicas (:status (web/compare-replicas [r1]))))
+    (is (= {:status :agree :content-hash "h1"} (web/compare-replicas [r1 r2])))
+    (is (= :disagree (:status (web/compare-replicas [r1 r3]))))
+    (is (= {"did:key:z1" "h1" "did:key:z2" "h2"}
+           (into {} (:by-node (web/compare-replicas [r1 r3])))))
+    (is (= :unmeasured (:status (web/compare-replicas [r1 (update r2 :evidence dissoc :content-hash)]))))))
+
+(def table
+  {:yakuwari/capabilities
+   [{:capability :propose_crawl_plan :decision :ok}
+    {:capability :crawl_new_host :decision :owner-approval}
+    {:capability :raise_budget :decision :blocked}]})
+
+(deftest unlisted-capabilities-are-blocked
+  (is (= :ok (web/decide table :propose_crawl_plan)))
+  (is (= :owner-approval (web/decide table :crawl_new_host)))
+  (is (= :blocked (web/decide table :raise_budget)))
+  (is (= :blocked (web/decide table :authenticated_crawl)))
+  (is (= :blocked (web/decide {:yakuwari/capabilities [{:capability :x :decision :maybe}]} :x))))
