@@ -33,7 +33,7 @@ gap between what this workspace claims and what it can demonstrate.
   it is meant to catch, watch it go red for that reason, restore.
 - **Record how to measure, never what was measured.** Dated numbers in prose
   get quoted later with the date dropped. This workspace has been bitten by
-  that repeatedly, including in its own CLAUDE.md.
+  that repeatedly, including in its own AGENTS.md.
 - **`grep` truncates readiness tables silently.** Use an EDN reader.
 - Report failures plainly. A green you did not earn is worse than a red.
 
