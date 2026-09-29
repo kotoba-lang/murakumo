@@ -190,7 +190,7 @@
                      (-> (.json response)
                          (.then (fn [body]
                                   (if (= 201 (.-status response))
-                                    (do (println "Payout request:" (or (.-payout-id body) "submitted"))
+                                    (do (println "Payout request:" (or (aget body "payout-id") "submitted"))
                                         (println "Awaiting operator approval; no transfer has occurred."))
                                     (fail! (str "Payout request refused (HTTP "
                                                 (.-status response) "): "

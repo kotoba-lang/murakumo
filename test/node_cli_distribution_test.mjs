@@ -76,6 +76,7 @@ try{
  assert.equal(calls.filter(x=>x.url==='/infer/payout/request').length,0);
  result=await runWithEnv(external,'payout',...payoutArgs);
  assert.equal(result.code,0,result.out);
+ assert.match(result.out,/Payout request: po-test/);
  assert.match(result.out,/Awaiting operator approval/);
  const request=calls.filter(x=>x.url==='/infer/payout/request').at(-1);
  assert.deepEqual(request.body,{did:current.did,credits:5000,to:destination});
