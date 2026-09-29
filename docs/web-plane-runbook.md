@@ -19,7 +19,7 @@ for the design; this is what to run.
   | `store/` | content-addressed bytes (fetched pages, extracts, manifests, index shards) | |
   | `zone.edn` | optional `{:zone "..."}` | |
   | `backends.edn` | optional vector of `{:name :kw :base-url "http://..."}` SearXNG endpoints for `:web/search` | |
-  | `kotobase.url`, `kotobase.prefix`, `kotobase.auth-cmd`, `kotobase.auth` | optional block-put config (see below) | `kotobase.auth` 0600 |
+  | `yataverse.url`, `yataverse.prefix`, `yataverse.auth-cmd`, `yataverse.auth` | optional block-put config (see below) | `yataverse.auth` 0600 |
   | `pending-put.txt` | CIDs whose remote put failed, retried by `:sync` | |
 
 ## Deploy / update
@@ -71,21 +71,28 @@ Modal credentials). `modal app stop murakumo-searxng` turns it off. Datacenter
 addresses are rate-limited by some engines: the function returns per-engine
 counts and unresponsive engines so that shows up rather than being hidden.
 
+## Naming
+
+kotobase was renamed yataverse (owner note 2026-09-29). Config files are now
+`yataverse.*`; the old `kotobase.*` names and `MURAKUMO_KOTOBASE_*` variables are
+still read as a fallback. Some source comments and the store-level docs still say
+kotobase.
+
 ## Optional configuration
 
 - **Search backends** (operator-only; the query is sent to these and, through
   them, to third-party engines). Kinds: `:searxng` (needs `:base-url`), `:wikipedia`
   (`:lang`, default `"en"`), `:hn`:
   `echo '[{:kind :wikipedia :name :wp} {:kind :hn :name :hn}]' > ~/.murakumo-web/backends.edn`
-- **yataverse / kotobase put** (files in `~/.murakumo-web/`; ssh runs a non-login
+- **yataverse put** (files in `~/.murakumo-web/`; ssh runs a non-login
   shell so env vars are unreliable):
 
   | file | content |
   |---|---|
-  | `kotobase.url` | gateway base URL, e.g. `https://ipfs.kotobase.net` |
-  | `kotobase.prefix` | optional, default `/ipfs/` (archive plane); the datom plane is `/ipld/` |
-  | `kotobase.auth-cmd` | EDN argv vector of **your minter**, e.g. `["/usr/local/bin/mint-cacao" "--aud" "ipfs.kotobase.net"]`; run without a shell **before every write**, stdout is the `Authorization` value |
-  | `kotobase.auth` | a static value — only for a gateway that accepts one (`chmod 600`) |
+  | `yataverse.url` | gateway base URL, e.g. `https://ipfs.yataverse.com` |
+  | `yataverse.prefix` | optional, default `/ipfs/` (archive plane); the datom plane is `/ipld/` |
+  | `yataverse.auth-cmd` | EDN argv vector of **your minter**, e.g. `["/usr/local/bin/mint-cacao" "--aud" "ipfs.kotobase.net"]`; run without a shell **before every write**, stdout is the `Authorization` value |
+  | `yataverse.auth` | a static value — only for a gateway that accepts one (`chmod 600`) |
 
   Why a command: kotobase authorizations are short-lived CACAOs with single-use
   nonces (`kotobase.blocks` says so), so a stored value works once at best (there

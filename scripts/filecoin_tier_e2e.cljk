@@ -1,0 +1,130 @@
+(ns filecoin-tier-e2e
+  "End-to-end check of the murakumo -> filecoin-cas process boundary, with the
+  real curl transport against a real sidecar process.
+
+    kbb --backend sci scripts/filecoin_tier_e2e.cljk                # in-memory network
+    kbb --backend sci scripts/filecoin_tier_e2e.cljk --calibration  # Filecoin testnet
+
+  --calibration needs ../filecoin-cas/.filecoin-cas/calibration.key (created by
+  filecoin-cas scripts/roundtrip.cljk) and takes a few minutes: the object goes
+  to Filecoin and is read back through it after the local copy is gone."
+  (:require ["node:child_process" :as cp]
+            ["node:crypto" :as crypto]
+            ["node:fs" :as fs]
+            ["node:os" :as os]
+            ["node:path" :as nodepath]
+            [kotoba.io :as kio]
+            [multiformats.core :as mf]
+            [murakumo.artifact-store :as store]
+            [murakumo.filecoin-tier :as tier]))
+
+(def cas-dir (.resolve nodepath "../filecoin-cas"))
+
+(defn- fail [msg] (println "FAIL:" msg) (js/process.exit 1))
+(defn- check [ok? msg] (if ok? (println "  ok  " msg) (fail msg)))
+
+(defn- start-sidecar!
+  "Spawn the service; resolve {:child :url} once it prints its listening line."
+  [{:keys [port token-file state-dir calibration?]}]
+  (js/Promise.
+    (fn [resolve reject]
+      (let [env (js/Object.assign #js {} js/process.env
+                                  #js {:FILECOIN_CAS_PORT (str port)
+                                       :FILECOIN_CAS_STATE_DIR state-dir
+                                       :FILECOIN_CAS_TOKEN_FILE token-file})
+            _ (when calibration?
+                (aset env "FILECOIN_CAS_CHAIN" "calibration")
+                (aset env "FILECOIN_CAS_KEY_FILE"
+                      (.join nodepath cas-dir ".filecoin-cas/calibration.key")))
+            args (cond-> ["--backend" "sci" "bin/filecoin-cas-server.cljk"]
+                   (not calibration?) (conj "--memory-network"))
+            child (.spawn cp "kbb" (to-array args) #js {:cwd cas-dir :env env})
+            buf (atom "")]
+        (.on (.-stdout child) "data"
+             (fn [d]
+               (swap! buf str (.toString d))
+               (when-let [[_ url] (re-find #":listening \"([^\"]+)\"" @buf)]
+                 (resolve {:child child :url url}))))
+        (.on (.-stderr child) "data" (fn [d] (js/process.stderr.write d)))
+        (.on child "exit" (fn [code] (reject (js/Error. (str "sidecar exited " code)))))))))
+
+(defn- install-host-sha256!
+  "multiformats' cljs default digest is orders of magnitude slower than the
+  host's; a 3 MiB object would take minutes. The seam proves the candidate
+  against the portable digest before accepting it."
+  []
+  (when (= :portable (mf/sha256-provider))
+    (mf/install-sha256!
+      (fn [b] (js/Uint8Array. (.digest (.update (.createHash crypto "sha256") b)))))))
+
+(defn- cid-of [bytes] (mf/cidv1-raw bytes))
+
+(defn- poll-stored!
+  "Resolve when the tier reports `cid` :stored (drain runs every 15 s)."
+  [cfg cid deadline]
+  (js/Promise.
+    (fn [resolve reject]
+      (letfn [(step []
+                (let [r ((:transport cfg) {:method "GET" :path (str "/status/" cid)})]
+                  (cond
+                    (and (= 200 (:status r))
+                         (re-find #":state :stored" (js/String (js/Buffer.from (:body r)))))
+                    (resolve true)
+                    (> (js/Date.now) deadline) (reject (js/Error. "not stored in time"))
+                    :else (js/setTimeout step 3000))))]
+        (step)))))
+
+(defn -main [args]
+  (install-host-sha256!)
+  (let [calibration? (some #{"--calibration"} args)
+        tmp (.mkdtempSync fs (.join nodepath (.tmpdir os) "mkfc-e2e-"))
+        token-file (.join nodepath tmp "token")
+        _ (.writeFileSync fs token-file "e2e-token-not-a-secret\n" #js {:mode 0600})
+        port (+ 20000 (rand-int 20000))]
+    (println "mode:" (if calibration? "calibration (real Filecoin)" "in-memory network"))
+    (-> (start-sidecar! {:port port :token-file token-file
+                         :state-dir (.join nodepath tmp "state") :calibration? calibration?})
+        (.then
+          (fn [{:keys [child url]}]
+            (let [env {"MURAKUMO_FILECOIN_CAS_URL" url
+                       "MURAKUMO_FILECOIN_CAS_TOKEN_FILE" token-file}
+                  cfg (assoc (tier/config-from-env #(get env %)) :timeout-s 60)
+                  cfg (assoc cfg :transport (tier/curl-transport cfg))
+                  errors (atom [])
+                  cfg (assoc cfg :on-error #(swap! errors conj %))
+                  ;; every byte value, 3 MiB: proves the curl path is binary safe
+                  data (js/Uint8Array. (let [b (js/Buffer.alloc (* 3 1024 1024))]
+                                         (dotimes [i (.-length b)] (aset b i (mod i 256)))
+                                         b))
+                  cid (cid-of data)
+                  a (tier/wrap (store/adapter (str (kio/temp-dir "mk-a"))) cfg)
+                  b (tier/wrap (store/adapter (str (kio/temp-dir "mk-b"))) cfg)]
+              (println "sidecar at" url "  cid" cid)
+              ((:put! a) cid data)
+              (check (empty? @errors) "put! accepted by the tier")
+              (check (tier/remote-known? cfg cid) "tier reports the object")
+              (let [wrong (assoc cfg :transport
+                                 (tier/curl-transport
+                                   (assoc cfg :token-file
+                                          (let [f (.join nodepath tmp "bad")]
+                                            (.writeFileSync fs f "wrong\n" #js {:mode 0600})
+                                            f))))
+                    r ((:transport wrong) {:method "GET" :path "/health"})]
+                (check (= 401 (:status r)) "a wrong token is refused (401)"))
+              (-> (poll-stored! cfg cid (+ (js/Date.now) (if calibration? 600000 60000)))
+                  (.then
+                    (fn [_]
+                      (check true "tier reports :stored")
+                      ;; a different, empty local store reads it back cold
+                      (let [got ((:get b) cid)]
+                        (check (some? got) "cold read from an empty local store")
+                        (check (= cid (cid-of got)) "bytes verify against the CID")
+                        (check (= (.-length data) (alength got)) "same length")
+                        (check (empty? @errors) "no tier errors")
+                        (println "OK  murakumo -> filecoin-cas round trip, real curl transport")
+                        (.kill child)
+                        (js/process.exit 0))))
+                  (.catch (fn [e] (.kill child) (fail (.-message e))))))))
+        (.catch (fn [e] (fail (.-message e)))))))
+
+(-main (vec (drop 1 (seq js/process.argv))))

@@ -213,8 +213,21 @@ moot because the host is JS-only; the hosts assume one crawl per node at a time.
 Reading `kotobase.blocks` showed the first `put-block!` design was wrong for the
 real gateway: kotobase write authorizations are short-lived CACAOs with
 single-use nonces, and the body is `application/vnd.ipld.raw`. A fixed
-`kotobase.auth` value would work for one write and then fail with 401. Now the
-node runs an operator-supplied **minter command** (`kotobase.auth-cmd`, argv, no
+`yataverse.auth` value would work for one write and then fail with 401. Now the
+node runs an operator-supplied **minter command** (`yataverse.auth-cmd`, argv, no
 shell) before every write; a regression test uses a single-use-nonce fake server
 to show the static value fails on the second put and the minter succeeds. The
 write path remains unexercised against the real gateway — it needs the minter.
+
+## kotobase is now yataverse (owner note 2026-09-29)
+
+The bytes plane was renamed. Node config is `yataverse.*` (`kotobase.*` and
+`MURAKUMO_KOTOBASE_*` are still read as a fallback); the gateway is
+`https://ipfs.yataverse.com`. Checking it showed that `GET /ipfs/<cid>` answers
+**301 to a per-CID subdomain** (`<cid>.ipfs.yataverse.com`), which the put's
+read-back verification did not follow and would have failed on for every real
+write. The read-back now follows up to 3 redirects, and only if the final host
+shares the base host's parent domain; the authenticated PUT never follows a
+redirect (regression tests for both). Reading a known block through the real
+gateway works end to end. Writing still needs the operator's minter
+(`yataverse.auth-cmd`); nothing has been written to the real gateway.

@@ -23,6 +23,9 @@
            (global.used=global.used||new Set()).add(a); blobs[q.url]=Buffer.concat(chunks); r.writeHead(201); return r.end(); }
          if(q.headers.authorization!=='Bearer good'){r.writeHead(401);return r.end();}
          blobs[q.url]=Buffer.concat(chunks); r.writeHead(201); return r.end(); }
+       if(q.method==='GET' && q.url.startsWith('/blob/')){ const b=blobs['/ipfs/'+q.url.slice(6)]; if(!b){r.writeHead(404);return r.end();} r.writeHead(200); return r.end(b); }
+       if(q.method==='GET' && mode==='redirect'){ r.writeHead(301,{location:'http://127.0.0.1:'+port+'/blob/'+q.url.slice(6)}); return r.end(); }
+       if(q.method==='GET' && mode==='redirect-off'){ r.writeHead(301,{location:'http://localhost:'+port+'/blob/'+q.url.slice(6)}); return r.end(); }
        if(q.method==='GET'){ let b=blobs[q.url]; if(!b){r.writeHead(404);return r.end();}
          if(mode==='corrupt') b=Buffer.from('tampered'); r.writeHead(200); return r.end(b); }
        r.writeHead(405); r.end(); }); }).listen(port,'127.0.0.1');")
@@ -169,3 +172,22 @@
   (is (= {:error :put/bad-path-prefix}
          (host/put-block! {:base-url "http://127.0.0.1:1" :authorization "x" :path-prefix "ipld"}
                           (w/raw-cid (w/utf8-bytes "x")) (w/utf8-bytes "x")))))
+
+(deftest readback-follows-a-same-domain-redirect-but-not-an-off-domain-one
+  ;; the real gateway answers GET /ipfs/<cid> with a 301 to a per-CID subdomain
+  (let [log (tmp ".log") a (start-server! 18906 "redirect" log)]
+    (try
+      (is (= {:ok true} (host/put-block! {:base-url "http://127.0.0.1:18906" :authorization "Bearer good"} cid bs)))
+      (finally (.kill a))))
+  (let [log (tmp ".log") b (start-server! 18907 "redirect-off" log)]
+    (try
+      (is (= {:error :put/verify-redirected-off-domain}
+             (host/put-block! {:base-url "http://127.0.0.1:18907" :authorization "Bearer good"} cid bs)))
+      (finally (.kill b)))))
+
+(deftest the-authenticated-put-itself-is-never-redirected
+  (let [src (.readFileSync fs "src/murakumo/web/host.cljk" "utf8")
+        put-part (subs src (.indexOf src "(defn put-block!"))]
+    ;; the PUT goes through `curl` with --max-redirs 0; only readback! passes -L
+    (is (re-find #"\"--max-redirs\" \"0\"" put-part))
+    (is (= 1 (count (re-seq #"\"-L\"" src))))))

@@ -240,6 +240,35 @@
           out (some-> (:stdout r) .toString .trim)]
       (when (and (zero? (:status r)) (seq out) (not (re-find #"[\r\n]" out))) out))))
 
+(defn- host-of [url] (some-> (re-find #"^https?://([^/:?#]+)" (str url)) second .toLowerCase))
+
+(defn- parent-domain
+  "Registrable-ish parent: last two labels of a hostname; an IP literal or a
+  single-label host is its own parent (so a redirect must stay on that host)."
+  [host]
+  (let [labels (.split host ".")]
+    (if (or (re-matches #"[0-9.]+" host) (< (.-length labels) 3)) host
+        (.join (.slice labels -2) "."))))
+
+(defn- readback!
+  "GET the block back for verification. The gateway may redirect to a per-CID
+  subdomain (ipfs.<domain>/ipfs/<cid> -> <cid>.ipfs.<domain>), so redirects are
+  followed here (https only after the first hop, at most 3) but the FINAL host
+  must share the base host's parent domain. Never used for the authenticated PUT.
+  Returns {:bytes u8} | {:error kw}."
+  [url base-url out-file max-time-s]
+  (let [r (run "curl" ["-sS" "-g" "--noproxy" "*" "--max-time" (str max-time-s)
+                       "--proto" "=http,https" "--proto-redir" "=https,http"
+                       "-L" "--max-redirs" "3" "-o" out-file "-w" "%{http_code} %{url_effective}" url] {})
+        [_ code eff] (re-find #"^(\d+) (.*)$" (str (some-> (:stdout r) .toString)))]
+    (cond
+      (not (zero? (:status r))) {:error :put/verify-unreachable}
+      (not= "200" code) {:error (keyword "put" (str "verify-http-" code))}
+      (not= (parent-domain (or (host-of eff) ""))
+            (parent-domain (or (host-of base-url) "")))
+      {:error :put/verify-redirected-off-domain}
+      :else {:bytes (js/Uint8Array. (.readFileSync fs out-file))})))
+
 (defn put-block!
   "PUT bytes at `<base-url><path-prefix><cid>` (default prefix /ipfs/) then GET them
   back and re-derive the CID. Authorization is `:authorization` (a string) or
@@ -258,6 +287,7 @@
       :else
       (let [url (str (.replace base-url #"/+$" "") path-prefix cid)
             tmp (str (.tmpdir (js/require "os")) "/murakumo-put-" (.toString (.randomBytes crypto 6) "hex"))
+            tmp2 (str tmp ".rb")
             curl (fn [args opts] (run "curl" (into ["-sS" "-g" "--noproxy" "*" "--max-time" (str max-time-s)
                                                     "--proto" "=http,https" "--max-redirs" "0"] args) opts))]
         (try
@@ -272,13 +302,13 @@
               (let [code (js/parseInt (.toString (:stdout put)) 10)]
                 (if-not (<= 200 code 299)
                   {:error (keyword "put" (str "http-" code))}
-                  (let [got (curl [url] {})]
+                  (let [rb (readback! url base-url tmp2 max-time-s)]
                     (cond
-                      (not (zero? (:status got))) {:error :put/verify-unreachable}
-                      (not= cid (w/raw-cid (js/Uint8Array. (:stdout got)))) {:error :put/verify-mismatch}
+                      (:error rb) rb
+                      (not= cid (w/raw-cid (:bytes rb))) {:error :put/verify-mismatch}
                       :else {:ok true}))))))
           (catch :default _ {:error :put/local-failure})
-          (finally (when (.existsSync fs tmp) (.unlinkSync fs tmp))))))))
+          (finally (doseq [f [tmp tmp2]] (when (.existsSync fs f) (.unlinkSync fs f)))))))))
 
 (defn tee-store
   "Local dir store first (durable, authoritative for the job), then a remote put.

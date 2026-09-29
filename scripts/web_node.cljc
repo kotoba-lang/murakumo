@@ -44,21 +44,25 @@
     {:seed seed :public-key-hex public-key-hex :node-did (host/did-key public-key-hex)}))
 
 (defn- remote-put-config
-  "Optional yataverse/kotobase put. Files under the node home (ssh is a non-login
-  shell, so env vars are unreliable):
-    kotobase.url         gateway base URL
-    kotobase.prefix      optional path prefix, default /ipfs/ (the datom plane is /ipld/)
-    kotobase.auth-cmd    EDN argv vector of the operator's MINTER, run per write
-                         (kotobase authorizations are short-lived CACAOs with
+  "Optional yataverse put (the bytes plane formerly named kotobase). Files under
+  the node home (ssh is a non-login shell, so env vars are unreliable); the old
+  kotobase.* names are still read as a fallback:
+    yataverse.url        gateway base URL
+    yataverse.prefix     optional path prefix, default /ipfs/
+    yataverse.auth-cmd   EDN argv vector of the operator's MINTER, run per write
+                         (write authorizations are short-lived CACAOs with
                          single-use nonces — a stored value works once at best)
-    kotobase.auth        static value, only for a gateway that accepts one (0600)
+    yataverse.auth       static value, only for a gateway that accepts one (0600)
   Absent url or any authorization -> local store only."
   []
-  (let [rd (fn [f] (let [p (.join path (home) f)] (when (.existsSync fs p) (.trim (.readFileSync fs p "utf8")))))
-        url (or (.. js/process -env -MURAKUMO_KOTOBASE_URL) (rd "kotobase.url"))
-        prefix (rd "kotobase.prefix")
-        cmd (some-> (rd "kotobase.auth-cmd") reader/read-string)
-        static (or (.. js/process -env -MURAKUMO_KOTOBASE_AUTH) (rd "kotobase.auth"))]
+  (let [rd (fn [base] (let [try-file (fn [n] (let [p (.join path (home) n)]
+                                               (when (.existsSync fs p) (.trim (.readFileSync fs p "utf8")))))]
+                        (or (try-file (str "yataverse." base)) (try-file (str "kotobase." base)))))
+        env (fn [a b] (or (aget (.-env js/process) a) (aget (.-env js/process) b)))
+        url (or (env "MURAKUMO_YATAVERSE_URL" "MURAKUMO_KOTOBASE_URL") (rd "url"))
+        prefix (rd "prefix")
+        cmd (some-> (rd "auth-cmd") reader/read-string)
+        static (or (env "MURAKUMO_YATAVERSE_AUTH" "MURAKUMO_KOTOBASE_AUTH") (rd "auth"))]
     (when (and (seq url) (or cmd (seq static)))
       (cond-> {:base-url url}
         (seq prefix) (assoc :path-prefix prefix)
