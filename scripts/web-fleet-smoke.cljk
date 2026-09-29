@@ -1,0 +1,29 @@
+;; Live smoke across real fleet nodes (ADR-260929 M1/M2/M4). Read-mostly: it
+;; fetches one public URL on each node and stores the bytes in that node's own
+;; ~/.murakumo-web/store.
+;;   kbb --classpath "src:test" scripts/web-fleet-smoke.cljk https://example.com/ host1:zoneA host2:zoneB ...
+(ns web-fleet-smoke
+  (:require [murakumo.web :as web]
+            [murakumo.web.dispatch :as dispatch]
+            [murakumo.web.host :as host]
+            [murakumo.web.verify :as verify]))
+
+(let [[url & specs] *command-line-args*
+      nodes (keep (fn [spec] (let [[h z] (.split spec ":")]
+                               (or (dispatch/remote-node {:host h :zone (or z "unset")})
+                                   (do (println "UNREACHABLE" h) nil))))
+                  specs)]
+  (doseq [n nodes] (println "node" (:host n) (:zone n) (:node-did n)))
+  (let [results (mapv (fn [n] [n ((:fetch! n) {:job-id (str "smoke/" (:host n)) :url url})]) nodes)]
+    (doseq [[n r] results]
+      (if-let [ok (:ok r)]
+        (println "fetch" (:host n) (get-in ok [:receipt :evidence :status]) (:output-cid ok)
+                 "sig-valid:" (host/verify? (:public-key-hex n) (web/receipt-signing-string (:receipt ok)) (:signature ok)))
+        (println "fetch" (:host n) "REFUSED" (pr-str r))))
+    (println "same-egress agreement:"
+             (pr-str (web/compare-replicas (keep #(get-in % [1 :ok :receipt]) results))))
+    (let [v (verify/verify-fetch!
+             {:nodes nodes :put! (fn [_ _] true) :sign! (fn [_] "n/a") :now-ms #(js/Date.now) :node-did "coordinator"}
+             {:job-id "smoke-verify" :url url :verify-replicas 2})]
+      (println "dual-zone verify:" (pr-str (or (:refused v) (:detail v) (get-in v [:ok :verdict :status])))
+               (when (:refused v) (pr-str (:detail v)))))))

@@ -132,3 +132,21 @@
   (let [md (w/html->markdown real-world-html)]
     (is (= "This domain is for use.\n\n[Learn more](https://iana.org/help/example-domains)[b](https://b.example/)" md))
     (is (not (re-find #"- |Example Domain|color" md)))))
+
+(deftest falls-back-to-the-next-vetted-address-and-prefers-ipv4
+  (let [tried (atom [])
+        {:keys [env]} (make-env {} {})
+        env (assoc env
+                   :resolve! (fn [_] ["2606:2800:220:1:248:1893:25c8:1946" "93.184.216.34" "93.184.216.35"])
+                   :http-get! (fn [{:keys [address]}]
+                                (swap! tried conj address)
+                                (if (= address "93.184.216.35") page {:error :curl/exit-7})))
+        ok (:ok (w/fetch! env {:job-id "j" :url "https://example.com/"}))]
+    (is ok)
+    (is (= ["93.184.216.34" "93.184.216.35"] @tried))))
+
+(deftest all-addresses-failing-is-a-transport-refusal
+  (let [{:keys [env]} (make-env {} {})
+        env (assoc env :resolve! (fn [_] ["93.184.216.34" "93.184.216.35"])
+                   :http-get! (fn [_] {:error :curl/exit-7}))]
+    (is (= :fetch/transport (:refused (w/fetch! env {:job-id "j" :url "https://example.com/"}))))))

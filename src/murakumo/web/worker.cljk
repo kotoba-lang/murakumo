@@ -91,8 +91,14 @@
           ;; every answer must be public; a single private A record refuses the host
           (some web/private-address? ips) (refuse :url/private-address host)
           :else
-          (let [r (http-get! {:url url :address (first ips) :max-bytes max-bytes})]
-            (if (:error r) (refuse :fetch/transport (:error r)) {:response r})))))))
+          ;; IPv4 first (many nodes have no IPv6 route); on a transport error try the
+          ;; next vetted address. Every address was checked public above.
+          (let [ordered (vec (concat (remove #(re-find #":" %) ips) (filter #(re-find #":" %) ips)))
+                attempt (reduce (fn [_ ip]
+                                  (let [r (http-get! {:url url :address ip :max-bytes max-bytes})]
+                                    (if (:error r) {:error (:error r)} (reduced {:response r}))))
+                                nil ordered)]
+            (if (:error attempt) (refuse :fetch/transport (:error attempt)) attempt)))))))
 
 (defn fetch!
   "job {:job-id :url [:max-bytes]} -> {:ok {:receipt :signature :output-cid}} | {:refused ..}"

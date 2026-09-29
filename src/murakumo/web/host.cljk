@@ -124,3 +124,78 @@
                                             (map (fn [x] {:url (:url x) :title (:title x) :snippet (:content x)})))
                                    (:results doc))})
                  (catch :default _ {:error :backend/bad-json})))))))) })
+
+;; --- identity -----------------------------------------------------------------
+
+(def ^:private b58 "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+
+(defn- base58btc
+  "Digit-array conversion (no BigInt literals: the stock nbb reader rejects them)."
+  [^js buf]
+  (let [bs (vec (array-seq buf))
+        zeros (count (take-while zero? bs))
+        digits (reduce (fn [ds b]
+                         (let [[ds carry] (reduce (fn [[out carry] d]
+                                                    (let [x (+ (* d 256) carry)]
+                                                      [(conj out (rem x 58)) (quot x 58)]))
+                                                  [[] b] ds)]
+                           (loop [ds ds carry carry]
+                             (if (pos? carry) (recur (conj ds (rem carry 58)) (quot carry 58)) ds))))
+                       [] bs)]
+    (str (apply str (repeat zeros "1")) (apply str (map #(nth b58 %) (reverse digits))))))
+
+(defn did-key
+  "did:key for an ed25519 public key given as SPKI hex (multicodec 0xed01)."
+  [public-key-hex]
+  (let [spki (js/Buffer.from public-key-hex "hex")
+        raw (.subarray spki (- (.-length spki) 32))]
+    (str "did:key:z" (base58btc (js/Buffer.concat #js [(js/Buffer.from #js [0xed 0x01]) raw])))))
+
+(defn load-or-create-seed!
+  "Node key: 32 random bytes as hex in `path`, mode 0600, created once. Never logged."
+  [path-str]
+  (if (.existsSync fs path-str)
+    (let [s (.trim (.readFileSync fs path-str "utf8"))]
+      (when-not (re-matches #"[0-9a-f]{64}" s)
+        (throw (ex-info "node key file is not 64 hex chars" {:path path-str})))
+      s)
+    (let [seed (.toString (.randomBytes crypto 32) "hex")]
+      (.mkdirSync fs (.dirname path path-str) #js {:recursive true :mode 0700})
+      (.writeFileSync fs path-str (str seed "\n") #js {:mode 0600 :flag "wx"})
+      seed)))
+
+;; --- store housekeeping -------------------------------------------------------
+
+(defn store-usage
+  "{:files n :bytes n} of a dir store."
+  [dir]
+  (if-not (.existsSync fs dir)
+    {:files 0 :bytes 0}
+    (reduce (fn [acc f] (-> acc (update :files inc)
+                            (update :bytes + (.-size (.statSync fs (.join path dir f))))))
+            {:files 0 :bytes 0}
+            (array-seq (.readdirSync fs dir)))))
+
+(defn store-gc!
+  "Delete oldest files until the store is <= max-bytes. Explicit operator action:
+  nothing is pinned elsewhere until the yataverse put lands, so this loses data."
+  [dir max-bytes]
+  (let [entries (->> (array-seq (.readdirSync fs dir))
+                     (map (fn [f] (let [st (.statSync fs (.join path dir f))]
+                                    {:f f :size (.-size st) :t (.-mtimeMs st)})))
+                     (sort-by :t))
+        total (reduce + (map :size entries))]
+    (loop [es entries total total removed 0]
+      (if (or (<= total max-bytes) (empty? es))
+        {:removed removed :bytes-after total}
+        (let [{:keys [f size]} (first es)]
+          (.unlinkSync fs (.join path dir f))
+          (recur (rest es) (- total size) (inc removed)))))))
+
+(defn free-bytes
+  "Free bytes on the volume holding `dir` (via `df -k`), or nil."
+  [dir]
+  (let [r (run "df" ["-k" dir] {})]
+    (when (zero? (:status r))
+      (some-> (.toString (:stdout r)) (.split "\n") (aget 1) (.split #"\s+") (aget 3)
+              (js/parseInt 10) (* 1024)))))

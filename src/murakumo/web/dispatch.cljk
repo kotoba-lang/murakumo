@@ -1,0 +1,58 @@
+(ns murakumo.web.dispatch
+  "Coordinator-side transport for web nodes (ADR-260929): one `ssh` per request
+  to `web_node.cljs` on the node, EDN in on stdin, one EDN line out.
+
+  This rides the SSH path fleet operations already use (fleet.edn, RULES.md #1:
+  BatchMode), so a node opens no new listening port. Hosts and paths come from
+  operator config and are validated against a strict pattern before they reach
+  a shell; job data only ever travels on stdin.
+
+  A node map returned by `remote-node` plugs straight into
+  `murakumo.web.verify/verify-fetch!`."
+  (:require [cljs.reader :as reader]))
+
+(def ^:private cp (js/require "child_process"))
+
+(def default-home ".murakumo-web")
+(def default-timeout-ms 120000)
+(def crawl-timeout-ms 900000)
+
+(defn- safe-token? [s] (boolean (and (string? s) (re-matches #"[A-Za-z0-9._@:/~-]+" s))))
+
+(defn- remote-command [home]
+  (str "MURAKUMO_WEB_HOME=\"$HOME/" home "\" nbb -cp \"$HOME/" home "/bundle\" \"$HOME/" home "/bundle/web_node.cljs\""))
+
+(defn call!
+  "Run one op on `host`. Returns the node's EDN result, or {:refused :dispatch/...}."
+  [{:keys [host home timeout-ms] :or {home default-home timeout-ms default-timeout-ms}} op job]
+  (cond
+    (not (safe-token? host)) {:refused :dispatch/bad-host}
+    (not (safe-token? home)) {:refused :dispatch/bad-home}
+    :else
+    (let [r (.spawnSync cp "ssh"
+                        #js ["-o" "BatchMode=yes" "-o" "ConnectTimeout=8" host (remote-command home)]
+                        #js {:input (pr-str {:op op :job job}) :timeout timeout-ms
+                             :maxBuffer (* 64 1024 1024) :encoding "utf8"})]
+      (cond
+        (.-error r) {:refused :dispatch/spawn-failed :detail (str (.-message (.-error r)))}
+        (not (zero? (.-status r))) {:refused :dispatch/ssh-failed :detail {:status (.-status r)
+                                                                             :stderr (subs (str (.-stderr r)) 0 (min 300 (count (str (.-stderr r)))))}}
+        :else
+        (let [line (last (remove empty? (.split (str (.-stdout r)) "\n")))]
+          (try (reader/read-string line)
+               (catch :default _ {:refused :dispatch/bad-reply})))))))
+
+(defn remote-node
+  "Node map for verify-fetch!. `zone` is the OPERATOR's declaration in the
+  registry; the node's own identity is read once with :whoami."
+  [{:keys [host zone] :as cfg}]
+  (let [who (call! cfg :whoami {})]
+    (when-let [ok (:ok who)]
+      {:host host :zone zone :node-did (:node-did ok) :public-key-hex (:public-key-hex ok)
+       :cfg cfg
+       :fetch! #(call! cfg :fetch %)
+       :extract! #(call! cfg :extract %)
+       :crawl! #(call! (assoc cfg :timeout-ms crawl-timeout-ms) :crawl %)
+       :search! #(call! cfg :search %)
+       :get! #(call! cfg :get %)
+       :health! #(call! cfg :health {})})))
