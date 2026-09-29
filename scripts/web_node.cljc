@@ -53,7 +53,7 @@
                          (write authorizations are short-lived CACAOs with
                          single-use nonces — a stored value works once at best)
     yataverse.auth       static value, only for a gateway that accepts one (0600)
-    yataverse.authn.edn  {:tenant-id "t_..." :storage "..." :permissions [...]} with
+    yataverse.authn.edn  an EDN map with :tenant-id (t_...), :storage, :permissions, plus
     yataverse.sa-token   a tenant service-account secret (kb_sa_..., 0600): the node
                          exchanges it at auth.kotoba.cloud for a 15-minute Biscuit
                          (cached until 60 s before expiry) — the current auth flow

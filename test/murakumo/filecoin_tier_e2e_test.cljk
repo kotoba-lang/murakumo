@@ -24,6 +24,12 @@
 
 (def cas-dir (.resolve nodepath "../filecoin-cas"))
 
+(defn- stop-sidecar!
+  "kbb runs the server as a child of its wrapper: signal the whole process
+  group (the child was spawned detached), or the server outlives the test."
+  [child]
+  (try (.kill js/process (- (.-pid child)) "SIGTERM") (catch :default _ nil)))
+
 (defn- start-sidecar!
   "Spawn the service; resolve {:child :url} once it prints its listening line."
   [{:keys [port token-file state-dir calibration?]}]
@@ -39,7 +45,7 @@
                       (.join nodepath cas-dir ".filecoin-cas/calibration.key")))
             args (cond-> ["--backend" "sci" "bin/filecoin-cas-server.cljk"]
                    (not calibration?) (conj "--memory-network"))
-            child (.spawn cp "kbb" (to-array args) #js {:cwd cas-dir :env env})
+            child (.spawn cp "kbb" (to-array args) #js {:cwd cas-dir :env env :detached true})
             buf (atom "")]
         (.on (.-stdout child) "data"
              (fn [d]
@@ -106,7 +112,7 @@
                                (is (= (.-length data) (alength got)) "same length"))
                              (is (empty? @errors) (str "no tier errors: " (pr-str @errors))))))))))
         (.finally (fn []
-                    (some-> @sidecar (.kill))
+                    (some-> @sidecar stop-sidecar!)
                     (.rmSync fs tmp #js {:recursive true :force true}))))))
 
 (deftest murakumo-to-filecoin-cas-round-trip
