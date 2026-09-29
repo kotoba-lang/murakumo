@@ -1,0 +1,22 @@
+;; Live smoke for ADR-260929 M1: fetch one URL, extract it, verify the receipt.
+;;   kbb --classpath "src:test" scripts/web-fetch-demo.cljk https://example.com/
+(ns web-fetch-demo
+  (:require [murakumo.web :as web]
+            [murakumo.web.host :as host]
+            [murakumo.web.worker :as w]))
+
+(let [url (or (first *command-line-args*) "https://example.com/")
+      seed (.toString (.randomBytes (js/require "crypto") 32) "hex")
+      dir (or (second *command-line-args*) (str (.tmpdir (js/require "os")) "/murakumo-web-demo"))
+      env (host/env {:store-dir dir :seed-hex seed :node-did "did:local:demo"})
+      pub (:public-key-hex (host/signer seed))
+      f (w/fetch! env {:job-id "demo-fetch" :url url})]
+  (if-let [ok (:ok f)]
+    (let [x (w/extract! env {:job-id "demo-extract" :fetch-cid (:output-cid ok) :format :markdown})]
+      (println "fetch   " (:output-cid ok) (get-in ok [:receipt :evidence :status]) (get-in ok [:receipt :evidence :bytes]) "bytes")
+      (println "verify  " (host/verify? pub (web/receipt-signing-string (:receipt ok)) (:signature ok)))
+      (println "extract " (or (get-in x [:ok :output-cid]) x))
+      (when-let [xo (:ok x)]
+        (println "---")
+        (println (w/utf8-string ((:get-bytes! env) (:output-cid xo))))))
+    (println "REFUSED" f)))

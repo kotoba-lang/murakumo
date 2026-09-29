@@ -1,0 +1,214 @@
+(ns murakumo.web.worker
+  "M1 of ADR-260929: `:web/fetch` and `:web/extract` with every host primitive
+  injected, so the same code runs under nbb on a fleet node and in tests.
+
+  env keys (all host-supplied):
+    :resolve!   (fn [host] -> [ip-string ...])              DNS
+    :http-get!  (fn [{:keys [url address max-bytes]}]       one hop, NO redirect
+                  -> {:status n :headers {lower-name value} :body bytes}
+                   | {:error kw})                            following; `address`
+                                                             is the vetted IP to pin
+    :put!       (fn [cid bytes] -> truthy)                  yataverse / IPFS put
+    :get-bytes! (fn [cid] -> bytes | nil)
+    :sign!      (fn [string] -> string)                     node key
+    :now-ms     (fn [] -> long)
+    :node-did   string
+  Nothing throws at the caller: every failure is a typed {:refused ...}."
+  (:require [kotoba.lang.text :as text]
+            [murakumo.canonical :as canonical]
+            [murakumo.web :as web]))
+
+(def default-max-bytes (* 5 1024 1024))
+(def max-redirects 5)
+
+;; --- host primitives ---------------------------------------------------------
+
+(defn utf8-bytes [s]
+  #?(:clj (.getBytes (str s) "UTF-8")
+     :cljs (js/Uint8Array. (js/Buffer.from (str s) "utf8"))))
+
+(defn utf8-string [bs]
+  #?(:clj (String. ^bytes bs "UTF-8")
+     :cljs (.toString (js/Buffer.from bs) "utf8")))
+
+(defn byte-count [bs]
+  #?(:clj (alength ^bytes bs) :cljs (.-length bs)))
+
+(defn sha256-digest
+  "bytes -> 32 unsigned ints."
+  [bs]
+  #?(:clj (mapv #(bit-and (int %) 0xff)
+                (.digest (java.security.MessageDigest/getInstance "SHA-256") ^bytes bs))
+     :cljs (let [h (.createHash (js/require "crypto") "sha256")]
+             (.update h (js/Buffer.from bs))
+             (vec (array-seq (js/Uint8Array. (.digest h)))))))
+
+(defn- hex [digest]
+  (apply str (map #(str (when (< % 16) "0") (#?(:clj Integer/toHexString :cljs .toString) % 16))
+                  digest)))
+
+(def ^:private b32 "abcdefghijklmnopqrstuvwxyz234567")
+
+(defn- base32 [bs]
+  (let [bits (mapcat (fn [b] (map #(bit-and (bit-shift-right b %) 1) [7 6 5 4 3 2 1 0])) bs)]
+    (apply str (map (fn [chunk] (nth b32 (reduce #(+ (* %1 2) %2) 0 chunk)))
+                    (partition 5 5 (repeat 0) bits)))))
+
+(defn raw-cid
+  "CIDv1 / raw / sha2-256, base32lower — the same name kotobase stores by."
+  [bs]
+  (str "b" (base32 (into [0x01 0x55 0x12 0x20] (sha256-digest bs)))))
+
+(defn content-hash [bs] (str "sha256:" (hex (sha256-digest bs))))
+
+;; --- fetch --------------------------------------------------------------------
+
+(defn- refuse [reason & [detail]]
+  {:refused reason :detail detail})
+
+(defn- redirect? [status] (contains? #{301 302 303 307 308} status))
+
+(defn- resolve-location
+  "Absolute Location only; a relative one is rebuilt from the current URL's origin."
+  [current location]
+  (cond
+    (re-find #"^https?://" location) location
+    (text/starts-with? location "//") (str (re-find #"^https?:" current) location)
+    (text/starts-with? location "/")
+    (str (second (re-find #"^(https?://[^/?#]+)" current)) location)
+    :else nil))
+
+(defn- hop
+  "Validate one URL and fetch it without following. Returns {:response r} or a refusal."
+  [{:keys [resolve! http-get!]} url max-bytes]
+  (let [checked (web/check-url url)]
+    (if (:refused checked)
+      (refuse (:refused checked) url)
+      (let [host (get-in checked [:ok :host])
+            ips (vec (resolve! host))]
+        (cond
+          (empty? ips) (refuse :fetch/unresolved host)
+          ;; every answer must be public; a single private A record refuses the host
+          (some web/private-address? ips) (refuse :url/private-address host)
+          :else
+          (let [r (http-get! {:url url :address (first ips) :max-bytes max-bytes})]
+            (if (:error r) (refuse :fetch/transport (:error r)) {:response r})))))))
+
+(defn fetch!
+  "job {:job-id :url [:max-bytes]} -> {:ok {:receipt :signature :output-cid}} | {:refused ..}"
+  [{:keys [put! sign! now-ms node-did] :as env} {:keys [job-id url max-bytes] :as job}]
+  (let [valid (web/validate-job (assoc job :kind :web/fetch))]
+    (if (:refused valid)
+      (refuse :job/invalid (:refused valid))
+      (let [started (now-ms)
+            cap (or max-bytes default-max-bytes)]
+        (loop [current url chain [] n 0]
+          (let [h (hop env current cap)]
+            (if (:refused h)
+              h
+              (let [{:keys [status headers body]} (:response h)]
+                (cond
+                  (redirect? status)
+                  (let [next-url (resolve-location current (get headers "location" ""))]
+                    (cond
+                      (nil? next-url) (refuse :fetch/bad-redirect (get headers "location"))
+                      (>= n max-redirects) (refuse :fetch/too-many-redirects current)
+                      :else (recur next-url (conj chain current) (inc n))))
+
+                  (nil? body) (refuse :fetch/no-body status)
+                  (> (byte-count body) cap) (refuse :fetch/too-large (byte-count body))
+
+                  :else
+                  (let [cid (raw-cid body)]
+                    (if-not (put! cid body)
+                      (refuse :store/put-failed cid)
+                      (let [r (web/receipt
+                               {:job-id job-id :kind :web/fetch :input-cids []
+                                :output-cid cid :node-did node-did
+                                :started-at started :finished-at (max started (now-ms))
+                                :evidence {:status status :final-url current
+                                           :redirects chain
+                                           :content-type (get headers "content-type")
+                                           :bytes (byte-count body)
+                                           :content-hash (content-hash body)}})]
+                        {:ok {:receipt r
+                              :signature (sign! (web/receipt-signing-string r))
+                              :output-cid cid}}))))))))))))
+
+;; --- extract ------------------------------------------------------------------
+
+(defn- js-int [s] #?(:clj (Long/parseLong s) :cljs (js/parseInt s 10)))
+
+(def ^:private entities
+  {"&amp;" "&" "&lt;" "<" "&gt;" ">" "&quot;" "\"" "&#39;" "'" "&nbsp;" " "})
+
+(defn- decode-entities [s]
+  (reduce (fn [acc [k v]] (text/replace acc k v)) s entities))
+
+(defn- strip-blocks [html]
+  (-> html
+      (text/replace #"<!--[\s\S]*?-->" "")
+      (text/replace #"(?i)<(script|style|noscript|template|head)[\s\S]*?</\1>" "")))
+
+(def ^:private href-re
+  ;; quoted (" or ') or unquoted attribute values
+  "(?i)<a\\s[^>]*?href=(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))")
+
+(defn- title-of [html]
+  (some-> (re-find #"(?i)<title[^>]*>([\s\S]*?)</title>" html) second text/trim decode-entities))
+
+(defn html->markdown
+  "Best-effort, dependency-free. Headings, paragraphs, list items, links."
+  [html]
+  (-> (strip-blocks html)
+      (text/replace #"(?i)<h([1-6])[^>]*>([\s\S]*?)</h\1>"
+                    (fn [[_ n body]] (str "\n\n" (apply str (repeat (js-int n) "#")) " " body "\n\n")))
+      (text/replace (re-pattern (str href-re "[^>]*>([\\s\\S]*?)</a>"))
+                    (fn [[_ q1 q2 bare body]] (str "[" body "](" (or q1 q2 bare) ")")))
+      (text/replace #"(?i)<li(\s[^>]*)?>" "\n- ")
+      (text/replace #"(?i)<(br|/p|/div|/tr)[^>]*>" "\n\n")
+      (text/replace #"<[^>]+>" "")
+      decode-entities
+      (text/replace #"[ \t]+" " ")
+      (text/replace #"\n[ \t]+" "\n")
+      (text/replace #"\n{3,}" "\n\n")
+      text/trim))
+
+(defn- links-of [html]
+  (vec (distinct (map (fn [[_ q1 q2 bare]] (or q1 q2 bare))
+                      (re-seq (re-pattern href-re) (strip-blocks html))))))
+
+(defn extract!
+  "job {:job-id :fetch-cid :format} -> {:ok {:receipt :signature :output-cid}} | {:refused ..}
+  Refuses if the bytes the store returns do not hash to the requested CID."
+  [{:keys [get-bytes! put! sign! now-ms node-did]} {:keys [job-id fetch-cid format] :as job}]
+  (let [valid (web/validate-job (assoc job :kind :web/extract))]
+    (cond
+      (:refused valid) (refuse :job/invalid (:refused valid))
+      (= format :json-schema) (refuse :extract/unsupported-format :json-schema)
+      :else
+      (let [started (now-ms)
+            bs (get-bytes! fetch-cid)]
+        (cond
+          (nil? bs) (refuse :extract/input-missing fetch-cid)
+          (not= fetch-cid (raw-cid bs)) (refuse :extract/cid-mismatch fetch-cid)
+          :else
+          (let [html (utf8-string bs)
+                out (case format
+                      :markdown (html->markdown html)
+                      :edn (canonical/string {:title (title-of html)
+                                              :markdown (html->markdown html)
+                                              :links (links-of html)}))
+                out-bytes (utf8-bytes out)
+                cid (raw-cid out-bytes)]
+            (if-not (put! cid out-bytes)
+              (refuse :store/put-failed cid)
+              (let [r (web/receipt
+                       {:job-id job-id :kind :web/extract :input-cids [fetch-cid]
+                        :output-cid cid :node-did node-did
+                        :started-at started :finished-at (max started (now-ms))
+                        :evidence {:format format :bytes (byte-count out-bytes)
+                                   :content-hash (content-hash out-bytes)}})]
+                {:ok {:receipt r
+                      :signature (sign! (web/receipt-signing-string r))
+                      :output-cid cid}}))))))))

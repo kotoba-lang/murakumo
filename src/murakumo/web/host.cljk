@@ -1,0 +1,96 @@
+(ns murakumo.web.host
+  "Node/nbb host primitives for murakumo.web.worker (ADR-260929 M1).
+
+  Synchronous on purpose — the worker is written against sync primitives. HTTP
+  is `curl` with the vetted address pinned via --resolve, redirects OFF and a
+  size cap; DNS is Node's resolver in a child process. The store is a local
+  content-addressed directory: the yataverse/IPFS put is a later transport
+  (ADR-2607023100) and is NOT claimed here."
+  (:require [murakumo.web.worker :as w]))
+
+(def ^:private cp (js/require "child_process"))
+(def ^:private fs (js/require "fs"))
+(def ^:private path (js/require "path"))
+(def ^:private crypto (js/require "crypto"))
+
+(defn- run [cmd args opts]
+  (try
+    (let [r (.spawnSync cp cmd (clj->js args) (clj->js (merge {:maxBuffer (* 64 1024 1024)} opts)))]
+      {:status (.-status r) :stdout (.-stdout r) :stderr (some-> (.-stderr r) .toString)})
+    (catch :default e {:status -1 :stderr (str e)})))
+
+(defn resolve!
+  "host -> [ip ...] (all A/AAAA answers), [] on failure."
+  [host]
+  (let [r (run "node" ["-e" "require('dns').promises.lookup(process.argv[1],{all:true}).then(a=>console.log(a.map(x=>x.address).join('\\n'))).catch(()=>{})" host]
+               {:timeout 10000})]
+    (if (zero? (:status r))
+      (vec (remove empty? (.split (.toString (:stdout r)) "\n")))
+      [])))
+
+(defn- parse-headers [raw]
+  (into {} (keep (fn [line]
+                   (when-let [i (.indexOf line ":")]
+                     (when (pos? i)
+                       [(.toLowerCase (subs line 0 i)) (.trim (subs line (inc i)))])))
+                 (.split raw "\r\n"))))
+
+(defn http-get!
+  "One hop, no redirect following, connect pinned to `address`."
+  [{:keys [url address max-bytes]}]
+  (let [[_ scheme host port] (re-find #"^(https?)://([^/:?#]+)(?::(\d+))?" url)
+        port (or port (if (= scheme "https") "443" "80"))
+        hdr (str (.tmpdir (js/require "os")) "/murakumo-web-" (.randomBytes crypto 6) ".hdr")
+        r (run "curl" ["-sS" "--max-time" "30" "--max-filesize" (str max-bytes)
+                       "--proto" "=http,https" "--max-redirs" "0"
+                       "--resolve" (str host ":" port ":" address)
+                       "-A" "murakumo-web/0 (+https://murakumo.cloud)"
+                       "-D" hdr "-o" "-" url]
+               {})]
+    (try
+      (if (and (zero? (:status r)) (.existsSync fs hdr))
+        (let [raw (.readFileSync fs hdr "utf8")
+              blocks (remove empty? (.split raw "\r\n\r\n"))
+              last-block (last blocks)
+              status (js/parseInt (second (re-find #"^HTTP/\S+ (\d+)" last-block)) 10)]
+          {:status status :headers (parse-headers last-block) :body (js/Uint8Array. (:stdout r))})
+        {:error (keyword "curl" (str "exit-" (:status r)))})
+      (finally (when (.existsSync fs hdr) (.unlinkSync fs hdr))))))
+
+(defn dir-store
+  "Content-addressed directory store. Returns {:put! :get-bytes!}."
+  [dir]
+  (.mkdirSync fs dir #js {:recursive true})
+  {:put! (fn [cid bs] (.writeFileSync fs (.join path dir cid) (js/Buffer.from bs)) true)
+   :get-bytes! (fn [cid]
+                 (let [p (.join path dir cid)]
+                   (when (.existsSync fs p) (js/Uint8Array. (.readFileSync fs p)))))})
+
+(def ^:private pkcs8-ed25519-prefix "302e020100300506032b657004220420")
+
+(defn- private-key [seed-hex]
+  (.createPrivateKey crypto #js {:key (js/Buffer.from (str pkcs8-ed25519-prefix seed-hex) "hex")
+                                 :format "der" :type "pkcs8"}))
+
+(defn signer
+  "seed-hex (32 bytes) -> {:sign! (fn [string] -> hex sig) :public-key-hex}."
+  [seed-hex]
+  (let [k (private-key seed-hex)
+        pub (.createPublicKey crypto k)]
+    {:sign! (fn [s] (.toString (.sign crypto nil (js/Buffer.from s "utf8") k) "hex"))
+     :public-key-hex (.toString (.export pub #js {:format "der" :type "spki"}) "hex")}))
+
+(defn verify?
+  "Check a receipt signature against the signer's public key (spki hex)."
+  [public-key-hex signing-string signature-hex]
+  (let [pub (.createPublicKey crypto #js {:key (js/Buffer.from public-key-hex "hex")
+                                          :format "der" :type "spki"})]
+    (.verify crypto nil (js/Buffer.from signing-string "utf8") pub (js/Buffer.from signature-hex "hex"))))
+
+(defn env
+  "Worker env for this host. opts: {:store-dir :seed-hex :node-did}."
+  [{:keys [store-dir seed-hex node-did]}]
+  (merge {:resolve! resolve! :http-get! http-get!
+          :now-ms (fn [] (js/Date.now)) :node-did node-did
+          :sign! (:sign! (signer seed-hex))}
+         (dir-store store-dir)))

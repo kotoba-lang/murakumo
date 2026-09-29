@@ -162,7 +162,7 @@ existing bots.
 | # | deliverable | proof |
 |---|---|---|
 | M0 | pure spec: job schemas + receipt shape (`src/murakumo/web.cljk`), refusal cases | `test/murakumo/web_test.cljk` (9 tests / 53 assertions, kbb) — **done 2026-09-29** |
-| M1 | `:web/fetch` + `:web/extract` on 2 nodes, CID out, receipt signed | live run, evidence file |
+| M1 | `:web/fetch` + `:web/extract` on 2 nodes, CID out, receipt signed | **partial 2026-09-29**: worker (`src/murakumo/web/worker.cljk`, 12 tests / 33 assertions) + nbb host (`web/host.cljk`, curl pinned to the vetted IP, redirects re-validated per hop, local CID store, ed25519 receipt signature verified) run live against a public URL on the operator machine. **Not done**: run on two fleet nodes; yataverse/IPFS put (local dir store only); `:json-schema` extract (typed refusal); JVM host. |
 | M2 | `:web/crawl` coordinator with robots/rate limits, budget | crawl of an owned test site |
 | M3 | `:web/search` Phase 1 federated, replaces the SearXNG single host | comparison vs SearXNG |
 | M4 | dual-zone fetch verification | forced-disagreement test |
