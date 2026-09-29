@@ -3,12 +3,19 @@
 set -u
 cd "$(dirname "$0")/.."
 fail=0
-for ns in web web-worker web-robots web-crawl web-search web-backends web-verify web-index web-host; do
+for ns in web web-worker web-robots web-crawl web-search web-backends web-verify web-index web-host web-provision; do
   out=$(kbb -M:test -n "murakumo.$ns-test" 2>&1)
   line=$(printf '%s\n' "$out" | grep '^kbb test:' | tail -1)
   echo "$ns: ${line:-NO RESULT}"
   case "$line" in *" 0 fail, 0 error"*) ;; *) fail=1; printf '%s\n' "$out" | tail -25 ;; esac
 done
+# The MCP server: handshake, tool list, and that credentials/bad arguments are refused
+# (no network involved).
+mcp=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}' '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"web_fetch","arguments":{"url":"https://example.com/","sa_token":"kb_sa_x"}}}' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"web_crawl","arguments":{"seeds":[]}}}' | timeout 30 node scripts/web_mcp.mjs 2>&1)
+case "$mcp" in
+  *'"web_provision"'*'credentials never travel through tool arguments'*'must be an array of short strings'*) echo "mcp server: ok" ;;
+  *) echo "mcp server: FAILED: $mcp" | head -3; fail=1 ;;
+esac
 # Python side of the Modal node must at least compile.
 python3 -m py_compile deploy/modal/web_node.py scripts/modal_call.py 2>/dev/null \
   && echo "modal python: compiles" || { echo "modal python: COMPILE FAILED (or modal not installed for python3)"; }

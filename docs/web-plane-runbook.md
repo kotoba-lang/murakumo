@@ -112,6 +112,30 @@ kotobase.
   put never fails the job: the CID is queued, then `:sync` drains it. `:health`
   shows `:put/no-remote-configured` until url and one authorization source exist.
 
+## Automatic provisioning via MCP / agent
+
+Nothing can mint a tenant service-account secret except a tenant admin, so the
+credential itself is a human step. Everything after it is automatic:
+
+1. The admin gives the operator a `kb_sa_...` secret and the tenant/storage ids.
+2. The operator puts them in ONE file, `~/.murakumo-web-provision/yataverse.edn`
+   (directory 0700, file 0600), as a map of config-file name to content:
+   `{"yataverse.url" "https://kotobase.net"
+     "yataverse.authn.edn" "{:tenant-id \"t_...\" :storage \"...\"}"
+     "yataverse.sa-token" "kb_sa_..."}`
+3. An agent (or you) calls the MCP tool **`web_provision`** (or
+   `kbb ... scripts/web-cli.cljk provision`). It refuses a drop-file that is not 0600,
+   validates every name and value shape, writes each node's 0600 config (ssh stdin /
+   Modal's authenticated API), and returns file names only. Then `web_config_status`,
+   `web_sync`, `web_health`.
+4. Delete the drop-file.
+
+The MCP server (`scripts/web_mcp.mjs`, project `.mcp.json`, or
+`claude mcp add murakumo-web -- node scripts/web_mcp.mjs`) exposes `web_health`,
+`web_config_status`, `web_fetch`, `web_crawl`, `web_search`, `web_verify_fetch`,
+`web_sync`, `web_provision`. Any argument named like a credential is refused, and no tool
+result contains a secret. The `web-plane` bot profile may call these; see its `yakuwari.edn`.
+
 ## Routine ops (via `murakumo.web.dispatch/call!`)
 
 | op | when | note |

@@ -251,3 +251,20 @@ So "issue the authorization" reduces to what a tenant admin can hand over: a
 now consumes that secret directly (`host/biscuit-from-service-account`, tested
 against a fake Authn incl. the refusals). Until it exists, puts stay in the local
 store and the queue.
+
+## Automatic provisioning through MCP and the bot (2026-09-30)
+
+The owner asked for the yataverse configuration to be handled automatically by MCP
+and agents. The credential cannot be: no MCP or agent can obtain a tenant
+service-account secret, which only a tenant admin can issue (and none of the MCP
+servers reachable here offers Authn administration). What is automated is everything
+after it: one 0600 drop-file (`~/.murakumo-web-provision/yataverse.edn`), a
+`:configure` node op that accepts only whitelisted file names and validated value
+shapes and writes 0600 atomically (`murakumo.web.provision`, 28 assertions), and an
+MCP server (`scripts/web_mcp.mjs`: health, config_status, fetch, crawl, search,
+verify_fetch, sync, provision) whose tools refuse any credential-like argument and
+never return a secret; `web_provision` takes no arguments. The `web-plane` bot may
+call these. Verified live with a non-secret config: a wrong-mode drop-file is
+refused, `backends.edn` (Wikipedia + HN) was applied to all three nodes and node-side
+search used it, and the drop-file was deleted. Writes to yataverse still wait for
+the admin's secret.

@@ -1,0 +1,75 @@
+;; One entry point for the web plane's operator actions, used by the MCP server and
+;; by hand. Prints ONE EDN line. No action here takes a secret as an argument.
+;;   MURAKUMO_REPO=$PWD kbb --classpath "src:test" scripts/web-cli.cljk <action> '<edn-args>'
+;; actions: health | fetch | crawl | search | verify | sync | config-status | provision
+(ns web-cli
+  (:require [cljs.reader :as reader]
+            [murakumo.web.dispatch :as d]
+            [murakumo.web.host :as host]
+            [murakumo.web.provision :as provision]
+            [murakumo.web.verify :as verify]))
+
+(def fs (js/require "fs"))
+(def path (js/require "path"))
+(def os (js/require "os"))
+
+(defn registry []
+  (:nodes (reader/read-string (.readFileSync fs (.join path (or (.. js/process -env -MURAKUMO_REPO) ".") "web-nodes.edn") "utf8"))))
+
+(defn node-cfg [name]
+  (or (first (filter #(= name (or (:host %) (:app %))) (registry)))
+      (first (registry))))
+
+(defn drop-dir [] (.join path (.homedir os) ".murakumo-web-provision"))
+(defn drop-file [] (.join path (drop-dir) "yataverse.edn"))
+
+(defn- mode-ok? [f]
+  (let [st (.statSync fs f)] (zero? (bit-and (.-mode st) 63))))          ; no group/other bits
+
+(defn provision!
+  "Read the operator's drop-file and configure EVERY registered node. The file must be
+  0600 in a 0700 directory. Secrets are read here and sent over the node transport
+  (ssh stdin / Modal's authenticated API); they are never printed, and the result
+  lists file names and counts only."
+  []
+  (let [f (drop-file)]
+    (cond
+      (not (.existsSync fs f)) {:refused :provision/no-drop-file :detail (str "put the config at " f)}
+      (not (mode-ok? f)) {:refused :provision/drop-file-not-0600}
+      (not (mode-ok? (drop-dir))) {:refused :provision/drop-dir-not-0700}
+      :else
+      (let [files (try (reader/read-string (.readFileSync fs f "utf8")) (catch :default _ nil))
+            v (provision/validate-files files)]
+        (if (:refused v)
+          {:refused :provision/invalid :detail (:refused v)}
+          (let [per-node (mapv (fn [cfg]
+                                 (let [w (d/call! cfg :configure {:files (:ok v)})
+                                       st (when (:ok w) (d/call! cfg :config-status {}))]
+                                   {:node (or (:host cfg) (:app cfg))
+                                    :configured (get-in w [:ok :written])
+                                    :put-configured? (get-in st [:ok :put-configured?])
+                                    :error (:refused w) :detail (:detail w)}))
+                               (registry))]
+            {:ok {:nodes per-node
+                  :all-configured? (every? :put-configured? per-node)}}))))))
+
+(defn- edn-arg [] (let [a (nth *command-line-args* 1 nil)] (if a (reader/read-string a) {})))
+
+(let [action (first *command-line-args*)
+      args (edn-arg)
+      out
+      (case action
+        "health" (mapv (fn [cfg] (assoc (select-keys (d/call! cfg :health {}) [:ok :refused]) :node (or (:host cfg) (:app cfg))))
+                       (registry))
+        "fetch" (d/call! (node-cfg (:node args)) :fetch (select-keys args [:job-id :url :max-bytes]))
+        "crawl" (d/call! (assoc (node-cfg (:node args)) :timeout-ms 900000) :crawl {:job-id (:job-id args) :plan (:plan args)})
+        "search" (d/call! (node-cfg (:node args)) :search {:job-id (:job-id args) :query (:query args) :k (or (:k args) 10)})
+        "verify" (let [nodes (keep d/remote-node (registry))]
+                   (verify/verify-fetch! {:nodes nodes :put! (fn [_ _] true) :sign! (fn [_] "n/a")
+                                          :now-ms #(js/Date.now) :node-did "coordinator"}
+                                         {:job-id (:job-id args) :url (:url args) :verify-replicas (or (:replicas args) 2)}))
+        "sync" (mapv (fn [cfg] {:node (or (:host cfg) (:app cfg)) :result (d/call! cfg :sync {})}) (registry))
+        "config-status" (mapv (fn [cfg] {:node (or (:host cfg) (:app cfg)) :result (d/call! cfg :config-status {})}) (registry))
+        "provision" (provision!)
+        {:refused :cli/unknown-action :detail action})]
+  (println (pr-str out)))

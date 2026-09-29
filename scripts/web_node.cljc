@@ -13,6 +13,7 @@
             [murakumo.web.crawl :as crawl]
             [murakumo.web.host :as host]
             [murakumo.web.index :as index]
+            [murakumo.web.provision :as provision]
             [murakumo.web.search :as search]
             [murakumo.web.worker :as w]))
 
@@ -160,6 +161,21 @@
              (cond (nil? bs) {:refused :get/not-found}
                    (> (w/byte-count bs) max-get-bytes) {:refused :get/too-large}
                    :else {:ok {:cid (:cid job) :bytes (w/byte-count bs) :base64 (b64 bs)}}))
+      ;; Write config files (whitelisted names, validated shapes, mode 0600, atomic).
+      ;; The result names files, never contents.
+      :configure (let [v (provision/validate-files (:files job))]
+                   (if (:refused v)
+                     {:refused :configure/invalid :detail (:refused v)}
+                     (do (.mkdirSync fs (home) #js {:recursive true :mode 0700})
+                         (doseq [[name content] (:ok v)]
+                           (let [target (.join path (home) name)
+                                 tmp (str target ".tmp-" (.toString (.randomBytes (js/require "crypto") 4) "hex"))]
+                             (.writeFileSync fs tmp (str content "\n") #js {:mode 0600})
+                             (.renameSync fs tmp target)))
+                         {:ok {:written (vec (sort (keys (:ok v))))}})))
+      :config-status (let [present (vec (filter #(.existsSync fs (.join path (home) %))
+                                                (sort provision/allowed-files)))]
+                       {:ok {:present present :put-configured? (provision/put-configured? present)}})
       :sync (if-let [remote (remote-put-config)]
               {:ok (host/sync-pending! (.join path (home) "store") (pending-file) remote)}
               {:refused :sync/no-remote-configured})

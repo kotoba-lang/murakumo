@@ -33,3 +33,15 @@ Anything not in `yakuwari.edn` is blocked.
 Keep three answers apart: **measured** (with the command and its exit code),
 **not measured** (and why), **proposed**. A check that could not run is exit 2,
 never a clean pass. Do not fill a gap with a plausible number.
+
+## Provisioning (yataverse writes)
+
+Config reaches nodes through **one place**: the operator's drop-file
+`~/.murakumo-web-provision/yataverse.edn` (0600 in a 0700 directory). When it
+appears, call the MCP tool `web_provision` — it takes no arguments, applies the file to
+every registered node and answers with file names only — then `web_config_status`,
+`web_sync` and `web_health`, and report what is measured.
+
+You never read, print, ask for, paste or pass on a secret; you cannot issue a tenant
+service-account secret or create an account, and you do not try. If `web_provision`
+says there is no drop-file, that is the answer: tell the operator where to put it.

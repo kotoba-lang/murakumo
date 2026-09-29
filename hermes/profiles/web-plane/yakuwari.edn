@@ -3,11 +3,19 @@
  [{:capability :read_evidence          :decision :ok}
   {:capability :read_node_health       :decision :ok}
   {:capability :propose_crawl_plan     :decision :ok}
+  ;; the murakumo-web MCP tools (scripts/web_mcp.mjs): health, config_status, fetch,
+  ;; search, verify_fetch, sync, and web_provision — which takes NO arguments and
+  ;; applies the operator's own 0600 drop-file. Secrets never pass through the agent.
+  {:capability :use_web_mcp_read       :decision :ok}
+  {:capability :apply_provision_dropfile :decision :ok}
   ;; a host already in web-nodes.edn's admitted crawl list, inside plan ceilings
   {:capability :submit_plan_known_host :decision :ok}
   {:capability :crawl_new_host         :decision :owner-approval}
   {:capability :deploy_bundle          :decision :owner-approval}
   {:capability :run_gc                 :decision :owner-approval}
+  {:capability :read_secret_files      :decision :blocked}
+  {:capability :create_account         :decision :blocked}
+  {:capability :issue_credentials      :decision :blocked}
   {:capability :raise_budget           :decision :blocked}
   {:capability :change_egress_policy   :decision :blocked}
   {:capability :relabel_zone           :decision :blocked}
