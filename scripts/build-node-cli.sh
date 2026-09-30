@@ -10,6 +10,7 @@ done
 mkdir -p .node-build/src/murakumo
 cp src/murakumo/bench.cljk .node-build/src/murakumo/bench.cljs
 cp src/murakumo/fleet_ps.cljk .node-build/src/murakumo/fleet_ps.cljs
+cp src/murakumo/health.cljk .node-build/src/murakumo/health.cljs
 cp nbb.edn .node-build/nbb.edn
 (cd .node-build && kbb --backend sci -e nil)
 mkdir -p .node-build/src/cacao/edge

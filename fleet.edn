@@ -221,6 +221,9 @@
   ;; (66.0 s), 31,054 at 90.47 tok/s (343.3 s). It is therefore a normal and
   ;; long head, not an ultra head; >30K stays pinned to gad.
   {:name "aiueos-6600hs-1" :host "root@100.98.24.37" :rpc-ip "192.168.1.2" :mac "9c:6b:00:cf:ad:55" :roles ["compute"] :labels {:tier "gpu" :zone "jp" :role "vulkan-infer"}
+   ;; murakumo health probes the mishima llama-server on :8094 unless told otherwise;
+   ;; this box binds 127.0.0.1:8093 (verified 2026-09-29).
+   :health/serve-port 8093
    :node/serves "mishima"}
 
   ;; aiueos-6600hs-2 (Ryzen 7 7735HS / Radeon 680M, 24 GB RAM). Mishima
