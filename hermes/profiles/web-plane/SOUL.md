@@ -45,3 +45,12 @@ every registered node and answers with file names only — then `web_config_stat
 You never read, print, ask for, paste or pass on a secret; you cannot issue a tenant
 service-account secret or create an account, and you do not try. If `web_provision`
 says there is no drop-file, that is the answer: tell the operator where to put it.
+
+## Decentralized identity (yataverse)
+
+Nodes do not share one secret. Each node holds its own ed25519 identity and, after
+`yataverse bootstrap` on that node, its own tenant service account (secret in
+`~/.config/yataverse`, mode 0600); `web_node` uses it automatically. Bootstrapping a node
+creates an account, so you request owner approval for that node first (`bootstrap_yataverse`
+is `:owner-approval`) and only then run `yataverse_bootstrap` (MCP) or
+`scripts/yataverse-node-bootstrap.sh <host>`. You never see the secret.

@@ -44,32 +44,50 @@
         {:keys [public-key-hex]} (host/signer seed)]
     {:seed seed :public-key-hex public-key-hex :node-did (host/did-key public-key-hex)}))
 
+(defn- yataverse-cli-config
+  "What `yataverse bootstrap` left on THIS machine under ~/.config/yataverse: the node's own
+  service-account secret (mode 0600, else ignored) and its tenant/storage. This is the
+  decentralized path — every node holds its own identity and its own secret; nothing is
+  copied from a central place."
+  []
+  (let [dir (.join path (.homedir os) ".config" "yataverse")
+        sa-file (.join path dir "sa-token")
+        cfg-file (.join path dir "config.json")]
+    (when (and (.existsSync fs sa-file) (.existsSync fs cfg-file)
+               (zero? (bit-and (.-mode (.lstatSync fs sa-file)) 63)))
+      (let [c (js->clj (js/JSON.parse (.readFileSync fs cfg-file "utf8")) :keywordize-keys true)]
+        (when (:tenantId c)
+          {:sa (.trim (.readFileSync fs sa-file "utf8")) :tenant-id (:tenantId c)
+           :storage (:storage c) :url (:url c)})))))
+
 (defn- remote-put-config
-  "Optional yataverse put (the bytes plane formerly named kotobase). Files under
-  the node home (ssh is a non-login shell, so env vars are unreliable); the old
-  kotobase.* names are still read as a fallback:
+  "Optional yataverse put (the bytes plane formerly named kotobase). Files under the node home
+  (ssh is a non-login shell, so env vars are unreliable); the old kotobase.* names are still
+  read as a fallback:
     yataverse.url        gateway base URL
     yataverse.prefix     optional path prefix, default /ipfs/
     yataverse.auth-cmd   EDN argv vector of the operator's MINTER, run per write
-                         (write authorizations are short-lived CACAOs with
-                         single-use nonces — a stored value works once at best)
     yataverse.auth       static value, only for a gateway that accepts one (0600)
     yataverse.authn.edn  an EDN map with :tenant-id (t_...), :storage, :permissions, plus
-    yataverse.sa-token   a tenant service-account secret (kb_sa_..., 0600): the node
-                         exchanges it at auth.kotoba.cloud for a 15-minute Biscuit
-                         (cached until 60 s before expiry) — the current auth flow
+    yataverse.sa-token   a tenant service-account secret (kb_sa_..., 0600): exchanged at
+                         auth.kotoba.cloud for a 15-minute Biscuit (cached until 60 s before expiry)
+  If none of the node-home files carry an authorization, the node's OWN yataverse CLI config
+  (~/.config/yataverse, written by `yataverse bootstrap` on this node) is used.
   Absent url or any authorization -> local store only."
   []
   (let [rd (fn [base] (let [try-file (fn [n] (let [p (.join path (home) n)]
                                                (when (.existsSync fs p) (.trim (.readFileSync fs p "utf8")))))]
                         (or (try-file (str "yataverse." base)) (try-file (str "kotobase." base)))))
         env (fn [a b] (or (aget (.-env js/process) a) (aget (.-env js/process) b)))
-        url (or (env "MURAKUMO_YATAVERSE_URL" "MURAKUMO_KOTOBASE_URL") (rd "url"))
+        own (yataverse-cli-config)
+        url (or (env "MURAKUMO_YATAVERSE_URL" "MURAKUMO_KOTOBASE_URL") (rd "url")
+                (when own (or (:url own) "https://kotobase.net")))
         prefix (rd "prefix")
         cmd (some-> (rd "auth-cmd") reader/read-string)
         static (or (env "MURAKUMO_YATAVERSE_AUTH" "MURAKUMO_KOTOBASE_AUTH") (rd "auth"))
-        authn (some-> (rd "authn.edn") reader/read-string)
-        sa (rd "sa-token")
+        authn (or (some-> (rd "authn.edn") reader/read-string)
+                  (when own {:tenant-id (:tenant-id own) :storage (:storage own)}))
+        sa (or (rd "sa-token") (:sa own))
         biscuit? (and (map? authn) (seq sa))
         cache (atom nil)
         biscuit-fn (fn []
@@ -174,8 +192,10 @@
                              (.renameSync fs tmp target)))
                          {:ok {:written (vec (sort (keys (:ok v))))}})))
       :config-status (let [present (vec (filter #(.existsSync fs (.join path (home) %))
-                                                (sort provision/allowed-files)))]
-                       {:ok {:present present :put-configured? (provision/put-configured? present)}})
+                                                (sort provision/allowed-files)))
+                           own? (boolean (yataverse-cli-config))]
+                       {:ok {:present present :own-yataverse-identity? own?
+                             :put-configured? (or own? (provision/put-configured? present))}})
       :sync (if-let [remote (remote-put-config)]
               {:ok (host/sync-pending! (.join path (home) "store") (pending-file) remote)}
               {:refused :sync/no-remote-configured})

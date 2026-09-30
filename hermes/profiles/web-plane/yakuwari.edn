@@ -8,6 +8,10 @@
   ;; applies the operator's own 0600 drop-file. Secrets never pass through the agent.
   {:capability :use_web_mcp_read       :decision :ok}
   {:capability :apply_provision_dropfile :decision :ok}
+  ;; `yataverse bootstrap` / MCP yataverse_bootstrap: the first sign-in CREATES AN ACCOUNT. The bot may
+  ;; run it on a node only after the owner has approved that node; the secret it stores never
+  ;; passes through the bot (0600 file, not returned).
+  {:capability :bootstrap_yataverse    :decision :owner-approval}
   ;; a host already in web-nodes.edn's admitted crawl list, inside plan ceilings
   {:capability :submit_plan_known_host :decision :ok}
   {:capability :crawl_new_host         :decision :owner-approval}
