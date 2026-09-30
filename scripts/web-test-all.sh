@@ -16,6 +16,9 @@ case "$mcp" in
   *'"web_provision"'*'credentials never travel through tool arguments'*'must be an array of short strings'*) echo "mcp server: ok" ;;
   *) echo "mcp server: FAILED: $mcp" | head -3; fail=1 ;;
 esac
+# An explicit unknown node name is refused, never mapped to another host (no network involved).
+cli=$(MURAKUMO_REPO="$PWD" kbb --classpath "src:test" scripts/web-cli.cljk fetch '{:node "no-such-node" :job-id "t" :url "https://example.com/"}' 2>&1 | tail -1)
+case "$cli" in *":cli/unknown-node"*) echo "web-cli unknown node: ok" ;; *) echo "web-cli unknown node: FAILED: $cli"; fail=1 ;; esac
 # Python side of the Modal node must at least compile.
 python3 -m py_compile deploy/modal/web_node.py scripts/modal_call.py 2>/dev/null \
   && echo "modal python: compiles" || { echo "modal python: COMPILE FAILED (or modal not installed for python3)"; }

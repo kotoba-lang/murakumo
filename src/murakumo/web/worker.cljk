@@ -16,7 +16,8 @@
   Nothing throws at the caller: every failure is a typed {:refused ...}."
   (:require [kotoba.lang.text :as text]
             [murakumo.canonical :as canonical]
-            [murakumo.web :as web]))
+            [murakumo.web :as web]
+            [murakumo.web.url :as url]))
 
 (def default-max-bytes (* 5 1024 1024))
 (def max-redirects 5)
@@ -69,14 +70,10 @@
 (defn- redirect? [status] (contains? #{301 302 303 307 308} status))
 
 (defn- resolve-location
-  "Absolute Location only; a relative one is rebuilt from the current URL's origin."
+  "Any RFC 3986 reference (absolute, //host, /path, path, ../path, ?query) resolved against the
+  current URL; nil when it does not end up an http(s) URL."
   [current location]
-  (cond
-    (re-find #"^https?://" location) location
-    (text/starts-with? location "//") (str (re-find #"^https?:" current) location)
-    (text/starts-with? location "/")
-    (str (second (re-find #"^(https?://[^/?#]+)" current)) location)
-    :else nil))
+  (url/resolve-url current location))
 
 (defn- hop
   "Validate one URL and fetch it without following. Returns {:response r} or a refusal."
@@ -85,7 +82,12 @@
     (if (:refused checked)
       (refuse (:refused checked) url)
       (let [host (get-in checked [:ok :host])
-            ips (vec (resolve! host))]
+            ;; an IP literal needs no DNS (and dns.lookup rejects the bracketed form): the
+            ;; literal itself is the address, and check-url has already vetted it
+            literal? (or (text/starts-with? host "[") (boolean (re-matches #"\d{1,3}(\.\d{1,3}){3}" host)))
+            ips (if literal?
+                  [(text/replace host #"^\[|\]$" "")]
+                  (vec (resolve! host)))]
         (cond
           (empty? ips) (refuse :fetch/unresolved host)
           ;; every answer must be public; a single private A record refuses the host
@@ -189,9 +191,11 @@
 
 (defn- tag-at
   "At index i (a '<'), parse the tag. Returns {:name :close? :end :raw} or nil when
-  it is not a tag or is not closed within max-tag-chars (then it is plain text)."
-  [s i n]
-  (let [close-at (.indexOf s ">" i)]
+  it is not a tag or is not closed within max-tag-chars (then it is plain text).
+  `next-gt` finds the next '>' at or after i (memoised by `scan`, so a page of '<' with one
+  distant '>' costs one search, not one per '<')."
+  [s i n next-gt]
+  (let [close-at (next-gt i)]
     (when (and (pos? (inc close-at)) (<= (- close-at i) max-tag-chars) (< (inc i) n))
       (let [raw (subs s (inc i) close-at)
             closing? (text/starts-with? raw "/")
@@ -210,7 +214,14 @@
   [html emit-text emit-open emit-close]
   (let [html (if (> (count html) max-extract-chars) (subs html 0 max-extract-chars) html)
         lc (ascii-lower html)
-        n (count html)]
+        n (count html)
+        ;; the next '>' at or after i; once one search finds it at g (or nowhere: -1), every
+        ;; later position up to g shares the answer
+        gt (atom nil)
+        next-gt (fn [i] (let [g @gt]
+                          (if (and g (or (neg? g) (>= g i)))
+                            g
+                            (reset! gt (.indexOf html ">" i)))))]
     (loop [i 0]
       (when (< i n)
         (let [lt (.indexOf html "<" i)]
@@ -229,7 +240,7 @@
                   (recur (if (neg? e) n (inc e))))
 
                 :else
-                (if-let [{:keys [name close? end raw] :as tag} (tag-at html lt n)]
+                (if-let [{:keys [name close? end raw] :as tag} (tag-at html lt n next-gt)]
                   (if (and (not close?) (skip-elements name))
                     (let [e (.indexOf lc (str "</" name) end)
                           gt (when-not (neg? e) (.indexOf html ">" e))]

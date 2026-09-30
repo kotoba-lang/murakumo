@@ -66,9 +66,12 @@
              (catch :default _ {:refused :dispatch/bad-reply}))))))
 
 (def idempotent-ops
-  "Ops safe to repeat after a transport failure: content-addressed, no side
-  effect beyond an identical store write. :gc and :sync are never auto-retried."
-  #{:whoami :health :fetch :extract :search :index :index-search :get :crawl})
+  "Ops that are safe to repeat after an AMBIGUOUS ssh failure. Exit 255 does not prove the
+  remote command never started (the connection can drop after stdin is delivered), so anything
+  that touches a third party (:fetch, :crawl, :search — origin requests and politeness) or
+  changes state (:sync, :gc, :configure) is NEVER retried automatically; the caller decides.
+  What remains is local reads and local, content-addressed computation."
+  #{:whoami :health :config-status :get :extract :index :index-search})
 
 (defn call!
   "Run one op on `host`. Returns the node's EDN result, or {:refused :dispatch/...}.

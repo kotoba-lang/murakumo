@@ -40,12 +40,21 @@
        :title (clean-text title max-title-chars)
        :snippet (clean-text snippet max-snippet-chars)})))
 
+(defn- dedupe-by-url
+  "Keep the first (best-ranked) occurrence of each normalised URL. Without this a backend that lists
+  one URL at several ranks would earn several reciprocal-rank contributions and outweigh other
+  engines."
+  [results]
+  (:out (reduce (fn [{:keys [seen out] :as acc} r]
+                  (if (contains? seen (:url r)) acc {:seen (conj seen (:url r)) :out (conj out r)}))
+                {:seen #{} :out []} results)))
+
 (defn- run-backend [{:keys [name search!]} query k]
   (let [r (try (search! {:query query :k k})
                (catch #?(:clj Throwable :cljs :default) _ {:error :backend/exception}))]
     (if (or (:error r) (not (sequential? (:results r))))
       {:name name :error (or (:error r) :backend/bad-response) :results []}
-      {:name name :results (vec (keep clean-result (:results r)))})))
+      {:name name :results (dedupe-by-url (keep clean-result (:results r)))})))
 
 (defn fuse
   "Reciprocal-rank fusion over per-backend ranked lists. Deterministic: integer

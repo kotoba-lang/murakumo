@@ -16,9 +16,18 @@
 (defn registry []
   (:nodes (reader/read-string (.readFileSync fs (.join path (or (.. js/process -env -MURAKUMO_REPO) ".") "web-nodes.edn") "utf8"))))
 
-(defn node-cfg [name]
-  (or (first (filter #(= name (or (:host %) (:app %))) (registry)))
-      (first (registry))))
+(defn node-cfg
+  "The registry entry named `name`; the first entry ONLY when no node was asked for. A named node
+  that is not registered is nil — never silently a different host or egress zone."
+  [name]
+  (if (or (nil? name) (= "" name))
+    (first (registry))
+    (first (filter #(= name (or (:host %) (:app %))) (registry)))))
+
+(defn with-node [args f]
+  (if-let [cfg (node-cfg (:node args))]
+    (f cfg)
+    {:refused :cli/unknown-node :detail (:node args)}))
 
 (defn drop-dir [] (.join path (.homedir os) ".murakumo-web-provision"))
 (defn drop-file [] (.join path (drop-dir) "yataverse.edn"))
@@ -61,9 +70,9 @@
       (case action
         "health" (mapv (fn [cfg] (assoc (select-keys (d/call! cfg :health {}) [:ok :refused]) :node (or (:host cfg) (:app cfg))))
                        (registry))
-        "fetch" (d/call! (node-cfg (:node args)) :fetch (select-keys args [:job-id :url :max-bytes]))
-        "crawl" (d/call! (assoc (node-cfg (:node args)) :timeout-ms 900000) :crawl {:job-id (:job-id args) :plan (:plan args)})
-        "search" (d/call! (node-cfg (:node args)) :search {:job-id (:job-id args) :query (:query args) :k (or (:k args) 10)})
+        "fetch" (with-node args #(d/call! % :fetch (select-keys args [:job-id :url :max-bytes])))
+        "crawl" (with-node args #(d/call! (assoc % :timeout-ms 900000) :crawl {:job-id (:job-id args) :plan (:plan args)}))
+        "search" (with-node args #(d/call! % :search {:job-id (:job-id args) :query (:query args) :k (or (:k args) 10)}))
         "verify" (let [nodes (keep d/remote-node (registry))]
                    (verify/verify-fetch! {:nodes nodes :put! (fn [_ _] true) :sign! (fn [_] "n/a")
                                           :now-ms #(js/Date.now) :node-did "coordinator"}

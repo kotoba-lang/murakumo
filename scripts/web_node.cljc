@@ -28,8 +28,20 @@
 
 (defn home [] (or (.. js/process -env -MURAKUMO_WEB_HOME) (.join path (.homedir os) ".murakumo-web")))
 
-(defn- read-edn-file [f]
-  (when (.existsSync fs f) (reader/read-string (.readFileSync fs f "utf8"))))
+(defn- read-edn-file
+  "nil when the file is absent OR unreadable: a bad config file must never break every request
+  (make-env runs before any op, including the :configure that would repair it)."
+  [f]
+  (try (when (.existsSync fs f) (reader/read-string (.readFileSync fs f "utf8")))
+       (catch :default _ nil)))
+
+(defn- unreadable-config-files []
+  (vec (for [name ["backends.edn" "zone.edn" "yataverse.authn.edn" "yataverse.auth-cmd"]
+             :let [f (.join path (home) name)]
+             :when (and (.existsSync fs f)
+                        (try (reader/read-string (.readFileSync fs f "utf8")) false
+                             (catch :default _ true)))]
+         name)))
 
 (defn- read-stdin []
   (let [buf (.readFileSync fs 0)]
@@ -129,7 +141,9 @@
         curl? (zero? (.-status (.spawnSync (js/require "child_process") "curl" #js ["--version"])))
         problems (cond-> []
                    (not curl?) (conj :curl/missing)
+                   (nil? free) (conj :disk/unmeasured)
                    (and free (< free min-free-bytes)) (conj :disk/low)
+                   (seq (unreadable-config-files)) (conj :config/unreadable)
                    (empty? (:backends env)) (conj :search/no-backends-configured)
                    (not (remote-put-config)) (conj :put/no-remote-configured))
         pending (if (.existsSync fs (pending-file))

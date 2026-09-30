@@ -43,3 +43,23 @@
   (is (false? (p/put-configured? ["yataverse.url"])))
   (is (false? (p/put-configured? ["yataverse.url" "yataverse.authn.edn"])))
   (is (false? (p/put-configured? ["yataverse.sa-token" "yataverse.authn.edn"]))))
+
+(deftest structured-files-must-parse-and-have-the-right-shape
+  (doseq [[name value reason]
+          [["backends.edn" "{" :backends.edn/not-edn]
+           ["backends.edn" "{:kind :wikipedia}" :backends.edn/bad-shape]
+           ["backends.edn" "[{:kind :bogus :name :x}]" :backends.edn/bad-shape]
+           ["backends.edn" "[{:kind :searxng :name :s :base-url \"ftp://x\"}]" :backends.edn/bad-shape]
+           ["backends.edn" "[{:name \"not-a-keyword\"}]" :backends.edn/bad-shape]
+           ["zone.edn" "{:zone" :zone.edn/not-edn]
+           ["zone.edn" "[:jp]" :zone.edn/bad-shape]
+           ["zone.edn" "{:zone \"\"}" :zone.edn/bad-shape]
+           ["yataverse.authn.edn" "{:tenant-id \"t_abc\" :storage" :yataverse.authn.edn/not-edn]
+           ["yataverse.authn.edn" "{:tenant-id \"nope\"}" :yataverse.authn.edn/no-tenant-id]
+           ["yataverse.authn.edn" "{:tenant-id \"t_abc\" :permissions \"x\"}" :yataverse.authn.edn/no-tenant-id]
+           ["yataverse.auth-cmd" "[\"a\" 3]" :yataverse.auth-cmd/not-an-argv-vector]
+           ["yataverse.auth-cmd" "[]" :yataverse.auth-cmd/not-an-argv-vector]]]
+    (is (= reason (get-in (p/validate-files {name value}) [:refused name])) (str name " " value)))
+  (is (:ok (p/validate-files {"backends.edn" "[{:kind :wikipedia :name :wp} {:kind :searxng :name :s :base-url \"http://127.0.0.1:8080\"}]"
+                              "zone.edn" "{:zone \"eu\"}"
+                              "yataverse.authn.edn" "{:tenant-id \"t_abc\" :storage \"blocks\" :permissions [\"data:read\"]}"}))))

@@ -21,6 +21,29 @@
 
 (defn- control-chars? [s] (boolean (re-find #"[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]" s)))
 
+(defn- read-edn
+  "Parse `s` as EDN; nil on any failure (a parse failure is a refusal, not an exception)."
+  [s]
+  (try #?(:clj (clojure.edn/read-string s) :cljs (cljs.reader/read-string s))
+       (catch #?(:clj Throwable :cljs :default) _ ::unreadable)))
+
+(def backend-kinds #{:searxng :wikipedia :hn :modal-searxng})
+
+(defn- valid-backends? [v]
+  (and (vector? v) (<= (count v) 20)
+       (every? (fn [b] (and (map? b) (keyword? (:name b))
+                            (contains? backend-kinds (or (:kind b) :searxng))
+                            (or (not= :searxng (or (:kind b) :searxng))
+                                (and (string? (:base-url b)) (re-find #"^https?://" (:base-url b))))))
+               v)))
+
+(defn- valid-zone? [v] (and (map? v) (string? (:zone v)) (<= 1 (count (:zone v)) 64)))
+
+(defn- valid-authn? [v]
+  (and (map? v) (string? (:tenant-id v)) (re-matches #"t_[A-Za-z0-9_-]+" (:tenant-id v))
+       (or (nil? (:storage v)) (string? (:storage v)))
+       (or (nil? (:permissions v)) (and (vector? (:permissions v)) (every? string? (:permissions v))))))
+
 (defn- check-file [name content]
   (let [c (if (string? content) (text/trim content) content)]
     (cond
@@ -35,10 +58,20 @@
         "yataverse.prefix" (when-not (and (re-matches #"/[A-Za-z0-9._/-]*/" c) (not (re-find #"\.\." c)))
                              :yataverse.prefix/bad)
         "yataverse.sa-token" (when-not (re-matches #"kb_sa_[A-Za-z0-9._-]+" c) :yataverse.sa-token/bad-shape)
-        "yataverse.authn.edn" (when-not (re-matches #"(?s)\{.*:tenant-id\s+\"t_[A-Za-z0-9_-]+\".*\}" c)
-                                :yataverse.authn.edn/no-tenant-id)
-        "yataverse.auth-cmd" (when-not (re-matches #"(?s)\[\s*\"[^\"]+\"(\s+\"[^\"]*\")*\s*\]" c)
-                               :yataverse.auth-cmd/not-an-argv-vector)
+        ;; parsed, not pattern-matched: a value that does not read as EDN of the right shape must
+        ;; never reach a node, where an unreadable config file would break every request
+        "yataverse.authn.edn" (let [v (read-edn c)]
+                                (cond (= v ::unreadable) :yataverse.authn.edn/not-edn
+                                      (not (valid-authn? v)) :yataverse.authn.edn/no-tenant-id))
+        "yataverse.auth-cmd" (let [v (read-edn c)]
+                               (when-not (and (vector? v) (seq v) (every? string? v) (not (empty? (first v))))
+                                 :yataverse.auth-cmd/not-an-argv-vector))
+        "backends.edn" (let [v (read-edn c)]
+                         (cond (= v ::unreadable) :backends.edn/not-edn
+                               (not (valid-backends? v)) :backends.edn/bad-shape))
+        "zone.edn" (let [v (read-edn c)]
+                     (cond (= v ::unreadable) :zone.edn/not-edn
+                           (not (valid-zone? v)) :zone.edn/bad-shape))
         nil))))
 
 (defn validate-files

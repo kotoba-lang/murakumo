@@ -1,6 +1,7 @@
 (ns murakumo.web-host-test
   "Host adapters against a real (local) HTTP server in a child process."
   (:require [kotoba.test :refer [deftest is]]
+            [murakumo.web.dispatch]
             [murakumo.web.host :as host]
             [murakumo.web.worker :as w]))
 
@@ -222,3 +223,17 @@
     (is (re-find #"\"--proto\" proto" part))
     (is (re-find #"insecure-http-for-tests \"=http,https\" \"=https\"" part))
     (is (not (re-find #"\"-H\"" part)))))
+
+(deftest every-curl-call-bypasses-proxies-and-globbing
+  ;; a proxy in the environment resolves names itself and defeats --resolve pinning; [1-100] globs fan out
+  (let [src (.readFileSync fs "src/murakumo/web/host.cljk" "utf8")
+        calls (re-seq #"\(run \"curl\"[\s\S]{0,420}" src)]
+    (is (>= (count calls) 6))
+    (doseq [c calls]
+      (is (re-find #"\"--noproxy\" \"\*\"" c) c)
+      (is (re-find #"\"-g\"" c) c))))
+
+(deftest automatic-retries-exclude-anything-that-touches-third-parties-or-changes-state
+  (let [ops @(resolve 'murakumo.web.dispatch/idempotent-ops)]
+    (is (every? ops [:whoami :health :get :extract :index :index-search]))
+    (is (not-any? ops [:fetch :crawl :search :sync :gc :configure]))))

@@ -84,3 +84,15 @@
         a (:ok (search/search! (mk) {:job-id "s" :query "q" :k 5}))
         b (:ok (search/search! (mk) {:job-id "s" :query "q" :k 5}))]
     (is (= (:results-cid a) (:results-cid b)))))
+
+(deftest a-backend-listing-one-url-several-times-counts-once
+  (let [{:keys [env]} (env [(backend :a [(r "https://x.example/1") (r "https://x.example/1#dup") (r "https://x.example/1/") (r "https://y.example/2")])
+                            (backend :b [(r "https://z.example/3")])])
+        ok (:ok (search/search! env {:job-id "s" :query "q" :k 10}))
+        res (get-in ok [:results :results])
+        x (first (filter #(= "https://x.example/1" (:url %)) res))]
+    (is (= [:a] (:sources x)))                                   ; not [:a :a :a]
+    (is (= 1 (count (filter #{"https://x.example/1"} (map :url res)))))
+    (is (= (quot 1000000 61) (:score x)))                        ; one rank-1 contribution, not three
+    ;; the duplicate URLs gave :a no extra weight: its rank-1 hit ties another engine's rank-1 hit
+    (is (= (:score x) (:score (first (filter #(= "https://z.example/3" (:url %)) res)))))))

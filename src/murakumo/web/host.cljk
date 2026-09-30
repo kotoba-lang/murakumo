@@ -45,14 +45,17 @@
 (defn http-get!
   "One hop, no redirect following, connect pinned to `address`."
   [{:keys [url address max-bytes]}]
-  (let [[_ scheme host port] (re-find #"^(https?)://([^/:?#]+)(?::(\d+))?" url)
+  (let [[_ scheme host port] (re-find #"^(https?)://(\[[^\]]+\]|[^/:?#]+)(?::(\d+))?" url)
         port (or port (if (= scheme "https") "443" "80"))
+        ;; an IP literal is connected to directly; --resolve pins names only
+        literal? (or (.startsWith host "[") (boolean (re-matches #"\d{1,3}(\.\d{1,3}){3}" host)))
         hdr (str (.tmpdir (js/require "os")) "/murakumo-web-" (.toString (.randomBytes crypto 6) "hex") ".hdr")
-        r (run "curl" ["-sS" "--max-time" "30" "--max-filesize" (str max-bytes)
-                       "--proto" "=http,https" "--max-redirs" "0"
-                       "--resolve" (str host ":" port ":" address)
-                       "-A" "murakumo-web/0 (+https://murakumo.cloud)"
-                       "-D" hdr "-o" "-" url]
+        ;; -g: no URL globbing ([1-1000] would fan out). --noproxy '*': a proxy from the
+        ;; environment would resolve the name itself and bypass the vetted address.
+        r (run "curl" (-> ["-sS" "-g" "--noproxy" "*" "--max-time" "30" "--max-filesize" (str max-bytes)
+                           "--proto" "=http,https" "--max-redirs" "0"]
+                          (into (when-not literal? ["--resolve" (str host ":" port ":" address)]))
+                          (into ["-A" "murakumo-web/0 (+https://murakumo.cloud)" "-D" hdr "-o" "-" url]))
                {})]
     (try
       (if (and (zero? (:status r)) (.existsSync fs hdr))

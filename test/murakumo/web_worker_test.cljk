@@ -181,3 +181,34 @@
         ok (:ok (w/fetch! env {:job-id "j" :url "https://example.com/a" :follow-redirects? false}))]
     (is (= 302 (get-in ok [:receipt :evidence :status])))
     (is (= "https://example.com/b" (get-in ok [:receipt :evidence :location])))))
+
+(deftest path-relative-redirect-targets-are-resolved
+  (doseq [[loc expected] [["login" "https://example.com/dir/login"]
+                          ["../next" "https://example.com/next"]
+                          ["?page=2" "https://example.com/dir/page?page=2"]
+                          ["/abs" "https://example.com/abs"]
+                          ["//example.com/net" "https://example.com/net"]]]
+    (let [{:keys [env]} (make-env {"https://example.com/dir/page"
+                                   {:status 302 :headers {"location" loc} :body (w/utf8-bytes "")}
+                                   expected page}
+                                  {"example.com" ["93.184.216.34"]})
+          ok (:ok (w/fetch! env {:job-id "j" :url "https://example.com/dir/page"}))]
+      (is ok (str "Location " loc))
+      (is (= expected (get-in ok [:receipt :evidence :final-url])) loc))))
+
+(deftest a-public-ipv6-literal-is-fetched-without-dns
+  (let [seen (atom nil)
+        {:keys [env]} (make-env {} {})
+        env (assoc env
+                   :resolve! (fn [_] (throw (ex-info "DNS must not be used for a literal" {})))
+                   :http-get! (fn [{:keys [address url]}] (reset! seen [address url]) page))
+        ok (:ok (w/fetch! env {:job-id "j" :url "https://[2606:4700:4700::1111]/"}))]
+    (is ok)
+    (is (= ["2606:4700:4700::1111" "https://[2606:4700:4700::1111]/"] @seen))     ; unbracketed for pinning, URL untouched
+    (is (= [:url/private-address] (:detail (w/fetch! env {:job-id "j" :url "https://[::1]/"}))))))
+
+(deftest many-open-brackets-and-one-distant-close-is-linear
+  ;; every '<' used to rescan to the same far '>' and be rejected: quadratic
+  (let [html (str (apply str (repeat 900000 "<")) ">")
+        ms (millis #(w/html->markdown html))]
+    (is (< ms 6000) (str "took " ms "ms"))))
