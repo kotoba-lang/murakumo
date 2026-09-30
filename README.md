@@ -59,7 +59,12 @@ murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0
   NixOS base profile does not install a node service. An optional module at
   [`nixos/node.nix`](nixos/node.nix) can schedule buyer claim responses and
   restart idle-only participation after boot. Both services are disabled by
-  default. Set `cliPath` to a system-wide installation outside `/home`, retain
+  default. The pinned installer copies it to
+  `/opt/murakumo-cli/current/nixos-node.nix` when installed with
+  `MURAKUMO_INSTALL_DIR=/opt/murakumo-cli`. Import the specific
+  `release-<hash>/nixos-node.nix` path in the machine configuration so the
+  NixOS evaluation cannot silently switch versions. Set `cliPath` to a
+  system-wide installation outside `/home`, retain
   the factory identity as a root-readable mode 0600 runtime file, and enable
   `claimResponder` only after the buyer claim endpoint is ready. Before enabling
   `participation`, manually run `doctor`, `check`, and `qualify` with the exact

@@ -17,7 +17,7 @@ if [ -e "$bin_dir/murakumo" ] || [ -L "$bin_dir/murakumo" ]; then
 fi
 staging=$(mktemp -d "$install_dir/.install.XXXXXXXX")
 trap 'rm -rf "$staging"' EXIT HUP INT TERM
-for file in node.mjs package.json package-lock.json; do
+for file in node.mjs package.json package-lock.json nixos-node.nix; do
   curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$base/$file" -o "$staging/$file"
 done
 node - "$staging" <<'JS'
@@ -48,6 +48,7 @@ if [ ! -d "$release_dir" ]; then mv "$staging" "$release_dir"; fi
 ln -sfn "$release_dir" "$install_dir/current"
 ln -sfn "$install_dir/current/murakumo" "$bin_dir/murakumo"
 echo "Installed: $bin_dir/murakumo"
+echo "Optional NixOS module: $install_dir/current/nixos-node.nix"
 case ":$PATH:" in *":$bin_dir:"*) ;; *) echo "Add $bin_dir to PATH in your shell profile, or use the full path above.";; esac
 echo 'Next: murakumo node init'
 echo 'Then: murakumo node doctor --model <your-served-model-id>'

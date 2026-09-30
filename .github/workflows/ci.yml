@@ -34,7 +34,9 @@ jobs:
         with:
           nix_path: nixpkgs=channel:nixos-25.05
       - name: Evaluate disabled and enabled Murakumo node services
-        run: nix-instantiate --eval --strict nixos/module-smoke.nix
+        run: |
+          cmp nixos/node.nix release/nixos-node.nix
+          nix-instantiate --eval --strict nixos/module-smoke.nix
 
   kotoba-operator:
     runs-on: ubuntu-latest

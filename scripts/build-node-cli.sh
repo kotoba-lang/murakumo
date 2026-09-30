@@ -21,11 +21,12 @@ done
 mkdir -p .node-build/src/grant
 cp .node-build/.nbb/.cache/*/nbb-deps/grant/device_attest.cljk .node-build/src/grant/device_attest.cljs
 (cd .node-build && kbb --backend sci --classpath src bundle ../scripts/node-cli.cljk -o ../release/node.mjs)
+cp nixos/node.nix release/nixos-node.nix
 # The bundler may return zero after an EDN read error and leave a broken bundle.
 node release/node.mjs node --help >/dev/null
 node -e 'const fs=require("fs"),c=require("crypto");fs.writeFileSync("release/node.sha256",c.createHash("sha256").update(fs.readFileSync("release/node.mjs")).digest("hex")+"\n")'
 node - <<'JS'
 const fs=require('fs'),crypto=require('crypto');const hashes={};
-for(const f of ['node.mjs','package.json','package-lock.json'])hashes[f]=crypto.createHash('sha256').update(fs.readFileSync('release/'+f)).digest('hex');
+for(const f of ['node.mjs','package.json','package-lock.json','nixos-node.nix'])hashes[f]=crypto.createHash('sha256').update(fs.readFileSync('release/'+f)).digest('hex');
 fs.writeFileSync('release/install.sh',fs.readFileSync('scripts/install-node.sh.in','utf8').replace('__HASHES__',JSON.stringify(hashes)).replace('__VERSION__',hashes['node.mjs'].slice(0,16)));
 JS
