@@ -105,9 +105,11 @@
 (defn claim-once! [args]
   (when-not (or (empty? args)
                 (and (= 2 (count args)) (= "--site" (first args))))
-    (throw (js/Error. "Use murakumo node claim-once [--site http://127.0.0.1:PORT].")))
+      (throw (js/Error. "Use murakumo node claim-once [--site https://localhost:PORT].")))
   (let [site (control-base (or (second args) "https://murakumo.cloud"))
         _ (when-not (or (= site "https://murakumo.cloud")
+                        (str/starts-with? site "https://127.0.0.1:")
+                        (str/starts-with? site "https://localhost:")
                         (str/starts-with? site "http://127.0.0.1:")
                         (str/starts-with? site "http://localhost:"))
             (throw (js/Error. "Claim service must be murakumo.cloud or local loopback.")))
