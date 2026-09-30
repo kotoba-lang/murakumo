@@ -85,7 +85,8 @@ const runWithEnv=(extra,...args)=>new Promise(resolve=>{
 });
 const run=(...args)=>runWithEnv({},...args);
 try{
- assert.equal((await run('init')).code,0);const original=readFileSync(path.join(home,'identity.json'),'utf8');
+ const initialized=await run('init');assert.equal(initialized.code,0,initialized.out);
+ const original=readFileSync(path.join(home,'identity.json'),'utf8');
  const current=JSON.parse(original);
  deviceDid=current.did;
  assert.equal(statSync(path.join(home,'identity.json')).mode&0o777,0o600);
