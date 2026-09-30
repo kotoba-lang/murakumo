@@ -11,12 +11,15 @@ mkdir -p .node-build/src/murakumo
 cp src/murakumo/bench.cljk .node-build/src/murakumo/bench.cljs
 cp src/murakumo/fleet_ps.cljk .node-build/src/murakumo/fleet_ps.cljs
 cp src/murakumo/health.cljk .node-build/src/murakumo/health.cljs
+cp src/murakumo/device_claim.cljk .node-build/src/murakumo/device_claim.cljs
 cp nbb.edn .node-build/nbb.edn
 (cd .node-build && kbb --backend sci -e nil)
 mkdir -p .node-build/src/cacao/edge
 for name in mint verify cbor base58; do
   cp .node-build/.nbb/.cache/*/nbb-deps/cacao/edge/$name.cljk .node-build/src/cacao/edge/$name.cljs
 done
+mkdir -p .node-build/src/grant
+cp .node-build/.nbb/.cache/*/nbb-deps/grant/device_attest.cljk .node-build/src/grant/device_attest.cljs
 (cd .node-build && kbb --backend sci --classpath src bundle ../scripts/node-cli.cljk -o ../release/node.mjs)
 node -e 'const fs=require("fs"),c=require("crypto");fs.writeFileSync("release/node.sha256",c.createHash("sha256").update(fs.readFileSync("release/node.mjs")).digest("hex")+"\n")'
 node - <<'JS'

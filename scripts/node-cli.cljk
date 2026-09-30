@@ -4,13 +4,14 @@
             [murakumo.bench :as bench]
             [murakumo.fleet-ps :as fleet-ps]
             [murakumo.health :as health]
+            [murakumo.device-claim :as claim]
             [cacao.edge.mint :as mint]
             [kotoba.lang.text :as str]
             ["node:fs" :as fs] ["node:path" :as path]
             ["node:os" :as os] ["node:crypto" :as crypto]))
 
 (defn help []
-  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+, a running OpenAI-compatible model server and network access are required.\nInstallation does not download models or start a service. Community enrollment\nmay remain pending admission; a heartbeat alone does not prove job eligibility.")
+  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Community enrollment may remain pending admission;\na heartbeat alone does not prove job eligibility.")
   (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
                                           (ctx, KV, slots), co-resident processes, units")
   (println "  Payout also requires --owner-token-file /absolute/private/path from the buyer's device page.")
@@ -101,6 +102,22 @@
               (seq (.-search u)) (seq (.-hash u)))
       (throw (js/Error. "The control plane base must contain only a scheme and host.")))
     base))
+(defn claim-once! [args]
+  (when-not (or (empty? args)
+                (and (= 2 (count args)) (= "--site" (first args))))
+    (throw (js/Error. "Use murakumo node claim-once [--site http://127.0.0.1:PORT].")))
+  (let [site (control-base (or (second args) "https://murakumo.cloud"))
+        _ (when-not (or (= site "https://murakumo.cloud")
+                        (str/starts-with? site "http://127.0.0.1:")
+                        (str/starts-with? site "http://localhost:"))
+            (throw (js/Error. "Claim service must be murakumo.cloud or local loopback.")))
+        id (identity)]
+    (when-not id
+      (throw (js/Error. "Device identity is missing; factory-provision this device first.")))
+    (-> (claim/once! js/fetch #(js/Date.now) site id)
+        (.then (fn [{:keys [outcome exit-code]}]
+                 (println "Claim response:" (name outcome))
+                 (when (not= 0 exit-code) (set! (.-exitCode js/process) exit-code)))))))
 (defn- fetch-node-grant! [id authn-base]
   (-> (mint! id authn-base ["murakumo://node-token"] 240000)
       (.then (fn [proof]
@@ -270,6 +287,9 @@
       (= command "--help") (help)
       (not= prefix "node") (fail! "Use: murakumo node, bench, fleet or health --help")
       (= command "init") (init!)
+      (= command "claim-once")
+      (-> (claim-once! args)
+          (.catch (fn [_] (fail! "Claim response failed. Check the site, device identity and network."))))
       (contains? #{"earnings" "payout"} command)
       (-> (payout-command! command args)
           (.catch (fn [_] (fail! "Payout operation failed. Check the network, device identity and request; no credentials are printed."))))

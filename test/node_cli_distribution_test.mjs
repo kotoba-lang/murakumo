@@ -4,13 +4,23 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import assert from 'node:assert/strict';
+import {createPublicKey,verify} from 'node:crypto';
 const home=mkdtempSync(path.join(tmpdir(),'murakumo-node-test-'));
-let denied=false,payoutDenied=false,authnDenied=false,deviceDid;const calls=[];
+let denied=false,payoutDenied=false,authnDenied=false,deviceDid;
+let pendingChallenge=null,attestAccepted=true;const calls=[];
 const server=http.createServer(async(req,res)=>{
  let body='';for await(const c of req)body+=c;
  calls.push({url:req.url,auth:req.headers.authorization,
   ownerAuth:req.headers['x-murakumo-owner-payout'],body:body?JSON.parse(body):null});
  res.setHeader('content-type','application/json');
+ if(req.url?.endsWith('/challenge')){
+  res.statusCode=pendingChallenge?200:404;
+  return res.end(JSON.stringify(pendingChallenge??{challenge:null}));
+ }
+ if(req.url?.endsWith('/attest')){
+  res.statusCode=attestAccepted?200:400;
+  return res.end(JSON.stringify({verified:attestAccepted}));
+ }
  if(req.url==='/v1/models')return res.end(JSON.stringify({data:[{id:'test-model'}]}));
  if(req.url==='/v1/murakumo/node-token'){
   res.statusCode=authnDenied?401:201;
@@ -54,6 +64,27 @@ try{
   origin:'https://murakumo.cloud',token:'factory-secret',privateKeyPem:current.privateKey}),{mode:0o600});
  const external={MURAKUMO_NODE_IDENTITY_FILE:factory};
  assert.notEqual((await runWithEnv(external,'init')).code,0);
+ result=await runWithEnv(external,'claim-once','--site',base);
+ assert.equal(result.code,0,result.out);
+ assert.match(result.out,/Claim response: idle/);
+ assert.equal(calls.filter(x=>x.url.endsWith('/attest')).length,0);
+ pendingChallenge={challenge:'challenge-one',nonce:'nonce-one',expiresAtMs:Date.now()+60000};
+ result=await runWithEnv(external,'claim-once','--site',base);
+ assert.equal(result.code,0,result.out);
+ assert.match(result.out,/Claim response: proved/);
+ const attestation=calls.filter(x=>x.url.endsWith('/attest')).at(-1);
+ assert.equal(attestation.body.challenge,'challenge-one');
+ const message=`aiueos-device-attest-v1\n${current.did}\n${base}\nnonce-one\n`;
+ assert(verify(null,Buffer.from(message),createPublicKey(current.privateKey),
+  Buffer.from(attestation.body.signature,'base64url')));
+ assert(!result.out.includes(current.privateKey));
+ attestAccepted=false;
+ pendingChallenge={challenge:'challenge-two',nonce:'nonce-two',expiresAtMs:Date.now()+60000};
+ result=await runWithEnv(external,'claim-once','--site',base);
+ assert.notEqual(result.code,0);
+ assert.match(result.out,/Claim response: rejected/);
+ attestAccepted=true;pendingChallenge=null;
+ assert.notEqual((await runWithEnv(external,'claim-once','--site','https://attacker.invalid')).code,0);
  result=await runWithEnv(external,'check',...flags);
  assert.equal(result.code,0,result.out);
  const enrollment=calls.filter(x=>x.url==='/infer/nodes').at(-1);
