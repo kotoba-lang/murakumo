@@ -6,14 +6,14 @@ import http from 'node:http';
 import assert from 'node:assert/strict';
 import {createPublicKey,verify} from 'node:crypto';
 const home=mkdtempSync(path.join(tmpdir(),'murakumo-node-test-'));
-let denied=false,payoutDenied=false,authnDenied=false,deviceDid;
+let denied=false,payoutDenied=false,authnDenied=false,qualificationDenied=false,deviceDid;
 let pendingChallenge=null,attestAccepted=true;const calls=[];
 const server=http.createServer(async(req,res)=>{
  let body='';for await(const c of req)body+=c;
  calls.push({url:req.url,auth:req.headers.authorization,
   ownerAuth:req.headers['x-murakumo-owner-payout'],body:body?JSON.parse(body):null});
  res.setHeader('content-type','application/json');
- if(req.url?.endsWith('/challenge')){
+ if(req.url?.endsWith('/challenge') && req.url!=='/infer/qualification/challenge'){
   res.statusCode=pendingChallenge?200:404;
   return res.end(JSON.stringify(pendingChallenge??{challenge:null}));
  }
@@ -22,6 +22,15 @@ const server=http.createServer(async(req,res)=>{
   return res.end(JSON.stringify({verified:attestAccepted}));
  }
  if(req.url==='/v1/models')return res.end(JSON.stringify({data:[{id:'test-model'}]}));
+ if(req.url==='/v1/chat/completions'){
+  const prompt=body?JSON.parse(body).messages?.[0]?.content:'';
+  const text=prompt.includes('17 plus 29')?'46'
+    :prompt.includes('kasuto')?'kasuto'
+    :prompt.includes('largest')?'Jupiter'
+    :prompt.includes('capital')?'Tokyo':'Distributed inference needs honest accounting.';
+  return res.end(JSON.stringify({choices:[{message:{content:text}}],
+    usage:{prompt_tokens:12,completion_tokens:8}}));
+ }
  if(req.url==='/v1/murakumo/node-token'){
   res.statusCode=authnDenied?401:201;
   return res.end(JSON.stringify(authnDenied?{error:'invalid_node_proof'}:{
@@ -30,6 +39,25 @@ const server=http.createServer(async(req,res)=>{
  }
  if(req.url==='/infer/nodes'){res.statusCode=denied?401:201;return res.end(JSON.stringify({'node/admission':'pending'}));}
  if(req.url.endsWith('/heartbeat')){res.statusCode=201;return res.end('{}');}
+ if(req.url==='/infer/qualification/challenge'){
+  res.statusCode=201;
+  return res.end(JSON.stringify({'qualification/id':'test-node:qualification',
+    'qualification/items':[
+      {'item/id':'arith','item/prompt':'What is 17 plus 29?','item/max-tokens':16},
+      {'item/id':'echo','item/prompt':'Repeat kasuto','item/max-tokens':16},
+      {'item/id':'fact-planet','item/prompt':'Which planet is largest?','item/max-tokens':16},
+      {'item/id':'fact-capital','item/prompt':'What is the capital of Japan?','item/max-tokens':16},
+      {'item/id':'throughput','item/prompt':'Why honest accounting?','item/max-tokens':128}]}));
+ }
+ if(req.url==='/infer/qualification/result'){
+  const answers=body?JSON.parse(body).answers:[];
+  const texts=answers.map(answer=>answer['answer/text']);
+  const accepted=!qualificationDenied&&JSON.stringify(texts)===JSON.stringify(['46','kasuto','Jupiter','Tokyo',
+    'Distributed inference needs honest accounting.']);
+  res.statusCode=accepted?200:400;
+  return res.end(JSON.stringify({verdict:accepted?'accepted':'rejected',
+    node:{'node/admission':accepted?'accepted':'pending'}}));
+ }
  if(req.url.startsWith('/infer/payout?did='))return res.end(JSON.stringify({policy:{'minimum-credits':5000},account:{earned:6000,payable:6000}}));
  if(req.url==='/infer/payout/request'){res.statusCode=payoutDenied?402:201;return res.end(JSON.stringify(payoutDenied?{error:'insufficient-earned-credits'}:{'payout-id':'po-test'}));}
  res.statusCode=404;res.end('{}');
@@ -91,6 +119,24 @@ try{
  assert.equal(enrollment.body['node/did'],current.did);
  assert.match(enrollment.auth,/^Biscuit /);
  assert(!result.out.includes('factory-secret'));
+ result=await runWithEnv(external,'qualify',...flags);
+ assert.equal(result.code,0,result.out);
+ assert.match(result.out,/qualification accepted/);
+ const challenge=calls.filter(x=>x.url==='/infer/qualification/challenge').at(-1);
+ assert.equal(challenge.body['node/did'],current.did);
+ assert.equal(challenge.body['node/name'],'test-node');
+ assert.match(challenge.auth,/^Biscuit /);
+ const qualification=calls.filter(x=>x.url==='/infer/qualification/result').at(-1);
+ assert.equal(qualification.body['qualification/id'],'test-node:qualification');
+ assert.equal(qualification.body.answers.length,5);
+ assert.equal(qualification.body.answers[4]['answer/generated-tokens'],8);
+ assert.equal(qualification.body.answers[4]['answer/prompt-tokens'],12);
+ assert(!result.out.includes('factory-secret'));
+ qualificationDenied=true;
+ result=await runWithEnv(external,'qualify',...flags);
+ assert.notEqual(result.code,0);
+ assert.match(result.out,/not accepted/);
+ qualificationDenied=false;
  result=await runWithEnv(external,'earnings','--base',base);
  assert.equal(result.code,0,result.out);
  assert.match(result.out,/Earned credits: 6000/);
@@ -136,5 +182,5 @@ try{
  authnDenied=true;assert.notEqual((await run('check',...flags)).code,0);
  authnDenied=false;
  denied=true;assert.notEqual((await run('check',...flags)).code,0);
- console.log('Packaged CLI: factory DID reuse, signed Community enrollment, earned-credit view, signed payout request, and refusal exits passed.');
+ console.log('Packaged CLI: factory DID reuse, signed Community enrollment and qualification, earned-credit view, signed payout request, and refusal exits passed.');
 }finally{server.close();rmSync(home,{recursive:true,force:true});}

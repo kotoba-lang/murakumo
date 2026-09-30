@@ -21,6 +21,8 @@ done
 mkdir -p .node-build/src/grant
 cp .node-build/.nbb/.cache/*/nbb-deps/grant/device_attest.cljk .node-build/src/grant/device_attest.cljs
 (cd .node-build && kbb --backend sci --classpath src bundle ../scripts/node-cli.cljk -o ../release/node.mjs)
+# The bundler may return zero after an EDN read error and leave a broken bundle.
+node release/node.mjs node --help >/dev/null
 node -e 'const fs=require("fs"),c=require("crypto");fs.writeFileSync("release/node.sha256",c.createHash("sha256").update(fs.readFileSync("release/node.mjs")).digest("hex")+"\n")'
 node - <<'JS'
 const fs=require('fs'),crypto=require('crypto');const hashes={};
