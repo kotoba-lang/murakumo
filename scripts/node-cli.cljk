@@ -160,8 +160,8 @@
                              :body (js->clj body :keywordize-keys true)})))))))
 
 (defn- qualification-answer! [local local-token model item]
-  (let [prompt (:item/prompt item)
-        limit (:item/max-tokens item)]
+  (let [prompt (:prompt item)
+        limit (:max-tokens item)]
     (when-not (and (string? prompt) (integer? limit) (<= 1 limit 128))
       (throw (js/Error. "The qualification challenge is malformed.")))
     (-> (worker/run-completion-with-fetch! js/fetch local local-token model prompt limit)
@@ -169,7 +169,7 @@
                  (when-not (:ok outcome)
                    (throw (js/Error. "The local model did not complete a qualification item.")))
                  (let [usage (get-in outcome [:response :usage])]
-                   (cond-> {:item/id (:item/id item)
+                   (cond-> {:item/id (:id item)
                             :answer/text (:text outcome)
                             :answer/ms (:ms outcome)}
                      (integer? (:prompt_tokens usage))
@@ -184,8 +184,8 @@
                (when-not (= 201 status)
                  (throw (js/Error. (str "Qualification challenge refused (HTTP " status
                                        "). Run node check before qualify."))))
-               (let [qid (:qualification/id body)
-                     items (:qualification/items body)]
+               (let [qid (:id body)
+                     items (:items body)]
                  (when-not (and (string? qid) (= 5 (count items)))
                    (throw (js/Error. "The qualification challenge is incomplete.")))
                  (-> (reduce (fn [answers item]
@@ -201,7 +201,7 @@
       (.then (fn [{:keys [status body]}]
                (if (and (= 200 status) (= "accepted" (:verdict body))
                         (contains? #{"accepted" :accepted}
-                                   (get-in body [:node :node/admission])))
+                                   (get-in body [:node :admission])))
                  (println "Community qualification accepted. This model may receive eligible public jobs.")
                  (do (println "Community qualification was not accepted (HTTP" status ").")
                      (when-let [failed (get-in body [:evidence :failed])]

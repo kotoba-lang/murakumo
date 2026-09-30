@@ -37,17 +37,17 @@ const server=http.createServer(async(req,res)=>{
    token:'A'.repeat(100),tokenType:'Biscuit',holder:deviceDid,
    expiresAt:new Date(Date.now()+15*60*1000).toISOString()}));
  }
- if(req.url==='/infer/nodes'){res.statusCode=denied?401:201;return res.end(JSON.stringify({'node/admission':'pending'}));}
+ if(req.url==='/infer/nodes'){res.statusCode=denied?401:201;return res.end(JSON.stringify({admission:'pending'}));}
  if(req.url.endsWith('/heartbeat')){res.statusCode=201;return res.end('{}');}
  if(req.url==='/infer/qualification/challenge'){
   res.statusCode=201;
-  return res.end(JSON.stringify({'qualification/id':'test-node:qualification',
-    'qualification/items':[
-      {'item/id':'arith','item/prompt':'What is 17 plus 29?','item/max-tokens':16},
-      {'item/id':'echo','item/prompt':'Repeat kasuto','item/max-tokens':16},
-      {'item/id':'fact-planet','item/prompt':'Which planet is largest?','item/max-tokens':16},
-      {'item/id':'fact-capital','item/prompt':'What is the capital of Japan?','item/max-tokens':16},
-      {'item/id':'throughput','item/prompt':'Why honest accounting?','item/max-tokens':128}]}));
+  return res.end(JSON.stringify({id:'test-node:qualification',
+    items:[
+      {id:'arith',prompt:'What is 17 plus 29?','max-tokens':16},
+      {id:'echo',prompt:'Repeat kasuto','max-tokens':16},
+      {id:'fact-planet',prompt:'Which planet is largest?','max-tokens':16},
+      {id:'fact-capital',prompt:'What is the capital of Japan?','max-tokens':16},
+      {id:'throughput',prompt:'Why honest accounting?','max-tokens':128}]}));
  }
  if(req.url==='/infer/qualification/result'){
   const answers=body?JSON.parse(body).answers:[];
@@ -56,7 +56,7 @@ const server=http.createServer(async(req,res)=>{
     'Distributed inference needs honest accounting.']);
   res.statusCode=accepted?200:400;
   return res.end(JSON.stringify({verdict:accepted?'accepted':'rejected',
-    node:{'node/admission':accepted?'accepted':'pending'}}));
+    node:{admission:accepted?'accepted':'pending'}}));
  }
  if(req.url.startsWith('/infer/payout?did='))return res.end(JSON.stringify({policy:{'minimum-credits':5000},account:{earned:6000,payable:6000}}));
  if(req.url==='/infer/payout/request'){res.statusCode=payoutDenied?402:201;return res.end(JSON.stringify(payoutDenied?{error:'insufficient-earned-credits'}:{'payout-id':'po-test'}));}
