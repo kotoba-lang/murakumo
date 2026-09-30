@@ -55,8 +55,9 @@ murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0
   count or free RAM falls below 1 GiB/10% of installed RAM; heartbeats advertise
   zero free slots in that state. A job already claimed finishes and reports its
   result. The host check cannot see every GPU-only workload, so validate it on
-  the actual machine before using it as the buyer's idle policy. The NixOS USB
-  installer offers an explicit, default-off systemd option for this mode.
+  the actual machine before using it as the buyer's idle policy. The current
+  NixOS base profile does not install a node service; run `join` manually until
+  an opt-in service has been configured and verified on the target machine.
 
 **Community enrollment starts pending admission.** Registration and a fresh
 heartbeat do not grant AWAI Secure membership, guarantee job placement or prove
