@@ -38,11 +38,26 @@ murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0
 - `init` creates a private device key on this PC (mode 0600) and leaves an existing
   identity untouched. Keep `~/.local/share/murakumo-node/identity.json` private;
   it is not a billing-account export. `MURAKUMO_NODE_HOME` changes this location.
+- A factory-provisioned Murakumo NixOS unit can use its existing
+  `/var/lib/murakumo/device-identity.json` by setting
+  `MURAKUMO_NODE_IDENTITY_FILE` to that absolute path for `doctor`, `check`
+  and `join`. Run as a user permitted to read the private file (normally root).
+  The CLI verifies that the Ed25519 key matches its DID and does not copy the
+  key. Do not run `init` for that unit. Its buyer claim and Community node then
+  use the same device DID; payout authority for the buyer is a separate step.
 - `doctor` checks the local model and identity without writing to the network.
 - `check` enrolls and sends one signed heartbeat with **zero free slots**; it
   never claims jobs. HTTP 201 for that heartbeat proves acceptance, not inference.
 - `join` serves jobs in the foreground until Ctrl-C. Device sessions renew while
   it runs. Restart the command after reboot; no persistent service is installed.
+- Add `--idle-only` to `join` for voluntary spare-capacity participation. The
+  node takes no new job while its one-minute CPU load exceeds half its core
+  count or free RAM falls below 1 GiB/10% of installed RAM; heartbeats advertise
+  zero free slots in that state. A job already claimed finishes and reports its
+  result. The host check cannot see every GPU-only workload, so validate it on
+  the actual machine before using it as the buyer's idle policy. The current
+  NixOS base profile does not install a node service; run `join` manually until
+  an opt-in service has been configured and verified on the target machine.
 
 **Community enrollment starts pending admission.** Registration and a fresh
 heartbeat do not grant AWAI Secure membership, guarantee job placement or prove
@@ -52,6 +67,22 @@ identity file. Existing operator credentials (`MURAKUMO_NODE_CACAO` +
 `MURAKUMO_NODE_DID`, or `MURAKUMO_SERVICE_TOKEN`) are still supported.
 A local server credential goes in `MURAKUMO_INFER_LOCAL_TOKEN` / `VLLM_API_KEY`,
 separately from network authentication.
+
+After the node has served an accepted paid job, `murakumo node earnings` reads
+its earned and payable credit totals by device DID. To request withdrawal of
+earned credits, sign in to the buyer's device page, select the claimed node,
+enter the exact amount and full 20-byte Base wallet address, and authorize it.
+The site checks current ownership and issues a capability valid for two minutes.
+Save that capability in a private file on the node (`chmod 600`), then run
+`murakumo node payout --credits 5000 --to 0x... --owner-token-file /absolute/path`
+with the **same** amount and address. The CLI also signs the exact request with
+the private device key. It rejects a missing or publicly readable buyer token
+file and never prints the token. The API requires both proofs and enforces the
+minimum and earned balance without publishing the buyer DID in the ledger. A
+successful request **debits the credits and awaits operator approval**; it does
+not transfer USDC. Factory units must set `MURAKUMO_NODE_IDENTITY_FILE` for
+these commands too. This is a manual pilot flow; the owner token and device
+signature are not a receipt for completed settlement.
 
 If diagnosis fails, confirm the server is running and the model ID matches.
 Missing flags, registration refusal and failed heartbeat checks exit nonzero.

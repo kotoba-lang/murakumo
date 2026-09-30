@@ -10,24 +10,53 @@
             ["node:os" :as os] ["node:crypto" :as crypto]))
 
 (defn help []
-  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\nNode.js 22+, a running OpenAI-compatible model server and network access are required.\nInstallation does not download models or start a service. Community enrollment\nmay remain pending admission; a heartbeat alone does not prove job eligibility.")
+  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+, a running OpenAI-compatible model server and network access are required.\nInstallation does not download models or start a service. Community enrollment\nmay remain pending admission; a heartbeat alone does not prove job eligibility.")
   (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
                                           (ctx, KV, slots), co-resident processes, units")
+  (println "  Payout also requires --owner-token-file /absolute/private/path from the buyer's device page.")
   (println "\n  murakumo bench nodes                    List tailnet nodes (name, ip, online)\n  murakumo bench run --node N --model P --engine llama|diffuse\n  murakumo bench ledger [--limit N]       Show the append-only measurement ledger\n\nMeasurements record argv, the model's bytes and hash, the host's memory and the\nengine's own output. Nothing here enrols a node or publishes a number.\n  murakumo bench --help")
   (println "\n  murakumo health check [--canary]        Probe every fleet node + the gateway, score it, record it\n  murakumo health slo | history            Availability, flapping and canary drift from the ledger\n  murakumo health heal [--apply]           Plan (or run) the one guarded self-heal\n  murakumo health --help"))
 
 (defn identity-path []
-  (.join path (or (aget js/process.env "MURAKUMO_NODE_HOME")
-                 (.join path (.homedir os) ".local" "share" "murakumo-node")) "identity.json"))
+  (or (aget js/process.env "MURAKUMO_NODE_IDENTITY_FILE")
+      (.join path (or (aget js/process.env "MURAKUMO_NODE_HOME")
+                      (.join path (.homedir os) ".local" "share" "murakumo-node"))
+             "identity.json")))
+(defn- checked-identity [raw]
+  (let [pem (or (.-privateKey raw) (.-privateKeyPem raw))
+        did (.-did raw)]
+    (when-not (and (string? pem) (string? did))
+      (throw (js/Error. "Device identity is missing its DID or private key.")))
+    (let [private (.createPrivateKey crypto pem)
+          _ (when-not (= "ed25519" (.-asymmetricKeyType private))
+              (throw (js/Error. "Device identity key must be Ed25519.")))
+          public (.export (.createPublicKey crypto private)
+                          #js {:format "der" :type "spki"})
+          raw-public (.subarray public (- (.-length public) 32))]
+      (when-not (= did (mint/did-key-from-raw-ed25519-pub raw-public))
+        (throw (js/Error. "Device identity DID does not match its private key."))))
+    #js {:did did :privateKey pem}))
 (defn identity []
   (let [p (identity-path)]
+    (when (and (aget js/process.env "MURAKUMO_NODE_IDENTITY_FILE")
+               (not (.isAbsolute path p)))
+      (throw (js/Error. "MURAKUMO_NODE_IDENTITY_FILE must be absolute.")))
+    (when (and (aget js/process.env "MURAKUMO_NODE_IDENTITY_FILE")
+               (not (.existsSync fs p)))
+      (throw (js/Error. "Externally provisioned device identity is missing.")))
     (when (.existsSync fs p)
-      (let [st (.lstatSync fs p)]
-        (when (or (.isSymbolicLink st) (not= 0 (bit-and (.-mode st) 63)))
-          (throw (js/Error. "Device identity must be a private regular file (chmod 600).")))
-        (try (js/JSON.parse (.readFileSync fs p "utf8"))
-             (catch :default _ (throw (js/Error. "Device identity file is invalid; restore your private backup."))))))))
+      (let [fd (.openSync fs p (bit-or (.-O_RDONLY (.-constants fs))
+                                     (.-O_NOFOLLOW (.-constants fs))))]
+        (try
+          (let [st (.fstatSync fs fd)]
+            (when (or (not (.isFile st)) (not= 0 (bit-and (.-mode st) 63)))
+              (throw (js/Error. "Device identity must be a private regular file (chmod 600).")))
+            (try (checked-identity (js/JSON.parse (.readFileSync fs fd "utf8")))
+                 (catch :default _ (throw (js/Error. "Device identity file is invalid or does not match its DID; restore your private backup.")))))
+          (finally (.closeSync fs fd)))))))
 (defn init! []
+  (when (aget js/process.env "MURAKUMO_NODE_IDENTITY_FILE")
+    (throw (js/Error. "Externally provisioned identity is managed by the installer; do not run node init.")))
   (if-let [id (identity)]
     (println "Identity already exists:" (.-did id))
     (let [kp (.generateKeyPairSync crypto "ed25519")
@@ -41,21 +70,135 @@
       (println "Device identity created:" did)
       (println "Private key stays on this PC. Next: murakumo node doctor --model <served-model-id>"))))
 (defn utc [ms] (.replace (.toISOString (js/Date. ms)) #"\.\d{3}Z$" "Z"))
-(defn mint! [id base]
-  (mint/mint (.-did id)
-             #(js/Promise.resolve (.sign crypto nil % (.-privateKey id)))
-             {:domain (.-host (js/URL. base)) :aud base
-              :nonce (.randomUUID crypto) :iat (utc (js/Date.now))
-              :exp (utc (+ (js/Date.now) 3600000))}))
+(defn mint!
+  ([id base] (mint! id base []))
+  ([id base resources] (mint! id base resources 3600000))
+  ([id base resources ttl-ms]
+   (mint/mint (.-did id)
+              #(js/Promise.resolve (.sign crypto nil % (.-privateKey id)))
+              {:domain (.-host (js/URL. base)) :aud base
+               :nonce (.randomUUID crypto) :iat (utc (js/Date.now))
+               :exp (utc (+ (js/Date.now) ttl-ms))
+               :resources resources})))
 (defn fail! [message] (println message) (set! (.-exitCode js/process) 1))
 (defn options [args]
+  (let [idle-only? (some #{"--idle-only"} args)
+        args (vec (remove #{"--idle-only"} args))]
   (when (or (odd? (count args))
-            (some (fn [[k v]] (or (not (contains? #{"--model" "--name" "--local-url" "--base" "--trust-tier"} k))
+            (some (fn [[k v]] (or (not (contains? #{"--model" "--name" "--local-url" "--base" "--authn" "--trust-tier"} k))
                                  (str/starts-with? v "--"))) (partition 2 args)))
     (throw (js/Error. "Unknown option or missing value. Use murakumo node --help.")))
-  (worker/parse-args args))
+  (assoc (worker/parse-args args) :idle-only (boolean idle-only?))))
+(defn control-base [value]
+  (let [base (str/replace (or value "https://api.murakumo.cloud") #"/+$" "")
+        u (js/URL. base)]
+    (when-not (or (= "https:" (.-protocol u))
+                  (and (= "http:" (.-protocol u))
+                       (contains? #{"localhost" "127.0.0.1" "[::1]"} (.-hostname u))))
+      (throw (js/Error. "The control plane must use HTTPS (HTTP is allowed only on loopback).")))
+    (when (or (seq (.-username u)) (seq (.-password u))
+              (not= "/" (.-pathname u))
+              (seq (.-search u)) (seq (.-hash u)))
+      (throw (js/Error. "The control plane base must contain only a scheme and host.")))
+    base))
+(defn- fetch-node-grant! [id authn-base]
+  (-> (mint! id authn-base ["murakumo://node-token"] 240000)
+      (.then (fn [proof]
+               (js/fetch (str authn-base "/v1/murakumo/node-token")
+                         #js {:method "POST"
+                              :headers #js {"content-type" "application/json"}
+                              :body (js/JSON.stringify #js {:cacao_b64 (:cacao-b64 proof)})
+                              :signal (js/AbortSignal.timeout 30000)})))
+      (.then (fn [response]
+               (-> (.json response)
+                   (.then (fn [body]
+                            (let [token (.-token body)
+                                  expires-at (js/Date.parse (.-expiresAt body))]
+                              (if (and (= 201 (.-status response))
+                                       (string? token)
+                                       (re-matches #"[A-Za-z0-9_-]{80,8192}" token)
+                                       (= "Biscuit" (.-tokenType body))
+                                       (= (.-did id) (.-holder body))
+                                       (number? expires-at)
+                                       (> expires-at (+ (js/Date.now) 60000)))
+                                {:token token :expires-at expires-at}
+                                (throw (js/Error. (str "Node authorization refused (HTTP "
+                                                        (.-status response) ")."))))))))))))
+(defn payout-options [args command]
+  (let [allowed (if (= command "earnings") #{"--base"}
+                    #{"--base" "--credits" "--to" "--owner-token-file"})]
+    (when (or (odd? (count args))
+              (some (fn [[k v]]
+                      (or (not (contains? allowed k)) (str/starts-with? v "--")))
+                    (partition 2 args)))
+      (throw (js/Error. "Unknown payout option or missing value.")))
+    (worker/parse-args args)))
+(defn- owner-payout-token [file]
+  (when-not (and (string? file) (.isAbsolute path file))
+    (throw (js/Error. "--owner-token-file must be an absolute path to a private file.")))
+  (let [fd (.openSync fs file (bit-or (.-O_RDONLY (.-constants fs))
+                                  (.-O_NOFOLLOW (.-constants fs))))]
+    (try
+      (let [st (.fstatSync fs fd)
+            token (str/trim (.readFileSync fs fd "utf8"))]
+        (when-not (and (.isFile st) (= 0 (bit-and (.-mode st) 63))
+                       (re-matches #"mk1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+" token))
+          (throw (js/Error. "Owner authorization file must be private (chmod 600) and contain a valid token.")))
+        token)
+      (finally (.closeSync fs fd)))))
+(defn payout-command! [command args]
+  (let [opts (payout-options args command)
+        base (control-base (:base opts))
+        id (identity)]
+    (when-not id
+      (throw (js/Error. "Run murakumo node init or configure MURAKUMO_NODE_IDENTITY_FILE first.")))
+    (if (= command "earnings")
+      (-> (js/fetch (str base "/infer/payout?did="
+                         (js/encodeURIComponent (.-did id)))
+                    #js {:signal (js/AbortSignal.timeout 30000)})
+          (.then (fn [response]
+                   (if (.-ok response)
+                     (-> (.json response)
+                         (.then (fn [body]
+                                  (let [account (.-account body)
+                                        policy (.-policy body)]
+                                    (println "Device DID:" (.-did id))
+                                    (println "Earned credits:" (aget account "earned"))
+                                    (println "Payable credits:" (aget account "payable"))
+                                    (println "Minimum request:" (aget policy "minimum-credits"))))))
+                     (fail! (str "Earnings lookup refused (HTTP " (.-status response) ")."))))))
+      (let [credits-text (:credits opts)
+            credits (when (and (string? credits-text)
+                               (re-matches #"[1-9][0-9]*" credits-text))
+                      (js/Number credits-text))
+            to (:to opts)
+            owner-token (owner-payout-token (:owner-token-file opts))]
+        (when-not (and (js/Number.isSafeInteger credits) (pos? credits))
+          (throw (js/Error. "--credits must be a positive whole number of credits.")))
+        (when-not (and (string? to) (re-matches #"0x[0-9a-fA-F]{40}" to))
+          (throw (js/Error. "--to must be a 20-byte 0x-prefixed EVM address.")))
+        (-> (mint! id base [(str "murakumo:payout?to=" to
+                                 "&credits=" credits)])
+            (.then (fn [session]
+                     (js/fetch (str base "/infer/payout/request")
+                               #js {:method "POST"
+                                    :headers #js {"content-type" "application/json"
+                                                  "authorization" (str "CACAO " (:cacao-b64 session))
+                                                  "x-murakumo-owner-payout" owner-token}
+                                    :body (js/JSON.stringify
+                                           #js {:did (.-did id) :credits credits :to to})
+                                    :signal (js/AbortSignal.timeout 30000)})))
+            (.then (fn [response]
+                     (-> (.json response)
+                         (.then (fn [body]
+                                  (if (= 201 (.-status response))
+                                    (do (println "Payout request:" (or (aget body "payout-id") "submitted"))
+                                        (println "Awaiting operator approval; no transfer has occurred."))
+                                    (fail! (str "Payout request refused (HTTP "
+                                                (.-status response) "): "
+                                                (or (.-error body) "unknown"))))))))))))))
 (defn run! [command opts]
-  (let [base (or (:base opts) "https://api.murakumo.cloud")
+  (let [base (control-base (:base opts))
         local (str/replace (or (:local-url opts) "http://127.0.0.1:11434/v1") #"/+$" "")
         model (:model opts)
         id (identity)
@@ -63,10 +206,6 @@
         auth (worker/control-auth opts env)]
     (when-not (and (string? model) (not (str/blank? model)))
       (throw (js/Error. "Specify --model exactly as returned by the local /v1/models endpoint.")))
-    (let [u (js/URL. base)]
-      (when-not (or (= "https:" (.-protocol u))
-                    (and (= "http:" (.-protocol u)) (contains? #{"localhost" "127.0.0.1" "[::1]"} (.-hostname u))))
-        (throw (js/Error. "The control plane must use HTTPS (HTTP is allowed only on loopback)."))))
     (-> (worker/probe-readiness-with-fetch! js/fetch local (worker/local-auth-token opts env) model)
         (.then (fn [probe]
                  (println "Local model:" (if (:ready? probe) "ready" "not ready") "(HTTP" (:status probe) ")")
@@ -79,16 +218,30 @@
                    (let [opts (assoc opts :base base :local-url local :check (= command "check"))]
                      (if auth
                        (worker/-main opts)
-                       (-> (mint! id base)
-                           (.then (fn [token]
-                                    (let [current (atom (:cacao-b64 token))]
-                                      (when (= command "join")
-                                        (.unref (js/setInterval
-                                                 #(-> (mint! id base)
-                                                      (.then (fn [t] (reset! current (:cacao-b64 t))))
-                                                      (.catch (fn [_] (println "Device session renewal failed."))))
-                                                 1800000)))
-                                      (worker/-main (assoc opts :did (.-did id) :cacao #(deref current)))))))))))))))
+                       (let [authn-base (control-base (or (:authn opts)
+                                                          (aget js/process.env "MURAKUMO_AUTHN_BASE")
+                                                          "https://auth.murakumo.cloud"))]
+                         (-> (fetch-node-grant! id authn-base)
+                             (.then (fn [grant]
+                                      (let [current (atom grant)
+                                            credential (fn []
+                                                         (let [{:keys [token expires-at]} @current]
+                                                           (when-not (and token
+                                                                          (> expires-at (+ (js/Date.now) 30000)))
+                                                             (throw (js/Error. "Node authorization expired.")))
+                                                           token))]
+                                        (when (= command "join")
+                                          (.unref (js/setInterval
+                                                   #(when (< (:expires-at @current)
+                                                             (+ (js/Date.now) 300000))
+                                                      (-> (fetch-node-grant! id authn-base)
+                                                          (.then (fn [next-grant]
+                                                                   (reset! current next-grant)))
+                                                          (.catch (fn [_]
+                                                                    (println "Device authorization renewal failed.")))))
+                                                   60000)))
+                                        (worker/-main (assoc opts :did (.-did id)
+                                                             :biscuit credential)))))))))))))))
 
 (let [;; kbb passes the script's own args as *command-line-args* (process.argv
       ;; still holds kbb's --classpath and the script path); the bundled release
@@ -117,6 +270,9 @@
       (= command "--help") (help)
       (not= prefix "node") (fail! "Use: murakumo node, bench, fleet or health --help")
       (= command "init") (init!)
+      (contains? #{"earnings" "payout"} command)
+      (-> (payout-command! command args)
+          (.catch (fn [_] (fail! "Payout operation failed. Check the network, device identity and request; no credentials are printed."))))
       (contains? #{"doctor" "check" "join"} command)
       (-> (run! command (options args))
           (.catch (fn [_] (fail! "Node operation failed. Check the local server, network and device identity; no credentials are printed."))))
