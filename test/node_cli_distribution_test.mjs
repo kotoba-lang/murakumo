@@ -7,7 +7,10 @@ import assert from 'node:assert/strict';
 import {createPublicKey,verify} from 'node:crypto';
 const home=mkdtempSync(path.join(tmpdir(),'murakumo-node-test-'));
 let denied=false,payoutDenied=false,authnDenied=false,qualificationDenied=false,deviceDid;
-let pendingChallenge=null,attestAccepted=true;const calls=[];
+let pendingChallenge=null,attestAccepted=true,joinJobAvailable=false,joinResult;
+let joinResultReceived;
+const joinResultPromise=new Promise(resolve=>{joinResultReceived=resolve;});
+const calls=[];
 const server=http.createServer(async(req,res)=>{
  let body='';for await(const c of req)body+=c;
  calls.push({url:req.url,auth:req.headers.authorization,
@@ -57,6 +60,17 @@ const server=http.createServer(async(req,res)=>{
   res.statusCode=accepted?200:400;
   return res.end(JSON.stringify({verdict:accepted?'accepted':'rejected',
     node:{admission:accepted?'accepted':'pending'}}));
+ }
+ if(req.url?.startsWith('/infer/queue?'))return res.end(JSON.stringify(joinJobAvailable?[
+  {'job-id':'job-cli-integration',kind:'host-large-model',
+   input:{prompt:'What is the capital of Japan?','max-tokens':16}}
+ ]:[]));
+ if(req.url==='/infer/queue/job-cli-integration/claim'){
+  joinJobAvailable=false;res.statusCode=201;return res.end('{}');
+ }
+ if(req.url==='/infer/queue/job-cli-integration/result'){
+  joinResult=JSON.parse(body);joinResultReceived();res.statusCode=201;
+  return res.end(JSON.stringify({shares:{provider:475}}));
  }
  if(req.url.startsWith('/infer/payout?did='))return res.end(JSON.stringify({policy:{'minimum-credits':5000},account:{earned:6000,payable:6000}}));
  if(req.url==='/infer/payout/request'){res.statusCode=payoutDenied?402:201;return res.end(JSON.stringify(payoutDenied?{error:'insufficient-earned-credits'}:{'payout-id':'po-test'}));}
@@ -137,6 +151,24 @@ try{
  assert.notEqual(result.code,0);
  assert.match(result.out,/not accepted/);
  qualificationDenied=false;
+ joinJobAvailable=true;
+ const joined=spawn(process.execPath,['release/node.mjs','node','join',...flags],{
+  env:{...process.env,MURAKUMO_NODE_IDENTITY_FILE:factory,
+   MURAKUMO_NODE_CACAO:'',MURAKUMO_NODE_DID:'',MURAKUMO_SERVICE_TOKEN:''}});
+ let joinOutput='';
+ joined.stdout.on('data',d=>joinOutput+=d);
+ joined.stderr.on('data',d=>joinOutput+=d);
+ try{
+  await Promise.race([joinResultPromise,new Promise((_,reject)=>setTimeout(
+   ()=>reject(new Error(`CLI did not report a claimed job: ${joinOutput}`)),10000))]);
+  assert.equal(joinResult.did,current.did);
+  assert.equal(joinResult.output.text,'Tokyo');
+  assert.equal(calls.filter(x=>x.url==='/infer/queue/job-cli-integration/claim').length,1);
+  assert.match(calls.find(x=>x.url==='/infer/queue/job-cli-integration/claim').auth,/^Biscuit /);
+ }finally{
+  joined.kill('SIGTERM');
+  await new Promise(resolve=>joined.once('close',resolve));
+ }
  result=await runWithEnv(external,'earnings','--base',base);
  assert.equal(result.code,0,result.out);
  assert.match(result.out,/Earned credits: 6000/);
@@ -182,5 +214,5 @@ try{
  authnDenied=true;assert.notEqual((await run('check',...flags)).code,0);
  authnDenied=false;
  denied=true;assert.notEqual((await run('check',...flags)).code,0);
- console.log('Packaged CLI: factory DID reuse, signed Community enrollment and qualification, earned-credit view, signed payout request, and refusal exits passed.');
+ console.log('Packaged CLI: factory DID reuse, Community enrollment and qualification, claimed job execution and report, earned-credit view, signed payout request, and refusal exits passed.');
 }finally{server.close();rmSync(home,{recursive:true,force:true});}
