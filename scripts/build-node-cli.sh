@@ -28,5 +28,6 @@ node -e 'const fs=require("fs"),c=require("crypto");fs.writeFileSync("release/no
 node - <<'JS'
 const fs=require('fs'),crypto=require('crypto');const hashes={};
 for(const f of ['node.mjs','package.json','package-lock.json','nixos-node.nix'])hashes[f]=crypto.createHash('sha256').update(fs.readFileSync('release/'+f)).digest('hex');
-fs.writeFileSync('release/install.sh',fs.readFileSync('scripts/install-node.sh.in','utf8').replace('__HASHES__',JSON.stringify(hashes)).replace('__VERSION__',hashes['node.mjs'].slice(0,16)));
+const version=crypto.createHash('sha256').update(JSON.stringify(hashes)).digest('hex').slice(0,16);
+fs.writeFileSync('release/install.sh',fs.readFileSync('scripts/install-node.sh.in','utf8').replace('__HASHES__',JSON.stringify(hashes)).replace('__VERSION__',version));
 JS
