@@ -5,7 +5,6 @@
             #?(:clj [kotoba.lang.http.host.babashka :as http-client])
             [ed25519.core :as ed]
             [murakumo.artifact-store :as artifact-store]
-            [murakumo.filecoin-tier :as filecoin-tier]
             [murakumo.cd.automation :as cd-automation]
             [murakumo.ci.broker-service :as broker-service]
             [murakumo.ci.file-store :as file-store]
@@ -86,10 +85,8 @@
        (throw (ex-info "murakumo-ci: GitHub webhook secret unavailable"
                        {:reason :missing-github-secret})))
      (let [persistent (file-store/create (:ci.coordinator/store-root config))
-           coordinator-cas (filecoin-tier/wrap
-                            (artifact-store/adapter
-                             (:ci.coordinator/artifact-root config))
-                            (filecoin-tier/config-from-env getenv))
+           coordinator-cas (artifact-store/adapter
+                            (:ci.coordinator/artifact-root config))
            deployments (or (:ci.coordinator/deployments config) {})
            issuer-seeds
            (into {}
