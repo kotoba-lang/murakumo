@@ -29,7 +29,8 @@
      `:proof-valid?`. A claimed DID the device cannot sign for is refused.
   3. The ledger refuses a DID it has revoked, and refuses to reuse a node name
      for a different key. Without that, 'auto' would mean any joiner can take
-     over a name the fleet already trusts.")
+     over a name the fleet already trusts."
+  (:require [kotoba.lang.text :as str]))
 
 ;; ── mesh radio configuration ───────────────────────────────────────────────
 
@@ -43,7 +44,15 @@
 
 (def default-country "JP")
 
-(def mesh-subnet-prefix "10.77.0.")
+(def mesh-subnet-prefix
+  "Allocated hosts live in 10.77.0.0/24 inside a /16 mesh. A joiner that has not
+  been admitted yet picks a throwaway address in 10.77.1.0/24, so it can reach
+  the seed (10.77.0.1) without taking a slot in the ledger."
+  "10.77.0.")
+
+(def seed-address "10.77.0.1")
+
+(def enroll-port 7077)
 
 (def min-passphrase-length
   "SAE has no offline dictionary attack, but it still falls to guessing online,
@@ -63,12 +72,17 @@
     (throw (ex-info "mesh passphrase must be 32-63 alphanumeric characters"
                     {:reason :weak-passphrase}))))
 
-(defn wpa-supplicant-conf
-  "wpa_supplicant config for one mesh point. `ieee80211w=2` (management frame
-  protection) is required by SAE on a mesh, not an option."
-  [{:keys [mesh-id passphrase frequency country]
+(def passphrase-placeholder
+  "Stands in for the passphrase in a rendered template. The installer replaces it
+  on the node, so the secret is generated there and never travels in a plan."
+  "@MESH_PASSPHRASE@")
+
+(defn wpa-supplicant-template
+  "wpa_supplicant config for one mesh point, passphrase left as
+  `passphrase-placeholder`. `ieee80211w=2` (management frame protection) is
+  required by SAE on a mesh, not an option."
+  [{:keys [mesh-id frequency country]
     :or {mesh-id default-mesh-id frequency default-frequency country default-country}}]
-  (require-passphrase! passphrase)
   (str "ctrl_interface=/run/wpa_supplicant\n"
        "update_config=0\n"
        "country=" country "\n"
@@ -78,10 +92,16 @@
        "    mode=5\n"
        "    frequency=" frequency "\n"
        "    key_mgmt=SAE\n"
-       "    psk=\"" passphrase "\"\n"
+       "    psk=\"" passphrase-placeholder "\"\n"
        "    ieee80211w=2\n"
        "    mesh_fwding=1\n"
        "}\n"))
+
+(defn wpa-supplicant-conf
+  "The template with a real passphrase substituted; refuses a weak one."
+  [{:keys [passphrase] :as opts}]
+  (require-passphrase! passphrase)
+  (str/replace (wpa-supplicant-template opts) passphrase-placeholder passphrase))
 
 (defn mesh-iface-script
   "Create the mesh-point interface from the station radio, or refuse.
@@ -97,12 +117,6 @@
        "}\n"
        "iw dev " iface " info >/dev/null 2>&1 || iw phy " phy " interface add " iface " type mp\n"
        "ip link set " iface " up\n"))
-
-(defn networkd-unit
-  "systemd-networkd .network for the mesh interface, static address."
-  [{:keys [iface address] :or {iface "mesh0"}}]
-  (str "[Match]\nName=" iface "\n\n"
-       "[Network]\nAddress=" address "/24\nLinkLocalAddressing=ipv6\n"))
 
 ;; ── ledger and admission ───────────────────────────────────────────────────
 

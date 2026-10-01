@@ -1,0 +1,101 @@
+(ns murakumo.mesh-seed-test
+  (:require [kotoba.test :refer [deftest is]]
+            [murakumo.mesh.seed :as seed]))
+
+(def ledger {:admit :auto-on-mesh
+             :nodes {"seed" {:id "seed" :status "authorized" :did "did:key:zSeed" :address "10.77.0.1"}}})
+
+(def nonces (atom 0))
+
+(defn- deps [& {:as extra}]
+  (merge {:now-ms 1000
+          :endpoint "http://10.77.0.1:7077/enroll"
+          :new-nonce #(str "n-" (swap! nonces inc))
+          ;; stand-ins for the JDK-backed shell: the b64 *is* the key here
+          :public-key-hex-of (fn [b64] (when (= "KEY-B" b64) "hexb"))
+          :device-did (fn [hex] (str "did:key:z-" hex))
+          :verify (fn [signed expected]
+                    (and (= (:nonce signed) (:nonce expected))
+                         (= (:key signed) (:public-key-b64 expected))))}
+         extra))
+
+(defn- post [state path body & {:as d}]
+  (seed/handle state {:method :post :path path :body body} (deps)))
+
+(defn- challenge [state & {:keys [b64 name] :or {b64 "KEY-B" name "b"}}]
+  (post state "/enroll/challenge" {:public-key-b64 b64 :node-name name}))
+
+(deftest the-happy-path-two-round-trips
+  (let [[s1 r1] (challenge (seed/initial-state ledger))
+        nonce (get-in r1 [:body :nonce])
+        [s2 r2] (post s1 "/enroll/claim" {:nonce nonce :signed-challenge {:nonce nonce :key "KEY-B"}})]
+    (is (= 200 (:status r1)))
+    (is (= 200 (:status r2)))
+    (is (= "authorized" (get-in r2 [:body :status])))
+    (is (= "10.77.0.2" (get-in r2 [:body :address])))
+    (is (= "authorized" (get-in s2 [:ledger :nodes "b" :status])))))
+
+(deftest the-did-is-derived-from-the-key-the-signature-is-checked-against
+  (let [[_ r] (challenge (seed/initial-state ledger) :b64 "someone-elses-key")]
+    (is (= 400 (:status r)))
+    (is (= :invalid-public-key (get-in r [:body :reason])))))
+
+(deftest a-nonce-is-single-use-even-after-a-failed-proof
+  (let [[s1 r1] (challenge (seed/initial-state ledger))
+        nonce (get-in r1 [:body :nonce])
+        [s2 r2] (post s1 "/enroll/claim" {:nonce nonce :signed-challenge {:nonce nonce :key "WRONG"}})
+        [_ r3] (post s2 "/enroll/claim" {:nonce nonce :signed-challenge {:nonce nonce :key "KEY-B"}})]
+    (is (= 403 (:status r2)))
+    (is (= :no-proof-of-possession (get-in r2 [:body :reason])))
+    (is (= :unknown-or-expired-nonce (get-in r3 [:body :reason])) "replay refused")))
+
+(deftest an-expired-challenge-is-refused
+  (let [[s1 r1] (challenge (seed/initial-state ledger))
+        nonce (get-in r1 [:body :nonce])
+        [_ r2] (seed/handle s1 {:method :post :path "/enroll/claim"
+                                :body {:nonce nonce :signed-challenge {:nonce nonce :key "KEY-B"}}}
+                            (deps :now-ms (+ 1000 seed/challenge-ttl-ms)))]
+    (is (= :unknown-or-expired-nonce (get-in r2 [:body :reason])))))
+
+(deftest a-failed-claim-does-not-touch-the-ledger
+  (let [s0 (seed/initial-state ledger)
+        [s1 r1] (challenge s0)
+        nonce (get-in r1 [:body :nonce])
+        [s2 _] (post s1 "/enroll/claim" {:nonce nonce :signed-challenge {:nonce nonce :key "WRONG"}})]
+    (is (= (:ledger s0) (:ledger s2)))))
+
+(deftest without-the-opt-in-the-join-is-pending-202
+  (let [[s1 r1] (challenge (seed/initial-state (dissoc ledger :admit)))
+        nonce (get-in r1 [:body :nonce])
+        [_ r2] (post s1 "/enroll/claim" {:nonce nonce :signed-challenge {:nonce nonce :key "KEY-B"}})]
+    (is (= 202 (:status r2)))
+    (is (= "pending" (get-in r2 [:body :status])))))
+
+(deftest bad-node-names-are-refused
+  (is (= :invalid-node-name (get-in (second (challenge (seed/initial-state ledger) :name "../etc")) [:body :reason])))
+  (is (= :invalid-node-name (get-in (second (challenge (seed/initial-state ledger) :name "")) [:body :reason]))))
+
+(deftest pending-challenges-are-capped-and-expired-ones-do-not-count
+  (let [full (reduce (fn [s i] (first (seed/handle s {:method :post :path "/enroll/challenge"
+                                                      :body {:public-key-b64 "KEY-B" :node-name "b"}}
+                                                  (deps :now-ms (+ 1000 i)))))
+                     (seed/initial-state ledger) (range seed/max-pending-challenges))
+        [_ r-full] (post full "/enroll/challenge" {:public-key-b64 "KEY-B" :node-name "b"})
+        [_ r-later] (seed/handle full {:method :post :path "/enroll/challenge"
+                                       :body {:public-key-b64 "KEY-B" :node-name "b"}}
+                                 (deps :now-ms (+ 100000 seed/challenge-ttl-ms)))]
+    (is (= 503 (:status r-full)))
+    (is (= 200 (:status r-later)))))
+
+(deftest routing-is-uniform-for-unknown-things
+  (let [s (seed/initial-state ledger)]
+    (is (= 404 (:status (second (post s "/nope" {})))))
+    (is (= 405 (:status (second (seed/handle s {:method :get :path "/enroll/claim" :body nil} (deps))))))
+    (is (= 400 (:status (second (seed/handle s {:method :post :path "/enroll/claim" :body "x"} (deps))))))))
+
+(deftest a-trusted-name-is-not-taken-over-via-the-endpoint
+  (let [[s1 r1] (challenge (seed/initial-state ledger) :name "seed")
+        nonce (get-in r1 [:body :nonce])
+        [_ r2] (post s1 "/enroll/claim" {:nonce nonce :signed-challenge {:nonce nonce :key "KEY-B"}})]
+    (is (= 403 (:status r2)))
+    (is (= :node-name-taken-by-another-key (get-in r2 [:body :reason])))))
