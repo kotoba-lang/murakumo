@@ -1,0 +1,75 @@
+(ns murakumo.mesh-seed-server-test
+  (:require ["node:fs" :as fs]
+            ["node:os" :as os]
+            ["node:path" :as path]
+            ["node:crypto" :as crypto]
+            [kotoba.test :refer [deftest is]]
+            [ed25519.core :as ed]
+            [murakumo.mesh :as mesh]
+            [murakumo.mesh.client :as client]
+            [murakumo.mesh.ledger :as ledger]
+            [murakumo.mesh.seed :as seed]
+            [murakumo.mesh.seed-server :as srv]))
+
+(def endpoint "http://10.77.0.1:7077/enroll")
+
+(defn- tmp-ledger [text]
+  (let [dir (.mkdtempSync fs (.join path (.tmpdir os) "mesh-srv-"))
+        p (.join path dir "ledger.edn")]
+    (when text (.writeFileSync fs p text))
+    p))
+
+(defn- enrol!
+  "A full two-round-trip join through `serve!` with a real key. Returns the claim's [status body]."
+  [state p seed-bytes name]
+  (let [did (ed/did-key-from-seed seed-bytes)
+        [cs {:keys [nonce]}] (let [[s body] (srv/serve! state endpoint p {:method :post :path "/enroll/challenge"
+                                                                          :body {:did did :node-name name}})]
+                               [s body])]
+    (if (not= 200 cs)
+      [cs nonce]
+      (srv/serve! state endpoint p
+                  {:method :post :path "/enroll/claim"
+                   :body {:nonce nonce
+                          :signature (client/sign-proof seed-bytes (mesh/proof-message {:nonce nonce :endpoint endpoint
+                                                                                        :did did :node-name name}))}}))))
+
+(def key-a (.randomBytes crypto 32))
+
+(deftest a-real-join-is-admitted-and-persisted
+  (let [p (tmp-ledger "{:admit :auto-on-mesh :nodes {}}")
+        state (atom (seed/initial-state {:nodes {}}))
+        [status body] (enrol! state p key-a "node-a")]
+    (is (= 200 status))
+    (is (= "10.77.0.2" (:address body)))
+    (is (= "authorized" (get-in (:ledger (srv/load-ledger p)) [:nodes "node-a" :status])) "on disk, not just in memory")))
+
+(deftest a-revocation-written-while-the-server-runs-takes-effect-on-the-next-join
+  (let [p (tmp-ledger "{:admit :auto-on-mesh :nodes {}}")
+        state (atom (seed/initial-state {:nodes {}}))
+        _ (enrol! state p key-a "node-a")
+        revoked (:ledger (ledger/revoke (:ledger (srv/load-ledger p)) "node-a" {:now-ms 1}))
+        _ (.writeFileSync fs p (ledger/serialize revoked))
+        [status body] (enrol! state p key-a "node-a")]
+    (is (= 403 status))
+    (is (= :did-revoked (:reason body)) "the server's in-memory copy did not resurrect the node")))
+
+(deftest a-corrupt-ledger-refuses-service-and-is-not-overwritten
+  (let [p (tmp-ledger "{:nodes {\"a\" {:status \"bogus\"")
+        before (.readFileSync fs p "utf8")
+        state (atom (seed/initial-state {:nodes {}}))
+        [status body] (srv/serve! state endpoint p {:method :post :path "/enroll/challenge"
+                                                    :body {:did (ed/did-key-from-seed key-a) :node-name "a"}})]
+    (is (= 503 status))
+    (is (= :ledger-unreadable (:reason body)))
+    (is (= before (.readFileSync fs p "utf8")))))
+
+(deftest a-missing-ledger-is-empty-at-startup-but-not-mid-run
+  (let [p (tmp-ledger nil)]
+    (is (= {:nodes {}} (srv/read-ledger p)) "startup")
+    (is (= 503 (first (srv/serve! (atom (seed/initial-state {:nodes {}})) endpoint p
+                                  {:method :post :path "/enroll/challenge"
+                                   :body {:did (ed/did-key-from-seed key-a) :node-name "a"}}))))))
+
+(deftest startup-over-a-corrupt-ledger-throws
+  (is (thrown? js/Error (srv/read-ledger (tmp-ledger "{{{")))))

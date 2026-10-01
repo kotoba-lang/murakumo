@@ -17,17 +17,29 @@
             [kotoba.lang.edn :as edn]
             [murakumo.durable-file :as durable]
             [murakumo.mesh :as mesh]
+            [murakumo.mesh.ledger :as ledger]
             [murakumo.mesh.seed :as seed]))
 
 (def max-body-bytes (* 64 1024))
 
-(defn read-ledger
-  "The ledger at `path`, or an empty one WITHOUT the auto-admit opt-in: a
-  missing or unreadable file must never default to admitting strangers."
+(defn load-ledger
+  "{:ledger l} or {:error kw}. :missing is its own answer: only startup may turn
+  it into an empty ledger. Anything unreadable stays an error, because treating a
+  corrupt file as empty and then persisting over it is how a revocation list is
+  lost."
   [path]
-  (try (let [l (edn/read-string (str (.readFileSync fs path "utf8")))]
-         (if (map? l) (update l :nodes #(or % {})) {:nodes {}}))
-       (catch :default _ {:nodes {}})))
+  (if-not (.existsSync fs path)
+    {:error :missing}
+    (try (ledger/parse (str (.readFileSync fs path "utf8")))
+         (catch :default _ {:error :unreadable}))))
+
+(defn read-ledger
+  "Ledger for display/startup: empty WITHOUT the auto-admit opt-in when absent."
+  [path]
+  (let [{l :ledger error :error} (load-ledger path)]
+    (cond l l
+          (= :missing error) {:nodes {}}
+          :else (throw (ex-info "ledger unreadable; refusing to start over it" {:path path :error error})))))
 
 (defn persist-ledger! [path ledger]
   (durable/write! path (kbytes/utf8-bytes (str (pr-str ledger) "\n"))))
@@ -50,14 +62,20 @@
 (defn serve!
   "Handle one parsed request against `state-atom`; returns [status body]."
   [state-atom endpoint ledger-path req]
-  (let [old @state-atom
-        [new-state resp] (seed/handle old req (deps endpoint))]
-    (if (and (not= (:ledger old) (:ledger new-state))
-             (try (persist-ledger! ledger-path (:ledger new-state)) false
-                  (catch :default _ true)))
-      [500 {:ok? false :reason :ledger-not-persisted}]
-      (do (reset! state-atom new-state)
-          [(:status resp) (:body resp)]))))
+  ;; The file is the source of truth, read on every request: a revocation written
+  ;; by `ledger-cli` while the server runs must take effect on the next join, and
+  ;; a server holding a stale copy would also persist it back over the revocation.
+  (let [{:keys [ledger error]} (load-ledger ledger-path)]
+    (if-not ledger
+      [503 {:ok? false :reason :ledger-unreadable :detail error}]
+      (let [old (assoc @state-atom :ledger ledger)
+            [new-state resp] (seed/handle old req (deps endpoint))]
+        (if (and (not= (:ledger old) (:ledger new-state))
+                 (try (persist-ledger! ledger-path (:ledger new-state)) false
+                      (catch :default _ true)))
+          [500 {:ok? false :reason :ledger-not-persisted}]
+          (do (reset! state-atom new-state)
+              [(:status resp) (:body resp)]))))))
 
 (defn- reply! [res status body]
   (let [payload (str (pr-str body) "\n")]

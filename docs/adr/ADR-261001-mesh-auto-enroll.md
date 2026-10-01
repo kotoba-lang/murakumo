@@ -24,6 +24,8 @@ real radio (see "Not verified").
 | `murakumo.mesh.client` | joiner: persistent device seed, proof, takes the allocated address |
 | `murakumo.mesh.install` | pure Linux/systemd plans for `:seed` and `:joiner`, join token |
 | `murakumo.mesh.install-cli` | runs a plan over SSH (`--dry-run` prints it) |
+| `murakumo.mesh.ledger` | pure: parse/validate, revoke, two-way `sync-plan` |
+| `murakumo.mesh.ledger-cli` | `sync`, `revoke`, `list` against the seed over SSH |
 
 ## Flow
 
@@ -76,9 +78,43 @@ disagree with the name.
 - The enrol endpoint speaks plain HTTP over the SAE-protected mesh. SAE is the
   confidentiality layer; there is no TLS.
 
+## Ledger sync and revocation
+
+The seed writes admissions; the operator owns hand-authored entries and
+revocations. `ledger-cli sync` reconciles them:
+
+1. Revoked is sticky in both directions (a stale copy cannot un-revoke).
+2. The operator's `:admit` flag is never imported from the seed.
+3. An authorized name never changes key through a sync; a disagreement is
+   reported (exit 3) and the local entry kept.
+
+`ledger-cli revoke NAME|DID` writes the operator's ledger first (the one fleet
+operations consult), then the seed's. If the seed is unreachable the revocation
+stands locally and the next `sync` pushes it. The seed refuses a revoked DID
+under any name. The server re-reads the ledger file on every request, so a
+revocation takes effect on the next join; a corrupt or missing-at-runtime file
+answers 503 and is never overwritten (startup over a corrupt file refuses to
+start; absent at startup is an empty ledger without the opt-in).
+
+The operator's first ledger is kept as `<path>.orig`, the previous as `.bak`
+(a rewrite drops hand-written comments).
+
+Verified: unit tests (`murakumo.mesh-ledger-test`, `murakumo.mesh-seed-server-test`)
+and a loopback run of real server + client + CLI with a stand-in `ssh`: sync is
+idempotent, revoke reaches both ledgers, the revoked key is refused under its
+old and a new name, other nodes are unaffected, an unreachable seed degrades to
+a local revocation.
+
+**A revocation does not take the radio off the mesh.** The node still holds the
+SAE passphrase and can associate and talk layer 2/3 to other nodes. It is cut off
+from fleet operations and from re-enrolling, not from the air. Rotating the
+passphrase (new `mesh.env` on every remaining node) is the cutoff for that and is
+not implemented.
+
 ## Follow-ups
 
-- Sync the seed's ledger to where `murakumo.kekkai` reads it
-  (`kekkai-tailnet.edn`); today it lives at `/var/lib/murakumo/` on the seed.
-- Revocation command (`murakumo.mesh/revoke` exists; no CLI yet).
+- Passphrase rotation across the remaining nodes (see above).
+- `sync`/`revoke` read-modify-write the seed's ledger over SSH; a join landing in
+  that window can be lost (the atomic rename keeps the file whole, not the race).
+  Narrow in practice, closed by moving the edit into the server.
 - kekkai's governor still routes `:node/admit` to a human for its own flow.
