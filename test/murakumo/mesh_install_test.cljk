@@ -79,3 +79,20 @@
   (let [{:keys [files]} (install/plan :seed {:node-name "s"})
         s (:content (first (filter #(str/ends-with? (:path %) "mesh-iface.sh") files)))]
     (is (str/includes? s "mesh point"))))
+
+(deftest units-start-the-enrol-programs-on-kbb-with-the-repo-classpath
+  (let [{:keys [files]} (install/plan :seed {:node-name "s"})
+        u (:content (first (filter #(str/ends-with? (:path %) "murakumo-enroll-seed.service") files)))]
+    (is (str/includes? u "kbb -cp /opt/murakumo/src:/opt/murakumo/resources -m murakumo.mesh.seed-server"))
+    (is (not (str/includes? u "clojure")))))
+
+(deftest the-remote-command-carries-the-script-as-base64
+  (let [cmd (install/remote-command "echo 'quo\"te' $(id)\n")]
+    (is (str/starts-with? cmd "echo "))
+    (is (str/ends-with? cmd " | base64 -d | sudo -n bash -s"))
+    (is (not (str/includes? cmd "$(id)")) "nothing of the script is visible to the transport's quoting")))
+
+(deftest only-a-valid-printed-token-is-handed-on
+  (is (= token (install/join-token-from-output (str "noise\nJOIN_TOKEN=" token "\n"))))
+  (is (nil? (install/join-token-from-output "JOIN_TOKEN=garbage\n")))
+  (is (nil? (install/join-token-from-output nil))))

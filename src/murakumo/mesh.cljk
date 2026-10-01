@@ -187,3 +187,31 @@
   (if (get-in ledger [:nodes node-name])
     (assoc-in ledger [:nodes node-name :status] "revoked")
     ledger))
+
+;; ── possession proof ───────────────────────────────────────────────────────
+;;
+;; The proof is an Ed25519 signature over `proof-message`, checked against the
+;; public key INSIDE the claimed did:key. There is no separate key field to
+;; disagree with the name, so a joiner cannot enrol under a DID it does not
+;; hold: the DID is the key.
+;;
+;; This is deliberately not `aiueos.provider.device`'s proof. That one is
+;; JVM-only (JDK Ed25519 plus a canonicaliser), and edge nodes run the JVM-free
+;; kbb engine. The message here is a plain domain-separated string -- no
+;; canonicaliser, so no second canonicaliser to drift from aiueos's.
+
+(def proof-domain "murakumo-mesh-enroll/v1")
+
+(def did-key-pattern
+  "did:key for Ed25519 (multicodec 0xed01 always encodes to z6Mk...)."
+  #"did:key:z6Mk[1-9A-HJ-NP-Za-km-z]{44}")
+
+(defn did-key? [s] (and (string? s) (boolean (re-matches did-key-pattern s))))
+
+(defn proof-message
+  "What the joiner signs. Every field is something the seed already holds, so
+  nothing the joiner says is trusted: the nonce is single-use and expires, the
+  endpoint stops a proof being replayed to a different seed, the DID and name
+  stop it being re-bound after the seed has looked at it."
+  [{:keys [nonce endpoint did node-name]}]
+  (str proof-domain "\n" nonce "\n" endpoint "\n" did "\n" node-name))

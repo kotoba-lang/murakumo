@@ -22,13 +22,15 @@
   Plans are rendered into shell. A node name or token that reached a heredoc
   unchecked would be a command injection on a root-owned installer, so every
   value is matched against a strict pattern first and refused otherwise."
-  (:require [kotoba.lang.text :as str]
+  (:require [kotoba.bytes :as kbytes]
+            [kotoba.lang.text :as str]
             [murakumo.mesh :as mesh]))
 
 (def etc-dir "/etc/murakumo")
 (def lib-dir "/usr/local/lib/murakumo")
 (def state-dir "/var/lib/murakumo")
 (def src-dir "/opt/murakumo")
+(def classpath (str src-dir "/src:" src-dir "/resources"))
 (def ledger-path (str state-dir "/kekkai-tailnet.edn"))
 (def address-file (str state-dir "/mesh-address"))
 
@@ -97,6 +99,7 @@
          (str "ip addr replace " mesh/seed-address "/16 dev " iface "\n")
          (str "A=\"$(cat " address-file " 2>/dev/null || true)\"\n"
               "[ -n \"$A\" ] || A=\"10.77.1.$(( $(od -An -N1 -tu1 /dev/urandom) % 253 + 2 ))\"\n"
+              "ip -4 addr flush dev " iface "\n"
               "ip addr replace \"$A/16\" dev " iface "\n"))))
 
 (defn- unit [description {:keys [requires after] :as _deps} service install]
@@ -128,7 +131,7 @@
                   (unit "Murakumo mesh enrol endpoint"
                         {:requires wpa-unit :after wpa-unit}
                         (str "WorkingDirectory=" src-dir "\n"
-                             "ExecStart=/usr/bin/env clojure -M -m murakumo.mesh.seed-server"
+                             "ExecStart=/usr/bin/env kbb -cp " classpath " -m murakumo.mesh.seed-server"
                              " --bind " mesh/seed-address " --port " mesh/enroll-port
                              " --ledger " ledger-path "\n"
                              "Restart=always\nRestartSec=5")
@@ -138,7 +141,7 @@
                   (unit "Murakumo mesh self-enrol"
                         {:requires wpa-unit :after wpa-unit}
                         (str "Type=oneshot\nWorkingDirectory=" src-dir "\n"
-                             "ExecStart=/usr/bin/env clojure -M -m murakumo.mesh.client"
+                             "ExecStart=/usr/bin/env kbb -cp " classpath " -m murakumo.mesh.client"
                              " --seed http://" mesh/seed-address ":" mesh/enroll-port
                              " --node-name " (:node-name opts)
                              " --state " state-dir " --iface " iface "\n"
@@ -189,8 +192,8 @@
              "[ \"$(id -u)\" = 0 ] || { echo 'must run as root' >&2; exit 2; }\n"
              "for c in wpa_supplicant iw ip od"
              (when (= :seed role) " openssl") "; do command -v \"$c\" >/dev/null || { echo \"missing $c\" >&2; exit 2; }; done\n"
-             "command -v clojure >/dev/null || { echo 'missing clojure (the enrol "
-             (if (= :seed role) "endpoint" "client") " runs on the JVM)' >&2; exit 2; }\n"
+             "command -v kbb >/dev/null || { echo 'missing kbb (the enrol "
+             (if (= :seed role) "endpoint" "client") " runs on the kbb engine)' >&2; exit 2; }\n"
              "install -d -m 0700 " etc-dir "\ninstall -d -m 0755 " state-dir "\n"
              (if (= :seed role)
                (str "if [ ! -s " etc-dir "/mesh.env ]; then\n"
@@ -222,3 +225,23 @@
                     "[ \"$ok\" = 1 ] || { echo 'FAILED: enrol endpoint not listening' >&2; exit 1; }\n"
                     "echo \"JOIN_TOKEN=$(cat " etc-dir "/mesh-join-token)\"\n")))]
     {:role role :files fs :units names :script script}))
+
+;; ── running a plan ─────────────────────────────────────────────────────────
+
+(defn remote-command
+  "The script as one ssh command. Carried as base64 rather than as a heredoc so
+  no character of it can interact with the quoting of the transport, and run
+  through `sudo -n` so a missing sudo rule fails at once instead of prompting
+  an ssh session that has no terminal."
+  [script]
+  (str "echo " (kbytes/base64-encode (vec (kbytes/utf8-bytes script)))
+       " | base64 -d | sudo -n bash -s"))
+
+(defn join-token-from-output
+  "The token a seed install printed, or nil. Parsed, not trusted: it is checked
+  by `parse-token` before anyone is handed it."
+  [out]
+  (some (fn [line]
+          (when-let [t (second (re-matches #"JOIN_TOKEN=(\S+)" (str/trim line)))]
+            (when (parse-token t) t)))
+        (str/split-lines (str out))))

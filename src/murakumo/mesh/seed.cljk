@@ -7,9 +7,9 @@
   Two round trips, because a proof of key possession must be about a nonce the
   seed issued, not one the joiner chose:
 
-    POST /enroll/challenge  {:public-key-b64 :node-name}
-      -> {:nonce :endpoint :issued-ms :public-key-b64}
-    POST /enroll/claim      {:nonce :signed-challenge}
+    POST /enroll/challenge  {:did :node-name}
+      -> {:nonce :endpoint :issued-ms}
+    POST /enroll/claim      {:nonce :signature}
       -> 200 {:ok? true :status \"authorized\" :address ...}
          202 {:ok? true :status \"pending\"}
          4xx {:ok? false :reason ...}
@@ -19,10 +19,9 @@
   swap the name after the seed has looked at it. A challenge is single use,
   consumed whether the claim succeeds or not.
 
-  Injected `deps`: {:now-ms :new-nonce :endpoint :verify :public-key-hex-of
-  :device-did}. `:verify` is `aiueos.provider.device/possession-proof-valid?`;
-  `:public-key-hex-of` derives the raw key from the SPKI the joiner sent, so
-  the DID is computed from the very key the signature is checked against."
+  Injected `deps`: {:now-ms :new-nonce :endpoint :verify}. `:verify` is
+  `(fn [did message signature-hex] bool)`, `ed25519.core/verify-did` in the
+  shell. The key is the one inside the DID, so there is nothing to bind."
   (:require [murakumo.mesh :as mesh]))
 
 (def challenge-ttl-ms 60000)
@@ -45,16 +44,14 @@
   (and (string? s) (boolean (re-matches #"[a-z0-9][a-z0-9-]{0,62}" s))))
 
 (defn- issue-challenge
-  [state {:keys [public-key-b64 node-name]} {:keys [now-ms new-nonce endpoint public-key-hex-of device-did]}]
-  (let [state (update state :challenges live-challenges now-ms)
-        hex (when (string? public-key-b64) (public-key-hex-of public-key-b64))
-        did (when hex (device-did hex))]
+  [state {:keys [did node-name]} {:keys [now-ms new-nonce endpoint]}]
+  (let [state (update state :challenges live-challenges now-ms)]
     (cond
       (not (valid-node-name? node-name))
       (respond state 400 {:ok? false :reason :invalid-node-name})
 
-      (nil? did)
-      (respond state 400 {:ok? false :reason :invalid-public-key})
+      (not (mesh/did-key? did))
+      (respond state 400 {:ok? false :reason :invalid-did})
 
       (>= (count (:challenges state)) max-pending-challenges)
       (respond state 503 {:ok? false :reason :too-many-pending})
@@ -62,13 +59,11 @@
       :else
       (let [nonce (new-nonce)]
         (respond (assoc-in state [:challenges nonce]
-                           {:did did :node-name node-name
-                            :public-key-b64 public-key-b64 :issued-ms now-ms})
-                 200 {:ok? true :nonce nonce :endpoint endpoint
-                      :issued-ms now-ms :public-key-b64 public-key-b64})))))
+                           {:did did :node-name node-name :issued-ms now-ms})
+                 200 {:ok? true :nonce nonce :endpoint endpoint :issued-ms now-ms})))))
 
 (defn- claim
-  [state {:keys [nonce signed-challenge]} {:keys [now-ms endpoint verify]}]
+  [state {:keys [nonce signature]} {:keys [now-ms endpoint verify]}]
   (let [live (live-challenges (:challenges state) now-ms)
         c (get live nonce)
         ;; Consumed on any outcome: a failed proof must not be retried against
@@ -76,11 +71,12 @@
         state (assoc state :challenges (dissoc live nonce))]
     (if-not c
       (respond state 403 {:ok? false :reason :unknown-or-expired-nonce})
-      (let [expected {:public-key-b64 (:public-key-b64 c) :nonce nonce :endpoint endpoint}
+      (let [msg (mesh/proof-message {:nonce nonce :endpoint endpoint
+                                     :did (:did c) :node-name (:node-name c)})
             v (mesh/admit (:ledger state)
                           {:did (:did c) :node-name (:node-name c) :now-ms now-ms
-                           :proof-valid? (boolean (and (map? signed-challenge)
-                                                       (verify signed-challenge expected)))})
+                           :proof-valid? (boolean (and (string? signature)
+                                                       (verify (:did c) msg signature)))})
             state (assoc state :ledger (:ledger v))
             addr (get-in v [:ledger :nodes (:node-name c) :address])]
         (case (:decision v)
