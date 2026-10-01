@@ -141,13 +141,13 @@
     (if (empty? as)
       (assoc m :cmd (first args))
       (case k
-        "--dry-run" (recur (assoc m :dry-run? true) (cons v more))
+        "--dry-run" (recur (assoc m :dry-run? true) (rest as))
         "--host" (recur (assoc m :host v) more)
         "--ledger" (recur (assoc m :ledger v) more)
         "--remote-path" (recur (assoc m :remote-path v) more)
         "--reason" (recur (assoc m :reason v) more)
         (if (and (nil? (:selector m)) (not (str/starts-with? (str k) "--")))
-          (recur (assoc m :selector k) (cons v more))
+          (recur (assoc m :selector k) (rest as))
           (throw (ex-info (str "unknown argument " k) {:arg k})))))))
 
 (defn -main [& args]

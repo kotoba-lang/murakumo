@@ -26,6 +26,8 @@ real radio (see "Not verified").
 | `murakumo.mesh.install-cli` | runs a plan over SSH (`--dry-run` prints it) |
 | `murakumo.mesh.ledger` | pure: parse/validate, revoke, two-way `sync-plan` |
 | `murakumo.mesh.ledger-cli` | `sync`, `revoke`, `list` against the seed over SSH |
+| `murakumo.mesh.rotate` | pure: rotation targets, per-node script, resumable state |
+| `murakumo.mesh.rotate-cli` | rotate the SAE passphrase across the remaining nodes |
 
 ## Flow
 
@@ -107,14 +109,45 @@ a local revocation.
 
 **A revocation does not take the radio off the mesh.** The node still holds the
 SAE passphrase and can associate and talk layer 2/3 to other nodes. It is cut off
-from fleet operations and from re-enrolling, not from the air. Rotating the
-passphrase (new `mesh.env` on every remaining node) is the cutoff for that and is
-not implemented.
+from fleet operations and from re-enrolling, not from the air. Passphrase
+rotation is the cutoff for that.
+
+## Passphrase rotation
+
+`rotate-cli --seed-host H` gives every `authorized`, non-revoked node of the
+operator's ledger (plus the seed) a new passphrase. Revoked nodes are skipped:
+that is the cutoff. Pending nodes are skipped too, so an unadmitted machine is
+never handed the new secret; if admitted later it joins with the new token.
+
+- **Reached over SSH to each node's tailnet host, not over the mesh** -- the mesh
+  is what is changing. Hosts come from `fleet.edn` (names match by convention)
+  and `--host-map node=host`; a node with no host is reported, never guessed.
+- **Order and failure:** non-seed nodes first, seed last; a failed node does not
+  stop the rest. Progress is saved after each node in a 0600 state file holding
+  the new passphrase, so re-running resumes with the *same* passphrase instead of
+  rotating a node to a second secret. A node you give up on is revoked, which
+  drops it from the targets and lets the rotation finish.
+- **Per node:** config written to `.new` and renamed, `wpa_supplicant` unit
+  restarted and checked active; the seed also rewrites its join token. Re-running
+  is idempotent. The new token is printed once the whole set is done.
+- **Afterwards** each node is polled for a mesh peer; one with none is reported
+  (exit 3) -- it may not have re-formed on the new passphrase.
+
+Verified: unit tests (`murakumo.mesh-rotate-test`), the generated scripts run
+against a sandboxed `/etc/murakumo` (token field rewritten, 0600, idempotent,
+"not installed" refused), and a full `rotate-cli` run over three stand-in nodes
+with a stand-in `ssh`: partial failure leaves a resumable state, the resume reuses
+the same passphrase and touches only the missing node, revoked and pending nodes
+are never contacted, the state file is 0600 and removed on completion.
+
+Not verified: a real mesh re-forming on a new SAE passphrase (no radio). The
+passphrase is in each node's ssh command line, so briefly visible in its process
+list to local users; acceptable on single-owner edge nodes, not on shared hosts.
 
 ## Follow-ups
 
-- Passphrase rotation across the remaining nodes (see above).
 - `sync`/`revoke` read-modify-write the seed's ledger over SSH; a join landing in
   that window can be lost (the atomic rename keeps the file whole, not the race).
   Narrow in practice, closed by moving the edit into the server.
+- Rotation could take the passphrase on stdin instead of the command line.
 - kekkai's governor still routes `:node/admit` to a human for its own flow.

@@ -26,7 +26,7 @@
     (if (empty? as)
       (assoc m :role (keyword (first args)))
       (case k
-        "--dry-run" (recur (assoc m :dry-run? true) (cons v more))
+        "--dry-run" (recur (assoc m :dry-run? true) (rest as))
         "--host" (recur (assoc m :host v) more)
         "--node-name" (recur (assoc m :node-name v) more)
         "--token" (recur (assoc m :token v) more)
