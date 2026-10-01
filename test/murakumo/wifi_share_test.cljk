@@ -1,0 +1,41 @@
+(ns murakumo.wifi-share-test
+  "The label is what a person types or pastes, so what it may look like is pinned.
+  The sealing and the server are covered end to end by test/wifi_share_test.mjs
+  against the packaged CLI."
+  (:require [murakumo.wifi-share :as ws]
+            [murakumo.onboard :as onboard]
+            [kotoba.test :refer [deftest is testing]]))
+
+(def ls "AAECAwQFBgcICQoLDA0ODw")
+(def did "did:key:z6MkTestDevice")
+
+(deftest the-payload-is-parsed
+  (is (= {:label-secret ls :did did}
+         (ws/parse-label (str "aiueos:1;did=" did ";model=m;endpoint=e;token=t;ls=" ls))))
+  (testing "the DID is optional, the secret is not"
+    (is (= {:label-secret ls} (ws/parse-label (str "aiueos:1;ls=" ls))))))
+
+(deftest the-label-url-is-parsed
+  (is (= {:label-secret ls :did did}
+         (ws/parse-label (str "https://murakumo.cloud/#claim?q="
+                              (js/encodeURIComponent (str "aiueos:1;did=" did ";ls=" ls)))))
+      "the QR carries the payload percent-encoded in the fragment")
+  (testing "surrounding whitespace from a paste does not matter"
+    (is (= {:label-secret ls} (ws/parse-label (str "  aiueos:1;ls=" ls "\n"))))))
+
+(deftest a-label-without-a-usable-secret-is-refused
+  (doseq [bad ["" "nonsense" (str "aiueos:1;did=" did) "aiueos:1;ls=short"
+               "aiueos:1;ls=AAECAwQFBgcICQoLDA0ODk"  ; 22 characters, but the last cannot end a 16-byte secret
+               nil]]
+    (is (= {:error :no-label-secret} (ws/parse-label bad)) (pr-str bad))))
+
+(deftest a-different-box-in-the-room-is-not-provisioned
+  (let [state {:did did :label-secret ls :ssid "DemoNet" :security :wpa2-personal
+               :passphrase "demo-pass-1234" :fingerprint-of onboard/device-fingerprint}
+        key "1ekGUFKTlUnQVazwPzSCAFeOPtK2XrapZWRHF2G6T1Q"]
+    (is (= 200 (:status (ws/seal-request state {:code "K7QX3M" :fp (onboard/device-fingerprint did) :key key}))))
+    (is (= {:status 409 :body {:error "different-box"}}
+           (ws/seal-request state {:code "K7QX3M" :fp "00000000" :key key}))
+        "the fingerprint heard is not the one the label's DID gives")
+    (is (= {:status 400 :body {:error "bad-code"}}
+           (ws/seal-request state {:code "k7qx3m" :fp (onboard/device-fingerprint did) :key key})))))

@@ -12,6 +12,9 @@ cp src/murakumo/bench.cljk .node-build/src/murakumo/bench.cljs
 cp src/murakumo/fleet_ps.cljk .node-build/src/murakumo/fleet_ps.cljs
 cp src/murakumo/health.cljk .node-build/src/murakumo/health.cljs
 cp src/murakumo/device_claim.cljk .node-build/src/murakumo/device_claim.cljs
+for name in onboard wifi_share wifi_share_page; do
+  cp "src/murakumo/$name.cljk" ".node-build/src/murakumo/$name.cljs"
+done
 cp nbb.edn .node-build/nbb.edn
 (cd .node-build && kbb --backend sci -e nil)
 mkdir -p .node-build/src/cacao/edge
@@ -20,6 +23,7 @@ for name in mint verify cbor base58; do
 done
 mkdir -p .node-build/src/grant
 cp .node-build/.nbb/.cache/*/nbb-deps/grant/device_attest.cljk .node-build/src/grant/device_attest.cljs
+cp .node-build/.nbb/.cache/*/nbb-deps/grant/acoustic_onboard.cljk .node-build/src/grant/acoustic_onboard.cljs
 (cd .node-build && kbb --backend sci --classpath src bundle ../scripts/node-cli.cljk -o ../release/node.mjs)
 cp nixos/node.nix release/nixos-node.nix
 # The bundler may return zero after an EDN read error and leave a broken bundle.

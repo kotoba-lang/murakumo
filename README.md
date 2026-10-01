@@ -124,6 +124,29 @@ completed local inference, Community enrollment (201) and authenticated heartbea
 acceptance (201). The check did not advertise free slots or fetch the work queue.
 Community job placement and a paid end-to-end request were not exercised.
 
+### Hand this PC's Wi-Fi to a headless box (`wifi-share`, proposed in ADR-0243)
+
+```sh
+murakumo node wifi-share
+```
+
+For a box with a speaker and a microphone but no screen. The box beacons (a short bell
+motif; the data rides in ultrasound). Run this on a PC that is on the Wi-Fi you want to share:
+it reads that network's passphrase from the OS (macOS shows its own permission prompt;
+Linux uses NetworkManager, Windows `netsh`), seals it in this process, and opens a page on
+`localhost` that hears the box and plays the sealed bytes. The passphrase is never printed,
+put in a URL, or sent to the browser.
+
+- It asks for the **label** (`aiueos:1;…ls=…` or the label URL). The envelope is bound to the label
+  secret, so someone who only heard the beacon cannot point the box at their own Wi-Fi; if the
+  label names a DID, a different box in the room is refused.
+- macOS hides the connected network name from command-line tools, so you pick from the saved
+  networks. Pass `--ssid NAME` to skip the choice; `--passphrase-stdin` reads the passphrase from
+  stdin instead of the OS.
+- The whole sealed message must fit ggwave's 140 bytes: SSID and passphrase together at most 88 bytes.
+- This is the sender half only. The box-side command and its NixOS unit are not in this release, and
+  nothing here is promised publicly until the acceptance run in ADR-0243 passes on real hardware.
+
 ## Fleet operator tooling
 
 **Control plane for the murakumo inference-node fleet (Mac-mini fleet today), including the optional kotoba mesh workload layer.**
