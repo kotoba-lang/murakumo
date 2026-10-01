@@ -73,3 +73,45 @@
 
 (deftest startup-over-a-corrupt-ledger-throws
   (is (thrown? js/Error (srv/read-ledger (tmp-ledger "{{{")))))
+
+(deftest admin-sync-persists-a-pushed-revocation-to-the-file
+  (let [p (tmp-ledger "{:admit :auto-on-mesh :nodes {}}")
+        state (atom (seed/initial-state {:nodes {}}))
+        _ (enrol! state p key-a "node-a")
+        did (ed/did-key-from-seed key-a)
+        [status body] (srv/serve-admin! p {:method :post :path "/admin/sync"
+                                           :body {:ledger {:nodes {"node-a" {:id "node-a" :status "revoked" :did did}}}}})]
+    (is (= 200 status))
+    (is (= ["node-a"] (get-in body [:report :revoked-on-seed])))
+    (is (= "revoked" (get-in (:ledger (srv/load-ledger p)) [:nodes "node-a" :status])) "on disk")
+    (is (= :did-revoked (:reason (second (enrol! state p key-a "node-a")))))))
+
+(deftest admin-sync-keeps-a-join-that-is-already-in-the-file
+  (let [p (tmp-ledger "{:admit :auto-on-mesh :nodes {}}")
+        state (atom (seed/initial-state {:nodes {}}))
+        _ (enrol! state p key-a "node-a")
+        [status body] (srv/serve-admin! p {:method :post :path "/admin/sync" :body {:ledger {:nodes {}}}})]
+    (is (= 200 status))
+    (is (= ["node-a"] (get-in body [:report :added])))
+    (is (= "authorized" (get-in (:ledger (srv/load-ledger p)) [:nodes "node-a" :status])))))
+
+(deftest admin-sync-over-an-unreadable-ledger-refuses-and-does-not-overwrite
+  (let [p (tmp-ledger "{:nodes {\"a\" {:status \"bogus\"")
+        before (.readFileSync fs p "utf8")
+        [status body] (srv/serve-admin! p {:method :post :path "/admin/sync" :body {:ledger {:nodes {}}}})]
+    (is (= 503 status))
+    (is (= :ledger-unreadable (:reason body)))
+    (is (= before (.readFileSync fs p "utf8")))))
+
+(deftest a-dry-run-leaves-the-file-byte-identical
+  (let [p (tmp-ledger "{:admit :auto-on-mesh :nodes {}}")
+        state (atom (seed/initial-state {:nodes {}}))
+        _ (enrol! state p key-a "node-a")
+        before (.readFileSync fs p "utf8")
+        did (ed/did-key-from-seed key-a)
+        [status body] (srv/serve-admin! p {:method :post :path "/admin/sync"
+                                           :body {:dry-run? true
+                                                  :ledger {:nodes {"node-a" {:id "node-a" :status "revoked" :did did}}}}})]
+    (is (= 200 status))
+    (is (true? (:changed? body)))
+    (is (= before (.readFileSync fs p "utf8")))))

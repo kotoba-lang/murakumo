@@ -111,3 +111,18 @@
   (is (= token (install/join-token-from-output (str "noise\nJOIN_TOKEN=" token "\n"))))
   (is (nil? (install/join-token-from-output "JOIN_TOKEN=garbage\n")))
   (is (nil? (install/join-token-from-output nil))))
+
+(deftest the-seed-serves-operator-ops-on-a-root-only-socket-not-on-the-mesh
+  (let [{:keys [script files]} (install/plan :seed {:node-name "s"})
+        u (:content (first (filter #(str/ends-with? (:path %) "murakumo-enroll-seed.service") files)))]
+    (is (str/includes? u "--admin-socket /run/murakumo/enroll-admin.sock"))
+    (is (str/includes? u "RuntimeDirectory=murakumo"))
+    (is (str/includes? u "RuntimeDirectoryMode=0700"))
+    (is (str/includes? script "FAILED: admin socket missing"))
+    (is (str/includes? script "openssl curl") "ledger-cli reaches the socket with curl")
+    (is (not (str/includes? u "--admin-socket 10.77")) "never a network address")))
+
+(deftest a-joiner-has-no-admin-socket
+  (let [{:keys [files script]} (install/plan :joiner {:node-name "b" :token token})]
+    (is (not-any? #(str/includes? (:content %) "admin-socket") files))
+    (is (not (str/includes? script "curl")))))

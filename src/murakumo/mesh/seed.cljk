@@ -22,7 +22,8 @@
   Injected `deps`: {:now-ms :new-nonce :endpoint :verify}. `:verify` is
   `(fn [did message signature-hex] bool)`, `ed25519.core/verify-did` in the
   shell. The key is the one inside the DID, so there is nothing to bind."
-  (:require [murakumo.mesh :as mesh]))
+  (:require [murakumo.mesh :as mesh]
+            [murakumo.mesh.ledger :as ledger]))
 
 (def challenge-ttl-ms 60000)
 
@@ -96,3 +97,31 @@
     (= "/enroll/challenge" path) (issue-challenge state body deps)
     (= "/enroll/claim" path) (claim state body deps)
     :else (respond state 404 {:ok? false :reason :not-found})))
+
+;; ── operator operations ────────────────────────────────────────────────────
+
+(defn admin
+  "Operator operations on the seed's ledger, run INSIDE the server.
+
+  They used to be a read-modify-write over ssh, and a join landing between the
+  read and the write was lost. Here the operation is one synchronous step on the
+  ledger as it is at that instant, exactly like a join, so the two cannot
+  interleave. `ledger` is the seed's current ledger.
+
+    POST /admin/sync {:ledger <operator's> :dry-run? bool}
+      -> {:ok? true :ledger <operator's, merged> :report {...} :changed? bool}
+
+  Returns {:status :body :ledger} where `:ledger` is the seed's ledger to persist
+  (unchanged for a dry run)."
+  [seed-ledger {:keys [method path body]}]
+  (cond
+    (not= :post method) {:status 405 :body {:ok? false :reason :method-not-allowed} :ledger seed-ledger}
+    (not= "/admin/sync" path) {:status 404 :body {:ok? false :reason :not-found} :ledger seed-ledger}
+    (not (and (map? body) (ledger/valid? (:ledger body))))
+    {:status 400 :body {:ok? false :reason :invalid-ledger} :ledger seed-ledger}
+    :else
+    (let [{:keys [local remote report]} (ledger/sync-plan (update (:ledger body) :nodes #(or % {})) seed-ledger)]
+      {:status 200
+       :ledger (if (:dry-run? body) seed-ledger remote)
+       :body {:ok? true :ledger local :report report :dry-run? (boolean (:dry-run? body))
+              :changed? (ledger/changed? report)}})))

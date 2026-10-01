@@ -23,6 +23,15 @@
 
 (def statuses #{"authorized" "pending" "revoked"})
 
+(defn valid?
+  "Is `l` a ledger: a map whose :nodes (if any) maps names to entries with a known
+  status."
+  [l]
+  (and (map? l)
+       (map? (or (:nodes l) {}))
+       (every? (fn [[k v]] (and (string? k) (map? v) (contains? statuses (:status v))))
+               (:nodes l))))
+
 (defn parse
   "Text -> {:ledger l} or {:error kw}. A ledger that does not have the expected
   shape is an error, never an empty ledger: treating a corrupt file as empty is
@@ -31,11 +40,7 @@
   (let [l (try (edn/read-string (str text)) (catch #?(:clj Exception :cljs :default) _ ::unreadable))]
     (cond
       (= ::unreadable l) {:error :unreadable}
-      (not (map? l)) {:error :bad-shape}
-      (not (map? (or (:nodes l) {}))) {:error :bad-shape}
-      (not (every? (fn [[k v]] (and (string? k) (map? v) (contains? statuses (:status v))))
-                   (:nodes l)))
-      {:error :bad-shape}
+      (not (valid? l)) {:error :bad-shape}
       :else {:ledger (update l :nodes #(or % {}))})))
 
 (defn serialize [ledger] (str (pr-str ledger) "\n"))

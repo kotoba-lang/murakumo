@@ -32,6 +32,10 @@
 (def src-dir "/opt/murakumo")
 (def classpath (str src-dir "/src:" src-dir "/resources"))
 (def ledger-path (str state-dir "/kekkai-tailnet.edn"))
+(def admin-socket
+  "Operator operations (`ledger-cli`) reach the seed server here, not on the mesh.
+  The directory is 0700 and the socket 0600: only root on the seed can open it."
+  "/run/murakumo/enroll-admin.sock")
 (def address-file (str state-dir "/mesh-address"))
 
 (def ^:private heredoc-delimiter "MURAKUMO_EOF")
@@ -131,9 +135,10 @@
                   (unit "Murakumo mesh enrol endpoint"
                         {:requires wpa-unit :after wpa-unit}
                         (str "WorkingDirectory=" src-dir "\n"
+                             "RuntimeDirectory=murakumo\nRuntimeDirectoryMode=0700\n"
                              "ExecStart=/usr/bin/env kbb -cp " classpath " -m murakumo.mesh.seed-server"
                              " --bind " mesh/seed-address " --port " mesh/enroll-port
-                             " --ledger " ledger-path "\n"
+                             " --ledger " ledger-path " --admin-socket " admin-socket "\n"
                              "Restart=always\nRestartSec=5")
                         true)))
       (= :joiner role)
@@ -201,7 +206,7 @@
         (str "set -eu\n"
              "[ \"$(id -u)\" = 0 ] || { echo 'must run as root' >&2; exit 2; }\n"
              "for c in wpa_supplicant iw ip od"
-             (when (= :seed role) " openssl") "; do command -v \"$c\" >/dev/null || { echo \"missing $c\" >&2; exit 2; }; done\n"
+             (when (= :seed role) " openssl curl") "; do command -v \"$c\" >/dev/null || { echo \"missing $c\" >&2; exit 2; }; done\n"
              "command -v kbb >/dev/null || { echo 'missing kbb (the enrol "
              (if (= :seed role) "endpoint" "client") " runs on the kbb engine)' >&2; exit 2; }\n"
              "install -d -m 0700 " etc-dir "\ninstall -d -m 0755 " state-dir "\n"
@@ -234,6 +239,8 @@
              (when (= :seed role)
                (str "ok=0; for i in $(seq 1 30); do ss -ltn | grep -q '" mesh/seed-address ":" mesh/enroll-port "' && ok=1 && break; sleep 1; done\n"
                     "[ \"$ok\" = 1 ] || { echo 'FAILED: enrol endpoint not listening' >&2; exit 1; }\n"
+                    "ok=0; for i in $(seq 1 30); do [ -S " admin-socket " ] && ok=1 && break; sleep 1; done\n"
+                    "[ \"$ok\" = 1 ] || { echo 'FAILED: admin socket missing' >&2; exit 1; }\n"
                     "echo \"JOIN_TOKEN=$(cat " etc-dir "/mesh-join-token)\"\n")))]
     {:role role :files fs :units names :script script
      ;; The joiner's passphrase travels on stdin, never in the script or an argument.

@@ -83,35 +83,67 @@
                                 "content-length" (.byteLength js/Buffer payload)})
     (.end res payload)))
 
+(defn serve-admin!
+  "Operator operation against the file ledger; returns [status body]. One
+  synchronous step -- load, decide, persist -- like a join, so a join cannot land
+  between the operator's read and write."
+  [ledger-path req]
+  (let [{l :ledger error :error} (load-ledger ledger-path)]
+    (if-not l
+      [503 {:ok? false :reason :ledger-unreadable :detail error}]
+      (let [r (seed/admin l req)]
+        (if (and (not= l (:ledger r))
+                 (try (persist-ledger! ledger-path (:ledger r)) false
+                      (catch :default _ true)))
+          [500 {:ok? false :reason :ledger-not-persisted}]
+          [(:status r) (:body r)])))))
+
+(defn- request-handler
+  "node:http handler: read the body (bounded), parse it, run `dispatch` on
+  {:method :path :body}, reply with EDN."
+  [dispatch]
+  (fn [req res]
+    (let [chunks (atom []) size (atom 0) done? (atom false)
+          finish! (fn [status body] (when-not @done? (reset! done? true) (reply! res status body)))]
+      (.on req "data"
+           (fn [c]
+             (swap! size + (.-length c))
+             (if (> @size max-body-bytes)
+               (do (finish! 413 {:ok? false :reason :too-large}) (.destroy req))
+               (swap! chunks conj c))))
+      (.on req "error" (fn [_] (finish! 400 {:ok? false :reason :bad-request})))
+      (.on req "end"
+           (fn []
+             (when-not @done?
+               (let [body (try (edn/read-string (.toString (js/Buffer.concat (clj->js @chunks)) "utf8"))
+                               (catch :default _ nil))
+                     [status out] (try (dispatch {:method (keyword (.toLowerCase (.-method req)))
+                                                  :path (.-pathname (js/URL. (.-url req) "http://x"))
+                                                  :body body})
+                                       (catch :default _ [500 {:ok? false :reason :internal}]))]
+                 (finish! status out))))))))
+
+(defn start-admin!
+  "Listen for operator operations on a unix socket. Not on the mesh: the mesh
+  address is reachable by every node holding the passphrase, including a revoked
+  one, and an admin endpoint there would let the node being revoked un-revoke
+  itself. The socket lives in a 0700 directory and is chmod 0600, so only root on
+  the seed can open it -- the filesystem is the authentication."
+  [{:keys [admin-socket ledger]}]
+  (when (.existsSync fs admin-socket) (.unlinkSync fs admin-socket))
+  (let [server (.createServer http (request-handler #(serve-admin! ledger %)))]
+    (.listen server admin-socket (fn [] (.chmodSync fs admin-socket 0600)))
+    server))
+
 (defn start!
-  "Bind and listen; returns the server."
-  [{:keys [bind port ledger]}]
+  "Bind and listen; returns the server. With `:admin-socket`, also serves operator
+  operations there."
+  [{:keys [bind port ledger admin-socket] :as opts}]
   (let [endpoint (str "http://" bind ":" port "/enroll")
         state (atom (seed/initial-state (read-ledger ledger)))
-        server (.createServer
-                http
-                (fn [req res]
-                  (let [chunks (atom []) size (atom 0) done? (atom false)
-                        finish! (fn [status body] (when-not @done? (reset! done? true) (reply! res status body)))]
-                    (.on req "data"
-                         (fn [c]
-                           (swap! size + (.-length c))
-                           (if (> @size max-body-bytes)
-                             (do (finish! 413 {:ok? false :reason :too-large}) (.destroy req))
-                             (swap! chunks conj c))))
-                    (.on req "error" (fn [_] (finish! 400 {:ok? false :reason :bad-request})))
-                    (.on req "end"
-                         (fn []
-                           (when-not @done?
-                             (let [body (try (edn/read-string (.toString (js/Buffer.concat (clj->js @chunks)) "utf8"))
-                                             (catch :default _ nil))
-                                   [status out] (try (serve! state endpoint ledger
-                                                             {:method (keyword (.toLowerCase (.-method req)))
-                                                              :path (.-pathname (js/URL. (.-url req) "http://x"))
-                                                              :body body})
-                                                     (catch :default _ [500 {:ok? false :reason :internal}]))]
-                               (finish! status out))))))))]
+        server (.createServer http (request-handler #(serve! state endpoint ledger %)))]
     (.listen server port bind)
+    (when admin-socket (start-admin! opts))
     server))
 
 (defn- parse-args [args]
@@ -122,6 +154,7 @@
                "--bind" (assoc m :bind v)
                "--port" (assoc m :port (js/parseInt v 10))
                "--ledger" (assoc m :ledger v)
+               "--admin-socket" (assoc m :admin-socket v)
                (throw (ex-info (str "unknown argument " k) {:arg k})))
              more))))
 

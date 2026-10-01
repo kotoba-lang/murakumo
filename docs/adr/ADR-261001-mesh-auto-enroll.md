@@ -90,8 +90,8 @@ revocations. `ledger-cli sync` reconciles them:
 3. An authorized name never changes key through a sync; a disagreement is
    reported (exit 3) and the local entry kept.
 
-`ledger-cli revoke NAME|DID` writes the operator's ledger first (the one fleet
-operations consult), then the seed's. If the seed is unreachable the revocation
+`ledger-cli revoke NAME|DID` merges, revokes in the operator's ledger (the one fleet
+operations consult), then pushes to the seed. If the seed is unreachable the revocation
 stands locally and the next `sync` pushes it. The seed refuses a revoked DID
 under any name. The server re-reads the ledger file on every request, so a
 revocation takes effect on the next join; a corrupt or missing-at-runtime file
@@ -111,6 +111,33 @@ a local revocation.
 SAE passphrase and can associate and talk layer 2/3 to other nodes. It is cut off
 from fleet operations and from re-enrolling, not from the air. Passphrase
 rotation is the cutoff for that.
+
+### The merge runs inside the seed server
+
+`sync`/`revoke` used to read the seed's ledger over SSH, edit it, and write it
+back; a join landing between the read and the write was lost. They now POST to
+`/admin/sync` on the seed server (`seed/admin`), which loads, merges and persists
+as one synchronous step, exactly like a join, so the two cannot interleave. A
+revoke is merge -> revoke locally -> push, each seed call atomic; a join between
+them is kept.
+
+The endpoint is a **unix socket** (`/run/murakumo/enroll-admin.sock`, directory
+0700, socket 0600), reached with `sudo curl --unix-socket` over ssh. It is not on
+the mesh address: the mesh is reachable by every node holding the passphrase,
+including a revoked one, and an admin endpoint there would let the node being
+revoked un-revoke itself. The filesystem is the authentication; there is no token.
+`--dry-run` is computed on the server and persists nothing. A seed whose server is
+down still lets `revoke` stand locally; `sync` carries it over later.
+
+Verified: pure `seed/admin` tests (merge, push, `:admit` never imported, dry run,
+a join already in the ledger is kept, bad body/route), and a real server, real unix
+socket and real `curl`: socket mode `srw-------`; 6 joins run in parallel with
+repeated syncs left all 6 in the seed ledger with distinct addresses; revoke
+merged, pushed and was enforced on the next join; dry run left the file
+byte-identical; a wrong socket gives a clear error.
+
+Not covered: someone editing the ledger file by hand while the server runs (the
+server re-reads per request, but an external editor is not serialised with it).
 
 ## Passphrase rotation
 
@@ -158,7 +185,4 @@ Not verified: a real mesh re-forming on a new SAE passphrase (no radio).
 
 ## Follow-ups
 
-- `sync`/`revoke` read-modify-write the seed's ledger over SSH; a join landing in
-  that window can be lost (the atomic rename keeps the file whole, not the race).
-  Narrow in practice, closed by moving the edit into the server.
 - kekkai's governor still routes `:node/admit` to a human for its own flow.

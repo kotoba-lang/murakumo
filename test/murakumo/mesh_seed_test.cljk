@@ -128,3 +128,49 @@
         [_ r2] (post s1 "/enroll/claim" (claim-body nonce did-b "seed"))]
     (is (= 403 (:status r2)))
     (is (= :node-name-taken-by-another-key (get-in r2 [:body :reason])))))
+
+;; ── operator operations ────────────────────────────────────────────────────
+
+(def admit-led {:admit :auto-on-mesh
+                :nodes {"b" {:id "b" :status "authorized" :did did-b :address "10.77.0.2"}}})
+
+(defn- admin [seed-ledger body & {:keys [path method] :or {path "/admin/sync" method :post}}]
+  (seed/admin seed-ledger {:method method :path path :body body}))
+
+(deftest admin-sync-merges-what-the-seed-holds-into-the-operators-ledger
+  (let [r (admin admit-led {:ledger {:nodes {}}})]
+    (is (= 200 (:status r)))
+    (is (= ["b"] (get-in r [:body :report :added])))
+    (is (= "authorized" (get-in r [:body :ledger :nodes "b" :status])))
+    (is (= admit-led (:ledger r)) "the seed's own ledger is unchanged by a pull")))
+
+(deftest admin-sync-pushes-an-operator-revocation-into-the-seeds-ledger
+  (let [r (admin admit-led {:ledger {:nodes {"b" {:id "b" :status "revoked" :did did-b}}}})]
+    (is (= "revoked" (get-in r [:ledger :nodes "b" :status])) "this is what the server persists")
+    (is (= ["b"] (get-in r [:body :report :revoked-on-seed])))
+    (is (= :auto-on-mesh (:admit (:ledger r))) "the seed keeps its own :admit")))
+
+(deftest admin-sync-never-imports-the-seeds-admit-flag
+  (let [r (admin admit-led {:ledger {:nodes {}}})]
+    (is (not (contains? (get-in r [:body :ledger]) :admit)))))
+
+(deftest a-dry-run-reports-and-persists-nothing
+  (let [r (admin admit-led {:ledger {:nodes {"b" {:id "b" :status "revoked" :did did-b}}} :dry-run? true})]
+    (is (= 200 (:status r)))
+    (is (true? (get-in r [:body :changed?])))
+    (is (= admit-led (:ledger r)))))
+
+(deftest an-admin-op-on-a-ledger-that-just-took-a-join-keeps-the-join
+  ;; the race this exists to close: the join is in the seed ledger the op is given
+  (let [[s1 r1] (challenge (seed/initial-state ledger))
+        nonce (get-in r1 [:body :nonce])
+        [s2 _] (post s1 "/enroll/claim" (claim-body nonce did-b "b"))
+        r (admin (:ledger s2) {:ledger {:nodes {}}})]
+    (is (some #{"b"} (get-in r [:body :report :added])) "the joiner is in the operator's view")
+    (is (= "authorized" (get-in r [:ledger :nodes "b" :status])) "and still in the ledger to persist")))
+
+(deftest admin-refuses-a-bad-body-and-unknown-routes
+  (is (= 400 (:status (admin admit-led {:ledger {:nodes {"x" {:status "bogus"}}}}))))
+  (is (= 400 (:status (admin admit-led "nope"))))
+  (is (= 404 (:status (admin admit-led {} :path "/admin/other"))))
+  (is (= 405 (:status (admin admit-led {} :method :get)))))
