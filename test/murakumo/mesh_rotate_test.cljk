@@ -53,8 +53,9 @@
         "an unreachable node blocks completion until it is fixed or revoked")))
 
 (deftest the-node-script-writes-atomically-and-verifies-the-unit
-  (let [s (rotate/rotate-script {:passphrase pass :role :node})]
-    (is (str/includes? s (str "'" pass "'")))
+  (let [s (rotate/rotate-script {:role :node})]
+    (is (not (str/includes? s pass)) "the new passphrase is not in the script")
+    (is (str/includes? s "IFS= read -r MESH_PASSPHRASE"))
     (is (str/includes? s "mesh.env.new"))
     (is (str/includes? s "mv /etc/murakumo/wpa-mesh.conf.new /etc/murakumo/wpa-mesh.conf"))
     (is (str/includes? s "chmod 600 /etc/murakumo/wpa-mesh.conf.new"))
@@ -63,15 +64,19 @@
     (is (not (str/includes? s "JOIN_TOKEN")) "only the seed prints a token")))
 
 (deftest the-seed-script-also-rewrites-and-prints-the-join-token
-  (let [s (rotate/rotate-script {:passphrase pass :role :seed})]
+  (let [s (rotate/rotate-script {:role :seed})]
     (is (str/includes? s "$4=p"))
     (is (str/includes? s "mesh-join-token.new"))
     (is (str/includes? s "JOIN_TOKEN="))))
 
 (deftest hostile-values-never-reach-the-shell
-  (is (thrown? Exception (rotate/rotate-script {:passphrase "short" :role :node})))
-  (is (thrown? Exception (rotate/rotate-script {:passphrase pass :role :node :iface "mesh0; id"})))
+  (is (thrown? Exception (rotate/stdin-for "short")))
+  (is (thrown? Exception (rotate/stdin-for (str pass "\n; id"))))
+  (is (thrown? Exception (rotate/rotate-script {:role :node :iface "mesh0; id"})))
   (is (thrown? Exception (rotate/peers-script {:iface "x y"}))))
+
+(deftest the-passphrase-is-piped-as-one-line
+  (is (= (str pass "\n") (rotate/stdin-for pass))))
 
 (deftest peers-are-read-from-the-printed-line
   (is (= 2 (rotate/peers-from-output "noise\nPEERS=2\n")))

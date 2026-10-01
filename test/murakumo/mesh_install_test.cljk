@@ -39,7 +39,8 @@
 (deftest joiner-plan-uses-the-token-and-starts-the-client
   (let [{:keys [script units files]} (install/plan :joiner {:node-name "node-b" :token token})]
     (is (= ["murakumo-mesh-iface.service" "murakumo-mesh-wpa.service" "murakumo-mesh-enroll.service"] units))
-    (is (str/includes? script (str "MESH_PASSPHRASE=%s\\n' '" pass "'")))
+    (is (not (str/includes? script pass)) "the passphrase is not in the script")
+    (is (str/includes? script "IFS= read -r MESH_PASSPHRASE") "it is read from stdin")
     (is (str/includes? script "murakumo.mesh.client"))
     (is (str/includes? script "--node-name node-b"))
     (is (str/includes? script "--no-block") "a joiner's enrol may legitimately retry")
@@ -86,11 +87,25 @@
     (is (str/includes? u "kbb -cp /opt/murakumo/src:/opt/murakumo/resources -m murakumo.mesh.seed-server"))
     (is (not (str/includes? u "clojure")))))
 
-(deftest the-remote-command-carries-the-script-as-base64
+(deftest the-joiner-passphrase-travels-on-stdin-only
+  (let [{:keys [script stdin]} (install/plan :joiner {:node-name "node-b" :token token})
+        seed (install/plan :seed {:node-name "s"})]
+    (is (= (str pass "\n") stdin))
+    (is (nil? (:stdin seed)) "a seed mints its passphrase on the node; nothing to pipe")
+    (is (not (str/includes? (install/remote-command script) pass)))))
+
+(deftest the-remote-command-carries-the-script-as-base64-and-leaves-stdin-free
   (let [cmd (install/remote-command "echo 'quo\"te' $(id)\n")]
-    (is (str/starts-with? cmd "echo "))
-    (is (str/ends-with? cmd " | base64 -d | sudo -n bash -s"))
+    (is (str/starts-with? cmd "sudo -n bash -c \"$(echo "))
+    (is (str/ends-with? cmd " | base64 -d)\""))
+    (is (not (str/includes? cmd "bash -s")) "the script is not on stdin")
     (is (not (str/includes? cmd "$(id)")) "nothing of the script is visible to the transport's quoting")))
+
+(deftest the-stdin-reader-validates-what-it-is-given
+  (let [s install/read-passphrase-snippet]
+    (is (str/includes? s "bad passphrase on stdin"))
+    (is (str/includes? s "bad passphrase length on stdin"))
+    (is (str/includes? s "no passphrase on stdin"))))
 
 (deftest only-a-valid-printed-token-is-handed-on
   (is (= token (install/join-token-from-output (str "noise\nJOIN_TOKEN=" token "\n"))))

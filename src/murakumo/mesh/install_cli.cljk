@@ -14,10 +14,10 @@
 (defn run!
   "Install `role` on `host`. Returns {:ok? :out :err :join-token}."
   [host role opts {:keys [dry-run?]}]
-  (let [{:keys [script]} (install/plan role opts)]
+  (let [{:keys [script stdin]} (install/plan role opts)]
     (if dry-run?
       {:ok? true :dry-run true :script script}
-      (let [{:keys [exit out err]} (ssh/sh host (install/remote-command script))]
+      (let [{:keys [exit out err]} (ssh/sh-in host (install/remote-command script) (or stdin ""))]
         {:ok? (zero? exit) :exit exit :out (str/trim (str out)) :err (str/trim (str err))
          :join-token (install/join-token-from-output out)}))))
 

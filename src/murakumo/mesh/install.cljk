@@ -159,6 +159,16 @@
 
 ;; ── the script ─────────────────────────────────────────────────────────────
 
+(def read-passphrase-snippet
+  "Shell that takes the passphrase from stdin and refuses anything that is not a
+  valid one. The passphrase never appears in the script or in an argument, so it
+  is not in the remote process list; the validation is repeated here because this
+  runs as root on a node and must not trust what the caller piped in."
+  (str "IFS= read -r MESH_PASSPHRASE || { echo 'no passphrase on stdin' >&2; exit 2; }\n"
+       "case \"$MESH_PASSPHRASE\" in ''|*[!0-9A-Za-z]*) echo 'bad passphrase on stdin' >&2; exit 2;; esac\n"
+       "[ \"${#MESH_PASSPHRASE}\" -ge " mesh/min-passphrase-length " ] && [ \"${#MESH_PASSPHRASE}\" -le 63 ] "
+       "|| { echo 'bad passphrase length on stdin' >&2; exit 2; }\n"))
+
 (defn- write-file [{:keys [path mode content]}]
   (str "install -d -m 0755 \"$(dirname " path ")\"\n"
        "cat > " path ".tmp <<'" heredoc-delimiter "'\n"
@@ -200,7 +210,8 @@
                     "  ( umask 077; printf 'MESH_PASSPHRASE=%s\\n' \"$(openssl rand -hex 16)\" > " etc-dir "/mesh.env )\n"
                     "fi\n"
                     "[ -s " ledger-path " ] || printf '{:admit :auto-on-mesh :nodes {}}\\n' > " ledger-path "\n")
-               (str "( umask 077; printf 'MESH_PASSPHRASE=%s\\n' '" (:passphrase parsed) "' > " etc-dir "/mesh.env )\n"))
+               (str read-passphrase-snippet
+                    "( umask 077; printf 'MESH_PASSPHRASE=%s\\n' \"$MESH_PASSPHRASE\" > " etc-dir "/mesh.env )\n"))
              ". " etc-dir "/mesh.env\n"
              (str/join (map write-file fs))
              "( umask 077; sed \"s/" mesh/passphrase-placeholder "/$MESH_PASSPHRASE/\" " etc-dir "/wpa-mesh.conf.tpl > " etc-dir "/wpa-mesh.conf )\n"
@@ -224,18 +235,22 @@
                (str "ok=0; for i in $(seq 1 30); do ss -ltn | grep -q '" mesh/seed-address ":" mesh/enroll-port "' && ok=1 && break; sleep 1; done\n"
                     "[ \"$ok\" = 1 ] || { echo 'FAILED: enrol endpoint not listening' >&2; exit 1; }\n"
                     "echo \"JOIN_TOKEN=$(cat " etc-dir "/mesh-join-token)\"\n")))]
-    {:role role :files fs :units names :script script}))
+    {:role role :files fs :units names :script script
+     ;; The joiner's passphrase travels on stdin, never in the script or an argument.
+     :stdin (when parsed (str (:passphrase parsed) "\n"))}))
 
 ;; ── running a plan ─────────────────────────────────────────────────────────
 
 (defn remote-command
-  "The script as one ssh command. Carried as base64 rather than as a heredoc so
-  no character of it can interact with the quoting of the transport, and run
-  through `sudo -n` so a missing sudo rule fails at once instead of prompting
-  an ssh session that has no terminal."
+  "The script as one ssh command. Carried as base64, so no character of it can
+  interact with the quoting of the transport, and run as `sudo -n bash -c` so
+  that a missing sudo rule fails at once instead of prompting a session that has
+  no terminal.
+
+  The script is an argument, not the shell's stdin, precisely so stdin is free to
+  carry a secret (see `read-passphrase-snippet`)."
   [script]
-  (str "echo " (kbytes/base64-encode (vec (kbytes/utf8-bytes script)))
-       " | base64 -d | sudo -n bash -s"))
+  (str "sudo -n bash -c \"$(echo " (kbytes/base64-encode (vec (kbytes/utf8-bytes script))) " | base64 -d)\""))
 
 (defn join-token-from-output
   "The token a seed install printed, or nil. Parsed, not trusted: it is checked

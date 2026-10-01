@@ -91,21 +91,21 @@
 ;; ── the node script ────────────────────────────────────────────────────────
 
 (defn rotate-script
-  "Rotate one node. Idempotent: running it again with the same passphrase leaves
-  the same state. Config files are written to `.new` and renamed, so a failure
+  "Rotate one node. The new passphrase is read from STDIN (see `stdin-for`), not
+  rendered into the script, so it is not in the remote process list. Idempotent:
+  running it again with the same passphrase leaves the same state. Config files are written to `.new` and renamed, so a failure
   midway never leaves a node with a half-written passphrase file.
 
   The seed also rewrites its join token (field 4 is the passphrase) and prints
   it; the token is what a new joiner is installed with."
-  [{:keys [passphrase role iface] :or {iface "mesh0"}}]
-  (when-not (mesh/valid-passphrase? passphrase)
-    (throw (ex-info "bad passphrase" {:reason :weak-passphrase})))
+  [{:keys [role iface] :or {iface "mesh0"}}]
   (when-not (re-matches #"[a-z][a-z0-9]{0,14}" iface)
     (throw (ex-info "bad iface" {:field :iface})))
   (str "set -eu\n"
        "[ \"$(id -u)\" = 0 ] || { echo 'must run as root' >&2; exit 2; }\n"
        "[ -s " install/etc-dir "/wpa-mesh.conf.tpl ] || { echo 'mesh is not installed on this node' >&2; exit 2; }\n"
-       "( umask 077; printf 'MESH_PASSPHRASE=%s\\n' '" passphrase "' > " install/etc-dir "/mesh.env.new )\n"
+       install/read-passphrase-snippet
+       "( umask 077; printf 'MESH_PASSPHRASE=%s\\n' \"$MESH_PASSPHRASE\" > " install/etc-dir "/mesh.env.new )\n"
        "mv " install/etc-dir "/mesh.env.new " install/etc-dir "/mesh.env\n"
        ". " install/etc-dir "/mesh.env\n"
        "( umask 077; sed \"s/" mesh/passphrase-placeholder "/$MESH_PASSPHRASE/\" " install/etc-dir "/wpa-mesh.conf.tpl > " install/etc-dir "/wpa-mesh.conf.new )\n"
@@ -120,6 +120,14 @@
        "[ \"$ok\" = 1 ] || { echo 'FAILED: murakumo-mesh-wpa.service not active' >&2; journalctl -u murakumo-mesh-wpa.service -n 20 --no-pager >&2; exit 1; }\n"
        (when (= :seed role)
          (str "echo \"JOIN_TOKEN=$(cat " install/etc-dir "/mesh-join-token)\"\n"))))
+
+(defn stdin-for
+  "What to pipe to `rotate-script`. Refuses an invalid passphrase here as well, so
+  a bad value fails on the operator's machine, before any node is touched."
+  [passphrase]
+  (when-not (mesh/valid-passphrase? passphrase)
+    (throw (ex-info "bad passphrase" {:reason :weak-passphrase})))
+  (str passphrase "\n"))
 
 (defn peers-script
   "How many mesh peers this node sees. Printed as PEERS=n after waiting up to 30 s

@@ -140,14 +140,25 @@ with a stand-in `ssh`: partial failure leaves a resumable state, the resume reus
 the same passphrase and touches only the missing node, revoked and pending nodes
 are never contacted, the state file is 0600 and removed on completion.
 
-Not verified: a real mesh re-forming on a new SAE passphrase (no radio). The
-passphrase is in each node's ssh command line, so briefly visible in its process
-list to local users; acceptable on single-owner edge nodes, not on shared hosts.
+**The passphrase travels on stdin.** Not in the script and not in any argument, so
+it is not in the remote process list. This covers rotation and a joiner install
+(`murakumo.ssh/sh-in`; the script is carried as base64 in a `sudo -n bash -c`
+argument precisely so stdin is free). The node re-validates what it reads
+(`install/read-passphrase-snippet`: present, alphanumeric, 32-63 characters) and
+refuses otherwise, because it runs as root and must not trust the pipe. A seed
+install pipes nothing: it mints its passphrase on the node. The operator's state
+file still holds the passphrase (0600); that is the one place it rests.
+
+Verified for stdin: a full `rotate-cli` run over stand-in nodes, with a log of
+every command line a process list would show -- the new passphrase appears in none
+of them -- and the node-side reader against valid input, too short, too long,
+shell metacharacters, command substitution, quote, empty line and no input.
+
+Not verified: a real mesh re-forming on a new SAE passphrase (no radio).
 
 ## Follow-ups
 
 - `sync`/`revoke` read-modify-write the seed's ledger over SSH; a join landing in
   that window can be lost (the atomic rename keeps the file whole, not the race).
   Narrow in practice, closed by moving the edit into the server.
-- Rotation could take the passphrase on stdin instead of the command line.
 - kekkai's governor still routes `:node/admit` to a human for its own flow.

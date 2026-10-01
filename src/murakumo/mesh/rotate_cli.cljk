@@ -16,9 +16,8 @@
   file is deleted when the rotation completes; `--restart` abandons one and
   starts over with a new passphrase.
 
-  The passphrase is passed to each node in the ssh command line, so it is briefly
-  visible in that node's process list to its local users. Acceptable on a
-  single-owner edge node; not on a shared host.
+  The passphrase is piped to each node on stdin, so it is in no argument and not
+  in the node's process list.
 
   Exit: 0 rotated and every node sees a peer, 1 failed or incomplete (state kept),
   2 bad usage, 3 rotated but a node sees no peer afterwards (see the report)."
@@ -50,9 +49,11 @@
 
 (defn clear-state! [path] (when (.existsSync fs path) (.unlinkSync fs path)))
 
-(defn- run-node! [{:keys [host]} script]
-  (let [{:keys [exit out err]} (ssh/sh host (install/remote-command script))]
-    {:ok? (zero? exit) :out (str out) :err (str/trim (str err))}))
+(defn- run-node!
+  ([node script] (run-node! node script ""))
+  ([{:keys [host]} script stdin]
+  (let [{:keys [exit out err]} (ssh/sh-in host (install/remote-command script) stdin)]
+    {:ok? (zero? exit) :out (str out) :err (str/trim (str err))})))
 
 (defn- read-fleet [path]
   (try (edn/read-string (str (.readFileSync fs path "utf8"))) (catch :default _ {})))
@@ -82,7 +83,7 @@
             (println header)
             (let [{st :state failures :failures}
                   (reduce (fn [{:keys [state failures] :as acc} n]
-                            (let [r (run-node! n (rotate/rotate-script {:passphrase (:passphrase state) :role (:role n)}))]
+                            (let [r (run-node! n (rotate/rotate-script {:role (:role n)}) (rotate/stdin-for (:passphrase state)))]
                               (if (:ok? r)
                                 (let [token (when (= :seed (:role n)) (install/join-token-from-output (:out r)))
                                       s' (rotate/mark-done state (:name n) token)]

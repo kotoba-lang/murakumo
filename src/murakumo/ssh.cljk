@@ -22,6 +22,15 @@
   (tunnel/sh-result
    (apply p/sh (tunnel/ssh-argv host cmd))))
 
+(defn sh-in
+  "Like `sh`, with `stdin` (a string) as the remote command's standard input.
+
+   For secrets: an argument is visible in the remote process list to that
+   node's local users for as long as the command runs; standard input is not."
+  [host cmd stdin]
+  (tunnel/sh-result
+   (apply p/sh {:in stdin} (tunnel/ssh-argv host cmd))))
+
 (defn reachable?
   "True if `host` answers SSH within the connect timeout."
   [host]
