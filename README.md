@@ -210,6 +210,8 @@ points at `#devices`.
   inverted, which some scanners will not read.
 - `--public-url ORIGIN` (NixOS `console.publicUrl`) is the address the claim link and the hint use, when a phone
   cannot reach the one the box talks to: a box in a VM talks to loopback, and a phone cannot.
+- `--rows N` (NixOS `console.rows`) declares the terminal's height: a serial console cannot report one, so the
+  default is 24, which cannot hold a QR (about 29 rows) and the link is shown as text. Give it the real height.
 - NixOS: `services.murakumoNode.console.enable = true;` (`console.tty` is `tty1` by default; use `ttyAMA0` or
   `ttyS0` for a serial console or a VM). The service takes the terminal over from getty, like a kiosk.
 

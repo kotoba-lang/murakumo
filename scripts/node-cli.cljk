@@ -291,14 +291,15 @@
     (cond
       (nil? a) opts
       (= a "--once") (recur more (assoc opts :once true))
-      (and (contains? #{"--state-dir" "--site" "--interval" "--public-url"} a) (seq more) (not (str/starts-with? (first more) "--")))
+      (and (contains? #{"--state-dir" "--site" "--interval" "--public-url" "--rows"} a) (seq more) (not (str/starts-with? (first more) "--")))
       (recur (rest more) (assoc opts (keyword (subs a 2)) (first more)))
-      :else (throw (js/Error. "Use murakumo node console [--state-dir DIR] [--site URL] [--public-url URL] [--interval SECONDS] [--once].")))))
+      :else (throw (js/Error. "Use murakumo node console [--state-dir DIR] [--site URL] [--public-url URL] [--rows N] [--interval SECONDS] [--once].")))))
 (defn console! [args]
   (let [opts (console-options args)
         site (control-base (or (:site opts) "https://murakumo.cloud"))
         id (identity)
         interval (js/parseInt (or (:interval opts) "3") 10)
+        declared-rows (some-> (:rows opts) (js/parseInt 10))
         public (when-let [u (:public-url opts)]
                 (let [parsed (try (js/URL. u) (catch :default _ nil))]
                   (when-not (and parsed (contains? #{"https:" "http:"} (.-protocol parsed)) (= "/" (.-pathname parsed))
@@ -309,6 +310,7 @@
               :fp (onboard/device-fingerprint (.-did id)) :qr-fn node-console-qr/qr-lines}]
     (when-not id (throw (js/Error. "Device identity is missing; factory-provision this device first.")))
     (when-not (<= 1 interval 60) (throw (js/Error. "--interval must be 1 to 60 seconds.")))
+    (when (and (:rows opts) (not (<= 10 declared-rows 200))) (throw (js/Error. "--rows must be 10 to 200.")))
     (if (:once opts)
       ;; one plain frame: for a log, a pipe, or a test. No cursor codes.
       (-> (node-console/gather! (assoc base :width 80))
@@ -316,7 +318,11 @@
       (let [ticks (atom 0)
             draw! (fn []
                     (let [n (swap! ticks inc)
-                          rows (let [r (.-rows js/process.stdout)] (if (and (number? r) (pos? r)) r 24))
+                          ;; A serial console cannot tell us its height, so an operator may declare it; otherwise
+                          ;; the terminal's, otherwise the smallest common one.
+                          rows (or declared-rows
+                                   (let [r (.-rows js/process.stdout)] (when (and (number? r) (pos? r)) r))
+                                   24)
                           ;; flip pages about every 8 s when the screen is too short for both
                           page (if (even? (quot n (max 1 (js/Math.round (/ 8 interval))))) :status :qr)]
                       (-> (node-console/gather! (assoc base :width (or (.-columns js/process.stdout) 80)))
