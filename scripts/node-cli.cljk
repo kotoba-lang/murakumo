@@ -5,13 +5,16 @@
             [murakumo.fleet-ps :as fleet-ps]
             [murakumo.health :as health]
             [murakumo.device-claim :as claim]
+            [murakumo.onboard :as onboard]
+            [murakumo.wifi-share :as wifi-share]
             [cacao.edge.mint :as mint]
             [kotoba.lang.text :as str]
             ["node:fs" :as fs] ["node:path" :as path]
-            ["node:os" :as os] ["node:crypto" :as crypto]))
+            ["node:os" :as os] ["node:crypto" :as crypto]
+            ["node:readline" :as readline] ["node:child_process" :as child-process]))
 
 (defn help []
-  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node qualify --model ID        Run the local model through Community admission\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Run check, then qualify before joining Community jobs;\na heartbeat alone does not prove job eligibility.")
+  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node wifi-share                Hand this PC's Wi-Fi to a headless box by sound\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node qualify --model ID        Run the local model through Community admission\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Run check, then qualify before joining Community jobs;\na heartbeat alone does not prove job eligibility.")
   (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
                                           (ctx, KV, slots), co-resident processes, units")
   (println "  Payout also requires --owner-token-file /absolute/private/path from the buyer's device page.")
@@ -120,6 +123,71 @@
         (.then (fn [{:keys [outcome exit-code]}]
                  (println "Claim response:" (name outcome))
                  (when (not= 0 exit-code) (set! (.-exitCode js/process) exit-code)))))))
+(defn- ask! [question]
+  (js/Promise. (fn [resolve _]
+                 (let [rl (.createInterface readline
+                                            #js {:input js/process.stdin :output js/process.stdout})]
+                   (.question rl question (fn [answer] (.close rl) (resolve answer)))))))
+(defn- read-stdin! []
+  (js/Promise. (fn [resolve _]
+                 (let [chunks (atom "")]
+                   (.setEncoding js/process.stdin "utf8")
+                   (.on js/process.stdin "data" (fn [c] (swap! chunks str c)))
+                   (.on js/process.stdin "end" (fn [] (resolve (str/replace @chunks #"\r?\n$" ""))))))))
+(defn- wifi-share-options [args]
+  (loop [[a & more] args opts {}]
+    (cond
+      (nil? a) opts
+      (= a "--no-open") (recur more (assoc opts :no-open true))
+      (= a "--passphrase-stdin") (recur more (assoc opts :passphrase-stdin true))
+      (and (contains? #{"--ssid" "--security" "--label" "--port"} a)
+           (seq more) (not (str/starts-with? (first more) "--")))
+      (recur (rest more) (assoc opts (keyword (subs a 2)) (first more)))
+      :else (throw (js/Error. "Use murakumo node wifi-share [--ssid NAME] [--security wpa2-personal|wpa3-personal|open] [--label PAYLOAD_OR_URL] [--passphrase-stdin] [--port N] [--no-open].")))))
+(defn wifi-share! [args]
+  (let [opts (wifi-share-options args)
+        security (keyword (or (:security opts) "wpa2-personal"))
+        port (js/parseInt (or (:port opts) "8765") 10)]
+    (when-not (contains? #{:open :wpa2-personal :wpa3-personal} security)
+      (throw (js/Error. "--security must be wpa2-personal, wpa3-personal or open.")))
+    (when-not (<= 1024 port 65535) (throw (js/Error. "--port must be between 1024 and 65535.")))
+    (-> (js/Promise.resolve (:ssid opts))
+        (.then (fn [ssid]
+                 (or ssid (wifi-share/current-ssid)
+                     (let [saved (wifi-share/saved-networks)]
+                       (when (seq saved)
+                         (println "The OS hides the connected network name from this tool. Saved networks:")
+                         (doseq [[i n] (map-indexed vector (take 15 saved))] (println (str "  " (inc i) ". " n)))
+                         (-> (ask! "Number of the network to share: ")
+                             (.then (fn [a] (nth saved (dec (js/parseInt a 10)) nil)))))))))
+        (.then (fn [ssid]
+                 (when-not (and (string? ssid) (seq ssid))
+                   (throw (js/Error. "Could not determine the network. Pass --ssid NAME.")))
+                 (-> (if (:label opts) (js/Promise.resolve (:label opts))
+                         (ask! "Label from the box (the aiueos:1;… payload or its URL): "))
+                     (.then (fn [label]
+                              (let [parsed (wifi-share/parse-label label)]
+                                (when (:error parsed)
+                                  (throw (js/Error. "That label has no usable label secret (ls=…).")))
+                                (-> (if (:passphrase-stdin opts) (read-stdin!)
+                                        (do (println (str "Sharing \"" ssid "\". The OS may ask permission to read its passphrase."))
+                                            (js/Promise.resolve (wifi-share/read-passphrase ssid))))
+                                    (.then (fn [pass]
+                                             (when (and (not= :open security)
+                                                        (not (and (string? pass) (<= 8 (count pass) 63))))
+                                               (throw (js/Error. "The passphrase could not be read (denied, not saved, or not 8-63 characters).")))
+                                             (let [state (merge parsed {:ssid ssid :security security :passphrase pass
+                                                                        :fingerprint-of onboard/device-fingerprint})
+                                                   tok (wifi-share/token)]
+                                               (wifi-share/serve! (assoc state :port port :token tok
+                                                                         :ggwave (wifi-share/available-ggwave)))
+                                               (let [url (str "http://localhost:" port "/?t=" tok)]
+                                                 (println "Open (this PC only):" url)
+                                                 (when-not (:no-open opts)
+                                                   (try (.unref (.spawn child-process
+                                                                        (if (= "darwin" (.platform os)) "open" "xdg-open")
+                                                                        #js [url] #js {:stdio "ignore" :detached true}))
+                                                        (catch :default _ nil)))))))))))))))))
 (defn- fetch-node-grant! [id authn-base]
   (-> (mint! id authn-base ["murakumo://node-token"] 240000)
       (.then (fn [proof]
@@ -370,6 +438,9 @@
       (= command "claim-once")
       (-> (claim-once! args)
           (.catch (fn [_] (fail! "Claim response failed. Check the site, device identity and network."))))
+      (= command "wifi-share")
+      (-> (wifi-share! args)
+          (.catch (fn [e] (fail! (.-message e)))))
       (contains? #{"earnings" "payout"} command)
       (-> (payout-command! command args)
           (.catch (fn [_] (fail! "Payout operation failed. Check the network, device identity and request; no credentials are printed."))))
