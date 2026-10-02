@@ -56,8 +56,35 @@ murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0
   zero free slots in that state. A job already claimed finishes and reports its
   result. The host check cannot see every GPU-only workload, so validate it on
   the actual machine before using it as the buyer's idle policy. The current
-  NixOS base profile does not install a node service; run `join` manually until
-  an opt-in service has been configured and verified on the target machine.
+  NixOS base profile does not install a node service. An optional module at
+  [`nixos/node.nix`](nixos/node.nix) can schedule buyer claim responses and
+  restart idle-only participation after boot. Both services are disabled by
+  default. The pinned installer copies it to
+  `/opt/murakumo-cli/current/nixos-node.nix` when installed with
+  `MURAKUMO_INSTALL_DIR=/opt/murakumo-cli`. Import the specific
+  `release-<hash>/nixos-node.nix` path in the machine configuration so the
+  NixOS evaluation cannot silently switch versions. Set `cliPath` to a
+  system-wide installation outside `/home`, retain
+  the factory identity as a root-readable mode 0600 runtime file, and enable
+  `claimResponder` only after the buyer claim endpoint is ready. Before enabling
+  `participation`, manually run `doctor`, `check`, and `qualify` with the exact
+  served model ID on that unit; enable it only after qualification is accepted.
+  The module does not install a model, mint credits, or request payout.
+
+  Example NixOS configuration after importing `nixos/node.nix`:
+
+  ```nix
+  services.murakumoNode = {
+    enable = true;
+    cliPath = "/opt/murakumo-cli/current/murakumo";
+    claimResponder.enable = true;
+    participation = {
+      enable = true; # Set only after doctor, check, and qualify pass on this unit.
+    };
+    nodeName = "my-pc";
+    model = "YOUR_EXACT_SERVED_MODEL_ID";
+  };
+  ```
 
 **Community enrollment starts pending admission.** Registration and a fresh
 heartbeat do not grant AWAI Secure membership, guarantee job placement or prove
@@ -96,6 +123,29 @@ A clean device identity on macOS, an isolated Ollama server and `smollm2:135m`
 completed local inference, Community enrollment (201) and authenticated heartbeat
 acceptance (201). The check did not advertise free slots or fetch the work queue.
 Community job placement and a paid end-to-end request were not exercised.
+
+### Hand this PC's Wi-Fi to a headless box (`wifi-share`, proposed in ADR-0243)
+
+```sh
+murakumo node wifi-share
+```
+
+For a box with a speaker and a microphone but no screen. The box beacons (a short bell
+motif; the data rides in ultrasound). Run this on a PC that is on the Wi-Fi you want to share:
+it reads that network's passphrase from the OS (macOS shows its own permission prompt;
+Linux uses NetworkManager, Windows `netsh`), seals it in this process, and opens a page on
+`localhost` that hears the box and plays the sealed bytes. The passphrase is never printed,
+put in a URL, or sent to the browser.
+
+- It asks for the **label** (`aiueos:1;…ls=…` or the label URL). The envelope is bound to the label
+  secret, so someone who only heard the beacon cannot point the box at their own Wi-Fi; if the
+  label names a DID, a different box in the room is refused.
+- macOS hides the connected network name from command-line tools, so you pick from the saved
+  networks. Pass `--ssid NAME` to skip the choice; `--passphrase-stdin` reads the passphrase from
+  stdin instead of the OS.
+- The whole sealed message must fit ggwave's 140 bytes: SSID and passphrase together at most 88 bytes.
+- This is the sender half only. The box-side command and its NixOS unit are not in this release, and
+  nothing here is promised publicly until the acceptance run in ADR-0243 passes on real hardware.
 
 ## Fleet operator tooling
 
