@@ -144,8 +144,27 @@ put in a URL, or sent to the browser.
   networks. Pass `--ssid NAME` to skip the choice; `--passphrase-stdin` reads the passphrase from
   stdin instead of the OS.
 - The whole sealed message must fit ggwave's 140 bytes: SSID and passphrase together at most 88 bytes.
-- This is the sender half only. The box-side command and its NixOS unit are not in this release, and
-  nothing here is promised publicly until the acceptance run in ADR-0243 passes on real hardware.
+- The box-side command is described below.
+
+**Box side** (`murakumo node onboard`, run by the NixOS unit below; needs a speaker and a microphone). It
+beacons while the box is unclaimed and offline, opens a sealed profile played back by a sender, stores
+only the encrypted message, hands the profile to NetworkManager as a mode-0600 keyfile (never as
+`nmcli ... password` arguments), and answers with an acknowledgement. Every message that does not open
+rotates the code and counts as an attempt; five and the window closes. If the box is still offline
+after a profile (a mistyped passphrase) a new window opens. A proved claim retires the label secret and
+the onboarding key and keeps the box quiet afterwards. Audio goes through commands (`aplay`/`arecord` by
+default; `--play-cmd`/`--record-cmd` for anything that reads or writes raw f32le 48 kHz mono PCM).
+
+```nix
+services.murakumoNode = {
+  enable = true;
+  cliPath = "/opt/murakumo-cli/current/murakumo";
+  onboard.enable = true;     # requires networking.networkmanager.enable
+};
+```
+
+The unit only runs while `/var/lib/murakumo/onboard/label-secret` exists (the factory puts it there, mode
+0600, and prints it in the label QR) and the `closed` marker does not.
 
 ## Fleet operator tooling
 

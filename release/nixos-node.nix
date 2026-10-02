@@ -43,6 +43,38 @@ in
     authnUrl = mkOption { type = types.str; default = "https://auth.murakumo.cloud"; };
     claimResponder.enable = mkEnableOption "periodic device claim responses";
     participation.enable = mkEnableOption "idle-only Community job participation";
+    onboard = {
+      enable = mkEnableOption ''
+        Wi-Fi onboarding by sound (ADR-0243) for a box that has a speaker and a microphone
+        but no screen. The unit exists only until the box is claimed: it needs the label
+        secret in the state directory and stops for good once the claim retires it
+      '';
+      stateDir = mkOption {
+        type = types.str;
+        default = "/var/lib/murakumo/onboard";
+        description = "Private directory holding the label secret, the onboarding key and the received (encrypted) message.";
+      };
+      mode = mkOption {
+        type = types.enum [ "quiet" "soft" ];
+        default = "quiet";
+        description = "quiet carries data in ultrasound; soft carries it audibly at low volume.";
+      };
+      ttlMinutes = mkOption {
+        type = types.ints.between 1 120;
+        default = 15;
+        description = "How long one provisioning window stays open.";
+      };
+      playCommand = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Command that plays raw f32le 48 kHz mono PCM from stdin. Null means aplay.";
+      };
+      recordCommand = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Command that writes raw f32le 48 kHz mono PCM to stdout. Null means arecord.";
+      };
+    };
   };
 
   config = mkIf cfg.enable {
@@ -53,7 +85,35 @@ in
         message = "services.murakumoNode.identityFile must be an absolute runtime path."; }
       { assertion = !cfg.participation.enable || (cfg.nodeName != "" && cfg.model != "");
         message = "Idle participation requires an explicit nodeName and exact served model ID."; }
+      { assertion = !cfg.onboard.enable || lib.hasPrefix "/" cfg.onboard.stateDir;
+        message = "services.murakumoNode.onboard.stateDir must be an absolute path."; }
+      { assertion = !cfg.onboard.enable || config.networking.networkmanager.enable;
+        message = "Wi-Fi onboarding hands the profile to NetworkManager; enable networking.networkmanager."; }
     ];
+
+    systemd.tmpfiles.rules = lib.optional cfg.onboard.enable "d ${cfg.onboard.stateDir} 0700 root root -";
+
+    # Not ordered after network-online: this unit exists to get the box online. It is only
+    # started while the box is unclaimed (the label secret exists, the claim marker does not).
+    systemd.services.murakumo-onboard = mkIf cfg.onboard.enable (common // {
+      description = "Take a Wi-Fi profile handed over by sound (ADR-0243)";
+      wantedBy = [ "multi-user.target" ];
+      after = [ "sound.target" "NetworkManager.service" ];
+      wants = [ ];
+      path = [ pkgs.nodejs pkgs.alsa-utils pkgs.networkmanager ];
+      environment = common.environment // { MURAKUMO_ONBOARD_DIR = cfg.onboard.stateDir; };
+      unitConfig.ConditionPathExists = [ "${cfg.onboard.stateDir}/label-secret" "!${cfg.onboard.stateDir}/closed" ];
+      script = ''exec ${cli} node onboard --state-dir ${lib.escapeShellArg cfg.onboard.stateDir} --keyfile-dir /etc/NetworkManager/system-connections --mode ${cfg.onboard.mode} --ttl-minutes ${toString cfg.onboard.ttlMinutes} --site ${lib.escapeShellArg cfg.siteUrl}${lib.optionalString (cfg.onboard.playCommand != null) " --play-cmd ${lib.escapeShellArg cfg.onboard.playCommand}"}${lib.optionalString (cfg.onboard.recordCommand != null) " --record-cmd ${lib.escapeShellArg cfg.onboard.recordCommand}"}'';
+      serviceConfig = common.serviceConfig // {
+        Type = "simple";
+        Restart = "on-failure";
+        RestartSec = "30s";
+        # exit 4 means the window closed (time, attempts, or no label secret): do not reopen it by restarting
+        RestartPreventExitStatus = "4";
+        ReadWritePaths = [ cfg.onboard.stateDir "/etc/NetworkManager/system-connections" ];
+        SupplementaryGroups = [ "audio" ];
+      };
+    });
 
     systemd.services.murakumo-claim = mkIf cfg.claimResponder.enable (common // {
       description = "Answer a pending Murakumo buyer device claim";

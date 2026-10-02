@@ -7,6 +7,9 @@
             [murakumo.device-claim :as claim]
             [murakumo.onboard :as onboard]
             [murakumo.wifi-share :as wifi-share]
+            [murakumo.onboard-device :as onboard-device]
+            [murakumo.onboard-state :as onboard-state]
+            [murakumo.onboard-audio :as onboard-audio]
             [cacao.edge.mint :as mint]
             [kotoba.lang.text :as str]
             ["node:fs" :as fs] ["node:path" :as path]
@@ -14,7 +17,7 @@
             ["node:readline" :as readline] ["node:child_process" :as child-process]))
 
 (defn help []
-  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node wifi-share                Hand this PC's Wi-Fi to a headless box by sound\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node qualify --model ID        Run the local model through Community admission\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Run check, then qualify before joining Community jobs;\na heartbeat alone does not prove job eligibility.")
+  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node wifi-share                Hand this PC's Wi-Fi to a headless box by sound\n  murakumo node onboard                   (box) Take a Wi-Fi profile handed over by sound\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node qualify --model ID        Run the local model through Community admission\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Run check, then qualify before joining Community jobs;\na heartbeat alone does not prove job eligibility.")
   (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
                                           (ctx, KV, slots), co-resident processes, units")
   (println "  Payout also requires --owner-token-file /absolute/private/path from the buyer's device page.")
@@ -105,6 +108,7 @@
               (seq (.-search u)) (seq (.-hash u)))
       (throw (js/Error. "The control plane base must contain only a scheme and host.")))
     base))
+(defn- onboard-dir [] (or (aget js/process.env "MURAKUMO_ONBOARD_DIR") onboard-state/default-state-dir))
 (defn claim-once! [args]
   (when-not (or (empty? args)
                 (and (= 2 (count args)) (= "--site" (first args))))
@@ -122,6 +126,9 @@
     (-> (claim/once! js/fetch #(js/Date.now) site id)
         (.then (fn [{:keys [outcome exit-code]}]
                  (println "Claim response:" (name outcome))
+                 ;; the label secret and the onboarding key have done their job
+                 (when (= :proved outcome)
+                   (try (onboard-state/retire! (onboard-dir)) (catch :default _ nil)))
                  (when (not= 0 exit-code) (set! (.-exitCode js/process) exit-code)))))))
 (defn- ask! [question]
   (js/Promise. (fn [resolve _]
@@ -188,6 +195,42 @@
                                                                         (if (= "darwin" (.platform os)) "open" "xdg-open")
                                                                         #js [url] #js {:stdio "ignore" :detached true}))
                                                         (catch :default _ nil)))))))))))))))))
+(defn- split-command [text] (vec (remove str/blank? (str/split text #"\s+"))))
+(defn- onboard-options [args]
+  (loop [[a & more] args opts {}]
+    (cond
+      (nil? a) opts
+      (contains? #{"--no-apply" "--no-reload"} a) (recur more (assoc opts (keyword (subs a 2)) true))
+      (and (contains? #{"--state-dir" "--keyfile-dir" "--mode" "--ttl-minutes" "--max-attempts"
+                        "--play-cmd" "--record-cmd" "--site"} a)
+           (seq more))
+      (recur (rest more) (assoc opts (keyword (subs a 2)) (first more)))
+      :else (throw (js/Error. "Use murakumo node onboard [--state-dir DIR] [--keyfile-dir DIR] [--mode quiet|soft] [--ttl-minutes N] [--max-attempts N] [--play-cmd CMD] [--record-cmd CMD] [--site URL] [--no-apply] [--no-reload].")))))
+(defn onboard! [args]
+  (let [opts (onboard-options args)
+        id (identity)
+        mode (keyword (or (:mode opts) "quiet"))
+        site (control-base (or (:site opts) "https://murakumo.cloud"))
+        ttl-minutes (js/parseInt (or (:ttl-minutes opts) "15") 10)
+        max-attempts (js/parseInt (or (:max-attempts opts) "5") 10)]
+    (when-not id (throw (js/Error. "Device identity is missing; factory-provision this device first.")))
+    (when-not (contains? #{:quiet :soft} mode) (throw (js/Error. "--mode must be quiet or soft.")))
+    (when-not (and (<= 1 ttl-minutes 120) (<= 1 max-attempts 20))
+      (throw (js/Error. "--ttl-minutes must be 1-120 and --max-attempts 1-20.")))
+    (-> (onboard-device/run!
+         {:state-dir (or (:state-dir opts) (onboard-dir))
+          :keyfile-dir (or (:keyfile-dir opts) onboard-device/default-keyfile-dir)
+          :did-fingerprint (onboard/device-fingerprint (.-did id))
+          :mode mode :ttl-ms (* ttl-minutes 60000) :max-attempts max-attempts
+          :play-cmd (if (:play-cmd opts) (split-command (:play-cmd opts)) onboard-audio/default-play-cmd)
+          :record-cmd (if (:record-cmd opts) (split-command (:record-cmd opts)) onboard-audio/default-record-cmd)
+          :apply? (not (:no-apply opts)) :reload? (not (:no-reload opts))
+          :online? (fn [] (-> (js/fetch site #js {:method "HEAD" :signal (js/AbortSignal.timeout 5000)})
+                              (.then (fn [_] true)) (.catch (fn [_] false))))
+          :log (fn [m] (println "[onboard]" m))})
+        (.then (fn [{:keys [outcome reason]}]
+                 (println "Onboarding:" (name outcome) (when reason (str "(" (name reason) ")")))
+                 (when (= :closed outcome) (set! (.-exitCode js/process) 4)))))))
 (defn- fetch-node-grant! [id authn-base]
   (-> (mint! id authn-base ["murakumo://node-token"] 240000)
       (.then (fn [proof]
@@ -438,6 +481,9 @@
       (= command "claim-once")
       (-> (claim-once! args)
           (.catch (fn [_] (fail! "Claim response failed. Check the site, device identity and network."))))
+      (= command "onboard")
+      (-> (onboard! args)
+          (.catch (fn [e] (fail! (.-message e)))))
       (= command "wifi-share")
       (-> (wifi-share! args)
           (.catch (fn [e] (fail! (.-message e)))))
