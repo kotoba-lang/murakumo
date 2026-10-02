@@ -6,6 +6,8 @@
             [murakumo.health :as health]
             [murakumo.device-claim :as claim]
             [murakumo.device-report :as report]
+            [murakumo.node-console :as node-console]
+            [murakumo.node-console-qr :as node-console-qr]
             [murakumo.onboard :as onboard]
             [murakumo.wifi-share :as wifi-share]
             [murakumo.onboard-device :as onboard-device]
@@ -18,7 +20,7 @@
             ["node:readline" :as readline] ["node:child_process" :as child-process]))
 
 (defn help []
-  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node report                    Send this device's signed heartbeat to the console\n  murakumo node wifi-share                Hand this PC's Wi-Fi to a headless box by sound\n  murakumo node onboard                   (box) Take a Wi-Fi profile handed over by sound\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node qualify --model ID        Run the local model through Community admission\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Run check, then qualify before joining Community jobs;\na heartbeat alone does not prove job eligibility.")
+  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node report                    Send this device's signed heartbeat to the console\n  murakumo node console                   Show this box's status and a claim QR on its own screen\n  murakumo node wifi-share                Hand this PC's Wi-Fi to a headless box by sound\n  murakumo node onboard                   (box) Take a Wi-Fi profile handed over by sound\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node qualify --model ID        Run the local model through Community admission\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Run check, then qualify before joining Community jobs;\na heartbeat alone does not prove job eligibility.")
   (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
                                           (ctx, KV, slots), co-resident processes, units")
   (println "  Payout also requires --owner-token-file /absolute/private/path from the buyer's device page.")
@@ -232,6 +234,17 @@
         (.then (fn [{:keys [outcome reason]}]
                  (println "Onboarding:" (name outcome) (when reason (str "(" (name reason) ")")))
                  (when (= :closed outcome) (set! (.-exitCode js/process) 4)))))))
+(defn- state-dir [] (or (aget js/process.env "MURAKUMO_STATE_DIR") "/var/lib/murakumo"))
+(defn- write-report-status!
+  "Leave the last heartbeat result where the console can read it. Best effort and non-secret: an outcome
+  word and a time. A box where this directory is not writable simply shows `none yet`."
+  [outcome]
+  (try
+    (let [p (.join path (state-dir) "report-status.json")
+          tmp (str p ".tmp")]
+      (.writeFileSync fs tmp (js/JSON.stringify #js {:outcome (name outcome) :at-ms (js/Date.now)}) #js {:mode 420})
+      (.renameSync fs tmp p))
+    (catch :default _ nil)))
 (defn- report-options [args]
   (loop [[a & more] args opts {}]
     (cond
@@ -259,18 +272,60 @@
         (-> (send!)
             (.then (fn [{:keys [outcome exit-code]}]
                      (println "Heartbeat:" (name outcome))
+                     (write-report-status! outcome)
                      (when (not= 0 exit-code) (set! (.-exitCode js/process) exit-code)))))
         ;; A loop for a box without a timer. It says something only when the answer changes, so a
         ;; healthy box is quiet and a box that has not been claimed yet does not fill a log.
         (let [last-outcome (atom nil)
               tick (fn [] (-> (send!)
                               (.then (fn [{:keys [outcome]}]
+                                       (write-report-status! outcome)
                                        (when (not= outcome @last-outcome)
                                          (reset! last-outcome outcome)
                                          (println "Heartbeat:" (name outcome)))))))]
           (tick)
           (js/setInterval tick (* 1000 interval))
           (js/Promise. (fn [_ _] nil)))))))
+(defn- console-options [args]
+  (loop [[a & more] args opts {}]
+    (cond
+      (nil? a) opts
+      (= a "--once") (recur more (assoc opts :once true))
+      (and (contains? #{"--state-dir" "--site" "--interval"} a) (seq more) (not (str/starts-with? (first more) "--")))
+      (recur (rest more) (assoc opts (keyword (subs a 2)) (first more)))
+      :else (throw (js/Error. "Use murakumo node console [--state-dir DIR] [--site URL] [--interval SECONDS] [--once].")))))
+(defn console! [args]
+  (let [opts (console-options args)
+        site (control-base (or (:site opts) "https://murakumo.cloud"))
+        id (identity)
+        interval (js/parseInt (or (:interval opts) "3") 10)
+        base {:state-dir (or (:state-dir opts) (state-dir)) :site site :did (.-did id)
+              :fp (onboard/device-fingerprint (.-did id)) :qr-fn node-console-qr/qr-lines}]
+    (when-not id (throw (js/Error. "Device identity is missing; factory-provision this device first.")))
+    (when-not (<= 1 interval 60) (throw (js/Error. "--interval must be 1 to 60 seconds.")))
+    (if (:once opts)
+      ;; one plain frame: for a log, a pipe, or a test. No cursor codes.
+      (-> (node-console/gather! (assoc base :width 80))
+          (.then (fn [st] (println (str/join "\n" (node-console/screen st))))))
+      (let [ticks (atom 0)
+            draw! (fn []
+                    (let [n (swap! ticks inc)
+                          rows (let [r (.-rows js/process.stdout)] (if (and (number? r) (pos? r)) r 24))
+                          ;; flip pages about every 8 s when the screen is too short for both
+                          page (if (even? (quot n (max 1 (js/Math.round (/ 8 interval))))) :status :qr)]
+                      (-> (node-console/gather! (assoc base :width (or (.-columns js/process.stdout) 80)))
+                          (.then (fn [st]
+                                   (.write js/process.stdout
+                                           (node-console/frame (node-console/screen (assoc st :height rows :page page))))))
+                          (.catch (fn [_] nil)))))
+            restore! (fn [] (.write js/process.stdout "\u001b[?25h"))]
+        ;; hide the cursor for a steady picture; always give it back
+        (.write js/process.stdout "\u001b[?25l\u001b[2J")
+        (.on js/process "SIGINT" (fn [] (restore!) (.exit js/process 0)))
+        (.on js/process "SIGTERM" (fn [] (restore!) (.exit js/process 0)))
+        (draw!)
+        (js/setInterval draw! (* 1000 interval))
+        (js/Promise. (fn [_ _] nil))))))
 (defn- fetch-node-grant! [id authn-base]
   (-> (mint! id authn-base ["murakumo://node-token"] 240000)
       (.then (fn [proof]
@@ -521,6 +576,9 @@
       (= command "claim-once")
       (-> (claim-once! args)
           (.catch (fn [_] (fail! "Claim response failed. Check the site, device identity and network."))))
+      (= command "console")
+      (-> (console! args)
+          (.catch (fn [e] (fail! (.-message e)))))
       (= command "report")
       (-> (report! args)
           (.catch (fn [e] (fail! (.-message e)))))

@@ -1,0 +1,129 @@
+(ns murakumo.node-console-test
+  "What the screen says is pinned as literals: it is the one place a person at the box reads what is
+  going on, and a wrong word there (`claimed` for a box that is not) is worse than a missing one."
+  (:require [murakumo.node-console :as c]
+            [kotoba.lang.text :as str]
+            [kotoba.test :refer [deftest is testing]]))
+
+(def did "did:key:z6MkgR8bqUuXhrcSFe7cP5HCi33hABZQ1gdLxkGKLAC3oRe4")
+(def label (str "aiueos:1;did=" did ";model=k16;endpoint=https://murakumo.cloud;token=TOK123;ls=AAECAwQFBgcICQoLDA0ODw"))
+(defn fake-qr [text] ["█▀▀▀▀▀█" "█ qr   █" "█▄▄▄▄▄█"])
+(def base {:qr-fn fake-qr :did did :fp "2c3b85f8" :site "https://murakumo.cloud" :now-ms 1000000 :width 80
+           :addresses [{:name "eth0" :address "10.0.2.15"}] :reachable? true :onboarding :ready :label label})
+
+(defn text-of [state] (str/join "\n" (c/screen state)))
+
+(deftest the-claim-link-never-carries-the-onboarding-secret
+  (let [url (c/claim-url label "https://murakumo.cloud")]
+    (is (str/starts-with? url "https://murakumo.cloud/#claim?q="))
+    (is (not (str/includes? url "AAECAwQFBgcICQoLDA0ODw")) "the label secret stays on the label")
+    (is (not (str/includes? url "ls%3D")))
+    (let [f (c/label-fields url)]
+      (is (= did (get f "did")))
+      (is (= "TOK123" (get f "token")) "the claim token is what a claim needs")
+      (is (= "k16" (get f "model"))))))
+
+(deftest a-label-without-a-token-or-did-has-no-claim-link
+  (is (nil? (c/claim-url "aiueos:1;did=x" "https://murakumo.cloud")))
+  (is (nil? (c/claim-url "nonsense" "https://murakumo.cloud")))
+  (is (nil? (c/claim-url nil "https://murakumo.cloud"))))
+
+(deftest an-unclaimed-box-says-so-and-offers-a-qr
+  (let [s (c/screen (assoc base :heartbeat {:outcome :not-claimed :at-ms 988000}))
+        t (str/join "\n" s)]
+    (is (= " MURAKUMO NODE" (first s)))
+    (is (str/includes? t "Claim      waiting to be claimed"))
+    (is (str/includes? t "Heartbeat  not-claimed · 12 s ago"))
+    (is (str/includes? t "Network    10.0.2.15 (eth0)"))
+    (is (str/includes? t "Console    https://murakumo.cloud  reachable"))
+    (is (str/includes? t "Wi-Fi      ready: can take Wi-Fi by sound until it is claimed"))
+    (is (str/includes? t "scan with your phone"))
+    (is (some #(str/includes? % "█") s) "the QR is drawn")
+    (is (not (str/includes? t "AAECAwQFBgcICQoLDA0ODw")) "no secret on screen")))
+
+(deftest a-claimed-box-says-so-and-does-not-ask-to-be-scanned
+  (let [t (text-of (assoc base :heartbeat {:outcome :accepted :at-ms 999000}))]
+    (is (str/includes? t "Claim      claimed"))
+    (is (str/includes? t "belongs to an account"))
+    (is (not (str/includes? t "scan with your phone")))
+    (is (not (str/includes? t "█")))))
+
+(deftest a-box-that-has-not-reported-is-not-called-claimed-or-unclaimed
+  (let [t (text-of (assoc base :heartbeat nil))]
+    (is (str/includes? t "Claim      not known yet (no report has been sent)"))
+    (is (str/includes? t "Heartbeat  none yet"))))
+
+(deftest every-outcome-has-its-own-words
+  (doseq [[o words] {:accepted "claimed" :stale "claimed" :not-claimed "waiting to be claimed"
+                     :rejected "did not accept this device's signature" :clock-ahead "clock is ahead"
+                     :unreachable "cannot reach the console" :error "returned an error"}]
+    (is (str/includes? (c/claim-text o) words) (name o)))
+  (is (= "not known yet (no report has been sent)" (c/claim-text nil))))
+
+(deftest a-box-with-no-network-or-no-label-says-so
+  (let [t (text-of (assoc base :addresses [] :reachable? false :label nil :onboarding nil
+                          :heartbeat {:outcome :unreachable :at-ms 999000}))]
+    (is (str/includes? t "Network    no network address"))
+    (is (str/includes? t "Console    https://murakumo.cloud  unreachable"))
+    (is (str/includes? t "Wi-Fi      not provisioned for Wi-Fi by sound"))
+    (is (str/includes? t "No label on this device"))))
+
+(deftest a-retired-box-says-the-claim-went-through
+  (is (str/includes? (text-of (assoc base :onboarding :retired :heartbeat {:outcome :accepted :at-ms 999000}))
+                     "retired (the claim went through)")))
+
+(deftest the-did-is-shortened-for-reading-not-for-identity
+  (is (= "did:key:z6MkgR8bq…LAC3oRe4" (c/short-did did)))
+  (is (= "did:key:short" (c/short-did "did:key:short"))))
+
+(deftest ages-are-coarse
+  (is (= "12 s ago" (c/age-text 12)))
+  (is (= "2 min ago" (c/age-text 120)))
+  (is (= "2 h ago" (c/age-text 7200)))
+  (is (nil? (c/age-text nil))))
+
+(deftest a-frame-redraws-in-place
+  (let [f (c/frame ["a" "b"])]
+    (is (str/starts-with? f "\u001b[H") "cursor home, not clear-screen: no flicker on a slow line")
+    (is (= "\u001b[Ha\u001b[K\nb\u001b[K\n\u001b[J" f))))
+
+(deftest the-screen-fits-the-width-it-is-given
+  (doseq [w [60 80 120]]
+    (let [s (c/screen (assoc base :width w :heartbeat {:outcome :not-claimed :at-ms 988000}))]
+      (is (every? #(<= (count %) (+ w 8)) s) (str "width " w)))))
+
+(def tall-qr (vec (repeat 25 "█▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀█")))
+
+(deftest a-short-terminal-gets-pages-and-never-a-cut-off-qr
+  (let [st (assoc base :qr-fn (fn [_] tall-qr) :heartbeat {:outcome :not-claimed :at-ms 988000})
+        all (c/screen st)
+        p1 (c/screen (assoc st :height 32 :page :status))
+        p2 (c/screen (assoc st :height 32 :page :qr))]
+    (testing "tall enough: one screen, as before"
+      (is (some #(str/includes? % "scan with your phone") all))
+      (is (some #(str/includes? % "Claim      waiting to be claimed") all)))
+    (testing "too short: the first page is the status and says another follows"
+      (is (some #(str/includes? % "Claim      waiting to be claimed") p1))
+      (is (not-any? #(str/includes? % "█") p1))
+      (is (some #(str/includes? % "page 1 of 2") p1)))
+    (testing "the second page is the claim block alone, if it fits"
+      (is (some #(str/includes? % "scan with your phone") p2))
+      (is (not-any? #(str/includes? % "MURAKUMO NODE") p2)))
+    (testing "no page is taller than the terminal"
+      (is (<= (count p1) 32))
+      (is (<= (count p2) 32)))))
+
+(deftest when-even-the-qr-page-is-too-tall-the-link-is-shown-as-text
+  ;; a 25-row QR with its two lines of text is 29 rows: a 24-row console cannot show it, and half a QR
+  ;; code is worse than none
+  (doseq [h [20 24]]
+    (let [st (assoc base :qr-fn (fn [_] tall-qr) :heartbeat {:outcome :not-claimed :at-ms 988000})
+          p2 (c/screen (assoc st :height h :page :qr))
+          t (str/join "\n" p2)]
+      (is (not-any? #(str/includes? % "█") p2) (str "height " h ": no half-drawn QR"))
+      (is (str/includes? t "https://murakumo.cloud/#claim?q="))
+      (is (str/includes? t "too short to draw the QR code")))))
+
+(deftest a-claimed-box-needs-no-second-page
+  (let [st (assoc base :heartbeat {:outcome :accepted :at-ms 999000})]
+    (is (some #(str/includes? % "belongs to an account") (c/screen (assoc st :height 24 :page :status))))))

@@ -43,6 +43,19 @@ in
     authnUrl = mkOption { type = types.str; default = "https://auth.murakumo.cloud"; };
     claimResponder.enable = mkEnableOption "periodic device claim responses";
     participation.enable = mkEnableOption "idle-only Community job participation";
+    console = {
+      enable = mkEnableOption "the box's own status screen with a claim QR code (murakumo node console), drawn on a terminal";
+      tty = mkOption {
+        type = types.str;
+        default = "tty1";
+        description = "Terminal to draw on: tty1 for a monitor, or the serial console (ttyAMA0 on an aarch64 VM, ttyS0 on x86).";
+      };
+      stateDir = mkOption {
+        type = types.str;
+        default = "/var/lib/murakumo";
+        description = "Where the label, the last heartbeat result and the onboarding state live.";
+      };
+    };
     report = {
       enable = mkEnableOption "periodic signed heartbeats to the console, so a claimed device shows when it was last seen";
       intervalSeconds = mkOption {
@@ -137,6 +150,32 @@ in
         Unit = "murakumo-claim.service";
       };
     };
+
+    # Takes over its terminal from getty, the way a kiosk does: the screen is the box's own and has no login.
+    systemd.services.murakumo-console = mkIf cfg.console.enable (common // {
+      description = "Show this box's Murakumo status and claim code on its screen";
+      wantedBy = [ "multi-user.target" ];
+      # Not after network-online: the screen is most useful exactly when the network is not up yet.
+      after = [ "systemd-user-sessions.service" "getty@${cfg.console.tty}.service" "serial-getty@${cfg.console.tty}.service" ];
+      wants = [ ];
+      conflicts = [ "getty@${cfg.console.tty}.service" "serial-getty@${cfg.console.tty}.service" ];
+      environment = common.environment // {
+        MURAKUMO_STATE_DIR = cfg.console.stateDir;
+        TERM = if builtins.match "tty[0-9]+" cfg.console.tty != null then "linux" else "vt100";
+      };
+      script = ''exec ${cli} node console --state-dir ${lib.escapeShellArg cfg.console.stateDir} --site ${lib.escapeShellArg cfg.siteUrl}'';
+      serviceConfig = common.serviceConfig // {
+        Type = "simple";
+        Restart = "always";
+        RestartSec = "5s";
+        StandardInput = "tty";
+        StandardOutput = "tty";
+        TTYPath = "/dev/${cfg.console.tty}";
+        TTYReset = true;
+        TTYVHangup = true;
+        TTYVTDisallocate = builtins.match "tty[0-9]+" cfg.console.tty != null;
+      };
+    });
 
     systemd.services.murakumo-report = mkIf cfg.report.enable (common // {
       description = "Send a signed Murakumo device heartbeat";
