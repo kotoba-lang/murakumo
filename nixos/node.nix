@@ -41,8 +41,31 @@ in
     localUrl = mkOption { type = types.str; default = "http://127.0.0.1:11434/v1"; };
     baseUrl = mkOption { type = types.str; default = "https://api.murakumo.cloud"; };
     authnUrl = mkOption { type = types.str; default = "https://auth.murakumo.cloud"; };
+    stateDir = mkOption {
+      type = types.str;
+      default = "/var/lib/murakumo";
+      description = "Where the device's label, the last heartbeat result and the onboarding state live. The report service writes here and the console reads it.";
+    };
     claimResponder.enable = mkEnableOption "periodic device claim responses";
     participation.enable = mkEnableOption "idle-only Community job participation";
+    console = {
+      enable = mkEnableOption "the box's own status screen with a claim QR code (murakumo node console), drawn on a terminal";
+      tty = mkOption {
+        type = types.str;
+        default = "tty1";
+        description = "Terminal to draw on: tty1 for a monitor, or the serial console (ttyAMA0 on an aarch64 VM, ttyS0 on x86).";
+      };
+      rows = mkOption {
+        type = types.nullOr (types.ints.between 10 200);
+        default = null;
+        description = "Height of the terminal, when it cannot report it (a serial console cannot). The status and the claim QR need about 40 rows to share a screen and the QR alone about 29; below that they alternate, and below 29 the link is shown as text.";
+      };
+      publicUrl = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Origin a phone opens for the claim link, when it differs from siteUrl (for example a VM that talks to loopback). Null means siteUrl.";
+      };
+    };
     report = {
       enable = mkEnableOption "periodic signed heartbeats to the console, so a claimed device shows when it was last seen";
       intervalSeconds = mkOption {
@@ -126,7 +149,13 @@ in
     systemd.services.murakumo-claim = mkIf cfg.claimResponder.enable (common // {
       description = "Answer a pending Murakumo buyer device claim";
       script = ''exec ${cli} node claim-once --site ${lib.escapeShellArg cfg.siteUrl}'';
-      serviceConfig = common.serviceConfig // { Type = "oneshot"; };
+      # A proved claim retires the onboarding secrets and key; under ProtectSystem=strict that write is
+      # silently refused unless the directory is listed (the "-" makes a missing directory not an error).
+      environment = common.environment // { MURAKUMO_ONBOARD_DIR = cfg.onboard.stateDir; };
+      serviceConfig = common.serviceConfig // {
+        Type = "oneshot";
+        ReadWritePaths = [ "-${cfg.onboard.stateDir}" ];
+      };
     });
     systemd.timers.murakumo-claim = mkIf cfg.claimResponder.enable {
       description = "Poll for a pending Murakumo device claim";
@@ -138,11 +167,41 @@ in
       };
     };
 
+    # Takes over its terminal from getty, the way a kiosk does: the screen is the box's own and has no login.
+    systemd.services.murakumo-console = mkIf cfg.console.enable (common // {
+      description = "Show this box's Murakumo status and claim code on its screen";
+      wantedBy = [ "multi-user.target" ];
+      # Not after network-online: the screen is most useful exactly when the network is not up yet.
+      after = [ "systemd-user-sessions.service" "getty@${cfg.console.tty}.service" "serial-getty@${cfg.console.tty}.service" ];
+      wants = [ ];
+      conflicts = [ "getty@${cfg.console.tty}.service" "serial-getty@${cfg.console.tty}.service" ];
+      environment = common.environment // {
+        MURAKUMO_STATE_DIR = cfg.stateDir;
+        TERM = if builtins.match "tty[0-9]+" cfg.console.tty != null then "linux" else "vt100";
+      };
+      script = ''exec ${cli} node console --state-dir ${lib.escapeShellArg cfg.stateDir} --site ${lib.escapeShellArg cfg.siteUrl}${lib.optionalString (cfg.console.publicUrl != null) " --public-url ${lib.escapeShellArg cfg.console.publicUrl}"}${lib.optionalString (cfg.console.rows != null) " --rows ${toString cfg.console.rows}"}'';
+      serviceConfig = common.serviceConfig // {
+        Type = "simple";
+        Restart = "always";
+        RestartSec = "5s";
+        StandardInput = "tty";
+        StandardOutput = "tty";
+        TTYPath = "/dev/${cfg.console.tty}";
+        TTYReset = true;
+        TTYVHangup = true;
+        TTYVTDisallocate = builtins.match "tty[0-9]+" cfg.console.tty != null;
+      };
+    });
+
     systemd.services.murakumo-report = mkIf cfg.report.enable (common // {
       description = "Send a signed Murakumo device heartbeat";
       script = ''exec ${cli} node report --site ${lib.escapeShellArg cfg.siteUrl} --once'';
+      # The last result is written for the console to read; ProtectSystem=strict would make that write
+      # fail silently (it is best effort) and the console would say `none yet` forever.
+      environment = common.environment // { MURAKUMO_STATE_DIR = cfg.stateDir; };
       serviceConfig = common.serviceConfig // {
         Type = "oneshot";
+        ReadWritePaths = [ "-${cfg.stateDir}" ];
         # exit 4: not claimed yet. Expected until the claim goes through, not a failure to alarm on.
         SuccessExitStatus = "4";
       };

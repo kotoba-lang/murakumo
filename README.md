@@ -185,6 +185,36 @@ Exit codes: `0` accepted (or an observation already stored), `1` the console did
 console's. On NixOS: `services.murakumoNode.report.enable = true;` runs it every 60 s; exit 4 is not a failure.
 Until a device is claimed the console has no row for it and refuses the heartbeat, by design.
 
+### The box's own screen (`node console`)
+
+```sh
+murakumo node console              # draws on this terminal until Ctrl-C
+murakumo node console --once       # one plain frame, for a log or a pipe
+```
+
+For a box with a screen (a monitor, a serial line, a VM's console) and a person standing in front of it with a
+phone. It says, in order: which device this is, whether it is claimed, its network address, whether the
+console is reachable, the last heartbeat, and whether it can take Wi-Fi by sound. Until the box is claimed it
+draws a **QR code** of the claim link (`/#claim?q=…`) that the phone camera opens; once claimed it says so and
+points at `#devices`.
+
+- It is passive: it reads the label (`<state-dir>/label`, written by the factory, mode 0600) and the last result
+  `murakumo node report` left in `<state-dir>/report-status.json` (an outcome word and a time). It never sends a
+  heartbeat of its own.
+- The QR is built from the label **without its onboarding secret** (`ls`), which proves the person has the
+  physical label and must not appear on a screen. Decoded by an independent reader, the QR carries `did`, `model`,
+  `endpoint` and `token`, and no `ls`.
+- A QR is about 25 rows. If the terminal is too short for the status and the QR together, the two alternate
+  every few seconds; if even the QR alone does not fit, the link is shown as text and the screen says why. The
+  QR draws light modules as blocks, for the default light-on-black console. A light terminal theme shows it
+  inverted, which some scanners will not read.
+- `--public-url ORIGIN` (NixOS `console.publicUrl`) is the address the claim link and the hint use, when a phone
+  cannot reach the one the box talks to: a box in a VM talks to loopback, and a phone cannot.
+- `--rows N` (NixOS `console.rows`) declares the terminal's height: a serial console cannot report one, so the
+  default is 24, which cannot hold a QR (about 29 rows) and the link is shown as text. Give it the real height.
+- NixOS: `services.murakumoNode.console.enable = true;` (`console.tty` is `tty1` by default; use `ttyAMA0` or
+  `ttyS0` for a serial console or a VM). The service takes the terminal over from getty, like a kiosk.
+
 ## Fleet operator tooling
 
 **Control plane for the murakumo inference-node fleet (Mac-mini fleet today), including the optional kotoba mesh workload layer.**
