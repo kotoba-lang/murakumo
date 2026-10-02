@@ -15,7 +15,11 @@
 ;; a human (kekkai.governor's :node/admit high-stakes rule). This file is the
 ;; resulting ground-fact snapshot murakumo consults; it does not run the
 ;; admission flow itself. See kotoba-lang/kekkai/README.md.
-{:nodes
+;; Opt in to mesh auto-admit (ADR-261001): a joiner that reaches the 802.11s mesh
+;; and proves its device key is written here as "authorized" without a human.
+;; Omit :admit and mesh joins stay "pending".
+{:admit :auto-on-mesh
+ :nodes
  {"naphtali" {:id "naphtali" :status "authorized" :did "did:key:zNaphtali"}
   "simeon"   {:id "simeon"   :status "authorized" :did "did:key:zSimeon"}
   ;; a newly added Mac mini stays "pending" (excluded from fleet ops) until an
