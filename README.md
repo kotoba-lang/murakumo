@@ -166,6 +166,25 @@ services.murakumoNode = {
 The unit only runs while `/var/lib/murakumo/onboard/label-secret` exists (the factory puts it there, mode
 0600, and prints it in the label QR) and the `closed` marker does not.
 
+### Show up in the console (`node report`)
+
+A claimed device reports for itself, signed with the key it already holds:
+
+```sh
+murakumo node report --once            # one heartbeat (what the NixOS timer runs)
+murakumo node report --interval 60     # a loop for a box without a timer; quiet unless the answer changes
+```
+
+It posts `POST /api/devices/:did/heartbeat` on murakumo.cloud. The body is `{"observed-at-ms":…,"metrics":{…}}`
+and the signature (`x-aiueos-signature`, base64url Ed25519) covers `aiueos-device-heartbeat-v1`, the DID, the
+origin the request reaches and the SHA-256 of the body exactly as sent. Metrics are the machine's own health
+only (`load1`, `mem-free-ratio`, `uptime-s`, `platform`, `arch`, `node`): no host name, address, SSID or account data.
+
+Exit codes: `0` accepted (or an observation already stored), `1` the console did not accept the signature,
+`3` unreachable, `4` not claimed yet (expected before the claim goes through), `5` the clock is ahead of the
+console's. On NixOS: `services.murakumoNode.report.enable = true;` runs it every 60 s; exit 4 is not a failure.
+Until a device is claimed the console has no row for it and refuses the heartbeat, by design.
+
 ## Fleet operator tooling
 
 **Control plane for the murakumo inference-node fleet (Mac-mini fleet today), including the optional kotoba mesh workload layer.**

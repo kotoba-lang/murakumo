@@ -43,6 +43,14 @@ in
     authnUrl = mkOption { type = types.str; default = "https://auth.murakumo.cloud"; };
     claimResponder.enable = mkEnableOption "periodic device claim responses";
     participation.enable = mkEnableOption "idle-only Community job participation";
+    report = {
+      enable = mkEnableOption "periodic signed heartbeats to the console, so a claimed device shows when it was last seen";
+      intervalSeconds = mkOption {
+        type = types.ints.between 10 600;
+        default = 60;
+        description = "How often to report. The console counts a device as live for a few multiples of 60 s, so keep this at or under that.";
+      };
+    };
     onboard = {
       enable = mkEnableOption ''
         Wi-Fi onboarding by sound (ADR-0243) for a box that has a speaker and a microphone
@@ -127,6 +135,25 @@ in
         OnBootSec = "20s";
         OnUnitActiveSec = "20s";
         Unit = "murakumo-claim.service";
+      };
+    };
+
+    systemd.services.murakumo-report = mkIf cfg.report.enable (common // {
+      description = "Send a signed Murakumo device heartbeat";
+      script = ''exec ${cli} node report --site ${lib.escapeShellArg cfg.siteUrl} --once'';
+      serviceConfig = common.serviceConfig // {
+        Type = "oneshot";
+        # exit 4: not claimed yet. Expected until the claim goes through, not a failure to alarm on.
+        SuccessExitStatus = "4";
+      };
+    });
+    systemd.timers.murakumo-report = mkIf cfg.report.enable {
+      description = "Report a Murakumo device heartbeat";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnBootSec = "30s";
+        OnUnitActiveSec = "${toString cfg.report.intervalSeconds}s";
+        Unit = "murakumo-report.service";
       };
     };
 
