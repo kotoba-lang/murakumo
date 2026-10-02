@@ -1,0 +1,111 @@
+(ns murakumo.web-verify-test
+  (:require [kotoba.test :refer [deftest is]]
+            [murakumo.web :as web]
+            [murakumo.web.verify :as verify]
+            [murakumo.web.worker :as w]))
+
+(defn- page [body & [status]]
+  {:status (or status 200) :headers {"content-type" "text/html"} :body (w/utf8-bytes body)})
+
+(defn- node
+  "A real worker over a fake transport that serves `resp` (or fails)."
+  [did zone resp]
+  (let [store (atom {})
+        env {:resolve! (fn [_] ["93.184.216.34"])
+             :http-get! (fn [_] (or resp {:error :connect-failed}))
+             :put! (fn [cid bs] (swap! store assoc cid bs) true)
+             :get-bytes! (fn [cid] (get @store cid))
+             :sign! (fn [_] (str "sig-" did)) :now-ms (let [t (atom 0)] (fn [] (swap! t inc)))
+             :node-did did}]
+    {:node-did did :zone zone
+     :fetch! #(w/fetch! env %) :extract! #(w/extract! env %)}))
+
+(defn- coord [nodes]
+  (let [store (atom {})]
+    {:store store
+     :env {:nodes nodes :put! (fn [cid bs] (swap! store assoc cid bs) true)
+           :sign! (fn [_] "coord-sig") :now-ms (let [t (atom 0)] (fn [] (swap! t inc)))
+           :node-did "did:key:zcoord"}}))
+
+(def job {:job-id "v1" :url "https://example.com/" :verify-replicas 2})
+(def same (page "<html><body><p>same</p></body></html>"))
+
+(deftest same-content-from-two-zones-agrees
+  (let [{:keys [env store]} (coord [(node "did:a" "jp" same) (node "did:b" "us" same)])
+        ok (:ok (verify/verify-fetch! env job))]
+    (is (= :agree (get-in ok [:verdict :status])))
+    (is (= ["jp" "us"] (get-in ok [:receipt :evidence :zones])))
+    (is (contains? @store (:record-cid ok)))
+    (is (:ok (web/validate-receipt (:receipt ok))))
+    (is (= 2 (count (get-in ok [:receipt :input-cids]))))))
+
+(deftest forced-disagreement-is-returned-as-data
+  (let [{:keys [env]} (coord [(node "did:a" "jp" (page "<p>real page</p>"))
+                              (node "did:b" "us" (page "<p>injected ad-free lie</p>"))])
+        v (:verdict (:ok (verify/verify-fetch! env job)))]
+    (is (= :disagree (:status v)))
+    (is (= :content (:reason v)))
+    (is (= #{"did:a" "did:b"} (set (keys (:by-node v)))))
+    (is (not= (get (:by-node v) "did:a") (get (:by-node v) "did:b")))))
+
+(deftest raw-difference-that-vanishes-after-extraction-is-not-a-disagreement
+  (let [{:keys [env]} (coord [(node "did:a" "jp" (page "<p>hello</p><script>ad('1')</script><!--t1-->"))
+                              (node "did:b" "us" (page "<p>hello</p><script>ad('2')</script><!--t2-->"))])
+        v (:verdict (:ok (verify/verify-fetch! env job)))]
+    (is (= :agree-after-extraction (:status v)))
+    (is (= 2 (count (:raw-by-node v))))))
+
+(deftest a-status-mismatch-is-a-disagreement-even-with-equal-bodies
+  (let [{:keys [env]} (coord [(node "did:a" "jp" (page "<p>x</p>" 200))
+                              (node "did:b" "us" (page "<p>x</p>" 403))])
+        v (:verdict (:ok (verify/verify-fetch! env job)))]
+    (is (= :disagree (:status v)))
+    (is (= :status (:reason v)))
+    (is (= {"did:a" 200 "did:b" 403} (into {} (:by-node v))))))
+
+(deftest a-failing-replica-gives-insufficient-replicas-not-agreement
+  (let [{:keys [env]} (coord [(node "did:a" "jp" same) (node "did:b" "us" nil)])
+        v (:verdict (:ok (verify/verify-fetch! env job)))]
+    (is (= :insufficient-replicas (:status v)))
+    (is (= [{:node-did "did:b" :zone "us" :error :fetch/transport}] (:errors v)))))
+
+(deftest replicas-must-come-from-distinct-zones
+  (let [{:keys [env]} (coord [(node "did:a" "jp" same) (node "did:b" "jp" same)])]
+    (is (= {:refused :verify/insufficient-zones :detail {:requested 2 :available 1}}
+           (verify/verify-fetch! env job)))))
+
+(deftest selection-takes-one-node-per-zone-in-order
+  (let [ns [{:zone "jp" :node-did "1"} {:zone "jp" :node-did "2"} {:zone "us" :node-did "3"} {:zone "eu" :node-did "4"}]]
+    (is (= ["1" "3"] (map :node-did (verify/select-nodes ns 2))))
+    (is (= ["1" "3" "4"] (map :node-did (verify/select-nodes ns 3))))
+    (is (nil? (verify/select-nodes ns 4)))))
+
+(deftest invalid-jobs-are-refused
+  (let [{:keys [env]} (coord [(node "did:a" "jp" same) (node "did:b" "us" same)])]
+    (is (= :job/invalid (:refused (verify/verify-fetch! env (assoc job :url "http://127.0.0.1/")))))
+    (is (= :job/invalid (:refused (verify/verify-fetch! env (assoc job :verify-replicas 9)))))
+    (is (= :verify/needs-two-replicas (:refused (verify/verify-fetch! env (assoc job :verify-replicas 1)))))))
+
+(deftest default-is-two-replicas
+  (let [{:keys [env]} (coord [(node "did:a" "jp" same) (node "did:b" "us" same)])]
+    (is (= :agree (get-in (verify/verify-fetch! env (dissoc job :verify-replicas)) [:ok :verdict :status])))))
+
+(deftest replicas-whose-receipts-do-not-verify-are-errors-not-evidence
+  (let [ok-node (node "did:a" "jp" same)
+        forged (assoc (node "did:b" "us" same) :receipt-valid? (fn [_ _] false))
+        honest (assoc ok-node :receipt-valid? (fn [_ sig] (= sig "sig-did:a")))
+        {:keys [env]} (coord [honest forged])
+        v (:verdict (:ok (verify/verify-fetch! env job)))]
+    (is (= :insufficient-replicas (:status v)))
+    (is (= [{:node-did "did:b" :zone "us" :error :receipt/bad-signature}] (:errors v)))))
+
+(deftest a-receipt-naming-a-different-node-does-not-count
+  (let [impostor (assoc (node "did:x" "us" same) :node-did "did:claimed" :receipt-valid? (fn [_ _] true))
+        {:keys [env]} (coord [(assoc (node "did:a" "jp" same) :receipt-valid? (fn [_ _] true)) impostor])
+        v (:verdict (:ok (verify/verify-fetch! env job)))]
+    (is (= :insufficient-replicas (:status v)))))
+
+(deftest nodes-without-a-verifier-are-marked-unauthenticated
+  (let [{:keys [env]} (coord [(node "did:a" "jp" same) (node "did:b" "us" same)])
+        ok (:ok (verify/verify-fetch! env job))]
+    (is (every? :unauthenticated (get-in ok [:record :replicas])))))

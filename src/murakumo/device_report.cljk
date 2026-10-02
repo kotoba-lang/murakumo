@@ -81,7 +81,8 @@
   "Send one heartbeat. `fetch-fn` and `now-fn` are injected so the wire can be tested without
   a network. Returns a Promise of `{:outcome ... :exit-code n}`."
   [fetch-fn now-fn site id metrics]
-  (let [did (.-did id)
+  (let [site (endpoint-of site)
+        did (.-did id)
         text (body-text (now-fn) metrics)
         input (signing-input did (endpoint-of site) (body-sha256 text))]
     (if-not (string? input)

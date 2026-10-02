@@ -78,7 +78,7 @@
                fake-fetch (fn [url opts]
                             (reset! seen {:url url :opts opts})
                             (js/Promise.resolve #js {:status 202 :json (fn [] (js/Promise.resolve #js {:accepted true}))}))]
-           (-> (report/once! fake-fetch (fn [] 1790000000000) "https://murakumo.cloud"
+           (-> (report/once! fake-fetch (fn [] 1790000000000) "https://murakumo.cloud/portal/?view=devices#devices"
                              #js {:did did :privateKey pem} {"load1" 0.5})
                (.then (fn [{:keys [outcome exit-code]}]
                         (is (= :accepted outcome))
