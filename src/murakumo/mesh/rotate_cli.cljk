@@ -24,6 +24,7 @@
   (:require ["node:fs" :as fs]
             ["node:os" :as os]
             ["node:crypto" :as crypto]
+            ["node:path" :as node-path]
             [kotoba.lang.edn :as edn]
             [kotoba.lang.text :as str]
             [murakumo.mesh.install :as install]
@@ -42,9 +43,9 @@
 (defn save-state!
   "0600 from creation, then renamed into place: the file holds the new secret."
   [path state]
-  (let [tmp (str path ".tmp")]
-    (.mkdirSync fs (.slice path 0 (.lastIndexOf path "/")) #js {:recursive true})
-    (.writeFileSync fs tmp (str (pr-str state) "\n") #js {:mode 0600})
+  (let [tmp (str path ".tmp-" (.randomUUID crypto))]
+    (.mkdirSync fs (.dirname node-path path) #js {:recursive true})
+    (.writeFileSync fs tmp (str (pr-str state) "\n") #js {:mode 0600 :flag "wx"})
     (.renameSync fs tmp path)))
 
 (defn clear-state! [path] (when (.existsSync fs path) (.unlinkSync fs path)))
@@ -67,7 +68,8 @@
       {:ok? false :msg (str "local ledger: " (name (:error l)))}
       (let [hm (rotate/host-map (read-fleet fleet) host-pairs)
             t (rotate/targets (:ledger l) {:host-map hm :seed-host seed-host :seed-name seed-name})
-            existing (when-not restart? (load-state state-path))
+            saved (when-not restart? (load-state state-path))
+            existing (when (and saved (not (rotate/restart-required? saved (:ledger l) (:nodes t)))) saved)
             st (or existing (rotate/new-state (rotate/generate-passphrase (.toString (.randomBytes crypto 16) "hex"))
                                               (.now js/Date)))
             todo (rotate/remaining st (:nodes t))
@@ -83,7 +85,10 @@
             (println header)
             (let [{st :state failures :failures}
                   (reduce (fn [{:keys [state failures] :as acc} n]
-                            (let [r (run-node! n (rotate/rotate-script {:role (:role n)}) (rotate/stdin-for (:passphrase state)))]
+                            (let [state (rotate/expose state n)
+                                  _ (save-state! state-path state)
+                                  acc (assoc acc :state state)
+                                  r (run-node! n (rotate/rotate-script {:role (:role n)}) (rotate/stdin-for (:passphrase state)))]
                               (if (:ok? r)
                                 (let [token (when (= :seed (:role n)) (install/join-token-from-output (:out r)))
                                       s' (rotate/mark-done state (:name n) token)]

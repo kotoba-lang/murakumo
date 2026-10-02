@@ -141,7 +141,7 @@ server re-reads per request, but an external editor is not serialised with it).
 
 ## Passphrase rotation
 
-`rotate-cli --seed-host H` gives every `authorized`, non-revoked node of the
+`rotate-cli --seed-host H` gives every `authorized`, non-revoked mesh member of the
 operator's ledger (plus the seed) a new passphrase. Revoked nodes are skipped:
 that is the cutoff. Pending nodes are skipped too, so an unadmitted machine is
 never handed the new secret; if admitted later it joins with the new token.
@@ -152,8 +152,11 @@ never handed the new secret; if admitted later it joins with the new token.
 - **Order and failure:** non-seed nodes first, seed last; a failed node does not
   stop the rest. Progress is saved after each node in a 0600 state file holding
   the new passphrase, so re-running resumes with the *same* passphrase instead of
-  rotating a node to a second secret. A node you give up on is revoked, which
-  drops it from the targets and lets the rotation finish.
+  rotating a node to a second secret. Exposure is recorded before SSH, including
+  commands that fail after writing the secret. If an exposed recipient is revoked,
+  changes key/host, or disappears, the resume creates a fresh secret and rotates
+  the remaining members again. Legacy progress without recipient evidence also
+  restarts. The seed appears once, last, with its seed-specific token update.
 - **Per node:** config written to `.new` and renamed, `wpa_supplicant` unit
   restarted and checked active; the seed also rewrites its join token. Re-running
   is idempotent. The new token is printed once the whole set is done.
@@ -182,6 +185,29 @@ of them -- and the node-side reader against valid input, too short, too long,
 shell metacharacters, command substitution, quote, empty line and no input.
 
 Not verified: a real mesh re-forming on a new SAE passphrase (no radio).
+
+## PR review corrections (2026-10-02)
+
+- Revocations close over names and DIDs on both ledgers, retaining each key's
+  tombstone. Revoking by name also revokes local aliases. Admission checks all
+  matching entries, so an authorized alias cannot hide a revoked key.
+- Human authorization is preserved over stale pending state and pushed back to
+  the seed. A preauthorized mesh join allocates a stable address on first join;
+  retries and aliases reuse its recorded mesh address. Non-mesh addresses are
+  not reused. Pending enrollment and failed address application exit nonzero so
+  systemd retries after human admission or a transient interface failure.
+- Rotation requires mesh membership (`:mesh? true`, a valid allocated mesh
+  address, or `:admitted-by :auto-on-mesh`); tailnet-only authorized nodes do not
+  receive the secret or block completion.
+- Joiner units use the seed address and port carried by the validated join token.
+  Relative rotation-state paths work; secret temporary files are exclusive 0600
+  files with fresh names.
+
+Regression coverage is in `mesh_review_regression_test.cljk`, including the
+actual rotation coordinator over injected SSH, partial failure/resume, fresh
+secret after a recipient revocation, actual address scripts, and private files.
+This remains local/loopback evidence; no physical mesh or production deployment
+is established by merging this PR.
 
 ## Follow-ups
 

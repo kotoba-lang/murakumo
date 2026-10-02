@@ -71,6 +71,10 @@
 (defn- parse-int [s]
   #?(:clj (Long/parseLong s) :cljs (js/parseInt s 10)))
 
+(defn- valid-address? [s]
+  (and (matches? (patterns :address) s)
+       (every? #(<= 0 (parse-int %) 255) (str/split s #"\."))))
+
 (defn parse-token
   "Token -> map, or nil. nil for anything malformed: the caller is about to put
   these fields in a root shell script."
@@ -80,8 +84,9 @@
       (when (and (= "murakumo-mesh" tag) (= "v1" ver) (empty? more)
                  (matches? (patterns :mesh-id) mesh-id)
                  (mesh/valid-passphrase? passphrase)
-                 (matches? (patterns :address) addr)
+                 (valid-address? addr)
                  (matches? #"\d{2,5}" port)
+                 (<= 1 (parse-int port) 65535)
                  (matches? (patterns :frequency) freq))
         {:mesh-id mesh-id :passphrase passphrase :seed-address addr
            :port (parse-int port) :frequency (parse-int freq)}))))
@@ -147,7 +152,7 @@
                         {:requires wpa-unit :after wpa-unit}
                         (str "Type=oneshot\nWorkingDirectory=" src-dir "\n"
                              "ExecStart=/usr/bin/env kbb -cp " classpath " -m murakumo.mesh.client"
-                             " --seed http://" mesh/seed-address ":" mesh/enroll-port
+                             " --seed http://" (:seed-address opts) ":" (:port opts)
                              " --node-name " (:node-name opts)
                              " --state " state-dir " --iface " iface "\n"
                              "Restart=on-failure\nRestartSec=15")
@@ -196,7 +201,7 @@
                                           (throw (ex-info "bad join token" {:reason :bad-token}))))
         opts (merge {:mesh-id mesh/default-mesh-id :frequency mesh/default-frequency}
                     (select-keys opts [:mesh-id :frequency])
-                    (when parsed (select-keys parsed [:mesh-id :frequency]))
+                    (when parsed (select-keys parsed [:mesh-id :frequency :seed-address :port]))
                     {:phy phy :iface iface :country country :node-name node-name})
         _ (doseq [k [:phy :iface :country :mesh-id :frequency :node-name]] (check! k (get opts k)))
         fs (files role opts)

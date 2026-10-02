@@ -9,8 +9,8 @@
   (`ed25519.core/did-key-from-seed`), so the DID the seed records is the key it
   verifies against.
 
-  Exit codes are for systemd (`Restart=on-failure`): 0 admitted or pending (a
-  pending node waits for a human and retrying would not change that), 1
+  Exit codes are for systemd (`Restart=on-failure`): 0 admitted and address
+  applied, 1 pending (retry after human admission) or
   anything worth retrying -- mesh not peered yet, seed not up, claim refused."
   (:require ["node:fs" :as fs]
             ["node:crypto" :as crypto]
@@ -66,6 +66,19 @@
   (durable/write! (str state-dir "/mesh-address") (kbytes/utf8-bytes (str address "\n")))
   (.-status (.spawnSync cp "/bin/sh" #js [script])))
 
+(defn finish-enrol!
+  "Return the systemd exit status, including application and pending failures."
+  [r node-name state addr-script]
+  (case (:status r)
+    200 (let [address (get-in r [:body :address])]
+          (if-not (mesh/allocated-address? address)
+            (do (js/console.error "enrol failed: missing allocated address") 1)
+            (if (= 0 (apply-address! state address addr-script))
+              (do (println "enrolled" node-name "address" address) 0)
+              (do (js/console.error "enrol failed: allocated address could not be applied") 1))))
+    202 (do (println "pending: a human must admit" node-name "in the ledger; retrying") 1)
+    (do (js/console.error "enrol failed" (:status r) (pr-str (:body r))) 1)))
+
 (defn- parse-args [args]
   (loop [m {:state "/var/lib/murakumo" :addr-script "/usr/local/lib/murakumo/mesh-addr.sh"} [k v & more :as as] args]
     (if (empty? as)
@@ -85,11 +98,4 @@
     (-> (enrol! seed node-name key-seed)
         (.catch (fn [e] {:status 0 :body {:reason (str e)}}))
         (.then (fn [r]
-                 (case (:status r)
-                   200 (do (apply-address! state (get-in r [:body :address]) addr-script)
-                           (println "enrolled" node-name "address" (get-in r [:body :address]))
-                           (js/process.exit 0))
-                   202 (do (println "pending: a human must admit" node-name "in the ledger")
-                           (js/process.exit 0))
-                   (do (js/console.error "enrol failed" (:status r) (pr-str (:body r)))
-                       (js/process.exit 1))))))))
+                 (js/process.exit (finish-enrol! r node-name state addr-script)))))))

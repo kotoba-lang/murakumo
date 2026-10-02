@@ -8,7 +8,7 @@
 
   ## Who is rotated
 
-  Only `authorized` nodes in the operator's ledger, plus the seed (which is not a
+  Only `authorized` mesh members in the operator's ledger, plus the seed (which is not a
   ledger entry). Revoked nodes are skipped on purpose -- that is the cutoff.
   Pending nodes are skipped too: they were never admitted, and rotating them would
   hand an unadmitted machine the new secret. A pending node admitted later joins
@@ -53,9 +53,15 @@
   [ledger {:keys [host-map seed-host seed-name] :or {seed-name default-seed-name}}]
   (let [entries (sort-by key (:nodes ledger))
         by (fn [status] (vec (keep (fn [[n e]] (when (= status (:status e)) n)) entries)))
-        members (by "authorized")
-        resolved (keep (fn [n] (when-let [h (get host-map n)] {:name n :host h :role :node})) members)]
-    {:nodes (vec (concat resolved [{:name seed-name :host seed-host :role :seed}]))
+        revoked-dids (set (keep (fn [[_ e]] (when (= "revoked" (:status e)) (:did e))) entries))
+        members (vec (keep (fn [[n e]] (when (and (not= n seed-name)
+                                                (= "authorized" (:status e))
+                                                (not (revoked-dids (:did e)))
+                                                (mesh/mesh-member? e)) n)) entries))
+        resolved (keep (fn [n] (when-let [h (get host-map n)]
+                                 {:name n :did (get-in ledger [:nodes n :did]) :host h :role :node})) members)]
+    {:nodes (vec (concat resolved [{:name seed-name :did (get-in ledger [:nodes seed-name :did])
+                                   :host seed-host :role :seed}]))
      :unresolved (vec (remove #(contains? host-map %) members))
      :skipped {:revoked (by "revoked") :pending (by "pending")}}))
 
@@ -76,6 +82,22 @@
 ;; ── per-node state ─────────────────────────────────────────────────────────
 
 (defn new-state [passphrase now-ms] {:passphrase passphrase :started-ms now-ms :done []})
+
+(defn expose [state node]
+  ;; Record before invoking SSH: a failed command may already have written it.
+  (assoc-in state [:exposed (:name node)] (select-keys node [:name :did :host :role])))
+
+(defn restart-required?
+  "Never resume a secret exposed to a revoked or changed recipient. Legacy
+  progress has no identity evidence and starts afresh conservatively."
+  [state ledger target-nodes]
+  (let [current (into {} (map (juxt :name #(select-keys % [:name :did :host :role])) target-nodes))
+        revoked-dids (set (keep (fn [[_ e]] (when (= "revoked" (:status e)) (:did e))) (:nodes ledger)))]
+    (boolean
+     (or (and (seq (:done state)) (not (seq (:exposed state))))
+         (some (fn [[n e]] (or (not= e (get current n))
+                               (= "revoked" (get-in ledger [:nodes n :status]))
+                               (and (:did e) (revoked-dids (:did e))))) (:exposed state))))))
 
 (defn mark-done [state node-name token]
   (cond-> (update state :done #(vec (distinct (conj % node-name))))

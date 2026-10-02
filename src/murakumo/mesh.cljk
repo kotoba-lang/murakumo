@@ -134,8 +134,17 @@
     (some (fn [n] (let [a (str mesh-subnet-prefix n)] (when-not (taken a) a)))
           (range 2 255))))
 
-(defn- node-by-did [ledger did]
-  (first (filter #(= did (:did %)) (vals (:nodes ledger)))))
+(defn allocated-address? [address]
+  (boolean
+   (when (string? address)
+     (when-let [[_ host] (re-matches #"10\.77\.0\.(\d{1,3})" address)]
+       (let [n #?(:clj (Long/parseLong host) :cljs (js/parseInt host 10))]
+         (and (<= 1 n 254) (= address (str mesh-subnet-prefix n))))))))
+
+(defn mesh-member? [entry]
+  (or (true? (:mesh? entry))
+      (= :auto-on-mesh (:admitted-by entry))
+      (allocated-address? (:address entry))))
 
 (defn admit
   "Decide a mesh join. Returns {:decision :grant|:pending|:deny :reason kw
@@ -147,14 +156,15 @@
   Order matters: a revoked DID is refused before anything else, so a revoked
   node cannot come back by presenting a valid proof."
   [ledger {:keys [did node-name now-ms proof-valid?]}]
-  (let [existing (node-by-did ledger did)
+  (let [matching (filter #(= did (:did %)) (vals (:nodes ledger)))
+        existing (first (filter #(= "authorized" (:status %)) matching))
         by-name (get-in ledger [:nodes node-name])
         deny (fn [reason] {:decision :deny :reason reason :ledger ledger})]
     (cond
       (or (not (string? did)) (not (string? node-name)) (empty? node-name))
       (deny :malformed-request)
 
-      (= "revoked" (:status existing))
+      (some #(= "revoked" (:status %)) matching)
       (deny :did-revoked)
 
       (not proof-valid?)
@@ -164,7 +174,15 @@
       (deny :node-name-taken-by-another-key)
 
       (and existing (= "authorized" (:status existing)))
-      {:decision :grant :reason :already-authorized :ledger ledger}
+      (if-let [addr (or (when (allocated-address? (:address by-name)) (:address by-name))
+                       (some #(when (and (= "authorized" (:status %))
+                                         (allocated-address? (:address %))) (:address %)) matching)
+                       (next-address ledger))]
+        {:decision :grant :reason :already-authorized
+         :ledger (assoc-in ledger [:nodes node-name]
+                           (merge existing by-name {:id node-name :did did :status "authorized"
+                                                    :mesh? true :address addr}))}
+        (deny :mesh-subnet-full))
 
       (not (auto-admit-enabled? ledger))
       {:decision :pending :reason :human-admission-required
@@ -177,7 +195,7 @@
         {:decision :grant :reason :auto-on-mesh
          :ledger (assoc-in ledger [:nodes node-name]
                            {:id node-name :status "authorized" :did did
-                            :address addr :admitted-ms now-ms
+                            :mesh? true :address addr :admitted-ms now-ms
                             :admitted-by :auto-on-mesh})}
         (deny :mesh-subnet-full)))))
 
