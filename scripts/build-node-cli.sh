@@ -12,7 +12,7 @@ cp src/murakumo/bench.cljk .node-build/src/murakumo/bench.cljs
 cp src/murakumo/fleet_ps.cljk .node-build/src/murakumo/fleet_ps.cljs
 cp src/murakumo/health.cljk .node-build/src/murakumo/health.cljs
 cp src/murakumo/device_claim.cljk .node-build/src/murakumo/device_claim.cljs
-for name in onboard wifi_share wifi_share_page; do
+for name in onboard onboard_audio onboard_device onboard_state onboard_window nm_keyfile wifi_share wifi_share_page; do
   cp "src/murakumo/$name.cljk" ".node-build/src/murakumo/$name.cljs"
 done
 cp nbb.edn .node-build/nbb.edn
