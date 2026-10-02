@@ -1,0 +1,98 @@
+(ns murakumo.web-search-test
+  (:require [kotoba.test :refer [deftest is]]
+            [murakumo.web :as web]
+            [murakumo.web.search :as search]))
+
+(defn- r [url & [title snippet]] {:url url :title (or title url) :snippet (or snippet "")})
+
+(defn- backend [name results] {:name name :search! (fn [_] {:results results})})
+
+(defn- env [backends]
+  (let [store (atom {})]
+    {:store store
+     :env {:backends backends
+           :put! (fn [cid bs] (swap! store assoc cid bs) true)
+           :sign! (fn [_] "sig") :now-ms (let [t (atom 0)] (fn [] (swap! t inc)))
+           :node-did "did:key:znode"}}))
+
+(defn- urls [ok] (mapv :url (get-in ok [:results :results])))
+
+(deftest fuses-dedupes-and-ranks-by-agreement
+  (let [{:keys [env]} (env [(backend :a [(r "https://x.example/1") (r "https://y.example/2") (r "https://z.example/3")])
+                            (backend :b [(r "https://y.example/2") (r "https://x.example/1#frag") (r "https://w.example/4")])])
+        ok (:ok (search/search! env {:job-id "s" :query "kotoba" :k 10}))]
+    ;; x and y are in both lists; x (1st,2nd) and y (2nd,1st) tie -> first appearance (x) first
+    (is (= ["https://x.example/1" "https://y.example/2" "https://z.example/3" "https://w.example/4"] (urls ok)))
+    (is (= [:a :b] (get-in ok [:results :results 0 :sources])))
+    (is (= 1 (count (filter #{"https://x.example/1"} (urls ok)))))
+    (is (every? :untrusted (get-in ok [:results :results])))))
+
+(deftest k-limits-results
+  (let [{:keys [env]} (env [(backend :a (mapv #(r (str "https://s.example/" %)) (range 20)))])]
+    (is (= 3 (count (urls (:ok (search/search! env {:job-id "s" :query "q" :k 3}))))))))
+
+(deftest unsafe-result-urls-are-dropped
+  (let [{:keys [env]} (env [(backend :a [(r "http://127.0.0.1/admin") (r "file:///etc/passwd")
+                                         (r "http://169.254.169.254/") (r "javascript:alert(1)")
+                                         (r "https://ok.example/")])])
+        ok (:ok (search/search! env {:job-id "s" :query "q" :k 10}))]
+    (is (= ["https://ok.example/"] (urls ok)))))
+
+(deftest result-text-is-cleaned-and-capped
+  (let [{:keys [env]} (env [(backend :a [(r "https://ok.example/" "T\u0000i\ttle\n\nx" (apply str (repeat 5000 "a")))])])
+        item (first (get-in (:ok (search/search! env {:job-id "s" :query "q" :k 1})) [:results :results]))]
+    (is (= "Ti tle x" (:title item)))
+    (is (= 1000 (count (:snippet item))))))
+
+(deftest one-failing-backend-is-recorded-not_fatal
+  (let [{:keys [env]} (env [(backend :a [(r "https://ok.example/")])
+                            {:name :b :search! (fn [_] {:error :backend/timeout})}
+                            {:name :c :search! (fn [_] (throw (ex-info "boom" {})))}])
+        ok (:ok (search/search! env {:job-id "s" :query "q" :k 5}))]
+    (is (= ["https://ok.example/"] (urls ok)))
+    (is (= [{:name :a :count 1} {:name :b :count 0 :error :backend/timeout}
+            {:name :c :count 0 :error :backend/exception}]
+           (get-in ok [:results :backends])))))
+
+(deftest all-backends-failing-is-a-typed-refusal-not-empty-results
+  (let [{:keys [env]} (env [{:name :a :search! (fn [_] {:error :backend/timeout})}])
+        r (search/search! env {:job-id "s" :query "q" :k 5})]
+    (is (= :search/all-backends-failed (:refused r)))
+    (is (= [{:name :a :error :backend/timeout}] (:detail r)))))
+
+(deftest an-honest-empty-result-is-ok
+  (let [{:keys [env]} (env [(backend :a [])])]
+    (is (= [] (urls (:ok (search/search! env {:job-id "s" :query "q" :k 5})))))))
+
+(deftest invalid-jobs-are-refused
+  (let [{:keys [env]} (env [(backend :a [])])]
+    (is (= :job/invalid (:refused (search/search! env {:job-id "s" :query "" :k 5}))))
+    (is (= :job/invalid (:refused (search/search! env {:job-id "s" :query "q" :k 0}))))
+    (is (= [:job/query-too-long]
+           (:detail (search/search! env {:job-id "s" :query (apply str (repeat 513 "a")) :k 5}))))
+    (is (= :search/no-backends (:refused (search/search! (assoc env :backends []) {:job-id "s" :query "q" :k 5}))))))
+
+(deftest receipt-is-valid-and-does-not-carry-the-plain-query
+  (let [{:keys [env store]} (env [(backend :a [(r "https://ok.example/")])])
+        ok (:ok (search/search! env {:job-id "s" :query "private question" :k 5}))]
+    (is (:ok (web/validate-receipt (:receipt ok))))
+    (is (contains? @store (:results-cid ok)))
+    (is (not (re-find #"private question" (pr-str (:receipt ok)))))))
+
+(deftest same-input-gives-the-same-cid
+  (let [mk (fn [] (:env (env [(backend :a [(r "https://x.example/1") (r "https://y.example/2")])])))
+        a (:ok (search/search! (mk) {:job-id "s" :query "q" :k 5}))
+        b (:ok (search/search! (mk) {:job-id "s" :query "q" :k 5}))]
+    (is (= (:results-cid a) (:results-cid b)))))
+
+(deftest a-backend-listing-one-url-several-times-counts-once
+  (let [{:keys [env]} (env [(backend :a [(r "https://x.example/1") (r "https://x.example/1#dup") (r "https://x.example/1/") (r "https://y.example/2")])
+                            (backend :b [(r "https://z.example/3")])])
+        ok (:ok (search/search! env {:job-id "s" :query "q" :k 10}))
+        res (get-in ok [:results :results])
+        x (first (filter #(= "https://x.example/1" (:url %)) res))]
+    (is (= [:a] (:sources x)))                                   ; not [:a :a :a]
+    (is (= 1 (count (filter #{"https://x.example/1"} (map :url res)))))
+    (is (= (quot 1000000 61) (:score x)))                        ; one rank-1 contribution, not three
+    ;; the duplicate URLs gave :a no extra weight: its rank-1 hit ties another engine's rank-1 hit
+    (is (= (:score x) (:score (first (filter #(= "https://z.example/3" (:url %)) res)))))))

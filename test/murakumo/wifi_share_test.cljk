@@ -4,10 +4,21 @@
   against the packaged CLI."
   (:require [murakumo.wifi-share :as ws]
             [murakumo.onboard :as onboard]
+            [murakumo.wifi-share-page :as page]
+            [kotoba.lang.text :as str]
             [kotoba.test :refer [deftest is testing]]))
 
 (def ls "AAECAwQFBgcICQoLDA0ODw")
 (def did "did:key:z6MkTestDevice")
+
+(deftest a-network-name-cannot-close-the-pages-script
+  (let [ssid "</ScRiPt><script>globalThis.injected=true</script>&<>"
+        html (page/page ssid)
+        encoded (second (re-find #"textContent=(.*?);const" html))]
+    (is (not (str/includes? html ssid)))
+    (is (= 2 (count (re-seq #"</script>" html))))
+    (is (= ssid (js/JSON.parse encoded)))
+    (is (str/includes? (page/page "Home Wi-Fi") "Home Wi-Fi"))))
 
 (deftest the-payload-is-parsed
   (is (= {:label-secret ls :did did}

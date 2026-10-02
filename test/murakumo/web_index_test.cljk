@@ -1,0 +1,166 @@
+(ns murakumo.web-index-test
+  (:require [kotoba.test :refer [deftest is]]
+            [murakumo.web :as web]
+            [murakumo.web.index :as index]
+            [murakumo.web.worker :as w]))
+
+(def docs
+  [{:cid "c1" :url "https://a.example/kotoba" :title "Kotoba language"
+    :text "Kotoba is a lisp for the kototama virtual machine. Kotoba compiles closed data."}
+   {:cid "c2" :url "https://a.example/murakumo" :title "Murakumo nodes"
+    :text "Murakumo turns ordinary machines into inference nodes serving models."}
+   {:cid "c3" :url "https://a.example/yataverse" :title "Yataverse"
+    :text "Yataverse replicates content addressed bytes across zones."}
+   {:cid "c4" :url "https://a.example/ja" :title "叢雲"
+    :text "叢雲は推論ノードを束ねる基盤です。言霊は仮想機械の契約です。"}])
+
+(defn- store-and-fetcher []
+  (let [store (atom {})
+        put! (fn [cid bs] (swap! store assoc cid bs) true)
+        fetch (fn [cid] (some-> (get @store cid) w/utf8-string cljs.reader/read-string))]
+    {:store store :put! put! :fetch fetch}))
+
+(deftest tokenizer-splits-words-and-bigrams-cjk
+  (is (= ["hello" "world" "42"] (index/tokenize "Hello, WORLD! 42")))
+  (is (= ["café" "naïve"] (index/tokenize "Café naïve")))
+  (is (= ["叢雲" "雲は" "はノ" "ノー" "ード"] (index/tokenize "叢雲はノード")))
+  (is (= ["a" "叢" "b"] (index/tokenize "a 叢 b")))
+  (is (= [] (index/tokenize "  ,.;  "))))
+
+(deftest fnv1a-matches-published-vectors-and-shards-are-stable
+  (is (= 0x811c9dc5 (index/fnv1a "")))
+  (is (= 0xe40c292c (index/fnv1a "a")))
+  (is (= 0xbf9cf968 (index/fnv1a "foobar")))
+  (is (= (index/shard-of "kotoba" 16) (index/shard-of "kotoba" 16)))
+  (is (every? #(< -1 (index/shard-of % 16) 16) ["a" "叢雲" "kotoba"])))
+
+(deftest build-store-and-query-roundtrip
+  (let [{:keys [put! fetch store]} (store-and-fetcher)
+        idx (index/build docs 8)
+        root-cid (index/store! put! idx)
+        root (fetch root-cid)
+        r (index/query root fetch "kotoba lisp" 3)]
+    (is (string? root-cid))
+    (is (= 8 (count (:shards root))))
+    (is (= "https://a.example/kotoba" (:url (first (:results r)))))
+    (is (empty? (:missing-shards r)))
+    (is (<= (:shards-touched r) 2))                      ; only the shards the terms live in
+    (is (= "https://a.example/ja" (:url (first (:results (index/query root fetch "推論ノード" 3))))))))
+
+(deftest the-same-documents-give-the-same-root-cid-in-any-input-order
+  (let [a (store-and-fetcher) b (store-and-fetcher)]
+    (is (= (index/store! (:put! a) (index/build docs 4))
+           (index/store! (:put! b) (index/build (reverse docs) 4))))))
+
+(deftest unknown-terms-are-an-honest-empty-result
+  (let [{:keys [put! fetch]} (store-and-fetcher)
+        root (fetch (index/store! put! (index/build docs 4)))]
+    (is (= [] (:results (index/query root fetch "zzzznotpresent" 5))))))
+
+(deftest an-unfetchable-shard-is-reported-not-treated-as-no-match
+  (let [{:keys [put! fetch]} (store-and-fetcher)
+        root (fetch (index/store! put! (index/build docs 4)))
+        r (index/query root (fn [_] nil) "kotoba" 5)]
+    (is (= [] (:results r)))
+    (is (= [(index/shard-of "kotoba" 4)] (:missing-shards r)))))
+
+(deftest ranking-prefers-the-more-relevant-and-breaks-ties-by-url
+  (let [{:keys [put! fetch]} (store-and-fetcher)
+        ds [{:cid "1" :url "https://b.example/2" :title "" :text "alpha beta"}
+            {:cid "2" :url "https://b.example/1" :title "" :text "alpha beta"}
+            {:cid "3" :url "https://b.example/3" :title "" :text "alpha alpha alpha gamma"}]
+        root (fetch (index/store! put! (index/build ds 2)))
+        r (:results (index/query root fetch "alpha" 3))]
+    (is (= "https://b.example/3" (:url (first r))))
+    (is (= ["https://b.example/1" "https://b.example/2"] (map :url (rest r))))))
+
+(deftest recall-at-k
+  (is (= 0.5 (index/recall-at-k [{:url "x"} {:url "y"}] ["x" "z"] 2)))
+  (is (= 0.0 (index/recall-at-k [{:url "x"}] ["z"] 1)))
+  (is (nil? (index/recall-at-k [] [] 3))))
+
+(deftest index-jobs-validate
+  (is (:ok (web/validate-job {:kind :web/index :manifest-cid "bafy" :shards 16})))
+  (is (= [:job/manifest-cid] (:refused (web/validate-job {:kind :web/index}))))
+  (is (= [:job/shards] (:refused (web/validate-job {:kind :web/index :manifest-cid "b" :shards 0})))))
+
+(def ^:private page-html
+  (fn [title body] (str "<html><head><title>" title "</title></head><body><p>" body "</p></body></html>")))
+
+(defn- signed-page [put! [url title body]]
+  (let [bs (w/utf8-bytes (page-html title body)) cid (w/raw-cid bs)]
+    (put! cid bs)
+    {:url url :cid cid :status 200 :signature "sig-ok"
+     :receipt {:kind :web/fetch :output-cid cid :node-did "did:key:znode"
+               :evidence {:status 200 :final-url url :content-type "text/html"}}}))
+
+(defn- node-env [put! store]
+  {:get-bytes! (fn [cid] (get @store cid)) :put! put! :sign! (fn [_] "sig")
+   :now-ms (let [t (atom 0)] (fn [] (swap! t inc))) :node-did "did:key:znode"
+   :receipt-valid? (fn [r sig] (and (= sig "sig-ok") (= (:node-did r) "did:key:znode")))})
+
+(defn- put-manifest! [put! m]
+  (let [bs (w/utf8-bytes (pr-str m)) cid (w/raw-cid bs)] (put! cid bs) cid))
+
+(def ^:private crawl-pages
+  [["https://a.example/1" "Kotoba" "kotoba is a lisp"]
+   ["https://a.example/2" "Murakumo" "murakumo serves inference nodes"]])
+
+(deftest index-a-crawl-then-search-it-end-to-end
+  (let [{:keys [put! store]} (store-and-fetcher)
+        env (node-env put! store)
+        pages (mapv #(signed-page put! %) crawl-pages)
+        img {:url "https://a.example/img" :cid "x" :status 200 :signature "sig-ok"
+             :receipt {:kind :web/fetch :output-cid "x" :evidence {:status 200 :final-url "https://a.example/img" :content-type "image/png"}}}
+        mcid (put-manifest! put! {:crawl-id "c" :plan {} :pages (conj pages img)})
+        built (:ok (index/index-crawl! env {:job-id "i1" :manifest-cid mcid :shards 4}))
+        found (:ok (index/search-index! env {:job-id "q1" :root-cid (:root-cid built) :query "inference" :k 5}))]
+    (is (= 2 (:docs built)))                                   ; the image page is not indexed
+    (is (= 1 (get-in built [:counts :rejected])))
+    (is (= :web/index (get-in built [:receipt :kind])))
+    (is (:ok (web/validate-receipt (:receipt built))))
+    (is (= ["https://a.example/2"] (mapv :url (get-in found [:results :results]))))
+    (is (:ok (web/validate-receipt (:receipt found))))
+    (is (= :index (get-in found [:receipt :evidence :source])))))
+
+(deftest a-manifest-without-this-nodes-signed-receipts-indexes-nothing
+  ;; index poisoning: an attacker page that is itself a plausible manifest
+  (let [{:keys [put! store]} (store-and-fetcher)
+        env (node-env put! store)
+        good (signed-page put! (first crawl-pages))
+        forged (fn [f] (put-manifest! put! {:crawl-id "c" :pages [(f good)]}))]
+    (doseq [[label f] [["bad signature" #(assoc % :signature "forged")]
+                       ["other node" #(assoc-in % [:receipt :node-did] "did:key:zother")]
+                       ["url not the receipt's" #(assoc % :url "http://bank.example/")]
+                       ["cid not the receipt's" #(assoc % :cid "bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+                       ["non-2xx" #(-> % (assoc :status 404) (assoc-in [:receipt :evidence :status] 404))]]]
+      (is (= :index/no-documents (:refused (index/index-crawl! env {:job-id "i" :manifest-cid (forged f)})))
+          label))))
+
+(deftest index-jobs-refuse-missing-tampered-or-foreign-inputs
+  (let [{:keys [put! store]} (store-and-fetcher)
+        env (node-env put! store)]
+    (is (= :index/manifest-missing (:refused (index/index-crawl! env {:job-id "i" :manifest-cid "nope"}))))
+    (swap! store assoc "bad" (w/utf8-bytes "{:pages []}"))
+    (is (= :index/manifest-cid-mismatch (:refused (index/index-crawl! env {:job-id "i" :manifest-cid "bad"}))))
+    (is (= :index/not-a-crawl-manifest
+           (:refused (index/index-crawl! env {:job-id "i" :manifest-cid (put-manifest! put! {:hello "world"})}))))
+    (is (= :index/not-a-crawl-manifest
+           (:refused (index/index-crawl! env {:job-id "i" :manifest-cid (put-manifest! put! [1 2 3])}))))
+    (is (= :index/no-receipt-verifier
+           (:refused (index/index-crawl! (dissoc env :receipt-valid?) {:job-id "i" :manifest-cid "x"}))))
+    (is (= :index/root-missing (:refused (index/search-index! env {:job-id "q" :root-cid "nope" :query "x" :k 3}))))))
+
+(deftest a-query-with-no-tokens-is-refused
+  (let [{:keys [put! store]} (store-and-fetcher)
+        env (node-env put! store)
+        mcid (put-manifest! put! {:crawl-id "c" :pages [(signed-page put! (first crawl-pages))]})
+        root (:root-cid (:ok (index/index-crawl! env {:job-id "i" :manifest-cid mcid})))]
+    (is (= [:job/query-no-tokens]
+           (:detail (index/search-index! env {:job-id "q" :root-cid root :query " ,.; " :k 3}))))))
+
+(deftest ln-matches-math-log-and-is-monotone
+  (doseq [x [0.1 0.5 0.75 1.0 1.49 1.5 2.0 2.718281828 10.0 137.5 1e6]]
+    (is (< (Math/abs (- (index/ln x) (Math/log x))) 1e-12) (str "ln " x)))
+  (is (= 0.0 (index/ln 1.0)))
+  (is (< (index/ln 2.0) (index/ln 3.0))))

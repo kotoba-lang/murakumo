@@ -30,19 +30,22 @@
 (defn apply-profile!
   "Hand a profile to NetworkManager as a keyfile (mode 0600), not as `nmcli ... password`
   arguments, which every user could read in the process list. Returns `{:applied? bool}`."
-  [{:keys [profile keyfile-dir reload?]}]
+  [{:keys [profile keyfile-dir reload? run-nmcli]}]
   (let [text (nm/keyfile profile (.randomUUID crypto))]
     (if (:error text)
       {:applied? false :reason (:error text)}
       (let [p (.join path keyfile-dir "murakumo-onboard.nmconnection")
-            tmp (str p ".tmp")]
+            tmp (str p ".tmp-" (.randomUUID crypto))
+            run-nmcli (or run-nmcli (fn [args] (.-status (.spawnSync child-process "nmcli" (clj->js args) #js {:stdio "ignore"}))))]
         (.mkdirSync fs keyfile-dir #js {:recursive true :mode 448})
-        (.writeFileSync fs tmp text #js {:mode 384 :flag "w"})
+        (.writeFileSync fs tmp text #js {:mode 384 :flag "wx"})
         (.renameSync fs tmp p)
-        (when reload?
-          (.spawnSync child-process "nmcli" #js ["connection" "reload"] #js {:stdio "ignore"})
-          (.spawnSync child-process "nmcli" #js ["connection" "up" "murakumo-onboard"] #js {:stdio "ignore"}))
-        {:applied? true}))))
+        (cond
+          (and reload? (not= 0 (run-nmcli ["connection" "reload"])))
+          {:applied? false :reason :nm-reload-failed}
+          (and reload? (not= 0 (run-nmcli ["connection" "up" "murakumo-onboard"])))
+          {:applied? false :reason :nm-activation-failed}
+          :else {:applied? true})))))
 
 ;; ── the loop ──────────────────────────────────────────────────────────────
 
