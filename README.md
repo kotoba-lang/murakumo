@@ -56,8 +56,35 @@ murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0
   zero free slots in that state. A job already claimed finishes and reports its
   result. The host check cannot see every GPU-only workload, so validate it on
   the actual machine before using it as the buyer's idle policy. The current
-  NixOS base profile does not install a node service; run `join` manually until
-  an opt-in service has been configured and verified on the target machine.
+  NixOS base profile does not install a node service. An optional module at
+  [`nixos/node.nix`](nixos/node.nix) can schedule buyer claim responses and
+  restart idle-only participation after boot. Both services are disabled by
+  default. The pinned installer copies it to
+  `/opt/murakumo-cli/current/nixos-node.nix` when installed with
+  `MURAKUMO_INSTALL_DIR=/opt/murakumo-cli`. Import the specific
+  `release-<hash>/nixos-node.nix` path in the machine configuration so the
+  NixOS evaluation cannot silently switch versions. Set `cliPath` to a
+  system-wide installation outside `/home`, retain
+  the factory identity as a root-readable mode 0600 runtime file, and enable
+  `claimResponder` only after the buyer claim endpoint is ready. Before enabling
+  `participation`, manually run `doctor`, `check`, and `qualify` with the exact
+  served model ID on that unit; enable it only after qualification is accepted.
+  The module does not install a model, mint credits, or request payout.
+
+  Example NixOS configuration after importing `nixos/node.nix`:
+
+  ```nix
+  services.murakumoNode = {
+    enable = true;
+    cliPath = "/opt/murakumo-cli/current/murakumo";
+    claimResponder.enable = true;
+    participation = {
+      enable = true; # Set only after doctor, check, and qualify pass on this unit.
+    };
+    nodeName = "my-pc";
+    model = "YOUR_EXACT_SERVED_MODEL_ID";
+  };
+  ```
 
 **Community enrollment starts pending admission.** Registration and a fresh
 heartbeat do not grant AWAI Secure membership, guarantee job placement or prove

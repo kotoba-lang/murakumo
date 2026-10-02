@@ -4,13 +4,14 @@
             [murakumo.bench :as bench]
             [murakumo.fleet-ps :as fleet-ps]
             [murakumo.health :as health]
+            [murakumo.device-claim :as claim]
             [cacao.edge.mint :as mint]
             [kotoba.lang.text :as str]
             ["node:fs" :as fs] ["node:path" :as path]
             ["node:os" :as os] ["node:crypto" :as crypto]))
 
 (defn help []
-  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+, a running OpenAI-compatible model server and network access are required.\nInstallation does not download models or start a service. Community enrollment\nmay remain pending admission; a heartbeat alone does not prove job eligibility.")
+  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node qualify --model ID        Run the local model through Community admission\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Run check, then qualify before joining Community jobs;\na heartbeat alone does not prove job eligibility.")
   (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
                                           (ctx, KV, slots), co-resident processes, units")
   (println "  Payout also requires --owner-token-file /absolute/private/path from the buyer's device page.")
@@ -101,6 +102,24 @@
               (seq (.-search u)) (seq (.-hash u)))
       (throw (js/Error. "The control plane base must contain only a scheme and host.")))
     base))
+(defn claim-once! [args]
+  (when-not (or (empty? args)
+                (and (= 2 (count args)) (= "--site" (first args))))
+      (throw (js/Error. "Use murakumo node claim-once [--site https://localhost:PORT].")))
+  (let [site (control-base (or (second args) "https://murakumo.cloud"))
+        _ (when-not (or (= site "https://murakumo.cloud")
+                        (str/starts-with? site "https://127.0.0.1:")
+                        (str/starts-with? site "https://localhost:")
+                        (str/starts-with? site "http://127.0.0.1:")
+                        (str/starts-with? site "http://localhost:"))
+            (throw (js/Error. "Claim service must be murakumo.cloud or local loopback.")))
+        id (identity)]
+    (when-not id
+      (throw (js/Error. "Device identity is missing; factory-provision this device first.")))
+    (-> (claim/once! js/fetch #(js/Date.now) site id)
+        (.then (fn [{:keys [outcome exit-code]}]
+                 (println "Claim response:" (name outcome))
+                 (when (not= 0 exit-code) (set! (.-exitCode js/process) exit-code)))))))
 (defn- fetch-node-grant! [id authn-base]
   (-> (mint! id authn-base ["murakumo://node-token"] 240000)
       (.then (fn [proof]
@@ -124,6 +143,70 @@
                                 {:token token :expires-at expires-at}
                                 (throw (js/Error. (str "Node authorization refused (HTTP "
                                                         (.-status response) ")."))))))))))))
+(defn- qualification-post! [base token path body]
+  (-> (js/fetch (str base path)
+                #js {:method "POST"
+                     :headers #js {"content-type" "application/json"
+                                   "authorization" (str "Biscuit " token)}
+                     :body (js/JSON.stringify
+                            (clj->js body :keyword-fn
+                                     (fn [k] (if-let [ns (namespace k)]
+                                               (str ns "/" (name k)) (name k)))))
+                     :signal (js/AbortSignal.timeout 30000)})
+      (.then (fn [response]
+               (-> (.json response)
+                   (.then (fn [body]
+                            {:status (.-status response)
+                             :body (js->clj body :keywordize-keys true)})))))))
+
+(defn- qualification-answer! [local local-token model item]
+  (let [prompt (:prompt item)
+        limit (:max-tokens item)]
+    (when-not (and (string? prompt) (integer? limit) (<= 1 limit 128))
+      (throw (js/Error. "The qualification challenge is malformed.")))
+    (-> (worker/run-completion-with-fetch! js/fetch local local-token model prompt limit)
+        (.then (fn [outcome]
+                 (when-not (:ok outcome)
+                   (throw (js/Error. "The local model did not complete a qualification item.")))
+                 (let [usage (get-in outcome [:response :usage])]
+                   (cond-> {:item/id (:id item)
+                            :answer/text (:text outcome)
+                            :answer/ms (:ms outcome)}
+                     (integer? (:prompt_tokens usage))
+                     (assoc :answer/prompt-tokens (:prompt_tokens usage))
+                     (integer? (:completion_tokens usage))
+                     (assoc :answer/generated-tokens (:completion_tokens usage)))))))))
+
+(defn- qualify! [id base token local local-token model node-name]
+  (-> (qualification-post! base token "/infer/qualification/challenge"
+                           {:node/name node-name :node/did (.-did id) :model model})
+      (.then (fn [{:keys [status body]}]
+               (when-not (= 201 status)
+                 (throw (js/Error. (str "Qualification challenge refused (HTTP " status
+                                       "). Run node check before qualify."))))
+               (let [qid (:id body)
+                     items (:items body)]
+                 (when-not (and (string? qid) (= 5 (count items)))
+                   (throw (js/Error. "The qualification challenge is incomplete.")))
+                 (-> (reduce (fn [answers item]
+                               (.then answers
+                                      (fn [rows]
+                                        (-> (qualification-answer! local local-token model item)
+                                            (.then #(conj rows %))))))
+                             (js/Promise.resolve []) items)
+                     (.then (fn [answers]
+                              (qualification-post! base token "/infer/qualification/result"
+                                                   {:qualification/id qid :did (.-did id)
+                                                    :answers answers})))))))
+      (.then (fn [{:keys [status body]}]
+               (if (and (= 200 status) (= "accepted" (:verdict body))
+                        (contains? #{"accepted" :accepted}
+                                   (get-in body [:node :admission])))
+                 (println "Community qualification accepted. This model may receive eligible public jobs.")
+                 (do (println "Community qualification was not accepted (HTTP" status ").")
+                     (when-let [failed (get-in body [:evidence :failed])]
+                       (println "Failed items:" (pr-str failed)))
+                     (set! (.-exitCode js/process) 1)))))))
 (defn payout-options [args command]
   (let [allowed (if (= command "earnings") #{"--base"}
                     #{"--base" "--credits" "--to" "--owner-token-file"})]
@@ -214,6 +297,20 @@
                    (not (:ready? probe)) (fail! "Start the local model server and use its exact model ID before joining.")
                    (not (or auth id)) (fail! "Run murakumo node init, then repeat this command.")
                    (= command "doctor") (println "Preflight passed. No registration or inference was performed.")
+                   (= command "qualify")
+                   (if-not id
+                     (fail! "Community qualification requires this device's private identity.")
+                     (let [authn-base (control-base (or (:authn opts)
+                                                        (aget js/process.env "MURAKUMO_AUTHN_BASE")
+                                                        "https://auth.murakumo.cloud"))
+                           node-name (or (:name opts) (some-> (.hostname os) (str/split #"\.") first)
+                                         "murakumo-node")]
+                       (when-not (worker/valid-node-name? node-name)
+                         (throw (js/Error. "The node name is invalid.")))
+                       (-> (fetch-node-grant! id authn-base)
+                           (.then (fn [grant]
+                                    (qualify! id base (:token grant) local
+                                              (worker/local-auth-token opts env) model node-name))))))
                    :else
                    (let [opts (assoc opts :base base :local-url local :check (= command "check"))]
                      (if auth
@@ -270,11 +367,17 @@
       (= command "--help") (help)
       (not= prefix "node") (fail! "Use: murakumo node, bench, fleet or health --help")
       (= command "init") (init!)
+      (= command "claim-once")
+      (-> (claim-once! args)
+          (.catch (fn [_] (fail! "Claim response failed. Check the site, device identity and network."))))
       (contains? #{"earnings" "payout"} command)
       (-> (payout-command! command args)
           (.catch (fn [_] (fail! "Payout operation failed. Check the network, device identity and request; no credentials are printed."))))
-      (contains? #{"doctor" "check" "join"} command)
+      (contains? #{"doctor" "check" "qualify" "join"} command)
       (-> (run! command (options args))
-          (.catch (fn [_] (fail! "Node operation failed. Check the local server, network and device identity; no credentials are printed."))))
+          (.catch (fn [error]
+                    (fail! (if (= command "qualify")
+                             (str "Community qualification failed: " (.-message error))
+                             "Node operation failed. Check the local server, network and device identity; no credentials are printed.")))))
       :else (fail! "Unknown command. Use: murakumo node --help"))
     (catch :default e (fail! (.-message e)))))
