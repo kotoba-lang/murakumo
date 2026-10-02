@@ -53,6 +53,10 @@ try{
   const m=matrix(qrLines),margin=2,size=m[0].length-2*margin;
   assert.equal((size-17)%4,0,'its side is 4v+17 modules');
   assert.ok(finderAt(m,margin,margin)&&finderAt(m,margin,margin+size-7)&&finderAt(m,margin+size-7,margin),'three finder patterns');
+  // the claim link can use an address a phone can reach, different from the one the box talks to
+  r=await run(['--public-url','https://192.168.1.4:8443']);
+  assert.match(r.out,/Console\s+http:\/\/127\.0\.0\.1:9/);assert.match(r.out,/open https:\/\/192\.168\.1\.4:8443\/#claim/);
+  r=await run(['--public-url','https://x.example/path']);assert.notEqual(r.code,0,'a public URL with a path is refused');
   // a heartbeat that was accepted: claimed, and nothing to scan
   fs.writeFileSync(path.join(state,'report-status.json'),JSON.stringify({outcome:'accepted','at-ms':Date.now()-5000}));
   r=await run();assert.equal(r.code,0);

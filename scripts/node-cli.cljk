@@ -291,15 +291,21 @@
     (cond
       (nil? a) opts
       (= a "--once") (recur more (assoc opts :once true))
-      (and (contains? #{"--state-dir" "--site" "--interval"} a) (seq more) (not (str/starts-with? (first more) "--")))
+      (and (contains? #{"--state-dir" "--site" "--interval" "--public-url"} a) (seq more) (not (str/starts-with? (first more) "--")))
       (recur (rest more) (assoc opts (keyword (subs a 2)) (first more)))
-      :else (throw (js/Error. "Use murakumo node console [--state-dir DIR] [--site URL] [--interval SECONDS] [--once].")))))
+      :else (throw (js/Error. "Use murakumo node console [--state-dir DIR] [--site URL] [--public-url URL] [--interval SECONDS] [--once].")))))
 (defn console! [args]
   (let [opts (console-options args)
         site (control-base (or (:site opts) "https://murakumo.cloud"))
         id (identity)
         interval (js/parseInt (or (:interval opts) "3") 10)
-        base {:state-dir (or (:state-dir opts) (state-dir)) :site site :did (.-did id)
+        public (when-let [u (:public-url opts)]
+                (let [parsed (try (js/URL. u) (catch :default _ nil))]
+                  (when-not (and parsed (contains? #{"https:" "http:"} (.-protocol parsed)) (= "/" (.-pathname parsed))
+                                 (empty? (.-search parsed)) (empty? (.-hash parsed)))
+                    (throw (js/Error. "--public-url must be an http(s) origin with no path, query or fragment.")))
+                  (.-origin parsed)))
+        base {:state-dir (or (:state-dir opts) (state-dir)) :site site :public-url public :did (.-did id)
               :fp (onboard/device-fingerprint (.-did id)) :qr-fn node-console-qr/qr-lines}]
     (when-not id (throw (js/Error. "Device identity is missing; factory-provision this device first.")))
     (when-not (<= 1 interval 60) (throw (js/Error. "--interval must be 1 to 60 seconds.")))

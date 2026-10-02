@@ -55,6 +55,11 @@ in
         default = "/var/lib/murakumo";
         description = "Where the label, the last heartbeat result and the onboarding state live.";
       };
+      publicUrl = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Origin a phone opens for the claim link, when it differs from siteUrl (for example a VM that talks to loopback). Null means siteUrl.";
+      };
     };
     report = {
       enable = mkEnableOption "periodic signed heartbeats to the console, so a claimed device shows when it was last seen";
@@ -163,7 +168,7 @@ in
         MURAKUMO_STATE_DIR = cfg.console.stateDir;
         TERM = if builtins.match "tty[0-9]+" cfg.console.tty != null then "linux" else "vt100";
       };
-      script = ''exec ${cli} node console --state-dir ${lib.escapeShellArg cfg.console.stateDir} --site ${lib.escapeShellArg cfg.siteUrl}'';
+      script = ''exec ${cli} node console --state-dir ${lib.escapeShellArg cfg.console.stateDir} --site ${lib.escapeShellArg cfg.siteUrl}${lib.optionalString (cfg.console.publicUrl != null) " --public-url ${lib.escapeShellArg cfg.console.publicUrl}"}'';
       serviceConfig = common.serviceConfig // {
         Type = "simple";
         Restart = "always";

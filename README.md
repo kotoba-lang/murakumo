@@ -208,6 +208,8 @@ points at `#devices`.
   every few seconds; if even the QR alone does not fit, the link is shown as text and the screen says why. The
   QR draws light modules as blocks, for the default light-on-black console. A light terminal theme shows it
   inverted, which some scanners will not read.
+- `--public-url ORIGIN` (NixOS `console.publicUrl`) is the address the claim link and the hint use, when a phone
+  cannot reach the one the box talks to: a box in a VM talks to loopback, and a phone cannot.
 - NixOS: `services.murakumoNode.console.enable = true;` (`console.tty` is `tty1` by default; use `ttyAMA0` or
   `ttyS0` for a serial console or a VM). The service takes the terminal over from getty, like a kiosk.
 

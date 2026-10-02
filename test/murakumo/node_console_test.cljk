@@ -127,3 +127,14 @@
 (deftest a-claimed-box-needs-no-second-page
   (let [st (assoc base :heartbeat {:outcome :accepted :at-ms 999000})]
     (is (some #(str/includes? % "belongs to an account") (c/screen (assoc st :height 24 :page :status))))))
+
+(deftest the-claim-link-and-hint-use-the-address-a-phone-can-reach
+  (let [st (assoc base :site "http://127.0.0.1:8090" :public-url "https://192.168.1.4:8443"
+                  :heartbeat {:outcome :not-claimed :at-ms 988000})
+        t (text-of st)]
+    (is (str/includes? t "Console    http://127.0.0.1:8090") "the console line is what the box talks to")
+    (is (str/includes? t "open https://192.168.1.4:8443/#claim") "the hint is what the phone opens")
+    (is (not (str/includes? t "or open http://127.0.0.1:8090")))
+    (testing "claimed: #devices at the public address"
+      (is (str/includes? (text-of (assoc st :heartbeat {:outcome :accepted :at-ms 999000}))
+                         "https://192.168.1.4:8443/#devices")))))

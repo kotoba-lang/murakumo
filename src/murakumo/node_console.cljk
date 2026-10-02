@@ -87,15 +87,18 @@
 (defn- sections
   "`{:status [...] :claim [...] :link [...]}`: the status block, the claim block with a QR (or what stands
   in for it), and the same claim block with the link as text."
-  [{:keys [did fp site now-ms width addresses reachable? heartbeat onboarding label qr-fn]}]
+  [{:keys [did fp site public-url now-ms width addresses reachable? heartbeat onboarding label qr-fn]}]
   (let [rule (apply str (repeat (dec width) "─"))
         age (when (and heartbeat (number? (:at-ms heartbeat)) (number? now-ms))
               (max 0 (js/Math.round (/ (- now-ms (:at-ms heartbeat)) 1000))))
         outcome (:outcome heartbeat)
         claimed? (contains? #{:accepted :stale} outcome)
-        url (claim-url label site)
+        ;; the address a PHONE can reach: not necessarily the one this box talks to (a box in a VM or behind
+        ;; a proxy talks to loopback, and a phone cannot)
+        shown (or public-url site)
+        url (claim-url label shown)
         qr (when (and url qr-fn (not claimed?)) (qr-fn url))
-        site* (str/replace (str site) #"/+$" "")]
+        site* (str/replace (str shown) #"/+$" "")]
     {:status [(str " MURAKUMO NODE")
               rule
               (row "Device" (str (short-did did) (when fp (str "   (id " fp ")"))))
@@ -127,6 +130,7 @@
 (defn screen
   "State -> lines of text (no colour, no cursor codes). `state`:
     :did :fp :site :now-ms :width
+    :public-url the origin a phone opens for the claim link and #devices; defaults to :site
     :addresses  [{:name :address} …]
     :reachable? true / false / nil (not checked)
     :heartbeat  {:outcome kw :at-ms n} or nil
@@ -198,10 +202,10 @@
 
 (defn gather!
   "Promise of the state `screen` draws. `qr-fn` is passed through to it."
-  [{:keys [state-dir site did fp width qr-fn]}]
+  [{:keys [state-dir site public-url did fp width qr-fn]}]
   (-> (reachable! site)
       (.then (fn [up?]
-               {:did did :fp fp :site site :now-ms (js/Date.now) :width width :qr-fn qr-fn
+               {:did did :fp fp :site site :public-url public-url :now-ms (js/Date.now) :width width :qr-fn qr-fn
                 :addresses (addresses) :reachable? up?
                 :heartbeat (heartbeat-status state-dir)
                 :onboarding (onboarding-state state-dir)
