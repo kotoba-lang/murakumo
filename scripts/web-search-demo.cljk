@@ -1,0 +1,18 @@
+;; Live smoke for ADR-260929 M3 against SearXNG-compatible endpoints given as args.
+;;   kbb --classpath "src:test" scripts/web-search-demo.cljk "query" http://127.0.0.1:8899 [more-base-urls...]
+;; Backends are operator config: the query is sent to each base URL.
+(ns web-search-demo
+  (:require [murakumo.web.host :as host]
+            [murakumo.web.search :as search]))
+
+(let [[query & bases] *command-line-args*
+      key-seed (.toString (.randomBytes (js/require "crypto") 32) "hex")
+      dir (str (.tmpdir (js/require "os")) "/murakumo-web-demo")
+      env (assoc (host/env {:store-dir dir :seed-hex key-seed :node-did "did:local:demo"})
+                 :backends (vec (map-indexed (fn [i b] (host/searxng {:name (keyword (str "b" i)) :base-url b})) bases)))
+      r (search/search! env {:job-id "demo-search" :query query :k 5})]
+  (if-let [ok (:ok r)]
+    (do (println "results-cid" (:results-cid ok))
+        (println "backends  " (pr-str (get-in ok [:results :backends])))
+        (doseq [x (get-in ok [:results :results])] (println (:score x) (pr-str (:sources x)) (:url x) "|" (:title x))))
+    (println "REFUSED" (pr-str r))))

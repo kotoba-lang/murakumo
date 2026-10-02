@@ -1,0 +1,214 @@
+(ns murakumo.web-worker-test
+  (:require [kotoba.test :refer [deftest is]]
+            [murakumo.web :as web]
+            [murakumo.web.worker :as w]))
+
+(def html
+  (str "<html><head><title>Kotoba &amp; Co</title><style>p{}</style></head><body>"
+       "<script>alert(1)</script><h1>Hello</h1><p>One <a href=\"https://a.example/x\">link</a></p>"
+       "<ul><li>a</li><li>b</li></ul><!-- hidden --></body></html>"))
+
+(defn- make-env
+  "Fake transport. `pages` maps url -> response; `dns` maps host -> [ip]."
+  [pages dns]
+  (let [store (atom {}) calls (atom [])]
+    {:store store :calls calls
+     :env {:resolve! (fn [host] (get dns host []))
+           :http-get! (fn [{:keys [url address] :as req}]
+                        (swap! calls conj req)
+                        (get pages url {:error :not-found}))
+           :put! (fn [cid bs] (swap! store assoc cid bs) true)
+           :get-bytes! (fn [cid] (get @store cid))
+           :sign! (fn [s] (str "sig:" (count s)))
+           :now-ms (let [t (atom 1000)] (fn [] (swap! t + 5)))
+           :node-did "did:key:znode"}}))
+
+(def page {:status 200 :headers {"content-type" "text/html"} :body (w/utf8-bytes html)})
+
+(deftest fetch-stores-bytes-under-their-cid-and-signs-a-receipt
+  (let [{:keys [env store calls]} (make-env {"https://example.com/" page}
+                                            {"example.com" ["93.184.216.34"]})
+        r (w/fetch! env {:job-id "j1" :url "https://example.com/"})
+        ok (:ok r)]
+    (is ok)
+    (is (= (w/raw-cid (w/utf8-bytes html)) (:output-cid ok)))
+    (is (contains? @store (:output-cid ok)))
+    (is (= "93.184.216.34" (:address (first @calls))))          ; connect is pinned to the vetted IP
+    (is (= (w/content-hash (w/utf8-bytes html)) (get-in ok [:receipt :evidence :content-hash])))
+    (is (:ok (web/validate-receipt (:receipt ok))))
+    (is (= (str "sig:" (count (web/receipt-signing-string (:receipt ok)))) (:signature ok)))))
+
+(deftest raw-cid-has-the-expected-prefix-and-length
+  (let [cid (w/raw-cid (w/utf8-bytes ""))]
+    (is (= "bafkrei" (subs cid 0 7)))
+    (is (= 59 (count cid)))
+    ;; the well-known raw CIDv1 of empty content
+    (is (= "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku" cid))))
+
+(deftest private-resolution-is-refused-before-connecting
+  (let [{:keys [env calls]} (make-env {"https://evil.example/" page}
+                                      {"evil.example" ["93.184.216.34" "169.254.169.254"]})
+        r (w/fetch! env {:job-id "j" :url "https://evil.example/"})]
+    (is (= :url/private-address (:refused r)))
+    (is (empty? @calls))))
+
+(deftest redirect-into-private-space-is-refused
+  (let [{:keys [env]} (make-env {"https://example.com/"
+                                 {:status 302 :headers {"location" "http://127.0.0.1/admin"} :body (w/utf8-bytes "")}}
+                                {"example.com" ["93.184.216.34"]})]
+    (is (= :url/private-address (:refused (w/fetch! env {:job-id "j" :url "https://example.com/"}))))))
+
+(deftest relative-redirects-are-followed-and-recorded
+  (let [{:keys [env]} (make-env {"https://example.com/a"
+                                 {:status 301 :headers {"location" "/b"} :body (w/utf8-bytes "")}
+                                 "https://example.com/b" page}
+                                {"example.com" ["93.184.216.34"]})
+        ok (:ok (w/fetch! env {:job-id "j" :url "https://example.com/a"}))]
+    (is (= "https://example.com/b" (get-in ok [:receipt :evidence :final-url])))
+    (is (= ["https://example.com/a"] (get-in ok [:receipt :evidence :redirects])))))
+
+(deftest redirect-loops-and-oversize-bodies-are-refused
+  (let [{:keys [env]} (make-env {"https://example.com/l"
+                                 {:status 302 :headers {"location" "https://example.com/l"} :body (w/utf8-bytes "")}
+                                 "https://example.com/big" page}
+                                {"example.com" ["93.184.216.34"]})]
+    (is (= :fetch/too-many-redirects (:refused (w/fetch! env {:job-id "j" :url "https://example.com/l"}))))
+    (is (= :fetch/too-large (:refused (w/fetch! env {:job-id "j" :url "https://example.com/big" :max-bytes 10}))))))
+
+(deftest invalid-jobs-and-transport-failures-are-typed
+  (let [{:keys [env]} (make-env {} {"example.com" ["93.184.216.34"]})]
+    (is (= :job/invalid (:refused (w/fetch! env {:job-id "j" :url "file:///etc/passwd"}))))
+    (is (= :fetch/transport (:refused (w/fetch! env {:job-id "j" :url "https://example.com/missing"}))))
+    (is (= :fetch/unresolved (:refused (w/fetch! env {:job-id "j" :url "https://nowhere.example/"}))))))
+
+(defn- fetched [pages]
+  (let [{:keys [env]} (make-env pages {"example.com" ["93.184.216.34"]})
+        ok (:ok (w/fetch! env {:job-id "f" :url "https://example.com/"}))]
+    [env ok]))
+
+(deftest extract-markdown
+  (let [[env f] (fetched {"https://example.com/" page})
+        r (:ok (w/extract! env {:job-id "e" :fetch-cid (:output-cid f) :format :markdown}))
+        md (w/utf8-string ((:get-bytes! env) (:output-cid r)))]
+    (is (= [(:output-cid f)] (get-in r [:receipt :input-cids])))
+    (is (re-find #"# Hello" md))
+    (is (re-find #"\[link\]\(https://a.example/x\)" md))
+    (is (re-find #"- a" md))
+    (is (not (re-find #"alert|hidden|p\{\}" md)))))
+
+(deftest extract-edn-has-title-and-links
+  (let [[env f] (fetched {"https://example.com/" page})
+        r (:ok (w/extract! env {:job-id "e" :fetch-cid (:output-cid f) :format :edn}))
+        doc (w/utf8-string ((:get-bytes! env) (:output-cid r)))]
+    (is (re-find #":title \"Kotoba & Co\"" doc))
+    (is (re-find #":links \[\"https://a.example/x\"\]" doc))))
+
+(deftest extract-refuses-bytes-that-do-not-match-their-cid
+  (let [[env f] (fetched {"https://example.com/" page})
+        tampered (assoc-in env [:get-bytes!] (fn [_] (w/utf8-bytes "<html>other</html>")))]
+    (is (= :extract/cid-mismatch
+           (:refused (w/extract! tampered {:job-id "e" :fetch-cid (:output-cid f) :format :markdown}))))
+    (is (= :extract/input-missing
+           (:refused (w/extract! (assoc env :get-bytes! (fn [_] nil))
+                                 {:job-id "e" :fetch-cid (:output-cid f) :format :markdown}))))
+    (is (= :extract/unsupported-format
+           (:refused (w/extract! env {:job-id "e" :fetch-cid (:output-cid f) :format :json-schema}))))))
+
+(deftest two-nodes-fetching-the-same-page-agree
+  (let [dns {"example.com" ["93.184.216.34"]}
+        mk (fn [did] (assoc (:env (make-env {"https://example.com/" page} dns)) :node-did did))
+        a (:ok (w/fetch! (mk "did:key:za") {:job-id "j" :url "https://example.com/"}))
+        b (:ok (w/fetch! (mk "did:key:zb") {:job-id "j" :url "https://example.com/"}))]
+    (is (= :agree (:status (web/compare-replicas [(:receipt a) (:receipt b)]))))))
+
+(def real-world-html
+  ;; verbatim shape of example.com: unquoted attributes, <link> in head, no <h1>
+  (str "<!doctype html><html lang=en><head><meta charset=utf-8><link rel=icon href=data:,>"
+       "<title>Example Domain</title><style>html{color:red}</style></head><body>"
+       "<p>This domain is for use.</p><a href=https://iana.org/help/example-domains>Learn more</a>"
+       "<a href='https://b.example/'>b</a><script src=/s.js></script></body></html>"))
+
+(deftest extract-handles-real-world-markup
+  (let [md (w/html->markdown real-world-html)]
+    (is (= "This domain is for use.\n\n[Learn more](https://iana.org/help/example-domains)[b](https://b.example/)" md))
+    (is (not (re-find #"- |Example Domain|color" md)))))
+
+(deftest falls-back-to-the-next-vetted-address-and-prefers-ipv4
+  (let [tried (atom [])
+        {:keys [env]} (make-env {} {})
+        env (assoc env
+                   :resolve! (fn [_] ["2606:2800:220:1:248:1893:25c8:1946" "93.184.216.34" "93.184.216.35"])
+                   :http-get! (fn [{:keys [address]}]
+                                (swap! tried conj address)
+                                (if (= address "93.184.216.35") page {:error :curl/exit-7})))
+        ok (:ok (w/fetch! env {:job-id "j" :url "https://example.com/"}))]
+    (is ok)
+    (is (= ["93.184.216.34" "93.184.216.35"] @tried))))
+
+(deftest all-addresses-failing-is-a-transport-refusal
+  (let [{:keys [env]} (make-env {} {})
+        env (assoc env :resolve! (fn [_] ["93.184.216.34" "93.184.216.35"])
+                   :http-get! (fn [_] {:error :curl/exit-7}))]
+    (is (= :fetch/transport (:refused (w/fetch! env {:job-id "j" :url "https://example.com/"}))))))
+
+(defn- millis [thunk] (let [t (.now js/Date)] (thunk) (- (.now js/Date) t)))
+
+(deftest extraction-is-linear-on-hostile-markup
+  ;; each of these hung the earlier regex version (quadratic); 1 MB must be quick
+  (doseq [unit ["<h1>x" "<script>" "<a href=\"x\">" "<title>" "<!--" "<li>" "<" "&amp;"]]
+    (let [html (apply str (repeat 150000 unit))
+          ms (millis #(do (w/html->markdown html) (w/links-of html) (w/title-of html)))]
+      (is (< ms 6000) (str "too slow for " unit ": " ms "ms")))))
+
+(deftest entities-are-decoded-once-and-numerically
+  (is (= "&lt;script&gt;" (w/decode-entities "&amp;lt;script&amp;gt;")))
+  (is (= "A B<" (w/decode-entities "&#65;&#x20;B&lt;")))
+  (is (= "&unknown;" (w/decode-entities "&unknown;")))
+  (is (= "�" (w/decode-entities "&#0;")))
+  (is (= "�" (w/decode-entities "&#xD800;")))
+  (is (= ["https://x.example/?a=1&b=2"] (w/links-of "<a href=\"https://x.example/?a=1&amp;b=2\">x</a>"))))
+
+(deftest header-and-script-lookalikes-are-not-skipped
+  (is (= "kept" (w/html->markdown "<header>kept</header>")))
+  (is (= "kept" (w/html->markdown "<scripting>kept</scripting>")))
+  (is (= "kept" (w/html->markdown "<script>gone()</script>kept")))
+  (is (= "" (w/html->markdown "<head>gone"))))
+
+(deftest no-follow-returns-the-redirect-with-its-absolute-location
+  (let [{:keys [env]} (make-env {"https://example.com/a"
+                                 {:status 302 :headers {"location" "/b"} :body (w/utf8-bytes "")}}
+                                {"example.com" ["93.184.216.34"]})
+        ok (:ok (w/fetch! env {:job-id "j" :url "https://example.com/a" :follow-redirects? false}))]
+    (is (= 302 (get-in ok [:receipt :evidence :status])))
+    (is (= "https://example.com/b" (get-in ok [:receipt :evidence :location])))))
+
+(deftest path-relative-redirect-targets-are-resolved
+  (doseq [[loc expected] [["login" "https://example.com/dir/login"]
+                          ["../next" "https://example.com/next"]
+                          ["?page=2" "https://example.com/dir/page?page=2"]
+                          ["/abs" "https://example.com/abs"]
+                          ["//example.com/net" "https://example.com/net"]]]
+    (let [{:keys [env]} (make-env {"https://example.com/dir/page"
+                                   {:status 302 :headers {"location" loc} :body (w/utf8-bytes "")}
+                                   expected page}
+                                  {"example.com" ["93.184.216.34"]})
+          ok (:ok (w/fetch! env {:job-id "j" :url "https://example.com/dir/page"}))]
+      (is ok (str "Location " loc))
+      (is (= expected (get-in ok [:receipt :evidence :final-url])) loc))))
+
+(deftest a-public-ipv6-literal-is-fetched-without-dns
+  (let [seen (atom nil)
+        {:keys [env]} (make-env {} {})
+        env (assoc env
+                   :resolve! (fn [_] (throw (ex-info "DNS must not be used for a literal" {})))
+                   :http-get! (fn [{:keys [address url]}] (reset! seen [address url]) page))
+        ok (:ok (w/fetch! env {:job-id "j" :url "https://[2606:4700:4700::1111]/"}))]
+    (is ok)
+    (is (= ["2606:4700:4700::1111" "https://[2606:4700:4700::1111]/"] @seen))     ; unbracketed for pinning, URL untouched
+    (is (= [:url/private-address] (:detail (w/fetch! env {:job-id "j" :url "https://[::1]/"}))))))
+
+(deftest many-open-brackets-and-one-distant-close-is-linear
+  ;; every '<' used to rescan to the same far '>' and be rejected: quadratic
+  (let [html (str (apply str (repeat 900000 "<")) ">")
+        ms (millis #(w/html->markdown html))]
+    (is (< ms 6000) (str "took " ms "ms"))))
