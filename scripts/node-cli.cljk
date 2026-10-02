@@ -5,6 +5,7 @@
             [murakumo.fleet-ps :as fleet-ps]
             [murakumo.health :as health]
             [murakumo.device-claim :as claim]
+            [murakumo.device-report :as report]
             [murakumo.onboard :as onboard]
             [murakumo.wifi-share :as wifi-share]
             [murakumo.onboard-device :as onboard-device]
@@ -17,7 +18,7 @@
             ["node:readline" :as readline] ["node:child_process" :as child-process]))
 
 (defn help []
-  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node wifi-share                Hand this PC's Wi-Fi to a headless box by sound\n  murakumo node onboard                   (box) Take a Wi-Fi profile handed over by sound\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node qualify --model ID        Run the local model through Community admission\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Run check, then qualify before joining Community jobs;\na heartbeat alone does not prove job eligibility.")
+  (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node report                    Send this device's signed heartbeat to the console\n  murakumo node wifi-share                Hand this PC's Wi-Fi to a headless box by sound\n  murakumo node onboard                   (box) Take a Wi-Fi profile handed over by sound\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node qualify --model ID        Run the local model through Community admission\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Run check, then qualify before joining Community jobs;\na heartbeat alone does not prove job eligibility.")
   (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
                                           (ctx, KV, slots), co-resident processes, units")
   (println "  Payout also requires --owner-token-file /absolute/private/path from the buyer's device page.")
@@ -231,6 +232,45 @@
         (.then (fn [{:keys [outcome reason]}]
                  (println "Onboarding:" (name outcome) (when reason (str "(" (name reason) ")")))
                  (when (= :closed outcome) (set! (.-exitCode js/process) 4)))))))
+(defn- report-options [args]
+  (loop [[a & more] args opts {}]
+    (cond
+      (nil? a) opts
+      (= a "--once") (recur more (assoc opts :once true))
+      (and (contains? #{"--site" "--interval"} a) (seq more) (not (str/starts-with? (first more) "--")))
+      (recur (rest more) (assoc opts (keyword (subs a 2)) (first more)))
+      :else (throw (js/Error. "Use murakumo node report [--site https://murakumo.cloud] [--once | --interval SECONDS].")))))
+(defn report! [args]
+  (let [opts (report-options args)
+        site (control-base (or (:site opts) "https://murakumo.cloud"))
+        id (identity)
+        interval (some-> (:interval opts) (js/parseInt 10))]
+    (when-not (or (= site "https://murakumo.cloud")
+                  (str/starts-with? site "https://127.0.0.1:") (str/starts-with? site "https://localhost:")
+                  (str/starts-with? site "http://127.0.0.1:") (str/starts-with? site "http://localhost:"))
+      (throw (js/Error. "The console must be murakumo.cloud or local loopback.")))
+    (when-not id
+      (throw (js/Error. "Device identity is missing; factory-provision this device first.")))
+    (when (and interval (not (<= 10 interval 3600)))
+      (throw (js/Error. "--interval must be 10 to 3600 seconds.")))
+    (when (and interval (:once opts)) (throw (js/Error. "Use --once or --interval, not both.")))
+    (let [send! #(report/once! js/fetch (fn [] (js/Date.now)) site id (report/collect-metrics))]
+      (if-not interval
+        (-> (send!)
+            (.then (fn [{:keys [outcome exit-code]}]
+                     (println "Heartbeat:" (name outcome))
+                     (when (not= 0 exit-code) (set! (.-exitCode js/process) exit-code)))))
+        ;; A loop for a box without a timer. It says something only when the answer changes, so a
+        ;; healthy box is quiet and a box that has not been claimed yet does not fill a log.
+        (let [last-outcome (atom nil)
+              tick (fn [] (-> (send!)
+                              (.then (fn [{:keys [outcome]}]
+                                       (when (not= outcome @last-outcome)
+                                         (reset! last-outcome outcome)
+                                         (println "Heartbeat:" (name outcome)))))))]
+          (tick)
+          (js/setInterval tick (* 1000 interval))
+          (js/Promise. (fn [_ _] nil)))))))
 (defn- fetch-node-grant! [id authn-base]
   (-> (mint! id authn-base ["murakumo://node-token"] 240000)
       (.then (fn [proof]
@@ -481,6 +521,9 @@
       (= command "claim-once")
       (-> (claim-once! args)
           (.catch (fn [_] (fail! "Claim response failed. Check the site, device identity and network."))))
+      (= command "report")
+      (-> (report! args)
+          (.catch (fn [e] (fail! (.-message e)))))
       (= command "onboard")
       (-> (onboard! args)
           (.catch (fn [e] (fail! (.-message e)))))
