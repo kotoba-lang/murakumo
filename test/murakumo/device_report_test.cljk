@@ -1,0 +1,95 @@
+(ns murakumo.device-report-test
+  "The signing input is a wire rule shared with the server, so it is pinned as a literal. The
+  signature is checked with node:crypto's verify and a public key taken from the DID: a
+  separate path from the code that signed, standing in for the server's WebCrypto check.
+  Every refusal names its own reason."
+  (:require [murakumo.device-report :as report]
+            [kotoba.test :refer [deftest is testing async]]
+            ["node:crypto" :as crypto] ["node:os" :as os]))
+
+(def did "did:key:z6MkTestDevice")
+(def endpoint "https://murakumo.cloud")
+
+(deftest the-signing-input-is-pinned
+  (is (= "aiueos-device-heartbeat-v1\ndid:key:z6MkTestDevice\nhttps://murakumo.cloud\nabc123\n"
+         (report/signing-input did endpoint "abc123"))
+      "changing this invalidates every heartbeat signature")
+  (is (= {:error :field-blank} (report/signing-input did endpoint ""))))
+
+(deftest the-body-is-the-text-that-is-hashed
+  (let [text (report/body-text 1790000000000 {"load1" 0.5 "uptime-s" 12})]
+    (is (= "{\"observed-at-ms\":1790000000000,\"metrics\":{\"load1\":0.5,\"uptime-s\":12}}" text))
+    (is (= 64 (count (report/body-sha256 text))))
+    (is (= (report/body-sha256 text) (report/body-sha256 text)))
+    (is (not= (report/body-sha256 text) (report/body-sha256 (str text " "))))))
+
+(deftest the-endpoint-is-the-origin-the-request-reaches
+  (is (= "https://murakumo.cloud" (report/endpoint-of "https://murakumo.cloud")))
+  (is (= "https://murakumo.cloud" (report/endpoint-of "https://murakumo.cloud/")))
+  (is (= "http://127.0.0.1:8123" (report/endpoint-of "http://127.0.0.1:8123/anything"))))
+
+(deftest a-signature-verifies-with-the-dids-key-and-with-nothing-else
+  (let [pair (.generateKeyPairSync crypto "ed25519")
+        pem (.export (.-privateKey pair) #js {:format "pem" :type "pkcs8"})
+        input (report/signing-input did endpoint "abc123")
+        sig (report/sign pem input)
+        verify (fn [message sig-b64]
+                 (.verify crypto nil (js/Buffer.from message "utf8") (.-publicKey pair)
+                          (js/Buffer.from sig-b64 "base64url")))]
+    (is (true? (verify input sig)))
+    (testing "a different body hash, endpoint or domain does not verify"
+      (is (false? (verify (report/signing-input did endpoint "abc124") sig)))
+      (is (false? (verify (report/signing-input did "https://evil.example" "abc123") sig)))
+      (is (false? (verify (str "aiueos-device-attest-v1\n" did "\n" endpoint "\nabc123\n") sig))
+          "an enrolment-domain message is not a heartbeat"))))
+
+(deftest what-the-server-says-is-sorted-into-outcomes
+  (is (= {:outcome :accepted} (report/interpret {:status 202 :body {"accepted" true}})))
+  (is (= {:outcome :rejected :reason :bad-signature}
+         (report/interpret {:status 401 :body {"accepted" false "reason" "bad-signature"}})))
+  (doseq [r ["unknown-device" "not-claimed"]]
+    (is (= {:outcome :not-claimed} (report/interpret {:status 409 :body {"reason" r}})) r))
+  (is (= {:outcome :stale} (report/interpret {:status 409 :body {"reason" "stale"}})))
+  (is (= {:outcome :clock-ahead} (report/interpret {:status 409 :body {"reason" "future-dated"}})))
+  (testing "a 202 whose body does not say accepted is not an acceptance"
+    (is (= {:outcome :error :status 202} (report/interpret {:status 202 :body {}}))))
+  (testing "no response is not folded into any answer from the server"
+    (is (= {:outcome :unreachable} (report/interpret {:status nil :body nil}))))
+  (is (= {:outcome :error :status 500} (report/interpret {:status 500 :body {}}))))
+
+(deftest outcomes-have-distinct-exit-codes-where-it-matters
+  (is (= 0 (:accepted report/exit-codes)))
+  (is (= 0 (:stale report/exit-codes)) "the same millisecond twice is not a fault")
+  (is (= 4 (:not-claimed report/exit-codes)) "expected before the claim goes through")
+  (is (= 4 (count (distinct (map report/exit-codes [:rejected :unreachable :not-claimed :clock-ahead]))))))
+
+(deftest the-metrics-carry-no-identity-of-the-machine
+  (let [m (report/collect-metrics)
+        text (js/JSON.stringify (clj->js m))]
+    (is (= #{"load1" "mem-free-ratio" "uptime-s" "platform" "arch" "node"} (set (keys m))))
+    (is (<= 0 (get m "mem-free-ratio") 1))
+    (is (not (.includes text (.hostname os))) "no host name")))
+
+(deftest a-heartbeat-is-posted-signed-to-the-device-path
+  (async done
+         (let [pair (.generateKeyPairSync crypto "ed25519")
+               pem (.export (.-privateKey pair) #js {:format "pem" :type "pkcs8"})
+               seen (atom nil)
+               fake-fetch (fn [url opts]
+                            (reset! seen {:url url :opts opts})
+                            (js/Promise.resolve #js {:status 202 :json (fn [] (js/Promise.resolve #js {:accepted true}))}))]
+           (-> (report/once! fake-fetch (fn [] 1790000000000) "https://murakumo.cloud/portal/?view=devices#devices"
+                             #js {:did did :privateKey pem} {"load1" 0.5})
+               (.then (fn [{:keys [outcome exit-code]}]
+                        (is (= :accepted outcome))
+                        (is (= 0 exit-code))
+                        (let [{:keys [url opts]} @seen
+                              body (.-body opts)
+                              sig (aget (.-headers opts) "x-aiueos-signature")]
+                          (is (= "https://murakumo.cloud/api/devices/did%3Akey%3Az6MkTestDevice/heartbeat" url))
+                          (is (= "POST" (.-method opts)))
+                          (is (true? (.verify crypto nil
+                                              (js/Buffer.from (report/signing-input did endpoint (report/body-sha256 body)) "utf8")
+                                              (.-publicKey pair) (js/Buffer.from sig "base64url")))
+                              "the signature covers the exact body that was sent"))
+                        (done)))))))
