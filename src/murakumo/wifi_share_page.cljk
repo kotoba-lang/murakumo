@@ -1,7 +1,15 @@
 (ns murakumo.wifi-share-page
   "The one page `murakumo node wifi-share` serves on localhost. It hears the box,
   asks the helper to seal, and plays the sealed bytes. It never sees the
-  passphrase: sealing happens in the helper process.")
+  passphrase: sealing happens in the helper process."
+  (:require [kotoba.lang.text :as str]))
+
+(defn- script-string [s]
+  ;; JSON quoting alone does not stop the HTML parser closing a script element.
+  (-> (js/JSON.stringify s)
+      (str/replace "<" "\\u003c")
+      (str/replace ">" "\\u003e")
+      (str/replace "&" "\\u0026")))
 
 (def ^:private page-script
   "const $=s=>document.querySelector(s),T=new URLSearchParams(location.search).get('t');let ctx,gg,inst,dev=null,acked=false;
@@ -32,4 +40,4 @@ $('#send').onclick=async()=>{try{const r=await fetch('/seal?t='+T,{method:'POST'
        "<div class=\"card\"><small>渡すネットワーク</small><b id=\"ssid\"></b><small>パスワードはこの PC のヘルパーの中だけにあり、ブラウザには届きません。</small>"
        "<button id=\"go\">端末の音を聞き取る</button><meter id=\"lv\" min=\"0\" max=\"1\" value=\"0\" style=\"width:100%\"></meter><div id=\"st\">端末のスピーカーの近くで開始してください。</div></div>"
        "<div class=\"card\" id=\"dev\" hidden><small>聞き取った端末</small><div class=\"code\" id=\"code\"></div><button id=\"send\">この端末に Wi-Fi を音で渡す</button><div id=\"ws\"></div></div></main>"
-       "<script src=\"/ggwave.js\"></script><script>document.getElementById('ssid').textContent=" (js/JSON.stringify ssid) ";" page-script "</script></html>"))
+       "<script src=\"/ggwave.js\"></script><script>document.getElementById('ssid').textContent=" (script-string ssid) ";" page-script "</script></html>"))

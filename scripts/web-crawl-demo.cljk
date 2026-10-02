@@ -1,0 +1,21 @@
+;; Live smoke for ADR-260929 M2: crawl one seed politely and print the manifest.
+;;   kbb --classpath "src:test" scripts/web-crawl-demo.cljk https://example.com/ [store-dir]
+(ns web-crawl-demo
+  (:require [murakumo.web :as web]
+            [murakumo.web.crawl :as crawl]
+            [murakumo.web.host :as host]))
+
+(let [seed (or (first *command-line-args*) "https://example.com/")
+      key-seed (.toString (.randomBytes (js/require "crypto") 32) "hex")
+      dir (or (second *command-line-args*) (str (.tmpdir (js/require "os")) "/murakumo-web-demo"))
+      sleep! (fn [ms] (let [a (js/Int32Array. (js/SharedArrayBuffer. 4))] (.wait js/Atomics a 0 0 ms)))
+      env (assoc (host/env {:store-dir dir :seed-hex key-seed :node-did "did:local:demo"}) :sleep! sleep!)
+      r (crawl/crawl! env {:job-id "demo-crawl"
+                           :plan {:seeds [seed] :max-pages 5 :max-depth 1 :delay-ms 1000 :scope :same-host}})]
+  (if-let [ok (:ok r)]
+    (do (println "manifest" (:manifest-cid ok))
+        (println "stats   " (pr-str (get-in ok [:manifest :stats])))
+        (println "robots  " (pr-str (get-in ok [:manifest :robots])))
+        (doseq [p (get-in ok [:manifest :pages])] (println "page    " (:status p) (:url p) (:cid p)))
+        (doseq [s (get-in ok [:manifest :skipped])] (println "skipped " (pr-str s))))
+    (println "REFUSED" (pr-str r))))

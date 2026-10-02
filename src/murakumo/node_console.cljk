@@ -97,7 +97,9 @@
         ;; a proxy talks to loopback, and a phone cannot)
         shown (or public-url site)
         url (claim-url label shown)
-        qr (when (and url qr-fn (not claimed?)) (qr-fn url))
+        candidate-qr (when (and url qr-fn (not claimed?)) (qr-fn url))
+        ;; A QR wrapped by the terminal is not a scannable QR, even on a tall screen.
+        qr (when (and candidate-qr (every? #(<= (+ 3 (count %)) width) candidate-qr)) candidate-qr)
         site* (str/replace (str shown) #"/+$" "")]
     {:status [(str " MURAKUMO NODE")
               rule
@@ -117,7 +119,8 @@
               qr (vec (concat [" To add this device to your account, scan with your phone:" ""]
                               (for [l qr] (str "   " l))
                               ["" (str " or open " site* "/#claim and paste the label text")]))
-              url [" Open this link on your phone to add the device:" (str "   " url)]
+              url (cond-> [" Open this link on your phone to add the device:" (str "   " url)]
+                    candidate-qr (conj " (this terminal is too narrow to draw the QR code)"))
               :else [" No label on this device, so there is nothing to scan."
                      " The factory writes it to <state-dir>/label."])
      :link (cond
@@ -145,7 +148,7 @@
   two are shown as pages, and the shell flips `:page`; if even the QR page is too tall, the link is shown as
   text and says why."
   [{:keys [width height page] :or {width 80} :as state}]
-  (let [width (max 60 (min 120 width))
+  (let [width (max 1 (min 120 width))
         {:keys [status claim link]} (sections (assoc state :width width))
         total (+ (count status) (reduce + (map #(wrapped-rows % width) claim)))]
     (vec

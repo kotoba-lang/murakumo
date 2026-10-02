@@ -94,6 +94,14 @@
 
 (def tall-qr (vec (repeat 25 "█▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀█")))
 
+(deftest a-tall-but-narrow-terminal-does-not-wrap-the-qr
+  (let [st (assoc base :qr-fn (fn [_] tall-qr) :width 20 :height 100
+                  :heartbeat {:outcome :not-claimed :at-ms 988000})
+        rows (c/screen st)]
+    (is (not-any? #(str/includes? % "█") rows))
+    (is (some #(str/includes? % "too narrow") rows))
+    (is (some #(str/includes? % "https://murakumo.cloud/#claim?q=") rows))))
+
 (deftest a-short-terminal-gets-pages-and-never-a-cut-off-qr
   (let [st (assoc base :qr-fn (fn [_] tall-qr) :heartbeat {:outcome :not-claimed :at-ms 988000})
         all (c/screen st)
