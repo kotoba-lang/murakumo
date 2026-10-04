@@ -1,0 +1,25 @@
+(ns install-native-image-worker
+  "Install the qualified native image lane on the owned K16; existing credentials remain local."
+  (:require [nbb.core :as nbb] ["node:fs" :as fs] ["node:path" :as path] ["node:child_process" :as cp]))
+(let [host (first *command-line-args*) root (path/resolve (path/dirname nbb/*file*) "..")
+      target "/opt/murakumo/qwen-image21"
+      encode #(.toString (js/Buffer.from %) "base64")
+      unit (str "[Unit]\nDescription=Murakumo qualified Qwen image pull worker\nAfter=network-online.target\nWants=network-online.target\n"
+                "[Service]\nType=simple\nEnvironmentFile=/etc/murakumo/join.env\nEnvironment=MURAKUMO_IMAGE_WORKER_NAME=aiueos-k16-qwen-image21\n"
+                "ExecStart=/usr/local/bin/nbb --classpath " target "/src " target "/join.cljk\n"
+                "Restart=always\nRestartSec=10\nNice=10\nCPUQuota=400%\nMemoryHigh=12G\nMemoryMax=14G\nMemorySwapMax=2G\nOOMScoreAdjust=900\nKillMode=control-group\nTimeoutStopSec=5\n"
+                "[Install]\nWantedBy=multi-user.target\n")]
+  (when-not (= host "root@100.66.205.17") (throw (js/Error. "Use the owned K16 host root@100.66.205.17")))
+  (let [files [["src/murakumo/infer/image_worker.cljk" "src/murakumo/infer/image_worker.cljs"]
+               ["src/murakumo/infer/image_native.cljk" "src/murakumo/infer/image_native.cljs"]
+               ["scripts/infer-native-image-join.cljk" "join.cljk"]]
+        script (str "set -euo pipefail\ntest \"$(id -u)\" = 0\ntest -f /etc/murakumo/join.env\n"
+                    "test -x /usr/local/bin/nbb\ntest -f " target "/qualified.json\n"
+                    "if systemctl is-active --quiet murakumo-native-image-worker.service; then echo 'Stop the idle image worker before reinstalling'; exit 1; fi\n"
+                    "mkdir -p " target "/src/murakumo/infer\n"
+                    (apply str (map (fn [[from to]] (str "echo '" (encode (fs/readFileSync (path/join root from))) "' | base64 -d > " target "/" to "\n")) files))
+                    "echo '" (encode unit) "' | base64 -d > /etc/systemd/system/murakumo-native-image-worker.service\n"
+                    "systemd-analyze verify /etc/systemd/system/murakumo-native-image-worker.service\n"
+                    "systemctl daemon-reload\nsystemctl enable --now murakumo-native-image-worker.service\n"
+                    "systemctl is-active murakumo-native-image-worker.service\n")]
+    (cp/execFileSync "ssh" #js [host "/bin/bash -s"] #js {:input script :stdio #js ["pipe" "inherit" "inherit"] :timeout 30000})))

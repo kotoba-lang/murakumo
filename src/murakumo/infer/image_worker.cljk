@@ -42,6 +42,8 @@
                  (local! cfg "POST" "/free" {:unload_models true :free_memory true}))))
       (.catch (fn [_] nil))))
 (defn probe! [cfg]
+  (if-let [probe-fn (:probe-fn cfg)]
+    (probe-fn cfg)
   (-> (js/Promise.all #js [(local! cfg "GET" "/object_info/CheckpointLoaderSimple" nil)
                          (local! cfg "GET" "/queue" nil)])
       (.then (fn [[objects queue]]
@@ -54,7 +56,7 @@
                           (> (- (js/Date.now) @last-cleanup) 60000))
                    (do (reset! last-cleanup (js/Date.now))
                        (-> (release-idle! cfg) (.then (fn [_] probe))))
-                   probe))))))
+                   probe)))))))
 (defn heartbeat! [cfg]
   (-> (probe! cfg)
       (.catch (fn [_] {:name (:name cfg) :models [] :ready false :running 0 :pending 0 :memory-bytes 0}))
@@ -75,7 +77,7 @@
 (defn image-file [history id]
   (let [entry (or (get history (keyword id)) (get history id))]
     (first (mapcat :images (vals (:outputs entry))))))
-(defn render! [cfg claim lost?]
+(defn comfy-render! [cfg claim lost?]
   (let [id (:id claim)]
     (-> (local! cfg "POST" "/prompt" {:prompt (workflow (:input claim))
                                        :client_id (str "murakumo-image:" id ":" (:attempt claim))})
@@ -104,6 +106,10 @@
                                               (if entry (throw (js/Error. "ComfyUI finished without image"))
                                                 (-> (wait! 3000) (.then poll!)))))))))]
                      (poll!))))))))
+(defn render! [cfg claim lost?]
+  (if-let [render-fn (:render-fn cfg)]
+    (render-fn cfg claim lost?)
+    (comfy-render! cfg claim lost?)))
 (defn acknowledge! [cfg claim b64 lost?]
   (letfn [(send! [n]
             (if (or @lost? (>= (js/Date.now) (:deadline claim)))
@@ -142,7 +148,7 @@
                   (-> (api! cfg "POST" (str "/infer/image-jobs/" id "/failed") (fence cfg claim))
                       (.catch (fn [_] nil)))))
         (.finally (fn [] (js/clearInterval timer) (reset! (:busy cfg) false)
-                    (when @completed? (release-idle! cfg)))))))
+                    (when (and @completed? (:comfy cfg)) (release-idle! cfg)))))))
 (defn poll! [cfg]
   ;; The independent heartbeat loop publishes once per interval. Polling must
   ;; only probe locally, otherwise idle nodes continuously contend on head CAS.
