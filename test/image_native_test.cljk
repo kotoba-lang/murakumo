@@ -7,7 +7,9 @@
 (deftest fixed-profile-and-literal-prompt
   (let [args (n/arguments {:native-root "/models"} claim "/tmp/output.png")]
     (is (= (:prompt (:input claim)) (nth args (inc (.indexOf (clj->js args) "-p")))))
-    (is (some #{"--clip-on-cpu"} args)))
+    (is (= "cpu" (nth args (inc (.indexOf (clj->js args) "--backend")))))
+    (is (= "cpu" (nth args (inc (.indexOf (clj->js args) "--params-backend")))))
+    (is (= "off" (nth args (inc (.indexOf (clj->js args) "--auto-fit"))))))
   (is (try (n/arguments {:native-root "/models"} (assoc claim :model "another-model") "/tmp/output.png") false
            (catch :default _ true))))
 (deftest no-unqualified-advertisement

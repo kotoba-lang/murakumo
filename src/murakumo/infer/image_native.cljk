@@ -20,7 +20,7 @@
 (defn qualified? [cfg]
   (try
     (let [marker (js->clj (js/JSON.parse (fs/readFileSync (path/join (:native-root cfg) "qualified.json") "utf8")) :keywordize-keys true)]
-      (and (= model-id (:model marker)) (= runtime-revision (:runtime marker))
+      (and (= model-id (:model marker)) (= runtime-revision (:runtime marker)) (= "cpu" (:backend marker))
            (= (mapv :sha256 artifacts) (:sha256 marker))
            (fs/existsSync (:sd-cli cfg))
            (every? #(fs/existsSync (path/join (:native-root cfg) "models" (:file %))) artifacts)))
@@ -42,7 +42,9 @@
      "--vae" (model-path (:file (last artifacts)))
      "-p" prompt "-W" (str width) "-H" (str height) "--steps" (str steps)
      "--seed" (str seed) "--cfg-scale" "1" "--sampling-method" "euler"
-     "--offload-to-cpu" "--clip-on-cpu" "--vae-on-cpu" "--fa" "-t" "4" "-o" output]))
+     ;; The K16's resident text service owns Vulkan exclusively. Explicit CPU
+     ;; assignments and disabled auto-fit prevent even an idle-GPU race.
+     "--backend" "cpu" "--params-backend" "cpu" "--auto-fit" "off" "--fa" "-t" "4" "-o" output]))
 
 (defn render! [cfg claim lost?]
   (let [dir (fs/mkdtempSync (path/join (:native-root cfg) "job-")) output (path/join dir "image.png")]
