@@ -72,6 +72,16 @@
         (doseq [flag ["--force-fp32" "--fp32-unet" "--bf16-unet"]]
           (assertion/throws #(precision-args ["python" "main.py" flag])))
         (assertion/throws #(precision-args ["bash" "-c" "python main.py"]))
+        (let [attempts (atom 0) sleeps (atom 0)]
+          (with-redefs [sh! (fn [cmd _]
+                             (if (= cmd "/bin/sleep") (swap! sleeps inc)
+                               (if (< (swap! attempts inc) 3) (throw (js/Error. "unloading")) "started")))]
+            (assertion/equal (bootstrap! "fixture.plist") "started")
+            (assertion/equal @attempts 3) (assertion/equal @sleeps 2)))
+        (let [attempts (atom 0)]
+          (with-redefs [sh! (fn [cmd _]
+                             (when-not (= cmd "/bin/sleep") (swap! attempts inc) (throw (js/Error. "unavailable"))))]
+            (assertion/throws #(bootstrap! "fixture.plist")) (assertion/equal @attempts 6)))
         (println "Precision configuration: preserved arguments, idempotence and conflicts verified."))
     (= mode "--on-node") (prepare!)
     (contains? hosts mode)
