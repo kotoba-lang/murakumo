@@ -150,7 +150,7 @@
         controllers (atom {})
         save! #(persist! file @state)
         tick! (fn []
-                (doseq [[id lane] (sort-by (fn [[_ l]] (:last-probe l 0)) @lanes)
+                (doseq [[id lane] (sort-by (fn [[_ l]] [(:last-probe l 0) (if (= "image" (:kind l)) 0 1)]) @lanes)
                         :when (and (not (:probing lane)) (not (get-in @state [:groups (:group lane)]))
                                    (not (and (= "text" (:kind lane))
                                              (some #(and (= "image" (:kind %)) (= (:group lane) (:group %)) (:external-busy %))
