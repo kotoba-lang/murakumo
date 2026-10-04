@@ -4,6 +4,9 @@
             ["node:child_process" :as cp] ["node:assert/strict" :as assertion]))
 (def hosts #{"asher" "zebulun" "joseph" "dan" "benjamin" "issachar" "naphtali"})
 (defn precision-args [args]
+  (when-not (and (vector? args) (re-matches #"python(?:[0-9]+(?:\.[0-9]+)*)?" (path/basename (or (first args) "")))
+                (some #(boolean (re-find #"(^|/)main\.py$" %)) args))
+    (throw (js/Error. "Only a direct ComfyUI Python launcher can be prepared")))
   (when (some #{"--force-fp32" "--fp32-unet" "--fp64-unet" "--bf16-unet"
                 "--fp8_e4m3fn-unet" "--fp8_e5m2-unet"} args)
     (throw (js/Error. "Explicit existing precision must be reviewed before changing it")))
@@ -60,6 +63,7 @@
           (assertion/deepEqual (clj->js (precision-args ["python" "main.py" flag])) (clj->js ["python" "main.py" flag])))
         (doseq [flag ["--force-fp32" "--fp32-unet" "--bf16-unet"]]
           (assertion/throws #(precision-args ["python" "main.py" flag])))
+        (assertion/throws #(precision-args ["bash" "-c" "python main.py"]))
         (println "Precision configuration: preserved arguments, idempotence and conflicts verified."))
     (= mode "--on-node") (prepare!)
     (contains? hosts mode)
