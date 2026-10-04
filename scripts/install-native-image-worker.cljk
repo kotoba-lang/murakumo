@@ -6,6 +6,7 @@
       encode #(.toString (js/Buffer.from %) "base64")
       unit (str "[Unit]\nDescription=Murakumo qualified Qwen image pull worker\nAfter=network-online.target\nWants=network-online.target\n"
                 "[Service]\nType=simple\nEnvironmentFile=/etc/murakumo/join.env\nEnvironment=MURAKUMO_IMAGE_WORKER_NAME=aiueos-k16-qwen-image21\n"
+                "Environment=NODE_OPTIONS=--dns-result-order=ipv4first\n"
                 "ExecStart=/usr/local/bin/nbb --classpath " target "/src " target "/join.cljk\n"
                 "Restart=always\nRestartSec=10\nNice=10\nCPUQuota=400%\nMemoryHigh=12G\nMemoryMax=14G\nMemorySwapMax=2G\nOOMScoreAdjust=900\nKillMode=control-group\nTimeoutStopSec=5\n"
                 "[Install]\nWantedBy=multi-user.target\n")]
