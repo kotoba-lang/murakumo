@@ -167,11 +167,13 @@
                       (.finally (fn []
                                   (swap! lanes assoc-in [id :probing] false)
                                   (swap! state update :groups dissoc (:group lane)))))))
-        execute! (fn [req res lane-id]
+        execute! (fn [req res lane-id compatibility?]
                    (-> (read-body! req (:max-body-bytes config 2097152))
                        (.then
                         (fn [bytes]
-                          (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
+                          (let [raw-body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
+                                body (if (and compatibility? (contains? #{"mishima" "murakumo/free"} (:model raw-body)))
+                                       (assoc raw-body :model "mishima") raw-body)
                                 id (aget (.-headers req) "x-murakumo-job-id")
                                 digest (.digest (.update (.createHash crypto "sha256") bytes) "hex")
                                 lane (get @lanes lane-id)
@@ -243,17 +245,42 @@
                                                                     [id (select-keys (assoc l :busy (boolean (or (:external-busy l) (get-in @state [:groups (:group l)]))))
                                                                                      [:model :kind :context :ready :busy :failures])]))})
                                     (and (= "POST" (.-method req)) (str/starts-with? (.-url req) "/execute/"))
-                                    (execute! req res (subs (.-url req) 9))
-                                    :else (json! res 404 {:error "not_found"})))))]
+                                    (execute! req res (subs (.-url req) 9) false)
+                                    :else (json! res 404 {:error "not_found"})))))
+        compatibility-server
+        (when (:compat-port config)
+          (when-not (and (:compat-bind config)
+                         (or (= "127.0.0.1" (:compat-bind config))
+                             (re-matches #"100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+" (:compat-bind config)))
+                         (get @lanes "text"))
+            (throw (js/Error. "compat-port requires explicit loopback or tailnet bind and a text lane")))
+          (.createServer http
+            (fn [req res]
+              (let [lane (get @lanes "text")
+                    busy (boolean (or (:external-busy lane) (get-in @state [:groups (:group lane)])))]
+                (cond
+                  (and (= "GET" (.-method req)) (= "/health" (.-url req)))
+                  (json! res (if (or (:ready lane) busy) 200 503) {:status (if busy "busy" (if (:ready lane) "ok" "unavailable"))})
+                  (and (= "GET" (.-method req)) (= "/slots" (.-url req)))
+                  (json! res 200 [{:is_processing (or busy (not (:ready lane)))}])
+                  (and (= "POST" (.-method req)) (= "/v1/chat/completions" (.-url req)))
+                  (do
+                    (when-not (aget (.-headers req) "x-murakumo-job-id")
+                      (aset (.-headers req) "x-murakumo-job-id"
+                            (str (:node config) "_text_" (.toString (.randomBytes crypto 16) "hex"))))
+                    (execute! req res "text" true))
+                  :else (json! res 404 {:error "not_found"}))))))]
     (doseq [[id l] @lanes]
       (when-not (and (:group l) (:backend l) (:model l) (:path l))
         (throw (js/Error. (str "incomplete lane " id)))))
     (.listen server (:port config 8796) (:bind config "127.0.0.1"))
+    (when compatibility-server (.listen compatibility-server (:compat-port config) (:compat-bind config)))
     (tick!)
     (let [timer (js/setInterval tick! (:probe-interval-ms config 30000))]
       {:server server :state state :lanes lanes
        :close (fn [] (js/clearInterval timer)
-                (doseq [[_ c] @controllers] (.abort c)) (.close server))})))
+                (doseq [[_ c] @controllers] (.abort c)) (.close server)
+                (when compatibility-server (.close compatibility-server)))})))
 
 (defn run-command [command args]
   (case command
