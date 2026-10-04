@@ -1,0 +1,72 @@
+(ns prepare-image-comfy
+  "Opt-in FP16 UNet preparation of an idle owned image node. No busy render is interrupted."
+  (:require [nbb.core :as nbb] ["node:fs" :as fs] ["node:path" :as path]
+            ["node:child_process" :as cp] ["node:assert/strict" :as assertion]))
+(def hosts #{"asher" "zebulun" "joseph" "dan" "benjamin"})
+(defn precision-args [args]
+  (when (some #{"--force-fp32" "--fp32-unet" "--fp64-unet" "--bf16-unet"
+                "--fp8_e4m3fn-unet" "--fp8_e5m2-unet"} args)
+    (throw (js/Error. "Explicit existing precision must be reviewed before changing it")))
+  (if (some #{"--fp16-unet" "--force-fp16"} args) args (conj (vec args) "--fp16-unet")))
+(defn sh! [cmd args]
+  (.toString (cp/execFileSync cmd (clj->js args) #js {:timeout 30000 :stdio #js ["ignore" "pipe" "pipe"]})))
+(defn idle! []
+  (-> (js/fetch "http://127.0.0.1:8188/queue" #js {:signal (js/AbortSignal.timeout 5000)})
+      (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "ComfyUI queue unavailable"))) (.json r)))
+      (.then (fn [q]
+               (when-not (and (array? (.-queue_running q)) (array? (.-queue_pending q))
+                              (zero? (.-length (.-queue_running q))) (zero? (.-length (.-queue_pending q))))
+                 (throw (js/Error. "ComfyUI is busy; configuration preserved")))))))
+(defn prepare! []
+  (when-not (contains? hosts (path/basename (.-HOME js/process.env)))
+    (throw (js/Error. "Not an owned image node")))
+  (let [dir (path/join (.-HOME js/process.env) ".murakumo/images")
+        live "/Library/LaunchDaemons/com.murakumo.comfyui.plist"
+        before (path/join dir "comfyui-before-precision.plist")
+        proposed (path/join dir "comfyui-image-precision.plist")
+        label "system/com.murakumo.comfyui"]
+    (fs/mkdirSync dir #js {:recursive true})
+    (-> (idle!)
+        (.then (fn [_]
+                 (let [config (js->clj (js/JSON.parse (sh! "plutil" ["-convert" "json" "-o" "-" live])) :keywordize-keys true)
+                       args (:ProgramArguments config) next-args (precision-args args)]
+                   (when-not (and (vector? args) (seq args)) (throw (js/Error. "Invalid ComfyUI launch configuration")))
+                   (if (= args next-args) false
+                     (do (fs/writeFileSync before (fs/readFileSync live) #js {:mode 384})
+                         (fs/writeFileSync proposed (js/JSON.stringify (clj->js (assoc config :ProgramArguments next-args))) #js {:mode 384})
+                         (sh! "plutil" ["-convert" "xml1" proposed])
+                         (sh! "plutil" ["-lint" proposed]) true)))))
+        (.then (fn [change?]
+                 (if-not change? (println "comfy-image-precision-already-set")
+                   (-> (idle!)
+                       (.then (fn [_]
+                                (try
+                                  (sh! "sudo" ["-n" "install" "-o" "root" "-g" "wheel" "-m" "644" proposed live])
+                                  (sh! "sudo" ["-n" "launchctl" "bootout" label])
+                                  (sh! "sudo" ["-n" "launchctl" "bootstrap" "system" live])
+                                  (println "comfy-image-precision-prepared")
+                                  (catch :default e
+                                    (sh! "sudo" ["-n" "install" "-o" "root" "-g" "wheel" "-m" "644" before live])
+                                    (try (sh! "sudo" ["-n" "launchctl" "bootout" label]) (catch :default _ nil))
+                                    (sh! "sudo" ["-n" "launchctl" "bootstrap" "system" live])
+                                    (throw e)))))))))
+        (.catch (fn [e] (println "image-precision-not-applied:" (.-message e)) (set! (.-exitCode js/process) 1))))))
+(let [mode (first *command-line-args*)]
+  (cond
+    (= mode "--test")
+    (do (assertion/deepEqual (clj->js (precision-args ["python" "main.py" "--listen" "127.0.0.1"]))
+                            #js ["python" "main.py" "--listen" "127.0.0.1" "--fp16-unet"])
+        (doseq [flag ["--fp16-unet" "--force-fp16"]]
+          (assertion/deepEqual (clj->js (precision-args ["python" "main.py" flag])) (clj->js ["python" "main.py" flag])))
+        (doseq [flag ["--force-fp32" "--fp32-unet" "--bf16-unet"]]
+          (assertion/throws #(precision-args ["python" "main.py" flag])))
+        (println "Precision configuration: preserved arguments, idempotence and conflicts verified."))
+    (= mode "--on-node") (prepare!)
+    (contains? hosts mode)
+    (let [dir (str "/Users/" mode "/.murakumo/images")
+          payload (.toString (fs/readFileSync nbb/*file*) "base64")
+          script (str "set -euo pipefail\n test \"$(id -un)\" = " mode "\n umask 077\n mkdir -p " dir "\n"
+                      "echo '" payload "' | base64 -D > " dir "/prepare-comfy.cljk\n"
+                      "/opt/homebrew/bin/node /Users/" mode "/.murakumo/edge/nbb/lib/nbb_main.js " dir "/prepare-comfy.cljk --on-node\n")]
+      (cp/execFileSync "ssh" #js [mode "/bin/bash -s"] #js {:input script :stdio "inherit" :timeout 60000}))
+    :else (throw (js/Error. "Usage: prepare-image-comfy.cljk <owned image Mac> | --test"))))
