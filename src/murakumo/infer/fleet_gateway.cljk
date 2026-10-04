@@ -30,18 +30,24 @@
                                                       (assoc (js->clj body :keywordize-keys true) :at (js/Date.now)))))
                                       (.catch (fn [_] (swap! reports dissoc node)))))))
                       (.finally #(reset! polling false)))))
-        server (.createServer
-                http
-                (fn [req res]
+        handler (fn [req res compatibility?]
                   (cond
-                    (not (r/authorized? req token)) (r/json! res 401 {:error "unauthorized"})
-                    (and (= "GET" (.-method req)) (= "/health" (.-url req)))
+                    (and (not compatibility?) (not (r/authorized? req token))) (r/json! res 401 {:error "unauthorized"})
+                    (and (= "GET" (.-method req))
+                         (contains? (if compatibility? #{"/health" "/readiness"} #{"/health"}) (.-url req)))
                     (let [now (js/Date.now)
                           live (into {} (filter (fn [[_ p]] (< (- now (:at p)) 15000)) @reports))]
-                      (r/json! res (if (seq live) 200 503)
-                               {:node (:node config) :peers live :admission "node-owned"}))
+                      (if compatibility?
+                        (let [image-lanes (for [[_ p] live [_ lane] (:lanes p) :when (= "image" (:kind lane))] lane)
+                              models (into {} (for [model (distinct (map :model image-lanes))
+                                                    :let [ls (filter #(= model (:model %)) image-lanes)]]
+                                                [model {:ready (boolean (some :ready ls))
+                                                        :free (boolean (some #(and (:ready %) (not (:busy %))) ls))}]))]
+                          (r/json! res (if (seq image-lanes) 200 503) {:ok (boolean (seq image-lanes)) :busy (boolean (some :busy image-lanes)) :models models}))
+                        (r/json! res (if (seq live) 200 503)
+                                 {:node (:node config) :peers live :admission "node-owned"})))
                     (and (= "POST" (.-method req))
-                         (contains? #{"/v1/chat/completions" "/v1/images/generations"} (.-url req)))
+                         (contains? (if compatibility? #{"/v1/images/generations"} #{"/v1/chat/completions" "/v1/images/generations"}) (.-url req)))
                     (-> (r/read-body! req (:max-body-bytes config 2097152))
                         (.then
                          (fn [bytes]
@@ -107,15 +113,21 @@
                                (-> (js/Promise.resolve (attempt choices))
                                    (.finally #(js/clearTimeout timer)))))))
                         (.catch (fn [_] (when-not (.-headersSent res) (r/json! res 400 {:error "invalid_request"})))))
-                    :else (r/json! res 404 {:error "not_found"}))))]
+                    :else (r/json! res 404 {:error "not_found"})))
+        server (.createServer http (fn [req res] (handler req res false)))
+        compat-server (when (:compat-image-port config)
+                        (when-not (contains? #{"127.0.0.1" "::1"} (:compat-image-bind config "127.0.0.1"))
+                          (throw (js/Error. "image compatibility ingress must remain loopback")))
+                        (.createServer http (fn [req res] (handler req res true))))]
     (doseq [[node p] peers]
       (when-not (and (re-matches #"[A-Za-z0-9-]+" node) (:url p))
         (throw (js/Error. "invalid peer manifest"))))
     (.listen server (:port config 8797) (:bind config "127.0.0.1"))
+    (when compat-server (.listen compat-server (:compat-image-port config) (:compat-image-bind config "127.0.0.1")))
     (tick!)
     (let [timer (js/setInterval tick! (:probe-interval-ms config 3000))]
       {:server server :reports reports
-       :close (fn [] (js/clearInterval timer) (.close server))})))
+       :close (fn [] (js/clearInterval timer) (.close server) (when compat-server (.close compat-server)))})))
 
 (defn run-command [command args]
   (case command
