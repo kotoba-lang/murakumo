@@ -1,0 +1,9 @@
+(ns infer-image-join
+  (:require [murakumo.infer.image-worker :as worker]
+            ["node:os" :as os]))
+(let [token (aget js/process.env "MURAKUMO_SERVICE_TOKEN")
+      name (or (aget js/process.env "MURAKUMO_IMAGE_WORKER_NAME") (.hostname os))]
+  (if-not (and (string? token) (seq token) (re-matches #"[A-Za-z0-9._-]{1,128}" name))
+    (do (println "Owned-fleet token and valid worker name are required") (js/process.exit 1))
+    (worker/start! {:base (or (aget js/process.env "MURAKUMO_IMAGE_API") "https://api.murakumo.cloud")
+                    :token token :name name :comfy "http://127.0.0.1:8188" :min-free 1073741824})))

@@ -1,0 +1,38 @@
+(ns install-image-worker
+  "Install an outbound image worker on an existing owned Mac; credentials stay on that Mac."
+  (:require [nbb.core :as nbb] ["node:fs" :as fs] ["node:path" :as path]
+            ["node:child_process" :as cp]))
+(let [host (first *command-line-args*)
+      root (path/resolve (path/dirname nbb/*file*) "..")
+      payload (fn [file] (.toString (fs/readFileSync (path/join root file)) "base64"))]
+  (when-not (contains? #{"zebulun" "joseph" "dan" "benjamin"} host)
+    (throw (js/Error. "Usage: install-image-worker.cljk <owned Mac name>")))
+  (let [home (str "/Users/" host)
+        dir (str home "/.murakumo/images")
+        launcher (str "#!/bin/bash\nset -euo pipefail\nset -a\n. \"" home "/.murakumo/edge/join.env\"\nset +a\n"
+                      "export MURAKUMO_IMAGE_WORKER_NAME=" host "\n"
+                      "exec /opt/homebrew/bin/node " home "/.murakumo/edge/nbb/lib/nbb_main.js --classpath " dir "/src " dir "/join.cljk\n")
+        label "ai.gftd.murakumo-image-worker"
+        plist (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>"
+                   "<key>Label</key><string>" label "</string><key>UserName</key><string>" host "</string>"
+                   "<key>ProgramArguments</key><array><string>/bin/bash</string><string>" dir "/launch.sh</string></array>"
+                   "<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>15</integer>"
+                   "<key>StandardOutPath</key><string>" dir "/worker.log</string><key>StandardErrorPath</key><string>" dir "/error.log</string>"
+                   "</dict></plist>")
+        encode #(.toString (js/Buffer.from %) "base64")
+        script (str "set -euo pipefail\n"
+                    "test \"$(id -un)\" = " host "\n"
+                    "test -f " home "/.murakumo/edge/join.env\n"
+                    "test -f " home "/.murakumo/edge/nbb/lib/nbb_main.js\n"
+                    "mkdir -p " dir "/src/murakumo/infer\numask 077\n"
+                    "echo '" (payload "src/murakumo/infer/image_worker.cljk") "' | base64 -D > " dir "/src/murakumo/infer/image_worker.cljs\n"
+                    "echo '" (payload "scripts/infer-image-join.cljk") "' | base64 -D > " dir "/join.cljk\n"
+                    "echo '" (encode launcher) "' | base64 -D > " dir "/launch.sh\n"
+                    "echo '" (encode plist) "' | base64 -D > " dir "/worker.plist\n"
+                    "plutil -lint " dir "/worker.plist\n"
+                    "sudo -n install -o root -g wheel -m 644 " dir "/worker.plist /Library/LaunchDaemons/" label ".plist\n"
+                    "sudo -n launchctl bootout system/" label " 2>/dev/null || true\n"
+                    "sudo -n launchctl bootstrap system /Library/LaunchDaemons/" label ".plist\n"
+                    "sudo -n launchctl kickstart -k system/" label "\n"
+                    "echo image-worker-installed\n")]
+    (cp/execFileSync "ssh" #js [host "/bin/bash -s"] #js {:input script :stdio #js ["pipe" "inherit" "inherit"] :timeout 30000})))
