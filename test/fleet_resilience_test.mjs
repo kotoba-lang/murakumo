@@ -60,7 +60,8 @@ test('two entrypoints share node-owned slots, survive peer loss and do not repla
  await sleep(200);
  const image=await fetch(gateways[0].url+'/v1/images/generations',{method:'POST',headers,body:JSON.stringify({model:'animagine-xl-4.0',prompt:'image'})});assert.equal(image.status,200);assert.equal(Buffer.from((await image.json()).data[0].b64_json,'base64').toString(),'image-fixture');await sleep(200);
  gateways[0].process.kill('SIGTERM');await once(gateways[0].process,'exit');
- const bad=await request(gateways[1],body.replace('hello','break'));  assert.equal(bad.status,502);const failure=await bad.json();assert.equal(failure.retryable,false);assert.equal(failure.error,'execution_unknown');
+ let bad;
+ await wait(async()=>{bad=await request(gateways[1],body.replace("hello","break"));if(bad.status===429){assert.equal((await bad.json()).executed,false);return false;}return true;});  assert.equal(bad.status,502);const failure=await bad.json();assert.equal(failure.retryable,false);assert.equal(failure.error,'execution_unknown');
  assert.equal(nodes[0].max,1);
  const ledger=JSON.parse(await readFile(nodes[0].stateFile,'utf8'));assert.ok(Object.values(ledger.jobs).some(j=>j.status==='unknown'),JSON.stringify({ledger,failure}));assert.deepEqual(ledger.groups,{});
 });
