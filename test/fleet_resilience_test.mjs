@@ -26,8 +26,8 @@ test('two entrypoints share node-owned slots, survive peer loss and do not repla
    let data='';req.on('data',b=>data+=b);req.on('end',()=>{const b=JSON.parse(data);const content=b.messages?.[0]?.content??b.prompt;if(content.startsWith('2+3'))return res.end(JSON.stringify({choices:[{message:{content:'5'}}]}));
     n.calls++;n.active++;n.max=Math.max(n.max,n.active);setTimeout(()=>{n.active--;if(content==='break')res.destroy();else res.end(JSON.stringify(req.url==='/image'?{data:[{b64_json:Buffer.from('image-fixture').toString('base64')}]}:{choices:[{message:{content:'OK'}}]}));},150);
    });});s.listen(0,'127.0.0.1');await once(s,'listening');servers.push(s);
-  n.port=await port();n.url=`http://127.0.0.1:${n.port}`;n.stateFile=join(dir,n.node+'-state.json');
-  n.config={node:n.node,port:n.port,tokenFile, 'token-file':tokenFile,'state-file':n.stateFile,'probe-interval-ms':100,lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',backend:`http://127.0.0.1:${s.address().port}`,path:'/v1/chat/completions','job-timeout-ms':2000}}};
+  n.compatPort=await port();n.port=await port();n.url=`http://127.0.0.1:${n.port}`;n.stateFile=join(dir,n.node+'-state.json');
+  n.config={node:n.node,port:n.port,tokenFile,"compat-port":n.compatPort,"compat-bind":"127.0.0.1", 'token-file':tokenFile,'state-file':n.stateFile,'probe-interval-ms':100,lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',backend:`http://127.0.0.1:${s.address().port}`,path:'/v1/chat/completions','job-timeout-ms':2000}}};
   n.config.lanes.image={kind:'image',model:'animagine-xl-4.0',group:'gpu',backend:`http://127.0.0.1:${s.address().port}`,path:'/image','readiness-url':`http://127.0.0.1:${s.address().port}/inventory`};n.process=await launch('resident.cljk',n.config,n.node);
   await wait(async()=>{const r=await fetch(n.url+'/health',{headers});const h=await r.json();return h.lanes.text.ready&&h.lanes.image.ready;});nodes.push(n);
  }
@@ -44,7 +44,7 @@ test('two entrypoints share node-owned slots, survive peer loss and do not repla
  const occupied=await request(gateways[0]);assert.equal(occupied.status,429);assert.equal((await occupied.json()).executed,false);
  for(const n of nodes)n.externalBusy=false;
  await wait(async()=>{const h=await(await fetch(gateways[0].url+"/health",{headers})).json();return Object.values(h.peers).every(p=>p.lanes.text.ready&&!p.lanes.text.busy);});
- const rs=await Promise.all(Array.from({length:8},(_,i)=>request(gateways[i%2])));const successful=rs.filter(r=>r.ok);assert.ok(successful.length>=2);await Promise.all(rs.map(r=>r.text()));
+ const rs=await Promise.all(Array.from({length:8},(_,i)=>i<2?fetch(`http://127.0.0.1:${nodes[i].compatPort}/v1/chat/completions`,{method:"POST",headers:{"content-type":"application/json"},body}):request(gateways[i%2])));const successful=rs.filter(r=>r.ok);assert.ok(successful.length>=2);await Promise.all(rs.map(r=>r.text()));
  assert.equal(nodes[0].max,1);assert.equal(nodes[1].max,1);assert.ok(nodes.every(n=>n.calls>0));
  const first=successful[0];const id=first.headers.get('x-murakumo-job-id');const owner=nodes.find(n=>id.startsWith(n.node+'_'));const count=owner.calls;
  const replay=await request(gateways[1],body,{'x-murakumo-job-id':id});assert.equal(replay.status,409);assert.equal(owner.calls,count);
