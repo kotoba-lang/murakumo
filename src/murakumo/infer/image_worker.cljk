@@ -34,12 +34,27 @@
     {:name (:name cfg) :models models :running running :pending pending :memory-bytes free
      :ready (boolean (and (seq models) (zero? running) (zero? pending) (not @(:busy cfg))
                           (>= free (:min-free cfg))))}))
+(defn release-idle! [cfg]
+  (-> (local! cfg "GET" "/queue" nil)
+      (.then (fn [r]
+               (when (and (ok? r) (empty? (get-in r [:body :queue_running]))
+                          (empty? (get-in r [:body :queue_pending])))
+                 (local! cfg "POST" "/free" {:unload_models true :free_memory true}))))
+      (.catch (fn [_] nil))))
 (defn probe! [cfg]
   (-> (js/Promise.all #js [(local! cfg "GET" "/object_info/CheckpointLoaderSimple" nil)
                          (local! cfg "GET" "/queue" nil)])
       (.then (fn [[objects queue]]
                (when-not (and (ok? objects) (ok? queue)) (throw (js/Error. "ComfyUI probe unavailable")))
-               (readiness cfg (:body objects) (:body queue))))))
+               (let [probe (readiness cfg (:body objects) (:body queue))
+                     last-cleanup (:last-cleanup cfg)]
+                 (if (and last-cleanup (not @(:busy cfg))
+                          (zero? (:running probe)) (zero? (:pending probe))
+                          (< (:memory-bytes probe) (:min-free cfg))
+                          (> (- (js/Date.now) @last-cleanup) 60000))
+                   (do (reset! last-cleanup (js/Date.now))
+                       (-> (release-idle! cfg) (.then (fn [_] probe))))
+                   probe))))))
 (defn heartbeat! [cfg]
   (-> (probe! cfg)
       (.catch (fn [_] {:name (:name cfg) :models [] :ready false :running 0 :pending 0 :memory-bytes 0}))
@@ -103,7 +118,7 @@
                                 (-> (wait! (* 2000 n)) (.then #(send! (inc n))))))))))]
     (send! 1)))
 (defn run! [cfg claim]
-  (let [id (:id claim) lost? (atom false) renewing? (atom false) last-renew (atom (js/Date.now))
+  (let [id (:id claim) lost? (atom false) completed? (atom false) renewing? (atom false) last-renew (atom (js/Date.now))
         renew (fn []
                 (when (>= (- (js/Date.now) @last-renew) 85000) (reset! lost? true))
                 (when-not (or @renewing? @lost?)
@@ -120,12 +135,14 @@
                  (-> (acknowledge! cfg claim b64 lost?)
                      (.then (fn [r]
                               (when-not (ok? r) (throw (js/Error. "Result rejected")))
+                              (reset! completed? true)
                               (println "[image] completed" id "attempt" (:attempt claim)))))))
         (.catch (fn [e]
                   (println "[image] incomplete" id "attempt" (:attempt claim) "reason" (.-name e) (.-message e))
                   (-> (api! cfg "POST" (str "/infer/image-jobs/" id "/failed") (fence cfg claim))
                       (.catch (fn [_] nil)))))
-        (.finally (fn [] (js/clearInterval timer) (reset! (:busy cfg) false))))))
+        (.finally (fn [] (js/clearInterval timer) (reset! (:busy cfg) false)
+                    (when @completed? (release-idle! cfg)))))))
 (defn poll! [cfg]
   ;; The independent heartbeat loop publishes once per interval. Polling must
   ;; only probe locally, otherwise idle nodes continuously contend on head CAS.
@@ -144,7 +161,7 @@
                                                              :else (throw (js/Error. "Claim rejected"))))))))]
                                 (claim-next! (:body r)))))))))))
 (defn start! [cfg]
-  (let [cfg (assoc cfg :busy (atom false)) failures (atom 0)]
+  (let [cfg (assoc cfg :busy (atom false) :last-cleanup (atom 0)) failures (atom 0)]
     (letfn [(heartbeat-loop! []
               (-> (heartbeat! cfg) (.catch (fn [_] nil))
                   (.finally #(js/setTimeout heartbeat-loop! 15000))))
