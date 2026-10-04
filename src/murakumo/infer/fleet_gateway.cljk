@@ -38,7 +38,7 @@
                     (and (= "GET" (.-method req)) (= "/health" (.-url req)))
                     (let [now (js/Date.now)
                           live (into {} (filter (fn [[_ p]] (< (- now (:at p)) 15000)) @reports))]
-                      (r/json! res (if (some (fn [[_ p]] (some :ready (vals (:lanes p)))) live) 200 503)
+                      (r/json! res (if (seq live) 200 503)
                                {:node (:node config) :peers live :admission "node-owned"}))
                     (and (= "POST" (.-method req))
                          (contains? #{"/v1/chat/completions" "/v1/images/generations"} (.-url req)))

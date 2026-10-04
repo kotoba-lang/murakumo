@@ -22,7 +22,7 @@ test('two entrypoints share node-owned slots, survive peer loss and do not repla
  async function launch(script,config,name){const path=join(dir,name+'.json');await writeFile(path,JSON.stringify(config));const source=process.env.MURAKUMO_TEST_SOURCE==='1';const p=spawn(source?'kbb':process.execPath,source?['--backend','sci','--classpath',join(root,'src'),join(root,'scripts',script),'serve','--config',path]:[join(root,'release/node.mjs'),script==='resident.cljk'?'resident':'gateway','serve','--config',path],{cwd:dir,stdio:['ignore','pipe','pipe']});let output='';p.stderr.on('data',b=>output+=b);processes.push(p);await wait(async()=>{if(p.exitCode!==null)throw Error(output);try{return (await fetch(`http://127.0.0.1:${config.port}/health`,{headers})).status!==404;}catch{return false;}});return p;}
  for(let i=0;i<2;i++){
   const n={node:'n'+i,active:0,max:0,calls:0};
-  const s=createServer((req,res)=>{if(req.url==='/queue')return res.end(JSON.stringify({queue_running:n.active?[['job']]:[],queue_pending:[]}));if(req.url==='/inventory')return res.end(JSON.stringify({CheckpointLoaderSimple:{input:{required:{ckpt_name:[['animagine-xl-4.0.safetensors']]}}}}));if(req.url==='/slots'){res.setHeader('content-type','application/json');return res.end(JSON.stringify([{is_processing:n.active>0}]));}
+  const s=createServer((req,res)=>{if(req.url==='/queue')return res.end(JSON.stringify({queue_running:n.active?[['job']]:[],queue_pending:[]}));if(req.url==='/inventory')return res.end(JSON.stringify({CheckpointLoaderSimple:{input:{required:{ckpt_name:[['animagine-xl-4.0.safetensors']]}}}}));if(req.url==='/slots'){res.setHeader('content-type','application/json');return res.end(JSON.stringify([{is_processing:n.active>0||n.externalBusy===true}]));}
    let data='';req.on('data',b=>data+=b);req.on('end',()=>{const b=JSON.parse(data);const content=b.messages?.[0]?.content??b.prompt;if(content.startsWith('2+3'))return res.end(JSON.stringify({choices:[{message:{content:'5'}}]}));
     n.calls++;n.active++;n.max=Math.max(n.max,n.active);setTimeout(()=>{n.active--;if(content==='break')res.destroy();else res.end(JSON.stringify(req.url==='/image'?{data:[{b64_json:Buffer.from('image-fixture').toString('base64')}]}:{choices:[{message:{content:'OK'}}]}));},150);
    });});s.listen(0,'127.0.0.1');await once(s,'listening');servers.push(s);
@@ -37,6 +37,13 @@ test('two entrypoints share node-owned slots, survive peer loss and do not repla
  assert.equal((await fetch(nodes[0].url+'/health')).status,401);
  // Different gateways race on the same resident: only its atomic admission may dispatch.
  const request=(g,content=body,extra={})=>fetch(g.url+'/v1/chat/completions',{method:'POST',headers:{...headers,...extra},body:content});
+ // External occupancy is capacity, never a failure or a dead gateway.
+ for(const n of nodes)n.externalBusy=true;
+ await wait(async()=>{const states=await Promise.all(nodes.map(async n=>(await(await fetch(n.url+"/health",{headers})).json()).lanes.text));return states.every(x=>x.busy&&!x.ready&&x.failures===0);});
+ await wait(async()=>{const r=await fetch(gateways[0].url+"/health",{headers});const h=await r.json();return r.status===200&&Object.values(h.peers).every(p=>p.lanes.text.busy);});
+ const occupied=await request(gateways[0]);assert.equal(occupied.status,429);assert.equal((await occupied.json()).executed,false);
+ for(const n of nodes)n.externalBusy=false;
+ await wait(async()=>{const h=await(await fetch(gateways[0].url+"/health",{headers})).json();return Object.values(h.peers).every(p=>p.lanes.text.ready&&!p.lanes.text.busy);});
  const rs=await Promise.all(Array.from({length:8},(_,i)=>request(gateways[i%2])));const successful=rs.filter(r=>r.ok);assert.ok(successful.length>=2);await Promise.all(rs.map(r=>r.text()));
  assert.equal(nodes[0].max,1);assert.equal(nodes[1].max,1);assert.ok(nodes.every(n=>n.calls>0));
  const first=successful[0];const id=first.headers.get('x-murakumo-job-id');const owner=nodes.find(n=>id.startsWith(n.node+'_'));const count=owner.calls;
@@ -53,7 +60,8 @@ test('two entrypoints share node-owned slots, survive peer loss and do not repla
  await sleep(200);
  const image=await fetch(gateways[0].url+'/v1/images/generations',{method:'POST',headers,body:JSON.stringify({model:'animagine-xl-4.0',prompt:'image'})});assert.equal(image.status,200);assert.equal(Buffer.from((await image.json()).data[0].b64_json,'base64').toString(),'image-fixture');await sleep(200);
  gateways[0].process.kill('SIGTERM');await once(gateways[0].process,'exit');
- const bad=await request(gateways[1],body.replace('hello','break'));  assert.equal(bad.status,502);const failure=await bad.json();assert.equal(failure.retryable,false);assert.equal(failure.error,'execution_unknown');
+ let bad;
+ await wait(async()=>{bad=await request(gateways[1],body.replace("hello","break"));if(bad.status===429){assert.equal((await bad.json()).executed,false);return false;}return true;});  assert.equal(bad.status,502);const failure=await bad.json();assert.equal(failure.retryable,false);assert.equal(failure.error,'execution_unknown');
  assert.equal(nodes[0].max,1);
  const ledger=JSON.parse(await readFile(nodes[0].stateFile,'utf8'));assert.ok(Object.values(ledger.jobs).some(j=>j.status==='unknown'),JSON.stringify({ledger,failure}));assert.deepEqual(ledger.groups,{});
 });
