@@ -22,7 +22,7 @@ test('two entrypoints share node-owned slots, survive peer loss and do not repla
  async function launch(script,config,name){const path=join(dir,name+'.json');await writeFile(path,JSON.stringify(config));const source=process.env.MURAKUMO_TEST_SOURCE==='1';const p=spawn(source?'kbb':process.execPath,source?['--backend','sci','--classpath',join(root,'src'),join(root,'scripts',script),'serve','--config',path]:[join(root,'release/node.mjs'),script==='resident.cljk'?'resident':'gateway','serve','--config',path],{cwd:dir,stdio:['ignore','pipe','pipe']});let output='';p.stderr.on('data',b=>output+=b);processes.push(p);await wait(async()=>{if(p.exitCode!==null)throw Error(output);try{return (await fetch(`http://127.0.0.1:${config.port}/health`,{headers})).status!==404;}catch{return false;}});return p;}
  for(let i=0;i<2;i++){
   const n={node:'n'+i,active:0,max:0,calls:0};
-  const s=createServer((req,res)=>{if(req.url==='/readiness'){res.statusCode=n.bridgeDown?503:200;return res.end(JSON.stringify({models:{'animagine-xl-4.0':{ready:!n.bridgeDown,free:!n.active}}}));}if(req.url==='/queue')return res.end(JSON.stringify({queue_running:n.active?[['job']]:[],queue_pending:[]}));if(req.url==='/inventory')return res.end(JSON.stringify({CheckpointLoaderSimple:{input:{required:{ckpt_name:[['animagine-xl-4.0.safetensors']]}}}}));if(req.url==='/slots'){res.setHeader('content-type','application/json');return res.end(JSON.stringify([{is_processing:n.active>0||n.externalBusy===true}]));}
+  const s=createServer((req,res)=>{if(req.url==='/readiness'){res.statusCode=n.bridgeDown?503:200;return res.end(JSON.stringify({models:{'animagine-xl-4.0':{ready:!n.bridgeDown,free:!n.active}}}));}if(req.url==='/queue'&&n.queueFailure){res.statusCode=503;return res.end('{}');}if(req.url==='/queue')return res.end(JSON.stringify({queue_running:n.active||n.externalImageBusy?[['job']]:[],queue_pending:[]}));if(req.url==='/inventory')return res.end(JSON.stringify({CheckpointLoaderSimple:{input:{required:{ckpt_name:[['animagine-xl-4.0.safetensors']]}}}}));if(req.url==='/slots'){res.setHeader('content-type','application/json');return res.end(JSON.stringify([{is_processing:n.active>0||n.externalBusy===true}]));}
    let data='';req.on('data',b=>data+=b);req.on('end',()=>{const b=JSON.parse(data);const content=b.messages?.[0]?.content??b.prompt;if(content.startsWith('2+3'))return res.end(JSON.stringify({choices:[{message:{content:'5'}}]}));
     n.calls++;n.active++;n.max=Math.max(n.max,n.active);setTimeout(()=>{n.active--;if(content==='break')res.destroy();else res.end(JSON.stringify(req.url==='/image'?{data:[{b64_json:Buffer.from('image-fixture').toString('base64')}]}:{choices:[{message:{content:'OK'}}]}));},150);
    });});s.listen(0,'127.0.0.1');await once(s,'listening');servers.push(s);
@@ -31,6 +31,26 @@ test('two entrypoints share node-owned slots, survive peer loss and do not repla
   n.config.lanes.image={kind:'image',model:'animagine-xl-4.0',group:'gpu',backend:`http://127.0.0.1:${s.address().port}`,path:'/image','readiness-url':`http://127.0.0.1:${s.address().port}/inventory`};n.process=await launch('resident.cljk',n.config,n.node);
   await wait(async()=>{const r=await fetch(n.url+'/health',{headers});const h=await r.json();return h.lanes.text.ready&&h.lanes.image.ready;});nodes.push(n);
  }
+ nodes[0].externalImageBusy=true;
+ await wait(async()=>{const h=await(await fetch(nodes[0].url+'/health',{headers})).json();return h.lanes.image.busy&&h.lanes.text.busy;});
+ const nativeSlots=await(await fetch('http://127.0.0.1:'+nodes[0].compatPort+'/slots')).json();assert.equal(nativeSlots[0].is_processing,true);
+ const rejected=await fetch('http://127.0.0.1:'+nodes[0].compatPort+'/v1/chat/completions',{method:'POST',body:JSON.stringify({model:'mishima',messages:[{role:'user',content:'while external image runs'}],max_tokens:32})});assert.equal(rejected.status,429);assert.equal((await rejected.json()).executed,false);
+ nodes[0].queueFailure=true;
+ await wait(async()=>{const h=await(await fetch(nodes[0].url+'/health',{headers})).json();return h.lanes.image.failures>0;});
+ const indeterminate=await(await fetch(nodes[0].url+'/health',{headers})).json();assert.equal(indeterminate.lanes.image.busy,true);assert.equal(indeterminate.lanes.text.busy,true);
+ nodes[0].queueFailure=false;
+ nodes[0].externalImageBusy=false;
+ await wait(async()=>{const h=await(await fetch(nodes[0].url+'/health',{headers})).json();return !h.lanes.text.busy&&h.lanes.image.ready;});
+ const staleConfig={...nodes[0].config,'probe-interval-ms':1000};
+ nodes[0].process.kill('SIGTERM');await once(nodes[0].process,'exit');nodes[0].process=await launch('resident.cljk',staleConfig,nodes[0].node);
+ await wait(async()=>{const h=await(await fetch(nodes[0].url+'/health',{headers})).json();return h.lanes.text.ready&&h.lanes.image.ready&&!h.lanes.text.busy;});
+ nodes[0].externalImageBusy=true;
+ const beforeCalls=nodes[0].calls;
+ const freshGuard=await fetch(nodes[0].url+'/execute/text',{method:'POST',headers:{...headers,'x-murakumo-job-id':'new_external_queue_job'},body:JSON.stringify({model:'mishima',messages:[{role:'user',content:'live queue admission'}],max_tokens:16})});
+ assert.equal(freshGuard.status,429);assert.equal((await freshGuard.json()).executed,false);assert.equal(nodes[0].calls,beforeCalls);
+ nodes[0].externalImageBusy=false;
+ nodes[0].process.kill('SIGTERM');await once(nodes[0].process,'exit');nodes[0].process=await launch('resident.cljk',nodes[0].config,nodes[0].node);
+ await wait(async()=>{const h=await(await fetch(nodes[0].url+'/health',{headers})).json();return h.lanes.text.ready&&h.lanes.image.ready;});
  nodes[0].bridgeDown=true;
  await wait(async()=>{const h=await(await fetch(nodes[0].url+"/health",{headers})).json();return !h.lanes.image.ready&&h.lanes.text.ready;});
  nodes[0].bridgeDown=false;
