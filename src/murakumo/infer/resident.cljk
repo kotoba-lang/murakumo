@@ -87,6 +87,27 @@
           (or (nil? e) (>= depth 5)) false
           :else (recur (.-cause e) (inc depth)))))
 
+(defn check-shared-images! [lanes lane]
+  ;; A cached health sample is insufficient for shared-memory admission.
+  ;; Missing/invalid queue observations fail closed before any execution.
+  (js/Promise.all
+   (clj->js
+    (for [image (vals lanes)
+          :when (and (= "text" (:kind lane)) (= "image" (:kind image))
+                     (= (:group lane) (:group image)))]
+      (-> (js/fetch (str (.-origin (js/URL. (:readiness-url image))) "/queue")
+                    #js {:signal (.timeout js/AbortSignal 3000)})
+          (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "queue unavailable"))) (.json r)))
+          (.then (fn [q]
+                   (when-not (and (js/Array.isArray (.-queue_running q))
+                                  (js/Array.isArray (.-queue_pending q))
+                                  (zero? (.-length (.-queue_running q)))
+                                  (zero? (.-length (.-queue_pending q))))
+                     (throw (js/Error. "shared image queue occupied or unknown")))))
+          (.catch (fn [_]
+                    (let [e (js/Error. "shared image capacity unavailable")]
+                      (set! (.-code e) "BACKEND_BUSY") (throw e)))))))))
+
 (defn probe! [lane]
   (let [url (:backend lane)
         signal (.timeout js/AbortSignal 15000)]
@@ -158,14 +179,15 @@
                   ;; Reserve group for the probe too: canaries cannot race real jobs.
                   (swap! state assoc-in [:groups (:group lane)] (str "probe:" id))
                   (swap! lanes update id merge {:probing true :last-probe (js/Date.now)})
-                  (-> (probe! lane)
+                  (-> (check-shared-images! @lanes lane)
+                      (.then (fn [_] (probe! lane)))
                       (.then (fn [_] (swap! lanes update id merge {:ready true :failures 0 :external-busy false})))
                       (.catch (fn [error]
                                 (let [busy? (backend-busy-error? error)]
-                                  (swap! lanes update id #(-> % (assoc :ready false :external-busy busy?)
+                                  (swap! lanes update id #(-> % (assoc :ready false :external-busy (or busy? (:external-busy %)))
                                                              (assoc :failures (if busy? 0 (inc (:failures % 0)))))))
                                 (let [l (get @lanes id) now (js/Date.now)]
-                                  (when (and (not (backend-busy-error? error)) (heal-eligible? l now))
+                                  (when (and (not (backend-busy-error? error)) (not (:external-busy l)) (heal-eligible? l now))
                                     (swap! lanes assoc-in [id :last-heal] now)
                                     ;; Commands are manifest argv, never interpolated through a shell.
                                     (let [[bin & args] (:restart-argv l)]
@@ -181,6 +203,11 @@
                                   (swap! state update :groups dissoc (:group lane)))))))
         execute! (fn [req res lane-id compatibility?]
                    (-> (read-body! req (:max-body-bytes config 2097152))
+                       (.then (fn [bytes]
+                                (if (get-in @state [:jobs (aget (.-headers req) "x-murakumo-job-id")])
+                                  bytes
+                                  (-> (check-shared-images! @lanes (get @lanes lane-id))
+                                      (.then (fn [_] bytes))))))
                        (.then
                         (fn [bytes]
                           (let [raw-body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
@@ -247,7 +274,10 @@
                                                     (json! res 502 {:error "execution_unknown" :job-id id :retryable false}))
                                                   (when-not (.-writableEnded res) (.end res))))
                                         (.finally #(js/clearTimeout timer))))))))))
-                       (.catch (fn [_] (when-not (.-headersSent res) (json! res 400 {:error "request_failed"}))))))
+                       (.catch (fn [e] (when-not (.-headersSent res)
+                                        (if (backend-busy-error? e)
+                                          (json! res 429 {:error "busy" :executed false})
+                                          (json! res 400 {:error "request_failed"})))))))
         server (.createServer http
                               (fn [req res]
                                 (if-not (authorized? req token)
