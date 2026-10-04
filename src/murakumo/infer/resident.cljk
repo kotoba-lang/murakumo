@@ -77,6 +77,13 @@
       (finally (.closeSync fs fd)))
     (.renameSync fs tmp file)))
 
+(defn backend-busy-error? [error]
+  ;; SCI keeps the thrown JS Error as cause; native JS exposes it directly.
+  (loop [e error depth 0]
+    (cond (= "BACKEND_BUSY" (some-> e .-code)) true
+          (or (nil? e) (>= depth 5)) false
+          :else (recur (.-cause e) (inc depth)))))
+
 (defn probe! [lane]
   (let [url (:backend lane)
         signal (.timeout js/AbortSignal 15000)]
@@ -140,11 +147,13 @@
                   (swap! state assoc-in [:groups (:group lane)] (str "probe:" id))
                   (swap! lanes update id merge {:probing true :last-probe (js/Date.now)})
                   (-> (probe! lane)
-                      (.then (fn [_] (swap! lanes update id merge {:ready true :failures 0})))
+                      (.then (fn [_] (swap! lanes update id merge {:ready true :failures 0 :external-busy false})))
                       (.catch (fn [error]
-                                (swap! lanes update id #(-> % (assoc :ready false) (update :failures inc)))
+                                (let [busy? (backend-busy-error? error)]
+                                  (swap! lanes update id #(-> % (assoc :ready false :external-busy busy?)
+                                                             (assoc :failures (if busy? 0 (inc (:failures % 0)))))))
                                 (let [l (get @lanes id) now (js/Date.now)]
-                                  (when (and (not= "BACKEND_BUSY" (.-code error)) (heal-eligible? l now))
+                                  (when (and (not (backend-busy-error? error)) (heal-eligible? l now))
                                     (swap! lanes assoc-in [id :last-heal] now)
                                     ;; Commands are manifest argv, never interpolated through a shell.
                                     (let [[bin & args] (:restart-argv l)]
@@ -231,7 +240,7 @@
                                     (and (= "GET" (.-method req)) (= "/health" (.-url req)))
                                     (json! res 200 {:node (:node config)
                                                    :lanes (into {} (for [[id l] @lanes]
-                                                                    [id (select-keys (assoc l :busy (boolean (get-in @state [:groups (:group l)])))
+                                                                    [id (select-keys (assoc l :busy (boolean (or (:external-busy l) (get-in @state [:groups (:group l)]))))
                                                                                      [:model :kind :context :ready :busy :failures])]))})
                                     (and (= "POST" (.-method req)) (str/starts-with? (.-url req) "/execute/"))
                                     (execute! req res (subs (.-url req) 9))
