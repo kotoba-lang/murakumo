@@ -1,0 +1,125 @@
+(ns murakumo.infer.fleet-gateway
+  "Replicated stateless entrypoints; each resident owns admission and recovery."
+  (:require [murakumo.infer.resident :as r]
+            [clojure.string :as str]
+            ["node:fs" :as fs] ["node:http" :as http] ["node:crypto" :as crypto]))
+
+(defn candidates [reports model kind now stale-ms]
+  (vec (for [[node report] reports
+             :when (< (- now (:at report 0)) stale-ms)
+             [lane l] (:lanes report)
+             :when (and (:ready l) (not (:busy l)) (= model (:model l)) (= kind (:kind l)))]
+         {:node node :lane (name lane) :context (:context l 0)})))
+
+(defn start! [config]
+  (let [token (r/private-token (:token-file config))
+        reports (atom {})
+        peers (into {} (for [p (:peers config)] [(:node p) p]))
+        polling (atom false)
+        headers #js {"authorization" (str "Bearer " token) "content-type" "application/json"}
+        tick! (fn []
+                (when (compare-and-set! polling false true)
+                  (-> (js/Promise.allSettled
+                       (clj->js (for [[node p] peers]
+                                  (-> (js/fetch (str (:url p) "/health")
+                                                #js {:headers headers :signal (.timeout js/AbortSignal 5000)})
+                                      (.then (fn [resp] (when-not (.-ok resp) (throw (js/Error. "peer unavailable"))) (.json resp)))
+                                      (.then (fn [body]
+                                               (when-not (= node (.-node body)) (throw (js/Error. "peer identity mismatch")))
+                                               (swap! reports assoc node
+                                                      (assoc (js->clj body :keywordize-keys true) :at (js/Date.now)))))
+                                      (.catch (fn [_] (swap! reports dissoc node)))))))
+                      (.finally #(reset! polling false)))))
+        server (.createServer
+                http
+                (fn [req res]
+                  (cond
+                    (not (r/authorized? req token)) (r/json! res 401 {:error "unauthorized"})
+                    (and (= "GET" (.-method req)) (= "/health" (.-url req)))
+                    (let [now (js/Date.now)
+                          live (into {} (filter (fn [[_ p]] (< (- now (:at p)) 15000)) @reports))]
+                      (r/json! res (if (some (fn [[_ p]] (some :ready (vals (:lanes p)))) live) 200 503)
+                               {:node (:node config) :peers live :admission "node-owned"}))
+                    (and (= "POST" (.-method req))
+                         (contains? #{"/v1/chat/completions" "/v1/images/generations"} (.-url req)))
+                    (-> (r/read-body! req (:max-body-bytes config 2097152))
+                        (.then
+                         (fn [bytes]
+                           (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
+                                 kind (if (= "/v1/chat/completions" (.-url req)) "text" "image")
+                                 _ (when (and (= kind "text") (not (r/valid-output-budget? body)))
+                                     (throw (js/Error. "invalid output budget")))
+                                 incoming-id (aget (.-headers req) "x-murakumo-job-id")
+                                 nonce (str/replace (.randomUUID crypto) #"-" "")
+                                 choices (candidates @reports (:model body) kind (js/Date.now) 15000)
+                                 need (+ (.-length bytes) (:max_tokens body 1024))
+                                 choices (filterv #(or (= kind "image") (>= (:context %) need)) choices)
+                                 ;; Random first peer spreads simultaneous arrivals across gateways.
+                                 choices (if (seq choices)
+                                           (let [n (.randomInt crypto (count choices))]
+                                             (vec (concat (subvec choices n) (subvec choices 0 n)))) [])
+                                 ;; A retry is pinned to its original owner, even if health changed.
+                                 [owner lane suffix] (when incoming-id (str/split incoming-id #"_" 3))
+                                 choices (if incoming-id [{:node owner :lane lane}] choices)
+                                 controller (js/AbortController.)
+                                 timer (js/setTimeout #(.abort controller) (:request-timeout-ms config 490000))]
+                             (.on res "close" #(when-not (.-writableEnded res) (.abort controller)))
+                             (letfn [(attempt [remaining]
+                                       (if-let [{:keys [node lane]} (first remaining)]
+                                         (if-let [p (get peers node)]
+                                           (let [id (or incoming-id (str node "_" lane "_" nonce))]
+                                             (when-not (and (re-matches #"[A-Za-z0-9-]+" node)
+                                                            (re-matches #"[A-Za-z0-9-]+" lane)
+                                                            (or (nil? incoming-id) (re-matches #"[a-f0-9]{32}" (or suffix ""))))
+                                               (throw (js/Error. "invalid job id")))
+                                             (-> (js/fetch (str (:url p) "/execute/" lane)
+                                                           #js {:method "POST" :signal (.-signal controller)
+                                                                :headers #js {"authorization" (str "Bearer " token)
+                                                                              "content-type" "application/json"
+                                                                              "x-murakumo-job-id" id}
+                                                                :body bytes})
+                                                 (.then (fn [resp]
+                                                          ;; Retry only an explicit pre-admission refusal.
+                                                          ;; Timeouts, broken connections and 5xx after execution are ambiguous.
+                                                          (if (and (nil? incoming-id) (contains? #{429 503} (.-status resp)))
+                                                            (-> (.json resp)
+                                                                (.then (fn [refusal]
+                                                                         (if (false? (.-executed refusal))
+                                                                           (attempt (rest remaining))
+                                                                           (r/json! res 502 {:error "execution_unknown" :job-id id :retryable false})))))
+                                                            (do
+                                                              (.writeHead res (.-status resp)
+                                                                          #js {"content-type" (or (.get (.-headers resp) "content-type") "application/json")
+                                                                               "x-murakumo-job-id" id "x-murakumo-node" node})
+                                                              (let [reader (.getReader (.-body resp))]
+                                                                (letfn [(pump []
+                                                                          (-> (.read reader)
+                                                                              (.then (fn [part]
+                                                                                       (if (.-done part) (.end res)
+                                                                                           (do (.write res (.from js/Buffer (.-value part))) (pump)))))))]
+                                                                  (pump)))))))
+                                                 (.catch (fn [_]
+                                                           (when-not (.-headersSent res)
+                                                             (r/json! res 502 {:error "execution_unknown" :job-id id :retryable false}))
+                                                           (when-not (.-writableEnded res) (.end res))))))
+                                           (r/json! res 400 {:error "unknown_job_owner"}))
+                                         (r/json! res 429 {:error "no_ready_capacity" :executed false})))]
+                               (-> (js/Promise.resolve (attempt choices))
+                                   (.finally #(js/clearTimeout timer)))))))
+                        (.catch (fn [_] (when-not (.-headersSent res) (r/json! res 400 {:error "invalid_request"})))))
+                    :else (r/json! res 404 {:error "not_found"}))))]
+    (doseq [[node p] peers]
+      (when-not (and (re-matches #"[A-Za-z0-9-]+" node) (:url p))
+        (throw (js/Error. "invalid peer manifest"))))
+    (.listen server (:port config 8797) (:bind config "127.0.0.1"))
+    (tick!)
+    (let [timer (js/setInterval tick! (:probe-interval-ms config 3000))]
+      {:server server :reports reports
+       :close (fn [] (js/clearInterval timer) (.close server))})))
+
+(defn run-command [command args]
+  (case command
+    "serve" (let [[flag file] args]
+              (when-not (and (= flag "--config") file) (throw (js/Error. "gateway serve --config FILE")))
+              (start! (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys true)))
+    (println "murakumo gateway serve --config FILE — replicated fleet entrypoint")))
