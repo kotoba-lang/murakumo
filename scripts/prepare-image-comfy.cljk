@@ -13,6 +13,14 @@
   (if (some #{"--fp16-unet" "--force-fp16"} args) args (conj (vec args) "--fp16-unet")))
 (defn sh! [cmd args]
   (.toString (cp/execFileSync cmd (clj->js args) #js {:timeout 30000 :stdio #js ["ignore" "pipe" "pipe"]})))
+(defn bootstrap! [live]
+  ;; launchd can finish unloading asynchronously after bootout returns.
+  (loop [attempt 0]
+    (let [result (try {:value (sh! "sudo" ["-n" "launchctl" "bootstrap" "system" live])}
+                      (catch :default e {:error e}))]
+      (if-let [e (:error result)]
+        (if (< attempt 5) (do (sh! "/bin/sleep" ["1"]) (recur (inc attempt))) (throw e))
+        (:value result)))))
 (defn idle! []
   (-> (js/fetch "http://127.0.0.1:8188/queue" #js {:signal (js/AbortSignal.timeout 5000)})
       (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "ComfyUI queue unavailable"))) (.json r)))
@@ -46,14 +54,14 @@
                                 (try
                                   (sh! "sudo" ["-n" "install" "-o" "root" "-g" "wheel" "-m" "644" proposed live])
                                   (sh! "sudo" ["-n" "launchctl" "bootout" label])
-                                  (sh! "sudo" ["-n" "launchctl" "bootstrap" "system" live])
+                                  (bootstrap! live)
                                   (println "comfy-image-precision-prepared")
                                   (catch :default e
                                     (sh! "sudo" ["-n" "install" "-o" "root" "-g" "wheel" "-m" "644" before live])
                                     (try (sh! "sudo" ["-n" "launchctl" "bootout" label]) (catch :default _ nil))
-                                    (sh! "sudo" ["-n" "launchctl" "bootstrap" "system" live])
+                                    (bootstrap! live)
                                     (throw e)))))))))
-        (.catch (fn [e] (println "image-precision-not-applied:" (.-message e)) (set! (.-exitCode js/process) 1))))))
+        (.catch (fn [e] (println "image-precision-not-applied:" (.-message e)) (js/process.exit 1))))))
 (let [mode (first *command-line-args*)]
   (cond
     (= mode "--test")
