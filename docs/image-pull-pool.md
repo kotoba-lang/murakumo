@@ -8,4 +8,8 @@ A worker reports actual installed checkpoints, queue occupancy and reclaimable m
 
 Admission, quotas, leases and output references use the existing Merkle-LSM head CAS. Edge instances are stateless and workers are independent, but the shared CAS head and Cloudflare storage/API remain common dependencies: this is distributed execution, not a fully decentralized metadata network. No community-provider reward or confidentiality claim follows from owned-fleet image registration.
 
+The image pool currently supports installation on the owned Macs `zebulun`, `joseph`, `dan`, `benjamin` and the existing reserve `asher`. Installed checkpoint files are capabilities, not proof of available GPU capacity. A worker claims only with an empty local ComfyUI queue and at least 4 GiB of reclaimable memory; it releases idle ComfyUI models after an acknowledged result. Existing running or pending work prevents cache release. Only the independent heartbeat timer publishes readiness, so idle polling does not repeatedly write the shared CAS head.
+
+Image bodies are stored separately as immutable private R2 objects under `image-artifacts/v1/`; Merkle metadata carries their references. This avoids encoding large images inside metadata shards. The public adapter receives an image only through an authenticated job lookup with the matching network owner.
+
 Capacity: public GET /infer/image-jobs/capacity. Worker APIs and job input/output access require the operator credential; public adapters additionally enforce the caller's network proof. No prompt or bearer token is logged by the node worker.
