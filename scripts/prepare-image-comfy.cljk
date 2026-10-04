@@ -2,8 +2,11 @@
   "Opt-in FP16 UNet preparation of an idle owned image node. No busy render is interrupted."
   (:require [nbb.core :as nbb] ["node:fs" :as fs] ["node:path" :as path]
             ["node:child_process" :as cp] ["node:assert/strict" :as assertion]))
-(def hosts #{"asher" "zebulun" "joseph" "dan" "benjamin"})
+(def hosts #{"asher" "zebulun" "joseph" "dan" "benjamin" "issachar" "naphtali"})
 (defn precision-args [args]
+  (when-not (and (vector? args) (re-matches #"python(?:[0-9]+(?:\.[0-9]+)*)?" (path/basename (or (first args) "")))
+                (some #(boolean (re-find #"(^|/)main\.py$" %)) args))
+    (throw (js/Error. "Only a direct ComfyUI Python launcher can be prepared")))
   (when (some #{"--force-fp32" "--fp32-unet" "--fp64-unet" "--bf16-unet"
                 "--fp8_e4m3fn-unet" "--fp8_e5m2-unet"} args)
     (throw (js/Error. "Explicit existing precision must be reviewed before changing it")))
@@ -60,6 +63,7 @@
           (assertion/deepEqual (clj->js (precision-args ["python" "main.py" flag])) (clj->js ["python" "main.py" flag])))
         (doseq [flag ["--force-fp32" "--fp32-unet" "--bf16-unet"]]
           (assertion/throws #(precision-args ["python" "main.py" flag])))
+        (assertion/throws #(precision-args ["bash" "-c" "python main.py"]))
         (println "Precision configuration: preserved arguments, idempotence and conflicts verified."))
     (= mode "--on-node") (prepare!)
     (contains? hosts mode)
@@ -68,5 +72,5 @@
           script (str "set -euo pipefail\n test \"$(id -un)\" = " mode "\n umask 077\n mkdir -p " dir "\n"
                       "echo '" payload "' | base64 -D > " dir "/prepare-comfy.cljk\n"
                       "/opt/homebrew/bin/node /Users/" mode "/.murakumo/edge/nbb/lib/nbb_main.js " dir "/prepare-comfy.cljk --on-node\n")]
-      (cp/execFileSync "ssh" #js [mode "/bin/bash -s"] #js {:input script :stdio "inherit" :timeout 60000}))
+      (cp/execFileSync "ssh" #js [mode "/bin/bash -s"] #js {:input script :stdio #js ["pipe" "inherit" "inherit"] :timeout 60000}))
     :else (throw (js/Error. "Usage: prepare-image-comfy.cljk <owned image Mac> | --test"))))
