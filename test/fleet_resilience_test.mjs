@@ -32,7 +32,7 @@ test('two entrypoints share node-owned slots, survive peer loss and do not repla
   await wait(async()=>{const r=await fetch(n.url+'/health',{headers});const h=await r.json();return h.lanes.text.ready&&h.lanes.image.ready;});nodes.push(n);
  }
  const gateways=[];
- for(let i=0;i<2;i++){const p=await port();const config={node:'g'+i,port:p,'token-file':tokenFile,'probe-interval-ms':50,peers:nodes.map(n=>({node:n.node,url:n.url}))};const process=await launch('fleet-gateway.cljk',config,'g'+i);const url=`http://127.0.0.1:${p}`;await wait(async()=>{const r=await fetch(url+'/health',{headers});return r.ok&&Object.keys((await r.json()).peers).length===2;});gateways.push({url,process});}
+ for(let i=0;i<2;i++){const p=await port(),compatPort=await port();const config={node:'g'+i,port:p,'compat-image-port':compatPort,'token-file':tokenFile,'probe-interval-ms':50,peers:nodes.map(n=>({node:n.node,url:n.url}))};const process=await launch('fleet-gateway.cljk',config,'g'+i);const url=`http://127.0.0.1:${p}`;await wait(async()=>{const r=await fetch(url+'/health',{headers});return r.ok&&Object.keys((await r.json()).peers).length===2;});gateways.push({url,process,compatPort});}
  const body=JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'hello'}]});
  assert.equal((await fetch(nodes[0].url+'/health')).status,401);
  // Different gateways race on the same resident: only its atomic admission may dispatch.
@@ -58,7 +58,9 @@ test('two entrypoints share node-owned slots, survive peer loss and do not repla
  await wait(async()=>{const r=await fetch(nodes[0].url+'/health',{headers});return (await r.json()).lanes.text.ready;});
  const live=await request(gateways[0]);assert.equal(live.status,200);assert.equal(live.headers.get('x-murakumo-node'),'n0');await live.text();
  await sleep(200);
- const image=await fetch(gateways[0].url+'/v1/images/generations',{method:'POST',headers,body:JSON.stringify({model:'animagine-xl-4.0',prompt:'image'})});assert.equal(image.status,200);assert.equal(Buffer.from((await image.json()).data[0].b64_json,'base64').toString(),'image-fixture');await sleep(200);
+ const imageState=await(await fetch(`http://127.0.0.1:${gateways[0].compatPort}/readiness`)).json();assert.equal(imageState.models['animagine-xl-4.0'].free,true);
+ const forbidden=await fetch(`http://127.0.0.1:${gateways[0].compatPort}/v1/chat/completions`,{method:'POST',body});assert.equal(forbidden.status,404);
+ const image=await fetch(`http://127.0.0.1:${gateways[0].compatPort}/v1/images/generations`,{method:'POST',body:JSON.stringify({model:'animagine-xl-4.0',prompt:'image'})});assert.equal(image.status,200);assert.equal(Buffer.from((await image.json()).data[0].b64_json,'base64').toString(),'image-fixture');await sleep(200);
  gateways[0].process.kill('SIGTERM');await once(gateways[0].process,'exit');
  let bad;
  await wait(async()=>{bad=await request(gateways[1],body.replace("hello","break"));if(bad.status===429){assert.equal((await bad.json()).executed,false);return false;}return true;});  assert.equal(bad.status,502);const failure=await bad.json();assert.equal(failure.retryable,false);assert.equal(failure.error,'execution_unknown');
