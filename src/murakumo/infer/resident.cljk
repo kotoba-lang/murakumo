@@ -8,6 +8,9 @@
   (and (= (:model lane) (:model request))
        (>= (:context lane 0) (+ (:input-tokens request 0) (:max-tokens request 0)))))
 
+(defn external-group-busy? [lanes lane]
+  (boolean (some #(and (= (:group lane) (:group %)) (:external-busy %)) (vals lanes))))
+
 (defn valid-output-budget? [body]
   (let [n (:max_tokens body 1024)]
     (and (number? n) (js/Number.isSafeInteger n) (<= 1 n 32768))))
@@ -148,7 +151,10 @@
         save! #(persist! file @state)
         tick! (fn []
                 (doseq [[id lane] (sort-by (fn [[_ l]] (:last-probe l 0)) @lanes)
-                        :when (and (not (:probing lane)) (not (get-in @state [:groups (:group lane)])))]
+                        :when (and (not (:probing lane)) (not (get-in @state [:groups (:group lane)]))
+                                   (not (and (= "text" (:kind lane))
+                                             (some #(and (= "image" (:kind %)) (= (:group lane) (:group %)) (:external-busy %))
+                                                   (vals @lanes)))))]
                   ;; Reserve group for the probe too: canaries cannot race real jobs.
                   (swap! state assoc-in [:groups (:group lane)] (str "probe:" id))
                   (swap! lanes update id merge {:probing true :last-probe (js/Date.now)})
@@ -197,7 +203,9 @@
                               (json! res 422 {:error "model_mismatch"})
                               :else
                               (let [ttl (:job-timeout-ms lane 480000)
-                                    admission (admit @state lane id digest (js/Date.now) ttl)]
+                                    admission (if (and (not (get-in @state [:jobs id])) (external-group-busy? @lanes lane))
+                                                {:status 429 :reason :busy :state @state}
+                                                (admit @state lane id digest (js/Date.now) ttl))]
                                 (if (not= 200 (:status admission))
                                   (json! res (:status admission) {:error (name (:reason admission))
                                                                  :job-id id
@@ -248,7 +256,7 @@
                                     (and (= "GET" (.-method req)) (= "/health" (.-url req)))
                                     (json! res 200 {:node (:node config)
                                                    :lanes (into {} (for [[id l] @lanes]
-                                                                    [id (select-keys (assoc l :busy (boolean (or (:external-busy l) (get-in @state [:groups (:group l)]))))
+                                                                    [id (select-keys (assoc l :busy (boolean (or (external-group-busy? @lanes l) (get-in @state [:groups (:group l)]))))
                                                                                      [:model :kind :context :ready :busy :failures])]))})
                                     (and (= "POST" (.-method req)) (str/starts-with? (.-url req) "/execute/"))
                                     (execute! req res (subs (.-url req) 9) false)
@@ -263,7 +271,7 @@
           (.createServer http
             (fn [req res]
               (let [lane (get @lanes "text")
-                    busy (boolean (or (:external-busy lane) (get-in @state [:groups (:group lane)])))]
+                    busy (boolean (or (external-group-busy? @lanes lane) (get-in @state [:groups (:group lane)])))]
                 (cond
                   (and (= "GET" (.-method req)) (= "/health" (.-url req)))
                   (json! res (if (or (:ready lane) busy) 200 503) {:status (if busy "busy" (if (:ready lane) "ok" "unavailable"))})
