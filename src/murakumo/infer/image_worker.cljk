@@ -45,7 +45,7 @@
       (.catch (fn [_] {:name (:name cfg) :models [] :ready false :running 0 :pending 0 :memory-bytes 0}))
       (.then (fn [probe]
                (-> (api! cfg "POST" "/infer/image-workers/heartbeat" probe)
-                   (.then (fn [r] (when-not (= 201 (:status r)) (throw (js/Error. "Heartbeat rejected"))) probe)))))))
+                   (.then (fn [r] (when-not (= 201 (:status r)) (throw (js/Error. (str "Heartbeat rejected HTTP " (:status r))))) probe)))))))
 (defn workflow [{:keys [checkpoint prompt width height steps seed]}]
   {"3" {:class_type "KSampler" :inputs {:seed seed :steps steps :cfg 6.5 :sampler_name "euler_ancestral" :scheduler "normal" :denoise 1.0
                                            :model ["4" 0] :positive ["6" 0] :negative ["7" 0] :latent_image ["5" 0]}}
@@ -121,18 +121,20 @@
                      (.then (fn [r]
                               (when-not (ok? r) (throw (js/Error. "Result rejected")))
                               (println "[image] completed" id "attempt" (:attempt claim)))))))
-        (.catch (fn [_]
-                  (println "[image] incomplete" id "attempt" (:attempt claim))
+        (.catch (fn [e]
+                  (println "[image] incomplete" id "attempt" (:attempt claim) "reason" (.-name e) (.-message e))
                   (-> (api! cfg "POST" (str "/infer/image-jobs/" id "/failed") (fence cfg claim))
                       (.catch (fn [_] nil)))))
         (.finally (fn [] (js/clearInterval timer) (reset! (:busy cfg) false))))))
 (defn poll! [cfg]
-  (-> (heartbeat! cfg)
+  ;; The independent heartbeat loop publishes once per interval. Polling must
+  ;; only probe locally, otherwise idle nodes continuously contend on head CAS.
+  (-> (probe! cfg)
       (.then (fn [probe]
                (when (:ready probe)
                  (-> (api! cfg "GET" (str "/infer/image-jobs?worker=" (js/encodeURIComponent (:name cfg))) nil)
                      (.then (fn [r]
-                              (when-not (ok? r) (throw (js/Error. "Image queue unavailable")))
+                                  (when-not (ok? r) (throw (js/Error. (str "Image queue unavailable HTTP " (:status r)))))
                               (letfn [(claim-next! [jobs]
                                         (when-let [job (first jobs)]
                                           (-> (api! cfg "POST" (str "/infer/image-jobs/" (:id job) "/claim") {:worker (:name cfg)})
@@ -149,7 +151,7 @@
             (loop! []
               (-> (poll! cfg)
                   (.then #(reset! failures 0))
-                  (.catch (fn [_] (swap! failures inc) (println "[image] queue connection retry" @failures)))
+                  (.catch (fn [e] (swap! failures inc) (println "[image] queue connection retry" @failures "reason" (.-name e) (.-message e))))
                   (.finally #(js/setTimeout loop! (+ 3000 (min 60000 (* 2000 @failures)) (rand-int 2000))))))]
       (println "[image] outbound pool worker" (:name cfg))
       (heartbeat-loop!) (loop!))))
