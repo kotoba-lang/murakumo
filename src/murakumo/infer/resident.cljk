@@ -124,7 +124,13 @@
                          model (:model lane)
                          checkpoint (if (str/ends-with? model ".safetensors") model (str model ".safetensors"))]
                      (when-not (some #{checkpoint} names)
-                       (throw (js/Error. "image checkpoint unavailable"))) true)))))))
+                       (throw (js/Error. "image checkpoint unavailable")))
+                     (js/fetch (str (:backend lane) "/readiness") #js {:signal signal}))))
+          (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "image execution bridge unavailable"))) (.json r)))
+          (.then (fn [body]
+                   (let [report (js->clj body :keywordize-keys true)]
+                     (when-not (true? (get-in report [:models (keyword (:model lane)) :ready]))
+                       (throw (js/Error. "image execution dependency unavailable"))) true)))))))
 
 (defn start! [config]
   (let [token (private-token (:token-file config))
