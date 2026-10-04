@@ -1,0 +1,20 @@
+[Unit]
+Description=Murakumo node-owned inference admission and recovery
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=murakumo
+WorkingDirectory=/opt/murakumo
+ExecStart=/usr/bin/node /opt/murakumo/release/node.mjs resident serve --config /etc/murakumo/resident.json
+Restart=on-failure
+RestartSec=5
+StateDirectory=murakumo-resident
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/murakumo-resident
+[Install]
+WantedBy=multi-user.target

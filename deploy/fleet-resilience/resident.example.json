@@ -1,0 +1,23 @@
+{
+  "node": "asher",
+  "bind": "127.0.0.1",
+  "port": 8796,
+  "token-file": "/var/lib/murakumo-resident/peer-token",
+  "state-file": "/var/lib/murakumo-resident/receipts.json",
+  "probe-interval-ms": 30000,
+  "max-receipts": 100000,
+  "lanes": {
+    "text": {
+      "kind": "text", "model": "mishima", "context": 32768,
+      "group": "shared-memory", "backend": "http://127.0.0.1:8094",
+      "path": "/v1/chat/completions", "job-timeout-ms": 480000,
+      "cooldown-ms": 1800000
+    },
+    "image": {
+      "kind": "image", "model": "animagine-xl-4.0",
+      "group": "shared-memory", "backend": "http://127.0.0.1:8189",
+      "readiness-url": "http://127.0.0.1:8188/object_info/CheckpointLoaderSimple",
+      "path": "/v1/images/generations", "job-timeout-ms": 480000
+    }
+  }
+}

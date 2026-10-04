@@ -1,0 +1,254 @@
+(ns murakumo.infer.resident
+  "Node-owned admission and recovery. Gateways hold no execution slots."
+  (:require [clojure.string :as str]
+            ["node:fs" :as fs] ["node:http" :as http]
+            ["node:crypto" :as crypto] ["node:child_process" :as cp]))
+
+(defn eligible? [lane request]
+  (and (= (:model lane) (:model request))
+       (>= (:context lane 0) (+ (:input-tokens request 0) (:max-tokens request 0)))))
+
+(defn valid-output-budget? [body]
+  (let [n (:max_tokens body 1024)]
+    (and (number? n) (js/Number.isSafeInteger n) (<= 1 n 32768))))
+
+(defn admit [state lane id digest now ttl]
+  (cond
+    (get-in state [:jobs id])
+    (let [job (get-in state [:jobs id])]
+      {:status (if (= digest (:digest job)) 409 422) :reason :already-seen :state state})
+    (not (:ready lane)) {:status 503 :reason :not-ready :state state}
+    (>= (count (:jobs state)) (:max-jobs state 100000)) {:status 507 :reason :receipt-capacity :state state}
+    (get-in state [:groups (:group lane)]) {:status 429 :reason :busy :state state}
+    :else {:status 200 :state (-> state
+                                 (assoc-in [:groups (:group lane)] id)
+                                 (assoc-in [:jobs id] {:digest digest :group (:group lane)
+                                                      :status :running :deadline (+ now ttl)}))}))
+
+(defn finish [state id status]
+  (if-let [job (get-in state [:jobs id])]
+    (-> state
+        (update :groups dissoc (:group job))
+        (assoc-in [:jobs id :status] status))
+    state))
+
+(defn heal-eligible? [lane now]
+  (and (not (:ready lane)) (>= (:failures lane 0) 3)
+       (seq (:restart-argv lane))
+       (>= (- now (:last-heal lane 0)) (:cooldown-ms lane 1800000))))
+
+(defn json! [res status body]
+  (.writeHead res status #js {"content-type" "application/json" "cache-control" "no-store"})
+  (.end res (js/JSON.stringify (clj->js body))))
+
+(defn private-token [file]
+  (let [st (.lstatSync fs file)]
+    (when (or (.isSymbolicLink st) (not (.isFile st))
+              (not= 0 (bit-and (.-mode st) 63)))
+      (throw (js/Error. "token-file must be a private regular file (0600)")))
+    (let [token (str/trim (.readFileSync fs file "utf8"))]
+      (when (< (count token) 32) (throw (js/Error. "token-file is too short")))
+      token)))
+
+(defn authorized? [req token]
+  (let [a (js/Buffer.from (str "Bearer " token))
+        b (js/Buffer.from (or (aget (.-headers req) "authorization") ""))]
+    (and (= (.-length a) (.-length b)) (.timingSafeEqual crypto a b))))
+
+(defn read-body! [req limit]
+  (js/Promise.
+   (fn [resolve reject]
+     (let [parts (atom []) size (atom 0)]
+       (.on req "data" (fn [chunk]
+                         (if (> (swap! size + (.-length chunk)) limit)
+                           (do (reject (js/Error. "body too large")) (.destroy req))
+                           (swap! parts conj chunk))))
+       (.on req "error" reject)
+       (.on req "end" #(resolve (.concat js/Buffer (clj->js @parts))))))))
+
+(defn persist! [file state]
+  ;; Receipts precede dispatch. Atomic replacement prevents partial JSON after crash.
+  ;; No prompts or generated content enter this ledger.
+  (let [tmp (str file "." (.randomUUID crypto) ".tmp")
+        fd (.openSync fs tmp "wx" 384)]
+    (try
+      (.writeFileSync fs fd (js/JSON.stringify (clj->js state)))
+      (.fsyncSync fs fd)
+      (finally (.closeSync fs fd)))
+    (.renameSync fs tmp file)))
+
+(defn probe! [lane]
+  (let [url (:backend lane)
+        signal (.timeout js/AbortSignal 15000)]
+    (if (= "text" (:kind lane))
+      ;; /slots must show no external job before a canary can occupy this model.
+      (-> (js/fetch (str url "/slots") #js {:signal signal})
+          (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "slots unavailable"))) (.json r)))
+          (.then (fn [slots]
+                   (when-not (js/Array.isArray slots) (throw (js/Error. "invalid slot inventory")))
+                   (when (some #(true? (:is_processing %)) (js->clj slots :keywordize-keys true))
+                     (let [e (js/Error. "backend occupied outside resident")]
+                       (set! (.-code e) "BACKEND_BUSY") (throw e)))
+                   (js/fetch (str url "/v1/chat/completions")
+                             #js {:method "POST" :signal signal
+                                  :headers #js {"content-type" "application/json"}
+                                  :body (js/JSON.stringify
+                                         #js {:model (:model lane) :max_tokens 16 :temperature 0
+                                              :chat_template_kwargs #js {:enable_thinking false}
+                                              :messages #js [#js {:role "user" :content "2+3は? 数字だけで答えて。"}]})})))
+          (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "canary failed"))) (.json r)))
+          (.then (fn [body]
+                   (let [s (str/trim (or (some-> body .-choices (aget 0) .-message .-content) ""))]
+                     (when-not (= "5" s) (throw (js/Error. "canary answer incorrect"))) true))))
+      ;; Image readiness is upstream dependency readiness, not the bridge's own 200.
+      (-> (js/fetch (str (.-origin (js/URL. (:readiness-url lane))) "/queue") #js {:signal signal})
+          (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "image queue unavailable"))) (.json r)))
+          (.then (fn [queue]
+                   (when-not (and (js/Array.isArray (.-queue_running queue)) (js/Array.isArray (.-queue_pending queue)))
+                     (throw (js/Error. "invalid image queue")))
+                   (when (or (pos? (.-length (.-queue_running queue))) (pos? (.-length (.-queue_pending queue))))
+                     (let [e (js/Error. "image backend occupied")]
+                       (set! (.-code e) "BACKEND_BUSY") (throw e)))
+                   (js/fetch (:readiness-url lane) #js {:signal signal})))
+          (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "image backend unavailable"))) (.json r)))
+          (.then (fn [body]
+                   (let [inventory (js->clj body :keywordize-keys true)
+                         names (first (get-in inventory [:CheckpointLoaderSimple :input :required :ckpt_name]))
+                         model (:model lane)
+                         checkpoint (if (str/ends-with? model ".safetensors") model (str model ".safetensors"))]
+                     (when-not (some #{checkpoint} names)
+                       (throw (js/Error. "image checkpoint unavailable"))) true)))))))
+
+(defn start! [config]
+  (let [token (private-token (:token-file config))
+        file (:state-file config)
+        previous (if (.existsSync fs file)
+                   (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys false) {})
+        ;; On restart, previous running jobs become unknown; never replay them.
+        state (atom {:groups {} :max-jobs (:max-receipts config 100000)
+                     :jobs (into {} (for [[id j] (get previous "jobs")
+                                         :let [job (js->clj (clj->js j) :keywordize-keys true)]]
+                                     [id (update job :status #(if (= % "running") :unknown (keyword %)))]))})
+        lanes (atom (into {} (for [[id lane] (:lanes config)]
+                              [(name id) (assoc lane :ready false :failures 0 :probing false)])))
+        controllers (atom {})
+        save! #(persist! file @state)
+        tick! (fn []
+                (doseq [[id lane] (sort-by (fn [[_ l]] (:last-probe l 0)) @lanes)
+                        :when (and (not (:probing lane)) (not (get-in @state [:groups (:group lane)])))]
+                  ;; Reserve group for the probe too: canaries cannot race real jobs.
+                  (swap! state assoc-in [:groups (:group lane)] (str "probe:" id))
+                  (swap! lanes update id merge {:probing true :last-probe (js/Date.now)})
+                  (-> (probe! lane)
+                      (.then (fn [_] (swap! lanes update id merge {:ready true :failures 0})))
+                      (.catch (fn [error]
+                                (swap! lanes update id #(-> % (assoc :ready false) (update :failures inc)))
+                                (let [l (get @lanes id) now (js/Date.now)]
+                                  (when (and (not= "BACKEND_BUSY" (.-code error)) (heal-eligible? l now))
+                                    (swap! lanes assoc-in [id :last-heal] now)
+                                    ;; Commands are manifest argv, never interpolated through a shell.
+                                    (let [[bin & args] (:restart-argv l)]
+                                      (js/Promise. (fn [resolve _]
+                                       (.execFile cp bin (clj->js args)
+                                                 #js {:timeout 30000}
+                                                 (fn [error _ _]
+                                                   (println (js/JSON.stringify
+                                                             (clj->js {:event "heal" :lane id :ok (nil? error) :at now})))
+                                                   (resolve nil))))))))))
+                      (.finally (fn []
+                                  (swap! lanes assoc-in [id :probing] false)
+                                  (swap! state update :groups dissoc (:group lane)))))))
+        execute! (fn [req res lane-id]
+                   (-> (read-body! req (:max-body-bytes config 2097152))
+                       (.then
+                        (fn [bytes]
+                          (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
+                                id (aget (.-headers req) "x-murakumo-job-id")
+                                digest (.digest (.update (.createHash crypto "sha256") bytes) "hex")
+                                lane (get @lanes lane-id)
+                                request {:model (:model body) :input-tokens (.-length bytes)
+                                         :max-tokens (or (:max_tokens body) 1024)}]
+                            (cond
+                              (and (= "text" (:kind lane)) (not (valid-output-budget? body)))
+                              (json! res 400 {:error "invalid_output_budget"})
+                              (or (nil? id) (not (re-matches #"[A-Za-z0-9_-]{8,128}" id)))
+                              (json! res 400 {:error "job_id_required"})
+                              (nil? lane) (json! res 404 {:error "lane_unknown"})
+                              (and (= "text" (:kind lane)) (not (eligible? lane request)))
+                              (json! res 422 {:error "model_or_context_mismatch"})
+                              (and (= "image" (:kind lane)) (not= (:model lane) (:model body)))
+                              (json! res 422 {:error "model_mismatch"})
+                              :else
+                              (let [ttl (:job-timeout-ms lane 480000)
+                                    admission (admit @state lane id digest (js/Date.now) ttl)]
+                                (if (not= 200 (:status admission))
+                                  (json! res (:status admission) {:error (name (:reason admission))
+                                                                 :job-id id
+                                                                 :executed (if (= :already-seen (:reason admission)) "unknown" false)})
+                                  (let [controller (js/AbortController.) settled (atom false)
+                                        settle! (fn [status]
+                                                  (when (compare-and-set! settled false true)
+                                                    (swap! state finish id status)
+                                                    (swap! controllers dissoc id)
+                                                    (save!)))
+                                        timer (js/setTimeout #(.abort controller) ttl)]
+                                    (reset! state (:state admission))
+                                    (save!)
+                                    (swap! controllers assoc id controller)
+                                    (.on res "close" #(when-not (.-writableEnded res) (.abort controller)))
+                                    (-> (js/fetch (str (:backend lane) (:path lane))
+                                                  #js {:method "POST" :signal (.-signal controller)
+                                                       :headers #js {"content-type" "application/json"}
+                                                       :body (if (= "text" (:kind lane))
+                                                               (js/JSON.stringify (clj->js (assoc body :max_tokens (:max_tokens body 1024))))
+                                                               bytes)})
+                                        (.then (fn [r]
+                                                 (.writeHead res (.-status r)
+                                                             #js {"content-type" (or (.get (.-headers r) "content-type") "application/json")
+                                                                  "x-murakumo-job-id" id
+                                                                  "x-murakumo-node" (:node config)})
+                                                 (let [reader (.getReader (.-body r))]
+                                                   (letfn [(pump []
+                                                             (-> (.read reader)
+                                                                 (.then (fn [chunk]
+                                                                          (if (.-done chunk)
+                                                                            (do (settle! (if (.-ok r) :completed :failed)) (.end res))
+                                                                            (do (.write res (.from js/Buffer (.-value chunk))) (pump)))))))]
+                                                     (pump)))))
+                                        (.catch (fn [_]
+                                                  (swap! lanes assoc-in [lane-id :ready] false)
+                                                  (settle! :unknown)
+                                                  (when-not (.-headersSent res)
+                                                    (json! res 502 {:error "execution_unknown" :job-id id :retryable false}))
+                                                  (when-not (.-writableEnded res) (.end res))))
+                                        (.finally #(js/clearTimeout timer))))))))))
+                       (.catch (fn [_] (when-not (.-headersSent res) (json! res 400 {:error "request_failed"}))))))
+        server (.createServer http
+                              (fn [req res]
+                                (if-not (authorized? req token)
+                                  (json! res 401 {:error "unauthorized"})
+                                  (cond
+                                    (and (= "GET" (.-method req)) (= "/health" (.-url req)))
+                                    (json! res 200 {:node (:node config)
+                                                   :lanes (into {} (for [[id l] @lanes]
+                                                                    [id (select-keys (assoc l :busy (boolean (get-in @state [:groups (:group l)])))
+                                                                                     [:model :kind :context :ready :busy :failures])]))})
+                                    (and (= "POST" (.-method req)) (str/starts-with? (.-url req) "/execute/"))
+                                    (execute! req res (subs (.-url req) 9))
+                                    :else (json! res 404 {:error "not_found"})))))]
+    (doseq [[id l] @lanes]
+      (when-not (and (:group l) (:backend l) (:model l) (:path l))
+        (throw (js/Error. (str "incomplete lane " id)))))
+    (.listen server (:port config 8796) (:bind config "127.0.0.1"))
+    (tick!)
+    (let [timer (js/setInterval tick! (:probe-interval-ms config 30000))]
+      {:server server :state state :lanes lanes
+       :close (fn [] (js/clearInterval timer)
+                (doseq [[_ c] @controllers] (.abort c)) (.close server))})))
+
+(defn run-command [command args]
+  (case command
+    "serve" (let [[flag file] args]
+              (when-not (and (= flag "--config") file) (throw (js/Error. "resident serve --config FILE")))
+              (start! (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys true)))
+    (println "murakumo resident serve --config FILE — node-owned admission, canary and local healing")))
