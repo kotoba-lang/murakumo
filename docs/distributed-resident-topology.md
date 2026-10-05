@@ -85,7 +85,10 @@ A retired owner stays in the topology as disabled. Removing or replacing that
 binding is refused, so a new machine without the original receipts must join
 under a new node name. Past job IDs cannot be dispatched onto a replacement
 that silently reused a name. Restoring a node requires its owner identity and
-receipt ledger together. Unknown execution is never
+receipt ledger together. Startup refuses a missing or malformed ledger when
+the owner identity is already present, so storage loss cannot silently authorize
+previous work again. A fresh identity writes its empty durable ledger before
+opening admission. Unknown execution is never
 redispatched to a different owner. Receipt replication without a fenced consensus
 protocol would weaken this guarantee, so this topology change does not copy
 receipts or claim transparent mid-generation restart on another node. The

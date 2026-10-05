@@ -31,7 +31,7 @@ test('signed topology converges without its publisher, admits approved joins and
  const processes=[];t.after(()=>{for(const p of processes)p.kill('SIGTERM');});
  const configs=ids.map((node,i)=>({node,port:ports[i],bind:'127.0.0.1','token-file':tokenFile,'topology-file':files[i],'topology-public-key-file':publicFile,'topology-seeds':[urls[0]],'topology-poll-ms':50,'topology-fanout':3,'allow-loopback-topology?':true,'probe-interval-ms':50,...(i<2?{'state-file':join(dir,node+'-receipts.json'),lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',backend:'http://127.0.0.1:'+backend.address().port,path:'/v1/chat/completions'}}}:{peers:[]})}));
  async function launch(i){const path=join(dir,ids[i]+'.json');await writeFile(path,JSON.stringify(configs[i]));const p=spawn(process.execPath,[cli,i<2?'resident':'gateway','serve','--config',path],{stdio:['ignore','pipe','pipe']});processes.push(p);return p;}
- for(let i=0;i<2;i++)await writeFile(configs[i]['state-file']+'.owner-id',owners[i],{mode:0o600});
+ for(let i=0;i<2;i++){await writeFile(configs[i]['state-file']+'.owner-id',owners[i],{mode:0o600});await writeFile(configs[i]['state-file'],JSON.stringify({jobs:{}}),{mode:0o600});}
  for(let i=0;i<4;i++)await launch(i);
  const health=async i=>(await(await fetch(urls[i]+'/health',{headers})).json());
  await wait(async()=>{const h=await health(2);return h.peers?.n0?.lanes.text.ready;});
@@ -53,6 +53,12 @@ test('signed topology converges without its publisher, admits approved joins and
  // Persisted replicas restart without fetching the publisher.
  processes[1].kill('SIGTERM');await once(processes[1],'exit');await launch(1);
  await wait(async()=>{const h=await health(1);return h.topology?.revision===2&&h.lanes.text.ready;});
+ // Loss of the ledger cannot silently reuse the same owner and replay work.
+ const retainedLedger=await readFile(configs[1]['state-file']);
+ const runningResident=processes.at(-1);runningResident.kill('SIGTERM');await once(runningResident,'exit');
+ await rm(configs[1]['state-file']);const refused=await launch(1);const [exitCode]=await once(refused,'exit');assert.notEqual(exitCode,0);
+ await writeFile(configs[1]['state-file'],'{}');const malformed=await launch(1);const [malformedExit]=await once(malformed,'exit');assert.notEqual(malformedExit,0);
+ await writeFile(configs[1]['state-file'],retainedLedger);await launch(1);await wait(async()=>(await health(1)).lanes.text.ready);
  // Equal revision with different signed content is a durable conflict, never a random winner.
  const conflict=await signed({...payload,revision:2,nodes:payload.nodes});
  assert.equal((await fetch(urls[1]+'/topology',{method:'POST',headers,body:JSON.stringify(conflict)})).status,400);

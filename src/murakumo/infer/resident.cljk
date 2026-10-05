@@ -176,11 +176,17 @@
 
 (defn start! [config]
   (let [token (private-token (:token-file config))
-        topology (topo/start! config token)
         file (:state-file config)
-        owner-id (topo/owner-id! (:owner-id-file config (str file ".owner-id")))
+        owner-file (:owner-id-file config (str file ".owner-id"))
+        existing-owner? (.existsSync fs owner-file)
+        _ (when (and existing-owner? (not (.existsSync fs file)))
+            (throw (js/Error. "receipt ledger missing for retained owner; restore the paired ledger or retire this identity")))
+        owner-id (topo/owner-id! owner-file)
         previous (if (.existsSync fs file)
-                   (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys false) {})
+                   (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys false) {"jobs" {}})
+        _ (when-not (map? (get previous "jobs"))
+            (throw (js/Error. "invalid receipt ledger; refusing to reuse the retained owner")))
+        topology (topo/start! config token)
         ;; On restart, previous running jobs become unknown; never replay them.
         state (atom {:groups {} :max-jobs (:max-receipts config 100000)
                      :jobs (into {} (for [[id j] (get previous "jobs")
@@ -190,6 +196,7 @@
                               [(name id) (assoc lane :owner-id owner-id :ready false :failures 0 :probing false)])))
         controllers (atom {})
         save! #(persist! file @state)
+        _ (when-not (.existsSync fs file) (save!))
         tick! (fn []
                 (doseq [[id lane] (sort-by (fn [[_ l]] [(:last-probe l 0) (if (= "image" (:kind l)) 0 1)]) @lanes)
                         :when (and (topo/role-allowed? topology (:node config) lane) (not (:probing lane)) (not (get-in @state [:groups (:group lane)]))
