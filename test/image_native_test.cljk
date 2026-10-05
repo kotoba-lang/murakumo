@@ -25,8 +25,9 @@
       executable (path/join root "renderer")
       cfg {:native-root root :sd-cli executable}
       fake (str "#!/usr/bin/env node\nconst fs=require('node:fs');const a=process.argv.slice(2);"
+                "function emit(){const p=Buffer.alloc(24);Buffer.from('89504e470d0a1a0a','hex').copy(p);p.writeUInt32BE(512,16);p.writeUInt32BE(512,20);fs.writeFileSync(a[a.indexOf('-o')+1],p);}"
                 "if(a[a.indexOf('-p')+1].includes('wait-for-cancellation'))setInterval(()=>{},1000);"
-                "else{const p=Buffer.alloc(24);Buffer.from('89504e470d0a1a0a','hex').copy(p);p.writeUInt32BE(512,16);p.writeUInt32BE(512,20);fs.writeFileSync(a[a.indexOf('-o')+1],p);}")]
+                "else if(a[a.indexOf('-p')+1].includes('observation-recovery'))setTimeout(emit,3500);else emit();")]
   (fs/writeFileSync executable fake #js {:mode 493})
   (-> (n/render! cfg claim (atom false))
       (.then (fn [b64]
@@ -37,6 +38,22 @@
                  (-> (n/render! cfg (assoc-in claim [:input :prompt] "wait-for-cancellation") lost)
                      (.then (fn [_] (throw (js/Error. "Expired lease left a renderer running"))))
                      (.catch (fn [e] (a/match (.-message e) #"lease expired")))))))
+      (.then (fn [_]
+               (let [checks (atom 0) lost (atom false)]
+                 (-> (n/render! (assoc cfg :backend "metal" :gpu-idle-fn
+                                       (fn [_] (if (= 2 (swap! checks inc))
+                                                 (js/Promise.reject (js/Error. "transient observation timeout"))
+                                                 (js/Promise.resolve true))))
+                                (assoc-in claim [:input :prompt] "observation-recovery") lost)
+                     (.then (fn [_] (a/equal @lost false) (a/ok (> @checks 2))))))))
+      (.then (fn [_]
+               (let [checks (atom 0) lost (atom false)]
+                 (-> (n/render! (assoc cfg :backend "metal" :gpu-idle-fn
+                                       (fn [_] (if (= 1 (swap! checks inc)) (js/Promise.resolve true)
+                                                 (js/Promise.reject (js/Error. "persistent observation timeout")))))
+                                (assoc-in claim [:input :prompt] "wait-for-cancellation") lost)
+                     (.then (fn [_] (throw (js/Error. "Unobserved GPU execution continued indefinitely"))))
+                     (.catch (fn [e] (a/match (.-message e) #"gpu-observation-failed") (a/equal @lost true)))))))
       (.then (fn [_]
                (let [checks (atom 0) lost (atom false)]
                  (-> (n/render! (assoc cfg :backend "metal" :gpu-idle-fn (fn [_] (js/Promise.resolve (= 1 (swap! checks inc)))))

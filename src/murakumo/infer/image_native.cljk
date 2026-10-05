@@ -47,15 +47,15 @@
       (.then idle?)
       (.catch (fn [e]
                 (if (= "ECONNREFUSED" (some-> e .-cause .-code)) true
-                  (do (println "[image] local GPU observation unavailable" url (.-name e)) false))))))
+                  (do (println "[image] local GPU observation unavailable" url (.-name e)) (throw e)))))))
 (defn text-process-idle! []
   (js/Promise.
-   (fn [resolve _]
+   (fn [resolve reject]
      (cp/execFile "/usr/bin/pgrep" #js ["-x" "llama-server"] #js {:timeout 5000}
                   (fn [error _]
-                    (when (and error (not= 1 (.-code error)))
-                      (println "[image] local GPU process observation unavailable" (.-code error)))
-                    (resolve (boolean (and error (= 1 (.-code error))))))))))
+                    (if (and error (not= 1 (.-code error)))
+                      (do (println "[image] local GPU process observation unavailable" (.-code error)) (reject error))
+                      (resolve (boolean error))))))))
 (defn gpu-idle! [cfg]
   (if-not (= "metal" (:backend cfg)) (js/Promise.resolve true)
       (-> (js/Promise.all
@@ -100,18 +100,24 @@
                                   #js {:stdio #js ["ignore" "ignore" "pipe"] :shell false})
                    stderr (atom (js/Buffer.alloc 0)) reason (atom nil)
                    cancelled? (atom false) kill-timer (atom nil)
-                   gpu-checking? (atom false)
+                   gpu-checking? (atom false) observed-at (atom (js/Date.now))
                    timer (js/setInterval
                           (fn []
                             (when (and (= "metal" (:backend cfg)) (not @gpu-checking?))
                               (reset! gpu-checking? true)
                               (-> ((or (:gpu-idle-fn cfg) gpu-idle!) cfg)
                                   (.then (fn [idle?]
+                                           (reset! observed-at (js/Date.now))
                                            (if (not idle?) (do (reset! reason "gpu-occupied") (reset! lost? true))
                                              (-> (memory-available!) (.then (fn [free]
                                                                            (when (< free (* 2 1024 1024 1024))
                                                                              (reset! reason "memory-headroom") (reset! lost? true))))))))
-                                  (.catch (fn [_] (reset! reason "gpu-observation-failed") (reset! lost? true)))
+                                  ;; Heavy GPU loads can briefly delay pgrep or local
+                                  ;; occupancy endpoints. Preserve the last observation
+                                  ;; for at most 20s; real competition still cancels now.
+                                  (.catch (fn [_]
+                                            (when (>= (- (js/Date.now) @observed-at) 20000)
+                                              (reset! reason "gpu-observation-failed") (reset! lost? true))))
                                   (.finally #(reset! gpu-checking? false))))
                             (when (and (not @cancelled?) (or @lost? (>= (js/Date.now) (:deadline claim))))
                               (reset! cancelled? true) (.kill child "SIGTERM")
