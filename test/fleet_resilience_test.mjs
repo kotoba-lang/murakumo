@@ -116,3 +116,19 @@ test('text-only residents guard an optional external image queue without dispatc
  // A genuinely absent optional engine is allowed, while a broken one was denied.
  const absent=await port();config.lanes.text['external-image-queue-url']='http://127.0.0.1:'+absent+'/queue';child.kill('SIGTERM');await once(child,'exit');await writeFile(f,JSON.stringify(config));const restarted=spawn(process.execPath,[join(root,'release/node.mjs'),'resident','serve','--config',f],{stdio:'ignore'});t.after(()=>restarted.kill('SIGTERM'));await wait(async()=>(await health()).lanes.text.ready);
 });
+
+test('gateway withdraws unhealthy image ingress after inflight work finishes, and survives all-busy capacity',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'murakumo-ingress-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const token=randomBytes(32).toString('hex'),key=join(dir,'token'),marker=join(dir,'ingress.log'),wdMarker=join(dir,'watchdog.log'),action=join(dir,'action.mjs'),drain=join(dir,'draining');await writeFile(key,token,{mode:0o600});await writeFile(action,'import fs from "node:fs";fs.appendFileSync(process.argv[2],process.argv[3]+"\\n");');
+ let up=true,busy=false;
+ const source=createServer((req,res)=>{if(req.url==='/health'){res.statusCode=up?200:503;return res.end(JSON.stringify({node:'image0',lanes:{image:{kind:'image',model:'animagine-xl-4.0',ready:!busy,busy}}}));}req.resume();req.on('end',()=>setTimeout(()=>res.end('{"ok":true}'),350));});source.listen(0,'127.0.0.1');await once(source,'listening');t.after(()=>{source.closeAllConnections();source.close();});
+ const p=await port(),headers={authorization:'Bearer '+token,'content-type':'application/json'},url='http://127.0.0.1:'+p;
+ const config={node:'ingress-gateway',port:p,'token-file':key,'probe-interval-ms':30,peers:[{node:'image0',url:'http://127.0.0.1:'+source.address().port}],'drain-file':drain,'tunnel-start-argv':[process.execPath,action,marker,'start'],'tunnel-stop-argv':[process.execPath,action,marker,'stop'],'watchdog-argv':[process.execPath,action,wdMarker,'tick'],'watchdog-interval-ms':25};const f=join(dir,'config.json');await writeFile(f,JSON.stringify(config));const child=spawn(process.execPath,[join(root,'release/node.mjs'),'gateway','serve','--config',f],{stdio:'ignore',env:{...process.env,NOTIFY_SOCKET:join(dir,'fake-notify-socket')}});t.after(()=>child.kill('SIGTERM'));
+ const events=async()=>{try{return(await readFile(marker,'utf8')).trim().split('\n');}catch{return[];}};const health=async()=>(await(await fetch(url+'/health',{headers})).json());
+ await wait(async()=>(await events()).includes('start'));await wait(async()=>{try{return(await readFile(wdMarker,'utf8')).includes('tick');}catch{return false;}});
+ busy=true;await sleep(150);assert.equal((await events()).filter(x=>x==='stop').length,0);busy=false;await wait(async()=>(await health()).peers.image0?.lanes.image.ready);
+ const response=fetch(url+'/v1/images/generations',{method:'POST',headers,body:JSON.stringify({model:'animagine-xl-4.0',prompt:'fixture'})});await wait(async()=>(await health()).inflight===1);up=false;await sleep(150);assert.equal((await events()).filter(x=>x==='stop').length,0);assert.equal((await response).status,200);await wait(async()=>(await events()).includes('stop'));
+ up=true;await wait(async()=>(await events()).filter(x=>x==='start').length===2);
+ await writeFile(drain,'maintenance');await wait(async()=>(await health()).draining===true);const denied=await fetch(url+'/v1/images/generations',{method:'POST',headers,body:'{}'});assert.equal(denied.status,503);assert.equal((await denied.json()).executed,false);await wait(async()=>(await events()).filter(x=>x==='stop').length===2);
+ await rm(drain);await wait(async()=>(await events()).filter(x=>x==='start').length===3);assert.equal((await health()).inflight,0);
+});

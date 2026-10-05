@@ -3,7 +3,7 @@
   (:require [murakumo.infer.resident :as r]
             [murakumo.infer.replicated-topology :as topo]
             [clojure.string :as str]
-            ["node:fs" :as fs] ["node:http" :as http] ["node:crypto" :as crypto]))
+            ["node:child_process" :as cp] ["node:fs" :as fs] ["node:http" :as http] ["node:crypto" :as crypto]))
 
 (defn candidates [reports model kind now stale-ms]
   (vec (for [[node report] reports
@@ -16,6 +16,30 @@
   (let [token (r/private-token (:token-file config))
         topology (topo/start! config token)
         reports (atom {})
+        active (atom 0)
+        ingress-state (atom {:desired nil :failures 0 :applying false})
+        serving? #(and (topo/gateway-allowed? topology (:node config))
+                       (not (and (:drain-file config) (.existsSync fs (:drain-file config)))))
+        sync-ingress! (fn []
+                        (when (and (seq (:tunnel-start-argv config)) (seq (:tunnel-stop-argv config)))
+                          (let [now (js/Date.now)
+                                healthy? (boolean (and (serving?)
+                                           (some (fn [[node report]]
+                                                   (and (< (- now (:at report 0)) 15000)
+                                                        (topo/conformant-report? topology node report)
+                                                        (some #(= "image" (:kind %)) (vals (:lanes report))))) @reports)))
+                                failures (if healthy? 0 (inc (:failures @ingress-state)))
+                                apply? (and (not (:applying @ingress-state))
+                                            (not= healthy? (:desired @ingress-state))
+                                            (or healthy? (and (zero? @active) (>= failures (:tunnel-failure-threshold config 3)))))]
+                            (swap! ingress-state assoc :failures failures)
+                            (when apply?
+                              (swap! ingress-state assoc :applying true)
+                              (let [[bin & args] (if healthy? (:tunnel-start-argv config) (:tunnel-stop-argv config))]
+                                (.execFile cp bin (clj->js args) #js {:timeout 10000}
+                                  (fn [error _ _]
+                                    (swap! ingress-state #(cond-> (assoc % :applying false) (nil? error) (assoc :desired healthy?)))
+                                    (println (js/JSON.stringify (clj->js {:event "image-ingress" :enabled healthy? :ok (nil? error)}))))))))))
         peers (atom (into {} (for [p (if topology (topo/nodes topology) (:peers config))] [(:node p) p])))
         polling (atom false)
         headers #js {"authorization" (str "Bearer " token) "content-type" "application/json"}
@@ -34,7 +58,7 @@
                                                (swap! reports assoc node
                                                       (assoc (js->clj body :keywordize-keys true) :at (js/Date.now)))))
                                       (.catch (fn [_] (swap! reports dissoc node)))))))
-                      (.finally #(reset! polling false)))))
+                      (.finally (fn [] (reset! polling false) (sync-ingress!))))))
         handler (fn [req res compatibility?]
                   (cond
                     (and (not compatibility?) (not (r/authorized? req token))) (r/json! res 401 {:error "unauthorized"})
@@ -49,7 +73,7 @@
                     (and (= "GET" (.-method req))
                          (contains? (if compatibility? #{"/health" "/readiness"} #{"/health"}) (.-url req)))
                     (let [now (js/Date.now)
-                          live (if (topo/gateway-allowed? topology (:node config))
+                          live (if (serving?)
                                  (into {} (filter (fn [[node p]] (and (< (- now (:at p)) 15000) (topo/conformant-report? topology node p))) @reports)) {})]
                       (if compatibility?
                         (let [image-lanes (for [[_ p] live [_ lane] (:lanes p) :when (= "image" (:kind lane))] lane)
@@ -58,12 +82,16 @@
                                                 [model {:ready (boolean (some :ready ls))
                                                         :free (boolean (some #(and (:ready %) (not (:busy %))) ls))}]))]
                           (r/json! res (if (seq image-lanes) 200 503) {:ok (boolean (seq image-lanes)) :busy (boolean (some :busy image-lanes)) :models models}))
-                        (r/json! res (if (and (seq live) (topo/gateway-allowed? topology (:node config))) 200 503)
-                                 {:node (:node config) :topology (topo/summary topology) :resilience (topo/resilience topology live) :peers live :admission "node-owned"})))
-                    (and (= "POST" (.-method req)) (not (topo/gateway-allowed? topology (:node config))))
+                        (r/json! res (if (and (seq live) (serving?)) 200 503)
+                                 {:node (:node config) :topology (topo/summary topology) :resilience (topo/resilience topology live) :peers live :inflight @active :draining (not (serving?)) :admission "node-owned"})))
+                    (and (= "POST" (.-method req)) (not (serving?)))
                     (r/json! res 503 {:error "topology_gateway_unavailable" :executed false})
                     (and (= "POST" (.-method req))
                          (contains? (if compatibility? #{"/v1/images/generations"} #{"/v1/chat/completions" "/v1/images/generations"}) (.-url req)))
+                    (do
+                      (swap! active inc)
+                      (let [released? (atom false) release! #(when (compare-and-set! released? false true) (swap! active dec))]
+                        (.once res "finish" release!) (.once res "close" release!))
                     (-> (r/read-body! req (:max-body-bytes config 2097152))
                         (.then
                          (fn [bytes]
@@ -128,7 +156,7 @@
                                          (r/json! res 429 {:error "no_ready_capacity" :executed false})))]
                                (-> (js/Promise.resolve (attempt choices))
                                    (.finally #(js/clearTimeout timer)))))))
-                        (.catch (fn [_] (when-not (.-headersSent res) (r/json! res 400 {:error "invalid_request"})))))
+                        (.catch (fn [_] (when-not (.-headersSent res) (r/json! res 400 {:error "invalid_request"}))))))
                     :else (r/json! res 404 {:error "not_found"})))
         server (.createServer http (fn [req res] (handler req res false)))
         compat-server (when (:compat-image-port config)
@@ -141,9 +169,10 @@
     (.listen server (:port config 8797) (:bind config "127.0.0.1"))
     (when compat-server (.listen compat-server (:compat-image-port config) (:compat-image-bind config "127.0.0.1")))
     (tick!)
-    (let [timer (js/setInterval tick! (:probe-interval-ms config 3000))]
+    (let [timer (js/setInterval tick! (:probe-interval-ms config 3000))
+          stop-watchdog! (r/service-watchdog! config #(.-listening server))]
       {:server server :reports reports
-       :close (fn [] (when topology ((:close topology))) (js/clearInterval timer) (.close server) (when compat-server (.close compat-server)))})))
+       :close (fn [] (stop-watchdog!) (when topology ((:close topology))) (js/clearInterval timer) (.close server) (when compat-server (.close compat-server)))})))
 
 (defn run-command [command args]
   (case command
