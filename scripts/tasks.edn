@@ -8,7 +8,8 @@
 ;; model/token/dash/cloud/overlay/test) were dropped and have NO runnable
 ;; entrypoint today — those namespaces are .clj on babashka.process/cheshire,
 ;; so they need an nbb port, not a re-added bb.edn. `task` is the first port.
-{:identity {:cmd ["kbb" "-M" "-m" "murakumo.core" "identity"]
+{:image-model {:cmd ["kbb" "--backend" "sci" "scripts/image-model.cljk"] :pass-args? true :doc "Register, qualify on two workers, publish a prepared image-model manifest with --apply."}
+ :identity {:cmd ["kbb" "-M" "-m" "murakumo.core" "identity"]
             :pass-args? true
             :doc "Print the fleet operator DID. Uses MURAKUMO_OPERATOR_SEED if set, else the shared kotoba store ${XDG_DATA_HOME:-$HOME/.local/share}/kotoba/operator.seed. Never echoes the seed. Missing both is the existing missing-seed error."}
 

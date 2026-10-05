@@ -25,6 +25,11 @@
      (is (not (:ready (w/readiness cfg info {:queue_running [] :queue_pending []})))))
    (with-redefs [w/available-memory (fn [] 5368709120)]
      (is (:ready (w/readiness cfg info {:queue_running [] :queue_pending []}))))))
+(deftest prepared-checkpoints-use-the-shared-profile-catalog
+ (let [cfg {:name "node-a" :busy (atom false) :min-free 0
+            :model-files (atom {"future-image" "prepared.safetensors" "missing-image" "missing.safetensors"})}
+       info {:CheckpointLoaderSimple {:input {:required {:ckpt_name [["prepared.safetensors"]]}}}}]
+   (is (= ["future-image"] (:models (w/readiness cfg info {:queue_running [] :queue_pending []}))))))
 (let [r (run-tests 'image-worker-test)] (when (pos? (+ (:fail r) (:error r))) (js/process.exit 1)))
 (let [original (.-fetch js/globalThis) queue (atom {}) calls (atom [])
       cfg {:comfy "http://localhost:8188"}

@@ -33,7 +33,8 @@
             [kotoba.lang.text :as str]
             [murakumo.bench :as bench]
             [murakumo.health :as health]
-            [murakumo.apikey :as apikey]))
+            [murakumo.apikey :as apikey]
+            [murakumo.image-model :as image-model]))
 
 (defn- secret []
   #?(:cljs (or (some-> (aget js/process.env "MURAKUMO_TOKEN_SECRET") str) "")
@@ -176,7 +177,8 @@
     (catch :default e {:error (.-message e)})))
 
 (def ^:private tool-fns
-  {"murakumo.issue_api_key" issue-tool
+  {"murakumo.image_model_add" image-model/tool
+   "murakumo.issue_api_key" issue-tool
    "murakumo.verify_api_key" verify-tool
    "murakumo.bench_nodes" bench-nodes-tool
    "murakumo.bench_run" bench-run-tool
@@ -196,6 +198,12 @@
 
 (defn manifest []
   (-> (m/server "murakumo" "0.1.0")
+      (m/add-tool "murakumo.image_model_add"
+                  {:description "Register a prepared compatible image model, verify two independent live GPU render proofs, and publish it to murakumo.cloud and oppai.fans through their shared catalog. apply=false returns a plan. Requires operator credentials in the server environment; weights must already be installed and qualified on two workers."
+                   :input-schema {:type "object" :properties
+                     {"manifest" {:type "object"} "apply" {:type "boolean"}
+                      "proof_jobs" {:type "array" :items {:type "string"}}}
+                     :required ["manifest"]}})
       (m/add-tool "murakumo.issue_api_key"
                   {:description
                    (str "Issue a murakumo API key (mk1 capability token) for api.murakumo.cloud. "

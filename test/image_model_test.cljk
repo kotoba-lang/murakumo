@@ -1,0 +1,34 @@
+(ns image-model-test
+  (:require [murakumo.image-model :as model]
+            ["node:child_process" :as cp]))
+(def original-fetch js/fetch)
+(def original-token (aget js/process.env "MURAKUMO_SERVICE_TOKEN"))
+(def manifest {:id "prepared-image" :sites ["murakumo" "oppai"]})
+(def calls (atom []))
+(aset js/process.env "MURAKUMO_SERVICE_TOKEN" "test-only-operator")
+(aset js/globalThis "fetch" (fn [url opts]
+                (swap! calls conj [(str url) (.-method opts)])
+                (js/Promise.resolve (js/Response. (js/JSON.stringify
+                  (clj->js (cond
+                    (.endsWith url "/capacity") {:models [{:model "prepared-image" :ready 2}]}
+                    (.endsWith url "/publish") {:id "prepared-image" :published true :sites (:sites manifest)}
+                    (.includes url "?site=") {:models [{:id "prepared-image"}]}
+                    :else {:registered true}))) #js {:status 200}))))
+(-> (model/apply! manifest ["11111111-1111-4111-8111-111111111111" "22222222-2222-4222-8222-222222222222"])
+    (.then (fn [r]
+             (assert (:applied r)) (assert (:published r))
+             (assert (= 5 (count @calls)))
+             (assert (= "POST" (second (first @calls))))
+             (let [input {"jsonrpc" "2.0" "id" 1 "method" "tools/call"
+                          "params" {"name" "murakumo.image_model_add" "arguments" {"manifest" manifest}}}
+                   r (cp/spawnSync "kbb" #js ["--backend" "sci" "--classpath" "src:../org-anthropic-mcp/src" "scripts/mcp-server.cljk"]
+                                   #js {:encoding "utf8" :input (str (js/JSON.stringify (clj->js input)) "\n") :timeout 30000})
+                   reply (js->clj (js/JSON.parse (.-stdout r)) :keywordize-keys true)]
+               (assert (= 0 (.-status r)))
+               (assert (get-in reply [:result :content 0 :text]))
+               (assert (not (.includes (.-stdout r) "test-only-operator"))))
+             (println "Image publication CLI workflow and MCP stdio plan passed.")))
+    (.catch (fn [e] (println (.-message e)) (set! (.-exitCode js/process) 1)))
+    (.finally (fn [] (aset js/globalThis "fetch" original-fetch)
+                (if original-token (aset js/process.env "MURAKUMO_SERVICE_TOKEN" original-token)
+                  (js-delete js/process.env "MURAKUMO_SERVICE_TOKEN")))))

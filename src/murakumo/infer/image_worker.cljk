@@ -28,7 +28,7 @@
     (.freemem os)))
 (defn readiness [cfg object-info queue]
   (let [files (set (get-in object-info [:CheckpointLoaderSimple :input :required :ckpt_name 0]))
-        models (vec (keep (fn [[id file]] (when (contains? files file) id)) model-files))
+        models (vec (keep (fn [[id file]] (when (contains? files file) id)) (or (some-> (:model-files cfg) deref) model-files)))
         running (count (:queue_running queue)) pending (count (:queue_pending queue))
         free (available-memory)]
     {:name (:name cfg) :models models :running running :pending pending :memory-bytes free
@@ -57,8 +57,22 @@
                    (do (reset! last-cleanup (js/Date.now))
                        (-> (release-idle! cfg) (.then (fn [_] probe))))
                    probe)))))))
+(defn refresh-profiles! [cfg]
+  (if (or (:probe-fn cfg) (not (:model-files cfg)))
+    (js/Promise.resolve nil)
+    (-> (api! cfg "GET" "/infer/image-models/profiles" nil)
+        (.then (fn [r]
+                 (when (ok? r)
+                   (reset! (:model-files cfg)
+                           (merge model-files
+                                  (into {} (keep (fn [[id p]]
+                                                   (when (and (= "comfy-sdxl" (:renderer p)) (:checkpoint p))
+                                                     [(name id) (:checkpoint p)]))
+                                                 (get-in r [:body :profiles]))))))))
+        (.catch (fn [_] nil)))))
 (defn heartbeat! [cfg]
-  (-> (probe! cfg)
+  (-> (refresh-profiles! cfg)
+      (.then #(probe! cfg))
       (.catch (fn [_] {:name (:name cfg) :models [] :ready false :running 0 :pending 0 :memory-bytes 0}))
       (.then (fn [probe]
                (-> (api! cfg "POST" "/infer/image-workers/heartbeat" probe)
@@ -184,7 +198,7 @@
                                 (claim-next! (:body r)))))))))))
 (defn start! [cfg]
   (let [stopping? (atom false)
-        cfg (assoc cfg :busy (atom false) :last-cleanup (atom 0) :current-lost (atom nil) :stopping stopping?) failures (atom 0)
+        cfg (assoc cfg :busy (atom false) :model-files (atom model-files) :last-cleanup (atom 0) :current-lost (atom nil) :stopping stopping?) failures (atom 0)
         stop! (fn [] (reset! stopping? true)
                 (when-let [lost @(:current-lost cfg)] (reset! lost true))
                 (js/setTimeout #(js/process.exit 0) 5000))]
