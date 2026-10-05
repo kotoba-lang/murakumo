@@ -154,8 +154,10 @@ and exposes `draining` plus `inflight` in private health. Existing streams keep
 running. Remove the file to resume; the connector follows automatically.
 
 For Linux CLI services, declare `watchdog-argv` as
-`["/usr/bin/systemd-notify","--no-block","WATCHDOG=1"]` and apply
+`["/usr/bin/systemd-notify","WATCHDOG=1"]` and apply
 `deploy/systemd/cli-watchdog.conf` before the safe restart into this release.
 The CLI emits bounded notifications only while its server is listening. An
 unresponsive event loop misses the systemd watchdog deadline and is restarted.
 The receipt fence remains authoritative on restart; unknown work is not replayed.
+
+Use the portable notification command above: older fleet systemd versions reject `--no-block`. Verify that `WatchdogTimestampMonotonic` advances across multiple notification periods before qualifying a node. A configured watchdog without successful notifications repeatedly restarts healthy services.
