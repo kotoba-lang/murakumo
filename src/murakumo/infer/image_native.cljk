@@ -107,9 +107,9 @@
                               (reset! gpu-checking? true)
                               (-> ((or (:gpu-idle-fn cfg) gpu-idle!) cfg)
                                   (.then (fn [idle?]
-                                           (reset! observed-at (js/Date.now))
                                            (if (not idle?) (do (reset! reason "gpu-occupied") (reset! lost? true))
                                              (-> (memory-available!) (.then (fn [free]
+                                                                             (reset! observed-at (js/Date.now))
                                                                            (when (< free (* 2 1024 1024 1024))
                                                                              (reset! reason "memory-headroom") (reset! lost? true))))))))
                                   ;; Heavy GPU loads can briefly delay pgrep or local
