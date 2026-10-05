@@ -14,6 +14,11 @@
            (catch :default _ true))))
 (deftest no-unqualified-advertisement
   (is (not (n/qualified? {:native-root "/nonexistent-murakumo-test" :sd-cli "/nonexistent"}))))
+(deftest explicit-gpu-profile
+  (let [args (clj->js (n/arguments {:native-root "/models" :backend "metal"} claim "/tmp/output.png"))]
+    (is (= "diffusion=MTL0,te=cpu,vae=cpu" (aget args (inc (.indexOf args "--backend")))))
+    (is (= "diffusion=MTL0,te=cpu,vae=cpu" (aget args (inc (.indexOf args "--params-backend")))))
+    (is (= "off" (aget args (inc (.indexOf args "--auto-fit")))))))
 (let [r (run-tests 'image-native-test)] (when (pos? (+ (:fail r) (:error r))) (js/process.exit 1)))
 
 (let [root (fs/mkdtempSync (path/join (.tmpdir os) "native-image-test-"))
@@ -32,6 +37,12 @@
                  (-> (n/render! cfg (assoc-in claim [:input :prompt] "wait-for-cancellation") lost)
                      (.then (fn [_] (throw (js/Error. "Expired lease left a renderer running"))))
                      (.catch (fn [e] (a/match (.-message e) #"lease expired")))))))
+      (.then (fn [_]
+               (let [checks (atom 0) lost (atom false)]
+                 (-> (n/render! (assoc cfg :backend "metal" :gpu-idle-fn (fn [_] (js/Promise.resolve (= 1 (swap! checks inc)))))
+                                (assoc-in claim [:input :prompt] "wait-for-cancellation") lost)
+                     (.then (fn [_] (throw (js/Error. "External GPU occupation did not cancel our image"))))
+                     (.catch (fn [e] (a/match (.-message e) #"lease expired") (a/equal @lost true)))))))
       (.then (fn [_]
                (a/equal (count (filter #(.startsWith % "job-") (fs/readdirSync root))) 0)
                (println "Native renderer: literal arguments, artifact cleanup and lease cancellation passed.")))

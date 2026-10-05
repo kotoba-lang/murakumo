@@ -27,3 +27,15 @@ kbb --backend sci test/image_native_test.cljk
 ```
 
 The native test checks profile rejection, absence of unqualified advertisement, literal prompt arguments, artifact cleanup and cancellation of a renderer after lease loss. Image API tests additionally exercise the 25-step native profile after real compiled-bundle admission/claim.
+
+## Metal replicas
+
+The Metal profile assigns `diffusion=MTL0,te=cpu,vae=cpu` explicitly for both computation and parameters, with auto-fit disabled. MTL0 is the device reported by the pinned sd.cpp build on Apple M4; a missing GPU fails qualification rather than advertising a CPU fallback. The same three checked model artifacts and 512x512/25-step profile are retained.
+
+`prepare-metal-image-node.cljk` permits only `jacob@100.117.208.83` and `junkawasaki@100.86.235.122`. It builds the fixed runtime with `SD_METAL=ON`, checks all artifact hashes and the device inventory, invalidates old proof, and renders an actual image before writing a `metal` marker. The qualification supervisor bounds the entire process group. `--qualify` repeats checks and rendering without downloading/building. These nodes have no resident llama-server GPU service; pre-existing Ollama/Comfy services are preserved.
+
+`install-metal-image-worker.cljk HOST PRIVATE_CREDENTIAL_JSON` enrolls `jacob-qwen-image21-metal` or `25mbair-qwen-image21-metal`. The credential is the API's new `MURAKUMO_IMAGE_GPU_WORKER_TOKEN`, restricted to these image-worker identities and the Qwen image model. It cannot submit jobs, read image results, change the model catalog, or administer other services. The file must be private; it is copied only after qualification and is never printed. Node-local nbb 1.5.212 and a per-user launch agent restart a failed worker. The launch agent kills remaining process-group members; graceful shutdown additionally marks the current renderer cancelled and stops new polling.
+
+At least 10GiB of available memory (macOS memory-pressure report) is required for admission. Ollama resident models, a llama-server process, and Comfy pending/running jobs exclude GPU admission. These signals are rechecked before rendering and during execution; unexpected external occupation, unavailable occupancy observations, or less than 2GiB headroom cancel only our renderer. The common 90s fenced lease/retry logic then allows another ready replica to take over. This is coexistence protection, not a mechanism that controls unrelated local applications. Mac sleep/offline observations expire after45s and cannot remain advertised as ready.
+
+Migration disables CPU admission first by moving its marker aside, lets any existing render finish, then stops only the owned native CPU worker. Model files and CPU qualification evidence remain available for an explicit recovery. Normal production work is then handled by the two qualified Metal replicas. Acceptance requires independent GPU images, parallel API jobs on both workers, real interrupted-job handoff, image retrieval, and post-job readiness.
