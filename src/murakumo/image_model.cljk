@@ -34,6 +34,15 @@
            :prompt (str "Studio photograph of a " (if (zero? index) "blue ceramic bowl" "red ceramic vase") " on a wooden table, soft daylight, no text")
            :publication_consent "public-examples-v1"})
         (.then #(await-job! token id network (+ (js/Date.now) 5400000))))))
+(defn publish-ready! [token id sites proofs deadline]
+  (-> (request! token "POST" (str "/infer/image-models/" (js/encodeURIComponent id) "/publish")
+                {:sites sites :proof_jobs proofs})
+      (.catch (fn [e]
+                ;; A completed upload can precede the next 15-second heartbeat.
+                ;; Retry this readiness race with the same proofs, never rerender.
+                (if (and (= "proof_workers_not_ready" (.-message e)) (< (js/Date.now) deadline))
+                  (-> (sleep! 5000) (.then #(publish-ready! token id sites proofs deadline)))
+                  (throw e))))))
 (defn apply! [manifest proofs]
   (let [token (or (aget js/process.env "MURAKUMO_SERVICE_TOKEN") (aget js/process.env "MURAKUMO_OPERATOR_TOKEN"))
         id (:id manifest)]
@@ -48,8 +57,7 @@
                      (let [network (apply str (repeat 2 (str/replace (crypto/randomUUID) "-" "")))]
                        (-> (js/Promise.all (clj->js (map #(canary! token id % network) (range 2))))
                            (.then vec))))))
-          (.then #(request! token "POST" (str "/infer/image-models/" (js/encodeURIComponent id) "/publish")
-                           {:sites (:sites manifest) :proof_jobs %}))
+          (.then #(publish-ready! token id (:sites manifest) % (+ (js/Date.now) 180000)))
           (.then (fn [published]
                    (-> (js/Promise.all (clj->js (map (fn [site] (request! token "GET" (str "/infer/image-models?site=" site) nil)) (:sites manifest))))
                        (.then (fn [catalogs]
