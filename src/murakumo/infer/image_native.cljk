@@ -16,23 +16,49 @@
     :sha256 "bb21f7473051e1ac368515dd3f2e15cd44d7a11748ee8823e1ddca3e4876b7c9"}])
 
 (defn memory-available []
-  (* 1024 (js/parseInt (or (second (re-find #"MemAvailable:\s+(\d+)" (fs/readFileSync "/proc/meminfo" "utf8"))) "0") 10)))
+  (if (= "darwin" (.-platform js/process))
+    (let [report (cp/execFileSync "/usr/bin/memory_pressure" #js ["-Q"] #js {:encoding "utf8" :timeout 2000})
+          pct (js/parseInt (or (second (re-find #"free percentage: (\d+)%" report)) "0") 10)
+          total (js/parseInt (cp/execFileSync "/usr/sbin/sysctl" #js ["-n" "hw.memsize"] #js {:encoding "utf8" :timeout 2000}) 10)]
+      (* total (/ pct 100)))
+    (* 1024 (js/parseInt (or (second (re-find #"MemAvailable:\s+(\d+)" (fs/readFileSync "/proc/meminfo" "utf8"))) "0") 10))))
 (defn qualified? [cfg]
   (try
     (let [marker (js->clj (js/JSON.parse (fs/readFileSync (path/join (:native-root cfg) "qualified.json") "utf8")) :keywordize-keys true)]
-      (and (= model-id (:model marker)) (= runtime-revision (:runtime marker)) (= "cpu" (:backend marker))
+      (and (= model-id (:model marker)) (= runtime-revision (:runtime marker)) (= (or (:backend cfg) "cpu") (:backend marker))
            (= (mapv :sha256 artifacts) (:sha256 marker))
            (fs/existsSync (:sd-cli cfg))
            (every? #(fs/existsSync (path/join (:native-root cfg) "models" (:file %))) artifacts)))
     (catch :default _ false)))
+(defn optional-local! [url idle?]
+  (-> (js/fetch url #js {:signal (js/AbortSignal.timeout 1500)})
+      (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "GPU occupancy unavailable"))) (.json r)))
+      (.then idle?)
+      (.catch (fn [e] (= "ECONNREFUSED" (some-> e .-cause .-code))))))
+(defn gpu-idle! [cfg]
+  (if-not (= "metal" (:backend cfg)) (js/Promise.resolve true)
+    (let [text-idle? (try
+                       (cp/execFileSync "/usr/bin/pgrep" #js ["-x" "llama-server"] #js {:stdio "ignore" :timeout 1500}) false
+                       (catch :default e (= 1 (.-status e))))]
+      (-> (js/Promise.all
+           #js [(optional-local! "http://127.0.0.1:11434/api/ps"
+                                #(and (js/Array.isArray (.-models %)) (zero? (.-length (.-models %)))))
+                (optional-local! "http://127.0.0.1:8188/queue"
+                                #(and (js/Array.isArray (.-queue_running %)) (js/Array.isArray (.-queue_pending %))
+                                      (zero? (.-length (.-queue_running %))) (zero? (.-length (.-queue_pending %)))))])
+          (.then (fn [idle] (and text-idle? (every? true? idle))))))))
 (defn probe! [cfg]
   (let [qualified (qualified? cfg) free (memory-available)]
-    (js/Promise.resolve
-     {:name (:name cfg) :models (if qualified [model-id] []) :running (if @(:busy cfg) 1 0) :pending 0
-      :memory-bytes free :ready (boolean (and qualified (not @(:busy cfg)) (>= free (:min-free cfg))))})))
+    (-> (gpu-idle! cfg)
+        (.then (fn [idle?]
+                 {:name (:name cfg) :models (if qualified [model-id] []) :running (if @(:busy cfg) 1 0) :pending 0
+                  :memory-bytes free :ready (boolean (and idle? qualified (not @(:busy cfg)) (>= free (:min-free cfg))))})))))
 
 (defn arguments [cfg {:keys [model input]} output]
   (let [{:keys [prompt width height steps seed]} input
+        backend (or (:backend cfg) "cpu")
+        assignment (case backend "cpu" "cpu" "metal" "diffusion=MTL0,te=cpu,vae=cpu"
+                         (throw (js/Error. "Unsupported native backend")))
         model-path #(path/join (:native-root cfg) "models" %)]
     (when-not (and (= model-id model) (string? prompt) (<= 1 (count prompt) 2000)
                    (= 512 width height) (= 25 steps) (int? seed) (<= 0 seed 2147483647))
@@ -44,9 +70,9 @@
      "--seed" (str seed) "--cfg-scale" "1" "--sampling-method" "euler"
      ;; The K16's resident text service owns Vulkan exclusively. Explicit CPU
      ;; assignments and disabled auto-fit prevent even an idle-GPU race.
-     "--backend" "cpu" "--params-backend" "cpu" "--auto-fit" "off" "--fa" "-t" "4" "-o" output]))
+     "--backend" assignment "--params-backend" assignment "--auto-fit" "off" "--fa" "-t" "4" "-o" output]))
 
-(defn render! [cfg claim lost?]
+(defn execute! [cfg claim lost?]
   (let [dir (fs/mkdtempSync (path/join (:native-root cfg) "job-")) output (path/join dir "image.png")]
     (-> (js/Promise.
          (fn [resolve reject]
@@ -54,8 +80,15 @@
              (let [child (cp/spawn (:sd-cli cfg) (clj->js (arguments cfg claim output))
                                   #js {:stdio "ignore" :shell false})
                    cancelled? (atom false) kill-timer (atom nil)
+                   gpu-checking? (atom false)
                    timer (js/setInterval
                           (fn []
+                            (when (and (= "metal" (:backend cfg)) (not @gpu-checking?))
+                              (reset! gpu-checking? true)
+                              (-> ((or (:gpu-idle-fn cfg) gpu-idle!) cfg)
+                                  (.then (fn [idle?] (when (or (not idle?) (< (memory-available) (* 2 1024 1024 1024))) (reset! lost? true))))
+                                  (.catch (fn [_] (reset! lost? true)))
+                                  (.finally #(reset! gpu-checking? false))))
                             (when (and (not @cancelled?) (or @lost? (>= (js/Date.now) (:deadline claim))))
                               (reset! cancelled? true) (.kill child "SIGTERM")
                               (reset! kill-timer (js/setTimeout #(.kill child "SIGKILL") 3000)))) 1000)]
@@ -74,3 +107,11 @@
                           (catch :default e (reject e))))))
              (catch :default e (reject e)))))
         (.finally #(fs/rmSync dir #js {:recursive true :force true})))))
+
+(defn render! [cfg claim lost?]
+  (-> ((or (:gpu-idle-fn cfg) gpu-idle!) cfg)
+      (.then (fn [idle?]
+               (when-not idle? (throw (js/Error. "GPU occupied before image execution")))
+               (when (or @lost? (>= (js/Date.now) (:deadline claim)))
+                 (throw (js/Error. "Native image lease expired before execution")))
+               (execute! cfg claim lost?)))))

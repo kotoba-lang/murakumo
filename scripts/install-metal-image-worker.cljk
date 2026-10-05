@@ -1,0 +1,43 @@
+(ns install-metal-image-worker
+  (:require [nbb.core :as nbb] [murakumo.infer.image-native :as native]
+            ["node:fs" :as fs] ["node:path" :as path] ["node:child_process" :as cp]))
+(def hosts {"jacob@100.117.208.83" "jacob-qwen-image21-metal"
+            "junkawasaki@100.86.235.122" "25mbair-qwen-image21-metal"})
+(let [[host credential-file] *command-line-args*
+      repo (path/resolve (path/dirname nbb/*file*) "..")
+      root "/Users/junkawasaki/.murakumo/qwen-image21"
+      label "ai.gftd.murakumo-native-image-worker"
+      encode #(.toString (js/Buffer.from %) "base64")]
+  (when-not (and (contains? hosts host) credential-file) (throw (js/Error. "Owned Metal host and private GPU-worker credential file required")))
+  (let [st (fs/lstatSync credential-file)]
+    (when-not (and (.isFile st) (not (.isSymbolicLink st)) (zero? (bit-and (.-mode st) 63)))
+      (throw (js/Error. "Credential file must be a private regular file"))))
+  (let [token (aget (js/JSON.parse (fs/readFileSync credential-file "utf8")) "MURAKUMO_IMAGE_GPU_WORKER_TOKEN")
+        node (if (= host "jacob@100.117.208.83") "/Users/junkawasaki/.local/bin/node" "/opt/homebrew/bin/node")
+        launch (str "#!/bin/bash\nset -euo pipefail\nset -a\n. " root "/join.env\nset +a\n"
+                    "export PATH=/opt/homebrew/bin:/Users/junkawasaki/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin\n"
+                    "export NODE_OPTIONS=--dns-result-order=ipv4first\nexport MURAKUMO_NATIVE_IMAGE_ROOT=" root "\n"
+                    "export MURAKUMO_NATIVE_IMAGE_BACKEND=metal\nexport MURAKUMO_IMAGE_WORKER_NAME=" (get hosts host) "\n"
+                    "exec " node " " root "/nbb/node_modules/nbb/lib/nbb_main.js --classpath " root "/src " root "/join.cljk\n")
+        plist (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict>"
+                   "<key>Label</key><string>" label "</string><key>ProgramArguments</key><array><string>/bin/bash</string><string>" root "/launch.sh</string></array>"
+                   "<key>WorkingDirectory</key><string>" root "</string><key>RunAtLoad</key><true/><key>KeepAlive</key><true/>"
+                   "<key>ThrottleInterval</key><integer>15</integer><key>ExitTimeOut</key><integer>10</integer>"
+                   "<key>AbandonProcessGroup</key><false/><key>Nice</key><integer>10</integer>"
+                   "<key>StandardOutPath</key><string>" root "/worker.log</string><key>StandardErrorPath</key><string>" root "/worker-error.log</string></dict></plist>")
+        script (str "set -euo pipefail\nexport PATH=/opt/homebrew/bin:/Users/junkawasaki/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin\numask 077\n"
+                    "test $(id -un) = junkawasaki\n! launchctl print gui/$(id -u)/" label " >/dev/null 2>&1\n"
+                    "test -x " node "\n"
+                    "node -e 'const m=JSON.parse(require(\"fs\").readFileSync(\"" root "/qualified.json\"));if(m.backend!==\"metal\"||m.model!==\"" native/model-id "\"||m.runtime!==\"" native/runtime-revision "\")process.exit(1)'\n"
+                    "mkdir -p " root "/src/murakumo/infer\nnpm install --prefix " root "/nbb --no-audit --no-fund nbb@1.5.212\n"
+                    (apply str (for [[from to] [["src/murakumo/infer/image_worker.cljk" "src/murakumo/infer/image_worker.cljs"]
+                                               ["src/murakumo/infer/image_native.cljk" "src/murakumo/infer/image_native.cljs"]
+                                               ["scripts/infer-native-image-join.cljk" "join.cljk"]]]
+                                 (str "echo '" (encode (fs/readFileSync (path/join repo from))) "' | base64 -D > " root "/" to "\n")))
+                    "echo '" (encode (str "MURAKUMO_SERVICE_TOKEN=" token "\n")) "' | base64 -D > " root "/join.env\nchmod 600 " root "/join.env\n"
+                    "echo '" (encode launch) "' | base64 -D > " root "/launch.sh\n"
+                    "echo '" (encode plist) "' | base64 -D > /Users/junkawasaki/Library/LaunchAgents/" label ".plist\n"
+                    "plutil -lint /Users/junkawasaki/Library/LaunchAgents/" label ".plist\n"
+                    "launchctl bootstrap gui/$(id -u) /Users/junkawasaki/Library/LaunchAgents/" label ".plist\necho metal-worker-installed\n")]
+    (when-not (and (string? token) (re-matches #"[a-f0-9]{64}" token)) (throw (js/Error. "Invalid scoped worker credential")))
+    (cp/execFileSync "ssh" #js [host "/bin/bash -s"] #js {:input script :stdio #js ["pipe" "inherit" "inherit"] :timeout 180000})))
