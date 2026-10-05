@@ -85,7 +85,10 @@ A retired owner stays in the topology as disabled. Removing or replacing that
 binding is refused, so a new machine without the original receipts must join
 under a new node name. Past job IDs cannot be dispatched onto a replacement
 that silently reused a name. Restoring a node requires its owner identity and
-receipt ledger together. Unknown execution is never
+receipt ledger together. Startup refuses a missing or malformed ledger when
+the owner identity is already present, so storage loss cannot silently authorize
+previous work again. A fresh identity writes its empty durable ledger before
+opening admission. Unknown execution is never
 redispatched to a different owner. Receipt replication without a fenced consensus
 protocol would weaken this guarantee, so this topology change does not copy
 receipts or claim transparent mid-generation restart on another node. The
@@ -118,3 +121,41 @@ Run `node --test test/replicated_topology_test.mjs test/fleet_resilience_test.mj
 against the packaged CLI. Tests exercise approved join and retirement, signature
 rejection, rollback rejection, publisher loss, persisted rejoin and conflict
 recovery as well as multi-gateway admission and ambiguous-execution handling.
+
+## Legacy empty-owner upgrade
+
+An older resident created its owner identity before its first admission and
+could therefore legitimately have no ledger. Do not infer emptiness from a
+missing file. For a node confirmed to have never admitted any job, the operator
+may set `legacy-empty-ledger-owner-id` to that exact owner UUID for one upgrade.
+The resident writes an empty ledger and a durable `.bound-owner` marker before
+opening admission. Once that marker exists, the migration setting cannot
+authorize a missing ledger again. Nodes with any previous admission must
+restore their paired ledger instead. Remove the migration field after upgrade.
+
+## Ingress lifecycle and live process supervision
+
+A connected Cloudflare connector does not prove its local origin works. Bind
+`murakumo-recovery-tunnel.service` to `murakumo-fleet-gateway.service` with the
+committed systemd drop-ins. Stopping or restarting an ingress must withdraw or
+restart its image connector too; the other ingress continues independently.
+
+The gateway also supports `tunnel-start-argv` and `tunnel-stop-argv`. After three
+failed observations, it withdraws image ingress when it cannot reach a fresh,
+conformant image resident, or its gateway role is disabled. It waits until
+`inflight` is zero before withdrawing an otherwise live connector. Reachable
+but busy image lanes retain ingress: occupied capacity is not origin failure.
+A healthy image resident makes the connector return automatically. The desired
+connector state is reasserted every 30 seconds, so an unexpected service stop
+does not remain hidden behind cached state.
+
+An optional root-owned `drain-file` refuses new inference with `executed:false`
+and exposes `draining` plus `inflight` in private health. Existing streams keep
+running. Remove the file to resume; the connector follows automatically.
+
+For Linux CLI services, declare `watchdog-argv` as
+`["/usr/bin/systemd-notify","--no-block","WATCHDOG=1"]` and apply
+`deploy/systemd/cli-watchdog.conf` before the safe restart into this release.
+The CLI emits bounded notifications only while its server is listening. An
+unresponsive event loop misses the systemd watchdog deadline and is restarted.
+The receipt fence remains authoritative on restart; unknown work is not replayed.

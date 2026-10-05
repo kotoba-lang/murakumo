@@ -174,13 +174,35 @@
                                   (= (:probe-topology-digest lane) (:digest (topo/summary topology)))
                                   (topo/role-allowed? topology node lane)))))
 
+(defn service-watchdog! [config live?]
+  (if (and (aget (.-env js/process) "NOTIFY_SOCKET") (seq (:watchdog-argv config)))
+    (let [[bin & args] (:watchdog-argv config) sending? (atom false)
+          timer (js/setInterval
+                  (fn [] (when (and (live?) (compare-and-set! sending? false true))
+                           (.execFile cp bin (clj->js args) #js {:timeout 3000}
+                                      (fn [_ _ _] (reset! sending? false)))))
+                  (:watchdog-interval-ms config 10000))]
+      #(js/clearInterval timer))
+    (fn [] nil)))
+
 (defn start! [config]
   (let [token (private-token (:token-file config))
-        topology (topo/start! config token)
         file (:state-file config)
-        owner-id (topo/owner-id! (:owner-id-file config (str file ".owner-id")))
+        owner-file (:owner-id-file config (str file ".owner-id"))
+        existing-owner? (.existsSync fs owner-file)
+        owner-id (topo/owner-id! owner-file)
+        binding-file (str file ".bound-owner")
+        bound? (.existsSync fs binding-file)
+        _ (when (and bound? (not= owner-id (topo/owner-id! binding-file)))
+            (throw (js/Error. "receipt ledger owner binding mismatch")))
+        _ (when (and existing-owner? (not (.existsSync fs file))
+                     (or bound? (not= owner-id (:legacy-empty-ledger-owner-id config))))
+            (throw (js/Error. "receipt ledger missing for retained owner; restore its ledger or explicitly prepare a confirmed empty legacy owner")))
         previous (if (.existsSync fs file)
-                   (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys false) {})
+                   (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys false) {"jobs" {}})
+        _ (when-not (map? (get previous "jobs"))
+            (throw (js/Error. "invalid receipt ledger; refusing to reuse the retained owner")))
+        topology (topo/start! config token)
         ;; On restart, previous running jobs become unknown; never replay them.
         state (atom {:groups {} :max-jobs (:max-receipts config 100000)
                      :jobs (into {} (for [[id j] (get previous "jobs")
@@ -190,6 +212,11 @@
                               [(name id) (assoc lane :owner-id owner-id :ready false :failures 0 :probing false)])))
         controllers (atom {})
         save! #(persist! file @state)
+        _ (when-not (.existsSync fs file) (save!))
+        _ (when-not bound?
+            (let [fd (.openSync fs binding-file "wx" 384)]
+              (try (.writeFileSync fs fd owner-id) (.fsyncSync fs fd) (finally (.closeSync fs fd)))
+              (topo/sync-parent! binding-file)))
         tick! (fn []
                 (doseq [[id lane] (sort-by (fn [[_ l]] [(:last-probe l 0) (if (= "image" (:kind l)) 0 1)]) @lanes)
                         :when (and (topo/role-allowed? topology (:node config) lane) (not (:probing lane)) (not (get-in @state [:groups (:group lane)]))
@@ -359,9 +386,10 @@
     (.listen server (:port config 8796) (:bind config "127.0.0.1"))
     (when compatibility-server (.listen compatibility-server (:compat-port config) (:compat-bind config)))
     (tick!)
-    (let [timer (js/setInterval tick! (:probe-interval-ms config 30000))]
+    (let [timer (js/setInterval tick! (:probe-interval-ms config 30000))
+          stop-watchdog! (service-watchdog! config #(.-listening server))]
       {:server server :state state :lanes lanes
-       :close (fn [] (when topology ((:close topology))) (js/clearInterval timer)
+       :close (fn [] (stop-watchdog!) (when topology ((:close topology))) (js/clearInterval timer)
                 (doseq [[_ c] @controllers] (.abort c)) (.close server)
                 (when compatibility-server (.close compatibility-server)))})))
 
