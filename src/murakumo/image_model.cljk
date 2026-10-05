@@ -8,7 +8,10 @@
    :steps ["register immutable model profile" "require two ready replicas"
            "render canaries or verify supplied completed jobs" "publish to shared site catalog"]
    :prerequisite "Install and qualify pinned weights on two compatible GPU workers before applying."})
-(defn request! [token method path body]
+(defn sleep! [ms] (js/Promise. (fn [resolve _] (js/setTimeout resolve ms))))
+(defn request!
+  ([token method path body] (request! token method path body 0))
+  ([token method path body attempt]
   (-> (.fetch js/globalThis (str api path)
         (clj->js (cond-> {:method method :signal (js/AbortSignal.timeout 30000)
                          :headers {"authorization" (str "Bearer " token) "content-type" "application/json"}}
@@ -18,8 +21,17 @@
                    (.then (fn [b]
                             (let [b (js->clj b :keywordize-keys true)]
                               (if (.-ok r) b
-                                (throw (ex-info (or (get-in b [:error :code]) "image_model_request_failed") {:status (.-status r)})))))))))))
-(defn sleep! [ms] (js/Promise. (fn [resolve _] (js/setTimeout resolve ms))))
+                                (throw (ex-info (or (get-in b [:error :code]) "image_model_request_failed") {:status (.-status r)})))))))))
+      (.catch (fn [e]
+                ;; Registration, publication and UUID submissions are idempotent.
+                ;; Preserve the exact request when retrying a transient failure.
+                (if (and (< attempt 2)
+                         (or (contains? #{408 429 500 502 503 504}
+                                        (or (:status (ex-data e)) (:status (ex-data (ex-cause e)))))
+                             (contains? #{"TypeError" "TimeoutError" "AbortError"} (.-name e))))
+                  (-> (sleep! (* 1000 (inc attempt)))
+                      (.then #(request! token method path body (inc attempt))))
+                  (throw e)))))))
 (defn await-job! [token id network deadline]
   (-> (request! token "GET" (str "/infer/image-jobs/" id "?network=" network) nil)
       (.then (fn [job]
@@ -69,7 +81,7 @@
   ;; in a child, with credentials inherited through env rather than arguments.
   (let [r (.spawnSync child (or (aget js/process.env "MURAKUMO_KBB") "kbb")
                       #js ["--backend" "sci" "scripts/image-model.cljk" "--stdin"]
-                      #js {:encoding "utf8" :input (js/JSON.stringify (clj->js args)) :timeout 5500000 :maxBuffer 1048576})]
+                      #js {:encoding "utf8" :input (js/JSON.stringify (clj->js args)) :timeout 6000000 :maxBuffer 1048576})]
     (if (.-error r) {:error "image_model_runner_unavailable"}
       (try (js->clj (js/JSON.parse (.-stdout r)) :keywordize-keys true)
            (catch :default _ {:error "image_model_runner_failed"})))))
