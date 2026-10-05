@@ -111,17 +111,27 @@
     (render-fn cfg claim lost?)
     (comfy-render! cfg claim lost?)))
 (defn acknowledge! [cfg claim b64 lost?]
-  (letfn [(send! [n]
+  (letfn [(receipt! []
+            (-> (api! cfg "POST" (str "/infer/image-jobs/" (:id claim) "/receipt") (fence cfg claim))
+                (.then (fn [r] (when (and (ok? r) (true? (get-in r [:body :accepted]))) r)))
+                (.catch (fn [_] nil))))
+          (send! [n]
             (if (or @lost? (>= (js/Date.now) (:deadline claim)))
-              (js/Promise.reject (js/Error. "Result lease expired"))
+              (-> (receipt!) (.then (fn [r] (or r (throw (js/Error. "Result lease expired"))))))
               (-> (api! cfg "POST" (str "/infer/image-jobs/" (:id claim) "/done") (assoc (fence cfg claim) :b64 b64))
                   (.then (fn [r]
                            (cond (ok? r) r
                                  (>= (:status r) 500) (throw (js/Error. "Transient result store failure"))
                                  :else (do (reset! lost? true) (throw (js/Error. "Result fenced"))))))
                   (.catch (fn [e]
-                            (if (or @lost? (>= n 5)) (throw e)
-                                (-> (wait! (* 2000 n)) (.then #(send! (inc n))))))))))]
+                            ;; A committed done event can make renew return409
+                            ;; while its upload reply is lost. Confirm our exact
+                            ;; fence before reporting failure or uploading again.
+                            (-> (receipt!)
+                                (.then (fn [r]
+                                         (cond r r
+                                               (or @lost? (>= n 5)) (throw e)
+                                               :else (-> (wait! (* 2000 n)) (.then #(send! (inc n)))))))))))))]
     (send! 1)))
 (defn run! [cfg claim]
   (let [id (:id claim) lost? (atom (boolean (some-> (:stopping cfg) deref))) completed? (atom false) renewing? (atom false) last-renew (atom (js/Date.now))
@@ -130,8 +140,12 @@
                 (when-not (or @renewing? @lost?)
                   (reset! renewing? true)
                   (-> (api! cfg "POST" (str "/infer/image-jobs/" id "/renew") (fence cfg claim))
-                      (.then (fn [r] (cond (ok? r) (reset! last-renew (js/Date.now)) (= 409 (:status r)) (reset! lost? true))))
-                      (.catch (fn [_] nil))
+                      (.then (fn [r]
+                               (cond (ok? r) (reset! last-renew (js/Date.now))
+                                     :else (do (println "[image] lease update rejected" id "attempt" (:attempt claim)
+                                                        "http" (:status r) "code" (get-in r [:body :error :code]))
+                                               (when (= 409 (:status r)) (reset! lost? true))))))
+                      (.catch (fn [e] (println "[image] lease update unavailable" id "attempt" (:attempt claim) "reason" (.-name e))))
                       (.finally #(reset! renewing? false)))))
         timer (js/setInterval renew 20000)]
     (reset! (:busy cfg) true)
