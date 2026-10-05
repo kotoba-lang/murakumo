@@ -32,7 +32,7 @@ test('two entrypoints share node-owned slots, survive peer loss and do not repla
   await wait(async()=>{const r=await fetch(n.url+'/health',{headers});const h=await r.json();return h.lanes.text.ready&&h.lanes.image.ready;});nodes.push(n);
  }
  nodes[0].externalImageBusy=true;
- await wait(async()=>{const h=await(await fetch(nodes[0].url+'/health',{headers})).json();return h.lanes.image.busy&&h.lanes.text.busy;});
+ await wait(async()=>{const h=await(await fetch(nodes[0].url+'/health',{headers})).json();return h.lanes.image.busy&&!h.lanes.image.ready&&h.lanes.text.busy;});
  const nativeSlots=await(await fetch('http://127.0.0.1:'+nodes[0].compatPort+'/slots')).json();assert.equal(nativeSlots[0].is_processing,true);
  const rejected=await fetch('http://127.0.0.1:'+nodes[0].compatPort+'/v1/chat/completions',{method:'POST',body:JSON.stringify({model:'mishima',messages:[{role:'user',content:'while external image runs'}],max_tokens:32})});assert.equal(rejected.status,429);assert.equal((await rejected.json()).executed,false);
  nodes[0].queueFailure=true;

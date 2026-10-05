@@ -1,6 +1,7 @@
 (ns murakumo.infer.resident
   "Node-owned admission and recovery. Gateways hold no execution slots."
   (:require [clojure.string :as str]
+            [murakumo.infer.replicated-topology :as topo]
             ["node:fs" :as fs] ["node:http" :as http]
             ["node:crypto" :as crypto] ["node:child_process" :as cp]))
 
@@ -78,7 +79,7 @@
       (.writeFileSync fs fd (js/JSON.stringify (clj->js state)))
       (.fsyncSync fs fd)
       (finally (.closeSync fs fd)))
-    (.renameSync fs tmp file)))
+    (.renameSync fs tmp file) (topo/sync-parent! file)))
 
 (defn backend-busy-error? [error]
   ;; SCI keeps the thrown JS Error as cause; native JS exposes it directly.
@@ -158,7 +159,9 @@
 
 (defn start! [config]
   (let [token (private-token (:token-file config))
+        topology (topo/start! config token)
         file (:state-file config)
+        owner-id (topo/owner-id! (:owner-id-file config (str file ".owner-id")))
         previous (if (.existsSync fs file)
                    (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys false) {})
         ;; On restart, previous running jobs become unknown; never replay them.
@@ -167,12 +170,12 @@
                                          :let [job (js->clj (clj->js j) :keywordize-keys true)]]
                                      [id (update job :status #(if (= % "running") :unknown (keyword %)))]))})
         lanes (atom (into {} (for [[id lane] (:lanes config)]
-                              [(name id) (assoc lane :ready false :failures 0 :probing false)])))
+                              [(name id) (assoc lane :owner-id owner-id :ready false :failures 0 :probing false)])))
         controllers (atom {})
         save! #(persist! file @state)
         tick! (fn []
                 (doseq [[id lane] (sort-by (fn [[_ l]] [(:last-probe l 0) (if (= "image" (:kind l)) 0 1)]) @lanes)
-                        :when (and (not (:probing lane)) (not (get-in @state [:groups (:group lane)]))
+                        :when (and (topo/role-allowed? topology (:node config) lane) (not (:probing lane)) (not (get-in @state [:groups (:group lane)]))
                                    (not (and (= "text" (:kind lane))
                                              (some #(and (= "image" (:kind %)) (= (:group lane) (:group %)) (:external-busy %))
                                                    (vals @lanes)))))]
@@ -224,6 +227,11 @@
                               (or (nil? id) (not (re-matches #"[A-Za-z0-9_-]{8,128}" id)))
                               (json! res 400 {:error "job_id_required"})
                               (nil? lane) (json! res 404 {:error "lane_unknown"})
+                              (get-in @state [:jobs id])
+                              (let [seen (admit @state lane id digest (js/Date.now) 0)]
+                                (json! res (:status seen) {:error "already-seen" :job-id id :executed "unknown"}))
+                              (not (topo/role-allowed? topology (:node config) lane))
+                              (json! res 503 {:error "topology_role_unavailable" :executed false})
                               (and (= "text" (:kind lane)) (not (eligible? lane request)))
                               (json! res 422 {:error "model_or_context_mismatch"})
                               (and (= "image" (:kind lane)) (not= (:model lane) (:model body)))
@@ -283,10 +291,18 @@
                                 (if-not (authorized? req token)
                                   (json! res 401 {:error "unauthorized"})
                                   (cond
+                                    (and topology (= "GET" (.-method req)) (= "/topology" (.-url req)))
+                                    (json! res 200 (topo/document topology))
+                                    (and topology (= "POST" (.-method req)) (= "/topology" (.-url req)))
+                                    (-> (read-body! req 262144)
+                                        (.then (fn [bytes]
+                                                 ((:accept! topology) (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true))
+                                                 (json! res 200 (topo/summary topology))))
+                                        (.catch (fn [_] (json! res 400 {:error "invalid_topology"}))))
                                     (and (= "GET" (.-method req)) (= "/health" (.-url req)))
-                                    (json! res 200 {:node (:node config)
+                                    (json! res 200 {:node (:node config) :owner-id owner-id :topology (topo/summary topology)
                                                    :lanes (into {} (for [[id l] @lanes]
-                                                                    [id (select-keys (assoc l :busy (boolean (or (external-group-busy? @lanes l) (get-in @state [:groups (:group l)]))))
+                                                                    [id (select-keys (assoc l :ready (boolean (and (:ready l) (topo/role-allowed? topology (:node config) l))) :busy (boolean (or (external-group-busy? @lanes l) (get-in @state [:groups (:group l)]))))
                                                                                      [:model :kind :context :ready :busy :failures])]))})
                                     (and (= "POST" (.-method req)) (str/starts-with? (.-url req) "/execute/"))
                                     (execute! req res (subs (.-url req) 9) false)
@@ -301,6 +317,7 @@
           (.createServer http
             (fn [req res]
               (let [lane (get @lanes "text")
+                    lane (assoc lane :ready (and (:ready lane) (topo/role-allowed? topology (:node config) lane)))
                     busy (boolean (or (external-group-busy? @lanes lane) (get-in @state [:groups (:group lane)])))]
                 (cond
                   (and (= "GET" (.-method req)) (= "/health" (.-url req)))
@@ -322,7 +339,7 @@
     (tick!)
     (let [timer (js/setInterval tick! (:probe-interval-ms config 30000))]
       {:server server :state state :lanes lanes
-       :close (fn [] (js/clearInterval timer)
+       :close (fn [] (when topology ((:close topology))) (js/clearInterval timer)
                 (doseq [[_ c] @controllers] (.abort c)) (.close server)
                 (when compatibility-server (.close compatibility-server)))})))
 
