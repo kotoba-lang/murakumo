@@ -32,7 +32,7 @@ test('two entrypoints share node-owned slots, survive peer loss and do not repla
   await wait(async()=>{const r=await fetch(n.url+'/health',{headers});const h=await r.json();return h.lanes.text.ready&&h.lanes.image.ready;});nodes.push(n);
  }
  nodes[0].externalImageBusy=true;
- await wait(async()=>{const h=await(await fetch(nodes[0].url+'/health',{headers})).json();return h.lanes.image.busy&&h.lanes.text.busy;});
+ await wait(async()=>{const h=await(await fetch(nodes[0].url+'/health',{headers})).json();return h.lanes.image.busy&&!h.lanes.image.ready&&h.lanes.text.busy;});
  const nativeSlots=await(await fetch('http://127.0.0.1:'+nodes[0].compatPort+'/slots')).json();assert.equal(nativeSlots[0].is_processing,true);
  const rejected=await fetch('http://127.0.0.1:'+nodes[0].compatPort+'/v1/chat/completions',{method:'POST',body:JSON.stringify({model:'mishima',messages:[{role:'user',content:'while external image runs'}],max_tokens:32})});assert.equal(rejected.status,429);assert.equal((await rejected.json()).executed,false);
  nodes[0].queueFailure=true;
@@ -100,4 +100,19 @@ test('local declared repair runs once and readiness returns only after a success
  const file=join(dir,'config.json');await writeFile(file,JSON.stringify(config));const child=spawn(process.execPath,[join(root,'release/node.mjs'),'resident','serve','--config',file],{cwd:dir,stdio:['ignore','pipe','pipe']});t.after(()=>child.kill('SIGTERM'));let log='';child.stdout.on('data',b=>log+=b);
  await wait(async()=>{const r=await fetch(`http://127.0.0.1:${p}/health`,{headers:{authorization:`Bearer ${token}`}});return (await r.json()).lanes.text.ready;});
  assert.equal((await readFile(marker,'utf8')).trim(),'restart');assert.match(log,/"event":"heal"/);await sleep(200);assert.equal((await readFile(marker,'utf8')).trim(),'restart');
+});
+
+test('text-only residents guard an optional external image queue without dispatching work',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'murakumo-external-queue-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const token=randomBytes(32).toString('hex'),key=join(dir,'token');await writeFile(key,token,{mode:0o600});
+ let busy=false,bad=false,calls=0;
+ const engine=createServer((req,res)=>{if(req.url==='/queue'){res.statusCode=bad?503:200;return res.end(JSON.stringify({queue_running:busy?[['external']]:[],queue_pending:[]}));}if(req.url==='/slots')return res.end('[{"is_processing":false}]');let data='';req.on('data',b=>data+=b);req.on('end',()=>{const b=JSON.parse(data);if(!b.messages[0].content.startsWith('2+3'))calls++;res.end('{"choices":[{"message":{"content":"5"}}]}');});});engine.listen(0,'127.0.0.1');await once(engine,'listening');t.after(()=>{engine.closeAllConnections();engine.close();});
+ const p=await port(),ep=engine.address().port,headers={authorization:'Bearer '+token,'content-type':'application/json'};
+ const config={node:'text-only',port:p,'token-file':key,'state-file':join(dir,'state.json'),'probe-interval-ms':50,lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',backend:'http://127.0.0.1:'+ep,path:'/v1/chat/completions','external-image-queue-url':'http://127.0.0.1:'+ep+'/queue','external-image-queue-optional?':true}}};
+ const f=join(dir,'config.json');await writeFile(f,JSON.stringify(config));const child=spawn(process.execPath,[join(root,'release/node.mjs'),'resident','serve','--config',f],{stdio:'ignore'});t.after(()=>child.kill('SIGTERM'));
+ const health=async()=>(await(await fetch('http://127.0.0.1:'+p+'/health',{headers})).json());await wait(async()=>(await health()).lanes.text.ready);
+ for(const mode of ['busy','unknown']){busy=mode==='busy';bad=mode==='unknown';const response=await fetch('http://127.0.0.1:'+p+'/execute/text',{method:'POST',headers:{...headers,'x-murakumo-job-id':'guard_'+mode+'_123'},body:JSON.stringify({model:'mishima',max_tokens:16,messages:[{role:'user',content:'actual work'}]})});assert.equal(response.status,429);assert.equal((await response.json()).executed,false);assert.equal(calls,0);}
+ busy=false;bad=false;await wait(async()=>(await health()).lanes.text.ready);
+ // A genuinely absent optional engine is allowed, while a broken one was denied.
+ const absent=await port();config.lanes.text['external-image-queue-url']='http://127.0.0.1:'+absent+'/queue';child.kill('SIGTERM');await once(child,'exit');await writeFile(f,JSON.stringify(config));const restarted=spawn(process.execPath,[join(root,'release/node.mjs'),'resident','serve','--config',f],{stdio:'ignore'});t.after(()=>restarted.kill('SIGTERM'));await wait(async()=>(await health()).lanes.text.ready);
 });

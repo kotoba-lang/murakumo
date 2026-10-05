@@ -5,6 +5,7 @@
             [murakumo.fleet-ps :as fleet-ps]
             [murakumo.health :as health]
             [murakumo.infer.resident :as resident]
+            [murakumo.infer.replicated-topology :as topology]
             [murakumo.infer.fleet-gateway :as gateway]
             [murakumo.device-claim :as claim]
             [murakumo.device-report :as report]
@@ -23,6 +24,7 @@
 
 (defn help []
   (println "  murakumo resident serve --config FILE    Own local model admission, receipts, canaries and healing\n  murakumo gateway serve --config FILE     Replicated fleet entrypoint; no central slot ownership")
+  (println "  murakumo topology sign --input FILE --private-key-file FILE --output FILE\n                                          Sign a monotonic desired topology; residents only hold its public key")
   (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node report                    Send this device's signed heartbeat to the console\n  murakumo node console                   Show this box's status and a claim QR on its own screen\n  murakumo node wifi-share                Hand this PC's Wi-Fi to a headless box by sound\n  murakumo node onboard                   (box) Take a Wi-Fi profile handed over by sound\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node qualify --model ID        Run the local model through Community admission\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Run check, then qualify before joining Community jobs;\na heartbeat alone does not prove job eligibility.")
   (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
                                           (ctx, KV, slots), co-resident processes, units")
@@ -587,6 +589,7 @@
         (when (and (number? code) (not= 0 code)) (set! (.-exitCode js/process) code)))
       (= prefix "resident") (resident/run-command command args)
       (= prefix "gateway") (gateway/run-command command args)
+      (= prefix "topology") (topology/run-command command args)
       (= command "--help") (help)
       (not= prefix "node") (fail! "Use: murakumo node, bench, fleet or health --help")
       (= command "init") (init!)
