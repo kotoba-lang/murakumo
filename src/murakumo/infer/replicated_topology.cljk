@@ -3,8 +3,11 @@
   (:require [clojure.string :as str]
             ["node:fs" :as fs] ["node:path" :as path] ["node:crypto" :as crypto]))
 
+(defn key-name [x]
+  (if (keyword? x) (if-let [n (namespace x)] (str n "/" (name x)) (name x)) x))
+
 (defn canonical [x]
-  (cond (map? x) (into (sorted-map) (map (fn [[k v]] [k (canonical v)]) x))
+  (cond (map? x) (into (sorted-map) (map (fn [[k v]] [(key-name k) (canonical v)]) x))
         (sequential? x) (mapv canonical x)
         :else x))
 
@@ -44,7 +47,7 @@
                                  (string? (:model %)) (<= 1 (count (:model %)) 128)) (:roles node)))
       (throw (js/Error. "invalid topology roles"))))
   (when-not (and (map? (get-in payload [:policies :minimum-replicas]))
-                 (every? (fn [[model n]] (and (<= 1 (count (name model)) 128)
+                 (every? (fn [[model n]] (and (<= 1 (count (key-name model)) 128)
                                               (js/Number.isSafeInteger n) (<= 1 n 256)))
                          (get-in payload [:policies :minimum-replicas])))
     (throw (js/Error. "invalid topology resilience policy")))
@@ -62,7 +65,13 @@
                                (do (swap! parts conj (.from js/Buffer (.-value chunk))) (pump))))))))]
       (pump))))
 
+(defn bounded! [document]
+  (when (> (.byteLength js/Buffer (js/JSON.stringify (clj->js (canonical document)))) 262144)
+    (throw (js/Error. "topology document too large")))
+  document)
+
 (defn verify! [document public-key allow-loopback?]
+  (bounded! document)
   (let [payload (validate! (:payload document) allow-loopback?)]
     (when-not (and (string? (:signature document))
                    (.verify crypto nil (js/Buffer.from (encoded payload)) public-key
@@ -76,7 +85,7 @@
 
 (defn persist! [file document]
   (let [tmp (str file "." (.randomUUID crypto) ".tmp") fd (.openSync fs tmp "wx" 384)]
-    (try (.writeFileSync fs fd (js/JSON.stringify (clj->js document))) (.fsyncSync fs fd)
+    (try (.writeFileSync fs fd (js/JSON.stringify (clj->js (canonical document)))) (.fsyncSync fs fd)
          (finally (.closeSync fs fd)))
     (.renameSync fs tmp file) (sync-parent! file)))
 
@@ -86,7 +95,10 @@
           allow? (:allow-loopback-topology? config false)
           state (atom (verify! (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys true) public-key allow?))
           polling (atom false) conflict-file (str file ".conflict")
-          conflict (atom (.existsSync fs conflict-file)) cursor (atom 0)
+          conflict (atom (if (.existsSync fs conflict-file)
+                           (try (>= (:revision (js->clj (js/JSON.parse (.readFileSync fs conflict-file "utf8")) :keywordize-keys true))
+                                    (get-in @state [:payload :revision]))
+                                (catch :default _ true)) false)) cursor (atom 0)
           seeds (:topology-seeds config [])
           accept! (fn [document]
                     (let [document (verify! document public-key allow?)
@@ -101,15 +113,15 @@
                       (cond
                         (> (:revision incoming) (:revision current))
                         (do (persist! file document) (reset! state document) (reset! conflict false)
-                            (when (.existsSync fs conflict-file) (.unlinkSync fs conflict-file)) true)
+                            (when (.existsSync fs conflict-file) (.unlinkSync fs conflict-file) (sync-parent! conflict-file)) true)
                         (and (= (:revision incoming) (:revision current)) (not= (digest incoming) (digest current)))
-                        (do (.writeFileSync fs conflict-file (str (:revision incoming)) #js {:mode 384})
+                        (do (persist! conflict-file {:revision (:revision incoming)})
                             (reset! conflict true) (throw (js/Error. "conflicting signed topology revision")))
                         :else false)))
           tick! (fn []
                   (when (compare-and-set! polling false true)
                     (let [payload (:payload @state)
-                          all-urls (vec (distinct (concat seeds (map :url (filter :enabled (concat (:gateways payload) (:nodes payload)))))))
+                          all-urls (vec (distinct (concat seeds (map :url (concat (:gateways payload) (:nodes payload))))))
                           offset (mod (swap! cursor inc) (max 1 (count all-urls)))
                           urls (take (:topology-fanout config 3) (concat (subvec all-urls offset) (subvec all-urls 0 offset)))]
                       (-> (js/Promise.allSettled
@@ -125,8 +137,8 @@
         {:state state :conflict conflict :accept! accept! :tick! tick!
          :close #(js/clearInterval timer)}))))
 
-(defn document [replica] (when replica @(:state replica)))
-(defn payload [replica] (:payload (document replica)))
+(defn document [replica] (when replica (canonical @(:state replica))))
+(defn payload [replica] (when replica (:payload @(:state replica))))
 (defn summary [replica]
   (when replica {:revision (:revision (payload replica)) :digest (digest (payload replica))
                  :conflict @(:conflict replica) :source "signed-replicated"}))
@@ -150,10 +162,10 @@
     (let [minimum (get-in (payload replica) [:policies :minimum-replicas])
           lanes (mapcat #(vals (:lanes %)) (vals reports))]
       {:models (into {} (for [[model required] minimum
-                             :let [matching (filter #(= (name model) (:model %)) lanes)
+                             :let [matching (filter #(= (key-name model) (:model %)) lanes)
                                    ready (count (filter :ready matching))
                                    free (count (filter #(and (:ready %) (not (:busy %))) matching))]]
-                         [model {:ready ready :free free :minimum required :degraded (< ready required)}]))})))
+                         [(key-name model) {:ready ready :free free :minimum required :degraded (< ready required)}]))})))
 
 (defn conformant-report? [replica node report]
   (if-not replica true
@@ -188,9 +200,14 @@
                    _ (when (.existsSync fs (get opts "--output"))
                        (let [old (js->clj (js/JSON.parse (.readFileSync fs (get opts "--output") "utf8")) :keywordize-keys true)]
                          (when-not (> (:revision payload) (get-in old [:payload :revision] 0))
-                           (throw (js/Error. "signed revision must advance")))))
+                           (throw (js/Error. "signed revision must advance")))
+                         (let [incoming (into {} (map (juxt :node identity) (:nodes payload)))]
+                           (doseq [node (get-in old [:payload :nodes])]
+                             (when-not (= (:owner-id node) (:owner-id (get incoming (:node node))))
+                               (throw (js/Error. "receipt owner bindings must be retained")))))))
                    key (.readFileSync fs key-file "utf8")
                    document {:payload payload :signature (.toString (.sign crypto nil (js/Buffer.from (encoded payload)) key) "base64url")}]
+               (bounded! document)
                (persist! (get opts "--output") document)
                (println (js/JSON.stringify (clj->js {:revision (:revision payload) :digest (digest payload)}))))
       (println "murakumo topology sign --input FILE --private-key-file FILE --output FILE"))))

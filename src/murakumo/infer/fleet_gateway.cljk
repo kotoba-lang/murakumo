@@ -26,7 +26,7 @@
                     (swap! reports #(into {} (filter (fn [[node report]] (topo/conformant-report? topology node report)) %))))
                   (-> (js/Promise.allSettled
                        (clj->js (for [[node p] @peers]
-                                  (-> (js/fetch (str (:url p) "/health")
+                                  (-> (js/fetch (str (.-origin (js/URL. (:url p))) "/health")
                                                 #js {:headers headers :signal (.timeout js/AbortSignal 5000)})
                                       (.then (fn [resp] (when-not (.-ok resp) (throw (js/Error. "peer unavailable"))) (.json resp)))
                                       (.then (fn [body]
@@ -94,7 +94,7 @@
                                                             (re-matches #"[A-Za-z0-9-]+" lane)
                                                             (or (nil? incoming-id) (re-matches #"[a-f0-9]{32}" (or suffix ""))))
                                                (throw (js/Error. "invalid job id")))
-                                             (-> (js/fetch (str (:url p) "/execute/" lane)
+                                             (-> (js/fetch (str (.-origin (js/URL. (:url p))) "/execute/" lane)
                                                            #js {:method "POST" :signal (.-signal controller)
                                                                 :headers #js {"authorization" (str "Bearer " token)
                                                                               "content-type" "application/json"

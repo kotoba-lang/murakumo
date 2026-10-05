@@ -88,12 +88,22 @@
           (or (nil? e) (>= depth 5)) false
           :else (recur (.-cause e) (inc depth)))))
 
+(defn connection-refused? [error]
+  (loop [e error depth 0]
+    (cond (= "ECONNREFUSED" (some-> e .-code)) true
+          (or (nil? e) (>= depth 5)) false
+          :else (recur (.-cause e) (inc depth)))))
+
 (defn check-shared-images! [lanes lane]
   ;; A cached health sample is insufficient for shared-memory admission.
   ;; Missing/invalid queue observations fail closed before any execution.
   (js/Promise.all
    (clj->js
-    (for [image (vals lanes)
+    (for [image (cond-> (vec (vals lanes))
+                   (:external-image-queue-url lane)
+                   (conj {:kind "image" :group (:group lane)
+                          :readiness-url (:external-image-queue-url lane)
+                          :optional? (:external-image-queue-optional? lane)}))
           :when (and (= "text" (:kind lane)) (= "image" (:kind image))
                      (= (:group lane) (:group image)))]
       (-> (js/fetch (str (.-origin (js/URL. (:readiness-url image))) "/queue")
@@ -105,9 +115,11 @@
                                   (zero? (.-length (.-queue_running q)))
                                   (zero? (.-length (.-queue_pending q))))
                      (throw (js/Error. "shared image queue occupied or unknown")))))
-          (.catch (fn [_]
-                    (let [e (js/Error. "shared image capacity unavailable")]
-                      (set! (.-code e) "BACKEND_BUSY") (throw e)))))))))
+          (.catch (fn [error]
+                    (if (and (:optional? image) (connection-refused? error))
+                      true
+                      (let [e (js/Error. "shared image capacity unavailable")]
+                        (set! (.-code e) "BACKEND_BUSY") (throw e))))))))))
 
 (defn probe! [lane]
   (let [url (:backend lane)
@@ -157,6 +169,11 @@
                      (when-not (true? (get-in report [:models (keyword (:model lane)) :ready]))
                        (throw (js/Error. "image execution dependency unavailable"))) true)))))))
 
+(defn qualified-lane [topology node lane]
+  (assoc lane :ready (boolean (and (:ready lane)
+                                  (= (:probe-topology-digest lane) (:digest (topo/summary topology)))
+                                  (topo/role-allowed? topology node lane)))))
+
 (defn start! [config]
   (let [token (private-token (:token-file config))
         topology (topo/start! config token)
@@ -182,9 +199,14 @@
                   ;; Reserve group for the probe too: canaries cannot race real jobs.
                   (swap! state assoc-in [:groups (:group lane)] (str "probe:" id))
                   (swap! lanes update id merge {:probing true :last-probe (js/Date.now)})
+                  (let [probe-digest (:digest (topo/summary topology))]
                   (-> (check-shared-images! @lanes lane)
                       (.then (fn [_] (probe! lane)))
-                      (.then (fn [_] (swap! lanes update id merge {:ready true :failures 0 :external-busy false})))
+                      (.then (fn [_] (swap! lanes update id merge
+                                                {:ready (and (= probe-digest (:digest (topo/summary topology)))
+                                                             (topo/role-allowed? topology (:node config) lane))
+                                                 :probe-topology-digest probe-digest
+                                                 :failures 0 :external-busy false})))
                       (.catch (fn [error]
                                 (let [busy? (backend-busy-error? error)]
                                   (swap! lanes update id #(-> % (assoc :ready false :external-busy (or busy? (:external-busy %)))
@@ -203,7 +225,7 @@
                                                    (resolve nil))))))))))
                       (.finally (fn []
                                   (swap! lanes assoc-in [id :probing] false)
-                                  (swap! state update :groups dissoc (:group lane)))))))
+                                  (swap! state update :groups dissoc (:group lane))))))))
         execute! (fn [req res lane-id compatibility?]
                    (-> (read-body! req (:max-body-bytes config 2097152))
                        (.then (fn [bytes]
@@ -218,7 +240,7 @@
                                        (assoc raw-body :model "mishima") raw-body)
                                 id (aget (.-headers req) "x-murakumo-job-id")
                                 digest (.digest (.update (.createHash crypto "sha256") bytes) "hex")
-                                lane (get @lanes lane-id)
+                                lane (when-let [l (get @lanes lane-id)] (qualified-lane topology (:node config) l))
                                 request {:model (:model body) :input-tokens (.-length bytes)
                                          :max-tokens (or (:max_tokens body) 1024)}]
                             (cond
@@ -302,7 +324,7 @@
                                     (and (= "GET" (.-method req)) (= "/health" (.-url req)))
                                     (json! res 200 {:node (:node config) :owner-id owner-id :topology (topo/summary topology)
                                                    :lanes (into {} (for [[id l] @lanes]
-                                                                    [id (select-keys (assoc l :ready (boolean (and (:ready l) (topo/role-allowed? topology (:node config) l))) :busy (boolean (or (external-group-busy? @lanes l) (get-in @state [:groups (:group l)]))))
+                                                                    [id (select-keys (assoc (qualified-lane topology (:node config) l) :busy (boolean (or (external-group-busy? @lanes l) (get-in @state [:groups (:group l)]))))
                                                                                      [:model :kind :context :ready :busy :failures])]))})
                                     (and (= "POST" (.-method req)) (str/starts-with? (.-url req) "/execute/"))
                                     (execute! req res (subs (.-url req) 9) false)
@@ -317,7 +339,7 @@
           (.createServer http
             (fn [req res]
               (let [lane (get @lanes "text")
-                    lane (assoc lane :ready (and (:ready lane) (topo/role-allowed? topology (:node config) lane)))
+                    lane (qualified-lane topology (:node config) lane)
                     busy (boolean (or (external-group-busy? @lanes lane) (get-in @state [:groups (:group lane)])))]
                 (cond
                   (and (= "GET" (.-method req)) (= "/health" (.-url req)))
