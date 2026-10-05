@@ -30,7 +30,8 @@
                                                         (some #(= "image" (:kind %)) (vals (:lanes report))))) @reports)))
                                 failures (if healthy? 0 (inc (:failures @ingress-state)))
                                 apply? (and (not (:applying @ingress-state))
-                                            (not= healthy? (:desired @ingress-state))
+                                            (or (not= healthy? (:desired @ingress-state))
+                                                (>= (- now (:last-applied @ingress-state 0)) (:tunnel-reconcile-ms config 30000)))
                                             (or healthy? (and (zero? @active) (>= failures (:tunnel-failure-threshold config 3)))))]
                             (swap! ingress-state assoc :failures failures)
                             (when apply?
@@ -38,7 +39,7 @@
                               (let [[bin & args] (if healthy? (:tunnel-start-argv config) (:tunnel-stop-argv config))]
                                 (.execFile cp bin (clj->js args) #js {:timeout 10000}
                                   (fn [error _ _]
-                                    (swap! ingress-state #(cond-> (assoc % :applying false) (nil? error) (assoc :desired healthy?)))
+                                    (swap! ingress-state #(cond-> (assoc % :applying false) (nil? error) (assoc :desired healthy? :last-applied now)))
                                     (println (js/JSON.stringify (clj->js {:event "image-ingress" :enabled healthy? :ok (nil? error)}))))))))))
         peers (atom (into {} (for [p (if topology (topo/nodes topology) (:peers config))] [(:node p) p])))
         polling (atom false)

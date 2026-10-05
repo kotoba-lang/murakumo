@@ -145,7 +145,9 @@ failed observations, it withdraws image ingress when it cannot reach a fresh,
 conformant image resident, or its gateway role is disabled. It waits until
 `inflight` is zero before withdrawing an otherwise live connector. Reachable
 but busy image lanes retain ingress: occupied capacity is not origin failure.
-A healthy image resident makes the connector return automatically.
+A healthy image resident makes the connector return automatically. The desired
+connector state is reasserted every 30 seconds, so an unexpected service stop
+does not remain hidden behind cached state.
 
 An optional root-owned `drain-file` refuses new inference with `executed:false`
 and exposes `draining` plus `inflight` in private health. Existing streams keep
