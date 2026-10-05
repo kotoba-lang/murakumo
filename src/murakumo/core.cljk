@@ -474,8 +474,11 @@
 (defn cmd-model
   "Plan/download/inspect Hugging Face model caches on fleet nodes."
   [_ args]
-  (require 'murakumo.model-setup)
-  (apply (resolve 'murakumo.model-setup/-main) args))
+  (if (= "add-image" (first args))
+    (do (require 'murakumo.image-model)
+        (apply (resolve 'murakumo.image-model/-main) (rest args)))
+    (do (require 'murakumo.model-setup)
+        (apply (resolve 'murakumo.model-setup/-main) args))))
 
 (defn cmd-revive
   "Wake offline Mac fleet nodes by sending Wake-on-LAN from a live LAN peer."
