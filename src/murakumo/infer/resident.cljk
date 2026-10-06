@@ -1,6 +1,7 @@
 (ns murakumo.infer.resident
   "Node-owned admission and recovery. Gateways hold no execution slots."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [murakumo.infer.jobs :as jobs]
             [murakumo.infer.replicated-topology :as topo]
             ["node:fs" :as fs] ["node:http" :as http]
@@ -8,7 +9,30 @@
 
 (defn eligible? [lane request]
   (and (= (:model lane) (:model request))
+       (number? (:input-tokens request))
        (>= (:context lane 0) (+ (:input-tokens request 0) (:max-tokens request 0)))))
+
+(defn request-input-tokens [lane body byte-count]
+  ;; Image bytes are transport, not text tokens. Only explicitly bounded vision
+  ;; lanes admit inline images; never let a backend fetch caller-supplied URLs.
+  ;; The backend must enforce the same per-image maximum declared by the lane.
+  (let [images (atom [])
+        compact (walk/postwalk
+                 (fn [v]
+                   (if (and (map? v) (= "image_url" (:type v)))
+                     (do (swap! images conj (get-in v [:image_url :url]))
+                         (assoc-in v [:image_url :url] "")) v)) body)
+        n (count @images)
+        budget (:max-image-tokens lane)
+        maximum (:max-images lane 1)]
+    (if (zero? n) byte-count
+      (when (and (js/Number.isSafeInteger budget) (<= 1024 budget 8192)
+                 (js/Number.isSafeInteger maximum) (<= 1 maximum 4)
+                 (<= n maximum)
+                 (every? #(and (string? %)
+                               (re-matches #"data:image/(png|jpeg);base64,[A-Za-z0-9+/]+={0,2}" %)) @images))
+        (+ (.byteLength js/Buffer (js/JSON.stringify (clj->js compact)) "utf8")
+           256 (* n (+ budget 64)))))))
 
 (defn external-group-busy? [lanes lane]
   (boolean (some #(and (= (:group lane) (:group %)) (:external-busy %)) (vals lanes))))
@@ -271,7 +295,7 @@
                                 id (aget (.-headers req) "x-murakumo-job-id")
                                 digest (.digest (.update (.createHash crypto "sha256") bytes) "hex")
                                 lane (when-let [l (get @lanes lane-id)] (qualified-lane topology (:node config) l))
-                                request {:model (:model body) :input-tokens (.-length bytes)
+                                request {:model (:model body) :input-tokens (request-input-tokens lane body (.-length bytes))
                                          :max-tokens (or (:max_tokens body) 1024)}]
                             (cond
                               (and (:drain-file config) (.existsSync fs (:drain-file config)))
@@ -374,7 +398,7 @@
                                                    :jobs (when job-service {:membership (:membership job-service) :active (count @(:active job-service))})
                                                    :lanes (into {} (for [[id l] @lanes]
                                                                     [id (select-keys (assoc (qualified-lane topology (:node config) l) :ready (and (:ready (qualified-lane topology (:node config) l)) (not (and (:drain-file config) (.existsSync fs (:drain-file config))))) :busy (boolean (or (external-group-busy? @lanes l) (get-in @state [:groups (:group l)]))))
-                                                                                     [:model :kind :context :ready :busy :failures])]))})
+                                                                                     [:model :kind :context :max-image-tokens :max-images :ready :busy :failures])]))})
                                     (and (= "POST" (.-method req)) (str/starts-with? (.-url req) "/execute/"))
                                     (execute! req res (subs (.-url req) 9) false)
                                     :else (json! res 404 {:error "not_found"})))))

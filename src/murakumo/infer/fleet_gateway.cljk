@@ -11,7 +11,8 @@
              :when (< (- now (:at report 0)) stale-ms)
              [lane l] (:lanes report)
              :when (and (:ready l) (not (:busy l)) (= model (:model l)) (= kind (:kind l)))]
-         {:node node :lane (name lane) :context (:context l 0)})))
+         (merge (select-keys l [:max-image-tokens :max-images])
+                {:node node :lane (name lane) :context (:context l 0)}))))
 
 (defn start! [config]
   (let [token (r/private-token (:token-file config))
@@ -124,8 +125,9 @@
                                  incoming-id (aget (.-headers req) "x-murakumo-job-id")
                                  nonce (str/replace (.randomUUID crypto) #"-" "")
                                  choices (candidates (into {} (filter (fn [[node report]] (topo/conformant-report? topology node report)) @reports)) (:model body) kind (js/Date.now) 15000)
-                                 need (+ (.-length bytes) (:max_tokens body 1024))
-                                 choices (filterv #(or (= kind "image") (>= (:context %) need)) choices)
+                                 choices (filterv #(or (= kind "image")
+                                                      (when-let [input (r/request-input-tokens % body (.-length bytes))]
+                                                        (>= (:context %) (+ input (:max_tokens body 1024))))) choices)
                                  ;; Random first peer spreads simultaneous arrivals across gateways.
                                  choices (if (seq choices)
                                            (let [n (.randomInt crypto (count choices))]
