@@ -3,9 +3,9 @@
             [murakumo.infer.chat-route :as cr]))
 
 (def fleet
-  [{:id "a" :alive? true :inflight 0 :ctx 32768 :ewma-ms 2000 :last-used 30}
-   {:id "b" :alive? true :inflight 0 :ctx 32768 :ewma-ms 2000 :last-used 10}
-   {:id "j" :alive? true :inflight 0 :ctx 32768 :low-priority? true :ewma-ms 1000 :last-used 0}
+  [{:id "a" :alive? true :inflight 0 :ctx 32768 :default-max-tokens 512 :ewma-ms 2000 :last-used 30}
+   {:id "b" :alive? true :inflight 0 :ctx 32768 :default-max-tokens 512 :ewma-ms 2000 :last-used 10}
+   {:id "j" :alive? true :inflight 0 :ctx 32768 :default-max-tokens 512 :low-priority? true :ewma-ms 1000 :last-used 0}
    {:id "x" :alive? false :inflight 0 :ctx 32768 :last-used 0}])
 
 (deftest probe-rejects-degenerate-output
@@ -14,6 +14,11 @@
   (is (not (cr/probe-ok? "0000000000000000")))   ; asher with the canary Metal library
   (is (not (cr/probe-ok? "")))
   (is (not (cr/probe-ok? nil)))
+  (is (not (cr/probe-ok? "15")))
+  (is (not (cr/probe-ok? "0.5")))
+  (is (not (cr/probe-ok? "50")))
+  (is (not (cr/probe-ok? "5+5=10")))
+  (is (not (cr/probe-ok? "5は違います")))
   (is (not (cr/probe-ok? "5 5 5 5 5 5 5 5 5 5"))))  ; runaway output is not an answer
 
 (deftest ewma-first-sample-and-smoothing
@@ -47,7 +52,7 @@
         b    (first (filter #(= "b" (:id %)) slow))]
     (is (= 2 (cr/latency-tier cr/default-config (:ewma-ms (cr/observe (assoc b :ewma-ms nil) 23000)))))
     ;; b is the least recently used, but a faster node wins once b's EWMA is slow
-    (is (= {:node "a"} (cr/pick (map #(if (= "b" (:id %)) (assoc % :ewma-ms 23000) %) fleet) {})))))
+    (is (= {:node "a"} (cr/pick (map #(if (= "b" (:id %)) (assoc % :ewma-ms 23000) %) fleet) {:prompt-tokens 0 :max-tokens 0})))))
 
 (deftest context-window-gates-eligibility
   (testing "fits"
@@ -55,7 +60,20 @@
   (testing "too long for every live node → fall through to the next provider"
     (is (= {:none :too-long} (cr/pick fleet {:prompt-tokens 31000 :max-tokens 4000}))))
   (testing "a node with no declared window fails closed for a sized request"
-    (is (= {:none :too-long} (cr/pick [{:id "n" :alive? true :inflight 0}] {:prompt-tokens 10})))))
+    (is (= {:none :too-long} (cr/pick [{:id "n" :alive? true :inflight 0}] {:prompt-tokens 10 :max-tokens 1})))))
+
+(deftest omitted-output-reserves-the-actual-backend-default
+  (is (= {:none :too-long} (cr/pick fleet {:prompt-tokens 32700})))
+  (is (= {:node "b"} (cr/pick fleet {:prompt-tokens 32256})))
+  (is (= {:node "b"} (cr/pick fleet {:prompt-tokens 32700 :max-tokens 68})))
+  (is (not (cr/fits? {:ctx 32768 :default-max-tokens 2048} {:prompt-tokens 32000}))))
+
+(deftest unknown-or-invalid-budgets-refuse-routing
+  (is (not (cr/fits? {:ctx 32768} {:prompt-tokens 100})))
+  (is (not (cr/fits? {:ctx 32768 :default-max-tokens 512} {})))
+  (is (not (cr/fits? {:ctx 32768} {:prompt-tokens -1 :max-tokens 1})))
+  (is (not (cr/fits? {:ctx 32768} {:prompt-tokens 100 :max-tokens -1})))
+  (is (not (cr/fits? {} {:prompt-tokens 0 :max-tokens 0}))))
 
 (deftest all-slots-busy-means-wait-not-fail
   (is (= {:wait true} (cr/pick (map #(assoc % :inflight 1) fleet) {:prompt-tokens 100}))))

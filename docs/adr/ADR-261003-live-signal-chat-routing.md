@@ -36,13 +36,19 @@ verbatim passthrough, so:
    same inputs, same pick; no clock, no I/O. Any host (the operator-Mac router
    today, the gateway Worker later) calls it rather than re-deriving it.
 2. **Liveness is a verified answer, not a port.** A node is `alive` only if it
-   answers a tiny fixed question correctly (`2+3は? 数字だけで答えて。` → contains
-   `5`, shorter than 12 characters) with thinking disabled. TCP/HTTP health alone
+   answers a tiny fixed question correctly (`2+3は? 数字だけで答えて。` → a short
+   answer of `5`, shorter than 12 characters; `15`, `50` and `0.5` are rejected)
+   with thinking disabled. TCP/HTTP health alone
    never admits a node. A node whose probe fails is out of rotation within one
    probe interval and returns on its own when the probe passes.
 3. **Eligibility.** A node is eligible iff it is alive, has a free slot
    (`inflight < slots`), and its context window covers
-   `prompt-tokens + max-tokens`. If no node is eligible the core returns
+   `prompt-tokens + max-tokens`. The caller supplies the measured prompt estimate.
+   If output size is omitted, the node must declare its actual backend
+   `:default-max-tokens`; routing reserves that budget instead of zero. Unknown
+   context/budgets and negative or noninteger counts fail closed. An explicit
+   request output budget takes precedence over the backend default.
+   If no node is eligible the core returns
    `:wait` when a slot could free up, `:too-long` when no node can ever fit the
    request (callers fall through to the next provider, e.g. the `gad` origin),
    and `:none` when nothing is alive.

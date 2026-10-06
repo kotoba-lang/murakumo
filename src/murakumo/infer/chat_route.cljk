@@ -32,13 +32,14 @@
 (def probe-question "2+3は? 数字だけで答えて。")
 
 (defn probe-ok?
-  "True iff `content` is a plausible answer to `probe-question`: contains \"5\"
-  and is short. Catches degenerate output (all \"0\", empty, runaway reasoning)
+  "True iff `content` is a short answer of five to `probe-question`.
+  Catches wrong numbers, degenerate output (all \"0\", empty, runaway reasoning)
   that /health cannot see."
   [content]
   (let [s (str content)
         n (count s)]
-    (boolean (and (pos? n) (< n 12) (not= -1 (.indexOf s "5"))))))
+    (boolean (and (pos? n) (< n 12)
+                  (re-matches #"\s*(?:5|答えは5|5です)[。.!！]?\s*" s)))))
 
 ;; ---- latency ----------------------------------------------------------------
 
@@ -70,12 +71,18 @@
 (defn slots [cfg node] (or (:slots node) (:default-slots cfg)))
 
 (defn fits?
-  "Does the node's window cover the request? Unknown :ctx is treated as not
-  fitting a request that states a size, so a missing declaration fails closed."
+  "Does the node's window cover measured prompt tokens and effective output?
+  Omitted max-tokens uses the node's measured/configured :default-max-tokens.
+  Unknown budgets or context, and invalid token counts, fail closed. The caller
+  must supply the prompt estimate and the actual backend default when omitted."
   [node {:keys [prompt-tokens max-tokens]}]
-  (let [need (+ (or prompt-tokens 0) (or max-tokens 0))]
-    (or (zero? need)
-        (and (some? (:ctx node)) (>= (:ctx node) need)))))
+  (let [output (or max-tokens (:default-max-tokens node))
+        ctx (:ctx node)]
+    (boolean
+     (and (integer? prompt-tokens) (<= 0 prompt-tokens)
+          (integer? output) (<= 0 output)
+          (integer? ctx) (<= 0 ctx)
+          (>= ctx (+ prompt-tokens output))))))
 
 (defn eligible?
   ([node req] (eligible? default-config node req))
