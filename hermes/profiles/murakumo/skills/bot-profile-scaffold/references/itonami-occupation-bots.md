@@ -9,7 +9,7 @@ section）ごとに 1 体建てるときの、対象リポジトリ群と実装�
   正本 `data/isco-occupations.edn`）と `cloud-itonami/isic`（UN ISIC Rev.4、
   **R0 scaffold — `data/` は空**で taxonomy 未 ingest）。isco/isic は
 taxonomy authority mirror であり、消費側に移す・業務を自走させない
-（CLAUDE.md の authority boundary 節）。
+（AGENTS.md の authority boundary 節）。
 - **per-code 設計図アクター**: `cloud-itonami-isic-*`（457 repo）と
   `cloud-itonami-isco-*`（340 repo）。「実際に業務を担当する bot」の実体は
   これで、langgraph-clj StateGraph（`advisor ⊣ governor`、operation.cljc の
