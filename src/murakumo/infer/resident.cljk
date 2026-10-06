@@ -164,7 +164,7 @@
                                   :body (js/JSON.stringify
                                          #js {:model (:model lane) :max_tokens 16 :temperature 0
                                               :chat_template_kwargs #js {:enable_thinking false}
-                                              :messages #js [#js {:role "user" :content "2+3は? 数字だけで答えて。"}]})})))
+                                              :messages #js [#js {:role "user" :content "2+3. What is the sum? Reply with ONLY a single digit. No formula, equation, punctuation, or explanation."}]})})))
           (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "canary failed"))) (.json r)))
           (.then (fn [body]
                    (let [s (str/trim (or (some-> body .-choices (aget 0) .-message .-content) ""))]
