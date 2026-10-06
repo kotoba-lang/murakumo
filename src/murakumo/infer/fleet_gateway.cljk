@@ -1,6 +1,7 @@
 (ns murakumo.infer.fleet-gateway
   "Replicated stateless entrypoints; each resident owns admission and recovery."
   (:require [murakumo.infer.resident :as r]
+            [murakumo.infer.jobs :as jobs]
             [murakumo.infer.replicated-topology :as topo]
             [clojure.string :as str]
             ["node:child_process" :as cp] ["node:fs" :as fs] ["node:http" :as http] ["node:crypto" :as crypto]))
@@ -63,6 +64,26 @@
         handler (fn [req res compatibility?]
                   (cond
                     (and (not compatibility?) (not (r/authorized? req token))) (r/json! res 401 {:error "unauthorized"})
+                    (and (not compatibility?) (str/starts-with? (.-url req) "/jobs/"))
+                    (let [id (subs (.-url req) 6) method (.-method req)
+                          endpoints (for [[node report] @reports
+                                          :when (and (:jobs report) (< (- (js/Date.now) (:at report 0)) 15000)
+                                                     (topo/conformant-report? topology node report))]
+                                      (:url (get @peers node)))]
+                      (if-not (and (jobs/valid-id? id) (contains? #{"GET" "POST"} method) (serving?))
+                        (r/json! res 503 {:error "job_gateway_unavailable"})
+                        (letfn [(forward [urls body]
+                                  (if-let [url (first urls)]
+                                    (-> (jobs/request! (str url "/jobs/" id) token method body 30000)
+                                        (.catch (fn [_] (forward (rest urls) body))))
+                                    (js/Promise.reject (js/Error. "job quorum unavailable"))))]
+                          (-> (if (= method "POST")
+                                (-> (r/read-body! req 2097152)
+                                    (.then #(js->clj (js/JSON.parse (.toString %)) :keywordize-keys true)))
+                                (js/Promise.resolve nil))
+                              (.then #(forward endpoints %))
+                              (.then #(r/json! res (if (= method "POST") 202 200) %))
+                              (.catch (fn [_] (r/json! res 503 {:error "job_not_admitted" :retry "same-id-only"})))))))
                     (and topology (not compatibility?) (= "GET" (.-method req)) (= "/topology" (.-url req)))
                     (r/json! res 200 (topo/document topology))
                     (and topology (not compatibility?) (= "POST" (.-method req)) (= "/topology" (.-url req)))

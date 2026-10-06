@@ -1,6 +1,7 @@
 (ns murakumo.infer.resident
   "Node-owned admission and recovery. Gateways hold no execution slots."
   (:require [clojure.string :as str]
+            [murakumo.infer.jobs :as jobs]
             [murakumo.infer.replicated-topology :as topo]
             ["node:fs" :as fs] ["node:http" :as http]
             ["node:crypto" :as crypto] ["node:child_process" :as cp]))
@@ -203,6 +204,8 @@
         _ (when-not (map? (get previous "jobs"))
             (throw (js/Error. "invalid receipt ledger; refusing to reuse the retained owner")))
         topology (topo/start! config token)
+        job-service (try (jobs/start! config token topology)
+                         (catch :default e (when topology ((:close topology))) (throw e)))
         ;; On restart, previous running jobs become unknown; never replay them.
         state (atom {:groups {} :max-jobs (:max-receipts config 100000)
                      :jobs (into {} (for [[id j] (get previous "jobs")
@@ -271,6 +274,8 @@
                                 request {:model (:model body) :input-tokens (.-length bytes)
                                          :max-tokens (or (:max_tokens body) 1024)}]
                             (cond
+                              (and (:drain-file config) (.existsSync fs (:drain-file config)))
+                              (json! res 503 {:error "resident_draining" :executed false})
                               (and (= "text" (:kind lane)) (not (valid-output-budget? body)))
                               (json! res 400 {:error "invalid_output_budget"})
                               (or (nil? id) (not (re-matches #"[A-Za-z0-9_-]{8,128}" id)))
@@ -340,6 +345,22 @@
                                 (if-not (authorized? req token)
                                   (json! res 401 {:error "unauthorized"})
                                   (cond
+                                    (and job-service (str/starts-with? (.-url req) "/jobs/"))
+                                    (let [[id op extra] (str/split (subs (.-url req) 6) #"/")]
+                                      (if (or extra (not (jobs/valid-id? id)))
+                                        (json! res 400 {:error "invalid_job_path"})
+                                        (-> (if (= "GET" (.-method req))
+                                              (if op (js/Promise.reject (js/Error. "invalid job operation"))
+                                                ((:read! job-service) id))
+                                              (if (= "POST" (.-method req))
+                                                (-> (read-body! req 16777216)
+                                                    (.then (fn [bytes]
+                                                             (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)]
+                                                               (if op ((:handle! job-service) id op body)
+                                                                 ((:submit! job-service) id body))))))
+                                                (js/Promise.reject (js/Error. "invalid job method"))))
+                                            (.then #(json! res (if (and (= "POST" (.-method req)) (nil? op)) 202 200) %))
+                                            (.catch (fn [_] (json! res 503 {:error "job_not_admitted" :retry "same-id-only"}))))))
                                     (and topology (= "GET" (.-method req)) (= "/topology" (.-url req)))
                                     (json! res 200 (topo/document topology))
                                     (and topology (= "POST" (.-method req)) (= "/topology" (.-url req)))
@@ -350,8 +371,9 @@
                                         (.catch (fn [_] (json! res 400 {:error "invalid_topology"}))))
                                     (and (= "GET" (.-method req)) (= "/health" (.-url req)))
                                     (json! res 200 {:node (:node config) :owner-id owner-id :topology (topo/summary topology)
+                                                   :jobs (when job-service {:membership (:membership job-service) :active (count @(:active job-service))})
                                                    :lanes (into {} (for [[id l] @lanes]
-                                                                    [id (select-keys (assoc (qualified-lane topology (:node config) l) :busy (boolean (or (external-group-busy? @lanes l) (get-in @state [:groups (:group l)]))))
+                                                                    [id (select-keys (assoc (qualified-lane topology (:node config) l) :ready (and (:ready (qualified-lane topology (:node config) l)) (not (and (:drain-file config) (.existsSync fs (:drain-file config))))) :busy (boolean (or (external-group-busy? @lanes l) (get-in @state [:groups (:group l)]))))
                                                                                      [:model :kind :context :ready :busy :failures])]))})
                                     (and (= "POST" (.-method req)) (str/starts-with? (.-url req) "/execute/"))
                                     (execute! req res (subs (.-url req) 9) false)
@@ -389,7 +411,7 @@
     (let [timer (js/setInterval tick! (:probe-interval-ms config 30000))
           stop-watchdog! (service-watchdog! config #(.-listening server))]
       {:server server :state state :lanes lanes
-       :close (fn [] (stop-watchdog!) (when topology ((:close topology))) (js/clearInterval timer)
+       :close (fn [] (stop-watchdog!) (when job-service ((:close job-service))) (when topology ((:close topology))) (js/clearInterval timer)
                 (doseq [[_ c] @controllers] (.abort c)) (.close server)
                 (when compatibility-server (.close compatibility-server)))})))
 

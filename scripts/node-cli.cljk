@@ -5,6 +5,8 @@
             [murakumo.fleet-ps :as fleet-ps]
             [murakumo.health :as health]
             [murakumo.infer.resident :as resident]
+            [murakumo.infer.jobs-cli :as jobs-cli]
+            [murakumo.infer.jobs :as jobs]
             [murakumo.infer.replicated-topology :as topology]
             [murakumo.infer.fleet-gateway :as gateway]
             [murakumo.device-claim :as claim]
@@ -23,6 +25,7 @@
             ["node:readline" :as readline] ["node:child_process" :as child-process]))
 
 (defn help []
+  (println "  murakumo up CONFIG.json                 Run the configured resident under OS supervision\n  murakumo jobs submit ID INPUT.json --config CLIENT.json\n  murakumo jobs status ID --config CLIENT.json\n                                          Quorum-owned text/image jobs; endpoint failover preserves IDs\n  murakumo status --config CONFIG.json     Local measured health\n  murakumo drain --config CONFIG.json      Withdraw local admission; keep running jobs\n  murakumo resume --config CONFIG.json     Restore local admission")
   (println "  murakumo resident serve --config FILE    Own local model admission, receipts, canaries and healing\n  murakumo gateway serve --config FILE     Replicated fleet entrypoint; no central slot ownership")
   (println "  murakumo topology sign --input FILE --private-key-file FILE --output FILE\n                                          Sign a monotonic desired topology; residents only hold its public key")
   (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node report                    Send this device's signed heartbeat to the console\n  murakumo node console                   Show this box's status and a claim QR on its own screen\n  murakumo node wifi-share                Hand this PC's Wi-Fi to a headless box by sound\n  murakumo node onboard                   (box) Take a Wi-Fi profile handed over by sound\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node qualify --model ID        Run the local model through Community admission\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Run check, then qualify before joining Community jobs;\na heartbeat alone does not prove job eligibility.")
@@ -571,6 +574,23 @@
   (try
     (cond
       (or (nil? prefix) (= prefix "--help")) (help)
+      (= prefix "up") (resident/run-command "serve" ["--config" command])
+      (= prefix "jobs") (-> (jobs-cli/run-command command args) (.catch #(fail! (.-message %))))
+      (contains? #{"status" "drain" "resume"} prefix)
+      (let [file (first args)
+            _ (when-not (and (= command "--config") file (= 1 (count args)))
+                (throw (js/Error. "status|drain|resume --config CONFIG.json")))
+            config (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys true)]
+        (if (= prefix "status")
+          (let [token (resident/private-token (:token-file config))]
+            (-> (jobs/request! (str "http://" (:bind config "127.0.0.1") ":" (:port config 8796) "/health") token "GET" nil 5000)
+                (.then #(println (topology/encoded %)))
+                (.catch #(fail! "Resident health unavailable"))))
+          (let [file (:drain-file config)]
+            (when-not (and file (.isAbsolute path file)) (throw (js/Error. "declare an absolute drain-file in the resident config")))
+            (if (= prefix "drain") (.writeFileSync fs file "draining\n" #js {:mode 384})
+                (when (.existsSync fs file) (.unlinkSync fs file)))
+            (println prefix "requested for" (:node config)))))
       ;; `bench` is measured-only and never enrols: it dispatches into its own
       ;; namespace so a bench run cannot reach the node's identity or the
       ;; control plane. Its exit code is the command's, not this dispatcher's.
