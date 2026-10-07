@@ -168,9 +168,14 @@
         stop-finalizer (finalizer/start!
                         finalizer (or (:ci.coordinator/finalizer-interval-ms config) 5000))]
     (println (str "murakumo CI ingress on http://0.0.0.0:" http-port))
-    (try
-      (broker-service/serve! overlay-request broker)
-      (finally (stop-finalizer) (stop-http)))))
+    #?(:clj (try
+              (broker-service/serve! overlay-request broker)
+              (finally (stop-finalizer) (stop-http)))
+       ;; node: serve! returns a promise that never settles and the servers live on the event
+       ;; loop, so stopping is a signal, not a `finally`
+       :cljs (let [served (broker-service/serve! overlay-request broker)]
+               (.on js/process "SIGTERM" (fn [] (stop-finalizer) (stop-http) (js/process.exit 0)))
+               served))))
 
 (defn -main [& [config-path]]
   (when (str/blank? config-path)

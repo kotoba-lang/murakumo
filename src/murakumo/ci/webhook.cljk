@@ -4,7 +4,8 @@
             [kotoba.lang.text :as str]
             [murakumo.ci.broker :as broker]
             [murakumo.ci.source :as source]
-            #?(:clj [kotoba.lang.http.host.httpkit :as http]))
+            #?(:clj [kotoba.lang.http.host.httpkit :as http])
+            #?(:cljs ["node:http" :as node-http]))
   (:import
            [java.security MessageDigest]
            [javax.crypto Mac]
@@ -22,6 +23,11 @@
   (and (seq secret) (seq supplied)
        (MessageDigest/isEqual (utf8-bytes (github-signature secret raw-body))
                               (utf8-bytes supplied))))
+
+(defn- body-text
+  "The request body as text: a string as it is, anything else read as a stream (as `slurp` does)."
+  [body]
+  (if (string? body) body (slurp body)))
 
 (defn- response [status body]
   {:status status :headers {"content-type" "application/json"}
@@ -43,7 +49,7 @@
           (response 503 {:error "status_unavailable"}))
 
         (and (= :post method) (= "/ci/v1/events/github" uri))
-        (let [raw (slurp (:body request))
+        (let [raw (body-text (:body request))
               signature (get-in request [:headers "x-hub-signature-256"])]
           (if-not (github-signature-valid? github-secret raw signature)
             (response 401 {:error "invalid_signature"})
@@ -56,7 +62,7 @@
                 (response 400 {:error "invalid_event" :message (ex-message e)})))))
 
         (and (= :post method) (= "/ci/v1/events/radicle" uri))
-        (let [raw (slurp (:body request))
+        (let [raw (body-text (:body request))
               signature (get-in request [:headers "x-radicle-signature"])]
           (if-not (and verify-radicle
                        (verify-radicle {:raw raw :signature signature
@@ -72,13 +78,49 @@
 
         :else (response 404 {:error "not_found"})))))
 
+(def max-body-bytes (* 1024 1024))
+
+#?(:cljs
+   (defn- serve-node!
+     "node:http adapter for the Ring `handler`: bounded body (1 MiB), the response written as the
+     handler returns it. -> a zero-argument stop function."
+     [handler port]
+     (let [server (.createServer
+                   node-http
+                   (fn [req res]
+                     (let [chunks (atom []) size (atom 0) refused (atom false)
+                           reply! (fn [{:keys [status headers body]}]
+                                    (.writeHead res status (clj->js headers))
+                                    (.end res (str body)))]
+                       (.on req "data"
+                            (fn [chunk]
+                              (swap! size + (.-length chunk))
+                              (if (> @size max-body-bytes)
+                                (when-not @refused
+                                  (reset! refused true)
+                                  (reply! (response 413 {:error "too_large"}))
+                                  (.destroy req))
+                                (swap! chunks conj chunk))))
+                       (.on req "error" (fn [_] (.destroy res)))
+                       (.on req "end"
+                            (fn []
+                              (when-not @refused
+                                (let [text (.toString (js/Buffer.concat (clj->js @chunks)) "utf8")
+                                      headers (into {} (for [[k v] (js->clj (.-headers req))] [(str/lower k) v]))
+                                      r (try (handler {:request-method (keyword (str/lower (.-method req)))
+                                                       :uri (.-pathname (js/URL. (.-url req) "http://ci.invalid"))
+                                                       :headers headers :body text})
+                                             (catch :default _ (response 500 {:error "internal"})))]
+                                  (reply! r))))))))]
+       (.listen server port)
+       (fn [] (.close server) nil))))
+
 (defn serve!
-  "Listen on `port`. The server adapter (http-kit) is JVM-only; `handler` itself
-   is portable and is what the tests drive."
+  "Listen on `port`. On the JVM the adapter is http-kit; on Node it is `node:http`. Returns a
+   zero-argument stop function. `handler` itself is portable and is what the tests drive."
   [opts port]
   #?(:clj (http/run-server (handler opts) {:port port})
-     :cljs (throw (ex-info "murakumo-ci: no HTTP server adapter on this runtime"
-                           {:reason :no-http-server-host :port port}))))
+     :cljs (serve-node! (handler opts) port)))
 
 (defn -main [& [port-arg]]
   (when-not port-arg
