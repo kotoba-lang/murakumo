@@ -44,7 +44,8 @@
        (every? #(contains? (:nodes policy) %) (:targets policy))
        (every? (fn [[_ endpoint]]
                  (and (string? (:host endpoint))
-                      (pos-int? (:port endpoint))))
+                      (pos-int? (:port endpoint))
+                      (contains? #{nil :quic :tcp} (:transport endpoint))))
                (:nodes policy))
        (pos-int? (or (:batch-size policy) 1))
        (artifact-store/valid-cid? (:previous-artifact-cid policy))

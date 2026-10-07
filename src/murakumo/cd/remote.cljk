@@ -2,7 +2,8 @@
   "Fleet-node endpoint for deployment RPCs. Authorization is deliberately
    reconstructed from local trust configuration, never accepted from the
    controller."
-  (:require [murakumo.cd.capability :as capability]
+  (:require [murakumo.overlay.rpc :as rpc]
+            [murakumo.cd.capability :as capability]
             [murakumo.cd.protocol :as protocol]))
 
 (defn- denied [reason]
@@ -63,5 +64,5 @@
 (defn serve!
   "Serve a CD handler through the native overlay QUIC RPC driver."
   [overlay-request opts]
-  ((requiring-resolve 'murakumo.overlay.quic-driver/serve-rpc!)
+  (rpc/serve-rpc!
    overlay-request (handler opts)))

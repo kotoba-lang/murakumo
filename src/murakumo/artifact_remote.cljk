@@ -1,7 +1,7 @@
 (ns murakumo.artifact-remote
   "Remote, chunked CAS receiver. Only objects belonging to the capability's
    signed release bundle are accepted."
-  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio] [clojure.java.io :as io]
+  (:require [kotoba.bytes :as kbytes] [kotoba.io :as kio]
             [kotoba.lang.text :as str]
             [murakumo.artifact-protocol :as protocol]
             [murakumo.cd.bundle :as bundle]
@@ -52,12 +52,12 @@
          transfer-ttl-seconds 600}
     :as opts}]
   (let [transfers (atom {})
-        temp-root (io/file temp-dir)
-        _ (.mkdirs temp-root)
+        temp-root (kio/file temp-dir)
+        _ (kio/mkdirs temp-root)
         cleanup! (fn [id]
                    (when-let [transfer (get @transfers id)]
                      (swap! transfers dissoc id)
-                     (.delete ^java.io.File (:file transfer))))]
+                     (kio/delete (:file transfer))))]
     (fn [request]
       (let [operation (:murakumo.artifact/operation request)
             respond #(protocol/response operation node-id %)
@@ -84,10 +84,10 @@
                   (respond (denied :invalid-object-size))
                   (contains? @transfers id) (respond (denied :transfer-exists))
                   :else
-                  (let [file (java.io.File/createTempFile "artifact-" ".part" temp-root)]
+                  (let [file (kio/temp-file temp-root "artifact-" ".part")]
                     (locking transfers
                       (if (contains? @transfers id)
-                        (do (.delete file) (respond (denied :transfer-exists)))
+                        (do (kio/delete file) (respond (denied :transfer-exists)))
                         (do
                           (swap! transfers assoc id
                                  {:file file :size size :received 0 :next-seq 0
@@ -105,14 +105,13 @@
                               (kbytes/base64-decode-bytes ^String encoded))]
                   (if-not (and (= object-cid (:murakumo.artifact/object-cid request))
                                (= next-seq sequence) bytes
-                               (<= (alength ^bytes bytes) max-chunk-bytes)
-                               (<= (+ received (alength ^bytes bytes)) size))
+                               (<= (alength bytes) max-chunk-bytes)
+                               (<= (+ received (alength bytes)) size))
                     (do (cleanup! id) (respond (denied :invalid-chunk)))
                     (do
-                      (with-open [out (java.io.FileOutputStream. ^java.io.File file true)]
-                        (.write out ^bytes bytes))
+                      (kio/write-bytes file bytes #{:append :create :write})
                       (swap! transfers update id
-                             #(-> % (update :received + (alength ^bytes bytes))
+                             #(-> % (update :received + (alength bytes))
                                   (update :next-seq inc)))
                       (respond {:ok? true :status :continued}))))
                 (respond (denied :unknown-transfer)))
@@ -122,7 +121,7 @@
                 (if-not (and (= object-cid (:murakumo.artifact/object-cid request))
                              (= size received))
                   (do (cleanup! id) (respond (denied :incomplete-transfer)))
-                  (let [bytes (kio/read-all-bytes ^java.io.File file)]
+                  (let [bytes (kio/read-all-bytes file)]
                     (put! object-cid bytes)
                     (cleanup! id)
                     (respond {:ok? true :status :stored :cid object-cid})))
@@ -132,4 +131,4 @@
           (catch Throwable t
             (cleanup! id)
             (respond {:ok? false :reason :replication-failed
-                      :message (.getMessage t)})))))))
+                      :message (ex-message t)})))))))

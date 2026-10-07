@@ -1,6 +1,7 @@
 (ns murakumo.cd.node-daemon
   "Production composition and entrypoint for one Murakumo CD fleet node."
-  (:require [clojure.edn :as edn]
+  (:require [murakumo.overlay.rpc :as rpc]
+            [clojure.edn :as edn]
             [kotoba.io :as io]
             [kotoba.lang.text :as str]
             [murakumo.artifact-store :as artifact-store]
@@ -27,7 +28,7 @@
          (not (contains? kotoba :token))
          (= "murakumo.overlay.adapter-request" (:type overlay))
          (= 1 (:version overlay))
-         (= :quic (:transport overlay))
+         (contains? #{:quic :tcp} (:transport overlay))
          (string? (get-in overlay [:connect :host]))
          (pos-int? (get-in overlay [:connect :port])))))
 
@@ -72,7 +73,7 @@
 
 (defn serve! [config]
   (let [{:keys [overlay-request handler]} (build config)]
-    ((requiring-resolve 'murakumo.overlay.quic-driver/serve-rpc!)
+    (rpc/serve-rpc!
      overlay-request handler)))
 
 (defn -main [& [config-path]]

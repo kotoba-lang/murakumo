@@ -1,19 +1,23 @@
 (ns murakumo.ci.broker-service
   "Persistent, versioned broker RPC service for remote Murakumo runners."
-  (:require [kotoba.lang.error :as kerror] [murakumo.ci.broker :as broker]
+  (:require ["node:crypto" :as crypto]
+            [kotoba.lang.error :as kerror] [murakumo.ci.broker :as broker]
             [murakumo.ci.attest :as attest]
             [murakumo.ci.artifact-upload :as artifact-upload]
             [murakumo.ci.protocol :as protocol]
             [murakumo.ci.store :as store]
-            [nekko.sigref :as sigref])
-  (:import [java.security SecureRandom]))
+            [murakumo.overlay.rpc :as rpc]
+            [nekko.sigref :as sigref]))
 
 (def default-lease-ttl-ms 60000)
 
-(defn- token []
-  (let [bytes (byte-array 32)]
-    (.nextBytes (SecureRandom.) bytes)
-    (apply str (map #(format "%02x" (bit-and (int %) 0xff)) bytes))))
+(defn token
+  "A fresh lease bearer token: 256 bits from the operating system's CSPRNG (node:crypto), as 64
+  lower-case hex characters. The lease token is the credential a runner presents for every later
+  call on its run, so it must be unguessable and must not come from a seeded or time-based
+  generator."
+  []
+  (.toString (.randomBytes crypto 32) "hex"))
 
 (defn create
   [{:keys [store clock-ms lease-ttl-ms token-fn broker-key replicas rid
@@ -86,8 +90,9 @@
               (when artifact-exists?
                 (let [artifact-cids (map #(or (:cid %) (:digest %))
                                          (:verdict/artifacts verdict))
+                      ;; The receipt commit is stored as quads inside the snapshot, not as
+                      ;; an object of its own, so the snapshot stands for it here.
                       required (concat [(:verdict-cid attestation)
-                                        (:receipt-commit-cid attestation)
                                         (:receipt-snapshot-cid attestation)]
                                        artifact-cids)]
                   (when-not (and (every? string? required)
@@ -186,5 +191,5 @@
     {:state state :submit! submit! :handler handler}))
 
 (defn serve! [overlay-request service]
-  ((requiring-resolve 'murakumo.overlay.quic-driver/serve-rpc!)
+  (rpc/serve-rpc!
    overlay-request (:handler service)))
