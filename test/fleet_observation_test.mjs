@@ -27,7 +27,8 @@ test('residents sign their own observation and converge the fleet view by gossip
  const ids=['n0','n1'],ports=await Promise.all(ids.map(port)),gw=await port();
  const urls=ports.map(p=>'http://127.0.0.1:'+p),owners=ids.map(()=>randomUUID());
  const payload={schema:1,revision:1,'spec-version':2,models:{mishima:{kind:'text',file:'mishima/model/m.gguf'}},
-  nodes:ids.map((node,i)=>({node,url:urls[i],'owner-id':owners[i],enabled:true,roles:[{kind:'text',model:'mishima'}]})),
+  classes:{'mishima-text':{template:'llama-server',model:'mishima',replicas:2,eligible:{'max-pressure':4}}},
+  nodes:ids.map((node,i)=>({node,url:urls[i],'owner-id':owners[i],enabled:true,roles:[{kind:'text',model:'mishima'}],pins:['mishima-text']})),
   gateways:[{node:'g0',url:'http://127.0.0.1:'+gw,enabled:true}],policies:{'minimum-replicas':{mishima:1}}};
  const input=join(dir,'input.json'),signed=join(dir,'signed.json');await writeFile(input,JSON.stringify(payload));
  execFileSync(process.execPath,[cli,'topology','sign','--input',input,'--output',signed,'--private-key-file',keyFile,'--allow-loopback','true'],{stdio:'pipe'});
@@ -38,7 +39,7 @@ test('residents sign their own observation and converge the fleet view by gossip
   const tf=join(dir,ids[i]+'-topology.json');await writeFile(tf,await readFile(signed),{mode:0o600});
   const state=join(dir,ids[i]+'-receipts.json');await writeFile(state+'.owner-id',owners[i],{mode:0o600});
   const cfg={node:ids[i],port:ports[i],bind:'127.0.0.1','token-file':tokenFile,'topology-file':tf,'topology-public-key-file':publicFile,
-   'topology-poll-ms':50,'allow-loopback-topology?':true,'probe-interval-ms':100,'observation-poll-ms':100,'model-root':dir,
+   'topology-poll-ms':50,'allow-loopback-topology?':true,'probe-interval-ms':100,'observation-poll-ms':100,'model-root':dir,'converge-first-delay-ms':200,'converge-interval-ms':200,
    'state-file':state,'legacy-empty-ledger-owner-id':owners[i],
    lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',backend:'http://127.0.0.1:'+backend.address().port,path:'/v1/chat/completions'}}};
   const cp=join(dir,ids[i]+'.json');await writeFile(cp,JSON.stringify(cfg));
@@ -58,6 +59,13 @@ test('residents sign their own observation and converge the fleet view by gossip
   assert.equal(d.payload.models.mishima.present,false,'intent model file checked under model-root');
  }
  assert.notEqual(all.n0.payload.did,all.n1.payload.did,'each node has its own key');
+ // P3a: each node publishes its convergence plan in its signed observation;
+ // the intent does not say enforce, so the mode is observe and nothing is acted on
+ await wait(async()=>{const d=(await obs(0)).n0;return d.payload.converge?.plan?.length;},'convergence plan');
+ const conv=(await obs(0)).n0.payload.converge;
+ assert.equal(conv.mode,'observe');
+ assert.deepEqual(conv.plan.map(s=>[s.class,s.step]),[['mishima-text','ok']]);
+ assert.equal(conv.acted,undefined);
  // the rest of the resident still requires the fleet token
  assert.equal((await fetch(urls[0]+'/health')).status,401);
  // the node key is private and persists across restart

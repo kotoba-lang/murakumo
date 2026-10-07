@@ -6,6 +6,7 @@
     murakumo spec plan   FILE                                   L3 placement over live observations
     murakumo spec drift  FILE [--fleet F]                       declared vs declared vs observed
     murakumo spec mesh   FILE --node NAME                       itonami peers.edn for NAME from L1 trust
+    murakumo spec converge FILE                                 each resident's published convergence plan (P3a)
 
   FILE is a bare topology payload or a signed {payload, signature} document.
   Observations (L2) are read over HTTP from each node's itonami peer
@@ -114,26 +115,7 @@
                                                             "did" (get-in doc ["payload" "did"])
                                                             "sig" (get doc "signature")})]
                                :when p]
-                           [node {:at-ms (get p "at") :did (get p "did") :source "resident"
-                                  :pressure (get-in p ["host" "pressure"]) :free-pct (get-in p ["host" "free-pct"])
-                                  :memory-gb (get-in p ["host" "memory-gb"]) :release (get p "release")
-                                  :running (set (concat
-                                                 ;; a lane the resident admits for (model, kind)
-                                                 (for [[_ l] (get p "lanes")
-                                                       [c spec] (get intent "classes")
-                                                       :when (and (= (get l "model") (get spec "model"))
-                                                                  (= (get l "kind") (get-in intent ["models" (get spec "model") "kind"] (get l "kind"))))]
-                                                   c)
-                                                 ;; a running unit, matched to the class whose model the unit serves
-                                                 ;; (one unit, com.murakumo.mishima, can back several classes'
-                                                 ;; template, so the model must match too)
-                                                 (for [[unit st] (get p "units")
-                                                       :when (= "running" st)
-                                                       c (unit->classes unit)
-                                                       :let [m (get-in intent ["classes" c "model"])]
-                                                       :when (or (nil? m) (str/ends-with? unit (str "." m))
-                                                                 (not= "llama-server" (get-in intent ["classes" c "template"])))]
-                                                   c)))}]))))))))
+                           [node (spec/l2-entry intent p)]))))))))
 
 ;; ---------------------------------------------------------------- draft
 
@@ -289,6 +271,22 @@
                        (println (str "\n  L2 sources: " (count (filter #(= "resident" (:source %)) (vals obs))) " resident self-reports, "
                                      (count (remove #(= "resident" (:source %)) (vals obs))) " itonami-peer only"))
                        (if (seq ds) 1 0))))))
+
+      "converge"
+      (let [intent (load-intent)]
+        (-> (resident-observations intent)
+            (.then (fn [obs]
+                     (println (str (pad "NODE" 12) (pad "MODE" 9) "PLAN (class: step)"))
+                     (doseq [[n o] obs
+                             :let [cv (:converge o)]]
+                       (println (str (pad n 12) (pad (or (get cv "mode") "-") 9)
+                                     (if-let [p (seq (get cv "plan"))]
+                                       (str/join "  " (for [st p] (str (get st "class") ": " (get st "step"))))
+                                       (or (get cv "reason") "-"))))
+                       (doseq [a (get cv "acted")]
+                         (println (str (pad "" 21) "acted " (get a "class") " " (get a "unit") " ok=" (get a "ok") " " (get a "stderr")))))
+                     (println (str "\n  " (count obs) " residents reporting; a node acts only when the signed intent says converge.mode enforce for it"))
+                     0))))
 
       "mesh"
       (let [intent (load-intent) n (opt args "--node")]

@@ -6,6 +6,7 @@
             [murakumo.infer.replicated-topology :as topo]
             [murakumo.infer.keepalive :as ka]
             [murakumo.infer.observation :as observation]
+            [murakumo.infer.converge :as converge]
             ["node:fs" :as fs] ["node:http" :as http]
             ["node:crypto" :as crypto] ["node:child_process" :as cp]))
 
@@ -241,8 +242,14 @@
                               [(name id) (assoc lane :owner-id owner-id :ready false :failures 0 :probing false)])))
         controllers (atom {})
         ;; L2 (ADR-2610071730): this node's signed self-report, gossiped with peers
+        converger (atom nil)
         observations (when-not (false? (:observations? config))
-                       (observation/start! config token topology #(deref lanes)))
+                       (observation/start! config token topology #(deref lanes)
+                                           {:extra-fn #(when-let [c @converger] ((:status c)))}))
+        ;; P3a (ADR-2610071730): plan this node's share every interval; act only
+        ;; when the signed intent says enforce for this node (see converge ns)
+        _ (when (and observations topology (not (false? (:converge? config))))
+            (reset! converger (converge/start! config topology observations)))
         save! #(persist! file @state)
         _ (when-not (.existsSync fs file) (save!))
         _ (when-not bound?
@@ -448,7 +455,7 @@
     (let [timer (js/setInterval tick! (:probe-interval-ms config 30000))
           stop-watchdog! (service-watchdog! config #(.-listening server))]
       {:server server :state state :lanes lanes
-       :close (fn [] (stop-watchdog!) (when observations ((:close observations)))
+       :close (fn [] (stop-watchdog!) (when @converger ((:close @converger))) (when observations ((:close observations)))
                 (when job-service ((:close job-service))) (when topology ((:close topology))) (js/clearInterval timer)
                 (doseq [[_ c] @controllers] (.abort c)) (.close server)
                 (when compatibility-server (.close compatibility-server)))})))

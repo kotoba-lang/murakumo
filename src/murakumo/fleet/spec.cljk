@@ -203,3 +203,78 @@
          ";; (ADR-2610071730 D8). Do not edit; change the intent and regenerate.\n"
          "{:trusted #{" (str/join " " (map #(str "\"" (get (val %) "did") "\"") others)) "}, "
          ":peers [" (str/join " " (for [[_ t] others] (str "{:url \"" (get t "itonami-url") "\", :did \"" (get t "did") "\"}"))) "]}\n")))
+
+;; ---------------------------------------------------------------- L2 from a resident observation (P2)
+
+(defn l2-entry
+  "A verified resident observation payload (string keys) -> the observation
+  `placement` reads. :running holds the classes seen on the node: a lane the
+  resident admits for the class's (model, kind), or a running unit of the
+  class's template whose name ends with the class's model (one unit,
+  com.murakumo.mishima, backs the llama-server template of several classes)."
+  [intent payload]
+  (let [classes (get intent "classes")
+        unit-classes (fn [unit]
+                       (for [[c s] classes
+                             :when (= unit (get-in templates [(get s "template") :unit]))
+                             :let [m (get s "model")]
+                             :when (or (nil? m) (not= "llama-server" (get s "template"))
+                                       (str/ends-with? unit (str "." m)))]
+                         c))]
+    {:at-ms (get payload "at") :did (get payload "did") :source "resident"
+     :pressure (get-in payload ["host" "pressure"]) :free-pct (get-in payload ["host" "free-pct"])
+     :memory-gb (get-in payload ["host" "memory-gb"]) :release (get payload "release")
+     :units (get payload "units")
+     :models (into {} (for [[m f] (get payload "models")] [m {:present (get f "present")}]))
+     :converge (get payload "converge")
+     :running (set (concat
+                    (for [[_ l] (get payload "lanes")
+                          [c s] classes
+                          :when (and (= (get l "model") (get s "model"))
+                                     (= (get l "kind") (get-in intent ["models" (get s "model") "kind"] (get l "kind"))))]
+                      c)
+                    (for [[unit st] (get payload "units")
+                          :when (= "running" st)
+                          c (unit-classes unit)]
+                      c)))}))
+
+;; ---------------------------------------------------------------- convergence plan (P3a)
+
+(def default-cooldown-ms (* 30 60 1000))
+
+(defn converge-mode
+  "observe unless the signed intent says enforce for this node."
+  [intent node]
+  (let [{:strs [mode nodes]} (get intent "converge")]
+    (if (and (= "enforce" mode) (some #{node} nodes)) "enforce" "observe")))
+
+(defn converge-plan
+  "What node should do to hold its share — pure.
+  obs: this node's own l2-entry (with :units). Steps:
+    :ok          placed and observed running
+    :start       placed, pinned, unit installed but not running -> may start
+    :needs-lease placed by rendezvous (not pinned) and not running -> P3b
+    :blocked     cannot converge here (no template unit on this OS, unit not
+                 installed, model file missing)
+  Never a stop: P3a only ever starts what the operator pinned."
+  [intent l2 node now]
+  (let [plan (placement intent l2 now)
+        obs (get l2 node)
+        node-entry (first (filter #(= node (get % "node")) (get intent "nodes")))
+        pinned (set (get node-entry "pins"))]
+    (vec
+     (for [[c {:keys [nodes]}] plan
+           :when (some #{node} nodes)
+           :let [spec (get-in intent ["classes" c])
+                 unit (get-in templates [(get spec "template") :unit])
+                 state (get-in obs [:units unit])
+                 model (get spec "model")
+                 model-file (get-in obs [:models model])]]
+       (cond
+         (contains? (:running obs) c) {:class c :unit unit :step :ok}
+         (= "all" (get spec "replicas")) {:class c :unit unit :step :blocked :reason "\"all\" classes are installed by their own installer"}
+         (not (contains? pinned c)) {:class c :unit unit :step :needs-lease :reason "placed by rendezvous; needs a quorum lease (P3b)"}
+         (nil? state) {:class c :unit unit :step :blocked :reason "no template unit on this host (Linux names differ; P3b renders units)"}
+         (= "absent" state) {:class c :unit unit :step :blocked :reason "unit not installed (P3b renders it from the template)"}
+         (and model-file (not (:present model-file))) {:class c :unit unit :step :blocked :reason (str "model file for " model " missing")}
+         :else {:class c :unit unit :step :start :reason (str "pinned here; unit " state)})))))

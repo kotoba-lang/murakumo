@@ -198,7 +198,7 @@
 (defn start!
   "Begin observing and gossiping. lanes-fn returns the resident's current lane
   map (id -> lane). Returns {:own :all :accept! :close}."
-  [config token topology lanes-fn]
+  [config token topology lanes-fn & [{:keys [extra-fn]}]]
   (let [key (node-key! (or (:node-key-file config) (str (:state-file config) ".node-key")))
         store (atom {}) pins (atom (read-pins config))
         model-root (or (:model-root config) "/Users/Shared/murakumo")
@@ -223,7 +223,9 @@
                                                                     [id (select-keys l [:model :kind :context :ready :failures])]))
                                                      :host host
                                                      :units units
-                                                     :models (model-files payload model-root)})]
+                                                     :models (model-files payload model-root)
+                                                     ;; e.g. the convergence plan (P3a)
+                                                     :converge (when extra-fn (try (extra-fn) (catch :default _ nil)))})]
                                   ;; our own entry goes through the same gate as a peer's
                                   (accept! doc))))
                        (.catch (fn [_] nil))))

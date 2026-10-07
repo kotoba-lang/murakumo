@@ -1,0 +1,104 @@
+(ns murakumo.infer.converge
+  "P3a of ADR-2610071730: the resident converges ITS OWN share (kubelet).
+
+  Every converge interval the resident computes, from the signed intent (L1)
+  and the fleet's observations (L2), the same placement every node computes,
+  and from it the plan for itself (murakumo.fleet.spec/converge-plan). The plan
+  is published in this node's signed observation either way.
+
+  It ACTS only when all of these hold:
+    - the signed intent says converge.mode = enforce and lists this node
+    - the step is :start: a class the operator pinned here, whose template
+      unit is installed but not running
+    - the unit is one of the code-fixed template units (spec/templates), and
+      the action is fixed argv: launchctl enable + bootstrap (not loaded) or
+      kickstart (loaded, not running)
+    - the same unit was not acted on within the cooldown (30 min)
+  It never stops, evicts or renders anything (P3b, with quorum leases).
+  macOS only for now; Linux nodes publish their plan and do not act."
+  (:require [clojure.string :as str]
+            [murakumo.fleet.spec :as spec]
+            [murakumo.infer.replicated-topology :as topo]
+            ["node:child_process" :as cp]
+            ["node:fs" :as fs]))
+
+(defn intent-of
+  "The signed payload, string-keyed as murakumo.fleet.spec reads it."
+  [payload]
+  (when payload (js->clj (js/JSON.parse (topo/encoded payload)))))
+
+(defn l2-of
+  "observation store (node -> signed doc) -> spec L2."
+  [intent store]
+  (into {} (for [[node doc] store]
+             [(topo/key-name node) (spec/l2-entry intent (js->clj (js/JSON.parse (topo/encoded (:payload doc)))))])))
+
+(def template-units (set (map :unit (vals spec/templates))))
+
+(defn action-argv
+  "Fixed argv for a :start step, by the unit's observed launchd state; nil when
+  there is nothing safe to run."
+  [{:keys [unit]} state]
+  (when (contains? template-units unit)
+    (case state
+      "not-loaded" [["/bin/launchctl" "enable" (str "system/" unit)]
+                    ["/bin/launchctl" "bootstrap" "system" (str "/Library/LaunchDaemons/" unit ".plist")]]
+      "loaded" [["/bin/launchctl" "kickstart" (str "system/" unit)]]
+      nil)))
+
+(defn- run-argv [argv]
+  (js/Promise. (fn [resolve]
+                 (.execFile cp (first argv) (clj->js (rest argv)) #js {:timeout 20000}
+                            (fn [err _ stderr] (resolve {:argv argv :ok (nil? err) :stderr (str/trim (str stderr))}))))))
+
+(defn decide
+  "Which steps to act on now — pure. last-act: unit -> ms."
+  [mode plan obs last-act now cooldown-ms darwin?]
+  (if-not (and (= "enforce" mode) darwin?)
+    []
+    (vec (for [s plan
+               :when (= :start (:step s))
+               :let [argv (action-argv s (get-in obs [:units (:unit s)]))]
+               :when (and argv (< (get last-act (:unit s) 0) (- now cooldown-ms)))]
+           (assoc s :argv argv)))))
+
+(defn start!
+  "Begin converging. observations: the resident's observation service.
+  Returns {:status :tick! :close}."
+  [config topology observations]
+  (let [node (:node config)
+        darwin? (= "darwin" (.-platform js/process))
+        cooldown (:converge-cooldown-ms config spec/default-cooldown-ms)
+        state (atom {:mode "observe" :plan [] :acted [] :at nil})
+        last-act (atom {})
+        tick! (fn []
+                (let [intent (intent-of (topo/payload topology))
+                      now (js/Date.now)]
+                  (if-not (seq (get intent "classes"))
+                    (reset! state {:mode "none" :reason "the signed intent has no classes (spec-version 2 not yet signed)" :at now})
+                    (let [l2 (l2-of intent ((:all observations)))
+                          mode (spec/converge-mode intent node)
+                          plan (spec/converge-plan intent l2 node now)
+                          todo (decide mode plan (get l2 node) @last-act now cooldown darwin?)]
+                      (swap! state assoc :mode mode :plan plan :at now :revision (get intent "revision"))
+                      (-> (js/Promise.all
+                           (clj->js (for [s todo]
+                                      (do (swap! last-act assoc (:unit s) now)
+                                          (-> (reduce (fn [p argv] (.then p (fn [rs] (.then (run-argv argv) #(conj rs %)))))
+                                                      (js/Promise.resolve []) (:argv s))
+                                              (.then (fn [rs] {:class (:class s) :unit (:unit s) :at now
+                                                               :ok (every? :ok rs)
+                                                               :stderr (str/join " | " (keep #(not-empty (:stderr %)) rs))})))))))
+                          (.then (fn [rs] (when (pos? (.-length rs))
+                                            (swap! state update :acted #(vec (take-last 20 (into % (array-seq rs))))))))
+                          (.catch (fn [_] nil)))))))
+        first-run (js/setTimeout tick! (:converge-first-delay-ms config 60000))
+        timer (js/setInterval tick! (:converge-interval-ms config 300000))]
+    {:status (fn [] (let [s @state]
+                      (cond-> {:mode (:mode s) :at (:at s)}
+                        (:reason s) (assoc :reason (:reason s))
+                        (:revision s) (assoc :revision (:revision s))
+                        (seq (:plan s)) (assoc :plan (mapv #(select-keys % [:class :unit :step :reason]) (:plan s)))
+                        (seq (:acted s)) (assoc :acted (:acted s)))))
+     :tick! tick!
+     :close (fn [] (js/clearTimeout first-run) (js/clearInterval timer))}))

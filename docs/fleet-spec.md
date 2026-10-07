@@ -49,3 +49,22 @@ min are dropped and ones dated more than 2 min ahead are refused.
 
 `murakumo spec plan|drift` read L2 from the first resident that answers and fall back to the itonami peers for hosts
 without a resident (`L2 sources: …` is printed).
+
+## Convergence (P3a)
+
+Every resident computes, from the signed intent and the fleet's L2, the placement every node computes and the plan for
+its own share (`murakumo.fleet.spec/converge-plan`): `ok`, `start`, `needs-lease`, `blocked`. The plan is published in
+the node's signed observation (`payload.converge`); `murakumo spec converge F` lists every node's plan.
+
+A resident **acts** only when the signed intent says so for it:
+
+```json
+"converge": {"mode": "enforce", "nodes": ["zebulun"]}
+```
+
+and then only on `start` steps: a class the operator **pinned** to this node, whose template unit is installed but not
+running, by fixed argv (`launchctl enable` + `bootstrap`, or `kickstart`), at most once per unit per 30 min. It never
+stops, evicts or renders a unit. Rendezvous-placed (unpinned) shares are `needs-lease` until P3b settles them with quorum
+leases. macOS only for now; Linux residents publish their plan and do not act.
+
+Without `classes` in the signed intent (today's revision 2026100604) every resident reports mode `none` and does nothing.
