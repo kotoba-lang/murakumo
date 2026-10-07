@@ -68,3 +68,22 @@ stops, evicts or renders a unit. Rendezvous-placed (unpinned) shares are `needs-
 leases. macOS only for now; Linux residents publish their plan and do not act.
 
 Without `classes` in the signed intent (today's revision 2026100604) every resident reports mode `none` and does nothing.
+
+## Quorum leases (P3b)
+
+Shares that placement assigns by rendezvous (not pinned) are settled with quorum leases on the same signed voters as the
+jobs (`policies.job-voters`; the voters serve `/leases/…` with the fleet token). A lease is `{node class slot epoch
+until}`; it lives in a chain of single-decree Paxos registers `l_<sha256(class)>_<slot>_<epoch>` (the jobs acceptor),
+because a single decree is write-once:
+
+- `acquire`: ask the voters for the highest accepted epoch (hint), learn that epoch's value (completing a partial
+  accept), then renew (holder, < 10 min left), take over (other holder, past `until` + 60 s), report the holder, or claim
+  an open epoch. A lost race adopts the other value. Preempted rounds retry with backoff.
+- TTL 15 min; the holder trusts its lease until `until − 60 s`; voters keep the last 3 epochs per slot.
+- Two of three voters down: nothing is acquired or renewed and no node starts an unpinned share (fail closed).
+
+A resident takes leases only when the signed intent enforces convergence for it and it can act (macOS). A held lease
+turns the share's `needs-lease` step into `start`; the plan publishes `converge.leases` (holder, epoch, until).
+
+Still to do: rendering a missing unit from its template, and eviction (stopping a running share that is no longer
+placed) — the two operations that remove capacity — after leases have run on the fleet.

@@ -29,7 +29,7 @@ test('residents sign their own observation and converge the fleet view by gossip
  const payload={schema:1,revision:1,'spec-version':2,models:{mishima:{kind:'text',file:'mishima/model/m.gguf'}},
   classes:{'mishima-text':{template:'llama-server',model:'mishima',replicas:2,eligible:{'max-pressure':4}}},
   nodes:ids.map((node,i)=>({node,url:urls[i],'owner-id':owners[i],enabled:true,roles:[{kind:'text',model:'mishima'}],pins:['mishima-text']})),
-  gateways:[{node:'g0',url:'http://127.0.0.1:'+gw,enabled:true}],policies:{'minimum-replicas':{mishima:1}}};
+  gateways:[{node:'g0',url:'http://127.0.0.1:'+gw,enabled:true}],policies:{'minimum-replicas':{mishima:1},'job-voters':ids.map((node,i)=>({node,url:urls[i]}))}};
  const input=join(dir,'input.json'),signed=join(dir,'signed.json');await writeFile(input,JSON.stringify(payload));
  execFileSync(process.execPath,[cli,'topology','sign','--input',input,'--output',signed,'--private-key-file',keyFile,'--allow-loopback','true'],{stdio:'pipe'});
  const backend=createServer((req,res)=>{if(req.url==='/slots')return res.end('[{"is_processing":false}]');let b='';req.on('data',x=>b+=x);req.on('end',()=>res.end(JSON.stringify({choices:[{message:{content:'5'}}]})));});
@@ -68,6 +68,17 @@ test('residents sign their own observation and converge the fleet view by gossip
  assert.equal(conv.acted,undefined);
  // the rest of the resident still requires the fleet token
  assert.equal((await fetch(urls[0]+'/health')).status,401);
+ // P3b: voters serve quorum leases on /leases (token required)
+ const tok=(await readFile(tokenFile,'utf8')).trim(),H={authorization:'Bearer '+tok,'content-type':'application/json'};
+ const id='l_'+'0'.repeat(24)+'_0_1',b=[Date.now(),'t'],value={node:'n1',class:'mishima-text',slot:0,epoch:1,until:Date.now()+60000,revision:1};
+ assert.equal((await fetch(urls[0]+'/leases/'+id+'/prepare',{method:'POST',body:JSON.stringify({ballot:b})})).status,401);
+ for(const u of urls){
+  const p=await(await fetch(u+'/leases/'+id+'/prepare',{method:'POST',headers:H,body:JSON.stringify({ballot:b})})).json();assert.equal(p.ok,true);
+  const a=await(await fetch(u+'/leases/'+id+'/accept',{method:'POST',headers:H,body:JSON.stringify({ballot:b,value})})).json();assert.equal(a.ok,true);
+ }
+ assert.equal((await(await fetch(urls[1]+'/leases/hint/l_'+'0'.repeat(24)+'_0',{headers:H})).json()).epoch,1);
+ const bad=await(await fetch(urls[0]+'/leases/'+id.replace(/_1$/,'_2')+'/accept',{method:'POST',headers:H,body:JSON.stringify({ballot:[Date.now(),'u'],value:{...value,node:'nobody',epoch:2}})})).json();
+ assert.equal(bad.ok,false,'voters refuse a lease for a node outside the topology');
  // the node key is private and persists across restart
  const key=join(dir,'n0-receipts.json.node-key');
  assert.equal((await import('node:fs')).statSync(key).mode & 0o077,0);

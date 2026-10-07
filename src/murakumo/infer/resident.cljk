@@ -7,6 +7,7 @@
             [murakumo.infer.keepalive :as ka]
             [murakumo.infer.observation :as observation]
             [murakumo.infer.converge :as converge]
+            [murakumo.infer.lease :as lease]
             ["node:fs" :as fs] ["node:http" :as http]
             ["node:crypto" :as crypto] ["node:child_process" :as cp]))
 
@@ -248,8 +249,15 @@
                                            {:extra-fn #(when-let [c @converger] ((:status c)))}))
         ;; P3a (ADR-2610071730): plan this node's share every interval; act only
         ;; when the signed intent says enforce for this node (see converge ns)
+        ;; P3b: quorum leases on the same signed voters as the jobs (policies.job-voters)
+        lease-voters (get-in (topo/payload topology) [:policies :job-voters])
+        lease-acceptor (when (and topology (some #(= (:node config) (:node %)) lease-voters))
+                         (lease/start-acceptor! (or (:lease-directory config)
+                                                    (str (.dirname (js/require "node:path") (:state-file config)) "/leases"))
+                                                topology))
+        lease-client (when (seq lease-voters) (lease/http-client lease-voters token))
         _ (when (and observations topology (not (false? (:converge? config))))
-            (reset! converger (converge/start! config topology observations)))
+            (reset! converger (converge/start! config topology observations lease-client)))
         save! #(persist! file @state)
         _ (when-not (.existsSync fs file) (save!))
         _ (when-not bound?
@@ -405,6 +413,17 @@
                                                 (js/Promise.reject (js/Error. "invalid job method"))))
                                             (.then #(json! res (if (and (= "POST" (.-method req)) (nil? op)) 202 200) %))
                                             (.catch (fn [_] (json! res 503 {:error "job_not_admitted" :retry "same-id-only"}))))))
+                                    (and lease-acceptor (= "GET" (.-method req)) (str/starts-with? (.-url req) "/leases/hint/"))
+                                    (json! res 200 {:epoch ((:hint lease-acceptor) (subs (.-url req) 13))})
+                                    (and lease-acceptor (= "POST" (.-method req)) (str/starts-with? (.-url req) "/leases/"))
+                                    (let [[id op extra] (str/split (subs (.-url req) 8) #"/")]
+                                      (if (or extra (nil? op))
+                                        (json! res 400 {:error "invalid_lease_path"})
+                                        (-> (read-body! req 65536)
+                                            (.then (fn [bytes]
+                                                     (json! res 200 ((:handle! lease-acceptor) id
+                                                                     (assoc (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true) :op op)))))
+                                            (.catch (fn [_] (json! res 400 {:error "invalid_lease_request"}))))))
                                     (and topology (= "GET" (.-method req)) (= "/topology" (.-url req)))
                                     (json! res 200 (topo/document topology))
                                     (and topology (= "POST" (.-method req)) (= "/topology" (.-url req)))

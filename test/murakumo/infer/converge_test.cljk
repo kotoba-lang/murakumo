@@ -34,6 +34,15 @@
   (testing "a node not placed has an empty plan (and nothing is ever stopped)"
     (is (= [] (spec/converge-plan intent {"a" (obs {}) "b" (obs {}) "c" (obs {"com.murakumo.mishima" "running"} :running #{"mishima-text"})} "c" now)))))
 
+(deftest leased-shares-start-like-pins
+  (let [i (assoc-in intent ["nodes" 1] (node "b"))
+        l2 {"a" (obs {}) "b" (obs {"com.murakumo.mishima" "loaded"}) "c" (obs {"com.murakumo.mishima" "loaded"})}
+        placed (get-in (spec/placement i l2 now) ["mishima-text" :nodes])
+        other (first (remove #{"a"} placed))]
+    (is (= {"mishima-text" 0} (spec/lease-slots i l2 other now)) "the unpinned share is slot 0")
+    (is (= {} (spec/lease-slots i l2 "a" now)) "a pinned node needs no lease")
+    (is (= [:start] (map :step (spec/converge-plan i l2 other now {:leased #{"mishima-text"}}))) "holding the lease -> start")))
+
 (deftest acts-only-when-enforced-on-darwin-with-cooldown
   (let [plan [{:class "mishima-text" :unit "com.murakumo.mishima" :step :start}]
         o {:units {"com.murakumo.mishima" "loaded"}}]

@@ -256,12 +256,14 @@
     :needs-lease placed by rendezvous (not pinned) and not running -> P3b
     :blocked     cannot converge here (no template unit on this OS, unit not
                  installed, model file missing)
-  Never a stop: P3a only ever starts what the operator pinned."
-  [intent l2 node now]
+  Never a stop: only ever starts what the operator pinned, or (P3b) what this
+  node holds a quorum lease for (`leased`)."
+  [intent l2 node now & [{:keys [leased]}]]
   (let [plan (placement intent l2 now)
         obs (get l2 node)
         node-entry (first (filter #(= node (get % "node")) (get intent "nodes")))
-        pinned (set (get node-entry "pins"))]
+        ;; a class this node holds a quorum lease for counts like a pin (P3b)
+        pinned (into (set (get node-entry "pins")) leased)]
     (vec
      (for [[c {:keys [nodes]}] plan
            :when (some #{node} nodes)
@@ -278,3 +280,16 @@
          (= "absent" state) {:class c :unit unit :step :blocked :reason "unit not installed (P3b renders it from the template)"}
          (and model-file (not (:present model-file))) {:class c :unit unit :step :blocked :reason (str "model file for " model " missing")}
          :else {:class c :unit unit :step :start :reason (str "pinned here; unit " state)})))))
+
+(defn lease-slots
+  "class -> slot for the shares placed on node by rendezvous (not pinned):
+  the node's position among the class's unpinned placed nodes."
+  [intent l2 node now]
+  (let [pins (fn [n] (set (get (first (filter #(= n (get % "node")) (get intent "nodes"))) "pins")))]
+    (into {}
+          (for [[c {:keys [nodes]}] (placement intent l2 now)
+                :when (not= "all" (get-in intent ["classes" c "replicas"]))
+                :let [unpinned (vec (remove #(contains? (pins %) c) nodes))
+                      i (.indexOf (clj->js unpinned) node)]
+                :when (>= i 0)]
+            [c i]))))

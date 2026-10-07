@@ -19,6 +19,7 @@
   (:require [clojure.string :as str]
             [murakumo.fleet.spec :as spec]
             [murakumo.infer.replicated-topology :as topo]
+            [murakumo.infer.lease :as lease]
             ["node:child_process" :as cp]
             ["node:fs" :as fs]))
 
@@ -62,10 +63,22 @@
                :when (and argv (< (get last-act (:unit s) 0) (- now cooldown-ms)))]
            (assoc s :argv argv)))))
 
+(defn- acquire-leases!
+  "P3b: hold (or renew) a quorum lease for every share placed on this node by
+  rendezvous. Promise of class -> {:held? :lease} (or {:error msg})."
+  [client node revision slots]
+  (-> (js/Promise.all
+       (clj->js (for [[c slot] slots]
+                  (-> (lease/acquire! (assoc client :me node :revision revision) c slot)
+                      (.then (fn [r] [c r]))
+                      (.catch (fn [e] [c {:held? false :error (.-message e)}]))))))
+      (.then (fn [rs] (into {} (array-seq rs))))))
+
 (defn start!
   "Begin converging. observations: the resident's observation service.
+  lease-client: {:call! :hint! :n-voters} or nil (no voters in the intent).
   Returns {:status :tick! :close}."
-  [config topology observations]
+  [config topology observations & [lease-client]]
   (let [node (:node config)
         darwin? (= "darwin" (.-platform js/process))
         cooldown (:converge-cooldown-ms config spec/default-cooldown-ms)
@@ -78,9 +91,25 @@
                     (reset! state {:mode "none" :reason "the signed intent has no classes (spec-version 2 not yet signed)" :at now})
                     (let [l2 (l2-of intent ((:all observations)))
                           mode (spec/converge-mode intent node)
-                          plan (spec/converge-plan intent l2 node now)
-                          todo (decide mode plan (get l2 node) @last-act now cooldown darwin?)]
-                      (swap! state assoc :mode mode :plan plan :at now :revision (get intent "revision"))
+                          ;; leases are taken only by a node that would act on them:
+                          ;; holding a share it cannot start would starve the class
+                          slots (when (and lease-client darwin? (= "enforce" mode))
+                                  (spec/lease-slots intent l2 node now))]
+                      (-> (if (seq slots)
+                            (acquire-leases! lease-client node (get intent "revision") slots)
+                            (js/Promise.resolve {}))
+                          (.then
+                           (fn [leases]
+                             (let [leased (set (for [[c r] leases :when (lease/held-now? (:lease r) node (js/Date.now))] c))
+                                   plan (spec/converge-plan intent l2 node now {:leased leased})
+                                   todo (decide mode plan (get l2 node) @last-act now cooldown darwin?)]
+                               (swap! state assoc :mode mode :plan plan :at now :revision (get intent "revision")
+                                      :leases (into {} (for [[c r] leases]
+                                                         [c (cond-> {:held (boolean (:held? r))}
+                                                              (:lease r) (assoc :holder (get-in r [:lease :node])
+                                                                                :epoch (get-in r [:lease :epoch])
+                                                                                :until (get-in r [:lease :until]))
+                                                              (:error r) (assoc :error (:error r)))])))
                       (-> (js/Promise.all
                            (clj->js (for [s todo]
                                       (do (swap! last-act assoc (:unit s) now)
@@ -90,7 +119,7 @@
                                                                :ok (every? :ok rs)
                                                                :stderr (str/join " | " (keep #(not-empty (:stderr %)) rs))})))))))
                           (.then (fn [rs] (when (pos? (.-length rs))
-                                            (swap! state update :acted #(vec (take-last 20 (into % (array-seq rs))))))))
+                                            (swap! state update :acted #(vec (take-last 20 (into % (array-seq rs))))))))))))
                           (.catch (fn [_] nil)))))))
         first-run (js/setTimeout tick! (:converge-first-delay-ms config 60000))
         timer (js/setInterval tick! (:converge-interval-ms config 300000))]
@@ -99,6 +128,7 @@
                         (:reason s) (assoc :reason (:reason s))
                         (:revision s) (assoc :revision (:revision s))
                         (seq (:plan s)) (assoc :plan (mapv #(select-keys % [:class :unit :step :reason]) (:plan s)))
+                        (seq (:leases s)) (assoc :leases (:leases s))
                         (seq (:acted s)) (assoc :acted (:acted s)))))
      :tick! tick!
      :close (fn [] (js/clearTimeout first-run) (js/clearInterval timer))}))
