@@ -32,7 +32,8 @@
           (throw (ex-info "murakumo-ci: broker RPC failed"
                           {:reason :broker-rpc-failed :error error})))
         (when (= :ci/error (:murakumo.ci/type response))
-          (throw (ex-info "murakumo-ci: broker rejected request"
+          (throw (ex-info (str "murakumo-ci: broker rejected request: "
+                               (pr-str (select-keys (:murakumo.ci/body response) [:reason :missing])))
                           (:murakumo.ci/body response))))
         response))))
 

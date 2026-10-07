@@ -90,8 +90,9 @@
               (when artifact-exists?
                 (let [artifact-cids (map #(or (:cid %) (:digest %))
                                          (:verdict/artifacts verdict))
+                      ;; The receipt commit is stored as quads inside the snapshot, not as
+                      ;; an object of its own, so the snapshot stands for it here.
                       required (concat [(:verdict-cid attestation)
-                                        (:receipt-commit-cid attestation)
                                         (:receipt-snapshot-cid attestation)]
                                        artifact-cids)]
                   (when-not (and (every? string? required)

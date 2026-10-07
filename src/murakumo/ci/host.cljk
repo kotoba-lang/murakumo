@@ -98,8 +98,9 @@
               (clj->js (cond-> {:timeout timeout-ms :killSignal "SIGKILL"
                                 :encoding "utf8" :maxBuffer (* 64 1024 1024)}
                          dir (assoc :cwd (str dir))
-                         (seq env) (assoc :env (merge (js->clj js/process.env)
-                                                      (into {} (map (fn [[k v]] [(str k) (str v)])) env))))))
+                         (seq env) (assoc :env (let [e (js/Object.assign #js {} js/process.env)]
+                                                 (doseq [[k v] env] (aset e (str k) (str v)))
+                                                 e)))))
            timed-out? (= "ETIMEDOUT" (some-> (.-error r) .-code))]
        (when (and (.-error r) (not timed-out?))
          (throw (.-error r)))
@@ -123,7 +124,8 @@
           (catch Exception e
             (assoc result :exit 125 :artifact-error (ex-data e)
                    :verified-artifacts [])))
-        (assoc result :verified-artifacts [])))
+        (do #?(:cljs (js/console.error "murakumo-ci step failed:" (:exit result) (:stderr result)))
+            (assoc result :verified-artifacts []))))
     (catch Exception e
       {:exit 125 :timed-out? false :artifact-error (ex-data e)
        :verified-artifacts []})))

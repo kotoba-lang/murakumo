@@ -148,3 +148,36 @@
       (is (= :running
              (get-in @(:state coordinator)
                      [:murakumo.ci/runs "run-1" :ci.run/state]))))))
+
+(deftest receipt-commit-is-vouched-for-by-its-snapshot-not-stored-on-its-own
+  (let [seed (byte-array (repeat 32 (byte 5)))
+        runner-id (ed/did-key-from-seed seed)
+        stored (atom #{})
+        coordinator (service/create
+                     {:store (store/memory-store) :clock-ms (constantly 10)
+                      :lease-ttl-ms 100 :rid "rid-ci"
+                      :authorized-runners #{runner-id} :require-attestation? true
+                      :artifact-exists? #(contains? @stored %)})
+        _ ((:submit! coordinator) run)
+        offer ((:handler coordinator)
+               (protocol/lease-request {:runner/id runner-id
+                                        :runner/capabilities #{:linux}}))
+        lease (get-in offer [:murakumo.ci/body :lease])
+        logical-id (get-in offer [:murakumo.ci/body :run :ci.run/logical-id])
+        verdict {:verdict/version 1 :verdict/run-id logical-id
+                 :verdict/status :passed :verdict/artifacts []}
+        cid (attest/verdict-cid verdict)
+        sr (sigref/sign seed "rid-ci" (attest/result-ref logical-id) cid 10)
+        complete #((:handler coordinator)
+                   (protocol/attested-completion
+                    lease :passed "receipt"
+                    {:verdict-cid cid :verdict verdict
+                     ;; a commit lives as quads inside the snapshot, never as its own object
+                     :receipt-commit-cid "bafycommit"
+                     :receipt-snapshot-cid "bafysnapshot" :sigref sr}))]
+    ((:handler coordinator) (protocol/message :ci/run-started {:lease lease}))
+    (reset! stored #{cid})
+    (is (= ["bafysnapshot"]
+           (get-in (complete) [:murakumo.ci/body :missing])))
+    (reset! stored #{cid "bafysnapshot"})
+    (is (= :ci/ack (:murakumo.ci/type (complete))))))
