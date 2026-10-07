@@ -312,6 +312,34 @@ Linux `O_DIRECT` nor `F_NOCACHE` is active in the pinned native runtime. Fleet
 records therefore expose `:page-cache-bypassed? false` even if the upstream
 telemetry prints the requested `o_direct=1` flag.
 
+## System One Coding (kotoba-harness)
+
+murakumo can assemble typed kotoba functions with
+[kotoba-lang/kotoba-harness](https://github.com/kotoba-lang/kotoba-harness):
+TypeSafe Jev chooses typed blocks one hole at a time (never source text), the
+harness emits kotoba typed-subset source, and kotoba verifies each function
+(`kotoba -M check`, then the module plus fixed exhaustive checks compiled to
+wasm32-browser and run through `instantiateKotoba`). The search backtracks
+outward when the policy reports that no candidate fits.
+
+`system-one/gateway.edn` encodes the gateway's `max_tokens` clamp (`poll_worker.cljk`, `(min 2048 …)`) and lane admission (`resident.cljk`, `context >= input + max_tokens`) as `clamp-max-tokens`, `lane-fits` and `fits-after-clamp` (18 212 exhaustive cases; checks use
+independently written oracles). The harness commit is pinned in
+`kotoba-harness.pin.edn` and fetched into
+`${XDG_CACHE_HOME:-~/.cache}/kotoba-harness/<sha>`, outside this repository
+(override with `KOTOBA_HARNESS_HOME`).
+
+```sh
+sh scripts/system-one.sh validate   # offline: shape, catalog, baseline splice
+sh scripts/system-one.sh known      # kotoba verification of known-correct bodies
+sh scripts/system-one.sh wrong      # negative control (rejected)
+OPENROUTER_API_KEY=... sh scripts/system-one.sh jev
+```
+
+`known`/`wrong`/`jev` need a kotoba CLI that provides `-M check` and
+`-M compile --target wasm32-browser`, and `KOTOBA_BROWSER_HOST` pointing at
+amu's `runtime/browser-host.mjs`. `jev` spends OpenRouter credit (about a tenth
+of a cent per run). Receipts land in `target/system-one/`.
+
 ## Public API boundary
 
 Clients and applications use `https://api.murakumo.cloud` exclusively.
