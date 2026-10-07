@@ -137,3 +137,25 @@ murakumo rollout push --to http://<resident>:8796 --token-file T release/node.mj
 murakumo apply -f INTENT --private-key-file K --token-file T
 murakumo rollout status                                                               # per-node state, wave, reason
 ```
+
+## Operator quorum on the intent (P5b)
+
+A resident configured with several operator keys and a threshold accepts a topology only when at least `k` DISTINCT
+configured keys signed its payload; no single operator key can change the fleet's intent alone:
+
+```json
+"topology-public-keys": {"jun": "/var/lib/murakumo-resident/op-jun.pub", "ops2": "…", "ops3": "…"},
+"topology-threshold": 2
+```
+
+Without these keys the historical single `topology-public-key-file` applies unchanged. A quorum document carries
+`"signatures": [{"key": "<id>", "signature": "…"}]` (a legacy `signature` counts for the key it verifies against):
+
+```
+murakumo topology sign   --input INTENT --output DOC --private-key-file K1 --key-id jun
+murakumo topology cosign --document DOC --private-key-file K2 --key-id ops2      # on the second operator's machine
+murakumo apply -f INTENT --signed DOC --token-file T
+```
+
+Moving the live fleet to a quorum is an operator change to each resident's config (distribute the public keys, set the
+threshold) and must keep the current key among them so the running revision stays valid.

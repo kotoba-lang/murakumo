@@ -71,14 +71,51 @@
     (throw (js/Error. "topology document too large")))
   document)
 
-(defn verify! [document public-key allow-loopback?]
+(defn- sig-ok? [payload public-key sig]
+  (and (string? sig)
+       (try (.verify crypto nil (js/Buffer.from (encoded payload)) public-key (js/Buffer.from sig "base64url"))
+            (catch :default _ false))))
+
+(defn quorum-signers
+  "Distinct key ids whose signature over payload verifies (ADR-2610071730
+  P5b). keys: {id pem}. A legacy single :signature counts for whichever
+  configured key it verifies against."
+  [document payload keys]
+  (set (concat
+        (for [{:keys [key signature]} (:signatures document)
+              :let [pem (get keys (key-name key))]
+              :when (and pem (sig-ok? payload pem signature))]
+          (key-name key))
+        (for [[id pem] keys :when (sig-ok? payload pem (:signature document))] id))))
+
+(defn verify!
+  "trust is either one public key (PEM, the historical single operator key)
+  or {:keys {id pem} :threshold k}: then at least k DISTINCT configured keys
+  must have signed the payload — no single operator key can change the fleet's
+  intent alone."
+  [document trust allow-loopback?]
   (bounded! document)
   (let [payload (validate! (:payload document) allow-loopback?)]
-    (when-not (and (string? (:signature document))
-                   (.verify crypto nil (js/Buffer.from (encoded payload)) public-key
-                            (js/Buffer.from (:signature document) "base64url")))
-      (throw (js/Error. "invalid topology signature")))
+    (if (map? trust)
+      (let [signers (quorum-signers document payload (:keys trust))]
+        (when (< (count signers) (:threshold trust))
+          (throw (js/Error. (str "topology needs " (:threshold trust) " operator signatures, has " (count signers))))))
+      (when-not (sig-ok? payload trust (:signature document))
+        (throw (js/Error. "invalid topology signature"))))
     document))
+
+(defn trust-of
+  "The configured signature trust: a key quorum when topology-public-keys and
+  topology-threshold are set (threshold must be at least 1 and at most the
+  number of keys), else the single topology-public-key-file."
+  [config]
+  (if-let [ks (:topology-public-keys config)]
+    (let [keys (into {} (for [[id f] ks] [(key-name id) (.readFileSync fs f "utf8")]))
+          k (:topology-threshold config)]
+      (when-not (and (js/Number.isSafeInteger k) (<= 1 k (count keys)))
+        (throw (js/Error. "topology-threshold must be between 1 and the number of topology-public-keys")))
+      {:keys keys :threshold k})
+    (.readFileSync fs (:topology-public-key-file config) "utf8")))
 
 (defn sync-parent! [file]
   (let [fd (.openSync fs (.dirname path file) "r")]
@@ -92,7 +129,7 @@
 
 (defn start! [config token]
   (when-let [file (:topology-file config)]
-    (let [public-key (.readFileSync fs (:topology-public-key-file config) "utf8")
+    (let [public-key (trust-of config)
           allow? (:allow-loopback-topology? config false)
           state (atom (verify! (js->clj (js/JSON.parse (.readFileSync fs file "utf8")) :keywordize-keys true) public-key allow?))
           polling (atom false) conflict-file (str file ".conflict")
@@ -207,8 +244,27 @@
                              (when-not (= (:owner-id node) (:owner-id (get incoming (:node node))))
                                (throw (js/Error. "receipt owner bindings must be retained")))))))
                    key (.readFileSync fs key-file "utf8")
-                   document {:payload payload :signature (.toString (.sign crypto nil (js/Buffer.from (encoded payload)) key) "base64url")}]
+                   sig (.toString (.sign crypto nil (js/Buffer.from (encoded payload)) key) "base64url")
+                   key-id (get opts "--key-id")
+                   document (if key-id
+                              ;; P5b: a quorum document collects one signature per operator key
+                              {:payload payload :signatures [{:key key-id :signature sig}]}
+                              {:payload payload :signature sig})]
                (bounded! document)
                (persist! (get opts "--output") document)
                (println (js/JSON.stringify (clj->js {:revision (:revision payload) :digest (digest payload)}))))
-      (println "murakumo topology sign --input FILE --private-key-file FILE --output FILE"))))
+      "cosign" (let [key-file (get opts "--private-key-file")
+                     stat (.lstatSync fs key-file)
+                     _ (when-not (and (.isFile stat) (not (.isSymbolicLink stat)) (zero? (bit-and (.-mode stat) 63)))
+                         (throw (js/Error. "private signing key must be 0600")))
+                     key-id (or (get opts "--key-id") (throw (js/Error. "cosign needs --key-id")))
+                     doc (js->clj (js/JSON.parse (.readFileSync fs (get opts "--document") "utf8")) :keywordize-keys true)
+                     payload (validate! (:payload doc) (= "true" (get opts "--allow-loopback")))
+                     sig (.toString (.sign crypto nil (js/Buffer.from (encoded payload)) (.readFileSync fs key-file "utf8")) "base64url")
+                     doc (assoc doc :signatures (conj (vec (remove #(= key-id (key-name (:key %))) (:signatures doc)))
+                                                      {:key key-id :signature sig}))]
+                 (bounded! doc)
+                 (persist! (get opts "--document") doc)
+                 (println (js/JSON.stringify (clj->js {:revision (:revision payload) :digest (digest payload)
+                                                       :signers (mapv :key (:signatures doc))}))))
+      (println "murakumo topology sign --input FILE --private-key-file FILE --output FILE [--key-id ID]\n  murakumo topology cosign --document FILE --private-key-file FILE --key-id ID"))))
