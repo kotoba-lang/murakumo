@@ -22,7 +22,7 @@
          (map? (:ci.runner/source-remotes config))
          (every? string? (vals (:ci.runner/source-remotes config)))
          (= "murakumo.overlay.adapter-request" (:type broker))
-         (= :quic (:transport broker))
+         (contains? #{:quic :tcp} (:transport broker))
          (pos-int? (get-in broker [:connect :port])))))
 
 (defn load-config [path]

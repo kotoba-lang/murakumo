@@ -27,7 +27,7 @@
          (not (contains? kotoba :token))
          (= "murakumo.overlay.adapter-request" (:type overlay))
          (= 1 (:version overlay))
-         (= :quic (:transport overlay))
+         (contains? #{:quic :tcp} (:transport overlay))
          (string? (get-in overlay [:connect :host]))
          (pos-int? (get-in overlay [:connect :port])))))
 
@@ -72,7 +72,7 @@
 
 (defn serve! [config]
   (let [{:keys [overlay-request handler]} (build config)]
-    ((requiring-resolve 'murakumo.overlay.quic-driver/serve-rpc!)
+    ((requiring-resolve 'murakumo.overlay.rpc/serve-rpc!)
      overlay-request handler)))
 
 (defn -main [& [config-path]]

@@ -21,9 +21,9 @@
   [{:keys [broker-request timeout-ms request-fn]
     :or {timeout-ms 10000}}]
   ;; Resolved on the first RPC, not here: building a runner (config, identity)
-  ;; must not require the QUIC transport, which only the JVM host provides.
+  ;; must not require a transport (QUIC exists only on the JVM; TCP only where Node is).
   (let [request-fn (delay (or request-fn
-                              (requiring-resolve 'murakumo.overlay.quic-driver/request!)))]
+                              (requiring-resolve 'murakumo.overlay.rpc/request!)))]
     (fn [message]
       (let [{:keys [ok? response error]}
             (@request-fn broker-request message timeout-ms)]

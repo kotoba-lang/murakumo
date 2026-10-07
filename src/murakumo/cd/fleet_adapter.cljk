@@ -24,14 +24,14 @@
                                     {:ok? true})
                            overlay-request {:type "murakumo.overlay.adapter-request"
                                             :version 1
-                                            :transport :quic
+                                            :transport (or (:transport target) :quic)
                                             :session session
                                             :connect target}
                            payload (protocol/request action node issued-capability
                                                      operation-artifact environment verdict revision)
                            transport (when (:ok? staged)
                                        ((or request-fn
-                                            (requiring-resolve 'murakumo.overlay.quic-driver/request!))
+                                            (requiring-resolve 'murakumo.overlay.rpc/request!))
                                         overlay-request payload timeout-ms))]
                        (if-not (:ok? staged)
                          (assoc staged :reason :artifact-staging-failed

@@ -1,0 +1,73 @@
+;; murakumo.overlay.rpc — the overlay RPC, independent of its transport.
+
+(ns murakumo.overlay.rpc
+  "One request/response RPC between fleet nodes: a request envelope is one EDN line,
+  the response is one EDN line. The CI and CD code (`murakumo.ci.worker`,
+  `murakumo.ci.broker-service`, `murakumo.cd.*`, `murakumo.artifact-replication`) calls
+  `request!` and `serve-rpc!` here and never names a transport; the transport is
+  `(:transport request)`.
+
+    :quic   `murakumo.overlay.quic-driver`  JVM (kwik)
+    :tcp    `murakumo.overlay.tcp-driver`   Node (kbb/nbb), line-delimited EDN over TCP
+
+  A driver is resolved on first use, not when this namespace loads, so a host loads only
+  the transport it has. `request!` is synchronous (it returns the result map), which is
+  what the callers were written against; `serve-rpc!` serves until the process ends."
+  (:require [kotoba.lang.edn :as edn]))
+
+(def transports
+  "transport kind -> the namespace that implements it."
+  {:quic 'murakumo.overlay.quic-driver
+   :tcp 'murakumo.overlay.tcp-driver})
+
+(defn transport-of
+  "The transport an overlay request names; a request that names none is QUIC, as before."
+  [request]
+  (or (:transport request) :quic))
+
+(defn driver-fn
+  "The driver function `f` (a symbol name such as `request!`) for `request`'s transport.
+  Throws ex-info {:reason :unknown-transport} for a transport this host does not know."
+  [request f]
+  (let [kind (transport-of request)
+        ns-sym (get transports kind)]
+    (when-not ns-sym
+      (throw (ex-info "murakumo overlay: unknown RPC transport"
+                      {:reason :unknown-transport :transport kind})))
+    (requiring-resolve (symbol (str ns-sym) (str f)))))
+
+(defn request-envelope
+  "The request envelope every transport carries: the session and target framing, and
+  an arbitrary `payload`."
+  [request payload]
+  {:type "murakumo.overlay.rpc-request"
+   :transport (transport-of request)
+   :overlay (get-in request [:session :overlay])
+   :node (get-in request [:session :node])
+   :name (get-in request [:session :name])
+   :target (get-in request [:connect :path])
+   :payload payload})
+
+(defn handle-request-envelope
+  "The pure core of the responder: `req-line` (already read off the wire) and `handler`
+  (fn [payload] -> response). A handler that throws answers {:error message}.
+  -> {:request envelope :response response :response-line string}."
+  [req-line handler]
+  (let [envelope (try (when req-line (edn/read-string req-line))
+                      (catch Exception e {:parse-error (ex-message e)}))
+        response (if (:parse-error envelope)
+                   {:error "unreadable request"}
+                   (try (handler (:payload envelope))
+                        (catch Exception e {:error (ex-message e)})))]
+    {:request envelope :response response :response-line (pr-str response)}))
+
+(defn request!
+  "One synchronous round trip. -> {:ok? bool :request envelope :response edn} or
+  {:ok? false :reason kw :message string}."
+  [request payload timeout-ms]
+  ((driver-fn request 'request!) request payload timeout-ms))
+
+(defn serve-rpc!
+  "Serve `handler` (fn [payload] -> response) on the endpoint `request` describes."
+  [request handler]
+  ((driver-fn request 'serve-rpc!) request handler))

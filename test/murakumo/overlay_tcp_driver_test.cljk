@@ -1,0 +1,109 @@
+(ns murakumo.overlay-tcp-driver-test
+  "The Node-hosted overlay RPC (`murakumo.overlay.tcp-driver`) over real sockets. The client is
+  synchronous, so the server runs in a child process (test/murakumo/fixtures/tcp_rpc_server.cljk).
+
+  Node only (node:child_process, node:net)."
+  (:require ["node:child_process" :as cp]
+            ["node:net" :as net]
+            [kotoba.lang.edn :as edn]
+            [kotoba.test :refer [deftest is async]]
+            [murakumo.overlay.rpc :as rpc]
+            [murakumo.overlay.tcp-driver :as tcp]))
+
+(def ^:private servers (atom []))
+
+(defn- script-args
+  "The command that runs `script` under the same nbb/kbb this test runs under."
+  [script mode]
+  (let [argv (vec (array-seq js/process.argv))
+        cp-at (.indexOf argv "--classpath")]
+    (into [(nth argv 1)] (concat (when (>= cp-at 0) ["--classpath" (nth argv (inc cp-at))]) [script mode]))))
+
+(defn- start-server!
+  "-> Promise<port>."
+  [mode]
+  (js/Promise.
+   (fn [resolve reject]
+     (let [child (.spawn cp js/process.execPath (clj->js (script-args "test/murakumo/fixtures/tcp_rpc_server.cljk" mode)))
+           seen (atom "")]
+       (swap! servers conj child)
+       (.on (.-stdout child) "data"
+            (fn [chunk]
+              (swap! seen str chunk)
+              (when-let [line (first (filter #(.includes % ":listening") (.split @seen "\n")))]
+                (resolve (get-in (edn/read-string line) [:listen :port])))))
+       (.on child "error" reject)
+       (.on child "exit" (fn [code] (when (and code (not= 0 code)) (reject (js/Error. (str "server exited " code ": " @seen))))))))))
+
+(defn- stop-all! []
+  (doseq [c @servers] (.kill c))
+  (reset! servers []))
+
+(defn- over [port] {:type "murakumo.overlay.adapter-request" :version 1 :transport :tcp
+                    :session {:overlay "test" :node "n1"} :connect {:host "127.0.0.1" :port port}})
+
+(defn- raw!
+  "Send raw bytes, read what comes back until the server closes. -> Promise<string>."
+  [port bytes]
+  (js/Promise.
+   (fn [resolve _]
+     (let [buf (atom "") s (.connect net #js {:host "127.0.0.1" :port port})]
+       (.on s "connect" (fn [] (.write s bytes)))
+       (.on s "data" (fn [c] (swap! buf str c)))
+       (.on s "error" (fn [_] (resolve @buf)))
+       (.on s "close" (fn [] (resolve @buf)))))))
+
+(deftest the-bind-policy-is-loopback-and-the-tailnet-only
+  (doseq [h ["127.0.0.1" "::1" "localhost" "100.64.0.1" "100.127.255.254" "100.82.98.110"]] (is (tcp/bind-ok? h) h))
+  (doseq [h ["0.0.0.0" "::" "" nil "10.0.0.5" "100.63.255.255" "100.128.0.1" "100.64.256.1" "100.064.0.1" "example.com"]]
+    (is (not (tcp/bind-ok? h)) (str h))))
+
+(deftest a-request-to-an-endpoint-that-is-not-loopback-or-tailnet-is-refused-before-any-connection
+  (let [r (tcp/request! (assoc-in (over 1) [:connect :host] "93.184.216.34") {:a 1} 500)]
+    (is (false? (:ok? r)))
+    (is (= :invalid-request (:reason r)))))
+
+(deftest a-round-trip-carries-edn-both-ways-and-a-throwing-handler-answers-an-error
+  (async done
+    (-> (start-server! "echo")
+        (.then (fn [port]
+                 (let [payload {:murakumo.ci/type :ci/heartbeat :nested [1 {:k "v\nwith newline"} #{:a}]}
+                       ok (tcp/request! (over port) payload 5000)
+                       boom (tcp/request! (over port) :boom 5000)
+                       refused (tcp/request! (over 1) {:a 1} 1500)]
+                   (is (true? (:ok? ok)))
+                   (is (= {:echo payload} (:response ok)))
+                   (is (= "murakumo.overlay.rpc-request" (get-in ok [:request :type])))
+                   (is (= :tcp (get-in ok [:request :transport])))
+                   (is (true? (:ok? boom)))
+                   (is (= {:error "handler failed"} (:response boom)) "a handler that throws is an answer, not a hang")
+                   (is (false? (:ok? refused)))
+                   (is (= :stream-error (:reason refused)) "nothing listening on that port")
+                   port)))
+        (.then (fn [port]
+                 (-> (js/Promise.all #js [(raw! port "this is not edn (\n") (raw! port (str (apply str (repeat (+ tcp/max-line-bytes 10) "x")) "\n"))])
+                     (.then (fn [rs]
+                              (is (= {:error "unreadable request"} (edn/read-string (aget rs 0))))
+                              (is (= {:error "request too large"} (edn/read-string (aget rs 1)))))))))
+        (.catch (fn [e] (is false (str "unexpected: " (.-message e)))))
+        (.then (fn [_] (stop-all!) (done))))))
+
+(deftest a-peer-that-never-answers-is-a-timeout-not-a-hang
+  (async done
+    (-> (start-server! "silent")
+        (.then (fn [port]
+                 (let [t0 (js/Date.now) r (tcp/request! (over port) {:a 1} 600)]
+                   (is (false? (:ok? r)))
+                   (is (= :timeout (:reason r)))
+                   (is (< (- (js/Date.now) t0) 4000)))))
+        (.catch (fn [e] (is false (str "unexpected: " (.-message e)))))
+        (.then (fn [_] (stop-all!) (done))))))
+
+(deftest the-router-names-the-transport-and-refuses-an-unknown-one
+  (is (= :quic (rpc/transport-of {})))
+  (is (= :tcp (rpc/transport-of {:transport :tcp})))
+  (is (thrown? js/Error (rpc/driver-fn {:transport :carrier-pigeon} 'request!)))
+  (is (= "murakumo.overlay.rpc-request" (:type (rpc/request-envelope {:session {:overlay "o"}} :x))))
+  (let [r (rpc/handle-request-envelope (pr-str {:payload 5}) inc)]
+    (is (= 6 (:response r)))
+    (is (= "6" (:response-line r)))))

@@ -62,7 +62,7 @@
                         (not (str/blank? (:issuer-seed-env policy)))))
                  deployments)
          (= "murakumo.overlay.adapter-request" (:type overlay))
-         (= :quic (:transport overlay))
+         (contains? #{:quic :tcp} (:transport overlay))
          (pos-int? (get-in overlay [:connect :port])))))
 
 (defn load-config [path]

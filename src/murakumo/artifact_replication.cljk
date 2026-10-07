@@ -20,13 +20,13 @@
            timeout-ms chunk-bytes]
     :or {timeout-ms default-timeout-ms chunk-bytes default-chunk-bytes}}]
   (let [request-fn (or request-fn
-                       (requiring-resolve 'murakumo.overlay.quic-driver/request!))
+                       (requiring-resolve 'murakumo.overlay.rpc/request!))
         capability-document (:capability issued-capability)
         environment (:cd.capability/environment capability-document)
         verdict (:cd.capability/verdict-cid capability-document)
         rpc (fn [target node operation fields]
               (let [overlay-request {:type "murakumo.overlay.adapter-request"
-                                     :version 1 :transport :quic
+                                     :version 1 :transport (or (:transport target) :quic)
                                      :session session :connect target}
                     payload (protocol/request
                              operation
