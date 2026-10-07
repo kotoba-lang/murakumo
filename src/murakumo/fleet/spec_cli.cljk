@@ -118,24 +118,33 @@
   own URL (GET /observation), and kept in ~/.local/share/murakumo/
   observation-pins.json; any report signed by another key for a pinned node,
   and any relayed report for a node never seen at its own URL, is refused.
+
+  targets: [url node] pairs from the signed intent (a bare url when the node
+  behind it is unknown, e.g. tailnet discovery). A report counts as a node's
+  own only when it names the node assigned to the URL it came from, so a
+  resident cannot get its key pinned under another node's name; a bare url
+  never pins, its own report is used only when it matches an existing pin.
   Promise of node -> payload (string keys)."
-  [urls]
+  [targets]
   (let [now (js/Date.now)
-        urls (vec (distinct (map #(str/replace (str %) #"/+$" "") urls)))
+        targets (vec (distinct (for [t targets :let [[u n] (if (sequential? t) t [t nil])]]
+                                 [(str/replace (str u) #"/+$" "") n])))
         ok-time? (fn [p] (and (number? (get p "at")) (<= (get p "at") (+ now 120000))))]
     (-> (js/Promise.all
-         (clj->js (for [u urls]
+         (clj->js (for [[u _] targets]
                     (js/Promise.all #js [(fetch-json (str u "/observation") 5000)
                                          (fetch-json (str u "/observations") 5000)]))))
         (.then (fn [rows]
                  (let [pins (read-pins)
-                       own (for [[o _] (array-seq rows) :when o
+                       own (for [[[o _] [_ expect]] (map vector (array-seq rows) targets) :when o
                                  :let [p (verified (js->clj o))]
-                                 :when (and p (ok-time? p))]
-                             p)
+                                 :when (and p (ok-time? p) (or (nil? expect) (= expect (get p "node"))))]
+                             [p expect])
                        ;; first sight at its own URL pins the key; a pinned key is never replaced
-                       pins' (reduce (fn [m p] (if (contains? m (get p "node")) m (assoc m (get p "node") (get p "did"))))
+                       pins' (reduce (fn [m [p expect]]
+                                       (if (or (nil? expect) (contains? m (get p "node"))) m (assoc m (get p "node") (get p "did"))))
                                      pins own)
+                       own (map first own)
                        _ (when (not= pins' pins) (try (write-pins! pins') (catch :default _ nil)))
                        relayed (for [[_ m] (array-seq rows) :when m
                                      [node doc] (js->clj m)
@@ -154,7 +163,7 @@
   "L2 from the residents (P2): resident-docs over the intent's node URLs,
   mapped to spec/l2-entry. Promise of node -> l2-entry."
   [intent]
-  (-> (resident-docs (keep #(get % "url") (get intent "nodes")))
+  (-> (resident-docs (for [n (get intent "nodes") :when (get n "url")] [(get n "url") (get n "node")]))
       (.then (fn [docs] (into (sorted-map) (for [[node p] docs] [node (spec/l2-entry intent p)]))))))
 
 ;; ---------------------------------------------------------------- draft

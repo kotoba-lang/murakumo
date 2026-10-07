@@ -7,7 +7,7 @@
 (def old (apply str (repeat 64 "b")))
 (def now 100000000)
 (def intent {"agents" {"resident" {"sha256" target "waves" [["n0"] ["n1" "n2"]] "settle-ms" 1000}}})
-(defn- doc [& {:as m}] (merge {"release" (subs target 0 16) "lanes" {"t" {"ready" true}} "started-at" (- now 5000)} m))
+(defn- doc [& {:as m}] (merge {"at" (- now 1000) "release" (subs target 0 16) "lanes" {"t" {"ready" true}} "started-at" (- now 5000)} m))
 
 (deftest decisions
   (is (= :none (:state (r/decide {} "n0" old nil {} now))))
@@ -19,6 +19,8 @@
     (is (= :waiting (:state (r/decide intent "n1" old nil {"n0" (doc "release" (subs old 0 16))} now))))
     (is (= :waiting (:state (r/decide intent "n1" old nil {"n0" (doc "lanes" {"t" {"ready" false}})} now))))
     (is (= :waiting (:state (r/decide intent "n1" old nil {"n0" (doc "started-at" (- now 10))} now))) "not settled")
+    (is (= :waiting (:state (r/decide intent "n1" old nil {"n0" (doc "at" (- now r/gate-freshness-ms 1))} now)))
+        "a report older than the gate's freshness does not open the next wave (crashed after reporting)")
     (is (= :upgrade (:state (r/decide intent "n1" old nil {"n0" (doc)} now)))))
   (testing "a different dependency set blocks"
     (is (= :blocked (:state (r/decide (assoc-in intent ["agents" "resident" "package-sha256"] "x") "n0" old "y" {} now))))))

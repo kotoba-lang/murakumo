@@ -107,6 +107,27 @@
             (when-not (#{"observe" "enforce"} (get cv "mode")) [(problem ["converge" "mode"] "must be observe|enforce")])
             (when-not (and (sequential? (get cv "nodes" [])) (every? #(contains? node-names %) (get cv "nodes" [])))
               [(problem ["converge" "nodes"] "must list node names from nodes")])))))
+      (when-let [r (get-in payload ["agents" "resident"])]
+        ;; P5a staged self-update: every field is checked here, because a
+        ;; resident gate reading a malformed one (NaN settle, null sha) would
+        ;; open waves it should hold
+        (let [hex64? #(and (string? %) (re-matches #"[0-9a-f]{64}" %))
+              waves (get r "waves")
+              settle (get r "settle-ms")]
+          (for [p [(when-not (map? r) "must be a map")
+                   (when-not (hex64? (get r "sha256")) "sha256 must be 64 lowercase hex")
+                   (when (and (contains? r "package-sha256") (not (hex64? (get r "package-sha256")))) "package-sha256 must be 64 lowercase hex")
+                   (when-not (and (sequential? waves) (seq waves)
+                                  (every? #(and (sequential? %) (seq %) (every? (fn [n] (contains? node-names n)) %)) waves))
+                     "waves must be non-empty lists of node names from nodes")
+                   (when (and (sequential? waves) (not= (count (mapcat identity waves)) (count (set (mapcat identity waves)))))
+                     "a node appears in two waves")
+                   (when (and (contains? r "settle-ms") (not (and (number? settle) (js/Number.isFinite settle) (pos? settle))))
+                     "settle-ms must be a positive number")
+                   (when (and (contains? r "urls") (not (and (sequential? (get r "urls")) (every? #(str/starts-with? (str %) "https://") (get r "urls")))))
+                     "urls must be https URLs")]
+                :when p]
+            (problem ["agents" "resident"] p))))
       (forbidden-strings (select-keys payload ["models" "classes" "trust" "agents"]) [])))))
 
 ;; ---------------------------------------------------------------- L2

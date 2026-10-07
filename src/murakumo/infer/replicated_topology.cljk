@@ -114,6 +114,13 @@
           k (:topology-threshold config)]
       (when-not (and (js/Number.isSafeInteger k) (<= 1 k (count keys)))
         (throw (js/Error. "topology-threshold must be between 1 and the number of topology-public-keys")))
+      ;; k-of-n means n different operators: the same key under two ids would
+      ;; let one private key count twice
+      (let [fps (for [[_ pem] keys]
+                  (.digest (.update (.createHash crypto "sha256")
+                                    (.export (.createPublicKey crypto pem) #js {:type "spki" :format "der"})) "hex"))]
+        (when-not (= (count fps) (count (set fps)))
+          (throw (js/Error. "topology-public-keys must be distinct keys"))))
       {:keys keys :threshold k})
     (.readFileSync fs (:topology-public-key-file config) "utf8")))
 

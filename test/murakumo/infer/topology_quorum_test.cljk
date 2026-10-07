@@ -2,7 +2,7 @@
   "ADR-2610071730 P5b: k-of-n operator signatures on the signed topology. Offline."
   (:require [cljs.test :refer [deftest is testing run-tests]]
             [murakumo.infer.replicated-topology :as topo]
-            ["node:crypto" :as crypto]))
+            ["node:crypto" :as crypto] ["node:fs" :as fs] ["node:os" :as os] ["node:path" :as path]))
 
 (defn- kp [] (let [k (.generateKeyPairSync crypto "ed25519")]
                {:pub (.export (.-publicKey k) #js {:type "spki" :format "pem"})
@@ -28,6 +28,15 @@
   (testing "the historical single key still works"
     (is (some? (topo/verify! {:payload payload :signature (sig k1)} (:pub k1) false)))
     (is (thrown? js/Error (topo/verify! {:payload payload :signature (sig k2)} (:pub k1) false)))))
+
+(deftest quorum-keys-are-distinct
+  (let [d (.mkdtempSync fs (.join path (.tmpdir os) "quorum-keys-"))
+        f (fn [n k] (let [p (.join path d n)] (.writeFileSync fs p (:pub k)) p))
+        a (f "a.pem" k1) b (f "b.pem" k2) a2 (f "a2.pem" k1)]
+    (is (= 2 (:threshold (topo/trust-of {:topology-public-keys {:a a :b b} :topology-threshold 2}))))
+    (is (thrown? js/Error (topo/trust-of {:topology-public-keys {:a a :b a2} :topology-threshold 2}))
+        "one key under two ids would count twice")
+    (.rmSync fs d #js {:recursive true :force true})))
 
 (defmethod cljs.test/report [:cljs.test/default :end-run-tests] [m]
   (when-not (cljs.test/successful? m) (set! (.-exitCode js/process) 1)))

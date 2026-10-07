@@ -131,6 +131,14 @@ file, marker, exit 0; the supervisor (launchd KeepAlive / systemd Restart=always
 the drain and reports `rollout.updated`. A different `package-sha256` blocks (dependencies are not shipped).
 Rollback = the previous sha256 at a higher revision.
 
+Gate details: an earlier-wave report counts only while younger than 2 min (a resident that crashed after reporting
+healthy does not open the next wave). Draining never replaces under in-flight work: past 10 min the attempt fails, the
+drain is removed and the next tick retries. The resident's release directory must be writable by the resident (the
+systemd unit lists `/opt/murakumo/release` in `ReadWritePaths` and uses `Restart=always`). `apply` and `rollout plan`
+validate `agents.resident` (64-hex sha256, waves of intent nodes, positive `settle-ms`, https `urls`); `rollout status
+-f INTENT` reports success only when every node runs the intent's release at its revision. `rollout push` sends the
+fleet token only to a resident endpoint the topology validator accepts.
+
 ```
 murakumo rollout plan -f INTENT --release release/node.mjs --waves "zebulun;issachar,levi;benjamin,joseph,naphtali"
 murakumo rollout push --to http://<resident>:8796 --token-file T release/node.mjs     # seed one cache; peers spread it
@@ -141,7 +149,8 @@ murakumo rollout status                                                         
 ## Operator quorum on the intent (P5b)
 
 A resident configured with several operator keys and a threshold accepts a topology only when at least `k` DISTINCT
-configured keys signed its payload; no single operator key can change the fleet's intent alone:
+configured keys signed its payload; no single operator key can change the fleet's intent alone (the configured
+keys must be distinct public keys — one key under two ids is refused at start):
 
 ```json
 "topology-public-keys": {"jun": "/var/lib/murakumo-resident/op-jun.pub", "ops2": "…", "ops3": "…"},

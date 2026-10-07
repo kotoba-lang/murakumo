@@ -216,7 +216,12 @@
     (fn [] nil)))
 
 (defn start! [config]
-  (let [token (private-token (:token-file config))
+  (let [;; one drain file for admission, health and the self-update (P5a), even
+        ;; when the config does not name one
+        config (cond-> config
+                 (and (:state-file config) (not (:drain-file config)))
+                 (assoc :drain-file (str (:state-file config) ".draining")))
+        token (private-token (:token-file config))
         file (:state-file config)
         owner-file (:owner-id-file config (str file ".owner-id"))
         existing-owner? (.existsSync fs owner-file)

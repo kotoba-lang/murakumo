@@ -30,6 +30,11 @@
             ["node:fs" :as fs] ["node:path" :as path] ["node:crypto" :as crypto]))
 
 (def default-settle-ms (* 5 60 1000))
+(def gate-freshness-ms
+  ;; a wave gate counts only reports this recent: a resident that crashed after
+  ;; reporting healthy must not open the next wave from its last words
+  (* 2 60 1000))
+(def drain-limit-ms (* 10 60 1000))
 (def max-release-bytes (* 32 1024 1024))
 (def started-at (js/Date.now))
 
@@ -47,6 +52,7 @@
   "Does this observation payload show the target running, ready and settled?"
   [p target now settle-ms]
   (and p
+       (number? (get p "at")) (>= (get p "at") (- now gate-freshness-ms))
        (= (subs target 0 16) (get p "release"))
        (seq (get p "lanes"))
        (every? #(get % "ready") (vals (get p "lanes")))
@@ -76,13 +82,31 @@
 
 ;; ---------------------------------------------------------------- fetch
 
+(defn- read-bounded
+  "The response body, refused as soon as it exceeds max-release-bytes (never
+  buffered past the bound)."
+  [r]
+  (let [len (some-> (.get (.-headers r) "content-length") (js/parseInt 10))]
+    (if (and len (> len max-release-bytes))
+      (do (try (.cancel (.-body r)) (catch :default _ nil))
+          (js/Promise.reject (js/Error. "release too large")))
+      (let [reader (.getReader (.-body r)) chunks #js [] total (atom 0)]
+        (letfn [(step []
+                  (.then (.read reader)
+                         (fn [x]
+                           (if (.-done x)
+                             (js/Buffer.concat chunks)
+                             (do (swap! total + (.-byteLength (.-value x)))
+                                 (if (> @total max-release-bytes)
+                                   (do (.cancel reader) (throw (js/Error. "release too large")))
+                                   (do (.push chunks (js/Buffer.from (.-value x))) (step))))))))]
+          (step))))))
+
 (defn- fetch-bytes [url token]
   (-> (js/fetch url #js {:redirect "error" :signal (.timeout js/AbortSignal 60000)
                          :headers (if token #js {"authorization" (str "Bearer " token)} #js {})})
       (.then (fn [r] (when-not (.-ok r) (throw (js/Error. (str url " -> " (.-status r)))))
-               (.arrayBuffer r)))
-      (.then (fn [ab] (when (> (.-byteLength ab) max-release-bytes) (throw (js/Error. "release too large")))
-               (js/Buffer.from ab)))))
+               (read-bounded r)))))
 
 (defn fetch-release!
   "Peers first (those reporting the target), then the intent's urls. Resolves
@@ -93,10 +117,12 @@
     (letfn [(try-from [[[u tok] & more] errs]
               (if-not u
                 (js/Promise.reject (js/Error. (str "release " (subs target 0 12) " unavailable: " (str/join "; " errs))))
+                ;; each source exactly once: the outcome of this one is settled
+                ;; first, then (outside its handlers) the next one is tried
                 (-> (fetch-bytes u tok)
-                    (.then (fn [buf] (if (= target (sha256-hex buf)) buf
-                                         (try-from more (conj errs (str u " sha256 mismatch"))))))
-                    (.catch (fn [e] (try-from more (conj errs (.-message e))))))))]
+                    (.then (fn [buf] (if (= target (sha256-hex buf)) {:buf buf} {:err (str u " sha256 mismatch")}))
+                           (fn [e] {:err (.-message e)}))
+                    (.then (fn [{:keys [buf err]}] (if buf buf (try-from more (conj errs err))))))))]
       (try-from sources []))))
 
 ;; ---------------------------------------------------------------- service
@@ -143,6 +169,9 @@
   [config token topology docs-fn busy-fn & [{:keys [exit!] :or {exit! #(js/process.exit 0)}}]]
   (let [node (:node config)
         rf (release-file config)
+        ;; what this process runs: read once at start, so a release renamed into
+        ;; place by an interrupted handoff is still seen as not yet running
+        running-sha (file-sha rf)
         pkg (.join path (.dirname path rf) "package.json")
         updated (on-start! config)
         state (atom (cond-> {:state "none"} updated (assoc :updated updated)))
@@ -154,41 +183,61 @@
                         now (js/Date.now)
                         docs (docs-fn)
                         d (if conflicted? {:state :waiting :reason "topology conflict"}
-                              (decide intent node (file-sha rf) (file-sha pkg) docs now))]
+                              (decide intent node running-sha (file-sha pkg) docs now))]
                     (swap! state merge {:state (name (:state d)) :target (some-> (:target d) (subs 0 16))
                                         :wave (:wave d) :reason (:reason d) :at now})
-                    (if-not (= :upgrade (:state d))
+                    (cond
+                      (not= :upgrade (:state d))
                       (reset! busy-flag false)
+
+                      ;; the target is already in place on disk (a handoff that
+                      ;; renamed but did not get to exit): finish the handoff
+                      (= (:target d) (file-sha rf))
+                      (do (swap! state assoc :state "restarting") (exit!))
+
+                      :else
                       (let [target (:target d)
                             others (remove #(= node (get % "node")) (get intent "nodes"))
                             running? #(= (subs target 0 16) (get-in docs [(get % "node") "release"]))
                             ;; peers running the target first, then any peer (it may hold it in cache)
                             peer-urls (map #(get % "url") (concat (filter running? others) (remove running? others)))
+                            ;; the resident defaults :drain-file to <state-file>.draining,
+                            ;; so admission and health see this same file
                             drain (or (:drain-file config) (str (:state-file config) ".draining"))]
                         (swap! state assoc :state "fetching")
                         (-> (fetch-release! target peer-urls (get-in intent ["agents" "resident" "urls"] []) token)
                             (.then (fn [buf]
                                      (swap! state assoc :state "draining")
                                      (.writeFileSync fs drain "self-update")
+                                     ;; never replace under in-flight work: past the limit the
+                                     ;; rollout fails here (drain removed) and is retried later
                                      (js/Promise.
-                                      (fn [resolve]
+                                      (fn [resolve reject]
                                         (let [t0 (js/Date.now)]
-                                          (letfn [(wait [] (if (and (busy-fn) (< (- (js/Date.now) t0) 600000))
-                                                             (js/setTimeout wait 2000)
-                                                             (resolve buf)))]
+                                          (letfn [(wait [] (cond (not (busy-fn)) (resolve buf)
+                                                                 (> (- (js/Date.now) t0) (:rollout-drain-limit-ms config drain-limit-ms))
+                                                                 (reject (js/Error. "in-flight work did not finish while draining; will retry"))
+                                                                 :else (js/setTimeout wait 2000)))]
                                             (wait)))))))
                             (.then (fn [buf]
-                                     ;; atomic replace keeping owner and mode, then hand over
+                                     ;; atomic replace keeping owner and mode, then hand over.
+                                     ;; The marker goes first; once the rename commits nothing
+                                     ;; may stop the exit (a later failure would leave the old
+                                     ;; process running with the new bytes on disk)
                                      (let [st (.statSync fs rf)
-                                           from (subs (or (file-sha rf) "") 0 16)
+                                           from (subs (or running-sha "") 0 16)
                                            tmp (str rf "." (.randomUUID crypto) ".tmp")]
                                        (.writeFileSync fs tmp buf #js {:mode (bit-and (.-mode st) 511)})
                                        (try (.chownSync fs tmp (.-uid st) (.-gid st)) (catch :default _ nil))
-                                       (.renameSync fs tmp rf)
-                                       (topo/sync-parent! rf)
                                        (topo/persist! (marker-file config)
                                                       {:from from :to target
                                                        :at (js/Date.now) :drain-file drain})
+                                       (try (.renameSync fs tmp rf)
+                                            (catch :default e
+                                              (try (.unlinkSync fs tmp) (catch :default _ nil))
+                                              (try (.unlinkSync fs (marker-file config)) (catch :default _ nil))
+                                              (throw e)))
+                                       (try (topo/sync-parent! rf) (catch :default _ nil))
                                        (swap! state assoc :state "restarting")
                                        (exit!))))
                             (.catch (fn [e]

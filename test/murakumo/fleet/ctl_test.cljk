@@ -19,7 +19,12 @@
   (testing "stale reports and missing expected nodes are not converged"
     (is (not (:converged? (ctl/rollout-status {"a" (p "at" (- now (* 10 60 1000)))} nil now))))
     (is (= ["c"] (:missing (ctl/rollout-status {"a" (p) "b" (p)} #{"a" "b" "c"} now))))
-    (is (not (:converged? (ctl/rollout-status {} nil now))) "no report is not success")))
+    (is (not (:converged? (ctl/rollout-status {} nil now))) "no report is not success"))
+  (testing "with a target, agreement on the old release or revision is not rolled out"
+    (let [docs {"a" (p) "b" (p)} rev (get-in (p) ["topology" "revision"])]
+      (is (not (:converged? (ctl/rollout-status docs nil now {:release "r2" :revision rev}))))
+      (is (not (:converged? (ctl/rollout-status docs nil now {:release "r1" :revision (inc (or rev 0))}))))
+      (is (:converged? (ctl/rollout-status docs nil now {:release "r1" :revision rev}))))))
 
 (deftest review-fixes
   (is (re-find #"added" (ctl/diff-line {:what "node" :name "x" :change "added"})))

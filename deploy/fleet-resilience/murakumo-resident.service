@@ -7,7 +7,9 @@ Type=simple
 User=murakumo
 WorkingDirectory=/opt/murakumo
 ExecStart=/usr/bin/node /opt/murakumo/release/node.mjs resident serve --config /etc/murakumo/resident.json
-Restart=on-failure
+# always: a staged self-update (ADR-2610071730 P5a) replaces the release and
+# exits 0, and the supervisor must start the new bytes
+Restart=always
 RestartSec=5
 StateDirectory=murakumo-resident
 UMask=0077
@@ -15,6 +17,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/murakumo-resident
+# the release directory is writable (and owned by murakumo) so the resident can
+# replace its own release atomically during a staged self-update
+ReadWritePaths=/var/lib/murakumo-resident /opt/murakumo/release
 [Install]
 WantedBy=multi-user.target
