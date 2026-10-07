@@ -37,6 +37,8 @@
  :fleet-health {:cmd ["kbb" "--backend" "sci" "--classpath" "src" "scripts/node-cli.cljk" "fleet" "health"]
                 :pass-args? true
                 :doc "Every node at once, no ssh: tailscale online/last-seen, the itonami peer's signed self-report (memory pressure, swap, TIME_WAIT, rails, revision), resident :8094. Read-only."}
+ :test-fleet-spec {:cmd ["kbb" "--backend" "sci" "--classpath" "src:test" "test/murakumo/fleet/spec_test.cljk"]
+                   :doc "ADR-2610071730 P1: intent validation, deterministic placement, drift, mesh; wire compatibility with the resident's schema-1 validator. Offline."}
  :test-fleet-health {:cmd ["kbb" "--backend" "sci" "--classpath" "src:test" "test/murakumo/fleet_health_test.cljk"]
                      :doc "Offline tests for fleet health: envelope verification and problem assessment."}
  :test-fleet-ps {:cmd ["kbb" "--backend" "sci" "--classpath" "src:test" "test/murakumo/fleet_ps_test.cljk"]
