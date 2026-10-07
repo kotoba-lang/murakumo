@@ -1,0 +1,284 @@
+(ns murakumo.fleet.ctl
+  "murakumo as kubectl — ADR-2610071730 P4.
+
+    murakumo get nodes|classes|leases [-f INTENT] [--json]
+    murakumo describe node NAME
+    murakumo diff -f INTENT [--live SIGNED.json | --token-file T]
+    murakumo cordon|uncordon NAME -f INTENT          edit the intent file (revision +1)
+    murakumo apply -f INTENT [--dry-run] --private-key-file K --token-file T [--to URL]
+    murakumo rollout status
+
+  Reads come from the residents' signed self-reports (L2): every tailnet
+  resident is asked and the newest verified document per node wins, so the
+  answer does not depend on any one node. Nothing here uses ssh.
+
+  The only write is `apply`: it validates the intent (the resident's schema-1
+  validator and the spec-version 2 linter), refuses a revision that does not
+  advance past the live one, signs it with the operator key, POSTs it to one
+  resident with the fleet token and follows the residents' reports until they
+  all hold the new revision (gossip carries it; no node is special)."
+  (:require [clojure.string :as str]
+            [murakumo.fleet.spec :as spec]
+            [murakumo.fleet.spec-cli :as cli]
+            [murakumo.fleet-health :as fh]
+            [murakumo.infer.replicated-topology :as topo]
+            ["node:fs" :as fs]
+            ["node:crypto" :as crypto]))
+
+(defn- opt [args k] (second (drop-while #(not= % k) args)))
+(defn- flag? [args k] (boolean (some #{k} args)))
+(defn- pad [s n] (let [s (str s)] (if (>= (count s) n) s (str s (apply str (repeat (- n (count s)) " "))))))
+(defn- read-json [f] (js->clj (js/JSON.parse (str (.readFileSync fs f "utf8")))))
+(defn- payload-of [d] (if (contains? d "payload") (get d "payload") d))
+
+(defn resident-urls
+  "Where to ask: the intent's node URLs when given, else every online tailnet
+  node on the resident port."
+  [intent]
+  (if (seq (get intent "nodes"))
+    (vec (keep #(get % "url") (get intent "nodes")))
+    (vec (for [n (or (fh/tailnet) []) :when (:online n)] (str "http://" (:ip n) ":8796")))))
+
+(defn- age [ms] (let [s (js/Math.round (/ (- (js/Date.now) ms) 1000))]
+                  (cond (< s 120) (str s "s") (< s 7200) (str (quot s 60) "m") :else (str (quot s 3600) "h"))))
+
+;; ---------------------------------------------------------------- pure views
+
+(defn node-status
+  "Ready | NotReady | Stale for a raw payload at time now."
+  [p now]
+  (cond (< (get p "at" 0) (- now (* 5 60 1000))) "Stale"
+        (every? #(get % "ready") (vals (get p "lanes"))) "Ready"
+        :else "NotReady"))
+
+(defn nodes-table [docs now]
+  (for [[n p] docs]
+    {"NAME" n "STATUS" (node-status p now)
+     "LANES" (str/join "," (for [[id l] (get p "lanes")] (str id (when-not (get l "ready") "!"))))
+     "PRESSURE" (get {1 "normal" 2 "warn" 4 "CRIT"} (get-in p ["host" "pressure"]) "-")
+     "FREE" (some-> (get-in p ["host" "free-pct"]) (str "%"))
+     "TOPOLOGY" (get-in p ["topology" "revision"])
+     "RELEASE" (get p "release")
+     "CONVERGE" (get-in p ["converge" "mode"] "-")
+     "AGE" (age (get p "at"))}))
+
+(defn leases-table [docs]
+  (for [[n p] docs
+        [c l] (get-in p ["converge" "leases"])]
+    {"CLASS" c "ASKED-BY" n "HELD" (get l "held") "HOLDER" (get l "holder")
+     "EPOCH" (get l "epoch") "UNTIL" (some-> (get l "until") js/Date. .toISOString) "ERROR" (get l "error")}))
+
+(defn rollout-status
+  "Release and topology revision groups across nodes, with the majority."
+  [docs]
+  (let [by (fn [f] (into (sorted-map) (map (fn [[k v]] [k (vec (sort (map key v)))]) (group-by (comp f val) docs))))]
+    {:releases (by #(get % "release"))
+     :revisions (by #(get-in % ["topology" "revision"]))
+     :converged? (and (= 1 (count (distinct (map #(get % "release") (vals docs)))))
+                      (= 1 (count (distinct (map #(get-in % ["topology" "revision"]) (vals docs))))))}))
+
+(defn intent-diff
+  "What applying `intent` would change against the live payload: node roles /
+  pins / enabled / cordoned, policies, and the spec-version 2 sections."
+  [live intent]
+  (let [nodes (fn [p] (into {} (for [n (get p "nodes")] [(get n "node") n])))
+        ln (nodes live) in (nodes intent)
+        node-keys ["enabled" "cordoned" "roles" "pins" "overrides" "labels"]]
+    (vec
+     (concat
+      (for [n (sort (keys in)) :when (not (contains? ln n))] {:what "node" :name n :change "added"})
+      (for [n (sort (keys ln)) :when (not (contains? in n))] {:what "node" :name n :change "removed (refused: retire as disabled)"})
+      (for [n (sort (keys in)) :when (contains? ln n)
+            k node-keys
+            :let [a (get-in ln [n k]) b (get-in in [n k])]
+            :when (not= a b)]
+        {:what "node" :name n :field k :from a :to b})
+      (for [k ["policies" "spec-version" "models" "classes" "trust" "converge" "agents"]
+            :let [a (get live k) b (get intent k)]
+            :when (not= a b)]
+        {:what k :from (when a (if (map? a) (str (count a) " entries") a)) :to (when b (if (map? b) (str (count b) " entries") b))})
+      [{:what "revision" :from (get live "revision") :to (get intent "revision")}]))))
+
+(defn cordon
+  "The intent with node cordoned (or not), revision advanced by one."
+  [intent node on?]
+  (when-not (some #(= node (get % "node")) (get intent "nodes"))
+    (throw (js/Error. (str "no node " node " in the intent"))))
+  (-> intent
+      (update "nodes" (fn [ns] (mapv #(if (= node (get % "node"))
+                                         (if on? (assoc % "cordoned" true) (dissoc % "cordoned"))
+                                         %)
+                                      ns)))
+      (update "revision" inc)))
+
+;; ---------------------------------------------------------------- I/O
+
+(defn- print-table [rows cols]
+  (let [w (into {} (for [c cols] [c (+ 2 (apply max (count c) (map #(count (str (get % c))) rows)))]))]
+    (println (apply str (map #(pad % (w %)) cols)))
+    (doseq [r rows] (println (apply str (map #(pad (or (get r %) "-") (w %)) cols))))))
+
+(defn- live-payload
+  "The live signed payload: fetched with the fleet token (GET /topology on the
+  first resident that answers) or read from a signed mirror file."
+  [args urls]
+  (if-let [tf (opt args "--token-file")]
+    (let [token (str/trim (str (.readFileSync fs tf "utf8")))]
+      (letfn [(try-from [[u & more]]
+                (if-not u
+                  (js/Promise.reject (js/Error. "no resident returned /topology"))
+                  (-> (js/fetch (str u "/topology") #js {:headers #js {"authorization" (str "Bearer " token)}
+                                                         :signal (.timeout js/AbortSignal 5000)})
+                      (.then (fn [r] (if (.-ok r) (.json r) (try-from more))))
+                      (.catch (fn [_] (try-from more))))))]
+        (.then (try-from urls) #(payload-of (js->clj %)))))
+    (js/Promise.resolve (payload-of (read-json (or (opt args "--live") "deploy/fleet-topology.signed.json"))))))
+
+(defn- sign-payload [payload key-file]
+  (let [st (.lstatSync fs key-file)]
+    (when-not (and (.isFile st) (not (.isSymbolicLink st)) (zero? (bit-and (.-mode st) 63)))
+      (throw (js/Error. "private signing key must be a regular 0600 file")))
+    {"payload" payload
+     "signature" (.toString (.sign crypto nil (js/Buffer.from (topo/encoded payload)) (.readFileSync fs key-file "utf8")) "base64url")}))
+
+(defn- wait-revision!
+  "Follow the residents' reports until every reporting node holds revision."
+  [urls revision timeout-ms poll-ms]
+  (let [deadline (+ (js/Date.now) timeout-ms)]
+    (letfn [(poll []
+              (-> (cli/resident-docs urls)
+                  (.then (fn [docs]
+                           (let [have (sort (for [[n p] docs :when (= revision (get-in p ["topology" "revision"]))] n))
+                                 lag (sort (for [[n p] docs :when (not= revision (get-in p ["topology" "revision"]))] n))]
+                             (println (str "  " (count have) "/" (count docs) " residents hold " revision
+                                           (when (seq lag) (str "  waiting: " (str/join "," lag)))))
+                             (cond (and (seq docs) (empty? lag)) 0
+                                   (> (js/Date.now) deadline) 1
+                                   :else (js/Promise. (fn [r] (js/setTimeout #(r (poll)) poll-ms)))))))))]
+      (poll))))
+
+(defn run
+  "Promise of the exit code."
+  [[verb & args]]
+  (let [intent-file (opt args "-f")
+        intent (when intent-file (payload-of (read-json intent-file)))
+        urls (resident-urls intent)
+        now (js/Date.now)]
+    (case verb
+      "get"
+      (case (first args)
+        "nodes" (.then (cli/resident-docs urls)
+                       (fn [docs]
+                         (if (flag? args "--json") (println (js/JSON.stringify (clj->js docs) nil 1))
+                             (print-table (nodes-table docs now) ["NAME" "STATUS" "LANES" "PRESSURE" "FREE" "TOPOLOGY" "RELEASE" "CONVERGE" "AGE"]))
+                         (if (some #(not= "Ready" (node-status % now)) (vals docs)) 1 0)))
+        "classes" (if-not intent
+                    (do (println "get classes needs -f INTENT") (js/Promise.resolve 2))
+                    (.then (cli/resident-observations intent)
+                           (fn [l2]
+                             (let [plan (spec/placement intent l2 now)]
+                               (print-table (for [[c {:keys [nodes wanted short?]}] plan]
+                                              {"CLASS" c "WANTED" wanted
+                                               "PLACED" (count nodes)
+                                               "RUNNING" (count (filter #(contains? (get-in l2 [% :running]) c) nodes))
+                                               "NODES" (str/join "," nodes) "SHORT" (if short? "yes" "")})
+                                            ["CLASS" "WANTED" "PLACED" "RUNNING" "SHORT" "NODES"])
+                               (if (some :short? (vals plan)) 1 0)))))
+        "leases" (.then (cli/resident-docs urls)
+                        (fn [docs] (let [rows (leases-table docs)]
+                                     (if (seq rows) (print-table rows ["CLASS" "ASKED-BY" "HELD" "HOLDER" "EPOCH" "UNTIL" "ERROR"])
+                                         (println "no leases reported (no node enforces convergence on a rendezvous share)"))
+                                     0)))
+        (do (println "murakumo get nodes|classes|leases") (js/Promise.resolve 2)))
+
+      "describe"
+      (let [n (second args)]
+        (.then (cli/resident-docs urls)
+               (fn [docs]
+                 (if-let [p (get docs n)]
+                   (do (println (str "Name:      " n "\nDid:       " (get p "did") "\nStatus:    " (node-status p now)
+                                     "\nReported:  " (age (get p "at")) " ago\nRelease:   " (get p "release")
+                                     "\nTopology:  " (get-in p ["topology" "revision"]) " " (subs (str (get-in p ["topology" "digest"])) 0 12)
+                                     (when (get-in p ["topology" "conflict"]) "  CONFLICT")))
+                       (println "Host:") (doseq [[k v] (sort (get p "host"))] (println (str "  " (pad k 16) v)))
+                       (println "Lanes:") (doseq [[id l] (get p "lanes")] (println (str "  " (pad id 12) (get l "kind") " " (get l "model") " ctx=" (get l "context") (if (get l "ready") "  ready" "  NOT ready") " failures=" (get l "failures"))))
+                       (println "Units:") (doseq [[u st] (get p "units")] (println (str "  " (pad u 36) st)))
+                       (when (seq (get p "models")) (println "Models:") (doseq [[m f] (get p "models")] (println (str "  " (pad m 28) (pr-str f)))))
+                       (println (str "Converge:  " (get-in p ["converge" "mode"] "-") (when-let [r (get-in p ["converge" "reason"])] (str " (" r ")"))))
+                       (doseq [st (get-in p ["converge" "plan"])] (println (str "  " (pad (get st "class") 28) (get st "step") (when-let [r (get st "reason")] (str "  " r)))))
+                       (doseq [[c l] (get-in p ["converge" "leases"])] (println (str "  lease " c " " (pr-str l))))
+                       0)
+                   (do (println (str "no verified report from " n)) 1)))))
+
+      "diff"
+      (if-not intent
+        (do (println "diff needs -f INTENT") (js/Promise.resolve 2))
+        (.then (live-payload args urls)
+               (fn [live]
+                 (doseq [d (intent-diff live intent)]
+                   (println (str "  " (pad (:what d) 10) (pad (or (:name d) "") 12) (pad (or (:field d) "") 10)
+                                 (pr-str (:from d)) " -> " (pr-str (:to d)))))
+                 0)))
+
+      ("cordon" "uncordon")
+      (let [n (first args)]
+        (if-not (and n intent-file)
+          (do (println (str "murakumo " verb " NAME -f INTENT")) (js/Promise.resolve 2))
+          (let [next (cordon intent n (= verb "cordon"))]
+            (.writeFileSync fs intent-file (str (js/JSON.stringify (clj->js next) nil 2) "\n"))
+            (println (str verb "ed " n " in " intent-file " (revision " (get next "revision") "); placement will move its "
+                          "shares once applied: murakumo apply -f " intent-file))
+            (js/Promise.resolve 0))))
+
+      "apply"
+      (if-not intent
+        (do (println "apply needs -f INTENT") (js/Promise.resolve 2))
+        (let [problems (spec/validate intent)]
+          (try (topo/validate! (js->clj (clj->js intent) :keywordize-keys true) (flag? args "--allow-loopback"))
+               (catch :default e (println (str "  ! resident validator: " (.-message e))) (js/process.exit 1)))
+          (if (and (seq problems) (get intent "spec-version"))
+            (do (doseq [p problems] (println (str "  ! " (str/join "." (:path p)) ": " (:problem p)))) (js/Promise.resolve 1))
+            (.then (live-payload args urls)
+                   (fn [live]
+                     (doseq [d (intent-diff live intent)]
+                       (println (str "  " (pad (:what d) 10) (pad (or (:name d) "") 12) (pad (or (:field d) "") 10) (pr-str (:from d)) " -> " (pr-str (:to d)))))
+                     (cond
+                       (not (> (get intent "revision") (get live "revision")))
+                       (do (println (str "refused: revision " (get intent "revision") " does not advance past live " (get live "revision"))) 1)
+
+                       (flag? args "--dry-run")
+                       (do (println "dry run: nothing signed or sent") 0)
+
+                       (not (and (opt args "--private-key-file") (opt args "--token-file")))
+                       (do (println "apply needs --private-key-file (operator) and --token-file (fleet), or --dry-run") 2)
+
+                       :else
+                       (let [doc (sign-payload intent (opt args "--private-key-file"))
+                             token (str/trim (str (.readFileSync fs (opt args "--token-file") "utf8")))
+                             to (or (opt args "--to") (first urls))]
+                         (println (str "signed revision " (get intent "revision") " digest " (subs (topo/digest (js->clj (clj->js intent) :keywordize-keys true)) 0 12)
+                                       "; sending to " to))
+                         (-> (js/fetch (str to "/topology") #js {:method "POST" :body (topo/encoded doc)
+                                                                  :headers #js {"authorization" (str "Bearer " token) "content-type" "application/json"}
+                                                                  :signal (.timeout js/AbortSignal 10000)})
+                             (.then (fn [r]
+                                      (if-not (.-ok r)
+                                        (.then (.text r) (fn [t] (println (str "refused by " to ": " (.-status r) " " t)) 1))
+                                        (wait-revision! urls (get intent "revision")
+                                                        (* 1000 (js/parseInt (or (opt args "--timeout-s") "300") 10))
+                                                        (js/parseInt (or (opt args "--poll-ms") "10000") 10)))))))))))))
+
+      "rollout"
+      (if-not (= "status" (first args))
+        (do (println "murakumo rollout status") (js/Promise.resolve 2))
+        (.then (cli/resident-docs urls)
+               (fn [docs]
+                 (let [{:keys [releases revisions converged?]} (rollout-status docs)]
+                   (println "Release:") (doseq [[r ns] releases] (println (str "  " (pad r 18) (count ns) "  " (str/join "," ns))))
+                   (println "Topology revision:") (doseq [[r ns] revisions] (println (str "  " (pad r 18) (count ns) "  " (str/join "," ns))))
+                   (println (if converged? "rolled out: every reporting resident runs one release and one revision"
+                                "in progress or diverged"))
+                   (if converged? 0 1)))))
+
+      (do (println (:doc (meta #'run)) "\n" (-> 'murakumo.fleet.ctl find-ns meta :doc))
+          (js/Promise.resolve (if (#{"help" "--help" nil} verb) 0 2))))))

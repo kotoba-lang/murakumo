@@ -93,3 +93,22 @@ turns the share's `needs-lease` step into `start`; the plan publishes `converge.
 
 Still to do: rendering a missing unit from its template, and eviction (stopping a running share that is no longer
 placed) — the two operations that remove capacity — after leases have run on the fleet.
+
+## kubectl-shaped CLI (P4)
+
+```
+murakumo get nodes [-f F]            STATUS (Ready/NotReady/Stale), lanes, pressure, free, topology revision, release, converge mode
+murakumo get classes -f INTENT       per class: wanted / placed / running / short, placed nodes
+murakumo get leases                  the leases nodes report (holder, epoch, until)
+murakumo describe node NAME          one node's signed report in full (host, lanes, units, models, plan, leases)
+murakumo diff -f INTENT              what applying INTENT changes against the live signed payload
+                                     (--token-file T fetches it from a resident; default: deploy/fleet-topology.signed.json)
+murakumo cordon|uncordon NAME -f F   mark the node out of placement in the intent file (revision +1)
+murakumo apply -f INTENT [--dry-run] --private-key-file K --token-file T [--to URL]
+murakumo rollout status              release and topology revision spread across residents
+```
+
+Reads come from every resident's signed report (newest verified per node); nothing uses ssh. `apply` is the only
+write: it runs the resident's schema-1 validator and the spec-version 2 linter, refuses a revision that does not
+advance past the live one, signs with the operator key, POSTs to one resident with the fleet token and follows the
+residents' reports until every one holds the new revision (gossip carries it).

@@ -14,6 +14,7 @@ cp src/murakumo/fleet_health.cljk .node-build/src/murakumo/fleet_health.cljs
 mkdir -p .node-build/src/murakumo/fleet
 cp src/murakumo/fleet/spec.cljk .node-build/src/murakumo/fleet/spec.cljs
 cp src/murakumo/fleet/spec_cli.cljk .node-build/src/murakumo/fleet/spec_cli.cljs
+cp src/murakumo/fleet/ctl.cljk .node-build/src/murakumo/fleet/ctl.cljs
 cp src/murakumo/health.cljk .node-build/src/murakumo/health.cljs
 cp src/murakumo/device_claim.cljk .node-build/src/murakumo/device_claim.cljs
 for name in device_report node_console node_console_qr onboard onboard_audio onboard_device onboard_state onboard_window nm_keyfile wifi_share wifi_share_page; do

@@ -92,16 +92,14 @@
         (sequential? x) (mapv canonical x)
         :else x))
 
-(defn resident-observations
-  "L2 from the residents (P2): ask EVERY intent node's resident for
-  GET /observations in parallel and keep, per node, the newest document whose
-  signature verifies against the did it names and whose time is not in the
-  future (a resident's gossip view may still be partial; one with a fast clock
-  must not keep a node fresh). Promise of node -> l2-entry."
-  [intent]
-  (let [urls (vec (distinct (keep #(get % "url") (get intent "nodes"))))
-        now (js/Date.now)]
-    (-> (js/Promise.all (clj->js (for [u urls] (fetch-json (str (str/replace u #"/$" "") "/observations") 5000))))
+(defn resident-docs
+  "Verified raw observation payloads from EVERY intent node's resident, newest
+  per node (a resident's gossip view may be partial), refusing documents dated
+  more than 2 min ahead. urls: resident base URLs. Promise of node -> payload
+  (string keys)."
+  [urls]
+  (let [now (js/Date.now)]
+    (-> (js/Promise.all (clj->js (for [u (distinct urls)] (fetch-json (str (str/replace u #"/$" "") "/observations") 5000))))
         (.then (fn [ms]
                  (let [docs (for [m (array-seq ms) :when m
                                   [node doc] (js->clj m)
@@ -110,11 +108,18 @@
                                                                "sig" (get doc "signature")})]
                                   :when (and p (= node (get p "node")) (number? (get p "at"))
                                              (<= (get p "at") (+ now 120000)))]
-                              [node p])
-                       newest (reduce (fn [acc [node p]]
-                                        (if (> (get p "at") (get-in acc [node "at"] 0)) (assoc acc node p) acc))
-                                      {} docs)]
-                   (into (sorted-map) (for [[node p] newest] [node (spec/l2-entry intent p)]))))))))
+                              [node p])]
+                   (into (sorted-map)
+                         (reduce (fn [acc [node p]]
+                                   (if (> (get p "at") (get-in acc [node "at"] 0)) (assoc acc node p) acc))
+                                 {} docs))))))))
+
+(defn resident-observations
+  "L2 from the residents (P2): resident-docs over the intent's node URLs,
+  mapped to spec/l2-entry. Promise of node -> l2-entry."
+  [intent]
+  (-> (resident-docs (keep #(get % "url") (get intent "nodes")))
+      (.then (fn [docs] (into (sorted-map) (for [[node p] docs] [node (spec/l2-entry intent p)]))))))
 
 ;; ---------------------------------------------------------------- draft
 
