@@ -10,6 +10,12 @@ The fleet is managed in three layers, by rate of change (root ADR-2610071730):
 
 Git is an audit mirror of L1 at most. Fast-changing state never goes through git or an operator signature.
 
+## Files
+
+- `deploy/fleet-topology.json` — the reviewed **source payload** (bare), the input of `murakumo topology sign`.
+- `deploy/fleet-topology.signed.json` — a mirror of the live **signed** document (audit copy; revision 2026100604).
+- `deploy/fleet-intent.draft.json` — the spec-version 2 intent draft, unsigned.
+
 ## Commands (read-only)
 
 ```

@@ -208,18 +208,26 @@
 
 (defn l2-entry
   "A verified resident observation payload (string keys) -> the observation
-  `placement` reads. :running holds the classes seen on the node: a lane the
-  resident admits for the class's (model, kind), or a running unit of the
-  class's template whose name ends with the class's model (one unit,
-  com.murakumo.mishima, backs the llama-server template of several classes)."
+  `placement` reads. :running holds the classes seen on the node.
+
+  Lanes decide: a class runs when a READY lane reports its (model, kind). A
+  unit is only a fallback for a class whose model no lane on the node reports,
+  and only when the unit identifies the class: its name ends with the model
+  (com.murakumo.mishima -> mishima), or it is the only class on that template.
+  So one running ComfyUI or llama unit never makes every class that shares the
+  template look running."
   [intent payload]
   (let [classes (get intent "classes")
+        lanes (vals (get payload "lanes"))
+        lane-models (set (map #(get % "model") lanes))
+        per-template (frequencies (map #(get % "template") (vals classes)))
         unit-classes (fn [unit]
                        (for [[c s] classes
                              :when (= unit (get-in templates [(get s "template") :unit]))
                              :let [m (get s "model")]
-                             :when (or (nil? m) (not= "llama-server" (get s "template"))
-                                       (str/ends-with? unit (str "." m)))]
+                             :when (not (contains? lane-models m))
+                             :when (or (= 1 (get per-template (get s "template")))
+                                       (and m (str/ends-with? unit (str "." m))))]
                          c))]
     {:at-ms (get payload "at") :did (get payload "did") :source "resident"
      :pressure (get-in payload ["host" "pressure"]) :free-pct (get-in payload ["host" "free-pct"])
@@ -228,7 +236,8 @@
      :models (into {} (for [[m f] (get payload "models")] [m {:present (get f "present")}]))
      :converge (get payload "converge")
      :running (set (concat
-                    (for [[_ l] (get payload "lanes")
+                    (for [l lanes
+                          :when (get l "ready")
                           [c s] classes
                           :when (and (= (get l "model") (get s "model"))
                                      (= (get l "kind") (get-in intent ["models" (get s "model") "kind"] (get l "kind"))))]

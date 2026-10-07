@@ -47,8 +47,9 @@
   [intent]
   (-> (js/Promise.all #js [(observe intent) (resident-observations intent)])
       (.then (fn [[peers residents]]
-               (merge-with (fn [p r] (-> (merge p r) (assoc :running (into (or (:running p) #{}) (:running r)))))
-                           peers residents)))))
+               ;; a verified resident report is authoritative for its node; the
+               ;; itonami peer only fills nodes without one
+               (merge peers residents)))))
 
 (defn observe
   "Promise of node -> observation, from the itonami peers (signed, public).
@@ -92,30 +93,28 @@
         :else x))
 
 (defn resident-observations
-  "L2 from the residents (P2): ask the intent's node URLs one by one until a
-  resident answers GET /observations — by gossip, any one of them holds the
-  whole fleet. Each document is verified against the did it names.
-  Promise of node -> observation (classes running derived from units and lanes)."
+  "L2 from the residents (P2): ask EVERY intent node's resident for
+  GET /observations in parallel and keep, per node, the newest document whose
+  signature verifies against the did it names and whose time is not in the
+  future (a resident's gossip view may still be partial; one with a fast clock
+  must not keep a node fresh). Promise of node -> l2-entry."
   [intent]
-  (let [urls (vec (keep #(get % "url") (get intent "nodes")))
-        unit->classes (fn [unit]
-                        (for [[c s] (get intent "classes")
-                              :when (= unit (get-in spec/templates [(get s "template") :unit]))]
-                          c))]
-    (letfn [(try-from [[u & more]]
-              (if-not u
-                (js/Promise.resolve {})
-                (-> (fetch-json (str (str/replace u #"/$" "") "/observations") 5000)
-                    (.then (fn [m] (if (and m (pos? (count (js/Object.keys m)))) m (try-from more)))))))]
-      (-> (try-from urls)
-          (.then (fn [m]
-                   (into (sorted-map)
-                         (for [[node doc] (js->clj m)
-                               :let [p (fh/verify-envelope {"payload" (js/JSON.stringify (clj->js (canonical (get doc "payload"))))
-                                                            "did" (get-in doc ["payload" "did"])
-                                                            "sig" (get doc "signature")})]
-                               :when p]
-                           [node (spec/l2-entry intent p)]))))))))
+  (let [urls (vec (distinct (keep #(get % "url") (get intent "nodes"))))
+        now (js/Date.now)]
+    (-> (js/Promise.all (clj->js (for [u urls] (fetch-json (str (str/replace u #"/$" "") "/observations") 5000))))
+        (.then (fn [ms]
+                 (let [docs (for [m (array-seq ms) :when m
+                                  [node doc] (js->clj m)
+                                  :let [p (fh/verify-envelope {"payload" (js/JSON.stringify (clj->js (canonical (get doc "payload"))))
+                                                               "did" (get-in doc ["payload" "did"])
+                                                               "sig" (get doc "signature")})]
+                                  :when (and p (= node (get p "node")) (number? (get p "at"))
+                                             (<= (get p "at") (+ now 120000)))]
+                              [node p])
+                       newest (reduce (fn [acc [node p]]
+                                        (if (> (get p "at") (get-in acc [node "at"] 0)) (assoc acc node p) acc))
+                                      {} docs)]
+                   (into (sorted-map) (for [[node p] newest] [node (spec/l2-entry intent p)]))))))))
 
 ;; ---------------------------------------------------------------- draft
 
@@ -128,9 +127,16 @@
    "waiREALMIX_v11" {"kind" "image"}})
 
 (defn class-name
-  "A class name from model + kind, in the class-name alphabet."
+  "A class name from model + kind, in the class-name alphabet. Injective: when
+  normalizing changes the model name (case, underscores), a short hash of the
+  exact model is appended, so Foo/foo or foo_bar/foo-bar never collide."
   [model kind]
-  (str (-> (.toLowerCase (str model)) (str/replace #"[^a-z0-9.-]" "-")) "-" kind))
+  (let [m (str model)
+        norm (-> (.toLowerCase m) (str/replace #"[^a-z0-9.-]" "-"))]
+    (str norm
+         (when (not= norm m)
+           (str "-" (subs (.digest (.update (.createHash (js/require "node:crypto") "sha256") m) "hex") 0 6)))
+         "-" kind)))
 
 (declare draft*)
 
@@ -228,7 +234,7 @@
         load-intent #(payload-of (read-json file))]
     (case sub
       "draft"
-      (let [topo (payload-of (read-json (or (opt args "--topology") "deploy/fleet-topology.json")))
+      (let [topo (payload-of (read-json (or (opt args "--topology") "deploy/fleet-topology.json")))  ; bare payload or signed doc
             fleet (read-fleet-edn (or (opt args "--fleet") "fleet.edn"))]
         (-> (observe {"classes" {"mishima-text" {"template" "llama-server" "model" "mishima"}
                                  "itonami-peer" {"template" "itonami-peer"}}})
