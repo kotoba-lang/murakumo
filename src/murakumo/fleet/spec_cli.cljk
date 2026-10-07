@@ -38,6 +38,17 @@
 
 ;; ---------------------------------------------------------------- L2 observation
 
+(declare resident-observations observe)
+
+(defn observe-all
+  "L2: resident observations (authoritative when present) merged over the
+  itonami peers' (members and nodes without a resident report)."
+  [intent]
+  (-> (js/Promise.all #js [(observe intent) (resident-observations intent)])
+      (.then (fn [[peers residents]]
+               (merge-with (fn [p r] (-> (merge p r) (assoc :running (into (or (:running p) #{}) (:running r)))))
+                           peers residents)))))
+
 (defn observe
   "Promise of node -> observation, from the itonami peers (signed, public).
   :running holds the CLASSES observed: itonami-peer when its peer answered,
@@ -65,13 +76,64 @@
                                         :running (set (concat (when peer-class [peer-class])
                                                               (for [[c m] llm-classes :when (some #{m} (get info "agent_models"))] c)))))])))))))
 
+(defn- fetch-json [url timeout-ms]
+  (let [ctrl (js/AbortController.) t (js/setTimeout #(.abort ctrl) timeout-ms)]
+    (-> (js/fetch url #js {:signal (.-signal ctrl)})
+        (.then (fn [r] (when (.-ok r) (.json r))))
+        (.catch (fn [_] nil))
+        (.finally #(js/clearTimeout t)))))
+
+(defn- canonical
+  "Sorted-key form, as the resident signs it (replicated-topology/encoded)."
+  [x]
+  (cond (map? x) (into (sorted-map) (map (fn [[k v]] [(str k) (canonical v)]) x))
+        (sequential? x) (mapv canonical x)
+        :else x))
+
+(defn resident-observations
+  "L2 from the residents (P2): ask the intent's node URLs one by one until a
+  resident answers GET /observations — by gossip, any one of them holds the
+  whole fleet. Each document is verified against the did it names.
+  Promise of node -> observation (classes running derived from units and lanes)."
+  [intent]
+  (let [urls (vec (keep #(get % "url") (get intent "nodes")))
+        unit->classes (fn [unit]
+                        (for [[c s] (get intent "classes")
+                              :when (= unit (get-in spec/templates [(get s "template") :unit]))]
+                          c))]
+    (letfn [(try-from [[u & more]]
+              (if-not u
+                (js/Promise.resolve {})
+                (-> (fetch-json (str (str/replace u #"/$" "") "/observations") 5000)
+                    (.then (fn [m] (if (and m (pos? (count (js/Object.keys m)))) m (try-from more)))))))]
+      (-> (try-from urls)
+          (.then (fn [m]
+                   (into (sorted-map)
+                         (for [[node doc] (js->clj m)
+                               :let [p (fh/verify-envelope {"payload" (js/JSON.stringify (clj->js (canonical (get doc "payload"))))
+                                                            "did" (get-in doc ["payload" "did"])
+                                                            "sig" (get doc "signature")})]
+                               :when p]
+                           [node {:at-ms (get p "at") :did (get p "did") :source "resident"
+                                  :pressure (get-in p ["host" "pressure"]) :free-pct (get-in p ["host" "free-pct"])
+                                  :memory-gb (get-in p ["host" "memory-gb"]) :release (get p "release")
+                                  :running (set (mapcat (fn [[unit st]] (when (= "running" st) (unit->classes unit)))
+                                                        (get p "units")))}]))))))))
+
 ;; ---------------------------------------------------------------- draft
 
 (def known-models
   ;; what the fleet runs today (2026-10-07); a draft starts from these and the
   ;; operator edits before signing
   {"mishima" {"kind" "text" "file" "mishima/model/Ternary-Bonsai-2-27B-PTQ1_0.gguf" "bytes" 5946648928}
-   "animagine-xl-4.0" {"kind" "image"}})
+   "qwen3-vl-2b-instruct" {"kind" "text"}
+   "animagine-xl-4.0" {"kind" "image"}
+   "waiREALMIX_v11" {"kind" "image"}})
+
+(defn class-name
+  "A class name from model + kind, in the class-name alphabet."
+  [model kind]
+  (str (-> (.toLowerCase (str model)) (str/replace #"[^a-z0-9.-]" "-")) "-" kind))
 
 (declare draft*)
 
@@ -92,12 +154,12 @@
   [topology-payload fleet observations & [overrides]]
   (let [roles-of (fn [n] (get n "roles"))
         all-roles (mapcat roles-of (get topology-payload "nodes"))
-        class-of-role (fn [{:strs [kind model]}] (str model "-" kind))
+        class-of-role (fn [{:strs [kind model]}] (class-name model kind))
         min-rep (get-in topology-payload ["policies" "minimum-replicas"])
         classes (into (sorted-map)
                       (concat
                        (for [[[kind model] rs] (group-by (juxt #(get % "kind") #(get % "model")) all-roles)]
-                         [(str model "-" kind)
+                         [(class-name model kind)
                           (cond-> {"template" (if (= "text" kind) "llama-server" "comfyui")
                                    "model" model
                                    "replicas" (count rs)
@@ -138,9 +200,15 @@
                                                        ;; (e.g. levi/zebulun mishima 2026-10-07);
                                                        ;; "all" classes need no pin
                                                        (filter #(and (get classes %) (not= "all" (get-in classes [% "replicas"])))
-                                                               (observed-llm name))))]
+                                                               (observed-llm name))))
+                                role-overrides (into {} (for [r (roles-of n)
+                                                              :let [c (class-of-role r)
+                                                                    ctx (get r "context")]
+                                                              :when (and ctx (not= ctx (get-in classes [c "context"])))]
+                                                          [c {"context" ctx}]))
+                                ovr (merge-with merge role-overrides (get overrides name))]
                             (cond-> (assoc n "pins" (vec pins))
-                              (get overrides name) (assoc "overrides" (get overrides name))
+                              (seq ovr) (assoc "overrides" ovr)
                               (get-in observations [name :memory-gb]) (assoc "memory-gb" (get-in observations [name :memory-gb]))
                               (seq (get-in fleet [name :labels])) (assoc "labels" (get-in fleet [name :labels])))))
                         nodes))))))
@@ -183,14 +251,14 @@
 
       "plan"
       (let [intent (load-intent)]
-        (-> (observe intent)
+        (-> (observe-all intent)
             (.then (fn [obs] (print-plan (spec/placement intent obs (js/Date.now)))
                      (if (some :short? (vals (spec/placement intent obs (js/Date.now)))) 1 0)))))
 
       "drift"
       (let [intent (load-intent)
             fleet (read-fleet-edn (or (opt args "--fleet") "fleet.edn"))]
-        (-> (observe intent)
+        (-> (observe-all intent)
             (.then (fn [obs]
                      (let [now (js/Date.now)
                            running (into {} (for [[n o] obs :when (:running o)] [n (:running o)]))
@@ -201,8 +269,8 @@
                          (println "  no drift")
                          (doseq [d (sort-by (juxt :kind :node) ds)]
                            (println (str "  " (pad (name (:kind d)) 12) (pad (:node d) 10) (pad (:class d) 24) (:detail d)))))
-                       (println "\n  note: image lanes are not observable without the resident's authenticated /health (P2);")
-                       (println "        image classes show as `missing` until L2 carries them.")
+                       (println (str "\n  L2 sources: " (count (filter #(= "resident" (:source %)) (vals obs))) " resident self-reports, "
+                                     (count (remove #(= "resident" (:source %)) (vals obs))) " itonami-peer only"))
                        (if (seq ds) 1 0))))))
 
       "mesh"

@@ -33,8 +33,19 @@ Signing and publishing stay `murakumo topology sign` / `POST /topology` by the o
 - **Pins** carry today's per-node roles through the migration; placement keeps a pinned node first while it is eligible.
 - **Members.** A trusted host without a resident (e.g. the operator's agent host) is a `trust` entry with `"role": "member"`.
 
-## Known gap (P2)
+## L2: resident observations (P2)
 
-L2 today is the itonami peer's public, signed self-report. Nodes without a peer (xavier, k16, 6600hs, …) and image
-lanes are not observable yet, so `drift` shows them as `no fresh observation` / `missing`. P2 moves the self-report
-into the resident's `/health` and gossips it.
+Each resident signs its own observation with a per-node ed25519 key (`<state-file>.node-key`, 0600, did:key):
+lanes, host memory pressure / free % / swap / TCP TIME_WAIT / ephemeral floor, launchd state of the workload units
+(`com.murakumo.mishima`, `com.murakumo.comfy`, `cloud.itonami.agent.peer`, `com.murakumo.resident`,
+`com.murakumo.kotoba-mesh`), the model files the intent names (present / size), its release hash, the topology
+revision it holds. It refreshes every probe interval and gossips with 3 peers every 10 s along the topology's node list,
+so **any resident answers `GET /observations` for the whole fleet**. That endpoint (and `GET /observation`) is served
+without the fleet token — signed, health only, on the tailnet bind; everything else still needs the token.
+
+Merge rule (`observation/accept`): signature must verify against the did it names; the first did seen for a node is
+pinned (`<state-file>.observation-pins.json`) and a different key is refused; newer `at` wins; entries older than 15
+min are dropped and ones dated more than 2 min ahead are refused.
+
+`murakumo spec plan|drift` read L2 from the first resident that answers and fall back to the itonami peers for hosts
+without a resident (`L2 sources: …` is printed).

@@ -1,20 +1,21 @@
 {
+  "qualification": "resident-and-gateway-peer-convergence-20261005",
   "gateways": [
     {
-      "node": "gateway-xavier",
-      "url": "http://100.87.226.80:8797",
       "enabled": true,
-      "failure-domain": "local-site"
+      "failure-domain": "local-site",
+      "node": "gateway-xavier",
+      "url": "http://100.87.226.80:8797"
     },
     {
-      "node": "gateway-6600hs",
-      "url": "http://100.98.24.37:8797",
       "enabled": true,
-      "failure-domain": "local-site"
+      "failure-domain": "local-site",
+      "node": "gateway-6600hs",
+      "url": "http://100.98.24.37:8797"
     }
   ],
   "schema": 1,
-  "revision": 2026100501,
+  "revision": 2026100604,
   "agents": {
     "itonami-agent": "cd89186"
   },
@@ -78,31 +79,68 @@
         "max-pressure": 2
       },
       "context": 32768
+    },
+    "qwen3-vl-2b-instruct-text": {
+      "template": "llama-server",
+      "model": "qwen3-vl-2b-instruct",
+      "replicas": 2,
+      "minimum": 2,
+      "eligible": {
+        "min-memory-gb": 16,
+        "max-pressure": 2
+      },
+      "context": 4096
+    },
+    "wairealmix-v11-image": {
+      "template": "comfyui",
+      "model": "waiREALMIX_v11",
+      "replicas": 2,
+      "minimum": 2,
+      "eligible": {
+        "min-memory-gb": 16,
+        "max-pressure": 2
+      }
     }
   },
   "policies": {
-    "minimum-replicas": {
-      "mishima": 2,
-      "animagine-xl-4.0": 2
-    },
+    "job-voters": [
+      {
+        "node": "xavier",
+        "url": "http://100.87.226.80:8796"
+      },
+      {
+        "node": "k16",
+        "url": "http://100.66.205.17:8796"
+      },
+      {
+        "node": "6600hs",
+        "url": "http://100.98.24.37:8796"
+      }
+    ],
     "minimum-gateways": 2,
+    "minimum-replicas": {
+      "animagine-xl-4.0": 2,
+      "mishima": 2,
+      "qwen3-vl-2b-instruct": 2,
+      "waiREALMIX_v11": 2
+    },
     "receipt-policy": "owner-pinned-never-replay-unknown",
     "site-redundancy-qualified": false
   },
   "nodes": [
     {
-      "node": "judah",
-      "url": "http://100.113.200.45:8796",
       "enabled": true,
       "failure-domain": "local-site",
+      "node": "judah",
+      "owner-id": "9976027a-d7a0-4b6b-8e75-7535807ba881",
       "roles": [
         {
+          "context": 32768,
           "kind": "text",
-          "model": "mishima",
-          "context": 32768
+          "model": "mishima"
         }
       ],
-      "owner-id": "9976027a-d7a0-4b6b-8e75-7535807ba881",
+      "url": "http://100.113.200.45:8796",
       "pins": [
         "mishima-text"
       ],
@@ -126,26 +164,26 @@
       "memory-gb": 16,
       "roles": [
         {
+          "context": 32768,
           "kind": "text",
-          "model": "mishima",
-          "context": 32768
+          "model": "mishima"
         }
       ],
       "node": "benjamin"
     },
     {
-      "node": "dan",
-      "url": "http://100.98.142.59:8796",
       "enabled": true,
       "failure-domain": "local-site",
+      "node": "dan",
+      "owner-id": "b60802f1-5fe8-4052-88e0-873a1cacb553",
       "roles": [
         {
+          "context": 32768,
           "kind": "text",
-          "model": "mishima",
-          "context": 32768
+          "model": "mishima"
         }
       ],
-      "owner-id": "b60802f1-5fe8-4052-88e0-873a1cacb553",
+      "url": "http://100.98.142.59:8796",
       "pins": [
         "mishima-text"
       ],
@@ -170,9 +208,9 @@
       "memory-gb": 16,
       "roles": [
         {
+          "context": 32768,
           "kind": "text",
-          "model": "mishima",
-          "context": 32768
+          "model": "mishima"
         }
       ],
       "node": "issachar"
@@ -192,9 +230,9 @@
       "memory-gb": 16,
       "roles": [
         {
+          "context": 32768,
           "kind": "text",
-          "model": "mishima",
-          "context": 32768
+          "model": "mishima"
         }
       ],
       "node": "joseph"
@@ -214,26 +252,26 @@
       "memory-gb": 16,
       "roles": [
         {
+          "context": 32768,
           "kind": "text",
-          "model": "mishima",
-          "context": 32768
+          "model": "mishima"
         }
       ],
       "node": "naphtali"
     },
     {
-      "node": "xavier",
-      "url": "http://100.87.226.80:8796",
       "enabled": true,
       "failure-domain": "local-site",
+      "node": "xavier",
+      "owner-id": "d2e743e8-6e8d-484c-960a-391e080fddbe",
       "roles": [
         {
+          "context": 32768,
           "kind": "text",
-          "model": "mishima",
-          "context": 32768
+          "model": "mishima"
         }
       ],
-      "owner-id": "d2e743e8-6e8d-484c-960a-391e080fddbe",
+      "url": "http://100.87.226.80:8796",
       "pins": [
         "mishima-text"
       ],
@@ -244,38 +282,54 @@
       }
     },
     {
-      "node": "k16",
-      "url": "http://100.66.205.17:8796",
       "enabled": true,
       "failure-domain": "local-site",
+      "node": "k16",
+      "owner-id": "873091fc-d409-4852-bba9-9376ab745c05",
       "roles": [
         {
+          "context": 131072,
           "kind": "text",
-          "model": "mishima",
-          "context": 131072
+          "model": "mishima"
+        },
+        {
+          "context": 4096,
+          "kind": "text",
+          "model": "qwen3-vl-2b-instruct"
         }
       ],
-      "owner-id": "873091fc-d409-4852-bba9-9376ab745c05",
+      "url": "http://100.66.205.17:8796",
       "pins": [
-        "mishima-text"
-      ]
+        "mishima-text",
+        "qwen3-vl-2b-instruct-text"
+      ],
+      "overrides": {
+        "mishima-text": {
+          "context": 131072
+        }
+      }
     },
     {
-      "node": "6600hs",
-      "url": "http://100.98.24.37:8796",
       "enabled": true,
       "failure-domain": "local-site",
+      "node": "6600hs",
+      "owner-id": "57631405-d90c-4e61-be31-b45a4fa4c57d",
       "roles": [
         {
+          "context": 131072,
           "kind": "text",
-          "model": "mishima",
-          "context": 131072
+          "model": "mishima"
         }
       ],
-      "owner-id": "57631405-d90c-4e61-be31-b45a4fa4c57d",
+      "url": "http://100.98.24.37:8796",
       "pins": [
         "mishima-text"
-      ]
+      ],
+      "overrides": {
+        "mishima-text": {
+          "context": 131072
+        }
+      }
     },
     {
       "url": "http://100.66.28.79:8796",
@@ -286,6 +340,7 @@
       },
       "pins": [
         "animagine-xl-4.0-image",
+        "wairealmix-v11-image",
         "mishima-text"
       ],
       "failure-domain": "local-site",
@@ -295,6 +350,10 @@
         {
           "kind": "image",
           "model": "animagine-xl-4.0"
+        },
+        {
+          "kind": "image",
+          "model": "waiREALMIX_v11"
         }
       ],
       "node": "zebulun"
@@ -313,6 +372,7 @@
       },
       "pins": [
         "animagine-xl-4.0-image",
+        "wairealmix-v11-image",
         "mishima-text"
       ],
       "failure-domain": "local-site",
@@ -322,9 +382,30 @@
         {
           "kind": "image",
           "model": "animagine-xl-4.0"
+        },
+        {
+          "kind": "image",
+          "model": "waiREALMIX_v11"
         }
       ],
       "node": "levi"
+    },
+    {
+      "enabled": true,
+      "failure-domain": "local-site",
+      "node": "jacob-vision",
+      "owner-id": "feeb6f83-0dc1-4cff-82e7-8be668178997",
+      "roles": [
+        {
+          "context": 4096,
+          "kind": "text",
+          "model": "qwen3-vl-2b-instruct"
+        }
+      ],
+      "url": "http://100.117.208.83:8796",
+      "pins": [
+        "qwen3-vl-2b-instruct-text"
+      ]
     }
   ],
   "spec-version": 2,
@@ -336,6 +417,12 @@
       "kind": "text",
       "file": "mishima/model/Ternary-Bonsai-2-27B-PTQ1_0.gguf",
       "bytes": 5946648928
+    },
+    "qwen3-vl-2b-instruct": {
+      "kind": "text"
+    },
+    "waiREALMIX_v11": {
+      "kind": "image"
     }
   }
 }

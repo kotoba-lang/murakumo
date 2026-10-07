@@ -5,6 +5,7 @@
             [murakumo.infer.jobs :as jobs]
             [murakumo.infer.replicated-topology :as topo]
             [murakumo.infer.keepalive :as ka]
+            [murakumo.infer.observation :as observation]
             ["node:fs" :as fs] ["node:http" :as http]
             ["node:crypto" :as crypto] ["node:child_process" :as cp]))
 
@@ -239,6 +240,9 @@
         lanes (atom (into {} (for [[id lane] (:lanes config)]
                               [(name id) (assoc lane :owner-id owner-id :ready false :failures 0 :probing false)])))
         controllers (atom {})
+        ;; L2 (ADR-2610071730): this node's signed self-report, gossiped with peers
+        observations (when-not (false? (:observations? config))
+                       (observation/start! config token topology #(deref lanes)))
         save! #(persist! file @state)
         _ (when-not (.existsSync fs file) (save!))
         _ (when-not bound?
@@ -367,8 +371,16 @@
                                           (json! res 400 {:error "request_failed"})))))))
         server (ka/keep-alive! (.createServer http
                               (fn [req res]
-                                (if-not (authorized? req token)
+                                (cond
+                                  ;; signed, health-only, on the tailnet bind: readable without the
+                                  ;; fleet token so any node / the operator CLI can read the fleet's L2
+                                  (and observations (= "GET" (.-method req)) (= "/observations" (.-url req)))
+                                  (json! res 200 ((:all observations)))
+                                  (and observations (= "GET" (.-method req)) (= "/observation" (.-url req)))
+                                  (json! res 200 (or ((:own observations)) {}))
+                                  (not (authorized? req token))
                                   (json! res 401 {:error "unauthorized"})
+                                  :else
                                   (cond
                                     (and job-service (str/starts-with? (.-url req) "/jobs/"))
                                     (let [[id op extra] (str/split (subs (.-url req) 6) #"/")]
@@ -436,7 +448,8 @@
     (let [timer (js/setInterval tick! (:probe-interval-ms config 30000))
           stop-watchdog! (service-watchdog! config #(.-listening server))]
       {:server server :state state :lanes lanes
-       :close (fn [] (stop-watchdog!) (when job-service ((:close job-service))) (when topology ((:close topology))) (js/clearInterval timer)
+       :close (fn [] (stop-watchdog!) (when observations ((:close observations)))
+                (when job-service ((:close job-service))) (when topology ((:close topology))) (js/clearInterval timer)
                 (doseq [[_ c] @controllers] (.abort c)) (.close server)
                 (when compatibility-server (.close compatibility-server)))})))
 

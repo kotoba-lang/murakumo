@@ -35,6 +35,7 @@
 
 (def unit-pattern #"^(com\.murakumo|cloud\.itonami|ai\.gftd)\.[a-z0-9.-]+$")
 (def name-pattern #"^[a-z0-9][a-z0-9.-]{0,63}$")
+(def model-pattern #"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 (def default-ttl-ms (* 5 60 1000))
 
 ;; ---------------------------------------------------------------- validation
@@ -67,7 +68,7 @@
       (when-not (= 1 (get payload "schema")) [(problem ["schema"] "must stay 1 (wire compatibility)")])
       (for [[m spec] models
             p (concat
-               (when-not (re-matches name-pattern (str m)) [(str "bad model name " m)])
+               (when-not (re-matches model-pattern (str m)) [(str "bad model name " m)])
                (when-not (#{"text" "image"} (get spec "kind")) ["kind must be text|image"])
                (when-let [f (get spec "file")]
                  (when (or (str/starts-with? f "/") (str/includes? f "..")) ["file must be relative to the model root"])))]
