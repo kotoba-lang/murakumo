@@ -322,14 +322,20 @@ harness emits kotoba typed-subset source, and kotoba verifies each function
 wasm32-browser and run through `instantiateKotoba`). The search backtracks
 outward when the policy reports that no candidate fits.
 
-`system-one/gateway.edn` encodes the gateway's `max_tokens` clamp (`poll_worker.cljk`, `(min 2048 …)`) and lane admission (`resident.cljk`, `context >= input + max_tokens`) as `clamp-max-tokens`, `lane-fits` and `fits-after-clamp` (18 212 exhaustive cases; checks use
-independently written oracles). The harness commit is pinned in
+`system-one/gateway.edn` encodes two separate flows as typed kotoba functions
+(19 725 exhaustive cases; checks use independently written oracles):
+`clamp-max-tokens` is the poll worker's clamp (`poll_worker.cljk`,
+`(min 2048 …)`), and `lane-fits` is resident/gateway lane admission against the
+request's original `max_tokens` (`resident.cljk`, `fleet_gateway.cljk`:
+`context >= input + max_tokens`). They are deliberately not composed: the clamp
+is not applied before resident admission in production. The harness commit is pinned in
 `kotoba-harness.pin.edn` and fetched into
-`${XDG_CACHE_HOME:-~/.cache}/kotoba-harness/<sha>`, outside this repository
-(override with `KOTOBA_HARNESS_HOME`).
+`${XDG_CACHE_HOME:-~/.cache}/kotoba-harness/<sha>` on first use (network),
+outside this repository, and reused only while that checkout is the pinned
+commit with a clean worktree (override with `KOTOBA_HARNESS_HOME`).
 
 ```sh
-sh scripts/system-one.sh validate   # offline: shape, catalog, baseline splice
+sh scripts/system-one.sh validate   # no kotoba CLI, no model: shape, catalog, baseline splice
 sh scripts/system-one.sh known      # kotoba verification of known-correct bodies
 sh scripts/system-one.sh wrong      # negative control (rejected)
 OPENROUTER_API_KEY=... sh scripts/system-one.sh jev
