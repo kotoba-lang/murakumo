@@ -1,0 +1,26 @@
+(ns murakumo.ci-broker-token-test
+  "The default lease token (murakumo.ci.broker-service/token): shape, uniqueness, and that the
+  broker uses it when no :token-fn is given."
+  (:require [kotoba.io :as kio]
+            [kotoba.test :refer [deftest is]]
+            [murakumo.ci.broker-service :as service]
+            [murakumo.ci.file-store :as file-store]
+            [murakumo.ci.protocol :as protocol]))
+
+(deftest a-token-is-256-bits-of-lower-case-hex-and-never-repeats
+  (let [tokens (repeatedly 2000 service/token)]
+    (is (every? #(re-matches #"[0-9a-f]{64}" %) tokens))
+    (is (= 2000 (count (set tokens))) "2000 draws, 2000 different tokens")
+    ;; every one of the 64 hex positions takes more than one value across the draws: a
+    ;; constant, counter or low-entropy source would leave positions fixed
+    (is (every? #(> (count (set (map (fn [t] (nth t %)) tokens))) 8) (range 64)))))
+
+(deftest the-broker-issues-the-default-token-when-none-is-injected
+  (let [svc (service/create {:store (file-store/create (str (kio/temp-dir "murakumo-token")))
+                             :lease-ttl-ms 60000})
+        _ ((:submit! svc) {:ci.run/id "run-1" :ci.run/source {:source/revision "abc"}
+                           :ci.run/pipeline-digest "pipeline" :ci.run/requires #{:linux}})
+        offer ((:handler svc) (protocol/lease-request {:runner/id "did:key:zRunner" :runner/capabilities #{:linux}
+                                                       :runner/environment-digest "env"}))
+        t (get-in offer [:murakumo.ci/body :lease :ci.lease/token])]
+    (is (re-matches #"[0-9a-f]{64}" t))))

@@ -1,20 +1,23 @@
 (ns murakumo.ci.broker-service
   "Persistent, versioned broker RPC service for remote Murakumo runners."
-  (:require [murakumo.overlay.rpc :as rpc]
+  (:require ["node:crypto" :as crypto]
             [kotoba.lang.error :as kerror] [murakumo.ci.broker :as broker]
             [murakumo.ci.attest :as attest]
             [murakumo.ci.artifact-upload :as artifact-upload]
             [murakumo.ci.protocol :as protocol]
             [murakumo.ci.store :as store]
-            [nekko.sigref :as sigref])
-  (:import [java.security SecureRandom]))
+            [murakumo.overlay.rpc :as rpc]
+            [nekko.sigref :as sigref]))
 
 (def default-lease-ttl-ms 60000)
 
-(defn- token []
-  (let [bytes (byte-array 32)]
-    (.nextBytes (SecureRandom.) bytes)
-    (apply str (map #(format "%02x" (bit-and (int %) 0xff)) bytes))))
+(defn token
+  "A fresh lease bearer token: 256 bits from the operating system's CSPRNG (node:crypto), as 64
+  lower-case hex characters. The lease token is the credential a runner presents for every later
+  call on its run, so it must be unguessable and must not come from a seeded or time-based
+  generator."
+  []
+  (.toString (.randomBytes crypto 32) "hex"))
 
 (defn create
   [{:keys [store clock-ms lease-ttl-ms token-fn broker-key replicas rid

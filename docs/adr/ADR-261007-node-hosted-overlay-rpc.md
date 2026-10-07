@@ -59,6 +59,16 @@ that are already loaded, so the call sites (`ci.worker`, `ci.broker-service`, `c
 `artifact-replication`) now `:require murakumo.overlay.rpc` instead of resolving it by name. QUIC
 stays resolved lazily, since loading its namespace anywhere but the JVM fails.
 
+## The lease token
+
+The broker's default lease token was built with `java.security.SecureRandom`. That was not a
+blocker, and it needed no replacement to work: the kbb host backs `SecureRandom` with
+`crypto.randomFillSync` (nbb `jvm/security.cljs`), a CSPRNG, and the end-to-end test already ran on
+the default. It is nonetheless now written directly against `node:crypto` (`randomBytes 32`, 64 hex
+characters, `broker-service/token`) so the credential does not depend on an emulated JVM class, and
+`ci-broker-token-test` pins its shape, uniqueness and per-position variation; a constant, a
+time-based and a 64-bit mutant each fail it.
+
 ## Still not done
 
 - `overlay.runtime`: a stack overflow in the relay listen-spec derivation (4 errors, same on `main`).
@@ -67,9 +77,6 @@ stays resolved lazily, since loading its namespace anywhere but the JVM fails.
   CI/CD path needs them once the TCP driver is used.
 - `ci.github-status` needs the synchronous JVM HTTP client; not needed when GitHub is only an event
   source and status is read from Murakumo.
-- `broker-service` still builds its default lease token with `java.security.SecureRandom`; the
-  tests (and so far the end-to-end test) pass a `:token-fn`. A real coordinator on kbb needs that
-  replaced before it issues its first lease.
 - Bulk artifact transfer pays a child-process start per 48 KiB chunk.
 - Nothing has run a coordinator and runners on separate machines, nor a pipeline in the sandbox.
 
