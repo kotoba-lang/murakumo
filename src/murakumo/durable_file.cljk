@@ -115,3 +115,17 @@
      :cljs
      (fs/rmSync (str path) #js {:recursive true :force true}))
   nil)
+
+(defn regular-file?
+  "Is `path` a regular file, NOT following a symbolic link (a link, a directory or a missing
+   path is false)? What a CAS read checks before it trusts a path under its root."
+  [path]
+  #?(:clj (Files/isRegularFile (->path path) (into-array java.nio.file.LinkOption [java.nio.file.LinkOption/NOFOLLOW_LINKS]))
+     :cljs (try (.isFile (fs/lstatSync (str path))) (catch :default _ false))))
+
+(defn read-bytes
+  "The whole file at `path` as host bytes (an Int8Array on Node: the kotoba.bytes convention)."
+  [path]
+  #?(:clj (Files/readAllBytes (->path path))
+     :cljs (let [b (fs/readFileSync (str path))]
+             (js/Int8Array. (.-buffer b) (.-byteOffset b) (.-byteLength b)))))

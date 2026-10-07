@@ -56,3 +56,11 @@
                                :sandbox/timeout-ms 1000 :sandbox/output-dir dir})]
     (is (= :dirty-output-directory (get-in result [:artifact-error :reason])))
     (is (false? (io/exists? (io/file touched))))))
+
+(deftest process-adapter-passes-the-environment-it-is-given
+  (let [result (host/execute-command! {:argv ["/usr/bin/env"] :timeout-ms 2000
+                                       :env {"MURAKUMO_PROBE" "yes"}})]
+    (is (= 0 (:exit result)))
+    (is (some? (re-find #"MURAKUMO_PROBE=yes" (:stdout result))))
+    ;; the parent's environment is kept, not replaced
+    (is (some? (re-find #"PATH=" (:stdout result))))))
