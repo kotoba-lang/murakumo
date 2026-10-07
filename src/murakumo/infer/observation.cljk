@@ -26,6 +26,7 @@
             ["node:crypto" :as crypto] ["node:child_process" :as cp]))
 
 (def ttl-ms (* 15 60 1000))
+(def process-started (js/Date.now))
 (def future-skew-ms (* 2 60 1000))
 
 (def workload-units
@@ -169,9 +170,15 @@
                                st (assoc :bytes (.-size st)
                                          :size-matches (or (nil? (:bytes spec)) (= (:bytes spec) (.-size st)))))])))
 
-(def ^:private release-id
-  (delay (try (subs (.digest (.update (.createHash crypto "sha256") (.readFileSync fs (aget (.-argv js/process) 1))) "hex") 0 16)
-              (catch :default _ nil))))
+(def ^:private release-ids (atom {}))
+(defn- release-id
+  "First 16 hex of the release file's sha256 (config :release-file, else the
+  script this process runs) — the same file P5a self-update replaces."
+  [config]
+  (let [f (or (:release-file config) (aget (.-argv js/process) 1))]
+    (or (get @release-ids f)
+        (let [id (try (subs (.digest (.update (.createHash crypto "sha256") (.readFileSync fs f)) "hex") 0 16) (catch :default _ nil))]
+          (swap! release-ids assoc f id) id))))
 
 ;; ---------------------------------------------------------------- store + gossip
 
@@ -227,16 +234,18 @@
                                       doc (sign key {:node (:node config)
                                                      :did (:did key)
                                                      :at (js/Date.now)
-                                                     :release @release-id
+                                                     :release (release-id config)
                                                      :topology (topo/summary topology)
                                                      :lanes (into (sorted-map)
                                                                   (for [[id l] (lanes-fn)]
                                                                     [id (select-keys l [:model :kind :context :ready :failures])]))
                                                      :host host
                                                      :units units
-                                                     :models (if model-root (model-files payload model-root) {})
-                                                     ;; e.g. the convergence plan (P3a)
-                                                     :converge (when extra-fn (try (extra-fn) (catch :default _ nil)))})]
+                                                     :models (if model-root (model-files payload model-root) {})})
+                                      doc (sign key (merge (:payload doc)
+                                                           {:started-at process-started}
+                                                           ;; e.g. the convergence plan (P3a), the rollout (P5a)
+                                                           (when extra-fn (try (extra-fn) (catch :default _ nil)))))]
                                   ;; our own entry goes through the same gate as a peer's
                                   (accept! doc #{(:node config)}))))
                        (.catch (fn [_] nil))))
@@ -260,7 +269,9 @@
                                           ;; the peer at u may introduce only its own key
                                           (.then (fn [m] (doseq [[_ d] m] (accept! d #{(node-at u)}))))))))
                           (.finally #(reset! polling false))))))
-        t1 (js/setInterval observe! (:probe-interval-ms config 30000))
+        ;; its own interval (not the lane probe's): host probes such as netstat
+        ;; are not free, and a fast canary must not make them fast too
+        t1 (js/setInterval observe! (:observation-interval-ms config 30000))
         t2 (js/setInterval gossip! (:observation-poll-ms config 10000))]
     (observe!)
     {:own #(get @store (:node config))

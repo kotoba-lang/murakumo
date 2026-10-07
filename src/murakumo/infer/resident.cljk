@@ -8,6 +8,7 @@
             [murakumo.infer.observation :as observation]
             [murakumo.infer.converge :as converge]
             [murakumo.infer.lease :as lease]
+            [murakumo.infer.rollout :as rollout]
             ["node:fs" :as fs] ["node:http" :as http]
             ["node:crypto" :as crypto] ["node:child_process" :as cp]))
 
@@ -215,7 +216,12 @@
     (fn [] nil)))
 
 (defn start! [config]
-  (let [token (private-token (:token-file config))
+  (let [;; one drain file for admission, health and the self-update (P5a), even
+        ;; when the config does not name one
+        config (cond-> config
+                 (and (:state-file config) (not (:drain-file config)))
+                 (assoc :drain-file (str (:state-file config) ".draining")))
+        token (private-token (:token-file config))
         file (:state-file config)
         owner-file (:owner-id-file config (str file ".owner-id"))
         existing-owner? (.existsSync fs owner-file)
@@ -244,12 +250,15 @@
         controllers (atom {})
         ;; L2 (ADR-2610071730): this node's signed self-report, gossiped with peers
         converger (atom nil)
+        roller (atom nil)
         ;; token-free observation reads only on a private bind (loopback or tailnet)
         private-bind? (boolean (re-matches #"127\.0\.0\.1|100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+"
                                            (str (:bind config "127.0.0.1"))))
         observations (when-not (false? (:observations? config))
                        (observation/start! config token topology #(deref lanes)
-                                           {:extra-fn #(when-let [c @converger] ((:status c)))}))
+                                           {:extra-fn #(cond-> {}
+                                                         @converger (assoc :converge ((:status @converger)))
+                                                         @roller (assoc :rollout ((:status @roller))))}))
         ;; P3a (ADR-2610071730): plan this node's share every interval; act only
         ;; when the signed intent says enforce for this node (see converge ns)
         ;; P3b: quorum leases on the same signed voters as the jobs (policies.job-voters)
@@ -261,6 +270,14 @@
         lease-client (when (seq lease-voters) (lease/http-client lease-voters token))
         _ (when (and observations topology (not (false? (:converge? config))))
             (reset! converger (converge/start! config topology observations lease-client)))
+        ;; P5a: follow the signed intent's resident release in waves (self-update)
+        _ (when (and observations topology (not (false? (:rollout? config))))
+            (reset! roller
+                    (rollout/start! config token topology
+                                    #(into {} (for [[n d] ((:all observations))]
+                                                [(topo/key-name n) (js->clj (js/JSON.parse (topo/encoded (:payload d))))]))
+                                    #(boolean (or (some some? (vals (:groups @state)))
+                                                  (and job-service (pos? (count @(:active job-service)))))))))
         save! #(persist! file @state)
         _ (when-not (.existsSync fs file) (save!))
         _ (when-not bound?
@@ -398,6 +415,13 @@
                                   (and observations (= "GET" (.-method req)) (= "/observation" (.-url req))
                                        (or private-bind? (authorized? req token)))
                                   (json! res 200 (or ((:own observations)) {}))
+                                  ;; P5a: release bytes for peers (public code, sha256-addressed)
+                                  (and (= "GET" (.-method req)) (str/starts-with? (.-url req) "/release/")
+                                       (or private-bind? (authorized? req token)))
+                                  (if-let [buf (rollout/serve-release config (subs (.-url req) 9))]
+                                    (do (.writeHead res 200 #js {"content-type" "text/javascript" "content-length" (.-length buf)})
+                                        (.end res buf))
+                                    (json! res 404 {:error "release_not_here"}))
                                   (not (authorized? req token))
                                   (json! res 401 {:error "unauthorized"})
                                   :else
@@ -418,6 +442,10 @@
                                                 (js/Promise.reject (js/Error. "invalid job method"))))
                                             (.then #(json! res (if (and (= "POST" (.-method req)) (nil? op)) 202 200) %))
                                             (.catch (fn [_] (json! res 503 {:error "job_not_admitted" :retry "same-id-only"}))))))
+                                    (and (= "POST" (.-method req)) (= "/release" (.-url req)))
+                                    (-> (read-body! req rollout/max-release-bytes)
+                                        (.then (fn [bytes] (json! res 200 {:sha256 (rollout/accept-push! config bytes)})))
+                                        (.catch (fn [_] (json! res 400 {:error "invalid_release"}))))
                                     (and lease-acceptor (= "GET" (.-method req)) (str/starts-with? (.-url req) "/leases/hint/"))
                                     (json! res 200 {:epoch ((:hint lease-acceptor) (subs (.-url req) 13))})
                                     (and lease-acceptor (= "POST" (.-method req)) (str/starts-with? (.-url req) "/leases/"))
@@ -479,7 +507,7 @@
     (let [timer (js/setInterval tick! (:probe-interval-ms config 30000))
           stop-watchdog! (service-watchdog! config #(.-listening server))]
       {:server server :state state :lanes lanes
-       :close (fn [] (stop-watchdog!) (when @converger ((:close @converger))) (when observations ((:close observations)))
+       :close (fn [] (stop-watchdog!) (when @converger ((:close @converger))) (when @roller ((:close @roller))) (when observations ((:close observations)))
                 (when job-service ((:close job-service))) (when topology ((:close topology))) (js/clearInterval timer)
                 (doseq [[_ c] @controllers] (.abort c)) (.close server)
                 (when compatibility-server (.close compatibility-server)))})))

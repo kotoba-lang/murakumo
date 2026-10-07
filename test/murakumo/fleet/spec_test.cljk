@@ -31,6 +31,17 @@
 (defn- obs [& {:as m}] (merge {:at-ms now :pressure 1} m))
 (def all-fresh {"a" (obs) "bb" (obs) "ccc" (obs) "dddd" (obs)})
 
+(deftest validates-resident-rollout
+  (let [ok {"sha256" (apply str (repeat 64 "a")) "waves" [["a"] ["bb" "ccc"]] "settle-ms" 1000}
+        bad? (fn [r] (seq (spec/validate (assoc-in intent ["agents" "resident"] r))))]
+    (is (not (bad? ok)))
+    (is (bad? (assoc ok "sha256" nil)) "null sha")
+    (is (bad? (assoc ok "settle-ms" nil)) "NaN settle serialized as null")
+    (is (bad? (assoc ok "settle-ms" 0)))
+    (is (bad? (assoc ok "waves" [["a"] ["a"]])) "a node in two waves")
+    (is (bad? (assoc ok "waves" [["zz"]])) "unknown node")
+    (is (bad? (assoc ok "urls" ["http://x"])) "fallback urls must be https")))
+
 (deftest validates-intent
   (is (= [] (spec/validate intent)))
   (testing "NO-ARGV-IN-SPEC"
