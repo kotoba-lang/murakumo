@@ -107,3 +107,30 @@
   (let [r (rpc/handle-request-envelope (pr-str {:payload 5}) inc)]
     (is (= 6 (:response r)))
     (is (= "6" (:response-line r)))))
+
+(defn- fragmented!
+  "Send `text` in `n`-byte writes, then read the answer until the server closes. -> Promise<string>."
+  [port text n]
+  (js/Promise.
+   (fn [resolve _]
+     (let [buf (atom "") s (.connect net #js {:host "127.0.0.1" :port port})]
+       (.on s "connect" (fn []
+                          (doseq [i (range 0 (count text) n)]
+                            (.write s (subs text i (min (count text) (+ i n)))))))
+       (.on s "data" (fn [c] (swap! buf str c)))
+       (.on s "error" (fn [_] (resolve @buf)))
+       (.on s "close" (fn [] (resolve @buf)))))))
+
+(deftest a-large-response-arrives-whole-and-a-fragmented-request-is-read-once
+  (async done
+    (-> (start-server! "echo")
+        (.then (fn [port]
+                 ;; larger than any pipe buffer: the client child must drain stdout before exiting
+                 (let [big (apply str (repeat (* 1024 1024) "y"))
+                       r (tcp/request! (over port) big 15000)]
+                   (is (true? (:ok? r)) (str (:reason r) " " (:message r)))
+                   (is (= {:echo big} (:response r))))
+                 (-> (fragmented! port (str (pr-str {:payload {:a 1}}) "\n") 3)
+                     (.then (fn [answer] (is (= {:echo {:a 1}} (edn/read-string answer))))))))
+        (.catch (fn [e] (is false (str "unexpected: " (.-message e)))))
+        (.then (fn [_] (stop-all!) (done))))))

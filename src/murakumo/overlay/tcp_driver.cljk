@@ -41,7 +41,7 @@
 
 (def ^:private client-js
   ;; stdin: {"host","port","line","timeoutMs","maxBytes"}; stdout: {"ok":true,"line":..} | {"ok":false,"reason","message"}
-  "const net=require('node:net');let raw='';process.stdin.on('data',c=>raw+=c);process.stdin.on('end',()=>{const q=JSON.parse(raw);let buf=Buffer.alloc(0),done=false;const out=o=>{if(!done){done=true;process.stdout.write(JSON.stringify(o));process.exit(0)}};const s=net.connect({host:q.host,port:q.port});s.setTimeout(q.timeoutMs,()=>{s.destroy();out({ok:false,reason:'timeout',message:'no response in '+q.timeoutMs+' ms'})});s.on('error',e=>out({ok:false,reason:'stream-error',message:e.message}));s.on('connect',()=>s.write(q.line+'\\n'));s.on('data',c=>{buf=Buffer.concat([buf,c]);if(buf.length>q.maxBytes){s.destroy();return out({ok:false,reason:'stream-error',message:'response too large'})}const i=buf.indexOf(10);if(i>=0){s.end();out({ok:true,line:buf.subarray(0,i).toString('utf8')})}});s.on('close',()=>out({ok:false,reason:'stream-error',message:'closed before a response'}))});")
+  "const net=require('node:net');let raw='';process.stdin.on('data',c=>raw+=c);process.stdin.on('end',()=>{const q=JSON.parse(raw);let buf=Buffer.alloc(0),done=false;const out=o=>{if(!done){done=true;process.stdout.write(JSON.stringify(o),()=>process.exit(0))}};const s=net.connect({host:q.host,port:q.port});s.setTimeout(q.timeoutMs,()=>{s.destroy();out({ok:false,reason:'timeout',message:'no response in '+q.timeoutMs+' ms'})});s.on('error',e=>out({ok:false,reason:'stream-error',message:e.message}));s.on('connect',()=>s.write(q.line+'\\n'));s.on('data',c=>{buf=Buffer.concat([buf,c]);if(buf.length>q.maxBytes){s.destroy();return out({ok:false,reason:'stream-error',message:'response too large'})}const i=buf.indexOf(10);if(i>=0){s.end();out({ok:true,line:buf.subarray(0,i).toString('utf8')})}});s.on('close',()=>out({ok:false,reason:'stream-error',message:'closed before a response'}))});")
 
 (defn request!
   "One round trip, blocking. -> {:ok? true :request envelope :response edn} or
@@ -90,14 +90,21 @@
     (.on socket "data"
          (fn [chunk]
            (when-not @answered
-             (swap! size + (.-length chunk))
-             (if (> @size max-line-bytes)
-               (answer! (pr-str {:error "request too large"}))
-               (let [all (js/Buffer.concat (clj->js (conj @chunks chunk)))
-                     i (.indexOf all 10)]
-                 (if (neg? i)
-                   (swap! chunks conj chunk)
-                   (finish! (.subarray all 0 i))))))))))
+             ;; Look for the delimiter in the new chunk only, and count only the bytes before
+             ;; it, so a line of exactly max-line-bytes is accepted and a fragmented line is
+             ;; concatenated once rather than on every chunk.
+             (let [i (.indexOf chunk 10)
+                   line-part (if (neg? i) chunk (.subarray chunk 0 i))]
+               (swap! size + (.-length line-part))
+               (cond
+                 (> @size max-line-bytes)
+                 (answer! (pr-str {:error "request too large"}))
+
+                 (neg? i)
+                 (swap! chunks conj chunk)
+
+                 :else
+                 (finish! (js/Buffer.concat (clj->js (conj @chunks line-part)))))))))))
 
 (defn start-rpc-server!
   "Listen on the endpoint `request` describes and answer every connection with `handler`.
