@@ -1,6 +1,7 @@
 (ns murakumo.infer.replicated-topology
   "Operator-signed desired topology, replicated without a mandatory controller."
   (:require [clojure.string :as str]
+            [murakumo.infer.keepalive :as ka]
             ["node:fs" :as fs] ["node:path" :as path] ["node:crypto" :as crypto]))
 
 (defn key-name [x]
@@ -126,7 +127,7 @@
                           urls (take (:topology-fanout config 3) (concat (subvec all-urls offset) (subvec all-urls 0 offset)))]
                       (-> (js/Promise.allSettled
                            (clj->js (for [url urls]
-                             (-> (js/fetch (str (str/replace url #"/$" "") "/topology")
+                             (-> (ka/fetch (str (str/replace url #"/$" "") "/topology")
                                            #js {:headers #js {"authorization" (str "Bearer " token)}
                                                 :redirect "error" :signal (.timeout js/AbortSignal 3000)})
                                  (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "topology peer unavailable"))) (read-document! r)))

@@ -4,6 +4,7 @@
             [clojure.walk :as walk]
             [murakumo.infer.jobs :as jobs]
             [murakumo.infer.replicated-topology :as topo]
+            [murakumo.infer.keepalive :as ka]
             ["node:fs" :as fs] ["node:http" :as http]
             ["node:crypto" :as crypto] ["node:child_process" :as cp]))
 
@@ -131,7 +132,7 @@
                           :optional? (:external-image-queue-optional? lane)}))
           :when (and (= "text" (:kind lane)) (= "image" (:kind image))
                      (= (:group lane) (:group image)))]
-      (-> (js/fetch (str (.-origin (js/URL. (:readiness-url image))) "/queue")
+      (-> (ka/fetch (str (.-origin (js/URL. (:readiness-url image))) "/queue")
                     #js {:signal (.timeout js/AbortSignal 3000)})
           (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "queue unavailable"))) (.json r)))
           (.then (fn [q]
@@ -151,14 +152,14 @@
         signal (.timeout js/AbortSignal 15000)]
     (if (= "text" (:kind lane))
       ;; /slots must show no external job before a canary can occupy this model.
-      (-> (js/fetch (str url "/slots") #js {:signal signal})
+      (-> (ka/fetch (str url "/slots") #js {:signal signal})
           (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "slots unavailable"))) (.json r)))
           (.then (fn [slots]
                    (when-not (js/Array.isArray slots) (throw (js/Error. "invalid slot inventory")))
                    (when (some #(true? (:is_processing %)) (js->clj slots :keywordize-keys true))
                      (let [e (js/Error. "backend occupied outside resident")]
                        (set! (.-code e) "BACKEND_BUSY") (throw e)))
-                   (js/fetch (str url "/v1/chat/completions")
+                   (ka/fetch (str url "/v1/chat/completions")
                              #js {:method "POST" :signal signal
                                   :headers #js {"content-type" "application/json"}
                                   :body (js/JSON.stringify
@@ -170,7 +171,7 @@
                    (let [s (str/trim (or (some-> body .-choices (aget 0) .-message .-content) ""))]
                      (when-not (= "5" s) (throw (js/Error. "canary answer incorrect"))) true))))
       ;; Image readiness is upstream dependency readiness, not the bridge's own 200.
-      (-> (js/fetch (str (.-origin (js/URL. (:readiness-url lane))) "/queue") #js {:signal signal})
+      (-> (ka/fetch (str (.-origin (js/URL. (:readiness-url lane))) "/queue") #js {:signal signal})
           (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "image queue unavailable"))) (.json r)))
           (.then (fn [queue]
                    (when-not (and (js/Array.isArray (.-queue_running queue)) (js/Array.isArray (.-queue_pending queue)))
@@ -178,7 +179,7 @@
                    (when (or (pos? (.-length (.-queue_running queue))) (pos? (.-length (.-queue_pending queue))))
                      (let [e (js/Error. "image backend occupied")]
                        (set! (.-code e) "BACKEND_BUSY") (throw e)))
-                   (js/fetch (:readiness-url lane) #js {:signal signal})))
+                   (ka/fetch (:readiness-url lane) #js {:signal signal})))
           (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "image backend unavailable"))) (.json r)))
           (.then (fn [body]
                    (let [inventory (js->clj body :keywordize-keys true)
@@ -187,7 +188,7 @@
                          checkpoint (if (str/ends-with? model ".safetensors") model (str model ".safetensors"))]
                      (when-not (some #{checkpoint} names)
                        (throw (js/Error. "image checkpoint unavailable")))
-                     (js/fetch (str (:backend lane) "/readiness") #js {:signal signal}))))
+                     (ka/fetch (str (:backend lane) "/readiness") #js {:signal signal}))))
           (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "image execution bridge unavailable"))) (.json r)))
           (.then (fn [body]
                    (let [report (js->clj body :keywordize-keys true)]
@@ -334,7 +335,7 @@
                                     (save!)
                                     (swap! controllers assoc id controller)
                                     (.on res "close" #(when-not (.-writableEnded res) (.abort controller)))
-                                    (-> (js/fetch (str (:backend lane) (:path lane))
+                                    (-> (ka/fetch (str (:backend lane) (:path lane))
                                                   #js {:method "POST" :signal (.-signal controller)
                                                        :headers #js {"content-type" "application/json"}
                                                        :body (if (= "text" (:kind lane))
@@ -364,7 +365,7 @@
                                         (if (backend-busy-error? e)
                                           (json! res 429 {:error "busy" :executed false})
                                           (json! res 400 {:error "request_failed"})))))))
-        server (.createServer http
+        server (ka/keep-alive! (.createServer http
                               (fn [req res]
                                 (if-not (authorized? req token)
                                   (json! res 401 {:error "unauthorized"})
@@ -401,7 +402,7 @@
                                                                                      [:model :kind :context :max-image-tokens :max-images :ready :busy :failures])]))})
                                     (and (= "POST" (.-method req)) (str/starts-with? (.-url req) "/execute/"))
                                     (execute! req res (subs (.-url req) 9) false)
-                                    :else (json! res 404 {:error "not_found"})))))
+                                    :else (json! res 404 {:error "not_found"}))))))
         compatibility-server
         (when (:compat-port config)
           (when-not (and (:compat-bind config)
@@ -409,7 +410,7 @@
                              (re-matches #"100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+" (:compat-bind config)))
                          (get @lanes "text"))
             (throw (js/Error. "compat-port requires explicit loopback or tailnet bind and a text lane")))
-          (.createServer http
+          (ka/keep-alive! (.createServer http
             (fn [req res]
               (let [lane (get @lanes "text")
                     lane (qualified-lane topology (:node config) lane)
@@ -425,7 +426,7 @@
                       (aset (.-headers req) "x-murakumo-job-id"
                             (str (:node config) "_text_" (.toString (.randomBytes crypto 16) "hex"))))
                     (execute! req res "text" true))
-                  :else (json! res 404 {:error "not_found"}))))))]
+                  :else (json! res 404 {:error "not_found"})))))))]
     (doseq [[id l] @lanes]
       (when-not (and (:group l) (:backend l) (:model l) (:path l))
         (throw (js/Error. (str "incomplete lane " id)))))

@@ -4,7 +4,7 @@ set -eu
 cd "$(dirname "$0")/.."
 mkdir -p .node-build/src/murakumo/infer release
 trap 'rm -rf .node-build' EXIT HUP INT TERM
-for name in poll_worker image_job backoff replicated_topology jobs jobs_cli resident fleet_gateway; do
+for name in poll_worker image_job backoff keepalive replicated_topology jobs jobs_cli resident fleet_gateway; do
   cp "src/murakumo/infer/$name.cljk" ".node-build/src/murakumo/infer/$name.cljs"
 done
 mkdir -p .node-build/src/murakumo
