@@ -241,6 +241,9 @@
                               [(name id) (assoc lane :owner-id owner-id :ready false :failures 0 :probing false)])))
         controllers (atom {})
         ;; L2 (ADR-2610071730): this node's signed self-report, gossiped with peers
+        ;; token-free observation reads only on a private bind (loopback or tailnet)
+        private-bind? (boolean (re-matches #"127\.0\.0\.1|100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]+\.[0-9]+"
+                                           (str (:bind config "127.0.0.1"))))
         observations (when-not (false? (:observations? config))
                        (observation/start! config token topology #(deref lanes)))
         save! #(persist! file @state)
@@ -374,9 +377,11 @@
                                 (cond
                                   ;; signed, health-only, on the tailnet bind: readable without the
                                   ;; fleet token so any node / the operator CLI can read the fleet's L2
-                                  (and observations (= "GET" (.-method req)) (= "/observations" (.-url req)))
+                                  (and observations (= "GET" (.-method req)) (= "/observations" (.-url req))
+                                       (or private-bind? (authorized? req token)))
                                   (json! res 200 ((:all observations)))
-                                  (and observations (= "GET" (.-method req)) (= "/observation" (.-url req)))
+                                  (and observations (= "GET" (.-method req)) (= "/observation" (.-url req))
+                                       (or private-bind? (authorized? req token)))
                                   (json! res 200 (or ((:own observations)) {}))
                                   (not (authorized? req token))
                                   (json! res 401 {:error "unauthorized"})

@@ -20,6 +20,7 @@
   resident still requires it."
   (:require [clojure.string :as str]
             [murakumo.infer.keepalive :as ka]
+            [murakumo.infer.jobs :as jobs]
             [murakumo.infer.replicated-topology :as topo]
             ["node:fs" :as fs] ["node:path" :as path] ["node:os" :as os]
             ["node:crypto" :as crypto] ["node:child_process" :as cp]))
@@ -180,8 +181,12 @@
   (try (js->clj (js/JSON.parse (.readFileSync fs (pins-file config) "utf8"))) (catch :default _ {})))
 
 (defn accept
-  "Pure merge decision. Returns [store' pins' accepted? reason]."
-  [store pins doc now]
+  "Pure merge decision. Returns [store' pins' accepted? reason].
+  may-pin: the nodes whose key this call may pin for the first time — only a
+  node's OWN document, fetched from that node's topology URL (or this node's
+  own). A relayed document for a node not yet pinned is refused, so a peer
+  cannot claim another node's identity by getting there first."
+  [store pins doc now & [{:keys [may-pin]}]]
   (let [p (verified-payload doc)
         node (:node p)]
     (cond
@@ -189,6 +194,7 @@
       (> (:at p) (+ now future-skew-ms)) [store pins false "dated in the future"]
       (< (:at p) (- now ttl-ms)) [store pins false "stale"]
       (and (get pins node) (not= (get pins node) (:did p))) [store pins false (str "key for " node " differs from the pinned did")]
+      (and (nil? (get pins node)) (not (contains? (set may-pin) node))) [store pins false (str node " is not pinned yet; only its own URL may introduce its key")]
       (and (get store node) (<= (:at p) (get-in store [node :payload :at]))) [store pins false "not newer"]
       :else [(assoc store node doc) (assoc pins node (:did p)) true "accepted"])))
 
@@ -202,12 +208,15 @@
   (let [key (node-key! (or (:node-key-file config) (str (:state-file config) ".node-key")))
         store (atom {}) pins (atom (read-pins config))
         model-root (or (:model-root config) "/Users/Shared/murakumo")
-        accept! (fn [doc]
-                  (let [[s p ok? why] (accept @store @pins doc (js/Date.now))]
+        accept! (fn [doc & [may-pin]]
+                  (let [[s p ok? _] (accept @store @pins doc (js/Date.now) {:may-pin may-pin})]
                     (when ok?
-                      (when (not= p @pins)
-                        (try (topo/persist! (pins-file config) p) (catch :default _ nil)))
-                      (reset! store s) (reset! pins p))
+                      ;; a new pin must be durable BEFORE it is used: a pin held only
+                      ;; in memory would be gone after a restart, letting another key in
+                      (if (= p @pins)
+                        (reset! store s)
+                        (when (try (topo/persist! (pins-file config) p) true (catch :default _ false))
+                          (reset! store s) (reset! pins p))))
                     ok?))
         observe! (fn []
                    (-> (js/Promise.all #js [(host-facts) (unit-states)])
@@ -225,13 +234,14 @@
                                                      :units units
                                                      :models (model-files payload model-root)})]
                                   ;; our own entry goes through the same gate as a peer's
-                                  (accept! doc))))
+                                  (accept! doc #{(:node config)}))))
                        (.catch (fn [_] nil))))
         cursor (atom 0) polling (atom false)
         gossip! (fn []
                   (when (compare-and-set! polling false true)
                     (let [payload (topo/payload topology)
                           urls (vec (distinct (keep :url (concat (:nodes payload)))))
+                          node-at (into {} (for [n (:nodes payload)] [(:url n) (:node n)]))
                           offset (mod (swap! cursor inc) (max 1 (count urls)))
                           picked (take (:observation-fanout config 3) (concat (subvec urls offset) (subvec urls 0 offset)))]
                       (-> (js/Promise.allSettled
@@ -239,8 +249,12 @@
                                       (-> (ka/fetch (str (str/replace u #"/$" "") "/observations")
                                                     #js {:headers #js {"authorization" (str "Bearer " token)}
                                                          :redirect "error" :signal (.timeout js/AbortSignal 4000)})
-                                          (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "unavailable"))) (.json r)))
-                                          (.then (fn [m] (doseq [[_ d] (js->clj m :keywordize-keys true)] (accept! d))))))))
+                                          ;; bounded like the topology exchange: a faulty peer must not
+                                          ;; exhaust memory through gossip
+                                          (.then (fn [r] (when-not (.-ok r) (throw (js/Error. "unavailable")))
+                                                   (jobs/bounded-json! r (:observation-max-bytes config 4194304))))
+                                          ;; the peer at u may introduce only its own key
+                                          (.then (fn [m] (doseq [[_ d] m] (accept! d #{(node-at u)}))))))))
                           (.finally #(reset! polling false))))))
         t1 (js/setInterval observe! (:probe-interval-ms config 30000))
         t2 (js/setInterval gossip! (:observation-poll-ms config 10000))]

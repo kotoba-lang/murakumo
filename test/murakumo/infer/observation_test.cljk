@@ -21,19 +21,22 @@
 (deftest merge-rules
   (let [a (key!) b (key!)
         doc (fn [k node at] (o/sign k {:node node :did (:did k) :at at}))
-        [s p ok?] (o/accept {} {} (doc a "n0" now) now)]
+        [s p ok?] (o/accept {} {} (doc a "n0" now) now {:may-pin #{"n0"}})]
     (is ok?)
+    (testing "a relayed document cannot introduce a node's key (only its own URL can)"
+      (is (re-find #"not pinned yet" (nth (o/accept {} {} (doc b "n1" now) now {:may-pin #{"n0"}}) 3)))
+      (is (nth (o/accept {} {} (doc b "n1" now) now {:may-pin #{"n1"}}) 2)))
     (testing "newer wins, older and equal are not taken"
       (is (nth (o/accept s p (doc a "n0" (+ now 10)) now) 2))
       (is (not (nth (o/accept s p (doc a "n0" (- now 10)) now) 2))))
     (testing "another key for a known node is refused (pinned)"
       (is (re-find #"pinned" (nth (o/accept s p (doc b "n0" (+ now 10)) now) 3))))
     (testing "stale and future"
-      (is (= "stale" (nth (o/accept {} {} (doc a "n1" (- now o/ttl-ms 1)) now) 3)))
-      (is (= "dated in the future" (nth (o/accept {} {} (doc a "n1" (+ now o/future-skew-ms 1)) now) 3))))
+      (is (= "stale" (nth (o/accept {} {} (doc a "n1" (- now o/ttl-ms 1)) now {:may-pin #{"n1"}}) 3)))
+      (is (= "dated in the future" (nth (o/accept {} {} (doc a "n1" (+ now o/future-skew-ms 1)) now {:may-pin #{"n1"}}) 3))))
     (testing "tampered payload or a did that did not sign"
-      (is (= "bad signature" (nth (o/accept {} {} (assoc-in (doc a "n1" now) [:payload :node] "n2") now) 3)))
-      (is (= "bad signature" (nth (o/accept {} {} (assoc-in (doc a "n1" now) [:payload :did] (:did b)) now) 3))))
+      (is (= "bad signature" (nth (o/accept {} {} (assoc-in (doc a "n1" now) [:payload :node] "n2") now {:may-pin #{"n2"}}) 3)))
+      (is (= "bad signature" (nth (o/accept {} {} (assoc-in (doc a "n1" now) [:payload :did] (:did b)) now {:may-pin #{"n1"}}) 3))))
     (testing "fresh drops expired entries"
       (is (= ["n0"] (keys (o/fresh s now))))
       (is (empty? (o/fresh s (+ now o/ttl-ms 1)))))))
