@@ -126,11 +126,26 @@
       :free-pct (js/Math.round (* 100 (/ (.freemem os) (.totalmem os))))
       :loadavg (vec (array-seq (.loadavg os))) :uptime-s (js/Math.floor (.uptime os))})))
 
+(defn- systemd-units
+  "Linux: murakumo / itonami systemd services -> running | <active state>.
+  Names differ per host (murakumo-k16-mishima, murakumo-b70-bonsai-native …),
+  so they are reported as they are; classes are matched by lanes instead."
+  []
+  (-> (exec ["systemctl" "list-units" "--type=service" "--all" "--no-legend" "--plain" "--no-pager"
+             "murakumo-*" "itonami-*" "cloud-itonami*"] 8000)
+      (.then (fn [out]
+               (into (sorted-map)
+                     (for [line (str/split-lines (or out ""))
+                           :let [[unit _load active sub] (str/split (str/trim line) #"\s+")]
+                           :when (and unit (str/ends-with? unit ".service"))]
+                       [(subs unit 0 (- (count unit) 8)) (if (= "running" sub) "running" (str active "/" sub))]))))))
+
 (defn unit-states
-  "label -> running | loaded | not-loaded | absent (launchd system domain)."
+  "label -> running | loaded | not-loaded | absent (launchd system domain), or
+  on Linux the murakumo/itonami systemd services."
   []
   (if-not (= "darwin" (.-platform js/process))
-    (js/Promise.resolve {})
+    (systemd-units)
     (-> (js/Promise.all
          (clj->js (for [l workload-units]
                     (-> (exec ["launchctl" "print" (str "system/" l)] 4000)
