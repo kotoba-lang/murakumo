@@ -83,7 +83,7 @@ Discrimination measured 2026-09-10, four states, each by its own reason:
 ## Not done here
 
 The check is `.cljs` (nbb), matching this repo's seven existing scripts.
-CLAUDE.md's kbb-first rule applies to it; it should migrate with the other
+AGENTS.md's kbb-first rule applies to it; it should migrate with the other
 seven rather than become the lone exception. Named so the deviation is a
 decision rather than an oversight.
 

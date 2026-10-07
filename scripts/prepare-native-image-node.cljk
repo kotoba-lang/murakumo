@@ -1,0 +1,37 @@
+(ns prepare-native-image-node
+  "Prepare pinned native Qwen weights/runtime, then qualify a real 512px image before registration."
+  (:require [murakumo.infer.image-native :as native] ["node:child_process" :as cp]
+            ["node:fs" :as fs]))
+(let [[host mode] *command-line-args* root "/opt/murakumo/qwen-image21"
+      encode #(.toString (js/Buffer.from %) "base64")
+      downloads (apply str
+                 (map (fn [{:keys [file remote-file repo revision sha256]}]
+                        (str "if ! test -f " root "/models/" file " || ! echo '" sha256 "  " root "/models/" file "' | sha256sum -c --status; then\n"
+                             "curl -fL --retry 3 --connect-timeout 20 -o " root "/models/" file ".part https://huggingface.co/" repo "/resolve/" revision "/" (or remote-file file) "\n"
+                             "echo '" sha256 "  " root "/models/" file ".part' | sha256sum -c --status\nmv " root "/models/" file ".part " root "/models/" file "\nfi\n")) native/artifacts))
+      marker (js/JSON.stringify (clj->js {:model native/model-id :runtime native/runtime-revision :backend "cpu" :sha256 (mapv :sha256 native/artifacts)}))
+      probe (str root "/qualification.png")
+      args (native/arguments {:native-root root}
+                            {:model native/model-id :input {:prompt "A blue ceramic teapot on a wooden table, soft daylight, realistic still life, no people, no text"
+                                                          :width 512 :height 512 :steps 25 :seed 42}} probe)
+      quote-arg #(str "'" (.replaceAll % "'" "'\"'\"'") "'")
+      script (str "set -euo pipefail\ntest \"$(id -u)\" = 0\nmkdir -p " root "/models\n"
+                  "if systemctl is-active --quiet murakumo-native-image-worker.service; then echo 'Stop the idle image worker before requalification'; exit 1; fi\n"
+                  ;; A failed new runtime/render must never inherit an old qualification.
+                  "rm -f " root "/qualified.json " probe "\n"
+                  (when-not (= mode "--qualify")
+                    (str downloads "test -d " root "/runtime/.git || git clone --recursive https://github.com/leejet/stable-diffusion.cpp " root "/runtime\n"
+                         "cd " root "/runtime\ngit checkout " native/runtime-revision "\ngit submodule update --init --recursive\n"
+                         "cmake -B build -DSD_VULKAN=ON -DCMAKE_BUILD_TYPE=Release\nnice -n 10 cmake --build build --target sd-cli -j2\n"))
+                  "test \"$(git -C " root "/runtime rev-parse HEAD)\" = " native/runtime-revision "\n"
+                  (apply str (map (fn [{:keys [file sha256]}] (str "echo '" sha256 "  " root "/models/" file "' | sha256sum -c --status\n")) native/artifacts))
+                  ;; A real renderer process is bounded separately from existing node services.
+                  "systemd-run --unit=murakumo-qwen-image21-qualify --collect --wait --pipe "
+                  "-p MemoryHigh=12G -p MemoryMax=14G -p MemorySwapMax=2G -p OOMScoreAdjust=900 -p Nice=10 -p CPUQuota=400% -p RuntimeMaxSec=2700 "
+                  root "/runtime/build/bin/sd-cli " (apply str (interpose " " (map quote-arg args))) " > " root "/qualification.log 2>&1\n"
+                  "node -e 'const fs=require(\"node:fs\");const b=fs.readFileSync(\"" probe "\");"
+                  "if(b.length<24||b.length>8388608||b.subarray(0,8).toString(\"hex\")!==\"89504e470d0a1a0a\"||b.readUInt32BE(16)!==512||b.readUInt32BE(20)!==512)process.exit(1);'\n"
+                  "echo '" (encode marker) "' | base64 -d > " root "/qualified.json\nchmod 600 " root "/qualified.json\necho qwen-image21-qualified\n")]
+  (when-not (and (= host "root@100.66.205.17") (contains? #{nil "--qualify"} mode))
+    (throw (js/Error. "Usage: prepare-native-image-node.cljk root@100.66.205.17 [--qualify]")))
+  (cp/execFileSync "ssh" #js [host "/bin/bash -s"] #js {:input script :stdio #js ["pipe" "inherit" "inherit"] :timeout 5400000}))

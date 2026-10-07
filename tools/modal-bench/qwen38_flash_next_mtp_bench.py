@@ -16,7 +16,7 @@ model on this card.
 Python, not nbb: the Modal SDK is Python-only (same category as
 qwen38_27b_bench.py).  No decision lives here; it measures and prints.
 
-Every cell reports one of three statuses (CLAUDE.md: a measurement that could
+Every cell reports one of three statuses (AGENTS.md: a measurement that could
 not run must not look like one that ran):
 
     measured           -- it ran; the numbers are llama-server's own timings

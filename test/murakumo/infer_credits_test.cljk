@@ -512,6 +512,40 @@
                 (credits/release :alice {:for {:job "j1"} :held 120 :reason "provider-error"})]]
       (is (== 500.0 (credits/balance-of (credits/balances feed) :alice))))))
 
+(deftest funded-capture-consumes-the-hold-and-pays-the-provider-in-one-event
+  (let [held (credits/hold :alice 120 {:for {:job "purchase-1"}})
+        settled (credits/funded-capture :alice :provider
+                                       {:job-id "queue-1" :funding-id "purchase-1"
+                                        :held 120 :treasury 6})
+        after (credits/balances [earned held settled])]
+    (is (== 380.0 (get after "alice")))
+    (is (== 114.0 (get after "provider")))
+    (is (== 6.0 (get after :treasury)))
+    (is (= :already-captured (:error (credits/outstanding-hold
+                                      [earned held settled] "purchase-1"))))
+    (is (= 120.0 (+ (get after "provider") (get after :treasury)))))
+  (testing "a malformed combined event cannot create or lose value"
+    (let [bad (assoc (credits/funded-capture :alice :provider
+                                             {:job-id "queue-1" :funding-id "purchase-1"
+                                              :held 120 :treasury 6})
+                     :run/shares {"provider" 200})]
+      (is (thrown-with-msg? Exception #"not conserved"
+                            (credits/balances [earned bad]))))))
+
+(deftest funded-delivery-receipt-does-not-mint-credits
+  (let [hold (credits/hold :alice 120 {:for {:job "purchase-1"}})
+        receipt {:model "native-relay-funded-result"
+                 :run/funded-result {:job-id "queue-1" :text "done"}}
+        before (credits/balances [earned hold])
+        after (credits/balances [earned hold receipt])]
+    (is (= before after))
+    (is (nil? (get after "provider")))
+    (is (= before (credits/balances [earned hold
+                                     {:run/funded-dispute
+                                      {:job-id "queue-1" :reason "wrong answer"}}])))
+    (is (= before (credits/balances [earned hold
+                                     {:run/expired-job-id "queue-2"}])))))
+
 (deftest outstanding-hold-is-the-only-place-a-hold-is-consumed
   (let [held (credits/hold :alice 120 {:for {:job "j1"}})]
     (testing "額は台帳が返す。呼び出し側に held を指定させない"

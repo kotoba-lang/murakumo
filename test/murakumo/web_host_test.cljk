@@ -1,0 +1,239 @@
+(ns murakumo.web-host-test
+  "Host adapters against a real (local) HTTP server in a child process."
+  (:require [kotoba.test :refer [deftest is]]
+            [murakumo.web.dispatch]
+            [murakumo.web.host :as host]
+            [murakumo.web.worker :as w]))
+
+(def cp (js/require "child_process"))
+(def fs (js/require "fs"))
+(def os (js/require "os"))
+(def crypto (js/require "crypto"))
+
+(def server-src
+  "const http=require('http'),fs=require('fs');
+   const [port,mode,log]=[+process.argv[1],process.argv[2],process.argv[3]];
+   const blobs={};
+   http.createServer((q,r)=>{
+     const chunks=[]; q.on('data',c=>chunks.push(c)); q.on('end',()=>{
+       fs.appendFileSync(log, JSON.stringify({m:q.method,u:q.url,auth:q.headers.authorization||null})+'\\n');
+       if(mode==='down'){r.writeHead(503);return r.end();}
+       if(q.method==='POST' && q.url==='/v1/biscuit/token'){
+         const ok=q.headers.authorization==='Bearer kb_sa_good' && q.headers['content-type']==='application/json';
+         let b={}; try{b=JSON.parse(Buffer.concat(chunks).toString());}catch(e){}
+         if(!ok||b.tenantId!=='t_abc'){r.writeHead(401);return r.end('{\"error\":\"unauthorized\"}');}
+         r.writeHead(201,{'content-type':'application/json'});
+         return r.end(JSON.stringify({token:'tok123',authorization:'Biscuit tok123',expiresIn:900,storage:b.storage||null}));}
+       if(q.method==='PUT'){
+         if(q.headers['content-type']!=='application/vnd.ipld.raw'){r.writeHead(415);return r.end();}
+         if(mode==='nonce'){ const a=q.headers.authorization||''; if(!a.startsWith('CACAO ')||global.used&&global.used.has(a)){r.writeHead(401);return r.end();}
+           (global.used=global.used||new Set()).add(a); blobs[q.url]=Buffer.concat(chunks); r.writeHead(201); return r.end(); }
+         if(q.headers.authorization!=='Bearer good'){r.writeHead(401);return r.end();}
+         blobs[q.url]=Buffer.concat(chunks); r.writeHead(201); return r.end(); }
+       if(q.method==='GET' && q.url.startsWith('/blob/')){ const b=blobs['/ipfs/'+q.url.slice(6)]; if(!b){r.writeHead(404);return r.end();} r.writeHead(200); return r.end(b); }
+       if(q.method==='GET' && mode==='redirect'){ r.writeHead(301,{location:'http://127.0.0.1:'+port+'/blob/'+q.url.slice(6)}); return r.end(); }
+       if(q.method==='GET' && mode==='redirect-off'){ r.writeHead(301,{location:'http://localhost:'+port+'/blob/'+q.url.slice(6)}); return r.end(); }
+       if(q.method==='GET'){ let b=blobs[q.url]; if(!b){r.writeHead(404);return r.end();}
+         if(mode==='corrupt') b=Buffer.from('tampered'); r.writeHead(200); return r.end(b); }
+       r.writeHead(405); r.end(); }); }).listen(port,'127.0.0.1');")
+
+(defn- tmp [suffix] (str (.tmpdir os) "/murakumo-host-test-" (.toString (.randomBytes crypto 5) "hex") suffix))
+
+(defn- start-server! [port mode log]
+  (let [child (.spawn cp "node" #js ["-e" server-src (str port) mode log] #js {:stdio "ignore"})]
+    ;; wait until it answers
+    (loop [n 0]
+      (let [r (.spawnSync cp "curl" #js ["-s" "-o" "/dev/null" "-m" "1" (str "http://127.0.0.1:" port "/")])]
+        (when (and (pos? (.-status r)) (< n 40))
+          (.wait js/Atomics (js/Int32Array. (js/SharedArrayBuffer. 4)) 0 0 100)
+          (recur (inc n)))))
+    child))
+
+(defn- log-lines
+  "Server log minus the readiness probe (GET /)."
+  [log]
+  (if (.existsSync fs log)
+    (vec (filter #(re-find #"/ipfs/" %) (remove empty? (.split (.readFileSync fs log "utf8") "\n"))))
+    []))
+
+(def bs (w/utf8-bytes "hello block"))
+(def cid (w/raw-cid bs))
+
+(deftest put-block-writes-verifies-and-authorises
+  (let [log (tmp ".log") srv (start-server! 18901 "ok" log)]
+    (try
+      (let [base {:base-url "http://127.0.0.1:18901" :authorization "Bearer good"}]
+        (is (= {:ok true} (host/put-block! base cid bs)))
+        (let [lines (log-lines log)]
+          (is (re-find #"\"m\":\"PUT\"" (first lines)))
+          (is (re-find #"Bearer good" (first lines)))     ; header arrived via stdin config
+          (is (re-find #"\"m\":\"GET\"" (second lines))))
+        (is (= {:error :put/http-401} (host/put-block! (assoc base :authorization "Bearer bad") cid bs)))
+        (is (= {:error :put/no-authorization} (host/put-block! (dissoc base :authorization) cid bs)))
+        (is (= {:error :put/bad-base-url} (host/put-block! (assoc base :base-url "ftp://x") cid bs))))
+      (finally (.kill srv)))))
+
+(deftest a-server-that-returns-other-bytes-fails-verification
+  (let [log (tmp ".log") srv (start-server! 18902 "corrupt" log)]
+    (try
+      (is (= {:error :put/verify-mismatch}
+             (host/put-block! {:base-url "http://127.0.0.1:18902" :authorization "Bearer good"} cid bs)))
+      (finally (.kill srv)))))
+
+(deftest authorization-never-appears-in-the-process-arguments
+  ;; put-block! passes it on stdin; the log proves the server got it, and the
+  ;; source must not put it in argv. Guard the invariant on the source text.
+  (let [src (.readFileSync fs "src/murakumo/web/host.cljk" "utf8")
+        put-fn (subs src (.indexOf src "(defn put-block!"))]
+    (is (re-find #"\"--config\" \"-\"" put-fn))
+    (is (not (re-find #"\"-H\"" put-fn)))))
+
+(deftest tee-store-keeps-local-bytes-and-queues-failed-remote-puts
+  (let [dir (tmp "-store") pending (tmp "-pending") log (tmp ".log")
+        down (start-server! 18903 "down" log)]
+    (try
+      (let [store (host/tee-store dir pending {:base-url "http://127.0.0.1:18903" :authorization "Bearer good"})]
+        (is (true? ((:put! store) cid bs)))                       ; the job still succeeds
+        (is (= (w/utf8-string bs) (w/utf8-string ((:get-bytes! store) cid))))
+        (is (= (str cid "\n") (.readFileSync fs pending "utf8"))))
+      (finally (.kill down)))
+    ;; remote comes back: sync drains the queue
+    ;; a fresh port: reusing 18903 races the killed server's socket
+    (let [up (start-server! 18904 "ok" log)]
+      (try
+        (is (= {:synced 1 :remaining 0 :errors {}}
+               (host/sync-pending! dir pending {:base-url "http://127.0.0.1:18904" :authorization "Bearer good"})))
+        (is (= "" (.readFileSync fs pending "utf8")))
+        (finally (.kill up))))))
+
+(deftest gc-removes-oldest-first-and-usage-counts
+  (let [dir (tmp "-gc")
+        {:keys [put!]} (host/dir-store dir)
+        a (w/utf8-bytes "1234567890") b (w/utf8-bytes "abcdefghij")
+        ca (w/raw-cid a) cb (w/raw-cid b)]
+    (put! ca a)
+    (.wait js/Atomics (js/Int32Array. (js/SharedArrayBuffer. 4)) 0 0 50)
+    (put! cb b)
+    (is (= {:files 2 :bytes 20} (host/store-usage dir)))
+    (is (= {:removed 1 :bytes-after 10} (host/store-gc! dir 10)))
+    (is (nil? ((:get-bytes! (host/dir-store dir)) ca)))
+    (is (some? ((:get-bytes! (host/dir-store dir)) cb)))))
+
+(deftest store-keys-must-be-cids-so-nothing_outside_the_store_is_reachable
+  (let [root (tmp "-root") dir (str root "/store")
+        {:keys [put! get-bytes!]} (host/dir-store dir)]
+    (.writeFileSync fs (str root "/node.key") "SECRETSEED")
+    (doseq [k ["../node.key" "/etc/passwd" "..%2fnode.key" "a/../../node.key" "" nil "bAAAA"
+               (str "b" (apply str (repeat 200 "a")))]]
+      (is (nil? (get-bytes! k)) (str "read of " (pr-str k) " must be refused")))
+    (is (thrown? js/Error (put! "../evil" (w/utf8-bytes "x"))))
+    (is (not (.existsSync fs (str root "/evil"))))
+    (is (false? (host/valid-cid? "../node.key")))
+    (is (true? (host/valid-cid? (w/raw-cid (w/utf8-bytes "x")))))))
+
+(deftest a-hostname-starting-with-a-dash-is-never-resolved
+  (is (= [] (host/resolve! "--inspect=0.0.0.0")))
+  (is (= [] (host/resolve! "-x.example")))
+  (is (= [] (host/resolve! ""))))
+
+(deftest put-block-refuses-bad-cids-without-touching-the-network
+  (is (= {:error :put/bad-cid}
+         (host/put-block! {:base-url "http://127.0.0.1:1" :authorization "x"} "../x" (w/utf8-bytes "x")))))
+
+(deftest did-key-is-the-standard-ed25519-form
+  (let [seed (.toString (.randomBytes crypto 32) "hex")
+        did (host/did-key (:public-key-hex (host/signer seed)))]
+    (is (re-find #"^did:key:z6Mk" did))
+    (is (= did (host/did-key (:public-key-hex (host/signer seed)))))))
+
+(deftest cacao-style-single-use-authorization-needs-a-per-write-minter
+  ;; kotobase authorizations are single-use: a stored value works once, a minter always works
+  (let [log (tmp ".log") srv (start-server! 18905 "nonce" log)
+        n (atom 0)
+        b1 (w/utf8-bytes "block one") b2 (w/utf8-bytes "block two")
+        base {:base-url "http://127.0.0.1:18905"}]
+    (try
+      (let [static (assoc base :authorization "CACAO fixed")]
+        (is (= {:ok true} (host/put-block! static (w/raw-cid b1) b1)))
+        (is (= {:error :put/http-401} (host/put-block! static (w/raw-cid b2) b2))))   ; nonce reused
+      (let [minted (assoc base :authorization-fn (fn [] (str "CACAO nonce-" (swap! n inc))))]
+        (is (= {:ok true} (host/put-block! minted (w/raw-cid b1) b1)))
+        (is (= {:ok true} (host/put-block! minted (w/raw-cid b2) b2)))
+        (is (= 2 @n)))
+      (is (= {:error :put/no-authorization}
+             (host/put-block! (assoc base :authorization-fn (fn [] nil)) (w/raw-cid b1) b1)))
+      (finally (.kill srv)))))
+
+(deftest auth-from-command-runs-argv-without-a-shell
+  (is (= "CACAO abc" (host/auth-from-command ["printf" "CACAO abc"])))
+  (is (nil? (host/auth-from-command ["false"])))
+  (is (nil? (host/auth-from-command ["printf" "two\nlines"])))
+  (is (nil? (host/auth-from-command ["printf" ""])))
+  (is (nil? (host/auth-from-command "echo hi")))                  ; a string is never run
+  (is (= "a;echo pwned" (host/auth-from-command ["printf" "a;echo pwned"]))))  ; metacharacters stay data
+
+(deftest path-prefix-is-validated
+  (is (= {:error :put/bad-path-prefix}
+         (host/put-block! {:base-url "http://127.0.0.1:1" :authorization "x" :path-prefix "/../"}
+                          (w/raw-cid (w/utf8-bytes "x")) (w/utf8-bytes "x"))))
+  (is (= {:error :put/bad-path-prefix}
+         (host/put-block! {:base-url "http://127.0.0.1:1" :authorization "x" :path-prefix "ipld"}
+                          (w/raw-cid (w/utf8-bytes "x")) (w/utf8-bytes "x")))))
+
+(deftest readback-follows-a-same-domain-redirect-but-not-an-off-domain-one
+  ;; the real gateway answers GET /ipfs/<cid> with a 301 to a per-CID subdomain
+  (let [log (tmp ".log") a (start-server! 18906 "redirect" log)]
+    (try
+      (is (= {:ok true} (host/put-block! {:base-url "http://127.0.0.1:18906" :authorization "Bearer good"} cid bs)))
+      (finally (.kill a))))
+  (let [log (tmp ".log") b (start-server! 18907 "redirect-off" log)]
+    (try
+      (is (= {:error :put/verify-redirected-off-domain}
+             (host/put-block! {:base-url "http://127.0.0.1:18907" :authorization "Bearer good"} cid bs)))
+      (finally (.kill b)))))
+
+(deftest the-authenticated-put-itself-is-never-redirected
+  (let [src (.readFileSync fs "src/murakumo/web/host.cljk" "utf8")
+        put-part (subs src (.indexOf src "(defn put-block!"))]
+    ;; the PUT goes through `curl` with --max-redirs 0; only readback! passes -L
+    (is (re-find #"\"--max-redirs\" \"0\"" put-part))
+    (is (= 1 (count (re-seq #"\"-L\"" src))))))
+
+(deftest service-account-secret-is-exchanged-for-a-biscuit-only-at-allowed-hosts
+  (let [log (tmp ".log") srv (start-server! 18908 "ok" log)
+        cfg {:endpoint "http://127.0.0.1:18908" :authn-hosts #{"127.0.0.1"} :tenant-id "t_abc"
+             :storage "blocks" :sa-token "kb_sa_good"}]
+    (try
+      ;; the fake Authn is plain http on 127.0.0.1, so the https-only rule is what blocks it
+      (is (nil? (host/biscuit-from-service-account cfg)) "http endpoints are refused")
+      (let [t (assoc cfg :insecure-http-for-tests true)]
+        (is (= "Biscuit tok123" (host/biscuit-from-service-account t)))
+        (is (nil? (host/biscuit-from-service-account (assoc t :sa-token "kb_sa_wrong"))) "Authn 401 -> nil")
+        (is (nil? (host/biscuit-from-service-account (assoc t :tenant-id "t_other"))) "not a member -> nil"))
+      (is (nil? (host/biscuit-from-service-account (assoc cfg :endpoint "https://evil.example"))) "host not in the allow-list")
+      (is (nil? (host/biscuit-from-service-account (assoc cfg :sa-token "not-a-sa-secret"))))
+      (is (nil? (host/biscuit-from-service-account (assoc cfg :tenant-id "abc"))))
+      (is (nil? (host/biscuit-from-service-account (dissoc cfg :sa-token))))
+      (finally (.kill srv)))))
+
+(deftest the-service-account-secret-never-goes-in-argv
+  (let [src (.readFileSync fs "src/murakumo/web/host.cljk" "utf8")
+        part (subs src (.indexOf src "(defn biscuit-from-service-account") (.indexOf src "(defn put-block!"))]
+    (is (re-find #"\"--config\" \"-\"" part))
+    (is (re-find #"\"--proto\" proto" part))
+    (is (re-find #"insecure-http-for-tests \"=http,https\" \"=https\"" part))
+    (is (not (re-find #"\"-H\"" part)))))
+
+(deftest every-curl-call-bypasses-proxies-and-globbing
+  ;; a proxy in the environment resolves names itself and defeats --resolve pinning; [1-100] globs fan out
+  (let [src (.readFileSync fs "src/murakumo/web/host.cljk" "utf8")
+        calls (re-seq #"\(run \"curl\"[\s\S]{0,420}" src)]
+    (is (>= (count calls) 6))
+    (doseq [c calls]
+      (is (re-find #"\"--noproxy\" \"\*\"" c) c)
+      (is (re-find #"\"-g\"" c) c))))
+
+(deftest automatic-retries-exclude-anything-that-touches-third-parties-or-changes-state
+  (let [ops @(resolve 'murakumo.web.dispatch/idempotent-ops)]
+    (is (every? ops [:whoami :health :get :extract :index :index-search]))
+    (is (not-any? ops [:fetch :crawl :search :sync :gc :configure]))))

@@ -1,0 +1,180 @@
+(ns murakumo.mesh-review-regression-test
+  (:require [kotoba.test :refer [deftest is testing]]
+            [kotoba.lang.text :as str]
+            [murakumo.mesh :as mesh]
+            [murakumo.mesh.ledger :as ledger]
+            [murakumo.mesh.seed :as seed]
+            [murakumo.mesh.install :as install]
+            [murakumo.mesh.rotate :as rotate]
+            [murakumo.mesh.rotate-cli :as rotate-cli]
+            [murakumo.mesh.client :as client]
+            [murakumo.ssh :as ssh]
+            ["node:fs" :as fs]
+            ["node:os" :as os]
+            ["node:path" :as path]))
+
+(def did "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
+(defn entry [status] {:did did :status status})
+
+(deftest operator-revocation-by-name-also-revokes-local-did-aliases
+  (let [r (ledger/revoke {:nodes {"box" (entry "authorized") "alias" (entry "authorized")}}
+                         "box" {:now-ms 1})]
+    (is (= #{"box" "alias"} (set (:revoked r))))
+    (is (every? #(= "revoked" (:status %)) (vals (:nodes (:ledger r)))))))
+
+(deftest remote-revocation-closes-every-local-and-remote-alias
+  (let [a {:nodes {"live" (entry "authorized") "pending" (entry "pending")}}
+        b {:nodes {"revoked" (entry "revoked") "seed-alias" (entry "authorized")}}
+        r (ledger/sync-plan a b)]
+    (is (every? #(= "revoked" (:status %)) (vals (:nodes (:local r)))))
+    (is (every? #(= "revoked" (:status %)) (vals (:nodes (:remote r)))))
+    (is (not (ledger/changed? (:report (ledger/sync-plan (:local r) (:remote r))))))))
+
+(deftest same-name-revocation-keeps-both-key-tombstones
+  (let [a {:nodes {"same" (entry "authorized") "alias" (entry "authorized")}}
+        b {:nodes {"same" {:did "another-key" :status "revoked"}}}
+        r (ledger/sync-plan a b)]
+    (is (= did (get-in r [:local :nodes "same" :did])))
+    (is (= "another-key" (get-in r [:remote :nodes "same" :did])))
+    (is (= "revoked" (get-in r [:local :nodes "alias" :status])))))
+
+(deftest a-stale-pending-copy-cannot-reverse-human-admission
+  (let [human (assoc (entry "authorized") :admitted-by :human :admitted-ms 5)
+        r (seed/admin {:nodes {"box" (entry "pending")}}
+                      {:method :post :path "/admin/sync"
+                       :body {:ledger {:nodes {"box" human}}}})]
+    (is (= human (get-in r [:body :ledger :nodes "box"])))
+    (is (= human (get-in r [:ledger :nodes "box"])))
+    (is (true? (get-in r [:body :changed?])))))
+
+(deftest revoked-alias-order-cannot-hide-a-revoked-key
+  (doseq [nodes [(array-map "live" (entry "authorized") "revoked" (entry "revoked"))
+                 (array-map "revoked" (entry "revoked") "live" (entry "authorized"))]]
+    (let [l {:admit :auto-on-mesh :nodes nodes}
+          r (mesh/admit l {:did did :node-name "live" :proof-valid? true :now-ms 1})]
+      (is (= :did-revoked (:reason r)))
+      (is (= l (:ledger r))))))
+
+(deftest preauthorized-enrolment-allocates-once-and-keeps-human-authority
+  (let [l {:nodes {"box" (assoc (entry "authorized") :admitted-by :human)}}
+        req {:did did :node-name "box" :proof-valid? true :now-ms 1}
+        a (mesh/admit l req) b (mesh/admit (:ledger a) req)]
+    (is (= :grant (:decision a)))
+    (is (= "10.77.0.2" (get-in a [:ledger :nodes "box" :address])))
+    (is (= :human (get-in a [:ledger :nodes "box" :admitted-by])))
+    (is (= (:ledger a) (:ledger b)))
+    (is (mesh/mesh-member? (get-in a [:ledger :nodes "box"])))))
+
+(deftest an-authorized-key-enrolling-under-an-alias-gets-a-recorded-address
+  (let [req {:did did :node-name "alias" :proof-valid? true :now-ms 1}
+        r (mesh/admit {:nodes {"original" (entry "authorized")}} req)
+        second (mesh/admit (:ledger r) req)]
+    (is (= :grant (:decision r)))
+    (is (= "10.77.0.2" (get-in r [:ledger :nodes "alias" :address])))
+    (is (= (:ledger r) (:ledger second)))
+    (let [full (update (:ledger r) :nodes merge
+                       (into {} (map (fn [n] [(str "taken-" n) {:address (str "10.77.0." n)}]) (range 3 255))))]
+      (is (= :grant (:decision (mesh/admit full req))))
+      (is (= "10.77.0.2" (get-in (mesh/admit full req) [:ledger :nodes "alias" :address]))))))
+
+(deftest preauthorized-tailnet-address-is-not-reused-as-a-mesh-address
+  (let [r (mesh/admit {:nodes {"box" (assoc (entry "authorized") :address "100.64.0.2")}}
+                      {:did did :node-name "box" :proof-valid? true :now-ms 1})]
+    (is (= "10.77.0.2" (get-in r [:ledger :nodes "box" :address])))
+    (doseq [bad ["10.77.0.0" "10.77.0.255" "10.77.0.999" "10.77.0.02" "100.64.0.2"]]
+      (is (not (mesh/allocated-address? bad))))))
+
+(deftest mixed-fleet-rotation-targets-only-mesh-members-and-one-seed
+  (let [l {:nodes {"seed" (assoc (entry "authorized") :mesh? true)
+                  "mesh" {:did "mesh-key" :status "authorized" :address "10.77.0.2"}
+                  "tailnet" {:did "other-key" :status "authorized"}
+                  "revoked-alias" {:did "revoked-key" :status "revoked"}
+                  "live-alias" {:did "revoked-key" :status "authorized" :mesh? true}}}
+        t (rotate/targets l {:seed-host "root@seed"
+                            :host-map {"seed" "root@seed" "mesh" "root@mesh" "tailnet" "root@tailnet"}})]
+    (is (= ["mesh" "seed"] (mapv :name (:nodes t))))
+    (is (empty? (:unresolved t)))
+    (is (= [:node :seed] (mapv :role (:nodes t))))
+    (is (not (rotate/complete? (rotate/mark-done (rotate/new-state "old" 1) "mesh" nil) (:nodes t) [])))))
+
+(deftest resume-restarts-if-a-secret-recipient-was-revoked-or-changed
+  (let [n {:name "mesh" :did did :host "root@mesh" :role :node}
+        st (-> (rotate/new-state "old" 1) (rotate/expose n) (rotate/mark-done "mesh" nil))
+        l {:nodes {"mesh" (entry "authorized")}}]
+    (is (not (rotate/restart-required? st l [n])))
+    (is (rotate/restart-required? st (assoc-in l [:nodes "mesh" :status] "revoked") []))
+    (is (rotate/restart-required? st (assoc-in l [:nodes "alias"] (entry "revoked")) [n]))
+    (is (rotate/restart-required? st l [(assoc n :did "new-key")]))
+    (is (rotate/restart-required? st l [(assoc n :host "root@other")]))
+    (is (rotate/restart-required? (assoc (rotate/new-state "old" 1) :done ["mesh"]) l [n]))
+    (is (rotate/restart-required? (rotate/expose (rotate/new-state "old" 1) n)
+                                  (assoc-in l [:nodes "mesh" :status] "revoked") []))
+    (is (not (rotate/restart-required? (rotate/new-state "new" 2) l [n])))))
+
+(deftest joiner-uses-the-token-endpoint-and-refuses-invalid-endpoints
+  (let [pass "0123456789abcdef0123456789abcdef"
+        token (install/format-token {:passphrase pass :seed-address "10.77.0.9" :port 8787})
+        p (install/plan :joiner {:node-name "box" :token token})]
+    (is (str/includes? (:script p) "--seed http://10.77.0.9:8787"))
+    (is (nil? (install/parse-token (str "murakumo-mesh:v1:m:" pass ":999.77.0.1:7077:5180"))))
+    (is (nil? (install/parse-token (str "murakumo-mesh:v1:m:" pass ":10.77.0.1:99999:5180"))))))
+
+(deftest enrolment-retries-pending-and-address-application-failures
+  (let [dir (.mkdtempSync fs (.join path (.tmpdir os) "mesh-client-test-"))
+        script (.join path dir "apply.sh")
+        response {:status 200 :body {:address "10.77.0.2"}}]
+    (try
+      (.writeFileSync fs script "exit 7\n")
+      (is (= 1 (client/finish-enrol! response "box" dir script)))
+      (is (= "10.77.0.2\n" (.readFileSync fs (.join path dir "mesh-address") "utf8")))
+      (.writeFileSync fs script "exit 0\n")
+      (is (= 0 (client/finish-enrol! response "box" dir script)))
+      (is (= 1 (client/finish-enrol! {:status 202 :body {:status "pending"}} "box" dir script)))
+      (is (= 1 (client/finish-enrol! {:status 200 :body {}} "box" dir script)))
+      (finally (.rmSync fs dir #js {:recursive true :force true})))))
+
+(deftest rotation-state-can-be-a-relative-filename-and-is-private
+  (let [dir (.mkdtempSync fs (.join path (.tmpdir os) "mesh-rotate-test-"))
+        old (.cwd js/process)]
+    (try
+      (.chdir js/process dir)
+      (.writeFileSync fs "x.tmp" "unrelated" #js {:mode 0644})
+      (rotate-cli/save-state! "x" (rotate/new-state "0123456789abcdef0123456789abcdef" 1))
+      (is (= 0600 (bit-and (.-mode (.statSync fs "x")) 0777)))
+      (is (= 1 (:started-ms (rotate-cli/load-state "x"))))
+      (is (= "unrelated" (.readFileSync fs "x.tmp" "utf8")))
+      (finally (.chdir js/process old) (.rmSync fs dir #js {:recursive true :force true})))))
+
+(deftest actual-rotation-resumes-and-then-replaces-a-compromised-secret
+  (let [dir (.mkdtempSync fs (.join path (.tmpdir os) "mesh-resume-test-"))
+        ledger-path (.join path dir "ledger.edn")
+        state-path (.join path dir "rotation.edn")
+        calls (atom [])
+        l {:nodes {"a" (assoc (entry "authorized") :mesh? true)
+                   "b" {:status "authorized" :did "b-key" :mesh? true}}}
+        opts {:ledger ledger-path :fleet (.join path dir "absent") :state state-path
+              :seed-host "root@seed" :host-pairs {"a" "root@a" "b" "root@b"}}
+        transport (fn [host _script stdin]
+                    (swap! calls conj [host stdin])
+                    (cond
+                      (empty? stdin) {:exit 0 :out "PEERS=1\n" :err ""}
+                      (= host "root@b") {:exit 1 :out "" :err "temporary failure"}
+                      (= host "root@seed") {:exit 0 :out (str "JOIN_TOKEN=" (install/format-token {:passphrase (str/trim stdin)}) "\n") :err ""}
+                      :else {:exit 0 :out "" :err ""}))]
+    (try
+      (.writeFileSync fs ledger-path (pr-str l))
+      (with-redefs [ssh/sh-in transport]
+        (is (false? (:ok? (rotate-cli/rotate! opts))))
+        (let [old (:passphrase (rotate-cli/load-state state-path))]
+          (reset! calls [])
+          (is (false? (:ok? (rotate-cli/rotate! opts))))
+          (is (= old (:passphrase (rotate-cli/load-state state-path))))
+          (is (not-any? #(= "root@a" (first %)) @calls))
+          (.writeFileSync fs ledger-path (pr-str (assoc-in l [:nodes "a" :status] "revoked")))
+          (reset! calls [])
+          (is (false? (:ok? (rotate-cli/rotate! opts))))
+          (let [new (:passphrase (rotate-cli/load-state state-path))]
+            (is (not= old new))
+            (is (not-any? #(= "root@a" (first %)) @calls))
+            (is (every? #(= (str new "\n") (second %)) @calls)))))
+      (finally (.rmSync fs dir #js {:recursive true :force true})))))

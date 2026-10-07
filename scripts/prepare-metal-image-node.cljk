@@ -1,0 +1,36 @@
+(ns prepare-metal-image-node
+  (:require [murakumo.infer.image-native :as n] ["node:child_process" :as cp]))
+(def hosts {"jacob@100.117.208.83" "jacob" "junkawasaki@100.86.235.122" "25mbair"})
+(let [[host mode] *command-line-args* root "/Users/junkawasaki/.murakumo/qwen-image21"
+      quote-arg #(str "'" (.replaceAll % "'" "'\"'\"'") "'")
+      args (n/arguments {:native-root root :backend "metal"}
+                       {:model n/model-id :input {:prompt "A blue ceramic teapot on a wooden table, soft daylight, realistic still life, no people, no text" :width 512 :height 512 :steps 25 :seed 42}}
+                       (str root "/qualification.png"))
+      marker (js/JSON.stringify (clj->js {:model n/model-id :runtime n/runtime-revision :backend "metal" :sha256 (mapv :sha256 n/artifacts)}))
+      script (str "set -euo pipefail\nexport PATH=/opt/homebrew/bin:/Users/junkawasaki/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin\numask 077\n"
+                  "test $(uname -s) = Darwin\ntest $(id -un) = junkawasaki\n"
+                  "! launchctl print gui/$(id -u)/ai.gftd.murakumo-native-image-worker >/dev/null 2>&1\n"
+                  "mkdir -p " root "/models\nrm -f " root "/qualified.json " root "/qualification.png\n"
+                  (when-not (= mode "--qualify")
+                    (str "command -v cmake >/dev/null || brew install cmake\n"
+                         (apply str (for [{:keys [file remote-file repo revision sha256]} n/artifacts]
+                                      (str "if ! test -f " root "/models/" file " || ! echo '" sha256 "  " root "/models/" file "' | shasum -a 256 -c --status; then\n"
+                                           "curl -fL --retry 3 --connect-timeout 20 -o " root "/models/" file ".part https://huggingface.co/" repo "/resolve/" revision "/" (or remote-file file) "\n"
+                                           "echo '" sha256 "  " root "/models/" file ".part' | shasum -a 256 -c --status\nmv " root "/models/" file ".part " root "/models/" file "\nfi\n")))
+                         "test -d " root "/runtime/.git || git clone --recursive https://github.com/leejet/stable-diffusion.cpp " root "/runtime\n"
+                         "cd " root "/runtime\ngit checkout " n/runtime-revision "\ngit submodule update --init --recursive\n"
+                         "cmake -B build -DSD_METAL=ON -DCMAKE_BUILD_TYPE=Release\nnice -n 10 cmake --build build --target sd-cli -j2\n"))
+                  "test $(git -C " root "/runtime rev-parse HEAD) = " n/runtime-revision "\n"
+                  (apply str (for [{:keys [file sha256]} n/artifacts] (str "echo '" sha256 "  " root "/models/" file "' | shasum -a 256 -c --status\n")))
+                  root "/runtime/build/bin/sd-cli --list-devices > " root "/devices.txt\ngrep '^MTL0' " root "/devices.txt\n"
+                  ;; Detached group bounds the qualifier and every renderer child.
+                  "node -e 'const fs=require(\"fs\"),cp=require(\"child_process\");"
+                  "const fd=fs.openSync(\"" root "/qualification.log\",\"w\");"
+                  "const args=JSON.parse(Buffer.from(\"" (.toString (js/Buffer.from (js/JSON.stringify (clj->js (into ["-l" (str root "/runtime/build/bin/sd-cli")] args)))) "base64") "\",\"base64\").toString());"
+                  "const c=cp.spawn(\"/usr/bin/time\",args,{detached:true,stdio:[\"ignore\",fd,fd]});"
+                  "let expired=false;const stop=()=>{expired=true;try{process.kill(-c.pid,\"SIGTERM\")}catch{}setTimeout(()=>{try{process.kill(-c.pid,\"SIGKILL\")}catch{}},3000)};"
+                  "const timer=setTimeout(stop,2400000);process.on(\"SIGTERM\",stop);c.on(\"error\",()=>{clearTimeout(timer);process.exitCode=1});c.on(\"close\",code=>{clearTimeout(timer);fs.closeSync(fd);process.exitCode=expired?1:(code||0)})'\n"
+                  "node -e 'const fs=require(\"fs\");const b=fs.readFileSync(\"" root "/qualification.png\");if(b.length<24||b.length>8388608||b.subarray(0,8).toString(\"hex\")!==\"89504e470d0a1a0a\"||b.readUInt32BE(16)!==512||b.readUInt32BE(20)!==512)process.exit(1)'\n"
+                  "printf '%s' '" marker "' > " root "/qualified.json\necho metal-image-qualified\n")]
+  (when-not (and (contains? hosts host) (contains? #{nil "--qualify"} mode)) (throw (js/Error. "Use an owned Metal host [--qualify]")))
+  (cp/execFileSync "ssh" #js [host "/bin/bash -s"] #js {:input script :stdio #js ["pipe" "inherit" "inherit"] :timeout 5400000}))

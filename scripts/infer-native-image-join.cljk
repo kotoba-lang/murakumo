@@ -1,0 +1,13 @@
+(ns infer-native-image-join
+  (:require [murakumo.infer.image-worker :as worker] [murakumo.infer.image-native :as native]))
+(let [token (aget js/process.env "MURAKUMO_SERVICE_TOKEN")
+      root (or (aget js/process.env "MURAKUMO_NATIVE_IMAGE_ROOT") "/opt/murakumo/qwen-image21")
+      name (aget js/process.env "MURAKUMO_IMAGE_WORKER_NAME")
+      backend (or (aget js/process.env "MURAKUMO_NATIVE_IMAGE_BACKEND") "cpu")]
+  (when-not (and (seq token) (string? name) (re-matches #"[A-Za-z0-9._-]{1,128}" name))
+    (throw (js/Error. "Owned node credential and image worker name are required")))
+  (worker/start! {:base "https://api.murakumo.cloud" :token token :name name
+                  :native-root root :sd-cli (str root "/runtime/build/bin/sd-cli")
+                  :backend backend
+                  :min-free (* (if (= backend "metal") 10 12) 1024 1024 1024)
+                  :probe-fn native/probe! :render-fn native/render!}))

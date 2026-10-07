@@ -1,5 +1,13 @@
 # murakumo 叢雲
 
+**An inference node platform.** murakumo turns ordinary machines — Mac minis, PCs,
+Linux boxes, GPU servers — into *inference nodes* and joins them into one network
+that serves models through an OpenAI-compatible `/v1` API. A node brings its own
+model server (Ollama, llama.cpp, vLLM, MLX, …); murakumo provides identity,
+enrollment, heartbeat, job placement, distributed (multi-node) inference and
+fleet operations. The runtime is **not tied to WebAssembly**: WASM components are
+one optional workload a node can host, alongside inference.
+
 ## Join the inference network (macOS / Linux)
 
 Install the node CLI with **Node.js 22+ and npm** already available:
@@ -30,11 +38,53 @@ murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0
 - `init` creates a private device key on this PC (mode 0600) and leaves an existing
   identity untouched. Keep `~/.local/share/murakumo-node/identity.json` private;
   it is not a billing-account export. `MURAKUMO_NODE_HOME` changes this location.
+- A factory-provisioned Murakumo NixOS unit can use its existing
+  `/var/lib/murakumo/device-identity.json` by setting
+  `MURAKUMO_NODE_IDENTITY_FILE` to that absolute path for `doctor`, `check`
+  and `join`. Run as a user permitted to read the private file (normally root).
+  The CLI verifies that the Ed25519 key matches its DID and does not copy the
+  key. Do not run `init` for that unit. Its buyer claim and Community node then
+  use the same device DID; payout authority for the buyer is a separate step.
 - `doctor` checks the local model and identity without writing to the network.
 - `check` enrolls and sends one signed heartbeat with **zero free slots**; it
   never claims jobs. HTTP 201 for that heartbeat proves acceptance, not inference.
 - `join` serves jobs in the foreground until Ctrl-C. Device sessions renew while
   it runs. Restart the command after reboot; no persistent service is installed.
+- Add `--idle-only` to `join` for voluntary spare-capacity participation. The
+  node takes no new job while its one-minute CPU load exceeds half its core
+  count or free RAM falls below 1 GiB/10% of installed RAM; heartbeats advertise
+  zero free slots in that state. A job already claimed finishes and reports its
+  result. The host check cannot see every GPU-only workload, so validate it on
+  the actual machine before using it as the buyer's idle policy. The current
+  NixOS base profile does not install a node service. An optional module at
+  [`nixos/node.nix`](nixos/node.nix) can schedule buyer claim responses and
+  restart idle-only participation after boot. Both services are disabled by
+  default. The pinned installer copies it to
+  `/opt/murakumo-cli/current/nixos-node.nix` when installed with
+  `MURAKUMO_INSTALL_DIR=/opt/murakumo-cli`. Import the specific
+  `release-<hash>/nixos-node.nix` path in the machine configuration so the
+  NixOS evaluation cannot silently switch versions. Set `cliPath` to a
+  system-wide installation outside `/home`, retain
+  the factory identity as a root-readable mode 0600 runtime file, and enable
+  `claimResponder` only after the buyer claim endpoint is ready. Before enabling
+  `participation`, manually run `doctor`, `check`, and `qualify` with the exact
+  served model ID on that unit; enable it only after qualification is accepted.
+  The module does not install a model, mint credits, or request payout.
+
+  Example NixOS configuration after importing `nixos/node.nix`:
+
+  ```nix
+  services.murakumoNode = {
+    enable = true;
+    cliPath = "/opt/murakumo-cli/current/murakumo";
+    claimResponder.enable = true;
+    participation = {
+      enable = true; # Set only after doctor, check, and qualify pass on this unit.
+    };
+    nodeName = "my-pc";
+    model = "YOUR_EXACT_SERVED_MODEL_ID";
+  };
+  ```
 
 **Community enrollment starts pending admission.** Registration and a fresh
 heartbeat do not grant AWAI Secure membership, guarantee job placement or prove
@@ -44,6 +94,22 @@ identity file. Existing operator credentials (`MURAKUMO_NODE_CACAO` +
 `MURAKUMO_NODE_DID`, or `MURAKUMO_SERVICE_TOKEN`) are still supported.
 A local server credential goes in `MURAKUMO_INFER_LOCAL_TOKEN` / `VLLM_API_KEY`,
 separately from network authentication.
+
+After the node has served an accepted paid job, `murakumo node earnings` reads
+its earned and payable credit totals by device DID. To request withdrawal of
+earned credits, sign in to the buyer's device page, select the claimed node,
+enter the exact amount and full 20-byte Base wallet address, and authorize it.
+The site checks current ownership and issues a capability valid for two minutes.
+Save that capability in a private file on the node (`chmod 600`), then run
+`murakumo node payout --credits 5000 --to 0x... --owner-token-file /absolute/path`
+with the **same** amount and address. The CLI also signs the exact request with
+the private device key. It rejects a missing or publicly readable buyer token
+file and never prints the token. The API requires both proofs and enforces the
+minimum and earned balance without publishing the buyer DID in the ledger. A
+successful request **debits the credits and awaits operator approval**; it does
+not transfer USDC. Factory units must set `MURAKUMO_NODE_IDENTITY_FILE` for
+these commands too. This is a manual pilot flow; the owner token and device
+signature are not a receipt for completed settlement.
 
 If diagnosis fails, confirm the server is running and the model ID matches.
 Missing flags, registration refusal and failed heartbeat checks exit nonzero.
@@ -58,9 +124,103 @@ completed local inference, Community enrollment (201) and authenticated heartbea
 acceptance (201). The check did not advertise free slots or fetch the work queue.
 Community job placement and a paid end-to-end request were not exercised.
 
+### Hand this PC's Wi-Fi to a headless box (`wifi-share`, proposed in ADR-0243)
+
+```sh
+murakumo node wifi-share
+```
+
+For a box with a speaker and a microphone but no screen. The box beacons (a short bell
+motif; the data rides in ultrasound). Run this on a PC that is on the Wi-Fi you want to share:
+it reads that network's passphrase from the OS (macOS shows its own permission prompt;
+Linux uses NetworkManager, Windows `netsh`), seals it in this process, and opens a page on
+`localhost` that hears the box and plays the sealed bytes. The passphrase is never printed,
+put in a URL, or sent to the browser.
+
+- It asks for the **label** (`aiueos:1;…ls=…` or the label URL). The envelope is bound to the label
+  secret, so someone who only heard the beacon cannot point the box at their own Wi-Fi; if the
+  label names a DID, a different box in the room is refused.
+- macOS hides the connected network name from command-line tools, so you pick from the saved
+  networks. Pass `--ssid NAME` to skip the choice; `--passphrase-stdin` reads the passphrase from
+  stdin instead of the OS.
+- The whole sealed message must fit ggwave's 140 bytes: SSID and passphrase together at most 88 bytes.
+- The box-side command is described below.
+
+**Box side** (`murakumo node onboard`, run by the NixOS unit below; needs a speaker and a microphone). It
+beacons while the box is unclaimed and offline, opens a sealed profile played back by a sender, stores
+only the encrypted message, hands the profile to NetworkManager as a mode-0600 keyfile (never as
+`nmcli ... password` arguments), and answers with an acknowledgement. Every message that does not open
+rotates the code and counts as an attempt; five and the window closes. If the box is still offline
+after a profile (a mistyped passphrase) a new window opens. A proved claim retires the label secret and
+the onboarding key and keeps the box quiet afterwards. Audio goes through commands (`aplay`/`arecord` by
+default; `--play-cmd`/`--record-cmd` for anything that reads or writes raw f32le 48 kHz mono PCM).
+
+```nix
+services.murakumoNode = {
+  enable = true;
+  cliPath = "/opt/murakumo-cli/current/murakumo";
+  onboard.enable = true;     # requires networking.networkmanager.enable
+};
+```
+
+The unit only runs while `/var/lib/murakumo/onboard/label-secret` exists (the factory puts it there, mode
+0600, and prints it in the label QR) and the `closed` marker does not.
+
+### Show up in the console (`node report`)
+
+A claimed device reports for itself, signed with the key it already holds:
+
+```sh
+murakumo node report --once            # one heartbeat (what the NixOS timer runs)
+murakumo node report --interval 60     # a loop for a box without a timer; quiet unless the answer changes
+```
+
+It posts `POST /api/devices/:did/heartbeat` on murakumo.cloud. The body is `{"observed-at-ms":…,"metrics":{…}}`
+and the signature (`x-aiueos-signature`, base64url Ed25519) covers `aiueos-device-heartbeat-v1`, the DID, the
+origin the request reaches and the SHA-256 of the body exactly as sent. Metrics are the machine's own health
+only (`load1`, `mem-free-ratio`, `uptime-s`, `platform`, `arch`, `node`): no host name, address, SSID or account data.
+
+Exit codes: `0` accepted (or an observation already stored), `1` the console did not accept the signature,
+`3` unreachable, `4` not claimed yet (expected before the claim goes through), `5` the clock is ahead of the
+console's. On NixOS: `services.murakumoNode.report.enable = true;` runs it every 60 s; exit 4 is not a failure.
+Until a device is claimed the console has no row for it and refuses the heartbeat, by design.
+
+### The box's own screen (`node console`)
+
+```sh
+murakumo node console              # draws on this terminal until Ctrl-C
+murakumo node console --once       # one plain frame, for a log or a pipe
+```
+
+For a box with a screen (a monitor, a serial line, a VM's console) and a person standing in front of it with a
+phone. It says, in order: which device this is, whether it is claimed, its network address, whether the
+console is reachable, the last heartbeat, and whether it can take Wi-Fi by sound. Until the box is claimed it
+draws a **QR code** of the claim link (`/#claim?q=…`) that the phone camera opens; once claimed it says so and
+points at `#devices`.
+
+- It is passive: it reads the label (`<state-dir>/label`, written by the factory, mode 0600) and the last result
+  `murakumo node report` left in `<state-dir>/report-status.json` (an outcome word and a time). It never sends a
+  heartbeat of its own.
+- The QR is built from the label **without its onboarding secret** (`ls`), which proves the person has the
+  physical label and must not appear on a screen. Decoded by an independent reader, the QR carries `did`, `model`,
+  `endpoint` and `token`, and no `ls`.
+- A QR is about 25 rows. If the terminal is too short for the status and the QR together, the two alternate
+  every few seconds; if even the QR alone does not fit, the link is shown as text and the screen says why. The
+  QR draws light modules as blocks, for the default light-on-black console. A light terminal theme shows it
+  inverted, which some scanners will not read.
+- `--public-url ORIGIN` (NixOS `console.publicUrl`) is the address the claim link and the hint use, when a phone
+  cannot reach the one the box talks to: a box in a VM talks to loopback, and a phone cannot.
+- `--rows N` (NixOS `console.rows`) declares the terminal's height: a serial console cannot report one, so the
+  default is 24, which cannot hold a QR (about 29 rows) and the link is shown as text. Give it the real height.
+- NixOS: `services.murakumoNode.console.enable = true;` (`console.tty` is `tty1` by default; use `ttyAMA0` or
+  `ttyS0` for a serial console or a VM). The service takes the terminal over from getty, like a kiosk.
+
 ## Fleet operator tooling
 
-**Control plane for the kotoba WASM lattice/mesh across the Mac-mini fleet.**
+**Control plane for the murakumo inference-node fleet (Mac-mini fleet today), including the optional kotoba mesh workload layer.**
+
+Inference is the primary workload; the kotoba mesh layer described below is an
+optional, additional workload runtime on the same nodes.
 
 kotoba ships a single-node mesh runtime (`kotoba-server` with the `p2p,realtime-wasm`
 features) and a single-node status command (`kotoba lattice ps`) — but **no
@@ -85,11 +245,43 @@ The EDN is not proof of current enforcement; only a successful live readback is.
 The decision and blocked-canary evidence are in
 [`ADR-260811`](docs/adr/ADR-260811-version-github-merge-governance.md).
 
+### What is each node running? — `murakumo fleet ps`
+
+One read-only command answers "which model is loaded where, with which context
+and KV cache, is it busy, and what else shares the node's memory":
+
+```bash
+murakumo fleet ps                    # every online macOS node
+murakumo fleet ps --node joseph      # one node (name or tailnet IP, prefix ok)
+murakumo fleet ps --all --json       # every online node, machine-readable
+kbb --backend sci scripts/run-task.cljk fleet-ps --node joseph   # from a checkout
+```
+
+```
+joseph (100.82.123.35)  Darwin  16 GB  free 74%  swap 30.6 GB
+  model   llama-server pid 32640  2.6 GB  Ternary-Bonsai-2-27B-PTQ1_0.gguf  ctx 32768  kv q8_0/q8_0  fa on  parallel 1  100.82.123.35:8094  slots 0/1 busy
+  shares  2.3 GB  kotoba-server  [com.murakumo.kotoba-mesh]
+  shares  0.9 GB  node /Users/joseph/.inga/releases/inga-origin-20260911/engine/cl  [com.gftd.inga.reservation.20260911.w4]
+  units   com.gftd.inga-node.read-audit.w4, com.gftd.inga.reservation.20260911.w4, com.murakumo.comfyui, com.murakumo.kotoba-mesh, com.murakumo.mishima  (+11 not running)
+```
+
+`model` rows come from the server's own argv plus a live `/slots` read (the
+`ctx` shown is what the server reports). `shares` rows are the other processes
+over 200 MB, each with the launchd / systemd unit that owns it (by pid or
+parent pid, so a node process started by `npm exec` under a job is attributed
+to the job). The probe runs under `/bin/sh -s` on stdin, never the login shell
+(the nodes' zsh does not word-split and aborts on unmatched globs), needs no
+sudo and writes nothing. A node it cannot read is printed as `UNREACHABLE` with
+the reason; exit 0 all read, 1 some unreachable, 2 no node matched. Tests:
+`kbb --backend sci scripts/run-task.cljk test-fleet-ps` (fixture captured from
+joseph).
+
 > Not to be confused with the *etzhayyim* murakumo (k3s-on-Lima + Ansible control
 > plane for the religious-corp **LangGraph/Pregel cells**). This repo is the
-> **kotoba WASM mesh** layer — libp2p lattice nodes hosting content-addressed WASM
-> components (`run` / `on-http` / `on-tick` / `on-kse`). Different substrate, on the
-> same hardware.
+> **inference node platform** — nodes serving models (single-node and pipeline-parallel
+> across nodes), with an optional kotoba mesh layer (libp2p lattice nodes hosting
+> content-addressed WASM components: `run` / `on-http` / `on-tick` / `on-kse`).
+> Different substrate, on the same hardware.
 
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
@@ -224,7 +416,7 @@ Each fleet node runs `kotoba-server` as a **macOS LaunchAgent** (`RunAtLoad` +
 
 - forms a libp2p **gossipsub lattice** and advertises a **Heartbeat** (roles, labels,
   free-gas, hosted components);
-- **hosts WASM components** placed by the lattice auction and fires their cron
+- **hosts workloads** — inference and, optionally, WASM components — placed by the lattice auction and fires their cron
   (`on-tick`), HTTP (`on-http`), and KSE (`on-kse`) triggers;
 - **persists** the components' `kqe-assert!` output to its kotoba Datom log — i.e. the
   node is a real PDS/graph writer, not a sandbox.
@@ -239,6 +431,7 @@ export MURAKUMO_KOTOBA_DIR=~/github/com-junkawasaki/orgs/com-junkawasaki/kotoba
 
 kbb --backend sci scripts/run-task.cljk identity      # print the operator DID (never the seed)
 kbb --backend sci scripts/run-task.cljk ops status    # fold /health + lattice ps across the fleet
+kbb --backend sci scripts/run-task.cljk health check --canary   # verdict + score for the fleet and gateway; see docs/FLEET-HEALTH.md
 kbb --backend sci scripts/run-task.cljk task run --n 22 --cmd 'hostname'   # fan a batch over the fleet
 kbb --backend sci scripts/run-task.cljk token issue --scope chat           # mint a gateway API key
 
@@ -773,7 +966,7 @@ declares a version but `./bin` is empty (clone murakumo → `pin` the declared s
 
 ## Distributed inference — `infer` (the fleet as one model host, exo-style)
 
-The same fleet that hosts WASM components can serve **one LLM too large for any
+The same fleet (which can also host optional WASM components) can serve **one LLM too large for any
 single node**, [exo](https://github.com/exo-explore/exo)-style: probe every node's
 live memory, cut a **memory-weighted contiguous layer partition** (each node's slice
 ∝ its usable RAM), and run a pipeline-parallel ring over it. Pipeline parallel is

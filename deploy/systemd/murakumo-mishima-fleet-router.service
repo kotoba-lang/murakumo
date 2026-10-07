@@ -6,7 +6,28 @@ Wants=network-online.target murakumo-b70-bonsai-native.service
 [Service]
 Type=simple
 WorkingDirectory=/opt/murakumo/mishima
-ExecStart=/usr/bin/npx --yes nbb /opt/murakumo/mishima/infer-cluster.cljk --bind 0.0.0.0 --port 8092 --heads 127.0.0.1:8093,100.101.27.85:8094,100.81.66.86:8094,100.113.200.45:8094,100.66.28.79:8094,100.102.78.81:8094,100.82.123.35:8094,100.89.204.30:8094,100.98.142.59:8094,100.75.169.8:8094,100.96.122.69:8094,100.82.98.110:8094,100.87.226.80:8094 --long-heads 127.0.0.1:8093,100.82.98.110:8094,100.87.226.80:8094 --ultra-heads 100.82.98.110:8094
+# Per-head concurrency is 1 (owner, 2026-09-25): the router queues and hands a
+# head its next request only when idle, refusing (429 + Retry-After) what cannot
+# get a first token inside --ttft-budget-ms. --prefill-tok-s seeds each head's
+# prefill speed until the router measures it; measured 2026-09-25, 4,500-token
+# prompt, one sample per head (prefill / decode tok/s): gad 260/17.4, B70
+# 173/3.4, xavier 69/4.1, naphtali (M4) 51.5/9.4, aiueos-node-260910 28.5/5.6.
+# B70 serves ctx 131072, so it is admitted to the long and ultra classes.
+# aiueos-6600hs-2 serves ctx 65536 through tailnet-only Serve :8095; 4061
+# prompt tokens took 129580 ms (31.3 tok/s), 8 decode tokens 1300 ms on
+# 2026-09-27. It joins long, not ultra, with one llama-server slot.
+# 2026-09-25 (later): the ten M4 heads run 32K context with a q8_0 KV cache
+# (kotoba-lang/murakumo deploy/com.murakumo.mishima.plist.tmpl) and join the
+# long class, seeded at the 45 tok/s cold prefill measured on naphtali with a
+# 22K-token prompt. TTFT budget 240 s, with hermes' stale timeout raised to
+# 300 s (scripts/hermes-managed/config.yaml), still under the ~270 s silence
+# after which the Worker->router VPC hop was seen to drop a request.
+# --decode-tok-s: decode speed per head, measured 2026-09-25/26 (M4 9.85 at
+# 32K q8_0 KV, 14-way load test; gad 17.4, B70 3.4, xavier 4.1, aiueos-node
+# 5.6 from single 4,500-token runs). Heads within a class are ranked by
+# expected finish (cold prefill + answer / decode), so a long answer does not
+# land on a 3-4 tok/s head while an M4 is idle.
+ExecStart=/usr/bin/npx --yes nbb /opt/murakumo/mishima/infer-cluster.cljk --bind 0.0.0.0 --port 8092 --heads 127.0.0.1:8093,100.101.27.85:8094,100.81.66.86:8094,100.113.200.45:8094,100.66.28.79:8094,100.102.78.81:8094,100.82.123.35:8094,100.89.204.30:8094,100.98.142.59:8094,100.75.169.8:8094,100.96.122.69:8094,100.82.98.110:8094,100.87.226.80:8094,100.66.205.17:8094,100.84.134.120:8095 --long-heads 127.0.0.1:8093,100.82.98.110:8094,100.87.226.80:8094,100.66.205.17:8094,100.101.27.85:8094,100.81.66.86:8094,100.113.200.45:8094,100.66.28.79:8094,100.102.78.81:8094,100.82.123.35:8094,100.89.204.30:8094,100.98.142.59:8094,100.75.169.8:8094,100.96.122.69:8094,100.84.134.120:8095 --ultra-heads 127.0.0.1:8093,100.82.98.110:8094,100.66.205.17:8094 --ttft-budget-ms 240000 --prefill-tok-s 127.0.0.1:8093=173,100.82.98.110:8094=260,100.87.226.80:8094=69,100.66.205.17:8094=28.5,100.101.27.85:8094=45,100.81.66.86:8094=45,100.113.200.45:8094=45,100.66.28.79:8094=45,100.102.78.81:8094=45,100.82.123.35:8094=45,100.89.204.30:8094=45,100.98.142.59:8094=45,100.75.169.8:8094=45,100.96.122.69:8094=45,100.84.134.120:8095=31.3 --decode-tok-s 127.0.0.1:8093=3.4,100.82.98.110:8094=17.4,100.87.226.80:8094=4.1,100.66.205.17:8094=5.6,100.101.27.85:8094=9.85,100.81.66.86:8094=9.85,100.113.200.45:8094=9.85,100.66.28.79:8094=9.85,100.102.78.81:8094=9.85,100.82.123.35:8094=9.85,100.89.204.30:8094=9.85,100.98.142.59:8094=9.85,100.75.169.8:8094=9.85,100.96.122.69:8094=9.85,100.84.134.120:8095=5.38
 Restart=always
 RestartSec=2
 

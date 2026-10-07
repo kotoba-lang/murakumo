@@ -17,12 +17,12 @@ if [ -e "$bin_dir/murakumo" ] || [ -L "$bin_dir/murakumo" ]; then
 fi
 staging=$(mktemp -d "$install_dir/.install.XXXXXXXX")
 trap 'rm -rf "$staging"' EXIT HUP INT TERM
-for file in node.mjs package.json package-lock.json; do
+for file in node.mjs package.json package-lock.json nixos-node.nix; do
   curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$base/$file" -o "$staging/$file"
 done
 node - "$staging" <<'JS'
 const fs=require('fs'),path=require('path'),crypto=require('crypto');
-const hashes={"node.mjs":"232c5c6540e2ca9f38b75932202c26070cea202b06bf0b47dbdbef6cf8d5c4e7","package.json":"a786286a30b67227ef0e73381fddf4f35c51df4361c34ce68cc4a8c7947dcacc","package-lock.json":"22456888066745a55fae40e659fb7455b4afed3cf7eda5a39be97c7e85789c4a"};
+const hashes={"node.mjs":"d3a741966e9e10985b2034730ac3526b6fb6aed68b35e93624aeb551871432a2","package.json":"95fed67104441aee31cc77f93f90e5dd412171a21288b3bb4fe9fdc5b1c1f3db","package-lock.json":"705a22363fb593f18bb8c98943b7e8acb1cefa68a50c527247ebcfe30d296644","nixos-node.nix":"1517cc283dd55f415ee942d63d72c3188abfc109d07807a09d58e8a64efca03e"};
 for(const [file,want] of Object.entries(hashes)){
  const got=crypto.createHash('sha256').update(fs.readFileSync(path.join(process.argv[2],file))).digest('hex');
  if(got!==want){console.error('Release checksum mismatch for '+file+'. Retry with the latest installer.');process.exit(1);}
@@ -41,13 +41,14 @@ exec node "$(cd "$(dirname "$self")" && pwd)/node.mjs" "$@"
 LAUNCHER
 chmod +x "$staging/murakumo"
 "$staging/murakumo" node --help >/dev/null
-release_dir="$install_dir/release-232c5c6540e2ca9f"
+release_dir="$install_dir/release-0af7bc6577d68475"
 if [ ! -d "$release_dir" ]; then mv "$staging" "$release_dir"; fi
 # Update only the installer's own links; never replace an existing directory.
 [ ! -e "$install_dir/current" ] || [ -L "$install_dir/current" ] || { echo 'Refusing to replace current directory.' >&2; exit 1; }
 ln -sfn "$release_dir" "$install_dir/current"
 ln -sfn "$install_dir/current/murakumo" "$bin_dir/murakumo"
 echo "Installed: $bin_dir/murakumo"
+echo "Optional NixOS module: $install_dir/current/nixos-node.nix"
 case ":$PATH:" in *":$bin_dir:"*) ;; *) echo "Add $bin_dir to PATH in your shell profile, or use the full path above.";; esac
 echo 'Next: murakumo node init'
 echo 'Then: murakumo node doctor --model <your-served-model-id>'

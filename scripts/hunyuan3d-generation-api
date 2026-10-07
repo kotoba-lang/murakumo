@@ -2,10 +2,12 @@
 """Async Murakumo verified model, voice, motion and bounded effect artifact API."""
 import base64
 import hashlib
+import hmac
 import json
 import math
 import os
 import pathlib
+import re
 import signal
 import subprocess
 import threading
@@ -49,6 +51,7 @@ COMFY_INSTANCES = {"minimax": COMFY_URL_MINIMAX, "v034": COMFY_URL_V034}
 # rather than a slowdown. Add an instance here when you add it above.
 COMFY_BASES = [u for u in (COMFY_URL, COMFY_URL_MINIMAX, COMFY_URL_V034) if u]
 TOKEN = os.environ.get("MURAKUMO_GENERATION_TOKEN", "")
+CALLER_SECRET = os.environ.get("MURAKUMO_GENERATION_CALLER_SECRET", "")
 # Hosted video provider (fal.ai). Absent key = the hosted models are simply not
 # offered; nothing falls back to the fleet, because a caller who asked for
 # Seedance and silently got LTX would be charged for a model they did not pick.
@@ -2259,6 +2262,35 @@ def run_video_job(job_id, source, params):
 
 
 
+def authorized_generation_capability(value, now=None):
+    """Verify the narrow one-minute mk1 token minted by Isekai's generation proxy."""
+    if not CALLER_SECRET or not isinstance(value, str) or len(value) > 2048:
+        return False
+    parts = value.split(".")
+    if len(parts) != 3 or parts[0] != "mk1" or not re.fullmatch(r"[A-Za-z0-9_-]+", parts[1]) or \
+            not re.fullmatch(r"[A-Za-z0-9_-]+", parts[2]):
+        return False
+    signing_input = f"mk1.{parts[1]}".encode("ascii")
+    expected = base64.urlsafe_b64encode(hmac.new(
+        CALLER_SECRET.encode(), signing_input, hashlib.sha256).digest()).rstrip(b"=").decode()
+    if not hmac.compare_digest(parts[2], expected):
+        return False
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(
+            parts[1] + "=" * (-len(parts[1]) % 4)))
+    except (ValueError, UnicodeDecodeError, TypeError):
+        return False
+    if not isinstance(payload, dict) or payload.get("sub") != "isekai-pages" or \
+            payload.get("scope") != "generation":
+        return False
+    issued, expires = payload.get("iat"), payload.get("exp")
+    if type(issued) is not int or type(expires) is not int:
+        return False
+    current = int(time.time()) if now is None else now
+    return current - 30 <= issued <= current + 30 and \
+        issued < expires <= issued + 60 and current < expires
+
+
 class Handler(BaseHTTPRequestHandler):
     def send_json(self, status, body):
         data = json.dumps(body, ensure_ascii=False).encode()
@@ -2268,7 +2300,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("content-length", str(len(data))); self.end_headers(); self.wfile.write(data)
 
     def authorized(self):
-        return not TOKEN or self.headers.get("authorization") == f"Bearer {TOKEN}"
+        authorization = self.headers.get("authorization", "")
+        if TOKEN and hmac.compare_digest(authorization, f"Bearer {TOKEN}"):
+            return True
+        if authorization.startswith("Bearer ") and \
+                authorized_generation_capability(authorization[7:]):
+            return True
+        return not TOKEN and not CALLER_SECRET
 
     def do_OPTIONS(self):
         self.send_response(204); self.send_header("access-control-allow-origin", "*")
