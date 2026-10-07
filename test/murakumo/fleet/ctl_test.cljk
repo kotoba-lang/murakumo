@@ -12,10 +12,28 @@
   (is (= "Stale" (ctl/node-status (p "at" (- now (* 6 60 1000))) now))))
 
 (deftest rollout
-  (is (:converged? (ctl/rollout-status {"a" (p) "b" (p)})))
-  (let [r (ctl/rollout-status {"a" (p) "b" (p "release" "r2")})]
+  (is (:converged? (ctl/rollout-status {"a" (p) "b" (p)} nil now)))
+  (let [r (ctl/rollout-status {"a" (p) "b" (p "release" "r2")} nil now)]
     (is (not (:converged? r)))
-    (is (= {"r1" ["a"] "r2" ["b"]} (:releases r)))))
+    (is (= {"r1" ["a"] "r2" ["b"]} (:releases r))))
+  (testing "stale reports and missing expected nodes are not converged"
+    (is (not (:converged? (ctl/rollout-status {"a" (p "at" (- now (* 10 60 1000)))} nil now))))
+    (is (= ["c"] (:missing (ctl/rollout-status {"a" (p) "b" (p)} #{"a" "b" "c"} now))))
+    (is (not (:converged? (ctl/rollout-status {} nil now))) "no report is not success")))
+
+(deftest review-fixes
+  (is (re-find #"added" (ctl/diff-line {:what "node" :name "x" :change "added"})))
+  (is (= 300 (ctl/parse-positive nil 300)))
+  (is (thrown? js/Error (ctl/parse-positive "abc" 300)))
+  (is (thrown? js/Error (ctl/parse-positive "-5" 300)))
+  (is (= "http://100.64.0.1:8796" (ctl/base-url "http://100.64.0.1:8796//")))
+  (is (ctl/trusted-endpoint? "http://100.64.0.1:8796" false))
+  (is (not (ctl/trusted-endpoint? "https://evil.example.com" false)) "the fleet token never goes to a non-fleet URL")
+  (is (not (ctl/trusted-endpoint? "http://127.0.0.1:8796" false)))
+  (is (= #{"a"} (ctl/expected-nodes {"nodes" [{"node" "a" "enabled" true} {"node" "b" "enabled" false}]})))
+  (let [live {"revision" 1 "nodes" [{"node" "a" "url" "http://100.64.0.1:8796" "enabled" true}] "gateways" [{"node" "g"}]}]
+    (is (some #(= "url" (:field %)) (ctl/intent-diff live (assoc-in live ["nodes" 0 "url"] "http://100.64.0.2:8796"))))
+    (is (some #(= "gateways" (:what %)) (ctl/intent-diff live (assoc live "gateways" []))))))
 
 (deftest diff-and-cordon
   (let [live {"revision" 5 "nodes" [{"node" "a" "enabled" true} {"node" "b" "enabled" true}] "policies" {"x" 1}}
