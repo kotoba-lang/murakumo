@@ -56,6 +56,18 @@
     (is (nil? (c/action-argv {:unit "com.evil.thing"} "loaded")) "only template units")
     (is (= [] (c/decide "enforce" [{:class "x" :unit "com.murakumo.mishima" :step :needs-lease}] o {} now 1000 true)))))
 
+(deftest review-fixes
+  (testing "malformed converge field is observe, never a throw"
+    (is (= "observe" (spec/converge-mode (assoc intent "converge" {"mode" "enforce" "nodes" 1}) "a")))
+    (is (= "observe" (spec/converge-mode (assoc intent "converge" "enforce") "a")))
+    (is (seq (spec/validate (assoc intent "converge" {"mode" "enforce" "nodes" ["nope"]}))))
+    (is (seq (spec/validate (assoc intent "converge" {"mode" "yolo" "nodes" []})))))
+  (testing "one action per unit when classes share a template"
+    (let [plan [{:class "x" :unit "com.murakumo.comfy" :step :start} {:class "y" :unit "com.murakumo.comfy" :step :start}]]
+      (is (= 1 (count (c/decide "enforce" plan {:units {"com.murakumo.comfy" "loaded"}} {} now 1000 true))))))
+  (testing "a model file of the wrong size blocks"
+    (is (= [:blocked] (map :step (spec/converge-plan intent {"a" (obs {"com.murakumo.mishima" "loaded"} :models {"mishima" {:present true :size-matches false}}) "b" (obs {}) "c" (obs {})} "a" now))))))
+
 (deftest mode-comes-from-the-signed-intent
   (is (= "observe" (spec/converge-mode intent "a")))
   (is (= "enforce" (spec/converge-mode (assoc intent "converge" {"mode" "enforce" "nodes" ["a"]}) "a")))

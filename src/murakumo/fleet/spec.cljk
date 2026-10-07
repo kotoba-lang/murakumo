@@ -99,6 +99,14 @@
                (when-let [l (get node "labels")] (when-not (map? l) ["labels must be a map"])))
             :when p]
         (problem ["nodes" n] p))
+      (when-let [cv (get payload "converge")]
+        (concat
+         (when-not (map? cv) [(problem ["converge"] "must be a map")])
+         (when (map? cv)
+           (concat
+            (when-not (#{"observe" "enforce"} (get cv "mode")) [(problem ["converge" "mode"] "must be observe|enforce")])
+            (when-not (and (sequential? (get cv "nodes" [])) (every? #(contains? node-names %) (get cv "nodes" [])))
+              [(problem ["converge" "nodes"] "must list node names from nodes")])))))
       (forbidden-strings (select-keys payload ["models" "classes" "trust" "agents"]) [])))))
 
 ;; ---------------------------------------------------------------- L2
@@ -233,7 +241,7 @@
      :pressure (get-in payload ["host" "pressure"]) :free-pct (get-in payload ["host" "free-pct"])
      :memory-gb (get-in payload ["host" "memory-gb"]) :release (get payload "release")
      :units (get payload "units")
-     :models (into {} (for [[m f] (get payload "models")] [m {:present (get f "present")}]))
+     :models (into {} (for [[m f] (get payload "models")] [m {:present (get f "present") :size-matches (get f "size-matches")}]))
      :converge (get payload "converge")
      :running (set (concat
                     (for [l lanes
@@ -252,10 +260,13 @@
 (def default-cooldown-ms (* 30 60 1000))
 
 (defn converge-mode
-  "observe unless the signed intent says enforce for this node."
+  "observe unless the signed intent says enforce for this node. Anything
+  malformed (not a map, nodes not a list of names) is observe, never a throw."
   [intent node]
-  (let [{:strs [mode nodes]} (get intent "converge")]
-    (if (and (= "enforce" mode) (some #{node} nodes)) "enforce" "observe")))
+  (let [cv (get intent "converge")
+        {:strs [mode nodes]} (if (map? cv) cv {})]
+    (if (and (= "enforce" mode) (sequential? nodes) (every? string? nodes) (some #{node} nodes))
+      "enforce" "observe")))
 
 (defn converge-plan
   "What node should do to hold its share — pure.
@@ -287,7 +298,8 @@
          (not (contains? pinned c)) {:class c :unit unit :step :needs-lease :reason "placed by rendezvous; needs a quorum lease (P3b)"}
          (nil? state) {:class c :unit unit :step :blocked :reason "no template unit on this host (Linux names differ; P3b renders units)"}
          (= "absent" state) {:class c :unit unit :step :blocked :reason "unit not installed (P3b renders it from the template)"}
-         (and model-file (not (:present model-file))) {:class c :unit unit :step :blocked :reason (str "model file for " model " missing")}
+         (and model-file (false? (:present model-file))) {:class c :unit unit :step :blocked :reason (str "model file for " model " missing")}
+         (and model-file (false? (:size-matches model-file))) {:class c :unit unit :step :blocked :reason (str "model file for " model " has the wrong size")}
          :else {:class c :unit unit :step :start :reason (str "pinned here; unit " state)})))))
 
 (defn lease-slots

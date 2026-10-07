@@ -57,11 +57,13 @@
   [mode plan obs last-act now cooldown-ms darwin?]
   (if-not (and (= "enforce" mode) darwin?)
     []
-    (vec (for [s plan
-               :when (= :start (:step s))
-               :let [argv (action-argv s (get-in obs [:units (:unit s)]))]
-               :when (and argv (< (get last-act (:unit s) 0) (- now cooldown-ms)))]
-           (assoc s :argv argv)))))
+    ;; one action per unit even when several classes share its template
+    (vec (vals (into (sorted-map)
+                     (for [s plan
+                           :when (= :start (:step s))
+                           :let [argv (action-argv s (get-in obs [:units (:unit s)]))]
+                           :when (and argv (< (get last-act (:unit s) 0) (- now cooldown-ms)))]
+                       [(:unit s) (assoc s :argv argv)]))))))
 
 (defn- acquire-leases!
   "P3b: hold (or renew) a quorum lease for every share placed on this node by
@@ -83,14 +85,23 @@
         darwin? (= "darwin" (.-platform js/process))
         cooldown (:converge-cooldown-ms config spec/default-cooldown-ms)
         state (atom {:mode "observe" :plan [] :acted [] :at nil})
-        last-act (atom {})
+        ;; cooldowns survive restarts: an action must not repeat because the
+        ;; resident restarted inside its cooldown
+        act-file (str (:state-file config) ".converge-acts.json")
+        last-act (atom (try (js->clj (js/JSON.parse (.readFileSync fs act-file "utf8"))) (catch :default _ {})))
+        remember! (fn [unit now]
+                    (swap! last-act assoc unit now)
+                    (try (topo/persist! act-file @last-act) true (catch :default _ false)))
         tick! (fn []
                 (let [intent (intent-of (topo/payload topology))
                       now (js/Date.now)]
                   (if-not (seq (get intent "classes"))
                     (reset! state {:mode "none" :reason "the signed intent has no classes (spec-version 2 not yet signed)" :at now})
                     (let [l2 (l2-of intent ((:all observations)))
-                          mode (spec/converge-mode intent node)
+                          ;; a conflicted topology (two signed payloads, one revision)
+                          ;; fails closed like admission does: plan, never act
+                          conflicted? (boolean (some-> topology :conflict deref))
+                          mode (if conflicted? "observe" (spec/converge-mode intent node))
                           ;; leases are taken only by a node that would act on them:
                           ;; holding a share it cannot start would starve the class
                           slots (when (and lease-client darwin? (= "enforce" mode))
@@ -104,6 +115,7 @@
                                    plan (spec/converge-plan intent l2 node now {:leased leased})
                                    todo (decide mode plan (get l2 node) @last-act now cooldown darwin?)]
                                (swap! state assoc :mode mode :plan plan :at now :revision (get intent "revision")
+                                      :conflicted conflicted?
                                       :leases (into {} (for [[c r] leases]
                                                          [c (cond-> {:held (boolean (:held? r))}
                                                               (:lease r) (assoc :holder (get-in r [:lease :node])
@@ -111,8 +123,10 @@
                                                                                 :until (get-in r [:lease :until]))
                                                               (:error r) (assoc :error (:error r)))])))
                       (-> (js/Promise.all
-                           (clj->js (for [s todo]
-                                      (do (swap! last-act assoc (:unit s) now)
+                           (clj->js (for [s todo
+                                          ;; act only when the cooldown mark is durable
+                                          :when (remember! (:unit s) now)]
+                                      (do
                                           (-> (reduce (fn [p argv] (.then p (fn [rs] (.then (run-argv argv) #(conj rs %)))))
                                                       (js/Promise.resolve []) (:argv s))
                                               (.then (fn [rs] {:class (:class s) :unit (:unit s) :at now

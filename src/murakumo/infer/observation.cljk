@@ -207,7 +207,9 @@
   [config token topology lanes-fn & [{:keys [extra-fn]}]]
   (let [key (node-key! (or (:node-key-file config) (str (:state-file config) ".node-key")))
         store (atom {}) pins (atom (read-pins config))
-        model-root (or (:model-root config) "/Users/Shared/murakumo")
+        ;; macOS fleet nodes keep models under /Users/Shared/murakumo; elsewhere
+        ;; an unset root means "unknown", not "missing" (no :models reported)
+        model-root (or (:model-root config) (when (= "darwin" (.-platform js/process)) "/Users/Shared/murakumo"))
         accept! (fn [doc & [may-pin]]
                   (let [[s p ok? _] (accept @store @pins doc (js/Date.now) {:may-pin may-pin})]
                     (when ok?
@@ -232,7 +234,7 @@
                                                                     [id (select-keys l [:model :kind :context :ready :failures])]))
                                                      :host host
                                                      :units units
-                                                     :models (model-files payload model-root)
+                                                     :models (if model-root (model-files payload model-root) {})
                                                      ;; e.g. the convergence plan (P3a)
                                                      :converge (when extra-fn (try (extra-fn) (catch :default _ nil)))})]
                                   ;; our own entry goes through the same gate as a peer's
