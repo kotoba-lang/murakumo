@@ -1,6 +1,7 @@
 (ns murakumo.ci.worker
   "One remote runner's lease-to-signed-completion execution path."
-  (:require [kotoba.io :as io]
+  (:require [murakumo.overlay.rpc :as rpc]
+            [kotoba.io :as io]
             [ed25519.core :as ed]
             [bonsai.repo :as repo]
             [murakumo.artifact-store :as artifact-store]
@@ -23,7 +24,7 @@
   ;; Resolved on the first RPC, not here: building a runner (config, identity)
   ;; must not require a transport (QUIC exists only on the JVM; TCP only where Node is).
   (let [request-fn (delay (or request-fn
-                              (requiring-resolve 'murakumo.overlay.rpc/request!)))]
+                              rpc/request!))]
     (fn [message]
       (let [{:keys [ok? response error]}
             (@request-fn broker-request message timeout-ms)]

@@ -1,0 +1,74 @@
+(ns murakumo.ci-tcp-e2e-test
+  "A runner talking to a CI broker through the TCP overlay driver, both real: lease, start,
+  heartbeat, a chunked artifact upload into the coordinator CAS, completion, status. The broker is
+  a child process (test/murakumo/fixtures/ci_broker_server.cljk) because the runner's RPC client is
+  synchronous.
+
+  Node only."
+  (:require ["node:child_process" :as cp]
+            [kotoba.bytes :as kbytes]
+            [kotoba.io :as kio]
+            [kotoba.lang.edn :as edn]
+            [kotoba.test :refer [deftest is async]]
+            [multiformats.core :as multiformats]
+            [murakumo.artifact-store :as cas]
+            [murakumo.ci.artifact-upload :as upload]
+            [murakumo.ci.protocol :as protocol]
+            [murakumo.ci.worker :as worker]))
+
+(def ^:private children (atom []))
+
+(defn- script-args [script args]
+  (let [argv (vec (array-seq js/process.argv))
+        cp-at (.indexOf argv "--classpath")]
+    (into [(nth argv 1)] (concat (when (>= cp-at 0) ["--classpath" (nth argv (inc cp-at))]) [script] args))))
+
+(defn- start-broker! [store cas-root xfer]
+  (js/Promise.
+   (fn [resolve reject]
+     (let [child (.spawn cp js/process.execPath (clj->js (script-args "test/murakumo/fixtures/ci_broker_server.cljk" [store cas-root xfer])))
+           seen (atom "")]
+       (swap! children conj child)
+       (.on (.-stdout child) "data"
+            (fn [chunk]
+              (swap! seen str chunk)
+              (when-let [line (first (filter #(.includes % ":listening") (.split @seen "\n")))]
+                (resolve (get-in (edn/read-string line) [:listen :port])))))
+       (.on (.-stderr child) "data" (fn [c] (swap! seen str c)))
+       (.on child "exit" (fn [code] (when (and code (not= 0 code)) (reject (js/Error. (str "broker exited " code ": " @seen))))))))))
+
+(deftest a-runner-leases-uploads-and-completes-through-the-tcp-overlay
+  (async done
+    (let [root (str (kio/temp-dir "murakumo-ci-tcp"))
+          store (str root "/store") cas-root (str root "/cas") xfer (str root "/xfer")]
+      (-> (start-broker! store cas-root xfer)
+          (.then (fn [port]
+                   (let [rpc (worker/rpc-client {:broker-request {:type "murakumo.overlay.adapter-request" :version 1 :transport :tcp
+                                                                  :session {:overlay "test" :node "runner"}
+                                                                  :connect {:host "127.0.0.1" :port port}}
+                                                 :timeout-ms 8000})
+                         runner {:runner/id "did:key:zRunner" :runner/capabilities #{:linux} :runner/environment-digest "env"}
+                         offer (rpc (protocol/lease-request runner))
+                         lease (get-in offer [:murakumo.ci/body :lease])
+                         _ (is (= :ci/lease-offer (:murakumo.ci/type offer)))
+                         started (rpc (protocol/message :ci/run-started {:lease lease}))
+                         beat (rpc (protocol/message :ci/heartbeat {:lease lease}))
+                         renewed (get-in beat [:murakumo.ci/body :lease])   ; a heartbeat renews the lease: later calls carry it
+                         bytes (kbytes/utf8-bytes "an artifact that is longer than one eight byte chunk, with a newline\n")
+                         cid (multiformats/cidv1-raw bytes)
+                         put! (upload/uploader {:rpc rpc :lease-fn (constantly renewed) :chunk-bytes 8})
+                         _ (put! cid bytes)
+                         stored (cas/get-bytes cas-root cid)
+                         done-msg (rpc (protocol/completion renewed :passed "bafyreceipt"))
+                         status (rpc (protocol/message :ci/run-status {:run-id "run-1"}))
+                         nothing (rpc (protocol/lease-request (assoc runner :runner/id "did:key:zOther")))]
+                     (is (= "run-1" (:ci.lease/run-id lease)))
+                     (is (= :ci/ack (:murakumo.ci/type started)))
+                     (is (= :ci/heartbeat-ack (:murakumo.ci/type beat)))
+                     (is (= (seq bytes) (seq stored)) "the artifact crossed the overlay in 9 chunks and verified in the CAS")
+                     (is (= :ci/ack (:murakumo.ci/type done-msg)))
+                     (is (= :passed (get-in status [:murakumo.ci/body :runs 0 :ci.run/state])))
+                     (is (= "bafyreceipt" (get-in status [:murakumo.ci/body :runs 0 :ci.run/receipt-cid])) "the receipt the runner reported is on the run")
+                     (is (= :ci/no-work (:murakumo.ci/type nothing)) "a finished run is not offered again"))))
+          (.catch (fn [e] (is false (str "unexpected: " (.-message e)))))
+          (.then (fn [_] (doseq [c @children] (.kill c)) (reset! children []) (done)))))))

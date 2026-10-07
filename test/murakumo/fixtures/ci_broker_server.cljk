@@ -1,0 +1,19 @@
+(ns murakumo.fixtures.ci-broker-server
+  "A CI broker over the TCP overlay in a child process: one submitted run, a file store, the
+  coordinator CAS. Usage: <script> STORE-ROOT CAS-ROOT TRANSFER-ROOT. Prints the listening line."
+  (:require [murakumo.artifact-store :as cas]
+            [murakumo.ci.broker-service :as service]
+            [murakumo.ci.file-store :as file-store]
+            [murakumo.overlay.rpc :as rpc]))
+
+(let [[store-root cas-root xfer-root] *command-line-args*
+      svc (service/create {:store (file-store/create store-root)
+                           :lease-ttl-ms 60000
+                           :artifact-upload-opts {:temp-dir xfer-root
+                                                  :put! #(cas/put! cas-root %1 %2)
+                                                  :get-bytes #(cas/get-bytes cas-root %)}})]
+  ((:submit! svc) {:ci.run/id "run-1" :ci.run/source {:source/revision "abc"}
+                   :ci.run/pipeline-digest "pipeline" :ci.run/requires #{:linux}})
+  (rpc/serve-rpc! {:type "murakumo.overlay.adapter-request" :version 1 :transport :tcp
+                   :session {:overlay "test" :node "coordinator"} :connect {:host "127.0.0.1" :port 0}}
+                  (:handler svc)))

@@ -1,6 +1,7 @@
 (ns murakumo.cd.fleet-adapter
   "Controller-side adapter from cd.executor callbacks to overlay QUIC RPC."
-  (:require [murakumo.cd.protocol :as protocol]))
+  (:require [murakumo.overlay.rpc :as rpc]
+            [murakumo.cd.protocol :as protocol]))
 
 (def default-timeout-ms 10000)
 
@@ -31,7 +32,7 @@
                                                      operation-artifact environment verdict revision)
                            transport (when (:ok? staged)
                                        ((or request-fn
-                                            (requiring-resolve 'murakumo.overlay.rpc/request!))
+                                            rpc/request!)
                                         overlay-request payload timeout-ms))]
                        (if-not (:ok? staged)
                          (assoc staged :reason :artifact-staging-failed

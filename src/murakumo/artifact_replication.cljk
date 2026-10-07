@@ -1,18 +1,18 @@
 (ns murakumo.artifact-replication
   "Controller-side chunked replication of signed release objects over QUIC."
-  (:require [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
+  (:require [murakumo.overlay.rpc :as rpc]
+            [kotoba.bytes :as kbytes] [kotoba.lang.text :as str]
             [murakumo.artifact-protocol :as protocol]
-            [murakumo.cd.bundle :as bundle])
-  (:import [java.util UUID]))
+            [murakumo.cd.bundle :as bundle]))
 
 (def default-chunk-bytes (* 48 1024))
 (def default-timeout-ms 10000)
 
-(defn- chunks [^bytes bytes size]
+(defn- chunks [bytes size]
   (map-indexed
    (fn [idx offset]
      (let [end (min (alength bytes) (+ offset size))]
-       [idx (java.util.Arrays/copyOfRange bytes offset end)]))
+       [idx (.slice bytes offset end)]))
    (range 0 (alength bytes) size)))
 
 (defn create-overlay-replicator
@@ -20,7 +20,7 @@
            timeout-ms chunk-bytes]
     :or {timeout-ms default-timeout-ms chunk-bytes default-chunk-bytes}}]
   (let [request-fn (or request-fn
-                       (requiring-resolve 'murakumo.overlay.rpc/request!))
+                       rpc/request!)
         capability-document (:capability issued-capability)
         environment (:cd.capability/environment capability-document)
         verdict (:cd.capability/verdict-cid capability-document)
@@ -43,12 +43,12 @@
                    :error (or error :invalid-response)})))
         send-object!
         (fn [target node scope object-cid bytes]
-          (let [id (str/replace (str (UUID/randomUUID)) "-" "")
+          (let [id (str/replace (str (random-uuid)) "-" "")
                 fields (assoc scope
                               :murakumo.artifact/transfer-id id
                               :murakumo.artifact/object-cid object-cid)
                 begin (rpc target node :begin
-                           (assoc fields :murakumo.artifact/size (alength ^bytes bytes)))]
+                           (assoc fields :murakumo.artifact/size (alength bytes)))]
             (if-not (:ok? begin)
               begin
               (if (= :present (:status begin))
@@ -59,7 +59,7 @@
                                       (assoc fields
                                              :murakumo.artifact/sequence sequence
                                              :murakumo.artifact/data
-                                             (kbytes/base64-encode ^bytes chunk)))]
+                                             (kbytes/base64-encode chunk)))]
                       (if (:ok? result)
                         (recur (rest remaining))
                         result))

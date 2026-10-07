@@ -1,6 +1,7 @@
 (ns murakumo.ci.broker-service
   "Persistent, versioned broker RPC service for remote Murakumo runners."
-  (:require [kotoba.lang.error :as kerror] [murakumo.ci.broker :as broker]
+  (:require [murakumo.overlay.rpc :as rpc]
+            [kotoba.lang.error :as kerror] [murakumo.ci.broker :as broker]
             [murakumo.ci.attest :as attest]
             [murakumo.ci.artifact-upload :as artifact-upload]
             [murakumo.ci.protocol :as protocol]
@@ -186,5 +187,5 @@
     {:state state :submit! submit! :handler handler}))
 
 (defn serve! [overlay-request service]
-  ((requiring-resolve 'murakumo.overlay.rpc/serve-rpc!)
+  (rpc/serve-rpc!
    overlay-request (:handler service)))

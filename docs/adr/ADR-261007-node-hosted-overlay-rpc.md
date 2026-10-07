@@ -43,25 +43,41 @@ functions, `request!` (synchronous) and `serve-rpc!`.
   drop-in.
 - The remaining JVM-only code on the CI/CD path (below).
 
-## Remaining gaps on kbb, measured (not caused by this change: identical before it)
+## What the CI/CD path needed besides the driver (done)
 
-Of the CI/CD, artifact and overlay test namespaces, 33 pass on kbb with and without this change.
-Failing on both:
+The artifact path used `clojure.java.io` coercions and `java.util.Arrays`, which kbb does not
+provide, so five CI/CD test namespaces failed on kbb before this work (`ci.artifact-upload`,
+`artifact-replication`, `ci.worker`, `cd.automation`, `cd.controller`). Ported to `kotoba.io`:
+`ci.artifact-upload`, `artifact-remote` (staging files: `kio/temp-file`, `kio/write-bytes` with
+`:append`, `kio/delete`), `artifact-replication` (chunks by `.slice`, a copy), and
+`artifact-store` (the CAS; reads go through `durable-file/regular-file?`, which does not follow
+symbolic links, and `read-bytes`, which returns an Int8Array as `kotoba.bytes` does). The five
+namespaces now pass.
 
-- `ci.artifact-upload`, `artifact-replication`, `ci.worker` (artifact step), `cd.automation`,
-  `cd.controller`: the CAS and upload code still use `clojure.java.io` coercions
-  (`:as-file ... Coercions`) and `java.util.Arrays`, which kbb does not provide. They need the same
-  port to `kotoba.io` / `kotoba.bytes` the rest of the repository already had.
-- `overlay.runtime`: a stack overflow in the relay listen-spec derivation.
-- The pure overlay namespaces (`overlay.adapter`, `dial`, `relay`, `transport`, `forward`, `cert`,
-  `crypto`, ...) and `cd-quic-live` do not load on kbb (JVM sockets, BouncyCastle).
+The router requires the TCP driver statically: on kbb `requiring-resolve` finds only namespaces
+that are already loaded, so the call sites (`ci.worker`, `ci.broker-service`, `cd.*`,
+`artifact-replication`) now `:require murakumo.overlay.rpc` instead of resolving it by name. QUIC
+stays resolved lazily, since loading its namespace anywhere but the JVM fails.
+
+## Still not done
+
+- `overlay.runtime`: a stack overflow in the relay listen-spec derivation (4 errors, same on `main`).
+- The pure overlay namespaces (`adapter`, `dial`, `relay`, `transport`, `forward`, `cert`, `crypto`,
+  the witness set) and `cd-quic-live` do not load on kbb (JVM sockets, BouncyCastle). Nothing on the
+  CI/CD path needs them once the TCP driver is used.
 - `ci.github-status` needs the synchronous JVM HTTP client; not needed when GitHub is only an event
   source and status is read from Murakumo.
+- `broker-service` still builds its default lease token with `java.security.SecureRandom`; the
+  tests (and so far the end-to-end test) pass a `:token-fn`. A real coordinator on kbb needs that
+  replaced before it issues its first lease.
+- Bulk artifact transfer pays a child-process start per 48 KiB chunk.
+- Nothing has run a coordinator and runners on separate machines, nor a pipeline in the sandbox.
 
 ## Verification
 
-`overlay-tcp-driver-test`: 5 tests / 37 assertions over real sockets (the server in a child
-process, because the client blocks): EDN round trip with nested data, a throwing handler answers an
-error, an unreadable and an oversized request are refused, a closed port is a stream error, a silent
-peer is a timeout and not a hang, the bind policy, and the router. Nothing has yet run a coordinator
-and a runner over it: that needs the artifact path above.
+`overlay-tcp-driver-test`: 5 tests / 37 assertions over real sockets (the server in a child process,
+because the client blocks). `ci-tcp-e2e-test`: a runner and a CI broker, both real, in separate
+processes over the TCP overlay: lease, start, heartbeat, a 9-chunk artifact upload into the
+coordinator CAS (verified by CID), completion, and the run's status; a finished run is not offered
+again. Of the CI/CD, artifact and overlay namespaces, 39 now pass on kbb (33 before; the other
+23 that do not load are the JVM-only overlay, unchanged).
