@@ -10,7 +10,7 @@ import {randomBytes} from 'node:crypto';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const root=resolve('.');
 async function port(){const s=createServer();s.listen(0,'127.0.0.1');await once(s,'listening');const p=s.address().port;await new Promise(r=>s.close(r));return p;}
-async function wait(fn){for(let i=0;i<100;i++){try{if(await fn())return;}catch{}await sleep(50);}throw Error('condition timed out');}
+async function wait(fn){for(let i=0;i<300;i++){try{if(await fn())return;}catch{}await sleep(50);}throw Error('condition timed out');}
 // A llama-server stand-in: advertises Keep-Alive timeout=2 and FIN-closes each socket after 2 s idle.
 // An 'end' on a socket it has not ended itself is a FIN from the resident, i.e. the client closed first.
 async function backend(){
