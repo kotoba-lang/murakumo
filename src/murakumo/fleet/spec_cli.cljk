@@ -1,0 +1,216 @@
+(ns murakumo.fleet.spec-cli
+  "`murakumo spec …` — the read-only P1 of ADR-2610071730.
+
+    murakumo spec draft  [--topology F] [--fleet F] [--out F]   intent draft from what is declared + observed
+    murakumo spec lint   FILE                                   validate the L1 keys
+    murakumo spec plan   FILE                                   L3 placement over live observations
+    murakumo spec drift  FILE [--fleet F]                       declared vs declared vs observed
+    murakumo spec mesh   FILE --node NAME                       itonami peers.edn for NAME from L1 trust
+
+  FILE is a bare topology payload or a signed {payload, signature} document.
+  Observations (L2) are read over HTTP from each node's itonami peer
+  (signed self-report) plus tailscale; nothing is written to any node, and
+  nothing is signed or published — the operator signs with `murakumo
+  topology sign`."
+  (:require [kotoba.lang.text :as str]
+            [cljs.reader :as reader]
+            [murakumo.fleet.spec :as spec]
+            [murakumo.fleet-health :as fh]
+            ["node:fs" :as fs]))
+
+(defn- opt [args k] (second (drop-while #(not= % k) args)))
+
+(defn- read-json [f] (js->clj (js/JSON.parse (str (.readFileSync fs f "utf8")))))
+
+(defn- payload-of [doc] (if (contains? doc "payload") (get doc "payload") doc))
+
+(defn read-fleet-edn
+  "fleet.edn -> node name -> {:serves #{model} :labels {..}}. :node/serves
+  values are file names or model ids; models are matched by id."
+  [f]
+  (if-not (and f (.existsSync fs f))
+    {}
+    (let [d (reader/read-string (str (.readFileSync fs f "utf8")))
+          nodes (or (:nodes d) (:fleet/nodes d) [])]
+      (into {} (for [n nodes]
+                 [(:name n) {:serves (let [s (:node/serves n)] (cond (string? s) #{s} (sequential? s) (set s) :else #{}))
+                             :labels (into {} (map (fn [[k v]] [(name k) (if (keyword? v) (name v) v)]) (:labels n)))}])))))
+
+;; ---------------------------------------------------------------- L2 observation
+
+(defn observe
+  "Promise of node -> observation, from the itonami peers (signed, public).
+  :running holds the CLASSES observed: itonami-peer when its peer answered,
+  and each llm class whose model the node lends from its own rails."
+  [intent]
+  (let [nodes (or (fh/tailnet) [])
+        expected (fh/expected-peers)
+        url-of (fn [{:keys [ip]}] (or (first (filter #(str/includes? % (str "//" ip ":")) (keys expected)))
+                                      (str "http://" ip ":7420")))
+        llm-classes (for [[c s] (get intent "classes") :when (= "llama-server" (get s "template"))] [c (get s "model")])
+        peer-class (some (fn [[c s]] (when (= "itonami-peer" (get s "template")) c)) (get intent "classes"))]
+    (-> (js/Promise.all (clj->js (map #(fh/read-node % (url-of %)) nodes)))
+        (.then (fn [rs]
+                 (into (sorted-map)
+                       (for [r (array-seq rs)
+                             :let [info (get-in r [:peer :info]) h (get info "health")]]
+                         [(:name r)
+                          (cond-> {:online (:online r) :ip (:ip r) :url (url-of r) :self? (:self? r)}
+                            info (assoc :at-ms (js/Date.now)
+                                        :did (get info "did")
+                                        :pressure (get h "pressure_level")
+                                        :free-pct (get h "mem_free_pct")
+                                        :memory-gb (get h "mem_total_gb")
+                                        :revision (get h "revision")
+                                        :running (set (concat (when peer-class [peer-class])
+                                                              (for [[c m] llm-classes :when (some #{m} (get info "agent_models"))] c)))))])))))))
+
+;; ---------------------------------------------------------------- draft
+
+(def known-models
+  ;; what the fleet runs today (2026-10-07); a draft starts from these and the
+  ;; operator edits before signing
+  {"mishima" {"kind" "text" "file" "mishima/model/Ternary-Bonsai-2-27B-PTQ1_0.gguf" "bytes" 5946648928}
+   "animagine-xl-4.0" {"kind" "image"}})
+
+(declare draft*)
+
+(defn parse-overrides
+  "--override node:class:key=value (repeatable) -> {node {class {key value}}}.
+  Numeric values become numbers."
+  [args]
+  (reduce (fn [m o]
+            (if-let [[_ n c k v] (re-matches #"^([^:]+):([^:]+):([a-z-]+)=(.+)$" (str o))]
+              (assoc-in m [n c k] (if (re-matches #"\d+" v) (js/parseInt v 10) v))
+              (throw (js/Error. (str "bad --override " o " (want node:class:key=value)")))))
+          {}
+          (map second (filter #(= "--override" (first %)) (partition 2 1 args)))))
+
+(defn draft
+  "Topology payload + fleet.edn + observations -> an L1 intent draft
+  (spec-version 2). The revision is left as is: signing bumps it."
+  [topology-payload fleet observations & [overrides]]
+  (let [roles-of (fn [n] (get n "roles"))
+        all-roles (mapcat roles-of (get topology-payload "nodes"))
+        class-of-role (fn [{:strs [kind model]}] (str model "-" kind))
+        min-rep (get-in topology-payload ["policies" "minimum-replicas"])
+        classes (into (sorted-map)
+                      (concat
+                       (for [[[kind model] rs] (group-by (juxt #(get % "kind") #(get % "model")) all-roles)]
+                         [(str model "-" kind)
+                          (cond-> {"template" (if (= "text" kind) "llama-server" "comfyui")
+                                   "model" model
+                                   "replicas" (count rs)
+                                   "minimum" (get min-rep model 1)
+                                   "eligible" {"min-memory-gb" 16 "max-pressure" 2}}
+                            (= "text" kind) (assoc "context" (key (apply max-key val (frequencies (keep #(get % "context") rs))))))])
+                       [["itonami-peer" {"template" "itonami-peer" "replicas" "all" "port" 7420
+                                         "eligible" {"max-pressure" 4}}]]))
+        observed-llm (fn [n] (get-in observations [n :running]))]
+    (-> (draft* topology-payload fleet observations overrides roles-of class-of-role classes observed-llm)
+        (as-> d (update d "classes"
+                        (fn [cs] (into (sorted-map)
+                                       (for [[c spec] cs]
+                                         [c (if (number? (get spec "replicas"))
+                                              ;; status quo: as many as are pinned today
+                                              (assoc spec "replicas" (count (filter #(some #{c} (get % "pins")) (get d "nodes"))))
+                                              spec)]))))))))
+
+(defn- draft* [topology-payload fleet observations overrides roles-of class-of-role classes observed-llm]
+  (let [all-roles (mapcat roles-of (get topology-payload "nodes"))]
+    (-> topology-payload
+        (assoc "spec-version" 2
+               "models" (into (sorted-map) (for [[m s] known-models :when (some #(= m (get % "model")) all-roles)] [m s]))
+               "classes" classes
+               "trust" (into (sorted-map) (for [[n o] observations
+                                                 :let [node? (some #(= n (get % "node")) (get topology-payload "nodes"))]
+                                                 :when (and (:did o) (or node? (:self? o)))]
+                                             [n (cond-> {"did" (:did o) "itonami-url" (:url o)}
+                                                  (not node?) (assoc "role" "member"))]))
+               "agents" (let [revs (keep :revision (vals observations))]
+                          (cond-> {} (seq revs) (assoc "itonami-agent" (key (apply max-key val (frequencies revs)))))))
+        (update "nodes"
+                (fn [nodes]
+                  (mapv (fn [n]
+                          (let [name (get n "node")
+                                pins (distinct (concat (map class-of-role (roles-of n))
+                                                       ;; observed decisions not yet in the topology
+                                                       ;; (e.g. levi/zebulun mishima 2026-10-07);
+                                                       ;; "all" classes need no pin
+                                                       (filter #(and (get classes %) (not= "all" (get-in classes [% "replicas"])))
+                                                               (observed-llm name))))]
+                            (cond-> (assoc n "pins" (vec pins))
+                              (get overrides name) (assoc "overrides" (get overrides name))
+                              (get-in observations [name :memory-gb]) (assoc "memory-gb" (get-in observations [name :memory-gb]))
+                              (seq (get-in fleet [name :labels])) (assoc "labels" (get-in fleet [name :labels])))))
+                        nodes))))))
+
+;; ---------------------------------------------------------------- rendering
+
+(defn- pad [s n] (let [s (str s)] (if (>= (count s) n) s (str s (apply str (repeat (- n (count s)) " "))))))
+
+(defn- print-plan [plan]
+  (doseq [[c {:keys [nodes wanted short? excluded]}] plan]
+    (println (str (pad c 24) (count nodes) "/" wanted (when short? "  SHORT") "  " (str/join " " nodes)))
+    (doseq [[n why] excluded] (println (str (pad "" 26) "- " n ": " why)))))
+
+(defn run
+  "Promise of the exit code."
+  [[sub & args]]
+  (let [file (first (remove #(str/starts-with? % "--") args))
+        load-intent #(payload-of (read-json file))]
+    (case sub
+      "draft"
+      (let [topo (payload-of (read-json (or (opt args "--topology") "deploy/fleet-topology.json")))
+            fleet (read-fleet-edn (or (opt args "--fleet") "fleet.edn"))]
+        (-> (observe {"classes" {"mishima-text" {"template" "llama-server" "model" "mishima"}
+                                 "itonami-peer" {"template" "itonami-peer"}}})
+            (.then (fn [obs]
+                     (let [d (draft topo fleet obs (parse-overrides args))
+                           out (js/JSON.stringify (clj->js d) nil 2)
+                           problems (spec/validate d)]
+                       (if-let [f (opt args "--out")] (do (.writeFileSync fs f (str out "\n")) (println (str "wrote " f))) (println out))
+                       (binding [*print-fn* *print-err-fn*]
+                         (doseq [p problems] (println (str "  ! " (str/join "." (:path p)) ": " (:problem p)))))
+                       (if (seq problems) 1 0))))))
+
+      "lint"
+      (let [problems (spec/validate (load-intent))]
+        (if (seq problems)
+          (doseq [p problems] (println (str "  ! " (str/join "." (:path p)) ": " (:problem p))))
+          (println "valid (spec-version 2, schema 1)"))
+        (js/Promise.resolve (if (seq problems) 1 0)))
+
+      "plan"
+      (let [intent (load-intent)]
+        (-> (observe intent)
+            (.then (fn [obs] (print-plan (spec/placement intent obs (js/Date.now)))
+                     (if (some :short? (vals (spec/placement intent obs (js/Date.now)))) 1 0)))))
+
+      "drift"
+      (let [intent (load-intent)
+            fleet (read-fleet-edn (or (opt args "--fleet") "fleet.edn"))]
+        (-> (observe intent)
+            (.then (fn [obs]
+                     (let [now (js/Date.now)
+                           running (into {} (for [[n o] obs :when (:running o)] [n (:running o)]))
+                           ds (spec/drift intent obs running (into {} (map (fn [[n v]] [n (:serves v)]) fleet)) now)]
+                       (print-plan (spec/placement intent obs now))
+                       (println)
+                       (if (empty? ds)
+                         (println "  no drift")
+                         (doseq [d (sort-by (juxt :kind :node) ds)]
+                           (println (str "  " (pad (name (:kind d)) 12) (pad (:node d) 10) (pad (:class d) 24) (:detail d)))))
+                       (println "\n  note: image lanes are not observable without the resident's authenticated /health (P2);")
+                       (println "        image classes show as `missing` until L2 carries them.")
+                       (if (seq ds) 1 0))))))
+
+      "mesh"
+      (let [intent (load-intent) n (opt args "--node")]
+        (if-not n
+          (do (println "--node NAME required") (js/Promise.resolve 2))
+          (do (print (spec/peers-edn intent n)) (js/Promise.resolve 0))))
+
+      (do (println (:doc (meta (resolve 'murakumo.fleet.spec-cli/run))))
+          (println "murakumo spec draft|lint|plan|drift|mesh — see src/murakumo/fleet/spec_cli.cljk")
+          (js/Promise.resolve (if (#{"help" "--help" nil} sub) 0 2))))))

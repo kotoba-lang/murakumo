@@ -4,6 +4,7 @@
             [murakumo.bench :as bench]
             [murakumo.fleet-ps :as fleet-ps]
             [murakumo.fleet-health :as fleet-health]
+            [murakumo.fleet.spec-cli :as spec-cli]
             [murakumo.health :as health]
             [murakumo.infer.resident :as resident]
             [murakumo.infer.jobs-cli :as jobs-cli]
@@ -34,6 +35,10 @@
                                           (ctx, KV, slots), co-resident processes, units
   murakumo fleet health [--node N] [--json] Every node at once, no ssh: online, memory
                                           pressure, swap, TIME_WAIT, rails, peer (signed)")
+  (println "\n  murakumo spec draft [--override n:class:key=v] [--out F]  Fleet intent draft (declared + observed)
+  murakumo spec lint F | plan F | drift F | mesh F --node N
+                                          Validate; placement every node computes; drift; peers.edn
+                                          (ADR-2610071730; read-only, signing is `topology sign`)")
   (println "  Payout also requires --owner-token-file /absolute/private/path from the buyer's device page.")
   (println "\n  murakumo bench nodes                    List tailnet nodes (name, ip, online)\n  murakumo bench run --node N --model P --engine llama|diffuse\n  murakumo bench ledger [--limit N]       Show the append-only measurement ledger\n\nMeasurements record argv, the model's bytes and hash, the host's memory and the\nengine's own output. Nothing here enrols a node or publishes a number.\n  murakumo bench --help")
   (println "\n  murakumo health check [--canary]        Probe every fleet node + the gateway, score it, record it\n  murakumo health slo | history            Availability, flapping and canary drift from the ledger\n  murakumo health heal [--apply]           Plan (or run) the one guarded self-heal\n  murakumo health --help"))
@@ -605,6 +610,11 @@
       (= prefix "fleet")
       (-> (if (= command "health") (fleet-health/run args) (fleet-ps/run-command command args))
           (.then (fn [code] (when (not= 0 code) (set! (.-exitCode js/process) code)))))
+      ;; `spec` is the fleet intent (ADR-2610071730 P1): read-only — it drafts,
+      ;; validates, plans and diffs; signing stays `murakumo topology sign`.
+      (= prefix "spec")
+      (-> (spec-cli/run (cons command args))
+          (.then (fn [code] (when (not= 0 code) (set! (.-exitCode js/process) code)))))
       ;; `health` probes and assesses the fleet; its one write is a guarded mesh
       ;; restart behind --apply, and it has no path to the node identity either.
       (= prefix "health")
@@ -614,7 +624,7 @@
       (= prefix "gateway") (gateway/run-command command args)
       (= prefix "topology") (topology/run-command command args)
       (= command "--help") (help)
-      (not= prefix "node") (fail! "Use: murakumo node, bench, fleet or health --help")
+      (not= prefix "node") (fail! "Use: murakumo node, bench, fleet, spec or health --help")
       (= command "init") (init!)
       (= command "claim-once")
       (-> (claim-once! args)

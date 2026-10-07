@@ -1,0 +1,341 @@
+{
+  "gateways": [
+    {
+      "node": "gateway-xavier",
+      "url": "http://100.87.226.80:8797",
+      "enabled": true,
+      "failure-domain": "local-site"
+    },
+    {
+      "node": "gateway-6600hs",
+      "url": "http://100.98.24.37:8797",
+      "enabled": true,
+      "failure-domain": "local-site"
+    }
+  ],
+  "schema": 1,
+  "revision": 2026100501,
+  "agents": {
+    "itonami-agent": "cd89186"
+  },
+  "trust": {
+    "benjamin": {
+      "did": "did:key:z6Mknfg12wGRBX8dH7GciXsE1BzNc8xLNEwVv41UyqyhhDhX",
+      "itonami-url": "http://100.75.169.8:7420"
+    },
+    "issachar": {
+      "did": "did:key:z6Mkisxh4P7ERRZvhctmLLZQ5ZwmbDTyByhXtaQR8v8kf1zi",
+      "itonami-url": "http://100.89.204.30:7420"
+    },
+    "joseph": {
+      "did": "did:key:z6MksfwJ25i2ZtCNFBRfiB9iLcKx4DoiUDh4G9ufB9jmaBQh",
+      "itonami-url": "http://100.82.123.35:7420"
+    },
+    "levi": {
+      "did": "did:key:z6Mkjbk1yzxqbGDDQvbS2cM9UfErbfUMvnD2CFPw2SAuDcbL",
+      "itonami-url": "http://100.102.78.81:7420"
+    },
+    "main-2": {
+      "did": "did:key:z6Mkhbind2d8Yi6wbpxQqFWrmpegkmnNYuvR3RwZkrsP9Zwv",
+      "itonami-url": "http://100.108.223.94:7420",
+      "role": "member"
+    },
+    "naphtali": {
+      "did": "did:key:z6MktxD2hSuCmd45F2RH6zcLAPnssLKq9UUraeNJbWzmUYky",
+      "itonami-url": "http://100.101.27.85:7420"
+    },
+    "zebulun": {
+      "did": "did:key:z6MkwLjPcydmyaDxxQe381f4v4FMFC4s3nqKt5vBS6HM3oJj",
+      "itonami-url": "http://100.66.28.79:7420"
+    }
+  },
+  "classes": {
+    "animagine-xl-4.0-image": {
+      "template": "comfyui",
+      "model": "animagine-xl-4.0",
+      "replicas": 2,
+      "minimum": 2,
+      "eligible": {
+        "min-memory-gb": 16,
+        "max-pressure": 2
+      }
+    },
+    "itonami-peer": {
+      "template": "itonami-peer",
+      "replicas": "all",
+      "port": 7420,
+      "eligible": {
+        "max-pressure": 4
+      }
+    },
+    "mishima-text": {
+      "template": "llama-server",
+      "model": "mishima",
+      "replicas": 11,
+      "minimum": 2,
+      "eligible": {
+        "min-memory-gb": 16,
+        "max-pressure": 2
+      },
+      "context": 32768
+    }
+  },
+  "policies": {
+    "minimum-replicas": {
+      "mishima": 2,
+      "animagine-xl-4.0": 2
+    },
+    "minimum-gateways": 2,
+    "receipt-policy": "owner-pinned-never-replay-unknown",
+    "site-redundancy-qualified": false
+  },
+  "nodes": [
+    {
+      "node": "judah",
+      "url": "http://100.113.200.45:8796",
+      "enabled": true,
+      "failure-domain": "local-site",
+      "roles": [
+        {
+          "kind": "text",
+          "model": "mishima",
+          "context": 32768
+        }
+      ],
+      "owner-id": "9976027a-d7a0-4b6b-8e75-7535807ba881",
+      "pins": [
+        "mishima-text"
+      ],
+      "labels": {
+        "tier": "edge",
+        "zone": "jp"
+      }
+    },
+    {
+      "url": "http://100.75.169.8:8796",
+      "enabled": true,
+      "labels": {
+        "tier": "edge",
+        "zone": "jp"
+      },
+      "pins": [
+        "mishima-text"
+      ],
+      "failure-domain": "local-site",
+      "owner-id": "00d4a408-4a29-4c4a-8f87-d1ea30b7acf5",
+      "memory-gb": 16,
+      "roles": [
+        {
+          "kind": "text",
+          "model": "mishima",
+          "context": 32768
+        }
+      ],
+      "node": "benjamin"
+    },
+    {
+      "node": "dan",
+      "url": "http://100.98.142.59:8796",
+      "enabled": true,
+      "failure-domain": "local-site",
+      "roles": [
+        {
+          "kind": "text",
+          "model": "mishima",
+          "context": 32768
+        }
+      ],
+      "owner-id": "b60802f1-5fe8-4052-88e0-873a1cacb553",
+      "pins": [
+        "mishima-text"
+      ],
+      "labels": {
+        "tier": "edge",
+        "zone": "jp",
+        "role": "pdshost"
+      }
+    },
+    {
+      "url": "http://100.89.204.30:8796",
+      "enabled": true,
+      "labels": {
+        "tier": "edge",
+        "zone": "jp"
+      },
+      "pins": [
+        "mishima-text"
+      ],
+      "failure-domain": "local-site",
+      "owner-id": "ccf3ba2d-41c5-4dab-a1cd-51ea1004b0aa",
+      "memory-gb": 16,
+      "roles": [
+        {
+          "kind": "text",
+          "model": "mishima",
+          "context": 32768
+        }
+      ],
+      "node": "issachar"
+    },
+    {
+      "url": "http://100.82.123.35:8796",
+      "enabled": true,
+      "labels": {
+        "tier": "edge",
+        "zone": "jp"
+      },
+      "pins": [
+        "mishima-text"
+      ],
+      "failure-domain": "local-site",
+      "owner-id": "4aaa4998-adab-45f0-9a8d-b4552b3f6b9f",
+      "memory-gb": 16,
+      "roles": [
+        {
+          "kind": "text",
+          "model": "mishima",
+          "context": 32768
+        }
+      ],
+      "node": "joseph"
+    },
+    {
+      "url": "http://100.101.27.85:8796",
+      "enabled": true,
+      "labels": {
+        "tier": "edge",
+        "zone": "jp"
+      },
+      "pins": [
+        "mishima-text"
+      ],
+      "failure-domain": "local-site",
+      "owner-id": "128341d9-7369-4814-8da5-603f53be171a",
+      "memory-gb": 16,
+      "roles": [
+        {
+          "kind": "text",
+          "model": "mishima",
+          "context": 32768
+        }
+      ],
+      "node": "naphtali"
+    },
+    {
+      "node": "xavier",
+      "url": "http://100.87.226.80:8796",
+      "enabled": true,
+      "failure-domain": "local-site",
+      "roles": [
+        {
+          "kind": "text",
+          "model": "mishima",
+          "context": 32768
+        }
+      ],
+      "owner-id": "d2e743e8-6e8d-484c-960a-391e080fddbe",
+      "pins": [
+        "mishima-text"
+      ],
+      "labels": {
+        "tier": "gpu",
+        "zone": "jp",
+        "role": "cuda-infer"
+      }
+    },
+    {
+      "node": "k16",
+      "url": "http://100.66.205.17:8796",
+      "enabled": true,
+      "failure-domain": "local-site",
+      "roles": [
+        {
+          "kind": "text",
+          "model": "mishima",
+          "context": 131072
+        }
+      ],
+      "owner-id": "873091fc-d409-4852-bba9-9376ab745c05",
+      "pins": [
+        "mishima-text"
+      ]
+    },
+    {
+      "node": "6600hs",
+      "url": "http://100.98.24.37:8796",
+      "enabled": true,
+      "failure-domain": "local-site",
+      "roles": [
+        {
+          "kind": "text",
+          "model": "mishima",
+          "context": 131072
+        }
+      ],
+      "owner-id": "57631405-d90c-4e61-be31-b45a4fa4c57d",
+      "pins": [
+        "mishima-text"
+      ]
+    },
+    {
+      "url": "http://100.66.28.79:8796",
+      "enabled": true,
+      "labels": {
+        "tier": "edge",
+        "zone": "jp"
+      },
+      "pins": [
+        "animagine-xl-4.0-image",
+        "mishima-text"
+      ],
+      "failure-domain": "local-site",
+      "owner-id": "c8c003cf-3863-445d-8cb8-ef298e9ab2dc",
+      "memory-gb": 16,
+      "roles": [
+        {
+          "kind": "image",
+          "model": "animagine-xl-4.0"
+        }
+      ],
+      "node": "zebulun"
+    },
+    {
+      "url": "http://100.102.78.81:8796",
+      "overrides": {
+        "mishima-text": {
+          "context": 8192
+        }
+      },
+      "enabled": true,
+      "labels": {
+        "tier": "edge",
+        "zone": "jp"
+      },
+      "pins": [
+        "animagine-xl-4.0-image",
+        "mishima-text"
+      ],
+      "failure-domain": "local-site",
+      "owner-id": "fbc6cf63-90a4-4079-9680-8f355fa30161",
+      "memory-gb": 16,
+      "roles": [
+        {
+          "kind": "image",
+          "model": "animagine-xl-4.0"
+        }
+      ],
+      "node": "levi"
+    }
+  ],
+  "spec-version": 2,
+  "models": {
+    "animagine-xl-4.0": {
+      "kind": "image"
+    },
+    "mishima": {
+      "kind": "text",
+      "file": "mishima/model/Ternary-Bonsai-2-27B-PTQ1_0.gguf",
+      "bytes": 5946648928
+    }
+  }
+}
