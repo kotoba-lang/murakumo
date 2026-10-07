@@ -312,6 +312,40 @@ Linux `O_DIRECT` nor `F_NOCACHE` is active in the pinned native runtime. Fleet
 records therefore expose `:page-cache-bypassed? false` even if the upstream
 telemetry prints the requested `o_direct=1` flag.
 
+## System One Coding (kotoba-harness)
+
+murakumo can assemble typed kotoba functions with
+[kotoba-lang/kotoba-harness](https://github.com/kotoba-lang/kotoba-harness):
+TypeSafe Jev chooses typed blocks one hole at a time (never source text), the
+harness emits kotoba typed-subset source, and kotoba verifies each function
+(`kotoba -M check`, then the module plus fixed exhaustive checks compiled to
+wasm32-browser and run through `instantiateKotoba`). The search backtracks
+outward when the policy reports that no candidate fits.
+
+`system-one/gateway.edn` encodes two separate flows as typed kotoba functions
+(19 725 exhaustive cases; checks use independently written oracles):
+`clamp-max-tokens` is the poll worker's clamp (`poll_worker.cljk`,
+`(min 2048 …)`), and `lane-fits` is resident/gateway lane admission against the
+request's original `max_tokens` (`resident.cljk`, `fleet_gateway.cljk`:
+`context >= input + max_tokens`). They are deliberately not composed: the clamp
+is not applied before resident admission in production. The harness commit is pinned in
+`kotoba-harness.pin.edn` and fetched into
+`${XDG_CACHE_HOME:-~/.cache}/kotoba-harness/<sha>` on first use (network),
+outside this repository, and reused only while that checkout is the pinned
+commit with a clean worktree (override with `KOTOBA_HARNESS_HOME`).
+
+```sh
+sh scripts/system-one.sh validate   # no kotoba CLI, no model: shape, catalog, baseline splice
+sh scripts/system-one.sh known      # kotoba verification of known-correct bodies
+sh scripts/system-one.sh wrong      # negative control (rejected)
+OPENROUTER_API_KEY=... sh scripts/system-one.sh jev
+```
+
+`known`/`wrong`/`jev` need a kotoba CLI that provides `-M check` and
+`-M compile --target wasm32-browser`, and `KOTOBA_BROWSER_HOST` pointing at
+amu's `runtime/browser-host.mjs`. `jev` spends OpenRouter credit (about a tenth
+of a cent per run). Receipts land in `target/system-one/`.
+
 ## Public API boundary
 
 Clients and applications use `https://api.murakumo.cloud` exclusively.

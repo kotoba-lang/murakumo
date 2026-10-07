@@ -1,0 +1,29 @@
+{:id "murakumo-gateway" :title "murakumo poll-worker max_tokens clamp and resident lane admission"
+ :module-file "src/murakumo/infer/admission.kotoba"
+ :preserved-check "(if (= (marker) 7) 0 1000)"
+ :program
+ {:goal "murakumo inference admission, two independent flows. clamp-max-tokens(requested) is the poll worker's clamp: the minimum of the literal 2048 and requested. lane-fits(context, input, max-tokens) is resident lane admission with the original max-tokens: true exactly when context >= input + max-tokens, i.e. if context is less than (input plus max-tokens) then false else true."
+  :stages [{:id "clamp" :goal "Poll-worker path only." :operations ["minimum"] :calls [] :depends-on []} {:id "fit" :goal "Resident/gateway path; uses the original max-tokens, never the poll-worker clamp." :operations ["less-than" "add" "if-bool"] :calls [] :depends-on []}]
+  :functions [{:id "clamp-max-tokens" :stage "clamp" :goal "Outermost: minimum of the literal 2048 and requested." :args [{:name "requested" :type :i64}] :returns :i64} {:id "lane-fits" :stage "fit" :goal "Outermost: if. Condition: context less than (input plus max-tokens). Then: literal false. Else: literal true." :args [{:name "context" :type :i64} {:name "input" :type :i64} {:name "max-tokens" :type :i64}] :returns :bool}]
+  :literals [{:id "max-output" :type :i64 :value 2048} {:id "true" :type :bool :value true} {:id "false" :type :bool :value false}]
+  :max-decisions 128 :max-depth 6 :candidate-limit 8}
+ :baseline "(ns murakumo.infer.admission (:export [clamp-max-tokens lane-fits marker]))
+;; Two separate flows, not composed: poll_worker.cljk clamps a present max_tokens with (min 2048 ...); resident.cljk / fleet_gateway.cljk admit a lane against the request's original max_tokens when context >= input + max_tokens.
+(defn clamp-max-tokens [requested :i64] :i64 0)
+(defn lane-fits [context :i64 input :i64 max-tokens :i64] :bool false)
+(defn marker [] :i64 7)
+"
+ :check ";; Fixed acceptance checks (exhaustive grids, independent oracles) per function; marker must stay 7.
+(defn chk-clamp [r :i64] :i64 (if (< 2048 r) 2048 r))
+(defn chk-fit [c :i64 i :i64 m :i64] :i64 (if (< c (+ i m)) 0 1))
+(defn chk-case-clamp-max-tokens [r :i64] :i64 (if (= (clamp-max-tokens r) (chk-clamp r)) 0 1))
+(defn chk-clamp-max-tokens-r [r :i64 bad :i64] :i64 (if (< r 4100) (chk-clamp-max-tokens-r (+ r 1) (+ bad (chk-case-clamp-max-tokens r))) bad))
+(defn chk-case-lane-fits [c :i64 i :i64 m :i64] :i64 (if (lane-fits c i m) (- 1 (chk-fit c i m)) (chk-fit c i m)))
+(defn chk-lane-fits-c [c :i64 bad :i64] :i64 (if (< c 25) (chk-lane-fits-c (+ c 1) (chk-lane-fits-i c 0 bad)) bad))
+(defn chk-lane-fits-i [c :i64 i :i64 bad :i64] :i64 (if (< i 25) (chk-lane-fits-i c (+ i 1) (chk-lane-fits-m c i 0 bad)) bad))
+(defn chk-lane-fits-m [c :i64 i :i64 m :i64 bad :i64] :i64 (if (< m 25) (chk-lane-fits-m c i (+ m 1) (+ bad (chk-case-lane-fits c i m))) bad))
+"
+ :checks {"clamp-max-tokens" "(chk-clamp-max-tokens-r 0 0)" "lane-fits" "(chk-lane-fits-c 0 0)"}
+ :cases 19725
+ :known {"clamp-max-tokens" "(min 2048 requested)" "lane-fits" "(if (< context (+ input max-tokens)) false true)"}
+ :wrong {"clamp-max-tokens" "(min 2048 requested)" "lane-fits" "(if (< (+ input max-tokens) context) true false)"}}
