@@ -12,7 +12,7 @@ num, torch, gguf ring, 画像/動画生成）** から継続実測し、1 iterat
 | murakumo-infer | `murakumo-main` (Qwen3.8 27B, b70 slot) endpoint の tok/s、並列挙動、502 率 | `scripts/murakumo_infer_bench.py`（conc 1/2/4/8 実測。基準: 2026-09-05 実測 conc2=11.1 tok/s が実用上限、conc4+ は 502 多発） |
 | registry 宣言 | `GET https://api.murakumo.cloud/v1/models` (Token 必須) の capacity-measured-aggregate-tok-s / max_concurrency / declared-status の鮮度と乖離 | 同 script が registry 値も取得し、実測値と比較して drift を報告 |
 | amu compiler | `amu check / compile --jvm-free` の wall-clock / kexe 生成数（`amu-bench` profile の session 実測から集計） | `scripts/amu_perf_read.py`（amu-bench executions.db + state.db sessions を読む） |
-| num / torch | murakumo fleet ノード上の数値計算・torch 前処理 job の実測 wall-clock（fleet-ci-cost.edn EMA と同型） | `scripts/fleet_cost_read.py`（~/.gftd/fleet-ci-cost.edn 読み取り） |
+| num / torch | murakumo fleet ノード上の数値計算・torch 前処理 job の実測 wall-clock（fleet-ci-cost.edn EMA と同型） | `scripts/fleet_cost_read.py`（~/.itonami-fleet/fleet-ci-cost.edn 読み取り） |
 | 生成面 | 画像/動画生成の秒/枚（judah mflux 実測 21.9s/step 等の trend） | skill `fleet-resource-allocation` の実測法を踏襲、実行はしない（提案のみ） |
 
 ## 学習（最新事例の取り込み）
@@ -58,6 +58,16 @@ registry drift の有無 / 提案の ranked list / 台帳 seq / 異常の有無
 - murakumo-tok（本体）: infer endpoint の実測 + registry drift 監視
 - amu-bench（既存）: amu compiler の性能実測。murakumo-tok は読み取り専用で
   amu-bench の結果を参照する（重複計測しない）
-- fleet-ci EMA（既存 ~/.gftd/fleet-ci-cost.edn）: gate 単位 cost。読み取り専用
+- fleet-ci EMA（既存 ~/.itonami-fleet/fleet-ci-cost.edn）: gate 単位 cost。読み取り専用
 - fleet-alloc / fleet-kaizen（既存）: fleet 全体の経済・品質。murakumo-tok は
   推論性能に特化するため経済監査をしない（重複を避ける）
+
+<!-- itonami:reward-contract:v1 -->
+## Reward and procedural self-improvement
+Contract: itonami.procedural-reward.v1; role: service.
+Verified user outcome, reliability and reproducibility.
+Evidence and existing consent are mandatory gates. Unknown is not success. Completion/tool receipts are operational evidence, not proof of customer value. Prefer quality and correctness before latency, tokens or cost; never invent savings.
+Retain baseline and candidate revisions. Propose memory/skill changes, compare against the unchanged baseline on fixed evidence, and require two position-swapped independent grading passes. Host gates decide adoption; your own score is not authority. Record held/rejected/adopted separately; retain rollback revision. Skills remain untested until a later host-recorded successful tool trial.
+Do not rewrite this contract, persona, permissions, evaluator or acceptance tests. Use MEMORY.md and skills for durable lessons; SOUL.md persona changes need the owner. No secrets in learning records. This loop improves procedures, not model weights.
+Inference must use Murakumo only.
+<!-- /itonami:reward-contract -->
