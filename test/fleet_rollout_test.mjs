@@ -9,13 +9,16 @@ import {createServer} from 'node:http';
 import {spawn,execFileSync} from 'node:child_process';
 import {once} from 'node:events';
 import {mkdtemp,writeFile,readFile,rm,copyFile} from 'node:fs/promises';
-import {existsSync} from 'node:fs';
+import {existsSync,openSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {generateKeyPairSync,randomBytes,randomUUID,createHash} from 'node:crypto';
 const root=resolve('.'), cli=join(root,'release/node.mjs');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const sha=b=>createHash('sha256').update(b).digest('hex');
+// residents log to files, never to a pipe: execFileSync blocks this process,
+// and on Linux a resident writing to a full pipe blocks too — a deadlock
+const logTo=(dir,name)=>{const f=openSync(join(dir,name+'.log'),'a');return ['ignore',f,f];};
 async function wait(fn,what,n=400){for(let i=0;i<n;i++){try{if(await fn())return;}catch{}await sleep(100);}throw Error(what+' timed out');}
 async function port(){const s=createServer();s.listen(0,'127.0.0.1');await once(s,'listening');const p=s.address().port;await new Promise(r=>s.close(r));return p;}
 
@@ -40,7 +43,7 @@ test('residents self-update in waves behind a health gate',async t=>{
   gateways:[{node:'g0',url:'http://127.0.0.1:'+gw,enabled:true}],policies:{'minimum-replicas':{mishima:1}},
   agents:{resident:{sha256:sha(target),waves:[['n0'],['n1']],'settle-ms':500}}};
  const input=join(dir,'input.json'),signed=join(dir,'signed.json');await writeFile(input,JSON.stringify(payload));
- execFileSync(process.execPath,[cli,'topology','sign','--input',input,'--output',signed,'--private-key-file',keyFile,'--allow-loopback','true'],{stdio:'pipe'});
+ execFileSync(process.execPath,[cli,'topology','sign','--input',input,'--output',signed,'--private-key-file',keyFile,'--allow-loopback','true'],{timeout:120000,stdio:'pipe'});
  const procs={};t.after(()=>{for(const p of Object.values(procs))p.kill('SIGTERM');});
  const cfgPath=i=>join(dir,ids[i]+'.json');
  for(let i=0;i<2;i++){
@@ -52,7 +55,7 @@ test('residents self-update in waves behind a health gate',async t=>{
    'release-file':rel[i],'state-file':state,'legacy-empty-ledger-owner-id':owners[i],
    lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',backend:'http://127.0.0.1:'+backend.address().port,path:'/v1/chat/completions'}}}));
  }
- const start=i=>{const p=spawn(process.execPath,[cli,'resident','serve','--config',cfgPath(i)],{stdio:['ignore','pipe','pipe']});procs[ids[i]]=p;return p;};
+ const start=i=>{const p=spawn(process.execPath,[cli,'resident','serve','--config',cfgPath(i)],{stdio:logTo(dir,ids[i])});procs[ids[i]]=p;return p;};
  // seed the target into n1's cache only: n0 must get it peer to peer
  const n1=start(1);
  await wait(async()=>(await fetch(urls[1]+'/observation')).ok,'n1 up');
