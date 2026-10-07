@@ -39,7 +39,7 @@ test('residents sign their own observation and converge the fleet view by gossip
   const tf=join(dir,ids[i]+'-topology.json');await writeFile(tf,await readFile(signed),{mode:0o600});
   const state=join(dir,ids[i]+'-receipts.json');await writeFile(state+'.owner-id',owners[i],{mode:0o600});
   const cfg={node:ids[i],port:ports[i],bind:'127.0.0.1','token-file':tokenFile,'topology-file':tf,'topology-public-key-file':publicFile,
-   'topology-poll-ms':50,'allow-loopback-topology?':true,'probe-interval-ms':100,'observation-poll-ms':100,'model-root':dir,'converge-first-delay-ms':200,'converge-interval-ms':200,
+   'topology-poll-ms':50,'allow-loopback-topology?':true,'probe-interval-ms':100,'observation-poll-ms':100,'observation-interval-ms':200,'model-root':dir,'converge-first-delay-ms':200,'converge-interval-ms':200,
    'state-file':state,'legacy-empty-ledger-owner-id':owners[i],
    lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',backend:'http://127.0.0.1:'+backend.address().port,path:'/v1/chat/completions'}}};
   const cp=join(dir,ids[i]+'.json');await writeFile(cp,JSON.stringify(cfg));

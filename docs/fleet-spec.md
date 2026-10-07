@@ -112,3 +112,28 @@ Reads come from every resident's signed report (newest verified per node); nothi
 write: it runs the resident's schema-1 validator and the spec-version 2 linter, refuses a revision that does not
 advance past the live one, signs with the operator key, POSTs to one resident with the fleet token and follows the
 residents' reports until every one holds the new revision (gossip carries it).
+
+## Staged self-update (P5a)
+
+The signed intent pins the resident release and the waves:
+
+```json
+"agents": {"resident": {"sha256": "<node.mjs sha256>", "package-sha256": "<package.json sha256>",
+                        "waves": [["zebulun"], ["issachar", "levi"], ["benjamin", "joseph", "naphtali"]],
+                        "settle-ms": 300000, "urls": ["https://…/node.mjs"]}}
+```
+
+Each resident finds its wave and upgrades only when every node of every earlier wave reports the target release, all
+lanes ready, and a process up for `settle-ms` (health gate); an unhealthy wave stops the rest. Bytes come from peers
+first (`GET /release/<sha256>`: a peer running the target or holding it in cache), then the intent's `urls`; they are
+kept only when their sha256 is the pinned one. Applying = drain, wait for in-flight work, atomic replace of the release
+file, marker, exit 0; the supervisor (launchd KeepAlive / systemd Restart=always) starts the new release, which removes
+the drain and reports `rollout.updated`. A different `package-sha256` blocks (dependencies are not shipped).
+Rollback = the previous sha256 at a higher revision.
+
+```
+murakumo rollout plan -f INTENT --release release/node.mjs --waves "zebulun;issachar,levi;benjamin,joseph,naphtali"
+murakumo rollout push --to http://<resident>:8796 --token-file T release/node.mjs     # seed one cache; peers spread it
+murakumo apply -f INTENT --private-key-file K --token-file T
+murakumo rollout status                                                               # per-node state, wave, reason
+```

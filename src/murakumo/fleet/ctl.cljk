@@ -111,6 +111,31 @@
                                       ns)))
       (update "revision" inc)))
 
+(defn parse-waves
+  "\"a;b,c;d\" -> [[\"a\"] [\"b\" \"c\"] [\"d\"]]"
+  [s]
+  (vec (for [w (str/split (str s) #";") :let [ns (vec (remove str/blank? (map str/trim (str/split w #","))))] :when (seq ns)] ns)))
+
+(defn rollout-plan
+  "The intent with agents.resident pinned to sha in waves, revision +1."
+  [intent sha package-sha waves settle-ms urls]
+  (let [known (set (map #(get % "node") (get intent "nodes")))
+        unknown (remove known (mapcat identity waves))]
+    (when (seq unknown) (throw (js/Error. (str "not in the intent: " (str/join "," unknown)))))
+    (when-not (= (count (mapcat identity waves)) (count (set (mapcat identity waves))))
+      (throw (js/Error. "a node appears in two waves")))
+    (-> intent
+        (assoc-in ["agents" "resident"]
+                  (cond-> {"sha256" sha "waves" waves}
+                    package-sha (assoc "package-sha256" package-sha)
+                    settle-ms (assoc "settle-ms" settle-ms)
+                    (seq urls) (assoc "urls" (vec urls))))
+        (assoc "spec-version" (or (get intent "spec-version") 2))
+        (update "revision" inc))))
+
+(defn- rollout-sha [f]
+  (when (.existsSync fs f) (.digest (.update (.createHash crypto "sha256") (.readFileSync fs f)) "hex")))
+
 ;; ---------------------------------------------------------------- I/O
 
 (defn- print-table [rows cols]
@@ -269,16 +294,49 @@
                                                         (js/parseInt (or (opt args "--poll-ms") "10000") 10)))))))))))))
 
       "rollout"
-      (if-not (= "status" (first args))
-        (do (println "murakumo rollout status") (js/Promise.resolve 2))
+      (case (first args)
+        "status"
         (.then (cli/resident-docs urls)
                (fn [docs]
                  (let [{:keys [releases revisions converged?]} (rollout-status docs)]
                    (println "Release:") (doseq [[r ns] releases] (println (str "  " (pad r 18) (count ns) "  " (str/join "," ns))))
                    (println "Topology revision:") (doseq [[r ns] revisions] (println (str "  " (pad r 18) (count ns) "  " (str/join "," ns))))
+                   (when-let [rows (seq (for [[n p] docs :let [r (get p "rollout")] :when (and r (not= "none" (get r "state")))] [n r]))]
+                     (println "Self-update (P5a):")
+                     (doseq [[n r] rows]
+                       (println (str "  " (pad n 12) (pad (get r "state") 16) (pad (or (get r "target") "") 18)
+                                     (when (get r "wave") (str "wave " (get r "wave") "  ")) (or (get r "reason") "")
+                                     (when-let [u (get r "updated")] (str "  updated " (get u "from") " -> " (subs (str (get u "to")) 0 16)))))))
                    (println (if converged? "rolled out: every reporting resident runs one release and one revision"
                                 "in progress or diverged"))
-                   (if converged? 0 1)))))
+                   (if converged? 0 1))))
+
+        "plan"
+        (let [rel (opt args "--release") waves (opt args "--waves")]
+          (if-not (and intent-file rel waves)
+            (do (println "murakumo rollout plan -f INTENT --release node.mjs --waves \"a;b,c;d\" [--settle-ms N] [--url https://…]")
+                (js/Promise.resolve 2))
+            (let [sha (rollout-sha rel)
+                  pkg (rollout-sha (str (.replace rel #"[^/]*$" "") "package.json"))
+                  next (rollout-plan intent sha pkg (parse-waves waves)
+                                     (some-> (opt args "--settle-ms") (js/parseInt 10))
+                                     (keep second (filter #(= "--url" (first %)) (partition 2 1 args))))]
+              (.writeFileSync fs intent-file (str (js/JSON.stringify (clj->js next) nil 2) "\n"))
+              (println (str "planned resident " (subs sha 0 16) " in " (count (parse-waves waves)) " waves (revision "
+                            (get next "revision") "); next: murakumo rollout push --to <resident> --token-file T " rel
+                            " && murakumo apply -f " intent-file))
+              (js/Promise.resolve 0))))
+
+        "push"
+        (let [f (last args) to (opt args "--to") tf (opt args "--token-file")]
+          (if-not (and to tf f (.existsSync fs f))
+            (do (println "murakumo rollout push --to URL --token-file T node.mjs") (js/Promise.resolve 2))
+            (-> (js/fetch (str to "/release") #js {:method "POST" :body (.readFileSync fs f)
+                                                    :headers #js {"authorization" (str "Bearer " (str/trim (str (.readFileSync fs tf "utf8"))))}
+                                                    :signal (.timeout js/AbortSignal 60000)})
+                (.then (fn [r] (.then (.text r) (fn [t] (println (str (.-status r) " " t)) (if (.-ok r) 0 1))))))))
+
+        (do (println "murakumo rollout status|plan|push") (js/Promise.resolve 2)))
 
       (do (println (:doc (meta #'run)) "\n" (-> 'murakumo.fleet.ctl find-ns meta :doc))
           (js/Promise.resolve (if (#{"help" "--help" nil} verb) 0 2))))))
