@@ -10,6 +10,7 @@ done
 mkdir -p .node-build/src/murakumo
 cp src/murakumo/bench.cljk .node-build/src/murakumo/bench.cljs
 cp src/murakumo/fleet_ps.cljk .node-build/src/murakumo/fleet_ps.cljs
+cp src/murakumo/fleet_health.cljk .node-build/src/murakumo/fleet_health.cljs
 cp src/murakumo/health.cljk .node-build/src/murakumo/health.cljs
 cp src/murakumo/device_claim.cljk .node-build/src/murakumo/device_claim.cljs
 for name in device_report node_console node_console_qr onboard onboard_audio onboard_device onboard_state onboard_window nm_keyfile wifi_share wifi_share_page; do

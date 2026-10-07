@@ -34,6 +34,11 @@
  :fleet-ps {:cmd ["kbb" "--backend" "sci" "--classpath" "src" "scripts/node-cli.cljk" "fleet" "ps"]
             :pass-args? true
             :doc "What each fleet node runs: model servers (ctx, KV cache, slots), co-resident processes with their launchd unit, running units. Read-only."}
+ :fleet-health {:cmd ["kbb" "--backend" "sci" "--classpath" "src" "scripts/node-cli.cljk" "fleet" "health"]
+                :pass-args? true
+                :doc "Every node at once, no ssh: tailscale online/last-seen, the itonami peer's signed self-report (memory pressure, swap, TIME_WAIT, rails, revision), resident :8094. Read-only."}
+ :test-fleet-health {:cmd ["kbb" "--backend" "sci" "--classpath" "src:test" "test/murakumo/fleet_health_test.cljk"]
+                     :doc "Offline tests for fleet health: envelope verification and problem assessment."}
  :test-fleet-ps {:cmd ["kbb" "--backend" "sci" "--classpath" "src:test" "test/murakumo/fleet_ps_test.cljk"]
                  :doc "Offline tests for fleet ps parsing, on probe output captured from the M4 heads (no SSH)."}
  :test-task {:cmd ["kbb" "--backend" "sci" "--classpath" "src:test" "test/murakumo/task_plan_test.cljk"]
