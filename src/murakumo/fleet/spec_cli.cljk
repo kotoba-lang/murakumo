@@ -117,8 +117,23 @@
                            [node {:at-ms (get p "at") :did (get p "did") :source "resident"
                                   :pressure (get-in p ["host" "pressure"]) :free-pct (get-in p ["host" "free-pct"])
                                   :memory-gb (get-in p ["host" "memory-gb"]) :release (get p "release")
-                                  :running (set (mapcat (fn [[unit st]] (when (= "running" st) (unit->classes unit)))
-                                                        (get p "units")))}]))))))))
+                                  :running (set (concat
+                                                 ;; a lane the resident admits for (model, kind)
+                                                 (for [[_ l] (get p "lanes")
+                                                       [c spec] (get intent "classes")
+                                                       :when (and (= (get l "model") (get spec "model"))
+                                                                  (= (get l "kind") (get-in intent ["models" (get spec "model") "kind"] (get l "kind"))))]
+                                                   c)
+                                                 ;; a running unit, matched to the class whose model the unit serves
+                                                 ;; (one unit, com.murakumo.mishima, can back several classes'
+                                                 ;; template, so the model must match too)
+                                                 (for [[unit st] (get p "units")
+                                                       :when (= "running" st)
+                                                       c (unit->classes unit)
+                                                       :let [m (get-in intent ["classes" c "model"])]
+                                                       :when (or (nil? m) (str/ends-with? unit (str "." m))
+                                                                 (not= "llama-server" (get-in intent ["classes" c "template"])))]
+                                                   c)))}]))))))))
 
 ;; ---------------------------------------------------------------- draft
 
