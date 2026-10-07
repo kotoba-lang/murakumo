@@ -83,14 +83,15 @@ test('residents sign their own observation and converge the fleet view by gossip
  const live=JSON.parse(await readFile(signed,'utf8')).payload;
  const next={...live,revision:2,nodes:live.nodes.map(n=>n.node==='n1'?{...n,cordoned:true}:n)};
  const intentFile=join(dir,'intent-2.json');await writeFile(intentFile,JSON.stringify(next));
- const dry=execFileSync(process.execPath,[cli,'apply','-f',intentFile,'--dry-run','--allow-loopback','--token-file',tokenFile],{encoding:'utf8'});
+ const cliEnv={...process.env,MURAKUMO_OBSERVATION_PINS:join(dir,'cli-pins.json')};
+ const dry=execFileSync(process.execPath,[cli,'apply','-f',intentFile,'--dry-run','--allow-loopback','--token-file',tokenFile],{encoding:'utf8',env:cliEnv});
  assert.match(dry,/cordoned/);assert.match(dry,/dry run/);
- const out=execFileSync(process.execPath,[cli,'apply','-f',intentFile,'--allow-loopback','--private-key-file',keyFile,'--token-file',tokenFile,'--poll-ms','500','--timeout-s','60'],{encoding:'utf8'});
+ const out=execFileSync(process.execPath,[cli,'apply','-f',intentFile,'--allow-loopback','--private-key-file',keyFile,'--token-file',tokenFile,'--poll-ms','500','--timeout-s','60'],{encoding:'utf8',env:cliEnv});
  assert.match(out,/2\/2 residents hold 2/);
- const nodes=execFileSync(process.execPath,[cli,'get','nodes','-f',intentFile],{encoding:'utf8'});
+ const nodes=execFileSync(process.execPath,[cli,'get','nodes','-f',intentFile],{encoding:'utf8',env:cliEnv});
  assert.match(nodes,/n0/);assert.match(nodes,/n1/);
  // a non-advancing revision is refused
- assert.throws(()=>execFileSync(process.execPath,[cli,'apply','-f',intentFile,'--allow-loopback','--private-key-file',keyFile,'--token-file',tokenFile],{encoding:'utf8',stdio:'pipe'}));
+ assert.throws(()=>execFileSync(process.execPath,[cli,'apply','-f',intentFile,'--allow-loopback','--private-key-file',keyFile,'--token-file',tokenFile],{encoding:'utf8',stdio:'pipe',env:cliEnv}));
  // the node key is private and persists across restart
  const key=join(dir,'n0-receipts.json.node-key');
  assert.equal((await import('node:fs')).statSync(key).mode & 0o077,0);

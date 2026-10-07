@@ -92,27 +92,63 @@
         (sequential? x) (mapv canonical x)
         :else x))
 
+(defn- pins-file []
+  (or (aget js/process.env "MURAKUMO_OBSERVATION_PINS")
+      (str (.homedir (js/require "node:os")) "/.local/share/murakumo/observation-pins.json")))
+
+(defn- read-pins [] (try (js->clj (js/JSON.parse (.readFileSync fs (pins-file) "utf8"))) (catch :default _ {})))
+
+(defn- write-pins! [m]
+  (let [f (pins-file) dir (.dirname (js/require "node:path") f) tmp (str f ".tmp")]
+    (.mkdirSync fs dir #js {:recursive true :mode 448})
+    (.writeFileSync fs tmp (js/JSON.stringify (clj->js m) nil 1) #js {:mode 384})
+    (.renameSync fs tmp f)))
+
+(defn- verified [doc]
+  (fh/verify-envelope {"payload" (js/JSON.stringify (clj->js (canonical (get doc "payload"))))
+                       "did" (get-in doc ["payload" "did"])
+                       "sig" (get doc "signature")}))
+
 (defn resident-docs
-  "Verified raw observation payloads from EVERY intent node's resident, newest
-  per node (a resident's gossip view may be partial), refusing documents dated
-  more than 2 min ahead. urls: resident base URLs. Promise of node -> payload
-  (string keys)."
+  "Verified raw observation payloads from EVERY given resident, newest per
+  node, refusing documents dated more than 2 min ahead.
+
+  Identity binding (same rule as the residents): a node's did is pinned the
+  first time this CLI sees that node's OWN report fetched from that node's
+  own URL (GET /observation), and kept in ~/.local/share/murakumo/
+  observation-pins.json; any report signed by another key for a pinned node,
+  and any relayed report for a node never seen at its own URL, is refused.
+  Promise of node -> payload (string keys)."
   [urls]
-  (let [now (js/Date.now)]
-    (-> (js/Promise.all (clj->js (for [u (distinct urls)] (fetch-json (str (str/replace u #"/$" "") "/observations") 5000))))
-        (.then (fn [ms]
-                 (let [docs (for [m (array-seq ms) :when m
-                                  [node doc] (js->clj m)
-                                  :let [p (fh/verify-envelope {"payload" (js/JSON.stringify (clj->js (canonical (get doc "payload"))))
-                                                               "did" (get-in doc ["payload" "did"])
-                                                               "sig" (get doc "signature")})]
-                                  :when (and p (= node (get p "node")) (number? (get p "at"))
-                                             (<= (get p "at") (+ now 120000)))]
-                              [node p])]
+  (let [now (js/Date.now)
+        urls (vec (distinct (map #(str/replace (str %) #"/+$" "") urls)))
+        ok-time? (fn [p] (and (number? (get p "at")) (<= (get p "at") (+ now 120000))))]
+    (-> (js/Promise.all
+         (clj->js (for [u urls]
+                    (js/Promise.all #js [(fetch-json (str u "/observation") 5000)
+                                         (fetch-json (str u "/observations") 5000)]))))
+        (.then (fn [rows]
+                 (let [pins (read-pins)
+                       own (for [[o _] (array-seq rows) :when o
+                                 :let [p (verified (js->clj o))]
+                                 :when (and p (ok-time? p))]
+                             p)
+                       ;; first sight at its own URL pins the key; a pinned key is never replaced
+                       pins' (reduce (fn [m p] (if (contains? m (get p "node")) m (assoc m (get p "node") (get p "did"))))
+                                     pins own)
+                       _ (when (not= pins' pins) (try (write-pins! pins') (catch :default _ nil)))
+                       relayed (for [[_ m] (array-seq rows) :when m
+                                     [node doc] (js->clj m)
+                                     :let [p (verified doc)]
+                                     :when (and p (= node (get p "node")) (ok-time? p))]
+                                 p)]
                    (into (sorted-map)
-                         (reduce (fn [acc [node p]]
-                                   (if (> (get p "at") (get-in acc [node "at"] 0)) (assoc acc node p) acc))
-                                 {} docs))))))))
+                         (reduce (fn [acc p]
+                                   (let [n (get p "node")]
+                                     (if (and (= (get pins' n) (get p "did"))
+                                              (> (get p "at") (get-in acc [n "at"] 0)))
+                                       (assoc acc n p) acc)))
+                                 {} (concat own relayed)))))))))
 
 (defn resident-observations
   "L2 from the residents (P2): resident-docs over the intent's node URLs,
