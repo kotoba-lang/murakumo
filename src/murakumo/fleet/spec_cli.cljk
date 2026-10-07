@@ -179,7 +179,9 @@
                                    "model" model
                                    "replicas" (count rs)
                                    "minimum" (get min-rep model 1)
-                                   "eligible" {"min-memory-gb" 16 "max-pressure" 2}}
+                                   ;; no memory floor by default: host RAM says nothing about
+                                   ;; a node serving from GPU memory (6600hs, Intel B70)
+                                   "eligible" {"max-pressure" 2}}
                             (= "text" kind) (assoc "context" (key (apply max-key val (frequencies (keep #(get % "context") rs))))))])
                        [["itonami-peer" {"template" "itonami-peer" "replicas" "all" "port" 7420
                                          "eligible" {"max-pressure" 4}}]]))
