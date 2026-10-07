@@ -3,6 +3,7 @@
   (:require [murakumo.infer.poll-worker :as worker]
             [murakumo.bench :as bench]
             [murakumo.fleet-ps :as fleet-ps]
+            [murakumo.fleet-health :as fleet-health]
             [murakumo.health :as health]
             [murakumo.infer.resident :as resident]
             [murakumo.infer.jobs-cli :as jobs-cli]
@@ -30,7 +31,9 @@
   (println "  murakumo topology sign --input FILE --private-key-file FILE --output FILE\n                                          Sign a monotonic desired topology; residents only hold its public key")
   (println "Murakumo node CLI\n\n  murakumo node init                      Create a private device identity\n  murakumo node claim-once                Answer one pending buyer claim challenge\n  murakumo node report                    Send this device's signed heartbeat to the console\n  murakumo node console                   Show this box's status and a claim QR on its own screen\n  murakumo node wifi-share                Hand this PC's Wi-Fi to a headless box by sound\n  murakumo node onboard                   (box) Take a Wi-Fi profile handed over by sound\n  murakumo node doctor --model ID         Check local model and identity (read-only)\n  murakumo node check --model ID          Enroll + verify heartbeat; do not take jobs\n  murakumo node qualify --model ID        Run the local model through Community admission\n  murakumo node join --model ID           Serve Community jobs until Ctrl-C\n  murakumo node earnings                  Show earned and payable device credits\n  murakumo node payout --credits N --to 0xADDRESS\n                                          Request an operator-approved payout\n\nOptions: --name NAME --local-url http://127.0.0.1:11434/v1\n         --base https://api.murakumo.cloud\n         --authn https://auth.murakumo.cloud\n         --idle-only (join: accept new jobs only when host load and free RAM allow)\nNode.js 22+ and network access are required. Model checks and Community jobs also\nrequire a running OpenAI-compatible model server. Installation does not download\nmodels or start a service. Run check, then qualify before joining Community jobs;\na heartbeat alone does not prove job eligibility.")
   (println "\n  murakumo fleet ps [--node N] [--json]   What each fleet node runs: model servers
-                                          (ctx, KV, slots), co-resident processes, units")
+                                          (ctx, KV, slots), co-resident processes, units
+  murakumo fleet health [--node N] [--json] Every node at once, no ssh: online, memory
+                                          pressure, swap, TIME_WAIT, rails, peer (signed)")
   (println "  Payout also requires --owner-token-file /absolute/private/path from the buyer's device page.")
   (println "\n  murakumo bench nodes                    List tailnet nodes (name, ip, online)\n  murakumo bench run --node N --model P --engine llama|diffuse\n  murakumo bench ledger [--limit N]       Show the append-only measurement ledger\n\nMeasurements record argv, the model's bytes and hash, the host's memory and the\nengine's own output. Nothing here enrols a node or publishes a number.\n  murakumo bench --help")
   (println "\n  murakumo health check [--canary]        Probe every fleet node + the gateway, score it, record it\n  murakumo health slo | history            Availability, flapping and canary drift from the ledger\n  murakumo health heal [--apply]           Plan (or run) the one guarded self-heal\n  murakumo health --help"))
@@ -600,7 +603,7 @@
         (when (nil? command) (set! (.-exitCode js/process) 1)))
       ;; `fleet` is read-only: it ssh-reads each node and never enrols or writes.
       (= prefix "fleet")
-      (-> (fleet-ps/run-command command args)
+      (-> (if (= command "health") (fleet-health/run args) (fleet-ps/run-command command args))
           (.then (fn [code] (when (not= 0 code) (set! (.-exitCode js/process) code)))))
       ;; `health` probes and assesses the fleet; its one write is a guarded mesh
       ;; restart behind --apply, and it has no path to the node identity either.
