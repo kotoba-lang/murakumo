@@ -3,7 +3,8 @@
   Offline; no network."
   (:require [cljs.test :refer [deftest is testing run-tests]]
             [murakumo.fleet.spec :as spec]
-            [murakumo.infer.replicated-topology :as rt]))
+            [murakumo.infer.replicated-topology :as rt]
+            [murakumo.fleet.spec-cli :as cli]))
 
 (def did-a "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
 (def did-b "did:key:z6MkmQMZJpe1wjnYuXLF8XUNvyDcEJQJ2Jjcc6K8sxoj9GdF")
@@ -73,6 +74,22 @@
   (let [t (spec/peers-edn intent "a")]
     (is (re-find (re-pattern did-b) t))
     (is (not (re-find (re-pattern did-a) t)) "a node does not trust itself")))
+
+(deftest running-comes-from-ready-lanes
+  (let [i {"models" {"anim" {"kind" "image"} "wai" {"kind" "image"} "mishima" {"kind" "text"}}
+           "classes" {"anim-image" {"template" "comfyui" "model" "anim"}
+                      "wai-image" {"template" "comfyui" "model" "wai"}
+                      "mishima-text" {"template" "llama-server" "model" "mishima"}}}
+        p {"at" 1 "units" {"com.murakumo.comfy" "running" "com.murakumo.mishima" "running"}
+           "lanes" {"image" {"model" "anim" "kind" "image" "ready" true}
+                    "image-wai" {"model" "wai" "kind" "image" "ready" false}}}]
+    (is (= #{"anim-image" "mishima-text"} (:running (spec/l2-entry i p)))
+        "a shared comfy unit counts only for the ready lane; mishima (no lane) falls back to its own unit")))
+
+(deftest class-names-are-injective
+  (is (not= (cli/class-name "Foo" "text") (cli/class-name "foo" "text")))
+  (is (not= (cli/class-name "foo_bar" "text") (cli/class-name "foo-bar" "text")))
+  (is (= "mishima-text" (cli/class-name "mishima" "text")) "plain names stay readable"))
 
 (defmethod cljs.test/report [:cljs.test/default :end-run-tests] [m]
   (when-not (cljs.test/successful? m) (set! (.-exitCode js/process) 1)))

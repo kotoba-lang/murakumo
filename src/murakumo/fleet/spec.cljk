@@ -35,6 +35,7 @@
 
 (def unit-pattern #"^(com\.murakumo|cloud\.itonami|ai\.gftd)\.[a-z0-9.-]+$")
 (def name-pattern #"^[a-z0-9][a-z0-9.-]{0,63}$")
+(def model-pattern #"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 (def default-ttl-ms (* 5 60 1000))
 
 ;; ---------------------------------------------------------------- validation
@@ -67,7 +68,7 @@
       (when-not (= 1 (get payload "schema")) [(problem ["schema"] "must stay 1 (wire compatibility)")])
       (for [[m spec] models
             p (concat
-               (when-not (re-matches name-pattern (str m)) [(str "bad model name " m)])
+               (when-not (re-matches model-pattern (str m)) [(str "bad model name " m)])
                (when-not (#{"text" "image"} (get spec "kind")) ["kind must be text|image"])
                (when-let [f (get spec "file")]
                  (when (or (str/starts-with? f "/") (str/includes? f "..")) ["file must be relative to the model root"])))]
@@ -98,6 +99,14 @@
                (when-let [l (get node "labels")] (when-not (map? l) ["labels must be a map"])))
             :when p]
         (problem ["nodes" n] p))
+      (when-let [cv (get payload "converge")]
+        (concat
+         (when-not (map? cv) [(problem ["converge"] "must be a map")])
+         (when (map? cv)
+           (concat
+            (when-not (#{"observe" "enforce"} (get cv "mode")) [(problem ["converge" "mode"] "must be observe|enforce")])
+            (when-not (and (sequential? (get cv "nodes" [])) (every? #(contains? node-names %) (get cv "nodes" [])))
+              [(problem ["converge" "nodes"] "must list node names from nodes")])))))
       (forbidden-strings (select-keys payload ["models" "classes" "trust" "agents"]) [])))))
 
 ;; ---------------------------------------------------------------- L2
@@ -202,3 +211,106 @@
          ";; (ADR-2610071730 D8). Do not edit; change the intent and regenerate.\n"
          "{:trusted #{" (str/join " " (map #(str "\"" (get (val %) "did") "\"") others)) "}, "
          ":peers [" (str/join " " (for [[_ t] others] (str "{:url \"" (get t "itonami-url") "\", :did \"" (get t "did") "\"}"))) "]}\n")))
+
+;; ---------------------------------------------------------------- L2 from a resident observation (P2)
+
+(defn l2-entry
+  "A verified resident observation payload (string keys) -> the observation
+  `placement` reads. :running holds the classes seen on the node.
+
+  Lanes decide: a class runs when a READY lane reports its (model, kind). A
+  unit is only a fallback for a class whose model no lane on the node reports,
+  and only when the unit identifies the class: its name ends with the model
+  (com.murakumo.mishima -> mishima), or it is the only class on that template.
+  So one running ComfyUI or llama unit never makes every class that shares the
+  template look running."
+  [intent payload]
+  (let [classes (get intent "classes")
+        lanes (vals (get payload "lanes"))
+        lane-models (set (map #(get % "model") lanes))
+        per-template (frequencies (map #(get % "template") (vals classes)))
+        unit-classes (fn [unit]
+                       (for [[c s] classes
+                             :when (= unit (get-in templates [(get s "template") :unit]))
+                             :let [m (get s "model")]
+                             :when (not (contains? lane-models m))
+                             :when (or (= 1 (get per-template (get s "template")))
+                                       (and m (str/ends-with? unit (str "." m))))]
+                         c))]
+    {:at-ms (get payload "at") :did (get payload "did") :source "resident"
+     :pressure (get-in payload ["host" "pressure"]) :free-pct (get-in payload ["host" "free-pct"])
+     :memory-gb (get-in payload ["host" "memory-gb"]) :release (get payload "release")
+     :units (get payload "units")
+     :models (into {} (for [[m f] (get payload "models")] [m {:present (get f "present") :size-matches (get f "size-matches")}]))
+     :converge (get payload "converge")
+     :running (set (concat
+                    (for [l lanes
+                          :when (get l "ready")
+                          [c s] classes
+                          :when (and (= (get l "model") (get s "model"))
+                                     (= (get l "kind") (get-in intent ["models" (get s "model") "kind"] (get l "kind"))))]
+                      c)
+                    (for [[unit st] (get payload "units")
+                          :when (= "running" st)
+                          c (unit-classes unit)]
+                      c)))}))
+
+;; ---------------------------------------------------------------- convergence plan (P3a)
+
+(def default-cooldown-ms (* 30 60 1000))
+
+(defn converge-mode
+  "observe unless the signed intent says enforce for this node. Anything
+  malformed (not a map, nodes not a list of names) is observe, never a throw."
+  [intent node]
+  (let [cv (get intent "converge")
+        {:strs [mode nodes]} (if (map? cv) cv {})]
+    (if (and (= "enforce" mode) (sequential? nodes) (every? string? nodes) (some #{node} nodes))
+      "enforce" "observe")))
+
+(defn converge-plan
+  "What node should do to hold its share — pure.
+  obs: this node's own l2-entry (with :units). Steps:
+    :ok          placed and observed running
+    :start       placed, pinned, unit installed but not running -> may start
+    :needs-lease placed by rendezvous (not pinned) and not running -> P3b
+    :blocked     cannot converge here (no template unit on this OS, unit not
+                 installed, model file missing)
+  Never a stop: only ever starts what the operator pinned, or (P3b) what this
+  node holds a quorum lease for (`leased`)."
+  [intent l2 node now & [{:keys [leased]}]]
+  (let [plan (placement intent l2 now)
+        obs (get l2 node)
+        node-entry (first (filter #(= node (get % "node")) (get intent "nodes")))
+        ;; a class this node holds a quorum lease for counts like a pin (P3b)
+        pinned (into (set (get node-entry "pins")) leased)]
+    (vec
+     (for [[c {:keys [nodes]}] plan
+           :when (some #{node} nodes)
+           :let [spec (get-in intent ["classes" c])
+                 unit (get-in templates [(get spec "template") :unit])
+                 state (get-in obs [:units unit])
+                 model (get spec "model")
+                 model-file (get-in obs [:models model])]]
+       (cond
+         (contains? (:running obs) c) {:class c :unit unit :step :ok}
+         (= "all" (get spec "replicas")) {:class c :unit unit :step :blocked :reason "\"all\" classes are installed by their own installer"}
+         (not (contains? pinned c)) {:class c :unit unit :step :needs-lease :reason "placed by rendezvous; needs a quorum lease (P3b)"}
+         (nil? state) {:class c :unit unit :step :blocked :reason "no template unit on this host (Linux names differ; P3b renders units)"}
+         (= "absent" state) {:class c :unit unit :step :blocked :reason "unit not installed (P3b renders it from the template)"}
+         (and model-file (false? (:present model-file))) {:class c :unit unit :step :blocked :reason (str "model file for " model " missing")}
+         (and model-file (false? (:size-matches model-file))) {:class c :unit unit :step :blocked :reason (str "model file for " model " has the wrong size")}
+         :else {:class c :unit unit :step :start :reason (str "pinned here; unit " state)})))))
+
+(defn lease-slots
+  "class -> slot for the shares placed on node by rendezvous (not pinned):
+  the node's position among the class's unpinned placed nodes."
+  [intent l2 node now]
+  (let [pins (fn [n] (set (get (first (filter #(= n (get % "node")) (get intent "nodes"))) "pins")))]
+    (into {}
+          (for [[c {:keys [nodes]}] (placement intent l2 now)
+                :when (not= "all" (get-in intent ["classes" c "replicas"]))
+                :let [unpinned (vec (remove #(contains? (pins %) c) nodes))
+                      i (.indexOf (clj->js unpinned) node)]
+                :when (>= i 0)]
+            [c i]))))
