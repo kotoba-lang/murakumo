@@ -5,12 +5,17 @@ import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {spawn,execFileSync} from 'node:child_process';
 import {once} from 'node:events';
+import {openSync} from 'node:fs';
 import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {generateKeyPairSync,randomBytes,randomUUID,verify,createPublicKey} from 'node:crypto';
 const root=resolve('.'), cli=join(root,'release/node.mjs');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+// residents log to files, never to a pipe: the CLI runs below with execFileSync,
+// which blocks this process, and on Linux a resident writing to a full pipe
+// blocks too (pipe writes are synchronous there) — a deadlock
+const logTo=(dir,name)=>{const f=openSync(join(dir,name+'.log'),'a');return ['ignore',f,f];};
 async function wait(fn,what){for(let i=0;i<200;i++){try{if(await fn())return;}catch{}await sleep(50);}throw Error(what+' timed out');}
 async function port(){const s=createServer();s.listen(0,'127.0.0.1');await once(s,'listening');const p=s.address().port;await new Promise(r=>s.close(r));return p;}
 const B58='123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -31,7 +36,7 @@ test('residents sign their own observation and converge the fleet view by gossip
   nodes:ids.map((node,i)=>({node,url:urls[i],'owner-id':owners[i],enabled:true,roles:[{kind:'text',model:'mishima'}],pins:['mishima-text']})),
   gateways:[{node:'g0',url:'http://127.0.0.1:'+gw,enabled:true}],policies:{'minimum-replicas':{mishima:1},'job-voters':ids.map((node,i)=>({node,url:urls[i]}))}};
  const input=join(dir,'input.json'),signed=join(dir,'signed.json');await writeFile(input,JSON.stringify(payload));
- execFileSync(process.execPath,[cli,'topology','sign','--input',input,'--output',signed,'--private-key-file',keyFile,'--allow-loopback','true'],{stdio:'pipe'});
+ execFileSync(process.execPath,[cli,'topology','sign','--input',input,'--output',signed,'--private-key-file',keyFile,'--allow-loopback','true'],{timeout:120000,stdio:'pipe'});
  const backend=createServer((req,res)=>{if(req.url==='/slots')return res.end('[{"is_processing":false}]');let b='';req.on('data',x=>b+=x);req.on('end',()=>res.end(JSON.stringify({choices:[{message:{content:'5'}}]})));});
  backend.listen(0,'127.0.0.1');await once(backend,'listening');t.after(()=>{backend.closeAllConnections();backend.close();});
  const processes=[];t.after(()=>{for(const p of processes)p.kill('SIGTERM');});
@@ -43,7 +48,7 @@ test('residents sign their own observation and converge the fleet view by gossip
    'state-file':state,'legacy-empty-ledger-owner-id':owners[i],
    lanes:{text:{kind:'text',model:'mishima',context:32768,group:'gpu',backend:'http://127.0.0.1:'+backend.address().port,path:'/v1/chat/completions'}}};
   const cp=join(dir,ids[i]+'.json');await writeFile(cp,JSON.stringify(cfg));
-  processes.push(spawn(process.execPath,[cli,'resident','serve','--config',cp],{stdio:['ignore','pipe','pipe']}));
+  processes.push(spawn(process.execPath,[cli,'resident','serve','--config',cp],{stdio:logTo(dir,ids[i])}));
  }
  const obs=async i=>(await(await fetch(urls[i]+'/observations')).json());
  // no token needed, and both nodes appear on both residents (gossip)
@@ -61,7 +66,8 @@ test('residents sign their own observation and converge the fleet view by gossip
  assert.notEqual(all.n0.payload.did,all.n1.payload.did,'each node has its own key');
  // P3a: each node publishes its convergence plan in its signed observation;
  // the intent does not say enforce, so the mode is observe and nothing is acted on
- await wait(async()=>{const d=(await obs(0)).n0;return d.payload.converge?.plan?.length;},'convergence plan');
+ // the first plan can predate the first probe (lane not yet running): wait for it to settle
+ await wait(async()=>{const d=(await obs(0)).n0;return d.payload.converge?.plan?.[0]?.step==='ok';},'convergence plan');
  const conv=(await obs(0)).n0.payload.converge;
  assert.equal(conv.mode,'observe');
  assert.deepEqual(conv.plan.map(s=>[s.class,s.step]),[['mishima-text','ok']]);
@@ -79,6 +85,19 @@ test('residents sign their own observation and converge the fleet view by gossip
  assert.equal((await(await fetch(urls[1]+'/leases/hint/l_'+'0'.repeat(24)+'_0',{headers:H})).json()).epoch,1);
  const bad=await(await fetch(urls[0]+'/leases/'+id.replace(/_1$/,'_2')+'/accept',{method:'POST',headers:H,body:JSON.stringify({ballot:[Date.now(),'u'],value:{...value,node:'nobody',epoch:2}})})).json();
  assert.equal(bad.ok,false,'voters refuse a lease for a node outside the topology');
+ // P4: murakumo apply — validate, sign, send, follow until every resident holds it
+ const live=JSON.parse(await readFile(signed,'utf8')).payload;
+ const next={...live,revision:2,nodes:live.nodes.map(n=>n.node==='n1'?{...n,cordoned:true}:n)};
+ const intentFile=join(dir,'intent-2.json');await writeFile(intentFile,JSON.stringify(next));
+ const cliEnv={...process.env,MURAKUMO_OBSERVATION_PINS:join(dir,'cli-pins.json')};
+ const dry=execFileSync(process.execPath,[cli,'apply','-f',intentFile,'--dry-run','--allow-loopback','--token-file',tokenFile],{timeout:120000,encoding:'utf8',env:cliEnv});
+ assert.match(dry,/cordoned/);assert.match(dry,/dry run/);
+ const out=execFileSync(process.execPath,[cli,'apply','-f',intentFile,'--allow-loopback','--private-key-file',keyFile,'--token-file',tokenFile,'--poll-ms','500','--timeout-s','60'],{timeout:120000,encoding:'utf8',env:cliEnv});
+ assert.match(out,/2\/2 residents hold 2/);
+ const nodes=execFileSync(process.execPath,[cli,'get','nodes','-f',intentFile],{timeout:120000,encoding:'utf8',env:cliEnv});
+ assert.match(nodes,/n0/);assert.match(nodes,/n1/);
+ // a non-advancing revision is refused
+ assert.throws(()=>execFileSync(process.execPath,[cli,'apply','-f',intentFile,'--allow-loopback','--private-key-file',keyFile,'--token-file',tokenFile],{timeout:120000,encoding:'utf8',stdio:'pipe',env:cliEnv}));
  // the node key is private and persists across restart
  const key=join(dir,'n0-receipts.json.node-key');
  assert.equal((await import('node:fs')).statSync(key).mode & 0o077,0);
