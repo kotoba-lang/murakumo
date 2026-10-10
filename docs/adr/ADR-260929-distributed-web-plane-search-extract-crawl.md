@@ -1,7 +1,7 @@
 # ADR-260929: Distributed web plane — search / extract / crawl
 
-**Status**: Accepted for the execution side (M0–M5 implemented and run on fleet nodes,
-see Milestones); the public gate is decided below but not built yet.
+**Status**: Accepted. M0–M5 implemented and run on fleet nodes (see Milestones); the
+public gate `web.murakumo.cloud` is live since 2026-10-11 (M6, below).
 **Date**: 2026-09-29 (owner decisions added 2026-10-10)
 **Scope**: murakumo (placement), kototama (receipts), yataverse (bytes)
 
@@ -14,10 +14,10 @@ run the planes their capabilities and opt-in allow).
 | question | decision |
 |---|---|
 | gate (open question 1) | a new Worker at `web.murakumo.cloud` with its own `mk1` secret and scope `web`, not shared with `api.` or `generation.` |
-| how the gate reaches nodes | pull: nodes claim jobs from the gate's queue (`web-join`, the same shape as `infer-join`). No inbound port, no tunnel, no per-request ssh. ssh dispatch stays for operator use |
+| how the gate reaches nodes | **as built (2026-10-11):** the Worker is stateless and forwards over Workers VPC (the existing gad Tunnel, no public origin hostname) to an origin on gad that holds the queue and quota and runs jobs on its local node. The first draft said "pull, `web-join`, the gate's queue"; that would have needed a queue in Cloudflare, which root ADR-2609132007 (no D1/DO/KV) and the 2026-10-07 owner direction (no R2) rule out. Adding nodes is an `origin.edn` entry (`:transport :ssh`) |
 | egress | fleet nodes only. **No dependency on Modal** for the public plane; the Modal node stays a private verification aid. A node's web egress is off unless its operator opts in (most fleet nodes exit from a home line) |
 | access | operator-issued tokens only (`token issue <sub> web <ttl>`), per-token daily quota and crawl page caps; no billing yet. Metering unit: fetched page, settled in KUMO later |
-| yataverse writes | deferred. Results stay in node stores and the gate's R2 with a retention limit |
+| yataverse writes | deferred. Results stay in the node store and the origin's job records on gad |
 | dual-zone verify | not offered publicly while there is no second public egress zone |
 
 Unchanged: SSRF rejection at gate and worker, robots.txt, per-host rate limits, no
@@ -112,6 +112,18 @@ only the frontier and budget, never the bytes.
 Reuse `:labels {:zone ...}` and the planner: fetch jobs prefer a node near the
 target when a geo hint exists; extract jobs prefer the node that already holds
 the fetch CID (bitswap locality) to avoid moving bytes.
+
+## M6: public gate (2026-10-11)
+
+- Worker `murakumo-web` (network-awai/cloud-murakumo `src/cloud_murakumo/web_gate.cljk`,
+  `wrangler.web.jsonc`): own `MURAKUMO_TOKEN_SECRET`, scope `web`, 64 KiB body cap, fails
+  closed (503) without its secret or origin binding.
+- Origin (`scripts/web_origin.cljc` + pure `murakumo.web.origin`): queue, per-subject daily
+  quota, full URL policy, public ceilings, one job at a time; systemd
+  `murakumo-web-origin` on gad as user `gad`; the node it drives is gad's own
+  `/home/gad/.murakumo-web` (a new node key, not root's).
+- Public egress: gad only (Tokyo home line), opt-in in `origin.edn`.
+- Operation: `docs/web-plane-runbook.md` "Public gate".
 
 ## Control plane: itonami.cloud bots (owner direction 2026-09-29)
 
