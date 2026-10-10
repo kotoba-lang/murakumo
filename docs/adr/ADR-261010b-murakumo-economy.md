@@ -63,7 +63,8 @@ halving          at Bitcoin halving heights: 1,050,000, 1,260,000, 1,470,000, �
 era 0            genesis → first Bitcoin halving height after genesis (L0 blocks)
 era 0 subsidy    R0 = 1,995,000,000 / (L0 + 210,000), fixed at genesis
 era n ≥ 1        R0 / 2^n per block, 210,000 blocks each
-smallest unit    1e-8 KUMO
+smallest unit    1e-6 KUMO (micro-KUMO; the 2.1e15 total stays exact below 2^53,
+                 so JS numbers and EDN carry every amount on every host)
 ```
 
 Example with genesis at about BTC height 1,013,000 (mid-2027), so L0 ≈ 37,000

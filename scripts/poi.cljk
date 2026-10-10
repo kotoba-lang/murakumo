@@ -3,7 +3,8 @@
 ;;
 ;;   kbb scripts/poi.cljk round            challenge every healthy head once, replay-verify each
 ;;   kbb scripts/poi.cljk seal             close a settlement block at the current Bitcoin tip
-;;   kbb scripts/poi.cljk run [--rounds N] N rounds, then seal
+;;   kbb scripts/poi.cljk collect          pull node-signed customer receipts from every resident
+;;   kbb scripts/poi.cljk run [--rounds N] N rounds, collect, then seal
 ;;   kbb scripts/poi.cljk points           Season 0 points per node (sealed blocks only)
 ;;   kbb scripts/poi.cljk status           heads, unsealed documents, last block
 ;;
@@ -76,10 +77,10 @@
 (defn- points [dir args]
   (let [proven (set (some-> (opt args "--proven") (str/split #",")))
         pts (ledger/season0-points dir proven)]
-    (println "node  points(uVCU)  verified-jobs  failed  pending")
+    (println "node  points(uVCU)  verified-jobs  customer-jobs  failed  pending  held")
     (table (sort-by (comp - #(or % 0) :points)
                     (map (fn [[n m]] (assoc m :node n)) pts))
-           [:node :points :jobs :failed :pending])))
+           [:node :points :jobs :customer :failed :pending :held])))
 
 (defn -main [& args]
   (let [cmd (first args)
@@ -88,9 +89,11 @@
     (case cmd
       "round" (.then (challenge/round! dir key (heads args) {}) print-round)
       "seal" (seal! dir key)
+      "collect" (.then (challenge/collect! dir key (heads args)) #(println "collected" (pr-str %)))
       "run" (let [n (js/parseInt (or (opt args "--rounds") "1") 10)]
               (-> (reduce (fn [p _] (.then p (fn [_] (.then (challenge/round! dir key (heads args) {}) print-round))))
                           (js/Promise.resolve nil) (range n))
+                  (.then (fn [_] (.then (challenge/collect! dir key (heads args)) #(println "collected" (pr-str %)))))
                   (.then (fn [_] (seal! dir key)))
                   (.then (fn [_] (points dir args)))))
       "points" (points dir args)
@@ -99,7 +102,7 @@
                  (println "heads" (str/join ", " (map :name hs)))
                  (println "unsealed documents" (count (ledger/unsealed dir)))
                  (println "blocks" (count bs) "last height" (some-> (last bs) :payload :height)))
-      (do (println "usage: kbb scripts/poi.cljk round|seal|run [--rounds N]|points|status [--dir D] [--heads ip:port,...] [--proven a,b]")
+      (do (println "usage: kbb scripts/poi.cljk round|collect|seal|run [--rounds N]|points|status [--dir D] [--heads ip:port,...] [--proven a,b]")
           (js/process.exit 2)))))
 
 (apply -main *command-line-args*)
