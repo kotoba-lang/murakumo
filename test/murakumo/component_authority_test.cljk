@@ -10,11 +10,13 @@
           (unchecked-byte (Integer/parseInt (str a b) 16)))
         (partition 2 value))))
 
+;; Positive event fixtures are CIDv1/raw/sha2-256 of murakumo/<label>,
+;; rather than readable labels that the strict ABI CID predicate rejects.
 (deftest placement-and-revocation-form-a-monotonic-fence
   (let [state (atom (authority/initial-state))
         events (atom [])
         publish! #(swap! events conj %)
-        cid "bafyreicomponent"]
+        cid "bafkreifbdkk5egcev52n2m754rg2xgmuexez6ki3eodozg4x6tuxchcaqa"]
     (authority/apply-command!
      state publish! {:op :place :component-cid cid :node "edge-a"})
     (authority/apply-command!
@@ -31,8 +33,8 @@
     (is (every? authority/valid-event? @events))))
 
 (deftest revocation-fences-partitioned-hosts-without-observed-placement
-  (let [[state event] (authority/revoke (authority/initial-state) "bafyreistale")]
-    (is (= 1 (authority/current-epoch state "bafyreistale")))
+  (let [[state event] (authority/revoke (authority/initial-state) "bafkreifkspkdcpqa3wmwe7ib2xptsywwsfuhqcwqb56n5na4buc5wsb6de")]
+    (is (= 1 (authority/current-epoch state "bafkreifkspkdcpqa3wmwe7ib2xptsywwsfuhqcwqb56n5na4buc5wsb6de")))
     (is (= :revoked (:murakumo.component/event event)))
     (is (authority/valid-event? event))))
 
@@ -57,7 +59,7 @@
         (authority/apply-signed-command!
          (atom (authority/initial-state))
          #(swap! published conj %)
-         {:op :revoke :component-cid "bafyreicomponent"}
+         {:op :revoke :component-cid "bafkreifbdkk5egcev52n2m754rg2xgmuexez6ki3eodozg4x6tuxchcaqa"}
          {:seed seed :key-id "murakumo-2026-01"
           :issuer "did:key:murakumo"
           :audience "did:key:kototama-edge-a"
