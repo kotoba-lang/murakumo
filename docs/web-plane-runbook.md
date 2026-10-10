@@ -142,7 +142,7 @@ result contains a secret. The `web-plane` bot profile may call these; see its `y
 caller --mk1 (scope web)--> murakumo-web Worker (network-awai/cloud-murakumo, wrangler.web.jsonc)
           stateless: token, scope, body cap        |
                                                    | Workers VPC "murakumo-web-origin"
-                                                   | (comfyui-gad Tunnel c75a3e83 -> 127.0.0.1:8095)
+                                                   | (comfyui-gad Tunnel c75a3e83 -> 192.168.1.16:8095)
                                                    v
           web origin on gad (scripts/web_origin.cljc, systemd murakumo-web-origin, user gad)
           queue + per-subject quota + full URL policy, one job at a time
@@ -151,6 +151,10 @@ caller --mk1 (scope web)--> murakumo-web Worker (network-awai/cloud-murakumo, wr
           /home/gad/.murakumo-web  (its own node.key / did:key, store/, backends.edn)
 ```
 
+- **Address**: the Tunnel has connectors on several LAN hosts, so the VPC service names
+  gad's LAN address and `origin.edn` sets `:host "192.168.1.16"` (with 127.0.0.1, 6 of 20
+  requests reached the origin, 2026-10-11). The origin bearer is still required for
+  every request, including from the LAN.
 - **No Cloudflare state** (root ADR-2609132007, no R2 since 2026-10-07): the queue,
   records and quota are files under `/home/gad/.murakumo-web-origin/` (`jobs/<id>.edn`,
   `quota.edn`). A job that was running when the origin restarted is marked failed, never
