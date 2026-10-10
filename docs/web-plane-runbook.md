@@ -136,6 +136,65 @@ The MCP server (`scripts/web_mcp.mjs`, project `.mcp.json`, or
 `web_sync`, `web_provision`. Any argument named like a credential is refused, and no tool
 result contains a secret. The `web-plane` bot profile may call these; see its `yakuwari.edn`.
 
+## Public gate: web.murakumo.cloud (owner decisions 2026-10-10)
+
+```
+caller --mk1 (scope web)--> murakumo-web Worker (network-awai/cloud-murakumo, wrangler.web.jsonc)
+          stateless: token, scope, body cap        |
+                                                   | Workers VPC "murakumo-web-origin"
+                                                   | (comfyui-gad Tunnel c75a3e83 -> 127.0.0.1:8095)
+                                                   v
+          web origin on gad (scripts/web_origin.cljc, systemd murakumo-web-origin, user gad)
+          queue + per-subject quota + full URL policy, one job at a time
+                                                   |
+                                                   v  local node op (web_node.cljs, user gad)
+          /home/gad/.murakumo-web  (its own node.key / did:key, store/, backends.edn)
+```
+
+- **No Cloudflare state** (root ADR-2609132007, no R2 since 2026-10-07): the queue,
+  records and quota are files under `/home/gad/.murakumo-web-origin/` (`jobs/<id>.edn`,
+  `quota.edn`). A job that was running when the origin restarted is marked failed, never
+  re-run (it touched third parties).
+- **Egress opt-in**: a node runs public jobs only with `:public-egress? true` in
+  `origin.edn`. Today only gad's local node (user `gad`, never root) is opted in; it
+  exits from the Tokyo home line. To stop public egress, set it to false (or stop the
+  unit): new jobs then get `503 no_public_node`.
+- **Limits** (`murakumo.web.origin/public-limits`, `default-quota`): crawl <= 20 pages,
+  depth <= 3, delay >= 1 s, <= 5 seeds; search k <= 20; 200 jobs and 10 crawls per token
+  subject per UTC day; queue <= 100.
+
+API (all JSON; `Authorization: Bearer mk1...`, scope `web` or `all`):
+
+| call | body / result |
+|---|---|
+| `POST /v1/web/jobs` | `{"kind":"scrape","url":...}` / `{"kind":"crawl","seeds":[...],"max_pages":n,"max_depth":n,"scope":"same-host"}` / `{"kind":"search","query":...,"k":n}` -> `202 {"id","status":"queued"|"running"}` |
+| `GET /v1/web/jobs/{id}` | `{"status":"done","result":{...,"receipts":[...],"untrusted":true}}` or `"failed"` with `error`; only the token subject that created it can read it |
+| `GET /` | discovery document |
+| `GET /health` | origin health (no token needed at the Worker; the Worker itself authenticates to the origin) |
+
+Errors: 400 invalid_request (with reasons), 401 invalid_token, 403 insufficient_scope,
+413 too_large, 429 quota, 502 origin_unavailable, 503 gate_not_configured / no_public_node /
+queue_full.
+
+Issue a token (the Worker's own signing secret, macOS Keychain item
+`murakumo-web-token-secret` on the operator Mac; never the api./generation. secrets):
+
+```sh
+cd network-awai/cloud-murakumo
+MURAKUMO_TOKEN_SECRET="$(security find-generic-password -s murakumo-web-token-secret -w)" \
+  kbb -M:token issue <subject> web <ttl-seconds>
+```
+
+Install / update the origin on gad (bundle under the `gad` user, then restart):
+
+```sh
+scripts/web-bundle.sh /tmp/wb/bundle
+tar -C /tmp/wb -cf - bundle | ssh gad 'D=/home/gad/.murakumo-web; rm -rf $D/bundle.new && mkdir $D/bundle.new && tar -C $D/bundle.new --strip-components=1 -xf - && (cd $D/bundle.new && sha256sum -c MANIFEST.sha256 >/dev/null) && rm -rf $D/bundle.old && mv $D/bundle $D/bundle.old && mv $D/bundle.new $D/bundle && chown -R gad:gad $D && systemctl restart murakumo-web-origin'
+```
+
+The unit is `deploy/systemd/murakumo-web-origin.service`. `origin-token` (0600, >= 32 chars)
+is the Worker secret `WEB_ORIGIN_TOKEN`; rotate both together.
+
 ## Routine ops (via `murakumo.web.dispatch/call!`)
 
 | op | when | note |

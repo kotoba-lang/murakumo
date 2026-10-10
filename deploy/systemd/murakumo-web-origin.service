@@ -1,0 +1,27 @@
+# web.murakumo.cloud origin on gad (ADR-260929, owner decisions 2026-10-10).
+# The Worker reaches 127.0.0.1:8095 through the comfyui-gad Tunnel (Workers VPC);
+# nothing listens on a public address. Runs as the unprivileged user `gad`, and
+# so does every node op it starts (local transport): a public fetch never runs as root.
+# Config and secret: /home/gad/.murakumo-web-origin/{origin.edn,origin-token(0600)}.
+# Install: docs/web-plane-runbook.md "Public gate".
+[Unit]
+Description=murakumo web plane origin (web.murakumo.cloud)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gad
+Environment=MURAKUMO_WEB_ORIGIN_HOME=/home/gad/.murakumo-web-origin
+WorkingDirectory=/home/gad/.murakumo-web/bundle
+ExecStart=/usr/local/bin/nbb -cp /home/gad/.murakumo-web/bundle /home/gad/.murakumo-web/bundle/web_origin.cljs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/gad/.murakumo-web /home/gad/.murakumo-web-origin
+
+[Install]
+WantedBy=multi-user.target

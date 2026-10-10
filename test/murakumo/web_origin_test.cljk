@@ -1,0 +1,84 @@
+(ns murakumo.web-origin-test
+  (:require [kotoba.test :refer [deftest is]]
+            [murakumo.web.origin :as o]))
+
+(deftest scrape-takes-a-public-url-only
+  (is (= {:ok {:kind :scrape :url "https://example.com/a"}} (o/parse-request {"kind" "scrape" "url" "https://example.com/a"})))
+  (doseq [[url reason] [["http://127.0.0.1/" :url/private-address]
+                        ["http://[::1]/" :url/private-address]
+                        ["http://169.254.169.254/latest/meta-data" :url/private-address]
+                        ["file:///etc/passwd" :url/scheme]
+                        ["https://user:pw@example.com/" :url/userinfo]
+                        ["http://localhost/" :url/internal-name]
+                        [42 :url/not-a-string]]]
+    (is (= {:refused [reason]} (o/parse-request {"kind" "scrape" "url" url})) (str url)))
+  (is (= {:refused [:url/too-long]}
+         (o/parse-request {"kind" "scrape" "url" (str "https://example.com/" (apply str (repeat 2100 "a")))}))))
+
+(deftest unknown-or-malformed-requests-are-refused
+  (is (= {:refused [:request/unknown-kind]} (o/parse-request {"kind" "fetch-everything"})))
+  (is (= {:refused [:request/unknown-kind]} (o/parse-request {})))
+  (is (= {:refused [:request/not-an-object]} (o/parse-request ["kind" "scrape"]))))
+
+(deftest crawl-is-held-under-the-public-ceilings
+  (let [ok (o/parse-request {"kind" "crawl" "seeds" ["https://example.com/"] "max_pages" 5 "max_depth" 1})]
+    (is (= :crawl (get-in ok [:ok :kind])))
+    (is (= {:seeds ["https://example.com/"] :max-pages 5 :max-depth 1 :delay-ms 1000 :scope :same-host}
+           (get-in ok [:ok :plan]))))
+  (is (= [:crawl/max-pages] (:refused (o/parse-request {"kind" "crawl" "seeds" ["https://example.com/"] "max_pages" 21}))))
+  (is (= [:crawl/max-depth] (:refused (o/parse-request {"kind" "crawl" "seeds" ["https://example.com/"] "max_depth" 4}))))
+  (is (= [:crawl/delay-below-floor] (:refused (o/parse-request {"kind" "crawl" "seeds" ["https://example.com/"] "delay_ms" 999}))))
+  (is (= [:crawl/scope] (:refused (o/parse-request {"kind" "crawl" "seeds" ["https://example.com/"] "scope" "everything"}))))
+  (is (= [:crawl/seeds] (:refused (o/parse-request {"kind" "crawl" "seeds" []}))))
+  (is (= [:crawl/seeds] (:refused (o/parse-request {"kind" "crawl" "seeds" (vec (repeat 6 "https://example.com/"))}))))
+  (is (= [:url/private-address] (:refused (o/parse-request {"kind" "crawl" "seeds" ["http://10.0.0.1/"]})))))
+
+(deftest search-bounds-query-and-k
+  (is (= {:ok {:kind :search :query "kotoba" :k 10}} (o/parse-request {"kind" "search" "query" "  kotoba "})))
+  (is (= [:search/query] (:refused (o/parse-request {"kind" "search" "query" "   "}))))
+  (is (= [:search/k] (:refused (o/parse-request {"kind" "search" "query" "x" "k" 21}))))
+  (is (= [:search/query-too-long] (:refused (o/parse-request {"kind" "search" "query" (apply str (repeat 513 "q"))})))))
+
+(def day1 1791600000000)                  ; 2026-10-10 (UTC)
+(def day2 (+ day1 (* 24 3600 1000)))
+
+(deftest quota-counts-per-subject-per-utc-day
+  (let [q {:jobs-per-day 2 :crawls-per-day 1}
+        s1 (:ok (o/charge-quota {} "alice" :scrape day1 q))
+        s2 (:ok (o/charge-quota s1 "alice" :crawl day1 q))]
+    (is (= {"alice" {:jobs 2 :crawls 1}} (:used s2)))
+    (is (= {:refused :quota/jobs-per-day} (o/charge-quota s2 "alice" :scrape day1 q)))
+    (is (:ok (o/charge-quota s2 "bob" :scrape day1 q)) "another subject has its own count")
+    (is (= {:refused :quota/crawls-per-day} (o/charge-quota s1 "alice" :crawl (+ day1 1) {:jobs-per-day 9 :crawls-per-day 0})))
+    (is (= {"alice" {:jobs 1 :crawls 0}} (:used (:ok (o/charge-quota s2 "alice" :scrape day2 q)))) "a new day starts at zero")
+    (is (= {:refused :quota/no-subject} (o/charge-quota {} "" :scrape day1 q)))
+    (is (= {:refused :quota/no-subject} (o/charge-quota {} nil :scrape day1 q)))))
+
+(deftest records-move-forward-and-a-running-job-is-never-rerun-after-restart
+  (let [r (o/new-record "0123456789abcdef0123456789abcdef" "alice" {:kind :scrape :url "https://example.com/"} 1)]
+    (is (= :queued (:status r)))
+    (is (= r (o/recover r 5)) "queued stays queued")
+    (let [running (o/start r 2)
+          after (o/recover running 5)]
+      (is (= :failed (:status after)))
+      (is (= :origin/restarted-while-running (get-in after [:error :reason]))))
+    (is (= :done (:status (o/finish (o/start r 2) {:title "x"} 3))))))
+
+(deftest ids-and-ownership
+  (is (o/valid-id? "0123456789abcdef0123456789abcdef"))
+  (doseq [bad ["../quota" "0123" "0123456789ABCDEF0123456789ABCDEF" nil]]
+    (is (not (o/valid-id? bad)) (str bad)))
+  (let [r (o/new-record "0123456789abcdef0123456789abcdef" "alice" {:kind :search :query "q" :k 1} 1)]
+    (is (o/owner? r "alice"))
+    (is (not (o/owner? r "bob")))
+    (is (not (o/owner? r nil)))))
+
+(deftest the-public-view-is-json-shaped-and-omits-the-subject
+  (let [v (o/public-view (o/fail (o/start (o/new-record "0123456789abcdef0123456789abcdef" "alice"
+                                                         {:kind :scrape :url "https://example.com/"} 1) 2)
+                                 :fetch/too-large 6000000 3))]
+    (is (= {"id" "0123456789abcdef0123456789abcdef" "kind" "scrape" "status" "failed"
+            "created_ms" 1 "started_ms" 2 "finished_ms" 3
+            "error" {"reason" "fetch/too-large" "detail" 6000000}}
+           v))
+    (is (not (contains? v "sub")))))
