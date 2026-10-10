@@ -4,16 +4,17 @@
   Host mirror of kotoba/poi_core.kotoba; parity is asserted by
   test/murakumo/poi_kotoba_parity_test.cljk. Units:
     VCU   micro-VCU (1 uVCU = 1 GFLOP of verified forward compute)
-    KUMO  base units (1 KUMO = 1e8 base)
+    KUMO  base units (1 KUMO = 1e6 base; the 2.1e15 total stays exact below
+          2^53, so JS numbers and EDN carry it on every host)
     money micro-USD
   Era 0 runs from genesis to the first Bitcoin halving height after genesis;
   later eras are 210,000 Bitcoin blocks, so KUMO halves on Bitcoin's blocks.")
 
-(def subsidy-total-base 199500000000000000)
-(def mga-base 10500000000000000)
+(def subsidy-total-base 1995000000000000)
+(def mga-base 105000000000000)
 (def halving-interval 210000)
 (def maturity-blocks 144)
-(def base-per-kumo 100000000)
+(def base-per-kumo 1000000)
 (def bitcoin-halvings
   "Bitcoin halving heights from the next one on."
   (iterate #(+ % halving-interval) 1050000))

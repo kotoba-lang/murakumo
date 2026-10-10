@@ -67,6 +67,24 @@
     (append-jsonl! (file dir "receipts.jsonl") doc)
     doc))
 
+(defn doc-digest [doc] (topo/digest (:payload doc)))
+
+(defn- customer-receipts [dir]
+  (filter #(= "customer" (get-in % [:payload :kind])) (receipts dir)))
+
+(defn node-dids
+  "First did seen per node among recorded customer receipts (pinned)."
+  [dir]
+  (reduce (fn [m d] (let [{:keys [node did]} (:payload d)] (if (contains? m node) m (assoc m node did))))
+          {} (customer-receipts dir)))
+
+(defn node-receipt-digests [dir]
+  (into #{} (keep #(some-> % :payload :node-doc doc-digest)) (customer-receipts dir)))
+
+(defn last-node-receipt-at [dir node]
+  (reduce max 0 (keep #(when (= node (get-in % [:payload :node])) (get-in % [:payload :node-at]))
+                      (customer-receipts dir))))
+
 ;; ----------------------------------------------------------------- merkle
 
 (defn- sha256-hex [s] (.digest (.update (.createHash crypto "sha256") s) "hex"))
@@ -128,9 +146,20 @@
          passed (into #{} (comp (map :payload) (filter :pass) (map :job))
                       (get by-type "verdict"))
          failed (into #{} (comp (map :payload) (remove :pass) (map :job))
-                      (get by-type "verdict"))]
-     (reduce (fn [acc {{:keys [job node uvcu]} :payload}]
-               (cond (failed job) (update-in acc [node :failed] (fnil inc 0))
+                      (get by-type "verdict"))
+         standing (reduce (fn [m {{:keys [node pass]} :payload}] (assoc m node (boolean pass)))
+                          {} (get by-type "verdict"))]
+     (reduce (fn [acc {{:keys [job node uvcu kind]} :payload}]
+               (cond (= "customer" kind)
+                     ;; customer jobs cannot be replayed without the prompt, so they
+                     ;; count while the node's latest sealed capacity verdict passed
+                     (if (get standing node)
+                       (-> acc
+                           (update-in [node :points] (fnil + 0)
+                                      (poi/season0-points {:uvcu uvcu :btc-proven (if (proven node) 1 0)}))
+                           (update-in [node :customer] (fnil inc 0)))
+                       (update-in acc [node :held] (fnil inc 0)))
+                     (failed job) (update-in acc [node :failed] (fnil inc 0))
                      (passed job) (-> acc
                                       (update-in [node :points] (fnil + 0)
                                                  (poi/season0-points {:uvcu uvcu

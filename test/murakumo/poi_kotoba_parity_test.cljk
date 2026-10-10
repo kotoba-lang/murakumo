@@ -1,0 +1,70 @@
+;; Proof of Inference: murakumo.poi.core vs the shipped KIR of
+;; kotoba/poi_core.kotoba, executed through the oracle (:poi).
+
+(ns murakumo.poi-kotoba-parity-test
+  (:require [kotoba.test :refer [deftest is testing]]
+            [murakumo.kotoba.oracle :as oracle]
+            [murakumo.poi.core :as poi]))
+
+(defn- call [f & args] (oracle/i64->host (oracle/call :poi f (vec args))))
+(defn- rec [schema fields m]
+  (oracle/record [:record schema (mapv #(vector % :i64) fields)] m))
+
+(defn- text [m] (rec :poi/text-work [:p-active-m :t-in :t-out :cached] m))
+(defn- diff [m] (rec :poi/diffusion-work [:p-m :latent :steps :cfg] m))
+(defn- at [m] (rec :poi/at [:height :genesis :next-halving] m))
+(defn- split [m] (rec :poi/split-in [:subsidy :height :genesis] m))
+(defn- cpool [m] (rec :poi/cpool [:production :fees-uusd :price-uusd :lambda-num :lambda-den] m))
+(defn- truthy [x] (if (number? x) (pos? x) (boolean x)))
+
+(deftest catalog-has-poi
+  (is (oracle/ready? :poi)))
+
+(deftest constants-match
+  (is (= poi/subsidy-total-base (call 'subsidy-total-base)))
+  (is (= poi/mga-base (call 'mga-base)))
+  (is (= poi/halving-interval (call 'halving-interval)))
+  (is (= poi/maturity-blocks (call 'maturity-blocks)))
+  (is (= poi/base-per-kumo (call 'base-per-kumo))))
+
+(deftest vcu-matches
+  (doseq [m [{:p-active-m 27000 :t-in 55 :t-out 4 :cached 42}
+             {:p-active-m 27000 :t-in 10 :t-out 100 :cached 50}
+             {:p-active-m 3000 :t-in 0 :t-out 0 :cached 0}]]
+    (is (= (poi/uvcu-text m) (call 'uvcu-text (text m))) (str m)))
+  (let [m {:p-m 2000 :latent 9216 :steps 8 :cfg 1}]
+    (is (= (poi/uvcu-diffusion m) (call 'uvcu-diffusion (diff m))))))
+
+(deftest subsidy-schedule-matches
+  (doseq [h [1000000 1013000 1049999 1050000 1259999 1260000 1470000 9999999]]
+    (let [m {:height h :genesis 1013000 :next-halving 1050000}]
+      (is (= (poi/subsidy-at m) (call 'subsidy-at (at m))) (str "height " h)))))
+
+(deftest split-and-pools-match
+  (doseq [m [{:subsidy 807692307692 :height 1013000 :genesis 1013000}
+             {:subsidy 807692307692 :height 1223000 :genesis 1013000}]]
+    (is (= (poi/treasury-cut m) (call 'treasury-cut (split m))))
+    (is (= (poi/verification-cut m) (call 'verification-cut (split m))))
+    (is (= (poi/production m) (call 'production (split m)))))
+  (doseq [m [{:production 100000000000 :fees-uusd 2500000 :price-uusd 50000 :lambda-num 1 :lambda-den 1}
+             {:production 100 :fees-uusd 2500000 :price-uusd 50000 :lambda-num 1 :lambda-den 1}
+             {:production 100000000000 :fees-uusd 2500000 :price-uusd 0 :lambda-num 1 :lambda-den 1}]]
+    (is (= (poi/customer-pool m) (call 'customer-pool (cpool m))) (str m))
+    (is (= (poi/capacity-pool m) (call 'capacity-pool (cpool m))) (str m))))
+
+(deftest guards-match
+  (doseq [m [{:s-bp 5000 :c-bp 1000 :fee 100 :e 100}
+             {:s-bp 5300 :c-bp 1000 :fee 100 :e 100}]]
+    (is (= (poi/wash-unprofitable? m)
+           (truthy (call 'wash-unprofitable? (rec :poi/wash [:s-bp :c-bp :fee :e] m))))))
+  (doseq [now [243 244]]
+    (let [m {:settled 100 :now now}]
+      (is (= (poi/mature? m) (truthy (call 'mature? (rec :poi/mature [:settled :now] m)))))))
+  (doseq [p [0 1]]
+    (let [m {:uvcu 1001 :btc-proven p}]
+      (is (= (poi/season0-points m) (call 'season0-points (rec :poi/points [:uvcu :btc-proven] m))))))
+  (doseq [m [{:matched 3 :total 4 :min-num 3 :min-den 4}
+             {:matched 2 :total 4 :min-num 3 :min-den 4}
+             {:matched 0 :total 0 :min-num 3 :min-den 4}]]
+    (is (= (poi/verify-pass? m)
+           (truthy (call 'verify-pass? (rec :poi/verdict [:matched :total :min-num :min-den] m)))))))

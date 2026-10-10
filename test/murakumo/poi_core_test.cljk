@@ -42,7 +42,7 @@
                               :fees-uusd 2500000 :price-uusd 50000})]
     (is (= (:subsidy s) (+ (:treasury s) (:verification s) (:production s))) "split conserves")
     (is (= (:production s) (+ (:customer-pool s) (:capacity-pool s))) "pools conserve")
-    (is (= 5000000000 (:customer-pool s)) "$2.50 of fees at $0.05/KUMO caps the customer pool at 50 KUMO"))
+    (is (= 50000000 (:customer-pool s)) "$2.50 of fees at $0.05/KUMO caps the customer pool at 50 KUMO"))
   (testing "treasury share sunsets 210,000 blocks after genesis"
     (is (zero? (:treasury (poi/split-subsidy {:height 1223000 :genesis 1013000 :next-halving 1050000})))))
   (testing "no reference price, no customer pool: all production pays proven capacity"

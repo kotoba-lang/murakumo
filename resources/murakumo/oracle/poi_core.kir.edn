@@ -1,0 +1,716 @@
+{:format :kotoba.kir/v4,
+ :signature nil,
+ :functions
+ [{:name subsidy-total-base,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1995000000000000,
+   :param-types []}
+  {:name mga-base,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 105000000000000,
+   :param-types []}
+  {:name halving-interval,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 210000,
+   :param-types []}
+  {:name maturity-blocks,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 144,
+   :param-types []}
+  {:name base-per-kumo,
+   :params [],
+   :result :i64,
+   :effects #{},
+   :body 1000000,
+   :param-types []}
+  {:name uvcu-text,
+   :params [w],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [p
+     (record-get
+      [:record
+       :poi/text-work
+       [[:p-active-m :i64] [:t-in :i64] [:t-out :i64] [:cached :i64]]]
+      w
+      :p-active-m)
+     uncached
+     (-
+      (record-get
+       [:record
+        :poi/text-work
+        [[:p-active-m :i64] [:t-in :i64] [:t-out :i64] [:cached :i64]]]
+       w
+       :t-in)
+      (record-get
+       [:record
+        :poi/text-work
+        [[:p-active-m :i64] [:t-in :i64] [:t-out :i64] [:cached :i64]]]
+       w
+       :cached))
+     fresh
+     (if (< uncached 0) 0 uncached)
+     toks
+     (+
+      (record-get
+       [:record
+        :poi/text-work
+        [[:p-active-m :i64] [:t-in :i64] [:t-out :i64] [:cached :i64]]]
+       w
+       :t-out)
+      fresh)]
+    (quot (* (* 2 p) toks) 1000)),
+   :param-types [[:ref :poi/text-work]]}
+  {:name uvcu-diffusion,
+   :params [d],
+   :result :i64,
+   :effects #{},
+   :body
+   (quot
+    (*
+     (*
+      (*
+       (*
+        2
+        (record-get
+         [:record
+          :poi/diffusion-work
+          [[:p-m :i64] [:latent :i64] [:steps :i64] [:cfg :i64]]]
+         d
+         :p-m))
+       (record-get
+        [:record
+         :poi/diffusion-work
+         [[:p-m :i64] [:latent :i64] [:steps :i64] [:cfg :i64]]]
+        d
+        :latent))
+      (record-get
+       [:record
+        :poi/diffusion-work
+        [[:p-m :i64] [:latent :i64] [:steps :i64] [:cfg :i64]]]
+       d
+       :steps))
+     (record-get
+      [:record
+       :poi/diffusion-work
+       [[:p-m :i64] [:latent :i64] [:steps :i64] [:cfg :i64]]]
+      d
+      :cfg))
+    1000),
+   :param-types [[:ref :poi/diffusion-work]]}
+  {:name subsidy-r0,
+   :params [g],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [l0
+     (-
+      (record-get
+       [:record :poi/era0 [[:genesis :i64] [:next-halving :i64]]]
+       g
+       :next-halving)
+      (record-get
+       [:record :poi/era0 [[:genesis :i64] [:next-halving :i64]]]
+       g
+       :genesis))]
+    (if
+     (< l0 0)
+     0
+     (quot (subsidy-total-base) (+ l0 (halving-interval))))),
+   :param-types [[:ref :poi/era0]]}
+  {:name halve-step,
+   :params [h],
+   :result [:ref :poi/halve],
+   :effects #{},
+   :body
+   (let
+    [amount
+     (record-get
+      [:record
+       :poi/halve-step
+       [[:amount :i64] [:n :i64] [:k :i64] [:d :i64]]]
+      h
+      :amount)
+     n
+     (record-get
+      [:record
+       :poi/halve-step
+       [[:amount :i64] [:n :i64] [:k :i64] [:d :i64]]]
+      h
+      :n)
+     k
+     (record-get
+      [:record
+       :poi/halve-step
+       [[:amount :i64] [:n :i64] [:k :i64] [:d :i64]]]
+      h
+      :k)]
+    (if
+     (< n k)
+     (record-new
+      [:record :poi/halve [[:amount :i64] [:n :i64]]]
+      amount
+      n)
+     (record-new
+      [:record :poi/halve [[:amount :i64] [:n :i64]]]
+      (quot
+       amount
+       (record-get
+        [:record
+         :poi/halve-step
+         [[:amount :i64] [:n :i64] [:k :i64] [:d :i64]]]
+        h
+        :d))
+      (- n k)))),
+   :param-types [[:ref :poi/halve-step]]}
+  {:name halve-n,
+   :params [h],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [amount
+     (record-get
+      [:record :poi/halve [[:amount :i64] [:n :i64]]]
+      h
+      :amount)
+     n
+     (record-get [:record :poi/halve [[:amount :i64] [:n :i64]]] h :n)]
+    (if
+     (< n 1)
+     amount
+     (if
+      (< 52 n)
+      0
+      (let
+       [s32
+        (halve-step
+         (record-new
+          [:record
+           :poi/halve-step
+           [[:amount :i64] [:n :i64] [:k :i64] [:d :i64]]]
+          amount
+          n
+          32
+          4294967296))
+        s16
+        (halve-step
+         (record-new
+          [:record
+           :poi/halve-step
+           [[:amount :i64] [:n :i64] [:k :i64] [:d :i64]]]
+          (record-get
+           [:record :poi/halve [[:amount :i64] [:n :i64]]]
+           s32
+           :amount)
+          (record-get
+           [:record :poi/halve [[:amount :i64] [:n :i64]]]
+           s32
+           :n)
+          16
+          65536))
+        s8
+        (halve-step
+         (record-new
+          [:record
+           :poi/halve-step
+           [[:amount :i64] [:n :i64] [:k :i64] [:d :i64]]]
+          (record-get
+           [:record :poi/halve [[:amount :i64] [:n :i64]]]
+           s16
+           :amount)
+          (record-get
+           [:record :poi/halve [[:amount :i64] [:n :i64]]]
+           s16
+           :n)
+          8
+          256))
+        s4
+        (halve-step
+         (record-new
+          [:record
+           :poi/halve-step
+           [[:amount :i64] [:n :i64] [:k :i64] [:d :i64]]]
+          (record-get
+           [:record :poi/halve [[:amount :i64] [:n :i64]]]
+           s8
+           :amount)
+          (record-get
+           [:record :poi/halve [[:amount :i64] [:n :i64]]]
+           s8
+           :n)
+          4
+          16))
+        s2
+        (halve-step
+         (record-new
+          [:record
+           :poi/halve-step
+           [[:amount :i64] [:n :i64] [:k :i64] [:d :i64]]]
+          (record-get
+           [:record :poi/halve [[:amount :i64] [:n :i64]]]
+           s4
+           :amount)
+          (record-get
+           [:record :poi/halve [[:amount :i64] [:n :i64]]]
+           s4
+           :n)
+          2
+          4))
+        s1
+        (halve-step
+         (record-new
+          [:record
+           :poi/halve-step
+           [[:amount :i64] [:n :i64] [:k :i64] [:d :i64]]]
+          (record-get
+           [:record :poi/halve [[:amount :i64] [:n :i64]]]
+           s2
+           :amount)
+          (record-get
+           [:record :poi/halve [[:amount :i64] [:n :i64]]]
+           s2
+           :n)
+          1
+          2))]
+       (record-get
+        [:record :poi/halve [[:amount :i64] [:n :i64]]]
+        s1
+        :amount))))),
+   :param-types [[:ref :poi/halve]]}
+  {:name subsidy-at,
+   :params [s],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [height
+     (record-get
+      [:record
+       :poi/at
+       [[:height :i64] [:genesis :i64] [:next-halving :i64]]]
+      s
+      :height)
+     genesis
+     (record-get
+      [:record
+       :poi/at
+       [[:height :i64] [:genesis :i64] [:next-halving :i64]]]
+      s
+      :genesis)
+     next-h
+     (record-get
+      [:record
+       :poi/at
+       [[:height :i64] [:genesis :i64] [:next-halving :i64]]]
+      s
+      :next-halving)
+     r0
+     (subsidy-r0
+      (record-new
+       [:record :poi/era0 [[:genesis :i64] [:next-halving :i64]]]
+       genesis
+       next-h))]
+    (if
+     (< height genesis)
+     0
+     (if
+      (< height next-h)
+      r0
+      (halve-n
+       (record-new
+        [:record :poi/halve [[:amount :i64] [:n :i64]]]
+        r0
+        (+ 1 (quot (- height next-h) (halving-interval)))))))),
+   :param-types [[:ref :poi/at]]}
+  {:name treasury-cut,
+   :params [t],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (<
+     (-
+      (record-get
+       [:record
+        :poi/split-in
+        [[:subsidy :i64] [:height :i64] [:genesis :i64]]]
+       t
+       :height)
+      (record-get
+       [:record
+        :poi/split-in
+        [[:subsidy :i64] [:height :i64] [:genesis :i64]]]
+       t
+       :genesis))
+     (halving-interval))
+    (quot
+     (record-get
+      [:record
+       :poi/split-in
+       [[:subsidy :i64] [:height :i64] [:genesis :i64]]]
+      t
+      :subsidy)
+     10)
+    0),
+   :param-types [[:ref :poi/split-in]]}
+  {:name verification-cut,
+   :params [t],
+   :result :i64,
+   :effects #{},
+   :body
+   (quot
+    (*
+     (record-get
+      [:record
+       :poi/split-in
+       [[:subsidy :i64] [:height :i64] [:genesis :i64]]]
+      t
+      :subsidy)
+     5)
+    100),
+   :param-types [[:ref :poi/split-in]]}
+  {:name production,
+   :params [t],
+   :result :i64,
+   :effects #{},
+   :body
+   (-
+    (record-get
+     [:record
+      :poi/split-in
+      [[:subsidy :i64] [:height :i64] [:genesis :i64]]]
+     t
+     :subsidy)
+    (+ (treasury-cut t) (verification-cut t))),
+   :param-types [[:ref :poi/split-in]]}
+  {:name customer-pool,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (let
+    [prod
+     (record-get
+      [:record
+       :poi/cpool
+       [[:production :i64]
+        [:fees-uusd :i64]
+        [:price-uusd :i64]
+        [:lambda-num :i64]
+        [:lambda-den :i64]]]
+      c
+      :production)
+     price
+     (record-get
+      [:record
+       :poi/cpool
+       [[:production :i64]
+        [:fees-uusd :i64]
+        [:price-uusd :i64]
+        [:lambda-num :i64]
+        [:lambda-den :i64]]]
+      c
+      :price-uusd)
+     den
+     (record-get
+      [:record
+       :poi/cpool
+       [[:production :i64]
+        [:fees-uusd :i64]
+        [:price-uusd :i64]
+        [:lambda-num :i64]
+        [:lambda-den :i64]]]
+      c
+      :lambda-den)]
+    (if
+     (< price 1)
+     0
+     (if
+      (< den 1)
+      0
+      (let
+       [cap
+        (quot
+         (*
+          (*
+           (record-get
+            [:record
+             :poi/cpool
+             [[:production :i64]
+              [:fees-uusd :i64]
+              [:price-uusd :i64]
+              [:lambda-num :i64]
+              [:lambda-den :i64]]]
+            c
+            :fees-uusd)
+           (record-get
+            [:record
+             :poi/cpool
+             [[:production :i64]
+              [:fees-uusd :i64]
+              [:price-uusd :i64]
+              [:lambda-num :i64]
+              [:lambda-den :i64]]]
+            c
+            :lambda-num))
+          (base-per-kumo))
+         (* price den))]
+       (if (< cap prod) cap prod))))),
+   :param-types [[:ref :poi/cpool]]}
+  {:name capacity-pool,
+   :params [c],
+   :result :i64,
+   :effects #{},
+   :body
+   (-
+    (record-get
+     [:record
+      :poi/cpool
+      [[:production :i64]
+       [:fees-uusd :i64]
+       [:price-uusd :i64]
+       [:lambda-num :i64]
+       [:lambda-den :i64]]]
+     c
+     :production)
+    (customer-pool c)),
+   :param-types [[:ref :poi/cpool]]}
+  {:name wash-unprofitable?,
+   :params [w],
+   :result :bool,
+   :effects #{},
+   :body
+   (let
+    [s
+     (record-get
+      [:record
+       :poi/wash
+       [[:s-bp :i64] [:c-bp :i64] [:fee :i64] [:e :i64]]]
+      w
+      :s-bp)
+     c
+     (record-get
+      [:record
+       :poi/wash
+       [[:s-bp :i64] [:c-bp :i64] [:fee :i64] [:e :i64]]]
+      w
+      :c-bp)
+     f
+     (record-get
+      [:record
+       :poi/wash
+       [[:s-bp :i64] [:c-bp :i64] [:fee :i64] [:e :i64]]]
+      w
+      :fee)
+     e
+     (record-get
+      [:record
+       :poi/wash
+       [[:s-bp :i64] [:c-bp :i64] [:fee :i64] [:e :i64]]]
+      w
+      :e)
+     lhs
+     (* s (+ (* (- 10000 c) f) (* 10000 e)))
+     rhs
+     (* (* 10000 10000) f)]
+    (if (< lhs rhs) true false)),
+   :param-types [[:ref :poi/wash]]}
+  {:name mature?,
+   :params [m],
+   :result :bool,
+   :effects #{},
+   :body
+   (if
+    (<
+     (-
+      (record-get
+       [:record :poi/mature [[:settled :i64] [:now :i64]]]
+       m
+       :now)
+      (record-get
+       [:record :poi/mature [[:settled :i64] [:now :i64]]]
+       m
+       :settled))
+     (maturity-blocks))
+    false
+    true),
+   :param-types [[:ref :poi/mature]]}
+  {:name season0-points,
+   :params [p],
+   :result :i64,
+   :effects #{},
+   :body
+   (if
+    (<
+     (record-get
+      [:record :poi/points [[:uvcu :i64] [:btc-proven :i64]]]
+      p
+      :btc-proven)
+     1)
+    (record-get
+     [:record :poi/points [[:uvcu :i64] [:btc-proven :i64]]]
+     p
+     :uvcu)
+    (quot
+     (*
+      (record-get
+       [:record :poi/points [[:uvcu :i64] [:btc-proven :i64]]]
+       p
+       :uvcu)
+      3)
+     2)),
+   :param-types [[:ref :poi/points]]}
+  {:name verify-pass?,
+   :params [v],
+   :result :bool,
+   :effects #{},
+   :body
+   (let
+    [total
+     (record-get
+      [:record
+       :poi/verdict
+       [[:matched :i64] [:total :i64] [:min-num :i64] [:min-den :i64]]]
+      v
+      :total)]
+    (if
+     (< total 1)
+     false
+     (if
+      (<
+       (*
+        (record-get
+         [:record
+          :poi/verdict
+          [[:matched :i64]
+           [:total :i64]
+           [:min-num :i64]
+           [:min-den :i64]]]
+         v
+         :matched)
+        (record-get
+         [:record
+          :poi/verdict
+          [[:matched :i64]
+           [:total :i64]
+           [:min-num :i64]
+           [:min-den :i64]]]
+         v
+         :min-den))
+       (*
+        total
+        (record-get
+         [:record
+          :poi/verdict
+          [[:matched :i64]
+           [:total :i64]
+           [:min-num :i64]
+           [:min-den :i64]]]
+         v
+         :min-num)))
+      false
+      true))),
+   :param-types [[:ref :poi/verdict]]}],
+ :oracle-value nil,
+ :schema-identities
+ {:poi/at
+  "a8f124c6551944f5965f8a43586f73fca447b4f3e2f34e3d83cbfd548ca7f35e",
+  :poi/cpool
+  "31c66bb38b93d1c71d38ee54999359f6125d34bfbd90d61162ed38929f08e392",
+  :poi/diffusion-work
+  "400e91b59a303b8b7dbf07cbc20cf399d5164fb9137cba4c95a1ee057f8f83cf",
+  :poi/era0
+  "211d5028058bd85fc35a798d0e3a5b4188189d3d6a82e419525048569686d59a",
+  :poi/halve
+  "217897bec543a579381c4a83bf5a827462d795ad65da69db2ac6a184a2d87517",
+  :poi/halve-step
+  "cab1091ce84d188266106e9fd05e1e26dd8279d8e78394089761aed2786329f3",
+  :poi/mature
+  "f640482af63f2c077deef27dd72687755194d21370615855b4797c6ff594f8ff",
+  :poi/points
+  "0154a2f82ac91a526c11bcb39c60f8d83ecd79b9c90babfccdd20009749fa511",
+  :poi/split-in
+  "486806c88feb1cadbad40abd39a68067936e4d6c009410af2aa4c0b332b1ddff",
+  :poi/text-work
+  "ac859bd32f4b1c564956caa29121ef1623509e7e8590010d509a846b21caea87",
+  :poi/verdict
+  "8c3fc71bcb6344f67c6405672394def0fd98d9fdd94a8d4d3dbf56b99ba6defd",
+  :poi/wash
+  "14bb441ab37261cb78953ce56e5f4a256de7a6217670b0fcb84a7ff78d1f3299"},
+ :exports
+ [subsidy-total-base
+  mga-base
+  halving-interval
+  maturity-blocks
+  base-per-kumo
+  uvcu-text
+  uvcu-diffusion
+  subsidy-r0
+  halve-step
+  halve-n
+  subsidy-at
+  treasury-cut
+  verification-cut
+  production
+  customer-pool
+  capacity-pool
+  wash-unprofitable?
+  mature?
+  season0-points
+  verify-pass?],
+ :schemas
+ {:poi/wash
+  [:record
+   :poi/wash
+   [[:s-bp :i64] [:c-bp :i64] [:fee :i64] [:e :i64]]],
+  :poi/mature [:record :poi/mature [[:settled :i64] [:now :i64]]],
+  :poi/split-in
+  [:record
+   :poi/split-in
+   [[:subsidy :i64] [:height :i64] [:genesis :i64]]],
+  :poi/era0 [:record :poi/era0 [[:genesis :i64] [:next-halving :i64]]],
+  :poi/text-work
+  [:record
+   :poi/text-work
+   [[:p-active-m :i64] [:t-in :i64] [:t-out :i64] [:cached :i64]]],
+  :poi/points [:record :poi/points [[:uvcu :i64] [:btc-proven :i64]]],
+  :poi/diffusion-work
+  [:record
+   :poi/diffusion-work
+   [[:p-m :i64] [:latent :i64] [:steps :i64] [:cfg :i64]]],
+  :poi/cpool
+  [:record
+   :poi/cpool
+   [[:production :i64]
+    [:fees-uusd :i64]
+    [:price-uusd :i64]
+    [:lambda-num :i64]
+    [:lambda-den :i64]]],
+  :poi/halve [:record :poi/halve [[:amount :i64] [:n :i64]]],
+  :poi/at
+  [:record
+   :poi/at
+   [[:height :i64] [:genesis :i64] [:next-halving :i64]]],
+  :poi/verdict
+  [:record
+   :poi/verdict
+   [[:matched :i64] [:total :i64] [:min-num :i64] [:min-den :i64]]],
+  :poi/halve-step
+  [:record
+   :poi/halve-step
+   [[:amount :i64] [:n :i64] [:k :i64] [:d :i64]]]},
+ :effects #{},
+ :blocks [],
+ :entry nil}

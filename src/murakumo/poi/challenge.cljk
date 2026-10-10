@@ -143,3 +143,58 @@
                                              #(conj acc %)))))
                          (js/Promise.resolve [])
                          live))))))
+
+;; ------------------------------------------------- customer job receipts
+
+(def resident-port 7420)
+
+(defn- get-json [url timeout-ms]
+  (let [ctl (js/AbortController.)
+        t (js/setTimeout #(.abort ctl) timeout-ms)]
+    (-> (js/fetch url #js {:signal (.-signal ctl)})
+        (.then (fn [r] (if (.-ok r) (.then (.json r) #(js->clj % :keywordize-keys true)) nil)))
+        (.catch (constantly nil))
+        (.finally #(js/clearTimeout t)))))
+
+(defn- resident-url [head]
+  (let [host (second (re-matches #"https?://([^:/]+).*" (:url head)))]
+    (str "http://" host ":" resident-port)))
+
+(defn collect!
+  "Pull node-signed customer receipts from every head's resident and record
+  each new one, wrapped and countersigned by the coordinator. A receipt is
+  taken only if it verifies against the did it names and that did is the one
+  first seen for the node (pinned in the ledger), so a node cannot sign for
+  another. Resolves {node new-count}."
+  [dir key heads]
+  (let [pins (ledger/node-dids dir)
+        seen (ledger/node-receipt-digests dir)]
+    (reduce
+     (fn [p head]
+       (.then p
+              (fn [acc]
+                (let [since (ledger/last-node-receipt-at dir (:name head))]
+                  (.then (get-json (str (resident-url head) "/poi/receipts?since=" since) 10000)
+                         (fn [resp]
+                           (let [did (:did resp)
+                                 pinned (get pins (:name head))
+                                 docs (when (and did (or (nil? pinned) (= pinned did)))
+                                        (filter #(and (ledger/signed? %)
+                                                      (= did (get-in % [:payload :issuer]))
+                                                      (not (seen (ledger/doc-digest %))))
+                                                (:receipts resp)))]
+                             (doseq [d docs]
+                               (let [{:keys [job model t-in t-out cached at]} (:payload d)]
+                                 (ledger/append-receipt!
+                                  dir key
+                                  {:type "receipt" :kind "customer" :job job :node (:name head) :did did
+                                   :model model :t-in t-in :t-out t-out :cached cached :node-at at
+                                   :uvcu (poi/uvcu-text {:p-active-m (get default-p-active-m model 0)
+                                                         :t-in (or t-in 0) :t-out (or t-out 0) :cached (or cached 0)})
+                                   :node-doc d})))
+                             (assoc acc (:name head) (cond (nil? resp) "unreachable"
+                                                           (and pinned (not= pinned did)) "did mismatch"
+                                                           :else (count docs))))))))))
+     (js/Promise.resolve {})
+     heads)))
+

@@ -1,0 +1,162 @@
+(ns poi-core
+  (:schemas {:poi/text-work [:record :poi/text-work
+                             [[:p-active-m :i64] [:t-in :i64] [:t-out :i64] [:cached :i64]]]
+             :poi/diffusion-work [:record :poi/diffusion-work
+                                  [[:p-m :i64] [:latent :i64] [:steps :i64] [:cfg :i64]]]
+             :poi/era0 [:record :poi/era0
+                        [[:genesis :i64] [:next-halving :i64]]]
+             :poi/halve [:record :poi/halve
+                         [[:amount :i64] [:n :i64]]]
+             :poi/halve-step [:record :poi/halve-step
+                              [[:amount :i64] [:n :i64] [:k :i64] [:d :i64]]]
+             :poi/at [:record :poi/at
+                      [[:height :i64] [:genesis :i64] [:next-halving :i64]]]
+             :poi/split-in [:record :poi/split-in
+                            [[:subsidy :i64] [:height :i64] [:genesis :i64]]]
+             :poi/cpool [:record :poi/cpool
+                         [[:production :i64] [:fees-uusd :i64] [:price-uusd :i64]
+                          [:lambda-num :i64] [:lambda-den :i64]]]
+             :poi/wash [:record :poi/wash
+                        [[:s-bp :i64] [:c-bp :i64] [:fee :i64] [:e :i64]]]
+             :poi/mature [:record :poi/mature
+                          [[:settled :i64] [:now :i64]]]
+             :poi/points [:record :poi/points
+                          [[:uvcu :i64] [:btc-proven :i64]]]
+             :poi/verdict [:record :poi/verdict
+                           [[:matched :i64] [:total :i64] [:min-num :i64] [:min-den :i64]]]})
+  (:export [subsidy-total-base mga-base halving-interval maturity-blocks base-per-kumo
+            uvcu-text uvcu-diffusion
+            subsidy-r0 halve-step halve-n subsidy-at
+            treasury-cut verification-cut production customer-pool capacity-pool
+            wash-unprofitable? mature? season0-points verify-pass?]))
+
+;; ADR-261010b / 261010c / 261010d — Proof of Inference integer core.
+;; Units: VCU in micro-VCU (1 uVCU = 1 GFLOP of verified forward compute);
+;; KUMO in base units (1 KUMO = 1e6 base, so the whole 2.1e15 supply stays
+;; exact below 2^53 on every host). Era 0 ends at the first Bitcoin
+;; halving height after genesis; later eras are 210,000 Bitcoin blocks each.
+;; Parity: test/murakumo/poi_kotoba_parity_test.cljk (host == shipped KIR)
+
+(defn subsidy-total-base [] :i64 1995000000000000)
+(defn mga-base [] :i64 105000000000000)
+(defn halving-interval [] :i64 210000)
+(defn maturity-blocks [] :i64 144)
+(defn base-per-kumo [] :i64 1000000)
+
+(defn uvcu-text [w [:ref :poi/text-work]] :i64
+  ;; 2 · P_active · (T_out + uncached T_in), in GFLOP. Cached prefix is free.
+  (let [p (record-get w :p-active-m)
+        uncached (- (record-get w :t-in) (record-get w :cached))
+        fresh (if (< uncached 0) 0 uncached)
+        toks (+ (record-get w :t-out) fresh)]
+    (quot (* (* 2 p) toks) 1000)))
+
+(defn uvcu-diffusion [d [:ref :poi/diffusion-work]] :i64
+  ;; 2 · P_dit · N_latent · steps · cfg, in GFLOP.
+  (quot (* (* (* (* 2 (record-get d :p-m)) (record-get d :latent))
+              (record-get d :steps))
+           (record-get d :cfg))
+        1000))
+
+(defn subsidy-r0 [g [:ref :poi/era0]] :i64
+  ;; R0 = 1.995e9 KUMO / (L0 + 210,000), L0 = next-halving − genesis.
+  (let [l0 (- (record-get g :next-halving) (record-get g :genesis))]
+    (if (< l0 0)
+      0
+      (quot (subsidy-total-base) (+ l0 (halving-interval))))))
+
+(defn halve-step [h [:ref :poi/halve-step]] [:ref :poi/halve]
+  ;; Divide by d = 2^k when at least k halvings remain.
+  (let [amount (record-get h :amount)
+        n (record-get h :n)
+        k (record-get h :k)]
+    (if (< n k)
+      (record-new [:ref :poi/halve] amount n)
+      (record-new [:ref :poi/halve] (quot amount (record-get h :d)) (- n k)))))
+
+(defn halve-n [h [:ref :poi/halve]] :i64
+  ;; amount / 2^n, floored, without recursion: 32 + 16 + 8 + 4 + 2 + 1 covers
+  ;; every n below 64, and any amount below 2^53 is 0 after 53 halvings.
+  ;; Floor division composes, so this equals n successive halvings.
+  (let [amount (record-get h :amount)
+        n (record-get h :n)]
+    (if (< n 1)
+      amount
+      (if (< 52 n)
+        0
+        (let [s32 (halve-step (record-new [:ref :poi/halve-step] amount n 32 4294967296))
+              s16 (halve-step (record-new [:ref :poi/halve-step] (record-get s32 :amount) (record-get s32 :n) 16 65536))
+              s8 (halve-step (record-new [:ref :poi/halve-step] (record-get s16 :amount) (record-get s16 :n) 8 256))
+              s4 (halve-step (record-new [:ref :poi/halve-step] (record-get s8 :amount) (record-get s8 :n) 4 16))
+              s2 (halve-step (record-new [:ref :poi/halve-step] (record-get s4 :amount) (record-get s4 :n) 2 4))
+              s1 (halve-step (record-new [:ref :poi/halve-step] (record-get s2 :amount) (record-get s2 :n) 1 2))]
+          (record-get s1 :amount))))))
+
+(defn subsidy-at [s [:ref :poi/at]] :i64
+  (let [height (record-get s :height)
+        genesis (record-get s :genesis)
+        next-h (record-get s :next-halving)
+        r0 (subsidy-r0 (record-new [:ref :poi/era0] genesis next-h))]
+    (if (< height genesis)
+      0
+      (if (< height next-h)
+        r0
+        (halve-n (record-new [:ref :poi/halve] r0
+                             (+ 1 (quot (- height next-h) (halving-interval)))))))))
+
+(defn treasury-cut [t [:ref :poi/split-in]] :i64
+  ;; 10% for the first 210,000 blocks after genesis, then 0.
+  (if (< (- (record-get t :height) (record-get t :genesis)) (halving-interval))
+    (quot (record-get t :subsidy) 10)
+    0))
+
+(defn verification-cut [t [:ref :poi/split-in]] :i64
+  (quot (* (record-get t :subsidy) 5) 100))
+
+(defn production [t [:ref :poi/split-in]] :i64
+  (- (record-get t :subsidy) (+ (treasury-cut t) (verification-cut t))))
+
+(defn customer-pool [c [:ref :poi/cpool]] :i64
+  ;; min(production, λ · fees ÷ price_ref), fees and price in micro-USD.
+  (let [prod (record-get c :production)
+        price (record-get c :price-uusd)
+        den (record-get c :lambda-den)]
+    (if (< price 1)
+      0
+      (if (< den 1)
+        0
+        (let [cap (quot (* (* (record-get c :fees-uusd) (record-get c :lambda-num)) (base-per-kumo))
+                        (* price den))]
+          (if (< cap prod) cap prod))))))
+
+(defn capacity-pool [c [:ref :poi/cpool]] :i64
+  (- (record-get c :production) (customer-pool c)))
+
+(defn wash-unprofitable? [w [:ref :poi/wash]] :bool
+  ;; s · ((1 − c) · F + e) < F, with s and c in basis points.
+  (let [s (record-get w :s-bp)
+        c (record-get w :c-bp)
+        f (record-get w :fee)
+        e (record-get w :e)
+        lhs (* s (+ (* (- 10000 c) f) (* 10000 e)))
+        rhs (* (* 10000 10000) f)]
+    (if (< lhs rhs) true false)))
+
+(defn mature? [m [:ref :poi/mature]] :bool
+  (if (< (- (record-get m :now) (record-get m :settled)) (maturity-blocks)) false true))
+
+(defn season0-points [p [:ref :poi/points]] :i64
+  ;; Home miner bridge (ADR-261010d §4): 1.5× for proven Bitcoin miners.
+  (if (< (record-get p :btc-proven) 1)
+    (record-get p :uvcu)
+    (quot (* (record-get p :uvcu) 3) 2)))
+
+(defn verify-pass? [v [:ref :poi/verdict]] :bool
+  ;; matched / total ≥ min-num / min-den, and at least one token compared.
+  (let [total (record-get v :total)]
+    (if (< total 1)
+      false
+      (if (< (* (record-get v :matched) (record-get v :min-den))
+             (* total (record-get v :min-num)))
+        false
+        true))))

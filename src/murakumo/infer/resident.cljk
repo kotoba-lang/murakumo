@@ -6,6 +6,7 @@
             [murakumo.infer.replicated-topology :as topo]
             [murakumo.infer.keepalive :as ka]
             [murakumo.infer.observation :as observation]
+            [murakumo.infer.poi-receipt :as poi-receipt]
             [murakumo.infer.converge :as converge]
             [murakumo.infer.lease :as lease]
             [murakumo.infer.rollout :as rollout]
@@ -259,6 +260,12 @@
                                            {:extra-fn #(cond-> {}
                                                          @converger (assoc :converge ((:status @converger)))
                                                          @roller (assoc :rollout ((:status @roller))))}))
+        ;; ADR-261010: node-signed usage receipts for completed text jobs, with the
+        ;; observation key (same did); off with {:poi-receipts? false}
+        poi-file (str file ".poi-receipts.jsonl")
+        poi-key (when-not (false? (:poi-receipts? config))
+                  (try (observation/node-key! (or (:node-key-file config) (str file ".node-key")))
+                       (catch :default _ nil)))
         ;; P3a (ADR-2610071730): plan this node's share every interval; act only
         ;; when the signed intent says enforce for this node (see converge ns)
         ;; P3b: quorum leases on the same signed voters as the jobs (policies.job-voters)
@@ -385,13 +392,26 @@
                                                              #js {"content-type" (or (.get (.-headers r) "content-type") "application/json")
                                                                   "x-murakumo-job-id" id
                                                                   "x-murakumo-node" (:node config)})
-                                                 (let [reader (.getReader (.-body r))]
+                                                 (let [reader (.getReader (.-body r))
+                                                       seen (atom "")
+                                                       record? (and poi-key (= "text" (:kind lane)))]
                                                    (letfn [(pump []
                                                              (-> (.read reader)
                                                                  (.then (fn [chunk]
                                                                           (if (.-done chunk)
-                                                                            (do (settle! (if (.-ok r) :completed :failed)) (.end res))
-                                                                            (do (.write res (.from js/Buffer (.-value chunk))) (pump)))))))]
+                                                                            (do (settle! (if (.-ok r) :completed :failed))
+                                                                                (.end res)
+                                                                                (when (and record? (.-ok r))
+                                                                                  (when-let [u (poi-receipt/usage-of @seen)]
+                                                                                    (poi-receipt/append! poi-file poi-key
+                                                                                                         (poi-receipt/receipt {:node (:node config) :did (:did poi-key)
+                                                                                                                               :job id :lane lane-id :model (:model body)
+                                                                                                                               :at (js/Date.now)}
+                                                                                                                              u)))))
+                                                                            (let [b (.from js/Buffer (.-value chunk))]
+                                                                              (when record? (swap! seen poi-receipt/tail (.toString b "utf8")))
+                                                                              (.write res b)
+                                                                              (pump)))))))]
                                                      (pump)))))
                                         (.catch (fn [_]
                                                   (swap! lanes assoc-in [lane-id :ready] false)
@@ -415,6 +435,13 @@
                                   (and observations (= "GET" (.-method req)) (= "/observation" (.-url req))
                                        (or private-bind? (authorized? req token)))
                                   (json! res 200 (or ((:own observations)) {}))
+                                  ;; ADR-261010: node-signed usage receipts (no prompt, no output),
+                                  ;; for the Proof of Inference coordinator
+                                  (and poi-key (= "GET" (.-method req)) (str/starts-with? (.-url req) "/poi/receipts")
+                                       (or private-bind? (authorized? req token)))
+                                  (let [at (or (some->> (re-find #"[?&]since=(\d+)" (.-url req)) second (js/parseInt)) 0)]
+                                    (json! res 200 {:node (:node config) :did (:did poi-key)
+                                                    :receipts (poi-receipt/since poi-file at)}))
                                   ;; P5a: release bytes for peers (public code, sha256-addressed)
                                   (and (= "GET" (.-method req)) (str/starts-with? (.-url req) "/release/")
                                        (or private-bind? (authorized? req token)))
