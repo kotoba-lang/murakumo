@@ -146,7 +146,10 @@
 
 ;; ------------------------------------------------- customer job receipts
 
-(def resident-port 8796)
+(def default-resident-port
+  "The resident's port (resident.example.json), used only for a head the
+  topology does not name."
+  8796)
 
 (defn- get-json [url timeout-ms]
   (let [ctl (js/AbortController.)
@@ -156,9 +159,23 @@
         (.catch (constantly nil))
         (.finally #(js/clearTimeout t)))))
 
-(defn- resident-url [head]
-  (let [host (second (re-matches #"https?://([^:/]+).*" (:url head)))]
-    (str "http://" host ":" resident-port)))
+(defn- url-host [u] (second (re-matches #"https?://([^:/]+).*" (str u))))
+
+(defn topology-residents
+  "{host {:name node :url resident-url}} for the enabled nodes of a parsed
+  fleet topology (string keys, as in deploy/fleet-topology.json)."
+  [topology]
+  (into {} (for [n (get topology "nodes")
+                 :let [u (get n "url") host (url-host u)]
+                 :when (and host (not (false? (get n "enabled"))))]
+             [host {:name (get n "node") :url (str/replace u #"/+$" "")}])))
+
+(defn resident-url
+  "Where a head's resident serves /poi/receipts: the URL the topology gives for
+  its node (:resident-url), else the head's host on the default resident port."
+  [head]
+  (or (some-> (:resident-url head) (str/replace #"/+$" ""))
+      (str "http://" (url-host (:url head)) ":" default-resident-port)))
 
 (defn collect!
   "Pull node-signed customer receipts from every head's resident and record

@@ -11,8 +11,11 @@
 ;; Options: --dir DIR (default ~/.local/share/murakumo/poi)
 ;;          --heads ip:port,...  (default: the Mishima router's --heads, loopback dropped)
 ;;          --proven node,...    nodes with a Bitcoin hashrate proof (1.5× Season 0 points)
+;;          --topology FILE      resident URLs per node (default deploy/fleet-topology.json)
 ;;
-;; Heads are named from `tailscale status --json`. The Bitcoin tip comes from
+;; Receipts are collected from the resident URL the topology gives for a head's
+;; node; a head it does not name falls back to its host on port 8796.
+;; Heads are named from `tailscale status --json`, else from the topology. The Bitcoin tip comes from
 ;; mempool.space. Jobs are sequential and short (16 tokens) so a one-slot head
 ;; never queues more than one protocol job.
 (ns poi
@@ -23,6 +26,7 @@
             ["node:fs" :as fs] ["node:child_process" :as cp]))
 
 (def router-unit "deploy/systemd/murakumo-mishima-fleet-router.service")
+(def topology-file "deploy/fleet-topology.json")
 
 (defn- opt [args k]
   (second (drop-while #(not= % k) args)))
@@ -41,11 +45,18 @@
                  [ip (get peer "HostName")])))
     (catch :default _ {})))
 
+(defn topology-residents [file]
+  (try (challenge/topology-residents (js->clj (js/JSON.parse (.readFileSync fs file "utf8"))))
+       (catch :default _ {})))
+
 (defn heads [args]
   (let [names (tailnet-names)
+        residents (topology-residents (or (opt args "--topology") topology-file))
         addrs (if-let [h (opt args "--heads")] (str/split h #",") (router-heads))]
-    (mapv (fn [a] (let [ip (first (str/split a #":"))]
-                    {:name (get names ip ip) :url (str "http://" a)}))
+    (mapv (fn [a] (let [ip (first (str/split a #":"))
+                        r (get residents ip)]
+                    (cond-> {:name (get names ip (or (:name r) ip)) :url (str "http://" a)}
+                      r (assoc :resident-url (:url r)))))
           addrs)))
 
 (defn btc-tip []
@@ -102,7 +113,7 @@
                  (println "heads" (str/join ", " (map :name hs)))
                  (println "unsealed documents" (count (ledger/unsealed dir)))
                  (println "blocks" (count bs) "last height" (some-> (last bs) :payload :height)))
-      (do (println "usage: kbb scripts/poi.cljk round|collect|seal|run [--rounds N]|points|status [--dir D] [--heads ip:port,...] [--proven a,b]")
+      (do (println "usage: kbb scripts/poi.cljk round|collect|seal|run [--rounds N]|points|status [--dir D] [--heads ip:port,...] [--topology F] [--proven a,b]")
           (js/process.exit 2)))))
 
 (apply -main *command-line-args*)
