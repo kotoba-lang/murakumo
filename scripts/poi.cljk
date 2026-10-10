@@ -63,12 +63,15 @@
 (defn- seal! [dir key]
   (.then (btc-tip)
          (fn [tip]
+           (if (<= (:btc-height tip) (or (some-> (last (ledger/blocks dir)) :payload :height) 0))
+             (println (str "no new Bitcoin block since the last seal (height " (:btc-height tip)
+                           "); " (count (ledger/unsealed dir)) " documents carry over to the next block"))
            (let [b (:payload (ledger/seal! dir key tip))]
              (println (str "sealed block at Bitcoin height " (:height b)
                            " (" (:receipts b) " receipts, " (:verdicts b) " verdicts) root " (subs (:root b) 0 16) "…"))
              (let [next-halving (poi/next-bitcoin-halving (:height b))]
                (println (str "next Bitcoin and KUMO halving: block " next-halving
-                             " (" (- next-halving (:height b)) " blocks away)")))))))
+                             " (" (- next-halving (:height b)) " blocks away)"))))))))
 
 (defn- points [dir args]
   (let [proven (set (some-> (opt args "--proven") (str/split #",")))
