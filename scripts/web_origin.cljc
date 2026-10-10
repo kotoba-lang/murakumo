@@ -8,9 +8,13 @@
 ;; This process holds the queue and the per-subject quota on the fleet, and runs
 ;; one job at a time on the nodes in origin.edn through `web_node.cljs`.
 ;;
-;; Listens on 127.0.0.1 only. State under $MURAKUMO_WEB_ORIGIN_HOME:
+;; Listens on 127.0.0.1 unless origin.edn sets :host. The comfyui-gad Tunnel has
+;; connectors on more than one LAN host, so the Workers VPC service must name gad's
+;; LAN address (as the other VPC services do), not 127.0.0.1: measured 2026-10-11,
+;; 127.0.0.1 answered 6 of 20 requests. Every request still needs the origin bearer.
+;; State under $MURAKUMO_WEB_ORIGIN_HOME:
 ;;   origin-token   the shared secret with the Worker (0600, refused otherwise)
-;;   origin.edn     {:port 8095 :nodes [...] :quota {...}}  (operator config)
+;;   origin.edn     {:host "127.0.0.1" :port 8095 :nodes [...] :quota {...}}  (operator config)
 ;;   jobs/<id>.edn  one record per job      quota.edn  today's per-subject use
 ;;
 ;; A node runs public jobs only when its entry says :public-egress? true — the
@@ -266,8 +270,10 @@
     (doseq [r recs] (let [r2 (o/recover r now)] (when (not= r r2) (save! r2))))
     (reset! queue (vec (keep #(when (= :queued (:status %)) (:id %)) recs))))
   (let [port (or (:port (config)) 8095)
+        host (let [h (:host (config))]
+               (if (and (string? h) (re-matches #"[0-9]{1,3}(\.[0-9]{1,3}){3}" h)) h "127.0.0.1"))
         server (.createServer http handler)]
-    (.listen server port "127.0.0.1" (fn [] (js/console.log (str "web-origin listening on 127.0.0.1:" port))))
+    (.listen server port host (fn [] (js/console.log (str "web-origin listening on " host ":" port))))
     (pump!)))
 
 (when-not (.. js/process -env -WEB_ORIGIN_NO_MAIN) (main))
