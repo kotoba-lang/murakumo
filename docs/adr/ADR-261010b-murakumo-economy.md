@@ -8,6 +8,16 @@
   `memory-time-weight`, `settle-pool-shares-2`, `ledger-violations`)
 - Hardware figures are design assumptions (accepted as such, 2026-10-10)
 
+> **Naming conflict to resolve before acceptance (2026-10-10).** Root ADR-2610101900
+> records the owner decision that **KUMO is the unit of root ADR-2610031000**: murakumo's
+> prepaid, non-redeemable compute unit that absorbs credits 1:1. This ADR uses the same
+> name for a different thing (a 2.1B-cap halving subsidy token kept apart from credits,
+> §1–§2). Both cannot be KUMO. Per ADR-2610101900 this ADR is to be repositioned as the
+> **reward design on top of that KUMO**: the subsidy unit here needs another name (or the
+> subsidy is re-expressed as a KUMO pool), and §1 "two units, kept apart" must be
+> rewritten against 2610031000's single unit. Until then, read "KUMO" below as "the
+> subsidy unit of this proposal", not the murakumo compute unit.
+
 ## Context
 
 ADR-261010 decided that miners are paid by a fee stream plus a halving subsidy.
