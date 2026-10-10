@@ -1,0 +1,102 @@
+#!/usr/bin/env kbb
+;; poi — Proof of Inference phase 1 on the live fleet (ADR-261010*).
+;;
+;;   kbb scripts/poi.cljk round            challenge every healthy head once, replay-verify each
+;;   kbb scripts/poi.cljk seal             close a settlement block at the current Bitcoin tip
+;;   kbb scripts/poi.cljk run [--rounds N] N rounds, then seal
+;;   kbb scripts/poi.cljk points           Season 0 points per node (sealed blocks only)
+;;   kbb scripts/poi.cljk status           heads, unsealed documents, last block
+;;
+;; Options: --dir DIR (default ~/.local/share/murakumo/poi)
+;;          --heads ip:port,...  (default: the Mishima router's --heads, loopback dropped)
+;;          --proven node,...    nodes with a Bitcoin hashrate proof (1.5× Season 0 points)
+;;
+;; Heads are named from `tailscale status --json`. The Bitcoin tip comes from
+;; mempool.space. Jobs are sequential and short (16 tokens) so a one-slot head
+;; never queues more than one protocol job.
+(ns poi
+  (:require [clojure.string :as str]
+            [murakumo.poi.core :as poi]
+            [murakumo.poi.ledger :as ledger]
+            [murakumo.poi.challenge :as challenge]
+            ["node:fs" :as fs] ["node:child_process" :as cp]))
+
+(def router-unit "deploy/systemd/murakumo-mishima-fleet-router.service")
+
+(defn- opt [args k]
+  (second (drop-while #(not= % k) args)))
+
+(defn router-heads []
+  (let [unit (.readFileSync fs router-unit "utf8")
+        [_ heads] (re-find #"--heads (\S+)" unit)]
+    (->> (str/split heads #",")
+         (remove #(str/starts-with? % "127."))
+         vec)))
+
+(defn tailnet-names []
+  (try
+    (let [st (js->clj (js/JSON.parse (.execFileSync cp "tailscale" #js ["status" "--json"] #js {:encoding "utf8"})))]
+      (into {} (for [peer (vals (get st "Peer")) ip (get peer "TailscaleIPs")]
+                 [ip (get peer "HostName")])))
+    (catch :default _ {})))
+
+(defn heads [args]
+  (let [names (tailnet-names)
+        addrs (if-let [h (opt args "--heads")] (str/split h #",") (router-heads))]
+    (mapv (fn [a] (let [ip (first (str/split a #":"))]
+                    {:name (get names ip ip) :url (str "http://" a)}))
+          addrs)))
+
+(defn btc-tip []
+  (-> (js/Promise.all #js [(.then (js/fetch "https://mempool.space/api/blocks/tip/height") #(.text %))
+                           (.then (js/fetch "https://mempool.space/api/blocks/tip/hash") #(.text %))])
+      (.then (fn [[h hash]] {:btc-height (js/parseInt (str/trim h) 10) :btc-hash (str/trim hash)}))))
+
+(defn- table [rows cols]
+  (doseq [r rows] (println (str/join "  " (map #(str (get r %)) cols)))))
+
+(defn- print-round [results]
+  (println "node  verifier  match  tok/s  uVCU  pass")
+  (table (map #(update % :tok-s (fn [x] (if x (.toFixed x 1) "-"))) results)
+         [:node :verifier :match :tok-s :uvcu :pass]))
+
+(defn- seal! [dir key]
+  (.then (btc-tip)
+         (fn [tip]
+           (let [b (:payload (ledger/seal! dir key tip))]
+             (println (str "sealed block at Bitcoin height " (:height b)
+                           " (" (:receipts b) " receipts, " (:verdicts b) " verdicts) root " (subs (:root b) 0 16) "…"))
+             (let [next-halving (poi/next-bitcoin-halving (:height b))]
+               (println (str "next Bitcoin and KUMO halving: block " next-halving
+                             " (" (- next-halving (:height b)) " blocks away)")))))))
+
+(defn- points [dir args]
+  (let [proven (set (some-> (opt args "--proven") (str/split #",")))
+        pts (ledger/season0-points dir proven)]
+    (println "node  points(uVCU)  verified-jobs  failed  pending")
+    (table (sort-by (comp - #(or % 0) :points)
+                    (map (fn [[n m]] (assoc m :node n)) pts))
+           [:node :points :jobs :failed :pending])))
+
+(defn -main [& args]
+  (let [cmd (first args)
+        dir (or (opt args "--dir") (ledger/default-dir))
+        key (ledger/coordinator dir)]
+    (case cmd
+      "round" (.then (challenge/round! dir key (heads args) {}) print-round)
+      "seal" (seal! dir key)
+      "run" (let [n (js/parseInt (or (opt args "--rounds") "1") 10)]
+              (-> (reduce (fn [p _] (.then p (fn [_] (.then (challenge/round! dir key (heads args) {}) print-round))))
+                          (js/Promise.resolve nil) (range n))
+                  (.then (fn [_] (seal! dir key)))
+                  (.then (fn [_] (points dir args)))))
+      "points" (points dir args)
+      "status" (let [hs (heads args) bs (ledger/blocks dir)]
+                 (println "coordinator" (:did key))
+                 (println "heads" (str/join ", " (map :name hs)))
+                 (println "unsealed documents" (count (ledger/unsealed dir)))
+                 (println "blocks" (count bs) "last height" (some-> (last bs) :payload :height)))
+      (do (println "usage: kbb scripts/poi.cljk round|seal|run [--rounds N]|points|status [--dir D] [--heads ip:port,...] [--proven a,b]")
+          (js/process.exit 2)))))
+
+(apply -main *command-line-args*)
