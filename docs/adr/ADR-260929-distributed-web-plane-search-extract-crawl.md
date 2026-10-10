@@ -1,8 +1,28 @@
 # ADR-260929: Distributed web plane — search / extract / crawl
 
-**Status**: Proposed (design only; nothing below is implemented)
-**Date**: 2026-09-29
+**Status**: Accepted for the execution side (M0–M5 implemented and run on fleet nodes,
+see Milestones); the public gate is decided below but not built yet.
+**Date**: 2026-09-29 (owner decisions added 2026-10-10)
 **Scope**: murakumo (placement), kototama (receipts), yataverse (bytes)
+
+## Owner decisions (2026-10-10)
+
+This is the **web plane** on murakumo, the resource layer (root ADR-2610101900: one plane
+= one mon, with its own gate, token scope, verification rule and metering unit; nodes
+run the planes their capabilities and opt-in allow).
+
+| question | decision |
+|---|---|
+| gate (open question 1) | a new Worker at `web.murakumo.cloud` with its own `mk1` secret and scope `web`, not shared with `api.` or `generation.` |
+| how the gate reaches nodes | pull: nodes claim jobs from the gate's queue (`web-join`, the same shape as `infer-join`). No inbound port, no tunnel, no per-request ssh. ssh dispatch stays for operator use |
+| egress | fleet nodes only. **No dependency on Modal** for the public plane; the Modal node stays a private verification aid. A node's web egress is off unless its operator opts in (most fleet nodes exit from a home line) |
+| access | operator-issued tokens only (`token issue <sub> web <ttl>`), per-token daily quota and crawl page caps; no billing yet. Metering unit: fetched page, settled in KUMO later |
+| yataverse writes | deferred. Results stay in node stores and the gate's R2 with a retention limit |
+| dual-zone verify | not offered publicly while there is no second public egress zone |
+
+Unchanged: SSRF rejection at gate and worker, robots.txt, per-host rate limits, no
+credentials in payloads, fetched content is untrusted data, the bot is not in the
+request path.
 
 ## Context
 
@@ -148,9 +168,7 @@ existing bots.
 
 ## Open questions (owner decisions)
 
-1. **Gate**: extend `generation.murakumo.cloud`-style gate, or a new
-   `web.murakumo.cloud`? (Recommendation: new gate; different scope/token, as the
-   generation gate showed hosts are not interchangeable.)
+1. **Gate**: decided 2026-10-10 — a new `web.murakumo.cloud` (see Owner decisions).
 2. **Rendering**: JS rendering needs a headless browser on nodes; Mac minis can
    host it, but it widens the attack surface. Start HTML-only?
 3. **Economics**: how workers are paid/metered (relates to the AWAI billing

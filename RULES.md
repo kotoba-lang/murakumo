@@ -23,11 +23,13 @@ These rules govern operator actions against `fleet.edn`.
    (ROCm/Radeon 8060S); its paint pipeline remains unverified.
 9. Run `kbb -M:test` and `git diff --check` after CLI, inventory, or policy changes.
 10. Preserve unrelated worktree changes, including generated inference plans.
-11. **"murakumo inference" names the engine `kotoba-lang/inference` (`kotodama.inference`,
-    built on `kotoba-lang/torch` + `kotoba-lang/num`, amu native compile), not llama.cpp.**
-    A node serving with upstream `llama-server` (every node on 2026-09-18) is a control /
-    interim host and must be recorded as "llama.cpp", never as "murakumo inference".
-    Whether that engine can run a given architecture is decided by `kotoba-lang/inference`'s
-    `verify/` evidence (Gemma4 e4b end-to-end, Qwen4Exp admission); an architecture with no
-    evidence there is "unmeasured (blocked)", not a number. Owner correction 2026-09-18,
-    root ADR-2609181615.
+11. **"murakumo inference" names the inference plane (the `/v1` service on murakumo);
+    "kotoba inference" names the engine `kotoba-lang/inference` (`kotodama.inference`,
+    built on `kotoba-lang/torch` + `kotoba-lang/num`, amu native compile).** Record the
+    engine per node as `engine` (`kotoba-inference`, `llama.cpp`, ...) and never infer it
+    from the plane name: a node serving with upstream `llama-server` is in the murakumo
+    inference plane with engine `llama.cpp`, and its numbers never go in a kotoba
+    inference column. Whether kotoba inference can run a given architecture is decided by
+    `kotoba-lang/inference`'s `verify/` evidence (Gemma4 e4b end-to-end, Qwen4Exp
+    admission); an architecture with no evidence there is "unmeasured (blocked)", not a
+    number. Owner decision 2026-10-10, root ADR-2610101900 (amends ADR-2609181615).
