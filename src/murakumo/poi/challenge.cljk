@@ -79,10 +79,35 @@
   (let [n (count a)]
     {:matched (count (filter true? (map = a b))) :total n}))
 
-(defn- random-other [heads exclude]
+(def max-verifiers
+  "A verifier that cannot answer (busy, error, empty output) says nothing about
+  the producer, so the replay moves to another random head, up to this many."
+  3)
+
+(defn- shuffled-others [heads exclude]
   (let [others (vec (remove #(= (:name %) (:name exclude)) heads))]
-    (when (seq others)
-      (nth others (.randomInt crypto (count others))))))
+    (loop [v others out []]
+      (if (empty? v)
+        out
+        (let [i (.randomInt crypto (count v))]
+          (recur (into (subvec v 0 i) (subvec v (inc i))) (conj out (nth v i))))))))
+
+(defn- replay
+  "Replay `body` on up to max-verifiers random other heads; resolves the first
+  verifier that answered with tokens as {:verifier head :res res :tried n}, or
+  {:tried n} when none could."
+  [heads producer body]
+  (let [candidates (take max-verifiers (shuffled-others heads producer))]
+    (reduce (fn [p v]
+              (.then p (fn [acc]
+                         (if (:res acc)
+                           acc
+                           (.then (run-job v body)
+                                  (fn [res] (if (:ok? res)
+                                              {:verifier v :res res :tried (inc (:tried acc))}
+                                              (update acc :tried inc))))))))
+            (js/Promise.resolve {:tried 0})
+            candidates)))
 
 (defn- receipt-of [job-id head model res]
   (let [{:keys [prompt_tokens completion_tokens]} (:usage res)
@@ -110,20 +135,24 @@
            (if-not (:ok? res)
              {:job job-id :node (:name head) :skipped (or (:error res) (str "HTTP " (:status res)))}
              (let [receipt (receipt-of job-id head model res)
-                   _ (ledger/append-receipt! dir key receipt)
-                   verifier (random-other heads head)]
-               (if-not verifier
-                 {:job job-id :node (:name head) :uvcu (:uvcu receipt) :verdict "no verifier"}
-                 (-> (run-job verifier body)
-                     (.then
-                      (fn [vres]
+                   _ (ledger/append-receipt! dir key receipt)]
+               (-> (replay heads head body)
+                   (.then
+                    (fn [{:keys [verifier tried] vres :res}]
+                      (if-not verifier
+                        ;; nobody could replay: inconclusive, neither pass nor fail
+                        (let [verdict {:type "verdict" :job job-id :node (:name head)
+                                       :inconclusive true :tried tried}]
+                          (ledger/append-receipt! dir key verdict)
+                          {:job job-id :node (:name head) :uvcu (:uvcu receipt)
+                           :tok-s (:decode-tok-s receipt) :match "-" :pass "inconclusive"})
                         (let [{:keys [matched total]} (compare-ids (:ids res) (:ids vres))
                               fast? (>= (or (:decode-tok-s receipt) 0) (get min-decode-tok-s model 0))
-                              agree? (and (:ok? vres)
-                                          (poi/verify-pass? {:matched matched :total total
-                                                             :min-num match-num :min-den match-den}))
+                              agree? (poi/verify-pass? {:matched matched :total total
+                                                        :min-num match-num :min-den match-den})
                               verdict {:type "verdict" :job job-id :node (:name head)
-                                       :verifier (:name verifier) :matched matched :total total
+                                       :verifier (:name verifier) :tried tried
+                                       :matched matched :total total
                                        :fast fast? :pass (and fast? agree?)}]
                           (ledger/append-receipt! dir key verdict)
                           {:job job-id :node (:name head) :verifier (:name verifier)

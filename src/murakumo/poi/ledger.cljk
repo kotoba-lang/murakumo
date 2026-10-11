@@ -143,12 +143,13 @@
    (let [sealed (sealed-digests dir)
          docs (filter #(and (signed? %) (sealed (topo/digest (:payload %)))) (receipts dir))
          by-type (group-by #(get-in % [:payload :type]) docs)
+         decided (filter #(not (get-in % [:payload :inconclusive])) (get by-type "verdict"))
          passed (into #{} (comp (map :payload) (filter :pass) (map :job))
-                      (get by-type "verdict"))
+                      decided)
          failed (into #{} (comp (map :payload) (remove :pass) (map :job))
-                      (get by-type "verdict"))
+                      decided)
          standing (reduce (fn [m {{:keys [node pass]} :payload}] (assoc m node (boolean pass)))
-                          {} (get by-type "verdict"))]
+                          {} decided)]
      (reduce (fn [acc {{:keys [job node uvcu kind]} :payload}]
                (cond (= "customer" kind)
                      ;; customer jobs cannot be replayed without the prompt, so they
