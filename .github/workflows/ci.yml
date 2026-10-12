@@ -10,6 +10,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  macos-native-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --test test-macos-client/client.test.mjs
+      - run: python3 -m py_compile macos-client/mlx-engine.py
+
   packaged-node-economy:
     runs-on: ubuntu-latest
     steps:

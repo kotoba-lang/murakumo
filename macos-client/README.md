@@ -19,7 +19,7 @@ Kotoba Node CLI (`scripts/node-cli.cljk` → `release/node.mjs`), delegated by
 Configuration/releases/logs/models use
 `~/github/workspaces/murakumo/native-client`; credentials use
 `~/.local/share/murakumo-native/client.token` (0600). The LaunchAgent runs in
-`user/<uid>` and persists via `~/Library/LaunchAgents` at user login, not before
+`gui/<uid>` when a login session exists (otherwise `user/<uid>`) and persists via `~/Library/LaunchAgents` at user login, not before
 login. The menu-bar app is installed at `~/Applications/Murakumo Client.app`.
 Local builds use ad-hoc signing; App Store publication/notarization is separate.
 

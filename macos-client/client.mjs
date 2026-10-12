@@ -15,7 +15,8 @@ export function validateConfig(c){
  if(!['llama-metal','mlx-metal'].includes(c.backend)||typeof c.model!=='string'||!c.model||c.model.length>1024||!Number.isInteger(c.port)||c.port<1024||c.port>65535||Number(u.port)===c.port)throw Error('Invalid native configuration');
  return c;
 }
-export function validateJob(v,c){if(v.model!==c.model||!Array.isArray(v.messages)||!v.messages.length||v.messages.length>128||v.messages.some(x=>!['system','user','assistant'].includes(x.role)||typeof x.content!=='string')||!Number.isInteger(v.max_tokens)||v.max_tokens<1||v.max_tokens>1024||v.stream!==undefined&&typeof v.stream!=='boolean')throw Error('Invalid inference request');return v;}
+export function validContent(content,backend){return typeof content==='string'||(backend==='llama-metal'&&Array.isArray(content)&&content.length>0&&content.every(p=>p&&((p.type==='text'&&typeof p.text==='string')||(p.type==='image_url'&&typeof p.image_url?.url==='string'))));}
+export function validateJob(v,c){if(v.model!==c.model||!Array.isArray(v.messages)||!v.messages.length||v.messages.length>128||v.messages.some(x=>!['system','user','assistant'].includes(x.role)||!validContent(x.content,c.backend))||!Number.isInteger(v.max_tokens)||v.max_tokens<1||v.max_tokens>2048||v.stream!==undefined&&typeof v.stream!=='boolean')throw Error('Invalid inference request');return v;}
 export function authorized(header,token){const a=Buffer.from(header||''),b=Buffer.from('Bearer '+token);return a.length===b.length&&timingSafeEqual(a,b);}
 export function gpuEvidence(c){
  const port=new URL(c.engineURL).port;
@@ -47,7 +48,7 @@ export async function start(c,token,{fetcher=fetch,evidence=gpuEvidence}={}){
    const d=await r.json();return send(200,{object:'list',data:(d.data||[]).filter(m=>m.id===c.model)});
   }
   if(req.method!=='POST'||req.url!=='/v1/chat/completions')return send(404,{error:'not_found'});
-  if(Date.now()-refreshed>30000){gpu=evidence(c);refreshed=Date.now();}
+  gpu=evidence(c);refreshed=Date.now();
   if(!gpu.verified)return send(503,{error:'native_gpu_not_verified'});
   if(busy)return send(429,{error:'native_slot_busy'});
   busy=true;ownsSlot=true;
@@ -64,6 +65,7 @@ export async function start(c,token,{fetcher=fetch,evidence=gpuEvidence}={}){
  await new Promise((ok,bad)=>{server.once('error',bad);server.listen(c.port,'127.0.0.1',ok);});return server;
 }
 export async function api(c,token,path,body){const r=await fetch('http://127.0.0.1:'+c.port+path,{method:body?'POST':'GET',headers:{authorization:'Bearer '+token,...(body?{'content-type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(180000)});if(!r.ok)throw Error('Native API HTTP '+r.status);return r.json();}
+export function diagnosticAnswer(text){return /^(?:2\s*\+\s*2\s*=\s*)?4[.!]?$/.test(text?.trim()||'');}
 export async function bench(c,token,count=3){
  const payload={model:c.model,messages:[{role:'user',content:'Reply with only the number: 2+2=?'}],max_tokens:16,temperature:0,chat_template_kwargs:{enable_thinking:false}};
  const samples=[];
@@ -71,12 +73,12 @@ export async function bench(c,token,count=3){
   const begun=performance.now();let r;
   if(route==='client')r=await api(c,token,'/v1/chat/completions',payload);
   else{const h={'content-type':'application/json'};if(c.engineTokenFile)h.authorization='Bearer '+readFileSync(c.engineTokenFile,'utf8').trim();const response=await fetch(c.engineURL+'/chat/completions',{method:'POST',headers:h,body:JSON.stringify(payload),signal:AbortSignal.timeout(180000)});if(!response.ok)throw Error('Direct benchmark failed');r=await response.json();}
-  const text=r.choices?.[0]?.message?.content?.trim();if(!text||!text.includes('4'))throw Error('Inference diagnostic failed');
+  const text=r.choices?.[0]?.message?.content?.trim();if(!diagnosticAnswer(text))throw Error('Inference diagnostic failed: '+JSON.stringify(text));
   samples.push({route,seconds:(performance.now()-begun)/1000,tokens:r.usage?.completion_tokens,tokensPerSecond:r.timings?.predicted_per_second||r.murakumo?.tokens_per_second||null,response:text});
  }
  return {schema:'murakumo.native-bench.v1',observedAt:new Date().toISOString(),backend:c.backend,samples,status:await api(c,token,'/status')};
 }
-if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){
+if(process.argv[1]&&realpathSync(process.argv[1])===realpathSync(fileURLToPath(import.meta.url))){
  try{
  const args=process.argv.slice(2),command=args.shift()||'status';const ix=args.indexOf('--root');const root=ix>=0?resolve(args[ix+1]):ROOT;
  const c=validateConfig(JSON.parse(readFileSync(join(root,'config.json'),'utf8'))),token=readFileSync(c.tokenFile,'utf8').trim();
