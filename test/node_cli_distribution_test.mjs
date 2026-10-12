@@ -24,6 +24,7 @@ const server=http.createServer(async(req,res)=>{
   res.statusCode=attestAccepted?200:400;
   return res.end(JSON.stringify({verified:attestAccepted}));
  }
+ if(req.url==='/v1/models' && req.headers.authorization!=='Bearer local-probe-token'){res.statusCode=401;return res.end('{}');}
  if(req.url==='/v1/models')return res.end(JSON.stringify({data:[{id:'test-model'}]}));
  if(req.url==='/v1/chat/completions'){
   const prompt=body?JSON.parse(body).messages?.[0]?.content:'';
@@ -79,7 +80,7 @@ const server=http.createServer(async(req,res)=>{
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const base=`http://127.0.0.1:${server.address().port}`;
 const runWithEnv=(extra,...args)=>new Promise(resolve=>{
- const p=spawn(process.execPath,['release/node.mjs','node',...args],{env:{...process.env,MURAKUMO_NODE_HOME:home,MURAKUMO_NODE_CACAO:'',MURAKUMO_NODE_DID:'',MURAKUMO_SERVICE_TOKEN:'',...extra}});
+ const p=spawn(process.execPath,['release/node.mjs','node',...args],{env:{...process.env,MURAKUMO_NODE_HOME:home,MURAKUMO_INFER_LOCAL_TOKEN:'local-probe-token',MURAKUMO_NODE_CACAO:'',MURAKUMO_NODE_DID:'',MURAKUMO_SERVICE_TOKEN:'',...extra}});
  let out='';p.stdout.on('data',d=>out+=d);p.stderr.on('data',d=>out+=d);
  p.on('close',code=>resolve({code,out}));
 });
@@ -154,7 +155,7 @@ try{
  qualificationDenied=false;
  joinJobAvailable=true;
  const joined=spawn(process.execPath,['release/node.mjs','node','join',...flags],{
-  env:{...process.env,MURAKUMO_NODE_IDENTITY_FILE:factory,
+  env:{...process.env,MURAKUMO_NODE_IDENTITY_FILE:factory,MURAKUMO_INFER_LOCAL_TOKEN:'local-probe-token',
    MURAKUMO_NODE_CACAO:'',MURAKUMO_NODE_DID:'',MURAKUMO_SERVICE_TOKEN:''}});
  let joinOutput='';
  joined.stdout.on('data',d=>joinOutput+=d);

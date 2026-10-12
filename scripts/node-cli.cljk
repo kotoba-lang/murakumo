@@ -526,7 +526,10 @@
         local (str/replace (or (:local-url opts) "http://127.0.0.1:11434/v1") #"/+$" "")
         model (:model opts)
         id (identity)
-        env (js->clj js/process.env)
+        env {"MURAKUMO_INFER_LOCAL_TOKEN" (aget js/process.env "MURAKUMO_INFER_LOCAL_TOKEN")
+             "VLLM_API_KEY" (aget js/process.env "VLLM_API_KEY")
+             "MURAKUMO_NODE_CACAO" (aget js/process.env "MURAKUMO_NODE_CACAO")
+             "MURAKUMO_SERVICE_TOKEN" (aget js/process.env "MURAKUMO_SERVICE_TOKEN")}
         auth (worker/control-auth opts env)]
     (when-not (and (string? model) (not (str/blank? model)))
       (throw (js/Error. "Specify --model exactly as returned by the local /v1/models endpoint.")))
