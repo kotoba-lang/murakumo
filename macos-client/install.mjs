@@ -8,6 +8,14 @@ export function install({source,root=ROOT,engineURL,backend,model,python,mlxMode
  if(Number(process.versions.node.split('.')[0])<22)throw Error('Node.js 22+ required');
  if(platform()!=='darwin'||arch()!=='arm64')throw Error('Apple Silicon macOS required');
  const uid=process.getuid(),domain='user/'+uid;
+ if(!activate){
+  const m=JSON.parse(readFileSync(join(source,'manifest.json')));
+  if(m.schema!=='murakumo.native-package.v1'||!/^[a-f0-9]{16}$/.test(m.version))throw Error('Invalid package');
+  for(const [name,hash] of Object.entries(m.files)){if(name.includes('..')||name.startsWith('/')||createHash('sha256').update(readFileSync(join(source,name))).digest('hex')!==hash)throw Error('Package verification failed');}
+  validateConfig({engineURL,backend,model,port:19840});
+  if(backend==='mlx-metal'&&(!python||!mlxModel||!existsSync(python)||!existsSync(mlxModel)))throw Error('MLX environment not ready');
+  return {dryRun:true,noWrites:true,root,version:m.version,launchDomain:domain,backend,model};
+ }
  if(existsSync(join(root,'config.json'))&&JSON.parse(readFileSync(join(root,'config.json'))).schema!=='murakumo.native-config.v1')throw Error('Unknown existing configuration preserved');
  mkdirSync(root,{recursive:true,mode:0o700});if(lstatSync(root).isSymbolicLink()||lstatSync(root).uid!==uid)throw Error('Unsafe install root');chmodSync(root,0o700);
  const manifest=JSON.parse(readFileSync(join(source,'manifest.json')));
