@@ -85,9 +85,10 @@ if(process.argv[1]&&realpathSync(process.argv[1])===realpathSync(fileURLToPath(i
  if(command==='serve')await start(c,token);
  else if(command==='status')console.log(JSON.stringify(await api(c,token,'/status'),null,2));
  else if(command==='bench')console.log(JSON.stringify(await bench(c,token),null,2));
+ else if(command==='link'||command==='link-status'){const {identity,startLink,registrationStatus}=await import('./device-link.mjs');const id=identity();const result=command==='link-status'?await registrationStatus(id):await startLink(id,hostname().replace(/[^A-Za-z0-9._-]/g,'-').slice(0,64),join(root,'registration-flow.json'));console.log(JSON.stringify(result));}
  else if(command==='node'){
   const filtered=args.filter((_,i)=>ix<0||i<ix||i>ix+1);
   const r=spawnSync(process.execPath,[join(c.runtime,'node.mjs'),'node',...filtered],{stdio:'inherit',env:{...process.env,MURAKUMO_INFER_LOCAL_TOKEN:token}});process.exitCode=r.status||0;
- }else throw Error('Use status, bench, serve or node');
+ }else throw Error('Use status, bench, serve, link, link-status or node');
  }catch(e){console.error(e.message);process.exitCode=1;}
 }
