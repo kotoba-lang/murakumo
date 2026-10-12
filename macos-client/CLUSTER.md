@@ -30,3 +30,27 @@ does not establish a cross-product Passkey login bridge or migrate older owners.
 
 The monitor is the first operating routine, not a qualification of arbitrary
 Itonami jobs, global consensus, always-available hardware or OS reboot behavior.
+
+## Build and install as one bundle
+
+Commit the Itonami monitor source first, then build the native package with its
+repository as the fourth argument:
+
+```
+node macos-client/package.mjs PACKAGE APP_BINARY ITONAMI_SOURCE_REPOSITORY
+```
+
+The builder refuses modified monitor files, seals both monitor executables and
+records the producer repository/commit in the manifest. Native installation can
+then install both Client and monitoring from that one verified payload:
+
+```
+node PACKAGE/install.mjs --engine-url LOCAL_ENGINE --backend BACKEND --model ID \
+  --cluster-roster PRIVATE_ROSTER.json --prepare-registration \
+  --import-state STOPPED_STAGE_CHECKPOINT_DIRECTORY
+```
+
+A single-node package without a roster does not enable cluster networking or
+monitoring implicitly. The cluster window reports that its monitor is unavailable
+until an explicitly admitted cluster profile is installed. Peer admission never
+stands in for user ownership.

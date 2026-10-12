@@ -4,7 +4,7 @@ import {join,resolve,dirname,basename} from 'node:path';import {homedir,platform
 import {validateConfig,ROOT} from './client.mjs';
 const label='com.murakumo.native-client';
 export function plist(program,args,log){const escape=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');return '<?xml version="1.0"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>'+escape(log.label)+'</string><key>ProgramArguments</key><array>'+[program,...args].map(a=>'<string>'+escape(a)+'</string>').join('')+'</array><key>LimitLoadToSessionType</key><array><string>Aqua</string><string>Background</string></array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>15</integer><key>StandardOutPath</key><string>'+escape(log.path)+'</string><key>StandardErrorPath</key><string>'+escape(log.path)+'</string></dict></plist>';}
-export function install({source,root=ROOT,engineURL,backend,model,python,mlxModel,activate=true}){
+export function install({source,root=ROOT,engineURL,backend,model,python,mlxModel,clusterRoster,prepareRegistration=false,importState,activate=true}){
  if(Number(process.versions.node.split('.')[0])<22)throw Error('Node.js 22+ required');
  if(platform()!=='darwin'||arch()!=='arm64')throw Error('Apple Silicon macOS required');
  const uid=process.getuid();
@@ -16,6 +16,7 @@ export function install({source,root=ROOT,engineURL,backend,model,python,mlxMode
   if(m.schema!=='murakumo.native-package.v1'||!/^[a-f0-9]{16}$/.test(m.version))throw Error('Invalid package');
   for(const [name,hash] of Object.entries(m.files)){if(name.includes('..')||name.startsWith('/')||createHash('sha256').update(readFileSync(join(source,name))).digest('hex')!==hash)throw Error('Package verification failed');}
   validateConfig({engineURL,backend,model,port:19840});
+  if(clusterRoster&&!m.files['cluster-monitor/monitor.mjs'])throw Error('Cluster package required');
   if(backend==='mlx-metal'&&(!python||!mlxModel||!existsSync(python)||!existsSync(mlxModel)))throw Error('MLX environment not ready');
   return {dryRun:true,noWrites:true,root,version:m.version,launchDomain:domain,backend,model};
  }
@@ -54,8 +55,14 @@ export function install({source,root=ROOT,engineURL,backend,model,python,mlxMode
  const quote=s=>"'"+s.replaceAll("'","'\\''")+"'";
  writeFileSync(join(bin,'murakumo-native'),'#!/bin/sh\nexec '+quote(process.execPath)+' '+quote(join(release,'client.mjs'))+' "$@"\n',{mode:0o755});chmodSync(join(bin,'murakumo-native'),0o755);
  // The existing murakumo CLI remains untouched. Use native node ... for shared identity flow.
- return {root,version:manifest.version,launchDomain:domain,labels:jobs.map(j=>j.label),model,backend};
+ let monitor=null;
+ if(clusterRoster){
+  if(!manifest.files['cluster-monitor/monitor.mjs']||!manifest.files['cluster-monitor/install.mjs'])throw Error('Build the native package with the pinned Itonami monitor source');
+  const args=[join(release,'cluster-monitor/install.mjs'),'--roster',clusterRoster,'--protocol-sha',manifest.files['cluster-protocol.mjs'],'--identity-sha',manifest.files['device-link.mjs'],'--monitor-sha',manifest.files['cluster-monitor/monitor.mjs'],...(prepareRegistration?['--prepare-registration']:[]),...(importState?['--import-state',importState]:[])];
+  const r=spawnSync(process.execPath,args,{encoding:'utf8',timeout:30000});if(r.status!==0)throw Error('Cluster monitor installation failed: '+r.stderr.trim());monitor=JSON.parse(r.stdout);
+ }
+ return {monitor,root,version:manifest.version,launchDomain:domain,labels:jobs.map(j=>j.label),model,backend};
 }
 if(process.argv[1]&&realpathSync(process.argv[1])===realpathSync(fileURLToPath(import.meta.url))){
- try{const args=process.argv.slice(2);const get=k=>{const i=args.indexOf(k);return i<0?undefined:args[i+1];};console.log(JSON.stringify(install({source:dirname(fileURLToPath(import.meta.url)),engineURL:get('--engine-url'),backend:get('--backend'),model:get('--model'),python:get('--python'),mlxModel:get('--mlx-model'),activate:!args.includes('--dry-run')})));}catch(e){console.error(e.message);process.exitCode=1;}
+ try{const args=process.argv.slice(2);const get=k=>{const i=args.indexOf(k);return i<0?undefined:args[i+1];};console.log(JSON.stringify(install({source:dirname(fileURLToPath(import.meta.url)),engineURL:get('--engine-url'),backend:get('--backend'),model:get('--model'),python:get('--python'),mlxModel:get('--mlx-model'),clusterRoster:get('--cluster-roster'),prepareRegistration:args.includes('--prepare-registration'),importState:get('--import-state'),activate:!args.includes('--dry-run')})));}catch(e){console.error(e.message);process.exitCode=1;}
 }

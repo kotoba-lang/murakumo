@@ -14,6 +14,10 @@ export function validateFacts(f){
  const r=f.registration;if(!r||typeof r.registered!=='boolean'||!(r.accountDid===null||typeof r.accountDid==='string'&&r.accountDid.length<=256)||r.approvalUri!==undefined&&!/^https:\/\/auth\.kotoba\.cloud\/node\?code=[A-Z0-9_-]{10}$/.test(r.approvalUri)||r.expiresAt!==undefined&&!Number.isSafeInteger(r.expiresAt))throw Error('Invalid registration observation');return f;
 }
 export const signed=(body,key)=>{const bytes=JSON.stringify(body);return {body,signature:sign(null,Buffer.from(bytes),key).toString('base64url')};};
-export function authenticated(envelope,roster,{kind,audience,now=Date.now(),historical=false}={}){
+export function verifyEnvelope(envelope,roster,{kind,audience,now=Date.now(),historical=false}={}){
  const b=envelope?.body,p=roster.nodes.find(p=>p.did===b?.did);if(!p||b.schema!==kind||b.clusterId!==roster.clusterId||!Number.isSafeInteger(b.at)||(!historical&&Math.abs(now-b.at)>90000)||audience&&b.audience!==audience||!Number.isSafeInteger(b.sequence)||b.sequence<1||! /^[A-Za-z0-9_-]{86}$/.test(envelope.signature||'')||!verify(null,Buffer.from(JSON.stringify(b)),createPublicKey(p.publicKey),Buffer.from(envelope.signature,'base64url')))throw Error('Peer proof refused');if(kind==='itonami.cluster-monitor-receipt.v1')validateFacts(b.facts);return b;
 }
+
+const scope=b=>JSON.stringify([b.schema,b.clusterId,b.did,b.audience||'']);
+export function authenticateRequest(envelope,roster,options){if(!options?.marks)throw Error('Durable replay state required');const b=verifyEnvelope(envelope,roster,options),key=scope(b),prior=options.marks[key];if(prior&&b.sequence<=prior.sequence)throw Error('Request replay refused');options.marks[key]={sequence:b.sequence,digest:hash(JSON.stringify(envelope))};return b;}
+export function acceptObservation(envelope,roster,options){if(!options?.marks)throw Error('Durable observation state required');const b=verifyEnvelope(envelope,roster,options),key=scope(b),digest=hash(JSON.stringify(envelope)),prior=options.marks[key];if(prior&&(b.sequence<prior.sequence||b.sequence===prior.sequence&&digest!==prior.digest))throw Error('Observation rollback/equivocation refused');options.marks[key]={sequence:b.sequence,digest};return b;}
