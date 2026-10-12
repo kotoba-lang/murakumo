@@ -2,7 +2,7 @@
 // Native macOS platform adapter. Identity/admission remains the shared Kotoba CLI.
 import http from 'node:http';
 import {hostname,platform,arch,totalmem,freemem,homedir} from 'node:os';
-import {readFileSync,writeFileSync,mkdirSync,chmodSync,existsSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdirSync,chmodSync,existsSync,realpathSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {randomBytes,timingSafeEqual} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
@@ -76,7 +76,7 @@ export async function bench(c,token,count=3){
  }
  return {schema:'murakumo.native-bench.v1',observedAt:new Date().toISOString(),backend:c.backend,samples,status:await api(c,token,'/status')};
 }
-if(process.argv[1]===fileURLToPath(import.meta.url)){
+if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){
  try{
  const args=process.argv.slice(2),command=args.shift()||'status';const ix=args.indexOf('--root');const root=ix>=0?resolve(args[ix+1]):ROOT;
  const c=validateConfig(JSON.parse(readFileSync(join(root,'config.json'),'utf8'))),token=readFileSync(c.tokenFile,'utf8').trim();

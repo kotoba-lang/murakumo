@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import {readFileSync,writeFileSync,mkdirSync,chmodSync,existsSync,cpSync,renameSync,lstatSync} from 'node:fs';
+import {readFileSync,writeFileSync,mkdirSync,chmodSync,existsSync,cpSync,renameSync,lstatSync,realpathSync} from 'node:fs';
 import {join,resolve,dirname} from 'node:path';import {homedir,platform,arch} from 'node:os';import {spawnSync} from 'node:child_process';import {createHash,randomBytes} from 'node:crypto';import {fileURLToPath} from 'node:url';
 import {validateConfig,ROOT} from './client.mjs';
 const label='com.murakumo.native-client';
@@ -51,6 +51,6 @@ export function install({source,root=ROOT,engineURL,backend,model,python,mlxMode
  // The existing murakumo CLI remains untouched. Use native node ... for shared identity flow.
  return {root,version:manifest.version,launchDomain:domain,labels:jobs.map(j=>j.label),model,backend};
 }
-if(process.argv[1]===fileURLToPath(import.meta.url)){
+if(process.argv[1]&&realpathSync(process.argv[1])===fileURLToPath(import.meta.url)){
  try{const args=process.argv.slice(2);const get=k=>{const i=args.indexOf(k);return i<0?undefined:args[i+1];};console.log(JSON.stringify(install({source:dirname(fileURLToPath(import.meta.url)),engineURL:get('--engine-url'),backend:get('--backend'),model:get('--model'),python:get('--python'),mlxModel:get('--mlx-model'),activate:!args.includes('--dry-run')})));}catch(e){console.error(e.message);process.exitCode=1;}
 }
