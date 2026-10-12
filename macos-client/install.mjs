@@ -34,7 +34,7 @@ export function install({source,root=ROOT,engineURL,backend,model,python,mlxMode
  if(backend==='mlx-metal'&&(!python||!mlxModel||!existsSync(python)||!existsSync(mlxModel)))throw Error('Existing MLX Python and local model required');
  // Frozen Kotoba Node CLI uses pinned dependencies; no identity or account rewrite.
  const runtime=join(release,'runtime');const npm=join(dirname(process.execPath),'npm');
- const deps=spawnSync(existsSync(npm)?npm:'npm',['ci','--ignore-scripts','--omit=dev','--prefix',runtime],{encoding:'utf8',timeout:120000});if(deps.status!==0)throw Error('Pinned CLI dependency installation failed');
+ const deps=spawnSync(existsSync(npm)?npm:'npm',['ci','--ignore-scripts','--omit=dev','--workspaces=false'],{cwd:realpathSync(runtime),encoding:'utf8',timeout:120000});if(deps.status!==0)throw Error('Pinned CLI dependency installation failed');
  const config=join(root,'config.json');writeFileSync(config+'.part',JSON.stringify(c)+'\n',{mode:0o600});renameSync(config+'.part',config);
  const logs=join(root,'logs'),agents=join(homedir(),'Library/LaunchAgents');mkdirSync(logs,{recursive:true});mkdirSync(agents,{recursive:true});
  const run=(args,required=true)=>{const r=spawnSync('/bin/launchctl',args,{encoding:'utf8'});if(required&&r.status!==0)throw Error('launchctl '+args[0]+' failed: '+r.stderr.trim());};
