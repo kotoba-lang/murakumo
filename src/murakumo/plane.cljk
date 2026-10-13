@@ -82,3 +82,22 @@
   (vec (for [p (:planes registry), pre (:plane/namespaces p)
              :when (not-any? #(prefix-of? pre %) namespaces)]
          pre)))
+
+(defn- json-key [k] (-> (name k) (text/replace "-" "_") (text/replace "?" "")))
+
+(defn- json-val [v]
+  (cond
+    (keyword? v) (name v)
+    (set? v) (vec (sort (map json-val v)))
+    (sequential? v) (mapv json-val v)
+    (map? v) (into (sorted-map) (map (fn [[k x]] [(json-key k) (json-val x)])) v)
+    :else v))
+
+(defn public-view
+  "The registry as published (murakumo.cloud/.well-known/murakumo-planes.json):
+  every plane without its namespace prefixes, which are this repo's internals.
+  Keys and keyword values become strings; boolean keys lose the `?`."
+  [registry]
+  {"version" (:registry/version registry)
+   "layer" "murakumo is the resource layer; planes share its nodes and settlement (root ADR-2610101900)"
+   "planes" (mapv #(json-val (dissoc % :plane/namespaces)) (:planes registry))})
