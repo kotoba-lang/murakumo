@@ -5,6 +5,14 @@
 - Amends: ADR-261010b §2 (supply) and §10 (no premine → no insider allocation)
 - Depends: ADR-261010 (Proof of Inference, onprem tiers), ADR-261010b (KUMO)
 
+> **Superseded 2026-10-13 by root ADR-2610131800 (owner decision, later the same day).**
+> KUMO is the 2.1B-cap reward token after all: tradable as a fixed-supply ERC-20 on Base,
+> converted through THORChain, with sale, foundation/team allocation and liquidity
+> provision allowed (buyback still not). Prepaid credit has no unit name; it is the
+> murakumo.cloud USD prepaid balance. The reward-pool revision below (f181488b) is
+> withdrawn and this ADR is to be restored to the fixed-cap model of 2026-10-10 and
+> aligned with ADR-2610131800 §3-§4. `poi/core` already implements that model.
+
 > **Revised 2026-10-13 (owner decision: the subsidy is a KUMO reward pool, ADR-261010b).**
 > There is no 2.1B cap to carve from. The MGA becomes a **sub-account of the reward pool**
 > that receives 5% of every pool inflow until genesis + 12 months, and it pays out only

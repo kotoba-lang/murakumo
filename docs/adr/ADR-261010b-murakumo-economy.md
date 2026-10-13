@@ -8,6 +8,14 @@
   `memory-time-weight`, `settle-pool-shares-2`, `ledger-violations`)
 - Hardware figures are design assumptions (accepted as such, 2026-10-10)
 
+> **Superseded 2026-10-13 by root ADR-2610131800 (owner decision, later the same day).**
+> KUMO is the 2.1B-cap reward token after all: tradable as a fixed-supply ERC-20 on Base,
+> converted through THORChain, with sale, foundation/team allocation and liquidity
+> provision allowed (buyback still not). Prepaid credit has no unit name; it is the
+> murakumo.cloud USD prepaid balance. The reward-pool revision below (f181488b) is
+> withdrawn and this ADR is to be restored to the fixed-cap model of 2026-10-10 and
+> aligned with ADR-2610131800 §3-§4. `poi/core` already implements that model.
+
 > **Revised 2026-10-13 (owner decision): the subsidy is a KUMO reward pool, not a second
 > unit.** KUMO is the unit of root ADR-2610031000 (murakumo's compute unit; credits fold
 > into it 1:1; purchased KUMO is not redeemable, earned KUMO is). The first draft of this
