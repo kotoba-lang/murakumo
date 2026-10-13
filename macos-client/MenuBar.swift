@@ -16,6 +16,8 @@ struct ClusterStatus:Decodable {let fleetNodes:[FleetConnection]?;let clusterId:
  @Published var localFleet:LocalFleetCapacity?
  @Published var localFleetAt:Date?
  @Published var localFleetError:String?
+ private var localFleetGeneration=0
+ private var localFleetTask:URLSessionDataTask?
  func request(_ port:Int,_ path:String,completion:@escaping (Data?)->Void) {
   do {
    let root=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("github/workspaces/murakumo/native-client")
@@ -27,7 +29,7 @@ struct ClusterStatus:Decodable {let fleetNodes:[FleetConnection]?;let clusterId:
   }catch{completion(nil)}
  }
  func refresh(){request(19840,"/status"){data in Task{@MainActor in guard let data=data,let s=try? JSONDecoder().decode(NativeStatus.self,from:data) else{self.text="Clientに接続できません";return};self.text="\(s.host)\n\(s.backend)\n推論エンジン: \(s.engineReady ? "利用可能":"準備中")\nClient: \(s.residentBytes/1048576) MiB\nmacOS ネイティブ"}}}
- func refreshLocalFleet(){guard let url=URL(string:"https://api.murakumo.cloud/ready?model=mishima") else{return};var r=URLRequest(url:url);r.timeoutInterval=8;r.cachePolicy = .reloadIgnoringLocalCacheData;URLSession.shared.dataTask(with:r){data,response,_ in Task{@MainActor in guard let data=data,let status=(response as? HTTPURLResponse)?.statusCode,[200,503].contains(status),let f=try? JSONDecoder().decode(LocalFleetCapacity.self,from:data) else{self.localFleetError="ローカル推論クラスタの状態を取得できません";return};self.localFleet=f;self.localFleetAt=Date();self.localFleetError=nil}}.resume()}
+ func refreshLocalFleet(){localFleetGeneration+=1;let generation=localFleetGeneration;localFleetTask?.cancel();guard let url=URL(string:"https://api.murakumo.cloud/ready?model=mishima") else{return};var r=URLRequest(url:url);r.timeoutInterval=8;r.cachePolicy = .reloadIgnoringLocalCacheData;localFleetTask=URLSession.shared.dataTask(with:r){data,response,_ in Task{@MainActor in guard generation==self.localFleetGeneration else{return};guard let data=data,let status=(response as? HTTPURLResponse)?.statusCode,[200,503].contains(status),let f=try? JSONDecoder().decode(LocalFleetCapacity.self,from:data) else{self.localFleetError="ローカル推論クラスタの状態を取得できません";return};self.localFleet=f;self.localFleetAt=Date();self.localFleetError=nil}};localFleetTask?.resume()}
  func refreshCluster(){refreshLocalFleet();request(19843,"/cluster/status"){data in Task{@MainActor in guard let data=data,let s=try? JSONDecoder().decode(ClusterStatus.self,from:data) else{self.clusterError="監視Botに接続できません。最後の表示は過去の観測です。";return};self.cluster=s;self.clusterError=nil}}}
 }
 struct ClusterView:View {
