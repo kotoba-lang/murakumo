@@ -11,7 +11,7 @@
     (c/require! (and (string? (:id response))
                      (c/natural? (:prompt_tokens usage)) (c/natural? (:completion_tokens usage)))
                 :collection/inference-unmetered)
-    {:collect? (= "collect" (get-in response [:choices 0 :message :content]))
+    {:collect? (= "collect" (some-> (get-in response [:choices 0 :message :content]) .trim))
      :inference-input-tokens (:prompt_tokens usage)
      :inference-output-tokens (:completion_tokens usage)
      :inference-receipt {:provider-response-id (:id response) :assignment-id assignment-id

@@ -91,16 +91,19 @@
                                          (= (:url page) (:final-url ev))
                                          (= (:origin-host lease) (get-in (web/check-url (:url page)) [:ok :host]))
                                          (integer? (:status ev)) (<= 200 (:status ev) 299)
-                                         (re-find #"(?i)html" (str (:content-type ev)))
+                                         (= (:status page) (:status ev))
                                          (verify (web/receipt-signing-string pr) (:signature page)))
                                     :collection/page-invalid)
-                        {:cid (:cid page) :url (:url page) :title (or (w/title-of html) "")
-                         :text (w/html->markdown html)})) pages)
+                        (when (re-find #"(?i)html" (str (:content-type ev)))
+                          {:cid (:cid page) :url (:url page) :title (or (w/title-of html) "")
+                           :text (w/html->markdown html)}))) pages)
+          docs (filterv some? docs)
           rebuilt (atom {})
           expected (index/store! (fn [cid bs] (swap! rebuilt assoc cid bs) true) (index/build docs))
           usage (:usage r)]
       (c/require! (and (= expected (:index-cid r))
-                       (= (count docs) (:tool-pages usage) (:index-documents usage))
+                       (= (count pages) (:tool-pages usage))
+                       (= (count docs) (:index-documents usage))
                        (= :web/index (:kind root))) :collection/index-invalid)
       (doseq [block-cid (distinct (concat [(:profile-cid lease) (:manifest-cid r) (:index-cid r)]
                                          (when-let [meter-cid (get-in r [:inference-receipt :response-cid])] [meter-cid])
@@ -124,7 +127,8 @@
         _ (c/require! (seq ids) :collection/no-results)
         pages (mapcat (fn [id]
                         (:pages (read-doc! shared-get! (get-in state [:accepted id :receipt :manifest-cid])))) ids)
-        unique (vals (reduce (fn [m p] (assoc m (:url p) p)) (sorted-map) pages))
+        unique (filter #(re-find #"(?i)html" (str (get-in % [:receipt :evidence :content-type])))
+                       (vals (reduce (fn [m p] (assoc m (:url p) p)) (sorted-map) pages)))
         docs (mapv (fn [p]
                      (let [html (w/utf8-string (read-block! shared-get! (:cid p)))]
                        {:cid (:cid p) :url (:url p) :title (or (w/title-of html) "")

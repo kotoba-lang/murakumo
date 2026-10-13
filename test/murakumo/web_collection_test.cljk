@@ -165,3 +165,21 @@
       (is (thrown? js/Error (transport/require-node! p))))
     (with-redefs [dispatch/call! (fn [_ _ _] {:ok {:base64 "Y29ycnVwdA=="}})]
       (is (thrown? js/Error (transport/get-block! p (c/cid "expected")))))))
+
+(deftest non-html-pages-share-but-do-not-enter-the-index
+  (let [{:keys [participant env public-key]} (node 1) [_ lease] (started participant)
+        original (:http-get! env)
+        env (assoc env :http-get! (fn [request]
+                                   (if (.endsWith (:url request) "/p")
+                                     {:status 200 :headers {"content-type" "application/json"}
+                                      :body (w/utf8-bytes "{}")}
+                                     (original request))))
+        result (runtime/run! env lease) shared (atom {})
+        adapter {:node-get! (:get-bytes! env)
+                 :shared-put! (fn [cid bs] (swap! shared assoc cid bs) true)
+                 :shared-get! #(get @shared %)
+                 :verify-signature! (fn [_ body sig] (host/verify? public-key body sig))
+                 :verify-inference! (constantly true)}]
+    (is (= 2 (get-in result [:receipt :usage :tool-pages])))
+    (is (= 1 (get-in result [:receipt :usage :index-documents])))
+    (is (true? (runtime/verify-and-share! adapter lease result)))))
