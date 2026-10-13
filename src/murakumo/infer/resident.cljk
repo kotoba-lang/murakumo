@@ -382,7 +382,9 @@
                        (.then (fn [bytes]
                                 (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
                                       lane (get @lanes lane-id)]
-                                  (-> (input-tokens! lane body (.-length bytes))
+                                  (-> (if (get-in @state [:jobs (aget (.-headers req) "x-murakumo-job-id")])
+                                        (js/Promise.resolve {})
+                                        (input-tokens! lane body (.-length bytes)))
                                       (.then (fn [estimate] {:bytes bytes :input-tokens (:input-tokens estimate)}))))))
                        (.then
                         (fn [{:keys [bytes input-tokens]}]
