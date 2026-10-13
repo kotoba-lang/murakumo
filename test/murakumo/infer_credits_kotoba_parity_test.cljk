@@ -103,7 +103,7 @@
     (is (= 1 (get actual "hn")))
     (is (= 10 (get actual "hd")))
     (is (= 1 (get actual "pn")))
-    (is (= 20 (get actual "pd")))
+    (is (= 10 (get actual "pd")))
     (is (= (double (/ (get actual "hn") (get actual "hd")))
            (double credits/default-head-frac)))
     (is (= (double (/ (get actual "pn") (get actual "pd")))
@@ -119,7 +119,7 @@
                                         [{:node {:name "head" :head? true}
                                           :span 1 :est-bytes 1}]}})
         cases {"tc" (mul-call "token-cost" price tokens)
-               "tr" (cut-call total 1 20)
+               "tr" (cut-call total 1 10)
                "hd" (cut-call total 1 10)
                "pl" (pool-call total
                                (long (:run/treasury settled))
@@ -175,9 +175,9 @@
     (is (= 30 (get actual "sf")))
     (is (= 30 (get actual "s0")))
     (is (= 70 (get actual "s1")))
-    ;; settle 200 → treasury 10 head 20 pool 170 → equal w → 85 each
-    (is (= 85 (get actual "ss0")))
-    (is (= 85 (get actual "ss1")))
+    ;; settle 200 → treasury 20 head 20 pool 160 → equal w → 80 each
+    (is (= 80 (get actual "ss0")))
+    (is (= 80 (get actual "ss1")))
     (is (= 30 (get actual "m2")))
     (is (= 6 (get actual "m3")))
     (testing "cljc job-cost multi-unit"

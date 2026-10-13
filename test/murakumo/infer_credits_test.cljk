@@ -18,13 +18,13 @@
     (testing "shares follow memory-time: the biggest resident shard earns most"
       (is (> (shares "head") (shares "naphtali") (shares "levi"))))
     (testing "treasury and head cut off the top"
-      (is (= 10.0 treasury))
+      (is (= 20.0 treasury))
       (is (= 20.0 head)))))
 
 (deftest balances-fold
   (let [b (credits/balances [run run])]
     (testing "two identical runs → double everything, plus the head's conductor cut"
-      (is (= 20.0 (b :treasury)))
+      (is (= 40.0 (b :treasury)))
       (is (< (Math/abs (- 400.0 (+ (b :treasury) (reduce + (vals (dissoc b :treasury)))))) 1e-9))))
   (testing "pre-settled entries fold identically to raw runs"
     (is (= (credits/balances [run]) (credits/balances [(credits/settle run)])))))
@@ -405,12 +405,12 @@
         permissive (credits/settle nobody)]
     (testing "unknown weights are NOT zero — nothing justifies paying anyone"
       (is (= {} (:run/shares strict)))
-      (is (= 170.0 (:run/unallocated strict))))
+      (is (= 160.0 (:run/unallocated strict))))
     (testing ":permissive pays the same two nodes an equal split — which is
               exactly the failure mode: a compiled-in constant makes every
               memory-time weight identical, so the split carries no information"
       (is (= 2 (count (:run/shares permissive))))
-      (is (< (Math/abs (- 85.0 (get-in permissive [:run/shares "tab-03GbCM"]))) 1e-9))
+      (is (< (Math/abs (- 80.0 (get-in permissive [:run/shares "tab-03GbCM"]))) 1e-9))
       (is (= 0.0 (:run/unallocated permissive))))
     (testing "both excluded nodes are named"
       (is (= 2 (count (:run/capability-excluded strict)))))))
@@ -423,7 +423,7 @@
                    :plan {:assignments [{:node {:name "head" :head? true}
                                          :span 0 :est-bytes 1e10}]}}
         r (credits/settle no-weight)]
-    (is (= 170.0 (get-in r [:run/shares "head"])))
+    (is (= 160.0 (get-in r [:run/shares "head"])))
     (is (= 0.0 (:run/unallocated r)))))
 
 (deftest accounting-identity-holds-under-every-policy

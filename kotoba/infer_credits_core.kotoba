@@ -50,7 +50,7 @@
 (defn head-num [] :i64 1)
 (defn head-den [] :i64 10)
 (defn protocol-num [] :i64 1)
-(defn protocol-den [] :i64 20)
+(defn protocol-den [] :i64 10)
 
 (defn token-cost [m [:ref :credits/mul]] :i64
   (* (record-get m :price) (record-get m :n)))
@@ -118,11 +118,11 @@
   (record-get shares :s1))
 
 (defn settle-pool-shares-2 [s [:ref :credits/settle-w]] [:ref :credits/shares2]
-  ;; default head 1/10 protocol 1/20 → pool, then floor shares
+  ;; default head 1/10 protocol 1/10 (ADR-261010b §7) → pool, then floor shares
   (let [total (record-get s :total)
         w0 (record-get s :w0)
         w1 (record-get s :w1)
-        tr (cut (record-new [:ref :credits/cut-in] total 1 20))
+        tr (cut (record-new [:ref :credits/cut-in] total 1 10))
         hd (cut (record-new [:ref :credits/cut-in] total 1 10))
         pl (pool (record-new [:ref :credits/pool-in] total tr hd))]
     (share-record-2 (record-new [:ref :credits/shares-w] pl w0 w1))))
