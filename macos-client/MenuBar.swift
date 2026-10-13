@@ -3,9 +3,10 @@ import AppKit
 struct NativeStatus: Decodable { let host:String; let backend:String; let engineReady:Bool; let residentBytes:Int; let virtualMachine:Bool }
 struct Registration:Decodable {let registered:Bool;let accountDid:String?;let approvalUri:String?;let expiresAt:Double?}
 struct ClusterFacts: Decodable {let registration:Registration?;let nativeAvailable:Bool;let gpuVerified:Bool;let engineReady:Bool;let backend:String?;let model:String?;let busy:Bool;let clientMiB:Int?;let freeMiB:Int;let totalMiB:Int}
-struct ClusterNode: Decodable,Identifiable {var id:String{did};var admitted:Bool{reachable && proofVerified};let name:String;let did:String;let reachable:Bool;let observedAt:Double?;let facts:ClusterFacts?;let proofVerified:Bool}
+struct ClusterNode: Decodable,Identifiable {var id:String{did};var admitted:Bool{reachable && proofVerified && observedAt != nil && Date().timeIntervalSince1970*1000-observedAt! < 120000};let name:String;let did:String;let reachable:Bool;let observedAt:Double?;let facts:ClusterFacts?;let proofVerified:Bool}
 struct ClusterBot:Decodable {let name:String;let mode:String;let completedTicks:Int;let lastTick:Double?}
-struct ClusterStatus:Decodable {let clusterId:String;let ownership:String;let nodes:[ClusterNode];let bot:ClusterBot}
+struct FleetConnection:Decodable,Identifiable {var id:String{name};let name:String;let state:String;let reason:String;let observers:Int;let observedAt:Double;let sshReady:Bool;let residentReachable:Bool;let proofVerified:Bool}
+struct ClusterStatus:Decodable {let fleetNodes:[FleetConnection]?;let clusterId:String;let ownership:String;let nodes:[ClusterNode];let bot:ClusterBot}
 @MainActor class StatusModel: ObservableObject {
  @Published var text="接続を確認しています…"
  @Published var cluster:ClusterStatus?
@@ -26,12 +27,13 @@ struct ClusterStatus:Decodable {let clusterId:String;let ownership:String;let no
 struct ClusterView:View {
  @ObservedObject var model:StatusModel
  var body:some View{VStack(alignment:.leading,spacing:18){
-  HStack{VStack(alignment:.leading){Text("Murakumo Cluster").font(.largeTitle.bold());Text("Itonami · クラスタ監視・運用Bot").foregroundColor(.secondary)};Spacer();Button("更新"){model.refreshCluster()}}
+  HStack{VStack(alignment:.leading){Text("Murakumo 全体地図").font(.largeTitle.bold());Text("Itonami · クラスタ監視・運用Bot").foregroundColor(.secondary)};Spacer();Button("更新"){model.refreshCluster()}}
   if let error=model.clusterError{Text(error).foregroundColor(.orange)}
   if let c=model.cluster{
    HStack{Label("\(c.nodes.filter{$0.admitted}.count) / \(c.nodes.count) 台を観測",systemImage:"network");Spacer();Text("監視 \(c.bot.completedTicks) 回")}
    Text("ユーザー連携: \(c.ownership == "server-registered" ? "登録窓口で全台の同一所有者を確認済み" : c.ownership == "multiple-owner-accounts" ? "複数の所有者があるため確認が必要" : "本人署名による登録待ち")").font(.callout).foregroundColor(.secondary)
    ScrollView{VStack(spacing:8){ForEach(c.nodes){n in HStack(spacing:16){Circle().fill(n.admitted ? Color.green:Color.orange).frame(width:9,height:9);VStack(alignment:.leading,spacing:4){Text(n.name).font(.headline);Text(n.admitted ? (n.facts?.model ?? "未観測") : "署名付きの新しい観測なし").font(.caption).foregroundColor(.secondary)}.frame(width:260,alignment:.leading);Spacer();VStack(alignment:.trailing,spacing:4){Text(n.admitted ? (n.facts?.engineReady == true ? "推論エンジン稼働":"エンジン確認が必要"):"応答なし / 未観測");Text(n.proofVerified ? "端末署名を検証済み":"署名未確認").font(.caption).foregroundColor(.secondary)};Text(n.admitted && n.facts?.gpuVerified == true ? "Metal / GPU":"GPU未確認").frame(width:110);if n.admitted,let f=n.facts{Text("空き \(f.freeMiB/1024) / \(f.totalMiB/1024) GiB").font(.caption).frame(width:140)};if n.admitted,let r=n.facts?.registration,r.registered==false,let expires=r.expiresAt,expires>Date().timeIntervalSince1970*1000,let link=r.approvalUri,link.hasPrefix("https://auth.kotoba.cloud/node?code="),let url=URL(string:link){Button("連携"){NSWorkspace.shared.open(url)}};if let at=n.observedAt{Text(Date(timeIntervalSince1970:at/1000),style:.time).font(.caption).foregroundColor(.secondary)}}.padding(14).background(Color(NSColor.controlBackgroundColor)).cornerRadius(12)}}}
+   if let fleet=c.fleetNodes,!fleet.isEmpty{Text("接続不良を監視しているノード").font(.headline);ForEach(fleet){n in HStack{Circle().fill(n.state == "Reachable" && Date().timeIntervalSince1970*1000-n.observedAt < 120000 ? Color.green:Color.orange).frame(width:9,height:9);Text(n.name).font(.headline).frame(width:110,alignment:.leading);VStack(alignment:.leading){Text(Date().timeIntervalSince1970*1000-n.observedAt < 120000 ? n.state:"Unknown · 観測期限切れ");Text(n.reason).font(.caption).foregroundColor(.secondary)};Spacer();Text("署名観測 \(n.observers) 台").font(.caption);Text(Date(timeIntervalSince1970:n.observedAt/1000),style:.time).font(.caption)}.padding(8)};Text("接続観測は推論の資格や所有者登録とは別です。電源・管理接続がないノードは現地対応を待ちます。").font(.caption).foregroundColor(.secondary)}
    Text("各端末が独立して監視を継続。署名付き状態と履歴を端末間で保持します。所有者認証・公開ジョブの権限は監視署名と別です。").font(.caption).foregroundColor(.secondary)
   }else if model.clusterError==nil{ProgressView("監視状態を取得しています…")}
   HStack{Button("Murakumo 管理画面"){NSWorkspace.shared.open(URL(string:"https://murakumo.cloud/portal/#devices")!)};Button("Itonami Bot管理"){NSWorkspace.shared.open(URL(string:"https://app.itonami.cloud/")!)}}
