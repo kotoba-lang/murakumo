@@ -5,6 +5,14 @@
 - Amends: ADR-261010b §2 (supply) and §10 (no premine → no insider allocation)
 - Depends: ADR-261010 (Proof of Inference, onprem tiers), ADR-261010b (KUMO)
 
+> **Revised 2026-10-13 (owner decision: the subsidy is a KUMO reward pool, ADR-261010b).**
+> There is no 2.1B cap to carve from. The MGA becomes a **sub-account of the reward pool**
+> that receives 5% of every pool inflow until genesis + 12 months, and it pays out only
+> against delivered capacity as described below. Read every absolute amount in this ADR
+> as a share of that sub-account: tranche A = 50%, B = 30%, C = 20% (the former 52.5M /
+> 31.5M / 21.0M of 105M). Condition 2 below ("never new supply") holds more strongly than
+> before: nothing is minted at all. Unclaimed reservations still return to the pool.
+
 ## Context
 
 murakumo wants Bitcoin miners to commit power early. A subsidy that starts at

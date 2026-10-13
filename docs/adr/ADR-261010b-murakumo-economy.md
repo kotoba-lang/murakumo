@@ -8,15 +8,15 @@
   `memory-time-weight`, `settle-pool-shares-2`, `ledger-violations`)
 - Hardware figures are design assumptions (accepted as such, 2026-10-10)
 
-> **Naming conflict to resolve before acceptance (2026-10-10).** Root ADR-2610101900
-> records the owner decision that **KUMO is the unit of root ADR-2610031000**: murakumo's
-> prepaid, non-redeemable compute unit that absorbs credits 1:1. This ADR uses the same
-> name for a different thing (a 2.1B-cap halving subsidy token kept apart from credits,
-> §1–§2). Both cannot be KUMO. Per ADR-2610101900 this ADR is to be repositioned as the
-> **reward design on top of that KUMO**: the subsidy unit here needs another name (or the
-> subsidy is re-expressed as a KUMO pool), and §1 "two units, kept apart" must be
-> rewritten against 2610031000's single unit. Until then, read "KUMO" below as "the
-> subsidy unit of this proposal", not the murakumo compute unit.
+> **Revised 2026-10-13 (owner decision): the subsidy is a KUMO reward pool, not a second
+> unit.** KUMO is the unit of root ADR-2610031000 (murakumo's compute unit; credits fold
+> into it 1:1; purchased KUMO is not redeemable, earned KUMO is). The first draft of this
+> ADR used "KUMO" for a 2.1B-cap halving token kept apart from credits; that is withdrawn.
+> What remains is the Bitcoin-shaped *schedule and split*: a funded pool of KUMO pays a
+> per-block release that halves on Bitcoin's halving blocks, split between customer work,
+> proven capacity, verification and a sunsetting treasury share. No new token is minted.
+> Sections 1, 2, 7, 9, 10 and 11 are rewritten; 3–6, 8 and 12 hold with "subsidy" read as
+> "release from the pool". Root ADR-2610101900 decision 7 (planes meter, they do not mint).
 
 ## Context
 
@@ -36,65 +36,56 @@ counterpart exists because of this.
 
 | Bitcoin | murakumo |
 |---|---|
-| BTC, hard cap 21M | **KUMO**, hard cap 2.1B |
+| BTC, hard cap 21M | **KUMO reward pool**: funded, never minted; it can only pay out what was paid in |
 | Block every 10 min | **Settlement block per Bitcoin block** (anchored) |
 | Hash (SHA-256 work) | **VCU** (ADR-261010 §1, verified PFLOP) |
-| Block subsidy, halving every 210,000 blocks (~4 y) | Subsidy, halving **on the same blocks as Bitcoin** (1,050,000, 1,260,000, …) |
+| Block subsidy, halving every 210,000 blocks (~4 y) | Release rate from the pool, halving **on the same blocks as Bitcoin** (1,050,000, 1,260,000, …) |
 | Transaction fees | **Inference fees** (customer payments) |
 | Difficulty adjustment (keeps block time) | **Subsidy split rule** (keeps subsidy tied to real work) and published inference hashprice |
 | Coinbase maturity, 100 blocks | **Reward maturity, 144 blocks (24 h)**, the slashing window |
 | Mining pools (PPS/FPPS/PPLNS) | murakumo PPS pool for fees, third-party pools allowed |
 | Miner signalling (BIP 9) | **VCU-weighted signalling** for parameter changes |
-| Fair launch, no premine | **No insider allocation, no sale**. 5% is reserved for miners and earned by delivered capacity (ADR-261010c). Treasury takes a sunsetting share of subsidy |
+| Fair launch, no premine | **No insider allocation, no sale, no new token**. A capacity-unlocked miner reservation is carved from the pool (ADR-261010c). Treasury takes a sunsetting share of the release |
 | ECDSA/Schnorr | **Ed25519 + ML-DSA-65 hybrid** on every receipt and block |
 
 ## Decision
 
-### 1. Two units, kept apart
+### 1. One unit: KUMO
 
-- **Credits**: what customers pay with. They are USD-denominated, prepaid and
-  non-transferable. Fees settle in credits, and nodes cash them out in fiat.
-  This is the existing `:infer-credits` ledger.
-- **KUMO**: what the subsidy is paid in. It is used for stake and slashing, and
-  optionally for paying fees. Its supply is fixed by §2.
+- **KUMO** is what customers pay with and what nodes earn (root ADR-2610031000: credits
+  fold into it 1:1; topups accrue it; purchased KUMO is not redeemable; earned KUMO is,
+  through the existing redeem-request / redeem-settle path; transfers are not earnings).
+- **The reward pool** is an account of KUMO, not a unit. It pays the per-block release of
+  §2, split by §4. Rewards from the pool are earnings (redeemable under the same rules),
+  so a node is paid in the one unit it already understands.
+- There is no second token, no cap to sell against, and nothing to list. The fee economy
+  and the reward economy are the same ledger (`:infer-credits` / `cloud-murakumo.kumo`).
 
-Keeping two units means the fee economy works on day one without any token. KUMO
-can stay non-transferable until legal review clears it (§10), and launching or
-delaying it never touches customer billing.
-
-### 2. Supply schedule
+### 2. Funding and release schedule
 
 ```
-hard cap         2,100,000,000 KUMO
-  miner genesis allocation   105,000,000  (5%, ADR-261010c)
-  block subsidy            1,995,000,000  (95%)
+pool inflows     protocol cut share  p_pool · c · fees     (§7; published per block)
+                 treasury deposits   operator-funded, published, never withdrawn back
+                 forfeits            slashed stake (§8), expired miner reservations (261010c)
+pool outflow     release R(h) = r(h) · B(h)                 B(h) = pool balance at block h
 block            one settlement block per Bitcoin block
-halving          at Bitcoin halving heights: 1,050,000, 1,260,000, 1,470,000, …
-era 0            genesis → first Bitcoin halving height after genesis (L0 blocks)
-era 0 subsidy    R0 = 1,995,000,000 / (L0 + 210,000), fixed at genesis
-era n ≥ 1        R0 / 2^n per block, 210,000 blocks each
-smallest unit    1e-6 KUMO (micro-KUMO; the 2.1e15 total stays exact below 2^53,
-                 so JS numbers and EDN carry every amount on every host)
+rate             r(h) = r0 / 2^era(h); era changes at Bitcoin halving heights
+                 1,050,000, 1,260,000, 1,470,000, ...
+smallest unit    1e-6 KUMO (exact below 2^53 for any plausible balance)
 ```
 
-Example with genesis at about BTC height 1,013,000 (mid-2027), so L0 ≈ 37,000
-and R0 ≈ 8,077. Cumulative supply includes the 105M MGA:
-
-| Era | Bitcoin heights | ≈ Years | Subsidy / block | Era emission | Cumulative supply | Share of cap |
-|---|---|---|---|---|---|---|
-| 0 | 1,013,000–1,050,000 | 2027–2028 | 8,077 | 0.299B | 0.404B | 19.2% |
-| 1 | 1,050,000–1,260,000 | 2028–2032 | 4,038 | 0.848B | 1.252B | 59.6% |
-| 2 | 1,260,000–1,470,000 | 2032–2036 | 2,019 | 0.424B | 1.676B | 79.8% |
-| 3 | 1,470,000–1,680,000 | 2036–2040 | 1,010 | 0.212B | 1.888B | 89.9% |
-| 4 | 1,680,000–1,890,000 | 2040–2044 | 505 | 0.106B | 1.994B | 94.9% |
-| 5 | 1,890,000–2,100,000 | 2044–2048 | 252 | 0.053B | 2.047B | 97.5% |
-
-The halving blocks are Bitcoin's own (decided in ADR-261010c §9). Miners
-already plan capex, financing and treasury around that cycle, and a shared
-calendar needs no explanation. Inference hardware depreciates faster than
-ASICs; the §4 capacity pool answers that by paying for proven capacity while
-demand is still small. The accepted cost is that BTC and KUMO subsidies drop
-on the same block.
+- **The pool can never pay more than it holds.** The release is a fraction of the
+  current balance, so the liability is bounded by what was paid in. Nothing is promised
+  ahead of funding, which is what made a fixed-cap token schedule a legal and
+  accounting problem.
+- **Halving keeps the Bitcoin calendar** (decided in ADR-261010c §9): the release
+  *rate* halves on Bitcoin's own halving blocks, so early capacity earns a larger share
+  of the same pool than late capacity. Miners already plan around that calendar.
+- `r0` and `p_pool` are launch parameters (§11). Example: with `r0` = 1/200,000 per
+  block, a balance that receives no new funding releases about 65% of itself in era 0's
+  first 210,000 blocks; each later era releases at half the rate.
+- The pool balance, inflows and every block's release are public (the block log of §9),
+  so the schedule is auditable the same way Bitcoin's supply is.
 
 ### 3. What a block contains
 
@@ -105,7 +96,7 @@ header
   verdicts_root      Merkle root of verification results (pass / slash)
   challenges_root    Merkle root of capacity challenges issued and answered
   subsidy            S(h), and its split (§4)
-  fees_usd           total customer fees settled
+  fees               total customer fees settled (KUMO)
   params_hash        hash of the active parameter set
   signatures         block signers, Ed25519 + ML-DSA-65 each
 body
@@ -128,16 +119,15 @@ Each block's subsidy `S(h)` splits in this order:
 treasury      τ · S          τ = 10% for the first 210,000 blocks after genesis, then 0
 verification  v · S          v = 5%, permanent
 production    P = S − τS − vS
-  customer pool   P_c = min(P, λ · fees_usd / price_ref)
+  customer pool   P_c = min(P, λ · fees)
   capacity pool   P_k = P − P_c
 ```
 
 - **Customer pool** (`P_c`): paid pro-rata to VCU from customer jobs in the
   block. It is capped so that the subsidy attached to customer work is worth
-  at most `λ` times the fees that work paid (`λ = 1`). `price_ref` is a 7-day
-  TWAP of KUMO in USD. While KUMO is non-transferable, `price_ref` is a published
-  accounting price. Nobody can sell a non-transferable token, so nobody gains
-  by manipulating that price.
+  at most `λ` times the fees that work paid (`λ = 1`). Fees and rewards are both
+  KUMO (§1), so the cap is in one unit and needs no exchange rate (the first draft's
+  `price_ref` is gone).
 - **Capacity pool** (`P_k`): paid for **protocol-issued work** that no customer
   chooses (§5). It cannot be wash-traded.
 - **Verification** (`v`): paid to verifiers per replay performed. It is
@@ -194,10 +184,11 @@ protocol, not the node, chooses that work.
 - The protocol cut funds the **PPS reserve** and operations. murakumo does not
   buy KUMO back with fee revenue. Doing so would make KUMO look like a claim on
   murakumo's business (see §10).
-- **Paying in KUMO** (optional): a customer may pay fees in KUMO at `price_ref`
-  with a discount. A base portion of those KUMO is burned and the rest goes to
-  the node. This works like EIP-1559's base-fee burn: usage removes supply only
-  when customers choose KUMO.
+- **Fees are KUMO** (§1). The protocol cut `c` is split: `p_pool · c` funds the reward
+  pool (§2) and the rest funds the PPS reserve and operations. A fee-funded buyback does
+  not exist because there is nothing to buy back. Fees for work with a provider are moved
+  by `:kumo/settle-run` (purchaser → providers + treasury), never burned (root
+  ADR-2610031000 §2).
 - **Pools**: murakumo runs a PPS pool, which pays a fixed USD per VCU from the
   reserve. Third-party pools may aggregate small onprem V/S operators and pay
   them however they choose. The protocol pays each node directly, and pools
@@ -229,7 +220,7 @@ Building a new chain on day one would be the riskiest possible start. Instead:
 |---|---|---|---|
 | 1 | murakumo settlement ledger (kotoba records), public block log | murakumo coordinator | Centralised but auditable. Each block's header hash is **anchored to Bitcoin** (OP_RETURN, batched hourly), so history cannot be rewritten silently |
 | 2 | Same ledger | **Federation** of independent verifiers and operators, k-of-n hybrid signatures | Like Liquid: no single party can sign a block |
-| 3 | A chain with post-quantum signature support (own or existing) | Open set, VCU- and stake-weighted | KUMO becomes transferable after legal review |
+| 3 | awai (root ADR-2610092330) or an existing chain with post-quantum signature support | Open set, VCU- and stake-weighted | Any change to KUMO's transferability is a separate owner decision after legal review |
 
 Anchoring to Bitcoin gives miners a reason to trust phase 1: the history
 they're paid from is committed to the chain they already secure.
@@ -238,22 +229,24 @@ that every federation member runs.
 
 ### 10. Legal boundaries
 
-- No sale, no insider allocation, no buyback. KUMO is distributed only for
-  verified work: the block subsidy, and the miner allocation that unlocks only
-  against delivered capacity (ADR-261010c).
-- KUMO stays **non-transferable** until counsel clears Japan's Payment Services
-  Act (crypto-asset classification, exchange listing) and FIEA
-  (security-token risk), plus each target jurisdiction.
-- Credits are prepaid instruments. Unused-balance thresholds under the Payment
-  Services Act decide when registration and deposit obligations apply.
-- The treasury share is time-limited and published per block, so it is never
-  an undisclosed allocation.
+- No sale, no insider allocation, no buyback, no new token. Rewards are paid only for
+  verified work, from a pool that holds KUMO paid in beforehand.
+- KUMO keeps root ADR-2610031000's rules: purchased KUMO is a prepaid instrument and not
+  redeemable; earned KUMO (including pool rewards) is redeemable through the operator's
+  settle step. Unused-balance thresholds under Japan's Payment Services Act decide when
+  registration and deposit obligations apply to the prepaid part.
+- Any transferable or exchange-listed form of value is out of scope (root
+  ADR-2608311800: BOT is the only tradeable token).
+- The treasury share is time-limited and published per block, so it is never an
+  undisclosed allocation.
 
 ### 11. Parameters and governance
 
 | Parameter | Launch value | Hard bounds | Changed by |
 |---|---|---|---|
-| Hard cap, block cadence, halving heights | 2.1B, one per Bitcoin block, Bitcoin halving heights | **Immutable** | — |
+| Block cadence, halving heights, "release is a fraction of the balance" | One per Bitcoin block, Bitcoin halving heights | **Immutable** | — |
+| `r0` era-0 release rate | set at launch | > 0, < 1/10,000 per block | Immutable after genesis |
+| `p_pool` share of the protocol cut to the pool | set at launch | 0–100% | Signalling |
 | `τ` treasury share | 10% | 0–10%, sunsets 210,000 blocks after genesis | Immutable sunset |
 | `v` verification share | 5% | 2–10% | Signalling |
 | `c` protocol cut | 10% | 5–20% | Signalling |
@@ -282,7 +275,14 @@ immutable as the cap.
 
 ## Consequences
 
-- `infer_credits_core` grows a block-settlement surface: `subsidy-at`,
+- **Code follow-up (not done in the 2026-10-13 revision):** `src/murakumo/poi/core.cljk`
+  and `kotoba/poi_core.kotoba` (with its shipped KIR under `resources/murakumo/oracle/`,
+  checked by `poi_kotoba_parity_test`) still implement the withdrawn fixed-cap schedule
+  (`subsidy-total-base`, `mga-base`, `subsidy-r0`). Moving them to `release-at` and a
+  KUMO-denominated customer-pool cap changes the `.kotoba` source and needs the KIR
+  regenerated with amu, which was not available on the host that made this revision.
+  Until then those functions describe the first draft, not this ADR.
+- `infer_credits_core` grows a block-settlement surface over the KUMO ledger: `release-at` (r(h)·B(h)), `subsidy-at` (the same, kept as the split input),
   `split-subsidy`, `customer-pool-cap`, `wash-bound?`, `mature?` and
   `slash`, all pure, under the same kotoba parity discipline as the rest of
   the credits oracle.
@@ -300,8 +300,7 @@ immutable as the cap.
 
 ## Open questions
 
-- `price_ref` before KUMO is transferable: who publishes the accounting price,
-  and on what basis.
+- Launch values of `r0` and `p_pool`, and the size of the first treasury deposit.
 - Contents and licensing of the public-goods queue.
 - Federation membership criteria for phase 2.
 - Whether the operator soft cap should apply per legal entity or per stake key.
