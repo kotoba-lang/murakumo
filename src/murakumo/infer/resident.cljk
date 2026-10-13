@@ -13,6 +13,11 @@
             ["node:fs" :as fs] ["node:http" :as http]
             ["node:crypto" :as crypto] ["node:child_process" :as cp]))
 
+(defn output-reservation [lane maximum]
+  ;; max_tokens is an upper bound, not a promise to fill it. Tokenizer-enabled
+  ;; heads reserve 8K for an agent turn and enforce their remaining context.
+  (if (= "llama-template" (:input-tokenizer lane)) (min maximum 8192) maximum))
+
 (defn eligible? [lane request]
   (and (= (:model lane) (:model request))
        (number? (:input-tokens request))
@@ -395,7 +400,7 @@
                                 digest (.digest (.update (.createHash crypto "sha256") bytes) "hex")
                                 lane (when-let [l (get @lanes lane-id)] (qualified-lane topology (:node config) l))
                                 request {:model (:model body) :input-tokens input-tokens
-                                         :max-tokens (or (:max_tokens body) 1024)}]
+                                         :max-tokens (output-reservation lane (or (:max_tokens body) 1024))}]
                             (cond
                               (.-destroyed res) nil
                               (and (:drain-file config) (.existsSync fs (:drain-file config)))
@@ -438,7 +443,9 @@
                                                   #js {:method "POST" :signal (.-signal controller)
                                                        :headers #js {"content-type" "application/json"}
                                                        :body (if (= "text" (:kind lane))
-                                                               (js/JSON.stringify (clj->js (assoc body :max_tokens (:max_tokens body 1024))))
+                                                               (js/JSON.stringify (clj->js (assoc body :max_tokens (if (= "llama-template" (:input-tokenizer lane))
+                                                                                         (min (:max_tokens body 1024) (- (:context lane) input-tokens))
+                                                                                         (:max_tokens body 1024)))))
                                                                bytes)})
                                         (.then (fn [r]
                                                  (.writeHead res (.-status r)
