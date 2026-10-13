@@ -78,6 +78,7 @@
             :node/ready? true
             :node/model "m"
             :node/engine "openai-compatible"
+            :node/planes ["inference"]
             :node/observed-at 1000
             :node/capacity {:slots-total 1 :slots-free 1 :memory-bytes 4096}}
            (worker/heartbeat-body config true 1000)))
@@ -85,6 +86,10 @@
     (let [body (worker/heartbeat-body config true 1001)]
       (is (false? (:node/ready? body)))
       (is (= 0 (get-in body [:node/capacity :slots-free]))))))
+
+(deftest heartbeat-names-the-planes-it-serves
+  (is (= ["generation"] (:node/planes (worker/heartbeat-body {:did "d" :model "m" :planes ["generation"]
+                                                              :memory-bytes (constantly 1)} true 1)))))
 
 (deftest idle-only-node-withholds-capacity-while-the-host-is-busy
   (let [config {:did "did:key:node" :model "m" :slots 1

@@ -149,8 +149,11 @@
 
 (defn heartbeat-body
   "Build one bounded liveness observation.  `ready?` is a fresh local model
-  probe; a busy single-slot worker remains live but advertises zero free slots."
-  [{:keys [did model engine slots busy? memory-bytes idle?]} ready? observed-at]
+  probe; a busy single-slot worker remains live but advertises zero free slots.
+  `:node/planes` names the planes this process serves (root ADR-2610101900;
+  murakumo.plane-registry): a poll worker serves the inference plane unless its
+  config says otherwise."
+  [{:keys [did model engine slots busy? memory-bytes idle? planes]} ready? observed-at]
   (let [total (max 1 (or slots 1))
         used (if (and busy? @busy?) 1 0)
         available? (and (or (nil? idle?) (try (boolean (idle?))
@@ -160,6 +163,7 @@
      :node/ready? (boolean (and ready? available?))
      :node/model model
      :node/engine (or engine "openai-compatible")
+     :node/planes (vec (or (seq planes) ["inference"]))
      :node/observed-at observed-at
      :node/capacity {:slots-total total
                      :slots-free (if available? (max 0 (- total used)) 0)

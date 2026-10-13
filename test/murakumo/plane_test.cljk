@@ -1,12 +1,12 @@
 (ns murakumo.plane-test
-  (:require [cljs.reader :as reader]
-            [kotoba.test :refer [deftest is]]
-            [murakumo.plane :as plane]))
+  (:require [kotoba.test :refer [deftest is]]
+            [murakumo.plane :as plane]
+            [murakumo.plane-registry :as reg]))
 
 (def fs (js/require "fs"))
 (def path (js/require "path"))
 
-(def registry (reader/read-string (.readFileSync fs "resources/murakumo/planes.edn" "utf8")))
+(def registry reg/registry)
 
 (defn- src-namespaces
   "Every namespace under src/, from its file path (the repo's ns-per-file layout)."
@@ -54,3 +54,14 @@
   (is (= [:plane/settlement] (plane/plane-problems (assoc (plane/by-id registry :web) :plane/settlement :usd))))
   (is (= [:plane/requires] (plane/plane-problems (assoc (plane/by-id registry :web) :plane/requires #{:root}))))
   (is (= [:plane/missing-keys :plane/opt-in?] (plane/plane-problems (dissoc (plane/by-id registry :web) :plane/opt-in?)))))
+
+(deftest the-published-view-has-no-internals
+  (let [v (plane/public-view registry)
+        web (first (filter #(= "web" (get % "id")) (get v "planes")))]
+    (is (= 7 (count (get v "planes"))))
+    (is (= {"host" "web.murakumo.cloud" "scope" "web"} (get web "gate")))
+    (is (= true (get web "opt_in")))
+    (is (= ["egress"] (get web "requires")))
+    (is (= "kumo" (get web "settlement")))
+    (is (not-any? #(contains? % "namespaces") (get v "planes")))
+    (is (= (js/JSON.stringify (clj->js v)) (js/JSON.stringify (clj->js (plane/public-view registry)))) "stable")))

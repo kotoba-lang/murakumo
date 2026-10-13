@@ -16,7 +16,7 @@ would be a large, conflict-prone diff with no behaviour to show for it.
 
 ## Decision
 
-1. **A plane is a data descriptor** in `resources/murakumo/planes.edn`: id, name,
+1. **A plane is a data descriptor** in `murakumo.plane-registry` (`src/murakumo/plane_registry.cljk`; was `resources/murakumo/planes.edn` until it had to be required by the murakumo.cloud Worker): id, name,
    status (`:live` `:partial` `:planned`), public gate host and token scope, what it
    promises, what it meters, its settlement unit (`:kumo` `:yata` `:en`), its
    verification rule, the node capabilities it requires (`:accelerator` `:disk`
