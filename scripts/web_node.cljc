@@ -9,8 +9,11 @@
 ;; existing SSH path, so a node exposes nothing new to the network.
 (ns web-node
   (:require [cljs.reader :as reader]
+            [murakumo.canonical :as canonical]
             [murakumo.web :as web]
             [murakumo.web.crawl :as crawl]
+            [murakumo.web.collection-runtime :as collection]
+            [murakumo.web.collection-host :as collection-host]
             [murakumo.web.host :as host]
             [murakumo.web.index :as index]
             [murakumo.web.provision :as provision]
@@ -186,6 +189,26 @@
       :fetch (w/fetch! env job)
       :extract (w/extract! env job)
       :crawl (crawl/crawl! env job)
+      :collection-run
+      (let [cfg (read-edn-file (.join path (home) "collector-host.edn"))]
+        (when-not (and (true? (:public-egress? cfg))
+                      (= (:supplier-did cfg) (:supplier-did job))
+                      (= (:owner-did cfg) (:owner-did job))
+                      (= (:bot-id cfg) (:bot-id job)))
+          (throw (ex-info "host has not admitted this collector" {:type :collection/host-not-admitted})))
+        {:ok (collection-host/run-once!
+               (.join path (home) "collection-runs") job
+               #(collection/run! (assoc env :run-bot!
+                                       (fn [p assignment] (collection-host/run-bot! cfg (:put! env) p assignment))) job))})
+      :collection-profile-put
+      (let [cfg (read-edn-file (.join path (home) "collector-host.edn"))
+            p (collection/profile (:profile job)) cid (w/raw-cid (w/utf8-bytes (canonical/string p)))]
+        (when-not (and (= (:owner-did cfg) (:owner-did p)) (= (:bot-id cfg) (:bot-id p))
+                      (contains? (:profile-cids cfg) cid))
+          (throw (ex-info "profile is not host-admitted" {:type :collection/profile-not-admitted})))
+        (when-not ((:put! env) cid (w/utf8-bytes (canonical/string p)))
+          (throw (ex-info "profile store failed" {:type :collection/profile-put-failed})))
+        {:ok {:profile-cid cid}})
       :search (search/search! env job)
       :index (index/index-crawl! env job)
       :index-search (index/search-index! env job)

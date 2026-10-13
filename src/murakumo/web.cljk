@@ -260,8 +260,14 @@
 
 (defn decide
   "Decision for a bot capability against a yakuwari table. Unlisted, or any
-  value other than :ok / :owner-approval, is :blocked."
+  value other than autonomous/approval-required (or their legacy web aliases),
+  is :blocked. Preserve the old web decision result vocabulary for callers."
   [table capability]
   (let [d (some (fn [row] (when (= capability (:capability row)) (:decision row)))
                 (:yakuwari/capabilities table))]
-    (if (#{:ok :owner-approval} d) d :blocked)))
+    (case d
+      :autonomous :ok
+      :approval-required :owner-approval
+      :ok :ok
+      :owner-approval :owner-approval
+      :blocked)))

@@ -1,0 +1,33 @@
+(ns web-collection-profile-smoke
+  (:require [cljs.reader :as reader]
+            [murakumo.canonical :as canonical]
+            [murakumo.web.collection :as c]
+            [murakumo.web.worker :as w]))
+
+(let [fs (js/require "fs") path (js/require "path") cp (js/require "child_process")
+      bundle (.resolve path (first *command-line-args*))
+      root (or (.. js/process -env -MURAKUMO_TEST_DIR) (.join path (.cwd js/process) "build"))
+      _ (.mkdirSync fs root #js {:recursive true})
+      dir (.mkdtempSync fs (.join path root "profile-smoke-"))
+      p {:schema :web/collector-profile-v1 :owner-did "did:key:zFixtureOwner" :bot-id "fixture"
+         :soul "Collect only admitted public pages." :tools [:web/crawl :web/index]}
+      cid (c/cid p)
+      cfg {:owner-did (:owner-did p) :bot-id (:bot-id p) :profile-cids #{cid}}
+      call! (fn [profile]
+              (let [env (js/Object.assign #js {} (.-env js/process)
+                          #js {:MURAKUMO_WEB_HOME dir :MURAKUMO_YATAVERSE_URL ""})
+                    r (.spawnSync cp "nbb" (clj->js ["-cp" bundle (str bundle "/web_node.cljs")])
+                                  #js {:input (pr-str {:op :collection-profile-put :job {:profile profile}})
+                                       :encoding "utf8" :timeout 30000 :env env})
+                    line (last (.split (.trim (str (.-stdout r))) "\n"))]
+                (c/require! (zero? (.-status r)) :collection/smoke-process)
+                (reader/read-string line)))]
+  (try
+    (.writeFileSync fs (.join path dir "collector-host.edn") (pr-str cfg) #js {:mode 0600})
+    (c/require! (= cid (get-in (call! p) [:ok :profile-cid])) :collection/smoke-profile-cid)
+    (let [bs (js/Uint8Array. (.readFileSync fs (.join path dir "store" cid)))]
+      (c/require! (= cid (w/raw-cid bs)) :collection/smoke-profile-readback)
+      (c/require! (= (canonical/string p) (w/utf8-string bs)) :collection/smoke-profile-body))
+    (c/require! (:refused (call! (assoc p :soul "Unreviewed revision"))) :collection/smoke-revision-not-held)
+    (println "stock-nbb collection profile: ok")
+    (finally (.rmSync fs dir #js {:recursive true :force true}))))
