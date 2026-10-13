@@ -34,7 +34,7 @@ test('signed topology converges without its publisher, admits approved joins and
  for(let i=0;i<2;i++){await writeFile(configs[i]['state-file']+'.owner-id',owners[i],{mode:0o600});if(i===1)await writeFile(configs[i]['state-file'],JSON.stringify({jobs:{}}),{mode:0o600});}
  for(let i=0;i<4;i++)await launch(i);
  const health=async i=>(await(await fetch(urls[i]+'/health',{headers})).json());
- await wait(async()=>{const h=await health(2);return h.peers?.n0?.lanes.text.ready;});
+ await wait(async()=>{const hs=await Promise.all(ids.map((_,i)=>health(i)));return hs.every(h=>h.topology?.revision===1)&&hs[2].peers?.n0?.lanes.text.ready;});
  assert.equal((await health(1)).lanes.text.ready,false);
  assert.equal((await readFile(configs[0]['state-file']+'.bound-owner','utf8')).trim(),owners[0]);
  assert.equal((await fetch(urls[2]+'/topology')).status,401);
