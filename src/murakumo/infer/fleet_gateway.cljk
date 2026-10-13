@@ -11,8 +11,28 @@
              :when (< (- now (:at report 0)) stale-ms)
              [lane l] (:lanes report)
              :when (and (:ready l) (not (:busy l)) (= model (:model l)) (= kind (:kind l)))]
-         (merge (select-keys l [:max-image-tokens :max-images])
+         (merge (select-keys l [:max-image-tokens :max-images :input-tokenizer])
                 {:node node :lane (name lane) :context (:context l 0)}))))
+
+(defn gateway-input-tokens! [choices peers body bytes token]
+  "Ask one qualified same-model resident for a digest-bound tokenizer estimate.
+  It does not admit or execute a job; execution owners verify admission again."
+  (if-let [{:keys [node lane]} (first (filter #(= "llama-template" (:input-tokenizer %)) choices))]
+    (let [peer (get peers node)
+          digest (.digest (.update (.createHash crypto "sha256") bytes) "hex")]
+      (-> (js/fetch (str (.-origin (js/URL. (:url peer))) "/estimate/" lane)
+                    #js {:method "POST" :signal (.timeout js/AbortSignal 7000)
+                         :headers #js {"authorization" (str "Bearer " token) "content-type" "application/json"}
+                         :body bytes})
+          (.then (fn [resp] (when-not (.-ok resp) (throw (js/Error. "estimate unavailable"))) (.json resp)))
+          (.then (fn [result]
+                   (when (and (= digest (.-digest result)) (= (:model body) (.-model result))
+                              (= "backend-tokenizer" (.-source result))
+                              (js/Number.isSafeInteger (aget result "input-tokens"))
+                              (<= 0 (aget result "input-tokens") 2097280))
+                     (aget result "input-tokens"))))
+          (.catch (fn [_] nil))))
+    (js/Promise.resolve nil)))
 
 (defn start! [config]
   (let [token (r/private-token (:token-file config))
@@ -116,9 +136,16 @@
                       (let [released? (atom false) release! #(when (compare-and-set! released? false true) (swap! active dec))]
                         (.once res "finish" release!) (.once res "close" release!))
                     (-> (r/read-body! req (:max-body-bytes config 2097152))
+                        (.then (fn [bytes]
+                                 (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
+                                       kind (if (= "/v1/chat/completions" (.-url req)) "text" "image")
+                                       choices (candidates (into {} (filter (fn [[node report]] (topo/conformant-report? topology node report)) @reports)) (:model body) kind (js/Date.now) 15000)]
+                                   (-> (if (= kind "text") (gateway-input-tokens! choices @peers body bytes token) (js/Promise.resolve nil))
+                                       (.then (fn [input] {:bytes bytes :input-tokens input}))))))
                         (.then
-                         (fn [bytes]
-                           (let [body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
+                         (fn [{:keys [bytes input-tokens]}]
+                           (let [_ (when (.-destroyed res) (throw (js/Error. "caller disconnected")))
+                                 body (js->clj (js/JSON.parse (.toString bytes)) :keywordize-keys true)
                                  kind (if (= "/v1/chat/completions" (.-url req)) "text" "image")
                                  _ (when (and (= kind "text") (not (r/valid-output-budget? body)))
                                      (throw (js/Error. "invalid output budget")))
@@ -126,7 +153,7 @@
                                  nonce (str/replace (.randomUUID crypto) #"-" "")
                                  choices (candidates (into {} (filter (fn [[node report]] (topo/conformant-report? topology node report)) @reports)) (:model body) kind (js/Date.now) 15000)
                                  choices (filterv #(or (= kind "image")
-                                                      (when-let [input (r/request-input-tokens % body (.-length bytes))]
+                                                      (when-let [input (or (when (= "llama-template" (:input-tokenizer %)) input-tokens) (r/request-input-tokens % body (.-length bytes)))]
                                                         (>= (:context %) (+ input (:max_tokens body 1024))))) choices)
                                  ;; Random first peer spreads simultaneous arrivals across gateways.
                                  choices (if (seq choices)
