@@ -46,6 +46,9 @@ test('backend tokenizer admits a large byte payload to 32K without weakening con
  const overflow=structuredClone(body);overflow.messages[0].content='REAL_TOKEN_OVERFLOW '+overflow.messages[0].content;
  r=await fetch(gu+'/v1/chat/completions',{method:'POST',headers,body:JSON.stringify(overflow)});assert.equal(r.status,429);assert.equal(executions,1);
  r=await fetch(ru+'/execute/text',{method:'POST',headers:{...headers,'x-murakumo-job-id':'direct-overflow-123'},body:JSON.stringify(overflow)});assert.equal(r.status,422);assert.equal(executions,1);
+ const largeOutput={...body,max_tokens:32768};
+ r=await fetch(gu+'/v1/chat/completions',{method:'POST',headers,body:JSON.stringify(largeOutput)});assert.equal(r.status,200);await r.json();assert.equal(received.at(-1).max_tokens,32768-8128,'output is bounded by actual head context');
+ await wait(async()=>(await(await fetch(gu+'/health',{headers})).json()).peers.n.lanes.text.busy===false);
  const streaming={model:'mishima',max_tokens:64,stream:true,messages:[{role:'user',content:'Reply OK.'}]};
  const started=Date.now();r=await fetch(gu+'/v1/chat/completions',{method:'POST',headers,body:JSON.stringify(streaming)});
  assert.equal(r.status,200);const reader=r.body.getReader();let part=await reader.read();let text=Buffer.from(part.value).toString();
@@ -55,5 +58,5 @@ test('backend tokenizer admits a large byte payload to 32K without weakening con
  const events=text.split('\n').filter(l=>l.startsWith('data: ')&&l!=='data: [DONE]').map(l=>JSON.parse(l.slice(6)));
  assert.equal(events.filter(e=>e.choices?.[0]?.delta?.content==='OK').length,1,'heartbeat never corrupts a split upstream event');
  tokenizerBroken=true;
- r=await fetch(gu+'/v1/chat/completions',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(r.status,429);assert.equal(executions,1);
+ r=await fetch(gu+'/v1/chat/completions',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(r.status,429);assert.equal(executions,2);
 });

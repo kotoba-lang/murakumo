@@ -323,11 +323,13 @@ wasm32-browser and run through `instantiateKotoba`). The search backtracks
 outward when the policy reports that no candidate fits.
 
 `system-one/gateway.edn` encodes two separate flows as typed kotoba functions
-(19 725 exhaustive cases; checks use independently written oracles):
+(35 358 cases including reservation boundaries; checks use independently written oracles):
 `clamp-max-tokens` is the poll worker's clamp (`poll_worker.cljk`,
 `(min 2048 …)`), and `lane-fits` is resident/gateway lane admission against the
-request's original `max_tokens` (`resident.cljk`, `fleet_gateway.cljk`:
-`context >= input + max_tokens`). They are deliberately not composed: the clamp
+request's original `max_tokens` on legacy lanes (`resident.cljk`, `fleet_gateway.cljk`:
+`context >= input + max_tokens`). `tokenizer-lane-fits` covers opt-in
+`llama-template` lanes: `context >= input + min(max_tokens, 8192)`, with the
+upstream output ceiling clamped to the head's remaining context. They are deliberately not composed: the clamp
 is not applied before resident admission in production. The harness commit is pinned in
 `kotoba-harness.pin.edn` and fetched into
 `${XDG_CACHE_HOME:-~/.cache}/kotoba-harness/<sha>` on first use (network),
