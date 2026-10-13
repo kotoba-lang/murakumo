@@ -1,22 +1,35 @@
 ;; web-plane permission table. Unlisted capabilities are :blocked.
-{:yakuwari/capabilities
- [{:capability :read_evidence          :decision :ok}
-  {:capability :read_node_health       :decision :ok}
-  {:capability :propose_crawl_plan     :decision :ok}
+{:yakuwari/id :web-plane
+ :yakuwari/project "kotoba-lang/murakumo"
+ :yakuwari/objective "Operate owner-admitted cooperative collection profiles and verified common indexes."
+ :yakuwari/runners [{:runner :hermes :weight 1}]
+ :yakuwari/capabilities
+ [{:capability :read_evidence          :decision :autonomous}
+  {:capability :read_node_health       :decision :autonomous}
+  {:capability :propose_crawl_plan     :decision :autonomous}
+  {:capability :read_collection_state :decision :autonomous}
+  {:capability :propose_collection_plan :decision :autonomous}
+  {:capability :run_admitted_collection_tick :decision :autonomous}
+  {:capability :recover_admitted_collection_index :decision :autonomous}
+  {:capability :admit_collection_participant :decision :approval-required}
+  {:capability :approve_collection_funding :decision :approval-required}
+  {:capability :set_collection_prices :decision :approval-required}
+  {:capability :issue_kumo :decision :blocked}
+  {:capability :finalize_kumo_payment :decision :blocked}
   ;; the murakumo-web MCP tools (scripts/web_mcp.mjs): health, config_status, fetch,
   ;; search, verify_fetch, sync, and web_provision — which takes NO arguments and
   ;; applies the operator's own 0600 drop-file. Secrets never pass through the agent.
-  {:capability :use_web_mcp_read       :decision :ok}
-  {:capability :apply_provision_dropfile :decision :ok}
+  {:capability :use_web_mcp_read       :decision :autonomous}
+  {:capability :apply_provision_dropfile :decision :autonomous}
   ;; `yataverse bootstrap` / MCP yataverse_bootstrap: the first sign-in CREATES AN ACCOUNT. The bot may
   ;; run it on a node only after the owner has approved that node; the secret it stores never
   ;; passes through the bot (0600 file, not returned).
-  {:capability :bootstrap_yataverse    :decision :owner-approval}
+  {:capability :bootstrap_yataverse    :decision :approval-required}
   ;; a host already in web-nodes.edn's admitted crawl list, inside plan ceilings
-  {:capability :submit_plan_known_host :decision :ok}
-  {:capability :crawl_new_host         :decision :owner-approval}
-  {:capability :deploy_bundle          :decision :owner-approval}
-  {:capability :run_gc                 :decision :owner-approval}
+  {:capability :submit_plan_known_host :decision :autonomous}
+  {:capability :crawl_new_host         :decision :approval-required}
+  {:capability :deploy_bundle          :decision :approval-required}
+  {:capability :run_gc                 :decision :approval-required}
   {:capability :read_secret_files      :decision :blocked}
   {:capability :create_account         :decision :blocked}
   {:capability :issue_credentials      :decision :blocked}

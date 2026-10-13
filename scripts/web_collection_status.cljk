@@ -1,0 +1,22 @@
+(ns web-collection-status
+  "Read-only, secret-free status for the web-plane bot. No auto provisioning."
+  (:require [cljs.reader :as reader]
+            [murakumo.web.collection :as c]))
+
+(let [fs (js/require "fs") path (js/require "path") os (js/require "os")
+      dir (or (.. js/process -env -MURAKUMO_COLLECTION_HOME)
+              (.join path (.homedir os) ".murakumo-web" "collection"))
+      file (.join path dir "state.edn")]
+  (try
+    (if-not (.existsSync fs file)
+      (do (prn {:state :not-provisioned}) (set! (.-exitCode js/process) 2))
+      (let [st (reader/read-string (.readFileSync fs file "utf8"))
+            _ (c/require! (= c/schema (:schema st)) :collection/state-schema)
+            counts (frequencies (map :state (vals (:leases st))))]
+        (prn {:schema c/schema :campaigns (count (:campaigns st)) :leases counts
+              :accepted (count (:accepted st)) :common-indexes (count (:roots st))
+              :paid (count (:paid st))
+              :unpaid-contributions (- (count (:accepted st)) (count (:paid st)))
+              :reconciliation-needed (get counts :running 0)})))
+    (catch :default e (prn {:refused (or (:type (ex-data e)) :collection/status-unavailable)})
+           (set! (.-exitCode js/process) 2))))

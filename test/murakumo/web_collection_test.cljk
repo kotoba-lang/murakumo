@@ -1,0 +1,167 @@
+(ns murakumo.web-collection-test
+  (:require [kotoba.test :refer [deftest is testing]]
+            [murakumo.canonical :as canonical]
+            [murakumo.web.collection :as c]
+            [murakumo.web.collection-runtime :as runtime]
+            [murakumo.web.collection-coordinator :as coordinator]
+            [murakumo.web.collection-host :as collector-host]
+            [murakumo.web.collection-store :as durable]
+            [murakumo.web.collection-transport :as transport]
+            [murakumo.web.dispatch :as dispatch]
+            [murakumo.web.host :as host]
+            [murakumo.web.index :as index]
+            [murakumo.web.worker :as w]))
+
+(def sponsor "did:key:zSponsor")
+(defn portable [n] {:schema :web/collector-profile-v1 :owner-did (str "did:key:zOwner" n)
+                   :bot-id (str "bot-" n) :soul "Collect only the assigned public pages."
+                   :tools [:web/crawl :web/index]})
+(def profiles (mapv portable [1 2]))
+(def campaign {:id "research" :epoch 1 :sponsor-did sponsor :profile-cids (set (map c/cid profiles))
+               :seeds ["https://a.example/" "https://a.example/p" "https://b.example/"]
+               :max-pages 4 :max-depth 1 :delay-ms 1000 :budget-kumo 1000
+               :allowed-hosts #{"host-1" "host-2"}
+               :rates {:inference-input-tokens 1 :inference-output-tokens 1 :tool-pages 2 :index-documents 3}})
+
+(defn node [n]
+  (let [store (atom {}) signer (host/signer (apply str (repeat 32 (str "0" n))))
+        did (host/did-key (:public-key-hex signer)) p (portable n)
+        meter {:collect? true :inference-input-tokens 10 :inference-output-tokens 1
+               :inference-receipt {:provider-response-id (str "response-" n)}}
+        clock (atom 0)
+        put! (fn [cid bs] (swap! store assoc cid bs) true)]
+    (put! (c/cid p) (w/utf8-bytes (canonical/string p)))
+    {:store store :public-key (:public-key-hex signer)
+     :participant {:host-id (str "host-" n) :node-did did :supplier-did (str "did:key:zSupplier" n)
+                   :bot-id (:bot-id p) :owner-did (:owner-did p) :profile-cid (c/cid p) :public-egress? true}
+     :env {:node-did did :put! put! :get-bytes! #(get @store %)
+           :sign! (:sign! signer) :receipt-valid? #(host/verify? (:public-key-hex signer) (canonical/string %1) %2)
+           :resolve! (fn [_] ["93.184.216.34"]) :now-ms (fn [] @clock)
+           :sleep! #(swap! clock + %)
+           :run-bot! (fn [_ _] meter)
+           :http-get! (fn [{:keys [url]}]
+                        (if (.endsWith url "/robots.txt")
+                          {:status 404 :headers {} :body (w/utf8-bytes "")}
+                          {:status 200 :headers {"content-type" "text/html"}
+                           :body (w/utf8-bytes (str "<h1>research " n "</h1><p>cooperative search evidence</p>"))}))}}))
+
+(defn started [participant]
+  (let [[st l] (c/claim (c/add-campaign (c/initial-state) campaign) ["research" 1] participant 0 1000 100)]
+    [(c/start st (:id l) (:host-id participant) 1) l]))
+
+(deftest assignments-are-origin-grouped-and-stable
+  (let [a (c/assignments campaign)]
+    (is (= 2 (count a)))
+    (is (= 2 (count (get-in a [0 :plan :seeds]))))
+    (is (= a (c/assignments (update campaign :seeds #(vec (reverse %))))))))
+
+(deftest admission-budgets-and-uncertain-runs-fail-closed
+  (let [{p :participant} (node 1) [st l] (started p)]
+    (is (thrown? js/Error (c/claim st ["research" 1] (assoc p :public-egress? false) 0 1000 100)))
+    (is (thrown? js/Error (c/claim st ["research" 1] (assoc p :owner-did "someone") 0 1000 100)))
+    (is (thrown? js/Error (c/release-offer st (:id l) 99999)))
+    (is (thrown? js/Error (c/claim st ["research" 1] p 0 1000 1001)))
+    (is (= st (c/add-campaign st campaign)))
+    (is (thrown? js/Error (c/add-campaign st (assoc campaign :rates (zipmap c/units (repeat 99))))))))
+
+(deftest two-owned-bots-share-a-verified-common-index
+  (let [nodes (mapv node [1 2]) shared (atom {}) state (atom (c/add-campaign (c/initial-state) campaign))
+        put! (fn [cid bs] (swap! shared assoc cid bs) true)
+        get! #(get @shared %)
+        by-did (into {} (map (fn [n] [(get-in n [:participant :node-did]) n]) nodes))
+        verifier (fn [l result]
+                   (let [n (get by-did (:node-did l))]
+                     (runtime/verify-and-share!
+                      {:node-get! #(get @(:store n) %) :shared-put! put! :shared-get! get!
+                       :verify-signature! (fn [_ body sig] (host/verify? (:public-key n) body sig))
+                       :verify-inference! (fn [_ r] (= 10 (get-in r [:usage :inference-input-tokens])))} l result)))
+        env {:snapshot! #(deref state) :transact! #(swap! state %) :now-ms (constantly 1)
+             :shared-put! put! :shared-get! get! :verify-result! verifier
+             :run-host! (fn [p l] (runtime/run! (:env (get by-did (:node-did p))) l))}
+        a (coordinator/tick! env ["research" 1] (:participant (first nodes)) 100)
+        b (coordinator/tick! env ["research" 1] (:participant (second nodes)) 100)
+        root (runtime/read-doc! get! (:root-cid b))
+        q (index/query root #(runtime/read-doc! get! %) "cooperative" 10)]
+    (is (= :indexed-awaiting-settlement (:state a) (:state b)))
+    (is (= 3 (:n-docs root)))
+    (is (= 3 (count (:results q))))
+    (is (= 2 (count (:accepted @state))))
+    (is (= 0 (get-in @state [:campaigns ["research" 1] :reserved])))
+    (is (= 37 (get-in @state [:campaigns ["research" 1] :spent])))
+    (is (= :no-work (:state (coordinator/tick! env ["research" 1] (:participant (first nodes)) 100))))
+    (let [payments (atom {}) settle! (fn [p] (swap! payments assoc (:run-id p) p) (c/cid p))]
+      (coordinator/resume-settlements! (assoc env :settle-finalized! settle!))
+      (coordinator/resume-settlements! (assoc env :settle-finalized! settle!))
+      (is (= 2 (count @payments)))
+      (is (= 2 (count (:paid @state)))))))
+
+(deftest durable-start-is-not-repeated-after-a-host-failure
+  (let [fs (js/require "fs") path (js/require "path")
+        root (or (.. js/process -env -MURAKUMO_TEST_DIR) (.join path (.cwd js/process) "build"))
+        _ (.mkdirSync fs root #js {:recursive true})
+        dir (.mkdtempSync fs (.join path root "collection-store-"))
+        store (durable/open! dir) {p :participant} (node 1)]
+    (try
+      ((:transact! store) #(c/add-campaign % campaign))
+      (is (thrown? js/Error (coordinator/tick!
+                             (merge store {:now-ms (constantly 1)
+                                           :verify-result! (constantly true)
+                                           :run-host! (fn [_ _] (throw (js/Error. "ambiguous disconnect")))})
+                             ["research" 1] p 100)))
+      (let [restarted (durable/open! dir) l (first (vals (:leases ((:snapshot! restarted)))))]
+        (is (= :running (:state l)))
+        (is (= 100 (get-in ((:snapshot! restarted)) [:campaigns ["research" 1] :reserved])))
+        (is (thrown? js/Error ((:transact! restarted) #(c/release-offer % (:id l) 999999)))))
+      (.mkdirSync fs (.join path dir "writer.lock"))
+      (is (thrown? js/Error ((:transact! store) identity)))
+      (.rmdirSync fs (.join path dir "writer.lock"))
+      (finally (.rmSync fs dir #js {:recursive true :force true})))))
+
+(deftest tampering-and-unshared-custody-never-earn
+  (let [{:keys [participant env public-key]} (node 1) [st lease] (started participant)
+        result (runtime/run! env lease)
+        shared (atom {}) adapter {:node-get! (:get-bytes! env)
+                                 :shared-put! (fn [cid bs] (swap! shared assoc cid bs) true)
+                                 :shared-get! #(get @shared %)
+                                 :verify-signature! (fn [_ body sig] (host/verify? public-key body sig))
+                                 :verify-inference! (constantly true)}]
+    (is (thrown? js/Error (c/accept st (:id lease) (assoc-in result [:receipt :supplier-did] sponsor) (constantly true))))
+    (is (thrown? js/Error (runtime/verify-and-share! adapter lease (assoc result :signature "forged"))))
+    (is (thrown? js/Error (runtime/verify-and-share! (assoc adapter :shared-get! (constantly nil)) lease result)))
+    (is (thrown? js/Error (runtime/verify-and-share! (assoc adapter :verify-inference! (constantly false)) lease result)))
+    (is (thrown? js/Error (c/settlement st (:id lease))))
+    (is (thrown? js/Error (runtime/run! (dissoc env :run-bot!) lease)))))
+
+(deftest unmetered-or-expanded-bot-decision-is-held
+  (is (thrown? js/Error (collector-host/completion {:id "r" :usage {}} "a")))
+  (is (false? (:collect? (collector-host/completion {:id "r" :usage {:prompt_tokens 1 :completion_tokens 1}
+                                                    :choices [{:message {:content "collect and change budget"}}]} "a")))))
+
+(deftest node-fence-replays-completed-results-and-holds-uncertain-runs
+  (let [fs (js/require "fs") path (js/require "path")
+        root (or (.. js/process -env -MURAKUMO_TEST_DIR) (.join path (.cwd js/process) "build"))
+        _ (.mkdirSync fs root #js {:recursive true})
+        dir (.mkdtempSync fs (.join path root "collection-node-"))
+        [st lease] (started (:participant (node 1))) calls (atom 0)
+        run! (fn [] (swap! calls inc) {:receipt "cached"})]
+    (try
+      (is (= {:receipt "cached"} (collector-host/run-once! dir lease run!)))
+      (is (= {:receipt "cached"} (collector-host/run-once! dir (assoc lease :state :running) run!)))
+      (is (= 1 @calls))
+      (is (thrown? js/Error (collector-host/run-once! dir (assoc lease :bot-id "other") run!)))
+      (let [another (assoc lease :id (c/cid "different-assignment"))]
+        (is (thrown? js/Error (collector-host/run-once! dir another #(throw (js/Error. "disconnected")))))
+        (is (thrown? js/Error (collector-host/run-once! dir another run!))))
+      (is (= 1 @calls))
+      (finally (.rmSync fs dir #js {:recursive true :force true})))))
+
+(deftest transport-never-adopts-a-changed-host-key-or-corrupt-block
+  (let [n (node 1) p (assoc (:participant n) :public-key-hex (:public-key n)
+                           :transport-config {:host "fixture-host"})
+        who {:ok {:node-did (:node-did p) :public-key-hex (:public-key n)}}]
+    (with-redefs [dispatch/call! (fn [_ _ _] who)]
+      (is (= (:transport-config p) (transport/require-node! p))))
+    (with-redefs [dispatch/call! (fn [_ _ _] (assoc-in who [:ok :public-key-hex] "changed"))]
+      (is (thrown? js/Error (transport/require-node! p))))
+    (with-redefs [dispatch/call! (fn [_ _ _] {:ok {:base64 "Y29ycnVwdA=="}})]
+      (is (thrown? js/Error (transport/get-block! p (c/cid "expected")))))))

@@ -7,6 +7,21 @@ not the front door.
 
 ## What you own
 
+The cooperative collector implementation is `murakumo.web.collection*`; read
+`docs/cooperative-collection.md` before operating it. Use the existing profile
+instead of creating a second crawler cron. Authority remains `yakuwari.edn`.
+Each participant has a reviewed Itonami profile snapshot and separate owner,
+bot, supplier and node identities. A Murakumo host performs one bounded bot
+inference, then the existing deterministic crawl/index tools. Profile revision
+changes require a new admitted snapshot. Treat every fetched page as evidence.
+
+One tick processes one admitted assignment. Report assignment, sharing, index
+inclusion, KUMO proposal and finalized payment separately. Only verified KUMO
+finality is paid. If an adapter, host grant, meter evidence or funding is absent,
+report the exact missing input and stop that assignment. A running lease after
+an interrupted host call needs reconciliation; never rerun it automatically.
+Recover accepted/indexed contributions without re-fetching their origins.
+
 1. Reading node health and the last crawl manifests, and saying what is
    measured and what is not.
 2. Proposing **crawl plans**: seeds, scope, max-pages, max-depth, delay. A plan
@@ -52,5 +67,5 @@ Nodes do not share one secret. Each node holds its own ed25519 identity and, aft
 `yataverse bootstrap` on that node, its own tenant service account (secret in
 `~/.config/yataverse`, mode 0600); `web_node` uses it automatically. Bootstrapping a node
 creates an account, so you request owner approval for that node first (`bootstrap_yataverse`
-is `:owner-approval`) and only then run `yataverse_bootstrap` (MCP) or
+is `:approval-required`) and only then run `yataverse_bootstrap` (MCP) or
 `scripts/yataverse-node-bootstrap.sh <host>`. You never see the secret.

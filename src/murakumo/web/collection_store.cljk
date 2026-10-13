@@ -1,0 +1,50 @@
+(ns murakumo.web.collection-store
+  "Host-local durable coordinator state. A single authoritative filesystem,
+  not a cross-host lock: other hosts submit work to this coordinator."
+  (:require [murakumo.web.collection :as c]
+            #?(:cljs [cljs.reader :as reader])))
+
+(defn open!
+  "Returns snapshot!/transact! adapters. A held/crash lock is never stolen.
+  State is committed by atomic rename before any assignment is dispatched."
+  [directory]
+  #?(:clj (throw (ex-info "collection store requires stock-nbb" {:type :collection/store-host}))
+     :cljs
+     (let [fs (js/require "fs") path (js/require "path") dir (.resolve path directory)
+           state-file (.join path dir "state.edn") lock (.join path dir "writer.lock")
+           _ (loop [p dir]
+               (when (.existsSync fs p)
+                 (c/require! (not (.isSymbolicLink (.lstatSync fs p))) :collection/symlink))
+               (when-not (= p (.dirname path p)) (recur (.dirname path p))))
+           _ (.mkdirSync fs dir #js {:recursive true :mode 0700})
+           _ (.chmodSync fs dir 0700)
+           read! (fn []
+                   (if (.existsSync fs state-file)
+                     (do (c/require! (not (.isSymbolicLink (.lstatSync fs state-file))) :collection/symlink)
+                         (let [st (reader/read-string (.readFileSync fs state-file "utf8"))]
+                           (c/require! (= c/schema (:schema st)) :collection/state-schema) st))
+                     (c/initial-state)))
+           transact! (fn [f]
+                       (try (.mkdirSync fs lock #js {:mode 0700})
+                            (catch :default _
+                              (throw (ex-info "coordinator writer held; reconcile a crash lock explicitly"
+                                              {:type :collection/writer-held}))))
+                       (let [tmp (.join path dir (str ".state-" (.toString (.randomBytes (js/require "crypto") 8) "hex")))]
+                         (try
+                           ;; State must round-trip sets and vector map keys.
+                           ;; CID canonicalization intentionally turns sets into
+                           ;; vectors and is therefore NOT a state serializer.
+                           (let [st (f (read!)) bs (binding [*print-length* nil *print-level* nil]
+                                                     (pr-str st))]
+                             (c/require! (= c/schema (:schema st)) :collection/state-schema)
+                             (.writeFileSync fs tmp bs #js {:mode 0600 :flag "wx"})
+                             (let [fd (.openSync fs tmp "r")]
+                               (try (.fsyncSync fs fd) (finally (.closeSync fs fd))))
+                             (.renameSync fs tmp state-file)
+                             (let [fd (.openSync fs dir "r")]
+                               (try (.fsyncSync fs fd) (finally (.closeSync fs fd))))
+                             st)
+                           (finally
+                             (when (.existsSync fs tmp) (.unlinkSync fs tmp))
+                             (.rmdirSync fs lock)))))]
+       {:snapshot! read! :transact! transact!})))

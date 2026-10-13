@@ -3,7 +3,7 @@
 set -u
 cd "$(dirname "$0")/.."
 fail=0
-for ns in web web-worker web-robots web-crawl web-search web-backends web-verify web-index web-host web-provision web-origin; do
+for ns in web web-worker web-robots web-crawl web-search web-backends web-verify web-index web-host web-provision web-origin web-collection; do
   out=$(kbb -M:test -n "murakumo.$ns-test" 2>&1)
   line=$(printf '%s\n' "$out" | grep '^kbb test:' | tail -1)
   echo "$ns: ${line:-NO RESULT}"
@@ -32,6 +32,9 @@ case "$out" in
     echo "stock-nbb selftest: ok" ;;
   *) echo "stock-nbb selftest: FAILED: $out"; fail=1 ;;
 esac
+# Profile installation hashes the complete portable body, not a web receipt's
+# selected fields; an unreviewed revision must be refused by the actual node.
+if kbb scripts/web_collection_profile_smoke.cljk "$tmp/bundle"; then :; else fail=1; fi
 # The public origin (web_origin.cljs) under stock nbb: auth, request policy and the
 # no-opted-in-node refusal, on a loopback port (no internet involved).
 ohome="$tmp/origin"; mkdir -p "$ohome"; chmod 700 "$ohome"
