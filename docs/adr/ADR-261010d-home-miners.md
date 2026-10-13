@@ -114,7 +114,7 @@ home scale it is small, and the multiplier is the meaningful incentive.
 | murakumo credits (use murakumo's own services) | None | None | Launch |
 | Bank transfer (JPY/USD) | ¥5,000 / $35 | KYC on first cash-out | Launch |
 | Lightning (BTC) | 1,000 sats | KYC on first cash-out | After legal review |
-| KUMO | Per block, matured after 144 blocks | Same as above | After KUMO's legal gate |
+| Pool rewards in KUMO | Per block, matured after 144 blocks | Same as above | With the reward pool (ADR-261010b §2); earned KUMO redeems like credits |
 
 The client produces an annual earnings statement. Earnings are taxable
 income, typically 雑所得 in Japan.

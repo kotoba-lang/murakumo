@@ -113,8 +113,8 @@ ledger phases, governance) are fixed in ADR-261010b.
 Rewards have two streams:
 
 1. **Fee stream**: customer payments, settled in fiat or credits as PPS/PPLNS.
-2. **Subsidy stream**: a fixed-supply reward token, **KUMO**, emitted once
-   per Bitcoin block, halving on Bitcoin's halving blocks, distributed **only by verified VCU** (never by stake or
+2. **Subsidy stream**: a release from a funded **KUMO reward pool** (no separate
+   token; revised 2026-10-13, see ADR-261010b), paid once per Bitcoin block, halving on Bitcoin's halving blocks, distributed **only by verified VCU** (never by stake or
    idle capacity). Subsidy received is locked for a vesting period and doubles
    as slashing collateral.
 
