@@ -1264,9 +1264,15 @@ kbb -M:murakumo nodes    # nodes without :status "authorized" are now excluded,
 
 ## Status (honest)
 
-> **Measured fleet state, 2026-07-25** (`kbb --backend sci scripts/run-task.cljk ops status`, cross-checked
+**This is a dated snapshot, not current status.** It records one measurement
+taken on 2026-07-25. For the fleet as it is now, run `murakumo health check`
+or `kbb --backend sci scripts/run-task.cljk fleet-health`
+([`docs/FLEET-HEALTH.md`](docs/FLEET-HEALTH.md)), or
+`kbb --backend sci scripts/run-task.cljk ops status`.
+
+> **Measured fleet state, 2026-07-25 (snapshot)** (`kbb --backend sci scripts/run-task.cljk ops status`, cross-checked
 > with a `task run` over all 11 reachable nodes). The claims in this section describe what the
-> CODE does; here is what the FLEET currently looks like:
+> CODE does; here is what the FLEET looked like on that date:
 >
 > - 11 of 12 nodes reachable over ssh (xavier has no `~/.ssh/config` entry — see `fleet.edn`).
 > - `~/.murakumo/bin/kotoba-server` is installed on **5** of them (simeon, levi, joseph, dan,
