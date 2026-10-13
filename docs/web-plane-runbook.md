@@ -186,8 +186,12 @@ Issue a token (the Worker's own signing secret, macOS Keychain item
 ```sh
 cd network-awai/cloud-murakumo
 MURAKUMO_TOKEN_SECRET="$(security find-generic-password -s murakumo-web-token-secret -w)" \
-  kbb -M:token issue <subject> web <ttl-seconds>
+  kbb --backend sci --classpath src:../../kotoba-lang/text/src bin/token-issue.cljk <subject> web <ttl-seconds>
 ```
+
+(`kbb -M:token issue`, the CLI's documented form, fails under kbb with "load-spec requires
+JVM" as of 2026-10-11; `bin/token-issue.cljk` is the same argument checks and signing,
+byte-identical, without the JVM.)
 
 Install / update the origin on gad (bundle under the `gad` user, then restart):
 
