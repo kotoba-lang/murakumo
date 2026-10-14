@@ -2,16 +2,15 @@
 
 - Status: proposed (5% size and Bitcoin-aligned halvings accepted 2026-10-10)
 - Date: 2026-10-10
-- Amends: ADR-261010b §2 (supply) and §10 (no premine → no insider allocation)
+- Amends: ADR-261010b §2 (supply) and §10 (allocations; revised 2026-10-13 by root ADR-2610131800)
 - Depends: ADR-261010 (Proof of Inference, onprem tiers), ADR-261010b (KUMO)
 
-> **Revised 2026-10-13 (owner decision: the subsidy is a KUMO reward pool, ADR-261010b).**
-> There is no 2.1B cap to carve from. The MGA becomes a **sub-account of the reward pool**
-> that receives 5% of every pool inflow until genesis + 12 months, and it pays out only
-> against delivered capacity as described below. Read every absolute amount in this ADR
-> as a share of that sub-account: tranche A = 50%, B = 30%, C = 20% (the former 52.5M /
-> 31.5M / 21.0M of 105M). Condition 2 below ("never new supply") holds more strongly than
-> before: nothing is minted at all. Unclaimed reservations still return to the pool.
+> **Revised 2026-10-13 (owner decision, root ADR-2610131800).** Foundation and team
+> allocations and a sale are now allowed inside the 2.1B cap, so condition 1 below no
+> longer describes KUMO as a whole. It still describes the MGA: the MGA goes only to
+> people who bring power, is earned by delivered capacity, and is never sold. A
+> same-day revision (f181488b) that made the MGA a sub-account of a funded pool was
+> withdrawn by the owner; the fixed 105M allocation stands.
 
 ## Context
 
@@ -22,8 +21,9 @@ pledge today, and no stake to skip the probation tier on day one.
 Miners trust Bitcoin partly because it had no premine. An allocation therefore
 has to satisfy four conditions, or it costs more trust than it buys:
 
-1. **Nothing goes to the team, investors or the treasury.** The only
-   pre-allocation goes to people who bring power to the network.
+1. **No part of the MGA goes to the team, investors or the treasury.** The MGA
+   goes only to people who bring power to the network. (Foundation and team
+   allocations exist separately and are published; root ADR-2610131800 §3.)
 2. **It comes out of the existing 2.1B cap.** It is never new supply.
 3. **It is earned by delivered capacity, not by past hashrate alone.** Past
    hashrate decides who may reserve and how much. Only murakumo capacity
@@ -130,8 +130,8 @@ to other MGA holders. Everyone who mines afterward shares them.
 
 ### 8. Transferability and legal
 
-- MGA KUMO is non-transferable until the same legal gate as all KUMO
-  (ADR-261010b §10).
+- Unlocked MGA KUMO becomes transferable only after the legal gate that applies
+  to all KUMO (ADR-261010b §10, root ADR-2610131800 §6).
 - It is never sold, and no payment is accepted for a reservation.
 - Reservations above a threshold (e.g. 10 MW pledged) require KYC and
   sanctions screening, because miners operate across many jurisdictions.
@@ -184,7 +184,7 @@ economy is open.
 | 1 | **Luxor** (US) | Already sources GPUs and AI servers for miners and offers financing and hedging against hashrate. Runs the Tenki compute marketplace and publishes Hashrate Index, a natural publisher for the inference hashprice. Named by SBI Crypto as a migration target | Tenki overlaps with murakumo. Position murakumo as the inference workload and onprem hardware inside Luxor's sourcing, not as a rival marketplace |
 | 1 | **Braiins Pool** (CZ) | Originated Stratum V2, and Braiins OS has a large installed base among small miners, so an opt-in can live in firmware. Home-mining hardware (Forge) matches onprem V/S in homes. Named by SBI Crypto as a migration target | Smaller share (~3%, sources vary) |
 | 1 | **Former SBI Crypto hashers** (JP) | SBI Crypto closed its pool on 2026-07-31, displacing ~21 EH/s (~2.2%). It was a Japanese base that murakumo can reach directly. They moved mostly to Braiins, Luxor and NeoPool, so reach them through those pools plus direct outreach | No pool to partner with. SBI Holdings (which is acquiring bitbank) is a separate, later conversation about KUMO's legal and exchange path |
-| 2 | **OCEAN** (US) | Non-custodial TIDES payouts; its decentralisation-minded community fits the no-insider-allocation design | Parts of this community are hostile to tokens. Lead with the fee economy |
+| 2 | **OCEAN** (US) | Non-custodial TIDES payouts; its decentralisation-minded community fits an MGA that pays no insiders and is earned by delivered capacity | Parts of this community are hostile to tokens. Lead with the fee economy |
 | 2 | **DEMAND** (SV2-native) | Small and new, so a partnership is easier and the opt-in fits SV2 Job Declaration | Very small share. Confirm the official domain before integrating |
 | 2 | **NeoPool** (Seychelles/Dubai) | ~17 EH/s, growing, and explicitly trying to close the gap on bigger pools, so it is motivated to differentiate | Offshore jurisdiction and mostly promotional coverage. Do full compliance diligence first |
 | 3 | **Foundry USA** (~30%) | Institutional KYC onboarding makes attestation easy | Its clients are mostly large. Approach them directly under tranche A instead |
@@ -209,8 +209,8 @@ Spark (SV2/DATUM status, 2026), bitcoinminingstock.io (NeoPool).
 ## Consequences
 
 - ADR-261010b §2 changes: the subsidy totals 1.995B, and the halvings sit on
-  Bitcoin's halving blocks (§9). §10's "no premine" becomes "no insider
-  allocation; 5% earned miner allocation".
+  Bitcoin's halving blocks (§9). §10 now lists the allowed allocations; the MGA
+  is the 5% earned miner share among them.
 - New services are needed: a hashrate-proof verifier (BIP-322, pool
   attestations), a registration window, a pledge tracker against capacity
   challenges, and genesis-points accounting in Season 0.
@@ -219,7 +219,7 @@ Spark (SV2/DATUM status, 2026), bitcoinminingstock.io (NeoPool).
 
 ## Non-goals
 
-- Any allocation to the team, investors, advisors or the treasury.
+- Paying any part of the MGA to the team, investors, advisors or the treasury.
 - Rewarding past hashrate without delivered murakumo capacity.
 - Selling reservations, or accepting payment for priority.
 
