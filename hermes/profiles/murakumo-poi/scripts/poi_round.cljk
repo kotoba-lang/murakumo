@@ -1,0 +1,44 @@
+;; murakumo-poi (itonami bot) hourly round: challenge + collect + settlement block
+;; (ADR-261010* in kotoba-lang/murakumo). No model; itonami-agent runs this with
+;; `kbb --backend sci` on the job's schedule.
+;;
+;; Self-healing: the runner worktree is recreated when a cleanup removed it and
+;; moved to the latest kotoba-lang/murakumo main on every run. The ledger lives in
+;; ~/.local/share/murakumo/poi and is never touched here.
+(ns poi-round
+  (:require [clojure.string :as str]
+            ["node:child_process" :as cp]
+            ["node:fs" :as fs]
+            ["node:os" :as os]
+            ["node:path" :as path]))
+
+(def home (.homedir os))
+(def canon (.join path home "github" "kotoba-lang" "murakumo"))
+(def runner (.join path home "github" "wt" "claude" "murakumo-poi-runner"))
+(def env
+  (doto (js/Object.assign #js {} (.-env js/process))
+    (aset "PATH" (str/join ":" [(.join path home ".local" "bin") "/opt/homebrew/bin"
+                                "/usr/local/bin" "/usr/bin" "/bin"]))))
+
+(defn run
+  "Run argv in cwd; returns {:exit :out}. Output is captured, never thrown."
+  [cwd & argv]
+  (let [r (.spawnSync cp (first argv) (clj->js (rest argv))
+                      #js {:cwd cwd :env env :encoding "utf8" :maxBuffer (* 64 1024 1024)})]
+    {:exit (or (.-status r) 1)
+     :out (str (.-stdout r) (.-stderr r))}))
+
+(defn step! [label {:keys [exit out]}]
+  (when-not (zero? exit)
+    (println (str "FAILED\t" label "\n" out))
+    (js/process.exit 1)))
+
+(println (str "=== " (.toISOString (js/Date.))))
+(step! "fetch" (run canon "git" "fetch" "-q" "origin" "main"))
+(when-not (.existsSync fs runner)
+  (run canon "git" "worktree" "prune")
+  (step! "worktree add" (run canon "git" "worktree" "add" "-q" "--detach" runner "origin/main")))
+(step! "checkout main" (run runner "git" "checkout" "-q" "--detach" "origin/main"))
+(let [{:keys [exit out]} (run runner "kbb" "scripts/poi.cljk" "run" "--rounds" "1")]
+  (println (str/join "\n" (remove #(str/starts-with? % "kbb: ") (str/split-lines out))))
+  (js/process.exit exit))
