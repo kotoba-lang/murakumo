@@ -8,6 +8,75 @@ enrollment, heartbeat, job placement, distributed (multi-node) inference and
 fleet operations. The runtime is **not tied to WebAssembly**: WASM components are
 one optional workload a node can host, alongside inference.
 
+## Where this fits / quick use
+
+Figure: an [interactive map of the kotoba / murakumo stack](https://kotoba-lang.org/anatomy/kotoba-murakumo/)
+(published from the same figure as this section; the page may not be live yet).
+
+| piece | use it for |
+|---|---|
+| [kotoba](https://github.com/kotoba-lang/kotoba) | the language and CLI. Grants authority (capabilities) to programs and agents; `kotoba id new` creates a Passkey-controlled principal. |
+| [itonami](https://github.com/network-awai/cloud-itonami) | owns business intent, tenant, deadline and budget; submits stable job IDs to Murakumo and observes the same job from surviving endpoints. |
+| [murakumo](https://github.com/kotoba-lang/murakumo) | the compute plane: nodes, gateways, and quorum placement of a job on a ready node. |
+| [kotobase](https://github.com/kotoba-lang/kotobase) | results as a signed, immutable, CID-addressed commit DAG. [`kotoba-lang/chain`](https://github.com/kotoba-lang/chain) is the parent-linked commit-chain primitive; [`kotobase-anchor-fevm`](https://github.com/kotoba-lang/kotobase-anchor-fevm) is by default a chainless signed transparency log, with an optional EVM anchor. |
+
+Two layers sit beside this path and are not part of it yet:
+
+- Private network layer: AWAI DNA (spec in
+  [network-awai/network-awai-apex PR #14](https://github.com/network-awai/network-awai-apex/pull/14),
+  directory `awai-dna/`): the DNA CID identifies a network and each agent keeps
+  its own signed source chain, with warrants and a kekkai realm. The spec,
+  validator, node/sync work, and an experimental TCP/Noise/Yamux peer host are
+  merged (see [PR #18](https://github.com/network-awai/network-awai-apex/pull/18)).
+  This is not a qualified production mesh: peer discovery, NAT traversal/relay,
+  independent-host operation, and a public gateway remain unverified. There is
+  no single global "AWAI chain"; each agent has a source chain within its DNA
+  network.
+- Settlement: Base / x402 settles bounded USDC charges for murakumo's public
+  paid route (`cloud-murakumo`). Base is a settlement link, not the identity
+  root. Chain ID 260425 (`cloud-itonami/chain-contracts`) is decommissioned and
+  is not live.
+
+Quick use (node commands as documented in this README, job commands in
+`docs/simple-fleet-jobs.md`; `murakumo jobs submit` talks to a real fleet, so
+run it only when you mean to):
+
+```sh
+# join as a node (Node.js 22+ and npm; the installer starts no service and registers nothing)
+curl -fsSL https://murakumo.cloud/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+murakumo node init
+murakumo node doctor --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1   # local checks only
+murakumo node check  --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1  # one signed heartbeat, zero slots
+murakumo node qualify --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1  # qualify before Community participation
+murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1  # serve jobs until Ctrl-C
+
+# operator side: one stable job ID, observed from any surviving endpoint
+murakumo status --config /var/lib/murakumo-resident/config.json
+murakumo jobs submit tenant_job_0001 input.json --config client.json
+murakumo jobs status tenant_job_0001 --config client.json
+```
+
+Itonami owns the stable business job ID, deadline and budget; murakumo picks an
+owner by 2-of-3 quorum and keeps the intent and result. The current Murakumo
+job contract does not receive the Itonami deadline and uses resident/job
+configuration timeouts, so that deadline does not stop Murakumo work. See
+[`docs/simple-fleet-jobs.md`](docs/simple-fleet-jobs.md) (which also documents
+the `jobs submit` / `jobs status` commands and their client config).
+
+Fleet snapshot, recorded 2026-10-06 (private fleet, not a service guarantee):
+11 resident nodes, 2 gateways, 3 voting nodes with quorum 2 of 3, signed
+topology revision `2026100603`. Limits stated with it: fault tolerance across
+independent sites is not verified, and the fleet still depends on Tailscale and
+Cloudflare. A community node starts pending admission; registration does not
+guarantee job placement. Itonami billing, settlement and approvals have not
+moved to this quorum lane, and an in-flight job whose owner is lost stays
+`unknown` (it is not re-run elsewhere).
+
+Not live or guaranteed: hosted billed deploy of kotoba grants; the AWAI DNA
+network; anything on chain ID 260425. The fleet figures above are a dated
+snapshot, not a current status.
+
 ## Join the inference network (macOS / Linux)
 
 Install the node CLI with **Node.js 22+ and npm** already available:
