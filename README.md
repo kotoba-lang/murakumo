@@ -24,10 +24,14 @@ Two layers sit beside this path and are not part of it yet:
 
 - Private network layer: AWAI DNA (spec in
   [network-awai/network-awai-apex PR #14](https://github.com/network-awai/network-awai-apex/pull/14),
-  branch `dna-private-network-spec`, directory `awai-dna/`): the DNA CID is the
-  network id, each agent keeps a signed source chain, with warrants and a kekkai
-  realm. Proposed / spec stage, open PR, simulated transport only. There is no
-  "awai chain".
+  directory `awai-dna/`): the DNA CID identifies a network and each agent keeps
+  its own signed source chain, with warrants and a kekkai realm. The spec,
+  validator, node/sync work, and an experimental TCP/Noise/Yamux peer host are
+  merged (see [PR #18](https://github.com/network-awai/network-awai-apex/pull/18)).
+  This is not a qualified production mesh: peer discovery, NAT traversal/relay,
+  independent-host operation, and a public gateway remain unverified. There is
+  no single global "AWAI chain"; each agent has a source chain within its DNA
+  network.
 - Settlement: Base / x402 settles bounded USDC charges for murakumo's public
   paid route (`cloud-murakumo`). Base is a settlement link, not the identity
   root. Chain ID 260425 (`cloud-itonami/chain-contracts`) is decommissioned and
