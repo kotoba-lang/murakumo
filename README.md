@@ -16,7 +16,7 @@ Figure: an [interactive map of the kotoba / murakumo stack](https://kotoba-lang.
 | piece | use it for |
 |---|---|
 | [kotoba](https://github.com/kotoba-lang/kotoba) | the language and CLI. Grants authority (capabilities) to programs and agents; `kotoba id new` creates a Passkey-controlled principal. |
-| [itonami](https://github.com/network-awai/cloud-itonami) | hands over jobs with stable IDs, deadlines and output limits. |
+| [itonami](https://github.com/network-awai/cloud-itonami) | owns business intent, tenant, deadline and budget; submits stable job IDs to Murakumo and observes the same job from surviving endpoints. |
 | [murakumo](https://github.com/kotoba-lang/murakumo) | the compute plane: nodes, gateways, and quorum placement of a job on a ready node. |
 | [kotobase](https://github.com/kotoba-lang/kotobase) | results as a signed, immutable, CID-addressed commit DAG. [`kotoba-lang/chain`](https://github.com/kotoba-lang/chain) is the parent-linked commit-chain primitive; [`kotobase-anchor-fevm`](https://github.com/kotoba-lang/kotobase-anchor-fevm) is by default a chainless signed transparency log, with an optional EVM anchor. |
 
@@ -44,9 +44,12 @@ run it only when you mean to):
 ```sh
 # join as a node (Node.js 22+ and npm; the installer starts no service and registers nothing)
 curl -fsSL https://murakumo.cloud/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
 murakumo node init
 murakumo node doctor --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1   # local checks only
 murakumo node check  --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1  # one signed heartbeat, zero slots
+murakumo node qualify --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1  # qualify before Community participation
+murakumo node join --name my-pc --model YOUR_MODEL_ID --local-url http://127.0.0.1:11434/v1  # serve jobs until Ctrl-C
 
 # operator side: one stable job ID, observed from any surviving endpoint
 murakumo status --config /var/lib/murakumo-resident/config.json
@@ -54,8 +57,10 @@ murakumo jobs submit tenant_job_0001 input.json --config client.json
 murakumo jobs status tenant_job_0001 --config client.json
 ```
 
-Itonami supplies the stable job ID, deadline and output limit; murakumo picks
-an owner by 2-of-3 quorum and keeps the intent and result. See
+Itonami owns the stable business job ID, deadline and budget; murakumo picks an
+owner by 2-of-3 quorum and keeps the intent and result. The current Murakumo
+job contract does not receive the Itonami deadline and uses resident/job
+configuration timeouts, so that deadline does not stop Murakumo work. See
 [`docs/simple-fleet-jobs.md`](docs/simple-fleet-jobs.md) (which also documents
 the `jobs submit` / `jobs status` commands and their client config).
 
