@@ -1,0 +1,50 @@
+;; Kekkai is an explicit SSH route. The default remains the existing host alias.
+(ns murakumo.kekkai-transport-test
+  (:require [cljs.test :refer [deftest is testing run-tests]]
+            [murakumo.kekkai.runtime :as runtime]))
+
+(def naphtali
+  {:name "naphtali"
+   :host "naphtali"
+   :kekkai {:node-id "naphtali"
+            :ssh-user "naphtali"
+            :ssh-local-port 52222}})
+
+(deftest tailscale-remains-explicit-default-route
+  (let [node (first (runtime/select-transport [naphtali] "tailscale"))]
+    (is (= "tailscale" (:transport node)))
+    (is (= "naphtali" (:host node)))
+    (is (nil? (:ssh-host node)))
+    (is (nil? (:ssh-port node)))))
+
+(deftest kekkai-route-is-loopback-and-does-not-fall-back
+  (let [node (first (runtime/select-transport [naphtali] "kekkai"))]
+    (is (= "kekkai" (:transport node)))
+    (is (= "naphtali" (:host node)) "identity stays visible in results")
+    (is (= "naphtali@127.0.0.1" (:ssh-host node)))
+    (is (= 52222 (:ssh-port node))))
+  (testing "missing route configuration is an error, not Tailscale fallback"
+    (is (thrown? js/Error
+                 (runtime/select-transport [{:name "naphtali" :host "naphtali"}]
+                                           "kekkai"))))
+  (testing "unsupported transports fail closed"
+    (is (thrown? js/Error (runtime/select-transport [naphtali] "automatic")))))
+
+(deftest kekkai-ports-must-be-valid-and-unique
+  (is (thrown? js/Error
+               (runtime/select-transport
+                [(assoc-in naphtali [:kekkai :ssh-local-port] 0)] "kekkai")))
+  (is (thrown? js/Error
+               (runtime/select-transport
+                [naphtali
+                 (assoc naphtali :name "judah"
+                        :kekkai {:node-id "judah" :ssh-user "judah"
+                                 :ssh-local-port 52222})]
+                "kekkai"))))
+
+(defmethod cljs.test/report [:cljs.test/default :end-run-tests] [m]
+  (println (str "\n" (:test m) " tests, " (:pass m) " assertions, "
+                (:fail m) " failures, " (:error m) " errors"))
+  (when-not (cljs.test/successful? m) (js/process.exit 1)))
+
+(run-tests)

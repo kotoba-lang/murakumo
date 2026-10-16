@@ -4,7 +4,7 @@
                              [[:name :string] [:status :string]]]})
   (:export [default-ledger-path strip-trailing-newlines parse-status-out
             authorized? denial-line-of default-kekkai-dir-under
-            cli-bin cli-alias-flag cli-main-flag cli-main-ns
+            cli-bin cli-alias-flag cli-main-flag cli-main-ns cli-status-batch-command
             status-authorized status-unknown
             denial-prefix denial-mid denial-suffix
             kekkai-dir-suffix]))
@@ -42,7 +42,7 @@
 
 (defn kekkai-dir-suffix [] :string
   ;; default sibling checkout under HOME
-  "/github/com-junkawasaki/orgs/kotoba-lang/kekkai")
+  "/github/kotoba-lang/kekkai")
 
 (defn strip-trailing-newlines [s :string] :string
   (string-replace-all s "\n" ""))
@@ -70,10 +70,12 @@
 (defn default-kekkai-dir-under [home :string] :string
   (string-concat home (kekkai-dir-suffix)))
 
-(defn cli-bin [] :string "clojure")
+(defn cli-bin [] :string "kbb")
 
 (defn cli-alias-flag [] :string "-M")
 
 (defn cli-main-flag [] :string "-m")
 
-(defn cli-main-ns [] :string "kekkai.cli")
+(defn cli-main-ns [] :string "kekkai.status-cli")
+
+(defn cli-status-batch-command [] :string "status-batch")

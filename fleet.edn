@@ -23,7 +23,7 @@
  ;; today (mlx_audio.server needs webrtcvad), so the reconciler reports it
  ;; MISSING while idle — that is the honest state, not drift to repair.
  :nodes
- [{:name "naphtali" :host "naphtali" :rpc-ip "192.168.1.25" :mac "1c:f6:4c:35:21:a5" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves ["ltxv-2b-0.9.6-distilled-04-25.safetensors" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared media plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}
+ [{:name "naphtali" :host "naphtali" :kekkai {:node-id "naphtali" :ssh-user "naphtali" :ssh-local-port 52222} :rpc-ip "192.168.1.25" :mac "1c:f6:4c:35:21:a5" :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves ["ltxv-2b-0.9.6-distilled-04-25.safetensors" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared media plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}
   ;; simeon is the ipfs-pinner — its IPFS daemon owns UDP 4001, so give the mesh
   ;; node a different libp2p port (4001 default would fail swarm init).
   {:name "simeon"   :host "simeon@simeon" :rpc-ip "192.168.1.24" :mac "1c:f6:4c:51:5e:ec" :p2p-port 4003 :roles ["pin" "compute"] :labels {:tier "edge" :zone "jp"} :node/serves ["waiREALMIX_v11.safetensors" "mishima"] :node/serves-exception {:reason "owner-directed Mishima one-slot fleet; measured alongside the declared media plane" :adr "verify/evidence/mishima-fleet-aggregate-20260920.json" :until "2027-03-31"}}

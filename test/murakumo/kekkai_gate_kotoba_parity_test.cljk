@@ -28,7 +28,7 @@
              #"\(:export \[[^\]]+\]\)"
              (str "(:export [default-ledger-path strip-trailing-newlines parse-status-out "
                   "authorized? denial-line-of default-kekkai-dir-under "
-                  "cli-bin cli-alias-flag cli-main-flag cli-main-ns "
+                  "cli-bin cli-alias-flag cli-main-flag cli-main-ns cli-status-batch-command "
                   "status-authorized status-unknown "
                   "denial-prefix denial-mid denial-suffix kekkai-dir-suffix "
                   (str/join " " (map first cases)) "])"))
@@ -95,15 +95,17 @@
                 {"bin" "(cli-bin)"
                  "alias" "(cli-alias-flag)"
                  "mflag" "(cli-main-flag)"
-                 "mainns" "(cli-main-ns)"})]
+                 "mainns" "(cli-main-ns)"
+                 "batch" "(cli-status-batch-command)"})]
     (is (= gate/cli-bin (get actual "bin")))
-    (is (= "clojure" (get actual "bin")))
+    (is (= "kbb" (get actual "bin")))
     (is (= gate/cli-alias-flag (get actual "alias")))
     (is (= "-M" (get actual "alias")))
     (is (= gate/cli-main-flag (get actual "mflag")))
     (is (= "-m" (get actual "mflag")))
     (is (= gate/cli-main-ns (get actual "mainns")))
-    (is (= "kekkai.cli" (get actual "mainns")))
+    (is (= "kekkai.status-cli" (get actual "mainns")))
+    (is (= "status-batch" (get actual "batch")))
     (is (= [gate/cli-bin gate/cli-alias-flag gate/cli-main-flag gate/cli-main-ns
             "led.edn" "n1"]
            (gate/cli-argv "led.edn" "n1")))))

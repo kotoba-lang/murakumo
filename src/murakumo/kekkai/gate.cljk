@@ -70,6 +70,9 @@
 (def cli-main-ns
   (o 'cli-main-ns []))
 
+(def cli-status-batch-command
+  (o 'cli-status-batch-command []))
+
 ;; ── public API ────────────────────────────────────────────────────────
 
 (def default-ledger-path
@@ -104,15 +107,23 @@
        (default-kekkai-dir (or (config/home-dir getenv) "")))))
 
 (defn cli-argv
-  "The `kekkai.cli` subprocess argv for one node's status query, run with
+  "The `kekkai.status-cli` subprocess argv for one node's status query, run with
    :dir = kekkai-dir so its own deps.edn resolves.
    Binary/flag/ns fragments from kotoba oracle (required)."
   [ledger-path node-name]
   [cli-bin cli-alias-flag cli-main-flag cli-main-ns
    (str ledger-path) (str node-name)])
 
+(defn cli-batch-argv
+  "One Kekkai CLI invocation for a set of node IDs. The command token is
+   Kotoba-owned; the host only assembles the argv vector."
+  [ledger-path node-ids]
+  (into [cli-bin cli-alias-flag cli-main-flag cli-main-ns
+         cli-status-batch-command (str ledger-path)]
+        (map str node-ids)))
+
 (defn parse-status
-  "Normalise a kekkai.cli process result ({:exit :out}) into a status string.
+  "Normalise a Kekkai status CLI process result ({:exit :out}) into a status string.
    kekkai.cli prints the real status on stdout even when it exits non-zero;
    only falls back to \"unknown\" when the subprocess produced no output.
 

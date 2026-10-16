@@ -19,10 +19,11 @@
             [murakumo.kotoba.oracle :as oracle]))
 
 ;; T6.4: preload shipped KIR before product-shell requires (nbb from repo root).
-(oracle/preload! [:task-plan :fleet-inventory])
+(oracle/preload! [:task-plan :fleet-inventory :config :kekkai-gate :tunnel])
 
 (require '[murakumo.task.exec :as exec]
-         '[murakumo.task.plan :as plan])
+         '[murakumo.task.plan :as plan]
+         '[murakumo.kekkai.runtime :as kekkai])
 
 (def default-ledger ".murakumo-task-ledger.edn")
 
@@ -80,6 +81,15 @@
 (defn load-fleet [f]
   (slurp-edn (get f "fleet" "fleet.edn")))
 
+(defn- fleet-for-cli [fleet f]
+  (let [wanted (some-> (get f "nodes") csv set)
+        selected (if wanted
+                   (filterv #(contains? wanted (:name %)) (:nodes fleet))
+                   (:nodes fleet))
+        admitted (kekkai/apply-admission selected)
+        nodes (kekkai/select-transport admitted (get f "transport" "tailscale"))]
+    (assoc fleet :nodes nodes)))
+
 (defn- opts-from [f fleet]
   (merge plan/default-opts
          {:max-slots (flag-int f "max-slots" (:max-slots plan/default-opts))
@@ -91,6 +101,7 @@
           :max-load1 (when (get f "max-load") (flag-num f "max-load" nil))
           :max-load-per-core (when (get f "max-load-per-core") (flag-num f "max-load-per-core" nil))
           :multiplex? (not (get f "no-multiplex"))
+          :transport (get f "transport" "tailscale")
           :worker? (not (get f "no-worker"))
           :fleet-port (:fleet/port fleet)}))
 
@@ -129,10 +140,11 @@
       (println (str/join "  " (map (fn [k w] (pad (get r k "") w)) ks widths))))))
 
 (defn- print-nodes [nodes]
-  (print-rows [[:name "NODE"] [:host "HOST"] [:online "SSH"] [:mesh "MESH"] [:cores "CORES"]
+  (print-rows [[:name "NODE"] [:transport "PATH"] [:host "HOST"] [:online "SSH"] [:mesh "MESH"] [:cores "CORES"]
                [:mem "MEM"] [:load1 "LOAD1"] [:ms "PROBE-MS"] [:note "NOTE"]]
               (mapv (fn [n]
                       {:name (:name n) :host (:host n)
+                       :transport (or (:transport n) "tailscale")
                        :online (if (:online? n) "up" "DOWN")
                        :mesh (cond (not (:online? n)) "-"
                                    (:mesh-up? n) "up"
@@ -180,12 +192,12 @@
                       (.then (fn [_] (throw e)))))))))
 
 (defn cmd-probe [f]
-  (let [fleet (load-fleet f)
+  (let [fleet (fleet-for-cli (load-fleet f) f)
         nodes (:nodes fleet)
         opts (opts-from f fleet)]
     (with-multiplexing
       opts
-      (constantly (map :host nodes))
+      (constantly nodes)
       (fn [opts]
         (-> (exec/probe nodes opts)
             (.then (fn [probed]
@@ -230,10 +242,7 @@
       (println (str "  " (:id u) " — " (:detail u))))))
 
 (defn cmd-plan [f]
-  (let [fleet (load-fleet f)
-        fleet (if-let [wanted (some-> (get f "nodes") csv set)]
-                (update fleet :nodes (fn [nodes] (filterv #(contains? wanted (:name %)) nodes)))
-                fleet)
+  (let [fleet (fleet-for-cli (load-fleet f) f)
         tasks (tasks-from f)
         opts0 (opts-from f fleet)
         finish (fn [nodes]
@@ -243,11 +252,12 @@
                    p))]
     (if (get f "no-probe")
       (do (finish (:nodes fleet)) (js/Promise.resolve nil))
-      (with-multiplexing opts0 (constantly (map :host (:nodes fleet)))
+      (with-multiplexing opts0 (constantly (:nodes fleet))
         (fn [opts] (-> (exec/probe (:nodes fleet) opts) (.then finish)))))))
 
 (defn transport-label [opts]
-  (str (if (false? (:worker? opts)) "one ssh per task" "resident workers")
+  (str (:transport opts) ", "
+       (if (false? (:worker? opts)) "one ssh per task" "resident workers")
        (if (:control-path opts) " on a multiplexed connection" ", one connection each")))
 
 (defn- append-ledger! [path entry]
@@ -263,7 +273,7 @@
           (subs o 0 (min 60 (count o))))})
 
 (defn cmd-run [f]
-  (let [fleet (load-fleet f)
+  (let [fleet (fleet-for-cli (load-fleet f) f)
         tasks (tasks-from f)
         opts0 (opts-from f fleet)
         ledger (get f "ledger" default-ledger)
@@ -273,7 +283,7 @@
       (.exit js/process 2))
     (with-multiplexing
       opts0
-      (constantly (map :host (:nodes fleet)))
+      (constantly (:nodes fleet))
       (fn [mopts]
         (-> (if (get f "no-probe")
               (js/Promise.resolve (:nodes fleet))
@@ -382,6 +392,7 @@
     "  --labels tier=edge     placement label constraints (all must match)"
     "  --roles compute,pin    placement role constraints (all must be present)"
     "  --nodes a,b            explicit node allow-list"
+    "  --transport tailscale|kekkai (default tailscale; Kekkai uses fleet :kekkai forward ports)"
     "  --min-mem-gb 16        require at least this much RAM on the node"
     ""
     "throughput / admission:"

@@ -58,51 +58,53 @@
    {:task :node :host :exit :timeout? :stdout :stderr :started-ms :duration-ms}.
    Never rejects — a spawn error or timeout is reported as data, because a
    partially-failed fan-out is a normal outcome the planner must be able to fold."
-  [{:keys [task node host]} opts]
-  (js/Promise.
-   (fn [resolve _reject]
-     (let [t0 (js/Date.now)
-           timeout-ms (or (:timeout-ms task) (:timeout-ms opts) 120000)
-           argv (tunnel/ssh-argv host (:cmd task)
-                                 {:connect-timeout-s (or (:connect-timeout-s opts) 8)
-                                  :control-path (:control-path opts)})
-           child (.spawn cp (first argv) (to-array (rest argv))
-                         #js {:stdio #js ["ignore" "pipe" "pipe"]})
-           out (atom "")
-           err (atom "")
-           state (atom nil)
-           finish (fn [m]
-                    (let [[clean rc] (tunnel/parse-rc @out)]
-                      (resolve (merge {:task task :node node :host host
-                                       :stdout clean
-                                       :remote-rc rc
-                                       :stderr (str/trim @err)
-                                       :started-ms t0
-                                       :duration-ms (- (js/Date.now) t0)}
-                                      m))))
-           timer (js/setTimeout (fn []
-                                  (when (nil? @state)
-                                    (reset! state :timeout)
-                                    (.kill child "SIGKILL")))
-                                timeout-ms)]
-       (.on (.-stdout child) "data" (fn [d] (swap! out str (.toString d))))
-       (.on (.-stderr child) "data" (fn [d] (swap! err str (.toString d))))
-       (.on child "error"
-            (fn [e]
-              (js/clearTimeout timer)
-              (when (nil? @state)
-                (reset! state :error)
-                (finish {:exit nil :timeout? false :error (str (.-message e))}))))
-       (.on child "close"
-            (fn [code]
-              (js/clearTimeout timer)
-              (when (not= :error @state)
-                ;; The in-band sentinel wins when present: ssh's own exit code
-                ;; is unreliable on this fleet (see wrap-cmd).
-                (let [[_ rc] (tunnel/parse-rc @out)]
-                  (finish {:exit (when-not (= :timeout @state) (or rc code))
-                           :ssh-exit code
-                           :timeout? (= :timeout @state)})))))))))
+  [{:keys [task node host ssh-host ssh-port]} opts]
+  (let [endpoint (or ssh-host host)]
+    (js/Promise.
+     (fn [resolve _reject]
+       (let [t0 (js/Date.now)
+             timeout-ms (or (:timeout-ms task) (:timeout-ms opts) 120000)
+             argv (tunnel/ssh-argv endpoint (:cmd task)
+                                   {:connect-timeout-s (or (:connect-timeout-s opts) 8)
+                                    :ssh-port (or ssh-port (:ssh-port opts))
+                                    :control-path (:control-path opts)})
+             child (.spawn cp (first argv) (to-array (rest argv))
+                           #js {:stdio #js ["ignore" "pipe" "pipe"]})
+             out (atom "")
+             err (atom "")
+             state (atom nil)
+             finish (fn [m]
+                      (let [[clean rc] (tunnel/parse-rc @out)]
+                        (resolve (merge {:task task :node node :host host
+                                         :stdout clean
+                                         :remote-rc rc
+                                         :stderr (str/trim @err)
+                                         :started-ms t0
+                                         :duration-ms (- (js/Date.now) t0)}
+                                        m))))
+             timer (js/setTimeout (fn []
+                                    (when (nil? @state)
+                                      (reset! state :timeout)
+                                      (.kill child "SIGKILL")))
+                                  timeout-ms)]
+         (.on (.-stdout child) "data" (fn [d] (swap! out str (.toString d))))
+         (.on (.-stderr child) "data" (fn [d] (swap! err str (.toString d))))
+         (.on child "error"
+              (fn [e]
+                (js/clearTimeout timer)
+                (when (nil? @state)
+                  (reset! state :error)
+                  (finish {:exit nil :timeout? false :error (str (.-message e))}))))
+         (.on child "close"
+              (fn [code]
+                (js/clearTimeout timer)
+                (when (not= :error @state)
+                  ;; The in-band sentinel wins when present: ssh's own exit code
+                  ;; is unreliable on this fleet (see wrap-cmd).
+                  (let [[_ rc] (tunnel/parse-rc @out)]
+                    (finish {:exit (when-not (= :timeout @state) (or rc code))
+                             :ssh-exit code
+                             :timeout? (= :timeout @state)}))))))))))
 
 (defn- take-next!
   "Pop the next assignment off a node's queue. Safe without locking: nbb is
@@ -145,10 +147,15 @@
   (let [by-name (into {} (map (juxt :name identity)) nodes)
         groups (group-by :node (:assignments plan))
         ps (mapv (fn [[node-name as]]
-                   (let [slot-count (plan/slots (get by-name node-name) opts)]
+                   (let [node (get by-name node-name)
+                         slot-count (plan/slots node opts)
+                         node-opts (assoc opts :ssh-port (:ssh-port node))
+                         endpoint (or (:ssh-host node) (:host node))
+                         assignments (mapv #(assoc % :ssh-host (:ssh-host node)
+                                                    :ssh-port (:ssh-port node)) as)]
                      (if (false? (:worker? opts))
-                       (run-node-queue as slot-count opts)
-                       (worker/run-node-queue (:host (first as)) as slot-count opts))))
+                       (run-node-queue assignments slot-count node-opts)
+                       (worker/run-node-queue endpoint assignments slot-count node-opts))))
                  groups)]
     (if (empty? ps)
       (js/Promise.resolve [])
@@ -163,15 +170,20 @@
   (if-not dir
     (js/Promise.resolve nil)
     (let [cpath (control-path dir)
-          ps (mapv (fn [h]
+          targets (map (fn [x]
+                         (if (map? x)
+                           {:host (or (:ssh-host x) (:host x)) :ssh-port (:ssh-port x)}
+                           {:host x}))
+                       hosts)
+          ps (mapv (fn [{:keys [host ssh-port]}]
                      (js/Promise.
                       (fn [resolve _]
-                        (let [argv (tunnel/close-master-argv h cpath)
+                        (let [argv (tunnel/close-master-argv host cpath {:ssh-port ssh-port})
                               child (.spawn cp (first argv) (to-array (rest argv))
                                             #js {:stdio "ignore"})]
                           (.on child "close" (fn [_] (resolve nil)))
                           (.on child "error" (fn [_] (resolve nil)))))))
-                   (distinct (remove nil? hosts)))]
+                   (distinct (remove #(nil? (:host %)) targets)))]
       (-> (js/Promise.all (to-array ps))
           (.then (fn [_]
                    (try (.rmSync fs dir #js {:recursive true :force true})
@@ -218,7 +230,8 @@
   (let [ps (mapv (fn [node]
                    (-> (run-one {:task {:cmd (probe-cmd (or (:port node) (:fleet-port opts) 8077))
                                         :id (str "probe-" (:name node))}
-                                 :node (:name node) :host (:host node)}
+                                 :node (:name node) :host (:host node)
+                                 :ssh-host (:ssh-host node) :ssh-port (:ssh-port node)}
                                 (assoc opts :timeout-ms (or (:probe-timeout-ms opts) 15000)))
                        (.then (fn [r]
                                 (if (and (= 0 (:exit r)) (seq (:stdout r)))
