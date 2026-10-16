@@ -8,7 +8,7 @@
 (deftest env-resolution-defaults-then-overrides
   (testing "defaults"
     (is (= "kekkai-tailnet.edn" (gate/ledger-path (constantly nil))))
-    (is (= "/home/jun/github/com-junkawasaki/orgs/kotoba-lang/kekkai"
+    (is (= "/home/jun/github/kotoba-lang/kekkai"
            (gate/kekkai-dir #(when (= "HOME" %) "/home/jun")))))
   (testing "env overrides"
     (is (= "/etc/murakumo/ledger.edn"
@@ -17,10 +17,13 @@
            (gate/kekkai-dir #(when (= "MURAKUMO_KEKKAI_DIR" %) "/opt/kekkai"))))))
 
 (deftest cli-argv-and-status-parsing
-  (is (= ["kbb" "-M" "-m" "kekkai.cli" "ledger.edn" "asher"]
+  (is (= ["kbb" "-M" "-m" "kekkai.status-cli" "ledger.edn" "asher"]
          (gate/cli-argv "ledger.edn" "asher")))
+  (is (= ["kbb" "-M" "-m" "kekkai.status-cli" "status-batch"
+          "ledger.edn" "naphtali" "judah"]
+         (gate/cli-batch-argv "ledger.edn" ["naphtali" "judah"])))
   (is (= "authorized" (gate/parse-status {:exit 0 :out "authorized\n"})))
-  (testing "kekkai.cli exits 1 for non-authorized statuses but still prints the real status"
+  (testing "the status CLI still prints non-authorized statuses"
     (is (= "pending" (gate/parse-status {:exit 1 :out "pending\n"})))
     (is (= "revoked" (gate/parse-status {:exit 1 :out "revoked\n"}))))
   (testing "a hard subprocess failure (no output at all) falls back to unknown"

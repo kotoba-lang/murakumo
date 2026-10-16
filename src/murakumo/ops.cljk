@@ -29,12 +29,13 @@
 ;; T6.4 preload guarantee: cache shipped KIR *before* product-shell requires so
 ;; hosts that deleted cljs mirrors (and future deletes) load against oracle only.
 ;; resources/ is resolved relative to process.cwd() (run nbb from repo root).
-(oracle/preload! [:dash-state :fleet-inventory :task-plan])
+(oracle/preload! [:dash-state :fleet-inventory :task-plan :config :kekkai-gate :tunnel])
 
 (require '[murakumo.dash.state :as state]
          '[murakumo.fleet.inventory :as inv]
          '[murakumo.task.exec :as exec]
-         '[murakumo.task.plan :as plan])
+         '[murakumo.task.plan :as plan]
+         '[murakumo.kekkai.runtime :as kekkai])
 
 ;; --- probing ----------------------------------------------------------------
 
@@ -72,12 +73,14 @@
   (let [port (inv/node-port fleet node)
         p2p (or (:p2p-port node) (:fleet/p2p-port fleet))]
     (-> (exec/run-one {:task {:id (str "status-" (:name node)) :cmd (probe-command port)}
-                       :node (:name node) :host (:host node)}
+                       :node (:name node) :host (:host node)
+                       :ssh-host (:ssh-host node) :ssh-port (:ssh-port node)}
                       (assoc opts :timeout-ms (or (:probe-timeout-ms opts) 20000)))
         (.then (fn [r]
                  (if-not (= 0 (:exit r))
                    (assoc (state/down-node node)
                           :host (:host node) :p2p p2p
+                          :transport (or (:transport node) "tailscale")
                           :error (or (:error r)
                                      (when (:timeout? r) "timeout")
                                      (not-empty (:stderr r))
@@ -85,7 +88,8 @@
                    (let [lines (state/probe-lines (:stdout r))
                          health (decode-health (get lines "H"))]
                      (merge (state/probe-node (assoc node :online? true) health lines p2p)
-                            {:binary (get lines "B" "?")
+                            {:transport (or (:transport node) "tailscale")
+                             :binary (get lines "B" "?")
                              :agent (if (= "0" (str/trim (get lines "A" "0"))) "no" "yes")
                              :ports (port-pressure (get lines "T"))}))))))))
 
@@ -104,6 +108,7 @@
 (defn- status-rows [snap]
   (mapv (fn [n]
           {:name (:name n)
+           :transport (or (:transport n) "tailscale")
            :ssh (if (:online n) "up" "DOWN")
            :health (:health n)
            :wasm (or (:wasm n) "-")
@@ -124,7 +129,7 @@
         snap))
 
 (defn print-status [snap]
-  (print-rows [[:name "NODE"] [:ssh "SSH"] [:health "HEALTH"] [:ports "PORTS"] [:wasm "WASM-EXEC"]
+  (print-rows [[:name "NODE"] [:transport "PATH"] [:ssh "SSH"] [:health "HEALTH"] [:ports "PORTS"] [:wasm "WASM-EXEC"]
                [:links "LINKS"] [:p2p "P2P"] [:binary "BINARY"] [:agent "AGENT"]
                [:hosted "HOSTED"] [:note "NOTE"]]
               (status-rows snap))
@@ -156,7 +161,9 @@
 
 (defn cmd-status [f]
   (let [fleet (edn/read-string (.readFileSync fs (get f "fleet" "fleet.edn") "utf8"))
-        nodes (inv/select fleet (first (:_ f)))
+        selected (inv/select fleet (first (:_ f)))
+        admitted (kekkai/apply-admission selected)
+        nodes (kekkai/select-transport admitted (get f "transport" "tailscale"))
         opts (assoc plan/default-opts :multiplex? (not (get f "no-multiplex")))
         dir (exec/control-dir! opts)
         opts (assoc opts :control-path (exec/control-path dir))]
@@ -166,13 +173,13 @@
                    (if (= "edn" (get f "format"))
                      (println (pr-str snap))
                      (print-status snap))
-                   (exec/close-masters! dir (map :host nodes))))))))
+                   (exec/close-masters! dir nodes)))))))
 
 (def usage
   (str/join "\n"
             ["murakumo ops — the fleet read surface (nbb port of `nodes` + `status`)"
              ""
-             "  status [all|a,b] [--format edn] [--fleet fleet.edn] [--no-multiplex]"
+             "  status [all|a,b] [--transport tailscale|kekkai] [--format edn] [--fleet fleet.edn] [--no-multiplex]"
              ""
              "One ssh round trip per node: /health, wasm_executor, peer links, hosted"
              "component CIDs, mesh binary presence, LaunchAgent state."]))

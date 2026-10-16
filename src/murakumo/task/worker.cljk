@@ -63,6 +63,7 @@
   [host opts]
   (let [argv (tunnel/ssh-argv host "bash -s"
                               {:connect-timeout-s (or (:connect-timeout-s opts) 8)
+                               :ssh-port (:ssh-port opts)
                                :control-path (:control-path opts)
                                :wrap? false})
         child (.spawn cp (first argv) (to-array (rest argv))

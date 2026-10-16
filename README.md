@@ -1286,34 +1286,27 @@ see `com-junkawasaki/kotoba`'s mesh persistence + etzhayyim's `issue-cacao`).
 ## Fleet admission — kekkai (zero-trust gate, opt-in)
 
 `fleet.edn` is the **desired** inventory; it is not, by itself, an admission
-record — anyone who can edit `fleet.edn` and reach a node over Tailscale gets
-treated as fleet today. `murakumo.kekkai` closes that gap by gating
-`murakumo.fleet/select` — the single choke point every command (`nodes`,
-`provision`, `status`, `mesh`, `deploy`, `up`/`down`) resolves its node set
-through — against [`kotoba-lang/kekkai`](https://github.com/kotoba-lang/kekkai),
+record. The runnable `ops status` and `task probe|plan|run` CLI paths consult
+[`kotoba-lang/kekkai`](https://github.com/kotoba-lang/kekkai),
 a zero-trust Tailscale-equivalent control plane (coord-LLM proposal ⊣
 TailnetGovernor, admission always routed to a human, append-only ledger).
 
 ```bash
 cp kekkai-tailnet.edn.example kekkai-tailnet.edn   # opt in
-# edit :status per node ("authorized" | "pending" | "expired" | "revoked")
-kbb -M:murakumo nodes    # nodes without :status "authorized" are now excluded,
-                      # reported to stderr: "[kekkai] <name>: not authorized (<status>) — excluded from fleet ops"
+# the CLI omits every node whose ledger status is not "authorized"
+kbb --backend sci src/murakumo/ops.cljk status
 ```
 
 - **Opt-in, not a breaking default.** Absent `./kekkai-tailnet.edn` (or
-  `$MURAKUMO_KEKKAI_LEDGER`), `select` behaves exactly as before — every
-  command against every fleet.edn node. The gate only activates once that
-  ledger file exists.
+  `$MURAKUMO_KEKKAI_LEDGER`), these CLI paths preserve the selected fleet nodes.
+  The gate activates once that ledger file exists.
 - **Deny-by-default.** A node not in the ledger at all is treated as
   `"unknown"`, same as `"pending"`/`"expired"`/`"revoked"` — only an explicit
   `"authorized"` entry passes. Being listed in `fleet.edn` is never, on its
   own, sufficient (that would make the governor a no-op).
-- **Process boundary, not an in-process dep.** kekkai rides langgraph/JVM;
-  murakumo's own CLI runs on babashka. Status lookups shell out to
-  the sibling kekkai checkout (`$MURAKUMO_KEKKAI_DIR`) as a leftover process
-  boundary — not this repo's operator start, and not a `:desired`/`:factory`
-  alias. Default operator start is `kotoba run`.
+- **Process boundary, not an in-process dep.** Kekkai status runs through the
+  sibling checkout (`$MURAKUMO_KEKKAI_DIR`) and its kbb CLI, keeping its
+  dependencies out of Murakumo's nbb process.
 - **What this does NOT replace.** `cloud.edn`'s default-deny capability
   policy (`kbb -M:cloud dial ... capability=ssh`) still governs what a given
   *admitted* node may reach; kekkai gates fleet **membership** (is this node
@@ -1321,15 +1314,45 @@ kbb -M:murakumo nodes    # nodes without :status "authorized" are now excluded,
   `"authorized"`) happens through kekkai's own CoordinationActor elsewhere —
   this ledger file is the ground-fact snapshot murakumo reads, not the
   admission flow itself.
-- Pure logic (`murakumo.kekkai.gate`, env resolution + node partitioning) is
-  unit-tested offline in `kbb -M:test`; the subprocess shell (`murakumo.kekkai`)
-  is exercised manually against a real sibling kekkai checkout.
-- **Known cost (not yet optimized): one JVM spawn per node.** `apply-gate`
-  shells out to `kekkai.cli` once per node in the selection (no batching), so
-  enabling the gate on a full fleet still pays one leftover JVM spawn per
-  node (kekkai sibling CLI). That is a named leftover, not murakumo operator
-  start. A launch failure (missing sibling, broken checkout) degrades that
-  node to `"unknown"` (denied) rather than crashing the command.
+- The CLI invokes `kekkai.status-cli status-batch` once for the selected fleet nodes.
+  Missing Kekkai checkout, CLI failure, or malformed output maps to `unknown`
+  and denies those nodes.
+
+## Kekkai SSH transport from Murakumo CLI
+
+Murakumo keeps its current Tailscale SSH route as the default. To use Kekkai's
+userspace stream edge, run a persistent `kekkai.node.stream-edge` process on the
+Murakumo controller and configure one local forward for each target node. The
+remote signed netmap must grant that controller `:ssh` on port 22. For example,
+the controller config can contain:
+
+```clojure
+{:node/id "murakumo-controller"
+ :runner :stream-edge
+ :forwards [{:listen-port 2222 :peer "judah" :port 22 :capability :ssh}]}
+```
+
+Add the corresponding optional route metadata to the intended fleet entry:
+
+```clojure
+{:name "judah" :host "judah"
+ :kekkai {:node-id "judah" :ssh-user "judah" :ssh-local-port 2222}}
+```
+
+Then select the route per command:
+
+```bash
+kbb --backend sci src/murakumo/ops.cljk status naphtali --transport kekkai
+kbb --backend sci src/murakumo/task.cljk probe --transport kekkai --nodes naphtali
+kbb --backend sci src/murakumo/task.cljk run --transport kekkai --nodes naphtali --n 1 --cmd hostname
+```
+
+Kekkai transport connects SSH to `ssh-user@127.0.0.1:<ssh-local-port>`. The
+Kekkai SSH user is explicit because the normal Tailscale host alias may supply a
+different remote username. The CLI fails when a node lacks its Kekkai peer ID,
+SSH user, or local port; it never falls back to Tailscale. The optional Murakumo
+admission ledger is a separate membership check, and the signed netmap remains
+the data-plane authority.
 
 ## Status (honest)
 

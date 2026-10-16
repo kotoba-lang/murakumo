@@ -68,6 +68,20 @@
          (tunnel/remote-curl-command "http://localhost:8077/health")))
   (is (= {:exit 1 :err "missing"} (tunnel/scp-result {:exit 1 :err " missing\n"}))))
 
+(deftest kekkai-ssh-port-is-explicit
+  (testing "SSH task routes through the configured loopback forward"
+    (let [argv (tunnel/ssh-argv "naphtali@127.0.0.1" "hostname"
+                                {:ssh-port 52222 :wrap? false})]
+      (is (= "-p" (nth argv 1)))
+      (is (= "52222" (nth argv 2)))
+      (is (= "naphtali@127.0.0.1" (nth argv (- (count argv) 2))))
+      (is (= "hostname" (last argv)))))
+  (testing "multiplex master shutdown uses the same local port"
+    (is (= ["ssh" "-p" "52222" "-o" "ControlPath=/tmp/m/%C" "-O" "exit"
+            "naphtali@127.0.0.1"]
+           (tunnel/close-master-argv "naphtali@127.0.0.1" "/tmp/m/%C"
+                                     {:ssh-port 52222})))))
+
 #?(:cljs
    (defmethod cljs.test/report [:cljs.test/default :end-run-tests] [m]
      (println (str "\n" (:test m) " tests, " (:pass m) " assertions, "

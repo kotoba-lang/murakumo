@@ -1,0 +1,106 @@
+;; murakumo.kekkai.runtime — nbb host adapter for admission + transport.
+;; Pure status/argv tokens come from Kotoba through murakumo.kekkai.gate;
+;; process and filesystem access stay at this host boundary.
+
+(ns murakumo.kekkai.runtime
+  (:require ["node:child_process" :as cp]
+            ["node:fs" :as fs]
+            ["node:path" :as path]
+            [kotoba.lang.edn :as edn]
+            [kotoba.lang.text :as str]
+            [murakumo.kekkai.gate :as gate]))
+
+(defn- getenv [key]
+  (aget (.-env js/process) key))
+
+(defn- resolved-ledger []
+  (.resolve path (gate/ledger-path getenv)))
+
+(defn- resolved-kekkai-dir []
+  (.resolve path (gate/kekkai-dir getenv)))
+
+(defn- batch-statuses [nodes ledger]
+  (let [dir (resolved-kekkai-dir)
+        ids (mapv #(or (get-in % [:kekkai :node-id]) (:name %)) nodes)
+        argv (gate/cli-batch-argv ledger ids)]
+    (if-not (.existsSync fs dir)
+      (do
+        (binding [*print-fn* *print-err-fn*]
+          (println "[kekkai] checkout unavailable; fleet admission denied"))
+        {})
+      (try
+        (let [result (.spawnSync cp gate/cli-bin
+                                 (clj->js (rest argv))
+                                 #js {:cwd dir :encoding "utf8"
+                                      :maxBuffer (* 4 1024 1024)})
+              status (.-status result)
+              output (.-stdout result)]
+          (if (and (= 0 status) (seq output))
+            (edn/read-string output)
+            (do
+              (binding [*print-fn* *print-err-fn*]
+                (println "[kekkai] status query failed; fleet admission denied"))
+              {})))
+        (catch :default _
+          (binding [*print-fn* *print-err-fn*]
+            (println "[kekkai] status query failed; fleet admission denied"))
+          {})))))
+
+(defn apply-admission
+  "When a local Kekkai ledger exists, retain only explicitly authorized nodes.
+   The CLI reads all statuses in one Kekkai JVM process. Missing tools, bad
+   output, and absent node IDs fail closed to unknown."
+  [nodes]
+  (let [ledger (resolved-ledger)]
+    (if-not (.existsSync fs ledger)
+      nodes
+      (let [statuses (batch-statuses nodes ledger)
+            by-name (into {}
+                          (map (fn [n]
+                                 [(:name n)
+                                  (get statuses
+                                       (or (get-in n [:kekkai :node-id]) (:name n))
+                                       gate/status-unknown)]))
+                          nodes)
+            {:keys [admitted denied]} (gate/partition-nodes nodes by-name)]
+        (doseq [n denied]
+          (binding [*print-fn* *print-err-fn*]
+            (println (gate/denial-line n))))
+        admitted))))
+
+(defn select-transport
+  "Resolve the explicit SSH endpoint for each selected fleet node.
+   Tailscale keeps the configured host. Kekkai requires a pre-running local
+   stream-edge forwarder and an explicit per-node node ID and local port."
+  [nodes transport]
+  (when-not (contains? #{"tailscale" "kekkai"} transport)
+    (throw (js/Error. (str "unsupported transport " transport
+                           "; choose tailscale or kekkai"))))
+  (if (= "tailscale" transport)
+    (mapv #(assoc % :transport transport) nodes)
+    (let [selected (mapv (fn [node]
+                           (let [node-id (get-in node [:kekkai :node-id])
+                                 port (get-in node [:kekkai :ssh-local-port])
+                                 user (get-in node [:kekkai :ssh-user])]
+                             (when-not (and (string? node-id) (seq node-id))
+                               (throw (js/Error. (str "fleet node " (:name node)
+                                                      " needs :kekkai :node-id for Kekkai transport"))))
+                             (when-not (and (number? port) (= port (js/Math.floor port))
+                                            (<= 1 port 65535))
+                               (throw (js/Error. (str "fleet node " (:name node)
+                                                      " needs :kekkai :ssh-local-port in 1..65535"))))
+                             (when-not (and (string? user)
+                                            (re-matches #"[A-Za-z0-9._-]+" user))
+                               (throw (js/Error. (str "fleet node " (:name node)
+                                                      " needs :kekkai :ssh-user for Kekkai transport"))))
+                             (assoc node :transport transport
+                                    :ssh-host (str user "@127.0.0.1")
+                                    :ssh-port port)))
+                         nodes)
+          duplicates (->> selected (group-by :ssh-port)
+                          (keep (fn [[port entries]]
+                                  (when (> (count entries) 1) port))))]
+      (when (seq duplicates)
+        (throw (js/Error. (str "Kekkai SSH local ports must be unique; duplicated: "
+                               (str/join "," duplicates)))))
+      selected)))

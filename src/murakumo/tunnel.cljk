@@ -74,6 +74,10 @@
   "ssh -O exit control verb. Kotoba SSoT (requires oracle)."
   (o 'exit-ctl []))
 
+(def ssh-port-flag
+  "SSH port flag. Kotoba SSoT (requires oracle)."
+  (o 'ssh-port-flag []))
+
 (def pgrep-bin
   (o 'pgrep-bin []))
 (def pkill-bin
@@ -209,7 +213,10 @@
    Bin name via `ssh-bin`."
   ([host cmd] (ssh-argv host cmd nil))
   ([host cmd opts]
-   (vec (concat [ssh-bin] (conn-opts opts)
+   (vec (concat [ssh-bin]
+                (when-let [port (:ssh-port opts)]
+                  [ssh-port-flag (str port)])
+                (conn-opts opts)
                 [host (if (false? (:wrap? opts)) cmd (wrap-cmd cmd))]))))
 
 (defn scp-argv
@@ -228,9 +235,16 @@
   "argv that shuts down a multiplexed connection's master socket. Run this when
    a batch finishes instead of leaving masters to expire on ControlPersist.
    Bin/flags via ssh-bin / o-flag / O-flag / exit-ctl."
-  [host control-path]
-  [ssh-bin o-flag (o-record 'close-master-control-opt {:control-path control-path} [[:control-path :string]])
-   O-flag exit-ctl host])
+  ([host control-path]
+   (close-master-argv host control-path nil))
+  ([host control-path opts]
+   (vec (concat [ssh-bin]
+                (when-let [port (:ssh-port opts)]
+                  [ssh-port-flag (str port)])
+                [o-flag (o-record 'close-master-control-opt
+                                  {:control-path control-path}
+                                  [[:control-path :string]])
+                 O-flag exit-ctl host]))))
 
 (defn ensure-forward-command
   "Shell command that starts an SSH local forward only when an equivalent one is absent.
