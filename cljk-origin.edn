@@ -1,7 +1,24 @@
 {:format :kotoba.cljk-origin/v1
  :renamed-on "2026-09-11"
  :decision "adr-2609111500-cljk-rename-all-clojure-source (com-junkawasaki/root 90-docs/adr; owner instruction 2026-09-11)"
- :rule "value = the extension the file had before the rename. A path ending in .clj.cljk or .cljs.cljk kept it in the name because both platform files existed (or the plain target was taken)."
+ :rule "origin values record the extension before rename. Target values select a platform for new .cljk files that have no prior extension in Git history. A path ending in .clj.cljk or .cljs.cljk kept it in the name because both platform files existed (or the plain target was taken)."
+ ;; New .cljk modules have no historical extension. Record their chosen
+ ;; compiler target separately; do not make :origins claim a rename that never
+ ;; happened. Use .cljc only when both JVM and CLJS compile; the worker/crawler
+ ;; chain targets .cljs where JVM interop or a JVM dependency blocks loading.
+ :targets
+ {"src/murakumo/web.cljk" ".cljc"
+  "src/murakumo/web/backends.cljk" ".cljs"
+  "src/murakumo/web/crawl.cljk" ".cljs"
+  "src/murakumo/web/dispatch.cljk" ".cljs"
+  "src/murakumo/web/host.cljk" ".cljs"
+  "src/murakumo/web/index.cljk" ".cljs"
+  "src/murakumo/web/provision.cljk" ".cljc"
+  "src/murakumo/web/robots.cljk" ".cljc"
+  "src/murakumo/web/search.cljk" ".cljs"
+  "src/murakumo/web/url.cljk" ".cljc"
+  "src/murakumo/web/verify.cljk" ".cljs"
+  "src/murakumo/web/worker.cljk" ".cljs"}
  :origins
  {"src/murakumo/infer/keepalive.cljk" ".cljs"
   "src/murakumo/infer/jobs.cljk" ".cljs"
