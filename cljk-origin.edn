@@ -1,24 +1,37 @@
 {:format :kotoba.cljk-origin/v1
  :renamed-on "2026-09-11"
  :decision "adr-2609111500-cljk-rename-all-clojure-source (com-junkawasaki/root 90-docs/adr; owner instruction 2026-09-11)"
- :rule "origin values record the extension before rename. Target values select a platform for new .cljk files that have no prior extension in Git history. A path ending in .clj.cljk or .cljs.cljk kept it in the name because both platform files existed (or the plain target was taken)."
- ;; New .cljk modules have no historical extension. Record their chosen
- ;; compiler target separately; do not make :origins claim a rename that never
- ;; happened. Use .cljc only when both JVM and CLJS compile; the worker/crawler
- ;; chain targets .cljs where JVM interop or a JVM dependency blocks loading.
+ :rule "origin values record the extension before rename. Target values select the mirrored source extension for new .cljk files with no prior extension in Git history. A path ending in .clj.cljk or .cljs.cljk kept it in the name because both platform files existed (or the plain target was taken)."
+ ;; New .cljk modules have no historical extension. Record the mirrored source
+ ;; extension separately; do not make :origins claim a rename that never
+ ;; happened. .cljc preserves reader-conditional forms, but does not by itself
+ ;; prove that the full dependency closure loads on both JVM and CLJS. Qualify
+ ;; each host graph with its actual compiler; use .cljs for CLJS-only sources
+ ;; that do not contain reader conditionals.
  :targets
- {"src/murakumo/web.cljk" ".cljc"
-  "src/murakumo/web/backends.cljk" ".cljs"
+ {"src/murakumo/kekkai/runtime.cljk" ".cljs"
+  "src/murakumo/web.cljk" ".cljc"
+  "src/murakumo/web/collection.cljk" ".cljs"
+  "src/murakumo/web/collection_coordinator.cljk" ".cljs"
+  "src/murakumo/web/collection_host.cljk" ".cljc"
+  "src/murakumo/web/collection_runtime.cljk" ".cljc"
+  "src/murakumo/web/collection_store.cljk" ".cljc"
+  "src/murakumo/web/collection_transport.cljk" ".cljc"
+  "src/murakumo/web/origin.cljk" ".cljc"
+  "src/murakumo/web/backends.cljk" ".cljc"
   "src/murakumo/web/crawl.cljk" ".cljs"
   "src/murakumo/web/dispatch.cljk" ".cljs"
   "src/murakumo/web/host.cljk" ".cljs"
-  "src/murakumo/web/index.cljk" ".cljs"
+  "src/murakumo/web/index.cljk" ".cljc"
   "src/murakumo/web/provision.cljk" ".cljc"
   "src/murakumo/web/robots.cljk" ".cljc"
-  "src/murakumo/web/search.cljk" ".cljs"
+  "src/murakumo/web/search.cljk" ".cljc"
   "src/murakumo/web/url.cljk" ".cljc"
   "src/murakumo/web/verify.cljk" ".cljs"
-  "src/murakumo/web/worker.cljk" ".cljs"}
+  "src/murakumo/web/worker.cljk" ".cljc"
+  "test/murakumo/kekkai_transport_test.cljk" ".cljs"
+  "test/murakumo/poi_challenge_test.cljk" ".cljs"
+  "test/murakumo/web_collection_test.cljk" ".cljs"}
  :origins
  {"src/murakumo/infer/keepalive.cljk" ".cljs"
   "src/murakumo/infer/jobs.cljk" ".cljs"
@@ -241,14 +254,6 @@
   "src/murakumo/tunnel.cljk" ".cljc"
   "src/murakumo/wifi_share.cljk" ".cljs"
   "src/murakumo/wifi_share_page.cljk" ".cljs"
-  "src/murakumo/web.cljk" ".cljc"
-  "src/murakumo/web/backends.cljk" ".cljc"
-  "src/murakumo/web/crawl.cljk" ".cljc"
-  "src/murakumo/web/dispatch.cljk" ".cljs"
-  "src/murakumo/web/host.cljk" ".cljs"
-  "src/murakumo/web/index.cljk" ".cljc"
-  "src/murakumo/web/provision.cljk" ".cljc"
-  "src/murakumo/web/origin.cljk" ".cljc"
   "src/murakumo/plane.cljk" ".cljc"
   "src/murakumo/plane_registry.cljk" ".cljc"
   "test/murakumo/plane_test.cljk" ".cljs"
@@ -261,11 +266,6 @@
   "test/murakumo/poi_kotoba_parity_test.cljk" ".cljc"
   "test/murakumo/poi_receipt_test.cljk" ".cljc"
   "test/murakumo/web_origin_test.cljk" ".cljc"
-  "src/murakumo/web/robots.cljk" ".cljc"
-  "src/murakumo/web/search.cljk" ".cljc"
-  "src/murakumo/web/url.cljk" ".cljc"
-  "src/murakumo/web/verify.cljk" ".cljc"
-  "src/murakumo/web/worker.cljk" ".cljs"
   "test-native/murakumo/kotoba_native_execution_test.cljk" ".clj"
   "test/murakumo/access_test.cljk" ".clj"
   "test/murakumo/aiueos_join_plan_parity_test.cljk" ".clj"
