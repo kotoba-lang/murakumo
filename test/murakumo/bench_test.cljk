@@ -153,14 +153,25 @@ MODEL_SHA8=246d67d4")
 
 (deftest kotoba-native-argv-shape
   (let [cmd (bench/kotoba-native-remote {:bin "/opt/kgpu" :guest "/opt/kgpu/g.bin"
-                                         :offset 5872 :isa "aarch64" :wires "42"})]
+                                         :offset 5872 :isa "aarch64" :wires "42"
+                                         :model "/opt/kgpu/x.gguf"})]
     (is (str/includes? cmd "./kexe-loader-gpu '/opt/kgpu/g.bin' 5872 0 aarch64 42"))
     (testing "the guest's own timing needs the string result type and the report"
       (is (str/includes? cmd "KEXE_RESULT_TYPE=string"))
       (is (str/includes? cmd "KEXE_STRUCTURED_REPORT=1")))
     (testing "loader defaults land when the opts are absent"
       (is (str/includes? (bench/kotoba-native-remote {:guest "g.bin" :offset 200})
-                         "./kexe-loader-gpu 'g.bin' 200 0 aarch64 42")))))
+                         "./kexe-loader-gpu 'g.bin' 200 0 aarch64 42")))
+    (testing "and when the CLI path forwards them as nil — :or does not cover a present nil"
+      (is (str/includes? (bench/kotoba-native-remote {:guest "g.bin" :offset 200
+                                                      :isa nil :wires nil :arity nil})
+                         "./kexe-loader-gpu 'g.bin' 200 0 aarch64 42")))
+    (testing "the recorded model is bound to the invocation (guest bytes grep)"
+      (is (str/includes? cmd "GUEST_MODEL_MISMATCH=1")))
+    (testing "the guest's wall budget is the requested run limit"
+      (is (str/includes? (bench/kotoba-native-remote {:guest "g.bin" :offset 200
+                                                      :wall-seconds 1234})
+                         "KEXE_WALL_SECONDS=1234")))))
 
 (deftest kotoba-native-parse-reads-the-engine-timing
   (let [m (bench/parse-kotoba-native kotoba-native-report)]

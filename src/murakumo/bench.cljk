@@ -139,10 +139,13 @@
    (str user "@" ip) remote-cmd])
 
 (defn host-probe-cmd []
+  ;; Every substitution falls back to the Darwin spelling: a probe failure
+  ;; inside $() is silent, and the row would record blank host facts on an
+  ;; Apple node instead of the machine it measured (review finding).
   (str "echo HOST=$(hostname);"
        " echo KERNEL=$(uname -r);"
-       " echo THREADS=$(nproc);"
-       " echo MEMTOTAL_KB=$(awk '/MemTotal/{print $2}' /proc/meminfo);"
+       " echo THREADS=$(nproc 2>/dev/null || sysctl -n hw.ncpu);"
+       " echo MEMTOTAL_KB=$(awk '/MemTotal/{print $2}' /proc/meminfo 2>/dev/null || expr $(sysctl -n hw.memsize) / 1024);"
        " echo GTT_BYTES=$(cat /sys/class/drm/card*/device/mem_info_gtt_total 2>/dev/null | head -1);"
        " echo VRAM_BYTES=$(cat /sys/class/drm/card*/device/mem_info_vram_total 2>/dev/null | head -1)"))
 
@@ -159,8 +162,8 @@
 
 (defn model-probe-cmd [model]
   (str "if [ -f " (q model) " ]; then"
-       " echo MODEL_BYTES=$(stat -c%s " (q model) ");"
-       " echo MODEL_SHA8=$(sha256sum " (q model) " | cut -c1-8);"
+       " echo MODEL_BYTES=$(stat -c%s " (q model) " 2>/dev/null || stat -f%z " (q model) ");"
+       " echo MODEL_SHA8=$( (sha256sum " (q model) " 2>/dev/null || shasum -a 256 " (q model) ") | cut -c1-8);"
        " else echo MODEL_MISSING=1; fi"))
 
 (defn llama-bench-remote
@@ -208,13 +211,31 @@
 
 (defn kotoba-native-remote
   "Build the kexe-loader argv for a kotoba/amu selfhost decode guest.
-  The guest reports its own per-step GPU SUBMIT time (wire 42 = :gpu/compute)."
-  [{:keys [bin bin-name guest offset arity isa wires] :or {arity 0 isa "aarch64" wires "42"}}]
+  The guest reports its own per-step GPU SUBMIT time (wire 42 = :gpu/compute).
+
+  Two rules the tests pin, both learned from review of a real run:
+  - The defaults are applied here with `or`, not with destructuring `:or`:
+    the CLI path forwards every key (possibly nil) and `:or` does not cover a
+    present nil, so the loader invocation lost both positional defaults.
+  - `model` is not a loader input — the guest MAPs the weights at build time —
+    so the command binds it by grep: a guest whose bytes do not contain the
+    recorded --model path refuses to run (GUEST_MODEL_MISMATCH) instead of
+    attributing one workload to whatever file the operator named. The path is
+    a literal in the guest (measured: grep -aF finds it in the .bin)."
+  [{:keys [bin bin-name guest offset arity isa wires model wall-seconds]}]
   (let [dir (or bin ".")
-        name (or bin-name "kexe-loader-gpu")]
-    (str "cd " (q dir) " && export LD_LIBRARY_PATH=" (q dir) ":${LD_LIBRARY_PATH:-} &&"
-         " KEXE_RESULT_TYPE=string KEXE_STRUCTURED_REPORT=1 KEXE_FUEL=10000000"
-         " KEXE_WALL_SECONDS=900 KEXE_STRING_POOL=16777216 KEXE_PAIRS=2097152"
+        name (or bin-name "kexe-loader-gpu")
+        isa (or isa "aarch64")
+        wires (or wires "42")
+        arity (or arity 0)
+        wall (or wall-seconds 900)
+        bind (when (seq model)
+               (str "grep -aqF -- " (q model) " " (q guest)
+                    " || { echo GUEST_MODEL_MISMATCH=1; exit 9; }; "))]
+    (str "cd " (q dir) " && export LD_LIBRARY_PATH=" (q dir) ":${LD_LIBRARY_PATH:-} && "
+         (or bind "")
+         "KEXE_RESULT_TYPE=string KEXE_STRUCTURED_REPORT=1 KEXE_FUEL=10000000"
+         " KEXE_WALL_SECONDS=" wall " KEXE_STRING_POOL=16777216 KEXE_PAIRS=2097152"
          " KEXE_VECTORS=65536 KEXE_VECTOR_ITEMS=4194304"
          " ./" name " " (q guest) " " offset " " arity " " isa " " wires)))
 
@@ -475,7 +496,9 @@ publishes a number."))
                                                           :offset (num (:offset opts) 0)
                                                           :arity (num (:arity opts) 0)
                                                           :isa (:isa opts)
-                                                          :wires (:wires opts)})
+                                                          :wires (:wires opts)
+                                                          :model (:model opts)
+                                                          :wall-seconds timeout-s})
                    (throw (js/Error. (str "bench: unknown engine " engine))))
           t0 (js/Date.now)
           ;; `export K=V;` and not a bare `K=V cmd` prefix: the remote command
@@ -530,6 +553,9 @@ publishes a number."))
                   "diffuse-cli printed no token count — nothing was measured"
                   (and (= engine "kotoba-native") (nil? (:tok-s parsed)))
                   "the decode guest reported no per-step timing — nothing was measured"
+                  (and (= engine "kotoba-native")
+                       (str/includes? (str (:stdout r)) "GUEST_MODEL_MISMATCH=1"))
+                  "the guest does not embed the recorded --model path — refusing to attribute this run to it"
                   :else nil)})))
 
 (defn cmd-run [opts]
