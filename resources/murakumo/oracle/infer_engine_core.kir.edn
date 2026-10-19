@@ -469,6 +469,185 @@
      (string-concat "/bin/mlx.launch --hosts " f)]
     (string-concat venv g)),
    :param-types [[:ref :engine/mlx-launch]]}
+  {:name kexe-env-prefix,
+   :params [e],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [a
+     (string-concat
+      "KEXE_RESULT_TYPE=string KEXE_STRUCTURED_REPORT=1 KEXE_FUEL="
+      (i64-str
+       (record-get
+        [:record
+         :engine/knative-env
+         [[:fuel :i64]
+          [:wall-seconds :i64]
+          [:string-pool :i64]
+          [:pairs :i64]
+          [:vectors :i64]
+          [:vector-items :i64]]]
+        e
+        :fuel)))
+     b
+     (string-concat
+      " KEXE_WALL_SECONDS="
+      (i64-str
+       (record-get
+        [:record
+         :engine/knative-env
+         [[:fuel :i64]
+          [:wall-seconds :i64]
+          [:string-pool :i64]
+          [:pairs :i64]
+          [:vectors :i64]
+          [:vector-items :i64]]]
+        e
+        :wall-seconds)))
+     c
+     (string-concat
+      " KEXE_STRING_POOL="
+      (i64-str
+       (record-get
+        [:record
+         :engine/knative-env
+         [[:fuel :i64]
+          [:wall-seconds :i64]
+          [:string-pool :i64]
+          [:pairs :i64]
+          [:vectors :i64]
+          [:vector-items :i64]]]
+        e
+        :string-pool)))
+     d
+     (string-concat
+      " KEXE_PAIRS="
+      (i64-str
+       (record-get
+        [:record
+         :engine/knative-env
+         [[:fuel :i64]
+          [:wall-seconds :i64]
+          [:string-pool :i64]
+          [:pairs :i64]
+          [:vectors :i64]
+          [:vector-items :i64]]]
+        e
+        :pairs)))
+     f
+     (string-concat
+      " KEXE_VECTORS="
+      (i64-str
+       (record-get
+        [:record
+         :engine/knative-env
+         [[:fuel :i64]
+          [:wall-seconds :i64]
+          [:string-pool :i64]
+          [:pairs :i64]
+          [:vectors :i64]
+          [:vector-items :i64]]]
+        e
+        :vectors)))
+     g
+     (string-concat
+      " KEXE_VECTOR_ITEMS="
+      (i64-str
+       (record-get
+        [:record
+         :engine/knative-env
+         [[:fuel :i64]
+          [:wall-seconds :i64]
+          [:string-pool :i64]
+          [:pairs :i64]
+          [:vectors :i64]
+          [:vector-items :i64]]]
+        e
+        :vector-items)))
+     ab
+     (string-concat a b)
+     cd
+     (string-concat c d)
+     fg
+     (string-concat f g)]
+    (string-concat (string-concat ab cd) fg)),
+   :param-types [[:ref :engine/knative-env]]}
+  {:name kexe-loader-front,
+   :params [l],
+   :result :string,
+   :effects #{},
+   :body
+   (let
+    [loader
+     (record-get
+      [:record
+       :engine/knative-launch
+       [[:loader :string]
+        [:guest-bin :string]
+        [:offset :i64]
+        [:arity :i64]]]
+      l
+      :loader)
+     guest-bin
+     (record-get
+      [:record
+       :engine/knative-launch
+       [[:loader :string]
+        [:guest-bin :string]
+        [:offset :i64]
+        [:arity :i64]]]
+      l
+      :guest-bin)
+     offset
+     (record-get
+      [:record
+       :engine/knative-launch
+       [[:loader :string]
+        [:guest-bin :string]
+        [:offset :i64]
+        [:arity :i64]]]
+      l
+      :offset)
+     arity
+     (record-get
+      [:record
+       :engine/knative-launch
+       [[:loader :string]
+        [:guest-bin :string]
+        [:offset :i64]
+        [:arity :i64]]]
+      l
+      :arity)]
+    (string-concat
+     loader
+     (string-concat
+      " "
+      (string-concat
+       guest-bin
+       (string-concat
+        " "
+        (string-concat
+         (i64-str offset)
+         (string-concat " " (i64-str arity)))))))),
+   :param-types [[:ref :engine/knative-launch]]}
+  {:name kexe-guest-tail,
+   :params [g],
+   :result :string,
+   :effects #{},
+   :body
+   (string-concat
+    (record-get
+     [:record :engine/knative-guest [[:isa :string] [:wires :string]]]
+     g
+     :isa)
+    (string-concat
+     " "
+     (record-get
+      [:record :engine/knative-guest [[:isa :string] [:wires :string]]]
+      g
+      :wires))),
+   :param-types [[:ref :engine/knative-guest]]}
   {:name head-cmd-front,
    :params [h],
    :result :string,
@@ -617,37 +796,43 @@
  :oracle-value nil,
  :schema-identities
  {:engine/embed-back
-  "6ecf82ab54f7eba9c802446cf2b6594381d73ec91422782782f3ece4fae1c504",
+  "3a9493b009e8aa72287eef62b752cf7b17adb8706a9a14bbd408a2effc81df37",
   :engine/embed-front
-  "b68ba28e969674e3415db10358fcc3a77aad9175aa5f895eb1706a51fa879804",
+  "7726a84808f0ff8a2895c43fc8f2c325672c9cd2bead963605f5da924dc65544",
   :engine/endpoint
-  "2057c3488bfa15929e7bca51b65aab12bac602d1462a1dcd579073b683e70973",
+  "152eebfa4bf3b664bfb9dcf049b7516e68e3c221d12b7502ef0efb1685f8f6ad",
   :engine/head-front
-  "6eb6fc0f45acd4292b0e824cbdbe82da850a157754a3cbc4707bf2791aa55b13",
+  "e720aa96783bc09070fa33bc069fb29cb9b335b0714e30c75e262b263e3e4213",
   :engine/head-middle
-  "eebfe804889e5bd541848cc10e00f73a7ecb1b1841a84b43fcf43d3b15b8caae",
+  "ded0c78286b410dc173d611d5ab19d82e5f512e9cbf848d98630269c4a2ab77a",
   :engine/head-tail
-  "11b7de39905b6a4fbfbc41ac50ed94789e68b5b9e3e38fea0b67f590119876c3",
+  "66654d99be2068402fd29213d6ea1900875d6ac068d00a67a8c176e059dec10e",
+  :engine/knative-env
+  "fbffb8fedc2fa4263baf02583143f9f25c268f63ab97be8f32340854b2ad9602",
+  :engine/knative-guest
+  "7c1ec2807cdba42efebb0b8cf29f76626514d337929ea67f2401ffe99a607ee9",
+  :engine/knative-launch
+  "6269eb43e04bc9d163fe8931ec5f8ccc5f0337bf0476461fe4194d6117b964cc",
   :engine/mlx-launch
-  "db40bff8d31b71b0854b58ea34efec02426105e12a19969c85a5471e6ca13900",
+  "d894f2a94d5819f3f68de713667ded4540e13320fb7cfaa5f40f12c190703b79",
   :engine/mlx-moe
-  "cf46e08e11b8af7152bf5979b758762f2d505ac3377c66c50e0dc6ad0c4a8f04",
+  "51b14391aaa7a1fb1951714858e97deb64099933717440503e856a66ce1c8c3e",
   :engine/opt-i64
-  "00844f0bb81b3db6144850406d302dcc7379ecc258ed38c90d20a264d48db8fc",
+  "d761a382304541c4a6c3646e04ecd76119fab6d689fb43f84ad0baf14e7083e6",
   :engine/opt-str
-  "2b3e374f2b4eccc4eb73da873a751852e9bda201126278cb02abc56517818113",
+  "37cd39792479f1b9e03dd1955304f02795e2c2d7dd387a695a15b35f8241680a",
   :engine/rpc-csv-2
-  "0b6453cd37947cd862633c463541d64237c5a4144254bf429b495d3b6e368bd1",
+  "c20a39cf9d776a483a9169974c6ba818ff0bda34fd1962919568bc2641d585fc",
   :engine/rpc-csv-3
-  "ff9866b4bec8779355e6eedc7d8834e13a37b5471d23a68bdcfee89cc6bfff7f",
+  "8f35f9a60ecb150a9d584ec440ae6040d519347a7d9ff81785a4543fda487772",
   :engine/rpc-server
-  "cf97c6adaca5f7e0770c374fb072b816c34f0d9cac41a50ccea716fc3bf26169",
+  "4c3cf95aa03b582a659b70971abb02ffbdb22cc993c19dbf1b6347f9cc33510a",
   :engine/tensor-3
-  "51dd301662faf92bf7b22999beb65344dd3d9a64fc95455e6fbd12dcfc5b3595",
+  "406c02db56bc89d81bd112557f3913c09ec2fcc106cf19b9ec9b450b2feab989",
   :engine/waste
-  "069e6cd71b9e86966b89cd207b9040d2df54fb9e4541056a1573d27dfdc870c5",
+  "9dced2298c9383cb46ed811014de286319c3c1ebb190e1a6a4a2a68762fadb39",
   :engine/waste-serve
-  "bc86a670a5eed09472ce598c133fa8db3aea12183b4395df1c32b6c4291b790e"},
+  "d86f2edf5f52009302310a932fc56f76aef6428940cd8bea855ece7c7bb9719d"},
  :exports
  [default-rpc-port
   digit-char
@@ -670,61 +855,13 @@
   head-cmd-middle
   head-cmd-tail
   rpc-csv-2
-  rpc-csv-3],
+  rpc-csv-3
+  kexe-env-prefix
+  kexe-loader-front
+  kexe-guest-tail],
  :schemas
- {:engine/rpc-server
-  [:record
-   :engine/rpc-server
-   [[:bin-dir :string]
-    [:port :i64]
-    [:device :string]
-    [:cache :bool]
-    [:cache-dir :string]]],
-  :engine/head-middle
-  [:record
-   :engine/head-middle
-   [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]],
-  :engine/head-front
-  [:record
-   :engine/head-front
-   [[:bin-dir :string] [:model-path :string]]],
-  :engine/opt-str
-  [:record
-   :engine/opt-str
-   [[:flag :string] [:value :string] [:present :bool]]],
-  :engine/rpc-csv-2
-  [:record :engine/rpc-csv-2 [[:ep0 :string] [:ep1 :string]]],
-  :engine/mlx-launch
-  [:record
-   :engine/mlx-launch
-   [[:venv :string]
-    [:hosts-file :string]
-    [:model-repo :string]
-    [:max-tokens :i64]]],
-  :engine/embed-back
+ {:engine/embed-back
   [:record :engine/embed-back [[:parallel :i64] [:port :i64]]],
-  :engine/head-tail
-  [:record
-   :engine/head-tail
-   [[:ctx :i64] [:parallel :i64] [:port :i64]]],
-  :engine/waste-serve
-  [:record
-   :engine/waste-serve
-   [[:python :string] [:container :string] [:port :i64]]],
-  :engine/tensor-3
-  [:record :engine/tensor-3 [[:s0 :i64] [:s1 :i64] [:s2 :i64]]],
-  :engine/mlx-moe
-  [:record
-   :engine/mlx-moe
-   [[:venv :string] [:model-repo :string] [:port :i64]]],
-  :engine/waste
-  [:record
-   :engine/waste
-   [[:bin-dir :string] [:subcmd :string] [:container :string]]],
-  :engine/rpc-csv-3
-  [:record
-   :engine/rpc-csv-3
-   [[:ep0 :string] [:ep1 :string] [:ep2 :string]]],
   :engine/embed-front
   [:record
    :engine/embed-front
@@ -734,10 +871,79 @@
     [:ctx :i64]]],
   :engine/endpoint
   [:record :engine/endpoint [[:host :string] [:port :i64]]],
+  :engine/head-front
+  [:record
+   :engine/head-front
+   [[:bin-dir :string] [:model-path :string]]],
+  :engine/head-middle
+  [:record
+   :engine/head-middle
+   [[:rpc-csv :string] [:strategy :string] [:tsplit :string]]],
+  :engine/head-tail
+  [:record
+   :engine/head-tail
+   [[:ctx :i64] [:parallel :i64] [:port :i64]]],
+  :engine/knative-env
+  [:record
+   :engine/knative-env
+   [[:fuel :i64]
+    [:wall-seconds :i64]
+    [:string-pool :i64]
+    [:pairs :i64]
+    [:vectors :i64]
+    [:vector-items :i64]]],
+  :engine/knative-guest
+  [:record :engine/knative-guest [[:isa :string] [:wires :string]]],
+  :engine/knative-launch
+  [:record
+   :engine/knative-launch
+   [[:loader :string]
+    [:guest-bin :string]
+    [:offset :i64]
+    [:arity :i64]]],
+  :engine/mlx-launch
+  [:record
+   :engine/mlx-launch
+   [[:venv :string]
+    [:hosts-file :string]
+    [:model-repo :string]
+    [:max-tokens :i64]]],
+  :engine/mlx-moe
+  [:record
+   :engine/mlx-moe
+   [[:venv :string] [:model-repo :string] [:port :i64]]],
   :engine/opt-i64
   [:record
    :engine/opt-i64
-   [[:flag :string] [:value :i64] [:present :bool]]]},
- :effects #{},
- :blocks [],
+   [[:flag :string] [:value :i64] [:present :bool]]],
+  :engine/opt-str
+  [:record
+   :engine/opt-str
+   [[:flag :string] [:value :string] [:present :bool]]],
+  :engine/rpc-csv-2
+  [:record :engine/rpc-csv-2 [[:ep0 :string] [:ep1 :string]]],
+  :engine/rpc-csv-3
+  [:record
+   :engine/rpc-csv-3
+   [[:ep0 :string] [:ep1 :string] [:ep2 :string]]],
+  :engine/rpc-server
+  [:record
+   :engine/rpc-server
+   [[:bin-dir :string]
+    [:port :i64]
+    [:device :string]
+    [:cache :bool]
+    [:cache-dir :string]]],
+  :engine/tensor-3
+  [:record :engine/tensor-3 [[:s0 :i64] [:s1 :i64] [:s2 :i64]]],
+  :engine/waste
+  [:record
+   :engine/waste
+   [[:bin-dir :string] [:subcmd :string] [:container :string]]],
+  :engine/waste-serve
+  [:record
+   :engine/waste-serve
+   [[:python :string] [:container :string] [:port :i64]]]},
+ :effects #{}, 
+ :blocks [], 
  :entry nil}

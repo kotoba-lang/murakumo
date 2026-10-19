@@ -15,7 +15,8 @@
        "rpc-server-cmd embed-head-front embed-head-back "
        "mlx-moe-bin mlx-moe-front opt-i64-flag opt-str-flag "
        "tensor-split-3 mlx-launch-front "
-       "head-cmd-front head-cmd-middle head-cmd-tail rpc-csv-2 rpc-csv-3"))
+       "head-cmd-front head-cmd-middle head-cmd-tail rpc-csv-2 rpc-csv-3 "
+       "kexe-env-prefix kexe-loader-front kexe-guest-tail"))
 
 (defn- kotoba-literal [s]
   (str \" (-> s (str/replace "\\" "\\\\") (str/replace "\"" "\\\"")) \"))
@@ -311,4 +312,43 @@
     (is (str/includes? (get actual "mid") "--split-mode layer"))
     (is (str/includes? (get actual "mid") "--tensor-split 10,10,5"))
     (is (str/ends-with? (get actual "tail") "--port 8080"))))
+
+(deftest kotoba-native-cmd-matches-engine
+  ;; The three KIR fragments joined exactly the way the host joins them
+  ;; (env " " front " " tail) must equal murakumo.infer.engine/kotoba-native-cmd.
+  (let [body (str "(string-concat (kexe-env-prefix (record-new [:ref :engine/knative-env] "
+                  "10000000 900 16777216 2097152 65536 4194304))"
+                  " (string-concat \" \" (string-concat (kexe-loader-front "
+                  "(record-new [:ref :engine/knative-launch] "
+                  (kotoba-literal "/l/kexe-loader-gpu") " " (kotoba-literal "/g/g.bin") " 5872 0))"
+                  " (string-concat \" \" (kexe-guest-tail (record-new [:ref :engine/knative-guest] "
+                  (kotoba-literal "aarch64") " " (kotoba-literal "42")))))))")
+        kotoba (get (compile-string-cases {"knative" body}) "knative")
+        host (engine/kotoba-native-cmd {:loader "/l/kexe-loader-gpu"
+                                        :guest-bin "/g/g.bin"
+                                        :offset 5872 :arity 0
+                                        :isa "aarch64" :wires "42"
+                                        :fuel 10000000 :wall-seconds 900
+                                        :string-pool 16777216 :pairs 2097152
+                                        :vectors 65536 :vector-items 4194304})]
+    (is (= host kotoba))
+    (testing "the fragment shapes are the loader's argv, not a shell wrapper"
+      (is (str/includes? kotoba "KEXE_RESULT_TYPE=string KEXE_STRUCTURED_REPORT=1"))
+      (is (str/ends-with? kotoba "aarch64 42")))))
+
+(deftest kotoba-native-launch-wrappers-and-guards
+  (let [opts {:loader "/opt/kgpu/kexe-loader-gpu" :guest-bin "/opt/kgpu/g.bin"
+              :offset 200 :model "/opt/kgpu/x.gguf"}
+        cmd (engine/kotoba-native-launch opts)]
+    (testing "the loader's directory and shared-library environment"
+      (is (str/includes? cmd "cd '/opt/kgpu' && export LD_LIBRARY_PATH='/opt/kgpu':${LD_LIBRARY_PATH:-}")))
+    (testing "the recorded model is bound to the invocation (guest bytes grep)"
+      (is (str/includes? cmd "GUEST_MODEL_MISMATCH=1")))
+    (testing "the pure argv still closes the command"
+      (is (str/ends-with? cmd "aarch64 42")))
+    (testing "a nonzero arity would launch an invalid loader invocation — refused by name"
+      (is (thrown? js/Error (engine/kotoba-native-launch (assoc opts :arity 3)))))
+    (testing "zero arity is fine"
+      (is (str/includes? (engine/kotoba-native-launch (assoc opts :arity 0))
+                         "aarch64 42")))))
 
