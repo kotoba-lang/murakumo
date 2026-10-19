@@ -376,6 +376,36 @@
                    {:g (oracle/record knative-guest-schema {:isa isa :wires wires})}
                    [[:g :raw]]))))
 
+(defn kotoba-native-launch
+  "The full launch command for a :kotoba-native head.
+
+  kotoba-native-cmd is the pure argv; this adds the host-side wrapper every
+  rule of which is measured:
+  - cd into the loader's directory and put it on LD_LIBRARY_PATH — the fleet's
+    loaders ship their .so beside the executable (bench's launcher does the
+    same);
+  - bind the recorded model to the invocation — the guest embeds its weights
+    at build time, so a guest whose bytes do not contain the model path
+    refuses to run (GUEST_MODEL_MISMATCH) instead of attributing one workload
+    to whatever file the operator named;
+  - refuse a nonzero :arity by name — the loader ABI passes exactly :arity
+    values after the wires argument, and this adapter passes none, so a
+    nonzero arity would launch an invalid invocation."
+  [{:keys [loader guest-bin model] :as opts}]
+  (when-let [a (:arity opts)]
+    (when (not= 0 a)
+      (throw (js/Error. (str "kotoba-native: nonzero :arity " a " needs guest "
+                             "arguments this adapter does not pass — refusing")))))
+  (let [idx (.lastIndexOf (str loader) "/")
+        dir (if (>= idx 0) (subs (str loader) 0 idx) ".")
+        q (fn [s] (str "'" (str/replace (str s) "'" "'\\''") "'"))
+        bind (when (seq model)
+               (str "grep -aqF -- " (q model) " " (q guest-bin)
+                    " || { echo GUEST_MODEL_MISMATCH=1; exit 9; }; "))]
+    (str "cd " (q dir) " && export LD_LIBRARY_PATH=" (q dir) ":${LD_LIBRARY_PATH:-} && "
+         (or bind "")
+         (kotoba-native-cmd opts))))
+
 (defn commands
   "Plan + engine + opts -> {:workers [...] :head {...}} process specs."
   [plan engine opts]
@@ -391,4 +421,4 @@
     :llamacpp-embed {:head {:cmd (embed-head-cmd opts)}}
     ;; kotoba/amu selfhost: one resident decode guest behind the C loader, no
     ;; rpc ring — the guest is single-sequence by construction (batch-rows 0)
-    :kotoba-native {:head {:cmd (kotoba-native-cmd opts)}}))
+    :kotoba-native {:head {:cmd (kotoba-native-launch opts)}}))

@@ -336,3 +336,19 @@
       (is (str/includes? kotoba "KEXE_RESULT_TYPE=string KEXE_STRUCTURED_REPORT=1"))
       (is (str/ends-with? kotoba "aarch64 42")))))
 
+(deftest kotoba-native-launch-wrappers-and-guards
+  (let [opts {:loader "/opt/kgpu/kexe-loader-gpu" :guest-bin "/opt/kgpu/g.bin"
+              :offset 200 :model "/opt/kgpu/x.gguf"}
+        cmd (engine/kotoba-native-launch opts)]
+    (testing "the loader's directory and shared-library environment"
+      (is (str/includes? cmd "cd '/opt/kgpu' && export LD_LIBRARY_PATH='/opt/kgpu':${LD_LIBRARY_PATH:-}")))
+    (testing "the recorded model is bound to the invocation (guest bytes grep)"
+      (is (str/includes? cmd "GUEST_MODEL_MISMATCH=1")))
+    (testing "the pure argv still closes the command"
+      (is (str/ends-with? cmd "aarch64 42")))
+    (testing "a nonzero arity would launch an invalid loader invocation — refused by name"
+      (is (thrown? js/Error (engine/kotoba-native-launch (assoc opts :arity 3)))))
+    (testing "zero arity is fine"
+      (is (str/includes? (engine/kotoba-native-launch (assoc opts :arity 0))
+                         "aarch64 42")))))
+
