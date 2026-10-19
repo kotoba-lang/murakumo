@@ -68,6 +68,15 @@
   [:record :engine/mlx-launch
    [[:venv :string] [:hosts-file :string]
     [:model-repo :string] [:max-tokens :i64]]])
+(def ^:private knative-env-schema
+  [:record :engine/knative-env
+   [[:fuel :i64] [:wall-seconds :i64] [:string-pool :i64]
+    [:pairs :i64] [:vectors :i64] [:vector-items :i64]]])
+(def ^:private knative-launch-schema
+  [:record :engine/knative-launch
+   [[:loader :string] [:guest-bin :string] [:offset :i64] [:arity :i64]]])
+(def ^:private knative-guest-schema
+  [:record :engine/knative-guest [[:isa :string] [:wires :string]]])
 
 (def default-rpc-port
   (oracle/i64->host (o 'default-rpc-port [])))
@@ -325,8 +334,50 @@
        (when (seq api-key-file) (str " --api-key-file " (pr-str api-key-file)))
        (when (seq extra-args) (str " " (str/join " " extra-args)))))
 
+;; ── kotoba-native (kexe-loader) ──────────────────────────────────────────────
+
+(defn kotoba-native-cmd
+  "The kexe-loader launch of a kotoba/amu selfhost decode guest.
+
+  Three pure fragments come from the shipped :infer-engine KIR (T6.4): the
+  budget env prefix, the loader front (<loader> <guest.bin> <offset> <arity>),
+  and the guest tail (<isa> <wires>, wires = capability allow-csv, 42 =
+  :gpu/compute). The shell wrapper (cd / LD_LIBRARY_PATH / the model-binding
+  grep) is variable-arity host join and stays here.
+
+  Defaults are applied with `or` in the body: the CLI path forwards every key
+  (possibly nil) and destructuring :or does not cover a present nil."
+  [{:keys [loader guest-bin offset arity isa wires
+           fuel wall-seconds string-pool pairs vectors vector-items]}]
+  (let [offset (or offset 0)
+        arity (or arity 0)
+        isa (or isa "aarch64")
+        wires (or wires "42")
+        fuel (or fuel 10000000)
+        wall-seconds (or wall-seconds 900)
+        string-pool (or string-pool 16777216)
+        pairs (or pairs 2097152)
+        vectors (or vectors 65536)
+        vector-items (or vector-items 4194304)]
+    (str (o-record 'kexe-env-prefix
+                   {:e (oracle/record knative-env-schema
+                                      {:fuel fuel :wall-seconds wall-seconds
+                                       :string-pool string-pool :pairs pairs
+                                       :vectors vectors :vector-items vector-items})}
+                   [[:e :raw]])
+         " "
+         (o-record 'kexe-loader-front
+                   {:l (oracle/record knative-launch-schema
+                                      {:loader loader :guest-bin guest-bin
+                                       :offset offset :arity arity})}
+                   [[:l :raw]])
+         " "
+         (o-record 'kexe-guest-tail
+                   {:g (oracle/record knative-guest-schema {:isa isa :wires wires})}
+                   [[:g :raw]]))))
+
 (defn commands
-  "Plan + engine + opts → {:workers [...] :head {...}} process specs."
+  "Plan + engine + opts -> {:workers [...] :head {...}} process specs."
   [plan engine opts]
   (case engine
     :llamacpp-rpc {:workers (vec (rpc-worker-cmds plan opts))
@@ -337,4 +388,7 @@
     ;; waste is single-node by construction: the container is one file tree on
     ;; one machine's NVMe and there is no ring to lay out
     :waste {:head {:cmd (waste-serve-cmd opts)}}
-    :llamacpp-embed {:head {:cmd (embed-head-cmd opts)}}))
+    :llamacpp-embed {:head {:cmd (embed-head-cmd opts)}}
+    ;; kotoba/amu selfhost: one resident decode guest behind the C loader, no
+    ;; rpc ring — the guest is single-sequence by construction (batch-rows 0)
+    :kotoba-native {:head {:cmd (kotoba-native-cmd opts)}}))

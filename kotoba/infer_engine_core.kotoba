@@ -37,7 +37,16 @@
                              [:container :string]]]
              :engine/waste-serve [:record :engine/waste-serve
                                   [[:python :string] [:container :string]
-                                   [:port :i64]]]})
+                                   [:port :i64]]]
+             :engine/knative-env [:record :engine/knative-env
+                                  [[:fuel :i64] [:wall-seconds :i64]
+                                   [:string-pool :i64] [:pairs :i64]
+                                   [:vectors :i64] [:vector-items :i64]]]
+             :engine/knative-launch [:record :engine/knative-launch
+                                     [[:loader :string] [:guest-bin :string]
+                                      [:offset :i64] [:arity :i64]]]
+             :engine/knative-guest [:record :engine/knative-guest
+                                    [[:isa :string] [:wires :string]]]})
   (:export [default-rpc-port digit-char nat-str i64-str
             split-mode-name endpoint rpc-server-cmd
             embed-head-front embed-head-back
@@ -45,7 +54,8 @@
             waste-front waste-serve-front
             tensor-split-3 mlx-launch-front
             head-cmd-front head-cmd-middle head-cmd-tail
-            rpc-csv-2 rpc-csv-3]))
+            rpc-csv-2 rpc-csv-3
+            kexe-env-prefix kexe-loader-front kexe-guest-tail]))
 
 ;; W6 pure-planner oracle — murakumo.infer.engine string/cmd assembly subset.
 ;; Plan-walking (workers/head-cmd over assignment vectors) stays cljc.
@@ -196,6 +206,59 @@
         f (string-concat hosts-file e)
         g (string-concat "/bin/mlx.launch --hosts " f)]
     (string-concat venv g)))
+
+;; ── kotoba-native (kexe-loader) launch ───────────────────────────────────────
+;; The kotoba/amu selfhost decode guest is a raw-code file the C loader runs:
+;; budgets first, then <loader> <guest.bin> <offset> <arity> <isa> <wires>.
+;; KEXE_RESULT_TYPE=string / KEXE_STRUCTURED_REPORT=1 are fixed — the guest's
+;; per-step GPU SUBMIT time is only readable as the structured string result.
+
+(defn kexe-env-prefix [e [:ref :engine/knative-env]] :string
+  (let [fuel (record-get e :fuel)
+        wall (record-get e :wall-seconds)
+        pool (record-get e :string-pool)
+        pairs (record-get e :pairs)
+        vectors (record-get e :vectors)
+        items (record-get e :vector-items)]
+    (string-concat
+     "KEXE_RESULT_TYPE=string KEXE_STRUCTURED_REPORT=1 KEXE_FUEL="
+     (string-concat
+      (i64-str fuel)
+      (string-concat
+       " KEXE_WALL_SECONDS="
+       (string-concat
+        (i64-str wall)
+        (string-concat
+         " KEXE_STRING_POOL="
+         (string-concat
+          (i64-str pool)
+          (string-concat
+           " KEXE_PAIRS="
+           (string-concat
+            (i64-str pairs)
+            (string-concat
+             " KEXE_VECTORS="
+             (string-concat
+              (i64-str vectors)
+              (string-concat " KEXE_VECTOR_ITEMS=" (i64-str items)))))))))))))
+
+(defn kexe-loader-front [l [:ref :engine/knative-launch]] :string
+  ;; "<loader> <guest-bin> <offset> <arity>"
+  (let [loader (record-get l :loader)
+        guest-bin (record-get l :guest-bin)
+        offset (record-get l :offset)
+        arity (record-get l :arity)]
+    (string-concat
+     loader
+     (string-concat
+      " "
+      (string-concat
+       guest-bin
+       (string-concat " " (string-concat (i64-str offset) (string-concat " " (i64-str arity)))))))))
+
+(defn kexe-guest-tail [g [:ref :engine/knative-guest]] :string
+  ;; "<isa> <wires>" — wires is the capability allow-csv (42 = :gpu/compute)
+  (string-concat (record-get g :isa) (string-concat " " (record-get g :wires))))
 
 (defn head-cmd-front [h [:ref :engine/head-front]] :string
   ;; cljc head-cmd through "-m <model>". T5.2 native record.
