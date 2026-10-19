@@ -214,33 +214,20 @@
 ;; per-step GPU SUBMIT time is only readable as the structured string result.
 
 (defn kexe-env-prefix [e [:ref :engine/knative-env]] :string
-  (let [fuel (record-get e :fuel)
-        wall (record-get e :wall-seconds)
-        pool (record-get e :string-pool)
-        pairs (record-get e :pairs)
-        vectors (record-get e :vectors)
-        items (record-get e :vector-items)]
-    (string-concat
-     "KEXE_RESULT_TYPE=string KEXE_STRUCTURED_REPORT=1 KEXE_FUEL="
-     (string-concat
-      (i64-str fuel)
-      (string-concat
-       " KEXE_WALL_SECONDS="
-       (string-concat
-        (i64-str wall)
-        (string-concat
-         " KEXE_STRING_POOL="
-         (string-concat
-          (i64-str pool)
-          (string-concat
-           " KEXE_PAIRS="
-           (string-concat
-            (i64-str pairs)
-            (string-concat
-             " KEXE_VECTORS="
-             (string-concat
-              (i64-str vectors)
-              (string-concat " KEXE_VECTOR_ITEMS=" (i64-str items)))))))))))))
+  ;; Flat pair-concat chain: every binding is one binary string-concat, so the
+  ;; form stays countable (an earlier nested spelling left an unbalanced paren
+  ;; the native reader refused as 'unterminated collection').
+  (let [a (string-concat "KEXE_RESULT_TYPE=string KEXE_STRUCTURED_REPORT=1 KEXE_FUEL="
+                         (i64-str (record-get e :fuel)))
+        b (string-concat " KEXE_WALL_SECONDS=" (i64-str (record-get e :wall-seconds)))
+        c (string-concat " KEXE_STRING_POOL=" (i64-str (record-get e :string-pool)))
+        d (string-concat " KEXE_PAIRS=" (i64-str (record-get e :pairs)))
+        f (string-concat " KEXE_VECTORS=" (i64-str (record-get e :vectors)))
+        g (string-concat " KEXE_VECTOR_ITEMS=" (i64-str (record-get e :vector-items)))
+        ab (string-concat a b)
+        cd (string-concat c d)
+        fg (string-concat f g)]
+    (string-concat (string-concat ab cd) fg)))
 
 (defn kexe-loader-front [l [:ref :engine/knative-launch]] :string
   ;; "<loader> <guest-bin> <offset> <arity>"
