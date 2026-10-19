@@ -240,7 +240,10 @@
                         "append-only bench ledger. engine=llama runs llama-bench on a GGUF "
                         "(returns pp512/tg128); engine=diffuse runs diffuse-cli on a LLaDA/Dream "
                         "block-diffusion GGUF (returns tok/s, tokens per denoising step, peak RSS, "
-                        "major faults). The row records argv, the binary, the model's byte count "
+                        "major faults); engine=kotoba-native runs a kotoba/amu selfhost decode "
+                        "guest through kexe-loader (returns ms/token and tok/s from the guest's "
+                        "own SUBMIT fence; rows are labeled bootstrap reference). The row records "
+                        "argv, the binary, the model's byte count "
                         "and sha256 prefix, and the host's threads/memory, so two runs can be "
                         "compared later without re-deriving what was measured. Rows are never "
                         "rewritten. This does NOT enrol the node or register the model.")
@@ -248,7 +251,7 @@
                    {:type "object"
                     :properties
                     {"node" {:type "string" :description "tailnet node name or IP"}
-                     "engine" {:type "string" :enum ["llama" "diffuse"]}
+                     "engine" {:type "string" :enum ["llama" "diffuse" "kotoba-native"]}
                      "model" {:type "string" :description "model path ON THAT NODE"}
                      "bin" {:type "string" :description "directory holding the runtime binary on that node"}
                      "bin_name" {:type "string" :description "binary name if not the engine default"}
@@ -261,7 +264,12 @@
                      "steps" {:type "integer" :description "diffuse denoising steps per block (default 32)"}
                      "temp" {:type "number" :description "diffuse sampling temperature (default 0 = argmax)"}
                      "ngl" {:type "integer" :description "llama GPU layers (0 = CPU)"}
-                     "timeout_s" {:type "integer" :description "kill the remote run after this many seconds"}
+                     "guest" {:type "string" :description "kotoba-native: decode guest .bin path ON THAT NODE"}
+                     "offset" {:type "integer" :description "kotoba-native: guest entry offset from amu extract-native"}
+                     "arity" {:type "integer" :description "kotoba-native: loader arity (default 0)"}
+                     "isa" {:type "string" :description "kotoba-native: loader isa (default aarch64)"}
+                     "wires" {:type "string" :description "kotoba-native: capability allow-csv (default 42 = :gpu/compute)"}
+                     "timeout_s" {:type "integer" :description "kill the remote run after this many seconds; also the guest's wall budget"}
                      "record" {:type "boolean" :description "append to the ledger (default true)"}}
                     :required ["node" "engine" "model"]}})
       (m/add-tool "murakumo.bench_ledger"

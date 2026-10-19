@@ -118,4 +118,78 @@ MODEL_SHA8=246d67d4")
 
 (deftest options-are-not-silently-dropped
   (is (= {:node "n" :t "16"} (bench/parse-args ["--node" "n" "--t" "16"])))
-  (is (thrown? js/Error (bench/parse-args ["--node"]))))
+  (is (thrown? js/Error (bench/parse-args ["--node"])))
+  (testing "no options is legal — `bench nodes` and `bench help` are real commands"
+    (is (= {} (bench/parse-args [])))))
+
+;; ── kotoba-native engine ─────────────────────────────────────────────────────
+;; The fixtures below carry the REAL bytes of one decode-guest run
+;; (out/run2.json, 2026-10-19: Qwen2.5-0.5B-Instruct Q8_0, 24 layers, greedy
+;; prompt 760,6511,314,9338,369, Apple M1 Max / MoltenVK): the per-step SUBMIT
+;; ns and the greedy argmax ids, 8/8 equal to the f64 oracle. The per-step x
+;; payload (7168 hex chars in the real output) is elided to a 4-byte stand-in —
+;; the parser never reads it — and the last part's extra 4th segment (the final
+;; logits) is kept in shape because ignoring it is one of the parse rules.
+
+(def real-step-ns
+  [52093000 21520000 21196000 22035000 22869000 22012000 21419000 21146000])
+
+(def real-step-ids [220 14 715 262 314 746 600 220])
+
+(defn- id-hex [n]
+  (let [b (js/Buffer.alloc 4)]
+    (.writeUInt32LE b n 0)
+    (.toString b "hex")))
+
+(def kotoba-native-report
+  (let [parts (map-indexed
+               (fn [i [ns id]]
+                 (str ns "|0000c07f|" (id-hex id)
+                      (when (= i (dec (count real-step-ns))) "|7fc000007fc00000")))
+               (map vector real-step-ns real-step-ids))]
+    (str "{:status :ok :result-type :string :result-utf8-hex \""
+         (.toString (js/Buffer.from (str/join "#" parts) "utf8") "hex")
+         "\"}")))
+
+(deftest kotoba-native-argv-shape
+  (let [cmd (bench/kotoba-native-remote {:bin "/opt/kgpu" :guest "/opt/kgpu/g.bin"
+                                         :offset 5872 :isa "aarch64" :wires "42"
+                                         :model "/opt/kgpu/x.gguf"})]
+    (is (str/includes? cmd "./kexe-loader-gpu '/opt/kgpu/g.bin' 5872 0 aarch64 42"))
+    (testing "the guest's own timing needs the string result type and the report"
+      (is (str/includes? cmd "KEXE_RESULT_TYPE=string"))
+      (is (str/includes? cmd "KEXE_STRUCTURED_REPORT=1")))
+    (testing "loader defaults land when the opts are absent"
+      (is (str/includes? (bench/kotoba-native-remote {:guest "g.bin" :offset 200})
+                         "./kexe-loader-gpu 'g.bin' 200 0 aarch64 42")))
+    (testing "and when the CLI path forwards them as nil — :or does not cover a present nil"
+      (is (str/includes? (bench/kotoba-native-remote {:guest "g.bin" :offset 200
+                                                      :isa nil :wires nil :arity nil})
+                         "./kexe-loader-gpu 'g.bin' 200 0 aarch64 42")))
+    (testing "the recorded model is bound to the invocation (guest bytes grep)"
+      (is (str/includes? cmd "GUEST_MODEL_MISMATCH=1")))
+    (testing "the guest's wall budget is the requested run limit"
+      (is (str/includes? (bench/kotoba-native-remote {:guest "g.bin" :offset 200
+                                                      :wall-seconds 1234})
+                         "KEXE_WALL_SECONDS=1234")))))
+
+(deftest kotoba-native-parse-reads-the-engine-timing
+  (let [m (bench/parse-kotoba-native kotoba-native-report)]
+    (is (= 8 (:steps m)))
+    (testing "the argmax ids survive the parse (and the extra segment does not)"
+      (is (= real-step-ids (:token-ids m))))
+    (testing "step 0 is warmup and is dropped from the rate"
+      (is (< (js/Math.abs (- 21.7424 (:ms-per-token m))) 0.0001))
+      (is (< (js/Math.abs (- 45.99 (:tok-s m))) 0.01)))
+    (testing "no report is empty, not zero — zero is a rate someone measures"
+      (is (= {} (bench/parse-kotoba-native "nothing here"))))))
+
+(deftest a-kotoba-native-row-renders-its-own-unit
+  (let [row (bench/row {:node {:name "box" :ip "1.2.3.4"}
+                        :engine "kexe-loader"
+                        :bin "/b"
+                        :model "/m/x.gguf"
+                        :remote "./kexe-loader-gpu g.bin 200 0 aarch64 42"
+                        :metrics {:ms-per-token 21.7424 :tok-s 45.99 :steps 7}
+                        :extra {:bytes 531068480 :sha "246d67d4"}})]
+    (is (str/includes? (bench/ledger-line row) "ms/tok=21.742"))))
