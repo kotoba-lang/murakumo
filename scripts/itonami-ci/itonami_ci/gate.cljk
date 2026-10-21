@@ -35,6 +35,11 @@
   (clj->js {"PATH" (.. js/process -env -PATH) "HOME" (.. js/process -env -HOME)
             "LANG" "C.UTF-8" "TMPDIR" (str work "/tmp")}))
 
+(defn attempt-name [lease-id]
+  ;; Lease ids contain '/' and 'sha256:'. Native capability path lists use
+  ;; ':' as their separator, so only a plain digest may enter this path.
+  (h/sha256-hex (str lease-id)))
+
 (defn run! [job gdir work]
   (let [verdict (str work "/verdict.edn")
         _ (when (h/exists? verdict) (throw (ex-info "attempt verdict already exists" {:path verdict})))

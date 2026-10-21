@@ -14,6 +14,8 @@
 (def sha-b (apply str (repeat 40 "b")))
 (def sha-g (apply str (repeat 40 "c")))
 (def digest (str "sha256:" (apply str (repeat 64 "d"))))
+(check "attempt paths do not contain native capability separators"
+       (re-matches #"[0-9a-f]{64}" (gate/attempt-name "itonami-ci/sha256:job/epoch")))
 (def fixture-pins {:amu-commit sha-g :seed-hash digest :policy-digest digest
                    :deps-lock-digest digest :runner-digest digest :policy-commit sha-a})
 (def j (core/job-spec {:repo "test/library" :pr 3 :base-sha sha-a :head-sha sha-b
