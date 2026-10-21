@@ -1,0 +1,22 @@
+;; itonami CI runner configuration (ADR-0002). No secret material here: the
+;; MVP status credential is the operator's `gh` login on the node; kagi
+;; replaces it (ADR-0002 §Reporting).
+{:node-slot 0                         ; this node's slot in the tsukasa ledger
+ :context "itonami/selfhost-gate"     ; GitHub commit-status context
+ :poll-ms 300000                      ; 5 min; polling, not webhooks (§Trigger)
+ :replicas 2                          ; distinct failure domains that must agree before "success"
+ :targets [{:repo "kotoba-lang/amu" :prs [1428]}
+           {:repo "kotoba-lang/org-nist-sha2" :prs [3]}]
+ :gate {:repo "kotoba-lang/amu"
+        :ref "claude/selfhost-ci-gate"
+        :entry "scripts/gate/run.cljk"
+        ;; {gate} {base} {head} {repo} {verdict} are substituted. Confirm the
+        ;; flags against run.cljk's usage when it lands on the remote branch;
+        ;; a wrong flag fails the run (error), it can never yield success.
+        :argv ["kbb" "--backend" "sci" "{gate}/scripts/gate/run.cljk"
+               "--base" "{base}" "--head" "{head}" "--repo" "{repo}" "--out" "{verdict}"]
+        :pin-files {:seed-hash "seed/SEED.sha256"
+                    :policy-digest "scripts/gate/policy.edn"
+                    :deps-lock-digest "deps-lock.edn"}}
+ :capabilities #{:git :kbb :cc}
+ :budget {:wall-ms 3600000 :max-output-bytes 1048576}}

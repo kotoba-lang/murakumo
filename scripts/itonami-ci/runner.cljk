@@ -1,0 +1,209 @@
+;; bootstrap-tooling: itonami CI node runner, MVP (ADR-0002). Runs on kbb (SCI
+;; on Node) — a bootstrap artifact, not product-path code (amu
+;; docs/selfhost-priority.md rule 9). One tick:
+;;
+;;   poll PR heads (gh api) → job spec + CID → placement over the tsukasa
+;;   ledger → sahai lease (epoch-fenced) → gate (or UNMEASURED stub) →
+;;   signed receipt → fence re-check → fail-closed status → commit status
+;;
+;;   kbb --backend sci --classpath scripts/itonami-ci:<sahai>/src \
+;;       scripts/itonami-ci/runner.cljk [--once] [--dry-run] [--config F]
+;;
+;; Stop: touch ~/.itonami/itonami-ci/STOP (checked before every tick), or
+;; kill "$(cat ~/.itonami/itonami-ci/runner.pid)".
+(ns runner
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
+            [itonami-ci.core :as core]
+            [itonami-ci.host :as h]
+            [sahai.core :as lease]
+            [sahai.fence :as fence]))
+
+(def dir (h/home ".itonami" "itonami-ci"))
+(defn- p [& xs] (apply str dir "/" (interpose "/" xs)))
+(def ledger-path (or (.. js/process -env -ITONAMI_LEDGER) (h/home ".itonami" "tsukasa" "itonami-ledger.edn")))
+
+(def args (set *command-line-args*))
+(def config-path (or (second (drop-while #(not= "--config" %) *command-line-args*))
+                     "scripts/itonami-ci/config.edn"))
+(def config (edn/read-string (h/slurp* config-path)))
+(def dry-run? (contains? args "--dry-run"))
+
+;; --- ledger view -----------------------------------------------------------
+
+(defn ledger-nodes []
+  (let [l (h/read-edn ledger-path nil)]
+    (when-not l (throw (ex-info "no tsukasa ledger; register this node first (node.cljk)" {})))
+    (for [[slot n] (:nodes l)]
+      (assoc n :slot slot :state (nth (:states l) slot)))))
+
+;; --- trigger: poll PR heads ------------------------------------------------
+
+(defn pr-heads []
+  (for [{:keys [repo prs]} (:targets config)
+        pr (or (seq (map (fn [n] (h/gh-json (str "repos/" repo "/pulls/" n))) prs))
+               (h/gh-json (str "repos/" repo "/pulls?state=open&per_page=100")))
+        :when (and pr (= "open" (:state pr)))]
+    {:repo repo :pr (:number pr) :head-sha (get-in pr [:head :sha]) :base-sha (get-in pr [:base :sha])}))
+
+;; --- gate: present on the remote branch or UNMEASURED ---------------------
+
+(defn gate-commit
+  "The remote tip of the gate branch, only if it carries the entry file.
+  Read-only: ls-remote + contents API. No local branch is created or moved."
+  []
+  (let [{:keys [repo ref entry]} (:gate config)
+        sha (h/ls-remote (str "https://github.com/" repo ".git") (str "refs/heads/" ref))]
+    (when (and sha (h/gh-json (str "repos/" repo "/contents/" entry "?ref=" sha)))
+      sha)))
+
+(defn gate-dir!
+  "A detached, shallow checkout of exactly the gate commit, owned by the
+  runner (never one of the operator's worktrees)."
+  [sha]
+  (let [d (p "gates" sha) repo (get-in config [:gate :repo])]
+    (when-not (h/exists? (str d "/.git"))
+      (h/mkdirs d)
+      (doseq [argv [["git" "init" "-q" d]
+                    ["git" "-C" d "fetch" "-q" "--depth" "1" (str "https://github.com/" repo ".git") sha]
+                    ["git" "-C" d "checkout" "-q" "--detach" "FETCH_HEAD"]]]
+        (let [r (h/run argv :timeout-ms 600000)]
+          (when-not (zero? (:exit r)) (throw (ex-info "gate checkout failed" {:argv argv :err (:err r)}))))))
+    d))
+
+(defn pins [gate-sha gdir]
+  (merge {:amu-commit gate-sha}
+         (into {} (for [[k f] (get-in config [:gate :pin-files])]
+                    [k (some->> (when gdir (h/sha256-file (str gdir "/" f))) (str "sha256:"))]))))
+
+;; --- execution ---------------------------------------------------------------
+
+(defn- subst [argv m]
+  (mapv (fn [a] (reduce (fn [s [k v]] (str/replace s (str "{" (name k) "}") (str v))) a m)) argv))
+
+(defn run-gate!
+  "Native toolchain processes under a declared capability set. argv only, no
+  shell; env is an allowlist (no GH_TOKEN / credentials reach the gate)."
+  [job gdir work]
+  (let [verdict (str work "/verdict.edn")
+        argv (subst (get-in job [:job/gate :gate/argv])
+                    {:gate gdir :base (:job/base job) :head (:job/head job)
+                     :repo (:job/repo job) :verdict verdict})
+        env (clj->js {"PATH" (.. js/process -env -PATH) "HOME" (.. js/process -env -HOME)
+                      "LANG" "C.UTF-8" "TMPDIR" (str work "/tmp")})
+        _ (h/mkdirs (str work "/tmp"))
+        r (h/run argv :cwd gdir :env env
+                 :timeout-ms (get-in job [:job/budget :budget/wall-ms])
+                 :max-bytes (get-in job [:job/budget :budget/max-output-bytes]))
+        v (when (h/exists? verdict) (try (edn/read-string (h/slurp* verdict)) (catch :default _ nil)))]
+    {:exit (:exit r)
+     :outcome (cond (:timed-out? r) :timed-out
+                    (nil? v) :error
+                    (zero? (:exit r)) :pass
+                    :else :fail)
+     :verdict-cid (when v (h/cid v))
+     :events [{:argv argv :exit (:exit r) :timed-out? (:timed-out? r)
+               :stdout-sha256 (h/sha256-hex (:out r)) :stderr-sha256 (h/sha256-hex (:err r))}]}))
+
+;; --- one job ----------------------------------------------------------------
+
+(defn registry [] (h/read-edn (p "leases.edn") (lease/empty-registry)))
+(defn save-registry! [r] (h/write-edn (p "leases.edn") r))
+
+(defn lease-live?
+  "The epoch fence at report time: the registry must still name THIS lease
+  id and epoch as the holder, unexpired. A node that timed out cannot report."
+  [l]
+  (let [holder (fence/holder-for-key (registry) (fence/fence-key l))]
+    (boolean (and holder
+                  (= (:kototama.fleet/lease-id holder) (:kototama.fleet/lease-id l))
+                  (= (fence/epoch holder) (fence/epoch l))
+                  (not (lease/lease-expired? holder))))))
+
+(defn execute! [node key job job-cid gdir]
+  (let [ttl (+ 60000 (get-in job [:job/budget :budget/wall-ms]))
+        claim (fence/claim-lease (registry) (lease/make-lease "itonami-ci" job-cid :ttl-ms ttl :owner (:id node))
+                                 (:id node) :ttl-ms ttl)]
+    (if-not (:ok? claim)
+      (do (h/log "lease refused" job-cid (:reason claim)) nil)
+      (let [l (:lease claim)
+            _ (save-registry! (:registry claim))
+            started (h/now-ms)
+            work (p "work" (subs job-cid 7 23))
+            res (if gdir
+                  (run-gate! job gdir work)
+                  {:exit nil :outcome :unmeasured :verdict-cid nil
+                   :events [{:stub "gate CLI not on the remote gate branch; nothing was executed"}]})
+            body (core/receipt-body (merge res {:job-cid job-cid :job job :node node :lease l
+                                                :started-at (h/iso started) :finished-at (h/iso (h/now-ms))}))
+            text (core/canonical-text body)
+            rc (h/cid body)
+            signed {:receipt body :receipt-cid rc
+                    :signature {:alg "ed25519" :did (:did node) :value (h/sign-hex key text)}}]
+        (h/write-edn (p "receipts" (str (subs rc 7) ".edn")) signed)
+        (let [live (lease-live? l)]
+          ;; release: the run is over either way
+          (save-registry! (lease/register-lease (registry) (lease/expire-lease l)))
+          {:receipt body :receipt-cid rc
+           :lease-live? live
+           :problems (cond-> (core/receipt-problems body job-cid)
+                       (not (h/verify-hex key text (get-in signed [:signature :value]))) (conj :bad-signature)
+                       (not= (:did node) (:did key)) (conj :signer-not-ledger-node))})))))
+
+(defn tick! []
+  (let [state (h/read-edn (p "state.edn") {:jobs {} :posted {}})
+        key (h/load-or-create-key! (p "node-key.pem"))
+        nodes (ledger-nodes)
+        self (first (filter #(= (:node-slot config) (:slot %)) nodes))
+        gsha (gate-commit)
+        gdir (when gsha (gate-dir! gsha))
+        caps (:capabilities config)
+        placement (core/place nodes caps (:replicas config))
+        heads (pr-heads)]
+    (h/write-edn (p "heartbeat.edn") {:node (:id self) :did (:did key) :at (h/iso (h/now-ms))
+                                      :gate-commit (or gsha core/unmeasured) :heads (count heads)})
+    (h/log "tick" (count heads) "head(s); gate" (or gsha "UNMEASURED") "; placement" (pr-str (dissoc placement :nodes))
+           (pr-str (mapv :id (:nodes placement))))
+    (reduce
+     (fn [state {:keys [repo pr head-sha] :as head}]
+       (let [job (core/job-spec (merge head {:gate (assoc (:gate config) :commit gsha)
+                                             :pins (pins gsha gdir) :budget (:budget config)
+                                             :capabilities caps}))
+             job-cid (h/cid job)
+             _ (h/write-edn (p "jobs" (str (subs job-cid 7) ".edn")) job)
+             placed-here? (some #(= (:id self) (:id %)) (:nodes placement))
+             ;; a cached attempt is reused only if its lease was live; a
+             ;; fenced-out attempt is never counted and the job runs again
+             attempts (or (seq (filter :lease-live? (get-in state [:jobs job-cid :attempts])))
+                          (when (and placed-here? (= 2 (:state self)))
+                            (some-> (execute! self key job job-cid gdir) vector)))
+             decision (merge (core/status-decision {:job job :job-cid job-cid :placement placement
+                                                    :attempts attempts :replicas (:replicas config)})
+                             {:context (:context config)})
+             posted (get-in state [:posted [repo head-sha]])
+             state (assoc-in state [:jobs job-cid] {:repo repo :pr pr :head head-sha :attempts attempts
+                                                    :decision decision})]
+         (h/log repo (str "#" pr) (subs head-sha 0 12) "job" (subs job-cid 0 19) "->" (:state decision) "|" (:description decision))
+         (cond
+           (= (select-keys posted [:state :description]) (select-keys decision [:state :description])) state
+           dry-run? (do (h/log "dry-run: not posting") state)
+           :else
+           (let [r (h/post-status! repo head-sha decision)]
+             (if (zero? (:exit r))
+               (do (h/log "posted" (:context decision) (:state decision) "on" repo head-sha)
+                   (assoc-in state [:posted [repo head-sha]] (assoc decision :job-cid job-cid :at (h/iso (h/now-ms)))))
+               (do (h/log "status POST failed" (str/trim (:err r))) state))))))
+     state heads)))
+
+(defn loop! []
+  (if (h/exists? (p "STOP"))
+    (do (h/log "STOP file present; exiting") (js/process.exit 0))
+    (do (try (let [s (tick!)] (h/write-edn (p "state.edn") s))
+             (catch :default e (h/log "tick failed (nothing posted):" (ex-message e) (pr-str (ex-data e)))))
+        (when-not (contains? args "--once")
+          (js/setTimeout loop! (:poll-ms config))))))
+
+(h/mkdirs dir)
+(when-not (contains? args "--once")
+  (h/spit-atomic (p "runner.pid") (str (.-pid js/process) "\n")))
+(loop!)
