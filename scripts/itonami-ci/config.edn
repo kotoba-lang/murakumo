@@ -5,21 +5,28 @@
  :context "itonami/selfhost-gate"     ; GitHub commit-status context
  :poll-ms 300000                      ; 5 min; polling, not webhooks (§Trigger)
  :replicas 2                          ; distinct failure domains that must agree before "success"
- :targets [{:repo "kotoba-lang/amu" :prs [1428]}
-           {:repo "kotoba-lang/org-nist-sha2" :prs [3]}]
+ ;; Explicit revisions also cover merged PRs; their original comparison must
+ ;; not turn into an empty diff against today's main.
+ :targets [{:repo "kotoba-lang/org-nist-sha2"
+            :revisions [{:pr 3 :base-sha "59e0ccb99106dd3e4f8a5047346001e38708b084"
+                         :head-sha "200676bd4639c5055fce8bfb1734ec4149e30515"}]}
+           {:repo "kotoba-lang/amu" :prs [1428]}]
  :gate {:repo "kotoba-lang/amu"
         :ref "claude/selfhost-ci-gate"
         :entry "scripts/gate/run.cljk"
         ;; {gate} {base} {head} {repo} {verdict} are substituted. The argv is
-        ;; scripts/gate/README.md's: --repo takes owner/name (cloned blobless
+        ;; scripts/gate/README.md's: --repo takes owner/name (a full clone
         ;; under the gate's work dir); a repo without bin/amu at {head} is
         ;; judged in consumer mode by the amu of {gate} itself. The policy is
         ;; pinned here by kotoba-lang commit; the verdict's :pins record every
         ;; input (amu commit, deps-lock digest, nbb pin, policy sha256, seed
         ;; sha256, farm digests, gate file digests). Exit 0 PASS, 1 FAIL, 2 error.
         :argv ["kbb" "--backend" "sci" "{gate}/scripts/gate/run.cljk"
-               "--repo" "{repo}" "--base" "{base}" "--head" "{head}" "--out" "{verdict}"
-               "--kotoba-lang-ref" "4d4d188b9c2da2e90d296588a5cc6dbce7a6d80d"]
+               "--repo" "{repo}" "--base" "{base}" "--head" "{head}" "--out" "{verdict}" "--keep"
+               "--kotoba-lang-ref" "{policy-ref}"]
+        :policy {:repo "kotoba-lang/kotoba-lang"
+                 :commit "4d4d188b9c2da2e90d296588a5cc6dbce7a6d80d"
+                 :path "lang/selfhost-compiler-grant.edn"}
         ;; files of the gate checkout hashed into the job spec
         :pin-files {:seed-record "seed/rungs/r6n.record"
                     :deps-lock-digest "deps-lock.edn"
@@ -27,5 +34,5 @@
                     :gate-entry "scripts/gate/run.cljk"
                     :gate-ratchet "scripts/gate/ratchet.cljk"
                     :gate-boundary "scripts/gate/boundary.cljk"}}
- :capabilities #{:git :kbb :cc}
+ :capabilities #{:git :kbb :node :cc}
  :budget {:wall-ms 3600000 :max-output-bytes 1048576}}
