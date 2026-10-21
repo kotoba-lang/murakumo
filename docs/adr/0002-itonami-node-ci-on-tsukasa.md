@@ -174,6 +174,104 @@ receipts) makes no judgement and fails closed.
   lease taken, nothing executed, receipt signed, status `pending`.
 - Runbook: `scripts/itonami-ci/README.md`.
 
+## itonami container runner (GitHub Actions on a tsukasa node)
+
+Added 2026-10-21. A second, narrower use of the same node: existing GitHub
+Actions workflows of **private** repositories run their check jobs on
+`main-2` inside an *itonami container* (podman backing) instead of on
+GitHub-hosted runners. This does not reverse §Rejected alternatives: the amu
+selfhost gate still goes through the ledger → lease → signed receipt path
+above. The container runner is a stopgap for workflows that are already
+GitHub Actions YAML (e.g. private network-awai repos, where hosted minutes
+are at the mercy of the org's billing state), and it is driven by the same
+tsukasa lifecycle.
+
+The name is deliberately generic. tsukasa's README reserves `hako` / `fune`
+for a future container / microVM exec backing; adopting either needs owner
+approval, so neither is used here.
+
+### Shape
+
+| part | where | what |
+|---|---|---|
+| node record | `~/.itonami/tsukasa/itonami-ledger.edn`, slot 0 `main-2` | capabilities `+ :container/podman :gh-actions-runner` via `node.cljk declare-caps` (ledger_core has no capability rule; the write is gated on ledger_core's `first-problem` re-verifying the stored identity, and refused for an empty slot or a retired node) |
+| image | `scripts/itonami-ci/container/Containerfile` | ubuntu 24.04 arm64 pinned by digest, actions/runner 2.338.0 linux-arm64 and node 24.21.0, both sha256-verified at build; git, build-essential, python3, php-cli. Runs as uid 1001, no sudo. apt packages are not version-pinned; resolved versions are written to `/etc/itonami-runner/manifest.txt` |
+| supervisor | `scripts/itonami-ci/container.cljk` + `container.edn` | bootstrap tooling on kbb. Ledger state 2 `active` → keep N=1 ephemeral runner per repo; 3 `draining`, 4 `retired`, anything else, or the STOP file → start nothing, stop idle runners, let a busy one finish its job, delete our runner registrations |
+| registration | repo level, `network-awai/kotobase-control-plane` | labels `self-hosted, Linux, ARM64, itonami, node-main-2`; `--ephemeral`, one job per container, then the container and its volume are deleted and a fresh one registers |
+| log | `~/.itonami/containers/log` | every start, stop, configure, job start, job end, deregistration, refusal |
+
+### Why repo level
+
+Org level with a runner group restricted to private repositories is the
+better shape, but the operator's `gh` token has no `admin:org` scope
+(`gh auth refresh -h github.com -s admin:org` adds it). Until then the
+supervisor registers per repository, and before **every** registration it
+checks the repository is private and refuses otherwise: on a public
+repository a fork pull request could run arbitrary code on this Mac.
+
+### Security boundary
+
+What a job **can** reach:
+
+- the internet (github.com, package registries) through the podman
+  machine's NAT;
+- its own per-container podman volume at `/home/runner/_work` (VM storage,
+  deleted with the container), and the repository token GitHub gives the job.
+
+What a job **cannot** reach:
+
+- the Mac's files: nothing from `$HOME` is mounted, no SSH keys, no gh
+  login, no `~/.itonami` (the only host mount is a per-container secret dir
+  that holds the registration token until the container deletes it, before
+  `config.sh` runs and long before a job);
+- a container engine: no docker / podman socket is mounted; the container
+  is rootless podman in the podman-machine VM, `--cap-drop ALL`,
+  `no-new-privileges`, `--cpus 4 --memory 6g --pids-limit 4096`;
+- the Mac's localhost services and the LAN / tailnet. Measured 2026-10-21:
+  without a rule, `host.containers.internal` (192.168.127.254, gvproxy)
+  forwards to services bound to the Mac's 127.0.0.1 (postgres and local
+  APIs answered). The runner network `itonami-runner` (interface
+  `itonami0`) therefore gets an nftables table `inet itonami_runner` in the
+  rootless network namespace that drops traffic to 10/8, 100.64/10, 127/8,
+  169.254/16, 172.16/12, 192.168/16, fc00::/7, fe80::/10 and everything to
+  the namespace except DNS. Re-probed with the table in place: Mac
+  localhost and gateway refused, github.com and registry.npmjs.org 200. The
+  supervisor applies the table right after each container start (the
+  namespace only exists while a bridge container runs) and removes the
+  container if it cannot (fail closed), and re-checks it every tick;
+- the registration token: it is never in the container environment (a job
+  could read `/proc/1/environ`), only in a 0600 file read and deleted before
+  `config.sh`.
+
+Residual risks, stated: a job runs arbitrary code from any branch pushed to
+the repository (anyone with write access), with internet egress; the image's
+apt layer is not reproducible bit for bit; the egress table has a short
+window between container start and its application, before the runner has
+registered (no job can be assigned in it).
+
+### Workflows
+
+A job lands here only if its workflow says `runs-on: [self-hosted, itonami]`.
+network-awai/kotobase-control-plane#833 (draft) moves seven check-only jobs
+(no secrets, no `id-token`, no artifact consumed by a deploy). Release,
+deploy, signing, artifact-producing and CodeQL jobs stay on GitHub-hosted
+runners. When the Mac is off, moved jobs queue rather than run.
+
+### Operate
+
+```bash
+# from this repo's root
+kbb --backend sci --classpath scripts/itonami-ci scripts/itonami-ci/node.cljk show
+podman build --platform linux/arm64 -t localhost/itonami-runner:2.338.0 scripts/itonami-ci/container
+nohup kbb --backend sci --classpath scripts/itonami-ci scripts/itonami-ci/container.cljk \
+    --config "$PWD/scripts/itonami-ci/container.edn" >> ~/.itonami/containers/supervisor.out 2>&1 &!
+
+touch ~/.itonami/containers/STOP      # stop: drain (busy job finishes), deregister, exit
+rm ~/.itonami/containers/STOP         # before starting again
+kbb ... node.cljk transition --slot 0 --to 3    # drain the node: same drain, supervisor stays up
+kbb ... node.cljk transition --slot 0 --to 2    # back to active: runners start again
+```
+
 ## Bootstrap boundary
 
 `scripts/itonami-ci/*.cljk` host files are bootstrap tooling (kbb = SCI on
@@ -184,7 +282,8 @@ as a compiled Kotoba artifact here.
 
 ## Rejected alternatives
 
-- **GitHub Actions self-hosted runners**: still GitHub's scheduler and
+- **GitHub Actions self-hosted runners** (for the selfhost gate; the
+  container runner above serves existing Actions workflows only): still GitHub's scheduler and
   credential model in the execution path.
 - **Run the gate inside kototama now**: kototama has no host-process
   contract; a receipt claiming kototama execution would be false.

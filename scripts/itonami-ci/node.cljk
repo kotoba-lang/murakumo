@@ -7,6 +7,7 @@
 ;;   ... node.cljk register --slot 0 --id main-2 --did self \
 ;;       --failure-domain <declared> --availability intermittent --caps git,kbb,cc
 ;;   ... node.cljk transition --slot 0 --to 1      ; 0 proposed 1 admitted 2 active 3 draining 4 retired
+;;   ... node.cljk declare-caps --slot 0 --add container/podman,gh-actions-runner
 ;;   ... node.cljk show
 (ns node
   (:require [clojure.string :as str]
@@ -94,6 +95,36 @@
                      (do (record! l {:op :transition-refused :slot slot :to to :verdict v})
                          (println v) (js/process.exit 2)))))))))
 
+(defn declare-caps!
+  "Add declared capabilities to a registered node. ledger_core has no
+  capability rule (capabilities are host-declared metadata, see its :export
+  list), so the admissible verdict here is ledger_core's own: the stored
+  identity must still pass first-problem, the slot must hold a node, and a
+  retired node is refused. Nothing is written unless all three hold."
+  [{:keys [slot add]}]
+  (let [l (h/read-edn ledger-path (empty-ledger))
+        slot (js/parseInt slot)
+        node (get-in l [:nodes slot])
+        st (nth (:states l) slot -1)
+        added (set (map keyword (remove str/blank? (str/split (str add) #","))))]
+    (-> (load-core l)
+        (.then (fn [core]
+                 (let [v (cond
+                           ;; host-side refusals are named itonami-ci/*, never tsukasa/*
+                           (or (nil? node) (neg? st)) "itonami-ci/no-node-in-slot"
+                           (= st 4) "itonami-ci/node-retired"
+                           :else ((f core "first-problem") (str (:id node)) (str (:did node))
+                                  (str (:failure-domain node)) (str (:availability node))))]
+                   (if (= v "tsukasa/ok")
+                     (let [caps (into (set (:capabilities node)) added)]
+                       (record! (assoc-in l [:nodes slot :capabilities] caps)
+                                {:op :declare-capabilities :slot slot :added added
+                                 :identity-verdict v :state ((f core "state-name") (big st))
+                                 :capability-verdict :none-in-ledger-core})
+                       (println v "slot" slot "capabilities" (pr-str caps)))
+                     (do (record! l {:op :declare-capabilities-refused :slot slot :added added :verdict v})
+                         (println v) (js/process.exit 2)))))))))
+
 (defn show! []
   (let [l (h/read-edn ledger-path (empty-ledger))
         codes (into {} (map-indexed (fn [i d] [d i]) (distinct (map :failure-domain (vals (:nodes l))))))
@@ -115,5 +146,6 @@
     "compile" (compile! o)
     "register" (register! o)
     "transition" (transition! o)
+    "declare-caps" (declare-caps! o)
     "show" (show!)
-    (do (println "usage: node.cljk compile|register|transition|show ...") (js/process.exit 64))))
+    (do (println "usage: node.cljk compile|register|transition|declare-caps|show ...") (js/process.exit 64))))

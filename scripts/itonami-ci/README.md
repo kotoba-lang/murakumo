@@ -11,6 +11,13 @@ kbb (SCI on Node); the pure decision half is `itonami_ci/core.cljk`.
 | `runner.cljk` | poll → job → lease → gate/stub → signed receipt → status |
 | `core_test.cljk` | fail-closed regression checks (18) |
 | `config.edn` | targets, gate ref/argv, replicas, context |
+| `container.cljk` | itonami container supervisor: ephemeral GitHub Actions runners in rootless podman, driven by the ledger state (ADR-0002 §itonami container runner) |
+| `container.edn` | repos (private only), image, labels, cpu/memory limits |
+| `container/Containerfile` | pinned linux/arm64 runner image (base by digest, runner + node by sha256) |
+
+Container runner: start, stop (`touch ~/.itonami/containers/STOP`), drain
+(`node.cljk transition --slot 0 --to 3`) and its security boundary are in
+ADR-0002 §itonami container runner. Log: `~/.itonami/containers/log`.
 
 State lives outside the repo: `~/.itonami/tsukasa/` (ledger + compiled
 ledger_core) and `~/.itonami/itonami-ci/` (node key 0600, leases, jobs,
