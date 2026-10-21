@@ -10,13 +10,22 @@
  :gate {:repo "kotoba-lang/amu"
         :ref "claude/selfhost-ci-gate"
         :entry "scripts/gate/run.cljk"
-        ;; {gate} {base} {head} {repo} {verdict} are substituted. Confirm the
-        ;; flags against run.cljk's usage when it lands on the remote branch;
-        ;; a wrong flag fails the run (error), it can never yield success.
+        ;; {gate} {base} {head} {repo} {verdict} are substituted. The argv is
+        ;; scripts/gate/README.md's: --repo takes owner/name (cloned blobless
+        ;; under the gate's work dir); a repo without bin/amu at {head} is
+        ;; judged in consumer mode by the amu of {gate} itself. The policy is
+        ;; pinned here by kotoba-lang commit; the verdict's :pins record every
+        ;; input (amu commit, deps-lock digest, nbb pin, policy sha256, seed
+        ;; sha256, farm digests, gate file digests). Exit 0 PASS, 1 FAIL, 2 error.
         :argv ["kbb" "--backend" "sci" "{gate}/scripts/gate/run.cljk"
-               "--base" "{base}" "--head" "{head}" "--repo" "{repo}" "--out" "{verdict}"]
-        :pin-files {:seed-hash "seed/SEED.sha256"
-                    :policy-digest "scripts/gate/policy.edn"
-                    :deps-lock-digest "deps-lock.edn"}}
+               "--repo" "{repo}" "--base" "{base}" "--head" "{head}" "--out" "{verdict}"
+               "--kotoba-lang-ref" "4d4d188b9c2da2e90d296588a5cc6dbce7a6d80d"]
+        ;; files of the gate checkout hashed into the job spec
+        :pin-files {:seed-record "seed/rungs/r6n.record"
+                    :deps-lock-digest "deps-lock.edn"
+                    :nbb-pin "package-lock.json"
+                    :gate-entry "scripts/gate/run.cljk"
+                    :gate-ratchet "scripts/gate/ratchet.cljk"
+                    :gate-boundary "scripts/gate/boundary.cljk"}}
  :capabilities #{:git :kbb :cc}
  :budget {:wall-ms 3600000 :max-output-bytes 1048576}}
