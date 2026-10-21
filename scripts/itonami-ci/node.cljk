@@ -11,6 +11,7 @@
 ;;   ... node.cljk show
 (ns node
   (:require [clojure.string :as str]
+            [itonami-ci.ledger-artifact :as artifact]
             [itonami-ci.host :as h]))
 
 (def ledger-path (or (.. js/process -env -ITONAMI_LEDGER) (h/home ".itonami" "tsukasa" "itonami-ledger.edn")))
@@ -23,17 +24,8 @@
 (defn- empty-ledger []
   {:tsukasa/ledger-format 1 :states [-1 -1 -1 -1 -1 -1 -1 -1] :nodes {} :history []})
 
-(defn- load-core
-  "Import the compiled ledger_core and refuse it if its KIR digest is not the
-  one recorded when it was compiled (fail closed on a swapped artifact)."
-  [ledger]
-  (let [want (get-in ledger [:tsukasa/core :kir-digest])]
-    (-> (js/import artifact-path)
-        (.then (fn [m]
-                 (let [got (.-kirDigest (.-kotobaArtifact m))]
-                   (when-not (= want got)
-                     (throw (ex-info "ledger_core artifact digest mismatch" {:want want :got got})))
-                   ((.-instantiateKotoba m))))))))
+(defn- load-core [ledger]
+  (artifact/load-core artifact-path (:tsukasa/core ledger)))
 
 (defn- f [core n] (aget core n))
 (defn- big [n] (js/BigInt n))

@@ -180,16 +180,12 @@
              decision (merge (core/status-decision {:job job :job-cid job-cid :placement placement
                                                     :attempts attempts :replicas (:replicas config)})
                              {:context (:context config)})
-             posted (get-in state [:posted [repo head-sha]])
              verdicts (distinct (map #(get-in % [:receipt :state-after :verdict-cid])
                                      (filter :lease-live? attempts)))
              pkey {:repo repo :head-sha head-sha :gate-commit gsha :verdicts verdicts :state (:state decision)}
-             ;; last post for THIS PR (any head). A pre-existing legacy entry for
-             ;; the same head with the same state+description counts as posted, so
-             ;; upgrading does not re-post what is already on GitHub.
-             last-pr (or (get-in state [:posted-pr [repo pr] :key])
-                         (when (= (select-keys posted [:state :description]) (select-keys decision [:state :description]))
-                           (core/post-key pkey)))
+             ;; Legacy descriptions cannot prove the gate/verdict identity.
+             ;; Post once on upgrade, then persist the complete semantic key.
+             last-pr (get-in state [:posted-pr [repo pr] :key])
              state (assoc-in state [:jobs job-cid] {:repo repo :pr pr :head head-sha :attempts attempts
                                                     :decision decision})]
          (h/log repo (str "#" pr) (subs head-sha 0 12) "job" (subs job-cid 0 19) "->" (:state decision) "|" (:description decision))
