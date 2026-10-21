@@ -12,8 +12,10 @@
 (def sha-b "2222222222222222222222222222222222222222")
 (defn job [gate-commit]
   (core/job-spec {:repo "kotoba-lang/amu" :pr 1 :base-sha sha-a :head-sha sha-b
-                  :gate {:repo "kotoba-lang/amu" :ref "g" :commit gate-commit :argv ["x"]}
-                  :pins {:seed-hash (str "sha256:" (apply str (repeat 64 "a")))
+                  :gate {:repo "kotoba-lang/amu" :ref "g" :commit gate-commit :policy {:commit sha-a} :argv ["x"]}
+                  :pins {:amu-commit (or gate-commit core/unmeasured)
+                         :gate-files (zipmap [:seed-record :deps-lock-digest :nbb-pin :gate-entry :gate-ratchet :gate-boundary] (repeat (apply str (repeat 64 "a"))))
+                         :seed-hash (str "sha256:" (apply str (repeat 64 "a")))
                          :policy-digest (str "sha256:" (apply str (repeat 64 "b")))
                          :deps-lock-digest (str "sha256:" (apply str (repeat 64 "c")))
                          :runner-digest (str "sha256:" (apply str (repeat 64 "d")))

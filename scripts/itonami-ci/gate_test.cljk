@@ -5,7 +5,6 @@
             [itonami-ci.gate :as gate]
             [itonami-ci.host :as h]
             ["node:fs" :as fs]
-            ["node:os" :as os]
             ["node:path" :as path]))
 
 (def results (atom []))
@@ -17,13 +16,16 @@
 (check "attempt paths do not contain native capability separators"
        (re-matches #"[0-9a-f]{64}" (gate/attempt-name "itonami-ci/sha256:job/epoch")))
 (def fixture-pins {:amu-commit sha-g :seed-hash digest :policy-digest digest
-                   :deps-lock-digest digest :runner-digest digest :policy-commit sha-a})
+                   :deps-lock-digest digest :runner-digest digest :policy-commit sha-a
+                   :gate-files (zipmap [:seed-record :deps-lock-digest :nbb-pin :gate-entry :gate-ratchet :gate-boundary] (repeat (subs digest 7)))})
 (def j (core/job-spec {:repo "test/library" :pr 3 :base-sha sha-a :head-sha sha-b
-                       :gate {:commit sha-g :argv ["node"]} :pins fixture-pins}))
+                       :gate {:commit sha-g :policy {:commit sha-a} :argv ["node"]} :pins fixture-pins}))
 (def v {:format :kotoba.selfhost-gate/v1 :verdict "PASS"
-        :change {:repo "test/library" :base sha-a :head sha-b} :gate {:gate-commit sha-g :gate-dirty false}
+        :change {:repo "test/library" :base sha-a :head sha-b} :gate {:gate-commit sha-g :gate-dirty false
+                                                              :gate-files (zipmap ["run.cljk" "ratchet.cljk" "boundary.cljk"] (repeat (subs digest 7)))}
         :gates [{:gate :g1 :status "PASS" :flips []}]
         :pins {:head {:policy {:sha256 (subs digest 7)}} :base {:policy {:sha256 (subs digest 7)}}}})
+(def fail-v (-> v (assoc :verdict "FAIL" :failures ["fixture regression"]) (assoc-in [:gates 0 :status] "FAIL")))
 (check "complete pins are runnable" (empty? (core/job-problems j)))
 (check "missing policy pin fails closed"
        (some #{:unmeasured-input-pin} (core/job-problems (assoc-in j [:job/pins :pin/policy-digest] "UNMEASURED"))))
@@ -46,7 +48,18 @@
           (core/target-heads {:repo "test/library" :revisions [{:pr 3 :base-sha sha-a :head-sha sha-b}]}
                              [{:state "closed" :base {:sha sha-b} :head {:sha sha-b}}])))
 
-(def root (fs/mkdtempSync (str (os/tmpdir) "/itonami-gate-test-")))
+(doseq [[name bad problem] [["malformed gate SHA" (assoc-in j [:job/gate :gate/commit] "arbitrary") :bad-gate-commit]
+                           ["changed gate pin" (assoc-in j [:job/pins :pin/amu-commit] sha-a) :gate-pin-mismatch]
+                           ["missing gate file" (assoc-in j [:job/pins :pin/gate-files :nbb-pin] nil) :unmeasured-gate-files]
+                           ["different policy ref" (assoc-in j [:job/gate :gate/policy-ref] sha-b) :policy-ref-mismatch]]]
+  (check name (some #{problem} (core/job-problems bad))))
+(doseq [[name bad problem] [["PASS with failed gate refused" (assoc-in v [:gates 0 :status] "FAIL") :inconsistent-verdict]
+                           ["PASS with failures refused" (assoc v :failures ["regression"]) :inconsistent-verdict]
+                           ["missing dirty attestation refused" (update v :gate dissoc :gate-dirty) :dirty-gate]
+                           ["changed gate bytes refused" (assoc-in v [:gate :gate-files "run.cljk"] "wrong") :verdict-gate-files-mismatch]]]
+  (check name (some #{problem} (core/verdict-problems bad j 0))))
+
+(def root (fs/mkdtempSync (path/join (.cwd js/process) ".itonami-gate-test-")))
 (defn fixture [name verdict code]
   (let [dir (str root "/" name) script (str dir "/process.mjs")]
     (h/mkdirs dir)
@@ -62,10 +75,11 @@
   (aset (.-env js/process) "ITONAMI_GATE_TEST_SECRET" "test-only-marker")
   (try
     (doseq [[name verdict exit expected] [["pass" v 0 :pass]
-                                         ["fail" (assoc v :verdict "FAIL") 1 :fail]
+                                         ["fail" fail-v 1 :fail]
                                          ["missing" nil 0 :error]
                                          ["wrong-head" (assoc-in v [:change :head] sha-a) 0 :error]
-                                         ["wrong-exit" v 1 :error]]]
+                                         ["wrong-exit" v 1 :error]
+                                         ["inconsistent" (assoc-in v [:gates 0 :status] "FAIL") 0 :error]]]
       (let [{:keys [work script]} (fixture name verdict exit)
             job (assoc-in j [:job/gate :gate/argv] ["node" script "{verdict}"])
             r (gate/run! job root work)]

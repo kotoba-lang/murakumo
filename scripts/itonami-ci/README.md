@@ -90,7 +90,7 @@ that (ADR-0002 §Reporting).
 Review regression checks:
 
 ```bash
-kbb --backend sci --classpath "$CP" scripts/itonami-ci/host_test.cljk
+kbb --backend sci --config scripts/itonami-ci/nbb.edn --classpath "$CP" scripts/itonami-ci/host_test.cljk
 python3 scripts/itonami-ci/container_test.py
 ```
 
@@ -107,3 +107,11 @@ label before minting a token. A failed filter/start removes the container, volum
 Status de-duplication persists the repo/head/gate/verdict/state key per PR.
 A legacy record without that complete key triggers one post on upgrade;
 equal description text cannot establish that the gate or verdict is equal.
+
+Gate admission requires a full gate SHA, matching Amu/policy pins and all
+configured gate-file digests. The returned verdict must explicitly attest a
+clean gate and match the entry/ratchet/boundary bytes as well as the source
+pair, policy digest and exit code. An aggregate PASS with a failed subgate
+or recorded failures is refused. Gate fixtures run subprocesses with an
+isolated allowlisted environment and keep logs only in their temporary
+workspace directories.
