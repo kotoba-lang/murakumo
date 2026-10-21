@@ -1,0 +1,35 @@
+;; Exercise the actual runner loop twice without service calls or app-state writes.
+(ns poll-test
+  (:require [itonami-ci.host :as h]
+            [itonami-ci.gate :as gate]
+            [nbb.core :as nbb]
+            ["node:path" :as path]))
+(def calls (atom []))
+(def cfg {:targets [{:repo "fixture/library" :revisions [{:pr 1 :base-sha (apply str (repeat 40 "a")) :head-sha (apply str (repeat 40 "b"))}]}]
+          :node-slot 0 :replicas 2 :gate {:argv []} :budget {} :poll-ms 1})
+;; Mutations are confined to this test process. Permanent mocks deliberately
+;; survive asynchronous module loading, unlike scoped with-redefs bindings.
+(alter-var-root #'h/home (constantly (fn [& xs] (apply path/join (.cwd js/process) ".unused-poll-fixture" xs))))
+(alter-var-root #'h/mkdirs (constantly (fn [& _] nil)))
+(alter-var-root #'h/spit-atomic (constantly (fn [& _] nil)))
+(alter-var-root #'h/write-edn (constantly (fn [& _] nil)))
+(alter-var-root #'h/read-edn (constantly (fn [p default] (if (.endsWith p "itonami-ledger.edn") {:states [] :nodes {}} default))))
+(alter-var-root #'h/slurp* (constantly (fn [_] (pr-str cfg))))
+(alter-var-root #'h/load-or-create-key! (constantly (fn [_] {:did "fixture"})))
+(alter-var-root #'h/exists? (constantly (fn [_] false)))
+(alter-var-root #'h/ls-remote (constantly (fn [& _] nil)))
+(alter-var-root #'h/run (constantly (fn [& _] (throw (ex-info "unexpected process" {})))))
+(alter-var-root #'h/gh-json (constantly (fn [& _] (throw (ex-info "unexpected GitHub call" {})))))
+(alter-var-root #'h/post-status! (constantly (fn [& _] {:exit 0})))
+(alter-var-root #'gate/pins (constantly (fn [_ _ _ root] (swap! calls conj {:root root :file *file*}) {})))
+(def schedule js/setTimeout)
+(def scheduled (atom 0))
+(defn finish []
+  (aset js/globalThis "setTimeout" schedule)
+  (let [expected (path/join (.cwd js/process) "scripts/itonami-ci")
+        ok (and (= 2 (count @calls)) (every? #(= expected (:root %)) @calls) (nil? (:file (second @calls))))]
+    (println (if ok "ok" "FAIL") "actual initial and timer ticks retain the same source root without a file binding")
+    (js/process.exit (if ok 0 1))))
+(aset js/globalThis "setTimeout" (fn [callback _]
+                     (if (= 1 (swap! scheduled inc)) (js/setImmediate callback) (js/setImmediate finish))))
+(nbb/load-file "scripts/itonami-ci/runner.cljk")
