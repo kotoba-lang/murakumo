@@ -9,7 +9,7 @@ kbb (SCI on Node); the pure decision half is `itonami_ci/core.cljk`.
 | `itonami_ci/host.cljk` | files, sha256, ed25519 did:key, argv-only processes, `gh` calls |
 | `node.cljk` | tsukasa ledger operator CLI (verdicts from compiled `ledger_core.kotoba`) |
 | `runner.cljk` | poll → job → lease → gate/stub → signed receipt → status |
-| `core_test.cljk` | fail-closed regression checks (18) |
+| `core_test.cljk` | fail-closed and status de-duplication regression checks |
 | `config.edn` | targets, gate ref/argv, replicas, context |
 | `itonami_ci/gate.cljk`, `gate_test.cljk` | pinned gate process boundary and its regression checks |
 | `nbb.edn` | runner-only SCI bootstrap config; no ambient Maven/JVM resolution |
@@ -30,7 +30,7 @@ receipts, state, heartbeat, `runner.log`, `runner.pid`).
 ```bash
 CP="scripts/itonami-ci:$SAHAI/src"
 
-# 0. compile tsukasa's ledger_core with amu (records commit + KIR digest)
+# 0. compile tsukasa's ledger_core with amu (records commit, KIR and artifact SHA256)
 kbb --backend sci --classpath scripts/itonami-ci scripts/itonami-ci/node.cljk compile \
     --tsukasa <tsukasa checkout> --amu <amu checkout>
 
@@ -86,3 +86,24 @@ one measured PASS remains pending while two failure domains are required.
 
 The MVP posts with the operator's `gh` login. kagi's GitHub lease replaces
 that (ADR-0002 §Reporting).
+
+Review regression checks:
+
+```bash
+kbb --backend sci --classpath "$CP" scripts/itonami-ci/host_test.cljk
+python3 scripts/itonami-ci/container_test.py
+```
+
+Ledger operations verify the recorded artifact SHA256 before importing any
+executable bytes, then check the KIR digest. The operator owns both files.
+The container library is inert on import; only `container.cljk` starts it.
+An active node must declare `container/podman` and `gh-actions-runner`.
+Adoption is scoped to the node label. Rebuild the runner image together with
+the supervisor: it waits (at most 120 seconds) for the supervisor's
+`egress-ready` marker before reading the token or registering with GitHub.
+The supervisor refuses images without the `app.itonami.egress-barrier=1`
+label before minting a token. A failed filter/start removes the container, volume and token directory.
+
+Status de-duplication persists the repo/head/gate/verdict/state key per PR.
+A legacy record without that complete key triggers one post on upgrade;
+equal description text cannot establish that the gate or verdict is equal.

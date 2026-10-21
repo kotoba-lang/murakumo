@@ -1,0 +1,17 @@
+(ns itonami-ci.ledger-artifact
+  (:require [itonami-ci.host :as h]))
+
+(defn load-core
+  "Authenticate executable bytes before import can run any module code.
+  The ledger and artifact are operator-owned files, not untrusted inputs."
+  [path {:keys [artifact-sha256 kir-digest]}]
+  (let [got (h/sha256-file path)]
+    (when-not (and (re-matches #"[0-9a-f]{64}" (str artifact-sha256))
+                   (= artifact-sha256 got))
+      (throw (ex-info "ledger_core artifact SHA256 mismatch" {})))
+    (-> (js/import path)
+        (.then (fn [m]
+                 (when-not (and (some? kir-digest)
+                                (= kir-digest (.-kirDigest (.-kotobaArtifact m))))
+                   (throw (ex-info "ledger_core KIR digest mismatch" {})))
+                 ((.-instantiateKotoba m)))))))

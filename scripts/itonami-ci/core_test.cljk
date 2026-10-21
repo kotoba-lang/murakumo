@@ -19,9 +19,11 @@
                          :runner-digest (str "sha256:" (apply str (repeat 64 "d")))
                          :policy-commit sha-a}
                   :capabilities #{:git}}))
+(def v1 (str "sha256:" (apply str (repeat 64 "a"))))
+(def v2 (str "sha256:" (apply str (repeat 64 "b"))))
 (def ok-place {:ok? true :nodes [] :eligible 2 :domains 2})
 (defn attempt [outcome verdict fd & {:keys [live extra] :or {live true}}]
-  (let [r (merge (core/receipt-body {:job-cid "cid" :job (job sha-a) :outcome outcome :verdict-cid verdict
+  (let [r (merge (core/receipt-body {:job-cid "cid" :job (job sha-a) :outcome outcome :exit (case outcome :pass 0 :fail 1 -1) :verdict-cid verdict
                                      :node {:id fd :did "did:key:z" :failure-domain fd} :lease {}})
                  extra)]
     {:receipt r :lease-live? live :problems (core/receipt-problems r "cid")}))
@@ -35,26 +37,34 @@
 ;; stub: no gate → pending, even if a (forged) PASS attempt is present
 (check "gate unavailable is pending" (= "pending" (decide (job nil) [])))
 (check "gate unavailable never succeeds"
-       (= "pending" (decide (job nil) [(attempt :pass "v1" "d1") (attempt :pass "v1" "d2")])))
+       (= "pending" (decide (job nil) [(attempt :pass v1 "d1") (attempt :pass v1 "d2")])))
 
 (check "no node is pending"
        (= "pending" (decide (job sha-a) [] :placement {:ok? false :reason :no-active-node :eligible 0})))
-(check "one PASS of two required is pending" (= "pending" (decide (job sha-a) [(attempt :pass "v1" "d1")])))
+(check "one PASS of two required is pending" (= "pending" (decide (job sha-a) [(attempt :pass v1 "d1")])))
 (check "two PASS in one failure domain is pending"
-       (= "pending" (decide (job sha-a) [(attempt :pass "v1" "d1") (attempt :pass "v1" "d1")])))
+       (= "pending" (decide (job sha-a) [(attempt :pass v1 "d1") (attempt :pass v1 "d1")])))
 (check "two PASS in distinct domains with one verdict is success"
-       (= "success" (decide (job sha-a) [(attempt :pass "v1" "d1") (attempt :pass "v1" "d2")])))
+       (= "success" (decide (job sha-a) [(attempt :pass v1 "d1") (attempt :pass v1 "d2")])))
 (check "split verdict CID is error"
-       (= "error" (decide (job sha-a) [(attempt :pass "v1" "d1") (attempt :pass "v2" "d2")])))
-(check "a FAIL is failure" (= "failure" (decide (job sha-a) [(attempt :fail "v1" "d1")])))
+       (= "error" (decide (job sha-a) [(attempt :pass v1 "d1") (attempt :pass v2 "d2")])))
+(check "a FAIL is failure" (= "failure" (decide (job sha-a) [(attempt :fail v1 "d1")])))
 (check "expired-lease attempts are not counted"
-       (= "pending" (decide (job sha-a) [(attempt :pass "v1" "d1" :live false) (attempt :pass "v1" "d2" :live false)])))
+       (= "pending" (decide (job sha-a) [(attempt :pass v1 "d1" :live false) (attempt :pass v1 "d2" :live false)])))
 (check "receipt carrying a bearer is refused"
-       (= "error" (decide (job sha-a) [(attempt :pass "v1" "d1" :extra {:token "ghs_x"}) (attempt :pass "v1" "d2")])))
+       (= "error" (decide (job sha-a) [(attempt :pass v1 "d1" :extra {:token "ghs_x"}) (attempt :pass v1 "d2")])))
 (check "PASS without a verdict CID is refused"
        (= "error" (decide (job sha-a) [(attempt :pass nil "d1") (attempt :pass nil "d2")])))
 (check "no verdict at all is error, not success"
        (= "error" (decide (job sha-a) [(attempt :error nil "d1") (attempt :error nil "d2")])))
+
+(doseq [cid [nil "" "UNMEASURED" "sha256:abcd" "arbitrary"]]
+  (check (str "malformed measured CID refused: " (pr-str cid))
+         (= "error" (decide (job sha-a) [(attempt :pass v1 "d1" :extra {:state-after {:verdict-cid cid}})] :replicas 1))))
+(check "PASS with failing exit refused"
+       (= "error" (decide (job sha-a) [(attempt :pass v1 "d1" :extra {:exit 1})] :replicas 1)))
+(check "FAIL with successful exit refused"
+       (= "error" (decide (job sha-a) [(attempt :fail v1 "d1" :extra {:exit 0})] :replicas 1)))
 
 ;; placement: only active (2), distinct failure domains
 (def nodes [{:id "a" :state 2 :availability "intermittent" :failure-domain "x" :capabilities #{:git}}
@@ -77,6 +87,20 @@
          (and (:ok? r2) (= "b" (:kototama.fleet/owner holder)) (= 2 (fence/epoch holder))))
   (check "the timed-out node is no longer the holder"
          (not= (:kototama.fleet/lease-id (:lease r1)) (:kototama.fleet/lease-id holder))))
+
+;; post de-duplication: (repo, head, gate commit, verdict) decides
+(let [k {:repo "r" :head-sha "h1" :gate-commit "g1" :verdicts [v1] :state "failure"}
+      last (core/post-key k)]
+  (check "same repo/head/gate/verdict is not re-posted" (not (core/post-needed? last k)))
+  (check "first post for a PR is needed" (core/post-needed? nil k))
+  (check "new head posts" (core/post-needed? last (assoc k :head-sha "h2")))
+  (check "new gate commit posts" (core/post-needed? last (assoc k :gate-commit "g2")))
+  (check "changed verdict posts" (core/post-needed? last (assoc k :verdicts [v2])))
+  (check "changed state posts" (core/post-needed? last (assoc k :state "error")))
+  (check "verdict order does not matter"
+         (not (core/post-needed? (core/post-key (assoc k :verdicts ["a" "b"])) (assoc k :verdicts ["b" "a"]))))
+  (check "missing gate commit is keyed as UNMEASURED, stable"
+         (not (core/post-needed? (core/post-key (assoc k :gate-commit nil)) (assoc k :gate-commit nil)))))
 
 (doseq [[n ok] @results] (println (if ok "ok  " "FAIL") n))
 (let [bad (count (remove second @results))]

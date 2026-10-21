@@ -59,6 +59,7 @@ RUN mkdir -p /etc/itonami-runner \
 LABEL org.opencontainers.image.title="itonami-runner" \
       org.opencontainers.image.version="${RUNNER_VERSION}" \
       app.itonami.node-backing="podman" \
+      app.itonami.egress-barrier="1" \
       app.itonami.runner.sha256="${RUNNER_SHA256}"
 
 USER runner
@@ -69,4 +70,4 @@ USER runner
 # environment (a job could read /proc/1/environ) and gone before any job.
 # --ephemeral: one job, then the runner deregisters and the container exits.
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/bin/bash", "-c", "set -eu; cd /home/runner/actions-runner; t=$(cat /run/itonami/token); rm -f /run/itonami/token; ./config.sh --unattended --ephemeral --disableupdate --replace --url \"$RUNNER_URL\" --token \"$t\" --name \"$RUNNER_NAME\" --labels \"$RUNNER_LABELS\" --work /home/runner/_work; unset t; echo itonami-runner-configured; exec ./run.sh"]
+CMD ["/bin/bash", "-c", "set -eu; cd /home/runner/actions-runner; n=0; until [ -f /run/itonami/egress-ready ]; do n=$((n + 1)); if [ \"$n\" -ge 120 ]; then echo egress-barrier-timeout >&2; exit 1; fi; sleep 1; done; [ \"$(cat /run/itonami/egress-ready)\" = ready ]; t=$(cat /run/itonami/token); rm -f /run/itonami/token; ./config.sh --unattended --ephemeral --disableupdate --replace --url \"$RUNNER_URL\" --token \"$t\" --name \"$RUNNER_NAME\" --labels \"$RUNNER_LABELS\" --work /home/runner/_work; unset t; echo itonami-runner-configured; exec ./run.sh"]

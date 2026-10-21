@@ -238,16 +238,19 @@ What a job **cannot** reach:
   localhost and gateway refused, github.com and registry.npmjs.org 200. The
   supervisor applies the table right after each container start (the
   namespace only exists while a bridge container runs) and removes the
-  container if it cannot (fail closed), and re-checks it every tick;
+  container if it cannot (fail closed), and re-checks it every tick. The image
+  waits for an `egress-ready` marker (120-second deadline) before token read
+  and registration; the supervisor writes it only after filter verification;
 - the registration token: it is never in the container environment (a job
   could read `/proc/1/environ`), only in a 0600 file read and deleted before
   `config.sh`.
 
 Residual risks, stated: a job runs arbitrary code from any branch pushed to
 the repository (anyone with write access), with internet egress; the image's
-apt layer is not reproducible bit for bit; the egress table has a short
-window between container start and its application, before the runner has
-registered (no job can be assigned in it).
+apt layer is not reproducible bit for bit. The network namespace exists before
+filter installation, but the registration barrier prevents job admission
+until installation is acknowledged. Deploy the rebuilt image with this
+supervisor; an older image does not implement that barrier.
 
 ### Workflows
 
@@ -293,3 +296,14 @@ as a compiled Kotoba artifact here.
   login is a disclosed stopgap on the operator's own machine only.
 - **A third CI system**: this extends ADR-0001's verdict/attestation shape and
   is meant to converge with it (JUN-254 children), not to run beside it.
+
+### Review safeguards
+
+Before importing the compiled ledger module, the node CLI verifies its bytes
+against the ledger's `:artifact-sha256`, then verifies its KIR digest. The
+operator must protect both files; this is not a signature from an independent
+issuer. Container admission also requires both declared capabilities
+`:container/podman` and `:gh-actions-runner`; adoption filters by node label.
+Measured receipts require a SHA256 verdict CID and a consistent process exit
+(PASS 0, FAIL 1). Status migration without a complete semantic post key posts
+once rather than inferring gate identity from human-readable descriptions.

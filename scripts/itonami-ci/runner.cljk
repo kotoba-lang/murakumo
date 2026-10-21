@@ -158,18 +158,27 @@
              decision (merge (core/status-decision {:job job :job-cid job-cid :placement placement
                                                     :attempts attempts :replicas (:replicas config)})
                              {:context (:context config)})
-             posted (get-in state [:posted [repo head-sha]])
+             verdicts (distinct (map #(get-in % [:receipt :state-after :verdict-cid])
+                                     (filter :lease-live? attempts)))
+             pkey {:repo repo :head-sha head-sha :gate-commit gsha :verdicts verdicts :state (:state decision)}
+             ;; Legacy descriptions cannot prove the gate/verdict identity.
+             ;; Post once on upgrade, then persist the complete semantic key.
+             last-pr (get-in state [:posted-pr [repo pr] :key])
              state (assoc-in state [:jobs job-cid] {:repo repo :pr pr :head head-sha :attempts attempts
                                                     :decision decision})]
          (h/log repo (str "#" pr) (subs head-sha 0 12) "job" (subs job-cid 0 19) "->" (:state decision) "|" (:description decision))
          (cond
-           (= (select-keys posted [:state :description]) (select-keys decision [:state :description])) state
+           (not (core/post-needed? last-pr pkey))
+           (do (h/log "unchanged (repo, head, gate, verdict); not posting" repo (str "#" pr))
+               (assoc-in state [:posted-pr [repo pr]] {:key (core/post-key pkey) :job-cid job-cid}))
            dry-run? (do (h/log "dry-run: not posting") state)
            :else
            (let [r (h/post-status! repo head-sha decision)]
              (if (zero? (:exit r))
                (do (h/log "posted" (:context decision) (:state decision) "on" repo head-sha)
-                   (assoc-in state [:posted [repo head-sha]] (assoc decision :job-cid job-cid :at (h/iso (h/now-ms)))))
+                   (-> state
+                       (assoc-in [:posted [repo head-sha]] (assoc decision :job-cid job-cid :at (h/iso (h/now-ms))))
+                       (assoc-in [:posted-pr [repo pr]] {:key (core/post-key pkey) :job-cid job-cid :at (h/iso (h/now-ms))})))
                (do (h/log "status POST failed" (str/trim (:err r))) state))))))
      state heads)))
 

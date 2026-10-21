@@ -188,8 +188,11 @@
       (some #(and (map-entry? %) (contains? forbidden-receipt-keys (key %))) flat)
       (conj :forbidden-material)
       (and (#{:pass :fail} (:outcome receipt))
-           (= unmeasured (get-in receipt [:state-after :verdict-cid])))
-      (conj :outcome-without-verdict))))
+           (not (re-matches #"sha256:[0-9a-f]{64}" (str (get-in receipt [:state-after :verdict-cid])))))
+      (conj :outcome-without-verdict)
+      (and (#{:pass :fail} (:outcome receipt))
+           (not= (:exit receipt) (if (= :pass (:outcome receipt)) 0 1)))
+      (conj :outcome-exit-mismatch))))
 
 ;; ---------------------------------------------------------------------------
 ;; Status decision (ADR-0002 §Fail-closed). `attempts` are
@@ -241,3 +244,23 @@
 
       :else
       {:state "error" :description (str "UNMEASURED: gate produced no verdict, job " jc)})))
+
+;; ---------------------------------------------------------------------------
+;; Post de-duplication. One commit status per (repo, PR) is posted only when
+;; what it would say has changed: the head sha, the gate commit that judged it,
+;; or the verdict. Re-evaluating the same head with the same gate and getting
+;; the same verdict posts nothing. The status `state` is part of the key too, so
+;; a pending -> error change with no verdict still posts. The description text is
+;; NOT compared (it embeds job ids and varies without meaning).
+
+(defn post-key
+  "The identity of a status post: [repo head-sha gate-commit verdict-cids state].
+  verdict-cids is the sorted vector of distinct live-attempt verdict CIDs."
+  [{:keys [repo head-sha gate-commit verdicts state]}]
+  [repo head-sha (or gate-commit unmeasured) (vec (sort (distinct (remove nil? verdicts)))) state])
+
+(defn post-needed?
+  "True unless `last-post` (the stored post-key for this PR, or nil) equals the
+  key of this decision."
+  [last-post key-map]
+  (not= last-post (post-key key-map)))

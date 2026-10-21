@@ -1,0 +1,68 @@
+;; Bootstrap host boundaries, using isolated files and no real service calls.
+(ns host-test
+  (:require [itonami-ci.host :as h]
+            [itonami-ci.container :as container]
+            [itonami-ci.ledger-artifact :as artifact]
+            ["node:fs" :as fs]
+            ["node:path" :as path]))
+(def root (fs/mkdtempSync (path/join (.cwd js/process) ".itonami-ci-test-")))
+(def results (atom []))
+(defn check [n ok] (swap! results conj [n (boolean ok)]))
+(defn refused? [f] (try (f) false (catch :default _ true)))
+(def ledger (atom {:states [2] :nodes {0 {:id "fixture" :capabilities #{:container/podman :gh-actions-runner}}}}))
+(def cfg {:node-slot 0 :repos [] :name-prefix "fixture-" :labels [] :image "fixture-image"})
+(defn cf [name] (deref (ns-resolve 'itonami-ci.container name)))
+(h/mkdirs (path/join root ".itonami/containers"))
+(with-redefs [container/dir (path/join root ".itonami/containers")
+              container/config cfg
+              h/read-edn (fn [& _] @ledger)]
+  (check "declared active node can run containers" (= :active ((cf 'mode))))
+  (swap! ledger assoc-in [:nodes 0 :capabilities] #{:git})
+  (check "active node without container capabilities cannot start" (= :inactive ((cf 'mode))))
+  (swap! ledger assoc-in [:nodes 0 :capabilities] #{:container/podman :gh-actions-runner})
+  (let [calls (atom [])]
+    (with-redefs [h/run (fn [argv & _] (swap! calls conj argv) {:exit 0 :out ""})]
+      ((cf 'containers) "fixture/repo")
+      (check "adoption is scoped to node label" (some #{"label=app.itonami.node=fixture"} (first @calls)))))
+  (let [calls (atom [])]
+    (with-redefs [h/gh-json (constantly {:private true})
+                  h/run (fn [argv & _] (swap! calls conj argv) {:exit 0 :out ""})]
+      (container/start! "fixture/repo")
+      (check "old image refused before token mint or container start"
+             (= [["podman" "image" "inspect" "fixture-image" "--format" "{{index .Config.Labels \"app.itonami.egress-barrier\"}}"]] @calls))))
+  (doseq [[label run-exit filter-exit ready?] [["success" 0 0 true] ["filter failure" 0 1 false] ["start failure" 1 0 false]]]
+    (let [calls (atom [])]
+      (with-redefs [h/now-ms (constantly 123)
+                    h/gh-json (constantly {:private true})
+                    h/run (fn [argv & _]
+                            (swap! calls conj argv)
+                            (cond (= "gh" (first argv)) {:exit 0 :out "fixture-token"}
+                                  (= ["podman" "run"] (subvec (vec argv) 0 2)) {:exit run-exit :err "fixture failure"}
+                                  (= ["podman" "image"] (subvec (vec argv) 0 2)) {:exit 0 :out "1"}
+                                  (= ["podman" "machine"] (subvec (vec argv) 0 2))
+                                  (do (check (str label ": marker absent until filter acknowledged")
+                                             (not (h/exists? (path/join root ".itonami/containers/secrets/fixture-123/egress-ready"))))
+                                      {:exit filter-exit})
+                                  :else {:exit 0 :out ""}))]
+        ((cf 'start!) "fixture/repo")
+        (let [sd (path/join root ".itonami/containers/secrets/fixture-123")]
+          (check (str label ": registration barrier") (= ready? (h/exists? (str sd "/egress-ready"))))
+          (check (str label ": no abandoned token on failure") (or ready? (not (h/exists? (str sd "/token")))))
+        (fs/rmSync (path/join root ".itonami/containers/secrets/fixture-123") #js {:recursive true :force true}))))))
+(def jsfile (path/join root "ledger.mjs"))
+(h/spit-atomic jsfile "globalThis.itonamiArtifactExecuted = true; export const kotobaArtifact = {kirDigest:'kir'}; export function instantiateKotoba(){ return {ok:true}; }")
+(check "missing artifact pin rejected before execution" (refused? #(artifact/load-core jsfile {:kir-digest "kir"})))
+(check "substituted bytes rejected before execution" (refused? #(artifact/load-core jsfile {:kir-digest "kir" :artifact-sha256 (apply str (repeat 64 "0"))})))
+(check "rejected module was never executed" (not (.-itonamiArtifactExecuted js/globalThis)))
+(-> (artifact/load-core jsfile {:kir-digest "kir" :artifact-sha256 (h/sha256-file jsfile)})
+    (.then (fn [core]
+             (check "pinned artifact can instantiate" (true? (.-ok core)))
+             (artifact/load-core jsfile {:kir-digest "wrong" :artifact-sha256 (h/sha256-file jsfile)})))
+    (.then (fn [_] (check "wrong KIR rejected" false)))
+    (.catch (fn [e] (check "wrong KIR rejected" (= "ledger_core KIR digest mismatch" (ex-message e)))))
+    (.finally (fn []
+                (fs/rmSync root #js {:recursive true :force true})
+                (doseq [[n ok] @results] (println (if ok "ok" "FAIL") n))
+                (let [bad (count (remove second @results))]
+                  (println (count @results) "checks," bad "failed")
+                  (js/process.exit (if (zero? bad) 0 1))))))
