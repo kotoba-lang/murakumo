@@ -1,0 +1,73 @@
+# itonami container (podman backing): one ephemeral GitHub Actions runner
+# for node main-2. Bootstrap tooling (ADR-0002 §itonami container runner);
+# the supervisor is scripts/itonami-ci/container.cljk.
+#
+# Pins (all verified at build time; a mismatch fails the build):
+#   base     ubuntu 24.04, linux/arm64 manifest, by digest
+#   runner   actions/runner v2.338.0 linux-arm64, sha256 from the release
+#   node     v24.21.0 (LTS "Krypton") linux-arm64, sha256 from SHASUMS256
+# apt packages are NOT version-pinned (the Ubuntu ports snapshot service
+# refused us, 2026-10-21); the build writes the resolved dpkg versions to
+# /etc/itonami-runner/manifest.txt so an image can be audited after the fact.
+#
+#   podman build --platform linux/arm64 -t localhost/itonami-runner:2.338.0 \
+#       scripts/itonami-ci/container
+FROM docker.io/library/ubuntu@sha256:18b33ff3829707f31ada654a963b9ee35f2e6f0241b964bd17a22a9b330cb63d
+
+ARG RUNNER_VERSION=2.338.0
+ARG RUNNER_SHA256=628b4a7258487b80c1d3c221095a7ded349f5ae0175fd3dfab708d07428f041b
+ARG NODE_VERSION=24.21.0
+ARG NODE_SHA256=6ad1325edbdb5649c379b75a237147a666c95d4f9ae8d340fef2d1575d289ad2
+
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8 RUNNER_ALLOW_RUNASROOT=0
+
+# Toolchain the target workflows expect from an ubuntu runner: git, a C
+# compiler, python3, php-cli (sdk matrix), archive tools. Java, Clojure and
+# Node versions are installed per job by actions/setup-* into the job's
+# fresh tool cache; the Kotoba/amu bits are fetched by the workflows
+# themselves (git clone of kotoba-lang/*), not baked in here.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git git-lfs jq unzip zip xz-utils zstd tar gzip \
+      build-essential pkg-config python3 python3-venv php-cli openssh-client \
+      libicu74 libkrb5-3 zlib1g libssl3t64 liblttng-ust1t64 tini \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSLo /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-arm64.tar.xz" \
+ && echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c - \
+ && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner \
+ && rm /tmp/node.tar.xz && node --version
+
+# Unprivileged runner user, no sudo. uid 1001 so `--userns=keep-id:uid=1001`
+# maps the Mac owner onto it for the one-shot token mount. /home/runner/_work
+# exists in the image so the per-container podman volume copies up its owner.
+RUN groupadd -g 1001 runner && useradd -m -u 1001 -g 1001 -s /bin/bash runner
+
+WORKDIR /home/runner/actions-runner
+RUN curl -fsSLo /tmp/runner.tgz "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-arm64-${RUNNER_VERSION}.tar.gz" \
+ && echo "${RUNNER_SHA256}  /tmp/runner.tgz" | sha256sum -c - \
+ && tar -xzf /tmp/runner.tgz -C /home/runner/actions-runner \
+ && rm /tmp/runner.tgz \
+ && mkdir -p /home/runner/_work \
+ && chown -R runner:runner /home/runner
+
+RUN mkdir -p /etc/itonami-runner \
+ && { echo "runner ${RUNNER_VERSION} sha256:${RUNNER_SHA256}"; \
+      echo "node ${NODE_VERSION} sha256:${NODE_SHA256}"; \
+      dpkg-query -W -f='${Package} ${Version} ${Architecture}\n'; } > /etc/itonami-runner/manifest.txt
+
+LABEL org.opencontainers.image.title="itonami-runner" \
+      org.opencontainers.image.version="${RUNNER_VERSION}" \
+      app.itonami.node-backing="podman" \
+      app.itonami.egress-barrier="1" \
+      app.itonami.runner.sha256="${RUNNER_SHA256}"
+
+USER runner
+# The supervisor passes RUNNER_URL / RUNNER_NAME / RUNNER_LABELS through an
+# env file, and the registration token as a 0600 file in a per-container
+# secret dir mounted at /run/itonami. The token is read and the file deleted
+# (on the host too) before config.sh runs, so it is never in the container's
+# environment (a job could read /proc/1/environ) and gone before any job.
+# --ephemeral: one job, then the runner deregisters and the container exits.
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["/bin/bash", "-c", "set -eu; cd /home/runner/actions-runner; n=0; until [ -f /run/itonami/egress-ready ]; do n=$((n + 1)); if [ \"$n\" -ge 120 ]; then echo egress-barrier-timeout >&2; exit 1; fi; sleep 1; done; [ \"$(cat /run/itonami/egress-ready)\" = ready ]; t=$(cat /run/itonami/token); rm -f /run/itonami/token; ./config.sh --unattended --ephemeral --disableupdate --replace --url \"$RUNNER_URL\" --token \"$t\" --name \"$RUNNER_NAME\" --labels \"$RUNNER_LABELS\" --work /home/runner/_work; unset t; echo itonami-runner-configured; exec ./run.sh"]

@@ -1,0 +1,129 @@
+;; bootstrap-tooling: Node host effects for itonami CI (ADR-0002). Runs on kbb
+;; (SCI on Node). Not product-path code; the Kotoba-route replacement is the
+;; murakumo node agent + kagi broker (ADR-0002 §Bootstrap boundary).
+(ns itonami-ci.host
+  (:require [clojure.edn :as edn]
+            [itonami-ci.core :as core]
+            ["node:crypto" :as crypto]
+            ["node:fs" :as fs]
+            ["node:os" :as os]
+            ["node:path" :as path]
+            ["node:child_process" :as cp]))
+
+(defn now-ms [] (.now js/Date))
+(defn iso [ms] (.toISOString (js/Date. ms)))
+(defn home [& xs] (apply path/join (os/homedir) xs))
+
+(defn log [& xs]
+  (println (str (iso (now-ms)) " " (apply str (interpose " " xs)))))
+
+;; --- files -----------------------------------------------------------------
+
+(defn exists? [p] (fs/existsSync p))
+(defn mkdirs [p] (fs/mkdirSync p #js {:recursive true :mode 0700}))
+(defn slurp* [p] (fs/readFileSync p "utf8"))
+
+(defn spit-atomic
+  "write-then-rename so a crash never leaves a half file."
+  [p text & {:keys [mode] :or {mode 0600}}]
+  (mkdirs (path/dirname p))
+  (let [tmp (str p ".tmp-" (.-pid js/process))]
+    (fs/writeFileSync tmp text #js {:mode mode})
+    (fs/renameSync tmp p)))
+
+(defn read-edn [p default]
+  (if (exists? p) (edn/read-string (slurp* p)) default))
+
+(defn write-edn [p x] (spit-atomic p (str (pr-str x) "\n")))
+
+;; --- content addresses -----------------------------------------------------
+
+(defn sha256-hex [s]
+  (-> (crypto/createHash "sha256") (.update s "utf8") (.digest "hex")))
+
+(defn sha256-file [p]
+  (when (exists? p)
+    (-> (crypto/createHash "sha256") (.update (fs/readFileSync p)) (.digest "hex"))))
+
+(defn cid [x] (str "sha256:" (sha256-hex (core/canonical-text x))))
+
+;; --- node identity: ed25519, named by did:key ------------------------------
+
+(def ^:private b58 "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+
+(defn- base58 [bytes]
+  (let [n (reduce (fn [acc b] (+ (* acc (js/BigInt 256)) (js/BigInt b))) (js/BigInt 0) bytes)
+        digits (loop [n n out ""]
+                 (if (= n (js/BigInt 0)) out
+                     (recur (/ n (js/BigInt 58))
+                            (str (.charAt b58 (js/Number (mod n (js/BigInt 58))) ) out))))
+        zeros (count (take-while zero? bytes))]
+    (str (apply str (repeat zeros "1")) digits)))
+
+(defn- raw-public [public-key]
+  ;; SPKI DER for ed25519 is a 12-byte prefix + the 32-byte key.
+  (let [der (.export public-key #js {:format "der" :type "spki"})]
+    (vec (.subarray der 12))))
+
+(defn did-key [public-key]
+  (str "did:key:z" (base58 (into [0xed 0x01] (raw-public public-key)))))
+
+(defn load-or-create-key!
+  "The node's private key stays in a 0600 file on the node and never enters a
+  receipt, a job, a status or the wire. Returns {:did .. :private .. :public ..}."
+  [p]
+  (when-not (exists? p)
+    (let [kp (crypto/generateKeyPairSync "ed25519")]
+      (spit-atomic p (.export (.-privateKey kp) #js {:format "pem" :type "pkcs8"}))))
+  (let [priv (crypto/createPrivateKey (slurp* p))
+        pub (crypto/createPublicKey priv)]
+    {:did (did-key pub) :private priv :public pub}))
+
+(defn sign-hex [key text]
+  (.toString (crypto/sign nil (js/Buffer.from text "utf8") (:private key)) "hex"))
+
+(defn verify-hex [key text sig]
+  (crypto/verify nil (js/Buffer.from text "utf8") (:public key) (js/Buffer.from sig "hex")))
+
+;; --- processes: argv only, never a shell -----------------------------------
+
+(defn run
+  "spawnSync with an argv vector. :env replaces the environment entirely when
+  given (the gate gets an allowlisted env, never the operator's)."
+  [argv & {:keys [cwd env timeout-ms input max-bytes]
+           :or {timeout-ms 120000 max-bytes (* 8 1024 1024)}}]
+  (let [opts (cond-> {:encoding "utf8" :timeout timeout-ms :maxBuffer max-bytes}
+               cwd (assoc :cwd cwd)
+               env (assoc :env env)
+               input (assoc :input input))
+        r (cp/spawnSync (first argv) (clj->js (vec (rest argv))) (clj->js opts))]
+    {:exit (if (some? (.-status r)) (.-status r) -1)
+     :signal (.-signal r)
+     :timed-out? (= "ETIMEDOUT" (some-> (.-error r) .-code))
+     :error (some-> (.-error r) str)
+     :out (or (.-stdout r) "")
+     :err (or (.-stderr r) "")}))
+
+(defn gh-json
+  "gh api GET → parsed JSON (keywordized) or nil. gh holds the credential; it
+  never passes through this process's argv or output."
+  [endpoint]
+  (let [r (run ["gh" "api" endpoint] :timeout-ms 60000)]
+    (when (zero? (:exit r))
+      (js->clj (js/JSON.parse (:out r)) :keywordize-keys true))))
+
+(defn post-status!
+  "POST /repos/:repo/statuses/:sha. MVP credential: the operator's gh login on
+  this Mac. ADR-0002 §Reporting: replaced by a kagi lease (statuses:write,
+  one repo, <=1h) once kagi ADR-0003 lands."
+  [repo sha {:keys [state description context]}]
+  (run ["gh" "api" "-X" "POST" (str "repos/" repo "/statuses/" sha)
+        "-f" (str "state=" state)
+        "-f" (str "context=" context)
+        "-f" (str "description=" (subs description 0 (min 140 (count description))))]
+       :timeout-ms 60000))
+
+(defn ls-remote [url ref]
+  (let [r (run ["git" "ls-remote" url ref] :timeout-ms 60000)]
+    (when (zero? (:exit r))
+      (some-> (re-find #"^([0-9a-f]{40})" (:out r)) second))))

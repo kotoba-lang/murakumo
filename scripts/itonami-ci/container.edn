@@ -1,0 +1,15 @@
+;; itonami container supervisor configuration (ADR-0002 §itonami container
+;; runner). No secret material here: registration tokens are fetched just in
+;; time with the operator's gh login and never written to this file.
+{:node-slot 0                                   ; this node's slot in the tsukasa ledger
+ ;; Repo-level registration only. Every repo is checked to be PRIVATE before
+ ;; each registration; a public repo is refused (fork PRs could run here).
+ :repos ["network-awai/kotobase-control-plane"]
+ :per-repo 1                                    ; N live ephemeral runners per repo while active
+ :image "localhost/itonami-runner:2.338.0"
+ :name-prefix "itonami-main-2-"
+ ;; self-hosted, Linux, ARM64 are added by the runner itself
+ :labels ["itonami" "node-main-2"]
+ :cpus "4" :memory "6g" :pids-limit "4096"
+ :stop-timeout-s 30
+ :poll-ms 15000}

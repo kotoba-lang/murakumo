@@ -1,0 +1,221 @@
+(ns itonami-ci.core
+  "itonami CI (ADR-0002) — the pure half. Job spec, its content address input,
+  placement over the tsukasa ledger, the receipt body, and the fail-closed
+  status decision. Values in, values out: no clock, no process, no network,
+  no keys. The host half (itonami_ci/runner.cljk, node.cljk) is bootstrap
+  tooling and does the effects.
+
+  Every function that ends in a GitHub state returns one of
+  \"pending\" \"failure\" \"error\" \"success\", and the only path to
+  \"success\" is `status-decision` with a measured PASS agreed by at least
+  `replicas` nodes in distinct failure domains, each holding a live lease.")
+
+;; ---------------------------------------------------------------------------
+;; Canonical text. Bootstrap form: EDN with every map and set sorted, printed
+;; with pr-str. The CID is sha256 over these UTF-8 bytes (computed by the host).
+;; ADR-0002 §Job spec: replaced by murakumo.canonical once that loads on the
+;; Kotoba route; the version tag below changes when it is.
+
+(def canonical-version "itonami-ci/edn-sorted-v0")
+
+(defn- by-text [a b] (compare (pr-str a) (pr-str b)))
+
+(defn canon [x]
+  (cond
+    (map? x) (into (sorted-map-by by-text) (map (fn [[k v]] [k (canon v)]) x))
+    (set? x) (into (sorted-set-by by-text) (map canon x))
+    (vector? x) (mapv canon x)
+    (seq? x) (apply list (map canon x))
+    :else x))
+
+(defn canonical-text [x] (pr-str (canon x)))
+
+;; ---------------------------------------------------------------------------
+;; Job spec. A job is identified by WHAT is judged (repo, base, head), BY WHAT
+;; (gate source commit + argv), and UNDER WHICH pins. Two nodes given the same
+;; job compute the same CID; nothing node-specific enters it.
+
+(def unmeasured "UNMEASURED")
+
+(defn job-spec
+  [{:keys [repo pr base-sha head-sha gate pins budget capabilities]}]
+  {:itonami.ci/version 1
+   :itonami.ci/kind :selfhost-gate
+   :itonami.ci/canonical canonical-version
+   :job/repo repo
+   :job/pr pr
+   :job/base base-sha
+   :job/head head-sha
+   :job/gate {:gate/repo (:repo gate)
+              :gate/ref (:ref gate)
+              :gate/commit (or (:commit gate) unmeasured)
+              :gate/argv (vec (:argv gate))}
+   :job/pins {:pin/amu-commit (or (:amu-commit pins) unmeasured)
+              :pin/seed-hash (or (:seed-hash pins) unmeasured)
+              :pin/policy-digest (or (:policy-digest pins) unmeasured)
+              :pin/deps-lock-digest (or (:deps-lock-digest pins) unmeasured)}
+   :job/budget {:budget/wall-ms (:wall-ms budget 3600000)
+                :budget/max-output-bytes (:max-output-bytes budget 1048576)}
+   :job/capabilities (set capabilities)})
+
+(defn job-problems
+  "Why a job spec cannot be run. Empty = runnable. A job whose gate commit is
+  UNMEASURED is not runnable: it can only produce an UNMEASURED status."
+  [job]
+  (cond-> []
+    (not (re-matches #"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+" (str (:job/repo job))))
+    (conj :bad-repo)
+    (not (re-matches #"[0-9a-f]{40}" (str (:job/head job)))) (conj :bad-head-sha)
+    (not (re-matches #"[0-9a-f]{40}" (str (:job/base job)))) (conj :bad-base-sha)
+    (= unmeasured (get-in job [:job/gate :gate/commit])) (conj :gate-unavailable)
+    (empty? (get-in job [:job/gate :gate/argv])) (conj :no-gate-argv)))
+
+;; ---------------------------------------------------------------------------
+;; Placement over the tsukasa ledger (ADR-0002 §Placement). Only lifecycle
+;; state 2 (active) is eligible. tsukasa refused any node without a declared
+;; failure-domain and availability, so both are present here by construction.
+
+(def state-active 2)
+
+(defn eligible-nodes [ledger-nodes required-caps]
+  (->> ledger-nodes
+       (filter #(= state-active (:state %)))
+       (filter #(every? (set (:capabilities %)) required-caps))))
+
+(defn place
+  "Choose `replicas` nodes in pairwise-distinct failure domains, always-on
+  before intermittent, then by id (deterministic). Returns
+  {:ok? true :nodes [...]} or {:ok? false :reason ... :eligible n :domains n}."
+  [ledger-nodes required-caps replicas]
+  (let [el (eligible-nodes ledger-nodes required-caps)
+        ordered (sort-by (juxt #(if (= "always-on" (:availability %)) 0 1) :id) el)
+        picked (reduce (fn [acc n]
+                         (if (or (>= (count acc) replicas)
+                                 (some #(= (:failure-domain %) (:failure-domain n)) acc))
+                           acc (conj acc n)))
+                       [] ordered)
+        domains (count (distinct (map :failure-domain el)))]
+    (cond
+      (empty? el) {:ok? false :reason :no-active-node :eligible 0 :domains 0 :nodes []}
+      (< (count picked) replicas) {:ok? false :reason :insufficient-failure-domains
+                                   :eligible (count el) :domains domains
+                                   :nodes picked}
+      :else {:ok? true :nodes picked :eligible (count el) :domains domains})))
+
+;; ---------------------------------------------------------------------------
+;; Receipt (ADR-0002 §Result). Shaped after the kototama receipt-v1 key set so
+;; the move to a kototama-hosted gate changes values, not shape. Execution is
+;; NOT kototama today: :machine-spec says native-exec.
+
+(defn receipt-body
+  [{:keys [job-cid job node lease outcome exit verdict-cid events started-at finished-at]}]
+  {:receipt/version 1
+   :machine-spec "itonami-ci/native-exec-v0"
+   :implementation "itonami-ci/runner-bootstrap-kbb"
+   :profile :native-toolchain
+   :message-cid job-cid
+   :program-cid (get-in job [:job/gate :gate/commit])
+   :state-before {:job-cid job-cid :pins (:job/pins job)}
+   :state-after {:verdict-cid (or verdict-cid unmeasured)}
+   :outcome outcome
+   :exit exit
+   :fuel-used unmeasured
+   :events (vec events)
+   :child-receipts []
+   :authority-decision {:node-id (:id node) :node-did (:did node)
+                        :failure-domain (:failure-domain node)
+                        :lease-id (:kototama.fleet/lease-id lease)
+                        :epoch (:kototama.fleet/epoch lease)
+                        :lease-expires-at (:kototama.fleet/expires-at lease)
+                        :capabilities (:job/capabilities job)}
+   :started-at started-at
+   :finished-at finished-at})
+
+(def forbidden-receipt-keys #{:raw-bearer :token :github-token :private-key :secret :authorization})
+
+(defn receipt-problems
+  "A receipt the coordinator must refuse: wrong job, forbidden material,
+  a measured outcome without a verdict CID."
+  [receipt expected-job-cid]
+  (let [flat (tree-seq coll? seq receipt)]
+    (cond-> []
+      (not= expected-job-cid (:message-cid receipt)) (conj :job-cid-mismatch)
+      (some #(and (map-entry? %) (contains? forbidden-receipt-keys (key %))) flat)
+      (conj :forbidden-material)
+      (and (#{:pass :fail} (:outcome receipt))
+           (not (re-matches #"sha256:[0-9a-f]{64}" (str (get-in receipt [:state-after :verdict-cid])))))
+      (conj :outcome-without-verdict)
+      (and (#{:pass :fail} (:outcome receipt))
+           (not= (:exit receipt) (if (= :pass (:outcome receipt)) 0 1)))
+      (conj :outcome-exit-mismatch))))
+
+;; ---------------------------------------------------------------------------
+;; Status decision (ADR-0002 §Fail-closed). `attempts` are
+;; {:receipt r :problems [...] :lease-live? bool}; the host computes
+;; :lease-live? (sahai epoch fence) at report time.
+
+(defn- clip [s n] (let [s (str s)] (if (> (count s) n) (subs s 0 n) s)))
+
+(defn status-decision
+  [{:keys [job job-cid placement attempts replicas]}]
+  (let [problems (job-problems job)
+        live (filter :lease-live? attempts)
+        refused (first (filter #(seq (:problems %)) live))
+        verdicts (distinct (map #(get-in % [:receipt :state-after :verdict-cid]) live))
+        passes (filter #(= :pass (get-in % [:receipt :outcome])) live)
+        pass-domains (count (distinct (map #(get-in % [:receipt :authority-decision :failure-domain]) passes)))
+        fails (filter #(= :fail (get-in % [:receipt :outcome])) live)
+        jc (clip job-cid 19)]
+    (cond
+      (some #{:gate-unavailable} problems)
+      {:state "pending" :description (str "UNMEASURED: selfhost gate CLI not available yet (stub, no verdict) job " jc)}
+
+      (seq problems)
+      {:state "error" :description (str "UNMEASURED: job spec refused " (pr-str problems))}
+
+      (and (not (:ok? placement)) (empty? live))
+      {:state "pending" :description (str "UNMEASURED: no placement (" (name (:reason placement)) ", "
+                                           (:eligible placement) " active node(s))")}
+
+      refused
+      {:state "error" :description (str "receipt refused " (pr-str (:problems refused)))}
+
+      (empty? live)
+      {:state "pending" :description (str "UNMEASURED: no live-lease receipt yet, job " jc)}
+
+      (> (count verdicts) 1)
+      {:state "error" :description "replicas disagree on verdict CID (split result is a hard error)"}
+
+      (seq fails)
+      {:state "failure" :description (str "gate FAIL on " (count fails) " node(s), verdict " (clip (first verdicts) 19))}
+
+      (and (seq passes) (>= pass-domains replicas))
+      {:state "success" :description (str "gate PASS agreed by " pass-domains " failure domain(s), verdict "
+                                           (clip (first verdicts) 19))}
+
+      (seq passes)
+      {:state "pending" :description (str "gate PASS on " pass-domains "/" replicas
+                                           " failure domain(s); replication required before success")}
+
+      :else
+      {:state "error" :description (str "UNMEASURED: gate produced no verdict, job " jc)})))
+
+;; ---------------------------------------------------------------------------
+;; Post de-duplication. One commit status per (repo, PR) is posted only when
+;; what it would say has changed: the head sha, the gate commit that judged it,
+;; or the verdict. Re-evaluating the same head with the same gate and getting
+;; the same verdict posts nothing. The status `state` is part of the key too, so
+;; a pending -> error change with no verdict still posts. The description text is
+;; NOT compared (it embeds job ids and varies without meaning).
+
+(defn post-key
+  "The identity of a status post: [repo head-sha gate-commit verdict-cids state].
+  verdict-cids is the sorted vector of distinct live-attempt verdict CIDs."
+  [{:keys [repo head-sha gate-commit verdicts state]}]
+  [repo head-sha (or gate-commit unmeasured) (vec (sort (distinct (remove nil? verdicts)))) state])
+
+(defn post-needed?
+  "True unless `last-post` (the stored post-key for this PR, or nil) equals the
+  key of this decision."
+  [last-post key-map]
+  (not= last-post (post-key key-map)))

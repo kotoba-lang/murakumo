@@ -1,0 +1,103 @@
+;; bootstrap-tooling: fail-closed regression tests for itonami CI (ADR-0002).
+;;   kbb --backend sci --classpath scripts/itonami-ci:<sahai>/src scripts/itonami-ci/core_test.cljk
+(ns core-test
+  (:require [itonami-ci.core :as core]
+            [sahai.core :as lease]
+            [sahai.fence :as fence]))
+
+(def results (atom []))
+(defn check [name ok] (swap! results conj [name (boolean ok)]))
+
+(def sha-a "1111111111111111111111111111111111111111")
+(def sha-b "2222222222222222222222222222222222222222")
+(defn job [gate-commit]
+  (core/job-spec {:repo "kotoba-lang/amu" :pr 1 :base-sha sha-a :head-sha sha-b
+                  :gate {:repo "kotoba-lang/amu" :ref "g" :commit gate-commit :argv ["x"]}
+                  :capabilities #{:git}}))
+(def v1 (str "sha256:" (apply str (repeat 64 "a"))))
+(def v2 (str "sha256:" (apply str (repeat 64 "b"))))
+(def ok-place {:ok? true :nodes [] :eligible 2 :domains 2})
+(defn attempt [outcome verdict fd & {:keys [live extra] :or {live true}}]
+  (let [r (merge (core/receipt-body {:job-cid "cid" :job (job sha-a) :outcome outcome :exit (case outcome :pass 0 :fail 1 -1) :verdict-cid verdict
+                                     :node {:id fd :did "did:key:z" :failure-domain fd} :lease {}})
+                 extra)]
+    {:receipt r :lease-live? live :problems (core/receipt-problems r "cid")}))
+(defn decide [j attempts & {:keys [placement replicas] :or {placement ok-place replicas 2}}]
+  (:state (core/status-decision {:job j :job-cid "cid" :placement placement :attempts attempts :replicas replicas})))
+
+;; the job CID input is node-independent and order-independent
+(check "canonical text ignores map order"
+       (= (core/canonical-text {:a 1 :b #{3 2}}) (core/canonical-text {:b #{2 3} :a 1})))
+
+;; stub: no gate → pending, even if a (forged) PASS attempt is present
+(check "gate unavailable is pending" (= "pending" (decide (job nil) [])))
+(check "gate unavailable never succeeds"
+       (= "pending" (decide (job nil) [(attempt :pass v1 "d1") (attempt :pass v1 "d2")])))
+
+(check "no node is pending"
+       (= "pending" (decide (job sha-a) [] :placement {:ok? false :reason :no-active-node :eligible 0})))
+(check "one PASS of two required is pending" (= "pending" (decide (job sha-a) [(attempt :pass v1 "d1")])))
+(check "two PASS in one failure domain is pending"
+       (= "pending" (decide (job sha-a) [(attempt :pass v1 "d1") (attempt :pass v1 "d1")])))
+(check "two PASS in distinct domains with one verdict is success"
+       (= "success" (decide (job sha-a) [(attempt :pass v1 "d1") (attempt :pass v1 "d2")])))
+(check "split verdict CID is error"
+       (= "error" (decide (job sha-a) [(attempt :pass v1 "d1") (attempt :pass v2 "d2")])))
+(check "a FAIL is failure" (= "failure" (decide (job sha-a) [(attempt :fail v1 "d1")])))
+(check "expired-lease attempts are not counted"
+       (= "pending" (decide (job sha-a) [(attempt :pass v1 "d1" :live false) (attempt :pass v1 "d2" :live false)])))
+(check "receipt carrying a bearer is refused"
+       (= "error" (decide (job sha-a) [(attempt :pass v1 "d1" :extra {:token "ghs_x"}) (attempt :pass v1 "d2")])))
+(check "PASS without a verdict CID is refused"
+       (= "error" (decide (job sha-a) [(attempt :pass nil "d1") (attempt :pass nil "d2")])))
+(check "no verdict at all is error, not success"
+       (= "error" (decide (job sha-a) [(attempt :error nil "d1") (attempt :error nil "d2")])))
+
+(doseq [cid [nil "" "UNMEASURED" "sha256:abcd" "arbitrary"]]
+  (check (str "malformed measured CID refused: " (pr-str cid))
+         (= "error" (decide (job sha-a) [(attempt :pass v1 "d1" :extra {:state-after {:verdict-cid cid}})] :replicas 1))))
+(check "PASS with failing exit refused"
+       (= "error" (decide (job sha-a) [(attempt :pass v1 "d1" :extra {:exit 1})] :replicas 1)))
+(check "FAIL with successful exit refused"
+       (= "error" (decide (job sha-a) [(attempt :fail v1 "d1" :extra {:exit 0})] :replicas 1)))
+
+;; placement: only active (2), distinct failure domains
+(def nodes [{:id "a" :state 2 :availability "intermittent" :failure-domain "x" :capabilities #{:git}}
+            {:id "b" :state 3 :availability "always-on" :failure-domain "y" :capabilities #{:git}}
+            {:id "c" :state 2 :availability "always-on" :failure-domain "x" :capabilities #{:git}}
+            {:id "d" :state 0 :availability "always-on" :failure-domain "z" :capabilities #{:git}}])
+(check "draining/proposed nodes are not placed"
+       (= ["c"] (mapv :id (:nodes (core/place nodes #{:git} 1)))))
+(check "two replicas need two active domains"
+       (= :insufficient-failure-domains (:reason (core/place nodes #{:git} 2))))
+(check "missing capability excludes a node" (= :no-active-node (:reason (core/place nodes #{:cc} 1))))
+
+;; sahai epoch fence: a node whose lease expired loses the job to a higher epoch
+(let [l1 (binding [lease/*now-ms* 0] (lease/make-lease "itonami-ci" "job" :ttl-ms 10 :owner "a"))
+      r1 (binding [lease/*now-ms* 0] (fence/claim-lease (lease/empty-registry) l1 "a" :ttl-ms 10))
+      r2 (binding [lease/*now-ms* 100]
+           (fence/claim-lease (:registry r1) (lease/make-lease "itonami-ci" "job" :owner "b") "b"))
+      holder (binding [lease/*now-ms* 100] (fence/holder-for-key (:registry r2) ["itonami-ci" "job"]))]
+  (check "expired lease is stolen with a bumped epoch"
+         (and (:ok? r2) (= "b" (:kototama.fleet/owner holder)) (= 2 (fence/epoch holder))))
+  (check "the timed-out node is no longer the holder"
+         (not= (:kototama.fleet/lease-id (:lease r1)) (:kototama.fleet/lease-id holder))))
+
+;; post de-duplication: (repo, head, gate commit, verdict) decides
+(let [k {:repo "r" :head-sha "h1" :gate-commit "g1" :verdicts [v1] :state "failure"}
+      last (core/post-key k)]
+  (check "same repo/head/gate/verdict is not re-posted" (not (core/post-needed? last k)))
+  (check "first post for a PR is needed" (core/post-needed? nil k))
+  (check "new head posts" (core/post-needed? last (assoc k :head-sha "h2")))
+  (check "new gate commit posts" (core/post-needed? last (assoc k :gate-commit "g2")))
+  (check "changed verdict posts" (core/post-needed? last (assoc k :verdicts [v2])))
+  (check "changed state posts" (core/post-needed? last (assoc k :state "error")))
+  (check "verdict order does not matter"
+         (not (core/post-needed? (core/post-key (assoc k :verdicts ["a" "b"])) (assoc k :verdicts ["b" "a"]))))
+  (check "missing gate commit is keyed as UNMEASURED, stable"
+         (not (core/post-needed? (core/post-key (assoc k :gate-commit nil)) (assoc k :gate-commit nil)))))
+
+(doseq [[n ok] @results] (println (if ok "ok  " "FAIL") n))
+(let [bad (count (remove second @results))]
+  (println (count @results) "checks," bad "failed")
+  (js/process.exit (if (zero? bad) 0 1)))

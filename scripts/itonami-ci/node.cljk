@@ -1,0 +1,143 @@
+;; bootstrap-tooling: tsukasa ledger operator CLI for itonami CI (ADR-0002).
+;; Every verdict comes from tsukasa's own ledger_core, compiled by amu to a
+;; js-kotoba-v1 artifact; this file only persists what ledger_core admitted.
+;;
+;;   kbb --backend sci --classpath scripts/itonami-ci scripts/itonami-ci/node.cljk compile \
+;;       --tsukasa <tsukasa checkout> --amu <amu checkout>
+;;   ... node.cljk register --slot 0 --id main-2 --did self \
+;;       --failure-domain <declared> --availability intermittent --caps git,kbb,cc
+;;   ... node.cljk transition --slot 0 --to 1      ; 0 proposed 1 admitted 2 active 3 draining 4 retired
+;;   ... node.cljk declare-caps --slot 0 --add container/podman,gh-actions-runner
+;;   ... node.cljk show
+(ns node
+  (:require [clojure.string :as str]
+            [itonami-ci.ledger-artifact :as artifact]
+            [itonami-ci.host :as h]))
+
+(def ledger-path (or (.. js/process -env -ITONAMI_LEDGER) (h/home ".itonami" "tsukasa" "itonami-ledger.edn")))
+(def artifact-path (h/home ".itonami" "tsukasa" "ledger_core.js"))
+(def key-path (h/home ".itonami" "itonami-ci" "node-key.pem"))
+
+(defn- opts [args]
+  (into {} (map (fn [[k v]] [(keyword (subs k 2)) v]) (partition 2 args))))
+
+(defn- empty-ledger []
+  {:tsukasa/ledger-format 1 :states [-1 -1 -1 -1 -1 -1 -1 -1] :nodes {} :history []})
+
+(defn- load-core [ledger]
+  (artifact/load-core artifact-path (:tsukasa/core ledger)))
+
+(defn- f [core n] (aget core n))
+(defn- big [n] (js/BigInt n))
+(defn- states-js [ledger] (clj->js (mapv big (:states ledger))))
+(defn- states-clj [v] (mapv js/Number (js->clj v)))
+
+(defn- record! [ledger entry]
+  (let [l (update ledger :history conj (assoc entry :at (h/iso (h/now-ms))))]
+    (h/write-edn ledger-path l) l))
+
+(defn compile! [{:keys [tsukasa amu]}]
+  (let [src (str tsukasa "/kotoba/tsukasa/ledger_core.kotoba")
+        commit (str/trim (:out (h/run ["git" "-C" tsukasa "rev-parse" "HEAD"])))
+        amu-commit (str/trim (:out (h/run ["git" "-C" amu "rev-parse" "HEAD"])))
+        _ (h/mkdirs (h/home ".itonami" "tsukasa"))
+        r (h/run [(str amu "/bin/amu") "compile" src "--target" "js" "--jvm-free" "--output" artifact-path]
+                 :cwd amu :timeout-ms 600000)]
+    (when-not (zero? (:exit r)) (println (:err r)) (js/process.exit 1))
+    (-> (js/import artifact-path)
+        (.then (fn [m]
+                 (let [a (.-kotobaArtifact m)
+                       l (h/read-edn ledger-path (empty-ledger))
+                       core {:repo "kotoba-lang/tsukasa" :commit commit :amu-commit amu-commit
+                             :target "js-kotoba-v1" :kir-digest (.-kirDigest a)
+                             :source-digest (.-sourceDigest a)
+                             :artifact-sha256 (h/sha256-file artifact-path)}]
+                   (record! (assoc l :tsukasa/core core) {:op :compile :core core})
+                   (prn core)))))))
+
+(defn register! [{:keys [slot id did failure-domain availability caps]}]
+  (let [l (h/read-edn ledger-path (empty-ledger))
+        slot (js/parseInt slot)
+        did (if (= did "self") (:did (h/load-or-create-key! key-path)) (str did))
+        fd (str failure-domain) av (str availability)]
+    (-> (load-core l)
+        (.then (fn [core]
+                 (let [v ((f core "register-verdict") (states-js l) (big slot) (str id) did fd av)]
+                   (if (= v "tsukasa/ok")
+                     (let [s ((f core "commit-register") (states-js l) (big slot))
+                           node {:id id :did did :failure-domain fd :availability av
+                                 :capabilities (set (map keyword (remove str/blank? (str/split (str caps) #","))))}]
+                       (record! (-> l (assoc :states (states-clj s)) (assoc-in [:nodes slot] node))
+                                {:op :register :slot slot :node node :verdict v})
+                       (println v "slot" slot "state" ((f core "state-name") (big 0))))
+                     (do (record! l {:op :register-refused :slot slot :id id :verdict v})
+                         (println v) (js/process.exit 2)))))))))
+
+(defn transition! [{:keys [slot to]}]
+  (let [l (h/read-edn ledger-path (empty-ledger))
+        slot (js/parseInt slot) to (js/parseInt to)]
+    (-> (load-core l)
+        (.then (fn [core]
+                 (let [v ((f core "transition-verdict") (states-js l) (big slot) (big to))]
+                   (if (= v "tsukasa/ok")
+                     (let [s ((f core "transition-commit") (states-js l) (big slot) (big to))]
+                       (record! (assoc l :states (states-clj s))
+                                {:op :transition :slot slot :to to :verdict v})
+                       (println v "slot" slot "->" ((f core "state-name") (big to))))
+                     (do (record! l {:op :transition-refused :slot slot :to to :verdict v})
+                         (println v) (js/process.exit 2)))))))))
+
+(defn declare-caps!
+  "Add declared capabilities to a registered node. ledger_core has no
+  capability rule (capabilities are host-declared metadata, see its :export
+  list), so the admissible verdict here is ledger_core's own: the stored
+  identity must still pass first-problem, the slot must hold a node, and a
+  retired node is refused. Nothing is written unless all three hold."
+  [{:keys [slot add]}]
+  (let [l (h/read-edn ledger-path (empty-ledger))
+        slot (js/parseInt slot)
+        node (get-in l [:nodes slot])
+        st (nth (:states l) slot -1)
+        added (set (map keyword (remove str/blank? (str/split (str add) #","))))]
+    (-> (load-core l)
+        (.then (fn [core]
+                 (let [v (cond
+                           ;; host-side refusals are named itonami-ci/*, never tsukasa/*
+                           (or (nil? node) (neg? st)) "itonami-ci/no-node-in-slot"
+                           (= st 4) "itonami-ci/node-retired"
+                           :else ((f core "first-problem") (str (:id node)) (str (:did node))
+                                  (str (:failure-domain node)) (str (:availability node))))]
+                   (if (= v "tsukasa/ok")
+                     (let [caps (into (set (:capabilities node)) added)]
+                       (record! (assoc-in l [:nodes slot :capabilities] caps)
+                                {:op :declare-capabilities :slot slot :added added
+                                 :identity-verdict v :state ((f core "state-name") (big st))
+                                 :capability-verdict :none-in-ledger-core})
+                       (println v "slot" slot "capabilities" (pr-str caps)))
+                     (do (record! l {:op :declare-capabilities-refused :slot slot :added added :verdict v})
+                         (println v) (js/process.exit 2)))))))))
+
+(defn show! []
+  (let [l (h/read-edn ledger-path (empty-ledger))
+        codes (into {} (map-indexed (fn [i d] [d i]) (distinct (map :failure-domain (vals (:nodes l))))))
+        live (filter (fn [[slot _]] (#{1 2 3} (nth (:states l) slot))) (:nodes l))
+        ds (clj->js (mapv #(big (codes (:failure-domain (val %)))) live))]
+    (-> (load-core l)
+        (.then (fn [core]
+                 (prn :tsukasa/core (:tsukasa/core l))
+                 (doseq [[slot n] (sort (:nodes l))]
+                   (println slot (:id n) ((f core "state-name") (big (nth (:states l) slot)))
+                            (:availability n) (:failure-domain n) (:did n) (pr-str (:capabilities n))))
+                 (println "audit(admitted..draining): nodes" (js/Number ((f core "audit-nodes") ds))
+                          "independent-domains" (js/Number ((f core "audit-domains") ds))
+                          "largest-domain" (js/Number ((f core "audit-largest") ds))
+                          "single-domain?" ((f core "audit-single?") ds)))))))
+
+(let [[cmd & args] *command-line-args* o (opts args)]
+  (case cmd
+    "compile" (compile! o)
+    "register" (register! o)
+    "transition" (transition! o)
+    "declare-caps" (declare-caps! o)
+    "show" (show!)
+    (do (println "usage: node.cljk compile|register|transition|declare-caps|show ...") (js/process.exit 64))))
