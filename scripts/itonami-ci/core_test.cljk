@@ -73,6 +73,20 @@
   (check "the timed-out node is no longer the holder"
          (not= (:kototama.fleet/lease-id (:lease r1)) (:kototama.fleet/lease-id holder))))
 
+;; post de-duplication: (repo, head, gate commit, verdict) decides
+(let [k {:repo "r" :head-sha "h1" :gate-commit "g1" :verdicts ["v1"] :state "failure"}
+      last (core/post-key k)]
+  (check "same repo/head/gate/verdict is not re-posted" (not (core/post-needed? last k)))
+  (check "first post for a PR is needed" (core/post-needed? nil k))
+  (check "new head posts" (core/post-needed? last (assoc k :head-sha "h2")))
+  (check "new gate commit posts" (core/post-needed? last (assoc k :gate-commit "g2")))
+  (check "changed verdict posts" (core/post-needed? last (assoc k :verdicts ["v2"])))
+  (check "changed state posts" (core/post-needed? last (assoc k :state "error")))
+  (check "verdict order does not matter"
+         (not (core/post-needed? (core/post-key (assoc k :verdicts ["a" "b"])) (assoc k :verdicts ["b" "a"]))))
+  (check "missing gate commit is keyed as UNMEASURED, stable"
+         (not (core/post-needed? (core/post-key (assoc k :gate-commit nil)) (assoc k :gate-commit nil)))))
+
 (doseq [[n ok] @results] (println (if ok "ok  " "FAIL") n))
 (let [bad (count (remove second @results))]
   (println (count @results) "checks," bad "failed")
