@@ -1,0 +1,63 @@
+;; bootstrap-tooling: runner/gate process boundary, not native selfhost evidence.
+(ns itonami-ci.gate
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
+            [itonami-ci.core :as core]
+            [itonami-ci.host :as h]))
+
+(def runner-files ["runner.cljk" "nbb.edn" "itonami_ci/core.cljk" "itonami_ci/host.cljk" "itonami_ci/gate.cljk"])
+
+(defn pins [config gate-sha gdir runner-root]
+  (let [{:keys [repo commit path]} (get-in config [:gate :policy])
+        policy (when (and (re-matches #"[0-9a-f]{40}" (str commit)) repo path)
+                 (h/gh-json (str "repos/" repo "/contents/" path "?ref=" commit)))
+        policy-text (when (= "base64" (:encoding policy))
+                      (.toString (js/Buffer.from (:content policy) "base64") "utf8"))
+        files (into {} (for [[k f] (get-in config [:gate :pin-files])]
+                         [k (when gdir (h/sha256-file (str gdir "/" f)))]))
+        record (when-let [f (get-in config [:gate :pin-files :seed-record])]
+                 (when (and gdir (h/exists? (str gdir "/" f))) (h/slurp* (str gdir "/" f))))
+        seed (some-> (re-find #"(?m)^seed1_sha256 ([0-9a-f]{64})\s*$" (or record "")) second)]
+    {:amu-commit gate-sha
+     :seed-hash (when seed (str "sha256:" seed))
+     :policy-commit commit
+     :policy-digest (when policy-text (str "sha256:" (h/sha256-hex policy-text)))
+     :deps-lock-digest (some->> (:deps-lock-digest files) (str "sha256:"))
+     :gate-files files
+     :runner-digest (when (every? #(h/exists? (str runner-root "/" %)) runner-files)
+                      (h/cid (into (sorted-map)
+                                   (for [f runner-files]
+                                     [f (h/sha256-file (str runner-root "/" f))]))))}))
+
+(defn allowed-env [work]
+  ;; Deliberately replaces the parent environment; no GitHub bearer or model
+  ;; provider credential is inherited by the gate process.
+  (clj->js {"PATH" (.. js/process -env -PATH) "HOME" (.. js/process -env -HOME)
+            "LANG" "C.UTF-8" "TMPDIR" (str work "/tmp")}))
+
+(defn run! [job gdir work]
+  (let [verdict (str work "/verdict.edn")
+        _ (when (h/exists? verdict) (throw (ex-info "attempt verdict already exists" {:path verdict})))
+        argv (mapv (fn [a] (reduce (fn [s [k v]] (str/replace s (str "{" (name k) "}") (str v))) a
+                                  {:gate gdir :base (:job/base job) :head (:job/head job)
+                                   :repo (:job/repo job) :verdict verdict
+                                   :policy-ref (get-in job [:job/gate :gate/policy-ref])}))
+                   (get-in job [:job/gate :gate/argv]))
+        _ (h/mkdirs (str work "/tmp"))
+        r (h/run argv :cwd gdir :env (allowed-env work)
+                 :timeout-ms (get-in job [:job/budget :budget/wall-ms])
+                 :max-bytes (get-in job [:job/budget :budget/max-output-bytes]))
+        _ (h/spit-atomic (str work "/stdout.log") (:out r))
+        _ (h/spit-atomic (str work "/stderr.log") (:err r))
+        v (when (h/exists? verdict) (try (edn/read-string (h/slurp* verdict)) (catch :default _ nil)))
+        problems (core/verdict-problems v job (:exit r))]
+    {:exit (:exit r)
+     :outcome (cond (:timed-out? r) :timed-out
+                    (seq problems) :error
+                    (= "PASS" (:verdict v)) :pass
+                    :else :fail)
+     :verdict-cid (when (and v (empty? problems)) (h/cid v))
+     :events [(cond-> {:argv argv :exit (:exit r) :timed-out? (:timed-out? r)
+                       :process-error (:error r) :verdict-problems problems
+                       :stdout-sha256 (h/sha256-hex (:out r)) :stderr-sha256 (h/sha256-hex (:err r))}
+                (and v (empty? problems)) (assoc :gate (core/verdict-summary v)))]}))

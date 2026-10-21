@@ -1,0 +1,101 @@
+;; bootstrap-tooling: exercise the real process/receipt boundary without GitHub writes.
+(ns gate-test
+  (:require [clojure.edn :as edn]
+            [itonami-ci.core :as core]
+            [itonami-ci.gate :as gate]
+            [itonami-ci.host :as h]
+            ["node:fs" :as fs]
+            ["node:os" :as os]
+            ["node:path" :as path]))
+
+(def results (atom []))
+(defn check [name ok] (swap! results conj [name (boolean ok)]))
+(def sha-a (apply str (repeat 40 "a")))
+(def sha-b (apply str (repeat 40 "b")))
+(def sha-g (apply str (repeat 40 "c")))
+(def digest (str "sha256:" (apply str (repeat 64 "d"))))
+(def fixture-pins {:amu-commit sha-g :seed-hash digest :policy-digest digest
+                   :deps-lock-digest digest :runner-digest digest :policy-commit sha-a})
+(def j (core/job-spec {:repo "test/library" :pr 3 :base-sha sha-a :head-sha sha-b
+                       :gate {:commit sha-g :argv ["node"]} :pins fixture-pins}))
+(def v {:format :kotoba.selfhost-gate/v1 :verdict "PASS"
+        :change {:repo "test/library" :base sha-a :head sha-b} :gate {:gate-commit sha-g :gate-dirty false}
+        :gates [{:gate :g1 :status "PASS" :flips []}]
+        :pins {:head {:policy {:sha256 (subs digest 7)}} :base {:policy {:sha256 (subs digest 7)}}}})
+(check "complete pins are runnable" (empty? (core/job-problems j)))
+(check "missing policy pin fails closed"
+       (some #{:unmeasured-input-pin} (core/job-problems (assoc-in j [:job/pins :pin/policy-digest] "UNMEASURED"))))
+(check "verdict must match source pair"
+       (some #{:verdict-source-mismatch} (core/verdict-problems (assoc-in v [:change :head] sha-a) j 0)))
+(check "verdict must match gate commit"
+       (some #{:verdict-gate-mismatch} (core/verdict-problems (assoc-in v [:gate :gate-commit] sha-a) j 0)))
+(check "FAIL with zero exit is refused"
+       (some #{:verdict-exit-mismatch} (core/verdict-problems (assoc v :verdict "FAIL") j 0)))
+(check "dirty gate cannot produce a counted verdict"
+       (some #{:dirty-gate} (core/verdict-problems (assoc-in v [:gate :gate-dirty] true) j 0)))
+(check "PASS without gate results is refused"
+       (some #{:missing-gate-results} (core/verdict-problems (assoc v :gates []) j 0)))
+(check "verdict policy must match the job pin"
+       (some #{:verdict-policy-mismatch} (core/verdict-problems (assoc-in v [:pins :head :policy :sha256] "wrong") j 0)))
+(check "normal polling ignores closed PRs"
+       (empty? (core/target-heads {:repo "test/library"} [{:state "closed" :head {:sha sha-b}}])))
+(check "historical revision retains original base and head"
+       (= [{:repo "test/library" :pr 3 :base-sha sha-a :head-sha sha-b}]
+          (core/target-heads {:repo "test/library" :revisions [{:pr 3 :base-sha sha-a :head-sha sha-b}]}
+                             [{:state "closed" :base {:sha sha-b} :head {:sha sha-b}}])))
+
+(def root (fs/mkdtempSync (str (os/tmpdir) "/itonami-gate-test-")))
+(defn fixture [name verdict code]
+  (let [dir (str root "/" name) script (str dir "/process.mjs")]
+    (h/mkdirs dir)
+    (h/spit-atomic script
+      (str "import fs from 'node:fs';\n"
+           "if(process.env.GH_TOKEN || process.env.GITHUB_TOKEN || process.env.ITONAMI_GATE_TEST_SECRET) process.exit(9);\n"
+           "console.log('fixture output'); console.error('fixture diagnostic');\n"
+           (when verdict (str "fs.writeFileSync(process.argv[2]," (js/JSON.stringify (pr-str verdict)) ");\n"))
+           "process.exit(" code ");\n"))
+    {:work (str dir "/attempt") :script script}))
+
+(let [prior (.. js/process -env -ITONAMI_GATE_TEST_SECRET)]
+  (aset (.-env js/process) "ITONAMI_GATE_TEST_SECRET" "test-only-marker")
+  (try
+    (doseq [[name verdict exit expected] [["pass" v 0 :pass]
+                                         ["fail" (assoc v :verdict "FAIL") 1 :fail]
+                                         ["missing" nil 0 :error]
+                                         ["wrong-head" (assoc-in v [:change :head] sha-a) 0 :error]
+                                         ["wrong-exit" v 1 :error]]]
+      (let [{:keys [work script]} (fixture name verdict exit)
+            job (assoc-in j [:job/gate :gate/argv] ["node" script "{verdict}"])
+            r (gate/run! job root work)]
+        (check (str name ": process outcome") (= expected (:outcome r)))
+        (check (str name ": bounded logs retained")
+               (and (= (h/sha256-file (str work "/stdout.log")) (get-in r [:events 0 :stdout-sha256]))
+                    (= (h/sha256-file (str work "/stderr.log")) (get-in r [:events 0 :stderr-sha256]))))
+        (check (str name ": only valid verdicts get a CID")
+               (= (contains? #{:pass :fail} expected) (some? (:verdict-cid r))))
+        (when (= expected :pass)
+          (check "gate and ratchet summary reaches receipt events"
+                 (= [{:gate :g1 :status "PASS" :flips []}] (get-in r [:events 0 :gate :gates])))
+          (check "old attempt verdict is never reused"
+                 (try (gate/run! job root work) false (catch :default _ true))))))
+    (finally
+      (if prior (aset (.-env js/process) "ITONAMI_GATE_TEST_SECRET" prior)
+          (js-delete (.-env js/process) "ITONAMI_GATE_TEST_SECRET")))))
+
+(h/spit-atomic (str root "/seed.record") (str "seed1_sha256 " (apply str (repeat 64 "e")) "\n"))
+(h/spit-atomic (str root "/lock.edn") "{:locked true}\n")
+(let [policy "{:grant :test}\n"
+      p (with-redefs [h/gh-json (fn [_] {:encoding "base64" :content (.toString (js/Buffer.from policy) "base64")})]
+          (gate/pins {:gate {:policy {:repo "test/policy" :commit sha-a :path "grant.edn"}
+                            :pin-files {:seed-record "seed.record" :deps-lock-digest "lock.edn"}}}
+                     sha-g root (path/dirname *file*))) ]
+  (check "seed payload hash comes from record, not record bytes"
+         (= (str "sha256:" (apply str (repeat 64 "e"))) (:seed-hash p)))
+  (check "policy digest covers pinned policy contents" (= (str "sha256:" (h/sha256-hex policy)) (:policy-digest p)))
+  (check "runner source digest is a single sha256 CID" (re-matches #"sha256:[0-9a-f]{64}" (:runner-digest p))))
+
+(fs/rmSync root #js {:recursive true})
+(doseq [[n ok] @results] (println (if ok "ok  " "FAIL") n))
+(let [bad (count (remove second @results))]
+  (println (count @results) "checks," bad "failed")
+  (js/process.exit (if (zero? bad) 0 1)))

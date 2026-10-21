@@ -13,6 +13,11 @@
 (defn job [gate-commit]
   (core/job-spec {:repo "kotoba-lang/amu" :pr 1 :base-sha sha-a :head-sha sha-b
                   :gate {:repo "kotoba-lang/amu" :ref "g" :commit gate-commit :argv ["x"]}
+                  :pins {:seed-hash (str "sha256:" (apply str (repeat 64 "a")))
+                         :policy-digest (str "sha256:" (apply str (repeat 64 "b")))
+                         :deps-lock-digest (str "sha256:" (apply str (repeat 64 "c")))
+                         :runner-digest (str "sha256:" (apply str (repeat 64 "d")))
+                         :policy-commit sha-a}
                   :capabilities #{:git}}))
 (def ok-place {:ok? true :nodes [] :eligible 2 :domains 2})
 (defn attempt [outcome verdict fd & {:keys [live extra] :or {live true}}]

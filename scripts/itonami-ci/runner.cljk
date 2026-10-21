@@ -15,7 +15,9 @@
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
             [itonami-ci.core :as core]
+            [itonami-ci.gate :as gate]
             [itonami-ci.host :as h]
+            ["node:path" :as path]
             [sahai.core :as lease]
             [sahai.fence :as fence]))
 
@@ -40,11 +42,12 @@
 ;; --- trigger: poll PR heads ------------------------------------------------
 
 (defn pr-heads []
-  (for [{:keys [repo prs]} (:targets config)
-        pr (or (seq (map (fn [n] (h/gh-json (str "repos/" repo "/pulls/" n))) prs))
-               (h/gh-json (str "repos/" repo "/pulls?state=open&per_page=100")))
-        :when (and pr (= "open" (:state pr)))]
-    {:repo repo :pr (:number pr) :head-sha (get-in pr [:head :sha]) :base-sha (get-in pr [:base :sha])}))
+  (mapcat (fn [{:keys [repo prs revisions] :as target}]
+            (core/target-heads target
+              (when-not (seq revisions)
+                (or (seq (map (fn [n] (h/gh-json (str "repos/" repo "/pulls/" n))) prs))
+                    (h/gh-json (str "repos/" repo "/pulls?state=open&per_page=100"))))))
+          (:targets config)))
 
 ;; --- gate: present on the remote branch or UNMEASURED ---------------------
 
@@ -72,38 +75,11 @@
     d))
 
 (defn pins [gate-sha gdir]
-  (merge {:amu-commit gate-sha}
-         (into {} (for [[k f] (get-in config [:gate :pin-files])]
-                    [k (some->> (when gdir (h/sha256-file (str gdir "/" f))) (str "sha256:"))]))))
+  (gate/pins config gate-sha gdir (path/dirname *file*)))
 
 ;; --- execution ---------------------------------------------------------------
 
-(defn- subst [argv m]
-  (mapv (fn [a] (reduce (fn [s [k v]] (str/replace s (str "{" (name k) "}") (str v))) a m)) argv))
-
-(defn run-gate!
-  "Native toolchain processes under a declared capability set. argv only, no
-  shell; env is an allowlist (no GH_TOKEN / credentials reach the gate)."
-  [job gdir work]
-  (let [verdict (str work "/verdict.edn")
-        argv (subst (get-in job [:job/gate :gate/argv])
-                    {:gate gdir :base (:job/base job) :head (:job/head job)
-                     :repo (:job/repo job) :verdict verdict})
-        env (clj->js {"PATH" (.. js/process -env -PATH) "HOME" (.. js/process -env -HOME)
-                      "LANG" "C.UTF-8" "TMPDIR" (str work "/tmp")})
-        _ (h/mkdirs (str work "/tmp"))
-        r (h/run argv :cwd gdir :env env
-                 :timeout-ms (get-in job [:job/budget :budget/wall-ms])
-                 :max-bytes (get-in job [:job/budget :budget/max-output-bytes]))
-        v (when (h/exists? verdict) (try (edn/read-string (h/slurp* verdict)) (catch :default _ nil)))]
-    {:exit (:exit r)
-     :outcome (cond (:timed-out? r) :timed-out
-                    (nil? v) :error
-                    (zero? (:exit r)) :pass
-                    :else :fail)
-     :verdict-cid (when v (h/cid v))
-     :events [{:argv argv :exit (:exit r) :timed-out? (:timed-out? r)
-               :stdout-sha256 (h/sha256-hex (:out r)) :stderr-sha256 (h/sha256-hex (:err r))}]}))
+;; Process execution and verdict validation live in itonami-ci.gate.
 
 ;; --- one job ----------------------------------------------------------------
 
@@ -129,9 +105,11 @@
       (let [l (:lease claim)
             _ (save-registry! (:registry claim))
             started (h/now-ms)
-            work (p "work" (subs job-cid 7 23))
+            work (p "work" (subs job-cid 7 23) (str (:kototama.fleet/lease-id l)))
             res (if gdir
-                  (run-gate! job gdir work)
+                  (if-let [problems (seq (core/job-problems job))]
+                    {:exit nil :outcome :error :verdict-cid nil :events [{:job-problems problems}]}
+                    (gate/run! job gdir work))
                   {:exit nil :outcome :unmeasured :verdict-cid nil
                    :events [{:stub "gate CLI not on the remote gate branch; nothing was executed"}]})
             body (core/receipt-body (merge res {:job-cid job-cid :job job :node node :lease l

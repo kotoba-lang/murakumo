@@ -37,6 +37,16 @@
 
 (def unmeasured "UNMEASURED")
 
+(defn target-heads
+  "Explicit historical revisions stay pinned after a PR closes. Polling
+  targets continue to select only open PRs. No current-main substitution."
+  [{:keys [repo revisions]} prs]
+  (if (seq revisions)
+    (mapv #(assoc % :repo repo) revisions)
+    (mapv (fn [pr] {:repo repo :pr (:number pr)
+                   :head-sha (get-in pr [:head :sha]) :base-sha (get-in pr [:base :sha])})
+          (filter #(= "open" (:state %)) prs))))
+
 (defn job-spec
   [{:keys [repo pr base-sha head-sha gate pins budget capabilities]}]
   {:itonami.ci/version 1
@@ -49,11 +59,15 @@
    :job/gate {:gate/repo (:repo gate)
               :gate/ref (:ref gate)
               :gate/commit (or (:commit gate) unmeasured)
+              :gate/policy-ref (get-in gate [:policy :commit])
               :gate/argv (vec (:argv gate))}
    :job/pins {:pin/amu-commit (or (:amu-commit pins) unmeasured)
               :pin/seed-hash (or (:seed-hash pins) unmeasured)
               :pin/policy-digest (or (:policy-digest pins) unmeasured)
-              :pin/deps-lock-digest (or (:deps-lock-digest pins) unmeasured)}
+              :pin/deps-lock-digest (or (:deps-lock-digest pins) unmeasured)
+              :pin/policy-commit (or (:policy-commit pins) unmeasured)
+              :pin/runner-digest (or (:runner-digest pins) unmeasured)
+              :pin/gate-files (:gate-files pins)}
    :job/budget {:budget/wall-ms (:wall-ms budget 3600000)
                 :budget/max-output-bytes (:max-output-bytes budget 1048576)}
    :job/capabilities (set capabilities)})
@@ -68,7 +82,38 @@
     (not (re-matches #"[0-9a-f]{40}" (str (:job/head job)))) (conj :bad-head-sha)
     (not (re-matches #"[0-9a-f]{40}" (str (:job/base job)))) (conj :bad-base-sha)
     (= unmeasured (get-in job [:job/gate :gate/commit])) (conj :gate-unavailable)
-    (empty? (get-in job [:job/gate :gate/argv])) (conj :no-gate-argv)))
+    (empty? (get-in job [:job/gate :gate/argv])) (conj :no-gate-argv)
+    (not-every? #(re-matches #"sha256:[0-9a-f]{64}" (str (get-in job [:job/pins %])))
+                [:pin/seed-hash :pin/policy-digest :pin/deps-lock-digest :pin/runner-digest])
+    (conj :unmeasured-input-pin)
+    (not (re-matches #"[0-9a-f]{40}" (str (get-in job [:job/pins :pin/policy-commit]))))
+    (conj :unmeasured-policy-commit)))
+
+(defn verdict-problems
+  "Only this exact source pair and gate can produce a counted verdict.
+  Exit zero is not evidence without a well-formed matching PASS."
+  [v job exit]
+  (cond-> []
+    (not= :kotoba.selfhost-gate/v1 (:format v)) (conj :bad-verdict-format)
+    (not (#{"PASS" "FAIL"} (:verdict v))) (conj :bad-verdict)
+    (not= [(:job/base job) (:job/head job)]
+          [(get-in v [:change :base]) (get-in v [:change :head])]) (conj :verdict-source-mismatch)
+    (not= (:job/repo job) (get-in v [:change :repo])) (conj :verdict-repo-mismatch)
+    (not= (get-in job [:job/gate :gate/commit]) (get-in v [:gate :gate-commit]))
+    (conj :verdict-gate-mismatch)
+    (true? (get-in v [:gate :gate-dirty])) (conj :dirty-gate)
+    (not (and (seq (:gates v)) (every? #(and (:gate %) (#{"PASS" "FAIL"} (:status %))) (:gates v))))
+    (conj :missing-gate-results)
+    (not-every? #(= (get-in job [:job/pins :pin/policy-digest])
+                    (str "sha256:" (get-in v [:pins % :policy :sha256]))) [:base :head])
+    (conj :verdict-policy-mismatch)
+    (not= (if (= "PASS" (:verdict v)) 0 1) exit) (conj :verdict-exit-mismatch)))
+
+(defn verdict-summary [v]
+  {:verdict (:verdict v)
+   :gates (mapv #(select-keys % [:gate :status :base :head :flips :gains :failures]) (:gates v))
+   :failures (:failures v)
+   :pins (:pins v)})
 
 ;; ---------------------------------------------------------------------------
 ;; Placement over the tsukasa ledger (ADR-0002 §Placement). Only lifecycle
