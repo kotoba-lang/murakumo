@@ -21,6 +21,9 @@
             [sahai.core :as lease]
             [sahai.fence :as fence]))
 
+;; Capture while the entry file binding exists; timer callbacks have no *file*.
+(def runner-root (path/dirname *file*))
+
 (def dir (h/home ".itonami" "itonami-ci"))
 (defn- p [& xs] (apply str dir "/" (interpose "/" xs)))
 (def ledger-path (or (.. js/process -env -ITONAMI_LEDGER) (h/home ".itonami" "tsukasa" "itonami-ledger.edn")))
@@ -75,7 +78,7 @@
     d))
 
 (defn pins [gate-sha gdir]
-  (gate/pins config gate-sha gdir (path/dirname *file*)))
+  (gate/pins config gate-sha gdir runner-root))
 
 ;; --- execution ---------------------------------------------------------------
 
