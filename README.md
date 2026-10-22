@@ -352,6 +352,91 @@ joseph).
 > content-addressed WASM components: `run` / `on-http` / `on-tick` / `on-kse`).
 > Different substrate, on the same hardware.
 
+## Fleet decisions in Kotoba
+
+`kotoba/fleet_intent_core.kotoba` and `kotoba/fleet_placement_core.kotoba` state
+the L1 check and the L3 placement of `src/murakumo/fleet/spec.cljk` as pure
+Kotoba, for the itonami node management plane (com-junkawasaki/root
+ADR-2610222140 §4; Linear JUN-315). The `.cljk` is unchanged and does not call
+them.
+
+- **Intent** (`murakumo.fleet-intent`) checks one decoded field at a time. The
+  caller walks the JSON payload, because the guest has no JSON reader yet
+  (kotoba-lang/amu#1469).
+  - `wire-problem`: spec-version 2, schema stays 1.
+  - `revision-verdict`: a new revision must advance the current one.
+  - Name, model, unit, template, did:key and hex64 checks, with the `.cljk`'s
+    patterns.
+  - `forbidden?` (NO-ARGV-IN-SPEC): one of `;` `|` `&` `` ` `` `$` `<` `>`, a leading `/`, or
+    whitespace then `-`/`--` and a-z. Whitespace is JavaScript's `\s`, read a
+    code point at a time from UTF-8.
+  - `class-problem`, `trust-problem`, and `cell-problem` for itonami cells:
+    `sha256:` + hex64 digest, runtime class wasm 1 or container 2, replicas.
+  - Each returns a pinned `intent/...` literal.
+- **Placement** (`murakumo.fleet-placement`):
+  - `fresh?`, `effective-memory` and `labels-ok?` (newline-terminated
+    `key=value` lines).
+  - `eligible-reason`, in the `.cljk`'s order (disabled, cordoned, stale,
+    memory, labels, pressure). It adds two checks for cells: `not-active`
+    (the node's tsukasa state is not active) and `runtime-class`.
+  - `placement`: the eligible pinned nodes in input order, then the other
+    eligible nodes by ascending `sha256(class "\0" node)` hex, then the first
+    `replicas` (-1 = all).
+  - The hash is the caller's, passed in as 64 hex characters per node, so the
+    stack keeps one sha256. The test digests were computed with Python's
+    hashlib.
+  - `test-scenarios` replays `test/murakumo/fleet/spec_test.cljk`'s fixture
+    (pinned a, 8 GB dddd, stale a, bb at pressure 4).
+
+Gates (no Node.js, nbb, JVM or babashka):
+
+```bash
+AMU=../amu; G=$(mktemp -d)   # G must be under a path podman can mount
+cp "$AMU/seed/bootstrap/aarch64-linux-static-root.elf" "$G/root.elf"
+F=kotoba/fleet_intent_core.kotoba
+{ echo '(ns fleet-intent-gate (:export [main]))'
+  tail -n +$(( $(grep -n 'test-cell\]))' $F | cut -d: -f1) + 1 )) $F
+  cat <<'EOF'
+(defn main [] :i64
+  (+ (if (test-wire) 1 0) (+ (if (test-names) 2 0)
+  (+ (if (test-strings) 4 0) (+ (if (test-forbidden) 8 0)
+  (+ (if (test-class) 16 0) (+ (if (test-trust) 32 0)
+  (if (test-cell) 64 0))))))))
+EOF
+} > "$G/intent.kotoba"
+F=kotoba/fleet_placement_core.kotoba
+{ echo '(ns fleet-placement-gate (:export [main]))'
+  tail -n +$(( $(grep -n 'test-scenarios\]))' $F | cut -d: -f1) + 1 )) $F
+  cat <<'EOF'
+(defn main [] :i64
+  (+ (if (test-fresh) 1 0) (+ (if (test-labels) 2 0)
+  (+ (if (test-eligible) 4 0) (+ (if (test-placement) 8 0)
+  (if (test-scenarios) 16 0))))))
+EOF
+} > "$G/placement.kotoba"
+for u in intent placement; do
+  podman run --rm --platform linux/arm64 --network none -e KEXE_CAP_RESOURCES_35="$G" \
+    -v "$G:$G" -w "$G" docker.io/library/python:3.12-alpine sh -c \
+    "./root.elf compile $G/$u.kotoba --target aarch64-linux --output $G/$u.elf --format static \
+     && chmod +x $u.elf && KEXE_STRUCTURED_REPORT=1 ./$u.elf"
+done
+#   → {:status :ok :result 127 ...}   (intent: all seven test-* true)
+#   → {:status :ok :result 31 ...}    (placement: all five test-* true)
+```
+
+Measured on 2026-10-22 with the root of amu `f5b11a08` (sha256 `8256bfd8…dc7`):
+`127` and `31`. The negative controls break one rule each:
+
+| Broken rule | Result | Drops |
+|---|---|---|
+| `forbidden?` without the leading-`/` check | 119 | `test-forbidden` |
+| base58 letting `0` through | 123 | `test-strings` |
+| placement sorting descending | 7 | `test-placement`, `test-scenarios` |
+| pressure compared with `>=` | 27 | `test-eligible` |
+
+Receipt: `docs/evidence/fleet-kotoba-selfhost-gate-20261022.edn`. These gates
+are not in CI (CDCI is stopped; AGENTS.md).
+
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
 `qwen3.8-flash-next-ud-iq3-xxs` is a single-node, lossless Qwen4Exp route for

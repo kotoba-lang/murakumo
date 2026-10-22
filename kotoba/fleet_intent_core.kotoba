@@ -1,0 +1,293 @@
+;; murakumo.fleet-intent — the L1 intent check of src/murakumo/fleet/spec.cljk
+;; (`validate`), as pure Kotoba decisions over one decoded field at a time
+;; (com-junkawasaki/root ADR-2610222140 §4; Linear JUN-315). The caller walks
+;; the JSON payload and asks about each field; walking the maps stays in the
+;; caller until the guest has a JSON reader (kotoba-lang/amu#1469).
+;;
+;;   wire-problem       spec-version must be 2, schema must stay 1
+;;   revision-verdict   a new revision must be >= 1 and advance the current one
+;;   name-ok?           ^[a-z0-9][a-z0-9.-]{0,63}$          (classes, nodes, cells)
+;;   model-name-ok?     ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$
+;;   unit-ok?           ^(com\.murakumo|cloud\.itonami|ai\.gftd)\.[a-z0-9.-]+$
+;;   template-unit      the unit of one of the five fixed templates, or ""
+;;   model-file-ok?     relative to the model root: no leading "/", no ".."
+;;   did-key-ok?        ^did:key:z6Mk[1-9A-HJ-NP-Za-km-z]+$  (ed25519)
+;;   hex64?             64 lowercase hex
+;;   forbidden?         NO-ARGV-IN-SPEC: a string (outside a "file" key) that
+;;                      holds one of ; | & ` $ < >, starts with "/", or has
+;;                      whitespace followed by "-" or "--" and a-z
+;;   class-problem      one class: name, template, model, replicas, max-pressure
+;;   trust-problem      one trust entry: in nodes or role "member", ed25519 did
+;;   cell-problem       one itonami cell (ADR-2610222140 §1): name, digest
+;;                      "sha256:" + hex64, runtime class wasm 1 or container 2,
+;;                      replicas
+;;   converge-mode-ok?  "observe" or "enforce"
+;;
+;; Encodings: replicas "all" is -1; an absent max-pressure is 0; an absent
+;; model is "". Whitespace is JavaScript's \s (the .cljk's regex), decoded
+;; from UTF-8: strings are walked a code point at a time.
+;;
+;; Written in the Amu selfhost seed subset; README "Fleet decisions in Kotoba"
+;; has the gate.
+(ns murakumo.fleet-intent
+  (:export [wire-problem revision-verdict name-ok? model-name-ok? unit-ok?
+            template-unit template-ok? model-file-ok? did-key-ok? hex64?
+            forbidden? class-problem trust-problem cell-problem
+            converge-mode-ok? replicas-ok? max-pressure-ok?
+            test-wire test-names test-strings test-forbidden test-class
+            test-trust test-cell]))
+
+;; ---------------------------------------------------------------------------
+;; Characters (code points)
+
+(defn lower? [c :i64] :bool (and (>= c 97) (<= c 122)))
+(defn upper? [c :i64] :bool (and (>= c 65) (<= c 90)))
+(defn digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
+(defn hex-lower? [c :i64] :bool (or (digit? c) (and (>= c 97) (<= c 102))))
+
+;; JavaScript's \s
+(defn js-space? [c :i64] :bool
+  (or (and (>= c 9) (<= c 13)) (= c 32) (= c 160) (= c 5760)
+      (and (>= c 8192) (<= c 8202)) (= c 8232) (= c 8233) (= c 8239)
+      (= c 8287) (= c 12288) (= c 65279)))
+
+;; bytes the code point c takes in UTF-8
+(defn utf8-width [c :i64] :i64
+  (cond (< c 128) 1 (< c 2048) 2 (< c 65536) 3 :else 4))
+
+(defn cp [s :string i :i64] :i64 (string-code-point-at s i))
+
+;; class 0: [a-z0-9.-]   1: [A-Za-z0-9._-]   2: base58   3: [a-z0-9]   4: [A-Za-z0-9]
+(defn in-class? [c :i64 k :i64] :bool
+  (cond (= k 0) (or (lower? c) (digit? c) (= c 46) (= c 45))
+        (= k 1) (or (lower? c) (upper? c) (digit? c) (= c 46) (= c 95) (= c 45))
+        (= k 2) (and (or (lower? c) (upper? c) (digit? c))
+                     (not (= c 48)) (not (= c 73)) (not (= c 79)) (not (= c 108)))
+        (= k 3) (or (lower? c) (digit? c))
+        (= k 4) (or (lower? c) (upper? c) (digit? c))
+        :else false))
+
+;; every code point of s from byte i on is in class k
+(defn all-in? [s :string i :i64 k :i64] :bool
+  (if (>= i (string-length s)) true
+    (let [c (cp s i)]
+      (if (in-class? c k) (all-in? s (+ i (utf8-width c)) k) false))))
+
+;; first char in class first-k, the rest in rest-k, 1..max-len bytes (ASCII
+;; only can pass, so bytes are characters)
+(defn pattern-ok? [s :string first-k :i64 rest-k :i64 max-len :i64] :bool
+  (let [n (string-length s)]
+    (and (>= n 1) (<= n max-len)
+         (in-class? (cp s 0) first-k)
+         (all-in? s (utf8-width (cp s 0)) rest-k))))
+
+(defn prefix? [s :string p :string] :bool (= (string-index-of s p) 0))
+
+;; ---------------------------------------------------------------------------
+;; Wire and revision
+
+(defn wire-problem [schema :i64 spec-version :i64] :string
+  (cond (not (= spec-version 2)) "intent/spec-version"
+        (not (= schema 1)) "intent/schema"
+        :else "intent/ok"))
+
+(defn revision-verdict [current :i64 proposed :i64] :string
+  (cond (< proposed 1) "intent/bad-revision"
+        (<= proposed current) "intent/not-advancing"
+        :else "intent/ok"))
+
+;; ---------------------------------------------------------------------------
+;; Names
+
+(defn name-ok? [s :string] :bool (pattern-ok? s 3 0 64))
+
+(defn model-name-ok? [s :string] :bool (pattern-ok? s 4 1 128))
+
+;; s is prefix p followed by at least one [a-z0-9.-]
+(defn unit-after? [s :string p :string] :bool
+  (and (prefix? s p) (> (string-length s) (string-length p))
+       (all-in? s (string-length p) 0)))
+
+(defn unit-ok? [s :string] :bool
+  (or (unit-after? s "com.murakumo.") (unit-after? s "cloud.itonami.")
+      (unit-after? s "ai.gftd.")))
+
+(defn hex-all? [s :string i :i64] :bool
+  (if (>= i (string-length s)) true
+    (if (hex-lower? (cp s i)) (hex-all? s (+ i 1)) false)))
+
+(defn hex64? [s :string] :bool
+  (and (= (string-length s) 64) (hex-all? s 0)))
+
+(defn did-key-ok? [s :string] :bool
+  (and (prefix? s "did:key:z6Mk") (> (string-length s) 12) (all-in? s 12 2)))
+
+(defn model-file-ok? [f :string] :bool
+  (and (not (prefix? f "/")) (< (string-index-of f "..") 0)))
+
+;; the five templates of spec.cljk, fixed in code (NO-ARGV-IN-SPEC)
+(defn template-unit [t :string] :string
+  (cond (= t "llama-server") "com.murakumo.mishima"
+        (= t "comfyui") "com.murakumo.comfy"
+        (= t "itonami-peer") "cloud.itonami.agent.peer"
+        (= t "murakumo-resident") "com.murakumo.resident"
+        (= t "kotoba-mesh") "com.murakumo.kotoba-mesh"
+        :else ""))
+
+(defn template-ok? [t :string] :bool (not (= (template-unit t) "")))
+
+(defn replicas-ok? [r :i64] :bool (or (= r -1) (and (>= r 0) (<= r 256))))
+
+(defn max-pressure-ok? [p :i64] :bool (or (= p 0) (= p 1) (= p 2) (= p 4)))
+
+(defn converge-mode-ok? [m :string] :bool (or (= m "observe") (= m "enforce")))
+
+;; ---------------------------------------------------------------------------
+;; NO-ARGV-IN-SPEC
+
+(defn shell-char? [c :i64] :bool
+  (or (= c 59) (= c 124) (= c 38) (= c 96) (= c 36) (= c 60) (= c 62)))
+
+;; at byte i: whitespace, then "-" or "--", then a-z
+(defn flag-at? [s :string i :i64] :bool
+  (let [n (string-length s) c (cp s i) j (+ i (utf8-width c))]
+    (and (js-space? c) (< j n) (= (cp s j) 45)
+         (or (and (< (+ j 1) n) (lower? (cp s (+ j 1))))
+             (and (< (+ j 2) n) (= (cp s (+ j 1)) 45) (lower? (cp s (+ j 2))))))))
+
+(defn command-like-from? [s :string i :i64] :bool
+  (if (>= i (string-length s)) false
+    (let [c (cp s i)]
+      (if (or (shell-char? c) (flag-at? s i)) true
+        (command-like-from? s (+ i (utf8-width c)))))))
+
+(defn forbidden? [s :string is-file :bool] :bool
+  (and (not is-file) (or (prefix? s "/") (command-like-from? s 0))))
+
+;; ---------------------------------------------------------------------------
+;; One entry at a time
+
+(defn class-problem [name :string template :string model :string model-known :bool
+                     replicas :i64 max-pressure :i64] :string
+  (cond (not (name-ok? name)) "intent/bad-class-name"
+        (not (template-ok? template)) "intent/unknown-template"
+        (and (not (= model "")) (not model-known)) "intent/unknown-model"
+        (not (replicas-ok? replicas)) "intent/bad-replicas"
+        (not (max-pressure-ok? max-pressure)) "intent/bad-max-pressure"
+        :else "intent/ok"))
+
+(defn trust-problem [in-nodes :bool role :string did :string] :string
+  (cond (and (not in-nodes) (not (= role "member"))) "intent/trust-not-in-nodes"
+        (not (did-key-ok? did)) "intent/bad-did"
+        :else "intent/ok"))
+
+(defn cell-problem [name :string digest :string runtime-class :i64 replicas :i64] :string
+  (cond (not (name-ok? name)) "intent/bad-cell-name"
+        (not (and (prefix? digest "sha256:") (= (string-length digest) 71)
+                  (hex64? (string-substring digest 7 71)))) "intent/bad-digest"
+        (not (or (= runtime-class 1) (= runtime-class 2))) "intent/bad-runtime-class"
+        (not (replicas-ok? replicas)) "intent/bad-replicas"
+        :else "intent/ok"))
+
+;; ---------------------------------------------------------------------------
+;; test-* : zero-arity, true when every assertion holds.
+
+(defn test-wire [] :bool
+  (if (and (= (wire-problem 1 2) "intent/ok")
+           (= (wire-problem 2 2) "intent/schema")
+           (= (wire-problem 1 1) "intent/spec-version")
+           (= (wire-problem 2 1) "intent/spec-version")
+           (= (revision-verdict 2026100604 2026100605) "intent/ok")
+           (= (revision-verdict 2026100604 2026100604) "intent/not-advancing")
+           (= (revision-verdict 2026100604 2026100501) "intent/not-advancing")
+           (= (revision-verdict 0 0) "intent/bad-revision")
+           (= (revision-verdict 0 1) "intent/ok"))
+    true false))
+
+(defn test-names [] :bool
+  (if (and (name-ok? "mishima-text") (name-ok? "a") (name-ok? "9.x-y")
+           (not (name-ok? "")) (not (name-ok? "-a")) (not (name-ok? ".a"))
+           (not (name-ok? "Foo")) (not (name-ok? "foo_bar")) (not (name-ok? "a b"))
+           (name-ok? "a123456789b123456789c123456789d123456789e123456789f123456789g123")
+           (not (name-ok? "a123456789b123456789c123456789d123456789e123456789f123456789g1234"))
+           (model-name-ok? "mishima") (model-name-ok? "Qwen2.5-0.5B_Instruct")
+           (not (model-name-ok? "_x")) (not (model-name-ok? "a/b"))
+           (unit-ok? "com.murakumo.mishima") (unit-ok? "cloud.itonami.agent.peer")
+           (unit-ok? "ai.gftd.x-1") (not (unit-ok? "com.murakumo."))
+           (not (unit-ok? "com.example.x")) (not (unit-ok? "com.murakumo.Mishima"))
+           (= (template-unit "llama-server") "com.murakumo.mishima")
+           (= (template-unit "itonami-peer") "cloud.itonami.agent.peer")
+           (not (template-ok? "arbitrary")) (not (template-ok? ""))
+           (replicas-ok? -1) (replicas-ok? 0) (replicas-ok? 256)
+           (not (replicas-ok? 257)) (not (replicas-ok? -2))
+           (max-pressure-ok? 0) (max-pressure-ok? 4) (not (max-pressure-ok? 3))
+           (converge-mode-ok? "enforce") (not (converge-mode-ok? "apply")))
+    true false))
+
+(defn test-strings [] :bool
+  (if (and (did-key-ok? "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK")
+           (not (did-key-ok? "did:web:x"))
+           (not (did-key-ok? "did:key:z6Mk"))
+           ;; 0, I, O and l are not base58
+           (not (did-key-ok? "did:key:z6Mk0abc"))
+           (not (did-key-ok? "did:key:z6MkIabc"))
+           (not (did-key-ok? "did:key:z6Mklabc"))
+           (hex64? "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+           (not (hex64? "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"))
+           (not (hex64? "aaaa"))
+           (model-file-ok? "mishima/model/m.gguf")
+           (not (model-file-ok? "/etc/passwd"))
+           (not (model-file-ok? "mishima/../../x")))
+    true false))
+
+(defn test-forbidden [] :bool
+  (if (and (forbidden? "/bin/sh -c rm" false)
+           ;; a leading "/" alone is enough
+           (forbidden? "/etc/passwd" false)
+           (forbidden? "rm -rf x" false)
+           (forbidden? "x --force" false)
+           (forbidden? "a;b" false) (forbidden? "a|b" false) (forbidden? "a&b" false)
+           (forbidden? "`x`" false) (forbidden? "$HOME" false)
+           (forbidden? "a<b" false) (forbidden? "a>b" false)
+           ;; a tab and JavaScript's non-ASCII spaces count as whitespace
+           (forbidden? "x\t-v" false)
+           (forbidden? "x -v" false)
+           (forbidden? "x　--v" false)
+           (not (forbidden? "mishima-text" false))
+           (not (forbidden? "a -1" false))
+           (not (forbidden? "a - b" false))
+           (not (forbidden? "x -V" false))
+           (not (forbidden? "café -" false))
+           (not (forbidden? "" false))
+           ;; a "file" key is checked by model-file-ok? instead
+           (not (forbidden? "/models/m.gguf" true)))
+    true false))
+
+(defn test-class [] :bool
+  (if (and (= (class-problem "mishima-text" "llama-server" "mishima" true 2 2) "intent/ok")
+           (= (class-problem "itonami-peer" "itonami-peer" "" false -1 4) "intent/ok")
+           (= (class-problem "Bad" "llama-server" "mishima" true 2 2) "intent/bad-class-name")
+           (= (class-problem "x" "arbitrary" "mishima" true 2 2) "intent/unknown-template")
+           (= (class-problem "x" "llama-server" "nope" false 2 2) "intent/unknown-model")
+           (= (class-problem "x" "llama-server" "mishima" true 300 2) "intent/bad-replicas")
+           (= (class-problem "x" "llama-server" "mishima" true 2 3) "intent/bad-max-pressure"))
+    true false))
+
+(defn test-trust [] :bool
+  (if (and (= (trust-problem true "" "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK") "intent/ok")
+           (= (trust-problem false "member" "did:key:z6MkmQMZJpe1wjnYuXLF8XUNvyDcEJQJ2Jjcc6K8sxoj9GdF") "intent/ok")
+           (= (trust-problem false "" "did:key:z6MkmQMZJpe1wjnYuXLF8XUNvyDcEJQJ2Jjcc6K8sxoj9GdF") "intent/trust-not-in-nodes")
+           (= (trust-problem true "" "did:web:x") "intent/bad-did"))
+    true false))
+
+(defn test-cell [] :bool
+  (if (and (= (cell-problem "kaikei" "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 2 1) "intent/ok")
+           (= (cell-problem "kaikei" "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 1 -1) "intent/ok")
+           (= (cell-problem "Kaikei" "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 2 1) "intent/bad-cell-name")
+           (= (cell-problem "kaikei" "kaikei:latest" 2 1) "intent/bad-digest")
+           (= (cell-problem "kaikei" "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" 2 1) "intent/bad-digest")
+           (= (cell-problem "kaikei" "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 2 1) "intent/bad-digest")
+           (= (cell-problem "kaikei" "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 3 1) "intent/bad-runtime-class")
+           (= (cell-problem "kaikei" "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 4 1) "intent/bad-runtime-class")
+           (= (cell-problem "kaikei" "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 2 257) "intent/bad-replicas"))
+    true false))
