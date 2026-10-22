@@ -1,0 +1,48 @@
+;; murakumo fleet decisions in Kotoba: selfhost gate receipt (Linear JUN-315;
+;; com-junkawasaki/root ADR-2610222140 §4). The README "Fleet decisions in
+;; Kotoba" commands, run as written 2026-10-22 on this Mac's podman machine
+;; (applehv, arm64 Linux guest). No Node.js, nbb, JVM or babashka in the build
+;; or the run; the container image supplies only sh. Not part of CI (CDCI is
+;; stopped, AGENTS.md).
+{:schema "murakumo.selfhost-gate.v1"
+ :date "2026-10-22"
+ :compiler {:repo "kotoba-lang/amu"
+            :commit "f5b11a08a88c11ed9f1ab2347400bca1da75d8e9"
+            :path "seed/bootstrap/aarch64-linux-static-root.elf"
+            :sha256 "8256bfd8462c2014bf1864f154e88aa7cbb16eda7754aaabf8bf2303dcfc8dc7"}
+ :host {:runtime "podman --platform linux/arm64 --network none"
+        :image "docker.io/library/python:3.12-alpine"
+        :image-digest "sha256:57f679a3910bed1eb16ad722b904a118bca8586ec8ad39d98dd13350e7062cb2"}
+ :gates [{:source {:path "kotoba/fleet_intent_core.kotoba"
+                   :sha256 "7aa3f26b7fd495c5c6eb01b8a5f8882f2c4400635a37df18fd680f56e944ee16"}
+          :unit-sha256 "67eb28e58ab5d5a0de03b8a9dcba530c929cc1355f7436bfa4260d2ffbf7e1e5"
+          :main "1 + 2 + ... + 64 over the seven test-*"
+          :compile "{:ok true, :target :aarch64-linux, :format :static, :code-bytes 124587, :bytes 131584}"
+          :image-sha256 "0bd1e4dff17f732561bdcedc538d3eee0110640aa2f9e6868880c6ea97eff28b"
+          :result 127 :expected 127}
+         {:source {:path "kotoba/fleet_placement_core.kotoba"
+                   :sha256 "0b26a3637502734d933d73eb589dd058bd82bc620388db6e7a934716cc0b97ed"}
+          :unit-sha256 "f59721313f5db4ab6fe9b5bd8e808aad47287cedbbd9515c06eb1b4c85e75b98"
+          :main "1 + 2 + 4 + 8 + 16 over the five test-*"
+          :compile "{:ok true, :target :aarch64-linux, :format :static, :code-bytes 128163, :bytes 135680}"
+          :image-sha256 "c31d535efb33d36a6dfc4a8f1c6beda319021767ab91d79df3000cd1b0fdbefb"
+          :result 31 :expected 31}]
+ :negative-controls [{:mutation "forbidden? without the leading-\"/\" check"
+                      :unit-sha256 "4f275b395fd08f3fa0aac849dff643dc6e29a98156dffd86c4aa27607523b9c9"
+                      :result 119 :expected 119 :drops ["test-forbidden"]}
+                     {:mutation "base58 letting \"0\" through (in-class? k 2)"
+                      :unit-sha256 "12d4193a7cc0daf66e9e4a28da0d6634a90fc49fa694a674ba4957d0ad95e21a"
+                      :result 123 :expected 123 :drops ["test-strings"]}
+                     {:mutation "placement sorting by descending score"
+                      :unit-sha256 "5fff68333d46bf4a0a3cb605f1863575f7b37753970ff7da1eb382fe069c97fa"
+                      :result 7 :expected 7 :drops ["test-placement" "test-scenarios"]}
+                     {:mutation "pressure compared with >= instead of >"
+                      :unit-sha256 "7a194667ae2f99e09ccafbe12a251b97582793f56e9a64d6d12000ef96a5aaae"
+                      :result 27 :expected 27 :drops ["test-eligible"]}]
+ :parity {:against "src/murakumo/fleet/spec.cljk validate / fresh? / eligible / placement and test/murakumo/fleet/spec_test.cljk"
+          :digests "sha256(class \"\\0\" node) for classes mishima-text and itonami-peer over nodes a bb ccc dddd, computed with Python hashlib"
+          :how "the expected orders follow from those digests by the .cljk's rule (pinned first, then ascending hex); test-scenarios replays the .cljk fixture"
+          :not-run "the .cljk itself (it runs on Node, which is not used)"}
+ :differences ["eligibility reasons are pinned literals (eligible/...), not the .cljk's free-text messages"
+               "two added reasons for itonami cells: eligible/not-active (after disabled) and eligible/runtime-class (last)"
+               "the intent check takes one decoded field at a time; walking the JSON maps stays in the caller (amu#1469)"]}

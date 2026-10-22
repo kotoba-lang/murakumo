@@ -1,0 +1,257 @@
+;; murakumo.fleet-placement — L2 freshness, eligibility and the deterministic
+;; rendezvous placement of src/murakumo/fleet/spec.cljk (`fresh?`, `eligible`,
+;; `placement`), as pure Kotoba (com-junkawasaki/root ADR-2610222140 §3–4;
+;; Linear JUN-315). Every node runs the same function on the same (intent,
+;; observations, now) and gets the same answer; quorum leases settle the rest.
+;;
+;;   fresh?            an observation counts only while younger than ttl
+;;   effective-memory  the node's declared memory-gb, else the observed, else 0
+;;   labels-ok?        every wanted label equals the node's (newline-terminated
+;;                     "key=value" lines; keys are unique, no "=" in a key)
+;;   eligible-reason   eligible/ok, or why not, in the .cljk's order: disabled,
+;;                     cordoned, stale, memory, labels, pressure; plus two for
+;;                     itonami cells (ADR-2610222140): not-active (the node's
+;;                     tsukasa state is not active, after disabled) and
+;;                     runtime-class (the node does not declare the cell's
+;;                     class, last). An inference class passes both as true.
+;;   placement         node indices in placement order: the eligible pinned
+;;                     nodes in input order, then the other eligible nodes by
+;;                     ascending score (the lowercase hex of
+;;                     sha256(class "\0" node), 64 chars per node, joined),
+;;                     ties by input order; the first `replicas` (-1 = all)
+;;   wanted / short?   the replica count asked for, and whether it fell short
+;;
+;; The hash itself is the caller's: one sha256 for the whole stack, not a copy
+;; here. The digests in the tests were computed independently (Python
+;; hashlib), and the expected orders follow from them.
+;;
+;; Written in the Amu selfhost seed subset; README "Fleet decisions in Kotoba"
+;; has the gate.
+(ns murakumo.fleet-placement
+  (:export [fresh? effective-memory effective-max-pressure labels-ok?
+            eligible-reason eligible? placement-problem placement wanted short?
+            test-fresh test-labels test-eligible test-placement test-scenarios]))
+
+;; ---------------------------------------------------------------------------
+;; L2
+
+(defn fresh? [has-obs :bool at-ms :i64 now-ms :i64 ttl-ms :i64] :bool
+  (and has-obs (< (- now-ms at-ms) ttl-ms)))
+
+;; -1 = absent
+(defn effective-memory [node-gb :i64 obs-gb :i64] :i64
+  (cond (>= node-gb 0) node-gb (>= obs-gb 0) obs-gb :else 0))
+
+;; 0 = absent, which is 2
+(defn effective-max-pressure [p :i64] :i64 (if (= p 0) 2 p))
+
+;; ---------------------------------------------------------------------------
+;; Labels
+
+;; the line of want starting at byte i, without its newline
+(defn line-end [s :string i :i64] :i64
+  (let [k (string-index-of (string-substring s i (string-length s)) "\n")]
+    (if (< k 0) (string-length s) (+ i k))))
+
+(defn labels-from? [want :string have-lines :string i :i64] :bool
+  (if (>= i (string-length want)) true
+    (let [e (line-end want i)
+          line (string-substring want i e)]
+      (if (< (string-index-of have-lines (string-concat "\n" (string-concat line "\n"))) 0)
+        false
+        (labels-from? want have-lines (+ e 1))))))
+
+(defn labels-ok? [want :string have :string] :bool
+  (labels-from? want (string-concat "\n" have) 0))
+
+;; ---------------------------------------------------------------------------
+;; Eligibility
+
+(defn eligible-reason [enabled :bool active :bool cordoned :bool fresh :bool
+                       memory-gb :i64 min-gb :i64 labels :bool
+                       pressure :i64 max-pressure :i64 class-held :bool] :string
+  (cond (not enabled) "eligible/disabled"
+        (not active) "eligible/not-active"
+        cordoned "eligible/cordoned"
+        (not fresh) "eligible/stale"
+        (and (> min-gb 0) (< memory-gb min-gb)) "eligible/memory"
+        (not labels) "eligible/labels"
+        (and (> pressure 0) (> pressure (effective-max-pressure max-pressure))) "eligible/pressure"
+        (not class-held) "eligible/runtime-class"
+        :else "eligible/ok"))
+
+(defn eligible? [reason :string] :bool (= reason "eligible/ok"))
+
+;; ---------------------------------------------------------------------------
+;; Placement
+
+(defn placement-problem [elig :vector-i64 pinned :vector-i64 scores :string replicas :i64] :string
+  (cond (not (= (vector-count pinned) (vector-count elig))) "placement/bad-input"
+        (not (= (string-length scores) (* 64 (vector-count elig)))) "placement/bad-input"
+        (< replicas -1) "placement/bad-input"
+        :else "placement/ok"))
+
+(defn member? [v :vector-i64 x :i64 j :i64] :bool
+  (cond (>= j (vector-count v)) false
+        (= (vector-at v j) x) true
+        :else (member? v x (+ j 1))))
+
+(defn score-of [scores :string i :i64] :string
+  (string-substring scores (* i 64) (+ (* i 64) 64)))
+
+(defn collect-pinned [elig :vector-i64 pinned :vector-i64 i :i64 acc :vector-i64] :vector-i64
+  (if (>= i (vector-count elig)) acc
+    (collect-pinned elig pinned (+ i 1)
+                    (if (and (= (vector-at elig i) 1) (= (vector-at pinned i) 1))
+                      (vector-conj acc i) acc))))
+
+;; the lowest-scored eligible, unpinned index not yet in acc; -1 for none.
+;; Strict < keeps the earlier index on a tie.
+(defn best-other [elig :vector-i64 pinned :vector-i64 scores :string acc :vector-i64
+                  i :i64 best :i64] :i64
+  (if (>= i (vector-count elig)) best
+    (best-other elig pinned scores acc (+ i 1)
+                (if (and (= (vector-at elig i) 1) (= (vector-at pinned i) 0)
+                         (not (member? acc i 0))
+                         (or (< best 0)
+                             (< (string-compare (score-of scores i) (score-of scores best)) 0)))
+                  i best))))
+
+(defn fill-others [elig :vector-i64 pinned :vector-i64 scores :string acc :vector-i64] :vector-i64
+  (let [b (best-other elig pinned scores acc 0 -1)]
+    (if (< b 0) acc (fill-others elig pinned scores (vector-conj acc b)))))
+
+(defn take-first [v :vector-i64 k :i64 i :i64 acc :vector-i64] :vector-i64
+  (if (or (>= i k) (>= i (vector-count v))) acc
+    (take-first v k (+ i 1) (vector-conj acc (vector-at v i)))))
+
+(defn placement [elig :vector-i64 pinned :vector-i64 scores :string replicas :i64] :vector-i64
+  (if (= (placement-problem elig pinned scores replicas) "placement/ok")
+    (let [ordered (fill-others elig pinned scores (collect-pinned elig pinned 0 []))]
+      (if (= replicas -1) ordered (take-first ordered replicas 0 [])))
+    []))
+
+(defn count-ones [v :vector-i64 i :i64 n :i64] :i64
+  (if (>= i (vector-count v)) n
+    (count-ones v (+ i 1) (if (= (vector-at v i) 1) (+ n 1) n))))
+
+(defn wanted [replicas :i64 elig :vector-i64] :i64
+  (if (= replicas -1) (count-ones elig 0 0) replicas))
+
+(defn short? [replicas :i64 chosen :i64] :bool
+  (and (>= replicas 0) (< chosen replicas)))
+
+;; ---------------------------------------------------------------------------
+;; test-* : zero-arity, true when every assertion holds.
+
+(defn same? [a :vector-i64 b :vector-i64 i :i64] :bool
+  (cond (not (= (vector-count a) (vector-count b))) false
+        (>= i (vector-count a)) true
+        (= (vector-at a i) (vector-at b i)) (same? a b (+ i 1))
+        :else false))
+
+(defn test-fresh [] :bool
+  (if (and (fresh? true 1000000 1000000 300000)
+           (fresh? true 700001 1000000 300000)
+           (not (fresh? true 700000 1000000 300000))
+           (not (fresh? true 0 1000000 300000))
+           (not (fresh? false 1000000 1000000 300000))
+           (= (effective-memory 16 32) 16)
+           (= (effective-memory -1 32) 32)
+           (= (effective-memory 0 32) 0)
+           (= (effective-memory -1 -1) 0)
+           (= (effective-max-pressure 0) 2)
+           (= (effective-max-pressure 4) 4))
+    true false))
+
+(defn test-labels [] :bool
+  (if (and (labels-ok? "" "")
+           (labels-ok? "" "gpu=b70\n")
+           (labels-ok? "gpu=b70\n" "gpu=b70\nsite=home\n")
+           (labels-ok? "site=home\ngpu=b70\n" "gpu=b70\nsite=home\n")
+           (not (labels-ok? "gpu=b70\n" "gpu=b7\n"))
+           (not (labels-ok? "gpu=b7\n" "gpu=b70\n"))
+           (not (labels-ok? "pu=b70\n" "gpu=b70\n"))
+           (not (labels-ok? "a=1\n" ""))
+           (not (labels-ok? "a=1\nb=2\n" "a=1\n")))
+    true false))
+
+(defn test-eligible [] :bool
+  (if (and (= (eligible-reason true true false true 16 16 true 1 2 true) "eligible/ok")
+           (= (eligible-reason false false true false 0 16 false 4 2 false) "eligible/disabled")
+           (= (eligible-reason true false true false 0 16 false 4 2 false) "eligible/not-active")
+           (= (eligible-reason true true true false 0 16 false 4 2 false) "eligible/cordoned")
+           (= (eligible-reason true true false false 0 16 false 4 2 false) "eligible/stale")
+           (= (eligible-reason true true false true 8 16 false 4 2 false) "eligible/memory")
+           (= (eligible-reason true true false true 16 16 false 4 2 false) "eligible/labels")
+           (= (eligible-reason true true false true 16 16 true 4 2 false) "eligible/pressure")
+           (= (eligible-reason true true false true 16 16 true 4 4 false) "eligible/runtime-class")
+           ;; no min-memory, no pressure observed, max-pressure absent (2)
+           (= (eligible-reason true true false true 0 0 true 0 0 true) "eligible/ok")
+           (= (eligible-reason true true false true 0 0 true 2 0 true) "eligible/ok")
+           (= (eligible-reason true true false true 0 0 true 3 0 true) "eligible/pressure")
+           (eligible? "eligible/ok") (not (eligible? "eligible/memory")))
+    true false))
+
+;; sha256(class "\0" node) for nodes a, bb, ccc, dddd (Python hashlib)
+(defn mishima-scores [] :string
+  "0e0adf8cf0ce92f36fa6aa4927f1fc222e7a9914470af2b842e4e43cf0ed856f21a176c2ba41b670ae1cd0324805046366ab42ba4f84a7117c642087205017e59b337b76ecdd79cc9b72016a1a9a1855e4d75607ddca9b5317b0e85e86a6c4fe507f5ff6441e1df7bbf8f32b4679c9fe69fb320299fb403ca66da398eef8df48")
+
+(defn peer-scores [] :string
+  "5f182fb5d2262e703d6b6f0450ea3dc98158d7f260202dc22576f573589d479373df924df82304a46c31cc55f7a0a2ce199516318ca34cd71bacaf848e84bda259c7ac50406850c12f5dc80dbee68ea0f5715a2e237389527ab453fa6ef1ff3f09c9bc576d2f0fcc749ff4cc087c8719c07686bac6f15e1e492a27e96cebd0d3")
+
+(defn test-placement [] :bool
+  (if (and ;; unpinned, all: the hash order dddd ccc a bb
+           (same? (placement [1 1 1 1] [0 0 0 0] (peer-scores) -1) [3 2 0 1] 0)
+           (same? (placement [1 1 1 1] [0 0 0 0] (mishima-scores) -1) [0 1 3 2] 0)
+           ;; a pinned node first, then the hash order
+           (same? (placement [1 1 1 1] [0 0 1 0] (mishima-scores) -1) [2 0 1 3] 0)
+           (same? (placement [1 1 1 0] [1 0 0 0] (mishima-scores) 2) [0 1] 0)
+           ;; a pinned node that is not eligible is not placed
+           (same? (placement [0 1 1 1] [1 0 0 0] (mishima-scores) 2) [1 3] 0)
+           (same? (placement [0 0 0 0] [0 0 0 0] (mishima-scores) 2) [] 0)
+           (same? (placement [1 1 1 1] [0 0 0 0] (mishima-scores) 0) [] 0)
+           ;; equal scores keep input order
+           (same? (placement [1 1] [0 0] (string-concat (score-of (mishima-scores) 2) (score-of (mishima-scores) 2)) -1) [0 1] 0)
+           ;; malformed input places nothing
+           (= (placement-problem [1 1] [0] (mishima-scores) 1) "placement/bad-input")
+           (= (placement-problem [1 1 1 1] [0 0 0 0] "abc" 1) "placement/bad-input")
+           (= (placement-problem [1 1 1 1] [0 0 0 0] (mishima-scores) -2) "placement/bad-input")
+           (same? (placement [1 1 1 1] [0 0 0 0] "abc" 1) [] 0)
+           (= (wanted -1 [1 0 1 1]) 3) (= (wanted 2 [1 0 1 1]) 2)
+           (short? 2 1) (not (short? 2 2)) (not (short? -1 0)))
+    true false))
+
+;; murakumo test/murakumo/fleet/spec_test.cljk's fixture: nodes a (pinned to
+;; mishima-text), bb, ccc, dddd (8 GB, the others 16); mishima-text wants 2 on
+;; >= 16 GB at pressure <= 2; itonami-peer wants all at pressure <= 4.
+(defn elig-bit [enabled :bool fresh :bool mem :i64 min-gb :i64 pressure :i64 max-p :i64] :i64
+  (if (eligible? (eligible-reason enabled true false fresh mem min-gb true pressure max-p true)) 1 0))
+
+(defn test-scenarios [] :bool
+  (let [now 1000000 ttl 300000
+        ;; placement-is-deterministic: every node fresh at pressure 1
+        m1 (vector-conj (vector-conj (vector-conj (vector-conj []
+              (elig-bit true (fresh? true now now ttl) 16 16 1 2))
+              (elig-bit true (fresh? true now now ttl) 16 16 1 2))
+              (elig-bit true (fresh? true now now ttl) 16 16 1 2))
+              (elig-bit true (fresh? true now now ttl) 8 16 1 2))
+        p1 (vector-conj (vector-conj (vector-conj (vector-conj []
+              (elig-bit true (fresh? true now now ttl) 16 0 1 4))
+              (elig-bit true (fresh? true now now ttl) 16 0 1 4))
+              (elig-bit true (fresh? true now now ttl) 16 0 1 4))
+              (elig-bit true (fresh? true now now ttl) 8 0 1 4))
+        ;; stale-is-unknown-and-pressure-excludes: a stale, bb at pressure 4
+        m2 (vector-conj (vector-conj (vector-conj (vector-conj []
+              (elig-bit true (fresh? true 0 now ttl) 16 16 1 2))
+              (elig-bit true (fresh? true now now ttl) 16 16 4 2))
+              (elig-bit true (fresh? true now now ttl) 16 16 1 2))
+              (elig-bit true (fresh? true now now ttl) 8 16 1 2))
+        c2 (placement m2 [1 0 0 0] (mishima-scores) 2)]
+    (if (and (same? m1 [1 1 1 0] 0)
+             (same? (placement m1 [1 0 0 0] (mishima-scores) 2) [0 1] 0)
+             (same? (placement p1 [0 0 0 0] (peer-scores) -1) [3 2 0 1] 0)
+             (same? m2 [0 0 1 0] 0)
+             (same? c2 [2] 0)
+             (short? 2 (vector-count c2)))
+      true false)))
