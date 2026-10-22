@@ -185,8 +185,8 @@
                 http-kit/http-kit {:mvn/version "2.8.1"}}
    :main-opts ["-m" "cognitect.test-runner" "-n" "murakumo.infer-test"]}
   ;; Leftover JVM test path for the kwik/witness-quorum-dependent overlay
-  ;; library (not an operator start). Default CI is kotoba compile / kotoba
-  ;; run; this alias is leftover-jvm workflow_dispatch only.
+  ;; library (not an operator start). No workflow runs it: the JVM is not
+  ;; part of CI/CD (AGENTS.md).
   :test {;; cloud-murakumo/src is TEST-ONLY, for the API-key parity gate
          ;; (murakumo.apikey-parity-test): keys minted here must be byte-identical
          ;; to, and accepted by, the namespace that actually VERIFIES them. A
@@ -222,8 +222,8 @@
                       ;; the opt-in alias -- this repo has no entry in
                       ;; scripts/fleet-ci/gates.edn. Default CI is now job
                       ;; kotoba-operator (kotoba compile wasm+web, file-on-disk,
-                      ;; guest-run). Leftover JVM is leftover-jvm.yml,
-                      ;; workflow_dispatch only. `oracle/open-native!` resolves
+                      ;; guest-run). No workflow runs the JVM
+                      ;; (AGENTS.md). `oracle/open-native!` resolves
                       ;; it at call time, so nothing that only runs the
                       ;; interpreter inherits it. The full 735-export sweep
                       ;; stays opt-in.
