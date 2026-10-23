@@ -1,0 +1,112 @@
+;; murakumo.fleet-agent-step -- a bot's agent turn as a murakumo job for
+;; itonami nodes (Linear JUN-289): the job's identity, and which node's
+;; receipt confirms it when more than one node ran it.
+;;
+;;   job-text / job-id  the job, canonical JSON of the issue's fields, and its
+;;                      SHA-256:
+;;                      {"input":<CID>,"kind":"itonami.agent-step/1",
+;;                       "policy":<CID>,"profile":"sha256:..","rail":..}
+;;                      profile is the bot profile's OCI digest; input and
+;;                      policy (the capability bound) are CIDv1; rail is an
+;;                      itonami inference rail, murakumo or mishima, never a
+;;                      Hermes model provider (itonami-agent "Two CLIs")
+;;   job-problem        "job/ok" or the first field that is not one of those
+;;   receipt-text       the node's signed execution receipt for one run:
+;;                      {"at":ms,"did":..,"epoch":n,"exit":n,"job":<id>,
+;;                       "kind":"itonami.agent-step-receipt/1","node":..,
+;;                       "output":<CID>}
+;;   receipt-verdict    "job/confirmed" only for the receipt signed by the
+;;                      job lease's current holder at the lease's current
+;;                      epoch (sahai.fence: a stolen or re-taken lease has a
+;;                      higher epoch), so a job that two nodes ran is
+;;                      confirmed once. Otherwise job/bad-signature,
+;;                      job/not-the-holder, job/stale-epoch or
+;;                      job/bad-output-cid.
+;;
+;; Placement (runtime class, capability) is fleet_cell_placement's and
+;; fleet_cell_launch's; the lease registry and the clock are the caller's,
+;; as in sahai.fence.
+;;
+;; Composition order: sha2.core, ed25519.selfhost, jcs.reader,
+;; oci.itonami-artifact, tsukasa ledger_core and node_state,
+;; fleet_node_enrollment, sahai.fence, this file. docs/agent-step.md has the
+;; gate.
+(ns murakumo.fleet-agent-step
+  (:export [job-text job-id job-problem receipt-text receipt-verdict test-agent-step]))
+
+(defn- as-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn job-text [profile :string input :string policy :string rail :string] :string
+  (str "{\"input\":\"" input "\",\"kind\":\"itonami.agent-step/1\",\"policy\":\"" policy
+       "\",\"profile\":\"" profile "\",\"rail\":\"" rail "\"}"))
+
+(defn job-id [profile :string input :string policy :string rail :string] :string
+  (sha256-hex (as-bytes (job-text profile input policy rail))))
+
+(defn job-problem [profile :string input :string policy :string rail :string] :string
+  (cond (not (= (digest-problem profile) "oci/ok")) (digest-problem profile)
+        (= (cid-digest input) "") "job/bad-input-cid"
+        (= (cid-digest policy) "") "job/bad-policy-cid"
+        (not (or (= rail "murakumo") (= rail "mishima"))) "job/not-an-itonami-rail"
+        :else "job/ok"))
+
+(defn receipt-text [at :i64 did :string epoch :i64 exit :i64 job :string node :string output :string] :string
+  (str "{\"at\":" at ",\"did\":\"" did "\",\"epoch\":" epoch ",\"exit\":" exit ",\"job\":\"" job
+       "\",\"kind\":\"itonami.agent-step-receipt/1\",\"node\":\"" node "\",\"output\":\"" output "\"}"))
+
+;; holder-did and holder-epoch: the job lease as the fence holds it now
+(defn receipt-verdict [holder-did :string holder-epoch :i64
+                       at :i64 did :string epoch :i64 exit :i64 job :string node :string output :string
+                       sig :string] :string
+  (cond (not (= (statement-problem did (receipt-text at did epoch exit job node output) sig) "enroll/ok")) "job/bad-signature"
+        (not (= did holder-did)) "job/not-the-holder"
+        (not (= epoch holder-epoch)) "job/stale-epoch"
+        (= (cid-digest output) "") "job/bad-output-cid"
+        :else "job/confirmed"))
+
+;; ---------------------------------------------------------------------------
+;; test-agent-step: the job, CIDs and receipts from Python hashlib and
+;; OpenSSL 3 (RFC 8032 keys 1 and 2; docs/evidence/agent-step-vectors-20261023.py).
+
+(defn- as-profile [] :string "sha256:6e5ac5ef12cd31e4889ec39bc8944e41cbca613829e5dad43c2eb401239c9ea8")
+(defn- as-input [] :string "bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey")
+(defn- as-policy [] :string "bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq")
+(defn- as-job [] :string "{\"input\":\"bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey\",\"kind\":\"itonami.agent-step/1\",\"policy\":\"bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq\",\"profile\":\"sha256:6e5ac5ef12cd31e4889ec39bc8944e41cbca613829e5dad43c2eb401239c9ea8\",\"rail\":\"murakumo\"}")
+(defn- as-jobId [] :string "ded77d4a699b728ef3ba67c14e4d26a76160bbc7a129ea75543cf9e6d07a73f1")
+(defn- as-output [] :string "bafkreicjiv65wa2mvyywylconw3pslnbwlzyogs4jpo5qwqllx4y4lvyey")
+(defn- as-didA [] :string "did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw")
+(defn- as-didB [] :string "did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT")
+(defn- as-sigA [] :string "fexM4p1nN9LbX6skAnkWf_LmBMm3gPr0EReedU2WVl7LplzEF-g3Rn-46MmKDa-hX9Q2UJiRTgJX2S-2TTAeCg")
+(defn- as-sigB [] :string "PQuZKItFpqgWXBWrU_DdpirWBuSrNsrKRDNZng-l3Zx4drEtBr-yRw8YSlU9oLCHWzu39JgNtFTzhi3BsZlVAg")
+(defn- as-sigBbyA [] :string "MmuVQAqM8yKH-lr2Fx3ILK32Vh-Dtfu59Ye3BArgYY8Bc8T-99369A1y4sHnNEZNqJ82HY9e9j4DO3bCcSrJCA")
+
+(defn- as-verdict [holder :string hepoch :i64 did :string epoch :i64 exit :i64 node :string sig :string] :string
+  (receipt-verdict holder hepoch 1792500000000 did epoch exit (as-jobId) node (as-output) sig))
+
+(defn test-agent-step [] :bool
+  (let [;; b70 takes the free lease at epoch 1; k16 cannot while it lives; once it
+        ;; expired, k16 steals it and the epoch goes to 2
+        r1 (claim-reason false "" false 0 1 "b70") e1 (claimed-epoch r1 0 1 true)
+        r2 (claim-reason true "b70" false e1 1 "k16")
+        r3 (claim-reason true "b70" true e1 1 "k16") e3 (claimed-epoch r3 e1 1 true)
+        a (as-verdict (as-didB) e3 (as-didA) 1 0 "b70" (as-sigA))
+        b (as-verdict (as-didB) e3 (as-didB) 2 0 "k16" (as-sigB))]
+    (and (= (job-text (as-profile) (as-input) (as-policy) "murakumo") (as-job))
+         (= (job-id (as-profile) (as-input) (as-policy) "murakumo") (as-jobId))
+         (= (job-problem (as-profile) (as-input) (as-policy) "murakumo") "job/ok")
+         (= (job-problem (as-profile) (as-input) (as-policy) "mishima") "job/ok")
+         (= (job-problem (as-profile) (as-input) (as-policy) "openrouter") "job/not-an-itonami-rail")
+         (= (job-problem "sha512:00" (as-input) (as-policy) "murakumo") "itonami/unsupported-digest")
+         (= (job-problem (as-profile) "bnot-a-cid" (as-policy) "murakumo") "job/bad-input-cid")
+         (= (job-problem (as-profile) (as-input) (as-profile) "murakumo") "job/bad-policy-cid")
+         (= r1 "fence/free") (= e1 1) (= r2 "fence/held-by-other") (= r3 "fence/steal-expired") (= e3 2)
+         ;; both nodes ran it; only the holder at the current epoch is confirmed
+         (= b "job/confirmed") (= a "job/not-the-holder")
+         (= (+ (if (= a "job/confirmed") 1 0) (if (= b "job/confirmed") 1 0)) 1)
+         ;; k16's own receipt from before it took the lease again, at epoch 3
+         (= (as-verdict (as-didB) 3 (as-didB) 2 0 "k16" (as-sigB)) "job/stale-epoch")
+         ;; k16's receipt text signed by b70's key; and a changed exit code
+         (= (as-verdict (as-didB) 2 (as-didB) 2 0 "k16" (as-sigBbyA)) "job/bad-signature")
+         (= (as-verdict (as-didB) 2 (as-didB) 2 1 "k16" (as-sigB)) "job/bad-signature")
+         ;; the receipts are canonical JSON
+         (json-canonical? (as-bytes (receipt-text 1792500000000 (as-didB) 2 0 (as-jobId) "k16" (as-output)))))))

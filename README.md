@@ -556,6 +556,18 @@ operator-signed topology document that `replicated_topology` replicates.
 Nine documents signed by OpenSSL, serialized out of order, pass or fail as
 they should. Reproduction: [topology verify](docs/topology-verify.md).
 
+`kotoba/fleet_agent_step.kotoba` treats a bot's agent turn as a murakumo job
+(JUN-289).
+
+- **The job.** It is the canonical JSON of the bot profile's OCI digest, the
+  input and policy CIDs, and an itonami inference rail (`murakumo` or
+  `mishima`, never a Hermes provider). Its id is that text's SHA-256.
+- **Confirmation.** `receipt-verdict` confirms a run only from the receipt
+  signed by the job lease's current holder at the lease's current epoch
+  (sahai's fence). A job that two nodes ran is confirmed once.
+
+Reproduction: [agent step](docs/agent-step.md).
+
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
 `qwen3.8-flash-next-ud-iq3-xxs` is a single-node, lossless Qwen4Exp route for
