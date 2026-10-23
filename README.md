@@ -569,8 +569,10 @@ nodes, as `replicated_topology` `start!` does:
 - it adopts a verified, advancing document that keeps every owner-id, and
   records a same-revision conflict.
 
-A replica chain carries revision 8 to the file the voters follow, and k16 is
-then chosen. Peers that serve a forged, older, owner-replacing or conflicting
+Its peers are the seeds and the payload's gateway and node urls, polled with
+a fanout and a moving cursor. A replica chain carries revision 8 to the file
+the voters follow, and k16 is then chosen. Replicas in separate containers on
+tailnet addresses find each other through the payload alone. Peers that serve a forged, older, owner-replacing or conflicting
 document are each kept out. Reproduction:
 [topology replica](docs/topology-replica.md).
 
