@@ -464,6 +464,35 @@ Amu-built loaderless static image. It is a source-unity composition gate;
 it does not qualify the project linker or a deployed node agent.
 Reproduction and hashes: [cell integration gate](docs/cell-placement-integration.md).
 
+### Itonami node enrollment: signed declaration and heartbeat
+
+`kotoba/fleet_node_enrollment.kotoba` is the caller that the cell adapter
+assumes: "The caller verifies signed L1/L2 inputs before deriving the node
+state." It verifies the two statements a node signs with its own did:key:
+- its declaration, whose SHA-256 digest the operator admits in L1;
+- its heartbeat, carrying the time, the declaration it attests and its own
+  drain mark.
+
+Only then do the statements' facts reach tsukasa's `node-target`, through
+`signed-target`.
+
+- **Encoding.** did:key decoding is strict, and signatures are canonical
+  base64url. The texts are the sorted-key JSON murakumo already signs.
+- **Node side.** `sign-declaration` and `sign-heartbeat` produce OpenSSL's
+  bytes.
+- **The gate.** A loaderless static image combines four pinned bodies with
+  this file: org-nist-sha2's `sha2.core`, org-ietf-ed25519's Ed25519, and
+  tsukasa's ledger and node state. It reports 511. Three controls are
+  measured: unsigned declarations accepted (351), old heartbeats counted as
+  fresh (63), and a non-canonical did:key accepted (503).
+- **A runtime limit.** Each Ed25519 operation keeps about 10 MiB that the
+  image does not reclaim. A continuously running agent has to account for
+  that.
+
+The L1 operator signature, peer transport, persistence and two-node
+convergence are not part of this gate. Reproduction, wire forms and hashes:
+[node enrollment](docs/node-enrollment.md).
+
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
 `qwen3.8-flash-next-ud-iq3-xxs` is a single-node, lossless Qwen4Exp route for
