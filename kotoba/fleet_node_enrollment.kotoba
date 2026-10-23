@@ -51,6 +51,7 @@
   (:export [did-key-public did-key-problem did-from-public field-problem
             declaration-text declaration-digest declaration-problem sign-declaration
             heartbeat-text heartbeat-problem sign-heartbeat signed-target signed-step node-did
+            sign-statement statement-problem
             test-did test-signature-encoding test-declaration test-heartbeat
             test-signed-target test-signed-path test-signed-step]))
 
@@ -252,6 +253,18 @@
   (let [out (vector-alloc 64) z (sign-into out seed (en-bytes (heartbeat-text node did decl at drain)))]
     (en-b64-encode out)))
 
+;; any other statement text (a receipt, for one): the same signature form.
+;; The text carries its own kind; a caller checks the kind it expects.
+(defn sign-statement [seed :vector-i64 text :string] :string
+  (let [out (vector-alloc 64) z (sign-into out seed (en-bytes text))]
+    (en-b64-encode out)))
+
+(defn statement-problem [did :string text :string sig :string] :string
+  (cond (not (= (did-key-problem did) "enroll/ok")) (did-key-problem did)
+        (not (en-sig-ok? sig)) "enroll/signature-encoding"
+        (not (arena-scope (verify? (did-key-public did) (en-bytes text) (en-sig-bytes sig)))) "enroll/bad-signature"
+        :else "enroll/ok"))
+
 ;; node-target over verified inputs: the declaration's problem and digest
 ;; come from the signed declaration; fresh and self-drain only from a valid
 ;; heartbeat for that declaration (no valid heartbeat = not fresh, no drain
@@ -366,6 +379,10 @@
          (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) at false (en-hb1) now 30000 5000) "enroll/ok")
          ;; the node's side gives OpenSSL's bytes
          (= (sign-heartbeat (en-seed1) (en-did1) "b70" (en-dA) at false) (en-hb1))
+         ;; a heartbeat is also a statement; another text is not
+         (= (statement-problem (en-did1) (heartbeat-text "b70" (en-did1) (en-dA) at false) (en-hb1)) "enroll/ok")
+         (= (statement-problem (en-did1) (heartbeat-text "b70" (en-did1) (en-dA) at true) (en-hb1)) "enroll/bad-signature")
+         (= (sign-statement (en-seed1) (heartbeat-text "b70" (en-did1) (en-dA) at false)) (en-hb1))
          ;; the drain mark is signed
          (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) at true (en-hb1) now 30000 5000) "enroll/heartbeat-bad-signature")
          (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) at true (en-hb2) now 30000 5000) "enroll/ok")

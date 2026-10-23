@@ -1,0 +1,182 @@
+# Itonami cell run: launch an admitted cell and sign its receipt
+
+Tracked in [JUN-288](https://linear.app/kotobalabs/issue/JUN-288), under
+com-junkawasaki/root ADR-2610222140 §3, steps 4 to 7. The acceptance there
+names one OCI artifact holding a loaderless static image built by Amu
+selfhost. It must:
+- start on a node after its digest is checked;
+- return a signed receipt;
+- be refused, with a reason, on a node that does not declare or grant its
+  class;
+- never start when its digest does not match.
+
+This gate does exactly that on one node.
+
+`kotoba/fleet_cell_run.kotoba` is the node agent's run, one static image:
+
+1. Read the node's Ed25519 seed from its key file (wire 35).
+2. Sign its own declaration and heartbeat, and derive its ledger state with
+   `signed-step` against the L1 admitted digest
+   ([node enrollment](node-enrollment.md)).
+3. Read the release's image index and decide with `launch-verdict`
+   ([cell launch](cell-launch.md)):
+   - the node is active;
+   - SHA-256 of the bytes is the L1 cell digest;
+   - the bytes are strict JSON;
+   - it is an itonami index whose class annotation is the L1 class;
+   - the host policy allows the class.
+4. Start the container with wire 20, which may run only the granted
+   `/usr/bin/podman`, with a fixed argv: `run --rm --pull never --network
+   none --read-only <repo>@<the first manifest's digest>`. The image's own
+   entry runs. Stdin is at end of file, and stdout comes back (at most
+   16 KiB, within 10 s). A refused cell starts nothing.
+5. Write the receipt in canonical JSON. `jcs.reader`'s `json-canonical?`
+   holds for it. It is signed with the node's key (`sign-statement`):
+   `{"at":ms,"cell":<index CID>,"did":..,"exit":n,"kind":"itonami.receipt/1","node":..,"output":<CID of stdout>}`.
+
+The cell is `kotoba` source, about two lines, compiled by the same Amu root
+and put in a `FROM scratch` image.
+
+## Reproduce
+
+This needs a Linux host with rootless podman. On macOS that host is the
+podman machine: the agent runs inside it through `podman machine ssh`, and
+the machine mounts `/Users`. Run the commands from this repository with
+clean pinned sources. Choose a new task-owned directory for `G`.
+
+```sh
+AMU=/Users/junkawasaki/github/kotoba-lang/amu
+K=/Users/junkawasaki/github/kotoba-lang
+G=/Users/junkawasaki/github/workspaces/<agent>/<task>
+mkdir -p "$G"
+git -C "$AMU" show 457042ab741520980bceb5bf12970937d1bc8dba:seed/bootstrap/aarch64-linux-static-root.elf > "$G/root.elf"
+chmod +x "$G/root.elf"
+# Expected compiler SHA-256: 1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e
+shasum -a 256 "$G/root.elf"
+cat > "$G/cell.kotoba" <<'EOF'
+(ns itonami-demo-cell (:export [main]))
+(defn main [] :i64 (let [x (typed-cap-call :io/write :string :string "itonami cell: hello from a loaderless static image\n")] 0))
+EOF
+pin() { git -C "$K/$1" show "$2:$3" | sed '1,/\]))$/d'; }
+{
+  echo '(ns itonami-cell-run (:export [main]))'
+  pin org-nist-sha2 ea83e70a6a8efb8fb12dd5f0031fcda35a9ec77b kotoba/sha2/core.kotoba
+  pin org-ietf-ed25519 6f17477b5be91a0c8c369b8d30e7e5ea0c10a8aa kotoba/ed25519/selfhost.kotoba
+  pin org-ietf-jcs 6dfee43e80c273eb7d473c0a01e2779662a4a7c3 kotoba/jcs/reader.kotoba
+  pin org-oci-distribution 90463924db65eea4d9021dc6623105472282b5a9 kotoba/oci/itonami_artifact.kotoba
+  pin grant fa7e9b567286cd38cc4b229d8c980bfe676d9cce kotoba/grant/runtime_class.kotoba
+  pin tsukasa 03e2322489839be2176d5c23d0ccb4120d1b0ee8 kotoba/tsukasa/ledger_core.kotoba
+  pin tsukasa 03e2322489839be2176d5c23d0ccb4120d1b0ee8 kotoba/tsukasa/node_state.kotoba
+  sed '1,/\]))$/d' kotoba/fleet_node_enrollment.kotoba
+  sed '1,/\]))$/d' kotoba/fleet_cell_launch.kotoba
+  sed '1,/\]))$/d' kotoba/fleet_cell_run.kotoba
+  echo '(defn main [] :i64 (cell-run-main))'
+} > "$G/agent.kotoba"
+# a control agent that starts the container whatever the verdict says
+sed 's/(if (not (= verdict "launch\/ok")) 1/(if false 1/' "$G/agent.kotoba" > "$G/unchecked.kotoba"
+podman run --rm --pull never --platform linux/arm64 --network none \
+  -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
+    for c in cell agent unchecked; do
+      rm -f /gate/$c.elf
+      ./root.elf compile /gate/$c.kotoba --target aarch64-linux --output /gate/$c.elf --format static >/dev/null || exit 1
+      chmod +x /gate/$c.elf
+    done'
+printf 'FROM scratch\nCOPY cell.elf /cell\nENTRYPOINT ["/cell"]\n' > "$G/Containerfile"
+podman build -q --platform linux/arm64 -t localhost/itonami-cell-demo:jun288 -f "$G/Containerfile" "$G"
+MD=$(podman image inspect --format '{{.Digest}}' localhost/itonami-cell-demo:jun288)
+# RFC 8032 test key 1, for this gate only
+printf '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60\n' > "$G/node.key"
+python3 -I - "$G" "$MD" <<'PY'
+import hashlib, sys
+g, md = sys.argv[1], sys.argv[2]
+m = '{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"' + md + '","size":0}'
+for name, cls in [("release", "container"), ("other", "wasm")]:
+    b = ('{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","artifactType":"application/vnd.itonami.app.v1",'
+         f'"manifests":[{m}],"annotations":{{"org.itonami.runtime-class":"{cls}"}}}}').encode()
+    open(f"{g}/{name}.json", "wb").write(b)
+    open(f"{g}/{name}.digest", "w").write("sha256:" + hashlib.sha256(b).hexdigest())
+PY
+R=$(cat "$G/release.digest"); O=$(cat "$G/other.digest")
+A=9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29   # L1: b70's admitted declaration
+N=1792500000000
+run() {  # name image index-file l1-digest class admitted allow
+  podman machine ssh -- "cd $G && env KEXE_ALLOW=20,35,37,38 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_20=/usr/bin/podman \
+    KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH ./$2.elf $G/$3 $4 $5 localhost/itonami-cell-demo $G/node.key b70 site-a $6 $N $7" \
+    > "$G/$1.out" 2>&1 || true   # a refused cell exits 1
+  echo "$1: $(head -1 "$G/$1.out")$(grep -q '^exit ' "$G/$1.out" && echo ', container ran')"
+}
+run honest agent release.json "$R" container "$A" 2
+run digest-mismatch agent release.json "$O" container "$A" 2
+run class-mismatch agent other.json "$O" container "$A" 2
+run not-granted agent release.json "$R" container "$A" 1
+run not-admitted agent release.json "$R" container 0000000000000000000000000000000000000000000000000000000000000000 2
+run control unchecked release.json "$O" container "$A" 2
+```
+
+Expected output, measured on 2026-10-23 (the podman machine, arm64 Linux
+6.15, rootless podman):
+
+```text
+honest: verdict launch/ok, container ran
+digest-mismatch: verdict launch/digest-mismatch
+class-mismatch: verdict itonami/runtime-class-mismatch
+not-granted: verdict grant/runtime-class-not-granted
+not-admitted: verdict launch/node-not-active
+control: verdict launch/digest-mismatch, container ran
+```
+
+- **not-admitted.** L1 admits another declaration, so the node's own state
+  is `admitted` (held, `node/declaration-changed`) and not `active`.
+- **control.** The same mismatched release is started anyway by an agent
+  that ignores the verdict. The verdict is what keeps a mismatched release
+  from starting.
+
+**Check the honest receipt independently.** OpenSSL verifies the Ed25519
+signature with the did's key, and `hashlib` recomputes both CIDs and the
+canonical text:
+
+```sh
+python3 -I - "$G" <<'PY'
+import base64, hashlib, json, subprocess, sys, os
+g = sys.argv[1]
+lines = dict(l.split(" ", 1) for l in open(f"{g}/honest.out").read().splitlines() if " " in l and not l.startswith("{"))
+text, sig = lines["receipt"], lines["signature"]
+r = json.loads(text)
+B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+n = 0
+for c in r["did"][9:]: n = n * 58 + B58.index(c)
+pk = n.to_bytes(34, "big")[2:]
+der = bytes.fromhex("302a300506032b6570032100") + pk
+open(f"{g}/pub.pem", "w").write("-----BEGIN PUBLIC KEY-----\n" + base64.b64encode(der).decode() + "\n-----END PUBLIC KEY-----\n")
+open(f"{g}/receipt.txt", "wb").write(text.encode())
+open(f"{g}/receipt.sig", "wb").write(base64.urlsafe_b64decode(sig + "=="))
+ossl = next(p for p in ["/opt/homebrew/opt/openssl@3/bin/openssl", "/usr/bin/openssl"] if os.path.exists(p))
+v = subprocess.run([ossl, "pkeyutl", "-verify", "-pubin", "-inkey", f"{g}/pub.pem", "-rawin",
+                    "-in", f"{g}/receipt.txt", "-sigfile", f"{g}/receipt.sig"], capture_output=True, text=True)
+def cid(d): return "b" + base64.b32encode(bytes([1, 0x55, 0x12, 0x20]) + d).decode().lower().rstrip("=")
+out = b"itonami cell: hello from a loaderless static image\n"
+print("signature:", v.stdout.strip() or v.stderr.strip())
+print("canonical:", json.dumps(r, sort_keys=True, separators=(",", ":")) == text)
+print("cell CID:", r["cell"] == cid(bytes.fromhex(open(f"{g}/release.digest").read()[7:])))
+print("output CID:", r["output"] == cid(hashlib.sha256(out).digest()), "exit", r["exit"])
+PY
+```
+
+Expected: `Signature Verified Successfully`, then `canonical: True`,
+`cell CID: True` and `output CID: True exit 0`. The receipt is
+[evidence/cell-run-20261023.json](evidence/cell-run-20261023.json).
+
+The image `localhost/itonami-cell-demo:jun288` stays in the local podman
+store until it is removed (`podman rmi localhost/itonami-cell-demo:jun288`).
+
+## What this does not show
+
+- Pulling the release from a registry. The index and the image are local.
+- Checking the image manifest and layers against the index. podman resolves
+  the digest.
+- A second node.
+- Persistence of the receipt (kotobase, yataverse).
+- The persistent container stdio channel (JUN-298).
+- A first rootless podman start after boot under `no_new_privs`. Here the
+  user namespace already existed.
+- x86_64 execution.
