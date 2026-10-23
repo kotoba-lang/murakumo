@@ -580,6 +580,18 @@ replays two proposers racing over three voters, and the chosen lease stays
 chosen. Without the promise check on accept, both proposers reach a
 majority. Reproduction: [lease core](docs/lease-core.md).
 
+`kotoba/fleet_lease_node.kotoba` runs that register as separate processes
+over TCP: three voters and a proposer, each a static image.
+
+- **Voters** write their state to a file before they reply. They are started
+  again for every step, so their state comes only from their files.
+- **The run.** A prepares; B's lease is chosen; A's accept under its old
+  ballot is refused by all three voters; A's retry adopts B's lease.
+- **The control.** With voters that accept under an old ballot, A's stale
+  accept also reports `chosen`, so two leases are chosen for one id.
+
+Reproduction: [lease node](docs/lease-node.md).
+
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
 `qwen3.8-flash-next-ud-iq3-xxs` is a single-node, lossless Qwen4Exp route for

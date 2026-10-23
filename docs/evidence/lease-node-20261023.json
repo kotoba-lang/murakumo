@@ -1,0 +1,99 @@
+{
+  "schema": "murakumo.lease-node.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-289"
+  ],
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": [
+    {
+      "name": "sha2",
+      "repository": "kotoba-lang/org-nist-sha2",
+      "commit": "ea83e70a6a8efb8fb12dd5f0031fcda35a9ec77b",
+      "path": "kotoba/sha2/core.kotoba",
+      "sha256": "2c59ef55bc2b527c1aac723c0fee896eba75ee82fecd212a2858782beadc6888"
+    },
+    {
+      "name": "jcs-reader",
+      "repository": "kotoba-lang/org-ietf-jcs",
+      "commit": "6331a9b461f5858be484b9d6859f314f9c3a2510",
+      "path": "kotoba/jcs/reader.kotoba",
+      "sha256": "f8af2953904bd0a96e7b5c3b9e34151bcae3754e5358669adb8ac289acc0872f"
+    },
+    {
+      "name": "lease-core",
+      "path": "kotoba/fleet_lease_core.kotoba",
+      "sha256": "7136a27cf24bc32e40ff2c1c594516b1bf3cf34f6ad621c27fa0b5f2fc1149c3"
+    },
+    {
+      "name": "lease-node",
+      "path": "kotoba/fleet_lease_node.kotoba",
+      "sha256": "b0d103a453f98cac9a0b0b1bca6ac084daa4db45ad2b659054d962c05d4c6db9"
+    }
+  ],
+  "steps": [
+    "A prepares (100,a)",
+    "B runs a full round (101,b)",
+    "A accepts under (100,a)",
+    "A runs a full round (102,a)"
+  ],
+  "results": {
+    "correct": {
+      "chosen": [
+        "k16",
+        "k16 (adopted)"
+      ],
+      "staleAccept": "no-majority accept 0",
+      "voterStates": [
+        "102 a 102 a {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"until\":1792500900000}",
+        "102 a 102 a {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"until\":1792500900000}",
+        "102 a 102 a {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"until\":1792500900000}"
+      ]
+    },
+    "careless": {
+      "chosen": [
+        "k16",
+        "b70 (stale accept)",
+        "b70"
+      ],
+      "voterStates": [
+        "102 a 102 a {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"until\":1792500900000}",
+        "102 a 102 a {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"until\":1792500900000}",
+        "102 a 102 a {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"until\":1792500900000}"
+      ],
+      "mutation": "accept-ok? without the promise check"
+    }
+  },
+  "execution": {
+    "runtime": "native arm64 Linux 6.15.10 on local Podman applehv VM",
+    "network": "none (loopback)",
+    "processes": "three voters restarted per step from their state files, one proposer per step",
+    "reproduced": "docs/lease-node.md commands run as written in a fresh directory"
+  },
+  "limitations": [
+    "one host",
+    "no fleet token, membership or lease ids",
+    "state written without fsync",
+    "scripted interleaving",
+    "aarch64-linux only"
+  ],
+  "artifacts": {
+    "node.kotoba": {
+      "bytes": 41816,
+      "sha256": "4d2b92cf86c36cd5157210d6dd254ce74af557a3e2afeb18e895c44af2fdb390"
+    },
+    "node.elf": {
+      "bytes": 324096,
+      "sha256": "dd4750a1157ee2718946b4f316f6cd9703088db6a16571fe5c61d973479d496f"
+    },
+    "careless.kotoba": {
+      "bytes": 41787,
+      "sha256": "41bef79d99bead9f0b1ab5ae555e89a98fdb4968e37dc31cf3ea4656906c806e"
+    },
+    "run.sh": {
+      "bytes": 1081,
+      "sha256": "5f27ee37d9f4ccfad958a1b6407a451bbe59ddc3c3c2817ccc1547a55a2e3d3a"
+    }
+  }
+}
