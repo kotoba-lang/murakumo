@@ -572,6 +572,14 @@ they should. Reproduction: [topology verify](docs/topology-verify.md).
 
 Reproduction: [agent step](docs/agent-step.md).
 
+`kotoba/fleet_lease_core.kotoba` ports the quorum lease register's
+decisions (P3b; `lease.cljk` and the Paxos acceptor of `jobs.cljk`):
+majorities, ballot order, prepare and accept (a ballot never accepts a
+second value), adoption, lease values, `decide` and `held-now?`. Its gate
+replays two proposers racing over three voters, and the chosen lease stays
+chosen. Without the promise check on accept, both proposers reach a
+majority. Reproduction: [lease core](docs/lease-core.md).
+
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
 `qwen3.8-flash-next-ud-iq3-xxs` is a single-node, lossless Qwen4Exp route for
