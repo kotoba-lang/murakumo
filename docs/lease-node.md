@@ -321,9 +321,131 @@ voters of "k16 proposes" and "until too far ahead" still hold the promise
 
 The receipt is [evidence/lease-preemption-20261023.json](evidence/lease-preemption-20261023.json).
 
+## Rotation
+
+A voter with a topology follows changes to its topology file while it runs,
+as `replicated_topology`'s `accept!` does for a resident:
+- **Polling.** While idle, the voter looks at the file every 500 ms.
+- **Adopting.** A changed file is adopted only when all three hold:
+  - it verifies against the trust (`topology-verdict`);
+  - its revision is higher than the one held;
+  - every node of the held topology keeps its `owner-id`. A node can be
+    retired, but its name cannot be given to another owner.
+- **Otherwise** the voter keeps the topology it holds.
+
+The log says `voter topology <revision>` or `voter kept <reason>`. The
+comparison and the verification run in `arena-scope`, so only an adopted
+or newly seen document stays allocated.
+
+The voters start on revision 7 (b70 enabled, k16 not) and keep running
+while `live.json` is replaced:
+1. an older revision 6 that enables k16;
+2. a revision 9 that enables k16 under revision 8's signature;
+3. a signed revision 9 that enables k16 but gives b70 another owner;
+4. revision 8, which enables k16 and disables b70.
+
+There are two controls:
+- **`static`** voters never look at the file again, the voter before this
+  change;
+- **`unchecked`** voters adopt any changed file.
+
+With the same `$G`, `$K`, `node.kotoba`, `node.elf` and `topology.json`
+(from Membership):
+
+```sh
+python3 -I docs/evidence/lease-rotation-topology-20261023.py "$G"
+sed 's/(or (= path "") (= (arena-scope (if (ln-same-file? path seen) 0 1)) 0))/true/' "$G/node.kotoba" > "$G/static.kotoba"
+sed 's/(if (= why "") (let \[x (ln-say (str "voter topology "/(if true (let [x (ln-say (str "voter topology "/' \
+  "$G/node.kotoba" > "$G/unchecked.kotoba"
+cat > "$G/rotate.sh" <<'EOF'
+N=1792500000000; U=1792500900000
+TRUST=op1=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw
+VK='{"class":"qwen-text","epoch":1,"node":"k16","revision":7,"slot":0,"until":'$U'}'
+VA='{"class":"qwen-text","epoch":1,"node":"b70","revision":7,"slot":0,"until":'$U'}'
+prop() {  # label t value
+  env KEXE_ALLOW=37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7901,127.0.0.1:7902,127.0.0.1:7903 \
+    /gate/node.elf proposer full $2 x "$3" 7901 7902 7903 2>&1 | grep -v '^{:status' | sed "s/^/  $1: /" | cut -c1-100
+}
+swap() { cp /gate/$1 /gate/live.json; sleep 4; }
+for img in node static unchecked; do
+  echo "== voters: $img"
+  rm -f /gate/rot-v*.state; cp /gate/topology.json /gate/live.json
+  for v in 1 2 3; do
+    env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:790$v \
+      /gate/$img.elf voter 790$v /gate/rot-v$v.state 6000 /gate/live.json $TRUST 1 $N > /gate/rot-v$v.log 2>&1 &
+  done
+  sleep 3
+  prop "k16, revision 7 held" 101 "$VK"
+  swap topology-r6.json;        prop "k16, after revision 6" 102 "$VK"
+  swap topology-r9-forged.json; prop "k16, after a forged 9" 103 "$VK"
+  swap topology-r9-owner.json;  prop "k16, after 9 with b70's owner replaced" 104 "$VK"
+  swap topology-r8.json;        prop "b70, after revision 8" 105 "$VA"
+                                prop "k16, after revision 8" 106 "$VK"
+  wait
+  sed 's/^/  voter 1 log: /' /gate/rot-v1.log
+done
+EOF
+podman run --rm --pull never --platform linux/arm64 --network none \
+  -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
+    for c in static unchecked; do
+      rm -f /gate/$c.elf
+      ./root.elf compile /gate/$c.kotoba --target aarch64-linux --output /gate/$c.elf --format static >/dev/null || exit 1
+      chmod +x /gate/$c.elf
+    done
+    sh /gate/rotate.sh'
+```
+
+Expected output, measured on 2026-10-23 (`…` is the rest of the lease):
+
+```text
+== voters: node
+  k16, revision 7 held: no-majority accept 0
+  k16, after revision 6: no-majority accept 0
+  k16, after a forged 9: no-majority accept 0
+  k16, after 9 with b70's owner replaced: no-majority accept 0
+  b70, after revision 8: no-majority accept 0
+  k16, after revision 8: chosen {"class":"qwen-text","epoch":1,"node":"k16",…}
+  voter 1 log: voter kept intent/not-advancing
+  voter 1 log: voter kept topology/needs-signatures
+  voter 1 log: voter kept topology/owner-replaced
+  voter 1 log: voter topology 8
+== voters: static
+  k16, revision 7 held: no-majority accept 0
+  k16, after revision 6: no-majority accept 0
+  k16, after a forged 9: no-majority accept 0
+  k16, after 9 with b70's owner replaced: no-majority accept 0
+  b70, after revision 8: chosen {"class":"qwen-text","epoch":1,"node":"b70",…}
+  k16, after revision 8: chosen {"class":"qwen-text","epoch":1,"node":"b70",…}
+== voters: unchecked
+  k16, revision 7 held: no-majority accept 0
+  k16, after revision 6: chosen {"class":"qwen-text","epoch":1,"node":"k16",…}
+  k16, after a forged 9: chosen {"class":"qwen-text","epoch":1,"node":"k16",…}
+  k16, after 9 with b70's owner replaced: chosen {"class":"qwen-text","epoch":1,"node":"k16",…}
+  b70, after revision 8: chosen {"class":"qwen-text","epoch":1,"node":"k16",…}
+  k16, after revision 8: chosen {"class":"qwen-text","epoch":1,"node":"k16",…}
+  voter 1 log: voter topology 6
+  voter 1 log: voter topology 9
+  voter 1 log: voter topology 9
+  voter 1 log: voter topology 8
+```
+
+- **The voters.** They keep revision 7 through the older, forged and
+  owner-replacing documents, and each refusal is in their log. Then they
+  adopt revision 8: b70, now disabled, is refused, and k16 is chosen.
+- **`static`.** Without rotation, the voters still give a lease to b70
+  after the operator has disabled it.
+- **`unchecked`.** Adopting any changed file lets k16 in on the older
+  revision 6.
+
+The rotation receipt is [evidence/lease-rotation-20261023.json](evidence/lease-rotation-20261023.json).
+
 ## What this does not show
 
 - Separate hosts.
+- The topology replica that writes the file. Here the test replaces it. A
+  request that arrives within 500 ms of a change is judged under the
+  topology held. A request that arrives while a voter verifies waits, and
+  its proposer may count that voter as down (fail closed).
 - The fleet token and lease ids of `lease.cljk`.
 - An fsync: a voter survives a process restart, not a power cut.
 - Concurrent proposers on separate hosts. The race loop runs on one
