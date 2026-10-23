@@ -56,9 +56,9 @@ AMU=/Users/junkawasaki/github/kotoba-lang/amu
 K=/Users/junkawasaki/github/kotoba-lang
 G=/Users/junkawasaki/github/workspaces/<agent>/<task>
 mkdir -p "$G"
-git -C "$AMU" show 457042ab741520980bceb5bf12970937d1bc8dba:seed/bootstrap/aarch64-linux-static-root.elf > "$G/root.elf"
+git -C "$AMU" show 51b89255ef674a2da8bfbe650c971f1b08c0e3d3:seed/bootstrap/aarch64-linux-static-root.elf > "$G/root.elf"
 chmod +x "$G/root.elf"
-# Expected compiler SHA-256: 1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e
+# Expected compiler SHA-256: 88afda8977285f3839ebad1cb785a344b296c6890f3f901746259dd478ab9fb7
 shasum -a 256 "$G/root.elf"
 for c in cell impostor; do
   text=$([ $c = cell ] && echo "itonami cell: hello from a loaderless static image" || echo "itonami cell: an impostor")

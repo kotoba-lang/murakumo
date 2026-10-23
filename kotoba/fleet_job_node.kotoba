@@ -104,7 +104,8 @@
 (defn- jn-run [] :i64
   (let [profile (jn-arg 1) input (jn-arg 2) policy (jn-arg 3) rail (jn-arg 4)
         node (jn-arg 5) seed (key-seed (jn-arg 6)) fd (jn-arg 7) admitted (jn-arg 8)
-        now (jn-int (jn-arg 9)) allowed (jn-int (jn-arg 10)) index (jn-arg 11) layout (jn-arg 12)
+        now (if (= (jn-arg 9) "clock") (jn-int (typed-cap-call 7 :string :string "wall")) (jn-int (jn-arg 9)))
+        allowed (jn-int (jn-arg 10)) index (jn-arg 11) layout (jn-arg 12)
         ports (jn-arg 13) t (jn-int (jn-arg 14)) rogue (= (jn-arg 15) "rogue")
         ipath (jn-arg 16) token (jn-token 17)
         has-input (and (not (= ipath "")) (= (typed-cap-call 35 :string :string (string-concat ipath "EXISTS_SEP")) "1"))

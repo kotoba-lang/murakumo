@@ -100,7 +100,7 @@ for v in 1 2 3; do
 done
 sleep 0.3
 node() {  # name key fd admitted t mode
-  env KEXE_ALLOW=20,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+  env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
     KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
     $G/job.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N 2 $G/release.json $G/layout-cell $PORTS $5 $6 > $G/$TAG-$1.out 2>&1
 }
@@ -115,7 +115,7 @@ for n in b70 k16; do
 done
 for n in b70 k16; do
   if grep -q '^receipt ' $G/$TAG-$n.out; then
-    env KEXE_ALLOW=35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+    env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
       $G/job.elf verify $PORTS $TRUST $G/$TAG-$n.out 200 2>&1 | grep -v '^{:status' | sed "s/^/$TAG verify $n's receipt: /"
   fi
 done
@@ -126,7 +126,7 @@ TRUST=b70=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw,k16=did:key:z
 for v in 1 2 3; do env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_43=127.0.0.1:$B$v $G/job.elf voter $B$v $G/rogue-v$v.state 5000 > /dev/null 2>&1 & done
 sleep 0.3
 for n in b70 k16; do
-  env KEXE_ALLOW=35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+  env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
     $G/$IMG.elf verify ${B}1,${B}2,${B}3 $TRUST $G/rogue-$n.out 300 2>&1 | grep -v '^{:status' | sed "s/^/$IMG verifier, $n's receipt: /"
 done
 wait
@@ -232,7 +232,7 @@ for v in 1 2 3; do
 done
 sleep 0.3
 node() {  # name key fd admitted allow t
-  env KEXE_ALLOW=20,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+  env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
     KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
     $G/$IMG.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N $5 $G/release.json $G/layout-cell $PORTS $6 follow > $G/$TAG-$1.out 2>&1
 }
@@ -241,7 +241,7 @@ node b70 node.key site-a $DA 2 102
 for n in k16 b70; do
   echo "$TAG $n: $(grep -E '^(ineligible|lease|held-by|verdict|layout|refused) ' $G/$TAG-$n.out | tr '\n' ' ')$(grep -q '^receipt ' $G/$TAG-$n.out && echo '| receipt')"
 done
-env KEXE_ALLOW=35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
   $G/job.elf verify $PORTS $TRUST $G/$TAG-b70.out 200 2>&1 | grep -v '^{:status' | sed "s/^/$TAG verify b70's output: /"
 wait
 EOF
@@ -282,9 +282,10 @@ The node agent gives the cell its input over container stdio (JUN-298).
 - **Delivery.** The holder starts the cell with `podman run -i …` and passes
   the bytes on wire 20 after `STDIN_SEP`. The cell reads them on wire 41.
 
-Both wires are in the static runtimes from amu `c00d98a4` (JUN-354,
-JUN-357, [docs/static-stdin.md](https://github.com/kotoba-lang/amu/blob/main/docs/static-stdin.md)),
-so the job image and the cell here are built by that root.
+Both wires are in the static runtimes of the root pinned above (amu
+`c00d98a4` and later: JUN-354, JUN-357,
+[docs/static-stdin.md](https://github.com/kotoba-lang/amu/blob/main/docs/static-stdin.md)),
+which builds the job image and the cell here.
 
 The cell is a rule-based bot, with no inference. One turn reads the message
 on stdin and answers with its word count and the message. Its image config
@@ -294,10 +295,6 @@ without the node's environment.
 With the same `$G`, `$K` and `job.kotoba` (from the main block above):
 
 ```sh
-git -C "$AMU" show c00d98a4fd396a08b4c93591d221f724f9d24da8:seed/bootstrap/aarch64-linux-static-root.elf > "$G/root2.elf"
-chmod +x "$G/root2.elf"
-# Expected compiler SHA-256: 048244b3c26204ea32ff545005d2826d068fb15787dd20a8c5c636758e0f4d49
-shasum -a 256 "$G/root2.elf"
 cat > "$G/bot.kotoba" <<'EOF'
 (ns itonami-bot (:export [main]))
 ;; A rule-based bot cell: one turn reads the message on stdin (wire 41) and
@@ -317,7 +314,7 @@ podman run --rm --pull never --platform linux/arm64 --network none \
   -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
     for c in bot job; do
       rm -f /gate/$c-2.elf
-      ./root2.elf compile /gate/$c.kotoba --target aarch64-linux --output /gate/$c-2.elf --format static >/dev/null || exit 1
+      ./root.elf compile /gate/$c.kotoba --target aarch64-linux --output /gate/$c-2.elf --format static >/dev/null || exit 1
       chmod +x /gate/$c-2.elf
     done'
 printf 'FROM scratch\nCOPY bot-2.elf /cell\nENV KEXE_ALLOW=37,41\nENTRYPOINT ["/cell"]\n' > "$G/Containerfile.bot"
@@ -352,7 +349,7 @@ for v in 1 2 3; do
 done
 sleep 0.3
 run() {  # tag input-file t
-  env KEXE_ALLOW=20,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+  env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
     KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
     $G/job-2.elf run $R $IN $PO murakumo b70 $G/node.key site-a $DA $N 2 $G/release-bot.json $G/layout-bot $PORTS $3 follow $2 \
     > $G/turn-$1.out 2>&1
@@ -360,7 +357,7 @@ run() {  # tag input-file t
 }
 run changed-input $G/turn-input-changed.txt 100
 run turn $G/turn-input.txt 101
-env KEXE_ALLOW=35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
   $G/job-2.elf verify $PORTS $TRUST $G/turn-turn.out 200 2>&1 | grep -v '^{:status' | sed "s/^/verify the turn's receipt: /"
 wait
 EOF
@@ -419,8 +416,7 @@ The receipt is [evidence/job-node-bot-turn-20261023.json](evidence/job-node-bot-
   which the lease node's race loop measures on its own.
 - A bot turn with an inference rail, and the consent before inference
   leaves the node. The bot here is rule-based.
-- The fleet token and membership on the register, and an fsync for voter
-  state.
+- The fleet token and membership on the register (see the lease node).
 - Voters checking the runtime class. Each node judges its own fit; the
   signed topology lists no runtime classes, and the voters are not given
   nodes' admitted declarations. A node that takes a lease it cannot serve

@@ -44,9 +44,12 @@
 ;; nothing to a request whose mac does not hold, and a proposer counts a reply
 ;; whose mac does not hold as no answer.
 ;;
-;; The state file is written, not fsynced: a voter survives a process
-;; restart, not a power cut. Lease ids are lease.cljk's and not part of this
-;; transport.
+;; The state file is replaced durably before the reply: written to <file>.tmp,
+;; fsynced, renamed over <file>, and the directory fsynced (amu wire 35,
+;; JUN-359); a voter that cannot store its state refuses. A preempted round
+;; waits 20 + 0..199 ms before it is tried again (wires 23 and 7, JUN-360).
+;; now may be given as clock (wire 7's wall clock). Lease ids are lease.cljk's
+;; and not part of this transport.
 ;;
 ;; Composition order: sha2.core, ed25519.selfhost, jcs.reader, tsukasa
 ;; ledger_core and node_state, fleet_node_enrollment, fleet_intent_core,
@@ -66,7 +69,22 @@
 
 (defn- ln-exists? [path :string] :bool (= (typed-cap-call 35 :string :string (string-concat path "EXISTS_SEP")) "1"))
 (defn- ln-load [path :string] :string (if (ln-exists? path) (typed-cap-call 35 :string :string path) "0 - 0 - -"))
-(defn- ln-store [path :string text :string] :i64 (let [x (typed-cap-call 35 :string :string (str path "WRITE_SEP" text))] 0))
+;; the parent directory of path ("/" for a top-level file)
+(defn- ln-dirname [path :string] :string
+  (let [b (ln-bytes path) k (loop [i (- (vector-count b) 1)] (cond (< i 0) -1 (= (vector-at b i) 47) i :else (recur (- i 1))))]
+    (if (< k 1) "/" (string-substring path 0 k))))
+;; replace the file durably (amu wire 35, JUN-359): the text to <path>.tmp,
+;; fsync it, rename it over <path>, fsync the directory; 1 when every step
+;; answered 1, else 0
+(defn- ln-store [path :string text :string] :i64
+  (let [tmp (string-concat path ".tmp")
+        w (typed-cap-call 35 :string :string (str tmp "WRITE_SEP" text))
+        f (typed-cap-call 35 :string :string (string-concat tmp "FSYNC_SEP"))
+        r (if (= f "1") (typed-cap-call 35 :string :string (str tmp "RENAME_SEP" path)) "0")
+        d (if (= r "1") (typed-cap-call 35 :string :string (string-concat (ln-dirname path) "FSYNC_SEP")) "0")]
+    (if (= d "1") 1 0)))
+;; now in ms: a decimal, or clock for wire 7's wall clock (amu #1518)
+(defn- ln-now [s :string] :i64 (if (= s "clock") (ln-int (typed-cap-call 7 :string :string "wall")) (ln-int s)))
 
 (defn- ln-int [s :string] :i64
   (let [b (ln-bytes s)]
@@ -179,11 +197,11 @@
         op (ln-field req 0) bt (ln-int (ln-field req 1)) bid (ln-field req 2) v (ln-field req 3)]
     (cond (= op "prepare")
           (if (prepare-ok? bt bid pt pid)
-            (let [ns (str bt " " bid " " at " " (ln-dash aid) " " (ln-dash av)) z (ln-store file ns)] (ln-reply true ns))
+            (let [ns (str bt " " bid " " at " " (ln-dash aid) " " (ln-dash av))] (if (= (ln-store file ns) 1) (ln-reply true ns) (ln-reply false st)))
             (ln-reply false st))
           (= op "accept")
           (if (and (json-canonical? (ln-bytes v)) (ln-member-ok? topo now v) (accept-ok? bt bid v pt pid at aid av))
-            (let [ns (str bt " " bid " " bt " " bid " " v) z (ln-store file ns)] (ln-reply true ns))
+            (let [ns (str bt " " bid " " bt " " bid " " v)] (if (= (ln-store file ns) 1) (ln-reply true ns) (ln-reply false st)))
             (ln-reply false st))
           :else (ln-reply false st))))
 
@@ -252,7 +270,7 @@
           (let [doc (if (ln-exists? path) (ln-load-doc path) (vector-alloc 0))
                 v (topology-verdict doc (ln-arg 5) (ln-int (ln-arg 6)) 0)]
             (if (not (= v "topology/ok")) (let [x (ln-say (string-concat "voter " v))] 2)
-              (ln-voter (ln-arg 1) (ln-arg 2) (ln-int (ln-arg 3)) doc (ln-int (ln-arg 7))
+              (ln-voter (ln-arg 1) (ln-arg 2) (ln-int (ln-arg 3)) doc (ln-now (ln-arg 7))
                         path (ln-arg 5) (ln-int (ln-arg 6)) token))))))
 
 ;; ---------------------------------------------------------------------------
@@ -326,11 +344,19 @@
 ;; just above that promise, at most ln-tries rounds, and the retry adopts
 ;; whatever was accepted by then. Too few answers (fail closed) or a refused
 ;; value end it. There is no random backoff: the runtime has no sleep.
+;; lease.cljk round!'s backoff before a retry: 20 + 0..199 ms, the jitter from
+;; wire 23 and the sleep on wire 7 (amu JUN-360)
+(defn- ln-backoff [] :i64
+  (let [b (ln-bytes (typed-cap-call 23 :string :string "1"))
+        h (vector-at b 0) l (vector-at b 1)
+        x (+ (* 16 (if (< h 58) (- h 48) (- h 87))) (if (< l 58) (- l 48) (- l 87)))
+        s (typed-cap-call 7 :string :string (str "sleep " (+ 20 (quot (* x 200) 256))))]
+    0))
 (defn- ln-rounds [t :i64 id :string own :string ports :string token :string] :string
   (loop [k 1 tt t]
     (let [r (ln-try tt id own ports token)]
       (cond (not (= (ln-field r 0) "preempted")) r
-            (< k (ln-tries)) (recur (+ k 1) (+ (ln-int (ln-field r 1)) 1))
+            (< k (ln-tries)) (let [z (ln-backoff)] (recur (+ k 1) (+ (ln-int (ln-field r 1)) 1)))
             :else (str "no-majority " (ln-field r 2) " " (ln-field r 3))))))
 
 (defn- ln-proposer [mode :string t :i64 id :string own :string ports :string token :string] :i64
