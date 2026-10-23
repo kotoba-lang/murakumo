@@ -1,0 +1,83 @@
+{
+  "schema": "murakumo.lease-core.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-289"
+  ],
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "portedFrom": {
+    "src/murakumo/infer/lease.cljk": "efc82b9d1a4fd30680b969be55f183b874863f39b7cf58b3f525d28e1e9b3bfb",
+    "src/murakumo/infer/jobs.cljk": "bb15aa06a00c73a16b469d489e424f0c28dc524ab1fc3160542c67af674a7fa2"
+  },
+  "sources": [
+    {
+      "name": "sha2",
+      "repository": "kotoba-lang/org-nist-sha2",
+      "commit": "ea83e70a6a8efb8fb12dd5f0031fcda35a9ec77b",
+      "path": "kotoba/sha2/core.kotoba",
+      "sha256": "2c59ef55bc2b527c1aac723c0fee896eba75ee82fecd212a2858782beadc6888"
+    },
+    {
+      "name": "jcs-reader",
+      "repository": "kotoba-lang/org-ietf-jcs",
+      "commit": "6331a9b461f5858be484b9d6859f314f9c3a2510",
+      "path": "kotoba/jcs/reader.kotoba",
+      "sha256": "f8af2953904bd0a96e7b5c3b9e34151bcae3754e5358669adb8ac289acc0872f"
+    },
+    {
+      "name": "lease",
+      "path": "kotoba/fleet_lease_core.kotoba",
+      "sha256": "7136a27cf24bc32e40ff2c1c594516b1bf3cf34f6ad621c27fa0b5f2fc1149c3"
+    }
+  ],
+  "groups": {
+    "acceptor": 1,
+    "race": 2,
+    "decide": 4
+  },
+  "expectedResult": 7,
+  "results": {
+    "positive": 7,
+    "reuseBallot": 6,
+    "acceptNoPromise": 4,
+    "noSkew": 3
+  },
+  "budget": {
+    "wallSeconds": 0.01,
+    "maxRssKiB": 768
+  },
+  "execution": {
+    "runtime": "native arm64 Linux 6.15.10 on local Podman applehv VM",
+    "network": "none",
+    "reproduced": "docs/lease-core.md commands run as written in a fresh directory"
+  },
+  "limitations": [
+    "voter transport and persistence are the caller's",
+    "no multi-node register run",
+    "parity rows derived by hand; the .cljk was not executed (nbb is excluded)",
+    "aarch64-linux only"
+  ],
+  "artifacts": {
+    "gate.kotoba": {
+      "bytes": 35343,
+      "sha256": "b39bea7bc172b29c2165d25e3d13fd6bcb635c71bb264c2fbf90b40708188332"
+    },
+    "gate.elf": {
+      "bytes": 307712,
+      "sha256": "5ab51f9ed5b79bf93ac0b2aed2a56e79ec2ccd7fa39efbb8424cc6f9db5dafd0"
+    },
+    "reuse-ballot.kotoba": {
+      "bytes": 35290,
+      "sha256": "01eaa723a806f44c2fdc624369ebdc9adac0f84faef76f200561858dbeabe63c"
+    },
+    "accept-no-promise.kotoba": {
+      "bytes": 35314,
+      "sha256": "14f0098f847ee8a806bfe1cc076348a98e0abbe7ed211ff5ed78e5408a1b4bfa"
+    },
+    "no-skew.kotoba": {
+      "bytes": 35326,
+      "sha256": "c935670e7ea541db4cef32495a9cc01f385fd72534276044e3214da028e62e79"
+    }
+  }
+}

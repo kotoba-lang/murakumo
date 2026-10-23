@@ -1,0 +1,166 @@
+;; murakumo.fleet-lease -- the quorum lease register's decisions (ADR-2610071730
+;; P3b; src/murakumo/infer/lease.cljk and the acceptor of
+;; src/murakumo/infer/jobs.cljk), as pure Kotoba, so a static-image node agent
+;; can be a voter and a proposer (Linear JUN-289: who holds a job's lease, and
+;; at which epoch, is what fleet_agent_step's receipt-verdict checks).
+;;
+;;   majority        n voters -> the quorum, floor(n/2) + 1
+;;   ballot-ok?      a ballot is (t, id): 0 < t <= 2^53-1, id 1..128 bytes
+;;   ballot-cmp      jobs.cljk `compare` on [t id]: t first, then the id's
+;;                   bytes; an absent ballot is (0, "")
+;;   prepare-ok?     the acceptor promises a ballot not older than its promise
+;;   accept-ok?      ... and accepts a value under it, unless that ballot was
+;;                   already used for a different value (even after restart)
+;;   adopt?          a reply's accepted ballot beats the best seen so far: the
+;;                   proposer adopts the value accepted under the highest one
+;;   lease-text      the value {class epoch node revision slot until}, canonical
+;;                   JSON; values are compared by this text
+;;   valid-value?    lease.cljk valid-value?: an enabled node, class 1..128,
+;;                   slot 0..255, epoch >= 1, until <= now + ttl + skew
+;;   base-of, id-of  l_<24 hex of SHA-256(class)>_<slot>, then _<epoch>
+;;   decide          lease.cljk decide: lease/propose-open, lease/renew,
+;;                   lease/hold, lease/take-over or lease/held-by;
+;;                   decide-epoch the epoch a proposal carries
+;;   held-now?       a holder trusts its lease only until until - skew
+;;
+;; Times are ms: ttl 15 min, renew-before 10 min, skew 60 s, as in lease.cljk.
+;; Safety does not depend on clocks (Paxos); liveness and expiry do. The
+;; transport, the voters' files and the clock are the caller's.
+;;
+;; Composition order: sha2.core, jcs.reader, this file. docs/lease-core.md has
+;; the gate.
+(ns murakumo.fleet-lease
+  (:export [majority ballot-ok? ballot-cmp prepare-ok? accept-ok? adopt? lease-text
+            valid-value? base-of id-of decide decide-epoch held-now?
+            lease-ttl lease-renew-before lease-skew
+            test-lease-acceptor test-lease-race test-lease-decide]))
+
+(defn lease-ttl [] :i64 900000)
+(defn lease-renew-before [] :i64 600000)
+(defn lease-skew [] :i64 60000)
+
+(defn majority [n :i64] :i64 (+ (quot n 2) 1))
+
+;; ---------------------------------------------------------------------------
+;; The acceptor
+
+(defn ballot-ok? [t :i64 id :string] :bool
+  (and (> t 0) (<= t 9007199254740991) (>= (string-length id) 1) (<= (string-length id) 128)))
+
+(defn ballot-cmp [ta :i64 ida :string tb :i64 idb :string] :i64
+  (cond (> ta tb) 1 (< ta tb) -1 :else (string-compare ida idb)))
+
+;; pt pid: the ballot promised so far, (0, "") when none
+(defn prepare-ok? [bt :i64 bid :string pt :i64 pid :string] :bool
+  (and (ballot-ok? bt bid) (>= (ballot-cmp bt bid pt pid) 0)))
+
+;; at aid accepted: the ballot and value accepted so far, (0, "", "") when none
+(defn accept-ok? [bt :i64 bid :string value :string pt :i64 pid :string at :i64 aid :string accepted :string] :bool
+  (and (ballot-ok? bt bid) (not (= value "")) (>= (ballot-cmp bt bid pt pid) 0)
+       (or (not (and (= bt at) (= bid aid))) (= value accepted))))
+
+(defn adopt? [at :i64 aid :string best-t :i64 best-id :string] :bool
+  (and (> at 0) (> (ballot-cmp at aid best-t best-id) 0)))
+
+;; ---------------------------------------------------------------------------
+;; Lease values
+
+(defn- lc-plain? [s :string] :bool
+  (let [b (vector-i64-from-bytes (string-to-utf8 s))]
+    (loop [i 0] (if (= i (vector-count b)) true (let [c (vector-at b i)] (if (and (>= c 33) (<= c 126) (not (= c 34)) (not (= c 92))) (recur (+ i 1)) false))))))
+
+(defn lease-text [node :string class :string slot :i64 epoch :i64 until :i64 revision :i64] :string
+  (str "{\"class\":\"" class "\",\"epoch\":" epoch ",\"node\":\"" node "\",\"revision\":" revision
+       ",\"slot\":" slot ",\"until\":" until "}"))
+
+;; enabled: the node is an enabled topology node (the caller looks it up in
+;; the verified topology)
+(defn valid-value? [node :string enabled :bool class :string slot :i64 epoch :i64 until :i64 now :i64] :bool
+  (and enabled (> (string-length node) 0) (lc-plain? node)
+       (>= (string-length class) 1) (<= (string-length class) 128) (lc-plain? class)
+       (>= slot 0) (<= slot 255) (>= epoch 1) (<= epoch 9007199254740991)
+       (<= until (+ now (+ (lease-ttl) (lease-skew))))))
+
+(defn base-of [class :string slot :i64] :string
+  (str "l_" (string-substring (sha256-hex (vector-i64-from-bytes (string-to-utf8 class))) 0 24) "_" slot))
+
+(defn id-of [base :string epoch :i64] :string (str base "_" epoch))
+
+;; ---------------------------------------------------------------------------
+;; The proposer's decision for epoch e and its chosen value (if any)
+
+(defn decide [me :string e :i64 has-value :bool v-node :string v-until :i64 now :i64] :string
+  (cond (not has-value) "lease/propose-open"
+        (= me v-node) (if (> now (- v-until (lease-renew-before))) "lease/renew" "lease/hold")
+        (> now (+ v-until (lease-skew))) "lease/take-over"
+        :else "lease/held-by"))
+
+(defn decide-epoch [action :string e :i64] :i64
+  (cond (= action "lease/propose-open") (if (< e 1) 1 e)
+        (or (= action "lease/renew") (= action "lease/take-over")) (+ e 1)
+        :else e))
+
+(defn held-now? [lease-node :string me :string until :i64 now :i64] :bool
+  (and (= lease-node me) (< now (- until (lease-skew)))))
+
+;; ---------------------------------------------------------------------------
+;; test-* : zero-arity, true when every assertion holds
+
+(defn test-lease-acceptor [] :bool
+  (and (= (majority 1) 1) (= (majority 2) 2) (= (majority 3) 2) (= (majority 4) 3) (= (majority 5) 3)
+       (ballot-ok? 1 "a") (not (ballot-ok? 0 "a")) (not (ballot-ok? 5 ""))
+       (= (ballot-cmp 2 "a" 1 "z") 1) (= (ballot-cmp 1 "z" 2 "a") -1)
+       (= (ballot-cmp 2 "b" 2 "a") 1) (= (ballot-cmp 2 "a" 2 "a") 0)
+       ;; prepare: fresh, equal and newer pass; older fails
+       (prepare-ok? 5 "a" 0 "") (prepare-ok? 5 "a" 5 "a") (prepare-ok? 6 "a" 5 "b") (not (prepare-ok? 5 "a" 5 "b"))
+       ;; accept under the promise, or a newer ballot; never an older one
+       (accept-ok? 5 "a" "v" 5 "a" 0 "" "") (accept-ok? 6 "a" "v" 5 "a" 0 "" "")
+       (not (accept-ok? 4 "a" "v" 5 "a" 0 "" ""))
+       (not (accept-ok? 5 "a" "" 5 "a" 0 "" ""))
+       ;; the same ballot cannot accept another value; the same value again is fine
+       (not (accept-ok? 5 "a" "w" 5 "a" 5 "a" "v")) (accept-ok? 5 "a" "v" 5 "a" 5 "a" "v")
+       (adopt? 3 "x" 0 "") (not (adopt? 0 "" 0 "")) (adopt? 4 "a" 3 "z") (not (adopt? 3 "a" 3 "b"))))
+
+;; two proposers over three voters, step by step: whatever is chosen stays chosen
+(defn test-lease-race [] :bool
+  (let [va (lease-text "b70" "qwen-text" 0 1 1792500900000 7)
+        vb (lease-text "k16" "qwen-text" 0 1 1792500900000 7)
+        ;; A prepares (100,a) at voters 1 and 2; B prepares (101,b) at 2 and 3
+        p1 (prepare-ok? 100 "a" 0 "") p2a (prepare-ok? 100 "a" 0 "")
+        p2b (prepare-ok? 101 "b" 100 "a") p3 (prepare-ok? 101 "b" 0 "")
+        ;; A's accept: voter 1 promised (100,a) -> ok; voter 2 promised (101,b) -> refused
+        a1 (accept-ok? 100 "a" va 100 "a" 0 "" "") a2 (accept-ok? 100 "a" va 101 "b" 0 "" "")
+        a-ok (+ (if a1 1 0) (if a2 1 0))
+        ;; B accepts its own value at 2 and 3 (nothing accepted there yet)
+        b2 (accept-ok? 101 "b" vb 101 "b" 0 "" "") b3 (accept-ok? 101 "b" vb 101 "b" 0 "" "")
+        b-ok (+ (if b2 1 0) (if b3 1 0))
+        ;; A retries with (102,a): voters 1 and 2 answer; 1 accepted va at
+        ;; (100,a), 2 accepted vb at (101,b): A must adopt vb
+        adopt-vb (adopt? 101 "b" 100 "a")
+        chosen-by-a (if adopt-vb vb va)
+        a2b (accept-ok? 102 "a" chosen-by-a 102 "a" 101 "b" vb)]
+    (and p1 p2a p2b p3 a1 (not a2) (< a-ok (majority 3)) b2 b3 (>= b-ok (majority 3))
+         adopt-vb (= chosen-by-a vb) a2b
+         (json-canonical? (vector-i64-from-bytes (string-to-utf8 va)))
+         (not (= va vb)))))
+
+(defn test-lease-decide [] :bool
+  (let [now 1792500000000 until (+ now (lease-ttl))]
+    (and (= (decide "b70" 0 false "" 0 now) "lease/propose-open") (= (decide-epoch "lease/propose-open" 0) 1)
+         (= (decide-epoch "lease/propose-open" 4) 4)
+         (= (decide "b70" 3 true "b70" until now) "lease/hold") (= (decide-epoch "lease/hold" 3) 3)
+         (= (decide "b70" 3 true "b70" until (+ now 300001)) "lease/renew") (= (decide-epoch "lease/renew" 3) 4)
+         (= (decide "k16" 3 true "b70" until now) "lease/held-by")
+         (= (decide "k16" 3 true "b70" until (+ until 60000)) "lease/held-by")
+         (= (decide "k16" 3 true "b70" until (+ until 60001)) "lease/take-over") (= (decide-epoch "lease/take-over" 3) 4)
+         (held-now? "b70" "b70" until now) (not (held-now? "b70" "b70" until (- until 60000)))
+         (not (held-now? "b70" "k16" until now))
+         (valid-value? "b70" true "qwen-text" 0 1 until now)
+         (not (valid-value? "b70" false "qwen-text" 0 1 until now))
+         (not (valid-value? "b70" true "" 0 1 until now))
+         (not (valid-value? "b70" true "qwen-text" 256 1 until now))
+         (not (valid-value? "b70" true "qwen-text" 0 0 until now))
+         (not (valid-value? "b70" true "qwen-text" 0 1 (+ until 60001) now))
+         (not (valid-value? "b\"70" true "qwen-text" 0 1 until now))
+         (= (base-of "qwen-text" 3) "l_0419e78c55d8469ccbe5bf5f_3")
+         (= (id-of (base-of "qwen-text" 3) 12) "l_0419e78c55d8469ccbe5bf5f_3_12"))))
