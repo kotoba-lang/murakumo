@@ -567,9 +567,71 @@ a voter with a short token: voter token/missing-or-short
 
 The fleet token receipt is [evidence/lease-token-20261023.json](evidence/lease-token-20261023.json).
 
+## Across containers
+
+The same register, off loopback. Each voter runs in its own container on a
+podman network, at `100.64.9.21` to `.23`, port 7401, with the fleet
+token. Each proposer runs in another container and dials the three
+addresses. Every container has its own network namespace and address, but
+they share one machine.
+
+With the same `$G`, `node.elf` and token files (from Fleet token):
+
+```sh
+VA='{"class":"qwen-text","epoch":1,"node":"b70","revision":7,"slot":0,"until":1792500900000}'
+VK='{"class":"qwen-text","epoch":1,"node":"k16","revision":7,"slot":0,"until":1792500900000}'
+VOTERS="100.64.9.21:7401 100.64.9.22:7401 100.64.9.23:7401"
+podman network create --subnet 100.64.9.0/24 itonami-lease-gate >/dev/null
+voter() {  # ip
+  podman run --rm --pull never --platform linux/arm64 --network itonami-lease-gate --ip $1 -v "$G:/gate" \
+    -e KEXE_ALLOW=35,37,38,43,44,46,47 -e KEXE_CAP_RESOURCES_35=/gate -e KEXE_CAP_RESOURCES_43=$1:7401 \
+    docker.io/library/python:3.12-alpine /gate/node.elf voter $1:7401 /gate/net-$1.state 8000 "" "" "" "" /gate/fleet.token \
+    > "$G/net-$1.log" 2>&1 &
+}
+prop() {  # label ip t value token-file
+  podman run --rm --pull never --platform linux/arm64 --network itonami-lease-gate --ip $2 -v "$G:/gate" \
+    -e KEXE_ALLOW=35,37,38,45,46,47 -e KEXE_CAP_RESOURCES_35=/gate -e KEXE_CAP_RESOURCES_45=$(echo $VOTERS | tr ' ' ',') \
+    docker.io/library/python:3.12-alpine /gate/node.elf proposer full $3 x "$4" token=/gate/$5 $VOTERS 2>&1 \
+    | grep -v '^{:status' | sed "s/^/$1: /" | cut -c1-96
+}
+rm -f "$G"/net-*.state "$G"/net-*.log
+for ip in 100.64.9.21 100.64.9.22 100.64.9.23; do voter $ip; done
+sleep 3
+prop "outsider at .31, another token" 100.64.9.31 101 "$VK" other.token
+prop "member at .30, the fleet token" 100.64.9.30 102 "$VA" fleet.token
+prop "member at .32, a later round" 100.64.9.32 103 "$VK" fleet.token
+wait
+for ip in 100.64.9.21 100.64.9.22 100.64.9.23; do
+  echo "voter $ip: $(cut -d' ' -f1-4 "$G/net-$ip.state") $(grep -o '"node":"[a-z0-9]*"' "$G/net-$ip.state") | log: $(cat "$G/net-$ip.log")"
+done
+podman network rm itonami-lease-gate >/dev/null
+```
+
+Expected output, measured on 2026-10-23 (`…` is the rest of the lease):
+
+```text
+outsider at .31, another token: no-majority prepare 0
+member at .30, the fleet token: chosen {"class":"qwen-text","epoch":1,"node":"b70",…}
+member at .32, a later round: chosen {"class":"qwen-text","epoch":1,"node":"b70",…}
+voter 100.64.9.21: 103 x 103 x "node":"b70" | log: voter refused unauthenticated
+voter 100.64.9.22: 103 x 103 x "node":"b70" | log: voter refused unauthenticated
+voter 100.64.9.23: 103 x 103 x "node":"b70" | log: voter refused unauthenticated
+```
+
+- **The outsider** reaches all three voters across the network, but holds
+  another token, so each refuses it and logs the refusal.
+- **The member's round** is chosen.
+- **A later member round** proposing k16 adopts the chosen b70, and every
+  voter ends holding b70 under ballot 103.
+
+Each voter has its own address, and the grants name exact addresses: a
+voter may listen only on its own, and a proposer may dial only the three
+voters.
+
 ## What this does not show
 
-- Separate hosts.
+- Separate hosts. The containers in "Across containers" have their own
+  network namespaces and addresses, but share one machine.
 - The topology replica in this run. Here the test replaces the file; the
   replica that writes it is [topology replica](topology-replica.md). A
   request that arrives within 500 ms of a change is judged under the
