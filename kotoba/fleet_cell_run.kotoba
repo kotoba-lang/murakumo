@@ -11,25 +11,31 @@
 ;;      launch-verdict (fleet_cell_launch): node active, SHA-256 of the
 ;;      bytes = the L1 cell digest, strict JSON, an itonami index whose
 ;;      runtime-class annotation is the L1 class, the host policy;
-;;   4. the container: wire 20 runs the granted podman with a fixed argv,
-;;      run --rm --pull never --network none --read-only <repo>@<the first
-;;      manifest's digest>; the image's own entry runs (NO-ARGV-IN-SPEC);
-;;      stdin is at end of file, stdout comes back (at most 16 KiB, 10 s);
-;;   5. the receipt, canonical JSON (jcs.reader's json-canonical? holds for
+;;   4. the image itself, from its OCI image layout directory
+;;      (fleet_oci_layout): the manifest the release names, then its config
+;;      and every layer, each by size and SHA-256 in the guest;
+;;   5. the container: wire 20 runs the granted podman with a fixed argv,
+;;      run --rm --pull never --network none --read-only oci:<that layout>,
+;;      so what runs is what was checked; the image's own entry runs
+;;      (NO-ARGV-IN-SPEC); stdin is at end of file, stdout comes back (at
+;;      most 16 KiB, 10 s);
+;;   6. the receipt, canonical JSON (jcs.reader's json-canonical? holds for
 ;;      it), signed with the node's key:
 ;;      {"at":ms,"cell":<index CID>,"did":..,"exit":n,
 ;;       "kind":"itonami.receipt/1","node":..,"output":<CID of stdout>}
 ;;
 ;; cell-run-main reads its arguments (wire 38, from index 0): index path,
-;; L1 cell digest, L1 cell class, local repository, key path, node,
+;; L1 cell digest, L1 cell class, image layout directory, key path, node,
 ;; failure-domain, the L1 admitted declaration digest, now (ms), the host's
-;; allow mask. It prints "verdict <v>", then for an admitted cell "exit <n>",
+;; allow mask. It prints "verdict <v>", then for an admitted cell
+;; "layout <l>", and for a checked image "exit <n>",
 ;; "receipt <text>", "signature <b64url>" and "self-check <reason>
 ;; <canonical 0|1>". A refused cell starts no container.
 ;;
 ;; Composition order: sha2.core, ed25519.selfhost, jcs.reader,
 ;; oci.itonami-artifact, grant.runtime-class, tsukasa ledger_core and
-;; node_state, fleet_node_enrollment, fleet_cell_launch, this file.
+;; node_state, fleet_node_enrollment, fleet_cell_launch, fleet_oci_layout,
+;; this file.
 ;; docs/cell-run.md has the gate.
 (ns murakumo.fleet-cell-run
   (:export [cell-run cell-run-main receipt-text]))
@@ -61,13 +67,20 @@
   (and (>= (vector-count key) 64)
        (loop [i 0] (if (= i 64) true (let [c (vector-at key i)] (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102))) (recur (+ i 1)) false))))))
 
-;; the first manifest's digest in an index jcs.reader accepted, or ""
-(defn- cr-manifest-digest [index :vector-i64] :string
+;; the first manifest descriptor in an index jcs.reader accepted, or -1
+(defn- cr-manifest [index :vector-i64] :i64
   (let [root (loop [i 0] (if (and (< i (vector-count index)) (let [c (vector-at index i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i))
         ms (json-member index root "manifests")
-        m0 (if (and (>= ms 0) (= (json-kind index ms) 2)) (json-element index ms 0) -1)
-        d (if (and (>= m0 0) (= (json-kind index m0) 1)) (json-member index m0 "digest") -1)]
+        m0 (if (and (>= ms 0) (= (json-kind index ms) 2)) (json-element index ms 0) -1)]
+    (if (and (>= m0 0) (= (json-kind index m0) 1)) m0 -1)))
+
+(defn- cr-manifest-digest [index :vector-i64] :string
+  (let [m (cr-manifest index) d (if (>= m 0) (json-member index m "digest") -1)]
     (if (and (>= d 0) (= (json-kind index d) 3)) (json-string index d) "")))
+
+(defn- cr-manifest-size [index :vector-i64] :i64
+  (let [m (cr-manifest index) z (if (>= m 0) (json-member index m "size") -1)]
+    (if (and (>= z 0) (= (json-kind index z) 4) (json-int-ok? index z)) (json-int index z) -1)))
 
 (defn receipt-text [at :i64 cell :string did :string exit :i64 node :string output :string] :string
   (str "{\"at\":" at ",\"cell\":\"" cell "\",\"did\":\"" did "\",\"exit\":" exit
@@ -83,7 +96,7 @@
       (if (= i 3) s
         (recur (+ i 1) (signed-step s node did fd "always-on" 2 dsig admitted 0 digest at false hsig now 30000 5000))))))
 
-(defn cell-run [index-path :string cell-digest :string cell-class :string repo :string key-path :string
+(defn cell-run [index-path :string cell-digest :string cell-class :string layout :string key-path :string
                 node :string fd :string admitted :string now :i64 allowed :i64] :i64
   (let [key (cr-read key-path)]
     (if (not (cr-key-ok? key)) (let [x (cr-say "verdict run/bad-key")] 2)
@@ -93,11 +106,13 @@
             verdict (launch-verdict index cell-digest cell-class state 2 allowed)
             a (cr-say (string-concat "verdict " verdict))]
         (if (not (= verdict "launch/ok")) 1
-          (let [md (cr-manifest-digest index)]
-            (if (not (= (digest-problem md) "oci/ok")) (let [x (cr-say "verdict run/bad-manifest-digest")] 1)
+          (let [md (cr-manifest-digest index)
+                lv (layout-verdict layout md (cr-manifest-size index))
+                y (cr-say (string-concat "layout " lv))]
+            (if (not (= lv "layout/ok")) 1
               (let [answer (cr-spawn (str "/usr/bin/podman" "ARG_SEP" "run" "ARG_SEP" "--rm" "ARG_SEP" "--pull" "ARG_SEP" "never"
                                           "ARG_SEP" "--network" "ARG_SEP" "none" "ARG_SEP" "--read-only"
-                                          "ARG_SEP" repo "@" md))
+                                          "ARG_SEP" "oci:" layout))
                     nl (string-index-of answer "\n")
                     exit (if (< nl 0) -9 (cr-int (string-substring answer 0 nl)))
                     out (if (< nl 0) "" (string-substring answer (+ nl 1) (string-length answer)))

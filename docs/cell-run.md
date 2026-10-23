@@ -25,17 +25,24 @@ This gate does exactly that on one node.
    - the bytes are strict JSON;
    - it is an itonami index whose class annotation is the L1 class;
    - the host policy allows the class.
-4. Start the container with wire 20, which may run only the granted
+4. Check the image itself with `layout-verdict`
+   (`kotoba/fleet_oci_layout.kotoba`). The image is the OCI image layout
+   directory that `podman save --format oci-dir` writes. The layout's
+   `index.json` must list exactly the manifest the release names, at its
+   size. The manifest, then its config, then every layer must exist, with
+   the descriptor's size and SHA-256, all hashed in the guest.
+5. Start that same directory with wire 20, which may run only the granted
    `/usr/bin/podman`, with a fixed argv: `run --rm --pull never --network
-   none --read-only <repo>@<the first manifest's digest>`. The image's own
-   entry runs. Stdin is at end of file, and stdout comes back (at most
-   16 KiB, within 10 s). A refused cell starts nothing.
-5. Write the receipt in canonical JSON. `jcs.reader`'s `json-canonical?`
+   none --read-only oci:<layout>`. What runs is what was checked. The
+   image's own entry runs. Stdin is at end of file, and stdout comes back
+   (at most 16 KiB, within 10 s). A refused cell starts nothing.
+6. Write the receipt in canonical JSON. `jcs.reader`'s `json-canonical?`
    holds for it. It is signed with the node's key (`sign-statement`):
    `{"at":ms,"cell":<index CID>,"did":..,"exit":n,"kind":"itonami.receipt/1","node":..,"output":<CID of stdout>}`.
 
 The cell is `kotoba` source, about two lines, compiled by the same Amu root
-and put in a `FROM scratch` image.
+and put in a `FROM scratch` image. A second cell, the "impostor", prints a
+different line and is used only to build the swapped layout.
 
 ## Reproduce
 
@@ -53,83 +60,117 @@ git -C "$AMU" show 457042ab741520980bceb5bf12970937d1bc8dba:seed/bootstrap/aarch
 chmod +x "$G/root.elf"
 # Expected compiler SHA-256: 1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e
 shasum -a 256 "$G/root.elf"
-cat > "$G/cell.kotoba" <<'EOF'
-(ns itonami-demo-cell (:export [main]))
-(defn main [] :i64 (let [x (typed-cap-call :io/write :string :string "itonami cell: hello from a loaderless static image\n")] 0))
-EOF
+for c in cell impostor; do
+  text=$([ $c = cell ] && echo "itonami cell: hello from a loaderless static image" || echo "itonami cell: an impostor")
+  printf '(ns itonami-demo-%s (:export [main]))\n(defn main [] :i64 (let [x (typed-cap-call :io/write :string :string "%s\\n")] 0))\n' "$c" "$text" > "$G/$c.kotoba"
+done
 pin() { git -C "$K/$1" show "$2:$3" | sed '1,/\]))$/d'; }
 {
   echo '(ns itonami-cell-run (:export [main]))'
   pin org-nist-sha2 ea83e70a6a8efb8fb12dd5f0031fcda35a9ec77b kotoba/sha2/core.kotoba
   pin org-ietf-ed25519 6f17477b5be91a0c8c369b8d30e7e5ea0c10a8aa kotoba/ed25519/selfhost.kotoba
-  pin org-ietf-jcs 6dfee43e80c273eb7d473c0a01e2779662a4a7c3 kotoba/jcs/reader.kotoba
+  pin org-ietf-jcs 6331a9b461f5858be484b9d6859f314f9c3a2510 kotoba/jcs/reader.kotoba
   pin org-oci-distribution 90463924db65eea4d9021dc6623105472282b5a9 kotoba/oci/itonami_artifact.kotoba
   pin grant fa7e9b567286cd38cc4b229d8c980bfe676d9cce kotoba/grant/runtime_class.kotoba
   pin tsukasa 03e2322489839be2176d5c23d0ccb4120d1b0ee8 kotoba/tsukasa/ledger_core.kotoba
   pin tsukasa 03e2322489839be2176d5c23d0ccb4120d1b0ee8 kotoba/tsukasa/node_state.kotoba
   sed '1,/\]))$/d' kotoba/fleet_node_enrollment.kotoba
   sed '1,/\]))$/d' kotoba/fleet_cell_launch.kotoba
+  sed '1,/\]))$/d' kotoba/fleet_oci_layout.kotoba
   sed '1,/\]))$/d' kotoba/fleet_cell_run.kotoba
   echo '(defn main [] :i64 (cell-run-main))'
 } > "$G/agent.kotoba"
-# a control agent that starts the container whatever the verdict says
+# controls: an agent that starts the container whatever the verdict says, and
+# one that does not compare the layout's index.json with the release
 sed 's/(if (not (= verdict "launch\/ok")) 1/(if false 1/' "$G/agent.kotoba" > "$G/unchecked.kotoba"
+sed 's/(not (ol-index-ok? xb x0 manifest-digest manifest-size)) "layout\/index-mismatch"/false "layout\/index-mismatch"/' \
+  "$G/agent.kotoba" > "$G/no-index-check.kotoba"
 podman run --rm --pull never --platform linux/arm64 --network none \
   -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
-    for c in cell agent unchecked; do
+    for c in cell impostor agent unchecked no-index-check; do
       rm -f /gate/$c.elf
       ./root.elf compile /gate/$c.kotoba --target aarch64-linux --output /gate/$c.elf --format static >/dev/null || exit 1
       chmod +x /gate/$c.elf
     done'
-printf 'FROM scratch\nCOPY cell.elf /cell\nENTRYPOINT ["/cell"]\n' > "$G/Containerfile"
-podman build -q --platform linux/arm64 -t localhost/itonami-cell-demo:jun288 -f "$G/Containerfile" "$G"
-MD=$(podman image inspect --format '{{.Digest}}' localhost/itonami-cell-demo:jun288)
+for c in cell impostor; do
+  printf 'FROM scratch\nCOPY %s.elf /cell\nENTRYPOINT ["/cell"]\n' $c > "$G/Containerfile.$c"
+  podman build -q --platform linux/arm64 -t localhost/itonami-cell-demo:$c -f "$G/Containerfile.$c" "$G"
+  rm -rf "$G/layout-$c"; podman save -q --format oci-dir -o "$G/layout-$c" localhost/itonami-cell-demo:$c
+done
 # RFC 8032 test key 1, for this gate only
 printf '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60\n' > "$G/node.key"
-python3 -I - "$G" "$MD" <<'PY'
-import hashlib, sys
-g, md = sys.argv[1], sys.argv[2]
-m = '{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"' + md + '","size":0}'
+python3 -I - "$G" <<'PY'
+import hashlib, json, os, shutil, sys
+g = sys.argv[1]
+idx = json.load(open(f"{g}/layout-cell/index.json"))["manifests"][0]
+md, ms = idx["digest"], idx["size"]
+m = '{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"' + md + '","size":' + str(ms) + '}'
 for name, cls in [("release", "container"), ("other", "wasm")]:
     b = ('{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","artifactType":"application/vnd.itonami.app.v1",'
          f'"manifests":[{m}],"annotations":{{"org.itonami.runtime-class":"{cls}"}}}}').encode()
     open(f"{g}/{name}.json", "wb").write(b)
     open(f"{g}/{name}.digest", "w").write("sha256:" + hashlib.sha256(b).hexdigest())
+man = json.load(open(f"{g}/layout-cell/blobs/sha256/{md[7:]}"))
+layer = man["layers"][0]["digest"][7:]
+for name in ["tampered", "missing"]:
+    shutil.rmtree(f"{g}/layout-{name}", ignore_errors=True); shutil.copytree(f"{g}/layout-cell", f"{g}/layout-{name}")
+p = f"{g}/layout-tampered/blobs/sha256/{layer}"; b = bytearray(open(p, "rb").read()); b[len(b) // 2] ^= 1; open(p, "wb").write(bytes(b))
+os.remove(f"{g}/layout-missing/blobs/sha256/{layer}")
+# the impostor's layout, with every blob of the released image copied in
+shutil.rmtree(f"{g}/layout-swapped", ignore_errors=True); shutil.copytree(f"{g}/layout-impostor", f"{g}/layout-swapped")
+for f in os.listdir(f"{g}/layout-cell/blobs/sha256"):
+    shutil.copy(f"{g}/layout-cell/blobs/sha256/{f}", f"{g}/layout-swapped/blobs/sha256/{f}")
 PY
 R=$(cat "$G/release.digest"); O=$(cat "$G/other.digest")
 A=9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29   # L1: b70's admitted declaration
 N=1792500000000
-run() {  # name image index-file l1-digest class admitted allow
+run() {  # name agent layout index-file l1-digest admitted allow
   podman machine ssh -- "cd $G && env KEXE_ALLOW=20,35,37,38 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_20=/usr/bin/podman \
-    KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH ./$2.elf $G/$3 $4 $5 localhost/itonami-cell-demo $G/node.key b70 site-a $6 $N $7" \
+    KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH ./$2.elf $G/$4 $5 container $G/$3 $G/node.key b70 site-a $6 $N $7" \
     > "$G/$1.out" 2>&1 || true   # a refused cell exits 1
-  echo "$1: $(head -1 "$G/$1.out")$(grep -q '^exit ' "$G/$1.out" && echo ', container ran')"
+  echo "$1: $(grep -E '^(verdict|layout) ' "$G/$1.out" | tr '\n' ' ')$(grep -q '^exit ' "$G/$1.out" && echo '| container ran')"
 }
-run honest agent release.json "$R" container "$A" 2
-run digest-mismatch agent release.json "$O" container "$A" 2
-run class-mismatch agent other.json "$O" container "$A" 2
-run not-granted agent release.json "$R" container "$A" 1
-run not-admitted agent release.json "$R" container 0000000000000000000000000000000000000000000000000000000000000000 2
-run control unchecked release.json "$O" container "$A" 2
+run honest agent layout-cell release.json "$R" "$A" 2
+run digest-mismatch agent layout-cell release.json "$O" "$A" 2
+run not-granted agent layout-cell release.json "$R" "$A" 1
+run not-admitted agent layout-cell release.json "$R" 0000000000000000000000000000000000000000000000000000000000000000 2
+run tampered-layer agent layout-tampered release.json "$R" "$A" 2
+run missing-blob agent layout-missing release.json "$R" "$A" 2
+run swapped-index agent layout-swapped release.json "$R" "$A" 2
+run control-verdict unchecked layout-cell release.json "$O" "$A" 2
+run control-index no-index-check layout-swapped release.json "$R" "$A" 2
+grep -h '^receipt ' "$G/control-index.out" | head -1 | cut -c1-24; podman machine ssh -- "podman run --rm --network none --read-only oci:$G/layout-swapped 2>/dev/null"
 ```
 
 Expected output, measured on 2026-10-23 (the podman machine, arm64 Linux
 6.15, rootless podman):
 
 ```text
-honest: verdict launch/ok, container ran
+honest: verdict launch/ok layout layout/ok | container ran
 digest-mismatch: verdict launch/digest-mismatch
-class-mismatch: verdict itonami/runtime-class-mismatch
 not-granted: verdict grant/runtime-class-not-granted
 not-admitted: verdict launch/node-not-active
-control: verdict launch/digest-mismatch, container ran
+tampered-layer: verdict launch/ok layout layout/digest-mismatch
+missing-blob: verdict launch/ok layout layout/missing-blob
+swapped-index: verdict launch/ok layout layout/index-mismatch
+control-verdict: verdict launch/digest-mismatch layout layout/ok | container ran
+control-index: verdict launch/ok layout layout/ok | container ran
+receipt {"at":1792500000
+itonami cell: an impostor
 ```
 
 - **not-admitted.** L1 admits another declaration, so the node's own state
-  is `admitted` (held, `node/declaration-changed`) and not `active`.
-- **control.** The same mismatched release is started anyway by an agent
-  that ignores the verdict. The verdict is what keeps a mismatched release
-  from starting.
+  is `admitted` (held) and not `active`.
+- **tampered-layer and missing-blob.** One byte of the layer is changed, or
+  the layer is removed. The agent refuses before podman runs.
+- **swapped-index.** The directory holds every blob of the released image,
+  so the named manifest, config and layer all verify. Its `index.json`,
+  however, points to the impostor, and podman runs what `index.json` names.
+  The index check refuses it.
+- **control-index.** Without that check the agent admits the swapped
+  directory, and podman runs the impostor (the last line), under a receipt
+  for the release. **control-verdict** shows the same for the release
+  verdict.
 
 **Check the honest receipt independently.** OpenSSL verifies the Ed25519
 signature with the did's key, and `hashlib` recomputes both CIDs and the
@@ -164,16 +205,19 @@ PY
 
 Expected: `Signature Verified Successfully`, then `canonical: True`,
 `cell CID: True` and `output CID: True exit 0`. The receipt is
+[evidence/cell-run-layout-20261023.json](evidence/cell-run-layout-20261023.json). The first version, which
+ran the image by repository digest, is recorded in
 [evidence/cell-run-20261023.json](evidence/cell-run-20261023.json).
 
-The image `localhost/itonami-cell-demo:jun288` stays in the local podman
-store until it is removed (`podman rmi localhost/itonami-cell-demo:jun288`).
+The images `localhost/itonami-cell-demo:cell` and `:impostor` stay in the
+local podman store until they are removed (`podman rmi
+localhost/itonami-cell-demo:cell localhost/itonami-cell-demo:impostor`).
 
 ## What this does not show
 
-- Pulling the release from a registry. The index and the image are local.
-- Checking the image manifest and layers against the index. podman resolves
-  the digest.
+- Pulling the release from a registry. The layout is a local directory.
+- Another process writing to the layout directory between the check and the
+  run. The directory must stay under the agent's own scope.
 - A second node.
 - Persistence of the receipt (kotobase, yataverse).
 - The persistent container stdio channel (JUN-298).
