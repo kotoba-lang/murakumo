@@ -3,8 +3,9 @@
 ;; runtime's TCP wires (Linear JUN-289; ADR-2610071730 P3b). The rules are
 ;; fleet_lease_core's; this file is the transport and the voter's state.
 ;;
-;;   voter     lease-node-main voter <port> <state file> <idle ms>
-;;             [<topology file> <trust id=did,..> <threshold> <now ms>]
+;;   voter     lease-node-main voter <port | ip:port> <state file> <idle ms>
+;;             [<topology file> <trust id=did,..> <threshold> <now ms>
+;;              [<fleet token file>]]
 ;;             listens; for each connection reads one request line, decides
 ;;             with prepare-ok? / accept-ok?, writes its new state to the
 ;;             state file (wire 35) BEFORE it replies, replies one line and
@@ -23,7 +24,8 @@
 ;;             revision and keeps every node's owner-id (replicated_topology
 ;;             accept!); the log says "voter topology <revision>" or
 ;;             "voter kept <reason>".
-;;   proposer  lease-node-main proposer <mode> <t> <id> <value> <port>...
+;;   proposer  lease-node-main proposer <mode> <t> <id> <value>
+;;             [token=<fleet token file>] <port | ip:port>...
 ;;             mode full: prepare, adopt the value accepted under the highest
 ;;             ballot (else its own), accept, print "chosen <value>" on a
 ;;             majority; a round that a voter's higher promise preempted is
@@ -36,16 +38,22 @@
 ;; is a lease-text, canonical JSON with no spaces; an accept whose value is
 ;; not canonical JSON is refused. Every request is handled in arena-scope.
 ;;
+;; With a fleet token file (32 bytes or more after trimming, as resident.cljk
+;; private-token) on both sides, every request and reply carries an
+;; HMAC-SHA256 under the token (see "The fleet token" below). A voter answers
+;; nothing to a request whose mac does not hold, and a proposer counts a reply
+;; whose mac does not hold as no answer.
+;;
 ;; The state file is written, not fsynced: a voter survives a process
-;; restart, not a power cut. Membership, the fleet token and lease ids are
-;; lease.cljk's and not part of this transport.
+;; restart, not a power cut. Lease ids are lease.cljk's and not part of this
+;; transport.
 ;;
 ;; Composition order: sha2.core, ed25519.selfhost, jcs.reader, tsukasa
 ;; ledger_core and node_state, fleet_node_enrollment, fleet_intent_core,
 ;; fleet_topology_verify, fleet_lease_core, this file.
 ;; docs/lease-node.md has the gate.
 (ns murakumo.fleet-lease-node
-  (:export [lease-node-main lease-round]))
+  (:export [lease-node-main lease-round lease-token]))
 
 (defn- ln-listen [s :string] :string (typed-cap-call 43 :string :string s))
 (defn- ln-accept [s :string] :string (typed-cap-call 44 :string :string s))
@@ -75,6 +83,42 @@
 
 (defn- ln-dash [s :string] :string (if (= s "") "-" s))
 (defn- ln-undash [s :string] :string (if (= s "-") "" s))
+
+;; a voter's address: "ip:port", or a bare port on 127.0.0.1
+(defn- ln-addr [p :string] :string (if (>= (string-index-of p ":") 0) p (str "127.0.0.1:" p)))
+
+;; text before the first newline; text after the first space ("" when none)
+(defn- ln-line [s :string] :string (let [k (string-index-of s "\n")] (if (< k 0) s (string-substring s 0 k))))
+(defn- ln-rest [s :string] :string (let [k (string-index-of s " ")] (if (< k 0) "" (string-substring s (+ k 1) (string-length s)))))
+
+;; ---------------------------------------------------------------------------
+;; The fleet token (resident.cljk private-token and authorized?)
+;;
+;; With a token, every line is sent as "<mac> <line>": a request's mac is
+;; HMAC-SHA256(token, "req " + line), a reply's is HMAC-SHA256(token,
+;; "rep " + request line + "\n" + reply line). The token itself is never sent,
+;; and a reply is bound to the request it answers. Macs are compared in
+;; constant time.
+
+(defn- ln-space? [c :i64] :bool (or (= c 32) (= c 9) (= c 10) (= c 13)))
+
+;; the token file's content without surrounding whitespace; "" when there is no
+;; file or the token is shorter than 32 bytes
+(defn- ln-token [path :string] :string
+  (if (or (= path "") (not (ln-exists? path))) ""
+    (let [t (typed-cap-call 35 :string :string path) b (ln-bytes t) n (vector-count b)
+          i (loop [i 0] (if (and (< i n) (ln-space? (vector-at b i))) (recur (+ i 1)) i))
+          j (loop [j n] (if (and (> j i) (ln-space? (vector-at b (- j 1)))) (recur (- j 1)) j))]
+      (if (< (- j i) 32) "" (string-substring t i j)))))
+
+(defn lease-token [path :string] :string (ln-token path))
+
+(defn- ln-mac [token :string msg :string] :string (hmac-sha256-hex (ln-bytes token) (ln-bytes msg)))
+
+(defn- ln-same? [a :string b :string] :bool
+  (let [x (ln-bytes a) y (ln-bytes b)]
+    (and (= (vector-count x) (vector-count y))
+         (= (loop [i 0 d 0] (if (= i (vector-count x)) d (recur (+ i 1) (bit-or d (bit-xor (vector-at x i) (vector-at y i)))))) 0))))
 
 ;; lowercase hex <-> text, for wires 46 and 47
 (defn- ln-unhex [h :string] :string
@@ -167,15 +211,20 @@
           :else (ln-reply false st))))
 
 ;; one connection, or none within ms: 0 when one was answered, else 1
-(defn- ln-serve-one [l :string file :string ms :i64 topo :vector-i64 now :i64] :i64
+(defn- ln-serve-one [l :string file :string ms :i64 topo :vector-i64 now :i64 token :string] :i64
   (arena-scope
     (let [c (ln-accept (str l " " ms))]
       (if (< (ln-int c) 1) 1
-        (let [req (ln-recv c true)
-              rep (ln-handle file req topo now)
-              w (ln-write (str c " " (hex (ln-bytes (string-concat rep "\n")))))
-              z (ln-write c)]
-          0)))))
+        (let [raw (ln-line (ln-recv c true))
+              line (if (= token "") raw (ln-rest raw))
+              ok (or (= token "") (ln-same? (ln-field raw 0) (ln-mac token (string-concat "req " line))))]
+          (if (not ok)
+            (let [x (ln-say "voter refused unauthenticated") z (ln-write c)] 0)
+            (let [rep (ln-handle file line topo now)
+                  out (if (= token "") rep (str (ln-mac token (str "rep " line "\n" rep)) " " rep))
+                  w (ln-write (str c " " (hex (ln-bytes (string-concat out "\n")))))
+                  z (ln-write c)]
+              0)))))))
 
 (defn- ln-load-doc [path :string] :vector-i64
   (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 (ln-bytes path)))))
@@ -202,11 +251,11 @@
 ;; a voter with a topology looks at its file after each empty slice and
 ;; rotates when it changed. Only an adopted or newly seen document stays
 ;; allocated; the comparison and the verification run in arena-scope.
-(defn- ln-voter [port :i64 file :string idle :i64 topo :vector-i64 now :i64
-                 path :string trust :string threshold :i64] :i64
-  (let [l (ln-listen (str "127.0.0.1:" port))]
+(defn- ln-voter [addr :string file :string idle :i64 topo :vector-i64 now :i64
+                 path :string trust :string threshold :i64 token :string] :i64
+  (let [l (ln-listen (ln-addr addr))]
     (loop [n 0 left idle cur topo seen topo]
-      (let [r (ln-serve-one l file (if (< left 500) left 500) cur now)]
+      (let [r (ln-serve-one l file (if (< left 500) left 500) cur now token)]
         (cond (= r 0) (recur (+ n 1) idle cur seen)
               (<= left 500) n
               (or (= path "") (= (arena-scope (if (ln-same-file? path seen) 0 1)) 0)) (recur n (- left 500) cur seen)
@@ -216,27 +265,34 @@
                         (recur n (- left 500) cur d))))))))
 
 ;; the voter's topology: none, or the verified document; "" and the reason
-;; when it does not verify
+;; when it does not verify. A token file that is named but missing or short
+;; stops the voter too.
 (defn- ln-voter-main [] :i64
-  (let [path (ln-arg 4)]
-    (if (= path "") (ln-voter (ln-int (ln-arg 1)) (ln-arg 2) (ln-int (ln-arg 3)) (vector-alloc 0) 0 "" "" 0)
-      (let [doc (if (ln-exists? path) (ln-load-doc path) (vector-alloc 0))
-            v (topology-verdict doc (ln-arg 5) (ln-int (ln-arg 6)) 0)]
-        (if (not (= v "topology/ok")) (let [x (ln-say (string-concat "voter " v))] 2)
-          (ln-voter (ln-int (ln-arg 1)) (ln-arg 2) (ln-int (ln-arg 3)) doc (ln-int (ln-arg 7))
-                    path (ln-arg 5) (ln-int (ln-arg 6))))))))
+  (let [path (ln-arg 4) tpath (ln-arg 8) token (ln-token tpath)]
+    (cond (and (not (= tpath "")) (= token "")) (let [x (ln-say "voter token/missing-or-short")] 2)
+          (= path "") (ln-voter (ln-arg 1) (ln-arg 2) (ln-int (ln-arg 3)) (vector-alloc 0) 0 "" "" 0 token)
+          :else
+          (let [doc (if (ln-exists? path) (ln-load-doc path) (vector-alloc 0))
+                v (topology-verdict doc (ln-arg 5) (ln-int (ln-arg 6)) 0)]
+            (if (not (= v "topology/ok")) (let [x (ln-say (string-concat "voter " v))] 2)
+              (ln-voter (ln-arg 1) (ln-arg 2) (ln-int (ln-arg 3)) doc (ln-int (ln-arg 7))
+                        path (ln-arg 5) (ln-int (ln-arg 6)) token))))))
 
 ;; ---------------------------------------------------------------------------
 ;; The proposer
 
-;; send one line to the voter at port and read its reply ("" when it is down)
-(defn- ln-ask [port :string line :string] :string
-  (let [c (ln-dial (str "127.0.0.1:" port " 1000"))]
+;; send one line to the voter at port and read its reply ("" when it is down,
+;; or, with a token, when the reply's mac does not hold)
+(defn- ln-ask [port :string line :string token :string] :string
+  (let [c (ln-dial (str (ln-addr port) " 1000"))]
     (if (< (ln-int c) 1) ""
-      (let [w (ln-write (str c " " (hex (ln-bytes (string-concat line "\n")))))
-            r (ln-recv c false)
+      (let [msg (if (= token "") line (str (ln-mac token (string-concat "req " line)) " " line))
+            w (ln-write (str c " " (hex (ln-bytes (string-concat msg "\n")))))
+            r (ln-line (ln-recv c false))
             z (ln-write c)]
-        r))))
+        (cond (= token "") r
+              (ln-same? (ln-field r 0) (ln-mac token (str "rep " line "\n" (ln-rest r)))) (ln-rest r)
+              :else "")))))
 
 ;; the voters' ports, "p1,p2,..": their count and the k-th
 (defn- ln-port-count [ports :string] :i64
@@ -254,11 +310,11 @@
 ;; number of voters that answered, the highest promise t among refusals whose
 ;; promise beats the ballot (t, id) (0 when none), and the value accepted under
 ;; the highest ballot (else own)
-(defn- ln-phase [line :string t :i64 id :string own :string ports :string] :string
+(defn- ln-phase [line :string t :i64 id :string own :string ports :string token :string] :string
   (let [n (ln-port-count ports)]
     (loop [k 0 oks 0 ans 0 pre 0 bt 0 bid "" bv own]
       (if (= k n) (str oks " " ans " " pre " " bv)
-        (let [r (ln-ask (ln-port ports k) line)
+        (let [r (ln-ask (ln-port ports k) line token)
               ok (= (ln-field r 0) "ok")
               pt (ln-int (ln-field r 1)) pid (ln-undash (ln-field r 2))
               beats (and (= (ln-field r 0) "no") (> (ballot-cmp pt pid t id) 0) (> pt pre))
@@ -278,12 +334,12 @@
 
 ;; one round at the ballot (t, id): "chosen <value>" (own or adopted), or
 ;; what ln-short says about the phase that fell short
-(defn- ln-try [t :i64 id :string own :string ports :string] :string
+(defn- ln-try [t :i64 id :string own :string ports :string token :string] :string
   (let [need (majority (ln-port-count ports))
-        prep (ln-phase (str "prepare " t " " id) t id own ports)
+        prep (ln-phase (str "prepare " t " " id) t id own ports token)
         value (ln-field prep 3)]
     (if (< (ln-int (ln-field prep 0)) need) (ln-short prep "prepare" need)
-      (let [acc (ln-phase (str "accept " t " " id " " value) t id value ports)]
+      (let [acc (ln-phase (str "accept " t " " id " " value) t id value ports token)]
         (if (< (ln-int (ln-field acc 0)) need) (ln-short acc "accept" need)
           (string-concat "chosen " value))))))
 
@@ -293,35 +349,44 @@
 ;; just above that promise, at most ln-tries rounds, and the retry adopts
 ;; whatever was accepted by then. Too few answers (fail closed) or a refused
 ;; value end it. There is no random backoff: the runtime has no sleep.
-(defn- ln-rounds [t :i64 id :string own :string ports :string] :string
+(defn- ln-rounds [t :i64 id :string own :string ports :string token :string] :string
   (loop [k 1 tt t]
-    (let [r (ln-try tt id own ports)]
+    (let [r (ln-try tt id own ports token)]
       (cond (not (= (ln-field r 0) "preempted")) r
             (< k (ln-tries)) (recur (+ k 1) (+ (ln-int (ln-field r 1)) 1))
             :else (str "no-majority " (ln-field r 2) " " (ln-field r 3))))))
 
-(defn- ln-proposer [mode :string t :i64 id :string own :string ports :string] :i64
+(defn- ln-proposer [mode :string t :i64 id :string own :string ports :string token :string] :i64
   (let [need (majority (ln-port-count ports))]
     (cond (= mode "prepare")
-          (let [pok (ln-int (ln-field (ln-phase (str "prepare " t " " id) t id own ports) 0))]
+          (let [pok (ln-int (ln-field (ln-phase (str "prepare " t " " id) t id own ports token) 0))]
             (if (< pok need) (let [x (ln-say (str "no-majority prepare " pok))] 1) (let [x (ln-say (str "prepared " pok))] 0)))
           (= mode "accept")
-          (let [aok (ln-int (ln-field (ln-phase (str "accept " t " " id " " own) t id own ports) 0))]
+          (let [aok (ln-int (ln-field (ln-phase (str "accept " t " " id " " own) t id own ports token) 0))]
             (if (< aok need) (let [x (ln-say (str "no-majority accept " aok))] 1) (let [x (ln-say (string-concat "chosen " own))] 0)))
           :else
-          (let [r (ln-rounds t id own ports) x (ln-say r)] (if (= (ln-field r 0) "chosen") 0 1)))))
+          (let [r (ln-rounds t id own ports token) x (ln-say r)] (if (= (ln-field r 0) "chosen") 0 1)))))
 
 ;; rounds for own value, as the proposer's full mode: the chosen value (own or
-;; an adopted one), or "" when none was chosen
-(defn lease-round [t :i64 id :string own :string ports :string] :string
-  (let [r (ln-rounds t id own ports)]
+;; an adopted one), or "" when none was chosen. token "" sends plain lines.
+(defn lease-round [t :i64 id :string own :string ports :string token :string] :string
+  (let [r (ln-rounds t id own ports token)]
     (if (= (ln-field r 0) "chosen") (ln-field r 1) "")))
 
-;; the voters' ports from argument 5 on, joined by ","
+;; the voters from argument 5 on, joined by ","; an argument "token=<file>"
+;; names the fleet token file instead
+(defn- ln-tok-arg? [a :string] :bool (= (string-index-of a "token=") 0))
 (defn- ln-arg-ports [] :string
-  (loop [k 5 out ""] (if (= (ln-arg k) "") out (recur (+ k 1) (if (= out "") (ln-arg k) (str out "," (ln-arg k)))))))
+  (loop [k 5 out ""]
+    (cond (= (ln-arg k) "") out
+          (ln-tok-arg? (ln-arg k)) (recur (+ k 1) out)
+          :else (recur (+ k 1) (if (= out "") (ln-arg k) (str out "," (ln-arg k)))))))
+(defn- ln-arg-token-path [] :string
+  (loop [k 5] (cond (= (ln-arg k) "") "" (ln-tok-arg? (ln-arg k)) (string-substring (ln-arg k) 6 (string-length (ln-arg k))) :else (recur (+ k 1)))))
 
 (defn lease-node-main [] :i64
   (if (= (ln-arg 0) "voter")
     (ln-voter-main)
-    (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports))))
+    (let [tp (ln-arg-token-path) token (ln-token tp)]
+      (if (and (not (= tp "")) (= token "")) (let [x (ln-say "proposer token/missing-or-short")] 2)
+        (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports) token)))))

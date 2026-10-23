@@ -5,7 +5,9 @@ ADR-2610071730 P3b. [Lease core](lease-core.md) holds the register's rules.
 `kotoba/fleet_lease_node.kotoba` runs them as separate processes, voters and
 a proposer, each a loaderless static image, over the runtime's TCP wires.
 
-- **Voter** (`voter <port> <state file> <idle ms>`). For each connection it:
+- **Voter** (`voter <port | ip:port> <state file> <idle ms>`, then optionally
+  a topology, its trust, threshold and now, and a fleet token file). For
+  each connection it:
   1. reads one request line;
   2. decides with `prepare-ok?` / `accept-ok?`;
   3. writes its new state to the state file (wire 35), **before it
@@ -15,7 +17,7 @@ a proposer, each a loaderless static image, over the runtime's TCP wires.
   It exits after `<idle ms>` with no connection. The state file is its only
   memory, so a voter that is started again keeps its promise and its
   accepted value. Every request is handled in `arena-scope`.
-- **Proposer** (`proposer <mode> <t> <id> <value> <port>…`):
+- **Proposer** (`proposer <mode> <t> <id> <value> [token=<file>] <port | ip:port>…`):
   - `full` prepares, adopts the value accepted under the highest ballot (or
     else its own), accepts, and on a majority prints `chosen <value>`. A
     round preempted by a voter's higher promise is tried again just above
@@ -156,7 +158,7 @@ voters() {  # tag topology-file-or-empty
     env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:760$v \
       /gate/node.elf voter 760$v /gate/$1-v$v.state 8000 $3 $4 $5 $6 > /gate/$1-v$v.log 2>&1 &
   done
-  sleep 3
+  sleep 5   # each voter verifies the topology before it listens
 }
 prop() {  # label t id value
   env KEXE_ALLOW=37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7601,127.0.0.1:7602,127.0.0.1:7603 \
@@ -313,7 +315,8 @@ race once: both hold the same lease 0/20, a proposer without a lease 20/20, two 
 - **Race.** With retries, both proposers report the same lease in every
   run. With one round, one of the two ends without a lease in every run.
   No run chose two leases. The counts are from one run and depend on
-  timing; the scripted cases do not.
+  timing; the scripted cases do not. Later runs gave 1/20 to 2/20 with one
+  round, and 20/20 again with retries.
 
 Membership refusals are not retried. After the membership run above, the
 voters of "k16 proposes" and "until too far ahead" still hold the promise
@@ -374,7 +377,7 @@ for img in node static unchecked; do
     env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:790$v \
       /gate/$img.elf voter 790$v /gate/rot-v$v.state 6000 /gate/live.json $TRUST 1 $N > /gate/rot-v$v.log 2>&1 &
   done
-  sleep 3
+  sleep 5   # each voter verifies the topology before it listens
   prop "k16, revision 7 held" 101 "$VK"
   swap topology-r6.json;        prop "k16, after revision 6" 102 "$VK"
   swap topology-r9-forged.json; prop "k16, after a forged 9" 103 "$VK"
@@ -439,6 +442,131 @@ Expected output, measured on 2026-10-23 (`…` is the rest of the lease):
 
 The rotation receipt is [evidence/lease-rotation-20261023.json](evidence/lease-rotation-20261023.json).
 
+## Fleet token
+
+The resident requires the fleet token on `/leases` (`resident.cljk`'s
+`private-token` and `authorized?`). Here, a voter given a token file, and a
+proposer given `token=<file>`, bind every line to the token:
+- **The token.** It is the file's content without surrounding whitespace,
+  and must be at least 32 bytes.
+- **Requests** are sent as `<mac> <line>`, with mac =
+  HMAC-SHA256(token, `req ` + line).
+- **Replies** are sent as `<mac> <reply>`, with mac = HMAC-SHA256(token,
+  `rep ` + request line + newline + reply). A reply is therefore bound to
+  the request it answers.
+- **The token itself is never sent.** Macs are compared in constant time.
+- **Failures.** A voter answers nothing to a request whose mac does not
+  hold, and logs it. A proposer counts a reply whose mac does not hold as no
+  answer.
+
+The token file's mode is not checked. The resident requires 0600, but wire
+35 has no stat.
+
+Voters and proposers also take `ip:port` where they took a port. A bare port
+still means 127.0.0.1.
+
+The fleet voters hold the fleet token. In order:
+1. an outsider with another token sends an accept at ballot 900;
+2. an outsider with no token runs a full round;
+3. a member runs a full round with the fleet token;
+4. the member runs a round against impostor voters, which hold another
+   token and accept anything.
+
+There are two controls:
+- **`trusting-voter`:** voters that do not check a request's mac;
+- **`trusting-proposer`:** a member that does not check a reply's mac.
+
+With the same `$G`, `$K` and `node.kotoba`:
+
+```sh
+python3 -I - "$G" <<'PY'
+import hashlib, sys
+g = sys.argv[1]
+for name in ["fleet", "other"]:   # test tokens, for this gate only
+    open(f"{g}/{name}.token", "w").write(hashlib.sha256(f"lease-node gate {name} token".encode()).hexdigest() + "\n")
+open(f"{g}/short.token", "w").write("short\n")
+PY
+sed 's/ok (or (= token "") (ln-same? (ln-field raw 0) (ln-mac token (string-concat "req " line))))/ok true/' \
+  "$G/node.kotoba" > "$G/trusting-voter.kotoba"
+sed 's/(ln-same? (ln-field r 0) (ln-mac token (str "rep " line "\\n" (ln-rest r)))) (ln-rest r)/true (ln-rest r)/' \
+  "$G/node.kotoba" > "$G/trusting-proposer.kotoba"
+cat > "$G/token.sh" <<'EOF'
+VA='{"class":"qwen-text","epoch":1,"node":"b70","revision":7,"slot":0,"until":1792500900000}'
+VK='{"class":"qwen-text","epoch":1,"node":"k16","revision":7,"slot":0,"until":1792500900000}'
+voters() {  # image tag base token-file
+  for v in 1 2 3; do
+    env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:$3$v \
+      /gate/$1.elf voter $3$v /gate/$2-v$v.state 3000 "" "" "" "" /gate/$4 > /gate/$2-v$v.log 2>&1 &
+  done
+  sleep 0.3
+}
+prop() {  # image label base mode t id value [token=file]
+  env KEXE_ALLOW=35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_45=127.0.0.1:${3}1,127.0.0.1:${3}2,127.0.0.1:${3}3 \
+    /gate/$1.elf proposer $4 $5 $6 "$7" $8 ${3}1 ${3}2 ${3}3 2>&1 | grep -v '^{:status' | sed "s/^/  $2: /" | cut -c1-96
+}
+for img in node trusting-voter trusting-proposer; do
+  V=node; P=node; [ $img = trusting-voter ] && V=trusting-voter; [ $img = trusting-proposer ] && P=trusting-proposer
+  echo "== $img"
+  rm -f /gate/tok-v*.state /gate/imp-v*.state
+  voters $V tok 796 fleet.token
+  prop node "outsider accepts (900,x), another token" 796 accept 900 x "$VK" token=/gate/other.token
+  prop node "outsider round (901,x), no token" 796 full 901 x "$VK"
+  prop $P "member round (902,b70), the fleet token" 796 full 902 b70 "$VA" token=/gate/fleet.token
+  voters trusting-voter imp 797 other.token
+  prop $P "member round (903,b70), impostor voters" 797 full 903 b70 "$VA" token=/gate/fleet.token
+  wait
+  sed 's/^/  voter 1 log: /' /gate/tok-v1.log
+done
+voters node short 798 short.token; wait
+echo "a voter with a short token: $(head -1 /gate/short-v1.log)"
+EOF
+podman run --rm --pull never --platform linux/arm64 --network none \
+  -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
+    for c in trusting-voter trusting-proposer; do
+      rm -f /gate/$c.elf
+      ./root.elf compile /gate/$c.kotoba --target aarch64-linux --output /gate/$c.elf --format static >/dev/null || exit 1
+      chmod +x /gate/$c.elf
+    done
+    sh /gate/token.sh'
+```
+
+Expected output, measured on 2026-10-23 (`…` is the rest of the lease):
+
+```text
+== node
+  outsider accepts (900,x), another token: no-majority accept 0
+  outsider round (901,x), no token: no-majority prepare 0
+  member round (902,b70), the fleet token: chosen {"class":"qwen-text","epoch":1,"node":"b70",…}
+  member round (903,b70), impostor voters: no-majority prepare 0
+  voter 1 log: voter refused unauthenticated
+  voter 1 log: voter refused unauthenticated
+== trusting-voter
+  outsider accepts (900,x), another token: no-majority accept 0
+  outsider round (901,x), no token: no-majority prepare 0
+  member round (902,b70), the fleet token: chosen {"class":"qwen-text","epoch":1,"node":"k16",…}
+  member round (903,b70), impostor voters: no-majority prepare 0
+== trusting-proposer
+  outsider accepts (900,x), another token: no-majority accept 0
+  outsider round (901,x), no token: no-majority prepare 0
+  member round (902,b70), the fleet token: chosen {"class":"qwen-text","epoch":1,"node":"b70",…}
+  member round (903,b70), impostor voters: chosen {"class":"qwen-text","epoch":1,"node":"b70",…}
+  voter 1 log: voter refused unauthenticated
+  voter 1 log: voter refused unauthenticated
+a voter with a short token: voter token/missing-or-short
+```
+
+- **The fleet voters** refuse both outsiders, and the log shows each
+  refusal. The member's round is chosen. Against the impostors, the
+  member's proposer counts no reply, because none carries a mac under the
+  fleet token.
+- **`trusting-voter`.** The outsider's accept lands although the outsider
+  cannot read the replies. The member's next round then adopts k16, the
+  outsider's lease.
+- **`trusting-proposer`.** The member reports a lease chosen by impostor
+  voters that hold none of the fleet's state.
+
+The fleet token receipt is [evidence/lease-token-20261023.json](evidence/lease-token-20261023.json).
+
 ## What this does not show
 
 - Separate hosts.
@@ -446,7 +574,7 @@ The rotation receipt is [evidence/lease-rotation-20261023.json](evidence/lease-r
   request that arrives within 500 ms of a change is judged under the
   topology held. A request that arrives while a voter verifies waits, and
   its proposer may count that voter as down (fail closed).
-- The fleet token and lease ids of `lease.cljk`.
+- Lease ids of `lease.cljk`.
 - An fsync: a voter survives a process restart, not a power cut.
 - Concurrent proposers on separate hosts. The race loop runs on one
   machine, and there is no random backoff, so two proposers can in

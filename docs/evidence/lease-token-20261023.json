@@ -1,0 +1,131 @@
+{
+  "schema": "murakumo.lease-token.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-289"
+  ],
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": {
+    "kotoba/fleet_lease_node.kotoba": "dbaa9afb291a51121f309af6bd1e671b013c5b95ec0e7970a1e5fecc55654f3d",
+    "kotoba/fleet_job_node.kotoba": "0c62a0d3faa5828b65aae867b7d640c164803a2fb7eacd67c1e0f5f70fd1d57a"
+  },
+  "images": {
+    "node": {
+      "bytes": 545280,
+      "sha256": "d67bc2cc4af1ec466085f5d5842eccb75748f88615bbbca9f3ffcc4947edede9"
+    },
+    "trusting-voter": {
+      "bytes": 545280,
+      "sha256": "1c470ce45a87887cf2898798a2c09a2373bae34c3d93aa401b968ffcd77da147"
+    },
+    "trusting-proposer": {
+      "bytes": 545280,
+      "sha256": "751ea5c67e7456326b923836941b2277d7c95de44475eb137f45bf6829b3b36f"
+    }
+  },
+  "jobImage": {
+    "bytes": 651776,
+    "sha256": "96a0cb4559e4ef3a757a1f5e6197df3070a58fd5af3a289a976e90f81015fbdf"
+  },
+  "tokens": "fleet.token and other.token are SHA-256 hex of fixed test strings (for this gate only); short.token is 5 bytes; their values are not recorded here",
+  "controls": {
+    "trusting-voter": "sed sets the voter's request check to ok true",
+    "trusting-proposer": "sed replaces the proposer's reply mac check with true"
+  },
+  "token": [
+    "== node",
+    "  outsider accepts (900,x), another token: no-majority accept 0",
+    "  outsider round (901,x), no token: no-majority prepare 0",
+    "  member round (902,b70), the fleet token: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"r",
+    "  member round (903,b70), impostor voters: no-majority prepare 0",
+    "  voter 1 log: voter refused unauthenticated",
+    "  voter 1 log: voter refused unauthenticated",
+    "== trusting-voter",
+    "  outsider accepts (900,x), another token: no-majority accept 0",
+    "  outsider round (901,x), no token: no-majority prepare 0",
+    "  member round (902,b70), the fleet token: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"r",
+    "  member round (903,b70), impostor voters: no-majority prepare 0",
+    "== trusting-proposer",
+    "  outsider accepts (900,x), another token: no-majority accept 0",
+    "  outsider round (901,x), no token: no-majority prepare 0",
+    "  member round (902,b70), the fleet token: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"r",
+    "  member round (903,b70), impostor voters: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"r",
+    "  voter 1 log: voter refused unauthenticated",
+    "  voter 1 log: voter refused unauthenticated",
+    "a voter with a short token: voter token/missing-or-short"
+  ],
+  "reruns": {
+    "lease-node run": [
+      "1 A prepare (100,a): prepared 3",
+      "2 B round   (101,b): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"until\":17925009",
+      "3 A accept  (100,a): no-majority accept 0",
+      "4 A round   (102,a): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"until\":17925009",
+      "1 A prepare (100,a): prepared 3",
+      "2 B round   (101,b): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"until\":17925009",
+      "3 A accept  (100,a): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"until\":17925009",
+      "4 A round   (102,a): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"until\":17925009"
+    ],
+    "membership": [
+      "k16 proposes, topology says disabled: no-majority accept 0",
+      "b70 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"until\":1792500900000}",
+      "b70 proposes until too far ahead: no-majority accept 0",
+      "voters given a forged topology: no-majority prepare 0",
+      "forged voter says: voter topology/needs-signatures",
+      "control: open voters, k16 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\""
+    ],
+    "preemption": [
+      "a2 b70 round    (100,b70): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot",
+      "b2 b70 round    (100,b70): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot",
+      "c1 one voter up (100,b70): no-majority prepare 1",
+      "a2 b70 round    (100,b70): no-majority prepare 0",
+      "b2 b70 round    (100,b70): no-majority prepare 0",
+      "c1 one voter up (100,b70): no-majority prepare 1",
+      "race node: both hold the same lease 20/20, a proposer without a lease 0/20, two leases 0/20",
+      "race once: both hold the same lease 1/20, a proposer without a lease 19/20, two leases 0/20"
+    ],
+    "rotation": [
+      "  b70, after revision 8: no-majority accept 0",
+      "  k16, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"u",
+      "  voter 1 log: voter kept intent/not-advancing",
+      "  voter 1 log: voter kept topology/needs-signatures",
+      "  voter 1 log: voter kept topology/owner-replaced",
+      "  voter 1 log: voter topology 8",
+      "  b70, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"u",
+      "  k16, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"u",
+      "  b70, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"u",
+      "  k16, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"u",
+      "  voter 1 log: voter topology 6",
+      "  voter 1 log: voter topology 9",
+      "  voter 1 log: voter topology 9",
+      "  voter 1 log: voter topology 8"
+    ],
+    "job-node": [
+      "honest b70: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "honest k16: lease b70 held-by b70",
+      "honest verify b70's receipt: holder b70 verdict job/confirmed",
+      "rogue b70: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "rogue k16: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "rogue verify b70's receipt: holder b70 verdict job/confirmed",
+      "rogue verify k16's receipt: holder b70 verdict job/not-the-holder",
+      "job verifier, b70's receipt: holder b70 verdict job/confirmed",
+      "job verifier, k16's receipt: holder b70 verdict job/not-the-holder",
+      "nofence verifier, b70's receipt: holder b70 verdict job/confirmed",
+      "nofence verifier, k16's receipt: holder b70 verdict job/confirmed",
+      "canonical: True | kind itonami.agent-step-receipt/1 | epoch 1 | node b70",
+      "job id: True",
+      "class k16: ineligible grant/runtime-class-not-granted",
+      "class b70: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "class verify b70's output: holder b70 verdict job/confirmed",
+      "late k16: lease k16 verdict grant/runtime-class-not-granted refused grant/runtime-class-not-granted",
+      "late b70: lease k16 held-by k16",
+      "late verify b70's output: holder k16 verdict job/bad-signature"
+    ]
+  },
+  "notes": [
+    "The Membership and Rotation start-up waits are 5 s instead of 3 s: one run under load (podman machine load average about 3.8) gave 'b70 proposes: no-majority prepare 1', and two reruns matched; listen sockets already set SO_REUSEADDR.",
+    "Race counts vary between runs (one-round control 0/20, 2/20, 1/20 agreeing); retries agreed 20/20 in each.",
+    "The token file's mode is not checked (wire 35 has no stat).",
+    "Every block was run as documented in fresh directories; no Node, NBB, JVM, hosted compiler, C compiler or C loader runs."
+  ]
+}

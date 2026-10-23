@@ -32,6 +32,10 @@ its acceptance items are covered here:
 - **`verify`, on anyone:** it learns the chosen lease with `lease-round`, maps
   the holder to its did through the trust, and judges a node's receipt with
   `receipt-verdict`.
+- **The fleet token.** `run` and `verify` take an optional fleet token file
+  as their last argument. With it, their lease rounds carry the token's
+  macs ([lease node, Fleet token](lease-node.md#fleet-token)). The runs
+  below use none.
 
 Three refactors make the composition possible:
 - `fleet_agent_step`'s `receipt-text` is now `step-receipt-text`, so it no

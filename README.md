@@ -598,7 +598,10 @@ five rounds, as `lease.cljk`'s `round!`). In a race loop on one machine, two
 proposers then report the same lease in 20 of 20 runs, against 0 of 20 with
 one round. Running voters follow their topology file: a changed topology is
 adopted only if it verifies, advances the revision and keeps every node's
-owner-id. Reproduction: [lease node](docs/lease-node.md).
+owner-id. With a fleet token, every request and reply carries an HMAC-SHA256
+under it, as the resident's bearer token guards `/leases`: outsiders are
+refused and impostor voters are not believed. Reproduction:
+[lease node](docs/lease-node.md).
 
 `kotoba/fleet_job_node.kotoba` gives one agent-step job to two nodes.
 
