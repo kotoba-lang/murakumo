@@ -22,9 +22,15 @@ image, writing the file that the voters already follow
   
   Replies are HTTP/1.0, then the connection closes. Requests are parsed as
   bytes and never decoded.
-- **Poll.** After `<poll ms>` without a request, the replica asks each peer
-  for `/topology` with the token, reading at most 262144 body bytes within
-  3 s. It then applies `accept!`:
+- **Poll.** Every `<poll ms>` (a request served counts as one 100 ms
+  slice), the replica picks its peers as `tick!` does:
+  1. the seeds given on the command line, then the url of every gateway and
+     node of the payload it holds, without repeats and without its own
+     address;
+  2. `<fanout>` of those, starting at a cursor that moves by one each poll.
+
+  It asks each for `/topology` with the token, reading at most 262144 body
+  bytes within 3 s. It then applies `accept!`:
   - a document that verifies, advances the revision and keeps every node's
     `owner-id` is adopted and written to the file;
   - one that verifies at the same revision but with another payload is a
@@ -35,8 +41,9 @@ image, writing the file that the voters already follow
   adopted document stays allocated.
 
 The command line is `replica <file> <trust> <threshold> <token file>
-<listen ip:port> <poll ms> <polls> <peer ip:port>…`. The replica exits after
-`<polls>` polls.
+<listen ip:port> <poll ms> <polls> <fanout> [<seed ip:port>…]`. The replica
+exits after `<polls>` polls. Its dial grant must name the seeds and the
+payload's addresses.
 
 ## Reproduce
 
@@ -87,9 +94,9 @@ N=1792500000000; U=1792500900000
 VK='{"class":"qwen-text","epoch":1,"node":"k16","revision":7,"slot":0,"until":'$U'}'
 rep() {  # image name file token listen polls peer...
   img=$1; name=$2; file=$3; tok=$4; listen=$5; polls=$6; shift 6
-  dial=$(echo "$@" | tr ' ' ',')
+  dial=$(echo "$@" | tr ' ' ','),100.64.0.10:8796,100.64.0.1:8796   # the seeds, and the payload's addresses (unreachable here)
   env KEXE_ALLOW=35,37,38,43,44,45,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:$listen KEXE_CAP_RESOURCES_45=$dial \
-    /gate/$img.elf replica /gate/$file $TRUST 1 /gate/$tok 127.0.0.1:$listen 500 $polls "$@" > /gate/$name.log 2>&1 &
+    /gate/$img.elf replica /gate/$file $TRUST 1 /gate/$tok 127.0.0.1:$listen 500 $polls 8 "$@" > /gate/$name.log 2>&1 &
 }
 rev() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["payload"]["revision"])' /gate/$1; }
 for img in node unchecked open; do
@@ -141,12 +148,12 @@ Expected output, measured on 2026-10-23 (`…` is the rest of the lease):
   r2 holds revision 8
     r2 log: replica topology 8 from 127.0.0.1:7811
   r3 holds revision 7, conflict recorded
-    r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831
     r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833
     r3 log: replica conflict 7 from 127.0.0.1:7834
     r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831
     r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833
     r3 log: replica conflict 7 from 127.0.0.1:7834
+    r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831
   r4 holds revision 7
     voter 1 log: voter topology 8
 == replicas: unchecked
@@ -156,15 +163,15 @@ Expected output, measured on 2026-10-23 (`…` is the rest of the lease):
     r1 log: replica refused unauthenticated
   r2 holds revision 8
     r2 log: replica topology 8 from 127.0.0.1:7811
-  r3 holds revision 7
-    r3 log: replica topology 9 from 127.0.0.1:7831
+  r3 holds revision 6
     r3 log: replica topology 6 from 127.0.0.1:7832
     r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833
     r3 log: replica topology 7 from 127.0.0.1:7834
     r3 log: replica topology 9 from 127.0.0.1:7831
-    r3 log: replica topology 6 from 127.0.0.1:7832
     r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833
     r3 log: replica topology 7 from 127.0.0.1:7834
+    r3 log: replica topology 9 from 127.0.0.1:7831
+    r3 log: replica topology 6 from 127.0.0.1:7832
   r4 holds revision 7
     voter 1 log: voter topology 8
 == replicas: open
@@ -173,12 +180,12 @@ Expected output, measured on 2026-10-23 (`…` is the rest of the lease):
   r2 holds revision 8
     r2 log: replica topology 8 from 127.0.0.1:7811
   r3 holds revision 7, conflict recorded
-    r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831
     r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833
     r3 log: replica conflict 7 from 127.0.0.1:7834
     r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831
     r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833
     r3 log: replica conflict 7 from 127.0.0.1:7834
+    r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831
   r4 holds revision 8
     r4 log: replica topology 8 from 127.0.0.1:7811
     voter 1 log: voter topology 8
@@ -190,13 +197,14 @@ a replica with a short token: replica token/missing-or-short
   adopt it, so k16, enabled by revision 8, is chosen.
 - **Peers that answer anyone.** `r3` keeps the forged 9 and the 9 that
   replaces b70's owner out, and logs both. It ignores the older 6, and
-  records the signed 7 with another payload as a conflict. Each poll does the
-  same.
+  records the signed 7 with another payload as a conflict. Each poll asks
+  every peer (fanout 8), starting at the cursor. The payload's own addresses
+  are unreachable in this container.
 - **The token.** `r4` holds another token, so `r1` answers 401 and logs it,
   and `r4` stays at revision 7.
 - **`unchecked`.** A replica that adopts whatever a peer answers takes the
-  forged 9, then the older 6, then the conflicting 7. Only the owner rule,
-  checked separately, still holds.
+  older 6, the conflicting 7 and the forged 9 in turn, and ends at 6. Only the
+  owner rule, checked separately, still holds.
 - **`open`.** A replica that serves without the token gives revision 8 to
   `r4`, which holds another token.
 
@@ -204,10 +212,76 @@ The voters verify what they read on their own, so a replica that writes a
 bad file still cannot make them accept it ([lease node, Rotation](lease-node.md#rotation)).
 The receipt is [evidence/topology-replica-20261023.json](evidence/topology-replica-20261023.json).
 
+## Peers from the topology
+
+Here each replica runs in its own container on a podman network with
+tailnet addresses, so the payload's urls are real and `validate!` accepts
+them:
+- **n1** holds revision 8 at `100.64.9.11:8796`, which is also the
+  gateway's url.
+- **n3 and n4** serve revision 7 at `.13` and `.14`. They poll only once, at
+  the end.
+- **n2**, at `.12`, holds revision 7. It has no seeds and fanout 2, so it
+  finds n1 only through the payload.
+
+Without its own address, n2's peers are n1, n3 and n4:
+- **Poll 1** starts at the second of them and asks n3 and n4, which have
+  nothing newer.
+- **Poll 2** asks n4 and n1, and adopts revision 8.
+
+The control `seeds-only` ignores the payload's urls.
+
+With the same `$G`, `$K` and `node.kotoba`:
+
+```sh
+sed 's/(tr-without (tr-add-urls (tr-add-urls s0 held (json-member held p "gateways")) held (json-member held p "nodes")) self)/(tr-without s0 self)/' \
+  "$G/node.kotoba" > "$G/seeds-only.kotoba"
+podman run --rm --pull never --platform linux/arm64 --network none \
+  -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
+    rm -f /gate/seeds-only.elf
+    ./root.elf compile /gate/seeds-only.kotoba --target aarch64-linux --output /gate/seeds-only.elf --format static >/dev/null || exit 1
+    chmod +x /gate/seeds-only.elf'
+TRUST=op1=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw
+podman network create --subnet 100.64.9.0/24 itonami-replica-gate >/dev/null
+node() {  # image name ip poll-ms polls
+  podman run --rm --pull never --platform linux/arm64 --network itonami-replica-gate --ip $3 -v "$G:/gate" \
+    -e KEXE_ALLOW=35,37,38,43,44,45,46,47 -e KEXE_CAP_RESOURCES_35=/gate -e KEXE_CAP_RESOURCES_43=$3:8796 \
+    -e KEXE_CAP_RESOURCES_45=100.64.9.11:8796,100.64.9.12:8796,100.64.9.13:8796,100.64.9.14:8796 \
+    docker.io/library/python:3.12-alpine /gate/$1.elf replica /gate/$2.json $TRUST 1 /gate/fleet.token $3:8796 $4 $5 2 \
+    > "$G/$2.log" 2>&1 &
+}
+for run in "node 1" "node 2" "seeds-only 2"; do
+  set -- $run
+  cp "$G/topology-net8.json" "$G/n1.json"; for n in n2 n3 n4; do cp "$G/topology-net7.json" "$G/$n.json"; done
+  node node n1 100.64.9.11 8000 1; node node n3 100.64.9.13 8000 1; node node n4 100.64.9.14 8000 1
+  sleep 3
+  node $1 n2 100.64.9.12 500 $2
+  wait
+  echo "n2 ($1, $2 polls) holds revision $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["payload"]["revision"])' "$G/n2.json")"
+  sed 's/^/  n2 log: /' "$G/n2.log"
+done
+podman network rm itonami-replica-gate >/dev/null
+```
+
+Expected output, measured on 2026-10-23:
+
+```text
+n2 (node, 1 polls) holds revision 7
+n2 (node, 2 polls) holds revision 8
+  n2 log: replica topology 8 from 100.64.9.11:8796
+n2 (seeds-only, 2 polls) holds revision 7
+```
+
+The cursor makes the second poll reach n1, and the payload's urls are what
+lead n2 there: without them, n2 has no peer to ask.
+The receipt is [evidence/topology-replica-peers-20261023.json](evidence/topology-replica-peers-20261023.json).
+
 ## What this does not show
 
-- Peers drawn from the payload's urls, fanout and a cursor, as `start!` has.
-- An atomic write. The file is written in place, with no temporary file,
-  rename or fsync, because wire 35 has none.
-- Polling while requests keep arriving.
-- Separate hosts, and x86_64.
+- **An atomic write.** The file is written in place, with no temporary
+  file, rename or fsync, because wire 35 has none (JUN-359).
+- **A poll interval measured by a clock.** It is counted in 100 ms slices,
+  and a served request counts as one, because there is no clock wire
+  (JUN-360).
+- **Separate hosts and x86_64.** The containers have their own network
+  namespaces and addresses, but share one machine.

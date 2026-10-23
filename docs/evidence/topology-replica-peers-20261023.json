@@ -1,0 +1,94 @@
+{
+  "schema": "murakumo.topology-replica-peers.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-289",
+    "JUN-290"
+  ],
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": {
+    "kotoba/fleet_topology_replica.kotoba": "81d3b27d8f508f3e3804a635ae0e7f160318cc7e60f24e688a6a0659c14bf125",
+    "docs/evidence/topology-replica-docs-20261023.py": "5d52f9237acc1c35e27ba71bf5d5584675196d8716772831661eda09b6058984"
+  },
+  "images": {
+    "node": {
+      "bytes": 623104,
+      "sha256": "7cd3bff177ab7166451465cde9cfb3400972ab31cf3930eb8614c127f86732a9"
+    },
+    "unchecked": {
+      "bytes": 623104,
+      "sha256": "0c5048fefd3702a922ebc68c2df825b05f6f303f061dbce3e61f8373f0dc6d2f"
+    },
+    "open": {
+      "bytes": 623104,
+      "sha256": "9139f7cccb9b2cebe2e200c4b2f2db03fc74222eced46e5f523151d4fb89154e"
+    },
+    "seeds-only": {
+      "bytes": 623104,
+      "sha256": "3e029c42371120b2dac4b41056b8bd262e0554c93a80d8cb60f73725c800d82f"
+    }
+  },
+  "network": "podman bridge itonami-replica-gate, 100.64.9.0/24; one container per replica",
+  "control": "seeds-only: sed reduces the peer list to the seeds (the payload's urls are not added)",
+  "output": [
+    "== replicas: node",
+    "  k16 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"",
+    "  r1 holds revision 8",
+    "    r1 log: replica refused unauthenticated",
+    "    r1 log: replica refused unauthenticated",
+    "  r2 holds revision 8",
+    "    r2 log: replica topology 8 from 127.0.0.1:7811",
+    "  r3 holds revision 7, conflict recorded",
+    "    r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833",
+    "    r3 log: replica conflict 7 from 127.0.0.1:7834",
+    "    r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831",
+    "    r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833",
+    "    r3 log: replica conflict 7 from 127.0.0.1:7834",
+    "    r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831",
+    "  r4 holds revision 7",
+    "    voter 1 log: voter topology 8",
+    "== replicas: unchecked",
+    "  k16 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"",
+    "  r1 holds revision 8",
+    "    r1 log: replica refused unauthenticated",
+    "    r1 log: replica refused unauthenticated",
+    "  r2 holds revision 8",
+    "    r2 log: replica topology 8 from 127.0.0.1:7811",
+    "  r3 holds revision 6",
+    "    r3 log: replica topology 6 from 127.0.0.1:7832",
+    "    r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833",
+    "    r3 log: replica topology 7 from 127.0.0.1:7834",
+    "    r3 log: replica topology 9 from 127.0.0.1:7831",
+    "    r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833",
+    "    r3 log: replica topology 7 from 127.0.0.1:7834",
+    "    r3 log: replica topology 9 from 127.0.0.1:7831",
+    "    r3 log: replica topology 6 from 127.0.0.1:7832",
+    "  r4 holds revision 7",
+    "    voter 1 log: voter topology 8",
+    "== replicas: open",
+    "  k16 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"",
+    "  r1 holds revision 8",
+    "  r2 holds revision 8",
+    "    r2 log: replica topology 8 from 127.0.0.1:7811",
+    "  r3 holds revision 7, conflict recorded",
+    "    r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833",
+    "    r3 log: replica conflict 7 from 127.0.0.1:7834",
+    "    r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831",
+    "    r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833",
+    "    r3 log: replica conflict 7 from 127.0.0.1:7834",
+    "    r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831",
+    "  r4 holds revision 8",
+    "    r4 log: replica topology 8 from 127.0.0.1:7811",
+    "    voter 1 log: voter topology 8",
+    "a replica with a short token: replica token/missing-or-short",
+    "n2 (node, 1 polls) holds revision 7",
+    "n2 (node, 2 polls) holds revision 8",
+    "  n2 log: replica topology 8 from 100.64.9.11:8796",
+    "n2 (seeds-only, 2 polls) holds revision 7"
+  ],
+  "notes": [
+    "The main block now passes fanout 8 and grants dials to the payload's addresses (100.64.0.10:8796, 100.64.0.1:8796), which are unreachable in its --network none container; its r3 log order follows the cursor.",
+    "Every block of docs/topology-replica.md was run as documented in a fresh directory; no Node, NBB, JVM, hosted compiler, C compiler or C loader runs."
+  ]
+}

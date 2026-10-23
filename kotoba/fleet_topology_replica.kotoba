@@ -4,7 +4,7 @@
 ;; JUN-290 retires the nbb path).
 ;;
 ;;   replica-main  replica <file> <trust id=did,..> <threshold> <token file>
-;;                 <listen ip:port> <poll ms> <polls> <peer ip:port>...
+;;                 <listen ip:port> <poll ms> <polls> <fanout> [<seed ip:port>...]
 ;;
 ;; At start the replica verifies <file> (fleet_topology_verify
 ;; topology-verdict against revision 0, which includes validate!) and does not
@@ -15,8 +15,13 @@
 ;;          it, the token comes first: any request without it is answered 401
 ;;          and logged ("replica refused unauthenticated"); any other request
 ;;          404. HTTP/1.0, then the connection closes.
-;;   poll   after <poll ms> without a request, GET /topology from each peer
-;;          with the token (HTTP/1.0, at most 262144 body bytes, 3 s). As
+;;   poll   every <poll ms> (a served request counts as one 100 ms slice),
+;;          as tick! does: the seeds, then the url of every gateway and node of
+;;          the payload held, without repeats and without the replica's own
+;;          address (it serves only between polls); <fanout> of them from a cursor
+;;          that moves by one each poll (the first poll starts at the second).
+;;          GET /topology from each with the token (HTTP/1.0, at most 262144
+;;          body bytes, 3 s). As
 ;;          accept! does: a document that verifies, advances the revision and
 ;;          keeps every owner-id is adopted and written to <file>
 ;;          ("replica topology <revision> from <peer>"); one that verifies at
@@ -28,11 +33,11 @@
 ;; Requests are parsed as bytes, never decoded, and every request and poll
 ;; runs in arena-scope; only an adopted document stays allocated.
 ;;
-;; Not as start!: the peers are given, not drawn from the payload's urls, and
-;; there is no fanout or cursor. The file is written in place (wire 35 has no
+;; The dial grant (KEXE_CAP_RESOURCES_45) must name the seeds and the payload's
+;; addresses. Not as start!: the file is written in place (wire 35 has no
 ;; temporary file, fsync or rename), so a reader can see it half written and
-;; must verify what it reads, as the voters do. A replica that keeps serving
-;; does not poll meanwhile.
+;; must verify what it reads, as the voters do; the poll interval is counted
+;; in slices, not by a clock.
 ;;
 ;; Composition order: sha2.core, ed25519.selfhost, jcs.reader, tsukasa
 ;; ledger_core and node_state, fleet_node_enrollment, fleet_intent_core,
@@ -217,18 +222,55 @@
                     (recur (+ k 1) cur adopted))
                   :else (recur (+ k 1) cur adopted))))))))
 
-(defn- tr-run [l :string file :string trust :string threshold :i64 token :string poll :i64 polls :i64 peers :string held :vector-i64] :i64
+(defn- tr-has? [list :string x :string] :bool
+  (loop [k 0] (cond (= k (tr-count list)) false (= (tr-part list k) x) true :else (recur (+ k 1)))))
+(defn- tr-add [list :string x :string] :string
+  (cond (= x "") list (tr-has? list x) list (= list "") x :else (str list "," x)))
+
+;; "http://a.b.c.d:p/" (validate! holds) -> "a.b.c.d:p"
+(defn- tr-addr [url :string] :string
+  (let [r (string-substring url 7 (string-length url)) n (string-length r)]
+    (if (and (> n 0) (= (string-substring r (- n 1) n) "/")) (string-substring r 0 (- n 1)) r)))
+
+(defn- tr-add-urls [list :string doc :vector-i64 arr :i64] :string
+  (loop [k 0 out list]
+    (let [e (json-element doc arr k)]
+      (if (< e 0) out
+        (let [v (json-member doc e "url")]
+          (recur (+ k 1) (if (and (>= v 0) (= (json-kind doc v) 3)) (tr-add out (tr-addr (json-string doc v))) out)))))))
+
+;; tick!'s all-urls: the seeds, then the gateways' and the nodes' urls, but
+;; not the replica's own address (it serves only between polls, so asking
+;; itself would wait out the timeout)
+(defn- tr-without [list :string x :string] :string
+  (loop [k 0 out ""] (if (= k (tr-count list)) out (recur (+ k 1) (if (= (tr-part list k) x) out (tr-add out (tr-part list k)))))))
+(defn- tr-all-peers [seeds :string held :vector-i64 self :string] :string
+  (let [root (loop [i 0] (if (and (< i (vector-count held)) (let [c (vector-at held i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i))
+        p (json-member held root "payload")
+        s0 (loop [k 0 out ""] (if (= k (tr-count seeds)) out (recur (+ k 1) (tr-add out (tr-part seeds k)))))]
+    (tr-without (tr-add-urls (tr-add-urls s0 held (json-member held p "gateways")) held (json-member held p "nodes")) self)))
+
+;; fanout entries of all from cursor mod |all| on, wrapping
+(defn- tr-pick [all :string cursor :i64 fanout :i64] :string
+  (let [n (tr-count all)]
+    (if (= n 0) ""
+      (loop [i 0 out ""]
+        (if (or (= i n) (= i fanout)) out
+          (recur (+ i 1) (tr-add out (tr-part all (rem (+ cursor i) n)))))))))
+
+(defn- tr-run [l :string self :string file :string trust :string threshold :i64 token :string poll :i64 polls :i64 fanout :i64
+               seeds :string held :vector-i64] :i64
   (loop [k 0 left poll cur held]
     (if (>= k polls) 0
       (let [r (tr-serve-one l cur token (if (< left 100) left 100))]
-        (cond (= r 0) (recur k left cur)
-              (> left 100) (recur k (- left 100) cur)
-              (= (arena-scope (tr-poll file cur trust threshold token peers)) 1) (recur (+ k 1) poll (tr-load file))
+        (cond (> left 100) (recur k (- left 100) cur)
+              (= (arena-scope (tr-poll file cur trust threshold token (tr-pick (tr-all-peers seeds cur self) (+ k 1) fanout))) 1)
+              (recur (+ k 1) poll (tr-load file))
               :else (recur (+ k 1) poll cur))))))
 
-;; the peers from argument 8 on, joined by ","
+;; the seeds from argument 9 on, joined by ","
 (defn- tr-arg-peers [] :string
-  (loop [k 8 out ""] (if (= (tr-arg k) "") out (recur (+ k 1) (if (= out "") (tr-arg k) (str out "," (tr-arg k)))))))
+  (loop [k 9 out ""] (if (= (tr-arg k) "") out (recur (+ k 1) (if (= out "") (tr-arg k) (str out "," (tr-arg k)))))))
 
 (defn replica-main [] :i64
   (let [file (tr-arg 1) trust (tr-arg 2) threshold (tr-int (tr-arg 3)) token (lease-token (tr-arg 4))
@@ -236,4 +278,5 @@
         v (topology-verdict held trust threshold 0)]
     (cond (= token "") (let [x (tr-say "replica token/missing-or-short")] 2)
           (not (= v "topology/ok")) (let [x (tr-say (string-concat "replica " v))] 2)
-          :else (tr-run (tr-listen (tr-arg 5)) file trust threshold token (tr-int (tr-arg 6)) (tr-int (tr-arg 7)) (tr-arg-peers) held))))
+          :else (tr-run (tr-listen (tr-arg 5)) (tr-arg 5) file trust threshold token (tr-int (tr-arg 6)) (tr-int (tr-arg 7)) (tr-int (tr-arg 8))
+                        (tr-arg-peers) held))))
