@@ -1,0 +1,172 @@
+;; murakumo.fleet-node-peer -- two itonami nodes exchange their signed
+;; statements over the static runtime's TCP wires and each derives the same
+;; ledger state for both (Linear JUN-287; com-junkawasaki/root ADR-2610222140
+;; §1: the ledger is a function of L1 and L2, with no coordinator).
+;;
+;; peer-main reads its arguments (wire 38, index 0 is the first argument): role ("a" is b70 in site-a, "b"
+;; is k16 in site-b), now (ms), its own port, the peer's port, and how old
+;; its own heartbeat is (ms). Then it:
+;;   1. listens on 127.0.0.1:<own port> (wire 43);
+;;   2. derives its did:key from its seed and signs its declaration and a
+;;      heartbeat at now - age (fleet_node_enrollment);
+;;   3. dials the peer (wire 45) until it answers, writes one line and
+;;      closes; while the peer is not listening yet, a 50 ms accept on its
+;;      own listener is the wait, and keeps the peer's connection if it
+;;      arrives first;
+;;   4. accepts the peer's connection and reads its line to end of file;
+;;   5. runs signed-step three times from -1 for both nodes, its own line
+;;      and the peer's, through the same verification, and prints
+;;      "<node> <state> <declaration digest>" for both, in node order.
+;; Two honest nodes therefore print the same two lines. A line that is not
+;; ten printable-ASCII fields is "peer/malformed".
+;;
+;; Line: node did failure-domain availability runtime-classes
+;;       declaration-signature heartbeat-at drain(0|1) heartbeat-declaration
+;;       heartbeat-signature, separated by single spaces; the enrollment
+;;       rules already keep every field free of spaces.
+;;
+;; L1 here is a constant: both nodes admitted with their declaration
+;; digests, no cordon, no retirement (the operator's signature over L1 is
+;; separate work). The seeds are RFC 8032 test keys 1 and 2, for the gate
+;; only; a real node reads its own key.
+;;
+;; Composition order: sha2.core, ed25519.selfhost, tsukasa ledger_core and
+;; node_state, fleet_node_enrollment, this file. docs/node-peer-convergence.md
+;; has the gate.
+(ns murakumo.fleet-node-peer
+  (:export [peer-main peer-run]))
+
+;; ---------------------------------------------------------------------------
+;; Wires
+
+(defn- pe-listen [s :string] :string (typed-cap-call 43 :string :string s))
+(defn- pe-accept [s :string] :string (typed-cap-call 44 :string :string s))
+(defn- pe-dial [s :string] :string (typed-cap-call 45 :string :string s))
+(defn- pe-read [s :string] :string (typed-cap-call 46 :string :string s))
+(defn- pe-write [s :string] :string (typed-cap-call 47 :string :string s))
+(defn- pe-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- pe-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
+
+;; ---------------------------------------------------------------------------
+;; Text
+
+(defn- pe-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+;; 1..18 decimal digits -> the number; anything else -> -1
+(defn- pe-int [s :string] :i64
+  (let [b (pe-bytes s)]
+    (if (or (= (vector-count b) 0) (> (vector-count b) 18)) -1
+      (loop [i 0 n 0]
+        (if (= i (vector-count b)) n
+          (let [c (vector-at b i)]
+            (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -1)))))))
+
+(defn- pe-handle? [s :string] :bool (> (pe-int s) 0))
+
+;; printable ASCII and single spaces only
+(defn- pe-printable? [b :vector-i64] :bool
+  (loop [i 0] (if (= i (vector-count b)) true (if (and (>= (vector-at b i) 32) (<= (vector-at b i) 126)) (recur (+ i 1)) false))))
+
+(defn- pe-field-count [b :vector-i64] :i64
+  (loop [i 0 n 1] (if (= i (vector-count b)) n (recur (+ i 1) (if (= (vector-at b i) 32) (+ n 1) n)))))
+
+;; the k-th space-separated field of an ASCII line
+(defn- pe-field [line :string b :vector-i64 k :i64] :string
+  (loop [i 0 start 0 n 0]
+    (cond (= i (vector-count b)) (if (= n k) (string-substring line start i) "")
+          (= (vector-at b i) 32) (if (= n k) (string-substring line start i) (recur (+ i 1) (+ i 1) (+ n 1)))
+          :else (recur (+ i 1) start n))))
+
+(defn- pe-line [node :string did :string fd :string av :string rc :i64 dsig :string
+                at :i64 drain :bool hdecl :string hsig :string] :string
+  (str node " " did " " fd " " av " " rc " " dsig " " at " " (if drain "1" "0") " " hdecl " " hsig))
+
+;; ---------------------------------------------------------------------------
+;; The node and L1
+
+(defn- pe-seed [role :string] :vector-i64
+  (if (= role "a")
+    (hex-bytes "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
+    (hex-bytes "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb")))
+
+;; the key the declaration is signed with: the node's own
+(defn- pe-decl-seed [role :string] :vector-i64 (pe-seed role))
+
+(defn- pe-node [role :string] :string (if (= role "a") "b70" "k16"))
+(defn- pe-fd [role :string] :string (if (= role "a") "site-a" "site-b"))
+
+;; L1: the declaration digest the operator admitted for each node
+(defn- pe-admitted [node :string] :string
+  (cond (= node "b70") "9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29"
+        (= node "k16") "64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb"
+        :else ""))
+
+;; ---------------------------------------------------------------------------
+;; Exchange
+
+;; dial until the peer answers, write the line and close. While waiting, a
+;; 50 ms accept on the own listener is the pause; it keeps the first
+;; incoming connection. The handle of that connection, 0 if none came, or -1
+;; when the peer never answered.
+(defn- pe-send [peer :string l :string hexline :string] :i64
+  (loop [k 0 stash 0]
+    (if (= k 400) -1
+      (let [c (pe-dial (str peer " 1000"))]
+        (if (pe-handle? c)
+          (let [w (pe-write (str c " " hexline)) z (pe-write c)] stash)
+          (let [a (pe-accept (str l " 50"))]
+            (recur (+ k 1) (if (and (= stash 0) (pe-handle? a)) (pe-int a) stash))))))))
+
+;; read a connection to end of file, as hex; "" on a timeout or an error
+(defn- pe-recv [in :i64] :string
+  (loop [k 0 acc ""]
+    (if (= k 8) ""
+      (let [r (pe-read (str in " 16384 5000"))]
+        (cond (= r "") acc
+              (or (= r "timeout") (= r "closed") (= r "reset") (= r "refused") (= r "unreachable")) ""
+              :else (recur (+ k 1) (string-concat acc r)))))))
+
+;; ---------------------------------------------------------------------------
+;; State
+
+;; three signed steps from -1: absent -> proposed -> admitted -> active for
+;; a node whose statements verify and whose heartbeat is fresh
+(defn- pe-state [line :string b :vector-i64 now :i64] :i64
+  (let [node (pe-field line b 0) did (pe-field line b 1) fd (pe-field line b 2) av (pe-field line b 3)
+        rc (pe-int (pe-field line b 4)) dsig (pe-field line b 5) at (pe-int (pe-field line b 6))
+        drain (= (pe-field line b 7) "1") hdecl (pe-field line b 8) hsig (pe-field line b 9)]
+    (loop [i 0 s -1]
+      (if (= i 3) s
+        (recur (+ i 1) (signed-step s node did fd av rc dsig (pe-admitted node) 0 hdecl at drain hsig now 30000 5000))))))
+
+(defn- pe-report [line :string b :vector-i64 now :i64] :string
+  (str (pe-field line b 0) " " (pe-state line b now) " "
+       (declaration-digest (pe-field line b 0) (pe-field line b 1) (pe-field line b 2) (pe-field line b 3)
+                           (pe-int (pe-field line b 4)))))
+
+(defn peer-run [role :string now :i64 my-port :i64 peer-port :i64 age :i64] :i64
+  (let [l (pe-listen (str "127.0.0.1:" my-port))
+        seed (pe-seed role) did (node-did seed) node (pe-node role) fd (pe-fd role)
+        digest (declaration-digest node did fd "always-on" 2)
+        dsig (sign-declaration (pe-decl-seed role) did node fd "always-on" 2)
+        at (- now age)
+        hsig (sign-heartbeat seed did node digest at false)
+        own (pe-line node did fd "always-on" 2 dsig at false digest hsig)
+        stash (pe-send (str "127.0.0.1:" peer-port) l (hex (pe-bytes own)))
+        in (if (> stash 0) stash (if (= stash 0) (pe-int (pe-accept (str l " 10000"))) -1))
+        got (if (> in 0) (pe-recv in) "")
+        gb (hex-bytes got)
+        ok (and (> (vector-count gb) 0) (pe-printable? gb) (= (pe-field-count gb) 10))
+        peer (if ok (string-from-utf8 (bytes-from-vector-i64 gb)) "")
+        ob (pe-bytes own) pb (pe-bytes peer)]
+    (cond (< stash 0) (let [x (pe-say "peer/unreachable")] 3)
+          (not ok) (let [x (pe-say "peer/malformed")] 2)
+          :else
+          (let [mine (pe-report own ob now) theirs (pe-report peer pb now)
+                first-mine (< (string-compare node (pe-field peer pb 0)) 0)
+                a (pe-say (if first-mine mine theirs))
+                c (pe-say (if first-mine theirs mine))]
+            0))))
+
+(defn peer-main [] :i64
+  (peer-run (pe-arg 0) (pe-int (pe-arg 1)) (pe-int (pe-arg 2)) (pe-int (pe-arg 3)) (pe-int (pe-arg 4))))

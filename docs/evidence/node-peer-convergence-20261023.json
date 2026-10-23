@@ -1,0 +1,165 @@
+{
+  "schema": "murakumo.node-peer-convergence.v1",
+  "date": "2026-10-23",
+  "linear": "JUN-287",
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": [
+    {
+      "name": "sha2",
+      "repository": "kotoba-lang/org-nist-sha2",
+      "commit": "ea83e70a6a8efb8fb12dd5f0031fcda35a9ec77b",
+      "path": "kotoba/sha2/core.kotoba",
+      "sha256": "2c59ef55bc2b527c1aac723c0fee896eba75ee82fecd212a2858782beadc6888"
+    },
+    {
+      "name": "ed25519",
+      "repository": "kotoba-lang/org-ietf-ed25519",
+      "commit": "6f17477b5be91a0c8c369b8d30e7e5ea0c10a8aa",
+      "path": "kotoba/ed25519/selfhost.kotoba",
+      "sha256": "47c086f3d93ad4f6da047bbf3b9250f7e4fbc7539ec1a0077abb2d82ceb3dc14"
+    },
+    {
+      "name": "ledger",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/ledger_core.kotoba",
+      "sha256": "e520534370dec3d3e6d4f5a2252f353485f3979457b3ec3162019d84d7d5e2d5"
+    },
+    {
+      "name": "state",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/node_state.kotoba",
+      "sha256": "2d478d602aa313fd2cd20ad8bc18b24b3013897b565799967a67b3156970e4c4"
+    },
+    {
+      "name": "enrollment",
+      "repository": "kotoba-lang/murakumo",
+      "commit": "13c420b47710ab80c7301d1c466f791ad2cfb681",
+      "path": "kotoba/fleet_node_enrollment.kotoba",
+      "sha256": "16d4b03837be170a9b0e9fe15778f6f18995cd38f09af2da2996e7e0df29a504"
+    },
+    {
+      "name": "peer",
+      "path": "kotoba/fleet_node_peer.kotoba",
+      "sha256": "880041f157ae118b3ee775d427850a9de32e1d968202e3d1cf7281033db29ddd"
+    }
+  ],
+  "target": "aarch64-linux",
+  "format": "loaderless-static",
+  "grants": {
+    "KEXE_ALLOW": "37,38,43,44,45,46,47",
+    "listen": "127.0.0.1:<own port> only",
+    "dial": "127.0.0.1:<peer port> only"
+  },
+  "now": 1792500000000,
+  "ttlMs": 30000,
+  "skewMs": 5000,
+  "scenarios": {
+    "honest": "both heartbeats 1 s old",
+    "stale": "k16's heartbeat 60 s old",
+    "liar": "k16 signs its declaration with b70's key",
+    "control": "the liar against a node that does not check declaration signatures"
+  },
+  "outputs": {
+    "honest": {
+      "a": [
+        "b70 2 9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29",
+        "k16 2 64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb"
+      ],
+      "b": [
+        "b70 2 9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29",
+        "k16 2 64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb"
+      ],
+      "same": true,
+      "aSha256": "e2f23900b4c60ac7bf4ef5946b14a6527b8876400d9054813bb23c19202ef1e0",
+      "bSha256": "e2f23900b4c60ac7bf4ef5946b14a6527b8876400d9054813bb23c19202ef1e0"
+    },
+    "stale": {
+      "a": [
+        "b70 2 9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29",
+        "k16 1 64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb"
+      ],
+      "b": [
+        "b70 2 9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29",
+        "k16 1 64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb"
+      ],
+      "same": true,
+      "aSha256": "486b4acd1182441cc1c65910ce810c53a8ad985c08a72c2dd993a9ebe070c41c",
+      "bSha256": "486b4acd1182441cc1c65910ce810c53a8ad985c08a72c2dd993a9ebe070c41c"
+    },
+    "liar": {
+      "a": [
+        "b70 2 9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29",
+        "k16 -1 64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb"
+      ],
+      "b": [
+        "b70 2 9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29",
+        "k16 -1 64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb"
+      ],
+      "same": true,
+      "aSha256": "d8f94e1a2a1e36e04923415d863d43214b3b3729420d826d18d598da3ef4c135",
+      "bSha256": "d8f94e1a2a1e36e04923415d863d43214b3b3729420d826d18d598da3ef4c135"
+    },
+    "control": {
+      "a": [
+        "b70 2 9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29",
+        "k16 2 64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb"
+      ],
+      "b": [
+        "b70 2 9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29",
+        "k16 -1 64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb"
+      ],
+      "same": false,
+      "aSha256": "e2f23900b4c60ac7bf4ef5946b14a6527b8876400d9054813bb23c19202ef1e0",
+      "bSha256": "d8f94e1a2a1e36e04923415d863d43214b3b3729420d826d18d598da3ef4c135"
+    }
+  },
+  "admittedDigests": {
+    "b70": "9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29",
+    "k16": "64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb",
+    "computedWith": "Python hashlib over the canonical declaration text"
+  },
+  "execution": {
+    "network": "none (loopback only)",
+    "shell": "docker.io/library/python:3.12-alpine (arm64, image 255f49222a74)",
+    "runtime": "native arm64 Linux 6.15.10 on local Podman applehv VM; two processes, one container",
+    "compilerAndGuest": "native ELF; no hosted compiler, C compiler or C loader invoked",
+    "reproduced": "docs/node-peer-convergence.md commands run as written in a fresh directory"
+  },
+  "limitations": [
+    "two processes on one loopback interface, not separate hosts or failure domains",
+    "one exchange round per process, not a long-running agent",
+    "now is an argument: the static runtime has no clock wire",
+    "seeds are RFC 8032 test keys in the source, for this gate only",
+    "L1 is a constant; the operator signature over L1 is not checked",
+    "aarch64-linux only"
+  ],
+  "artifacts": {
+    "peer.kotoba": {
+      "bytes": 75179,
+      "sha256": "d01c555b20905bf96ea6d5e234fbc3d0df02f1e1c28ab6a6a91b4d6024bb1c51"
+    },
+    "peer.elf": {
+      "bytes": 397824,
+      "sha256": "3e814807c9f23d6b5288869568b9273fcf49a35dc7e139194237c2a614f58f46"
+    },
+    "liar.kotoba": {
+      "bytes": 75178,
+      "sha256": "c737f240b95b05d0aa115e8997688ae11ea85364a911b62c036b77522df5e45e"
+    },
+    "liar.elf": {
+      "bytes": 397824,
+      "sha256": "290b4f6590bc858de52b4a089fc399cb4acd4c011e1edbf3a4a31cac57e3a418"
+    },
+    "unchecked.kotoba": {
+      "bytes": 75067,
+      "sha256": "81e31d88d5d89d3497d7aa7be4127b204ff40a1b60d02b7efcde717bd144afb2"
+    },
+    "unchecked.elf": {
+      "bytes": 397824,
+      "sha256": "ab6a1d935ebf0166ebf0248cd5afa612112b0b9e7e6d1a78d040a371aace2d1a"
+    }
+  }
+}
