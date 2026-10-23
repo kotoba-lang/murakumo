@@ -1,0 +1,160 @@
+{
+  "schema": "murakumo.cell-run.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-288"
+  ],
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": [
+    {
+      "name": "sha2",
+      "repository": "kotoba-lang/org-nist-sha2",
+      "commit": "ea83e70a6a8efb8fb12dd5f0031fcda35a9ec77b",
+      "path": "kotoba/sha2/core.kotoba",
+      "sha256": "2c59ef55bc2b527c1aac723c0fee896eba75ee82fecd212a2858782beadc6888"
+    },
+    {
+      "name": "ed25519",
+      "repository": "kotoba-lang/org-ietf-ed25519",
+      "commit": "6f17477b5be91a0c8c369b8d30e7e5ea0c10a8aa",
+      "path": "kotoba/ed25519/selfhost.kotoba",
+      "sha256": "47c086f3d93ad4f6da047bbf3b9250f7e4fbc7539ec1a0077abb2d82ceb3dc14"
+    },
+    {
+      "name": "jcs-reader",
+      "repository": "kotoba-lang/org-ietf-jcs",
+      "commit": "6dfee43e80c273eb7d473c0a01e2779662a4a7c3",
+      "path": "kotoba/jcs/reader.kotoba",
+      "sha256": "31d2ee046d924a82f0ce18b5ee56b3da49fe4cde002e906c347407f05b02650b"
+    },
+    {
+      "name": "oci",
+      "repository": "kotoba-lang/org-oci-distribution",
+      "commit": "90463924db65eea4d9021dc6623105472282b5a9",
+      "path": "kotoba/oci/itonami_artifact.kotoba",
+      "sha256": "db212e3cdaf7c1d51d7dbf44f8d1ed7a4e36773e6b77b5dab979d759012233bd"
+    },
+    {
+      "name": "grant",
+      "repository": "kotoba-lang/grant",
+      "commit": "fa7e9b567286cd38cc4b229d8c980bfe676d9cce",
+      "path": "kotoba/grant/runtime_class.kotoba",
+      "sha256": "250ff617e1745abe562568db11c4aadfe74d1acf4619eb125a62c23b47245cb8"
+    },
+    {
+      "name": "ledger",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/ledger_core.kotoba",
+      "sha256": "e520534370dec3d3e6d4f5a2252f353485f3979457b3ec3162019d84d7d5e2d5"
+    },
+    {
+      "name": "state",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/node_state.kotoba",
+      "sha256": "2d478d602aa313fd2cd20ad8bc18b24b3013897b565799967a67b3156970e4c4"
+    },
+    {
+      "name": "enrollment",
+      "path": "kotoba/fleet_node_enrollment.kotoba",
+      "sha256": "514652719718a77b078230efe8ca74e1473905dc8a4cde4656c790f1662af7e1"
+    },
+    {
+      "name": "launch",
+      "path": "kotoba/fleet_cell_launch.kotoba",
+      "sha256": "d3910f962e1dd61ff7dfa25f3c4ccfcc7fd0680ae6c918d4a288bd340fafd137"
+    },
+    {
+      "name": "run",
+      "path": "kotoba/fleet_cell_run.kotoba",
+      "sha256": "3312e2b2c9546eaef8a9d7b7ece9cd7da8457b9088077dc4c10d0a0ee1b7bd62"
+    }
+  ],
+  "cell": {
+    "source": "docs/cell-run.md (two lines of Kotoba)",
+    "image": {
+      "bytes": 205312,
+      "sha256": "8d05b526ccd499a105641886b51c3a758af6260f10a7ab4bdffc54588e2d0ce1"
+    },
+    "oci": {
+      "ref": "localhost/itonami-cell-demo:jun288",
+      "manifestDigest": "sha256:db888af99a6ace9d5ac280f02ee46980cbbf8e0682801dcafb41d3d846a468fa",
+      "imageId": "f68da4db488f4d6f7972c4b4b1a42eae689bd8ed8f0f89b5565dee459c286732",
+      "base": "FROM scratch"
+    }
+  },
+  "release": {
+    "index": {
+      "bytes": 342,
+      "sha256": "14027d85007f8f8ad8836f542ef91602ee6a13237a0fa30a689a60e7aea33afa"
+    },
+    "l1Digest": "sha256:14027d85007f8f8ad8836f542ef91602ee6a13237a0fa30a689a60e7aea33afa"
+  },
+  "agent": {
+    "image": {
+      "bytes": 475648,
+      "sha256": "c0f5c1883a254c355257b751ecdb2ddd317d3f12926a81dc8e2d135941099602"
+    },
+    "control": {
+      "bytes": 475648,
+      "sha256": "c23296cc9a091b4f7fdc68eb5f75bfda69279c4f854f12c3ea2e0fb98e389314"
+    },
+    "grants": {
+      "KEXE_ALLOW": "20,35,37,38",
+      "spawn": "/usr/bin/podman only",
+      "spawnEnv": "HOME:XDG_RUNTIME_DIR:PATH",
+      "fs": "the gate directory"
+    },
+    "argv": "run --rm --pull never --network none --read-only <repo>@<manifest digest>"
+  },
+  "scenarios": {
+    "honest": [
+      "verdict launch/ok",
+      "exit 0",
+      "receipt {\"at\":1792500000000,\"cell\":\"bafkreiauaj6ykad7r6fnra3pkqxpsfqc5zvbgi32b6rqu2e2mdt25iz27i\",\"did\":\"did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw\",\"exit\":0,\"kind\":\"itonami.receipt/1\",\"node\":\"b70\",\"output\":\"bafkreig5gh2rdlgk55lmrrtnrfnfmnwp4kk5ijdefhhu77ynmxw7ixq5i4\"}",
+      "signature IYJWdqmCbK22nlZIFFBIl0k9z3cDEmHIObV_FWcn-u9uUgkqrAjoCtd0Yn779Ky_WitH2j8dUzWTMeqMOWfyDw",
+      "self-check enroll/ok 1"
+    ],
+    "digest-mismatch": [
+      "verdict launch/digest-mismatch"
+    ],
+    "class-mismatch": [
+      "verdict itonami/runtime-class-mismatch"
+    ],
+    "not-granted": [
+      "verdict grant/runtime-class-not-granted"
+    ],
+    "not-admitted": [
+      "verdict launch/node-not-active"
+    ],
+    "control": [
+      "verdict launch/digest-mismatch",
+      "exit 0",
+      "receipt {\"at\":1792500000000,\"cell\":\"bafkreidf7nppxct3phgcpatzkbvml3rz7o5giodjbfh2upwf2el3mtna44\",\"did\":\"did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw\",\"exit\":0,\"kind\":\"itonami.receipt/1\",\"node\":\"b70\",\"output\":\"bafkreig5gh2rdlgk55lmrrtnrfnfmnwp4kk5ijdefhhu77ynmxw7ixq5i4\"}",
+      "signature Z0JxcPVtnyX-ipzGnDtflEk-WSb9xa1aKcCiGlzMz74HosStZ2Rj2_5LkQ0m5UF1gw_sgIDvHcGLTu_QvrODAA",
+      "self-check enroll/ok 1"
+    ]
+  },
+  "independentChecks": {
+    "signature": "OpenSSL 3 pkeyutl -verify with the did's Ed25519 key: Signature Verified Successfully",
+    "canonical": "json.dumps(sort_keys, compact) equals the receipt text",
+    "cellCid": true,
+    "outputCid": true
+  },
+  "execution": {
+    "host": "podman machine (applehv) on macOS arm64, Fedora CoreOS arm64, Linux 6.15.10, rootless podman 5.6",
+    "how": "the agent runs directly in the VM through podman machine ssh; the cell runs in a rootless container",
+    "compilerAndGuest": "native ELF; no hosted compiler, C compiler or C loader invoked",
+    "reproduced": "docs/cell-run.md commands run as written in a fresh directory"
+  },
+  "limitations": [
+    "the index and image are local, not pulled from a registry",
+    "podman, not the agent, resolves the manifest digest; manifests and layers are not checked by the agent",
+    "one node; no receipt persistence",
+    "the rootless user namespace already existed; a first start after boot under no_new_privs is not shown",
+    "seed is RFC 8032 test key 1 in a file",
+    "aarch64-linux only"
+  ]
+}

@@ -523,6 +523,22 @@ and the host's allow mask. It refuses when:
 Its gate reports 31. Each control (no digest check, no strict JSON, no
 policy) gives 15. Reproduction: [cell launch](docs/cell-launch.md).
 
+`kotoba/fleet_cell_run.kotoba` carries an admitted cell through to its
+receipt, in one static image:
+- it reads the node's key from a file;
+- it derives the node's state from its own signed statements;
+- it admits the release with `launch-verdict`;
+- it starts the container through wire 20, granted only `/usr/bin/podman`
+  with a fixed argv (`run --rm --pull never --network none --read-only
+  <repo>@<digest>`);
+- it signs a canonical receipt carrying the CID of the container's output.
+
+On the podman machine, a `FROM scratch` image holding a two-line Kotoba cell
+runs and returns a receipt. OpenSSL verifies the receipt's signature, and
+hashlib confirms both CIDs. A digest mismatch, a class mismatch, a host
+policy refusal and an unadmitted node each start nothing. Reproduction:
+[cell run](docs/cell-run.md).
+
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
 `qwen3.8-flash-next-ud-iq3-xxs` is a single-node, lossless Qwen4Exp route for

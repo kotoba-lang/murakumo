@@ -1,0 +1,116 @@
+;; murakumo.fleet-cell-run -- the node agent launches an admitted itonami
+;; cell and returns a signed execution receipt (Linear JUN-288;
+;; com-junkawasaki/root ADR-2610222140 §3 steps 4-7; network-awai-apex
+;; ADR 0010). One run, every input checked in the guest:
+;;
+;;   1. the node's Ed25519 seed from its key file (wire 35, 64 hex);
+;;   2. its own declaration and heartbeat, signed, and its ledger state from
+;;      them through signed-step against the L1 admitted digest
+;;      (fleet_node_enrollment);
+;;   3. the release's image index from its file (wire 35), then
+;;      launch-verdict (fleet_cell_launch): node active, SHA-256 of the
+;;      bytes = the L1 cell digest, strict JSON, an itonami index whose
+;;      runtime-class annotation is the L1 class, the host policy;
+;;   4. the container: wire 20 runs the granted podman with a fixed argv,
+;;      run --rm --pull never --network none --read-only <repo>@<the first
+;;      manifest's digest>; the image's own entry runs (NO-ARGV-IN-SPEC);
+;;      stdin is at end of file, stdout comes back (at most 16 KiB, 10 s);
+;;   5. the receipt, canonical JSON (jcs.reader's json-canonical? holds for
+;;      it), signed with the node's key:
+;;      {"at":ms,"cell":<index CID>,"did":..,"exit":n,
+;;       "kind":"itonami.receipt/1","node":..,"output":<CID of stdout>}
+;;
+;; cell-run-main reads its arguments (wire 38, from index 0): index path,
+;; L1 cell digest, L1 cell class, local repository, key path, node,
+;; failure-domain, the L1 admitted declaration digest, now (ms), the host's
+;; allow mask. It prints "verdict <v>", then for an admitted cell "exit <n>",
+;; "receipt <text>", "signature <b64url>" and "self-check <reason>
+;; <canonical 0|1>". A refused cell starts no container.
+;;
+;; Composition order: sha2.core, ed25519.selfhost, jcs.reader,
+;; oci.itonami-artifact, grant.runtime-class, tsukasa ledger_core and
+;; node_state, fleet_node_enrollment, fleet_cell_launch, this file.
+;; docs/cell-run.md has the gate.
+(ns murakumo.fleet-cell-run
+  (:export [cell-run cell-run-main receipt-text]))
+
+(defn- cr-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
+(defn- cr-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- cr-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cr-read [path :string] :vector-i64
+  (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 (cr-bytes path)))))
+(defn- cr-spawn [s :string] :string (typed-cap-call :process/spawn :string :string s))
+
+;; 1..18 decimal digits, with an optional "-"; anything else -> -9
+(defn- cr-int [s :string] :i64
+  (let [b (cr-bytes s) neg (and (> (vector-count b) 0) (= (vector-at b 0) 45)) j0 (if neg 1 0)]
+    (if (or (= (vector-count b) j0) (> (- (vector-count b) j0) 18)) -9
+      (loop [i j0 n 0]
+        (if (= i (vector-count b)) (if neg (- 0 n) n)
+          (let [c (vector-at b i)] (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -9)))))))
+
+;; the seed: the key file's first 64 bytes as lowercase hex
+(defn- cr-seed [key :vector-i64] :vector-i64
+  (loop [i 0 out (vector-alloc 32)]
+    (if (= i 32) out
+      (let [h (vector-at key (* 2 i)) l (vector-at key (+ (* 2 i) 1))
+            v (+ (* 16 (if (< h 58) (- h 48) (- h 87))) (if (< l 58) (- l 48) (- l 87)))]
+        (recur (+ i 1) (vector-assoc! out i v))))))
+
+(defn- cr-key-ok? [key :vector-i64] :bool
+  (and (>= (vector-count key) 64)
+       (loop [i 0] (if (= i 64) true (let [c (vector-at key i)] (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102))) (recur (+ i 1)) false))))))
+
+;; the first manifest's digest in an index jcs.reader accepted, or ""
+(defn- cr-manifest-digest [index :vector-i64] :string
+  (let [root (loop [i 0] (if (and (< i (vector-count index)) (let [c (vector-at index i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i))
+        ms (json-member index root "manifests")
+        m0 (if (and (>= ms 0) (= (json-kind index ms) 2)) (json-element index ms 0) -1)
+        d (if (and (>= m0 0) (= (json-kind index m0) 1)) (json-member index m0 "digest") -1)]
+    (if (and (>= d 0) (= (json-kind index d) 3)) (json-string index d) "")))
+
+(defn receipt-text [at :i64 cell :string did :string exit :i64 node :string output :string] :string
+  (str "{\"at\":" at ",\"cell\":\"" cell "\",\"did\":\"" did "\",\"exit\":" exit
+       ",\"kind\":\"itonami.receipt/1\",\"node\":\"" node "\",\"output\":\"" output "\"}"))
+
+;; the node's own ledger state from its own signed statements
+(defn- cr-state [seed :vector-i64 did :string node :string fd :string admitted :string now :i64] :i64
+  (let [digest (declaration-digest node did fd "always-on" 2)
+        dsig (sign-declaration seed did node fd "always-on" 2)
+        at (- now 1000)
+        hsig (sign-heartbeat seed did node digest at false)]
+    (loop [i 0 s -1]
+      (if (= i 3) s
+        (recur (+ i 1) (signed-step s node did fd "always-on" 2 dsig admitted 0 digest at false hsig now 30000 5000))))))
+
+(defn cell-run [index-path :string cell-digest :string cell-class :string repo :string key-path :string
+                node :string fd :string admitted :string now :i64 allowed :i64] :i64
+  (let [key (cr-read key-path)]
+    (if (not (cr-key-ok? key)) (let [x (cr-say "verdict run/bad-key")] 2)
+      (let [seed (cr-seed key) did (node-did seed)
+            state (cr-state seed did node fd admitted now)
+            index (cr-read index-path)
+            verdict (launch-verdict index cell-digest cell-class state 2 allowed)
+            a (cr-say (string-concat "verdict " verdict))]
+        (if (not (= verdict "launch/ok")) 1
+          (let [md (cr-manifest-digest index)]
+            (if (not (= (digest-problem md) "oci/ok")) (let [x (cr-say "verdict run/bad-manifest-digest")] 1)
+              (let [answer (cr-spawn (str "/usr/bin/podman" "ARG_SEP" "run" "ARG_SEP" "--rm" "ARG_SEP" "--pull" "ARG_SEP" "never"
+                                          "ARG_SEP" "--network" "ARG_SEP" "none" "ARG_SEP" "--read-only"
+                                          "ARG_SEP" repo "@" md))
+                    nl (string-index-of answer "\n")
+                    exit (if (< nl 0) -9 (cr-int (string-substring answer 0 nl)))
+                    out (if (< nl 0) "" (string-substring answer (+ nl 1) (string-length answer)))
+                    output (digest-cid (string-concat "sha256:" (sha256-hex (cr-bytes out))) 85)
+                    text (receipt-text now (index-cid cell-digest) did exit node output)
+                    sig (sign-statement seed text)
+                    b (cr-say (string-concat "exit " (string-from-i64 exit)))
+                    c (cr-say (string-concat "receipt " text))
+                    d (cr-say (string-concat "signature " sig))
+                    e (cr-say (str "self-check " (statement-problem did text sig) " "
+                                   (if (json-canonical? (cr-bytes text)) "1" "0")))]
+                0))))))))
+
+(defn cell-run-main [] :i64
+  (cell-run (cr-arg 0) (cr-arg 1) (cr-arg 2) (cr-arg 3) (cr-arg 4) (cr-arg 5) (cr-arg 6) (cr-arg 7)
+            (cr-int (cr-arg 8)) (cr-int (cr-arg 9))))
