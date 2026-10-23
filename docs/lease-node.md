@@ -17,7 +17,10 @@ a proposer, each a loaderless static image, over the runtime's TCP wires.
   accepted value. Every request is handled in `arena-scope`.
 - **Proposer** (`proposer <mode> <t> <id> <value> <port>…`):
   - `full` prepares, adopts the value accepted under the highest ballot (or
-    else its own), accepts, and on a majority prints `chosen <value>`;
+    else its own), accepts, and on a majority prints `chosen <value>`. A
+    round preempted by a voter's higher promise is tried again just above
+    it, at most five rounds, as `lease.cljk`'s `round!`
+    ([Preemption](#preemption));
   - `prepare` runs only the prepare phase;
   - `accept` runs only the accept phase, with the value given.
 - **Lines.** Requests are `prepare <t> <id>` and `accept <t> <id> <value>`;
@@ -191,11 +194,139 @@ control: open voters, k16 proposes: chosen {"class":"qwen-text","epoch":1,"node"
 
 The membership receipt is [evidence/lease-membership-20261023.json](evidence/lease-membership-20261023.json).
 
+## Preemption
+
+As `lease.cljk`'s `round!` does, a full round that falls short is tried
+again only when it was preempted:
+- **Preempted:** a majority of voters answered, and at least one refusal
+  carried a promise higher than the round's ballot. The next round runs at
+  ballot (that promise + 1, own id) and adopts whatever was accepted by
+  then. At most five rounds run.
+- **Not retried:**
+  - fewer than a majority answered (fail closed);
+  - the voters refused the value itself under the round's own ballot, as
+    membership does above.
+
+There is no random backoff, because the runtime has no sleep.
+
+Three scripted cases, each with this proposer and with a control that runs
+one round only (`ln-tries` 1, the proposer before this change):
+- **a.** k16 has prepared at ballot 500, so voters have promised it, and
+  b70 then runs a full round at 100: a node whose clock is behind.
+- **b.** k16's lease was chosen at 500, and b70 then runs a full round at
+  100.
+- **c.** Only one of three voters is up.
+
+A race loop then starts b70 and k16 together twenty times. With the same
+`$G`, `$K` and `node.kotoba`:
+
+```sh
+sed 's/(defn- ln-tries \[\] :i64 5)/(defn- ln-tries [] :i64 1)/' "$G/node.kotoba" > "$G/once.kotoba"
+cat > "$G/preempt.sh" <<'EOF'
+VA='{"class":"qwen-text","epoch":1,"node":"b70","revision":7,"slot":0,"until":1792500900000}'
+VB='{"class":"qwen-text","epoch":1,"node":"k16","revision":7,"slot":0,"until":1792500900000}'
+voters() {  # image tag count
+  for v in $(seq 1 $3); do
+    env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:780$v \
+      /gate/$1.elf voter 780$v /gate/$2-v$v.state 1500 > /gate/$2-v$v.log 2>&1 &
+  done
+  sleep 0.3
+}
+prop() {  # image label mode t id value
+  env KEXE_ALLOW=37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7801,127.0.0.1:7802,127.0.0.1:7803 \
+    /gate/$1.elf proposer $3 $4 $5 "$6" 7801 7802 7803 2>&1 | grep -v '^{:status' | sed "s/^/$2: /" | cut -c1-96
+}
+state() { for v in 1 2 3; do [ -f /gate/$1-v$v.state ] && echo "  voter $v: $(cut -c1-60 /gate/$1-v$v.state)"; done; }
+for img in node once; do
+  rm -f /gate/$img-*.state
+  echo "== proposer: $img"
+  voters $img $img-a 3; prop $img "a1 k16 prepares (500,k16)" prepare 500 k16 "$VB"; wait
+  voters $img $img-a 3; prop $img "a2 b70 round    (100,b70)" full 100 b70 "$VA"; wait; state $img-a
+  voters $img $img-b 3; prop $img "b1 k16 round    (500,k16)" full 500 k16 "$VB"; wait
+  voters $img $img-b 3; prop $img "b2 b70 round    (100,b70)" full 100 b70 "$VA"; wait; state $img-b
+  voters $img $img-c 1; prop $img "c1 one voter up (100,b70)" full 100 b70 "$VA"; wait; state $img-c
+done
+for img in node once; do
+  agree=0; short=0; split=0
+  for i in $(seq 1 20); do
+    rm -f /gate/race-v*.state
+    voters $img race 3
+    prop $img A full 100 b70 "$VA" > /gate/race-a.out &
+    prop $img B full 100 k16 "$VB" > /gate/race-b.out &
+    wait
+    a=$(grep -o '"node":"[a-z0-9]*"' /gate/race-a.out); b=$(grep -o '"node":"[a-z0-9]*"' /gate/race-b.out)
+    if [ -z "$a" ] || [ -z "$b" ]; then short=$((short + 1)); elif [ "$a" = "$b" ]; then agree=$((agree + 1)); else split=$((split + 1)); fi
+  done
+  echo "race $img: both hold the same lease $agree/20, a proposer without a lease $short/20, two leases $split/20"
+done
+EOF
+podman run --rm --pull never --platform linux/arm64 --network none \
+  -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
+    for c in node once; do
+      rm -f /gate/$c.elf
+      ./root.elf compile /gate/$c.kotoba --target aarch64-linux --output /gate/$c.elf --format static >/dev/null || exit 1
+      chmod +x /gate/$c.elf
+    done
+    sh /gate/preempt.sh'
+```
+
+Expected output, measured on 2026-10-23 (`…` is the rest of the lease):
+
+```text
+== proposer: node
+a1 k16 prepares (500,k16): prepared 3
+a2 b70 round    (100,b70): chosen {"class":"qwen-text","epoch":1,"node":"b70",…}
+  voter 1: 501 b70 501 b70 {"class":"qwen-text","epoch":1,"node":"b70",
+  voter 2: 501 b70 501 b70 {"class":"qwen-text","epoch":1,"node":"b70",
+  voter 3: 501 b70 501 b70 {"class":"qwen-text","epoch":1,"node":"b70",
+b1 k16 round    (500,k16): chosen {"class":"qwen-text","epoch":1,"node":"k16",…}
+b2 b70 round    (100,b70): chosen {"class":"qwen-text","epoch":1,"node":"k16",…}
+  voter 1: 501 b70 501 b70 {"class":"qwen-text","epoch":1,"node":"k16",
+  voter 2: 501 b70 501 b70 {"class":"qwen-text","epoch":1,"node":"k16",
+  voter 3: 501 b70 501 b70 {"class":"qwen-text","epoch":1,"node":"k16",
+c1 one voter up (100,b70): no-majority prepare 1
+  voter 1: 100 b70 0 - -
+== proposer: once
+a1 k16 prepares (500,k16): prepared 3
+a2 b70 round    (100,b70): no-majority prepare 0
+  voter 1: 500 k16 0 - -
+  voter 2: 500 k16 0 - -
+  voter 3: 500 k16 0 - -
+b1 k16 round    (500,k16): chosen {"class":"qwen-text","epoch":1,"node":"k16",…}
+b2 b70 round    (100,b70): no-majority prepare 0
+  voter 1: 500 k16 500 k16 {"class":"qwen-text","epoch":1,"node":"k16",
+  voter 2: 500 k16 500 k16 {"class":"qwen-text","epoch":1,"node":"k16",
+  voter 3: 500 k16 500 k16 {"class":"qwen-text","epoch":1,"node":"k16",
+c1 one voter up (100,b70): no-majority prepare 1
+  voter 1: 100 b70 0 - -
+race node: both hold the same lease 20/20, a proposer without a lease 0/20, two leases 0/20
+race once: both hold the same lease 0/20, a proposer without a lease 20/20, two leases 0/20
+```
+
+- **a.** b70's round at 100 is refused by voters that promised 500. b70
+  tries again at 501. Nothing was accepted, so its own lease is chosen. One
+  round alone ends `no-majority prepare 0`.
+- **b.** At 501, b70 adopts k16's chosen lease, so the chosen lease stays
+  chosen. A late node learns the holder instead of failing.
+- **c.** One answer is not a majority, so b70 stops after one round (the
+  voter's promise stays at 100). The same holds for the control.
+- **Race.** With retries, both proposers report the same lease in every
+  run. With one round, one of the two ends without a lease in every run.
+  No run chose two leases. The counts are from one run and depend on
+  timing; the scripted cases do not.
+
+Membership refusals are not retried. After the membership run above, the
+voters of "k16 proposes" and "until too far ahead" still hold the promise
+101.
+
+The receipt is [evidence/lease-preemption-20261023.json](evidence/lease-preemption-20261023.json).
+
 ## What this does not show
 
 - Separate hosts.
 - The fleet token and lease ids of `lease.cljk`.
 - An fsync: a voter survives a process restart, not a power cut.
-- Concurrent proposers racing in real time. The interleaving here is
-  scripted.
+- Concurrent proposers on separate hosts. The race loop runs on one
+  machine, and there is no random backoff, so two proposers can in
+  principle keep preempting each other for all five rounds.
 - x86_64 execution.

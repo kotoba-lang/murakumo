@@ -593,7 +593,10 @@ over TCP: three voters and a proposer, each a static image.
 With a topology, voters verify the operator-signed topology at start and
 accept only values naming an enabled node of it (`valid-value?`): a disabled
 node, an `until` too far ahead and a forged topology are each refused.
-Reproduction: [lease node](docs/lease-node.md).
+A round preempted by a higher promise is tried again just above it (at most
+five rounds, as `lease.cljk`'s `round!`). In a race loop on one machine, two
+proposers then report the same lease in 20 of 20 runs, against 0 of 20 with
+one round. Reproduction: [lease node](docs/lease-node.md).
 
 `kotoba/fleet_job_node.kotoba` gives one agent-step job to two nodes.
 
