@@ -209,9 +209,88 @@ Expected: `Signature Verified Successfully`, then `canonical: True`,
 ran the image by repository digest, is recorded in
 [evidence/cell-run-20261023.json](evidence/cell-run-20261023.json).
 
-The images `localhost/itonami-cell-demo:cell` and `:impostor` stay in the
-local podman store until they are removed (`podman rmi
-localhost/itonami-cell-demo:cell localhost/itonami-cell-demo:impostor`).
+The images `localhost/itonami-cell-demo:cell`, `:impostor` and `:slow`
+stay in the local podman store until they are removed (`podman rmi
+localhost/itonami-cell-demo:cell localhost/itonami-cell-demo:impostor
+localhost/itonami-cell-demo:slow`).
+
+## Process table
+
+The acceptance also asks that the start path has no Node.js, nbb, JVM,
+babashka or Cloudflare, checked in the process table. The same `$G` and
+agent are used with a cell that computes for about 3 seconds, so its
+processes can be seen. `ps` is sampled every 0.2 s until a process named
+`cell` or `crun` exists:
+
+```sh
+printf '(ns itonami-demo-slow (:export [main]))\n(defn- spin [n :i64] :i64 (loop [i 0 a 0] (if (= i n) a (recur (+ i 1) (+ a (rem i 7))))))\n(defn main [] :i64 (let [s (spin 300000000) x (typed-cap-call :io/write :string :string (string-concat "itonami cell: slow, " (string-concat (string-from-i64 (rem s 10)) "\\n")))] 0))\n' > "$G/slow.kotoba"
+podman run --rm --pull never --platform linux/arm64 --network none -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate \
+  docker.io/library/python:3.12-alpine sh -c 'rm -f slow.elf; ./root.elf compile /gate/slow.kotoba --target aarch64-linux --output /gate/slow.elf --format static >/dev/null && chmod +x slow.elf'
+printf 'FROM scratch\nCOPY slow.elf /cell\nENTRYPOINT ["/cell"]\n' > "$G/Containerfile.slow"
+podman build -q --platform linux/arm64 -t localhost/itonami-cell-demo:slow -f "$G/Containerfile.slow" "$G"
+rm -rf "$G/layout-slow"; podman save -q --format oci-dir -o "$G/layout-slow" localhost/itonami-cell-demo:slow
+python3 -I - "$G" <<'PY'
+import hashlib, json, sys
+g = sys.argv[1]
+idx = json.load(open(f"{g}/layout-slow/index.json"))["manifests"][0]
+m = '{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"' + idx["digest"] + '","size":' + str(idx["size"]) + '}'
+b = ('{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","artifactType":"application/vnd.itonami.app.v1",'
+     f'"manifests":[{m}],"annotations":{{"org.itonami.runtime-class":"container"}}}}').encode()
+open(f"{g}/release-slow.json", "wb").write(b); open(f"{g}/release-slow.digest", "w").write("sha256:" + hashlib.sha256(b).hexdigest())
+PY
+cat > "$G/ps-snap.sh" <<EOF
+cd $G
+env KEXE_ALLOW=20,35,37,38 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
+  ./agent.elf $G/release-slow.json $(cat "$G/release-slow.digest") container $G/layout-slow $G/node.key b70 site-a $A $N 2 > $G/slow-run.out 2>&1 &
+AGENT=\$!
+for i in \$(seq 1 100); do
+  ps -eo pid,ppid,user,comm,args > /tmp/ps-snap.txt
+  if awk '\$4 ~ /^(crun|cell)\$/' /tmp/ps-snap.txt | grep -q .; then cp /tmp/ps-snap.txt $G/slow-ps.txt; break; fi
+  sleep 0.2
+done
+wait \$AGENT
+EOF
+podman machine ssh -- "sh $G/ps-snap.sh"
+python3 -I - "$G/slow-ps.txt" <<'PY'
+import sys
+procs = {}
+for l in list(open(sys.argv[1]))[1:]:
+    p = l.split(None, 4); procs[int(p[0])] = (int(p[1]), p[3], p[4].strip() if len(p) > 4 else "")
+def show(pid, depth):
+    print("  " * depth + procs[pid][1] + ": " + procs[pid][2][:60])
+    for c in sorted(c for c, v in procs.items() if v[0] == pid): show(c, depth + 1)
+show(min(pid for pid, v in procs.items() if v[1] == "agent.elf"), 0)
+for c in [pid for pid, v in procs.items() if v[1] == "cell"]:
+    chain, p = [], c
+    while p in procs and p != 1: chain.append(procs[p][1]); p = procs[p][0]
+    print("cell ancestry:", " <- ".join(chain))
+print("excluded runtimes present:", sorted({v[1] for v in procs.values() if v[1] in ("node", "nbb", "java", "bb", "babashka", "clojure")}))
+PY
+```
+
+Measured on 2026-10-23 (local paths shortened to `G`):
+
+```text
+agent.elf: ./agent.elf G/release-slow.json sha256:7dc1f7ee66725
+  agent.elf: ./agent.elf G/release-slow.json sha256:7dc1f7ee667
+    podman: /usr/bin/podman run --rm --pull never --network none --rea…
+cell ancestry: cell <- conmon
+excluded runtimes present: []
+```
+
+The process tree has three levels:
+- the agent;
+- its spawn helper, which is forked before the sandbox and is the only
+  process that may execute anything;
+- the granted podman, with its fixed argv.
+
+The container runs under `conmon`, which podman detaches to the user's
+systemd. No `node`, `nbb`, `java`, `bb`, `babashka` or `clojure` process runs
+anywhere on the VM at that moment. The agent's own output for that run was
+`verdict launch/ok`, `layout layout/ok`, `exit 0` and `self-check enroll/ok
+1`. The receipt is
+[evidence/cell-run-process-table-20261023.json](evidence/cell-run-process-table-20261023.json).
+It records only the agent's subtree and the cell's ancestry.
 
 ## What this does not show
 
