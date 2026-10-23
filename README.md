@@ -597,9 +597,11 @@ Reproduction: [lease node](docs/lease-node.md).
 
 `kotoba/fleet_job_node.kotoba` gives one agent-step job to two nodes.
 
-- **The race.** Each node races for the job's lease on that register. Only
-  the holder runs the cell (`cell-execute`) and signs an agent-step receipt
-  with the lease epoch.
+- **The race.** Each node first judges the release against its own signed
+  state and host policy (`cell-admit`); a node whose runtime class does not
+  fit stops (`ineligible`) and never holds the job. Each remaining node races
+  for the job's lease on that register. Only the holder runs the cell
+  (`cell-execute`) and signs an agent-step receipt with the lease epoch.
 - **The verifier.** It learns the holder from the voters and confirms only
   that receipt.
 - **The control.** When the other node runs anyway, its receipt is
