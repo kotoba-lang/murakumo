@@ -554,11 +554,13 @@ operator-signed topology document that `replicated_topology` replicates.
   `quorum-signers`, a legacy `signature` counts for whichever trusted key it
   verifies against, and each `signatures` entry counts only for its own key
   id.
-- **Then the payload.** Only after that are the schema and an advancing
-  revision checked.
+- **Then the payload.** Only after that are the schema, `validate!`
+  (structure, identities, tailnet endpoints, owners and roles, resilience
+  policy) and an advancing revision checked.
 
-Nine documents signed by OpenSSL, serialized out of order, pass or fail as
-they should. Reproduction: [topology verify](docs/topology-verify.md).
+Ten documents signed by OpenSSL, serialized out of order, and 51 payload
+cases pass or fail as they should. Reproduction:
+[topology verify](docs/topology-verify.md).
 
 `kotoba/fleet_agent_step.kotoba` treats a bot's agent turn as a murakumo job
 (JUN-289).

@@ -21,9 +21,9 @@ seeds = {"op1": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f6
          "op3": "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7"}
 seeds = {k: bytes.fromhex(v) for k, v in seeds.items()}
 dids = {k: did(v) for k, v in seeds.items()}
-def payload(rev=7, schema=1, extra=None):
+def payload(rev=7, schema=1, extra=None, url="http://100.64.0.10:8796/"):
     p = {"schema": schema, "revision": rev,
-         "nodes": [{"node": "b70", "url": "http://100.64.0.10:8796/", "enabled": True,
+         "nodes": [{"node": "b70", "url": url, "enabled": True,
                     "owner-id": "01234567-89ab-cdef-0123-456789abcdef", "roles": [{"kind": "text", "model": "m1"}]}],
          "gateways": [{"node": "gw", "url": "http://100.64.0.1:8796/", "enabled": True}],
          "policies": {"minimum-replicas": {"m1": 1}}}
@@ -31,6 +31,7 @@ def payload(rev=7, schema=1, extra=None):
     return p
 canon = lambda p: json.dumps(p, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
 P7 = payload(); P8 = payload(rev=8); PS = payload(schema=2); PF = payload(extra={"weight": 0.5})
+PE = payload(url="http://100.64.0.10:8000/")   # signed, but validate! refuses the endpoint
 s = {k: sign(v, canon(P7)) for k, v in seeds.items()}
 docs = {
   "single": json.dumps({"payload": P7, "signature": s["op1"]}),
@@ -42,6 +43,7 @@ docs = {
   "float": json.dumps({"payload": PF, "signature": sign(seeds["op1"], canon(PF))}),
   "same-key-twice": json.dumps({"payload": P7, "signature": s["op1"], "signatures": [{"key": "op1", "signature": s["op1"]}]}),
   "schema-2": json.dumps({"payload": PS, "signature": sign(seeds["op1"], canon(PS))}),
+  "signed-bad-endpoint": json.dumps({"payload": PE, "signature": sign(seeds["op1"], canon(PE))}),
 }
 json.dump({"dids": dids, "docs": docs, "canonical": canon(P7).decode()}, open("vectors.json", "w"), indent=1)
 os.remove("k.pem"); os.remove("m.bin")

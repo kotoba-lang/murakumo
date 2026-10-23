@@ -19,7 +19,8 @@ the first refusal:
 | 5 | a well-formed trust and threshold | `topology/bad-trust` |
 | 6 | at least `threshold` **distinct** trusted keys signed the canonical payload | `topology/needs-signatures` |
 | 7 | `schema` is 1 | `topology/schema` |
-| 8 | the revision advances (fleet_intent_core's `revision-verdict`) | `intent/bad-revision`, `intent/not-advancing` |
+| 8 | the payload passes `validate!` ([Payload](#payload)) | `topology/invalid-structure`, `duplicate-identity`, `invalid-endpoint`, `invalid-roles`, `invalid-policy` |
+| 9 | the revision advances (fleet_intent_core's `revision-verdict`) | `intent/bad-revision`, `intent/not-advancing` |
 
 **What is signed.** As in `verify!`, the signed bytes are `encoded
 payload`: the canonical re-encoding of the parsed payload, with keys sorted
@@ -36,9 +37,42 @@ A document may therefore arrive in any key order or spacing, and still verify.
 keys. These are the operators' public keys as did:key, the form the host
 derives from its PEM files once.
 
-Checking the signatures comes before reading what the payload says. Payload
-validation beyond `schema` and `revision` (nodes, gateways, roles, policies)
-stays with `validate!` and `fleet_intent_core`.
+Checking the signatures comes before reading what the payload says.
+
+## Payload
+
+`verify!` runs `validate!` on every document, and `topology-payload-problem`
+is that check with `allow-loopback` false, in `validate!`'s order:
+1. **Structure.** `revision` is a positive safe integer; `nodes` is an array
+   of 1 to 256 entries and `gateways` one of 1 to 16.
+2. **Identities.** No `node` value repeats within `nodes`, or within
+   `gateways`.
+3. **Endpoints.** Every entry has a `node` matching `[A-Za-z0-9-]+`, a
+   tailnet endpoint `url` and a boolean `enabled`.
+4. **Owners and roles.** Every node has an `owner-id` matching
+   `[a-f0-9-]{36}` and at most 8 roles. Each role has kind `text` or `image`
+   and a `model` of 1 to 128 UTF-16 code units, as JavaScript counts them.
+5. **Resilience policy.** `policies.minimum-replicas` is an object whose
+   keys have 1 to 128 code units and whose values are integers 1 to 256.
+
+**Stricter than `endpoint?`.** `endpoint?` parses with the WHATWG URL
+parser. Here the url must be exactly `http://a.b.c.d:8796` or `:8797`, with
+an optional final `/`. Each octet must be decimal without a leading zero,
+the first octet 100 and the second 64 to 127. So the voter refuses some urls
+that a resident accepts after normalizing, such as an upper-case scheme or
+an octal octet. It never accepts one that a resident refuses.
+
+The cases are made by
+[`evidence/topology-payload-vectors-20261023.py`](evidence/topology-payload-vectors-20261023.py)
+`emit`, which changes one thing in a valid payload per case:
+- eleven valid payloads, including a url without its final `/`, a 128-unit
+  model and one of 64 surrogate pairs;
+- thirty-eight invalid ones, at least one per refusal;
+- the two stricter cases above.
+
+Voters use `topology-verdict` at start and on rotation
+([lease node](lease-node.md)), so they now refuse a signed topology that
+`validate!` refuses.
 
 ## Reproduce
 
@@ -69,14 +103,16 @@ pin() { git -C "$K/$1" show "$2:$3" | sed '1,/\]))$/d'; }
   cat <<'EOF'
 (defn main [] :i64
  (+ (if (and (test-wire) (test-names) (test-strings) (test-forbidden) (test-class) (test-trust) (test-cell)) 1 0)
- (+ (if (test-did) 2 0) (if (test-topology) 4 0))))
+ (+ (if (test-did) 2 0) (+ (if (test-topology) 4 0) (if (test-payload) 8 0)))))
 EOF
 } > "$G/gate.kotoba"
 sed 's/(and (= (json-kind b e) 1) (= (tv-text b e "key") id)/(and (= (json-kind b e) 1) true/' "$G/gate.kotoba" > "$G/no-key-id.kotoba"
 sed 's/(cond (< n threshold) "topology\/needs-signatures"/(cond false "topology\/needs-signatures"/' "$G/gate.kotoba" > "$G/no-threshold.kotoba"
+sed 's/(not (= (topology-payload-problem doc) "topology\/ok")) (topology-payload-problem doc)/false (topology-payload-problem doc)/' "$G/gate.kotoba" > "$G/no-validate.kotoba"
+sed 's/(and (= (string-index-of url "http:\/\/") 0)/(or true (= (string-index-of url "http:\/\/") 0)/' "$G/gate.kotoba" > "$G/loose-endpoint.kotoba"
 podman run --rm --pull never --platform linux/arm64 --network none \
   -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
-    for c in gate no-key-id no-threshold; do
+    for c in gate no-key-id no-threshold no-validate loose-endpoint; do
       rm -f /gate/$c.elf
       ./root.elf compile /gate/$c.kotoba --target aarch64-linux --output /gate/$c.elf --format static >/dev/null || exit 1
       chmod +x /gate/$c.elf
@@ -87,9 +123,10 @@ podman run --rm --pull never --platform linux/arm64 --network none \
 The reported result is a bitmask:
 - `1`: fleet_intent_core's tests;
 - `2`: enrollment's did:key tests;
-- `4`: `test-topology`.
+- `4`: `test-topology`;
+- `8`: `test-payload`.
 
-`test-topology` runs nine documents. Each is serialized with unsorted keys
+`test-topology` runs ten documents. Each is serialized with unsorted keys
 and spaces, and signed over the canonical payload by OpenSSL 3 with RFC 8032
 keys 1 to 3. The script that made them is
 [`evidence/topology-vectors-20261023.py`](evidence/topology-vectors-20261023.py).
@@ -103,6 +140,8 @@ The cases:
 - a float in the payload;
 - one key signing both as the legacy signature and as an entry;
 - schema 2;
+- a payload signed by operator 1 whose node url uses port 8000, which
+  `validate!` refuses;
 - in addition: a non-advancing revision, and a duplicate, empty or too-weak
   trust.
 
@@ -110,11 +149,13 @@ Measured on 2026-10-23 (arm64 Linux 6.15 under podman, amu `457042ab` root):
 
 | source | required reported result |
 | --- | --- |
-| unchanged | 7 |
-| an entry counts whatever its key id says | 3 |
-| the threshold is not checked | 3 |
+| unchanged | 15 |
+| an entry counts whatever its key id says | 11 |
+| the threshold is not checked | 11 |
+| the verdict skips `validate!` | 11 |
+| any url is an endpoint | 3 |
 
-The gate image is 479,744 bytes and runs in 12.5 s with a 9,804 KiB maximum
+The gate image is 532,992 bytes and runs in 9.4 s with a 14,160 KiB maximum
 resident set. Every verify runs in `arena-scope`. The receipt is
 [evidence/topology-verify-20261023.json](evidence/topology-verify-20261023.json).
 

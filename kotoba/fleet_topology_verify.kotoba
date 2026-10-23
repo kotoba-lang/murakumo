@@ -13,7 +13,10 @@
 ;;     6. fewer than threshold DISTINCT trusted keys signed the canonical
 ;;        payload                                            topology/needs-signatures
 ;;     7. schema is not 1                                    topology/schema
-;;     8. the revision does not advance (fleet_intent_core's revision-verdict)
+;;     8. the payload fails replicated_topology validate!    topology-payload-problem's
+;;        reason: invalid-structure, duplicate-identity, invalid-endpoint,
+;;        invalid-roles or invalid-policy
+;;     9. the revision does not advance (fleet_intent_core's revision-verdict)
 ;;   topology-revision the payload's revision, -1 when there is none
 ;;
 ;; As replicated_topology's verify! does: the signed bytes are the canonical
@@ -25,15 +28,16 @@
 ;; entries, distinct ids and keys): the operators' keys as did:key, the form
 ;; the host derives from its PEM files once.
 ;;
-;; Payload validation beyond schema and revision (nodes, gateways, roles,
-;; policies) is replicated_topology's validate! and fleet_intent_core; this
-;; module verifies who signed what.
+;; topology-payload-problem is validate! with allow-loopback false: structure,
+;; duplicate identities, endpoints, owner-ids and roles, resilience policy, in
+;; validate!'s order. Its endpoint check is a strict subset of endpoint?'s
+;; WHATWG URL parsing (see tv-endpoint?).
 ;;
 ;; Composition order: sha2.core, ed25519.selfhost, jcs.reader, tsukasa
 ;; ledger_core and node_state, fleet_node_enrollment, fleet_intent_core, this
 ;; file. docs/topology-verify.md has the gate.
 (ns murakumo.fleet-topology-verify
-  (:export [topology-verdict topology-revision test-topology]))
+  (:export [topology-verdict topology-revision topology-payload-problem test-topology test-payload]))
 
 (defn- tv-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
 
@@ -89,6 +93,151 @@
     (let [p (json-member doc (tv-root doc) "payload") r (if (>= p 0) (json-member doc p "revision") -1)]
       (if (and (>= r 0) (json-int-ok? doc r)) (json-int doc r) -1))))
 
+;; ---------------------------------------------------------------------------
+;; replicated_topology validate!, with allow-loopback false (the voter's and
+;; resident's default)
+
+(defn- tv-skip [b :vector-i64 i :i64] :i64
+  (loop [j i] (if (and (< j (vector-count b)) (let [c (vector-at b j)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ j 1)) j)))
+
+;; UTF-16 code units of the UTF-8 bytes [s, e), as JavaScript's count
+(defn- tv-u16 [b :vector-i64 s :i64 e :i64] :i64
+  (loop [i s n 0] (if (>= i e) n (let [c (vector-at b i)] (recur (+ i 1) (cond (and (>= c 128) (<= c 191)) n (>= c 240) (+ n 2) :else (+ n 1)))))))
+
+;; a string value's length in UTF-16 code units, -1 when it is not a string
+(defn- tv-str-len [b :vector-i64 v :i64] :i64
+  (if (or (< v 0) (not (= (json-kind b v) 3))) -1 (let [d (json-string-bytes b v)] (tv-u16 d 0 (vector-count d)))))
+
+;; [A-Za-z0-9-]+
+(defn- tv-name-ok? [s :string] :bool
+  (let [b (tv-bytes s)]
+    (and (> (vector-count b) 0)
+         (loop [i 0] (if (= i (vector-count b)) true
+                       (let [c (vector-at b i)]
+                         (if (or (and (>= c 65) (<= c 90)) (and (>= c 97) (<= c 122)) (and (>= c 48) (<= c 57)) (= c 45)) (recur (+ i 1)) false)))))))
+
+;; [a-f0-9-]{36}
+(defn- tv-owner-ok? [s :string] :bool
+  (let [b (tv-bytes s)]
+    (and (= (vector-count b) 36)
+         (loop [i 0] (if (= i 36) true
+                       (let [c (vector-at b i)]
+                         (if (or (and (>= c 97) (<= c 102)) (and (>= c 48) (<= c 57)) (= c 45)) (recur (+ i 1)) false)))))))
+
+;; the k-th of the dot-separated octets of h: decimal 0..255 without a leading
+;; zero, or -1
+(defn- tv-octet [h :string k :i64] :i64
+  (let [b (tv-bytes h)]
+    (loop [i 0 part 0 start 0]
+      (let [end (or (= i (vector-count b)) (= (vector-at b i) 46))]
+        (cond (and end (= part k))
+              (let [n (- i start)]
+                (if (or (< n 1) (> n 3) (and (> n 1) (= (vector-at b start) 48))) -1
+                  (loop [j start v 0]
+                    (if (= j i) (if (> v 255) -1 v)
+                      (let [c (vector-at b j)] (if (and (>= c 48) (<= c 57)) (recur (+ j 1) (+ (* v 10) (- c 48))) -1))))))
+              (= i (vector-count b)) -1
+              end (recur (+ i 1) (+ part 1) (+ i 1))
+              :else (recur (+ i 1) part start))))))
+
+(defn- tv-dots [h :string] :i64
+  (let [b (tv-bytes h)] (loop [i 0 n 0] (if (= i (vector-count b)) n (recur (+ i 1) (if (= (vector-at b i) 46) (+ n 1) n))))))
+
+;; endpoint?: "http://" a.b.c.d ":" 8796 or 8797, then "/" or nothing, with
+;; a = 100 and 64 <= b <= 127 (the tailnet). This is a subset of what endpoint?
+;; accepts through WHATWG URL parsing, which also normalizes, e.g., an
+;; upper-case scheme or an octal octet; those are refused here.
+(defn- tv-endpoint? [url :string] :bool
+  (and (= (string-index-of url "http://") 0)
+       (let [r (string-substring url 7 (string-length url)) k (string-index-of r ":")]
+         (and (> k 0)
+              (let [h (string-substring r 0 k) p (string-substring r (+ k 1) (string-length r))]
+                (and (or (= p "8796") (= p "8797") (= p "8796/") (= p "8797/"))
+                     (= (tv-dots h) 3) (= (tv-octet h 0) 100)
+                     (>= (tv-octet h 1) 64) (<= (tv-octet h 1) 127)
+                     (>= (tv-octet h 2) 0) (>= (tv-octet h 3) 0)))))))
+
+;; an entry's identity for the duplicate check, as (map :node entries): the
+;; node value's canonical bytes, "" for nil (absent, null or not an object)
+(defn- tv-ident [b :vector-i64 e :i64] :string
+  (let [v (if (= (json-kind b e) 1) (json-member b e "node") -1)]
+    (if (or (< v 0) (= (json-kind b v) 7)) "" (string-from-utf8 (bytes-from-vector-i64 (json-canonical-bytes b v))))))
+
+(defn- tv-unique? [b :vector-i64 arr :i64] :bool
+  (let [n (json-count b arr)]
+    (loop [i 0 j 1]
+      (cond (>= i n) true
+            (>= j n) (recur (+ i 1) (+ i 2))
+            (= (tv-ident b (json-element b arr i)) (tv-ident b (json-element b arr j))) false
+            :else (recur i (+ j 1))))))
+
+(defn- tv-boolean? [b :vector-i64 v :i64] :bool (and (>= v 0) (or (= (json-kind b v) 5) (= (json-kind b v) 6))))
+
+;; every entry: a name, an endpoint and a boolean enabled
+(defn- tv-entries-ok? [b :vector-i64 arr :i64] :bool
+  (loop [k 0]
+    (let [e (json-element b arr k)]
+      (cond (< e 0) true
+            (and (= (json-kind b e) 1) (tv-name-ok? (tv-text b e "node")) (tv-endpoint? (tv-text b e "url"))
+                 (tv-boolean? b (json-member b e "enabled")))
+            (recur (+ k 1))
+            :else false))))
+
+;; a role: kind text or image, a model of 1..128 UTF-16 code units
+(defn- tv-role-ok? [b :vector-i64 r :i64] :bool
+  (and (= (json-kind b r) 1)
+       (let [kind (tv-text b r "kind")] (or (= kind "text") (= kind "image")))
+       (let [n (tv-str-len b (json-member b r "model"))] (and (>= n 1) (<= n 128)))))
+
+(defn- tv-roles-ok? [b :vector-i64 rs :i64] :bool
+  (loop [j 0] (let [r (json-element b rs j)] (cond (< r 0) true (tv-role-ok? b r) (recur (+ j 1)) :else false))))
+
+;; every node: an owner-id, at most 8 roles, each well formed
+(defn- tv-nodes-roles-ok? [b :vector-i64 arr :i64] :bool
+  (loop [k 0]
+    (let [e (json-element b arr k)
+          rs (if (>= e 0) (json-member b e "roles") -1)]
+      (cond (< e 0) true
+            (and (tv-owner-ok? (tv-text b e "owner-id")) (>= rs 0) (= (json-kind b rs) 2) (<= (json-count b rs) 8) (tv-roles-ok? b rs))
+            (recur (+ k 1))
+            :else false))))
+
+;; policies.minimum-replicas: an object whose every key has 1..128 UTF-16
+;; code units and whose every value is an integer 1..256. jcs.reader keys
+;; carry no escapes, so a key's bytes lie between its quotes.
+(defn- tv-replicas-ok? [b :vector-i64 o :i64] :bool
+  (loop [i (tv-skip b (+ o 1))]
+    (cond (= (vector-at b i) 125) true
+          (not (= (vector-at b i) 34)) false
+          :else
+          (let [ks (+ i 1)
+                ke (loop [j ks] (if (= (vector-at b j) 34) j (recur (+ j 1))))
+                v (tv-skip b (+ (tv-skip b (+ ke 1)) 1))
+                nxt (tv-skip b (json-end b v))
+                n (tv-u16 b ks ke)]
+            (cond (not (and (>= n 1) (<= n 128) (= (json-kind b v) 4) (json-int-ok? b v) (>= (json-int b v) 1) (<= (json-int b v) 256))) false
+                  (= (vector-at b nxt) 44) (recur (tv-skip b (+ nxt 1)))
+                  :else true)))))
+
+;; validate!'s refusals, in its order, for a document whose payload is an
+;; object of strict JSON
+(defn topology-payload-problem [doc :vector-i64] :string
+  (let [p (json-member doc (tv-root doc) "payload")
+        rv (json-member doc p "revision") ns (json-member doc p "nodes") gs (json-member doc p "gateways")
+        pol (json-member doc p "policies")
+        mr (if (and (>= pol 0) (= (json-kind doc pol) 1)) (json-member doc pol "minimum-replicas") -1)]
+    (cond (not (and (>= rv 0) (= (json-kind doc rv) 4) (json-int-ok? doc rv) (> (json-int doc rv) 0)
+                    (>= ns 0) (= (json-kind doc ns) 2) (>= (json-count doc ns) 1) (<= (json-count doc ns) 256)
+                    (>= gs 0) (= (json-kind doc gs) 2) (>= (json-count doc gs) 1) (<= (json-count doc gs) 16)))
+          "topology/invalid-structure"
+          (not (tv-unique? doc ns)) "topology/duplicate-identity"
+          (not (tv-entries-ok? doc ns)) "topology/invalid-endpoint"
+          (not (tv-unique? doc gs)) "topology/duplicate-identity"
+          (not (tv-entries-ok? doc gs)) "topology/invalid-endpoint"
+          (not (tv-nodes-roles-ok? doc ns)) "topology/invalid-roles"
+          (not (and (>= mr 0) (= (json-kind doc mr) 1) (tv-replicas-ok? doc mr))) "topology/invalid-policy"
+          :else "topology/ok")))
+
 (defn topology-verdict [doc :vector-i64 trust :string threshold :i64 current :i64] :string
   (cond (> (vector-count doc) 262144) "topology/too-large"
         (not (json-valid? doc)) "topology/not-strict-json"
@@ -106,6 +255,7 @@
                           s (json-member doc p "schema")]
                       (cond (< n threshold) "topology/needs-signatures"
                             (not (and (>= s 0) (json-int-ok? doc s) (= (json-int doc s) 1))) "topology/schema"
+                            (not (= (topology-payload-problem doc) "topology/ok")) (topology-payload-problem doc)
                             :else (let [v (revision-verdict current (topology-revision doc))]
                                     (if (= v "intent/ok") "topology/ok" v))))))))))
 
@@ -123,6 +273,7 @@
 (defn- tv-doc-float [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 1, \"revision\": 7, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}, \"weight\": 0.5}, \"signature\": \"6bFuhSq6pDOqhENX0Rm2ZZPzNU6TbraXv5zXvDy_MkniHSoC9cr5AkBny6JKIPZfltttzN1681pIvaIaD-8IBw\"}"))
 (defn- tv-doc-same-key-twice [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 1, \"revision\": 7, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}}, \"signature\": \"eN2z9Zt2ASZITkcK7WzV_55DvQtIfFDH6vHz3NQDXNanAgps7rQ6WH2NcxOf1WiJNKUTEXSsZS_N9oL4QcjcAw\", \"signatures\": [{\"key\": \"op1\", \"signature\": \"eN2z9Zt2ASZITkcK7WzV_55DvQtIfFDH6vHz3NQDXNanAgps7rQ6WH2NcxOf1WiJNKUTEXSsZS_N9oL4QcjcAw\"}]}"))
 (defn- tv-doc-schema-2 [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 2, \"revision\": 7, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}}, \"signature\": \"ZDgEjVgQ5JnykhuG0e5KdLHI1opQPihpwjGGq7TOOuRLvTbtbzgvxBWAM_FvBKCKHEwrVesv41O4Lv4TfpKTDw\"}"))
+(defn- tv-doc-signed-bad-endpoint [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 1, \"revision\": 7, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8000/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}}, \"signature\": \"uSqGXSXKiIWWwaOp332pPHNHz9SUCJWFbaZXeRDBXjwa8AWkQMwQmmuCK9s1nyPjWn6Hnuoxx1tytTZ3H80vAw\"}"))
 (defn- tv-trust1 [] :string "op1=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw")
 (defn- tv-trust3 [] :string "op1=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw,op2=did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT,op3=did:key:z6MkwSD8dBdqcXQzKJZQFPy2hh2izzxskndKCjdmC2dBpfME")
 (defn- tv-trust-dup [] :string "op1=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw,opx=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw")
@@ -143,7 +294,115 @@
        ;; one key counts once, legacy and entry together
        (= (topology-verdict (tv-doc-same-key-twice) (tv-trust3) 2 6) "topology/needs-signatures")
        (= (topology-verdict (tv-doc-schema-2) (tv-trust1) 1 6) "topology/schema")
+       ;; signed by op1, but validate! refuses its endpoint
+       (= (topology-verdict (tv-doc-signed-bad-endpoint) (tv-trust1) 1 6) "topology/invalid-endpoint")
        (= (topology-verdict (tv-doc-single) (tv-trust-dup) 1 6) "topology/bad-trust")
        (= (topology-verdict (tv-doc-single) (tv-trust1) 2 6) "topology/bad-trust")
        (= (topology-verdict (tv-doc-single) "" 1 6) "topology/bad-trust")
        (= (topology-verdict (tv-bytes "{\"signature\":\"x\"}") (tv-trust1) 1 6) "topology/no-payload")))
+
+;; topology-payload-problem cases (docs/evidence/topology-payload-vectors-20261023.py emit)
+(defn- tv-p-ok [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-ok-no-slash [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-ok-8797 [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8797/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-ok-disabled [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":false,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-ok-extra-field [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}],\"extra\":1}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-ok-no-roles [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-ok-model-128 [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"image\",\"model\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-ok-model-64-pairs [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-ok-two-nodes [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]},{\"node\":\"k16\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-ok-no-replicas [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{}}}}"))
+(defn- tv-p-ok-two-replicas [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1,\"m2\":256}}}}"))
+(defn- tv-p-revision-zero [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":0,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-nodes-empty [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-nodes-missing [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-nodes-object [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":{},\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-gateways-17 [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"g0\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g1\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g2\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g3\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g4\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g5\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g6\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g7\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g8\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g9\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g10\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g11\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g12\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g13\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g14\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g15\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"g16\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-nodes-duplicate [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]},{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-gateways-duplicate [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true},{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-name-underscore [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b_70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-name-empty [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-name-number [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":70,\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-url-https [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"https://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-url-port-8000 [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8000/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-url-no-port [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-url-private-10 [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://10.0.0.1:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-url-second-128 [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.128.0.1:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-url-octet-256 [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.256:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-url-path [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/x\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-url-query [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/?a\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-url-userinfo [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://u@100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-url-loopback [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://127.0.0.1:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-enabled-string [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":\"yes\",\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-gateway-url [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:9000/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-owner-short [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"0123\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-owner-upper [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89AB-CDEF-0123-456789ABCDEF\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-owner-missing [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-roles-9 [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"},{\"kind\":\"text\",\"model\":\"m1\"},{\"kind\":\"text\",\"model\":\"m1\"},{\"kind\":\"text\",\"model\":\"m1\"},{\"kind\":\"text\",\"model\":\"m1\"},{\"kind\":\"text\",\"model\":\"m1\"},{\"kind\":\"text\",\"model\":\"m1\"},{\"kind\":\"text\",\"model\":\"m1\"},{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-role-audio [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"audio\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-role-not-object [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[\"text\"]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-model-empty [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-model-129 [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-model-65-pairs [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\\ud83d\\ude00\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-policies-missing [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}]}}"))
+(defn- tv-p-replicas-zero [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":0}}}}"))
+(defn- tv-p-replicas-257 [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":257}}}}"))
+(defn- tv-p-replicas-string [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":\"1\"}}}}"))
+(defn- tv-p-replicas-empty-key [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"\":1}}}}"))
+(defn- tv-p-replicas-second-bad [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1,\"m2\":0}}}}"))
+(defn- tv-p-replicas-array [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":[1]}}}"))
+(defn- tv-p-strict-upper-scheme [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"HTTP://100.64.0.10:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+(defn- tv-p-strict-octal-octet [] :vector-i64 (tv-bytes "{\"payload\":{\"schema\":1,\"revision\":7,\"nodes\":[{\"node\":\"b70\",\"url\":\"http://100.64.0.010:8796/\",\"enabled\":true,\"owner-id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"roles\":[{\"kind\":\"text\",\"model\":\"m1\"}]}],\"gateways\":[{\"node\":\"gw\",\"url\":\"http://100.64.0.1:8796/\",\"enabled\":true}],\"policies\":{\"minimum-replicas\":{\"m1\":1}}}}"))
+
+(defn test-payload [] :bool
+  (and (= (topology-payload-problem (tv-p-ok)) "topology/ok")
+       (= (topology-payload-problem (tv-p-ok-no-slash)) "topology/ok")
+       (= (topology-payload-problem (tv-p-ok-8797)) "topology/ok")
+       (= (topology-payload-problem (tv-p-ok-disabled)) "topology/ok")
+       (= (topology-payload-problem (tv-p-ok-extra-field)) "topology/ok")
+       (= (topology-payload-problem (tv-p-ok-no-roles)) "topology/ok")
+       (= (topology-payload-problem (tv-p-ok-model-128)) "topology/ok")
+       (= (topology-payload-problem (tv-p-ok-model-64-pairs)) "topology/ok")
+       (= (topology-payload-problem (tv-p-ok-two-nodes)) "topology/ok")
+       (= (topology-payload-problem (tv-p-ok-no-replicas)) "topology/ok")
+       (= (topology-payload-problem (tv-p-ok-two-replicas)) "topology/ok")
+       (= (topology-payload-problem (tv-p-revision-zero)) "topology/invalid-structure")
+       (= (topology-payload-problem (tv-p-nodes-empty)) "topology/invalid-structure")
+       (= (topology-payload-problem (tv-p-nodes-missing)) "topology/invalid-structure")
+       (= (topology-payload-problem (tv-p-nodes-object)) "topology/invalid-structure")
+       (= (topology-payload-problem (tv-p-gateways-17)) "topology/invalid-structure")
+       (= (topology-payload-problem (tv-p-nodes-duplicate)) "topology/duplicate-identity")
+       (= (topology-payload-problem (tv-p-gateways-duplicate)) "topology/duplicate-identity")
+       (= (topology-payload-problem (tv-p-name-underscore)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-name-empty)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-name-number)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-url-https)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-url-port-8000)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-url-no-port)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-url-private-10)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-url-second-128)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-url-octet-256)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-url-path)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-url-query)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-url-userinfo)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-url-loopback)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-enabled-string)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-gateway-url)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-owner-short)) "topology/invalid-roles")
+       (= (topology-payload-problem (tv-p-owner-upper)) "topology/invalid-roles")
+       (= (topology-payload-problem (tv-p-owner-missing)) "topology/invalid-roles")
+       (= (topology-payload-problem (tv-p-roles-9)) "topology/invalid-roles")
+       (= (topology-payload-problem (tv-p-role-audio)) "topology/invalid-roles")
+       (= (topology-payload-problem (tv-p-role-not-object)) "topology/invalid-roles")
+       (= (topology-payload-problem (tv-p-model-empty)) "topology/invalid-roles")
+       (= (topology-payload-problem (tv-p-model-129)) "topology/invalid-roles")
+       (= (topology-payload-problem (tv-p-model-65-pairs)) "topology/invalid-roles")
+       (= (topology-payload-problem (tv-p-policies-missing)) "topology/invalid-policy")
+       (= (topology-payload-problem (tv-p-replicas-zero)) "topology/invalid-policy")
+       (= (topology-payload-problem (tv-p-replicas-257)) "topology/invalid-policy")
+       (= (topology-payload-problem (tv-p-replicas-string)) "topology/invalid-policy")
+       (= (topology-payload-problem (tv-p-replicas-empty-key)) "topology/invalid-policy")
+       (= (topology-payload-problem (tv-p-replicas-second-bad)) "topology/invalid-policy")
+       (= (topology-payload-problem (tv-p-replicas-array)) "topology/invalid-policy")
+       (= (topology-payload-problem (tv-p-strict-upper-scheme)) "topology/invalid-endpoint")
+       (= (topology-payload-problem (tv-p-strict-octal-octet)) "topology/invalid-endpoint")))
