@@ -81,7 +81,7 @@
          (in-class? (cp s 0) first-k)
          (all-in? s (utf8-width (cp s 0)) rest-k))))
 
-(defn prefix? [s :string p :string] :bool (= (string-index-of s p) 0))
+(defn fi-prefix? [s :string p :string] :bool (= (string-index-of s p) 0))
 
 ;; ---------------------------------------------------------------------------
 ;; Wire and revision
@@ -105,7 +105,7 @@
 
 ;; s is prefix p followed by at least one [a-z0-9.-]
 (defn unit-after? [s :string p :string] :bool
-  (and (prefix? s p) (> (string-length s) (string-length p))
+  (and (fi-prefix? s p) (> (string-length s) (string-length p))
        (all-in? s (string-length p) 0)))
 
 (defn unit-ok? [s :string] :bool
@@ -120,10 +120,10 @@
   (and (= (string-length s) 64) (hex-all? s 0)))
 
 (defn did-key-ok? [s :string] :bool
-  (and (prefix? s "did:key:z6Mk") (> (string-length s) 12) (all-in? s 12 2)))
+  (and (fi-prefix? s "did:key:z6Mk") (> (string-length s) 12) (all-in? s 12 2)))
 
 (defn model-file-ok? [f :string] :bool
-  (and (not (prefix? f "/")) (< (string-index-of f "..") 0)))
+  (and (not (fi-prefix? f "/")) (< (string-index-of f "..") 0)))
 
 ;; the five templates of spec.cljk, fixed in code (NO-ARGV-IN-SPEC)
 (defn template-unit [t :string] :string
@@ -162,7 +162,7 @@
         (command-like-from? s (+ i (utf8-width c)))))))
 
 (defn forbidden? [s :string is-file :bool] :bool
-  (and (not is-file) (or (prefix? s "/") (command-like-from? s 0))))
+  (and (not is-file) (or (fi-prefix? s "/") (command-like-from? s 0))))
 
 ;; ---------------------------------------------------------------------------
 ;; One entry at a time
@@ -183,7 +183,7 @@
 
 (defn cell-problem [name :string digest :string runtime-class :i64 replicas :i64] :string
   (cond (not (name-ok? name)) "intent/bad-cell-name"
-        (not (and (prefix? digest "sha256:") (= (string-length digest) 71)
+        (not (and (fi-prefix? digest "sha256:") (= (string-length digest) 71)
                   (hex64? (string-substring digest 7 71)))) "intent/bad-digest"
         (not (or (= runtime-class 1) (= runtime-class 2))) "intent/bad-runtime-class"
         (not (replicas-ok? replicas)) "intent/bad-replicas"

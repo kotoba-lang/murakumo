@@ -539,6 +539,23 @@ hashlib confirms both CIDs. A digest mismatch, a class mismatch, a host
 policy refusal and an unadmitted node each start nothing. Reproduction:
 [cell run](docs/cell-run.md).
 
+`kotoba/fleet_topology_verify.kotoba` checks L1 itself. It verifies the
+operator-signed topology document that `replicated_topology` replicates.
+
+- **Rebuilding the signed bytes.** The payload is canonicalized with
+  `json-canonical-bytes`, because murakumo signs the canonical re-encoding
+  and not the bytes as they arrive.
+- **Counting signatures.** The canonical payload must be signed by at least
+  `threshold` distinct trusted keys, given as did:key. As in
+  `quorum-signers`, a legacy `signature` counts for whichever trusted key it
+  verifies against, and each `signatures` entry counts only for its own key
+  id.
+- **Then the payload.** Only after that are the schema and an advancing
+  revision checked.
+
+Nine documents signed by OpenSSL, serialized out of order, pass or fail as
+they should. Reproduction: [topology verify](docs/topology-verify.md).
+
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
 `qwen3.8-flash-next-ud-iq3-xxs` is a single-node, lossless Qwen4Exp route for
