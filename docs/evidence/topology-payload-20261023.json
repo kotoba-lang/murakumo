@@ -1,0 +1,103 @@
+{
+  "schema": "murakumo.topology-payload.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-289",
+    "JUN-287"
+  ],
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": {
+    "kotoba/fleet_topology_verify.kotoba": "5084f2170ee91574a3e54cae552271691d06bcfd60d5d52021d44eaa607ff542",
+    "docs/evidence/topology-payload-vectors-20261023.py": "f2b596876dfe024fe0e957fb8f062f1ff7d2d590b83a42e20f223b5390e5e3c0",
+    "docs/evidence/topology-vectors-20261023.py": "acc4631ed42fe1935cee3e6295d19f13595f031f7b9ccf081c841dfa2a435163"
+  },
+  "images": {
+    "gate": {
+      "bytes": 532992,
+      "sha256": "22bf62f85066b059b1aca8dc7b6fa8cedc823338dcd14b9fb2b62d8174d99993"
+    },
+    "no-key-id": {
+      "bytes": 528896,
+      "sha256": "13fb7a8879335aebd9facdc4dec6b3a8aa2a8127edadaa283122eb376f5687c9"
+    },
+    "no-threshold": {
+      "bytes": 532992,
+      "sha256": "fac6ae9d739727cb6c4c3f5b5b8edd64e2d896291a14807a32f50d21c68a2fb5"
+    },
+    "no-validate": {
+      "bytes": 532992,
+      "sha256": "96a92231237e6e227191c71a2caeae19a0f5be046dcc84f97a5af6bceb603a25"
+    },
+    "loose-endpoint": {
+      "bytes": 532992,
+      "sha256": "d681013ef3e9073fdc5649c3e9688ab388515739209e35a4d5ea0706d741e3c3"
+    }
+  },
+  "results": {
+    "gate": 15,
+    "no-key-id": 11,
+    "no-threshold": 11,
+    "no-validate": 11,
+    "loose-endpoint": 3
+  },
+  "gateRun": {
+    "seconds": 9.4,
+    "maxRssKiB": 14160
+  },
+  "payloadCases": {
+    "valid": 11,
+    "invalid": 38,
+    "stricterThanWhatwg": 2
+  },
+  "reruns": {
+    "lease-node": [
+      "k16 proposes, topology says disabled: no-majority accept 0",
+      "b70 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"until\":1792500900000}",
+      "b70 proposes until too far ahead: no-majority accept 0",
+      "voters given a forged topology: no-majority prepare 0",
+      "forged voter says: voter topology/needs-signatures",
+      "control: open voters, k16 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"",
+      "race node: both hold the same lease 20/20, a proposer without a lease 0/20, two leases 0/20",
+      "race once: both hold the same lease 0/20, a proposer without a lease 20/20, two leases 0/20",
+      "  b70, after revision 8: no-majority accept 0",
+      "  k16, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"u",
+      "  b70, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"u",
+      "  k16, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"u",
+      "  b70, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"u",
+      "  k16, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"u",
+      "  member round (902,b70), the fleet token: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"r",
+      "  member round (903,b70), impostor voters: no-majority prepare 0",
+      "  member round (902,b70), the fleet token: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"r",
+      "  member round (903,b70), impostor voters: no-majority prepare 0",
+      "  member round (902,b70), the fleet token: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"r",
+      "  member round (903,b70), impostor voters: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"r"
+    ],
+    "job-node": [
+      "honest b70: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "honest k16: lease b70 held-by b70",
+      "honest verify b70's receipt: holder b70 verdict job/confirmed",
+      "rogue b70: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "rogue k16: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "rogue verify b70's receipt: holder b70 verdict job/confirmed",
+      "rogue verify k16's receipt: holder b70 verdict job/not-the-holder",
+      "job verifier, b70's receipt: holder b70 verdict job/confirmed",
+      "job verifier, k16's receipt: holder b70 verdict job/not-the-holder",
+      "nofence verifier, b70's receipt: holder b70 verdict job/confirmed",
+      "nofence verifier, k16's receipt: holder b70 verdict job/confirmed",
+      "canonical: True | kind itonami.agent-step-receipt/1 | epoch 1 | node b70",
+      "job id: True",
+      "class k16: ineligible grant/runtime-class-not-granted",
+      "class b70: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "class verify b70's output: holder b70 verdict job/confirmed",
+      "late k16: lease k16 verdict grant/runtime-class-not-granted refused grant/runtime-class-not-granted",
+      "late b70: lease k16 held-by k16",
+      "late verify b70's output: holder k16 verdict job/bad-signature"
+    ]
+  },
+  "notes": [
+    "Expected refusals are read from replicated_topology validate!'s order of checks; no JavaScript runs.",
+    "The endpoint check is a strict subset of endpoint?'s WHATWG URL parsing: an upper-case scheme and an octal octet are refused here and accepted by a resident.",
+    "Every block was run as documented in fresh directories; no Node, NBB, JVM, hosted compiler, C compiler or C loader runs."
+  ]
+}
