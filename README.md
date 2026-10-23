@@ -509,6 +509,20 @@ both). A node that skips the declaration check diverges from the liar's own
 view, which is the control. Reproduction and receipt:
 [node peer convergence](docs/node-peer-convergence.md).
 
+`kotoba/fleet_cell_launch.kotoba` is the node agent's admission check, made
+before a container starts. `launch-verdict` takes the fetched image index
+bytes, the cell's L1 digest and class, the node's state and declared classes,
+and the host's allow mask. It refuses when:
+- the node is not active;
+- the bytes' SHA-256 is not the L1 digest (checked before parsing);
+- the bytes are not strict JSON, so a `mediaType` given twice cannot be read
+  two ways;
+- org-oci-distribution's index or annotation rules fail;
+- grant's class policy fails.
+
+Its gate reports 31. Each control (no digest check, no strict JSON, no
+policy) gives 15. Reproduction: [cell launch](docs/cell-launch.md).
+
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
 `qwen3.8-flash-next-ud-iq3-xxs` is a single-node, lossless Qwen4Exp route for

@@ -1,0 +1,111 @@
+;; murakumo.fleet-cell-launch -- may this node launch this itonami release?
+;; The node agent's admission check before a container starts (Linear
+;; JUN-288; network-awai-apex ADR 0010 §2.2-§2.5; com-junkawasaki/root
+;; ADR-2610222140 §3 steps 4-5), decided in the guest from the bytes it
+;; fetched rather than from fields a host parsed for it.
+;;
+;;   launch-verdict  index bytes, the cell's L1 digest and runtime class, the
+;;                   node's ledger state code, its declared class mask, and
+;;                   the host's allow mask -> "launch/ok" or the first
+;;                   refusal, in this order:
+;;     1. the node is not active                 launch/node-not-active
+;;     2. the L1 digest is not sha256:<hex64>    org-oci-distribution's reason
+;;     3. SHA-256 of the bytes is not that digest  launch/digest-mismatch
+;;        (checked before the bytes are parsed at all)
+;;     4. the bytes are not strict JSON          launch/index-not-strict-json
+;;        (jcs.reader: duplicate keys refused, so a "mediaType" given twice
+;;        cannot mean one thing to this node and another to a lenient parser)
+;;     5. not an itonami image index             org-oci-distribution's reason
+;;     6. the org.itonami.runtime-class annotation is not the L1 class
+;;                                               org-oci-distribution's reason
+;;     7. the host's policy refuses the class    grant's reason
+;;   index-cid       the release's CIDv1 (raw codec), for the receipt
+;;
+;; The state code and the declared mask come from the node's verified
+;; statements (fleet_node_enrollment's signed-step and declaration), the L1
+;; digest and class from the operator's intent. Launching the container and
+;; signing the execution receipt are the next steps.
+;;
+;; Composition order (canonical sources, no copies): org-nist-sha2 sha2.core,
+;; org-ietf-jcs jcs.reader, org-oci-distribution oci.itonami-artifact, grant
+;; grant.runtime-class, tsukasa ledger_core and node_state, this file.
+;; docs/cell-launch.md has the gate.
+(ns murakumo.fleet-cell-launch
+  (:export [launch-verdict index-cid test-launch]))
+
+(defn- cl-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+;; the first non-whitespace byte: where a valid document's value starts
+(defn- cl-root [b :vector-i64] :i64
+  (loop [i 0]
+    (if (and (< i (vector-count b)) (let [c (vector-at b i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i)))
+
+;; an object's string member, or "" when it is absent or not a string
+(defn- cl-text [b :vector-i64 obj :i64 key :string] :string
+  (let [v (json-member b obj key)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))
+
+(defn- cl-annotation [b :vector-i64 root :i64] :string
+  (let [a (json-member b root "annotations")]
+    (if (and (>= a 0) (= (json-kind b a) 1)) (cl-text b a "org.itonami.runtime-class") "")))
+
+(defn launch-verdict [index :vector-i64 cell-digest :string cell-class :string
+                      state :i64 declared :i64 allowed :i64] :string
+  (let [dp (digest-problem cell-digest)]
+    (cond (not (schedulable? state)) "launch/node-not-active"
+          (not (= dp "oci/ok")) dp
+          (not (= (string-concat "sha256:" (sha256-hex index)) cell-digest)) "launch/digest-mismatch"
+          (not (json-valid? index)) "launch/index-not-strict-json"
+          :else
+          (let [root (cl-root index)
+                ip (index-problem (cl-text index root "mediaType") (cl-text index root "artifactType"))
+                cp (class-annotation-problem (cl-annotation index root) cell-class)
+                gv (class-verdict cell-class declared allowed)]
+            (cond (not (= ip "oci/ok")) ip
+                  (not (= cp "oci/ok")) cp
+                  (not (= gv "grant/ok")) gv
+                  :else "launch/ok")))))
+
+(defn index-cid [cell-digest :string] :string (digest-cid cell-digest 85))
+
+;; ---------------------------------------------------------------------------
+;; test-launch: index documents and their SHA-256 digests from Python hashlib.
+;; Every release lists one manifest; "dup" gives mediaType twice (a manifest's
+;; first, the index's last).
+
+(defn- cl-index-ok [] :vector-i64 (cl-bytes "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.index.v1+json\",\"artifactType\":\"application/vnd.itonami.app.v1\",\"manifests\":[{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"sha256:abababababababababababababababababababababababababababababababab\",\"size\":512}],\"annotations\":{\"org.itonami.runtime-class\":\"container\"}}"))
+(defn- cl-digest-ok [] :string "sha256:60a287b9c1e77276c3eb065a7192d721c4e4de53e3be36ecb0182ab8117116a1")
+(defn- cl-index-wasm [] :vector-i64 (cl-bytes "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.index.v1+json\",\"artifactType\":\"application/vnd.itonami.app.v1\",\"manifests\":[{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"sha256:abababababababababababababababababababababababababababababababab\",\"size\":512}],\"annotations\":{\"org.itonami.runtime-class\":\"wasm\"}}"))
+(defn- cl-digest-wasm [] :string "sha256:5a80e2ac642c1b8e8d12421583c2433c0b9b7da3a00b85f3a7d4a3310ae407fb")
+(defn- cl-index-not-app [] :vector-i64 (cl-bytes "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.index.v1+json\",\"artifactType\":\"application/vnd.example.v1\",\"manifests\":[{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"sha256:abababababababababababababababababababababababababababababababab\",\"size\":512}],\"annotations\":{\"org.itonami.runtime-class\":\"container\"}}"))
+(defn- cl-digest-not-app [] :string "sha256:9de73729de61b8d9ea5b1d3f21cb2196ae0f67482f5632cadfee8a971acb7816")
+(defn- cl-index-dup [] :vector-i64 (cl-bytes "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"mediaType\":\"application/vnd.oci.image.index.v1+json\",\"artifactType\":\"application/vnd.itonami.app.v1\",\"manifests\":[{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"sha256:abababababababababababababababababababababababababababababababab\",\"size\":512}],\"annotations\":{\"org.itonami.runtime-class\":\"container\"}}"))
+(defn- cl-digest-dup [] :string "sha256:1404b5e4b0f9d2dbd0b9f9475cbdd6b96f8f40567c0aaefca43adb07cb15d3f2")
+(defn- cl-index-no-ann [] :vector-i64 (cl-bytes "{\"schemaVersion\":2,\"mediaType\":\"application/vnd.oci.image.index.v1+json\",\"artifactType\":\"application/vnd.itonami.app.v1\",\"manifests\":[{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"digest\":\"sha256:abababababababababababababababababababababababababababababababab\",\"size\":512}]}"))
+(defn- cl-digest-no-ann [] :string "sha256:8ed475eb56d8395af1bdbd4a0171282fe9361a81afcfc27e32d0181623f721e5")
+
+(defn test-launch [] :bool
+  (and (= (launch-verdict (cl-index-ok) (cl-digest-ok) "container" 2 2 2) "launch/ok")
+       (= (launch-verdict (cl-index-ok) (cl-digest-ok) "container" 2 3 3) "launch/ok")
+       (= (index-cid (cl-digest-ok)) "bafkreidaukd3tqphoj3mh2ygljyzfvzbytsn4u7dxy3ozmayfk4bc4iwue")
+       ;; the node must be active: proposed, admitted, draining, retired, absent
+       (= (launch-verdict (cl-index-ok) (cl-digest-ok) "container" 1 2 2) "launch/node-not-active")
+       (= (launch-verdict (cl-index-ok) (cl-digest-ok) "container" 3 2 2) "launch/node-not-active")
+       (= (launch-verdict (cl-index-ok) (cl-digest-ok) "container" -1 2 2) "launch/node-not-active")
+       ;; the L1 digest
+       (= (launch-verdict (cl-index-ok) "sha512:00" "container" 2 2 2) "itonami/unsupported-digest")
+       (= (launch-verdict (cl-index-ok) "sha256:00" "container" 2 2 2) "oci/bad-digest")
+       ;; other bytes than the digest names, even a valid index
+       (= (launch-verdict (cl-index-wasm) (cl-digest-ok) "container" 2 2 2) "launch/digest-mismatch")
+       (= (launch-verdict (cl-index-ok) (cl-digest-wasm) "wasm" 2 3 3) "launch/digest-mismatch")
+       ;; the duplicate mediaType: refused before any field is read
+       (= (launch-verdict (cl-index-dup) (cl-digest-dup) "container" 2 2 2) "launch/index-not-strict-json")
+       (= (launch-verdict (cl-index-not-app) (cl-digest-not-app) "container" 2 2 2) "itonami/not-an-itonami-app")
+       ;; the annotation must mirror the L1 class
+       (= (launch-verdict (cl-index-wasm) (cl-digest-wasm) "container" 2 3 3) "itonami/runtime-class-mismatch")
+       (= (launch-verdict (cl-index-wasm) (cl-digest-wasm) "wasm" 2 3 3) "launch/ok")
+       (= (launch-verdict (cl-index-no-ann) (cl-digest-no-ann) "container" 2 2 2) "itonami/unknown-runtime-class")
+       (= (launch-verdict (cl-index-ok) (cl-digest-ok) "microvm" 2 2 2) "itonami/unknown-runtime-class")
+       ;; the host's policy, then the node's declaration
+       (= (launch-verdict (cl-index-ok) (cl-digest-ok) "container" 2 2 1) "grant/runtime-class-not-granted")
+       (= (launch-verdict (cl-index-ok) (cl-digest-ok) "container" 2 1 3) "grant/runtime-class-not-declared")
+       (= (launch-verdict (cl-index-ok) (cl-digest-ok) "container" 2 2 0) "grant/runtime-class-not-granted")))
