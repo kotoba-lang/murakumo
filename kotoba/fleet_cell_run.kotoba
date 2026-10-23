@@ -17,8 +17,9 @@
 ;;   5. the container: wire 20 runs the granted podman with a fixed argv,
 ;;      run --rm --pull never --network none --read-only oci:<that layout>,
 ;;      so what runs is what was checked; the image's own entry runs
-;;      (NO-ARGV-IN-SPEC); stdin is at end of file, stdout comes back (at
-;;      most 16 KiB, 10 s);
+;;      (NO-ARGV-IN-SPEC); stdin is at end of file, or, given an input, it
+;;      carries the input (run -i, and the input after wire 20's STDIN_SEP:
+;;      container stdio, JUN-298); stdout comes back (at most 16 KiB, 10 s);
 ;;   6. the receipt, canonical JSON (jcs.reader's json-canonical? holds for
 ;;      it), signed with the node's key:
 ;;      {"at":ms,"cell":<index CID>,"did":..,"exit":n,
@@ -112,10 +113,11 @@
 (defn cell-admit [index-path :string cell-digest :string cell-class :string state :i64 allowed :i64] :string
   (launch-verdict (cr-read index-path) cell-digest cell-class state 2 allowed))
 
-;; steps 3-5 for a node whose state is known: "ok <exit> <output CID>", or
+;; steps 3-5 for a node whose state is known; input "" gives the container no
+;; stdin (end of file): "ok <exit> <output CID>", or
 ;; "refused <reason>"; prints the "verdict" and "layout" lines
 (defn cell-execute [index-path :string cell-digest :string cell-class :string layout :string
-                    state :i64 allowed :i64] :string
+                    state :i64 allowed :i64 input :string] :string
   (let [index (cr-read index-path)
         verdict (cell-admit index-path cell-digest cell-class state allowed)
         a (cr-say (string-concat "verdict " verdict))]
@@ -124,9 +126,10 @@
             lv (layout-verdict layout md (cr-manifest-size index))
             y (cr-say (string-concat "layout " lv))]
         (if (not (= lv "layout/ok")) (string-concat "refused " lv)
-          (let [answer (cr-spawn (str "/usr/bin/podman" "ARG_SEP" "run" "ARG_SEP" "--rm" "ARG_SEP" "--pull" "ARG_SEP" "never"
-                                      "ARG_SEP" "--network" "ARG_SEP" "none" "ARG_SEP" "--read-only"
-                                      "ARG_SEP" "oci:" layout))
+          (let [argv (str "/usr/bin/podman" "ARG_SEP" "run" (if (= input "") "" "ARG_SEP-i") "ARG_SEP" "--rm" "ARG_SEP" "--pull" "ARG_SEP" "never"
+                          "ARG_SEP" "--network" "ARG_SEP" "none" "ARG_SEP" "--read-only"
+                          "ARG_SEP" "oci:" layout)
+                answer (cr-spawn (if (= input "") argv (str argv "STDIN_SEP" input)))
                 nl (string-index-of answer "\n")
                 exit (if (< nl 0) -9 (cr-int (string-substring answer 0 nl)))
                 out (if (< nl 0) "" (string-substring answer (+ nl 1) (string-length answer)))]
@@ -137,7 +140,7 @@
   (let [key (cr-read key-path)]
     (if (not (cr-key-ok? key)) (let [x (cr-say "verdict run/bad-key")] 2)
       (let [seed (cr-seed key) did (node-did seed)
-            r (cell-execute index-path cell-digest cell-class layout (own-state seed did node fd admitted now) allowed)]
+            r (cell-execute index-path cell-digest cell-class layout (own-state seed did node fd admitted now) allowed "")]
         (if (not (= (cr-field r 0) "ok")) 1
           (let [exit (cr-int (cr-field r 1))
                 text (receipt-text now (index-cid cell-digest) did exit node (cr-field r 2))

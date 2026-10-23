@@ -4,7 +4,12 @@
 ;;
 ;;   run     job-node-main run <profile> <input> <policy> <rail> <node> <key>
 ;;           <failure-domain> <admitted> <now> <allow> <index> <layout>
-;;           <voter ports p1,p2,..> <ballot t> <follow|rogue> [<fleet token file>]
+;;           <voter ports p1,p2,..> <ballot t> <follow|rogue> [<input file>
+;;           [<fleet token file>]]
+;;           0. given an input file, its bytes must be the job's input: the raw
+;;              CIDv1 of their SHA-256 equals <input> ("job input/missing",
+;;              "job input/cid-mismatch" otherwise); the cell then gets them
+;;              on its stdin (fleet_cell_run cell-execute);
 ;;           1. the job (fleet_agent_step job-problem, job-id);
 ;;           1a. whether this node may run the cell at all: its own signed
 ;;              state, then the launch verdict (fleet_cell_run cell-admit:
@@ -100,11 +105,16 @@
   (let [profile (jn-arg 1) input (jn-arg 2) policy (jn-arg 3) rail (jn-arg 4)
         node (jn-arg 5) seed (key-seed (jn-arg 6)) fd (jn-arg 7) admitted (jn-arg 8)
         now (jn-int (jn-arg 9)) allowed (jn-int (jn-arg 10)) index (jn-arg 11) layout (jn-arg 12)
-        ports (jn-arg 13) t (jn-int (jn-arg 14)) rogue (= (jn-arg 15) "rogue") token (jn-token 16)
+        ports (jn-arg 13) t (jn-int (jn-arg 14)) rogue (= (jn-arg 15) "rogue")
+        ipath (jn-arg 16) token (jn-token 17)
+        has-input (and (not (= ipath "")) (= (typed-cap-call 35 :string :string (string-concat ipath "EXISTS_SEP")) "1"))
+        itext (if has-input (typed-cap-call 35 :string :string ipath) "")
         jp (job-problem profile input policy rail)]
     (cond (not (= jp "job/ok")) (let [x (jn-say (string-concat "job " jp))] 1)
           (= (vector-count seed) 0) (let [x (jn-say "job run/bad-key")] 1)
           (= token "-") (let [x (jn-say "job token/missing-or-short")] 2)
+          (and (not (= ipath "")) (not has-input)) (let [x (jn-say "job input/missing")] 1)
+          (and has-input (not (= (digest-cid (string-concat "sha256:" (sha256-hex (jn-bytes itext))) 85) input))) (let [x (jn-say "job input/cid-mismatch")] 1)
           :else
           (let [jid (job-id profile input policy rail)
                 did (node-did seed)
@@ -117,7 +127,7 @@
                     epoch (if (= chosen "") 0 (jn-num chosen "epoch"))
                     b (jn-say (string-concat "lease " (if (= holder "") "none" holder)))]
                 (if (and (not (= holder node)) (not rogue)) (let [x (jn-say (string-concat "held-by " holder))] 0)
-                  (let [r (cell-execute index profile "container" layout state allowed)]
+                  (let [r (cell-execute index profile "container" layout state allowed itext)]
                     (if (not (= (jn-field r 0) "ok")) (let [x (jn-say r)] 1)
                       (let [text (step-receipt-text now did (if (> epoch 0) epoch 1) (jn-int (jn-field r 1)) jid node (jn-field r 2))
                             c (jn-say (string-concat "receipt " text))

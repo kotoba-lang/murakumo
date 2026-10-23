@@ -630,6 +630,12 @@ refused and impostor voters are not believed. Reproduction:
   that receipt.
 - **The control.** When the other node runs anyway, its receipt is
   `job/not-the-holder`. A verifier without the fence would confirm both.
+- **A bot turn with input.** The agent checks in the guest that the input
+  file's bytes are the job's input CID, then hands them to the cell over
+  container stdio (`podman run -i`, amu's wire 20 stdin payload and wire 41).
+  A rule-based bot cell answers. The receipt's output CID is the reply's, and
+  the receipt is confirmed. An input that does not match is refused before
+  the lease.
 
 Reproduction: [job node](docs/job-node.md).
 

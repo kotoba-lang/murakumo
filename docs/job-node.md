@@ -3,7 +3,8 @@
 Tracked in [JUN-289](https://linear.app/kotobalabs/issue/JUN-289). Three of
 its acceptance items are covered here:
 - one bot profile's turn runs on a node, and its output CID and receipt can
-  be read back;
+  be read back; with its input, over container stdio
+  ([A bot turn with input](#a-bot-turn-with-input));
 - the same job given to two nodes is confirmed only once, through the
   fence;
 - a node whose runtime class or host policy does not fit the job does not
@@ -32,10 +33,11 @@ its acceptance items are covered here:
 - **`verify`, on anyone:** it learns the chosen lease with `lease-round`, maps
   the holder to its did through the trust, and judges a node's receipt with
   `receipt-verdict`.
-- **The fleet token.** `run` and `verify` take an optional fleet token file
-  as their last argument. With it, their lease rounds carry the token's
-  macs ([lease node, Fleet token](lease-node.md#fleet-token)). The runs
-  below use none.
+- **The fleet token.** `run` (after its optional input file, argument 16)
+  and `verify` take an optional fleet token file as their last argument.
+  With it, their lease rounds carry the token's macs
+  ([lease node, Fleet token](lease-node.md#fleet-token)). The runs below use
+  none.
 
 Three refactors make the composition possible:
 - `fleet_agent_step`'s `receipt-text` is now `step-receipt-text`, so it no
@@ -270,14 +272,153 @@ late verify b70's output: holder k16 verdict job/bad-signature
 The receipt is
 [evidence/job-node-runtime-class-20261023.json](evidence/job-node-runtime-class-20261023.json).
 
+## A bot turn with input
+
+The node agent gives the cell its input over container stdio (JUN-298).
+- **Run.** `run`'s argument 16 names an input file.
+- **Check first.** The agent reads the file and checks, in the guest, that
+  the raw CIDv1 of its SHA-256 is the job's `<input>`. Only then does it
+  compete for the lease.
+- **Delivery.** The holder starts the cell with `podman run -i …` and passes
+  the bytes on wire 20 after `STDIN_SEP`. The cell reads them on wire 41.
+
+Both wires are in the static runtimes from amu `c00d98a4` (JUN-354,
+JUN-357, [docs/static-stdin.md](https://github.com/kotoba-lang/amu/blob/main/docs/static-stdin.md)),
+so the job image and the cell here are built by that root.
+
+The cell is a rule-based bot, with no inference. One turn reads the message
+on stdin and answers with its word count and the message. Its image config
+grants it wires 37 and 41 (`ENV KEXE_ALLOW=37,41`). The container starts it
+without the node's environment.
+
+With the same `$G`, `$K` and `job.kotoba` (from the main block above):
+
+```sh
+git -C "$AMU" show c00d98a4fd396a08b4c93591d221f724f9d24da8:seed/bootstrap/aarch64-linux-static-root.elf > "$G/root2.elf"
+chmod +x "$G/root2.elf"
+# Expected compiler SHA-256: 048244b3c26204ea32ff545005d2826d068fb15787dd20a8c5c636758e0f4d49
+shasum -a 256 "$G/root2.elf"
+cat > "$G/bot.kotoba" <<'EOF'
+(ns itonami-bot (:export [main]))
+;; A rule-based bot cell: one turn reads the message on stdin (wire 41) and
+;; answers it on stdout (wire 37). No inference.
+(defn- words [b :vector-i64] :i64
+  (loop [i 0 n 0 in false]
+    (if (= i (vector-count b)) n
+      (let [c (vector-at b i) sp (or (= c 32) (= c 10) (= c 9))]
+        (recur (+ i 1) (if (and (not sp) (not in)) (+ n 1) n) (not sp))))))
+(defn main [] :i64
+  (let [msg (typed-cap-call :io/read :string :string "")
+        n (words (vector-i64-from-bytes (string-to-utf8 msg)))
+        x (typed-cap-call :io/write :string :string (str "itonami bot: " n " words: " msg))]
+    0))
+EOF
+podman run --rm --pull never --platform linux/arm64 --network none \
+  -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
+    for c in bot job; do
+      rm -f /gate/$c-2.elf
+      ./root2.elf compile /gate/$c.kotoba --target aarch64-linux --output /gate/$c-2.elf --format static >/dev/null || exit 1
+      chmod +x /gate/$c-2.elf
+    done'
+printf 'FROM scratch\nCOPY bot-2.elf /cell\nENV KEXE_ALLOW=37,41\nENTRYPOINT ["/cell"]\n' > "$G/Containerfile.bot"
+podman build -q --platform linux/arm64 -t localhost/itonami-cell-demo:bot -f "$G/Containerfile.bot" "$G"
+rm -rf "$G/layout-bot"; podman save -q --format oci-dir -o "$G/layout-bot" localhost/itonami-cell-demo:bot
+printf 'hello itonami, please run one turn' > "$G/turn-input.txt"
+printf 'hello itonami, please run one turn!' > "$G/turn-input-changed.txt"
+python3 -I - "$G" <<'PY'
+import base64, hashlib, json, sys
+g = sys.argv[1]
+idx = json.load(open(f"{g}/layout-bot/index.json"))["manifests"][0]
+m = '{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"' + idx["digest"] + '","size":' + str(idx["size"]) + '}'
+b = ('{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","artifactType":"application/vnd.itonami.app.v1",'
+     f'"manifests":[{m}],"annotations":{{"org.itonami.runtime-class":"container"}}}}').encode()
+open(f"{g}/release-bot.json", "wb").write(b)
+open(f"{g}/release-bot.digest", "w").write("sha256:" + hashlib.sha256(b).hexdigest())
+cid = lambda d: "b" + base64.b32encode(bytes([1, 0x55, 0x12, 0x20]) + hashlib.sha256(d).digest()).decode().lower().rstrip("=")
+open(f"{g}/turn-input.cid", "w").write(cid(open(f"{g}/turn-input.txt", "rb").read()))
+PY
+cat > "$G/turn.sh" <<'EOF'
+G=$1; B=757
+R=$(cat $G/release-bot.digest); IN=$(cat $G/turn-input.cid)
+PO=bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq
+DA=9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29
+PORTS=${B}1,${B}2,${B}3; DIAL=127.0.0.1:${B}1,127.0.0.1:${B}2,127.0.0.1:${B}3
+N=1792500000000
+TRUST=b70=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw,k16=did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT
+rm -f $G/turn-v*.state $G/turn-*.out
+for v in 1 2 3; do
+  env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_43=127.0.0.1:$B$v \
+    $G/job-2.elf voter $B$v $G/turn-v$v.state 60000 > /dev/null 2>&1 &
+done
+sleep 0.3
+run() {  # tag input-file t
+  env KEXE_ALLOW=20,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+    KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
+    $G/job-2.elf run $R $IN $PO murakumo b70 $G/node.key site-a $DA $N 2 $G/release-bot.json $G/layout-bot $PORTS $3 follow $2 \
+    > $G/turn-$1.out 2>&1
+  echo "$1: $(grep -E '^(job input/|lease |held-by |verdict |layout )' $G/turn-$1.out | tr '\n' ' ')$(grep -q '^receipt ' $G/turn-$1.out && echo '| receipt')"
+}
+run changed-input $G/turn-input-changed.txt 100
+run turn $G/turn-input.txt 101
+env KEXE_ALLOW=35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+  $G/job-2.elf verify $PORTS $TRUST $G/turn-turn.out 200 2>&1 | grep -v '^{:status' | sed "s/^/verify the turn's receipt: /"
+wait
+EOF
+podman machine ssh -- "sh $G/turn.sh $G" 2>&1 | grep -v 'Copying\|Getting image\|Writing manifest'
+python3 -I - "$G" <<'PY'
+import base64, hashlib, json, subprocess, sys, os
+g = sys.argv[1]
+lines = dict(l.split(" ", 1) for l in open(f"{g}/turn-turn.out").read().splitlines() if l.startswith(("receipt ", "signature ")))
+text, sig = lines["receipt"], lines["signature"]; r = json.loads(text)
+B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"; n = 0
+for c in r["did"][9:]: n = n * 58 + B58.index(c)
+der = bytes.fromhex("302a300506032b6570032100") + n.to_bytes(34, "big")[2:]
+open(f"{g}/pub.pem", "w").write("-----BEGIN PUBLIC KEY-----\n" + base64.b64encode(der).decode() + "\n-----END PUBLIC KEY-----\n")
+open(f"{g}/r.txt", "wb").write(text.encode()); open(f"{g}/r.sig", "wb").write(base64.urlsafe_b64decode(sig + "=="))
+ossl = next(p for p in ["/opt/homebrew/opt/openssl@3/bin/openssl", "/usr/bin/openssl"] if os.path.exists(p))
+v = subprocess.run([ossl, "pkeyutl", "-verify", "-pubin", "-inkey", f"{g}/pub.pem", "-rawin", "-in", f"{g}/r.txt", "-sigfile", f"{g}/r.sig"], capture_output=True, text=True)
+cid = lambda d: "b" + base64.b32encode(bytes([1, 0x55, 0x12, 0x20]) + hashlib.sha256(d).digest()).decode().lower().rstrip("=")
+msg = open(f"{g}/turn-input.txt", "rb").read()
+reply = b"itonami bot: " + str(len(msg.split())).encode() + b" words: " + msg
+job = json.dumps({"input": cid(msg), "kind": "itonami.agent-step/1", "policy": "bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq",
+                  "profile": open(f"{g}/release-bot.digest").read(), "rail": "murakumo"}, sort_keys=True, separators=(",", ":"))
+print("signature:", v.stdout.strip() or v.stderr.strip())
+print("job id:", r["job"] == hashlib.sha256(job.encode()).hexdigest(), "| exit", r["exit"], "| node", r["node"])
+print("output CID is the reply's:", r["output"] == cid(reply), "|", reply.decode())
+PY
+```
+
+Expected output, measured on 2026-10-23 (the podman machine, arm64 Linux
+6.15, rootless podman):
+
+```text
+changed-input: job input/cid-mismatch
+turn: lease b70 verdict launch/ok layout layout/ok | receipt
+verify the turn's receipt: holder b70 verdict job/confirmed
+signature: Signature Verified Successfully
+job id: True | exit 0 | node b70
+output CID is the reply's: True | itonami bot: 6 words: hello itonami, please run one turn
+```
+
+- **The changed input.** Its bytes are not the job's input, so the agent
+  stops before it competes for the lease, and nothing runs.
+- **The turn.** b70 holds the lease and runs the cell with the input on its
+  stdin. The cell answers it. The receipt names the job, and the output CID
+  of the reply. The verifier confirms it.
+- **Independently.** OpenSSL verifies the signature. hashlib recomputes the
+  job id from the input's CID, and the reply's CID from the message: the
+  reply carries the input, so the input reached the cell.
+
+The receipt is [evidence/job-node-bot-turn-20261023.json](evidence/job-node-bot-turn-20261023.json).
+
 ## What this does not show
 
 - Separate hosts. Everything runs on the podman machine.
 - Real-time contention between proposers here. k16 starts after b70's
   round. A preempted round is tried again ([lease node, Preemption](lease-node.md#preemption)),
   which the lease node's race loop measures on its own.
-- A real bot profile's turn with an inference rail, and the consent before
-  inference leaves the node.
+- A bot turn with an inference rail, and the consent before inference
+  leaves the node. The bot here is rule-based.
 - The fleet token and membership on the register, and an fsync for voter
   state.
 - Voters checking the runtime class. Each node judges its own fit; the
