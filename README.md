@@ -474,20 +474,22 @@ state." It verifies the two statements a node signs with its own did:key:
   drain mark.
 
 Only then do the statements' facts reach tsukasa's `node-target`, through
-`signed-target`.
+`signed-target`. For a long-lived agent, `signed-step` maps a previous state
+code to the next one.
 
 - **Encoding.** did:key decoding is strict, and signatures are canonical
   base64url. The texts are the sorted-key JSON murakumo already signs.
-- **Node side.** `sign-declaration` and `sign-heartbeat` produce OpenSSL's
-  bytes.
+- **Node side.** `sign-declaration` and `sign-heartbeat` take the node's own
+  did and produce OpenSSL's bytes.
 - **The gate.** A loaderless static image combines four pinned bodies with
   this file: org-nist-sha2's `sha2.core`, org-ietf-ed25519's Ed25519, and
-  tsukasa's ledger and node state. It reports 511. Three controls are
-  measured: unsigned declarations accepted (351), old heartbeats counted as
-  fresh (63), and a non-canonical did:key accepted (503).
-- **A runtime limit.** Each Ed25519 operation keeps about 10 MiB that the
-  image does not reclaim. A continuously running agent has to account for
-  that.
+  tsukasa's ledger and node state. It reports 1023. Three controls are
+  measured: unsigned declarations accepted (863), old heartbeats counted as
+  fresh (63), and a non-canonical did:key accepted (1015).
+- **Memory.** One Ed25519 verify allocates about 8 MiB, and a static image
+  frees nothing by itself. The signature checks and `signed-step` run in
+  `(arena-scope ..)`, so 16 steps (32 verifies) peak at 8,620 KiB. Without
+  any scope they peak at 266,540 KiB.
 
 The L1 operator signature, peer transport, persistence and two-node
 convergence are not part of this gate. Reproduction, wire forms and hashes:
