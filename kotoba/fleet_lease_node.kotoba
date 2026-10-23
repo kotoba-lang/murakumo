@@ -4,12 +4,20 @@
 ;; fleet_lease_core's; this file is the transport and the voter's state.
 ;;
 ;;   voter     lease-node-main voter <port> <state file> <idle ms>
+;;             [<topology file> <trust id=did,..> <threshold> <now ms>]
 ;;             listens; for each connection reads one request line, decides
 ;;             with prepare-ok? / accept-ok?, writes its new state to the
 ;;             state file (wire 35) BEFORE it replies, replies one line and
 ;;             closes; exits after <idle ms> without a connection. The state
 ;;             file is the voter's only memory, so a voter started again
 ;;             keeps its promise and its accepted value.
+;;             With a topology, as lease.cljk's acceptor: the voter verifies
+;;             the operator-signed topology at start (fleet_topology_verify;
+;;             it does not start on any other verdict) and accepts only a
+;;             value that valid-value? admits against it: an enabled node of
+;;             the topology, class 1..128, slot 0..255, epoch >= 1, until no
+;;             later than now + ttl + skew. Without one the voter is open and
+;;             checks only the value's form: for tests, not for a fleet.
 ;;   proposer  lease-node-main proposer <mode> <t> <id> <value> <port>...
 ;;             mode full: prepare, adopt the value accepted under the highest
 ;;             ballot (else its own), accept, print "chosen <value>" on a
@@ -25,7 +33,9 @@
 ;; restart, not a power cut. Membership, the fleet token and lease ids are
 ;; lease.cljk's and not part of this transport.
 ;;
-;; Composition order: sha2.core, jcs.reader, fleet_lease_core, this file.
+;; Composition order: sha2.core, ed25519.selfhost, jcs.reader, tsukasa
+;; ledger_core and node_state, fleet_node_enrollment, fleet_intent_core,
+;; fleet_topology_verify, fleet_lease_core, this file.
 ;; docs/lease-node.md has the gate.
 (ns murakumo.fleet-lease-node
   (:export [lease-node-main lease-round]))
@@ -84,9 +94,34 @@
 
 (defn- ln-reply [ok :bool st :string] :string (str (if ok "ok " "no ") st))
 
+(defn- ln-text [b :vector-i64 obj :i64 key :string] :string
+  (let [v (json-member b obj key)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))
+(defn- ln-num [b :vector-i64 obj :i64 key :string] :i64
+  (let [v (json-member b obj key)] (if (and (>= v 0) (= (json-kind b v) 4) (json-int-ok? b v)) (json-int b v) -1)))
+(defn- ln-root [b :vector-i64] :i64
+  (loop [i 0] (if (and (< i (vector-count b)) (let [c (vector-at b i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i)))
+
+;; is node an enabled node of the (verified) topology?
+(defn- ln-enabled? [topo :vector-i64 node :string] :bool
+  (let [p (json-member topo (ln-root topo) "payload") ns (if (>= p 0) (json-member topo p "nodes") -1)]
+    (if (or (< ns 0) (not (= (json-kind topo ns) 2))) false
+      (loop [k 0]
+        (let [e (json-element topo ns k)]
+          (cond (< e 0) false
+                (and (= (json-kind topo e) 1) (= (ln-text topo e "node") node))
+                (let [en (json-member topo e "enabled")] (and (>= en 0) (= (json-kind topo en) 5)))
+                :else (recur (+ k 1))))))))
+
+;; no topology: any canonical value; else lease.cljk valid-value? against it
+(defn- ln-member-ok? [topo :vector-i64 now :i64 value :string] :bool
+  (if (= (vector-count topo) 0) true
+    (let [v (ln-bytes value) r (ln-root v) node (ln-text v r "node")]
+      (valid-value? node (ln-enabled? topo node) (ln-text v r "class") (ln-num v r "slot")
+                    (ln-num v r "epoch") (ln-num v r "until") now))))
+
 ;; one request against the state in file; the new state is stored before the
 ;; reply is returned
-(defn- ln-handle [file :string req :string] :string
+(defn- ln-handle [file :string req :string topo :vector-i64 now :i64] :string
   (let [st (ln-load file)
         pt (ln-int (ln-field st 0)) pid (ln-undash (ln-field st 1))
         at (ln-int (ln-field st 2)) aid (ln-undash (ln-field st 3)) av (ln-undash (ln-field st 4))
@@ -96,24 +131,36 @@
             (let [ns (str bt " " bid " " at " " (ln-dash aid) " " (ln-dash av)) z (ln-store file ns)] (ln-reply true ns))
             (ln-reply false st))
           (= op "accept")
-          (if (and (json-canonical? (ln-bytes v)) (accept-ok? bt bid v pt pid at aid av))
+          (if (and (json-canonical? (ln-bytes v)) (ln-member-ok? topo now v) (accept-ok? bt bid v pt pid at aid av))
             (let [ns (str bt " " bid " " bt " " bid " " v) z (ln-store file ns)] (ln-reply true ns))
             (ln-reply false st))
           :else (ln-reply false st))))
 
-(defn- ln-serve-one [l :string file :string idle :i64] :i64
+(defn- ln-serve-one [l :string file :string idle :i64 topo :vector-i64 now :i64] :i64
   (arena-scope
     (let [c (ln-accept (str l " " idle))]
       (if (< (ln-int c) 1) 1
         (let [req (ln-recv c true)
-              rep (ln-handle file req)
+              rep (ln-handle file req topo now)
               w (ln-write (str c " " (hex (ln-bytes (string-concat rep "\n")))))
               z (ln-write c)]
           0)))))
 
-(defn- ln-voter [port :i64 file :string idle :i64] :i64
+(defn- ln-voter [port :i64 file :string idle :i64 topo :vector-i64 now :i64] :i64
   (let [l (ln-listen (str "127.0.0.1:" port))]
-    (loop [n 0] (if (= (ln-serve-one l file idle) 0) (recur (+ n 1)) n))))
+    (loop [n 0] (if (= (ln-serve-one l file idle topo now) 0) (recur (+ n 1)) n))))
+
+;; the voter's topology: none, or the verified document; "" and the reason
+;; when it does not verify
+(defn- ln-voter-main [] :i64
+  (let [path (ln-arg 4)]
+    (if (= path "") (ln-voter (ln-int (ln-arg 1)) (ln-arg 2) (ln-int (ln-arg 3)) (vector-alloc 0) 0)
+      (let [doc (if (ln-exists? path)
+                  (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 (ln-bytes path))))
+                  (vector-alloc 0))
+            v (topology-verdict doc (ln-arg 5) (ln-int (ln-arg 6)) 0)]
+        (if (not (= v "topology/ok")) (let [x (ln-say (string-concat "voter " v))] 2)
+          (ln-voter (ln-int (ln-arg 1)) (ln-arg 2) (ln-int (ln-arg 3)) doc (ln-int (ln-arg 7))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; The proposer
@@ -178,5 +225,5 @@
 
 (defn lease-node-main [] :i64
   (if (= (ln-arg 0) "voter")
-    (ln-voter (ln-int (ln-arg 1)) (ln-arg 2) (ln-int (ln-arg 3)))
+    (ln-voter-main)
     (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports))))

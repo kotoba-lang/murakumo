@@ -1,0 +1,53 @@
+{
+  "schema": "murakumo.lease-membership.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-289"
+  ],
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "sources": {
+    "kotoba/fleet_lease_node.kotoba": "2db577ff488a16ac7cd9658185e0fbbb4a559710683d6270ff71b37c3b703cd1",
+    "kotoba/fleet_lease_core.kotoba": "7136a27cf24bc32e40ff2c1c594516b1bf3cf34f6ad621c27fa0b5f2fc1149c3",
+    "kotoba/fleet_topology_verify.kotoba": "eb985fd8756734820a4b03586d533700760f22a0f4f9eb0b54525d6d687b91a8",
+    "kotoba/fleet_intent_core.kotoba": "417882b9927323a56cf007b22d72c0f5351e9df74caaed0329df1eecdeb4474c",
+    "kotoba/fleet_node_enrollment.kotoba": "514652719718a77b078230efe8ca74e1473905dc8a4cde4656c790f1662af7e1"
+  },
+  "topology": {
+    "file": "94bc664bc7b72bd1e3d4578a7fd44c2098051572906ce4d7623c519997ab8b6d",
+    "forged": "66c62270ddfb90414862d9e9f910a43a6758627ca4ed4f2c18ffd1b431e9a910",
+    "signer": "OpenSSL 3, RFC 8032 key 1 as the operator",
+    "nodes": {
+      "b70": "enabled",
+      "k16": "disabled"
+    },
+    "script": "docs/evidence/lease-membership-topology-20261023.py"
+  },
+  "results": {
+    "k16 proposes (disabled)": "no-majority accept 0",
+    "b70 proposes": "chosen b70",
+    "b70 until too far ahead": "no-majority accept 0",
+    "forged topology": "voters do not start: voter topology/needs-signatures",
+    "control: open voters, k16": "chosen k16"
+  },
+  "rerunGates": {
+    "lease-node": "unchanged, with the new composition",
+    "job-node": "unchanged (after docs/cell-run.md's main block)"
+  },
+  "image": {
+    "bytes": 528896,
+    "sha256": "1dbcee4fbcd2fbe44bc4a2ec14c8daf30d4fd0009d3ac72859497a9a92774f3b"
+  },
+  "execution": {
+    "runtime": "native arm64 Linux 6.15.10 on local Podman applehv VM",
+    "network": "none (loopback)",
+    "reproduced": "docs/lease-node.md commands run as written in a fresh directory"
+  },
+  "limitations": [
+    "the topology is fixed at the voter's start; no rotation",
+    "no fleet token or lease ids",
+    "no fsync",
+    "one host",
+    "aarch64-linux only"
+  ]
+}

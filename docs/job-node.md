@@ -53,7 +53,7 @@ pin() { git -C "$K/$1" show "$2:$3" | sed '1,/\]))$/d'; }
   pin tsukasa 03e2322489839be2176d5c23d0ccb4120d1b0ee8 kotoba/tsukasa/node_state.kotoba
   for f in fleet_node_enrollment fleet_cell_launch fleet_oci_layout fleet_cell_run; do sed '1,/\]))$/d' kotoba/$f.kotoba; done
   pin sahai ba19195945c6f4482b46818d0570aa840f9ef681 kotoba/sahai/fence.kotoba
-  for f in fleet_agent_step fleet_lease_core fleet_lease_node fleet_job_node; do sed '1,/\]))$/d' kotoba/$f.kotoba; done
+  for f in fleet_agent_step fleet_intent_core fleet_topology_verify fleet_lease_core fleet_lease_node fleet_job_node; do sed '1,/\]))$/d' kotoba/$f.kotoba; done
   echo '(defn main [] :i64 (if (= (typed-cap-call 38 :string :string "0") "voter") (lease-node-main) (job-node-main)))'
 } > "$G/job.kotoba"
 # a verifier without the fence: no holder or epoch check
