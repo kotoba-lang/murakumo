@@ -437,6 +437,33 @@ Measured on 2026-10-22 with the root of amu `f5b11a08` (sha256 `8256bfd8…dc7`)
 Receipt: `docs/evidence/fleet-kotoba-selfhost-gate-20261022.edn`. These gates
 are not in CI (CDCI is stopped; AGENTS.md).
 
+### Itonami cell placement integration
+
+`kotoba/fleet_cell_placement.kotoba` connects the canonical tsukasa node
+lifecycle and runtime-class declarations to `fleet_placement_core`.
+`cell-eligible-reason` takes the node's state code, declared class mask and
+requested class, and derives `active` and `class-held` with tsukasa's
+`schedulable?` and `has-runtime-class?`. Callers no longer need to manufacture
+these two booleans. Proposed, admitted, draining, retired, unknown or
+class-incompatible nodes are refused with the existing placement reasons.
+The existing resource/refusal precedence is preserved.
+
+An Itonami node can host a Murakumo inference worker, a bot or a storage
+service when it declares the required class and satisfies the constraints.
+`murakumo` is not a runtime class. `microvm` is a backing of `container`
+(fune), not a third class. This API only proposes placement: it neither
+grants capabilities nor verifies signatures, admits artifacts, launches a
+container or invokes inference. The host must verify signed inputs and
+enforce grant/artifact admission separately.
+
+The native integration gate composes the unchanged tsukasa ledger and
+node-state bodies at commit `03e2322489839be2176d5c23d0ccb4120d1b0ee8`, the
+placement body and this adapter, in that order. It runs all upstream
+test groups and the declaration → legal state → placement path in one
+Amu-built loaderless static image. It is a source-unity composition gate;
+it does not qualify the project linker or a deployed node agent.
+Reproduction and hashes: [cell integration gate](docs/cell-placement-integration.md).
+
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
 `qwen3.8-flash-next-ud-iq3-xxs` is a single-node, lossless Qwen4Exp route for

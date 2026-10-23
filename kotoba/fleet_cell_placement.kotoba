@@ -1,0 +1,69 @@
+;; Itonami cells, including a Murakumo inference worker, use the same node
+;; lifecycle and runtime-class declarations. A service name is not a node
+;; state, runtime class or grant.
+;;
+;; Composition order (canonical sources, no copies):
+;;   tsukasa/ledger_core, tsukasa/node_state, fleet_placement_core, this file.
+;; The caller verifies signed L1/L2 inputs before deriving the node state.
+;; This function proposes placement only. The selected node must separately
+;; check grant, artifact digest/signature and capability bounds before launch.
+(ns murakumo.fleet-cell-placement
+  (:export [cell-eligible-reason test-cell-eligibility test-cell-state-path]))
+
+;; Derive the two authority-sensitive inputs to eligible-reason from the
+;; canonical tsukasa functions instead of accepting caller-selected booleans.
+(defn cell-eligible-reason [state :i64 runtime-classes :i64 runtime-class :string
+                           enabled :bool cordoned :bool fresh :bool
+                           memory-gb :i64 min-gb :i64 labels :bool
+                           pressure :i64 max-pressure :i64] :string
+  (eligible-reason enabled (schedulable? state) cordoned fresh
+                   memory-gb min-gb labels pressure max-pressure
+                   (has-runtime-class? runtime-classes runtime-class)))
+
+(defn test-cell-eligibility [] :bool
+  (and
+    (= (cell-eligible-reason 2 2 "container" true false true 16 8 true 1 2) "eligible/ok")
+    (= (cell-eligible-reason 2 1 "wasm" true false true 16 8 true 1 2) "eligible/ok")
+    (= (cell-eligible-reason 2 3 "container" true false true 16 8 true 1 2) "eligible/ok")
+    (= (cell-eligible-reason 2 3 "wasm" true false true 16 8 true 1 2) "eligible/ok")
+    (= (cell-eligible-reason 0 3 "container" true false true 16 8 true 1 2) "eligible/not-active")
+    (= (cell-eligible-reason 1 3 "container" true false true 16 8 true 1 2) "eligible/not-active")
+    (= (cell-eligible-reason 3 3 "container" true false true 16 8 true 1 2) "eligible/not-active")
+    (= (cell-eligible-reason 4 3 "container" true false true 16 8 true 1 2) "eligible/not-active")
+    (= (cell-eligible-reason 9 3 "container" true false true 16 8 true 1 2) "eligible/not-active")
+    (= (cell-eligible-reason 2 1 "container" true false true 16 8 true 1 2) "eligible/runtime-class")
+    (= (cell-eligible-reason 2 2 "wasm" true false true 16 8 true 1 2) "eligible/runtime-class")
+    (= (cell-eligible-reason 2 0 "wasm" true false true 16 8 true 1 2) "eligible/runtime-class")
+    (= (cell-eligible-reason 2 4 "container" true false true 16 8 true 1 2) "eligible/runtime-class")
+    (= (cell-eligible-reason 2 3 "microvm" true false true 16 8 true 1 2) "eligible/runtime-class")
+    (= (cell-eligible-reason 2 3 "murakumo" true false true 16 8 true 1 2) "eligible/runtime-class")
+    ;; Keep the canonical precedence: resource refusal precedes class refusal.
+    (= (cell-eligible-reason 2 1 "container" true false true 4 8 true 1 2) "eligible/memory")
+    (= (cell-eligible-reason 2 3 "container" true true true 16 8 true 1 2) "eligible/cordoned")
+    (= (cell-eligible-reason 2 3 "container" true false false 16 8 true 1 2) "eligible/stale")
+    (= (cell-eligible-reason 2 3 "container" true false true 16 8 true 3 2) "eligible/pressure")))
+
+;; Cross-component path: declaration -> derived target -> legal state step ->
+;; eligibility. These are fixture inputs, not signature or transport evidence.
+(defn test-cell-state-path [] :bool
+  (let [decl (first-problem "n" "did:key:x" "site-a" "always-on" 2)
+        fresh (fresh? true 1000000 1000000 300000)
+        target (node-target decl "d1" "d1" false fresh false false)
+        proposed (next-state -1 target)
+        admitted (next-state proposed target)
+        active (next-state admitted target)
+        stale-target (node-target decl "d1" "d1" false false false false)
+        drained (next-state active stale-target)
+        changed (node-target decl "d1" "d2" false true false false)
+        refused (node-target (first-problem "n" "did:key:x" "site-a" "always-on" 0)
+                             "d1" "d1" false true false false)]
+    (and
+      (= proposed 0) (= admitted 1) (= active 2) (= drained 3)
+      (= (cell-eligible-reason proposed 2 "container" true false fresh 16 8 true 1 2) "eligible/not-active")
+      (= (cell-eligible-reason admitted 2 "container" true false fresh 16 8 true 1 2) "eligible/not-active")
+      (= (cell-eligible-reason active 2 "container" true false fresh 16 8 true 1 2) "eligible/ok")
+      (= (cell-eligible-reason drained 2 "container" true false false 16 8 true 1 2) "eligible/not-active")
+      (= (cell-eligible-reason (next-state active changed) 2 "container" true false true 16 8 true 1 2) "eligible/not-active")
+      (= (cell-eligible-reason (next-state active refused) 0 "container" true false true 16 8 true 1 2) "eligible/not-active")
+      (= (cell-eligible-reason (next-state drained target) 2 "container" true false true 16 8 true 1 2) "eligible/ok")
+      (= (cell-eligible-reason (next-state 4 target) 2 "container" true false true 16 8 true 1 2) "eligible/not-active"))))
