@@ -43,9 +43,11 @@ shasum -a 256 "$G/root.elf"
 {
   echo '(ns itonami-lease-node (:export [main]))'
   git -C "$K/org-nist-sha2" show ea83e70a6a8efb8fb12dd5f0031fcda35a9ec77b:kotoba/sha2/core.kotoba | sed '1,/\]))$/d'
+  git -C "$K/org-ietf-ed25519" show 6f17477b5be91a0c8c369b8d30e7e5ea0c10a8aa:kotoba/ed25519/selfhost.kotoba | sed '1,/\]))$/d'
   git -C "$K/org-ietf-jcs" show 6331a9b461f5858be484b9d6859f314f9c3a2510:kotoba/jcs/reader.kotoba | sed '1,/\]))$/d'
-  sed '1,/\]))$/d' kotoba/fleet_lease_core.kotoba
-  sed '1,/\]))$/d' kotoba/fleet_lease_node.kotoba
+  git -C "$K/tsukasa" show 03e2322489839be2176d5c23d0ccb4120d1b0ee8:kotoba/tsukasa/ledger_core.kotoba | sed '1,/\]))$/d'
+  git -C "$K/tsukasa" show 03e2322489839be2176d5c23d0ccb4120d1b0ee8:kotoba/tsukasa/node_state.kotoba | sed '1,/\]))$/d'
+  for f in fleet_node_enrollment fleet_intent_core fleet_topology_verify fleet_lease_core fleet_lease_node; do sed '1,/\]))$/d' kotoba/$f.kotoba; done
   echo '(defn main [] :i64 (lease-node-main))'
 } > "$G/node.kotoba"
 # careless voters: accept ignores the promise
@@ -117,10 +119,82 @@ files.
 
 The receipt is [evidence/lease-node-20261023.json](evidence/lease-node-20261023.json).
 
+## Membership
+
+As in `lease.cljk`'s acceptor, a voter given a topology checks every lease
+value against it.
+
+- **At start.** The voter verifies the operator-signed topology with
+  `topology-verdict` ([topology verify](topology-verify.md)). On any other
+  verdict it does not start.
+- **On accept.** It takes only a value that `valid-value?` admits against
+  that topology:
+  - an enabled node of the topology;
+  - class 1..128 and slot 0..255;
+  - epoch at least 1;
+  - `until` no later than now + ttl + skew.
+- **Without a topology** the voter is open, as in the run above, and checks
+  only the value's form. That is for tests, not for a fleet.
+
+With the same `$G`, `$K` and `node.elf` (each voter now takes `<topology>
+<trust> <threshold> <now>` after its idle time):
+
+```sh
+python3 -I docs/evidence/lease-membership-topology-20261023.py "$G"   # topology.json: b70 enabled, k16 not; and a forged copy
+cat > "$G/member.sh" <<'EOF'
+N=1792500000000; U=1792500900000; FAR=1792502000000
+TRUST=op1=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw
+VK='{"class":"qwen-text","epoch":1,"node":"k16","revision":7,"slot":0,"until":'$U'}'
+VA='{"class":"qwen-text","epoch":1,"node":"b70","revision":7,"slot":0,"until":'$U'}'
+VF='{"class":"qwen-text","epoch":1,"node":"b70","revision":7,"slot":0,"until":'$FAR'}'
+voters() {  # tag topology-file-or-empty
+  for v in 1 2 3; do
+    if [ -n "$2" ]; then set -- "$1" "$2" /gate/$2 $TRUST 1 $N; else set -- "$1" "" "" "" "" ""; fi
+    env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:760$v \
+      /gate/node.elf voter 760$v /gate/$1-v$v.state 8000 $3 $4 $5 $6 > /gate/$1-v$v.log 2>&1 &
+  done
+  sleep 3
+}
+prop() {  # label t id value
+  env KEXE_ALLOW=37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7601,127.0.0.1:7602,127.0.0.1:7603 \
+    /gate/node.elf proposer full $2 $3 "$4" 7601 7602 7603 2>&1 | grep -v '^{:status' | sed "s/^/$1: /" | cut -c1-110
+}
+rm -f /gate/*.state
+voters k16 topology.json; prop "k16 proposes, topology says disabled" 101 k16 "$VK"; wait
+voters b70 topology.json; prop "b70 proposes" 101 b70 "$VA"; wait
+voters far topology.json; prop "b70 proposes until too far ahead" 101 b70 "$VF"; wait
+voters forged topology-forged.json; prop "voters given a forged topology" 101 k16 "$VK"; wait
+echo "forged voter says: $(head -1 /gate/forged-v1.log)"
+voters open ""; prop "control: open voters, k16 proposes" 101 k16 "$VK"; wait
+EOF
+podman run --rm --pull never --platform linux/arm64 --network none -v "$G:/gate" -w /gate \
+  docker.io/library/python:3.12-alpine sh /gate/member.sh
+```
+
+Expected output, measured on 2026-10-23 (`…` is the rest of the lease):
+
+```text
+k16 proposes, topology says disabled: no-majority accept 0
+b70 proposes: chosen {"class":"qwen-text","epoch":1,"node":"b70",…}
+b70 proposes until too far ahead: no-majority accept 0
+voters given a forged topology: no-majority prepare 0
+forged voter says: voter topology/needs-signatures
+control: open voters, k16 proposes: chosen {"class":"qwen-text","epoch":1,"node":"k16",…}
+```
+
+- **The topology.** It is signed by the operator key (RFC 8032 key 1, for
+  this gate only) and lists b70 enabled and k16 disabled.
+- **The forged copy.** It enables k16 without a new signature, so no voter
+  starts on it.
+- **The control.** Open voters let k16 be chosen, so the membership check is
+  what refuses it.
+
+The membership receipt is [evidence/lease-membership-20261023.json](evidence/lease-membership-20261023.json).
+
 ## What this does not show
 
 - Separate hosts.
-- The fleet token, voter membership and lease ids of `lease.cljk`.
+- The fleet token and lease ids of `lease.cljk`.
 - An fsync: a voter survives a process restart, not a power cut.
 - Concurrent proposers racing in real time. The interleaving here is
   scripted.

@@ -590,6 +590,9 @@ over TCP: three voters and a proposer, each a static image.
 - **The control.** With voters that accept under an old ballot, A's stale
   accept also reports `chosen`, so two leases are chosen for one id.
 
+With a topology, voters verify the operator-signed topology at start and
+accept only values naming an enabled node of it (`valid-value?`): a disabled
+node, an `until` too far ahead and a forged topology are each refused.
 Reproduction: [lease node](docs/lease-node.md).
 
 `kotoba/fleet_job_node.kotoba` gives one agent-step job to two nodes.
