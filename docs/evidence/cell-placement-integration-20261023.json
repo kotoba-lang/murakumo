@@ -1,0 +1,87 @@
+{
+  "amuCommit": "e06dbba75ce7b559c23e3199189f476599973df0",
+  "compilerSha256": "d17590b4352b4ecae97fb472355b05cda54cbfc01d3a29ad284531e2342e13d2",
+  "sources": [
+    {
+      "name": "ledger",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/ledger_core.kotoba",
+      "sha256": "e520534370dec3d3e6d4f5a2252f353485f3979457b3ec3162019d84d7d5e2d5"
+    },
+    {
+      "name": "state",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/node_state.kotoba",
+      "sha256": "2d478d602aa313fd2cd20ad8bc18b24b3013897b565799967a67b3156970e4c4"
+    },
+    {
+      "name": "placement",
+      "repository": "kotoba-lang/murakumo",
+      "commit": "4100ce32671ca25930fb51b1af913d1579da0478",
+      "path": "kotoba/fleet_placement_core.kotoba",
+      "sha256": "0b26a3637502734d933d73eb589dd058bd82bc620388db6e7a934716cc0b97ed"
+    },
+    {
+      "name": "cell",
+      "path": "kotoba/fleet_cell_placement.kotoba",
+      "sha256": "32e524c1c819ea2f9e38b61461cb7f7569040058dde2c8ebf1a97283c1bade22"
+    }
+  ],
+  "schema": "murakumo.cell-placement-integration.v1",
+  "date": "2026-10-23",
+  "target": "aarch64-linux",
+  "format": "loaderless-static",
+  "composition": "unchanged canonical source bodies in one unity; namespace declarations replaced by the i64 gate entry",
+  "groups": {
+    "ledger": 1,
+    "nodeState": 2,
+    "placement": 4,
+    "cellEligibility": 8,
+    "cellStatePath": 16
+  },
+  "expectedResult": 31,
+  "results": {
+    "positive": 31,
+    "stateBypass": 7,
+    "classBypass": 23
+  },
+  "execution": {
+    "network": "none",
+    "image": "docker.io/library/alpine:3",
+    "runtime": "native arm64 Linux on local Podman applehv VM",
+    "compilerAndGuest": "native ELF; no hosted compiler, C compiler or C loader invoked"
+  },
+  "limitations": [
+    "Source-unity gate, not project linker or signed release qualification",
+    "Inputs are synthetic; no DID signature, network, OCI launch, inference, storage or payment exercised",
+    "No production route or funding change"
+  ],
+  "artifacts": {
+    "gate.kotoba": {
+      "bytes": 32845,
+      "sha256": "d9a81b54b224b69cc8b257d887401db84a367502a7609466cffec3ec42b48e54"
+    },
+    "gate.elf": {
+      "bytes": 221696,
+      "sha256": "d4e0280f9a07a5c4450634f1bb209a6b61bd19d597aaac72ccbb8e122ec44dcf"
+    },
+    "state-bypass.kotoba": {
+      "bytes": 32829,
+      "sha256": "710ffdb51e27d222ee9e531f9f55cf9c249c9c299a67789e5f6421039d3b7787"
+    },
+    "state-bypass.elf": {
+      "bytes": 221696,
+      "sha256": "b025c1966f8378e7ac6e077dcfc0c089c7da3fa6bd3e794520959ba2b4ab50cf"
+    },
+    "class-bypass.kotoba": {
+      "bytes": 32799,
+      "sha256": "cb28da10f9414fe453bb913d4e50fb922332f0c4ac38476891f0c324e7346579"
+    },
+    "class-bypass.elf": {
+      "bytes": 221696,
+      "sha256": "1f290d47e770f41aeeb941ce25a35e56f125ee3a49dedbdb89bcb9a333c5c389"
+    }
+  }
+}
