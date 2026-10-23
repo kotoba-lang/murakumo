@@ -1,0 +1,41 @@
+{
+  "schema": "murakumo.cell-run-process-table.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-288",
+    "JUN-289"
+  ],
+  "how": "docs/cell-run.md \"Process table\": the agent runs a cell that computes for about 3 s; ps is sampled every 0.2 s until a process named cell or crun exists",
+  "agentTree": [
+    {
+      "depth": 0,
+      "comm": "agent.elf",
+      "args": "./agent.elf G/release-slow.json sha256:7dc1f7ee6672548b4b07a7955e5e71019f5c3b82b54a965a58fa50fc01069763 container G/layout-slow G/node.key b70 site-a 9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29 1792500000000 2"
+    },
+    {
+      "depth": 1,
+      "comm": "agent.elf",
+      "args": "./agent.elf G/release-slow.json sha256:7dc1f7ee6672548b4b07a7955e5e71019f5c3b82b54a965a58fa50fc01069763 container G/layout-slow G/node.key b70 site-a 9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29 1792500000000 2"
+    },
+    {
+      "depth": 2,
+      "comm": "podman",
+      "args": "/usr/bin/podman run --rm --pull never --network none --read-only oci:G/layout-slow"
+    }
+  ],
+  "cellAncestry": [
+    [
+      "cell",
+      "conmon"
+    ]
+  ],
+  "excludedRuntimesPresent": [],
+  "processCount": 203,
+  "agentOutput": [
+    "verdict launch/ok",
+    "layout layout/ok",
+    "exit 0",
+    "self-check enroll/ok 1"
+  ],
+  "note": "only the agent's subtree and the cell's ancestry are recorded; other processes on the VM are counted, not listed"
+}
