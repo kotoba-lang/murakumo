@@ -528,15 +528,19 @@ receipt, in one static image:
 - it reads the node's key from a file;
 - it derives the node's state from its own signed statements;
 - it admits the release with `launch-verdict`;
-- it starts the container through wire 20, granted only `/usr/bin/podman`
+- it checks the image's OCI layout itself (`fleet_oci_layout`): the layout's
+  `index.json` must name the release's manifest, and the manifest, config
+  and every layer are checked by size and SHA-256;
+- it starts that same layout through wire 20, granted only `/usr/bin/podman`
   with a fixed argv (`run --rm --pull never --network none --read-only
-  <repo>@<digest>`);
+  oci:<layout>`);
 - it signs a canonical receipt carrying the CID of the container's output.
 
 On the podman machine, a `FROM scratch` image holding a two-line Kotoba cell
 runs and returns a receipt. OpenSSL verifies the receipt's signature, and
-hashlib confirms both CIDs. A digest mismatch, a class mismatch, a host
-policy refusal and an unadmitted node each start nothing. Reproduction:
+hashlib confirms both CIDs. A digest mismatch, a host policy refusal, an
+unadmitted node, a changed layer byte, a missing blob and an index.json
+pointing elsewhere each start nothing. Reproduction:
 [cell run](docs/cell-run.md).
 
 `kotoba/fleet_topology_verify.kotoba` checks L1 itself. It verifies the

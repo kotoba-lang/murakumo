@@ -1,0 +1,97 @@
+;; murakumo.fleet-oci-layout -- the node agent checks an image itself before
+;; it runs: an OCI image layout directory (what `podman save --format oci-dir`
+;; writes), from the manifest the release names down to every layer (Linear
+;; JUN-288; network-awai-apex ADR 0010 §2.3). Every blob is read through wire
+;; 35 and hashed in the guest; podman then runs that same directory
+;; (`oci:<dir>`), so what ran is what was checked.
+;;
+;;   layout-verdict  layout directory, manifest digest and size (from the
+;;                   release index) -> "layout/ok" or the first refusal:
+;;     layout/not-an-oci-layout   oci-layout is missing, not strict JSON, or
+;;                                not imageLayoutVersion "1.0.0"
+;;     layout/index-mismatch      index.json does not list exactly one
+;;                                manifest, the release's, at its size:
+;;                                podman runs what index.json points to, so
+;;                                a directory holding the named blobs but
+;;                                pointing elsewhere must not pass
+;;     the manifest blob, then the config blob, then each layer blob:
+;;     layout/bad-descriptor      not sha256:<hex64>, or no size
+;;     layout/missing-blob        blobs/sha256/<hex> does not exist
+;;     layout/size-mismatch       its length is not the descriptor's size
+;;     layout/digest-mismatch     its SHA-256 is not the descriptor's digest
+;;     layout/not-an-oci-manifest the manifest is not strict JSON, not
+;;                                schemaVersion 2 with the OCI manifest type,
+;;                                or has more than 16 layers
+;;
+;; Each blob check runs in arena-scope and answers a code, so reading layers
+;; does not accumulate. The directory must stay under the agent's own scope
+;; between the check and the run; nothing else may write there.
+;;
+;; Composition order: sha2.core, jcs.reader, oci.itonami-artifact, this file
+;; (fleet_cell_run uses it). docs/cell-run.md has the gate.
+(ns murakumo.fleet-oci-layout
+  (:export [layout-verdict]))
+
+(defn- ol-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- ol-exists? [path :string] :bool (= (typed-cap-call 35 :string :string (string-concat path "EXISTS_SEP")) "1"))
+(defn- ol-read [path :string] :vector-i64
+  (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 (ol-bytes path)))))
+
+(defn- ol-root [b :vector-i64] :i64
+  (loop [i 0] (if (and (< i (vector-count b)) (let [c (vector-at b i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i)))
+
+(defn- ol-text [b :vector-i64 obj :i64 key :string] :string
+  (let [v (json-member b obj key)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))
+
+(defn- ol-int [b :vector-i64 obj :i64 key :string] :i64
+  (let [v (json-member b obj key)] (if (and (>= v 0) (= (json-kind b v) 4) (json-int-ok? b v)) (json-int b v) -1)))
+
+(defn- ol-blob-path [layout :string digest :string] :string
+  (str layout "/blobs/sha256/" (string-substring digest 7 71)))
+
+;; 0 ok, 1 bad descriptor, 2 missing, 3 size, 4 digest
+(defn- ol-blob-code [layout :string digest :string size :i64] :i64
+  (arena-scope
+    (cond (or (not (= (digest-problem digest) "oci/ok")) (< size 0)) 1
+          (not (ol-exists? (ol-blob-path layout digest))) 2
+          :else (let [b (ol-read (ol-blob-path layout digest))]
+                  (cond (not (= (vector-count b) size)) 3
+                        (not (= (string-concat "sha256:" (sha256-hex b)) digest)) 4
+                        :else 0)))))
+
+(defn- ol-reason [code :i64] :string
+  (case code 0 "layout/ok" 1 "layout/bad-descriptor" 2 "layout/missing-blob" 3 "layout/size-mismatch" "layout/digest-mismatch"))
+
+;; a descriptor object's blob
+(defn- ol-descriptor-code [layout :string b :vector-i64 d :i64] :i64
+  (if (or (< d 0) (not (= (json-kind b d) 1))) 1
+    (ol-blob-code layout (ol-text b d "digest") (ol-int b d "size"))))
+
+;; index.json's single manifest x0 is the release's, at its size
+(defn- ol-index-ok? [xb :vector-i64 x0 :i64 digest :string size :i64] :bool
+  (and (>= x0 0) (= (json-kind xb x0) 1) (= (ol-text xb x0 "digest") digest) (= (ol-int xb x0 "size") size)))
+
+(defn layout-verdict [layout :string manifest-digest :string manifest-size :i64] :string
+  (let [lf (string-concat layout "/oci-layout")
+        lb (if (ol-exists? lf) (ol-read lf) (vector-alloc 0))]
+    (if (not (and (json-valid? lb) (= (ol-text lb (ol-root lb) "imageLayoutVersion") "1.0.0"))) "layout/not-an-oci-layout"
+      (let [xf (string-concat layout "/index.json")
+            xb (if (ol-exists? xf) (ol-read xf) (vector-alloc 0))
+            xs (if (json-valid? xb) (json-member xb (ol-root xb) "manifests") -1)
+            x0 (if (and (>= xs 0) (= (json-kind xb xs) 2) (= (json-count xb xs) 1)) (json-element xb xs 0) -1)
+            mc (ol-blob-code layout manifest-digest manifest-size)]
+        (cond (not (ol-index-ok? xb x0 manifest-digest manifest-size)) "layout/index-mismatch"
+              (> mc 0) (ol-reason mc)
+              :else
+          (let [m (ol-read (ol-blob-path layout manifest-digest)) root (ol-root m)
+                layers (if (json-valid? m) (json-member m root "layers") -1)]
+            (if (not (and (json-valid? m) (= (ol-int m root "schemaVersion") 2)
+                          (= (ol-text m root "mediaType") "application/vnd.oci.image.manifest.v1+json")
+                          (>= layers 0) (= (json-kind m layers) 2) (<= (json-count m layers) 16)))
+              "layout/not-an-oci-manifest"
+              (let [cc (ol-descriptor-code layout m (json-member m root "config"))]
+                (if (> cc 0) (ol-reason cc)
+                  (loop [k 0]
+                    (if (= k (json-count m layers)) "layout/ok"
+                      (let [lc (ol-descriptor-code layout m (json-element m layers k))]
+                        (if (> lc 0) (ol-reason lc) (recur (+ k 1)))))))))))))))
