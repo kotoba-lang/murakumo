@@ -1,0 +1,136 @@
+{
+  "schema": "itonami.node.local-launch-evidence.v1",
+  "recordedAt": "2026-10-23T06:19:55.925896+00:00",
+  "linear": "JUN-343",
+  "status": "PASS_LOCAL_PREVIEW_ONLY",
+  "compiler": {
+    "amuMain": "457042ab741520980bceb5bf12970937d1bc8dba",
+    "bytes": 1458688,
+    "sha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+    "lineage": "Amu selfhost native fixed point; prior TCP/spawn adoption receipt"
+  },
+  "nativeMonitor": {
+    "bytes": 213504,
+    "sha256": "9c6fb4582be57eb976f42fb8224769bce1564854f1853e5377f239d21ed364c3",
+    "machine": "AArch64",
+    "interpreter": false
+  },
+  "nativeStaticServer": {
+    "bytes": 217600,
+    "sha256": "67674b3c3d622b9224b486ca0beff1ffc5f0b1d51630a379272792318dd7c847",
+    "machine": "AArch64",
+    "interpreter": false
+  },
+  "source": {
+    "murakumoBase": "f127b3fff77b74b26cda38157a5d454383d4e9db",
+    "hostMonitor": {
+      "bytes": 4238,
+      "sha256": "3c894ac336cb565238279d2fc6f48803ce2a202ff83a93fcda0d7637cbe5c2cf"
+    },
+    "apexBase": "6cf94718ef35e8eeee3cb983ada674700cad6b83",
+    "staticServer": {
+      "bytes": 4416,
+      "sha256": "d6f977c300e4dbf933a65fd91177d315390c6bbe88ef2d6b6b2deeb8e4519866"
+    }
+  },
+  "successiveObservations": [
+    {
+      "schema": "itonami.node.local-observation.v1",
+      "hostLabel": "local-mac-linux-vm",
+      "runId": "local-jun343-r2-20261023",
+      "sequence": 2,
+      "linuxUptimeSeconds": 163976,
+      "memoryTotalKiB": 8099272,
+      "memoryAvailableKiB": 6677300,
+      "source": "native-procfs",
+      "scope": "linux-vm",
+      "enrollment": "unregistered",
+      "signed": false,
+      "cellRuntime": false,
+      "peerCount": null,
+      "cellCount": null,
+      "economicState": "unconnected"
+    },
+    {
+      "schema": "itonami.node.local-observation.v1",
+      "hostLabel": "local-mac-linux-vm",
+      "runId": "local-jun343-r2-20261023",
+      "sequence": 43,
+      "linuxUptimeSeconds": 164592,
+      "memoryTotalKiB": 8099272,
+      "memoryAvailableKiB": 6488608,
+      "source": "native-procfs",
+      "scope": "linux-vm",
+      "enrollment": "unregistered",
+      "signed": false,
+      "cellRuntime": false,
+      "peerCount": null,
+      "cellCount": null,
+      "economicState": "unconnected"
+    }
+  ],
+  "nativeFieldTests": [
+    {
+      "case": "test-fields",
+      "expectedResult": 7,
+      "exit": 0,
+      "stdout": "{:status :ok :result 7 :fuel {:initial 9007199254740991 :remaining 9007199254740939 :metered false}}\n",
+      "stderr": ""
+    },
+    {
+      "case": "test-fields-negative",
+      "expectedResult": 0,
+      "exit": 0,
+      "stdout": "{:status :ok :result 0 :fuel {:initial 9007199254740991 :remaining 9007199254740966 :metered false}}\n",
+      "stderr": ""
+    }
+  ],
+  "containers": [
+    {
+      "name": "itonami-local-host-jun343-r2",
+      "status": "running",
+      "entry": "/node-host-monitor",
+      "arguments": [
+        "local-mac-linux-vm",
+        "local-jun343-r2-20261023",
+        "/state"
+      ],
+      "networkMode": "none",
+      "readOnlyRootfs": true,
+      "processTable": [
+        "PID         COMMAND          COMMAND",
+        "1           node-host-monit  /node-host-monitor local-mac-linux-vm local-jun343-r2-20261023 /state"
+      ]
+    },
+    {
+      "name": "itonami-node-console-jun343",
+      "status": "running",
+      "entry": "/static-server",
+      "arguments": [
+        "/assets"
+      ],
+      "networkMode": "bridge",
+      "readOnlyRootfs": true,
+      "processTable": [
+        "PID         COMMAND        COMMAND",
+        "1           static-server  /static-server /assets"
+      ]
+    }
+  ],
+  "buildAndRunningComponentForbiddenHosts": [],
+  "orchestration": "Manual shell/Podman with Python diagnostics only; not a qualified native CLI, packaging controller or CDCI",
+  "sharedRuntime": {
+    "integrated": false,
+    "canonicalPath": "kotoba-lang/wasm-webcomponent/src/kotoba-client-runtime.js",
+    "verifiedMain": "c13cf005e7000f5af64bcba281a1ce70f69b8674",
+    "present": false
+  },
+  "fullDistributedNode": false,
+  "signedEnrollment": false,
+  "hataCellExecution": false,
+  "murakumoInference": false,
+  "yataverseRestore": false,
+  "economicIntegration": false,
+  "localMonitorSampleBudget": 2000,
+  "staticRequestBudget": 1000
+}
