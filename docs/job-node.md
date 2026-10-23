@@ -1,25 +1,32 @@
 # One agent-step job on two nodes: run once, confirmed once
 
-Tracked in [JUN-289](https://linear.app/kotobalabs/issue/JUN-289). Two of its
-acceptance items are covered here:
+Tracked in [JUN-289](https://linear.app/kotobalabs/issue/JUN-289). Three of
+its acceptance items are covered here:
 - one bot profile's turn runs on a node, and its output CID and receipt can
   be read back;
 - the same job given to two nodes is confirmed only once, through the
-  fence.
+  fence;
+- a node whose runtime class or host policy does not fit the job does not
+  take it on ([Runtime class](#runtime-class)).
 
 `kotoba/fleet_job_node.kotoba` puts the earlier modules in order.
 
 - **`run`, on each node:**
   1. The job is checked and named (`job-problem`, `job-id`).
-  2. The node takes one round on the quorum lease register over TCP
+  2. The node derives its own signed state and judges the release with
+     `cell-admit`: node active, release digest, runtime class and host
+     policy, the launch verdict of [cell launch](cell-launch.md). A node
+     that may not run the cell stops here (`ineligible`), before it
+     competes for the lease.
+  3. The node takes one round on the quorum lease register over TCP
      (`lease-round`, [lease node](lease-node.md)). Its own value is
      `lease-text(node, job id, slot 0, epoch 1, now + ttl)`, and the chosen
      value names the holder.
-  3. A node that does not hold the lease stops (`held-by`).
-  4. The holder derives its own signed state and runs the cell with
-     `cell-execute`: the release verdict, the image layout, and podman with
-     a fixed argv ([cell run](cell-run.md)).
-  5. It signs the agent-step receipt with the lease epoch
+  4. A node that does not hold the lease stops (`held-by`).
+  5. The holder runs the cell with `cell-execute`: the release verdict
+     again, the image layout, and podman with a fixed argv
+     ([cell run](cell-run.md)).
+  6. It signs the agent-step receipt with the lease epoch
      ([agent step](agent-step.md)).
 - **`verify`, on anyone:** it learns the chosen lease with one round, maps
   the holder to its did through the trust, and judges a node's receipt with
@@ -30,7 +37,8 @@ Three refactors make the composition possible:
   longer clashes with `fleet_cell_run`'s;
 - the lease proposer takes its voter ports as a list, through the exported
   `lease-round`;
-- `fleet_cell_run` exports `cell-execute`, `own-state` and `key-seed`.
+- `fleet_cell_run` exports `cell-execute`, `own-state` and `key-seed`, and
+  `cell-admit`, the launch verdict alone, which `cell-execute` uses too.
 
 The agent-step, lease-node and cell-run gates were all rerun and give the
 same results.
@@ -89,8 +97,10 @@ node() {  # name key fd admitted t mode
     KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
     $G/job.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N 2 $G/release.json $G/layout-cell $PORTS $5 $6 > $G/$TAG-$1.out 2>&1
 }
+rm -f $G/$TAG-b70.out $G/$TAG-k16.out
 node b70 node.key site-a $DA 100 follow &
-sleep 0.3
+# k16 starts once b70's lease round is over
+for i in $(seq 1 100); do grep -q '^lease ' $G/$TAG-b70.out 2>/dev/null && break; sleep 0.1; done
 node k16 k16.key site-b $DK 101 $MODE_B &
 wait %4 %5 2>/dev/null; sleep 0.5
 for n in b70 k16; do
@@ -106,7 +116,7 @@ EOF
 cat > "$G/verify-again.sh" <<'EOF'
 G=$1; IMG=$2; B=753; DIAL=127.0.0.1:${B}1,127.0.0.1:${B}2,127.0.0.1:${B}3
 TRUST=b70=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw,k16=did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT
-for v in 1 2 3; do env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_43=127.0.0.1:$B$v $G/job.elf voter $B$v $G/rogue-v$v.state 1500 > /dev/null 2>&1 & done
+for v in 1 2 3; do env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_43=127.0.0.1:$B$v $G/job.elf voter $B$v $G/rogue-v$v.state 5000 > /dev/null 2>&1 & done
 sleep 0.3
 for n in b70 k16; do
   env KEXE_ALLOW=35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
@@ -135,9 +145,9 @@ nofence verifier, b70's receipt: holder b70 verdict job/confirmed
 nofence verifier, k16's receipt: holder b70 verdict job/confirmed
 ```
 
-- **honest.** b70 and k16 race for the job's lease. k16 starts 0.3 s later,
-  so its round adopts b70's chosen value. b70 runs the cell and signs. k16
-  stops, and nothing of it runs.
+- **honest.** b70 and k16 both go for the job's lease. k16 starts once
+  b70's round is over, so its round adopts b70's chosen value. b70 runs the
+  cell and signs. k16 stops, and nothing of it runs.
 - **rogue.** k16 runs the cell anyway and signs a receipt. The verifier
   confirms only b70's, so the job is confirmed once although it ran twice.
 - **verify-again.** The voters start again from their state files. The
@@ -176,12 +186,98 @@ itonami.agent-step-receipt/1 | epoch 1 | node b70`, `job id: True` and
 `output CID: True`. The receipt is
 [evidence/job-node-20261023.json](evidence/job-node-20261023.json).
 
+## Runtime class
+
+A node takes a job's lease only if it may run the job's cell. Before its
+lease round, each node judges the release against its own signed state and
+its host's policy (`cell-admit`). This covers the acceptance item "a node
+whose runtime class or capability does not fit is not given the job": in
+this design nodes put themselves forward, so being given a job means
+holding its lease.
+
+Here k16's host grants only the `wasm` class (allow mask 1), while the
+release is a `container` cell. k16 goes first, and b70 follows with a
+higher ballot. The control is a node agent that checks the release only
+after it holds the lease, as `cell-execute` alone does. With the same `$G`:
+
+```sh
+# the control: the release is judged only once the lease is held
+sed 's/(if (not (= admit "launch\/ok"))/(if false/' "$G/job.kotoba" > "$G/late.kotoba"
+podman run --rm --pull never --platform linux/arm64 --network none \
+  -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
+    rm -f /gate/late.elf
+    ./root.elf compile /gate/late.kotoba --target aarch64-linux --output /gate/late.elf --format static >/dev/null || exit 1
+    chmod +x /gate/late.elf'
+cat > "$G/class.sh" <<'EOF'
+G=$1; IMG=$2; TAG=$3; B=$4
+R=$(cat $G/release.digest)
+IN=bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey
+PO=bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq
+DA=9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29
+DK=64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb
+PORTS=${B}1,${B}2,${B}3; DIAL=127.0.0.1:${B}1,127.0.0.1:${B}2,127.0.0.1:${B}3
+N=1792500000000
+TRUST=b70=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw,k16=did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT
+rm -f $G/$TAG-v*.state $G/$TAG-b70.out $G/$TAG-k16.out
+for v in 1 2 3; do
+  env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_43=127.0.0.1:$B$v \
+    $G/job.elf voter $B$v $G/$TAG-v$v.state 25000 > /dev/null 2>&1 &
+done
+sleep 0.3
+node() {  # name key fd admitted allow t
+  env KEXE_ALLOW=20,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+    KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
+    $G/$IMG.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N $5 $G/release.json $G/layout-cell $PORTS $6 follow > $G/$TAG-$1.out 2>&1
+}
+node k16 k16.key site-b $DK 1 101   # k16's host grants the wasm class only
+node b70 node.key site-a $DA 2 102
+for n in k16 b70; do
+  echo "$TAG $n: $(grep -E '^(ineligible|lease|held-by|verdict|layout|refused) ' $G/$TAG-$n.out | tr '\n' ' ')$(grep -q '^receipt ' $G/$TAG-$n.out && echo '| receipt')"
+done
+env KEXE_ALLOW=35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+  $G/job.elf verify $PORTS $TRUST $G/$TAG-b70.out 200 2>&1 | grep -v '^{:status' | sed "s/^/$TAG verify b70's output: /"
+wait
+EOF
+podman machine ssh -- "sh $G/class.sh $G job class 754; sh $G/class.sh $G late late 755" 2>&1 | grep -v 'Copying\|Getting image\|Writing manifest'
+```
+
+Expected output, measured on 2026-10-23 (the same podman machine):
+
+```text
+class k16: ineligible grant/runtime-class-not-granted
+class b70: lease b70 verdict launch/ok layout layout/ok | receipt
+class verify b70's output: holder b70 verdict job/confirmed
+late k16: lease k16 verdict grant/runtime-class-not-granted refused grant/runtime-class-not-granted
+late b70: lease k16 held-by k16
+late verify b70's output: holder k16 verdict job/bad-signature
+```
+
+- **class.** k16 judges the release before its round. Its host does not
+  grant `container`, so it stops and sends the voters nothing. b70's round
+  finds no accepted value and takes the lease. b70 runs the cell, and its
+  receipt is confirmed.
+- **late (the control).** k16 takes the lease first and refuses the cell
+  only then, so nothing runs. b70's higher ballot adopts k16's accepted
+  value, so b70 stops (`held-by k16`). The job now has a holder that will
+  not run it until the lease's ttl (15 min) runs out. b70's output has no
+  receipt, which the verifier reports as `job/bad-signature`.
+
+The receipt is
+[evidence/job-node-runtime-class-20261023.json](evidence/job-node-runtime-class-20261023.json).
+
 ## What this does not show
 
 - Separate hosts. Everything runs on the podman machine.
-- Real-time contention between proposers. k16 starts 0.3 s later.
+- Real-time contention between proposers. k16 starts after b70's round.
+  The proposer takes one round and does not retry: started 0.3 s apart,
+  with each node checking its own state first, the two rounds overlap and
+  b70's can end `lease none`. The fence still confirms one receipt.
 - A real bot profile's turn with an inference rail, and the consent before
   inference leaves the node.
 - The fleet token and membership on the register, and an fsync for voter
   state.
+- Voters checking the runtime class. Each node judges its own fit; the
+  signed topology lists no runtime classes, and the voters are not given
+  nodes' admitted declarations. A node that takes a lease it cannot serve
+  holds the job up for at most the ttl, as the control shows.
 - x86_64 execution.

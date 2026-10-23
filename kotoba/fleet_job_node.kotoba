@@ -6,6 +6,11 @@
 ;;           <failure-domain> <admitted> <now> <allow> <index> <layout>
 ;;           <voter ports p1,p2,..> <ballot t> <follow|rogue>
 ;;           1. the job (fleet_agent_step job-problem, job-id);
+;;           1a. whether this node may run the cell at all: its own signed
+;;              state, then the launch verdict (fleet_cell_run cell-admit:
+;;              node active, release digest, runtime class, host policy).
+;;              A node that may not stops ("ineligible <verdict>") before
+;;              the lease round, so it never holds a job it would refuse;
 ;;           2. the job's lease: one round on the quorum register over TCP
 ;;              (fleet_lease_node lease-round), own value
 ;;              lease-text(node, job id, slot 0, epoch 1, now + ttl); the
@@ -95,19 +100,22 @@
           (= (vector-count seed) 0) (let [x (jn-say "job run/bad-key")] 1)
           :else
           (let [jid (job-id profile input policy rail)
-                chosen (lease-round t node (lease-text node jid 0 1 (+ now (lease-ttl)) 0) ports)
-                holder (if (= chosen "") "" (jn-text chosen "node"))
-                epoch (if (= chosen "") 0 (jn-num chosen "epoch"))
-                a (jn-say (str "job " jid))
-                b (jn-say (string-concat "lease " (if (= holder "") "none" holder)))]
-            (if (and (not (= holder node)) (not rogue)) (let [x (jn-say (string-concat "held-by " holder))] 0)
-              (let [did (node-did seed)
-                    r (cell-execute index profile "container" layout (own-state seed did node fd admitted now) allowed)]
-                (if (not (= (jn-field r 0) "ok")) (let [x (jn-say r)] 1)
-                  (let [text (step-receipt-text now did (if (> epoch 0) epoch 1) (jn-int (jn-field r 1)) jid node (jn-field r 2))
-                        c (jn-say (string-concat "receipt " text))
-                        d (jn-say (string-concat "signature " (sign-statement seed text)))]
-                    0))))))))
+                did (node-did seed)
+                state (own-state seed did node fd admitted now)
+                admit (cell-admit index profile "container" state allowed)
+                a (jn-say (str "job " jid))]
+            (if (not (= admit "launch/ok")) (let [x (jn-say (string-concat "ineligible " admit))] 0)
+              (let [chosen (lease-round t node (lease-text node jid 0 1 (+ now (lease-ttl)) 0) ports)
+                    holder (if (= chosen "") "" (jn-text chosen "node"))
+                    epoch (if (= chosen "") 0 (jn-num chosen "epoch"))
+                    b (jn-say (string-concat "lease " (if (= holder "") "none" holder)))]
+                (if (and (not (= holder node)) (not rogue)) (let [x (jn-say (string-concat "held-by " holder))] 0)
+                  (let [r (cell-execute index profile "container" layout state allowed)]
+                    (if (not (= (jn-field r 0) "ok")) (let [x (jn-say r)] 1)
+                      (let [text (step-receipt-text now did (if (> epoch 0) epoch 1) (jn-int (jn-field r 1)) jid node (jn-field r 2))
+                            c (jn-say (string-concat "receipt " text))
+                            d (jn-say (string-concat "signature " (sign-statement seed text)))]
+                        0))))))))))
 
 (defn- jn-verify [] :i64
   (let [ports (jn-arg 1) trust (jn-arg 2)

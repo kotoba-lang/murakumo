@@ -38,7 +38,7 @@
 ;; this file.
 ;; docs/cell-run.md has the gate.
 (ns murakumo.fleet-cell-run
-  (:export [cell-run cell-run-main receipt-text own-state cell-execute key-seed]))
+  (:export [cell-run cell-run-main receipt-text own-state cell-admit cell-execute key-seed]))
 
 (defn- cr-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
 (defn- cr-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
@@ -107,12 +107,17 @@
             (= (vector-at b i) 32) (if (= n k) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ n 1)))
             :else (recur (+ i 1) start n)))))
 
+;; step 3 alone: the launch verdict for a node whose state is known, so a node
+;; can tell whether it may take a cell on before it competes for one
+(defn cell-admit [index-path :string cell-digest :string cell-class :string state :i64 allowed :i64] :string
+  (launch-verdict (cr-read index-path) cell-digest cell-class state 2 allowed))
+
 ;; steps 3-5 for a node whose state is known: "ok <exit> <output CID>", or
 ;; "refused <reason>"; prints the "verdict" and "layout" lines
 (defn cell-execute [index-path :string cell-digest :string cell-class :string layout :string
                     state :i64 allowed :i64] :string
   (let [index (cr-read index-path)
-        verdict (launch-verdict index cell-digest cell-class state 2 allowed)
+        verdict (cell-admit index-path cell-digest cell-class state allowed)
         a (cr-say (string-concat "verdict " verdict))]
     (if (not (= verdict "launch/ok")) (string-concat "refused " verdict)
       (let [md (cr-manifest-digest index)
