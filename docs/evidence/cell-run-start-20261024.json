@@ -1,0 +1,65 @@
+{
+  "schema": "murakumo.evidence.cell-run-start.v1",
+  "date": "2026-10-24",
+  "issue": "JUN-288",
+  "doc": "docs/cell-run.md",
+  "sourceCommitBase": "ae14258fb2921b8dc40fd7b21037eef3cffa37cf",
+  "compiler": {
+    "repo": "kotoba-lang/amu",
+    "commit": "51b89255ef674a2da8bfbe650c971f1b08c0e3d3",
+    "sha256": "88afda8977285f3839ebad1cb785a344b296c6890f3f901746259dd478ab9fb7"
+  },
+  "host": "podman machine (applehv, arm64 Linux 6.15), rootless podman; the agent runs inside it through podman machine ssh",
+  "change": "cell-start imports the checked layout (podman pull --quiet oci:<layout>, which checks each blob against its digest), refuses unless the printed image ID is the config digest layout-verdict checked, and runs sha256:<that ID>",
+  "units": {
+    "agent.kotoba": "f941afe33aa549c6c23774f4b159a9875bae63e3d23a519ea6c9a8f90c757fa6",
+    "unchecked.kotoba": "3dde6e517fa4b385d62ca27799e7bd5e3ec05d1299355606d8d05036742fe1ed",
+    "no-index-check.kotoba": "f6faf88b09ce46d14b1f33b0c0730df098fb56625206be58fbbf1aecbba24544",
+    "start.kotoba": "310782d6f471c5a1afcc0d7ea0e274eb3b1418ca3c3dc4dec6e87516b283a972",
+    "start-unpinned.kotoba": "ea335e0daab7dea5c16d7549f0fe0aa4e969a108455cd2d1cb380e7450a02df4"
+  },
+  "images": {
+    "agent.elf": "a4089c5021101876159c8825a721794a538f53f2eb8d3991c54a6e33f9aa3636",
+    "start.elf": "7c16b66189e2018981ed8f0f303965b207c7aff3f2e568a74599929176d311cf",
+    "start-unpinned.elf": "11bd070a034d43815982192bd862fd2b535b3b3c548400d18be172ec28bf60ce",
+    "cell.elf": "ea1b0cbdfbc0a29efe60563ad40ae8be169ab6de829aecca657aa1dea7010c72",
+    "impostor.elf": "62f48095407b69c9882495a37e1a9fbbcf28e597dbe82e3db20b215299b180e9"
+  },
+  "scenarios": [
+    "honest: verdict launch/ok layout layout/ok | container ran",
+    "digest-mismatch: verdict launch/digest-mismatch",
+    "not-granted: verdict grant/runtime-class-not-granted",
+    "not-admitted: verdict launch/node-not-active",
+    "tampered-layer: verdict launch/ok layout layout/digest-mismatch",
+    "missing-blob: verdict launch/ok layout layout/missing-blob",
+    "swapped-index: verdict launch/ok layout layout/index-mismatch",
+    "control-verdict: verdict launch/digest-mismatch layout layout/ok | container ran",
+    "control-index: verdict launch/ok layout layout/ok start run/image-mismatch",
+    "podman itself, from the swapped directory: itonami cell: an impostor",
+    "start-honest: ok 0 bafkreig5gh2rdlgk55lmrrtnrfnfmnwp4kk5ijdefhhu77ynmxw7ixq5i4",
+    "start-swapped: refused run/image-mismatch",
+    "start-control: ok 0 bafkreicbcotf7c3tkl3fcllsknbo62gnnd6jthjbifeuqofq2jo4pls5ri"
+  ],
+  "receiptCheck": [
+    "signature: Signature Verified Successfully",
+    "canonical: True",
+    "cell CID: True",
+    "output CID: True exit 0"
+  ],
+  "processTable": [
+    "agent.elf: ./agent.elf /Users/junkawasaki/github/workspaces/claude/cell",
+    "  agent.elf: ./agent.elf /Users/junkawasaki/github/workspaces/claude/cell",
+    "    podman: /usr/bin/podman run --rm --pull never --network none --read-",
+    "cell ancestry: cell <- conmon",
+    "excluded runtimes present: []"
+  ],
+  "cids": {
+    "itonami cell: hello from a loaderless static image\\n": "bafkreig5gh2rdlgk55lmrrtnrfnfmnwp4kk5ijdefhhu77ynmxw7ixq5i4",
+    "itonami cell: an impostor\\n": "bafkreicbcotf7c3tkl3fcllsknbo62gnnd6jthjbifeuqofq2jo4pls5ri",
+    "checked": "recomputed with Python hashlib (CIDv1 raw sha2-256 base32)"
+  },
+  "controls": {
+    "start-unpinned": "cell-start with the image-ID comparison removed and run oci:<layout> instead of sha256:<ID>: it starts the impostor from the swapped directory",
+    "no-index-check": "now refused at start (run/image-mismatch): the index check and the start step each refuse the swap"
+  }
+}

@@ -31,11 +31,19 @@ This gate does exactly that on one node.
    `index.json` must list exactly the manifest the release names, at its
    size. The manifest, then its config, then every layer must exist, with
    the descriptor's size and SHA-256, all hashed in the guest.
-5. Start that same directory with wire 20, which may run only the granted
-   `/usr/bin/podman`, with a fixed argv: `run --rm --pull never --network
-   none --read-only oci:<layout>`. What runs is what was checked. The
-   image's own entry runs. Stdin is at end of file, and stdout comes back
-   (at most 16 KiB, within 10 s). A refused cell starts nothing.
+5. Start it with `cell-start`. Wire 20 may run only the granted
+   `/usr/bin/podman`, and runs it twice with fixed argvs:
+   - `pull --quiet oci:<layout>` imports the directory. podman checks
+     each blob against its digest, and prints the image ID. That ID must
+     be the config digest step 4 checked; otherwise the agent refuses with
+     `run/image-mismatch` (or `run/import-failed`), and nothing starts.
+   - `run --rm --pull never --network none --read-only sha256:<that ID>`
+     runs the image by its ID.
+
+   What runs is what was checked, even if the directory changes after the
+   check. The image's own entry runs. Stdin is at end of file, and stdout
+   comes back (at most 16 KiB, within 10 s). A refused cell starts
+   nothing.
 6. Write the receipt in canonical JSON. `jcs.reader`'s `json-canonical?`
    holds for it. It is signed with the node's key (`sign-statement`):
    `{"at":ms,"cell":<index CID>,"did":..,"exit":n,"kind":"itonami.receipt/1","node":..,"output":<CID of stdout>}`.
@@ -85,9 +93,14 @@ pin() { git -C "$K/$1" show "$2:$3" | sed '1,/\]))$/d'; }
 sed 's/(if (not (= verdict "launch\/ok")) (string-concat "refused " verdict)/(if false (string-concat "refused " verdict)/' "$G/agent.kotoba" > "$G/unchecked.kotoba"
 sed 's/(not (ol-index-ok? xb x0 manifest-digest manifest-size)) "layout\/index-mismatch"/false "layout\/index-mismatch"/' \
   "$G/agent.kotoba" > "$G/no-index-check.kotoba"
+# the start step alone, for a directory that changed after the check; its
+# control runs oci:<layout>, as the start step did before
+sed 's/^(defn main \[\] :i64 (cell-run-main))$/(defn main [] :i64 (cr-say (cell-start (cr-arg 0) (cr-arg 1) "")))/' "$G/agent.kotoba" > "$G/start.kotoba"
+sed -e 's/(not (= id (str (string-substring cfg 7 71) "\\n"))) "refused run\/image-mismatch"/false "refused run\/image-mismatch"/' \
+    -e 's/"ARG_SEP" "--read-only" "ARG_SEP" cfg)/"ARG_SEP" "--read-only" "ARG_SEP" "oci:" layout)/' "$G/start.kotoba" > "$G/start-unpinned.kotoba"
 podman run --rm --pull never --platform linux/arm64 --network none \
   -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
-    for c in cell impostor agent unchecked no-index-check; do
+    for c in cell impostor agent unchecked no-index-check start start-unpinned; do
       rm -f /gate/$c.elf
       ./root.elf compile /gate/$c.kotoba --target aarch64-linux --output /gate/$c.elf --format static >/dev/null || exit 1
       chmod +x /gate/$c.elf
@@ -128,7 +141,7 @@ run() {  # name agent layout index-file l1-digest admitted allow
   podman machine ssh -- "cd $G && env KEXE_ALLOW=20,35,37,38 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_20=/usr/bin/podman \
     KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH ./$2.elf $G/$4 $5 container $G/$3 $G/node.key b70 site-a $6 $N $7" \
     > "$G/$1.out" 2>&1 || true   # a refused cell exits 1
-  echo "$1: $(grep -E '^(verdict|layout) ' "$G/$1.out" | tr '\n' ' ')$(grep -q '^exit ' "$G/$1.out" && echo '| container ran')"
+  echo "$1: $(grep -E '^(verdict|layout|start) ' "$G/$1.out" | tr '\n' ' ')$(grep -q '^exit ' "$G/$1.out" && echo '| container ran')"
 }
 run honest agent layout-cell release.json "$R" "$A" 2
 run digest-mismatch agent layout-cell release.json "$O" "$A" 2
@@ -139,10 +152,19 @@ run missing-blob agent layout-missing release.json "$R" "$A" 2
 run swapped-index agent layout-swapped release.json "$R" "$A" 2
 run control-verdict unchecked layout-cell release.json "$O" "$A" 2
 run control-index no-index-check layout-swapped release.json "$R" "$A" 2
-grep -h '^receipt ' "$G/control-index.out" | head -1 | cut -c1-24; podman machine ssh -- "podman run --rm --network none --read-only oci:$G/layout-swapped 2>/dev/null"
+echo "podman itself, from the swapped directory: $(podman machine ssh -- "podman run --rm --network none --read-only oci:$G/layout-swapped 2>/dev/null")"
+CFG=sha256:$(podman image inspect --format '{{.Id}}' localhost/itonami-cell-demo:cell)   # the config digest step 4 checks
+start() {  # name image layout
+  podman machine ssh -- "cd $G && env KEXE_ALLOW=20,35,37,38 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_20=/usr/bin/podman \
+    KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH ./$2.elf $G/$3 $CFG" > "$G/$1.out" 2>&1 || true
+  echo "$1: $(grep -E '^(ok|refused) ' "$G/$1.out")"
+}
+start start-honest start layout-cell
+start start-swapped start layout-swapped
+start start-control start-unpinned layout-swapped
 ```
 
-Expected output, measured on 2026-10-23 (the podman machine, arm64 Linux
+Expected output, measured on 2026-10-24 (the podman machine, arm64 Linux
 6.15, rootless podman):
 
 ```text
@@ -154,9 +176,11 @@ tampered-layer: verdict launch/ok layout layout/digest-mismatch
 missing-blob: verdict launch/ok layout layout/missing-blob
 swapped-index: verdict launch/ok layout layout/index-mismatch
 control-verdict: verdict launch/digest-mismatch layout layout/ok | container ran
-control-index: verdict launch/ok layout layout/ok | container ran
-receipt {"at":1792500000
-itonami cell: an impostor
+control-index: verdict launch/ok layout layout/ok start run/image-mismatch
+podman itself, from the swapped directory: itonami cell: an impostor
+start-honest: ok 0 bafkreig5gh2rdlgk55lmrrtnrfnfmnwp4kk5ijdefhhu77ynmxw7ixq5i4
+start-swapped: refused run/image-mismatch
+start-control: ok 0 bafkreicbcotf7c3tkl3fcllsknbo62gnnd6jthjbifeuqofq2jo4pls5ri
 ```
 
 - **not-admitted.** L1 admits another declaration, so the node's own state
@@ -168,9 +192,19 @@ itonami cell: an impostor
   however, points to the impostor, and podman runs what `index.json` names.
   The index check refuses it.
 - **control-index.** Without that check the agent admits the swapped
-  directory, and podman runs the impostor (the last line), under a receipt
-  for the release. **control-verdict** shows the same for the release
-  verdict.
+  directory. podman on its own would run the impostor from it (the next
+  line), but the start step imports it, sees an image ID that is not the
+  release's config digest, and starts nothing. The index check and the
+  start step each refuse the swap. **control-verdict** shows the release
+  verdict is needed: without it, a mismatched release starts.
+- **start-swapped.** The start step alone, given the swapped directory and
+  the config digest that the check found for the release. This is the
+  directory changing after the check. podman imports the impostor, whose
+  image ID is not that digest, so the agent refuses and nothing starts.
+  **start-honest** starts the release from its own directory. Its output CID
+  is the one in the honest receipt.
+- **start-control.** A start step that runs `oci:<layout>`, as before, runs
+  the impostor. Its output CID is that of `itonami cell: an impostor`.
 
 **Check the honest receipt independently.** OpenSSL verifies the Ed25519
 signature with the did's key, and `hashlib` recomputes both CIDs and the
@@ -205,6 +239,8 @@ PY
 
 Expected: `Signature Verified Successfully`, then `canonical: True`,
 `cell CID: True` and `output CID: True exit 0`. The receipt is
+[evidence/cell-run-start-20261024.json](evidence/cell-run-start-20261024.json). The version that ran
+`oci:<layout>` is recorded in
 [evidence/cell-run-layout-20261023.json](evidence/cell-run-layout-20261023.json). The first version, which
 ran the image by repository digest, is recorded in
 [evidence/cell-run-20261023.json](evidence/cell-run-20261023.json).
@@ -295,8 +331,9 @@ It records only the agent's subtree and the cell's ancestry.
 ## What this does not show
 
 - Pulling the release from a registry. The layout is a local directory.
-- Another process writing to the layout directory between the check and the
-  run. The directory must stay under the agent's own scope.
+- Who else may write to podman's own storage. The image runs by its ID from
+  the user's rootless store. An import leaves the image it took, the
+  impostor's too, in that store, untagged, until it is removed.
 - A second node.
 - Persistence of the receipt (kotobase, yataverse).
 - The persistent container stdio channel (JUN-298).

@@ -14,9 +14,14 @@
 ;;   4. the image itself, from its OCI image layout directory
 ;;      (fleet_oci_layout): the manifest the release names, then its config
 ;;      and every layer, each by size and SHA-256 in the guest;
-;;   5. the container: wire 20 runs the granted podman with a fixed argv,
-;;      run --rm --pull never --network none --read-only oci:<that layout>,
-;;      so what runs is what was checked; the image's own entry runs
+;;   5. the container (cell-start): wire 20 runs the granted podman twice,
+;;      with fixed argvs. pull --quiet oci:<that layout> imports it; podman
+;;      checks each blob against its digest, and prints the image ID, which
+;;      must be the config digest that step 4 checked (else
+;;      run/image-mismatch, or run/import-failed, and nothing starts). Then
+;;      run --rm --pull never --network none --read-only sha256:<that ID>
+;;      runs it by ID, so what runs is what was checked even if the
+;;      directory changed after the check; the image's own entry runs
 ;;      (NO-ARGV-IN-SPEC); stdin is at end of file, or, given an input, it
 ;;      carries the input (run -i, and the input after wire 20's STDIN_SEP:
 ;;      container stdio, JUN-298); stdout comes back (at most 16 KiB, 10 s);
@@ -29,7 +34,8 @@
 ;; L1 cell digest, L1 cell class, image layout directory, key path, node,
 ;; failure-domain, the L1 admitted declaration digest, now (ms), the host's
 ;; allow mask. It prints "verdict <v>", then for an admitted cell
-;; "layout <l>", and for a checked image "exit <n>",
+;; "layout <l>", for a checked image that does not start "start <reason>",
+;; and for a started one "exit <n>",
 ;; "receipt <text>", "signature <b64url>" and "self-check <reason>
 ;; <canonical 0|1>". A refused cell starts no container.
 ;;
@@ -39,7 +45,7 @@
 ;; this file.
 ;; docs/cell-run.md has the gate.
 (ns murakumo.fleet-cell-run
-  (:export [cell-run cell-run-main receipt-text own-state cell-admit cell-execute key-seed]))
+  (:export [cell-run cell-run-main receipt-text own-state cell-admit cell-execute cell-start key-seed]))
 
 (defn- cr-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
 (defn- cr-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
@@ -126,14 +132,29 @@
             lv (layout-verdict layout md (cr-manifest-size index))
             y (cr-say (string-concat "layout " lv))]
         (if (not (= lv "layout/ok")) (string-concat "refused " lv)
-          (let [argv (str "/usr/bin/podman" "ARG_SEP" "run" (if (= input "") "" "ARG_SEP-i") "ARG_SEP" "--rm" "ARG_SEP" "--pull" "ARG_SEP" "never"
-                          "ARG_SEP" "--network" "ARG_SEP" "none" "ARG_SEP" "--read-only"
-                          "ARG_SEP" "oci:" layout)
-                answer (cr-spawn (if (= input "") argv (str argv "STDIN_SEP" input)))
-                nl (string-index-of answer "\n")
-                exit (if (< nl 0) -9 (cr-int (string-substring answer 0 nl)))
-                out (if (< nl 0) "" (string-substring answer (+ nl 1) (string-length answer)))]
-            (str "ok " exit " " (digest-cid (string-concat "sha256:" (sha256-hex (cr-bytes out))) 85))))))))
+          (let [r (cell-start layout (layout-config-digest layout md) input)
+                z (if (= (cr-field r 0) "refused") (cr-say (string-concat "start " (cr-field r 1))) 0)]
+            r))))))
+
+;; a spawn's answer, "<exit>\n<stdout>": the exit (-9 when malformed) and stdout
+(defn- cr-exit [answer :string] :i64
+  (let [nl (string-index-of answer "\n")] (if (< nl 0) -9 (cr-int (string-substring answer 0 nl)))))
+(defn- cr-out [answer :string] :string
+  (let [nl (string-index-of answer "\n")] (if (< nl 0) "" (string-substring answer (+ nl 1) (string-length answer)))))
+
+;; step 5 for a layout whose config digest cfg was checked: import, then run
+;; by ID. "ok <exit> <output CID>" or "refused run/<reason>"
+(defn cell-start [layout :string cfg :string input :string] :string
+  (if (not (= (string-length cfg) 71)) "refused run/no-config"
+    (let [pull (cr-spawn (str "/usr/bin/podman" "ARG_SEP" "pull" "ARG_SEP" "--quiet" "ARG_SEP" "oci:" layout))
+          id (cr-out pull)]
+      (cond (not (= (cr-exit pull) 0)) "refused run/import-failed"
+            (not (= id (str (string-substring cfg 7 71) "\n"))) "refused run/image-mismatch"
+            :else
+            (let [argv (str "/usr/bin/podman" "ARG_SEP" "run" (if (= input "") "" "ARG_SEP-i") "ARG_SEP" "--rm" "ARG_SEP" "--pull" "ARG_SEP" "never"
+                            "ARG_SEP" "--network" "ARG_SEP" "none" "ARG_SEP" "--read-only" "ARG_SEP" cfg)
+                  answer (cr-spawn (if (= input "") argv (str argv "STDIN_SEP" input)))]
+              (str "ok " (cr-exit answer) " " (digest-cid (string-concat "sha256:" (sha256-hex (cr-bytes (cr-out answer)))) 85)))))))
 
 (defn cell-run [index-path :string cell-digest :string cell-class :string layout :string key-path :string
                 node :string fd :string admitted :string now :i64 allowed :i64] :i64
