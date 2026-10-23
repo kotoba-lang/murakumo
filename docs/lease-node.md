@@ -10,8 +10,10 @@ a proposer, each a loaderless static image, over the runtime's TCP wires.
   each connection it:
   1. reads one request line;
   2. decides with `prepare-ok?` / `accept-ok?`;
-  3. writes its new state to the state file (wire 35), **before it
-     replies**;
+  3. replaces its state file durably, **before it replies**: the new state
+     goes to `<file>.tmp`, which is fsynced and renamed over the file, and
+     then the directory is fsynced (amu wire 35 `FSYNC_SEP`, `RENAME_SEP`).
+     A voter that cannot store its state refuses;
   4. replies one line and closes.
 
   It exits after `<idle ms>` with no connection. The state file is its only
@@ -41,9 +43,9 @@ AMU=/Users/junkawasaki/github/kotoba-lang/amu
 K=/Users/junkawasaki/github/kotoba-lang
 G=/Users/junkawasaki/github/workspaces/<agent>/<task>
 mkdir -p "$G"
-git -C "$AMU" show 457042ab741520980bceb5bf12970937d1bc8dba:seed/bootstrap/aarch64-linux-static-root.elf > "$G/root.elf"
+git -C "$AMU" show 51b89255ef674a2da8bfbe650c971f1b08c0e3d3:seed/bootstrap/aarch64-linux-static-root.elf > "$G/root.elf"
 chmod +x "$G/root.elf"
-# Expected compiler SHA-256: 1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e
+# Expected compiler SHA-256: 88afda8977285f3839ebad1cb785a344b296c6890f3f901746259dd478ab9fb7
 shasum -a 256 "$G/root.elf"
 {
   echo '(ns itonami-lease-node (:export [main]))'
@@ -68,7 +70,7 @@ voters() {
   sleep 0.3
 }
 prop() {
-  env KEXE_ALLOW=37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7401,127.0.0.1:7402,127.0.0.1:7403 \
+  env KEXE_ALLOW=7,23,37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7401,127.0.0.1:7402,127.0.0.1:7403 \
     /gate/node.elf proposer $2 $3 $4 "$5" 7401 7402 7403 2>&1 | grep -v '^{:status' | sed "s/^/$1: /"
 }
 for img in node careless; do
@@ -92,7 +94,7 @@ podman run --rm --pull never --platform linux/arm64 --network none \
 ```
 
 Expected output, measured on 2026-10-23 (arm64 Linux 6.15 under podman, amu
-`457042ab` root; `…` is the rest of the lease):
+`51b89255` root; `…` is the rest of the lease):
 
 ```text
 == voters: node
@@ -152,21 +154,32 @@ TRUST=op1=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw
 VK='{"class":"qwen-text","epoch":1,"node":"k16","revision":7,"slot":0,"until":'$U'}'
 VA='{"class":"qwen-text","epoch":1,"node":"b70","revision":7,"slot":0,"until":'$U'}'
 VF='{"class":"qwen-text","epoch":1,"node":"b70","revision":7,"slot":0,"until":'$FAR'}'
+ready() {  # port...: wait, at most 30 s in all, until each voter answers; the probe is prepare 0 (no ballot), which changes nothing
+  python3 -I -c 'import socket, sys, time
+end = time.time() + 30
+for p in sys.argv[1:]:
+    while time.time() < end:
+        try:
+            c = socket.create_connection(("127.0.0.1", int(p)), 0.5); c.settimeout(5); c.sendall(b"prepare 0 probe\n"); c.recv(4096); c.close(); break
+        except OSError:
+            time.sleep(0.2)' "$@"
+}
 voters() {  # tag topology-file-or-empty
   for v in 1 2 3; do
     if [ -n "$2" ]; then set -- "$1" "$2" /gate/$2 $TRUST 1 $N; else set -- "$1" "" "" "" "" ""; fi
-    env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:760$v \
+    env KEXE_ALLOW=7,35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:760$v \
       /gate/node.elf voter 760$v /gate/$1-v$v.state 8000 $3 $4 $5 $6 > /gate/$1-v$v.log 2>&1 &
   done
-  sleep 5   # each voter verifies the topology before it listens
+  if [ "$1" = forged ]; then sleep 3; else ready 7601 7602 7603; fi   # each voter verifies the topology before it listens
 }
 prop() {  # label t id value
-  env KEXE_ALLOW=37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7601,127.0.0.1:7602,127.0.0.1:7603 \
+  env KEXE_ALLOW=7,23,37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7601,127.0.0.1:7602,127.0.0.1:7603 \
     /gate/node.elf proposer full $2 $3 "$4" 7601 7602 7603 2>&1 | grep -v '^{:status' | sed "s/^/$1: /" | cut -c1-110
 }
 rm -f /gate/*.state
 voters k16 topology.json; prop "k16 proposes, topology says disabled" 101 k16 "$VK"; wait
 voters b70 topology.json; prop "b70 proposes" 101 b70 "$VA"; wait
+N=clock; voters clk topology.json; prop "b70 proposes, voters on the clock" 101 b70 "$VA"; wait; N=1792500000000
 voters far topology.json; prop "b70 proposes until too far ahead" 101 b70 "$VF"; wait
 voters forged topology-forged.json; prop "voters given a forged topology" 101 k16 "$VK"; wait
 echo "forged voter says: $(head -1 /gate/forged-v1.log)"
@@ -181,6 +194,7 @@ Expected output, measured on 2026-10-23 (`…` is the rest of the lease):
 ```text
 k16 proposes, topology says disabled: no-majority accept 0
 b70 proposes: chosen {"class":"qwen-text","epoch":1,"node":"b70",…}
+b70 proposes, voters on the clock: chosen {"class":"qwen-text","epoch":1,"node":"b70",…}
 b70 proposes until too far ahead: no-majority accept 0
 voters given a forged topology: no-majority prepare 0
 forged voter says: voter topology/needs-signatures
@@ -209,7 +223,9 @@ again only when it was preempted:
   - the voters refused the value itself under the round's own ballot, as
     membership does above.
 
-There is no random backoff, because the runtime has no sleep.
+Before a retry the proposer waits 20 + 0..199 ms, as `round!` does. The
+jitter is one byte from wire 23 (`:entropy/draw`), and the wait is on wire 7
+(`:clock/now` `sleep`), so proposers need wires 7 and 23 granted.
 
 Three scripted cases, each with this proposer and with a control that runs
 one round only (`ln-tries` 1, the proposer before this change):
@@ -235,7 +251,7 @@ voters() {  # image tag count
   sleep 0.3
 }
 prop() {  # image label mode t id value
-  env KEXE_ALLOW=37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7801,127.0.0.1:7802,127.0.0.1:7803 \
+  env KEXE_ALLOW=7,23,37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7801,127.0.0.1:7802,127.0.0.1:7803 \
     /gate/$1.elf proposer $3 $4 $5 "$6" 7801 7802 7803 2>&1 | grep -v '^{:status' | sed "s/^/$2: /" | cut -c1-96
 }
 state() { for v in 1 2 3; do [ -f /gate/$1-v$v.state ] && echo "  voter $v: $(cut -c1-60 /gate/$1-v$v.state)"; done; }
@@ -366,10 +382,20 @@ TRUST=op1=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw
 VK='{"class":"qwen-text","epoch":1,"node":"k16","revision":7,"slot":0,"until":'$U'}'
 VA='{"class":"qwen-text","epoch":1,"node":"b70","revision":7,"slot":0,"until":'$U'}'
 prop() {  # label t value
-  env KEXE_ALLOW=37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7901,127.0.0.1:7902,127.0.0.1:7903 \
+  env KEXE_ALLOW=7,23,37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7901,127.0.0.1:7902,127.0.0.1:7903 \
     /gate/node.elf proposer full $2 x "$3" 7901 7902 7903 2>&1 | grep -v '^{:status' | sed "s/^/  $1: /" | cut -c1-100
 }
 swap() { cp /gate/$1 /gate/live.json; sleep 4; }
+ready() {  # port...: wait, at most 30 s in all, until each voter answers; the probe is prepare 0 (no ballot), which changes nothing
+  python3 -I -c 'import socket, sys, time
+end = time.time() + 30
+for p in sys.argv[1:]:
+    while time.time() < end:
+        try:
+            c = socket.create_connection(("127.0.0.1", int(p)), 0.5); c.settimeout(5); c.sendall(b"prepare 0 probe\n"); c.recv(4096); c.close(); break
+        except OSError:
+            time.sleep(0.2)' "$@"
+}
 for img in node static unchecked; do
   echo "== voters: $img"
   rm -f /gate/rot-v*.state; cp /gate/topology.json /gate/live.json
@@ -377,7 +403,7 @@ for img in node static unchecked; do
     env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:790$v \
       /gate/$img.elf voter 790$v /gate/rot-v$v.state 6000 /gate/live.json $TRUST 1 $N > /gate/rot-v$v.log 2>&1 &
   done
-  sleep 5   # each voter verifies the topology before it listens
+  ready 7901 7902 7903   # each voter verifies the topology before it listens
   prop "k16, revision 7 held" 101 "$VK"
   swap topology-r6.json;        prop "k16, after revision 6" 102 "$VK"
   swap topology-r9-forged.json; prop "k16, after a forged 9" 103 "$VK"
@@ -501,7 +527,7 @@ voters() {  # image tag base token-file
   sleep 0.3
 }
 prop() {  # image label base mode t id value [token=file]
-  env KEXE_ALLOW=35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_45=127.0.0.1:${3}1,127.0.0.1:${3}2,127.0.0.1:${3}3 \
+  env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_45=127.0.0.1:${3}1,127.0.0.1:${3}2,127.0.0.1:${3}3 \
     /gate/$1.elf proposer $4 $5 $6 "$7" $8 ${3}1 ${3}2 ${3}3 2>&1 | grep -v '^{:status' | sed "s/^/  $2: /" | cut -c1-96
 }
 for img in node trusting-voter trusting-proposer; do
@@ -590,7 +616,7 @@ voter() {  # ip
 }
 prop() {  # label ip t value token-file
   podman run --rm --pull never --platform linux/arm64 --network itonami-lease-gate --ip $2 -v "$G:/gate" \
-    -e KEXE_ALLOW=35,37,38,45,46,47 -e KEXE_CAP_RESOURCES_35=/gate -e KEXE_CAP_RESOURCES_45=$(echo $VOTERS | tr ' ' ',') \
+    -e KEXE_ALLOW=7,23,35,37,38,45,46,47 -e KEXE_CAP_RESOURCES_35=/gate -e KEXE_CAP_RESOURCES_45=$(echo $VOTERS | tr ' ' ',') \
     docker.io/library/python:3.12-alpine /gate/node.elf proposer full $3 x "$4" token=/gate/$5 $VOTERS 2>&1 \
     | grep -v '^{:status' | sed "s/^/$1: /" | cut -c1-96
 }
@@ -638,8 +664,6 @@ voters.
   topology held. A request that arrives while a voter verifies waits, and
   its proposer may count that voter as down (fail closed).
 - Lease ids of `lease.cljk`.
-- An fsync: a voter survives a process restart, not a power cut.
 - Concurrent proposers on separate hosts. The race loop runs on one
-  machine, and there is no random backoff, so two proposers can in
-  principle keep preempting each other for all five rounds.
+  machine.
 - x86_64 execution.

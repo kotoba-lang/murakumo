@@ -572,8 +572,9 @@ nodes, as `replicated_topology` `start!` does:
 Its peers are the seeds and the payload's gateway and node urls, polled with
 a fanout and a moving cursor. A replica chain carries revision 8 to the file
 the voters follow, and k16 is then chosen. Replicas in separate containers on
-tailnet addresses find each other through the payload alone. Peers that serve a forged, older, owner-replacing or conflicting
-document are each kept out. Reproduction:
+tailnet addresses find each other through the payload alone. Peers that
+serve a forged, older, owner-replacing or conflicting document are each kept
+out. The file is replaced durably, so a reader never sees it half written. Reproduction:
 [topology replica](docs/topology-replica.md).
 
 `kotoba/fleet_agent_step.kotoba` treats a bot's agent turn as a murakumo job
@@ -599,8 +600,10 @@ majority. Reproduction: [lease core](docs/lease-core.md).
 `kotoba/fleet_lease_node.kotoba` runs that register as separate processes
 over TCP: three voters and a proposer, each a static image.
 
-- **Voters** write their state to a file before they reply. They are started
-  again for every step, so their state comes only from their files.
+- **Voters** replace their state file durably before they reply: a
+  temporary, fsynced, renamed over the file, and the directory fsynced
+  (amu's wire 35 `FSYNC_SEP` and `RENAME_SEP`). They are started again for
+  every step, so their state comes only from their files.
 - **The run.** A prepares; B's lease is chosen; A's accept under its old
   ballot is refused by all three voters; A's retry adopts B's lease.
 - **The control.** With voters that accept under an old ballot, A's stale
@@ -609,8 +612,9 @@ over TCP: three voters and a proposer, each a static image.
 With a topology, voters verify the operator-signed topology at start and
 accept only values naming an enabled node of it (`valid-value?`): a disabled
 node, an `until` too far ahead and a forged topology are each refused.
-A round preempted by a higher promise is tried again just above it (at most
-five rounds, as `lease.cljk`'s `round!`). In a race loop on one machine, two
+A round preempted by a higher promise is tried again just above it, after a
+random 20..219 ms wait (at most five rounds, as `lease.cljk`'s `round!`). The
+jitter comes from wire 23 and the wait from wire 7's sleep. In a race loop on one machine, two
 proposers then report the same lease in 20 of 20 runs, against 0 of 20 with
 one round. Running voters follow their topology file: a changed topology is
 adopted only if it verifies, advances the revision and keeps every node's

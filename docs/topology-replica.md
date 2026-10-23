@@ -57,9 +57,9 @@ AMU=/Users/junkawasaki/github/kotoba-lang/amu
 K=/Users/junkawasaki/github/kotoba-lang
 G=/Users/junkawasaki/github/workspaces/<agent>/<task>
 mkdir -p "$G"
-git -C "$AMU" show 457042ab741520980bceb5bf12970937d1bc8dba:seed/bootstrap/aarch64-linux-static-root.elf > "$G/root.elf"
+git -C "$AMU" show 51b89255ef674a2da8bfbe650c971f1b08c0e3d3:seed/bootstrap/aarch64-linux-static-root.elf > "$G/root.elf"
 chmod +x "$G/root.elf"
-# Expected compiler SHA-256: 1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e
+# Expected compiler SHA-256: 88afda8977285f3839ebad1cb785a344b296c6890f3f901746259dd478ab9fb7
 shasum -a 256 "$G/root.elf"
 pin() { git -C "$K/$1" show "$2:$3" | sed '1,/\]))$/d'; }
 {
@@ -98,6 +98,16 @@ rep() {  # image name file token listen polls peer...
   env KEXE_ALLOW=35,37,38,43,44,45,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:$listen KEXE_CAP_RESOURCES_45=$dial \
     /gate/$img.elf replica /gate/$file $TRUST 1 /gate/$tok 127.0.0.1:$listen 500 $polls 8 "$@" > /gate/$name.log 2>&1 &
 }
+ready() {  # port...: wait, at most 30 s in all, until each voter answers; the probe is prepare 0 (no ballot), which changes nothing
+  python3 -I -c 'import socket, sys, time
+end = time.time() + 30
+for p in sys.argv[1:]:
+    while time.time() < end:
+        try:
+            c = socket.create_connection(("127.0.0.1", int(p)), 0.5); c.settimeout(5); c.sendall(b"prepare 0 probe\n"); c.recv(4096); c.close(); break
+        except OSError:
+            time.sleep(0.2)' "$@"
+}
 rev() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["payload"]["revision"])' /gate/$1; }
 for img in node unchecked open; do
   echo "== replicas: $img"
@@ -106,19 +116,21 @@ for img in node unchecked open; do
   # voters following r2.json, as in the lease node's Rotation
   for v in 1 2 3; do
     env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:782$v \
-      /gate/node.elf voter 782$v /gate/rot-v$v.state 12000 /gate/r2.json $TRUST 1 $N > /gate/voter-v$v.log 2>&1 &
+      /gate/node.elf voter 782$v /gate/rot-v$v.state 20000 /gate/r2.json $TRUST 1 $N > /gate/voter-v$v.log 2>&1 &
   done
   # peers that answer anyone: a forged 9, an older 6, a 9 that replaces b70's owner, a conflicting 7
   python3 -I /gate/peer.py 7831 /gate/topology-r9-forged.json 20 & python3 -I /gate/peer.py 7832 /gate/topology-r6.json 20 &
   python3 -I /gate/peer.py 7833 /gate/topology-r9-owner.json 20 & python3 -I /gate/peer.py 7834 /gate/topology-r7-conflict.json 20 &
-  sleep 3
+  ready 7821 7822 7823; sleep 1   # the voters verify the topology before they listen
   R1=node; R3=node; [ $img = open ] && R1=open; [ $img = unchecked ] && R3=unchecked
   rep $R1 r1 r1.json fleet.token 7811 12 127.0.0.1:7812
   rep node r2 r2.json fleet.token 7812 4 127.0.0.1:7811
   rep $R3 r3 r3.json fleet.token 7813 2 127.0.0.1:7831 127.0.0.1:7832 127.0.0.1:7833 127.0.0.1:7834
   rep node r4 r4.json other.token 7814 2 127.0.0.1:7811
-  sleep 6
-  env KEXE_ALLOW=37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7821,127.0.0.1:7822,127.0.0.1:7823 \
+  # until r2 holds revision 8 (at most 60 s), then 4 s for the voters, which look at the file every 500 ms
+  # (their log is buffered until they exit, so it cannot tell when they adopted it)
+  for i in $(seq 1 120); do [ "$(rev r2.json)" = 8 ] && break; sleep 0.5; done; sleep 4
+  env KEXE_ALLOW=7,23,37,38,45,46,47 KEXE_CAP_RESOURCES_45=127.0.0.1:7821,127.0.0.1:7822,127.0.0.1:7823 \
     /gate/node.elf proposer full 101 k16 "$VK" 7821 7822 7823 2>&1 | grep -v '^{:status' | sed 's/^/  k16 proposes: /' | cut -c1-90
   wait
   for r in r1 r2 r3 r4; do echo "  $r holds revision $(rev $r.json)$([ -f /gate/$r.json.conflict ] && echo ", conflict recorded")"; sed "s/^/    $r log: /" /gate/$r.log; done
@@ -278,10 +290,8 @@ The receipt is [evidence/topology-replica-peers-20261023.json](evidence/topology
 
 ## What this does not show
 
-- **An atomic write.** The file is written in place, with no temporary
-  file, rename or fsync, because wire 35 has none (JUN-359).
 - **A poll interval measured by a clock.** It is counted in 100 ms slices,
-  and a served request counts as one, because there is no clock wire
-  (JUN-360).
+  and a served request counts as one. Wire 7 now has a clock; the replica
+  does not use it yet.
 - **Separate hosts and x86_64.** The containers have their own network
   namespaces and addresses, but share one machine.

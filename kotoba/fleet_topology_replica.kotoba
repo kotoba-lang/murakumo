@@ -34,10 +34,10 @@
 ;; runs in arena-scope; only an adopted document stays allocated.
 ;;
 ;; The dial grant (KEXE_CAP_RESOURCES_45) must name the seeds and the payload's
-;; addresses. Not as start!: the file is written in place (wire 35 has no
-;; temporary file, fsync or rename), so a reader can see it half written and
-;; must verify what it reads, as the voters do; the poll interval is counted
-;; in slices, not by a clock.
+;; addresses. The file is replaced durably (a temporary, fsync, rename, fsync
+;; of the directory: amu wire 35, JUN-359), so a reader never sees it half
+;; written; the voters still verify what they read. Not as start!: the poll
+;; interval is counted in slices, not by a clock.
 ;;
 ;; Composition order: sha2.core, ed25519.selfhost, jcs.reader, tsukasa
 ;; ledger_core and node_state, fleet_node_enrollment, fleet_intent_core,
@@ -57,7 +57,18 @@
 (defn- tr-exists? [path :string] :bool (= (typed-cap-call 35 :string :string (string-concat path "EXISTS_SEP")) "1"))
 (defn- tr-load [path :string] :vector-i64
   (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 (tr-bytes path)))))
-(defn- tr-store [path :string text :string] :i64 (let [x (typed-cap-call 35 :string :string (str path "WRITE_SEP" text))] 0))
+;; replace the file durably (amu wire 35, JUN-359): the text to <path>.tmp,
+;; fsync it, rename it over <path>, fsync the directory; 1 when every step
+;; answered 1, else 0. Readers never see the file half written.
+(defn- tr-store [path :string text :string] :i64
+  (let [tmp (string-concat path ".tmp")
+        b (tr-bytes path) k (loop [i (- (vector-count b) 1)] (cond (< i 0) -1 (= (vector-at b i) 47) i :else (recur (- i 1))))
+        dir (if (< k 1) "/" (string-substring path 0 k))
+        w (typed-cap-call 35 :string :string (str tmp "WRITE_SEP" text))
+        f (typed-cap-call 35 :string :string (string-concat tmp "FSYNC_SEP"))
+        r (if (= f "1") (typed-cap-call 35 :string :string (str tmp "RENAME_SEP" path)) "0")
+        d (if (= r "1") (typed-cap-call 35 :string :string (string-concat dir "FSYNC_SEP")) "0")]
+    (if (= d "1") 1 0)))
 
 (defn- tr-int [s :string] :i64
   (let [b (tr-bytes s)]
@@ -212,10 +223,10 @@
       (let [peer (tr-part peers k) d (tr-fetch peer token)]
         (if (= (vector-count d) 0) (recur (+ k 1) cur adopted)
           (let [j (tr-judge d cur trust threshold peer)]
-            (cond (= j 0)
-                  (let [w (tr-store file (string-from-utf8 (bytes-from-vector-i64 d)))
-                        x (tr-say (str "replica topology " (topology-revision d) " from " peer))]
+            (cond (and (= j 0) (= (tr-store file (string-from-utf8 (bytes-from-vector-i64 d))) 1))
+                  (let [x (tr-say (str "replica topology " (topology-revision d) " from " peer))]
                     (recur (+ k 1) d 1))
+                  (= j 0) (let [x (tr-say (str "replica kept store-failed from " peer))] (recur (+ k 1) cur adopted))
                   (= j 1)
                   (let [w (tr-store (string-concat file ".conflict") (str "{\"revision\":" (topology-revision d) "}"))
                         x (tr-say (str "replica conflict " (topology-revision d) " from " peer))]
