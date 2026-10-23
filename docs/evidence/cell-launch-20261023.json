@@ -1,0 +1,115 @@
+{
+  "schema": "murakumo.cell-launch.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-288"
+  ],
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": [
+    {
+      "name": "sha2",
+      "repository": "kotoba-lang/org-nist-sha2",
+      "commit": "ea83e70a6a8efb8fb12dd5f0031fcda35a9ec77b",
+      "path": "kotoba/sha2/core.kotoba",
+      "sha256": "2c59ef55bc2b527c1aac723c0fee896eba75ee82fecd212a2858782beadc6888"
+    },
+    {
+      "name": "jcs-reader",
+      "repository": "kotoba-lang/org-ietf-jcs",
+      "commit": "6dfee43e80c273eb7d473c0a01e2779662a4a7c3",
+      "path": "kotoba/jcs/reader.kotoba",
+      "sha256": "31d2ee046d924a82f0ce18b5ee56b3da49fe4cde002e906c347407f05b02650b"
+    },
+    {
+      "name": "oci",
+      "repository": "kotoba-lang/org-oci-distribution",
+      "commit": "90463924db65eea4d9021dc6623105472282b5a9",
+      "path": "kotoba/oci/itonami_artifact.kotoba",
+      "sha256": "db212e3cdaf7c1d51d7dbf44f8d1ed7a4e36773e6b77b5dab979d759012233bd"
+    },
+    {
+      "name": "grant",
+      "repository": "kotoba-lang/grant",
+      "commit": "fa7e9b567286cd38cc4b229d8c980bfe676d9cce",
+      "path": "kotoba/grant/runtime_class.kotoba",
+      "sha256": "250ff617e1745abe562568db11c4aadfe74d1acf4619eb125a62c23b47245cb8"
+    },
+    {
+      "name": "ledger",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/ledger_core.kotoba",
+      "sha256": "e520534370dec3d3e6d4f5a2252f353485f3979457b3ec3162019d84d7d5e2d5"
+    },
+    {
+      "name": "state",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/node_state.kotoba",
+      "sha256": "2d478d602aa313fd2cd20ad8bc18b24b3013897b565799967a67b3156970e4c4"
+    },
+    {
+      "name": "launch",
+      "path": "kotoba/fleet_cell_launch.kotoba",
+      "sha256": "d3910f962e1dd61ff7dfa25f3c4ccfcc7fd0680ae6c918d4a288bd340fafd137"
+    }
+  ],
+  "target": "aarch64-linux",
+  "format": "loaderless-static",
+  "groups": {
+    "oci": 1,
+    "grant": 2,
+    "ledger": 4,
+    "nodeState": 8,
+    "launch": 16
+  },
+  "expectedResult": 31,
+  "results": {
+    "positive": 31,
+    "noDigestCheck": 15,
+    "noStrictJson": 15,
+    "noGrantCheck": 15
+  },
+  "vectors": "five OCI image index documents and their SHA-256 digests from Python hashlib; the index CID from the multibase rule in Python",
+  "budget": {
+    "wallSeconds": 0.06,
+    "maxRssKiB": 716,
+    "measuredWith": "busybox time -v"
+  },
+  "execution": {
+    "network": "none",
+    "shell": "docker.io/library/python:3.12-alpine (arm64)",
+    "runtime": "native arm64 Linux 6.15.10 on local Podman applehv VM",
+    "compilerAndGuest": "native ELF; no hosted compiler, C compiler or C loader invoked",
+    "reproduced": "docs/cell-launch.md commands run as written in a fresh directory"
+  },
+  "limitations": [
+    "no container started; no execution receipt",
+    "the index is given, not fetched from a registry",
+    "manifests and layers listed by the index are not checked",
+    "aarch64-linux only"
+  ],
+  "artifacts": {
+    "gate.kotoba": {
+      "bytes": 60667,
+      "sha256": "21695c2609871d6ba8e7625ce83d0fa10447f9715950e5abed5691356c1d40d0"
+    },
+    "gate.elf": {
+      "bytes": 348672,
+      "sha256": "14da0f32fb5098914ce74959a178449b78e2406c5a8ac3b73d43574b636c9cf7"
+    },
+    "no-digest.kotoba": {
+      "bytes": 60606,
+      "sha256": "a4961035f6a3cceb4547d2be12dc12740a0c4347d0c12a6b8649061b5d0c3d18"
+    },
+    "no-strict.kotoba": {
+      "bytes": 60647,
+      "sha256": "b95bed5564e63fc3b5707bc1659dd27e531b736cf79e72bcf161d9e63e8e0f71"
+    },
+    "no-grant.kotoba": {
+      "bytes": 60649,
+      "sha256": "fc95ce89541addecf6f1a4e664f5c0399baa4b3b8d418c47187f67d2ee50778b"
+    }
+  }
+}
