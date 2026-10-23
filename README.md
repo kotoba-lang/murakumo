@@ -495,6 +495,20 @@ The L1 operator signature, peer transport, persistence and two-node
 convergence are not part of this gate. Reproduction, wire forms and hashes:
 [node enrollment](docs/node-enrollment.md).
 
+`kotoba/fleet_node_peer.kotoba` runs that check between two nodes. Each node
+is its own static image:
+- it listens on its own port;
+- it signs its declaration and heartbeat;
+- it sends them to the other node over the runtime's TCP wires and reads the
+  other's;
+- it derives both nodes' states with `signed-step`.
+
+On loopback, two processes print the same states for an honest pair, for a
+stale heartbeat (`1`) and for a node that signs with another key (`-1`, by
+both). A node that skips the declaration check diverges from the liar's own
+view, which is the control. Reproduction and receipt:
+[node peer convergence](docs/node-peer-convergence.md).
+
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
 `qwen3.8-flash-next-ud-iq3-xxs` is a single-node, lossless Qwen4Exp route for
