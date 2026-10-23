@@ -570,7 +570,8 @@ The fleet token receipt is [evidence/lease-token-20261023.json](evidence/lease-t
 ## What this does not show
 
 - Separate hosts.
-- The topology replica that writes the file. Here the test replaces it. A
+- The topology replica in this run. Here the test replaces the file; the
+  replica that writes it is [topology replica](topology-replica.md). A
   request that arrives within 500 ms of a change is judged under the
   topology held. A request that arrives while a voter verifies waits, and
   its proposer may count that voter as down (fail closed).

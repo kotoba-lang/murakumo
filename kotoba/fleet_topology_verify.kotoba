@@ -37,7 +37,8 @@
 ;; ledger_core and node_state, fleet_node_enrollment, fleet_intent_core, this
 ;; file. docs/topology-verify.md has the gate.
 (ns murakumo.fleet-topology-verify
-  (:export [topology-verdict topology-revision topology-payload-problem test-topology test-payload]))
+  (:export [topology-verdict topology-revision topology-payload-problem topology-owners-kept?
+            test-topology test-payload]))
 
 (defn- tv-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
 
@@ -87,6 +88,29 @@
                        (and (= (json-kind b e) 1) (= (tv-text b e "key") id)
                             (= (statement-problem did text (tv-text b e "signature")) "enroll/ok")) true
                        :else (recur (+ k 1)))))))))
+
+;; the owner-id of node in a topology, "" when the node or its owner-id is
+;; absent
+(defn- tv-owner [doc :vector-i64 node :string] :string
+  (let [p (json-member doc (tv-root doc) "payload") ns (if (>= p 0) (json-member doc p "nodes") -1)]
+    (if (or (< ns 0) (not (= (json-kind doc ns) 2))) ""
+      (loop [k 0]
+        (let [e (json-element doc ns k)]
+          (cond (< e 0) ""
+                (and (= (json-kind doc e) 1) (= (tv-text doc e "node") node)) (tv-text doc e "owner-id")
+                :else (recur (+ k 1))))))))
+
+;; replicated_topology accept!: a node name stays bound to its owner-id, so a
+;; newer topology may not drop or replace an owner (retire it and use a new
+;; name instead)
+(defn topology-owners-kept? [old :vector-i64 new :vector-i64] :bool
+  (let [p (json-member old (tv-root old) "payload") ns (if (>= p 0) (json-member old p "nodes") -1)]
+    (if (or (< ns 0) (not (= (json-kind old ns) 2))) true
+      (loop [k 0]
+        (let [e (json-element old ns k)]
+          (cond (< e 0) true
+                (and (= (json-kind old e) 1) (not (= (tv-text old e "owner-id") (tv-owner new (tv-text old e "node"))))) false
+                :else (recur (+ k 1))))))))
 
 (defn topology-revision [doc :vector-i64] :i64
   (if (not (json-valid? doc)) -1

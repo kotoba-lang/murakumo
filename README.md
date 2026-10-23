@@ -562,6 +562,18 @@ Ten documents signed by OpenSSL, serialized out of order, and 51 payload
 cases pass or fail as they should. Reproduction:
 [topology verify](docs/topology-verify.md).
 
+`kotoba/fleet_topology_replica.kotoba` keeps that topology current between
+nodes, as `replicated_topology` `start!` does:
+- it serves `/topology` behind the fleet bearer token;
+- it polls peers with the token;
+- it adopts a verified, advancing document that keeps every owner-id, and
+  records a same-revision conflict.
+
+A replica chain carries revision 8 to the file the voters follow, and k16 is
+then chosen. Peers that serve a forged, older, owner-replacing or conflicting
+document are each kept out. Reproduction:
+[topology replica](docs/topology-replica.md).
+
 `kotoba/fleet_agent_step.kotoba` treats a bot's agent turn as a murakumo job
 (JUN-289).
 

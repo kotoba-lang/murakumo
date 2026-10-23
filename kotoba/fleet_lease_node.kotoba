@@ -163,29 +163,6 @@
                 (let [en (json-member topo e "enabled")] (and (>= en 0) (= (json-kind topo en) 5)))
                 :else (recur (+ k 1))))))))
 
-;; the owner-id of node in a topology, "" when the node or its owner-id is
-;; absent
-(defn- ln-owner [doc :vector-i64 node :string] :string
-  (let [p (json-member doc (ln-root doc) "payload") ns (if (>= p 0) (json-member doc p "nodes") -1)]
-    (if (or (< ns 0) (not (= (json-kind doc ns) 2))) ""
-      (loop [k 0]
-        (let [e (json-element doc ns k)]
-          (cond (< e 0) ""
-                (and (= (json-kind doc e) 1) (= (ln-text doc e "node") node)) (ln-text doc e "owner-id")
-                :else (recur (+ k 1))))))))
-
-;; replicated_topology accept!: a node name stays bound to its owner-id, so a
-;; newer topology may not drop or replace an owner (retire it and use a new
-;; name instead)
-(defn- ln-owners-kept? [old :vector-i64 new :vector-i64] :bool
-  (let [p (json-member old (ln-root old) "payload") ns (if (>= p 0) (json-member old p "nodes") -1)]
-    (if (or (< ns 0) (not (= (json-kind old ns) 2))) true
-      (loop [k 0]
-        (let [e (json-element old ns k)]
-          (cond (< e 0) true
-                (and (= (json-kind old e) 1) (not (= (ln-text old e "owner-id") (ln-owner new (ln-text old e "node"))))) false
-                :else (recur (+ k 1))))))))
-
 ;; no topology: any canonical value; else lease.cljk valid-value? against it
 (defn- ln-member-ok? [topo :vector-i64 now :i64 value :string] :bool
   (if (= (vector-count topo) 0) true
@@ -242,7 +219,7 @@
 (defn- ln-rotate [doc :vector-i64 topo :vector-i64 trust :string threshold :i64] :i64
   (let [v (topology-verdict doc trust threshold (topology-revision topo))
         why (cond (not (= v "topology/ok")) v
-                  (not (ln-owners-kept? topo doc)) "topology/owner-replaced"
+                  (not (topology-owners-kept? topo doc)) "topology/owner-replaced"
                   :else "")]
     (if (= why "") (let [x (ln-say (str "voter topology " (topology-revision doc)))] 0)
       (let [x (ln-say (string-concat "voter kept " why))] 1))))

@@ -1,0 +1,239 @@
+;; murakumo.fleet-topology-replica -- the operator-signed topology replicated
+;; between nodes over HTTP, as src/murakumo/infer/replicated_topology.cljk
+;; start! does for a resident, in a loaderless static image (Linear JUN-289;
+;; JUN-290 retires the nbb path).
+;;
+;;   replica-main  replica <file> <trust id=did,..> <threshold> <token file>
+;;                 <listen ip:port> <poll ms> <polls> <peer ip:port>...
+;;
+;; At start the replica verifies <file> (fleet_topology_verify
+;; topology-verdict against revision 0, which includes validate!) and does not
+;; start on any other verdict, nor without a fleet token of 32 bytes or more
+;; (fleet_lease_node lease-token). Then, in slices of 100 ms:
+;;   serve  a request "GET /topology" carrying "authorization: Bearer <token>"
+;;          is answered 200 with the document held. As resident.cljk orders
+;;          it, the token comes first: any request without it is answered 401
+;;          and logged ("replica refused unauthenticated"); any other request
+;;          404. HTTP/1.0, then the connection closes.
+;;   poll   after <poll ms> without a request, GET /topology from each peer
+;;          with the token (HTTP/1.0, at most 262144 body bytes, 3 s). As
+;;          accept! does: a document that verifies, advances the revision and
+;;          keeps every owner-id is adopted and written to <file>
+;;          ("replica topology <revision> from <peer>"); one that verifies at
+;;          the same revision with another payload is a conflict, recorded in
+;;          <file>.conflict ("replica conflict <revision> from <peer>"); one
+;;          that fails verification or replaces an owner is kept out
+;;          ("replica kept <reason> from <peer>"); an older or equal one is
+;;          ignored. The replica exits after <polls> polls.
+;; Requests are parsed as bytes, never decoded, and every request and poll
+;; runs in arena-scope; only an adopted document stays allocated.
+;;
+;; Not as start!: the peers are given, not drawn from the payload's urls, and
+;; there is no fanout or cursor. The file is written in place (wire 35 has no
+;; temporary file, fsync or rename), so a reader can see it half written and
+;; must verify what it reads, as the voters do. A replica that keeps serving
+;; does not poll meanwhile.
+;;
+;; Composition order: sha2.core, ed25519.selfhost, jcs.reader, tsukasa
+;; ledger_core and node_state, fleet_node_enrollment, fleet_intent_core,
+;; fleet_topology_verify, fleet_lease_core, fleet_lease_node, this file.
+;; docs/topology-replica.md has the gate.
+(ns murakumo.fleet-topology-replica
+  (:export [replica-main]))
+
+(defn- tr-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- tr-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
+(defn- tr-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- tr-listen [s :string] :string (typed-cap-call 43 :string :string s))
+(defn- tr-accept [s :string] :string (typed-cap-call 44 :string :string s))
+(defn- tr-dial [s :string] :string (typed-cap-call 45 :string :string s))
+(defn- tr-read [s :string] :string (typed-cap-call 46 :string :string s))
+(defn- tr-write [s :string] :string (typed-cap-call 47 :string :string s))
+(defn- tr-exists? [path :string] :bool (= (typed-cap-call 35 :string :string (string-concat path "EXISTS_SEP")) "1"))
+(defn- tr-load [path :string] :vector-i64
+  (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 (tr-bytes path)))))
+(defn- tr-store [path :string text :string] :i64 (let [x (typed-cap-call 35 :string :string (str path "WRITE_SEP" text))] 0))
+
+(defn- tr-int [s :string] :i64
+  (let [b (tr-bytes s)]
+    (if (or (= (vector-count b) 0) (> (vector-count b) 16)) -1
+      (loop [i 0 n 0] (if (= i (vector-count b)) n (let [c (vector-at b i)] (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -1)))))))
+
+;; ---------------------------------------------------------------------------
+;; Bytes on a connection
+
+(defn- tr-slice [b :vector-i64 s :i64 e :i64] :vector-i64
+  (loop [i s out (vector-alloc (- e s))] (if (= i e) out (recur (+ i 1) (vector-assoc! out (- i s) (vector-at b i))))))
+
+;; where "\r\n\r\n" ends in the first n bytes of b, or -1
+(defn- tr-head-end [b :vector-i64 n :i64] :i64
+  (loop [i 3]
+    (cond (>= i n) -1
+          (and (= (vector-at b (- i 3)) 13) (= (vector-at b (- i 2)) 10) (= (vector-at b (- i 1)) 13) (= (vector-at b i) 10)) (+ i 1)
+          :else (recur (+ i 1)))))
+
+;; the hex h (wire 46) decoded into buf from n on; the new length
+(defn- tr-put-hex [buf :vector-i64 n :i64 h :string] :i64
+  (let [b (tr-bytes h) m (quot (vector-count b) 2)]
+    (loop [i 0]
+      (if (= i m) (+ n m)
+        (let [a (vector-at b (* 2 i)) c (vector-at b (+ (* 2 i) 1))
+              x (+ (* 16 (if (< a 58) (- a 48) (- a 87))) (if (< c 58) (- c 48) (- c 87)))
+              z (vector-assoc! buf (+ n i) x)]
+          (recur (+ i 1)))))))
+
+;; read c until the end of the stream (or, with head, of the HTTP head), at
+;; most max bytes; no bytes when there would be more
+(defn- tr-recv [c :string max :i64 head :bool] :vector-i64
+  (let [buf (vector-alloc (+ max 16384))]
+    (loop [n 0 k 0]
+      (if (> n max) (vector-alloc 0)
+        (let [r (if (> k 80) "" (tr-read (str c " 16384 3000")))]
+          (if (or (= r "") (= r "timeout") (= r "closed") (= r "reset")) (tr-slice buf 0 n)
+            (let [m (tr-put-hex buf n r)]
+              (if (and head (>= (tr-head-end buf m) 0)) (tr-slice buf 0 m) (recur m (+ k 1))))))))))
+
+;; write bytes in pieces of 8192 (wire 47 takes at most 16 KiB of hex)
+(defn- tr-send [c :string b :vector-i64] :i64
+  (loop [s 0]
+    (if (>= s (vector-count b)) 0
+      (let [e (if (> (+ s 8192) (vector-count b)) (vector-count b) (+ s 8192))
+            w (tr-write (str c " " (hex (tr-slice b s e))))]
+        (recur e)))))
+
+(defn- tr-concat [a :vector-i64 b :vector-i64] :vector-i64
+  (let [n (vector-count a) out (vector-alloc (+ n (vector-count b)))
+        x (loop [i 0] (if (= i n) 0 (let [z (vector-assoc! out i (vector-at a i))] (recur (+ i 1)))))]
+    (loop [i 0] (if (= i (vector-count b)) out (let [z (vector-assoc! out (+ n i) (vector-at b i))] (recur (+ i 1)))))))
+
+;; ---------------------------------------------------------------------------
+;; Serving GET /topology
+
+;; does b hold, at [s, s + |t|), exactly the bytes of t (case-folded to lower
+;; case when fold)?
+(defn- tr-at? [b :vector-i64 s :i64 e :i64 t :string fold :bool] :bool
+  (let [tb (tr-bytes t)]
+    (and (= (- e s) (vector-count tb))
+         (loop [i 0]
+           (if (= i (vector-count tb)) true
+             (let [c (vector-at b (+ s i)) l (if (and fold (>= c 65) (<= c 90)) (+ c 32) c)]
+               (if (= l (vector-at tb i)) (recur (+ i 1)) false)))))))
+
+(defn- tr-line-end [b :vector-i64 i :i64 n :i64] :i64
+  (loop [j i] (cond (>= (+ j 1) n) -1 (and (= (vector-at b j) 13) (= (vector-at b (+ j 1)) 10)) j :else (recur (+ j 1)))))
+
+;; constant time: are [s, e) of b and the bytes of t equal?
+(defn- tr-same? [b :vector-i64 s :i64 e :i64 t :string] :bool
+  (let [tb (tr-bytes t)]
+    (and (= (- e s) (vector-count tb))
+         (= (loop [i 0 d 0] (if (= i (vector-count tb)) d (recur (+ i 1) (bit-or d (bit-xor (vector-at b (+ s i)) (vector-at tb i)))))) 0))))
+
+;; does the head carry "authorization: Bearer <token>" (the name in any case,
+;; the value with surrounding spaces and tabs dropped)?
+(defn- tr-authorized? [b :vector-i64 n :i64 token :string] :bool
+  (loop [i (+ (tr-line-end b 0 n) 2)]
+    (let [e (tr-line-end b i n)]
+      (if (or (< e 0) (= e i)) false
+        (let [colon (loop [j i] (cond (>= j e) -1 (= (vector-at b j) 58) j :else (recur (+ j 1))))]
+          (if (and (> colon i) (tr-at? b i colon "authorization" true))
+            (let [vs (loop [j (+ colon 1)] (if (and (< j e) (or (= (vector-at b j) 32) (= (vector-at b j) 9))) (recur (+ j 1)) j))
+                  ve (loop [j e] (if (and (> j vs) (or (= (vector-at b (- j 1)) 32) (= (vector-at b (- j 1)) 9))) (recur (- j 1)) j))]
+              (tr-same? b vs ve (string-concat "Bearer " token)))
+            (recur (+ e 2))))))))
+
+(defn- tr-reply [c :string status :string body :vector-i64] :i64
+  (let [head (str "HTTP/1.0 " status "\r\ncontent-type: application/json\r\ncache-control: no-store\r\ncontent-length: "
+                  (vector-count body) "\r\nconnection: close\r\n\r\n")
+        w (tr-send c (tr-concat (tr-bytes head) body))]
+    0))
+
+;; one request, or none within ms: 0 when one was answered, else 1
+(defn- tr-serve-one [l :string held :vector-i64 token :string ms :i64] :i64
+  (arena-scope
+    (let [c (tr-accept (str l " " ms))]
+      (if (< (tr-int c) 1) 1
+        (let [req (tr-recv c 8192 true) n (vector-count req) e0 (if (> n 0) (tr-line-end req 0 n) -1)
+              get? (and (>= e0 0) (or (tr-at? req 0 e0 "GET /topology HTTP/1.0" false) (tr-at? req 0 e0 "GET /topology HTTP/1.1" false)))
+              r (cond (or (< e0 0) (not (tr-authorized? req n token)))
+                      (let [x (tr-say "replica refused unauthenticated")] (tr-reply c "401 Unauthorized" (tr-bytes "{\"error\":\"unauthorized\"}")))
+                      get? (tr-reply c "200 OK" held)
+                      :else (tr-reply c "404 Not Found" (tr-bytes "{\"error\":\"not_found\"}")))
+              z (tr-write c)]
+          0)))))
+
+;; ---------------------------------------------------------------------------
+;; Polling peers
+
+;; the body of a 200 from GET /topology at peer, or no bytes
+(defn- tr-fetch [peer :string token :string] :vector-i64
+  (let [c (tr-dial (str peer " 3000"))]
+    (if (< (tr-int c) 1) (vector-alloc 0)
+      (let [w (tr-send c (tr-bytes (str "GET /topology HTTP/1.0\r\nhost: " peer "\r\nauthorization: Bearer " token "\r\nconnection: close\r\n\r\n")))
+            resp (tr-recv c (+ 262144 8192) false)
+            z (tr-write c)
+            n (vector-count resp) h (tr-head-end resp n) e0 (if (> n 0) (tr-line-end resp 0 n) -1)
+            ok (and (>= e0 12) (or (tr-at? resp 0 9 "HTTP/1.0 " false) (tr-at? resp 0 9 "HTTP/1.1 " false))
+                    (tr-at? resp 9 12 "200" false) (or (= e0 12) (= (vector-at resp 12) 32)))]
+        (if (or (< h 0) (not ok) (> (- n h) 262144)) (vector-alloc 0) (tr-slice resp h n))))))
+
+(defn- tr-payload-text [doc :vector-i64] :string
+  (let [root (loop [i 0] (if (and (< i (vector-count doc)) (let [c (vector-at doc i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i))
+        p (json-member doc root "payload")]
+    (if (< p 0) "" (string-from-utf8 (bytes-from-vector-i64 (json-canonical-bytes doc p))))))
+
+;; accept!: 0 adopt, 1 conflict, 2 ignore (an older or equal revision, or a
+;; document kept out, which is logged)
+(defn- tr-judge [d :vector-i64 held :vector-i64 trust :string threshold :i64 peer :string] :i64
+  (let [v (topology-verdict d trust threshold (topology-revision held))]
+    (cond (= v "topology/ok")
+          (if (topology-owners-kept? held d) 0 (let [x (tr-say (str "replica kept topology/owner-replaced from " peer))] 2))
+          (= v "intent/not-advancing")
+          (if (and (= (topology-revision d) (topology-revision held)) (not (= (tr-payload-text d) (tr-payload-text held)))) 1 2)
+          :else (let [x (tr-say (str "replica kept " v " from " peer))] 2))))
+
+(defn- tr-count [s :string] :i64
+  (if (= s "") 0 (let [b (tr-bytes s)] (loop [i 0 n 1] (if (= i (vector-count b)) n (recur (+ i 1) (if (= (vector-at b i) 44) (+ n 1) n)))))))
+(defn- tr-part [s :string k :i64] :string
+  (let [b (tr-bytes s)]
+    (loop [i 0 start 0 n 0]
+      (cond (= i (vector-count b)) (if (= n k) (string-substring s start i) "")
+            (= (vector-at b i) 44) (if (= n k) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ n 1)))
+            :else (recur (+ i 1) start n)))))
+
+;; one poll of every peer: 1 when a document was adopted (the file holds it)
+(defn- tr-poll [file :string held :vector-i64 trust :string threshold :i64 token :string peers :string] :i64
+  (loop [k 0 cur held adopted 0]
+    (if (= k (tr-count peers)) adopted
+      (let [peer (tr-part peers k) d (tr-fetch peer token)]
+        (if (= (vector-count d) 0) (recur (+ k 1) cur adopted)
+          (let [j (tr-judge d cur trust threshold peer)]
+            (cond (= j 0)
+                  (let [w (tr-store file (string-from-utf8 (bytes-from-vector-i64 d)))
+                        x (tr-say (str "replica topology " (topology-revision d) " from " peer))]
+                    (recur (+ k 1) d 1))
+                  (= j 1)
+                  (let [w (tr-store (string-concat file ".conflict") (str "{\"revision\":" (topology-revision d) "}"))
+                        x (tr-say (str "replica conflict " (topology-revision d) " from " peer))]
+                    (recur (+ k 1) cur adopted))
+                  :else (recur (+ k 1) cur adopted))))))))
+
+(defn- tr-run [l :string file :string trust :string threshold :i64 token :string poll :i64 polls :i64 peers :string held :vector-i64] :i64
+  (loop [k 0 left poll cur held]
+    (if (>= k polls) 0
+      (let [r (tr-serve-one l cur token (if (< left 100) left 100))]
+        (cond (= r 0) (recur k left cur)
+              (> left 100) (recur k (- left 100) cur)
+              (= (arena-scope (tr-poll file cur trust threshold token peers)) 1) (recur (+ k 1) poll (tr-load file))
+              :else (recur (+ k 1) poll cur))))))
+
+;; the peers from argument 8 on, joined by ","
+(defn- tr-arg-peers [] :string
+  (loop [k 8 out ""] (if (= (tr-arg k) "") out (recur (+ k 1) (if (= out "") (tr-arg k) (str out "," (tr-arg k)))))))
+
+(defn replica-main [] :i64
+  (let [file (tr-arg 1) trust (tr-arg 2) threshold (tr-int (tr-arg 3)) token (lease-token (tr-arg 4))
+        held (if (tr-exists? file) (tr-load file) (vector-alloc 0))
+        v (topology-verdict held trust threshold 0)]
+    (cond (= token "") (let [x (tr-say "replica token/missing-or-short")] 2)
+          (not (= v "topology/ok")) (let [x (tr-say (string-concat "replica " v))] 2)
+          :else (tr-run (tr-listen (tr-arg 5)) file trust threshold token (tr-int (tr-arg 6)) (tr-int (tr-arg 7)) (tr-arg-peers) held))))

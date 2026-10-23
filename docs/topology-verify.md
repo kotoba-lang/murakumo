@@ -165,8 +165,8 @@ reports 127.
 
 ## What this does not show
 
-- Fetching the document from peers.
-- Persisting the held revision.
+- Fetching the document from peers and persisting it. The replica does
+  that ([topology replica](topology-replica.md)).
 - The itonami node-admission fields that ADR-2610222140 proposes for L1
   (admitted declaration digest, cordon, retire). They are not in the payload
   schema yet.
