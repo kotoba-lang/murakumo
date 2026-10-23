@@ -1,0 +1,145 @@
+{
+  "schema": "murakumo.topology-replica.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-289",
+    "JUN-290"
+  ],
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": {
+    "kotoba/fleet_topology_replica.kotoba": "288cd9cb3a8820fc584423fa3ce6f555a2fd5ddfa18611c5942d23cd1c42ce58",
+    "kotoba/fleet_topology_verify.kotoba": "4cc732511aad715b57b23ddc1d1b9f3f11da697f74de310ecc7d728970272419",
+    "kotoba/fleet_lease_node.kotoba": "8246737ffca3b008b78336b528dba468aa5e1b6d5c263d10b344ac0cf2e8d852",
+    "docs/evidence/topology-replica-peer-20261023.py": "1d0c085b00de79ca30396cec7cd30046a28abda4c46d481d25fbd9581eaea47e",
+    "docs/evidence/topology-replica-docs-20261023.py": "43e398150c0293e6e0b307f403657db79e03bf0553aadec9abe43b7f0f5db907"
+  },
+  "images": {
+    "node": {
+      "bytes": 619008,
+      "sha256": "b326f934ed1013c1fb0c3913f6c868262d0547d24efdf6265d1eb2c222349964"
+    },
+    "unchecked": {
+      "bytes": 619008,
+      "sha256": "b8dcfb95845e8d8fbf0e145af8a17c071f6881a7442477ffdf9181aec0f27d41"
+    },
+    "open": {
+      "bytes": 619008,
+      "sha256": "05b8c7ebc03b599c11b76c78de58a8e06ab245fcde4619e4558224ff10b3a0ac"
+    }
+  },
+  "controls": {
+    "unchecked": "sed sets the replica's verdict on a fetched document to topology/ok",
+    "open": "sed drops the bearer check when serving"
+  },
+  "replica": [
+    "== replicas: node",
+    "  k16 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"",
+    "  r1 holds revision 8",
+    "    r1 log: replica refused unauthenticated",
+    "    r1 log: replica refused unauthenticated",
+    "  r2 holds revision 8",
+    "    r2 log: replica topology 8 from 127.0.0.1:7811",
+    "  r3 holds revision 7, conflict recorded",
+    "    r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831",
+    "    r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833",
+    "    r3 log: replica conflict 7 from 127.0.0.1:7834",
+    "    r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831",
+    "    r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833",
+    "    r3 log: replica conflict 7 from 127.0.0.1:7834",
+    "  r4 holds revision 7",
+    "    voter 1 log: voter topology 8",
+    "== replicas: unchecked",
+    "  k16 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"",
+    "  r1 holds revision 8",
+    "    r1 log: replica refused unauthenticated",
+    "    r1 log: replica refused unauthenticated",
+    "  r2 holds revision 8",
+    "    r2 log: replica topology 8 from 127.0.0.1:7811",
+    "  r3 holds revision 7",
+    "    r3 log: replica topology 9 from 127.0.0.1:7831",
+    "    r3 log: replica topology 6 from 127.0.0.1:7832",
+    "    r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833",
+    "    r3 log: replica topology 7 from 127.0.0.1:7834",
+    "    r3 log: replica topology 9 from 127.0.0.1:7831",
+    "    r3 log: replica topology 6 from 127.0.0.1:7832",
+    "    r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833",
+    "    r3 log: replica topology 7 from 127.0.0.1:7834",
+    "  r4 holds revision 7",
+    "    voter 1 log: voter topology 8",
+    "== replicas: open",
+    "  k16 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"",
+    "  r1 holds revision 8",
+    "  r2 holds revision 8",
+    "    r2 log: replica topology 8 from 127.0.0.1:7811",
+    "  r3 holds revision 7, conflict recorded",
+    "    r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831",
+    "    r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833",
+    "    r3 log: replica conflict 7 from 127.0.0.1:7834",
+    "    r3 log: replica kept topology/needs-signatures from 127.0.0.1:7831",
+    "    r3 log: replica kept topology/owner-replaced from 127.0.0.1:7833",
+    "    r3 log: replica conflict 7 from 127.0.0.1:7834",
+    "  r4 holds revision 8",
+    "    r4 log: replica topology 8 from 127.0.0.1:7811",
+    "    voter 1 log: voter topology 8",
+    "a replica with a short token: replica token/missing-or-short"
+  ],
+  "reruns": {
+    "topology-verify": [
+      "gate {:status :ok :result 15 :f",
+      "no-key-id {:status :ok :result 11 :f",
+      "no-threshold {:status :ok :result 11 :f",
+      "no-validate {:status :ok :result 11 :f",
+      "loose-endpoint {:status :ok :result 3 :fu"
+    ],
+    "lease-node": [
+      "k16 proposes, topology says disabled: no-majority accept 0",
+      "b70 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"until\":1792500900000}",
+      "b70 proposes until too far ahead: no-majority accept 0",
+      "voters given a forged topology: no-majority prepare 0",
+      "forged voter says: voter topology/needs-signatures",
+      "control: open voters, k16 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"",
+      "race node: both hold the same lease 20/20, a proposer without a lease 0/20, two leases 0/20",
+      "race once: both hold the same lease 0/20, a proposer without a lease 20/20, two leases 0/20",
+      "  b70, after revision 8: no-majority accept 0",
+      "  k16, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"u",
+      "  b70, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"u",
+      "  k16, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"u",
+      "  b70, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"u",
+      "  k16, after revision 8: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"u",
+      "  member round (902,b70), the fleet token: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"r",
+      "  member round (903,b70), impostor voters: no-majority prepare 0",
+      "  member round (902,b70), the fleet token: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"r",
+      "  member round (903,b70), impostor voters: no-majority prepare 0",
+      "  member round (902,b70), the fleet token: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"r",
+      "  member round (903,b70), impostor voters: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"r"
+    ],
+    "job-node": [
+      "honest b70: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "honest k16: lease b70 held-by b70",
+      "honest verify b70's receipt: holder b70 verdict job/confirmed",
+      "rogue b70: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "rogue k16: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "rogue verify b70's receipt: holder b70 verdict job/confirmed",
+      "rogue verify k16's receipt: holder b70 verdict job/not-the-holder",
+      "job verifier, b70's receipt: holder b70 verdict job/confirmed",
+      "job verifier, k16's receipt: holder b70 verdict job/not-the-holder",
+      "nofence verifier, b70's receipt: holder b70 verdict job/confirmed",
+      "nofence verifier, k16's receipt: holder b70 verdict job/confirmed",
+      "canonical: True | kind itonami.agent-step-receipt/1 | epoch 1 | node b70",
+      "job id: True",
+      "class k16: ineligible grant/runtime-class-not-granted",
+      "class b70: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "class verify b70's output: holder b70 verdict job/confirmed",
+      "late k16: lease k16 verdict grant/runtime-class-not-granted refused grant/runtime-class-not-granted",
+      "late b70: lease k16 held-by k16",
+      "late verify b70's output: holder k16 verdict job/bad-signature"
+    ]
+  },
+  "notes": [
+    "The test peers are Python http.server processes that answer anyone; they stand in for hostile or outdated nodes and are not part of a node path.",
+    "The first run let the test peers live 9 s, and the second poll of r3 reached two of them after they had exited; they now live 20 s and every poll sees all four.",
+    "The tokens are SHA-256 hex of fixed test strings, for this gate only; their values are not recorded.",
+    "Every block was run as documented in fresh directories; no Node, NBB, JVM, hosted compiler, C compiler or C loader runs."
+  ]
+}
