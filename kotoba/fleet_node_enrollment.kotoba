@@ -1,0 +1,382 @@
+;; murakumo.fleet-node-enrollment -- the signed L2 statements of an itonami
+;; node, verified before tsukasa derives its ledger state (Linear JUN-287;
+;; com-junkawasaki/root ADR-2610222140 §1). tsukasa's node-target takes L2's
+;; facts as plain values and leaves enrollment and heartbeat to murakumo
+;; (tsukasa README, "The boundary"); here those facts come from statements
+;; the node signed with its own did:key, so a caller cannot hand node-target
+;; a made-up declaration, digest, freshness or drain mark.
+;;
+;;   did:key     strict: "did:key:z", base58btc of 0xed 0x01 and a 32-byte
+;;               Ed25519 public key, canonical (no leading "1"), exactly 34
+;;               bytes. did-key-public / did-key-problem / did-from-public
+;;   declaration the node's own declaration, signed. Its text is the JSON
+;;               murakumo signs elsewhere (src/murakumo/infer/
+;;               replicated_topology.cljk `encoded`: keys sorted, no spaces),
+;;               with a kind:
+;;               {"availability":..,"did":..,"failure-domain":..,
+;;                "kind":"tsukasa.declaration/1","node":..,"runtime-classes":N}
+;;               Its digest (SHA-256 hex) is what the operator admits in L1
+;;               and what the heartbeat names.
+;;   heartbeat   the node's signed liveness and its own drain mark:
+;;               {"at":ms,"declaration":hex,"did":..,"drain":bool,
+;;                "kind":"tsukasa.heartbeat/1","node":..}
+;;   signed-target  tsukasa's node-target from the signed declaration, the
+;;               signed heartbeat and the L1 facts (admitted digest, cordon,
+;;               retire).
+;;
+;; declaration-problem is node-target's decl-problem: "enroll/ok", one of
+;; ledger_core's first-problem reasons (checked first, same precedence), or
+;; an enroll/ reason. The other checks answer "enroll/ok" or an enroll/
+;; reason. Signatures are base64url without padding (86 characters,
+;; canonical), the form murakumo's observation documents carry. String fields
+;; are printable ASCII without '"' or '\', at most 128 bytes, so the JSON
+;; text needs no escapes and is the same bytes JSON.stringify gives.
+;;
+;; A node's did:key is the host's identity. Admitting or placing a node does
+;; not admit a Cell (mon CID x agent key, network-awai-apex ADR 0011): these
+;; statements carry their own kinds and are never read as Cell statements.
+;; The L1 inputs stay plain here; verifying the operator's signature over L1
+;; is a separate step.
+;;
+;; Composition order (canonical sources, no copies): org-nist-sha2 sha2.core,
+;; org-ietf-ed25519 ed25519.selfhost, tsukasa ledger_core and node_state, this
+;; file. docs/node-enrollment.md has the gate.
+(ns murakumo.fleet-node-enrollment
+  (:export [did-key-public did-key-problem did-from-public field-problem
+            declaration-text declaration-digest declaration-problem sign-declaration
+            heartbeat-text heartbeat-problem sign-heartbeat signed-target node-did
+            test-did test-signature-encoding test-declaration test-heartbeat
+            test-signed-target test-signed-path]))
+
+;; ---------------------------------------------------------------------------
+;; Bytes and alphabets
+
+(defn- en-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn- en-b58 [] :string "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+
+(defn- en-b64 [] :string "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+
+(defn- en-char [alphabet :string i :i64] :string (string-substring alphabet i (+ i 1)))
+
+;; a byte's base58btc digit, -1 outside the alphabet (0 O I l are not in it)
+(defn- en-b58-digit [c :i64] :i64
+  (cond (and (>= c 49) (<= c 57)) (- c 49)
+        (and (>= c 65) (<= c 72)) (- c 56)
+        (and (>= c 74) (<= c 78)) (- c 57)
+        (and (>= c 80) (<= c 90)) (- c 58)
+        (and (>= c 97) (<= c 107)) (- c 64)
+        (and (>= c 109) (<= c 122)) (- c 65)
+        :else -1))
+
+(defn- en-b64-digit [c :i64] :i64
+  (cond (and (>= c 65) (<= c 90)) (- c 65)
+        (and (>= c 97) (<= c 122)) (- c 71)
+        (and (>= c 48) (<= c 57)) (+ c 4)
+        (= c 45) 62
+        (= c 95) 63
+        :else -1))
+
+(defn- en-starts? [b :vector-i64 p :string] :bool
+  (let [q (en-bytes p)]
+    (if (< (vector-count b) (vector-count q)) false
+      (loop [i 0] (if (= i (vector-count q)) true (if (= (vector-at b i) (vector-at q i)) (recur (+ i 1)) false))))))
+
+(defn- en-slice [v :vector-i64 a :i64 n :i64] :vector-i64
+  (loop [i 0 out (vector-alloc n)] (if (= i n) out (recur (+ i 1) (vector-assoc! out i (vector-at v (+ a i)))))))
+
+;; ---------------------------------------------------------------------------
+;; did:key
+
+;; 0 ok, 1 not did:key:z, 2 a leading "1" (not canonical), 3 outside the
+;; alphabet, 4 not an Ed25519 key (too long, too short or another codec);
+;; then the 34 decoded bytes
+(defn- en-did-raw [did :string] :vector-i64
+  (let [b (en-bytes did) out (vector-alloc 35)]
+    (cond (not (en-starts? b "did:key:z")) (vector-assoc! out 0 1)
+          (and (> (vector-count b) 9) (= (vector-at b 9) 49)) (vector-assoc! out 0 2)
+          :else
+          (loop [i 9 acc out]
+            (if (= i (vector-count b))
+              (if (and (= (vector-at acc 1) 237) (= (vector-at acc 2) 1)) acc (vector-assoc! acc 0 4))
+              (let [d (en-b58-digit (vector-at b i))]
+                (if (< d 0) (vector-assoc! acc 0 3)
+                  ;; acc[1..34] := acc[1..34] * 58 + d, big-endian
+                  (let [carry (loop [j 34 c d]
+                                (if (= j 0) c
+                                  (let [x (+ (* (vector-at acc j) 58) c)
+                                        z (vector-assoc! acc j (bit-and x 255))]
+                                    (recur (- j 1) (u64-shift-right x 8)))))]
+                    (if (> carry 0) (vector-assoc! acc 0 4) (recur (+ i 1) acc))))))))))
+
+(defn did-key-problem [did :string] :string
+  (case (vector-at (en-did-raw did) 0)
+    0 "enroll/ok"
+    1 "enroll/not-did-key"
+    2 "enroll/did-key-not-canonical"
+    3 "enroll/did-key-bad-base58"
+    "enroll/did-key-not-ed25519"))
+
+;; the 32-byte public key, or no bytes when the did is refused
+(defn did-key-public [did :string] :vector-i64
+  (let [raw (en-did-raw did)]
+    (if (= (vector-at raw 0) 0) (en-slice raw 3 32) (vector-alloc 0))))
+
+;; divide the big-endian number in b by 58 in place; the remainder
+(defn- en-div58 [b :vector-i64] :i64
+  (loop [j 0 r 0]
+    (if (= j (vector-count b)) r
+      (let [x (+ (* r 256) (vector-at b j)) z (vector-assoc! b j (quot x 58))]
+        (recur (+ j 1) (rem x 58))))))
+
+(defn- en-zero? [b :vector-i64] :bool
+  (loop [j 0] (if (= j (vector-count b)) true (if (= (vector-at b j) 0) (recur (+ j 1)) false))))
+
+(defn- en-b58-encode [raw :vector-i64] :string
+  (let [b (en-slice raw 0 (vector-count raw))
+        ones (loop [j 0 s ""] (if (and (< j (vector-count raw)) (= (vector-at raw j) 0)) (recur (+ j 1) (string-concat s "1")) s))]
+    (loop [out ""]
+      (if (en-zero? b) (string-concat ones out)
+        (let [r (en-div58 b)] (recur (string-concat (en-char (en-b58) r) out)))))))
+
+(defn did-from-public [pk :vector-i64] :string
+  (let [raw (vector-alloc 34) a (vector-assoc! raw 0 237) c (vector-assoc! raw 1 1)
+        filled (loop [i 0 out raw] (if (= i 32) out (recur (+ i 1) (vector-assoc! out (+ i 2) (vector-at pk i)))))]
+    (string-concat "did:key:z" (en-b58-encode filled))))
+
+(defn node-did [seed :vector-i64] :string (did-from-public (public-from-seed seed)))
+
+;; ---------------------------------------------------------------------------
+;; Signatures: base64url, no padding, 64 bytes = 86 characters, and the last
+;; character's four unused bits are zero
+
+(defn- en-sig-raw [sig :string] :vector-i64
+  (let [b (en-bytes sig) out (vector-alloc 65)]
+    (if (not (= (vector-count b) 86)) (vector-assoc! out 0 1)
+      (loop [i 0 acc 0 bits 0 k 1 o out]
+        (if (= i 86)
+          (if (= acc 0) o (vector-assoc! o 0 1))
+          (let [d (en-b64-digit (vector-at b i))]
+            (if (< d 0) (vector-assoc! o 0 1)
+              (let [a2 (+ (* acc 64) d) b2 (+ bits 6)]
+                (if (>= b2 8)
+                  (let [bv (bit-and (u64-shift-right a2 (- b2 8)) 255)
+                        left (bit-and a2 (- (i64-shift-left 1 (- b2 8)) 1))]
+                    (recur (+ i 1) left (- b2 8) (+ k 1) (vector-assoc! o k bv)))
+                  (recur (+ i 1) a2 b2 k o))))))))))
+
+(defn- en-sig-ok? [sig :string] :bool (= (vector-at (en-sig-raw sig) 0) 0))
+
+(defn- en-sig-bytes [sig :string] :vector-i64 (en-slice (en-sig-raw sig) 1 64))
+
+(defn- en-b64-encode [v :vector-i64] :string
+  (loop [i 0 acc 0 bits 0 out ""]
+    (if (= i (vector-count v))
+      (if (= bits 0) out (string-concat out (en-char (en-b64) (i64-shift-left acc (- 6 bits)))))
+      (let [a2 (+ (* acc 256) (vector-at v i)) b2 (+ bits 8)]
+        (if (>= b2 12)
+          (let [hi (u64-shift-right a2 (- b2 6)) lo (u64-shift-right (bit-and a2 (- (i64-shift-left 1 (- b2 6)) 1)) (- b2 12))]
+            (recur (+ i 1) (bit-and a2 (- (i64-shift-left 1 (- b2 12)) 1)) (- b2 12)
+                   (string-concat out (string-concat (en-char (en-b64) hi) (en-char (en-b64) lo)))))
+          (let [hi (u64-shift-right a2 (- b2 6))]
+            (recur (+ i 1) (bit-and a2 (- (i64-shift-left 1 (- b2 6)) 1)) (- b2 6) (string-concat out (en-char (en-b64) hi)))))))))
+
+;; ---------------------------------------------------------------------------
+;; Statements
+
+(defn field-problem [s :string] :string
+  (let [b (en-bytes s)]
+    (if (> (vector-count b) 128) "enroll/field-too-long"
+      (loop [i 0]
+        (if (= i (vector-count b)) "enroll/ok"
+          (let [c (vector-at b i)]
+            (if (and (>= c 33) (<= c 126) (not (= c 34)) (not (= c 92))) (recur (+ i 1)) "enroll/field-charset")))))))
+
+(defn declaration-text [node :string did :string fd :string av :string rc :i64] :string
+  (str "{\"availability\":\"" av "\",\"did\":\"" did "\",\"failure-domain\":\"" fd
+       "\",\"kind\":\"tsukasa.declaration/1\",\"node\":\"" node "\",\"runtime-classes\":" rc "}"))
+
+(defn declaration-digest [node :string did :string fd :string av :string rc :i64] :string
+  (sha256-hex (en-bytes (declaration-text node did fd av rc))))
+
+(defn- en-fields [node :string fd :string av :string] :string
+  (cond (not (= (field-problem node) "enroll/ok")) (field-problem node)
+        (not (= (field-problem fd) "enroll/ok")) (field-problem fd)
+        :else (field-problem av)))
+
+;; ledger_core's shape first (its pinned reasons and precedence), then the
+;; fields, the did:key, the signature's form and the signature itself
+(defn declaration-problem [node :string did :string fd :string av :string rc :i64 sig :string] :string
+  (let [shape (first-problem node did fd av rc)]
+    (cond (not (= shape "tsukasa/ok")) shape
+          (not (= (en-fields node fd av) "enroll/ok")) (en-fields node fd av)
+          (not (= (did-key-problem did) "enroll/ok")) (did-key-problem did)
+          (not (en-sig-ok? sig)) "enroll/signature-encoding"
+          (not (verify? (did-key-public did) (en-bytes (declaration-text node did fd av rc)) (en-sig-bytes sig)))
+          "enroll/bad-signature"
+          :else "tsukasa/ok")))
+
+(defn sign-declaration [seed :vector-i64 node :string fd :string av :string rc :i64] :string
+  (en-b64-encode (sign seed (en-bytes (declaration-text node (node-did seed) fd av rc)))))
+
+(defn heartbeat-text [node :string did :string decl :string at :i64 drain :bool] :string
+  (str "{\"at\":" at ",\"declaration\":\"" decl "\",\"did\":\"" did "\",\"drain\":" (if drain "true" "false")
+       ",\"kind\":\"tsukasa.heartbeat/1\",\"node\":\"" node "\"}"))
+
+;; decl: the digest of the declaration the caller holds; hb-decl: the one the
+;; heartbeat names. The signature is checked over what the heartbeat says,
+;; then it must name the current declaration and be fresh: no later than
+;; now + skew, no older than now - ttl (ms).
+(defn heartbeat-problem [node :string did :string decl :string hb-decl :string at :i64 drain :bool
+                         sig :string now :i64 ttl :i64 skew :i64] :string
+  (cond (or (< at 0) (> at 9007199254740991)) "enroll/heartbeat-bad-time"
+        (not (= (did-key-problem did) "enroll/ok")) (did-key-problem did)
+        (not (en-sig-ok? sig)) "enroll/signature-encoding"
+        (not (verify? (did-key-public did) (en-bytes (heartbeat-text node did hb-decl at drain)) (en-sig-bytes sig)))
+        "enroll/heartbeat-bad-signature"
+        (not (= hb-decl decl)) "enroll/heartbeat-other-declaration"
+        (> at (+ now skew)) "enroll/heartbeat-future"
+        (< at (- now ttl)) "enroll/heartbeat-stale"
+        :else "enroll/ok"))
+
+(defn sign-heartbeat [seed :vector-i64 node :string decl :string at :i64 drain :bool] :string
+  (en-b64-encode (sign seed (en-bytes (heartbeat-text node (node-did seed) decl at drain)))))
+
+;; node-target over verified inputs: the declaration's problem and digest
+;; come from the signed declaration; fresh and self-drain only from a valid
+;; heartbeat for that declaration (no valid heartbeat = not fresh, no drain
+;; mark). admitted, cordoned and retired are L1's.
+(defn signed-target [node :string did :string fd :string av :string rc :i64 decl-sig :string
+                     admitted :string retired :bool cordoned :bool
+                     hb-decl :string hb-at :i64 hb-drain :bool hb-sig :string
+                     now :i64 ttl :i64 skew :i64] :string
+  (let [problem (declaration-problem node did fd av rc decl-sig)
+        digest (declaration-digest node did fd av rc)
+        hb (if (= problem "tsukasa/ok")
+             (heartbeat-problem node did digest hb-decl hb-at hb-drain hb-sig now ttl skew)
+             "enroll/declaration-refused")
+        fresh (= hb "enroll/ok")]
+    (node-target problem admitted digest retired fresh cordoned (and fresh hb-drain))))
+
+;; ---------------------------------------------------------------------------
+;; test-* : zero-arity, true when every assertion holds. Vectors: RFC 8032
+;; test keys 1 and 2; texts, digests and signatures from OpenSSL 3.6 and
+;; Python hashlib, independent of this code (docs/evidence has the script).
+
+(defn- en-seed1 [] :vector-i64 (hex-bytes "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"))
+(defn- en-pk1 [] :vector-i64 (hex-bytes "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"))
+(defn- en-pk2 [] :vector-i64 (hex-bytes "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"))
+(defn- en-did1 [] :string "did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw")
+(defn- en-did2 [] :string "did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT")
+(defn- en-dA [] :string "9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29")
+(defn- en-dB [] :string "3e922744701722e346efc79c802c4523173ad0ccba7367b1ff579223a8b9d062")
+(defn- en-sigA [] :string "l20t-60bAY29aeH9yQQHsCT6-LbA_ynZ5Hbu89yi3rJuoQDK04MDwzVhwgrUClyFEb-CHV52T21pFhwhn0NGDQ")
+(defn- en-sigB [] :string "VV32IbdqggD7sS3dX38qTX--HwQvx99s-mDMVp30GwcWX5VHBsRm01B4URf9z-BGPCnsNq7tPZw_TC7W3wAtBg")
+(defn- en-sigA2 [] :string "7hXjGTke40LEPNBPSauwAShcAT01RhzLbb7324k4MdyB_7vWyCaQ5mPtkWlLvRPC4p8MWUXqthEv-ebCQNeBDg")
+(defn- en-hb1 [] :string "OcLMkqbCWUb8E8rBsLhZWo_o57gSsOnuPFuB3YGZHh8VmbN8csq7WYDgFWQbisz8V-yrDUux5Y7ze31QoyXBDg")
+(defn- en-hb2 [] :string "G7GRSWemf3eEMsxmsn_2PPwah3p5K9mP3y1-Z74BvF2mA9f17eWKLlPWBdAdx0XN4a4ao57V2il_gySb1JDSBQ")
+(defn- en-hb3 [] :string "vEtqMdDAAe5Rk-OMZldose2uWTLG6xXL2zCao2yEhhOWBxIfvZIr7bonWq7qGkEkhmnnD-4F_LNKaarRW083Dg")
+(defn- en-hbA2 [] :string "TzXtBnfxUEwK4HKHqctvMBiIC1uilPAd-DV_RgKiPLRYTsTo_YjLWAsfNAhtmIpk9wOWjALmxza2_8_U11mtDw")
+(defn- en-at [] :i64 1792500000000)
+
+(defn test-did [] :bool
+  (let [spec "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK"
+        tail (string-substring (en-did1) 9 (string-length (en-did1)))]
+    (and (= (did-from-public (en-pk1)) (en-did1))
+         (= (did-from-public (en-pk2)) (en-did2))
+         (bytes=? (did-key-public (en-did1)) (en-pk1))
+         (= (did-key-problem (en-did1)) "enroll/ok")
+         ;; the did:key specification's example round-trips
+         (= (did-key-problem spec) "enroll/ok")
+         (= (did-from-public (did-key-public spec)) spec)
+         (= (did-key-problem (string-concat "did:key:z1" tail)) "enroll/did-key-not-canonical")
+         (= (did-key-problem (string-concat "did:key:z0" tail)) "enroll/did-key-bad-base58")
+         (= (did-key-problem "did:key:z6MkéaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK") "enroll/did-key-bad-base58")
+         ;; an X25519 key (0xec 0x01) is not a signing key
+         (= (did-key-problem "did:key:z6LSrApwZptxFR4jy6U8Z8exYPwTqSXniWLqihApE1oK9WsK") "enroll/did-key-not-ed25519")
+         (= (did-key-problem (string-substring (en-did1) 0 (- (string-length (en-did1)) 1))) "enroll/did-key-not-ed25519")
+         (= (did-key-problem (string-concat (en-did1) "z")) "enroll/did-key-not-ed25519")
+         (= (did-key-problem "did:key:z") "enroll/did-key-not-ed25519")
+         (= (did-key-problem "did:web:example.com") "enroll/not-did-key")
+         (= (vector-count (did-key-public "did:web:example.com")) 0))))
+
+(defn test-signature-encoding [] :bool
+  (let [s (en-sigA)]
+    (and (en-sig-ok? s)
+         (= (en-b64-encode (en-sig-bytes s)) s)
+         (= (vector-count (en-sig-bytes s)) 64)
+         (not (en-sig-ok? (string-substring s 0 85)))
+         (not (en-sig-ok? (string-concat s "A")))
+         (not (en-sig-ok? (string-concat (string-substring s 0 85) "+")))
+         ;; "Q" ends in four zero bits; "R" does not, so it is not canonical
+         (not (en-sig-ok? (string-concat (string-substring s 0 85) "R"))))))
+
+(defn test-declaration [] :bool
+  (and (= (declaration-text "b70" (en-did1) "site-a" "always-on" 2)
+          "{\"availability\":\"always-on\",\"did\":\"did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw\",\"failure-domain\":\"site-a\",\"kind\":\"tsukasa.declaration/1\",\"node\":\"b70\",\"runtime-classes\":2}")
+       (= (declaration-digest "b70" (en-did1) "site-a" "always-on" 2) (en-dA))
+       (= (declaration-digest "b70" (en-did1) "site-a" "always-on" 3) (en-dB))
+       (= (declaration-problem "b70" (en-did1) "site-a" "always-on" 2 (en-sigA)) "tsukasa/ok")
+       ;; the node's side gives OpenSSL's bytes
+       (= (sign-declaration (en-seed1) "b70" "site-a" "always-on" 2) (en-sigA))
+       ;; another declaration, another key, another did
+       (= (declaration-problem "b70" (en-did1) "site-a" "always-on" 3 (en-sigA)) "enroll/bad-signature")
+       (= (declaration-problem "b70" (en-did1) "site-a" "always-on" 2 (en-sigA2)) "enroll/bad-signature")
+       (= (declaration-problem "b70" (en-did2) "site-a" "always-on" 2 (en-sigA)) "enroll/bad-signature")
+       ;; ledger_core's reasons come first
+       (= (declaration-problem "b70" (en-did1) "site-a" "always-on" 0 (en-sigA)) "tsukasa/missing-runtime-classes")
+       (= (declaration-problem "" (en-did1) "site-a" "always-on" 2 (en-sigA)) "tsukasa/missing-id")
+       (= (declaration-problem "b70" "did:web:x" "site-a" "always-on" 2 (en-sigA)) "tsukasa/bad-did")
+       (= (declaration-problem "b 70" (en-did1) "site-a" "always-on" 2 (en-sigA)) "enroll/field-charset")
+       (= (declaration-problem "b70" (en-did1) "site\"a" "always-on" 2 (en-sigA)) "enroll/field-charset")
+       (= (field-problem "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+          "enroll/field-too-long")
+       (= (declaration-problem "b70" "did:key:z6LSrApwZptxFR4jy6U8Z8exYPwTqSXniWLqihApE1oK9WsK" "site-a" "always-on" 2 (en-sigA))
+          "enroll/did-key-not-ed25519")
+       (= (declaration-problem "b70" (en-did1) "site-a" "always-on" 2 "short") "enroll/signature-encoding")))
+
+(defn test-heartbeat [] :bool
+  (let [at (en-at) now (+ (en-at) 1000)]
+    (and (= (heartbeat-text "b70" (en-did1) (en-dA) at false)
+            "{\"at\":1792500000000,\"declaration\":\"9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29\",\"did\":\"did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw\",\"drain\":false,\"kind\":\"tsukasa.heartbeat/1\",\"node\":\"b70\"}")
+         (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) at false (en-hb1) now 30000 5000) "enroll/ok")
+         ;; the drain mark is signed
+         (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) at true (en-hb1) now 30000 5000) "enroll/heartbeat-bad-signature")
+         (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) at true (en-hb2) now 30000 5000) "enroll/ok")
+         (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) at false (en-hbA2) now 30000 5000) "enroll/heartbeat-bad-signature")
+         (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dB) at false (en-hb3) now 30000 5000) "enroll/heartbeat-other-declaration")
+         (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) at false (en-hb1) (- at 10000) 30000 5000) "enroll/heartbeat-future")
+         (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) at false (en-hb1) (+ at 40000) 30000 5000) "enroll/heartbeat-stale")
+         (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) -1 false (en-hb1) now 30000 5000) "enroll/heartbeat-bad-time"))))
+
+;; signed-target with declaration A (rc 2) unless said otherwise
+(defn- en-target [rc :i64 decl-sig :string admitted :string retired :bool cordoned :bool
+                  hb-decl :string drain :bool hb-sig :string now :i64] :string
+  (signed-target "b70" (en-did1) "site-a" "always-on" rc decl-sig admitted retired cordoned
+                 hb-decl (en-at) drain hb-sig now 30000 5000))
+
+(defn test-signed-target [] :bool
+  (let [now (+ (en-at) 1000) late (+ (en-at) 40000)]
+    (and (= (en-target 2 (en-sigA) (en-dA) false false (en-dA) false (en-hb1) now) "node/active")
+         (= (en-target 2 (en-sigA) "" false false (en-dA) false (en-hb1) now) "node/proposed")
+         ;; the node now declares rc 3, signed, with a heartbeat for it
+         (= (en-target 3 (en-sigB) (en-dA) false false (en-dB) false (en-hb3) now) "node/declaration-changed")
+         (= (en-target 2 (en-sigA) (en-dA) false false (en-dA) false (en-hb1) late) "node/stale")
+         (= (en-target 2 (en-sigA) (en-dA) false false (en-dA) true (en-hb2) now) "node/self-drain")
+         ;; a drain mark nobody signed is not a drain mark, and the heartbeat is not fresh
+         (= (en-target 2 (en-sigA) (en-dA) false false (en-dA) true (en-hb1) now) "node/stale")
+         (= (en-target 2 (en-sigA2) (en-dA) false false (en-dA) false (en-hb1) now) "node/refused")
+         (= (en-target 2 (en-sigA) (en-dA) false true (en-dA) false (en-hb1) now) "node/cordoned")
+         (= (en-target 2 (en-sigA) (en-dA) true false (en-dA) false (en-hb1) now) "node/retired"))))
+
+;; a node's life from signed inputs, one legal step at a time
+(defn test-signed-path [] :bool
+  (let [now (+ (en-at) 1000) late (+ (en-at) 40000)
+        proposed (en-target 2 (en-sigA) "" false false (en-dA) false (en-hb1) now)
+        active (en-target 2 (en-sigA) (en-dA) false false (en-dA) false (en-hb1) now)
+        stale (en-target 2 (en-sigA) (en-dA) false false (en-dA) false (en-hb1) late)
+        retired (en-target 2 (en-sigA) (en-dA) true false (en-dA) false (en-hb1) now)
+        s0 (next-state -1 proposed) s1 (next-state s0 active) s2 (next-state s1 active)
+        s3 (next-state s2 stale) s4 (next-state s3 active) s5 (next-state s4 retired) s6 (next-state s5 retired)]
+    (and (= s0 0) (= s1 1) (= s2 2) (schedulable? s2) (= s3 3) (not (schedulable? s3))
+         (= s4 2) (= s5 3) (= s6 4))))

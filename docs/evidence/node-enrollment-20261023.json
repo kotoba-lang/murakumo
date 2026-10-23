@@ -1,0 +1,127 @@
+{
+  "schema": "murakumo.node-enrollment.v1",
+  "date": "2026-10-23",
+  "linear": "JUN-287",
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": [
+    {
+      "name": "sha2",
+      "repository": "kotoba-lang/org-nist-sha2",
+      "commit": "ea83e70a6a8efb8fb12dd5f0031fcda35a9ec77b",
+      "path": "kotoba/sha2/core.kotoba",
+      "sha256": "2c59ef55bc2b527c1aac723c0fee896eba75ee82fecd212a2858782beadc6888"
+    },
+    {
+      "name": "ed25519",
+      "repository": "kotoba-lang/org-ietf-ed25519",
+      "commit": "2e919bc7f17e8b0e731dfa8f71cd977fa90347e1",
+      "path": "kotoba/ed25519/selfhost.kotoba",
+      "sha256": "6122760634e68c6371c444eb81141fd27c9686d2646222a72f0f3342d1a9e740"
+    },
+    {
+      "name": "ledger",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/ledger_core.kotoba",
+      "sha256": "e520534370dec3d3e6d4f5a2252f353485f3979457b3ec3162019d84d7d5e2d5"
+    },
+    {
+      "name": "state",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/node_state.kotoba",
+      "sha256": "2d478d602aa313fd2cd20ad8bc18b24b3013897b565799967a67b3156970e4c4"
+    },
+    {
+      "name": "enrollment",
+      "path": "kotoba/fleet_node_enrollment.kotoba",
+      "sha256": "f3b3073c399231a719461682bddf6da8b3e30340b2f56786663cdb31ce2cea43"
+    }
+  ],
+  "target": "aarch64-linux",
+  "format": "loaderless-static",
+  "composition": "unchanged canonical source bodies in one unity; namespace declarations replaced by the i64 gate entry (docs/node-enrollment.md)",
+  "groups": {
+    "ed25519": 1,
+    "ledger": 2,
+    "nodeState": 4,
+    "didKey": 8,
+    "signatureEncoding": 16,
+    "declaration": 32,
+    "heartbeat": 64,
+    "signedTarget": 128,
+    "signedPath": 256
+  },
+  "expectedResult": 511,
+  "results": {
+    "positive": 511,
+    "declarationUnsigned": 351,
+    "noStale": 63,
+    "didLeadingOne": 503
+  },
+  "vectors": {
+    "keys": "RFC 8032 test keys 1 and 2",
+    "signer": "OpenSSL 3.6.4",
+    "digest": "Python hashlib",
+    "script": "docs/evidence/node-enrollment-vectors-20261023.py",
+    "script_sha256": "02abcc5cea09df4cfa6a11f0f7e085b22b80f21347e308f0b88d5b4db2883f55"
+  },
+  "execution": {
+    "network": "none",
+    "image": "docker.io/library/alpine:3@sha256:e311ae748be7f56ae5cba304bc488f0786df68ee507513f654a5cc8597cffb42",
+    "runtime": "native arm64 Linux 6.15.10 on local Podman applehv VM",
+    "compilerAndGuest": "native ELF; no hosted compiler, C compiler or C loader invoked",
+    "reproduced": "docs/node-enrollment.md commands run as written in a fresh directory"
+  },
+  "budget": {
+    "gateWallSeconds": {
+      "idleVm": 36.0,
+      "loadedVm": 91.1,
+      "loadedVmNote": "load average 7.6 with six other sessions' containers"
+    },
+    "gateMaxRssKiB": 408360,
+    "measuredWith": "busybox time -v",
+    "finding": "each Ed25519 operation keeps about 10 MiB the image does not reclaim; a long-lived agent cannot verify heartbeats indefinitely in one process with the current runtime"
+  },
+  "limitations": [
+    "Source-unity gate, not project linkage or signed release qualification",
+    "aarch64-linux only; x86_64 not executed",
+    "L1 operator signature, peer transport, persistence and two-node convergence not exercised",
+    "No OCI launch, inference, storage, payment or production change"
+  ],
+  "artifacts": {
+    "gate.kotoba": {
+      "bytes": 65849,
+      "sha256": "cbfe8b7b4c1c939695632deceae4d9778ece4f7be32b9d780f2aed1623ff906b"
+    },
+    "gate.elf": {
+      "bytes": 377344,
+      "sha256": "e67e932b18b3538986d157e34175e94ec242e6e9dbd77711ba5f699b4fd99a1c"
+    },
+    "decl-unsigned.kotoba": {
+      "bytes": 65751,
+      "sha256": "a3e1b5bb8fd72da643e9d56ad96b4fb12378670fb8db19964363c8dfab18ef47"
+    },
+    "decl-unsigned.elf": {
+      "bytes": 377344,
+      "sha256": "89be16da74be7fff4220f856a0d72ab2c663f408fbd8c6887b34c434c92c2511"
+    },
+    "no-stale.kotoba": {
+      "bytes": 65836,
+      "sha256": "ca8111a53a919a5e8a24cd39a55071d0a94eb320855fd3560a217d9c47cb0c24"
+    },
+    "no-stale.elf": {
+      "bytes": 377344,
+      "sha256": "2ae8e0dcee1ef36fff797028ff7247f738161c158579bec51394d8947af680f4"
+    },
+    "did-leading-one.kotoba": {
+      "bytes": 65803,
+      "sha256": "ab05cde8cedc28dda3def462d96697f4fb1c69acde3f2c06627700790aa4acce"
+    },
+    "did-leading-one.elf": {
+      "bytes": 377344,
+      "sha256": "16cd0ba4cfb8bea1549b91f3255a860845f5483b6869a643ea3ed334110141e6"
+    }
+  }
+}
