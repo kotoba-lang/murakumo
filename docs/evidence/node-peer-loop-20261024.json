@@ -1,0 +1,96 @@
+{
+  "schema": "murakumo.evidence.node-peer-loop.v1",
+  "date": "2026-10-24",
+  "issue": "JUN-287",
+  "doc": "docs/node-peer-convergence.md#a-continuous-loop-heartbeat-loss-and-return",
+  "sourceCommitBase": "8d0a57183ec2cdcbc569f622026a6f99dccbc0a9",
+  "compiler": {
+    "repo": "kotoba-lang/amu",
+    "commit": "51b89255ef674a2da8bfbe650c971f1b08c0e3d3",
+    "sha256": "88afda8977285f3839ebad1cb785a344b296c6890f3f901746259dd478ab9fb7"
+  },
+  "host": "podman machine (applehv, arm64 Linux 6.15), rootless podman, --network none, python:3.12-alpine; two processes on one loopback",
+  "units": {
+    "peer.kotoba": "c46b294e5e53745e35fcbce60323955d36b0a527f8d6c7d9347993b36a371d85",
+    "loop.kotoba": "3a862f7650dce8df605a6290f5aae6cf69bf4c25c858001ed731f39afb6a1959",
+    "ageless.kotoba": "d9351d5e82aed2db4af4a1e55cf066c1d70f849afb2deadf3ab4b7ddfbf00890"
+  },
+  "images": {
+    "peer.elf": "85138e01da3cd6bc8de51516acfaf644485685f6f471a4c142e48c726e152459",
+    "liar.elf": "07fe5d9036ca55d78a466be15cd6679e8f98806209d481fece046461c5ba4a29",
+    "unchecked.elf": "58287c727f5082d54fd274341acee36c7e4c173f636b6b8e86d362367c739aa1",
+    "loop.elf": "6b756f71f2758da366b101c8d70594af4fd641914fa16ba45adf5336b6216ae3",
+    "ageless.elf": "573ad63e38d551176246175236548d0b5dd60b093486aaed2a655914316c2789"
+  },
+  "keys": "RFC 8032 test keys 1 and 2 in a.key and b.key, for the gate only",
+  "scenario": "24 rounds of 2500 ms each, ttl 15000 ms; k16 sends nothing in rounds 6 to 14 and keeps listening",
+  "output": [
+    "loop: b70 holds k16 at 0 1 2 3 2 | b70 itself 0 1 2 | k16 holds b70 at 0 1 2",
+    "ageless: b70 holds k16 at 0 1 2 | b70 itself 0 1 2 | k16 holds b70 at 0 1 2",
+    "a missing key file: peer/key-unreadable"
+  ],
+  "rounds": {
+    "b70 (loop-a.out)": [
+      "round 0 b70 0 k16 0",
+      "round 1 b70 1 k16 1",
+      "round 2 b70 2 k16 2",
+      "round 3 b70 2 k16 2",
+      "round 4 b70 2 k16 2",
+      "round 5 b70 2 k16 2",
+      "round 6 b70 2 k16 2",
+      "round 7 b70 2 k16 2",
+      "round 8 b70 2 k16 2",
+      "round 9 b70 2 k16 2",
+      "round 10 b70 2 k16 3",
+      "round 11 b70 2 k16 3",
+      "round 12 b70 2 k16 3",
+      "round 13 b70 2 k16 3",
+      "round 14 b70 2 k16 3",
+      "round 15 b70 2 k16 3",
+      "round 16 b70 2 k16 3",
+      "round 17 b70 2 k16 3",
+      "round 18 b70 2 k16 2",
+      "round 19 b70 2 k16 2",
+      "round 20 b70 2 k16 2",
+      "round 21 b70 2 k16 2",
+      "round 22 b70 2 k16 2",
+      "round 23 b70 2 k16 2"
+    ],
+    "k16 (loop-b.out)": [
+      "round 0 b70 0 k16 0",
+      "round 1 b70 1 k16 1",
+      "round 2 b70 2 k16 2",
+      "round 3 b70 2 k16 2",
+      "round 4 b70 2 k16 2",
+      "round 5 b70 2 k16 2",
+      "round 6 b70 2 k16 2",
+      "round 7 b70 2 k16 2",
+      "round 8 b70 2 k16 2",
+      "round 9 b70 2 k16 2",
+      "round 10 b70 2 k16 2",
+      "round 11 b70 2 k16 2",
+      "round 12 b70 2 k16 2",
+      "round 13 b70 2 k16 2",
+      "round 14 b70 2 k16 2",
+      "round 15 b70 2 k16 2",
+      "round 16 b70 2 k16 2",
+      "round 17 b70 2 k16 2",
+      "round 18 b70 2 k16 2",
+      "round 19 b70 2 k16 2",
+      "round 20 b70 2 k16 2",
+      "round 21 b70 2 k16 2",
+      "round 22 b70 2 k16 2",
+      "round 23 b70 2 k16 2"
+    ]
+  },
+  "oneRoundGate": {
+    "output": [
+      "honest same: b70 2 k16 2",
+      "stale same: b70 2 k16 1",
+      "liar same: b70 2 k16 -1",
+      "control DIFFER: a: b70 2 k16 2  b: b70 2 k16 -1"
+    ],
+    "note": "the Reproduce block re-pinned from amu 457042ab's root to 51b89255's (457042ab's checker refuses wire 7, which the module now uses); the same four lines as the 2026-10-23 receipt"
+  },
+  "control": "ageless: sed 's/(>= at (- now ttl))/true/' on loop.kotoba"
+}
