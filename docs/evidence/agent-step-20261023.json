@@ -1,0 +1,124 @@
+{
+  "schema": "murakumo.agent-step.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-289"
+  ],
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": [
+    {
+      "name": "sha2",
+      "repository": "kotoba-lang/org-nist-sha2",
+      "commit": "ea83e70a6a8efb8fb12dd5f0031fcda35a9ec77b",
+      "path": "kotoba/sha2/core.kotoba",
+      "sha256": "2c59ef55bc2b527c1aac723c0fee896eba75ee82fecd212a2858782beadc6888"
+    },
+    {
+      "name": "ed25519",
+      "repository": "kotoba-lang/org-ietf-ed25519",
+      "commit": "6f17477b5be91a0c8c369b8d30e7e5ea0c10a8aa",
+      "path": "kotoba/ed25519/selfhost.kotoba",
+      "sha256": "47c086f3d93ad4f6da047bbf3b9250f7e4fbc7539ec1a0077abb2d82ceb3dc14"
+    },
+    {
+      "name": "jcs-reader",
+      "repository": "kotoba-lang/org-ietf-jcs",
+      "commit": "6331a9b461f5858be484b9d6859f314f9c3a2510",
+      "path": "kotoba/jcs/reader.kotoba",
+      "sha256": "f8af2953904bd0a96e7b5c3b9e34151bcae3754e5358669adb8ac289acc0872f"
+    },
+    {
+      "name": "oci",
+      "repository": "kotoba-lang/org-oci-distribution",
+      "commit": "90463924db65eea4d9021dc6623105472282b5a9",
+      "path": "kotoba/oci/itonami_artifact.kotoba",
+      "sha256": "db212e3cdaf7c1d51d7dbf44f8d1ed7a4e36773e6b77b5dab979d759012233bd"
+    },
+    {
+      "name": "ledger",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/ledger_core.kotoba",
+      "sha256": "e520534370dec3d3e6d4f5a2252f353485f3979457b3ec3162019d84d7d5e2d5"
+    },
+    {
+      "name": "state",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/node_state.kotoba",
+      "sha256": "2d478d602aa313fd2cd20ad8bc18b24b3013897b565799967a67b3156970e4c4"
+    },
+    {
+      "name": "fence",
+      "repository": "kotoba-lang/sahai",
+      "commit": "ba19195945c6f4482b46818d0570aa840f9ef681",
+      "path": "kotoba/sahai/fence.kotoba",
+      "sha256": "63a833e81d927e07cd59c62caea50214c9e87358dd8e1c51d84c130ea9ea95f8"
+    },
+    {
+      "name": "enrollment",
+      "path": "kotoba/fleet_node_enrollment.kotoba",
+      "sha256": "514652719718a77b078230efe8ca74e1473905dc8a4cde4656c790f1662af7e1"
+    },
+    {
+      "name": "agent-step",
+      "path": "kotoba/fleet_agent_step.kotoba",
+      "sha256": "72130be56966829b2fe63e06a5e8ec8266062e8bf40c72cfda0751c0111cbaa2"
+    }
+  ],
+  "target": "aarch64-linux",
+  "format": "loaderless-static",
+  "groups": {
+    "fence": 1,
+    "oci": 2,
+    "agentStep": 4
+  },
+  "expectedResult": 7,
+  "results": {
+    "positive": 7,
+    "fenceIgnored": 3,
+    "epochNotChecked": 3
+  },
+  "vectors": {
+    "by": "Python hashlib and OpenSSL 3, RFC 8032 keys 1 and 2",
+    "script": "docs/evidence/agent-step-vectors-20261023.py",
+    "scriptSha256": "f595b044799a47d203d89ded7b495a414529cd75b8f76561997210ac3959860a"
+  },
+  "budget": {
+    "wallSeconds": 3.67,
+    "maxRssKiB": 8856,
+    "measuredWith": "busybox time -v"
+  },
+  "execution": {
+    "network": "none",
+    "shell": "docker.io/library/python:3.12-alpine (arm64)",
+    "runtime": "native arm64 Linux 6.15.10 on local Podman applehv VM",
+    "compilerAndGuest": "native ELF; no hosted compiler, C compiler or C loader invoked",
+    "reproduced": "docs/agent-step.md commands run as written in a fresh directory"
+  },
+  "limitations": [
+    "no job distribution and no lease registry (P3b quorum register)",
+    "no bot turn with an inference rail",
+    "consent before inference leaves the node not exercised",
+    "aarch64-linux only"
+  ],
+  "artifacts": {
+    "gate.kotoba": {
+      "bytes": 109995,
+      "sha256": "1e0980b1c58f27d61a0068142d94d3b3876239a31a861d33b553e98efeb759fe"
+    },
+    "gate.elf": {
+      "bytes": 475648,
+      "sha256": "bfe722974faf24c4214c9404f3c6a665dce38dab0a53cf9e5ba048a3ae04f09a"
+    },
+    "no-fence.kotoba": {
+      "bytes": 109953,
+      "sha256": "2022295d6c6cf14ae91ea4a5a03bae10020954849e2ad81b4e1d6dd0d84bf142"
+    },
+    "no-epoch.kotoba": {
+      "bytes": 109972,
+      "sha256": "e717454eccc9a0f170726224ba02edaf9bfff87b51e8b3788d2f75231fef421f"
+    }
+  }
+}
