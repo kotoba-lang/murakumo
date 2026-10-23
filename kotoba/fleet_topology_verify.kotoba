@@ -1,0 +1,149 @@
+;; murakumo.fleet-topology-verify -- the operator-signed topology (L1 of
+;; ADR-2610071730, src/murakumo/infer/replicated_topology.cljk) verified in a
+;; static image (Linear JUN-287; com-junkawasaki/root ADR-2610222140 §1).
+;;
+;;   topology-verdict  document bytes, the trust, a threshold and the
+;;                     revision held now -> "topology/ok" or the first
+;;                     refusal, in this order:
+;;     1. over 262144 bytes (replicated_topology bounded!)  topology/too-large
+;;     2. not strict JSON (jcs.reader)                       topology/not-strict-json
+;;     3. no "payload" object                                topology/no-payload
+;;     4. the payload has no canonical form here             topology/not-canonical-domain
+;;     5. a malformed trust or threshold                     topology/bad-trust
+;;     6. fewer than threshold DISTINCT trusted keys signed the canonical
+;;        payload                                            topology/needs-signatures
+;;     7. schema is not 1                                    topology/schema
+;;     8. the revision does not advance (fleet_intent_core's revision-verdict)
+;;   topology-revision the payload's revision, -1 when there is none
+;;
+;; As replicated_topology's verify! does: the signed bytes are the canonical
+;; re-encoding of the payload (`encoded`: keys sorted, no spaces), not the
+;; bytes as they arrive, so they are rebuilt with json-canonical-bytes. A
+;; legacy "signature" counts for whichever trusted key it verifies against;
+;; each "signatures" entry {key, signature} counts for its own key id; a key
+;; counts once however often it signed. The trust is "id=did:key,..." (1..8
+;; entries, distinct ids and keys): the operators' keys as did:key, the form
+;; the host derives from its PEM files once.
+;;
+;; Payload validation beyond schema and revision (nodes, gateways, roles,
+;; policies) is replicated_topology's validate! and fleet_intent_core; this
+;; module verifies who signed what.
+;;
+;; Composition order: sha2.core, ed25519.selfhost, jcs.reader, tsukasa
+;; ledger_core and node_state, fleet_node_enrollment, fleet_intent_core, this
+;; file. docs/topology-verify.md has the gate.
+(ns murakumo.fleet-topology-verify
+  (:export [topology-verdict topology-revision test-topology]))
+
+(defn- tv-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn- tv-root [b :vector-i64] :i64
+  (loop [i 0] (if (and (< i (vector-count b)) (let [c (vector-at b i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i)))
+
+;; trust entries "id=did" separated by ","
+(defn- tv-count [trust :string] :i64
+  (let [b (tv-bytes trust)]
+    (if (= (vector-count b) 0) 0
+      (loop [i 0 n 1] (if (= i (vector-count b)) n (recur (+ i 1) (if (= (vector-at b i) 44) (+ n 1) n)))))))
+
+;; part 0: the id, part 1: the did, of entry k
+(defn- tv-part [trust :string k :i64 part :i64] :string
+  (let [b (tv-bytes trust)]
+    (loop [i 0 e 0 start 0 eq -1]
+      (let [c (if (< i (vector-count b)) (vector-at b i) 44)]
+        (cond (= c 44)
+              (if (= e k)
+                (if (< eq 0) "" (if (= part 0) (string-substring trust start eq) (string-substring trust (+ eq 1) i)))
+                (if (>= i (vector-count b)) "" (recur (+ i 1) (+ e 1) (+ i 1) -1)))
+              (and (= c 61) (< eq 0)) (recur (+ i 1) e start i)
+              :else (recur (+ i 1) e start eq))))))
+
+(defn- tv-trust-ok? [trust :string] :bool
+  (let [n (tv-count trust)]
+    (and (>= n 1) (<= n 8)
+         (loop [x 0]
+           (if (= x n) true
+             (let [id (tv-part trust x 0) did (tv-part trust x 1)]
+               (if (and (> (string-length id) 0) (= (did-key-problem did) "enroll/ok")
+                        (loop [y 0] (if (= y x) true (if (or (= (tv-part trust y 0) id) (= (tv-part trust y 1) did)) false (recur (+ y 1))))))
+                 (recur (+ x 1)) false)))))))
+
+(defn- tv-text [b :vector-i64 obj :i64 key :string] :string
+  (let [v (json-member b obj key)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))
+
+;; did the key id/did sign text, through the legacy signature or its own entry?
+(defn- tv-signed? [b :vector-i64 root :i64 id :string did :string text :string] :bool
+  (let [legacy (tv-text b root "signature")
+        sigs (json-member b root "signatures")]
+    (or (and (> (string-length legacy) 0) (= (statement-problem did text legacy) "enroll/ok"))
+        (and (>= sigs 0) (= (json-kind b sigs) 2)
+             (loop [k 0]
+               (let [e (json-element b sigs k)]
+                 (cond (< e 0) false
+                       (and (= (json-kind b e) 1) (= (tv-text b e "key") id)
+                            (= (statement-problem did text (tv-text b e "signature")) "enroll/ok")) true
+                       :else (recur (+ k 1)))))))))
+
+(defn topology-revision [doc :vector-i64] :i64
+  (if (not (json-valid? doc)) -1
+    (let [p (json-member doc (tv-root doc) "payload") r (if (>= p 0) (json-member doc p "revision") -1)]
+      (if (and (>= r 0) (json-int-ok? doc r)) (json-int doc r) -1))))
+
+(defn topology-verdict [doc :vector-i64 trust :string threshold :i64 current :i64] :string
+  (cond (> (vector-count doc) 262144) "topology/too-large"
+        (not (json-valid? doc)) "topology/not-strict-json"
+        :else
+        (let [root (tv-root doc) p (json-member doc root "payload")]
+          (if (or (< p 0) (not (= (json-kind doc p) 1))) "topology/no-payload"
+            (let [cb (json-canonical-bytes doc p)]
+              (cond (= (vector-count cb) 0) "topology/not-canonical-domain"
+                    (or (not (tv-trust-ok? trust)) (< threshold 1) (> threshold (tv-count trust))) "topology/bad-trust"
+                    :else
+                    (let [text (string-from-utf8 (bytes-from-vector-i64 cb))
+                          n (loop [x 0 n 0]
+                              (if (= x (tv-count trust)) n
+                                (recur (+ x 1) (if (tv-signed? doc root (tv-part trust x 0) (tv-part trust x 1) text) (+ n 1) n))))
+                          s (json-member doc p "schema")]
+                      (cond (< n threshold) "topology/needs-signatures"
+                            (not (and (>= s 0) (json-int-ok? doc s) (= (json-int doc s) 1))) "topology/schema"
+                            :else (let [v (revision-verdict current (topology-revision doc))]
+                                    (if (= v "intent/ok") "topology/ok" v))))))))))
+
+;; ---------------------------------------------------------------------------
+;; test-topology: documents serialized with unsorted keys and spaces, signed
+;; over the canonical payload by OpenSSL 3 with RFC 8032 keys 1-3
+;; (docs/evidence/topology-vectors-20261023.py).
+
+(defn- tv-doc-single [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 1, \"revision\": 7, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}}, \"signature\": \"eN2z9Zt2ASZITkcK7WzV_55DvQtIfFDH6vHz3NQDXNanAgps7rQ6WH2NcxOf1WiJNKUTEXSsZS_N9oL4QcjcAw\"}"))
+(defn- tv-doc-quorum [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 1, \"revision\": 7, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}}, \"signatures\": [{\"key\": \"op2\", \"signature\": \"PLQ-jyZRUu_hB3-hbmO64XnqvuPj_tkaq_0LOYoZf5oUOIlQD-xB9Gip0QberAEc2GZZQ7clHmUlo7WQm_C0Cw\"}, {\"key\": \"op1\", \"signature\": \"eN2z9Zt2ASZITkcK7WzV_55DvQtIfFDH6vHz3NQDXNanAgps7rQ6WH2NcxOf1WiJNKUTEXSsZS_N9oL4QcjcAw\"}]}"))
+(defn- tv-doc-one-of-two [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 1, \"revision\": 7, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}}, \"signatures\": [{\"key\": \"op1\", \"signature\": \"eN2z9Zt2ASZITkcK7WzV_55DvQtIfFDH6vHz3NQDXNanAgps7rQ6WH2NcxOf1WiJNKUTEXSsZS_N9oL4QcjcAw\"}]}"))
+(defn- tv-doc-tampered [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 1, \"revision\": 8, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}}, \"signature\": \"eN2z9Zt2ASZITkcK7WzV_55DvQtIfFDH6vHz3NQDXNanAgps7rQ6WH2NcxOf1WiJNKUTEXSsZS_N9oL4QcjcAw\"}"))
+(defn- tv-doc-mislabeled [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 1, \"revision\": 7, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}}, \"signatures\": [{\"key\": \"op1\", \"signature\": \"HS-NlQetL6JXb79EpC0wwZuMwW5JjZR2BAATgoeMVjFWf5_p-l9TOJ1VqODy5qCUp1TpwQcxJL4C9bg1Cm2FAw\"}]}"))
+(defn- tv-doc-duplicate-payload [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 1, \"revision\": 8, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}}, \"payload\": {\"schema\": 1, \"revision\": 7, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}}, \"signature\": \"eN2z9Zt2ASZITkcK7WzV_55DvQtIfFDH6vHz3NQDXNanAgps7rQ6WH2NcxOf1WiJNKUTEXSsZS_N9oL4QcjcAw\"}"))
+(defn- tv-doc-float [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 1, \"revision\": 7, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}, \"weight\": 0.5}, \"signature\": \"6bFuhSq6pDOqhENX0Rm2ZZPzNU6TbraXv5zXvDy_MkniHSoC9cr5AkBny6JKIPZfltttzN1681pIvaIaD-8IBw\"}"))
+(defn- tv-doc-same-key-twice [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 1, \"revision\": 7, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}}, \"signature\": \"eN2z9Zt2ASZITkcK7WzV_55DvQtIfFDH6vHz3NQDXNanAgps7rQ6WH2NcxOf1WiJNKUTEXSsZS_N9oL4QcjcAw\", \"signatures\": [{\"key\": \"op1\", \"signature\": \"eN2z9Zt2ASZITkcK7WzV_55DvQtIfFDH6vHz3NQDXNanAgps7rQ6WH2NcxOf1WiJNKUTEXSsZS_N9oL4QcjcAw\"}]}"))
+(defn- tv-doc-schema-2 [] :vector-i64 (tv-bytes "{\"payload\": {\"schema\": 2, \"revision\": 7, \"nodes\": [{\"node\": \"b70\", \"url\": \"http://100.64.0.10:8796/\", \"enabled\": true, \"owner-id\": \"01234567-89ab-cdef-0123-456789abcdef\", \"roles\": [{\"kind\": \"text\", \"model\": \"m1\"}]}], \"gateways\": [{\"node\": \"gw\", \"url\": \"http://100.64.0.1:8796/\", \"enabled\": true}], \"policies\": {\"minimum-replicas\": {\"m1\": 1}}}, \"signature\": \"ZDgEjVgQ5JnykhuG0e5KdLHI1opQPihpwjGGq7TOOuRLvTbtbzgvxBWAM_FvBKCKHEwrVesv41O4Lv4TfpKTDw\"}"))
+(defn- tv-trust1 [] :string "op1=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw")
+(defn- tv-trust3 [] :string "op1=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw,op2=did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT,op3=did:key:z6MkwSD8dBdqcXQzKJZQFPy2hh2izzxskndKCjdmC2dBpfME")
+(defn- tv-trust-dup [] :string "op1=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw,opx=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw")
+
+(defn test-topology [] :bool
+  (and (= (topology-verdict (tv-doc-single) (tv-trust1) 1 6) "topology/ok")
+       (= (topology-revision (tv-doc-single)) 7)
+       (= (topology-verdict (tv-doc-single) (tv-trust1) 1 7) "intent/not-advancing")
+       (= (topology-verdict (tv-doc-quorum) (tv-trust3) 2 6) "topology/ok")
+       (= (topology-verdict (tv-doc-one-of-two) (tv-trust3) 2 6) "topology/needs-signatures")
+       (= (topology-verdict (tv-doc-one-of-two) (tv-trust3) 1 6) "topology/ok")
+       ;; the signature is over revision 7; the payload says 8
+       (= (topology-verdict (tv-doc-tampered) (tv-trust1) 1 6) "topology/needs-signatures")
+       ;; op3's signature under op1's id counts for nobody
+       (= (topology-verdict (tv-doc-mislabeled) (tv-trust3) 1 6) "topology/needs-signatures")
+       (= (topology-verdict (tv-doc-duplicate-payload) (tv-trust1) 1 6) "topology/not-strict-json")
+       (= (topology-verdict (tv-doc-float) (tv-trust1) 1 6) "topology/not-canonical-domain")
+       ;; one key counts once, legacy and entry together
+       (= (topology-verdict (tv-doc-same-key-twice) (tv-trust3) 2 6) "topology/needs-signatures")
+       (= (topology-verdict (tv-doc-schema-2) (tv-trust1) 1 6) "topology/schema")
+       (= (topology-verdict (tv-doc-single) (tv-trust-dup) 1 6) "topology/bad-trust")
+       (= (topology-verdict (tv-doc-single) (tv-trust1) 2 6) "topology/bad-trust")
+       (= (topology-verdict (tv-doc-single) "" 1 6) "topology/bad-trust")
+       (= (topology-verdict (tv-bytes "{\"signature\":\"x\"}") (tv-trust1) 1 6) "topology/no-payload")))
