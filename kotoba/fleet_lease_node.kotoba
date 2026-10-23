@@ -18,6 +18,11 @@
 ;;             the topology, class 1..128, slot 0..255, epoch >= 1, until no
 ;;             later than now + ttl + skew. Without one the voter is open and
 ;;             checks only the value's form: for tests, not for a fleet.
+;;             While idle it looks at the topology file every 500 ms. A
+;;             changed file is adopted only if it verifies, advances the
+;;             revision and keeps every node's owner-id (replicated_topology
+;;             accept!); the log says "voter topology <revision>" or
+;;             "voter kept <reason>".
 ;;   proposer  lease-node-main proposer <mode> <t> <id> <value> <port>...
 ;;             mode full: prepare, adopt the value accepted under the highest
 ;;             ballot (else its own), accept, print "chosen <value>" on a
@@ -114,6 +119,29 @@
                 (let [en (json-member topo e "enabled")] (and (>= en 0) (= (json-kind topo en) 5)))
                 :else (recur (+ k 1))))))))
 
+;; the owner-id of node in a topology, "" when the node or its owner-id is
+;; absent
+(defn- ln-owner [doc :vector-i64 node :string] :string
+  (let [p (json-member doc (ln-root doc) "payload") ns (if (>= p 0) (json-member doc p "nodes") -1)]
+    (if (or (< ns 0) (not (= (json-kind doc ns) 2))) ""
+      (loop [k 0]
+        (let [e (json-element doc ns k)]
+          (cond (< e 0) ""
+                (and (= (json-kind doc e) 1) (= (ln-text doc e "node") node)) (ln-text doc e "owner-id")
+                :else (recur (+ k 1))))))))
+
+;; replicated_topology accept!: a node name stays bound to its owner-id, so a
+;; newer topology may not drop or replace an owner (retire it and use a new
+;; name instead)
+(defn- ln-owners-kept? [old :vector-i64 new :vector-i64] :bool
+  (let [p (json-member old (ln-root old) "payload") ns (if (>= p 0) (json-member old p "nodes") -1)]
+    (if (or (< ns 0) (not (= (json-kind old ns) 2))) true
+      (loop [k 0]
+        (let [e (json-element old ns k)]
+          (cond (< e 0) true
+                (and (= (json-kind old e) 1) (not (= (ln-text old e "owner-id") (ln-owner new (ln-text old e "node"))))) false
+                :else (recur (+ k 1))))))))
+
 ;; no topology: any canonical value; else lease.cljk valid-value? against it
 (defn- ln-member-ok? [topo :vector-i64 now :i64 value :string] :bool
   (if (= (vector-count topo) 0) true
@@ -138,9 +166,10 @@
             (ln-reply false st))
           :else (ln-reply false st))))
 
-(defn- ln-serve-one [l :string file :string idle :i64 topo :vector-i64 now :i64] :i64
+;; one connection, or none within ms: 0 when one was answered, else 1
+(defn- ln-serve-one [l :string file :string ms :i64 topo :vector-i64 now :i64] :i64
   (arena-scope
-    (let [c (ln-accept (str l " " idle))]
+    (let [c (ln-accept (str l " " ms))]
       (if (< (ln-int c) 1) 1
         (let [req (ln-recv c true)
               rep (ln-handle file req topo now)
@@ -148,21 +177,54 @@
               z (ln-write c)]
           0)))))
 
-(defn- ln-voter [port :i64 file :string idle :i64 topo :vector-i64 now :i64] :i64
+(defn- ln-load-doc [path :string] :vector-i64
+  (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 (ln-bytes path)))))
+
+;; does the topology file still hold the bytes last seen (or is it gone)?
+(defn- ln-same-file? [path :string seen :vector-i64] :bool
+  (if (not (ln-exists? path)) true
+    (let [d (ln-load-doc path)]
+      (and (= (vector-count d) (vector-count seen))
+           (loop [i 0] (cond (= i (vector-count d)) true (= (vector-at d i) (vector-at seen i)) (recur (+ i 1)) :else false))))))
+
+;; a changed topology file, as replicated_topology accept!: adopt it (0) when it
+;; verifies against the trust, advances the revision held and keeps every
+;; owner; else keep the topology held (1). The voter's log says which.
+(defn- ln-rotate [doc :vector-i64 topo :vector-i64 trust :string threshold :i64] :i64
+  (let [v (topology-verdict doc trust threshold (topology-revision topo))
+        why (cond (not (= v "topology/ok")) v
+                  (not (ln-owners-kept? topo doc)) "topology/owner-replaced"
+                  :else "")]
+    (if (= why "") (let [x (ln-say (str "voter topology " (topology-revision doc)))] 0)
+      (let [x (ln-say (string-concat "voter kept " why))] 1))))
+
+;; serve until idle ms pass without a connection. Waiting in slices of 500 ms,
+;; a voter with a topology looks at its file after each empty slice and
+;; rotates when it changed. Only an adopted or newly seen document stays
+;; allocated; the comparison and the verification run in arena-scope.
+(defn- ln-voter [port :i64 file :string idle :i64 topo :vector-i64 now :i64
+                 path :string trust :string threshold :i64] :i64
   (let [l (ln-listen (str "127.0.0.1:" port))]
-    (loop [n 0] (if (= (ln-serve-one l file idle topo now) 0) (recur (+ n 1)) n))))
+    (loop [n 0 left idle cur topo seen topo]
+      (let [r (ln-serve-one l file (if (< left 500) left 500) cur now)]
+        (cond (= r 0) (recur (+ n 1) idle cur seen)
+              (<= left 500) n
+              (or (= path "") (= (arena-scope (if (ln-same-file? path seen) 0 1)) 0)) (recur n (- left 500) cur seen)
+              :else (let [d (ln-load-doc path)]
+                      (if (= (arena-scope (ln-rotate d cur trust threshold)) 0)
+                        (recur n (- left 500) d d)
+                        (recur n (- left 500) cur d))))))))
 
 ;; the voter's topology: none, or the verified document; "" and the reason
 ;; when it does not verify
 (defn- ln-voter-main [] :i64
   (let [path (ln-arg 4)]
-    (if (= path "") (ln-voter (ln-int (ln-arg 1)) (ln-arg 2) (ln-int (ln-arg 3)) (vector-alloc 0) 0)
-      (let [doc (if (ln-exists? path)
-                  (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 (ln-bytes path))))
-                  (vector-alloc 0))
+    (if (= path "") (ln-voter (ln-int (ln-arg 1)) (ln-arg 2) (ln-int (ln-arg 3)) (vector-alloc 0) 0 "" "" 0)
+      (let [doc (if (ln-exists? path) (ln-load-doc path) (vector-alloc 0))
             v (topology-verdict doc (ln-arg 5) (ln-int (ln-arg 6)) 0)]
         (if (not (= v "topology/ok")) (let [x (ln-say (string-concat "voter " v))] 2)
-          (ln-voter (ln-int (ln-arg 1)) (ln-arg 2) (ln-int (ln-arg 3)) doc (ln-int (ln-arg 7))))))))
+          (ln-voter (ln-int (ln-arg 1)) (ln-arg 2) (ln-int (ln-arg 3)) doc (ln-int (ln-arg 7))
+                    path (ln-arg 5) (ln-int (ln-arg 6))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; The proposer

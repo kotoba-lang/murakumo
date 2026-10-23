@@ -222,7 +222,7 @@ TRUST=b70=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw,k16=did:key:z
 rm -f $G/$TAG-v*.state $G/$TAG-b70.out $G/$TAG-k16.out
 for v in 1 2 3; do
   env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_43=127.0.0.1:$B$v \
-    $G/job.elf voter $B$v $G/$TAG-v$v.state 25000 > /dev/null 2>&1 &
+    $G/job.elf voter $B$v $G/$TAG-v$v.state 60000 > /dev/null 2>&1 &   # k16 and b70 each check first, without a connection
 done
 sleep 0.3
 node() {  # name key fd admitted allow t
