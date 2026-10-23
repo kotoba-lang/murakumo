@@ -27,14 +27,17 @@
 ;;
 ;; L1 here is a constant: both nodes admitted with their declaration
 ;; digests, no cordon, no retirement (the operator's signature over L1 is
-;; separate work). The seeds are RFC 8032 test keys 1 and 2, for the gate
-;; only; a real node reads its own key.
+;; separate work). peer-run's seeds are RFC 8032 test keys 1 and 2, for
+;; the gate only; peer-loop reads the node's key from a file.
+;;
+;; peer-loop is the same exchange as a continuous loop (below): rounds on the
+;; clock, the node's key from a file, and heartbeat loss and return.
 ;;
 ;; Composition order: sha2.core, ed25519.selfhost, tsukasa ledger_core and
 ;; node_state, fleet_node_enrollment, this file. docs/node-peer-convergence.md
 ;; has the gate.
 (ns murakumo.fleet-node-peer
-  (:export [peer-main peer-run]))
+  (:export [peer-main peer-run peer-loop peer-loop-main]))
 
 ;; ---------------------------------------------------------------------------
 ;; Wires
@@ -170,3 +173,120 @@
 
 (defn peer-main [] :i64
   (peer-run (pe-arg 0) (pe-int (pe-arg 1)) (pe-int (pe-arg 2)) (pe-int (pe-arg 3)) (pe-int (pe-arg 4))))
+
+;; ---------------------------------------------------------------------------
+;; A continuous loop (JUN-287)
+;;
+;; peer-loop-main reads: "loop", role, the key file (64 hex digits: the
+;; node's seed, read on wire 35), its own port, the peer's port, the number
+;; of rounds, the round length (ms), the heartbeat ttl (ms), and the rounds
+;; [quiet-from, quiet-to) in which it sends nothing (its heartbeats are lost
+;; to the peer; it still listens). Each round:
+;;   1. reads the wall clock (wire 7) and signs a heartbeat at that time;
+;;   2. unless the round is quiet, dials the peer once (500 ms) and writes
+;;      its line; a peer that does not answer is skipped;
+;;   3. accepts on its own listener until the round's end, keeping the last
+;;      well-formed line that arrives;
+;;   4. takes one tsukasa next-state step for both nodes, from the last line
+;;      each has, and prints "round <k> <node> <state> <node> <state>" in
+;;      node order.
+;; A node whose heartbeats stop keeps its last line, which ages: once it is
+;; older than the ttl the node is stale, and an active node drains (3). A
+;; fresh heartbeat brings it back to active (2).
+;; Verification is the same as peer-run's, without repeating it: a
+;; declaration is verified once, a heartbeat line once when it arrives
+;; (heartbeat-problem asked at the heartbeat's own time, so only its time is
+;; left), and freshness is checked every round against the clock with
+;; heartbeat-problem's bounds (no later than now + 5 s, no older than now -
+;; ttl). Each round keeps its lines and their hex, a few KB.
+
+(defn- pe-now [] :i64 (pe-int (typed-cap-call 7 :string :string "wall")))
+(defn- pe-other [role :string] :string (if (= role "a") "k16" "b70"))
+
+(defn- pe-hex? [b :vector-i64 n :i64] :bool
+  (loop [i 0] (if (= i n) true (let [c (vector-at b i)] (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102))) (recur (+ i 1)) false)))))
+
+;; the node's seed from its key file, or an empty vector
+(defn- pe-key [path :string] :vector-i64
+  (if (not (= (typed-cap-call 35 :string :string (str path "EXISTS_SEP")) "1")) (vector-alloc 0)
+    (let [t (typed-cap-call 35 :string :string path) b (pe-bytes t)]
+      (if (and (>= (vector-count b) 64) (pe-hex? b 64)) (hex-bytes (string-substring t 0 64)) (vector-alloc 0)))))
+
+(defn- pe-decl-part [line :string b :vector-i64] :string
+  (str (pe-field line b 0) " " (pe-field line b 1) " " (pe-field line b 2) " " (pe-field line b 3) " "
+       (pe-field line b 4) " " (pe-field line b 5)))
+(defn- pe-decl-problem [line :string b :vector-i64] :string
+  (declaration-problem (pe-field line b 0) (pe-field line b 1) (pe-field line b 2) (pe-field line b 3)
+                       (pe-int (pe-field line b 4)) (pe-field line b 5)))
+;; every check of the heartbeat but its time
+(defn- pe-hb-pre [line :string b :vector-i64] :string
+  (let [node (pe-field line b 0) did (pe-field line b 1) at (pe-int (pe-field line b 6))
+        digest (declaration-digest node did (pe-field line b 2) (pe-field line b 3) (pe-int (pe-field line b 4)))]
+    (heartbeat-problem node did digest (pe-field line b 8) at (= (pe-field line b 7) "1") (pe-field line b 9) at 0 0)))
+
+;; node-target for a line whose declaration (dp) and heartbeat (hp) were checked
+(defn- pe-target [line :string b :vector-i64 dp :string hp :string now :i64 ttl :i64] :string
+  (let [node (pe-field line b 0) at (pe-int (pe-field line b 6))
+        fresh (and (= dp "tsukasa/ok") (= hp "enroll/ok") (<= at (+ now 5000)) (>= at (- now ttl)))]
+    (node-target dp (pe-admitted node)
+                 (declaration-digest node (pe-field line b 1) (pe-field line b 2) (pe-field line b 3) (pe-int (pe-field line b 4)))
+                 false fresh false (and fresh (= (pe-field line b 7) "1")))))
+
+;; dial the peer once and write the line: 1 written, 0 no answer
+(defn- pe-push [peer :string hexline :string] :i64
+  (let [c (pe-dial (str peer " 500"))]
+    (if (pe-handle? c) (let [w (pe-write (str c " " hexline)) z (pe-write c)] 1) 0)))
+
+;; a well-formed line from one connection, or ""
+(defn- pe-take [in :i64] :string
+  (let [gb (hex-bytes (pe-recv in))]
+    (if (and (> (vector-count gb) 0) (pe-printable? gb) (= (pe-field-count gb) 10))
+      (string-from-utf8 (bytes-from-vector-i64 gb)) "")))
+
+;; accept until the clock reaches until; the last well-formed line, or ""
+(defn- pe-window [l :string until :i64] :string
+  (loop [latest ""]
+    (let [left (- until (pe-now))]
+      (if (<= left 0) latest
+        (let [a (pe-accept (str l " " (if (> left 1000) 1000 left)))]
+          (if (pe-handle? a)
+            (let [line (pe-take (pe-int a)) z (pe-write a)] (recur (if (= line "") latest line)))
+            (recur latest)))))))
+
+(defn- pe-round-say [k :i64 node :string s :i64 other :string so :i64] :i64
+  (pe-say (if (< (string-compare node other) 0)
+            (str "round " k " " node " " s " " other " " so)
+            (str "round " k " " other " " so " " node " " s))))
+
+(defn peer-loop [role :string key :string my-port :i64 peer-port :i64 rounds :i64 interval :i64 ttl :i64
+                 quiet-from :i64 quiet-to :i64] :i64
+  (let [seed (pe-key key)]
+    (if (not (= (vector-count seed) 32)) (let [x (pe-say "peer/key-unreadable")] 2)
+      (let [l (pe-listen (str "127.0.0.1:" my-port)) peer (str "127.0.0.1:" peer-port)
+            did (node-did seed) node (pe-node role) fd (pe-fd role)
+            digest (declaration-digest node did fd "always-on" 2)
+            dsig (sign-declaration seed did node fd "always-on" 2)
+            own-dp (declaration-problem node did fd "always-on" 2 dsig)]
+        (loop [k 0 s-own -1 s-peer -1 pline "" pdecl "" pdp "" php ""]
+          (if (= k rounds) 0
+            (let [t0 (pe-now)
+                  own (pe-line node did fd "always-on" 2 dsig t0 false digest (sign-heartbeat seed did node digest t0 false))
+                  ob (pe-bytes own)
+                  own-hp (pe-hb-pre own ob)
+                  p (if (and (>= k quiet-from) (< k quiet-to)) 0 (pe-push peer (hex ob)))
+                  got (pe-window l (+ t0 interval))
+                  gb (pe-bytes got)
+                  nline (if (= got "") pline got)
+                  nb (pe-bytes nline)
+                  ndecl (if (= got "") pdecl (pe-decl-part got gb))
+                  ndp (cond (= got "") pdp (= ndecl pdecl) pdp :else (pe-decl-problem got gb))
+                  nhp (if (= got "") php (pe-hb-pre got gb))
+                  now (pe-now)
+                  so (next-state s-own (pe-target own ob own-dp own-hp now ttl))
+                  sp (if (= nline "") s-peer (next-state s-peer (pe-target nline nb ndp nhp now ttl)))
+                  r (pe-round-say k node so (if (= nline "") (pe-other role) (pe-field nline nb 0)) sp)]
+              (recur (+ k 1) so sp nline ndecl ndp nhp))))))))
+
+(defn peer-loop-main [] :i64
+  (peer-loop (pe-arg 1) (pe-arg 2) (pe-int (pe-arg 3)) (pe-int (pe-arg 4)) (pe-int (pe-arg 5)) (pe-int (pe-arg 6)) (pe-int (pe-arg 7))
+             (pe-int (pe-arg 8)) (pe-int (pe-arg 9))))
