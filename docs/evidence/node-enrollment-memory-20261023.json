@@ -1,0 +1,138 @@
+{
+  "schema": "murakumo.node-enrollment.v2",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-287",
+    "JUN-345"
+  ],
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": [
+    {
+      "name": "sha2",
+      "repository": "kotoba-lang/org-nist-sha2",
+      "commit": "ea83e70a6a8efb8fb12dd5f0031fcda35a9ec77b",
+      "path": "kotoba/sha2/core.kotoba",
+      "sha256": "2c59ef55bc2b527c1aac723c0fee896eba75ee82fecd212a2858782beadc6888"
+    },
+    {
+      "name": "ed25519",
+      "repository": "kotoba-lang/org-ietf-ed25519",
+      "commit": "6f17477b5be91a0c8c369b8d30e7e5ea0c10a8aa",
+      "path": "kotoba/ed25519/selfhost.kotoba",
+      "sha256": "47c086f3d93ad4f6da047bbf3b9250f7e4fbc7539ec1a0077abb2d82ceb3dc14"
+    },
+    {
+      "name": "ledger",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/ledger_core.kotoba",
+      "sha256": "e520534370dec3d3e6d4f5a2252f353485f3979457b3ec3162019d84d7d5e2d5"
+    },
+    {
+      "name": "state",
+      "repository": "kotoba-lang/tsukasa",
+      "commit": "03e2322489839be2176d5c23d0ccb4120d1b0ee8",
+      "path": "kotoba/tsukasa/node_state.kotoba",
+      "sha256": "2d478d602aa313fd2cd20ad8bc18b24b3013897b565799967a67b3156970e4c4"
+    },
+    {
+      "name": "enrollment",
+      "path": "kotoba/fleet_node_enrollment.kotoba",
+      "sha256": "16d4b03837be170a9b0e9fe15778f6f18995cd38f09af2da2996e7e0df29a504"
+    }
+  ],
+  "target": "aarch64-linux",
+  "format": "loaderless-static",
+  "groups": {
+    "ed25519": 1,
+    "ledger": 2,
+    "nodeState": 4,
+    "didKey": 8,
+    "signatureEncoding": 16,
+    "declaration": 32,
+    "heartbeat": 64,
+    "signedTarget": 128,
+    "signedPath": 256,
+    "signedStep": 512
+  },
+  "expectedResult": 1023,
+  "results": {
+    "positive": 1023,
+    "declarationUnsigned": 863,
+    "noStale": 63,
+    "didLeadingOne": 1015
+  },
+  "memory": {
+    "work": "16 signed-step calls (32 Ed25519 verifies)",
+    "measuredWith": "busybox time -v",
+    "scoped": {
+      "result": 16,
+      "maxRssKiB": 8620
+    },
+    "stepScopeOnly": {
+      "result": 16,
+      "maxRssKiB": 16940,
+      "mutation": "ed25519 verify? and both enrollment checks in (do ..)"
+    },
+    "unscoped": {
+      "result": 16,
+      "maxRssKiB": 266540,
+      "mutation": "every arena-scope in (do ..)"
+    },
+    "gateMaxRssKiB": {
+      "now": 50356,
+      "before": 408360
+    }
+  },
+  "execution": {
+    "network": "none",
+    "image": "docker.io/library/alpine:3@sha256:e311ae748be7f56ae5cba304bc488f0786df68ee507513f654a5cc8597cffb42",
+    "runtime": "native arm64 Linux 6.15.10 on local Podman applehv VM, shared with other sessions' containers",
+    "compilerAndGuest": "native ELF; no hosted compiler, C compiler or C loader invoked"
+  },
+  "limitations": [
+    "Source-unity gate, not project linkage",
+    "aarch64-linux only",
+    "L1 operator signature, peer transport, persistence and two-node convergence not exercised",
+    "Wall-clock times on a shared VM are not performance figures"
+  ],
+  "artifacts": {
+    "gate.kotoba": {
+      "bytes": 68928,
+      "sha256": "a3f8ad223b54e247a4c9a799f2186888bbd79f18d5855bb2813304c52a27db95"
+    },
+    "gate.elf": {
+      "bytes": 381440,
+      "sha256": "6b5a5454b1ad9ad188f46b3c75647acc6ce514141b7faacaae63a941510c3c05"
+    },
+    "decl-unsigned.kotoba": {
+      "bytes": 68816,
+      "sha256": "c18dff0a36ea24194da5cbc672aaacd82d4bef6d6b344e86597715afeb2f0f6f"
+    },
+    "no-stale.kotoba": {
+      "bytes": 68915,
+      "sha256": "777cdf73e9571e791088d7ef800480ef04b6db09faef86668d8f36103a5c4db7"
+    },
+    "did-leading-one.kotoba": {
+      "bytes": 68882,
+      "sha256": "82b83d5be0f068621b13e4ed94c3cc8ece135652ed1ef7ead708f1b17b782072"
+    },
+    "memory.kotoba": {
+      "bytes": 68513,
+      "sha256": "18f8a6f14ae655e59760e5c9c1c10929f4d17c5007791bd5b8c56b94e7411ddd"
+    },
+    "memory.elf": {
+      "bytes": 381440,
+      "sha256": "c9efd1a890ea64ba7f81e59b7b445ba404cded2b698f0bf0f103c9eb2c210b80"
+    },
+    "memory-step-only.kotoba": {
+      "bytes": 68486,
+      "sha256": "2bbb531c92a16b8dcb00d3c86b5368595a6b2e26f443dfa81987b2c5471a958e"
+    },
+    "memory-unscoped.kotoba": {
+      "bytes": 68468,
+      "sha256": "b9b7bf260ab6e46d9ee22ac87a59f7556f9ee20eea25f9682d5007684df70752"
+    }
+  }
+}

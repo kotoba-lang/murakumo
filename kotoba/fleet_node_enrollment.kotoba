@@ -38,15 +38,21 @@
 ;; The L1 inputs stay plain here; verifying the operator's signature over L1
 ;; is a separate step.
 ;;
+;; Memory: a static image frees nothing by itself, and one Ed25519 verify
+;; allocates about 8 MiB. Each signature check here runs in (arena-scope ..),
+;; signing goes through ed25519's sign-into, and signed-step -- a state code
+;; in, the next one out -- releases everything a step allocated. A
+;; long-lived agent calls signed-step, or wraps its own turn in arena-scope.
+;;
 ;; Composition order (canonical sources, no copies): org-nist-sha2 sha2.core,
 ;; org-ietf-ed25519 ed25519.selfhost, tsukasa ledger_core and node_state, this
 ;; file. docs/node-enrollment.md has the gate.
 (ns murakumo.fleet-node-enrollment
   (:export [did-key-public did-key-problem did-from-public field-problem
             declaration-text declaration-digest declaration-problem sign-declaration
-            heartbeat-text heartbeat-problem sign-heartbeat signed-target node-did
+            heartbeat-text heartbeat-problem sign-heartbeat signed-target signed-step node-did
             test-did test-signature-encoding test-declaration test-heartbeat
-            test-signed-target test-signed-path]))
+            test-signed-target test-signed-path test-signed-step]))
 
 ;; ---------------------------------------------------------------------------
 ;; Bytes and alphabets
@@ -212,12 +218,15 @@
           (not (= (en-fields node fd av) "enroll/ok")) (en-fields node fd av)
           (not (= (did-key-problem did) "enroll/ok")) (did-key-problem did)
           (not (en-sig-ok? sig)) "enroll/signature-encoding"
-          (not (verify? (did-key-public did) (en-bytes (declaration-text node did fd av rc)) (en-sig-bytes sig)))
+          (not (arena-scope (verify? (did-key-public did) (en-bytes (declaration-text node did fd av rc)) (en-sig-bytes sig))))
           "enroll/bad-signature"
           :else "tsukasa/ok")))
 
-(defn sign-declaration [seed :vector-i64 node :string fd :string av :string rc :i64] :string
-  (en-b64-encode (sign seed (en-bytes (declaration-text node (node-did seed) fd av rc)))))
+;; the node's side: did is the node's own (node-did seed, computed once);
+;; signing a did that is not the seed's gives a statement that never verifies
+(defn sign-declaration [seed :vector-i64 did :string node :string fd :string av :string rc :i64] :string
+  (let [out (vector-alloc 64) z (sign-into out seed (en-bytes (declaration-text node did fd av rc)))]
+    (en-b64-encode out)))
 
 (defn heartbeat-text [node :string did :string decl :string at :i64 drain :bool] :string
   (str "{\"at\":" at ",\"declaration\":\"" decl "\",\"did\":\"" did "\",\"drain\":" (if drain "true" "false")
@@ -232,15 +241,16 @@
   (cond (or (< at 0) (> at 9007199254740991)) "enroll/heartbeat-bad-time"
         (not (= (did-key-problem did) "enroll/ok")) (did-key-problem did)
         (not (en-sig-ok? sig)) "enroll/signature-encoding"
-        (not (verify? (did-key-public did) (en-bytes (heartbeat-text node did hb-decl at drain)) (en-sig-bytes sig)))
+        (not (arena-scope (verify? (did-key-public did) (en-bytes (heartbeat-text node did hb-decl at drain)) (en-sig-bytes sig))))
         "enroll/heartbeat-bad-signature"
         (not (= hb-decl decl)) "enroll/heartbeat-other-declaration"
         (> at (+ now skew)) "enroll/heartbeat-future"
         (< at (- now ttl)) "enroll/heartbeat-stale"
         :else "enroll/ok"))
 
-(defn sign-heartbeat [seed :vector-i64 node :string decl :string at :i64 drain :bool] :string
-  (en-b64-encode (sign seed (en-bytes (heartbeat-text node (node-did seed) decl at drain)))))
+(defn sign-heartbeat [seed :vector-i64 did :string node :string decl :string at :i64 drain :bool] :string
+  (let [out (vector-alloc 64) z (sign-into out seed (en-bytes (heartbeat-text node did decl at drain)))]
+    (en-b64-encode out)))
 
 ;; node-target over verified inputs: the declaration's problem and digest
 ;; come from the signed declaration; fresh and self-drain only from a valid
@@ -257,6 +267,19 @@
              "enroll/declaration-refused")
         fresh (= hb "enroll/ok")]
     (node-target problem admitted digest retired fresh cordoned (and fresh hb-drain))))
+
+;; one ledger step from signed inputs, with everything it allocated released:
+;; the previous state code in, the next one out (tsukasa's codes, -1 absent).
+;; l1 holds L1's two marks as bits, 1 cordoned and 2 retired, so the whole
+;; step fits the seed's sixteen parameters.
+(defn signed-step [prev :i64 node :string did :string fd :string av :string rc :i64 decl-sig :string
+                   admitted :string l1 :i64
+                   hb-decl :string hb-at :i64 hb-drain :bool hb-sig :string
+                   now :i64 ttl :i64 skew :i64] :i64
+  (arena-scope
+    (next-state prev (signed-target node did fd av rc decl-sig admitted
+                                    (= (bit-and l1 2) 2) (= (bit-and l1 1) 1)
+                                    hb-decl hb-at hb-drain hb-sig now ttl skew))))
 
 ;; ---------------------------------------------------------------------------
 ;; test-* : zero-arity, true when every assertion holds. Vectors: RFC 8032
@@ -318,7 +341,8 @@
        (= (declaration-digest "b70" (en-did1) "site-a" "always-on" 3) (en-dB))
        (= (declaration-problem "b70" (en-did1) "site-a" "always-on" 2 (en-sigA)) "tsukasa/ok")
        ;; the node's side gives OpenSSL's bytes
-       (= (sign-declaration (en-seed1) "b70" "site-a" "always-on" 2) (en-sigA))
+       (= (node-did (en-seed1)) (en-did1))
+       (= (sign-declaration (en-seed1) (en-did1) "b70" "site-a" "always-on" 2) (en-sigA))
        ;; another declaration, another key, another did
        (= (declaration-problem "b70" (en-did1) "site-a" "always-on" 3 (en-sigA)) "enroll/bad-signature")
        (= (declaration-problem "b70" (en-did1) "site-a" "always-on" 2 (en-sigA2)) "enroll/bad-signature")
@@ -340,6 +364,8 @@
     (and (= (heartbeat-text "b70" (en-did1) (en-dA) at false)
             "{\"at\":1792500000000,\"declaration\":\"9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29\",\"did\":\"did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw\",\"drain\":false,\"kind\":\"tsukasa.heartbeat/1\",\"node\":\"b70\"}")
          (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) at false (en-hb1) now 30000 5000) "enroll/ok")
+         ;; the node's side gives OpenSSL's bytes
+         (= (sign-heartbeat (en-seed1) (en-did1) "b70" (en-dA) at false) (en-hb1))
          ;; the drain mark is signed
          (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) at true (en-hb1) now 30000 5000) "enroll/heartbeat-bad-signature")
          (= (heartbeat-problem "b70" (en-did1) (en-dA) (en-dA) at true (en-hb2) now 30000 5000) "enroll/ok")
@@ -380,3 +406,18 @@
         s3 (next-state s2 stale) s4 (next-state s3 active) s5 (next-state s4 retired) s6 (next-state s5 retired)]
     (and (= s0 0) (= s1 1) (= s2 2) (schedulable? s2) (= s3 3) (not (schedulable? s3))
          (= s4 2) (= s5 3) (= s6 4))))
+
+;; the same life through signed-step, a state code at a time
+(defn- en-step [prev :i64 admitted :string retired :bool now :i64] :i64
+  (signed-step prev "b70" (en-did1) "site-a" "always-on" 2 (en-sigA) admitted (if retired 2 0)
+               (en-dA) (en-at) false (en-hb1) now 30000 5000))
+
+(defn test-signed-step [] :bool
+  (let [now (+ (en-at) 1000) late (+ (en-at) 40000)
+        s0 (en-step -1 "" false now) s1 (en-step s0 (en-dA) false now) s2 (en-step s1 (en-dA) false now)
+        s3 (en-step s2 (en-dA) false late) s4 (en-step s3 (en-dA) false now)
+        s5 (en-step s4 (en-dA) true now) s6 (en-step s5 (en-dA) true now)]
+    (and (= s0 0) (= s1 1) (= s2 2) (= s3 3) (= s4 2) (= s5 3) (= s6 4)
+         ;; l1 bit 1 is a cordon: an active node drains
+         (= (signed-step 2 "b70" (en-did1) "site-a" "always-on" 2 (en-sigA) (en-dA) 1
+                         (en-dA) (en-at) false (en-hb1) now 30000 5000) 3))))
