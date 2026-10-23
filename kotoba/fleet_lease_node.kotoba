@@ -28,7 +28,7 @@
 ;; Composition order: sha2.core, jcs.reader, fleet_lease_core, this file.
 ;; docs/lease-node.md has the gate.
 (ns murakumo.fleet-lease-node
-  (:export [lease-node-main]))
+  (:export [lease-node-main lease-round]))
 
 (defn- ln-listen [s :string] :string (typed-cap-call 43 :string :string s))
 (defn- ln-accept [s :string] :string (typed-cap-call 44 :string :string s))
@@ -127,33 +127,56 @@
             z (ln-write c)]
         r))))
 
-;; the voters' ports are arguments 5.. ; ask each, gather (ok count, best
-;; accepted ballot and value)
-(defn- ln-ports [] :i64 (loop [k 5] (if (= (ln-arg k) "") (- k 5) (recur (+ k 1)))))
+;; the voters' ports, "p1,p2,..": their count and the k-th
+(defn- ln-port-count [ports :string] :i64
+  (if (= ports "") 0
+    (let [b (ln-bytes ports)] (loop [i 0 n 1] (if (= i (vector-count b)) n (recur (+ i 1) (if (= (vector-at b i) 44) (+ n 1) n)))))))
 
-(defn- ln-phase [line :string own :string] :string
-  (let [n (ln-ports)]
+(defn- ln-port [ports :string k :i64] :string
+  (let [b (ln-bytes ports)]
+    (loop [i 0 start 0 n 0]
+      (cond (= i (vector-count b)) (if (= n k) (string-substring ports start i) "")
+            (= (vector-at b i) 44) (if (= n k) (string-substring ports start i) (recur (+ i 1) (+ i 1) (+ n 1)))
+            :else (recur (+ i 1) start n)))))
+
+;; ask each voter, gather (ok count, best accepted ballot and value)
+(defn- ln-phase [line :string own :string ports :string] :string
+  (let [n (ln-port-count ports)]
     (loop [k 0 oks 0 bt 0 bid "" bv own]
       (if (= k n) (str oks " " bv)
-        (let [r (ln-ask (ln-arg (+ k 5)) line)
+        (let [r (ln-ask (ln-port ports k) line)
               ok (= (ln-field r 0) "ok")
               at (ln-int (ln-field r 3)) aid (ln-undash (ln-field r 4)) av (ln-undash (ln-field r 5))
               better (and ok (adopt? at aid bt bid))]
           (recur (+ k 1) (if ok (+ oks 1) oks) (if better at bt) (if better aid bid) (if better av bv)))))))
 
-(defn- ln-proposer [mode :string t :i64 id :string own :string] :i64
-  (let [n (ln-ports) need (majority n)
-        prep (if (= mode "accept") (str n " " own) (ln-phase (str "prepare " t " " id) own))
+(defn- ln-proposer [mode :string t :i64 id :string own :string ports :string] :i64
+  (let [n (ln-port-count ports) need (majority n)
+        prep (if (= mode "accept") (str n " " own) (ln-phase (str "prepare " t " " id) own ports))
         pok (ln-int (ln-field prep 0)) value (ln-field prep 1)]
     (cond (< pok need) (let [x (ln-say (str "no-majority prepare " pok))] 1)
           (= mode "prepare") (let [x (ln-say (str "prepared " pok))] 0)
           :else
-          (let [acc (ln-phase (str "accept " t " " id " " value) value)
+          (let [acc (ln-phase (str "accept " t " " id " " value) value ports)
                 aok (ln-int (ln-field acc 0))]
             (if (< aok need) (let [x (ln-say (str "no-majority accept " aok))] 1)
               (let [x (ln-say (string-concat "chosen " value))] 0))))))
 
+;; one full round for own value: the chosen value (own or an adopted one),
+;; or "" when no majority answered
+(defn lease-round [t :i64 id :string own :string ports :string] :string
+  (let [need (majority (ln-port-count ports))
+        prep (ln-phase (str "prepare " t " " id) own ports)
+        value (ln-field prep 1)]
+    (if (< (ln-int (ln-field prep 0)) need) ""
+      (let [acc (ln-phase (str "accept " t " " id " " value) value ports)]
+        (if (< (ln-int (ln-field acc 0)) need) "" value)))))
+
+;; the voters' ports from argument 5 on, joined by ","
+(defn- ln-arg-ports [] :string
+  (loop [k 5 out ""] (if (= (ln-arg k) "") out (recur (+ k 1) (if (= out "") (ln-arg k) (str out "," (ln-arg k)))))))
+
 (defn lease-node-main [] :i64
   (if (= (ln-arg 0) "voter")
     (ln-voter (ln-int (ln-arg 1)) (ln-arg 2) (ln-int (ln-arg 3)))
-    (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4))))
+    (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports))))

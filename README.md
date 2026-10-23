@@ -592,6 +592,18 @@ over TCP: three voters and a proposer, each a static image.
 
 Reproduction: [lease node](docs/lease-node.md).
 
+`kotoba/fleet_job_node.kotoba` gives one agent-step job to two nodes.
+
+- **The race.** Each node races for the job's lease on that register. Only
+  the holder runs the cell (`cell-execute`) and signs an agent-step receipt
+  with the lease epoch.
+- **The verifier.** It learns the holder from the voters and confirms only
+  that receipt.
+- **The control.** When the other node runs anyway, its receipt is
+  `job/not-the-holder`. A verifier without the fence would confirm both.
+
+Reproduction: [job node](docs/job-node.md).
+
 ## Qwen3.8 Flash Next Expert-aware NVMe route
 
 `qwen3.8-flash-next-ud-iq3-xxs` is a single-node, lossless Qwen4Exp route for

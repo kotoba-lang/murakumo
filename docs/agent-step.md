@@ -15,7 +15,7 @@ to two nodes is confirmed once, through the fence.
     Hermes model provider (itonami-agent, "Two CLIs").
 - **`job-problem`.** It answers `job/ok`, or names the first field that is
   not one of those.
-- **`receipt-text`.** The node's signed execution receipt for one run:
+- **`step-receipt-text`.** The node's signed execution receipt for one run:
   `{"at":ms,"did":…,"epoch":n,"exit":n,"job":<id>,"kind":"itonami.agent-step-receipt/1","node":…,"output":<CID>}`.
 - **`receipt-verdict`.** It answers `job/confirmed` only for a receipt signed
   by the job lease's current holder, at the lease's current epoch, using
