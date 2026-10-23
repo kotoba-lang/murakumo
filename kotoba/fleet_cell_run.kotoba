@@ -38,7 +38,7 @@
 ;; this file.
 ;; docs/cell-run.md has the gate.
 (ns murakumo.fleet-cell-run
-  (:export [cell-run cell-run-main receipt-text]))
+  (:export [cell-run cell-run-main receipt-text own-state cell-execute key-seed]))
 
 (defn- cr-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
 (defn- cr-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
@@ -67,6 +67,10 @@
   (and (>= (vector-count key) 64)
        (loop [i 0] (if (= i 64) true (let [c (vector-at key i)] (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102))) (recur (+ i 1)) false))))))
 
+;; the node's seed from its key file; no bytes when it is not 64 lowercase hex
+(defn key-seed [key-path :string] :vector-i64
+  (let [key (cr-read key-path)] (if (cr-key-ok? key) (cr-seed key) (vector-alloc 0))))
+
 ;; the first manifest descriptor in an index jcs.reader accepted, or -1
 (defn- cr-manifest [index :vector-i64] :i64
   (let [root (loop [i 0] (if (and (< i (vector-count index)) (let [c (vector-at index i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i))
@@ -87,7 +91,7 @@
        ",\"kind\":\"itonami.receipt/1\",\"node\":\"" node "\",\"output\":\"" output "\"}"))
 
 ;; the node's own ledger state from its own signed statements
-(defn- cr-state [seed :vector-i64 did :string node :string fd :string admitted :string now :i64] :i64
+(defn own-state [seed :vector-i64 did :string node :string fd :string admitted :string now :i64] :i64
   (let [digest (declaration-digest node did fd "always-on" 2)
         dsig (sign-declaration seed did node fd "always-on" 2)
         at (- now 1000)
@@ -96,35 +100,49 @@
       (if (= i 3) s
         (recur (+ i 1) (signed-step s node did fd "always-on" 2 dsig admitted 0 digest at false hsig now 30000 5000))))))
 
+(defn- cr-field [s :string k :i64] :string
+  (let [b (cr-bytes s)]
+    (loop [i 0 start 0 n 0]
+      (cond (= i (vector-count b)) (if (= n k) (string-substring s start i) "")
+            (= (vector-at b i) 32) (if (= n k) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ n 1)))
+            :else (recur (+ i 1) start n)))))
+
+;; steps 3-5 for a node whose state is known: "ok <exit> <output CID>", or
+;; "refused <reason>"; prints the "verdict" and "layout" lines
+(defn cell-execute [index-path :string cell-digest :string cell-class :string layout :string
+                    state :i64 allowed :i64] :string
+  (let [index (cr-read index-path)
+        verdict (launch-verdict index cell-digest cell-class state 2 allowed)
+        a (cr-say (string-concat "verdict " verdict))]
+    (if (not (= verdict "launch/ok")) (string-concat "refused " verdict)
+      (let [md (cr-manifest-digest index)
+            lv (layout-verdict layout md (cr-manifest-size index))
+            y (cr-say (string-concat "layout " lv))]
+        (if (not (= lv "layout/ok")) (string-concat "refused " lv)
+          (let [answer (cr-spawn (str "/usr/bin/podman" "ARG_SEP" "run" "ARG_SEP" "--rm" "ARG_SEP" "--pull" "ARG_SEP" "never"
+                                      "ARG_SEP" "--network" "ARG_SEP" "none" "ARG_SEP" "--read-only"
+                                      "ARG_SEP" "oci:" layout))
+                nl (string-index-of answer "\n")
+                exit (if (< nl 0) -9 (cr-int (string-substring answer 0 nl)))
+                out (if (< nl 0) "" (string-substring answer (+ nl 1) (string-length answer)))]
+            (str "ok " exit " " (digest-cid (string-concat "sha256:" (sha256-hex (cr-bytes out))) 85))))))))
+
 (defn cell-run [index-path :string cell-digest :string cell-class :string layout :string key-path :string
                 node :string fd :string admitted :string now :i64 allowed :i64] :i64
   (let [key (cr-read key-path)]
     (if (not (cr-key-ok? key)) (let [x (cr-say "verdict run/bad-key")] 2)
       (let [seed (cr-seed key) did (node-did seed)
-            state (cr-state seed did node fd admitted now)
-            index (cr-read index-path)
-            verdict (launch-verdict index cell-digest cell-class state 2 allowed)
-            a (cr-say (string-concat "verdict " verdict))]
-        (if (not (= verdict "launch/ok")) 1
-          (let [md (cr-manifest-digest index)
-                lv (layout-verdict layout md (cr-manifest-size index))
-                y (cr-say (string-concat "layout " lv))]
-            (if (not (= lv "layout/ok")) 1
-              (let [answer (cr-spawn (str "/usr/bin/podman" "ARG_SEP" "run" "ARG_SEP" "--rm" "ARG_SEP" "--pull" "ARG_SEP" "never"
-                                          "ARG_SEP" "--network" "ARG_SEP" "none" "ARG_SEP" "--read-only"
-                                          "ARG_SEP" "oci:" layout))
-                    nl (string-index-of answer "\n")
-                    exit (if (< nl 0) -9 (cr-int (string-substring answer 0 nl)))
-                    out (if (< nl 0) "" (string-substring answer (+ nl 1) (string-length answer)))
-                    output (digest-cid (string-concat "sha256:" (sha256-hex (cr-bytes out))) 85)
-                    text (receipt-text now (index-cid cell-digest) did exit node output)
-                    sig (sign-statement seed text)
-                    b (cr-say (string-concat "exit " (string-from-i64 exit)))
-                    c (cr-say (string-concat "receipt " text))
-                    d (cr-say (string-concat "signature " sig))
-                    e (cr-say (str "self-check " (statement-problem did text sig) " "
-                                   (if (json-canonical? (cr-bytes text)) "1" "0")))]
-                0))))))))
+            r (cell-execute index-path cell-digest cell-class layout (own-state seed did node fd admitted now) allowed)]
+        (if (not (= (cr-field r 0) "ok")) 1
+          (let [exit (cr-int (cr-field r 1))
+                text (receipt-text now (index-cid cell-digest) did exit node (cr-field r 2))
+                sig (sign-statement seed text)
+                b (cr-say (string-concat "exit " (string-from-i64 exit)))
+                c (cr-say (string-concat "receipt " text))
+                d (cr-say (string-concat "signature " sig))
+                e (cr-say (str "self-check " (statement-problem did text sig) " "
+                               (if (json-canonical? (cr-bytes text)) "1" "0")))]
+            0))))))
 
 (defn cell-run-main [] :i64
   (cell-run (cr-arg 0) (cr-arg 1) (cr-arg 2) (cr-arg 3) (cr-arg 4) (cr-arg 5) (cr-arg 6) (cr-arg 7)

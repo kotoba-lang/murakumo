@@ -1,0 +1,120 @@
+{
+  "schema": "murakumo.job-node.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-289"
+  ],
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": {
+    "kotoba/fleet_job_node.kotoba": "dd60a2e166fc5caf9b6a3d02a92fd682ee330dfb07fb9343a4c2f9265ba9e66d",
+    "kotoba/fleet_agent_step.kotoba": "8e61e145c6c6dd1269a0cc33a44c88d5e34782cee7ca831c0872632863c6258d",
+    "kotoba/fleet_lease_core.kotoba": "7136a27cf24bc32e40ff2c1c594516b1bf3cf34f6ad621c27fa0b5f2fc1149c3",
+    "kotoba/fleet_lease_node.kotoba": "a482385e9cf2d0be3e04e9cf0de2a0bffcef2817d8342662192f3813cab4bc27",
+    "kotoba/fleet_cell_run.kotoba": "37023aed00d0a25e36ebdcc6781d3899e94fea3cc3f3da66954aeee8a76c1da9",
+    "kotoba/fleet_oci_layout.kotoba": "6beff95915cbe4def4882ff4d5d3156fff942f384e08a5d3c1c555baf0d89e02",
+    "kotoba/fleet_cell_launch.kotoba": "d3910f962e1dd61ff7dfa25f3c4ccfcc7fd0680ae6c918d4a288bd340fafd137",
+    "kotoba/fleet_node_enrollment.kotoba": "514652719718a77b078230efe8ca74e1473905dc8a4cde4656c790f1662af7e1"
+  },
+  "pinned": {
+    "sha2": "ea83e70",
+    "ed25519": "6f17477",
+    "jcs-reader": "6331a9b",
+    "oci": "9046392",
+    "grant": "fa7e9b5",
+    "tsukasa": "03e2322",
+    "sahai": "ba19195"
+  },
+  "images": {
+    "job": {
+      "bytes": 578048,
+      "sha256": "59fd9e19a590c3c40cc1ab825aa4ae4c91bcff9a68972202d027df5e9ed2d243"
+    },
+    "nofence": {
+      "bytes": 578048,
+      "sha256": "cadb34ed8c18084bbbee16e7e4ff096f3abdd04cd5a137f91be24b59ad54c53c"
+    }
+  },
+  "scenarios": {
+    "honest": "b70 at ballot 100, k16 0.3 s later at 101, both follow the lease",
+    "rogue": "the same, k16 runs whatever the lease says"
+  },
+  "outputs": {
+    "honest-b70": [
+      "Getting image source signatures",
+      "Copying blob sha256:20c301fc9b719905e3addefa11f41fc3b76d70be60f3e5b8ec451ed60370f305",
+      "Copying config sha256:f68da4db488f4d6f7972c4b4b1a42eae689bd8ed8f0f89b5565dee459c286732",
+      "Writing manifest to image destination",
+      "job a8813337b4a6e70a0b7eee3cdda6c0f010aba0f34634ef61224afdebb7196338",
+      "lease b70",
+      "verdict launch/ok",
+      "layout layout/ok",
+      "receipt {\"at\":1792500000000,\"did\":\"did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw\",\"epoch\":1,\"exit\":0,\"job\":\"a8813337b4a6e70a0b7eee3cdda6c0f010aba0f34634ef61224afdebb7196338\",\"kind\":\"itonami.agent-step-receipt/1\",\"node\":\"b70\",\"output\":\"bafkreig5gh2rdlgk55lmrrtnrfnfmnwp4kk5ijdefhhu77ynmxw7ixq5i4\"}",
+      "signature D6SiyZ2dtY2QFtMCoK9jXmv_XHdQm7-5ScOdh1nWzTyvUMHcnzavNBi2ajEDVuNtrfkbWqjcS2A1q-LbhJJRBg"
+    ],
+    "honest-k16": [
+      "job a8813337b4a6e70a0b7eee3cdda6c0f010aba0f34634ef61224afdebb7196338",
+      "lease b70",
+      "held-by b70"
+    ],
+    "rogue-b70": [
+      "Getting image source signatures",
+      "Copying blob sha256:20c301fc9b719905e3addefa11f41fc3b76d70be60f3e5b8ec451ed60370f305",
+      "Copying config sha256:f68da4db488f4d6f7972c4b4b1a42eae689bd8ed8f0f89b5565dee459c286732",
+      "Writing manifest to image destination",
+      "job a8813337b4a6e70a0b7eee3cdda6c0f010aba0f34634ef61224afdebb7196338",
+      "lease b70",
+      "verdict launch/ok",
+      "layout layout/ok",
+      "receipt {\"at\":1792500000000,\"did\":\"did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw\",\"epoch\":1,\"exit\":0,\"job\":\"a8813337b4a6e70a0b7eee3cdda6c0f010aba0f34634ef61224afdebb7196338\",\"kind\":\"itonami.agent-step-receipt/1\",\"node\":\"b70\",\"output\":\"bafkreig5gh2rdlgk55lmrrtnrfnfmnwp4kk5ijdefhhu77ynmxw7ixq5i4\"}",
+      "signature D6SiyZ2dtY2QFtMCoK9jXmv_XHdQm7-5ScOdh1nWzTyvUMHcnzavNBi2ajEDVuNtrfkbWqjcS2A1q-LbhJJRBg"
+    ],
+    "rogue-k16": [
+      "Getting image source signatures",
+      "Copying blob sha256:20c301fc9b719905e3addefa11f41fc3b76d70be60f3e5b8ec451ed60370f305",
+      "Copying config sha256:f68da4db488f4d6f7972c4b4b1a42eae689bd8ed8f0f89b5565dee459c286732",
+      "Writing manifest to image destination",
+      "job a8813337b4a6e70a0b7eee3cdda6c0f010aba0f34634ef61224afdebb7196338",
+      "lease b70",
+      "verdict launch/ok",
+      "layout layout/ok",
+      "receipt {\"at\":1792500000000,\"did\":\"did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT\",\"epoch\":1,\"exit\":0,\"job\":\"a8813337b4a6e70a0b7eee3cdda6c0f010aba0f34634ef61224afdebb7196338\",\"kind\":\"itonami.agent-step-receipt/1\",\"node\":\"k16\",\"output\":\"bafkreig5gh2rdlgk55lmrrtnrfnfmnwp4kk5ijdefhhu77ynmxw7ixq5i4\"}",
+      "signature Ctn9flyy_Y8VYb8ORc7T47AfPXrXuyeVxLzVxnORgZwTXI5l0D-lytePGk8_TfFpyIihx92ghccUDcN-kslSCg"
+    ]
+  },
+  "verdicts": {
+    "honest b70": "job/confirmed",
+    "rogue b70": "job/confirmed",
+    "rogue k16": "job/not-the-holder",
+    "restarted voters, job verifier": [
+      "job/confirmed",
+      "job/not-the-holder"
+    ],
+    "restarted voters, nofence verifier": [
+      "job/confirmed",
+      "job/confirmed"
+    ]
+  },
+  "independentChecks": {
+    "signature": "OpenSSL 3: Signature Verified Successfully",
+    "canonical": true,
+    "jobId": true,
+    "outputCid": true
+  },
+  "rerunGates": {
+    "agent-step": "7 / 3 / 3",
+    "lease-node": "unchanged",
+    "cell-run": "nine scenarios and the process table unchanged (control sed and process trigger updated to the refactor)"
+  },
+  "execution": {
+    "host": "podman machine (applehv), Fedora CoreOS arm64, Linux 6.15.10, rootless podman 5.6",
+    "reproduced": "docs/cell-run.md main block then docs/job-node.md, as written, in a fresh directory"
+  },
+  "limitations": [
+    "one host",
+    "k16 starts 0.3 s later (no real-time contention)",
+    "no bot turn with an inference rail, no consent step",
+    "no fleet token or membership on the register, no fsync",
+    "aarch64-linux only"
+  ]
+}

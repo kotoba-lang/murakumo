@@ -82,7 +82,7 @@ pin() { git -C "$K/$1" show "$2:$3" | sed '1,/\]))$/d'; }
 } > "$G/agent.kotoba"
 # controls: an agent that starts the container whatever the verdict says, and
 # one that does not compare the layout's index.json with the release
-sed 's/(if (not (= verdict "launch\/ok")) 1/(if false 1/' "$G/agent.kotoba" > "$G/unchecked.kotoba"
+sed 's/(if (not (= verdict "launch\/ok")) (string-concat "refused " verdict)/(if false (string-concat "refused " verdict)/' "$G/agent.kotoba" > "$G/unchecked.kotoba"
 sed 's/(not (ol-index-ok? xb x0 manifest-digest manifest-size)) "layout\/index-mismatch"/false "layout\/index-mismatch"/' \
   "$G/agent.kotoba" > "$G/no-index-check.kotoba"
 podman run --rm --pull never --platform linux/arm64 --network none \
@@ -220,7 +220,7 @@ The acceptance also asks that the start path has no Node.js, nbb, JVM,
 babashka or Cloudflare, checked in the process table. The same `$G` and
 agent are used with a cell that computes for about 3 seconds, so its
 processes can be seen. `ps` is sampled every 0.2 s until a process named
-`cell` or `crun` exists:
+`cell` exists:
 
 ```sh
 printf '(ns itonami-demo-slow (:export [main]))\n(defn- spin [n :i64] :i64 (loop [i 0 a 0] (if (= i n) a (recur (+ i 1) (+ a (rem i 7))))))\n(defn main [] :i64 (let [s (spin 300000000) x (typed-cap-call :io/write :string :string (string-concat "itonami cell: slow, " (string-concat (string-from-i64 (rem s 10)) "\\n")))] 0))\n' > "$G/slow.kotoba"
@@ -245,7 +245,7 @@ env KEXE_ALLOW=20,35,37,38 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_20=/usr/b
 AGENT=\$!
 for i in \$(seq 1 100); do
   ps -eo pid,ppid,user,comm,args > /tmp/ps-snap.txt
-  if awk '\$4 ~ /^(crun|cell)\$/' /tmp/ps-snap.txt | grep -q .; then cp /tmp/ps-snap.txt $G/slow-ps.txt; break; fi
+  if awk '\$4 == "cell"' /tmp/ps-snap.txt | grep -q .; then cp /tmp/ps-snap.txt $G/slow-ps.txt; break; fi
   sleep 0.2
 done
 wait \$AGENT

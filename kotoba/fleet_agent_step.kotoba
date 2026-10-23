@@ -11,7 +11,7 @@
 ;;                      itonami inference rail, murakumo or mishima, never a
 ;;                      Hermes model provider (itonami-agent "Two CLIs")
 ;;   job-problem        "job/ok" or the first field that is not one of those
-;;   receipt-text       the node's signed execution receipt for one run:
+;;   step-receipt-text  the node's signed execution receipt for one run:
 ;;                      {"at":ms,"did":..,"epoch":n,"exit":n,"job":<id>,
 ;;                       "kind":"itonami.agent-step-receipt/1","node":..,
 ;;                       "output":<CID>}
@@ -32,7 +32,7 @@
 ;; fleet_node_enrollment, sahai.fence, this file. docs/agent-step.md has the
 ;; gate.
 (ns murakumo.fleet-agent-step
-  (:export [job-text job-id job-problem receipt-text receipt-verdict test-agent-step]))
+  (:export [job-text job-id job-problem step-receipt-text receipt-verdict test-agent-step]))
 
 (defn- as-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
 
@@ -50,7 +50,7 @@
         (not (or (= rail "murakumo") (= rail "mishima"))) "job/not-an-itonami-rail"
         :else "job/ok"))
 
-(defn receipt-text [at :i64 did :string epoch :i64 exit :i64 job :string node :string output :string] :string
+(defn step-receipt-text [at :i64 did :string epoch :i64 exit :i64 job :string node :string output :string] :string
   (str "{\"at\":" at ",\"did\":\"" did "\",\"epoch\":" epoch ",\"exit\":" exit ",\"job\":\"" job
        "\",\"kind\":\"itonami.agent-step-receipt/1\",\"node\":\"" node "\",\"output\":\"" output "\"}"))
 
@@ -58,7 +58,7 @@
 (defn receipt-verdict [holder-did :string holder-epoch :i64
                        at :i64 did :string epoch :i64 exit :i64 job :string node :string output :string
                        sig :string] :string
-  (cond (not (= (statement-problem did (receipt-text at did epoch exit job node output) sig) "enroll/ok")) "job/bad-signature"
+  (cond (not (= (statement-problem did (step-receipt-text at did epoch exit job node output) sig) "enroll/ok")) "job/bad-signature"
         (not (= did holder-did)) "job/not-the-holder"
         (not (= epoch holder-epoch)) "job/stale-epoch"
         (= (cid-digest output) "") "job/bad-output-cid"
@@ -109,4 +109,4 @@
          (= (as-verdict (as-didB) 2 (as-didB) 2 0 "k16" (as-sigBbyA)) "job/bad-signature")
          (= (as-verdict (as-didB) 2 (as-didB) 2 1 "k16" (as-sigB)) "job/bad-signature")
          ;; the receipts are canonical JSON
-         (json-canonical? (as-bytes (receipt-text 1792500000000 (as-didB) 2 0 (as-jobId) "k16" (as-output)))))))
+         (json-canonical? (as-bytes (step-receipt-text 1792500000000 (as-didB) 2 0 (as-jobId) "k16" (as-output)))))))

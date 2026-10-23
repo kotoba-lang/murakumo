@@ -1,0 +1,125 @@
+;; murakumo.fleet-job-node -- one agent-step job, given to more than one node,
+;; run once and confirmed once (Linear JUN-289). Every piece is an earlier
+;; module; this file puts them in order on a node and on a verifier.
+;;
+;;   run     job-node-main run <profile> <input> <policy> <rail> <node> <key>
+;;           <failure-domain> <admitted> <now> <allow> <index> <layout>
+;;           <voter ports p1,p2,..> <ballot t> <follow|rogue>
+;;           1. the job (fleet_agent_step job-problem, job-id);
+;;           2. the job's lease: one round on the quorum register over TCP
+;;              (fleet_lease_node lease-round), own value
+;;              lease-text(node, job id, slot 0, epoch 1, now + ttl); the
+;;              chosen value names the holder ("lease <holder>");
+;;           3. a node that does not hold it stops ("held-by <holder>"),
+;;              unless it is the rogue control;
+;;           4. the holder runs the cell: its own signed state (own-state),
+;;              then fleet_cell_run's cell-execute (release verdict, image
+;;              layout, podman with a fixed argv);
+;;           5. it signs the agent-step receipt with the lease epoch
+;;              ("receipt <text>", "signature <b64url>").
+;;   verify  job-node-main verify <voter ports> <trust node=did,...> <node
+;;           output file> <ballot t>; the file is a node's run output, whose
+;;           "receipt" and "signature" lines are judged (wire 35)
+;;           learns the chosen lease with one round (adopting whatever was
+;;           chosen), maps its holder to a did through the trust, and judges
+;;           the receipt with receipt-verdict: job/confirmed only for the
+;;           holder at the lease's epoch.
+;;
+;; Composition order: sha2.core, ed25519.selfhost, jcs.reader,
+;; oci.itonami-artifact, grant.runtime-class, tsukasa ledger_core and
+;; node_state, fleet_node_enrollment, fleet_cell_launch, fleet_oci_layout,
+;; fleet_cell_run, sahai.fence, fleet_agent_step, fleet_lease_core,
+;; fleet_lease_node, this file. docs/job-node.md has the gate.
+(ns murakumo.fleet-job-node
+  (:export [job-node-main]))
+
+(defn- jn-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- jn-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
+(defn- jn-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn- jn-int [s :string] :i64
+  (let [b (jn-bytes s) neg (and (> (vector-count b) 0) (= (vector-at b 0) 45)) j0 (if neg 1 0)]
+    (if (or (= (vector-count b) j0) (> (- (vector-count b) j0) 16)) -1
+      (loop [i j0 n 0]
+        (if (= i (vector-count b)) (if neg (- 0 n) n)
+          (let [c (vector-at b i)] (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -1)))))))
+
+(defn- jn-field [s :string k :i64] :string
+  (let [b (jn-bytes s)]
+    (loop [i 0 start 0 n 0]
+      (cond (= i (vector-count b)) (if (= n k) (string-substring s start i) "")
+            (= (vector-at b i) 32) (if (= n k) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ n 1)))
+            :else (recur (+ i 1) start n)))))
+
+;; a member of a JSON object text: its string, its integer, or "" / -1
+(defn- jn-root [b :vector-i64] :i64
+  (loop [i 0] (if (and (< i (vector-count b)) (let [c (vector-at b i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i)))
+(defn- jn-text [doc :string key :string] :string
+  (let [b (jn-bytes doc)]
+    (if (not (json-valid? b)) ""
+      (let [v (json-member b (jn-root b) key)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))))
+(defn- jn-num [doc :string key :string] :i64
+  (let [b (jn-bytes doc)]
+    (if (not (json-valid? b)) -1
+      (let [v (json-member b (jn-root b) key)] (if (and (>= v 0) (json-int-ok? b v)) (json-int b v) -1)))))
+
+;; the did a trust "node=did,node=did" gives a node, or ""
+(defn- jn-did-of [trust :string node :string] :string
+  (let [b (jn-bytes trust) key (string-concat node "=")]
+    (loop [i 0 start 0]
+      (let [end (if (= i (vector-count b)) true (= (vector-at b i) 44))]
+        (cond (and end (> i start))
+              (let [entry (string-substring trust start i)]
+                (if (= (string-index-of entry key) 0) (string-substring entry (string-length key) (string-length entry))
+                  (if (= i (vector-count b)) "" (recur (+ i 1) (+ i 1)))))
+              (= i (vector-count b)) ""
+              end (recur (+ i 1) (+ i 1))
+              :else (recur (+ i 1) start))))))
+
+;; the rest of the first line of text that starts with prefix, or ""
+(defn- jn-line [text :string prefix :string] :string
+  (let [k (string-index-of (string-concat "\n" text) (string-concat "\n" prefix))]
+    (if (< k 0) ""
+      (let [start (+ k (string-length prefix))
+            rest (string-substring text start (string-length text))
+            nl (string-index-of rest "\n")]
+        (if (< nl 0) rest (string-substring rest 0 nl))))))
+
+(defn- jn-run [] :i64
+  (let [profile (jn-arg 1) input (jn-arg 2) policy (jn-arg 3) rail (jn-arg 4)
+        node (jn-arg 5) seed (key-seed (jn-arg 6)) fd (jn-arg 7) admitted (jn-arg 8)
+        now (jn-int (jn-arg 9)) allowed (jn-int (jn-arg 10)) index (jn-arg 11) layout (jn-arg 12)
+        ports (jn-arg 13) t (jn-int (jn-arg 14)) rogue (= (jn-arg 15) "rogue")
+        jp (job-problem profile input policy rail)]
+    (cond (not (= jp "job/ok")) (let [x (jn-say (string-concat "job " jp))] 1)
+          (= (vector-count seed) 0) (let [x (jn-say "job run/bad-key")] 1)
+          :else
+          (let [jid (job-id profile input policy rail)
+                chosen (lease-round t node (lease-text node jid 0 1 (+ now (lease-ttl)) 0) ports)
+                holder (if (= chosen "") "" (jn-text chosen "node"))
+                epoch (if (= chosen "") 0 (jn-num chosen "epoch"))
+                a (jn-say (str "job " jid))
+                b (jn-say (string-concat "lease " (if (= holder "") "none" holder)))]
+            (if (and (not (= holder node)) (not rogue)) (let [x (jn-say (string-concat "held-by " holder))] 0)
+              (let [did (node-did seed)
+                    r (cell-execute index profile "container" layout (own-state seed did node fd admitted now) allowed)]
+                (if (not (= (jn-field r 0) "ok")) (let [x (jn-say r)] 1)
+                  (let [text (step-receipt-text now did (if (> epoch 0) epoch 1) (jn-int (jn-field r 1)) jid node (jn-field r 2))
+                        c (jn-say (string-concat "receipt " text))
+                        d (jn-say (string-concat "signature " (sign-statement seed text)))]
+                    0))))))))
+
+(defn- jn-verify [] :i64
+  (let [ports (jn-arg 1) trust (jn-arg 2)
+        out (if (= (typed-cap-call 35 :string :string (string-concat (jn-arg 3) "EXISTS_SEP")) "1") (typed-cap-call 35 :string :string (jn-arg 3)) "")
+        receipt (jn-line out "receipt ") sig (jn-line out "signature ") t (jn-int (jn-arg 4))
+        chosen (lease-round t "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports)
+        holder (if (= chosen "") "" (jn-text chosen "node"))
+        verdict (receipt-verdict (jn-did-of trust holder) (jn-num chosen "epoch")
+                                 (jn-num receipt "at") (jn-text receipt "did") (jn-num receipt "epoch") (jn-num receipt "exit")
+                                 (jn-text receipt "job") (jn-text receipt "node") (jn-text receipt "output") sig)
+        x (jn-say (str "holder " (if (= holder "") "none" holder) " verdict " verdict))]
+    (if (= verdict "job/confirmed") 0 1)))
+
+(defn job-node-main [] :i64
+  (if (= (jn-arg 0) "verify") (jn-verify) (jn-run)))
