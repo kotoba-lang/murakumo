@@ -1,0 +1,117 @@
+{
+  "schema": "murakumo.lease-preemption.v1",
+  "date": "2026-10-23",
+  "linear": [
+    "JUN-289"
+  ],
+  "amuCommit": "457042ab741520980bceb5bf12970937d1bc8dba",
+  "compilerSha256": "1739f52f02fc90c28a1fa4a6c3a3f780caeff481893e3a1cd35badd8c227682e",
+  "sources": {
+    "kotoba/fleet_lease_node.kotoba": "2e244b7faa7216d882470598245beff923049d9984f226b2d4aecd8d428d2579",
+    "kotoba/fleet_job_node.kotoba": "b3626b40e5e10f671a2424dad633a77185656bbbf291a0c0c5dfef52ea55301f"
+  },
+  "images": {
+    "node": {
+      "bytes": 532992,
+      "sha256": "71b88fe9d38ea58b793a7b5c6b013c77522348761fbe94e038b94d0ef08cdea6"
+    },
+    "once": {
+      "bytes": 532992,
+      "sha256": "6b008055e57d9b64d9a56b10c2aa86c9413289c4c79b1eb28fbfe3d749343d39"
+    }
+  },
+  "jobImage": {
+    "bytes": 635392,
+    "sha256": "79cb3cc8f66088c7dafc312d0a2025abe1e4f906a1fe0c86cf4708f6d265a393"
+  },
+  "control": "once: sed sets (defn- ln-tries [] :i64 1), one round as before this change",
+  "preemption": [
+    "== proposer: node",
+    "a1 k16 prepares (500,k16): prepared 3",
+    "a2 b70 round    (100,b70): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot",
+    "  voter 1: 501 b70 501 b70 {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",",
+    "  voter 2: 501 b70 501 b70 {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",",
+    "  voter 3: 501 b70 501 b70 {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",",
+    "b1 k16 round    (500,k16): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot",
+    "b2 b70 round    (100,b70): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot",
+    "  voter 1: 501 b70 501 b70 {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",",
+    "  voter 2: 501 b70 501 b70 {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",",
+    "  voter 3: 501 b70 501 b70 {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",",
+    "c1 one voter up (100,b70): no-majority prepare 1",
+    "  voter 1: 100 b70 0 - -",
+    "== proposer: once",
+    "a1 k16 prepares (500,k16): prepared 3",
+    "a2 b70 round    (100,b70): no-majority prepare 0",
+    "  voter 1: 500 k16 0 - -",
+    "  voter 2: 500 k16 0 - -",
+    "  voter 3: 500 k16 0 - -",
+    "b1 k16 round    (500,k16): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot",
+    "b2 b70 round    (100,b70): no-majority prepare 0",
+    "  voter 1: 500 k16 500 k16 {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",",
+    "  voter 2: 500 k16 500 k16 {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",",
+    "  voter 3: 500 k16 500 k16 {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",",
+    "c1 one voter up (100,b70): no-majority prepare 1",
+    "  voter 1: 100 b70 0 - -",
+    "race node: both hold the same lease 20/20, a proposer without a lease 0/20, two leases 0/20",
+    "race once: both hold the same lease 0/20, a proposer without a lease 20/20, two leases 0/20"
+  ],
+  "reruns": {
+    "lease-node run": [
+      "== voters: node",
+      "1 A prepare (100,a): prepared 3",
+      "2 B round   (101,b): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"until\":1792500900000}",
+      "3 A accept  (100,a): no-majority accept 0",
+      "4 A round   (102,a): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"until\":1792500900000}",
+      "== voters: careless",
+      "1 A prepare (100,a): prepared 3",
+      "2 B round   (101,b): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\"until\":1792500900000}",
+      "3 A accept  (100,a): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"until\":1792500900000}",
+      "4 A round   (102,a): chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"until\":1792500900000}"
+    ],
+    "membership": [
+      "k16 proposes, topology says disabled: no-majority accept 0",
+      "b70 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"b70\",\"revision\":7,\"slot\":0,\"until\":1792500900000}",
+      "b70 proposes until too far ahead: no-majority accept 0",
+      "voters given a forged topology: no-majority prepare 0",
+      "forged voter says: voter topology/needs-signatures",
+      "control: open voters, k16 proposes: chosen {\"class\":\"qwen-text\",\"epoch\":1,\"node\":\"k16\",\"revision\":7,\"slot\":0,\""
+    ],
+    "membership voters not retried": {
+      "k16": [
+        "101 k16 0 - -",
+        "101 k16 0 - -",
+        "101 k16 0 - -"
+      ],
+      "far": [
+        "101 b70 0 - -",
+        "101 b70 0 - -",
+        "101 b70 0 - -"
+      ]
+    },
+    "job-node": [
+      "honest b70: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "honest k16: lease b70 held-by b70",
+      "honest verify b70's receipt: holder b70 verdict job/confirmed",
+      "rogue b70: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "rogue k16: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "rogue verify b70's receipt: holder b70 verdict job/confirmed",
+      "rogue verify k16's receipt: holder b70 verdict job/not-the-holder",
+      "job verifier, b70's receipt: holder b70 verdict job/confirmed",
+      "job verifier, k16's receipt: holder b70 verdict job/not-the-holder",
+      "nofence verifier, b70's receipt: holder b70 verdict job/confirmed",
+      "nofence verifier, k16's receipt: holder b70 verdict job/confirmed",
+      "canonical: True | kind itonami.agent-step-receipt/1 | epoch 1 | node b70",
+      "job id: True",
+      "class k16: ineligible grant/runtime-class-not-granted",
+      "class b70: lease b70 verdict launch/ok layout layout/ok | receipt",
+      "class verify b70's output: holder b70 verdict job/confirmed",
+      "late k16: lease k16 verdict grant/runtime-class-not-granted refused grant/runtime-class-not-granted",
+      "late b70: lease k16 held-by k16",
+      "late verify b70's output: holder k16 verdict job/bad-signature"
+    ]
+  },
+  "notes": [
+    "Race counts are from one run on one machine and depend on timing; the scripted cases a-c do not.",
+    "Every block was run as documented in fresh directories; no Node, NBB, JVM, hosted compiler, C compiler or C loader runs."
+  ]
+}

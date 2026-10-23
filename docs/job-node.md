@@ -18,8 +18,9 @@ its acceptance items are covered here:
      policy, the launch verdict of [cell launch](cell-launch.md). A node
      that may not run the cell stops here (`ineligible`), before it
      competes for the lease.
-  3. The node takes one round on the quorum lease register over TCP
-     (`lease-round`, [lease node](lease-node.md)). Its own value is
+  3. The node takes a round on the quorum lease register over TCP
+     (`lease-round`, [lease node](lease-node.md)), tried again if a higher
+     promise preempts it. Its own value is
      `lease-text(node, job id, slot 0, epoch 1, now + ttl)`, and the chosen
      value names the holder.
   4. A node that does not hold the lease stops (`held-by`).
@@ -28,7 +29,7 @@ its acceptance items are covered here:
      ([cell run](cell-run.md)).
   6. It signs the agent-step receipt with the lease epoch
      ([agent step](agent-step.md)).
-- **`verify`, on anyone:** it learns the chosen lease with one round, maps
+- **`verify`, on anyone:** it learns the chosen lease with `lease-round`, maps
   the holder to its did through the trust, and judges a node's receipt with
   `receipt-verdict`.
 
@@ -268,10 +269,9 @@ The receipt is
 ## What this does not show
 
 - Separate hosts. Everything runs on the podman machine.
-- Real-time contention between proposers. k16 starts after b70's round.
-  The proposer takes one round and does not retry: started 0.3 s apart,
-  with each node checking its own state first, the two rounds overlap and
-  b70's can end `lease none`. The fence still confirms one receipt.
+- Real-time contention between proposers here. k16 starts after b70's
+  round. A preempted round is tried again ([lease node, Preemption](lease-node.md#preemption)),
+  which the lease node's race loop measures on its own.
 - A real bot profile's turn with an inference rail, and the consent before
   inference leaves the node.
 - The fleet token and membership on the register, and an fsync for voter

@@ -21,7 +21,9 @@
 ;;   proposer  lease-node-main proposer <mode> <t> <id> <value> <port>...
 ;;             mode full: prepare, adopt the value accepted under the highest
 ;;             ballot (else its own), accept, print "chosen <value>" on a
-;;             majority; mode prepare: only the prepare phase; mode accept:
+;;             majority; a round that a voter's higher promise preempted is
+;;             tried again just above it (at most 5 rounds, as lease.cljk
+;;             round!); mode prepare: only the prepare phase; mode accept:
 ;;             only the accept phase, with the value given
 ;;
 ;; Lines: "prepare <t> <id>" and "accept <t> <id> <value>"; replies
@@ -186,38 +188,72 @@
             (= (vector-at b i) 44) (if (= n k) (string-substring ports start i) (recur (+ i 1) (+ i 1) (+ n 1)))
             :else (recur (+ i 1) start n)))))
 
-;; ask each voter, gather (ok count, best accepted ballot and value)
-(defn- ln-phase [line :string own :string ports :string] :string
+;; ask each voter, gather "<ok> <answers> <pre> <value>": the ok count, the
+;; number of voters that answered, the highest promise t among refusals whose
+;; promise beats the ballot (t, id) (0 when none), and the value accepted under
+;; the highest ballot (else own)
+(defn- ln-phase [line :string t :i64 id :string own :string ports :string] :string
   (let [n (ln-port-count ports)]
-    (loop [k 0 oks 0 bt 0 bid "" bv own]
-      (if (= k n) (str oks " " bv)
+    (loop [k 0 oks 0 ans 0 pre 0 bt 0 bid "" bv own]
+      (if (= k n) (str oks " " ans " " pre " " bv)
         (let [r (ln-ask (ln-port ports k) line)
               ok (= (ln-field r 0) "ok")
+              pt (ln-int (ln-field r 1)) pid (ln-undash (ln-field r 2))
+              beats (and (= (ln-field r 0) "no") (> (ballot-cmp pt pid t id) 0) (> pt pre))
               at (ln-int (ln-field r 3)) aid (ln-undash (ln-field r 4)) av (ln-undash (ln-field r 5))
               better (and ok (adopt? at aid bt bid))]
-          (recur (+ k 1) (if ok (+ oks 1) oks) (if better at bt) (if better aid bid) (if better av bv)))))))
+          (recur (+ k 1) (if ok (+ oks 1) oks) (if (= r "") ans (+ ans 1)) (if beats pt pre)
+                 (if better at bt) (if better aid bid) (if better av bv)))))))
+
+;; a phase without a majority of oks: "preempted <pre> <phase> <ok>" when a
+;; majority answered and a refusal carried a higher promise, else
+;; "no-majority <phase> <ok>"
+(defn- ln-short [res :string phase :string need :i64] :string
+  (let [oks (ln-field res 0)]
+    (if (and (>= (ln-int (ln-field res 1)) need) (> (ln-int (ln-field res 2)) 0))
+      (str "preempted " (ln-field res 2) " " phase " " oks)
+      (str "no-majority " phase " " oks))))
+
+;; one round at the ballot (t, id): "chosen <value>" (own or adopted), or
+;; what ln-short says about the phase that fell short
+(defn- ln-try [t :i64 id :string own :string ports :string] :string
+  (let [need (majority (ln-port-count ports))
+        prep (ln-phase (str "prepare " t " " id) t id own ports)
+        value (ln-field prep 3)]
+    (if (< (ln-int (ln-field prep 0)) need) (ln-short prep "prepare" need)
+      (let [acc (ln-phase (str "accept " t " " id " " value) t id value ports)]
+        (if (< (ln-int (ln-field acc 0)) need) (ln-short acc "accept" need)
+          (string-concat "chosen " value))))))
+
+(defn- ln-tries [] :i64 5)
+
+;; as lease.cljk round!: a round preempted by a higher promise is tried again
+;; just above that promise, at most ln-tries rounds, and the retry adopts
+;; whatever was accepted by then. Too few answers (fail closed) or a refused
+;; value end it. There is no random backoff: the runtime has no sleep.
+(defn- ln-rounds [t :i64 id :string own :string ports :string] :string
+  (loop [k 1 tt t]
+    (let [r (ln-try tt id own ports)]
+      (cond (not (= (ln-field r 0) "preempted")) r
+            (< k (ln-tries)) (recur (+ k 1) (+ (ln-int (ln-field r 1)) 1))
+            :else (str "no-majority " (ln-field r 2) " " (ln-field r 3))))))
 
 (defn- ln-proposer [mode :string t :i64 id :string own :string ports :string] :i64
-  (let [n (ln-port-count ports) need (majority n)
-        prep (if (= mode "accept") (str n " " own) (ln-phase (str "prepare " t " " id) own ports))
-        pok (ln-int (ln-field prep 0)) value (ln-field prep 1)]
-    (cond (< pok need) (let [x (ln-say (str "no-majority prepare " pok))] 1)
-          (= mode "prepare") (let [x (ln-say (str "prepared " pok))] 0)
+  (let [need (majority (ln-port-count ports))]
+    (cond (= mode "prepare")
+          (let [pok (ln-int (ln-field (ln-phase (str "prepare " t " " id) t id own ports) 0))]
+            (if (< pok need) (let [x (ln-say (str "no-majority prepare " pok))] 1) (let [x (ln-say (str "prepared " pok))] 0)))
+          (= mode "accept")
+          (let [aok (ln-int (ln-field (ln-phase (str "accept " t " " id " " own) t id own ports) 0))]
+            (if (< aok need) (let [x (ln-say (str "no-majority accept " aok))] 1) (let [x (ln-say (string-concat "chosen " own))] 0)))
           :else
-          (let [acc (ln-phase (str "accept " t " " id " " value) value ports)
-                aok (ln-int (ln-field acc 0))]
-            (if (< aok need) (let [x (ln-say (str "no-majority accept " aok))] 1)
-              (let [x (ln-say (string-concat "chosen " value))] 0))))))
+          (let [r (ln-rounds t id own ports) x (ln-say r)] (if (= (ln-field r 0) "chosen") 0 1)))))
 
-;; one full round for own value: the chosen value (own or an adopted one),
-;; or "" when no majority answered
+;; rounds for own value, as the proposer's full mode: the chosen value (own or
+;; an adopted one), or "" when none was chosen
 (defn lease-round [t :i64 id :string own :string ports :string] :string
-  (let [need (majority (ln-port-count ports))
-        prep (ln-phase (str "prepare " t " " id) own ports)
-        value (ln-field prep 1)]
-    (if (< (ln-int (ln-field prep 0)) need) ""
-      (let [acc (ln-phase (str "accept " t " " id " " value) value ports)]
-        (if (< (ln-int (ln-field acc 0)) need) "" value)))))
+  (let [r (ln-rounds t id own ports)]
+    (if (= (ln-field r 0) "chosen") (ln-field r 1) "")))
 
 ;; the voters' ports from argument 5 on, joined by ","
 (defn- ln-arg-ports [] :string

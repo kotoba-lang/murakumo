@@ -11,7 +11,8 @@
 ;;              node active, release digest, runtime class, host policy).
 ;;              A node that may not stops ("ineligible <verdict>") before
 ;;              the lease round, so it never holds a job it would refuse;
-;;           2. the job's lease: one round on the quorum register over TCP
+;;           2. the job's lease: a round on the quorum register over TCP, tried
+;;              again when a higher promise preempts it
 ;;              (fleet_lease_node lease-round), own value
 ;;              lease-text(node, job id, slot 0, epoch 1, now + ttl); the
 ;;              chosen value names the holder ("lease <holder>");
@@ -25,7 +26,7 @@
 ;;   verify  job-node-main verify <voter ports> <trust node=did,...> <node
 ;;           output file> <ballot t>; the file is a node's run output, whose
 ;;           "receipt" and "signature" lines are judged (wire 35)
-;;           learns the chosen lease with one round (adopting whatever was
+;;           learns the chosen lease with lease-round (adopting whatever was
 ;;           chosen), maps its holder to a did through the trust, and judges
 ;;           the receipt with receipt-verdict: job/confirmed only for the
 ;;           holder at the lease's epoch.
