@@ -9,17 +9,20 @@
 ;; At start the replica verifies <file> (fleet_topology_verify
 ;; topology-verdict against revision 0, which includes validate!) and does not
 ;; start on any other verdict, nor without a fleet token of 32 bytes or more
-;; (fleet_lease_node lease-token). Then, in slices of 100 ms:
+;; (fleet_lease_node lease-token). Then, until the next poll is due:
 ;;   serve  a request "GET /topology" carrying "authorization: Bearer <token>"
 ;;          is answered 200 with the document held. As resident.cljk orders
 ;;          it, the token comes first: any request without it is answered 401
 ;;          and logged ("replica refused unauthenticated"); any other request
 ;;          404. HTTP/1.0, then the connection closes.
-;;   poll   every <poll ms> (a served request counts as one 100 ms slice),
-;;          as tick! does: the seeds, then the url of every gateway and node of
-;;          the payload held, without repeats and without the replica's own
-;;          address (it serves only between polls); <fanout> of them from a cursor
-;;          that moves by one each poll (the first poll starts at the second).
+;;   poll   every <poll ms> on the monotonic clock (wire 7), as setInterval
+;;          runs tick!: the first <poll ms> after start, each next one <poll
+;;          ms> after the previous one ended (a poll blocks serving, where
+;;          tick! runs beside it). As tick! does: the seeds, then the url
+;;          of every gateway and node of the payload held, without repeats
+;;          and without the replica's own address (it serves only between
+;;          polls); <fanout> of them from a cursor that moves by one each poll
+;;          (the first poll starts at the second).
 ;;          GET /topology from each with the token (HTTP/1.0, at most 262144
 ;;          body bytes, 3 s). As
 ;;          accept! does: a document that verifies, advances the revision and
@@ -36,8 +39,7 @@
 ;; The dial grant (KEXE_CAP_RESOURCES_45) must name the seeds and the payload's
 ;; addresses. The file is replaced durably (a temporary, fsync, rename, fsync
 ;; of the directory: amu wire 35, JUN-359), so a reader never sees it half
-;; written; the voters still verify what they read. Not as start!: the poll
-;; interval is counted in slices, not by a clock.
+;; written; the voters still verify what they read.
 ;;
 ;; Composition order: sha2.core, ed25519.selfhost, jcs.reader, tsukasa
 ;; ledger_core and node_state, fleet_node_enrollment, fleet_intent_core,
@@ -269,15 +271,25 @@
         (if (or (= i n) (= i fanout)) out
           (recur (+ i 1) (tr-add out (tr-part all (rem (+ cursor i) n)))))))))
 
+;; the monotonic clock in ms: wire 7 answers it in ns, up to 19 digits; read in
+;; arena-scope, so the loop that asks it keeps nothing
+(defn- tr-mono-read [] :i64
+  (let [b (tr-bytes (typed-cap-call 7 :string :string "monotonic"))]
+    (quot (loop [i 0 n 0] (if (= i (vector-count b)) n (recur (+ i 1) (+ (* n 10) (- (vector-at b i) 48))))) 1000000)))
+(defn- tr-mono [] :i64 (arena-scope (tr-mono-read)))
+
+;; serve until a poll is due (each accept waits at most 1 s), then poll; the
+;; next poll is due <poll ms> after this one ends, since none is served while
+;; it runs
 (defn- tr-run [l :string self :string file :string trust :string threshold :i64 token :string poll :i64 polls :i64 fanout :i64
                seeds :string held :vector-i64] :i64
-  (loop [k 0 left poll cur held]
+  (loop [k 0 due (+ (tr-mono) poll) cur held]
     (if (>= k polls) 0
-      (let [r (tr-serve-one l cur token (if (< left 100) left 100))]
-        (cond (> left 100) (recur k (- left 100) cur)
-              (= (arena-scope (tr-poll file cur trust threshold token (tr-pick (tr-all-peers seeds cur self) (+ k 1) fanout))) 1)
-              (recur (+ k 1) poll (tr-load file))
-              :else (recur (+ k 1) poll cur))))))
+      (let [left (- due (tr-mono))]
+        (if (> left 0)
+          (let [r (tr-serve-one l cur token (if (< left 1000) left 1000))] (recur k due cur))
+          (let [a (arena-scope (tr-poll file cur trust threshold token (tr-pick (tr-all-peers seeds cur self) (+ k 1) fanout)))]
+            (recur (+ k 1) (+ (tr-mono) poll) (if (= a 1) (tr-load file) cur))))))))
 
 ;; the seeds from argument 9 on, joined by ","
 (defn- tr-arg-peers [] :string

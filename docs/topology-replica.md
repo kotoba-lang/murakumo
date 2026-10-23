@@ -22,8 +22,12 @@ image, writing the file that the voters already follow
   
   Replies are HTTP/1.0, then the connection closes. Requests are parsed as
   bytes and never decoded.
-- **Poll.** Every `<poll ms>` (a request served counts as one 100 ms
-  slice), the replica picks its peers as `tick!` does:
+- **Poll.** Every `<poll ms>` on the monotonic clock (wire 7), as
+  `setInterval` runs `tick!`: the first poll `<poll ms>` after start, each
+  next one `<poll ms>` after the previous one ended. A poll blocks serving
+  here, where `tick!` runs beside the server, so the replica always serves
+  for the whole interval. Each accept waits at most until the poll is due
+  (1 s at most). For each poll it picks its peers as `tick!` does:
   1. the seeds given on the command line, then the url of every gateway and
      node of the payload it holds, without repeats and without its own
      address;
@@ -95,7 +99,7 @@ VK='{"class":"qwen-text","epoch":1,"node":"k16","revision":7,"slot":0,"until":'$
 rep() {  # image name file token listen polls peer...
   img=$1; name=$2; file=$3; tok=$4; listen=$5; polls=$6; shift 6
   dial=$(echo "$@" | tr ' ' ','),100.64.0.10:8796,100.64.0.1:8796   # the seeds, and the payload's addresses (unreachable here)
-  env KEXE_ALLOW=35,37,38,43,44,45,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:$listen KEXE_CAP_RESOURCES_45=$dial \
+  env KEXE_ALLOW=7,35,37,38,43,44,45,46,47 KEXE_CAP_RESOURCES_35=/gate KEXE_CAP_RESOURCES_43=127.0.0.1:$listen KEXE_CAP_RESOURCES_45=$dial \
     /gate/$img.elf replica /gate/$file $TRUST 1 /gate/$tok 127.0.0.1:$listen 500 $polls 8 "$@" > /gate/$name.log 2>&1 &
 }
 ready() {  # port...: wait, at most 30 s in all, until each voter answers; the probe is prepare 0 (no ballot), which changes nothing
@@ -257,7 +261,7 @@ TRUST=op1=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw
 podman network create --subnet 100.64.9.0/24 itonami-replica-gate >/dev/null
 node() {  # image name ip poll-ms polls
   podman run --rm --pull never --platform linux/arm64 --network itonami-replica-gate --ip $3 -v "$G:/gate" \
-    -e KEXE_ALLOW=35,37,38,43,44,45,46,47 -e KEXE_CAP_RESOURCES_35=/gate -e KEXE_CAP_RESOURCES_43=$3:8796 \
+    -e KEXE_ALLOW=7,35,37,38,43,44,45,46,47 -e KEXE_CAP_RESOURCES_35=/gate -e KEXE_CAP_RESOURCES_43=$3:8796 \
     -e KEXE_CAP_RESOURCES_45=100.64.9.11:8796,100.64.9.12:8796,100.64.9.13:8796,100.64.9.14:8796 \
     docker.io/library/python:3.12-alpine /gate/$1.elf replica /gate/$2.json $TRUST 1 /gate/fleet.token $3:8796 $4 $5 2 \
     > "$G/$2.log" 2>&1 &
@@ -288,10 +292,40 @@ The cursor makes the second poll reach n1, and the payload's urls are what
 lead n2 there: without them, n2 has no peer to ask.
 The receipt is [evidence/topology-replica-peers-20261023.json](evidence/topology-replica-peers-20261023.json).
 
+## Poll on the clock
+
+A replica polls every `<poll ms>` on the monotonic clock, however many
+requests it serves in between. Before, the interval was counted in 100 ms
+slices and each request it served counted as one, so a busy replica polled
+early.
+
+Run this after the Reproduce block, with the same `G`. One replica polls
+once, 3000 ms after it starts serving, with no peer (fanout 0). A test client
+(`docs/evidence/topology-replica-clock-20261023.py`) asks it for `/topology`
+every 50 ms until it exits. The control `slices` moves the due time 100 ms
+earlier after every accept, as the slice count did.
+
+```sh
+sed 's/(recur k due cur))/(recur k (- due 100) cur))/' "$G/node.kotoba" > "$G/slices.kotoba"
+cp docs/evidence/topology-replica-clock-20261023.py "$G/clock.py"
+podman run --rm --pull never --platform linux/arm64 --network none \
+  -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
+    rm -f /gate/slices.elf
+    ./root.elf compile /gate/slices.kotoba --target aarch64-linux --output /gate/slices.elf --format static >/dev/null || exit 1
+    chmod +x /gate/slices.elf
+    python3 -I /gate/clock.py /gate node slices'
+```
+
+Expected output:
+
+```text
+node: polled on time, more than 20 requests served, exit 0
+slices: polled early, 20 or fewer requests served, exit 0
+```
+
+The receipt is [evidence/topology-replica-clock-20261023.json](evidence/topology-replica-clock-20261023.json).
+
 ## What this does not show
 
-- **A poll interval measured by a clock.** It is counted in 100 ms slices,
-  and a served request counts as one. Wire 7 now has a clock; the replica
-  does not use it yet.
 - **Separate hosts and x86_64.** The containers have their own network
   namespaces and addresses, but share one machine.

@@ -1,0 +1,39 @@
+{
+  "schema": "murakumo.evidence.topology-replica-clock.v1",
+  "date": "2026-10-23",
+  "issue": "JUN-289",
+  "doc": "docs/topology-replica.md#poll-on-the-clock",
+  "sourceCommitBase": "3a995c957808488a6c39ac7641c4b650ef6fe164",
+  "compiler": {
+    "repo": "kotoba-lang/amu",
+    "commit": "51b89255ef674a2da8bfbe650c971f1b08c0e3d3",
+    "sha256": "88afda8977285f3839ebad1cb785a344b296c6890f3f901746259dd478ab9fb7"
+  },
+  "host": "podman machine (applehv, arm64 Linux 6.15), rootless podman, --network none, python:3.12-alpine",
+  "units": {
+    "node.kotoba": "1bcf5d5b3ddab98bad3d1771b38bb0112b5fa7e122174cc7f1c29ee9a5a3221a",
+    "slices.kotoba": "2380e61a2b45646f5578e4bbc7034e9bef967d619939200f9e97a36c97686c34"
+  },
+  "images": {
+    "node.elf": "d0bc810d097649c6d4d45a0f969a3a00626fea01a0d5dd81a61774077b42674a",
+    "slices.elf": "5c812c50cc1d71430dd74956549b4979040eec7306ba83369a30004715fa00bd"
+  },
+  "control": "slices: sed 's/(recur k due cur))/(recur k (- due 100) cur))/' on node.kotoba, so every accept brings the due time 100 ms nearer, as the old slice count did",
+  "scenario": "one replica, poll 3000 ms, 1 poll, fanout 0; a test client asks GET /topology with the fleet token every 50 ms until the replica exits; the time is counted from its first answer (on time from 2.5 s on)",
+  "output": [
+    "node: polled on time, more than 20 requests served, exit 0",
+    "slices: polled early, 20 or fewer requests served, exit 0"
+  ],
+  "test-client": "docs/evidence/topology-replica-clock-20261023.py (Python, a stand-in client, not part of any node path)",
+  "alsoRun": {
+    "how": "the Reproduce and Peers from the topology blocks of docs/topology-replica.md, run as written with the same G and images",
+    "result": "both outputs equal the doc's expected text (k16 chosen, r2 and the voters at revision 8, r3's conflict and kept documents, r4 kept out; n2 at 8 only with 2 polls and the payload's urls)",
+    "images": {
+      "node.elf": "d0bc810d097649c6d4d45a0f969a3a00626fea01a0d5dd81a61774077b42674a",
+      "unchecked.elf": "32ac2b65ed2ce673339101281abb7551030ada2a413389ebbb936765a70a0ded",
+      "open.elf": "940bb835c854af3491ad1026f33035a48ac14195dbc28699abefabc8a1723a8c",
+      "seeds-only.elf": "56c1fc2c329fe16521e0a9a4d2c39022a423da1fa2ae9845fbe0656fafdebe6f"
+    },
+    "caught": "a first version timed the next poll from when the previous one began; r1, whose polls wait on the payload's unreachable addresses, then polled back to back and served nothing, so r2 stayed at revision 7. The next poll is now due <poll ms> after the previous one ends. That version also read wire 7's monotonic answer as ms; it is ns."
+  }
+}
