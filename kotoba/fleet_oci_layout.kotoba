@@ -2,8 +2,10 @@
 ;; it runs: an OCI image layout directory (what `podman save --format oci-dir`
 ;; writes), from the manifest the release names down to every layer (Linear
 ;; JUN-288; network-awai-apex ADR 0010 §2.3). Every blob is read through wire
-;; 35 and hashed in the guest; podman then runs that same directory
-;; (`oci:<dir>`), so what ran is what was checked.
+;; 35 and hashed in the guest. podman then imports the directory and runs the
+;; image by its ID, the config digest checked here (fleet_cell_run
+;; cell-start), so what runs is what was checked even if the directory
+;; changes after the check.
 ;;
 ;;   layout-verdict  layout directory, manifest digest and size (from the
 ;;                   release index) -> "layout/ok" or the first refusal:
@@ -23,14 +25,16 @@
 ;;                                schemaVersion 2 with the OCI manifest type,
 ;;                                or has more than 16 layers
 ;;
+;;   layout-config-digest  the config digest of a manifest in the layout, as
+;;                   its descriptor says ("" when the manifest cannot be read)
+;;
 ;; Each blob check runs in arena-scope and answers a code, so reading layers
-;; does not accumulate. The directory must stay under the agent's own scope
-;; between the check and the run; nothing else may write there.
+;; does not accumulate.
 ;;
 ;; Composition order: sha2.core, jcs.reader, oci.itonami-artifact, this file
 ;; (fleet_cell_run uses it). docs/cell-run.md has the gate.
 (ns murakumo.fleet-oci-layout
-  (:export [layout-verdict]))
+  (:export [layout-verdict layout-config-digest]))
 
 (defn- ol-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
 (defn- ol-exists? [path :string] :bool (= (typed-cap-call 35 :string :string (string-concat path "EXISTS_SEP")) "1"))
@@ -95,3 +99,11 @@
                     (if (= k (json-count m layers)) "layout/ok"
                       (let [lc (ol-descriptor-code layout m (json-element m layers k))]
                         (if (> lc 0) (ol-reason lc) (recur (+ k 1)))))))))))))))
+
+;; the image ID podman gives what this manifest describes: its config digest
+(defn layout-config-digest [layout :string manifest-digest :string] :string
+  (let [f (ol-blob-path layout manifest-digest)
+        m (if (ol-exists? f) (ol-read f) (vector-alloc 0))]
+    (if (not (json-valid? m)) ""
+      (let [c (json-member m (ol-root m) "config")]
+        (if (or (< c 0) (not (= (json-kind m c) 1))) "" (ol-text m c "digest"))))))
