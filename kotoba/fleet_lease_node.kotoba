@@ -1,0 +1,159 @@
+;; murakumo.fleet-lease-node -- the quorum lease register running as separate
+;; processes: voters and a proposer, each a loaderless static image, over the
+;; runtime's TCP wires (Linear JUN-289; ADR-2610071730 P3b). The rules are
+;; fleet_lease_core's; this file is the transport and the voter's state.
+;;
+;;   voter     lease-node-main voter <port> <state file> <idle ms>
+;;             listens; for each connection reads one request line, decides
+;;             with prepare-ok? / accept-ok?, writes its new state to the
+;;             state file (wire 35) BEFORE it replies, replies one line and
+;;             closes; exits after <idle ms> without a connection. The state
+;;             file is the voter's only memory, so a voter started again
+;;             keeps its promise and its accepted value.
+;;   proposer  lease-node-main proposer <mode> <t> <id> <value> <port>...
+;;             mode full: prepare, adopt the value accepted under the highest
+;;             ballot (else its own), accept, print "chosen <value>" on a
+;;             majority; mode prepare: only the prepare phase; mode accept:
+;;             only the accept phase, with the value given
+;;
+;; Lines: "prepare <t> <id>" and "accept <t> <id> <value>"; replies
+;; "ok|no <pt> <pid> <at> <aid> <value>" with "-" for an empty field. A value
+;; is a lease-text, canonical JSON with no spaces; an accept whose value is
+;; not canonical JSON is refused. Every request is handled in arena-scope.
+;;
+;; The state file is written, not fsynced: a voter survives a process
+;; restart, not a power cut. Membership, the fleet token and lease ids are
+;; lease.cljk's and not part of this transport.
+;;
+;; Composition order: sha2.core, jcs.reader, fleet_lease_core, this file.
+;; docs/lease-node.md has the gate.
+(ns murakumo.fleet-lease-node
+  (:export [lease-node-main]))
+
+(defn- ln-listen [s :string] :string (typed-cap-call 43 :string :string s))
+(defn- ln-accept [s :string] :string (typed-cap-call 44 :string :string s))
+(defn- ln-dial [s :string] :string (typed-cap-call 45 :string :string s))
+(defn- ln-read [s :string] :string (typed-cap-call 46 :string :string s))
+(defn- ln-write [s :string] :string (typed-cap-call 47 :string :string s))
+(defn- ln-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- ln-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
+(defn- ln-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn- ln-exists? [path :string] :bool (= (typed-cap-call 35 :string :string (string-concat path "EXISTS_SEP")) "1"))
+(defn- ln-load [path :string] :string (if (ln-exists? path) (typed-cap-call 35 :string :string path) "0 - 0 - -"))
+(defn- ln-store [path :string text :string] :i64 (let [x (typed-cap-call 35 :string :string (str path "WRITE_SEP" text))] 0))
+
+(defn- ln-int [s :string] :i64
+  (let [b (ln-bytes s)]
+    (if (or (= (vector-count b) 0) (> (vector-count b) 16)) -1
+      (loop [i 0 n 0] (if (= i (vector-count b)) n (let [c (vector-at b i)] (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -1)))))))
+
+;; the k-th space-separated field of a line ("" when there is none)
+(defn- ln-field [line :string k :i64] :string
+  (let [b (ln-bytes line)]
+    (loop [i 0 start 0 n 0]
+      (cond (= i (vector-count b)) (if (= n k) (string-substring line start i) "")
+            (or (= (vector-at b i) 32) (= (vector-at b i) 10)) (if (= n k) (string-substring line start i) (recur (+ i 1) (+ i 1) (+ n 1)))
+            :else (recur (+ i 1) start n)))))
+
+(defn- ln-dash [s :string] :string (if (= s "") "-" s))
+(defn- ln-undash [s :string] :string (if (= s "-") "" s))
+
+;; lowercase hex <-> text, for wires 46 and 47
+(defn- ln-unhex [h :string] :string
+  (let [b (ln-bytes h) n (quot (vector-count b) 2)
+        v (loop [i 0 out (vector-alloc n)]
+            (if (= i n) out
+              (let [a (vector-at b (* 2 i)) c (vector-at b (+ (* 2 i) 1))
+                    x (+ (* 16 (if (< a 58) (- a 48) (- a 87))) (if (< c 58) (- c 48) (- c 87)))]
+                (recur (+ i 1) (vector-assoc! out i x)))))]
+    (string-from-utf8 (bytes-from-vector-i64 v))))
+
+;; read a connection until a newline (voter) or the end of the stream (proposer)
+(defn- ln-recv [c :string until-newline :bool] :string
+  (loop [k 0 acc ""]
+    (if (= k 16) acc
+      (let [r (ln-read (str c " 4096 2000"))]
+        (cond (= r "") acc
+              (or (= r "timeout") (= r "closed") (= r "reset")) acc
+              :else (let [acc2 (string-concat acc (ln-unhex r))]
+                      (if (and until-newline (>= (string-index-of acc2 "\n") 0)) acc2 (recur (+ k 1) acc2))))))))
+
+;; ---------------------------------------------------------------------------
+;; The voter
+
+(defn- ln-reply [ok :bool st :string] :string (str (if ok "ok " "no ") st))
+
+;; one request against the state in file; the new state is stored before the
+;; reply is returned
+(defn- ln-handle [file :string req :string] :string
+  (let [st (ln-load file)
+        pt (ln-int (ln-field st 0)) pid (ln-undash (ln-field st 1))
+        at (ln-int (ln-field st 2)) aid (ln-undash (ln-field st 3)) av (ln-undash (ln-field st 4))
+        op (ln-field req 0) bt (ln-int (ln-field req 1)) bid (ln-field req 2) v (ln-field req 3)]
+    (cond (= op "prepare")
+          (if (prepare-ok? bt bid pt pid)
+            (let [ns (str bt " " bid " " at " " (ln-dash aid) " " (ln-dash av)) z (ln-store file ns)] (ln-reply true ns))
+            (ln-reply false st))
+          (= op "accept")
+          (if (and (json-canonical? (ln-bytes v)) (accept-ok? bt bid v pt pid at aid av))
+            (let [ns (str bt " " bid " " bt " " bid " " v) z (ln-store file ns)] (ln-reply true ns))
+            (ln-reply false st))
+          :else (ln-reply false st))))
+
+(defn- ln-serve-one [l :string file :string idle :i64] :i64
+  (arena-scope
+    (let [c (ln-accept (str l " " idle))]
+      (if (< (ln-int c) 1) 1
+        (let [req (ln-recv c true)
+              rep (ln-handle file req)
+              w (ln-write (str c " " (hex (ln-bytes (string-concat rep "\n")))))
+              z (ln-write c)]
+          0)))))
+
+(defn- ln-voter [port :i64 file :string idle :i64] :i64
+  (let [l (ln-listen (str "127.0.0.1:" port))]
+    (loop [n 0] (if (= (ln-serve-one l file idle) 0) (recur (+ n 1)) n))))
+
+;; ---------------------------------------------------------------------------
+;; The proposer
+
+;; send one line to the voter at port and read its reply ("" when it is down)
+(defn- ln-ask [port :string line :string] :string
+  (let [c (ln-dial (str "127.0.0.1:" port " 1000"))]
+    (if (< (ln-int c) 1) ""
+      (let [w (ln-write (str c " " (hex (ln-bytes (string-concat line "\n")))))
+            r (ln-recv c false)
+            z (ln-write c)]
+        r))))
+
+;; the voters' ports are arguments 5.. ; ask each, gather (ok count, best
+;; accepted ballot and value)
+(defn- ln-ports [] :i64 (loop [k 5] (if (= (ln-arg k) "") (- k 5) (recur (+ k 1)))))
+
+(defn- ln-phase [line :string own :string] :string
+  (let [n (ln-ports)]
+    (loop [k 0 oks 0 bt 0 bid "" bv own]
+      (if (= k n) (str oks " " bv)
+        (let [r (ln-ask (ln-arg (+ k 5)) line)
+              ok (= (ln-field r 0) "ok")
+              at (ln-int (ln-field r 3)) aid (ln-undash (ln-field r 4)) av (ln-undash (ln-field r 5))
+              better (and ok (adopt? at aid bt bid))]
+          (recur (+ k 1) (if ok (+ oks 1) oks) (if better at bt) (if better aid bid) (if better av bv)))))))
+
+(defn- ln-proposer [mode :string t :i64 id :string own :string] :i64
+  (let [n (ln-ports) need (majority n)
+        prep (if (= mode "accept") (str n " " own) (ln-phase (str "prepare " t " " id) own))
+        pok (ln-int (ln-field prep 0)) value (ln-field prep 1)]
+    (cond (< pok need) (let [x (ln-say (str "no-majority prepare " pok))] 1)
+          (= mode "prepare") (let [x (ln-say (str "prepared " pok))] 0)
+          :else
+          (let [acc (ln-phase (str "accept " t " " id " " value) value)
+                aok (ln-int (ln-field acc 0))]
+            (if (< aok need) (let [x (ln-say (str "no-majority accept " aok))] 1)
+              (let [x (ln-say (string-concat "chosen " value))] 0))))))
+
+(defn lease-node-main [] :i64
+  (if (= (ln-arg 0) "voter")
+    (ln-voter (ln-int (ln-arg 1)) (ln-arg 2) (ln-int (ln-arg 3)))
+    (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4))))
