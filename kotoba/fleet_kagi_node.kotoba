@@ -1,0 +1,131 @@
+;; Native kagi node enrollment adapter. This process receives public proofs
+;; and signatures only; its capability scope contains no author/delegate seed.
+;; Local operator genesis/head/admitted digest are independent CLI inputs.
+;; A registered node is admitted, never active without a fresh heartbeat.
+(ns murakumo.fleet-kagi-node (:export [main]))
+
+(defn kn-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn kn-read [path :string] :string (typed-cap-call 35 :string :string path))
+(defn kn-fields [line :string start :i64 end :i64] :string
+  (loop [i start out ""] (if (= i end) out
+    (recur (+ i 1) (str out (if (= i start) "" " ") (kg-field line i))))))
+(defn kn-line [text :string row :i64] :string
+  (loop [start 0 i 0]
+    (let [end (kc-line-end text start)]
+      (if (= i row) (string-substring text start end)
+        (if (= end (string-length text)) "" (recur (+ end 1) (+ i 1)))))))
+(defn kn-state [export :string pin :string head :string] :string
+  (let [config (kn-line export 0) policy (kn-line export 1)
+        first (kc-line-end export 0) second (if (< first (string-length export)) (kc-line-end export (+ first 1)) (string-length export))]
+    (if (or (not (kg-hex? pin 64)) (not (kg-hex? head 64))
+            (not (kg-line? config 6)) (not= (kg-field config 0) "kagi.host.local.v1")
+            (not= (kg-field config 1) pin) (not= (kg-field config 2) head)
+            (>= second (string-length export)) (not= (kg-policy-problem policy) "")) ""
+      (let [state (kc-verify-bundle (string-substring export (+ second 1) (string-length export)) pin)]
+        (if (and (= (kg-state-problem state) "") (= (kg-field state 2) head)
+                 (= (kg-field state 5) (kg-field config 5))
+                 (= (kg-field state 6) (kg-hash policy))) state "")))))
+(defn kn-shape [public :string node :string fd :string av :string rc :i64] :string
+  (if (not (kg-public? public)) "kagi-node/author"
+    (let [did (did-from-public (hex-bytes public)) shape (first-problem node did fd av rc)]
+      (cond (not= shape "tsukasa/ok") shape
+            (not= (field-problem node) "enroll/ok") "kagi-node/node-label"
+            (not= (field-problem fd) "enroll/ok") "kagi-node/failure-domain"
+            (not= (field-problem av) "enroll/ok") "kagi-node/availability"
+            :else ""))))
+(defn kn-problem [export :string pin :string head :string envelope :string
+                  node :string fd :string av :string rc :i64 admitted :string now :i64] :string
+  (let [state (kn-state export pin head) policy (kn-line export 1) config (kn-line export 0)
+        public (kg-field state 5) shape (kn-shape public node fd av rc)
+        line (kn-line envelope 0) shaped (kg-line? line 15) permit (if shaped (kn-fields line 0 13) "")]
+    (cond (not= (kg-state-problem state) "") "kagi-node/keyset-proof"
+          (not= shape "") shape
+          (or (not shaped) (not= (str line "\n") envelope)) "kagi-node/envelope"
+          (or (not= (kg-field policy 1) "node") (not= (kg-field policy 2) (str "node:" node))
+              (not= (kg-field policy 3) "tsukasa:local") (not= (kg-field permit 4) "node-declaration")) "kagi-node/policy-boundary"
+          :else
+          (let [digest (declaration-digest node (did-from-public (hex-bytes public)) fd av rc)
+                reason (kg-permit-problem state policy permit (kg-field line 13) now 0
+                         (kg-number (kg-field config 3)) (kg-field config 4))]
+            (cond (not= reason "") reason
+                  (not= (kg-field permit 7) digest) "kagi-node/declaration-digest"
+                  (not= admitted digest) "kagi-node/operator-admission"
+                  (not (kg-verify public (kg-permit-message permit) (kg-field line 14))) "kagi-node/author-signature"
+                  :else "")))))
+(defn kn-create [root :string value :string] :bool
+  (let [nul (string-from-utf8 (bytes-from-vector-i64 (vector-alloc 1)))
+        request (str nul "KPV1" nul "C" root "/enrollment" nul value)
+        answer (vector-i64-from-bytes (typed-cap-call 35 :bytes :bytes (string-to-utf8 request)))]
+    (and (= (vector-count answer) 1) (= (vector-at answer 0) 1))))
+(defn kn-private-record [root :string] :string
+  (let [nul (string-from-utf8 (bytes-from-vector-i64 (vector-alloc 1)))
+        request (str nul "KPV1" nul "R" root "/enrollment")
+        answer (vector-i64-from-bytes (typed-cap-call 35 :bytes :bytes (string-to-utf8 request)))]
+    (if (and (> (vector-count answer) 0) (= (vector-at answer 0) 1))
+      (string-from-utf8 (bytes-from-vector-i64 (vector-drop answer 1))) "")))
+(defn kn-status-text [node :string did :string pin :string admitted :string now :i64] :string
+  (str "{\"schema\":\"murakumo.kagi.enrollment.v1\",\"mode\":\"local-software\",\"node\":\"" node
+       "\",\"did\":\"" did "\",\"keyset\":\"" pin "\",\"declaration\":\"" admitted
+       "\",\"observedAtMs\":" now ",\"signed\":true,\"enrollment\":\"admitted\",\"active\":false,\"freshHeartbeat\":false,\"cellRuntime\":false,\"productionQualified\":false}\n"))
+(defn kn-restored-status [export :string pin :string head :string root :string] :string
+  (let [record (kn-private-record root)
+              raw-header (kn-line record 0) header (if (kg-line? raw-header 9) raw-header "") end (kc-line-end record 0)
+              envelope (if (< end (string-length record)) (string-substring record (+ end 1) (string-length record)) "")
+              node (kg-field header 3) fd (kg-field header 4) av (kg-field header 5)
+              rc (kg-number (kg-field header 6)) admitted (kg-field header 7) at (kg-number (kg-field header 8))
+              now (kg-number (typed-cap-call 7 :string :string "wall"))
+              reason (kn-problem export pin head envelope node fd av rc admitted at)]
+          (if (or (not (kg-line? header 9)) (not= (kg-field header 0) "murakumo.kagi.enrollment.v1")
+                  (not= (kg-field header 1) pin) (not= (kg-field header 2) head)
+                  (not= reason "") (< now at))
+            ""
+            (let [state (kn-state export pin head)]
+              (kn-status-text node (did-from-public (hex-bytes (kg-field state 5))) pin admitted now)))))
+(defn kn-publish [export-path :string pin :string head :string root :string directory :string] :i64
+  (let [status (kn-restored-status (kn-read export-path) pin head root)]
+    (if (= status "") 2
+      (let [tmp (str directory "/node-status.json.tmp") final (str directory "/node-status.json")
+            written (typed-cap-call 35 :string :string (str tmp "WRITE" "_SEP" status))
+            flushed (typed-cap-call 35 :string :string (str tmp "FSYNC" "_SEP"))
+            moved (if (= flushed "1") (typed-cap-call 35 :string :string (str tmp "RENAME" "_SEP" final)) "0")
+            durable (if (= moved "1") (typed-cap-call 35 :string :string (str directory "FSYNC" "_SEP")) "0")]
+        (if (= durable "1") 0 2)))))
+(defn kn-watch [] :i64
+  (let [count (kg-number (kn-arg 6))]
+    (if (or (< count 1) (> count 720) (= (kn-arg 5) "") (not= (kn-arg 7) "")) (kc-error "watch-local EXPORT PIN HEAD LEDGER PUBLIC_DIRECTORY SAMPLES_1_TO_720")
+      (loop [i 0]
+        (if (= i count) 0
+          (let [result (arena-scope (kn-publish (kn-arg 1) (kn-arg 2) (kn-arg 3) (kn-arg 4) (kn-arg 5)))]
+            (if (not= result 0) (kc-error "node proof/clock/publication refused")
+              (let [wait (typed-cap-call 7 :string :string "sleep 5000")] (recur (+ i 1))))))))))
+(defn kn-main [] :i64
+  (let [command (kn-arg 0)]
+    (cond
+      (= command "declaration")
+        (let [public (kn-arg 1) node (kn-arg 2) fd (kn-arg 3) av (kn-arg 4) rc (kg-number (kn-arg 5))
+              reason (kn-shape public node fd av rc)]
+          (if (or (not= reason "") (not= (kn-arg 6) "")) (kc-error "node declaration arguments refused")
+            ;; Exact body bytes: intentionally no trailing LF.
+            (kc-output (declaration-text node (did-from-public (hex-bytes public)) fd av rc))))
+      (= command "register-local")
+        (let [export (kn-read (kn-arg 1)) pin (kn-arg 2) head (kn-arg 3)
+              envelope (kn-read (kn-arg 4)) node (kn-arg 5) fd (kn-arg 6) av (kn-arg 7)
+              rc (kg-number (kn-arg 8)) admitted (kn-arg 9) root (kn-arg 10)
+              now (kg-number (typed-cap-call 7 :string :string "wall"))
+              reason (kn-problem export pin head envelope node fd av rc admitted now)]
+          (if (or (= root "") (not= (kn-arg 11) "") (not= reason "")) (kc-error (str "registration refused: " reason))
+            (let [state (kn-state export pin head) public (kg-field state 5) did (did-from-public (hex-bytes public))
+                  target (node-target "tsukasa/ok" admitted admitted false false false false)
+                  proposed (next-state -1 target) enrolled (next-state proposed target)
+                  commit-time (kg-number (typed-cap-call 7 :string :string "wall"))
+                  record (str "murakumo.kagi.enrollment.v1 " pin " " head " " node " " fd " " av " " rc " " admitted " " commit-time "\n" envelope)
+                  permit (kn-fields (kn-line envelope 0) 0 13)
+                  committed (and (= enrolled 1) (>= commit-time now) (<= commit-time (kg-number (kg-field permit 12))) (kn-create root record))]
+              (if (not committed) (kc-error "registration private journal already exists or durable create refused")
+                (kc-output (kn-status-text node did pin admitted commit-time))))))
+      (= command "status-local")
+        (let [status (kn-restored-status (kn-read (kn-arg 1)) (kn-arg 2) (kn-arg 3) (kn-arg 4))]
+          (if (or (= status "") (not= (kn-arg 5) "")) (kc-error "stored registration proof/journal/clock refused") (kc-output status)))
+      (= command "watch-local") (kn-watch)
+      :else (kc-error "native node: declaration AUTHOR NODE FAILURE_DOMAIN AVAILABILITY CLASS | register-local EXPORT PIN HEAD ENVELOPE NODE FAILURE_DOMAIN AVAILABILITY CLASS ADMITTED_DIGEST PRIVATE_LEDGER"))))
+(defn main [] :i64 (arena-scope (kn-main)))
