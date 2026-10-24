@@ -1,0 +1,23 @@
+;; JUN-156: predicates for independently learned canonical quorum lease values.
+;; This does not turn a JSON file or signed intent into a live quorum result.
+;; Compose after fleet_lease_core, checkpoint and recovery_retention.
+(ns murakumo.recovery-admission
+  (:export [recovery-lease-problem recovery-admission-problem]))
+
+(defn recovery-lease-problem [lease :vector-i64 task :string node :string epoch :i64 now :i64] :string
+  (cond (or (not (json-canonical? lease)) (not (= (json-kind lease 0) 1))
+            (not (= (json-count lease 0) 6))) "recovery/lease-schema"
+        (or (not (= (cp-str lease 0 "class") task)) (not (= (cp-num lease 0 "slot") 0))) "recovery/lease-task"
+        (or (< epoch 1) (not (= (cp-num lease 0 "epoch") epoch))) "recovery/lease-epoch"
+        (or (<= now 0) (not (valid-value? (cp-str lease 0 "node") true task 0 epoch (cp-num lease 0 "until") now))
+            (< (cp-num lease 0 "revision") 0)) "recovery/lease-value"
+        (not (held-now? (cp-str lease 0 "node") node (cp-num lease 0 "until") now)) "recovery/lease-not-held"
+        :else "recovery/lease-admitted"))
+
+;; The caller must obtain a fresh authenticated majority observation, supply
+;; its verified node membership and clock, and fence effects/publication again.
+;; This boundary checks data; it intentionally does not dispatch inference.
+(defn recovery-admission-problem [a :vector-i64 b :vector-i64 pins :vector-i64 lease :vector-i64 node :string epoch :i64 now :i64] :string
+  (cond (not (= (retention-pair-problem a b pins) "retention/pair-verified")) "recovery/replicas-not-admitted"
+        (<= (cp-num pins 0 "until") now) "recovery/retention-expired"
+        :else (recovery-lease-problem lease (cp-str pins 0 "task") node epoch now)))

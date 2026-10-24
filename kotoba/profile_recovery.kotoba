@@ -39,14 +39,14 @@
 ;; All arguments and properties are fixed except task-owned paths and the
 ;; content-addressed unit name. curl ignores ~/.curlrc, never follows redirects,
 ;; receives no credentials, and can contact only this profile's declared host.
-(defn- pr-submit [unit :string request :string response :string] :bool
+(defn- pr-submit [unit :string request :string response :string seconds :i64] :bool
   (cp-ok? (cp-spawn (str "/usr/bin/systemd-run" (cp-a) "--user" (cp-a) "--quiet" (cp-a) "--no-block"
     (cp-a) (str "--unit=" unit) (cp-a) "--property=Type=oneshot" (cp-a) "--property=RemainAfterExit=yes"
     (cp-a) "--property=TimeoutStartSec=900" (cp-a) "--property=NoNewPrivileges=yes"
     (cp-a) "--property=MemoryMax=128M" (cp-a) "--property=CPUQuota=25%"
     (cp-a) "/usr/bin/curl" (cp-a) "--disable" (cp-a) "--http1.1" (cp-a) "--proto" (cp-a) "=https"
     (cp-a) "--tlsv1.2" (cp-a) "--fail-with-body" (cp-a) "--silent" (cp-a) "--show-error"
-    (cp-a) "--connect-timeout" (cp-a) "5" (cp-a) "--max-time" (cp-a) "840"
+    (cp-a) "--connect-timeout" (cp-a) "5" (cp-a) "--max-time" (cp-a) (str seconds)
     (cp-a) "--header" (cp-a) "Content-Type: application/json" (cp-a) "--data-binary" (cp-a) (str "@" request)
     (cp-a) "--output" (cp-a) response (cp-a) "https://api.murakumo.cloud/v1/chat/completions"))))
 
@@ -78,10 +78,11 @@
        (>= (string-index-of (cp-text meta) ":rails [:murakumo]") 0)
        (>= (string-index-of (cp-text meta) ":authorities [\"api.murakumo.cloud\"]") 0)))
 
-(defn- pr-step [repo :string runtime :vector-i64 cache :string next :i64] :string
+(defn- pr-step-bounded [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
   (let [dir (str repo "/profile") meta (cp-read (str dir "/itonami.edn")) role (cp-read (str dir "/SOUL.md"))
         state (cp-read (str repo "/state.json")) task (cp-str runtime 0 "task")]
-    (cond (not (pr-runtime? runtime meta role)) "profile/runtime-refused"
+    (cond (or (< seconds 1) (> seconds 840)) "profile/budget-refused"
+          (not (pr-runtime? runtime meta role)) "profile/runtime-refused"
           (or (not (json-canonical? state)) (not (= (cp-num state 0 "next") next)) (< next 1) (> next 2)
               (not (= (cp-str state 0 "task") task))) "profile/state-refused"
           :else
@@ -100,7 +101,7 @@
                     id (sha256-hex (cp-bytes body)) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
                     request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
                     saved (cp-write request (cp-bytes body)) status (pr-unit-state unit)
-                    submitted (and saved (or (= status "start") (= status "running") (= status "exited") (pr-submit unit request response)))]
+                    submitted (and saved (or (= status "start") (= status "running") (= status "exited") (pr-submit unit request response seconds)))]
                 (if (or (not submitted) (not (pr-wait unit response))) "profile/inference-unavailable-state-retained"
                   (let [answer (cp-read response) cid (cp-cid answer)
                         outdir (str repo "/outputs") output (str outdir "/" next ".json")
@@ -110,6 +111,9 @@
                         rename (if ok (cp-fs (str tmp (cp-sep "RENAME") repo "/state.json")) "0")
                         sync (if (= rename "1") (cp-fs (str repo (cp-sep "FSYNC"))) "0")]
                     (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed")))))))))
+
+(defn- pr-step [repo :string runtime :vector-i64 cache :string next :i64] :string
+  (pr-step-bounded repo runtime cache next 840))
 
 ;; A task-owned producer's heartbeat. The worker holds this only after its
 ;; checkpoint is replicated. No claim about a physical host or fleet consensus.

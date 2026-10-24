@@ -1,0 +1,16 @@
+;; Bounded provisioning tool for an operator-selected recovery group. The
+;; resulting trust pin is task-local and never changes production membership.
+(ns murakumo.recovery-topology
+  (:export [recovery-topology-main]))
+
+(defn recovery-topology-main [] :i64
+  (let [raw (cp-read (cp-arg 0)) key (cp-arg 1) out (cp-arg 2)]
+    (if (or (not (json-canonical? raw)) (not (ri-private? key)) (cp-exists? out)) (cp-say "recovery/topology-input")
+      (let [seed (cp-seed key)]
+        (if (not (= (vector-count seed) 32)) (cp-say "identity/key-unavailable")
+      (let [did (did-from-public (public-from-seed seed))
+            text (cp-text raw) doc (cp-bytes (str "{\"payload\":" text ",\"signature\":\"" (sign-statement seed text) "\"}"))
+            trust (str "recovery-operator=" did) result (topology-verdict doc trust 1 0)]
+        (if (and (= result "topology/ok") (cp-write out doc)
+                 (= (cp-fs (str (cp-parent-dir out) (cp-sep "FSYNC"))) "1"))
+          (cp-say (str "recovery/topology-signed " did)) (cp-say result))))))))

@@ -1,0 +1,32 @@
+;; Public RFC8032 vectors, never host identity material.
+(ns murakumo.recovery-retention-test
+  (:export [test-recovery-retention]))
+
+(defn- rrt-seed [second :bool] :vector-i64
+  (hex-bytes (if second "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"
+    "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")))
+(defn- rrt-did [second :bool] :string (did-from-public (public-from-seed (rrt-seed second))))
+(defn- rrt-cid [] :string "bafkreibyq4ig24q4jywl3wnkxnyazlb3calr5u2i2bd6utshg2gfbsqi5m")
+(defn- rrt-receipt [second :bool wrong :bool] :vector-i64
+  (let [text (retention-text (rrt-cid) (rrt-did second) (if second "host-B" "host-A") "task" 3000000)]
+    (cp-bytes (str "{\"payload\":" text ",\"signature\":\"" (sign-statement (rrt-seed (if wrong (not second) second)) text) "\"}"))))
+(defn- rrt-pins [authorB :string domainB :string] :vector-i64
+  (cp-bytes (str "{\"authorA\":\"" (rrt-did false) "\",\"authorB\":\"" authorB
+    "\",\"checkpoint\":\"" (rrt-cid) "\",\"domainA\":\"host-A\",\"domainB\":\"" domainB
+    "\",\"task\":\"task\",\"until\":2000000}")))
+
+(defn test-recovery-retention [] :i64
+  (let [a (rrt-receipt false false) b (rrt-receipt true false)
+        pins (rrt-pins (rrt-did true) "host-B")
+        lease (cp-bytes (lease-text "B" "task" 0 2 1500000 1))]
+    (+ (if (= (retention-pair-problem a b pins) "retention/pair-verified") 1 0)
+       (if (= (retention-problem (rrt-receipt false true) (rrt-did false) (rrt-cid) "host-A" "task" 2000000) "retention/signature") 2 0)
+       (if (and (= (retention-pair-problem a b (rrt-pins (rrt-did false) "host-B")) "retention/independence")
+                (= (retention-pair-problem a b (rrt-pins (rrt-did true) "host-A")) "retention/independence")) 4 0)
+       (if (and (= (retention-problem a (rrt-did false) (rrt-cid) "host-A" "other" 2000000) "retention/task")
+                (= (retention-problem a (rrt-did false) (rrt-cid) "host-A" "task" 3000001) "retention/deadline")) 8 0)
+       (if (and (= (recovery-admission-problem a b pins lease "B" 2 1000000) "recovery/lease-admitted")
+                (= (recovery-admission-problem a b pins lease "A" 2 1000000) "recovery/lease-not-held")
+                (= (recovery-lease-problem lease "task" "B" 1 1000000) "recovery/lease-epoch")
+                (= (recovery-lease-problem lease "task" "B" 2 1500000) "recovery/lease-not-held")
+                (= (recovery-lease-problem lease "other" "B" 2 1000000) "recovery/lease-task")) 16 0))))

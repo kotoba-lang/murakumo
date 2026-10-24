@@ -1,0 +1,38 @@
+;; JUN-156: host-local native recovery identity. Never prints seed material.
+;; The caller provides an exclusively owned 0700 application-data directory.
+(ns murakumo.recovery-identity
+  (:export [recovery-identity-main]))
+
+(defn- ri-stat [path :string format :string] :string
+  (cp-line (cp-out (cp-spawn (str "/usr/bin/stat" (cp-a) (str "--format=" format) (cp-a) "--" (cp-a) path)))))
+
+(defn- ri-private? [path :string] :bool
+  (and (= (ri-stat (cp-parent-dir path) "%a") "700")
+       (= (ri-stat (cp-parent-dir path) "%F") "directory")
+       (= (ri-stat path "%F") "regular file") (= (ri-stat path "%a") "600")))
+
+(defn- ri-show [path :string] :string
+  (if (not (ri-private? path)) "identity/private-file-required"
+    (let [seed (cp-seed path)]
+      (if (= (vector-count seed) 32) (str "identity/did " (did-from-public (public-from-seed seed))) "identity/key-unavailable"))))
+
+(defn recovery-identity-main [] :i64
+  (let [path (cp-arg 1)]
+    (cond (not (cp-safe-absolute? path)) (cp-say "identity/path")
+          (= (cp-arg 0) "show") (cp-say (ri-show path))
+          (not (= (cp-arg 0) "init")) (cp-say "identity/command")
+          (cp-exists? path) (cp-say (ri-show path))
+          (or (not (= (ri-stat (cp-parent-dir path) "%a") "700"))
+              (not (= (ri-stat (cp-parent-dir path) "%F") "directory"))) (cp-say "identity/private-directory-required")
+          :else
+          (let [draw (typed-cap-call 23 :string :string "32")
+                tmp (str path "." (string-substring (sha256-hex (cp-bytes draw)) 0 24) ".tmp")
+                saved (and (cp-hex? draw 64) (cp-write tmp (cp-bytes draw)))
+                private (and saved (cp-ok? (cp-spawn (str "/usr/bin/chmod" (cp-a) "600" (cp-a) "--" (cp-a) tmp))))
+                ;; ln has no force flag: an existing identity can never be
+                ;; replaced, even by concurrent initializers. Temp names use
+                ;; a one-way digest, never the seed itself.
+                published (and private (cp-ok? (cp-spawn (str "/usr/bin/ln" (cp-a) "--no-target-directory" (cp-a) "--" (cp-a) tmp (cp-a) path))))
+                cleaned (if saved (cp-spawn (str "/usr/bin/unlink" (cp-a) "--" (cp-a) tmp)) "")
+                sync (and (or published (cp-exists? path)) (= (cp-fs (str (cp-parent-dir path) (cp-sep "FSYNC"))) "1"))]
+            (cp-say (if sync (ri-show path) "identity/initialization-failed"))))))
