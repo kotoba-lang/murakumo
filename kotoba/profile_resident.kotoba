@@ -1,0 +1,141 @@
+;; Daily propose-only native profile resident. Host config, not checkpoint
+;; instructions, fixes authority/identity/policy/endpoints. One systemd-owned
+;; writer. A head is published only after a fresh lease and two durable replicas.
+(ns murakumo.profile-resident
+  (:export [profile-resident-main]))
+
+(defn- rt-now [] :i64 (ln-now "clock"))
+(defn- rt-save [path :string b :vector-i64] :bool
+  (and (cp-write (str path ".tmp") b)
+    (= (cp-fs (str path ".tmp" (cp-sep "RENAME") path)) "1")
+    (= (cp-fs (str (cp-parent-dir path) (cp-sep "FSYNC"))) "1")))
+
+(defn- rt-status [cfg :vector-i64 phase :string] :i64
+  (let [b (cp-bytes (str "{\"at\":" (rt-now) ",\"phase\":\"" phase "\"}"))
+        z (rt-save (cp-str cfg 0 "status") b)] 0))
+
+(defn- rt-root? [cfg :vector-i64 root :vector-i64] :bool (pp-root? cfg root))
+(defn- rt-due? [head :vector-i64 request :string now :i64] :bool
+  (or (>= now (cp-num head 0 "nextAt")) (not (= request (cp-str head 0 "request")))))
+
+(defn- rt-lease [cfg :vector-i64 epoch :i64] :vector-i64
+  (cp-bytes (lease-group-round epoch (cp-str cfg 0 "node")
+    (lease-text (cp-str cfg 0 "node") (cp-str cfg 0 "task") 0 epoch (+ (rt-now) (lease-ttl)) 1)
+    (cp-str cfg 0 "voters") (lease-token (cp-str cfg 0 "tokenFile")))))
+
+(defn- rt-current-lease [cfg :vector-i64 floor :i64] :vector-i64
+  (let [path (cp-str cfg 0 "leaseFile") saved (if (cp-exists? path) (cp-read path) (vector-alloc 0))
+        e (if (>= (cp-num saved 0 "epoch") floor) (cp-num saved 0 "epoch") floor)
+        learned (rt-lease cfg e) now (rt-now) node (cp-str cfg 0 "node")]
+    (if (= (vector-count learned) 0) learned
+      (let [mine (= (cp-str learned 0 "node") node)
+            renew (or (and mine (> now (- (cp-num learned 0 "until") (lease-renew-before))))
+                      (not mine))
+            next (if (and renew
+                       (or mine (> now (+ (cp-num learned 0 "until") (lease-skew)))))
+                     (rt-lease cfg (+ e 1)) learned)
+            ne (cp-num next 0 "epoch")
+            bound (and (json-canonical? next) (= (json-count next 0) 6)
+                    (= (cp-str next 0 "class") (cp-str cfg 0 "task")) (= (cp-num next 0 "slot") 0)
+                    (or (= ne e) (= ne (+ e 1)))
+                    (valid-value? (cp-str next 0 "node") true (cp-str cfg 0 "task") 0 ne (cp-num next 0 "until") (rt-now)))
+            saved (and bound (rt-save path next))]
+        (if (and saved (= (recovery-lease-problem next (cp-str cfg 0 "task") node ne (rt-now)) "recovery/lease-admitted"))
+          next (vector-alloc 0))))))
+
+(defn- rt-pins [cfg :vector-i64 root :string until :i64] :vector-i64
+  (cp-bytes (str "{\"authorA\":\"" (cp-str cfg 0 "authorA") "\",\"authorB\":\"" (cp-str cfg 0 "authorB")
+    "\",\"checkpoint\":\"" root "\",\"domainA\":\"" (cp-str cfg 0 "domainA") "\",\"domainB\":\"" (cp-str cfg 0 "domainB")
+    "\",\"task\":\"" (cp-str cfg 0 "task") "\",\"until\":" until "}")))
+
+(defn- rt-head [root :string a :string b :string until :i64 next-at :i64 request :string] :vector-i64
+  (cp-bytes (str "{\"checkpoint\":\"" root "\",\"kind\":\"itonami.resident-head/1\",\"nextAt\":" next-at
+    ",\"receiptA\":\"" a "\",\"receiptB\":\"" b "\",\"request\":\"" request "\",\"until\":" until "}")))
+
+(defn- rt-replicate [cfg :vector-i64 root :string next-at :i64 request :string] :bool
+  (let [store (cp-str cfg 0 "store") until (+ (rt-now) 172800000)
+        address (cp-str cfg 0 "peer") token (lease-token (cp-str cfg 0 "tokenFile"))
+        sent (peer-upload store root address token)
+        a (if sent (peer-retain store root address token until) "")
+        r (if (not (= a "")) (retention-attest store root (cp-str cfg 0 "key") (cp-str cfg 0 "domainB") (cp-str cfg 0 "task") until) "")
+        b (if (= (ln-field r 0) "retention/recorded") (ln-field r 1) "")]
+    (and (not (= a "")) (not (= b ""))
+      (= (retention-pair-problem (cp-load store a) (cp-load store b) (rt-pins cfg root until)) "retention/pair-verified")
+      (rt-save (cp-str cfg 0 "candidateHead") (rt-head root a b until next-at request)))))
+
+(defn- rt-admitted-head? [cfg :vector-i64 head :vector-i64] :bool
+  (let [store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint") until (cp-num head 0 "until")]
+    (and (json-canonical? head) (= (cp-str head 0 "kind") "itonami.resident-head/1")
+      (cp-block? store root) (rt-root? cfg (cp-load store root)) (cp-closure? store (cp-load store root))
+      (> until (rt-now))
+      (= (retention-pair-problem (cp-load store (cp-str head 0 "receiptA"))
+           (cp-load store (cp-str head 0 "receiptB")) (rt-pins cfg root until)) "retention/pair-verified"))))
+
+(defn- rt-capture [cfg :vector-i64 repo :string epoch :i64 parent :string next :i64] :string
+  (let [list (str (cp-str cfg 0 "runtimeRoot") "/untracked.json") summary (str (cp-str cfg 0 "runtimeRoot") "/summary.txt")
+        saved (and (cp-write list (cp-bytes (str "[\"outputs/" next ".json\"]")))
+                   (cp-write summary (cp-bytes (str "Verified read-only resident proposal turn " next "; no tools dispatched.\n"))))
+        args (str (cp-str cfg 0 "checkpointBinary") (cp-a) "capture" (cp-a) repo (cp-a) (cp-str cfg 0 "store")
+          (cp-a) (cp-str cfg 0 "key") (cp-a) repo "/profile/itonami.edn" (cp-a) (cp-str cfg 0 "policyFile")
+          (cp-a) (cp-str cfg 0 "environmentFile") (cp-a) summary (cp-a) list (cp-a) epoch (cp-a) parent (cp-a) (cp-str cfg 0 "task"))
+        result (if saved (cp-spawn args) "") first (cp-line (cp-out result))]
+    (if (and (cp-ok? result) (= (ln-field first 0) "checkpoint/created")) (ln-field first 1) "")))
+
+(defn- rt-turn [cfg :vector-i64 head :vector-i64 lease :vector-i64 request :string] :string
+  (let [store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint") checkpoint (cp-load store root)
+        dest (str (cp-str cfg 0 "runtimeRoot") "/checkouts/" (rt-now))
+        restored (cp-materialize store checkpoint dest)]
+    (if (not (= restored "checkpoint/restored")) restored
+      (let [next (cp-num (cp-read (str dest "/state.json")) 0 "next")
+            next-at (+ (rt-now) (cp-num cfg 0 "intervalMs"))
+            status (rt-status cfg "inference")
+            result (pr-step-resident dest (cp-read (cp-str cfg 0 "environmentFile")) (cp-str cfg 0 "cache") next
+                     (rf-budget (cp-num lease 0 "until") (cp-num head 0 "until") (rt-now)))
+            fresh (rt-lease cfg (cp-num lease 0 "epoch"))]
+        (cond (not (= (ln-field result 0) "profile/step-completed")) result
+              (or (not (= (cp-text lease) (cp-text fresh)))
+                  (not (= (recovery-lease-problem fresh (cp-str cfg 0 "task") (cp-str cfg 0 "node")
+                    (cp-num lease 0 "epoch") (rt-now)) "recovery/lease-admitted"))) "resident/lease-lost"
+              :else
+              (let [successor (rt-capture cfg dest (cp-num lease 0 "epoch") root next)
+                    copied (and (not (= successor "")) (rt-replicate cfg successor next-at request))
+                    final (if copied (rt-lease cfg (cp-num lease 0 "epoch")) (vector-alloc 0))]
+                (if (and copied (= (cp-text lease) (cp-text final))
+                         (= (recovery-lease-problem final (cp-str cfg 0 "task") (cp-str cfg 0 "node")
+                              (cp-num lease 0 "epoch") (rt-now)) "recovery/lease-admitted")
+                         (rt-save (cp-str cfg 0 "head") (cp-read (cp-str cfg 0 "candidateHead"))))
+                  (str "resident/published " next " " successor) "resident/proposal-retained")))))))
+
+(defn- rt-cycle [cfg :vector-i64] :string
+  (let [head-path (cp-str cfg 0 "head")
+        head (if (cp-exists? head-path) (cp-read head-path) (vector-alloc 0))
+        root (if (cp-exists? head-path) (cp-str head 0 "checkpoint") (cp-str cfg 0 "bootstrap"))
+        request (if (cp-exists? (cp-str cfg 0 "request")) (cp-cid (cp-read (cp-str cfg 0 "request"))) "none")]
+    (cond (or (not (= (cp-cid (cp-read (cp-str cfg 0 "environmentFile"))) (cp-str cfg 0 "environment")))
+              (not (= (cp-cid (cp-read (cp-str cfg 0 "policyFile"))) (cp-str cfg 0 "policy")))) "resident/runtime-pins-refused"
+          (not (cp-block? (cp-str cfg 0 "store") root)) "resident/missing-checkpoint"
+          (not (rt-root? cfg (cp-load (cp-str cfg 0 "store") root))) "resident/checkpoint-refused"
+          (not (rt-admitted-head? cfg head))
+          (if (and (rt-replicate cfg root (if (cp-exists? head-path) (cp-num head 0 "nextAt") 0)
+                      (if (cp-exists? head-path) (cp-str head 0 "request") "none"))
+                   (rt-save head-path (cp-read (cp-str cfg 0 "candidateHead")))) "resident/replicas-refreshed" "resident/replica-unavailable")
+          (not (rt-due? head request (rt-now))) "resident/idle"
+          :else (let [root-data (cp-load (cp-str cfg 0 "store") root)
+                      lease (rt-current-lease cfg (cp-num root-data (cp-payload root-data) "epoch"))]
+                  (if (= (vector-count lease) 0) "resident/quorum-unavailable" (rt-turn cfg head lease request))))))
+
+(defn profile-resident-main [] :i64
+  (let [cfg (cp-read (cp-arg 1))]
+    (if (or (not (json-canonical? cfg)) (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
+            (not (= (cp-num cfg 0 "intervalMs") 86400000))
+            (not (rf-voters? (cp-str cfg 0 "voters"))) (= (lease-token (cp-str cfg 0 "tokenFile")) "")
+            (not (= (ri-show (cp-str cfg 0 "key")) (str "identity/did " (cp-str cfg 0 "authorB")))))
+      (let [x (cp-say "resident/config-refused")] 2)
+      (if (= (cp-arg 0) "once")
+        (let [r (rt-cycle cfg) status (rt-status cfg r)] (cp-say r))
+      (if (not (= (cp-arg 0) "run")) (let [x (cp-say "resident/command-refused")] 2)
+      (loop [i 0]
+        (let [result (arena-scope
+                       (let [r (rt-cycle cfg) s (rt-status cfg r) event (cp-say r)] 0))
+              z (loop [k 0] (if (>= k 10) true (if (pr-pause) (recur (+ k 1)) false)))]
+          (if z (recur (+ i 1)) 2))))))))

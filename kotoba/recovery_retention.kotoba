@@ -2,7 +2,7 @@
 ;; Root, signers, domains and retention deadline are independent operator pins.
 ;; A signature is a host's retention promise, not proof of future availability.
 (ns murakumo.recovery-retention
-  (:export [retention-text retention-problem retention-pair-problem retention-main]))
+  (:export [retention-text retention-problem retention-pair-problem retention-attest retention-main]))
 
 (defn retention-text [root :string did :string domain :string task :string until :i64] :string
   (str "{\"checkpoint\":\"" root "\",\"did\":\"" did "\",\"domain\":\"" domain
@@ -52,9 +52,8 @@
         (if (rr-sync store (cp-str b (json-element b us i) "cid")) (recur (+ i 1)) false)))
       (= (cp-fs (str store (cp-sep "FSYNC"))) "1"))))
 
-(defn- rr-attest [] :string
-  (let [store (cp-arg 1) root (cp-arg 2) domain (cp-arg 4) task (cp-arg 5)
-        until (ln-int (cp-arg 6)) now (ln-now "clock")]
+(defn retention-attest [store :string root :string key :string domain :string task :string until :i64] :string
+  (let [now (ln-now "clock")]
     (if (or (not (cp-safe-absolute? store)) (not (cp-block? store root))
             (= domain "") (= task "") (not (= (field-problem domain) "enroll/ok"))
             (not (= (field-problem task) "enroll/ok")) (<= until now)) "retention/arguments"
@@ -62,7 +61,7 @@
             verdict (checkpoint-problem b (cp-str b p "did") (cp-str b p "profile")
               (cp-str b p "policy") (cp-str b p "environment") (cp-num b p "epoch") (cp-str b p "parent") task)]
         (if (or (not (= verdict "checkpoint/ok")) (not (rr-sync-closure store root b))) "retention/incomplete"
-          (let [seed (cp-seed (cp-arg 3))]
+          (let [seed (cp-seed key)]
             (if (not (= (vector-count seed) 32)) "retention/key-unavailable"
               (let [did (did-from-public (public-from-seed seed)) text (retention-text root did domain task until)
                     receipt (cp-bytes (str "{\"payload\":" text ",\"signature\":\"" (sign-statement seed text) "\"}"))
@@ -71,6 +70,6 @@
                   (str "retention/recorded " cid) "retention/publication-failed")))))))))
 
 (defn retention-main [] :i64
-  (cond (= (cp-arg 0) "retain") (cp-say (rr-attest))
+  (cond (= (cp-arg 0) "retain") (cp-say (retention-attest (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (ln-int (cp-arg 6))))
         (= (cp-arg 0) "verify-pair") (cp-say (retention-pair-problem (cp-read (cp-arg 1)) (cp-read (cp-arg 2)) (cp-read (cp-arg 3))))
         :else (cp-say "retention/command")))
