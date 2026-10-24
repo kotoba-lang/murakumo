@@ -1,0 +1,105 @@
+;; JUN-156: native recovery using independently pinned durable replicas and
+;; the existing authenticated Paxos lease register on three physical hosts.
+;; The deployment plan is fresh host input, never an approval in a checkpoint.
+;; A per-epoch register is not a global accepted-head / membership authority.
+(ns murakumo.fenced-profile-recovery
+  (:export [fenced-profile-main]))
+
+(defn- rf-now [] :i64 (ln-now "clock"))
+(defn- rf-budget [lease-until :i64 retention-until :i64 now :i64] :i64
+  (let [lease-end (- lease-until (lease-skew))
+        end (if (< lease-end retention-until) lease-end retention-until)
+        seconds (quot (- end (+ now 10000)) 1000)]
+    (if (> seconds 840) 840 seconds)))
+(defn- rf-host [port :string] :string
+  (let [i (string-index-of port ":")] (if (> i 0) (string-substring port 0 i) "")))
+(defn- rf-voters? [ports :string] :bool
+  (and (= (ln-port-count ports) 3)
+    (let [a (rf-host (ln-port ports 0)) b (rf-host (ln-port ports 1)) c (rf-host (ln-port ports 2))]
+      (and (not (= a "")) (not (= b "")) (not (= c "")) (not (= a b)) (not (= b c)) (not (= a c))))))
+(defn- rf-learn [plan :vector-i64 previous :bool] :string
+  (let [node (cp-str plan 0 "node") task (cp-str plan 0 "task")
+        epoch (cp-num plan 0 (if previous "previousEpoch" "epoch"))
+        ports (cp-str plan 0 (if previous "previousPorts" "ports"))
+        token (lease-token (cp-str plan 0 "tokenFile")) now (rf-now)]
+    (if (= token "") ""
+      (lease-round now node
+        (if previous (cp-text (cp-read (cp-str plan 0 "previousLease")))
+          (lease-text node task 0 epoch (+ now (lease-ttl)) (cp-num plan 0 "revision"))) ports token))))
+
+(defn- rf-run [plan :vector-i64 restore :bool] :string
+  (let [store (cp-str plan 0 "store") root (cp-str plan 0 "checkpoint")
+        pins (cp-read (cp-str plan 0 "pins")) contract (cp-read (cp-str plan 0 "contract"))
+        a (cp-read (cp-str plan 0 "receiptA")) b (cp-read (cp-str plan 0 "receiptB"))
+        node (cp-str plan 0 "node") now (rf-now)
+        epoch (cp-num plan 0 "epoch") task (cp-str plan 0 "task")
+        checkpoint (if (cp-block? store root) (cp-load store root) (vector-alloc 0))
+        checked (checkpoint-problem checkpoint (cp-str contract 0 "author") (cp-str contract 0 "profile")
+          (cp-str contract 0 "policy") (cp-str contract 0 "environment") (cp-num contract 0 "epoch")
+          (cp-str contract 0 "parent") (cp-str contract 0 "task"))]
+    (cond (not (= (retention-pair-problem a b pins) "retention/pair-verified")) "recovery/replicas-not-admitted"
+          (<= (cp-num pins 0 "until") now) "recovery/retention-expired"
+          (or (not (json-canonical? contract)) (not (= task (cp-str pins 0 "task"))) (not (= task (cp-str contract 0 "task")))
+              (not (= root (cp-str pins 0 "checkpoint"))) (not (= (cp-num contract 0 "next") 2))
+              (not (= (cp-num contract 0 "epoch") (cp-num plan 0 "previousEpoch")))
+              (not (= epoch (+ (cp-num contract 0 "epoch") 1)))) "recovery/plan-binding"
+          (not (= checked "checkpoint/ok")) checked
+          (not (cp-closure? store checkpoint)) "checkpoint/missing-or-corrupt-block"
+          (not (= (rf-previous-status plan) 1)) "recovery/previous-lease-not-released"
+          :else
+          (let [lease (cp-bytes (rf-learn plan false))
+                admitted (recovery-lease-problem lease task node epoch (rf-now))]
+            (if (not (= admitted "recovery/lease-admitted")) admitted
+          (let [dest (cp-str plan 0 "dest") ready (if restore (cp-materialize store checkpoint dest) "checkpoint/restored")
+                budget (rf-budget (cp-num lease 0 "until") (cp-num pins 0 "until") (rf-now))]
+            (if (not (= ready "checkpoint/restored")) ready
+              (let [saved (cp-write (cp-str plan 0 "observedLease") lease)
+                    event (cp-say "recovery/lease-and-replicas-admitted")
+                    result (if saved (pr-step-bounded dest (cp-load store (cp-str contract 0 "environment"))
+                             (cp-str plan 0 "cache") (cp-num contract 0 "next") budget) "recovery/lease-record-failed")
+                    fresh (cp-bytes (rf-learn plan false)) after (rf-now)]
+                (if (<= (cp-num pins 0 "until") after) "recovery/retention-expired-proposal-retained"
+                (if (or (not (= (cp-text lease) (cp-text fresh)))
+                        (not (= (recovery-lease-problem fresh task node epoch after) "recovery/lease-admitted")))
+                  "recovery/lease-lost-proposal-retained"
+                  result))))))))))
+
+(defn- rf-previous-value-status [previous :vector-i64 expected :vector-i64 node :string task :string epoch :i64 now :i64] :i64
+  (cond (not (= (cp-text previous) (cp-text expected))) -1
+        (not (= (cp-num previous 0 "epoch") epoch)) -2
+        (or (not (= (cp-str previous 0 "class") task)) (not (= (cp-num previous 0 "slot") 0))) -3
+        (= (decide node (cp-num previous 0 "epoch") true
+             (cp-str previous 0 "node") (cp-num previous 0 "until") now) "lease/take-over") 1
+        :else 0))
+
+(defn- rf-previous-status [plan :vector-i64] :i64
+  (arena-scope
+    (let [previous (cp-bytes (rf-learn plan true)) now (rf-now)
+          expected (cp-read (cp-str plan 0 "previousLease"))]
+      (rf-previous-value-status previous expected (cp-str plan 0 "node")
+        (cp-str plan 0 "task") (cp-num plan 0 "previousEpoch") now))))
+
+(defn- rf-watch [plan :vector-i64] :string
+  (loop [i 0 seen false misses 0]
+    (let [alive (arena-scope (pr-alive? (cp-str plan 0 "peer"))) lost (if alive 0 (+ misses 1))]
+      (cond (and seen (>= lost 2))
+            (let [event (cp-say "recovery/producer-lost")]
+              (loop [waits 0]
+                (let [status (rf-previous-status plan)]
+                  (cond (= status -1) "recovery/previous-lease-unavailable"
+                        (= status -2) "recovery/previous-lease-epoch"
+                        (= status -3) "recovery/previous-lease-task"
+                        (= status 1) (rf-run plan true)
+                        (>= waits 1800) "recovery/lease-wait-expired"
+                        :else (let [z (pr-pause)] (recur (+ waits 1)))))))
+            (>= i 1800) "recovery/watch-expired"
+            :else (let [z (pr-pause)] (recur (+ i 1) (or seen alive) lost))))))
+
+(defn fenced-profile-main [] :i64
+  (let [plan (cp-read (cp-arg 1))]
+    (cond (or (not (json-canonical? plan)) (not (= (cp-str plan 0 "kind") "itonami.fenced-recovery-plan/1"))) (cp-say "recovery/plan-refused")
+          (or (not (rf-voters? (cp-str plan 0 "ports"))) (not (rf-voters? (cp-str plan 0 "previousPorts")))
+              (= (cp-str plan 0 "node") "") (not (lc-plain? (cp-str plan 0 "node")))) (cp-say "recovery/voters-refused")
+          (= (cp-arg 0) "watch") (cp-say (rf-watch plan))
+          (= (cp-arg 0) "step") (cp-say (rf-run plan false))
+          :else (cp-say "recovery/command"))))

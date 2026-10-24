@@ -1,0 +1,76 @@
+;; JUN-156: durable checkpoint replica attestations. Compose after checkpoint.
+;; Root, signers, domains and retention deadline are independent operator pins.
+;; A signature is a host's retention promise, not proof of future availability.
+(ns murakumo.recovery-retention
+  (:export [retention-text retention-problem retention-pair-problem retention-main]))
+
+(defn retention-text [root :string did :string domain :string task :string until :i64] :string
+  (str "{\"checkpoint\":\"" root "\",\"did\":\"" did "\",\"domain\":\"" domain
+    "\",\"kind\":\"itonami.checkpoint-retention/1\",\"task\":\"" task "\",\"until\":" until "}"))
+
+(defn retention-problem [b :vector-i64 did :string root :string domain :string task :string minimum :i64] :string
+  (let [p (cp-payload b)]
+    (cond (or (not (json-canonical? b)) (< p 0) (not (= (json-kind b 0) 1))
+              (not (= (json-count b 0) 2)) (not (= (json-kind b p) 1)) (not (= (json-count b p) 6))) "retention/schema"
+          (not (= (cp-str b p "kind") "itonami.checkpoint-retention/1")) "retention/kind"
+          (or (not (cp-raw? root)) (not (= (cp-str b p "checkpoint") root))) "retention/checkpoint"
+          (or (not (= (did-key-problem did) "enroll/ok")) (not (= (cp-str b p "did") did))) "retention/author"
+          (or (= domain "") (not (= (field-problem domain) "enroll/ok"))
+              (not (= (cp-str b p "domain") domain))) "retention/domain"
+          (or (= task "") (not (= (field-problem task) "enroll/ok"))
+              (not (= (cp-str b p "task") task))) "retention/task"
+          (or (< minimum 1) (< (cp-num b p "until") minimum)) "retention/deadline"
+          (not (= (statement-problem did (cp-json b p) (cp-str b 0 "signature")) "enroll/ok")) "retention/signature"
+          :else "retention/ok")))
+
+;; Exactly two separately pinned hosts; one node or one failure domain cannot
+;; manufacture a second replica by producing a second receipt.
+(defn retention-pair-problem [a :vector-i64 b :vector-i64 pins :vector-i64] :string
+  (let [root (cp-str pins 0 "checkpoint") task (cp-str pins 0 "task") until (cp-num pins 0 "until")
+        da (cp-str pins 0 "authorA") db (cp-str pins 0 "authorB")
+        fa (cp-str pins 0 "domainA") fb (cp-str pins 0 "domainB")]
+    (cond (not (json-canonical? pins)) "retention/pins"
+          (or (= da db) (= fa fb)) "retention/independence"
+          (not (= (retention-problem a da root fa task until) "retention/ok")) "retention/replica-A"
+          (not (= (retention-problem b db root fb task until) "retention/ok")) "retention/replica-B"
+          :else "retention/pair-verified")))
+
+(defn- rr-sync [store :string cid :string] :bool
+  (and (cp-block? store cid) (= (cp-fs (str store "/" cid (cp-sep "FSYNC"))) "1")))
+
+;; Flush every verified object before the directory entry barrier, then sign.
+;; A fresh process must reverify the same closure before issuing another ack.
+(defn- rr-sync-closure [store :string cid :string b :vector-i64] :bool
+  (let [p (cp-payload b) bundle (cp-str b p "bundle") index (cp-load store bundle)
+        chunks (json-member index 0 "chunks") us (json-member b p "untracked")]
+    (and (cp-closure? store b) (rr-sync store cid) (rr-sync store bundle)
+      (rr-sync store (cp-str b p "policy")) (rr-sync store (cp-str b p "environment"))
+      (rr-sync store (cp-str b p "summary")) (rr-sync store (digest-cid (cp-str b p "profile") 85))
+      (loop [i 0] (if (= i (json-count index chunks)) true
+        (if (arena-scope (rr-sync store (json-string index (json-element index chunks i)))) (recur (+ i 1)) false)))
+      (loop [i 0] (if (= i (json-count b us)) true
+        (if (rr-sync store (cp-str b (json-element b us i) "cid")) (recur (+ i 1)) false)))
+      (= (cp-fs (str store (cp-sep "FSYNC"))) "1"))))
+
+(defn- rr-attest [] :string
+  (let [store (cp-arg 1) root (cp-arg 2) domain (cp-arg 4) task (cp-arg 5)
+        until (ln-int (cp-arg 6)) now (ln-now "clock")]
+    (if (or (not (cp-safe-absolute? store)) (not (cp-block? store root))
+            (= domain "") (= task "") (not (= (field-problem domain) "enroll/ok"))
+            (not (= (field-problem task) "enroll/ok")) (<= until now)) "retention/arguments"
+      (let [b (cp-load store root) p (cp-payload b)
+            verdict (checkpoint-problem b (cp-str b p "did") (cp-str b p "profile")
+              (cp-str b p "policy") (cp-str b p "environment") (cp-num b p "epoch") (cp-str b p "parent") task)]
+        (if (or (not (= verdict "checkpoint/ok")) (not (rr-sync-closure store root b))) "retention/incomplete"
+          (let [seed (cp-seed (cp-arg 3))]
+            (if (not (= (vector-count seed) 32)) "retention/key-unavailable"
+              (let [did (did-from-public (public-from-seed seed)) text (retention-text root did domain task until)
+                    receipt (cp-bytes (str "{\"payload\":" text ",\"signature\":\"" (sign-statement seed text) "\"}"))
+                    cid (if (= (retention-problem receipt did root domain task until) "retention/ok") (cp-put store receipt) "")]
+                (if (and (not (= cid "")) (rr-sync store cid) (= (cp-fs (str store (cp-sep "FSYNC"))) "1"))
+                  (str "retention/recorded " cid) "retention/publication-failed")))))))))
+
+(defn retention-main [] :i64
+  (cond (= (cp-arg 0) "retain") (cp-say (rr-attest))
+        (= (cp-arg 0) "verify-pair") (cp-say (retention-pair-problem (cp-read (cp-arg 1)) (cp-read (cp-arg 2)) (cp-read (cp-arg 3))))
+        :else (cp-say "retention/command")))

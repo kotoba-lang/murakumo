@@ -246,11 +246,11 @@
 ;; a voter with a topology looks at its file after each empty slice and
 ;; rotates when it changed. Only an adopted or newly seen document stays
 ;; allocated; the comparison and the verification run in arena-scope.
-(defn- ln-voter [addr :string file :string idle :i64 topo :vector-i64 now :i64
+(defn- ln-voter [addr :string file :string idle :i64 topo :vector-i64 now :i64 live-clock :bool
                  path :string trust :string threshold :i64 token :string] :i64
   (let [l (ln-listen (ln-addr addr))]
     (loop [n 0 left idle cur topo seen topo]
-      (let [r (ln-serve-one l file (if (< left 500) left 500) cur now token)]
+      (let [r (ln-serve-one l file (if (< left 500) left 500) cur (if live-clock (ln-now "clock") now) token)]
         (cond (= r 0) (recur (+ n 1) idle cur seen)
               (<= left 500) n
               (or (= path "") (= (arena-scope (if (ln-same-file? path seen) 0 1)) 0)) (recur n (- left 500) cur seen)
@@ -265,12 +265,12 @@
 (defn- ln-voter-main [] :i64
   (let [path (ln-arg 4) tpath (ln-arg 8) token (ln-token tpath)]
     (cond (and (not (= tpath "")) (= token "")) (let [x (ln-say "voter token/missing-or-short")] 2)
-          (= path "") (ln-voter (ln-arg 1) (ln-arg 2) (ln-int (ln-arg 3)) (vector-alloc 0) 0 "" "" 0 token)
+          (= path "") (ln-voter (ln-arg 1) (ln-arg 2) (ln-int (ln-arg 3)) (vector-alloc 0) 0 false "" "" 0 token)
           :else
           (let [doc (if (ln-exists? path) (ln-load-doc path) (vector-alloc 0))
                 v (topology-verdict doc (ln-arg 5) (ln-int (ln-arg 6)) 0)]
             (if (not (= v "topology/ok")) (let [x (ln-say (string-concat "voter " v))] 2)
-              (ln-voter (ln-arg 1) (ln-arg 2) (ln-int (ln-arg 3)) doc (ln-now (ln-arg 7))
+              (ln-voter (ln-arg 1) (ln-arg 2) (ln-int (ln-arg 3)) doc (ln-now (ln-arg 7)) (= (ln-arg 7) "clock")
                         path (ln-arg 5) (ln-int (ln-arg 6)) token))))))
 
 ;; ---------------------------------------------------------------------------
