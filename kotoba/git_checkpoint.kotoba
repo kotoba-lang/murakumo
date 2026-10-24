@@ -80,6 +80,14 @@
   (cp-text (json-canonical-bytes b i)))
 (defn- cp-payload [b :vector-i64] :i64 (json-member b 0 "payload"))
 
+;; Sorted neighbours are insufficient: a, a-b, a/x are sorted but overlap.
+(defn- cp-no-overlap? [b :vector-i64 us :i64 upto :i64 path :string] :bool
+  (loop [i 0]
+    (if (= i upto) true
+      (let [prior (cp-str b (json-element b us i) "path")]
+        (if (or (= prior path) (= (string-index-of path (str prior "/")) 0)
+                (= (string-index-of prior (str path "/")) 0)) false (recur (+ i 1)))))))
+
 ;; Caller supplies trust and the exact resume contract from its independently
 ;; authorized task. A signature alone grants no authority. Epoch/parent are
 ;; checked for equality, not inferred from a peer's own claim.
@@ -111,7 +119,7 @@
                 (let [u (json-element b us i) path (cp-str b u "path") cid (cp-str b u "cid") mode (cp-str b u "mode")]
                   (if (and (= (json-kind b u) 1) (= (json-count b u) 3) (checkpoint-path? path) (cp-raw? cid)
                            (or (= mode "644") (= mode "755"))
-                           (> (string-compare path previous) 0) (or (= previous "") (not (= (string-index-of path (str previous "/")) 0))))
+                           (> (string-compare path previous) 0) (cp-no-overlap? b us i path))
                     (recur (+ i 1) path) "checkpoint/untracked-path"))))))))
 
 (defn- cp-spawn [s :string] :string (typed-cap-call 20 :string :string s))
@@ -139,6 +147,21 @@
 (defn- cp-size [p :string] :i64
   (let [s (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%s" (cp-a) "--" (cp-a) p))]
     (if (cp-ok? s) (cp-int (cp-line (cp-out s))) -1)))
+(defn- cp-mkdir [p :string] :bool (cp-ok? (cp-spawn (str "/usr/bin/mkdir" (cp-a) "-p" (cp-a) "--" (cp-a) p))))
+
+;; Inspect each parent itself, without stat -L. Git may have checked out a
+;; symlink pointing elsewhere inside the granted filesystem scope. Neither
+;; mkdir -p nor a final-component O_NOFOLLOW protects against that parent.
+;; The caller owns the tree exclusively, as required for capture/materialize.
+(defn- cp-real-parents? [base :string rel :string create :bool] :bool
+  (loop [i 0]
+    (if (= i (string-length rel)) true
+      (if (not (= (string-substring rel i (+ i 1)) "/")) (recur (+ i 1))
+        (let [p (str base "/" (string-substring rel 0 i))
+              before (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%F" (cp-a) "--" (cp-a) p))
+              made (if (and create (not (cp-ok? before))) (cp-mkdir p) false)
+              after (if made (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%F" (cp-a) "--" (cp-a) p)) before)]
+          (if (= after "0\ndirectory\n") (recur (+ i 1)) false))))))
 (defn- cp-range [p :string off :i64 n :i64] :vector-i64 (cp-read (str p (cp-sep "RANGE") off ":" n)))
 (defn- cp-chunk-size [size :i64 i :i64] :i64
   (let [remaining (- size (* i 131072))] (if (< remaining 131072) remaining 131072)))
@@ -209,7 +232,7 @@
                          (= (string-index-of (cp-git repo (str "check-ignore" (cp-a) "--" (cp-a) path)) "1\n") 0))
               st (if admitted (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%a:%F" (cp-a) "--" (cp-a) repo "/" path)) "refused")
               mode (cond (= st "0\n644:regular file\n") "644" (= st "0\n755:regular file\n") "755" :else "")
-              cid (if (not (= mode "")) (cp-put store (cp-read (str repo "/" path))) "")]
+              cid (if (and (not (= mode "")) (cp-real-parents? repo path false)) (cp-put store (cp-read (str repo "/" path))) "")]
           (if (= cid "") "" (recur (+ i 1) path (str out (if (= i 0) "" ",") "{\"cid\":\"" cid "\",\"mode\":\"" mode "\",\"path\":\"" path "\"}"))))))))
 
 (defn- cp-capture [] :i64
@@ -249,7 +272,9 @@
                     (not (= head-r (cp-git repo "rev-parseARG_SEP--verifyARG_SEPHEAD"))))
               (cp-say "checkpoint/capture-incomplete-or-busy")
               (if (not (= verdict "checkpoint/ok")) (cp-say verdict)
-                (cp-say (str "checkpoint/created " (cp-put store envelope) "\n" (cp-text envelope)))))))))))
+                (let [cid (cp-put store envelope)]
+                  (if (= cid "") (cp-say "checkpoint/root-publication-failed")
+                    (cp-say (str "checkpoint/created " cid "\n" (cp-text envelope)))))))))))))
 
 (defn- cp-closure? [store :string b :vector-i64] :bool
   (let [p (cp-payload b) us (json-member b p "untracked")]
@@ -259,7 +284,6 @@
          (loop [i 0] (if (= i (json-count b us)) true
            (if (cp-block? store (cp-str b (json-element b us i) "cid")) (recur (+ i 1)) false))))))
 
-(defn- cp-mkdir [p :string] :bool (cp-ok? (cp-spawn (str "/usr/bin/mkdir" (cp-a) "-p" (cp-a) "--" (cp-a) p))))
 (defn- cp-parent-dir [p :string] :string
   (loop [i (- (string-length p) 1)] (if (< i 1) "/" (if (= (string-substring p i (+ i 1)) "/") (string-substring p 0 i) (recur (- i 1))))))
 (defn- cp-materialize [store :string b :vector-i64 dest :string] :string
@@ -281,7 +305,7 @@
                   (loop [i 0]
                     (if (= i (json-count b us)) true
                       (let [u (json-element b us i) path (str stage "/" (cp-str b u "path"))]
-                        (if (and (not (cp-exists? path)) (cp-mkdir (cp-parent-dir path)) (cp-write path (cp-load store (cp-str b u "cid")))
+                        (if (and (cp-real-parents? stage (cp-str b u "path") true) (not (cp-exists? path)) (cp-write path (cp-load store (cp-str b u "cid")))
                                  (cp-ok? (cp-spawn (str "/usr/bin/chmod" (cp-a) (cp-str b u "mode") (cp-a) "--" (cp-a) path))))
                           (recur (+ i 1)) false)))) false)]
             (if (not files) "checkpoint/materialize-failed-partial-retained"

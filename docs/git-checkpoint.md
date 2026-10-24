@@ -122,6 +122,16 @@ that verdict (`checkpoint/created`, `checkpoint/verified`,
 success from the process exit alone. Native capability refusals can also trap.
 Do not dispatch development work after any other result.
 
+Review hardening before merge: every untracked parent is checked as a real
+directory (not a Git-created symlink), and all earlier allowlist entries are
+checked for ancestor conflicts, including nonadjacent sorted entries. Failed
+root-object publication emits `checkpoint/root-publication-failed` rather than
+an empty `checkpoint/created` result. The additional negative control used a
+validly signed received checkpoint; the old controller wrote into a task-owned
+sibling fixture, while the reviewed controller retained a partial checkout
+without creating that sibling target. See
+[review evidence](evidence/git-checkpoint-review-20261024.json).
+
 Restore verifies the root CID/signature/contract and the entire object closure
 before creating `DEST.partial`. It assembles and reads back the bundle chunks,
 initializes Git with no template, fetches the full checkpoint ref, checks out
