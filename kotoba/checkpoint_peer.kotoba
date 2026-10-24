@@ -1,0 +1,94 @@
+;; Bounded immutable profile-cache transport over operator-selected private
+;; endpoints. HMAC requests/replies reuse fleet_lease_node's framing. The
+;; caller must provision encrypted host transport (Tailnet / verified SSH).
+;; Keys are host inputs, never network payloads. No file paths in requests.
+(ns murakumo.checkpoint-peer
+  (:export [checkpoint-peer-main peer-exchange peer-upload peer-retain]))
+
+(defn- pp-recv [c :string newline :bool] :string
+  (loop [i 0 out ""]
+    (if (or (>= i 64) (> (string-length out) 40000)) ""
+      (let [r (ln-read (str c " 4096 " (if (and (not newline) (= i 0)) 30000 3000)))]
+        (cond (or (= r "") (= r "timeout") (= r "closed") (= r "reset")) out
+              :else (let [next (str out (ln-unhex r))]
+                (if (and newline (>= (string-index-of next "\n") 0)) next (recur (+ i 1) next))))))))
+
+(defn peer-exchange [address :string token :string line :string] :string
+  (if (= token "") ""
+    (let [c (ln-dial (str address " 2000"))]
+      (if (< (ln-int c) 1) ""
+        (let [w (ln-write (str c " " (hex (ln-bytes (str (ln-mac token (str "req " line)) " " line "\n")))))
+              raw (ln-line (pp-recv c false)) reply (ln-rest raw) z (ln-write c)]
+          (if (ln-same? (ln-field raw 0) (ln-mac token (str "rep " line "\n" reply))) reply ""))))))
+
+(defn- pp-root? [cfg :vector-i64 root :vector-i64] :bool
+  (let [p (cp-payload root) did (cp-str root p "did")]
+    (and (or (= did (cp-str cfg 0 "authorA")) (= did (cp-str cfg 0 "authorB")))
+      (= (checkpoint-problem root did (cp-str cfg 0 "profile") (cp-str cfg 0 "policy")
+           (cp-str cfg 0 "environment") (cp-num root p "epoch") (cp-str root p "parent")
+           (cp-str cfg 0 "task")) "checkpoint/ok"))))
+
+(defn- pp-handle [cfg :vector-i64 line :string] :string
+  (let [op (ln-field line 0) cid (ln-field line 1) store (cp-str cfg 0 "store")]
+    (cond (not (cp-raw? cid)) "peer/cid-refused"
+          (= op "put")
+          (let [h (ln-field line 2)]
+            (if (or (> (string-length h) 32768) (not (= (rem (string-length h) 2) 0))
+                    (not (cp-hex? h (string-length h)))) "peer/block-refused"
+              (let [b (hex-bytes h)]
+                (if (and (= (cp-cid b) cid) (= (cp-put store b) cid)
+                         (= (cp-fs (str store (cp-sep "FSYNC"))) "1")) (str "stored " cid) "peer/store-refused"))))
+          (= op "get")
+          (if (and (cp-block? store cid) (<= (vector-count (cp-load store cid)) 16384))
+            (str "block " cid " " (hex (cp-load store cid))) "peer/absent")
+          (= op "retain")
+          (let [until (ln-int (ln-field line 2)) now (ln-now "clock")]
+            (if (or (<= until now) (> until (+ now 604800000)) (not (cp-block? store cid))
+                    (not (pp-root? cfg (cp-load store cid)))) "peer/root-refused"
+              (let [r (retention-attest store cid (cp-str cfg 0 "key") (cp-str cfg 0 "domain") (cp-str cfg 0 "task") until)
+                    receipt (ln-field r 1)]
+                (if (= (ln-field r 0) "retention/recorded")
+                  (str "receipt " receipt " " (hex (cp-load store receipt))) r))))
+          :else "peer/operation-refused")))
+
+(defn- pp-one [l :string cfg :vector-i64 token :string] :i64
+  (arena-scope
+    (let [c (ln-accept (str l " 1000"))]
+      (if (< (ln-int c) 1) 0
+        (let [raw (ln-line (pp-recv c true)) line (ln-rest raw)
+              ok (ln-same? (ln-field raw 0) (ln-mac token (str "req " line)))
+              reply (if ok (pp-handle cfg line) "")
+              w (if ok (ln-write (str c " " (hex (ln-bytes (str (ln-mac token (str "rep " line "\n" reply)) " " reply "\n"))))) "")
+              z (ln-write c)] 0)))))
+
+(defn- pp-put [store :string cid :string address :string token :string] :bool
+  (and (cp-block? store cid)
+    (let [b (cp-load store cid)]
+      (and (<= (vector-count b) 16384)
+           (= (peer-exchange address token (str "put " cid " " (hex b))) (str "stored " cid))))))
+
+(defn peer-upload [store :string root :string address :string token :string] :bool
+  (let [b (cp-load store root) p (cp-payload b) bundle (cp-str b p "bundle")
+        index (cp-load store bundle) chunks (json-member index 0 "chunks") us (json-member b p "untracked")]
+    (and (cp-closure? store b) (pp-put store root address token) (pp-put store bundle address token)
+      (pp-put store (cp-str b p "policy") address token) (pp-put store (cp-str b p "environment") address token)
+      (pp-put store (cp-str b p "summary") address token) (pp-put store (digest-cid (cp-str b p "profile") 85) address token)
+      (loop [i 0] (if (= i (json-count index chunks)) true
+        (if (arena-scope (pp-put store (json-string index (json-element index chunks i)) address token)) (recur (+ i 1)) false)))
+      (loop [i 0] (if (= i (json-count b us)) true
+        (if (arena-scope (pp-put store (cp-str b (json-element b us i) "cid") address token)) (recur (+ i 1)) false))))))
+
+(defn peer-retain [store :string root :string address :string token :string until :i64] :string
+  (let [r (peer-exchange address token (str "retain " root " " until)) cid (ln-field r 1) h (ln-field r 2)]
+    (if (and (= (ln-field r 0) "receipt") (cp-raw? cid) (<= (string-length h) 4096)
+             (= (rem (string-length h) 2) 0) (cp-hex? h (string-length h))
+             (= (cp-put store (hex-bytes h)) cid)) cid "")))
+
+(defn checkpoint-peer-main [] :i64
+  (let [cfg (cp-read (cp-arg 0)) token (lease-token (cp-str cfg 0 "tokenFile"))]
+    (if (or (not (json-canonical? cfg)) (not (= (cp-str cfg 0 "kind") "itonami.checkpoint-peer/1"))
+            (= token "") (not (= (ri-show (cp-str cfg 0 "key")) (str "identity/did " (cp-str cfg 0 "selfDid")))))
+      (let [x (cp-say "peer/config-refused")] 2)
+      (let [l (ln-listen (cp-str cfg 0 "listen"))]
+        (if (< (ln-int l) 1) (let [x (cp-say "peer/listen-refused")] 2)
+          (loop [i 0] (let [z (pp-one l cfg token)] (recur (+ i 1)))))))))

@@ -1,0 +1,54 @@
+;; A dedicated task group multiplexes the existing durable Paxos register by
+;; epoch on one explicitly granted endpoint. Decisions/state/reply HMACs remain
+;; fleet_lease_node's. No public/plaintext or arbitrary register path mode.
+(ns murakumo.fleet-lease-group
+  (:export [lease-group-main lease-group-round]))
+
+(defn- lg-epoch? [e :i64] :bool (and (> e 0) (<= e 1000000)))
+(defn- lg-request [line :string task :string dir :string topo :vector-i64 now :i64] :string
+  (let [op (ln-field line 0) epoch (ln-int (ln-field line 1))
+        t (ln-field line 2) id (ln-field line 3) value (ln-field line 4)
+        v (ln-bytes value) file (str dir "/epoch-" epoch ".state")]
+    (if (or (not (lg-epoch? epoch))
+            (not (or (= op "prepare") (= op "accept")))
+            (and (= op "accept")
+              (or (not (= (cp-str v 0 "class") task)) (not (= (cp-num v 0 "slot") 0))
+                  (not (= (cp-num v 0 "epoch") epoch))))) "no 0 - 0 - -"
+      (ln-handle file (str op " " t " " id (if (= op "accept") (str " " value) "")) topo now))))
+
+(defn- lg-serve [l :string dir :string task :string topo :vector-i64 token :string] :i64
+  (arena-scope
+    (let [c (ln-accept (str l " 1000"))]
+      (if (< (ln-int c) 1) 0
+        (let [raw (ln-line (ln-recv c true)) line (ln-rest raw)
+              ok (ln-same? (ln-field raw 0) (ln-mac token (str "req " line)))
+              reply (if ok (lg-request line task dir topo (ln-now "clock")) "")
+              sent (if ok (ln-write (str c " " (hex (ln-bytes (str (ln-mac token (str "rep " line "\n" reply)) " " reply "\n"))))) "")
+              closed (ln-write c)] 0)))))
+
+(defn- lg-try [epoch :i64 t :i64 node :string own :string ports :string token :string] :string
+  (let [need (majority (ln-port-count ports))
+        prep (ln-phase (str "prepare " epoch " " t " " node) t node own ports token)
+        value (ln-field prep 3)]
+    (if (< (ln-int (ln-field prep 0)) need) (ln-short prep "prepare" need)
+      (let [acc (ln-phase (str "accept " epoch " " t " " node " " value) t node value ports token)]
+        (if (< (ln-int (ln-field acc 0)) need) (ln-short acc "accept" need) (str "chosen " value))))))
+
+(defn lease-group-round [epoch :i64 node :string own :string ports :string token :string] :string
+  (if (or (not (lg-epoch? epoch)) (= token "") (not (rf-voters? ports))) ""
+    (loop [k 0 t (ln-now "clock")]
+      (let [r (lg-try epoch t node own ports token)]
+        (cond (= (ln-field r 0) "chosen") (ln-field r 1)
+              (and (= (ln-field r 0) "preempted") (< k 4))
+              (let [z (ln-backoff)] (recur (+ k 1) (+ (ln-int (ln-field r 1)) 1)))
+              :else "")))))
+
+(defn lease-group-main [] :i64
+  (let [addr (cp-arg 0) dir (cp-arg 1) task (cp-arg 2) topo (cp-read (cp-arg 3))
+        trust (cp-arg 4) token (lease-token (cp-arg 5))]
+    (if (or (= token "") (= task "") (not (lc-plain? task))
+            (not (cp-safe-absolute? dir)) (not (= (topology-verdict topo trust 1 0) "topology/ok")))
+      (let [x (cp-say "group/config-refused")] 2)
+      (let [l (ln-listen addr)]
+        (if (< (ln-int l) 1) (let [x (cp-say "group/listen-refused")] 2)
+          (loop [i 0] (let [x (lg-serve l dir task topo token)] (recur (+ i 1)))))))))

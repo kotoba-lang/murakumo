@@ -1,0 +1,16 @@
+[Unit]
+Description=Itonami native read-only profile resident
+After=network-online.target
+
+[Service]
+Type=simple
+UMask=0022
+NoNewPrivileges=yes
+MemoryMax=512M
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=%h/.itonami/native/accountability-steward/resident.env
+ExecStart=@PINNED_NATIVE_RESIDENT_PATH@ run @ABSOLUTE_RESIDENT_CONFIG_PATH@
+
+[Install]
+WantedBy=default.target

@@ -78,22 +78,27 @@
        (>= (string-index-of (cp-text meta) ":rails [:murakumo]") 0)
        (>= (string-index-of (cp-text meta) ":authorities [\"api.murakumo.cloud\"]") 0)))
 
-(defn- pr-step-bounded [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
+(defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64] :string
   (let [dir (str repo "/profile") meta (cp-read (str dir "/itonami.edn")) role (cp-read (str dir "/SOUL.md"))
         state (cp-read (str repo "/state.json")) task (cp-str runtime 0 "task")]
     (cond (or (< seconds 1) (> seconds 840)) "profile/budget-refused"
           (not (pr-runtime? runtime meta role)) "profile/runtime-refused"
-          (or (not (json-canonical? state)) (not (= (cp-num state 0 "next") next)) (< next 1) (> next 2)
+          (or (not (json-canonical? state)) (not (= (cp-num state 0 "next") next)) (< next 1) (> next limit)
               (not (= (cp-str state 0 "task") task))) "profile/state-refused"
           :else
           (let [previous (cp-str state 0 "previous") prior-file (str repo "/outputs/" (- next 1) ".json")
                 prior (if (= next 1) (vector-alloc 0) (cp-read prior-file))
                 linked (if (= next 1) (= previous "none") (= previous (cp-cid prior)))]
             (if (not linked) "profile/previous-output-mismatch"
-              (let [instruction (str "Read-only checkpoint recovery task " task ", step " next
+              (let [instruction (if (= limit 2) (str "Read-only checkpoint recovery task " task ", step " next
                        ". Continue from the preceding assistant result, if present. Propose one next read-only verification."
                        " Do not call tools, change files, publish, merge or contact anyone. Reply in at most 16 tokens.")
-                    body (str "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":32,\"messages\":["
+                       (str "Resident accountability-steward proposal turn " next ", task " task
+                         ". Follow the profile's propose-only goal and continue from the preceding proposal."
+                         " State one concrete next verification and what evidence would decide it."
+                         " You have no current external observations; do not invent progress or completion."
+                         " All tools are denied. Do not change files, publish, merge or contact anyone."))
+                    body (str "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":" tokens ",\"messages\":["
                       "{\"content\":" (pr-json-quote (str "This invocation is a model-only read-only proposal. All tools are denied.\n" (cp-text role))) ",\"role\":\"system\"},"
                       (if (= next 1) "" (str "{\"content\":" (pr-json-quote (pr-answer prior)) ",\"role\":\"assistant\"},"))
                       "{\"content\":" (pr-json-quote instruction) ",\"role\":\"user\"}],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
@@ -111,6 +116,12 @@
                         rename (if ok (cp-fs (str tmp (cp-sep "RENAME") repo "/state.json")) "0")
                         sync (if (= rename "1") (cp-fs (str repo (cp-sep "FSYNC"))) "0")]
                     (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed")))))))))
+
+(defn- pr-step-bounded [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
+  (pr-step-range repo runtime cache next seconds 2 32))
+
+(defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
+  (pr-step-range repo runtime cache next seconds 1000000 256))
 
 (defn- pr-step [repo :string runtime :vector-i64 cache :string next :i64] :string
   (pr-step-bounded repo runtime cache next 840))

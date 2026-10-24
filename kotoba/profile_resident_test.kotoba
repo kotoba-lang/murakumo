@@ -1,0 +1,27 @@
+;; Append the public git_checkpoint_test fixtures before this native gate.
+(ns murakumo.profile-resident-test
+  (:export [test-profile-resident]))
+
+(defn- rtt-cfg [did :string] :vector-i64
+  (cp-bytes (str "{\"authorA\":\"" did "\",\"authorB\":\"" did "\",\"environment\":\"" (cpt-cid)
+    "\",\"node\":\"A\",\"policy\":\"" (cpt-cid) "\",\"profile\":\"" (cpt-profile) "\",\"task\":\"drill\"}")))
+
+(defn test-profile-resident [] :i64
+  (let [head (rt-head (cpt-cid) (cpt-cid) (cpt-cid) 200000 100000 "request-one")
+        a (cpt-envelope true) cfg (rtt-cfg (cpt-did))
+        lease (cp-bytes (lease-text "A" "drill" 0 1 500000 1))
+        other (cp-bytes (lease-text "B" "drill" 0 1 500000 1))]
+    (+ (if (and (lg-epoch? 1) (lg-epoch? 1000000) (not (lg-epoch? 0)) (not (lg-epoch? 1000001))) 1 0)
+       (if (and (= (lg-request "prepare 0 1 B" "task" "/unused" (vector-alloc 0) 1) "no 0 - 0 - -")
+                (= (lg-request (str "accept 1 1 B " (lease-text "B" "other" 0 1 999 1)) "task" "/unused" (vector-alloc 0) 1) "no 0 - 0 - -")) 2 0)
+       (if (and (json-canonical? head) (not (rt-due? head "request-one" 99999))
+                (rt-due? head "request-two" 99999) (rt-due? head "request-one" 100000)) 4 0)
+       (if (and (pp-root? cfg a) (not (pp-root? cfg (cpt-envelope false)))
+                (not (pp-root? (rtt-cfg "did:key:untrusted") a))) 8 0)
+       (if (and (= (cp-str head 0 "request") "request-one") (= (cp-num head 0 "nextAt") 100000)
+                (= (cp-num head 0 "until") 200000)) 16 0)
+       (if (and (= (rt-post-problem cfg head lease lease 199999) "resident/admission-held")
+                (= (rt-post-problem cfg head lease lease 200000) "resident/retention-expired-proposal-retained")
+                (= (rt-post-problem cfg head lease lease 200001) "resident/retention-expired-proposal-retained")) 32 0)
+       (if (and (= (rt-post-problem cfg head lease other 100000) "resident/lease-lost")
+                (= (rt-post-problem cfg head lease (vector-alloc 0) 100000) "resident/lease-lost")) 64 0))))

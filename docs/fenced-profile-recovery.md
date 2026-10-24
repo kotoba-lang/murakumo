@@ -169,3 +169,8 @@ dispatch and fresh lease verification after inference. Preserve evidence of
 what was actually run; do not substitute the pure gate for this live drill.
 After the drill, stop only its task-owned units and forwarding helpers, keeping
 host identities, promised checkpoint replicas and persisted lease state.
+
+The [native resident extension](profile-resident.md) adds enabled services, daily
+scheduling, automatically signed A/B replica publication and restart continuation.
+Its selected-profile qualification and remaining host-startup gates are separate
+from this original bounded drill.
