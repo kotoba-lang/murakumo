@@ -1,0 +1,162 @@
+;; JUN-156: a bounded, model-only Itonami profile step and automatic recovery.
+;; Compose after git_checkpoint and its pinned native dependency closure.
+;; The host supplies reviewed immutable profile/runtime pins and fresh tool
+;; grants. SOUL and itonami.edn are data, never an authority source. No model
+;; output is dispatched as a tool. This adapter does not run legacy cron scripts.
+;; HTTPS transport is an explicitly admitted curl oneshot in the existing user
+;; manager, not a detached child escaping the native spawn's 10-second budget.
+(ns murakumo.profile-recovery
+  (:export [profile-recovery-main]))
+
+(defn- pr-json-quote [s :string] :string
+  (let [b (cp-bytes s) out (vector-alloc (+ 2 (* 6 (vector-count b)))) z (vector-assoc! out 0 34)
+        end (loop [i 0 p 1]
+          (if (= i (vector-count b)) p
+            (let [c (vector-at b i)]
+              (cond (or (= c 34) (= c 92))
+                    (let [x (vector-assoc! out p 92) y (vector-assoc! out (+ p 1) c)] (recur (+ i 1) (+ p 2)))
+                    (< c 32)
+                    (let [a (vector-assoc! out p 92) c0 (vector-assoc! out (+ p 1) 117)
+                          d (vector-assoc! out (+ p 2) 48) e (vector-assoc! out (+ p 3) 48)
+                          f (vector-assoc! out (+ p 4) (string-code-point-at "0123456789abcdef" (quot c 16)))
+                          g (vector-assoc! out (+ p 5) (string-code-point-at "0123456789abcdef" (rem c 16)))]
+                      (recur (+ i 1) (+ p 6)))
+                    :else (let [x (vector-assoc! out p c)] (recur (+ i 1) (+ p 1)))))))
+        y (vector-assoc! out end 34)]
+    (cp-text (loop [i 0 v (vector-alloc (+ end 1))]
+      (if (> i end) v (recur (+ i 1) (vector-assoc! v i (vector-at out i))))))))
+
+(defn- pr-pause [] :bool (arena-scope (cp-ok? (cp-spawn (str "/usr/bin/sleep" (cp-a) "1")))))
+(defn- pr-unit-state [unit :string] :string
+  (cp-line (cp-out (cp-spawn (str "/usr/bin/systemctl" (cp-a) "--user" (cp-a) "show" (cp-a)
+    "--property=SubState" (cp-a) "--value" (cp-a) unit)))))
+
+(defn- pr-unit-code [unit :string] :i64
+  (arena-scope
+    (let [s (pr-unit-state unit)]
+      (cond (= s "exited") 1 (= s "failed") -1 :else 0))))
+
+;; All arguments and properties are fixed except task-owned paths and the
+;; content-addressed unit name. curl ignores ~/.curlrc, never follows redirects,
+;; receives no credentials, and can contact only this profile's declared host.
+(defn- pr-submit [unit :string request :string response :string] :bool
+  (cp-ok? (cp-spawn (str "/usr/bin/systemd-run" (cp-a) "--user" (cp-a) "--quiet" (cp-a) "--no-block"
+    (cp-a) (str "--unit=" unit) (cp-a) "--property=Type=oneshot" (cp-a) "--property=RemainAfterExit=yes"
+    (cp-a) "--property=TimeoutStartSec=900" (cp-a) "--property=NoNewPrivileges=yes"
+    (cp-a) "--property=MemoryMax=128M" (cp-a) "--property=CPUQuota=25%"
+    (cp-a) "/usr/bin/curl" (cp-a) "--disable" (cp-a) "--http1.1" (cp-a) "--proto" (cp-a) "=https"
+    (cp-a) "--tlsv1.2" (cp-a) "--fail-with-body" (cp-a) "--silent" (cp-a) "--show-error"
+    (cp-a) "--connect-timeout" (cp-a) "5" (cp-a) "--max-time" (cp-a) "840"
+    (cp-a) "--header" (cp-a) "Content-Type: application/json" (cp-a) "--data-binary" (cp-a) (str "@" request)
+    (cp-a) "--output" (cp-a) response (cp-a) "https://api.murakumo.cloud/v1/chat/completions"))))
+
+(defn- pr-answer [b :vector-i64] :string
+  (if (not (json-valid? b)) ""
+    (let [cs (json-member b 0 "choices") c (if (>= cs 0) (json-element b cs 0) -1)
+          m (if (>= c 0) (json-member b c "message") -1)]
+      (if (>= m 0) (cp-str b m "content") ""))))
+
+(defn- pr-wait [unit :string response :string] :bool
+  (loop [i 0]
+    (let [state (pr-unit-code unit)]
+      (cond (= state 1)
+            (and (cp-exists? response) (not (= (pr-answer (cp-read response)) "")))
+            (or (= state -1) (> i 900)) false
+            :else (let [z (pr-pause)] (if z (recur (+ i 1)) false))))))
+
+(defn- pr-runtime? [runtime :vector-i64 meta :vector-i64 role :vector-i64] :bool
+  (and (json-canonical? runtime) (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime/1")
+       (= (cp-str runtime 0 "rail") "murakumo")
+       (= (cp-str runtime 0 "endpoint") "https://api.murakumo.cloud/v1/chat/completions")
+       (= (str "sha256:" (sha256-hex meta)) (cp-str runtime 0 "profileDigest"))
+       (= (str "sha256:" (sha256-hex role)) (cp-str runtime 0 "roleDigest"))
+       (= (cp-str runtime 0 "profile") "accountability-steward")
+       (not (= (cp-str runtime 0 "model") ""))
+       (cp-hex? (cp-str runtime 0 "source") 40)
+       (not (= (cp-str runtime 0 "task") "")) (= (field-problem (cp-str runtime 0 "task")) "enroll/ok")
+       (>= (string-index-of (cp-text meta) ":capabilities []") 0)
+       (>= (string-index-of (cp-text meta) ":rails [:murakumo]") 0)
+       (>= (string-index-of (cp-text meta) ":authorities [\"api.murakumo.cloud\"]") 0)))
+
+(defn- pr-step [repo :string runtime :vector-i64 cache :string next :i64] :string
+  (let [dir (str repo "/profile") meta (cp-read (str dir "/itonami.edn")) role (cp-read (str dir "/SOUL.md"))
+        state (cp-read (str repo "/state.json")) task (cp-str runtime 0 "task")]
+    (cond (not (pr-runtime? runtime meta role)) "profile/runtime-refused"
+          (or (not (json-canonical? state)) (not (= (cp-num state 0 "next") next)) (< next 1) (> next 2)
+              (not (= (cp-str state 0 "task") task))) "profile/state-refused"
+          :else
+          (let [previous (cp-str state 0 "previous") prior-file (str repo "/outputs/" (- next 1) ".json")
+                prior (if (= next 1) (vector-alloc 0) (cp-read prior-file))
+                linked (if (= next 1) (= previous "none") (= previous (cp-cid prior)))]
+            (if (not linked) "profile/previous-output-mismatch"
+              (let [instruction (str "Read-only checkpoint recovery task " task ", step " next
+                       ". Continue from the preceding assistant result, if present. Propose one next read-only verification."
+                       " Do not call tools, change files, publish, merge or contact anyone. Reply in at most 16 tokens.")
+                    body (str "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":32,\"messages\":["
+                      "{\"content\":" (pr-json-quote (str "This invocation is a model-only read-only proposal. All tools are denied.\n" (cp-text role))) ",\"role\":\"system\"},"
+                      (if (= next 1) "" (str "{\"content\":" (pr-json-quote (pr-answer prior)) ",\"role\":\"assistant\"},"))
+                      "{\"content\":" (pr-json-quote instruction) ",\"role\":\"user\"}],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
+                      ",\"reasoning_effort\":\"none\",\"stream\":false,\"temperature\":0}")
+                    id (sha256-hex (cp-bytes body)) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
+                    request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
+                    saved (cp-write request (cp-bytes body)) status (pr-unit-state unit)
+                    submitted (and saved (or (= status "start") (= status "running") (= status "exited") (pr-submit unit request response)))]
+                (if (or (not submitted) (not (pr-wait unit response))) "profile/inference-unavailable-state-retained"
+                  (let [answer (cp-read response) cid (cp-cid answer)
+                        outdir (str repo "/outputs") output (str outdir "/" next ".json")
+                        newstate (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
+                        tmp (str repo "/state.json.tmp")
+                        ok (and (cp-mkdir outdir) (not (cp-exists? output)) (cp-write output answer) (cp-write tmp newstate))
+                        rename (if ok (cp-fs (str tmp (cp-sep "RENAME") repo "/state.json")) "0")
+                        sync (if (= rename "1") (cp-fs (str repo (cp-sep "FSYNC"))) "0")]
+                    (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed")))))))))
+
+;; A task-owned producer's heartbeat. The worker holds this only after its
+;; checkpoint is replicated. No claim about a physical host or fleet consensus.
+(defn- pr-hold [address :string] :i64
+  (let [listener (typed-cap-call 43 :string :string address) ready (cp-say "profile/producer-holding")]
+    (loop [i 0]
+      (let [handled (arena-scope (let [c (typed-cap-call 44 :string :string (str listener " 1000"))]
+        (if (> (cp-int c) 0)
+          (let [w (typed-cap-call 47 :string :string (str c " 616c6976650a"))
+                z (typed-cap-call 47 :string :string c)] 1) 0)))]
+        (recur (+ i handled))))))
+
+(defn- pr-alive? [peer :string] :bool
+  (arena-scope
+    (let [c (typed-cap-call 45 :string :string (str peer " 1000"))]
+      (if (<= (cp-int c) 0) false
+        (let [r (loop [i 0 bytes ""]
+                  (if (or (>= (string-length bytes) 12) (>= i 6)) bytes
+                    (let [part (typed-cap-call 46 :string :string (str c " 6 1000"))]
+                      (if (= part "") bytes (recur (+ i 1) (str bytes part))))))
+              z (typed-cap-call 47 :string :string c)]
+          (= r "616c6976650a"))))))
+
+(defn- pr-resume [store :string cid :string contract :vector-i64 dest :string cache :string] :string
+  (if (or (not (json-canonical? contract)) (not (cp-block? store cid))) "profile/contract-refused"
+    (let [b (cp-load store cid) v (checkpoint-problem b (cp-str contract 0 "author") (cp-str contract 0 "profile")
+          (cp-str contract 0 "policy") (cp-str contract 0 "environment") (cp-num contract 0 "epoch")
+          (cp-str contract 0 "parent") (cp-str contract 0 "task"))]
+      (cond (not (= v "checkpoint/ok")) v
+            (not (cp-closure? store b)) "checkpoint/missing-or-corrupt-block"
+            :else (let [restored (cp-materialize store b dest)]
+              (if (not (= restored "checkpoint/restored")) restored
+                (let [report (cp-say "profile/automatically-restored")]
+                  (pr-step dest (cp-load store (cp-str contract 0 "environment")) cache (cp-num contract 0 "next")))))))))
+
+(defn profile-recovery-main [] :i64
+  (cond (= (cp-arg 0) "step")
+        (cp-say (pr-step (cp-arg 1) (cp-read (cp-arg 2)) (cp-arg 3) (cp-int (cp-arg 4))))
+        (= (cp-arg 0) "hold") (pr-hold (cp-arg 1))
+        (= (cp-arg 0) "watch")
+        (let [requested (cp-int (cp-arg 7)) limit (if (and (> requested 0) (<= requested 1800)) requested 1800)]
+        (loop [i 0 seen false failures 0]
+          (let [alive (pr-alive? (cp-arg 1)) misses (if alive 0 (+ failures 1))]
+            (if (and alive (not seen)) (cp-say "profile/producer-observed") 0)
+            (cond (and seen (>= misses 2))
+                  (let [v (cp-say "profile/producer-lost")]
+                    (cp-say (pr-resume (cp-arg 2) (cp-arg 3) (cp-read (cp-arg 4)) (cp-arg 5) (cp-arg 6))))
+                  (>= i limit) (cp-say "profile/watch-expired")
+                  :else (let [z (pr-pause)] (recur (+ i 1) (or seen alive) misses))))))
+        :else (cp-say "profile/command")))
