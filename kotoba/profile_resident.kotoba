@@ -81,6 +81,16 @@
         result (if saved (cp-spawn args) "") first (cp-line (cp-out result))]
     (if (and (cp-ok? result) (= (ln-field first 0) "checkpoint/created")) (ln-field first 1) "")))
 
+;; A valid dispatch budget cannot replace checking the input promise after
+;; inference or the potentially slow capture/replica round. Keep the proposal
+;; when either the deadline or the independently re-learned lease is lost.
+(defn- rt-post-problem [cfg :vector-i64 head :vector-i64 lease :vector-i64 fresh :vector-i64 now :i64] :string
+  (cond (<= (cp-num head 0 "until") now) "resident/retention-expired-proposal-retained"
+        (or (not (= (cp-text lease) (cp-text fresh)))
+            (not (= (recovery-lease-problem fresh (cp-str cfg 0 "task") (cp-str cfg 0 "node")
+                      (cp-num lease 0 "epoch") now) "recovery/lease-admitted"))) "resident/lease-lost"
+        :else "resident/admission-held"))
+
 (defn- rt-turn [cfg :vector-i64 head :vector-i64 lease :vector-i64 request :string] :string
   (let [store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint") checkpoint (cp-load store root)
         dest (str (cp-str cfg 0 "runtimeRoot") "/checkouts/" (rt-now))
@@ -91,20 +101,20 @@
             status (rt-status cfg "inference")
             result (pr-step-resident dest (cp-read (cp-str cfg 0 "environmentFile")) (cp-str cfg 0 "cache") next
                      (rf-budget (cp-num lease 0 "until") (cp-num head 0 "until") (rt-now)))
-            fresh (rt-lease cfg (cp-num lease 0 "epoch"))]
+            fresh (rt-lease cfg (cp-num lease 0 "epoch"))
+            post (rt-post-problem cfg head lease fresh (rt-now))]
         (cond (not (= (ln-field result 0) "profile/step-completed")) result
-              (or (not (= (cp-text lease) (cp-text fresh)))
-                  (not (= (recovery-lease-problem fresh (cp-str cfg 0 "task") (cp-str cfg 0 "node")
-                    (cp-num lease 0 "epoch") (rt-now)) "recovery/lease-admitted"))) "resident/lease-lost"
+              (not (= post "resident/admission-held")) post
               :else
               (let [successor (rt-capture cfg dest (cp-num lease 0 "epoch") root next)
                     copied (and (not (= successor "")) (rt-replicate cfg successor next-at request))
-                    final (if copied (rt-lease cfg (cp-num lease 0 "epoch")) (vector-alloc 0))]
-                (if (and copied (= (cp-text lease) (cp-text final))
-                         (= (recovery-lease-problem final (cp-str cfg 0 "task") (cp-str cfg 0 "node")
-                              (cp-num lease 0 "epoch") (rt-now)) "recovery/lease-admitted")
-                         (rt-save (cp-str cfg 0 "head") (cp-read (cp-str cfg 0 "candidateHead"))))
-                  (str "resident/published " next " " successor) "resident/proposal-retained")))))))
+                    final (if copied (rt-lease cfg (cp-num lease 0 "epoch")) (vector-alloc 0))
+                    post-final (rt-post-problem cfg head lease final (rt-now))]
+                (cond (not copied) "resident/proposal-retained"
+                      (not (= post-final "resident/admission-held")) post-final
+                      (rt-save (cp-str cfg 0 "head") (cp-read (cp-str cfg 0 "candidateHead")))
+                      (str "resident/published " next " " successor)
+                      :else "resident/head-publication-failed")))))))
 
 (defn- rt-cycle [cfg :vector-i64] :string
   (let [head-path (cp-str cfg 0 "head")

@@ -81,9 +81,12 @@ operator provisioning and review.
 5. The request body hashes to a stable systemd inference unit and cache path.
    A resident crash reuses an in-flight/completed unit and the same cache;
    runtime restart does not create another inference for that request.
-6. After the actual model result, recheck the lease, capture a successor signed
+6. After the actual model result, recheck both the input retention deadline
+   and the lease, capture a successor signed
    checkpoint, automatically upload its entire closure, obtain both signed
-   retention receipts, recheck the lease again, and atomically publish head.
+   retention receipts, recheck the input deadline and lease again immediately
+   before atomically publishing head. An expired input keeps the proposal and
+   leaves the admitted head unchanged, even when its successor has replicas.
    Only the latest output is allowlisted in the successor checkpoint; older
    outputs are not needed to continue the immediately preceding proposal.
 7. The head records `nextAt` and the consumed operator request CID together.
@@ -157,8 +160,10 @@ Append `fleet_intent_core`, `fleet_topology_verify`, `fleet_lease_core`,
 headers into the seed's single namespace input, then select the desired main.
 Build static `aarch64-linux` and `x86_64-linux` artifacts. A pure gate additionally
 appends `git_checkpoint_test` and `profile_resident_test`: result/exit status
-31. Removing the **production** `pp-root?` checkpoint signature/contract check
-produces 23. This is not an assertion-inversion test. CI/CD stays stopped;
+127. It covers the exact retention deadline and independently lost leases.
+Removing the **production** retention guard produces 95. Before this review's
+expanded gate, removing the production `pp-root?` checkpoint signature/contract
+check changed 31 to 23. These are not assertion-inversion tests. CI/CD stays stopped;
 there is no Node, nbb, JVM or Python product runtime fallback.
 
 The per-epoch quorum and operator-pinned local head do not establish a global
@@ -183,3 +188,20 @@ its listener and was removed without disrupting the working transport. The
 root volume also has insufficient free space for new user LaunchAgents.
 No physical Mac/shared B host restart or host-storage cleanup was performed.
 The qualified runtime crash/guest reboot does not claim host-login auto-start.
+
+[PR #544 review evidence](evidence/profile-resident-review544-20261024.json)
+records the retention regression and its correction. A loopback-only fixture
+delayed the real A retention response by 22 seconds, using an isolated head
+with a conservatively shortened deadline. The old resident published after
+that deadline; the corrected native resident refused publication. Both reused
+the already completed inference unit with provider submission capability
+removed. The production head, schedule and inference cache stayed unchanged.
+The fixture was stopped after the check; it is not a product runtime helper.
+
+C's host boot installation requires an administrator-owned LaunchDaemon,
+running the exact dedicated VM/transport as the unprivileged owner. FileVault
+unlock remains a physical boot prerequisite. The owner requested startup
+configuration and dedicated VM qualification first, with physical C reboot
+deferred until unlock preparation. The real daily tick remains scheduled for
+2026-10-25 18:21:15.493 JST; a thread follow-up checks it after 18:45 JST.
+Neither the clock nor `nextAt` was advanced to claim elapsed-time evidence.
