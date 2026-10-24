@@ -1,0 +1,58 @@
+;; NixOS native host observation for JUN-379. No enrollment or app authority.
+;; Args: HOST RUN OUTPUT_DIR SCOPE (nixos-vm | nixos-host).
+;; Atomic public snapshots contain no key material. A reader must treat them
+;; as observations, never admission, scheduling grants or Cell receipts.
+(ns murakumo.nixos-monitor (:export [main]))
+(defn nm-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn nm-read [p :string] :string (typed-cap-call 35 :string :string p))
+(defn nm-label? [s :string] :bool
+  (and (> (string-length s) 0) (<= (string-length s) 64)
+    (loop [i 0] (if (= i (string-length s)) true
+      (let [c (string-code-point-at s i)]
+        (if (or (and (>= c 97) (<= c 122)) (and (>= c 48) (<= c 57)) (= c 45))
+          (recur (+ i 1)) false))))))
+(defn nm-digits [s :string start :i64] :string
+  (loop [i start] (if (= i (string-length s)) (string-substring s start i)
+    (let [c (string-code-point-at s i)]
+      (if (and (>= c 48) (<= c 57)) (recur (+ i 1)) (string-substring s start i))))))
+(defn nm-field [s :string key :string] :string
+  (let [at (if (= key "") 0 (string-index-of s key))]
+    (if (< at 0) "null"
+      (loop [i (+ at (string-length key))]
+        (if (= i (string-length s)) "null"
+          (let [c (string-code-point-at s i)]
+            (if (or (= c 32) (= c 9)) (recur (+ i 1))
+              (let [n (nm-digits s i)] (if (= n "") "null" n)))))))))
+(defn nm-check [] :bool
+  (and (nm-label? "nixos-node-1") (not (nm-label? "bad\"label"))
+       (= (nm-field "MemAvailable:  123 kB\n" "MemAvailable:") "123")
+       (= (nm-field "8.3 6.1\n" "") "8")
+       (= (nm-field "missing" "MemTotal:") "null")))
+(defn nm-sample [label :string run :string dir :string scope :string sequence :i64] :bool
+  (let [mem (nm-read "/proc/meminfo") uptime (nm-read "/proc/uptime")
+        now (typed-cap-call 7 :string :string "wall")
+        text (str "{\"schema\":\"itonami.node.local-observation.v1\",\"hostLabel\":\"" label
+          "\",\"runId\":\"" run "\",\"sequence\":" sequence ",\"observedAtMs\":" now
+          ",\"linuxUptimeSeconds\":" (nm-field uptime "")
+          ",\"memoryTotalKiB\":" (nm-field mem "MemTotal:")
+          ",\"memoryAvailableKiB\":" (nm-field mem "MemAvailable:")
+          ",\"source\":\"native-procfs\",\"scope\":\"" scope
+          "\",\"enrollment\":\"unregistered\",\"signed\":false,\"cellRuntime\":false,\"peerCount\":null,\"cellCount\":null,\"economicState\":\"unconnected\"}\n")
+        tmp (str dir "/observation.json.tmp") final (str dir "/observation.json")
+        written (nm-read (str tmp "WRITE" "_SEP" text))
+        flushed (nm-read (str tmp "FSYNC" "_SEP"))
+        moved (if (= flushed "1") (nm-read (str tmp "RENAME" "_SEP" final)) "0")
+        durable (if (= moved "1") (nm-read (str dir "FSYNC" "_SEP")) "0")]
+    (= durable "1")))
+(defn main [] :i64
+  (let [host (nm-arg 0) run (nm-arg 1) dir (nm-arg 2) scope (nm-arg 3)]
+    (if (or (not (nm-check)) (not (nm-label? host)) (not (nm-label? run)) (= dir "")
+            (not= (nm-arg 4) "") (not (or (= scope "nixos-vm") (= scope "nixos-host"))))
+      (let [out (typed-cap-call 39 :string :string "nixos-monitor: arguments/self-check refused\n")] 2)
+      ;; Bounded process lifetime plus systemd Restart=always. arena-scope frees
+      ;; each sample, preventing the observation loop from retaining snapshots.
+      (loop [i 1]
+        (if (> i 2000) 0
+          (let [ok (arena-scope (nm-sample host run dir scope i))]
+            (if (not ok) 3
+              (let [wait (typed-cap-call 7 :string :string "sleep 5000")] (recur (+ i 1))))))))))
