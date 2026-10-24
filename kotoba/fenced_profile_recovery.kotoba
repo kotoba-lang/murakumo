@@ -6,6 +6,11 @@
   (:export [fenced-profile-main]))
 
 (defn- rf-now [] :i64 (ln-now "clock"))
+(defn- rf-budget [lease-until :i64 retention-until :i64 now :i64] :i64
+  (let [lease-end (- lease-until (lease-skew))
+        end (if (< lease-end retention-until) lease-end retention-until)
+        seconds (quot (- end (+ now 10000)) 1000)]
+    (if (> seconds 840) 840 seconds)))
 (defn- rf-host [port :string] :string
   (let [i (string-index-of port ":")] (if (> i 0) (string-substring port 0 i) "")))
 (defn- rf-voters? [ports :string] :bool
@@ -46,18 +51,18 @@
                 admitted (recovery-lease-problem lease task node epoch (rf-now))]
             (if (not (= admitted "recovery/lease-admitted")) admitted
           (let [dest (cp-str plan 0 "dest") ready (if restore (cp-materialize store checkpoint dest) "checkpoint/restored")
-                seconds (quot (- (- (cp-num lease 0 "until") (lease-skew)) (+ (rf-now) 10000)) 1000)
-                budget (if (> seconds 840) 840 seconds)]
+                budget (rf-budget (cp-num lease 0 "until") (cp-num pins 0 "until") (rf-now))]
             (if (not (= ready "checkpoint/restored")) ready
               (let [saved (cp-write (cp-str plan 0 "observedLease") lease)
                     event (cp-say "recovery/lease-and-replicas-admitted")
                     result (if saved (pr-step-bounded dest (cp-load store (cp-str contract 0 "environment"))
                              (cp-str plan 0 "cache") (cp-num contract 0 "next") budget) "recovery/lease-record-failed")
                     fresh (cp-bytes (rf-learn plan false)) after (rf-now)]
+                (if (<= (cp-num pins 0 "until") after) "recovery/retention-expired-proposal-retained"
                 (if (or (not (= (cp-text lease) (cp-text fresh)))
                         (not (= (recovery-lease-problem fresh task node epoch after) "recovery/lease-admitted")))
                   "recovery/lease-lost-proposal-retained"
-                  result)))))))))
+                  result))))))))))
 
 (defn- rf-previous-value-status [previous :vector-i64 expected :vector-i64 node :string task :string epoch :i64 now :i64] :i64
   (cond (not (= (cp-text previous) (cp-text expected))) -1

@@ -124,9 +124,14 @@ equality with the independently pinned prior value. It waits for canonical
 `lease/take-over`, including the clock-skew barrier. It verifies the signed
 replica pair and checkpoint binding before proposing the successor lease.
 Only the chosen holder at exactly the next epoch may materialize and infer.
+Direct `step` also freshly learns the predecessor and requires its expiry
+plus skew before proposing the successor. The review counterexample and
+native gate 63 are in [review evidence](evidence/direct-step-review-20261024.json).
 
 The inference curl timeout is bounded by the remaining lease window, minus
 the canonical skew and a publication margin, with an upper bound of 840 s.
+The replica retention deadline can shorten this budget further, and expiry
+after inference retains the proposal instead of reporting a valid continuation.
 After inference the controller learns the lease again; a different/unavailable
 lease or expired holder retains the proposal and refuses successful publication.
 No model-output tools or legacy profile scripts are dispatched.
