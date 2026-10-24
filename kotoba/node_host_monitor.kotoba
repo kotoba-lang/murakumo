@@ -1,0 +1,68 @@
+;; Local, unregistered Itonami host observation. JUN-343.
+;; This is not signed L2, enrollment, a Cell conductor, or an OCI launcher.
+;; No process/spawn, dialing, identity material, registry or inference access.
+;; A private TCP listener is only a bounded 15-second wait; it is not published.
+;; The output directory MUST NOT be served by the static app origin.
+;; argv: HOST_LABEL RUN_ID OUTPUT_DIRECTORY. Labels are local names, not DIDs.
+(ns itonami.node-host-monitor (:export [main]))
+
+(defn cat [a :string b :string] :string (string-concat a b))
+(defn dec-text [n :i64] :string
+  (if (< n 10) (string-substring "0123456789" n (+ n 1))
+    (cat (dec-text (quot n 10)) (dec-text (rem n 10)))))
+(defn arg [n :i64] :string (typed-cap-call 38 :string :string (dec-text n)))
+(defn read-text [p :string] :string (typed-cap-call 35 :string :string p))
+(defn write-text [p :string s :string] :string
+  (typed-cap-call 35 :string :string (cat p (cat (cat "WRITE" "_SEP") s))))
+(defn safe-label-at? [s :string i :i64] :bool
+  (if (>= i (string-length s)) true
+    (let [c (string-code-point-at s i)]
+      (and (or (and (>= c 97) (<= c 122)) (and (>= c 48) (<= c 57)) (= c 45))
+           (safe-label-at? s (+ i 1))))))
+(defn safe-label? [s :string] :bool
+  (and (> (string-length s) 0) (<= (string-length s) 64) (safe-label-at? s 0)))
+(defn digits-end [s :string i :i64] :i64
+  (if (>= i (string-length s)) i
+    (let [c (string-code-point-at s i)]
+      (if (and (>= c 48) (<= c 57)) (digits-end s (+ i 1)) i))))
+(defn skip-space [s :string i :i64] :i64
+  (if (>= i (string-length s)) i
+    (let [c (string-code-point-at s i)]
+      (if (or (= c 32) (= c 9)) (skip-space s (+ i 1)) i))))
+(defn field-number [s :string key :string] :string
+  ;; The native primitive refuses an empty search pattern. Uptime's first
+  ;; number starts at byte zero and does not require a search.
+  (let [k (if (= (string-length key) 0) 0 (string-index-of s key))]
+    (if (< k 0) "null"
+      (let [a (skip-space s (+ k (string-length key))) b (digits-end s a)]
+        (if (= a b) "null" (string-substring s a b))))))
+(defn observation [label :string run :string seq :i64 mem :string uptime :string] :string
+  (let [a (cat "{\"schema\":\"itonami.node.local-observation.v1\",\"hostLabel\":\"" label)
+        b (cat a (cat "\",\"runId\":\"" run))
+        c (cat b (cat "\",\"sequence\":" (dec-text seq)))
+        d (cat c (cat ",\"linuxUptimeSeconds\":" (field-number uptime "")))
+        e (cat d (cat ",\"memoryTotalKiB\":" (field-number mem "MemTotal:")))
+        f (cat e (cat ",\"memoryAvailableKiB\":" (field-number mem "MemAvailable:")))]
+    (cat f ",\"source\":\"native-procfs\",\"scope\":\"linux-vm\",\"enrollment\":\"unregistered\",\"signed\":false,\"cellRuntime\":false,\"peerCount\":null,\"cellCount\":null,\"economicState\":\"unconnected\"}\n")))
+(defn tick [listener :string label :string run :string dir :string seq :i64] :i64
+  (let [mem (read-text "/proc/meminfo") uptime (read-text "/proc/uptime")
+        json (observation label run seq mem uptime)
+        output (write-text (cat dir "/observation.json") json)
+        log (typed-cap-call 37 :string :string json)]
+    (if (>= seq 2000) 0
+      (let [wait (typed-cap-call 44 :string :string (cat listener " 15000"))
+            close (if (= wait "timeout") "" (typed-cap-call 47 :string :string wait))]
+        (tick listener label run dir (+ seq 1))))))
+(defn test-fields [] :i64
+  (if (and (= (field-number "MemTotal:  8192 kB\nMemAvailable: 2048 kB\n" "MemTotal:") "8192")
+           (= (field-number "MemAvailable: 2048 kB\n" "MemAvailable:") "2048")
+           (= (field-number "123.45 99.0\n" "") "123")
+           (= (field-number "missing" "MemTotal:") "null")
+           (safe-label? "local-mac-linux-vm")
+           (not (safe-label? "bad\"label")) (not (safe-label? ""))) 7 0))
+(defn main [] :i64
+  (let [label (arg 0) run (arg 1) dir (arg 2)]
+    (if (and (safe-label? label) (safe-label? run) (> (string-length dir) 0) (= (test-fields) 7))
+      (let [listener (typed-cap-call 43 :string :string "127.0.0.1:18716")]
+        (tick listener label run dir 1))
+      (let [msg (typed-cap-call 37 :string :string "host-monitor: invalid local label/run/output; not started\n")] 2))))
