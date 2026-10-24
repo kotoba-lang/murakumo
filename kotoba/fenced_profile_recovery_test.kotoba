@@ -1,0 +1,14 @@
+;; A future chosen predecessor still fences direct step, not just watch.
+(ns murakumo.fenced-profile-recovery-test
+  (:export [test-fenced-profile-recovery]))
+
+(defn test-fenced-profile-recovery [] :i64
+  (let [a (cp-bytes (lease-text "A" "task" 0 1 10000 1))]
+    (+ (if (= (rf-previous-value-status a a "B" "task" 1 1000) 0) 1 0)
+       (if (and (= (rf-previous-value-status a a "B" "task" 1 70000) 0)
+                (= (rf-previous-value-status a a "B" "task" 1 70001) 1)) 2 0)
+       (if (and (= (rf-previous-value-status (cp-bytes "") a "B" "task" 1 70001) -1)
+                (= (rf-previous-value-status a a "B" "task" 2 70001) -2)
+                (= (rf-previous-value-status a a "B" "other" 1 70001) -3)) 4 0)
+       (if (and (rf-voters? "127.0.0.1:1,127.0.0.2:1,127.0.0.3:1")
+                (not (rf-voters? "127.0.0.1:1,127.0.0.1:2,127.0.0.3:1"))) 8 0))))

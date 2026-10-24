@@ -40,6 +40,7 @@
               (not (= epoch (+ (cp-num contract 0 "epoch") 1)))) "recovery/plan-binding"
           (not (= checked "checkpoint/ok")) checked
           (not (cp-closure? store checkpoint)) "checkpoint/missing-or-corrupt-block"
+          (not (= (rf-previous-status plan) 1)) "recovery/previous-lease-not-released"
           :else
           (let [lease (cp-bytes (rf-learn plan false))
                 admitted (recovery-lease-problem lease task node epoch (rf-now))]
@@ -58,16 +59,20 @@
                   "recovery/lease-lost-proposal-retained"
                   result)))))))))
 
+(defn- rf-previous-value-status [previous :vector-i64 expected :vector-i64 node :string task :string epoch :i64 now :i64] :i64
+  (cond (not (= (cp-text previous) (cp-text expected))) -1
+        (not (= (cp-num previous 0 "epoch") epoch)) -2
+        (or (not (= (cp-str previous 0 "class") task)) (not (= (cp-num previous 0 "slot") 0))) -3
+        (= (decide node (cp-num previous 0 "epoch") true
+             (cp-str previous 0 "node") (cp-num previous 0 "until") now) "lease/take-over") 1
+        :else 0))
+
 (defn- rf-previous-status [plan :vector-i64] :i64
   (arena-scope
     (let [previous (cp-bytes (rf-learn plan true)) now (rf-now)
           expected (cp-read (cp-str plan 0 "previousLease"))]
-      (cond (not (= (cp-text previous) (cp-text expected))) -1
-            (not (= (cp-num previous 0 "epoch") (cp-num plan 0 "previousEpoch"))) -2
-            (not (= (cp-str previous 0 "class") (cp-str plan 0 "task"))) -3
-            (= (decide (cp-str plan 0 "node") (cp-num previous 0 "epoch") true
-                 (cp-str previous 0 "node") (cp-num previous 0 "until") now) "lease/take-over") 1
-            :else 0))))
+      (rf-previous-value-status previous expected (cp-str plan 0 "node")
+        (cp-str plan 0 "task") (cp-num plan 0 "previousEpoch") now))))
 
 (defn- rf-watch [plan :vector-i64] :string
   (loop [i 0 seen false misses 0]
