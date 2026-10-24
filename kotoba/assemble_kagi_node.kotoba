@@ -1,0 +1,53 @@
+;; Native bounded source assembler for the public kagi/node adapter.
+;; Owner sources are digest checked before namespace removal. No host reader,
+;; project-link fallback, network, private key or source execution.
+(ns murakumo.kagi-node-assemble (:export [main]))
+(defn mna-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn mna-read [path :string] :string (typed-cap-call 35 :string :string path))
+(defn mna-width [c :i64] :i64 (cond (< c 128) 1 (< c 2048) 2 (< c 65536) 3 :else 4))
+(defn mna-body [source :string] :string
+  (let [start (string-index-of source "(ns ")]
+    (if (< start 0) ""
+      (loop [i start depth 0 quoted false escaped false comment false]
+        (if (= i (string-length source)) ""
+          (let [c (string-code-point-at source i)
+                next-depth (+ depth (if (or quoted comment) 0 (if (= c 40) 1 (if (= c 41) -1 0))))]
+            (if (and (not quoted) (not comment) (= c 41) (= next-depth 0))
+              (string-substring source (+ i 1) (string-length source))
+              (recur (+ i (mna-width c)) next-depth
+                (if comment quoted (if quoted (if (and (= c 34) (not escaped)) false true) (= c 34)))
+                (and quoted (not escaped) (= c 92))
+                (if comment (not (= c 10)) (and (not quoted) (= c 59)))))))))))
+(defn mna-owner [root :string name :string digest :string] :string
+  (let [source (mna-read (str root "/" name ".kotoba"))
+        actual (typed-cap-call 3 :string :string source)]
+    (if (= digest actual) (mna-body source) "")))
+(defn mna-error [message :string] :i64
+  (let [printed (typed-cap-call 39 :string :string (str "node assemble: " message "\n"))] 2))
+(defn main [] :i64
+  (let [owners (mna-arg 0) repo (mna-arg 1) output (mna-arg 2)
+        p0 (mna-owner owners "sha2" "2c59ef55bc2b527c1aac723c0fee896eba75ee82fecd212a2858782beadc6888")
+        p1 (mna-owner owners "ed25519" "47c086f3d93ad4f6da047bbf3b9250f7e4fbc7539ec1a0077abb2d82ceb3dc14")
+        p2 (mna-owner owners "ledger" "e520534370dec3d3e6d4f5a2252f353485f3979457b3ec3162019d84d7d5e2d5")
+        p3 (mna-owner owners "node-state" "2d478d602aa313fd2cd20ad8bc18b24b3013897b565799967a67b3156970e4c4")
+        p4 (mna-owner owners "kagi-core" "a164be15e7769924cb7f4981ca6c587aa868149137ce3a2bdee65357eafc24f4")
+        p5 (mna-owner owners "kagi-cli" "5848aa363aae2168b390705ef8b311047c625b07d62478a68cd83837359bc7b4")
+        p6 (mna-owner owners "enrollment" "514652719718a77b078230efe8ca74e1473905dc8a4cde4656c790f1662af7e1")
+        own (mna-body (mna-read (str repo "/kotoba/fleet_kagi_node.kotoba")))
+        cli-main (string-index-of p5 "(defn main []")]
+    (if (or (= owners "") (= repo "") (= output "") (not= (mna-arg 3) "")
+            (= p0 "")
+            (= p1 "")
+            (= p2 "")
+            (= p3 "")
+            (= p4 "")
+            (= p5 "")
+            (= p6 "")
+            (= own "") (< cli-main 0)) (mna-error "source pin/header/arguments refused")
+      (if (not= (mna-read (str output "EXISTS" "_SEP")) "0") (mna-error "output exists")
+        (let [source (str "(ns murakumo.kagi-node-source-unity (:export [main]))\n"
+                       p0 "\n" p1 "\n" p2 "\n" p3 "\n" p4 "\n"
+                       (string-substring p5 0 cli-main) "\n" p6 "\n" own "\n")
+              written (mna-read (str output "WRITE" "_SEP" source))
+              digest (typed-cap-call 3 :string :string source)
+              printed (typed-cap-call 37 :string :string (str "murakumo.kagi.node.assembly.v1 " digest "\n"))] 0)))))
