@@ -8,6 +8,9 @@ enrollment, heartbeat, job placement, distributed (multi-node) inference and
 fleet operations. The runtime is **not tied to WebAssembly**: WASM components are
 one optional workload a node can host, alongside inference.
 
+Native agent development recovery: [signed Git checkpoints between nodes](docs/git-checkpoint.md)
+(JUN-156; two-host recovery drill, separate from automatic placement).
+
 ## Where this fits / quick use
 
 Figure: an [interactive map of the kotoba / murakumo stack](https://kotoba-lang.org/anatomy/kotoba-murakumo/)

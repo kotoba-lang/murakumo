@@ -1,0 +1,33 @@
+;; Native regression gate. RFC 8032 public test seed, never an operator key.
+;; Append after git_checkpoint.kotoba in the pinned native source closure.
+(ns murakumo.git-checkpoint-test
+  (:export [test-git-checkpoint]))
+
+(defn- cpt-cid [] :string "bafkreibyq4ig24q4jywl3wnkxnyazlb3calr5u2i2bd6utshg2gfbsqi5m")
+(defn- cpt-did [] :string "did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw")
+(defn- cpt-profile [] :string "sha256:004fb9a2ca673e4d6c5bb28a0b4615962370515dda443aef8cc869885bb38c9e")
+(defn- cpt-envelope [sig-good :bool] :vector-i64
+  (let [cid (cpt-cid)
+        text (str "{\"bundle\":\"" cid "\",\"did\":\"" (cpt-did) "\",\"environment\":\"" cid
+          "\",\"epoch\":2,\"head\":\"dd0c22efa4f0dee695a4a4cc2c8c683ebf26a936\",\"kind\":\"itonami.git-checkpoint/1\",\"parent\":\"root\",\"policy\":\"" cid
+          "\",\"profile\":\"" (cpt-profile) "\",\"stash\":\"none\",\"summary\":\"" cid "\",\"task\":\"drill\",\"untracked\":[]}")
+        seed (hex-bytes (if sig-good "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60"
+          "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb"))]
+    (vector-i64-from-bytes (string-to-utf8 (str "{\"payload\":" text ",\"signature\":\"" (sign-statement seed text) "\"}")))))
+
+(defn test-git-checkpoint [] :i64
+  (let [b (cpt-envelope true) bad (cpt-envelope false) cid (cpt-cid) did (cpt-did) profile (cpt-profile)]
+    (+ (if (= (checkpoint-problem b did profile cid cid 2 "root" "drill") "checkpoint/ok") 1 0)
+       (if (and (= (checkpoint-problem bad did profile cid cid 2 "root" "drill") "checkpoint/signature")
+                (= (checkpoint-problem b "did:key:untrusted" profile cid cid 2 "root" "drill") "checkpoint/author")) 2 0)
+       (if (and (= (checkpoint-problem b did profile cid cid 3 "root" "drill") "checkpoint/epoch")
+                (= (checkpoint-problem b did profile cid cid 2 cid "drill") "checkpoint/parent")) 4 0)
+       (if (and (= (checkpoint-problem b did "sha256:wrong" cid cid 2 "root" "drill") "checkpoint/profile")
+                (= (checkpoint-problem b did profile "wrong" cid 2 "root" "drill") "checkpoint/policy")
+                (= (checkpoint-problem b did profile cid "wrong" 2 "root" "drill") "checkpoint/environment")
+                (= (checkpoint-problem b did profile cid cid 2 "root" "other-task") "checkpoint/task")) 8 0)
+       (if (and (checkpoint-path? "src/main.kotoba") (checkpoint-path? "resume.txt")
+                (not (checkpoint-path? "../outside")) (not (checkpoint-path? ".git/config"))
+                (not (checkpoint-path? "a//b")) (not (checkpoint-path? "a/../b"))
+                (not (checkpoint-path? "/absolute")) (not (checkpoint-path? "pathARG_SEPoption"))
+                (not (checkpoint-path? "a\nb"))) 16 0))))

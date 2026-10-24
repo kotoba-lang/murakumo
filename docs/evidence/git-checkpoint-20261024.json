@@ -1,0 +1,204 @@
+{
+  "schema": "murakumo.git-checkpoint-recovery-evidence/1",
+  "date": "2026-10-24",
+  "issue": "JUN-156",
+  "status": "PASS_SELECTED_TWO_HOST_NATIVE_GIT_RECOVERY",
+  "source": {
+    "murakumoBase": "d62bfbf014a35635a987e623c835f76b535171fd",
+    "fileSHA256": {
+      "kotoba/git_checkpoint.kotoba": "8880fa207c5d2c8e4989c938a7c6f37a3c9b8ca785bbe337a9bdabe3b0ec2513",
+      "kotoba/git_checkpoint_test.kotoba": "3b15b6fc092f411355e36b3baa98f2c21ffed82dc5f379073e767d3aac6f7475"
+    },
+    "flattenedNativeSourceSHA256": "3e8d19655b5922ead00091db40113d9dfa872cf9dcaa0cbcdff9abb32a7ae030"
+  },
+  "compiler": {
+    "amuRevision": "dd35c6379e3b87f024bf685fa8d61af0aa07cea1",
+    "arm64RootSHA256": "688324e0fdc7a93a664ae55fe0ad417e7a980ab844656f3f97889812363c9479",
+    "x86_64CompilerSHA256": "011f1f84068a18b400471cfdfe58acb4525fd189c474c3baf6bc4e67f33fc842",
+    "route": "Amu-produced arm64 Linux root -> loaderless arm64/x86_64 static ELF; B uses the same revision native x86_64 compiler",
+    "productControllerRuntimes": [
+      "loaderless-native"
+    ],
+    "externalTools": [
+      "git",
+      "mkdir",
+      "GNU stat",
+      "chmod"
+    ],
+    "hostHarness": "shell/sed and SSH/SCP; Python used only for independent CID/tamper oracle and this evidence serialization, never as controller/compiler fallback"
+  },
+  "artifacts": {
+    "checkpoint-arm64-v2.elf": {
+      "sha256": "2fa1a16e9e7e9dc7e81923605f928222d02e5604567aaac916cc0896ced5a7e7",
+      "bytes": 545280
+    },
+    "checkpoint-x86_64-v2.elf": {
+      "sha256": "f60b1c39c9295955a49c85ff849e8bd3a5fb5daa68ebc29da0dfba4c2aafcc9f",
+      "bytes": 643584
+    },
+    "gate-v2.elf": {
+      "sha256": "cb16c9156e071fd82e088e67899186bc0db8a80ba5b85db583d93245b1a5fe62",
+      "bytes": 647680
+    },
+    "no-epoch-v2.elf": {
+      "sha256": "2188de921301008e5e5070f6643f9069f985eaeefbf82ee978345cc196f2ee81",
+      "bytes": 647680
+    },
+    "no-signature-v2.elf": {
+      "sha256": "b69b1ea562c5a4f405af7c834f62b95081ef2aa2702462d70b0856e11deacc04",
+      "bytes": 647680
+    }
+  },
+  "hosts": {
+    "a": "native arm64 Linux VM on development Mac",
+    "b": "murakumo-ci-6600hs, separate physical x86_64 Linux host",
+    "physicalFailureDomains": 2,
+    "transport": "peer SSH/SCP of CID files, no B2, shared checkout or object alternates",
+    "outageModel": "A known fixture/store paths renamed before B restores; A was not powered off; B performs no fetch from A at restore"
+  },
+  "fixtureRound": {
+    "aCheckpoint": "bafkreiaonqxdta4djln54dbdhzd6c6gfarkyb7uw5fhurj3sdri6hfzoiy",
+    "bCheckpoint": "bafkreico5qgzvzokumrowam3q5gagfpsshsxagu6qwlohc3vtauycgfs4q",
+    "recoveryReceipt": "bafkreigsyhjqhnrtnpvragy3iim7dybdiaaanv2nwmah3ux6ot2dnlljs4",
+    "initialHead": "dd0c22efa4f0dee695a4a4cc2c8c683ebf26a936",
+    "resumedHead": "8e4f99a47e47607c5733dc64801cc0908ec05dc7",
+    "bundleBytes": 185383,
+    "chunks": 2,
+    "binarySHA256": "ea7ab3deb39bfb51474693d2224498ce97de87c8be1c4203fbb9fdc0c6af0c4d",
+    "indexAndWorktreeBinaryPatches": "byte-for-byte match",
+    "untrackedModes": [
+      "0644",
+      "0755"
+    ],
+    "nativeBefore": 41,
+    "nativeAfter": 42,
+    "successorRestored": true,
+    "initialControllerSHA256": "0b5b9eb6a2f2bd510523459460ca7095e2bb0ebc1e26f952542691a864a60825",
+    "finalControllerReverifiedNegativeControlsAndSuccessorRestore": true
+  },
+  "realRepositoryRound": {
+    "trackedPaths": 1284,
+    "bundleBytes": 6628028,
+    "chunks": 51,
+    "aCheckpoint": "bafkreic4v4cox2abtqu4cdftknphh7zmhc25aizcfwhibqokwj34rzvmrq",
+    "bCheckpoint": "bafkreihroc6gncjpfo6kpopzph577xx5zm2ofnchqzyi4m4simo56gvmly",
+    "recoveryReceipt": "bafkreielv4jn32x4rmimuulggj4wyacmhu6jjlayvoncorma5vobspeliu",
+    "restoredHead": "d62bfbf014a35635a987e623c835f76b535171fd",
+    "resumedHead": "29983a00823979873b5cdd86dc521b9440b68c6b",
+    "indexWorktreeState": "README WIP plus three explicitly selected new source/document files",
+    "restoredSourceSHA256Matches": true,
+    "nativeDevelopment": "B added kotoba/recovery_drill_check.kotoba, compiled/executed it with result 1, committed the source snapshot, captured clean successor (stash=none), emitted and verified recovery receipt",
+    "nativeDevelopmentResult": 1,
+    "successorEpoch": 2,
+    "successorParentMatchesA": true,
+    "publishedToMain": false,
+    "aEnvelope": {
+      "payload": {
+        "bundle": "bafkreictbke2mg6yjjjej7uxtinf5cgu7lipnqakczgumsxdlkl37wuiwq",
+        "did": "did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw",
+        "environment": "bafkreicor5fmef4dqvtpvn3dluge3cgtiksufxt7mltz3j5erkqvbwapce",
+        "epoch": 1,
+        "head": "d62bfbf014a35635a987e623c835f76b535171fd",
+        "kind": "itonami.git-checkpoint/1",
+        "parent": "root",
+        "policy": "bafkreidq4c5vlutvjjb4mdb6wxt4pwegjrxxzizzrh5aa6nu4hwjrfnsde",
+        "profile": "sha256:004fb9a2ca673e4d6c5bb28a0b4615962370515dda443aef8cc869885bb38c9e",
+        "stash": "f1bb1c023c91598dedecb93ac5c4659483575eda",
+        "summary": "bafkreigul6fhktxgotkt2hqwskwoaguqvxaqz4x4r3psjaxj4wjqbru6cu",
+        "task": "jun-156-real-source",
+        "untracked": [
+          {
+            "cid": "bafkreifhacmbqjkteux4vrothmv7v5diym5b73ek6qloiyftkvwmvwoxfq",
+            "mode": "644",
+            "path": "docs/git-checkpoint.md"
+          },
+          {
+            "cid": "bafkreieiqd5ca7c5fshetcojhct4n432hsnyzj4fxprtpkn5vpr3b3bfcm",
+            "mode": "644",
+            "path": "kotoba/git_checkpoint.kotoba"
+          },
+          {
+            "cid": "bafkreib3cw3pycjpiejvly3lhovjr4wcd77nqlof6n4qoptwpu5ky33uou",
+            "mode": "644",
+            "path": "kotoba/git_checkpoint_test.kotoba"
+          }
+        ]
+      },
+      "signature": "Cvu9NCxbTM_GQ9CYm8wkDsMfETRYF_JXzGBmROfS48MBMT4MpO6wIOjwU2gtgCJzJn5xvuI0WbHwoMmG2D7yCQ"
+    },
+    "bEnvelope": {
+      "payload": {
+        "bundle": "bafkreiglubzeicrbcf5n324doewc2lofxatjt3elpz7hus3tvxgeu5x63e",
+        "did": "did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT",
+        "environment": "bafkreicor5fmef4dqvtpvn3dluge3cgtiksufxt7mltz3j5erkqvbwapce",
+        "epoch": 2,
+        "head": "29983a00823979873b5cdd86dc521b9440b68c6b",
+        "kind": "itonami.git-checkpoint/1",
+        "parent": "bafkreic4v4cox2abtqu4cdftknphh7zmhc25aizcfwhibqokwj34rzvmrq",
+        "policy": "bafkreidq4c5vlutvjjb4mdb6wxt4pwegjrxxzizzrh5aa6nu4hwjrfnsde",
+        "profile": "sha256:004fb9a2ca673e4d6c5bb28a0b4615962370515dda443aef8cc869885bb38c9e",
+        "stash": "none",
+        "summary": "bafkreib7ilabhozzi5yxme2ur54hoysfbogisuk6ahdgl4tcuomt75pyjy",
+        "task": "jun-156-real-source",
+        "untracked": []
+      },
+      "signature": "YT3RS_HNxJ4Xwy77WTzqNQ1kAg0zhdVZSO7vZ5zifWhFsl2tGcTxWvJ4F6WbKwPSNmcbDqp9UIUYx2UiieyaCQ"
+    },
+    "recoveryEnvelope": {
+      "payload": {
+        "checkpoint": "bafkreic4v4cox2abtqu4cdftknphh7zmhc25aizcfwhibqokwj34rzvmrq",
+        "did": "did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT",
+        "epoch": 2,
+        "kind": "itonami.recovery/1",
+        "resumed": "bafkreihroc6gncjpfo6kpopzph577xx5zm2ofnchqzyi4m4simo56gvmly",
+        "task": "jun-156-real-source"
+      },
+      "signature": "8BGZKqc3RxyViK0YC5lS8jJkzQZkGD6h_-pUL9HejKk0BMVQxLNiHUL6Tfe5jEHN60dGLuwViVn_SzP6JsIfCQ"
+    },
+    "recoveryVerdict": "recovery/verified"
+  },
+  "verification": {
+    "gitFsck": "pass --full --strict",
+    "alternates": false,
+    "shallowPrerequisite": false,
+    "nativeRegression": 31,
+    "epochCheckRemoved": 27,
+    "signatureCheckRemoved": 29,
+    "preMaterializationRefusals": [
+      "wrong-author",
+      "wrong-profile",
+      "wrong-policy",
+      "wrong-environment",
+      "wrong-task",
+      "wrong-epoch",
+      "wrong-parent",
+      "correct-CID-with-forged-signature",
+      "missing-chunk",
+      "corrupted-chunk"
+    ],
+    "allRejectedDestinationsAndPartialTreesAbsent": true,
+    "existingDestinationPreserved": true,
+    "invalidRecoveryLinkRefused": true,
+    "independentPythonCIDOracleMatchedRoot": true
+  },
+  "qualificationFixes": {
+    "filesystemScope": "store-only grant refused separate source worktree; final capture explicitly grants the common parent",
+    "chunkMemory": "arena-scoped temporary allocation; fixed outer CID table",
+    "sampledRSSKiBBefore": 677424,
+    "sampledRSSKiBAfter": 15816,
+    "rssMeasurement": "diagnostic samples, not maxima or a performance benchmark"
+  },
+  "notQualified": [
+    "production profile inference resume",
+    "automatic materialize/dispatch",
+    "live lease/delegation authority resolution",
+    "Nekko/Kagami publication or accepted-head finality",
+    "browser consent/runtime integration",
+    "on-chain recovery receipt anchor",
+    "encrypted Yataverse/kura retention and durable independent replica receipts",
+    "power-loss durability and automatic local eviction",
+    "all Git features or arbitrary sizes beyond the explicit v1 bounds"
+  ],
+  "identityScope": "RFC 8032 public fixture keys and fixture profile descriptor; signatures are not a production node enrollment or human quorum",
+  "cleanup": "task-owned worktrees, source checkpoints and evidence retained for review; unrelated WIP/stashes/branches untouched; no cache eviction"
+}
