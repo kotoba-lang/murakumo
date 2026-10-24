@@ -9,7 +9,7 @@ p.add_argument('--signer',required=True,type=Path)
 p.add_argument('--node',required=True,type=Path)
 p.add_argument('--output',required=True,type=Path)
 a=p.parse_args()
-assert platform.system()=='Linux' 
+assert platform.system()=='Linux'
 base=a.output.resolve();base.mkdir(mode=0o700,parents=True,exist_ok=False)
 private=base/'signer';private.mkdir(mode=0o700)
 ledger=base/'node-ledger';ledger.mkdir(mode=0o700)
