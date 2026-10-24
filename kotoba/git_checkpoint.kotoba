@@ -1,0 +1,371 @@
+;; Portable Git checkpoint component (JUN-156). Immutable proposals, never a
+;; lease acquisition, accepted-head update, or a replay of tool approvals.
+;; Composition: sha2, ed25519.selfhost, jcs.reader, oci.itonami-artifact,
+;; tsukasa ledger_core/node_state, fleet_node_enrollment, this module.
+;; Seed-subset implementation; replace flattening when native project imports
+;; admit this dependency closure. Git is an explicitly granted external tool;
+;; the controller, CID checks and signatures execute in loaderless native code.
+(ns murakumo.git-checkpoint
+  (:export [checkpoint-main checkpoint-problem checkpoint-path?]))
+
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [b :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 b)))
+(defn- cp-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- cp-say [s :string] :i64 (let [x (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- cp-fs [s :string] :string (typed-cap-call 35 :string :string s))
+(defn- cp-sep [s :string] :string (str s "_SEP"))
+(defn- cp-exists? [p :string] :bool (= (cp-fs (str p (cp-sep "EXISTS"))) "1"))
+(defn- cp-read [p :string] :vector-i64
+  (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (string-to-utf8 p))))
+(defn- cp-cid [b :vector-i64] :string (digest-cid (str "sha256:" (sha256-hex b)) 85))
+(defn- cp-hex? [s :string n :i64] :bool
+  (let [b (cp-bytes s)]
+    (and (= (vector-count b) n)
+      (loop [i 0] (if (= i n) true
+        (let [c (vector-at b i)] (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102))) (recur (+ i 1)) false)))))))
+(defn- cp-raw? [s :string] :bool (= (cid-codec s) 85))
+(defn- cp-safe-absolute? [s :string] :bool
+  (and (> (string-length s) 1) (= (string-substring s 0 1) "/")
+       (= (field-problem s) "enroll/ok")
+       (< (string-index-of s "_SEP") 0) (< (string-index-of s "..") 0)))
+
+;; Intentionally bounded ASCII path profile. No dotfiles, control/delimiter
+;; bytes, traversal, .git, aliases, duplicate or overlapping paths.
+(defn checkpoint-path? [s :string] :bool
+  (let [b (cp-bytes s) n (vector-count b)]
+    (and (> n 0) (<= n 120) (< (string-index-of s "_SEP") 0)
+      (loop [i 0 start true]
+        (if (= i n) (not start)
+          (let [c (vector-at b i)]
+            (cond (= c 47) (if start false (recur (+ i 1) true))
+                  (or (and (>= c 97) (<= c 122)) (and (>= c 65) (<= c 90)) (and (>= c 48) (<= c 57)) (= c 95) (= c 45)) (recur (+ i 1) false)
+                  (= c 46) (if start false (if (and (> i 0) (= (vector-at b (- i 1)) 46)) false (recur (+ i 1) false)))
+                  :else false)))))))
+
+;; Binary writes split after every ASCII A/W. This also handles payloads containing
+;; the runtime's WRITE/APPEND delimiter strings without interpreting content.
+;; 4 KiB chunks, shortened inside any delimiter occurrence.
+(defn- cp-cut [b :vector-i64 start :i64] :i64
+  (let [end (if (< (+ start 4096) (vector-count b)) (+ start 4096) (vector-count b))]
+    (loop [i start]
+      (cond (>= i end) end
+            (or (= (vector-at b i) 87) (= (vector-at b i) 65)) (+ i 1)
+            :else (recur (+ i 1))))))
+(defn- cp-piece [p :string b :vector-i64 i :i64 e :i64 first :bool] :i64
+  (let [prefix (cp-bytes (str p (cp-sep (if first "WRITE" "APPEND")))) n (vector-count prefix)
+        v (loop [k 0 v (vector-alloc (+ n (- e i)))]
+            (if (= k (+ n (- e i))) v
+              (recur (+ k 1) (vector-assoc! v k (if (< k n) (vector-at prefix k) (vector-at b (+ i (- k n))))))))
+        z (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 v))] 0))
+(defn- cp-write [p :string b :vector-i64] :bool
+  (let [z (loop [i 0 first true]
+            (let [e (cp-cut b i) x (cp-piece p b i e first)]
+              (if (= e (vector-count b)) 0 (recur e false))))
+        flush (cp-fs (str p (cp-sep "FSYNC")))]
+    (and (= flush "1") (= (cp-cid (cp-read p)) (cp-cid b)))))
+(defn- cp-put [store :string b :vector-i64] :string
+  (let [cid (cp-cid b) p (str store "/" cid)]
+    (if (or (> (vector-count b) 131072)
+            (if (cp-exists? p) (not (= (cp-cid (cp-read p)) cid)) (not (cp-write p b)))) "" cid)))
+(defn- cp-load [store :string cid :string] :vector-i64
+  (if (and (cp-raw? cid) (cp-exists? (str store "/" cid))) (cp-read (str store "/" cid)) (vector-alloc 0)))
+(defn- cp-block? [store :string cid :string] :bool
+  (and (cp-raw? cid) (cp-exists? (str store "/" cid))
+    (let [b (cp-read (str store "/" cid))] (and (<= (vector-count b) 131072) (= (cp-cid b) cid)))))
+(defn- cp-str [b :vector-i64 o :i64 k :string] :string
+  (let [v (json-member b o k)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))
+(defn- cp-num [b :vector-i64 o :i64 k :string] :i64
+  (let [v (json-member b o k)] (if (and (>= v 0) (= (json-kind b v) 4) (json-int-ok? b v)) (json-int b v) -1)))
+(defn- cp-json [b :vector-i64 i :i64] :string
+  (cp-text (json-canonical-bytes b i)))
+(defn- cp-payload [b :vector-i64] :i64 (json-member b 0 "payload"))
+
+;; Sorted neighbours are insufficient: a, a-b, a/x are sorted but overlap.
+(defn- cp-no-overlap? [b :vector-i64 us :i64 upto :i64 path :string] :bool
+  (loop [i 0]
+    (if (= i upto) true
+      (let [prior (cp-str b (json-element b us i) "path")]
+        (if (or (= prior path) (= (string-index-of path (str prior "/")) 0)
+                (= (string-index-of prior (str path "/")) 0)) false (recur (+ i 1)))))))
+
+;; Caller supplies trust and the exact resume contract from its independently
+;; authorized task. A signature alone grants no authority. Epoch/parent are
+;; checked for equality, not inferred from a peer's own claim.
+(defn checkpoint-problem [b :vector-i64 author :string profile :string policy :string environment :string
+                          epoch :i64 parent :string task :string] :string
+  (if (or (> (vector-count b) 8192) (not (json-canonical? b))) "checkpoint/noncanonical"
+    (let [p (cp-payload b) us (if (>= p 0) (json-member b p "untracked") -1)
+          did (if (>= p 0) (cp-str b p "did") "")]
+      (cond (or (not (= (json-kind b 0) 1)) (not (= (json-count b 0) 2)) (< p 0)
+                (not (= (json-kind b p) 1)) (not (= (json-count b p) 13))
+                (= task "") (not (= (field-problem task) "enroll/ok"))) "checkpoint/schema"
+            (not (= (cp-str b p "kind") "itonami.git-checkpoint/1")) "checkpoint/kind"
+            (not (= did author)) "checkpoint/author"
+            (not (= (statement-problem did (cp-json b p) (cp-str b 0 "signature")) "enroll/ok")) "checkpoint/signature"
+            (not (= (cp-str b p "profile") profile)) "checkpoint/profile"
+            (not (= (cp-str b p "policy") policy)) "checkpoint/policy"
+            (not (= (cp-str b p "environment") environment)) "checkpoint/environment"
+            (or (< epoch 1) (not (= (cp-num b p "epoch") epoch))) "checkpoint/epoch"
+            (not (= (cp-str b p "parent") parent)) "checkpoint/parent"
+            (not (= (cp-str b p "task") task)) "checkpoint/task"
+            (or (not (cp-hex? (cp-str b p "head") 40))
+                (not (or (= (cp-str b p "stash") "none") (cp-hex? (cp-str b p "stash") 40)))) "checkpoint/git-id"
+            (or (not (= (digest-problem profile) "oci/ok")) (not (cp-raw? policy)) (not (cp-raw? environment))
+                (not (cp-raw? (cp-str b p "bundle"))) (not (cp-raw? (cp-str b p "summary")))
+                (not (or (= parent "root") (cp-raw? parent)))) "checkpoint/cid"
+            (or (< us 0) (not (= (json-kind b us) 2)) (> (json-count b us) 16)) "checkpoint/untracked"
+            :else (loop [i 0 previous ""]
+              (if (= i (json-count b us)) "checkpoint/ok"
+                (let [u (json-element b us i) path (cp-str b u "path") cid (cp-str b u "cid") mode (cp-str b u "mode")]
+                  (if (and (= (json-kind b u) 1) (= (json-count b u) 3) (checkpoint-path? path) (cp-raw? cid)
+                           (or (= mode "644") (= mode "755"))
+                           (> (string-compare path previous) 0) (cp-no-overlap? b us i path))
+                    (recur (+ i 1) path) "checkpoint/untracked-path"))))))))
+
+(defn- cp-spawn [s :string] :string (typed-cap-call 20 :string :string s))
+(defn- cp-out [s :string] :string
+  (let [i (string-index-of s "\n")] (if (< i 0) "" (string-substring s (+ i 1) (string-length s)))))
+(defn- cp-ok? [s :string] :bool (= (string-index-of s "0\n") 0))
+(defn- cp-line [s :string] :string
+  (let [i (string-index-of s "\n")] (if (< i 0) s (string-substring s 0 i))))
+(defn- cp-a [] :string (cp-sep "ARG"))
+(defn- cp-git [repo :string args :string] :string
+  (cp-spawn (str "/usr/bin/git" (cp-a) "--no-pager" (cp-a) "-c" (cp-a) "core.hooksPath=/dev/null"
+    (cp-a) "-c" (cp-a) "core.fsmonitor=false" (cp-a) "-c" (cp-a) "gc.auto=0"
+    (cp-a) "-c" (cp-a) "core.autocrlf=false" (cp-a) "-c" (cp-a) "core.attributesFile=/dev/null"
+    (cp-a) "-c" (cp-a) "commit.gpgSign=false"
+    (cp-a) "-c" (cp-a) "user.name=Itonami checkpoint"
+    (cp-a) "-c" (cp-a) "user.email=checkpoint@example.invalid"
+    (cp-a) "-C" (cp-a) repo (cp-a) args)))
+(defn- cp-seed [p :string] :vector-i64
+  (let [s (cp-line (cp-text (cp-read p)))] (if (cp-hex? s 64) (hex-bytes s) (vector-alloc 0))))
+(defn- cp-int [s :string] :i64
+  (let [b (cp-bytes s)] (if (or (= (vector-count b) 0) (> (vector-count b) 9)) -1
+    (loop [i 0 n 0] (if (= i (vector-count b)) n
+      (let [c (vector-at b i)] (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -1)))))))
+
+(defn- cp-size [p :string] :i64
+  (let [s (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%s" (cp-a) "--" (cp-a) p))]
+    (if (cp-ok? s) (cp-int (cp-line (cp-out s))) -1)))
+(defn- cp-mkdir [p :string] :bool (cp-ok? (cp-spawn (str "/usr/bin/mkdir" (cp-a) "-p" (cp-a) "--" (cp-a) p))))
+
+;; Inspect each parent itself, without stat -L. Git may have checked out a
+;; symlink pointing elsewhere inside the granted filesystem scope. Neither
+;; mkdir -p nor a final-component O_NOFOLLOW protects against that parent.
+;; The caller owns the tree exclusively, as required for capture/materialize.
+(defn- cp-real-parents? [base :string rel :string create :bool] :bool
+  (loop [i 0]
+    (if (= i (string-length rel)) true
+      (if (not (= (string-substring rel i (+ i 1)) "/")) (recur (+ i 1))
+        (let [p (str base "/" (string-substring rel 0 i))
+              before (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%F" (cp-a) "--" (cp-a) p))
+              made (if (and create (not (cp-ok? before))) (cp-mkdir p) false)
+              after (if made (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%F" (cp-a) "--" (cp-a) p)) before)]
+          (if (= after "0\ndirectory\n") (recur (+ i 1)) false))))))
+(defn- cp-range [p :string off :i64 n :i64] :vector-i64 (cp-read (str p (cp-sep "RANGE") off ":" n)))
+(defn- cp-chunk-size [size :i64 i :i64] :i64
+  (let [remaining (- size (* i 131072))] (if (< remaining 131072) remaining 131072)))
+
+;; The signed index binds chunk order and bytes. v1 bounds a bundle at 64 MiB;
+;; larger bundles refuse rather than publishing a partial checkpoint.
+(defn- cp-save-chunk [store :string path :string size :i64 i :i64 ids :vector-i64] :bool
+  (arena-scope
+    (let [cid (cp-put store (cp-range path (* i 131072) (cp-chunk-size size i))) b (cp-bytes cid)]
+      (and (= (vector-count b) 59)
+        (loop [k 0] (if (= k 59) true
+          (let [z (vector-assoc! ids (+ (* i 59) k) (vector-at b k))] (recur (+ k 1)))))))))
+(defn- cp-chunk-id [ids :vector-i64 i :i64] :string
+  (let [b (loop [k 0 b (vector-alloc 59)]
+            (if (= k 59) b (recur (+ k 1) (vector-assoc! b k (vector-at ids (+ (* i 59) k))))))]
+    (cp-text b)))
+(defn- cp-save-bundle [store :string path :string] :string
+  (let [size (cp-size path)]
+    (if (or (< size 1) (> size 67108864)) ""
+      (let [n (quot (+ size 131071) 131072) ids (vector-alloc (* n 59))
+            saved (loop [i 0] (if (= i n) true (if (cp-save-chunk store path size i ids) (recur (+ i 1)) false)))
+            chunks (if saved (loop [i 0 out "["]
+                     (if (= i n) (str out "]")
+                       (recur (+ i 1) (str out (if (= i 0) "" ",") "\"" (cp-chunk-id ids i) "\"")))) "")]
+        (if (= chunks "") "" (cp-put store (cp-bytes (str "{\"chunks\":" chunks ",\"kind\":\"itonami.git-bundle/1\",\"size\":" size "}"))))))))
+
+(defn- cp-bundle? [store :string cid :string] :bool
+  (if (not (cp-block? store cid)) false
+    (let [b (cp-load store cid)]
+      (if (not (json-canonical? b)) false
+        (let [chunks (json-member b 0 "chunks") size (cp-num b 0 "size")]
+          (and (= (json-kind b 0) 1) (= (json-count b 0) 3)
+            (= (cp-str b 0 "kind") "itonami.git-bundle/1") (> size 0) (<= size 67108864)
+            (>= chunks 0) (= (json-kind b chunks) 2) (= (json-count b chunks) (quot (+ size 131071) 131072))
+            (loop [i 0]
+              (if (= i (json-count b chunks)) true
+                (if (arena-scope (let [el (json-element b chunks i) c (if (= (json-kind b el) 3) (json-string b el) "")]
+                      (and (cp-block? store c) (= (cp-size (str store "/" c)) (cp-chunk-size size i)))))
+                  (recur (+ i 1)) false)))))))))
+
+(defn- cp-assemble-bundle [store :string cid :string] :bool
+  (let [b (cp-load store cid) chunks (json-member b 0 "chunks") size (cp-num b 0 "size") path (str store "/" cid ".bundle")
+        written (loop [i 0]
+                  (if (= i (json-count b chunks)) true
+                    (if (arena-scope
+                          (let [data (cp-load store (json-string b (json-element b chunks i)))
+                                z (loop [p 0]
+                                    (let [e (cp-cut data p) w (cp-piece path data p e (and (= i 0) (= p 0)))]
+                                      (if (= e (vector-count data)) 0 (recur e))))] true))
+                      (recur (+ i 1)) false)))
+        flush (cp-fs (str path (cp-sep "FSYNC")))]
+    (and written (= flush "1") (= (cp-size path) size)
+      (loop [i 0]
+        (if (= i (json-count b chunks)) true
+          (if (arena-scope (= (cp-cid (cp-range path (* i 131072) (cp-chunk-size size i))) (json-string b (json-element b chunks i))))
+            (recur (+ i 1)) false))))))
+
+;; Explicit allowlist only: ignored/registered paths are never captured as
+;; untracked. GNU stat without -L rejects symlinks and special files before
+;; the native read. v1 admits regular files with modes 0644 or 0755 only.
+(defn- cp-capture-untracked [repo :string store :string list :vector-i64] :string
+  (if (or (not (json-canonical? list)) (not (= (json-kind list 0) 2)) (> (json-count list 0) 16)) ""
+    (loop [i 0 prev "" out "["]
+      (if (= i (json-count list 0)) (str out "]")
+        (let [el (json-element list 0 i) path (if (= (json-kind list el) 3) (json-string list el) "")
+              admitted (and (checkpoint-path? path) (> (string-compare path prev) 0)
+                         (= (string-index-of (cp-git repo (str "ls-files" (cp-a) "--error-unmatch" (cp-a) "--" (cp-a) path)) "1\n") 0)
+                         (= (string-index-of (cp-git repo (str "check-ignore" (cp-a) "--" (cp-a) path)) "1\n") 0))
+              st (if admitted (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%a:%F" (cp-a) "--" (cp-a) repo "/" path)) "refused")
+              mode (cond (= st "0\n644:regular file\n") "644" (= st "0\n755:regular file\n") "755" :else "")
+              cid (if (and (not (= mode "")) (cp-real-parents? repo path false)) (cp-put store (cp-read (str repo "/" path))) "")]
+          (if (= cid "") "" (recur (+ i 1) path (str out (if (= i 0) "" ",") "{\"cid\":\"" cid "\",\"mode\":\"" mode "\",\"path\":\"" path "\"}"))))))))
+
+(defn- cp-capture [] :i64
+  (let [repo (cp-arg 1) store (cp-arg 2) seed (cp-seed (cp-arg 3))
+        epoch (cp-int (cp-arg 9)) parent (cp-arg 10) task (cp-arg 11)]
+    (if (or (not (cp-safe-absolute? repo)) (not (cp-safe-absolute? store)) (not (= (vector-count seed) 32))
+            (< epoch 1) (= task "") (not (= (field-problem task) "enroll/ok")))
+      (cp-say "checkpoint/capture-arguments")
+      (let [head-r (cp-git repo "rev-parseARG_SEP--verifyARG_SEPHEAD") head (cp-line (cp-out head-r))
+            status (cp-git repo "statusARG_SEP--porcelain=v1ARG_SEP--untracked-files=no")
+            modes (cp-git repo "ls-filesARG_SEP--format=%(objectmode)")
+            attrs (cp-git repo "ls-filesARG_SEP--ARG_SEP.gitattributesARG_SEP:(glob)**/.gitattributes")
+            filters (cp-git repo "configARG_SEP--get-regexpARG_SEP^filter[.]")
+            stash-r (if (and (cp-ok? head-r) (cp-ok? status) (cp-ok? modes) (< (string-index-of (cp-out modes) "160000\n") 0)
+                            (cp-ok? attrs) (= (cp-out attrs) "") (= (string-index-of filters "1\n") 0))
+                      (cp-git repo "stashARG_SEPcreateARG_SEPitonami-checkpoint") "refused")
+            stash0 (cp-line (cp-out stash-r)) stash (if (= stash0 "") "none" stash0)
+            ref (str "refs/itonami/checkpoints/" (if (= stash "none") head stash))
+            update (if (and (cp-ok? stash-r) (cp-hex? head 40) (or (= stash "none") (cp-hex? stash 40)))
+                     (cp-git repo (str "update-ref" (cp-a) ref (cp-a) (if (= stash "none") head stash))) "refused")
+            bundle-path (str store "/" (if (= stash "none") head stash) ".bundle")
+            bundle-r (if (cp-ok? update) (cp-git repo (str "bundle" (cp-a) "create" (cp-a) bundle-path (cp-a) "HEAD" (cp-a) ref)) "refused")]
+        (if (not (cp-ok? bundle-r)) (cp-say (str "checkpoint/git-capture " bundle-r " stash " stash-r))
+          (let [bundle (cp-save-bundle store bundle-path) profile-bytes (cp-read (cp-arg 4))
+                profile-cid (cp-put store profile-bytes) profile (str "sha256:" (sha256-hex profile-bytes))
+                policy (cp-put store (cp-read (cp-arg 5))) environment (cp-put store (cp-read (cp-arg 6)))
+                summary (cp-put store (cp-read (cp-arg 7))) us (cp-capture-untracked repo store (cp-read (cp-arg 8)))
+                did (did-from-public (public-from-seed seed))
+                payload (str "{\"bundle\":\"" bundle "\",\"did\":\"" did "\",\"environment\":\"" environment
+                  "\",\"epoch\":" epoch ",\"head\":\"" head "\",\"kind\":\"itonami.git-checkpoint/1\",\"parent\":\"" parent
+                  "\",\"policy\":\"" policy "\",\"profile\":\"" profile "\",\"stash\":\"" stash
+                  "\",\"summary\":\"" summary "\",\"task\":\"" task "\",\"untracked\":" (if (= us "") "null" us) "}")
+                envelope (cp-bytes (str "{\"payload\":" payload ",\"signature\":\"" (sign-statement seed payload) "\"}"))
+                verdict (checkpoint-problem envelope did profile policy environment epoch parent task)]
+            (if (or (= bundle "") (= profile-cid "") (= policy "") (= environment "") (= summary "") (= us "")
+                    (not (= status (cp-git repo "statusARG_SEP--porcelain=v1ARG_SEP--untracked-files=no")))
+                    (not (= head-r (cp-git repo "rev-parseARG_SEP--verifyARG_SEPHEAD"))))
+              (cp-say "checkpoint/capture-incomplete-or-busy")
+              (if (not (= verdict "checkpoint/ok")) (cp-say verdict)
+                (let [cid (cp-put store envelope)]
+                  (if (= cid "") (cp-say "checkpoint/root-publication-failed")
+                    (cp-say (str "checkpoint/created " cid "\n" (cp-text envelope)))))))))))))
+
+(defn- cp-closure? [store :string b :vector-i64] :bool
+  (let [p (cp-payload b) us (json-member b p "untracked")]
+    (and (cp-bundle? store (cp-str b p "bundle")) (cp-block? store (cp-str b p "policy"))
+         (cp-block? store (cp-str b p "environment")) (cp-block? store (cp-str b p "summary"))
+         (cp-block? store (digest-cid (cp-str b p "profile") 85))
+         (loop [i 0] (if (= i (json-count b us)) true
+           (if (cp-block? store (cp-str b (json-element b us i) "cid")) (recur (+ i 1)) false))))))
+
+(defn- cp-parent-dir [p :string] :string
+  (loop [i (- (string-length p) 1)] (if (< i 1) "/" (if (= (string-substring p i (+ i 1)) "/") (string-substring p 0 i) (recur (- i 1))))))
+(defn- cp-materialize [store :string b :vector-i64 dest :string] :string
+  (let [p (cp-payload b) head (cp-str b p "head") stash (cp-str b p "stash")
+        stage (str dest ".partial") ref (str "refs/itonami/checkpoints/" (if (= stash "none") head stash))
+        bundle (str store "/" (cp-str b p "bundle") ".bundle")]
+    (cond (not (cp-safe-absolute? dest)) "checkpoint/destination"
+          (or (cp-exists? dest) (cp-exists? stage)) "checkpoint/destination-exists"
+          (not (cp-assemble-bundle store (cp-str b p "bundle"))) "checkpoint/bundle-assembly"
+          (not (cp-mkdir stage)) "checkpoint/mkdir"
+          :else
+          (let [init (cp-git stage "initARG_SEP--quietARG_SEP--template=")
+                fetch (if (cp-ok? init) (cp-git stage (str "-c" (cp-a) "protocol.file.allow=always" (cp-a) "fetch" (cp-a) "--no-tags" (cp-a) bundle (cp-a) (str ref ":" ref))) "refused")
+                checkout (if (cp-ok? fetch) (cp-git stage (str "checkout" (cp-a) "--quiet" (cp-a) "--detach" (cp-a) head)) "refused")
+                apply (if (and (cp-ok? checkout) (not (= stash "none"))) (cp-git stage (str "stash" (cp-a) "apply" (cp-a) "--index" (cp-a) ref)) checkout)
+                fsck (if (cp-ok? apply) (cp-git stage "fsckARG_SEP--fullARG_SEP--strict") "refused")
+                us (json-member b p "untracked")
+                files (if (cp-ok? fsck)
+                  (loop [i 0]
+                    (if (= i (json-count b us)) true
+                      (let [u (json-element b us i) path (str stage "/" (cp-str b u "path"))]
+                        (if (and (cp-real-parents? stage (cp-str b u "path") true) (not (cp-exists? path)) (cp-write path (cp-load store (cp-str b u "cid")))
+                                 (cp-ok? (cp-spawn (str "/usr/bin/chmod" (cp-a) (cp-str b u "mode") (cp-a) "--" (cp-a) path))))
+                          (recur (+ i 1)) false)))) false)]
+            (if (not files) "checkpoint/materialize-failed-partial-retained"
+              (let [sync (cp-fs (str stage (cp-sep "FSYNC")))
+                    rename (if (= sync "1") (cp-fs (str stage (cp-sep "RENAME") dest)) "0")
+                    parent-sync (if (= rename "1") (cp-fs (str (cp-parent-dir dest) (cp-sep "FSYNC"))) "0")]
+                (if (and (= rename "1") (= parent-sync "1")) "checkpoint/restored" "checkpoint/publish-failed")))))))
+
+(defn- cp-restore [] :i64
+  (let [store (cp-arg 1) cid (cp-arg 2)]
+    (if (not (cp-block? store cid)) (cp-say "checkpoint/missing-or-corrupt-root")
+      (let [b (cp-load store cid)
+            v (checkpoint-problem b (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6) (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9))]
+        (cond (not (= v "checkpoint/ok")) (cp-say v)
+              (not (cp-closure? store b)) (cp-say "checkpoint/missing-or-corrupt-block")
+              (= (cp-arg 0) "verify") (cp-say "checkpoint/verified")
+              :else (cp-say (cp-materialize store b (cp-arg 10))))))))
+
+;; Signed recovery attestation after the resumed node produces a successor.
+;; This records the parent link; it does not publish an accepted fleet head.
+(defn- cp-recovery [] :i64
+  (let [store (cp-arg 1) from (cp-arg 2) to (cp-arg 3) seed (cp-seed (cp-arg 4)) task (cp-arg 5)]
+    (if (or (not (= (vector-count seed) 32)) (not (cp-block? store from)) (not (cp-block? store to)))
+      (cp-say "recovery/missing-input")
+      (let [a (cp-load store from) b (cp-load store to)]
+        (if (or (not (json-canonical? a)) (not (json-canonical? b))
+                (< (cp-payload a) 0) (< (cp-payload b) 0)) (cp-say "recovery/noncanonical")
+          (let [pa (cp-payload a) pb (cp-payload b) did (did-from-public (public-from-seed seed))
+                ea (if (>= pa 0) (cp-num a pa "epoch") -1) eb (if (>= pb 0) (cp-num b pb "epoch") -1)
+                va (checkpoint-problem a (cp-str a pa "did") (cp-str a pa "profile") (cp-str a pa "policy")
+                     (cp-str a pa "environment") ea (cp-str a pa "parent") task)
+                vb (checkpoint-problem b did (cp-str a pa "profile") (cp-str a pa "policy")
+                     (cp-str a pa "environment") eb from task)]
+            (if (or (not (= va "checkpoint/ok")) (not (= vb "checkpoint/ok")) (<= eb ea)
+                    (not (cp-closure? store a)) (not (cp-closure? store b)))
+              (cp-say "recovery/contract")
+              (let [text (str "{\"checkpoint\":\"" from "\",\"did\":\"" did "\",\"epoch\":" eb
+                           ",\"kind\":\"itonami.recovery/1\",\"resumed\":\"" to "\",\"task\":\"" task "\"}")
+                    envelope (cp-bytes (str "{\"payload\":" text ",\"signature\":\"" (sign-statement seed text) "\"}"))
+                    cid (cp-put store envelope)]
+                (cp-say (str "recovery/recorded " cid "\n" (cp-text envelope)))))))))))
+
+(defn- cp-verify-recovery [] :i64
+  (let [store (cp-arg 1) cid (cp-arg 2)]
+    (if (not (cp-block? store cid)) (cp-say "recovery/missing-or-corrupt")
+      (let [b (cp-load store cid)]
+        (if (not (json-canonical? b)) (cp-say "recovery/noncanonical")
+          (let [p (cp-payload b) did (cp-arg 3)]
+            (cond (or (< p 0) (not (= (json-kind b 0) 1)) (not (= (json-count b 0) 2))
+                      (not (= (json-kind b p) 1)) (not (= (json-count b p) 6))) (cp-say "recovery/schema")
+                  (or (not (= (cp-str b p "kind") "itonami.recovery/1")) (not (= (cp-str b p "did") did))
+                      (not (= (cp-str b p "checkpoint") (cp-arg 4))) (not (= (cp-str b p "resumed") (cp-arg 5)))
+                      (not (= (cp-str b p "task") (cp-arg 6))) (< (cp-int (cp-arg 7)) 1)
+                      (not (= (cp-num b p "epoch") (cp-int (cp-arg 7))))) (cp-say "recovery/contract")
+                  (not (= (statement-problem did (cp-json b p) (cp-str b 0 "signature")) "enroll/ok")) (cp-say "recovery/signature")
+                  :else (cp-say "recovery/verified"))))))))
+
+(defn checkpoint-main [] :i64
+  (cond (= (cp-arg 0) "capture") (cp-capture)
+        (or (= (cp-arg 0) "restore") (= (cp-arg 0) "verify")) (cp-restore)
+        (= (cp-arg 0) "recovery") (cp-recovery)
+        (= (cp-arg 0) "verify-recovery") (cp-verify-recovery)
+        :else (cp-say "checkpoint/command")))
