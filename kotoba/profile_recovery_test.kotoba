@@ -1,0 +1,23 @@
+;; Native tests; compose after profile_recovery and checkpoint dependencies.
+(ns murakumo.profile-recovery-test
+  (:export [test-profile-recovery]))
+
+(defn- prt-runtime [meta :vector-i64 role :vector-i64 endpoint :string model :string] :vector-i64
+  (cp-bytes (str "{\"endpoint\":" (pr-json-quote endpoint)
+    ",\"kind\":\"itonami.readonly-profile-runtime/1\",\"model\":" (pr-json-quote model)
+    ",\"profile\":\"accountability-steward\",\"profileDigest\":\"sha256:" (sha256-hex meta)
+    "\",\"rail\":\"murakumo\",\"roleDigest\":\"sha256:" (sha256-hex role)
+    "\",\"source\":\"0000000000000000000000000000000000000000\",\"task\":\"test\"}")))
+
+(defn test-profile-recovery [] :i64
+  (let [text "日本語\n\"quote\"\\path\t" quoted (pr-json-quote text)
+        parsed (cp-bytes (str "{\"content\":" quoted "}"))
+        meta (cp-bytes ":capabilities [] :rails [:murakumo] :authorities [\"api.murakumo.cloud\"]")
+        role (cp-bytes "immutable role") endpoint "https://api.murakumo.cloud/v1/chat/completions"
+        runtime (prt-runtime meta role endpoint "test-model")]
+    (+ (if (and (json-valid? parsed) (= (cp-str parsed 0 "content") text)) 1 0)
+       (if (pr-runtime? runtime meta role) 2 0)
+       (if (and (not (pr-runtime? (prt-runtime meta role "https://unapproved.invalid/v1/chat/completions" "test-model") meta role))
+                (not (pr-runtime? (prt-runtime meta role endpoint "") meta role))) 4 0)
+       (if (and (not (pr-runtime? runtime (cp-bytes "changed profile") role))
+                (not (pr-runtime? runtime meta (cp-bytes "changed SOUL")))) 8 0))))

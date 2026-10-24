@@ -1,0 +1,221 @@
+{
+  "kind": "itonami.actual-profile-recovery-evidence/1",
+  "observedAt": "2026-10-24T05:26:41.838643+00:00",
+  "tracking": [
+    "JUN-156",
+    "JUN-289",
+    "AWAI-34"
+  ],
+  "base": {
+    "mergedPR": 540,
+    "mergeCommit": "8629ae178fa9d827f90c6d1a7df3b5547e0b9a71"
+  },
+  "profile": {
+    "repository": "kotoba-lang/kotoba",
+    "revision": "bd97e7183463c6dd36032ca913fa70fb4a3ec068",
+    "path": "hermes/profiles/accountability-steward",
+    "id": "accountability-steward",
+    "metadataDigest": "sha256:766bd2861b4b3d3ec3327c9649a6c91d7c364b9f06f6c599ad2f2d56f45802b8",
+    "soulDigest": "sha256:cb965d65f70ee3866b5db544c3a254d97382099b9c7488cbc52b1e4012d973c0",
+    "fullSOULInBothRequests": true,
+    "hermesRuntimeUsed": false,
+    "legacyCronExecuted": false,
+    "modelOutputTools": false
+  },
+  "environment": {
+    "nodeA": "native aarch64 Linux in existing development Mac VM",
+    "nodeB": "separate physical x86_64 Linux murakumo-ci-6600hs",
+    "fault": "SIGKILL of task-owned native producer, not physical host outage",
+    "replication": "SSH/SCP initial immutable checkpoint replica; no live filesystem mount",
+    "heartbeat": "native TCP over explicitly provisioned verified SSH loopback tunnels",
+    "automaticActions": [
+      "observe A alive",
+      "two consecutive missed heartbeats",
+      "verify independently pinned root/signature/closure",
+      "materialize independent Git checkout",
+      "load pinned runtime",
+      "continue actual inference step 2"
+    ],
+    "signerQualification": "RFC8032 public fixture keys; production enrollment/credentials unexercised",
+    "manager": "explicit Linux user-systemd/curl host provider",
+    "inferenceEndpoint": "https://api.murakumo.cloud/v1/chat/completions",
+    "inferenceServiceBackendQualification": "Existing selected service invoked; its internal deployment is not qualified by this drill"
+  },
+  "artifacts": {
+    "root.elf": {
+      "sha256": "688324e0fdc7a93a664ae55fe0ad417e7a980ab844656f3f97889812363c9479",
+      "bytes": 3240448
+    },
+    "reviewed-arm64.elf": {
+      "sha256": "4406ef9e1018d1585f3f6b9904704f8cd7c1ac7bea10c47fc1d7ceb82b5f53f9",
+      "bytes": 549376
+    },
+    "reviewed-checkpoint.elf": {
+      "sha256": "6f3a47030413cb468a8057b42e18ac702c67c500028a6e5d7a69d7c8f4929ead",
+      "bytes": 643584
+    },
+    "profile-recovery-arm64-v2.elf": {
+      "sha256": "99c4bb299595c45432fb036104be884dc37a72473c12b2066155a0f6de5fec7c",
+      "bytes": 578048
+    },
+    "profile-recovery-arm64-v4.elf": {
+      "sha256": "5b957091022e5b909a1864ef66fd9da267a5ff27d35ef88061f491f76d08a422",
+      "bytes": 578048
+    },
+    "profile-recovery-x86-v4.elf": {
+      "sha256": "507a21db2cc0b00f4eeebdde160f511013b73a39157f3fb827f3706102012138",
+      "bytes": 672256
+    },
+    "profile-recovery-v4.kotoba": {
+      "sha256": "b86cb2194a30125788b386127740b313122f45890163504d2ce376b8b58625a8",
+      "bytes": 136521
+    },
+    "profile-recovery-test-v4.elf": {
+      "sha256": "4e8f392742f3b6d05120f221a8c466816b6d43a4a5efa95125653b484d86d1fd",
+      "bytes": 582144
+    }
+  },
+  "sourceDigests": {
+    "kotoba/profile_recovery.kotoba": "308d140e9216fd57529490c9b99c71d61d3ad5173e307d50b66cba723e8bc860",
+    "kotoba/profile_recovery_test.kotoba": "2d2cf9e7c98ee1f5d14966ae120cd37d060757023085a997fbf1c34d424fd682",
+    "kotoba/git_checkpoint.kotoba": "26c4e35c8f39c6c3b468a43d4b0a0ad70baa14d7bbe73f521d88621b9a04251a"
+  },
+  "inference": {
+    "A": {
+      "sha256": "5fe926a2d9089d2d2478a6b349e02866213c3d035fcffeb478faf58d5fbec36d",
+      "model": "mishima",
+      "usage": {
+        "completion_tokens": 15,
+        "prompt_tokens": 2182,
+        "total_tokens": 2197,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "nonemptyAssistantContent": true
+    },
+    "B": {
+      "sha256": "0f85a2a8c9ac4422b3fac253e8a868be33f377d584c19220f6a5b0608c2f36e2",
+      "model": "mishima",
+      "usage": {
+        "completion_tokens": 15,
+        "prompt_tokens": 2205,
+        "total_tokens": 2220,
+        "prompt_tokens_details": {
+          "cached_tokens": 2201
+        }
+      },
+      "nonemptyAssistantContent": true
+    },
+    "priorOutputByteIdentical": true,
+    "priorAssistantInBRequest": true,
+    "stateAfterB": {
+      "next": 3,
+      "previous": "bafkreiapqwrkrsnmiqrlh6wckpukq2f6gpzxpvmeygjcb5vfwbqiylzw4i",
+      "task": "jun-156-actual-profile-recovery"
+    },
+    "note": "B final run has backend prefix-cache tokens recorded in usage; it produced a new actual response. A first inference used v2 artifact; final A heartbeat and B watcher/inference used v4."
+  },
+  "checkpointA": {
+    "cid": "bafkreia4ehberdtjnbkmymsfqnjxrpvhxog3gfyexloqp4ulect7r5jzyu",
+    "envelope": {
+      "payload": {
+        "bundle": "bafkreiapxi2gamxqvwvuut7oscmpmu6kayzdbyzbc5jc2gozokva4cftku",
+        "did": "did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw",
+        "environment": "bafkreicetokzftsrcmmkpdzigypxwom3tqredn7texkzisevgrmejnzuju",
+        "epoch": 1,
+        "head": "1d86725b6bbc1338b0c39a77fc357526bc7472d9",
+        "kind": "itonami.git-checkpoint/1",
+        "parent": "root",
+        "policy": "bafkreietdyv4gebjcmysdt4ikzl62syayozruzgs7oihlarlxaeb3r3kte",
+        "profile": "sha256:766bd2861b4b3d3ec3327c9649a6c91d7c364b9f06f6c599ad2f2d56f45802b8",
+        "stash": "aff4f2984bcf1ef6a191ac30e1dfe495af47c0fd",
+        "summary": "bafkreib4ejmeulsq2edce22eonxmpveciq3ek3ytboqgbmx3ljeordtl5m",
+        "task": "jun-156-actual-profile-recovery",
+        "untracked": [
+          {
+            "cid": "bafkreic75etkfwiituwsi6fgwne6akdgee6d2a27z77li6h26wgv7pwdnu",
+            "mode": "644",
+            "path": "outputs/1.json"
+          }
+        ]
+      },
+      "signature": "KPOJHixsTHEXCo1zYBqNt3hP3LQjq76D0mxnW4-oUwKGUGAjqC85J2eSV16KFbidVUVxl7sXJs7S1-Ea5tSrAg"
+    }
+  },
+  "checkpointB": {
+    "cid": "bafkreib6zrtlq7w6cxvo2gpb4igib2uamkfz7xmwvh6ysttfdhe2pwoeqa",
+    "envelope": {
+      "payload": {
+        "bundle": "bafkreifqzxhc47bzw4jct3z22z4mtlvs5ij6cs3ytlhtxbhcfklimfhzgm",
+        "did": "did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT",
+        "environment": "bafkreicetokzftsrcmmkpdzigypxwom3tqredn7texkzisevgrmejnzuju",
+        "epoch": 2,
+        "head": "1d86725b6bbc1338b0c39a77fc357526bc7472d9",
+        "kind": "itonami.git-checkpoint/1",
+        "parent": "bafkreia4ehberdtjnbkmymsfqnjxrpvhxog3gfyexloqp4ulect7r5jzyu",
+        "policy": "bafkreietdyv4gebjcmysdt4ikzl62syayozruzgs7oihlarlxaeb3r3kte",
+        "profile": "sha256:766bd2861b4b3d3ec3327c9649a6c91d7c364b9f06f6c599ad2f2d56f45802b8",
+        "stash": "56e9892820addca65e6cf07c7445fc32353bc04c",
+        "summary": "bafkreifrjpajcqklnihentu23b7o4f7zy4rvtozi2677wqrvjvb4y7rgqq",
+        "task": "jun-156-actual-profile-recovery",
+        "untracked": [
+          {
+            "cid": "bafkreic75etkfwiituwsi6fgwne6akdgee6d2a27z77li6h26wgv7pwdnu",
+            "mode": "644",
+            "path": "outputs/1.json"
+          },
+          {
+            "cid": "bafkreiapqwrkrsnmiqrlh6wckpukq2f6gpzxpvmeygjcb5vfwbqiylzw4i",
+            "mode": "644",
+            "path": "outputs/2.json"
+          }
+        ]
+      },
+      "signature": "xftdKqJPpMCSOAcqus6jWd0W28G4xtWLTkurCYhGPaYpoxKgC8BFuq9kTdVEQ6ZBtHXOIcYougQNRFIg5WbjBg"
+    }
+  },
+  "recoveryReceipt": {
+    "cid": "bafkreihxqri7mjzvexbf4ytmxewmsaaeov5iq2zjbejxmm74lxj5ynv3k4",
+    "envelope": {
+      "payload": {
+        "checkpoint": "bafkreia4ehberdtjnbkmymsfqnjxrpvhxog3gfyexloqp4ulect7r5jzyu",
+        "did": "did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT",
+        "epoch": 2,
+        "kind": "itonami.recovery/1",
+        "resumed": "bafkreib6zrtlq7w6cxvo2gpb4igib2uamkfz7xmwvh6ysttfdhe2pwoeqa",
+        "task": "jun-156-actual-profile-recovery"
+      },
+      "signature": "kuFfHX16FL5U2sBE77lIbJSa7u9oGaUILVDmA_1sL3mgnPVCSSbaQae7BQxEuK0YaeSp7uhOLlvqQba9G17IAQ"
+    }
+  },
+  "verification": {
+    "nativeGateExit": 15,
+    "soulDigestRemovalMutantExit": 7,
+    "integrationNegatives": {
+      "replayedStep": "profile/state-refused",
+      "forbiddenEndpoint": "profile/runtime-refused",
+      "changedSOUL": "profile/runtime-refused",
+      "changedPriorOutput": "profile/previous-output-mismatch",
+      "neverObservedPeer": "profile/watch-expired"
+    },
+    "negativeInferenceProcessGrants": false,
+    "gitFsck": "passed",
+    "successorRestore": "passed: fresh checkout, next=3, response 2 byte identical",
+    "receipt": "recovery/verified",
+    "completedWatcherVerdicts": [
+      "profile/producer-observed",
+      "profile/producer-lost",
+      "profile/automatically-restored",
+      "profile/step-completed 2 bafkreiapqwrkrsnmiqrlh6wckpukq2f6gpzxpvmeygjcb5vfwbqiylzw4i"
+    ]
+  },
+  "remaining": [
+    "production OCI/job-node dispatch and live lease/delegation/fencing admission",
+    "accepted-head/Kagami/Nekko admission",
+    "chain-anchored receipt and finality",
+    "encrypted durable replica receipts, repair and eviction",
+    "physical host outage and full profile cron/tool workflow qualification"
+  ],
+  "privacy": "No raw prompts, model answers, private keys or credentials in committed evidence."
+}

@@ -11,6 +11,10 @@ continues development. Git directories and agent sessions are not synchronized.
 The controller is Amu selfhost-built loaderless native code; Git and the
 listed filesystem utilities are explicitly granted external tools.
 
+The [actual Itonami profile recovery adapter](itonami-profile-recovery.md)
+adds producer-loss detection and a bounded read-only inference continuation
+on another node. It preserves the admission boundaries described here.
+
 ## Existing implementation and the remaining gap
 
 | Component inspected | Existing behavior | This change / remaining work |
