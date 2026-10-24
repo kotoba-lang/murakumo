@@ -1,7 +1,10 @@
-# Local Itonami host monitor
+# Local Murakumo Node host monitor
 
 JUN-343 adds `kotoba/node_host_monitor.kotoba`, an **unregistered local host
-observation candidate** for the Itonami node console. It is not the resident
+observation component** for the Murakumo Node console. Itonami is the
+agent-first workspace above the execution host. The historical namespace
+and `itonami.node.local-observation.v1` schema remain stable; neither names
+an agent identity. It is not the resident
 agent described by ADR-2610222140, signed L2, peer enrollment, a Hata Cell
 conductor, or an OCI launcher. Those gates remain JUN-287 / JUN-288 / AWAI-22.
 
@@ -65,6 +68,13 @@ issuing an empty search.
 See `docs/evidence/node-host-monitor-20261023.json` for source/compiler/image
 pins, successive real observations and the test receipts. The corresponding
 UI candidate is `network-awai/network-awai-apex/apps/node-console/`.
+
+The 2026-10-24 review rebuilt the unchanged source with Amu selfhost
+compiler `8385ac69…`, reproduced monitor digest `007ff7a1…`, and reran the
+positive field result (7), mutated expectation (0), and invalid-label refusal
+(exit 2). `docs/evidence/node-host-monitor-review-20261024.json` records this
+review separately from the historical launch receipt. The Mac monitor was
+still advancing and remained explicitly unsigned/unregistered.
 
 ## Keep the roles separate
 
