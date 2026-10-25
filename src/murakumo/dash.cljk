@@ -9,7 +9,7 @@
 ;; auto-refreshing web page, plus a JSON API at /api.
 
 (ns murakumo.dash
-  (:require [babashka.process :as p]
+  (:require [murakumo.proc :as p]
             [json.compat :as json]
             [murakumo.config :as config]
             [murakumo.dash.state :as state]
@@ -37,7 +37,8 @@
      :cljs (js/Atomics.wait (js/Int32Array. (js/SharedArrayBuffer. 1)) 0 0 ms)))
 
 (defn- error-message [e]
-  #?(:clj (.getMessage e) :cljs (.-message e)))
+  #?(:clj (.getMessage e)
+     :cljs (str (.-message e) " @ " (.-stack e))))
 
 ;; ── identity / graph (kept self-contained — mirrors core's operator token) ────
 
@@ -71,19 +72,26 @@
         h (state/parse-health #(json/parse-string % true) (get lines "H" ""))]
     (state/probe-node n h lines (p2p-port fleet n))))
 
+(defn- now-iso []
+  #?(:clj (.toString (java.time.Instant/now)) :cljs (.toISOString (js/Date.))))
+
 (defn collect [fleet]
-  (let [fleet (fleet/enrich fleet)
-        ts (.toString (java.time.Instant/now))]
-    (state/snapshot
-     fleet
-     ts
-     (mapv (fn [{:keys [action node]}]
-             (case action
-               :probe (probe fleet node)
-               :down (state/down-node node)))
-           (state/collect-node-plans
-            (:nodes fleet)
-            #(ssh/reachable? (:host %)))))))
+  (println "collect: enrich")
+  (let [fleet (fleet/enrich fleet)]
+    (println "collect: enriched" (count (:nodes fleet)))
+    (let [ts (now-iso)
+          plans (do (println "collect: plans") (state/collect-node-plans
+                                               (:nodes fleet)
+                                               #(do (println "collect: probe" (:host %)) (ssh/reachable? (:host %)))))]
+      (println "collect: probed" (count plans))
+      (state/snapshot
+       fleet
+       ts
+       (mapv (fn [{:keys [action node]}]
+               (case action
+                 :probe (probe fleet node)
+                 :down (state/down-node node)))
+             plans)))))
 
 ;; ── persist (append-only as-of history on the kotoba Datom log) ───────────────
 
