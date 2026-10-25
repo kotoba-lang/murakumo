@@ -136,6 +136,15 @@
   ;;
   ;; CI/CD subsystem entry points (#301 via #321).
   :cd-node {:main-opts ["-m" "murakumo.cd.node-daemon"]}
+  ;; Fleet dashboard (README "Dashboard + Datom persistence"):
+  ;;   kbb -M:dash [port] [interval-s]   → http://localhost:<port>
+  ;; The command was documented in the README but the alias did not exist
+  ;; (measured 2026-10-25: `kbb -M:dash` refused "alias [:dash] is not
+  ;; declared"). http-kit (kotoba.lang.http.host.httpkit) is already a
+  ;; top-level dep, so the alias only supplies the main. Extra CLI args are
+  ;; appended to :main-opts (see the :gen note below), so `kbb -M:dash 8899 15`
+  ;; reaches murakumo.dash/-main as ["8899" "15"].
+  :dash {:main-opts ["-m" "murakumo.dash"]}
   :artifact-import {:main-opts ["-m" "murakumo.artifact-import"]}
   :ci-coordinator {:main-opts ["-m" "murakumo.ci.coordinator"]}
   :ci-runner {:main-opts ["-m" "murakumo.ci.runner-daemon"]}
