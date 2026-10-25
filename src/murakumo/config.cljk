@@ -12,6 +12,7 @@
 (ns murakumo.config
   (:require [kotoba.io :as kio] #?(:clj [kotoba.lang.edn :as edn]
                :cljs [cljs.reader :as edn])
+            #?(:cljs ["node:fs" :as fs])
             [kotoba.lang.text :as str]
             [murakumo.kotoba.oracle :as oracle]))
 
@@ -210,10 +211,11 @@
   (pr-str value))
 
 (defn read-edn-file
-  "Read EDN from a host file. Available in CLJ/babashka shells."
+  "Read EDN from a host file. CLJ/babashka shells slurp; the kbb engine
+  (node:fs) reads the same bytes (2026-10-25, so `kbb -M:dash` can load)."
   [path]
   #?(:clj (parse-edn (slurp path))
-     :cljs (throw (ex-info "read-edn-file is host-only" {:path path}))))
+     :cljs (parse-edn (fs/readFileSync path "utf8"))))
 
 (defn read-edn-file-or
   "Read EDN from a host file, returning `fallback` on read/parse failure."
@@ -223,10 +225,11 @@
     (catch #?(:clj Exception :cljs :default) _ fallback)))
 
 (defn write-edn-file
-  "Write EDN to a host file. Available in CLJ/babashka shells."
+  "Write EDN to a host file. CLJ/babashka shells spit; the kbb engine
+  (node:fs) writes the same bytes (2026-10-25, so `kbb -M:dash` can load)."
   [path value]
   #?(:clj (spit path (edn-string value))
-     :cljs (throw (ex-info "write-edn-file is host-only" {:path path}))))
+     :cljs (fs/writeFileSync path (edn-string value) "utf8")))
 
 (defn- unblob
   "Undo edn-datomize.cljk's pr-str blobbing of a non-scalar value. Strings that
@@ -408,7 +411,14 @@
             (runtime-context-from-getenv #(System/getenv %)
                                          user-dir
                                          #(kio/exists? (kio/file %))))
-     :cljs (throw (ex-info "current-runtime-context is host-only" {}))))
+     :cljs (if (exists? js/process)
+             (runtime-context-from-getenv
+              (fn [k]
+                (let [v (aget (.-env js/process) k)]
+                  (when (some? v) (str v))))
+              (js/process.cwd)
+              (fn [p] (fs/existsSync p)))
+             (throw (ex-info "current-runtime-context is host-only" {})))))
 
 ;; ── Ops config (non-secret exact-name getenv) ──────────────────────────
 ;; Delivery residual shells: inject getenv for tests; process defaults use

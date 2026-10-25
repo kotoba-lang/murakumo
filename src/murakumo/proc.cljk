@@ -1,0 +1,40 @@
+(ns murakumo.proc
+  "Injected process host for the CLIs' shell-outs.
+
+  `babashka.process/sh` is a Maven jar and cannot load on the kbb engine
+  (SCI-on-node): kbb warns it is not on the classpath and any call dies at
+  runtime (measured 2026-10-25: `Maximum call stack size exceeded` from the
+  dashboard's first snapshot round). This host keeps the SAME call shape
+  (`(sh opts? & args)` -> `{:out :err :exit}`) and picks the implementation
+  per runtime:
+
+  - :clj  delegates to babashka.process/sh unchanged (JVM/babashka behavior
+          is byte-for-byte what it was);
+  - :cljs runs node:child_process spawnSync - the only synchronous process
+          route on node - mapping stdout/stderr/status to :out/:err/:exit and
+          supporting the one option these call sites use, `{:in stdin}`.
+
+  Not a general process library: it exists so murakumo's documented
+  `kbb -M:dash` route can probe the fleet. Callers are murakumo's own CLIs."
+  (:require #?(:clj [babashka.process :as bp])
+            #?(:cljs ["node:child_process" :as cp])))
+
+(defn sh
+  "Run a command to completion. (sh opts? & args) with string args, returning
+  {:out :err :exit}. opts supports {:in stdin} only; anything else is passed
+  through on :clj and ignored on :cljs."
+  [& args]
+  (let [[opts argv] (if (map? (first args))
+                      [(first args) (vec (rest args))]
+                      [nil (vec args)])]
+    #?(:clj (if opts (apply bp/sh opts argv) (apply bp/sh argv))
+       :cljs (let [spawn (.-spawnSync cp)
+                   cmd (first argv)
+                   argv-js (clj->js (vec (rest argv)))
+                   opts-js (clj->js (if (contains? opts :in)
+                                      {:encoding "utf8" :input (str (:in opts))}
+                                      {:encoding "utf8"}))
+                   res (spawn cmd argv-js opts-js)]
+               {:out (str (.-stdout res))
+                :err (str (.-stderr res))
+                :exit (or (.-status res) 1)}))))

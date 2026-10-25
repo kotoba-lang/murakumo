@@ -9,7 +9,7 @@
 ;; auto-refreshing web page, plus a JSON API at /api.
 
 (ns murakumo.dash
-  (:require [babashka.process :as p]
+  (:require [murakumo.proc :as p]
             [json.compat :as json]
             [murakumo.config :as config]
             [murakumo.dash.state :as state]
@@ -19,7 +19,26 @@
             [murakumo.provision.plan :as provision]
             [murakumo.report :as report]
             [murakumo.ssh :as ssh]
-            [kotoba.lang.http.host.httpkit :as http]))
+            ;; Serving host per runtime (2026-10-25): httpkit is :clj-only; the
+            ;; kbb engine gets the injected node:http adapter.
+            #?(:clj [kotoba.lang.http.host.httpkit :as http]
+               :cljs [murakumo.dash.node-server :as http])))
+
+;; ── portable host clock / sleep (2026-10-25) ────────────────────────────
+;; The kbb engine (SCI-on-node) has no Thread/sleep, System or Exception.
+;; The :clj branches keep the JVM/babashka behavior byte-for-byte; the :cljs
+;; branches are the node equivalents, so `kbb -M:dash` can load and run.
+
+(defn- now-ms []
+  #?(:clj (System/currentTimeMillis) :cljs (.getTime (js/Date.))))
+
+(defn- sleep-ms [ms]
+  #?(:clj (Thread/sleep ms)
+     :cljs (js/Atomics.wait (js/Int32Array. (js/SharedArrayBuffer. 1)) 0 0 ms)))
+
+(defn- error-message [e]
+  #?(:clj (.getMessage e)
+     :cljs (str (.-message e) " @ " (.-stack e))))
 
 ;; ── identity / graph (kept self-contained — mirrors core's operator token) ────
 
@@ -53,19 +72,26 @@
         h (state/parse-health #(json/parse-string % true) (get lines "H" ""))]
     (state/probe-node n h lines (p2p-port fleet n))))
 
+(defn- now-iso []
+  #?(:clj (.toString (java.time.Instant/now)) :cljs (.toISOString (js/Date.))))
+
 (defn collect [fleet]
-  (let [fleet (fleet/enrich fleet)
-        ts (.toString (java.time.Instant/now))]
-    (state/snapshot
-     fleet
-     ts
-     (mapv (fn [{:keys [action node]}]
-             (case action
-               :probe (probe fleet node)
-               :down (state/down-node node)))
-           (state/collect-node-plans
-            (:nodes fleet)
-            #(ssh/reachable? (:host %)))))))
+  (println "collect: enrich")
+  (let [fleet (fleet/enrich fleet)]
+    (println "collect: enriched" (count (:nodes fleet)))
+    (let [ts (now-iso)
+          plans (do (println "collect: plans") (state/collect-node-plans
+                                               (:nodes fleet)
+                                               #(do (println "collect: probe" (:host %)) (ssh/reachable? (:host %)))))]
+      (println "collect: probed" (count plans))
+      (state/snapshot
+       fleet
+       ts
+       (mapv (fn [{:keys [action node]}]
+               (case action
+                 :probe (probe fleet node)
+                 :down (state/down-node node)))
+             plans)))))
 
 ;; ── persist (append-only as-of history on the kotoba Datom log) ───────────────
 
@@ -98,12 +124,12 @@
   [fleet token target snap]
   (let [seq (swap! snap-seq inc)
         write-plan (persist/snapshot-write-plan
-                    (System/currentTimeMillis)
+          (now-ms)
                     seq
                     snap
                     (json/generate-string snap))]
     (p/sh "bash" "-c" (persist/write-forward-command write-plan (node-port fleet target) (:host target)))
-    (Thread/sleep persist/forward-settle-ms)
+    (sleep-ms persist/forward-settle-ms)
     (let [body (json/generate-string (:envelope write-plan))
           r (apply p/sh (persist/write-curl-argv write-plan token body (internal-trust!)))]
       (persist/write-ok? (:out r)))))
@@ -132,22 +158,32 @@
     (let [{:keys [snapshot at total live?]} (state/selected-snapshot @history @cache (query-at req))]
       (state/html-response (state/render-html snapshot at total live? @persisted @alerts)))))
 
+(defn- snapshot-once! [fleet token target]
+  (try
+    (let [prev @cache
+          snap (collect fleet)
+          al (diff-alerts (when (seq (:nodes prev)) prev) snap)]
+      (reset! cache snap)
+      (swap! history #(state/append-capped % hist-cap snap))
+      (when (seq al)
+        (swap! alerts #(state/concat-capped % alert-cap al))
+        (doseq [a al] (println (report/alert-line a))))
+      (when (and token target (persist! fleet token target snap)) (swap! persisted inc)))
+    (catch #?(:clj Exception :cljs :default) e (binding [*out* *err*] (println (report/snapshot-error-line (error-message e)))))))
+
 (defn- snapshotter [fleet token target interval]
-  (future
-    (loop []
-      (try
-        (let [prev @cache
-              snap (collect fleet)
-              al (diff-alerts (when (seq (:nodes prev)) prev) snap)]
-          (reset! cache snap)
-          (swap! history #(state/append-capped % hist-cap snap))
-          (when (seq al)
-            (swap! alerts #(state/concat-capped % alert-cap al))
-            (doseq [a al] (println (report/alert-line a))))
-          (when (and token target (persist! fleet token target snap)) (swap! persisted inc)))
-        (catch Exception e (binding [*out* *err*] (println (report/snapshot-error-line (.getMessage e))))))
-      (Thread/sleep (state/interval-sleep-ms interval))
-      (recur))))
+  ;; :clj: one future per dashboard. :cljs (kbb engine, SCI-on-node): the event
+  ;; loop is the scheduler — a synchronous loop would block the HTTP server —
+  ;; so each round is a setTimeout step (2026-10-25 port).
+  #?(:clj (future
+            (loop []
+              (snapshot-once! fleet token target)
+              (sleep-ms (state/interval-sleep-ms interval))
+              (recur)))
+     :cljs (letfn [(step []
+                     (snapshot-once! fleet token target)
+                     (js/setTimeout step (state/interval-sleep-ms interval)))]
+             (js/setTimeout step 0))))
 
 (defn -main [& args]
   (let [fleet (fleet/load-fleet)
@@ -159,4 +195,6 @@
     (snapshotter fleet token target interval)
     (http/run-server handler {:port port})
     (println (report/dashboard-start-line port interval))
-    @(promise)))
+    ;; :clj blocks on a promise; on the kbb engine the node:http server and the
+    ;; snapshotter's setTimeout chain hold the event loop open instead.
+    #?(:clj @(promise) :cljs nil)))
