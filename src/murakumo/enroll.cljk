@@ -9,11 +9,13 @@
   and the `did:key` envelope belongs to `org-w3-did`. This namespace is where
   the two meet.
 
-  Nothing here re-decides anything aiueos already decides. `claim` verifies the
-  possession proof with `aiueos.provider.device` and then hands the answer to
-  `aiueos.enroll/claim`, which owns the admission rules. If this namespace ever
-  grows a rule of its own, that rule has drifted out of the contract."
-  (:require [aiueos.enroll :as enroll]
+  Nothing here re-decides anything the decision plane already decides. `claim`
+  verifies the possession proof with `aiueos.provider.device` and then hands
+  the answer to `grant.enroll/claim`, which owns the admission rules (the
+  decision plane left aiueos for grant -- root ADR-2608219500). If this
+  namespace ever grows a rule of its own, that rule has drifted out of the
+  contract."
+  (:require [grant.enroll :as enroll]
             #?(:clj [aiueos.provider.device :as device])
             [did.core :as did]
             [kotoba.lang.text :as str]))
@@ -58,7 +60,7 @@
 (defn label
   "The canonical label payload for a device, as printed on the box.
 
-  Built by `aiueos.enroll/qr-payload` — the encoding lives with the decision
+  Built by `grant.enroll/qr-payload` — the encoding lives with the decision
   that consumes it, so a label and the state machine that answers it cannot
   drift apart. Returns nil when the key cannot be named or a field would make
   the encoding ambiguous."
@@ -79,7 +81,7 @@
 
 #?(:clj
    (defn claim
-     "Verify the device's possession proof, then let `aiueos.enroll/claim`
+     "Verify the device's possession proof, then let `grant.enroll/claim`
      decide.
 
      `req` — `{:label :owner :now-ms :signed-challenge :expected}` where
@@ -91,7 +93,7 @@
 
      The proof is verified here and reduced to the single boolean the decision
      consumes; the decision's own reasons are returned unchanged. A verdict from
-     this function is always an `aiueos.enroll` verdict, never a murakumo one."
+     this function is always a `grant.enroll` verdict, never a murakumo one."
      ([record req] (claim record req enroll/default-policy))
      ([record req policy]
       (let [parsed (enroll/parse-qr (:label req))

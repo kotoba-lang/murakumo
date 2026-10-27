@@ -71,11 +71,14 @@
         io.github.kotoba-lang/org-ietf-ed25519
         {:git/sha "073be4e92df040db85ad232a729c3b60ef046be0"}
         ;; Enrolment and release admission: murakumo is the fleet plane, so it
-        ;; consumes aiueos's decisions rather than restating them (aiueos's own
-        ;; rule -- enforcement layers import aiueos, never the reverse), names
-        ;; device keys with the library that owns the did:key envelope, and
-        ;; reads revocation with the library that owns the status-list format.
-        ;; None of the three is reimplemented here.
+        ;; consumes grant's decisions rather than restating them (the decision
+        ;; plane left aiueos for grant -- root ADR-2608219500; nothing in grant
+        ;; requires aiueos). grant.enroll / grant.publisher / grant.key-lifecycle
+        ;; own the rules. Device keys are named with the library that owns the
+        ;; did:key envelope, and revocation is read with the library that owns
+        ;; the status-list format. None of the three is reimplemented here.
+        ;; aiueos stays only for aiueos.provider.device -- the device-side key
+        ;; mechanism, which never lets a private half leave the machine.
         io.github.kotoba-lang/aiueos
         {:git/sha "0bd6e3ab49a3679a72777edd3e465ff58713f5b5"}
         io.github.kotoba-lang/org-w3-did
