@@ -4,6 +4,7 @@
             [ed25519.core :as ed]
             [bonsai.repo :as repo]
             [murakumo.artifact-store :as artifact-store]
+            [murakumo.filecoin-tier :as filecoin-tier]
             [murakumo.blob :as blob]
             [murakumo.canonical :as canonical]
             [murakumo.ci.attest :as attest]
@@ -105,7 +106,8 @@
         attempt-id (:ci.lease/token lease)
         workspace (str (io/file workspace-root (:ci.run/id run) attempt-id "source"))
         output-root (str (io/file workspace-root (:ci.run/id run) attempt-id "outputs"))
-        local-cas (artifact-store/adapter artifact-root)
+        local-cas (filecoin-tier/wrap (artifact-store/adapter artifact-root)
+                                      (filecoin-tier/config-from-env))
         source-db (atom (repo/empty-repo))
         source-blobs (atom {})
         current-lease (atom lease)
