@@ -1,9 +1,9 @@
 (ns murakumo.enroll-test
   (:require [murakumo.enroll :as me]
             [murakumo.factory :as factory]
-            [aiueos.enroll :as enroll]
+            [grant.enroll :as enroll]
             [aiueos.provider.device :as device]
-            [aiueos.key-lifecycle :as kl]
+            [grant.key-lifecycle :as kl]
             [kotoba.test :refer [deftest is testing]]))
 
 (def kp (device/generate-operational-keypair!))
@@ -50,7 +50,7 @@
     (is (= :tofu (:aiueos.enroll/trust v)) "no factory certificate -> reported")
     (is (= :claimed (:state (me/record-after (record) v "acct:k"))))))
 
-(deftest a-claim-with-a-replayed-proof-is-denied-by-aiueos-not-by-murakumo
+(deftest a-claim-with-a-replayed-proof-is-denied-by-grant-not-by-murakumo
   (let [v (me/claim (record) {:label label :owner "acct:k" :now-ms 1000
                               :signed-challenge proof
                               :expected (assoc expected :nonce "n-2")})]
