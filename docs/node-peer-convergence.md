@@ -17,8 +17,7 @@ loaderless static image (`peer-main`) and works like this:
 3. It dials the peer (wire 45), writes one line of the ten statement fields,
    and closes the connection. While the peer is not listening yet, a 50 ms
    accept on its own listener serves as the wait.
-4. It accepts the peer's connection and reads the peer's line to end of
-   file.
+4. It accepts the peer's connection and reads the peer's line up to its LF (end of file for a sender that writes no LF).
 5. It runs `signed-step` three times from -1 for both nodes, through the same
    verification. It prints `<node> <state> <declaration digest>` for both
    nodes, in node order.
@@ -201,3 +200,30 @@ The receipt is [evidence/node-peer-loop-20261024.json](evidence/node-peer-loop-2
 - The L1 operator signature, persistence, or murakumo's existing HTTP
   observation transport.
 - x86_64 execution.
+
+## Line framing and a relay that drops the half close
+
+The wires carry hex, so a sender ends its line with the byte LF (`0a`) and a
+receiver ends the line at the first `0a` at an even offset of the hex. A line
+holds only printable ASCII, so it never contains `0a`. A receiver therefore
+does not wait for end of file. This matters behind a relay that does not pass
+on the client's half close: Lima's port forward does this, and a node that
+waited for end of file saw `peer/malformed` after its 5 s read timeout
+(JUN-287, measured on 2026-10-29 with tcpdump in a Lima guest on naphtali).
+
+The control is a TCP relay in front of node a that never forwards the
+client's half close (`write_eof`) upstream. Put it between b and a on a
+podman bridge, build `a` and `b` with `127.0.0.1` replaced by the container
+addresses, and compare the previous source (reads to end of file) with this
+one:
+
+```text
+old a: peer/malformed        b: b70 2 9af9…8c29 / k16 2 64f1…03fb
+new a: b70 2 … / k16 2 …     b: b70 2 … / k16 2 …
+```
+
+The previous source fails on `a`. This one converges on both sides. A sender
+that writes no LF still ends its line at end of file, so mixed versions
+interoperate. This is a loopback-level reproduction of a physical-host
+failure. The real path (naphtali Lima VM, tailscale) with the new source is
+not yet re-measured.
