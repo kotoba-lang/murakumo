@@ -13,7 +13,8 @@
 ;;      closes; while the peer is not listening yet, a 50 ms accept on its
 ;;      own listener is the wait, and keeps the peer's connection if it
 ;;      arrives first;
-;;   4. accepts the peer's connection and reads its line to end of file;
+;;   4. accepts the peer's connection and reads its line up to its LF (or to
+;;      end of file for a sender that writes no LF);
 ;;   5. runs signed-step three times from -1 for both nodes, its own line
 ;;      and the peer's, through the same verification, and prints
 ;;      "<node> <state> <declaration digest>" for both, in node order.
@@ -116,18 +117,32 @@
     (if (= k 400) -1
       (let [c (pe-dial (str peer " 1000"))]
         (if (pe-handle? c)
-          (let [w (pe-write (str c " " hexline)) z (pe-write c)] stash)
+          (let [w (pe-write (str c " " hexline "0a")) z (pe-write c)] stash)
           (let [a (pe-accept (str l " 50"))]
             (recur (+ k 1) (if (and (= stash 0) (pe-handle? a)) (pe-int a) stash))))))))
 
-;; read a connection to end of file, as hex; "" on a timeout or an error
+;; the wires carry hex, so the sender ends its line with the byte LF, "0a". A
+;; line has no LF byte (pe-take refuses anything but printable ASCII), so the
+;; first "0a" at an even offset of the hex ends the line; -1 when there is none.
+(defn- pe-lf-at [h :string] :i64
+  (loop [i 0]
+    (cond (> (+ i 2) (string-length h)) -1
+          (= (string-substring h i (+ i 2)) "0a") i
+          :else (recur (+ i 2)))))
+
+;; read one line as hex. The line is complete at its LF and does not wait for
+;; end of file: a relay that does not pass on a half close (a port forward, a
+;; load balancer) would otherwise leave the read waiting for a close that
+;; never comes. A sender that does not write LF still ends the line with end
+;; of file. "" on a timeout or an error.
 (defn- pe-recv [in :i64] :string
   (loop [k 0 acc ""]
     (if (= k 8) ""
       (let [r (pe-read (str in " 16384 5000"))]
         (cond (= r "") acc
               (or (= r "timeout") (= r "closed") (= r "reset") (= r "refused") (= r "unreachable")) ""
-              :else (recur (+ k 1) (string-concat acc r)))))))
+              :else (let [all (string-concat acc r) nl (pe-lf-at all)]
+                      (if (< nl 0) (recur (+ k 1) all) (string-substring all 0 nl))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; State
@@ -235,7 +250,7 @@
 ;; dial the peer once and write the line: 1 written, 0 no answer
 (defn- pe-push [peer :string hexline :string] :i64
   (let [c (pe-dial (str peer " 500"))]
-    (if (pe-handle? c) (let [w (pe-write (str c " " hexline)) z (pe-write c)] 1) 0)))
+    (if (pe-handle? c) (let [w (pe-write (str c " " hexline "0a")) z (pe-write c)] 1) 0)))
 
 ;; a well-formed line from one connection, or ""
 (defn- pe-take [in :i64] :string
