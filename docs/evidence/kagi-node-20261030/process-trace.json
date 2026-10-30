@@ -1,0 +1,16 @@
+{
+  "schema": "murakumo.native-kagi-node.process-trace.v1",
+  "date": "2026-10-30",
+  "issue": "JUN-591",
+  "method": "scripts/check-native-kagi-node.py run unchanged under a Python audit hook that records every subprocess.Popen executable",
+  "host": "Podman --platform linux/arm64 --network none, image python:3.12-slim",
+  "execs": [
+    "/out/kagi-host",
+    "/out/node-adapter"
+  ],
+  "count": 18,
+  "nativeSpawnGranted": false,
+  "nativeSpawnNote": "the gate grants KEXE_ALLOW=7,23,35,37,38,39; wire 20 (spawn) is not granted, so the two images cannot start processes",
+  "containerToolsAbsent": ["node", "java", "cc", "gcc", "clang", "nbb", "bb"],
+  "build": "compiler, assembler and both images ran with PATH=/nonexistent; only the Amu root ELF was executed"
+}

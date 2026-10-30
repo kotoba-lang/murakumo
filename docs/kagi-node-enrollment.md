@@ -69,10 +69,35 @@ restoration. An OCI process, signed permit or node admission is not a Cell.
 Independent production key custody remains separately unqualified.
 
 
-The exact candidate compiler/owner/source/artifact pins are in
-`native-kagi-node.lock.json`; the compiler is the Amu private-store candidate,
-not a replacement for its adopted bootstrap root. The 13-case receipt is in
-`docs/evidence/kagi-node-20261024/native-gate.json`. To repeat with freshly
+The exact compiler/owner/source/artifact pins are in
+`native-kagi-node.lock.json`. Since JUN-591 the compiler is Amu main's
+committed `seed/bootstrap/aarch64-linux-static-root.elf`, which is not an
+adopted release root. The 13-case receipt and a trace of every process the gate
+starts are in `docs/evidence/kagi-node-20261030/`; the 2026-10-24 receipt is the
+previous candidate's.
+
+Build, on arm64 Linux (Podman `--platform linux/arm64 --network none`), with
+`PATH=/nonexistent KEXE_STACK_BYTES=8388608` and wire 35 scoped to the inputs.
+`ROOT` is the pinned compiler; `RUNNER` is Amu's `seed/x86_64-kx64-runner.kotoba`
+(`packRunner` in the lock). Each source compiles to an aarch64 payload, which is
+packed into an aarch64-linux static image:
+
+```text
+ROOT compile SRC --target aarch64-macos --output X.kseed
+ROOT compile RUNNER --target aarch64-linux --output X --format packed --payload X.kseed
+```
+
+1. Build `kotoba/assemble_kagi_node.kotoba` this way (`nativeAssemblerSha256`).
+2. Put the seven owner sources (`ownerSources`, named `<name>.kotoba`) in OWNERS
+   and this repository's `kotoba/fleet_kagi_node.kotoba` under REPO, then run
+   `KEXE_ALLOW=3,35,37,38,39 assemble OWNERS REPO unity.kotoba`. It prints
+   `murakumo.kagi.node.assembly.v1 <sha256>`, which must equal
+   `assembledSourceSha256`.
+3. Build `unity.kotoba` this way into the node adapter (`artifactSha256`).
+   Two builds from the same inputs give the same bytes.
+
+The kagi host is built the same way from kagi's assembled unity source; the
+gate receipt records its digest. To repeat with freshly
 created local-only keys, run the diagnostic orchestration on arm64 Linux:
 
 ```text
