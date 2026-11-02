@@ -191,11 +191,15 @@
                     (cond (not (= attempt "job/attempt-recorded")) (let [x (jn-say attempt)] 1)
                           (not (= still-held "job/lease-ok")) (let [x (jn-say still-held)] 1)
                           :else
-                          (let [r (cell-execute index profile "container" layout state allowed (if source-admitted source itext))]
-                            (if (not (= (jn-field r 0) "ok")) (let [x (jn-say r)] 1)
-                              (let [text (step-receipt-text now did (if (> epoch 0) epoch 1) (jn-int (jn-field r 1)) jid node (jn-field r 2))
+                          (let [capture (and source-admitted (= (jn-arg 23) "capture-output"))
+                                r (if capture (cell-execute-captured index profile "container" layout state allowed source)
+                                      (cell-execute index profile "container" layout state allowed (if source-admitted source itext)))
+                                nl (string-index-of r "\n") header (if (>= nl 0) (string-substring r 0 nl) r)]
+                            (if (not (= (jn-field header 0) "ok")) (let [x (jn-say header)] 1)
+                              (let [text (step-receipt-text now did (if (> epoch 0) epoch 1) (jn-int (jn-field header 1)) jid node (jn-field header 2))
                                     c (jn-say (string-concat "receipt " text))
-                                    d (jn-say (string-concat "signature " (sign-statement seed text)))]
+                                    d (jn-say (string-concat "signature " (sign-statement seed text)))
+                                    e (if (and capture (>= nl 0)) (jn-say (str "output-base64url " (string-substring r (+ nl 1) (string-length r)))) 0)]
                                 0))))))))))))
 
 (defn- jn-run [] :i64 (jn-run-with-source "" false))
