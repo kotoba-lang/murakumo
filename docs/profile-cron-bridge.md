@@ -148,8 +148,17 @@ process exit status alone does not distinguish the controls). A disposable
 Linux VM independently showed `systemctl --user show` for a never-created
 unit returning `LoadState=not-found` and `SubState=dead`, both with exit 0.
 The VM was stopped and removed. These observations do not execute the full
-resident, its new marker writes, an actual inference or a crash/restart. A Mac
-FS capability probe trapped instead of running, so marker durability and the
-full native controller remain unverified. The current resident also uses
-systemd and curl, so this draft is not a qualified Kotoba-only operational
-path. See AWAI-150.
+resident, an actual inference or its crash/restart. A Mac FS capability probe
+trapped instead of running.
+
+A separate ARM64 Linux native fixture copied the actual request-write and
+marker functions, while substituting byte-equivalent text identity for CID
+calculation. It exercised real local file writes and fsync, normal process
+restart, a request left without a marker, and SIGKILL after marker creation.
+Each subsequent attempt refused to prepare the same submission. A control
+that removed both existence checks returned 1. The source, artifact hashes
+and limits are recorded in [evidence](evidence/awai150-dispatch-marker-native-20261103.json).
+This tests the isolated filesystem sequence, not power loss, a complete
+resident, a real systemd dispatch or a distributed fence. The current resident
+also uses systemd and curl, so this draft is not a qualified Kotoba-only
+operational path. See AWAI-150.

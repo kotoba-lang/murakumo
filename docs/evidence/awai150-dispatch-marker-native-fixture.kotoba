@@ -1,0 +1,66 @@
+(ns awai150-marker-fixture (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [b :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 b)))
+(defn- cp-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- cp-say [s :string] :i64 (let [x (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- cp-fs [s :string] :string (typed-cap-call 35 :string :string s))
+(defn- cp-sep [s :string] :string (str s "_SEP"))
+(defn- cp-exists? [p :string] :bool (= (cp-fs (str p (cp-sep "EXISTS"))) "1"))
+(defn- cp-read [p :string] :vector-i64
+  (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (string-to-utf8 p))))
+
+(defn- cp-cid [b :vector-i64] :string (cp-text b))
+(defn- cp-cut [b :vector-i64 start :i64] :i64
+  (let [end (if (< (+ start 4096) (vector-count b)) (+ start 4096) (vector-count b))]
+    (loop [i start]
+      (cond (>= i end) end
+            (or (= (vector-at b i) 87) (= (vector-at b i) 65)) (+ i 1)
+            :else (recur (+ i 1))))))
+(defn- cp-piece [p :string b :vector-i64 i :i64 e :i64 first :bool] :i64
+  (let [prefix (cp-bytes (str p (cp-sep (if first "WRITE" "APPEND")))) n (vector-count prefix)
+        v (loop [k 0 v (vector-alloc (+ n (- e i)))]
+            (if (= k (+ n (- e i))) v
+              (recur (+ k 1) (vector-assoc! v k (if (< k n) (vector-at prefix k) (vector-at b (+ i (- k n))))))))
+        z (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 v))] 0))
+(defn- cp-write [p :string b :vector-i64] :bool
+  (let [z (loop [i 0 first true]
+            (let [e (cp-cut b i) x (cp-piece p b i e first)]
+              (if (= e (vector-count b)) 0 (recur e false))))
+        flush (cp-fs (str p (cp-sep "FSYNC")))]
+    (and (= flush "1") (= (cp-cid (cp-read p)) (cp-cid b)))))
+(defn- cp-parent-dir [p :string] :string
+  (loop [i (- (string-length p) 1)] (if (< i 1) "/" (if (= (string-substring p i (+ i 1)) "/") (string-substring p 0 i) (recur (- i 1))))))
+(defn- pr-unit-active? [s :string] :bool
+  (or (= s "start-pre") (= s "start") (= s "start-post") (= s "running")))
+
+(defn- pr-run-decision [status :string request-exists :bool request-matches :bool
+                       marker-exists :bool response-exists :bool] :string
+  (cond (and (or (pr-unit-active? status) (= status "exited"))
+             request-exists request-matches) "profile/reuse-unit"
+        (and (= status "unit/not-found") (not request-exists)
+             (not marker-exists) (not response-exists)) "profile/new-unit"
+        :else "profile/submission-unknown"))
+
+(defn- pr-prepare-submit [request :string marker :string body :vector-i64] :bool
+  (and (not (cp-exists? request)) (not (cp-exists? marker))
+       (cp-write request body)
+       (= (cp-fs (str (cp-parent-dir request) (cp-sep "FSYNC"))) "1")
+       (cp-write marker (cp-bytes "itonami.inference-dispatch/1\n"))
+       (= (cp-fs (str (cp-parent-dir marker) (cp-sep "FSYNC"))) "1")))
+
+(defn main [] :i64
+ (let [dir (cp-arg 0) mode (cp-arg 1) request (str dir "/request") marker (str dir "/dispatch") body (cp-bytes "nonsecret fixture")
+       exists (cp-exists? request) mark (cp-exists? marker)
+       matches (if exists (= (cp-cid (cp-read request)) (cp-cid body)) false)
+       choice (pr-run-decision "unit/not-found" exists matches mark false)]
+  (cond (= mode "fresh")
+        (if (and (= choice "profile/new-unit") (pr-prepare-submit request marker body)
+                 (= (cp-text (cp-read request)) "nonsecret fixture")
+                 (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n")
+                 (not (pr-prepare-submit request marker body))) 0 1)
+        (= mode "hold")
+        (if (and (= choice "profile/new-unit") (pr-prepare-submit request marker body)
+                 (cp-write (str dir "/ready") (cp-bytes "ready")))
+            (loop [i 0] (if (= i 9223372036854775807) 4 (recur (+ i 1)))) 5)
+        (= mode "recover") (if (= choice "profile/submission-unknown") 0 2)
+        :else 3)))
