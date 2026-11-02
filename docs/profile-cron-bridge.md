@@ -162,3 +162,18 @@ This tests the isolated filesystem sequence, not power loss, a complete
 resident, a real systemd dispatch or a distributed fence. The current resident
 also uses systemd and curl, so this draft is not a qualified Kotoba-only
 operational path. See AWAI-150.
+
+A follow-up ARM64 Linux native fixture combined the actual status-query,
+decision and marker functions with a real user systemd instance. Its
+substitute submitter started a transient `touch` unit, rather than the
+resident's curl or a model. The initial request prepared its marker and the
+matching completed unit was reusable. After stopping the unit, systemd
+reported `LoadState=not-found` and `SubState=dead`; the saved request and
+marker made the next attempt refuse. With both user-bus environment paths
+invalid, the real query failed and the native decision returned UNKNOWN.
+The first fixture's `--wait` and `RemainAfterExit` combination timed out;
+the successful run used `--no-block`, as recorded in the
+[evidence](evidence/awai150-systemd-submission-20261103.json). It substitutes
+text identity for CID comparison and does not test the full resident, its
+actual curl request, inference, a crash during inference, power loss, or
+concurrent writers. The disposable VM was stopped and removed.
