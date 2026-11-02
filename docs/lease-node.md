@@ -3,12 +3,22 @@
 **Draft recovery change:** a voter now refuses every request if its durable
 register is missing, malformed or internally inconsistent. It no longer treats
 a missing file as an empty register. The older examples below that start a
-voter with a nonexistent file require revision. A new voter needs a securely
-provisioned `0 - 0 - -` register; after state loss, recovery and membership
-must be established independently before any reinitialization. This draft has
-no safe automatic enrollment/recovery procedure and must not be deployed as
-one. A valid but stale register can still be replayed; this check alone does
-not prevent rollback.
+voter with a nonexistent file require revision. An explicit
+`init-fresh <absolute-path>` operation creates `0 - 0 - -` with a temporary
+directory, fsync and an FS2 no-replace rename. It is only for an independently
+established new voter: after state loss, recovery and membership must be
+established separately before reinitialization. This draft has no automatic
+enrollment/recovery procedure and must not be deployed as one. A valid but
+stale register can still be replayed; this check alone does not prevent rollback.
+
+`init-fresh` returns `voter/init-created`, `voter/init-refused`, or
+`voter/init-unknown`; unknown means publication may have happened and must be
+reconciled before any retry. On ARM64 Linux/XFS, the native fixture in
+`docs/evidence/awai150-voter-init-fixture.kotoba` created a fresh register,
+preserved an existing sentinel, and allowed exactly one of two concurrent
+initializers to succeed. Replacing no-replace with ordinary rename overwrote
+the sentinel in the control. A crash can leave a private temporary directory;
+power-cut and cleanup recovery are not covered by this test.
 
 Tracked in [JUN-289](https://linear.app/kotobalabs/issue/JUN-289), under
 ADR-2610071730 P3b. [Lease core](lease-core.md) holds the register's rules.
