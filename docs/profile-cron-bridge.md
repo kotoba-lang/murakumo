@@ -65,6 +65,18 @@ test checked the decision boundaries; its bypass mutant returned `1` while the
 original returned `0`. A subsequent Linux ARM64 static source-unity build with
 the git-checkpoint pinned root compiler also returned exit 0, and the bypass
 mutant returned exit 1. The [evidence](evidence/awai147-retention-refresh-native-20261103.json)
-records exact hashes. This is a local native gate, not a restarted CI pipeline,
-a live expired-retention renewal, real GitHub storage, a crash or a model
-inference. No periodic service has been installed.
+records exact hashes. This is a local native gate, not a restarted CI pipeline.
+
+An isolated Linux VM test then created *expired*, independently signed
+retention receipts with public test keys for a test checkpoint. The actual
+native resident `refresh` rejected an invalid receipt reference and, with the
+peer stopped, preserved the old head. With the native checkpoint peer running,
+it uploaded the verified closure, acquired fresh receipts, published the same
+checkpoint head and independently verified the new signature pair. A repeated
+refresh left the head unchanged; no request was installed. The two test
+identities and replica stores shared one VM, so this does not qualify separate
+failure domains, GitHub archival, crash recovery or model inference. The
+[host harness](../test-native/murakumo/resident-retention-live-host-test.py)
+requires a disposable VM, separately built fixture binaries and a test-only
+checkpoint; it must never be pointed at live credentials. [Evidence](evidence/awai147-retention-refresh-live-20261103.json).
+No periodic service has been installed.
