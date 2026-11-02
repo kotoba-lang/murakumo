@@ -94,3 +94,18 @@ VM process via stdin and the dedicated VM was removed. The optional
 [host harness](../test-native/murakumo/resident-retention-github-host-test.py)
 requires a disposable VM, test-only fixture and explicitly selected private
 repository. [Evidence](evidence/awai147-retention-refresh-github-20261103.json).
+
+A later isolated ARM64 Linux VM exercised the actual cron planner, controller,
+bridge, resident, checkpoint peer and GitHub archive adapter together. The
+resident started with an expired signed head and no live voters; the GitHub
+archive was an existing classified test checkpoint. It renewed the head,
+read back and verified the private archive, prepared the cron request and
+reported `resident/quorum-unavailable`. The cursor remained unchanged and the
+durable dispatch marker remained. A second invocation refused the uncertain
+dispatch without calling the resident again. The controller's missing execute
+bit was discovered by this test and fixed. The two test identities were
+colocated in one VM; no MTP inference, successful cursor advance, real periodic
+activation, independent failure domains or production membership was tested.
+The [host harness](../test-native/murakumo/cron-resident-github-failure-host-test.py)
+requires a disposable VM, pinned binaries, a classified test fixture and a
+private GitHub repository. [Evidence](evidence/awai147-cron-github-quorum-failure-20261103.json).
