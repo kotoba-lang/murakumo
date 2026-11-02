@@ -1,0 +1,92 @@
+;; Native single-cycle coordinator candidate. Compose after the canonical
+;; checkpoint, schedule/cursor, resident, GitHub archive and bridge sources.
+;; The host pins all inputs, credentials, egress and the single task's paths.
+;; This coordinator does not create a distributed lease or a resource limit.
+(ns murakumo.profile-cron-controller (:export [profile-cron-controller-main]))
+
+(defn- nc-sensitive-path? [cfg :vector-i64 config :string definition :string cursor :string source :string p :string] :bool
+  (or (= p config) (= p definition) (= p cursor) (= p source)
+      (= p (cp-str cfg 0 "head")) (= p (cp-str cfg 0 "store"))
+      (= p (cp-str cfg 0 "request")) (= p (cp-str cfg 0 "status"))
+      (= p (cp-str cfg 0 "candidateHead")) (= p (cp-str cfg 0 "leaseFile"))
+      (= p (cp-str cfg 0 "archiveAck")) (= p (cp-str cfg 0 "key"))
+      (= p (cp-str cfg 0 "tokenFile")) (= p (cp-str cfg 0 "policyFile"))
+      (= p (cp-str cfg 0 "environmentFile")) (= p (cp-str cfg 0 "runtimeFile"))
+      (= p (str (cp-str cfg 0 "head") ".resident-lockfile"))))
+
+;; The marker is created and synced before inference can be submitted. A
+;; leftover or partial marker is UNKNOWN; never infer failure and retry. The
+;; enclosing task lock and host-owned directory exclude cooperating writers.
+(defn- nc-mark [marker :string job :string] :bool
+  (and (not (cp-exists? marker)) (cp-write marker (cp-bytes (str job "\n")))
+       (= (cp-fs "M" (cp-parent-dir marker) "") "1")))
+
+(defn- nc-advance [cfg :vector-i64 definition :vector-i64 pin :string cursor-path :string cursor :vector-i64
+                  source :vector-i64 slot :i64] :string
+  (let [now (rt-now) head (rt-read-head cfg (cp-str cfg 0 "head"))
+        request (br-request definition pin cursor now)
+        plan (br-problem cfg definition pin cursor source now)]
+    (cond (not (= plan "bridge/ok")) "cron-resident/plan-changed"
+          (not (= slot (br-slot definition cursor))) "cron-resident/slot-changed"
+          (not (= (br-head-problem cfg head) "bridge/head-ready")) "cron-resident/archive-pending"
+          (not (br-completed? head request)) "cron-resident/completion-unknown"
+          (not (= (cc-advance cursor-path cursor pin slot) "cursor/advanced")) "cron-resident/cursor-unknown"
+          :else (str "cron-resident/completed " slot))))
+
+(defn- nc-cycle [cfg :vector-i64 config-path :string definition-path :string pin :string cursor-path :string source-path :string
+                state :string work-before :string work-after :string repo :string gh :string] :string
+  (if (or (not (cp-safe-absolute? definition-path)) (not (cp-safe-absolute? cursor-path))
+          (not (cp-safe-absolute? source-path)) (not (cp-safe-absolute? state))
+          (not (cp-safe-absolute? work-before)) (not (cp-safe-absolute? work-after))
+          (not (cp-safe-absolute? gh)) (= work-before work-after)
+          (= cursor-path config-path) (= cursor-path definition-path) (= cursor-path source-path)
+          (not (cp-exists? definition-path)) (not (cp-exists? cursor-path)) (not (cp-exists? source-path)))
+    "cron-resident/input-refused"
+    (let [definition (cp-read definition-path) cursor (cp-read cursor-path) source (cp-read source-path)
+          now (rt-now) plan (br-problem cfg definition pin cursor source now)
+          slot (if (= plan "bridge/ok") (br-slot definition cursor) -1)
+          previous (cp-num cursor 0 "slot")
+          job (if (= plan "bridge/ok") (verified-cron-job-id true now previous slot pin definition) "")
+          marker (str state "/dispatch-" job)]
+      (cond (= plan "cursor/idle") "cron-resident/idle"
+            (not (= plan "bridge/ok")) "cron-resident/plan-refused"
+            (or (not (cp-hex? job 64))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path marker)
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".pending"))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path work-before)
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path work-after)) "cron-resident/path-refused"
+            :else
+            (let [refresh (rt-refresh cfg)]
+              (if (not (or (= refresh "resident/retention-ready") (= refresh "resident/replicas-refreshed"))) "cron-resident/retention-pending"
+                (let [archive (rt-archive-native cfg work-before repo gh)]
+                  (if (not (= (ln-field archive 0) "resident-archive/confirmed")) "cron-resident/archive-pending"
+                    (let [head (rt-read-head cfg (cp-str cfg 0 "head")) request (br-request definition pin cursor (rt-now))
+                          ready (br-head-problem cfg head)]
+                      (cond (not (= ready "bridge/head-ready")) "cron-resident/head-refused"
+                            (br-completed? head request) (nc-advance cfg definition pin cursor-path cursor source slot)
+                            (not (= (br-install cfg head request) "bridge/request-ready")) "cron-resident/request-refused"
+                            (not (nc-mark marker job)) "cron-resident/dispatch-unknown"
+                            :else
+                            (let [turn (rt-cycle cfg) status (rt-status cfg turn)]
+                              (if (not (= (ln-field turn 0) "resident/published")) "cron-resident/completion-unknown"
+                                (let [new-archive (rt-archive-native cfg work-after repo gh)]
+                                  (if (not (= (ln-field new-archive 0) "resident-archive/confirmed")) "cron-resident/archive-pending"
+                                    (nc-advance cfg definition pin cursor-path cursor source slot)))))))))))))))
+
+(defn profile-cron-controller-main [] :i64
+  (let [config (cp-arg 0) definition (cp-arg 1) pin (cp-arg 2) cursor (cp-arg 3) source (cp-arg 4)
+        state (cp-arg 5) work-before (cp-arg 6) work-after (cp-arg 7) repo (cp-arg 8) gh (cp-arg 9)
+        cfg (if (and (cp-safe-absolute? config) (cp-exists? config)) (cp-read config) (vector-alloc 0))
+        head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
+    (if (or (not (json-valid? cfg)) (not (json-canonical? cfg)) (not (rt-lock-config-safe? cfg config))
+            (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
+            (not (= (cp-num cfg 0 "intervalMs") 86400000))
+            (not (rf-voters? (cp-str cfg 0 "voters"))) (= (lease-token (cp-str cfg 0 "tokenFile")) "")
+            (not (= (ri-show (cp-str cfg 0 "key")) (str "identity/did " (cp-str cfg 0 "authorB")))))
+      (let [z (cp-say "cron-resident/config-refused")] 2)
+      (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
+        (let [z (cp-say "cron-resident/local-writer-busy")] 2)
+        (let [result (nc-cycle cfg config definition pin cursor source state work-before work-after repo gh)
+              release (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")
+              z (cp-say (if release result "cron-resident/local-unlock-failed"))]
+          (if release 0 2))))))
