@@ -117,7 +117,7 @@ Example host grant (Linux, after separately checking executable provenance):
 ```sh
 export KEXE_ALLOW=20,35,37,38
 export KEXE_CAP_RESOURCES_35="$CHECKPOINT_FS_SCOPE"
-export KEXE_CAP_RESOURCES_20=/usr/bin/git:/usr/bin/mkdir:/usr/bin/stat:/usr/bin/chmod
+export KEXE_CAP_RESOURCES_20=/usr/bin/git
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 export KEXE_SPAWN_ENV=PATH:GIT_CONFIG_GLOBAL:GIT_CONFIG_NOSYSTEM
 ```
@@ -212,7 +212,15 @@ signed test fixture and exercises a separate file-backed Git remote.
 
 ## Native build and gate
 
-Use a new task workspace `G`, a fresh checkout `M` of this change, and the
+The recipe below is historical evidence for the older source. Its pinned
+compiler does not provide the FS2 U operation required by the current draft;
+using it for this source fails closed. Do not use these commands as a current
+build or deployment recipe. A qualified compiler/runtime containing the U
+form from [Amu #1796](https://github.com/kotoba-lang/amu/pull/1796), plus the
+entire current dependency closure and host grants, still needs to be pinned
+and verified. The Linux fixture below uses an explicitly test-only compiler.
+
+Historically, use a new task workspace `G`, a fresh checkout `M` of this change, and the
 canonical repository forest `K`. The only compiler executed below is the
 pinned Amu-produced ELF. Shell/sed concatenate sources; they do not compile or
 implement checkpoint decisions.
@@ -310,18 +318,21 @@ quorum, or introduce an origin-side application server.
 Checkpoint size, directory creation and parent checks, and restore chmod use
 FS2 no-follow metadata and mutations. Parent components still require exclusive
 ownership of the tree; this is not a concurrent-writer guarantee. The native
-Linux extracted-source fixture in
+Linux extracted-source fixture from the earlier GNU-stat implementation in
 [awai150-native-metadata-fixture.kotoba](evidence/awai150-native-metadata-fixture.kotoba)
 exercises regular files, symlinks, a FIFO, directory creation, permissions and
 untracked capture with real Git. Its scope and hashes are recorded in
 [awai150-native-metadata-20261103.json](evidence/awai150-native-metadata-20261103.json).
 
-Untracked capture still uses GNU `stat` to enforce the exact 0644/0755 mode
-allowlist. FS2's current metadata masks off special permission bits, so using it
-there would accept files previously refused. The GNU dependency prevents this
-path from working on stock macOS. A native metadata interface that exposes
-special bits and a macOS runtime test are needed before claiming portability;
-this fixture is not an end-to-end GitHub capture or restore test.
+Untracked capture uses the draft FS2 U no-follow metadata form to enforce the
+exact 0644/0755 allowlist including special permission bits. Existing FS2 O
+masks these bits and is insufficient. U requires the candidate runtime in
+[Amu #1796](https://github.com/kotoba-lang/amu/pull/1796): older runtimes
+refuse the operation. The [full-mode capture fixture](evidence/awai150-fullmode-capture-fixture.kotoba)
+uses real Git and an explicitly test-only Linux ARM64 compiler; see the
+[evidence](evidence/awai150-fullmode-capture-20261103.json). Darwin does not
+yet have a qualified provider for this operation; neither this fixture nor
+the historical tests establish an end-to-end GitHub capture or restore.
 
 The [materialize race fixture](evidence/awai150-materialize-real-fs-fixture.kotoba)
 executes the extracted restore control flow with native FS2 on Linux and
