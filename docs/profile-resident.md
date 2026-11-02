@@ -287,6 +287,20 @@ admission limit or justify accepting truncated proposals. The earlier resident
 binary also lacked the later interrupted-output retry fix; the combined native
 gate was subsequently rebuilt using the exact current source.
 
+A subsequent one-turn integration used that current source, the compact pinned
+work/context, a 360-token bound, and the actual Mac mini MTP service. The
+resident completed step 2, rechecked the lease, replicated and published its
+successor, waited for GitHub archival, and then remained idle on two subsequent
+invocations. The model reported 1,673 prompt / 278 completion tokens, 121 MTP
+forwards and 99 accepted drafts; the minimum observed free pressure was 28%.
+The resulting private GitHub archive was fetched by immutable commit and
+restored on another Linux host; its state, output and pinned profile files
+matched the producer. [Evidence](evidence/awai147-resident-mtp-github-turn-20261103.json).
+The test used public test keys and simulated all voters and replica signers on
+one host; it does not qualify independent failure domains or continuous
+operation. The second host verified only cold restoration. No inference service,
+timer or production identity was left enabled.
+
 An isolated test with the real experimental MTP checkpoint, two distinct
 public test signers and freshly signed retention receipts observed pending
 before archival, verified the actual private GitHub archive, and observed idle
