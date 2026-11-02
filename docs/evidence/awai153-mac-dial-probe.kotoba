@@ -1,0 +1,5 @@
+(ns awai150-mac-dial (:export [main]))
+(defn main [] :i64
+  (let [r (typed-cap-call :net/dial :string :string "127.0.0.1:29871 50")
+        x (typed-cap-call :io/write :string :string r)]
+    (if (or (= r "refused") (= r "unreachable") (= r "timeout")) 0 1)))
