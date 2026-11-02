@@ -284,6 +284,19 @@ revisions in the build recipe and the retrieved files match the manifests'
 SHA-256 values. This is evidence from the parent import records, not an
 independent fetch from the original repositories.
 
+An operator-run AWAI-147 experiment subsequently executed the actual native
+`profile-recovery step` with the growth profile, work order and context pinned
+by the runtime, a verified SSH Unix-socket tunnel, and a memory-guarded MTP
+service on an M4 Mac mini. The step accepted a `stop` response with 342 MTP
+forward calls and 248 accepted drafts, wrote a 2,990-byte compact output, and
+advanced fixture state from 1 to 2 with a matching output CID. The monitor's
+minimum free-memory reading was 27%; the API reported zero paged KV blocks
+despite a 128-block setting. The temporary model service, tunnel and unit
+were stopped after the turn. This exercises the real step and parser, but not
+the resident lease, automatic checkpoint replication, restart, GitHub state
+adapter or other profiles. The manually recorded private GitHub draft is not
+an autonomous checkpoint, and the generated claims require verification.
+
 The per-epoch quorum and operator-pinned local head do not establish a global
 accepted head, Byzantine consensus, production Cell membership, delegated
 write authority, OCI job dispatch or a chain-anchored recovery receipt. Those
