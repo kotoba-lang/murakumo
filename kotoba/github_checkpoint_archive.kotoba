@@ -24,6 +24,21 @@
                      (cp-a) (str "repos/" repo) (cp-a) "--jq" (cp-a) "[.full_name,.private] | @tsv"))]
     (and (cp-ok? answer) (= (cp-out answer) (str repo "\ttrue\n")))))
 
+;; Reject effective Git configuration that can redirect transport, weaken TLS,
+;; load external helpers, or expand configuration. --name-only avoids emitting
+;; configured values. Exit 1 with no output means no matching keys; any other
+;; outcome is a refusal. The host must still restrict the child environment and
+;; network/credential authority; Git configuration is not the whole boundary.
+(defn- ga-config-safe? [repo-dir :string] :bool
+  (= (cp-git repo-dir (str "config" (cp-a) "--name-only" (cp-a) "--get-regexp" (cp-a)
+    "^(url[.].*[.](insteadof|pushinsteadof)|http([.].*)?[.](proxy|sslverify|sslcainfo|followredirects)|remote[.].*[.]proxy|credential([.].*)?[.]helper|include([.].*)?[.]path)$")) "1\n"))
+
+;; Transport explicitly enforces TLS verification and disables redirects. The
+;; config check above also rejects URL-scoped settings that could override them.
+(defn- ga-git [repo-dir :string args :string] :string
+  (cp-git repo-dir (str "-c" (cp-a) "http.sslVerify=true" (cp-a) "-c" (cp-a)
+                         "http.followRedirects=false" (cp-a) args)))
+
 ;; Never copy an unverified object. The caller keeps the source store
 ;; quiescent and the private task directory exclusively owned throughout.
 (defn- ga-copy [store :string out :string cid :string] :bool
@@ -71,26 +86,29 @@
               manifest (cp-bytes (str "{\"author\":\"" author "\",\"environment\":\"" environment
                 "\",\"epoch\":" epoch ",\"kind\":\"itonami.github-checkpoint-archive/1\",\"parent\":\"" parent
                 "\",\"policy\":\"" policy "\",\"profile\":\"" profile "\",\"root\":\"" cid "\",\"task\":\"" task "\"}"))
-              ready (and (= (cp-fs "I" repo-dir "") "1") (= (cp-fs "I" blocks "") "1")
+              created-repo (= (cp-fs "I" repo-dir "") "1")
+              init (if created-repo (cp-git repo-dir "initARG_SEP--quietARG_SEP--template=") "refused")
+              config-safe (and (cp-ok? init) (ga-config-safe? repo-dir))
+              ready (and config-safe (= (cp-fs "I" blocks "") "1")
                          (ga-copy-closure store blocks cid b) (ga-verified? blocks cid author profile policy environment epoch parent task)
                          (cp-write (str repo-dir "/manifest.json") manifest))
-              init (if ready (cp-git repo-dir "initARG_SEP--quietARG_SEP--template=") "refused")
-              add (if (cp-ok? init) (cp-git repo-dir "addARG_SEP--ARG_SEPblocksARG_SEPmanifest.json") "refused")
+              add (if ready (cp-git repo-dir "addARG_SEP--ARG_SEPblocksARG_SEPmanifest.json") "refused")
               commit (if (cp-ok? add) (cp-git repo-dir "commitARG_SEP--quietARG_SEP-mARG_SEPArchive verified checkpoint") "refused")
               tree-out (if (cp-ok? commit) (cp-git repo-dir "rev-parseARG_SEPHEAD^{tree}") "refused")
               tree (cp-line (cp-out tree-out))]
+          (if (not config-safe) "archive/git-config-refused"
           (if (not (and (cp-ok? tree-out) (cp-hex? tree 40))) "archive/staging-refused"
-            (let [push (cp-git repo-dir (str "push" (cp-a) "--quiet" (cp-a) remote (cp-a) "HEAD:" ref))
+            (let [push (ga-git repo-dir (str "push" (cp-a) "--quiet" (cp-a) remote (cp-a) "HEAD:" ref))
                   created (= (cp-fs "I" readback "") "1")
                   ri (if created (cp-git readback "initARG_SEP--quietARG_SEP--template=") "refused")
-                  fetch (if (cp-ok? ri) (cp-git readback (str "fetch" (cp-a) "--quiet" (cp-a) "--no-tags" (cp-a) remote (cp-a) ref)) "refused")
+                  fetch (if (and (cp-ok? ri) (ga-config-safe? readback)) (ga-git readback (str "fetch" (cp-a) "--quiet" (cp-a) "--no-tags" (cp-a) remote (cp-a) ref)) "refused")
                   got (if (cp-ok? fetch) (cp-git readback "rev-parseARG_SEPFETCH_HEAD^{tree}") "refused")
                   check (if (and (cp-ok? got) (= (cp-line (cp-out got)) tree)) (cp-git readback "fsckARG_SEP--fullARG_SEP--strict") "refused")
                   checkout (if (cp-ok? check) (cp-git readback "checkoutARG_SEP--quietARG_SEPFETCH_HEADARG_SEP--ARG_SEPblocksARG_SEPmanifest.json") "refused")
                   verified (and (cp-ok? checkout) (= (cp-cid (cp-read (str readback "/manifest.json"))) (cp-cid manifest))
                                 (ga-verified? (str readback "/blocks") cid author profile policy environment epoch parent task))]
               (if verified (str "archive/stored " cid " " tree " " (if (cp-ok? push) "acknowledged" "unacknowledged"))
-                "archive/readback-unknown-or-conflict"))))))
+                "archive/readback-unknown-or-conflict")))))))
 
 (defn github-checkpoint-archive-main [] :i64
   (cp-say (ga-archive (cp-arg 0) (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6)
