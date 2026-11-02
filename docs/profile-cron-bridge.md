@@ -188,3 +188,18 @@ refused a second request. The fixture replaces profile/CID and response/MTP
 validation with fixed test stubs; the test server's Python is a dated,
 one-time test dependency only. It does not exercise a real model or the full
 resident. See [evidence](evidence/awai150-curl-submission-20261103.json).
+
+An additional native ARM64 fixture executes the actual `pr-step-range` path
+with real systemd/curl and a private Unix-socket test server. Its profile and
+runtime checks, CID and hash, JSON admission, MTP classification, answer and
+response compaction are explicit fixture stubs. In the first case, output and
+next state were written after one request. In the second, the native process
+was killed after the server recorded the request; when the existing unit
+completed, a fresh process reused its response and published output and state
+without a second request. In the third, both the process and its unit were
+stopped before the response: the fresh process returned
+`profile/inference-unavailable-state-retained`, left state unchanged and did
+not send another request. Stopping curl caused the test server's expected
+broken pipe. The [fixture evidence](evidence/awai150-profile-step-20261103.json)
+does not establish real profile authorization, MTP correctness, a full
+resident turn, GitHub storage, power-loss recovery or native-only operation.
