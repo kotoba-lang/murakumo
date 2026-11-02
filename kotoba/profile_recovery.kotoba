@@ -76,11 +76,28 @@
       ;; them as a completed profile step.
       (if (and (>= m 0) (= (cp-str b c "finish_reason") "stop")) (cp-str b m "content") ""))))
 
-(defn- pr-wait [unit :string response :string] :bool
+;; The local server must report the requested model and actual MTP execution.
+;; This is response evidence, not an attestation of the server or its weights;
+;; the host still has to authenticate and qualify the socket peer.
+(defn- pr-mtp-response? [runtime :vector-i64 b :vector-i64] :bool
+  (if (not (json-valid? b)) false
+    (let [s (json-member b 0 "mtplx_stats")
+          enabled (if (>= s 0) (json-member b s "runtime_mtp_enabled") -1)
+          head (if (>= s 0) (json-member b s "draft_head_installed") -1)]
+      (and (>= s 0) (= (cp-str b 0 "model") (cp-str runtime 0 "model"))
+           (= (cp-str b s "generation_mode") "mtp")
+           (>= enabled 0) (= (json-kind b enabled) 5)
+           (>= head 0) (= (json-kind b head) 5)
+           (> (cp-num b s "mtp_forward_calls") 0)))))
+
+(defn- pr-wait [unit :string response :string runtime :vector-i64] :bool
   (loop [i 0]
     (let [state (pr-unit-code unit)]
       (cond (= state 1)
-            (and (cp-exists? response) (not (= (pr-answer (cp-read response)) "")))
+            (and (cp-exists? response)
+                 (let [b (cp-read response)]
+                   (and (not (= (pr-answer b) ""))
+                        (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime b)))))
             (or (= state -1) (> i 900)) false
             :else (let [z (pr-pause)] (if z (recur (+ i 1)) false))))))
 
@@ -137,7 +154,8 @@
           (let [previous (cp-str state 0 "previous") prior-file (str repo "/outputs/" (- next 1) ".json")
                 prior (if (= next 1) (vector-alloc 0) (cp-read prior-file))
                 linked (if (= next 1) (= previous "none")
-                         (and (= previous (cp-cid prior)) (not (= (pr-answer prior) ""))))]
+                         (and (= previous (cp-cid prior)) (not (= (pr-answer prior) ""))
+                              (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime prior))))]
             (if (not linked) "profile/previous-output-mismatch"
               (let [instruction (if growth
                        (str "Read-only AWAI growth steward task " task ", step " next ".\n"
@@ -163,7 +181,7 @@
                     request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
                     saved (cp-write request (cp-bytes body)) status (pr-unit-state unit)
                     submitted (and saved (or (= status "start") (= status "running") (= status "exited") (pr-submit unit request response seconds runtime)))]
-                (if (or (not submitted) (not (pr-wait unit response))) "profile/inference-unavailable-state-retained"
+                (if (or (not submitted) (not (pr-wait unit response runtime))) "profile/inference-unavailable-state-retained"
                   (let [answer (cp-read response) cid (cp-cid answer)
                         outdir (str repo "/outputs") output (str outdir "/" next ".json")
                         newstate (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))

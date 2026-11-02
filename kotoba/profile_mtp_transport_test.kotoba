@@ -1,6 +1,17 @@
 ;; Append after profile_recovery and the native checkpoint dependency closure.
 (ns murakumo.profile-mtp-transport-test
-  (:export [test-profile-mtp-transport test-profile-growth-runtime]))
+  (:export [test-profile-mtp-transport test-profile-growth-runtime test-profile-mtp-response]))
+
+(defn test-profile-mtp-response [] :bool
+  (let [runtime (cp-bytes "{\"model\":\"bonsai\"}")
+        good (cp-bytes "{\"model\":\"bonsai\",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"mtp\",\"mtp_forward_calls\":1,\"runtime_mtp_enabled\":true}}")
+        ar (cp-bytes "{\"model\":\"bonsai\",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"ar\",\"mtp_forward_calls\":1,\"runtime_mtp_enabled\":true}}")
+        disabled (cp-bytes "{\"model\":\"bonsai\",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"mtp\",\"mtp_forward_calls\":1,\"runtime_mtp_enabled\":false}}")
+        wrong-model (cp-bytes "{\"model\":\"other\",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"mtp\",\"mtp_forward_calls\":1,\"runtime_mtp_enabled\":true}}")
+        no-stats (cp-bytes "{\"model\":\"bonsai\"}")]
+    (and (pr-mtp-response? runtime good) (not (pr-mtp-response? runtime ar))
+         (not (pr-mtp-response? runtime disabled)) (not (pr-mtp-response? runtime wrong-model))
+         (not (pr-mtp-response? runtime no-stats)))))
 
 (defn- prt-growth-runtime [meta :vector-i64 role :vector-i64 work :vector-i64 context :vector-i64 tools :string] :vector-i64
   (cp-bytes (str "{\"authorizationFile\":\"/run/user/1000/itonami/header\",\"contextDigest\":\"sha256:" (sha256-hex context)

@@ -37,6 +37,14 @@ the unit arguments or checkpoint. The local and original HTTPS routes use
 distinct request/unit identities so a previous result on one route cannot be
 mistaken for a result on the other.
 
+For this local route, each new and previous response must report the configured
+model, MTP generation, an installed/enabled draft head and at least one MTP
+forward call. Missing or contradictory statistics refuse advancement, even
+when the response contains text. Existing HTTPS checkpoints without those
+statistics therefore need a separately reviewed migration; they are not
+silently admitted as MTP history. Server-reported statistics are evidence of
+the request path, not cryptographic proof of the peer or model artifact.
+
 The path checks do **not** authenticate the socket peer, verify file ownership
 or permissions, prove the model digest, or manage tunnel and service lifetime.
 Before enabling this route, an operator must use private owner-controlled
