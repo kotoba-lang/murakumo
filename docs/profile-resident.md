@@ -45,7 +45,22 @@ qualify the actual model and MTP behavior, and establish bounded memory,
 readiness, restart and failure behavior. A socket file or declared model name
 is not qualification. The local URL and these fields do not grant a profile
 tools, external publication, GitHub writes, or an execution lease. This route
-does not yet load the other Itonami profiles or supply GitHub checkpoints.
+does not qualify the other Itonami profiles or supply GitHub checkpoints.
+
+The local MTP runtime also has an opt-in, model-only
+`awai-growth-steward` lane. The host must pin the profile metadata and SOUL,
+`profile/tasks/first-turn.md`, and an operator-prepared
+`profile/context.md` using the runtime's `profileDigest`, `roleDigest`,
+`workDigest`, and `contextDigest`; the last two must be nonempty and at most
+8 KiB. It must set `profile` to `awai-growth-steward` and `tools` to `none`.
+Both files must be included in the verified checkpoint closure and contain no
+secrets. The snapshot is supplied as source material, not live observations. The
+model can propose a draft only: metadata capability declarations do not
+enable tools, publication, messaging, GitHub writes or scheduling. A pinned
+runtime and a completed response do not prove the model fits the host or that
+the source snapshot is current. The existing replica, lease and retention
+gates remain required. The full profile exceeded the current 16 GiB Mac mini
+experiment's memory guard and this lane has not been deployed.
 
 ## Components and state
 

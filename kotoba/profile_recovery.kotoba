@@ -100,11 +100,37 @@
        (>= (string-index-of (cp-text meta) ":rails [:murakumo]") 0)
        (>= (string-index-of (cp-text meta) ":authorities [\"api.murakumo.cloud\"]") 0)))
 
+;; A separate, host-pinned read-only lane for the AWAI growth steward. The
+;; profile metadata does not grant any of its listed capabilities: this
+;; adapter only asks the model for a draft and never dispatches tool calls.
+;; The host selects and pins both the work order and the bounded source
+;; snapshot; neither is a live observation or an authorization.
+(defn- pr-growth-runtime? [runtime :vector-i64 meta :vector-i64 role :vector-i64 work :vector-i64 context :vector-i64] :bool
+  (and (json-canonical? runtime) (pr-local-mtp? runtime)
+       (= (cp-str runtime 0 "rail") "murakumo") (= (cp-str runtime 0 "tools") "none")
+       (= (cp-str runtime 0 "profile") "awai-growth-steward")
+       (not (= (cp-str runtime 0 "model") ""))
+       (= (str "sha256:" (sha256-hex meta)) (cp-str runtime 0 "profileDigest"))
+       (= (str "sha256:" (sha256-hex role)) (cp-str runtime 0 "roleDigest"))
+       (= (str "sha256:" (sha256-hex work)) (cp-str runtime 0 "workDigest"))
+       (= (str "sha256:" (sha256-hex context)) (cp-str runtime 0 "contextDigest"))
+       (> (vector-count work) 0) (<= (vector-count work) 8192)
+       (> (vector-count context) 0) (<= (vector-count context) 8192)
+       (cp-hex? (cp-str runtime 0 "source") 40)
+       (not (= (cp-str runtime 0 "task") "")) (= (field-problem (cp-str runtime 0 "task")) "enroll/ok")
+       (>= (string-index-of (cp-text meta) ":profile/id \"awai-growth-steward\"") 0)
+       (>= (string-index-of (cp-text meta) ":rails [:murakumo]") 0)
+       (>= (string-index-of (cp-text meta) ":authorities [\"api.murakumo.cloud\"]") 0)))
+
 (defn- pr-step-range [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64 limit :i64 tokens :i64] :string
   (let [dir (str repo "/profile") meta (cp-read (str dir "/itonami.edn")) role (cp-read (str dir "/SOUL.md"))
+        growth (= (cp-str runtime 0 "profile") "awai-growth-steward")
+        work-path (str dir "/tasks/first-turn.md") context-path (str dir "/context.md")
+        work (if (and growth (cp-exists? work-path)) (cp-read work-path) (vector-alloc 0))
+        context (if (and growth (cp-exists? context-path)) (cp-read context-path) (vector-alloc 0))
         state (cp-read (str repo "/state.json")) task (cp-str runtime 0 "task")]
     (cond (or (< seconds 1) (> seconds 840)) "profile/budget-refused"
-          (not (pr-runtime? runtime meta role)) "profile/runtime-refused"
+          (not (or (pr-runtime? runtime meta role) (pr-growth-runtime? runtime meta role work context))) "profile/runtime-refused"
           (or (not (json-canonical? state)) (not (= (cp-num state 0 "next") next)) (< next 1) (> next limit)
               (not (= (cp-str state 0 "task") task))) "profile/state-refused"
           :else
@@ -113,14 +139,19 @@
                 linked (if (= next 1) (= previous "none")
                          (and (= previous (cp-cid prior)) (not (= (pr-answer prior) ""))))]
             (if (not linked) "profile/previous-output-mismatch"
-              (let [instruction (if (= limit 2) (str "Read-only checkpoint recovery task " task ", step " next
+              (let [instruction (if growth
+                       (str "Read-only AWAI growth steward task " task ", step " next ".\n"
+                         (cp-text work) "\n\nBounded source snapshot, not live observations:\n" (cp-text context)
+                         "\nAll tools are denied. Do not change files, publish, merge or contact anyone."
+                         " Do not invent observations or report completion of unperformed work.")
+                       (if (= limit 2) (str "Read-only checkpoint recovery task " task ", step " next
                        ". Continue from the preceding assistant result, if present. Propose one next read-only verification."
                        " Do not call tools, change files, publish, merge or contact anyone. Reply in at most 16 tokens.")
                        (str "Resident accountability-steward proposal turn " next ", task " task
                          ". Follow the profile's propose-only goal and continue from the preceding proposal."
                          " State one concrete next verification and what evidence would decide it."
                          " You have no current external observations; do not invent progress or completion."
-                         " All tools are denied. Do not change files, publish, merge or contact anyone."))
+                         " All tools are denied. Do not change files, publish, merge or contact anyone.")))
                     body (str "{\"chat_template_kwargs\":{\"enable_thinking\":false},\"max_tokens\":" tokens ",\"messages\":["
                       "{\"content\":" (pr-json-quote (str "This invocation is a model-only read-only proposal. All tools are denied.\n" (cp-text role))) ",\"role\":\"system\"},"
                       (if (= next 1) "" (str "{\"content\":" (pr-json-quote (pr-answer prior)) ",\"role\":\"assistant\"},"))

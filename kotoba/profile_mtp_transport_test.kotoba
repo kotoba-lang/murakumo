@@ -1,6 +1,25 @@
 ;; Append after profile_recovery and the native checkpoint dependency closure.
 (ns murakumo.profile-mtp-transport-test
-  (:export [test-profile-mtp-transport]))
+  (:export [test-profile-mtp-transport test-profile-growth-runtime]))
+
+(defn- prt-growth-runtime [meta :vector-i64 role :vector-i64 work :vector-i64 context :vector-i64 tools :string] :vector-i64
+  (cp-bytes (str "{\"authorizationFile\":\"/run/user/1000/itonami/header\",\"contextDigest\":\"sha256:" (sha256-hex context)
+    "\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"model\":\"bonsai\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"sha256:"
+    (sha256-hex meta) "\",\"rail\":\"murakumo\",\"roleDigest\":\"sha256:" (sha256-hex role)
+    "\",\"socket\":\"/run/user/1000/itonami/socket\",\"source\":\"0000000000000000000000000000000000000000\",\"task\":\"test\",\"tools\":" (pr-json-quote tools)
+    ",\"workDigest\":\"sha256:" (sha256-hex work) "\"}")))
+
+(defn test-profile-growth-runtime [] :bool
+  (let [meta (cp-bytes ":profile/id \"awai-growth-steward\" :rails [:murakumo] :authorities [\"api.murakumo.cloud\"]")
+        role (cp-bytes "role") work (cp-bytes "work") context (cp-bytes "context")
+        good (prt-growth-runtime meta role work context "none")
+        tools (prt-growth-runtime meta role work context "enabled")]
+    (and (pr-growth-runtime? good meta role work context)
+         (not (pr-growth-runtime? tools meta role work context))
+         (not (pr-growth-runtime? good (cp-bytes "changed") role work context))
+         (not (pr-growth-runtime? good meta (cp-bytes "changed") work context))
+         (not (pr-growth-runtime? good meta role (cp-bytes "changed") context))
+         (not (pr-growth-runtime? good meta role work (cp-bytes "changed"))))))
 
 (defn test-profile-mtp-transport [] :bool
   (let [ok (cp-bytes "{\"authorizationFile\":\"/run/user/1000/itonami/header\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"socket\":\"/run/user/1000/itonami/socket\"}")
