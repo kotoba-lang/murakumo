@@ -151,12 +151,20 @@
     (loop [i 0 n 0] (if (= i (vector-count b)) n
       (let [c (vector-at b i)] (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -1)))))))
 
+(defn- cp-meta-field [s :string wanted :i64] :string
+  (let [b (cp-bytes s) n (vector-count b)]
+    (loop [i 0 start 0 field 0]
+      (cond (= i n) (if (= field wanted) (string-substring s start i) "")
+            (= (vector-at b i) 32) (if (= field wanted) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ field 1)))
+            :else (recur (+ i 1) start field)))))
+(defn- cp-kind [p :string] :string (cp-meta-field (cp-fs "O" p "") 3))
 (defn- cp-size [p :string] :i64
-  (let [s (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%s" (cp-a) "--" (cp-a) p))]
-    (if (cp-ok? s) (cp-int (cp-line (cp-out s))) -1)))
-(defn- cp-mkdir [p :string] :bool (cp-ok? (cp-spawn (str "/usr/bin/mkdir" (cp-a) "-p" (cp-a) "--" (cp-a) p))))
+  (let [m (cp-fs "O" p "")]
+    (if (= (cp-meta-field m 3) "0") (cp-int (cp-meta-field m 1)) -1)))
+(defn- cp-mkdir [p :string] :bool
+  (or (= (cp-fs "I" p "") "1") (= (cp-kind p) "1")))
 
-;; Inspect each parent itself, without stat -L. Git may have checked out a
+;; Inspect each parent itself, without following it. Git may have checked out a
 ;; symlink pointing elsewhere inside the granted filesystem scope. Neither
 ;; mkdir -p nor a final-component O_NOFOLLOW protects against that parent.
 ;; The caller owns the tree exclusively, as required for capture/materialize.
@@ -165,10 +173,10 @@
     (if (= i (string-length rel)) true
       (if (not (= (string-substring rel i (+ i 1)) "/")) (recur (+ i 1))
         (let [p (str base "/" (string-substring rel 0 i))
-              before (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%F" (cp-a) "--" (cp-a) p))
-              made (if (and create (not (cp-ok? before))) (cp-mkdir p) false)
-              after (if made (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%F" (cp-a) "--" (cp-a) p)) before)]
-          (if (= after "0\ndirectory\n") (recur (+ i 1)) false))))))
+              before (cp-kind p)
+              made (if (and create (= before "")) (cp-mkdir p) false)
+              after (if made (cp-kind p) before)]
+          (if (= after "1") (recur (+ i 1)) false))))))
 (defn- cp-range [p :string off :i64 n :i64] :vector-i64 (cp-read-op p "E" (str off ":" n)))
 (defn- cp-chunk-size [size :i64 i :i64] :i64
   (let [remaining (- size (* i 131072))] (if (< remaining 131072) remaining 131072)))
@@ -313,7 +321,7 @@
                     (if (= i (json-count b us)) true
                       (let [u (json-element b us i) path (str stage "/" (cp-str b u "path"))]
                         (if (and (cp-real-parents? stage (cp-str b u "path") true) (not (cp-exists? path)) (cp-write path (cp-load store (cp-str b u "cid")))
-                                 (cp-ok? (cp-spawn (str "/usr/bin/chmod" (cp-a) (cp-str b u "mode") (cp-a) "--" (cp-a) path))))
+                                 (= (cp-fs "H" path (cp-str b u "mode")) "1"))
                           (recur (+ i 1)) false)))) false)]
             (if (not files) "checkpoint/materialize-failed-partial-retained"
               (let [sync (cp-fs "M" stage "")
