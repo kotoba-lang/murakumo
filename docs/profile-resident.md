@@ -497,3 +497,17 @@ and workload lifecycle controls. The Linux native
 [lock fixture](evidence/awai150-resident-lock-fixture.kotoba) uses stubbed
 resident operations; [its evidence](evidence/awai150-resident-lock-20261103.json)
 does not qualify Mac, real inference, process-tree cleanup or a fleet governor.
+
+### Native archive acknowledgement candidate
+
+`profile-resident archive-native CONFIG WORK REPO GH` invokes the native archive
+candidate under the same local resident lock. `WORK` is a fresh private path;
+the host must provision and reconcile it, the repository, executable,
+credentials, Git configuration and egress. After a matching independent
+readback, the resident rechecks the admitted head and publishes the bounded
+acknowledgement via a synced temporary file and rename. Unknown or failed work
+is not automatically retried, and an existing temporary file is retained.
+This entry point is a draft: the existing cron controller does not call it,
+work-directory retention is not automated, and production use requires the
+full process/credential/governor gates described in
+[native-github-checkpoint-archive.md](native-github-checkpoint-archive.md).
