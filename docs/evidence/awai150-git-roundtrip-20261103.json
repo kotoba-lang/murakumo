@@ -1,0 +1,12 @@
+{
+  "kind": "awai.checkpoint-git-roundtrip-fixture/1",
+  "date": "2026-11-03",
+  "environment": "Disposable Linux ARM64 VM, 1 CPU and 2 GiB RAM; real Git and filesystem",
+  "checkpointSourceSha256": "95fe32556765729e501dc04bcb0d7bdb8cfbefaf30fcd43fa377a361f9d1c0cd",
+  "fixtureSha256": "72c98cd26f44bfcf96ce18be9a9c7befc788b6a9615fd2629b3727f5089da79b",
+  "fixtureElfSha256": "d4dfa1eef7bf16d60b381de5ff41d5d63fc9500f4e5bf5a000e1467ff57405de",
+  "stagedTestCompilerSha256": "1fa2c90b875d9366de6250a7ee74b87bf733bc7e5e98c9e8cc06a9dc76faf66b",
+  "method": "A synthetic local Git repository and bundle were created for the test. The actual extracted checkpoint functions chunked and stored the bundle, captured an untracked executable, reconstructed the bundle, and restored tracked and untracked files to a new tree via real Git and native FS2. The 39 checkpoint functions included in the fixture match current checkpoint source exactly. The restored Git HEAD, file content and executable mode were checked independently.",
+  "negativeControls": "An existing destination was refused. After deliberately corrupting a stored bundle chunk, restoration returned checkpoint/bundle-assembly and did not create the destination or its partial tree.",
+  "limits": "The fixture creates an unsigned minimal envelope and calls internal materialization directly. It does not exercise signature or contract validation, the public checkpoint CLI capture path, GitHub storage/readback, concurrent writers or macOS. The staged compiler is a byte-patched test copy, not a self-built or released compiler."
+}

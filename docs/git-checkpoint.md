@@ -339,3 +339,11 @@ executes the extracted restore control flow with native FS2 on Linux and
 simulates a destination appearing after the existence check. It also tests an
 existing stage and two negative controls. Git and bundle operations are stubbed;
 see the [record](evidence/awai150-materialize-race-20261103.json) for scope.
+
+A separate [Git round-trip fixture](evidence/awai150-git-roundtrip-fixture.kotoba)
+uses real Git and native FS2 to chunk and reconstruct a synthetic bundle,
+restore a tracked file and an untracked executable, and reject a preexisting
+destination and a corrupted bundle chunk. The fixture calls internal functions
+with an unsigned minimal envelope; it does not verify signatures, exercise the
+public capture CLI or contact GitHub. See the
+[evidence record](evidence/awai150-git-roundtrip-20261103.json).
