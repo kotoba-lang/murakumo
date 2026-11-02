@@ -216,7 +216,10 @@ GitHub persistence, a production identity, or a resident inference/lease cycle.
 
 When the trusted host config includes an absolute `archiveAck` path, a
 replica-admitted head must also have a matching, unexpired local GitHub archive
-acknowledgement before the resident starts the next turn. Missing, malformed,
+acknowledgement before the resident starts the next turn. The current
+GitHub-enabled lane is the read-only local-MTP `awai-growth-steward` profile;
+other profiles refuse this mode until they have an independently reviewed
+projection and runtime contract. Missing, malformed,
 mismatched or expired acknowledgement yields `resident/archive-pending`.
 A present but empty, non-string, unsafe or colliding configuration path is
 refused. Omitting `archiveAck` preserves the earlier behavior. The ack path and
@@ -229,7 +232,23 @@ and both current signed retention receipts. The companion
 `scripts/itonami-resident-github-archive.sh RESIDENT_BIN CONFIG CHECKPOINT_BIN WORKROOT OWNER/REPO`
 passes that descriptor to the GitHub archive adapter. After independently
 fetching and verifying the archived checkpoint, it writes an atomic fsynced
-ack for the same root and tree, expiring in 15 minutes. Run the provided
+ack for the same root and tree, expiring in 15 minutes. For this mode the
+host additionally pins `runtimeFile` and its raw CID in `runtime`, together
+with `modelArtifactDigest` and `mtpArtifactDigest`. `runtimeFile` holds the
+local socket and authorization-file paths; it is never the checkpoint
+`environmentFile`. Instead, `environmentFile` must be canonical JSON with
+exactly these 13 fields: `kind` (`itonami.profile-environment-public/1`),
+`profile`, `profileDigest`, `roleDigest`, `workDigest`, `contextDigest`,
+`source`, `task`, `model`, `rail`, `tools`, `modelArtifactDigest`, and
+`mtpArtifactDigest`. Shared fields must match the independently pinned local
+runtime and the two artifact digests must match the host config. The public
+descriptor is checkpointed and archived; runtime paths and credentials are
+not part of it. These declared artifact digests do not prove what a socket
+peer actually loaded. The bundle, profile context and output also need
+explicit data classification before archival; the projection is not a general
+secret scanner.
+
+Run the provided
 `itonami-profile-archive.service.tmpl` and `.timer.tmpl` every five minutes
 on a separately provisioned trusted Linux host. The archive script, native
 binaries, config, task directory, explicit repository and GitHub credentials
@@ -238,6 +257,13 @@ A failure does not refresh the acknowledgement; once it expires the next
 turn remains pending. A valid acknowledgement records a recent readback, not a
 guarantee of future GitHub availability or that an ongoing turn can be
 cancelled. Changing the head makes the prior acknowledgement inapplicable.
+
+An isolated integration test captured a new signed checkpoint with the public
+projection while keeping the local MTP runtime separate, verified two test
+retention receipts, and archived it to the private GitHub repository. The
+GitHub readback contained the 13-field projection without endpoint, socket or
+authorization-file fields. Changed runtime bytes and an added socket field in
+the projection both refused. This test did not start model inference.
 
 An isolated test with the real experimental MTP checkpoint, two distinct
 public test signers and freshly signed retention receipts observed pending
