@@ -210,3 +210,37 @@ full model's post-load optimizations. It uses a single input token and two
 greedy steps rather than a representative prompt or quality benchmark. The
 short-lived direct Tailscale ring lacks application-level peer authentication.
 It is experimental code, not a deployed engine, gateway, scheduler or bot.
+
+## Experimental distributed MTP candidate and verification
+
+The three-Mac 64-layer experiment was extended with the installed MTPLX
+`inject_mtp_support` implementation and the actual `mtp.safetensors` sidecar on
+the final stage. A separate parameter-name coverage check found 31 sidecar
+keys and 31 MTP parameter leaves, with no missing or extra names. This is a
+coverage check, not a complete validation of the weights or quantization.
+The experiment used the shared trunk output head rather than the optional
+MTPLX draft-only output-head optimization.
+
+For each of four short, multi-token prompts, the distributed decoder advanced
+the MTP history cache for every known adjacent prompt pair, produced a draft
+candidate using the last hidden state and the primary greedy token, and ran
+the target decoder serially on that primary token to verify the candidate.
+All four candidates matched the target. For `Hello, I am`, a separate
+single-Mac layer-streaming calculation produced the same primary, candidate,
+verified target, and SHA-256 of both target logits and the draft logits. Both
+paths used the same layer-loading and MTPLX MTP implementations. Separately,
+eight *single-token* prompts without prior history produced zero accepted
+candidates; `Hello`'s candidate and target logits also matched the
+single-Mac reference. These twelve short cases exercise both acceptance and
+rejection, but are not a representative acceptance or performance benchmark.
+
+This serial check does not perform batched speculative verification or show a
+speedup. It is an experimental text-only program, not a running MTP server,
+full MTPLX post-load path, production gateway, scheduler or bot. It does not
+validate longer contexts, MTP rollback, streaming generation, independent
+production-loader parity, failure recovery or ten-host scheduling. As in the
+prior pipeline, the temporary direct Tailscale ring had no application-level
+peer authentication. Two contextual pipeline runs had sampled pressure-free
+minima of 75/73/69%; the reference minimum was 84%, with the same 60% guard.
+These samples are neither peak RAM measurements nor proof that other work was
+unaffected. [Evidence](evidence/awai149-distributed-mtp-20261103.json).
