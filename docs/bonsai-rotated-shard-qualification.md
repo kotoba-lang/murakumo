@@ -99,3 +99,27 @@ segment boundaries, inference quality, the pinned Exo runtime, failure
 handling, or secure production communications. As in the earlier experiment,
 the short-lived direct Tailscale ring had no application-level peer
 authentication; only synthetic activations were used.
+
+## Three physical Macs and the MTPLX layer
+
+The same real value-projection tensors were exercised on three physical Macs
+using MLX 0.32.2 and the installed MTPLX 2.12.2. The fixture instantiated
+MTPLX's actual `HadamardQuantizedLinear`, loaded the four real tensors and
+compared its output with the unpartitioned reference: the maximum difference
+was zero on each rank. The test did not run model post-load wiring or enable
+its planned ternary fast path. The three ranks split the five input blocks as
+2/2/1 and split 1024 output rows as 342/341/341. With one deterministic
+synthetic input, each output partition matched its reference exactly; after
+float16 all-sum, maximum absolute difference was 0.00390625. Each host
+reported the same tensor fingerprint.
+
+This was a single layer, not full model or MTP inference. For reference
+comparison each host loaded the entire selected layer before slicing, so the
+experiment does not measure or achieve production memory savings. Its
+short-lived direct Tailscale ring had no application-level peer authentication.
+The [diagnostic](evidence/awai149-three-mac-real-layer-probe.py) is a probe,
+not a runtime implementation; [evidence](evidence/awai149-three-mac-real-layer-20261103.json)
+records the precise scope. A read-only check found the specific prior test
+venv and model paths on three of the ten surveyed minis; their absence at
+those paths on the other seven is not proof that those machines lack other
+usable installations.
