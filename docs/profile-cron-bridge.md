@@ -231,6 +231,16 @@ and [repository fixture](evidence/awai150-repo-sync-fixture.kotoba). These
 mocked cases do not prove filesystem power-loss behavior, a complete resident,
 or that the unqualified systemd/curl path is suitable for deployment.
 
+A separate nonsecret GitHub transport observation used two independent
+clones of the new private bot-state repository. Two distinct commits shared a
+base; the first push created a temporary ref and the stale second push was
+rejected with `fetch first`. A separate bare clone fetched the ref and checked
+the first commit and file bytes. The observer removed its unchanged test ref
+and a later `ls-remote` confirmed its absence. This does not exercise the bot,
+native GitHub writer, concurrent lease/fencing or ambiguous acknowledgement;
+Git ref conflict handling alone does not fence an authorized stale writer.
+See [evidence](evidence/awai150-github-cas-live-20261103.json).
+
 A further ARM64 static fixture exercised the actual `pr-save-output` and
 native wire-35 file operations on XFS in a disposable VM. New and matching
 files succeeded, a mismatching file was preserved and refused, and an
