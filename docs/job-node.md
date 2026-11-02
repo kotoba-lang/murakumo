@@ -28,16 +28,20 @@ its acceptance items are covered here:
      names this job and slot, has the expected epoch and revision, names this
      node, and is still within its lease deadline. A different holder stops
      (`held-by`); absent, stale or mismatched values refuse dispatch.
-  5. The holder runs the cell with `cell-execute`: the release verdict
+  5. The holder atomically creates and fsyncs a per-job attempt marker in its
+     private host-provisioned directory, then rechecks the lease deadline.
+     Existing or uncertain markers stop and require reconciliation.
+  6. The holder runs the cell with `cell-execute`: the release verdict
      again, the image layout, and podman with a fixed argv
      ([cell run](cell-run.md)).
-  6. It signs the agent-step receipt with the lease epoch
+  7. It signs the agent-step receipt with the lease epoch
      ([agent step](agent-step.md)).
 - **`verify`, on anyone:** it learns the chosen lease with `lease-round`, maps
   the holder to its did through the trust, and judges a node's receipt with
   `receipt-verdict`.
-- **The fleet token.** `run` (after its optional input file, argument 16)
-  and `verify` take an optional fleet token file as their last argument.
+- **The fleet token.** `run` takes an input file or empty argument at 16,
+  a fleet token file or empty argument at 17, and the required private attempt
+  directory at 18. `verify` takes an optional fleet token file.
   With it, their lease rounds carry the token's macs
   ([lease node, Fleet token](lease-node.md#fleet-token)). The runs below use
   none.
@@ -52,6 +56,30 @@ Three refactors make the composition possible:
 
 The agent-step, lease-node and cell-run gates were all rerun and give the
 same results.
+
+The host must provision one stable 0700 attempt root on a durable local
+filesystem, with trusted private ancestors and exclusive ownership. All local
+entry points for the same job must use that exact root, including after
+restart. A live host must supply `clock`, not a caller-selected numeric test
+time. The root is a host policy input, never job input. A successful atomic
+`mkdir` plus fsync of both the marker and parent precedes dispatch; no automatic
+path removes the marker. A preexisting marker, failed mkdir, or uncertain fsync
+does not authorize retry. A failed start therefore remains UNKNOWN until a
+separately authorized reconciliation. Disk-full and unbounded marker retention
+also need operator handling; do not silently evict deduplication history.
+
+In an isolated x86_64 Linux test, 20 simultaneous native attempts for the same
+ID produced one marker and 19 refusals. A missing fsync capability after mkdir
+left the marker and a subsequent process refused to retry. With three real
+authenticated loopback voters and a fixed clock, the first matching job reached
+a cell stub; a second process for that job stopped at the persisted marker.
+A 0755 root was refused. Voters shared one host, admission and cell execution
+were stubbed, and a real reboot or power-loss test was not performed.
+
+This guards repeated starts on one correctly configured host. It does not make
+different roots or separate hosts share a claim, terminate an old process after
+lease expiry, fence external effects, or implement outcome reconciliation. The
+distributed authority and effect sink still need their own fencing protocol.
 
 AWAI-147 adds a dispatch guard for the adopted lease: a live, canonical value
 must name this exact job, node, slot, epoch and revision. The old `rogue`
@@ -128,9 +156,10 @@ done
 sleep 0.3
 node() {  # name key fd admitted t mode
   IMAGE=job; [ "$6" = rogue ] && IMAGE=job-rogue
+  mkdir -m 700 "$G/$TAG-$1-attempts"
   env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-    KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
-    $G/$IMAGE.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N 2 $G/release.json $G/layout-cell $PORTS $5 $6 > $G/$TAG-$1.out 2>&1
+    KEXE_CAP_RESOURCES_20=/usr/bin/podman:/usr/bin/stat:/usr/bin/mkdir KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
+    $G/$IMAGE.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N 2 $G/release.json $G/layout-cell $PORTS $5 $6 '' '' "$G/$TAG-$1-attempts" > $G/$TAG-$1.out 2>&1
 }
 rm -f $G/$TAG-b70.out $G/$TAG-k16.out
 node b70 node.key site-a $DA 100 follow &
@@ -261,9 +290,10 @@ for v in 1 2 3; do
 done
 sleep 0.3
 node() {  # name key fd admitted allow t
+  mkdir -m 700 "$G/$TAG-$1-attempts"
   env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-    KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
-    $G/$IMG.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N $5 $G/release.json $G/layout-cell $PORTS $6 follow > $G/$TAG-$1.out 2>&1
+    KEXE_CAP_RESOURCES_20=/usr/bin/podman:/usr/bin/stat:/usr/bin/mkdir KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
+    $G/$IMG.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N $5 $G/release.json $G/layout-cell $PORTS $6 follow '' '' "$G/$TAG-$1-attempts" > $G/$TAG-$1.out 2>&1
 }
 node k16 k16.key site-b $DK 1 101   # k16's host grants the wasm class only
 node b70 node.key site-a $DA 2 102
@@ -378,9 +408,10 @@ for v in 1 2 3; do
 done
 sleep 0.3
 run() {  # tag input-file t
+  mkdir -m 700 "$G/turn-$1-attempts"
   env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-    KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
-    $G/job-2.elf run $R $IN $PO murakumo b70 $G/node.key site-a $DA $N 2 $G/release-bot.json $G/layout-bot $PORTS $3 follow $2 \
+    KEXE_CAP_RESOURCES_20=/usr/bin/podman:/usr/bin/stat:/usr/bin/mkdir KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
+    $G/job-2.elf run $R $IN $PO murakumo b70 $G/node.key site-a $DA $N 2 $G/release-bot.json $G/layout-bot $PORTS $3 follow $2 '' "$G/turn-$1-attempts" \
     > $G/turn-$1.out 2>&1
   echo "$1: $(grep -E '^(job input/|lease |held-by |verdict |layout )' $G/turn-$1.out | tr '\n' ' ')$(grep -q '^receipt ' $G/turn-$1.out && echo '| receipt')"
 }
