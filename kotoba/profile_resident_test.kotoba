@@ -45,18 +45,22 @@
   (let [d (cpt-profile) source "0000000000000000000000000000000000000000"
         cfg (cp-bytes (str "{\"modelArtifactDigest\":\"" d "\",\"mtpArtifactDigest\":\"" d "\",\"profile\":\"" d "\",\"task\":\"drill\"}"))
         runtime (cp-bytes (str "{\"authorizationFile\":\"/tmp/header\",\"contextDigest\":\"" d
-          "\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"model\":\"bonsai\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"" d
+          "\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"maxTokens\":360,\"model\":\"bonsai\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"" d
           "\",\"rail\":\"murakumo\",\"roleDigest\":\"" d "\",\"socket\":\"/tmp/socket\",\"source\":\"" source
           "\",\"task\":\"drill\",\"tools\":\"none\",\"workDigest\":\"" d "\"}"))
-        env-text (str "{\"contextDigest\":\"" d "\",\"kind\":\"itonami.profile-environment-public/1\",\"model\":\"bonsai\",\"modelArtifactDigest\":\"" d
+        env-text (str "{\"contextDigest\":\"" d "\",\"kind\":\"itonami.profile-environment-public/2\",\"maxTokens\":360,\"model\":\"bonsai\",\"modelArtifactDigest\":\"" d
           "\",\"mtpArtifactDigest\":\"" d "\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"" d
           "\",\"rail\":\"murakumo\",\"roleDigest\":\"" d "\",\"source\":\"" source
           "\",\"task\":\"drill\",\"tools\":\"none\",\"workDigest\":\"" d "\"}")
         env (cp-bytes env-text)
+        cap-needle "\"maxTokens\":360" cap-pos (string-index-of env-text cap-needle)
+        wrong-cap (cp-bytes (str (string-substring env-text 0 cap-pos) "\"maxTokens\":361"
+                                 (string-substring env-text (+ cap-pos (string-length cap-needle)) (string-length env-text))))
         split (string-index-of env-text ",\"source\":")
         extra (cp-bytes (str (string-substring env-text 0 split) ",\"socket\":\"/tmp/socket\"" (string-substring env-text split (string-length env-text))))
         wrong-cfg (cp-bytes (str "{\"modelArtifactDigest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"mtpArtifactDigest\":\"" d "\",\"profile\":\"" d "\",\"task\":\"drill\"}"))]
     (and (rt-public-environment? cfg runtime env)
          (not (rt-public-environment? cfg runtime runtime))
          (not (rt-public-environment? cfg runtime extra))
+         (not (rt-public-environment? cfg runtime wrong-cap))
          (not (rt-public-environment? wrong-cfg runtime env)))))

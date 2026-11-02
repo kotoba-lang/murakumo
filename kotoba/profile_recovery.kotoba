@@ -148,6 +148,8 @@
 ;; snapshot; neither is a live observation or an authorization.
 (defn- pr-growth-runtime? [runtime :vector-i64 meta :vector-i64 role :vector-i64 work :vector-i64 context :vector-i64] :bool
   (and (json-canonical? runtime) (pr-local-mtp? runtime)
+       (let [i (json-member runtime 0 "maxTokens")]
+         (or (< i 0) (and (json-int-ok? runtime i) (>= (json-int runtime i) 64) (<= (json-int runtime i) 768))))
        (= (cp-str runtime 0 "rail") "murakumo") (= (cp-str runtime 0 "tools") "none")
        (= (cp-str runtime 0 "profile") "awai-growth-steward")
        (not (= (cp-str runtime 0 "model") ""))
@@ -224,7 +226,8 @@
                       (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))
 
 (defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
-  (if (= (cp-str runtime 0 "profile") "awai-growth-steward") 768
+  (if (= (cp-str runtime 0 "profile") "awai-growth-steward")
+    (let [limit (cp-num runtime 0 "maxTokens")] (if (and (>= limit 64) (<= limit 768)) limit 768))
     (if resident 256 32)))
 
 (defn- pr-step-bounded [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string

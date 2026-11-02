@@ -76,9 +76,11 @@ secrets. The snapshot is supplied as source material, not live observations. The
 model can propose a draft only: metadata capability declarations do not
 enable tools, publication, messaging, GitHub writes or scheduling. A pinned
 runtime and a completed response do not prove the model fits the host or that
-the source snapshot is current. The growth lane has a 768-token completion
-limit and requests a concise six-role handoff. The host must admit sufficient
-context and memory for the full prompt plus that bound. The existing replica, lease and retention
+the source snapshot is current. The growth lane requests a concise six-role
+handoff and defaults to a 768-token completion limit. An independently pinned
+local runtime may set `maxTokens` from 64 to 768. The host must admit sufficient
+context and memory for the full prompt plus that bound. The existing replica,
+lease and retention
 gates remain required. A 16 GiB Mac mini operator experiment generated a
 six-role draft with the full SOUL, work order and source snapshot using the
 sustained profile and a 128-block KV setting; the resident, API response
@@ -237,11 +239,13 @@ host additionally pins `runtimeFile` and its raw CID in `runtime`, together
 with `modelArtifactDigest` and `mtpArtifactDigest`. `runtimeFile` holds the
 local socket and authorization-file paths; it is never the checkpoint
 `environmentFile`. Instead, `environmentFile` must be canonical JSON with
-exactly these 13 fields: `kind` (`itonami.profile-environment-public/1`),
-`profile`, `profileDigest`, `roleDigest`, `workDigest`, `contextDigest`,
+exactly these 14 fields: `kind` (`itonami.profile-environment-public/2`),
+`maxTokens` (an integer from 64 to 768), `profile`, `profileDigest`, `roleDigest`, `workDigest`, `contextDigest`,
 `source`, `task`, `model`, `rail`, `tools`, `modelArtifactDigest`, and
 `mtpArtifactDigest`. Shared fields must match the independently pinned local
-runtime and the two artifact digests must match the host config. The public
+runtime, including the same `maxTokens`, and the two artifact digests must match
+the host config. The earlier 13-field `/1` experimental projection requires a
+new signed checkpoint; it is not silently accepted as `/2`. The public
 descriptor is checkpointed and archived; runtime paths and credentials are
 not part of it. These declared artifact digests do not prove what a socket
 peer actually loaded. The bundle, profile context and output also need
@@ -264,6 +268,24 @@ retention receipts, and archived it to the private GitHub repository. The
 GitHub readback contained the 13-field projection without endpoint, socket or
 authorization-file fields. Changed runtime bytes and an added socket field in
 the projection both refused. This test did not start model inference.
+
+A later integrated resident attempt restored that checkpoint and started the
+next local-MTP proposal. With a 3,072-token context and a 768-token completion
+limit, the Mac mini memory-pressure monitor stopped the model at 26% free
+(the configured stop threshold was 27%); the resident retained its input head.
+A separate 2,048-context diagnostic using the previous proposal as input
+reached MTP but exhausted a 160-token output limit and was refused as
+incomplete. It bottomed at 27% free. See
+[capacity evidence](evidence/awai147-resident-mtp-memory-20261103.json).
+A compacted operator-prepared work order and snapshot retained the original
+SOUL and preceding proposal; a direct 2,048-context diagnostic used 1,673
+prompt tokens and completed in 278 of a 360-token cap, reporting six role IDs,
+121 MTP forwards and 99 accepted drafts. Its minimum observed free pressure
+was 28%. The host can now pin `maxTokens` for this profile, but this diagnostic
+was not a resident turn. These measurements do not establish a safe production
+admission limit or justify accepting truncated proposals. The earlier resident
+binary also lacked the later interrupted-output retry fix; the combined native
+gate was subsequently rebuilt using the exact current source.
 
 An isolated test with the real experimental MTP checkpoint, two distinct
 public test signers and freshly signed retention receipts observed pending

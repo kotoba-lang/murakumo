@@ -75,8 +75,8 @@
 ;; the runtime. Socket, authorizationFile and endpoint remain host-local.
 ;; Pins describe operator-selected artifacts; they do not attest the peer.
 (defn- rt-public-environment? [cfg :vector-i64 runtime :vector-i64 env :vector-i64] :bool
-  (and (json-canonical? env) (= (json-kind env 0) 1) (= (json-count env 0) 13)
-       (= (cp-str env 0 "kind") "itonami.profile-environment-public/1")
+  (and (json-canonical? env) (= (json-kind env 0) 1) (= (json-count env 0) 14)
+       (= (cp-str env 0 "kind") "itonami.profile-environment-public/2")
        (json-canonical? runtime) (pr-local-mtp? runtime) (= (cp-str runtime 0 "profile") "awai-growth-steward")
        (= (cp-str env 0 "profile") (cp-str runtime 0 "profile"))
        (= (digest-problem (cp-str env 0 "profileDigest")) "oci/ok")
@@ -86,6 +86,8 @@
        (= (cp-str env 0 "workDigest") (cp-str runtime 0 "workDigest"))
        (= (cp-str env 0 "contextDigest") (cp-str runtime 0 "contextDigest"))
        (= (cp-str env 0 "source") (cp-str runtime 0 "source")) (cp-hex? (cp-str env 0 "source") 40)
+       (>= (cp-num env 0 "maxTokens") 64) (<= (cp-num env 0 "maxTokens") 768)
+       (= (cp-num env 0 "maxTokens") (cp-num runtime 0 "maxTokens"))
        (= (cp-str env 0 "model") (cp-str runtime 0 "model")) (not (= (cp-str env 0 "model") ""))
        (= (field-problem (cp-str env 0 "model")) "enroll/ok")
        (= (cp-str env 0 "task") (cp-str cfg 0 "task")) (= (cp-str env 0 "task") (cp-str runtime 0 "task"))
