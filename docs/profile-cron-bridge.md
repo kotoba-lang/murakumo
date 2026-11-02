@@ -45,3 +45,23 @@ An earlier separate resident integration did perform a Bonsai MTP turn and a
 GitHub restore, but used a different setup. The new cron-to-MTP path, real
 periodic activation, independent multi-host fencing, physical resource
 reservation and the ten-Mac production fleet remain unqualified.
+
+## Retention renewal before a cron dispatch
+
+The controller now invokes `resident refresh CONFIG` before archiving a due
+slot. This operation does not infer or consume the cron request. It verifies
+the current head, pinned checkpoint closure, pinned runtime and the existing
+pair of retention signatures even if their deadline has expired. An intact
+head whose retention expires within 15 minutes is re-replicated and published
+with fresh retention receipts; otherwise it is left unchanged. A missing,
+invalid or unverifiable head is refused. The controller requires an exact
+successful refresh result before archive, request installation or a dispatch
+marker. All resident writers still require host-level serialization.
+
+The macOS-host controller sequencing test uses test doubles and substitutes
+BSD `stat`; it checks that an invalid head stops before archive or bridge and
+that ready and refreshed cases proceed. An Amu macOS compiled source-unity
+test checked the decision boundaries; its bypass mutant returned `1` while the
+original returned `0`. This is not the repository's required Linux static
+native CI gate, a live expired-retention renewal, real GitHub storage, a crash
+or a model inference. No periodic service has been installed.

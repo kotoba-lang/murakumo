@@ -30,6 +30,11 @@ set -- $header
 previous=$2; slot=$3; job=$4
 for n in "$previous" "$slot"; do printf '%s\n' "$n" | LC_ALL=C grep -Eq '^[0-9]+$' || fail 'cron-resident/plan-invalid'; done
 printf '%s\n' "$job" | LC_ALL=C grep -Eq '^[0-9a-f]{64}$' || fail 'cron-resident/plan-invalid'
+# Renew an intact but expiring retention pair without invoking inference.
+# A corrupt or unverifiable head remains refused; never create a dispatch
+# marker until retention and the archive have both been confirmed.
+refresh=$("$resident" refresh "$config") || fail 'cron-resident/retention-pending'
+case "$refresh" in resident/retention-ready|resident/replicas-refreshed) ;; *) fail 'cron-resident/retention-pending';; esac
 # Refresh the archive of the current admitted head before checking completion
 # or installing a request. This is an explicit pinned host operation.
 archive=$("$archiver" "$resident" "$config" "$checkpoint" "$workroot" "$repo") || fail 'cron-resident/archive-pending'
