@@ -297,6 +297,18 @@ the resident lease, automatic checkpoint replication, restart, GitHub state
 adapter or other profiles. The manually recorded private GitHub draft is not
 an autonomous checkpoint, and the generated claims require verification.
 
+The resulting real profile output and state were then captured and restored by
+the native checkpoint executable. Repeating step 1 was refused because state
+had advanced; changing the previous output made step 2 refuse before dispatch.
+For a reviewable GitHub export, a second checkpoint used a sanitized,
+non-runnable environment descriptor without socket or credential paths. Its
+eight CID blocks and verification manifest were manually committed to a private
+experimental branch, fetched from an immutable GitHub commit, and restored by
+the native verifier into a fresh test directory. The restored profile, context,
+state and output matched the original bytes. The signer was a public test key;
+this export is not an accepted production head, an automated GitHub adapter, or
+a substitute for fresh runtime provisioning and lease admission.
+
 The per-epoch quorum and operator-pinned local head do not establish a global
 accepted head, Byzantine consensus, production Cell membership, delegated
 write authority, OCI job dispatch or a chain-anchored recovery receipt. Those
