@@ -67,8 +67,13 @@
 (defn- ln-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
 (defn- ln-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
 
-(defn- ln-exists? [path :string] :bool (= (typed-cap-call 35 :string :string (string-concat path "EXISTS_SEP")) "1"))
-(defn- ln-load [path :string] :string (if (ln-exists? path) (typed-cap-call 35 :string :string path) "0 - 0 - -"))
+(defn- ln-frame [op :string path :string tail :string] :string (str "\u0000FS2\u0000" op path "\u0000" tail))
+(defn- ln-fs [op :string path :string tail :string] :string
+  (let [r (typed-cap-call :fs/app-data :string :string (ln-frame op path tail))]
+    (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
+      (string-substring r 5 (string-length r)) "")))
+(defn- ln-exists? [path :string] :bool (= (ln-fs "D" path "") "1"))
+(defn- ln-load [path :string] :string (if (ln-exists? path) (ln-fs "A" path "") "0 - 0 - -"))
 ;; the parent directory of path ("/" for a top-level file)
 (defn- ln-dirname [path :string] :string
   (let [b (ln-bytes path) k (loop [i (- (vector-count b) 1)] (cond (< i 0) -1 (= (vector-at b i) 47) i :else (recur (- i 1))))]
@@ -78,10 +83,10 @@
 ;; answered 1, else 0
 (defn- ln-store [path :string text :string] :i64
   (let [tmp (string-concat path ".tmp")
-        w (typed-cap-call 35 :string :string (str tmp "WRITE_SEP" text))
-        f (typed-cap-call 35 :string :string (string-concat tmp "FSYNC_SEP"))
-        r (if (= f "1") (typed-cap-call 35 :string :string (str tmp "RENAME_SEP" path)) "0")
-        d (if (= r "1") (typed-cap-call 35 :string :string (string-concat (ln-dirname path) "FSYNC_SEP")) "0")]
+        w (ln-fs "B" tmp text)
+        f (if (and (not (= text "")) (= w text)) (ln-fs "M" tmp "") "0")
+        r (if (= f "1") (ln-fs "L" tmp path) "0")
+        d (if (= r "1") (ln-fs "M" (ln-dirname path) "") "0")]
     (if (= d "1") 1 0)))
 ;; now in ms: a decimal, or clock for wire 7's wall clock (amu #1518)
 (defn- ln-now [s :string] :i64 (if (= s "clock") (ln-int (typed-cap-call 7 :string :string "wall")) (ln-int s)))
@@ -124,7 +129,7 @@
 ;; file or the token is shorter than 32 bytes
 (defn- ln-token [path :string] :string
   (if (or (= path "") (not (ln-exists? path))) ""
-    (let [t (typed-cap-call 35 :string :string path) b (ln-bytes t) n (vector-count b)
+    (let [t (ln-fs "A" path "") b (ln-bytes t) n (vector-count b)
           i (loop [i 0] (if (and (< i n) (ln-space? (vector-at b i))) (recur (+ i 1)) i))
           j (loop [j n] (if (and (> j i) (ln-space? (vector-at b (- j 1)))) (recur (- j 1)) j))]
       (if (< (- j i) 32) "" (string-substring t i j)))))
@@ -222,7 +227,10 @@
               0)))))))
 
 (defn- ln-load-doc [path :string] :vector-i64
-  (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 (ln-bytes path)))))
+  (let [r (typed-cap-call :fs/app-data :string :bytes (ln-frame "A" path "")) n (bytes-count r)]
+    (if (and (>= n 5) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
+             (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))
+      (vector-i64-from-bytes (bytes-slice r 5 n)) (vector-alloc 0))))
 
 ;; does the topology file still hold the bytes last seen (or is it gone)?
 (defn- ln-same-file? [path :string seen :vector-i64] :bool

@@ -7,8 +7,8 @@
 (defn- rt-now [] :i64 (ln-now "clock"))
 (defn- rt-save [path :string b :vector-i64] :bool
   (and (cp-write (str path ".tmp") b)
-    (= (cp-fs (str path ".tmp" (cp-sep "RENAME") path)) "1")
-    (= (cp-fs (str (cp-parent-dir path) (cp-sep "FSYNC"))) "1")))
+    (= (cp-fs "L" (str path ".tmp") path) "1")
+    (= (cp-fs "M" (cp-parent-dir path) "") "1")))
 
 (defn- rt-status [cfg :vector-i64 phase :string] :i64
   (let [b (cp-bytes (str "{\"at\":" (rt-now) ",\"phase\":\"" phase "\"}"))
