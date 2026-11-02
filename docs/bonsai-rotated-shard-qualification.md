@@ -177,3 +177,36 @@ explicitly tolerates unused MTP tensors; a successful generic pipeline load
 alone therefore cannot establish the requested MTP execution. Full-model
 state, MTP verification, authenticated transport and physical reservations
 remain separate requirements.
+
+## Full decoder over three Macs: two greedy tokens
+
+An experimental text-only pipeline assigned all 64 real decoder layers to
+three physical Macs in ranges `[0,21)`, `[21,42)`, `[42,64)`. Each stage
+loaded its own layers from the local packed checkpoint; rank 0 loaded only the
+embedding row for each input token, and rank 2 loaded the output projection
+and final normalization. The workers kept their own layer caches between two
+single-token steps. With input token 9419 (`Hello`), greedy decoding produced
+token IDs 11 and 353 (`Hello, I`). Both output logits arrays had the same
+SHA-256 as a separate single-Mac calculation that streamed the 64 layers from
+disk for each token with independent caches. That reference used the same
+layer-loading and mathematical implementation, so it tests partition and
+transport consistency, not equivalence to every production model path.
+
+The three stages requested 2,284,519,424 / 2,284,519,424 / 2,389,452,800
+bytes of layer tensor arrays; rank 2 also requested 357,601,280 bytes for the
+head. These counts exclude allocation, caches, the reference, OS page cache
+and temporary copies; they are not measured peak memory. An MLX 4 GiB
+per-process limit and a watchdog stopping below 60% reported free pressure
+were applied. Across two pipeline runs the sampled host minima were 89%, 87%
+and 72%; the streaming reference used a 2 GiB MLX limit and had a sampled
+minimum of 88%. Sampling cannot establish the lowest instantaneous value or
+absence of impact on other work. Processes and listeners were stopped after the
+runs. [Pipeline probe](evidence/awai149-three-mac-full-decoder-probe.py),
+[streaming reference](evidence/awai149-full-decoder-stream-reference.py),
+and [evidence](evidence/awai149-full-decoder-pipeline-20261103.json).
+
+This is not an MTP run: it excludes the draft head, MTP verification and the
+full model's post-load optimizations. It uses a single input token and two
+greedy steps rather than a representative prompt or quality benchmark. The
+short-lived direct Tailscale ring lacks application-level peer authentication.
+It is experimental code, not a deployed engine, gateway, scheduler or bot.
