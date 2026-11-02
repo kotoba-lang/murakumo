@@ -24,7 +24,10 @@ its acceptance items are covered here:
      promise preempts it. Its own value is
      `lease-text(node, job id, slot 0, epoch 1, now + ttl)`, and the chosen
      value names the holder.
-  4. A node that does not hold the lease stops (`held-by`).
+  4. Before starting the cell, the node checks the chosen value is canonical,
+     names this job and slot, has the expected epoch and revision, names this
+     node, and is still within its lease deadline. A different holder stops
+     (`held-by`); absent, stale or mismatched values refuse dispatch.
   5. The holder runs the cell with `cell-execute`: the release verdict
      again, the image layout, and podman with a fixed argv
      ([cell run](cell-run.md)).
@@ -50,6 +53,17 @@ Three refactors make the composition possible:
 The agent-step, lease-node and cell-run gates were all rerun and give the
 same results.
 
+AWAI-147 adds a dispatch guard for the adopted lease: a live, canonical value
+must name this exact job, node, slot, epoch and revision. The old `rogue`
+argument cannot bypass it. The native `test-job-dispatch-lease` gate covers
+wrong holders/jobs, expiry, invalid or excessive deadlines and malformed
+values. A separate `jn-run` test used stubs for admission, the lease round and
+the cell: a non-holder with the legacy `rogue` argument did not reach the
+stubbed cell, while a guard-removal mutant did. These tests do not demonstrate
+a live quorum, nor do they establish effect-boundary fencing after dispatch.
+The 2026-10-23 transcript below remains historical; its rogue path is now a
+separate test-only mutant and has not been rerun as part of this change.
+
 ## Reproduce
 
 First run [cell run](cell-run.md)'s main block, which writes the release,
@@ -71,12 +85,15 @@ pin() { git -C "$K/$1" show "$2:$3" | sed '1,/\]))$/d'; }
   for f in fleet_agent_step fleet_intent_core fleet_topology_verify fleet_lease_core fleet_lease_node fleet_job_node; do sed '1,/\]))$/d' kotoba/$f.kotoba; done
   echo '(defn main [] :i64 (if (= (typed-cap-call 38 :string :string "0") "voter") (lease-node-main) (job-node-main)))'
 } > "$G/job.kotoba"
+# Negative controls only; never deploy either mutant. The old `rogue`
+# argument no longer disables the production job node's dispatch guard.
+sed 's/(jn-lease-problem chosen node jid check-now)/(if (= (jn-arg 15) "rogue") "job\/lease-ok" (jn-lease-problem chosen node jid check-now))/' "$G/job.kotoba" > "$G/job-rogue.kotoba"
 # a verifier without the fence: no holder or epoch check
 sed -e 's/(not (= did holder-did)) "job\/not-the-holder"/false "job\/not-the-holder"/' \
     -e 's/(not (= epoch holder-epoch)) "job\/stale-epoch"/false "job\/stale-epoch"/' "$G/job.kotoba" > "$G/nofence.kotoba"
 podman run --rm --pull never --platform linux/arm64 --network none \
   -e KEXE_CAP_RESOURCES_35=/gate -v "$G:/gate" -w /gate docker.io/library/python:3.12-alpine sh -c '
-    for c in job nofence; do
+    for c in job job-rogue nofence; do
       rm -f /gate/$c.elf
       ./root.elf compile /gate/$c.kotoba --target aarch64-linux --output /gate/$c.elf --format static >/dev/null || exit 1
       chmod +x /gate/$c.elf
@@ -100,9 +117,10 @@ for v in 1 2 3; do
 done
 sleep 0.3
 node() {  # name key fd admitted t mode
+  IMAGE=job; [ "$6" = rogue ] && IMAGE=job-rogue
   env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
     KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
-    $G/job.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N 2 $G/release.json $G/layout-cell $PORTS $5 $6 > $G/$TAG-$1.out 2>&1
+    $G/$IMAGE.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N 2 $G/release.json $G/layout-cell $PORTS $5 $6 > $G/$TAG-$1.out 2>&1
 }
 rm -f $G/$TAG-b70.out $G/$TAG-k16.out
 node b70 node.key site-a $DA 100 follow &
@@ -155,8 +173,9 @@ nofence verifier, k16's receipt: holder b70 verdict job/confirmed
 - **honest.** b70 and k16 both go for the job's lease. k16 starts once
   b70's round is over, so its round adopts b70's chosen value. b70 runs the
   cell and signs. k16 stops, and nothing of it runs.
-- **rogue.** k16 runs the cell anyway and signs a receipt. The verifier
-  confirms only b70's, so the job is confirmed once although it ran twice.
+- **rogue.** The separate test-only mutant makes k16 run the cell anyway and
+  sign a receipt. The verifier confirms only b70's, so the job is confirmed
+  once although it ran twice. The unmodified node does not offer this bypass.
 - **verify-again.** The voters start again from their state files. The
   verifier still learns b70, and a verifier without the fence confirms both
   receipts.
