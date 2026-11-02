@@ -301,6 +301,18 @@ one host; it does not qualify independent failure domains or continuous
 operation. The second host verified only cold restoration. No inference service,
 timer or production identity was left enabled.
 
+A separate [multi-host replication and quorum drill](evidence/awai147-dist-quorum-replication-20261103.json)
+used three Linux voter hosts and two host-local keys generated independently.
+The remote replica verified and restored the checkpoint and returned its block
+after a peer restart. The lease quorum continued with one voter stopped,
+refused with two stopped, and recovered after one restarted with persisted
+state. The same checkpoint was archived to private GitHub. The topology used a
+public test operator key, the outages were process stops rather than host
+power cycles, and no inference was dispatched during this drill. Promised
+blocks and private test keys were retained; test listeners and transport
+tokens were removed. This is not production membership or a 10-Mac failover
+qualification.
+
 An isolated test with the real experimental MTP checkpoint, two distinct
 public test signers and freshly signed retention receipts observed pending
 before archival, verified the actual private GitHub archive, and observed idle
