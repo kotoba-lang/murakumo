@@ -1,0 +1,106 @@
+(ns awai150-systemd-fixture (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [b :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 b)))
+(defn- cp-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- cp-say [s :string] :i64 (let [x (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- cp-fs [s :string] :string (typed-cap-call 35 :string :string s))
+(defn- cp-sep [s :string] :string (str s "_SEP"))
+(defn- cp-exists? [p :string] :bool (= (cp-fs (str p (cp-sep "EXISTS"))) "1"))
+(defn- cp-read [p :string] :vector-i64
+  (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (string-to-utf8 p))))
+
+(defn- cp-cid [b :vector-i64] :string (cp-text b))
+(defn- cp-cut [b :vector-i64 start :i64] :i64
+  (let [end (if (< (+ start 4096) (vector-count b)) (+ start 4096) (vector-count b))]
+    (loop [i start]
+      (cond (>= i end) end
+            (or (= (vector-at b i) 87) (= (vector-at b i) 65)) (+ i 1)
+            :else (recur (+ i 1))))))
+(defn- cp-piece [p :string b :vector-i64 i :i64 e :i64 first :bool] :i64
+  (let [prefix (cp-bytes (str p (cp-sep (if first "WRITE" "APPEND")))) n (vector-count prefix)
+        v (loop [k 0 v (vector-alloc (+ n (- e i)))]
+            (if (= k (+ n (- e i))) v
+              (recur (+ k 1) (vector-assoc! v k (if (< k n) (vector-at prefix k) (vector-at b (+ i (- k n))))))))
+        z (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 v))] 0))
+(defn- cp-write [p :string b :vector-i64] :bool
+  (let [z (loop [i 0 first true]
+            (let [e (cp-cut b i) x (cp-piece p b i e first)]
+              (if (= e (vector-count b)) 0 (recur e false))))
+        flush (cp-fs (str p (cp-sep "FSYNC")))]
+    (and (= flush "1") (= (cp-cid (cp-read p)) (cp-cid b)))))
+(defn- cp-parent-dir [p :string] :string
+  (loop [i (- (string-length p) 1)] (if (< i 1) "/" (if (= (string-substring p i (+ i 1)) "/") (string-substring p 0 i) (recur (- i 1))))))
+(defn- cp-spawn [s :string] :string (typed-cap-call 20 :string :string s))
+(defn- cp-out [s :string] :string
+  (let [i (string-index-of s "\n")] (if (< i 0) "" (string-substring s (+ i 1) (string-length s)))))
+(defn- cp-ok? [s :string] :bool (= (string-index-of s "0\n") 0))
+(defn- cp-line [s :string] :string
+  (let [i (string-index-of s "\n")] (if (< i 0) s (string-substring s 0 i))))
+(defn- cp-a [] :string (cp-sep "ARG"))
+(defn- pr-unit-state [unit :string] :string
+  ;; A failed query is not evidence that the unit does not exist. Inspect the
+  ;; load state separately so only an explicit not-found permits first submit.
+  (let [load (cp-spawn (str "/usr/bin/systemctl" (cp-a) "--user" (cp-a) "show" (cp-a)
+               "--property=LoadState" (cp-a) "--value" (cp-a) unit))
+        value (if (cp-ok? load) (cp-line (cp-out load)) "")]
+    (cond (= value "not-found") "unit/not-found"
+          (not (= value "loaded")) "unit/unknown"
+          :else (let [sub (cp-spawn (str "/usr/bin/systemctl" (cp-a) "--user" (cp-a) "show" (cp-a)
+                            "--property=SubState" (cp-a) "--value" (cp-a) unit))]
+                  (if (cp-ok? sub) (cp-line (cp-out sub)) "unit/unknown")))))
+
+(defn- pr-unit-active? [s :string] :bool
+  (or (= s "start-pre") (= s "start") (= s "start-post") (= s "running")))
+
+(defn- pr-unit-code [unit :string] :i64
+  (arena-scope
+    (let [s (pr-unit-state unit)]
+      (cond (= s "exited") 1 (pr-unit-active? s) 0 :else -1))))
+
+;; A request is created only after an explicit not-found observation and
+;; before any submission. A leftover request or marker is UNKNOWN, including
+;; after a crash between the durable marker and the systemd call. Existing
+;; units may only be observed when their request bytes still match.
+;; The caller must serialize writers to this private cache directory.
+(defn- pr-run-decision [status :string request-exists :bool request-matches :bool
+                       marker-exists :bool response-exists :bool] :string
+  (cond (and (or (pr-unit-active? status) (= status "exited"))
+             request-exists request-matches) "profile/reuse-unit"
+        (and (= status "unit/not-found") (not request-exists)
+             (not marker-exists) (not response-exists)) "profile/new-unit"
+        :else "profile/submission-unknown"))
+
+(defn- pr-prepare-submit [request :string marker :string body :vector-i64] :bool
+  (and (not (cp-exists? request)) (not (cp-exists? marker))
+       (cp-write request body)
+       (= (cp-fs (str (cp-parent-dir request) (cp-sep "FSYNC"))) "1")
+       (cp-write marker (cp-bytes "itonami.inference-dispatch/1\n"))
+       (= (cp-fs (str (cp-parent-dir marker) (cp-sep "FSYNC"))) "1")))
+
+(defn fixture-submit [unit :string dest :string] :bool
+ (cp-ok? (cp-spawn (str "/usr/bin/systemd-run" (cp-a) "--user" (cp-a) "--quiet" (cp-a) "--no-block"
+   (cp-a) "--property=Type=oneshot" (cp-a) "--property=RemainAfterExit=yes"
+   (cp-a) (str "--unit=" unit) (cp-a) "/usr/bin/touch" (cp-a) dest))))
+(defn fixture-await [unit :string count :i64] :bool
+ (let [status (pr-unit-state unit)]
+  (cond (= status "exited") true
+        (>= count 50) false
+        (pr-unit-active? status) (if (cp-ok? (cp-spawn (str "/usr/bin/sleep" (cp-a) "0.1")))
+                                     (fixture-await unit (+ count 1)) false)
+        :else false)))
+(defn main [] :i64
+ (let [dir (cp-arg 0) mode (cp-arg 1) unit "awai150-fixture.service"
+       request (str dir "/request") marker (str dir "/dispatch") body (cp-bytes "nonsecret fixture")
+       exists (cp-exists? request) mark (cp-exists? marker)
+       matches (if exists (= (cp-cid (cp-read request)) (cp-cid body)) false)
+       status (pr-unit-state unit) choice (pr-run-decision status exists matches mark false)]
+  (cond (= mode "fresh")
+        (if (and (= status "unit/not-found") (= choice "profile/new-unit")
+                 (pr-prepare-submit request marker body)
+                 (fixture-submit unit (str dir "/effect"))
+                 (fixture-await unit 0)
+                 (= (pr-run-decision (pr-unit-state unit) true true true false) "profile/reuse-unit")
+                 (cp-exists? (str dir "/effect"))) 0 1)
+        (= mode "recover") (if (= choice "profile/submission-unknown") 0 2)
+        (= mode "error") (let [logged (cp-say (str "query-status " status " decision " choice))] (if (and (= status "unit/unknown") (= choice "profile/submission-unknown")) 0 3))
+        :else 4)))
