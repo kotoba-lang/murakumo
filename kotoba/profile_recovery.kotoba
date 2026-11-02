@@ -161,7 +161,10 @@
                        (str "Read-only AWAI growth steward task " task ", step " next ".\n"
                          (cp-text work) "\n\nBounded source snapshot, not live observations:\n" (cp-text context)
                          "\nAll tools are denied. Do not change files, publish, merge or contact anyone."
-                         " Do not invent observations or report completion of unperformed work.")
+                         " Do not invent observations or report completion of unperformed work."
+                         " Use a concise six-row table with next job, evidence and stop condition for each role."
+                         " Use each full role ID. Avoid repeated evidence and source snapshot details."
+                         " Keep the whole answer under 450 tokens. End with brief unknowns and next handoff.")
                        (if (= limit 2) (str "Read-only checkpoint recovery task " task ", step " next
                        ". Continue from the preceding assistant result, if present. Propose one next read-only verification."
                        " Do not call tools, change files, publish, merge or contact anyone. Reply in at most 16 tokens.")
@@ -191,11 +194,15 @@
                         sync (if (= rename "1") (cp-fs (str repo (cp-sep "FSYNC"))) "0")]
                     (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed")))))))))
 
+(defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
+  (if (= (cp-str runtime 0 "profile") "awai-growth-steward") 768
+    (if resident 256 32)))
+
 (defn- pr-step-bounded [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
-  (pr-step-range repo runtime cache next seconds 2 32))
+  (pr-step-range repo runtime cache next seconds 2 (pr-token-budget runtime false)))
 
 (defn- pr-step-resident [repo :string runtime :vector-i64 cache :string next :i64 seconds :i64] :string
-  (pr-step-range repo runtime cache next seconds 1000000 256))
+  (pr-step-range repo runtime cache next seconds 1000000 (pr-token-budget runtime true)))
 
 (defn- pr-step [repo :string runtime :vector-i64 cache :string next :i64] :string
   (pr-step-bounded repo runtime cache next 840))

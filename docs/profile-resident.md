@@ -14,9 +14,10 @@ The source profile is `kotoba-lang/kotoba` revision
 `hermes/profiles/accountability-steward`. Its shared format does not make this
 a Hermes execution: host state belongs in `~/.itonami`, rail is Murakumo,
 model is `mishima`, and no model output is dispatched as a tool. The source's
-"daily" declaration becomes a fixed 86,400,000 ms interval. Each proposal has
-at most 256 completion tokens; it explicitly has no live external observations.
-The existing two-turn recovery command keeps its original limit and prompt.
+"daily" declaration becomes a fixed 86,400,000 ms interval. Each original
+accountability proposal has at most 256 completion tokens; it explicitly has no
+live external observations. The existing two-turn recovery command keeps its
+original limit and prompt for that profile.
 Responses are usable only when the first choice has nonempty content and
 `finish_reason` is `stop`. Truncated, tool-call, missing and unknown finish
 reasons do not advance the checkpoint; a prior response that fails the same
@@ -66,7 +67,9 @@ secrets. The snapshot is supplied as source material, not live observations. The
 model can propose a draft only: metadata capability declarations do not
 enable tools, publication, messaging, GitHub writes or scheduling. A pinned
 runtime and a completed response do not prove the model fits the host or that
-the source snapshot is current. The existing replica, lease and retention
+the source snapshot is current. The growth lane has a 768-token completion
+limit and requests a concise six-role handoff. The host must admit sufficient
+context and memory for the full prompt plus that bound. The existing replica, lease and retention
 gates remain required. A 16 GiB Mac mini operator experiment generated a
 six-role draft with the full SOUL, work order and source snapshot using a
 bounded KV cache; the resident, API response checks, restart and capacity

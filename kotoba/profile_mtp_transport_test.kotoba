@@ -1,6 +1,12 @@
 ;; Append after profile_recovery and the native checkpoint dependency closure.
 (ns murakumo.profile-mtp-transport-test
-  (:export [test-profile-mtp-transport test-profile-growth-runtime test-profile-mtp-response]))
+  (:export [test-profile-mtp-transport test-profile-growth-runtime test-profile-mtp-response test-profile-token-budget]))
+
+(defn test-profile-token-budget [] :bool
+  (let [growth (cp-bytes "{\"profile\":\"awai-growth-steward\"}")
+        original (cp-bytes "{\"profile\":\"accountability-steward\"}")]
+    (and (= (pr-token-budget growth false) 768) (= (pr-token-budget growth true) 768)
+         (= (pr-token-budget original false) 32) (= (pr-token-budget original true) 256))))
 
 (defn test-profile-mtp-response [] :bool
   (let [runtime (cp-bytes "{\"model\":\"bonsai\"}")
