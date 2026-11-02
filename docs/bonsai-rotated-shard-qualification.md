@@ -44,3 +44,30 @@ generic sharding capability alone. The actual pinned engine, rotated layer,
 MTP head, data path and multi-rank outputs need correctness and resource
 qualification before live placement. Pipeline parallelism remains a separate
 candidate with its own correctness and bandwidth tests.
+
+## Two-Mac synthetic projection
+
+A bounded direct Tailscale ring test used MLX 0.32.2 on two distinct Mac minis.
+The data was synthetic and neither model weights nor credentials were sent.
+The installed model manifest had 402 listed modules, all with block 1024;
+the experiment used block 1024 and a 2048-wide synthetic input, not actual
+module weights or a complete layer geometry survey. Each rank computed a
+128-output 2-bit affine projection. Output-row partitioning replicated the
+signs and input rotation and matched the corresponding full output slice
+exactly. Input-column partitioning split only at both the 1024-element
+Hadamard block and 128-element quantization group boundaries. The sum of
+float16 partial projections differed from the full projection by at most
+0.0625, below the experiment's pre-set 0.25 absolute limit. This tolerance
+is diagnostic, not a model-quality acceptance criterion. A split cutting a
+Hadamard block was explicitly refused by the fixture.
+
+The [small probe](evidence/awai149-two-mac-aligned-probe.py) and
+[results](evidence/awai149-two-mac-aligned-20261103.json) demonstrate one
+candidate arithmetic approach, not an integrated sharding implementation.
+They do not test segmented/fused layers, real packed weights, logits,
+collective failures, actual MTP or the pinned Exo engine. The direct ring
+sockets carried no application authentication and were temporary; they do
+not establish a suitable production transport. A loopback-over-SSH attempt
+had timed out during initialization; no conclusion about that design follows
+from one attempt. Production requires authenticated transport, correct
+process supervision and failure isolation in addition to model qualification.
