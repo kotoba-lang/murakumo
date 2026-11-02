@@ -73,7 +73,7 @@
     (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
       (string-substring r 5 (string-length r)) "")))
 (defn- ln-exists? [path :string] :bool (= (ln-fs "D" path "") "1"))
-(defn- ln-load [path :string] :string (if (ln-exists? path) (ln-fs "A" path "") "0 - 0 - -"))
+(defn- ln-load [path :string] :string (if (ln-exists? path) (ln-fs "A" path "") ""))
 ;; the parent directory of path ("/" for a top-level file)
 (defn- ln-dirname [path :string] :string
   (let [b (ln-bytes path) k (loop [i (- (vector-count b) 1)] (cond (< i 0) -1 (= (vector-at b i) 47) i :else (recur (- i 1))))]
@@ -193,6 +193,19 @@
       (valid-value? node (ln-enabled? topo node) (ln-text v r "class") (ln-num v r "slot")
                     (ln-num v r "epoch") (ln-num v r "until") now))))
 
+;; An absent, truncated or inconsistent durable register is not a fresh
+;; voter. Reinitialization requires an independently authorized recovery.
+(defn- ln-state-ok? [st :string] :bool
+  (let [pt (ln-int (ln-field st 0)) pid (ln-undash (ln-field st 1))
+        at (ln-int (ln-field st 2)) aid (ln-undash (ln-field st 3)) av (ln-undash (ln-field st 4))]
+    (and (>= pt 0) (>= at 0)
+         (= st (str pt " " (ln-dash pid) " " at " " (ln-dash aid) " " (ln-dash av)))
+         (if (= pt 0) (= pid "") (ballot-ok? pt pid))
+         (if (= at 0) (and (= aid "") (= av ""))
+           (and (ballot-ok? at aid) (not (= av ""))
+                (>= (ballot-cmp pt pid at aid) 0)
+                (json-valid? (ln-bytes av)) (json-canonical? (ln-bytes av)))))))
+
 ;; one request against the state in file; the new state is stored before the
 ;; reply is returned
 (defn- ln-handle [file :string req :string topo :vector-i64 now :i64] :string
@@ -200,7 +213,8 @@
         pt (ln-int (ln-field st 0)) pid (ln-undash (ln-field st 1))
         at (ln-int (ln-field st 2)) aid (ln-undash (ln-field st 3)) av (ln-undash (ln-field st 4))
         op (ln-field req 0) bt (ln-int (ln-field req 1)) bid (ln-field req 2) v (ln-field req 3)]
-    (cond (= op "prepare")
+    (cond (not (ln-state-ok? st)) "no 0 - 0 - -"
+          (= op "prepare")
           (if (prepare-ok? bt bid pt pid)
             (let [ns (str bt " " bid " " at " " (ln-dash aid) " " (ln-dash av))] (if (= (ln-store file ns) 1) (ln-reply true ns) (ln-reply false st)))
             (ln-reply false st))
