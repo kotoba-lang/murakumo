@@ -1,6 +1,20 @@
 ;; Append after profile_recovery and the native checkpoint dependency closure.
 (ns murakumo.profile-mtp-transport-test
-  (:export [test-profile-mtp-transport test-profile-growth-runtime test-profile-mtp-response test-profile-token-budget]))
+  (:export [test-profile-mtp-transport test-profile-growth-runtime test-profile-mtp-response test-profile-token-budget test-profile-mtp-compact]))
+
+(defn test-profile-mtp-compact [] :bool
+  (let [runtime (cp-bytes "{\"model\":\"bonsai\"}")
+        text "line 1\n\"quoted\" 日本語"
+        raw (cp-bytes (str "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":" (pr-json-quote text)
+          "}}],\"model\":\"bonsai\",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"mtp\",\"mtp_forward_calls\":1,\"runtime_mtp_enabled\":true}}"))
+        compact (pr-mtp-compact runtime raw)
+        invalid (cp-bytes "{\"model\":\"bonsai\"}")]
+    (and (json-valid? compact) (= (pr-answer compact) text)
+         (pr-mtp-response? runtime compact) (pr-replicable? compact)
+         (not (pr-replicable? (vector-alloc 0)))
+         (pr-replicable? (vector-alloc 16384)) (not (pr-replicable? (vector-alloc 16385)))
+         (= (cp-str compact 0 "rawResponseDigest") (str "sha256:" (sha256-hex raw)))
+         (= (vector-count (pr-mtp-compact runtime invalid)) 0))))
 
 (defn test-profile-token-budget [] :bool
   (let [growth (cp-bytes "{\"profile\":\"awai-growth-steward\"}")

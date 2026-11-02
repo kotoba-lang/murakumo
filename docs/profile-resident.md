@@ -46,6 +46,15 @@ statistics therefore need a separately reviewed migration; they are not
 silently admitted as MTP history. Server-reported statistics are evidence of
 the request path, not cryptographic proof of the peer or model artifact.
 
+The local response may include extensive server diagnostics. Before it enters
+the checkpoint, the resident keeps the complete answer, finish reason, model,
+the MTP fields needed for admission, and a SHA-256 digest of the raw response
+in a compact JSON record. The raw response remains in the local private cache;
+its digest does not make it available after recovery. Empty or over-16-KiB
+checkpoint records are refused before advancing state, matching the peer's
+per-block limit. This transformation does not approve the answer or authorize
+publication of its contents.
+
 The path checks do **not** authenticate the socket peer, verify file ownership
 or permissions, prove the model digest, or manage tunnel and service lifetime.
 Before enabling this route, an operator must use private owner-controlled

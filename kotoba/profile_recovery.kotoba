@@ -90,6 +90,22 @@
            (>= head 0) (= (json-kind b head) 5)
            (> (cp-num b s "mtp_forward_calls") 0)))))
 
+;; The server's diagnostic-heavy response can exceed the peer's 16 KiB block
+;; limit. Keep the full model text and only the fields needed for continuation
+;; and MTP admission. Bind the compact record to the raw cache bytes by hash;
+;; the hash alone does not make the raw response available on a recovery host.
+(defn- pr-mtp-compact [runtime :vector-i64 b :vector-i64] :vector-i64
+  (let [answer (pr-answer b) stats (if (json-valid? b) (json-member b 0 "mtplx_stats") -1)]
+    (if (or (= answer "") (not (pr-mtp-response? runtime b))) (vector-alloc 0)
+      (cp-bytes (str "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":" (pr-json-quote answer)
+        "}}],\"model\":" (pr-json-quote (cp-str b 0 "model"))
+        ",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"mtp\",\"mtp_forward_calls\":"
+        (cp-num b stats "mtp_forward_calls") ",\"runtime_mtp_enabled\":true},\"rawResponseDigest\":\"sha256:"
+        (sha256-hex b) "\"}")))))
+
+(defn- pr-replicable? [b :vector-i64] :bool
+  (and (> (vector-count b) 0) (<= (vector-count b) 16384)))
+
 (defn- pr-wait [unit :string response :string runtime :vector-i64] :bool
   (loop [i 0]
     (let [state (pr-unit-code unit)]
@@ -185,14 +201,19 @@
                     saved (cp-write request (cp-bytes body)) status (pr-unit-state unit)
                     submitted (and saved (or (= status "start") (= status "running") (= status "exited") (pr-submit unit request response seconds runtime)))]
                 (if (or (not submitted) (not (pr-wait unit response runtime))) "profile/inference-unavailable-state-retained"
-                  (let [answer (cp-read response) cid (cp-cid answer)
+                  (let [raw (cp-read response)
+                        answer (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw)
+                        cid (cp-cid answer)
                         outdir (str repo "/outputs") output (str outdir "/" next ".json")
                         newstate (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
                         tmp (str repo "/state.json.tmp")
-                        ok (and (cp-mkdir outdir) (not (cp-exists? output)) (cp-write output answer) (cp-write tmp newstate))
+                        usable (pr-replicable? answer)
+                        ok (and usable
+                                (cp-mkdir outdir) (not (cp-exists? output)) (cp-write output answer) (cp-write tmp newstate))
                         rename (if ok (cp-fs (str tmp (cp-sep "RENAME") repo "/state.json")) "0")
                         sync (if (= rename "1") (cp-fs (str repo (cp-sep "FSYNC"))) "0")]
-                    (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed")))))))))
+                    (if (not usable) "profile/response-not-replicable"
+                      (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))
 
 (defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
   (if (= (cp-str runtime 0 "profile") "awai-growth-steward") 768
