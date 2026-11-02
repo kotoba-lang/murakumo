@@ -210,6 +210,35 @@
                    " " (cp-str cfg 0 "policy") " " (cp-str cfg 0 "environment") " " (cp-num b p "epoch")
                    " " (cp-str b p "parent") " " (cp-str cfg 0 "task") " " store " " (cp-str cfg 0 "archiveAck")))))
 
+;; Archive an admitted head under the resident's local lock, then publish the
+;; acknowledgement only after readback and a second admission check. The host
+;; supplies a fresh, private work path and pinned GitHub executable/repository.
+;; Failure or unknown outcome is returned to the caller without retry.
+(defn- rt-archive-native [cfg :vector-i64 work :string repo :string gh :string] :string
+  (let [descriptor (rt-archive cfg)
+        root (ln-field descriptor 1) author (ln-field descriptor 2) profile (ln-field descriptor 3)
+        policy (ln-field descriptor 4) environment (ln-field descriptor 5) epoch-text (ln-field descriptor 6)
+        parent (ln-field descriptor 7) task (ln-field descriptor 8) store (ln-field descriptor 9) ack (ln-field descriptor 10)
+        exact (str "resident/archive " root " " author " " profile " " policy " " environment " " epoch-text
+                   " " parent " " task " " store " " ack)]
+    (if (or (not (= descriptor exact)) (not (cp-safe-absolute? ack))
+            (= work ack) (= work (str ack ".tmp"))) "resident-archive/head-refused"
+      (let [result (ga-archive work store root author profile policy environment (cp-int epoch-text) parent task repo gh)
+            tree (ln-field result 2) outcome (ln-field result 3)
+            valid (and (cp-hex? tree 40) (or (= outcome "acknowledged") (= outcome "unacknowledged"))
+                       (= result (str "archive/stored " root " " tree " " outcome)))
+            now (rt-now) current (= (rt-archive cfg) descriptor)
+            tmp (str ack ".tmp")
+            until (if (and (> now 0) (<= now 9223372036853875807)) (+ now 900000) 0)
+            body (cp-bytes (str "{\"checkpoint\":\"" root "\",\"kind\":\"itonami.github-archive-ack/1\",\"tree\":\""
+                                tree "\",\"until\":" until "}"))
+            prepared (and valid current (> until 0)
+                          (not (cp-exists? tmp)) (cp-write tmp body))
+            moved (if prepared (cp-fs "L" tmp ack) "0")
+            synced (if (= moved "1") (cp-fs "M" (cp-parent-dir ack) "") "0")]
+        (if (= synced "1") (str "resident-archive/confirmed " root " " tree)
+          "resident-archive/unconfirmed")))))
+
 (defn- rt-capture [cfg :vector-i64 repo :string epoch :i64 parent :string next :i64] :string
   (let [list (str (cp-str cfg 0 "runtimeRoot") "/untracked.json") summary (str (cp-str cfg 0 "runtimeRoot") "/summary.txt")
         saved (and (cp-write list (cp-bytes (str "[\"outputs/" next ".json\"]")))
@@ -293,6 +322,7 @@
       (let [result (cond (= operation "cycle") (rt-cycle cfg)
                          (= operation "refresh") (rt-refresh cfg)
                          (= operation "archive") (rt-archive cfg)
+                         (= operation "archive-native") (rt-archive-native cfg (cp-arg 2) (cp-arg 3) (cp-arg 4))
                          :else "resident/command-refused")
             status (if (= operation "cycle") (rt-status cfg result) 0)
             released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")]
@@ -336,6 +366,7 @@
       (let [x (cp-say "resident/config-refused")] 2)
       (if (= (cp-arg 0) "refresh") (cp-say (rt-serialized cfg "refresh"))
       (if (= (cp-arg 0) "archive") (cp-say (rt-serialized cfg "archive"))
+      (if (= (cp-arg 0) "archive-native") (cp-say (rt-serialized cfg "archive-native"))
       (if (= (cp-arg 0) "once")
         (cp-say (rt-serialized cfg "cycle"))
       (if (not (= (cp-arg 0) "run")) (let [x (cp-say "resident/command-refused")] 2)
@@ -345,4 +376,4 @@
                          (if (or (= r "resident/local-writer-busy") (= r "resident/local-unlock-failed")) 1 0)))
               z (if (= result 0)
                   (loop [k 0] (if (>= k 10) true (if (pr-pause) (recur (+ k 1)) false))) false)]
-          (if z (recur (+ i 1)) 2))))))))))
+          (if z (recur (+ i 1)) 2)))))))))))

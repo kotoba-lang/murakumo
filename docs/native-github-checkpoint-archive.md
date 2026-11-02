@@ -9,8 +9,10 @@ the tree, runs Git fsck and re-verifies the signed closure. A push failure is
 not considered success unless that readback matches; other outcomes are unknown
 or conflicting. The component does not acquire a lease or authorize a bot.
 
-This is an unqualified draft. It is not yet wired to the resident, cron or an
-archive acknowledgement, and no autonomous production service uses it. The
+This is an unqualified draft. The resident exposes an explicit `archive-native`
+operation that calls it and writes an acknowledgement only after readback and
+rechecking the admitted head. The cron controller does not invoke this operation,
+and no autonomous production service uses it. The
 host must fix the exact repository and executable identities, classify every
 byte for GitHub, grant a short-lived repository-scoped credential, isolate
 source/work directories, set disk limits and reconcile/clean retained attempts.
@@ -51,3 +53,10 @@ DNS and other host effects remain outside its proof. The host requirements
 above still apply, and a failed or unknown operation must be reconciled before
 retrying. The earlier local-remote fixture documents the earlier source before
 this guard and does not qualify the new transport configuration.
+
+The [resident acknowledgement fixture](evidence/awai150-resident-native-archive-20261103.json)
+uses real Git and filesystem operations with stubbed head/retention admission,
+clock and privacy response. It confirms that a changed head, refused repository
+or leftover temporary acknowledgement does not publish an acknowledgement. A
+separate native lock fixture covers contention for this operation. Neither test
+establishes full resident or GitHub integration.
