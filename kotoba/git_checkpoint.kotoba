@@ -235,8 +235,8 @@
             (recur (+ i 1)) false))))))
 
 ;; Explicit allowlist only: ignored/registered paths are never captured as
-;; untracked. GNU stat without -L rejects symlinks and special files before
-;; the native read. v1 admits regular files with modes 0644 or 0755 only.
+;; untracked. FS2 U no-follow metadata exposes all permission bits; the
+;; native read admits regular files with exact modes 0644 or 0755 only.
 (defn- cp-capture-untracked [repo :string store :string list :vector-i64] :string
   (if (or (not (json-canonical? list)) (not (= (json-kind list 0) 2)) (> (json-count list 0) 16)) ""
     (loop [i 0 prev "" out "["]
@@ -245,8 +245,10 @@
               admitted (and (checkpoint-path? path) (> (string-compare path prev) 0)
                          (= (string-index-of (cp-git repo (str "ls-files" (cp-a) "--error-unmatch" (cp-a) "--" (cp-a) path)) "1\n") 0)
                          (= (string-index-of (cp-git repo (str "check-ignore" (cp-a) "--" (cp-a) path)) "1\n") 0))
-              st (if admitted (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%a:%F" (cp-a) "--" (cp-a) repo "/" path)) "refused")
-              mode (cond (= st "0\n644:regular file\n") "644" (= st "0\n755:regular file\n") "755" :else "")
+              st (if admitted (cp-fs "U" (str repo "/" path) "") "")
+              kind (cp-meta-field st 3) bits (cp-meta-field st 0)
+              mode (cond (and (= kind "0") (= bits "420")) "644"
+                         (and (= kind "0") (= bits "493")) "755" :else "")
               cid (if (and (not (= mode "")) (cp-real-parents? repo path false)) (cp-put store (cp-read (str repo "/" path))) "")]
           (if (= cid "") "" (recur (+ i 1) path (str out (if (= i 0) "" ",") "{\"cid\":\"" cid "\",\"mode\":\"" mode "\",\"path\":\"" path "\"}"))))))))
 
