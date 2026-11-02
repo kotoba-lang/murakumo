@@ -80,3 +80,17 @@ failure domains, GitHub archival, crash recovery or model inference. The
 requires a disposable VM, separately built fixture binaries and a test-only
 checkpoint; it must never be pointed at live credentials. [Evidence](evidence/awai147-retention-refresh-live-20261103.json).
 No periodic service has been installed.
+
+A further isolated Linux VM test used a classified checkpoint already stored
+in the private GitHub archive. The native resident renewed expired public-test
+retention receipts through a native loopback peer, then the real resident
+archive adapter checked the private repository, fetched the immutable archive,
+verified its tree and checkpoint closure, and wrote an acknowledgement matching
+the checkpoint and tree. The previously archived tree was independently read
+back; the test did not establish whether the attempted Git push created a new
+ref. The test used same-VM test signers, no cron controller, model inference or
+production credentials. Its short-lived GitHub credential was delivered to the
+VM process via stdin and the dedicated VM was removed. The optional
+[host harness](../test-native/murakumo/resident-retention-github-host-test.py)
+requires a disposable VM, test-only fixture and explicitly selected private
+repository. [Evidence](evidence/awai147-retention-refresh-github-20261103.json).
