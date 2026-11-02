@@ -127,3 +127,27 @@ The cron controller, GitHub archive for a new successor and MTP inference were
 not run in this attempt; no new result was produced. This does not establish a
 safe single-host capacity or that a different host can accept the model.
 [Evidence](evidence/awai147-cron-real-model-admission-20261103.json).
+
+## Controller crash lock
+
+On Linux the controller takes an exclusive nonblocking `/usr/bin/flock` on a
+persistent file in the private state directory. It also creates the existing
+`lock` directory with a version marker, so an older controller using only that
+directory cannot enter while the new controller runs. A later invocation that
+holds the kernel lock may remove a marked directory left by a killed process;
+an unmarked legacy directory, an incomplete marker, a symlink or an unexpected
+directory entry is refused for operator reconciliation. Do not delete or
+replace the lock file while any controller or descendant may be running.
+Processes inheriting the descriptor keep the lock until they exit. The durable
+per-job dispatch marker is separate and is never removed by lock recovery: an
+unconfirmed dispatch still stops instead of retrying inference.
+
+A disposable Linux ARM64 VM ran the actual shell controller with test
+executables. It checked exclusion against both a second new invocation and the
+legacy directory operation, parent SIGKILL while a child still holds the lock,
+recovery after the child exits, refusal of an unmarked legacy directory, and
+preservation of an uncertain dispatch without another resident invocation.
+This is host-local process coordination; it does not fence writers on other
+machines, resolve a dispatch of unknown outcome, install a periodic service,
+or demonstrate inference or GitHub archival. The reusable fixture is
+[`cron-controller-lock-host-test.sh`](../test-native/murakumo/cron-controller-lock-host-test.sh).
