@@ -300,5 +300,7 @@ schedule, and round-tripped binary checkpoint data and a lease register. The
 files survived an orderly VM restart. Evidence and the compiler/image hashes
 are in `docs/evidence/awai150-fs2-native-20261103.json`. These fixtures do not
 qualify the complete resident, actual quorum, GitHub transport, Mac runtime,
-concurrent writers or sudden power loss. The prior compiler's legacy wire-35
-path is no longer a fallback for this draft component.
+concurrent writers or sudden power loss. The prior compiler's legacy byte
+filesystem path is no longer a fallback for this draft component. Group
+serialization uses the current native provider's scoped wire-35 flock
+operations, which are separate from the FS2 file operations.
