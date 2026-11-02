@@ -16,9 +16,11 @@ mkdir "$base/bin" "$base/work"
 cp -R "$source_store" "$base/work/store"
 /usr/bin/git init -q --bare "$base/remote.git"
 export TEST_REMOTE="$base/remote.git" TEST_PRIVATE=true
+# This gate must stay file-only even if the mock URL rewriting breaks.
+export GIT_ALLOW_PROTOCOL=file
 cat > "$base/bin/gh" <<'GH'
 #!/bin/sh
-printf 'cloud-itonami/itonami-state\t%s\n' "$TEST_PRIVATE"
+printf 'fixture-owner/checkpoint-archive\t%s\n' "$TEST_PRIVATE"
 GH
 cat > "$base/bin/git" <<'GIT'
 #!/bin/sh
@@ -28,14 +30,14 @@ for arg do
   [ "$arg" = fetch ] && mode=fetch
 done
 if [ "$mode" = fetch ] && [ "${TEST_FAIL_FETCH:-0}" = 1 ]; then exit 1; fi
-/usr/bin/git -c protocol.file.allow=always -c "url.file://$TEST_REMOTE.insteadOf=https://github.com/cloud-itonami/itonami-state.git" "$@"
+/usr/bin/git -c protocol.file.allow=always -c "url.file://$TEST_REMOTE.insteadOf=https://github.com/fixture-owner/checkpoint-archive.git" "$@"
 result=$?
 if [ "$mode" = push ] && [ "${TEST_LOST_ACK:-0}" = 1 ] && [ "$result" = 0 ]; then exit 1; fi
 exit "$result"
 GIT
 chmod 700 "$base/bin/gh" "$base/bin/git"
 export PATH="$base/bin:/usr/bin:/bin"
-run() { "$script" "$bin" "$base/work" "$base/work/store" cloud-itonami/itonami-state "$root" "$author" "$1" "$policy" "$environment" "$epoch" "$parent" "$task"; }
+run() { "$script" "$bin" "$base/work" "$base/work/store" fixture-owner/checkpoint-archive "$root" "$author" "$1" "$policy" "$environment" "$epoch" "$parent" "$task"; }
 ref="refs/heads/itonami/archive/$root"
 # A lost acknowledgement can be resolved only by verified readback.
 TEST_LOST_ACK=1 run "$profile" > "$base/first.out"
