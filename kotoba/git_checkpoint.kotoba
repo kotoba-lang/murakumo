@@ -308,7 +308,7 @@
     (cond (not (cp-safe-absolute? dest)) "checkpoint/destination"
           (or (cp-exists? dest) (cp-exists? stage)) "checkpoint/destination-exists"
           (not (cp-assemble-bundle store (cp-str b p "bundle"))) "checkpoint/bundle-assembly"
-          (not (cp-mkdir stage)) "checkpoint/mkdir"
+          (not (= (cp-fs "I" stage "") "1")) "checkpoint/mkdir"
           :else
           (let [init (cp-git stage "initARG_SEP--quietARG_SEP--template=")
                 fetch (if (cp-ok? init) (cp-git stage (str "-c" (cp-a) "protocol.file.allow=always" (cp-a) "fetch" (cp-a) "--no-tags" (cp-a) bundle (cp-a) (str ref ":" ref))) "refused")
@@ -325,7 +325,7 @@
                           (recur (+ i 1)) false)))) false)]
             (if (not files) "checkpoint/materialize-failed-partial-retained"
               (let [sync (cp-fs "M" stage "")
-                    rename (if (= sync "1") (cp-fs "L" stage dest) "0")
+                    rename (if (= sync "1") (cp-fs "T" stage dest) "0")
                     parent-sync (if (= rename "1") (cp-fs "M" (cp-parent-dir dest) "") "0")]
                 (if (and (= rename "1") (= parent-sync "1")) "checkpoint/restored" "checkpoint/publish-failed")))))))
 
