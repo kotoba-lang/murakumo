@@ -1,6 +1,31 @@
 ;; Native tests; compose after profile_recovery and checkpoint dependencies.
 (ns murakumo.profile-recovery-test
-  (:export [test-profile-recovery test-profile-answer test-profile-save-output]))
+  (:export [test-profile-recovery test-profile-answer test-profile-save-output
+            test-profile-submit-decision test-profile-submit-marker]))
+
+(defn test-profile-submit-decision [] :bool
+  (and (= (pr-run-decision "unit/not-found" false false false false) "profile/new-unit")
+       (= (pr-run-decision "unit/unknown" false false false false) "profile/submission-unknown")
+       (= (pr-run-decision "unit/not-found" true true true false) "profile/submission-unknown")
+       (= (pr-run-decision "unit/not-found" true true false false) "profile/submission-unknown")
+       (= (pr-run-decision "unit/not-found" false false true false) "profile/submission-unknown")
+       (= (pr-run-decision "unit/not-found" false false false true) "profile/submission-unknown")
+       (= (pr-run-decision "running" true true true false) "profile/reuse-unit")
+       (= (pr-run-decision "exited" true true false true) "profile/reuse-unit")
+       (= (pr-run-decision "running" true false true false) "profile/submission-unknown")
+       (= (pr-run-decision "failed" true true true false) "profile/submission-unknown")
+       (= (pr-run-decision "dead" false false false false) "profile/submission-unknown")))
+
+;; The caller provisions an exclusive, empty test directory. Failure to
+;; durably create the marker must not lead to a second submit attempt.
+(defn test-profile-submit-marker [dir :string] :bool
+  (let [request (str dir "/profile-submit-request") marker (str dir "/profile-submit-marker")
+        body (cp-bytes "nonsecret test request")]
+    (and (not (cp-exists? request)) (not (cp-exists? marker))
+         (pr-prepare-submit request marker body)
+         (= (cp-cid (cp-read request)) (cp-cid body))
+         (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n")
+         (not (pr-prepare-submit request marker body)))))
 
 ;; DIR is an exclusively owned fresh test directory; do not overwrite an
 ;; existing file. Exercise real filesystem reads, writes and fsync barriers.

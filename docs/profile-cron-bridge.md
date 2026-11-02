@@ -127,3 +127,29 @@ The cron controller, GitHub archive for a new successor and MTP inference were
 not run in this attempt; no new result was produced. This does not establish a
 safe single-host capacity or that a different host can accept the model.
 [Evidence](evidence/awai147-cron-real-model-admission-20261103.json).
+
+## Model submission recovery candidate
+
+The draft resident now observes systemd's load and substate separately. Only
+an explicit `not-found` result, with no prior request, dispatch marker or
+response, allows a first submission. It writes and flushes the request and a
+local dispatch marker before starting the unit. If the request or marker is
+left behind without a discoverable unit, the result is unknown and the
+resident does not submit again. An existing running or exited unit can be
+observed only when its saved request matches the expected bytes. The private
+cache still needs external single-writer serialization; these files do not
+provide a distributed fence or survive an untrusted host rollback.
+
+A low-cost Mac Amu CLI check accepted the integrated source. Extracted tests
+of the exact decision functions returned 0; controls removing the marker check
+or ignoring a simulated failed `systemctl` query returned 1. Those tests use
+mock provider responses and the CLI prints the Kotoba result on stdout (its
+process exit status alone does not distinguish the controls). A disposable
+Linux VM independently showed `systemctl --user show` for a never-created
+unit returning `LoadState=not-found` and `SubState=dead`, both with exit 0.
+The VM was stopped and removed. These observations do not execute the full
+resident, its new marker writes, an actual inference or a crash/restart. A Mac
+FS capability probe trapped instead of running, so marker durability and the
+full native controller remain unverified. The current resident also uses
+systemd and curl, so this draft is not a qualified Kotoba-only operational
+path. See AWAI-150.
