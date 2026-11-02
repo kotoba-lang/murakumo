@@ -88,6 +88,26 @@
         r (if (= f "1") (ln-fs "L" tmp path) "0")
         d (if (= r "1") (ln-fs "M" (ln-dirname path) "") "0")]
     (if (= d "1") 1 0)))
+
+;; Explicit genesis for a new voter only. T is FS2's no-replace rename, so
+;; even concurrent initializers cannot overwrite an existing register. This
+;; local operation cannot establish that an absent voter has never voted.
+(defn- ln-init-fresh [path :string] :string
+  (if (or (< (string-length path) 2) (not (= (string-substring path 0 1) "/"))
+          (= (string-substring path (- (string-length path) 1) (string-length path)) "/"))
+    "voter/init-refused"
+    (let [parent (ln-dirname path) dir (ln-fs "N" parent ".voter-genesis-")]
+      (if (= dir "") "voter/init-refused"
+        (let [temp (str dir "/register") text "0 - 0 - -"
+              wrote (= (ln-fs "B" temp text) text)
+              flushed (and wrote (= (ln-fs "M" temp "") "1"))
+              moved (and flushed (= (ln-fs "T" temp path) "1"))
+              sync (and moved (= (ln-fs "M" parent "") "1"))
+              removed (if moved true (= (ln-fs "J" temp "") "1"))
+              cleaned (= (ln-fs "K" dir "") "1")]
+          (cond (and moved sync cleaned) "voter/init-created"
+                moved "voter/init-unknown"
+                :else "voter/init-refused"))))))
 ;; now in ms: a decimal, or clock for wire 7's wall clock (amu #1518)
 (defn- ln-now [s :string] :i64 (if (= s "clock") (ln-int (typed-cap-call 7 :string :string "wall")) (ln-int s)))
 
@@ -410,8 +430,11 @@
   (loop [k 5] (cond (= (ln-arg k) "") "" (ln-tok-arg? (ln-arg k)) (string-substring (ln-arg k) 6 (string-length (ln-arg k))) :else (recur (+ k 1)))))
 
 (defn lease-node-main [] :i64
+  (if (= (ln-arg 0) "init-fresh")
+    (let [result (ln-init-fresh (ln-arg 1)) x (ln-say result)]
+      (if (= result "voter/init-created") 0 1))
   (if (= (ln-arg 0) "voter")
     (ln-voter-main)
     (let [tp (ln-arg-token-path) token (ln-token tp)]
       (if (and (not (= tp "")) (= token "")) (let [x (ln-say "proposer token/missing-or-short")] 2)
-        (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports) token)))))
+        (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports) token))))))

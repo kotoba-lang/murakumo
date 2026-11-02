@@ -1,0 +1,32 @@
+(ns awai150-voter-init-fixture (:export [main]))
+(defn- ln-frame [op :string path :string tail :string] :string (str "\u0000FS2\u0000" op path "\u0000" tail))
+(defn- ln-fs [op :string path :string tail :string] :string
+  (let [r (typed-cap-call :fs/app-data :string :string (ln-frame op path tail))]
+    (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
+      (string-substring r 5 (string-length r)) "")))
+(defn- ln-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- ln-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
+(defn- ln-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- ln-dirname [path :string] :string
+  (let [b (ln-bytes path) k (loop [i (- (vector-count b) 1)] (cond (< i 0) -1 (= (vector-at b i) 47) i :else (recur (- i 1))))]
+    (if (< k 1) "/" (string-substring path 0 k))))
+(defn- ln-init-fresh [path :string] :string
+  (if (or (< (string-length path) 2) (not (= (string-substring path 0 1) "/"))
+          (= (string-substring path (- (string-length path) 1) (string-length path)) "/"))
+    "voter/init-refused"
+    (let [parent (ln-dirname path) dir (ln-fs "N" parent ".voter-genesis-")]
+      (if (= dir "") "voter/init-refused"
+        (let [temp (str dir "/register") text "0 - 0 - -"
+              wrote (= (ln-fs "B" temp text) text)
+              flushed (and wrote (= (ln-fs "M" temp "") "1"))
+              moved (and flushed (= (ln-fs "T" temp path) "1"))
+              sync (and moved (= (ln-fs "M" parent "") "1"))
+              removed (if moved true (= (ln-fs "J" temp "") "1"))
+              cleaned (= (ln-fs "K" dir "") "1")]
+          (cond (and moved sync cleaned) "voter/init-created"
+                moved "voter/init-unknown"
+                :else "voter/init-refused"))))))
+
+(defn main [] :i64
+ (let [result (ln-init-fresh (ln-arg 0)) printed (ln-say result)]
+  (cond (= result "voter/init-created") 0 (= result "voter/init-refused") 1 :else 2)))
