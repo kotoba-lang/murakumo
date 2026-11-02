@@ -145,3 +145,35 @@ The [probe](evidence/awai149-sliced-real-layer-probe.py) and
 experiment, not a production loader. This is still one layer, not the full
 model, real prompt, MTPLX post-load fast paths, MTP, authenticated production
 transport, process recovery or measured system memory savings.
+
+## Three real decoder layers across three Macs
+
+A bounded follow-up assigned consecutive real decoder layers 2, 3 and 4 to
+three physical Macs. Layers 2 and 4 use the gated linear-attention path;
+layer 3 uses full attention. Each worker loaded only its layer's checkpoint
+tensors into the installed MLX/MTPLX decoder and Prism projection classes.
+A reference on rank 0 separately loaded all three layers. Two deterministic
+synthetic hidden-state inputs were processed in sequence with separate,
+persistent per-layer cache objects. The stage-to-stage outputs matched the
+single-host reference exactly at both steps. Each distributed layer's tensor
+fingerprint matched the corresponding reference fingerprint.
+
+The raw tensor arrays read for the three distributed stages were 109,990,784,
+104,933,376 and 109,990,784 bytes. The reference copies on rank 0 are
+additional; these counts are not peak memory or physical I/O. The diagnostic
+set an MLX per-process 2 GiB limit and stopped if sampled host memory-pressure
+free fell below 60%. The sampled minima were 89%, 87% and 87%; sampling
+cannot rule out shorter drops or impact on other workloads. No sustained
+model service was started. [Probe](evidence/awai149-three-mac-decoder-pipeline-probe.py)
+and [evidence](evidence/awai149-three-mac-decoder-pipeline-20261103.json).
+
+This is a three-layer, two-step experiment using synthetic hidden states,
+not a complete prompt, full model, logits, MTP head, throughput or production
+pipeline. It uses the installed MTPLX classes without the full model's
+post-load kernel wiring, and a temporary direct Tailscale ring without
+application-level peer authentication. Exo's
+[pinned loading code](https://github.com/exo-explore/exo/blob/63760522e34fa070fc9f40f5b93803e29b3b0797/src/exo/worker/engines/mlx/utils_mlx.py)
+explicitly tolerates unused MTP tensors; a successful generic pipeline load
+alone therefore cannot establish the requested MTP execution. Full-model
+state, MTP verification, authenticated transport and physical reservations
+remain separate requirements.
