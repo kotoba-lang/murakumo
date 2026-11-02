@@ -199,8 +199,11 @@ it as permission to start a new bot turn or to repeat external effects. The
 caller must provision the binary, controlled `PATH`, GitHub authentication,
 private task directory, classified inputs and independent contract. The store
 must remain quiescent while the adapter copies it. No scheduler or resident
-invokes this script yet; a local archive test is not proof of GitHub access or
-production fencing. The native integration gate is
+invokes this script yet. An operator-run experimental checkpoint was archived
+to the private GitHub repository and independently read back; see the
+[sanitized evidence](evidence/awai147-github-archive-20261103.json). That
+one-time test does not establish production credential provisioning or fencing.
+The native integration gate is
 `test-native/murakumo/github-checkpoint-archive-gate.sh`, which accepts a
 signed test fixture and exercises a separate file-backed Git remote.
 
