@@ -244,6 +244,23 @@ expanded gate, removing the production `pp-root?` checkpoint signature/contract
 check changed 31 to 23. These are not assertion-inversion tests. CI/CD stays stopped;
 there is no Node, nbb, JVM or Python product runtime fallback.
 
+For the AWAI-147 MTP change, an ARM64 Linux native build composed this entire
+resident closure, the checkpoint and resident regression gates, and the MTP
+tests without parser or cryptographic stubs. The combined gate passed; removing
+the production post-inference retention deadline guard made it fail. A separate
+native gate parsed the actual 17,275-byte MTP response and generated a
+2,589-byte compact record; independent JSON parsing checked the full answer,
+model, finish, MTP fields and raw-response hash. A wrong-model control failed.
+These gates do not run a resident cycle or prove a network replica or restart.
+
+The pinned dependency owners were unavailable directly during this test. The
+source bytes were taken from `kotoba-lang/kotoba-parent` commit
+`d50f87be086e7dd82e828df03aacb580c4115b0c` and its prior Ed25519 import
+commit `5ce9dac6c`; the parent project's import manifests identify the pinned
+revisions in the build recipe and the retrieved files match the manifests'
+SHA-256 values. This is evidence from the parent import records, not an
+independent fetch from the original repositories.
+
 The per-epoch quorum and operator-pinned local head do not establish a global
 accepted head, Byzantine consensus, production Cell membership, delegated
 write authority, OCI job dispatch or a chain-anchored recovery receipt. Those
