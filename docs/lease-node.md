@@ -28,6 +28,14 @@ returned `no-majority`; neither missing register was recreated. See
 one VM, over unauthenticated loopback: this does not qualify failure isolation
 or secure communication between Mac hosts.
 
+A separate loopback fixture used a synthetic fleet token with the actual
+native voters and proposer. The correct token chose A, a different token
+received no majority and left all three register hashes unchanged, and a
+subsequent authorized round adopted A. See
+`docs/evidence/awai150-lease-auth-20261103.json`. HMAC here authenticates
+messages but does not encrypt them; host isolation, Tailnet transport, token
+provisioning and replay resistance remain unqualified.
+
 Tracked in [JUN-289](https://linear.app/kotobalabs/issue/JUN-289), under
 ADR-2610071730 P3b. [Lease core](lease-core.md) holds the register's rules.
 `kotoba/fleet_lease_node.kotoba` runs them as separate processes, voters and
