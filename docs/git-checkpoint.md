@@ -79,8 +79,11 @@ All paths are absolute inside a task-owned filesystem scope. Pre-create the
 object-store directory. Stop writers to the source repository for capture;
 the final HEAD/status comparison detects some concurrent changes but is not a
 lock. Give each restoration an exclusively owned destination parent and a new
-destination name. Do not run two restores to the same path: the exists check
-plus rename is not an atomic no-replace lock against concurrent creators.
+destination name. Stage creation must create a new directory, and final
+publication uses FS2 no-replace rename so a concurrently created destination
+is not overwritten. The caller still owns the entire destination parent
+exclusively: these operations do not lock the tree or make concurrent restores
+safe. A refused publish leaves the partial tree for inspection.
 
 ```text
 checkpoint capture REPO STORE KEY PROFILE_FILE POLICY_FILE ENV_FILE SUMMARY_FILE UNTRACKED_JSON EPOCH PARENT TASK
@@ -319,3 +322,9 @@ there would accept files previously refused. The GNU dependency prevents this
 path from working on stock macOS. A native metadata interface that exposes
 special bits and a macOS runtime test are needed before claiming portability;
 this fixture is not an end-to-end GitHub capture or restore test.
+
+The [materialize race fixture](evidence/awai150-materialize-real-fs-fixture.kotoba)
+executes the extracted restore control flow with native FS2 on Linux and
+simulates a destination appearing after the existence check. It also tests an
+existing stage and two negative controls. Git and bundle operations are stubbed;
+see the [record](evidence/awai150-materialize-race-20261103.json) for scope.
