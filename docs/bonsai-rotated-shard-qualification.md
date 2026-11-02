@@ -71,3 +71,31 @@ not establish a suitable production transport. A loopback-over-SSH attempt
 had timed out during initialization; no conclusion about that design follows
 from one attempt. Production requires authenticated transport, correct
 process supervision and failure isolation in addition to model qualification.
+
+## Actual packed-layer geometry and two-Mac check
+
+Reading only the local safetensors header and the installed model manifest
+matched all 402 listed modules. For a uniform **two-rank input-column split**
+that preserves 1024-wide rotations, only 64 of 402 modules have an aligned
+per-rank width; all 402 have an output width divisible by two. The most
+common input width is 5120, i.e. five rotation blocks, so a two-rank equal
+input split would cut a block. This count is only a necessary dimension check:
+it does not account for fused segment layout or determine a complete model
+partition. An uneven three-block/two-block split is a candidate for this width.
+
+A second two-Mac experiment loaded only four tensors for the actual packed
+`layers.63.self_attn.v_proj` layer (5120 inputs, 1024 outputs). The two hosts'
+tensor fingerprints matched. With a deterministic synthetic input, output-row
+partitioning matched the full layer's corresponding outputs exactly. The uneven
+3072/2048 input split followed by a float16 all-sum had maximum absolute
+error 0.00390625 against the unpartitioned result, whose largest absolute
+output was 7.5078125. The preselected 0.25 diagnostic tolerance is not a
+quality threshold. The [probe](evidence/awai149-real-weight-probe.py) and
+[evidence](evidence/awai149-real-weight-20261103.json) do not include weights.
+
+Only one layer and one synthetic activation were exercised. This is not a
+full forward pass or MTP run, and does not verify the other 401 modules,
+segment boundaries, inference quality, the pinned Exo runtime, failure
+handling, or secure production communications. As in the earlier experiment,
+the short-lived direct Tailscale ring had no application-level peer
+authentication; only synthetic activations were used.
