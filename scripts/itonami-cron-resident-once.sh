@@ -15,22 +15,8 @@ for p in "$workroot" "$state" "$config" "$definition" "$cursor" "$source"; do ca
 [ -d "$workroot" ] && [ -d "$state" ] && [ ! -L "$state" ] || fail 'cron-resident/state-unavailable'
 [ "$(/usr/bin/stat -c %a -- "$state")" = 700 ] || fail 'cron-resident/state-not-private'
 umask 077
-# Keep the legacy directory as a sentinel so an older controller cannot run
-# concurrently during an upgrade. Only a directory marked by this version is
-# eligible for recovery, and only while holding the kernel lock. A legacy or
-# incomplete directory is left for operator reconciliation.
-[ -x /usr/bin/flock ] && [ ! -L "$state/.controller-flock" ] || fail 'cron-resident/lock-unavailable'
-exec 9>>"$state/.controller-flock" || fail 'cron-resident/lock-unavailable'
-/usr/bin/flock -n 9 || fail 'cron-resident/locked-or-unknown'
-if [ -e "$state/lock" ] || [ -L "$state/lock" ]; then
-  [ -d "$state/lock" ] && [ ! -L "$state/lock" ] && [ -f "$state/lock/flock-v1" ] && [ ! -L "$state/lock/flock-v1" ] &&
-    [ "$(cat "$state/lock/flock-v1")" = 'cron-resident/flock-v1' ] || fail 'cron-resident/locked-or-unknown'
-  rm "$state/lock/flock-v1" && rmdir "$state/lock" || fail 'cron-resident/locked-or-unknown'
-fi
 mkdir "$state/lock" 2>/dev/null || fail 'cron-resident/locked-or-unknown'
-printf '%s\n' 'cron-resident/flock-v1' > "$state/lock/flock-v1" || fail 'cron-resident/lock-unavailable'
-cleanup_lock() { rm -f "$state/lock/flock-v1" 2>/dev/null || true; rmdir "$state/lock" 2>/dev/null || true; }
-trap cleanup_lock EXIT
+trap 'rmdir "$state/lock" 2>/dev/null || true' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
