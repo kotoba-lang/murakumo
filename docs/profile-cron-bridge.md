@@ -267,3 +267,19 @@ integer `nextAt` and a positive integer `until`. The small source-closure
 fixture `docs/evidence/awai150-head-shape-fixture.kotoba` exercises the real
 JSON, CID and shape functions; its invalid-time bypass control fails. This is
 format validation, not authentication of the time or consumed request.
+
+The draft resident now stores a signed head envelope: the key must match the
+host-pinned `authorB`, and the resident and cron bridge verify its signature
+before using the payload. Publishing also verifies the candidate and binds it
+to the expected checkpoint, schedule and request. The source-closure fixture
+`docs/evidence/awai150-signed-head-fixture.kotoba` uses the actual Ed25519,
+JSON, CID and head functions with a fixed public test seed; it detects changed
+schedule or request, wrong signers, unsigned heads and malformed input. An
+Amu macOS run printed 0; bypassing signature verification printed 1. A
+preliminary run trapped on malformed JSON, leading to an explicit validity
+check before canonical parsing. The native Linux attempt did not run: its
+disposable VM entered emergency mode during ignition and was removed.
+
+This draft format refuses earlier unsigned heads and has no migration yet.
+It does not prevent replay of an older valid signed head, qualify key custody,
+prove the complete resident/bridge integration, or authorize deployment.
