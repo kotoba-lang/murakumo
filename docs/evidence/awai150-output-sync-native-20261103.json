@@ -1,0 +1,27 @@
+{
+  "kind": "awai.profile-output-sync-native-fixture/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "sourceCommit": "e5e2ef0cc54d6ba800ad7aa2bc812bbf59d61197",
+  "target": "aarch64-linux-static in disposable one-CPU, 2 GiB Podman VM",
+  "filesystem": "xfs on VM /var; a separate preliminary run used tmpfs",
+  "compiler": {
+    "sourceCommit": "dd35c6379e3b87f024bf685fa8d61af0aa07cea1",
+    "sha256": "688324e0fdc7a93a664ae55fe0ad417e7a980ab844656f3f97889812363c9479"
+  },
+  "fixture": {
+    "source": "awai150-output-sync-native-fixture.kotoba",
+    "sourceSha256": "8483827434b2e324a62609374f73f7cf9347ee3286904d5fec7dbbbd947084ae",
+    "artifactSha256": "78c889627268c96c677392f57acc6ac415d4541c82bc8c11f21137d784747d24",
+    "mutantSourceSha256": "d3436f614b6398d8d5b7a807a547f8162823a430b4d34b9005f1836b0ef799e2",
+    "mutantArtifactSha256": "ffabf132908b5919b6157daa8c050b09dee57f139e4196164c4f4b2590e215a0",
+    "substitutions": "Text identity replaces CID hashing; the dirfail mode injects failure for the output-directory FSYNC. Other file operations invoke the native wire-35 provider."
+  },
+  "observed": {
+    "newFileAndMatchingExistingFile": "exit 0; expected bytes observed",
+    "mismatchingExistingFile": "exit 0; refusal expected and old bytes retained",
+    "injectedDirectorySyncFailure": "exit 0; refusal expected",
+    "directorySyncBypassMutant": "exit 2 for injected-failure case",
+    "gracefulVmRestart": "new and existing files retained; native reuse returned exit 0"
+  },
+  "scope": "Actual native file writes, file fsync and output-directory fsync on XFS; directory sync failure is injected rather than caused by the filesystem. Reboot was orderly. Not a sudden power-loss or storage-controller test, full state publication, real model, complete resident, remote filesystem, macOS runtime or distributed fencing qualification. VM and task-owned temporary files removed."
+}

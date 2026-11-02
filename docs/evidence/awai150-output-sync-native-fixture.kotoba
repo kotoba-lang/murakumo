@@ -1,0 +1,55 @@
+(ns awai150-output-sync-native (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn- cp-text [b :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 b)))
+
+(defn- cp-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+
+(defn- cp-sep [s :string] :string (str s "_SEP"))
+
+(defn- cp-fs [s :string] :string
+ (if (and (= (cp-arg 1) "dirfail") (= s (str (cp-arg 0) "/outputsFSYNC_SEP"))) "0"
+   (typed-cap-call 35 :string :string s)))
+(defn- cp-exists? [p :string] :bool (= (cp-fs (str p (cp-sep "EXISTS"))) "1"))
+
+(defn- cp-read [p :string] :vector-i64
+  (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (string-to-utf8 p))))
+
+(defn- cp-cid [b :vector-i64] :string (cp-text b))
+(defn- cp-cut [b :vector-i64 start :i64] :i64
+  (let [end (if (< (+ start 4096) (vector-count b)) (+ start 4096) (vector-count b))]
+    (loop [i start]
+      (cond (>= i end) end
+            (or (= (vector-at b i) 87) (= (vector-at b i) 65)) (+ i 1)
+            :else (recur (+ i 1))))))
+
+(defn- cp-piece [p :string b :vector-i64 i :i64 e :i64 first :bool] :i64
+  (let [prefix (cp-bytes (str p (cp-sep (if first "WRITE" "APPEND")))) n (vector-count prefix)
+        v (loop [k 0 v (vector-alloc (+ n (- e i)))]
+            (if (= k (+ n (- e i))) v
+              (recur (+ k 1) (vector-assoc! v k (if (< k n) (vector-at prefix k) (vector-at b (+ i (- k n))))))))
+        z (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 v))] 0))
+
+(defn- cp-write [p :string b :vector-i64] :bool
+  (let [z (loop [i 0 first true]
+            (let [e (cp-cut b i) x (cp-piece p b i e first)]
+              (if (= e (vector-count b)) 0 (recur e false))))
+        flush (cp-fs (str p (cp-sep "FSYNC")))]
+    (and (= flush "1") (= (cp-cid (cp-read p)) (cp-cid b)))))
+
+(defn- cp-parent-dir [p :string] :string
+  (loop [i (- (string-length p) 1)] (if (< i 1) "/" (if (= (string-substring p i (+ i 1)) "/") (string-substring p 0 i) (recur (- i 1))))))
+
+(defn- pr-save-output [path :string answer :vector-i64 cid :string] :bool
+  (and (if (cp-exists? path)
+         (and (= (cp-cid (cp-read path)) cid) (= (cp-fs (str path (cp-sep "FSYNC"))) "1"))
+         (cp-write path answer))
+       (= (cp-fs (str (cp-parent-dir path) (cp-sep "FSYNC"))) "1")))
+
+
+(defn main [] :i64
+ (let [mode (cp-arg 1) path (str (cp-arg 0) "/outputs/out.json")
+       ok (pr-save-output path (cp-bytes "fixture-output") "fixture-output")]
+  (cond (or (= mode "new") (= mode "existing")) (if ok 0 1)
+        (or (= mode "mismatch") (= mode "dirfail")) (if ok 2 0)
+        :else 3)))
