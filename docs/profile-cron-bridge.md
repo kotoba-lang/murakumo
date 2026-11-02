@@ -291,3 +291,14 @@ request, missing candidates and unsigned candidates. Removing each of the
 three expected-value checks separately makes the fixture print 1. This fixture
 substitutes in-memory filesystem access and a shape-only replica-admission
 predicate; it does not test persistence, actual receipts or concurrent writers.
+
+The checkpoint and lease source now emit FS2-framed requests, including byte
+reads/writes and ranged reads; callers use explicit FS2 rename and fsync
+operations. On an isolated ARM64 Linux/XFS VM, native extracted-source
+fixtures wrote and independently re-read a signed head, rejected a modified
+schedule, and round-tripped binary checkpoint data and a lease register. The
+files survived an orderly VM restart. Evidence and the compiler/image hashes
+are in `docs/evidence/awai150-fs2-native-20261103.json`. These fixtures do not
+qualify the complete resident, actual quorum, GitHub transport, Mac runtime,
+concurrent writers or sudden power loss. The prior compiler's legacy wire-35
+path is no longer a fallback for this draft component.

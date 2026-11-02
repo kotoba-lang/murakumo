@@ -37,7 +37,7 @@
                     (not (cp-hex? h (string-length h)))) "peer/block-refused"
               (let [b (hex-bytes h)]
                 (if (and (= (cp-cid b) cid) (= (cp-put store b) cid)
-                         (= (cp-fs (str store (cp-sep "FSYNC"))) "1")) (str "stored " cid) "peer/store-refused"))))
+                         (= (cp-fs "M" store "") "1")) (str "stored " cid) "peer/store-refused"))))
           (= op "get")
           (if (and (cp-block? store cid) (<= (vector-count (cp-load store cid)) 16384))
             (str "block " cid " " (hex (cp-load store cid))) "peer/absent")
