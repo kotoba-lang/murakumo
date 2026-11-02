@@ -200,6 +200,18 @@ Both peer processes and stores were on the same Linux host with test-only
 credentials: this does not establish independent failure domains, retention
 receipts, GitHub persistence, or a resident inference/lease cycle.
 
+A subsequent isolated drill transferred the same signed fixture from the K16
+Linux host to the separately identified `aiueos-6600hs` Linux host through
+Tailscale. Each host fsynced the closure and signed a two-minute test retention
+receipt using a different public test key and fixture domain; the native pair
+verifier returned `retention/pair-verified`. On the second host, native
+verification and checkout restoration succeeded, and SHA-256 comparisons of
+the profile, context, state and output matched the first host. A wrong token
+was rejected. The temporary peer listener was stopped and its random token
+cleared after the drill; fixture objects were retained. This demonstrates the
+selected host-to-host path, not sustained retention, Mac mini deployment,
+GitHub persistence, a production identity, or a resident inference/lease cycle.
+
 ## Deployment and restart
 
 Run voter/peer/resident as separate **enabled** user services with linger on
