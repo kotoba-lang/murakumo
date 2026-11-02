@@ -4,15 +4,29 @@
 ;; This coordinator does not create a distributed lease or a resource limit.
 (ns murakumo.profile-cron-controller (:export [profile-cron-controller-main]))
 
-(defn- nc-sensitive-path? [cfg :vector-i64 config :string definition :string cursor :string source :string p :string] :bool
-  (or (= p config) (= p definition) (= p cursor) (= p source)
-      (= p (cp-str cfg 0 "head")) (= p (cp-str cfg 0 "store"))
-      (= p (cp-str cfg 0 "request")) (= p (cp-str cfg 0 "status"))
-      (= p (cp-str cfg 0 "candidateHead")) (= p (cp-str cfg 0 "leaseFile"))
-      (= p (cp-str cfg 0 "archiveAck")) (= p (cp-str cfg 0 "key"))
+(defn- nc-path-or-tmp? [p :string base :string] :bool
+  (or (= p base) (= p (str base ".tmp"))))
+
+(defn- nc-resident-path? [cfg :vector-i64 p :string] :bool
+  (or (nc-path-or-tmp? p (cp-str cfg 0 "head")) (= p (cp-str cfg 0 "store"))
+      (= p (cp-str cfg 0 "runtimeRoot")) (= p (cp-str cfg 0 "cache"))
+      (nc-path-or-tmp? p (cp-str cfg 0 "request")) (nc-path-or-tmp? p (cp-str cfg 0 "status"))
+      (nc-path-or-tmp? p (cp-str cfg 0 "candidateHead")) (nc-path-or-tmp? p (cp-str cfg 0 "leaseFile"))
+      (= p (cp-str cfg 0 "key"))
       (= p (cp-str cfg 0 "tokenFile")) (= p (cp-str cfg 0 "policyFile"))
       (= p (cp-str cfg 0 "environmentFile")) (= p (cp-str cfg 0 "runtimeFile"))
       (= p (str (cp-str cfg 0 "head") ".resident-lockfile"))))
+
+(defn- nc-sensitive-path? [cfg :vector-i64 config :string definition :string cursor :string source :string p :string] :bool
+  (or (= p config) (= p definition) (= p cursor) (= p source)
+      (= p (cp-str cfg 0 "archiveAck")) (nc-resident-path? cfg p)))
+
+;; The archive publisher replaces both ack and its temporary path. Reject
+;; exact conflicts before acquiring the lock or touching resident state.
+(defn- nc-ack-safe? [cfg :vector-i64 config :string] :bool
+  (let [ack (cp-str cfg 0 "archiveAck") tmp (str ack ".tmp")]
+    (and (cp-safe-absolute? ack) (not (= ack config)) (not (= tmp config))
+         (not (nc-resident-path? cfg ack)) (not (nc-resident-path? cfg tmp)))))
 
 ;; The marker is created and synced before inference can be submitted. A
 ;; leftover or partial marker is UNKNOWN; never infer failure and retry. The
@@ -39,7 +53,15 @@
           (not (cp-safe-absolute? source-path)) (not (cp-safe-absolute? state))
           (not (cp-safe-absolute? work-before)) (not (cp-safe-absolute? work-after))
           (not (cp-safe-absolute? gh)) (= work-before work-after)
+          (= definition-path config-path) (= source-path config-path)
           (= cursor-path config-path) (= cursor-path definition-path) (= cursor-path source-path)
+          (nc-resident-path? cfg definition-path) (nc-resident-path? cfg cursor-path)
+          (nc-resident-path? cfg source-path)
+          (= definition-path (cp-str cfg 0 "archiveAck")) (= cursor-path (cp-str cfg 0 "archiveAck"))
+          (= source-path (cp-str cfg 0 "archiveAck"))
+          (= definition-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
+          (= cursor-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
+          (= source-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
           (not (cp-exists? definition-path)) (not (cp-exists? cursor-path)) (not (cp-exists? source-path)))
     "cron-resident/input-refused"
     (let [definition (cp-read definition-path) cursor (cp-read cursor-path) source (cp-read source-path)
@@ -79,6 +101,7 @@
         cfg (if (and (cp-safe-absolute? config) (cp-exists? config)) (cp-read config) (vector-alloc 0))
         head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
     (if (or (not (json-valid? cfg)) (not (json-canonical? cfg)) (not (rt-lock-config-safe? cfg config))
+            (not (nc-ack-safe? cfg config))
             (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
             (not (= (cp-num cfg 0 "intervalMs") 86400000))
             (not (rf-voters? (cp-str cfg 0 "voters"))) (= (lease-token (cp-str cfg 0 "tokenFile")) "")
