@@ -41,7 +41,12 @@ to the model, and advances state to 3. Steps outside 1..2 and replays are
 refused. Output files are fsynced before publishing state with a temporary
 file, rename and parent fsync. This is an exclusively owned, quiesced task
 directory; it has no concurrent-writer locking or exactly-once guarantee.
-An interrupted publication may leave an output requiring operator recovery.
+If publication is interrupted after the output was written but before state
+advanced, a retry may reuse that file only when its CID matches the completed
+response for the same request. The file is fsynced again before advancing
+state. A different or partial output is left untouched and publication fails;
+it still needs investigation. This does not provide concurrent-writer locking
+or guarantee exactly-once inference or external effects.
 
 The canonical runtime descriptor contains `kind` =
 `itonami.readonly-profile-runtime/1`, `profile` = `accountability-steward`,

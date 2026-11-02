@@ -1,6 +1,17 @@
 ;; Native tests; compose after profile_recovery and checkpoint dependencies.
 (ns murakumo.profile-recovery-test
-  (:export [test-profile-recovery test-profile-answer]))
+  (:export [test-profile-recovery test-profile-answer test-profile-save-output]))
+
+;; DIR is an exclusively owned fresh test directory; do not overwrite an
+;; existing file. Exercise real filesystem reads, writes and fsync barriers.
+(defn test-profile-save-output [dir :string] :bool
+  (let [path (str dir "/profile-output-test") original (cp-bytes "completed output")
+        other (cp-bytes "different output") cid (cp-cid original)]
+    (and (not (cp-exists? path))
+         (pr-save-output path original cid)
+         (pr-save-output path original cid)
+         (not (pr-save-output path other (cp-cid other)))
+         (= (cp-cid (cp-read path)) cid))))
 
 (defn test-profile-answer [] :bool
   (let [done (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"draft\"}}]}")
