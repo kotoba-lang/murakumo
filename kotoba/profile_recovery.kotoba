@@ -28,13 +28,44 @@
 
 (defn- pr-pause [] :bool (arena-scope (cp-ok? (cp-spawn (str "/usr/bin/sleep" (cp-a) "1")))))
 (defn- pr-unit-state [unit :string] :string
-  (cp-line (cp-out (cp-spawn (str "/usr/bin/systemctl" (cp-a) "--user" (cp-a) "show" (cp-a)
-    "--property=SubState" (cp-a) "--value" (cp-a) unit)))))
+  ;; A failed query is not evidence that the unit does not exist. Inspect the
+  ;; load state separately so only an explicit not-found permits first submit.
+  (let [load (cp-spawn (str "/usr/bin/systemctl" (cp-a) "--user" (cp-a) "show" (cp-a)
+               "--property=LoadState" (cp-a) "--value" (cp-a) unit))
+        value (if (cp-ok? load) (cp-line (cp-out load)) "")]
+    (cond (= value "not-found") "unit/not-found"
+          (not (= value "loaded")) "unit/unknown"
+          :else (let [sub (cp-spawn (str "/usr/bin/systemctl" (cp-a) "--user" (cp-a) "show" (cp-a)
+                            "--property=SubState" (cp-a) "--value" (cp-a) unit))]
+                  (if (cp-ok? sub) (cp-line (cp-out sub)) "unit/unknown")))))
+
+(defn- pr-unit-active? [s :string] :bool
+  (or (= s "start-pre") (= s "start") (= s "start-post") (= s "running")))
 
 (defn- pr-unit-code [unit :string] :i64
   (arena-scope
     (let [s (pr-unit-state unit)]
-      (cond (= s "exited") 1 (= s "failed") -1 :else 0))))
+      (cond (= s "exited") 1 (pr-unit-active? s) 0 :else -1))))
+
+;; A request is created only after an explicit not-found observation and
+;; before any submission. A leftover request or marker is UNKNOWN, including
+;; after a crash between the durable marker and the systemd call. Existing
+;; units may only be observed when their request bytes still match.
+;; The caller must serialize writers to this private cache directory.
+(defn- pr-run-decision [status :string request-exists :bool request-matches :bool
+                       marker-exists :bool response-exists :bool] :string
+  (cond (and (or (pr-unit-active? status) (= status "exited"))
+             request-exists request-matches) "profile/reuse-unit"
+        (and (= status "unit/not-found") (not request-exists)
+             (not marker-exists) (not response-exists)) "profile/new-unit"
+        :else "profile/submission-unknown"))
+
+(defn- pr-prepare-submit [request :string marker :string body :vector-i64] :bool
+  (and (not (cp-exists? request)) (not (cp-exists? marker))
+       (cp-write request body)
+       (= (cp-fs (str (cp-parent-dir request) (cp-sep "FSYNC"))) "1")
+       (cp-write marker (cp-bytes "itonami.inference-dispatch/1\n"))
+       (= (cp-fs (str (cp-parent-dir marker) (cp-sep "FSYNC"))) "1")))
 
 ;; This is a host-pinned transport description, not proof that the socket's
 ;; peer is the expected machine or that its model is qualified. The host must
@@ -208,8 +239,14 @@
                          (str "local-mtp\n" (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
                          body))) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
                     request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
-                    saved (cp-write request (cp-bytes body)) status (pr-unit-state unit)
-                    submitted (and saved (or (= status "start") (= status "running") (= status "exited") (pr-submit unit request response seconds runtime)))]
+                    marker (str cache "/" id ".dispatch") body-bytes (cp-bytes body)
+                    present (cp-exists? request) matches (if present (= (cp-cid (cp-read request)) (cp-cid body-bytes)) false)
+                    decision (pr-run-decision (pr-unit-state unit) present matches (cp-exists? marker) (cp-exists? response))
+                    submitted (cond (= decision "profile/reuse-unit") true
+                                    (= decision "profile/new-unit")
+                                    (and (pr-prepare-submit request marker body-bytes)
+                                         (pr-submit unit request response seconds runtime))
+                                    :else false)]
                 (if (or (not submitted) (not (pr-wait unit response runtime))) "profile/inference-unavailable-state-retained"
                   (let [raw (cp-read response)
                         answer (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw)
