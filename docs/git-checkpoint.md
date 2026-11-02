@@ -331,8 +331,9 @@ masks these bits and is insufficient. U requires the candidate runtime in
 refuse the operation. The [full-mode capture fixture](evidence/awai150-fullmode-capture-fixture.kotoba)
 uses real Git and an explicitly test-only Linux ARM64 compiler; see the
 [evidence](evidence/awai150-fullmode-capture-20261103.json). Darwin does not
-yet have a qualified provider for this operation; neither this fixture nor
-the historical tests establish an end-to-end GitHub capture or restore.
+yet have a qualified provider for this operation. The capture fixture is not
+itself an end-to-end GitHub test; the later signed CLI test below used only
+synthetic data and a separate operator-side Git transfer.
 
 The [materialize race fixture](evidence/awai150-materialize-real-fs-fixture.kotoba)
 executes the extracted restore control flow with native FS2 on Linux and
@@ -347,3 +348,11 @@ destination and a corrupted bundle chunk. The fixture calls internal functions
 with an unsigned minimal envelope; it does not verify signatures, exercise the
 public capture CLI or contact GitHub. See the
 [evidence record](evidence/awai150-git-roundtrip-20261103.json).
+
+A later [signed CLI and GitHub fixture](evidence/awai150-github-cli-20261103.json)
+exercised capture, contract verification and restoration of synthetic dirty and
+untracked content. Host-side Git stored the verified closure in a private test
+ref, then fetched it independently; the native CLI verified and restored the
+fetched blocks. This is an operator-run nonsecret test, not an autonomous
+GitHub archive component or a production bot. Its test compiler is not a
+released or self-built compiler, and the Mac runtime remains unqualified.
