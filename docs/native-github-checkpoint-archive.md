@@ -35,3 +35,19 @@ policy described above. The separate signed GitHub CLI fixture in
 [git-checkpoint.md](git-checkpoint.md) used operator-side Git; it did not run
 this archive candidate. No native GitHub transport, production secret path,
 Mac runtime or automated bot has been qualified by either test.
+
+The candidate now asks real Git for matching effective configuration key names
+before copying the closure or initiating Git transport. It refuses known URL
+rewrites, proxy settings, credential helpers, included config files and selected
+TLS/redirect overrides; errors also refuse. Git transport explicitly requests
+TLS verification and no HTTP redirects. The values are not emitted by this
+check. A [bounded test](evidence/awai150-git-config-guard-20261103.json)
+exercised the refusal cases with real Git. Its positive control modified the
+remote expression to point at a local bare repository.
+
+This check is **not** a complete security boundary: environment-supplied
+proxies, trust stores, credentials, Git/GH executables, configuration races,
+DNS and other host effects remain outside its proof. The host requirements
+above still apply, and a failed or unknown operation must be reconciled before
+retrying. The earlier local-remote fixture documents the earlier source before
+this guard and does not qualify the new transport configuration.
