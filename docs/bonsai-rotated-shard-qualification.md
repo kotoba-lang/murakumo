@@ -244,3 +244,30 @@ peer authentication. Two contextual pipeline runs had sampled pressure-free
 minima of 75/73/69%; the reference minimum was 84%, with the same 60% guard.
 These samples are neither peak RAM measurements nor proof that other work was
 unaffected. [Evidence](evidence/awai149-distributed-mtp-20261103.json).
+
+## Nine-Mac experimental MTP pipeline
+
+The later [nine-Mac experiment](evidence/awai149-nine-mac-mtp-20261103.json)
+partitioned the 64 decoder layers into nine consecutive stages and used the
+actual MTP sidecar for four short multi-token prompts. The serial target
+verification accepted all four draft tokens. For the first case, the target
+and draft logit hashes matched both the three-Mac result and the separate
+single-Mac streaming reference; those references shared the same model
+loading and mathematical implementation, so this is not independent
+production-loader parity. The [probe](evidence/awai149-nine-mac-mtp-context-probe.py)
+is experimental Python, not the native runtime or a deployed service.
+
+Six temporary shard transfers used mutually authenticated TLS and checked
+SHA-256 at both ends; the actual inference ring instead used temporary direct
+Tailscale TCP without application-level peer authentication. The evidence
+records a 4 GiB per-process MLX limit and sampled pressure-free minima of
+78–87%. These readings do not qualify total unified-memory limits, other
+workloads, process-tree recovery or a fleet governor. The tenth Mac was not
+used in this run because its observed memory pressure and swap were high;
+this is not a permanent assessment of that machine.
+
+This observation advances the distributed MTP correctness investigation,
+but proves neither a speedup nor safe continuous service. It does not cover
+batched speculative verification, representative contexts and quality, cache
+rollback, authenticated inference transport, bounded process lifetime,
+concurrent reservations, actual bot execution, or ten-host scheduling.
