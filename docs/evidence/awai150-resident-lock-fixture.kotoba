@@ -1,0 +1,30 @@
+(ns resident-serialization-fixture (:export [main]))
+(defn- cp-str [b :vector-i64 p :i64 k :string] :string "/var/tmp/awai150-resident-lock/head")
+(defn- cp-safe-absolute? [s :string] :bool (= s "/var/tmp/awai150-resident-lock/head"))
+(defn- rt-cycle [cfg :vector-i64] :string
+  (if (= (vector-at cfg 0) 1)
+    (let [r (typed-cap-call 35 :string :string "\u0000FS2\u0000B/var/tmp/awai150-resident-lock/ready\u0000ready")
+          wait (typed-cap-call 7 :string :string "sleep 3000")]
+      "resident/done") "resident/done"))
+(defn- rt-refresh [cfg :vector-i64] :string "resident/refreshed")
+(defn- rt-archive [cfg :vector-i64] :string "resident/archive-descriptor")
+(defn- rt-status [cfg :vector-i64 phase :string] :i64 0)
+(defn- rt-serialized [cfg :vector-i64 operation :string] :string
+  (let [head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
+    (if (not (and (cp-safe-absolute? head)
+                  (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1")))
+      "resident/local-writer-busy"
+      (let [result (cond (= operation "cycle") (rt-cycle cfg)
+                         (= operation "refresh") (rt-refresh cfg)
+                         (= operation "archive") (rt-archive cfg)
+                         :else "resident/command-refused")
+            status (if (= operation "cycle") (rt-status cfg result) 0)
+            released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")]
+        (if released result "resident/local-unlock-failed")))))
+
+(defn main [] :i64
+  (let [mode (typed-cap-call 38 :string :string "0")
+        cfg [(if (= mode "hold") 1 0)]
+        operation (cond (= mode "archive") "archive" (= mode "refresh") "refresh" :else "cycle")
+        result (rt-serialized cfg operation)
+        out (typed-cap-call 37 :string :string (str result "\n"))] 0))

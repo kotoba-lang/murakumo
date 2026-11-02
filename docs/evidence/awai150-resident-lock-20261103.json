@@ -1,0 +1,11 @@
+{
+  "kind": "awai.resident-local-writer-lock/1",
+  "date": "2026-11-03",
+  "environment": "Disposable Linux ARM64 VM, 1 CPU and 2 GiB RAM",
+  "residentSourceSha256": "84e847a07dadf5703aa9e4e4335aad46569a16aef7225727f5027e200f4f7b92",
+  "fixtureSha256": "349edcb78618d430ed345072293a4e871b74745cbd379ea52c615ce59cd27f3b",
+  "fixtureElfSha256": "b03e11ddc41ec7eada19046069d5114bcb238b322dec058f39b66ced9653256c",
+  "compilerSha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "observed": "The exact extracted rt-serialized function held a kernel flock across a sleeping fixture cycle. Separate native processes attempting cycle, refresh and archive received local-writer-busy. A later cycle succeeded after normal completion; another succeeded after the test holder was SIGKILLed. The lock inode remained the same. Mac CLI type-check accepted the combined source; an extracted configuration path collision test passed and a removed status-collision check made its negative control fail.",
+  "limits": "Resident operations, configuration and status are stubbed in the Linux fixture. No inference, external child process, full resident, Darwin runtime, multi-host coordination, inode replacement attack, power loss or fleet governor was tested. Kernel lock release on process death is not proof that delegated children stopped."
+}
