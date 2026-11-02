@@ -1,0 +1,10 @@
+{
+  "kind": "awai.checkpoint-materialize-race-fixture/1",
+  "date": "2026-11-03",
+  "environment": "Disposable local Linux ARM64 VM, 1 CPU and 2 GiB RAM",
+  "baseCompilerSha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "fixtureSha256": "16ee26925f49e60e27764419fc188c2cc75b9b37941aa9f88fac8f92e23a9557",
+  "fixtureElfSha256": "afce68dae65f4469b650bf7b1f796cb2933ec073c7cdef971f4d378027c606d0",
+  "observed": "The extracted cp-materialize function, using actual native FS2 against the VM filesystem, restored a fresh destination, refused an existing stage created after the mocked existence check while preserving its sentinel, and refused a destination created after the check while retaining its partial tree. Replacing no-replace T with ordinary L or replacing exclusive I with an allow-existing mkdir made the fixture return failure.",
+  "limits": "The Git, bundle and JSON helpers are stubs and the race is staged before execution by deliberately forcing the earlier existence check false. This is not an end-to-end checkpoint restore, concurrent adversarial test, Darwin runtime test or proof that the tree can be shared by writers. The destination parent still requires exclusive ownership."
+}

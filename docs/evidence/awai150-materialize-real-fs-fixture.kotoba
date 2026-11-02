@@ -1,0 +1,59 @@
+(ns checkpoint-publish-race-fixture (:export [main]))
+;; Deterministic stubs model a contender creating the stage or destination
+;; after the initial existence check. They do not emulate a real filesystem.
+(defn- cp-payload [b :vector-i64] :i64 0)
+(defn- cp-str [b :vector-i64 p :i64 key :string] :string
+  (cond (= key "stash") "none" (= key "head") "head" :else "bundle"))
+(defn- cp-safe-absolute? [p :string] :bool true)
+(defn- cp-exists? [p :string] :bool false)
+(defn- cp-assemble-bundle [store :string cid :string] :bool true)
+(defn- cp-frame [op :string path :string tail :string] :string
+  (str "\u0000FS2\u0000" op path "\u0000" tail))
+(defn- cp-fs [op :string path :string tail :string] :string
+  (let [r (typed-cap-call :fs/app-data :string :string (cp-frame op path tail))]
+    (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
+      (string-substring r 5 (string-length r)) "")))
+(defn- cp-mkdir [p :string] :bool (or (= (cp-fs "I" p "") "1") (= p "/var/tmp/awai154/data/checkpoint/stage-race.partial")))
+(defn- cp-git [p :string command :string] :string "0\n")
+(defn- cp-ok? [s :string] :bool (= s "0\n"))
+(defn- cp-a [] :string "ARG_SEP")
+(defn- json-member [b :vector-i64 p :i64 name :string] :i64 0)
+(defn- json-count [b :vector-i64 p :i64] :i64 0)
+(defn- json-element [b :vector-i64 p :i64 i :i64] :i64 0)
+(defn- cp-real-parents? [stage :string path :string create :bool] :bool true)
+(defn- cp-write [p :string b :vector-i64] :bool true)
+(defn- cp-load [p :string cid :string] :vector-i64 (vector-alloc 0))
+(defn- cp-parent-dir [p :string] :string "/var/tmp/awai154/data/checkpoint")
+(defn- cp-materialize [store :string b :vector-i64 dest :string] :string
+  (let [p (cp-payload b) head (cp-str b p "head") stash (cp-str b p "stash")
+        stage (str dest ".partial") ref (str "refs/itonami/checkpoints/" (if (= stash "none") head stash))
+        bundle (str store "/" (cp-str b p "bundle") ".bundle")]
+    (cond (not (cp-safe-absolute? dest)) "checkpoint/destination"
+          (or (cp-exists? dest) (cp-exists? stage)) "checkpoint/destination-exists"
+          (not (cp-assemble-bundle store (cp-str b p "bundle"))) "checkpoint/bundle-assembly"
+          (not (= (cp-fs "I" stage "") "1")) "checkpoint/mkdir"
+          :else
+          (let [init (cp-git stage "initARG_SEP--quietARG_SEP--template=")
+                fetch (if (cp-ok? init) (cp-git stage (str "-c" (cp-a) "protocol.file.allow=always" (cp-a) "fetch" (cp-a) "--no-tags" (cp-a) bundle (cp-a) (str ref ":" ref))) "refused")
+                checkout (if (cp-ok? fetch) (cp-git stage (str "checkout" (cp-a) "--quiet" (cp-a) "--detach" (cp-a) head)) "refused")
+                apply (if (and (cp-ok? checkout) (not (= stash "none"))) (cp-git stage (str "stash" (cp-a) "apply" (cp-a) "--index" (cp-a) ref)) checkout)
+                fsck (if (cp-ok? apply) (cp-git stage "fsckARG_SEP--fullARG_SEP--strict") "refused")
+                us (json-member b p "untracked")
+                files (if (cp-ok? fsck)
+                  (loop [i 0]
+                    (if (= i (json-count b us)) true
+                      (let [u (json-element b us i) path (str stage "/" (cp-str b u "path"))]
+                        (if (and (cp-real-parents? stage (cp-str b u "path") true) (not (cp-exists? path)) (cp-write path (cp-load store (cp-str b u "cid")))
+                                 (= (cp-fs "H" path (cp-str b u "mode")) "1"))
+                          (recur (+ i 1)) false)))) false)]
+            (if (not files) "checkpoint/materialize-failed-partial-retained"
+              (let [sync (cp-fs "M" stage "")
+                    rename (if (= sync "1") (cp-fs "T" stage dest) "0")
+                    parent-sync (if (= rename "1") (cp-fs "M" (cp-parent-dir dest) "") "0")]
+                (if (and (= rename "1") (= parent-sync "1")) "checkpoint/restored" "checkpoint/publish-failed")))))))
+
+(defn main [] :i64
+  (let [envelope (vector-alloc 0)]
+    (if (and (= (cp-materialize "/store" envelope "/var/tmp/awai154/data/checkpoint/fresh") "checkpoint/restored")
+             (= (cp-materialize "/store" envelope "/var/tmp/awai154/data/checkpoint/stage-race") "checkpoint/mkdir")
+             (= (cp-materialize "/store" envelope "/var/tmp/awai154/data/checkpoint/publish-race") "checkpoint/publish-failed")) 0 1)))
