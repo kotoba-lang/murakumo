@@ -223,6 +223,10 @@
           (not (rt-pins-ok? cfg)) "resident/runtime-pins-refused"
           (not (cp-block? (cp-str cfg 0 "store") root)) "resident/missing-checkpoint"
           (not (rt-root? cfg (cp-load (cp-str cfg 0 "store") root))) "resident/checkpoint-refused"
+          ;; Do not turn an invalid checkpoint or replica receipts into
+          ;; a newly admitted head. Bootstrap has no prior head; an existing
+          ;; head may be refreshed only after its full contract is intact.
+          (and (cp-exists? head-path) (not (rt-intact-head? cfg head))) "resident/head-refused"
           (not (rt-admitted-head? cfg head))
           (if (and (rt-replicate cfg root (if (cp-exists? head-path) (cp-num head 0 "nextAt") 0)
                       (if (cp-exists? head-path) (cp-str head 0 "request") "none"))
