@@ -1,0 +1,27 @@
+{
+  "kind": "awai.lease-group-scoped-flock-native-fixture/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "baseCommit": "76a3c0f",
+  "compilerSha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "environment": "Two disposable Linux ARM64 Podman VMs, each 1 CPU and 2 GiB RAM, local XFS; stopped and removed",
+  "provider": {"fixture": "awai150-linux-flock-fixture.kotoba", "sourceSha256": "e80648ca4b5d06383e0e9ce57f60218c4c6aa30ceace2bcbee594c21124f711d", "imageSha256": "24d4b697c27d6d8ae725c609138e7e51fcfbb841af4aec1c4fd23d043970e2d4", "observed": "A second native process was refused while the holder lived; after SIGKILL and wait it acquired and released the same lock file."},
+  "group": {
+    "fixture": "awai150-group-flock-fixture.kotoba",
+    "sourceSha256": "905da744021af66ae0b734a489ba3c9187fa87d81efdb7eab733f290bdb8c48f",
+    "imageSha256": "cbf7420a0280257f978c49832976cc863952d3d32d9e384deb16b74939016172",
+    "afterWatermarkMutationSha256": "299f6115129d519a6846563b5c3d4d905ec4bdaa9be82ce720112de9e6de6eae",
+    "afterStateMutationSha256": "4caca4ebd47887bb058ae21d39230de779a59792e9c2ad33faeffb7785626621",
+    "observed": "A legacy .epoch-lock directory refused without mutation. A concurrent process was refused while a test-instrumented holder was alive. Killing that holder after watermark publication released the flock automatically but the absent epoch stayed refused. Killing after initialized state released the flock automatically and a fresh process successfully prepared without manual unlock."
+  },
+  "quorum": {
+    "serverSource": "awai150-group-flock-server-fixture.kotoba",
+    "serverSourceSha256": "628527964c8c173cdd2b06c8c4655dd44765ce7eea0bcd01166d4c9f9a2cf007",
+    "serverImageSha256": "40f897422e6597a277e99033d9afc6a506d8ef16ada2d4d3c2dd1da413dff697",
+    "clientSource": "awai150-group-flock-client-fixture.kotoba",
+    "clientSourceSha256": "cf48884923866e517c3267764055062cffc9266f376a38d355b1f0c36954d276",
+    "clientImageSha256": "2a021f77ef00e080295fcd25d61e80cb699b35fddced20239efe4ef81110aa79",
+    "topology": "awai150-group-test-topology.json",
+    "observed": "Three authenticated native group servers with signed synthetic topology chose epochs 1 and 2. After SIGKILL of one server the others retained the first value. With one server down and a second epoch state removed, no majority was chosen and the missing file remained absent."
+  },
+  "limits": "Group owns its lock and writes within one process; do not generalize this to spawned child processes or a resource governor. The lock file must never be unlinked or replaced while any participant may run. Whole-directory rollback, sudden power loss, production keys, preexisting-state migration, Mac runtime, multi-host isolation, Tailscale transport, full bot and inference are not qualified."
+}

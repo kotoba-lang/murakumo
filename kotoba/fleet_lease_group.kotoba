@@ -20,14 +20,17 @@
            (and (= epoch (+ high 1)) (= (ln-store water (str epoch " epoch 0 - -")) 1)
                 (= (ln-init-fresh file) "voter/init-created"))))))
 
-;; One local group directory has one writer at a time. A process that dies
-;; with this directory held leaves it in place: callers refuse until a
-;; separately verified recovery removes the stale lock.
+;; One local group directory has one writer at a time. The native provider
+;; holds a kernel flock until release or process death; this process performs
+;; the writes itself and never delegates them to a child. The lock inode must
+;; remain fixed and the host must keep the directory private.
 (defn- lg-locked-request [dir :string epoch :i64 file :string line :string topo :vector-i64 now :i64] :string
-  (let [lock (str dir "/.epoch-lock") acquired (= (ln-fs "I" lock "") "1")]
+  (let [old-lock (str dir "/.epoch-lock") lock (str dir "/.epoch-lockfile")
+        acquired (and (not (ln-exists? old-lock))
+                      (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))]
     (if (not acquired) "no 0 - 0 - -"
       (let [reply (if (lg-epoch-ready? dir epoch file) (ln-handle file line topo now) "no 0 - 0 - -")
-            released (= (ln-fs "K" lock "") "1")]
+            released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")]
         (if released reply "no 0 - 0 - -")))))
 
 (defn- lg-request [line :string task :string dir :string topo :vector-i64 now :i64] :string
