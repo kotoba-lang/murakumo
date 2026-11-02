@@ -109,3 +109,21 @@ activation, independent failure domains or production membership was tested.
 The [host harness](../test-native/murakumo/cron-resident-github-failure-host-test.py)
 requires a disposable VM, pinned binaries, a classified test fixture and a
 private GitHub repository. [Evidence](evidence/awai147-cron-github-quorum-failure-20261103.json).
+
+## Guarded real-model attempt
+
+A later attempt prepared an isolated Linux ARM64 VM and the native binaries
+for a complete cron turn, then started the existing Bonsai MTP runtime on one
+Mac mini under a memory-pressure watchdog. The pre-start snapshot showed 90%
+reported free memory pressure and zero used swap. During model loading, the
+reported free percentage fell below the watchdog's 40% floor; the watchdog
+stopped the task-owned model process before the endpoint became ready. The
+exact minimum was not captured. Afterwards the measured free percentage was
+again 90%, swap used was zero, the task-owned port was closed, and the VM had
+been removed. This snapshot does not prove absence of any transient impact on
+other workloads.
+
+The cron controller, GitHub archive for a new successor and MTP inference were
+not run in this attempt; no new result was produced. This does not establish a
+safe single-host capacity or that a different host can accept the model.
+[Evidence](evidence/awai147-cron-real-model-admission-20261103.json).
