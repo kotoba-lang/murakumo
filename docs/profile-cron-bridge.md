@@ -216,6 +216,20 @@ response was refused without a second server request. Killing the native
 process during a held request and then allowing the unit to finish allowed a
 fresh process to publish the verified output with one server request. See
 [fixture evidence](evidence/awai150-profile-validation-20261103.json).
+
+The draft additionally syncs the repository directory after creating
+`outputs`, and syncs the output file and its parent directory before writing
+or renaming the new state. A failed sync stops state publication. Small macOS
+Amu source-unity fixtures with mocked filesystem calls exercise the real
+`pr-save-output` and `pr-step-range` paths: the output fixture returns `0`
+for successful writes and the file/directory failure cases; removing its
+output-directory sync makes it return `1`. The repository-sync fixture
+returns `0` without `UNSAFE_WRITE`; removing the prepublication repository
+sync emits `UNSAFE_WRITE` before returning `0`. CLI result values are stdout,
+not exit status. See [output fixture](evidence/awai150-output-sync-fixture.kotoba)
+and [repository fixture](evidence/awai150-repo-sync-fixture.kotoba). These
+mocked cases do not prove filesystem power-loss behavior, a complete resident,
+or that the unqualified systemd/curl path is suitable for deployment.
 This still uses systemd/curl and a fake server; its reported MTP fields are
 test data, not proof of model execution. It is not a complete resident,
 GitHub archive, power-loss or distributed-fencing qualification.

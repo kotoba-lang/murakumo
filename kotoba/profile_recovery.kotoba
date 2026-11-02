@@ -138,12 +138,13 @@
   (and (> (vector-count b) 0) (<= (vector-count b) 16384)))
 
 ;; A crash can leave the output durable while state still points at this turn.
-;; Only the exact completed response may be reused. Sync it again before
-;; publishing state, since an interrupted earlier write may not have flushed.
+;; Only the exact completed response may be reused. Sync both the file and
+;; its parent directory before state can refer to it.
 (defn- pr-save-output [path :string answer :vector-i64 cid :string] :bool
-  (if (cp-exists? path)
-    (and (= (cp-cid (cp-read path)) cid) (= (cp-fs (str path (cp-sep "FSYNC"))) "1"))
-    (cp-write path answer)))
+  (and (if (cp-exists? path)
+         (and (= (cp-cid (cp-read path)) cid) (= (cp-fs (str path (cp-sep "FSYNC"))) "1"))
+         (cp-write path answer))
+       (= (cp-fs (str (cp-parent-dir path) (cp-sep "FSYNC"))) "1")))
 
 (defn- pr-wait [unit :string response :string runtime :vector-i64] :bool
   (loop [i 0]
@@ -256,7 +257,8 @@
                         tmp (str repo "/state.json.tmp")
                         usable (pr-replicable? answer)
                         ok (and usable
-                                (cp-mkdir outdir) (pr-save-output output answer cid) (cp-write tmp newstate))
+                                (cp-mkdir outdir) (= (cp-fs (str repo (cp-sep "FSYNC"))) "1")
+                                (pr-save-output output answer cid) (cp-write tmp newstate))
                         rename (if ok (cp-fs (str tmp (cp-sep "RENAME") repo "/state.json")) "0")
                         sync (if (= rename "1") (cp-fs (str repo (cp-sep "FSYNC"))) "0")]
                     (if (not usable) "profile/response-not-replicable"
