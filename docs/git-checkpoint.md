@@ -301,3 +301,21 @@ Keep local caches until a separate retention protocol has independently
 verified persistent replicas, expiry/pinning and cold readback in the required
 failure domains. This component does not evict caches, claim durable replica
 quorum, or introduce an origin-side application server.
+
+### Native metadata and remaining portability limit
+
+Checkpoint size, directory creation and parent checks, and restore chmod use
+FS2 no-follow metadata and mutations. Parent components still require exclusive
+ownership of the tree; this is not a concurrent-writer guarantee. The native
+Linux extracted-source fixture in
+[awai150-native-metadata-fixture.kotoba](evidence/awai150-native-metadata-fixture.kotoba)
+exercises regular files, symlinks, a FIFO, directory creation, permissions and
+untracked capture with real Git. Its scope and hashes are recorded in
+[awai150-native-metadata-20261103.json](evidence/awai150-native-metadata-20261103.json).
+
+Untracked capture still uses GNU `stat` to enforce the exact 0644/0755 mode
+allowlist. FS2's current metadata masks off special permission bits, so using it
+there would accept files previously refused. The GNU dependency prevents this
+path from working on stock macOS. A native metadata interface that exposes
+special bits and a macOS runtime test are needed before claiming portability;
+this fixture is not an end-to-end GitHub capture or restore test.
