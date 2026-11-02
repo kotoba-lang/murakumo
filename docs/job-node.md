@@ -61,6 +61,16 @@ values. A separate `jn-run` test used stubs for admission, the lease round and
 the cell: a non-holder with the legacy `rogue` argument did not reach the
 stubbed cell, while a guard-removal mutant did. These tests do not demonstrate
 a live quorum, nor do they establish effect-boundary fencing after dispatch.
+An additional isolated x86_64 Linux test ran the actual proposer, three
+authenticated loopback voter processes and `jn-run`, with separate durable
+voter files and a fixed test clock. Cell admission and cell execution were
+stubs: a preselected lease for the same node but a different job was refused;
+a lease for another node was refused even with the legacy `rogue` argument;
+and a matching live lease reached the cell stub. The voter processes and test
+token were stopped/cleared afterward. All voters shared one host, used no
+topology membership document, and no real cell, host admission, concurrent
+race or effect sink was tested.
+
 The 2026-10-23 transcript below remains historical; its rogue path is now a
 separate test-only mutant and has not been rerun as part of this change.
 
