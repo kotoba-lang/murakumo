@@ -123,3 +123,25 @@ records the precise scope. A read-only check found the specific prior test
 venv and model paths on three of the ten surveyed minis; their absence at
 those paths on the other seven is not proof that those machines lack other
 usable installations.
+
+## Reading rank-local slices
+
+A follow-up three-Mac diagnostic used `safetensors.get_slice` to read only
+rank-local parts of the real value projection into actual MTPLX
+`HadamardQuantizedLinear` instances. Row-split layers retain the full sign
+vector; input-split layers retain only their whole 1024-wide rotation blocks
+and matching quantized groups. The row tensor arrays requested on the three
+ranks were 512,960 / 511,520 / 511,520 bytes, versus 1,495,040 bytes for all
+four full-layer tensors. Input-split arrays were 598,016 / 598,016 / 299,008
+bytes. These are array sizes, not measured physical I/O or peak unified memory:
+the constructor, allocator, OS page cache and temporary copies can use more.
+For verification rank 0 separately loaded the full layer and shared its
+output; ranks 1 and 2 did not load that full reference. Output-row slices
+matched exactly and the float16 sum of input slices differed by at most
+0.00390625 on the one synthetic activation.
+
+The [probe](evidence/awai149-sliced-real-layer-probe.py) and
+[evidence](evidence/awai149-sliced-real-layer-20261103.json) implement this
+experiment, not a production loader. This is still one layer, not the full
+model, real prompt, MTPLX post-load fast paths, MTP, authenticated production
+transport, process recovery or measured system memory savings.
