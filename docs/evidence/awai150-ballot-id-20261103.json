@@ -1,0 +1,25 @@
+{
+  "kind": "awai.lease-ballot-id-native-fixture/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "baseCommit": "e3f4f8d201af0318af339d3ff125f1dd10621891",
+  "compilerSha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "environment": "Two disposable Linux ARM64 Podman VMs sequentially, each 1 CPU and 2 GiB RAM; local XFS; stopped and removed",
+  "direct": {
+    "fixture": "awai150-ballot-id-fixture.kotoba",
+    "sourceSha256": "b10da238f4d87d37be38725dc7cf1d7c7452bf4a67f3b53d55be819d2ef89ebf",
+    "imageSha256": "2c3e47111fdde57c9b88a83c1228b1abad1fec55e866dc3cc65fbd6915f1f086",
+    "groupPrecheckMutantSha256": "58d63323b0eb98274d207f8c89ae2e32e6a3fcb8ce9aa8e2c983c84a2b5e8441",
+    "poisonMutantSourceSha256": "98346fddb24889f3a1a7db90bbfffd06f5b3fa79e4908f823c7462db18a185ae",
+    "observed": "Reserved dash, whitespace and non-ASCII IDs and malformed JSON were refused; voter and group watermark remained unchanged. A valid ID persisted in both. Bypassing the group ID precheck advanced the watermark. Bypassing the reserved-dash check and its fixture assertion made a native voter write the inconsistent state `1 - 0 - -`. Topology-member predicate was stubbed."
+  },
+  "integration": {
+    "serverSource": "awai150-ballot-group-server-fixture.kotoba",
+    "serverSourceSha256": "f68fb0a96a7946b14a547bbaf27e12d42699bc0fe23ce11e191b2676a1fe7e2d",
+    "serverImageSha256": "598501e4a757c03a64c530e8062a0e904d6ec741271f31d1d24f6d6d1fa19d32",
+    "clientSource": "awai150-ballot-group-client-fixture.kotoba",
+    "clientSourceSha256": "ffe34a324e492e5677ce06266dd960fa91fc81acd79115a6aef79ad360eb4853",
+    "clientImageSha256": "5a467caf574dfd5817be6d9cda6f62176723d65f29bff79fd175c622d57723ff",
+    "observed": "Three native group servers with synthetic HMAC token and signed test topology chose epochs 1 and 2. After one server was killed, the remaining quorum retained epoch 1. With another epoch-1 state file removed, the proposer returned no majority and that file was not recreated."
+  },
+  "limits": "The test uses one VM, synthetic credentials and test data. It does not qualify external monotonic state, rollback prevention, multi-host failure isolation, Mac runtime, real inference, power loss or full resident operation."
+}
