@@ -283,3 +283,11 @@ disposable VM entered emergency mode during ignition and was removed.
 This draft format refuses earlier unsigned heads and has no migration yet.
 It does not prevent replay of an older valid signed head, qualify key custody,
 prove the complete resident/bridge integration, or authorize deployment.
+
+`docs/evidence/awai150-signed-candidate-fixture.kotoba` exercises the actual
+candidate publisher and real signature verification with a fixed test key.
+It accepts a matching signed candidate and rejects changed checkpoint, time or
+request, missing candidates and unsigned candidates. Removing each of the
+three expected-value checks separately makes the fixture print 1. This fixture
+substitutes in-memory filesystem access and a shape-only replica-admission
+predicate; it does not test persistence, actual receipts or concurrent writers.
