@@ -1,5 +1,15 @@
 # The lease register as separate processes
 
+**Draft recovery change:** a voter now refuses every request if its durable
+register is missing, malformed or internally inconsistent. It no longer treats
+a missing file as an empty register. The older examples below that start a
+voter with a nonexistent file require revision. A new voter needs a securely
+provisioned `0 - 0 - -` register; after state loss, recovery and membership
+must be established independently before any reinitialization. This draft has
+no safe automatic enrollment/recovery procedure and must not be deployed as
+one. A valid but stale register can still be replayed; this check alone does
+not prevent rollback.
+
 Tracked in [JUN-289](https://linear.app/kotobalabs/issue/JUN-289), under
 ADR-2610071730 P3b. [Lease core](lease-core.md) holds the register's rules.
 `kotoba/fleet_lease_node.kotoba` runs them as separate processes, voters and
