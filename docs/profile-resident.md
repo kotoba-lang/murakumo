@@ -160,9 +160,14 @@ operator provisioning and review.
    outputs are not needed to continue the immediately preceding proposal.
 7. The head records `nextAt` and the consumed operator request CID together.
    A normal restart after publication stays idle. A unique canonical operator
-   request file may enqueue explicitly authorized pending work; replacing it
-   with the same bytes cannot enqueue a second turn. Local wall clocks must
-   remain healthy. There is no whole-fleet exactly-once inference claim.
+   request file may enqueue explicitly authorized pending work. A missing file
+   preserves the last consumed CID, including across a periodic turn; restoring
+   that same request therefore does not enqueue it again. A present request
+   must be a canonical JSON object no larger than 8 KiB, otherwise the cycle
+   refuses. Only the latest consumed CID is retained: replaying an older CID
+   after a different request still needs a durable request history or monotonic
+   sequence. Local wall clocks must remain healthy. There is no whole-fleet
+   exactly-once inference claim.
 
 `status.json` is atomically updated and provides progress even when stdout is
 buffered. Head publication uses file fsync, rename and parent-directory fsync.
