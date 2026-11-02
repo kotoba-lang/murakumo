@@ -1,0 +1,28 @@
+{
+  "date": "2026-11-03",
+  "scope": "Extracted controller code in 1 CPU / 2 GiB disposable ARM64 Linux VM. Plan, archive, inference and cursor are stubs. Tests call nc-cycle and nc-ack-safe? directly, not the full main or lock.",
+  "source_sha256": "0c5f268708d62d7bae43c92527193ec0bab0317bb005dd1283e382c19fde2ad4",
+  "compiler_sha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "fixtures": {
+    "awai150-cron-path-collision-fixture.kotoba": {
+      "sha256": "2bff1610305709c8d508fa2f2dae2ba6246146dfec97ac7f737e4ca317f2156a",
+      "image_sha256": "02f7d3640db8f9236e29f271149afc8959a9292b69fc0beae57fc928ac7f89a3"
+    },
+    "awai150-cron-path-no-guard.kotoba": {
+      "sha256": "1dc22a0caa379ff1ec8d5bbc58ce03a333cbb8470465cb29259d1296158c3463",
+      "image_sha256": "6c6ab5ee7bc4681b970ae9bf5251d009f3577cdb77fad5ec459aab1192924efa"
+    },
+    "awai150-cron-path-regression.kotoba": {
+      "sha256": "f2826a63ff8a875d1eafddc321270bb591e4692ebd4528eb392718f78c0b8add",
+      "image_sha256": "f2b388a8e6131a9a8223560f00f45864a58f8373efd78329b10197bf7cf953b2"
+    }
+  },
+  "results": [
+    "request path collisions with definition, cursor or source refused",
+    "archive acknowledgement temporary and resident head temporary input collisions refused",
+    "acknowledgement collisions with config or head refused",
+    "no-guard mutant rejected by test",
+    "successful cycle, uncertain dispatch refusal and archive recovery still passed"
+  ],
+  "limits": "Only exact string path comparisons are checked; symlink, hard-link, directory containment, other resident internal conflicts and external writers remain host isolation requirements. No complete integration, crash, macOS, GitHub or inference qualification."
+}
