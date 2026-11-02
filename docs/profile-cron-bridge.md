@@ -252,3 +252,11 @@ state publication. See [evidence](evidence/awai150-output-sync-native-20261103.j
 This still uses systemd/curl and a fake server; its reported MTP fields are
 test data, not proof of model execution. It is not a complete resident,
 GitHub archive, power-loss or distributed-fencing qualification.
+The resident cycle refuses an existing head whose checkpoint closure or
+replica receipts fail `rt-intact-head?`; it does not replace those receipts by
+re-replicating. A missing head may still bootstrap, and an intact expired head
+may refresh. `docs/evidence/awai150-head-repair-fixture.kotoba` exercises the
+actual cycle with mocked dependencies: the three cases return the expected
+results, while removing the production guard makes the fixture return 1.
+This does not authenticate mutable head fields such as `request` or `nextAt`,
+or prove real replica, restart, or concurrent writer behavior.
