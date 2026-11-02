@@ -5,16 +5,42 @@
   (:export [lease-group-main lease-group-round]))
 
 (defn- lg-epoch? [e :i64] :bool (and (> e 0) (<= e 1000000)))
+
+;; A fresh group must have an independently provisioned watermark register.
+;; Advance it durably before creating a new epoch file. If either the
+;; watermark or an already-seen epoch file disappears, refuse rather than
+;; treating lost votes as genesis. A rollback of the entire directory still
+;; requires an external monotonic authority and is not prevented here.
+(defn- lg-epoch-ready? [dir :string epoch :i64 file :string] :bool
+  (let [water (str dir "/epoch-watermark") state (ln-load water)
+        high (ln-int (ln-field state 0)) owner (ln-undash (ln-field state 1))]
+    (and (ln-state-ok? state) (= (ln-int (ln-field state 2)) 0)
+         (if (= high 0) (= owner "") (= owner "epoch"))
+         (if (ln-exists? file) (<= epoch high)
+           (and (= epoch (+ high 1)) (= (ln-store water (str epoch " epoch 0 - -")) 1)
+                (= (ln-init-fresh file) "voter/init-created"))))))
+
+;; One local group directory has one writer at a time. A process that dies
+;; with this directory held leaves it in place: callers refuse until a
+;; separately verified recovery removes the stale lock.
+(defn- lg-locked-request [dir :string epoch :i64 file :string line :string topo :vector-i64 now :i64] :string
+  (let [lock (str dir "/.epoch-lock") acquired (= (ln-fs "I" lock "") "1")]
+    (if (not acquired) "no 0 - 0 - -"
+      (let [reply (if (lg-epoch-ready? dir epoch file) (ln-handle file line topo now) "no 0 - 0 - -")
+            released (= (ln-fs "K" lock "") "1")]
+        (if released reply "no 0 - 0 - -")))))
+
 (defn- lg-request [line :string task :string dir :string topo :vector-i64 now :i64] :string
   (let [op (ln-field line 0) epoch (ln-int (ln-field line 1))
         t (ln-field line 2) id (ln-field line 3) value (ln-field line 4)
         v (ln-bytes value) file (str dir "/epoch-" epoch ".state")]
     (if (or (not (lg-epoch? epoch))
-            (not (or (= op "prepare") (= op "accept")))
+            (not (or (= op "prepare") (= op "accept"))) (not (ballot-ok? (ln-int t) id))
             (and (= op "accept")
-              (or (not (= (cp-str v 0 "class") task)) (not (= (cp-num v 0 "slot") 0))
+              (or (not (json-valid? v)) (not (json-canonical? v))
+                  (not (ln-member-ok? topo now value)) (not (= (cp-str v 0 "class") task)) (not (= (cp-num v 0 "slot") 0))
                   (not (= (cp-num v 0 "epoch") epoch))))) "no 0 - 0 - -"
-      (ln-handle file (str op " " t " " id (if (= op "accept") (str " " value) "")) topo now))))
+      (lg-locked-request dir epoch file (str op " " t " " id (if (= op "accept") (str " " value) "")) topo now))))
 
 (defn- lg-serve [l :string dir :string task :string topo :vector-i64 token :string] :i64
   (arena-scope
