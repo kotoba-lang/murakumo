@@ -71,7 +71,10 @@
   (if (not (json-valid? b)) ""
     (let [cs (json-member b 0 "choices") c (if (>= cs 0) (json-element b cs 0) -1)
           m (if (>= c 0) (json-member b c "message") -1)]
-      (if (>= m 0) (cp-str b m "content") ""))))
+      ;; A nonempty prefix is not a completed turn. Refuse truncated,
+      ;; tool-call, missing and unknown finish reasons rather than checkpointing
+      ;; them as a completed profile step.
+      (if (and (>= m 0) (= (cp-str b c "finish_reason") "stop")) (cp-str b m "content") ""))))
 
 (defn- pr-wait [unit :string response :string] :bool
   (loop [i 0]
@@ -107,7 +110,8 @@
           :else
           (let [previous (cp-str state 0 "previous") prior-file (str repo "/outputs/" (- next 1) ".json")
                 prior (if (= next 1) (vector-alloc 0) (cp-read prior-file))
-                linked (if (= next 1) (= previous "none") (= previous (cp-cid prior)))]
+                linked (if (= next 1) (= previous "none")
+                         (and (= previous (cp-cid prior)) (not (= (pr-answer prior) ""))))]
             (if (not linked) "profile/previous-output-mismatch"
               (let [instruction (if (= limit 2) (str "Read-only checkpoint recovery task " task ", step " next
                        ". Continue from the preceding assistant result, if present. Propose one next read-only verification."

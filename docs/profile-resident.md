@@ -17,6 +17,11 @@ model is `mishima`, and no model output is dispatched as a tool. The source's
 "daily" declaration becomes a fixed 86,400,000 ms interval. Each proposal has
 at most 256 completion tokens; it explicitly has no live external observations.
 The existing two-turn recovery command keeps its original limit and prompt.
+Responses are usable only when the first choice has nonempty content and
+`finish_reason` is `stop`. Truncated, tool-call, missing and unknown finish
+reasons do not advance the checkpoint; a prior response that fails the same
+check cannot be used as continuation input. A stopped response is still a
+model proposal, not proof that its claims or the requested work are complete.
 
 ### Optional local MTP transport
 
