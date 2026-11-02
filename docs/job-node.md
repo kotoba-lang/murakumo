@@ -37,11 +37,14 @@ its acceptance items are covered here:
   7. It signs the agent-step receipt with the lease epoch
      ([agent step](agent-step.md)).
 - **`verify`, on anyone:** it learns the chosen lease with `lease-round`, maps
-  the holder to its did through the trust, and judges a node's receipt with
-  `receipt-verdict`.
+  the holder to its did through the trust, and requires the trusted caller's
+  expected job ID to match both the lease class and signed receipt. It also
+  checks the receipt node and signature. The signed time is the dispatch time,
+  not proof that the cell finished before lease expiry.
 - **The fleet token.** `run` takes an input file or empty argument at 16,
   a fleet token file or empty argument at 17, and the required private attempt
-  directory at 18. `verify` takes an optional fleet token file.
+  directory at 18. `verify` takes a fleet token file or empty argument at 5,
+  followed by the independently determined expected job ID at 6.
   With it, their lease rounds carry the token's macs
   ([lease node, Fleet token](lease-node.md#fleet-token)). The runs below use
   none.
@@ -143,6 +146,7 @@ G=$1; MODE_B=$2; TAG=$3; B=$4
 R=$(cat $G/release.digest)
 IN=bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey
 PO=bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq
+JID=$(printf '{"input":"%s","kind":"itonami.agent-step/1","policy":"%s","profile":"%s","rail":"murakumo"}' "$IN" "$PO" "$R" | sha256sum | cut -d' ' -f1)
 DA=9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29
 DK=64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb
 PORTS=${B}1,${B}2,${B}3; DIAL=127.0.0.1:${B}1,127.0.0.1:${B}2,127.0.0.1:${B}3
@@ -173,18 +177,22 @@ done
 for n in b70 k16; do
   if grep -q '^receipt ' $G/$TAG-$n.out; then
     env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-      $G/job.elf verify $PORTS $TRUST $G/$TAG-$n.out 200 2>&1 | grep -v '^{:status' | sed "s/^/$TAG verify $n's receipt: /"
+      $G/job.elf verify $PORTS $TRUST $G/$TAG-$n.out 200 '' "$JID" 2>&1 | grep -v '^{:status' | sed "s/^/$TAG verify $n's receipt: /"
   fi
 done
 EOF
 cat > "$G/verify-again.sh" <<'EOF'
 G=$1; IMG=$2; B=753; DIAL=127.0.0.1:${B}1,127.0.0.1:${B}2,127.0.0.1:${B}3
+R=$(cat "$G/release.digest")
+IN=bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey
+PO=bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq
+JID=$(printf '{"input":"%s","kind":"itonami.agent-step/1","policy":"%s","profile":"%s","rail":"murakumo"}' "$IN" "$PO" "$R" | sha256sum | cut -d' ' -f1)
 TRUST=b70=did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw,k16=did:key:z6MkiaMbhXHNA4eJVCCj8dbzKzTgYDKf6crKgHVHid1F1WCT
 for v in 1 2 3; do env KEXE_ALLOW=35,37,38,43,44,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_43=127.0.0.1:$B$v $G/job.elf voter $B$v $G/rogue-v$v.state 5000 > /dev/null 2>&1 & done
 sleep 0.3
 for n in b70 k16; do
   env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-    $G/$IMG.elf verify ${B}1,${B}2,${B}3 $TRUST $G/rogue-$n.out 300 2>&1 | grep -v '^{:status' | sed "s/^/$IMG verifier, $n's receipt: /"
+    $G/$IMG.elf verify ${B}1,${B}2,${B}3 $TRUST $G/rogue-$n.out 300 '' "$JID" 2>&1 | grep -v '^{:status' | sed "s/^/$IMG verifier, $n's receipt: /"
 done
 wait
 EOF
@@ -278,6 +286,7 @@ G=$1; IMG=$2; TAG=$3; B=$4
 R=$(cat $G/release.digest)
 IN=bafkreihbgymriz33lmog7chhk7xlpqbv4bea7i7eyflwopbcbvfvrbnuey
 PO=bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq
+JID=$(printf '{"input":"%s","kind":"itonami.agent-step/1","policy":"%s","profile":"%s","rail":"murakumo"}' "$IN" "$PO" "$R" | sha256sum | cut -d' ' -f1)
 DA=9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29
 DK=64f1f5f59f863a9f851efccf40b65df6af43dc7406cbe92b6160f7b605f103fb
 PORTS=${B}1,${B}2,${B}3; DIAL=127.0.0.1:${B}1,127.0.0.1:${B}2,127.0.0.1:${B}3
@@ -301,7 +310,7 @@ for n in k16 b70; do
   echo "$TAG $n: $(grep -E '^(ineligible|lease|held-by|verdict|layout|refused) ' $G/$TAG-$n.out | tr '\n' ' ')$(grep -q '^receipt ' $G/$TAG-$n.out && echo '| receipt')"
 done
 env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-  $G/job.elf verify $PORTS $TRUST $G/$TAG-b70.out 200 2>&1 | grep -v '^{:status' | sed "s/^/$TAG verify b70's output: /"
+  $G/job.elf verify $PORTS $TRUST $G/$TAG-b70.out 200 '' "$JID" 2>&1 | grep -v '^{:status' | sed "s/^/$TAG verify b70's output: /"
 wait
 EOF
 podman machine ssh -- "sh $G/class.sh $G job class 754; sh $G/class.sh $G late late 755" 2>&1 | grep -v 'Copying\|Getting image\|Writing manifest'
@@ -397,6 +406,7 @@ cat > "$G/turn.sh" <<'EOF'
 G=$1; B=757
 R=$(cat $G/release-bot.digest); IN=$(cat $G/turn-input.cid)
 PO=bafkreicag2vl77rqrkqabdchmccylgru2qdcqn377gpefuebimv4junsgq
+JID=$(printf '{"input":"%s","kind":"itonami.agent-step/1","policy":"%s","profile":"%s","rail":"murakumo"}' "$IN" "$PO" "$R" | sha256sum | cut -d' ' -f1)
 DA=9af9509efcef6c13f34293a15319f37468ca5f42a55383a0ac8c270a8e678c29
 PORTS=${B}1,${B}2,${B}3; DIAL=127.0.0.1:${B}1,127.0.0.1:${B}2,127.0.0.1:${B}3
 N=1792500000000
@@ -418,7 +428,7 @@ run() {  # tag input-file t
 run changed-input $G/turn-input-changed.txt 100
 run turn $G/turn-input.txt 101
 env KEXE_ALLOW=7,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
-  $G/job-2.elf verify $PORTS $TRUST $G/turn-turn.out 200 2>&1 | grep -v '^{:status' | sed "s/^/verify the turn's receipt: /"
+  $G/job-2.elf verify $PORTS $TRUST $G/turn-turn.out 200 '' "$JID" 2>&1 | grep -v '^{:status' | sed "s/^/verify the turn's receipt: /"
 wait
 EOF
 podman machine ssh -- "sh $G/turn.sh $G" 2>&1 | grep -v 'Copying\|Getting image\|Writing manifest'
