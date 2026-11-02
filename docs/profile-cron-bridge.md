@@ -230,6 +230,15 @@ not exit status. See [output fixture](evidence/awai150-output-sync-fixture.kotob
 and [repository fixture](evidence/awai150-repo-sync-fixture.kotoba). These
 mocked cases do not prove filesystem power-loss behavior, a complete resident,
 or that the unqualified systemd/curl path is suitable for deployment.
+
+A further ARM64 static fixture exercised the actual `pr-save-output` and
+native wire-35 file operations on XFS in a disposable VM. New and matching
+files succeeded, a mismatching file was preserved and refused, and an
+injected output-directory sync failure was refused. The sync-bypass control
+failed. After an orderly VM restart, the written output remained and was
+reused. CID hashing was replaced with text identity and the failure was
+injected; this does not demonstrate sudden power-loss behavior or complete
+state publication. See [evidence](evidence/awai150-output-sync-native-20261103.json).
 This still uses systemd/curl and a fake server; its reported MTP fields are
 test data, not proof of model execution. It is not a complete resident,
 GitHub archive, power-loss or distributed-fencing qualification.
