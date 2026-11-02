@@ -81,7 +81,7 @@
                 (= (cp-str cfg 0 "request") cfgpath) (= (cp-str cfg 0 "request") definition-path)
                 (= (cp-str cfg 0 "request") cursor-path) (= (cp-str cfg 0 "request") source-path))
           (let [x (cp-say (if (= problem "bridge/ok") "bridge/path-conflict" problem))] 1)
-          (let [head-path (cp-str cfg 0 "head") head (if (cp-exists? head-path) (cp-read head-path) (vector-alloc 0))
+          (let [head-path (cp-str cfg 0 "head") head (rt-read-head cfg head-path)
                 h (br-head-problem cfg head) request (br-request definition pin cursor now)]
             (if (not (= h "bridge/head-ready")) (let [x (cp-say h)] 1)
               (cond (= mode "prepare") (let [x (cp-say (br-install cfg head request))] 0)
