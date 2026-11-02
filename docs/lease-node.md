@@ -36,6 +36,13 @@ subsequent authorized round adopted A. See
 messages but does not encrypt them; host isolation, Tailnet transport, token
 provisioning and replay resistance remain unqualified.
 
+The draft wire format admits ballot IDs made of printable ASCII bytes except
+the single `-`, which is reserved for an absent ID. Invalid IDs are rejected
+before a group watermark is changed; malformed JSON is validated before
+canonical parsing. Existing deployments using IDs outside this profile need
+an explicit migration. The native positive, refusal and control evidence is
+in `docs/evidence/awai150-ballot-id-20261103.json`.
+
 Tracked in [JUN-289](https://linear.app/kotobalabs/issue/JUN-289), under
 ADR-2610071730 P3b. [Lease core](lease-core.md) holds the register's rules.
 `kotoba/fleet_lease_node.kotoba` runs them as separate processes, voters and

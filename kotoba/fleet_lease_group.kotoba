@@ -38,7 +38,7 @@
         t (ln-field line 2) id (ln-field line 3) value (ln-field line 4)
         v (ln-bytes value) file (str dir "/epoch-" epoch ".state")]
     (if (or (not (lg-epoch? epoch))
-            (not (or (= op "prepare") (= op "accept"))) (not (ballot-ok? (ln-int t) id))
+            (not (or (= op "prepare") (= op "accept"))) (not (ln-ballot-valid? (ln-int t) id))
             (and (= op "accept")
               (or (not (json-valid? v)) (not (json-canonical? v))
                   (not (ln-member-ok? topo now value)) (not (= (cp-str v 0 "class") task)) (not (= (cp-num v 0 "slot") 0))
