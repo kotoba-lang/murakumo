@@ -95,6 +95,13 @@
                                   (if (not (= (ln-field new-archive 0) "resident-archive/confirmed")) "cron-resident/archive-pending"
                                     (nc-advance cfg definition pin cursor-path cursor source slot)))))))))))))))
 
+;; An unknown or refused cycle must be visible to the host as a failure even
+;; when the local lock was released. Exit success only for the two terminal
+;; outcomes that need no reconciliation.
+(defn- nc-exit-code [result :string released :bool] :i64
+  (if (not released) 2
+    (if (or (= result "cron-resident/idle") (= (ln-field result 0) "cron-resident/completed")) 0 1)))
+
 (defn profile-cron-controller-main [] :i64
   (let [config (cp-arg 0) definition (cp-arg 1) pin (cp-arg 2) cursor (cp-arg 3) source (cp-arg 4)
         state (cp-arg 5) work-before (cp-arg 6) work-after (cp-arg 7) repo (cp-arg 8) gh (cp-arg 9)
@@ -112,4 +119,4 @@
         (let [result (nc-cycle cfg config definition pin cursor source state work-before work-after repo gh)
               release (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")
               z (cp-say (if release result "cron-resident/local-unlock-failed"))]
-          (if release 0 2))))))
+          (nc-exit-code result release))))))
