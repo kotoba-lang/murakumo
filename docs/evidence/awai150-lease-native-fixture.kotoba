@@ -1,0 +1,1247 @@
+(ns awai150-lease-native-fixture (:export [main]))
+(defn- ln-frame [op :string path :string tail :string] :string (str "\u0000FS2\u0000" op path "\u0000" tail))
+(defn- ln-fs [op :string path :string tail :string] :string
+  (let [r (typed-cap-call :fs/app-data :string :string (ln-frame op path tail))]
+    (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
+      (string-substring r 5 (string-length r)) "")))
+(defn- s2-m32 [x :i64] :i64 (bit-and x 4294967295))
+(defn- s2-rotr [x :i64 n :i64] :i64
+  (s2-m32 (bit-or (u64-shift-right x n) (i64-shift-left x (- 32 n)))))
+(defn- s2-k [] :vector-i64
+  [1116352408 1899447441 3049323471 3921009573 961987163 1508970993 2453635748 2870763221
+   3624381080 310598401 607225278 1426881987 1925078388 2162078206 2614888103 3248222580
+   3835390401 4022224774 264347078 604807628 770255983 1249150122 1555081692 1996064986
+   2554220882 2821834349 2952996808 3210313671 3336571891 3584528711 113926993 338241895
+   666307205 773529912 1294757372 1396182291 1695183700 1986661051 2177026350 2456956037
+   2730485921 2820302411 3259730800 3345764771 3516065817 3600352804 4094571909 275423344
+   430227734 506948616 659060556 883997877 958139571 1322822218 1537002063 1747873779
+   1955562222 2024104815 2227730452 2361852424 2428436474 2756734187 3204031479 3329325298])
+(defn- s2-iv [words :i64] :vector-i64
+  (if (= words 7)
+    [3238371032 914150663 812702999 4144912697 4290775857 1750603025 1694076839 3204075428]
+    [1779033703 3144134277 1013904242 2773480762 1359893119 2600822924 528734635 1541459225]))
+(defn- s2-total [n :i64] :i64 (* (quot (+ n 72) 64) 64))
+(defn- s2-byte [data :vector-i64 i :i64 total :i64] :i64
+  (let [n (vector-count data)]
+    (cond (< i n) (vector-at data i)
+          (= i n) 128
+          (< i (- total 8)) 0
+          :else (bit-and (u64-shift-right (* n 8) (* (- (- total 1) i) 8)) 255))))
+(defn- s2-work [state :vector-i64] :vector-i64
+  (loop [i 0 out (vector-alloc 80)]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out i (vector-at state i))))))
+(defn- s2-load [w :vector-i64 data :vector-i64 start :i64 total :i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 16) out
+      (let [p (+ start (* i 4))
+            x (bit-or (bit-or (i64-shift-left (s2-byte data p total) 24)
+                              (i64-shift-left (s2-byte data (+ p 1) total) 16))
+                      (bit-or (i64-shift-left (s2-byte data (+ p 2) total) 8)
+                              (s2-byte data (+ p 3) total)))]
+        (recur (+ i 1) (vector-assoc! out (+ 16 i) x))))))
+(defn- s2-expand [w :vector-i64] :vector-i64
+  (loop [t 16 out w]
+    (if (= t 64) out
+      (let [w15 (vector-at out (+ 16 (- t 15)))
+            w2 (vector-at out (+ 16 (- t 2)))
+            s0 (bit-xor (bit-xor (s2-rotr w15 7) (s2-rotr w15 18)) (u64-shift-right w15 3))
+            s1 (bit-xor (bit-xor (s2-rotr w2 17) (s2-rotr w2 19)) (u64-shift-right w2 10))
+            x (s2-m32 (+ (+ (vector-at out (+ 16 (- t 16))) s0) (+ (vector-at out (+ 16 (- t 7))) s1)))]
+        (recur (+ t 1) (vector-assoc! out (+ 16 t) x))))))
+(defn- s2-begin [w :vector-i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out (+ 8 i) (vector-at out i))))))
+(defn- s2-rounds [w :vector-i64 k :vector-i64] :vector-i64
+  (loop [t 0 out w]
+    (if (= t 64) out
+      (let [a (vector-at out 8) b (vector-at out 9) c (vector-at out 10) d (vector-at out 11)
+            e (vector-at out 12) f (vector-at out 13) g (vector-at out 14) h (vector-at out 15)
+            big1 (bit-xor (bit-xor (s2-rotr e 6) (s2-rotr e 11)) (s2-rotr e 25))
+            ch (bit-xor (bit-and e f) (bit-and (s2-m32 (bit-not e)) g))
+            t1 (s2-m32 (+ (+ h big1) (+ ch (+ (vector-at k t) (vector-at out (+ 16 t))))))
+            big0 (bit-xor (bit-xor (s2-rotr a 2) (s2-rotr a 13)) (s2-rotr a 22))
+            maj (bit-xor (bit-xor (bit-and a b) (bit-and a c)) (bit-and b c))
+            t2 (s2-m32 (+ big0 maj))
+            next (-> out (vector-assoc! 15 g) (vector-assoc! 14 f) (vector-assoc! 13 e)
+                         (vector-assoc! 12 (s2-m32 (+ d t1))) (vector-assoc! 11 c) (vector-assoc! 10 b)
+                         (vector-assoc! 9 a) (vector-assoc! 8 (s2-m32 (+ t1 t2))))]
+        (recur (+ t 1) next)))))
+(defn- s2-add [w :vector-i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out i (s2-m32 (+ (vector-at out i) (vector-at out (+ 8 i)))))))))
+(defn- s2-out [w :vector-i64 words :i64] :vector-i64
+  (loop [i 0 out (vector-alloc (* words 4))]
+    (if (= i (* words 4)) out
+      (recur (+ i 1) (vector-assoc! out i (bit-and (u64-shift-right (vector-at w (quot i 4)) (* (- 3 (rem i 4)) 8)) 255))))))
+(defn- s2-digest [words :i64 data :vector-i64] :vector-i64
+  (let [total (s2-total (vector-count data)) k (s2-k)]
+    (loop [start 0 w (s2-work (s2-iv words))]
+      (if (>= start total) (s2-out w words)
+        (recur (+ start 64) (s2-add (s2-rounds (s2-begin (s2-expand (s2-load w data start total))) k)))))))
+(defn sha256 [data :vector-i64] :vector-i64 (s2-digest 8 data))
+(defn- s2-nibble [v :i64] :string
+  (case v 0 "0" 1 "1" 2 "2" 3 "3" 4 "4" 5 "5" 6 "6" 7 "7"
+          8 "8" 9 "9" 10 "a" 11 "b" 12 "c" 13 "d" 14 "e" "f"))
+(defn hex [bytes :vector-i64] :string
+  (loop [i 0 out ""]
+    (if (= i (vector-count bytes)) out
+      (let [b (vector-at bytes i)]
+        (recur (+ i 1) (string-concat out (string-concat (s2-nibble (quot b 16)) (s2-nibble (rem b 16)))))))))
+(defn- s2-pad-xor [key :vector-i64 x :i64 extra :i64] :vector-i64
+  (loop [i 0 out (vector-alloc (+ 64 extra))]
+    (if (= i 64) out
+      (recur (+ i 1) (vector-assoc! out i (bit-xor (if (< i (vector-count key)) (vector-at key i) 0) x))))))
+(defn- s2-after [head :vector-i64 tail :vector-i64] :vector-i64
+  (loop [i 0 out head]
+    (if (= i (vector-count tail)) out (recur (+ i 1) (vector-assoc! out (+ 64 i) (vector-at tail i))))))
+(defn hmac-sha256 [key :vector-i64 message :vector-i64] :vector-i64
+  (let [k0 (if (> (vector-count key) 64) (sha256 key) key)
+        inner (sha256 (s2-after (s2-pad-xor k0 54 (vector-count message)) message))]
+    (sha256 (s2-after (s2-pad-xor k0 92 32) inner))))
+(defn hmac-sha256-hex [key :vector-i64 message :vector-i64] :string (hex (hmac-sha256 key message)))
+(defn bzero [n :i64] :vector-i64
+  (let [v (vector-alloc n)] (loop [i 0] (if (>= i n) v (let [z (vector-assoc! v i 0)] (recur (inc i)))))))
+(defn bcopy-into [d :vector-i64 off :i64 s :vector-i64] :vector-i64
+  (loop [i 0] (if (>= i (vector-count s)) d (let [z (vector-assoc! d (+ off i) (vector-at s i))] (recur (inc i))))))
+(defn bslice [s :vector-i64 a :i64 n :i64] :vector-i64
+  (let [d (bzero n)] (loop [i 0] (if (>= i n) d (let [z (vector-assoc! d i (vector-at s (+ a i)))] (recur (inc i)))))))
+(defn bcat [a :vector-i64 b :vector-i64] :vector-i64
+  (bcopy-into (bcopy-into (bzero (+ (vector-count a) (vector-count b))) 0 a) (vector-count a) b))
+(defn bytes=? [a :vector-i64 b :vector-i64] :bool
+  (and (= (vector-count a) (vector-count b))
+       (loop [i 0] (cond (>= i (vector-count a)) true (= (vector-at a i) (vector-at b i)) (recur (inc i)) :else false))))
+(defn w64 [hi :i64 lo :i64] :i64 (bit-or (i64-shift-left hi 32) lo))
+(defn rotr [x :i64 n :i64] :i64 (bit-or (u64-shift-right x n) (i64-shift-left x (- 64 n))))
+(defn k512 [i :i64] :i64
+  (case i
+    0 (w64 0x428a2f98 0xd728ae22)
+    1 (w64 0x71374491 0x23ef65cd)
+    2 (w64 0xb5c0fbcf 0xec4d3b2f)
+    3 (w64 0xe9b5dba5 0x8189dbbc)
+    4 (w64 0x3956c25b 0xf348b538)
+    5 (w64 0x59f111f1 0xb605d019)
+    6 (w64 0x923f82a4 0xaf194f9b)
+    7 (w64 0xab1c5ed5 0xda6d8118)
+    8 (w64 0xd807aa98 0xa3030242)
+    9 (w64 0x12835b01 0x45706fbe)
+    10 (w64 0x243185be 0x4ee4b28c)
+    11 (w64 0x550c7dc3 0xd5ffb4e2)
+    12 (w64 0x72be5d74 0xf27b896f)
+    13 (w64 0x80deb1fe 0x3b1696b1)
+    14 (w64 0x9bdc06a7 0x25c71235)
+    15 (w64 0xc19bf174 0xcf692694)
+    16 (w64 0xe49b69c1 0x9ef14ad2)
+    17 (w64 0xefbe4786 0x384f25e3)
+    18 (w64 0x0fc19dc6 0x8b8cd5b5)
+    19 (w64 0x240ca1cc 0x77ac9c65)
+    20 (w64 0x2de92c6f 0x592b0275)
+    21 (w64 0x4a7484aa 0x6ea6e483)
+    22 (w64 0x5cb0a9dc 0xbd41fbd4)
+    23 (w64 0x76f988da 0x831153b5)
+    24 (w64 0x983e5152 0xee66dfab)
+    25 (w64 0xa831c66d 0x2db43210)
+    26 (w64 0xb00327c8 0x98fb213f)
+    27 (w64 0xbf597fc7 0xbeef0ee4)
+    28 (w64 0xc6e00bf3 0x3da88fc2)
+    29 (w64 0xd5a79147 0x930aa725)
+    30 (w64 0x06ca6351 0xe003826f)
+    31 (w64 0x14292967 0x0a0e6e70)
+    32 (w64 0x27b70a85 0x46d22ffc)
+    33 (w64 0x2e1b2138 0x5c26c926)
+    34 (w64 0x4d2c6dfc 0x5ac42aed)
+    35 (w64 0x53380d13 0x9d95b3df)
+    36 (w64 0x650a7354 0x8baf63de)
+    37 (w64 0x766a0abb 0x3c77b2a8)
+    38 (w64 0x81c2c92e 0x47edaee6)
+    39 (w64 0x92722c85 0x1482353b)
+    40 (w64 0xa2bfe8a1 0x4cf10364)
+    41 (w64 0xa81a664b 0xbc423001)
+    42 (w64 0xc24b8b70 0xd0f89791)
+    43 (w64 0xc76c51a3 0x0654be30)
+    44 (w64 0xd192e819 0xd6ef5218)
+    45 (w64 0xd6990624 0x5565a910)
+    46 (w64 0xf40e3585 0x5771202a)
+    47 (w64 0x106aa070 0x32bbd1b8)
+    48 (w64 0x19a4c116 0xb8d2d0c8)
+    49 (w64 0x1e376c08 0x5141ab53)
+    50 (w64 0x2748774c 0xdf8eeb99)
+    51 (w64 0x34b0bcb5 0xe19b48a8)
+    52 (w64 0x391c0cb3 0xc5c95a63)
+    53 (w64 0x4ed8aa4a 0xe3418acb)
+    54 (w64 0x5b9cca4f 0x7763e373)
+    55 (w64 0x682e6ff3 0xd6b2b8a3)
+    56 (w64 0x748f82ee 0x5defb2fc)
+    57 (w64 0x78a5636f 0x43172f60)
+    58 (w64 0x84c87814 0xa1f0ab72)
+    59 (w64 0x8cc70208 0x1a6439ec)
+    60 (w64 0x90befffa 0x23631e28)
+    61 (w64 0xa4506ceb 0xde82bde9)
+    62 (w64 0xbef9a3f7 0xb2c67915)
+    63 (w64 0xc67178f2 0xe372532b)
+    64 (w64 0xca273ece 0xea26619c)
+    65 (w64 0xd186b8c7 0x21c0c207)
+    66 (w64 0xeada7dd6 0xcde0eb1e)
+    67 (w64 0xf57d4f7f 0xee6ed178)
+    68 (w64 0x06f067aa 0x72176fba)
+    69 (w64 0x0a637dc5 0xa2c898a6)
+    70 (w64 0x113f9804 0xbef90dae)
+    71 (w64 0x1b710b35 0x131c471b)
+    72 (w64 0x28db77f5 0x23047d84)
+    73 (w64 0x32caab7b 0x40c72493)
+    74 (w64 0x3c9ebe0a 0x15c9bebc)
+    75 (w64 0x431d67c4 0x9c100d4c)
+    76 (w64 0x4cc5d4be 0xcb3e42b6)
+    77 (w64 0x597f299c 0xfc657e2a)
+    78 (w64 0x5fcb6fab 0x3ad6faec)
+    79 (w64 0x6c44198c 0x4a475817)
+    0))
+(defn be64 [p :vector-i64 off :i64] :i64
+  (loop [k 0 v 0] (if (= k 8) v (recur (inc k) (bit-or (i64-shift-left v 8) (vector-at p (+ off k)))))))
+(defn sha-w [p :vector-i64 off :i64] :vector-i64
+  (let [w (bzero 80)]
+    (loop [t 0]
+      (if (>= t 80) w
+        (let [v (if (< t 16) (be64 p (+ off (* 8 t)))
+                  (let [a (vector-at w (- t 15)) b (vector-at w (- t 2))]
+                    (+ (bit-xor (bit-xor (rotr b 19) (rotr b 61)) (u64-shift-right b 6))
+                       (+ (vector-at w (- t 7))
+                          (+ (bit-xor (bit-xor (rotr a 1) (rotr a 8)) (u64-shift-right a 7))
+                             (vector-at w (- t 16)))))))
+              z (vector-assoc! w t v)]
+          (recur (inc t)))))))
+(defn sha-rounds [s :vector-i64 w :vector-i64] :vector-i64
+  (loop [t 0]
+    (if (>= t 80) s
+      (let [a (vector-at s 0) b (vector-at s 1) c (vector-at s 2) d (vector-at s 3)
+            e (vector-at s 4) f (vector-at s 5) g (vector-at s 6) h (vector-at s 7)
+            t1 (+ h (+ (bit-xor (bit-xor (rotr e 14) (rotr e 18)) (rotr e 41))
+                       (+ (bit-xor (bit-and e f) (bit-and (bit-xor e -1) g))
+                          (+ (k512 t) (vector-at w t)))))
+            t2 (+ (bit-xor (bit-xor (rotr a 28) (rotr a 34)) (rotr a 39))
+                  (bit-xor (bit-xor (bit-and a b) (bit-and a c)) (bit-and b c)))
+            z7 (vector-assoc! s 7 g) z6 (vector-assoc! s 6 f) z5 (vector-assoc! s 5 e)
+            z4 (vector-assoc! s 4 (+ d t1)) z3 (vector-assoc! s 3 c) z2 (vector-assoc! s 2 b)
+            z1 (vector-assoc! s 1 a) z0 (vector-assoc! s 0 (+ t1 t2))]
+        (recur (inc t))))))
+(defn sha-iv [] :vector-i64
+  (let [h (bzero 8)
+        a (vector-assoc! h 0 (w64 0x6a09e667 0xf3bcc908)) b (vector-assoc! h 1 (w64 0xbb67ae85 0x84caa73b))
+        c (vector-assoc! h 2 (w64 0x3c6ef372 0xfe94f82b)) d (vector-assoc! h 3 (w64 0xa54ff53a 0x5f1d36f1))
+        e (vector-assoc! h 4 (w64 0x510e527f 0xade682d1)) f (vector-assoc! h 5 (w64 0x9b05688c 0x2b3e6c1f))
+        g (vector-assoc! h 6 (w64 0x1f83d9ab 0xfb41bd6b)) i (vector-assoc! h 7 (w64 0x5be0cd19 0x137e2179))]
+    h))
+(defn sha512 [m :vector-i64] :vector-i64
+  (let [n (vector-count m)
+        total (* 128 (quot (+ n 144) 128))
+        p (bcopy-into (bzero total) 0 m)
+        z (vector-assoc! p n 128)
+        bits (* 8 n)
+        y (loop [k 0] (if (= k 8) 0 (let [x (vector-assoc! p (- total (inc k)) (bit-and (u64-shift-right bits (* 8 k)) 255))] (recur (inc k)))))
+        h (sha-iv)
+        hh (loop [off 0]
+             (if (>= off total) h
+               (let [s (bcopy-into (bzero 8) 0 h)
+                     r (sha-rounds s (sha-w p off))
+                     u (loop [i 0] (if (= i 8) 0 (let [x (vector-assoc! h i (+ (vector-at h i) (vector-at r i)))] (recur (inc i)))))]
+                 (recur (+ off 128)))))
+        d (bzero 64)]
+    (loop [i 0]
+      (if (= i 64) d
+        (let [x (vector-assoc! d i (bit-and (u64-shift-right (vector-at hh (quot i 8)) (* 8 (- 7 (- i (* 8 (quot i 8)))))) 255))]
+          (recur (inc i)))))))
+(defn gf [l :vector-i64] :vector-i64 (bcopy-into (bzero 16) 0 l))
+(defn gf-car [o :vector-i64] :vector-i64
+  (loop [i 0]
+    (if (= i 16) o
+      (let [v (+ (vector-at o i) 65536) c (i64-shift-right v 16)
+            j (if (< i 15) (inc i) 0)
+            z (vector-assoc! o i (- v (i64-shift-left c 16)))
+            y (vector-assoc! o j (+ (vector-at o j) (if (= i 15) (* 38 (- c 1)) (- c 1))))]
+        (recur (inc i))))))
+(defn gf-sel [p :vector-i64 q :vector-i64 b :i64] :i64
+  (let [c (bit-xor (- b 1) -1)]
+    (loop [i 0]
+      (if (= i (vector-count p)) 0
+        (let [t (bit-and c (bit-xor (vector-at p i) (vector-at q i)))
+              z (vector-assoc! p i (bit-xor (vector-at p i) t)) y (vector-assoc! q i (bit-xor (vector-at q i) t))]
+          (recur (inc i)))))))
+(defn gf-add [a :vector-i64 b :vector-i64] :vector-i64
+  (let [o (bzero 16)] (loop [i 0] (if (= i 16) o (let [z (vector-assoc! o i (+ (vector-at a i) (vector-at b i)))] (recur (inc i)))))))
+(defn gf-sub [a :vector-i64 b :vector-i64] :vector-i64
+  (let [o (bzero 16)] (loop [i 0] (if (= i 16) o (let [z (vector-assoc! o i (- (vector-at a i) (vector-at b i)))] (recur (inc i)))))))
+(defn gf-mul [a :vector-i64 b :vector-i64] :vector-i64
+  (let [t (bzero 31)
+        x (loop [i 0]
+            (if (= i 16) 0
+              (let [ai (vector-at a i)
+                    y (loop [j 0] (if (= j 16) 0 (let [z (vector-assoc! t (+ i j) (+ (vector-at t (+ i j)) (* ai (vector-at b j))))] (recur (inc j)))))]
+                (recur (inc i)))))
+        y (loop [i 0] (if (= i 15) 0 (let [z (vector-assoc! t i (+ (vector-at t i) (* 38 (vector-at t (+ i 16)))))] (recur (inc i)))))
+        o (bslice t 0 16)]
+    (gf-car (gf-car o))))
+(defn gf-sq [a :vector-i64] :vector-i64 (gf-mul a a))
+(defn gf-inv [x :vector-i64] :vector-i64
+  (loop [a 253 c (gf x)] (if (< a 0) c (recur (dec a) (let [s (gf-sq c)] (if (or (= a 2) (= a 4)) s (gf-mul s x)))))))
+(defn gf-pow2523 [x :vector-i64] :vector-i64
+  (loop [a 250 c (gf x)] (if (< a 0) c (recur (dec a) (let [s (gf-sq c)] (if (= a 1) s (gf-mul s x)))))))
+(defn gf-pack [n :vector-i64] :vector-i64
+  (let [t (gf-car (gf-car (gf-car (gf n))))
+        m (bzero 16)
+        z (loop [j 0]
+            (if (= j 2) 0
+              (let [a (vector-assoc! m 0 (- (vector-at t 0) 65517))
+                    b (loop [i 1]
+                        (if (= i 15) 0
+                          (let [x (vector-assoc! m i (- (- (vector-at t i) 65535) (bit-and (i64-shift-right (vector-at m (dec i)) 16) 1)))
+                                y (vector-assoc! m (dec i) (bit-and (vector-at m (dec i)) 65535))]
+                            (recur (inc i)))))
+                    c (vector-assoc! m 15 (- (- (vector-at t 15) 32767) (bit-and (i64-shift-right (vector-at m 14) 16) 1)))
+                    bb (bit-and (i64-shift-right (vector-at m 15) 16) 1)
+                    d (vector-assoc! m 14 (bit-and (vector-at m 14) 65535))
+                    e (gf-sel t m (- 1 bb))]
+                (recur (inc j)))))
+        o (bzero 32)]
+    (loop [i 0]
+      (if (= i 16) o
+        (let [x (vector-assoc! o (* 2 i) (bit-and (vector-at t i) 255))
+              y (vector-assoc! o (inc (* 2 i)) (i64-shift-right (vector-at t i) 8))]
+          (recur (inc i)))))))
+(defn gf-neq? [a :vector-i64 b :vector-i64] :bool (not (bytes=? (gf-pack a) (gf-pack b))))
+(defn gf-par [a :vector-i64] :i64 (bit-and (vector-at (gf-pack a) 0) 1))
+(defn gf-unpack [n :vector-i64] :vector-i64
+  (let [o (bzero 16)
+        z (loop [i 0] (if (= i 16) 0 (let [x (vector-assoc! o i (+ (vector-at n (* 2 i)) (i64-shift-left (vector-at n (inc (* 2 i))) 8)))] (recur (inc i)))))
+        y (vector-assoc! o 15 (bit-and (vector-at o 15) 32767))]
+    o))
+(defn gf0 [] :vector-i64 (bzero 16))
+(defn gf1 [] :vector-i64 (gf [1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]))
+(defn gf-d [] :vector-i64 (gf [30883 4953 19914 30187 55467 16705 2637 112 59544 30585 16505 36039 65139 11119 27886 20995]))
+(defn gf-d2 [] :vector-i64 (gf [61785 9906 39828 60374 45398 33411 5274 224 53552 61171 33010 6542 64743 22239 55772 9222]))
+(defn gf-x [] :vector-i64 (gf [54554 36645 11616 51542 42930 38181 51040 26924 56412 64982 57905 49316 21502 52590 14035 8553]))
+(defn gf-y [] :vector-i64 (gf [26200 26214 26214 26214 26214 26214 26214 26214 26214 26214 26214 26214 26214 26214 26214 26214]))
+(defn gf-i [] :vector-i64 (gf [41136 18958 6951 50414 58488 44335 6150 12099 55207 15867 153 11085 57099 20417 9344 11139]))
+(defn pt [x :vector-i64 y :vector-i64 z :vector-i64 t :vector-i64] :vector-i64
+  (bcopy-into (bcopy-into (bcopy-into (bcopy-into (bzero 64) 0 x) 16 y) 32 z) 48 t))
+(defn pc [p :vector-i64 k :i64] :vector-i64 (bslice p (* 16 k) 16))
+(defn pt-add [p :vector-i64 q :vector-i64] :vector-i64
+  (let [a (gf-mul (gf-sub (pc p 1) (pc p 0)) (gf-sub (pc q 1) (pc q 0)))
+        b (gf-mul (gf-add (pc p 0) (pc p 1)) (gf-add (pc q 0) (pc q 1)))
+        c (gf-mul (gf-mul (pc p 3) (pc q 3)) (gf-d2))
+        d0 (gf-mul (pc p 2) (pc q 2)) d (gf-add d0 d0)
+        e (gf-sub b a) f (gf-sub d c) g (gf-add d c) h (gf-add b a)]
+    (pt (gf-mul e f) (gf-mul h g) (gf-mul g f) (gf-mul e h))))
+(defn pt-mul [q0 :vector-i64 s :vector-i64] :vector-i64
+  (loop [i 255 p (pt (gf0) (gf1) (gf1) (gf0)) q (bcat q0 (bzero 0))]
+    (if (< i 0) p
+      (let [b (bit-and (i64-shift-right (vector-at s (quot i 8)) (bit-and i 7)) 1)
+            x (gf-sel p q b)
+            q2 (pt-add q p) p2 (pt-add p p)
+            y (gf-sel p2 q2 b)]
+        (recur (dec i) p2 q2)))))
+(defn pt-base [] :vector-i64 (pt (gf-x) (gf-y) (gf1) (gf-mul (gf-x) (gf-y))))
+(defn pt-pack [p :vector-i64] :vector-i64
+  (let [zi (gf-inv (pc p 2)) tx (gf-mul (pc p 0) zi) ty (gf-mul (pc p 1) zi)
+        r (gf-pack ty) z (vector-assoc! r 31 (bit-xor (vector-at r 31) (i64-shift-left (gf-par tx) 7)))]
+    r))
+(defn pt-unpackneg [b :vector-i64] :vector-i64
+  (let [z (gf1) y (gf-unpack b)
+        num0 (gf-sq y) den (gf-add z (gf-mul num0 (gf-d))) num (gf-sub num0 z)
+        den2 (gf-sq den) den4 (gf-sq den2) den6 (gf-mul den4 den2)
+        t (gf-mul (gf-mul (gf-pow2523 (gf-mul (gf-mul den6 num) den)) num) (gf-mul den den))
+        x0 (gf-mul t den)
+        x1 (if (gf-neq? (gf-mul (gf-sq x0) den) num) (gf-mul x0 (gf-i)) x0)]
+    (if (gf-neq? (gf-mul (gf-sq x1) den) num) (vector-alloc 0)
+      (let [x (if (= (gf-par x1) (i64-shift-right (vector-at b 31) 7)) (gf-sub (gf0) x1) x1)]
+        (pt x y z (gf-mul x y))))))
+(defn l-byte [j :i64] :i64
+  (case j 0 237 1 211 2 245 3 92 4 26 5 99 6 18 7 88 8 214 9 156 10 247 11 162 12 222 13 249 14 222 15 20 31 16 0))
+(defn mod-l [x :vector-i64] :vector-i64
+  (let [a (loop [i 63]
+            (if (< i 32) 0
+              (let [xi (vector-at x i)
+                    carry (loop [j (- i 32) c 0]
+                            (if (>= j (- i 12)) (let [z (vector-assoc! x j (+ (vector-at x j) c))] c)
+                              (let [v (- (+ (vector-at x j) c) (* 16 (* xi (l-byte (- j (- i 32))))))
+                                    c2 (i64-shift-right (+ v 128) 8)
+                                    z (vector-assoc! x j (- v (i64-shift-left c2 8)))]
+                                (recur (inc j) c2))))
+                    z (vector-assoc! x i 0)]
+                (recur (dec i)))))
+        x31 (vector-at x 31)
+        c1 (loop [j 0 c 0]
+             (if (= j 32) c
+               (let [v (- (+ (vector-at x j) c) (* (i64-shift-right x31 4) (l-byte j)))
+                     c2 (i64-shift-right v 8) z (vector-assoc! x j (bit-and v 255))]
+                 (recur (inc j) c2))))
+        b (loop [j 0] (if (= j 32) 0 (let [z (vector-assoc! x j (- (vector-at x j) (* c1 (l-byte j))))] (recur (inc j)))))
+        r (bzero 32)]
+    (loop [i 0]
+      (if (= i 32) r
+        (let [z (if (< i 31) (vector-assoc! x (inc i) (+ (vector-at x (inc i)) (i64-shift-right (vector-at x i) 8))) x)
+              y (vector-assoc! r i (bit-and (vector-at x i) 255))]
+          (recur (inc i)))))))
+(defn reduce64 [h :vector-i64] :vector-i64 (mod-l (bcopy-into (bzero 64) 0 h)))
+(defn below-l? [s :vector-i64] :bool
+  (loop [j 31] (cond (< j 0) false (< (vector-at s j) (l-byte j)) true (> (vector-at s j) (l-byte j)) false :else (recur (dec j)))))
+(defn verify? [pk :vector-i64 m :vector-i64 sig :vector-i64] :bool
+  (arena-scope
+    (if (or (not (= (vector-count pk) 32)) (not (= (vector-count sig) 64))) false
+      (let [s (bslice sig 32 32) q (pt-unpackneg pk)]
+        (if (or (not (below-l? s)) (= (vector-count q) 0)) false
+          (let [rr (bslice sig 0 32)
+                h (reduce64 (sha512 (bcat (bcat rr pk) m)))
+                p (pt-add (pt-mul q h) (pt-mul (pt-base) s))]
+            (bytes=? (pt-pack p) rr)))))))
+(defn- jr-at [b :vector-i64 i :i64] :i64 (if (and (>= i 0) (< i (vector-count b))) (vector-at b i) -1))
+(defn- jr-ws? [c :i64] :bool (or (= c 32) (= c 9) (= c 10) (= c 13)))
+(defn- jr-skip [b :vector-i64 i :i64] :i64 (loop [j i] (if (jr-ws? (jr-at b j)) (recur (+ j 1)) j)))
+(defn- jr-digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
+(defn- jr-cont? [c :i64] :bool (and (>= c 128) (<= c 191)))
+(defn- jr-digits [b :vector-i64 j :i64] :i64 (loop [k j] (if (jr-digit? (jr-at b k)) (recur (+ k 1)) k)))
+(defn- jr-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- jr-hex [c :i64] :i64
+  (cond (jr-digit? c) (- c 48)
+        (and (>= c 97) (<= c 102)) (- c 87)
+        (and (>= c 65) (<= c 70)) (- c 55)
+        :else -1))
+(defn- jr-hex4 [b :vector-i64 k :i64] :i64
+  (let [a (jr-hex (jr-at b k)) c (jr-hex (jr-at b (+ k 1))) d (jr-hex (jr-at b (+ k 2))) e (jr-hex (jr-at b (+ k 3)))]
+    (if (or (< a 0) (< c 0) (< d 0) (< e 0)) -1 (+ (* a 4096) (+ (* c 256) (+ (* d 16) e))))))
+(defn- jr-utf8 [b :vector-i64 j :i64] :i64
+  (let [c (jr-at b j) c1 (jr-at b (+ j 1)) c2 (jr-at b (+ j 2)) c3 (jr-at b (+ j 3))]
+    (cond (and (>= c 194) (<= c 223)) (if (jr-cont? c1) 2 -1)
+          (= c 224) (if (and (>= c1 160) (<= c1 191) (jr-cont? c2)) 3 -1)
+          (or (and (>= c 225) (<= c 236)) (= c 238) (= c 239)) (if (and (jr-cont? c1) (jr-cont? c2)) 3 -1)
+          (= c 237) (if (and (>= c1 128) (<= c1 159) (jr-cont? c2)) 3 -1)
+          (= c 240) (if (and (>= c1 144) (<= c1 191) (jr-cont? c2) (jr-cont? c3)) 4 -1)
+          (and (>= c 241) (<= c 243)) (if (and (jr-cont? c1) (jr-cont? c2) (jr-cont? c3)) 4 -1)
+          (= c 244) (if (and (>= c1 128) (<= c1 143) (jr-cont? c2) (jr-cont? c3)) 4 -1)
+          :else -1)))
+(defn- jr-escape [b :vector-i64 j :i64] :i64
+  (let [c (jr-at b (+ j 1))]
+    (cond (or (= c 34) (= c 92) (= c 47) (= c 98) (= c 102) (= c 110) (= c 114) (= c 116)) (+ j 2)
+          (= c 117)
+          (let [u (jr-hex4 b (+ j 2))]
+            (cond (< u 0) -1
+                  (and (>= u 55296) (<= u 56319))
+                  (if (and (= (jr-at b (+ j 6)) 92) (= (jr-at b (+ j 7)) 117))
+                    (let [v (jr-hex4 b (+ j 8))] (if (and (>= v 56320) (<= v 57343)) (+ j 12) -1))
+                    -1)
+                  (and (>= u 56320) (<= u 57343)) -1
+                  :else (+ j 6)))
+          :else -1)))
+(defn- jr-str [b :vector-i64 i :i64 keys? :bool] :i64
+  (loop [j (+ i 1)]
+    (let [c (jr-at b j)]
+      (cond (< c 0) -3
+            (= c 34) (+ j 1)
+            (< c 32) -3
+            (= c 92) (if keys? -6 (let [e (jr-escape b j)] (if (< e 0) -3 (recur e))))
+            (< c 128) (recur (+ j 1))
+            :else (let [w (jr-utf8 b j)] (if (< w 0) -3 (recur (+ j w))))))))
+(defn- jr-number [b :vector-i64 i :i64] :i64
+  (let [j0 (if (= (jr-at b i) 45) (+ i 1) i)
+        c (jr-at b j0)
+        j1 (cond (= c 48) (+ j0 1) (and (>= c 49) (<= c 57)) (jr-digits b (+ j0 1)) :else -1)]
+    (if (< j1 0) -4
+      (let [j2 (if (= (jr-at b j1) 46) (if (jr-digit? (jr-at b (+ j1 1))) (jr-digits b (+ j1 2)) -1) j1)]
+        (if (< j2 0) -4
+          (let [e (jr-at b j2)]
+            (if (or (= e 101) (= e 69))
+              (let [k (if (or (= (jr-at b (+ j2 1)) 43) (= (jr-at b (+ j2 1)) 45)) (+ j2 2) (+ j2 1))]
+                (if (jr-digit? (jr-at b k)) (jr-digits b (+ k 1)) -4))
+              j2)))))))
+(defn- jr-lit [b :vector-i64 i :i64 lit :string] :i64
+  (let [l (jr-bytes lit)]
+    (loop [k 0] (if (= k (vector-count l)) (+ i k) (if (= (jr-at b (+ i k)) (vector-at l k)) (recur (+ k 1)) -1)))))
+(defn- jr-scalar [b :vector-i64 i :i64] :i64
+  (let [c (jr-at b i)]
+    (cond (= c 34) (jr-str b i false)
+          (or (= c 45) (jr-digit? c)) (jr-number b i)
+          (= c 116) (jr-lit b i "true")
+          (= c 102) (jr-lit b i "false")
+          (= c 110) (jr-lit b i "null")
+          :else -1)))
+(defn- jr-skip-string [b :vector-i64 i :i64] :i64
+  (loop [j (+ i 1)] (let [c (vector-at b j)] (cond (= c 34) (+ j 1) (= c 92) (recur (+ j 2)) :else (recur (+ j 1))))))
+(defn- jr-skip-value [b :vector-i64 i :i64] :i64
+  (let [c (vector-at b i)]
+    (cond (= c 34) (jr-skip-string b i)
+          (or (= c 123) (= c 91))
+          (loop [j (+ i 1) d 1]
+            (let [x (vector-at b j)]
+              (cond (= x 34) (recur (jr-skip-string b j) d)
+                    (or (= x 123) (= x 91)) (recur (+ j 1) (+ d 1))
+                    (or (= x 125) (= x 93)) (if (= d 1) (+ j 1) (recur (+ j 1) (- d 1)))
+                    :else (recur (+ j 1) d))))
+          :else (loop [j i] (let [x (jr-at b j)] (if (or (< x 0) (= x 44) (= x 125) (= x 93) (jr-ws? x)) j (recur (+ j 1))))))))
+(defn- jr-span=? [b :vector-i64 a :i64 ae :i64 c :i64 ce :i64] :bool
+  (if (not (= (- ae a) (- ce c))) false
+    (loop [k 0] (if (= k (- ae a)) true (if (= (vector-at b (+ a k)) (vector-at b (+ c k))) (recur (+ k 1)) false)))))
+(defn- jr-dup? [b :vector-i64 obj :i64 ks :i64 ke :i64] :bool
+  (loop [j (jr-skip b (+ obj 1))]
+    (if (>= j ks) false
+      (let [e (jr-skip-string b j)]
+        (if (jr-span=? b j e ks ke) true
+          (let [v (jr-skip b (+ (jr-skip b e) 1)) n (jr-skip b (jr-skip-value b v))]
+            (recur (jr-skip b (+ n 1)))))))))
+(defn json-end [b :vector-i64 start :i64] :i64
+  (let [kinds (vector-alloc 65) objs (vector-alloc 65)]
+    (loop [i start sp 0 mode 0]
+      (cond
+        (= mode 0)
+        (let [c (jr-at b i)]
+          (cond (or (= c 123) (= c 91))
+                (if (>= sp 64) -2
+                  (let [z (vector-assoc! kinds sp (if (= c 123) 1 2)) y (vector-assoc! objs sp i)]
+                    (recur (jr-skip b (+ i 1)) (+ sp 1) (if (= c 123) 3 4))))
+                :else (let [e (jr-scalar b i)] (if (< e 0) e (recur e sp 1)))))
+        (= mode 1)
+        (if (= sp 0) i
+          (let [j (jr-skip b i) c (jr-at b j) k (vector-at kinds (- sp 1))]
+            (cond (= c 44) (recur (jr-skip b (+ j 1)) sp (if (= k 1) 2 0))
+                  (and (= c 125) (= k 1)) (recur (+ j 1) (- sp 1) 1)
+                  (and (= c 93) (= k 2)) (recur (+ j 1) (- sp 1) 1)
+                  :else -1)))
+        (or (= mode 2) (= mode 3))
+        (let [c (jr-at b i)]
+          (cond (and (= mode 3) (= c 125)) (recur (+ i 1) (- sp 1) 1)
+                (= c 34)
+                (let [e (jr-str b i true)]
+                  (cond (< e 0) e
+                        (jr-dup? b (vector-at objs (- sp 1)) i e) -5
+                        :else (let [j (jr-skip b e)] (if (= (jr-at b j) 58) (recur (jr-skip b (+ j 1)) sp 0) -1))))
+                :else -1))
+        :else (if (= (jr-at b i) 93) (recur (+ i 1) (- sp 1) 1) (recur i sp 0))))))
+(defn json-valid? [b :vector-i64] :bool
+  (let [s (jr-skip b 0) e (json-end b s)]
+    (and (>= e 0) (= (jr-skip b e) (vector-count b)))))
+(defn json-kind [b :vector-i64 i :i64] :i64
+  (let [c (jr-at b i)]
+    (cond (= c 123) 1 (= c 91) 2 (= c 34) 3 (or (= c 45) (jr-digit? c)) 4
+          (= c 116) 5 (= c 102) 6 (= c 110) 7 :else 0)))
+(defn json-member [b :vector-i64 obj :i64 key :string] :i64
+  (if (not (= (jr-at b obj) 123)) -1
+    (let [k (jr-bytes key)]
+      (loop [j (jr-skip b (+ obj 1))]
+        (if (not (= (jr-at b j) 34)) -1
+          (let [e (jr-skip-string b j)
+                v (jr-skip b (+ (jr-skip b e) 1))
+                same (and (= (- (- e j) 2) (vector-count k))
+                          (loop [m 0] (if (= m (vector-count k)) true (if (= (vector-at b (+ (+ j 1) m)) (vector-at k m)) (recur (+ m 1)) false))))]
+            (if same v
+              (let [n (jr-skip b (jr-skip-value b v))]
+                (if (= (jr-at b n) 44) (recur (jr-skip b (+ n 1))) -1)))))))))
+(defn json-element [b :vector-i64 arr :i64 n :i64] :i64
+  (if (or (not (= (jr-at b arr) 91)) (< n 0)) -1
+    (loop [j (jr-skip b (+ arr 1)) k 0]
+      (if (= (jr-at b j) 93) -1
+        (if (= k n) j
+          (let [m (jr-skip b (jr-skip-value b j))]
+            (if (= (jr-at b m) 44) (recur (jr-skip b (+ m 1)) (+ k 1)) -1)))))))
+(defn json-count [b :vector-i64 i :i64] :i64
+  (let [c (jr-at b i)]
+    (if (not (or (= c 123) (= c 91))) 0
+      (let [j0 (jr-skip b (+ i 1))]
+        (if (or (= (jr-at b j0) 125) (= (jr-at b j0) 93)) 0
+          (loop [j j0 n 1]
+            (let [v (if (= c 123) (jr-skip b (+ (jr-skip b (jr-skip-string b j)) 1)) j)
+                  m (jr-skip b (jr-skip-value b v))]
+              (if (= (jr-at b m) 44) (recur (jr-skip b (+ m 1)) (+ n 1)) n))))))))
+(defn- jr-unescape [d :i64] :i64
+  (cond (= d 98) 8 (= d 102) 12 (= d 110) 10 (= d 114) 13 (= d 116) 9 :else d))
+(defn- jr-put-utf8 [out :vector-i64 n :i64 cp :i64] :i64
+  (cond (< cp 128) (let [z (vector-assoc! out n cp)] (+ n 1))
+        (< cp 2048) (let [z (vector-assoc! out n (+ 192 (quot cp 64))) y (vector-assoc! out (+ n 1) (+ 128 (rem cp 64)))] (+ n 2))
+        (< cp 65536) (let [z (vector-assoc! out n (+ 224 (quot cp 4096))) y (vector-assoc! out (+ n 1) (+ 128 (rem (quot cp 64) 64)))
+                           x (vector-assoc! out (+ n 2) (+ 128 (rem cp 64)))] (+ n 3))
+        :else (let [z (vector-assoc! out n (+ 240 (quot cp 262144))) y (vector-assoc! out (+ n 1) (+ 128 (rem (quot cp 4096) 64)))
+                    x (vector-assoc! out (+ n 2) (+ 128 (rem (quot cp 64) 64))) w (vector-assoc! out (+ n 3) (+ 128 (rem cp 64)))] (+ n 4))))
+(defn json-string-bytes [b :vector-i64 i :i64] :vector-i64
+  (let [e (jr-skip-string b i) out (vector-alloc (- e i))
+        n (loop [j (+ i 1) n 0]
+            (if (>= j (- e 1)) n
+              (let [c (vector-at b j)]
+                (if (= c 92)
+                  (let [d (vector-at b (+ j 1))]
+                    (if (= d 117)
+                      (let [u (jr-hex4 b (+ j 2))
+                            pair (and (>= u 55296) (<= u 56319))
+                            cp (if pair (+ 65536 (+ (* (- u 55296) 1024) (- (jr-hex4 b (+ j 8)) 56320))) u)]
+                        (recur (+ j (if pair 12 6)) (jr-put-utf8 out n cp)))
+                      (let [z (vector-assoc! out n (jr-unescape d))] (recur (+ j 2) (+ n 1)))))
+                  (let [z (vector-assoc! out n c)] (recur (+ j 1) (+ n 1)))))))]
+    (loop [k 0 r (vector-alloc n)] (if (= k n) r (recur (+ k 1) (vector-assoc! r k (vector-at out k)))))))
+(defn json-string [b :vector-i64 i :i64] :string (string-from-utf8 (bytes-from-vector-i64 (json-string-bytes b i))))
+(defn json-int-ok? [b :vector-i64 i :i64] :bool
+  (let [j0 (if (= (jr-at b i) 45) (+ i 1) i) e (jr-digits b j0) x (jr-at b e)]
+    (and (jr-digit? (jr-at b j0)) (not (= x 46)) (not (= x 101)) (not (= x 69)) (<= (- e j0) 16)
+         (<= (loop [k j0 v 0] (if (= k e) v (recur (+ k 1) (+ (* v 10) (- (vector-at b k) 48))))) 9007199254740991))))
+(defn json-int [b :vector-i64 i :i64] :i64
+  (let [neg (= (jr-at b i) 45) j0 (if neg (+ i 1) i) e (jr-digits b j0)
+        v (loop [k j0 v 0] (if (= k e) v (recur (+ k 1) (+ (* v 10) (- (vector-at b k) 48)))))]
+    (if neg (- 0 v) v)))
+(defn- jr-canon-string? [b :vector-i64 i :i64 e :i64] :bool
+  (loop [j (+ i 1)]
+    (if (>= j (- e 1)) true
+      (if (= (vector-at b j) 92)
+        (let [d (vector-at b (+ j 1))]
+          (cond (or (= d 34) (= d 92) (= d 98) (= d 102) (= d 110) (= d 114) (= d 116)) (recur (+ j 2))
+                (= d 117)
+                (let [u (jr-hex4 b (+ j 2))
+                      lower (loop [k 2] (if (= k 6) true (let [h (vector-at b (+ j k))] (if (and (>= h 65) (<= h 70)) false (recur (+ k 1))))))]
+                  (if (and lower (< u 32) (not (= u 8)) (not (= u 9)) (not (= u 10)) (not (= u 12)) (not (= u 13)))
+                    (recur (+ j 6)) false))
+                :else false))
+        (recur (+ j 1))))))
+(defn- jr-canon-key? [b :vector-i64 i :i64 e :i64] :bool
+  (loop [j (+ i 1) digits true]
+    (if (>= j (- e 1)) (not digits)
+      (let [c (vector-at b j)] (if (>= c 128) false (recur (+ j 1) (and digits (jr-digit? c))))))))
+(defn- jr-after? [b :vector-i64 a :i64 ae :i64 c :i64 ce :i64] :bool
+  (loop [k 1]
+    (let [x (if (< (+ a k) (- ae 1)) (vector-at b (+ a k)) -1) y (if (< (+ c k) (- ce 1)) (vector-at b (+ c k)) -1)]
+      (cond (and (< x 0) (< y 0)) false
+            (= x y) (recur (+ k 1))
+            :else (> y x)))))
+(defn- jr-canon-number? [b :vector-i64 i :i64 e :i64] :bool
+  (and (json-int-ok? b i) (= (jr-digits b (if (= (vector-at b i) 45) (+ i 1) i)) e)
+       (not (and (= (vector-at b i) 45) (= (vector-at b (+ i 1)) 48)))))
+(defn json-canonical? [b :vector-i64] :bool
+  (let [kinds (vector-alloc 65) want (vector-alloc 65) pa (vector-alloc 65) pe (vector-alloc 65)]
+    (loop [j 0 sp 0]
+      (if (= j (vector-count b)) true
+        (let [c (vector-at b j)]
+          (cond (jr-ws? c) false
+                (or (= c 123) (= c 91))
+                (let [z (vector-assoc! kinds sp (if (= c 123) 1 2)) y (vector-assoc! want sp (if (= c 123) 1 0)) x (vector-assoc! pa sp -1)]
+                  (recur (+ j 1) (+ sp 1)))
+                (or (= c 125) (= c 93)) (recur (+ j 1) (- sp 1))
+                (= c 44) (let [z (if (and (> sp 0) (= (vector-at kinds (- sp 1)) 1)) (vector-assoc! want (- sp 1) 1) want)] (recur (+ j 1) sp))
+                (= c 58) (recur (+ j 1) sp)
+                (= c 34)
+                (let [e (jr-skip-string b j)]
+                  (if (not (jr-canon-string? b j e)) false
+                    (if (and (> sp 0) (= (vector-at want (- sp 1)) 1))
+                      (let [d (- sp 1)]
+                        (if (and (jr-canon-key? b j e) (or (< (vector-at pa d) 0) (jr-after? b (vector-at pa d) (vector-at pe d) j e)))
+                          (let [z (vector-assoc! pa d j) y (vector-assoc! pe d e) x (vector-assoc! want d 0)] (recur e sp))
+                          false))
+                      (recur e sp))))
+                (or (= c 45) (jr-digit? c))
+                (let [e (jr-number b j)] (if (jr-canon-number? b j e) (recur e sp) false))
+                :else (recur (jr-skip-value b j) sp)))))))
+(defn- jr-put [out :vector-i64 n :i64 c :i64] :i64 (let [z (vector-assoc! out n c)] (+ n 1)))
+(defn- jr-put-text [out :vector-i64 n :i64 s :string] :i64
+  (let [t (jr-bytes s)] (loop [k 0 m n] (if (= k (vector-count t)) m (recur (+ k 1) (jr-put out m (vector-at t k)))))))
+(defn- jr-hexd [v :i64] :i64 (if (< v 10) (+ v 48) (+ v 87)))
+(defn- jr-put-string [out :vector-i64 n :i64 s :vector-i64] :i64
+  (let [m0 (jr-put out n 34)
+        m1 (loop [k 0 m m0]
+             (if (= k (vector-count s)) m
+               (let [c (vector-at s k)]
+                 (recur (+ k 1)
+                        (cond (= c 34) (jr-put out (jr-put out m 92) 34)
+                              (= c 92) (jr-put out (jr-put out m 92) 92)
+                              (= c 8) (jr-put out (jr-put out m 92) 98)
+                              (= c 12) (jr-put out (jr-put out m 92) 102)
+                              (= c 10) (jr-put out (jr-put out m 92) 110)
+                              (= c 13) (jr-put out (jr-put out m 92) 114)
+                              (= c 9) (jr-put out (jr-put out m 92) 116)
+                              (< c 32) (jr-put out (jr-put out (jr-put out (jr-put out (jr-put out (jr-put out m 92) 117) 48) 48)
+                                                                (jr-hexd (quot c 16))) (jr-hexd (rem c 16)))
+                              :else (jr-put out m c))))))]
+    (jr-put out m1 34)))
+(defn- jr-sort-members [b :vector-i64 ks :vector-i64 vs :vector-i64 m :i64] :i64
+  (loop [x 0]
+    (if (>= x m) 0
+      (let [best (loop [y (+ x 1) bi x]
+                   (if (= y m) bi
+                     (let [ky (vector-at ks y) kb (vector-at ks bi)]
+                       (recur (+ y 1) (if (jr-after? b ky (jr-skip-string b ky) kb (jr-skip-string b kb)) y bi)))))
+            k1 (vector-at ks x) v1 (vector-at vs x) k2 (vector-at ks best) v2 (vector-at vs best)
+            a (vector-assoc! ks x k2) c (vector-assoc! vs x v2) d (vector-assoc! ks best k1) e (vector-assoc! vs best v1)]
+        (recur (+ x 1))))))
+(defn- jr-emit [b :vector-i64 i :i64 out :vector-i64 n :i64] :i64
+  (let [k (json-kind b i)]
+    (cond (< n 0) n
+          (= k 1)
+          (let [m (json-count b i) ks (vector-alloc m) vs (vector-alloc m)
+                f (loop [j (jr-skip b (+ i 1)) x 0]
+                    (if (= x m) 0
+                      (let [e (jr-skip-string b j) v (jr-skip b (+ (jr-skip b e) 1))
+                            z (vector-assoc! ks x j) y (vector-assoc! vs x v)
+                            nx (jr-skip b (jr-skip-value b v))]
+                        (recur (if (= (jr-at b nx) 44) (jr-skip b (+ nx 1)) nx) (+ x 1)))))
+                ok (loop [x 0] (if (= x m) true (if (jr-canon-key? b (vector-at ks x) (jr-skip-string b (vector-at ks x))) (recur (+ x 1)) false)))]
+            (if (not ok) -1
+              (let [s (jr-sort-members b ks vs m)
+                    m2 (loop [x 0 p (jr-put out n 123)]
+                         (if (or (= x m) (< p 0)) p
+                           (let [p1 (if (> x 0) (jr-put out p 44) p)
+                                 k0 (vector-at ks x) ke (jr-skip-string b k0)
+                                 p2 (loop [q k0 r p1] (if (= q ke) r (recur (+ q 1) (jr-put out r (vector-at b q)))))]
+                             (recur (+ x 1) (jr-emit b (vector-at vs x) out (jr-put out p2 58))))))]
+                (if (< m2 0) -1 (jr-put out m2 125)))))
+          (= k 2)
+          (let [m2 (loop [j (jr-skip b (+ i 1)) x 0 p (jr-put out n 91)]
+                     (if (or (= (jr-at b j) 93) (< p 0)) p
+                       (let [p1 (jr-emit b j out (if (> x 0) (jr-put out p 44) p))
+                             nx (jr-skip b (jr-skip-value b j))]
+                         (recur (if (= (jr-at b nx) 44) (jr-skip b (+ nx 1)) nx) (+ x 1) p1))))]
+            (if (< m2 0) -1 (jr-put out m2 93)))
+          (= k 3) (jr-put-string out n (json-string-bytes b i))
+          (= k 4) (if (json-int-ok? b i) (jr-put-text out n (string-from-i64 (json-int b i))) -1)
+          (= k 5) (jr-put-text out n "true")
+          (= k 6) (jr-put-text out n "false")
+          (= k 7) (jr-put-text out n "null")
+          :else -1)))
+(defn json-canonical-bytes [b :vector-i64 i :i64] :vector-i64
+  (let [out (vector-alloc (vector-count b)) n (jr-emit b i out 0)]
+    (if (< n 0) (vector-alloc 0)
+      (loop [k 0 r (vector-alloc n)] (if (= k n) r (recur (+ k 1) (vector-assoc! r k (vector-at out k))))))))
+(defn- en-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- en-b58-digit [c :i64] :i64
+  (cond (and (>= c 49) (<= c 57)) (- c 49)
+        (and (>= c 65) (<= c 72)) (- c 56)
+        (and (>= c 74) (<= c 78)) (- c 57)
+        (and (>= c 80) (<= c 90)) (- c 58)
+        (and (>= c 97) (<= c 107)) (- c 64)
+        (and (>= c 109) (<= c 122)) (- c 65)
+        :else -1))
+(defn- en-b64-digit [c :i64] :i64
+  (cond (and (>= c 65) (<= c 90)) (- c 65)
+        (and (>= c 97) (<= c 122)) (- c 71)
+        (and (>= c 48) (<= c 57)) (+ c 4)
+        (= c 45) 62
+        (= c 95) 63
+        :else -1))
+(defn- en-starts? [b :vector-i64 p :string] :bool
+  (let [q (en-bytes p)]
+    (if (< (vector-count b) (vector-count q)) false
+      (loop [i 0] (if (= i (vector-count q)) true (if (= (vector-at b i) (vector-at q i)) (recur (+ i 1)) false))))))
+(defn- en-slice [v :vector-i64 a :i64 n :i64] :vector-i64
+  (loop [i 0 out (vector-alloc n)] (if (= i n) out (recur (+ i 1) (vector-assoc! out i (vector-at v (+ a i)))))))
+(defn- en-did-raw [did :string] :vector-i64
+  (let [b (en-bytes did) out (vector-alloc 35)]
+    (cond (not (en-starts? b "did:key:z")) (vector-assoc! out 0 1)
+          (and (> (vector-count b) 9) (= (vector-at b 9) 49)) (vector-assoc! out 0 2)
+          :else
+          (loop [i 9 acc out]
+            (if (= i (vector-count b))
+              (if (and (= (vector-at acc 1) 237) (= (vector-at acc 2) 1)) acc (vector-assoc! acc 0 4))
+              (let [d (en-b58-digit (vector-at b i))]
+                (if (< d 0) (vector-assoc! acc 0 3)
+                  ;; acc[1..34] := acc[1..34] * 58 + d, big-endian
+                  (let [carry (loop [j 34 c d]
+                                (if (= j 0) c
+                                  (let [x (+ (* (vector-at acc j) 58) c)
+                                        z (vector-assoc! acc j (bit-and x 255))]
+                                    (recur (- j 1) (u64-shift-right x 8)))))]
+                    (if (> carry 0) (vector-assoc! acc 0 4) (recur (+ i 1) acc))))))))))
+(defn did-key-problem [did :string] :string
+  (case (vector-at (en-did-raw did) 0)
+    0 "enroll/ok"
+    1 "enroll/not-did-key"
+    2 "enroll/did-key-not-canonical"
+    3 "enroll/did-key-bad-base58"
+    "enroll/did-key-not-ed25519"))
+(defn did-key-public [did :string] :vector-i64
+  (let [raw (en-did-raw did)]
+    (if (= (vector-at raw 0) 0) (en-slice raw 3 32) (vector-alloc 0))))
+(defn- en-sig-raw [sig :string] :vector-i64
+  (let [b (en-bytes sig) out (vector-alloc 65)]
+    (if (not (= (vector-count b) 86)) (vector-assoc! out 0 1)
+      (loop [i 0 acc 0 bits 0 k 1 o out]
+        (if (= i 86)
+          (if (= acc 0) o (vector-assoc! o 0 1))
+          (let [d (en-b64-digit (vector-at b i))]
+            (if (< d 0) (vector-assoc! o 0 1)
+              (let [a2 (+ (* acc 64) d) b2 (+ bits 6)]
+                (if (>= b2 8)
+                  (let [bv (bit-and (u64-shift-right a2 (- b2 8)) 255)
+                        left (bit-and a2 (- (i64-shift-left 1 (- b2 8)) 1))]
+                    (recur (+ i 1) left (- b2 8) (+ k 1) (vector-assoc! o k bv)))
+                  (recur (+ i 1) a2 b2 k o))))))))))
+(defn- en-sig-ok? [sig :string] :bool (= (vector-at (en-sig-raw sig) 0) 0))
+(defn- en-sig-bytes [sig :string] :vector-i64 (en-slice (en-sig-raw sig) 1 64))
+(defn statement-problem [did :string text :string sig :string] :string
+  (cond (not (= (did-key-problem did) "enroll/ok")) (did-key-problem did)
+        (not (en-sig-ok? sig)) "enroll/signature-encoding"
+        (not (arena-scope (verify? (did-key-public did) (en-bytes text) (en-sig-bytes sig)))) "enroll/bad-signature"
+        :else "enroll/ok"))
+(defn cp [s :string i :i64] :i64 (string-code-point-at s i))
+(defn revision-verdict [current :i64 proposed :i64] :string
+  (cond (< proposed 1) "intent/bad-revision"
+        (<= proposed current) "intent/not-advancing"
+        :else "intent/ok"))
+(defn- tv-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- tv-root [b :vector-i64] :i64
+  (loop [i 0] (if (and (< i (vector-count b)) (let [c (vector-at b i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i)))
+(defn- tv-count [trust :string] :i64
+  (let [b (tv-bytes trust)]
+    (if (= (vector-count b) 0) 0
+      (loop [i 0 n 1] (if (= i (vector-count b)) n (recur (+ i 1) (if (= (vector-at b i) 44) (+ n 1) n)))))))
+(defn- tv-part [trust :string k :i64 part :i64] :string
+  (let [b (tv-bytes trust)]
+    (loop [i 0 e 0 start 0 eq -1]
+      (let [c (if (< i (vector-count b)) (vector-at b i) 44)]
+        (cond (= c 44)
+              (if (= e k)
+                (if (< eq 0) "" (if (= part 0) (string-substring trust start eq) (string-substring trust (+ eq 1) i)))
+                (if (>= i (vector-count b)) "" (recur (+ i 1) (+ e 1) (+ i 1) -1)))
+              (and (= c 61) (< eq 0)) (recur (+ i 1) e start i)
+              :else (recur (+ i 1) e start eq))))))
+(defn- tv-trust-ok? [trust :string] :bool
+  (let [n (tv-count trust)]
+    (and (>= n 1) (<= n 8)
+         (loop [x 0]
+           (if (= x n) true
+             (let [id (tv-part trust x 0) did (tv-part trust x 1)]
+               (if (and (> (string-length id) 0) (= (did-key-problem did) "enroll/ok")
+                        (loop [y 0] (if (= y x) true (if (or (= (tv-part trust y 0) id) (= (tv-part trust y 1) did)) false (recur (+ y 1))))))
+                 (recur (+ x 1)) false)))))))
+(defn- tv-text [b :vector-i64 obj :i64 key :string] :string
+  (let [v (json-member b obj key)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))
+(defn- tv-signed? [b :vector-i64 root :i64 id :string did :string text :string] :bool
+  (let [legacy (tv-text b root "signature")
+        sigs (json-member b root "signatures")]
+    (or (and (> (string-length legacy) 0) (= (statement-problem did text legacy) "enroll/ok"))
+        (and (>= sigs 0) (= (json-kind b sigs) 2)
+             (loop [k 0]
+               (let [e (json-element b sigs k)]
+                 (cond (< e 0) false
+                       (and (= (json-kind b e) 1) (= (tv-text b e "key") id)
+                            (= (statement-problem did text (tv-text b e "signature")) "enroll/ok")) true
+                       :else (recur (+ k 1)))))))))
+(defn- tv-owner [doc :vector-i64 node :string] :string
+  (let [p (json-member doc (tv-root doc) "payload") ns (if (>= p 0) (json-member doc p "nodes") -1)]
+    (if (or (< ns 0) (not (= (json-kind doc ns) 2))) ""
+      (loop [k 0]
+        (let [e (json-element doc ns k)]
+          (cond (< e 0) ""
+                (and (= (json-kind doc e) 1) (= (tv-text doc e "node") node)) (tv-text doc e "owner-id")
+                :else (recur (+ k 1))))))))
+(defn topology-owners-kept? [old :vector-i64 new :vector-i64] :bool
+  (let [p (json-member old (tv-root old) "payload") ns (if (>= p 0) (json-member old p "nodes") -1)]
+    (if (or (< ns 0) (not (= (json-kind old ns) 2))) true
+      (loop [k 0]
+        (let [e (json-element old ns k)]
+          (cond (< e 0) true
+                (and (= (json-kind old e) 1) (not (= (tv-text old e "owner-id") (tv-owner new (tv-text old e "node"))))) false
+                :else (recur (+ k 1))))))))
+(defn topology-revision [doc :vector-i64] :i64
+  (if (not (json-valid? doc)) -1
+    (let [p (json-member doc (tv-root doc) "payload") r (if (>= p 0) (json-member doc p "revision") -1)]
+      (if (and (>= r 0) (json-int-ok? doc r)) (json-int doc r) -1))))
+(defn- tv-skip [b :vector-i64 i :i64] :i64
+  (loop [j i] (if (and (< j (vector-count b)) (let [c (vector-at b j)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ j 1)) j)))
+(defn- tv-u16 [b :vector-i64 s :i64 e :i64] :i64
+  (loop [i s n 0] (if (>= i e) n (let [c (vector-at b i)] (recur (+ i 1) (cond (and (>= c 128) (<= c 191)) n (>= c 240) (+ n 2) :else (+ n 1)))))))
+(defn- tv-str-len [b :vector-i64 v :i64] :i64
+  (if (or (< v 0) (not (= (json-kind b v) 3))) -1 (let [d (json-string-bytes b v)] (tv-u16 d 0 (vector-count d)))))
+(defn- tv-name-ok? [s :string] :bool
+  (let [b (tv-bytes s)]
+    (and (> (vector-count b) 0)
+         (loop [i 0] (if (= i (vector-count b)) true
+                       (let [c (vector-at b i)]
+                         (if (or (and (>= c 65) (<= c 90)) (and (>= c 97) (<= c 122)) (and (>= c 48) (<= c 57)) (= c 45)) (recur (+ i 1)) false)))))))
+(defn- tv-owner-ok? [s :string] :bool
+  (let [b (tv-bytes s)]
+    (and (= (vector-count b) 36)
+         (loop [i 0] (if (= i 36) true
+                       (let [c (vector-at b i)]
+                         (if (or (and (>= c 97) (<= c 102)) (and (>= c 48) (<= c 57)) (= c 45)) (recur (+ i 1)) false)))))))
+(defn- tv-octet [h :string k :i64] :i64
+  (let [b (tv-bytes h)]
+    (loop [i 0 part 0 start 0]
+      (let [end (or (= i (vector-count b)) (= (vector-at b i) 46))]
+        (cond (and end (= part k))
+              (let [n (- i start)]
+                (if (or (< n 1) (> n 3) (and (> n 1) (= (vector-at b start) 48))) -1
+                  (loop [j start v 0]
+                    (if (= j i) (if (> v 255) -1 v)
+                      (let [c (vector-at b j)] (if (and (>= c 48) (<= c 57)) (recur (+ j 1) (+ (* v 10) (- c 48))) -1))))))
+              (= i (vector-count b)) -1
+              end (recur (+ i 1) (+ part 1) (+ i 1))
+              :else (recur (+ i 1) part start))))))
+(defn- tv-dots [h :string] :i64
+  (let [b (tv-bytes h)] (loop [i 0 n 0] (if (= i (vector-count b)) n (recur (+ i 1) (if (= (vector-at b i) 46) (+ n 1) n))))))
+(defn- tv-endpoint? [url :string] :bool
+  (and (= (string-index-of url "http://") 0)
+       (let [r (string-substring url 7 (string-length url)) k (string-index-of r ":")]
+         (and (> k 0)
+              (let [h (string-substring r 0 k) p (string-substring r (+ k 1) (string-length r))]
+                (and (or (= p "8796") (= p "8797") (= p "8796/") (= p "8797/"))
+                     (= (tv-dots h) 3) (= (tv-octet h 0) 100)
+                     (>= (tv-octet h 1) 64) (<= (tv-octet h 1) 127)
+                     (>= (tv-octet h 2) 0) (>= (tv-octet h 3) 0)))))))
+(defn- tv-ident [b :vector-i64 e :i64] :string
+  (let [v (if (= (json-kind b e) 1) (json-member b e "node") -1)]
+    (if (or (< v 0) (= (json-kind b v) 7)) "" (string-from-utf8 (bytes-from-vector-i64 (json-canonical-bytes b v))))))
+(defn- tv-unique? [b :vector-i64 arr :i64] :bool
+  (let [n (json-count b arr)]
+    (loop [i 0 j 1]
+      (cond (>= i n) true
+            (>= j n) (recur (+ i 1) (+ i 2))
+            (= (tv-ident b (json-element b arr i)) (tv-ident b (json-element b arr j))) false
+            :else (recur i (+ j 1))))))
+(defn- tv-boolean? [b :vector-i64 v :i64] :bool (and (>= v 0) (or (= (json-kind b v) 5) (= (json-kind b v) 6))))
+(defn- tv-entries-ok? [b :vector-i64 arr :i64] :bool
+  (loop [k 0]
+    (let [e (json-element b arr k)]
+      (cond (< e 0) true
+            (and (= (json-kind b e) 1) (tv-name-ok? (tv-text b e "node")) (tv-endpoint? (tv-text b e "url"))
+                 (tv-boolean? b (json-member b e "enabled")))
+            (recur (+ k 1))
+            :else false))))
+(defn- tv-role-ok? [b :vector-i64 r :i64] :bool
+  (and (= (json-kind b r) 1)
+       (let [kind (tv-text b r "kind")] (or (= kind "text") (= kind "image")))
+       (let [n (tv-str-len b (json-member b r "model"))] (and (>= n 1) (<= n 128)))))
+(defn- tv-roles-ok? [b :vector-i64 rs :i64] :bool
+  (loop [j 0] (let [r (json-element b rs j)] (cond (< r 0) true (tv-role-ok? b r) (recur (+ j 1)) :else false))))
+(defn- tv-nodes-roles-ok? [b :vector-i64 arr :i64] :bool
+  (loop [k 0]
+    (let [e (json-element b arr k)
+          rs (if (>= e 0) (json-member b e "roles") -1)]
+      (cond (< e 0) true
+            (and (tv-owner-ok? (tv-text b e "owner-id")) (>= rs 0) (= (json-kind b rs) 2) (<= (json-count b rs) 8) (tv-roles-ok? b rs))
+            (recur (+ k 1))
+            :else false))))
+(defn- tv-replicas-ok? [b :vector-i64 o :i64] :bool
+  (loop [i (tv-skip b (+ o 1))]
+    (cond (= (vector-at b i) 125) true
+          (not (= (vector-at b i) 34)) false
+          :else
+          (let [ks (+ i 1)
+                ke (loop [j ks] (if (= (vector-at b j) 34) j (recur (+ j 1))))
+                v (tv-skip b (+ (tv-skip b (+ ke 1)) 1))
+                nxt (tv-skip b (json-end b v))
+                n (tv-u16 b ks ke)]
+            (cond (not (and (>= n 1) (<= n 128) (= (json-kind b v) 4) (json-int-ok? b v) (>= (json-int b v) 1) (<= (json-int b v) 256))) false
+                  (= (vector-at b nxt) 44) (recur (tv-skip b (+ nxt 1)))
+                  :else true)))))
+(defn topology-payload-problem [doc :vector-i64] :string
+  (let [p (json-member doc (tv-root doc) "payload")
+        rv (json-member doc p "revision") ns (json-member doc p "nodes") gs (json-member doc p "gateways")
+        pol (json-member doc p "policies")
+        mr (if (and (>= pol 0) (= (json-kind doc pol) 1)) (json-member doc pol "minimum-replicas") -1)]
+    (cond (not (and (>= rv 0) (= (json-kind doc rv) 4) (json-int-ok? doc rv) (> (json-int doc rv) 0)
+                    (>= ns 0) (= (json-kind doc ns) 2) (>= (json-count doc ns) 1) (<= (json-count doc ns) 256)
+                    (>= gs 0) (= (json-kind doc gs) 2) (>= (json-count doc gs) 1) (<= (json-count doc gs) 16)))
+          "topology/invalid-structure"
+          (not (tv-unique? doc ns)) "topology/duplicate-identity"
+          (not (tv-entries-ok? doc ns)) "topology/invalid-endpoint"
+          (not (tv-unique? doc gs)) "topology/duplicate-identity"
+          (not (tv-entries-ok? doc gs)) "topology/invalid-endpoint"
+          (not (tv-nodes-roles-ok? doc ns)) "topology/invalid-roles"
+          (not (and (>= mr 0) (= (json-kind doc mr) 1) (tv-replicas-ok? doc mr))) "topology/invalid-policy"
+          :else "topology/ok")))
+(defn topology-verdict [doc :vector-i64 trust :string threshold :i64 current :i64] :string
+  (cond (> (vector-count doc) 262144) "topology/too-large"
+        (not (json-valid? doc)) "topology/not-strict-json"
+        :else
+        (let [root (tv-root doc) p (json-member doc root "payload")]
+          (if (or (< p 0) (not (= (json-kind doc p) 1))) "topology/no-payload"
+            (let [cb (json-canonical-bytes doc p)]
+              (cond (= (vector-count cb) 0) "topology/not-canonical-domain"
+                    (or (not (tv-trust-ok? trust)) (< threshold 1) (> threshold (tv-count trust))) "topology/bad-trust"
+                    :else
+                    (let [text (string-from-utf8 (bytes-from-vector-i64 cb))
+                          n (loop [x 0 n 0]
+                              (if (= x (tv-count trust)) n
+                                (recur (+ x 1) (if (tv-signed? doc root (tv-part trust x 0) (tv-part trust x 1) text) (+ n 1) n))))
+                          s (json-member doc p "schema")]
+                      (cond (< n threshold) "topology/needs-signatures"
+                            (not (and (>= s 0) (json-int-ok? doc s) (= (json-int doc s) 1))) "topology/schema"
+                            (not (= (topology-payload-problem doc) "topology/ok")) (topology-payload-problem doc)
+                            :else (let [v (revision-verdict current (topology-revision doc))]
+                                    (if (= v "intent/ok") "topology/ok" v))))))))))
+(defn lease-ttl [] :i64 900000)
+(defn lease-skew [] :i64 60000)
+(defn majority [n :i64] :i64 (+ (quot n 2) 1))
+(defn ballot-ok? [t :i64 id :string] :bool
+  (and (> t 0) (<= t 9007199254740991) (>= (string-length id) 1) (<= (string-length id) 128)))
+(defn ballot-cmp [ta :i64 ida :string tb :i64 idb :string] :i64
+  (cond (> ta tb) 1 (< ta tb) -1 :else (string-compare ida idb)))
+(defn prepare-ok? [bt :i64 bid :string pt :i64 pid :string] :bool
+  (and (ballot-ok? bt bid) (>= (ballot-cmp bt bid pt pid) 0)))
+(defn accept-ok? [bt :i64 bid :string value :string pt :i64 pid :string at :i64 aid :string accepted :string] :bool
+  (and (ballot-ok? bt bid) (not (= value "")) (>= (ballot-cmp bt bid pt pid) 0)
+       (or (not (and (= bt at) (= bid aid))) (= value accepted))))
+(defn adopt? [at :i64 aid :string best-t :i64 best-id :string] :bool
+  (and (> at 0) (> (ballot-cmp at aid best-t best-id) 0)))
+(defn- lc-plain? [s :string] :bool
+  (let [b (vector-i64-from-bytes (string-to-utf8 s))]
+    (loop [i 0] (if (= i (vector-count b)) true (let [c (vector-at b i)] (if (and (>= c 33) (<= c 126) (not (= c 34)) (not (= c 92))) (recur (+ i 1)) false))))))
+(defn valid-value? [node :string enabled :bool class :string slot :i64 epoch :i64 until :i64 now :i64] :bool
+  (and enabled (> (string-length node) 0) (lc-plain? node)
+       (>= (string-length class) 1) (<= (string-length class) 128) (lc-plain? class)
+       (>= slot 0) (<= slot 255) (>= epoch 1) (<= epoch 9007199254740991)
+       (<= until (+ now (+ (lease-ttl) (lease-skew))))))
+(defn- ln-listen [s :string] :string (typed-cap-call 43 :string :string s))
+(defn- ln-accept [s :string] :string (typed-cap-call 44 :string :string s))
+(defn- ln-dial [s :string] :string (typed-cap-call 45 :string :string s))
+(defn- ln-read [s :string] :string (typed-cap-call 46 :string :string s))
+(defn- ln-write [s :string] :string (typed-cap-call 47 :string :string s))
+(defn- ln-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- ln-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
+(defn- ln-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- ln-exists? [path :string] :bool (= (ln-fs "D" path "") "1"))
+(defn- ln-load [path :string] :string (if (ln-exists? path) (ln-fs "A" path "") ""))
+(defn- ln-dirname [path :string] :string
+  (let [b (ln-bytes path) k (loop [i (- (vector-count b) 1)] (cond (< i 0) -1 (= (vector-at b i) 47) i :else (recur (- i 1))))]
+    (if (< k 1) "/" (string-substring path 0 k))))
+(defn- ln-store [path :string text :string] :i64
+  (let [tmp (string-concat path ".tmp")
+        w (ln-fs "B" tmp text)
+        f (if (and (not (= text "")) (= w text)) (ln-fs "M" tmp "") "0")
+        r (if (= f "1") (ln-fs "L" tmp path) "0")
+        d (if (= r "1") (ln-fs "M" (ln-dirname path) "") "0")]
+    (if (= d "1") 1 0)))
+(defn- ln-init-fresh [path :string] :string
+  (if (or (< (string-length path) 2) (not (= (string-substring path 0 1) "/"))
+          (= (string-substring path (- (string-length path) 1) (string-length path)) "/"))
+    "voter/init-refused"
+    (let [parent (ln-dirname path) dir (ln-fs "N" parent ".voter-genesis-")]
+      (if (= dir "") "voter/init-refused"
+        (let [temp (str dir "/register") text "0 - 0 - -"
+              wrote (= (ln-fs "B" temp text) text)
+              flushed (and wrote (= (ln-fs "M" temp "") "1"))
+              moved (and flushed (= (ln-fs "T" temp path) "1"))
+              sync (and moved (= (ln-fs "M" parent "") "1"))
+              removed (if moved true (= (ln-fs "J" temp "") "1"))
+              cleaned (= (ln-fs "K" dir "") "1")]
+          (cond (and moved sync cleaned) "voter/init-created"
+                moved "voter/init-unknown"
+                :else "voter/init-refused"))))))
+(defn- ln-now [s :string] :i64 (if (= s "clock") (ln-int (typed-cap-call 7 :string :string "wall")) (ln-int s)))
+(defn- ln-int [s :string] :i64
+  (let [b (ln-bytes s)]
+    (if (or (= (vector-count b) 0) (> (vector-count b) 16)) -1
+      (loop [i 0 n 0] (if (= i (vector-count b)) n (let [c (vector-at b i)] (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -1)))))))
+(defn- ln-field [line :string k :i64] :string
+  (let [b (ln-bytes line)]
+    (loop [i 0 start 0 n 0]
+      (cond (= i (vector-count b)) (if (= n k) (string-substring line start i) "")
+            (or (= (vector-at b i) 32) (= (vector-at b i) 10)) (if (= n k) (string-substring line start i) (recur (+ i 1) (+ i 1) (+ n 1)))
+            :else (recur (+ i 1) start n)))))
+(defn- ln-dash [s :string] :string (if (= s "") "-" s))
+(defn- ln-undash [s :string] :string (if (= s "-") "" s))
+(defn- ln-addr [p :string] :string (if (>= (string-index-of p ":") 0) p (str "127.0.0.1:" p)))
+(defn- ln-line [s :string] :string (let [k (string-index-of s "\n")] (if (< k 0) s (string-substring s 0 k))))
+(defn- ln-rest [s :string] :string (let [k (string-index-of s " ")] (if (< k 0) "" (string-substring s (+ k 1) (string-length s)))))
+(defn- ln-space? [c :i64] :bool (or (= c 32) (= c 9) (= c 10) (= c 13)))
+(defn- ln-token [path :string] :string
+  (if (or (= path "") (not (ln-exists? path))) ""
+    (let [t (ln-fs "A" path "") b (ln-bytes t) n (vector-count b)
+          i (loop [i 0] (if (and (< i n) (ln-space? (vector-at b i))) (recur (+ i 1)) i))
+          j (loop [j n] (if (and (> j i) (ln-space? (vector-at b (- j 1)))) (recur (- j 1)) j))]
+      (if (< (- j i) 32) "" (string-substring t i j)))))
+(defn- ln-mac [token :string msg :string] :string (hmac-sha256-hex (ln-bytes token) (ln-bytes msg)))
+(defn- ln-same? [a :string b :string] :bool
+  (let [x (ln-bytes a) y (ln-bytes b)]
+    (and (= (vector-count x) (vector-count y))
+         (= (loop [i 0 d 0] (if (= i (vector-count x)) d (recur (+ i 1) (bit-or d (bit-xor (vector-at x i) (vector-at y i)))))) 0))))
+(defn- ln-unhex [h :string] :string
+  (let [b (ln-bytes h) n (quot (vector-count b) 2)
+        v (loop [i 0 out (vector-alloc n)]
+            (if (= i n) out
+              (let [a (vector-at b (* 2 i)) c (vector-at b (+ (* 2 i) 1))
+                    x (+ (* 16 (if (< a 58) (- a 48) (- a 87))) (if (< c 58) (- c 48) (- c 87)))]
+                (recur (+ i 1) (vector-assoc! out i x)))))]
+    (string-from-utf8 (bytes-from-vector-i64 v))))
+(defn- ln-recv [c :string until-newline :bool] :string
+  (loop [k 0 acc ""]
+    (if (= k 16) acc
+      (let [r (ln-read (str c " 4096 2000"))]
+        (cond (= r "") acc
+              (or (= r "timeout") (= r "closed") (= r "reset")) acc
+              :else (let [acc2 (string-concat acc (ln-unhex r))]
+                      (if (and until-newline (>= (string-index-of acc2 "\n") 0)) acc2 (recur (+ k 1) acc2))))))))
+(defn- ln-reply [ok :bool st :string] :string (str (if ok "ok " "no ") st))
+(defn- ln-text [b :vector-i64 obj :i64 key :string] :string
+  (let [v (json-member b obj key)] (if (and (>= v 0) (= (json-kind b v) 3)) (json-string b v) "")))
+(defn- ln-num [b :vector-i64 obj :i64 key :string] :i64
+  (let [v (json-member b obj key)] (if (and (>= v 0) (= (json-kind b v) 4) (json-int-ok? b v)) (json-int b v) -1)))
+(defn- ln-root [b :vector-i64] :i64
+  (loop [i 0] (if (and (< i (vector-count b)) (let [c (vector-at b i)] (or (= c 32) (= c 9) (= c 10) (= c 13)))) (recur (+ i 1)) i)))
+(defn- ln-enabled? [topo :vector-i64 node :string] :bool
+  (let [p (json-member topo (ln-root topo) "payload") ns (if (>= p 0) (json-member topo p "nodes") -1)]
+    (if (or (< ns 0) (not (= (json-kind topo ns) 2))) false
+      (loop [k 0]
+        (let [e (json-element topo ns k)]
+          (cond (< e 0) false
+                (and (= (json-kind topo e) 1) (= (ln-text topo e "node") node))
+                (let [en (json-member topo e "enabled")] (and (>= en 0) (= (json-kind topo en) 5)))
+                :else (recur (+ k 1))))))))
+(defn- ln-member-ok? [topo :vector-i64 now :i64 value :string] :bool
+  (if (= (vector-count topo) 0) true
+    (let [v (ln-bytes value) r (ln-root v) node (ln-text v r "node")]
+      (valid-value? node (ln-enabled? topo node) (ln-text v r "class") (ln-num v r "slot")
+                    (ln-num v r "epoch") (ln-num v r "until") now))))
+(defn- ln-state-ok? [st :string] :bool
+  (let [pt (ln-int (ln-field st 0)) pid (ln-undash (ln-field st 1))
+        at (ln-int (ln-field st 2)) aid (ln-undash (ln-field st 3)) av (ln-undash (ln-field st 4))]
+    (and (>= pt 0) (>= at 0)
+         (= st (str pt " " (ln-dash pid) " " at " " (ln-dash aid) " " (ln-dash av)))
+         (if (= pt 0) (= pid "") (ballot-ok? pt pid))
+         (if (= at 0) (and (= aid "") (= av ""))
+           (and (ballot-ok? at aid) (not (= av ""))
+                (>= (ballot-cmp pt pid at aid) 0)
+                (json-valid? (ln-bytes av)) (json-canonical? (ln-bytes av)))))))
+(defn- ln-handle [file :string req :string topo :vector-i64 now :i64] :string
+  (let [st (ln-load file)
+        pt (ln-int (ln-field st 0)) pid (ln-undash (ln-field st 1))
+        at (ln-int (ln-field st 2)) aid (ln-undash (ln-field st 3)) av (ln-undash (ln-field st 4))
+        op (ln-field req 0) bt (ln-int (ln-field req 1)) bid (ln-field req 2) v (ln-field req 3)]
+    (cond (not (ln-state-ok? st)) "no 0 - 0 - -"
+          (= op "prepare")
+          (if (prepare-ok? bt bid pt pid)
+            (let [ns (str bt " " bid " " at " " (ln-dash aid) " " (ln-dash av))] (if (= (ln-store file ns) 1) (ln-reply true ns) (ln-reply false st)))
+            (ln-reply false st))
+          (= op "accept")
+          (if (and (json-canonical? (ln-bytes v)) (ln-member-ok? topo now v) (accept-ok? bt bid v pt pid at aid av))
+            (let [ns (str bt " " bid " " bt " " bid " " v)] (if (= (ln-store file ns) 1) (ln-reply true ns) (ln-reply false st)))
+            (ln-reply false st))
+          :else (ln-reply false st))))
+(defn- ln-serve-one [l :string file :string ms :i64 topo :vector-i64 now :i64 token :string] :i64
+  (arena-scope
+    (let [c (ln-accept (str l " " ms))]
+      (if (< (ln-int c) 1) 1
+        (let [raw (ln-line (ln-recv c true))
+              line (if (= token "") raw (ln-rest raw))
+              ok (or (= token "") (ln-same? (ln-field raw 0) (ln-mac token (string-concat "req " line))))]
+          (if (not ok)
+            (let [x (ln-say "voter refused unauthenticated") z (ln-write c)] 0)
+            (let [rep (ln-handle file line topo now)
+                  out (if (= token "") rep (str (ln-mac token (str "rep " line "\n" rep)) " " rep))
+                  w (ln-write (str c " " (hex (ln-bytes (string-concat out "\n")))))
+                  z (ln-write c)]
+              0)))))))
+(defn- ln-load-doc [path :string] :vector-i64
+  (let [r (typed-cap-call :fs/app-data :string :bytes (ln-frame "A" path "")) n (bytes-count r)]
+    (if (and (>= n 5) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
+             (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))
+      (vector-i64-from-bytes (bytes-slice r 5 n)) (vector-alloc 0))))
+(defn- ln-same-file? [path :string seen :vector-i64] :bool
+  (if (not (ln-exists? path)) true
+    (let [d (ln-load-doc path)]
+      (and (= (vector-count d) (vector-count seen))
+           (loop [i 0] (cond (= i (vector-count d)) true (= (vector-at d i) (vector-at seen i)) (recur (+ i 1)) :else false))))))
+(defn- ln-rotate [doc :vector-i64 topo :vector-i64 trust :string threshold :i64] :i64
+  (let [v (topology-verdict doc trust threshold (topology-revision topo))
+        why (cond (not (= v "topology/ok")) v
+                  (not (topology-owners-kept? topo doc)) "topology/owner-replaced"
+                  :else "")]
+    (if (= why "") (let [x (ln-say (str "voter topology " (topology-revision doc)))] 0)
+      (let [x (ln-say (string-concat "voter kept " why))] 1))))
+(defn- ln-voter [addr :string file :string idle :i64 topo :vector-i64 now :i64 live-clock :bool
+                 path :string trust :string threshold :i64 token :string] :i64
+  (let [l (ln-listen (ln-addr addr))]
+    (loop [n 0 left idle cur topo seen topo]
+      (let [r (ln-serve-one l file (if (< left 500) left 500) cur (if live-clock (ln-now "clock") now) token)]
+        (cond (= r 0) (recur (+ n 1) idle cur seen)
+              (<= left 500) n
+              (or (= path "") (= (arena-scope (if (ln-same-file? path seen) 0 1)) 0)) (recur n (- left 500) cur seen)
+              :else (let [d (ln-load-doc path)]
+                      (if (= (arena-scope (ln-rotate d cur trust threshold)) 0)
+                        (recur n (- left 500) d d)
+                        (recur n (- left 500) cur d))))))))
+(defn- ln-voter-main [] :i64
+  (let [path (ln-arg 4) tpath (ln-arg 8) token (ln-token tpath)]
+    (cond (and (not (= tpath "")) (= token "")) (let [x (ln-say "voter token/missing-or-short")] 2)
+          (= path "") (ln-voter (ln-arg 1) (ln-arg 2) (ln-int (ln-arg 3)) (vector-alloc 0) 0 false "" "" 0 token)
+          :else
+          (let [doc (if (ln-exists? path) (ln-load-doc path) (vector-alloc 0))
+                v (topology-verdict doc (ln-arg 5) (ln-int (ln-arg 6)) 0)]
+            (if (not (= v "topology/ok")) (let [x (ln-say (string-concat "voter " v))] 2)
+              (ln-voter (ln-arg 1) (ln-arg 2) (ln-int (ln-arg 3)) doc (ln-now (ln-arg 7)) (= (ln-arg 7) "clock")
+                        path (ln-arg 5) (ln-int (ln-arg 6)) token))))))
+(defn- ln-ask [port :string line :string token :string] :string
+  (let [c (ln-dial (str (ln-addr port) " 1000"))]
+    (if (< (ln-int c) 1) ""
+      (let [msg (if (= token "") line (str (ln-mac token (string-concat "req " line)) " " line))
+            w (ln-write (str c " " (hex (ln-bytes (string-concat msg "\n")))))
+            r (ln-line (ln-recv c false))
+            z (ln-write c)]
+        (cond (= token "") r
+              (ln-same? (ln-field r 0) (ln-mac token (str "rep " line "\n" (ln-rest r)))) (ln-rest r)
+              :else "")))))
+(defn- ln-port-count [ports :string] :i64
+  (if (= ports "") 0
+    (let [b (ln-bytes ports)] (loop [i 0 n 1] (if (= i (vector-count b)) n (recur (+ i 1) (if (= (vector-at b i) 44) (+ n 1) n)))))))
+(defn- ln-port [ports :string k :i64] :string
+  (let [b (ln-bytes ports)]
+    (loop [i 0 start 0 n 0]
+      (cond (= i (vector-count b)) (if (= n k) (string-substring ports start i) "")
+            (= (vector-at b i) 44) (if (= n k) (string-substring ports start i) (recur (+ i 1) (+ i 1) (+ n 1)))
+            :else (recur (+ i 1) start n)))))
+(defn- ln-phase [line :string t :i64 id :string own :string ports :string token :string] :string
+  (let [n (ln-port-count ports)]
+    (loop [k 0 oks 0 ans 0 pre 0 bt 0 bid "" bv own]
+      (if (= k n) (str oks " " ans " " pre " " bv)
+        (let [r (ln-ask (ln-port ports k) line token)
+              ok (= (ln-field r 0) "ok")
+              pt (ln-int (ln-field r 1)) pid (ln-undash (ln-field r 2))
+              beats (and (= (ln-field r 0) "no") (> (ballot-cmp pt pid t id) 0) (> pt pre))
+              at (ln-int (ln-field r 3)) aid (ln-undash (ln-field r 4)) av (ln-undash (ln-field r 5))
+              better (and ok (adopt? at aid bt bid))]
+          (recur (+ k 1) (if ok (+ oks 1) oks) (if (= r "") ans (+ ans 1)) (if beats pt pre)
+                 (if better at bt) (if better aid bid) (if better av bv)))))))
+(defn- ln-short [res :string phase :string need :i64] :string
+  (let [oks (ln-field res 0)]
+    (if (and (>= (ln-int (ln-field res 1)) need) (> (ln-int (ln-field res 2)) 0))
+      (str "preempted " (ln-field res 2) " " phase " " oks)
+      (str "no-majority " phase " " oks))))
+(defn- ln-try [t :i64 id :string own :string ports :string token :string] :string
+  (let [need (majority (ln-port-count ports))
+        prep (ln-phase (str "prepare " t " " id) t id own ports token)
+        value (ln-field prep 3)]
+    (if (< (ln-int (ln-field prep 0)) need) (ln-short prep "prepare" need)
+      (let [acc (ln-phase (str "accept " t " " id " " value) t id value ports token)]
+        (if (< (ln-int (ln-field acc 0)) need) (ln-short acc "accept" need)
+          (string-concat "chosen " value))))))
+(defn- ln-tries [] :i64 5)
+(defn- ln-backoff [] :i64
+  (let [b (ln-bytes (typed-cap-call 23 :string :string "1"))
+        h (vector-at b 0) l (vector-at b 1)
+        x (+ (* 16 (if (< h 58) (- h 48) (- h 87))) (if (< l 58) (- l 48) (- l 87)))
+        s (typed-cap-call 7 :string :string (str "sleep " (+ 20 (quot (* x 200) 256))))]
+    0))
+(defn- ln-rounds [t :i64 id :string own :string ports :string token :string] :string
+  (loop [k 1 tt t]
+    (let [r (ln-try tt id own ports token)]
+      (cond (not (= (ln-field r 0) "preempted")) r
+            (< k (ln-tries)) (let [z (ln-backoff)] (recur (+ k 1) (+ (ln-int (ln-field r 1)) 1)))
+            :else (str "no-majority " (ln-field r 2) " " (ln-field r 3))))))
+(defn- ln-proposer [mode :string t :i64 id :string own :string ports :string token :string] :i64
+  (let [need (majority (ln-port-count ports))]
+    (cond (= mode "prepare")
+          (let [pok (ln-int (ln-field (ln-phase (str "prepare " t " " id) t id own ports token) 0))]
+            (if (< pok need) (let [x (ln-say (str "no-majority prepare " pok))] 1) (let [x (ln-say (str "prepared " pok))] 0)))
+          (= mode "accept")
+          (let [aok (ln-int (ln-field (ln-phase (str "accept " t " " id " " own) t id own ports token) 0))]
+            (if (< aok need) (let [x (ln-say (str "no-majority accept " aok))] 1) (let [x (ln-say (string-concat "chosen " own))] 0)))
+          :else
+          (let [r (ln-rounds t id own ports token) x (ln-say r)] (if (= (ln-field r 0) "chosen") 0 1)))))
+(defn- ln-tok-arg? [a :string] :bool (= (string-index-of a "token=") 0))
+(defn- ln-arg-ports [] :string
+  (loop [k 5 out ""]
+    (cond (= (ln-arg k) "") out
+          (ln-tok-arg? (ln-arg k)) (recur (+ k 1) out)
+          :else (recur (+ k 1) (if (= out "") (ln-arg k) (str out "," (ln-arg k)))))))
+(defn- ln-arg-token-path [] :string
+  (loop [k 5] (cond (= (ln-arg k) "") "" (ln-tok-arg? (ln-arg k)) (string-substring (ln-arg k) 6 (string-length (ln-arg k))) :else (recur (+ k 1)))))
+(defn lease-node-main [] :i64
+  (if (= (ln-arg 0) "init-fresh")
+    (let [result (ln-init-fresh (ln-arg 1)) x (ln-say result)]
+      (if (= result "voter/init-created") 0 1))
+  (if (= (ln-arg 0) "voter")
+    (ln-voter-main)
+    (let [tp (ln-arg-token-path) token (ln-token tp)]
+      (if (and (not (= tp "")) (= token "")) (let [x (ln-say "proposer token/missing-or-short")] 2)
+        (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports) token))))))
+(defn lower [c :i64] :i64 (if (and (>= c 65) (<= c 90)) (+ c 32) c))
+(defn main [] :i64 (lease-node-main))

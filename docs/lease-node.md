@@ -20,6 +20,14 @@ initializers to succeed. Replacing no-replace with ordinary rename overwrote
 the sentinel in the control. A crash can leave a private temporary directory;
 power-cut and cleanup recovery are not covered by this test.
 
+An additional isolated ARM64 native test initialized three voters, chose a
+value, removed one test-owned register and verified that the remaining quorum
+retained the chosen value. After a second register was removed, a new round
+returned `no-majority`; neither missing register was recreated. See
+`docs/evidence/awai150-lease-quorum-20261103.json`. All three voters ran in
+one VM, over unauthenticated loopback: this does not qualify failure isolation
+or secure communication between Mac hosts.
+
 Tracked in [JUN-289](https://linear.app/kotobalabs/issue/JUN-289), under
 ADR-2610071730 P3b. [Lease core](lease-core.md) holds the register's rules.
 `kotoba/fleet_lease_node.kotoba` runs them as separate processes, voters and
