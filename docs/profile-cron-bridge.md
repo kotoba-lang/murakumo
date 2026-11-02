@@ -203,3 +203,19 @@ not send another request. Stopping curl caused the test server's expected
 broken pipe. The [fixture evidence](evidence/awai150-profile-step-20261103.json)
 does not establish real profile authorization, MTP correctness, a full
 resident turn, GitHub storage, power-loss recovery or native-only operation.
+
+The next fixture removes those profile, JSON, hash and MTP-validation stubs.
+It composes 106 reachable Kotoba functions from the pinned source-unity
+closure and uses the real `pr-step-range`, profile/role digest checks, JSON
+validation, SHA-256, CID, MTP response checks, output compaction and state
+writes. In a disposable ARM64 Linux VM, a fixed-response Unix-socket test
+server supplied fabricated model/MTP fields. A valid input produced a
+compacted output and a next-state CID that an independent calculation matched.
+A changed role digest was refused before dispatch, and a wrong model in the
+response was refused without a second server request. Killing the native
+process during a held request and then allowing the unit to finish allowed a
+fresh process to publish the verified output with one server request. See
+[fixture evidence](evidence/awai150-profile-validation-20261103.json).
+This still uses systemd/curl and a fake server; its reported MTP fields are
+test data, not proof of model execution. It is not a complete resident,
+GitHub archive, power-loss or distributed-fencing qualification.
