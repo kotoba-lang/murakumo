@@ -8,7 +8,8 @@
 ;; This function proposes placement only. The selected node must separately
 ;; check grant, artifact digest/signature and capability bounds before launch.
 (ns murakumo.fleet-cell-placement
-  (:export [cell-eligible-reason test-cell-eligibility test-cell-state-path]))
+  (:export [cell-eligible-reason cell-capacity-reason physical-capacity-reason
+            test-cell-eligibility test-cell-state-path test-cell-capacity]))
 
 ;; Derive the two authority-sensitive inputs to eligible-reason from the
 ;; canonical tsukasa functions instead of accepting caller-selected booleans.
@@ -19,6 +20,60 @@
   (eligible-reason enabled (schedulable? state) cordoned fresh
                    memory-gb min-gb labels pressure max-pressure
                    (has-runtime-class? runtime-classes runtime-class)))
+
+;; One dimension of an authenticated, independently measured physical pool:
+;; [qualified capacity, OS/control reserve, committed reservations,
+;;  bounded unmanaged usage, candidate demand]. Never add these values: use
+;; successive subtraction so signed overflow cannot create apparent space.
+;; The caller must aggregate host and VM reservations before this boundary.
+;; Missing measurements use -1, not zero. This is a proposal, not a permit.
+(defn physical-capacity-reason [v :vector-i64] :string
+  (if (not (= (vector-count v) 5)) "capacity/unknown"
+    (let [capacity (vector-at v 0) reserve (vector-at v 1)
+          committed (vector-at v 2) unmanaged (vector-at v 3)
+          demand (vector-at v 4) limit 9007199254740991]
+      (cond (or (< capacity 0) (< reserve 0) (< committed 0) (< unmanaged 0)
+                (<= demand 0) (> capacity limit) (> reserve limit)
+                (> committed limit) (> unmanaged limit) (> demand limit)) "capacity/unknown"
+            (> reserve capacity) "capacity/insufficient"
+            (> committed (- capacity reserve)) "capacity/insufficient"
+            (> unmanaged (- (- capacity reserve) committed)) "capacity/insufficient"
+            (> demand (- (- (- capacity reserve) committed) unmanaged)) "capacity/insufficient"
+            :else "capacity/ok"))))
+
+;; Composes the existing cell eligibility with a fresh, externally verified
+;; physical-pool snapshot. verified-pool must include identity, host/VM
+;; aggregation, all existing allocations and measurement provenance. Each
+;; relevant resource dimension must be checked by the caller; launch still
+;; needs a durable reservation, fencing, artifact and capability admission.
+(defn cell-capacity-reason [state :i64 classes :i64 class :string
+                            enabled :bool cordoned :bool fresh :bool
+                            memory :i64 min-memory :i64 labels :bool
+                            pressure :i64 max-pressure :i64
+                            verified-pool :bool pool-at :i64 now :i64 ttl :i64
+                            amounts :vector-i64] :string
+  (let [base (cell-eligible-reason state classes class enabled cordoned fresh
+                                   memory min-memory labels pressure max-pressure)]
+    (cond (not (= base "eligible/ok")) base
+          (not verified-pool) "capacity/unverified-pool"
+          (not (fresh? true pool-at now ttl)) "capacity/stale"
+          :else (physical-capacity-reason amounts))))
+
+(defn test-cell-capacity [] :bool
+  (and (= (physical-capacity-reason [100 10 20 30 40]) "capacity/ok")
+       (= (physical-capacity-reason [100 10 20 30 41]) "capacity/insufficient")
+       (= (physical-capacity-reason [100 101 0 0 1]) "capacity/insufficient")
+       (= (physical-capacity-reason [100 10 91 0 1]) "capacity/insufficient")
+       (= (physical-capacity-reason [100 10 20 71 1]) "capacity/insufficient")
+       (= (physical-capacity-reason [100 10 -1 0 1]) "capacity/unknown")
+       (= (physical-capacity-reason [100 10 20 0 0]) "capacity/unknown")
+       (= (physical-capacity-reason [100 10 20 0]) "capacity/unknown")
+       (= (physical-capacity-reason [9007199254740992 0 0 0 1]) "capacity/unknown")
+       (= (cell-capacity-reason 2 2 "container" true false true 16 8 true 1 2 true 100 100 10 [100 10 20 30 40]) "capacity/ok")
+       (= (cell-capacity-reason 2 2 "container" true false true 16 8 true 1 2 false 100 100 10 [100 10 20 30 40]) "capacity/unverified-pool")
+       (= (cell-capacity-reason 2 2 "container" true false true 16 8 true 1 2 true 101 100 10 [100 10 20 30 40]) "capacity/stale")
+       (= (cell-capacity-reason 2 2 "container" true false true 16 8 true 1 2 true 90 100 10 [100 10 20 30 40]) "capacity/stale")
+       (= (cell-capacity-reason 3 2 "container" true false true 16 8 true 1 2 true 100 100 10 [100 10 20 30 40]) "eligible/not-active")))
 
 (defn test-cell-eligibility [] :bool
   (and
