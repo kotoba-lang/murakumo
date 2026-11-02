@@ -136,9 +136,11 @@ response, allows a first submission. It writes and flushes the request and a
 local dispatch marker before starting the unit. If the request or marker is
 left behind without a discoverable unit, the result is unknown and the
 resident does not submit again. An existing running or exited unit can be
-observed only when its saved request matches the expected bytes. The private
-cache still needs external single-writer serialization; these files do not
-provide a distributed fence or survive an untrusted host rollback.
+observed only when its saved request matches the expected bytes. The resident now serializes cycle, refresh and archive operations on the same
+host and head using a scoped kernel lock. The host must still isolate shared
+caches across differently configured heads and noncooperating writers; the lock
+does not provide a distributed fence, control detached children, or survive
+an untrusted host rollback.
 
 A low-cost Mac Amu CLI check accepted the integrated source. Extracted tests
 of the exact decision functions returned 0; controls removing the marker check

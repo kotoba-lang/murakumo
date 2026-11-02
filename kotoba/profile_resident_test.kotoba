@@ -82,3 +82,15 @@
        (= (rt-refresh-decision true 100000 100000) "resident/retention-refresh-needed")
        (= (rt-refresh-decision true 1000000 100000) "resident/retention-refresh-needed")
        (= (rt-refresh-decision true 1000001 100000) "resident/retention-ready")))
+
+;; No explicitly configured file may replace the resident lock inode.
+(defn test-profile-resident-lock-config [] :bool
+  (let [head "/task/head" lock "/task/head.resident-lockfile"
+        good (cp-bytes (str "{\"head\":\"" head "\",\"status\":\"/task/status\"}"))]
+    (and (rt-lock-config-safe? good "/task/config")
+         (not (rt-lock-config-safe? good lock))
+         (not (rt-lock-config-safe? (cp-bytes "{\"head\":\"relative\"}") "/task/config"))
+         (not (rt-lock-config-safe? (cp-bytes (str "{\"head\":\"" head "\",\"status\":\"" lock "\"}")) "/task/config"))
+         (not (rt-lock-config-safe? (cp-bytes (str "{\"head\":\"" head "\",\"archiveAck\":\"" lock "\"}")) "/task/config"))
+         (not (rt-lock-config-safe? (cp-bytes (str "{\"head\":\"" head "\",\"runtimeRoot\":\"" lock "\"}")) "/task/config"))
+         (not (rt-lock-config-safe? (cp-bytes (str "{\"head\":\"" head "\",\"leaseFile\":\"" lock "\"}")) "/task/config")))))

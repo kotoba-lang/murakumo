@@ -518,3 +518,20 @@ configuration and dedicated VM qualification first, with physical C reboot
 deferred until unlock preparation. The real daily tick remains scheduled for
 2026-10-25 18:21:15.493 JST; a thread follow-up checks it after 18:45 JST.
 Neither the clock nor `nextAt` was advanced to claim elapsed-time evidence.
+
+## Local resident writer exclusion (draft)
+
+Cycle, refresh and archive operations take a scoped kernel flock on the fixed
+`<head>.resident-lockfile` before accessing shared state. A contender returns
+`resident/local-writer-busy`; a `run` process exits on that refusal or on an
+unlock failure instead of polling for the lock. The configured state paths
+must not equal the lock path, and the host must not unlink or replace its inode.
+
+The lock serializes cooperating processes using the same configured head on
+one host. It does not fence another host, differently aliased heads or shared
+caches, detached child processes, rollback, or writers that ignore the lock.
+The host must isolate those resources and independently provide lease/fencing
+and workload lifecycle controls. The Linux native
+[lock fixture](evidence/awai150-resident-lock-fixture.kotoba) uses stubbed
+resident operations; [its evidence](evidence/awai150-resident-lock-20261103.json)
+does not qualify Mac, real inference, process-tree cleanup or a fleet governor.
