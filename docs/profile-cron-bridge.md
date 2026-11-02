@@ -260,3 +260,10 @@ actual cycle with mocked dependencies: the three cases return the expected
 results, while removing the production guard makes the fixture return 1.
 This does not authenticate mutable head fields such as `request` or `nextAt`,
 or prove real replica, restart, or concurrent writer behavior.
+
+Head admission also requires the exact seven-field canonical schema: raw CIDs
+for the checkpoint and receipts, a raw request CID or `none`, a nonnegative
+integer `nextAt` and a positive integer `until`. The small source-closure
+fixture `docs/evidence/awai150-head-shape-fixture.kotoba` exercises the real
+JSON, CID and shape functions; its invalid-time bypass control fails. This is
+format validation, not authentication of the time or consumed request.

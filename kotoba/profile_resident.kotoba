@@ -73,9 +73,18 @@
       (= (retention-pair-problem (cp-load store a) (cp-load store b) (rt-pins cfg root until)) "retention/pair-verified")
       (rt-save (cp-str cfg 0 "candidateHead") (rt-head root a b until next-at request)))))
 
+(defn- rt-head-shape? [head :vector-i64] :bool
+  (let [request (cp-str head 0 "request")]
+    (and (json-canonical? head) (= (json-kind head 0) 1) (= (json-count head 0) 7)
+         (= (cp-str head 0 "kind") "itonami.resident-head/1")
+         (cp-raw? (cp-str head 0 "checkpoint"))
+         (cp-raw? (cp-str head 0 "receiptA")) (cp-raw? (cp-str head 0 "receiptB"))
+         (or (= request "none") (cp-raw? request))
+         (>= (cp-num head 0 "nextAt") 0) (> (cp-num head 0 "until") 0))))
+
 (defn- rt-intact-head? [cfg :vector-i64 head :vector-i64] :bool
   (let [store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint") until (cp-num head 0 "until")]
-    (and (json-canonical? head) (= (cp-str head 0 "kind") "itonami.resident-head/1")
+    (and (rt-head-shape? head)
       (cp-block? store root) (rt-root? cfg (cp-load store root)) (cp-closure? store (cp-load store root))
       (= (retention-pair-problem (cp-load store (cp-str head 0 "receiptA"))
            (cp-load store (cp-str head 0 "receiptB")) (rt-pins cfg root until)) "retention/pair-verified"))))
