@@ -178,6 +178,17 @@ keep promised objects, archive failed attempts, and review local usage before
 removing any task-owned data. Do not delete an object until all live heads,
 receipts and retention commitments are accounted for.
 
+For the AWAI growth steward, use a separately constructed Git execution cache
+containing the pinned profile files, pinned context, source record and tracked
+state; do not assume that a full source repository fits this transport. An
+isolated fixture with the actual pinned profile and context produced a 3,798-byte
+bootstrap Git bundle and a 4,267-byte bundle with one modified state; the
+compact real model output was 2,589 bytes as a separate untracked file. A full
+bundle of the source revision was 1,308,736 bytes and would produce chunks over
+the peer limit. These are fixture measurements, not a native checkpoint,
+replication or recovery qualification; future context and state changes must
+be checked again.
+
 ## Deployment and restart
 
 Run voter/peer/resident as separate **enabled** user services with linger on
