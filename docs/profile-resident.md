@@ -67,8 +67,11 @@ model can propose a draft only: metadata capability declarations do not
 enable tools, publication, messaging, GitHub writes or scheduling. A pinned
 runtime and a completed response do not prove the model fits the host or that
 the source snapshot is current. The existing replica, lease and retention
-gates remain required. The full profile exceeded the current 16 GiB Mac mini
-experiment's memory guard and this lane has not been deployed.
+gates remain required. A 16 GiB Mac mini operator experiment generated a
+six-role draft with the full SOUL, work order and source snapshot using a
+bounded KV cache; the resident, API response checks, restart and capacity
+admission have not been qualified for that workload, and this lane has not
+been deployed.
 
 ## Components and state
 
