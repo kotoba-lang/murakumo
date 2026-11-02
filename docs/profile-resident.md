@@ -71,10 +71,10 @@ the source snapshot is current. The growth lane has a 768-token completion
 limit and requests a concise six-role handoff. The host must admit sufficient
 context and memory for the full prompt plus that bound. The existing replica, lease and retention
 gates remain required. A 16 GiB Mac mini operator experiment generated a
-six-role draft with the full SOUL, work order and source snapshot using a
-bounded KV cache; the resident, API response checks, restart and capacity
-admission have not been qualified for that workload, and this lane has not
-been deployed.
+six-role draft with the full SOUL, work order and source snapshot using the
+sustained profile and a 128-block KV setting; the resident, API response
+checks, restart and capacity admission have not been qualified for that
+workload, and this lane has not been deployed.
 
 ## Components and state
 
