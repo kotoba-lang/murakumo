@@ -79,7 +79,8 @@
   ;; What the driver will actually hand out: the VRAM carve-out plus GTT.
   ;; Measured on gad: 48.0 + 23.3 GB, and Vulkan independently reported
   ;; 73052 MiB, which is the same number.
-  (if (measured? vram-total gtt-total) (+ vram-total gtt-total) -1))
+  (if (and (measured? vram-total gtt-total) (<= gtt-total (- 9223372036854775807 vram-total)))
+    (+ vram-total gtt-total) -1))
 
 ;; ── budget ─────────────────────────────────────────────────────────────
 
@@ -94,13 +95,21 @@
   120)
 
 (defn usable-bytes [aperture :i64 headroom-milli :i64] :i64
-  (if (< aperture 0) -1 (- aperture (quot (* aperture headroom-milli) 1000))))
+  (if (or (< aperture 0) (< headroom-milli 0) (> headroom-milli 1000)) -1
+    ;; Split before multiplying: neither term can exceed aperture.
+    (let [whole (* (quot aperture 1000) headroom-milli)
+          rem (- aperture (* (quot aperture 1000) 1000))
+          fraction (quot (* rem headroom-milli) 1000)]
+      (- aperture (+ whole fraction)))))
 
 (defn committed-bytes [resident :i64 opportunistic :i64] :i64
-  (+ resident opportunistic))
+  (if (or (< resident 0) (< opportunistic 0)
+          (> opportunistic (- 9223372036854775807 resident))) -1
+    (+ resident opportunistic)))
 
 (defn remaining-bytes [usable :i64 resident :i64 opportunistic :i64] :i64
-  (- usable (committed-bytes resident opportunistic)))
+  (let [committed (committed-bytes resident opportunistic)]
+    (if (or (< usable 0) (< committed 0)) -1 (- usable committed))))
 
 ;; ── the questions a refusal has to be able to answer ───────────────────
 
@@ -114,7 +123,8 @@
 (defn would-evict-resident? [klass :i64 request :i64 usable :i64 resident :i64] :bool
   ;; An opportunistic claim that only fits by displacing a serving head.
   (if (= klass 1)
-    (if (> (+ request resident) usable) true false)
+    (if (or (< usable 0) (< resident 0) (< request 0) (> resident usable)) true
+      (> request (- usable resident)))
     false))
 
 ;; ── verdict ────────────────────────────────────────────────────────────
@@ -123,23 +133,18 @@
   [klass :i64 request :i64 usable :i64 resident :i64 opportunistic :i64] :i64
   ;; 0 admitted / 1 unmeasured / 2 over-aperture / 3 no-remaining
   ;; 4 would-evict-resident / 5 unknown-class / 6 non-positive-request
-  ;;
-  ;; `usable` carries the sentinel: -1 means the device could not be read, and
-  ;; that is a REFUSAL, not an empty accelerator.
-  (if (>= usable 0)
-    (if (class-known? klass)
-      (if (< request 1)
-        6
-        (if (over-aperture? request usable)
-          2
-          (if (= klass 0)
-            ;; resident: opportunistic claims are evictable and do not block it
-            (if (> (+ request resident) usable) 3 0)
-            (if (would-evict-resident? klass request usable resident)
-              4
-              (if (> request (remaining-bytes usable resident opportunistic)) 3 0)))))
-      5)
-    1))
+  ;; 7 invalid-observation: negative or overflowed commitment.
+  (cond (< usable 0) 1
+        (not (class-known? klass)) 5
+        (< request 1) 6
+        (< (committed-bytes resident opportunistic) 0) 7
+        (over-aperture? request usable) 2
+        (= klass 0) (if (or (> resident usable) (> request (- usable resident))) 3 0)
+        (would-evict-resident? klass request usable resident) 4
+        ;; request and resident fit; compare against the remaining amount
+        ;; before subtracting opportunistic, avoiding signed addition overflow.
+        (> opportunistic (- (- usable resident) request)) 3
+        :else 0))
 
 (defn admitted?
   [klass :i64 request :i64 usable :i64 resident :i64 opportunistic :i64] :bool
@@ -147,18 +152,12 @@
 
 (defn granted-bytes
   [klass :i64 usable :i64 resident :i64 opportunistic :i64] :i64
-  ;; The largest request that WOULD be admitted for this class right now, so a
-  ;; caller can shrink instead of failing. Never negative, and never a guess:
-  ;; unmeasured grants nothing, because the honest answer to "how much is free"
-  ;; on a device we could not read is not a number.
-  (if (>= usable 0)
-    (if (class-known? klass)
-      (if (= klass 0)
-        (let [room (- usable resident)] (if (< room 0) 0 room))
-        (let [room (remaining-bytes usable resident opportunistic)]
-          (if (< room 0) 0 room)))
-      0)
-    0))
+  ;; Unknown or overflowed usage is not empty capacity.
+  (if (or (< usable 0) (not (class-known? klass))
+          (< (committed-bytes resident opportunistic) 0) (> resident usable)) 0
+    (let [room (- usable resident)]
+      (if (= klass 0) room
+        (if (>= opportunistic room) 0 (- room opportunistic))))))
 
 (defn code-name [code :i64] :string
   (if (= code 0) "admitted"
@@ -167,7 +166,8 @@
         (if (= code 3) "no-remaining"
           (if (= code 4) "would-evict-resident"
             (if (= code 5) "unknown-class"
-              (if (= code 6) "non-positive-request" "unknown-code"))))))))
+              (if (= code 6) "non-positive-request"
+                (if (= code 7) "invalid-observation" "unknown-code")))))))))
 
 
 ;; ── demand: who should be holding this device right now ────────────────
