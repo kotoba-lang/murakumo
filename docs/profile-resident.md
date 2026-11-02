@@ -1,5 +1,17 @@
 # Native Itonami profile residency
 
+The draft lease-group path now requires an independently provisioned
+`epoch-watermark` in each group directory. While holding a directory lock it
+advances the watermark before creating the next epoch's voter file; missing
+files at or below the watermark are refused. Epochs cannot skip ahead. A
+crash may leave the lock or a watermark without its epoch file, both requiring
+verified recovery. Existing directories need an explicit migration; creating
+a new zero watermark after state loss is unsafe. A whole-directory rollback
+can replay both files and is not prevented. The scoped ARM64 native tests,
+including a three-server same-VM integration, are recorded in
+`docs/evidence/awai150-group-watermark-20261103.json`; this is not Mac-host,
+network-failure, sudden-power-loss or production qualification.
+
 Tracked in [JUN-156](https://linear.app/kotobalabs/issue/JUN-156), with the
 production membership/admission boundaries in JUN-287/288/289.
 This extends [fenced recovery](fenced-profile-recovery.md) from a two-turn
