@@ -111,13 +111,15 @@
             (let [m (tr-put-hex buf n r)]
               (if (and head (>= (tr-head-end buf m) 0)) (tr-slice buf 0 m) (recur m (+ k 1))))))))))
 
-;; write bytes in pieces of 8192 (wire 47 takes at most 16 KiB of hex)
+;; Wire 47 returns the number of bytes actually sent, which may be shorter
+;; than requested. Fail the connection on a short write or error rather than
+;; skipping bytes or retrying a stalled connection.
 (defn- tr-send [c :string b :vector-i64] :i64
   (loop [s 0]
     (if (>= s (vector-count b)) 0
       (let [e (if (> (+ s 8192) (vector-count b)) (vector-count b) (+ s 8192))
-            w (tr-write (str c " " (hex (tr-slice b s e))))]
-        (recur e)))))
+            w (tr-int (tr-write (str c " " (hex (tr-slice b s e)))))]
+        (if (= w (- e s)) (recur e) 1)))))
 
 (defn- tr-concat [a :vector-i64 b :vector-i64] :vector-i64
   (let [n (vector-count a) out (vector-alloc (+ n (vector-count b)))
@@ -187,7 +189,7 @@
   (let [c (tr-dial (str peer " 3000"))]
     (if (< (tr-int c) 1) (vector-alloc 0)
       (let [w (tr-send c (tr-bytes (str "GET /topology HTTP/1.0\r\nhost: " peer "\r\nauthorization: Bearer " token "\r\nconnection: close\r\n\r\n")))
-            resp (tr-recv c (+ 262144 8192) false)
+            resp (if (= w 0) (tr-recv c (+ 262144 8192) false) (vector-alloc 0))
             z (tr-write c)
             n (vector-count resp) h (tr-head-end resp n) e0 (if (> n 0) (tr-line-end resp 0 n) -1)
             ok (and (>= e0 12) (or (tr-at? resp 0 9 "HTTP/1.0 " false) (tr-at? resp 0 9 "HTTP/1.1 " false))
