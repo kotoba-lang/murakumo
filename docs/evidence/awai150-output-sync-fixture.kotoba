@@ -1,0 +1,30 @@
+(ns awai150-output-sync-fixture (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn- cp-text [b :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 b)))
+
+(defn- cp-sep [s :string] :string (str s "_SEP"))
+
+(defn- cp-parent-dir [p :string] :string
+  (loop [i (- (string-length p) 1)] (if (< i 1) "/" (if (= (string-substring p i (+ i 1)) "/") (string-substring p 0 i) (recur (- i 1))))))
+
+(defn- cp-exists? [p :string] :bool (or (= p "/existing/out.json") (= p "/mismatch/out.json") (= p "/filefail/out.json")))
+(defn- cp-read [p :string] :vector-i64 (cp-bytes (if (= p "/mismatch/out.json") "bad" "good")))
+(defn- cp-cid [b :vector-i64] :string (cp-text b))
+(defn- cp-write [p :string b :vector-i64] :bool (not (= p "/writefail/out.json")))
+(defn- cp-fs [s :string] :string (if (or (= s "/dirfailFSYNC_SEP") (= s "/filefail/out.jsonFSYNC_SEP")) "0" "1"))
+(defn- pr-save-output [path :string answer :vector-i64 cid :string] :bool
+  (and (if (cp-exists? path)
+         (and (= (cp-cid (cp-read path)) cid) (= (cp-fs (str path (cp-sep "FSYNC"))) "1"))
+         (cp-write path answer))
+       (= (cp-fs (str (cp-parent-dir path) (cp-sep "FSYNC"))) "1")))
+
+
+(defn main [] :i64
+ (let [b (cp-bytes "good")]
+  (if (and (pr-save-output "/existing/out.json" b "good")
+           (pr-save-output "/new/out.json" b "good")
+           (not (pr-save-output "/mismatch/out.json" b "good"))
+           (not (pr-save-output "/filefail/out.json" b "good"))
+           (not (pr-save-output "/writefail/out.json" b "good"))
+           (not (pr-save-output "/dirfail/out.json" b "good"))) 0 1)))
