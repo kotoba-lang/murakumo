@@ -63,9 +63,9 @@
 (defn- pr-prepare-submit [request :string marker :string body :vector-i64] :bool
   (and (not (cp-exists? request)) (not (cp-exists? marker))
        (cp-write request body)
-       (= (cp-fs (str (cp-parent-dir request) (cp-sep "FSYNC"))) "1")
+       (= (cp-fs "M" (cp-parent-dir request) "") "1")
        (cp-write marker (cp-bytes "itonami.inference-dispatch/1\n"))
-       (= (cp-fs (str (cp-parent-dir marker) (cp-sep "FSYNC"))) "1")))
+       (= (cp-fs "M" (cp-parent-dir marker) "") "1")))
 
 ;; This is a host-pinned transport description, not proof that the socket's
 ;; peer is the expected machine or that its model is qualified. The host must
@@ -142,9 +142,9 @@
 ;; its parent directory before state can refer to it.
 (defn- pr-save-output [path :string answer :vector-i64 cid :string] :bool
   (and (if (cp-exists? path)
-         (and (= (cp-cid (cp-read path)) cid) (= (cp-fs (str path (cp-sep "FSYNC"))) "1"))
+         (and (= (cp-cid (cp-read path)) cid) (= (cp-fs "M" path "") "1"))
          (cp-write path answer))
-       (= (cp-fs (str (cp-parent-dir path) (cp-sep "FSYNC"))) "1")))
+       (= (cp-fs "M" (cp-parent-dir path) "") "1")))
 
 (defn- pr-wait [unit :string response :string runtime :vector-i64] :bool
   (loop [i 0]
@@ -257,10 +257,10 @@
                         tmp (str repo "/state.json.tmp")
                         usable (pr-replicable? answer)
                         ok (and usable
-                                (cp-mkdir outdir) (= (cp-fs (str repo (cp-sep "FSYNC"))) "1")
+                                (cp-mkdir outdir) (= (cp-fs "M" repo "") "1")
                                 (pr-save-output output answer cid) (cp-write tmp newstate))
-                        rename (if ok (cp-fs (str tmp (cp-sep "RENAME") repo "/state.json")) "0")
-                        sync (if (= rename "1") (cp-fs (str repo (cp-sep "FSYNC"))) "0")]
+                        rename (if ok (cp-fs "L" tmp (str repo "/state.json")) "0")
+                        sync (if (= rename "1") (cp-fs "M" repo "") "0")]
                     (if (not usable) "profile/response-not-replicable"
                       (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))
 

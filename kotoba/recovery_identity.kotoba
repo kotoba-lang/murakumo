@@ -34,5 +34,5 @@
                 ;; a one-way digest, never the seed itself.
                 published (and private (cp-ok? (cp-spawn (str "/usr/bin/ln" (cp-a) "--no-target-directory" (cp-a) "--" (cp-a) tmp (cp-a) path))))
                 cleaned (if saved (cp-spawn (str "/usr/bin/unlink" (cp-a) "--" (cp-a) tmp)) "")
-                sync (and (or published (cp-exists? path)) (= (cp-fs (str (cp-parent-dir path) (cp-sep "FSYNC"))) "1"))]
+                sync (and (or published (cp-exists? path)) (= (cp-fs "M" (cp-parent-dir path) "") "1"))]
             (cp-say (if sync (ri-show path) "identity/initialization-failed"))))))
