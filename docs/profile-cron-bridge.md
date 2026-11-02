@@ -177,3 +177,14 @@ the successful run used `--no-block`, as recorded in the
 text identity for CID comparison and does not test the full resident, its
 actual curl request, inference, a crash during inference, power loss, or
 concurrent writers. The disposable VM was stopped and removed.
+
+A further isolated ARM64 Linux fixture used the actual `pr-submit` and
+`pr-wait` functions: systemd started curl against a private Unix socket whose
+test server checked a fixed nonsecret request and authorization value. A
+valid request returned a fixed response exactly once; after removing the
+unit, the saved marker prevented another request. A deliberately invalid
+authorization value received HTTP 400, the unit failed, and recovery also
+refused a second request. The fixture replaces profile/CID and response/MTP
+validation with fixed test stubs; the test server's Python is a dated,
+one-time test dependency only. It does not exercise a real model or the full
+resident. See [evidence](evidence/awai150-curl-submission-20261103.json).
