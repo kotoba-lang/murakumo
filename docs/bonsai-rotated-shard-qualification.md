@@ -26,9 +26,19 @@ synthetic fixture and measured versions are recorded in
 [diagnostic](evidence/awai147-rotated-shard-probe.py) is not a product
 runtime or a CI fallback.
 
+A follow-up on the same Mac used two real MLX ring ranks in separate processes,
+with network access restricted to loopback. An `all_sum` of rank values returned
+3 at each rank, the ordinary quantized layer matched each 64-element output
+slice exactly, and both ranks rejected the synthetic rotated layer with the
+same `signs` error. The [probe](evidence/awai149-local-ring-probe.py) and
+[evidence](evidence/awai149-local-ring-20261103.json) describe this small
+experiment. It used one physical Mac and did not test inter-host networking.
+The launcher returned zero even on an earlier failed child launch, so a zero
+launcher status alone is not evidence that every rank succeeded; inspect each
+rank's records and errors.
+
 This is not an Exo end-to-end test: the installed MLX differs from Exo's
-pinned MLX, no actual model weights were loaded, and no multi-rank or MTP
-execution occurred. Do not treat this as a global incompatibility claim.
+pinned MLX, no actual model weights were loaded, and no MTP execution occurred. Do not treat this as a global incompatibility claim.
 Conversely, do not admit tensor-parallel Bonsai from model name or an engine's
 generic sharding capability alone. The actual pinned engine, rotated layer,
 MTP head, data path and multi-rank outputs need correctness and resource
