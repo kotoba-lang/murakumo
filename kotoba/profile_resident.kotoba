@@ -198,17 +198,17 @@
 
 ;; Describe only a currently verified, replica-admitted head. A signed epoch and
 ;; parent are archive parameters, not an independent lease or new head grant.
-(defn- rt-archive [cfg :vector-i64] :i64
+(defn- rt-archive [cfg :vector-i64] :string
   (let [path (cp-str cfg 0 "head") head (rt-read-head cfg path)
         store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint")
         b (if (cp-block? store root) (cp-load store root) (vector-alloc 0)) p (cp-payload b)]
     (if (or (= (cp-str cfg 0 "archiveAck") "") (not (cp-safe-absolute? store))
             (not (rt-admitted-head? cfg head))
             (not (rt-pins-ok? cfg)))
-      (cp-say "resident/archive-refused")
-      (cp-say (str "resident/archive " root " " (cp-str b p "did") " " (cp-str cfg 0 "profile")
+      "resident/archive-refused"
+      (str "resident/archive " root " " (cp-str b p "did") " " (cp-str cfg 0 "profile")
                    " " (cp-str cfg 0 "policy") " " (cp-str cfg 0 "environment") " " (cp-num b p "epoch")
-                   " " (cp-str b p "parent") " " (cp-str cfg 0 "task") " " store " " (cp-str cfg 0 "archiveAck"))))))
+                   " " (cp-str b p "parent") " " (cp-str cfg 0 "task") " " store " " (cp-str cfg 0 "archiveAck")))))
 
 (defn- rt-capture [cfg :vector-i64 repo :string epoch :i64 parent :string next :i64] :string
   (let [list (str (cp-str cfg 0 "runtimeRoot") "/untracked.json") summary (str (cp-str cfg 0 "runtimeRoot") "/summary.txt")
@@ -281,10 +281,47 @@
                       lease (rt-current-lease cfg (cp-num root-data (cp-payload root-data) "epoch"))]
                   (if (= (vector-count lease) 0) "resident/quorum-unavailable" (rt-turn cfg head lease request))))))
 
+;; A host-provisioned head path identifies the local writer domain. Keep the
+;; inode fixed for the lifetime of every participant. This lock is local only:
+;; it is neither a lease nor a distributed fence, and shared caches or heads
+;; reachable through different configured paths still require host isolation.
+(defn- rt-serialized [cfg :vector-i64 operation :string] :string
+  (let [head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
+    (if (not (and (cp-safe-absolute? head)
+                  (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1")))
+      "resident/local-writer-busy"
+      (let [result (cond (= operation "cycle") (rt-cycle cfg)
+                         (= operation "refresh") (rt-refresh cfg)
+                         (= operation "archive") (rt-archive cfg)
+                         :else "resident/command-refused")
+            status (if (= operation "cycle") (rt-status cfg result) 0)
+            released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")]
+        (if released result "resident/local-unlock-failed")))))
+
+;; A configured file must never be allowed to replace the lock inode. The
+;; host must also avoid hard links, aliases and out-of-band changes to it.
+(defn- rt-lock-config-safe? [cfg :vector-i64 config-path :string] :bool
+  (let [head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
+    (and (cp-safe-absolute? head)
+         (not (= lock config-path))
+         (not (= lock (cp-str cfg 0 "store")))
+         (not (= lock (cp-str cfg 0 "runtimeRoot")))
+         (not (= lock (cp-str cfg 0 "status")))
+         (not (= lock (cp-str cfg 0 "candidateHead")))
+         (not (= lock (cp-str cfg 0 "request")))
+         (not (= lock (cp-str cfg 0 "leaseFile")))
+         (not (= lock (cp-str cfg 0 "key")))
+         (not (= lock (cp-str cfg 0 "tokenFile")))
+         (not (= lock (cp-str cfg 0 "policyFile")))
+         (not (= lock (cp-str cfg 0 "environmentFile")))
+         (not (= lock (cp-str cfg 0 "runtimeFile")))
+         (not (= lock (cp-str cfg 0 "archiveAck"))))))
+
 (defn profile-resident-main [] :i64
   (let [cfg (cp-read (cp-arg 1)) archive-field (json-member cfg 0 "archiveAck")
         ack (cp-str cfg 0 "archiveAck")]
-    (if (or (not (json-canonical? cfg)) (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
+    (if (or (not (json-canonical? cfg)) (not (rt-lock-config-safe? cfg (cp-arg 1)))
+            (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
             (not (= (cp-num cfg 0 "intervalMs") 86400000))
             (and (>= archive-field 0)
                  (or (not (= (json-kind cfg archive-field) 3)) (not (cp-safe-absolute? ack))
@@ -297,13 +334,15 @@
             (not (rf-voters? (cp-str cfg 0 "voters"))) (= (lease-token (cp-str cfg 0 "tokenFile")) "")
             (not (= (ri-show (cp-str cfg 0 "key")) (str "identity/did " (cp-str cfg 0 "authorB")))))
       (let [x (cp-say "resident/config-refused")] 2)
-      (if (= (cp-arg 0) "refresh") (cp-say (rt-refresh cfg))
-      (if (= (cp-arg 0) "archive") (rt-archive cfg)
+      (if (= (cp-arg 0) "refresh") (cp-say (rt-serialized cfg "refresh"))
+      (if (= (cp-arg 0) "archive") (cp-say (rt-serialized cfg "archive"))
       (if (= (cp-arg 0) "once")
-        (let [r (rt-cycle cfg) status (rt-status cfg r)] (cp-say r))
+        (cp-say (rt-serialized cfg "cycle"))
       (if (not (= (cp-arg 0) "run")) (let [x (cp-say "resident/command-refused")] 2)
       (loop [i 0]
         (let [result (arena-scope
-                       (let [r (rt-cycle cfg) s (rt-status cfg r) event (cp-say r)] 0))
-              z (loop [k 0] (if (>= k 10) true (if (pr-pause) (recur (+ k 1)) false)))]
+                       (let [r (rt-serialized cfg "cycle") event (cp-say r)]
+                         (if (or (= r "resident/local-writer-busy") (= r "resident/local-unlock-failed")) 1 0)))
+              z (if (= result 0)
+                  (loop [k 0] (if (>= k 10) true (if (pr-pause) (recur (+ k 1)) false))) false)]
           (if z (recur (+ i 1)) 2))))))))))
