@@ -189,6 +189,17 @@ the peer limit. These are fixture measurements, not a native checkpoint,
 replication or recovery qualification; future context and state changes must
 be checked again.
 
+An additional isolated AWAI-147 test captured that growth-profile fixture with
+the native checkpoint executable, including the real compact MTP response as
+an allowlisted output. A native peer uploaded the full signed closure over
+authenticated loopback into a separate store; the checkpoint verifier and an
+independent checkout restored from that store, and the profile, context,
+state and output matched byte for byte. A wrong profile pin and a corrupted
+output block were refused before their destination directories were created.
+Both peer processes and stores were on the same Linux host with test-only
+credentials: this does not establish independent failure domains, retention
+receipts, GitHub persistence, or a resident inference/lease cycle.
+
 ## Deployment and restart
 
 Run voter/peer/resident as separate **enabled** user services with linger on
