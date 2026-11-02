@@ -62,6 +62,9 @@ The macOS-host controller sequencing test uses test doubles and substitutes
 BSD `stat`; it checks that an invalid head stops before archive or bridge and
 that ready and refreshed cases proceed. An Amu macOS compiled source-unity
 test checked the decision boundaries; its bypass mutant returned `1` while the
-original returned `0`. This is not the repository's required Linux static
-native CI gate, a live expired-retention renewal, real GitHub storage, a crash
-or a model inference. No periodic service has been installed.
+original returned `0`. A subsequent Linux ARM64 static source-unity build with
+the git-checkpoint pinned root compiler also returned exit 0, and the bypass
+mutant returned exit 1. The [evidence](evidence/awai147-retention-refresh-native-20261103.json)
+records exact hashes. This is a local native gate, not a restarted CI pipeline,
+a live expired-retention renewal, real GitHub storage, a crash or a model
+inference. No periodic service has been installed.
