@@ -18,6 +18,30 @@ model is `mishima`, and no model output is dispatched as a tool. The source's
 at most 256 completion tokens; it explicitly has no live external observations.
 The existing two-turn recovery command keeps its original limit and prompt.
 
+### Optional local MTP transport
+
+The opt-in runtime kind `itonami.readonly-profile-runtime-local-mtp/1` uses
+the same profile, policy, lease and retention checks as the original resident.
+Its `endpoint` must be exactly `http://localhost/v1/chat/completions`, and
+`socket` and `authorizationFile` must be distinct safe absolute paths. The
+host-pinned runtime file, not a profile or checkpoint, selects these paths.
+The caller starts curl through a transient user unit, with proxy use disabled,
+the URL fixed and transport restricted to the supplied Unix socket. The
+authorization file supplies a curl header; the credential itself is not in
+the unit arguments or checkpoint. The local and original HTTPS routes use
+distinct request/unit identities so a previous result on one route cannot be
+mistaken for a result on the other.
+
+The path checks do **not** authenticate the socket peer, verify file ownership
+or permissions, prove the model digest, or manage tunnel and service lifetime.
+Before enabling this route, an operator must use private owner-controlled
+directories, protect the header file, authenticate and pin any SSH tunnel,
+qualify the actual model and MTP behavior, and establish bounded memory,
+readiness, restart and failure behavior. A socket file or declared model name
+is not qualification. The local URL and these fields do not grant a profile
+tools, external publication, GitHub writes, or an execution lease. This route
+does not yet load the other Itonami profiles or supply GitHub checkpoints.
+
 ## Components and state
 
 | Component | Native entry | Responsibility |

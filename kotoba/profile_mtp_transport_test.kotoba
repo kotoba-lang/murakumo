@@ -1,0 +1,14 @@
+;; Append after profile_recovery and the native checkpoint dependency closure.
+(ns murakumo.profile-mtp-transport-test
+  (:export [test-profile-mtp-transport]))
+
+(defn test-profile-mtp-transport [] :bool
+  (let [ok (cp-bytes "{\"authorizationFile\":\"/run/user/1000/itonami/header\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"socket\":\"/run/user/1000/itonami/socket\"}")
+        remote (cp-bytes "{\"authorizationFile\":\"/run/user/1000/itonami/header\",\"endpoint\":\"http://example.com/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"socket\":\"/run/user/1000/itonami/socket\"}")
+        relative (cp-bytes "{\"authorizationFile\":\"/run/user/1000/itonami/header\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"socket\":\"relative/socket\"}")
+        traversal (cp-bytes "{\"authorizationFile\":\"/run/user/1000/../header\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"socket\":\"/run/user/1000/itonami/socket\"}")
+        same (cp-bytes "{\"authorizationFile\":\"/run/user/1000/itonami/socket\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"socket\":\"/run/user/1000/itonami/socket\"}")
+        other (cp-bytes "{\"authorizationFile\":\"/run/user/1000/itonami/header\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"wrong\",\"socket\":\"/run/user/1000/itonami/socket\"}")]
+    (and (pr-local-mtp? ok) (not (pr-local-mtp? remote))
+         (not (pr-local-mtp? relative)) (not (pr-local-mtp? traversal))
+         (not (pr-local-mtp? same)) (not (pr-local-mtp? other)))))

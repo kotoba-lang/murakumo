@@ -3,7 +3,7 @@
 ;; The host supplies reviewed immutable profile/runtime pins and fresh tool
 ;; grants. SOUL and itonami.edn are data, never an authority source. No model
 ;; output is dispatched as a tool. This adapter does not run legacy cron scripts.
-;; HTTPS transport is an explicitly admitted curl oneshot in the existing user
+;; Transport is an explicitly admitted curl oneshot in the existing user
 ;; manager, not a detached child escaping the native spawn's 10-second budget.
 (ns murakumo.profile-recovery
   (:export [profile-recovery-main]))
@@ -36,19 +36,36 @@
     (let [s (pr-unit-state unit)]
       (cond (= s "exited") 1 (= s "failed") -1 :else 0))))
 
-;; All arguments and properties are fixed except task-owned paths and the
-;; content-addressed unit name. curl ignores ~/.curlrc, never follows redirects,
-;; receives no credentials, and can contact only this profile's declared host.
-(defn- pr-submit [unit :string request :string response :string seconds :i64] :bool
+;; This is a host-pinned transport description, not proof that the socket's
+;; peer is the expected machine or that its model is qualified. The host must
+;; authenticate the tunnel, own its directory, and protect the header file.
+(defn- pr-local-mtp? [runtime :vector-i64] :bool
+  (and (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime-local-mtp/1")
+       (= (cp-str runtime 0 "endpoint") "http://localhost/v1/chat/completions")
+       (cp-safe-absolute? (cp-str runtime 0 "socket"))
+       (cp-safe-absolute? (cp-str runtime 0 "authorizationFile"))
+       (not (= (cp-str runtime 0 "socket") (cp-str runtime 0 "authorizationFile")))))
+
+;; Paths and the content-addressed unit name are host-supplied. curl ignores
+;; ~/.curlrc and redirects. The local variant cannot use a TCP proxy or select
+;; a network URL: it sends only through the explicitly pinned Unix socket.
+(defn- pr-submit [unit :string request :string response :string seconds :i64 runtime :vector-i64] :bool
   (cp-ok? (cp-spawn (str "/usr/bin/systemd-run" (cp-a) "--user" (cp-a) "--quiet" (cp-a) "--no-block"
     (cp-a) (str "--unit=" unit) (cp-a) "--property=Type=oneshot" (cp-a) "--property=RemainAfterExit=yes"
     (cp-a) "--property=TimeoutStartSec=900" (cp-a) "--property=NoNewPrivileges=yes"
     (cp-a) "--property=MemoryMax=128M" (cp-a) "--property=CPUQuota=25%"
-    (cp-a) "/usr/bin/curl" (cp-a) "--disable" (cp-a) "--http1.1" (cp-a) "--proto" (cp-a) "=https"
-    (cp-a) "--tlsv1.2" (cp-a) "--fail-with-body" (cp-a) "--silent" (cp-a) "--show-error"
+    (cp-a) "/usr/bin/curl" (cp-a) "--disable" (cp-a) "--http1.1"
+    (if (pr-local-mtp? runtime)
+      (str (cp-a) "--noproxy" (cp-a) "*"
+           (cp-a) "--unix-socket" (cp-a) (cp-str runtime 0 "socket")
+           (cp-a) "--header" (cp-a) (str "@" (cp-str runtime 0 "authorizationFile"))
+           (cp-a) "-fsS")
+      (str (cp-a) "--proto" (cp-a) "=https" (cp-a) "--tlsv1.2" (cp-a) "--fail-with-body"
+           (cp-a) "--silent" (cp-a) "--show-error"))
     (cp-a) "--connect-timeout" (cp-a) "5" (cp-a) "--max-time" (cp-a) (str seconds)
     (cp-a) "--header" (cp-a) "Content-Type: application/json" (cp-a) "--data-binary" (cp-a) (str "@" request)
-    (cp-a) "--output" (cp-a) response (cp-a) "https://api.murakumo.cloud/v1/chat/completions"))))
+    (cp-a) "--output" (cp-a) response (cp-a)
+    (if (pr-local-mtp? runtime) "http://localhost/v1/chat/completions" "https://api.murakumo.cloud/v1/chat/completions")))))
 
 (defn- pr-answer [b :vector-i64] :string
   (if (not (json-valid? b)) ""
@@ -65,9 +82,11 @@
             :else (let [z (pr-pause)] (if z (recur (+ i 1)) false))))))
 
 (defn- pr-runtime? [runtime :vector-i64 meta :vector-i64 role :vector-i64] :bool
-  (and (json-canonical? runtime) (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime/1")
+  (and (json-canonical? runtime)
+       (or (and (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime/1")
+                (= (cp-str runtime 0 "endpoint") "https://api.murakumo.cloud/v1/chat/completions"))
+           (pr-local-mtp? runtime))
        (= (cp-str runtime 0 "rail") "murakumo")
-       (= (cp-str runtime 0 "endpoint") "https://api.murakumo.cloud/v1/chat/completions")
        (= (str "sha256:" (sha256-hex meta)) (cp-str runtime 0 "profileDigest"))
        (= (str "sha256:" (sha256-hex role)) (cp-str runtime 0 "roleDigest"))
        (= (cp-str runtime 0 "profile") "accountability-steward")
@@ -103,10 +122,12 @@
                       (if (= next 1) "" (str "{\"content\":" (pr-json-quote (pr-answer prior)) ",\"role\":\"assistant\"},"))
                       "{\"content\":" (pr-json-quote instruction) ",\"role\":\"user\"}],\"model\":" (pr-json-quote (cp-str runtime 0 "model"))
                       ",\"reasoning_effort\":\"none\",\"stream\":false,\"temperature\":0}")
-                    id (sha256-hex (cp-bytes body)) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
+                    id (sha256-hex (cp-bytes (if (pr-local-mtp? runtime)
+                         (str "local-mtp\n" (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
+                         body))) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
                     request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
                     saved (cp-write request (cp-bytes body)) status (pr-unit-state unit)
-                    submitted (and saved (or (= status "start") (= status "running") (= status "exited") (pr-submit unit request response seconds)))]
+                    submitted (and saved (or (= status "start") (= status "running") (= status "exited") (pr-submit unit request response seconds runtime)))]
                 (if (or (not submitted) (not (pr-wait unit response))) "profile/inference-unavailable-state-retained"
                   (let [answer (cp-read response) cid (cp-cid answer)
                         outdir (str repo "/outputs") output (str outdir "/" next ".json")
