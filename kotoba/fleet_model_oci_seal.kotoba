@@ -1,0 +1,79 @@
+;; Experimental native OCI layout completion for the Bonsai model profile.
+;; Compose after fleet_model_assets and its actual dependencies. The trusted
+;; host owns the private layout and prevents aliases and concurrent writers.
+;; Its blobs directory already contains independently pinned base, MTP and
+;; asset blobs. This component does not create the asset tar, fetch a registry,
+;; attest a publisher, reserve resources, load a model or authorize execution.
+;; Any partial or unknown result requires host quarantine and reconciliation.
+(ns murakumo.fleet-model-oci-seal (:export [model-oci-seal-main]))
+
+(defn- ms-bytes [s :string] :vector-i64
+  (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- ms-digest [s :string] :string
+  (str "sha256:" (sha256-hex (ms-bytes s))))
+(defn- ms-descriptor [media :string digest :string size :i64] :string
+  (str "{\"digest\":\"" digest "\",\"mediaType\":\"" media "\",\"size\":" (ol-dec size) "}"))
+(defn- ms-manifest [base :string base-size :i64 mtp :string mtp-size :i64 assets :string assets-size :i64] :string
+  (let [empty "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"]
+    (str "{\"artifactType\":\"application/vnd.awai.model.bonsai.v1\",\"config\":"
+         (ms-descriptor "application/vnd.oci.empty.v1+json" empty 2)
+         ",\"layers\":["
+         (ms-descriptor "application/vnd.awai.model.bonsai.weights.v1" base base-size) ","
+         (ms-descriptor "application/vnd.awai.model.bonsai.mtp.v1" mtp mtp-size) ","
+         (ms-descriptor "application/vnd.awai.model.bonsai.assets.tar.v1" assets assets-size)
+         "],\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"schemaVersion\":2}")))
+(defn- ms-index [manifest :string size :i64] :string
+  (str "{\"manifests\":["
+       (ms-descriptor "application/vnd.oci.image.manifest.v1+json" manifest size)
+       "],\"schemaVersion\":2}"))
+
+;; A fresh private layout is required. The byte writer's full echo, mode and
+;; both fsync operations must succeed; no partial file is removed or retried.
+(defn- ms-write [path :string value :string] :bool
+  (let [b (ms-bytes value)]
+    (and (= (ta-fs "D" path "") "0") (ta-write path b (vector-count b) true)
+         (= (ta-fs "H" path "600") "1") (mp-mode? path "384" "0")
+         (= (ta-fs "M" path "") "1") (= (ta-fs "M" (ta-parent path) "") "1"))))
+
+;; argv: layout, base digest/size, MTP digest/size, tar digest/size, expected
+;; manifest digest. The host pins these independently, provisions private
+;; layout/blobs/sha256 directories and places all three blobs before calling.
+;; Index is written last, but its presence is not a publication receipt:
+;; only a zero result plus independent consumer verification is meaningful.
+(defn model-oci-seal-main [] :i64
+  (let [layout (md-arg 0) base (md-arg 1) base-size (md-decimal (md-arg 2))
+        mtp (md-arg 3) mtp-size (md-decimal (md-arg 4)) assets (md-arg 5)
+        assets-size (md-decimal (md-arg 6)) expected (md-arg 7)
+        empty "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        valid (and (= (md-arg 8) "") (md-path? layout)
+                   (not (= (string-substring layout (- (string-length layout) 1) (string-length layout)) "/"))
+                   (= (digest-problem base) "oci/ok") (= (digest-problem mtp) "oci/ok")
+                   (= (digest-problem assets) "oci/ok") (= (digest-problem expected) "oci/ok")
+                   (> base-size 0) (> mtp-size 0) (>= assets-size 1024) (<= assets-size 67108864)
+                   (= (rem assets-size 512) 0)
+                   (not (= base mtp)) (not (= base assets)) (not (= mtp assets))
+                   (not (= empty base)) (not (= empty mtp)) (not (= empty assets))
+                   (not (= expected empty)) (not (= expected base)) (not (= expected mtp)) (not (= expected assets)))
+        manifest (if valid (ms-manifest base base-size mtp mtp-size assets assets-size) "")
+        manifest-size (string-byte-length manifest)
+        ready (and valid (= (ms-digest manifest) expected)
+                   (mp-mode? layout "448" "1") (mp-mode? (str layout "/blobs") "448" "1")
+                   (mp-mode? (str layout "/blobs/sha256") "448" "1")
+                   (= (ta-fs "D" (str layout "/oci-layout") "") "0")
+                   (= (ta-fs "D" (str layout "/index.json") "") "0")
+                   (= (ta-fs "D" (ol-blob-path layout empty) "") "0")
+                   (= (ta-fs "D" (ol-blob-path layout expected) "") "0"))]
+    (if (not ready) (let [x (md-out "model-layout/input-refused")] 2)
+      (let [verified (and (= (md-observe (ol-blob-path layout base) base base-size) "model/digest-observed")
+                          (= (md-observe (ol-blob-path layout mtp) mtp mtp-size) "model/digest-observed")
+                          (= (md-observe (ol-blob-path layout assets) assets assets-size) "model/digest-observed"))]
+        (if (not verified) (let [x (md-out "model-layout/blob-refused")] 1)
+          (let [written (and (ms-write (ol-blob-path layout empty) "{}")
+                             (ms-write (ol-blob-path layout expected) manifest)
+                             (ms-write (str layout "/oci-layout") "{\"imageLayoutVersion\":\"1.0.0\"}")
+                             (ms-write (str layout "/index.json") (ms-index expected manifest-size)))
+                checked (if written (ma-check layout expected manifest-size base base-size mtp mtp-size assets assets-size true) "")
+                result (if (= checked "model-artifact/digests-observed")
+                         (str "model-layout/sealed " expected " " (ol-dec manifest-size)) "model-layout/publication-unknown")
+                x (md-out result)]
+            (if (= checked "model-artifact/digests-observed") 0 1)))))))

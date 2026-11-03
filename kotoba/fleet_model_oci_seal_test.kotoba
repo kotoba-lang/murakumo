@@ -1,0 +1,25 @@
+;; Compose after fleet_model_oci_seal and its native dependency closure.
+;; The fixture digest was calculated independently from compact JSON bytes.
+(ns murakumo.fleet-model-oci-seal-test (:export [test-model-oci-seal-descriptors]))
+
+(defn test-model-oci-seal-descriptors [] :bool
+  (let [base "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        mtp "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        assets "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        expected "sha256:6575a990965422340f1e5cecd0494a0b93ce32ea38ce01fc70082c051cbb1f01"
+        text (ms-manifest base 1234 mtp 512 assets 1024)
+        bytes (ms-bytes text) layers (json-member bytes 0 "layers")
+        index (ms-bytes (ms-index expected 758))
+        manifests (json-member index 0 "manifests")]
+    (and (= (vector-count bytes) 758) (= (ms-digest text) expected)
+         (not (= (ms-digest (ms-manifest base 1234 mtp 512 assets 1025)) expected))
+         (not (= (ms-digest (ms-manifest mtp 1234 base 512 assets 1024)) expected))
+         (json-valid? bytes) (json-canonical? bytes)
+         (= (ol-text bytes 0 "artifactType") "application/vnd.awai.model.bonsai.v1")
+         (>= layers 0) (= (json-kind bytes layers) 2) (= (json-count bytes layers) 3)
+         (ma-layer? bytes (json-element bytes layers 0) "application/vnd.awai.model.bonsai.weights.v1" base 1234)
+         (ma-layer? bytes (json-element bytes layers 1) "application/vnd.awai.model.bonsai.mtp.v1" mtp 512)
+         (ma-layer? bytes (json-element bytes layers 2) "application/vnd.awai.model.bonsai.assets.tar.v1" assets 1024)
+         (json-valid? index) (json-canonical? index) (>= manifests 0)
+         (= (json-count index manifests) 1)
+         (ol-index-ok? index (json-element index manifests 0) expected 758))))
