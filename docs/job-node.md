@@ -12,18 +12,22 @@ match the lease holder. A missing or malformed expected ID is refused before
 the quorum round. This intentionally changes the CLI contract: the historical
 verify examples below derive the ID from trusted job inputs, not from the
 untrusted receipt. The recorded example outputs are historical and predate
-the additional checks. The historical rogue-mode example requires a separate
-mutant: current production `run` accepts only `follow`.
+the additional checks. The historical scripts use numeric time and do not run
+unchanged with the current CLI. The historical rogue-mode example requires a
+separate mutant: current production `run` accepts only `follow`.
 
 `run` also checks that the chosen lease is live immediately before the cell,
 then re-learns the identical lease and checks its deadline again before signing
 a receipt. A regressed clock or unavailable quorum leaves the output
-unconfirmed. Use `clock` and a trusted host clock in an operational caller;
-numeric time is a deterministic fixture input. Suppressing a receipt cannot
+unconfirmed. `run` requires the literal `clock` in its time argument; numeric
+time is refused with `job/clock-required` before dispatch. The host clock must
+be trustworthy. Suppressing a receipt cannot
 undo effects already performed by the cell: external effects still require a
 sink-enforced fence and unknown outcomes must not be blindly retried. The
 [lease tests](evidence/awai147-job-live-lease-20261103.json) include real
-loopback voters with a synthetic cell and fixed clock.
+loopback voters with a synthetic cell and fixed clock. The later [real-clock
+fixture](evidence/awai147-job-real-clock-20261103.json) tests live wall-clock
+expiry and quorum loss using loopback voters in one VM.
 
 A confirmed receipt authenticates the signed fields against the chosen holder
 and epoch; it does not by itself establish a successful exit, retrieve or

@@ -3,7 +3,7 @@
 ;; module; this file puts them in order on a node and on a verifier.
 ;;
 ;;   run     job-node-main run <profile> <input> <policy> <rail> <node> <key>
-;;           <failure-domain> <admitted> <now> <allow> <index> <layout>
+;;           <failure-domain> <admitted> clock <allow> <index> <layout>
 ;;           <voter ports p1,p2,..> <ballot t> follow [<input file>
 ;;           [<fleet token file>]]
 ;;           0. given an input file, its bytes must be the job's input: the raw
@@ -144,6 +144,7 @@
           (= (vector-count seed) 0) (let [x (jn-say "job run/bad-key")] 1)
           (= token "-") (let [x (jn-say "job token/missing-or-short")] 2)
           (not (= mode "follow")) (let [x (jn-say "job/mode-refused")] 2)
+          (not (= (jn-arg 9) "clock")) (let [x (jn-say "job/clock-required")] 2)
           (or (< now 0) (> now 9007199253840991) (< t 1) (>= t 9007199254740991))
             (let [x (jn-say "job/time-or-ballot-refused")] 2)
           (and (not (= ipath "")) (not has-input)) (let [x (jn-say "job input/missing")] 1)

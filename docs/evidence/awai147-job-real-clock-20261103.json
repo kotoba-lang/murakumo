@@ -1,0 +1,42 @@
+{
+  "kind": "awai.job-real-clock/1",
+  "date": "2026-11-03",
+  "source_sha256": "b2305d8ff7bad3639a4088990e86663e7973f27c885d4c4caef063b1675810fe",
+  "compiler_sha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "scope": "Native source-closure fixtures compiled and run in a disposable ARM64 Linux VM with 1 CPU and 2 GiB. The real-clock quorum fixture runs nine loopback voter processes in three groups and uses the host wall clock; cell, admission and key input are synthetic. Other fixtures substitute time and quorum.",
+  "fixtures": {
+    "lease": {
+      "source": "awai147-job-real-clock-lease.kotoba",
+      "source_sha256": "d0060f984204d7165519cce1402e4bd382d6e50ce5da7d8aac2b29a2bb1cf861",
+      "elf_sha256": "c3a1da771099d232e4423fa80b65a7b1ccfd72face3850d4fb46dcbd6a7887a2"
+    },
+    "lease-old": {
+      "source": "awai147-job-real-clock-lease-old.kotoba",
+      "source_sha256": "58a4d14a256ec683f9db3a4d3ebd92065d314d87df788be329d4c9ef43e97f95",
+      "elf_sha256": "572a2951c545ea97b53f975f15d7af9aba55d053bb09537a673fc7a644bad160"
+    },
+    "real-quorum": {
+      "source": "awai147-job-real-clock-real-quorum.kotoba",
+      "source_sha256": "a2985b4dc75f0dbffe9bdef1a35981eca9c24a93a79c93a912fbf6007266eb05",
+      "elf_sha256": "74b321e280be338936a29db12829e76a69d49c51da7ac0611149b6a0c60f1c12"
+    },
+    "clockback": {
+      "source": "awai147-job-real-clock-clockback.kotoba",
+      "source_sha256": "5b9a2a15dbf6439ac8ca80a117183b81ac275936db52ac7cbc15012673f5f9a4",
+      "elf_sha256": "650833649d7f963233a7c2cc246495e98ff7721cc8dae97e74e60f91a6aca14b"
+    },
+    "clockback-bypass": {
+      "source": "awai147-job-real-clock-clockback-bypass.kotoba",
+      "source_sha256": "3add7e6c94f20bccdf9a7c7cc16d9c1bbede443431e21dcff5e8caaab7a1126a",
+      "elf_sha256": "a97c8f364c5118bbb3cd5563230bd69f7be0a96c9c959bbb63cab17d176b0063"
+    }
+  },
+  "results": [
+    "Numeric time refused before cell; valid synthetic live lease produced a receipt.",
+    "Synthetic expired, rogue and wrong-job requests refused before cell; lost or changed lease after cell suppressed receipt.",
+    "Synthetic backwards clock suppressed receipt; bypass mutant signed. Prior code signed expired and lost-lease cases.",
+    "Real wall clock and actual three-voter loopback quorum accepted live lease, refused expired lease before cell, and suppressed receipt after two voters were stopped during a delayed synthetic cell."
+  ],
+  "fault_injection": "The synthetic cell explicitly flushes its in-flight marker via stderr before delay; two voters are stopped after that marker is observed.",
+  "limits": "Voters share one VM and use unauthenticated loopback. Cell, key and admission are synthetic; fake clock is used for regression tests. No remote Mac, actual bot, authenticated independent quorum, wall-clock drift characterization, process-tree control, sink-side effect fencing or qualified governor. Suppressing a receipt cannot undo or fence effects. Do not blindly retry an unconfirmed outcome."
+}
