@@ -1,0 +1,36 @@
+;; Compose after fleet_job_output and github_checkpoint_archive. A host owns
+;; the store and fresh work path exclusively, pins every input and credential,
+;; and reconciles ambiguous child/remote outcomes before reusing either path.
+;; This does not obtain a lease, advance a cursor or limit resource use.
+(ns murakumo.fleet-job-output-archive (:export [job-output-archive-main]))
+
+(defn- jo-archive-result? [result :string cid :string] :bool
+  (let [tree (jn-field result 2) status (jn-field result 3)]
+    (and (cp-hex? tree 40) (or (= status "acknowledged") (= status "unacknowledged"))
+         (= result (str "archive/stored " cid " " tree " " status)))))
+
+;; Arguments: work, store, checkpoint CID, checkpoint author/profile/policy/
+;; environment/epoch/parent/task, private OWNER/REPO, GitHub CLI, output path/
+;; CID, proof path/CID, expected output signer DID and job ID (positions 0..17).
+;; The separately fetched archive is checked again against these pins.
+(defn job-output-archive-main [] :i64
+  (let [work (jn-arg 0) store (jn-arg 1) cid (jn-arg 2) author (jn-arg 3)
+        profile (jn-arg 4) policy (jn-arg 5) environment (jn-arg 6) epoch (cp-int (jn-arg 7))
+        parent (jn-arg 8) task (jn-arg 9) repo (jn-arg 10) gh (jn-arg 11)
+        out-path (jn-arg 12) output-cid (jn-arg 13) proof-path (jn-arg 14) proof-cid (jn-arg 15)
+        did (jn-arg 16) job (jn-arg 17)]
+    (if (or (not (cp-safe-absolute? store)) (not (jn-private-dir? store))
+            (not (cp-raw? cid)) (not (cp-raw? output-cid)) (not (cp-raw? proof-cid)))
+      (let [x (jn-say "job-output/archive-config-refused")] 2)
+      (let [local (jo-checkpoint-verdict store cid author profile policy environment epoch parent task
+                                         output-cid proof-cid did job out-path proof-path)
+            archived (if (= local "job-output/verified")
+                       (ga-archive work store cid author profile policy environment epoch parent task repo gh)
+                       "job-output/archive-local-refused")
+            readback (if (jo-archive-result? archived cid)
+                       (jo-checkpoint-verdict (str work "/readback/blocks") cid author profile policy environment
+                                              epoch parent task output-cid proof-cid did job out-path proof-path)
+                       "job-output/archive-readback-unknown")]
+        (if (= readback "job-output/verified")
+          (let [x (jn-say (str "job-output/archive-verified " cid " " (jn-field archived 2)))] 0)
+          (let [x (jn-say readback)] 1))))))
