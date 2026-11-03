@@ -1,0 +1,95 @@
+{
+  "kind": "awai.seven-mac-experimental-mtp/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "runtime": {
+    "mlx": "0.32.2",
+    "mlxLm": "0.31.3",
+    "mtplx": "2.12.2",
+    "python": "3.12"
+  },
+  "pipeline": {
+    "physicalMacs": 7,
+    "layerRanges": [
+      [
+        0,
+        9
+      ],
+      [
+        9,
+        18
+      ],
+      [
+        18,
+        27
+      ],
+      [
+        27,
+        36
+      ],
+      [
+        36,
+        45
+      ],
+      [
+        45,
+        54
+      ],
+      [
+        54,
+        64
+      ]
+    ],
+    "mlxPerProcessMemoryLimitBytes": 4294967296,
+    "stopBelowSampledMemoryPressureFreePercent": 60,
+    "sampledMinimumMemoryPressureFreePercentByRank": [
+      83,
+      84,
+      84,
+      82,
+      83,
+      81,
+      76
+    ]
+  },
+  "transfer": {
+    "temporaryShardHosts": 4,
+    "shardMiB": [
+      934,
+      934,
+      929,
+      934
+    ],
+    "integrity": "SHA-256 checked against each streamed shard at destination",
+    "temporaryRuntimeVersionChecked": true,
+    "taskTemporaryDirectoriesAbsentAfterwards": true
+  },
+  "contextCases": {
+    "count": 4,
+    "accepted": 4,
+    "primaryTokens": [
+      264,
+      33075,
+      11,
+      25358
+    ],
+    "draftTokens": [
+      5286,
+      888,
+      1017,
+      13
+    ],
+    "targetTokens": [
+      5286,
+      888,
+      1017,
+      13
+    ]
+  },
+  "reference": {
+    "firstCase": "both target logit hashes and draft logit hash match the three-Mac and independent single-Mac streaming run",
+    "details": "awai149-distributed-mtp-20261103.json"
+  },
+  "verification": "One candidate per prompt compared against the next full target step, serial greedy; not batched speculative verification.",
+  "transport": "temporary direct Tailscale TCP ring without application-level peer authentication",
+  "scope": "Experimental test, not a persistent service. No speedup benchmark, long-context quality, MTP rollback, production loader parity, authenticated serving, cron integration or ten-host scheduling."
+}
