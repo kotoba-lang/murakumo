@@ -1,0 +1,98 @@
+{
+  "schema": "murakumo.darwin-native-checkpoint-fixture.v1",
+  "host": {
+    "os": "Darwin",
+    "arch": "arm64",
+    "macOS": "26.3.1"
+  },
+  "checkpointSourceSha256": "e8e524fc95731cc57b29ae7175c02be40b676103b2b8768ab5b08fa7141f08c3",
+  "fixtureSourceSha256": "099977c3c2d6088910beaca9abd0032daf89386e37ca95f7082cb2be7172fb49",
+  "fixtureRawSha256": "6a86d84610d9a6edc120180e23f27dd74fd485fbe4bd861580e2bee77a1bc5ff",
+  "fixtureUnsignedSha256": "0f36ed5b202f8056296fe23060823ac500e204371aaffd27403573e3a62a5476",
+  "fixtureSignedSha256": "b4c2b7eb213f500251cac910117b28023f0aa8f2f7dc49bf675aa349ea7a5929",
+  "runtimePackagerSourceSha256": "8a17f1914f52615b8058b76c7fdb1134bcebb410ab709ec2ad586b47e2f89dad",
+  "compilerSha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "bootstrapPackagerSha256": "4114499dc10bd321070a221f88847b8708565f7d80e87c4ed84b28e599e3c41e",
+  "gitVersion": "git version 2.50.1 (Apple Git-155)",
+  "checkpointCid": "bafkreift54t2nbksspq2vjggjq4o7dguqcqf2rccdidkuhnkcqntwsmzxu",
+  "testPublicSeed": "00 repeated 32 bytes, synthetic only",
+  "sourceSnapshot": {
+    "head": "3c1b57e6f30cdf78c5fa7f4b77b2ad34195158bb",
+    "status": "MM tracked.txt\n?? notes.txt\n",
+    "index": "staged\n",
+    "worktree": "unstaged\n",
+    "untracked": "untracked content\n",
+    "untrackedMode": "0o644"
+  },
+  "restoredSnapshot": {
+    "head": "3c1b57e6f30cdf78c5fa7f4b77b2ad34195158bb",
+    "status": "MM tracked.txt\n?? notes.txt\n",
+    "index": "staged\n",
+    "worktree": "unstaged\n",
+    "untracked": "untracked content\n",
+    "untrackedMode": "0o644"
+  },
+  "cases": [
+    {
+      "case": "capture-real-git",
+      "exit": 0,
+      "stdout": "checkpoint/created bafkreift54t2nbksspq2vjggjq4o7dguqcqf2rccdidkuhnkcqntwsmzxu\n{\"payload\":{\"bundle\":\"bafkreiebd5vdif2ejh2u7x2pvu2tpyqabdtkkzf6wq4uo2glpa27b4nunm\",\"did\":\"did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp\",\"environment\":\"bafkreid6qvx3zvu7vfv5p4iyk2dbtr6gvpp7m3wq7w57hlycghvw37a72e\",\"epoch\":1,\"head\":\"3c1b57e6f30cdf78c5fa7f4b77b2ad34195158bb\",\"kind\":\"itonami.git-checkpoint/1\",\"parent\":\"root\",\"policy\":\"bafkreien64s5e4qt3rn3f6pgifssngaragyuxkbafcbfo26v6xhjrugh6u\",\"profile\":\"sha256:27ef7e8ec09fad7aa3b47217d095ffb4e37c66a2ed8ca35b941564429bd4fef8\",\"stash\":\"d1d82b73a1173216664e19938fb77f0a5b8f1ea2\",\"summary\":\"bafkreifefirtkuq3lc3evnbot5v2vvys24lzo773htwsjm5rdkybrrr6im\",\"task\":\"fixture\",\"untracked\":[{\"cid\":\"bafkreieh4lh452xgez4rukcbotw2fdxci7sbkjkjdgh35gu5jatmjgcwpa\",\"mode\":\"644\",\"path\":\"notes.txt\"}]},\"signature\":\"tdAybiSucxm0jHoA2Skd8nOI2Xi-riu0l5If2L-6nQr0G391tFjEetEEUA427CIDEtivhxdcIPW7areODCgjCQ\"}\n",
+      "stderrBytes": 96
+    },
+    {
+      "case": "verify-contract",
+      "exit": 0,
+      "stdout": "checkpoint/verified\n",
+      "stderrBytes": 0
+    },
+    {
+      "case": "reject-wrong-policy",
+      "exit": 1,
+      "stdout": "checkpoint/policy\n",
+      "stderrBytes": 0
+    },
+    {
+      "case": "restore-real-git",
+      "exit": 0,
+      "stdout": "checkpoint/restored\n",
+      "stderrBytes": 287
+    },
+    {
+      "case": "refuse-existing-destination",
+      "exit": 1,
+      "stdout": "checkpoint/destination-exists\n",
+      "stderrBytes": 0
+    },
+    {
+      "case": "reject-corrupted-block",
+      "exit": 1,
+      "stdout": "checkpoint/missing-or-corrupt-block\n",
+      "stderrBytes": 0
+    },
+    {
+      "case": "verify-after-restoring-fixture",
+      "exit": 0,
+      "stdout": "checkpoint/verified\n",
+      "stderrBytes": 0
+    },
+    {
+      "case": "reject-unknown-command",
+      "exit": 1,
+      "stdout": "checkpoint/command\n",
+      "stderrBytes": 0
+    },
+    {
+      "case": "reject-missing-recovery",
+      "exit": 1,
+      "stdout": "recovery/missing-or-corrupt\n",
+      "stderrBytes": 0
+    },
+    {
+      "case": "closure-confirmed",
+      "exit": 0,
+      "stdout": "checkpoint/block bafkreift54t2nbksspq2vjggjq4o7dguqcqf2rccdidkuhnkcqntwsmzxu\ncheckpoint/block bafkreiebd5vdif2ejh2u7x2pvu2tpyqabdtkkzf6wq4uo2glpa27b4nunm\ncheckpoint/block bafkreien64s5e4qt3rn3f6pgifssngaragyuxkbafcbfo26v6xhjrugh6u\ncheckpoint/block bafkreid6qvx3zvu7vfv5p4iyk2dbtr6gvpp7m3wq7w57hlycghvw37a72e\ncheckpoint/block bafkreifefirtkuq3lc3evnbot5v2vvys24lzo773htwsjm5rdkybrrr6im\ncheckpoint/block bafkreibh557i5qe7vv5khndsc7ijl75u4n6gnixnrsrvxfavmrbjxvh67a\ncheckpoint/block bafkreieh4lh452xgez4rukcbotw2fdxci7sbkjkjdgh35gu5jatmjgcwpa\ncheckpoint/block bafkreic6xy7scdmey7g55x56uxt6u7jkkzdamri4a36nv5prfgnmxjp2mu\ncheckpoint/closure-complete\n",
+      "stderrBytes": 0
+    }
+  ],
+  "limits": "Actual checkpoint capture/verify/restore source except cp-spawn replaced by a privileged test-only adapter mapping virtual fixture paths to physical paths. One Mac and local Git only. No production scoped spawn, process-tree governor, actual GitHub archive, independent node, bot, MTP inference, malicious concurrent mutations, power-loss durability or release qualification. Git stderr is expected for untracked checks and fetch; results are verified via output and independent host Git inspection."
+}
