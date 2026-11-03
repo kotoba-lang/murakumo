@@ -33,3 +33,40 @@ and the privileged diagnostic host packager was
 The host is not a production capability boundary; telemetry and the fixed
 in-band completion marker are not authenticated. A separate transport and
 resource-governor qualification is still required.
+
+## Later transport investigation
+
+A later fresh diagnostic run captured and classified the SSH stderr locally.
+Asher's pressure probe and Simeon's memory probe returned 255 with SSH reporting
+port 22 connection timeouts. This identifies the immediate failure in those
+two attempts; it does not establish why packets or the server were delayed.
+No credentials were printed. Tailscale discovery probes reached both nodes,
+first over DERP or a direct route; ICMP and TSMP probes also returned replies.
+Those replies alone do not prove the SSH service or path is continuously
+available. The Benjamin control also replied.
+
+After a single successful TSMP preflight per node, a fresh observer still
+failed: Asher at swap and Simeon at memory, each with exit 124 from the
+diagnostic host. To test a longer deadline without changing a service or
+production runtime, a separate task-only host increased its mode-0 child
+timer from five to fifteen seconds, and the fixture increased SSH
+`ConnectTimeout` from 3 to 10 seconds and `ServerAliveInterval` from 1 to 3.
+In this one comparison Asher got through memory, swap and pressure, then its
+disk connection timed out; Simeon's memory connection timed out. Both SSH
+processes returned 255 and the stderr named port 22 timeout. This small sample
+does not establish a general timeout recommendation or the root cause.
+
+The bounded stderr diagnostic fixture source SHA-256 was
+`221e7334f9bbe41f833026275422fecfbf76b909afcda7b22ffc52f22e6f75f5`
+and signed image SHA-256 was
+`2b6bf0bac6ba05b42575949d7b4cb9e7a63093d1c137f9dcede2aa3e424b40d8`.
+The longer-timer diagnostic host source SHA-256 was
+`bcd15a1efcdcafaac646c43286864ada2684e104a2e5f05332849c9be8435c0b`
+and signed host SHA-256 was
+`dc4b2503386c418f8a3b60837df231fef37a8ecea226ef5b3d6aad2d7934ce5a`.
+The longer-timeout observer fixture source SHA-256 was
+`de8742b6aad287240c075582dfccf872f6583d8c09eb044aea02b90e5a544c8a`
+and signed image SHA-256 was
+`25efd163266a363332b7ed2bee4dfcc06a44c9dcbe46b14dc881bf1d451ab7ca`.
+Only diagnostic copies were changed; existing production timeouts and services
+were untouched. No workload or token was used.
