@@ -25,13 +25,13 @@
     (and (cp-ok? answer) (= (cp-out answer) (str repo "\ttrue\n")))))
 
 ;; Reject effective Git configuration that can redirect transport, weaken TLS,
-;; load external helpers, or expand configuration. --name-only avoids emitting
+;; load external helpers/hooks/filters, or expand configuration. --name-only avoids emitting
 ;; configured values. Exit 1 with no output means no matching keys; any other
 ;; outcome is a refusal. The host must still restrict the child environment and
 ;; network/credential authority; Git configuration is not the whole boundary.
 (defn- ga-config-safe? [repo-dir :string] :bool
   (= (cp-git repo-dir (str "config" (cp-a) "--name-only" (cp-a) "--get-regexp" (cp-a)
-    "^(url[.].*[.](insteadof|pushinsteadof)|http([.].*)?[.](proxy|sslverify|sslcainfo|followredirects)|remote[.].*[.]proxy|credential([.].*)?[.]helper|include([.].*)?[.]path)$")) "1\n"))
+    "^(url[.].*[.](insteadof|pushinsteadof)|http([.].*)?[.](proxy|sslverify|sslcainfo|followredirects)|remote[.].*[.]proxy|credential([.].*)?[.]helper|(include|includeif)([.].*)?[.]path|core[.](hookspath|fsmonitor|attributesfile|sshcommand)|filter[.].*|commit[.]gpgsign|gpg[.].*)$")) "1\n"))
 
 ;; Transport explicitly enforces TLS verification and disables redirects. The
 ;; config check above also rejects URL-scoped settings that could override them.
