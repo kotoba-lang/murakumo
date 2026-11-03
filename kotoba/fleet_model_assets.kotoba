@@ -136,19 +136,49 @@
         x (md-out result)]
     (if (= result "assets/staged") 0 (if (= result "assets/input-refused") 2 1))))
 
-;; The pinned OCI manifest must validate every layer before any directory is
-;; created. The assets are then hashed again as the exact bytes are staged.
+;; Copy and hash the exact same chunks, including the final SHA-256 padding.
+;; This makes a completed stage reflect the pinned bytes without reading the
+;; large source twice. It does not seal the destination after this function.
+(defn- tw-copy [source :string dest :string digest :string size :i64] :bool
+  (let [entry (if (md-path? source) (typed-cap-call 35 :string :string (ol-frame "O" source "")) "")
+        meta (if (and (md-regular? entry) (= (ol-size entry 17179869184) size))
+               (typed-cap-call 35 :string :string (ol-frame "F" source "")) "")]
+    (if (or (not (md-path? dest)) (not (md-regular? meta)) (not (= (ol-size meta 17179869184) size))
+            (< size 1) (> size 17179869184) (not (= (ta-fs "D" dest "") "0"))) false
+      (let [work (s2-work (s2-iv 8)) k (s2-k)
+            copied (loop [offset 0]
+                     (if (= offset size) true
+                       (let [remaining (- size offset) count (if (> remaining 65536) 65536 remaining)
+                             last (= (+ offset count) size)
+                             ok (arena-scope
+                                  (let [data (ta-read source offset count) whole (* (quot count 64) 64)]
+                                    (and (= (vector-count data) count) (md-blocks work data whole k)
+                                         (if last (md-pad work data whole (- count whole) size k) true)
+                                         (ta-write dest data count (= offset 0)))))]
+                         (and ok (recur (+ offset count))))))
+            after (typed-cap-call 35 :string :string (ol-frame "F" source ""))
+            actual (if copied (str "sha256:" (hex (s2-out work 8))) "")]
+        (and copied (= meta after) (= actual digest)
+             (= (ta-fs "H" dest "600") "1") (= (ta-fs "M" dest "") "1"))))))
+
+;; The pinned OCI manifest and asset layer are checked before any directory
+;; is created. Each weight is then copied and hashed once into the stage.
 ;; The caller owns/isolates the layout and the target throughout this flow.
 (defn model-artifact-stage-main [] :i64
-  (let [layout (md-arg 0) assets (md-arg 7) size (md-decimal (md-arg 8)) stage (md-arg 9)
+  (let [layout (md-arg 0) base (md-arg 3) base-size (md-decimal (md-arg 4))
+        mtp (md-arg 5) mtp-size (md-decimal (md-arg 6)) assets (md-arg 7) size (md-decimal (md-arg 8)) stage (md-arg 9)
         result (if (or (not (= (md-arg 10) "")) (not (md-path? layout)) (not (md-path? stage))
                        (= (string-substring stage (- (string-length stage) 1) (string-length stage)) "/")
                        (ta-overlap? layout stage) (< size 1024) (> size 67108864) (not (= (rem size 512) 0))
                        (not (= (ta-fs "D" stage "") "0"))) "model-artifact/input-refused"
-                 (let [checked (ma-observe layout (md-arg 1) (md-decimal (md-arg 2))
-                                           (md-arg 3) (md-decimal (md-arg 4)) (md-arg 5) (md-decimal (md-arg 6))
-                                           assets size)]
-                   (if (not (= checked "model-artifact/digests-observed")) checked
-                     (ta-stage (ol-blob-path layout assets) stage assets size))))
+                 (let [checked (ma-check layout (md-arg 1) (md-decimal (md-arg 2))
+                                         base base-size mtp mtp-size assets size false)]
+                   (if (not (= checked "model-artifact/descriptors-observed")) checked
+                     (let [staged (ta-stage (ol-blob-path layout assets) stage assets size)]
+                       (if (not (= staged "assets/staged")) staged
+                         (if (and (tw-copy (ol-blob-path layout base) (str stage "/model.safetensors") base base-size)
+                                  (tw-copy (ol-blob-path layout mtp) (str stage "/mtp.safetensors") mtp mtp-size)
+                                  (= (ta-fs "M" stage "") "1"))
+                           "model-artifact/staged" "model-artifact/staging-unknown"))))))
         x (md-out result)]
-    (if (= result "assets/staged") 0 1)))
+    (if (= result "model-artifact/staged") 0 1)))
