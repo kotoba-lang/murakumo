@@ -85,6 +85,7 @@ plus rename is not an atomic no-replace lock against concurrent creators.
 ```text
 checkpoint capture REPO STORE KEY PROFILE_FILE POLICY_FILE ENV_FILE SUMMARY_FILE UNTRACKED_JSON EPOCH PARENT TASK
 checkpoint verify  STORE CID AUTHOR_DID PROFILE_DIGEST POLICY_CID ENV_CID EPOCH PARENT TASK
+checkpoint closure STORE CID AUTHOR_DID PROFILE_DIGEST POLICY_CID ENV_CID EPOCH PARENT TASK
 checkpoint restore STORE CID AUTHOR_DID PROFILE_DIGEST POLICY_CID ENV_CID EPOCH PARENT TASK DEST
 checkpoint recovery STORE FROM_CID TO_CID NODE_B_KEY TASK
 checkpoint verify-recovery STORE RECEIPT_CID NODE_B_DID FROM_CID TO_CID TASK EPOCH
@@ -92,7 +93,17 @@ checkpoint verify-recovery STORE RECEIPT_CID NODE_B_DID FROM_CID TO_CID TASK EPO
 
 `UNTRACKED_JSON` is a canonical, sorted JSON array of selected paths, e.g.
 `["resume.txt","src/new.kotoba"]`. No recursive collection of untracked or
-ignored files occurs. An author DID, expected root CID and resume contract must
+ignored files occurs. `closure` performs the same signature, independently supplied contract and full
+CID verification as `verify`, then emits `checkpoint/block CID` lines and a
+final `checkpoint/closure-complete` line. It includes the root, bundle index,
+all chunks, policy, environment, profile, summary and allowlisted untracked
+objects; duplicate CIDs are possible. A consumer must refuse partial output,
+recheck bytes against CIDs when copying, and keep the source store quiescent.
+The command enumerates objects only; it neither writes to GitHub nor admits a
+head. Checkpoint contents can contain sensitive data and require a separately
+approved destination and data boundary.
+
+An author DID, expected root CID and resume contract must
 come from the authorized task, not from untrusted fields returned by a peer.
 Exact equality is required for epoch and parent; there is no silent upgrade.
 The identity pins the selected profile artifact; release/OCI admission still
@@ -156,6 +167,45 @@ streaming/budget extension; they must not fall back to mounted live Git state.
 Each bundle chunk's hash/read/write temporaries live in an `arena-scope`.
 Only its CID is copied into an outer fixed-size index table, so processing
 many chunks does not retain every chunk's temporary allocations.
+
+## GitHub archive adapter
+
+`scripts/itonami-github-checkpoint-archive.sh` archives one independently
+classified checkpoint in a private GitHub repository. It accepts the native
+checkpoint binary, a private task-owned filesystem root containing the store,
+the explicit `OWNER/REPO`, and the same independent verification contract as
+`checkpoint verify`:
+
+```text
+itonami-github-checkpoint-archive.sh BIN WORKROOT STORE OWNER/REPO ROOT AUTHOR PROFILE POLICY ENV EPOCH PARENT TASK
+```
+
+On a trusted Linux host with `gh` authenticated for this repository, Git and
+its external credential helper, the adapter checks repository privacy, obtains
+the verified closure, copies only those blocks, and verifies the copied
+checkpoint again. It creates a fresh Git repository and pushes without force to
+`refs/heads/itonami/archive/<ROOT>`. It then fetches the ref into an independent
+repository, checks the exact tree and Git objects, restores the archive and
+verifies its checkpoint a third time. An already existing identical archive is
+idempotent; a conflicting tree or unavailable readback refuses. A lost push
+acknowledgement is accepted only if the matching archive can be read back and
+verified. The repository access and privacy check is a point-in-time check;
+repository administrators must maintain its access controls and retention.
+
+This ref is an archive, not an admitted resident head or distributed fence.
+Anyone with repository write access may alter it, so consumers must verify the
+contract and bytes again; never infer authority merely from the ref. Do not use
+it as permission to start a new bot turn or to repeat external effects. The
+caller must provision the binary, controlled `PATH`, GitHub authentication,
+private task directory, classified inputs and independent contract. The store
+must remain quiescent while the adapter copies it. No scheduler or resident
+invokes this script yet. An operator-run experimental checkpoint was archived
+to the private GitHub repository and independently read back; see the
+[sanitized evidence](evidence/awai147-github-archive-20261103.json). That
+one-time test does not establish production credential provisioning or fencing.
+The native integration gate is
+`test-native/murakumo/github-checkpoint-archive-gate.sh`, which accepts a
+signed test fixture and exercises a separate file-backed Git remote.
 
 ## Native build and gate
 

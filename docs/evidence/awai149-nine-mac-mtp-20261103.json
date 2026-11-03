@@ -1,0 +1,125 @@
+{
+  "kind": "awai.nine-mac-experimental-mtp/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "runtime": {
+    "mlx": "0.32.2",
+    "mlxLm": "0.31.3",
+    "mtplx": "2.12.2",
+    "python": "3.12"
+  },
+  "pipeline": {
+    "physicalMacs": 9,
+    "layerRanges": [
+      [
+        0,
+        7
+      ],
+      [
+        7,
+        14
+      ],
+      [
+        14,
+        21
+      ],
+      [
+        21,
+        28
+      ],
+      [
+        28,
+        35
+      ],
+      [
+        35,
+        42
+      ],
+      [
+        42,
+        49
+      ],
+      [
+        49,
+        56
+      ],
+      [
+        56,
+        64
+      ]
+    ],
+    "mlxPerProcessMemoryLimitBytes": 4294967296,
+    "stopBelowSampledMemoryPressureFreePercent": 60,
+    "sampledMinimumMemoryPressureFreePercentByRank": [
+      85,
+      86,
+      86,
+      86,
+      83,
+      85,
+      87,
+      82,
+      78
+    ]
+  },
+  "transfer": {
+    "temporaryShardHosts": 6,
+    "shardMiB": [
+      724,
+      724,
+      724,
+      729,
+      724,
+      724
+    ],
+    "transferSecondsIncludingSsh": [
+      13.3,
+      14.4,
+      13.4,
+      13.3,
+      14.3,
+      13.3
+    ],
+    "transport": "mutually authenticated TLS directly between Macs; short-lived unique test CA",
+    "integrity": "sender SHA-256 matched receiver streaming and reread SHA-256",
+    "isolatedRuntimeVersionChecked": true,
+    "taskTemporaryDirectoriesAbsentAfterwards": true,
+    "standaloneShard": {
+      "layerRange": [
+        21,
+        28
+      ],
+      "bytes": 759849192,
+      "sha256": "74315e619180941eb1edefe59397b8a0708991b2b081325b70d95b8fdb1cd783",
+      "destinationCount": 2
+    }
+  },
+  "contextCases": {
+    "count": 4,
+    "accepted": 4,
+    "primaryTokens": [
+      264,
+      33075,
+      11,
+      25358
+    ],
+    "draftTokens": [
+      5286,
+      888,
+      1017,
+      13
+    ],
+    "targetTokens": [
+      5286,
+      888,
+      1017,
+      13
+    ]
+  },
+  "reference": {
+    "firstCase": "both target logit hashes and draft logit hash match the three-Mac and independent single-Mac streaming run",
+    "details": "awai149-distributed-mtp-20261103.json"
+  },
+  "verification": "One candidate per prompt compared against the next full target step, serial greedy; not batched speculative verification.",
+  "inferenceTransport": "temporary direct Tailscale TCP ring without application-level peer authentication; TLS applied to shard transfers only",
+  "scope": "Experimental bounded test, not a persistent service. No speedup benchmark, long-context quality, MTP rollback, production loader parity, authenticated inference serving, cron integration or ten-host scheduling. The tenth Mac was not used because memory pressure and swap were high."
+}

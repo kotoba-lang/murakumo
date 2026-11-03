@@ -1,0 +1,19 @@
+{
+  "kind": "awai151.native-fifo-process-kill/1",
+  "date": "2026-11-03 Asia/Tokyo",
+  "environment": "disposable ARM64 Linux VM, 1 CPU, 2 GiB; removed after test",
+  "sourceSha256": "dd220f506002f5fac64067f8312a438990200adc6ae7bb6d8ae8cadc7072392d",
+  "compilerSha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "normalArtifactSha256": "3a33fbc3da6b4b88cb0e71ac7eaf07293f1ed5bbf7c9ea05dd47629ff16268c1",
+  "stagerSha256": "3b806a240bf9d9437e46d458b2cdb4c6ba4809fde505c6e6f59ecc3ff9600991",
+  "observerSha256": "3cefb4cb174f9f99b027228c72684339efcec005b2f74736e66f6d6d3f0a49b2",
+  "phases": [
+    {"phase":"after-intent", "sourceSha256":"4dc4c20f94a99cefb2384974e130d503afd6d09eb0d35bf10db1e863bedcb3c9", "artifactSha256":"f60e181bfc791c841a27a5793aee768f64e7acd5952376b2b2a6330a25df2fe1", "intent":true, "pending":false, "next":"fifo/pending-unknown"},
+    {"phase":"after-pending", "sourceSha256":"fe3669843d9aeb46389b00bcd50c3f60c081cdee1d594800c31d0265bfa96ec2", "artifactSha256":"5d1a0bcdbaf32980212520d4753b858aabbcedccb6bc93c10681f6b97af80b9f", "intent":true, "pending":true, "next":"fifo/pending-unknown"},
+    {"phase":"after-rename", "sourceSha256":"ba4ad533b3f0d5e14e43b0cd38d29ecee8ac9d37d88e58826d22003274a902c7", "artifactSha256":"882e3ee87f825c095de3d57ed4a5f0c74ff75a4d32441235c293f2bec5da75b3", "intent":true, "pending":false, "next":"fifo/pending-unknown"},
+    {"phase":"after-sync", "sourceSha256":"90e3abe9357e0f8835cebd2fac5e3627443cbddfcc6f4cdf647ebf589388659a", "artifactSha256":"14dbce3ee91a4b7e982aaf370beb00ad41c1991d7503f7d4ee66e97174e62587", "intent":true, "pending":false, "next":"fifo/pending-unknown"},
+    {"phase":"after-unlink", "sourceSha256":"c66474992b1839c27e424baf82a1cd3779c63dc853bd858509f1a5d127a0587d", "artifactSha256":"cc07a14b2ab4fe5efea49dcf58e526443a0a654b263b8288ef6262b733e8cab8", "intent":false, "pending":false, "next":"fifo/front expected-ticket"}
+  ],
+  "method": "Each instrumented native guest writes a readiness marker to stderr at the named boundary and sleeps; the observer waits for the marker, SIGKILLs its own child, then runs the uninstrumented native artifact against the same test directory. Each killed process exited -9. Source instrumentation and observer are test-only.",
+  "limits": "One synthetic enqueue per boundary, one Linux VM with live filesystem. No actual power loss or failed fsync, process descendants, Darwin, end-to-end resource governor, admission or fleet qualification. A readiness marker only localizes the deliberately inserted pause."
+}
