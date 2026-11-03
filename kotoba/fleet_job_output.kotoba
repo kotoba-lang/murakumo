@@ -4,7 +4,7 @@
 ;; Compose after fleet_job_node and git_checkpoint. The trusted host must own
 ;; both the capture tree and block store exclusively throughout this operation;
 ;; path-based metadata and reads do not bind against a concurrent replacement.
-(ns murakumo.fleet-job-output (:export [job-output-main job-output-proof-verify-main job-output-checkpoint-verify-main job-output-stage-main]))
+(ns murakumo.fleet-job-output (:export [job-output-main job-output-proof-verify-main job-output-checkpoint-verify-main job-output-stage-main job-output-checkpoint-capture-main]))
 
 (defn- jo-once? [s :string key :string] :bool
   (let [line (str "\n" key " ") all (str "\n" s) i (string-index-of all line)]
@@ -140,6 +140,25 @@
           (if (and (jo-stage-file? repo out-path output) (jo-stage-file? repo proof-path proof))
             (let [x (jn-say "job-output/staged")] 0)
             (let [x (jn-say "job-output/stage-unknown")] 1)))))))
+
+;; Arguments 1..11 are checkpoint capture's original trusted inputs; 12..17
+;; independently pin the staged paths, block CIDs, signer DID and job. The
+;; underlying capture checks its actual allowlist against these pins before
+;; root publication. The host retains exclusive ownership and serialization.
+(defn job-output-checkpoint-capture-main [] :i64
+  (let [repo (jn-arg 1) store (jn-arg 2) out-path (jn-arg 12) output-cid (jn-arg 13)
+        proof-path (jn-arg 14) proof-cid (jn-arg 15) did (jn-arg 16) job (jn-arg 17)]
+    (if (or (not (= (jn-arg 0) "capture-job-output"))
+            (not (cp-safe-absolute? repo)) (not (cp-safe-absolute? store)) (jo-overlap? repo store)
+            (not (jn-private-dir? repo)) (not (jn-private-dir? store))
+            (not (checkpoint-path? out-path)) (not (checkpoint-path? proof-path)) (jo-overlap? out-path proof-path)
+            (not (cp-raw? output-cid)) (not (cp-raw? proof-cid)))
+      (let [x (jn-say "job-output/capture-config-refused")] 2)
+      (let [output (jo-block store output-cid) proof (jo-block store proof-cid)
+            valid (and (jo-block? store output-cid output) (jo-block? store proof-cid proof)
+                       (= (jo-proof-verdict proof output did job) "job-output/verified"))]
+        (if valid (cp-capture-with-required out-path output-cid proof-path proof-cid)
+          (let [x (jn-say "job-output/capture-proof-refused")] 1))))))
 
 (defn job-output-proof-verify-main [] :i64
   (let [store (jn-arg 0) output-cid (jn-arg 1) proof-cid (jn-arg 2) did (jn-arg 3) job (jn-arg 4)]
