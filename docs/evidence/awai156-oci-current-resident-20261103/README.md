@@ -36,3 +36,7 @@ on the current retention-refresh branch. Every path changed by the original OCI
 commits matched the earlier OCI candidate byte-for-byte after replay. This is a
 source comparison only: the combined artifact, CI, model loader and governor
 have not been rebuilt or qualified.
+
+After the retention-refresh, cron and job-output branches merged into main,
+the OCI commits were replayed again on resident commit `e41be98`. This does not
+extend the scope of the earlier measurements.
