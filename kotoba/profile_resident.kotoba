@@ -254,9 +254,16 @@
 
 ;; The work directory and GitHub CLI are invocation arguments rather than
 ;; config fields; check them before the archive creates files or pushes.
+(defn- rt-work-resident-safe? [cfg :vector-i64 work :string] :bool
+  (let [runtime (cp-str cfg 0 "runtimeRoot") cache (cp-str cfg 0 "cache") store (cp-str cfg 0 "store")]
+    (and (cp-safe-absolute? runtime) (cp-safe-absolute? cache) (cp-safe-absolute? store)
+         (not (ga-path-overlap? work runtime)) (not (ga-path-overlap? work cache))
+         (not (ga-path-overlap? work store)))))
+
 (defn- rt-archive-paths-safe? [cfg :vector-i64 work :string gh :string] :bool
   (let [ack (cp-str cfg 0 "archiveAck")]
     (and (rt-ack-safe? cfg "") (cp-safe-absolute? work) (cp-safe-absolute? gh)
+         (rt-work-resident-safe? cfg work)
          (rt-ack-dir-safe? ack work) (rt-ack-file-safe? ack gh))))
 
 ;; Archive an admitted head under the resident's local lock, then publish the
