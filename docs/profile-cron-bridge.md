@@ -339,3 +339,11 @@ reconcile the same turn. Path-component boundaries distinguish `/work` from
 and protection against symlinks, hard links or concurrent mutation. The
 [bounded fixture](evidence/awai150-cron-work-layout-20261103/) uses stubbed
 storage and archive calls and checks a guard-bypass negative control.
+
+Request installation and head readiness now refuse a remaining `.tmp` or an
+unknown existence result, even when the current request already matches or is
+marked consumed. This prevents that ambiguous replacement from being treated
+as permission to dispatch or advance the cursor. The
+[Mac diagnostic fixture](evidence/awai150-request-pending-20261103/) tests
+both checks with real local file existence and stubbed authority/transport.
+The host must still provide exclusive path ownership and reconciliation.
