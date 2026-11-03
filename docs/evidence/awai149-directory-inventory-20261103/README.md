@@ -1,0 +1,7 @@
+# Darwin inventory parser diagnostic
+
+The parser consumes the bounded `ADI1` hex frame emitted by the fixed Darwin directory helper in kotoba-lang/amu#1805. It verifies framing, lengths, records, inode presence, file types, duplicate names and an exact allowed-name set selected by the caller's asset mask. A matching frame is not proof unless a trusted private host binds the helper's successful exit and output to the same open directory under exclusive control; stdin and asset masks can otherwise be forged.
+
+On this Mac, a diagnostic native FS2 host passed actual helper output into the compiled parser. The required synthetic assets, weights and receipt matched. An unknown file, symlink replacing a required file, missing required file, optional asset absent from the mask, truncated or uppercase input, incorrect mask, wrong magic, empty input, incorrect frame length, zero record length, and duplicate directory entry were refused. Selecting the present optional asset in the mask matched. The helper independently refused an over-limit directory.
+
+This component is not connected to `model-artifact-recover-main`. That recovery candidate still cannot reject unlisted directory entries through FS2 alone. A production host must validate the asset mask against the authenticated OCI artifact, bind the directory FD and helper result, enforce exclusive ownership throughout recovery, and integrate with the native resource governor. No real model or service was deployed.
