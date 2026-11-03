@@ -36,6 +36,15 @@
   (or (= a b) (= (string-index-of a (str b "/")) 0)
       (= (string-index-of b (str a "/")) 0)))
 
+;; Archive staging must not add or replace files inside the live runtime,
+;; cache, or checkpoint store, including when a parent is proposed as work.
+;; Path aliases remain the private host's responsibility.
+(defn- nc-work-resident-safe? [cfg :vector-i64 work :string] :bool
+  (let [runtime (cp-str cfg 0 "runtimeRoot") cache (cp-str cfg 0 "cache") store (cp-str cfg 0 "store")]
+    (and (cp-safe-absolute? runtime) (cp-safe-absolute? cache) (cp-safe-absolute? store)
+         (not (nc-path-overlap? work runtime)) (not (nc-path-overlap? work cache))
+         (not (nc-path-overlap? work store)))))
+
 (defn- nc-work-paths-safe? [before :string after :string marker :string cursor :string ack :string] :bool
   (let [pending (str cursor ".pending") intent (str cursor ".intent") last (str cursor ".last") ack-tmp (str ack ".tmp")]
     (not (or (nc-path-overlap? before after)
@@ -96,6 +105,7 @@
             (not (= plan "bridge/ok")) "cron-resident/plan-refused"
             (or (not (cp-hex? job 64))
                 (not (nc-work-paths-safe? work-before work-after marker cursor-path (cp-str cfg 0 "archiveAck")))
+                (not (nc-work-resident-safe? cfg work-before)) (not (nc-work-resident-safe? cfg work-after))
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path marker)
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".pending"))
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".intent"))
@@ -154,6 +164,7 @@
                 (not (cc-recovery-ready? cursor-path cursor))
                 (not (= (cp-fs "D" (str (cp-str cfg 0 "request") ".tmp") "") "0"))) "cron-resident/recovery-unknown"
             (or (not (nc-work-paths-safe? work-before work-after marker cursor-path (cp-str cfg 0 "archiveAck")))
+                (not (nc-work-resident-safe? cfg work-before)) (not (nc-work-resident-safe? cfg work-after))
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path marker)
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".pending"))
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".intent"))
