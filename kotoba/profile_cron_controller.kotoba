@@ -120,19 +120,71 @@
                                   (if (not (= (ln-field new-archive 0) "resident-archive/confirmed")) "cron-resident/archive-pending"
                                     (nc-advance cfg definition pin cursor-path cursor source slot))))))))))))))))
 
+;; Explicit recovery under the same writer lock. Reconstruct the request for
+;; the current slot (the minute before a matching slot is sufficient to
+;; validate it), bind it to the signed head, and independently read the
+;; archive back before retiring the local cursor intent. No inference runs.
+(defn- nc-recovery-cycle [cfg :vector-i64 config-path :string definition-path :string pin :string cursor-path :string source-path :string
+                          state :string work-before :string work-after :string repo :string gh :string] :string
+  (if (or (not (cp-safe-absolute? definition-path)) (not (cp-safe-absolute? cursor-path))
+          (not (cp-safe-absolute? source-path)) (not (cp-safe-absolute? state))
+          (not (cp-safe-absolute? work-before)) (not (cp-safe-absolute? work-after)) (not (cp-safe-absolute? gh))
+          (= definition-path config-path) (= source-path config-path) (= cursor-path config-path)
+          (= cursor-path definition-path) (= cursor-path source-path)
+          (nc-resident-path? cfg definition-path) (nc-resident-path? cfg cursor-path) (nc-resident-path? cfg source-path)
+          (= definition-path (cp-str cfg 0 "archiveAck")) (= cursor-path (cp-str cfg 0 "archiveAck"))
+          (= source-path (cp-str cfg 0 "archiveAck"))
+          (= definition-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
+          (= cursor-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
+          (= source-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
+          (not (cp-exists? definition-path)) (not (cp-exists? cursor-path)) (not (cp-exists? source-path))
+          (not (= (cp-fs "D" (str cursor-path ".pending") "") "0"))
+          (not (= (cp-fs "D" (str cursor-path ".intent") "") "1")))
+    "cron-resident/recovery-unknown"
+    (let [definition (cp-read definition-path) cursor (cp-read cursor-path) source (cp-read source-path)
+          now (rt-now) slot (cp-num cursor 0 "slot") prior (if (>= slot 60000) (- slot 60000) -1)
+          prior-cursor (if (>= prior 0) (cc-cursor pin prior) (vector-alloc 0))
+          plan (if (and (>= prior 0) (= (cc-cursor-problem cursor pin now) "cursor/ok"))
+                 (br-problem cfg definition pin prior-cursor source now) "cursor/invalid")
+          job (if (= plan "bridge/ok") (verified-cron-job-id true now prior slot pin definition) "")
+          marker (str state "/dispatch-" job) request (if (= plan "bridge/ok") (br-request definition pin prior-cursor now) (vector-alloc 0))
+          head (rt-read-head cfg (cp-str cfg 0 "head"))]
+      (cond (or (not (= plan "bridge/ok")) (not (= (br-slot definition prior-cursor) slot))
+                (not (cp-hex? job 64)) (not (rt-admitted-head? cfg head)) (not (br-completed? head request))
+                (not (cc-recovery-ready? cursor-path cursor))
+                (not (= (cp-fs "D" (str (cp-str cfg 0 "request") ".tmp") "") "0"))) "cron-resident/recovery-unknown"
+            (or (not (nc-work-paths-safe? work-before work-after marker cursor-path (cp-str cfg 0 "archiveAck")))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path marker)
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".pending"))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".intent"))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".last"))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path work-before)
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path work-after)) "cron-resident/path-refused"
+            :else
+            (let [archive (rt-archive-native cfg work-before repo gh)
+                  current (rt-read-head cfg (cp-str cfg 0 "head"))]
+              (cond (not (= (ln-field archive 0) "resident-archive/confirmed")) "cron-resident/recovery-unknown"
+                    (not (= (ln-field archive 1) (cp-str head 0 "checkpoint"))) "cron-resident/recovery-unknown"
+                    (not (= (cp-text head) (cp-text current))) "cron-resident/recovery-unknown"
+                    (not (= (br-head-problem cfg current) "bridge/head-ready")) "cron-resident/recovery-unknown"
+                    (not (br-completed? current request)) "cron-resident/recovery-unknown"
+                    (not (= (cc-recover cursor-path cursor) "cursor/recovered")) "cron-resident/recovery-unknown"
+                    :else (str "cron-resident/recovered " slot)))))))
+
 ;; An unknown or refused cycle must be visible to the host as a failure even
 ;; when the local lock was released. Exit success only for the two terminal
 ;; outcomes that need no reconciliation.
 (defn- nc-exit-code [result :string released :bool] :i64
   (if (not released) 2
-    (if (or (= result "cron-resident/idle") (= (ln-field result 0) "cron-resident/completed")) 0 1)))
+    (if (or (= result "cron-resident/idle") (= (ln-field result 0) "cron-resident/completed")
+            (= (ln-field result 0) "cron-resident/recovered")) 0 1)))
 
 (defn profile-cron-controller-main [] :i64
   (let [config (cp-arg 0) definition (cp-arg 1) pin (cp-arg 2) cursor (cp-arg 3) source (cp-arg 4)
-        state (cp-arg 5) work-before (cp-arg 6) work-after (cp-arg 7) repo (cp-arg 8) gh (cp-arg 9)
+        state (cp-arg 5) work-before (cp-arg 6) work-after (cp-arg 7) repo (cp-arg 8) gh (cp-arg 9) mode (cp-arg 10)
         cfg (if (and (cp-safe-absolute? config) (cp-exists? config)) (cp-read config) (vector-alloc 0))
         head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
-    (if (or (not (json-valid? cfg)) (not (json-canonical? cfg)) (not (rt-lock-config-safe? cfg config))
+    (if (or (not (or (= mode "") (= mode "recover"))) (not (json-valid? cfg)) (not (json-canonical? cfg)) (not (rt-lock-config-safe? cfg config))
             (not (nc-ack-safe? cfg config))
             (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
             (not (= (cp-num cfg 0 "intervalMs") 86400000))
@@ -141,7 +193,9 @@
       (let [z (cp-say "cron-resident/config-refused")] 2)
       (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
         (let [z (cp-say "cron-resident/local-writer-busy")] 2)
-        (let [result (nc-cycle cfg config definition pin cursor source state work-before work-after repo gh)
+        (let [result (if (= mode "recover")
+                       (nc-recovery-cycle cfg config definition pin cursor source state work-before work-after repo gh)
+                       (nc-cycle cfg config definition pin cursor source state work-before work-after repo gh))
               release (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")
               z (cp-say (if release result "cron-resident/local-unlock-failed"))]
           (nc-exit-code result release))))))
