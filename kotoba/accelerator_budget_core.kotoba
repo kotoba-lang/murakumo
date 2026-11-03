@@ -201,7 +201,13 @@
   ;; the two sides of this comparison measure over windows the host controls;
   ;; keeping it a weighted count means the host cannot silently change the
   ;; meaning by changing one window and not the other.
-  (+ queued (quot (* served-recent served-weight-milli) 1000)))
+  ;; Unknown or unrepresentable input must not masquerade as idle demand.
+  ;; Refuse overflow even if division would later bring the product in range.
+  (if (or (< queued 0) (< served-recent 0) (< served-weight-milli 0)) -1
+    (if (and (> served-weight-milli 0)
+             (> served-recent (quot 9223372036854775807 served-weight-milli))) -1
+      (let [weighted (quot (* served-recent served-weight-milli) 1000)]
+        (if (> weighted (- 9223372036854775807 queued)) -1 (+ queued weighted))))))
 
 (defn demand-window-default-s [] :i64
   ;; One hour. Short enough that a device stops being held by yesterday, long
@@ -226,13 +232,20 @@
 (defn idle? [demand :i64 idle-count :i64 idle-threshold :i64] :bool
   ;; Idle is BOTH: nothing to do right now, and that has held for long enough
   ;; to be a fact rather than a gap between two requests.
-  (if (> demand 0) false (if (>= idle-count idle-threshold) true false)))
+  (and (= demand 0) (>= idle-count 0) (> idle-threshold 0)
+       (>= idle-count idle-threshold)))
+
+(defn- demand-comparison-safe? [challenger :i64 holder :i64 margin-milli :i64] :bool
+  (and (>= challenger 0) (>= holder 0) (>= margin-milli 0)
+       (<= challenger (quot 9223372036854775807 1000))
+       (or (= margin-milli 0) (<= holder (quot 9223372036854775807 margin-milli)))))
 
 (defn challenger-wins? [challenger :i64 holder :i64 margin-milli :i64] :bool
   ;; Strictly greater, by the margin. Equal demand leaves the device where it
   ;; is -- incumbency is the tie-break, because moving costs a reload and
   ;; staying costs nothing.
-  (if (> (* challenger 1000) (* holder margin-milli)) true false))
+  (and (demand-comparison-safe? challenger holder margin-milli)
+       (> (* challenger 1000) (* holder margin-milli))))
 
 (defn starvation-losses-default [] :i64
   ;; How many consecutive decisions a workload may lose before its queued work
@@ -257,7 +270,7 @@
   ;; score. Recent completions are evidence that demand recurs; only a queue
   ;; means someone is waiting right now. A workload that is merely unpopular
   ;; must not accumulate a claim on the device while it has nothing to run.
-  (if (< challenger-queued 1)
+  (if (or (< challenger-queued 1) (< loss-streak 0))
     false
     (if (>= loss-streak (starvation-losses-default)) true false)))
 
@@ -265,7 +278,7 @@
   [holder-demand :i64 challenger-demand :i64 challenger-queued :i64
    idle-count :i64 loss-streak :i64] :i64
   ;; 0 keep / 1 revoke-idle / 2 revoke-outbid / 3 keep-no-challenger
-  ;; 4 revoke-starved
+  ;; 4 revoke-starved / 5 invalid or unrepresentable observation (keep)
   ;;
   ;; Four reasons, kept apart because each calls for different operator
   ;; action: an idle holder should release and stay released; an outbid holder
@@ -275,27 +288,26 @@
   ;;
   ;; Thresholds are read from this namespace rather than passed in, so two
   ;; callers cannot compare the same two workloads under different policies.
-  (if (< challenger-demand 1)
-    (if (idle? holder-demand idle-count (idle-samples-default)) 1 3)
-    (if (starved? challenger-queued loss-streak)
-      4
-      (if (idle? holder-demand idle-count (idle-samples-default))
-        1
-        (if (challenger-wins? challenger-demand holder-demand
-                              (margin-default-milli))
-          2
-          0)))))
+  (cond (or (< holder-demand 0) (< challenger-demand 0) (< challenger-queued 0)
+            (< idle-count 0) (< loss-streak 0)) 5
+        (< challenger-demand 1) (if (idle? holder-demand idle-count (idle-samples-default)) 1 3)
+        (starved? challenger-queued loss-streak) 4
+        (idle? holder-demand idle-count (idle-samples-default)) 1
+        (not (demand-comparison-safe? challenger-demand holder-demand (margin-default-milli))) 5
+        (challenger-wins? challenger-demand holder-demand (margin-default-milli)) 2
+        :else 0))
 
 (defn revoke?
   [holder-demand :i64 challenger-demand :i64 challenger-queued :i64
    idle-count :i64 loss-streak :i64] :bool
   (let [c (revoke-code holder-demand challenger-demand challenger-queued
                        idle-count loss-streak)]
-    (if (= c 0) false (if (= c 3) false true))))
+    (or (= c 1) (= c 2) (= c 4))))
 
 (defn revoke-name [code :i64] :string
   (if (= code 0) "keep"
     (if (= code 1) "revoke-idle"
       (if (= code 2) "revoke-outbid"
         (if (= code 3) "keep-no-challenger"
-          (if (= code 4) "revoke-starved" "unknown-code"))))))
+          (if (= code 4) "revoke-starved"
+            (if (= code 5) "invalid-observation" "unknown-code")))))))
