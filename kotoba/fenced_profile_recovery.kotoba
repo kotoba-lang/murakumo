@@ -27,6 +27,25 @@
         (if previous (cp-text (cp-read (cp-str plan 0 "previousLease")))
           (lease-text node task 0 epoch (+ now (lease-ttl)) (cp-num plan 0 "revision"))) ports token))))
 
+;; Restore and local writes can outlast the first lease observation. Relearn
+;; the same epoch after restore, before inference. This is still not an atomic
+;; effect fence or a guarantee that a previously started workload has stopped.
+(defn- rf-dispatch [plan :vector-i64 pins :vector-i64 contract :vector-i64
+                    lease :vector-i64 dest :string] :string
+  (let [saved (cp-write (cp-str plan 0 "observedLease") lease)
+        runtime (if saved (cp-load (cp-str plan 0 "store") (cp-str contract 0 "environment")) (vector-alloc 0))
+        fresh (if saved (cp-bytes (rf-learn plan false)) (vector-alloc 0)) now (rf-now)
+        task (cp-str plan 0 "task") node (cp-str plan 0 "node") epoch (cp-num plan 0 "epoch")
+        budget (rf-budget (cp-num lease 0 "until") (cp-num pins 0 "until") now)]
+    (cond (not saved) "recovery/lease-record-failed"
+          (<= (cp-num pins 0 "until") now) "recovery/retention-expired"
+          (or (not (= (cp-text lease) (cp-text fresh)))
+              (not (= (recovery-lease-problem fresh task node epoch now) "recovery/lease-admitted")))
+            "recovery/lease-lost-before-dispatch"
+          (< budget 1) "profile/budget-refused"
+          :else (let [event (cp-say "recovery/lease-and-replicas-admitted")]
+                  (pr-step-bounded dest runtime (cp-str plan 0 "cache") (cp-num contract 0 "next") budget)))))
+
 (defn- rf-run [plan :vector-i64 restore :bool] :string
   (let [store (cp-str plan 0 "store") root (cp-str plan 0 "checkpoint")
         pins (cp-read (cp-str plan 0 "pins")) contract (cp-read (cp-str plan 0 "contract"))
@@ -50,19 +69,17 @@
           (let [lease (cp-bytes (rf-learn plan false))
                 admitted (recovery-lease-problem lease task node epoch (rf-now))]
             (if (not (= admitted "recovery/lease-admitted")) admitted
-          (let [dest (cp-str plan 0 "dest") ready (if restore (cp-materialize store checkpoint dest) "checkpoint/restored")
-                budget (rf-budget (cp-num lease 0 "until") (cp-num pins 0 "until") (rf-now))]
+          (let [dest (cp-str plan 0 "dest") ready (if restore (cp-materialize store checkpoint dest) "checkpoint/restored")]
             (if (not (= ready "checkpoint/restored")) ready
-              (let [saved (cp-write (cp-str plan 0 "observedLease") lease)
-                    event (cp-say "recovery/lease-and-replicas-admitted")
-                    result (if saved (pr-step-bounded dest (cp-load store (cp-str contract 0 "environment"))
-                             (cp-str plan 0 "cache") (cp-num contract 0 "next") budget) "recovery/lease-record-failed")
-                    fresh (cp-bytes (rf-learn plan false)) after (rf-now)]
-                (if (<= (cp-num pins 0 "until") after) "recovery/retention-expired-proposal-retained"
-                (if (or (not (= (cp-text lease) (cp-text fresh)))
-                        (not (= (recovery-lease-problem fresh task node epoch after) "recovery/lease-admitted")))
-                  "recovery/lease-lost-proposal-retained"
-                  result))))))))))
+              (let [result (rf-dispatch plan pins contract lease dest)
+                    completed (= (ln-field result 0) "profile/step-completed")
+                    fresh (if completed (cp-bytes (rf-learn plan false)) (vector-alloc 0)) after (rf-now)]
+                (cond (not completed) result
+                      (<= (cp-num pins 0 "until") after) "recovery/retention-expired-proposal-retained"
+                      (or (not (= (cp-text lease) (cp-text fresh)))
+                          (not (= (recovery-lease-problem fresh task node epoch after) "recovery/lease-admitted")))
+                        "recovery/lease-lost-proposal-retained"
+                      :else result)))))))))
 
 (defn- rf-previous-value-status [previous :vector-i64 expected :vector-i64 node :string task :string epoch :i64 now :i64] :i64
   (cond (not (= (cp-text previous) (cp-text expected))) -1
