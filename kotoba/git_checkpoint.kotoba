@@ -270,7 +270,20 @@
               cid (if (and (not (= mode "")) (cp-real-parents? repo path false)) (cp-put store (cp-read (str repo "/" path))) "")]
           (if (= cid "") "" (recur (+ i 1) path (str out (if (= i 0) "" ",") "{\"cid\":\"" cid "\",\"mode\":\"" mode "\",\"path\":\"" path "\"}"))))))))
 
-(defn- cp-capture [] :i64
+(defn- cp-required-files? [list :vector-i64 a-path :string a-cid :string b-path :string b-cid :string] :bool
+  (and (json-canonical? list) (= (json-kind list 0) 2)
+       (checkpoint-path? a-path) (checkpoint-path? b-path) (not (= a-path b-path))
+       (cp-raw? a-cid) (cp-raw? b-cid)
+       (loop [i 0 a false b false]
+         (if (= i (json-count list 0)) (and a b)
+           (let [u (json-element list 0 i) path (cp-str list u "path") cid (cp-str list u "cid") mode (cp-str list u "mode")]
+             (recur (+ i 1) (or a (and (= path a-path) (= cid a-cid) (= mode "644")))
+                              (or b (and (= path b-path) (= cid b-cid) (= mode "644")))))))))
+
+;; An empty first required path preserves the ordinary checkpoint CLI. The
+;; trusted job adapter supplies all four pins, which must match the files
+;; actually captured before the checkpoint is published.
+(defn- cp-capture-with-required [a-path :string a-cid :string b-path :string b-cid :string] :i64
   (let [repo (cp-arg 1) store (cp-arg 2) seed (cp-seed (cp-arg 3))
         epoch (cp-int (cp-arg 9)) parent (cp-arg 10) task (cp-arg 11)]
     (if (or (not (cp-safe-absolute? repo)) (not (cp-safe-absolute? store)) (not (= (vector-count seed) 32))
@@ -303,6 +316,7 @@
                 envelope (cp-bytes (str "{\"payload\":" payload ",\"signature\":\"" (sign-statement seed payload) "\"}"))
                 verdict (checkpoint-problem envelope did profile policy environment epoch parent task)]
             (if (or (= bundle "") (= profile-cid "") (= policy "") (= environment "") (= summary "") (= us "")
+                    (and (not (= a-path "")) (not (cp-required-files? (cp-bytes us) a-path a-cid b-path b-cid)))
                     (not (= status (cp-git repo "statusARG_SEP--porcelain=v1ARG_SEP--untracked-files=no")))
                     (not (= head-r (cp-git repo "rev-parseARG_SEP--verifyARG_SEPHEAD"))))
               (cp-result "checkpoint/capture-incomplete-or-busy")
@@ -310,6 +324,8 @@
                 (let [cid (cp-put store envelope)]
                   (if (= cid "") (cp-result "checkpoint/root-publication-failed")
                     (cp-result (str "checkpoint/created " cid "\n" (cp-text envelope)))))))))))))
+
+(defn- cp-capture [] :i64 (cp-capture-with-required "" "" "" ""))
 
 (defn- cp-closure? [store :string b :vector-i64] :bool
   (let [p (cp-payload b) us (json-member b p "untracked")]

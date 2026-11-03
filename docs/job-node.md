@@ -170,6 +170,14 @@ unknown outcome on partial failure; the host must reconcile rather than retry
 or remove files blindly. The host still supplies both paths in the explicit
 checkpoint allowlist, verifies the resulting checkpoint and remote archive,
 and protects the private repository while the files have mode 0644.
+`job-output-checkpoint-capture-main` composes that proof verification with
+checkpoint capture. It accepts the ordinary capture arguments in positions
+1–11 and pins output path/CID, proof path/CID, signer DID and job in positions
+12–17. The actual captured allowlist must contain both path/CID pairs before
+the signed checkpoint root is published. The host must serialize access and
+protect the private repository and store; a failed capture can leave local
+Git or block artifacts to reconcile. This candidate does not push to GitHub,
+advance a cursor, or qualify the captured process/runtime.
 Log and existing block reads are bounded, and storage synchronizes the block
 and its directory. The host must keep both paths exclusively owned during the
 operation: separate path-based metadata and reads do not establish identity

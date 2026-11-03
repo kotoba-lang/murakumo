@@ -9,7 +9,8 @@
         output-cid (cp-cid (jo-decode output)) proof-cid (cp-cid proof)
         checkpoint (cp-bytes (str "{\"payload\":{\"untracked\":[{\"cid\":\"" output-cid
           "\",\"mode\":\"644\",\"path\":\"output\"},{\"cid\":\"" proof-cid
-          "\",\"mode\":\"644\",\"path\":\"proof\"}]}}"))]
+          "\",\"mode\":\"644\",\"path\":\"proof\"}]}}"))
+        required (json-canonical-bytes checkpoint (json-member checkpoint (cp-payload checkpoint) "untracked"))]
     (and (= (jo-verdict log did job) "job-output/verified")
          (= (jo-verdict (str log "receipt {}\n") did job) "job-output/missing-or-duplicate")
          (= (jo-verdict (str "receipt {\"a\":\nsignature " sig "\noutput-base64url " output "\n") did job) "job-output/receipt")
@@ -24,6 +25,9 @@
          (not (jo-checkpoint-links? checkpoint "other" output-cid "proof" proof-cid))
          (not (jo-checkpoint-links? checkpoint "output" proof-cid "proof" output-cid))
          (not (jo-checkpoint-links? checkpoint "output" output-cid "output" proof-cid))
+         (cp-required-files? required "output" output-cid "proof" proof-cid)
+         (not (cp-required-files? required "output" proof-cid "proof" output-cid))
+         (not (cp-required-files? required "output" output-cid "other" proof-cid))
          (jo-overlap? "results/a" "results/a/b")
          (jo-overlap? "results/a/b" "results/a")
          (not (jo-overlap? "results/a" "results/ab"))
