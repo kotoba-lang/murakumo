@@ -50,6 +50,12 @@
   (testing "transport failure keeps ssh's own code"
     (is (= {:exit 255 :ssh-exit 255 :out "" :err "connection refused"}
            (tunnel/sh-result {:exit 255 :out "" :err " connection refused\n"}))))
+  (testing "missing status never becomes success"
+    (is (= {:exit 255 :ssh-exit 0 :out "partial" :err ""}
+           (tunnel/sh-result {:exit 0 :out "partial" :err nil}))))
+  (testing "transport failure is not overridden by a prior status marker"
+    (is (= {:exit 255 :ssh-exit 255 :out "" :err ""}
+           (tunnel/sh-result {:exit 255 :out "__murakumo_rc=0\n" :err nil}))))
   (testing "success still looks like success, with the sentinel stripped"
     (is (= {:exit 0 :ssh-exit 0 :out "ok" :err ""}
            (tunnel/sh-result {:exit 0 :out " ok\n__murakumo_rc=0\n" :err nil})))))

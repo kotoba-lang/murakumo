@@ -1,0 +1,324 @@
+;; Read-only diagnostic observer. Compose with tunnel-core. This is not a
+;; resource governor, admission decision, trusted heartbeat, or SSH host.
+;; The caller must authorize the node/address pair and supply trusted key paths;
+;; the host must constrain process execution, output size, and execution time.
+(ns murakumo.fleet-ssh-observe
+  (:export [observe-inputs? observe-ssh-request observe-result observe-reply-reason observe-memory-swap observe-pressure observe-disk observe-model-files observe-node observe-native-snapshot observe-fixed-snapshot observe-native-node fleet-ssh-observe-main fleet-model-observe-main fleet-host-observe-main fleet-native-observe-main]))
+
+(defn- ob-bytes [s :string] :vector-i64
+  (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- ob-name? [s :string] :bool
+  (let [v (ob-bytes s) n (vector-count v)]
+    (and (> n 0) (<= n 32) (not (= (vector-at v 0) 45))
+         (not (= (vector-at v (- n 1)) 45))
+         (loop [i 0] (if (= i n) true
+           (let [c (vector-at v i)]
+             (if (or (and (>= c 97) (<= c 122)) (and (>= c 48) (<= c 57)) (= c 45))
+               (recur (+ i 1)) false)))))))
+(defn- ob-path? [s :string] :bool
+  (let [v (ob-bytes s) n (vector-count v)]
+    (and (> n 1) (<= n 255) (= (vector-at v 0) 47)
+         (not (= (vector-at v (- n 1)) 47))
+         (< (string-index-of s "..") 0) (< (string-index-of s "//") 0)
+         (< (string-index-of s "_SEP") 0)
+         (loop [i 0] (if (= i n) true
+           (let [c (vector-at v i)]
+             (if (or (and (>= c 97) (<= c 122)) (and (>= c 65) (<= c 90))
+                     (and (>= c 48) (<= c 57)) (= c 47) (= c 45) (= c 46) (= c 95))
+               (recur (+ i 1)) false)))))))
+;; Accept only canonical IPv4 addresses in Tailscale's 100.64.0.0/10 range.
+(defn- ob-ip? [s :string] :bool
+  (let [v (ob-bytes s) n (vector-count v)]
+    (and (>= n 9) (<= n 15)
+      (loop [i 0 part 0 val 0 digits 0 first-zero false]
+        (if (= i n)
+          (and (= part 3) (> digits 0) (<= val 255))
+          (let [c (vector-at v i)]
+            (cond
+              (= c 46) (if (and (< part 3) (> digits 0) (<= val 255)
+                                  (if (= part 0) (= val 100)
+                                    (if (= part 1) (and (>= val 64) (<= val 127)) true)))
+                         (recur (+ i 1) (+ part 1) 0 0 false) false)
+              (and (>= c 48) (<= c 57))
+                (if (or (>= digits 3) (and first-zero (> digits 0))) false
+                  (recur (+ i 1) part (+ (* val 10) (- c 48)) (+ digits 1) (and (= digits 0) (= c 48))))
+              :else false)))))))
+(defn observe-inputs? [node :string ip :string identity :string known :string] :bool
+  (and (ob-name? node) (ob-ip? ip) (ob-path? identity) (ob-path? known)))
+(defn- ob-a [] :string "ARG_SEP")
+(defn- ob-ssh-command [node :string ip :string identity :string known :string cmd :string] :string
+  (let [a (ob-a)]
+    (str "/usr/bin/ssh" a "-F" a "/dev/null" a "-i" a identity
+         a "-o" a "IdentitiesOnly=yes" a "-o" a "IdentityAgent=none"
+         a "-o" a "BatchMode=yes" a "-o" a "ConnectTimeout=3"
+         a "-o" a "ServerAliveInterval=1" a "-o" a "ServerAliveCountMax=2"
+         a "-o" a "StrictHostKeyChecking=yes" a "-o" a (str "UserKnownHostsFile=" known)
+         a "-o" a "GlobalKnownHostsFile=/dev/null" a "-o" a "VerifyHostKeyDNS=no"
+         a "-o" a "UpdateHostKeys=no"
+         a "-o" a (str "HostKeyAlias=" node) a "-o" a "ClearAllForwardings=yes"
+         a "-o" a "RequestTTY=no" a (str node "@" ip) a (wrap-cmd cmd))))
+;; The only permitted commands are selected by this component, never by a
+;; remote response or checkpoint. An empty request means invalid input/mode.
+(defn observe-ssh-request [node :string ip :string identity :string known :string mode :string] :string
+  (let [base (str "/Users/" node "/.murakumo/awai147-mtplx-bonsai/")
+        cmd (cond (= mode "memory-swap") "/usr/sbin/sysctl -n hw.memsize vm.swapusage"
+                  (= mode "native-snapshot") (str "/Users/" node "/.murakumo/bin/fleet-host-observer")
+                  (= mode "model-files") (str "/usr/bin/stat -f '%HT %z %N' " base "model.safetensors " base "mtp.safetensors")
+                  (= mode "pressure") "/usr/bin/memory_pressure -Q"
+                  (= mode "disk") "/bin/df -Pk /"
+                  :else "")]
+    (if (or (= cmd "") (not (observe-inputs? node ip identity known))) ""
+      (ob-ssh-command node ip identity known cmd))))
+;; Host response is <exit> LF <stdout>. Empty or ambiguous output is refusal.
+;; Output is untrusted observation only; neither the in-band marker nor these
+;; values confer admission authority. The host must enforce capture bounds.
+(defn- ob-safe-output? [s :string] :bool
+  (let [v (ob-bytes s) n (vector-count v)]
+    (and (> n 0) (<= n 8190)
+      (loop [i 0] (if (= i n) true
+        (let [c (vector-at v i)]
+          (if (or (= c 10) (and (>= c 32) (<= c 126))) (recur (+ i 1)) false)))))))
+(defn observe-result [reply :string] :string
+  (if (or (> (string-byte-length reply) 8192) (not (= (string-index-of reply "0\n") 0))) ""
+    (let [raw (string-substring reply 2 (string-byte-length reply))
+          output (if (= (remote-exit raw 0) 0) (remote-output raw 0) "")]
+      (if (ob-safe-output? output) output ""))))
+
+(defn observe-reply-reason [reply :string] :string
+  ;; Classify only a bounded, canonical host exit status. Never expose stderr,
+  ;; partial metrics, arbitrary host text or a fabricated remote success.
+  (let [n (string-byte-length reply) i (if (<= n 8192) (string-index-of reply "\n") -1)
+        word (if (and (> i 0) (<= i 3)) (string-substring reply 0 i) "")
+        code (if (= word "") -1 (parse-digits word))]
+    (cond (> n 8192) "reply-oversize"
+          (or (< code 0) (> code 255) (not (= word (i64-str code)))) "host-response-invalid"
+          (not (= code 0)) (str "transport-exit-" (i64-str code))
+          (= (observe-result reply) "") "remote-output-unknown"
+          :else "ok")))
+(defn- ob-probe [node :string ip :string identity :string known :string mode :string] :string
+  (let [request (observe-ssh-request node ip identity known mode)]
+    (if (= request "") "error\ninput-invalid"
+      (let [reply (typed-cap-call 20 :string :string request) reason (observe-reply-reason reply)]
+        (if (= reason "ok") (str "ok\n" (observe-result reply)) (str "error\n" reason))))))
+;; Tagged internal result avoids confusing remote bytes with local error text.
+(defn- ob-ok? [s :string] :bool (= (string-index-of s "ok\n") 0))
+(defn- ob-value [s :string] :string (string-substring s 3 (string-byte-length s)))
+(defn- ob-failure [mode :string s :string] :string
+  (str "error\n" mode " " (if (= (string-index-of s "error\n") 0)
+                              (string-substring s 6 (string-byte-length s)) "host-response-invalid")))
+;; sysctl -n emits exactly two lines: positive physical byte count then swap
+;; summary. No partial or reordered value may be mistaken for a complete read.
+(defn observe-memory-swap [raw :string] :string
+  (let [n (string-byte-length raw) cut (string-index-of raw "\n")
+        memory (if (and (> cut 0) (<= cut 16)) (string-substring raw 0 cut) "")
+        swap (if (and (> cut 0) (< (+ cut 1) n)) (string-substring raw (+ cut 1) n) "")
+        tail (string-index-of swap "\n")]
+    (if (and (ob-safe-output? raw) (> (string-length memory) 0)
+             (not (= (string-substring memory 0 1) "0"))
+             (loop [i 0] (if (= i (string-length memory)) true
+               (let [c (string-code-point-at memory i)]
+                 (if (and (>= c 48) (<= c 57)) (recur (+ i 1)) false))))
+             (> tail 0) (= tail (- (string-byte-length swap) 1))
+             (ob-swap-line? (string-substring swap 0 tail)))
+      (str "memory:\n" memory "\nswap:\n" swap) "")))
+
+;; Only accept a complete, unique percentage line. A percent is still an
+;; untrusted point-in-time diagnostic, not allocatable unified memory.
+(defn observe-pressure [raw :string] :string
+  (let [prefix "System-wide memory free percentage: "
+        at (string-index-of raw prefix) n (string-byte-length raw)
+        start (+ at (string-byte-length prefix))
+        tail (if (and (>= at 0) (< start n)) (string-substring raw start n) "")
+        end (string-index-of tail "%\n")
+        number (if (and (> end 0) (<= end 3)) (string-substring tail 0 end) "")
+        value (if (= number "") -1 (parse-digits number))]
+    (if (and (ob-safe-output? raw) (>= at 0)
+             (or (= at 0) (= (string-substring raw (- at 1) at) "\n"))
+             (= (+ end 2) (string-byte-length tail))
+             (>= value 0) (<= value 100) (= number (i64-str value))) raw "")))
+
+(defn- ob-word [line :string wanted :i64] :string
+  (let [n (string-byte-length line)]
+    (loop [i 0 index 0]
+      (let [start (loop [j i] (if (and (< j n) (= (string-code-point-at line j) 32)) (recur (+ j 1)) j))
+            end (loop [j start] (if (and (< j n) (not (= (string-code-point-at line j) 32))) (recur (+ j 1)) j))]
+        (cond (= start n) "" (= index wanted) (string-substring line start end)
+              :else (recur end (+ index 1)))))))
+(defn- ob-uint? [s :string] :bool
+  (let [n (string-byte-length s)]
+    (and (> n 0) (<= n 15) (or (= n 1) (not (= (string-substring s 0 1) "0")))
+      (loop [i 0] (if (= i n) true
+        (let [c (string-code-point-at s i)]
+          (if (and (>= c 48) (<= c 57)) (recur (+ i 1)) false)))))))
+(defn- ob-swap-size? [s :string] :bool
+  (let [n (string-byte-length s) unit (if (> n 1) (string-substring s (- n 1) n) "")
+        value (if (> n 1) (string-substring s 0 (- n 1)) "")
+        dot (string-index-of value ".")
+        whole (if (< dot 0) value (string-substring value 0 dot))
+        fraction (if (< dot 0) "" (string-substring value (+ dot 1) (string-byte-length value)))]
+    (and (or (= unit "K") (= unit "M") (= unit "G") (= unit "T")) (ob-uint? whole)
+         (or (< dot 0) (and (> (string-byte-length fraction) 0) (<= (string-byte-length fraction) 2)
+                            (loop [i 0] (if (= i (string-byte-length fraction)) true
+                              (let [c (string-code-point-at fraction i)]
+                                (if (and (>= c 48) (<= c 57)) (recur (+ i 1)) false)))))))))
+(defn- ob-swap-line? [line :string] :bool
+  (and (= (ob-word line 0) "total") (= (ob-word line 1) "=") (ob-swap-size? (ob-word line 2))
+       (= (ob-word line 3) "used") (= (ob-word line 4) "=") (ob-swap-size? (ob-word line 5))
+       (= (ob-word line 6) "free") (= (ob-word line 7) "=") (ob-swap-size? (ob-word line 8))
+       (or (= (ob-word line 9) "") (= (ob-word line 9) "(encrypted)")) (= (ob-word line 10) "")))
+;; Require one df -Pk root row and canonical numeric columns. This validates
+;; shape only, not whether filesystem blocks are actually reservable.
+(defn observe-disk [raw :string] :string
+  (let [cut (string-index-of raw "\n") n (string-byte-length raw)
+        header (if (> cut 0) (string-substring raw 0 cut) "")
+        tail (if (and (> cut 0) (< (+ cut 1) n)) (string-substring raw (+ cut 1) n) "")
+        end (string-index-of tail "\n") row (if (> end 0) (string-substring tail 0 end) "")
+        pct (ob-word row 4) plen (string-byte-length pct)
+        num (if (and (> plen 1) (= (string-substring pct (- plen 1) plen) "%"))
+              (string-substring pct 0 (- plen 1)) "")]
+    (if (and (ob-safe-output? raw) (= (ob-word header 0) "Filesystem")
+             (= (ob-word header 1) "1024-blocks") (= (ob-word header 2) "Used")
+             (= (ob-word header 3) "Available") (= (ob-word header 4) "Capacity")
+             (= (ob-word header 5) "Mounted") (= (ob-word header 6) "on") (= (ob-word header 7) "")
+             (> end 0) (= (+ end 1) (string-byte-length tail))
+             (not (= (ob-word row 0) "")) (ob-uint? (ob-word row 1)) (ob-uint? (ob-word row 2))
+             (ob-uint? (ob-word row 3)) (ob-uint? num) (<= (parse-digits num) 100)
+             (= (ob-word row 5) "/") (= (ob-word row 6) "")) raw "")))
+;; Exact ordered paths and positive sizes; SSH exit 0 alone is insufficient.
+;; This is only metadata observation, never a digest or model authorization.
+(defn- ob-size-line? [line :string path :string] :bool
+  (let [prefix "Regular File " n (string-byte-length line)
+        content (if (= (string-index-of line prefix) 0) (string-substring line (string-byte-length prefix) n) "")
+        cut (string-index-of content " ") end (string-byte-length content)
+        size (if (and (> cut 0) (<= cut 15)) (string-substring content 0 cut) "")]
+    (and (> (string-length size) 0) (not (= (string-substring size 0 1) "0"))
+         (= (string-substring content (+ cut 1) end) path)
+         (loop [i 0] (if (= i (string-length size)) true
+           (let [c (string-code-point-at size i)]
+             (if (and (>= c 48) (<= c 57)) (recur (+ i 1)) false)))))))
+(defn observe-model-files [node :string raw :string] :string
+  (let [n (string-byte-length raw) first (string-index-of raw "\n")
+        tail (if (and (> first 0) (< (+ first 1) n)) (string-substring raw (+ first 1) n) "")
+        second (string-index-of tail "\n") base (str "/Users/" node "/.murakumo/awai147-mtplx-bonsai/")]
+    (if (and (ob-name? node) (ob-safe-output? raw) (> first 0) (> second 0)
+             (= second (- (string-byte-length tail) 1))
+             (ob-size-line? (string-substring raw 0 first) (str base "model.safetensors"))
+             (ob-size-line? (string-substring tail 0 second) (str base "mtp.safetensors"))) raw "")))
+;; Three sequential fixed probes, with no partial result on any error. The caller is
+;; responsible for concurrency limits and an independently bounded host.
+(defn- ob-collect [node :string ip :string identity :string known :string] :string
+  (let [memory-swap (ob-probe node ip identity known "memory-swap")]
+    (if (not (ob-ok? memory-swap)) (ob-failure "memory-swap" memory-swap)
+      (let [values (observe-memory-swap (ob-value memory-swap))]
+        (if (= values "") "error\nmemory-swap malformed-output"
+          (let [pressure (ob-probe node ip identity known "pressure")]
+            (if (not (ob-ok? pressure)) (ob-failure "pressure" pressure)
+              (if (= (observe-pressure (ob-value pressure)) "") "error\npressure malformed-output"
+                (let [disk (ob-probe node ip identity known "disk")]
+                  (if (not (ob-ok? disk)) (ob-failure "disk" disk)
+                    (if (= (observe-disk (ob-value disk)) "") "error\ndisk malformed-output"
+                      (str "ok\n" values "pressure:\n" (ob-value pressure) "disk:\n" (ob-value disk)))))))))))))
+(defn observe-node [node :string ip :string identity :string known :string] :string
+  (let [result (ob-collect node ip identity known)] (if (ob-ok? result) (ob-value result) "")))
+
+;; On the remote Mac the native guest asks its explicitly granted host to run
+;; only these fixed executables. The host must bound process time/output and
+;; remove ambient authority; wire 20 support on Darwin is not yet qualified.
+(defn- ob-host-probe [request :string] :string
+  (let [reply (typed-cap-call 20 :string :string request)]
+    (if (or (> (string-byte-length reply) 8192) (not (= (string-index-of reply "0\n") 0))) ""
+      (let [out (string-substring reply 2 (string-byte-length reply))]
+        (if (ob-safe-output? out) out "")))))
+(defn- ob-host-snapshot [] :string
+  (let [memory (ob-host-probe "/usr/sbin/sysctlARG_SEP-nARG_SEPhw.memsizeARG_SEPvm.swapusage")]
+    (if (= (observe-memory-swap memory) "") ""
+      (let [pressure (ob-host-probe "/usr/bin/memory_pressureARG_SEP-Q")]
+        (if (= (observe-pressure pressure) "") ""
+          (let [disk (ob-host-probe "/bin/dfARG_SEP-PkARG_SEP/")]
+            (if (= (observe-disk disk) "") ""
+              (str "__awai_memory__\n" memory "__awai_pressure__\n" pressure "__awai_disk__\n" disk))))))))
+
+;; The receiving native guest checks every section again. The markers and
+;; reported data remain observations, not signed telemetry or reservations.
+(defn observe-native-snapshot [raw :string] :string
+  (let [begin "__awai_memory__\n" pm "__awai_pressure__\n" dm "__awai_disk__\n"
+        n (string-byte-length raw) p (string-index-of raw pm) d (string-index-of raw dm)
+        mstart (string-byte-length begin) pstart (+ p (string-byte-length pm)) dstart (+ d (string-byte-length dm))]
+    (if (or (not (= (string-index-of raw begin) 0)) (< p mstart) (< d pstart) (> dstart n)) ""
+      (let [memory (observe-memory-swap (string-substring raw mstart p))
+            pressure (observe-pressure (string-substring raw pstart d))
+            disk (observe-disk (string-substring raw dstart n))]
+        (if (or (= memory "") (= pressure "") (= disk "")) ""
+          (str memory "pressure:\n" pressure "disk:\n" disk))))))
+
+;; Fixed Darwin host record AOS1 is lowercase hex of a 56-byte little-endian
+;; struct plus LF. Values above the portable exact-integer limit are unknown.
+;; A syntactically valid record still does not authenticate the sender or
+;; establish that any amount is reservable.
+(defn- ob-hex-digit [c :i64] :i64
+  (cond (and (>= c 48) (<= c 57)) (- c 48)
+        (and (>= c 97) (<= c 102)) (- c 87) :else -1))
+(defn- ob-fixed-number [raw :string offset :i64 count :i64] :i64
+  (loop [i (- count 1) total 0]
+    (if (< i 0) total
+      (let [pos (* 2 (+ offset i)) hi (ob-hex-digit (string-code-point-at raw pos))
+            lo (ob-hex-digit (string-code-point-at raw (+ pos 1))) byte (+ (* hi 16) lo)]
+        (if (or (< hi 0) (< lo 0) (> total (quot (- 9007199254740991 byte) 256))) -1
+          (recur (- i 1) (+ (* total 256) byte)))))))
+(defn observe-fixed-snapshot [raw :string] :string
+  (if (or (not (= (string-byte-length raw) 113))
+          (not (= (string-substring raw 112 113) "\n"))
+          (not (= (string-substring raw 0 16) "414f533101000000"))) ""
+    (let [memory (ob-fixed-number raw 8 8) total (ob-fixed-number raw 16 8)
+          avail (ob-fixed-number raw 24 8) used (ob-fixed-number raw 32 8)
+          pressure (ob-fixed-number raw 40 4) block (ob-fixed-number raw 44 4)
+          free (ob-fixed-number raw 48 8)]
+      (if (or (<= memory 0) (< total 0) (< avail 0) (< used 0) (> avail total) (> used total)
+              (< pressure 0) (> pressure 100) (<= block 0) (< free 0)
+              (> free (quot 9007199254740991 block))) ""
+        (str "physical-memory-bytes: " (i64-str memory) "\nswap-total-bytes: " (i64-str total)
+             "\nswap-available-bytes: " (i64-str avail) "\nswap-used-bytes: " (i64-str used)
+             "\nmemorystatus-level: " (i64-str pressure) "\ndisk-available-bytes: " (i64-str (* block free)) "\n")))))
+(defn observe-native-node [node :string ip :string identity :string known :string] :string
+  (let [result (ob-probe node ip identity known "native-snapshot")]
+    (if (ob-ok? result) (observe-native-snapshot (ob-value result)) "")))
+
+(defn fleet-host-observe-main [] :i64
+  (let [extra (typed-cap-call 38 :string :string "0")
+        result (if (= extra "") (ob-host-snapshot) "")
+        out (typed-cap-call 37 :string :string (if (= result "") "host-observation/refused\n" result))]
+    (if (= result "") 1 0)))
+(defn fleet-native-observe-main [] :i64
+  (let [node (typed-cap-call 38 :string :string "0") ip (typed-cap-call 38 :string :string "1")
+        identity (typed-cap-call 38 :string :string "2") known (typed-cap-call 38 :string :string "3")
+        extra (typed-cap-call 38 :string :string "4")
+        result (if (= extra "") (observe-native-node node ip identity known) "")
+        out (typed-cap-call 37 :string :string
+              (if (= result "") "observation/refused native-snapshot\n" (str "observation/untrusted " node "\n" result)))]
+    (if (= result "") 1 0)))
+
+;; Trusted, bounded diagnostic host entry: NODE IPV4 IDENTITY KNOWN_HOSTS.
+;; The host authorizes this exact tuple, bounds process output and lifetime,
+;; and protects the identity; guest arguments alone grant no authority.
+(defn fleet-ssh-observe-main [] :i64
+  (let [node (typed-cap-call 38 :string :string "0") ip (typed-cap-call 38 :string :string "1")
+        identity (typed-cap-call 38 :string :string "2") known (typed-cap-call 38 :string :string "3")
+        extra (typed-cap-call 38 :string :string "4")
+        result (if (and (= extra "") (observe-inputs? node ip identity known))
+                 (ob-collect node ip identity known) "error\ninput-invalid")
+        out (typed-cap-call 37 :string :string
+              (if (ob-ok? result) (str "observation/untrusted " node "\n" (ob-value result))
+                (str "observation/refused " (string-substring result 6 (string-byte-length result)) "\n")))]
+    (if (ob-ok? result) 0 1)))
+
+;; Separate entry keeps model-file observation optional for fleet telemetry.
+(defn fleet-model-observe-main [] :i64
+  (let [node (typed-cap-call 38 :string :string "0") ip (typed-cap-call 38 :string :string "1")
+        identity (typed-cap-call 38 :string :string "2") known (typed-cap-call 38 :string :string "3")
+        extra (typed-cap-call 38 :string :string "4")
+        result (if (and (= extra "") (observe-inputs? node ip identity known))
+                 (ob-probe node ip identity known "model-files") "error\ninput-invalid")
+        output (if (ob-ok? result) (observe-model-files node (ob-value result)) "")
+        out (typed-cap-call 37 :string :string
+              (if (= output "") "model-observation/refused\n" (str "model-observation/untrusted " node "\n" output)))]
+    (if (= output "") 1 0)))
