@@ -73,13 +73,23 @@
       (= (retention-pair-problem (cp-load store a) (cp-load store b) (rt-pins cfg root until)) "retention/pair-verified")
       (rt-save (cp-str cfg 0 "candidateHead") (rt-head root a b until next-at request)))))
 
-(defn- rt-admitted-head? [cfg :vector-i64 head :vector-i64] :bool
+(defn- rt-intact-head? [cfg :vector-i64 head :vector-i64] :bool
   (let [store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint") until (cp-num head 0 "until")]
     (and (json-canonical? head) (= (cp-str head 0 "kind") "itonami.resident-head/1")
       (cp-block? store root) (rt-root? cfg (cp-load store root)) (cp-closure? store (cp-load store root))
-      (> until (rt-now))
       (= (retention-pair-problem (cp-load store (cp-str head 0 "receiptA"))
            (cp-load store (cp-str head 0 "receiptB")) (rt-pins cfg root until)) "retention/pair-verified"))))
+
+;; An expired but cryptographically intact head may be re-replicated without
+;; dispatching inference. A safety margin avoids expiring between refresh and
+;; the controller's subsequent archive/prepare/once steps.
+(defn- rt-admitted-head? [cfg :vector-i64 head :vector-i64] :bool
+  (and (rt-intact-head? cfg head) (> (cp-num head 0 "until") (rt-now))))
+
+(defn- rt-refresh-decision [intact :bool until :i64 now :i64] :string
+  (cond (not intact) "resident/head-refused"
+        (> until (+ now 900000)) "resident/retention-ready"
+        :else "resident/retention-refresh-needed"))
 
 ;; GitHub-enabled MTP residents checkpoint only a classified projection of
 ;; the runtime. Socket, authorizationFile and endpoint remain host-local.
@@ -122,6 +132,14 @@
              (and (cp-safe-absolute? (cp-str cfg 0 "runtimeFile"))
                   (= (cp-cid (rt-runtime cfg)) (cp-str cfg 0 "runtime"))
                   (rt-public-environment? cfg (rt-runtime cfg) env))))))
+
+(defn- rt-refresh [cfg :vector-i64] :string
+  (let [path (cp-str cfg 0 "head") head (if (cp-exists? path) (cp-read path) (vector-alloc 0))
+        problem (if (rt-pins-ok? cfg) (rt-refresh-decision (rt-intact-head? cfg head) (cp-num head 0 "until") (rt-now)) "resident/runtime-pins-refused")]
+    (if (not (= problem "resident/retention-refresh-needed")) problem
+      (if (and (rt-replicate cfg (cp-str head 0 "checkpoint") (cp-num head 0 "nextAt") (cp-str head 0 "request"))
+               (rt-save path (cp-read (cp-str cfg 0 "candidateHead")))
+               (rt-admitted-head? cfg (cp-read path))) "resident/replicas-refreshed" "resident/replica-unavailable"))))
 
 ;; An optional host-provisioned private acknowledgement directory gates each
 ;; next turn on confirmed GitHub archival of the current admitted checkpoint.
@@ -231,6 +249,7 @@
             (not (rf-voters? (cp-str cfg 0 "voters"))) (= (lease-token (cp-str cfg 0 "tokenFile")) "")
             (not (= (ri-show (cp-str cfg 0 "key")) (str "identity/did " (cp-str cfg 0 "authorB")))))
       (let [x (cp-say "resident/config-refused")] 2)
+      (if (= (cp-arg 0) "refresh") (cp-say (rt-refresh cfg))
       (if (= (cp-arg 0) "archive") (rt-archive cfg)
       (if (= (cp-arg 0) "once")
         (let [r (rt-cycle cfg) status (rt-status cfg r)] (cp-say r))
@@ -239,4 +258,4 @@
         (let [result (arena-scope
                        (let [r (rt-cycle cfg) s (rt-status cfg r) event (cp-say r)] 0))
               z (loop [k 0] (if (>= k 10) true (if (pr-pause) (recur (+ k 1)) false)))]
-          (if z (recur (+ i 1)) 2)))))))))
+          (if z (recur (+ i 1)) 2))))))))))

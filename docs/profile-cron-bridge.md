@@ -45,3 +45,85 @@ An earlier separate resident integration did perform a Bonsai MTP turn and a
 GitHub restore, but used a different setup. The new cron-to-MTP path, real
 periodic activation, independent multi-host fencing, physical resource
 reservation and the ten-Mac production fleet remain unqualified.
+
+## Retention renewal before a cron dispatch
+
+The controller now invokes `resident refresh CONFIG` before archiving a due
+slot. This operation does not infer or consume the cron request. It verifies
+the current head, pinned checkpoint closure, pinned runtime and the existing
+pair of retention signatures even if their deadline has expired. An intact
+head whose retention expires within 15 minutes is re-replicated and published
+with fresh retention receipts; otherwise it is left unchanged. A missing,
+invalid or unverifiable head is refused. The controller requires an exact
+successful refresh result before archive, request installation or a dispatch
+marker. All resident writers still require host-level serialization.
+
+The macOS-host controller sequencing test uses test doubles and substitutes
+BSD `stat`; it checks that an invalid head stops before archive or bridge and
+that ready and refreshed cases proceed. An Amu macOS compiled source-unity
+test checked the decision boundaries; its bypass mutant returned `1` while the
+original returned `0`. A subsequent Linux ARM64 static source-unity build with
+the git-checkpoint pinned root compiler also returned exit 0, and the bypass
+mutant returned exit 1. The [evidence](evidence/awai147-retention-refresh-native-20261103.json)
+records exact hashes. This is a local native gate, not a restarted CI pipeline.
+
+An isolated Linux VM test then created *expired*, independently signed
+retention receipts with public test keys for a test checkpoint. The actual
+native resident `refresh` rejected an invalid receipt reference and, with the
+peer stopped, preserved the old head. With the native checkpoint peer running,
+it uploaded the verified closure, acquired fresh receipts, published the same
+checkpoint head and independently verified the new signature pair. A repeated
+refresh left the head unchanged; no request was installed. The two test
+identities and replica stores shared one VM, so this does not qualify separate
+failure domains, GitHub archival, crash recovery or model inference. The
+[host harness](../test-native/murakumo/resident-retention-live-host-test.py)
+requires a disposable VM, separately built fixture binaries and a test-only
+checkpoint; it must never be pointed at live credentials. [Evidence](evidence/awai147-retention-refresh-live-20261103.json).
+No periodic service has been installed.
+
+A further isolated Linux VM test used a classified checkpoint already stored
+in the private GitHub archive. The native resident renewed expired public-test
+retention receipts through a native loopback peer, then the real resident
+archive adapter checked the private repository, fetched the immutable archive,
+verified its tree and checkpoint closure, and wrote an acknowledgement matching
+the checkpoint and tree. The previously archived tree was independently read
+back; the test did not establish whether the attempted Git push created a new
+ref. The test used same-VM test signers, no cron controller, model inference or
+production credentials. Its short-lived GitHub credential was delivered to the
+VM process via stdin and the dedicated VM was removed. The optional
+[host harness](../test-native/murakumo/resident-retention-github-host-test.py)
+requires a disposable VM, test-only fixture and explicitly selected private
+repository. [Evidence](evidence/awai147-retention-refresh-github-20261103.json).
+
+A later isolated ARM64 Linux VM exercised the actual cron planner, controller,
+bridge, resident, checkpoint peer and GitHub archive adapter together. The
+resident started with an expired signed head and no live voters; the GitHub
+archive was an existing classified test checkpoint. It renewed the head,
+read back and verified the private archive, prepared the cron request and
+reported `resident/quorum-unavailable`. The cursor remained unchanged and the
+durable dispatch marker remained. A second invocation refused the uncertain
+dispatch without calling the resident again. The controller's missing execute
+bit was discovered by this test and fixed. The two test identities were
+colocated in one VM; no MTP inference, successful cursor advance, real periodic
+activation, independent failure domains or production membership was tested.
+The [host harness](../test-native/murakumo/cron-resident-github-failure-host-test.py)
+requires a disposable VM, pinned binaries, a classified test fixture and a
+private GitHub repository. [Evidence](evidence/awai147-cron-github-quorum-failure-20261103.json).
+
+## Guarded real-model attempt
+
+A later attempt prepared an isolated Linux ARM64 VM and the native binaries
+for a complete cron turn, then started the existing Bonsai MTP runtime on one
+Mac mini under a memory-pressure watchdog. The pre-start snapshot showed 90%
+reported free memory pressure and zero used swap. During model loading, the
+reported free percentage fell below the watchdog's 40% floor; the watchdog
+stopped the task-owned model process before the endpoint became ready. The
+exact minimum was not captured. Afterwards the measured free percentage was
+again 90%, swap used was zero, the task-owned port was closed, and the VM had
+been removed. This snapshot does not prove absence of any transient impact on
+other workloads.
+
+The cron controller, GitHub archive for a new successor and MTP inference were
+not run in this attempt; no new result was produced. This does not establish a
+safe single-host capacity or that a different host can accept the model.
+[Evidence](evidence/awai147-cron-real-model-admission-20261103.json).

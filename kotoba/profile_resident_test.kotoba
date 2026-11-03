@@ -1,6 +1,6 @@
 ;; Append the public git_checkpoint_test fixtures before this native gate.
 (ns murakumo.profile-resident-test
-  (:export [test-profile-resident test-profile-archive-ack test-profile-public-environment]))
+  (:export [test-profile-resident test-profile-archive-ack test-profile-public-environment test-profile-retention-refresh]))
 
 (defn- rtt-cfg [did :string] :vector-i64
   (cp-bytes (str "{\"authorA\":\"" did "\",\"authorB\":\"" did "\",\"environment\":\"" (cpt-cid)
@@ -73,3 +73,12 @@
          (not (rt-public-environment? cfg runtime extra))
          (not (rt-public-environment? cfg runtime wrong-cap))
          (not (rt-public-environment? wrong-cfg runtime env)))))
+
+;; Renewal is allowed only for an intact signed head. Check expiry and the
+;; exact safety-margin boundary without performing replication or inference.
+(defn test-profile-retention-refresh [] :bool
+  (and (= (rt-refresh-decision false 2000000 100000) "resident/head-refused")
+       (= (rt-refresh-decision true 1 100000) "resident/retention-refresh-needed")
+       (= (rt-refresh-decision true 100000 100000) "resident/retention-refresh-needed")
+       (= (rt-refresh-decision true 1000000 100000) "resident/retention-refresh-needed")
+       (= (rt-refresh-decision true 1000001 100000) "resident/retention-ready")))
