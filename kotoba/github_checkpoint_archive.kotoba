@@ -111,8 +111,10 @@
                 "archive/readback-unknown-or-conflict")))))))
 
 (defn github-checkpoint-archive-main [] :i64
-  (cp-say (ga-archive (cp-arg 0) (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6)
-                      (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9) (cp-arg 10) (cp-arg 11))))
+  (let [result (ga-archive (cp-arg 0) (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6)
+                           (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9) (cp-arg 10) (cp-arg 11))
+        out (cp-say result)]
+    (if (= (string-index-of result "archive/stored ") 0) 0 1)))
 
 ;; Fetch only a host-pinned signed checkpoint into fresh private staging.
 ;; This restores data, not a lease, a current head, or permission to run it.
