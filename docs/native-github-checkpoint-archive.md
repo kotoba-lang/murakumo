@@ -126,3 +126,8 @@ The same diagnostic local-Git archive and restore path was subsequently checked
 independently on [two Tailscale-connected Mac minis](evidence/awai150-two-minis-local-archive-20261103/).
 The test used a local remote and synthetic privacy response on each host; it
 did not test GitHub, cross-host storage or autonomous bot operation.
+
+Restore also refuses lexical overlap between the work path and the destination's
+`.partial` staging path before any GitHub access. The [isolated input-gate
+fixture](evidence/awai150-restore-partial-path-20261103/) includes a negative
+control; it does not qualify real transport or filesystem alias protection.
