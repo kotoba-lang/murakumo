@@ -121,6 +121,14 @@ and the selected lease holder. Receipt suppression cannot undo a cell's
 effects or replace receiver-side fencing, process lifetime control and a
 qualified governor.
 
+`run` returns nonzero when this node is ineligible, another node holds the
+lease, or a lease cannot be validated. Those outcomes do not confirm that a
+job ran. Exit zero means this process emitted a receipt and signature, not
+that a caller has authenticated the receipt or durably recorded its effects.
+Callers must independently verify the receipt and reconcile the cursor before
+advancing it. This changes the earlier zero exit status for non-holders and
+ineligible nodes; callers need to handle those outcomes explicitly.
+
 The command blocks and output below are the 2026-10-23 historical gate. They
 use numeric time and omit the now-required expected job ID, so they are not a
 reproduction recipe for the current interface.
