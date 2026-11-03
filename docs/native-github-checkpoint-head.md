@@ -48,3 +48,11 @@ The [local restore fixture](evidence/awai150-head-restore-20261103/) verifies
 state reconstruction and rejects wrong pins, an existing destination and a
 corrupted archive block. Real GitHub credentials and production integration
 remain unqualified.
+
+GitHub's GraphQL `createCommitOnBranch` exposes `expectedHeadOid`; an
+[operator-side synthetic test](evidence/awai150-github-graphql-cas-20261103/)
+observed one winner and one expected-head mismatch for concurrent updates.
+The live input schema names the unqualified branch field `branchName`.
+This is a candidate replacement for the normal-push step, not yet an
+integrated native writer or a lease fence. Expected-OID comparison does not
+prevent an ABA rewind to the same OID or authorize a lease holder.
