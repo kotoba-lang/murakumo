@@ -190,6 +190,18 @@
 ;; The store must be the caller's independently fetched and verified archive
 ;; store, owned exclusively through this check. This function does not fetch
 ;; from GitHub or establish a live lease or permission to advance a cursor.
+(defn- jo-checkpoint-verdict [store :string checkpoint-cid :string author :string profile :string policy :string
+                             environment :string epoch :i64 parent :string task :string output-cid :string
+                             proof-cid :string did :string job :string out-path :string proof-path :string] :string
+  (let [checkpoint (jo-block store checkpoint-cid) output (jo-block store output-cid)
+        proof (jo-block store proof-cid)
+        blocks (and (jo-block? store checkpoint-cid checkpoint) (jo-block? store output-cid output)
+                    (jo-block? store proof-cid proof))
+        contract (if blocks (checkpoint-problem checkpoint author profile policy environment epoch parent task) "checkpoint/missing-or-corrupt-root")
+        linked (and (= contract "checkpoint/ok") (jo-checkpoint-links? checkpoint out-path output-cid proof-path proof-cid))
+        closure (if linked (cp-closure? store checkpoint) false)]
+    (if closure (jo-proof-verdict proof output did job) "job-output/checkpoint-refused")))
+
 (defn job-output-checkpoint-verify-main [] :i64
   (let [store (jn-arg 0) checkpoint-cid (jn-arg 1) author (jn-arg 2) profile (jn-arg 3)
         policy (jn-arg 4) environment (jn-arg 5) epoch (cp-int (jn-arg 6))
@@ -198,14 +210,8 @@
     (if (or (not (jn-attempt-root? store)) (not (jn-private-dir? store))
             (not (cp-raw? checkpoint-cid)) (not (cp-raw? output-cid)) (not (cp-raw? proof-cid)))
       (let [x (jn-say "job-output/checkpoint-config-refused")] 2)
-      (let [checkpoint (jo-block store checkpoint-cid) output (jo-block store output-cid)
-            proof (jo-block store proof-cid)
-            blocks (and (jo-block? store checkpoint-cid checkpoint) (jo-block? store output-cid output)
-                        (jo-block? store proof-cid proof))
-            contract (if blocks (checkpoint-problem checkpoint author profile policy environment epoch parent task) "checkpoint/missing-or-corrupt-root")
-            linked (and (= contract "checkpoint/ok") (jo-checkpoint-links? checkpoint out-path output-cid proof-path proof-cid))
-            closure (if linked (cp-closure? store checkpoint) false)
-            verdict (if closure (jo-proof-verdict proof output did job) "job-output/checkpoint-refused")]
+      (let [verdict (jo-checkpoint-verdict store checkpoint-cid author profile policy environment epoch parent task
+                                          output-cid proof-cid did job out-path proof-path)]
         (if (= verdict "job-output/verified")
           (let [x (jn-say "job-output/checkpoint-verified")] 0)
           (let [x (jn-say verdict)] 1))))))
