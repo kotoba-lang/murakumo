@@ -1,0 +1,80 @@
+(ns resident-run-refusal-fixture (:export [main]))
+(defn- cp-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- cp-say [s :string] :i64 (let [z (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [b :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 b)))
+(defn- ln-bytes [s :string] :vector-i64 (cp-bytes s))
+(defn- cp-read [p :string] :vector-i64 (cp-bytes p))
+(defn- cp-str [b :vector-i64 i :i64 k :string] :string (cond (= k "kind") "itonami.profile-resident/1" (= k "key") "key" (= k "authorB") "did" (= k "tokenFile") "token" :else ""))
+(defn- cp-num [b :vector-i64 i :i64 k :string] :i64 86400000)
+(defn- cp-raw? [s :string] :bool (= s "bafkreihhehshbuhps3ybccm6avyoyqdbewyai4qvfbqqh2l5unimwf3sam"))
+(defn- json-member [b :vector-i64 i :i64 k :string] :i64 -1)
+(defn- json-kind [b :vector-i64 i :i64] :i64 3)
+(defn- json-canonical? [b :vector-i64] :bool true)
+(defn- cp-safe-absolute? [s :string] :bool true)
+(defn- rt-lock-config-safe? [b :vector-i64 s :string] :bool true)
+(defn- rf-voters? [s :string] :bool true)
+(defn- lease-token [s :string] :string "token")
+(defn- ri-show [s :string] :string "identity/did did")
+(defn- rt-serialized [cfg :vector-i64 op :string] :string (cp-text cfg))
+(defn- pr-pause [] :bool (let [z (cp-say "PAUSE")] false))
+(defn- ln-int [s :string] :i64
+  (let [b (ln-bytes s)]
+    (if (or (= (vector-count b) 0) (> (vector-count b) 16)) -1
+      (loop [i 0 n 0] (if (= i (vector-count b)) n (let [c (vector-at b i)] (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -1)))))))
+
+;; the k-th space-separated field of a line ("" when there is none)
+(defn- ln-field [line :string k :i64] :string
+  (let [b (ln-bytes line)]
+    (loop [i 0 start 0 n 0]
+      (cond (= i (vector-count b)) (if (= n k) (string-substring line start i) "")
+            (or (= (vector-at b i) 32) (= (vector-at b i) 10)) (if (= n k) (string-substring line start i) (recur (+ i 1) (+ i 1) (+ n 1)))
+            :else (recur (+ i 1) start n)))))
+
+(defn- rt-cycle-ok? [result :string] :bool
+  (or (= result "resident/idle") (= result "resident/replicas-refreshed")
+      (and (= (ln-field result 0) "resident/published")
+           (> (ln-int (ln-field result 1)) 0) (cp-raw? (ln-field result 2))
+           (= result (str "resident/published " (ln-field result 1) " " (ln-field result 2))))))
+
+(defn- rt-once [cfg :vector-i64 operation :string] :i64
+  (let [result (rt-serialized cfg operation) logged (cp-say result)
+        ok (cond (= operation "cycle") (rt-cycle-ok? result)
+                 (= operation "refresh") (or (= result "resident/retention-ready") (= result "resident/replicas-refreshed"))
+                 (= operation "archive") (= (ln-field result 0) "resident/archive")
+                 (= operation "archive-native") (= (ln-field result 0) "resident-archive/confirmed")
+                 :else false)]
+    (if ok 0 1)))
+
+(defn profile-resident-main [] :i64
+  (let [cfg (cp-read (cp-arg 1)) archive-field (json-member cfg 0 "archiveAck")
+        ack (cp-str cfg 0 "archiveAck")]
+    (if (or (not (json-canonical? cfg)) (not (rt-lock-config-safe? cfg (cp-arg 1)))
+            (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
+            (not (= (cp-num cfg 0 "intervalMs") 86400000))
+            (and (>= archive-field 0)
+                 (or (not (= (json-kind cfg archive-field) 3)) (not (cp-safe-absolute? ack))
+                     (= ack (cp-arg 1)) (= ack (cp-str cfg 0 "head")) (= ack (cp-str cfg 0 "store"))
+                     (= ack (cp-str cfg 0 "status")) (= ack (cp-str cfg 0 "candidateHead"))
+                     (= ack (cp-str cfg 0 "request")) (= ack (cp-str cfg 0 "leaseFile"))
+                     (= ack (cp-str cfg 0 "key")) (= ack (cp-str cfg 0 "tokenFile"))
+                     (= ack (cp-str cfg 0 "policyFile")) (= ack (cp-str cfg 0 "environmentFile"))
+                     (= ack (cp-str cfg 0 "runtimeFile"))))
+            (not (rf-voters? (cp-str cfg 0 "voters"))) (= (lease-token (cp-str cfg 0 "tokenFile")) "")
+            (not (= (ri-show (cp-str cfg 0 "key")) (str "identity/did " (cp-str cfg 0 "authorB")))))
+      (let [x (cp-say "resident/config-refused")] 2)
+      (if (= (cp-arg 0) "refresh") (rt-once cfg "refresh")
+      (if (= (cp-arg 0) "archive") (rt-once cfg "archive")
+      (if (= (cp-arg 0) "archive-native") (rt-once cfg "archive-native")
+      (if (= (cp-arg 0) "once")
+        (rt-once cfg "cycle")
+      (if (not (= (cp-arg 0) "run")) (let [x (cp-say "resident/command-refused")] 2)
+      (loop [i 0]
+        (let [result (arena-scope
+                       (let [r (rt-serialized cfg "cycle") event (cp-say r)]
+                         (if (rt-cycle-ok? r) 0 1)))
+              z (if (= result 0)
+                  (loop [k 0] (if (>= k 10) true (if (pr-pause) (recur (+ k 1)) false))) false)]
+          (if z (recur (+ i 1)) 2)))))))))))
+
+(defn main [] :i64 (profile-resident-main))
