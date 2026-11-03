@@ -27,6 +27,7 @@ width, not the same file.
 | --- | --- | --- |
 | llama.cpp Metal | 0.7.0, build 11669 (`620d2225c`), Homebrew | `llama-bench -m <gguf> -p 512 -n 128 -r 3 -o json` |
 | llama.cpp CPU | same | `llama-bench -m <gguf> -ngl 0 -t 8 -p 512 -n 128 -r 3 -o json` |
+| llama.cpp CPU, 1 thread | same | `llama-bench -m <gguf> -ngl 0 -t 1 -p 512 -n 64 -r 2 -o json` (three rounds, after the others) |
 | MLX | mlx 0.31.1, mlx-lm 0.31.1 | `mlx_lm.benchmark --model <dir> -p 512 -g 128 -n 3` |
 | Kotoba Q8_0 kernel | Amu `1abb17f30` | `python3 -I bench/kernels/q8_0-matvec/run.py --amu <amu> --static --reps 300 --rounds 5 --static-reps 20 --static-rounds 3` |
 
@@ -42,6 +43,7 @@ Median of three round means (range in brackets), tokens per second.
 | MLX, 8-bit | 7,191 [7,140–7,215] | **249.4** [248.9–250.4] |
 | llama.cpp Metal, Q8_0 | **8,842** [8,788–8,883] | 218.4 [190.6–229.5] |
 | llama.cpp CPU, 8 threads, Q8_0 | 496 [454–529] | 49.3 [35.4–54.8] |
+| llama.cpp CPU, 1 thread, Q8_0 (64-token answer) | 150 [149–151] | 90.7 [90.1–91.2] |
 | murakumo, Kotoba GPU kernels (bootstrap reference) | — | 71.2 ¹ |
 | murakumo, Amu selfhost on this Mac | no route ² | no route ² |
 
@@ -52,6 +54,12 @@ compiled by `bin/amu` but launched by the C `kexe_loader`, which Amu removed on
 2026-10-22 (amu #1459/#1460), so that path no longer builds. Commit messages of
 2026-10-20 mention 7.07 ms/step after further fusion; no evidence file was
 written, so that figure is not used.
+
+On this loaded host one llama.cpp thread decodes faster than eight: every
+token synchronizes the threads once per operation, and with two VMs taking
+cores, some thread is usually waiting to be scheduled. One thread at 90.7 tok/s
+reads about 48 GB/s of Q8_0 weights from one core, which is the single-thread
+target the [roadmap](../../../docs/inference-roadmap.md) uses.
 
 ² No prompt-to-token route exists through Amu selfhost on macOS today: the
 native Mac CLI gives guests no filesystem and a 5-second `run` deadline, the

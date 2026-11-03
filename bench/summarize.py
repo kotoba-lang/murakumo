@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fold one bench/results/<run>/ directory into summary.json.
 
-Reads raw/llama-{metal,cpu}-r*.json (llama-bench -o json), raw/mlx-r*.txt
+Reads raw/llama-{metal,cpu,cpu1t}-r*.json (llama-bench -o json), raw/mlx-r*.txt
 (mlx_lm.benchmark) and q8-matvec-*.json (kernels/q8_0-matvec/run.py), and
 writes the per-engine median and range of the round means.
 
@@ -19,16 +19,18 @@ def stat(xs):
 def main(run):
     run = Path(run)
     out = {"run": run.name, "engines": {}}
-    for kind, label in (("metal", "llama.cpp Metal"), ("cpu", "llama.cpp CPU, 8 threads")):
-        pp, tg, meta = [], [], {}
+    for kind, label in (("metal", "llama.cpp Metal"), ("cpu", "llama.cpp CPU, 8 threads"),
+                        ("cpu1t", "llama.cpp CPU, 1 thread")):
+        pp, tg, meta, shape = [], [], {}, {}
         for f in sorted(run.glob(f"raw/llama-{kind}-r*.json")):
             for r in json.loads(f.read_text()):
                 (pp if r["n_prompt"] else tg).append(r["avg_ts"])
+                shape["n_prompt" if r["n_prompt"] else "n_gen"] = r["n_prompt"] or r["n_gen"]
                 meta = {"build": f"{r['build_commit']} ({r['build_number']})", "backends": r["backends"],
                         "n_gpu_layers": r["n_gpu_layers"], "n_threads": r["n_threads"],
                         "model": r["model_filename"], "model_type": r["model_type"]}
         if pp:
-            out["engines"][label] = {"prefill_pp512_tok_s": stat(pp), "decode_tg128_tok_s": stat(tg), **meta}
+            out["engines"][label] = {"prefill_tok_s": stat(pp), "decode_tok_s": stat(tg), **shape, **meta}
     pp, tg = [], []
     for f in sorted(run.glob("raw/mlx-r*.txt")):
         m = re.search(r"Averages: prompt_tps=([\d.]+), generation_tps=([\d.]+)", f.read_text())
@@ -36,7 +38,8 @@ def main(run):
         pp.append(float(m.group(1)))
         tg.append(float(m.group(2)))
     if pp:
-        out["engines"]["MLX (mlx_lm.benchmark)"] = {"prefill_pp512_tok_s": stat(pp), "decode_tg128_tok_s": stat(tg)}
+        out["engines"]["MLX (mlx_lm.benchmark)"] = {"prefill_tok_s": stat(pp), "decode_tok_s": stat(tg),
+                                                     "n_prompt": 512, "n_gen": 128}
     for f in run.glob("q8-matvec-*.json"):
         k = json.loads(f.read_text())
         out["kernel_q8_0_matvec"] = {
