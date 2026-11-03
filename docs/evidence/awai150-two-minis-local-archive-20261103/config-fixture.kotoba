@@ -1,0 +1,117 @@
+(ns config-fixture (:export [main]))
+(defn- hc-zero [] :string (string-from-utf8 (bytes-from-vector-i64 [0])))
+(defn- hc-field [s :string] :string (string-concat s (hc-zero)))
+(defn- hc-cat [a :vector-i64 b :vector-i64] :vector-i64
+  (let [n (vector-count a) m (vector-count b)
+        one (loop [i 0 out (vector-alloc (+ n m))]
+              (if (= i n) out (recur (+ i 1) (vector-assoc! out i (vector-at a i)))))]
+    (loop [i 0 out one]
+      (if (= i m) out (recur (+ i 1) (vector-assoc! out (+ n i) (vector-at b i)))))))
+(defn- hc-bytes [s :string] :vector-i64
+  (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- hc-text [v :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 v)))
+(defn- hc-slice [v :vector-i64 start :i64 length :i64] :vector-i64
+  (loop [i 0 out (vector-alloc length)]
+    (if (= i length) out (recur (+ i 1) (vector-assoc! out i (vector-at v (+ start i)))))))
+(defn- hc-frame [op :i64 tail :vector-i64] :vector-i64
+  (hc-cat [0 65 77 85 72 1 op] tail))
+(defn- hc-call [op :i64 tail :vector-i64] :vector-i64
+  (vector-i64-from-bytes
+    (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 (hc-frame op tail)))))
+(defn- hc-path-call [op :i64 path :string] :vector-i64
+  (hc-call op (hc-bytes (hc-field path))))
+(defn- hc-read [path :string] :vector-i64 (hc-path-call 1 path))
+(defn- hc-write [path :string bytes :vector-i64] :vector-i64
+  (hc-call 2 (hc-cat (hc-bytes (hc-field path)) bytes)))
+(defn- hc-ok? [reply :vector-i64] :bool
+  (and (> (vector-count reply) 0) (= (vector-at reply 0) 0)))
+(defn- hc-errno [reply :vector-i64] :i64
+  (if (>= (vector-count reply) 2) (vector-at reply 1) 22))
+(defn- hc-hex-value [c :i64] :i64
+  (cond (and (>= c 48) (<= c 57)) (- c 48)
+        (and (>= c 65) (<= c 70)) (- c 55) :else -1))
+(defn- hc-proc-reply [s :string] :vector-i64
+  (let [v (hc-bytes s)]
+    (if (and (= (vector-count v) 5)
+             (or (= (vector-at v 0) 48) (= (vector-at v 0) 49))
+             (>= (hc-hex-value (vector-at v 1)) 0) (>= (hc-hex-value (vector-at v 2)) 0)
+             (>= (hc-hex-value (vector-at v 3)) 0) (>= (hc-hex-value (vector-at v 4)) 0))
+      [(- (vector-at v 0) 48)
+       (+ (* 16 (hc-hex-value (vector-at v 1))) (hc-hex-value (vector-at v 2)))
+       (+ (* 16 (hc-hex-value (vector-at v 3))) (hc-hex-value (vector-at v 4)))]
+      [1 22 0])))
+(defn- hc-spawn [mode :i64 directory :string capture :string executable :string argc :i64 argv :string] :vector-i64
+  (let [fields (string-concat (hc-field directory)
+                 (string-concat (hc-field capture) (string-concat (hc-field executable) argv)))
+        request (hc-frame 9 (hc-cat [mode argc] (hc-bytes fields)))]
+    (hc-proc-reply (typed-cap-call :process/spawn :string :string (hc-text request)))))
+(defn- hc-out [s :string] :i64 (let [w (typed-cap-call :io/write :string :string s)] 0))
+(defn- hc-err [s :string] :i64 (let [w (typed-cap-call :io/write-error :string :string s)] 0))
+(defn- hc-digit [n :i64] :string
+  (case n 0 "0" 1 "1" 2 "2" 3 "3" 4 "4" 5 "5" 6 "6" 7 "7" 8 "8" "9"))
+(defn- hc-dec [n :i64] :string
+  (if (< n 10) (hc-digit n) (string-concat (hc-dec (quot n 10)) (hc-digit (rem n 10)))))
+(defn- hc-arg [i :i64] :string
+  (typed-cap-call :cli/args :string :string (hc-dec i)))
+(defn- hc-argc [] :i64
+  (let [s (hc-bytes (typed-cap-call :cli/args :string :string ""))]
+    (loop [i 0 n 0]
+      (if (= i (vector-count s)) n (recur (+ i 1) (+ (* n 10) (- (vector-at s i) 48)))))))
+(defn- hc-end [v :vector-i64 start :i64] :i64
+  (loop [i start]
+    (if (or (>= i (vector-count v)) (= (vector-at v i) 0)) i (recur (+ i 1)))))
+(defn- hc-info-exe [v :vector-i64] :string
+  (hc-text (hc-slice v 1 (- (hc-end v 1) 1))))
+(defn- hc-info-cwd [v :vector-i64] :string
+  (let [start (+ (hc-end v 1) 1)]
+    (hc-text (hc-slice v start (- (hc-end v start) start)))))
+(defn- hc-hex-digit [n :i64] :string
+  (if (< n 10) (hc-digit n) (case n 10 "a" 11 "b" 12 "c" 13 "d" 14 "e" "f")))
+(defn- hc-info-random [v :vector-i64] :string
+  (let [start (+ (hc-end v (+ (hc-end v 1) 1)) 1)]
+    (loop [i 0 out ""]
+      (if (= i 16) out
+        (let [n (vector-at v (+ start i))]
+          (recur (+ i 1) (string-concat out
+            (string-concat (hc-hex-digit (quot n 16)) (hc-hex-digit (rem n 16))))))))))
+
+(defn- fixture-argv [s :string] :vector-i64
+  (let [n (string-length s)]
+    (loop [start 0 count 0 out ""]
+      (let [rest (string-substring s start n) cut (string-index-of rest "ARG_SEP")
+            part (if (< cut 0) rest (string-substring rest 0 cut))
+            mapped (if (= (string-index-of part "/fixture5/") 0)
+                     (str "/private/tmp/awai150-mini-archive-4bac682e05" part) part)
+            next (str out (hc-field mapped))]
+        (if (< cut 0) (hc-cat [count] (hc-bytes next))
+          (if (>= count 63) [] (recur (+ start cut 7) (+ count 1) next)))))))
+(defn- cp-spawn [s :string] :string
+  (let [fields (fixture-argv s) info (hc-call 0 [])
+        seed (if (and (hc-ok? info) (> (vector-count info) 20)) (hc-info-random info) "")
+        count (if (> (vector-count fields) 0) (+ (vector-at fields 0) 1) 0)
+        argv (if (> (vector-count fields) 0) (hc-text (hc-slice fields 1 (- (vector-count fields) 1))) "")
+        capture (str "/private/tmp/awai150-mini-archive-4bac682e05/fixture5/logs/" seed)
+        root "/private/tmp/awai150-mini-archive-4bac682e05/fixture5"
+        permitted (and (> count 0) (<= count 64) (= (string-index-of s "/usr/bin/gitARG_SEP") 0) (= (string-length seed) 32))
+        result (if permitted (hc-spawn 0 root capture "/usr/bin/git" count argv) [])
+        output (if (hc-ok? result) (hc-read capture) [])]
+    (if (and (hc-ok? result) (hc-ok? output) (<= (vector-count output) 16385))
+      (str (hc-dec (vector-at result 1)) "\n" (hc-text (hc-slice output 1 (- (vector-count output) 1))))
+      "refused")))
+
+
+(defn- cp-a [] :string "ARG_SEP")
+(defn- cp-git [repo :string args :string] :string
+  (cp-spawn (str "/usr/bin/git" (cp-a) "--no-pager" (cp-a) "-c" (cp-a) "core.hooksPath=/dev/null"
+    (cp-a) "-c" (cp-a) "core.fsmonitor=false" (cp-a) "-c" (cp-a) "gc.auto=0"
+    (cp-a) "-c" (cp-a) "core.autocrlf=false" (cp-a) "-c" (cp-a) "core.attributesFile=/dev/null"
+    (cp-a) "-c" (cp-a) "commit.gpgSign=false"
+    (cp-a) "-c" (cp-a) "user.name=Itonami checkpoint"
+    (cp-a) "-c" (cp-a) "user.email=checkpoint@example.invalid"
+    (cp-a) "-C" (cp-a) repo (cp-a) args)))
+(defn- ga-config-safe? [repo-dir :string] :bool
+  (= (cp-git repo-dir (str "config" (cp-a) "--name-only" (cp-a) "--get-regexp" (cp-a)
+    "^(url[.].*[.](insteadof|pushinsteadof)|http([.].*)?[.](proxy|sslverify|sslcainfo|followredirects)|remote[.].*[.]proxy|credential([.].*)?[.]helper|include([.].*)?[.]path)$")) "1\n"))
+
+(defn main [] :i64
+ (let [path (typed-cap-call 38 :string :string "0") answer (if (ga-config-safe? path) "safe\n" "refused\n") out (typed-cap-call 37 :string :string answer)] 0))
