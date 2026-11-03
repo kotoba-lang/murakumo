@@ -1,0 +1,15 @@
+{
+  "kind": "awai.mac-mini-capacity-observation/1",
+  "date": "2026-11-03 Asia/Tokyo",
+  "fleetSnapshot": {"reachable": 10, "totalMemoryGiBEach": 16, "memoryPressureFreePercent": {"nineNodesRange": [87, 92], "remainingNode": 20}, "note": "One-time observations; not reservations, verified idle capacity or a representative-period baseline."},
+  "placementRegression": {"macNativeGatePassed": 9, "skippedForLowMemoryPressure": 1, "arm64LinuxStaticGateResult": 0, "oldFreshnessMutantResult": 1, "note": "Each selected Mac executed the same hash-verified Amu compiler and pure placement tests in an isolated task directory. This is distributed test execution, not live placement or resident deployment."},
+  "modelProvisioning": {"additionalMacsProvisioned": 1, "modelGiBApprox": 8.3, "runtimeMiBApprox": 487, "modelSha256": "130de5925082c168b7866b2e91b52e44abbafc99017e3ca352b77b5b55a269ed", "mtpSha256": "f803737b0e64bcce54fcfa22f2c7ee342ad37192b8e2a3299fc940387a828c9d", "runtimeTreeHashVerifiedBeforeRelocation": true, "pipCheckAndImportsPassed": true, "readiness": "artifacts-verified-capacity-refused"},
+  "capacityTrials": [
+    {"candidate": "existing-second-copy", "maxMemoryGiB": 9, "httpStatus": 507, "minimumObservedMemoryPressureFreePercent": 31, "completed": false},
+    {"candidate": "existing-second-copy", "maxMemoryGiB": 10, "prefillChunkTokens": 16, "minimumObservedMemoryPressureFreePercent": 26, "stoppedByMonitorBelowPercent": 27, "completed": false},
+    {"candidate": "new-copy", "maxMemoryGiB": 10, "prefillChunkTokens": 32, "minimumObservedMemoryPressureFreePercent": 26, "stoppedByMonitorBelowPercent": 27, "completed": false},
+    {"candidate": "new-copy", "maxMemoryGiB": 10, "prefillChunkTokens": 16, "pagedKvQuantization": "q4", "minimumObservedMemoryPressureFreePercent": 26, "stoppedByMonitorBelowPercent": 27, "completed": false},
+    {"candidate": "new-copy", "maxMemoryGiB": 10, "prefillChunkTokens": 4, "contextWindow": 2048, "maxOutputTokens": 360, "pagedKvQuantization": "q4", "samples": 60, "minimumObservedMemoryPressureFreePercent": 23, "stoppedByMonitorBelowPercent": 27, "completed": false, "note": "A one-second sample crossed from 27 to 23 percent before the monitor could stop the task. Memory pressure later recovered to 86 percent; the isolated service and temporary API key were gone. This did not produce or qualify an MTP response."}
+  ],
+  "scope": "The HTTP 507 cause was not independently diagnosed. Test services were stopped, temporary API credentials cleared and existing workloads preserved. The imported model remains on disk but is explicitly marked capacity-refused; it was not added to the production gateway or a scheduler. No autonomous 10-node capacity allocation was qualified."
+}

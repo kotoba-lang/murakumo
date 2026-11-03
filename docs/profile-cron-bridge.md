@@ -11,6 +11,9 @@ prompt. The `accountability-steward` path does not read that work order, so
 the bridge refuses it even if a matching digest field is supplied. A changed
 work order is refused rather than silently ignored. This remains a read-only
 proposal lane; it does not run tools or make external changes.
+its source CID to match the exact host-pinned work-order digest. The resident
+later verifies that digest again against the restored checkpoint. A changed
+work order is refused rather than silently ignored.
 
 The bridge checks runtime pins, the independently verified retained head and
 a fresh GitHub archive acknowledgement before installing a canonical cron

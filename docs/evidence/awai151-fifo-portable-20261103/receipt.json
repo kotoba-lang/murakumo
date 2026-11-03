@@ -1,0 +1,37 @@
+{
+  "kind": "awai151.native-fifo-darwin-linux/1",
+  "date": "2026-11-03 Asia/Tokyo",
+  "sourceSha256": "efd391789af509b94eadc65a35d1676ef2e6fbd2a8186b3f75cd7ea48ea97619",
+  "sourceUnitySha256": "bc70db59c12e8a6e74f02b29227e11ba22dd7e7a06351d9026e5ec67d89bdcc1",
+  "mac": {
+    "environment": "one local macOS 26.3.1 arm64, task-owned FD3 fixture",
+    "compilerSha256": "920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6",
+    "diagnosticPackagerSha256": "f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d",
+    "nativeRawSha256": "2d515feaf57ee1bf0151ea76dc36892b629cc70c9c6b63c350f47c3547cf895a",
+    "signedArtifactSha256": "542b3e1c5231e9a833ca33e8813f1a150b762d524d80add408fce5b8730b4dbd",
+    "contractObserverSha256": "d26d9722d47e5e4387a6170363571b950c31593ed05e2aed346380ed7e17a3ca",
+    "lockObserverSha256": "a578419d154593d3e63eb4a8a7890bc05b628ed6fd3c1a7a9d43873e4d724f6d",
+    "sequentialCases": 11, "raceAttempts": 8, "raceEnqueued": 7, "raceBusy": 1,
+    "independentlyHeldFlock": "fifo/busy, exit 1",
+    "oldSource": "front succeeded; enqueue trapped before intent creation because string-to-string FS2 B was unsupported",
+    "byteWriteWithOldDeletion": "queue updated and intent remained, but process trapped at unsupported FS2 J; following front refused pending-unknown",
+    "final": "byte B plus FS2 L to archive intent; sequential cases, race, and independently held lock passed"
+  },
+  "linux": {
+    "environment": "isolated ARM64 VM, 1 CPU, 2 GiB; removed after test",
+    "compilerSha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+    "normalArtifactSha256": "4330e3ca3523eb1749415ed9ecbef1a902a1d52b2cd3f4b033714a7b02f3b1a6",
+    "contractObserverSha256": "f78fb60ebab29bcd7dc78b51c79bafe119445ca40658846c69c7b7792a93ade2",
+    "crashObserverSha256": "fc5c8c0bc7eb86fcb5d131f8de512b456ebbc5454dc485278c67ffde9c25d1b1",
+    "contract": "7 sequential checks, 2 synthetic pending/intent, malformed state, 8 concurrent attempts; 1 enqueued and 7 busy",
+    "processKill": "instrumented enqueue SIGKILL after intent, pending, queue rename or directory sync: uninstrumented front refuses pending-unknown; after intent archive: uninstrumented front returns the committed ticket",
+    "testArtifacts": {
+      "after-intent": "312c089dfe383c0c358066498ef70fafacec0ec5bd485b41b159e1fb7a206eba",
+      "after-pending": "4ea0116ee6b3f9722c87cc9ce3256cb4fcb5901b571c52c09acab347ebc90900",
+      "after-rename": "61683dc31c38715a54c7023587cde11af052cad73a13198e3290853147d0bb2d",
+      "after-sync": "b44ca1d2b619a185cae2f8be34c83faec12690e4657ea69c28c936b2745698d0",
+      "after-archive": "1c64e396f8f44cd95d5e8b3fff0856e3b7a31ea30dbb53426e5bcec9968db1af"
+    }
+  },
+  "limits": "Mac uses diagnostic compiler/packager, not a release runtime. Single host and one concurrent sample. Linux SIGKILL uses deliberately instrumented fixture; no power loss, fsync failure, Mac SIGKILL, attacker path races, FIFO admission fairness, workload/process-tree lifecycle, resource limits, full governor or fleet qualification. Python is used only for fixture observation and staging."
+}

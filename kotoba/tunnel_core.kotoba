@@ -18,7 +18,7 @@
             marker-prefix? strip-marker-digits
             batch-mode-opt strict-host-key-opt control-master-opt
             digit-val? parse-digits trim-ws
-            pick-exit trim-err err-ws?
+            pick-exit remote-exit remote-output trim-err err-ws?
             ssh-bin scp-bin o-flag O-flag exit-ctl ssh-port-flag
             pgrep-bin pkill-bin f-flag fN-flag L-flag
             null-redirect or-sep settle-sleep pkill-suffix
@@ -66,8 +66,8 @@
 (defn control-persist-opt [seconds :i64] :string
   (string-concat "ControlPersist=" (string-concat (i64-str seconds) "s")))
 
-(defn scp-dest [s [:ref :tunnel/scp]] :string
-  (string-concat (record-get s :host) (string-concat ":" (record-get s :dest))))
+(defn scp-dest [s [:record :tunnel/scp [[:host :string] [:dest :string]]]] :string
+  (string-concat (record-get [:record :tunnel/scp [[:host :string] [:dest :string]]] s :host) (string-concat ":" (record-get [:record :tunnel/scp [[:host :string] [:dest :string]]] s :dest))))
 
 (defn close-master-control-opt [control-path :string] :string
   (string-concat "ControlPath=" control-path))
@@ -121,21 +121,17 @@
     (if (= n 0)
       s
       (let [c0 (string-substring s 0 1)]
-        (if (if (string=? c0 " ")
-              1
-              (if (string=? c0 "\t") 1 0))
+        (if (or (string=? c0 " ") (string=? c0 "\t"))
           (trim-ws (string-substring s 1 n))
           (let [c1 (string-substring s (- n 1) n)]
-            (if (if (string=? c1 " ")
-                  1
-                  (if (string=? c1 "\t") 1 0))
+            (if (or (string=? c1 " ") (string=? c1 "\t"))
               (trim-ws (string-substring s 0 (- n 1)))
               s)))))))
 
-(defn parse-digits-go [x [:ref :tunnel/digits-go]] :i64
+(defn parse-digits-go [x [:record :tunnel/digits-go [[:s :string] [:acc :i64]]]] :i64
   ;; T5.2 residual: s+acc on one guest record
-  (let [s (record-get x :s)
-        acc (record-get x :acc)
+  (let [s (record-get [:record :tunnel/digits-go [[:s :string] [:acc :i64]]] x :s)
+        acc (record-get [:record :tunnel/digits-go [[:s :string] [:acc :i64]]] x :acc)
         n (string-byte-length s)]
     (if (= n 0)
       acc
@@ -143,7 +139,7 @@
             d (digit-of c)]
         (if (< d 0)
           -1
-          (parse-digits-go (record-new [:ref :tunnel/digits-go]
+          (parse-digits-go (record-new [:record :tunnel/digits-go [[:s :string] [:acc :i64]]]
                                        (string-substring s 1 n)
                                        (+ (* acc 10) d))))))))
 
@@ -153,13 +149,45 @@
         n (string-byte-length t)]
     (if (= n 0)
       -1
-      (parse-digits-go (record-new [:ref :tunnel/digits-go] t 0)))))
+      (parse-digits-go (record-new [:record :tunnel/digits-go [[:s :string] [:acc :i64]]] t 0)))))
 
-(defn pick-exit [e [:ref :tunnel/exit]] :i64
-  ;; cljc sh-result: (if (some? rc) rc exit)
-  ;; Profile 5: has-rc is a real :bool presence flag (not 0/1 i64).
-  ;; T5.2 native record.
-  (if (record-get e :has-rc) (record-get e :rc) (record-get e :ssh-exit)))
+(defn pick-exit [e [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]]] :i64
+  ;; A transport failure is never a confirmed remote success. When SSH says
+  ;; zero but the wrapped command did not report an in-band status, preserve
+  ;; that uncertainty as a nonzero result rather than inventing success.
+  (let [transport (record-get [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] e :ssh-exit) rc (record-get [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] e :rc)]
+    (if (not (= transport 0)) transport
+      (if (and (record-get [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] e :has-rc) (>= rc 0) (<= rc 255)) rc 255))))
+
+;; A standalone native consumer may use the wrapped command's final marker.
+;; Treat ambiguous, duplicate, truncated or oversized output as unknown. This
+;; is framing for a trusted remote command, not authentication or a receipt.
+(defn- remote-marker-offset [raw :string] :i64
+  (let [n (string-byte-length raw) marker (rc-marker) m (string-byte-length marker)
+        i (if (<= n 1048576) (string-index-of raw marker) -1)
+        start (+ i m) remaining (if (and (>= i 0) (< start n)) (string-substring raw start n) "")
+        len (string-byte-length remaining)
+        digits (if (and (>= len 2) (<= len 4) (= (string-substring remaining (- len 1) len) "\n"))
+                 (string-substring remaining 0 (- len 1)) "")
+        dlen (string-byte-length digits)
+        code (if (and (> dlen 0) (<= dlen 3) (= (trim-ws digits) digits)
+                      (or (= dlen 1) (not (= (string-substring digits 0 1) "0"))))
+               (parse-digits digits) -1)]
+    (if (and (>= i 0) (>= code 0) (<= code 255)
+             (< (string-index-of remaining marker) 0)) i -1)))
+
+(defn remote-exit [raw :string transport :i64] :i64
+  (let [i (remote-marker-offset raw)]
+    (if (not (= transport 0)) transport
+      (if (< i 0) 255
+        (let [start (+ i (string-byte-length (rc-marker))) n (string-byte-length raw)]
+          (parse-digits (string-substring raw start (- n 1))))))))
+
+;; Preserve the command's exact pre-marker bytes, including any trailing LF.
+;; For unknown framing return no bytes rather than a plausible partial result.
+(defn remote-output [raw :string transport :i64] :string
+  (let [i (remote-marker-offset raw)]
+    (if (or (not (= transport 0)) (< i 0)) "" (string-substring raw 0 i))))
 
 (defn err-ws? [c :string] :bool
   (if (string=? c " ")
@@ -205,12 +233,12 @@
 (defn curl-prefix [] :string "curl -s -m 5 ")
 (defn curl-stderr-redirect [] :string " 2>/dev/null")
 
-(defn forward-spec [p [:ref :tunnel/ports]] :string
+(defn forward-spec [p [:record :tunnel/ports [[:local-port :i64] [:remote-port :i64]]]] :string
   ;; "{local}:localhost:{remote}"
   ;; T5.2 native record.
   (string-concat
-   (i64-str (record-get p :local-port))
-   (string-concat (localhost-colon) (i64-str (record-get p :remote-port)))))
+   (i64-str (record-get [:record :tunnel/ports [[:local-port :i64] [:remote-port :i64]]] p :local-port))
+   (string-concat (localhost-colon) (i64-str (record-get [:record :tunnel/ports [[:local-port :i64] [:remote-port :i64]]] p :remote-port)))))
 
 (defn ssh-forward-prefix [] :string
   ;; "ssh -o BatchMode=yes -fN -L "
@@ -232,13 +260,13 @@
           " "
           (string-concat (L-flag) " "))))))))))
 
-(defn ensure-forward-command [f [:ref :tunnel/forward]] :string
+(defn ensure-forward-command [f [:record :tunnel/forward [[:local-port :i64] [:remote-port :i64] [:host :string]]]] :string
   ;; pgrep -f '{spec} {host}' >/dev/null 2>&1 || ssh -o BatchMode=yes -fN -L {spec} {host}
   ;; T5.2 native record.
-  (let [local-port (record-get f :local-port)
-        remote-port (record-get f :remote-port)
-        host (record-get f :host)
-        spec (forward-spec (record-new [:ref :tunnel/ports] local-port remote-port))
+  (let [local-port (record-get [:record :tunnel/forward [[:local-port :i64] [:remote-port :i64] [:host :string]]] f :local-port)
+        remote-port (record-get [:record :tunnel/forward [[:local-port :i64] [:remote-port :i64] [:host :string]]] f :remote-port)
+        host (record-get [:record :tunnel/forward [[:local-port :i64] [:remote-port :i64] [:host :string]]] f :host)
+        spec (forward-spec (record-new [:record :tunnel/ports [[:local-port :i64] [:remote-port :i64]]] local-port remote-port))
         probe (string-concat
                (pgrep-bin)
                (string-concat
@@ -262,13 +290,13 @@
         (ssh-forward-prefix)
         (string-concat spec (string-concat " " host))))))))
 
-(defn replace-forward-command [f [:ref :tunnel/forward]] :string
+(defn replace-forward-command [f [:record :tunnel/forward [[:local-port :i64] [:remote-port :i64] [:host :string]]]] :string
   ;; pkill + sleep + ssh forward (see host). T5.2 native record.
-  (let [local-port (record-get f :local-port)
-        remote-port (record-get f :remote-port)
-        host (record-get f :host)
+  (let [local-port (record-get [:record :tunnel/forward [[:local-port :i64] [:remote-port :i64] [:host :string]]] f :local-port)
+        remote-port (record-get [:record :tunnel/forward [[:local-port :i64] [:remote-port :i64] [:host :string]]] f :remote-port)
+        host (record-get [:record :tunnel/forward [[:local-port :i64] [:remote-port :i64] [:host :string]]] f :host)
         lp (i64-str local-port)
-        spec (forward-spec (record-new [:ref :tunnel/ports] local-port remote-port))
+        spec (forward-spec (record-new [:record :tunnel/ports [[:local-port :i64] [:remote-port :i64]]] local-port remote-port))
         kill (string-concat
               (pkill-bin)
               (string-concat

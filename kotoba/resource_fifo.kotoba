@@ -1,0 +1,145 @@
+;; Durable local FIFO primitive for a future resource governor (AWAI-151).
+;; It never dispatches work or decides that a workload has stopped. Only a
+;; trusted host may invoke dequeue after separately verifying the whole
+;; workload's termination. Root, files and all callers must be host-owned.
+(ns murakumo.resource-fifo (:export [resource-fifo-main]))
+
+(defn- rq-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- rq-out [s :string] :i64 (let [z (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- rq-fs [op :string path :string tail :string] :string
+  (let [reply (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+    (if (and (>= (string-byte-length reply) 5) (= (string-substring reply 0 5) "\u0000FS2\u0000"))
+      (string-substring reply 5 (string-length reply)) "")))
+;; Use the byte FS2 form and verify its complete echo. The diagnostic
+;; Darwin provider supports B as bytes; Linux supports this form as well.
+(defn- rq-write? [path :string value :string] :bool
+  (let [payload (string-to-utf8 value)
+        request (string-to-utf8 (str "\u0000FS2\u0000B" path "\u0000" value))
+        answer (typed-cap-call 35 :bytes :bytes request) n (bytes-count payload)]
+    (and (= (bytes-count answer) (+ n 5)) (= (bytes-at answer 0) 0)
+         (= (bytes-at answer 1) 70) (= (bytes-at answer 2) 83)
+         (= (bytes-at answer 3) 50) (= (bytes-at answer 4) 0)
+         (loop [i 0]
+           (if (= i n) true
+             (and (= (bytes-at payload i) (bytes-at answer (+ i 5))) (recur (+ i 1))))))))
+(defn- rq-root? [s :string] :bool
+  (and (> (string-length s) 1) (<= (string-length s) 200)
+       (= (string-substring s 0 1) "/") (not (= (string-substring s (- (string-length s) 1) (string-length s)) "/"))
+       (< (string-index-of s "..") 0) (< (string-index-of s "//") 0) (< (string-index-of s "/./") 0)
+       (not (= (string-substring s (- (string-length s) 2) (string-length s)) "/."))
+       (< (string-index-of s "_SEP") 0)
+       (loop [i 0]
+         (if (= i (string-length s)) true
+           (let [c (string-code-point-at s i)]
+             (if (or (and (>= c 97) (<= c 122)) (and (>= c 65) (<= c 90))
+                     (and (>= c 48) (<= c 57)) (= c 47) (= c 45) (= c 95) (= c 46))
+               (recur (+ i 1)) false))))))
+(defn- rq-ticket? [s :string] :bool
+  (and (= (string-length s) 64)
+       (loop [i 0]
+         (if (= i 64) true
+           (let [c (string-code-point-at s i)]
+             (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102)))
+               (recur (+ i 1)) false))))))
+(defn- rq-valid? [s :string] :bool
+  (let [n (string-length s)]
+    (and (>= n 5) (<= n 4165) (= (string-substring s 0 5) "RGQ1\n")
+         (= (mod (- n 5) 65) 0)
+         (loop [i 5]
+           (if (= i n) true
+             (let [ticket (string-substring s i (+ i 64)) suffix (string-substring s (+ i 65) n)]
+               (and (= (string-substring s (+ i 64) (+ i 65)) "\n") (rq-ticket? ticket)
+                    (< (string-index-of suffix (str ticket "\n")) 0) (recur (+ i 65)))))))))
+;; A recovery journal must describe exactly one append or one removal.
+;; It is local crash evidence, not authority to launch or stop a workload.
+(defn- rq-removal? [old :string next :string] :bool
+  (and (= (string-length old) (+ (string-length next) 65))
+       (loop [i 5]
+         (if (>= i (string-length old)) false
+           (if (= next (str (string-substring old 0 i)
+                            (string-substring old (+ i 65) (string-length old))))
+             true (recur (+ i 65)))))))
+(defn- rq-transition? [old :string next :string] :bool
+  (and (rq-valid? old) (rq-valid? next)
+       (or (and (= (string-length next) (+ (string-length old) 65))
+                (= (string-substring next 0 (string-length old)) old))
+           (rq-removal? old next))))
+(defn- rq-recover [root :string state :string pending-status :string intent-status :string] :string
+  (let [intent (str root "/queue.intent")
+        journal (if (= intent-status "1") (rq-fs "A" intent "") "")
+        cut (string-index-of journal "NEXT\n")
+        old (if (and (>= (string-length journal) 5) (>= cut 5)) (string-substring journal 5 cut) "")
+        next (if (and (>= cut 5) (<= (+ cut 5) (string-length journal)))
+               (string-substring journal (+ cut 5) (string-length journal)) "")]
+    (cond (not (= pending-status "0")) "fifo/recovery-unresolved"
+          (= intent-status "0") "fifo/no-intent"
+          (not (= intent-status "1")) "fifo/recovery-unresolved"
+          (or (> (string-length journal) 8340) (< (string-length journal) 10)
+              (not (= (string-substring journal 0 5) "RGI1\n"))
+              (not (rq-transition? old next))) "fifo/journal-invalid"
+          (not (or (= state next) (= state old))) "fifo/recovery-unresolved"
+          ;; Re-sync the already visible state; do not perform its transition
+          ;; again. "aborted" clears this journal but does not authorize a
+          ;; retry or assert anything about an external workload. The host
+          ;; must reconcile that outcome separately. Failures remain unknown.
+          (and (= (rq-fs "M" (str root "/queue") "") "1")
+               (= (rq-fs "M" intent "") "1")
+               (= (rq-fs "M" root "") "1")
+               (= (rq-fs "L" intent (str root "/queue.last")) "1")
+               (= (rq-fs "M" root "") "1")) (if (= state next) "fifo/recovered" "fifo/aborted")
+          :else "fifo/recovery-unknown")))
+(defn- rq-commit [root :string original :string next :string] :bool
+  (let [state (str root "/queue") tmp (str root "/queue.pending") intent (str root "/queue.intent")]
+    ;; Keep a separately fsynced intent across the rename and its directory
+    ;; sync. A leftover intent blocks all callers for host reconciliation.
+    ;; Rename the completed marker aside only after the queue directory sync;
+    ;; replacement is supported by the tested Linux and Darwin FS2 L forms.
+    (and (= (rq-fs "D" intent "") "0") (= (rq-fs "D" tmp "") "0")
+         (rq-write? intent (str "RGI1\n" original "NEXT\n" next)) (= (rq-fs "M" intent "") "1")
+         (= (rq-fs "M" root "") "1") (rq-write? tmp next)
+         (= (rq-fs "M" tmp "") "1") (= (rq-fs "A" tmp "") next)
+         (= (rq-fs "A" state "") original) (= (rq-fs "L" tmp state) "1")
+         (= (rq-fs "M" root "") "1") (= (rq-fs "L" intent (str root "/queue.last")) "1")
+         (= (rq-fs "M" root "") "1"))))
+(defn- rq-apply [root :string op :string ticket :string] :string
+  (let [state-path (str root "/queue") pending (str state-path ".pending") intent (str state-path ".intent")
+        exists (rq-fs "D" state-path "") pending-status (rq-fs "D" pending "") intent-status (rq-fs "D" intent "")
+        state (if (= exists "1") (rq-fs "A" state-path "") "")]
+    (cond (or (not (= exists "1")) (not (rq-valid? state))) "fifo/state-invalid"
+          (= op "recover") (rq-recover root state pending-status intent-status)
+          (or (not (= pending-status "0")) (not (= intent-status "0"))) "fifo/pending-unknown"
+          (= op "front") (if (= state "RGQ1\n") "fifo/empty" (str "fifo/front " (string-substring state 5 69)))
+          (not (rq-ticket? ticket)) "fifo/ticket-invalid"
+          (= op "enqueue")
+            (cond (not (< (string-index-of state (str ticket "\n")) 0)) "fifo/already-queued"
+                  (>= (string-length state) 4165) "fifo/full"
+                  (rq-commit root state (str state ticket "\n")) "fifo/enqueued"
+                  :else "fifo/write-unknown")
+          (= op "dequeue")
+            (cond (= state "RGQ1\n") "fifo/empty"
+                  (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
+                  (rq-commit root state (str "RGQ1\n" (string-substring state 70 (string-length state)))) "fifo/dequeued"
+                  :else "fifo/write-unknown")
+          (= op "cancel")
+            (let [i (string-index-of state (str ticket "\n"))]
+              (cond (< i 0) "fifo/not-queued"
+                    (= i 5) "fifo/cancel-front-refused"
+                    (rq-commit root state (str (string-substring state 0 i)
+                                               (string-substring state (+ i 65) (string-length state)))) "fifo/cancelled"
+                    :else "fifo/write-unknown"))
+          :else "fifo/command-invalid")))
+(defn resource-fifo-main [] :i64
+  (let [root (rq-arg 0) op (rq-arg 1) ticket (rq-arg 2) lock (str root "/queue.lock")]
+    (if (or (not (rq-root? root)) (not (= (rq-arg 3) ""))
+            (not (or (= op "front") (= op "enqueue") (= op "dequeue") (= op "cancel") (= op "recover")))
+            (and (or (= op "front") (= op "recover")) (not (= ticket ""))))
+      (let [z (rq-out "fifo/input-invalid")] 2)
+      (if (not (= (rq-fs "D" lock "") "1")) (let [z (rq-out "fifo/lock-unavailable")] 2)
+        (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
+          (let [z (rq-out "fifo/busy")] 1)
+          (let [result (rq-apply root op ticket)
+                released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")
+                z (rq-out (if released result "fifo/unlock-unknown"))]
+            (if (and released (or (= result "fifo/enqueued") (= result "fifo/dequeued") (= result "fifo/cancelled")
+                                  (= result "fifo/empty") (= result "fifo/recovered") (= result "fifo/aborted")
+                                  (= (string-index-of result "fifo/front ") 0))) 0 1)))))))
