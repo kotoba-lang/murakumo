@@ -199,7 +199,7 @@
                 state (own-state seed did node fd admitted now)
                 admit (cell-admit index profile "container" state allowed)
                 a (jn-say (str "job " jid))]
-            (if (not (= admit "launch/ok")) (let [x (jn-say (string-concat "ineligible " admit))] 0)
+            (if (not (= admit "launch/ok")) (let [x (jn-say (string-concat "ineligible " admit))] 1)
               (let [chosen (lease-round t node (lease-text node jid 0 1 (+ now (lease-ttl)) 0) ports token)
                     holder (if (= chosen "") "" (jn-text chosen "node"))
                     epoch (if (= chosen "") 0 (jn-num chosen "epoch"))
@@ -207,7 +207,7 @@
                     check-now (ln-now "clock")
                     guard (if (< check-now now) "job/clock-regressed" (jn-lease-problem chosen node jid check-now))]
                 (if (not (= guard "job/lease-ok"))
-                  (let [x (jn-say (if (= guard "job/lease-holder") (str "held-by " holder) guard))] 0)
+                  (let [x (jn-say (if (= guard "job/lease-holder") (str "held-by " holder) guard))] 1)
                   (let [attempt (jn-attempt attempts jid) dispatch-now (ln-now "clock")
                         dispatch-guard (if (< dispatch-now check-now) "job/clock-regressed"
                                          (jn-lease-problem chosen node jid dispatch-now))]
