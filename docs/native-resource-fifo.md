@@ -32,3 +32,9 @@ actual filesystem writes, sequential order, duplicates, busy contenders and
 synthetic leftover intent/pending and corrupt state. Its concurrent case is a
 single race; its crash markers are manually created, not a crash or power-loss
 test. No Mac mini or existing service was modified.
+
+A later [Linux process-kill observation](evidence/awai151-fifo-kill-20261103/)
+paused instrumented source after the intent, pending write, rename, directory
+sync and intent unlink. The uninstrumented component refused the surviving
+intent in the first four cases and read the committed ticket in the fifth.
+This does not test power loss, failed fsync, Mac, process trees or admission.
