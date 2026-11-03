@@ -30,9 +30,20 @@
       (cp-cid b) "")))
 
 (defn- rt-lease [cfg :vector-i64 epoch :i64] :vector-i64
-  (cp-bytes (lease-group-round epoch (cp-str cfg 0 "node")
-    (lease-text (cp-str cfg 0 "node") (cp-str cfg 0 "task") 0 epoch (+ (rt-now) (lease-ttl)) 1)
-    (cp-str cfg 0 "voters") (lease-token (cp-str cfg 0 "tokenFile")))))
+  (let [now (rt-now)]
+    (if (or (< epoch 1) (> epoch 9007199254740991) (<= now 0)
+            (> now (- 9007199254740991 (lease-ttl)))) (vector-alloc 0)
+      (cp-bytes (lease-group-round epoch (cp-str cfg 0 "node")
+        (lease-text (cp-str cfg 0 "node") (cp-str cfg 0 "task") 0 epoch (+ now (lease-ttl)) 1)
+        (cp-str cfg 0 "voters") (lease-token (cp-str cfg 0 "tokenFile")))))))
+
+;; Do not use a learned value to decide renewal or takeover before validating
+;; its epoch, task and bounded times. It may be an old or corrupt quorum value.
+(defn- rt-lease-bound? [cfg :vector-i64 lease :vector-i64 epoch :i64 now :i64] :bool
+  (and (json-valid? lease) (json-canonical? lease) (= (json-kind lease 0) 1) (= (json-count lease 0) 6)
+       (= (cp-str lease 0 "class") (cp-str cfg 0 "task")) (= (cp-num lease 0 "slot") 0)
+       (= (cp-num lease 0 "epoch") epoch)
+       (valid-value? (cp-str lease 0 "node") true (cp-str cfg 0 "task") 0 epoch (cp-num lease 0 "until") now)))
 
 (defn- rt-current-lease [cfg :vector-i64 floor :i64] :vector-i64
   (let [path (cp-str cfg 0 "leaseFile") status (cp-fs "D" path "")
@@ -41,18 +52,16 @@
       (vector-alloc 0)
       (let [e (if (>= (cp-num saved 0 "epoch") floor) (cp-num saved 0 "epoch") floor)
             learned (rt-lease cfg e) now (rt-now) node (cp-str cfg 0 "node")]
-        (if (= (vector-count learned) 0) learned
+        (if (not (rt-lease-bound? cfg learned e now)) (vector-alloc 0)
           (let [mine (= (cp-str learned 0 "node") node)
                 renew (or (and mine (> now (- (cp-num learned 0 "until") (lease-renew-before))))
                           (not mine))
-                next (if (and renew
+                next (if (and renew (< e 9007199254740991)
                            (or mine (> now (+ (cp-num learned 0 "until") (lease-skew)))))
                          (rt-lease cfg (+ e 1)) learned)
                 ne (cp-num next 0 "epoch")
-                bound (and (json-canonical? next) (= (json-count next 0) 6)
-                        (= (cp-str next 0 "class") (cp-str cfg 0 "task")) (= (cp-num next 0 "slot") 0)
-                        (or (= ne e) (= ne (+ e 1)))
-                        (valid-value? (cp-str next 0 "node") true (cp-str cfg 0 "task") 0 ne (cp-num next 0 "until") (rt-now)))
+                bound (and (or (= ne e) (and (< e 9007199254740991) (= ne (+ e 1))))
+                           (rt-lease-bound? cfg next ne (rt-now)))
                 saved (and bound (rt-save path next))]
             (if (and saved (= (recovery-lease-problem next (cp-str cfg 0 "task") node ne (rt-now)) "recovery/lease-admitted"))
               next (vector-alloc 0))))))))

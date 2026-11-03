@@ -16,10 +16,11 @@
 ;;   lease-text      the value {class epoch node revision slot until}, canonical
 ;;                   JSON; values are compared by this text
 ;;   valid-value?    lease.cljk valid-value?: an enabled node, class 1..128,
-;;                   slot 0..255, epoch >= 1, until <= now + ttl + skew
+;;                   slot 0..255, epoch >= 1, bounded nonnegative clock and
+;;                   expiry, until <= now + ttl + skew (expired is allowed)
 ;;   base-of, id-of  l_<24 hex of SHA-256(class)>_<slot>, then _<epoch>
 ;;   decide          lease.cljk decide: lease/propose-open, lease/renew,
-;;                   lease/hold, lease/take-over or lease/held-by;
+;;                   lease/hold, lease/take-over, lease/held-by or invalid time;
 ;;                   decide-epoch the epoch a proposal carries
 ;;   held-now?       a holder trusts its lease only until until - skew
 ;;
@@ -79,6 +80,8 @@
   (and enabled (> (string-length node) 0) (lc-plain? node)
        (>= (string-length class) 1) (<= (string-length class) 128) (lc-plain? class)
        (>= slot 0) (<= slot 255) (>= epoch 1) (<= epoch 9007199254740991)
+       (>= now 0) (<= now 9007199254740991)
+       (>= until 0) (<= until 9007199254740991)
        (<= until (+ now (+ (lease-ttl) (lease-skew))))))
 
 (defn base-of [class :string slot :i64] :string
@@ -90,18 +93,24 @@
 ;; The proposer's decision for epoch e and its chosen value (if any)
 
 (defn decide [me :string e :i64 has-value :bool v-node :string v-until :i64 now :i64] :string
-  (cond (not has-value) "lease/propose-open"
+  (cond (or (< now 0) (> now 9007199254740991)
+            (and has-value (or (< v-until 0) (> v-until 9007199254740991)))) "lease/invalid-time"
+        (not has-value) "lease/propose-open"
         (= me v-node) (if (> now (- v-until (lease-renew-before))) "lease/renew" "lease/hold")
         (> now (+ v-until (lease-skew))) "lease/take-over"
         :else "lease/held-by"))
 
 (defn decide-epoch [action :string e :i64] :i64
-  (cond (= action "lease/propose-open") (if (< e 1) 1 e)
-        (or (= action "lease/renew") (= action "lease/take-over")) (+ e 1)
+  (cond (or (< e 0) (> e 9007199254740991)) -1
+        (= action "lease/propose-open") (if (< e 1) 1 e)
+        (or (= action "lease/renew") (= action "lease/take-over")) (if (= e 9007199254740991) -1 (+ e 1))
         :else e))
 
 (defn held-now? [lease-node :string me :string until :i64 now :i64] :bool
-  (and (= lease-node me) (< now (- until (lease-skew)))))
+  (and (not (= me "")) (= lease-node me)
+       (>= now 0) (<= now 9007199254740991)
+       (>= until (lease-skew)) (<= until 9007199254740991)
+       (< now (- until (lease-skew)))))
 
 ;; ---------------------------------------------------------------------------
 ;; test-* : zero-arity, true when every assertion holds
@@ -155,7 +164,19 @@
          (= (decide "k16" 3 true "b70" until (+ until 60001)) "lease/take-over") (= (decide-epoch "lease/take-over" 3) 4)
          (held-now? "b70" "b70" until now) (not (held-now? "b70" "b70" until (- until 60000)))
          (not (held-now? "b70" "k16" until now))
+         (not (held-now? "" "" until now))
+         (not (held-now? "b70" "b70" (- -9223372036854775807 1) now))
+         (not (held-now? "b70" "b70" until -1))
+         (= (decide "b70" 3 true "b70" -1 now) "lease/invalid-time")
+         (= (decide "b70" 3 false "" 0 -1) "lease/invalid-time")
+         (= (decide-epoch "lease/renew" 9007199254740991) -1)
+         (= (decide-epoch "lease/take-over" -1) -1)
          (valid-value? "b70" true "qwen-text" 0 1 until now)
+         ;; Expired but non-negative values remain adoptable in Paxos.
+         (valid-value? "b70" true "qwen-text" 0 1 0 now)
+         (not (valid-value? "b70" true "qwen-text" 0 1 -1 now))
+         (not (valid-value? "b70" true "qwen-text" 0 1 until -1))
+         (not (valid-value? "b70" true "qwen-text" 0 1 9007199254740992 now))
          (not (valid-value? "b70" false "qwen-text" 0 1 until now))
          (not (valid-value? "b70" true "" 0 1 until now))
          (not (valid-value? "b70" true "qwen-text" 256 1 until now))
