@@ -15,6 +15,21 @@ The [actual Itonami profile recovery adapter](itonami-profile-recovery.md)
 adds producer-loss detection and a bounded read-only inference continuation
 on another node. It preserves the admission boundaries described here.
 
+## Bounded Mac block-store check
+
+A [Mac diagnostic fixture](evidence/awai154-mac-checkpoint-block-20261103/receipt.json)
+composes this checkpoint source's actual block-writing helpers with SHA/CID
+code and the draft Darwin FS2 runtime from Amu #1796. It wrote an 8,197-byte
+synthetic block, read it back through the checkpoint's byte capability,
+verified its CID independently, and checked idempotent reuse. A deliberately
+corrupted existing block was refused without overwriting it. An existing
+symlink to the block path trapped before modifying its target; this is an
+unconfirmed failure, not a clean structured refusal.
+
+This is one Mac and local test data. It does not run the Git capture or
+restore, GitHub archive, authenticated bot, independent host or resource
+governor. The diagnostic runtime and compiler are not release qualified.
+
 ## Existing implementation and the remaining gap
 
 | Component inspected | Existing behavior | This change / remaining work |
