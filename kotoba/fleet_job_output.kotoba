@@ -4,7 +4,7 @@
 ;; Compose after fleet_job_node and git_checkpoint. The trusted host must own
 ;; both the capture tree and block store exclusively throughout this operation;
 ;; path-based metadata and reads do not bind against a concurrent replacement.
-(ns murakumo.fleet-job-output (:export [job-output-main job-output-proof-verify-main]))
+(ns murakumo.fleet-job-output (:export [job-output-main job-output-proof-verify-main job-output-checkpoint-verify-main]))
 
 (defn- jo-once? [s :string key :string] :bool
   (let [line (str "\n" key " ") all (str "\n" s) i (string-index-of all line)]
@@ -112,4 +112,42 @@
             verdict (if valid (jo-proof-verdict proof output did job) "job-output/proof-invalid")]
         (if (= verdict "job-output/verified")
           (let [x (jn-say "job-output/proof-verified")] 0)
+          (let [x (jn-say verdict)] 1))))))
+
+;; Only a signed checkpoint's explicit allowlisted files are archived. Match
+;; independently pinned paths and CIDs, not merely the presence of two blocks.
+(defn- jo-checkpoint-links? [checkpoint :vector-i64 out-path :string out-cid :string
+                            proof-path :string proof-cid :string] :bool
+  (let [payload (cp-payload checkpoint) files (if (>= payload 0) (json-member checkpoint payload "untracked") -1)]
+    (and (checkpoint-path? out-path) (checkpoint-path? proof-path) (not (= out-path proof-path))
+         (cp-raw? out-cid) (cp-raw? proof-cid) (>= files 0) (= (json-kind checkpoint files) 2)
+         (loop [i 0 found-out false found-proof false]
+           (if (= i (json-count checkpoint files)) (and found-out found-proof)
+             (let [item (json-element checkpoint files i) path (cp-str checkpoint item "path")
+                   cid (cp-str checkpoint item "cid") mode (cp-str checkpoint item "mode")
+                   out (and (= path out-path) (= cid out-cid) (= mode "644"))
+                   proof (and (= path proof-path) (= cid proof-cid) (= mode "644"))]
+               (recur (+ i 1) (or found-out out) (or found-proof proof))))))))
+
+;; The store must be the caller's independently fetched and verified archive
+;; store, owned exclusively through this check. This function does not fetch
+;; from GitHub or establish a live lease or permission to advance a cursor.
+(defn job-output-checkpoint-verify-main [] :i64
+  (let [store (jn-arg 0) checkpoint-cid (jn-arg 1) author (jn-arg 2) profile (jn-arg 3)
+        policy (jn-arg 4) environment (jn-arg 5) epoch (cp-int (jn-arg 6))
+        parent (jn-arg 7) task (jn-arg 8) output-cid (jn-arg 9) proof-cid (jn-arg 10)
+        did (jn-arg 11) job (jn-arg 12) out-path (jn-arg 13) proof-path (jn-arg 14)]
+    (if (or (not (jn-attempt-root? store)) (not (jn-private-dir? store))
+            (not (cp-raw? checkpoint-cid)) (not (cp-raw? output-cid)) (not (cp-raw? proof-cid)))
+      (let [x (jn-say "job-output/checkpoint-config-refused")] 2)
+      (let [checkpoint (jo-block store checkpoint-cid) output (jo-block store output-cid)
+            proof (jo-block store proof-cid)
+            blocks (and (jo-block? store checkpoint-cid checkpoint) (jo-block? store output-cid output)
+                        (jo-block? store proof-cid proof))
+            contract (if blocks (checkpoint-problem checkpoint author profile policy environment epoch parent task) "checkpoint/missing-or-corrupt-root")
+            linked (and (= contract "checkpoint/ok") (jo-checkpoint-links? checkpoint out-path output-cid proof-path proof-cid))
+            closure (if linked (cp-closure? store checkpoint) false)
+            verdict (if closure (jo-proof-verdict proof output did job) "job-output/checkpoint-refused")]
+        (if (= verdict "job-output/verified")
+          (let [x (jn-say "job-output/checkpoint-verified")] 0)
           (let [x (jn-say verdict)] 1))))))
