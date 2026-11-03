@@ -5,7 +5,10 @@ up to 64 caller-supplied 64-character lowercase hex tickets. A trusted host
 provisions a private directory containing a stable `queue.lock` and an initial
 `queue` containing `RGQ1` followed by LF. The component takes a nonblocking
 filesystem flock before every operation. `enqueue` appends a unique ticket,
-`front` reads the head, and `dequeue` removes only the exact head. Malformed,
+`front` reads the head, `dequeue` removes only the exact head, and `cancel`
+removes an exact non-head ticket. The trusted host must authorize cancellation
+only for an abandoned request that has not launched; cancellation of the head
+is always refused. Malformed,
 missing or duplicate state, full queue, unknown staging and contention are
 refused. No refusal is retried in a polling loop.
 
@@ -14,7 +17,7 @@ rename and directory fsync. After syncing the new queue, the intent is renamed
 to `queue.last` and the directory is synced again. A surviving intent or pending file blocks ordinary
 operations. The intent contains both the original and target queue. Under the
 same lock, explicit `recover` archives the intent only when it describes one
-valid append or head removal, no pending file remains, and the queue already
+valid append or single removal, no pending file remains, and the queue already
 equals the target. Recovery re-syncs the directory and never applies the
 transition again. Invalid, older-format or unresolved intents remain blocked
 for trusted-host reconciliation. The source requires a host-owned,
@@ -65,3 +68,8 @@ The [recovery observation](evidence/awai151-fifo-recovery-20261103/) checks
 synthetic process kills, invalid journals and a repeat recovery using the
 diagnostic Mac runtime, plus Linux ARM64 regression checks. It does not simulate power loss or authorize workload
 admission. Earlier process-kill evidence used the prior intent format.
+
+The [cancellation observation](evidence/awai151-fifo-cancel-20261103/)
+checks queue order, head refusal, recovery and a single lock race on a local
+Mac diagnostic runtime. Cancellation is not yet integrated with workload
+identity or a production governor.

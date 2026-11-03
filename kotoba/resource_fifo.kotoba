@@ -50,14 +50,20 @@
              (let [ticket (string-substring s i (+ i 64)) suffix (string-substring s (+ i 65) n)]
                (and (= (string-substring s (+ i 64) (+ i 65)) "\n") (rq-ticket? ticket)
                     (< (string-index-of suffix (str ticket "\n")) 0) (recur (+ i 65)))))))))
-;; A recovery journal must describe exactly one append or one head removal.
+;; A recovery journal must describe exactly one append or one removal.
 ;; It is local crash evidence, not authority to launch or stop a workload.
+(defn- rq-removal? [old :string next :string] :bool
+  (and (= (string-length old) (+ (string-length next) 65))
+       (loop [i 5]
+         (if (>= i (string-length old)) false
+           (if (= next (str (string-substring old 0 i)
+                            (string-substring old (+ i 65) (string-length old))))
+             true (recur (+ i 65)))))))
 (defn- rq-transition? [old :string next :string] :bool
   (and (rq-valid? old) (rq-valid? next)
        (or (and (= (string-length next) (+ (string-length old) 65))
                 (= (string-substring next 0 (string-length old)) old))
-           (and (>= (string-length old) 70)
-                (= next (str "RGQ1\n" (string-substring old 70 (string-length old))))))))
+           (rq-removal? old next))))
 (defn- rq-recover [root :string state :string pending-status :string intent-status :string] :string
   (let [intent (str root "/queue.intent")
         journal (if (= intent-status "1") (rq-fs "A" intent "") "")
@@ -110,11 +116,18 @@
                   (not (= (string-substring state 5 69) ticket)) "fifo/not-front"
                   (rq-commit root state (str "RGQ1\n" (string-substring state 70 (string-length state)))) "fifo/dequeued"
                   :else "fifo/write-unknown")
+          (= op "cancel")
+            (let [i (string-index-of state (str ticket "\n"))]
+              (cond (< i 0) "fifo/not-queued"
+                    (= i 5) "fifo/cancel-front-refused"
+                    (rq-commit root state (str (string-substring state 0 i)
+                                               (string-substring state (+ i 65) (string-length state)))) "fifo/cancelled"
+                    :else "fifo/write-unknown"))
           :else "fifo/command-invalid")))
 (defn resource-fifo-main [] :i64
   (let [root (rq-arg 0) op (rq-arg 1) ticket (rq-arg 2) lock (str root "/queue.lock")]
     (if (or (not (rq-root? root)) (not (= (rq-arg 3) ""))
-            (not (or (= op "front") (= op "enqueue") (= op "dequeue") (= op "recover")))
+            (not (or (= op "front") (= op "enqueue") (= op "dequeue") (= op "cancel") (= op "recover")))
             (and (or (= op "front") (= op "recover")) (not (= ticket ""))))
       (let [z (rq-out "fifo/input-invalid")] 2)
       (if (not (= (rq-fs "D" lock "") "1")) (let [z (rq-out "fifo/lock-unavailable")] 2)
@@ -123,5 +136,5 @@
           (let [result (rq-apply root op ticket)
                 released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")
                 z (rq-out (if released result "fifo/unlock-unknown"))]
-            (if (and released (or (= result "fifo/enqueued") (= result "fifo/dequeued")
+            (if (and released (or (= result "fifo/enqueued") (= result "fifo/dequeued") (= result "fifo/cancelled")
                                   (= result "fifo/empty") (= result "fifo/recovered") (= (string-index-of result "fifo/front ") 0))) 0 1)))))))
