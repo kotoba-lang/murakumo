@@ -1,6 +1,6 @@
 ;; Compose after fleet_model_oci_seal and its native dependency closure.
 ;; The fixture digest was calculated independently from compact JSON bytes.
-(ns murakumo.fleet-model-oci-seal-test (:export [test-model-oci-seal-descriptors]))
+(ns murakumo.fleet-model-oci-seal-test (:export [test-model-oci-seal-descriptors test-model-oci-seal-observed-pin]))
 
 (defn test-model-oci-seal-descriptors [] :bool
   (let [base "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -23,3 +23,13 @@
          (json-valid? index) (json-canonical? index) (>= manifests 0)
          (= (json-count index manifests) 1)
          (ol-index-ok? index (json-element index manifests 0) expected 758))))
+
+;; Independent public-source observation, not an approved publisher or a
+;; produced OCI artifact. See docs/evidence/awai149-oci-expected-20261103.
+(defn test-model-oci-seal-observed-pin [] :bool
+  (let [base "sha256:130de5925082c168b7866b2e91b52e44abbafc99017e3ca352b77b5b55a269ed"
+        mtp "sha256:f803737b0e64bcce54fcfa22f2c7ee342ad37192b8e2a3299fc940387a828c9d"
+        assets "sha256:9a2a88d5d3bf678f56310ff7f2dbf1868e43e28ac6ef61176b281d976398cea7"
+        manifest (ms-manifest base 8595477990 mtp 238934226 assets 13517312)]
+    (and (= (string-byte-length manifest) 774)
+         (= (ms-digest manifest) "sha256:a64f932f5780e1024057f84ed96a761cd535610dc6b0870154a93b9e59df3bc8"))))
