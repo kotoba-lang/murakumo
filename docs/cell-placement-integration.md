@@ -78,3 +78,14 @@ The shell concatenates source bodies without changing their definitions;
 the pinned native root compiles and executes them. This does not prove
 project-module linkage, signed input verification, native peer transport,
 OCI launch, model inference, Yataverse persistence, settlement or deployment.
+
+## Observation time boundary
+
+The native placement candidate rejects future timestamps, negative observation
+or current time, and nonpositive TTL before calculating observation age. An
+observation exactly at the TTL is stale. This intentionally differs from the
+older CLJK `fresh?`, which admits future timestamps. The
+[ARM64 source-unity check](evidence/awai151-freshness-20261103/) exercises the
+existing placement groups and shows that restoring the old predicate fails the
+future-time control. This decision does not establish trusted clocks or actual
+resource reservation; callers still need a qualified live admission boundary.

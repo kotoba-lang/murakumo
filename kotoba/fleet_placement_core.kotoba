@@ -4,7 +4,7 @@
 ;; Linear JUN-315). Every node runs the same function on the same (intent,
 ;; observations, now) and gets the same answer; quorum leases settle the rest.
 ;;
-;;   fresh?            an observation counts only while younger than ttl
+;;   fresh?            nonnegative, nonfuture observations younger than a positive ttl
 ;;   effective-memory  the node's declared memory-gb, else the observed, else 0
 ;;   labels-ok?        every wanted label equals the node's (newline-terminated
 ;;                     "key=value" lines; keys are unique, no "=" in a key)
@@ -25,6 +25,10 @@
 ;; here. The digests in the tests were computed independently (Python
 ;; hashlib), and the expected orders follow from them.
 ;;
+;; Future timestamps and invalid time inputs are intentionally rejected here;
+;; the legacy .cljk fresh? did not apply these checks. This candidate is not
+;; a live resource reservation or a replacement for host admission.
+;;
 ;; Written in the Amu selfhost seed subset; README "Fleet decisions in Kotoba"
 ;; has the gate.
 (ns murakumo.fleet-placement
@@ -36,7 +40,10 @@
 ;; L2
 
 (defn fresh? [has-obs :bool at-ms :i64 now-ms :i64 ttl-ms :i64] :bool
-  (and has-obs (< (- now-ms at-ms) ttl-ms)))
+  ;; Fail closed for missing/invalid time, future observations and nonpositive
+  ;; TTL. The nonnegative ordering also prevents signed subtraction overflow.
+  (and has-obs (>= at-ms 0) (>= now-ms at-ms) (> ttl-ms 0)
+       (< (- now-ms at-ms) ttl-ms)))
 
 ;; -1 = absent
 (defn effective-memory [node-gb :i64 obs-gb :i64] :i64
@@ -156,6 +163,13 @@
            (not (fresh? true 700000 1000000 300000))
            (not (fresh? true 0 1000000 300000))
            (not (fresh? false 1000000 1000000 300000))
+           (not (fresh? true 1000001 1000000 300000))
+           (not (fresh? true -1 0 300000))
+           (not (fresh? true 0 -1 300000))
+           (not (fresh? true 10 10 0))
+           (not (fresh? true 10 10 -1))
+           (fresh? true 9223372036854775807 9223372036854775807 1)
+           (not (fresh? true 0 9223372036854775807 9223372036854775807))
            (= (effective-memory 16 32) 16)
            (= (effective-memory -1 32) 32)
            (= (effective-memory 0 32) 0)
