@@ -1,0 +1,7 @@
+# macOS data and address-space limit probe
+
+On 2026-11-03, a local Apple Silicon Mac running macOS 26.3.1 build 25D771280a and Python 3.14.5 ran `probe.py`. It starts independent short-lived processes; each attempts only its own `setrlimit`. A baseline allocated and touched 32 MiB. As positive controls, direct libc calls setting both soft and hard CPU limit to 3 seconds and file-size limit to 8 MiB succeeded and `getrlimit` returned those values. Those controls establish installation, not enforcement.
+
+Direct libc calls setting both soft and hard `RLIMIT_DATA` to 8 MiB, 512 MiB or 1 GiB each returned -1 with errno 22 (`EINVAL`), and readback remained unlimited. `RLIMIT_AS` had the same results at all three bounds. On this Python/macOS combination, `RLIMIT_AS` and `RLIMIT_RSS` both have resource number 5; the latter also returned EINVAL at 8 MiB. Thus these two names are not independent successful controls in this environment. The prior RSS launchd test is documented in `../awai151-macos-rss-limit-20261103.json`.
+
+Probe SHA-256 `4b88c34fbefe48967c53555e7e34972929bac0149ae738c43888adeec96cd276`. The script is diagnostic Python only, not a governor or an operational dependency. This is one local Mac, not a mini or model execution. It does not establish behavior at every possible limit, under launchd, on other OS versions, for GPU/unified memory, or for all other possible resource controls. It provides no evidence that any tested memory limit was enforced. Existing services were untouched.
