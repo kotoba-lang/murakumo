@@ -18,7 +18,7 @@
             marker-prefix? strip-marker-digits
             batch-mode-opt strict-host-key-opt control-master-opt
             digit-val? parse-digits trim-ws
-            pick-exit trim-err err-ws?
+            pick-exit remote-exit remote-output trim-err err-ws?
             ssh-bin scp-bin o-flag O-flag exit-ctl ssh-port-flag
             pgrep-bin pkill-bin f-flag fN-flag L-flag
             null-redirect or-sep settle-sleep pkill-suffix
@@ -158,6 +158,36 @@
   (let [transport (record-get [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] e :ssh-exit) rc (record-get [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] e :rc)]
     (if (not (= transport 0)) transport
       (if (and (record-get [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] e :has-rc) (>= rc 0) (<= rc 255)) rc 255))))
+
+;; A standalone native consumer may use the wrapped command's final marker.
+;; Treat ambiguous, duplicate, truncated or oversized output as unknown. This
+;; is framing for a trusted remote command, not authentication or a receipt.
+(defn- remote-marker-offset [raw :string] :i64
+  (let [n (string-byte-length raw) marker (rc-marker) m (string-byte-length marker)
+        i (if (<= n 1048576) (string-index-of raw marker) -1)
+        start (+ i m) remaining (if (and (>= i 0) (< start n)) (string-substring raw start n) "")
+        len (string-byte-length remaining)
+        digits (if (and (>= len 2) (<= len 4) (= (string-substring remaining (- len 1) len) "\n"))
+                 (string-substring remaining 0 (- len 1)) "")
+        dlen (string-byte-length digits)
+        code (if (and (> dlen 0) (<= dlen 3) (= (trim-ws digits) digits)
+                      (or (= dlen 1) (not (= (string-substring digits 0 1) "0"))))
+               (parse-digits digits) -1)]
+    (if (and (>= i 0) (>= code 0) (<= code 255)
+             (< (string-index-of remaining marker) 0)) i -1)))
+
+(defn remote-exit [raw :string transport :i64] :i64
+  (let [i (remote-marker-offset raw)]
+    (if (not (= transport 0)) transport
+      (if (< i 0) 255
+        (let [start (+ i (string-byte-length (rc-marker))) n (string-byte-length raw)]
+          (parse-digits (string-substring raw start (- n 1))))))))
+
+;; Preserve the command's exact pre-marker bytes, including any trailing LF.
+;; For unknown framing return no bytes rather than a plausible partial result.
+(defn remote-output [raw :string transport :i64] :string
+  (let [i (remote-marker-offset raw)]
+    (if (or (not (= transport 0)) (< i 0)) "" (string-substring raw 0 i))))
 
 (defn err-ws? [c :string] :bool
   (if (string=? c " ")
