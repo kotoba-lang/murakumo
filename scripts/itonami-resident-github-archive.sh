@@ -21,7 +21,7 @@ root=$2; author=$3; profile=$4; policy=$5; environment=$6; epoch=$7; parent=$8; 
 shift 9
 store=$1; ack=$2
 ackdir=$(realpath -e -- "$(dirname -- "$ack")") || fail 'resident-archive/ack-directory-refused'
-case "$ackdir/" in "$workroot"/*/) ;; *) fail 'resident-archive/ack-outside-workroot';; esac
+case "$ackdir/" in "$workroot"/|"$workroot"/*/) ;; *) fail 'resident-archive/ack-outside-workroot';; esac
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 result=$("$script_dir/itonami-github-checkpoint-archive.sh" "$checkpoint" "$workroot" "$store" "$repo" "$root" "$author" "$profile" "$policy" "$environment" "$epoch" "$parent" "$task") || fail 'resident-archive/storage-unconfirmed'
 set -- $result

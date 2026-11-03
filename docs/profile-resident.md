@@ -76,6 +76,11 @@ secrets. The snapshot is supplied as source material, not live observations. The
 model can propose a draft only: metadata capability declarations do not
 enable tools, publication, messaging, GitHub writes or scheduling. A pinned
 runtime and a completed response do not prove the model fits the host or that
+the source snapshot is current. The growth lane requests a concise six-role
+handoff and defaults to a 768-token completion limit. An independently pinned
+local runtime may set `maxTokens` from 64 to 768. The host must admit sufficient
+context and memory for the full prompt plus that bound. The existing replica,
+lease and retention
 the source snapshot is current. The growth lane has a 768-token completion
 limit and requests a concise six-role handoff. The host must admit sufficient
 context and memory for the full prompt plus that bound. The existing replica, lease and retention
@@ -178,10 +183,48 @@ keep promised objects, archive failed attempts, and review local usage before
 removing any task-owned data. Do not delete an object until all live heads,
 receipts and retention commitments are accounted for.
 
+For the AWAI growth steward, use a separately constructed Git execution cache
+containing the pinned profile files, pinned context, source record and tracked
+state; do not assume that a full source repository fits this transport. An
+isolated fixture with the actual pinned profile and context produced a 3,798-byte
+bootstrap Git bundle and a 4,267-byte bundle with one modified state; the
+compact real model output was 2,589 bytes as a separate untracked file. A full
+bundle of the source revision was 1,308,736 bytes and would produce chunks over
+the peer limit. These are fixture measurements, not a native checkpoint,
+replication or recovery qualification; future context and state changes must
+be checked again.
+
+An additional isolated AWAI-147 test captured that growth-profile fixture with
+the native checkpoint executable, including the real compact MTP response as
+an allowlisted output. A native peer uploaded the full signed closure over
+authenticated loopback into a separate store; the checkpoint verifier and an
+independent checkout restored from that store, and the profile, context,
+state and output matched byte for byte. A wrong profile pin and a corrupted
+output block were refused before their destination directories were created.
+Both peer processes and stores were on the same Linux host with test-only
+credentials: this does not establish independent failure domains, retention
+receipts, GitHub persistence, or a resident inference/lease cycle.
+
+A subsequent isolated drill transferred the same signed fixture from the K16
+Linux host to the separately identified `aiueos-6600hs` Linux host through
+Tailscale. Each host fsynced the closure and signed a two-minute test retention
+receipt using a different public test key and fixture domain; the native pair
+verifier returned `retention/pair-verified`. On the second host, native
+verification and checkout restoration succeeded, and SHA-256 comparisons of
+the profile, context, state and output matched the first host. A wrong token
+was rejected. The temporary peer listener was stopped and its random token
+cleared after the drill; fixture objects were retained. This demonstrates the
+selected host-to-host path, not sustained retention, Mac mini deployment,
+GitHub persistence, a production identity, or a resident inference/lease cycle.
+
 ## Optional GitHub archive barrier
 
 When the trusted host config includes an absolute `archiveAck` path, a
 replica-admitted head must also have a matching, unexpired local GitHub archive
+acknowledgement before the resident starts the next turn. The current
+GitHub-enabled lane is the read-only local-MTP `awai-growth-steward` profile;
+other profiles refuse this mode until they have an independently reviewed
+projection and runtime contract. Missing, malformed,
 acknowledgement before the resident starts the next turn. Missing, malformed,
 mismatched or expired acknowledgement yields `resident/archive-pending`.
 A present but empty, non-string, unsafe or colliding configuration path is
@@ -195,6 +238,25 @@ and both current signed retention receipts. The companion
 `scripts/itonami-resident-github-archive.sh RESIDENT_BIN CONFIG CHECKPOINT_BIN WORKROOT OWNER/REPO`
 passes that descriptor to the GitHub archive adapter. After independently
 fetching and verifying the archived checkpoint, it writes an atomic fsynced
+ack for the same root and tree, expiring in 15 minutes. For this mode the
+host additionally pins `runtimeFile` and its raw CID in `runtime`, together
+with `modelArtifactDigest` and `mtpArtifactDigest`. `runtimeFile` holds the
+local socket and authorization-file paths; it is never the checkpoint
+`environmentFile`. Instead, `environmentFile` must be canonical JSON with
+exactly these 14 fields: `kind` (`itonami.profile-environment-public/2`),
+`maxTokens` (an integer from 64 to 768), `profile`, `profileDigest`, `roleDigest`, `workDigest`, `contextDigest`,
+`source`, `task`, `model`, `rail`, `tools`, `modelArtifactDigest`, and
+`mtpArtifactDigest`. Shared fields must match the independently pinned local
+runtime, including the same `maxTokens`, and the two artifact digests must match
+the host config. The earlier 13-field `/1` experimental projection requires a
+new signed checkpoint; it is not silently accepted as `/2`. The public
+descriptor is checkpointed and archived; runtime paths and credentials are
+not part of it. These declared artifact digests do not prove what a socket
+peer actually loaded. The bundle, profile context and output also need
+explicit data classification before archival; the projection is not a general
+secret scanner.
+
+Run the provided
 ack for the same root and tree, expiring in 15 minutes. Run the provided
 `itonami-profile-archive.service.tmpl` and `.timer.tmpl` every five minutes
 on a separately provisioned trusted Linux host. The archive script, native
@@ -204,6 +266,57 @@ A failure does not refresh the acknowledgement; once it expires the next
 turn remains pending. A valid acknowledgement records a recent readback, not a
 guarantee of future GitHub availability or that an ongoing turn can be
 cancelled. Changing the head makes the prior acknowledgement inapplicable.
+
+An isolated integration test captured a new signed checkpoint with the public
+projection while keeping the local MTP runtime separate, verified two test
+retention receipts, and archived it to the private GitHub repository. The
+GitHub readback contained the 13-field projection without endpoint, socket or
+authorization-file fields. Changed runtime bytes and an added socket field in
+the projection both refused. This test did not start model inference.
+
+A later integrated resident attempt restored that checkpoint and started the
+next local-MTP proposal. With a 3,072-token context and a 768-token completion
+limit, the Mac mini memory-pressure monitor stopped the model at 26% free
+(the configured stop threshold was 27%); the resident retained its input head.
+A separate 2,048-context diagnostic using the previous proposal as input
+reached MTP but exhausted a 160-token output limit and was refused as
+incomplete. It bottomed at 27% free. See
+[capacity evidence](evidence/awai147-resident-mtp-memory-20261103.json).
+A compacted operator-prepared work order and snapshot retained the original
+SOUL and preceding proposal; a direct 2,048-context diagnostic used 1,673
+prompt tokens and completed in 278 of a 360-token cap, reporting six role IDs,
+121 MTP forwards and 99 accepted drafts. Its minimum observed free pressure
+was 28%. The host can now pin `maxTokens` for this profile, but this diagnostic
+was not a resident turn. These measurements do not establish a safe production
+admission limit or justify accepting truncated proposals. The earlier resident
+binary also lacked the later interrupted-output retry fix; the combined native
+gate was subsequently rebuilt using the exact current source.
+
+A subsequent one-turn integration used that current source, the compact pinned
+work/context, a 360-token bound, and the actual Mac mini MTP service. The
+resident completed step 2, rechecked the lease, replicated and published its
+successor, waited for GitHub archival, and then remained idle on two subsequent
+invocations. The model reported 1,673 prompt / 278 completion tokens, 121 MTP
+forwards and 99 accepted drafts; the minimum observed free pressure was 28%.
+The resulting private GitHub archive was fetched by immutable commit and
+restored on another Linux host; its state, output and pinned profile files
+matched the producer. [Evidence](evidence/awai147-resident-mtp-github-turn-20261103.json).
+The test used public test keys and simulated all voters and replica signers on
+one host; it does not qualify independent failure domains or continuous
+operation. The second host verified only cold restoration. No inference service,
+timer or production identity was left enabled.
+
+A separate [multi-host replication and quorum drill](evidence/awai147-dist-quorum-replication-20261103.json)
+used three Linux voter hosts and two host-local keys generated independently.
+The remote replica verified and restored the checkpoint and returned its block
+after a peer restart. The lease quorum continued with one voter stopped,
+refused with two stopped, and recovered after one restarted with persisted
+state. The same checkpoint was archived to private GitHub. The topology used a
+public test operator key, the outages were process stops rather than host
+power cycles, and no inference was dispatched during this drill. Promised
+blocks and private test keys were retained; test listeners and transport
+tokens were removed. This is not production membership or a 10-Mac failover
+qualification.
 
 An isolated test with the real experimental MTP checkpoint, two distinct
 public test signers and freshly signed retention receipts observed pending

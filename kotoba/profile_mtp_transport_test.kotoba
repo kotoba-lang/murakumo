@@ -18,8 +18,10 @@
 
 (defn test-profile-token-budget [] :bool
   (let [growth (cp-bytes "{\"profile\":\"awai-growth-steward\"}")
-        original (cp-bytes "{\"profile\":\"accountability-steward\"}")]
+        original (cp-bytes "{\"profile\":\"accountability-steward\"}")
+        compact (cp-bytes "{\"maxTokens\":360,\"profile\":\"awai-growth-steward\"}")]
     (and (= (pr-token-budget growth false) 768) (= (pr-token-budget growth true) 768)
+         (= (pr-token-budget compact true) 360)
          (= (pr-token-budget original false) 32) (= (pr-token-budget original true) 256))))
 
 (defn test-profile-mtp-response [] :bool
@@ -44,8 +46,18 @@
   (let [meta (cp-bytes ":profile/id \"awai-growth-steward\" :rails [:murakumo] :authorities [\"api.murakumo.cloud\"]")
         role (cp-bytes "role") work (cp-bytes "work") context (cp-bytes "context")
         good (prt-growth-runtime meta role work context "none")
+        text (cp-text good) at (string-index-of text ",\"model\":")
+        prefix (string-substring text 0 at) suffix (string-substring text at (string-length text))
+        compact (cp-bytes (str prefix ",\"maxTokens\":360" suffix))
+        too-small (cp-bytes (str prefix ",\"maxTokens\":63" suffix))
+        too-large (cp-bytes (str prefix ",\"maxTokens\":769" suffix))
+        wrong-type (cp-bytes (str prefix ",\"maxTokens\":\"360\"" suffix))
         tools (prt-growth-runtime meta role work context "enabled")]
     (and (pr-growth-runtime? good meta role work context)
+         (pr-growth-runtime? compact meta role work context)
+         (not (pr-growth-runtime? too-small meta role work context))
+         (not (pr-growth-runtime? too-large meta role work context))
+         (not (pr-growth-runtime? wrong-type meta role work context))
          (not (pr-growth-runtime? tools meta role work context))
          (not (pr-growth-runtime? good (cp-bytes "changed") role work context))
          (not (pr-growth-runtime? good meta (cp-bytes "changed") work context))

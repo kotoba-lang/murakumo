@@ -71,6 +71,48 @@
       (= (retention-pair-problem (cp-load store (cp-str head 0 "receiptA"))
            (cp-load store (cp-str head 0 "receiptB")) (rt-pins cfg root until)) "retention/pair-verified"))))
 
+;; GitHub-enabled MTP residents checkpoint only a classified projection of
+;; the runtime. Socket, authorizationFile and endpoint remain host-local.
+;; Pins describe operator-selected artifacts; they do not attest the peer.
+(defn- rt-public-environment? [cfg :vector-i64 runtime :vector-i64 env :vector-i64] :bool
+  (and (json-canonical? env) (= (json-kind env 0) 1) (= (json-count env 0) 14)
+       (= (cp-str env 0 "kind") "itonami.profile-environment-public/2")
+       (json-canonical? runtime) (pr-local-mtp? runtime) (= (cp-str runtime 0 "profile") "awai-growth-steward")
+       (= (cp-str env 0 "profile") (cp-str runtime 0 "profile"))
+       (= (digest-problem (cp-str env 0 "profileDigest")) "oci/ok")
+       (= (cp-str env 0 "profileDigest") (cp-str cfg 0 "profile"))
+       (= (cp-str env 0 "profileDigest") (cp-str runtime 0 "profileDigest"))
+       (= (cp-str env 0 "roleDigest") (cp-str runtime 0 "roleDigest"))
+       (= (cp-str env 0 "workDigest") (cp-str runtime 0 "workDigest"))
+       (= (cp-str env 0 "contextDigest") (cp-str runtime 0 "contextDigest"))
+       (= (cp-str env 0 "source") (cp-str runtime 0 "source")) (cp-hex? (cp-str env 0 "source") 40)
+       (>= (cp-num env 0 "maxTokens") 64) (<= (cp-num env 0 "maxTokens") 768)
+       (= (cp-num env 0 "maxTokens") (cp-num runtime 0 "maxTokens"))
+       (= (cp-str env 0 "model") (cp-str runtime 0 "model")) (not (= (cp-str env 0 "model") ""))
+       (= (field-problem (cp-str env 0 "model")) "enroll/ok")
+       (= (cp-str env 0 "task") (cp-str cfg 0 "task")) (= (cp-str env 0 "task") (cp-str runtime 0 "task"))
+       (= (cp-str env 0 "rail") "murakumo") (= (cp-str runtime 0 "rail") "murakumo")
+       (= (cp-str env 0 "tools") "none") (= (cp-str runtime 0 "tools") "none")
+       (= (digest-problem (cp-str env 0 "roleDigest")) "oci/ok")
+       (= (digest-problem (cp-str env 0 "workDigest")) "oci/ok")
+       (= (digest-problem (cp-str env 0 "contextDigest")) "oci/ok")
+       (= (digest-problem (cp-str env 0 "modelArtifactDigest")) "oci/ok")
+       (= (digest-problem (cp-str env 0 "mtpArtifactDigest")) "oci/ok")
+       (= (cp-str env 0 "modelArtifactDigest") (cp-str cfg 0 "modelArtifactDigest"))
+       (= (cp-str env 0 "mtpArtifactDigest") (cp-str cfg 0 "mtpArtifactDigest"))))
+
+(defn- rt-runtime [cfg :vector-i64] :vector-i64
+  (cp-read (if (= (cp-str cfg 0 "archiveAck") "")
+             (cp-str cfg 0 "environmentFile") (cp-str cfg 0 "runtimeFile"))))
+
+(defn- rt-pins-ok? [cfg :vector-i64] :bool
+  (let [env (cp-read (cp-str cfg 0 "environmentFile")) policy (cp-read (cp-str cfg 0 "policyFile"))]
+    (and (= (cp-cid env) (cp-str cfg 0 "environment")) (= (cp-cid policy) (cp-str cfg 0 "policy"))
+         (or (= (cp-str cfg 0 "archiveAck") "")
+             (and (cp-safe-absolute? (cp-str cfg 0 "runtimeFile"))
+                  (= (cp-cid (rt-runtime cfg)) (cp-str cfg 0 "runtime"))
+                  (rt-public-environment? cfg (rt-runtime cfg) env))))))
+
 ;; An optional host-provisioned private acknowledgement directory gates each
 ;; next turn on confirmed GitHub archival of the current admitted checkpoint.
 ;; The file is a local trust boundary, not a remote lease or a signed receipt.
@@ -91,8 +133,7 @@
         b (if (cp-block? store root) (cp-load store root) (vector-alloc 0)) p (cp-payload b)]
     (if (or (= (cp-str cfg 0 "archiveAck") "") (not (cp-safe-absolute? store))
             (not (rt-admitted-head? cfg head))
-            (not (= (cp-cid (cp-read (cp-str cfg 0 "environmentFile"))) (cp-str cfg 0 "environment")))
-            (not (= (cp-cid (cp-read (cp-str cfg 0 "policyFile"))) (cp-str cfg 0 "policy"))))
+            (not (rt-pins-ok? cfg)))
       (cp-say "resident/archive-refused")
       (cp-say (str "resident/archive " root " " (cp-str b p "did") " " (cp-str cfg 0 "profile")
                    " " (cp-str cfg 0 "policy") " " (cp-str cfg 0 "environment") " " (cp-num b p "epoch")
@@ -126,7 +167,7 @@
       (let [next (cp-num (cp-read (str dest "/state.json")) 0 "next")
             next-at (+ (rt-now) (cp-num cfg 0 "intervalMs"))
             status (rt-status cfg "inference")
-            result (pr-step-resident dest (cp-read (cp-str cfg 0 "environmentFile")) (cp-str cfg 0 "cache") next
+            result (pr-step-resident dest (rt-runtime cfg) (cp-str cfg 0 "cache") next
                      (rf-budget (cp-num lease 0 "until") (cp-num head 0 "until") (rt-now)))
             fresh (rt-lease cfg (cp-num lease 0 "epoch"))
             post (rt-post-problem cfg head lease fresh (rt-now))]
@@ -148,8 +189,7 @@
         head (if (cp-exists? head-path) (cp-read head-path) (vector-alloc 0))
         root (if (cp-exists? head-path) (cp-str head 0 "checkpoint") (cp-str cfg 0 "bootstrap"))
         request (if (cp-exists? (cp-str cfg 0 "request")) (cp-cid (cp-read (cp-str cfg 0 "request"))) "none")]
-    (cond (or (not (= (cp-cid (cp-read (cp-str cfg 0 "environmentFile"))) (cp-str cfg 0 "environment")))
-              (not (= (cp-cid (cp-read (cp-str cfg 0 "policyFile"))) (cp-str cfg 0 "policy")))) "resident/runtime-pins-refused"
+    (cond (not (rt-pins-ok? cfg)) "resident/runtime-pins-refused"
           (not (cp-block? (cp-str cfg 0 "store") root)) "resident/missing-checkpoint"
           (not (rt-root? cfg (cp-load (cp-str cfg 0 "store") root))) "resident/checkpoint-refused"
           (not (rt-admitted-head? cfg head))
@@ -173,7 +213,8 @@
                      (= ack (cp-str cfg 0 "status")) (= ack (cp-str cfg 0 "candidateHead"))
                      (= ack (cp-str cfg 0 "request")) (= ack (cp-str cfg 0 "leaseFile"))
                      (= ack (cp-str cfg 0 "key")) (= ack (cp-str cfg 0 "tokenFile"))
-                     (= ack (cp-str cfg 0 "policyFile")) (= ack (cp-str cfg 0 "environmentFile"))))
+                     (= ack (cp-str cfg 0 "policyFile")) (= ack (cp-str cfg 0 "environmentFile"))
+                     (= ack (cp-str cfg 0 "runtimeFile"))))
             (not (rf-voters? (cp-str cfg 0 "voters"))) (= (lease-token (cp-str cfg 0 "tokenFile")) "")
             (not (= (ri-show (cp-str cfg 0 "key")) (str "identity/did " (cp-str cfg 0 "authorB")))))
       (let [x (cp-say "resident/config-refused")] 2)
