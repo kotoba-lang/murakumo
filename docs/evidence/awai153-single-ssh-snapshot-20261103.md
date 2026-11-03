@@ -66,3 +66,33 @@ deployed or modified.
 | signed native host fixture | `e06d2b27784928b546815f8e51327151a8ff742b1032da8b49c9d7061641c780` |
 | signed native receiver fixture | `cc66eaf6f9d847a94a555b36f45c10ae1d273d4264804b1f0da511af9034e1be` |
 | signed native unit fixture | `52d05d78358bcbc3fc79846ce46d0a870df45c19cd865dd685a9a8b7c07913b8` |
+
+## Benjamin: native sender and receiver through SSH
+
+On 2026-11-03, a task-only host executable compiled from the current native
+component and a diagnostic process adapter was copied to a newly created
+private temporary directory on Benjamin. The copied executable's SHA-256
+matched the local signed artifact. A native receiver with its remote path
+changed only for this task used the existing selected SSH identity and pinned
+host key to invoke it over Tailscale. The receiver returned
+`observation/untrusted benjamin` with all four validated sections: physical
+memory 16 GiB, zero swap used, pressure free 91%, and root filesystem
+60,988,988 KiB available. These measurements are a single, non-atomic sample.
+
+After the command returned, a process-list check found no process matching
+the task executable. The three exact capture files and task executable were
+removed from the task-only directory, and the directory's absence was checked.
+No pre-existing service or model was changed. No installation or persistent
+observer was created.
+
+Both ends used diagnostic process adapters. The receiver's configured binary
+path was substituted with the temporary path and does not prove the normal
+installed path works. One successful host does not qualify other minis,
+process-tree cleanup, durable deployment, trusted telemetry or resource
+admission. The remote marker remains forgeable by the remote process.
+
+| Cross-host diagnostic artifact | SHA-256 |
+| --- | --- |
+| signed temporary host executable | `15a5a21f96635b9eadef2d40e09ddc908b543639f659feda4cff8dcb71590c95` |
+| signed temporary receiver | `107844d141d09e63bc25e2b7fe59a21662aa10b99ebfd1c274a559cdc6a282a6` |
+| temporary receiver source | `3957e090ea413acf5f36f1a6d99070f2fe86c779bad24dd77d311a3227cc40e3` |
