@@ -44,13 +44,14 @@ Median of three round means (range in brackets), tokens per second.
 | llama.cpp Metal, Q8_0 | **8,842** [8,788–8,883] | 218.4 [190.6–229.5] |
 | llama.cpp CPU, 8 threads, Q8_0 | 496 [454–529] | 49.3 [35.4–54.8] |
 | llama.cpp CPU, 1 thread, Q8_0 (64-token answer) | 150 [149–151] | 90.7 [90.1–91.2] |
-| murakumo, Kotoba GPU kernels (bootstrap reference) | — | 71.2 ¹ |
+| murakumo, Kotoba decode guest on the GPU (bootstrap reference) | — | 71.2 ¹ |
 | murakumo, Amu selfhost on this Mac | no route ² | no route ² |
 
 ¹ Not re-measured: recorded on this Mac on 2026-10-19 (kotoba-lang/inference
 `verify/evidence/qwen25-0p5b-dense-selfhost-vs-llamacpp-m1max-20261019.json`,
 `nvgpu-h2` layout, GPU fence time per step through MoltenVK). The guest was
-compiled by `bin/amu` but launched by the C `kexe_loader`, which Amu removed on
+Kotoba compiled by `bin/amu`; its kernels were GLSL built with
+`glslangValidator`, and it was launched by the C `kexe_loader`, which Amu removed on
 2026-10-22 (amu #1459/#1460), so that path no longer builds. Commit messages of
 2026-10-20 mention 7.07 ms/step after further fusion; no evidence file was
 written, so that figure is not used.

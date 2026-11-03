@@ -20,7 +20,7 @@ Qwen2.5-0.5B-Instruct, 512-token prompt, decode in tokens per second.
 | llama.cpp Metal, Q8_0 | 218.4 | GPU target; AWAI-18 claim gate G1 |
 | llama.cpp CPU, 1 thread | 90.7 | single-thread target: ≈ 44.8 G weight-MACs/s, ≈ 48 GB/s of Q8_0 from one core |
 | llama.cpp CPU, 8 threads | 49.3 | multi-thread target (low here: loaded host) |
-| murakumo Kotoba GPU kernels, 2026-10-19 | 71.2 | the last Kotoba number on this Mac; its C loader is gone |
+| murakumo Kotoba decode guest (GLSL kernels), 2026-10-19 | 71.2 | the last murakumo token rate on this Mac; its C loader is gone |
 | **Kotoba via `bin/amu` (Amu selfhost Mac CLI), one Q8_0 kernel** | **3.6** (kernel-only bound) | 1.76 G MACs/s: 25× below llama.cpp's one thread, 1.7× below scalar C |
 
 The Kotoba kernel is correct (bit-exact with C, mutant caught) and its
