@@ -70,7 +70,10 @@ an empty placeholder at argument 17, and a host-provisioned private attempt
 root at argument 18. It durably records the job attempt before execution and
 refuses an existing or unknown marker; the host must reconcile ambiguous
 outcomes instead of deleting or replaying it. The root and its ancestors must
-be trusted and host-owned. Numeric times and the old rogue mode are refused. It re-learns the identical, still-live lease after
+be trusted and host-owned. Attempt creation uses scoped FS2 `U`, `I`, `H`
+and `M`, not child processes; the runtime must support the full-mode `U`
+operation. Older Linux bootstrap images can trap on `U` and are not qualified
+for this candidate. Numeric times and the old rogue mode are refused. It re-learns the identical, still-live lease after
 cell execution before issuing a receipt. `verify` now takes an independently
 derived expected job ID after the fleet-token argument (pass an empty token
 argument when no token is configured). A receipt is checked against that job
