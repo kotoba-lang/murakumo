@@ -63,9 +63,11 @@ reads about 48 GB/s of Q8_0 weights from one core, which is the single-thread
 target the [roadmap](../../../docs/inference-roadmap.md) uses.
 
 ² No prompt-to-token route exists through Amu selfhost on macOS today: the
-native Mac CLI gives guests no filesystem and a 5-second `run` deadline, the
-checker refuses surface float arithmetic, and the GPU wire is refused (E2115).
-The kernel below is the closest measurable piece.
+native Mac CLI gives guests no filesystem and a 5-second `run` deadline, and
+the GPU wire is refused (E2115). (This note first said the checker refuses
+surface floats. It admits named float operations such as `f32-add`; the probe
+used the wrong spelling. See `docs/inference-roadmap.md`.) The kernel below is
+the closest measurable piece.
 
 ## Results: one decode kernel, built three ways
 

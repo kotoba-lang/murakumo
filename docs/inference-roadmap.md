@@ -25,7 +25,13 @@ Qwen2.5-0.5B-Instruct, 512-token prompt, decode in tokens per second.
 
 The Kotoba kernel is correct (bit-exact with C, mutant caught) and its
 scalar code is within 1.7× of `cc -O2`. The 25× gap is everything a scalar,
-single-threaded, file-less, float-less language cannot express.
+single-threaded, file-less language with slow float code cannot express.
+
+Correction, same day: this document first listed surface floats as refused. They are not. The checker admits
+36 named float operations (`f32-add`, `f32-mul`, `f32-lt`, `f32-sqrt`, `i64-to-f32-rounded`, … ; amu
+`seed/21-check.kotoba` `ck-fl-code`, rung r6j). What it refuses is the generic `+`/`*` on floats (E2104) and the
+spelling `f32+`, which does not exist (E2101): the probe used the wrong names. Gap 1 and S1 below are rewritten
+accordingly.
 
 ## What stops a Kotoba engine on this Mac
 
@@ -33,8 +39,8 @@ Each row was confirmed in Amu `1abb17f30` source or by running `bin/amu`.
 
 | # | Gap | Where | Effect on inference |
 | --- | --- | --- | --- |
-| 1 | Surface floats are refused. `:f64` is an opaque carrier; `+` on floats is E2104, `f32+` is E2101 | amu `seed/21-check.kotoba:104`, probes in this run | no norms, softmax, RoPE or scales in user code; the kernel had to use fixed-point scales |
-| 2 | Float code moves both operands through `d0`/`d1` with `fmov` for every operation; no value lives in an FP register | amu `seed/41-a64gen.kotoba:2073-2076` | even once admitted, every float op costs three to five instructions |
+| 1 | Floats are spelled as named operations (`f32-add`, `f32-mul`, …); the generic `+`/`*` refuse them (E2104), and `f32-from-bits` is a library call (a 32-bit range assert), so every kernel that reads f32 values from a vector makes a call per element and is not a leaf | amu `seed/21-check.kotoba` `ck-fl-code`, `ck-r6f-t-f32` | the Q8_0 kernel used fixed-point scales only because the probe used the wrong names |
+| 2 | Float code moves both operands through `d0`/`d1` with `fmov` for every operation; no value lives in an FP register | amu `seed/41-a64gen.kotoba:2073-2076` | every float op costs three to five instructions, and an f32 accumulator crosses the general/FP boundary twice per iteration (S1 addresses this) |
 | 3 | No SIMD types or NEON lowering | spec and `41-a64gen` | M1 has FEAT_DotProd (`sdot`: 16 int8 MACs per instruction) and FEAT_FP16; the kernel unpacks each byte with two shifts |
 | 4 | No byte arrays; weights live in `:vector-i64` words | spec | 8 bytes per word plus unpacking; no `ldrsb`/`ld1` |
 | 5 | The Mac CLI host gives guests no filesystem, a 5-second `run` deadline and a 1 MiB source limit; the full-root route reads whole files only (wire 35, no range) | amu `examples/foundation-starter/MACOS-ARM64.md`, `docs/native-public-entry.md` | a 531 MB GGUF cannot reach a guest |
@@ -65,7 +71,7 @@ Each row was confirmed in Amu `1abb17f30` source or by running `bin/amu`.
 | Stage | Spec / compiler change | Gate | Target on this Mac |
 | --- | --- | --- | --- |
 | S0 · baseline | — (done: harness and this record) | Q8_0 kernel = C, mutant differs | 2.47 ms per 4,864 × 896 product |
-| S1 · scalar floats | `:f32` values, literals, arithmetic, compare and conversion admitted by the checker; `:f16` as a storage type. `41-a64gen` keeps floats in `s`/`d` registers across an expression and emits `fmadd` only where the spec allows contraction | f32 dot and RMSNorm twins vs C (`-ffp-contract=off`), bit-exact; mutant | f32 matvec within 2× of `cc -O2` |
+| S1 · scalar floats | `41-a64gen` keeps f32 locals in FP registers (FP homes, s16..s31) and writes f32 results into them in place; `f32-from-bits` becomes an inline range check. `:f16` storage and a fused `f32-fma` stay language decisions. **Built, diagnostic:** kotoba-lang/amu#1813 (ADR 0404): 4864 × 896 f32 matvec 32.2 → 19.9 ms (one accumulator) and 26.1 → 14.6 ms (four), C 6.2 / 2.1 ms; core adoption round and native CI pending | f32 matvec (1 and 4 accumulators), RMSNorm and an FP-home path corpus against C twins (`-ffp-contract=off`), bit-exact; mutants; `f32-from-bits` traps out of range; integer programs keep identical bytes | f32 matvec within 2× of `cc -O2`: not met; the rest of the gap is vector access and the per-element range check (S2) |
 | S2 · bytes | `:bytes` and `:vector-i8`/`:vector-u8` views with typed loads (`ldrsb`, `ldr q`); bounds checks hoisted out of counted loops whose range the checker proves | Q8_0 kernel checksum unchanged | ≤ 1.45 ms (scalar C) |
 | S3 · SIMD | fixed-width lane types (`:i8x16`, `:i32x4`, `:f32x4`, `:f16x8`) and forms that lower one-to-one: `dot-i8x16` → `sdot`, `fma-f32x4` → `fmla`, horizontal add → `addv` | Q8_0 and f32 kernels exact against scalar Kotoba and C | ≥ 40 G MACs/s on one core (llama.cpp's one thread: 44.8) |
 | S4 · model access | a `:model/read` capability naming one file and its sha256, granted per run; the Mac runtime maps it read-only through libSystem (`mmap`) and exposes it as `:bytes`; granted engines leave the 5-second `run` deadline | GGUF header and tensor-table admission on the real file (port of the AIUEOS `qwen35-gguf-*` objects to `qwen2`); a wrong digest is refused | 531 MB mapped, zero copies |
