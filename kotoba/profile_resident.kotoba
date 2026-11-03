@@ -71,6 +71,33 @@
       (= (retention-pair-problem (cp-load store (cp-str head 0 "receiptA"))
            (cp-load store (cp-str head 0 "receiptB")) (rt-pins cfg root until)) "retention/pair-verified"))))
 
+;; An optional host-provisioned private acknowledgement directory gates each
+;; next turn on confirmed GitHub archival of the current admitted checkpoint.
+;; The file is a local trust boundary, not a remote lease or a signed receipt.
+(defn- rt-archive-ack? [path :string root :string] :bool
+  (if (= path "") true
+    (if (not (cp-exists? path)) false
+      (let [ack (cp-read path)]
+        (and (json-canonical? ack) (= (json-kind ack 0) 1) (= (json-count ack 0) 4)
+          (= (cp-str ack 0 "kind") "itonami.github-archive-ack/1")
+          (= (cp-str ack 0 "checkpoint") root) (cp-hex? (cp-str ack 0 "tree") 40)
+          (> (cp-num ack 0 "until") (rt-now)) (<= (cp-num ack 0 "until") (+ (rt-now) 900000)))))))
+
+;; Describe only a currently verified, replica-admitted head. A signed epoch and
+;; parent are archive parameters, not an independent lease or new head grant.
+(defn- rt-archive [cfg :vector-i64] :i64
+  (let [path (cp-str cfg 0 "head") head (if (cp-exists? path) (cp-read path) (vector-alloc 0))
+        store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint")
+        b (if (cp-block? store root) (cp-load store root) (vector-alloc 0)) p (cp-payload b)]
+    (if (or (= (cp-str cfg 0 "archiveAck") "") (not (cp-safe-absolute? store))
+            (not (rt-admitted-head? cfg head))
+            (not (= (cp-cid (cp-read (cp-str cfg 0 "environmentFile"))) (cp-str cfg 0 "environment")))
+            (not (= (cp-cid (cp-read (cp-str cfg 0 "policyFile"))) (cp-str cfg 0 "policy"))))
+      (cp-say "resident/archive-refused")
+      (cp-say (str "resident/archive " root " " (cp-str b p "did") " " (cp-str cfg 0 "profile")
+                   " " (cp-str cfg 0 "policy") " " (cp-str cfg 0 "environment") " " (cp-num b p "epoch")
+                   " " (cp-str b p "parent") " " (cp-str cfg 0 "task") " " store " " (cp-str cfg 0 "archiveAck"))))))
+
 (defn- rt-capture [cfg :vector-i64 repo :string epoch :i64 parent :string next :i64] :string
   (let [list (str (cp-str cfg 0 "runtimeRoot") "/untracked.json") summary (str (cp-str cfg 0 "runtimeRoot") "/summary.txt")
         saved (and (cp-write list (cp-bytes (str "[\"outputs/" next ".json\"]")))
@@ -129,18 +156,28 @@
           (if (and (rt-replicate cfg root (if (cp-exists? head-path) (cp-num head 0 "nextAt") 0)
                       (if (cp-exists? head-path) (cp-str head 0 "request") "none"))
                    (rt-save head-path (cp-read (cp-str cfg 0 "candidateHead")))) "resident/replicas-refreshed" "resident/replica-unavailable")
+          (not (rt-archive-ack? (cp-str cfg 0 "archiveAck") root)) "resident/archive-pending"
           (not (rt-due? head request (rt-now))) "resident/idle"
           :else (let [root-data (cp-load (cp-str cfg 0 "store") root)
                       lease (rt-current-lease cfg (cp-num root-data (cp-payload root-data) "epoch"))]
                   (if (= (vector-count lease) 0) "resident/quorum-unavailable" (rt-turn cfg head lease request))))))
 
 (defn profile-resident-main [] :i64
-  (let [cfg (cp-read (cp-arg 1))]
+  (let [cfg (cp-read (cp-arg 1)) archive-field (json-member cfg 0 "archiveAck")
+        ack (cp-str cfg 0 "archiveAck")]
     (if (or (not (json-canonical? cfg)) (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
             (not (= (cp-num cfg 0 "intervalMs") 86400000))
+            (and (>= archive-field 0)
+                 (or (not (= (json-kind cfg archive-field) 3)) (not (cp-safe-absolute? ack))
+                     (= ack (cp-arg 1)) (= ack (cp-str cfg 0 "head")) (= ack (cp-str cfg 0 "store"))
+                     (= ack (cp-str cfg 0 "status")) (= ack (cp-str cfg 0 "candidateHead"))
+                     (= ack (cp-str cfg 0 "request")) (= ack (cp-str cfg 0 "leaseFile"))
+                     (= ack (cp-str cfg 0 "key")) (= ack (cp-str cfg 0 "tokenFile"))
+                     (= ack (cp-str cfg 0 "policyFile")) (= ack (cp-str cfg 0 "environmentFile"))))
             (not (rf-voters? (cp-str cfg 0 "voters"))) (= (lease-token (cp-str cfg 0 "tokenFile")) "")
             (not (= (ri-show (cp-str cfg 0 "key")) (str "identity/did " (cp-str cfg 0 "authorB")))))
       (let [x (cp-say "resident/config-refused")] 2)
+      (if (= (cp-arg 0) "archive") (rt-archive cfg)
       (if (= (cp-arg 0) "once")
         (let [r (rt-cycle cfg) status (rt-status cfg r)] (cp-say r))
       (if (not (= (cp-arg 0) "run")) (let [x (cp-say "resident/command-refused")] 2)
@@ -148,4 +185,4 @@
         (let [result (arena-scope
                        (let [r (rt-cycle cfg) s (rt-status cfg r) event (cp-say r)] 0))
               z (loop [k 0] (if (>= k 10) true (if (pr-pause) (recur (+ k 1)) false)))]
-          (if z (recur (+ i 1)) 2))))))))
+          (if z (recur (+ i 1)) 2)))))))))

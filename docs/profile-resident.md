@@ -178,6 +178,43 @@ keep promised objects, archive failed attempts, and review local usage before
 removing any task-owned data. Do not delete an object until all live heads,
 receipts and retention commitments are accounted for.
 
+## Optional GitHub archive barrier
+
+When the trusted host config includes an absolute `archiveAck` path, a
+replica-admitted head must also have a matching, unexpired local GitHub archive
+acknowledgement before the resident starts the next turn. Missing, malformed,
+mismatched or expired acknowledgement yields `resident/archive-pending`.
+A present but empty, non-string, unsafe or colliding configuration path is
+refused. Omitting `archiveAck` preserves the earlier behavior. The ack path and
+its parent must be private and writable only by the trusted host components;
+this local file is not a signed receipt or a distributed lease.
+
+`profile-resident archive CONFIG` describes a head only after checking the
+pinned profile, policy and environment, checkpoint signature and closure,
+and both current signed retention receipts. The companion
+`scripts/itonami-resident-github-archive.sh RESIDENT_BIN CONFIG CHECKPOINT_BIN WORKROOT OWNER/REPO`
+passes that descriptor to the GitHub archive adapter. After independently
+fetching and verifying the archived checkpoint, it writes an atomic fsynced
+ack for the same root and tree, expiring in 15 minutes. Run the provided
+`itonami-profile-archive.service.tmpl` and `.timer.tmpl` every five minutes
+on a separately provisioned trusted Linux host. The archive script, native
+binaries, config, task directory, explicit repository and GitHub credentials
+must be pinned and provisioned by that host. Templates do not enable services.
+A failure does not refresh the acknowledgement; once it expires the next
+turn remains pending. A valid acknowledgement records a recent readback, not a
+guarantee of future GitHub availability or that an ongoing turn can be
+cancelled. Changing the head makes the prior acknowledgement inapplicable.
+
+An isolated test with the real experimental MTP checkpoint, two distinct
+public test signers and freshly signed retention receipts observed pending
+before archival, verified the actual private GitHub archive, and observed idle
+after the acknowledgement. Expired acknowledgement and simulated GitHub
+failure returned to pending; an Amu-built mutant that removed the barrier
+incorrectly returned idle. The test used both test signers on one host and
+an ephemeral SSH HTTPS relay, so it does not qualify independent failure
+domains, persistent networking, real identities, inference scheduling or
+production deployment. See `test-native/murakumo/resident-github-barrier-gate.sh`
+for the isolated negative checks.
 For the AWAI growth steward, use a separately constructed Git execution cache
 containing the pinned profile files, pinned context, source record and tracked
 state; do not assume that a full source repository fits this transport. An
