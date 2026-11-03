@@ -314,6 +314,18 @@
                       (cp-num lease 0 "epoch") now) "recovery/lease-admitted"))) "resident/lease-lost"
         :else "resident/admission-held"))
 
+;; Materialization can outlast or invalidate the lease learned by rt-cycle.
+;; Re-learn it after restore, before any inference dispatch; an unknown or
+;; changed lease and insufficient remaining budget cannot start a new turn.
+;; This is not an atomic effect fence: the receiver still needs one.
+(defn- rt-dispatch [cfg :vector-i64 head :vector-i64 lease :vector-i64 dest :string next :i64] :string
+  (let [fresh (rt-lease cfg (cp-num lease 0 "epoch")) now (rt-now)
+        admission (rt-post-problem cfg head lease fresh now)
+        budget (rf-budget (cp-num lease 0 "until") (cp-num head 0 "until") now)]
+    (cond (not (= admission "resident/admission-held")) admission
+          (< budget 1) "profile/budget-refused"
+          :else (pr-step-resident dest (rt-runtime cfg) (cp-str cfg 0 "cache") next budget))))
+
 (defn- rt-turn [cfg :vector-i64 head :vector-i64 lease :vector-i64 request :string] :string
   (let [store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint") checkpoint (cp-load store root)
         dest (str (cp-str cfg 0 "runtimeRoot") "/checkouts/" (rt-now))
@@ -322,11 +334,11 @@
       (let [next (cp-num (cp-read (str dest "/state.json")) 0 "next")
             next-at (+ (rt-now) (cp-num cfg 0 "intervalMs"))
             status (rt-status cfg "inference")
-            result (pr-step-resident dest (rt-runtime cfg) (cp-str cfg 0 "cache") next
-                     (rf-budget (cp-num lease 0 "until") (cp-num head 0 "until") (rt-now)))
-            fresh (rt-lease cfg (cp-num lease 0 "epoch"))
-            post (rt-post-problem cfg head lease fresh (rt-now))]
-        (cond (not (= (ln-field result 0) "profile/step-completed")) result
+            result (rt-dispatch cfg head lease dest next)
+            completed (= (ln-field result 0) "profile/step-completed")
+            fresh (if completed (rt-lease cfg (cp-num lease 0 "epoch")) (vector-alloc 0))
+            post (if completed (rt-post-problem cfg head lease fresh (rt-now)) "resident/not-dispatched")]
+        (cond (not completed) result
               (not (= post "resident/admission-held")) post
               :else
               (let [successor (rt-capture cfg dest (cp-num lease 0 "epoch") root next)
