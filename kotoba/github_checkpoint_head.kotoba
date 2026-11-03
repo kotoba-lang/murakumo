@@ -3,7 +3,7 @@
 ;; lease: an independently authorized host must validate authority, hold the
 ;; expected head and fence effects at their actual sinks. Never auto-retry an
 ;; unknown result. The host isolates paths, credentials, Git/GH and egress.
-(ns murakumo.github-checkpoint-head (:export [github-checkpoint-head-main]))
+(ns murakumo.github-checkpoint-head (:export [github-checkpoint-head-main github-checkpoint-head-restore-main]))
 
 (defn- gh-head-text [task :string cid :string] :string
   (str "{\"checkpoint\":\"" cid "\",\"kind\":\"itonami.github-head/1\",\"task\":\"" task "\"}"))
@@ -77,3 +77,62 @@
                            (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9) (cp-arg 10) (cp-arg 11) (cp-arg 12))
         out (cp-say result)]
     (if (= (string-index-of result "head/advanced ") 0) 0 1)))
+
+;; Read only a host-pinned head commit, then independently verify the archive
+;; and signed closure using ga-restore. The commit pin must come from an
+;; authority outside the Git ref; this function does not establish freshness,
+;; lease ownership or permission to execute the restored data.
+(defn- gh-restore [work :string dest :string expected :string task :string author :string profile :string
+                   policy :string environment :string repo :string gh :string] :string
+  (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? dest))
+            (ga-path-overlap? work dest) (ga-path-overlap? work (str dest ".partial"))
+            (not (cp-safe-absolute? gh)) (not (ga-repo? repo)) (not (cp-hex? expected 40))
+            (= task "") (not (= (field-problem task) "enroll/ok"))
+            (= author "") (not (= (field-problem author) "enroll/ok"))
+            (not (= (digest-problem profile) "oci/ok")) (not (cp-raw? policy)) (not (cp-raw? environment))
+            (not (cp-absent? dest)) (not (cp-absent? (str dest ".partial"))) ) "head-restore/input-refused"
+        (not (ga-private? gh repo)) "head-restore/private-repository-unverified"
+        (not (= (cp-fs "I" work "") "1")) "head-restore/work-exists-or-unavailable"
+        (not (= (cp-fs "H" work "700") "1")) "head-restore/work-permissions"
+        :else
+        (let [head (str work "/head") remote (str "https://github.com/" repo ".git")
+              href (str "refs/heads/itonami/head/" (sha256-hex (cp-bytes task)))
+              made (= (cp-fs "I" head "") "1")
+              init (if made (cp-git head "initARG_SEP--quietARG_SEP--template=") "refused")
+              fetch (if (and (cp-ok? init) (ga-config-safe? head))
+                      (ga-git head (str "fetch" (cp-a) "--quiet" (cp-a) "--no-tags" (cp-a) remote (cp-a) href)) "refused")
+              id (if (cp-ok? fetch) (cp-git head "rev-parseARG_SEPFETCH_HEAD") "refused")
+              fsck (if (and (cp-ok? id) (= (cp-line (cp-out id)) expected) (gh-head-tree? head "FETCH_HEAD"))
+                     (cp-git head "fsckARG_SEP--fullARG_SEP--strict") "refused")
+              content (if (cp-ok? fsck) (cp-git head "showARG_SEPFETCH_HEAD:head.json") "refused")
+              h (if (cp-ok? content) (cp-bytes (cp-out content)) (vector-alloc 0))
+              cid (if (and (json-valid? h) (json-canonical? h) (= (json-kind h 0) 1) (= (json-count h 0) 3))
+                    (cp-str h 0 "checkpoint") "")]
+          (if (not (and (cp-raw? cid) (= (cp-text h) (gh-head-text task cid)))) "head-restore/head-refused"
+            (let [meta (str work "/meta") aref (str "refs/heads/itonami/archive/" cid)
+                  made-meta (= (cp-fs "I" meta "") "1")
+                  mi (if made-meta (cp-git meta "initARG_SEP--quietARG_SEP--template=") "refused")
+                  mf (if (and (cp-ok? mi) (ga-config-safe? meta))
+                       (ga-git meta (str "fetch" (cp-a) "--quiet" (cp-a) "--no-tags" (cp-a) remote (cp-a) aref)) "refused")
+                  mc (if (cp-ok? mf) (cp-git meta "fsckARG_SEP--fullARG_SEP--strict") "refused")
+                  show (if (cp-ok? mc) (cp-git meta "showARG_SEPFETCH_HEAD:manifest.json") "refused")
+                  m (if (cp-ok? show) (cp-bytes (cp-out show)) (vector-alloc 0))
+                  valid (and (<= (vector-count m) 8192) (json-valid? m) (= (json-kind m 0) 1))
+                  epoch (if valid (cp-num m 0 "epoch") -1)
+                  parent (if valid (cp-str m 0 "parent") "")
+                  manifest (cp-bytes (str "{\"author\":\"" author "\",\"environment\":\"" environment
+                    "\",\"epoch\":" epoch ",\"kind\":\"itonami.github-checkpoint-archive/1\",\"parent\":\"" parent
+                    "\",\"policy\":\"" policy "\",\"profile\":\"" profile "\",\"root\":\"" cid "\",\"task\":\"" task "\"}"))]
+              (if (not (and valid (> epoch 0) (or (= parent "root") (cp-raw? parent)) (ga-manifest-matches? m manifest)))
+                "head-restore/manifest-refused"
+                (let [r (ga-restore (str work "/restore") dest cid author profile policy environment epoch parent task repo gh)
+                      prefix (str "archive-restore/restored " cid " ")
+                      tree (if (= (string-index-of r prefix) 0) (string-substring r (string-length prefix) (string-length r)) "")]
+                  (if (cp-hex? tree 40) (str "head-restore/restored " cid " " expected " " tree)
+                    "head-restore/archive-or-materialize-refused"))))))))
+
+(defn github-checkpoint-head-restore-main [] :i64
+  (let [result (gh-restore (cp-arg 0) (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5)
+                           (cp-arg 6) (cp-arg 7) (cp-arg 8) (cp-arg 9))
+        out (cp-say result)]
+    (if (= (string-index-of result "head-restore/restored ") 0) 0 1)))

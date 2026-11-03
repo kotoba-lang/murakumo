@@ -35,3 +35,16 @@ checks competing children, readback after a deliberately lost acknowledgement,
 and refusal of unexpected files and symlinks. It uses a local bare repository,
 stubbed privacy and a privileged test-only Mac spawn adapter. No native GitHub
 credential, production branch, real bot or full autonomous flow was tested.
+
+The companion `github-checkpoint-head-restore-main` accepts a fresh private
+work path and destination, independently pinned head commit, task, author,
+profile, policy, environment, repository and GitHub executable. It verifies
+the head tree and pointer at the pinned commit, reads the archive manifest,
+then invokes the archive restore path to independently fetch and verify the
+signed closure before materializing a new checkout. The head commit pin must
+come from an external authority: accepting the current remote ref alone would
+not protect against rollback. Restore grants no lease or permission to execute.
+The [local restore fixture](evidence/awai150-head-restore-20261103/) verifies
+state reconstruction and rejects wrong pins, an existing destination and a
+corrupted archive block. Real GitHub credentials and production integration
+remain unqualified.
