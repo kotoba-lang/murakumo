@@ -50,12 +50,13 @@
 ;; A request is created only after an explicit not-found observation and
 ;; before any submission. A leftover request or marker is UNKNOWN, including
 ;; after a crash between the durable marker and the systemd call. Existing
-;; units may only be observed when their request bytes still match.
+;; units may only be observed when their request and durable dispatch marker
+;; still match. Missing or corrupt evidence is not a prior submission.
 ;; The caller must serialize writers to this private cache directory.
 (defn- pr-run-decision [status :string request-exists :bool request-matches :bool
-                       marker-exists :bool response-exists :bool] :string
+                       marker-exists :bool marker-matches :bool response-exists :bool] :string
   (cond (and (or (pr-unit-active? status) (= status "exited"))
-             request-exists request-matches) "profile/reuse-unit"
+             request-exists request-matches marker-exists marker-matches) "profile/reuse-unit"
         (and (= status "unit/not-found") (not request-exists)
              (not marker-exists) (not response-exists)) "profile/new-unit"
         :else "profile/submission-unknown"))
@@ -277,8 +278,10 @@
                                (or (= marker-status "0") (= marker-status "1"))
                                (or (= response-status "0") (= response-status "1")))
                     present (= request-status "1") matches (if present (= (cp-cid (cp-read request)) (cp-cid body-bytes)) false)
+                    marked (= marker-status "1")
+                    marker-matches (if marked (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n") false)
                     decision (if (and known (= pending-status "0"))
-                               (pr-run-decision (pr-unit-state unit) present matches (= marker-status "1") (= response-status "1")) "profile/submission-unknown")
+                               (pr-run-decision (pr-unit-state unit) present matches marked marker-matches (= response-status "1")) "profile/submission-unknown")
                     submitted (cond (= decision "profile/reuse-unit") true
                                     (= decision "profile/new-unit")
                                     (and (pr-prepare-submit request marker body-bytes)
