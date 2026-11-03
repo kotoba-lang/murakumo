@@ -6,7 +6,10 @@ The five integer inputs are qualified capacity, host control reserve, all
 committed host and guest reservations, bounded unmanaged usage, and candidate
 demand. Missing, negative, unsafe integer, malformed and zero-demand inputs
 are refused. Subtraction is checked at each step to avoid overflow. A demand
-exactly equal to the remaining capacity can be proposed.
+exactly equal to the remaining capacity can be proposed. This physical-pool
+path also requires an observed pressure value of 1, 2 or 4 and a valid
+maximum (1, 2, 4, or 0 for the existing default). Missing or unsupported
+pressure is refused even though legacy eligibility permits missing pressure.
 
 This is a pure decision boundary, not a live inventory, reservation allocator,
 dispatcher or launch permit. The caller must independently authenticate the
