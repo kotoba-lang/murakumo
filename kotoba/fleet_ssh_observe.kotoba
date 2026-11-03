@@ -1,0 +1,85 @@
+;; Read-only diagnostic observer. Compose with tunnel-core. This is not a
+;; resource governor, admission decision, trusted heartbeat, or SSH host.
+;; The caller must authorize the node/address pair and supply trusted key paths;
+;; the host must constrain process execution, output size, and execution time.
+(ns murakumo.fleet-ssh-observe
+  (:export [observe-inputs? observe-ssh-request observe-result observe-node]))
+
+(defn- ob-bytes [s :string] :vector-i64
+  (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- ob-name? [s :string] :bool
+  (let [v (ob-bytes s) n (vector-count v)]
+    (and (> n 0) (<= n 32) (not (= (vector-at v 0) 45))
+         (not (= (vector-at v (- n 1)) 45))
+         (loop [i 0] (if (= i n) true
+           (let [c (vector-at v i)]
+             (if (or (and (>= c 97) (<= c 122)) (and (>= c 48) (<= c 57)) (= c 45))
+               (recur (+ i 1)) false)))))))
+(defn- ob-path? [s :string] :bool
+  (let [v (ob-bytes s) n (vector-count v)]
+    (and (> n 1) (<= n 255) (= (vector-at v 0) 47)
+         (not (= (vector-at v (- n 1)) 47))
+         (< (string-index-of s "..") 0) (< (string-index-of s "//") 0)
+         (< (string-index-of s "_SEP") 0)
+         (loop [i 0] (if (= i n) true
+           (let [c (vector-at v i)]
+             (if (or (and (>= c 97) (<= c 122)) (and (>= c 65) (<= c 90))
+                     (and (>= c 48) (<= c 57)) (= c 47) (= c 45) (= c 46) (= c 95))
+               (recur (+ i 1)) false)))))))
+;; Accept only canonical IPv4 addresses in Tailscale's 100.64.0.0/10 range.
+(defn- ob-ip? [s :string] :bool
+  (let [v (ob-bytes s) n (vector-count v)]
+    (and (>= n 9) (<= n 15)
+      (loop [i 0 part 0 val 0 digits 0 first-zero false]
+        (if (= i n)
+          (and (= part 3) (> digits 0) (<= val 255))
+          (let [c (vector-at v i)]
+            (cond
+              (= c 46) (if (and (< part 3) (> digits 0) (<= val 255)
+                                  (if (= part 0) (= val 100)
+                                    (if (= part 1) (and (>= val 64) (<= val 127)) true)))
+                         (recur (+ i 1) (+ part 1) 0 0 false) false)
+              (and (>= c 48) (<= c 57))
+                (if (or (>= digits 3) (and first-zero (> digits 0))) false
+                  (recur (+ i 1) part (+ (* val 10) (- c 48)) (+ digits 1) (and (= digits 0) (= c 48))))
+              :else false)))))))
+(defn observe-inputs? [node :string ip :string identity :string known :string] :bool
+  (and (ob-name? node) (ob-ip? ip) (ob-path? identity) (ob-path? known)))
+(defn- ob-a [] :string "ARG_SEP")
+;; The only permitted commands are selected by this component, never by a
+;; remote response or checkpoint. An empty request means invalid input/mode.
+(defn observe-ssh-request [node :string ip :string identity :string known :string mode :string] :string
+  (let [cmd (cond (= mode "memory") "/usr/sbin/sysctl -n hw.memsize"
+                  (= mode "swap") "/usr/sbin/sysctl -n vm.swapusage"
+                  (= mode "pressure") "/usr/bin/memory_pressure -Q"
+                  :else "") a (ob-a)]
+    (if (or (= cmd "") (not (observe-inputs? node ip identity known))) ""
+      (str "/usr/bin/ssh" a "-F" a "/dev/null" a "-i" a identity
+           a "-o" a "IdentitiesOnly=yes" a "-o" a "IdentityAgent=none"
+           a "-o" a "BatchMode=yes" a "-o" a "ConnectTimeout=3"
+           a "-o" a "ServerAliveInterval=1" a "-o" a "ServerAliveCountMax=2"
+           a "-o" a "StrictHostKeyChecking=yes" a "-o" a (str "UserKnownHostsFile=" known)
+           a "-o" a (str "HostKeyAlias=" node) a "-o" a "ClearAllForwardings=yes"
+           a "-o" a "RequestTTY=no" a (str node "@" ip) a (wrap-cmd cmd)))))
+;; Host response is <exit> LF <stdout>. Empty or ambiguous output is refusal.
+;; Output is untrusted observation only; neither the in-band marker nor these
+;; values confer admission authority. The host must enforce capture bounds.
+(defn observe-result [reply :string] :string
+  (if (or (> (string-byte-length reply) 8192) (not (= (string-index-of reply "0\n") 0))) ""
+    (let [raw (string-substring reply 2 (string-byte-length reply))]
+      (if (= (remote-exit raw 0) 0) (remote-output raw 0) ""))))
+
+(defn- ob-probe [node :string ip :string identity :string known :string mode :string] :string
+  (let [request (observe-ssh-request node ip identity known mode)]
+    (if (= request "") ""
+      (observe-result (typed-cap-call 20 :string :string request)))))
+;; Sequential fixed probes, with no partial result on any error. The caller is
+;; responsible for concurrency limits and an independently bounded host.
+(defn observe-node [node :string ip :string identity :string known :string] :string
+  (let [memory (ob-probe node ip identity known "memory")]
+    (if (= memory "") ""
+      (let [swap (ob-probe node ip identity known "swap")]
+        (if (= swap "") ""
+          (let [pressure (ob-probe node ip identity known "pressure")]
+            (if (= pressure "") ""
+              (str "memory:\n" memory "swap:\n" swap "pressure:\n" pressure))))))))

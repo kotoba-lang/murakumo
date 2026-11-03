@@ -1,0 +1,25 @@
+;; Native unity fixture: compose tunnel_core, fleet_ssh_observe, then this
+;; source; export main. No network or process capability is used by this test.
+(ns murakumo.fleet-ssh-observe-test (:export [main]))
+(defn main [] :i64
+  (let [node "benjamin" ip "100.75.169.8" key "/tmp/keys/id" known "/tmp/known-hosts"
+        valid (observe-inputs? node ip key known)
+        rejects (and (not (observe-inputs? "" ip key known))
+          (not (observe-inputs? "-evil" ip key known))
+          (not (observe-inputs? "a@b" ip key known))
+          (not (observe-inputs? node "100.128.1.1" key known))
+          (not (observe-inputs? node "100.075.1.1" key known))
+          (not (observe-inputs? node "100.75.999.1" key known))
+          (not (observe-inputs? node "100.75.1" key known))
+          (not (observe-inputs? node ip "/tmp/ARG_SEPbad" known))
+          (not (observe-inputs? node ip "/tmp/../id" known))
+          (= (observe-ssh-request node ip key known "arbitrary") "")
+          (= (observe-result "0\nhello") "")
+          (= (observe-result "1\nhello__murakumo_rc=0\n") "")
+          (= (observe-result "0\nhello__murakumo_rc=7\n") "")
+          (= (observe-result "0\nhello__murakumo_rc=0\n") "hello"))
+        request (observe-ssh-request node ip key known "memory")
+        fixed (and (>= (string-index-of request "StrictHostKeyChecking=yes") 0)
+                   (>= (string-index-of request "HostKeyAlias=benjamin") 0)
+                   (>= (string-index-of request "/usr/sbin/sysctl -n hw.memsize") 0))]
+    (if (and valid rejects fixed) 0 1)))
