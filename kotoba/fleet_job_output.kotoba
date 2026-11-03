@@ -1,7 +1,9 @@
 ;; Validate a captured agent-step result before putting stdout in the existing
 ;; checkpoint block store. The expected DID/job are independent host pins;
 ;; neither a signature nor this block write is a live lease or archive grant.
-;; Compose after fleet_job_node and git_checkpoint.
+;; Compose after fleet_job_node and git_checkpoint. The trusted host must own
+;; both the capture tree and block store exclusively throughout this operation;
+;; path-based metadata and reads do not bind against a concurrent replacement.
 (ns murakumo.fleet-job-output (:export [job-output-main]))
 
 (defn- jo-once? [s :string key :string] :bool
@@ -39,17 +41,29 @@
               (not (= (cp-str b 0 "output") output-cid))) "job-output/content"
           :else "job-output/verified")))
 
+;; Bound existing block reads before cp-write can do any whole-file read.
+;; Exclusive ownership is required: size rechecks alone do not prevent races.
+(defn- jo-put [store :string b :vector-i64] :string
+  (let [cid (cp-cid b) path (str store "/" cid) exists (cp-fs "D" path "")
+        size (if (= exists "1") (cp-size path) -1)
+        prior (if (and (= exists "1") (>= size 0) (<= size 16384)) (cp-range path 0 size) (vector-alloc 0))
+        good (cond (> (vector-count b) 16384) false
+                   (= exists "0") (cp-write path b)
+                   (= exists "1") (and (= size (vector-count b)) (= (vector-count prior) size)
+                                        (= (cp-size path) size) (= (cp-cid prior) cid))
+                   :else false)]
+    (if (and (<= (vector-count b) 16384) good (= (cp-fs "M" store "") "1")) cid "")))
+
 (defn job-output-main [] :i64
   (let [logpath (jn-arg 0) did (jn-arg 1) job (jn-arg 2) store (jn-arg 3)
-        stat (if (jn-attempt-root? store)
-               (typed-cap-call 20 :string :string (str "/usr/bin/statARG_SEP--format=%F:%aARG_SEP--ARG_SEP" store)) "")]
-    (if (or (not (jn-attempt-root? logpath)) (not (= stat "0\ndirectory:700\n"))
-            (not (cp-exists? logpath)))
+        size (if (jn-attempt-root? logpath) (cp-size logpath) -1)]
+    (if (or (not (jn-attempt-root? store)) (not (jn-private-dir? store)) (< size 1) (> size 65536))
       (let [x (jn-say "job-output/config-refused")] 2)
-      (let [log (typed-cap-call 35 :string :string logpath)
-            verdict (if (> (string-length log) 65536) "job-output/too-large" (jo-verdict log did job))]
+      (let [raw (cp-range logpath 0 size)
+            log (cp-text raw)
+            verdict (if (and (= (vector-count raw) size) (= (cp-size logpath) size))
+                      (jo-verdict log did job) "job-output/read-unknown")]
         (if (not (= verdict "job-output/verified")) (let [x (jn-say verdict)] 1)
-          (let [bytes (jo-decode (jn-line log "output-base64url ")) cid (cp-put store bytes)
-                synced (if (= cid "") "" (cp-fs (str store "FSYNC_SEP")))]
-            (if (not (= synced "1")) (let [x (jn-say "job-output/store-unknown")] 1)
+          (let [bytes (jo-decode (jn-line log "output-base64url ")) cid (jo-put store bytes)]
+            (if (= cid "") (let [x (jn-say "job-output/store-unknown")] 1)
               (jn-say (str "job-output/stored " cid)))))))))
