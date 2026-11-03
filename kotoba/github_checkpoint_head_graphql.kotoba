@@ -64,9 +64,9 @@
                   fsck (if (and (cp-ok? got) (cp-hex? tip 40)) (cp-git check "fsckARG_SEP--fullARG_SEP--strict") "refused")
                   back (if (and (cp-ok? fsck) (gh-head-tree? check "FETCH_HEAD"))
                          (cp-git check "showARG_SEPFETCH_HEAD:head.json") "refused")
-                  back-parent (if (cp-ok? back) (cp-git check "rev-parseARG_SEPFETCH_HEAD^") "refused")]
+                  back-parent (and (cp-ok? back) (gh-single-parent? check "FETCH_HEAD" tip expected))]
               (if (not ready) "head-cas/precondition-refused"
-                (if (and (cp-ok? back-parent) (= (cp-line (cp-out back-parent)) expected) (= (cp-out back) new))
+                (if (and back-parent (= (cp-out back) new))
                   (str "head-cas/advanced " cid " " tip " " (if (= (hg-response-oid reply) tip) "acknowledged" "unacknowledged"))
                   "head-cas/conflict-or-unknown")))))))
 

@@ -17,6 +17,14 @@
     (and (cp-ok? r) (cp-hex? blob 40)
          (= out (str "100644 blob " blob "\thead.json\n")))))
 
+;; rev-parse REV^ alone only checks the first parent of a merge. A completed
+;; advancement must have exactly one parent and that parent must be the
+;; independently expected commit. Compare the complete parent listing.
+(defn- gh-single-parent? [dir :string rev :string tip :string expected :string] :bool
+  (if (or (not (cp-hex? tip 40)) (not (cp-hex? expected 40))) false
+    (let [r (cp-git dir (str "rev-list" (cp-a) "--parents" (cp-a) "-n" (cp-a) "1" (cp-a) rev))]
+      (and (cp-ok? r) (= (cp-out r) (str tip " " expected "\n"))))))
+
 ;; The operator must provision the initial ref and independently pin its full
 ;; commit ID and checkpoint. Each successor has one Git parent and an exact
 ;; expected checkpoint parent. A normal non-force push makes concurrent children
@@ -54,8 +62,8 @@
                   commit (if (cp-ok? add) (cp-git dir "commitARG_SEP--quietARG_SEP-mARG_SEPAdvance checkpoint head") "refused")
                   tip-r (if (cp-ok? commit) (cp-git dir "rev-parseARG_SEPHEAD") "refused")
                   tip (cp-line (cp-out tip-r))
-                  parent-r (if (cp-ok? tip-r) (cp-git dir "rev-parseARG_SEPHEAD^") "refused")]
-              (if (not (and (cp-ok? parent-r) (cp-hex? tip 40) (= (cp-line (cp-out parent-r)) expected)
+                  parent-ok (and (cp-ok? tip-r) (gh-single-parent? dir "HEAD" tip expected))]
+              (if (not (and parent-ok
                             (gh-head-tree? dir "HEAD"))) "head/precondition-or-staging-refused"
                 (let [push (ga-git dir (str "push" (cp-a) "--quiet" (cp-a) remote (cp-a) "HEAD:" ref))
                       check (str work "/check") made (= (cp-fs "I" check "") "1")
@@ -67,8 +75,8 @@
                              (cp-git check "fsckARG_SEP--fullARG_SEP--strict") "refused")
                       readback (if (and (cp-ok? fsck) (gh-head-tree? check "FETCH_HEAD"))
                                  (cp-git check "showARG_SEPFETCH_HEAD:head.json") "refused")
-                      back-parent (if (cp-ok? readback) (cp-git check "rev-parseARG_SEPFETCH_HEAD^") "refused")]
-                  (if (and (cp-ok? back-parent) (= (cp-line (cp-out back-parent)) expected) (= (cp-out readback) new))
+                      back-parent (and (cp-ok? readback) (gh-single-parent? check "FETCH_HEAD" tip expected))]
+                  (if (and back-parent (= (cp-out readback) new))
                     (str "head/advanced " cid " " tip " " (if (cp-ok? push) "acknowledged" "unacknowledged"))
                     "head/conflict-or-unknown"))))))))
 
