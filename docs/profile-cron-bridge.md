@@ -365,3 +365,9 @@ request, lease and submission state. The
 these branches with real permission errors on the newer diagnostic Mac FS2
 provider and stubbed operations. This requires a provider that preserves
 unknown errors; it is not a complete caller audit or autonomous execution.
+
+An [ARM64 Linux composition observation](evidence/awai150-current-cron-unity-20261103/)
+compiled a native controller containing the current six modules' functions and
+confirmed missing configuration is refused. A separate fixture exercised the
+current controller's sequencing with real marker/cursor files and stubbed
+external services. Neither result qualifies a production turn or Mac runtime.
