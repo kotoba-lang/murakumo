@@ -1,0 +1,30 @@
+(ns head-fixture (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [v :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 v)))
+(defn- cp-str [v :vector-i64 i :i64 key :string] :string (if (= key "request") (cp-text v) (if (= key "archiveAck") "/ack" "cid")))
+(defn- cp-fs [op :string path :string tail :string] :string
+  (if (= path "/error/request.tmp") "unavailable"
+    (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+      (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000")) (string-substring r 5 (string-length r)) ""))))
+(defn- json-valid? [v :vector-i64] :bool true)
+(defn- json-canonical? [v :vector-i64] :bool true)
+(defn- rt-admitted-head? [cfg :vector-i64 head :vector-i64] :bool true)
+(defn- cp-exists? [p :string] :bool true)
+(defn- cp-read [p :string] :vector-i64 (cp-bytes "ack"))
+(defn- rt-archive-ack? [p :string cid :string] :bool true)
+(defn- br-head-problem [cfg :vector-i64 head :vector-i64] :string
+  (cond (or (not (json-valid? head)) (not (json-canonical? head))) "bridge/head-invalid"
+        (not (rt-admitted-head? cfg head)) "bridge/head-unadmitted"
+        ;; Completion is also unknown while a request replacement is pending.
+        ;; The controller can otherwise bypass br-install when head already
+        ;; names the request and incorrectly advance its cursor.
+        (not (= (cp-fs "D" (str (cp-str cfg 0 "request") ".tmp") "") "0")) "bridge/request-unknown"
+        (or (not (cp-exists? (cp-str cfg 0 "archiveAck")))
+            (not (json-valid? (cp-read (cp-str cfg 0 "archiveAck"))))
+            (not (rt-archive-ack? (cp-str cfg 0 "archiveAck") (cp-str head 0 "checkpoint")))) "bridge/archive-pending"
+        :else "bridge/head-ready"))
+
+(defn main [] :i64
+ (let [path (typed-cap-call 38 :string :string "0")
+       result (br-head-problem (cp-bytes path) (cp-bytes "head"))
+       out (typed-cap-call 37 :string :string (str result "\n"))] 0))
