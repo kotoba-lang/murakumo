@@ -216,6 +216,7 @@
                           :else
                           (let [r (cell-execute index profile "container" layout state allowed (if source-admitted source itext))]
                     (if (not (= (jn-field r 0) "ok")) (let [x (jn-say r)] 1)
+                      (if (not (= (jn-field r 1) "0")) (let [x (jn-say "job/cell-failed")] 1)
                       (let [fresh (lease-round (+ t 1) node chosen ports token)
                             finished (ln-now "clock")
                             final-guard (jn-lease-problem fresh node jid finished)]
@@ -224,7 +225,7 @@
                           (let [text (step-receipt-text finished did epoch (jn-int (jn-field r 1)) jid node (jn-field r 2))
                                 c (jn-say (string-concat "receipt " text))
                                 d (jn-say (string-concat "signature " (sign-statement seed text)))]
-                            0))))))))))))))
+                            0)))))))))))))))
 
 (defn- jn-run [] :i64 (jn-run-with-source "" false))
 

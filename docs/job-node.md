@@ -89,6 +89,12 @@ Callers must independently verify the receipt and reconcile the cursor before
 advancing it. This changes the earlier zero exit status for non-holders and
 ineligible nodes; callers need to handle those outcomes explicitly.
 
+Successful container startup does not imply the cell succeeded. A nonzero or
+malformed cell exit is reported as `job/cell-failed` without a success receipt;
+the durable attempt marker remains for reconciliation. Receipt verification
+also rejects a correctly signed nonzero exit as `job/cell-failed`. This does
+not establish that a failed cell had no effects or make replay safe.
+
 The command blocks and output below are the 2026-10-23 historical gate. They
 use numeric time and omit the now-required expected job ID, so they are not a
 reproduction recipe for the current interface.
