@@ -22,6 +22,23 @@ the same ticket remained at the head. A separately held lock was also refused.
 The observer paths refer to temporary isolated test directories and must be
 adapted for another run. The injected pause is a test-only blocking pipe write.
 
+On the same local Mac, `dequeue-recovery.py` also recovered a committed head
+removal. Attempts to recover a non-head removal, a replaced head, a duplicate
+append or two simultaneous removals were rejected without changing the queue.
+
+A fresh 1-CPU, 2-GiB Linux ARM64 VM ran `linux-contract.py` and
+`linux-observe.py` against the current source. The uninstrumented Linux ELF
+SHA-256 was `4745a1e3ce2cd4fbc0cca0619dcd61836cfa86642b5d14f08666c0642f1ff76c`;
+the bootstrap compiler SHA-256 was
+`914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4`.
+The Linux source was the pinned source above with an entry-point namespace
+change and a `main` wrapper; its SHA-256 was
+`8f5d5b66637116ff00b27073799a3d1e70856b0882b42389606499abac6bce58`.
+The result log records sequential, one eight-contender race, the five write
+boundaries and four refusal cases. The earlier VM restart failure was avoided
+by creating a fresh VM, which was removed after the test. The Linux test does
+not cover the Mac-only head-removal cases or recovery-process interruption.
+
 These process-kill and synthetic checks do not simulate power loss, I/O error,
 untrusted writers, process-tree termination, actual resource admission, model
 inference or bots. The diagnostic runtime is not a production release. Historical

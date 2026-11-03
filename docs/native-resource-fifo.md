@@ -63,5 +63,5 @@ a cross-host queue, model inference or full governor test.
 
 The [recovery observation](evidence/awai151-fifo-recovery-20261103/) checks
 synthetic process kills, invalid journals and a repeat recovery using the
-diagnostic Mac runtime. It does not simulate power loss or authorize workload
+diagnostic Mac runtime, plus Linux ARM64 regression checks. It does not simulate power loss or authorize workload
 admission. Earlier process-kill evidence used the prior intent format.
