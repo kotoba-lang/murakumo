@@ -96,3 +96,39 @@ admission. The remote marker remains forgeable by the remote process.
 | signed temporary host executable | `15a5a21f96635b9eadef2d40e09ddc908b543639f659feda4cff8dcb71590c95` |
 | signed temporary receiver | `107844d141d09e63bc25e2b7fe59a21662aa10b99ebfd1c274a559cdc6a282a6` |
 | temporary receiver source | `3957e090ea413acf5f36f1a6d99070f2fe86c779bad24dd77d311a3227cc40e3` |
+
+## Additional mini diagnostics
+
+A subsequent sequential test used a new task-only directory on each of the
+other nine minis, copying the same signed native host fixture and checking its
+SHA-256 before invocation. The initial receiver did not obtain a complete
+observation. Eight captured remote exit 126; investigation showed that the
+task executable copied to Dan lacked execute permission. Asher's initial
+receiver output was empty, so its execution outcome was treated as unknown.
+
+For the eight explicit exit-126 cases, a second attempt was made only after
+checking that the exact task executable was not running, its digest matched,
+and its task capture directory was empty. The task executable was given mode
+0700 and a fresh receiver capture directory was used. Dan, Issachar, Joseph,
+Judah, Levi, Naphtali and Zebulun returned complete validated observations;
+their process absence and exact task-directory removal were verified. Simeon
+returned an unknown observation, with no matching process and an empty capture
+directory at later inspection. Its task executable and directory were then
+removed, with directory absence verified. Asher was not run again; after
+confirming no matching process and checking its task directory, its remaining
+task files and empty directories were removed and absence verified. SSH
+intermittency made Asher's cleanup require a later inspection.
+
+Combined with the earlier Benjamin test, eight distinct minis produced
+complete native sender/receiver observations across separate runs. Asher and
+Simeon did not. Joseph's later sample reported pressure free 20% and swap used
+3,255.56 MiB. All values are untrusted, non-atomic point-in-time reports, not
+reservations; no inference or existing workload was started or stopped.
+Diagnostic adapters and temporary paths were used on all nodes, and this does
+not qualify the installed path, process containment or production deployment.
+
+| Additional cross-host artifact | SHA-256 |
+| --- | --- |
+| signed task-only native host | `98ab188b9d4323c6d180f905d8d605e15dba3fa74de9fb231c2fb2385c2e0d27` |
+| signed receiver after permission fix | `cf56c51679cb9da71ea06fe4841c936df1c8b55a7fa72145ba79ed632ac64331` |
+| receiver source after permission fix | `edfb2cb4f53b718a9b2e8dd0aaa7234804f471e4167ff0c450e9ac016065f46f` |
