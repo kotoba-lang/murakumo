@@ -156,10 +156,12 @@
       (parse-digits-go (record-new [:ref :tunnel/digits-go] t 0)))))
 
 (defn pick-exit [e [:ref :tunnel/exit]] :i64
-  ;; cljc sh-result: (if (some? rc) rc exit)
-  ;; Profile 5: has-rc is a real :bool presence flag (not 0/1 i64).
-  ;; T5.2 native record.
-  (if (record-get e :has-rc) (record-get e :rc) (record-get e :ssh-exit)))
+  ;; A transport failure is never a confirmed remote success. When SSH says
+  ;; zero but the wrapped command did not report an in-band status, preserve
+  ;; that uncertainty as a nonzero result rather than inventing success.
+  (let [transport (record-get e :ssh-exit) rc (record-get e :rc)]
+    (if (not (= transport 0)) transport
+      (if (and (record-get e :has-rc) (>= rc 0) (<= rc 255)) rc 255))))
 
 (defn err-ws? [c :string] :bool
   (if (string=? c " ")

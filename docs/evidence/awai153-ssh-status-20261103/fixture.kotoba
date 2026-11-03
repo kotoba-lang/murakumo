@@ -1,0 +1,16 @@
+(ns ssh-status-test (:schemas {:tunnel/exit [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]]}) (:export [main]))
+(defn pick-exit [e [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]]] :i64
+  ;; A transport failure is never a confirmed remote success. When SSH says
+  ;; zero but the wrapped command did not report an in-band status, preserve
+  ;; that uncertainty as a nonzero result rather than inventing success.
+  (let [transport (record-get [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] e :ssh-exit) rc (record-get [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] e :rc)]
+    (if (not (= transport 0)) transport
+      (if (and (record-get [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] e :has-rc) (>= rc 0) (<= rc 255)) rc 255))))
+
+(defn main [] :i64
+ (if (and (= (pick-exit (record-new [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] true 0 0)) 0)
+          (= (pick-exit (record-new [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] true 7 0)) 7)
+          (= (pick-exit (record-new [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] false 0 0)) 255)
+          (= (pick-exit (record-new [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] true 0 255)) 255)
+          (= (pick-exit (record-new [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] false 0 7)) 7)
+          (= (pick-exit (record-new [:record :tunnel/exit [[:has-rc :bool] [:rc :i64] [:ssh-exit :i64]]] true 256 0)) 255)) 0 1))
