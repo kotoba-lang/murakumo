@@ -138,6 +138,13 @@ the signed checkpoint root is published. The host must serialize access and
 protect the private repository and store; a failed capture can leave local
 Git or block artifacts to reconcile. This candidate does not push to GitHub,
 advance a cursor, or qualify the captured process/runtime.
+The separate `job-output-archive-main` candidate checks that checkpoint and
+proof before invoking the private GitHub archive, then checks the same pinned
+checkpoint, output and proof in its independently fetched readback store.
+It accepts an unacknowledged push only if that independent readback verifies;
+otherwise the host must reconcile the unknown result before retrying. This
+entry does not hold a fleet lease, advance the cursor or qualify the process
+boundary. Its combined source has been checked, not exercised against GitHub.
 Log and existing block reads are bounded, and storage synchronizes the block
 and its directory. The host must keep both paths exclusively owned during the
 operation: separate path-based metadata and reads do not establish identity
