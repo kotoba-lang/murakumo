@@ -1,0 +1,52 @@
+(ns topology-send-fixture (:export [main]))
+(defn- tr-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn- s2-nibble [v :i64] :string
+  (case v 0 "0" 1 "1" 2 "2" 3 "3" 4 "4" 5 "5" 6 "6" 7 "7"
+          8 "8" 9 "9" 10 "a" 11 "b" 12 "c" 13 "d" 14 "e" "f"))
+
+(defn hex [bytes :vector-i64] :string
+  (loop [i 0 out ""]
+    (if (= i (vector-count bytes)) out
+      (let [b (vector-at bytes i)]
+        (recur (+ i 1) (string-concat out (string-concat (s2-nibble (quot b 16)) (s2-nibble (rem b 16)))))))))
+
+
+(defn- tr-int [s :string] :i64
+  (let [b (tr-bytes s)]
+    (if (or (= (vector-count b) 0) (> (vector-count b) 16)) -1
+      (loop [i 0 n 0] (if (= i (vector-count b)) n (let [c (vector-at b i)] (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -1)))))))
+
+;; ---------------------------------------------------------------------------
+;; Bytes on a connection
+
+
+(defn- tr-slice [b :vector-i64 s :i64 e :i64] :vector-i64
+  (loop [i s out (vector-alloc (- e s))] (if (= i e) out (recur (+ i 1) (vector-assoc! out (- i s) (vector-at b i))))))
+
+;; where "\r\n\r\n" ends in the first n bytes of b, or -1
+
+(defn- tr-write [s :string] :string
+  (cond (= s "1 616263646566") "2"
+        (= s "1 63646566") "4"
+        (= s "2 616263646566") "0"
+        (= s "3 616263646566") "reset"
+        (= s "4 616263646566") "7"
+        (= s "5 616263646566") "6"
+        :else "reset"))
+(defn- tr-send [c :string b :vector-i64] :i64
+  (loop [s 0]
+    (if (>= s (vector-count b)) 0
+      (let [e (if (> (+ s 8192) (vector-count b)) (vector-count b) (+ s 8192))
+            w (tr-int (tr-write (str c " " (hex (tr-slice b s e)))))]
+        (if (= w (- e s)) (recur e) 1)))))
+
+
+(defn main [] :i64
+ (let [b (tr-bytes "abcdef")]
+  (if (and (= (tr-send "1" b) 1)
+           (= (tr-send "2" b) 1)
+           (= (tr-send "3" b) 1)
+           (= (tr-send "4" b) 1)
+           (= (tr-send "5" b) 0)
+           (= (tr-send "6" (tr-bytes "")) 0)) 0 1)))
