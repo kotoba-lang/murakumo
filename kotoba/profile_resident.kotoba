@@ -223,6 +223,35 @@
                    " " (cp-str cfg 0 "policy") " " (cp-str cfg 0 "environment") " " (cp-num b p "epoch")
                    " " (cp-str b p "parent") " " (cp-str cfg 0 "task") " " store " " (cp-str cfg 0 "archiveAck")))))
 
+;; Ack publication renames a temporary file over the destination. Neither
+;; path may overlap a mutable directory, configured input, or another writer's
+;; temporary file. The host must also prevent filesystem aliases and races.
+(defn- rt-ack-dir-safe? [ack :string path :string] :bool
+  (or (= path "") (and (not (ga-path-overlap? ack path))
+                        (not (ga-path-overlap? (str ack ".tmp") path)))))
+(defn- rt-ack-file-safe? [ack :string path :string] :bool
+  (or (= path "") (and (not (= ack path)) (not (= (str ack ".tmp") path))
+                        (not (= ack (str path ".tmp"))) (not (= (str ack ".tmp") (str path ".tmp"))))))
+(defn- rt-ack-safe? [cfg :vector-i64 config-path :string] :bool
+  (let [ack (cp-str cfg 0 "archiveAck")]
+    (and (cp-safe-absolute? ack)
+         (rt-ack-dir-safe? ack (cp-str cfg 0 "store"))
+         (rt-ack-dir-safe? ack (cp-str cfg 0 "cache"))
+         (rt-ack-dir-safe? ack (cp-str cfg 0 "runtimeRoot"))
+         (rt-ack-file-safe? ack config-path)
+         (rt-ack-file-safe? ack (cp-str cfg 0 "head"))
+         (rt-ack-file-safe? ack (str (cp-str cfg 0 "head") ".resident-lockfile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "request"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "status"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "candidateHead"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "leaseFile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "key"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "checkpointBinary"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "tokenFile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "policyFile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "environmentFile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "runtimeFile")))))
+
 ;; Archive an admitted head under the resident's local lock, then publish the
 ;; acknowledgement only after readback and a second admission check. The host
 ;; supplies a fresh, private work path and pinned GitHub executable/repository.
@@ -234,7 +263,7 @@
         parent (ln-field descriptor 7) task (ln-field descriptor 8) store (ln-field descriptor 9) ack (ln-field descriptor 10)
         exact (str "resident/archive " root " " author " " profile " " policy " " environment " " epoch-text
                    " " parent " " task " " store " " ack)]
-    (if (or (not (= descriptor exact)) (not (cp-safe-absolute? ack))
+    (if (or (not (= descriptor exact)) (not (rt-ack-safe? cfg ""))
             (= work ack) (= work (str ack ".tmp"))) "resident-archive/head-refused"
       (let [result (ga-archive work store root author profile policy environment (cp-int epoch-text) parent task repo gh)
             tree (ln-field result 2) outcome (ln-field result 3)
@@ -390,7 +419,7 @@
             (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
             (not (= (cp-num cfg 0 "intervalMs") 86400000))
             (and (>= archive-field 0)
-                 (or (not (= (json-kind cfg archive-field) 3)) (not (cp-safe-absolute? ack))
+                 (or (not (= (json-kind cfg archive-field) 3)) (not (rt-ack-safe? cfg (cp-arg 1)))
                      (= ack (cp-arg 1)) (= ack (cp-str cfg 0 "head")) (= ack (cp-str cfg 0 "store"))
                      (= ack (cp-str cfg 0 "status")) (= ack (cp-str cfg 0 "candidateHead"))
                      (= ack (cp-str cfg 0 "request")) (= ack (cp-str cfg 0 "leaseFile"))
