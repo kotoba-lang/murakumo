@@ -393,3 +393,9 @@ ref, then fetched it independently; the native CLI verified and restored the
 fetched blocks. This is an operator-run nonsecret test, not an autonomous
 GitHub archive component or a production bot. Its test compiler is not a
 released or self-built compiler, and the Mac runtime remains unqualified.
+
+The current checkpoint source was also exercised with the newer diagnostic
+Darwin FS2 candidate in a [local Git capture/restore fixture](evidence/awai150-current-mac-checkpoint-20261103/).
+It matched staged, unstaged and listed untracked data after restore, and refused
+an inaccessible destination. The fixture uses a privileged test-only spawn
+adapter and does not qualify production GitHub transport or an autonomous bot.
