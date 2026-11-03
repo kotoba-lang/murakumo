@@ -86,7 +86,7 @@
 
 ;; Called only under the resident writer lock. The integrated controller calls
 ;; the lower-level bridge functions while already holding the same lock.
-(defn- br-command [] :i64
+(defn- br-command [cfg :vector-i64] :i64
   (let [mode (cp-arg 0) cfgpath (cp-arg 1) definition-path (cp-arg 2)
         pin (cp-arg 3) cursor-path (cp-arg 4) source-path (cp-arg 5)]
     (if (or (not (cp-safe-absolute? cfgpath)) (not (cp-safe-absolute? definition-path))
@@ -94,7 +94,7 @@
             (not (cp-exists? cfgpath)) (not (cp-exists? definition-path))
             (not (cp-exists? cursor-path)) (not (cp-exists? source-path)))
       (let [x (cp-say "bridge/input-unavailable")] 2)
-      (let [cfg (cp-read cfgpath) definition (cp-read definition-path) cursor (cp-read cursor-path)
+      (let [definition (cp-read definition-path) cursor (cp-read cursor-path)
             source (cp-read source-path) now (rt-now) problem (br-problem cfg definition pin cursor source now)]
         (if (or (not (= problem "bridge/ok"))
                 (= (cp-str cfg 0 "request") cfgpath) (= (cp-str cfg 0 "request") definition-path)
@@ -120,6 +120,8 @@
       (let [x (cp-say "bridge/config-refused")] 2)
       (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
         (let [x (cp-say "bridge/local-writer-busy")] 1)
-        (let [result (br-command)
+        ;; Use the exact config used to choose the lock; do not reread it
+        ;; after acquisition and accidentally operate in a different domain.
+        (let [result (br-command cfg)
               released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")]
           (if released result (let [x (cp-say "bridge/local-unlock-failed")] 2)))))))
