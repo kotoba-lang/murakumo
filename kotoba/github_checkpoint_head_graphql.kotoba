@@ -1,0 +1,77 @@
+;; GitHub expected-head mutation candidate. Compose after checkpoint head,
+;; archive and their native closure. The host supplies scoped credentials to a
+;; pinned GH executable, trusted expected commit, lease and network policy.
+;; Expected OID is not an anti-rollback authority or a lease fence.
+(ns murakumo.github-checkpoint-head-graphql (:export [github-checkpoint-head-cas-main]))
+
+(defn- hg-base64 [b :vector-i64] :string
+  (let [url (en-b64-encode b) standard (string-replace-all (string-replace-all url "-" "+") "_" "/")
+        r (rem (vector-count b) 3)]
+    (str standard (if (= r 0) "" (if (= r 1) "==" "=")))))
+
+;; Request contains only public metadata and checkpoint pointers, never a
+;; credential. GH gets its short-lived credential from the private host.
+(defn- hg-request [repo :string branch :string expected :string body :string] :vector-i64
+  (cp-bytes (str "{\"query\":\"mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){commit{oid}}}\","
+    "\"variables\":{\"input\":{\"branch\":{\"repositoryNameWithOwner\":\"" repo "\",\"branchName\":\"" branch
+    "\"},\"expectedHeadOid\":\"" expected "\",\"fileChanges\":{\"additions\":[{\"path\":\"head.json\",\"contents\":\""
+    (hg-base64 (cp-bytes body)) "\"}]},\"message\":{\"headline\":\"Advance checkpoint head\"}}}}")))
+
+(defn- hg-submit [gh :string request :string] :string
+  (cp-spawn (str gh (cp-a) "api" (cp-a) "--hostname" (cp-a) "github.com" (cp-a) "graphql" (cp-a) "--input" (cp-a) request)))
+
+;; GH may return JSON errors or an interrupted response. Only bind an
+;; acknowledgement to the exact commit independently fetched afterwards.
+(defn- hg-response-oid [response :string] :string
+  (let [b (cp-bytes (cp-out response))]
+    (if (and (cp-ok? response) (<= (vector-count b) 8192) (json-valid? b) (= (json-kind b 0) 1)
+             (< (json-member b 0 "errors") 0))
+      (let [d (json-member b 0 "data") x (if (>= d 0) (json-member b d "createCommitOnBranch") -1)
+            c (if (>= x 0) (json-member b x "commit") -1)]
+        (if (>= c 0) (cp-str b c "oid") "")) "")))
+
+(defn- hg-advance [work :string store :string cid :string author :string profile :string policy :string environment :string
+                   epoch :i64 parent :string task :string repo :string gh :string expected :string] :string
+  (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? store)) (ga-path-overlap? work store)
+            (not (cp-safe-absolute? gh)) (not (ga-repo? repo)) (not (cp-hex? expected 40))
+            (not (cp-raw? parent)) (not (cp-raw? cid))
+            (not (ga-verified? store cid author profile policy environment epoch parent task))) "head-cas/input-refused"
+        (not (= (cp-fs "I" work "") "1")) "head-cas/work-exists-or-unavailable"
+        (not (= (cp-fs "H" work "700") "1")) "head-cas/work-permissions"
+        :else
+        (let [archive (ga-archive (str work "/archive") store cid author profile policy environment epoch parent task repo gh)]
+          (if (not (= (string-index-of archive (str "archive/stored " cid " ")) 0)) "head-cas/archive-unconfirmed"
+            (let [head (str work "/head") branch (str "itonami/head/" (sha256-hex (cp-bytes task)))
+                  ref (str "refs/heads/" branch) remote (str "https://github.com/" repo ".git")
+                  old (gh-head-text task parent) new (gh-head-text task cid)
+                  made (= (cp-fs "I" head "") "1")
+                  init (if made (cp-git head "initARG_SEP--quietARG_SEP--template=") "refused")
+                  fetch (if (and (cp-ok? init) (ga-config-safe? head))
+                          (ga-git head (str "fetch" (cp-a) "--quiet" (cp-a) "--no-tags" (cp-a) remote (cp-a) ref)) "refused")
+                  prev (if (cp-ok? fetch) (cp-git head "rev-parseARG_SEPFETCH_HEAD") "refused")
+                  shape (and (cp-ok? prev) (= (cp-line (cp-out prev)) expected) (gh-head-tree? head "FETCH_HEAD"))
+                  content (if shape (cp-git head "showARG_SEPFETCH_HEAD:head.json") "refused")
+                  request (str work "/graphql.json")
+                  ready (and (cp-ok? content) (= (cp-out content) old) (cp-absent? request)
+                             (cp-write request (hg-request repo branch expected new)))
+                  reply (if ready (hg-submit gh request) "refused")
+                  check (str work "/check") made-check (and ready (= (cp-fs "I" check "") "1"))
+                  ci (if made-check (cp-git check "initARG_SEP--quietARG_SEP--template=") "refused")
+                  cf (if (and (cp-ok? ci) (ga-config-safe? check))
+                       (ga-git check (str "fetch" (cp-a) "--quiet" (cp-a) "--no-tags" (cp-a) remote (cp-a) ref)) "refused")
+                  got (if (cp-ok? cf) (cp-git check "rev-parseARG_SEPFETCH_HEAD") "refused")
+                  tip (cp-line (cp-out got))
+                  fsck (if (and (cp-ok? got) (cp-hex? tip 40)) (cp-git check "fsckARG_SEP--fullARG_SEP--strict") "refused")
+                  back (if (and (cp-ok? fsck) (gh-head-tree? check "FETCH_HEAD"))
+                         (cp-git check "showARG_SEPFETCH_HEAD:head.json") "refused")
+                  back-parent (if (cp-ok? back) (cp-git check "rev-parseARG_SEPFETCH_HEAD^") "refused")]
+              (if (not ready) "head-cas/precondition-refused"
+                (if (and (cp-ok? back-parent) (= (cp-line (cp-out back-parent)) expected) (= (cp-out back) new))
+                  (str "head-cas/advanced " cid " " tip " " (if (= (hg-response-oid reply) tip) "acknowledged" "unacknowledged"))
+                  "head-cas/conflict-or-unknown")))))))
+
+(defn github-checkpoint-head-cas-main [] :i64
+  (let [result (hg-advance (cp-arg 0) (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6)
+                           (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9) (cp-arg 10) (cp-arg 11) (cp-arg 12))
+        out (cp-say result)]
+    (if (= (string-index-of result "head-cas/advanced ") 0) 0 1)))
