@@ -1,0 +1,58 @@
+(ns config-race (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [v :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 v)))
+(defn- cp-arg [i :i64] :string (cond (= i 0) "prepare" (= i 1) "/test/config" (= i 2) "/test/definition" (= i 3) "pin" (= i 4) "/test/cursor" :else "/test/source"))
+(defn- cp-safe-absolute? [s :string] :bool true)
+(defn- cp-exists? [s :string] :bool true)
+(defn- cp-read [s :string] :vector-i64 (if (= s "/test/config") (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000A" s "\u0000"))] (if (>= (string-byte-length r) 5) (cp-bytes (string-substring r 5 (string-length r))) (vector-alloc 0))) (cp-bytes "dummy")))
+(defn- cp-str [v :vector-i64 i :i64 k :string] :string (if (= k "head") (if (= (cp-text v) "original") "/test/head" "/test/wrong-head") "/test/request"))
+(defn- json-valid? [v :vector-i64] :bool true)
+(defn- json-canonical? [v :vector-i64] :bool true)
+(defn- rt-lock-config-safe? [v :vector-i64 p :string] :bool true)
+(defn- cp-say [s :string] :i64 (let [x (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- rt-now [] :i64 1)
+(defn- br-problem [cfg :vector-i64 defn :vector-i64 pin :string cursor :vector-i64 source :vector-i64 now :i64] :string (if (= (cp-text cfg) "original") "fixture/original" "fixture/replacement"))
+(defn- rt-read-head [cfg :vector-i64 p :string] :vector-i64 (vector-alloc 0))
+(defn- br-head-problem [cfg :vector-i64 head :vector-i64] :string "stub")
+(defn- br-request [d :vector-i64 p :string c :vector-i64 n :i64] :vector-i64 (vector-alloc 0))
+(defn- br-install [a :vector-i64 b :vector-i64 c :vector-i64] :string "stub")
+(defn- br-completed? [a :vector-i64 b :vector-i64] :bool false)
+(defn- br-command [cfg :vector-i64] :i64
+  (let [mode (cp-arg 0) cfgpath (cp-arg 1) definition-path (cp-arg 2)
+        pin (cp-arg 3) cursor-path (cp-arg 4) source-path (cp-arg 5)]
+    (if (or (not (cp-safe-absolute? cfgpath)) (not (cp-safe-absolute? definition-path))
+            (not (cp-safe-absolute? cursor-path)) (not (cp-safe-absolute? source-path))
+            (not (cp-exists? cfgpath)) (not (cp-exists? definition-path))
+            (not (cp-exists? cursor-path)) (not (cp-exists? source-path)))
+      (let [x (cp-say "bridge/input-unavailable")] 2)
+      (let [definition (cp-read definition-path) cursor (cp-read cursor-path)
+            source (cp-read source-path) now (rt-now) problem (br-problem cfg definition pin cursor source now)]
+        (if (or (not (= problem "bridge/ok"))
+                (= (cp-str cfg 0 "request") cfgpath) (= (cp-str cfg 0 "request") definition-path)
+                (= (cp-str cfg 0 "request") cursor-path) (= (cp-str cfg 0 "request") source-path))
+          (let [x (cp-say (if (= problem "bridge/ok") "bridge/path-conflict" problem))] 1)
+          (let [head-path (cp-str cfg 0 "head") head (rt-read-head cfg head-path)
+                h (br-head-problem cfg head) request (br-request definition pin cursor now)]
+            (if (not (= h "bridge/head-ready")) (let [x (cp-say h)] 1)
+              (cond (= mode "prepare") (let [result (br-install cfg head request) x (cp-say result)]
+                                         (if (= result "bridge/request-ready") 0 1))
+                    (= mode "complete") (let [completed (br-completed? head request)
+                                               x (cp-say (if completed "bridge/completed" "bridge/not-completed"))]
+                                           (if completed 0 1))
+                    :else (let [x (cp-say "bridge/command-refused")] 2)))))))))
+
+(defn profile-cron-bridge-main [] :i64
+  (let [path (cp-arg 1)
+        cfg (if (and (cp-safe-absolute? path) (cp-exists? path)) (cp-read path) (vector-alloc 0))
+        head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
+    (if (not (and (json-valid? cfg) (json-canonical? cfg) (rt-lock-config-safe? cfg path)))
+      (let [x (cp-say "bridge/config-refused")] 2)
+      (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
+        (let [x (cp-say "bridge/local-writer-busy")] 1)
+        ;; Use the exact config used to choose the lock; do not reread it
+        ;; after acquisition and accidentally operate in a different domain.
+        (let [w (typed-cap-call 35 :bytes :bytes (string-to-utf8 (str "\u0000FS2\u0000B/test/config\u0000replacement"))) result (br-command cfg)
+              released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")]
+          (if released result (let [x (cp-say "bridge/local-unlock-failed")] 2)))))))
+
+(defn main [] :i64 (profile-cron-bridge-main))
