@@ -39,6 +39,11 @@
         wrong-node (step-receipt-text 1000 "did" 1 0 job "other" "output")
         extra (str "{\"class\":\"" job "\",\"epoch\":1,\"node\":\"n\",\"revision\":0,\"slot\":0,\"until\":2000,\"x\":1}")]
     (and (jn-receipt-bound? lease receipt job)
+         (jn-live-receipt? lease receipt job 1000)
+         (not (jn-live-receipt? lease receipt job 999))
+         (not (jn-live-receipt? lease receipt job 2000))
+         (not (jn-live-receipt? lease receipt job -1))
+         (not (jn-live-receipt? (lease-text "n" job 0 2 2000 0) receipt job 1000))
          (not (jn-receipt-bound? lease receipt other))
          (not (jn-receipt-bound? lease wrong-job job))
          (not (jn-receipt-bound? lease wrong-node job))
