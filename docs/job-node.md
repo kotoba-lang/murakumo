@@ -155,6 +155,12 @@ a failure between writes is unknown and requires reconciliation. The separate
 proof CID, signer DID and job ID, and rechecks both blocks and the signature.
 These blocks must be included in a verified checkpoint closure before an
 archive/restore can be said to preserve them.
+`job-output-checkpoint-verify-main` checks the independently pinned checkpoint
+signature and closure, the two pinned file paths and CIDs in its untracked
+allowlist, and the restored output proof. The caller supplies a private store
+from a separately verified archive readback; this entry does not contact GitHub
+or establish a live lease. The checkpoint capture still has to include both
+files at the pinned paths, and the full composition is not runtime-qualified.
 Log and existing block reads are bounded, and storage synchronizes the block
 and its directory. The host must keep both paths exclusively owned during the
 operation: separate path-based metadata and reads do not establish identity
