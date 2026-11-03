@@ -140,6 +140,17 @@
 (defn- pr-replicable? [b :vector-i64] :bool
   (and (> (vector-count b) 0) (<= (vector-count b) 16384)))
 
+;; The peer controls response length. Inspect its regular-file size before a
+;; single bounded range read so recovery does not load an arbitrary response
+;; into the resident arena. The private cache is exclusively host-owned; these
+;; separate path operations do not establish identity against a concurrent writer.
+;; This bound does not limit bytes written to disk during curl execution.
+(defn- pr-read-response [path :string] :vector-i64
+  (let [size (cp-size path)]
+    (if (or (< size 1) (> size 262144)) (vector-alloc 0)
+      (let [b (cp-range path 0 size)]
+        (if (and (= (vector-count b) size) (= (cp-size path) size)) b (vector-alloc 0))))))
+
 ;; A crash can leave the output durable while state still points at this turn.
 ;; Only the exact completed response may be reused. Sync both the file and
 ;; its parent directory before state can refer to it.
@@ -166,7 +177,7 @@
                    (= (cp-cid (cp-read request)) (cp-cid body))
                    (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n"))]
     (if (not ready) "profile/state-publication-unknown"
-      (let [raw (cp-read response) completed (and (not (= (pr-answer raw) ""))
+      (let [raw (pr-read-response response) completed (and (not (= (pr-answer raw) ""))
                         (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime raw)))
             answer (if completed (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw) (vector-alloc 0))
             cid (cp-cid answer) expected (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
@@ -184,7 +195,7 @@
     (let [state (pr-unit-code unit)]
       (cond (= state 1)
             (and (cp-exists? response)
-                 (let [b (cp-read response)]
+                 (let [b (pr-read-response response)]
                    (and (not (= (pr-answer b) ""))
                         (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime b)))))
             (or (= state -1) (> i 900)) false
@@ -293,7 +304,7 @@
                   (pr-reconcile-pending repo runtime next task state body-bytes unit request marker response)
                 (if (not (= pending-status "0")) "profile/state-publication-unknown"
                 (if (or (not submitted) (not (pr-wait unit response runtime))) "profile/inference-unavailable-state-retained"
-                  (let [raw (cp-read response)
+                  (let [raw (pr-read-response response)
                         answer (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw)
                         cid (cp-cid answer)
                         outdir (str repo "/outputs") output (str outdir "/" next ".json")
