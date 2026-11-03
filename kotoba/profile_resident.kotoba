@@ -305,6 +305,10 @@
         request (rt-request-id present (if present (cp-read request-path) (vector-alloc 0))
                                (cp-str head 0 "request"))]
     (cond (not (or (= head-status "0") (= head-status "1"))) "resident/head-unknown"
+          ;; A writer may have stopped during request replacement. Do not
+          ;; turn the old request into a periodic run while its successor is
+          ;; unresolved; only an explicit absent result permits progress.
+          (not (= (cp-fs "D" (str request-path ".tmp") "") "0")) "resident/request-unknown"
           (not (or (= request-status "0") (= request-status "1"))) "resident/request-unknown"
           (= request "") "resident/request-refused"
           (not (rt-pins-ok? cfg)) "resident/runtime-pins-refused"
