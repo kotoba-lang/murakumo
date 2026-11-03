@@ -108,7 +108,13 @@ passed a source check, not a runtime or production qualification.
 
 The `fleet_job_output` candidate validates a captured log against independently
 pinned signer DID and job ID, a successful canonical signed receipt and the
-output CID before storing its bytes in a private checkpoint block directory.
+output CID before storing its bytes and a receipt/signature proof in a private
+checkpoint block directory. It returns both CIDs only after both blocks sync;
+a failure between writes is unknown and requires reconciliation. The separate
+`job-output-proof-verify-main` entry accepts host-pinned store, output CID,
+proof CID, signer DID and job ID, and rechecks both blocks and the signature.
+These blocks must be included in a verified checkpoint closure before an
+archive/restore can be said to preserve them.
 Log and existing block reads are bounded, and storage synchronizes the block
 and its directory. The host must keep both paths exclusively owned during the
 operation: separate path-based metadata and reads do not establish identity
