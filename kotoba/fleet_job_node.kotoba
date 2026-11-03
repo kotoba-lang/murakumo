@@ -180,6 +180,7 @@
         allowed (jn-int (jn-arg 10)) index (jn-arg 11) layout (jn-arg 12)
         ports (jn-arg 13) t (jn-int (jn-arg 14)) mode (jn-arg 15)
         ipath (jn-arg 16) token (jn-token 17) attempts (jn-arg 18)
+        capture-arg (jn-arg 23) capture (and source-admitted (= capture-arg "capture-output"))
         has-input (and (not (= ipath "")) (= (typed-cap-call 35 :string :string (string-concat ipath "EXISTS_SEP")) "1"))
         itext (if has-input (typed-cap-call 35 :string :string ipath) "")
         jp (job-problem profile input policy rail)]
@@ -190,6 +191,7 @@
           (or (< now 0) (> now 9007199253000000) (< t 1) (>= t 9007199254740991))
             (let [x (jn-say "job/time-or-ballot-refused")] 2)
           (not (jn-attempt-root? attempts)) (let [x (jn-say "job/attempt-config")] 1)
+          (and (not (= capture-arg "")) (not capture)) (let [x (jn-say "job/capture-refused")] 2)
           (= token "-") (let [x (jn-say "job token/missing-or-short")] 2)
           (and (not (= ipath "")) (not has-input)) (let [x (jn-say "job input/missing")] 1)
           (and has-input (not (= (digest-cid (string-concat "sha256:" (sha256-hex (jn-bytes itext))) 85) input))) (let [x (jn-say "job input/cid-mismatch")] 1)
@@ -214,18 +216,23 @@
                     (cond (not (= attempt "job/attempt-recorded")) (let [x (jn-say attempt)] 1)
                           (not (= dispatch-guard "job/lease-ok")) (let [x (jn-say dispatch-guard)] 1)
                           :else
-                          (let [r (cell-execute index profile "container" layout state allowed (if source-admitted source itext))]
-                    (if (not (= (jn-field r 0) "ok")) (let [x (jn-say r)] 1)
-                      (if (not (= (jn-field r 1) "0")) (let [x (jn-say "job/cell-failed")] 1)
+                          (let [input-text (if source-admitted source itext)
+                                r (if capture (cell-execute-captured index profile "container" layout state allowed input-text)
+                                              (cell-execute index profile "container" layout state allowed input-text))
+                                nl (string-index-of r "\n") header (if (>= nl 0) (string-substring r 0 nl) r)]
+                    (if (not (= (jn-field header 0) "ok")) (let [x (jn-say header)] 1)
+                      (if (not (= (jn-field header 1) "0")) (let [x (jn-say "job/cell-failed")] 1)
+                      (if (and capture (< nl 0)) (let [x (jn-say "job/output-unknown")] 1)
                       (let [fresh (lease-round (+ t 1) node chosen ports token)
                             finished (ln-now "clock")
                             final-guard (jn-lease-problem fresh node jid finished)]
                         (if (or (< finished dispatch-now) (not (= fresh chosen)) (not (= final-guard "job/lease-ok")))
                           (let [x (jn-say "job/lease-lost-output-unconfirmed")] 1)
-                          (let [text (step-receipt-text finished did epoch (jn-int (jn-field r 1)) jid node (jn-field r 2))
+                          (let [text (step-receipt-text finished did epoch (jn-int (jn-field header 1)) jid node (jn-field header 2))
                                 c (jn-say (string-concat "receipt " text))
-                                d (jn-say (string-concat "signature " (sign-statement seed text)))]
-                            0)))))))))))))))
+                                d (jn-say (string-concat "signature " (sign-statement seed text)))
+                                e (if capture (jn-say (str "output-base64url " (string-substring r (+ nl 1) (string-length r)))) 0)]
+                            0))))))))))))))))
 
 (defn- jn-run [] :i64 (jn-run-with-source "" false))
 
