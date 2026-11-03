@@ -46,6 +46,10 @@
 (defn- br-head-problem [cfg :vector-i64 head :vector-i64] :string
   (cond (or (not (json-valid? head)) (not (json-canonical? head))) "bridge/head-invalid"
         (not (rt-admitted-head? cfg head)) "bridge/head-unadmitted"
+        ;; Completion is also unknown while a request replacement is pending.
+        ;; The controller can otherwise bypass br-install when head already
+        ;; names the request and incorrectly advance its cursor.
+        (not (= (cp-fs "D" (str (cp-str cfg 0 "request") ".tmp") "") "0")) "bridge/request-unknown"
         (or (not (cp-exists? (cp-str cfg 0 "archiveAck")))
             (not (json-valid? (cp-read (cp-str cfg 0 "archiveAck"))))
             (not (rt-archive-ack? (cp-str cfg 0 "archiveAck") (cp-str head 0 "checkpoint")))) "bridge/archive-pending"
@@ -62,10 +66,10 @@
   (let [path (cp-str cfg 0 "request") wanted (cp-cid request)
         old (if (cp-exists? path) (cp-cid (cp-read path)) "none")
         consumed (cp-str head 0 "request")]
-    (cond (= consumed wanted) "bridge/already-consumed"
+    (cond (not (= (cp-fs "D" (str path ".tmp") "") "0")) "bridge/request-unknown"
+          (= consumed wanted) "bridge/already-consumed"
           (and (not (= old "none")) (not (= old consumed)) (not (= old wanted))) "bridge/pending-request"
           (= old wanted) "bridge/request-ready"
-          (cp-exists? (str path ".tmp")) "bridge/request-unknown"
           (rt-save path request) "bridge/request-ready"
           :else "bridge/request-unknown")))
 
