@@ -1,6 +1,6 @@
 ;; Append the public git_checkpoint_test fixtures before this native gate.
 (ns murakumo.profile-resident-test
-  (:export [test-profile-resident test-profile-archive-ack test-profile-public-environment test-profile-retention-refresh]))
+  (:export [test-profile-resident test-profile-archive-ack test-profile-public-environment test-profile-retention-refresh test-profile-archive-path-safety]))
 
 (defn- rtt-cfg [did :string] :vector-i64
   (cp-bytes (str "{\"authorA\":\"" did "\",\"authorB\":\"" did "\",\"environment\":\"" (cpt-cid)
@@ -94,3 +94,18 @@
          (not (rt-lock-config-safe? (cp-bytes (str "{\"head\":\"" head "\",\"archiveAck\":\"" lock "\"}")) "/task/config"))
          (not (rt-lock-config-safe? (cp-bytes (str "{\"head\":\"" head "\",\"runtimeRoot\":\"" lock "\"}")) "/task/config"))
          (not (rt-lock-config-safe? (cp-bytes (str "{\"head\":\"" head "\",\"leaseFile\":\"" lock "\"}")) "/task/config")))))
+
+(defn test-profile-archive-path-safety [] :bool
+  (let [good (cp-bytes "{\"archiveAck\":\"/task/ack\",\"cache\":\"/task/cache\",\"head\":\"/task/head\",\"runtimeRoot\":\"/task/runtime\",\"store\":\"/task/store\"}")
+        in-store (cp-bytes "{\"archiveAck\":\"/task/store/block\",\"store\":\"/task/store\"}")
+        store-parent (cp-bytes "{\"archiveAck\":\"/task/store\",\"store\":\"/task/store/blocks\"}")
+        in-cache (cp-bytes "{\"archiveAck\":\"/task/cache/response\",\"cache\":\"/task/cache\"}")
+        in-runtime (cp-bytes "{\"archiveAck\":\"/task/runtime/head\",\"runtimeRoot\":\"/task/runtime\"}")
+        sibling (cp-bytes "{\"archiveAck\":\"/task/store2/ack\",\"store\":\"/task/store\"}")
+        key-temp (cp-bytes "{\"archiveAck\":\"/task/key\",\"key\":\"/task/key.tmp\"}")
+        binary (cp-bytes "{\"archiveAck\":\"/task/checkpoint\",\"checkpointBinary\":\"/task/checkpoint\"}")]
+    (and (rt-ack-safe? good "/task/config") (rt-ack-safe? sibling "/task/config")
+         (not (rt-ack-safe? in-store "/task/config")) (not (rt-ack-safe? store-parent "/task/config"))
+         (not (rt-ack-safe? in-cache "/task/config")) (not (rt-ack-safe? in-runtime "/task/config"))
+         (not (rt-ack-safe? key-temp "/task/config")) (not (rt-ack-safe? binary "/task/config"))
+         (not (rt-ack-safe? good "/task/ack.tmp")))))
