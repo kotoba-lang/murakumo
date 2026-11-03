@@ -4,7 +4,7 @@
 ;; Linear JUN-315). Every node runs the same function on the same (intent,
 ;; observations, now) and gets the same answer; quorum leases settle the rest.
 ;;
-;;   fresh?            an observation counts only while younger than ttl
+;;   fresh?            a valid, non-future observation counts while younger than ttl
 ;;   effective-memory  the node's declared memory-gb, else the observed, else 0
 ;;   labels-ok?        every wanted label equals the node's (newline-terminated
 ;;                     "key=value" lines; keys are unique, no "=" in a key)
@@ -36,7 +36,8 @@
 ;; L2
 
 (defn fresh? [has-obs :bool at-ms :i64 now-ms :i64 ttl-ms :i64] :bool
-  (and has-obs (< (- now-ms at-ms) ttl-ms)))
+  (and has-obs (>= at-ms 0) (<= at-ms now-ms) (<= now-ms 9007199254740991)
+       (> ttl-ms 0) (<= ttl-ms 9007199254740991) (< (- now-ms at-ms) ttl-ms)))
 
 ;; -1 = absent
 (defn effective-memory [node-gb :i64 obs-gb :i64] :i64
@@ -156,6 +157,12 @@
            (not (fresh? true 700000 1000000 300000))
            (not (fresh? true 0 1000000 300000))
            (not (fresh? false 1000000 1000000 300000))
+           (not (fresh? true 1000001 1000000 300000))
+           (not (fresh? true -1 0 300000))
+           (not (fresh? true 0 -1 300000))
+           (not (fresh? true 0 0 0))
+           (not (fresh? true 0 9007199254740992 1))
+           (not (fresh? true 0 0 9007199254740992))
            (= (effective-memory 16 32) 16)
            (= (effective-memory -1 32) 32)
            (= (effective-memory 0 32) 0)

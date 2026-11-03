@@ -81,6 +81,9 @@ handoff and defaults to a 768-token completion limit. An independently pinned
 local runtime may set `maxTokens` from 64 to 768. The host must admit sufficient
 context and memory for the full prompt plus that bound. The existing replica,
 lease and retention
+the source snapshot is current. The growth lane has a 768-token completion
+limit and requests a concise six-role handoff. The host must admit sufficient
+context and memory for the full prompt plus that bound. The existing replica, lease and retention
 gates remain required. A 16 GiB Mac mini operator experiment generated a
 six-role draft with the full SOUL, work order and source snapshot using the
 sustained profile and a 128-block KV setting; the resident, API response
@@ -222,6 +225,7 @@ acknowledgement before the resident starts the next turn. The current
 GitHub-enabled lane is the read-only local-MTP `awai-growth-steward` profile;
 other profiles refuse this mode until they have an independently reviewed
 projection and runtime contract. Missing, malformed,
+acknowledgement before the resident starts the next turn. Missing, malformed,
 mismatched or expired acknowledgement yields `resident/archive-pending`.
 A present but empty, non-string, unsafe or colliding configuration path is
 refused. Omitting `archiveAck` preserves the earlier behavior. The ack path and
@@ -253,6 +257,7 @@ explicit data classification before archival; the projection is not a general
 secret scanner.
 
 Run the provided
+ack for the same root and tree, expiring in 15 minutes. Run the provided
 `itonami-profile-archive.service.tmpl` and `.timer.tmpl` every five minutes
 on a separately provisioned trusted Linux host. The archive script, native
 binaries, config, task directory, explicit repository and GitHub credentials
@@ -323,6 +328,39 @@ an ephemeral SSH HTTPS relay, so it does not qualify independent failure
 domains, persistent networking, real identities, inference scheduling or
 production deployment. See `test-native/murakumo/resident-github-barrier-gate.sh`
 for the isolated negative checks.
+For the AWAI growth steward, use a separately constructed Git execution cache
+containing the pinned profile files, pinned context, source record and tracked
+state; do not assume that a full source repository fits this transport. An
+isolated fixture with the actual pinned profile and context produced a 3,798-byte
+bootstrap Git bundle and a 4,267-byte bundle with one modified state; the
+compact real model output was 2,589 bytes as a separate untracked file. A full
+bundle of the source revision was 1,308,736 bytes and would produce chunks over
+the peer limit. These are fixture measurements, not a native checkpoint,
+replication or recovery qualification; future context and state changes must
+be checked again.
+
+An additional isolated AWAI-147 test captured that growth-profile fixture with
+the native checkpoint executable, including the real compact MTP response as
+an allowlisted output. A native peer uploaded the full signed closure over
+authenticated loopback into a separate store; the checkpoint verifier and an
+independent checkout restored from that store, and the profile, context,
+state and output matched byte for byte. A wrong profile pin and a corrupted
+output block were refused before their destination directories were created.
+Both peer processes and stores were on the same Linux host with test-only
+credentials: this does not establish independent failure domains, retention
+receipts, GitHub persistence, or a resident inference/lease cycle.
+
+A subsequent isolated drill transferred the same signed fixture from the K16
+Linux host to the separately identified `aiueos-6600hs` Linux host through
+Tailscale. Each host fsynced the closure and signed a two-minute test retention
+receipt using a different public test key and fixture domain; the native pair
+verifier returned `retention/pair-verified`. On the second host, native
+verification and checkout restoration succeeded, and SHA-256 comparisons of
+the profile, context, state and output matched the first host. A wrong token
+was rejected. The temporary peer listener was stopped and its random token
+cleared after the drill; fixture objects were retained. This demonstrates the
+selected host-to-host path, not sustained retention, Mac mini deployment,
+GitHub persistence, a production identity, or a resident inference/lease cycle.
 
 ## Deployment and restart
 
