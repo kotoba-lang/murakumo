@@ -36,6 +36,30 @@ proven exited and is left for host reconciliation. A rename followed by an
 unknown directory-sync result also needs host reconciliation. The compiler is
 the byte-patched diagnostic Amu #1796 artifact, not a release build.
 
+## Follow-up: real CID and unit status
+
+Two additional native Linux ARM64 fixtures composed the current reconciliation
+function with real Kotoba SHA-256, CID, JSON parsing, MTP response validation,
+compact-response creation and scoped FS2. The response was synthetic, including
+its claimed MTP stats. With a stub unit status, the matching files published;
+six independently changed state, candidate, request, marker, response and
+output cases, plus a running-unit case, refused and retained the pre-test state
+and temp file.
+
+The second fixture also used the production `pr-unit-state` via the real Amu
+spawn capability and `systemctl --user` (systemd 255). An isolated test-owned
+oneshot unit with `RemainAfterExit=yes` allowed reconciliation after reaching
+`exited`. A running test-owned sleep unit and a nonexistent unit both refused.
+Each test unit was stopped and `LoadState=not-found, ActiveState=inactive` was
+verified. An initial observer using `systemd-run --wait` timed out because the
+unit remained active after exit; its unit was stopped and the successful rerun
+waited for the expected `SubState` directly.
+
+These results qualify only the composed test artifacts on that Linux VM. The
+model response, request and task were synthetic; this is not an integrated
+resident turn, Mac runtime test, real model or GitHub recovery. Power loss,
+concurrency, state persistence, process-tree and fault injection remain open.
+
 The source SHA-256 is
 `e27335e7f421657c2872533816a3080ab4f0b269d4b897aa81f5dba640e9ed21`;
 the diagnostic compiler SHA-256 is
@@ -45,3 +69,5 @@ the diagnostic compiler SHA-256 is
 | --- | --- | --- |
 | reconcile | `ee97397b7f305764e011f9f5c8b7786e288e488abc2fc54ec01ece2e3fac30d7` | `cf0cc10453f01245996e0160253c1cda2196ad6e9729a154da8cc9f38990844a` |
 | step | `5a7f57f324321c4f8ac80c04489ebffbee75ff2feebfbd88f2e3026da38c511a` | `ddbda3de78f14c3fb3ac3588ee9115d9f042679fdbf89ae52fd5b9ac34ea7aa3` |
+| CID and JSON | `a4963c3078eef61fd6a8093525bdff0693c7ae03b5cfefae8741f86a923f3808` | `bedb2d7ac213e0ebbe65d119d484cb61e68590a077c0aec27bce9e8c4b3b08c0` |
+| systemd status | `ba53be3f39aa079957f723415f4bbbabb5beea3a7a70d0fc1490b4aaa9b29fa0` | `094917bb9b591da9e959972021fef049fb1b35eb7fea37046e5dce0c01bd06f8` |
