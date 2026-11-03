@@ -20,6 +20,8 @@ intent path was refused by the actual path predicate. The standalone bridge
 returned `bridge/cursor-unknown` and nonzero for both `prepare` and `complete`.
 The no-intent due control trapped in the diagnostic host before the fixture
 reported a result; the due execution path is therefore unverified here.
+The cause and a corrected fixture are documented in the subsequent
+[composition diagnostic](../awai150-cursor-intent-composition-20261103/README.md).
 
 This is not evidence of a deployed controller or of end-to-end autonomy. A
 real composed build must incorporate the new itonami-agent cursor source from
