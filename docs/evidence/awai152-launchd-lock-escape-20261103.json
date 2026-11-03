@@ -1,0 +1,18 @@
+{
+  "kind": "awai.macos-launchd-lock-escape-observation/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "host": "local Apple Silicon Mac, macOS 26.3.1; not a remote Mac mini",
+  "fixture": {
+    "worker": "awai152-launchd-lock-worker.py",
+    "workerSha256": "3f6b72f4e02f45baea8e0d0010c26e69f8ea7c0fd711a1f9bb46e360e8165860",
+    "observer": "awai152-launchd-lock-observer.py",
+    "observerSha256": "55fb9bf47d6510da2164e68d790259cbeef6702e2a99cbe449e9374c036d1c1c",
+    "observerPaths": "Task-specific temporary paths; adapt before rerunning."
+  },
+  "observed": [
+    {"escapedGroup": false, "childAliveAfterParentDeath": false, "lockReacquired": true, "sampleDelaySeconds": 0.35},
+    {"escapedGroup": true, "childAliveAfterParentDeath": true, "lockReacquired": true, "sampleDelaySeconds": 0.35}
+  ],
+  "method": "Each unique one-shot user launchd job held a private flock and forked a child that closed its inherited lock descriptor. With group cleanup enabled, one child stayed in the job's process group and the other called setsid. The observer verified their identities and group relationships, SIGKILLed the parent, then checked child liveness and nonblocking reacquisition of the same lock. It killed its surviving test-owned child and booted out both jobs; their registrations were absent afterwards.",
+  "scope": "One local Mac observation using Python solely for test processes and observation. The test demonstrates that launchd group cleanup plus a parent-held flock does not fence a child that changes process groups. It does not exercise Amu's lock, actual bot or inference workloads, remote Mac minis, launchd service re-registration, a production governor or distributed fencing."
+}

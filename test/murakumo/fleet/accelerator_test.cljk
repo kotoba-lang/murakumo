@@ -72,10 +72,10 @@
       (let [d (accel/admit busy reg :opportunistic (gb 4))]
         (is (true? (:admitted? d)) (str "refused as " (:reason d)))
         (is (= :admitted (:reason d)))))
-    (testing "a resident claim ignores opportunistic holders, because they are evictable"
+    (testing "a resident claim waits until opportunistic holders are actually released"
       ;; 41.2 resident + 8 opportunistic against ~62.7 usable: a 15 GB resident
-      ;; request does not fit if opportunistic counted, and does if it does not.
-      (is (true? (:admitted? (accel/admit busy reg :resident (gb 15))))))))
+      ;; request does not fit while the 8 GB holder is still present.
+      (is (false? (:admitted? (accel/admit busy reg :resident (gb 15))))))))
 
 (deftest a-refusal-always-says-why-and-what-would-fit
   (let [busy (assoc gad :claims [{:pid "1" :bytes head-bytes :comm "llama-server"}])
