@@ -3,7 +3,7 @@
 ;; The caller must authorize the node/address pair and supply trusted key paths;
 ;; the host must constrain process execution, output size, and execution time.
 (ns murakumo.fleet-ssh-observe
-  (:export [observe-inputs? observe-ssh-request observe-result observe-node fleet-ssh-observe-main]))
+  (:export [observe-inputs? observe-ssh-request observe-result observe-reply-reason observe-node fleet-ssh-observe-main]))
 
 (defn- ob-bytes [s :string] :vector-i64
   (vector-i64-from-bytes (string-to-utf8 s)))
@@ -79,22 +79,43 @@
           output (if (= (remote-exit raw 0) 0) (remote-output raw 0) "")]
       (if (ob-safe-output? output) output ""))))
 
+(defn observe-reply-reason [reply :string] :string
+  ;; Classify only a bounded, canonical host exit status. Never expose stderr,
+  ;; partial metrics, arbitrary host text or a fabricated remote success.
+  (let [n (string-byte-length reply) i (if (<= n 8192) (string-index-of reply "\n") -1)
+        word (if (and (> i 0) (<= i 3)) (string-substring reply 0 i) "")
+        code (if (= word "") -1 (parse-digits word))]
+    (cond (> n 8192) "reply-oversize"
+          (or (< code 0) (> code 255) (not (= word (i64-str code)))) "host-response-invalid"
+          (not (= code 0)) (str "transport-exit-" (i64-str code))
+          (= (observe-result reply) "") "remote-output-unknown"
+          :else "ok")))
 (defn- ob-probe [node :string ip :string identity :string known :string mode :string] :string
   (let [request (observe-ssh-request node ip identity known mode)]
-    (if (= request "") ""
-      (observe-result (typed-cap-call 20 :string :string request)))))
+    (if (= request "") "error\ninput-invalid"
+      (let [reply (typed-cap-call 20 :string :string request) reason (observe-reply-reason reply)]
+        (if (= reason "ok") (str "ok\n" (observe-result reply)) (str "error\n" reason))))))
+;; Tagged internal result avoids confusing remote bytes with local error text.
+(defn- ob-ok? [s :string] :bool (= (string-index-of s "ok\n") 0))
+(defn- ob-value [s :string] :string (string-substring s 3 (string-byte-length s)))
+(defn- ob-failure [mode :string s :string] :string
+  (str "error\n" mode " " (if (= (string-index-of s "error\n") 0)
+                              (string-substring s 6 (string-byte-length s)) "host-response-invalid")))
 ;; Sequential fixed probes, with no partial result on any error. The caller is
 ;; responsible for concurrency limits and an independently bounded host.
-(defn observe-node [node :string ip :string identity :string known :string] :string
+(defn- ob-collect [node :string ip :string identity :string known :string] :string
   (let [memory (ob-probe node ip identity known "memory")]
-    (if (= memory "") ""
+    (if (not (ob-ok? memory)) (ob-failure "memory" memory)
       (let [swap (ob-probe node ip identity known "swap")]
-        (if (= swap "") ""
+        (if (not (ob-ok? swap)) (ob-failure "swap" swap)
           (let [pressure (ob-probe node ip identity known "pressure")]
-            (if (= pressure "") ""
+            (if (not (ob-ok? pressure)) (ob-failure "pressure" pressure)
               (let [disk (ob-probe node ip identity known "disk")]
-                (if (= disk "") ""
-                  (str "memory:\n" memory "swap:\n" swap "pressure:\n" pressure "disk:\n" disk))))))))))
+                (if (not (ob-ok? disk)) (ob-failure "disk" disk)
+                  (str "ok\nmemory:\n" (ob-value memory) "swap:\n" (ob-value swap)
+                       "pressure:\n" (ob-value pressure) "disk:\n" (ob-value disk)))))))))))
+(defn observe-node [node :string ip :string identity :string known :string] :string
+  (let [result (ob-collect node ip identity known)] (if (ob-ok? result) (ob-value result) "")))
 
 ;; Trusted, bounded diagnostic host entry: NODE IPV4 IDENTITY KNOWN_HOSTS.
 ;; The host authorizes this exact tuple, bounds process output and lifetime,
@@ -103,8 +124,9 @@
   (let [node (typed-cap-call 38 :string :string "0") ip (typed-cap-call 38 :string :string "1")
         identity (typed-cap-call 38 :string :string "2") known (typed-cap-call 38 :string :string "3")
         extra (typed-cap-call 38 :string :string "4")
-        data (if (and (= extra "") (observe-inputs? node ip identity known))
-               (observe-node node ip identity known) "")
+        result (if (and (= extra "") (observe-inputs? node ip identity known))
+                 (ob-collect node ip identity known) "error\ninput-invalid")
         out (typed-cap-call 37 :string :string
-              (if (= data "") "observation/refused\n" (str "observation/untrusted " node "\n" data)))]
-    (if (= data "") 1 0)))
+              (if (ob-ok? result) (str "observation/untrusted " node "\n" (ob-value result))
+                (str "observation/refused " (string-substring result 6 (string-byte-length result)) "\n")))]
+    (if (ob-ok? result) 0 1)))
