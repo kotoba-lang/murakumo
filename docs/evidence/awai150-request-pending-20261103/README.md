@@ -5,8 +5,10 @@ The bridge now refuses both installation and head readiness if the request's
 Previously, an already matching request bypassed the temporary-file check in
 `br-install`. An already consumed request also bypasses `br-install` in the
 controller, so `br-head-problem` checks the same condition before completion
-can advance the cursor. This is a fail-closed check; it does not automatically
-resolve or delete temporary files.
+can advance the cursor. This refuses explicit unknown responses; it does not automatically
+resolve or delete temporary files. The later [permission observation](../awai150-request-read-unknown-20261103/)
+shows the diagnostic Darwin FS2 D provider also maps a permission error to `0`,
+so this component cannot detect that case with the current provider.
 
 On one local ARM64 Mac using the diagnostic FS2 runtime, test fixtures copied
 the actual two bridge functions and used real FS2 D/A for isolated paths.

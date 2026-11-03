@@ -48,7 +48,8 @@
         (not (rt-admitted-head? cfg head)) "bridge/head-unadmitted"
         ;; Completion is also unknown while a request replacement is pending.
         ;; The controller can otherwise bypass br-install when head already
-        ;; names the request and incorrectly advance its cursor.
+        ;; names the request and incorrectly advance its cursor. A provider
+        ;; which maps lookup errors to "0" cannot establish this condition.
         (not (= (cp-fs "D" (str (cp-str cfg 0 "request") ".tmp") "") "0")) "bridge/request-unknown"
         (or (not (cp-exists? (cp-str cfg 0 "archiveAck")))
             (not (json-valid? (cp-read (cp-str cfg 0 "archiveAck"))))
@@ -62,11 +63,18 @@
 
 ;; Do not overwrite a different unconsumed request. A previous incomplete tmp
 ;; is UNKNOWN; host reconciliation, not a blind retry, must resolve it.
+;; The host must also guarantee a provider which distinguishes absence from
+;; all lookup errors: a provider that reports errors as "0" is unqualified.
 (defn- br-install [cfg :vector-i64 head :vector-i64 request :vector-i64] :string
   (let [path (cp-str cfg 0 "request") wanted (cp-cid request)
-        old (if (cp-exists? path) (cp-cid (cp-read path)) "none")
+        status (cp-fs "D" path "")
+        prior (if (= status "1") (cp-read path) (vector-alloc 0))
+        prior-valid (and (> (vector-count prior) 0) (<= (vector-count prior) 8192)
+                         (json-valid? prior) (json-canonical? prior) (= (json-kind prior 0) 1))
+        old (if (= status "1") (cp-cid prior) "none")
         consumed (cp-str head 0 "request")]
     (cond (not (= (cp-fs "D" (str path ".tmp") "") "0")) "bridge/request-unknown"
+          (not (or (= status "0") (and (= status "1") prior-valid))) "bridge/request-unknown"
           (= consumed wanted) "bridge/already-consumed"
           (and (not (= old "none")) (not (= old consumed)) (not (= old wanted))) "bridge/pending-request"
           (= old wanted) "bridge/request-ready"
