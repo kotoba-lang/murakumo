@@ -3,7 +3,7 @@
 ;; The caller must authorize the node/address pair and supply trusted key paths;
 ;; the host must constrain process execution, output size, and execution time.
 (ns murakumo.fleet-ssh-observe
-  (:export [observe-inputs? observe-ssh-request observe-result observe-reply-reason observe-node fleet-ssh-observe-main]))
+  (:export [observe-inputs? observe-ssh-request observe-result observe-reply-reason observe-memory-swap observe-node fleet-ssh-observe-main]))
 
 (defn- ob-bytes [s :string] :vector-i64
   (vector-i64-from-bytes (string-to-utf8 s)))
@@ -49,8 +49,7 @@
 ;; The only permitted commands are selected by this component, never by a
 ;; remote response or checkpoint. An empty request means invalid input/mode.
 (defn observe-ssh-request [node :string ip :string identity :string known :string mode :string] :string
-  (let [cmd (cond (= mode "memory") "/usr/sbin/sysctl -n hw.memsize"
-                  (= mode "swap") "/usr/sbin/sysctl -n vm.swapusage"
+  (let [cmd (cond (= mode "memory-swap") "/usr/sbin/sysctl -n hw.memsize vm.swapusage"
                   (= mode "pressure") "/usr/bin/memory_pressure -Q"
                   (= mode "disk") "/bin/df -Pk /"
                   :else "") a (ob-a)]
@@ -101,19 +100,34 @@
 (defn- ob-failure [mode :string s :string] :string
   (str "error\n" mode " " (if (= (string-index-of s "error\n") 0)
                               (string-substring s 6 (string-byte-length s)) "host-response-invalid")))
-;; Sequential fixed probes, with no partial result on any error. The caller is
+;; sysctl -n emits exactly two lines: positive physical byte count then swap
+;; summary. No partial or reordered value may be mistaken for a complete read.
+(defn observe-memory-swap [raw :string] :string
+  (let [n (string-byte-length raw) cut (string-index-of raw "\n")
+        memory (if (and (> cut 0) (<= cut 16)) (string-substring raw 0 cut) "")
+        swap (if (and (> cut 0) (< (+ cut 1) n)) (string-substring raw (+ cut 1) n) "")
+        tail (string-index-of swap "\n")]
+    (if (and (ob-safe-output? raw) (> (string-length memory) 0)
+             (not (= (string-substring memory 0 1) "0"))
+             (loop [i 0] (if (= i (string-length memory)) true
+               (let [c (string-code-point-at memory i)]
+                 (if (and (>= c 48) (<= c 57)) (recur (+ i 1)) false))))
+             (> tail 0) (= tail (- (string-byte-length swap) 1))
+             (= (string-index-of swap "total =") 0)
+             (> (string-index-of swap "used =") 0) (> (string-index-of swap "free =") 0))
+      (str "memory:\n" memory "\nswap:\n" swap) "")))
+;; Three sequential fixed probes, with no partial result on any error. The caller is
 ;; responsible for concurrency limits and an independently bounded host.
 (defn- ob-collect [node :string ip :string identity :string known :string] :string
-  (let [memory (ob-probe node ip identity known "memory")]
-    (if (not (ob-ok? memory)) (ob-failure "memory" memory)
-      (let [swap (ob-probe node ip identity known "swap")]
-        (if (not (ob-ok? swap)) (ob-failure "swap" swap)
+  (let [memory-swap (ob-probe node ip identity known "memory-swap")]
+    (if (not (ob-ok? memory-swap)) (ob-failure "memory-swap" memory-swap)
+      (let [values (observe-memory-swap (ob-value memory-swap))]
+        (if (= values "") "error\nmemory-swap malformed-output"
           (let [pressure (ob-probe node ip identity known "pressure")]
             (if (not (ob-ok? pressure)) (ob-failure "pressure" pressure)
               (let [disk (ob-probe node ip identity known "disk")]
                 (if (not (ob-ok? disk)) (ob-failure "disk" disk)
-                  (str "ok\nmemory:\n" (ob-value memory) "swap:\n" (ob-value swap)
-                       "pressure:\n" (ob-value pressure) "disk:\n" (ob-value disk)))))))))))
+                  (str "ok\n" values "pressure:\n" (ob-value pressure) "disk:\n" (ob-value disk)))))))))))
 (defn observe-node [node :string ip :string identity :string known :string] :string
   (let [result (ob-collect node ip identity known)] (if (ob-ok? result) (ob-value result) "")))
 
