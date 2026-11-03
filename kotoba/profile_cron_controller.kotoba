@@ -37,12 +37,16 @@
       (= (string-index-of b (str a "/")) 0)))
 
 (defn- nc-work-paths-safe? [before :string after :string marker :string cursor :string ack :string] :bool
-  (let [pending (str cursor ".pending") ack-tmp (str ack ".tmp")]
+  (let [pending (str cursor ".pending") intent (str cursor ".intent") last (str cursor ".last") ack-tmp (str ack ".tmp")]
     (not (or (nc-path-overlap? before after)
              (nc-path-overlap? before marker) (nc-path-overlap? after marker)
              (nc-path-overlap? before pending) (nc-path-overlap? after pending)
+             (nc-path-overlap? before intent) (nc-path-overlap? after intent)
+             (nc-path-overlap? before last) (nc-path-overlap? after last)
              (nc-path-overlap? before ack-tmp) (nc-path-overlap? after ack-tmp)
-             (nc-path-overlap? marker pending) (nc-path-overlap? marker ack-tmp)))))
+             (nc-path-overlap? marker pending) (nc-path-overlap? marker intent) (nc-path-overlap? marker last)
+             (nc-path-overlap? ack-tmp pending) (nc-path-overlap? ack-tmp intent) (nc-path-overlap? ack-tmp last)
+             (nc-path-overlap? marker ack-tmp)))))
 
 ;; The marker is created and synced before inference can be submitted. A
 ;; leftover or partial marker is UNKNOWN; never infer failure and retry. The
@@ -80,7 +84,7 @@
           (= source-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
           (not (cp-exists? definition-path)) (not (cp-exists? cursor-path)) (not (cp-exists? source-path)))
     "cron-resident/input-refused"
-    (if (not (cp-absent? (str cursor-path ".pending")))
+    (if (not (br-cursor-clear? cursor-path))
       "cron-resident/cursor-unknown"
     (let [definition (cp-read definition-path) cursor (cp-read cursor-path) source (cp-read source-path)
           now (rt-now) plan (br-problem cfg definition pin cursor source now)
@@ -94,6 +98,8 @@
                 (not (nc-work-paths-safe? work-before work-after marker cursor-path (cp-str cfg 0 "archiveAck")))
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path marker)
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".pending"))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".intent"))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".last"))
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path work-before)
                 (nc-sensitive-path? cfg config-path definition-path cursor-path source-path work-after)) "cron-resident/path-refused"
             :else
