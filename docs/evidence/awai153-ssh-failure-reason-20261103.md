@@ -70,3 +70,26 @@ and signed image SHA-256 was
 `25efd163266a363332b7ed2bee4dfcc06a44c9dcbe46b14dc881bf1d451ab7ca`.
 Only diagnostic copies were changed; existing production timeouts and services
 were untouched. No workload or token was used.
+
+## Subsequent reachability sample
+
+Around 05:56–05:57 UTC on 2026-11-03, Tailscale reported both nodes online,
+but a single 3-second Tailscale discovery ping and a separate 3-second TSMP
+ping to Asher timed out. A strict known-hosts SSH `/usr/bin/true` attempt to
+Asher's Tailscale IP also timed out at port 22 after five seconds. This is an
+overlay reachability failure in that sample, not proof of an SSH-only problem
+or a diagnosis of the peer's physical state.
+
+Simeon answered both Tailscale discovery and TSMP and one strict known-hosts
+SSH `/usr/bin/true` succeeded. A subsequent fresh native observer, using the
+same task-only 15-second host and 10-second SSH connect bounds described above,
+refused its first memory probe with exit 255 and SSH port 22 timeout. The
+initial manual test omitted the required `HostKeyAlias` and was correctly
+refused before authentication; the successful retry used the same pinned
+alias and key as the observer. These isolated observations do not establish
+availability rates, root cause or available capacity. No service was changed.
+
+The fresh observer fixture source SHA-256 was
+`9c5b225f2c76c69b8b787bfce35e9244a1afa0967d73919688863195e566df7d`
+and signed image SHA-256 was
+`56e85f977a0eecf24ad0f2e94f0d5ef3f1f51ef34cf507aa9e9866799497a921`.
