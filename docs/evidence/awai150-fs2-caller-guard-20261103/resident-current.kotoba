@@ -1,0 +1,91 @@
+(ns resident-guard (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [v :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 v)))
+(defn- cp-fs [op :string path :string tail :string] :string
+ (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+  (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000")) (string-substring r 5 (string-length r)) "")))
+(defn- cp-exists? [p :string] :bool (= (cp-fs "D" p "") "1"))
+(defn- cp-str [v :vector-i64 i :i64 key :string] :string
+ (cond (= key "head") (if (= (cp-text v) "head") "/denied/head" "/ok/head")
+       (= key "request") (if (= (cp-text v) "request") "/denied/request" "/ok/request")
+       (= key "leaseFile") (if (= (cp-text v) "lease") "/denied/lease" (if (= (cp-text v) "invalid") "/invalid/lease" "/ok/lease"))
+       (= key "node") "node" (= key "task") "task" (= key "class") "task" :else "root"))
+(defn- cp-read [p :string] :vector-i64 (if (= p "/invalid/lease") (vector-alloc 0) (cp-bytes "data")))
+(defn- cp-num [v :vector-i64 i :i64 key :string] :i64 (if (= key "slot") 0 1))
+(defn- json-valid? [v :vector-i64] :bool (> (vector-count v) 0))
+(defn- json-canonical? [v :vector-i64] :bool (> (vector-count v) 0))
+(defn- json-count [v :vector-i64 i :i64] :i64 6)
+(defn- rt-lease [v :vector-i64 e :i64] :vector-i64 (cp-bytes "lease"))
+(defn- rt-now [] :i64 100)
+(defn- lease-renew-before [] :i64 10)
+(defn- lease-skew [] :i64 1)
+(defn- valid-value? [a :string b :bool c :string d :i64 e :i64 f :i64 g :i64] :bool true)
+(defn- rt-save [p :string b :vector-i64] :bool true)
+(defn- recovery-lease-problem [v :vector-i64 t :string n :string e :i64 now :i64] :string "recovery/lease-admitted")
+(defn- rt-read-head [v :vector-i64 p :string] :vector-i64 (vector-alloc 0))
+(defn- rt-request-id [present :bool b :vector-i64 previous :string] :string "request")
+(defn- rt-pins-ok? [v :vector-i64] :bool false)
+(defn- cp-block? [a :string b :string] :bool true)
+(defn- cp-load [a :string b :string] :vector-i64 (vector-alloc 0))
+(defn- rt-root? [a :vector-i64 b :vector-i64] :bool true)
+(defn- rt-intact-head? [a :vector-i64 b :vector-i64] :bool true)
+(defn- rt-admitted-head? [a :vector-i64 b :vector-i64] :bool true)
+(defn- rt-replicate [a :vector-i64 b :string c :i64 d :string] :bool true)
+(defn- rt-publish-candidate [a :vector-i64 b :string c :i64 d :string] :bool true)
+(defn- rt-archive-ack? [a :string b :string] :bool true)
+(defn- rt-due? [a :vector-i64 b :string c :i64] :bool false)
+(defn- cp-payload [v :vector-i64] :i64 0)
+(defn- rt-turn [a :vector-i64 b :vector-i64 c :vector-i64 d :string] :string "turn")
+(defn- rt-current-lease [cfg :vector-i64 floor :i64] :vector-i64
+  (let [path (cp-str cfg 0 "leaseFile") status (cp-fs "D" path "")
+        saved (if (= status "1") (cp-read path) (vector-alloc 0))]
+    (if (not (or (= status "0") (and (= status "1") (json-valid? saved) (json-canonical? saved))))
+      (vector-alloc 0)
+      (let [e (if (>= (cp-num saved 0 "epoch") floor) (cp-num saved 0 "epoch") floor)
+            learned (rt-lease cfg e) now (rt-now) node (cp-str cfg 0 "node")]
+        (if (= (vector-count learned) 0) learned
+          (let [mine (= (cp-str learned 0 "node") node)
+                renew (or (and mine (> now (- (cp-num learned 0 "until") (lease-renew-before))))
+                          (not mine))
+                next (if (and renew
+                           (or mine (> now (+ (cp-num learned 0 "until") (lease-skew)))))
+                         (rt-lease cfg (+ e 1)) learned)
+                ne (cp-num next 0 "epoch")
+                bound (and (json-canonical? next) (= (json-count next 0) 6)
+                        (= (cp-str next 0 "class") (cp-str cfg 0 "task")) (= (cp-num next 0 "slot") 0)
+                        (or (= ne e) (= ne (+ e 1)))
+                        (valid-value? (cp-str next 0 "node") true (cp-str cfg 0 "task") 0 ne (cp-num next 0 "until") (rt-now)))
+                saved (and bound (rt-save path next))]
+            (if (and saved (= (recovery-lease-problem next (cp-str cfg 0 "task") node ne (rt-now)) "recovery/lease-admitted"))
+              next (vector-alloc 0))))))))
+(defn- rt-cycle [cfg :vector-i64] :string
+  (let [head-path (cp-str cfg 0 "head") head-status (cp-fs "D" head-path "")
+        head-present (= head-status "1") head (rt-read-head cfg head-path)
+        root (if head-present (cp-str head 0 "checkpoint") (cp-str cfg 0 "bootstrap"))
+        request-path (cp-str cfg 0 "request") request-status (cp-fs "D" request-path "") present (= request-status "1")
+        request (rt-request-id present (if present (cp-read request-path) (vector-alloc 0))
+                               (cp-str head 0 "request"))]
+    (cond (not (or (= head-status "0") (= head-status "1"))) "resident/head-unknown"
+          (not (or (= request-status "0") (= request-status "1"))) "resident/request-unknown"
+          (= request "") "resident/request-refused"
+          (not (rt-pins-ok? cfg)) "resident/runtime-pins-refused"
+          (not (cp-block? (cp-str cfg 0 "store") root)) "resident/missing-checkpoint"
+          (not (rt-root? cfg (cp-load (cp-str cfg 0 "store") root))) "resident/checkpoint-refused"
+          ;; Do not turn an invalid checkpoint or replica receipts into
+          ;; a newly admitted head. Bootstrap has no prior head; an existing
+          ;; head may be refreshed only after its full contract is intact.
+          (and head-present (not (rt-intact-head? cfg head))) "resident/head-refused"
+          (not (rt-admitted-head? cfg head))
+          (if (and (rt-replicate cfg root (if head-present (cp-num head 0 "nextAt") 0)
+                      (if head-present (cp-str head 0 "request") "none"))
+                   (rt-publish-candidate cfg root (if head-present (cp-num head 0 "nextAt") 0)
+                     (if head-present (cp-str head 0 "request") "none"))) "resident/replicas-refreshed" "resident/replica-unavailable")
+          (not (rt-archive-ack? (cp-str cfg 0 "archiveAck") root)) "resident/archive-pending"
+          (not (rt-due? head request (rt-now))) "resident/idle"
+          :else (let [root-data (cp-load (cp-str cfg 0 "store") root)
+                      lease (rt-current-lease cfg (cp-num root-data (cp-payload root-data) "epoch"))]
+                  (if (= (vector-count lease) 0) "resident/quorum-unavailable" (rt-turn cfg head lease request))))))
+(defn main [] :i64
+ (let [op (typed-cap-call 38 :string :string "0")
+       result (if (or (= op "lease") (= op "invalid") (= op "lease-ok")) (if (> (vector-count (rt-current-lease (cp-bytes op) 1)) 0) "lease" "empty") (rt-cycle (cp-bytes op)))
+       sent (typed-cap-call 37 :string :string (str result "\n"))] 0))

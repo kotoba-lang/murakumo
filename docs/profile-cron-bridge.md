@@ -347,12 +347,21 @@ as permission to dispatch or advance the cursor. The
 [Mac diagnostic fixture](evidence/awai150-request-pending-20261103/) tests
 both checks with real local file existence and stubbed authority/transport.
 The host must still provide exclusive path ownership and reconciliation.
-The current diagnostic Mac FS2 D provider returns `0` for both missing files
-and some lookup errors, so these checks cannot distinguish those cases and
-that provider is not qualified for autonomous execution. See the
+The earlier diagnostic Mac FS2 D provider returns `0` for both missing files
+and some lookup errors. A newer [diagnostic candidate](https://github.com/kotoba-lang/amu/pull/1796)
+distinguishes ENOENT from other tested lookup errors; neither is a qualified
+production provider. See the
 [permission observation](evidence/awai150-request-read-unknown-20261103/).
 
 Request installation also rejects a present request whose data is empty,
 oversized, invalid or noncanonical JSON, and rejects existence responses other
 than `0` or `1`. The provider must reliably distinguish lookup errors from
 absence; these checks cannot recover information the provider suppresses.
+
+The checkpoint, archive, resident and inference submission candidates now
+require explicit absence before selected writes and reject unknown head,
+request, lease and submission state. The
+[isolated caller fixture](evidence/awai150-fs2-caller-guard-20261103/) checks
+these branches with real permission errors on the newer diagnostic Mac FS2
+provider and stubbed operations. This requires a provider that preserves
+unknown errors; it is not a complete caller audit or autonomous execution.

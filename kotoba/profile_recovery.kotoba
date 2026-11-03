@@ -61,7 +61,7 @@
         :else "profile/submission-unknown"))
 
 (defn- pr-prepare-submit [request :string marker :string body :vector-i64] :bool
-  (and (not (cp-exists? request)) (not (cp-exists? marker))
+  (and (cp-absent? request) (cp-absent? marker)
        (cp-write request body)
        (= (cp-fs "M" (cp-parent-dir request) "") "1")
        (cp-write marker (cp-bytes "itonami.inference-dispatch/1\n"))
@@ -141,10 +141,11 @@
 ;; Only the exact completed response may be reused. Sync both the file and
 ;; its parent directory before state can refer to it.
 (defn- pr-save-output [path :string answer :vector-i64 cid :string] :bool
-  (and (if (cp-exists? path)
-         (and (= (cp-cid (cp-read path)) cid) (= (cp-fs "M" path "") "1"))
-         (cp-write path answer))
-       (= (cp-fs "M" (cp-parent-dir path) "") "1")))
+  (let [status (cp-fs "D" path "")]
+    (and (cond (= status "1") (and (= (cp-cid (cp-read path)) cid) (= (cp-fs "M" path "") "1"))
+               (= status "0") (cp-write path answer)
+               :else false)
+         (= (cp-fs "M" (cp-parent-dir path) "") "1"))))
 
 (defn- pr-wait [unit :string response :string runtime :vector-i64] :bool
   (loop [i 0]
@@ -241,8 +242,12 @@
                          body))) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
                     request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
                     marker (str cache "/" id ".dispatch") body-bytes (cp-bytes body)
-                    present (cp-exists? request) matches (if present (= (cp-cid (cp-read request)) (cp-cid body-bytes)) false)
-                    decision (pr-run-decision (pr-unit-state unit) present matches (cp-exists? marker) (cp-exists? response))
+                    request-status (cp-fs "D" request "") marker-status (cp-fs "D" marker "") response-status (cp-fs "D" response "")
+                    known (and (or (= request-status "0") (= request-status "1"))
+                               (or (= marker-status "0") (= marker-status "1"))
+                               (or (= response-status "0") (= response-status "1")))
+                    present (= request-status "1") matches (if present (= (cp-cid (cp-read request)) (cp-cid body-bytes)) false)
+                    decision (if known (pr-run-decision (pr-unit-state unit) present matches (= marker-status "1") (= response-status "1")) "profile/submission-unknown")
                     submitted (cond (= decision "profile/reuse-unit") true
                                     (= decision "profile/new-unit")
                                     (and (pr-prepare-submit request marker body-bytes)

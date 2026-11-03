@@ -48,7 +48,7 @@
 ;; leftover or partial marker is UNKNOWN; never infer failure and retry. The
 ;; enclosing task lock and host-owned directory exclude cooperating writers.
 (defn- nc-mark [marker :string job :string] :bool
-  (and (not (cp-exists? marker)) (cp-write marker (cp-bytes (str job "\n")))
+  (and (cp-absent? marker) (cp-write marker (cp-bytes (str job "\n")))
        (= (cp-fs "M" (cp-parent-dir marker) "") "1")))
 
 (defn- nc-advance [cfg :vector-i64 definition :vector-i64 pin :string cursor-path :string cursor :vector-i64
