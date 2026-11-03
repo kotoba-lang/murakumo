@@ -1,0 +1,31 @@
+(ns oci-size-guard-fixture (:export [main]))
+(defn- digest-problem [s :string] :string (if (or (= s "valid") (= s "sha256:sha")) "oci/ok" "oci/invalid"))
+(defn- ol-blob-path [root :string digest :string] :string root)
+(defn- ol-exists? [path :string] :bool (= path "/present"))
+(defn- ol-read [path :string] :vector-i64 (vector-alloc 0))
+(defn- sha256-hex [v :vector-i64] :string "sha")
+(defn- ol-blob-code [layout :string digest :string size :i64] :i64
+  (arena-scope
+    (cond (or (not (= (digest-problem digest) "oci/ok")) (< size 0)) 1
+          ;; The current implementation reads an entire blob into a byte
+          ;; value and vector-i64. Do not attempt that for model weights.
+          ;; This descriptor bound does not prove the actual file size or
+          ;; prevent concurrent file replacement; a qualified bounded reader
+          ;; and stable snapshot remain necessary for untrusted layouts.
+          (> size 4194304) 5
+          (not (ol-exists? (ol-blob-path layout digest))) 2
+          :else (let [b (ol-read (ol-blob-path layout digest))]
+                  (cond (not (= (vector-count b) size)) 3
+                        (not (= (string-concat "sha256:" (sha256-hex b)) digest)) 4
+                        :else 0)))))
+(defn- ol-reason [code :i64] :string
+  (case code 0 "layout/ok" 1 "layout/bad-descriptor" 2 "layout/missing-blob" 3 "layout/size-mismatch" 5 "layout/blob-too-large" "layout/digest-mismatch"))
+(defn main [] :i64
+ (if (and (= (ol-blob-code "/present" "sha256:sha" 0) 0)
+          (= (ol-blob-code "/present" "sha256:sha" 1) 3)
+          (= (ol-blob-code "/x" "valid" 4194304) 2)
+          (= (ol-blob-code "/x" "valid" 4194305) 5)
+          (= (ol-blob-code "/x" "valid" 8595477990) 5)
+          (= (ol-blob-code "/x" "bad" 8595477990) 1)
+          (= (ol-blob-code "/x" "valid" -1) 1)
+          (= (ol-reason 5) "layout/blob-too-large")) 0 1))
