@@ -1,0 +1,64 @@
+;; Append after profile_recovery and the native checkpoint dependency closure.
+(ns murakumo.profile-mtp-transport-test
+  (:export [test-profile-mtp-transport test-profile-growth-runtime test-profile-mtp-response test-profile-token-budget test-profile-mtp-compact]))
+
+(defn test-profile-mtp-compact [] :bool
+  (let [runtime (cp-bytes "{\"model\":\"bonsai\"}")
+        text "line 1\n\"quoted\" 日本語"
+        raw (cp-bytes (str "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":" (pr-json-quote text)
+          "}}],\"model\":\"bonsai\",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"mtp\",\"mtp_forward_calls\":1,\"runtime_mtp_enabled\":true}}"))
+        compact (pr-mtp-compact runtime raw)
+        invalid (cp-bytes "{\"model\":\"bonsai\"}")]
+    (and (json-valid? compact) (= (pr-answer compact) text)
+         (pr-mtp-response? runtime compact) (pr-replicable? compact)
+         (not (pr-replicable? (vector-alloc 0)))
+         (pr-replicable? (vector-alloc 16384)) (not (pr-replicable? (vector-alloc 16385)))
+         (= (cp-str compact 0 "rawResponseDigest") (str "sha256:" (sha256-hex raw)))
+         (= (vector-count (pr-mtp-compact runtime invalid)) 0))))
+
+(defn test-profile-token-budget [] :bool
+  (let [growth (cp-bytes "{\"profile\":\"awai-growth-steward\"}")
+        original (cp-bytes "{\"profile\":\"accountability-steward\"}")]
+    (and (= (pr-token-budget growth false) 768) (= (pr-token-budget growth true) 768)
+         (= (pr-token-budget original false) 32) (= (pr-token-budget original true) 256))))
+
+(defn test-profile-mtp-response [] :bool
+  (let [runtime (cp-bytes "{\"model\":\"bonsai\"}")
+        good (cp-bytes "{\"model\":\"bonsai\",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"mtp\",\"mtp_forward_calls\":1,\"runtime_mtp_enabled\":true}}")
+        ar (cp-bytes "{\"model\":\"bonsai\",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"ar\",\"mtp_forward_calls\":1,\"runtime_mtp_enabled\":true}}")
+        disabled (cp-bytes "{\"model\":\"bonsai\",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"mtp\",\"mtp_forward_calls\":1,\"runtime_mtp_enabled\":false}}")
+        wrong-model (cp-bytes "{\"model\":\"other\",\"mtplx_stats\":{\"draft_head_installed\":true,\"generation_mode\":\"mtp\",\"mtp_forward_calls\":1,\"runtime_mtp_enabled\":true}}")
+        no-stats (cp-bytes "{\"model\":\"bonsai\"}")]
+    (and (pr-mtp-response? runtime good) (not (pr-mtp-response? runtime ar))
+         (not (pr-mtp-response? runtime disabled)) (not (pr-mtp-response? runtime wrong-model))
+         (not (pr-mtp-response? runtime no-stats)))))
+
+(defn- prt-growth-runtime [meta :vector-i64 role :vector-i64 work :vector-i64 context :vector-i64 tools :string] :vector-i64
+  (cp-bytes (str "{\"authorizationFile\":\"/run/user/1000/itonami/header\",\"contextDigest\":\"sha256:" (sha256-hex context)
+    "\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"model\":\"bonsai\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"sha256:"
+    (sha256-hex meta) "\",\"rail\":\"murakumo\",\"roleDigest\":\"sha256:" (sha256-hex role)
+    "\",\"socket\":\"/run/user/1000/itonami/socket\",\"source\":\"0000000000000000000000000000000000000000\",\"task\":\"test\",\"tools\":" (pr-json-quote tools)
+    ",\"workDigest\":\"sha256:" (sha256-hex work) "\"}")))
+
+(defn test-profile-growth-runtime [] :bool
+  (let [meta (cp-bytes ":profile/id \"awai-growth-steward\" :rails [:murakumo] :authorities [\"api.murakumo.cloud\"]")
+        role (cp-bytes "role") work (cp-bytes "work") context (cp-bytes "context")
+        good (prt-growth-runtime meta role work context "none")
+        tools (prt-growth-runtime meta role work context "enabled")]
+    (and (pr-growth-runtime? good meta role work context)
+         (not (pr-growth-runtime? tools meta role work context))
+         (not (pr-growth-runtime? good (cp-bytes "changed") role work context))
+         (not (pr-growth-runtime? good meta (cp-bytes "changed") work context))
+         (not (pr-growth-runtime? good meta role (cp-bytes "changed") context))
+         (not (pr-growth-runtime? good meta role work (cp-bytes "changed"))))))
+
+(defn test-profile-mtp-transport [] :bool
+  (let [ok (cp-bytes "{\"authorizationFile\":\"/run/user/1000/itonami/header\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"socket\":\"/run/user/1000/itonami/socket\"}")
+        remote (cp-bytes "{\"authorizationFile\":\"/run/user/1000/itonami/header\",\"endpoint\":\"http://example.com/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"socket\":\"/run/user/1000/itonami/socket\"}")
+        relative (cp-bytes "{\"authorizationFile\":\"/run/user/1000/itonami/header\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"socket\":\"relative/socket\"}")
+        traversal (cp-bytes "{\"authorizationFile\":\"/run/user/1000/../header\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"socket\":\"/run/user/1000/itonami/socket\"}")
+        same (cp-bytes "{\"authorizationFile\":\"/run/user/1000/itonami/socket\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"socket\":\"/run/user/1000/itonami/socket\"}")
+        other (cp-bytes "{\"authorizationFile\":\"/run/user/1000/itonami/header\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"wrong\",\"socket\":\"/run/user/1000/itonami/socket\"}")]
+    (and (pr-local-mtp? ok) (not (pr-local-mtp? remote))
+         (not (pr-local-mtp? relative)) (not (pr-local-mtp? traversal))
+         (not (pr-local-mtp? same)) (not (pr-local-mtp? other)))))

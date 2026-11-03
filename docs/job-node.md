@@ -32,6 +32,7 @@ its acceptance items are covered here:
      private host-provisioned directory, then rechecks the lease deadline.
      Existing or uncertain markers stop and require reconciliation.
   6. The holder runs the cell with `cell-execute`: the release verdict
+  5. The holder runs the cell with `cell-execute`: the release verdict
      again, the image layout, and podman with a fixed argv
      ([cell run](cell-run.md)).
   7. It signs the agent-step receipt with the lease epoch
@@ -160,6 +161,9 @@ node() {  # name key fd admitted t mode
   env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
     KEXE_CAP_RESOURCES_20=/usr/bin/podman:/usr/bin/stat:/usr/bin/mkdir KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
     $G/$IMAGE.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N 2 $G/release.json $G/layout-cell $PORTS $5 $6 '' '' "$G/$TAG-$1-attempts" > $G/$TAG-$1.out 2>&1
+  env KEXE_ALLOW=7,20,23,35,37,38,45,46,47 KEXE_CAP_RESOURCES_35=$G KEXE_CAP_RESOURCES_45=$DIAL \
+    KEXE_CAP_RESOURCES_20=/usr/bin/podman KEXE_SPAWN_ENV=HOME:XDG_RUNTIME_DIR:PATH \
+    $G/$IMAGE.elf run $R $IN $PO murakumo $1 $G/$2 $3 $4 $N 2 $G/release.json $G/layout-cell $PORTS $5 $6 > $G/$TAG-$1.out 2>&1
 }
 rm -f $G/$TAG-b70.out $G/$TAG-k16.out
 node b70 node.key site-a $DA 100 follow &
