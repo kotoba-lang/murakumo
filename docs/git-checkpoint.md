@@ -191,10 +191,14 @@ Restore verifies the root CID/signature/contract and the entire object closure
 before creating `DEST.partial`. It assembles and reads back the bundle chunks,
 initializes Git with no template, fetches the full checkpoint ref, checks out
 the signed HEAD detached, applies WIP with `--index`, runs `git fsck`, and
-restores the selected regular untracked files and modes. On success it fsyncs
-the staging directory, renames it to DEST, and fsyncs the parent. A failed
+restores the selected regular untracked files and modes. The current candidate
+also synchronizes each untracked file after chmod and each of its parent
+directories before publication. On success it fsyncs the staging directory,
+renames it to DEST, and fsyncs the parent. A failed
 materialization retains its partial directory; it never overwrites an existing
-development tree. Files are fsynced, but this is not a qualified power-loss
+development tree. Git-created tracked files and the complete object/worktree
+closure are not independently proven durable by these untracked-file syncs;
+this is not a qualified power-loss
 durability/retention protocol for every imported object and Git internal file.
 
 V1 bounds are explicit: Git SHA-1 repositories, 64 MiB per full bundle in
