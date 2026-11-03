@@ -1,0 +1,55 @@
+;; Validate a captured agent-step result before putting stdout in the existing
+;; checkpoint block store. The expected DID/job are independent host pins;
+;; neither a signature nor this block write is a live lease or archive grant.
+;; Compose after fleet_job_node and git_checkpoint.
+(ns murakumo.fleet-job-output (:export [job-output-main]))
+
+(defn- jo-once? [s :string key :string] :bool
+  (let [line (str "\n" key " ") all (str "\n" s) i (string-index-of all line)]
+    (and (>= i 0) (< (string-index-of (string-substring all (+ i (string-length line)) (string-length all)) line) 0))))
+
+;; Strict unpadded base64url; re-encoding below rejects nonzero trailing bits.
+(defn- jo-decode [s :string] :vector-i64
+  (if (> (string-length s) 21846) (vector-alloc 0)
+    (loop [i 0 acc 0 bits 0 out []]
+      (if (= i (string-length s)) out
+        (let [digit (string-index-of (en-b64) (string-substring s i (+ i 1)))]
+          (if (< digit 0) (vector-alloc 0)
+            (let [a (+ (* acc 64) digit) b (+ bits 6)]
+              (if (>= b 8)
+                (let [left (- b 8) v (u64-shift-right a left)]
+                  (recur (+ i 1) (bit-and a (- (i64-shift-left 1 left) 1)) left (vector-conj out v)))
+                (recur (+ i 1) a b out)))))))))
+
+(defn- jo-verdict [log :string did :string job :string] :string
+  (let [receipt (jn-line log "receipt ") sig (jn-line log "signature ")
+        encoded (jn-line log "output-base64url ") b (jn-bytes receipt)
+        output (jo-decode encoded) output-cid (cp-cid output)]
+    (cond (or (not (jo-once? log "receipt")) (not (jo-once? log "signature"))
+              (not (jo-once? log "output-base64url"))) "job-output/missing-or-duplicate"
+          (or (not (= (did-key-problem did) "enroll/ok")) (not (jn-attempt-id? job))) "job-output/pins"
+          (or (not (json-valid? b)) (not (json-canonical? b)) (not (= (json-kind b 0) 1))
+              (not (= (json-count b 0) 8))) "job-output/receipt"
+          (or (not (= (cp-str b 0 "kind") "itonami.agent-step-receipt/1"))
+              (not (= (cp-str b 0 "did") did)) (not (= (cp-str b 0 "job") job))
+              (not (= (cp-num b 0 "exit") 0)) (< (cp-num b 0 "at") 1)
+              (< (cp-num b 0 "epoch") 1) (= (cp-str b 0 "node") "")) "job-output/binding"
+          (not (= (statement-problem did receipt sig) "enroll/ok")) "job-output/signature"
+          (or (> (vector-count output) 16384) (not (= (en-b64-encode output) encoded))
+              (not (= (cp-str b 0 "output") output-cid))) "job-output/content"
+          :else "job-output/verified")))
+
+(defn job-output-main [] :i64
+  (let [logpath (jn-arg 0) did (jn-arg 1) job (jn-arg 2) store (jn-arg 3)
+        stat (if (jn-attempt-root? store)
+               (typed-cap-call 20 :string :string (str "/usr/bin/statARG_SEP--format=%F:%aARG_SEP--ARG_SEP" store)) "")]
+    (if (or (not (jn-attempt-root? logpath)) (not (= stat "0\ndirectory:700\n"))
+            (not (cp-exists? logpath)))
+      (let [x (jn-say "job-output/config-refused")] 2)
+      (let [log (typed-cap-call 35 :string :string logpath)
+            verdict (if (> (string-length log) 65536) "job-output/too-large" (jo-verdict log did job))]
+        (if (not (= verdict "job-output/verified")) (let [x (jn-say verdict)] 1)
+          (let [bytes (jo-decode (jn-line log "output-base64url ")) cid (cp-put store bytes)
+                synced (if (= cid "") "" (cp-fs (str store "FSYNC_SEP")))]
+            (if (not (= synced "1")) (let [x (jn-say "job-output/store-unknown")] 1)
+              (jn-say (str "job-output/stored " cid)))))))))
