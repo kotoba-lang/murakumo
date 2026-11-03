@@ -25,7 +25,7 @@
 ;; exact conflicts before acquiring the lock or touching resident state.
 (defn- nc-ack-safe? [cfg :vector-i64 config :string] :bool
   (let [ack (cp-str cfg 0 "archiveAck") tmp (str ack ".tmp")]
-    (and (cp-safe-absolute? ack) (not (= ack config)) (not (= tmp config))
+    (and (rt-ack-safe? cfg config) (not (= ack config)) (not (= tmp config))
          (not (nc-resident-path? cfg ack)) (not (nc-resident-path? cfg tmp)))))
 
 ;; Archive staging directories must not consume each other or a path needed
