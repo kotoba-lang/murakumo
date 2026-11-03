@@ -146,6 +146,16 @@ CID and independently archive and read back the result before advancing a
 cursor; capture alone does none of those things. The current composition has
 passed a source check, not a runtime or production qualification.
 
+The `fleet_job_output` candidate validates a captured log against independently
+pinned signer DID and job ID, a successful canonical signed receipt and the
+output CID before storing its bytes in a private checkpoint block directory.
+Log and existing block reads are bounded, and storage synchronizes the block
+and its directory. The host must keep both paths exclusively owned during the
+operation: separate path-based metadata and reads do not establish identity
+against replacement. This candidate does not check a live lease, publish to
+GitHub, verify remote readback, or advance a cursor; the combined source has
+only been checked, not tested on a qualified runtime.
+
 The command blocks and output below are the 2026-10-23 historical gate. They
 use numeric time and omit the now-required expected job ID, so they are not a
 reproduction recipe for the current interface.
