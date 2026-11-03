@@ -1,0 +1,20 @@
+(ns marker-reuse (:export [main]))
+(defn- pr-unit-active? [s :string] :bool
+  (or (= s "start-pre") (= s "start") (= s "start-post") (= s "running")))
+
+(defn- pr-run-decision [status :string request-exists :bool request-matches :bool
+                       marker-exists :bool marker-matches :bool response-exists :bool] :string
+  (cond (and (or (pr-unit-active? status) (= status "exited"))
+             request-exists request-matches marker-exists marker-matches) "profile/reuse-unit"
+        (and (= status "unit/not-found") (not request-exists)
+             (not marker-exists) (not response-exists)) "profile/new-unit"
+        :else "profile/submission-unknown"))
+
+(defn main [] :i64
+ (if (and (= (pr-run-decision "running" true true true true false) "profile/reuse-unit")
+          (= (pr-run-decision "exited" true true true true true) "profile/reuse-unit")
+          (= (pr-run-decision "running" true true false false false) "profile/submission-unknown")
+          (= (pr-run-decision "exited" true true true false true) "profile/submission-unknown")
+          (= (pr-run-decision "unit/not-found" false false false false false) "profile/new-unit")
+          (= (pr-run-decision "unit/not-found" false false true true false) "profile/submission-unknown")
+          (= (pr-run-decision "running" true false true true false) "profile/submission-unknown")) 0 1))
