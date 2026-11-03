@@ -1,0 +1,50 @@
+(ns response-bound-fixture (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn- cp-frame [op :string path :string tail :string] :string
+  (str "\u0000FS2\u0000" op path "\u0000" tail))
+
+(defn- cp-fs [op :string path :string tail :string] :string
+  (let [r (typed-cap-call :fs/app-data :string :string (cp-frame op path tail))]
+    (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
+      (string-substring r 5 (string-length r)) "")))
+
+(defn- cp-read-op [p :string op :string tail :string] :vector-i64
+  (let [r (typed-cap-call :fs/app-data :string :bytes (cp-frame op p tail)) n (bytes-count r)]
+    (if (and (>= n 5) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
+             (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))
+      (vector-i64-from-bytes (bytes-slice r 5 n)) (vector-alloc 0))))
+
+(defn- cp-int [s :string] :i64
+  (let [b (cp-bytes s)] (if (or (= (vector-count b) 0) (> (vector-count b) 9)) -1
+    (loop [i 0 n 0] (if (= i (vector-count b)) n
+      (let [c (vector-at b i)] (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -1)))))))
+
+(defn- cp-meta-field [s :string wanted :i64] :string
+  (let [b (cp-bytes s) n (vector-count b)]
+    (loop [i 0 start 0 field 0]
+      (cond (= i n) (if (= field wanted) (string-substring s start i) "")
+            (= (vector-at b i) 32) (if (= field wanted) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ field 1)))
+            :else (recur (+ i 1) start field)))))
+
+(defn- cp-size [p :string] :i64
+  (let [m (cp-fs "O" p "")]
+    (if (= (cp-meta-field m 3) "0") (cp-int (cp-meta-field m 1)) -1)))
+
+(defn- cp-range [p :string off :i64 n :i64] :vector-i64 (cp-read-op p "E" (str off ":" n)))
+
+(defn- pr-read-response [path :string] :vector-i64
+  (let [size (cp-size path)]
+    (if (or (< size 1) (> size 262144)) (vector-alloc 0)
+      (let [b (cp-range path 0 size)]
+        (if (and (= (vector-count b) size) (= (cp-size path) size)) b (vector-alloc 0))))))
+
+;; A crash can leave the output durable while state still points at this turn.
+;; Only the exact completed response may be reused. Sync both the file and
+;; its parent directory before state can refer to it.
+
+(defn main [] :i64
+  (let [p (typed-cap-call 38 :string :string "0")
+        v (pr-read-response p)
+        out (typed-cap-call 37 :string :string (str (vector-count v) "\n"))]
+    0))

@@ -4,11 +4,36 @@
 (defn test-job-output [] :bool
   (let [receipt "{\"at\":1793645388593,\"did\":\"did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw\",\"epoch\":1,\"exit\":0,\"job\":\"52ca9f3745e6524a5f0d3eeb1c6c3c8715bcd6269a74d1669075acdc46200e77\",\"kind\":\"itonami.agent-step-receipt/1\",\"node\":\"b70\",\"output\":\"bafkreibuoymhi5lbx3ktszxduuzmekq2qpbqd7mz66w2cowz4memgb4dna\"}" sig "775KP54W6AiVBm49uj2HloKse9FxvkhmGSO50w9S1LAo3eD4qECI79mu8erj-B0gjU9Hl8zsd5FwoK4-TDaVDQ" output "Y3JvbiBjZWxsIHJlY2VpdmVkOiBib3VuZGVkIHNvdXJjZQ"
         did "did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw" job "52ca9f3745e6524a5f0d3eeb1c6c3c8715bcd6269a74d1669075acdc46200e77"
-        log (str "receipt " receipt "\nsignature " sig "\noutput-base64url " output "\n")]
+        log (str "receipt " receipt "\nsignature " sig "\noutput-base64url " output "\n")
+        proof (cp-bytes (str "{\"kind\":\"itonami.job-output-proof/1\",\"receipt\":" receipt ",\"signature\":\"" sig "\"}"))
+        output-cid (cp-cid (jo-decode output)) proof-cid (cp-cid proof)
+        checkpoint (cp-bytes (str "{\"payload\":{\"untracked\":[{\"cid\":\"" output-cid
+          "\",\"mode\":\"644\",\"path\":\"output\"},{\"cid\":\"" proof-cid
+          "\",\"mode\":\"644\",\"path\":\"proof\"}]}}"))
+        required (json-canonical-bytes checkpoint (json-member checkpoint (cp-payload checkpoint) "untracked"))
+        receipt-v2 (string-replace-all receipt "itonami.agent-step-receipt/1\",\"node\"" "itonami.agent-step-receipt/2\",\"lease\":\"09ce0a50ed671968129ad643398d66549fb5d5c9cc781c138044f68583bfbd2d\",\"node\"")
+        sig-v2 "ztXTDaUbgjiYKS7vwNyKBMUs4m99s7Ofeb_DI9F0wiTs79Sh1Q28xLpUrwdrP5iBX52W588YHT1R7lLEAjioCg"
+        log-v2 (str "receipt " receipt-v2 "\nsignature " sig-v2 "\noutput-base64url " output "\n")]
     (and (= (jo-verdict log did job) "job-output/verified")
+         (= (jo-verdict log-v2 did job) "job-output/verified")
+         (= (jo-verdict (str "receipt " receipt-v2 "\nsignature " sig "\noutput-base64url " output "\n") did job) "job-output/signature")
          (= (jo-verdict (str log "receipt {}\n") did job) "job-output/missing-or-duplicate")
          (= (jo-verdict (str "receipt {\"a\":\nsignature " sig "\noutput-base64url " output "\n") did job) "job-output/receipt")
          (= (jo-verdict (str "receipt " receipt "\nsignature AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\noutput-base64url " output "\n") did job) "job-output/signature")
          (= (jo-verdict (str "receipt " receipt "\nsignature " sig "\noutput-base64url YmFk\n") did job) "job-output/content")
          (= (jo-verdict log did "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") "job-output/binding")
+         (= (jo-proof-verdict proof (jo-decode output) did job) "job-output/verified")
+         (= (jo-proof-verdict proof (cp-bytes "bad") did job) "job-output/content")
+         (= (jo-proof-verdict proof (jo-decode output) did "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") "job-output/binding")
+         (= (jo-proof-verdict (cp-bytes "{}") (jo-decode output) did job) "job-output/proof-invalid")
+         (jo-checkpoint-links? checkpoint "output" output-cid "proof" proof-cid)
+         (not (jo-checkpoint-links? checkpoint "other" output-cid "proof" proof-cid))
+         (not (jo-checkpoint-links? checkpoint "output" proof-cid "proof" output-cid))
+         (not (jo-checkpoint-links? checkpoint "output" output-cid "output" proof-cid))
+         (cp-required-files? required "output" output-cid "proof" proof-cid)
+         (not (cp-required-files? required "output" proof-cid "proof" output-cid))
+         (not (cp-required-files? required "output" output-cid "other" proof-cid))
+         (jo-overlap? "results/a" "results/a/b")
+         (jo-overlap? "results/a/b" "results/a")
+         (not (jo-overlap? "results/a" "results/ab"))
          (= (en-b64-encode (jo-decode output)) output))))

@@ -174,3 +174,11 @@ The [native resident extension](profile-resident.md) adds enabled services, dail
 scheduling, automatically signed A/B replica publication and restart continuation.
 Its selected-profile qualification and remaining host-startup gates are separate
 from this original bounded drill.
+
+The candidate rejects negative or non-safe-integer lease times before comparing
+expiry, and validates a learned resident lease before using it to request a new
+epoch. Invalid values already persisted by an older voter require explicit
+reconciliation; they are not silently overwritten. An expired nonnegative
+value remains adoptable. The isolated
+[boundary tests](evidence/awai150-lease-time-guard-20261103/) do not establish
+live quorum behavior or qualify the complete deployment.

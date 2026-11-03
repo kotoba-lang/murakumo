@@ -6,9 +6,10 @@
 
 (defn- rt-now [] :i64 (ln-now "clock"))
 (defn- rt-save [path :string b :vector-i64] :bool
-  (and (cp-write (str path ".tmp") b)
-    (= (cp-fs (str path ".tmp" (cp-sep "RENAME") path)) "1")
-    (= (cp-fs (str (cp-parent-dir path) (cp-sep "FSYNC"))) "1")))
+  (and (cp-absent? (str path ".tmp"))
+    (cp-write (str path ".tmp") b)
+    (= (cp-fs "L" (str path ".tmp") path) "1")
+    (= (cp-fs "M" (cp-parent-dir path) "") "1")))
 
 (defn- rt-status [cfg :vector-i64 phase :string] :i64
   (let [b (cp-bytes (str "{\"at\":" (rt-now) ",\"phase\":\"" phase "\"}"))
@@ -29,29 +30,41 @@
       (cp-cid b) "")))
 
 (defn- rt-lease [cfg :vector-i64 epoch :i64] :vector-i64
-  (cp-bytes (lease-group-round epoch (cp-str cfg 0 "node")
-    (lease-text (cp-str cfg 0 "node") (cp-str cfg 0 "task") 0 epoch (+ (rt-now) (lease-ttl)) 1)
-    (cp-str cfg 0 "voters") (lease-token (cp-str cfg 0 "tokenFile")))))
+  (let [now (rt-now)]
+    (if (or (< epoch 1) (> epoch 9007199254740991) (<= now 0)
+            (> now (- 9007199254740991 (lease-ttl)))) (vector-alloc 0)
+      (cp-bytes (lease-group-round epoch (cp-str cfg 0 "node")
+        (lease-text (cp-str cfg 0 "node") (cp-str cfg 0 "task") 0 epoch (+ now (lease-ttl)) 1)
+        (cp-str cfg 0 "voters") (lease-token (cp-str cfg 0 "tokenFile")))))))
+
+;; Do not use a learned value to decide renewal or takeover before validating
+;; its epoch, task and bounded times. It may be an old or corrupt quorum value.
+(defn- rt-lease-bound? [cfg :vector-i64 lease :vector-i64 epoch :i64 now :i64] :bool
+  (and (json-valid? lease) (json-canonical? lease) (= (json-kind lease 0) 1) (= (json-count lease 0) 6)
+       (= (cp-str lease 0 "class") (cp-str cfg 0 "task")) (= (cp-num lease 0 "slot") 0)
+       (= (cp-num lease 0 "epoch") epoch)
+       (valid-value? (cp-str lease 0 "node") true (cp-str cfg 0 "task") 0 epoch (cp-num lease 0 "until") now)))
 
 (defn- rt-current-lease [cfg :vector-i64 floor :i64] :vector-i64
-  (let [path (cp-str cfg 0 "leaseFile") saved (if (cp-exists? path) (cp-read path) (vector-alloc 0))
-        e (if (>= (cp-num saved 0 "epoch") floor) (cp-num saved 0 "epoch") floor)
-        learned (rt-lease cfg e) now (rt-now) node (cp-str cfg 0 "node")]
-    (if (= (vector-count learned) 0) learned
-      (let [mine (= (cp-str learned 0 "node") node)
-            renew (or (and mine (> now (- (cp-num learned 0 "until") (lease-renew-before))))
-                      (not mine))
-            next (if (and renew
-                       (or mine (> now (+ (cp-num learned 0 "until") (lease-skew)))))
-                     (rt-lease cfg (+ e 1)) learned)
-            ne (cp-num next 0 "epoch")
-            bound (and (json-canonical? next) (= (json-count next 0) 6)
-                    (= (cp-str next 0 "class") (cp-str cfg 0 "task")) (= (cp-num next 0 "slot") 0)
-                    (or (= ne e) (= ne (+ e 1)))
-                    (valid-value? (cp-str next 0 "node") true (cp-str cfg 0 "task") 0 ne (cp-num next 0 "until") (rt-now)))
-            saved (and bound (rt-save path next))]
-        (if (and saved (= (recovery-lease-problem next (cp-str cfg 0 "task") node ne (rt-now)) "recovery/lease-admitted"))
-          next (vector-alloc 0))))))
+  (let [path (cp-str cfg 0 "leaseFile") status (cp-fs "D" path "")
+        saved (if (= status "1") (cp-read path) (vector-alloc 0))]
+    (if (not (or (= status "0") (and (= status "1") (json-valid? saved) (json-canonical? saved))))
+      (vector-alloc 0)
+      (let [e (if (>= (cp-num saved 0 "epoch") floor) (cp-num saved 0 "epoch") floor)
+            learned (rt-lease cfg e) now (rt-now) node (cp-str cfg 0 "node")]
+        (if (not (rt-lease-bound? cfg learned e now)) (vector-alloc 0)
+          (let [mine (= (cp-str learned 0 "node") node)
+                renew (or (and mine (> now (- (cp-num learned 0 "until") (lease-renew-before))))
+                          (not mine))
+                next (if (and renew (< e 9007199254740991)
+                           (or mine (> now (+ (cp-num learned 0 "until") (lease-skew)))))
+                         (rt-lease cfg (+ e 1)) learned)
+                ne (cp-num next 0 "epoch")
+                bound (and (or (= ne e) (and (< e 9007199254740991) (= ne (+ e 1))))
+                           (rt-lease-bound? cfg next ne (rt-now)))
+                saved (and bound (rt-save path next))]
+            (if (and saved (= (recovery-lease-problem next (cp-str cfg 0 "task") node ne (rt-now)) "recovery/lease-admitted"))
+              next (vector-alloc 0))))))))
 
 (defn- rt-pins [cfg :vector-i64 root :string until :i64] :vector-i64
   (cp-bytes (str "{\"authorA\":\"" (cp-str cfg 0 "authorA") "\",\"authorB\":\"" (cp-str cfg 0 "authorB")
@@ -62,20 +75,53 @@
   (cp-bytes (str "{\"checkpoint\":\"" root "\",\"kind\":\"itonami.resident-head/1\",\"nextAt\":" next-at
     ",\"receiptA\":\"" a "\",\"receiptB\":\"" b "\",\"request\":\"" request "\",\"until\":" until "}")))
 
+(defn- rt-head-shape? [head :vector-i64] :bool
+  (if (not (and (json-valid? head) (json-canonical? head) (= (json-kind head 0) 1))) false
+    (let [request (cp-str head 0 "request")]
+      (and (= (json-count head 0) 7)
+         (= (cp-str head 0 "kind") "itonami.resident-head/1")
+         (cp-raw? (cp-str head 0 "checkpoint"))
+         (cp-raw? (cp-str head 0 "receiptA")) (cp-raw? (cp-str head 0 "receiptB"))
+         (or (= request "none") (cp-raw? request))
+         (>= (cp-num head 0 "nextAt") 0) (> (cp-num head 0 "until") 0)))))
+
+;; The host-provisioned authorB pins the signer. A signature binds schedule
+;; and request but does not prevent replay of an older valid signed head.
+(defn- rt-sign-head [cfg :vector-i64 head :vector-i64] :vector-i64
+  (let [seed (cp-seed (cp-str cfg 0 "key")) did (cp-str cfg 0 "authorB")]
+    (if (and (rt-head-shape? head) (= (vector-count seed) 32)
+             (= (did-from-public (public-from-seed seed)) did))
+      (cp-bytes (str "{\"payload\":" (cp-text head) ",\"signature\":\"" (sign-statement seed (cp-text head)) "\"}"))
+      (vector-alloc 0))))
+
+(defn- rt-open-head [cfg :vector-i64 envelope :vector-i64] :vector-i64
+  (if (not (and (json-valid? envelope) (json-canonical? envelope) (= (json-kind envelope 0) 1) (= (json-count envelope 0) 2)))
+    (vector-alloc 0)
+    (let [p (cp-payload envelope)
+          head (if (>= p 0) (cp-bytes (cp-json envelope p)) (vector-alloc 0))]
+      (if (and (rt-head-shape? head)
+               (= (statement-problem (cp-str cfg 0 "authorB") (cp-text head) (cp-str envelope 0 "signature")) "enroll/ok"))
+        head (vector-alloc 0)))))
+
+(defn- rt-read-head [cfg :vector-i64 path :string] :vector-i64
+  (if (cp-exists? path) (rt-open-head cfg (cp-read path)) (vector-alloc 0)))
+
 (defn- rt-replicate [cfg :vector-i64 root :string next-at :i64 request :string] :bool
   (let [store (cp-str cfg 0 "store") until (+ (rt-now) 172800000)
         address (cp-str cfg 0 "peer") token (lease-token (cp-str cfg 0 "tokenFile"))
         sent (peer-upload store root address token)
         a (if sent (peer-retain store root address token until) "")
         r (if (not (= a "")) (retention-attest store root (cp-str cfg 0 "key") (cp-str cfg 0 "domainB") (cp-str cfg 0 "task") until) "")
-        b (if (= (ln-field r 0) "retention/recorded") (ln-field r 1) "")]
+        b (if (= (ln-field r 0) "retention/recorded") (ln-field r 1) "")
+        envelope (rt-sign-head cfg (rt-head root a b until next-at request))]
     (and (not (= a "")) (not (= b ""))
       (= (retention-pair-problem (cp-load store a) (cp-load store b) (rt-pins cfg root until)) "retention/pair-verified")
-      (rt-save (cp-str cfg 0 "candidateHead") (rt-head root a b until next-at request)))))
+      (> (vector-count envelope) 0)
+      (rt-save (cp-str cfg 0 "candidateHead") envelope))))
 
 (defn- rt-intact-head? [cfg :vector-i64 head :vector-i64] :bool
   (let [store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint") until (cp-num head 0 "until")]
-    (and (json-canonical? head) (= (cp-str head 0 "kind") "itonami.resident-head/1")
+    (and (rt-head-shape? head)
       (cp-block? store root) (rt-root? cfg (cp-load store root)) (cp-closure? store (cp-load store root))
       (= (retention-pair-problem (cp-load store (cp-str head 0 "receiptA"))
            (cp-load store (cp-str head 0 "receiptB")) (rt-pins cfg root until)) "retention/pair-verified"))))
@@ -85,6 +131,16 @@
 ;; the controller's subsequent archive/prepare/once steps.
 (defn- rt-admitted-head? [cfg :vector-i64 head :vector-i64] :bool
   (and (rt-intact-head? cfg head) (> (cp-num head 0 "until") (rt-now))))
+
+;; Read once and validate before publishing: candidateHead is an intermediate
+;; file, not authority to change the accepted checkpoint or consumed request.
+(defn- rt-publish-candidate [cfg :vector-i64 root :string next-at :i64 request :string] :bool
+  (let [path (cp-str cfg 0 "candidateHead")]
+    (if (not (cp-exists? path)) false
+      (let [envelope (cp-read path) head (rt-open-head cfg envelope)]
+        (and (rt-admitted-head? cfg head) (= (cp-str head 0 "checkpoint") root)
+             (= (cp-num head 0 "nextAt") next-at) (= (cp-str head 0 "request") request)
+             (rt-save (cp-str cfg 0 "head") envelope))))))
 
 (defn- rt-refresh-decision [intact :bool until :i64 now :i64] :string
   (cond (not intact) "resident/head-refused"
@@ -134,12 +190,12 @@
                   (rt-public-environment? cfg (rt-runtime cfg) env))))))
 
 (defn- rt-refresh [cfg :vector-i64] :string
-  (let [path (cp-str cfg 0 "head") head (if (cp-exists? path) (cp-read path) (vector-alloc 0))
+  (let [path (cp-str cfg 0 "head") head (rt-read-head cfg path)
         problem (if (rt-pins-ok? cfg) (rt-refresh-decision (rt-intact-head? cfg head) (cp-num head 0 "until") (rt-now)) "resident/runtime-pins-refused")]
     (if (not (= problem "resident/retention-refresh-needed")) problem
       (if (and (rt-replicate cfg (cp-str head 0 "checkpoint") (cp-num head 0 "nextAt") (cp-str head 0 "request"))
-               (rt-save path (cp-read (cp-str cfg 0 "candidateHead")))
-               (rt-admitted-head? cfg (cp-read path))) "resident/replicas-refreshed" "resident/replica-unavailable"))))
+               (rt-publish-candidate cfg (cp-str head 0 "checkpoint") (cp-num head 0 "nextAt") (cp-str head 0 "request"))
+               (rt-admitted-head? cfg (rt-read-head cfg path))) "resident/replicas-refreshed" "resident/replica-unavailable"))))
 
 ;; An optional host-provisioned private acknowledgement directory gates each
 ;; next turn on confirmed GitHub archival of the current admitted checkpoint.
@@ -155,17 +211,88 @@
 
 ;; Describe only a currently verified, replica-admitted head. A signed epoch and
 ;; parent are archive parameters, not an independent lease or new head grant.
-(defn- rt-archive [cfg :vector-i64] :i64
-  (let [path (cp-str cfg 0 "head") head (if (cp-exists? path) (cp-read path) (vector-alloc 0))
+(defn- rt-archive [cfg :vector-i64] :string
+  (let [path (cp-str cfg 0 "head") head (rt-read-head cfg path)
         store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint")
         b (if (cp-block? store root) (cp-load store root) (vector-alloc 0)) p (cp-payload b)]
     (if (or (= (cp-str cfg 0 "archiveAck") "") (not (cp-safe-absolute? store))
             (not (rt-admitted-head? cfg head))
             (not (rt-pins-ok? cfg)))
-      (cp-say "resident/archive-refused")
-      (cp-say (str "resident/archive " root " " (cp-str b p "did") " " (cp-str cfg 0 "profile")
+      "resident/archive-refused"
+      (str "resident/archive " root " " (cp-str b p "did") " " (cp-str cfg 0 "profile")
                    " " (cp-str cfg 0 "policy") " " (cp-str cfg 0 "environment") " " (cp-num b p "epoch")
-                   " " (cp-str b p "parent") " " (cp-str cfg 0 "task") " " store " " (cp-str cfg 0 "archiveAck"))))))
+                   " " (cp-str b p "parent") " " (cp-str cfg 0 "task") " " store " " (cp-str cfg 0 "archiveAck")))))
+
+;; Ack publication renames a temporary file over the destination. Neither
+;; path may overlap a mutable directory, configured input, or another writer's
+;; temporary file. The host must also prevent filesystem aliases and races.
+(defn- rt-ack-dir-safe? [ack :string path :string] :bool
+  (or (= path "") (and (not (ga-path-overlap? ack path))
+                        (not (ga-path-overlap? (str ack ".tmp") path)))))
+(defn- rt-ack-file-safe? [ack :string path :string] :bool
+  (or (= path "") (and (not (= ack path)) (not (= (str ack ".tmp") path))
+                        (not (= ack (str path ".tmp"))) (not (= (str ack ".tmp") (str path ".tmp"))))))
+(defn- rt-ack-safe? [cfg :vector-i64 config-path :string] :bool
+  (let [ack (cp-str cfg 0 "archiveAck")]
+    (and (cp-safe-absolute? ack)
+         (rt-ack-dir-safe? ack (cp-str cfg 0 "store"))
+         (rt-ack-dir-safe? ack (cp-str cfg 0 "cache"))
+         (rt-ack-dir-safe? ack (cp-str cfg 0 "runtimeRoot"))
+         (rt-ack-file-safe? ack config-path)
+         (rt-ack-file-safe? ack (cp-str cfg 0 "head"))
+         (rt-ack-file-safe? ack (str (cp-str cfg 0 "head") ".resident-lockfile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "request"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "status"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "candidateHead"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "leaseFile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "key"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "checkpointBinary"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "tokenFile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "policyFile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "environmentFile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "runtimeFile")))))
+
+;; The work directory and GitHub CLI are invocation arguments rather than
+;; config fields; check them before the archive creates files or pushes.
+(defn- rt-work-resident-safe? [cfg :vector-i64 work :string] :bool
+  (let [runtime (cp-str cfg 0 "runtimeRoot") cache (cp-str cfg 0 "cache") store (cp-str cfg 0 "store")]
+    (and (cp-safe-absolute? runtime) (cp-safe-absolute? cache) (cp-safe-absolute? store)
+         (not (ga-path-overlap? work runtime)) (not (ga-path-overlap? work cache))
+         (not (ga-path-overlap? work store)))))
+
+(defn- rt-archive-paths-safe? [cfg :vector-i64 work :string gh :string] :bool
+  (let [ack (cp-str cfg 0 "archiveAck")]
+    (and (rt-ack-safe? cfg "") (cp-safe-absolute? work) (cp-safe-absolute? gh)
+         (rt-work-resident-safe? cfg work)
+         (rt-ack-dir-safe? ack work) (rt-ack-file-safe? ack gh))))
+
+;; Archive an admitted head under the resident's local lock, then publish the
+;; acknowledgement only after readback and a second admission check. The host
+;; supplies a fresh, private work path and pinned GitHub executable/repository.
+;; Failure or unknown outcome is returned to the caller without retry.
+(defn- rt-archive-native [cfg :vector-i64 work :string repo :string gh :string] :string
+  (let [descriptor (rt-archive cfg)
+        root (ln-field descriptor 1) author (ln-field descriptor 2) profile (ln-field descriptor 3)
+        policy (ln-field descriptor 4) environment (ln-field descriptor 5) epoch-text (ln-field descriptor 6)
+        parent (ln-field descriptor 7) task (ln-field descriptor 8) store (ln-field descriptor 9) ack (ln-field descriptor 10)
+        exact (str "resident/archive " root " " author " " profile " " policy " " environment " " epoch-text
+                   " " parent " " task " " store " " ack)]
+    (if (or (not (= descriptor exact)) (not (rt-archive-paths-safe? cfg work gh))) "resident-archive/head-refused"
+      (let [result (ga-archive work store root author profile policy environment (cp-int epoch-text) parent task repo gh)
+            tree (ln-field result 2) outcome (ln-field result 3)
+            valid (and (cp-hex? tree 40) (or (= outcome "acknowledged") (= outcome "unacknowledged"))
+                       (= result (str "archive/stored " root " " tree " " outcome)))
+            now (rt-now) current (= (rt-archive cfg) descriptor)
+            tmp (str ack ".tmp")
+            until (if (and (> now 0) (<= now 9223372036853875807)) (+ now 900000) 0)
+            body (cp-bytes (str "{\"checkpoint\":\"" root "\",\"kind\":\"itonami.github-archive-ack/1\",\"tree\":\""
+                                tree "\",\"until\":" until "}"))
+            prepared (and valid current (> until 0)
+                          (cp-absent? tmp) (cp-write tmp body))
+            moved (if prepared (cp-fs "L" tmp ack) "0")
+            synced (if (= moved "1") (cp-fs "M" (cp-parent-dir ack) "") "0")]
+        (if (= synced "1") (str "resident-archive/confirmed " root " " tree)
+          "resident-archive/unconfirmed")))))
 
 (defn- rt-capture [cfg :vector-i64 repo :string epoch :i64 parent :string next :i64] :string
   (let [list (str (cp-str cfg 0 "runtimeRoot") "/untracked.json") summary (str (cp-str cfg 0 "runtimeRoot") "/summary.txt")
@@ -187,6 +314,18 @@
                       (cp-num lease 0 "epoch") now) "recovery/lease-admitted"))) "resident/lease-lost"
         :else "resident/admission-held"))
 
+;; Materialization can outlast or invalidate the lease learned by rt-cycle.
+;; Re-learn it after restore, before any inference dispatch; an unknown or
+;; changed lease and insufficient remaining budget cannot start a new turn.
+;; This is not an atomic effect fence: the receiver still needs one.
+(defn- rt-dispatch [cfg :vector-i64 head :vector-i64 lease :vector-i64 dest :string next :i64] :string
+  (let [fresh (rt-lease cfg (cp-num lease 0 "epoch")) now (rt-now)
+        admission (rt-post-problem cfg head lease fresh now)
+        budget (rf-budget (cp-num lease 0 "until") (cp-num head 0 "until") now)]
+    (cond (not (= admission "resident/admission-held")) admission
+          (< budget 1) "profile/budget-refused"
+          :else (pr-step-resident dest (rt-runtime cfg) (cp-str cfg 0 "cache") next budget))))
+
 (defn- rt-turn [cfg :vector-i64 head :vector-i64 lease :vector-i64 request :string] :string
   (let [store (cp-str cfg 0 "store") root (cp-str head 0 "checkpoint") checkpoint (cp-load store root)
         dest (str (cp-str cfg 0 "runtimeRoot") "/checkouts/" (rt-now))
@@ -195,11 +334,11 @@
       (let [next (cp-num (cp-read (str dest "/state.json")) 0 "next")
             next-at (+ (rt-now) (cp-num cfg 0 "intervalMs"))
             status (rt-status cfg "inference")
-            result (pr-step-resident dest (rt-runtime cfg) (cp-str cfg 0 "cache") next
-                     (rf-budget (cp-num lease 0 "until") (cp-num head 0 "until") (rt-now)))
-            fresh (rt-lease cfg (cp-num lease 0 "epoch"))
-            post (rt-post-problem cfg head lease fresh (rt-now))]
-        (cond (not (= (ln-field result 0) "profile/step-completed")) result
+            result (rt-dispatch cfg head lease dest next)
+            completed (= (ln-field result 0) "profile/step-completed")
+            fresh (if completed (rt-lease cfg (cp-num lease 0 "epoch")) (vector-alloc 0))
+            post (if completed (rt-post-problem cfg head lease fresh (rt-now)) "resident/not-dispatched")]
+        (cond (not completed) result
               (not (= post "resident/admission-held")) post
               :else
               (let [successor (rt-capture cfg dest (cp-num lease 0 "epoch") root next)
@@ -208,38 +347,104 @@
                     post-final (rt-post-problem cfg head lease final (rt-now))]
                 (cond (not copied) "resident/proposal-retained"
                       (not (= post-final "resident/admission-held")) post-final
-                      (rt-save (cp-str cfg 0 "head") (cp-read (cp-str cfg 0 "candidateHead")))
+                      (rt-publish-candidate cfg successor next-at request)
                       (str "resident/published " next " " successor)
                       :else "resident/head-publication-failed")))))))
 
 (defn- rt-cycle [cfg :vector-i64] :string
-  (let [head-path (cp-str cfg 0 "head")
-        head (if (cp-exists? head-path) (cp-read head-path) (vector-alloc 0))
-        root (if (cp-exists? head-path) (cp-str head 0 "checkpoint") (cp-str cfg 0 "bootstrap"))
-        request-path (cp-str cfg 0 "request") present (cp-exists? request-path)
+  (let [head-path (cp-str cfg 0 "head") head-status (cp-fs "D" head-path "")
+        head-present (= head-status "1") head (rt-read-head cfg head-path)
+        root (if head-present (cp-str head 0 "checkpoint") (cp-str cfg 0 "bootstrap"))
+        request-path (cp-str cfg 0 "request") request-status (cp-fs "D" request-path "") present (= request-status "1")
         request (rt-request-id present (if present (cp-read request-path) (vector-alloc 0))
                                (cp-str head 0 "request"))]
-    (cond (= request "") "resident/request-refused"
+    (cond (not (or (= head-status "0") (= head-status "1"))) "resident/head-unknown"
+          ;; A writer may have stopped during request replacement. Do not
+          ;; turn the old request into a periodic run while its successor is
+          ;; unresolved; only an explicit absent result permits progress.
+          (not (= (cp-fs "D" (str request-path ".tmp") "") "0")) "resident/request-unknown"
+          (not (or (= request-status "0") (= request-status "1"))) "resident/request-unknown"
+          (= request "") "resident/request-refused"
           (not (rt-pins-ok? cfg)) "resident/runtime-pins-refused"
           (not (cp-block? (cp-str cfg 0 "store") root)) "resident/missing-checkpoint"
           (not (rt-root? cfg (cp-load (cp-str cfg 0 "store") root))) "resident/checkpoint-refused"
+          ;; Do not turn an invalid checkpoint or replica receipts into
+          ;; a newly admitted head. Bootstrap has no prior head; an existing
+          ;; head may be refreshed only after its full contract is intact.
+          (and head-present (not (rt-intact-head? cfg head))) "resident/head-refused"
           (not (rt-admitted-head? cfg head))
-          (if (and (rt-replicate cfg root (if (cp-exists? head-path) (cp-num head 0 "nextAt") 0)
-                      (if (cp-exists? head-path) (cp-str head 0 "request") "none"))
-                   (rt-save head-path (cp-read (cp-str cfg 0 "candidateHead")))) "resident/replicas-refreshed" "resident/replica-unavailable")
+          (if (and (rt-replicate cfg root (if head-present (cp-num head 0 "nextAt") 0)
+                      (if head-present (cp-str head 0 "request") "none"))
+                   (rt-publish-candidate cfg root (if head-present (cp-num head 0 "nextAt") 0)
+                     (if head-present (cp-str head 0 "request") "none"))) "resident/replicas-refreshed" "resident/replica-unavailable")
           (not (rt-archive-ack? (cp-str cfg 0 "archiveAck") root)) "resident/archive-pending"
           (not (rt-due? head request (rt-now))) "resident/idle"
           :else (let [root-data (cp-load (cp-str cfg 0 "store") root)
                       lease (rt-current-lease cfg (cp-num root-data (cp-payload root-data) "epoch"))]
                   (if (= (vector-count lease) 0) "resident/quorum-unavailable" (rt-turn cfg head lease request))))))
 
+;; A host-provisioned head path identifies the local writer domain. Keep the
+;; inode fixed for the lifetime of every participant. This lock is local only:
+;; it is neither a lease nor a distributed fence, and shared caches or heads
+;; reachable through different configured paths still require host isolation.
+(defn- rt-serialized [cfg :vector-i64 operation :string] :string
+  (let [head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
+    (if (not (and (cp-safe-absolute? head)
+                  (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1")))
+      "resident/local-writer-busy"
+      (let [result (cond (= operation "cycle") (rt-cycle cfg)
+                         (= operation "refresh") (rt-refresh cfg)
+                         (= operation "archive") (rt-archive cfg)
+                         (= operation "archive-native") (rt-archive-native cfg (cp-arg 2) (cp-arg 3) (cp-arg 4))
+                         :else "resident/command-refused")
+            status (if (= operation "cycle") (rt-status cfg result) 0)
+            released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")]
+        (if released result "resident/local-unlock-failed")))))
+
+;; A configured file must never be allowed to replace the lock inode. The
+;; host must also avoid hard links, aliases and out-of-band changes to it.
+(defn- rt-lock-config-safe? [cfg :vector-i64 config-path :string] :bool
+  (let [head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
+    (and (cp-safe-absolute? head)
+         (not (= lock config-path))
+         (not (= lock (cp-str cfg 0 "store")))
+         (not (= lock (cp-str cfg 0 "runtimeRoot")))
+         (not (= lock (cp-str cfg 0 "status")))
+         (not (= lock (cp-str cfg 0 "candidateHead")))
+         (not (= lock (cp-str cfg 0 "request")))
+         (not (= lock (cp-str cfg 0 "leaseFile")))
+         (not (= lock (cp-str cfg 0 "key")))
+         (not (= lock (cp-str cfg 0 "tokenFile")))
+         (not (= lock (cp-str cfg 0 "policyFile")))
+         (not (= lock (cp-str cfg 0 "environmentFile")))
+         (not (= lock (cp-str cfg 0 "runtimeFile")))
+         (not (= lock (cp-str cfg 0 "archiveAck"))))))
+
+;; Only known successful cycles may be scheduled again. Every refusal or
+;; uncertain side effect exits so the host can reconcile it before another run.
+(defn- rt-cycle-ok? [result :string] :bool
+  (or (= result "resident/idle") (= result "resident/replicas-refreshed")
+      (and (= (ln-field result 0) "resident/published")
+           (> (ln-int (ln-field result 1)) 0) (cp-raw? (ln-field result 2))
+           (= result (str "resident/published " (ln-field result 1) " " (ln-field result 2))))))
+
+(defn- rt-once [cfg :vector-i64 operation :string] :i64
+  (let [result (rt-serialized cfg operation) logged (cp-say result)
+        ok (cond (= operation "cycle") (rt-cycle-ok? result)
+                 (= operation "refresh") (or (= result "resident/retention-ready") (= result "resident/replicas-refreshed"))
+                 (= operation "archive") (= (ln-field result 0) "resident/archive")
+                 (= operation "archive-native") (= (ln-field result 0) "resident-archive/confirmed")
+                 :else false)]
+    (if ok 0 1)))
+
 (defn profile-resident-main [] :i64
   (let [cfg (cp-read (cp-arg 1)) archive-field (json-member cfg 0 "archiveAck")
         ack (cp-str cfg 0 "archiveAck")]
-    (if (or (not (json-canonical? cfg)) (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
+    (if (or (not (json-canonical? cfg)) (not (rt-lock-config-safe? cfg (cp-arg 1)))
+            (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
             (not (= (cp-num cfg 0 "intervalMs") 86400000))
             (and (>= archive-field 0)
-                 (or (not (= (json-kind cfg archive-field) 3)) (not (cp-safe-absolute? ack))
+                 (or (not (= (json-kind cfg archive-field) 3)) (not (rt-ack-safe? cfg (cp-arg 1)))
                      (= ack (cp-arg 1)) (= ack (cp-str cfg 0 "head")) (= ack (cp-str cfg 0 "store"))
                      (= ack (cp-str cfg 0 "status")) (= ack (cp-str cfg 0 "candidateHead"))
                      (= ack (cp-str cfg 0 "request")) (= ack (cp-str cfg 0 "leaseFile"))
@@ -249,13 +454,16 @@
             (not (rf-voters? (cp-str cfg 0 "voters"))) (= (lease-token (cp-str cfg 0 "tokenFile")) "")
             (not (= (ri-show (cp-str cfg 0 "key")) (str "identity/did " (cp-str cfg 0 "authorB")))))
       (let [x (cp-say "resident/config-refused")] 2)
-      (if (= (cp-arg 0) "refresh") (cp-say (rt-refresh cfg))
-      (if (= (cp-arg 0) "archive") (rt-archive cfg)
+      (if (= (cp-arg 0) "refresh") (rt-once cfg "refresh")
+      (if (= (cp-arg 0) "archive") (rt-once cfg "archive")
+      (if (= (cp-arg 0) "archive-native") (rt-once cfg "archive-native")
       (if (= (cp-arg 0) "once")
-        (let [r (rt-cycle cfg) status (rt-status cfg r)] (cp-say r))
+        (rt-once cfg "cycle")
       (if (not (= (cp-arg 0) "run")) (let [x (cp-say "resident/command-refused")] 2)
       (loop [i 0]
         (let [result (arena-scope
-                       (let [r (rt-cycle cfg) s (rt-status cfg r) event (cp-say r)] 0))
-              z (loop [k 0] (if (>= k 10) true (if (pr-pause) (recur (+ k 1)) false)))]
-          (if z (recur (+ i 1)) 2))))))))))
+                       (let [r (rt-serialized cfg "cycle") event (cp-say r)]
+                         (if (rt-cycle-ok? r) 0 1)))
+              z (if (= result 0)
+                  (loop [k 0] (if (>= k 10) true (if (pr-pause) (recur (+ k 1)) false))) false)]
+          (if z (recur (+ i 1)) 2)))))))))))

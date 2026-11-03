@@ -67,8 +67,13 @@
 (defn- ln-say [s :string] :i64 (let [x (typed-cap-call :io/write :string :string (string-concat s "\n"))] 0))
 (defn- ln-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
 
-(defn- ln-exists? [path :string] :bool (= (typed-cap-call 35 :string :string (string-concat path "EXISTS_SEP")) "1"))
-(defn- ln-load [path :string] :string (if (ln-exists? path) (typed-cap-call 35 :string :string path) "0 - 0 - -"))
+(defn- ln-frame [op :string path :string tail :string] :string (str "\u0000FS2\u0000" op path "\u0000" tail))
+(defn- ln-fs [op :string path :string tail :string] :string
+  (let [r (typed-cap-call :fs/app-data :string :string (ln-frame op path tail))]
+    (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
+      (string-substring r 5 (string-length r)) "")))
+(defn- ln-exists? [path :string] :bool (= (ln-fs "D" path "") "1"))
+(defn- ln-load [path :string] :string (if (ln-exists? path) (ln-fs "A" path "") ""))
 ;; the parent directory of path ("/" for a top-level file)
 (defn- ln-dirname [path :string] :string
   (let [b (ln-bytes path) k (loop [i (- (vector-count b) 1)] (cond (< i 0) -1 (= (vector-at b i) 47) i :else (recur (- i 1))))]
@@ -78,11 +83,31 @@
 ;; answered 1, else 0
 (defn- ln-store [path :string text :string] :i64
   (let [tmp (string-concat path ".tmp")
-        w (typed-cap-call 35 :string :string (str tmp "WRITE_SEP" text))
-        f (typed-cap-call 35 :string :string (string-concat tmp "FSYNC_SEP"))
-        r (if (= f "1") (typed-cap-call 35 :string :string (str tmp "RENAME_SEP" path)) "0")
-        d (if (= r "1") (typed-cap-call 35 :string :string (string-concat (ln-dirname path) "FSYNC_SEP")) "0")]
+        w (ln-fs "B" tmp text)
+        f (if (and (not (= text "")) (= w text)) (ln-fs "M" tmp "") "0")
+        r (if (= f "1") (ln-fs "L" tmp path) "0")
+        d (if (= r "1") (ln-fs "M" (ln-dirname path) "") "0")]
     (if (= d "1") 1 0)))
+
+;; Explicit genesis for a new voter only. T is FS2's no-replace rename, so
+;; even concurrent initializers cannot overwrite an existing register. This
+;; local operation cannot establish that an absent voter has never voted.
+(defn- ln-init-fresh [path :string] :string
+  (if (or (< (string-length path) 2) (not (= (string-substring path 0 1) "/"))
+          (= (string-substring path (- (string-length path) 1) (string-length path)) "/"))
+    "voter/init-refused"
+    (let [parent (ln-dirname path) dir (ln-fs "N" parent ".voter-genesis-")]
+      (if (= dir "") "voter/init-refused"
+        (let [temp (str dir "/register") text "0 - 0 - -"
+              wrote (= (ln-fs "B" temp text) text)
+              flushed (and wrote (= (ln-fs "M" temp "") "1"))
+              moved (and flushed (= (ln-fs "T" temp path) "1"))
+              sync (and moved (= (ln-fs "M" parent "") "1"))
+              removed (if moved true (= (ln-fs "J" temp "") "1"))
+              cleaned (= (ln-fs "K" dir "") "1")]
+          (cond (and moved sync cleaned) "voter/init-created"
+                moved "voter/init-unknown"
+                :else "voter/init-refused"))))))
 ;; now in ms: a decimal, or clock for wire 7's wall clock (amu #1518)
 (defn- ln-now [s :string] :i64 (if (= s "clock") (ln-int (typed-cap-call 7 :string :string "wall")) (ln-int s)))
 
@@ -101,6 +126,16 @@
 
 (defn- ln-dash [s :string] :string (if (= s "") "-" s))
 (defn- ln-undash [s :string] :string (if (= s "-") "" s))
+
+;; The wire and durable register are space-delimited and reserve "-" for
+;; absence. An ID outside this profile cannot round-trip through that format.
+(defn- ln-ballot-valid? [t :i64 id :string] :bool
+  (and (ballot-ok? t id) (not (= id "-"))
+       (let [b (ln-bytes id)]
+         (loop [i 0]
+           (if (= i (vector-count b)) true
+             (let [c (vector-at b i)]
+               (if (and (>= c 33) (<= c 126)) (recur (+ i 1)) false)))))))
 
 ;; a voter's address: "ip:port", or a bare port on 127.0.0.1
 (defn- ln-addr [p :string] :string (if (>= (string-index-of p ":") 0) p (str "127.0.0.1:" p)))
@@ -124,7 +159,7 @@
 ;; file or the token is shorter than 32 bytes
 (defn- ln-token [path :string] :string
   (if (or (= path "") (not (ln-exists? path))) ""
-    (let [t (typed-cap-call 35 :string :string path) b (ln-bytes t) n (vector-count b)
+    (let [t (ln-fs "A" path "") b (ln-bytes t) n (vector-count b)
           i (loop [i 0] (if (and (< i n) (ln-space? (vector-at b i))) (recur (+ i 1)) i))
           j (loop [j n] (if (and (> j i) (ln-space? (vector-at b (- j 1)))) (recur (- j 1)) j))]
       (if (< (- j i) 32) "" (string-substring t i j)))))
@@ -188,6 +223,19 @@
       (valid-value? node (ln-enabled? topo node) (ln-text v r "class") (ln-num v r "slot")
                     (ln-num v r "epoch") (ln-num v r "until") now))))
 
+;; An absent, truncated or inconsistent durable register is not a fresh
+;; voter. Reinitialization requires an independently authorized recovery.
+(defn- ln-state-ok? [st :string] :bool
+  (let [pt (ln-int (ln-field st 0)) pid (ln-undash (ln-field st 1))
+        at (ln-int (ln-field st 2)) aid (ln-undash (ln-field st 3)) av (ln-undash (ln-field st 4))]
+    (and (>= pt 0) (>= at 0)
+         (= st (str pt " " (ln-dash pid) " " at " " (ln-dash aid) " " (ln-dash av)))
+         (if (= pt 0) (= pid "") (ln-ballot-valid? pt pid))
+         (if (= at 0) (and (= aid "") (= av ""))
+           (and (ln-ballot-valid? at aid) (not (= av ""))
+                (>= (ballot-cmp pt pid at aid) 0)
+                (json-valid? (ln-bytes av)) (json-canonical? (ln-bytes av)))))))
+
 ;; one request against the state in file; the new state is stored before the
 ;; reply is returned
 (defn- ln-handle [file :string req :string topo :vector-i64 now :i64] :string
@@ -195,12 +243,14 @@
         pt (ln-int (ln-field st 0)) pid (ln-undash (ln-field st 1))
         at (ln-int (ln-field st 2)) aid (ln-undash (ln-field st 3)) av (ln-undash (ln-field st 4))
         op (ln-field req 0) bt (ln-int (ln-field req 1)) bid (ln-field req 2) v (ln-field req 3)]
-    (cond (= op "prepare")
+    (cond (not (ln-state-ok? st)) "no 0 - 0 - -"
+          (not (ln-ballot-valid? bt bid)) (ln-reply false st)
+          (= op "prepare")
           (if (prepare-ok? bt bid pt pid)
             (let [ns (str bt " " bid " " at " " (ln-dash aid) " " (ln-dash av))] (if (= (ln-store file ns) 1) (ln-reply true ns) (ln-reply false st)))
             (ln-reply false st))
           (= op "accept")
-          (if (and (json-canonical? (ln-bytes v)) (ln-member-ok? topo now v) (accept-ok? bt bid v pt pid at aid av))
+          (if (and (json-valid? (ln-bytes v)) (json-canonical? (ln-bytes v)) (ln-member-ok? topo now v) (accept-ok? bt bid v pt pid at aid av))
             (let [ns (str bt " " bid " " bt " " bid " " v)] (if (= (ln-store file ns) 1) (ln-reply true ns) (ln-reply false st)))
             (ln-reply false st))
           :else (ln-reply false st))))
@@ -222,7 +272,10 @@
               0)))))))
 
 (defn- ln-load-doc [path :string] :vector-i64
-  (vector-i64-from-bytes (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 (ln-bytes path)))))
+  (let [r (typed-cap-call :fs/app-data :string :bytes (ln-frame "A" path "")) n (bytes-count r)]
+    (if (and (>= n 5) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
+             (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))
+      (vector-i64-from-bytes (bytes-slice r 5 n)) (vector-alloc 0))))
 
 ;; does the topology file still hold the bytes last seen (or is it gone)?
 (defn- ln-same-file? [path :string seen :vector-i64] :bool
@@ -388,8 +441,11 @@
   (loop [k 5] (cond (= (ln-arg k) "") "" (ln-tok-arg? (ln-arg k)) (string-substring (ln-arg k) 6 (string-length (ln-arg k))) :else (recur (+ k 1)))))
 
 (defn lease-node-main [] :i64
+  (if (= (ln-arg 0) "init-fresh")
+    (let [result (ln-init-fresh (ln-arg 1)) x (ln-say result)]
+      (if (= result "voter/init-created") 0 1))
   (if (= (ln-arg 0) "voter")
     (ln-voter-main)
     (let [tp (ln-arg-token-path) token (ln-token tp)]
       (if (and (not (= tp "")) (= token "")) (let [x (ln-say "proposer token/missing-or-short")] 2)
-        (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports) token)))))
+        (ln-proposer (ln-arg 1) (ln-int (ln-arg 2)) (ln-arg 3) (ln-arg 4) (ln-arg-ports) token))))))

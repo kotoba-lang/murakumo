@@ -1,0 +1,58 @@
+(ns test-archive-work (:export [main]))
+(defn- cp-safe-absolute? [s :string] :bool (and (> (string-length s) 1) (= (string-substring s 0 1) "/")))
+(defn- cp-str [cfg :vector-i64 i :i64 key :string] :string
+ (cond (= key "archiveAck") "/task/ack" (= key "runtimeRoot") "/task/runtime" (= key "cache") (if (= (vector-at cfg 0) 1) "" "/task/cache") (= key "store") "/task/store" (= key "head") "/task/head" :else ""))
+(defn- ga-path-overlap? [a :string b :string] :bool
+  (or (= a b) (= (string-index-of a (str b "/")) 0)
+      (= (string-index-of b (str a "/")) 0)))
+
+(defn- rt-ack-dir-safe? [ack :string path :string] :bool
+  (or (= path "") (and (not (ga-path-overlap? ack path))
+                        (not (ga-path-overlap? (str ack ".tmp") path)))))
+(defn- rt-ack-file-safe? [ack :string path :string] :bool
+  (or (= path "") (and (not (= ack path)) (not (= (str ack ".tmp") path))
+                        (not (= ack (str path ".tmp"))) (not (= (str ack ".tmp") (str path ".tmp"))))))
+(defn- rt-ack-safe? [cfg :vector-i64 config-path :string] :bool
+  (let [ack (cp-str cfg 0 "archiveAck")]
+    (and (cp-safe-absolute? ack)
+         (rt-ack-dir-safe? ack (cp-str cfg 0 "store"))
+         (rt-ack-dir-safe? ack (cp-str cfg 0 "cache"))
+         (rt-ack-dir-safe? ack (cp-str cfg 0 "runtimeRoot"))
+         (rt-ack-file-safe? ack config-path)
+         (rt-ack-file-safe? ack (cp-str cfg 0 "head"))
+         (rt-ack-file-safe? ack (str (cp-str cfg 0 "head") ".resident-lockfile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "request"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "status"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "candidateHead"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "leaseFile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "key"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "checkpointBinary"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "tokenFile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "policyFile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "environmentFile"))
+         (rt-ack-file-safe? ack (cp-str cfg 0 "runtimeFile")))))
+
+;; The work directory and GitHub CLI are invocation arguments rather than
+;; config fields; check them before the archive creates files or pushes.
+(defn- rt-work-resident-safe? [cfg :vector-i64 work :string] :bool
+  (let [runtime (cp-str cfg 0 "runtimeRoot") cache (cp-str cfg 0 "cache") store (cp-str cfg 0 "store")]
+    (and (cp-safe-absolute? runtime) (cp-safe-absolute? cache) (cp-safe-absolute? store)
+         (not (ga-path-overlap? work runtime)) (not (ga-path-overlap? work cache))
+         (not (ga-path-overlap? work store)))))
+
+(defn- rt-archive-paths-safe? [cfg :vector-i64 work :string gh :string] :bool
+  (let [ack (cp-str cfg 0 "archiveAck")]
+    (and (rt-ack-safe? cfg "") (cp-safe-absolute? work) (cp-safe-absolute? gh)
+         true
+         (rt-ack-dir-safe? ack work) (rt-ack-file-safe? ack gh))))
+
+(defn main [] :i64
+ (let [good [0] bad [1]]
+  (if (and (rt-archive-paths-safe? good "/task/work" "/tools/gh")
+           (rt-archive-paths-safe? good "/task/runtime2" "/tools/gh")
+           (not (rt-archive-paths-safe? good "/task/runtime/work" "/tools/gh"))
+           (not (rt-archive-paths-safe? good "/task/cache/work" "/tools/gh"))
+           (not (rt-archive-paths-safe? good "/task/store/work" "/tools/gh"))
+           (not (rt-archive-paths-safe? good "/task" "/tools/gh"))
+           (not (rt-archive-paths-safe? bad "/task/work" "/tools/gh"))
+           (not (rt-archive-paths-safe? good "/task/work" "/task/ack"))) 0 1)))

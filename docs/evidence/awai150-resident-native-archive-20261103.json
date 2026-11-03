@@ -1,0 +1,13 @@
+{
+  "kind": "awai.resident-native-archive-ack/1",
+  "date": "2026-11-03",
+  "environment": "Disposable Linux ARM64 VM, 1 CPU and 2 GiB RAM; real Git and filesystem",
+  "residentSourceSha256": "e77fd340ebcae4a4d4a8e4f7ee3a34cd1dd4a11202eed0c7b8272ab87d07adea",
+  "archiveSourceSha256": "77bd11bb59962db681d0b9c6715e5de661be5806880b6067af4c607e6598e871",
+  "archiveFixtureSha256": "4bd2a8391da2bd863c0472279f243786285cee8058663ec9505800096ab4c9d3",
+  "archiveFixtureElfSha256": "805a2335b82dc2d7ffa7bf15e6a2d1278914118ebac8cd304d9cd0a5d336b7d3",
+  "lockFixtureSha256": "91a99d8e053a1eefead9973f8b4fbe2e2314d8639c63deb3e88b51d8b9676312",
+  "lockFixtureElfSha256": "9b9f31952bf0dea8ad96c918b33883ea1f07db308adbb496ca176504d937075f",
+  "observed": "The extracted acknowledgement function invoked the native archive candidate with real Git against a local bare remote and wrote a correctly shaped acknowledgement after readback. Simulated head change during archival, private-repository refusal, and an existing temporary acknowledgement all returned unconfirmed without creating an acknowledgement; the existing temporary sentinel was preserved. In a separate real kernel-lock test, archive-native was refused while another cycle held the same local lock and admitted after release.",
+  "limits": "The head/retention admission, clock and GitHub privacy provider were stubbed. The remote expression in the archive fixture was changed to local file:// and no actual GitHub API was called. The lock fixture stubbed archive execution. These tests do not prove the full resident, cron controller, host credential or egress policy, detached child cleanup, Mac runtime, or real bot. The test compiler is byte-patched rather than a released self-build."
+}

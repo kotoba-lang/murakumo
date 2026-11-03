@@ -1,0 +1,44 @@
+(ns paths (:export [main]))
+(defn- en-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn field-problem [s :string] :string
+  (let [b (en-bytes s)]
+    (if (> (vector-count b) 128) "enroll/field-too-long"
+      (loop [i 0]
+        (if (= i (vector-count b)) "enroll/ok"
+          (let [c (vector-at b i)]
+            (if (and (>= c 33) (<= c 126) (not (= c 34)) (not (= c 92))) (recur (+ i 1)) "enroll/field-charset")))))))
+(defn- cp-safe-absolute? [s :string] :bool
+  (and (> (string-length s) 1) (= (string-substring s 0 1) "/")
+       (= (field-problem s) "enroll/ok")
+       (< (string-index-of s "_SEP") 0) (< (string-index-of s "..") 0)
+       (< (string-index-of s "//") 0) (< (string-index-of s "/./") 0)
+       (not (= (string-substring s (- (string-length s) 1) (string-length s)) "/"))
+       (not (= (string-substring s (- (string-length s) 2) (string-length s)) "/."))))
+(defn- ga-path-overlap? [a :string b :string] :bool
+  (or (= a b) (= (string-index-of a (str b "/")) 0)
+      (= (string-index-of b (str a "/")) 0)))
+
+(defn- ga-repo? [s :string] :bool true)
+(defn- cp-raw? [s :string] :bool true)
+(defn- ga-verified? [a :string b :string c :string d :string e :string f :string g :i64 h :string i :string] :bool true)
+(defn- cp-absent? [s :string] :bool true)
+(defn- archive [work :string store :string] :bool
+ (let [gh "/bin/gh" repo "x/y" cid "c" author "a" profile "p" policy "p" environment "e" epoch 1 parent "p" task "t"]
+  (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? store))
+            (not (cp-safe-absolute? gh)) (ga-path-overlap? work store) (not (ga-repo? repo))
+            (not (cp-raw? cid)) (not (ga-verified? store cid author profile policy environment epoch parent task))) true :else false)))
+(defn- restore [work :string dest :string] :bool
+ (let [gh "/bin/gh" repo "x/y" cid "c"]
+  (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? dest)) (ga-path-overlap? work dest)
+            (ga-path-overlap? work (str dest ".partial"))
+            (not (cp-safe-absolute? gh)) (not (ga-repo? repo)) (not (cp-raw? cid))
+            (not (cp-absent? dest)) (not (cp-absent? (str dest ".partial")))) true :else false)))
+(defn main [] :i64
+ (if (and (archive "" "/work") (archive "/" "/work") (archive "/work" "/work") (archive "/work" "/work/sub") (archive "/work/sub" "/work")
+          (restore "/restore.partial" "/restore") (restore "/restore.partial/sub" "/restore")
+          (not (restore "/restore.partial-other" "/restore"))
+          (restore "/work" "/work/sub") (restore "/work/sub" "/work")
+          (archive "/work/" "/work/sub") (archive "/work/./sub" "/work")
+          (archive "/work//sub" "/work") (restore "/work/." "/work")
+          (not (archive "/work" "/work-a")) (not (restore "/work" "/work-a"))
+          (not (archive "/space/path" "/space/pathology"))) 0 1))

@@ -5,7 +5,12 @@
 (ns murakumo.profile-cron-bridge (:export [profile-cron-bridge-main]))
 
 (defn- br-work-bound? [cfg :vector-i64 runtime :vector-i64 definition :vector-i64 source :vector-i64] :bool
-  (and (= (gt-str definition "profile") (cp-str cfg 0 "profile"))
+  ;; Only this resident path reads and verifies the pinned work-order bytes
+  ;; before including them in the model request. The accountability path
+  ;; does neither, even if a caller supplies an unrelated workDigest field.
+  (and (= (cp-str runtime 0 "profile") "awai-growth-steward")
+       (= (cp-str cfg 0 "profile") (cp-str runtime 0 "profile"))
+       (= (gt-str definition "profile") (cp-str cfg 0 "profile"))
        (= (gt-str definition "policy") (cp-str cfg 0 "policy"))
        (= (gt-str definition "rail") "murakumo")
        (> (vector-count source) 0) (<= (vector-count source) 8192)
@@ -41,6 +46,11 @@
 (defn- br-head-problem [cfg :vector-i64 head :vector-i64] :string
   (cond (or (not (json-valid? head)) (not (json-canonical? head))) "bridge/head-invalid"
         (not (rt-admitted-head? cfg head)) "bridge/head-unadmitted"
+        ;; Completion is also unknown while a request replacement is pending.
+        ;; The controller can otherwise bypass br-install when head already
+        ;; names the request and incorrectly advance its cursor. A provider
+        ;; which maps lookup errors to "0" cannot establish this condition.
+        (not (= (cp-fs "D" (str (cp-str cfg 0 "request") ".tmp") "") "0")) "bridge/request-unknown"
         (or (not (cp-exists? (cp-str cfg 0 "archiveAck")))
             (not (json-valid? (cp-read (cp-str cfg 0 "archiveAck"))))
             (not (rt-archive-ack? (cp-str cfg 0 "archiveAck") (cp-str head 0 "checkpoint")))) "bridge/archive-pending"
@@ -53,21 +63,36 @@
 
 ;; Do not overwrite a different unconsumed request. A previous incomplete tmp
 ;; is UNKNOWN; host reconciliation, not a blind retry, must resolve it.
+;; The host must also guarantee a provider which distinguishes absence from
+;; all lookup errors: a provider that reports errors as "0" is unqualified.
 (defn- br-install [cfg :vector-i64 head :vector-i64 request :vector-i64] :string
   (let [path (cp-str cfg 0 "request") wanted (cp-cid request)
-        old (if (cp-exists? path) (cp-cid (cp-read path)) "none")
+        status (cp-fs "D" path "")
+        prior (if (= status "1") (cp-read path) (vector-alloc 0))
+        prior-valid (and (> (vector-count prior) 0) (<= (vector-count prior) 8192)
+                         (json-valid? prior) (json-canonical? prior) (= (json-kind prior 0) 1))
+        old (if (= status "1") (cp-cid prior) "none")
         consumed (cp-str head 0 "request")]
-    (cond (= consumed wanted) "bridge/already-consumed"
+    (cond (not (= (cp-fs "D" (str path ".tmp") "") "0")) "bridge/request-unknown"
+          (not (or (= status "0") (and (= status "1") prior-valid))) "bridge/request-unknown"
+          (= consumed wanted) "bridge/already-consumed"
           (and (not (= old "none")) (not (= old consumed)) (not (= old wanted))) "bridge/pending-request"
           (= old wanted) "bridge/request-ready"
-          (cp-exists? (str path ".tmp")) "bridge/request-unknown"
           (rt-save path request) "bridge/request-ready"
           :else "bridge/request-unknown")))
 
 (defn- br-completed? [head :vector-i64 request :vector-i64] :bool
   (= (cp-str head 0 "request") (cp-cid request)))
 
-(defn profile-cron-bridge-main [] :i64
+;; The cursor replacement protocol has two independent recovery markers.
+;; Explicit absence is required for both; lookup failure is not absence.
+(defn- br-cursor-clear? [path :string] :bool
+  (and (= (cp-fs "D" (str path ".pending") "") "0")
+       (= (cp-fs "D" (str path ".intent") "") "0")))
+
+;; Called only under the resident writer lock. The integrated controller calls
+;; the lower-level bridge functions while already holding the same lock.
+(defn- br-command [cfg :vector-i64] :i64
   (let [mode (cp-arg 0) cfgpath (cp-arg 1) definition-path (cp-arg 2)
         pin (cp-arg 3) cursor-path (cp-arg 4) source-path (cp-arg 5)]
     (if (or (not (cp-safe-absolute? cfgpath)) (not (cp-safe-absolute? definition-path))
@@ -75,15 +100,43 @@
             (not (cp-exists? cfgpath)) (not (cp-exists? definition-path))
             (not (cp-exists? cursor-path)) (not (cp-exists? source-path)))
       (let [x (cp-say "bridge/input-unavailable")] 2)
-      (let [cfg (cp-read cfgpath) definition (cp-read definition-path) cursor (cp-read cursor-path)
+      (if (not (br-cursor-clear? cursor-path))
+        (let [x (cp-say "bridge/cursor-unknown")] 1)
+      (let [definition (cp-read definition-path) cursor (cp-read cursor-path)
             source (cp-read source-path) now (rt-now) problem (br-problem cfg definition pin cursor source now)]
         (if (or (not (= problem "bridge/ok"))
                 (= (cp-str cfg 0 "request") cfgpath) (= (cp-str cfg 0 "request") definition-path)
-                (= (cp-str cfg 0 "request") cursor-path) (= (cp-str cfg 0 "request") source-path))
+                (= (cp-str cfg 0 "request") cursor-path) (= (cp-str cfg 0 "request") source-path)
+                (= (cp-str cfg 0 "request") (str cursor-path ".pending"))
+                (= (cp-str cfg 0 "request") (str cursor-path ".intent"))
+                (= (cp-str cfg 0 "request") (str cursor-path ".last"))
+                (= (str (cp-str cfg 0 "request") ".tmp") cursor-path)
+                (= (str (cp-str cfg 0 "request") ".tmp") (str cursor-path ".pending"))
+                (= (str (cp-str cfg 0 "request") ".tmp") (str cursor-path ".intent"))
+                (= (str (cp-str cfg 0 "request") ".tmp") (str cursor-path ".last")))
           (let [x (cp-say (if (= problem "bridge/ok") "bridge/path-conflict" problem))] 1)
-          (let [head-path (cp-str cfg 0 "head") head (if (cp-exists? head-path) (cp-read head-path) (vector-alloc 0))
+          (let [head-path (cp-str cfg 0 "head") head (rt-read-head cfg head-path)
                 h (br-head-problem cfg head) request (br-request definition pin cursor now)]
             (if (not (= h "bridge/head-ready")) (let [x (cp-say h)] 1)
-              (cond (= mode "prepare") (let [x (cp-say (br-install cfg head request))] 0)
-                    (= mode "complete") (let [x (cp-say (if (br-completed? head request) "bridge/completed" "bridge/not-completed"))] 0)
-                    :else (let [x (cp-say "bridge/command-refused")] 2)))))))))
+              (cond (= mode "prepare") (let [result (br-install cfg head request) x (cp-say result)]
+                                         (if (= result "bridge/request-ready") 0 1))
+                    (= mode "complete") (let [completed (br-completed? head request)
+                                               x (cp-say (if completed "bridge/completed" "bridge/not-completed"))]
+                                           (if completed 0 1))
+                    :else (let [x (cp-say "bridge/command-refused")] 2))))))))))
+
+;; Standalone bridge users must serialize with resident cycles and the cron
+;; controller. The host still owns the lock inode and the entire path scope.
+(defn profile-cron-bridge-main [] :i64
+  (let [path (cp-arg 1)
+        cfg (if (and (cp-safe-absolute? path) (cp-exists? path)) (cp-read path) (vector-alloc 0))
+        head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
+    (if (not (and (json-valid? cfg) (json-canonical? cfg) (rt-lock-config-safe? cfg path)))
+      (let [x (cp-say "bridge/config-refused")] 2)
+      (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
+        (let [x (cp-say "bridge/local-writer-busy")] 1)
+        ;; Use the exact config used to choose the lock; do not reread it
+        ;; after acquisition and accidentally operate in a different domain.
+        (let [result (br-command cfg)
+              released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")]
+          (if released result (let [x (cp-say "bridge/local-unlock-failed")] 2)))))))

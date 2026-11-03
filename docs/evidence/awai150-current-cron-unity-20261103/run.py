@@ -1,0 +1,11 @@
+import os,pathlib,subprocess,resource,json,hashlib
+p=pathlib.Path('/private/tmp/awai150-cron-current-unity');env=dict(os.environ,KEXE_CAP_RESOURCES_35=str(p))
+def lim():resource.setrlimit(resource.RLIMIT_CPU,(100,100))
+r=subprocess.run([str(p/'root.elf'),'compile','unity.kotoba','--target','aarch64-linux','--output','controller.elf','--format','static'],cwd=p,env=env,capture_output=True,text=True,timeout=120,preexec_fn=lim)
+print('compile',r.returncode,r.stdout[-1000:],r.stderr[-1000:],flush=True)
+if r.returncode:raise SystemExit(r.returncode)
+binary=p/'controller.elf';binary.chmod(0o700);e=dict(env,KEXE_ALLOW='7,20,23,35,37,38,39,43,44,45,46,47')
+r=subprocess.run([str(binary),str(p/'missing-config')],cwd=p,env=e,capture_output=True,text=True,timeout=10,preexec_fn=lim)
+print('missing config',r.returncode,repr(r.stdout),repr(r.stderr),flush=True)
+assert r.returncode==2 and r.stdout.strip()=='cron-resident/config-refused',(r.returncode,r.stdout,r.stderr)
+print('sha256',hashlib.sha256(binary.read_bytes()).hexdigest(),flush=True)

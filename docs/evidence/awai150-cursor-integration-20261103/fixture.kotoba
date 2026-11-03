@@ -1,0 +1,56 @@
+(ns cursor-pending-fixture (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-fs [op :string path :string tail :string] :string
+ (if (or (= op "L") (= op "M")) "1"
+ (if (= path "/unknown.pending") "unavailable"
+  (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+   (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000")) (string-substring r 5 (string-length r)) "")))))
+(defn- cp-exists? [p :string] :bool (= (cp-fs "D" p "") "1"))
+(defn- cp-write [p :string v :vector-i64] :bool true)
+(defn- cp-read [p :string] :vector-i64 (cp-bytes "same"))
+(defn- cp-cid [v :vector-i64] :string "same")
+(defn- cp-parent-dir [p :string] :string "/")
+(defn- cc-cursor [pin :string slot :i64] :vector-i64 (cp-bytes "next"))
+(defn- jn-arg [i :i64] :string (typed-cap-call 38 :string :string (str i)))
+(defn- jn-say [s :string] :i64 (let [x (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- jn-attempt-root? [s :string] :bool true)
+(defn- cc-plan [d :vector-i64 pin :string c :vector-i64 now :i64] :string (if (= pin "bad") "cursor/definition" "cursor/idle"))
+(defn- ln-now [clock :string] :i64 1)
+(defn- jn-int [s :string] :i64 (if (= s "60000") 60000 0))
+(defn- cp-num [v :vector-i64 i :i64 k :string] :i64 0)
+(defn- cc-plan-problem [d :vector-i64 p :string c :vector-i64 n :i64] :string "trigger/ok")
+(defn- gt-str [d :vector-i64 k :string] :string "*")
+(defn- gt-num [d :vector-i64 k :string] :i64 0)
+(defn- next-cron-ms [c :string p :i64 o :i64] :i64 60000)
+(defn- cc-advance [path :string original :vector-i64 pin :string slot :i64] :string
+  (let [tmp (str path ".pending")]
+    (cond (not (= (cp-fs "D" tmp "") "0")) "cursor/pending-unknown"
+          (not (cp-write tmp (cc-cursor pin slot))) "cursor/write-unknown"
+          (not (= (cp-cid (cp-read path)) (cp-cid original))) "cursor/changed"
+          (not (= (cp-fs "L" tmp path) "1")) "cursor/rename-unknown"
+          (not (= (cp-fs "M" (cp-parent-dir path) "") "1")) "cursor/fsync-unknown"
+          :else "cursor/advanced")))
+
+(defn- rt-now [] :i64 120000)
+(defn- rt-read-head [cfg :vector-i64 path :string] :vector-i64 (cp-bytes "head"))
+(defn- cp-str [cfg :vector-i64 i :i64 key :string] :string "head")
+(defn- br-request [definition :vector-i64 pin :string cursor :vector-i64 now :i64] :vector-i64 (cp-bytes "req"))
+(defn- br-problem [cfg :vector-i64 definition :vector-i64 pin :string cursor :vector-i64 source :vector-i64 now :i64] :string "bridge/ok")
+(defn- br-slot [definition :vector-i64 cursor :vector-i64] :i64 60000)
+(defn- br-head-problem [cfg :vector-i64 head :vector-i64] :string "bridge/head-ready")
+(defn- br-completed? [head :vector-i64 request :vector-i64] :bool true)
+(defn- nc-advance [cfg :vector-i64 definition :vector-i64 pin :string cursor-path :string cursor :vector-i64
+                  source :vector-i64 slot :i64] :string
+  (let [now (rt-now) head (rt-read-head cfg (cp-str cfg 0 "head"))
+        request (br-request definition pin cursor now)
+        plan (br-problem cfg definition pin cursor source now)]
+    (cond (not (= plan "bridge/ok")) "cron-resident/plan-changed"
+          (not (= slot (br-slot definition cursor))) "cron-resident/slot-changed"
+          (not (= (br-head-problem cfg head) "bridge/head-ready")) "cron-resident/archive-pending"
+          (not (br-completed? head request)) "cron-resident/completion-unknown"
+          (not (= (cc-advance cursor-path cursor pin slot) "cursor/advanced")) "cron-resident/cursor-unknown"
+          :else (str "cron-resident/completed " slot))))
+
+(defn main [] :i64
+ (let [path (jn-arg 0) v (cp-bytes "same") r (nc-advance v v "pin" path v v 60000)]
+  (jn-say r)))

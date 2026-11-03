@@ -1,0 +1,209 @@
+;; Native single-cycle coordinator candidate. Compose after the canonical
+;; checkpoint, schedule/cursor, resident, GitHub archive and bridge sources.
+;; The host pins all inputs, credentials, egress and the single task's paths.
+;; This coordinator does not create a distributed lease or a resource limit.
+(ns murakumo.profile-cron-controller (:export [profile-cron-controller-main]))
+
+(defn- nc-path-or-tmp? [p :string base :string] :bool
+  (or (= p base) (= p (str base ".tmp"))))
+
+(defn- nc-resident-path? [cfg :vector-i64 p :string] :bool
+  (or (nc-path-or-tmp? p (cp-str cfg 0 "head")) (= p (cp-str cfg 0 "store"))
+      (= p (cp-str cfg 0 "runtimeRoot")) (= p (cp-str cfg 0 "cache"))
+      (nc-path-or-tmp? p (cp-str cfg 0 "request")) (nc-path-or-tmp? p (cp-str cfg 0 "status"))
+      (nc-path-or-tmp? p (cp-str cfg 0 "candidateHead")) (nc-path-or-tmp? p (cp-str cfg 0 "leaseFile"))
+      (= p (cp-str cfg 0 "key"))
+      (= p (cp-str cfg 0 "tokenFile")) (= p (cp-str cfg 0 "policyFile"))
+      (= p (cp-str cfg 0 "environmentFile")) (= p (cp-str cfg 0 "runtimeFile"))
+      (= p (str (cp-str cfg 0 "head") ".resident-lockfile"))))
+
+(defn- nc-sensitive-path? [cfg :vector-i64 config :string definition :string cursor :string source :string p :string] :bool
+  (or (= p config) (= p definition) (= p cursor) (= p source)
+      (= p (cp-str cfg 0 "archiveAck")) (nc-resident-path? cfg p)))
+
+;; The archive publisher replaces both ack and its temporary path. Reject
+;; exact conflicts before acquiring the lock or touching resident state.
+(defn- nc-ack-safe? [cfg :vector-i64 config :string] :bool
+  (let [ack (cp-str cfg 0 "archiveAck") tmp (str ack ".tmp")]
+    (and (rt-ack-safe? cfg config) (not (= ack config)) (not (= tmp config))
+         (not (nc-resident-path? cfg ack)) (not (nc-resident-path? cfg tmp)))))
+
+;; Archive staging directories must not consume each other or a path needed
+;; for dispatch/cursor/archive recovery. Compare path components, not textual
+;; prefixes ("/work-a" is separate from "/work"). The host still prevents
+;; symlinks, hard links and concurrent modification of its private scope.
+(defn- nc-path-overlap? [a :string b :string] :bool
+  (or (= a b) (= (string-index-of a (str b "/")) 0)
+      (= (string-index-of b (str a "/")) 0)))
+
+;; Archive staging must not add or replace files inside the live runtime,
+;; cache, or checkpoint store, including when a parent is proposed as work.
+;; Path aliases remain the private host's responsibility.
+(defn- nc-work-resident-safe? [cfg :vector-i64 work :string] :bool
+  (rt-work-resident-safe? cfg work))
+
+(defn- nc-work-paths-safe? [before :string after :string marker :string cursor :string ack :string] :bool
+  (let [pending (str cursor ".pending") intent (str cursor ".intent") last (str cursor ".last") ack-tmp (str ack ".tmp")]
+    (not (or (nc-path-overlap? before after)
+             (nc-path-overlap? before marker) (nc-path-overlap? after marker)
+             (nc-path-overlap? before pending) (nc-path-overlap? after pending)
+             (nc-path-overlap? before intent) (nc-path-overlap? after intent)
+             (nc-path-overlap? before last) (nc-path-overlap? after last)
+             (nc-path-overlap? before ack-tmp) (nc-path-overlap? after ack-tmp)
+             (nc-path-overlap? marker pending) (nc-path-overlap? marker intent) (nc-path-overlap? marker last)
+             (nc-path-overlap? ack-tmp pending) (nc-path-overlap? ack-tmp intent) (nc-path-overlap? ack-tmp last)
+             (nc-path-overlap? marker ack-tmp)))))
+
+;; The marker is created and synced before inference can be submitted. A
+;; leftover or partial marker is UNKNOWN; never infer failure and retry. The
+;; enclosing task lock and host-owned directory exclude cooperating writers.
+(defn- nc-mark [marker :string job :string] :bool
+  (and (cp-absent? marker) (cp-write marker (cp-bytes (str job "\n")))
+       (= (cp-fs "M" (cp-parent-dir marker) "") "1")))
+
+(defn- nc-advance [cfg :vector-i64 definition :vector-i64 pin :string cursor-path :string cursor :vector-i64
+                  source :vector-i64 slot :i64] :string
+  (let [now (rt-now) head (rt-read-head cfg (cp-str cfg 0 "head"))
+        request (br-request definition pin cursor now)
+        plan (br-problem cfg definition pin cursor source now)]
+    (cond (not (= plan "bridge/ok")) "cron-resident/plan-changed"
+          (not (= slot (br-slot definition cursor))) "cron-resident/slot-changed"
+          (not (= (br-head-problem cfg head) "bridge/head-ready")) "cron-resident/archive-pending"
+          (not (br-completed? head request)) "cron-resident/completion-unknown"
+          (not (= (cc-advance cursor-path cursor pin slot) "cursor/advanced")) "cron-resident/cursor-unknown"
+          :else (str "cron-resident/completed " slot))))
+
+(defn- nc-cycle [cfg :vector-i64 config-path :string definition-path :string pin :string cursor-path :string source-path :string
+                state :string work-before :string work-after :string repo :string gh :string] :string
+  (if (or (not (cp-safe-absolute? definition-path)) (not (cp-safe-absolute? cursor-path))
+          (not (cp-safe-absolute? source-path)) (not (cp-safe-absolute? state))
+          (not (cp-safe-absolute? work-before)) (not (cp-safe-absolute? work-after))
+          (not (cp-safe-absolute? gh)) (= work-before work-after)
+          (= definition-path config-path) (= source-path config-path)
+          (= cursor-path config-path) (= cursor-path definition-path) (= cursor-path source-path)
+          (nc-resident-path? cfg definition-path) (nc-resident-path? cfg cursor-path)
+          (nc-resident-path? cfg source-path)
+          (= definition-path (cp-str cfg 0 "archiveAck")) (= cursor-path (cp-str cfg 0 "archiveAck"))
+          (= source-path (cp-str cfg 0 "archiveAck"))
+          (= definition-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
+          (= cursor-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
+          (= source-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
+          (not (cp-exists? definition-path)) (not (cp-exists? cursor-path)) (not (cp-exists? source-path)))
+    "cron-resident/input-refused"
+    (if (not (br-cursor-clear? cursor-path))
+      "cron-resident/cursor-unknown"
+    (let [definition (cp-read definition-path) cursor (cp-read cursor-path) source (cp-read source-path)
+          now (rt-now) plan (br-problem cfg definition pin cursor source now)
+          slot (if (= plan "bridge/ok") (br-slot definition cursor) -1)
+          previous (cp-num cursor 0 "slot")
+          job (if (= plan "bridge/ok") (verified-cron-job-id true now previous slot pin definition) "")
+          marker (str state "/dispatch-" job)]
+      (cond (= plan "cursor/idle") "cron-resident/idle"
+            (not (= plan "bridge/ok")) "cron-resident/plan-refused"
+            (or (not (cp-hex? job 64))
+                (not (nc-work-paths-safe? work-before work-after marker cursor-path (cp-str cfg 0 "archiveAck")))
+                (not (nc-work-resident-safe? cfg work-before)) (not (nc-work-resident-safe? cfg work-after))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path marker)
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".pending"))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".intent"))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".last"))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path work-before)
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path work-after)) "cron-resident/path-refused"
+            :else
+            (let [refresh (rt-refresh cfg)]
+              (if (not (or (= refresh "resident/retention-ready") (= refresh "resident/replicas-refreshed"))) "cron-resident/retention-pending"
+                (let [archive (rt-archive-native cfg work-before repo gh)]
+                  (if (not (= (ln-field archive 0) "resident-archive/confirmed")) "cron-resident/archive-pending"
+                    (let [head (rt-read-head cfg (cp-str cfg 0 "head")) request (br-request definition pin cursor (rt-now))
+                          ready (br-head-problem cfg head)]
+                      (cond (not (= ready "bridge/head-ready")) "cron-resident/head-refused"
+                            (br-completed? head request) (nc-advance cfg definition pin cursor-path cursor source slot)
+                            (not (= (br-install cfg head request) "bridge/request-ready")) "cron-resident/request-refused"
+                            (not (nc-mark marker job)) "cron-resident/dispatch-unknown"
+                            :else
+                            (let [turn (rt-cycle cfg) status (rt-status cfg turn)]
+                              (if (not (= (ln-field turn 0) "resident/published")) "cron-resident/completion-unknown"
+                                (let [new-archive (rt-archive-native cfg work-after repo gh)]
+                                  (if (not (= (ln-field new-archive 0) "resident-archive/confirmed")) "cron-resident/archive-pending"
+                                    (nc-advance cfg definition pin cursor-path cursor source slot))))))))))))))))
+
+;; Explicit recovery under the same writer lock. Reconstruct the request for
+;; the current slot (the minute before a matching slot is sufficient to
+;; validate it), bind it to the signed head, and independently read the
+;; archive back before retiring the local cursor intent. No inference runs.
+(defn- nc-recovery-cycle [cfg :vector-i64 config-path :string definition-path :string pin :string cursor-path :string source-path :string
+                          state :string work-before :string work-after :string repo :string gh :string] :string
+  (if (or (not (cp-safe-absolute? definition-path)) (not (cp-safe-absolute? cursor-path))
+          (not (cp-safe-absolute? source-path)) (not (cp-safe-absolute? state))
+          (not (cp-safe-absolute? work-before)) (not (cp-safe-absolute? work-after)) (not (cp-safe-absolute? gh))
+          (= definition-path config-path) (= source-path config-path) (= cursor-path config-path)
+          (= cursor-path definition-path) (= cursor-path source-path)
+          (nc-resident-path? cfg definition-path) (nc-resident-path? cfg cursor-path) (nc-resident-path? cfg source-path)
+          (= definition-path (cp-str cfg 0 "archiveAck")) (= cursor-path (cp-str cfg 0 "archiveAck"))
+          (= source-path (cp-str cfg 0 "archiveAck"))
+          (= definition-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
+          (= cursor-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
+          (= source-path (str (cp-str cfg 0 "archiveAck") ".tmp"))
+          (not (cp-exists? definition-path)) (not (cp-exists? cursor-path)) (not (cp-exists? source-path))
+          (not (= (cp-fs "D" (str cursor-path ".pending") "") "0"))
+          (not (= (cp-fs "D" (str cursor-path ".intent") "") "1")))
+    "cron-resident/recovery-unknown"
+    (let [definition (cp-read definition-path) cursor (cp-read cursor-path) source (cp-read source-path)
+          now (rt-now) slot (cp-num cursor 0 "slot") prior (if (>= slot 60000) (- slot 60000) -1)
+          prior-cursor (if (>= prior 0) (cc-cursor pin prior) (vector-alloc 0))
+          plan (if (and (>= prior 0) (= (cc-cursor-problem cursor pin now) "cursor/ok"))
+                 (br-problem cfg definition pin prior-cursor source now) "cursor/invalid")
+          job (if (= plan "bridge/ok") (verified-cron-job-id true now prior slot pin definition) "")
+          marker (str state "/dispatch-" job) request (if (= plan "bridge/ok") (br-request definition pin prior-cursor now) (vector-alloc 0))
+          head (rt-read-head cfg (cp-str cfg 0 "head"))]
+      (cond (or (not (= plan "bridge/ok")) (not (= (br-slot definition prior-cursor) slot))
+                (not (cp-hex? job 64)) (not (rt-admitted-head? cfg head)) (not (br-completed? head request))
+                (not (cc-recovery-ready? cursor-path cursor))
+                (not (= (cp-fs "D" (str (cp-str cfg 0 "request") ".tmp") "") "0"))) "cron-resident/recovery-unknown"
+            (or (not (nc-work-paths-safe? work-before work-after marker cursor-path (cp-str cfg 0 "archiveAck")))
+                (not (nc-work-resident-safe? cfg work-before)) (not (nc-work-resident-safe? cfg work-after))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path marker)
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".pending"))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".intent"))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path (str cursor-path ".last"))
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path work-before)
+                (nc-sensitive-path? cfg config-path definition-path cursor-path source-path work-after)) "cron-resident/path-refused"
+            :else
+            (let [archive (rt-archive-native cfg work-before repo gh)
+                  current (rt-read-head cfg (cp-str cfg 0 "head"))]
+              (cond (not (= (ln-field archive 0) "resident-archive/confirmed")) "cron-resident/recovery-unknown"
+                    (not (= (ln-field archive 1) (cp-str head 0 "checkpoint"))) "cron-resident/recovery-unknown"
+                    (not (= (cp-text head) (cp-text current))) "cron-resident/recovery-unknown"
+                    (not (= (br-head-problem cfg current) "bridge/head-ready")) "cron-resident/recovery-unknown"
+                    (not (br-completed? current request)) "cron-resident/recovery-unknown"
+                    (not (= (cc-recover cursor-path cursor) "cursor/recovered")) "cron-resident/recovery-unknown"
+                    :else (str "cron-resident/recovered " slot)))))))
+
+;; An unknown or refused cycle must be visible to the host as a failure even
+;; when the local lock was released. Exit success only for the two terminal
+;; outcomes that need no reconciliation.
+(defn- nc-exit-code [result :string released :bool] :i64
+  (if (not released) 2
+    (if (or (= result "cron-resident/idle") (= (ln-field result 0) "cron-resident/completed")
+            (= (ln-field result 0) "cron-resident/recovered")) 0 1)))
+
+(defn profile-cron-controller-main [] :i64
+  (let [config (cp-arg 0) definition (cp-arg 1) pin (cp-arg 2) cursor (cp-arg 3) source (cp-arg 4)
+        state (cp-arg 5) work-before (cp-arg 6) work-after (cp-arg 7) repo (cp-arg 8) gh (cp-arg 9) mode (cp-arg 10)
+        cfg (if (and (cp-safe-absolute? config) (cp-exists? config)) (cp-read config) (vector-alloc 0))
+        head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
+    (if (or (not (or (= mode "") (= mode "recover"))) (not (json-valid? cfg)) (not (json-canonical? cfg)) (not (rt-lock-config-safe? cfg config))
+            (not (nc-ack-safe? cfg config))
+            (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
+            (not (= (cp-num cfg 0 "intervalMs") 86400000))
+            (not (rf-voters? (cp-str cfg 0 "voters"))) (= (lease-token (cp-str cfg 0 "tokenFile")) "")
+            (not (= (ri-show (cp-str cfg 0 "key")) (str "identity/did " (cp-str cfg 0 "authorB")))))
+      (let [z (cp-say "cron-resident/config-refused")] 2)
+      (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
+        (let [z (cp-say "cron-resident/local-writer-busy")] 2)
+        (let [result (if (= mode "recover")
+                       (nc-recovery-cycle cfg config definition pin cursor source state work-before work-after repo gh)
+                       (nc-cycle cfg config definition pin cursor source state work-before work-after repo gh))
+              release (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")
+              z (cp-say (if release result "cron-resident/local-unlock-failed"))]
+          (nc-exit-code result release))))))

@@ -1,5 +1,48 @@
 # The lease register as separate processes
 
+**Draft recovery change:** a voter now refuses every request if its durable
+register is missing, malformed or internally inconsistent. It no longer treats
+a missing file as an empty register. The older examples below that start a
+voter with a nonexistent file require revision. An explicit
+`init-fresh <absolute-path>` operation creates `0 - 0 - -` with a temporary
+directory, fsync and an FS2 no-replace rename. It is only for an independently
+established new voter: after state loss, recovery and membership must be
+established separately before reinitialization. This draft has no automatic
+enrollment/recovery procedure and must not be deployed as one. A valid but
+stale register can still be replayed; this check alone does not prevent rollback.
+
+`init-fresh` returns `voter/init-created`, `voter/init-refused`, or
+`voter/init-unknown`; unknown means publication may have happened and must be
+reconciled before any retry. On ARM64 Linux/XFS, the native fixture in
+`docs/evidence/awai150-voter-init-fixture.kotoba` created a fresh register,
+preserved an existing sentinel, and allowed exactly one of two concurrent
+initializers to succeed. Replacing no-replace with ordinary rename overwrote
+the sentinel in the control. A crash can leave a private temporary directory;
+power-cut and cleanup recovery are not covered by this test.
+
+An additional isolated ARM64 native test initialized three voters, chose a
+value, removed one test-owned register and verified that the remaining quorum
+retained the chosen value. After a second register was removed, a new round
+returned `no-majority`; neither missing register was recreated. See
+`docs/evidence/awai150-lease-quorum-20261103.json`. All three voters ran in
+one VM, over unauthenticated loopback: this does not qualify failure isolation
+or secure communication between Mac hosts.
+
+A separate loopback fixture used a synthetic fleet token with the actual
+native voters and proposer. The correct token chose A, a different token
+received no majority and left all three register hashes unchanged, and a
+subsequent authorized round adopted A. See
+`docs/evidence/awai150-lease-auth-20261103.json`. HMAC here authenticates
+messages but does not encrypt them; host isolation, Tailnet transport, token
+provisioning and replay resistance remain unqualified.
+
+The draft wire format admits ballot IDs made of printable ASCII bytes except
+the single `-`, which is reserved for an absent ID. Invalid IDs are rejected
+before a group watermark is changed; malformed JSON is validated before
+canonical parsing. Existing deployments using IDs outside this profile need
+an explicit migration. The native positive, refusal and control evidence is
+in `docs/evidence/awai150-ballot-id-20261103.json`.
+
 Tracked in [JUN-289](https://linear.app/kotobalabs/issue/JUN-289), under
 ADR-2610071730 P3b. [Lease core](lease-core.md) holds the register's rules.
 `kotoba/fleet_lease_node.kotoba` runs them as separate processes, voters and

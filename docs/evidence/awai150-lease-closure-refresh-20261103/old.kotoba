@@ -1,0 +1,5 @@
+(ns closure-lease-test (:export [main]))
+(defn lease-skew [] :i64 60000)
+(defn held-now? [lease-node :string me :string until :i64 now :i64] :bool
+  (and (= lease-node me) (< now (- until (lease-skew)))))
+(defn main [] :i64 (if (held-now? "bot" "bot" (- -9223372036854775807 1) 100000) 1 0))

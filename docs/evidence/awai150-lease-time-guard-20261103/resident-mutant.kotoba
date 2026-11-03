@@ -1,0 +1,127 @@
+(ns lease-time-gate (:export [main]))
+(defn sha256-hex [v :vector-i64] :string "01234567890123456789012345678901")
+(defn lease-ttl [] :i64 900000)
+(defn lease-renew-before [] :i64 600000)
+(defn lease-skew [] :i64 60000)
+
+(defn majority [n :i64] :i64 (+ (quot n 2) 1))
+
+;; ---------------------------------------------------------------------------
+;; The acceptor
+
+(defn ballot-ok? [t :i64 id :string] :bool
+  (and (> t 0) (<= t 9007199254740991) (>= (string-length id) 1) (<= (string-length id) 128)))
+
+(defn ballot-cmp [ta :i64 ida :string tb :i64 idb :string] :i64
+  (cond (> ta tb) 1 (< ta tb) -1 :else (string-compare ida idb)))
+
+;; pt pid: the ballot promised so far, (0, "") when none
+(defn prepare-ok? [bt :i64 bid :string pt :i64 pid :string] :bool
+  (and (ballot-ok? bt bid) (>= (ballot-cmp bt bid pt pid) 0)))
+
+;; at aid accepted: the ballot and value accepted so far, (0, "", "") when none
+(defn accept-ok? [bt :i64 bid :string value :string pt :i64 pid :string at :i64 aid :string accepted :string] :bool
+  (and (ballot-ok? bt bid) (not (= value "")) (>= (ballot-cmp bt bid pt pid) 0)
+       (or (not (and (= bt at) (= bid aid))) (= value accepted))))
+
+(defn adopt? [at :i64 aid :string best-t :i64 best-id :string] :bool
+  (and (> at 0) (> (ballot-cmp at aid best-t best-id) 0)))
+
+;; ---------------------------------------------------------------------------
+;; Lease values
+
+(defn- lc-plain? [s :string] :bool
+  (let [b (vector-i64-from-bytes (string-to-utf8 s))]
+    (loop [i 0] (if (= i (vector-count b)) true (let [c (vector-at b i)] (if (and (>= c 33) (<= c 126) (not (= c 34)) (not (= c 92))) (recur (+ i 1)) false))))))
+
+(defn lease-text [node :string class :string slot :i64 epoch :i64 until :i64 revision :i64] :string
+  (str "{\"class\":\"" class "\",\"epoch\":" epoch ",\"node\":\"" node "\",\"revision\":" revision
+       ",\"slot\":" slot ",\"until\":" until "}"))
+
+;; enabled: the node is an enabled topology node (the caller looks it up in
+;; the verified topology)
+(defn valid-value? [node :string enabled :bool class :string slot :i64 epoch :i64 until :i64 now :i64] :bool
+  (and enabled (> (string-length node) 0) (lc-plain? node)
+       (>= (string-length class) 1) (<= (string-length class) 128) (lc-plain? class)
+       (>= slot 0) (<= slot 255) (>= epoch 1) (<= epoch 9007199254740991)
+       (>= now 0) (<= now 9007199254740991)
+       (>= until 0) (<= until 9007199254740991)
+       (<= until (+ now (+ (lease-ttl) (lease-skew))))))
+
+(defn base-of [class :string slot :i64] :string
+  (str "l_" (string-substring (sha256-hex (vector-i64-from-bytes (string-to-utf8 class))) 0 24) "_" slot))
+
+(defn id-of [base :string epoch :i64] :string (str base "_" epoch))
+
+;; ---------------------------------------------------------------------------
+;; The proposer's decision for epoch e and its chosen value (if any)
+
+(defn decide [me :string e :i64 has-value :bool v-node :string v-until :i64 now :i64] :string
+  (cond (or (< now 0) (> now 9007199254740991)
+            (and has-value (or (< v-until 0) (> v-until 9007199254740991)))) "lease/invalid-time"
+        (not has-value) "lease/propose-open"
+        (= me v-node) (if (> now (- v-until (lease-renew-before))) "lease/renew" "lease/hold")
+        (> now (+ v-until (lease-skew))) "lease/take-over"
+        :else "lease/held-by"))
+
+(defn decide-epoch [action :string e :i64] :i64
+  (cond (or (< e 0) (> e 9007199254740991)) -1
+        (= action "lease/propose-open") (if (< e 1) 1 e)
+        (or (= action "lease/renew") (= action "lease/take-over")) (if (= e 9007199254740991) -1 (+ e 1))
+        :else e))
+
+(defn held-now? [lease-node :string me :string until :i64 now :i64] :bool
+  (and (not (= me "")) (= lease-node me)
+       (>= now 0) (<= now 9007199254740991)
+       (>= until (lease-skew)) (<= until 9007199254740991)
+       (< now (- until (lease-skew)))))
+
+
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [b :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 b)))
+(defn- cp-str [b :vector-i64 i :i64 k :string] :string
+ (cond (= k "leaseFile") "/lease" (= k "task") "task" (= k "class") "task"
+       (= k "node") (if (or (= (cp-text b) "bad") (= (cp-text b) "expired")) "other" "node") :else ""))
+(defn- cp-num [b :vector-i64 i :i64 k :string] :i64
+ (cond (= k "slot") 0 (= k "epoch") (if (= (cp-text b) "good") 2 1)
+       (= k "until") (cond (= (cp-text b) "bad") -1 (= (cp-text b) "expired") 1 :else 200000) :else 0))
+(defn- cp-fs [a :string b :string c :string] :string "0")
+(defn- cp-read [a :string] :vector-i64 (vector-alloc 0))
+(defn- json-valid? [a :vector-i64] :bool true)
+(defn- json-canonical? [a :vector-i64] :bool true)
+(defn- json-count [a :vector-i64 b :i64] :i64 6)
+(defn- json-kind [a :vector-i64 b :i64] :i64 1)
+(defn- rt-now [] :i64 100000)
+(defn- rt-lease [cfg :vector-i64 e :i64] :vector-i64
+ (cp-bytes (if (= e 1) (if (= (cp-text cfg) "bad") "bad" "expired") "good")))
+(defn- rt-save [p :string b :vector-i64] :bool true)
+(defn- recovery-lease-problem [a :vector-i64 b :string c :string d :i64 e :i64] :string "recovery/lease-admitted")
+(defn- rt-lease-bound? [cfg :vector-i64 lease :vector-i64 epoch :i64 now :i64] :bool
+  (and (json-valid? lease) (json-canonical? lease) (= (json-kind lease 0) 1) (= (json-count lease 0) 6)
+       (= (cp-str lease 0 "class") (cp-str cfg 0 "task")) (= (cp-num lease 0 "slot") 0)
+       (= (cp-num lease 0 "epoch") epoch)
+       (valid-value? (cp-str lease 0 "node") true (cp-str cfg 0 "task") 0 epoch (cp-num lease 0 "until") now)))
+
+(defn- rt-current-lease [cfg :vector-i64 floor :i64] :vector-i64
+  (let [path (cp-str cfg 0 "leaseFile") status (cp-fs "D" path "")
+        saved (if (= status "1") (cp-read path) (vector-alloc 0))]
+    (if (not (or (= status "0") (and (= status "1") (json-valid? saved) (json-canonical? saved))))
+      (vector-alloc 0)
+      (let [e (if (>= (cp-num saved 0 "epoch") floor) (cp-num saved 0 "epoch") floor)
+            learned (rt-lease cfg e) now (rt-now) node (cp-str cfg 0 "node")]
+        (if false (vector-alloc 0)
+          (let [mine (= (cp-str learned 0 "node") node)
+                renew (or (and mine (> now (- (cp-num learned 0 "until") (lease-renew-before))))
+                          (not mine))
+                next (if (and renew (< e 9007199254740991)
+                           (or mine (> now (+ (cp-num learned 0 "until") (lease-skew)))))
+                         (rt-lease cfg (+ e 1)) learned)
+                ne (cp-num next 0 "epoch")
+                bound (and (or (= ne e) (and (< e 9007199254740991) (= ne (+ e 1))))
+                           (rt-lease-bound? cfg next ne (rt-now)))
+                saved (and bound (rt-save path next))]
+            (if (and saved (= (recovery-lease-problem next (cp-str cfg 0 "task") node ne (rt-now)) "recovery/lease-admitted"))
+              next (vector-alloc 0))))))))
+(defn main [] :i64
+ (if (and (= (vector-count (rt-current-lease (cp-bytes "bad") 1)) 0)
+          (= (cp-text (rt-current-lease (cp-bytes "expired") 1)) "good")) 0 1))

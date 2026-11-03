@@ -1,0 +1,29 @@
+{
+  "kind": "awai.inference-submission-systemd-fixture/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "target": "aarch64-linux-static in disposable one-CPU VM",
+  "compiler": {
+    "sourceCommit": "dd35c6379e3b87f024bf685fa8d61af0aa07cea1",
+    "sha256": "688324e0fdc7a93a664ae55fe0ad417e7a980ab844656f3f97889812363c9479"
+  },
+  "fixture": {
+    "sourceSha256": "b421a6334f5b112d9ff93f30dedc8ec59445c766afd8f19a1245a7c31f4566af",
+    "artifactSha256": "59fe21f4e25b8c3d2e83939109b8ce7fd33f06608a0aa0513a894acb1b888d9b",
+    "productionFunctions": "pr-unit-state, pr-run-decision, pr-prepare-submit and filesystem helper source copied",
+    "substitutions": "CID uses text identity; fixture-submit starts a transient /usr/bin/touch unit, not the resident curl/model provider"
+  },
+  "observed": {
+    "freshSystemdSubmissionAndMatchingUnitReuse": 0,
+    "afterStopLoadState": "not-found",
+    "afterStopSubState": "dead",
+    "missingUnitWithDurableRequestAndMarkerRefused": 0,
+    "unreachableUserBusState": "unit/unknown",
+    "unreachableUserBusDecision": "profile/submission-unknown",
+    "unreachableUserBusRefused": 0
+  },
+  "initialFixtureFailures": [
+    "A fixture using systemd-run --wait with RemainAfterExit timed out; changed to the production-style --no-block and bounded observation.",
+    "Setting only DBUS_SESSION_BUS_ADDRESS did not make the bus unavailable; setting both it and XDG_RUNTIME_DIR to missing paths yielded the actual failure."
+  ],
+  "scope": "Isolated one-time native fixture with real user systemd and local VM filesystem. Systemd version was not recorded. No complete resident, production pr-submit/curl, model inference, GitHub, crash during inference, power loss, concurrent writers or distributed fence was tested. The VM and task-owned files were removed."
+}

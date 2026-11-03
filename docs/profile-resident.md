@@ -1,5 +1,20 @@
 # Native Itonami profile residency
 
+The draft lease-group path now requires an independently provisioned
+`epoch-watermark` in each group directory. While holding a native scoped flock it
+advances the watermark before creating the next epoch's voter file; missing
+files at or below the watermark are refused. Epochs cannot skip ahead. Process
+death releases the kernel lock; a watermark without its epoch file still
+requires verified recovery. A leftover `.epoch-lock` directory from the earlier
+draft is refused and must be reconciled. The `.epoch-lockfile` inode must be
+retained and never renamed or unlinked while a group may run. Existing
+directories need an explicit migration; creating
+a new zero watermark after state loss is unsafe. A whole-directory rollback
+can replay both files and is not prevented. The scoped ARM64 native tests,
+including a three-server same-VM integration, are recorded in
+`docs/evidence/awai150-group-flock-20261103.json`; this is not Mac-host,
+network-failure, sudden-power-loss or production qualification.
+
 Tracked in [JUN-156](https://linear.app/kotobalabs/issue/JUN-156), with the
 production membership/admission boundaries in JUN-287/288/289.
 This extends [fenced recovery](fenced-profile-recovery.md) from a two-turn
@@ -503,3 +518,34 @@ configuration and dedicated VM qualification first, with physical C reboot
 deferred until unlock preparation. The real daily tick remains scheduled for
 2026-10-25 18:21:15.493 JST; a thread follow-up checks it after 18:45 JST.
 Neither the clock nor `nextAt` was advanced to claim elapsed-time evidence.
+
+## Local resident writer exclusion (draft)
+
+Cycle, refresh and archive operations take a scoped kernel flock on the fixed
+`<head>.resident-lockfile` before accessing shared state. A contender returns
+`resident/local-writer-busy`; a `run` process exits on that refusal or on an
+unlock failure instead of polling for the lock. The configured state paths
+must not equal the lock path, and the host must not unlink or replace its inode.
+
+The lock serializes cooperating processes using the same configured head on
+one host. It does not fence another host, differently aliased heads or shared
+caches, detached child processes, rollback, or writers that ignore the lock.
+The host must isolate those resources and independently provide lease/fencing
+and workload lifecycle controls. The Linux native
+[lock fixture](evidence/awai150-resident-lock-fixture.kotoba) uses stubbed
+resident operations; [its evidence](evidence/awai150-resident-lock-20261103.json)
+does not qualify Mac, real inference, process-tree cleanup or a fleet governor.
+
+### Native archive acknowledgement candidate
+
+`profile-resident archive-native CONFIG WORK REPO GH` invokes the native archive
+candidate under the same local resident lock. `WORK` is a fresh private path;
+the host must provision and reconcile it, the repository, executable,
+credentials, Git configuration and egress. After a matching independent
+readback, the resident rechecks the admitted head and publishes the bounded
+acknowledgement via a synced temporary file and rename. Unknown or failed work
+is not automatically retried, and an existing temporary file is retained.
+This entry point is a draft: the existing cron controller does not call it,
+work-directory retention is not automated, and production use requires the
+full process/credential/governor gates described in
+[native-github-checkpoint-archive.md](native-github-checkpoint-archive.md).

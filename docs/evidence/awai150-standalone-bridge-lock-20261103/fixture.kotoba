@@ -1,0 +1,24 @@
+(ns bridge-lock-check (:export [main]))
+(defn- cp-arg [i :i64] :string "/test/config")
+(defn- cp-safe-absolute? [s :string] :bool true)
+(defn- cp-exists? [s :string] :bool true)
+(defn- cp-read [s :string] :vector-i64 [1])
+(defn- cp-str [v :vector-i64 i :i64 k :string] :string "/test/head")
+(defn- json-valid? [v :vector-i64] :bool true)
+(defn- json-canonical? [v :vector-i64] :bool true)
+(defn- rt-lock-config-safe? [v :vector-i64 p :string] :bool true)
+(defn- cp-say [s :string] :i64 (let [x (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- br-command [] :i64 (let [x (cp-say "command-executed")] 7))
+(defn profile-cron-bridge-main [] :i64
+  (let [path (cp-arg 1)
+        cfg (if (and (cp-safe-absolute? path) (cp-exists? path)) (cp-read path) (vector-alloc 0))
+        head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
+    (if (not (and (json-valid? cfg) (json-canonical? cfg) (rt-lock-config-safe? cfg path)))
+      (let [x (cp-say "bridge/config-refused")] 2)
+      (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
+        (let [x (cp-say "bridge/local-writer-busy")] 1)
+        (let [result (br-command)
+              released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")]
+          (if released result (let [x (cp-say "bridge/local-unlock-failed")] 2)))))))
+
+(defn main [] :i64 (profile-cron-bridge-main))

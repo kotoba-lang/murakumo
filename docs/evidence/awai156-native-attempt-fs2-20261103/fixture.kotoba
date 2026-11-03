@@ -1,0 +1,48 @@
+(ns attempt-fs2-fixture (:export [main]))
+(defn- jn-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- en-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn field-problem [s :string] :string
+  (let [b (en-bytes s)]
+    (if (> (vector-count b) 128) "enroll/field-too-long"
+      (loop [i 0]
+        (if (= i (vector-count b)) "enroll/ok"
+          (let [c (vector-at b i)]
+            (if (and (>= c 33) (<= c 126) (not (= c 34)) (not (= c 92))) (recur (+ i 1)) "enroll/field-charset")))))))
+(defn- jn-field [s :string k :i64] :string
+  (let [b (jn-bytes s)]
+    (loop [i 0 start 0 n 0]
+      (cond (= i (vector-count b)) (if (= n k) (string-substring s start i) "")
+            (= (vector-at b i) 32) (if (= n k) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ n 1)))
+            :else (recur (+ i 1) start n)))))
+(defn- jn-attempt-root? [dir :string] :bool
+  (and (> (string-length dir) 1) (<= (string-length dir) 128)
+       (= (string-substring dir 0 1) "/")
+       (< (string-index-of dir "..") 0) (< (string-index-of dir "_SEP") 0)
+       (= (field-problem dir) "enroll/ok")))
+(defn- jn-attempt-id? [jid :string] :bool
+  (let [b (jn-bytes jid)]
+    (and (= (vector-count b) 64)
+      (loop [i 0]
+        (if (= i 64) true
+          (let [c (vector-at b i)]
+            (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102)))
+              (recur (+ i 1)) false)))))))
+(defn- jn-fs [op :string path :string tail :string] :string
+  (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+    (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
+      (string-substring r 5 (string-length r)) "")))
+(defn- jn-private-dir? [path :string] :bool
+  (let [m (jn-fs "U" path "")]
+    (and (= (jn-field m 0) "448") (= (jn-field m 3) "1"))))
+(defn- jn-attempt [dir :string jid :string] :string
+  (if (or (not (jn-attempt-root? dir)) (not (jn-attempt-id? jid))
+          (not (jn-private-dir? dir))) "job/attempt-config"
+    (let [path (str dir "/" jid) made (jn-fs "I" path "")]
+      (if (not (= made "1")) "job/attempt-exists-or-unknown"
+        (if (and (= (jn-fs "H" path "0700") "1") (jn-private-dir? path)
+                 (= (jn-fs "M" path "") "1") (= (jn-fs "M" dir "") "1"))
+          "job/attempt-recorded" "job/attempt-unknown")))))
+(defn main [] :i64
+  (let [p (typed-cap-call 38 :string :string "0") id (typed-cap-call 38 :string :string "1")
+        r (jn-attempt p id) z (typed-cap-call 37 :string :string (str r "\n"))]
+    (if (= r "job/attempt-recorded") 0 1)))

@@ -1,0 +1,8 @@
+(ns awai150-flock-fixture (:export [main]))
+(defn main [] :i64
+ (let [mode (typed-cap-call 38 :string :string "0") path "/var/tmp/awai150-flock/lock"
+       got (typed-cap-call 35 :string :string (str path "FLOCK_SEP"))]
+  (cond (= mode "hold") (if (= got "1") (let [x (typed-cap-call 37 :string :string "ready\n") y (typed-cap-call 7 :string :string "sleep 30000")] 0) 1)
+        (= mode "contended") (if (= got "0") 0 2)
+        (= mode "free") (if (= got "1") (if (= (typed-cap-call 35 :string :string (str path "UNLOCK_SEP")) "1") 0 3) 4)
+        :else 5)))

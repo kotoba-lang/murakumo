@@ -1,0 +1,370 @@
+(ns awai150-native-metadata-fixture (:export [main]))
+(defn- s2-m32 [x :i64] :i64 (bit-and x 4294967295))
+(defn- s2-rotr [x :i64 n :i64] :i64
+  (s2-m32 (bit-or (u64-shift-right x n) (i64-shift-left x (- 32 n)))))
+(defn- s2-k [] :vector-i64
+  [1116352408 1899447441 3049323471 3921009573 961987163 1508970993 2453635748 2870763221
+   3624381080 310598401 607225278 1426881987 1925078388 2162078206 2614888103 3248222580
+   3835390401 4022224774 264347078 604807628 770255983 1249150122 1555081692 1996064986
+   2554220882 2821834349 2952996808 3210313671 3336571891 3584528711 113926993 338241895
+   666307205 773529912 1294757372 1396182291 1695183700 1986661051 2177026350 2456956037
+   2730485921 2820302411 3259730800 3345764771 3516065817 3600352804 4094571909 275423344
+   430227734 506948616 659060556 883997877 958139571 1322822218 1537002063 1747873779
+   1955562222 2024104815 2227730452 2361852424 2428436474 2756734187 3204031479 3329325298])
+(defn- s2-iv [words :i64] :vector-i64
+  (if (= words 7)
+    [3238371032 914150663 812702999 4144912697 4290775857 1750603025 1694076839 3204075428]
+    [1779033703 3144134277 1013904242 2773480762 1359893119 2600822924 528734635 1541459225]))
+(defn- s2-total [n :i64] :i64 (* (quot (+ n 72) 64) 64))
+(defn- s2-byte [data :vector-i64 i :i64 total :i64] :i64
+  (let [n (vector-count data)]
+    (cond (< i n) (vector-at data i)
+          (= i n) 128
+          (< i (- total 8)) 0
+          :else (bit-and (u64-shift-right (* n 8) (* (- (- total 1) i) 8)) 255))))
+(defn- s2-work [state :vector-i64] :vector-i64
+  (loop [i 0 out (vector-alloc 80)]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out i (vector-at state i))))))
+(defn- s2-load [w :vector-i64 data :vector-i64 start :i64 total :i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 16) out
+      (let [p (+ start (* i 4))
+            x (bit-or (bit-or (i64-shift-left (s2-byte data p total) 24)
+                              (i64-shift-left (s2-byte data (+ p 1) total) 16))
+                      (bit-or (i64-shift-left (s2-byte data (+ p 2) total) 8)
+                              (s2-byte data (+ p 3) total)))]
+        (recur (+ i 1) (vector-assoc! out (+ 16 i) x))))))
+(defn- s2-expand [w :vector-i64] :vector-i64
+  (loop [t 16 out w]
+    (if (= t 64) out
+      (let [w15 (vector-at out (+ 16 (- t 15)))
+            w2 (vector-at out (+ 16 (- t 2)))
+            s0 (bit-xor (bit-xor (s2-rotr w15 7) (s2-rotr w15 18)) (u64-shift-right w15 3))
+            s1 (bit-xor (bit-xor (s2-rotr w2 17) (s2-rotr w2 19)) (u64-shift-right w2 10))
+            x (s2-m32 (+ (+ (vector-at out (+ 16 (- t 16))) s0) (+ (vector-at out (+ 16 (- t 7))) s1)))]
+        (recur (+ t 1) (vector-assoc! out (+ 16 t) x))))))
+(defn- s2-begin [w :vector-i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out (+ 8 i) (vector-at out i))))))
+(defn- s2-rounds [w :vector-i64 k :vector-i64] :vector-i64
+  (loop [t 0 out w]
+    (if (= t 64) out
+      (let [a (vector-at out 8) b (vector-at out 9) c (vector-at out 10) d (vector-at out 11)
+            e (vector-at out 12) f (vector-at out 13) g (vector-at out 14) h (vector-at out 15)
+            big1 (bit-xor (bit-xor (s2-rotr e 6) (s2-rotr e 11)) (s2-rotr e 25))
+            ch (bit-xor (bit-and e f) (bit-and (s2-m32 (bit-not e)) g))
+            t1 (s2-m32 (+ (+ h big1) (+ ch (+ (vector-at k t) (vector-at out (+ 16 t))))))
+            big0 (bit-xor (bit-xor (s2-rotr a 2) (s2-rotr a 13)) (s2-rotr a 22))
+            maj (bit-xor (bit-xor (bit-and a b) (bit-and a c)) (bit-and b c))
+            t2 (s2-m32 (+ big0 maj))
+            next (-> out (vector-assoc! 15 g) (vector-assoc! 14 f) (vector-assoc! 13 e)
+                         (vector-assoc! 12 (s2-m32 (+ d t1))) (vector-assoc! 11 c) (vector-assoc! 10 b)
+                         (vector-assoc! 9 a) (vector-assoc! 8 (s2-m32 (+ t1 t2))))]
+        (recur (+ t 1) next)))))
+(defn- s2-add [w :vector-i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out i (s2-m32 (+ (vector-at out i) (vector-at out (+ 8 i)))))))))
+(defn- s2-out [w :vector-i64 words :i64] :vector-i64
+  (loop [i 0 out (vector-alloc (* words 4))]
+    (if (= i (* words 4)) out
+      (recur (+ i 1) (vector-assoc! out i (bit-and (u64-shift-right (vector-at w (quot i 4)) (* (- 3 (rem i 4)) 8)) 255))))))
+(defn- s2-digest [words :i64 data :vector-i64] :vector-i64
+  (let [total (s2-total (vector-count data)) k (s2-k)]
+    (loop [start 0 w (s2-work (s2-iv words))]
+      (if (>= start total) (s2-out w words)
+        (recur (+ start 64) (s2-add (s2-rounds (s2-begin (s2-expand (s2-load w data start total))) k)))))))
+(defn sha256 [data :vector-i64] :vector-i64 (s2-digest 8 data))
+(defn- s2-nibble [v :i64] :string
+  (case v 0 "0" 1 "1" 2 "2" 3 "3" 4 "4" 5 "5" 6 "6" 7 "7"
+          8 "8" 9 "9" 10 "a" 11 "b" 12 "c" 13 "d" 14 "e" "f"))
+(defn hex [bytes :vector-i64] :string
+  (loop [i 0 out ""]
+    (if (= i (vector-count bytes)) out
+      (let [b (vector-at bytes i)]
+        (recur (+ i 1) (string-concat out (string-concat (s2-nibble (quot b 16)) (s2-nibble (rem b 16)))))))))
+(defn sha256-hex [data :vector-i64] :string (hex (sha256 data)))
+(defn- jr-at [b :vector-i64 i :i64] :i64 (if (and (>= i 0) (< i (vector-count b))) (vector-at b i) -1))
+(defn- jr-ws? [c :i64] :bool (or (= c 32) (= c 9) (= c 10) (= c 13)))
+(defn- jr-skip [b :vector-i64 i :i64] :i64 (loop [j i] (if (jr-ws? (jr-at b j)) (recur (+ j 1)) j)))
+(defn- jr-digit? [c :i64] :bool (and (>= c 48) (<= c 57)))
+(defn- jr-digits [b :vector-i64 j :i64] :i64 (loop [k j] (if (jr-digit? (jr-at b k)) (recur (+ k 1)) k)))
+(defn- jr-hex [c :i64] :i64
+  (cond (jr-digit? c) (- c 48)
+        (and (>= c 97) (<= c 102)) (- c 87)
+        (and (>= c 65) (<= c 70)) (- c 55)
+        :else -1))
+(defn- jr-hex4 [b :vector-i64 k :i64] :i64
+  (let [a (jr-hex (jr-at b k)) c (jr-hex (jr-at b (+ k 1))) d (jr-hex (jr-at b (+ k 2))) e (jr-hex (jr-at b (+ k 3)))]
+    (if (or (< a 0) (< c 0) (< d 0) (< e 0)) -1 (+ (* a 4096) (+ (* c 256) (+ (* d 16) e))))))
+(defn- jr-number [b :vector-i64 i :i64] :i64
+  (let [j0 (if (= (jr-at b i) 45) (+ i 1) i)
+        c (jr-at b j0)
+        j1 (cond (= c 48) (+ j0 1) (and (>= c 49) (<= c 57)) (jr-digits b (+ j0 1)) :else -1)]
+    (if (< j1 0) -4
+      (let [j2 (if (= (jr-at b j1) 46) (if (jr-digit? (jr-at b (+ j1 1))) (jr-digits b (+ j1 2)) -1) j1)]
+        (if (< j2 0) -4
+          (let [e (jr-at b j2)]
+            (if (or (= e 101) (= e 69))
+              (let [k (if (or (= (jr-at b (+ j2 1)) 43) (= (jr-at b (+ j2 1)) 45)) (+ j2 2) (+ j2 1))]
+                (if (jr-digit? (jr-at b k)) (jr-digits b (+ k 1)) -4))
+              j2)))))))
+(defn- jr-skip-string [b :vector-i64 i :i64] :i64
+  (loop [j (+ i 1)] (let [c (vector-at b j)] (cond (= c 34) (+ j 1) (= c 92) (recur (+ j 2)) :else (recur (+ j 1))))))
+(defn- jr-skip-value [b :vector-i64 i :i64] :i64
+  (let [c (vector-at b i)]
+    (cond (= c 34) (jr-skip-string b i)
+          (or (= c 123) (= c 91))
+          (loop [j (+ i 1) d 1]
+            (let [x (vector-at b j)]
+              (cond (= x 34) (recur (jr-skip-string b j) d)
+                    (or (= x 123) (= x 91)) (recur (+ j 1) (+ d 1))
+                    (or (= x 125) (= x 93)) (if (= d 1) (+ j 1) (recur (+ j 1) (- d 1)))
+                    :else (recur (+ j 1) d))))
+          :else (loop [j i] (let [x (jr-at b j)] (if (or (< x 0) (= x 44) (= x 125) (= x 93) (jr-ws? x)) j (recur (+ j 1))))))))
+(defn json-kind [b :vector-i64 i :i64] :i64
+  (let [c (jr-at b i)]
+    (cond (= c 123) 1 (= c 91) 2 (= c 34) 3 (or (= c 45) (jr-digit? c)) 4
+          (= c 116) 5 (= c 102) 6 (= c 110) 7 :else 0)))
+(defn json-element [b :vector-i64 arr :i64 n :i64] :i64
+  (if (or (not (= (jr-at b arr) 91)) (< n 0)) -1
+    (loop [j (jr-skip b (+ arr 1)) k 0]
+      (if (= (jr-at b j) 93) -1
+        (if (= k n) j
+          (let [m (jr-skip b (jr-skip-value b j))]
+            (if (= (jr-at b m) 44) (recur (jr-skip b (+ m 1)) (+ k 1)) -1)))))))
+(defn json-count [b :vector-i64 i :i64] :i64
+  (let [c (jr-at b i)]
+    (if (not (or (= c 123) (= c 91))) 0
+      (let [j0 (jr-skip b (+ i 1))]
+        (if (or (= (jr-at b j0) 125) (= (jr-at b j0) 93)) 0
+          (loop [j j0 n 1]
+            (let [v (if (= c 123) (jr-skip b (+ (jr-skip b (jr-skip-string b j)) 1)) j)
+                  m (jr-skip b (jr-skip-value b v))]
+              (if (= (jr-at b m) 44) (recur (jr-skip b (+ m 1)) (+ n 1)) n))))))))
+(defn- jr-unescape [d :i64] :i64
+  (cond (= d 98) 8 (= d 102) 12 (= d 110) 10 (= d 114) 13 (= d 116) 9 :else d))
+(defn- jr-put-utf8 [out :vector-i64 n :i64 cp :i64] :i64
+  (cond (< cp 128) (let [z (vector-assoc! out n cp)] (+ n 1))
+        (< cp 2048) (let [z (vector-assoc! out n (+ 192 (quot cp 64))) y (vector-assoc! out (+ n 1) (+ 128 (rem cp 64)))] (+ n 2))
+        (< cp 65536) (let [z (vector-assoc! out n (+ 224 (quot cp 4096))) y (vector-assoc! out (+ n 1) (+ 128 (rem (quot cp 64) 64)))
+                           x (vector-assoc! out (+ n 2) (+ 128 (rem cp 64)))] (+ n 3))
+        :else (let [z (vector-assoc! out n (+ 240 (quot cp 262144))) y (vector-assoc! out (+ n 1) (+ 128 (rem (quot cp 4096) 64)))
+                    x (vector-assoc! out (+ n 2) (+ 128 (rem (quot cp 64) 64))) w (vector-assoc! out (+ n 3) (+ 128 (rem cp 64)))] (+ n 4))))
+(defn json-string-bytes [b :vector-i64 i :i64] :vector-i64
+  (let [e (jr-skip-string b i) out (vector-alloc (- e i))
+        n (loop [j (+ i 1) n 0]
+            (if (>= j (- e 1)) n
+              (let [c (vector-at b j)]
+                (if (= c 92)
+                  (let [d (vector-at b (+ j 1))]
+                    (if (= d 117)
+                      (let [u (jr-hex4 b (+ j 2))
+                            pair (and (>= u 55296) (<= u 56319))
+                            cp (if pair (+ 65536 (+ (* (- u 55296) 1024) (- (jr-hex4 b (+ j 8)) 56320))) u)]
+                        (recur (+ j (if pair 12 6)) (jr-put-utf8 out n cp)))
+                      (let [z (vector-assoc! out n (jr-unescape d))] (recur (+ j 2) (+ n 1)))))
+                  (let [z (vector-assoc! out n c)] (recur (+ j 1) (+ n 1)))))))]
+    (loop [k 0 r (vector-alloc n)] (if (= k n) r (recur (+ k 1) (vector-assoc! r k (vector-at out k)))))))
+(defn json-string [b :vector-i64 i :i64] :string (string-from-utf8 (bytes-from-vector-i64 (json-string-bytes b i))))
+(defn json-int-ok? [b :vector-i64 i :i64] :bool
+  (let [j0 (if (= (jr-at b i) 45) (+ i 1) i) e (jr-digits b j0) x (jr-at b e)]
+    (and (jr-digit? (jr-at b j0)) (not (= x 46)) (not (= x 101)) (not (= x 69)) (<= (- e j0) 16)
+         (<= (loop [k j0 v 0] (if (= k e) v (recur (+ k 1) (+ (* v 10) (- (vector-at b k) 48))))) 9007199254740991))))
+(defn- jr-canon-string? [b :vector-i64 i :i64 e :i64] :bool
+  (loop [j (+ i 1)]
+    (if (>= j (- e 1)) true
+      (if (= (vector-at b j) 92)
+        (let [d (vector-at b (+ j 1))]
+          (cond (or (= d 34) (= d 92) (= d 98) (= d 102) (= d 110) (= d 114) (= d 116)) (recur (+ j 2))
+                (= d 117)
+                (let [u (jr-hex4 b (+ j 2))
+                      lower (loop [k 2] (if (= k 6) true (let [h (vector-at b (+ j k))] (if (and (>= h 65) (<= h 70)) false (recur (+ k 1))))))]
+                  (if (and lower (< u 32) (not (= u 8)) (not (= u 9)) (not (= u 10)) (not (= u 12)) (not (= u 13)))
+                    (recur (+ j 6)) false))
+                :else false))
+        (recur (+ j 1))))))
+(defn- jr-canon-key? [b :vector-i64 i :i64 e :i64] :bool
+  (loop [j (+ i 1) digits true]
+    (if (>= j (- e 1)) (not digits)
+      (let [c (vector-at b j)] (if (>= c 128) false (recur (+ j 1) (and digits (jr-digit? c))))))))
+(defn- jr-after? [b :vector-i64 a :i64 ae :i64 c :i64 ce :i64] :bool
+  (loop [k 1]
+    (let [x (if (< (+ a k) (- ae 1)) (vector-at b (+ a k)) -1) y (if (< (+ c k) (- ce 1)) (vector-at b (+ c k)) -1)]
+      (cond (and (< x 0) (< y 0)) false
+            (= x y) (recur (+ k 1))
+            :else (> y x)))))
+(defn- jr-canon-number? [b :vector-i64 i :i64 e :i64] :bool
+  (and (json-int-ok? b i) (= (jr-digits b (if (= (vector-at b i) 45) (+ i 1) i)) e)
+       (not (and (= (vector-at b i) 45) (= (vector-at b (+ i 1)) 48)))))
+(defn json-canonical? [b :vector-i64] :bool
+  (let [kinds (vector-alloc 65) want (vector-alloc 65) pa (vector-alloc 65) pe (vector-alloc 65)]
+    (loop [j 0 sp 0]
+      (if (= j (vector-count b)) true
+        (let [c (vector-at b j)]
+          (cond (jr-ws? c) false
+                (or (= c 123) (= c 91))
+                (let [z (vector-assoc! kinds sp (if (= c 123) 1 2)) y (vector-assoc! want sp (if (= c 123) 1 0)) x (vector-assoc! pa sp -1)]
+                  (recur (+ j 1) (+ sp 1)))
+                (or (= c 125) (= c 93)) (recur (+ j 1) (- sp 1))
+                (= c 44) (let [z (if (and (> sp 0) (= (vector-at kinds (- sp 1)) 1)) (vector-assoc! want (- sp 1) 1) want)] (recur (+ j 1) sp))
+                (= c 58) (recur (+ j 1) sp)
+                (= c 34)
+                (let [e (jr-skip-string b j)]
+                  (if (not (jr-canon-string? b j e)) false
+                    (if (and (> sp 0) (= (vector-at want (- sp 1)) 1))
+                      (let [d (- sp 1)]
+                        (if (and (jr-canon-key? b j e) (or (< (vector-at pa d) 0) (jr-after? b (vector-at pa d) (vector-at pe d) j e)))
+                          (let [z (vector-assoc! pa d j) y (vector-assoc! pe d e) x (vector-assoc! want d 0)] (recur e sp))
+                          false))
+                      (recur e sp))))
+                (or (= c 45) (jr-digit? c))
+                (let [e (jr-number b j)] (if (jr-canon-number? b j e) (recur e sp) false))
+                :else (recur (jr-skip-value b j) sp)))))))
+(defn hex-value [c :i64] :i64
+  (cond (and (>= c 48) (<= c 57)) (- c 48)
+        (and (>= c 97) (<= c 102)) (- c 87)
+        :else -1))
+(defn hex-from? [s :string i :i64 n :i64] :bool
+  (cond (>= i n) true
+        (< (hex-value (string-code-point-at s i)) 0) false
+        :else (recur s (inc i) n)))
+(defn same-from? [s :string p :string i :i64] :bool
+  (cond (>= i (string-length p)) true
+        (= (string-code-point-at s i) (string-code-point-at p i)) (recur s p (inc i))
+        :else false))
+(defn digest-problem [d :string] :string
+  (let [n (string-length d)]
+    (cond (and (>= n 7) (same-from? d "sha256:" 0))
+            (if (= n 71) (if (hex-from? d 7 71) "oci/ok" "oci/bad-digest") "oci/bad-digest")
+          (> (string-index-of d ":") 0) "itonami/unsupported-digest"
+          :else "oci/bad-digest")))
+(defn b32-char [v :i64] :string (string-substring "abcdefghijklmnopqrstuvwxyz234567" v (inc v)))
+(defn cid-byte [d :string codec :i64 i :i64] :i64
+  (cond (= i 0) 1
+        (= i 1) codec
+        (= i 2) 18
+        (= i 3) 32
+        :else (let [k (+ 7 (* 2 (- i 4)))]
+                (+ (* 16 (hex-value (string-code-point-at d k))) (hex-value (string-code-point-at d (inc k)))))))
+(defn b32-from [d :string codec :i64 i :i64 acc :i64 nbits :i64 out :string] :string
+  (cond (>= nbits 5)
+          (let [m (- nbits 5) v (bit-and (u64-shift-right acc m) 31)]
+            (recur d codec i (bit-and acc (dec (i64-shift-left 1 m))) m (string-concat out (b32-char v))))
+        (< i 36)
+          (recur d codec (inc i) (bit-or (i64-shift-left acc 8) (cid-byte d codec i)) (+ nbits 8) out)
+        (> nbits 0) (string-concat out (b32-char (bit-and (i64-shift-left acc (- 5 nbits)) 31)))
+        :else out))
+(defn digest-cid [d :string codec :i64] :string
+  (cond (not (= (digest-problem d) "oci/ok")) ""
+        (= codec 85) (b32-from d codec 0 0 0 "b")
+        (= codec 113) (b32-from d codec 0 0 0 "b")
+        :else ""))
+(defn cp [s :string i :i64] :i64 (string-code-point-at s i))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-frame [op :string path :string tail :string] :string
+  (str "\u0000FS2\u0000" op path "\u0000" tail))
+(defn- cp-fs [op :string path :string tail :string] :string
+  (let [r (typed-cap-call :fs/app-data :string :string (cp-frame op path tail))]
+    (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
+      (string-substring r 5 (string-length r)) "")))
+(defn- cp-exists? [p :string] :bool (= (cp-fs "D" p "") "1"))
+(defn- cp-read-op [p :string op :string tail :string] :vector-i64
+  (let [r (typed-cap-call :fs/app-data :string :bytes (cp-frame op p tail)) n (bytes-count r)]
+    (if (and (>= n 5) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
+             (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))
+      (vector-i64-from-bytes (bytes-slice r 5 n)) (vector-alloc 0))))
+(defn- cp-read [p :string] :vector-i64 (cp-read-op p "A" ""))
+(defn- cp-cid [b :vector-i64] :string (digest-cid (str "sha256:" (sha256-hex b)) 85))
+(defn checkpoint-path? [s :string] :bool
+  (let [b (cp-bytes s) n (vector-count b)]
+    (and (> n 0) (<= n 120) (< (string-index-of s "_SEP") 0)
+      (loop [i 0 start true]
+        (if (= i n) (not start)
+          (let [c (vector-at b i)]
+            (cond (= c 47) (if start false (recur (+ i 1) true))
+                  (or (and (>= c 97) (<= c 122)) (and (>= c 65) (<= c 90)) (and (>= c 48) (<= c 57)) (= c 95) (= c 45)) (recur (+ i 1) false)
+                  (= c 46) (if start false (if (and (> i 0) (= (vector-at b (- i 1)) 46)) false (recur (+ i 1) false)))
+                  :else false)))))))
+(defn- cp-cut [b :vector-i64 start :i64] :i64
+  (let [end (if (< (+ start 4096) (vector-count b)) (+ start 4096) (vector-count b))]
+    (loop [i start]
+      (cond (>= i end) end
+            (or (= (vector-at b i) 87) (= (vector-at b i) 65)) (+ i 1)
+            :else (recur (+ i 1))))))
+(defn- cp-piece [p :string b :vector-i64 i :i64 e :i64 first :bool] :i64
+  (let [prefix (cp-bytes (cp-frame (if first "B" "C") p "")) n (vector-count prefix)
+        v (loop [k 0 v (vector-alloc (+ n (- e i)))]
+            (if (= k (+ n (- e i))) v
+              (recur (+ k 1) (vector-assoc! v k (if (< k n) (vector-at prefix k) (vector-at b (+ i (- k n))))))))
+        z (typed-cap-call :fs/app-data :bytes :bytes (bytes-from-vector-i64 v))] 0))
+(defn- cp-write [p :string b :vector-i64] :bool
+  (let [z (loop [i 0 first true]
+            (let [e (cp-cut b i) x (cp-piece p b i e first)]
+              (if (= e (vector-count b)) 0 (recur e false))))
+        flush (cp-fs "M" p "")]
+    (and (= flush "1") (= (cp-cid (cp-read p)) (cp-cid b)))))
+(defn- cp-put [store :string b :vector-i64] :string
+  (let [cid (cp-cid b) p (str store "/" cid)]
+    (if (or (> (vector-count b) 131072)
+            (if (cp-exists? p) (not (= (cp-cid (cp-read p)) cid)) (not (cp-write p b)))) "" cid)))
+(defn- cp-spawn [s :string] :string (typed-cap-call 20 :string :string s))
+(defn- cp-a [] :string "ARG_SEP")
+(defn- cp-git [repo :string args :string] :string
+  (cp-spawn (str "/usr/bin/git" (cp-a) "--no-pager" (cp-a) "-c" (cp-a) "core.hooksPath=/dev/null"
+    (cp-a) "-c" (cp-a) "core.fsmonitor=false" (cp-a) "-c" (cp-a) "gc.auto=0"
+    (cp-a) "-c" (cp-a) "core.autocrlf=false" (cp-a) "-c" (cp-a) "core.attributesFile=/dev/null"
+    (cp-a) "-c" (cp-a) "commit.gpgSign=false"
+    (cp-a) "-c" (cp-a) "user.name=Itonami checkpoint"
+    (cp-a) "-c" (cp-a) "user.email=checkpoint@example.invalid"
+    (cp-a) "-C" (cp-a) repo (cp-a) args)))
+(defn- cp-int [s :string] :i64
+  (let [b (cp-bytes s)] (if (or (= (vector-count b) 0) (> (vector-count b) 9)) -1
+    (loop [i 0 n 0] (if (= i (vector-count b)) n
+      (let [c (vector-at b i)] (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -1)))))))
+(defn- cp-meta-field [s :string wanted :i64] :string
+  (let [b (cp-bytes s) n (vector-count b)]
+    (loop [i 0 start 0 field 0]
+      (cond (= i n) (if (= field wanted) (string-substring s start i) "")
+            (= (vector-at b i) 32) (if (= field wanted) (string-substring s start i) (recur (+ i 1) (+ i 1) (+ field 1)))
+            :else (recur (+ i 1) start field)))))
+(defn- cp-kind [p :string] :string (cp-meta-field (cp-fs "O" p "") 3))
+(defn- cp-size [p :string] :i64
+  (let [m (cp-fs "O" p "")]
+    (if (= (cp-meta-field m 3) "0") (cp-int (cp-meta-field m 1)) -1)))
+(defn- cp-mkdir [p :string] :bool
+  (or (= (cp-fs "I" p "") "1") (= (cp-kind p) "1")))
+(defn- cp-real-parents? [base :string rel :string create :bool] :bool
+  (loop [i 0]
+    (if (= i (string-length rel)) true
+      (if (not (= (string-substring rel i (+ i 1)) "/")) (recur (+ i 1))
+        (let [p (str base "/" (string-substring rel 0 i))
+              before (cp-kind p)
+              made (if (and create (= before "")) (cp-mkdir p) false)
+              after (if made (cp-kind p) before)]
+          (if (= after "1") (recur (+ i 1)) false))))))
+(defn- cp-capture-untracked [repo :string store :string list :vector-i64] :string
+  (if (or (not (json-canonical? list)) (not (= (json-kind list 0) 2)) (> (json-count list 0) 16)) ""
+    (loop [i 0 prev "" out "["]
+      (if (= i (json-count list 0)) (str out "]")
+        (let [el (json-element list 0 i) path (if (= (json-kind list el) 3) (json-string list el) "")
+              admitted (and (checkpoint-path? path) (> (string-compare path prev) 0)
+                         (= (string-index-of (cp-git repo (str "ls-files" (cp-a) "--error-unmatch" (cp-a) "--" (cp-a) path)) "1\n") 0)
+                         (= (string-index-of (cp-git repo (str "check-ignore" (cp-a) "--" (cp-a) path)) "1\n") 0))
+              st (if admitted (cp-spawn (str "/usr/bin/stat" (cp-a) "--format=%a:%F" (cp-a) "--" (cp-a) repo "/" path)) "refused")
+              mode (cond (= st "0\n644:regular file\n") "644" (= st "0\n755:regular file\n") "755" :else "")
+              cid (if (and (not (= mode "")) (cp-real-parents? repo path false)) (cp-put store (cp-read (str repo "/" path))) "")]
+          (if (= cid "") "" (recur (+ i 1) path (str out (if (= i 0) "" ",") "{\"cid\":\"" cid "\",\"mode\":\"" mode "\",\"path\":\"" path "\"}"))))))))
+(defn lower [c :i64] :i64 (if (and (>= c 65) (<= c 90)) (+ c 32) c))
+
+(defn main [] :i64
+ (let [root "/var/tmp/awai150-meta" repo (str root "/repo") store (str root "/store")
+       file (str repo "/dir/file") link (str repo "/link") pipe (str repo "/pipe")]
+  (if (and (= (cp-kind file) "0") (= (cp-size file) 5) (= (cp-kind link) "2") (= (cp-size link) -1)
+           (= (cp-kind pipe) "3") (cp-mkdir (str repo "/dir")) (not (cp-mkdir link))
+           (cp-real-parents? repo "dir/file" false) (not (cp-real-parents? repo "link/file" false))
+           (cp-real-parents? repo "new/deep/file" true) (= (cp-kind (str repo "/new/deep")) "1")
+           (= (cp-fs "H" file "755") "1") (= (cp-meta-field (cp-fs "O" file "") 0) "493")
+           (= (cp-fs "H" file "644") "1")
+           (not (= (cp-capture-untracked repo store (cp-bytes "[\"dir/file\"]")) ""))
+           (= (cp-capture-untracked repo store (cp-bytes "[\"link/file\"]")) "")
+           (= (cp-capture-untracked repo store (cp-bytes "[\"special\"]")) "")) 0 1)))

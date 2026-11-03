@@ -1,0 +1,14 @@
+{
+  "kind": "awai.lease-group-crash-window-native-observation/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "sourceCommit": "6be0a26a1666274d2cf5916fecbef852f712e929",
+  "compilerSha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "fixture": "awai150-group-watermark-fixture.kotoba",
+  "fixtureSha256": "30f45a4fe6d63ee8f5b7d28451cda7ddc848c357704c23ef0556c28c21e2a456",
+  "environment": "Disposable 1-CPU, 2-GiB ARM64 Linux Podman VM; real native FS2 operations on VM filesystem; stopped and removed",
+  "injections": {
+    "afterWatermarkBeforeState": {"sourceSha256": "65899df40e8046bf7e91a3462acb862de7a396cee569ef6cf63536adaf283be7", "imageSha256": "aa6a8f7fba62a70e6dc2c32ff470a7ceefa22d390335016d3ef49f8db5dcc54c", "method": "Insert 30-second native clock sleep immediately before ln-init-fresh(file); observe advanced watermark and lock with no epoch file, then SIGKILL and wait for that task-owned PID.", "observed": "Existing lock refused. After manually removing it only after confirmed process death, the same epoch still refused and no epoch state was recreated."},
+    "afterStateBeforeVote": {"sourceSha256": "1a6a658c425acd297f4e8d8b64cc8fba434e1b574f2123c19bc8c33c8930e9ec", "imageSha256": "bb9444edd89127de7a6293a784839cebdb22185adc327ef9d4a433b3a5e61b27", "method": "Insert 30-second native clock sleep immediately after ln-init-fresh(file); observe initialized file and lock, then SIGKILL and wait for that task-owned PID.", "observed": "Existing lock refused. After manually removing it only after confirmed process death, a fresh process successfully prepared the same epoch."}
+  },
+  "limits": "The sleeps are test-only source mutations. Lock removal was manual in an isolated fixture, not an automatic safe recovery mechanism. No concurrent production writer, PID reuse, service restart, quorum, external anchor, power cut, Mac runtime or full bot was tested."
+}

@@ -1,0 +1,57 @@
+(ns awai150-head-repair-fixture (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [b :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 b)))
+(defn- cp-str [b :vector-i64 i :i64 k :string] :string
+  (cond (= k "head") (cp-text b) (= k "checkpoint") "root" (= k "store") "store"
+        (= k "request") "request" (= k "candidateHead") "candidate" :else "other"))
+(defn- cp-num [b :vector-i64 i :i64 k :string] :i64 1)
+(defn- cp-exists? [p :string] :bool (or (= p "head-broken") (= p "head-intact")))
+(defn- cp-read [p :string] :vector-i64 (cp-bytes p))
+(defn- cp-load [s :string r :string] :vector-i64 (cp-bytes r))
+(defn- cp-block? [s :string r :string] :bool true)
+(defn- cp-payload [b :vector-i64] :i64 0)
+(defn- rt-request-id [p :bool b :vector-i64 prior :string] :string "request")
+(defn- rt-pins-ok? [c :vector-i64] :bool true)
+(defn- rt-root? [c :vector-i64 b :vector-i64] :bool true)
+(defn- rt-intact-head? [c :vector-i64 h :vector-i64] :bool (= (cp-text h) "head-intact"))
+(defn- rt-admitted-head? [c :vector-i64 h :vector-i64] :bool false)
+(defn- rt-replicate [c :vector-i64 r :string t :i64 q :string] :bool true)
+(defn- rt-save [p :string b :vector-i64] :bool true)
+(defn- rt-archive-ack? [p :string r :string] :bool true)
+(defn- rt-now [] :i64 1)
+(defn- rt-due? [h :vector-i64 r :string t :i64] :bool true)
+(defn- rt-current-lease [c :vector-i64 e :i64] :vector-i64 (vector-alloc 0))
+(defn- rt-turn [c :vector-i64 h :vector-i64 l :vector-i64 r :string] :string "turn")
+(defn- rt-read-head [c :vector-i64 p :string] :vector-i64 (if (cp-exists? p) (cp-read p) (vector-alloc 0)))
+(defn- rt-publish-candidate [c :vector-i64 r :string t :i64 q :string] :bool true)
+(defn- rt-cycle [cfg :vector-i64] :string
+  (let [head-path (cp-str cfg 0 "head")
+        head (rt-read-head cfg head-path)
+        root (if (cp-exists? head-path) (cp-str head 0 "checkpoint") (cp-str cfg 0 "bootstrap"))
+        request-path (cp-str cfg 0 "request") present (cp-exists? request-path)
+        request (rt-request-id present (if present (cp-read request-path) (vector-alloc 0))
+                               (cp-str head 0 "request"))]
+    (cond (= request "") "resident/request-refused"
+          (not (rt-pins-ok? cfg)) "resident/runtime-pins-refused"
+          (not (cp-block? (cp-str cfg 0 "store") root)) "resident/missing-checkpoint"
+          (not (rt-root? cfg (cp-load (cp-str cfg 0 "store") root))) "resident/checkpoint-refused"
+          ;; Do not turn an invalid checkpoint or replica receipts into
+          ;; a newly admitted head. Bootstrap has no prior head; an existing
+          ;; head may be refreshed only after its full contract is intact.
+          (and (cp-exists? head-path) (not (rt-intact-head? cfg head))) "resident/head-refused"
+          (not (rt-admitted-head? cfg head))
+          (if (and (rt-replicate cfg root (if (cp-exists? head-path) (cp-num head 0 "nextAt") 0)
+                      (if (cp-exists? head-path) (cp-str head 0 "request") "none"))
+                   (rt-publish-candidate cfg root (if (cp-exists? head-path) (cp-num head 0 "nextAt") 0)
+                     (if (cp-exists? head-path) (cp-str head 0 "request") "none"))) "resident/replicas-refreshed" "resident/replica-unavailable")
+          (not (rt-archive-ack? (cp-str cfg 0 "archiveAck") root)) "resident/archive-pending"
+          (not (rt-due? head request (rt-now))) "resident/idle"
+          :else (let [root-data (cp-load (cp-str cfg 0 "store") root)
+                      lease (rt-current-lease cfg (cp-num root-data (cp-payload root-data) "epoch"))]
+                  (if (= (vector-count lease) 0) "resident/quorum-unavailable" (rt-turn cfg head lease request))))))
+
+
+(defn main [] :i64
+ (if (and (= (rt-cycle (cp-bytes "head-broken")) "resident/head-refused")
+          (= (rt-cycle (cp-bytes "head-intact")) "resident/replicas-refreshed")
+          (= (rt-cycle (cp-bytes "no-head")) "resident/replicas-refreshed")) 0 1))

@@ -1,0 +1,7 @@
+;; Append to the actual placement module body after replacing its ns form.
+(ns fleet-freshness-gate (:export [main]))
+(defn main [] :i64
+ (let [future (fresh? true 1000001 1000000 300000)
+       reason (eligible-reason true true false future 16 8 true 1 2 true)]
+   (if (and (test-fresh) (test-labels) (test-eligible) (test-placement) (test-scenarios)
+            (= reason "eligible/stale")) 0 1)))

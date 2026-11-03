@@ -48,6 +48,12 @@ its acceptance items are covered here:
   followed by the independently determined expected job ID at 6.
   the holder to its did through the trust, and judges a node's receipt with
   `receipt-verdict`.
+- **The fleet token.** `run` takes a token file path or an empty placeholder
+  at argument 17, followed by the attempt root at 18. `verify` takes the token
+  path or empty placeholder at argument 5, followed by the expected job ID.
+  A supplied token authenticates lease messages
+  ([lease node, Fleet token](lease-node.md#fleet-token)). The historical runs
+  below used none.
 - **The fleet token.** `run` takes an input file or empty argument at 16,
   a fleet token file or empty argument at 17, and the required private attempt
   directory at 18. `verify` takes an optional fleet token file.
@@ -98,6 +104,113 @@ values. A separate `jn-run` test used stubs for admission, the lease round and
 the cell: a non-holder with the legacy `rogue` argument did not reach the
 stubbed cell, while a guard-removal mutant did. These tests do not demonstrate
 a live quorum, nor do they establish effect-boundary fencing after dispatch.
+The 2026-10-23 transcript below remains historical; its rogue path is now a
+separate test-only mutant and has not been rerun as part of this change.
+
+The current `run` entry requires `clock`, `follow`, a fleet-token path or
+an empty placeholder at argument 17, and a host-provisioned private attempt
+root at argument 18. It durably records the job attempt before execution and
+refuses an existing or unknown marker; the host must reconcile ambiguous
+outcomes instead of deleting or replaying it. The root and its ancestors must
+be trusted and host-owned. Attempt creation uses scoped FS2 `U`, `I`, `H`
+and `M`, not child processes; the runtime must support the full-mode `U`
+operation. Older Linux bootstrap images can trap on `U` and are not qualified
+for this candidate. Numeric times and the old rogue mode are refused. It re-learns the identical, still-live lease after
+cell execution before issuing a receipt. `verify` now takes an independently
+derived expected job ID after the fleet-token argument (pass an empty token
+argument when no token is configured). A receipt is checked against that job
+and the selected lease holder. Receipt suppression cannot undo a cell's
+effects or replace receiver-side fencing, process lifetime control and a
+qualified governor.
+
+`run` returns nonzero when this node is ineligible, another node holds the
+lease, or a lease cannot be validated. Those outcomes do not confirm that a
+job ran. Exit zero means this process emitted a receipt and signature, not
+that a caller has authenticated the receipt or durably recorded its effects.
+Callers must independently verify the receipt and reconcile the cursor before
+advancing it. This changes the earlier zero exit status for non-holders and
+ineligible nodes; callers need to handle those outcomes explicitly.
+
+Successful container startup does not imply the cell succeeded. A nonzero or
+malformed cell exit is reported as `job/cell-failed` without a success receipt;
+the durable attempt marker remains for reconciliation. Receipt verification
+also rejects a correctly signed nonzero exit as `job/cell-failed`. This does
+not establish that a failed cell had no effects or make replay safe.
+
+The trusted cron composition may opt in to `capture-output` at argument 23.
+After the successful cell exit and post-execution lease check, it emits the
+captured stdout as an unpadded `output-base64url` line alongside the receipt.
+This capture path signs a v2 receipt containing the SHA-256 of the canonical
+adopted lease; the ordinary non-capture path retains the v1 receipt. The
+verifier accepts each version's exact canonical schema, and v2 verification
+compares the signed digest to the independently learned lease. This binds the
+receipt to the lease value but does not fence external effects atomically.
+Ordinary job runs cannot enable capture; an unexpected nonempty value is
+refused. The host must protect this potentially private output. The captured
+bytes are limited by the underlying spawn implementation and are not proof of
+complete application output. A caller must verify the signature and output
+CID and independently archive and read back the result before advancing a
+cursor; capture alone does none of those things. The current composition has
+passed a source check, not a runtime or production qualification.
+
+The `fleet_job_output` candidate validates a captured log against independently
+pinned signer DID and job ID, a successful canonical signed receipt and the
+output CID before storing its bytes and a receipt/signature proof in a private
+checkpoint block directory. It returns both CIDs only after both blocks sync;
+a failure between writes is unknown and requires reconciliation. The separate
+`job-output-proof-verify-main` entry accepts host-pinned store, output CID,
+proof CID, signer DID and job ID, and rechecks both blocks and the signature.
+These blocks must be included in a verified checkpoint closure before an
+archive/restore can be said to preserve them.
+`job-output-checkpoint-verify-main` checks the independently pinned checkpoint
+signature and closure, the two pinned file paths and CIDs in its untracked
+allowlist, and the restored output proof. The caller supplies a private store
+from a separately verified archive readback; this entry does not contact GitHub
+or establish a live lease. The checkpoint capture still has to include both
+files at the pinned paths, and the full composition is not runtime-qualified.
+`job-output-stage-main` can place the independently verified output/proof pair
+in two host-pinned, previously absent untracked files for that capture. It
+requires private, non-overlapping repository and block-store roots, existing
+real parent directories and exclusive host ownership. It refuses tracked or
+ignored paths, synchronizes each staged file and its parent, and reports an
+unknown outcome on partial failure; the host must reconcile rather than retry
+or remove files blindly. The host still supplies both paths in the explicit
+checkpoint allowlist, verifies the resulting checkpoint and remote archive,
+and protects the private repository while the files have mode 0644.
+`job-output-checkpoint-capture-main` composes that proof verification with
+checkpoint capture. It accepts the ordinary capture arguments in positions
+1–11 and pins output path/CID, proof path/CID, signer DID and job in positions
+12–17. The actual captured allowlist must contain both path/CID pairs before
+the signed checkpoint root is published. The host must serialize access and
+protect the private repository and store; a failed capture can leave local
+Git or block artifacts to reconcile. This candidate does not push to GitHub,
+advance a cursor, or qualify the captured process/runtime.
+The separate `job-output-archive-main` candidate checks that checkpoint and
+proof before invoking the private GitHub archive, then checks the same pinned
+checkpoint, output and proof in its independently fetched readback store.
+It accepts an unacknowledged push only if that independent readback verifies;
+otherwise the host must reconcile the unknown result before retrying. This
+entry does not hold a fleet lease, advance the cursor or qualify the process
+boundary. Its combined source has been checked, not exercised against GitHub.
+`job-output-restore-main` independently fetches the pinned private archive and
+checks the signed checkpoint and output proof before materializing a fresh
+destination. It then checks both restored files and the receipt again. The
+host must keep the destination quarantined and reconcile it on any unknown
+result. This entry restores data only; it does not restore a lease or grant
+permission to run a bot. The refactored ordinary checkpoint restore retains
+its prior result contract, but both paths still require runtime qualification.
+Log and existing block reads are bounded, and storage synchronizes the block
+and its directory. The host must keep both paths exclusively owned during the
+operation: separate path-based metadata and reads do not establish identity
+against replacement. This candidate does not check a live lease, publish to
+GitHub, verify remote readback, or advance a cursor; the combined source has
+only been checked, not tested on a qualified runtime.
+
+The command blocks and output below are the 2026-10-23 historical gate. They
+use numeric time and omit the now-required expected job ID, so they are not a
+reproduction recipe for the current interface.
+
+## Historical gate
 An additional isolated x86_64 Linux test ran the actual proposer, three
 authenticated loopback voter processes and `jn-run`, with separate durable
 voter files and a fixed test clock. Cell admission and cell execution were

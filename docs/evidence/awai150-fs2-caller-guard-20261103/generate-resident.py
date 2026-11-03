@@ -1,0 +1,50 @@
+from pathlib import Path
+import subprocess
+p=Path('/private/tmp/awai150-fs2-caller-guard');repo=Path('/Users/junkawasaki/github/workspaces/codex/awai150-inference-replay-guard')
+exec((p/'generate.py').read_text().split('header=r')[0])
+header=r'''(ns resident-guard (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [v :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 v)))
+(defn- cp-fs [op :string path :string tail :string] :string
+ (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+  (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000")) (string-substring r 5 (string-length r)) "")))
+(defn- cp-exists? [p :string] :bool (= (cp-fs "D" p "") "1"))
+(defn- cp-str [v :vector-i64 i :i64 key :string] :string
+ (cond (= key "head") (if (= (cp-text v) "head") "/denied/head" "/ok/head")
+       (= key "request") (if (= (cp-text v) "request") "/denied/request" "/ok/request")
+       (= key "leaseFile") (if (= (cp-text v) "lease") "/denied/lease" (if (= (cp-text v) "invalid") "/invalid/lease" "/ok/lease"))
+       (= key "node") "node" (= key "task") "task" (= key "class") "task" :else "root"))
+(defn- cp-read [p :string] :vector-i64 (if (= p "/invalid/lease") (vector-alloc 0) (cp-bytes "data")))
+(defn- cp-num [v :vector-i64 i :i64 key :string] :i64 (if (= key "slot") 0 1))
+(defn- json-valid? [v :vector-i64] :bool (> (vector-count v) 0))
+(defn- json-canonical? [v :vector-i64] :bool (> (vector-count v) 0))
+(defn- json-count [v :vector-i64 i :i64] :i64 6)
+(defn- rt-lease [v :vector-i64 e :i64] :vector-i64 (cp-bytes "lease"))
+(defn- rt-now [] :i64 100)
+(defn- lease-renew-before [] :i64 10)
+(defn- lease-skew [] :i64 1)
+(defn- valid-value? [a :string b :bool c :string d :i64 e :i64 f :i64 g :i64] :bool true)
+(defn- rt-save [p :string b :vector-i64] :bool true)
+(defn- recovery-lease-problem [v :vector-i64 t :string n :string e :i64 now :i64] :string "recovery/lease-admitted")
+(defn- rt-read-head [v :vector-i64 p :string] :vector-i64 (vector-alloc 0))
+(defn- rt-request-id [present :bool b :vector-i64 previous :string] :string "request")
+(defn- rt-pins-ok? [v :vector-i64] :bool false)
+(defn- cp-block? [a :string b :string] :bool true)
+(defn- cp-load [a :string b :string] :vector-i64 (vector-alloc 0))
+(defn- rt-root? [a :vector-i64 b :vector-i64] :bool true)
+(defn- rt-intact-head? [a :vector-i64 b :vector-i64] :bool true)
+(defn- rt-admitted-head? [a :vector-i64 b :vector-i64] :bool true)
+(defn- rt-replicate [a :vector-i64 b :string c :i64 d :string] :bool true)
+(defn- rt-publish-candidate [a :vector-i64 b :string c :i64 d :string] :bool true)
+(defn- rt-archive-ack? [a :string b :string] :bool true)
+(defn- rt-due? [a :vector-i64 b :string c :i64] :bool false)
+(defn- cp-payload [v :vector-i64] :i64 0)
+(defn- rt-turn [a :vector-i64 b :vector-i64 c :vector-i64 d :string] :string "turn")
+'''
+main='''(defn main [] :i64
+ (let [op (typed-cap-call 38 :string :string "0")
+       result (if (or (= op "lease") (= op "invalid") (= op "lease-ok")) (if (> (vector-count (rt-current-lease (cp-bytes op) 1)) 0) "lease" "empty") (rt-cycle (cp-bytes op)))
+       sent (typed-cap-call 37 :string :string (str result "\\n"))] 0))
+'''
+for label,old in [('resident-current',False),('resident-previous',True)]:
+ s=load('kotoba/profile_resident.kotoba',old);(p/(label+'.kotoba')).write_text(header+extract(s,'rt-current-lease')+extract(s,'rt-cycle')+main)

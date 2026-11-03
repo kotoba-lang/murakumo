@@ -1,0 +1,27 @@
+{
+  "kind": "awai.lease-group-watermark-native-fixture/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "baseCommit": "6ef3a723d489b76eb31ee967596eabcfc2b5c2c6",
+  "compilerSha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "environment": "Two disposable ARM64 Linux Podman VMs sequentially, each 1 CPU and 2 GiB RAM; local XFS; test-owned processes stopped and VMs removed",
+  "direct": {
+    "fixture": "awai150-group-watermark-fixture.kotoba",
+    "sourceSha256": "30f45a4fe6d63ee8f5b7d28451cda7ddc848c357704c23ef0556c28c21e2a456",
+    "imageSha256": "c9b369ee39dd08ff1f757539ce995e0a29c124d96523034dc8f8e6dfcaa01ee7",
+    "watermarkMutantSourceSha256": "6fe6e40dbb54fbde232e87c3f248af48c221a532a0f7e94b844512c61046a83d",
+    "lockMutantSourceSha256": "3857671a59048090a125d71d00a3edcca430b972894c54e3ae7c7aa72f6c385c",
+    "observed": "Missing watermark, skipped epoch, invalid ballot and malformed value refused without advancing watermark. A fresh first and next epoch initialized and voted. Deleting an already-seen epoch file caused refusal; the bypass mutant recreated it. An existing lock refused and remained; the lock-bypass mutant voted and removed it. Watermark advanced without a state file refused that epoch. Missing watermark refused. Topology-member predicate was stubbed."
+  },
+  "groupIntegration": {
+    "serverSource": "awai150-group-server-fixture.kotoba",
+    "serverSourceSha256": "725a4eee569a6affd459b126c81c32f2e78d7c1b1dcbf7c3bc413ea59042f3b1",
+    "serverImageSha256": "d0c316a6121a6e04ec589ee8415968454d94a5eb7bf03cbe5c151fa617f8a37c",
+    "clientSource": "awai150-group-client-fixture.kotoba",
+    "clientSourceSha256": "a8f8fe7ce0091ec196171e19b79178c83e2d18769c66d11147bc3b6ebcc33bac",
+    "clientImageSha256": "8f44968f9203db954597bf6674ce01aebf7de6efc83e70763e3ecb79038deca4",
+    "topologyFixture": "awai150-group-test-topology.json",
+    "topologySha256": "94bc664bc7b72bd1e3d4578a7fd44c2098051572906ce4d7623c519997ab8b6d",
+    "observed": "Three group servers, signed test topology, synthetic token and a native group client chose epochs 1 and 2. After one epoch-1 state file was removed the quorum adopted the original epoch-1 value without recreating that file. After a second was removed, no majority was chosen and neither file was recreated. An initial 1-second readiness attempt failed before servers listened; a later run waited for all three loopback listeners."
+  },
+  "limits": "A provisioned watermark and local serialization are required. A stale directory snapshot can roll back both watermark and epoch files; this is not an external monotonic or membership authority. Lock orphan recovery, crash/power-loss, admission quotas, existing-state migration, multi-host failure isolation, Tailscale confidentiality, actual bots and model inference remain unqualified."
+}

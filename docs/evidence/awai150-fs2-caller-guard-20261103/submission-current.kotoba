@@ -1,0 +1,28 @@
+(ns submission-guard (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-fs [op :string path :string tail :string] :string
+ (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+  (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000")) (string-substring r 5 (string-length r)) "")))
+(defn- cp-exists? [p :string] :bool (= (cp-fs "D" p "") "1"))
+(defn- cp-read [p :string] :vector-i64 (cp-bytes "data"))
+(defn- cp-cid [v :vector-i64] :string "cid")
+(defn- pr-unit-active? [s :string] :bool false)
+(defn- pr-unit-state [s :string] :string "unit/not-found")
+(defn- pr-run-decision [status :string request-exists :bool request-matches :bool
+                       marker-exists :bool response-exists :bool] :string
+  (cond (and (or (pr-unit-active? status) (= status "exited"))
+             request-exists request-matches) "profile/reuse-unit"
+        (and (= status "unit/not-found") (not request-exists)
+             (not marker-exists) (not response-exists)) "profile/new-unit"
+        :else "profile/submission-unknown"))
+(defn- probe [root :string] :string
+ (let [request (str root "/request") marker (str root "/marker") response (str root "/response") unit "unit" body-bytes (cp-bytes "data")
+                    request-status (cp-fs "D" request "") marker-status (cp-fs "D" marker "") response-status (cp-fs "D" response "")
+                    known (and (or (= request-status "0") (= request-status "1"))
+                               (or (= marker-status "0") (= marker-status "1"))
+                               (or (= response-status "0") (= response-status "1")))
+                    present (= request-status "1") matches (if present (= (cp-cid (cp-read request)) (cp-cid body-bytes)) false)
+                    decision (if known (pr-run-decision (pr-unit-state unit) present matches (= marker-status "1") (= response-status "1")) "profile/submission-unknown")] decision))
+(defn main [] :i64
+ (let [root (typed-cap-call 38 :string :string "0") result (probe root)
+       sent (typed-cap-call 37 :string :string (str result "\n"))] 0))

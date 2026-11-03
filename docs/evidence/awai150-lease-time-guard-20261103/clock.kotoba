@@ -1,0 +1,17 @@
+(ns lease-propose-test (:export [main]))
+(defn- rt-now [] :i64 9007199254740991)
+(defn- lease-ttl [] :i64 900000)
+(defn- cp-str [b :vector-i64 i :i64 k :string] :string "x")
+(defn- lease-text [a :string b :string c :i64 d :i64 e :i64 f :i64] :string "value")
+(defn- lease-token [a :string] :string "token")
+(defn- lease-group-round [a :i64 b :string c :string d :string e :string] :string "called")
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- rt-lease [cfg :vector-i64 epoch :i64] :vector-i64
+  (let [now (rt-now)]
+    (if (or (< epoch 1) (> epoch 9007199254740991) (<= now 0)
+            (> now (- 9007199254740991 (lease-ttl)))) (vector-alloc 0)
+      (cp-bytes (lease-group-round epoch (cp-str cfg 0 "node")
+        (lease-text (cp-str cfg 0 "node") (cp-str cfg 0 "task") 0 epoch (+ now (lease-ttl)) 1)
+        (cp-str cfg 0 "voters") (lease-token (cp-str cfg 0 "tokenFile")))))))
+
+(defn main [] :i64 (if (= (vector-count (rt-lease (vector-alloc 0) 1)) 0) 0 1))

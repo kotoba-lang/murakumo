@@ -3,9 +3,9 @@
 ;; module; this file puts them in order on a node and on a verifier.
 ;;
 ;;   run     job-node-main run <profile> <input> <policy> <rail> <node> <key>
-;;           <failure-domain> <admitted> <now> <allow> <index> <layout>
-;;           <voter ports p1,p2,..> <ballot t> <follow> <input file or empty>
-;;           <fleet token file or empty> <private attempt directory>
+;;           <failure-domain> <admitted> clock <allow> <index> <layout>
+;;           <voter ports p1,p2,..> <ballot t> follow [<input file>
+;;           <fleet token file or empty> <attempt root>]
 ;;           0. given an input file, its bytes must be the job's input: the raw
 ;;              CIDv1 of their SHA-256 equals <input> ("job input/missing",
 ;;              "job input/cid-mismatch" otherwise); the cell then gets them
@@ -23,14 +23,11 @@
 ;;              chosen value names the holder ("lease <holder>");
 ;;           3. a node that does not hold an unexpired lease for this exact
 ;;              job stops before starting the cell;
-;;           3a. atomically create and fsync a per-job attempt marker; an
-;;               existing or uncertain marker refuses execution and needs
-;;               reconciliation rather than an automatic retry;
 ;;           4. the holder runs the cell: its own signed state (own-state),
 ;;              then fleet_cell_run's cell-execute (release verdict, image
 ;;              layout, podman with a fixed argv);
-;;           5. it signs the agent-step receipt with the lease epoch
-;;              ("receipt <text>", "signature <b64url>").
+;;           5. it re-learns the same live lease and signs a receipt only
+;;              if the clock and lease still permit it.
 ;;   verify  job-node-main verify <voter ports> <trust node=did,...> <node
 ;;           output file> <ballot t> <fleet token file or empty> <expected job id>; the file is a node's run output, whose
 ;;           "receipt" and "signature" lines are judged (wire 35)
@@ -76,6 +73,28 @@
   (let [b (jn-bytes doc)]
     (if (not (json-valid? b)) -1
       (let [v (json-member b (jn-root b) key)] (if (and (>= v 0) (json-int-ok? b v)) (json-int b v) -1)))))
+
+;; Bind verification to an independently supplied job, not merely a holder.
+(defn- jn-job-id? [s :string] :bool
+  (let [b (jn-bytes s)]
+    (and (= (vector-count b) 64)
+      (loop [i 0]
+        (if (= i 64) true
+          (let [c (vector-at b i)]
+            (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102)))
+              (recur (+ i 1)) false)))))))
+
+(defn- jn-receipt-bound? [chosen :string receipt :string expected :string] :bool
+  (let [b (jn-bytes chosen) r (jn-bytes receipt) kind (jn-text receipt "kind")]
+    (and (jn-job-id? expected) (json-canonical? b) (= (json-kind b 0) 1) (= (json-count b 0) 6)
+         (json-canonical? r) (= (json-kind r 0) 1)
+         (or (and (= kind "itonami.agent-step-receipt/1") (= (json-count r 0) 8))
+             (and (= kind "itonami.agent-step-receipt/2") (= (json-count r 0) 9)))
+         (= (jn-text chosen "class") expected) (= (jn-num chosen "slot") 0)
+         (> (jn-num chosen "epoch") 0) (not (= (jn-text chosen "node") ""))
+         (> (jn-num receipt "at") 0) (< (jn-num receipt "at") (jn-num chosen "until"))
+         (= (jn-text receipt "job") expected)
+         (= (jn-text receipt "node") (jn-text chosen "node")))))
 
 ;; the did a trust "node=did,node=did" gives a node, or ""
 (defn- jn-did-of [trust :string node :string] :string
@@ -135,38 +154,48 @@
             (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102)))
               (recur (+ i 1)) false)))))))
 
-;; mkdir without -p is an atomic one-winner claim on the local filesystem.
-;; Even a failed fsync leaves the marker and stops: absence of an ack does not
-;; prove the attempt did not start. Never delete or recycle a marker here.
-(defn- jn-attempt [dir :string jid :string] :string
-  (if (or (not (jn-attempt-root? dir)) (not (jn-attempt-id? jid))) "job/attempt-config"
-    (let [stat (typed-cap-call 20 :string :string (str "/usr/bin/statARG_SEP--format=%F:%aARG_SEP--ARG_SEP" dir))]
-      (if (not (= stat "0\ndirectory:700\n")) "job/attempt-config"
-        (let [path (str dir "/" jid)
-              made (typed-cap-call 20 :string :string (str "/usr/bin/mkdirARG_SEP-mARG_SEP700ARG_SEP--ARG_SEP" path))]
-          (if (not (= (string-index-of made "0\n") 0)) "job/attempt-exists-or-unknown"
-            (if (and (= (typed-cap-call 35 :string :string (str path "FSYNC_SEP")) "1")
-                     (= (typed-cap-call 35 :string :string (str dir "FSYNC_SEP")) "1"))
-              "job/attempt-recorded" "job/attempt-unknown")))))))
+;; FS2 I is an exclusive mkdir: 1 means created; existing paths and
+;; unknown outcomes never authorize a retry. The root and its ancestors are
+;; private and trusted throughout this operation; FS2 calls are path-based.
+(defn- jn-fs [op :string path :string tail :string] :string
+  (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+    (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
+      (string-substring r 5 (string-length r)) "")))
 
-;; The default entry point always passes the exact CID-checked input. A
-;; separately composed adapter may supply a source payload only after it has
-;; verified the input envelope and source together. The job identity, attempt
-;; marker, lease and receipt still bind to the original envelope.
+(defn- jn-private-dir? [path :string] :bool
+  (let [m (jn-fs "U" path "")]
+    (and (= (jn-field m 0) "448") (= (jn-field m 3) "1"))))
+
+(defn- jn-attempt [dir :string jid :string] :string
+  (if (or (not (jn-attempt-root? dir)) (not (jn-attempt-id? jid))
+          (not (jn-private-dir? dir))) "job/attempt-config"
+    (let [path (str dir "/" jid) made (jn-fs "I" path "")]
+      (if (not (= made "1")) "job/attempt-exists-or-unknown"
+        (if (and (= (jn-fs "H" path "0700") "1") (jn-private-dir? path)
+                 (= (jn-fs "M" path "") "1") (= (jn-fs "M" dir "") "1"))
+          "job/attempt-recorded" "job/attempt-unknown")))))
+
+;; Only a trusted composed adapter may pass a source it has already verified.
+;; The public run entry passes the exact CID-checked input.
 (defn- jn-run-with-source [source :string source-admitted :bool] :i64
   (let [profile (jn-arg 1) input (jn-arg 2) policy (jn-arg 3) rail (jn-arg 4)
         node (jn-arg 5) seed (key-seed (jn-arg 6)) fd (jn-arg 7) admitted (jn-arg 8)
-        now (if (= (jn-arg 9) "clock") (jn-int (typed-cap-call 7 :string :string "wall")) (jn-int (jn-arg 9)))
+        now (jn-int (typed-cap-call 7 :string :string "wall"))
         allowed (jn-int (jn-arg 10)) index (jn-arg 11) layout (jn-arg 12)
-        ports (jn-arg 13) t (jn-int (jn-arg 14))
+        ports (jn-arg 13) t (jn-int (jn-arg 14)) mode (jn-arg 15)
         ipath (jn-arg 16) token (jn-token 17) attempts (jn-arg 18)
+        capture-arg (jn-arg 23) capture (and source-admitted (= capture-arg "capture-output"))
         has-input (and (not (= ipath "")) (= (typed-cap-call 35 :string :string (string-concat ipath "EXISTS_SEP")) "1"))
         itext (if has-input (typed-cap-call 35 :string :string ipath) "")
         jp (job-problem profile input policy rail)]
     (cond (not (= jp "job/ok")) (let [x (jn-say (string-concat "job " jp))] 1)
           (= (vector-count seed) 0) (let [x (jn-say "job run/bad-key")] 1)
-          (or (< now 0) (> now 9007199253000000)) (let [x (jn-say "job run/bad-clock")] 1)
+          (not (= (jn-arg 9) "clock")) (let [x (jn-say "job/clock-required")] 2)
+          (not (= mode "follow")) (let [x (jn-say "job/mode-refused")] 2)
+          (or (< now 0) (> now 9007199253000000) (< t 1) (>= t 9007199254740991))
+            (let [x (jn-say "job/time-or-ballot-refused")] 2)
           (not (jn-attempt-root? attempts)) (let [x (jn-say "job/attempt-config")] 1)
+          (and (not (= capture-arg "")) (not capture)) (let [x (jn-say "job/capture-refused")] 2)
           (= token "-") (let [x (jn-say "job token/missing-or-short")] 2)
           (and (not (= ipath "")) (not has-input)) (let [x (jn-say "job input/missing")] 1)
           (and has-input (not (= (digest-cid (string-concat "sha256:" (sha256-hex (jn-bytes itext))) 85) input))) (let [x (jn-say "job input/cid-mismatch")] 1)
@@ -176,31 +205,41 @@
                 state (own-state seed did node fd admitted now)
                 admit (cell-admit index profile "container" state allowed)
                 a (jn-say (str "job " jid))]
-            (if (not (= admit "launch/ok")) (let [x (jn-say (string-concat "ineligible " admit))] 0)
+            (if (not (= admit "launch/ok")) (let [x (jn-say (string-concat "ineligible " admit))] 1)
               (let [chosen (lease-round t node (lease-text node jid 0 1 (+ now (lease-ttl)) 0) ports token)
                     holder (if (= chosen "") "" (jn-text chosen "node"))
                     epoch (if (= chosen "") 0 (jn-num chosen "epoch"))
                     b (jn-say (string-concat "lease " (if (= holder "") "none" holder)))
-                    check-now (if (= (jn-arg 9) "clock") (ln-now "clock") now)
-                    guard (jn-lease-problem chosen node jid check-now)]
+                    check-now (ln-now "clock")
+                    guard (if (< check-now now) "job/clock-regressed" (jn-lease-problem chosen node jid check-now))]
                 (if (not (= guard "job/lease-ok"))
-                  (let [x (jn-say (if (= guard "job/lease-holder") (str "held-by " holder) guard))] 0)
-                  (let [attempt (jn-attempt attempts jid)
-                        dispatch-now (if (= (jn-arg 9) "clock") (ln-now "clock") now)
-                        still-held (jn-lease-problem chosen node jid dispatch-now)]
+                  (let [x (jn-say (if (= guard "job/lease-holder") (str "held-by " holder) guard))] 1)
+                  (let [attempt (jn-attempt attempts jid) dispatch-now (ln-now "clock")
+                        dispatch-guard (if (< dispatch-now check-now) "job/clock-regressed"
+                                         (jn-lease-problem chosen node jid dispatch-now))]
                     (cond (not (= attempt "job/attempt-recorded")) (let [x (jn-say attempt)] 1)
-                          (not (= still-held "job/lease-ok")) (let [x (jn-say still-held)] 1)
+                          (not (= dispatch-guard "job/lease-ok")) (let [x (jn-say dispatch-guard)] 1)
                           :else
-                          (let [capture (and source-admitted (= (jn-arg 23) "capture-output"))
-                                r (if capture (cell-execute-captured index profile "container" layout state allowed source)
-                                      (cell-execute index profile "container" layout state allowed (if source-admitted source itext)))
+                          (let [input-text (if source-admitted source itext)
+                                r (if capture (cell-execute-captured index profile "container" layout state allowed input-text)
+                                              (cell-execute index profile "container" layout state allowed input-text))
                                 nl (string-index-of r "\n") header (if (>= nl 0) (string-substring r 0 nl) r)]
-                            (if (not (= (jn-field header 0) "ok")) (let [x (jn-say header)] 1)
-                              (let [text (step-receipt-text now did (if (> epoch 0) epoch 1) (jn-int (jn-field header 1)) jid node (jn-field header 2))
-                                    c (jn-say (string-concat "receipt " text))
-                                    d (jn-say (string-concat "signature " (sign-statement seed text)))
-                                    e (if (and capture (>= nl 0)) (jn-say (str "output-base64url " (string-substring r (+ nl 1) (string-length r)))) 0)]
-                                0))))))))))))
+                    (if (not (= (jn-field header 0) "ok")) (let [x (jn-say header)] 1)
+                      (if (not (= (jn-field header 1) "0")) (let [x (jn-say "job/cell-failed")] 1)
+                      (if (and capture (< nl 0)) (let [x (jn-say "job/output-unknown")] 1)
+                      (let [fresh (lease-round (+ t 1) node chosen ports token)
+                            finished (ln-now "clock")
+                            final-guard (jn-lease-problem fresh node jid finished)]
+                        (if (or (< finished dispatch-now) (not (= fresh chosen)) (not (= final-guard "job/lease-ok")))
+                          (let [x (jn-say "job/lease-lost-output-unconfirmed")] 1)
+                          (let [text (if capture
+                                       (step-receipt-text-v2 finished did epoch (jn-int (jn-field header 1)) jid
+                                                             (sha256-hex (jn-bytes chosen)) node (jn-field header 2))
+                                       (step-receipt-text finished did epoch (jn-int (jn-field header 1)) jid node (jn-field header 2)))
+                                c (jn-say (string-concat "receipt " text))
+                                d (jn-say (string-concat "signature " (sign-statement seed text)))
+                                e (if capture (jn-say (str "output-base64url " (string-substring r (+ nl 1) (string-length r)))) 0)]
+                            0))))))))))))))))
 
 (defn- jn-run [] :i64 (jn-run-with-source "" false))
 
@@ -209,9 +248,17 @@
         out (if (= (typed-cap-call 35 :string :string (string-concat (jn-arg 3) "EXISTS_SEP")) "1") (typed-cap-call 35 :string :string (jn-arg 3)) "")
         receipt (jn-line out "receipt ") sig (jn-line out "signature ") t (jn-int (jn-arg 4))
         token (jn-token 5) expected (jn-arg 6)
-        chosen (if (or (= token "-") (not (jn-attempt-id? expected))) "" (lease-round t "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports token))
+        chosen (if (or (= token "-") (not (jn-job-id? expected))) "" (lease-round t "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports token))
         holder (if (= chosen "") "" (jn-text chosen "node"))
-        verdict (jn-receipt-verdict chosen trust expected receipt sig)
+        verdict (if (jn-receipt-bound? chosen receipt expected)
+                  (if (= (jn-text receipt "kind") "itonami.agent-step-receipt/2")
+                    (receipt-verdict-v2 (jn-did-of trust holder) (jn-num chosen "epoch") (sha256-hex (jn-bytes chosen))
+                      (jn-num receipt "at") (jn-text receipt "did") (jn-num receipt "epoch") (jn-num receipt "exit")
+                      (jn-text receipt "job") (jn-text receipt "lease") (jn-text receipt "node") (jn-text receipt "output") sig)
+                    (receipt-verdict (jn-did-of trust holder) (jn-num chosen "epoch")
+                    (jn-num receipt "at") (jn-text receipt "did") (jn-num receipt "epoch") (jn-num receipt "exit")
+                    (jn-text receipt "job") (jn-text receipt "node") (jn-text receipt "output") sig))
+                  "job/lease-binding-refused")
         x (jn-say (str "holder " (if (= holder "") "none" holder) " verdict " verdict))]
     (if (= verdict "job/confirmed") 0 1)))
 

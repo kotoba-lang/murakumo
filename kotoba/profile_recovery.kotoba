@@ -28,13 +28,45 @@
 
 (defn- pr-pause [] :bool (arena-scope (cp-ok? (cp-spawn (str "/usr/bin/sleep" (cp-a) "1")))))
 (defn- pr-unit-state [unit :string] :string
-  (cp-line (cp-out (cp-spawn (str "/usr/bin/systemctl" (cp-a) "--user" (cp-a) "show" (cp-a)
-    "--property=SubState" (cp-a) "--value" (cp-a) unit)))))
+  ;; A failed query is not evidence that the unit does not exist. Inspect the
+  ;; load state separately so only an explicit not-found permits first submit.
+  (let [load (cp-spawn (str "/usr/bin/systemctl" (cp-a) "--user" (cp-a) "show" (cp-a)
+               "--property=LoadState" (cp-a) "--value" (cp-a) unit))
+        value (if (cp-ok? load) (cp-line (cp-out load)) "")]
+    (cond (= value "not-found") "unit/not-found"
+          (not (= value "loaded")) "unit/unknown"
+          :else (let [sub (cp-spawn (str "/usr/bin/systemctl" (cp-a) "--user" (cp-a) "show" (cp-a)
+                            "--property=SubState" (cp-a) "--value" (cp-a) unit))]
+                  (if (cp-ok? sub) (cp-line (cp-out sub)) "unit/unknown")))))
+
+(defn- pr-unit-active? [s :string] :bool
+  (or (= s "start-pre") (= s "start") (= s "start-post") (= s "running")))
 
 (defn- pr-unit-code [unit :string] :i64
   (arena-scope
     (let [s (pr-unit-state unit)]
-      (cond (= s "exited") 1 (= s "failed") -1 :else 0))))
+      (cond (= s "exited") 1 (pr-unit-active? s) 0 :else -1))))
+
+;; A request is created only after an explicit not-found observation and
+;; before any submission. A leftover request or marker is UNKNOWN, including
+;; after a crash between the durable marker and the systemd call. Existing
+;; units may only be observed when their request and durable dispatch marker
+;; still match. Missing or corrupt evidence is not a prior submission.
+;; The caller must serialize writers to this private cache directory.
+(defn- pr-run-decision [status :string request-exists :bool request-matches :bool
+                       marker-exists :bool marker-matches :bool response-exists :bool] :string
+  (cond (and (or (pr-unit-active? status) (= status "exited"))
+             request-exists request-matches marker-exists marker-matches) "profile/reuse-unit"
+        (and (= status "unit/not-found") (not request-exists)
+             (not marker-exists) (not response-exists)) "profile/new-unit"
+        :else "profile/submission-unknown"))
+
+(defn- pr-prepare-submit [request :string marker :string body :vector-i64] :bool
+  (and (cp-absent? request) (cp-absent? marker)
+       (cp-write request body)
+       (= (cp-fs "M" (cp-parent-dir request) "") "1")
+       (cp-write marker (cp-bytes "itonami.inference-dispatch/1\n"))
+       (= (cp-fs "M" (cp-parent-dir marker) "") "1")))
 
 ;; This is a host-pinned transport description, not proof that the socket's
 ;; peer is the expected machine or that its model is qualified. The host must
@@ -49,18 +81,22 @@
 ;; Paths and the content-addressed unit name are host-supplied. curl ignores
 ;; ~/.curlrc and redirects. The local variant cannot use a TCP proxy or select
 ;; a network URL: it sends only through the explicitly pinned Unix socket.
+;; LimitAS is an additional per-process virtual-address bound. It does not
+;; replace cgroup enforcement, descendant containment or host admission.
+;; HTTPS uses --fail, supported by Xavier curl 7.68; error bodies are not
+;; retained as successful model responses.
 (defn- pr-submit [unit :string request :string response :string seconds :i64 runtime :vector-i64] :bool
   (cp-ok? (cp-spawn (str "/usr/bin/systemd-run" (cp-a) "--user" (cp-a) "--quiet" (cp-a) "--no-block"
     (cp-a) (str "--unit=" unit) (cp-a) "--property=Type=oneshot" (cp-a) "--property=RemainAfterExit=yes"
     (cp-a) "--property=TimeoutStartSec=900" (cp-a) "--property=NoNewPrivileges=yes"
-    (cp-a) "--property=MemoryMax=128M" (cp-a) "--property=CPUQuota=25%"
+    (cp-a) "--property=MemoryMax=128M" (cp-a) "--property=CPUQuota=25%" (cp-a) "--property=LimitAS=128M"
     (cp-a) "/usr/bin/curl" (cp-a) "--disable" (cp-a) "--http1.1"
     (if (pr-local-mtp? runtime)
       (str (cp-a) "--noproxy" (cp-a) "*"
            (cp-a) "--unix-socket" (cp-a) (cp-str runtime 0 "socket")
            (cp-a) "--header" (cp-a) (str "@" (cp-str runtime 0 "authorizationFile"))
            (cp-a) "-fsS")
-      (str (cp-a) "--proto" (cp-a) "=https" (cp-a) "--tlsv1.2" (cp-a) "--fail-with-body"
+      (str (cp-a) "--proto" (cp-a) "=https" (cp-a) "--tlsv1.2" (cp-a) "--fail"
            (cp-a) "--silent" (cp-a) "--show-error"))
     (cp-a) "--connect-timeout" (cp-a) "5" (cp-a) "--max-time" (cp-a) (str seconds)
     (cp-a) "--header" (cp-a) "Content-Type: application/json" (cp-a) "--data-binary" (cp-a) (str "@" request)
@@ -106,20 +142,62 @@
 (defn- pr-replicable? [b :vector-i64] :bool
   (and (> (vector-count b) 0) (<= (vector-count b) 16384)))
 
+;; The peer controls response length. Inspect its regular-file size before a
+;; single bounded range read so recovery does not load an arbitrary response
+;; into the resident arena. The private cache is exclusively host-owned; these
+;; separate path operations do not establish identity against a concurrent writer.
+;; This bound does not limit bytes written to disk during curl execution.
+(defn- pr-read-response [path :string] :vector-i64
+  (let [size (cp-size path)]
+    (if (or (< size 1) (> size 262144)) (vector-alloc 0)
+      (let [b (cp-range path 0 size)]
+        (if (and (= (vector-count b) size) (= (cp-size path) size)) b (vector-alloc 0))))))
+
 ;; A crash can leave the output durable while state still points at this turn.
-;; Only the exact completed response may be reused. Sync it again before
-;; publishing state, since an interrupted earlier write may not have flushed.
+;; Only the exact completed response may be reused. Sync both the file and
+;; its parent directory before state can refer to it.
 (defn- pr-save-output [path :string answer :vector-i64 cid :string] :bool
-  (if (cp-exists? path)
-    (and (= (cp-cid (cp-read path)) cid) (= (cp-fs (str path (cp-sep "FSYNC"))) "1"))
-    (cp-write path answer)))
+  (let [status (cp-fs "D" path "")]
+    (and (cond (= status "1") (and (= (cp-cid (cp-read path)) cid) (= (cp-fs "M" path "") "1"))
+               (= status "0") (cp-write path answer)
+               :else false)
+         (= (cp-fs "M" (cp-parent-dir path) "") "1"))))
+
+;; Recover a fully written but unpublished state only when the exact request,
+;; durable dispatch marker, finished response, saved output and candidate
+;; state all agree. The caller holds the private task's single-writer lock.
+;; Never dispatch again here. Unknown filesystem or sync outcomes remain for
+;; host reconciliation and must not be treated as a completed turn.
+(defn- pr-reconcile-pending [repo :string runtime :vector-i64 next :i64 task :string state :vector-i64
+                            body :vector-i64 unit :string request :string marker :string response :string] :string
+  (let [tmp (str repo "/state.json.tmp") outdir (str repo "/outputs")
+        output (str outdir "/" next ".json") statepath (str repo "/state.json")
+        ready (and (= (pr-unit-state unit) "exited")
+                   (= (cp-fs "D" tmp "") "1") (= (cp-fs "D" request "") "1")
+                   (= (cp-fs "D" marker "") "1") (= (cp-fs "D" response "") "1")
+                   (= (cp-fs "D" output "") "1")
+                   (= (cp-cid (cp-read request)) (cp-cid body))
+                   (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n"))]
+    (if (not ready) "profile/state-publication-unknown"
+      (let [raw (pr-read-response response) completed (and (not (= (pr-answer raw) ""))
+                        (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime raw)))
+            answer (if completed (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw) (vector-alloc 0))
+            cid (cp-cid answer) expected (cp-bytes (str "{\"next\":" (+ next 1) ",\"previous\":\"" cid "\",\"task\":\"" task "\"}"))
+            valid (and completed (pr-replicable? answer) (= (cp-cid (cp-read output)) cid)
+                       (= (cp-cid (cp-read tmp)) (cp-cid expected))
+                       (= (cp-cid (cp-read statepath)) (cp-cid state)))
+            durable (and valid (= (cp-fs "M" output "") "1") (= (cp-fs "M" outdir "") "1")
+                         (= (cp-fs "M" tmp "") "1") (= (cp-fs "M" repo "") "1"))
+            renamed (and durable (= (cp-fs "L" tmp statepath) "1"))
+            synced (and renamed (= (cp-fs "M" repo "") "1"))]
+        (if synced (str "profile/step-completed " next " " cid) "profile/state-publication-unknown")))))
 
 (defn- pr-wait [unit :string response :string runtime :vector-i64] :bool
   (loop [i 0]
     (let [state (pr-unit-code unit)]
       (cond (= state 1)
             (and (cp-exists? response)
-                 (let [b (cp-read response)]
+                 (let [b (pr-read-response response)]
                    (and (not (= (pr-answer b) ""))
                         (or (not (pr-local-mtp? runtime)) (pr-mtp-response? runtime b)))))
             (or (= state -1) (> i 900)) false
@@ -208,10 +286,27 @@
                          (str "local-mtp\n" (cp-str runtime 0 "socket") "\n" (cp-str runtime 0 "authorizationFile") "\n" body)
                          body))) unit (str "itonami-recovery-" (string-substring id 0 24) ".service")
                     request (str cache "/" id ".request.json") response (str cache "/" id ".response.json")
-                    saved (cp-write request (cp-bytes body)) status (pr-unit-state unit)
-                    submitted (and saved (or (= status "start") (= status "running") (= status "exited") (pr-submit unit request response seconds runtime)))]
+                    marker (str cache "/" id ".dispatch") body-bytes (cp-bytes body)
+                    request-status (cp-fs "D" request "") marker-status (cp-fs "D" marker "") response-status (cp-fs "D" response "")
+                    pending-status (cp-fs "D" (str repo "/state.json.tmp") "")
+                    known (and (or (= request-status "0") (= request-status "1"))
+                               (or (= marker-status "0") (= marker-status "1"))
+                               (or (= response-status "0") (= response-status "1")))
+                    present (= request-status "1") matches (if present (= (cp-cid (cp-read request)) (cp-cid body-bytes)) false)
+                    marked (= marker-status "1")
+                    marker-matches (if marked (= (cp-text (cp-read marker)) "itonami.inference-dispatch/1\n") false)
+                    decision (if (and known (= pending-status "0"))
+                               (pr-run-decision (pr-unit-state unit) present matches marked marker-matches (= response-status "1")) "profile/submission-unknown")
+                    submitted (cond (= decision "profile/reuse-unit") true
+                                    (= decision "profile/new-unit")
+                                    (and (pr-prepare-submit request marker body-bytes)
+                                         (pr-submit unit request response seconds runtime))
+                                    :else false)]
+                (if (= pending-status "1")
+                  (pr-reconcile-pending repo runtime next task state body-bytes unit request marker response)
+                (if (not (= pending-status "0")) "profile/state-publication-unknown"
                 (if (or (not submitted) (not (pr-wait unit response runtime))) "profile/inference-unavailable-state-retained"
-                  (let [raw (cp-read response)
+                  (let [raw (pr-read-response response)
                         answer (if (pr-local-mtp? runtime) (pr-mtp-compact runtime raw) raw)
                         cid (cp-cid answer)
                         outdir (str repo "/outputs") output (str outdir "/" next ".json")
@@ -219,11 +314,12 @@
                         tmp (str repo "/state.json.tmp")
                         usable (pr-replicable? answer)
                         ok (and usable
-                                (cp-mkdir outdir) (pr-save-output output answer cid) (cp-write tmp newstate))
-                        rename (if ok (cp-fs (str tmp (cp-sep "RENAME") repo "/state.json")) "0")
-                        sync (if (= rename "1") (cp-fs (str repo (cp-sep "FSYNC"))) "0")]
+                                (cp-mkdir outdir) (= (cp-fs "M" repo "") "1")
+                                (pr-save-output output answer cid) (cp-write tmp newstate))
+                        rename (if ok (cp-fs "L" tmp (str repo "/state.json")) "0")
+                        sync (if (= rename "1") (cp-fs "M" repo "") "0")]
                     (if (not usable) "profile/response-not-replicable"
-                      (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))
+                      (if (= sync "1") (str "profile/step-completed " next " " cid) "profile/state-publication-failed"))))))))))))
 
 (defn- pr-token-budget [runtime :vector-i64 resident :bool] :i64
   (if (= (cp-str runtime 0 "profile") "awai-growth-steward")

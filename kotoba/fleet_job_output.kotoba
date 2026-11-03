@@ -1,8 +1,10 @@
 ;; Validate a captured agent-step result before putting stdout in the existing
 ;; checkpoint block store. The expected DID/job are independent host pins;
 ;; neither a signature nor this block write is a live lease or archive grant.
-;; Compose after fleet_job_node and git_checkpoint.
-(ns murakumo.fleet-job-output (:export [job-output-main]))
+;; Compose after fleet_job_node and git_checkpoint. The trusted host must own
+;; both the capture tree and block store exclusively throughout this operation;
+;; path-based metadata and reads do not bind against a concurrent replacement.
+(ns murakumo.fleet-job-output (:export [job-output-main job-output-proof-verify-main job-output-checkpoint-verify-main job-output-stage-main job-output-checkpoint-capture-main]))
 
 (defn- jo-once? [s :string key :string] :bool
   (let [line (str "\n" key " ") all (str "\n" s) i (string-index-of all line)]
@@ -29,8 +31,10 @@
               (not (jo-once? log "output-base64url"))) "job-output/missing-or-duplicate"
           (or (not (= (did-key-problem did) "enroll/ok")) (not (jn-attempt-id? job))) "job-output/pins"
           (or (not (json-valid? b)) (not (json-canonical? b)) (not (= (json-kind b 0) 1))
-              (not (= (json-count b 0) 8))) "job-output/receipt"
-          (or (not (= (cp-str b 0 "kind") "itonami.agent-step-receipt/1"))
+              (not (or (and (= (cp-str b 0 "kind") "itonami.agent-step-receipt/1") (= (json-count b 0) 8))
+                       (and (= (cp-str b 0 "kind") "itonami.agent-step-receipt/2") (= (json-count b 0) 9)
+                            (jn-job-id? (cp-str b 0 "lease")))))) "job-output/receipt"
+          (or
               (not (= (cp-str b 0 "did") did)) (not (= (cp-str b 0 "job") job))
               (not (= (cp-num b 0 "exit") 0)) (< (cp-num b 0 "at") 1)
               (< (cp-num b 0 "epoch") 1) (= (cp-str b 0 "node") "")) "job-output/binding"
@@ -39,17 +43,177 @@
               (not (= (cp-str b 0 "output") output-cid))) "job-output/content"
           :else "job-output/verified")))
 
+;; Bound existing block reads before cp-write can do any whole-file read.
+;; Exclusive ownership is required: size rechecks alone do not prevent races.
+(defn- jo-put [store :string b :vector-i64] :string
+  (let [cid (cp-cid b) path (str store "/" cid) exists (cp-fs "D" path "")
+        size (if (= exists "1") (cp-size path) -1)
+        prior (if (and (= exists "1") (>= size 0) (<= size 16384)) (cp-range path 0 size) (vector-alloc 0))
+        good (cond (> (vector-count b) 16384) false
+                   (= exists "0") (cp-write path b)
+                   (= exists "1") (and (= size (vector-count b)) (= (vector-count prior) size)
+                                        (= (cp-size path) size) (= (cp-cid prior) cid))
+                   :else false)]
+    ;; A matching pre-existing block may be a visible but unsynced remnant of
+    ;; an interrupted writer. Sync the file itself before syncing its parent.
+    (if (and (<= (vector-count b) 16384) good (= (cp-fs "M" path "") "1")
+             (= (cp-fs "M" store "") "1")) cid "")))
+
 (defn job-output-main [] :i64
   (let [logpath (jn-arg 0) did (jn-arg 1) job (jn-arg 2) store (jn-arg 3)
-        stat (if (jn-attempt-root? store)
-               (typed-cap-call 20 :string :string (str "/usr/bin/statARG_SEP--format=%F:%aARG_SEP--ARG_SEP" store)) "")]
-    (if (or (not (jn-attempt-root? logpath)) (not (= stat "0\ndirectory:700\n"))
-            (not (cp-exists? logpath)))
+        size (if (jn-attempt-root? logpath) (cp-size logpath) -1)]
+    (if (or (not (jn-attempt-root? store)) (not (jn-private-dir? store)) (< size 1) (> size 65536))
       (let [x (jn-say "job-output/config-refused")] 2)
-      (let [log (typed-cap-call 35 :string :string logpath)
-            verdict (if (> (string-length log) 65536) "job-output/too-large" (jo-verdict log did job))]
+      (let [raw (cp-range logpath 0 size)
+            log (cp-text raw)
+            verdict (if (and (= (vector-count raw) size) (= (cp-size logpath) size))
+                      (jo-verdict log did job) "job-output/read-unknown")]
         (if (not (= verdict "job-output/verified")) (let [x (jn-say verdict)] 1)
-          (let [bytes (jo-decode (jn-line log "output-base64url ")) cid (cp-put store bytes)
-                synced (if (= cid "") "" (cp-fs (str store "FSYNC_SEP")))]
-            (if (not (= synced "1")) (let [x (jn-say "job-output/store-unknown")] 1)
-              (jn-say (str "job-output/stored " cid)))))))))
+          (let [bytes (jo-decode (jn-line log "output-base64url ")) cid (jo-put store bytes)
+                receipt (jn-line log "receipt ") sig (jn-line log "signature ")
+                proof (cp-bytes (str "{\"kind\":\"itonami.job-output-proof/1\",\"receipt\":" receipt
+                                     ",\"signature\":\"" sig "\"}"))
+                proof-cid (if (= cid "") "" (jo-put store proof))]
+            ;; Both blocks must be synchronized before returning either CID.
+            ;; An unknown partial write stays in the private store for host
+            ;; reconciliation, never treated as a published checkpoint.
+            (if (= proof-cid "") (let [x (jn-say "job-output/store-unknown")] 1)
+              (jn-say (str "job-output/stored " cid " " proof-cid)))))))))
+
+;; Re-verify host-pinned proof and output after a separate restore. This proves
+;; their signature and CID binding only; a host must still establish the
+;; live lease and independently verify the checkpoint/archive readback.
+(defn- jo-block [store :string cid :string] :vector-i64
+  (let [path (str store "/" cid) size (if (cp-raw? cid) (cp-size path) -1)
+        bytes (if (and (>= size 0) (<= size 16384)) (cp-range path 0 size) (vector-alloc 0))]
+    (if (and (>= size 0) (<= size 16384) (= (vector-count bytes) size)
+             (= (cp-size path) size) (= (cp-cid bytes) cid)) bytes (vector-alloc 0))))
+
+(defn- jo-block? [store :string cid :string bytes :vector-i64] :bool
+  (let [size (if (cp-raw? cid) (cp-size (str store "/" cid)) -1)]
+    (and (>= size 0) (<= size 16384) (= size (vector-count bytes)) (= (cp-cid bytes) cid))))
+
+(defn- jo-proof-verdict [proof :vector-i64 output :vector-i64 did :string job :string] :string
+  (let [receipt-index (if (json-valid? proof) (json-member proof 0 "receipt") -1)
+        valid (and (> (vector-count proof) 0) (json-canonical? proof)
+                   (= (json-kind proof 0) 1) (= (json-count proof 0) 3)
+                   (= (cp-str proof 0 "kind") "itonami.job-output-proof/1")
+                   (>= receipt-index 0) (= (json-kind proof receipt-index) 1))
+        receipt (if valid (cp-json proof receipt-index) "")
+        sig (if valid (cp-str proof 0 "signature") "")
+        log (str "receipt " receipt "\nsignature " sig "\noutput-base64url " (en-b64-encode output) "\n")]
+    (if valid (jo-verdict log did job) "job-output/proof-invalid")))
+
+;; Host-owned private trees are required: these path operations do not pin
+;; identities against concurrent replacement. Existing or ambiguous paths are
+;; never overwritten, removed, or retried after a partial stage.
+(defn- jo-overlap? [a :string b :string] :bool
+  (or (= a b) (= (string-index-of a (str b "/")) 0) (= (string-index-of b (str a "/")) 0)))
+
+(defn- jo-stage-path? [repo :string path :string] :bool
+  (and (checkpoint-path? path) (cp-real-parents? repo path false)
+       (cp-absent? (str repo "/" path))
+       (= (cp-git repo (str "ls-files" (cp-a) "--error-unmatch" (cp-a) "--" (cp-a) path)) "1\n")
+       (= (cp-git repo (str "check-ignore" (cp-a) "--" (cp-a) path)) "1\n")))
+
+(defn- jo-stage-file? [repo :string path :string data :vector-i64] :bool
+  (let [file (str repo "/" path)]
+    (and (cp-write file data) (= (cp-fs "H" file "644") "1")
+         (= (cp-meta-field (cp-fs "U" file "") 0) "420")
+         (= (cp-size file) (vector-count data)) (= (cp-fs "M" file "") "1")
+         (= (cp-fs "M" (cp-parent-dir file) "") "1"))))
+
+;; Stage the verified pair as private-repo untracked files. The caller then
+;; explicitly allowlists these paths in checkpoint capture; this function
+;; does not create or publish a checkpoint or authorize replay on failure.
+(defn job-output-stage-main [] :i64
+  (let [repo (jn-arg 0) store (jn-arg 1) output-cid (jn-arg 2) proof-cid (jn-arg 3)
+        did (jn-arg 4) job (jn-arg 5) out-path (jn-arg 6) proof-path (jn-arg 7)]
+    (if (or (not (cp-safe-absolute? repo)) (not (cp-safe-absolute? store)) (jo-overlap? repo store)
+            (not (jn-private-dir? repo)) (not (jn-private-dir? store))
+            (not (cp-raw? output-cid)) (not (cp-raw? proof-cid))
+            (not (checkpoint-path? out-path)) (not (checkpoint-path? proof-path)) (jo-overlap? out-path proof-path))
+      (let [x (jn-say "job-output/stage-config-refused")] 2)
+      (let [output (jo-block store output-cid) proof (jo-block store proof-cid)
+            blocks (and (jo-block? store output-cid output) (jo-block? store proof-cid proof))
+            verified (and blocks (= (jo-proof-verdict proof output did job) "job-output/verified"))
+            paths (and verified (jo-stage-path? repo out-path) (jo-stage-path? repo proof-path))]
+        (if (not paths) (let [x (jn-say "job-output/stage-refused")] 1)
+          (if (and (jo-stage-file? repo out-path output) (jo-stage-file? repo proof-path proof))
+            (let [x (jn-say "job-output/staged")] 0)
+            (let [x (jn-say "job-output/stage-unknown")] 1)))))))
+
+;; Arguments 1..11 are checkpoint capture's original trusted inputs; 12..17
+;; independently pin the staged paths, block CIDs, signer DID and job. The
+;; underlying capture checks its actual allowlist against these pins before
+;; root publication. The host retains exclusive ownership and serialization.
+(defn job-output-checkpoint-capture-main [] :i64
+  (let [repo (jn-arg 1) store (jn-arg 2) out-path (jn-arg 12) output-cid (jn-arg 13)
+        proof-path (jn-arg 14) proof-cid (jn-arg 15) did (jn-arg 16) job (jn-arg 17)]
+    (if (or (not (= (jn-arg 0) "capture-job-output"))
+            (not (cp-safe-absolute? repo)) (not (cp-safe-absolute? store)) (jo-overlap? repo store)
+            (not (jn-private-dir? repo)) (not (jn-private-dir? store))
+            (not (checkpoint-path? out-path)) (not (checkpoint-path? proof-path)) (jo-overlap? out-path proof-path)
+            (not (cp-raw? output-cid)) (not (cp-raw? proof-cid)))
+      (let [x (jn-say "job-output/capture-config-refused")] 2)
+      (let [output (jo-block store output-cid) proof (jo-block store proof-cid)
+            valid (and (jo-block? store output-cid output) (jo-block? store proof-cid proof)
+                       (= (jo-proof-verdict proof output did job) "job-output/verified"))]
+        (if valid (cp-capture-with-required out-path output-cid proof-path proof-cid)
+          (let [x (jn-say "job-output/capture-proof-refused")] 1))))))
+
+(defn job-output-proof-verify-main [] :i64
+  (let [store (jn-arg 0) output-cid (jn-arg 1) proof-cid (jn-arg 2) did (jn-arg 3) job (jn-arg 4)]
+    (if (or (not (jn-attempt-root? store)) (not (jn-private-dir? store))
+            (not (cp-raw? output-cid)) (not (cp-raw? proof-cid)))
+      (let [x (jn-say "job-output/proof-config-refused")] 2)
+      (let [proof (jo-block store proof-cid) output (jo-block store output-cid)
+            valid (and (jo-block? store proof-cid proof) (jo-block? store output-cid output))
+            verdict (if valid (jo-proof-verdict proof output did job) "job-output/proof-invalid")]
+        (if (= verdict "job-output/verified")
+          (let [x (jn-say "job-output/proof-verified")] 0)
+          (let [x (jn-say verdict)] 1))))))
+
+;; Only a signed checkpoint's explicit allowlisted files are archived. Match
+;; independently pinned paths and CIDs, not merely the presence of two blocks.
+(defn- jo-checkpoint-links? [checkpoint :vector-i64 out-path :string out-cid :string
+                            proof-path :string proof-cid :string] :bool
+  (let [payload (cp-payload checkpoint) files (if (>= payload 0) (json-member checkpoint payload "untracked") -1)]
+    (and (checkpoint-path? out-path) (checkpoint-path? proof-path) (not (= out-path proof-path))
+         (cp-raw? out-cid) (cp-raw? proof-cid) (>= files 0) (= (json-kind checkpoint files) 2)
+         (loop [i 0 found-out false found-proof false]
+           (if (= i (json-count checkpoint files)) (and found-out found-proof)
+             (let [item (json-element checkpoint files i) path (cp-str checkpoint item "path")
+                   cid (cp-str checkpoint item "cid") mode (cp-str checkpoint item "mode")
+                   out (and (= path out-path) (= cid out-cid) (= mode "644"))
+                   proof (and (= path proof-path) (= cid proof-cid) (= mode "644"))]
+               (recur (+ i 1) (or found-out out) (or found-proof proof))))))))
+
+;; The store must be the caller's independently fetched and verified archive
+;; store, owned exclusively through this check. This function does not fetch
+;; from GitHub or establish a live lease or permission to advance a cursor.
+(defn- jo-checkpoint-verdict [store :string checkpoint-cid :string author :string profile :string policy :string
+                             environment :string epoch :i64 parent :string task :string output-cid :string
+                             proof-cid :string did :string job :string out-path :string proof-path :string] :string
+  (let [checkpoint (jo-block store checkpoint-cid) output (jo-block store output-cid)
+        proof (jo-block store proof-cid)
+        blocks (and (jo-block? store checkpoint-cid checkpoint) (jo-block? store output-cid output)
+                    (jo-block? store proof-cid proof))
+        contract (if blocks (checkpoint-problem checkpoint author profile policy environment epoch parent task) "checkpoint/missing-or-corrupt-root")
+        linked (and (= contract "checkpoint/ok") (jo-checkpoint-links? checkpoint out-path output-cid proof-path proof-cid))
+        closure (if linked (cp-closure? store checkpoint) false)]
+    (if closure (jo-proof-verdict proof output did job) "job-output/checkpoint-refused")))
+
+(defn job-output-checkpoint-verify-main [] :i64
+  (let [store (jn-arg 0) checkpoint-cid (jn-arg 1) author (jn-arg 2) profile (jn-arg 3)
+        policy (jn-arg 4) environment (jn-arg 5) epoch (cp-int (jn-arg 6))
+        parent (jn-arg 7) task (jn-arg 8) output-cid (jn-arg 9) proof-cid (jn-arg 10)
+        did (jn-arg 11) job (jn-arg 12) out-path (jn-arg 13) proof-path (jn-arg 14)]
+    (if (or (not (jn-attempt-root? store)) (not (jn-private-dir? store))
+            (not (cp-raw? checkpoint-cid)) (not (cp-raw? output-cid)) (not (cp-raw? proof-cid)))
+      (let [x (jn-say "job-output/checkpoint-config-refused")] 2)
+      (let [verdict (jo-checkpoint-verdict store checkpoint-cid author profile policy environment epoch parent task
+                                          output-cid proof-cid did job out-path proof-path)]
+        (if (= verdict "job-output/verified")
+          (let [x (jn-say "job-output/checkpoint-verified")] 0)
+          (let [x (jn-say verdict)] 1))))))

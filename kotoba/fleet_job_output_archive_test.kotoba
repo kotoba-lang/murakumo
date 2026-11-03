@@ -1,0 +1,14 @@
+;; Compose after fleet_job_output_archive.
+(ns murakumo.fleet-job-output-archive-test (:export [test-job-output-archive]))
+
+(defn test-job-output-archive [] :bool
+  (let [cid "bafkreibuoymhi5lbxktszxduuzmekq2qpbqd7mz66w2cowz4memgb4dna"
+        tree "0123456789abcdef0123456789abcdef01234567"]
+    (and (jo-archive-result? (str "archive/stored " cid " " tree " acknowledged") cid)
+         (jo-archive-result? (str "archive/stored " cid " " tree " unacknowledged") cid)
+         (not (jo-archive-result? (str "archive/stored " cid " " tree " acknowledged extra") cid))
+         (not (jo-archive-result? (str "archive/stored other " tree " acknowledged") cid))
+         (not (jo-archive-result? (str "archive/stored " cid " bad acknowledged") cid))
+         (jo-restore-fetch-result? (str "archive-restore/fetched " cid " " tree) cid)
+         (not (jo-restore-fetch-result? (str "archive-restore/fetched other " tree) cid))
+         (not (jo-restore-fetch-result? (str "archive-restore/fetched " cid " " tree " extra") cid)))))

@@ -1,0 +1,7 @@
+# Resident archive path check with real JSON parsing
+
+A small local ARM64 native diagnostic composed the actual JCS reader, config string extraction, `field-problem`, `cp-safe-absolute?`, resident archive path checks, and `test-profile-archive-path-safety`. It passed with valid separate paths and refused runtime/cache/store overlaps, missing protected roots, and work paths containing `/./`, `//` or `..`. A mutant bypassing `rt-work-resident-safe?` exited 1. Unlike the prior stubbed config diagnostic, this run parses the test JSON and uses the current real path validator. `assemble.py` creates the unity fixture and mutant from explicit source paths; an independently supplied Amu compiler and diagnostic FS2 packager are still needed to build them.
+
+JCS reader SHA-256 `f8af2953904bd0a96e7b5c3b9e34151bcae3754e5358669adb8ac289acc0872f`; resident test source `2ec97ebca7c29b7aa40cff0ad8b023c73686b76ea4e797d9bb29d0387e9ead54`; assembled fixture `502d22727cd62bfeb691672ddefdd61c50e347c39c99120e40659ad072e22f82`; ad-hoc signed fixture `c2c610b0e5ada217bfe96ce49d0215198b6370570268c183abcc6d6438579d0e`; mutant executable `6703bf200192cc43d7f3785b7102c2b459da8941c7bc38425213db82462884d1`. Compiler SHA-256 `920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6`; diagnostic FS2 packager `f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d`.
+
+No actual archive, GitHub operation, filesystem alias, inference or live service was exercised. These checks do not qualify the resource governor or the full native suite.

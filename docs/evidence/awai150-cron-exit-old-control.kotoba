@@ -1,0 +1,46 @@
+(ns cron-exit-fixture (:export [main]))
+(defn- cp-arg [i :i64] :string "/var/tmp/awai150-exit/config")
+(defn- cp-safe-absolute? [p :string] :bool true)
+(defn- cp-exists? [p :string] :bool true)
+(defn- cp-read [p :string] :vector-i64 [0])
+(defn- json-valid? [b :vector-i64] :bool true)
+(defn- json-canonical? [b :vector-i64] :bool true)
+(defn- rt-lock-config-safe? [b :vector-i64 p :string] :bool true)
+(defn- nc-ack-safe? [b :vector-i64 p :string] :bool true)
+(defn- cp-num [b :vector-i64 i :i64 k :string] :i64 86400000)
+(defn- cp-str [b :vector-i64 i :i64 k :string] :string
+ (cond (= k "head") "/var/tmp/awai150-exit/head" (= k "kind") "itonami.profile-resident/1"
+       (= k "authorB") "did:fixture" :else "fixture"))
+(defn- rf-voters? [s :string] :bool true)
+(defn- lease-token [s :string] :string "token")
+(defn- ri-show [s :string] :string "identity/did did:fixture")
+(defn- cp-say [s :string] :i64 (let [x (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- ln-field [s :string k :i64] :string
+ (let [i (string-index-of s " ")] (if (or (not (= k 0)) (< i 0)) s (string-substring s 0 i))))
+(defn- nc-cycle [cfg :vector-i64 config :string definition :string pin :string cursor :string source :string state :string before :string after :string repo :string gh :string] :string
+ (let [arg (typed-cap-call 38 :string :string "0")]
+  (cond (= arg "idle") "cron-resident/idle" (= arg "completed") "cron-resident/completed 60000"
+        (= arg "archive") "cron-resident/archive-pending" (= arg "dispatch") "cron-resident/dispatch-unknown"
+        :else "cron-resident/completion-unknown")))
+(defn- nc-exit-code [result :string released :bool] :i64
+  (if (not released) 2
+    (if (or (= result "cron-resident/idle") (= (ln-field result 0) "cron-resident/completed")) 0 1)))
+
+(defn main [] :i64
+  (let [config (cp-arg 0) definition (cp-arg 1) pin (cp-arg 2) cursor (cp-arg 3) source (cp-arg 4)
+        state (cp-arg 5) work-before (cp-arg 6) work-after (cp-arg 7) repo (cp-arg 8) gh (cp-arg 9)
+        cfg (if (and (cp-safe-absolute? config) (cp-exists? config)) (cp-read config) (vector-alloc 0))
+        head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
+    (if (or (not (json-valid? cfg)) (not (json-canonical? cfg)) (not (rt-lock-config-safe? cfg config))
+            (not (nc-ack-safe? cfg config))
+            (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
+            (not (= (cp-num cfg 0 "intervalMs") 86400000))
+            (not (rf-voters? (cp-str cfg 0 "voters"))) (= (lease-token (cp-str cfg 0 "tokenFile")) "")
+            (not (= (ri-show (cp-str cfg 0 "key")) (str "identity/did " (cp-str cfg 0 "authorB")))))
+      (let [z (cp-say "cron-resident/config-refused")] 2)
+      (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
+        (let [z (cp-say "cron-resident/local-writer-busy")] 2)
+        (let [result (nc-cycle cfg config definition pin cursor source state work-before work-after repo gh)
+              release (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")
+              z (cp-say (if release result "cron-resident/local-unlock-failed"))]
+          (if release 0 2))))))
