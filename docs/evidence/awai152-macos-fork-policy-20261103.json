@@ -1,0 +1,27 @@
+{
+  "kind": "awai.macos-fork-policy-observation/1",
+  "date": "2026-11-03",
+  "host": "local Apple Silicon Mac, macOS 26.3.1 build 25D771280a; not a remote Mac mini",
+  "programs": {
+    "sandbox_exec": "/usr/bin/sandbox-exec, sha256 f3162ae11789a5b296bb3850d493c33ddd52053a03f984b2c4bc34004f4fee99",
+    "amu_cli": "/tmp/codex-amu-1762/bin/amu, sha256 6e7dc223795919581cdfc9128344948dfaddec58e9573bef9632923538f33a2a",
+    "observer_sha256": "56eed43ea62b818eec319d95202fb0f0c883b3c90e5af614264ee9a8bc793de4",
+    "source_sha256": "5444f65962136dd859d17972d5002a1e86439ab13197fd89d2326303676a32d9",
+    "compiled_smoke_sha256": "3892267423e0be68180a3039d23182f4c0f2f1336a5dd14f1712be26842e4ef9"
+  },
+  "observed": {
+    "allow_default": {
+      "fork": "allowed",
+      "posix_spawn": "allowed",
+      "amu_run_exit": 0
+    },
+    "deny_process_fork": {
+      "fork": "denied errno 1",
+      "posix_spawn": "denied errno 1",
+      "amu_run_exit": 70,
+      "direct_macho_exit": 0
+    }
+  },
+  "method": "sandbox-exec with (version 1)(allow default), then with (deny process-fork). Python observer performed only tiny fork and posix_spawn tests. The same trivial Kotoba guest was run through the existing Amu CLI and separately as its directly compiled Mach-O. All commands terminated.",
+  "scope": "sandbox-exec is deprecated on this Mac and this permissive policy is not a production security boundary. This does not test unlisted process-creation APIs, XPC/services, a real inference workload, resource enforcement, FIFO, lock or crash recovery, remote Mac minis, the full component, or compiler self-host qualification. It demonstrates a promising direct-single-process test path and the incompatibility of the current CLI run path with fork denial."
+}

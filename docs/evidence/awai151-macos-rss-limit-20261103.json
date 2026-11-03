@@ -1,0 +1,23 @@
+{
+  "kind": "awai.macos-rss-limit-observation/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "host": "local Apple Silicon Mac, macOS 26.3.1; not a remote Mac mini",
+  "python": "3.14.5; used only for temporary test processes and observation",
+  "fixtures": {
+    "worker": "awai151-macos-rss-worker.py",
+    "workerSha256": "04369de3035ec076d3b5679c71a1598c385eb201d13dbb11e687e7f308654c58",
+    "observer": "awai151-macos-rss-observer.py",
+    "observerSha256": "3c9150069fdaafb9e0f6094f60d8c790de456cb7124a249939123687160b2b06",
+    "direct": "awai151-macos-rss-direct.py",
+    "directSha256": "07ea07a5108375fd417944bdd3059ef41b271cdbcc6948b765e2247303b22a37",
+    "observerPaths": "Task-specific temporary paths; adapt before rerunning."
+  },
+  "observed": {
+    "baseline": {"requestedBytes": 33554432, "rssLimit": [9223372036854775807, 9223372036854775807], "rssKiB": 48032},
+    "launchdSoftAndHardRss8MiB": {"requestedBytes": 33554432, "rssLimit": [9223372036854775807, 9223372036854775807], "rssKiB": 48064},
+    "pythonSetrlimit": "ValueError: current limit exceeds maximum limit",
+    "directSetrlimit": {"resource": "RLIMIT_RSS (5)", "softBytes": 8388608, "hardBytes": 8388608, "return": -1, "errno": 22, "limitsAfter": [9223372036854775807, 9223372036854775807]}
+  },
+  "method": "The first observer run expected launchd to install the limit and failed because getrlimit remained unlimited. The second run captured a no-limit baseline, the same launchd setting, and an explicit Python setrlimit attempt; the explicit case produced no result because setrlimit raised. A separate direct libc call returned EINVAL. Each test-owned launchd job was booted out and checked absent.",
+  "scope": "One local macOS host and small Python test workload. This does not establish behavior for all Macs, GPU or unified-memory allocation, a native Amu workload, a process group, other resource controls, or a production governor. It does not prove a limit was successfully installed. The local launchd.plist and setrlimit manual pages describe RSS in terms of reclamation preference under memory pressure; the measured failure is specific to this host and test."
+}

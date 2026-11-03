@@ -33,7 +33,7 @@ shasum -a 256 "$G/root.elf"
   git -C "$TS" show 03e2322489839be2176d5c23d0ccb4120d1b0ee8:kotoba/tsukasa/node_state.kotoba |
     sed '1,/test-target test-steps test-legal test-paths]))/d'
   sed '1,/test-fresh test-labels test-eligible test-placement test-scenarios]))/d' kotoba/fleet_placement_core.kotoba
-  sed '1,/cell-eligible-reason test-cell-eligibility test-cell-state-path]))/d' kotoba/fleet_cell_placement.kotoba
+  sed '1,/test-cell-eligibility test-cell-state-path test-cell-capacity]))/d' kotoba/fleet_cell_placement.kotoba
   cat <<'EOF'
 (defn main [] :i64
  (+ (if (and (test-registration) (test-duplicates) (test-transitions) (test-retired-terminal) (test-ledger) (test-audit) (test-runtime-classes)) 1 0)
