@@ -20,6 +20,10 @@ verify the output bytes, prove a current unexpired fence, or authorize effects.
 The [bounded fixtures](evidence/awai147-job-lease-binding-20261103.json) use a
 real signed receipt and JSON code but stub the quorum and cell; they reproduce
 the prior cross-job acceptance and do not qualify a distributed deployment.
+A separate [loopback quorum fixture](evidence/awai147-job-real-quorum-20261103.json)
+uses actual voter processes and lease rounds with a substituted signed-receipt
+reader: it accepts a matching job, rejects another job and rejects loss of
+quorum. Its voters share one VM and do not establish independent failure domains.
 
 Tracked in [JUN-289](https://linear.app/kotobalabs/issue/JUN-289). Three of
 its acceptance items are covered here:

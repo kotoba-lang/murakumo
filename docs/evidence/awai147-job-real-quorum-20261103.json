@@ -1,0 +1,20 @@
+{
+  "kind": "awai.job-receipt-real-quorum/1",
+  "date": "2026-11-03",
+  "environment": "Disposable Linux ARM64 VM, 1 CPU, 2 GiB; six loopback voters in two independent groups on one host.",
+  "job_source_sha256": "37455c152c909de325e4545c07aafa53c97f0db3f3616670476243d045f62c3d",
+  "lease_node_source_sha256": "9633bf795a5298ad8938bc57edaeb2cbf0b1d4c5a0350655fd591eb05da424bb",
+  "compiler_sha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "new_fixture_sha256": "2c6b407df21a4a8b803d65f79d16a05c575869a253b146aa09c63f9cb88a3578",
+  "new_image_sha256": "2753f8649568897a5101c79043f15c3717a7309ebf3c3fdc17af2dd33da8eb2f",
+  "old_fixture_sha256": "c969156fe99923a1c9edc7cfefe6de01ad7a6eb29341548e93530183382a8338",
+  "old_image_sha256": "04b91701ad51e63d2dc7302b670dd865d62a474765b0101125c723c84972aaab",
+  "method": "Native voter processes and actual lease-round on loopback; each group chose a lease held by k16 at epoch 2. Group A used the signed receipt job; group B used a different job. The actual jn-verify consumed a fixed public-test signed receipt through a substituted filesystem reader. A pre-change verifier was separately compiled as the control. Two of group A voters were terminated to test quorum loss.",
+  "observed": [
+    "matching job lease returned job/confirmed",
+    "different job lease returned job/lease-binding-refused",
+    "pre-change verifier returned job/confirmed for the different job lease",
+    "with one of three voters remaining verifier refused"
+  ],
+  "limits": "Only receipt file access is stubbed; network and quorum are real but all voters share one VM and use unauthenticated loopback. The verifier uses the draft FS2 voter initialization from PR 572, not proof of main-branch binary provenance. No real cell, bot, credential, production key, current lease freshness, Mac, multi-host failure domain or governor is qualified."
+}
