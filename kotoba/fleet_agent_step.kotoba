@@ -32,7 +32,7 @@
 ;; fleet_node_enrollment, sahai.fence, this file. docs/agent-step.md has the
 ;; gate.
 (ns murakumo.fleet-agent-step
-  (:export [job-text job-id job-problem step-receipt-text receipt-verdict test-agent-step]))
+  (:export [job-text job-id job-problem step-receipt-text step-receipt-text-v2 receipt-verdict receipt-verdict-v2 test-agent-step]))
 
 (defn- as-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
 
@@ -54,6 +54,11 @@
   (str "{\"at\":" at ",\"did\":\"" did "\",\"epoch\":" epoch ",\"exit\":" exit ",\"job\":\"" job
        "\",\"kind\":\"itonami.agent-step-receipt/1\",\"node\":\"" node "\",\"output\":\"" output "\"}"))
 
+;; The v2 lease digest is SHA-256 over the canonical adopted lease bytes.
+(defn step-receipt-text-v2 [at :i64 did :string epoch :i64 exit :i64 job :string lease :string node :string output :string] :string
+  (str "{\"at\":" at ",\"did\":\"" did "\",\"epoch\":" epoch ",\"exit\":" exit ",\"job\":\"" job
+       "\",\"kind\":\"itonami.agent-step-receipt/2\",\"lease\":\"" lease "\",\"node\":\"" node "\",\"output\":\"" output "\"}"))
+
 ;; holder-did and holder-epoch: the job lease as the fence holds it now
 (defn receipt-verdict [holder-did :string holder-epoch :i64
                        at :i64 did :string epoch :i64 exit :i64 job :string node :string output :string
@@ -61,6 +66,17 @@
   (cond (not (= (statement-problem did (step-receipt-text at did epoch exit job node output) sig) "enroll/ok")) "job/bad-signature"
         (not (= did holder-did)) "job/not-the-holder"
         (not (= epoch holder-epoch)) "job/stale-epoch"
+        (not (= exit 0)) "job/cell-failed"
+        (= (cid-digest output) "") "job/bad-output-cid"
+        :else "job/confirmed"))
+
+(defn receipt-verdict-v2 [holder-did :string holder-epoch :i64 expected-lease :string
+                          at :i64 did :string epoch :i64 exit :i64 job :string lease :string node :string output :string
+                          sig :string] :string
+  (cond (not (= (statement-problem did (step-receipt-text-v2 at did epoch exit job lease node output) sig) "enroll/ok")) "job/bad-signature"
+        (not (= did holder-did)) "job/not-the-holder"
+        (not (= epoch holder-epoch)) "job/stale-epoch"
+        (or (not (= (string-length expected-lease) 64)) (not (= lease expected-lease))) "job/lease-binding-refused"
         (not (= exit 0)) "job/cell-failed"
         (= (cid-digest output) "") "job/bad-output-cid"
         :else "job/confirmed"))
@@ -82,6 +98,8 @@
 (defn- as-sigBbyA [] :string "MmuVQAqM8yKH-lr2Fx3ILK32Vh-Dtfu59Ye3BArgYY8Bc8T-99369A1y4sHnNEZNqJ82HY9e9j4DO3bCcSrJCA")
 ;; The holder really signed the same canonical receipt with exit 1.
 (defn- as-sigBfailed [] :string "t4aeeUwObwUPa7vhzMKXTLNJLN0R-AqDIV3pUKt19bVlg6gGc4yMjRqCakG_Jcqieg2HGcNSsLdsaFt0x6g5DQ")
+(defn- as-lease-digest [] :string "09ce0a50ed671968129ad643398d66549fb5d5c9cc781c138044f68583bfbd2d")
+(defn- as-sigBv2 [] :string "iiO--_Mr6t3Qb1kzvEyQ6ijKQzbUa91Y06iVV6QhPmjdscnwzttf81bRwfG50xqAQPClBOSrOmM6Ccilh15GAw")
 
 (defn- as-verdict [holder :string hepoch :i64 did :string epoch :i64 exit :i64 node :string sig :string] :string
   (receipt-verdict holder hepoch 1792500000000 did epoch exit (as-jobId) node (as-output) sig))
@@ -112,5 +130,8 @@
          (= (as-verdict (as-didB) 2 (as-didB) 2 0 "k16" (as-sigBbyA)) "job/bad-signature")
          (= (as-verdict (as-didB) 2 (as-didB) 2 1 "k16" (as-sigB)) "job/bad-signature")
          (= (as-verdict (as-didB) 2 (as-didB) 2 1 "k16" (as-sigBfailed)) "job/cell-failed")
+         (= (receipt-verdict-v2 (as-didB) 2 (as-lease-digest) 1792500000000 (as-didB) 2 0 (as-jobId) (as-lease-digest) "k16" (as-output) (as-sigBv2)) "job/confirmed")
+         (= (receipt-verdict-v2 (as-didB) 2 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" 1792500000000 (as-didB) 2 0 (as-jobId) (as-lease-digest) "k16" (as-output) (as-sigBv2)) "job/lease-binding-refused")
+         (= (receipt-verdict-v2 (as-didB) 2 (as-lease-digest) 1792500000000 (as-didB) 2 0 (as-jobId) "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "k16" (as-output) (as-sigBv2)) "job/bad-signature")
          ;; the receipts are canonical JSON
          (json-canonical? (as-bytes (step-receipt-text 1792500000000 (as-didB) 2 0 (as-jobId) "k16" (as-output)))))))

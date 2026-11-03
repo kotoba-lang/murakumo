@@ -10,8 +10,13 @@
         checkpoint (cp-bytes (str "{\"payload\":{\"untracked\":[{\"cid\":\"" output-cid
           "\",\"mode\":\"644\",\"path\":\"output\"},{\"cid\":\"" proof-cid
           "\",\"mode\":\"644\",\"path\":\"proof\"}]}}"))
-        required (json-canonical-bytes checkpoint (json-member checkpoint (cp-payload checkpoint) "untracked"))]
+        required (json-canonical-bytes checkpoint (json-member checkpoint (cp-payload checkpoint) "untracked"))
+        receipt-v2 (string-replace-all receipt "itonami.agent-step-receipt/1\",\"node\"" "itonami.agent-step-receipt/2\",\"lease\":\"09ce0a50ed671968129ad643398d66549fb5d5c9cc781c138044f68583bfbd2d\",\"node\"")
+        sig-v2 "ztXTDaUbgjiYKS7vwNyKBMUs4m99s7Ofeb_DI9F0wiTs79Sh1Q28xLpUrwdrP5iBX52W588YHT1R7lLEAjioCg"
+        log-v2 (str "receipt " receipt-v2 "\nsignature " sig-v2 "\noutput-base64url " output "\n")]
     (and (= (jo-verdict log did job) "job-output/verified")
+         (= (jo-verdict log-v2 did job) "job-output/verified")
+         (= (jo-verdict (str "receipt " receipt-v2 "\nsignature " sig "\noutput-base64url " output "\n") did job) "job-output/signature")
          (= (jo-verdict (str log "receipt {}\n") did job) "job-output/missing-or-duplicate")
          (= (jo-verdict (str "receipt {\"a\":\nsignature " sig "\noutput-base64url " output "\n") did job) "job-output/receipt")
          (= (jo-verdict (str "receipt " receipt "\nsignature AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\noutput-base64url " output "\n") did job) "job-output/signature")
