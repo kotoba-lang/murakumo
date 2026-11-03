@@ -1,0 +1,13 @@
+(ns archive-exit-fixture (:export [main]))
+(defn- cp-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- cp-int [s :string] :i64 1)
+(defn- cp-say [s :string] :i64 (let [r (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- ga-archive [a :string b :string c :string d :string e :string f :string g :string epoch :i64 h :string i :string j :string k :string] :string
+ (cond (= a "stored") "archive/stored root tree acknowledged"
+       (= a "unack") "archive/stored root tree unacknowledged"
+       (= a "private") "archive/private-repository-unverified"
+       (= a "readback") "archive/readback-unknown-or-conflict"
+       :else "archive/input-refused"))
+(defn main [] :i64
+  (cp-say (ga-archive (cp-arg 0) (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6)
+                      (cp-int (cp-arg 7)) (cp-arg 8) (cp-arg 9) (cp-arg 10) (cp-arg 11))))
