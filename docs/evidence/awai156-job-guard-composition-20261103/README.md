@@ -19,8 +19,9 @@ predicate, not a live cell, quorum or the complete job-node runtime.
 This cherry-pick carries the scope of #555 only. The separate
 [PR #576](https://github.com/kotoba-lang/murakumo/pull/576) also checks the
 lease after execution and requires a live clock; that stronger path is not
-included here. Neither guard is an atomic sink fence or a qualified resource
-governor. Real production authority, workload termination, effect fencing,
+included at the time of this test. A later commit combines those behaviors
+with the strict guard; see [the subsequent evidence](../awai156-job-live-lease-20261103/).
+Neither guard is an atomic sink fence or a qualified resource governor. Real production authority, workload termination, effect fencing,
 MTP inference and cross-host quorum remain unverified. Resolve and validate
 the overlapping PRs in dependency order before release.
 
