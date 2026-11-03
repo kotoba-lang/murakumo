@@ -133,9 +133,12 @@
 ;; ---------------------------------------------------------------- L2
 
 (defn fresh?
-  "An observation counts only while younger than ttl."
+  "An observation counts only if its safe-integer timestamp is not future and is younger than a positive ttl."
   [obs now-ms ttl-ms]
-  (and obs (number? (:at-ms obs)) (< (- now-ms (:at-ms obs)) ttl-ms)))
+  (let [at-ms (:at-ms obs)]
+    (and obs (js/Number.isSafeInteger at-ms) (js/Number.isSafeInteger now-ms)
+         (js/Number.isSafeInteger ttl-ms) (<= 0 at-ms now-ms) (pos? ttl-ms)
+         (< (- now-ms at-ms) ttl-ms))))
 
 ;; ---------------------------------------------------------------- L3 placement
 

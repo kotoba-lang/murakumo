@@ -31,6 +31,15 @@
 (defn- obs [& {:as m}] (merge {:at-ms now :pressure 1} m))
 (def all-fresh {"a" (obs) "bb" (obs) "ccc" (obs) "dddd" (obs)})
 
+(deftest future-and-invalid-observations-are-not-fresh
+  (is (spec/fresh? (obs :at-ms now) now 300000))
+  (is (not (spec/fresh? (obs :at-ms (inc now)) now 300000)))
+  (is (not (spec/fresh? (obs :at-ms -1) now 300000)))
+  (is (not (spec/fresh? (obs :at-ms 0) -1 300000)))
+  (is (not (spec/fresh? (obs :at-ms now) now 0)))
+  (is (not (spec/fresh? (obs :at-ms 1.5) now 300000)))
+  (is (not (spec/fresh? (obs :at-ms 9007199254740992) now 300000))))
+
 (deftest validates-resident-rollout
   (let [ok {"sha256" (apply str (repeat 64 "a")) "waves" [["a"] ["bb" "ccc"]] "settle-ms" 1000}
         bad? (fn [r] (seq (spec/validate (assoc-in intent ["agents" "resident"] r))))]
