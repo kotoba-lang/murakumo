@@ -82,7 +82,9 @@
           ;; again. "aborted" clears this journal but does not authorize a
           ;; retry or assert anything about an external workload. The host
           ;; must reconcile that outcome separately. Failures remain unknown.
-          (and (= (rq-fs "M" root "") "1")
+          (and (= (rq-fs "M" (str root "/queue") "") "1")
+               (= (rq-fs "M" intent "") "1")
+               (= (rq-fs "M" root "") "1")
                (= (rq-fs "L" intent (str root "/queue.last")) "1")
                (= (rq-fs "M" root "") "1")) (if (= state next) "fifo/recovered" "fifo/aborted")
           :else "fifo/recovery-unknown")))
