@@ -5,7 +5,12 @@
 (ns murakumo.profile-cron-bridge (:export [profile-cron-bridge-main]))
 
 (defn- br-work-bound? [cfg :vector-i64 runtime :vector-i64 definition :vector-i64 source :vector-i64] :bool
-  (and (= (gt-str definition "profile") (cp-str cfg 0 "profile"))
+  ;; Only this resident path reads and verifies the pinned work-order bytes
+  ;; before including them in the model request. The accountability path
+  ;; does neither, even if a caller supplies an unrelated workDigest field.
+  (and (= (cp-str runtime 0 "profile") "awai-growth-steward")
+       (= (cp-str cfg 0 "profile") (cp-str runtime 0 "profile"))
+       (= (gt-str definition "profile") (cp-str cfg 0 "profile"))
        (= (gt-str definition "policy") (cp-str cfg 0 "policy"))
        (= (gt-str definition "rail") "murakumo")
        (> (vector-count source) 0) (<= (vector-count source) 8192)

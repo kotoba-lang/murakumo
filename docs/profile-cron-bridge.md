@@ -4,9 +4,13 @@ AWAI-147 connects the native cron cursor to the existing read-only MTP profile
 resident. `profile_cron_bridge.kotoba` composes the pinned cron planner,
 agent-step identity, checkpoint and resident sources. It requires the due
 schedule's profile and policy to match the host-pinned resident config, and
-its source CID to match the exact host-pinned work-order digest. The resident
-later verifies that digest again against the restored checkpoint. A changed
-work order is refused rather than silently ignored.
+its source CID to match the exact host-pinned work-order digest. Only the
+`awai-growth-steward` resident path is admitted: it reads the work order from
+the restored checkpoint, verifies its digest and includes its bytes in the
+prompt. The `accountability-steward` path does not read that work order, so
+the bridge refuses it even if a matching digest field is supplied. A changed
+work order is refused rather than silently ignored. This remains a read-only
+proposal lane; it does not run tools or make external changes.
 
 The bridge checks runtime pins, the independently verified retained head and
 a fresh GitHub archive acknowledgement before installing a canonical cron
@@ -314,3 +318,5 @@ The native single-cycle coordinator candidate in `kotoba/profile_cron_controller
 The coordinator also rejects exact conflicts between its input files and resident-owned paths, including the resident temporary files, and refuses an archive acknowledgement path or its temporary path if it conflicts with the resident configuration. `docs/evidence/awai150-cron-path-guard-20261103.json` records source-closure and negative-control tests. Exact comparisons do not detect symlinks, hard links, nested paths or all resident-internal configuration conflicts; the host must still isolate and validate the complete path layout.
 
 The native controller exits zero only for idle or completed cycles. Refused, pending and unknown outcomes exit nonzero even if its local lock was released; an unlock failure exits 2. A host must distinguish the printed outcome and reconcile unknown dispatches rather than blindly retrying every nonzero exit. `docs/evidence/awai150-cron-exit-20261103.json` records an extracted-entry-point fixture with a real local lock and a negative control; the underlying cycle is stubbed.
+
+`docs/evidence/awai150-cron-work-binding-20261103.json` records native source-closure tests for the supported and unsupported profile cases, a wrong-work case and a bypass control. This does not prove an integrated inference turn.
