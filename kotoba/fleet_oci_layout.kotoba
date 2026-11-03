@@ -135,10 +135,13 @@
               :else
           (let [m (ol-read (ol-blob-path layout manifest-digest) manifest-size) root (ol-root m)
                 layers (if (and (ol-read-ok? m) (json-valid? m)) (json-member m root "layers") -1)]
-            (if (not (and (ol-read-ok? m) (json-valid? m) (= (ol-int m root "schemaVersion") 2)
+            (cond (or (not (ol-read-ok? m)) (not (= (vector-count m) manifest-size))) "layout/size-mismatch"
+              (not (= (string-concat "sha256:" (sha256-hex m)) manifest-digest)) "layout/digest-mismatch"
+              (not (and (json-valid? m) (= (ol-int m root "schemaVersion") 2)
                           (= (ol-text m root "mediaType") "application/vnd.oci.image.manifest.v1+json")
                           (>= layers 0) (= (json-kind m layers) 2) (<= (json-count m layers) 16)))
               "layout/not-an-oci-manifest"
+              :else
               (let [cc (ol-descriptor-code layout m (json-member m root "config"))]
                 (if (> cc 0) (ol-reason cc)
                   (loop [k 0]
@@ -148,8 +151,13 @@
 
 ;; the image ID podman gives what this manifest describes: its config digest
 (defn layout-config-digest [layout :string manifest-digest :string] :string
-  (let [f (ol-blob-path layout manifest-digest)
-        m (if (ol-exists? f) (ol-read f 4194304) (ol-failed))]
-    (if (not (and (ol-read-ok? m) (json-valid? m))) ""
-      (let [c (json-member m (ol-root m) "config")]
-        (if (or (< c 0) (not (= (json-kind m c) 1))) "" (ol-text m c "digest"))))))
+  (if (not (= (digest-problem manifest-digest) "oci/ok")) ""
+    (let [f (ol-blob-path layout manifest-digest)
+          m (if (ol-exists? f) (ol-read f 4194304) (ol-failed))]
+      ;; This is a separate read after layout-verdict; authenticate these exact
+      ;; bytes before using their config digest to decide what image to run.
+      (if (not (and (ol-read-ok? m) (= (string-concat "sha256:" (sha256-hex m)) manifest-digest)
+                    (json-valid? m))) ""
+        (let [c (json-member m (ol-root m) "config")
+              d (if (or (< c 0) (not (= (json-kind m c) 1))) "" (ol-text m c "digest"))]
+          (if (= (digest-problem d) "oci/ok") d ""))))))
