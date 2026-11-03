@@ -1,0 +1,19 @@
+{
+  "kind": "awai.macos-launchd-process-group-observation/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "host": "local Apple Silicon Mac, macOS 26.3.1; not a remote Mac mini",
+  "cliSha256": "6e7dc223795919581cdfc9128344948dfaddec58e9573bef9632923538f33a2a",
+  "fixture": {
+    "source": "awai152-launchd-process-group-fixture.kotoba",
+    "sourceSha256": "e69466c2ae835a267db56f2fdbfcbbebdffdae9014372e3887a497af527c2a0c",
+    "observer": "awai152-launchd-process-group-observer.py",
+    "observerSha256": "2f6dd034ec434752c443e73d348b909d9f984136de5326ee282fff971ee8c2cf",
+    "observerPaths": "Task-specific CLI and temporary directory paths; adapt before rerunning."
+  },
+  "observed": [
+    {"abandonProcessGroup": false, "sameProcessGroup": true, "guestAliveAfterUpTo1Second": false},
+    {"abandonProcessGroup": true, "sameProcessGroup": true, "guestAliveAfterUpTo1Second": true}
+  ],
+  "method": "A unique one-shot user launchd job started Amu with the test guest. The observer verified the CLI and guest shared the process group, SIGKILLed the CLI, and observed the guest for up to one second. The false case used the documented group-cleanup behavior; the true case disabled it as a control. The observer killed its own surviving test guest, booted out each unique test job and checked their registrations were absent.",
+  "scope": "A single local Mac observation with a short CPU guest, not the Bonsai model, a remote Mac mini, resource admission, a queue, lock, fence or production service. Group cleanup is asynchronous; processes that change groups, daemonize or use external services were not tested. The supervisor must still reconcile workload termination before admitting another job. Python was a one-off test observer, not operational tooling."
+}

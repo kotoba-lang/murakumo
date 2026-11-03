@@ -1,0 +1,18 @@
+{
+  "kind": "awai.three-mac-real-decoder-pipeline/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "physicalMacs": 3,
+  "runtime": {"mlx": "0.32.2", "mtplx": "2.12.2", "fullModelPostLoad": false},
+  "stages": [
+    {"rank": 0, "layer": 2, "attention": "gated-linear", "tensorArrayBytesRead": 109990784, "sha256": "e97b911d51245da5c0dab507c84428d5b695bbf5e628fe01056ae01d8f3843aa", "sampledMinimumMemoryPressureFreePercent": 89},
+    {"rank": 1, "layer": 3, "attention": "full", "tensorArrayBytesRead": 104933376, "sha256": "fabd6c071453363006d786d0d8713841647b004a47c7d545d18f1f7fb25275b8", "sampledMinimumMemoryPressureFreePercent": 87},
+    {"rank": 2, "layer": 4, "attention": "gated-linear", "tensorArrayBytesRead": 109990784, "sha256": "edc97a0af51bb263eb11919f96b55b863c375c18c8a9de08eaba13a1f62258f9", "sampledMinimumMemoryPressureFreePercent": 87}
+  ],
+  "reference": "Same three actual layers separately loaded and executed in sequence on rank 0, with independent caches",
+  "input": "Two deterministic synthetic hidden-state vectors, batch 1, sequence length 1, float16",
+  "stepMaxAbsoluteDifferences": [0.0, 0.0],
+  "guard": {"mlxPerProcessMemoryLimitBytes": 2147483648, "stopBelowSampledMemoryPressureFreePercent": 60},
+  "transport": "temporary direct Tailscale TCP ring without application-level authentication",
+  "cleanup": "All three task-owned probe processes exited; no listener or permanent service was installed.",
+  "scope": "Three consecutive decoder layers and two synthetic stateful steps; not full model, full prompt, logits, real token quality, MTP, complete peak memory, authenticated production transport, persistent service or ten-host scheduling."
+}

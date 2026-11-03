@@ -112,8 +112,8 @@
 
   `registry` is pid or comm-substring → :resident | :opportunistic. A claim
   that matches nothing is counted as OPPORTUNISTIC, which is the conservative
-  direction: an unknown holder is assumed evictable-but-present, so it reduces
-  what opportunistic work may take and does not silently free up room."
+  direction: an unknown holder remains present and reduces immediate capacity
+  for either class. Its release must be verified before capacity is reused."
   [{:keys [claims]} registry]
   (reduce (fn [acc {:keys [pid comm bytes]}]
             (let [k (or (get registry pid)

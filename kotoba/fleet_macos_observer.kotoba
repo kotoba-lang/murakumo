@@ -1,0 +1,91 @@
+;; Darwin native host-protocol bridge for the fleet observer candidate.
+;; Compose after tunnel_core, Amu seed/macos-cli-api.kotoba and
+;; fleet_ssh_observe.kotoba. The host must scope filesystem and process grants,
+;; bound process time/output, and provide a fresh private work directory for
+;; every invocation. Capture files are retained for host reconciliation.
+;; This is diagnostic only, not a resource reservation or a qualified host.
+(ns murakumo.fleet-macos-observer
+  (:export [fleet-macos-observer-main fleet-macos-receiver-main fleet-macos-fixed-receiver-main]))
+
+(defn- mo-argv [s :string] :vector-i64
+  (let [n (string-byte-length s)]
+    (loop [start 0 count 0 out ""]
+      (let [tail (string-substring s start n) cut (string-index-of tail "ARG_SEP")
+            item (if (< cut 0) tail (string-substring tail 0 cut))
+            next (str out (hc-field item))]
+        (cond (= item "") []
+              (< cut 0) (hc-cat [(+ count 1)] (hc-bytes next))
+              (>= count 62) []
+              :else (recur (+ start cut 7) (+ count 1) next))))))
+
+;; The caller supplies only a fixed request constructed in this component.
+;; Empty, failed, nonzero or oversized replies never become observations.
+(defn- mo-proc-ok? [reply :vector-i64] :bool
+  ;; AMUH carries status, exit and signal separately. Do not accept a
+  ;; contradictory success exit paired with a signal or a truncated reply.
+  (and (= (vector-count reply) 3) (= (vector-at reply 0) 0)
+       (= (vector-at reply 1) 0) (= (vector-at reply 2) 0)))
+(defn- mo-run [work :string name :string executable :string request :string] :string
+  (let [fields (mo-argv request) count (if (> (vector-count fields) 0) (vector-at fields 0) 0)
+        argv (if (> count 0) (hc-text (hc-slice fields 1 (- (vector-count fields) 1))) "")
+        capture (str work "/" name)
+        reply (if (and (ob-path? work) (> count 0) (<= count 63))
+                (hc-spawn 0 work capture executable count argv) [])
+        bytes (if (mo-proc-ok? reply) (hc-read capture) [])]
+    (if (and (hc-ok? bytes) (> (vector-count bytes) 1) (<= (vector-count bytes) 8193))
+      (str "0\n" (hc-text (hc-slice bytes 1 (- (vector-count bytes) 1)))) "")))
+(defn- mo-stdout [reply :string] :string
+  (if (= (string-index-of reply "0\n") 0) (string-substring reply 2 (string-byte-length reply)) ""))
+
+(defn- mo-snapshot [work :string] :string
+  (let [memory (mo-stdout (mo-run work "memory" "/usr/sbin/sysctl" "/usr/sbin/sysctlARG_SEP-nARG_SEPhw.memsizeARG_SEPvm.swapusage"))]
+    (if (= (observe-memory-swap memory) "") ""
+      (let [pressure (mo-stdout (mo-run work "pressure" "/usr/bin/memory_pressure" "/usr/bin/memory_pressureARG_SEP-Q"))]
+        (if (= (observe-pressure pressure) "") ""
+          (let [disk (mo-stdout (mo-run work "disk" "/bin/df" "/bin/dfARG_SEP-PkARG_SEP/"))]
+            (if (= (observe-disk disk) "") ""
+              (str "__awai_memory__\n" memory "__awai_pressure__\n" pressure "__awai_disk__\n" disk))))))))
+
+;; NODE IPV4 IDENTITY KNOWN LOCAL-WORK REMOTE-WORK. The remote binary and
+;; requested work path must be separately pinned by the host's policy. The
+;; SSH marker cannot establish the honesty of the authenticated remote host.
+(defn- mo-receive [node :string ip :string identity :string known :string work :string remote :string] :string
+  (if (not (and (observe-inputs? node ip identity known) (ob-path? work) (ob-path? remote))) ""
+    (let [cmd (str "/Users/" node "/.murakumo/bin/fleet-host-observer " remote)
+          request (ob-ssh-command node ip identity known cmd)
+          reply (mo-run work "snapshot" "/usr/bin/ssh" request)
+          raw (observe-result reply)]
+      (if (= raw "") "" (observe-native-snapshot raw)))))
+
+;; The remote fixed host is a no-argument, read-only executable. Its exact
+;; signed artifact and installation path still need independent host policy.
+(defn- mo-receive-fixed [node :string ip :string identity :string known :string work :string] :string
+  (if (not (and (observe-inputs? node ip identity known) (ob-path? work))) ""
+    (let [cmd (str "/Users/" node "/.murakumo/bin/fleet-fixed-observer")
+          request (ob-ssh-command node ip identity known cmd)
+          reply (mo-run work "snapshot" "/usr/bin/ssh" request)
+          raw (observe-result reply)]
+      (if (= raw "") "" (observe-fixed-snapshot raw)))))
+
+(defn fleet-macos-observer-main [] :i64
+  (let [work (typed-cap-call 38 :string :string "0") extra (typed-cap-call 38 :string :string "1")
+        result (if (and (= extra "") (ob-path? work)) (mo-snapshot work) "")
+        out (typed-cap-call 37 :string :string (if (= result "") "host-observation/refused\n" result))]
+    (if (= result "") 1 0)))
+(defn fleet-macos-receiver-main [] :i64
+  (let [node (typed-cap-call 38 :string :string "0") ip (typed-cap-call 38 :string :string "1")
+        identity (typed-cap-call 38 :string :string "2") known (typed-cap-call 38 :string :string "3")
+        work (typed-cap-call 38 :string :string "4") remote (typed-cap-call 38 :string :string "5")
+        extra (typed-cap-call 38 :string :string "6")
+        result (if (= extra "") (mo-receive node ip identity known work remote) "")
+        out (typed-cap-call 37 :string :string
+              (if (= result "") "observation/refused native-snapshot\n" (str "observation/untrusted " node "\n" result)))]
+    (if (= result "") 1 0)))
+(defn fleet-macos-fixed-receiver-main [] :i64
+  (let [node (typed-cap-call 38 :string :string "0") ip (typed-cap-call 38 :string :string "1")
+        identity (typed-cap-call 38 :string :string "2") known (typed-cap-call 38 :string :string "3")
+        work (typed-cap-call 38 :string :string "4") extra (typed-cap-call 38 :string :string "5")
+        result (if (= extra "") (mo-receive-fixed node ip identity known work) "")
+        out (typed-cap-call 37 :string :string
+              (if (= result "") "observation/refused fixed-snapshot\n" (str "observation/untrusted " node "\n" result)))]
+    (if (= result "") 1 0)))
