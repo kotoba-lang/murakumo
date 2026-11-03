@@ -1,5 +1,8 @@
 # Journaled local model publication candidate
 
+This records the publication-only candidate. The later [recovery diagnostic](../awai149-oci-recovery-20261103/README.md)
+adds a conditional reconciliation entry with important directory-inventory limits.
+
 `model-artifact-publish-main` takes the same pinned OCI inputs as the stage
 entry, plus fresh sibling stage and destination paths. It validates the OCI
 descriptors and assets, writes and syncs a sibling intent binding manifest,
