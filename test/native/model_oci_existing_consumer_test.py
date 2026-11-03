@@ -19,7 +19,9 @@ FIXTURE_SHA256 = "d5a852ecc05069d9fc93e044714a369c0a665d9b2c6db17c0a665b97155120
 IMAGE = "application/vnd.oci.image.manifest.v1+json"
 NAMES = ("config.json", "tokenizer.json", "tokenizer_config.json", "chat_template.jinja",
          "hadamard.json", "mtplx_runtime.json", "model.safetensors.index.json",
-         "MTPLX_PACK_MANIFEST.json")
+         "MTPLX_PACK_MANIFEST.json", "generation_config.json", "preprocessor_config.json",
+         "processor_config.json", "video_preprocessor_config.json", "LICENSE", "NOTICE.txt",
+         "README.md")
 
 
 def digest(data):
@@ -114,7 +116,34 @@ def main(fixture):
             assert (root / "published/mtp.safetensors").read_bytes() == mtp
             for name, data in payloads.items():
                 assert (root / "published" / name).read_bytes() == data
-            print("PASS existing native consumer: valid layout and wrong pin")
+            # Recompute all OCI descriptors around an archive containing an
+            # unknown member: the consumer must enforce the asset inventory,
+            # not merely reject an incorrect outer digest.
+            extra = b"unlisted\n"
+            bad_tar = tar[:-1024] + ustar_header("unexpected.json", len(extra)) + extra
+            bad_tar += bytes((-len(extra)) % 512) + bytes(1024)
+            with tarfile.open(fileobj=io.BytesIO(bad_tar), mode="r:") as archive:
+                assert {member.name: archive.extractfile(member).read() for member in archive.getmembers()} == {
+                    **payloads, "unexpected.json": extra}
+            bad_manifest = dict(manifest)
+            bad_manifest["layers"] = [*manifest["layers"][:2],
+                                      descriptor("application/vnd.awai.model.bonsai.assets.tar.v1", bad_tar)]
+            bad_encoded = json.dumps(bad_manifest, separators=(",", ":")).encode()
+            bad_index = json.dumps({"manifests": [descriptor(IMAGE, bad_encoded)], "schemaVersion": 2},
+                                   separators=(",", ":")).encode()
+            bad_layout = root / "badlayout"
+            bad_blobs = bad_layout / "blobs" / "sha256"
+            bad_blobs.mkdir(parents=True)
+            for data in (b"{}", base, mtp, bad_tar, bad_encoded):
+                (bad_blobs / digest(data)[7:]).write_bytes(data)
+            (bad_layout / "oci-layout").write_bytes(b'{"imageLayoutVersion":"1.0.0"}')
+            (bad_layout / "index.json").write_bytes(bad_index)
+            bad_args = ["/badlayout", digest(bad_encoded), str(len(bad_encoded)), digest(base), str(len(base)),
+                        digest(mtp), str(len(mtp)), digest(bad_tar), str(len(bad_tar))]
+            rejected_extra = call([*bad_args, "/extrastage", "/extratarget"])
+            assert rejected_extra.returncode != 0 and rejected_extra.stdout.strip() == "model-artifact/publication-unknown"
+            assert not (root / "extratarget").exists()
+            print("PASS existing native consumer: 15 assets, wrong pin, unlisted asset")
         finally:
             if fd != 3:
                 if saved is None:

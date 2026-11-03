@@ -39,8 +39,10 @@ constructs the same descriptor and USTAR header shape with small synthetic bytes
 Python's standard tar reader and, on one Mac,
 the previously built native publication fixture with SHA-256
 `d5a852ecc05069d9fc93e044714a369c0a665d9b2c6db17c0a665b97155120c1`
-accepted that layout, restored its synthetic blobs and eight assets, and
-refused a wrong base digest. The fixture's `ma-check`, `md-observe`, and
+accepted that layout, restored its synthetic blobs and all 15 fixed assets, and
+refused a wrong base digest. A separately hashed layout containing an unlisted
+tar member returned `model-artifact/publication-unknown` without publishing its
+target. The fixture's `ma-check`, `md-observe`, and
 `ma-stage-checked` matched the current source. This exercises the existing
 consumer with a Python-created layout; it does **not** execute the new seal
 component or prove its exact output, crash behavior or production ABI.
