@@ -85,6 +85,7 @@ plus rename is not an atomic no-replace lock against concurrent creators.
 ```text
 checkpoint capture REPO STORE KEY PROFILE_FILE POLICY_FILE ENV_FILE SUMMARY_FILE UNTRACKED_JSON EPOCH PARENT TASK
 checkpoint verify  STORE CID AUTHOR_DID PROFILE_DIGEST POLICY_CID ENV_CID EPOCH PARENT TASK
+checkpoint closure STORE CID AUTHOR_DID PROFILE_DIGEST POLICY_CID ENV_CID EPOCH PARENT TASK
 checkpoint restore STORE CID AUTHOR_DID PROFILE_DIGEST POLICY_CID ENV_CID EPOCH PARENT TASK DEST
 checkpoint recovery STORE FROM_CID TO_CID NODE_B_KEY TASK
 checkpoint verify-recovery STORE RECEIPT_CID NODE_B_DID FROM_CID TO_CID TASK EPOCH
@@ -92,7 +93,17 @@ checkpoint verify-recovery STORE RECEIPT_CID NODE_B_DID FROM_CID TO_CID TASK EPO
 
 `UNTRACKED_JSON` is a canonical, sorted JSON array of selected paths, e.g.
 `["resume.txt","src/new.kotoba"]`. No recursive collection of untracked or
-ignored files occurs. An author DID, expected root CID and resume contract must
+ignored files occurs. `closure` performs the same signature, independently supplied contract and full
+CID verification as `verify`, then emits `checkpoint/block CID` lines and a
+final `checkpoint/closure-complete` line. It includes the root, bundle index,
+all chunks, policy, environment, profile, summary and allowlisted untracked
+objects; duplicate CIDs are possible. A consumer must refuse partial output,
+recheck bytes against CIDs when copying, and keep the source store quiescent.
+The command enumerates objects only; it neither writes to GitHub nor admits a
+head. Checkpoint contents can contain sensitive data and require a separately
+approved destination and data boundary.
+
+An author DID, expected root CID and resume contract must
 come from the authorized task, not from untrusted fields returned by a peer.
 Exact equality is required for epoch and parent; there is no silent upgrade.
 The identity pins the selected profile artifact; release/OCI admission still
