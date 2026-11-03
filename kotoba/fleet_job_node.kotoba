@@ -21,8 +21,8 @@
 ;;              (fleet_lease_node lease-round), own value
 ;;              lease-text(node, job id, slot 0, epoch 1, now + ttl); the
 ;;              chosen value names the holder ("lease <holder>");
-;;           3. a node that does not hold it stops ("held-by <holder>"),
-;;              unless it is the rogue control;
+;;           3. a node that does not hold an unexpired lease for this exact
+;;              job stops before starting the cell;
 ;;           4. the holder runs the cell: its own signed state (own-state),
 ;;              then fleet_cell_run's cell-execute (release verdict, image
 ;;              layout, podman with a fixed argv);
@@ -101,18 +101,33 @@
 (defn- jn-token [i :i64] :string
   (let [path (jn-arg i)] (if (= path "") "" (let [t (lease-token path)] (if (= t "") "-" t)))))
 
+;; An adopted Paxos value is not automatically a lease for this job. Recheck
+;; its full binding and deadline immediately before dispatch. The register and
+;; clock still have to be independently provisioned and protected by the host.
+(defn- jn-lease-problem [chosen :string node :string jid :string now :i64] :string
+  (let [b (jn-bytes chosen) holder (jn-text chosen "node") class (jn-text chosen "class")
+        epoch (jn-num chosen "epoch") slot (jn-num chosen "slot")
+        until (jn-num chosen "until") revision (jn-num chosen "revision")]
+    (cond (or (= chosen "") (not (json-canonical? b)) (not (= (json-kind b 0) 1))
+              (not (= (json-count b 0) 6)) (= node "") (< now 0) (> now 9007199253000000)) "job/lease-invalid"
+          (not (= holder node)) "job/lease-holder"
+          (or (not (= class jid)) (not (= slot 0)) (not (= epoch 1)) (not (= revision 0))) "job/lease-binding"
+          (or (<= until now) (not (valid-value? holder true class slot epoch until now))) "job/lease-expired-or-invalid"
+          :else "job/lease-ok")))
+
 (defn- jn-run [] :i64
   (let [profile (jn-arg 1) input (jn-arg 2) policy (jn-arg 3) rail (jn-arg 4)
         node (jn-arg 5) seed (key-seed (jn-arg 6)) fd (jn-arg 7) admitted (jn-arg 8)
         now (if (= (jn-arg 9) "clock") (jn-int (typed-cap-call 7 :string :string "wall")) (jn-int (jn-arg 9)))
         allowed (jn-int (jn-arg 10)) index (jn-arg 11) layout (jn-arg 12)
-        ports (jn-arg 13) t (jn-int (jn-arg 14)) rogue (= (jn-arg 15) "rogue")
+        ports (jn-arg 13) t (jn-int (jn-arg 14))
         ipath (jn-arg 16) token (jn-token 17)
         has-input (and (not (= ipath "")) (= (typed-cap-call 35 :string :string (string-concat ipath "EXISTS_SEP")) "1"))
         itext (if has-input (typed-cap-call 35 :string :string ipath) "")
         jp (job-problem profile input policy rail)]
     (cond (not (= jp "job/ok")) (let [x (jn-say (string-concat "job " jp))] 1)
           (= (vector-count seed) 0) (let [x (jn-say "job run/bad-key")] 1)
+          (or (< now 0) (> now 9007199253000000)) (let [x (jn-say "job run/bad-clock")] 1)
           (= token "-") (let [x (jn-say "job token/missing-or-short")] 2)
           (and (not (= ipath "")) (not has-input)) (let [x (jn-say "job input/missing")] 1)
           (and has-input (not (= (digest-cid (string-concat "sha256:" (sha256-hex (jn-bytes itext))) 85) input))) (let [x (jn-say "job input/cid-mismatch")] 1)
@@ -126,8 +141,11 @@
               (let [chosen (lease-round t node (lease-text node jid 0 1 (+ now (lease-ttl)) 0) ports token)
                     holder (if (= chosen "") "" (jn-text chosen "node"))
                     epoch (if (= chosen "") 0 (jn-num chosen "epoch"))
-                    b (jn-say (string-concat "lease " (if (= holder "") "none" holder)))]
-                (if (and (not (= holder node)) (not rogue)) (let [x (jn-say (string-concat "held-by " holder))] 0)
+                    b (jn-say (string-concat "lease " (if (= holder "") "none" holder)))
+                    check-now (if (= (jn-arg 9) "clock") (ln-now "clock") now)
+                    guard (jn-lease-problem chosen node jid check-now)]
+                (if (not (= guard "job/lease-ok"))
+                  (let [x (jn-say (if (= guard "job/lease-holder") (str "held-by " holder) guard))] 0)
                   (let [r (cell-execute index profile "container" layout state allowed itext)]
                     (if (not (= (jn-field r 0) "ok")) (let [x (jn-say r)] 1)
                       (let [text (step-receipt-text now did (if (> epoch 0) epoch 1) (jn-int (jn-field r 1)) jid node (jn-field r 2))
@@ -149,4 +167,6 @@
     (if (= verdict "job/confirmed") 0 1)))
 
 (defn job-node-main [] :i64
-  (if (= (jn-arg 0) "verify") (jn-verify) (jn-run)))
+  (cond (= (jn-arg 0) "verify") (jn-verify)
+        (= (jn-arg 0) "run") (jn-run)
+        :else (let [x (jn-say "job/command-refused")] 2)))
