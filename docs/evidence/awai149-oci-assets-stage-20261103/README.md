@@ -7,6 +7,8 @@ actual header, data and padding bytes as it writes, and reports success only
 after the archive digest and metadata match and files and directory sync.
 The caller must obtain the exact asset digest and size from an independently
 verified OCI manifest. This entry is not yet wired into `model-artifact-main`.
+The later [integration candidate](../awai149-oci-assets-integration-20261103/README.md)
+adds a separate combined entry without changing this standalone interface.
 
 The current version-specific proposal limits the archive to 64 MiB and each
 file to 16 MiB. It accepts only the 15 fixed flat names seen in the prior
