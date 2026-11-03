@@ -161,6 +161,15 @@ allowlist, and the restored output proof. The caller supplies a private store
 from a separately verified archive readback; this entry does not contact GitHub
 or establish a live lease. The checkpoint capture still has to include both
 files at the pinned paths, and the full composition is not runtime-qualified.
+`job-output-stage-main` can place the independently verified output/proof pair
+in two host-pinned, previously absent untracked files for that capture. It
+requires private, non-overlapping repository and block-store roots, existing
+real parent directories and exclusive host ownership. It refuses tracked or
+ignored paths, synchronizes each staged file and its parent, and reports an
+unknown outcome on partial failure; the host must reconcile rather than retry
+or remove files blindly. The host still supplies both paths in the explicit
+checkpoint allowlist, verifies the resulting checkpoint and remote archive,
+and protects the private repository while the files have mode 0644.
 Log and existing block reads are bounded, and storage synchronizes the block
 and its directory. The host must keep both paths exclusively owned during the
 operation: separate path-based metadata and reads do not establish identity
