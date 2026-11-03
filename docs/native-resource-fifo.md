@@ -44,3 +44,9 @@ The [Darwin/Linux portability observation](evidence/awai151-fifo-portable-202611
 exercises byte writes and the completed-intent rename on one Mac with the
 diagnostic FS2 runtime and rechecks the current source on Linux. It does not
 qualify the Mac release runtime or authorize governor use.
+
+The [Mac process-kill observation](evidence/awai151-fifo-mac-kill-20261103/)
+repeats five write-boundary SIGKILL cases on one local Mac using instrumented
+fixtures and the diagnostic FS2 runtime. The uninstrumented artifact refused
+surviving intent, or read the committed ticket after intent archival. It does
+not establish power-loss, workload termination, fairness or fleet readiness.
