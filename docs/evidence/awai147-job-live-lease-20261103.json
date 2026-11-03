@@ -1,0 +1,38 @@
+{
+  "kind": "awai.job-live-lease/1",
+  "date": "2026-11-03",
+  "scope": "Native source-closure fixtures in disposable ARM64 Linux VM, 1 CPU and 2 GiB. Real loopback quorum test uses nine voter processes in three groups; cell, admission and key input are synthetic. Time is fixed at 1000 ms, not a live clock.",
+  "source_sha256": "d89b0636eaf5e332fec77225b49d24c3612b2cda9ceeac8baf29db4adf8b5d5e",
+  "compiler_sha256": "914b828a24ced086e09929894bb64806dea103bf79766ef144001a076717b1c4",
+  "fixtures": {
+    "live": [
+      "7e3f16a8b9af44c16f4a9ed1dae8e3d4e5a36a62271612abed326722827ed365",
+      "8e09aa8f80e5befccf602802d5a5797e87a147d1b5276926eccaba2b6b2813a4"
+    ],
+    "old": [
+      "58a4d14a256ec683f9db3a4d3ebd92065d314d87df788be329d4c9ef43e97f95",
+      "572a2951c545ea97b53f975f15d7af9aba55d053bb09537a673fc7a644bad160"
+    ],
+    "clock": [
+      "2d7a9e0e89a36c21674b666f354007c6c97085fba58ff66f113a79f68a115a11",
+      "3a2982671eff24945150bba72c47676770395b7c60b7435f2c2b784645494a98"
+    ],
+    "clock_bypass": [
+      "3129f8337f1d0c41c85339a84fe3a1f933fee2f2fd0ee6b10fdfce1a166ce9c9",
+      "bcdad00690c59e2a137ccfe38667f37b1f239dddbe2f970cb7ceccafc16645e3"
+    ],
+    "real_quorum": [
+      "e3924bb1e7ea793bc46cdb92a59030f98e5b9a4fe8eadbdac0f67ad9dea3dc5e",
+      "146e5f6bbdf5e9ec8aa635ac8c19d77a0cd9bf145cf3e587db9563fc9b3bb411"
+    ]
+  },
+  "results": [
+    "matching live lease permits synthetic cell and receipt",
+    "expired lease and rogue mode refused before cell",
+    "changed lease or absent quorum after cell suppresses receipt",
+    "clock regression suppresses receipt; bypass mutant signs",
+    "real three-voter loopback quorum accepted live lease, refused expired lease, and suppressed receipt after two voters were stopped during a delayed synthetic cell"
+  ],
+  "observation": "The initial fault-injection attempt observed the marker only at process exit because native stdout was buffered; the test-only cell now flushes via stderr before delay, and the final run observed its in-flight marker before stopping voters.",
+  "limits": "Same-VM unauthenticated loopback, synthetic cell/key/admission and fixed clock; no remote Mac, actual bot, authenticated quorum, real clock drift, process-tree control, sink-side effect fencing or governor. Once a cell starts, suppressing a receipt cannot undo or fence its effects. No blind retry of an unconfirmed outcome."
+}
