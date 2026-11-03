@@ -17,6 +17,9 @@ three. Missing, extra or wrong-media layers and duplicate pins are refused.
 The asset tar's structure and contents are **not parsed or extracted**; digest
 success does not establish that required files are present or safe to unpack.
 The media types and packaging remain proposals, not a standard or installer.
+This describes the original reader; the separate later
+[staging candidate](../awai149-oci-assets-stage-20261103/README.md) adds a
+restricted USTAR extraction path but is not yet connected to the OCI entry.
 
 On one local Darwin ARM64 Mac, ORAS created a synthetic three-layer layout
 with tiny model/MTP fixtures and a tar containing synthetic config/tokenizer
