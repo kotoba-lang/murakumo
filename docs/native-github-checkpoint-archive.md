@@ -37,6 +37,17 @@ policy described above. The separate signed GitHub CLI fixture in
 this archive candidate. No native GitHub transport, production secret path,
 Mac runtime or automated bot has been qualified by either test.
 
+A later [Mac fixture](evidence/awai154-mac-github-fixture-20261103/receipt.json)
+used the GitHub connector to publish and independently fetch the synthetic
+signed checkpoint closure in a dedicated private `itonami/fixture-mac/` ref.
+The Mac checkpoint fixture verified the fetched blocks and restored the local
+Git tree, including staged, unstaged and listed untracked data. A locally
+corrupted downloaded block and an existing destination were refused. This is
+operator-side connector transport with the privileged test-only Mac spawn/path
+adapter: neither the native archive candidate nor an autonomous bot performed
+the GitHub transaction. The fixture ref is not an `itonami/archive/` ref and
+is not discovered automatically by the native restore candidate.
+
 The candidate now asks real Git for matching effective configuration key names
 before copying the closure or initiating Git transport. It refuses known URL
 rewrites, proxy settings, credential helpers, included config files and selected
