@@ -1,0 +1,41 @@
+(ns pr-submit-fixture (:export [main]))
+(defn- arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- cp-str [v :vector-i64 i :i64 k :string] :string
+ (cond (= k "kind") "itonami.readonly-profile-runtime-local-mtp/1" (= k "endpoint") "http://localhost/v1/chat/completions" (= k "socket") (arg 4) (= k "authorizationFile") (arg 5) :else ""))
+(defn- cp-safe-absolute? [s :string] :bool (and (> (string-length s) 1) (= (string-substring s 0 1) "/")))
+(defn- cp-a [] :string "ARG_SEP")
+(defn- cp-spawn [s :string] :string (let [x (typed-cap-call 37 :string :string (str s "\n"))] "0\n"))
+(defn- cp-ok? [s :string] :bool (= (string-index-of s "0\n") 0))
+(defn- pr-local-mtp? [runtime :vector-i64] :bool
+  (and (= (cp-str runtime 0 "kind") "itonami.readonly-profile-runtime-local-mtp/1")
+       (= (cp-str runtime 0 "endpoint") "http://localhost/v1/chat/completions")
+       (cp-safe-absolute? (cp-str runtime 0 "socket"))
+       (cp-safe-absolute? (cp-str runtime 0 "authorizationFile"))
+       (not (= (cp-str runtime 0 "socket") (cp-str runtime 0 "authorizationFile")))))
+
+;; Paths and the content-addressed unit name are host-supplied. curl ignores
+;; ~/.curlrc and redirects. The local variant cannot use a TCP proxy or select
+;; a network URL: it sends only through the explicitly pinned Unix socket.
+;; LimitAS bounds this process's virtual address space; LimitFSIZE bounds each
+;; file it writes. Neither replaces aggregate storage or resource admission,
+;; cgroup enforcement, or descendant containment.
+(defn- pr-submit [unit :string request :string response :string seconds :i64 runtime :vector-i64] :bool
+  (cp-ok? (cp-spawn (str "/usr/bin/systemd-run" (cp-a) "--user" (cp-a) "--quiet" (cp-a) "--no-block"
+    (cp-a) (str "--unit=" unit) (cp-a) "--property=Type=oneshot" (cp-a) "--property=RemainAfterExit=yes"
+    (cp-a) "--property=TimeoutStartSec=900" (cp-a) "--property=NoNewPrivileges=yes"
+    (cp-a) "--property=MemoryMax=128M" (cp-a) "--property=CPUQuota=25%" (cp-a) "--property=LimitAS=128M"
+    (cp-a) "--property=LimitFSIZE=4M"
+    (cp-a) "/usr/bin/curl" (cp-a) "--disable" (cp-a) "--http1.1"
+    (if (pr-local-mtp? runtime)
+      (str (cp-a) "--noproxy" (cp-a) "*"
+           (cp-a) "--unix-socket" (cp-a) (cp-str runtime 0 "socket")
+           (cp-a) "--header" (cp-a) (str "@" (cp-str runtime 0 "authorizationFile"))
+           (cp-a) "-fsS")
+      (str (cp-a) "--proto" (cp-a) "=https" (cp-a) "--tlsv1.2" (cp-a) "--fail-with-body"
+           (cp-a) "--silent" (cp-a) "--show-error"))
+    (cp-a) "--connect-timeout" (cp-a) "5" (cp-a) "--max-time" (cp-a) (str seconds)
+    (cp-a) "--header" (cp-a) "Content-Type: application/json" (cp-a) "--data-binary" (cp-a) (str "@" request)
+    (cp-a) "--output" (cp-a) response (cp-a)
+    (if (pr-local-mtp? runtime) "http://localhost/v1/chat/completions" "https://api.murakumo.cloud/v1/chat/completions")))))
+
+(defn main [] :i64 (if (pr-submit (arg 0) (arg 1) (arg 2) 4 [0]) 0 1))
