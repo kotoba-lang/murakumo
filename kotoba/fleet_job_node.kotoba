@@ -150,20 +150,26 @@
             (if (or (and (>= c 48) (<= c 57)) (and (>= c 97) (<= c 102)))
               (recur (+ i 1)) false)))))))
 
-;; mkdir without -p is an atomic one-winner claim on the local filesystem.
-;; Even a failed fsync leaves the marker and stops: absence of an ack does not
-;; prove the attempt did not start. Never delete or recycle a marker here.
-(defn- jn-attempt [dir :string jid :string] :string
-  (if (or (not (jn-attempt-root? dir)) (not (jn-attempt-id? jid))) "job/attempt-config"
-    (let [stat (typed-cap-call 20 :string :string (str "/usr/bin/statARG_SEP--format=%F:%aARG_SEP--ARG_SEP" dir))]
-      (if (not (= stat "0\ndirectory:700\n")) "job/attempt-config"
-        (let [path (str dir "/" jid)
-              made (typed-cap-call 20 :string :string (str "/usr/bin/mkdirARG_SEP-mARG_SEP700ARG_SEP--ARG_SEP" path))]
-          (if (not (= (string-index-of made "0\n") 0)) "job/attempt-exists-or-unknown"
-            (if (and (= (typed-cap-call 35 :string :string (str path "FSYNC_SEP")) "1")
-                     (= (typed-cap-call 35 :string :string (str dir "FSYNC_SEP")) "1"))
-              "job/attempt-recorded" "job/attempt-unknown")))))))
+;; FS2 I is an exclusive mkdir: 1 means created; existing paths and
+;; unknown outcomes never authorize a retry. The root and its ancestors are
+;; private and trusted throughout this operation; FS2 calls are path-based.
+(defn- jn-fs [op :string path :string tail :string] :string
+  (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+    (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
+      (string-substring r 5 (string-length r)) "")))
 
+(defn- jn-private-dir? [path :string] :bool
+  (let [m (jn-fs "U" path "")]
+    (and (= (jn-field m 0) "448") (= (jn-field m 3) "1"))))
+
+(defn- jn-attempt [dir :string jid :string] :string
+  (if (or (not (jn-attempt-root? dir)) (not (jn-attempt-id? jid))
+          (not (jn-private-dir? dir))) "job/attempt-config"
+    (let [path (str dir "/" jid) made (jn-fs "I" path "")]
+      (if (not (= made "1")) "job/attempt-exists-or-unknown"
+        (if (and (= (jn-fs "H" path "0700") "1") (jn-private-dir? path)
+                 (= (jn-fs "M" path "") "1") (= (jn-fs "M" dir "") "1"))
+          "job/attempt-recorded" "job/attempt-unknown")))))
 
 ;; Only a trusted composed adapter may pass a source it has already verified.
 ;; The public run entry passes the exact CID-checked input.
