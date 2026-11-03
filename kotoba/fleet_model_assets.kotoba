@@ -2,7 +2,7 @@
 ;; Compose after sha2.core, fleet_oci_layout and fleet_model_digest. The host
 ;; supplies an exclusive private directory and prevents path aliases/writers.
 ;; Failure leaves a private incomplete directory for explicit reconciliation.
-(ns murakumo.fleet-model-assets (:export [model-assets-stage-main]))
+(ns murakumo.fleet-model-assets (:export [model-assets-stage-main model-artifact-stage-main]))
 
 (defn- ta-fs [op :string path :string tail :string] :string
   (let [r (typed-cap-call 35 :string :string (ol-frame op path tail))]
@@ -110,24 +110,45 @@
                 (recur next (bit-or seen (i64-shift-left 1 id)) 0)
                 :else false))))))
 
-(defn model-assets-stage-main [] :i64
-  (let [source (md-arg 0) stage (md-arg 1) digest (md-arg 2) size (md-decimal (md-arg 3))
-        entry (if (md-path? source) (typed-cap-call 35 :string :string (ol-frame "O" source "")) "")
+(defn- ta-stage [source :string stage :string digest :string size :i64] :string
+  (let [entry (if (md-path? source) (typed-cap-call 35 :string :string (ol-frame "O" source "")) "")
         meta (if (and (md-regular? entry) (= (ol-size entry 67108864) size))
                (typed-cap-call 35 :string :string (ol-frame "F" source "")) "")]
     (if (or (not (md-path? source)) (not (md-path? stage))
             (= (string-substring stage (- (string-length stage) 1) (string-length stage)) "/")
             (ta-overlap? source stage)
             (not (= (digest-problem digest) "oci/ok")) (< size 1024) (> size 67108864) (not (= (rem size 512) 0))
-            (not (= (md-arg 4) "")) (not (md-regular? entry)) (not (= (ol-size entry 67108864) size))
+            (not (md-regular? entry)) (not (= (ol-size entry 67108864) size))
             (not (md-regular? meta)) (not (= (ol-size meta 67108864) size)) (not (= (ta-fs "D" stage "") "0")))
-      (let [x (md-out "assets/input-refused")] 2)
+      "assets/input-refused"
       (if (not (and (= (ta-fs "I" stage "") "1") (= (ta-fs "H" stage "700") "1")
                     (= (ta-fs "M" (ta-parent stage) "") "1")))
-        (let [x (md-out "assets/staging-unknown")] 1)
+        "assets/staging-unknown"
         (let [work (s2-work (s2-iv 8)) ok (ta-walk source stage size work)
               after (typed-cap-call 35 :string :string (ol-frame "F" source ""))
               actual (if ok (str "sha256:" (hex (s2-out work 8))) "")
               result (if (and ok (= after meta) (= actual digest) (= (ta-fs "M" stage "") "1"))
-                       "assets/staged" "assets/staging-unknown") x (md-out result)]
-          (if (= result "assets/staged") 0 1))))))
+                       "assets/staged" "assets/staging-unknown")]
+          result)))))
+
+(defn model-assets-stage-main [] :i64
+  (let [result (if (= (md-arg 4) "") (ta-stage (md-arg 0) (md-arg 1) (md-arg 2) (md-decimal (md-arg 3))) "assets/input-refused")
+        x (md-out result)]
+    (if (= result "assets/staged") 0 (if (= result "assets/input-refused") 2 1))))
+
+;; The pinned OCI manifest must validate every layer before any directory is
+;; created. The assets are then hashed again as the exact bytes are staged.
+;; The caller owns/isolates the layout and the target throughout this flow.
+(defn model-artifact-stage-main [] :i64
+  (let [layout (md-arg 0) assets (md-arg 7) size (md-decimal (md-arg 8)) stage (md-arg 9)
+        result (if (or (not (= (md-arg 10) "")) (not (md-path? layout)) (not (md-path? stage))
+                       (= (string-substring stage (- (string-length stage) 1) (string-length stage)) "/")
+                       (ta-overlap? layout stage) (< size 1024) (> size 67108864) (not (= (rem size 512) 0))
+                       (not (= (ta-fs "D" stage "") "0"))) "model-artifact/input-refused"
+                 (let [checked (ma-observe layout (md-arg 1) (md-decimal (md-arg 2))
+                                           (md-arg 3) (md-decimal (md-arg 4)) (md-arg 5) (md-decimal (md-arg 6))
+                                           assets size)]
+                   (if (not (= checked "model-artifact/digests-observed")) checked
+                     (ta-stage (ol-blob-path layout assets) stage assets size))))
+        x (md-out result)]
+    (if (= result "assets/staged") 0 1)))
