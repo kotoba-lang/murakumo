@@ -27,3 +27,12 @@ governor are still required before deployment.
 - Source-check unity SHA-256 `8caa97cdd96501010fb43b529bf026b208e7873c26141c3e80d975efcd298357`.
 - OCI layout `d7db899f0d0aa903caef1b2aca82b6e875ea2fa75974ce70b150ff188dc47a74`; model staging `85323f565dd805b039ace18dc4bd7aef843ddefeded21052bcb537a7eb35189a`.
 - Resident `69afb94a0ff46add964df7867a2f9308ab3b59fd256c9ee8ec74e4b932600df4`; job node `c56f95d099dc0bb928b9ec7309eb880152327b88bc76ae5b5467176953112620`.
+
+## Reconciled parent follow-up
+
+The original measurements above refer to the earlier resident branch. The OCI
+candidate was subsequently replayed on resident commit `ba956ef`, itself based
+on the current retention-refresh branch. Every path changed by the original OCI
+commits matched the earlier OCI candidate byte-for-byte after replay. This is a
+source comparison only: the combined artifact, CI, model loader and governor
+have not been rebuilt or qualified.
