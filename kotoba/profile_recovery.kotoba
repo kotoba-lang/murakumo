@@ -83,6 +83,8 @@
 ;; a network URL: it sends only through the explicitly pinned Unix socket.
 ;; LimitAS is an additional per-process virtual-address bound. It does not
 ;; replace cgroup enforcement, descendant containment or host admission.
+;; HTTPS uses --fail, supported by Xavier curl 7.68; error bodies are not
+;; retained as successful model responses.
 (defn- pr-submit [unit :string request :string response :string seconds :i64 runtime :vector-i64] :bool
   (cp-ok? (cp-spawn (str "/usr/bin/systemd-run" (cp-a) "--user" (cp-a) "--quiet" (cp-a) "--no-block"
     (cp-a) (str "--unit=" unit) (cp-a) "--property=Type=oneshot" (cp-a) "--property=RemainAfterExit=yes"
@@ -94,7 +96,7 @@
            (cp-a) "--unix-socket" (cp-a) (cp-str runtime 0 "socket")
            (cp-a) "--header" (cp-a) (str "@" (cp-str runtime 0 "authorizationFile"))
            (cp-a) "-fsS")
-      (str (cp-a) "--proto" (cp-a) "=https" (cp-a) "--tlsv1.2" (cp-a) "--fail-with-body"
+      (str (cp-a) "--proto" (cp-a) "=https" (cp-a) "--tlsv1.2" (cp-a) "--fail"
            (cp-a) "--silent" (cp-a) "--show-error"))
     (cp-a) "--connect-timeout" (cp-a) "5" (cp-a) "--max-time" (cp-a) (str seconds)
     (cp-a) "--header" (cp-a) "Content-Type: application/json" (cp-a) "--data-binary" (cp-a) (str "@" request)
