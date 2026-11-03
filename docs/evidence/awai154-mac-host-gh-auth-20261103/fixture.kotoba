@@ -1,0 +1,57 @@
+(ns private-host-auth-fixture (:export [main]))
+;; Native Mac CLI host protocol. This module stages data and invokes the
+;; adopted compiler; no parser, evaluator or machine-code compiler lives here.
+(defn- hc-zero [] :string (string-from-utf8 (bytes-from-vector-i64 [0])))
+(defn- hc-field [s :string] :string (string-concat s (hc-zero)))
+(defn- hc-cat [a :vector-i64 b :vector-i64] :vector-i64
+  (let [n (vector-count a) m (vector-count b)
+        one (loop [i 0 out (vector-alloc (+ n m))]
+              (if (= i n) out (recur (+ i 1) (vector-assoc! out i (vector-at a i)))))]
+    (loop [i 0 out one]
+      (if (= i m) out (recur (+ i 1) (vector-assoc! out (+ n i) (vector-at b i)))))))
+(defn- hc-bytes [s :string] :vector-i64
+  (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- hc-text [v :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 v)))
+(defn- hc-slice [v :vector-i64 start :i64 length :i64] :vector-i64
+  (loop [i 0 out (vector-alloc length)]
+    (if (= i length) out (recur (+ i 1) (vector-assoc! out i (vector-at v (+ start i)))))))
+(defn- hc-frame [op :i64 tail :vector-i64] :vector-i64
+  (hc-cat [0 65 77 85 72 1 op] tail))
+(defn- hc-call [op :i64 tail :vector-i64] :vector-i64
+  (vector-i64-from-bytes
+    (typed-cap-call :fs/app-data-bytes :bytes :bytes (bytes-from-vector-i64 (hc-frame op tail)))))
+(defn- hc-path-call [op :i64 path :string] :vector-i64
+  (hc-call op (hc-bytes (hc-field path))))
+(defn- hc-read [path :string] :vector-i64 (hc-path-call 1 path))
+(defn- hc-write [path :string bytes :vector-i64] :vector-i64
+  (hc-call 2 (hc-cat (hc-bytes (hc-field path)) bytes)))
+(defn- hc-ok? [reply :vector-i64] :bool
+  (and (> (vector-count reply) 0) (= (vector-at reply 0) 0)))
+(defn- hc-errno [reply :vector-i64] :i64
+  (if (>= (vector-count reply) 2) (vector-at reply 1) 22))
+(defn- hc-hex-value [c :i64] :i64
+  (cond (and (>= c 48) (<= c 57)) (- c 48)
+        (and (>= c 65) (<= c 70)) (- c 55) :else -1))
+(defn- hc-proc-reply [s :string] :vector-i64
+  (let [v (hc-bytes s)]
+    (if (and (= (vector-count v) 5)
+             (or (= (vector-at v 0) 48) (= (vector-at v 0) 49))
+             (>= (hc-hex-value (vector-at v 1)) 0) (>= (hc-hex-value (vector-at v 2)) 0)
+             (>= (hc-hex-value (vector-at v 3)) 0) (>= (hc-hex-value (vector-at v 4)) 0))
+      [(- (vector-at v 0) 48)
+       (+ (* 16 (hc-hex-value (vector-at v 1))) (hc-hex-value (vector-at v 2)))
+       (+ (* 16 (hc-hex-value (vector-at v 3))) (hc-hex-value (vector-at v 4)))]
+      [1 22 0])))
+(defn- hc-spawn [mode :i64 directory :string capture :string executable :string argc :i64 argv :string] :vector-i64
+  (let [fields (string-concat (hc-field directory)
+                 (string-concat (hc-field capture) (string-concat (hc-field executable) argv)))
+        request (hc-frame 9 (hc-cat [mode argc] (hc-bytes fields)))]
+    (hc-proc-reply (typed-cap-call :process/spawn :string :string (hc-text request)))))
+
+(defn main [] :i64
+  (let [cwd (typed-cap-call 38 :string :string "0") capture (typed-cap-call 38 :string :string "1")
+        argv (str (hc-field "/opt/homebrew/bin/gh") (hc-field "auth") (hc-field "status"))
+        result (hc-spawn 0 cwd capture "/opt/homebrew/bin/gh" 3 argv)
+        refused (and (hc-ok? result) (= (vector-at result 1) 1))
+        out (typed-cap-call 37 :string :string (if refused "AUTH-ABSENT\n" "UNEXPECTED\n"))]
+    (if refused 0 1)))
