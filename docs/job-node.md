@@ -40,20 +40,14 @@ its acceptance items are covered here:
 - **`verify`, on anyone:** it learns the chosen lease with `lease-round`, maps
   the holder to its did through the trust, and requires the trusted caller's
   expected job ID to match both the lease class and signed receipt. It also
-  checks the receipt node and signature. The signed time is the dispatch time,
-  not proof that the cell finished before lease expiry.
-- **The fleet token.** `run` takes an input file or empty argument at 16,
-  a fleet token file or empty argument at 17, and the required private attempt
-  directory at 18. `verify` takes a fleet token file or empty argument at 5,
-  followed by the independently determined expected job ID at 6.
-  the holder to its did through the trust, and judges a node's receipt with
-  `receipt-verdict`.
-- **The fleet token.** `run` takes an input file or empty argument at 16,
-  a fleet token file or empty argument at 17, and the required private attempt
-  directory at 18. `verify` takes an optional fleet token file.
-  With it, their lease rounds carry the token's macs
-  ([lease node, Fleet token](lease-node.md#fleet-token)). The runs below use
-  none.
+  checks the receipt node and signature. The candidate re-learns the live
+  lease after execution, before signing a receipt.
+- **The fleet token.** `run` takes a token file path or an empty placeholder
+  at argument 17, followed by the attempt root at 18. `verify` takes the token
+  path or empty placeholder at argument 5, followed by the expected job ID.
+  A supplied token authenticates lease messages
+  ([lease node, Fleet token](lease-node.md#fleet-token)). The historical runs
+  below used none.
 
 Three refactors make the composition possible:
 - `fleet_agent_step`'s `receipt-text` is now `step-receipt-text`, so it no
@@ -111,8 +105,12 @@ race or effect sink was tested.
 The 2026-10-23 transcript below remains historical; its rogue path is now a
 separate test-only mutant and has not been rerun as part of this change.
 
-The current `run` entry requires `clock` and `follow`; numeric times and the
-old rogue mode are refused. It re-learns the identical, still-live lease after
+The current `run` entry requires `clock`, `follow`, a fleet-token path or
+an empty placeholder at argument 17, and a host-provisioned private attempt
+root at argument 18. It durably records the job attempt before execution and
+refuses an existing or unknown marker; the host must reconcile ambiguous
+outcomes instead of deleting or replaying it. The root and its ancestors must
+be trusted and host-owned. Numeric times and the old rogue mode are refused. It re-learns the identical, still-live lease after
 cell execution before issuing a receipt. `verify` now takes an independently
 derived expected job ID after the fleet-token argument (pass an empty token
 argument when no token is configured). A receipt is checked against that job
