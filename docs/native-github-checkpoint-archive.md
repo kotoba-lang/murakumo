@@ -11,8 +11,7 @@ or conflicting. The component does not acquire a lease or authorize a bot.
 
 This is an unqualified draft. The resident exposes an explicit `archive-native`
 operation that calls it and writes an acknowledgement only after readback and
-rechecking the admitted head. The cron controller does not invoke this operation,
-and no autonomous production service uses it. The
+rechecking the admitted head. The draft cron controller invokes this operation; no autonomous production service uses it. The
 host must fix the exact repository and executable identities, classify every
 byte for GitHub, grant a short-lived repository-scoped credential, isolate
 source/work directories, set disk limits and reconcile/clean retained attempts.
@@ -60,3 +59,22 @@ clock and privacy response. It confirms that a changed head, refused repository
 or leftover temporary acknowledgement does not publish an acknowledgement. A
 separate native lock fixture covers contention for this operation. Neither test
 establishes full resident or GitHub integration.
+
+
+The draft also exports `github-checkpoint-restore-main`, which accepts a fresh
+private work path, a fresh destination, the independently pinned checkpoint
+identity and contract, repository and `gh` executable. It fetches the archive
+ref, checks Git integrity, compares the exact canonical manifest, verifies the
+signed checkpoint and closure, then materializes a new checkout. It does not
+select a current head, acquire a lease or start a bot. Failed and unknown work
+remains for host reconciliation. The host must isolate paths and constrain Git,
+credentials, environment and egress as for archive.
+
+The [bounded local fixture](evidence/awai150-native-github-restore-20261103.json)
+restored a signed synthetic checkpoint and refused wrong author, a tampered
+block, a non-private response and an existing destination. It stubs privacy,
+changes the remote to local Git and uses a byte-patched test compiler; it is
+not a real GitHub or production recovery qualification. An older operator-made
+fixture manifest with a trailing newline was refused: this candidate requires
+the exact native canonical manifest, so older archives need a separately
+validated migration or recovery path.
