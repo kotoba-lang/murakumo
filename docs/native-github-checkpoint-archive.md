@@ -81,3 +81,9 @@ only addresses that specific manifest format: the earlier GitHub test ref uses
 `itonami/fixture`, while this candidate fetches `itonami/archive`; it does not
 automatically discover or migrate older refs. Real GitHub recovery and other
 legacy formats remain unqualified.
+
+The standalone archive entry point returns exit 0 only when the archive
+operation reports a verified stored result, including a verified readback after
+an unacknowledged push. Refusal and unknown results return exit 1; they do not
+authorize an automatic retry. The [entry-point fixture](evidence/awai150-archive-exit-20261103.json)
+uses a stubbed archive operation and is not an end-to-end GitHub test.
