@@ -1,0 +1,258 @@
+(ns model-stream-fixture (:export [main]))
+(defn u32 [x :i64] :i64 (if (neg? x) (+ x 4294967296) x))
+
+;; ---------------------------------------------------------------------------
+;; Words
+
+(defn- s2-m32 [x :i64] :i64 (bit-and x 4294967295))
+
+(defn- s2-rotr [x :i64 n :i64] :i64
+  (s2-m32 (bit-or (u64-shift-right x n) (i64-shift-left x (- 32 n)))))
+
+(defn- s2-k [] :vector-i64
+  [1116352408 1899447441 3049323471 3921009573 961987163 1508970993 2453635748 2870763221
+   3624381080 310598401 607225278 1426881987 1925078388 2162078206 2614888103 3248222580
+   3835390401 4022224774 264347078 604807628 770255983 1249150122 1555081692 1996064986
+   2554220882 2821834349 2952996808 3210313671 3336571891 3584528711 113926993 338241895
+   666307205 773529912 1294757372 1396182291 1695183700 1986661051 2177026350 2456956037
+   2730485921 2820302411 3259730800 3345764771 3516065817 3600352804 4094571909 275423344
+   430227734 506948616 659060556 883997877 958139571 1322822218 1537002063 1747873779
+   1955562222 2024104815 2227730452 2361852424 2428436474 2756734187 3204031479 3329325298])
+
+;; FIPS 180-4 5.3.3 (SHA-256) and 5.3.2 (SHA-224)
+(defn- s2-iv [words :i64] :vector-i64
+  (if (= words 7)
+    [3238371032 914150663 812702999 4144912697 4290775857 1750603025 1694076839 3204075428]
+    [1779033703 3144134277 1013904242 2773480762 1359893119 2600822924 528734635 1541459225]))
+
+;; ---------------------------------------------------------------------------
+;; Padding, read in place (5.1.1): the message, 128, zeros, then the length in
+;; bits as a 64-bit big-endian integer; total is a multiple of 64.
+
+(defn- s2-total [n :i64] :i64 (* (quot (+ n 72) 64) 64))
+
+(defn- s2-byte [data :vector-i64 i :i64 total :i64] :i64
+  (let [n (vector-count data)]
+    (cond (< i n) (vector-at data i)
+          (= i n) 128
+          (< i (- total 8)) 0
+          :else (bit-and (u64-shift-right (* n 8) (* (- (- total 1) i) 8)) 255))))
+
+;; ---------------------------------------------------------------------------
+;; One block. The work vector holds the hash state at 0..7, the working
+;; variables at 8..15 and the schedule at 16..79.
+
+(defn- s2-work [state :vector-i64] :vector-i64
+  (loop [i 0 out (vector-alloc 80)]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out i (vector-at state i))))))
+
+(defn- s2-load [w :vector-i64 data :vector-i64 start :i64 total :i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 16) out
+      (let [p (+ start (* i 4))
+            x (bit-or (bit-or (i64-shift-left (s2-byte data p total) 24)
+                              (i64-shift-left (s2-byte data (+ p 1) total) 16))
+                      (bit-or (i64-shift-left (s2-byte data (+ p 2) total) 8)
+                              (s2-byte data (+ p 3) total)))]
+        (recur (+ i 1) (vector-assoc! out (+ 16 i) x))))))
+
+(defn- s2-expand [w :vector-i64] :vector-i64
+  (loop [t 16 out w]
+    (if (= t 64) out
+      (let [w15 (vector-at out (+ 16 (- t 15)))
+            w2 (vector-at out (+ 16 (- t 2)))
+            s0 (bit-xor (bit-xor (s2-rotr w15 7) (s2-rotr w15 18)) (u64-shift-right w15 3))
+            s1 (bit-xor (bit-xor (s2-rotr w2 17) (s2-rotr w2 19)) (u64-shift-right w2 10))
+            x (s2-m32 (+ (+ (vector-at out (+ 16 (- t 16))) s0) (+ (vector-at out (+ 16 (- t 7))) s1)))]
+        (recur (+ t 1) (vector-assoc! out (+ 16 t) x))))))
+
+(defn- s2-begin [w :vector-i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out (+ 8 i) (vector-at out i))))))
+
+(defn- s2-rounds [w :vector-i64 k :vector-i64] :vector-i64
+  (loop [t 0 out w]
+    (if (= t 64) out
+      (let [a (vector-at out 8) b (vector-at out 9) c (vector-at out 10) d (vector-at out 11)
+            e (vector-at out 12) f (vector-at out 13) g (vector-at out 14) h (vector-at out 15)
+            big1 (bit-xor (bit-xor (s2-rotr e 6) (s2-rotr e 11)) (s2-rotr e 25))
+            ch (bit-xor (bit-and e f) (bit-and (s2-m32 (bit-not e)) g))
+            t1 (s2-m32 (+ (+ h big1) (+ ch (+ (vector-at k t) (vector-at out (+ 16 t))))))
+            big0 (bit-xor (bit-xor (s2-rotr a 2) (s2-rotr a 13)) (s2-rotr a 22))
+            maj (bit-xor (bit-xor (bit-and a b) (bit-and a c)) (bit-and b c))
+            t2 (s2-m32 (+ big0 maj))
+            next (-> out (vector-assoc! 15 g) (vector-assoc! 14 f) (vector-assoc! 13 e)
+                         (vector-assoc! 12 (s2-m32 (+ d t1))) (vector-assoc! 11 c) (vector-assoc! 10 b)
+                         (vector-assoc! 9 a) (vector-assoc! 8 (s2-m32 (+ t1 t2))))]
+        (recur (+ t 1) next)))))
+
+(defn- s2-add [w :vector-i64] :vector-i64
+  (loop [i 0 out w]
+    (if (= i 8) out (recur (+ i 1) (vector-assoc! out i (s2-m32 (+ (vector-at out i) (vector-at out (+ 8 i)))))))))
+
+(defn- s2-out [w :vector-i64 words :i64] :vector-i64
+  (loop [i 0 out (vector-alloc (* words 4))]
+    (if (= i (* words 4)) out
+      (recur (+ i 1) (vector-assoc! out i (bit-and (u64-shift-right (vector-at w (quot i 4)) (* (- 3 (rem i 4)) 8)) 255))))))
+
+(defn- s2-digest [words :i64 data :vector-i64] :vector-i64
+  (let [total (s2-total (vector-count data)) k (s2-k)]
+    (loop [start 0 w (s2-work (s2-iv words))]
+      (if (>= start total) (s2-out w words)
+        (recur (+ start 64) (s2-add (s2-rounds (s2-begin (s2-expand (s2-load w data start total))) k)))))))
+
+(defn sha256 [data :vector-i64] :vector-i64 (s2-digest 8 data))
+
+(defn sha224 [data :vector-i64] :vector-i64 (s2-digest 7 data))
+
+;; ---------------------------------------------------------------------------
+;; Hex
+
+(defn- s2-nibble [v :i64] :string
+  (case v 0 "0" 1 "1" 2 "2" 3 "3" 4 "4" 5 "5" 6 "6" 7 "7"
+          8 "8" 9 "9" 10 "a" 11 "b" 12 "c" 13 "d" 14 "e" "f"))
+
+(defn hex [bytes :vector-i64] :string
+  (loop [i 0 out ""]
+    (if (= i (vector-count bytes)) out
+      (let [b (vector-at bytes i)]
+        (recur (+ i 1) (string-concat out (string-concat (s2-nibble (quot b 16)) (s2-nibble (rem b 16)))))))))
+
+(defn sha256-hex [data :vector-i64] :string (hex (sha256 data)))
+
+(defn sha224-hex [data :vector-i64] :string (hex (sha224 data)))
+
+;; ---------------------------------------------------------------------------
+;; HMAC (FIPS 198-1): K0 is the key hashed when longer than the block, then
+;; zero-padded to 64 bytes; H((K0 ^ opad) || H((K0 ^ ipad) || message)).
+
+(defn- s2-pad-xor [key :vector-i64 x :i64 extra :i64] :vector-i64
+  (loop [i 0 out (vector-alloc (+ 64 extra))]
+    (if (= i 64) out
+      (recur (+ i 1) (vector-assoc! out i (bit-xor (if (< i (vector-count key)) (vector-at key i) 0) x))))))
+
+(defn- s2-after [head :vector-i64 tail :vector-i64] :vector-i64
+  (loop [i 0 out head]
+    (if (= i (vector-count tail)) out (recur (+ i 1) (vector-assoc! out (+ 64 i) (vector-at tail i))))))
+
+(defn hmac-sha256 [key :vector-i64 message :vector-i64] :vector-i64
+  (let [k0 (if (> (vector-count key) 64) (sha256 key) key)
+        inner (sha256 (s2-after (s2-pad-xor k0 54 (vector-count message)) message))]
+    (sha256 (s2-after (s2-pad-xor k0 92 32) inner))))
+
+(defn hmac-sha256-hex [key :vector-i64 message :vector-i64] :string (hex (hmac-sha256 key message)))
+(defn- ol-frame [op :string path :string tail :string] :string
+  (str "\u0000FS2\u0000" op path "\u0000" tail))
+(defn- ol-digit [n :i64] :string
+  (case n 0 "0" 1 "1" 2 "2" 3 "3" 4 "4" 5 "5" 6 "6" 7 "7" 8 "8" "9"))
+(defn- ol-dec [n :i64] :string
+  (if (< n 10) (ol-digit n) (str (ol-dec (quot n 10)) (ol-digit (rem n 10)))))
+(defn- ol-size [reply :string limit :i64] :i64
+  (let [n (string-byte-length reply)]
+    (if (or (< n 8) (> n 128) (not (= (string-substring reply 0 5) "\u0000FS2\u0000"))) -1
+      (let [space (loop [i 5]
+                    (cond (>= i n) -1 (= (string-code-point-at reply i) 32) i
+                          (or (< (string-code-point-at reply i) 48) (> (string-code-point-at reply i) 57)) -1
+                          :else (recur (+ i 1))))]
+        (if (or (< space 6) (>= (+ space 1) n)) -1
+          (loop [i (+ space 1) total 0 digits 0]
+            (if (>= i n) -1
+              (let [c (string-code-point-at reply i)]
+                (cond (= c 32) (if (and (> digits 0) (<= total limit)) total -1)
+                      (or (< c 48) (> c 57)) -1
+                      (> total (quot (- limit (- c 48)) 10)) -1
+                      :else (recur (+ i 1) (+ (* total 10) (- c 48)) (+ digits 1)))))))))))
+
+(defn- digest-problem [s :string] :string (if (= (string-length s) 71) "oci/ok" "oci/bad"))
+(defn- md-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- md-out [s :string] :i64 (let [x (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- md-regular? [meta :string] :bool
+  (let [n (string-length meta)]
+    (and (>= n 2) (= (string-substring meta (- n 2) n) " 0"))))
+(defn- md-decimal [s :string] :i64
+  ;; The current diagnostic Darwin E provider admits starting offsets below
+  ;; 16 GiB. A larger file needs a separately qualified provider profile.
+  (let [n (string-length s) limit 17179869184]
+    (if (or (= n 0) (> n 11) (and (> n 1) (= (string-substring s 0 1) "0"))) -1
+      (loop [i 0 value 0]
+        (if (= i n) value
+          (let [c (string-code-point-at s i) digit (- c 48)]
+            (if (or (< digit 0) (> digit 9) (> value (quot (- limit digit) 10))) -1
+              (recur (+ i 1) (+ (* value 10) digit)))))))))
+
+;; A caller gives a private, host-pinned path. Reject traversal and the legacy
+;; FS2 separator spelling; host must also prevent symlinks and hard-link races.
+(defn- md-path? [p :string] :bool
+  (and (> (string-length p) 1) (<= (string-length p) 512)
+       (= (string-substring p 0 1) "/") (< (string-index-of p "..") 0)
+       (< (string-index-of p "//") 0) (< (string-index-of p "/./") 0)
+       (< (string-index-of p "_SEP") 0)
+       (not (= (string-substring p (- (string-length p) 2) (string-length p)) "/."))
+       (loop [i 0]
+         (if (= i (string-length p)) true
+           (let [c (string-code-point-at p i)]
+             (and (or (and (>= c 97) (<= c 122)) (and (>= c 65) (<= c 90))
+                      (and (>= c 48) (<= c 57)) (= c 47) (= c 45) (= c 95) (= c 46))
+                  (recur (+ i 1))))))))
+
+;; SHA-256 compression writes into the persistent work vector. Each input
+;; chunk is a multiple of 64 except the last; the final block carries the
+;; total file length, not the size of the last range.
+(defn- md-blocks [work :vector-i64 data :vector-i64 length :i64 k :vector-i64] :bool
+  (loop [i 0]
+    (if (= i length) true
+      (let [w (s2-add (s2-rounds (s2-begin (s2-expand (s2-load work data i (vector-count data)))) k))]
+        (recur (+ i 64))))))
+
+(defn- md-pad [work :vector-i64 data :vector-i64 offset :i64 remain :i64 total :i64 k :vector-i64] :bool
+  (let [size (if (< remain 56) 64 128)
+        padding (loop [i 0 out (vector-alloc size)]
+                  (if (= i size) out
+                    (let [v (cond (< i remain) (vector-at data (+ offset i))
+                                  (= i remain) 128
+                                  (>= i (- size 8)) (bit-and (u64-shift-right (* total 8) (* (- (- size 1) i) 8)) 255)
+                                  :else 0)]
+                      (recur (+ i 1) (vector-assoc! out i v)))))]
+    (md-blocks work padding size k)))
+
+(defn- md-stream [path :string size :i64 work :vector-i64] :bool
+  (let [k (s2-k)]
+    (loop [offset 0]
+      (if (= offset size)
+        (md-pad work (vector-alloc 0) 0 0 size k)
+        (let [left (- size offset) count (if (> left 65536) 65536 left)
+              last (= (+ offset count) size)
+              ok (arena-scope
+                   (let [r (typed-cap-call 35 :string :bytes (ol-frame "E" path (str (ol-dec offset) ":" (ol-dec count))))]
+                     (if (not (and (= (bytes-count r) (+ count 5)) (= (bytes-at r 0) 0)
+                                   (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
+                                   (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))) false
+                       (let [data (vector-i64-from-bytes (bytes-slice r 5 (+ count 5)))
+                             whole (* (quot count 64) 64) good (md-blocks work data whole k)]
+                         (and good (if last (md-pad work data whole (- count whole) size k) true))))))]
+          (if (not ok) false (if last true (recur (+ offset count)))))))))
+
+(defn model-digest-main [] :i64
+  (let [path (md-arg 0) wanted (md-arg 1) size (md-decimal (md-arg 2))
+        valid (and (md-path? path) (= (digest-problem wanted) "oci/ok") (>= size 0) (= (md-arg 3) ""))]
+    (if (not valid) (let [x (md-out "model/input-refused")] 2)
+      ;; O reports the no-follow file type; the diagnostic Darwin F provider
+      ;; traps on directories rather than returning metadata. This preflight
+      ;; is meaningful only under the host's exclusive-path contract.
+      (let [entry (typed-cap-call 35 :string :string (ol-frame "O" path ""))
+            entry-size (ol-size entry 17179869184)]
+        (if (or (not (md-regular? entry)) (not (= entry-size size))) (let [x (md-out "model/size-unknown")] 1)
+        (let [meta (typed-cap-call 35 :string :string (ol-frame "F" path ""))
+              measured (ol-size meta 17179869184)]
+        (if (or (not (md-regular? meta)) (not (= measured size))) (let [x (md-out "model/size-unknown")] 1)
+          (let [work (s2-work (s2-iv 8)) ok (md-stream path size work)
+                after (typed-cap-call 35 :string :string (ol-frame "F" path ""))
+                digest (if ok (str "sha256:" (hex (s2-out work 8))) "")
+                result (cond (not ok) "model/read-unknown"
+                             (not (= meta after)) "model/changed-unknown"
+                             (not (= digest wanted)) "model/digest-mismatch"
+                             :else "model/digest-observed")
+                x (md-out result)]
+            (if (= result "model/digest-observed") 0 1)))))))))
+
+(defn main [] :i64 (model-digest-main))

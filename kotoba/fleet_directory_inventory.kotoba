@@ -1,0 +1,74 @@
+;; Parser for the fixed Darwin directory snapshot helper's ADI1 hex record.
+;; The private host must bind the helper's FD, successful exit and bytes to
+;; the same locked directory. Guest-supplied stdin is never proof by itself.
+;; Compose after fleet_model_assets (for the exact fixed asset names).
+(ns murakumo.fleet-directory-inventory (:export [model-inventory-main di-bound-inventory?]))
+
+(defn- di-nibble [c :i64] :i64
+  (cond (and (>= c 48) (<= c 57)) (- c 48)
+        (and (>= c 97) (<= c 102)) (+ 10 (- c 97)) :else -1))
+(defn- di-hex? [s :string] :bool
+  (let [n (string-length s)]
+    (and (>= n 17) (<= n 8209) (= (rem n 2) 1) (= (string-substring s (- n 1) n) "\n")
+         (loop [i 0] (if (= i (- n 1)) true
+           (and (>= (di-nibble (string-code-point-at s i)) 0) (recur (+ i 1))))))))
+(defn- di-byte [s :string i :i64] :i64
+  (+ (* 16 (di-nibble (string-code-point-at s (* i 2)))) (di-nibble (string-code-point-at s (+ (* i 2) 1)))))
+(defn- di-u16 [s :string i :i64] :i64 (+ (di-byte s i) (* 256 (di-byte s (+ i 1)))))
+(defn- di-u32 [s :string i :i64] :i64 (+ (di-u16 s i) (* 65536 (di-u16 s (+ i 2)))))
+(defn- di-nonzero-ino? [s :string i :i64] :bool
+  (loop [k 0] (if (= k 8) false (if (not (= (di-byte s (+ i k)) 0)) true (recur (+ k 1))))))
+(defn- di-name? [s :string start :i64 n :i64 name :string] :bool
+  (let [b (vector-i64-from-bytes (string-to-utf8 name))]
+    (and (= n (vector-count b))
+         (loop [i 0] (if (= i n) true (and (= (di-byte s (+ start i)) (vector-at b i)) (recur (+ i 1))))))))
+(defn- di-id [s :string start :i64 n :i64] :i64
+  (loop [i 0]
+    (if (= i 20) -1
+      (let [name (if (< i 15) (ta-name i)
+                   (case i 15 "model.safetensors" 16 "mtp.safetensors" 17 ".awai-model-receipt.json" 18 "." ".."))]
+        (if (di-name? s start n name) i (recur (+ i 1)))))))
+
+(defn- di-inventory? [s :string assets :i64] :bool
+  (if (or (not (di-hex? s)) (< assets 0) (> assets 32767) (not (= (bit-and assets 255) 255))) false
+    (let [bytes (quot (- (string-length s) 1) 2) declared (di-u32 s 4)
+          expected (bit-or assets 229376)]
+      (if (or (not (= (string-substring s 0 8) "41444931")) (> declared 4096) (not (= bytes (+ declared 8)))) false
+        (loop [offset 8 seen 0]
+          (if (= offset bytes) (= (bit-and seen 262143) expected)
+            (if (< (- bytes offset) 22) false
+              (let [reclen (di-u16 s (+ offset 16)) namelen (di-u16 s (+ offset 18)) typ (di-byte s (+ offset 20))
+                    valid (and (di-nonzero-ino? s offset) (>= reclen 22) (= (rem reclen 4) 0)
+                               (<= reclen (- bytes offset)) (> namelen 0) (<= namelen 255)
+                               (<= (+ namelen 22) reclen))
+                    id (if valid (di-id s (+ offset 21) namelen) -1)]
+                (if (or (not valid) (< id 0) (not (= (di-byte s (+ offset 21 namelen)) 0))
+                        (not (= (bit-and seen (i64-shift-left 1 id)) 0))
+                        (if (>= id 18) (not (= typ 4)) (not (= typ 8)))) false
+                  (recur (+ offset reclen) (bit-or seen (i64-shift-left 1 id))))))))))))
+
+;; ADI2 prefixes the existing directory records with FD-derived device/inode.
+;; Expected IDs are little-endian 8-byte lowercase hex supplied by a trusted
+;; host that holds the target FD. This comparison does not authenticate that
+;; host or make caller-provided expected IDs trustworthy.
+(defn- di-id-hex? [s :string] :bool
+  (and (= (string-length s) 16)
+       (loop [i 0] (if (= i 16) true
+         (and (>= (di-nibble (string-code-point-at s i)) 0) (recur (+ i 1)))))))
+
+(defn di-bound-inventory? [s :string assets :i64 dev :string ino :string] :bool
+  (let [n (string-length s)]
+    (and (>= n 49) (<= n 8241) (= (rem n 2) 1)
+         (= (string-substring s (- n 1) n) "\n")
+         (= (string-substring s 0 8) "41444932")
+         (di-id-hex? dev) (di-id-hex? ino)
+         (= (string-substring dev 8 16) "00000000")
+         (not (= ino "0000000000000000"))
+         (= (string-substring s 16 32) dev) (= (string-substring s 32 48) ino)
+         (di-inventory? (str "41444931" (string-substring s 8 16) (string-substring s 48 n)) assets))))
+
+(defn model-inventory-main [] :i64
+  (let [assets (md-decimal (md-arg 0)) extra (md-arg 1)
+        input (if (= extra "") (typed-cap-call 41 :string :string "") "")
+        ok (and (= extra "") (di-inventory? input assets)) x (md-out (if ok "inventory/match" "inventory/refused"))]
+    (if ok 0 1)))

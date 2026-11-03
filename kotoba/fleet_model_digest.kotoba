@@ -1,0 +1,175 @@
+;; Bounded streaming SHA-256 observation for a host-pinned model blob.
+;; Compose after sha2.core and fleet_oci_layout. The host owns the file and
+;; prevents writers, aliases and replacement throughout reading and use.
+;; FS2 E reopens by path, so this is not an immutable snapshot or launch grant.
+(ns murakumo.fleet-model-digest (:export [model-digest-main model-artifact-main]))
+
+(defn- md-arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- md-out [s :string] :i64 (let [x (typed-cap-call 37 :string :string (str s "\n"))] 0))
+(defn- md-regular? [meta :string] :bool
+  (let [n (string-length meta)]
+    (and (>= n 2) (= (string-substring meta (- n 2) n) " 0"))))
+(defn- md-decimal [s :string] :i64
+  ;; The current diagnostic Darwin E provider admits starting offsets below
+  ;; 16 GiB. A larger file needs a separately qualified provider profile.
+  (let [n (string-length s) limit 17179869184]
+    (if (or (= n 0) (> n 11) (and (> n 1) (= (string-substring s 0 1) "0"))) -1
+      (loop [i 0 value 0]
+        (if (= i n) value
+          (let [c (string-code-point-at s i) digit (- c 48)]
+            (if (or (< digit 0) (> digit 9) (> value (quot (- limit digit) 10))) -1
+              (recur (+ i 1) (+ (* value 10) digit)))))))))
+
+;; A caller gives a private, host-pinned path. Reject traversal and the legacy
+;; FS2 separator spelling; host must also prevent symlinks and hard-link races.
+(defn- md-path? [p :string] :bool
+  (and (> (string-length p) 1) (<= (string-length p) 512)
+       (= (string-substring p 0 1) "/") (< (string-index-of p "..") 0)
+       (< (string-index-of p "//") 0) (< (string-index-of p "/./") 0)
+       (< (string-index-of p "_SEP") 0)
+       (not (= (string-substring p (- (string-length p) 2) (string-length p)) "/."))
+       (loop [i 0]
+         (if (= i (string-length p)) true
+           (let [c (string-code-point-at p i)]
+             (and (or (and (>= c 97) (<= c 122)) (and (>= c 65) (<= c 90))
+                      (and (>= c 48) (<= c 57)) (= c 47) (= c 45) (= c 95) (= c 46))
+                  (recur (+ i 1))))))))
+
+;; SHA-256 compression writes into the persistent work vector. Each input
+;; chunk is a multiple of 64 except the last; the final block carries the
+;; total file length, not the size of the last range.
+(defn- md-blocks [work :vector-i64 data :vector-i64 length :i64 k :vector-i64] :bool
+  (loop [i 0]
+    (if (= i length) true
+      (let [w (s2-add (s2-rounds (s2-begin (s2-expand (s2-load work data i (vector-count data)))) k))]
+        (recur (+ i 64))))))
+
+(defn- md-pad [work :vector-i64 data :vector-i64 offset :i64 remain :i64 total :i64 k :vector-i64] :bool
+  (let [size (if (< remain 56) 64 128)
+        padding (loop [i 0 out (vector-alloc size)]
+                  (if (= i size) out
+                    (let [v (cond (< i remain) (vector-at data (+ offset i))
+                                  (= i remain) 128
+                                  (>= i (- size 8)) (bit-and (u64-shift-right (* total 8) (* (- (- size 1) i) 8)) 255)
+                                  :else 0)]
+                      (recur (+ i 1) (vector-assoc! out i v)))))]
+    (md-blocks work padding size k)))
+
+(defn- md-stream [path :string size :i64 work :vector-i64] :bool
+  (let [k (s2-k)]
+    (loop [offset 0]
+      (if (= offset size)
+        (md-pad work (vector-alloc 0) 0 0 size k)
+        (let [left (- size offset) count (if (> left 65536) 65536 left)
+              last (= (+ offset count) size)
+              ok (arena-scope
+                   (let [r (typed-cap-call 35 :string :bytes (ol-frame "E" path (str (ol-dec offset) ":" (ol-dec count))))]
+                     (if (not (and (= (bytes-count r) (+ count 5)) (= (bytes-at r 0) 0)
+                                   (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
+                                   (= (bytes-at r 3) 50) (= (bytes-at r 4) 0))) false
+                       (let [data (vector-i64-from-bytes (bytes-slice r 5 (+ count 5)))
+                             whole (* (quot count 64) 64) good (md-blocks work data whole k)]
+                         (and good (if last (md-pad work data whole (- count whole) size k) true))))))]
+          (if (not ok) false (if last true (recur (+ offset count)))))))))
+
+(defn- md-observe [path :string wanted :string size :i64] :string
+  (let [valid (and (md-path? path) (= (digest-problem wanted) "oci/ok") (>= size 0) (<= size 17179869184))]
+    (if (not valid) "model/input-refused"
+      ;; O reports the no-follow file type; the diagnostic Darwin F provider
+      ;; traps on directories rather than returning metadata. This preflight
+      ;; is meaningful only under the host's exclusive-path contract.
+      (let [entry (typed-cap-call 35 :string :string (ol-frame "O" path ""))
+            entry-size (ol-size entry 17179869184)]
+        (if (or (not (md-regular? entry)) (not (= entry-size size))) "model/size-unknown"
+        (let [meta (typed-cap-call 35 :string :string (ol-frame "F" path ""))
+              measured (ol-size meta 17179869184)]
+        (if (or (not (md-regular? meta)) (not (= measured size))) "model/size-unknown"
+          (let [work (s2-work (s2-iv 8)) ok (md-stream path size work)
+                after (typed-cap-call 35 :string :string (ol-frame "F" path ""))
+                digest (if ok (str "sha256:" (hex (s2-out work 8))) "")
+                result (cond (not ok) "model/read-unknown"
+                             (not (= meta after)) "model/changed-unknown"
+                             (not (= digest wanted)) "model/digest-mismatch"
+                             :else "model/digest-observed")]
+            result))))))))
+
+(defn model-digest-main [] :i64
+  (let [size (md-decimal (md-arg 2))
+        result (if (= (md-arg 3) "") (md-observe (md-arg 0) (md-arg 1) size) "model/input-refused")
+        x (md-out result)]
+    (if (= result "model/digest-observed") 0 (if (= result "model/input-refused") 2 1))))
+
+;; Proposed private OCI artifact profile. This parses and authenticates the
+;; exact manifest and all named layer descriptors; it is not a snapshot,
+;; registry client, model loader, publisher identity, or execution grant.
+(defn- ma-read [path :string limit :i64] :vector-i64
+  (let [entry (if (md-path? path) (typed-cap-call 35 :string :string (ol-frame "O" path "")) "")
+        size (ol-size entry limit)]
+    (if (and (md-path? path) (md-regular? entry) (>= size 0)) (ol-read path limit) (ol-failed))))
+
+(defn- ma-layer? [m :vector-i64 d :i64 kind :string digest :string size :i64] :bool
+  (and (>= d 0) (= (json-kind m d) 1) (= (ol-text m d "mediaType") kind)
+       (= (ol-text m d "digest") digest) (= (ol-int m d "size") size)))
+
+(defn- md-present? [path :string size :i64] :bool
+  (let [entry (if (md-path? path) (typed-cap-call 35 :string :string (ol-frame "O" path "")) "")
+        meta (if (and (md-regular? entry) (= (ol-size entry 17179869184) size))
+               (typed-cap-call 35 :string :string (ol-frame "F" path "")) "")]
+    (and (md-path? path) (md-regular? entry) (= (ol-size entry 17179869184) size)
+         (md-regular? meta) (= (ol-size meta 17179869184) size))))
+
+(defn- ma-check [layout :string manifest :string manifest-size :i64 base :string base-size :i64 mtp :string mtp-size :i64
+                assets :string assets-size :i64 verify-weights :bool] :string
+  (if (or (not (md-path? layout)) (not (= (digest-problem manifest) "oci/ok"))
+          (not (= (digest-problem base) "oci/ok")) (not (= (digest-problem mtp) "oci/ok"))
+          (not (= (digest-problem assets) "oci/ok"))
+          (< manifest-size 1) (> manifest-size 1048576) (< base-size 1) (> base-size 17179869184)
+          (< mtp-size 1) (> mtp-size 17179869184) (< assets-size 1) (> assets-size 17179869184)
+          (= base mtp) (= base assets) (= mtp assets)) "model-artifact/input-refused"
+    (let [layout-bytes (ma-read (str layout "/oci-layout") 1024)
+          index (ma-read (str layout "/index.json") 1048576)
+          indexes (if (and (ol-read-ok? index) (json-valid? index)) (json-member index (ol-root index) "manifests") -1)
+          first (if (and (>= indexes 0) (= (json-kind index indexes) 2) (= (json-count index indexes) 1)) (json-element index indexes 0) -1)
+          m (ma-read (ol-blob-path layout manifest) manifest-size)]
+      (cond (not (and (ol-read-ok? layout-bytes) (json-valid? layout-bytes)
+                      (= (ol-text layout-bytes (ol-root layout-bytes) "imageLayoutVersion") "1.0.0"))) "model-artifact/layout-refused"
+            (not (and (= (ol-int index (ol-root index) "schemaVersion") 2)
+                      (ol-index-ok? index first manifest manifest-size)
+                      (= (ol-text index first "mediaType") "application/vnd.oci.image.manifest.v1+json"))) "model-artifact/index-refused"
+            (or (not (ol-read-ok? m)) (not (= (vector-count m) manifest-size))
+                (not (= (str "sha256:" (sha256-hex m)) manifest)) (not (json-valid? m))) "model-artifact/manifest-refused"
+            :else
+            (let [root (ol-root m) layers (json-member m root "layers") config (json-member m root "config")
+                  first-layer (if (and (>= layers 0) (= (json-kind m layers) 2) (= (json-count m layers) 3)) (json-element m layers 0) -1)
+                  second-layer (if (>= first-layer 0) (json-element m layers 1) -1)
+                  third-layer (if (>= first-layer 0) (json-element m layers 2) -1)
+                  empty-digest "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+                  empty-config (ma-read (ol-blob-path layout empty-digest) 2)]
+              (cond (or (not (= (ol-int m root "schemaVersion") 2))
+                        (not (= (ol-text m root "mediaType") "application/vnd.oci.image.manifest.v1+json"))
+                        (not (= (ol-text m root "artifactType") "application/vnd.awai.model.bonsai.v1"))
+                        (not (ma-layer? m config "application/vnd.oci.empty.v1+json" empty-digest 2))
+                        (not (ol-read-ok? empty-config)) (not (= (vector-count empty-config) 2))
+                        (not (= (str "sha256:" (sha256-hex empty-config)) empty-digest))
+                        (not (ma-layer? m first-layer "application/vnd.awai.model.bonsai.weights.v1" base base-size))
+                        (not (ma-layer? m second-layer "application/vnd.awai.model.bonsai.mtp.v1" mtp mtp-size))
+                        (not (ma-layer? m third-layer "application/vnd.awai.model.bonsai.assets.tar.v1" assets assets-size))) "model-artifact/descriptor-refused"
+                    (not (md-present? (ol-blob-path layout base) base-size)) "model-artifact/base-unknown"
+                    (not (md-present? (ol-blob-path layout mtp) mtp-size)) "model-artifact/mtp-unknown"
+                    (and verify-weights (not (= (md-observe (ol-blob-path layout base) base base-size) "model/digest-observed"))) "model-artifact/base-unknown"
+                    (and verify-weights (not (= (md-observe (ol-blob-path layout mtp) mtp mtp-size) "model/digest-observed"))) "model-artifact/mtp-unknown"
+                    (not (= (md-observe (ol-blob-path layout assets) assets assets-size) "model/digest-observed")) "model-artifact/assets-unknown"
+                    :else (if verify-weights "model-artifact/digests-observed" "model-artifact/descriptors-observed")))))))
+
+(defn- ma-observe [layout :string manifest :string manifest-size :i64 base :string base-size :i64 mtp :string mtp-size :i64
+                  assets :string assets-size :i64] :string
+  (ma-check layout manifest manifest-size base base-size mtp mtp-size assets assets-size true))
+
+(defn model-artifact-main [] :i64
+  (let [result (if (= (md-arg 9) "")
+                 (ma-observe (md-arg 0) (md-arg 1) (md-decimal (md-arg 2))
+                             (md-arg 3) (md-decimal (md-arg 4)) (md-arg 5) (md-decimal (md-arg 6))
+                             (md-arg 7) (md-decimal (md-arg 8)))
+                 "model-artifact/input-refused")
+        x (md-out result)]
+    (if (= result "model-artifact/digests-observed") 0 1)))
