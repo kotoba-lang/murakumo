@@ -20,13 +20,18 @@
 
 ;; The caller supplies only a fixed request constructed in this component.
 ;; Empty, failed, nonzero or oversized replies never become observations.
+(defn- mo-proc-ok? [reply :vector-i64] :bool
+  ;; AMUH carries status, exit and signal separately. Do not accept a
+  ;; contradictory success exit paired with a signal or a truncated reply.
+  (and (= (vector-count reply) 3) (= (vector-at reply 0) 0)
+       (= (vector-at reply 1) 0) (= (vector-at reply 2) 0)))
 (defn- mo-run [work :string name :string executable :string request :string] :string
   (let [fields (mo-argv request) count (if (> (vector-count fields) 0) (vector-at fields 0) 0)
         argv (if (> count 0) (hc-text (hc-slice fields 1 (- (vector-count fields) 1))) "")
         capture (str work "/" name)
         reply (if (and (ob-path? work) (> count 0) (<= count 63))
                 (hc-spawn 0 work capture executable count argv) [])
-        bytes (if (and (hc-ok? reply) (= (vector-at reply 1) 0)) (hc-read capture) [])]
+        bytes (if (mo-proc-ok? reply) (hc-read capture) [])]
     (if (and (hc-ok? bytes) (> (vector-count bytes) 1) (<= (vector-count bytes) 8193))
       (str "0\n" (hc-text (hc-slice bytes 1 (- (vector-count bytes) 1)))) "")))
 (defn- mo-stdout [reply :string] :string

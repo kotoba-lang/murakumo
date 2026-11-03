@@ -8,4 +8,7 @@
         bad-path (mo-receive "benjamin" "100.75.169.8" "/tmp/id" "/tmp/known" "/tmp/work" "/tmp/../remote")]
     (if (and (> (vector-count argv) 1) (= (vector-at argv 0) 3)
              (= (vector-count empty) 0) (= bad-node "") (= bad-path "")
+             (mo-proc-ok? [0 0 0]) (not (mo-proc-ok? [0 0 9]))
+             (not (mo-proc-ok? [0 1 0])) (not (mo-proc-ok? [1 0 0]))
+             (not (mo-proc-ok? [0]))
              (= (mo-snapshot "relative") "")) 0 1)))
