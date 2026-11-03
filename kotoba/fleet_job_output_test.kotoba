@@ -1,0 +1,14 @@
+;; Compose after fleet_job_output. Public test key; no production authority.
+(ns murakumo.fleet-job-output-test (:export [test-job-output]))
+
+(defn test-job-output [] :bool
+  (let [receipt "{\"at\":1793645388593,\"did\":\"did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw\",\"epoch\":1,\"exit\":0,\"job\":\"52ca9f3745e6524a5f0d3eeb1c6c3c8715bcd6269a74d1669075acdc46200e77\",\"kind\":\"itonami.agent-step-receipt/1\",\"node\":\"b70\",\"output\":\"bafkreibuoymhi5lbx3ktszxduuzmekq2qpbqd7mz66w2cowz4memgb4dna\"}" sig "775KP54W6AiVBm49uj2HloKse9FxvkhmGSO50w9S1LAo3eD4qECI79mu8erj-B0gjU9Hl8zsd5FwoK4-TDaVDQ" output "Y3JvbiBjZWxsIHJlY2VpdmVkOiBib3VuZGVkIHNvdXJjZQ"
+        did "did:key:z6MktwupdmLXVVqTzCw4i46r4uGyosGXRnR3XjN4Zq7oMMsw" job "52ca9f3745e6524a5f0d3eeb1c6c3c8715bcd6269a74d1669075acdc46200e77"
+        log (str "receipt " receipt "\nsignature " sig "\noutput-base64url " output "\n")]
+    (and (= (jo-verdict log did job) "job-output/verified")
+         (= (jo-verdict (str log "receipt {}\n") did job) "job-output/missing-or-duplicate")
+         (= (jo-verdict (str "receipt {\"a\":\nsignature " sig "\noutput-base64url " output "\n") did job) "job-output/receipt")
+         (= (jo-verdict (str "receipt " receipt "\nsignature AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\noutput-base64url " output "\n") did job) "job-output/signature")
+         (= (jo-verdict (str "receipt " receipt "\nsignature " sig "\noutput-base64url YmFk\n") did job) "job-output/content")
+         (= (jo-verdict log did "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") "job-output/binding")
+         (= (en-b64-encode (jo-decode output)) output))))
