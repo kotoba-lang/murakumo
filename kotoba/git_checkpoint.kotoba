@@ -29,6 +29,9 @@
     (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000"))
       (string-substring r 5 (string-length r)) "")))
 (defn- cp-exists? [p :string] :bool (= (cp-fs "D" p "") "1"))
+;; Only an explicit absent response permits creation. A provider that maps
+;; lookup failures to "0" cannot satisfy this contract.
+(defn- cp-absent? [p :string] :bool (= (cp-fs "D" p "") "0"))
 (defn- cp-read-op [p :string op :string tail :string] :vector-i64
   (let [r (typed-cap-call :fs/app-data :string :bytes (cp-frame op p tail)) n (bytes-count r)]
     (if (and (>= n 5) (= (bytes-at r 0) 0) (= (bytes-at r 1) 70) (= (bytes-at r 2) 83)
@@ -84,9 +87,11 @@
         flush (cp-fs "M" p "")]
     (and (= flush "1") (= (cp-cid (cp-read p)) (cp-cid b)))))
 (defn- cp-put [store :string b :vector-i64] :string
-  (let [cid (cp-cid b) p (str store "/" cid)]
+  (let [cid (cp-cid b) p (str store "/" cid) status (cp-fs "D" p "")]
     (if (or (> (vector-count b) 131072)
-            (if (cp-exists? p) (not (= (cp-cid (cp-read p)) cid)) (not (cp-write p b)))) "" cid)))
+            (cond (= status "1") (not (= (cp-cid (cp-read p)) cid))
+                  (= status "0") (not (cp-write p b))
+                  :else true)) "" cid)))
 (defn- cp-load [store :string cid :string] :vector-i64
   (if (and (cp-raw? cid) (cp-exists? (str store "/" cid))) (cp-read (str store "/" cid)) (vector-alloc 0)))
 (defn- cp-block? [store :string cid :string] :bool
@@ -321,7 +326,7 @@
         stage (str dest ".partial") ref (str "refs/itonami/checkpoints/" (if (= stash "none") head stash))
         bundle (str store "/" (cp-str b p "bundle") ".bundle")]
     (cond (not (cp-safe-absolute? dest)) "checkpoint/destination"
-          (or (cp-exists? dest) (cp-exists? stage)) "checkpoint/destination-exists"
+          (or (not (cp-absent? dest)) (not (cp-absent? stage))) "checkpoint/destination-exists"
           (not (cp-assemble-bundle store (cp-str b p "bundle"))) "checkpoint/bundle-assembly"
           (not (= (cp-fs "I" stage "") "1")) "checkpoint/mkdir"
           :else
@@ -335,7 +340,7 @@
                   (loop [i 0]
                     (if (= i (json-count b us)) true
                       (let [u (json-element b us i) path (str stage "/" (cp-str b u "path"))]
-                        (if (and (cp-real-parents? stage (cp-str b u "path") true) (not (cp-exists? path)) (cp-write path (cp-load store (cp-str b u "cid")))
+                        (if (and (cp-real-parents? stage (cp-str b u "path") true) (cp-absent? path) (cp-write path (cp-load store (cp-str b u "cid")))
                                  (= (cp-fs "H" path (cp-str b u "mode")) "1"))
                           (recur (+ i 1)) false)))) false)]
             (if (not files) "checkpoint/materialize-failed-partial-retained"

@@ -50,9 +50,10 @@
 ;; quiescent and the private task directory exclusively owned throughout.
 (defn- ga-copy [store :string out :string cid :string] :bool
   (if (not (cp-block? store cid)) false
-    (let [path (str out "/" cid) data (cp-load store cid)]
-      (if (cp-exists? path) (cp-block? out cid)
-        (and (cp-write path data) (cp-block? out cid))))))
+    (let [path (str out "/" cid) data (cp-load store cid) status (cp-fs "D" path "")]
+      (cond (= status "1") (cp-block? out cid)
+            (= status "0") (and (cp-write path data) (cp-block? out cid))
+            :else false))))
 
 (defn- ga-copy-closure [store :string out :string cid :string b :vector-i64] :bool
   (let [p (cp-payload b) bundle (cp-str b p "bundle") index (cp-load store bundle)
@@ -136,7 +137,7 @@
                   epoch :i64 parent :string task :string repo :string gh :string] :string
   (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? dest)) (ga-path-overlap? work dest)
             (not (cp-safe-absolute? gh)) (not (ga-repo? repo)) (not (cp-raw? cid))
-            (cp-exists? dest) (cp-exists? (str dest ".partial"))) "archive-restore/input-refused"
+            (not (cp-absent? dest)) (not (cp-absent? (str dest ".partial")))) "archive-restore/input-refused"
         (not (ga-private? gh repo)) "archive-restore/private-repository-unverified"
         (not (= (cp-fs "I" work "") "1")) "archive-restore/work-exists-or-unavailable"
         (not (= (cp-fs "H" work "700") "1")) "archive-restore/work-permissions"
