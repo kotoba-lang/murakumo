@@ -1,0 +1,30 @@
+{
+  "kind": "awai.peer-link-probe/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "scope": "One sender and two destination Macs. In-memory repeated-byte payloads, not model shards or an authenticated MLX ring.",
+  "transport": "TLS 1.2 or later over direct Tailscale TCP, server and client certificates verified against a fresh test-only CA; a 256-bit SHA-256 acknowledgement verified the received bytes.",
+  "results": [
+    {
+      "bytes": 4194304,
+      "elapsedSecondsIncludingSshSetup": 1.88,
+      "destination": "A"
+    },
+    {
+      "bytes": 4194304,
+      "elapsedSecondsIncludingSshSetup": 0.98,
+      "destination": "B"
+    },
+    {
+      "bytes": 67108864,
+      "elapsedSecondsIncludingSshSetup": 1.47,
+      "destination": "A"
+    },
+    {
+      "bytes": 67108864,
+      "elapsedSecondsIncludingSshSetup": 2.43,
+      "destination": "B"
+    }
+  ],
+  "limits": "Single samples, not sustained throughput or latency SLA; identical repeated bytes were sent. Separate tests from the control Mac encountered SSH transfers timing out, while small commands were intermittent.",
+  "cleanup": "Task-owned temporary certificate directories were confirmed absent on all three hosts. No model files or service settings were changed."
+}
