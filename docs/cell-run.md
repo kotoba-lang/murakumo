@@ -31,6 +31,12 @@ This gate does exactly that on one node.
    `index.json` must list exactly the manifest the release names, at its
    size. The manifest, then its config, then every layer must exist, with
    the descriptor's size and SHA-256, all hashed in the guest.
+   This legacy whole-read path now refuses any descriptor above 4 MiB with
+   `layout/blob-too-large`; it cannot verify model weights. This checks only
+   the declared size before reading: a dishonest or concurrently changed file
+   can still exceed the bound. Index and layout metadata are also read without
+   a provider-enforced bound. A bounded reader and stable snapshot are required
+   before processing untrusted or large layouts. See the [diagnostic fixture](evidence/awai-oci-layout-size-guard-20261103/README.md).
 5. Start it with `cell-start`. Wire 20 may run only the granted
    `/usr/bin/podman`, and runs it twice with fixed argvs:
    - `pull --quiet oci:<layout>` imports the directory. podman checks

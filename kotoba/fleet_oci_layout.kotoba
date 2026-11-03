@@ -21,6 +21,7 @@
 ;;     layout/missing-blob        blobs/sha256/<hex> does not exist
 ;;     layout/size-mismatch       its length is not the descriptor's size
 ;;     layout/digest-mismatch     its SHA-256 is not the descriptor's digest
+;;     layout/blob-too-large      descriptor exceeds this whole-read profile
 ;;     layout/not-an-oci-manifest the manifest is not strict JSON, not
 ;;                                schemaVersion 2 with the OCI manifest type,
 ;;                                or has more than 16 layers
@@ -57,6 +58,12 @@
 (defn- ol-blob-code [layout :string digest :string size :i64] :i64
   (arena-scope
     (cond (or (not (= (digest-problem digest) "oci/ok")) (< size 0)) 1
+          ;; The current implementation reads an entire blob into a byte
+          ;; value and vector-i64. Do not attempt that for model weights.
+          ;; This descriptor bound does not prove the actual file size or
+          ;; prevent concurrent file replacement; a qualified bounded reader
+          ;; and stable snapshot remain necessary for untrusted layouts.
+          (> size 4194304) 5
           (not (ol-exists? (ol-blob-path layout digest))) 2
           :else (let [b (ol-read (ol-blob-path layout digest))]
                   (cond (not (= (vector-count b) size)) 3
@@ -64,7 +71,7 @@
                         :else 0)))))
 
 (defn- ol-reason [code :i64] :string
-  (case code 0 "layout/ok" 1 "layout/bad-descriptor" 2 "layout/missing-blob" 3 "layout/size-mismatch" "layout/digest-mismatch"))
+  (case code 0 "layout/ok" 1 "layout/bad-descriptor" 2 "layout/missing-blob" 3 "layout/size-mismatch" 5 "layout/blob-too-large" "layout/digest-mismatch"))
 
 ;; a descriptor object's blob
 (defn- ol-descriptor-code [layout :string b :vector-i64 d :i64] :i64
