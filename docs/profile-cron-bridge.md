@@ -347,3 +347,12 @@ as permission to dispatch or advance the cursor. The
 [Mac diagnostic fixture](evidence/awai150-request-pending-20261103/) tests
 both checks with real local file existence and stubbed authority/transport.
 The host must still provide exclusive path ownership and reconciliation.
+The current diagnostic Mac FS2 D provider returns `0` for both missing files
+and some lookup errors, so these checks cannot distinguish those cases and
+that provider is not qualified for autonomous execution. See the
+[permission observation](evidence/awai150-request-read-unknown-20261103/).
+
+Request installation also rejects a present request whose data is empty,
+oversized, invalid or noncanonical JSON, and rejects existence responses other
+than `0` or `1`. The provider must reliably distinguish lookup errors from
+absence; these checks cannot recover information the provider suppresses.

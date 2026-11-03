@@ -1,0 +1,35 @@
+(ns request-read-fixture (:export [main]))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-text [v :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 v)))
+(defn- cp-str [v :vector-i64 i :i64 key :string] :string (cp-text v))
+(defn- cp-cid [v :vector-i64] :string (cp-text v))
+(defn- json-valid? [v :vector-i64] :bool (not (= (cp-text v) "bad")))
+(defn- json-canonical? [v :vector-i64] :bool true)
+(defn- json-kind [v :vector-i64 i :i64] :i64 1)
+(defn- cp-fs [op :string path :string tail :string] :string
+  (if (and (= op "D") (= path "/status-unknown/request")) "unavailable"
+    (let [r (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
+      (if (and (>= (string-byte-length r) 5) (= (string-substring r 0 5) "\u0000FS2\u0000")) (string-substring r 5 (string-length r)) ""))))
+(defn- cp-exists? [p :string] :bool (= (cp-fs "D" p "") "1"))
+(defn- cp-read [p :string] :vector-i64 (if (= p "/read-error/request") (vector-alloc 0) (cp-bytes (cp-fs "A" p ""))))
+(defn- rt-save [p :string b :vector-i64] :bool true)
+(defn- br-install [cfg :vector-i64 head :vector-i64 request :vector-i64] :string
+  (let [path (cp-str cfg 0 "request") wanted (cp-cid request)
+        status (cp-fs "D" path "")
+        prior (if (= status "1") (cp-read path) (vector-alloc 0))
+        prior-valid (and (> (vector-count prior) 0) (<= (vector-count prior) 8192)
+                         (json-valid? prior) (json-canonical? prior) (= (json-kind prior 0) 1))
+        old (if (= status "1") (cp-cid prior) "none")
+        consumed (cp-str head 0 "request")]
+    (cond (not (= (cp-fs "D" (str path ".tmp") "") "0")) "bridge/request-unknown"
+          (not (or (= status "0") (and (= status "1") prior-valid))) "bridge/request-unknown"
+          (= consumed wanted) "bridge/already-consumed"
+          (and (not (= old "none")) (not (= old consumed)) (not (= old wanted))) "bridge/pending-request"
+          (= old wanted) "bridge/request-ready"
+          (rt-save path request) "bridge/request-ready"
+          :else "bridge/request-unknown")))
+
+(defn main [] :i64
+ (let [path (typed-cap-call 38 :string :string "0") head (typed-cap-call 38 :string :string "1")
+       result (br-install (cp-bytes path) (cp-bytes head) (cp-bytes "wanted"))
+       out (typed-cap-call 37 :string :string (str result "\n"))] 0))
