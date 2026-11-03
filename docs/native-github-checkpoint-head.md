@@ -56,3 +56,21 @@ The live input schema names the unqualified branch field `branchName`.
 This is a candidate replacement for the normal-push step, not yet an
 integrated native writer or a lease fence. Expected-OID comparison does not
 prevent an ABA rewind to the same OID or authorize a lease holder.
+
+`github_checkpoint_head_graphql.kotoba` now provides an alternate native
+candidate using `createCommitOnBranch` with `expectedHeadOid` instead of the
+normal push. It archives the signed closure, verifies the previous pinned
+commit and pointer, writes a credential-free GraphQL request in a private task
+directory, invokes the host-pinned `gh`, and independently fetches the result
+through Git. It reports acknowledged only when the API's returned OID matches
+the verified readback; a lost response can be reported as unacknowledged only
+when the readback has the expected parent and content. Other results remain
+unknown or conflicting and must be reconciled.
+
+The [native candidate test](evidence/awai150-head-graphql-native-20261103/)
+uses a fake API and local bare Git. The separate operator-side GitHub test above
+exercised the real API, not this candidate. A scoped `gh` and Git credential
+path, process lifetime control, private request directory and egress policy are
+still needed. Exact expected-head checking is not anti-ABA, rollback resistance,
+lease validation or permission to execute, and the candidate is not yet wired
+into a resident.
