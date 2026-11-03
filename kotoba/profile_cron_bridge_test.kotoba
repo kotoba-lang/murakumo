@@ -1,0 +1,17 @@
+;; Compose after the gateway trigger test fixtures and profile_cron_bridge.
+(ns murakumo.profile-cron-bridge-test (:export [test-profile-cron-bridge]))
+
+(defn test-profile-cron-bridge [] :bool
+  (let [source (cp-bytes "bounded source") wrong (cp-bytes "wrong source")
+        definition (test-definition-source "* * * * *" "bridge-test" 540 (cp-cid source))
+        cfg (cp-bytes (str "{\"policy\":\"" (gt-str definition "policy")
+                          "\",\"profile\":\"" (gt-str definition "profile") "\"}"))
+        runtime (cp-bytes (str "{\"workDigest\":\"sha256:" (sha256-hex source) "\"}"))
+        other (cp-bytes "{\"workDigest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\"}")
+        request (cp-bytes "{\"kind\":\"test\"}")
+        head (cp-bytes (str "{\"request\":\"" (cp-cid request) "\"}"))]
+    (and (br-work-bound? cfg runtime definition source)
+         (not (br-work-bound? cfg runtime definition wrong))
+         (not (br-work-bound? cfg other definition source))
+         (not (br-work-bound? (cp-bytes "{}") runtime definition source))
+         (br-completed? head request) (not (br-completed? head wrong)))))

@@ -162,9 +162,8 @@
 
 (defn parse-rc
   "Split captured stdout into [clean-stdout rc-or-nil]. rc is nil when the
-   sentinel never arrived (connection failure, kill, non-shell remote), in which
-   case the caller falls back to ssh's own exit code — which IS trustworthy for
-   ssh-level failures (255) even where the remote status is not.
+   sentinel never arrived (connection failure, kill, non-shell remote). A
+   missing sentinel with SSH exit zero is an unknown result, not success.
    Marker/digits classification via kotoba (required); line-split stays host."
   [out]
   (let [;; ⚠ The sentinel is only ITS OWN LINE when the remote command's stdout
@@ -178,12 +177,11 @@
         ;;         `trailing JSON input` (measured 2026-09-10: this is why
         ;;         `murakumo.infer.media/comfy` could not read /system_stats,
         ;;         and so why the ComfyUI gateway's /health returned an error)
-        ;;   rc    is nil, so `pick-exit` falls back to ssh's own code -- the
-        ;;         very code this function's docstring says is untrustworthy on
-        ;;         this fleet's macOS nodes, which report 0 regardless
+        ;;   rc    is nil; historically `pick-exit` trusted SSH's own code,
+        ;;         even though this fleet's macOS nodes can report 0 on failure
         ;;
         ;; So a command whose output lacks a trailing newline loses its exit
-        ;; status AND corrupts its stdout, and reports success either way.
+        ;; status AND corrupts its stdout, and historically reported success.
         ;; Put a glued sentinel back on its own line before splitting.
         raw (str out)
         i (str/index-of raw rc-marker)
@@ -299,10 +297,10 @@
 (defn sh-result
   "Normalise process output from an SSH command.
 
-   `:exit` is the REMOTE command's status (from the in-band sentinel) whenever
-   it is available, falling back to ssh's own code; `:ssh-exit` keeps what the
-   ssh client reported, so a caller can still tell a transport failure from a
-   remote non-zero exit. Exit pick + err trim via kotoba (required)."
+   `:exit` is the remote status only when SSH succeeds and the in-band sentinel
+   is valid. A nonzero SSH status is preserved; missing or invalid sentinel
+   with SSH zero returns 255 (unknown). `:ssh-exit` keeps the client status.
+   Exit pick + err trim via kotoba (required)."
   [{:keys [exit out err]}]
   (let [[clean rc] (parse-rc out)]
     {:exit (pick-exit rc exit)

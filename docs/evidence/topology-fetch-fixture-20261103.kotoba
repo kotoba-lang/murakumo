@@ -1,0 +1,80 @@
+(ns topology-fetch-fixture (:export [main]))
+(defn- tr-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+
+(defn- s2-nibble [v :i64] :string
+  (case v 0 "0" 1 "1" 2 "2" 3 "3" 4 "4" 5 "5" 6 "6" 7 "7"
+          8 "8" 9 "9" 10 "a" 11 "b" 12 "c" 13 "d" 14 "e" "f"))
+
+
+(defn hex [bytes :vector-i64] :string
+  (loop [i 0 out ""]
+    (if (= i (vector-count bytes)) out
+      (let [b (vector-at bytes i)]
+        (recur (+ i 1) (string-concat out (string-concat (s2-nibble (quot b 16)) (s2-nibble (rem b 16)))))))))
+
+
+(defn- tr-int [s :string] :i64
+  (let [b (tr-bytes s)]
+    (if (or (= (vector-count b) 0) (> (vector-count b) 16)) -1
+      (loop [i 0 n 0] (if (= i (vector-count b)) n (let [c (vector-at b i)] (if (and (>= c 48) (<= c 57)) (recur (+ i 1) (+ (* n 10) (- c 48))) -1)))))))
+
+;; ---------------------------------------------------------------------------
+;; Bytes on a connection
+
+
+(defn- tr-slice [b :vector-i64 s :i64 e :i64] :vector-i64
+  (loop [i s out (vector-alloc (- e s))] (if (= i e) out (recur (+ i 1) (vector-assoc! out (- i s) (vector-at b i))))))
+
+;; where "\r\n\r\n" ends in the first n bytes of b, or -1
+
+(defn- tr-head-end [b :vector-i64 n :i64] :i64
+  (loop [i 3]
+    (cond (>= i n) -1
+          (and (= (vector-at b (- i 3)) 13) (= (vector-at b (- i 2)) 10) (= (vector-at b (- i 1)) 13) (= (vector-at b i) 10)) (+ i 1)
+          :else (recur (+ i 1)))))
+
+;; the hex h (wire 46) decoded into buf from n on; the new length
+
+(defn- tr-at? [b :vector-i64 s :i64 e :i64 t :string fold :bool] :bool
+  (let [tb (tr-bytes t)]
+    (and (= (- e s) (vector-count tb))
+         (loop [i 0]
+           (if (= i (vector-count tb)) true
+             (let [c (vector-at b (+ s i)) l (if (and fold (>= c 65) (<= c 90)) (+ c 32) c)]
+               (if (= l (vector-at tb i)) (recur (+ i 1)) false)))))))
+
+
+(defn- tr-line-end [b :vector-i64 i :i64 n :i64] :i64
+  (loop [j i] (cond (>= (+ j 1) n) -1 (and (= (vector-at b j) 13) (= (vector-at b (+ j 1)) 10)) j :else (recur (+ j 1)))))
+
+;; constant time: are [s, e) of b and the bytes of t equal?
+
+(defn- tr-dial [s :string] :string (if (= s "good 3000") "3" "2"))
+(defn- tr-write [s :string] :string
+ (cond (or (= s "2") (= s "3")) "closed"
+       (= (string-substring s 0 1) "2") "0"
+       :else (string-from-i64 (quot (- (string-length s) 2) 2))))
+(defn- tr-recv [c :string max :i64 head :bool] :vector-i64 (tr-bytes "HTTP/1.0 200 OK\r\n\r\nbody"))
+(defn- tr-send [c :string b :vector-i64] :i64
+  (loop [s 0]
+    (if (>= s (vector-count b)) 0
+      (let [e (if (> (+ s 8192) (vector-count b)) (vector-count b) (+ s 8192))
+            w (tr-int (tr-write (str c " " (hex (tr-slice b s e)))))]
+        (if (= w (- e s)) (recur e) 1)))))
+
+
+(defn- tr-fetch [peer :string token :string] :vector-i64
+  (let [c (tr-dial (str peer " 3000"))]
+    (if (< (tr-int c) 1) (vector-alloc 0)
+      (let [w (tr-send c (tr-bytes (str "GET /topology HTTP/1.0\r\nhost: " peer "\r\nauthorization: Bearer " token "\r\nconnection: close\r\n\r\n")))
+            resp (if (= w 0) (tr-recv c (+ 262144 8192) false) (vector-alloc 0))
+            z (tr-write c)
+            n (vector-count resp) h (tr-head-end resp n) e0 (if (> n 0) (tr-line-end resp 0 n) -1)
+            ok (and (>= e0 12) (or (tr-at? resp 0 9 "HTTP/1.0 " false) (tr-at? resp 0 9 "HTTP/1.1 " false))
+                    (tr-at? resp 9 12 "200" false) (or (= e0 12) (= (vector-at resp 12) 32)))]
+        (if (or (< h 0) (not ok) (> (- n h) 262144)) (vector-alloc 0) (tr-slice resp h n))))))
+
+
+(defn main [] :i64
+ (if (and (= (vector-count (tr-fetch "bad" "token")) 0)
+          (= (string-from-utf8 (bytes-from-vector-i64 (tr-fetch "good" "token"))) "body")) 0 1))

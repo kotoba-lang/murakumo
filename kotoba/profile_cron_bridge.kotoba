@@ -1,0 +1,89 @@
+;; Bind a due cron slot to the existing read-only MTP resident. Compose after
+;; profile_resident, itonami.schedule, gateway_trigger and gateway_cursor.
+;; Host config, source and cursor are independently provisioned and private.
+;; This adapter neither calls inference nor grants effects or a lease.
+(ns murakumo.profile-cron-bridge (:export [profile-cron-bridge-main]))
+
+(defn- br-work-bound? [cfg :vector-i64 runtime :vector-i64 definition :vector-i64 source :vector-i64] :bool
+  (and (= (gt-str definition "profile") (cp-str cfg 0 "profile"))
+       (= (gt-str definition "policy") (cp-str cfg 0 "policy"))
+       (= (gt-str definition "rail") "murakumo")
+       (> (vector-count source) 0) (<= (vector-count source) 8192)
+       (= (cp-cid source) (gt-str definition "input"))
+       (= (str "sha256:" (sha256-hex source)) (cp-str runtime 0 "workDigest"))))
+
+(defn- br-problem [cfg :vector-i64 definition :vector-i64 pin :string
+                  cursor :vector-i64 source :vector-i64 now :i64] :string
+  (let [plan (cc-plan-problem definition pin cursor now)]
+    (cond (not (= plan "trigger/ok")) plan
+          (or (not (json-valid? cfg)) (not (json-canonical? cfg))
+              (not (= (cp-str cfg 0 "kind") "itonami.profile-resident/1"))
+              (not (cp-safe-absolute? (cp-str cfg 0 "request")))
+              (not (cp-safe-absolute? (cp-str cfg 0 "archiveAck")))
+              (not (cp-safe-absolute? (cp-str cfg 0 "head")))
+              (not (cp-safe-absolute? (cp-str cfg 0 "store")))
+              (not (cp-safe-absolute? (cp-str cfg 0 "runtimeFile")))
+              (not (cp-safe-absolute? (cp-str cfg 0 "environmentFile")))
+              (not (cp-safe-absolute? (cp-str cfg 0 "policyFile")))
+              (= (cp-str cfg 0 "request") (cp-str cfg 0 "archiveAck"))
+              (= (cp-str cfg 0 "request") (cp-str cfg 0 "head"))
+              (= (cp-str cfg 0 "request") (cp-str cfg 0 "store"))
+              (= (cp-str cfg 0 "request") (cp-str cfg 0 "runtimeFile"))
+              (= (cp-str cfg 0 "request") (cp-str cfg 0 "environmentFile"))
+              (= (cp-str cfg 0 "request") (cp-str cfg 0 "policyFile"))) "bridge/config"
+          (or (not (json-valid? (rt-runtime cfg)))
+              (not (json-valid? (cp-read (cp-str cfg 0 "environmentFile"))))
+              (not (json-valid? (cp-read (cp-str cfg 0 "policyFile"))))) "bridge/runtime-invalid"
+          (not (rt-pins-ok? cfg)) "bridge/runtime-pins"
+          (not (br-work-bound? cfg (rt-runtime cfg) definition source)) "bridge/work-binding"
+          :else "bridge/ok")))
+
+(defn- br-head-problem [cfg :vector-i64 head :vector-i64] :string
+  (cond (or (not (json-valid? head)) (not (json-canonical? head))) "bridge/head-invalid"
+        (not (rt-admitted-head? cfg head)) "bridge/head-unadmitted"
+        (or (not (cp-exists? (cp-str cfg 0 "archiveAck")))
+            (not (json-valid? (cp-read (cp-str cfg 0 "archiveAck"))))
+            (not (rt-archive-ack? (cp-str cfg 0 "archiveAck") (cp-str head 0 "checkpoint")))) "bridge/archive-pending"
+        :else "bridge/head-ready"))
+
+(defn- br-slot [definition :vector-i64 cursor :vector-i64] :i64
+  (next-cron-ms (gt-str definition "cron") (cp-num cursor 0 "slot") (gt-num definition "offsetMinutes")))
+(defn- br-request [definition :vector-i64 pin :string cursor :vector-i64 now :i64] :vector-i64
+  (cp-bytes (verified-cron-input true now (cp-num cursor 0 "slot") (br-slot definition cursor) pin definition)))
+
+;; Do not overwrite a different unconsumed request. A previous incomplete tmp
+;; is UNKNOWN; host reconciliation, not a blind retry, must resolve it.
+(defn- br-install [cfg :vector-i64 head :vector-i64 request :vector-i64] :string
+  (let [path (cp-str cfg 0 "request") wanted (cp-cid request)
+        old (if (cp-exists? path) (cp-cid (cp-read path)) "none")
+        consumed (cp-str head 0 "request")]
+    (cond (= consumed wanted) "bridge/already-consumed"
+          (and (not (= old "none")) (not (= old consumed)) (not (= old wanted))) "bridge/pending-request"
+          (= old wanted) "bridge/request-ready"
+          (cp-exists? (str path ".tmp")) "bridge/request-unknown"
+          (rt-save path request) "bridge/request-ready"
+          :else "bridge/request-unknown")))
+
+(defn- br-completed? [head :vector-i64 request :vector-i64] :bool
+  (= (cp-str head 0 "request") (cp-cid request)))
+
+(defn profile-cron-bridge-main [] :i64
+  (let [mode (cp-arg 0) cfgpath (cp-arg 1) definition-path (cp-arg 2)
+        pin (cp-arg 3) cursor-path (cp-arg 4) source-path (cp-arg 5)]
+    (if (or (not (cp-safe-absolute? cfgpath)) (not (cp-safe-absolute? definition-path))
+            (not (cp-safe-absolute? cursor-path)) (not (cp-safe-absolute? source-path))
+            (not (cp-exists? cfgpath)) (not (cp-exists? definition-path))
+            (not (cp-exists? cursor-path)) (not (cp-exists? source-path)))
+      (let [x (cp-say "bridge/input-unavailable")] 2)
+      (let [cfg (cp-read cfgpath) definition (cp-read definition-path) cursor (cp-read cursor-path)
+            source (cp-read source-path) now (rt-now) problem (br-problem cfg definition pin cursor source now)]
+        (if (or (not (= problem "bridge/ok"))
+                (= (cp-str cfg 0 "request") cfgpath) (= (cp-str cfg 0 "request") definition-path)
+                (= (cp-str cfg 0 "request") cursor-path) (= (cp-str cfg 0 "request") source-path))
+          (let [x (cp-say (if (= problem "bridge/ok") "bridge/path-conflict" problem))] 1)
+          (let [head-path (cp-str cfg 0 "head") head (if (cp-exists? head-path) (cp-read head-path) (vector-alloc 0))
+                h (br-head-problem cfg head) request (br-request definition pin cursor now)]
+            (if (not (= h "bridge/head-ready")) (let [x (cp-say h)] 1)
+              (cond (= mode "prepare") (let [x (cp-say (br-install cfg head request))] 0)
+                    (= mode "complete") (let [x (cp-say (if (br-completed? head request) "bridge/completed" "bridge/not-completed"))] 0)
+                    :else (let [x (cp-say "bridge/command-refused")] 2)))))))))

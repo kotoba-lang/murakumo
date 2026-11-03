@@ -1,0 +1,21 @@
+{
+  "kind": "awai151.native-fifo-darwin-process-kill/1",
+  "date": "2026-11-03 Asia/Tokyo",
+  "environment": "one local macOS 26.3.1 arm64; task-owned directory, FD3 and synthetic tickets",
+  "sourceSha256": "efd391789af509b94eadc65a35d1676ef2e6fbd2a8186b3f75cd7ea48ea97619",
+  "compilerSha256": "920954769b8fdc51cf50dfcab5c44a4e56cf01f261806a153b21488ba81ac4e6",
+  "diagnosticPackagerSha256": "f726f9dd8a4f169187275797a74d55ad3c62cc5f681cd31f19e1a28d67834f8d",
+  "normalArtifactSha256": "542b3e1c5231e9a833ca33e8813f1a150b762d524d80add408fce5b8730b4dbd",
+  "stagerSha256": "2ea4dd33f15cf00c3739b764b56c349c91a935955537db17f2af0ad9a780ea74",
+  "builderSha256": "b848a6f83d9c62940499358516bb7d18bd2f23542690722d24ffe7049bc1aca3",
+  "observerSha256": "d97a8a625167d0b395d7031179b7d26ebdd0ca2f02ae8b1dc4c41f670c44ad53",
+  "phases": [
+    {"phase":"after-intent", "artifactSha256":"b01ea9a38783a6b8f9d25f91b52dfefb71cce182b58b5b2896bc222e76fb4226", "intent":true, "pending":false, "next":"fifo/pending-unknown"},
+    {"phase":"after-pending", "artifactSha256":"de15df11e72be686f8d47c98c23367c2b77a7756110312ade89636b0de105d71", "intent":true, "pending":true, "next":"fifo/pending-unknown"},
+    {"phase":"after-rename", "artifactSha256":"001d8a987016f1bf507b8c648aa14083e2b485c7aca34a0c96b99e1b4d9d585f", "intent":true, "pending":false, "next":"fifo/pending-unknown"},
+    {"phase":"after-sync", "artifactSha256":"e2e63c8875e3736b0d7e6c81082439ae467d7e14d7f6643f4c7cdeb0d02eb2f2", "intent":true, "pending":false, "next":"fifo/pending-unknown"},
+    {"phase":"after-archive", "artifactSha256":"009a5938c969da5d1e0076ccdec8674c66a11b734f25723af9a301e864825c9c", "intent":false, "pending":false, "next":"fifo/front expected-ticket"}
+  ],
+  "method": "At each injected boundary an instrumented fixture writes 262144 synthetic zero bytes to an unread pipe; the observer reads one byte, checks the expected intermediate state, SIGKILLs only its own still-running child, and runs the uninstrumented artifact with the same FD3 scope. All killed children exited -9 and subsequent invocations acquired the lock. CPU limit was 3 seconds per killed fixture.",
+  "limits": "One local Mac, one synthetic enqueue per boundary, diagnostic FS2 runtime and instrumented fixtures. The pipe marker does not exist in production. No power loss, fsync failure, adversarial filesystem changes, remote Mac, process descendants, FIFO arrival fairness, resource reservation, full governor or autonomous bot qualification."
+}

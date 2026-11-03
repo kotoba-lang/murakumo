@@ -325,6 +325,28 @@ slices: polled early, 20 or fewer requests served, exit 0
 
 The receipt is [evidence/topology-replica-clock-20261023.json](evidence/topology-replica-clock-20261023.json).
 
+## Short-write handling
+
+The wire 47 send result is a byte count; it can be shorter than the requested
+chunk, or be an error. The replica now fails that connection on any result
+other than the full chunk length. A polling client closes the connection
+without reading a response after such a failure; the next scheduled poll can
+try again. A partially sent server response is closed and cannot be assumed
+delivered.
+
+Two small, test-only source-unity fixtures copy the production send and fetch
+functions and substitute scripted transport calls. The macOS ARM64 Amu CLI
+from commit `ebdd3f59c5cdfe8d5862816886fe47c702372bdf`, SHA-256
+`6e7dc223795919581cdfc9128344948dfaddec58e9573bef9632923538f33a2a`,
+returned `0` for both fixtures. The send cases cover full, partial, zero,
+reset, invalid oversized count and empty data. The fetch cases cover a failed
+send with a plausible response waiting and a successful response. Restoring
+the old unchecked send and, separately, unconditional receive made the
+respective fixture return `1`. Amu CLI prints these result values; they are
+not process exit codes. Fixtures: [send](evidence/topology-send-fixture-20261103.kotoba)
+and [fetch](evidence/topology-fetch-fixture-20261103.kotoba). These tests use
+mock calls, not real socket backpressure or a complete replica.
+
 ## What this does not show
 
 - **Separate hosts and x86_64.** The containers have their own network
