@@ -121,3 +121,8 @@ It found that system Git config caused a refusal in the earlier diagnostic
 host. A newer candidate disables system Git config in that host, after which
 local archive and restore succeeded; repo-local helper configuration was still
 refused. Real GitHub authorization and production transport remain unqualified.
+
+The same diagnostic local-Git archive and restore path was subsequently checked
+independently on [two Tailscale-connected Mac minis](evidence/awai150-two-minis-local-archive-20261103/).
+The test used a local remote and synthetic privacy response on each host; it
+did not test GitHub, cross-host storage or autonomous bot operation.
