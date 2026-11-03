@@ -81,7 +81,8 @@ memory 16 GiB, zero swap used, pressure free 91%, and root filesystem
 
 After the command returned, a process-list check found no process matching
 the task executable. The three exact capture files and task executable were
-removed from the task-only directory, and the directory's absence was checked.
+removed from the task-only directory, and the directory's absence was checked
+again using an explicit remote completion marker in a later pass.
 No pre-existing service or model was changed. No installation or persistent
 observer was created.
 
@@ -116,8 +117,9 @@ returned an unknown observation, with no matching process and an empty capture
 directory at later inspection. Its task executable and directory were then
 removed, with directory absence verified. Asher was not run again; after
 confirming no matching process and checking its task directory, its remaining
-task files and empty directories were removed and absence verified. SSH
-intermittency made Asher's cleanup require a later inspection.
+task files and empty directories were removed and absence was initially
+inferred from SSH exit status. A later marker-based recheck is recorded below;
+Asher's prior directory absence could not be confirmed in that pass.
 
 Combined with the earlier Benjamin test, eight distinct minis produced
 complete native sender/receiver observations across separate runs. Asher and
@@ -132,3 +134,41 @@ not qualify the installed path, process containment or production deployment.
 | signed task-only native host | `98ab188b9d4323c6d180f905d8d605e15dba3fa74de9fb231c2fb2385c2e0d27` |
 | signed receiver after permission fix | `cf56c51679cb9da71ea06fe4841c936df1c8b55a7fa72145ba79ed632ac64331` |
 | receiver source after permission fix | `edfb2cb4f53b718a9b2e8dd0aaa7234804f471e4167ff0c450e9ac016065f46f` |
+
+## Asher and Simeon follow-up; cleanup recheck
+
+A later task-only test used `scp -p` and verified both the copied digest and
+mode 0700 before executing the native fixture. Asher returned a complete
+observation: 16 GiB physical memory, zero swap used, pressure free 92%, and
+81,776,676 KiB root filesystem available. The first post-run process check was
+unknown. A later check saw a nonempty process list with no matching executable,
+the expected three captures, and the correct executable digest; the exact
+task files were removed. A further explicit-marker check confirmed the new
+task directory absent.
+
+Simeon's setup timed out before a complete observation. Some later SSH calls
+returned zero with empty output, which is insufficient to prove the remote
+command ran. Marker-framed checks subsequently showed no matching process, an
+empty task root and no task subdirectory. The empty root was removed and a
+marker-framed test confirmed it absent. This does not establish a successful
+native observation on Simeon.
+
+The empty-output finding also weakens the earlier cleanup claims based only
+on SSH exit status. A later marker-framed check confirmed the prior Benjamin
+directory and the prior directories on Dan, Issachar, Joseph, Judah, Levi,
+Naphtali, Simeon and Zebulun absent. The prior Asher directory could not be
+confirmed in that pass and remains **unknown**; no assumption of removal is
+made. The two new task directories were confirmed absent. These in-band
+markers detect missing completion in this diagnostic, but are not a proof
+against a malicious remote host.
+
+Across separate task-only runs, nine distinct minis have returned a complete
+native sender/receiver observation; Simeon remains unknown. This is not a
+simultaneous fleet snapshot, production installation, trusted resource
+reservation or permission to run inference.
+
+| Follow-up diagnostic artifact | SHA-256 |
+| --- | --- |
+| signed task-only native host | `88d40bde48ab497c86e0130997d754e716081ccb1a21aec9c8fced5c34321fb6` |
+| signed task-only receiver | `78bb78ed07f29a892dca04ab8cf95702c406d49e5b612827633b4d9a2f9aa7a4` |
+| task-only receiver source | `60faa458273fbbf558f118a0fcdf57014be857a0e34cca08bd2cac7a49c1887d` |
