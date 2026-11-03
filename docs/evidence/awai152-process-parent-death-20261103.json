@@ -1,0 +1,24 @@
+{
+  "kind": "awai.native-process-parent-death-observation/1",
+  "recordedAt": "2026-11-03 Asia/Tokyo",
+  "target": "aarch64-linux-static in disposable one-CPU, 2 GiB Podman VM",
+  "compiler": {
+    "sourceCommit": "dd35c6379e3b87f024bf685fa8d61af0aa07cea1",
+    "sha256": "688324e0fdc7a93a664ae55fe0ad417e7a980ab844656f3f97889812363c9479"
+  },
+  "fixture": {
+    "source": "awai152-process-parent-death-fixture.kotoba",
+    "sourceSha256": "24a7331b18b24450e23cf744a0a2de5cdea9c1d0f6b4e0b5661a08707af0fdf5",
+    "artifactSha256": "cc03ef506557eeed154501c3810667a3d9c002c725abdfd5c0cf50359428a2ef",
+    "observer": "awai152-process-parent-death-observer.py",
+    "observerSha256": "ae1920d7da7adf4c47f60e6554263a4c8603986d514c458b767ebfb0df4c3cc2"
+  },
+  "observed": {
+    "workload": "/usr/bin/sleep 6 via native wire 20",
+    "guestExit": -9,
+    "childAliveAfterGuestSigkill": true,
+    "sampleDelaySeconds": 0.5,
+    "cleanup": "Observer killed its test child; the dedicated VM was stopped and removed."
+  },
+  "scope": "One native Linux ARM64 artifact with the pinned compiler/runtime above. The observer waits for the exact test process, kills its guest, and checks the child's command and non-zombie status. It does not test a held lock, resource limit, grandchildren, daemonized work, macOS, latest Amu runtime, or a production governor. It does not establish how long the child would otherwise survive. Python was used only as an isolated test observer, not as an operational component."
+}

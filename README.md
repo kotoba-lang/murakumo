@@ -378,7 +378,9 @@ them.
   - Each returns a pinned `intent/...` literal.
 - **Placement** (`murakumo.fleet-placement`):
   - `fresh?`, `effective-memory` and `labels-ok?` (newline-terminated
-    `key=value` lines).
+    `key=value` lines). Freshness requires nonnegative safe-integer timestamps,
+    a positive safe-integer TTL, and an observation no later than the local
+    clock; a future or malformed observation remains unknown until corrected.
   - `eligible-reason`, in the `.cljk`'s order (disabled, cordoned, stale,
     memory, labels, pressure). It adds two checks for cells: `not-active`
     (the node's tsukasa state is not active) and `runtime-class`.

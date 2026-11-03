@@ -176,9 +176,9 @@
 
 (deftest call-record-tunnel-sh-result-pick-exit
   (when (oracle/ready? :tunnel)
-    ;; In-band rc wins over ssh-exit (pick-exit via call-record).
+    ;; Transport failure is not overridden by a prior in-band rc.
     (let [r (tunnel/sh-result {:exit 255 :out "ok\n__murakumo_rc=0\n" :err ""})]
-      (is (= 0 (:exit r)))
+      (is (= 255 (:exit r)))
       (is (= 255 (:ssh-exit r))))
     (let [r (tunnel/sh-result {:exit 7 :out "no sentinel\n" :err "  e  \n"})]
       (is (= 7 (:exit r)))
