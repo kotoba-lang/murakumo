@@ -135,6 +135,17 @@ the durable attempt marker remains for reconciliation. Receipt verification
 also rejects a correctly signed nonzero exit as `job/cell-failed`. This does
 not establish that a failed cell had no effects or make replay safe.
 
+The trusted cron composition may opt in to `capture-output` at argument 23.
+After the successful cell exit and post-execution lease check, it emits the
+captured stdout as an unpadded `output-base64url` line alongside the receipt.
+Ordinary job runs cannot enable capture; an unexpected nonempty value is
+refused. The host must protect this potentially private output. The captured
+bytes are limited by the underlying spawn implementation and are not proof of
+complete application output. A caller must verify the signature and output
+CID and independently archive and read back the result before advancing a
+cursor; capture alone does none of those things. The current composition has
+passed a source check, not a runtime or production qualification.
+
 The command blocks and output below are the 2026-10-23 historical gate. They
 use numeric time and omit the now-required expected job ID, so they are not a
 reproduction recipe for the current interface.
