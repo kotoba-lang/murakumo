@@ -74,3 +74,21 @@ path, process lifetime control, private request directory and egress policy are
 still needed. Exact expected-head checking is not anti-ABA, rollback resistance,
 lease validation or permission to execute, and the candidate is not yet wired
 into a resident.
+
+## Credential integration constraint
+
+The earlier status-only CI lease proposal is insufficient for checkpoint
+storage. Git-over-HTTPS needs GitHub App repository Contents permission; this
+workflow must also test the precise Contents write scope against archive pushes
+and `createCommitOnBranch`, restricted to the private state repository. The
+GraphQL permission and all negative cases remain to be verified with an actual
+installation token. See [GitHub App installation authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation)
+for the HTTP Git and token lifetime requirements.
+
+The candidate currently rejects Git credential-helper configuration and
+requires a separately controlled Git authentication channel as well as `gh`
+authentication. Kagi must supply both to a constrained native host without
+placing tokens in URLs, command arguments, logs, checkpoint data, or persistent
+Git configuration. An inherited environment alone does not prove child-process
+isolation or expiry. No credential delivery mechanism or real bot access is
+qualified by the existing tests.
