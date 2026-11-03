@@ -1,0 +1,6 @@
+(ns probe.scalar (:export [main]))
+
+(defn main [] :i64
+  (loop [i 0 c 7]
+    (if (= i 50000000) c
+      (recur (+ i 1) (bit-and (+ (* c 31) (i64-shift-right (i64-shift-left i 56) 56)) 281474976710655)))))

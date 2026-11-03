@@ -1,0 +1,7 @@
+(ns probe.vec (:export [main]))
+
+(defn main [] :i64
+  (let [v (vector-alloc 4096)]
+    (loop [i 0 c 7]
+      (if (= i 50000000) c
+        (recur (+ i 1) (bit-and (+ (* c 31) (vector-at v (bit-and i 4095))) 281474976710655))))))
