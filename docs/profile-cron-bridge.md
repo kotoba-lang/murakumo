@@ -328,3 +328,14 @@ The coordinator also rejects exact conflicts between its input files and residen
 The native controller exits zero only for idle or completed cycles. Refused, pending and unknown outcomes exit nonzero even if its local lock was released; an unlock failure exits 2. A host must distinguish the printed outcome and reconcile unknown dispatches rather than blindly retrying every nonzero exit. `docs/evidence/awai150-cron-exit-20261103.json` records an extracted-entry-point fixture with a real local lock and a negative control; the underlying cycle is stubbed.
 
 `docs/evidence/awai150-cron-work-binding-20261103.json` records native source-closure tests for the supported and unsupported profile cases, a wrong-work case and a bypass control. This does not prove an integrated inference turn.
+
+The native coordinator also checks that the two fresh archive staging paths do
+not overlap each other, the dispatch marker, the cursor's `.pending` path or
+the archive acknowledgement's `.tmp` path. It rejects marker collisions with
+the latter temporary paths before refresh, archive or inference. This prevents
+an earlier staging operation from occupying a path needed to complete or
+reconcile the same turn. Path-component boundaries distinguish `/work` from
+`/work-a`; these are lexical checks and do not replace a host-owned directory
+and protection against symlinks, hard links or concurrent mutation. The
+[bounded fixture](evidence/awai150-cron-work-layout-20261103/) uses stubbed
+storage and archive calls and checks a guard-bypass negative control.
