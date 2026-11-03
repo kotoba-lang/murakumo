@@ -84,7 +84,9 @@
 (defn- br-completed? [head :vector-i64 request :vector-i64] :bool
   (= (cp-str head 0 "request") (cp-cid request)))
 
-(defn profile-cron-bridge-main [] :i64
+;; Called only under the resident writer lock. The integrated controller calls
+;; the lower-level bridge functions while already holding the same lock.
+(defn- br-command [] :i64
   (let [mode (cp-arg 0) cfgpath (cp-arg 1) definition-path (cp-arg 2)
         pin (cp-arg 3) cursor-path (cp-arg 4) source-path (cp-arg 5)]
     (if (or (not (cp-safe-absolute? cfgpath)) (not (cp-safe-absolute? definition-path))
@@ -107,3 +109,17 @@
                                                x (cp-say (if completed "bridge/completed" "bridge/not-completed"))]
                                            (if completed 0 1))
                     :else (let [x (cp-say "bridge/command-refused")] 2)))))))))
+
+;; Standalone bridge users must serialize with resident cycles and the cron
+;; controller. The host still owns the lock inode and the entire path scope.
+(defn profile-cron-bridge-main [] :i64
+  (let [path (cp-arg 1)
+        cfg (if (and (cp-safe-absolute? path) (cp-exists? path)) (cp-read path) (vector-alloc 0))
+        head (cp-str cfg 0 "head") lock (str head ".resident-lockfile")]
+    (if (not (and (json-valid? cfg) (json-canonical? cfg) (rt-lock-config-safe? cfg path)))
+      (let [x (cp-say "bridge/config-refused")] 2)
+      (if (not (= (typed-cap-call 35 :string :string (str lock "FLOCK_SEP")) "1"))
+        (let [x (cp-say "bridge/local-writer-busy")] 1)
+        (let [result (br-command)
+              released (= (typed-cap-call 35 :string :string (str lock "UNLOCK_SEP")) "1")]
+          (if released result (let [x (cp-say "bridge/local-unlock-failed")] 2)))))))
