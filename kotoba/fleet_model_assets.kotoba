@@ -2,7 +2,7 @@
 ;; Compose after sha2.core, fleet_oci_layout and fleet_model_digest. The host
 ;; supplies an exclusive private directory and prevents path aliases/writers.
 ;; Failure leaves a private incomplete directory for explicit reconciliation.
-(ns murakumo.fleet-model-assets (:export [model-assets-stage-main model-artifact-stage-main]))
+(ns murakumo.fleet-model-assets (:export [model-assets-stage-main model-artifact-stage-main model-artifact-publish-main]))
 
 (defn- ta-fs [op :string path :string tail :string] :string
   (let [r (typed-cap-call 35 :string :string (ol-frame op path tail))]
@@ -164,6 +164,15 @@
 ;; The pinned OCI manifest and asset layer are checked before any directory
 ;; is created. Each weight is then copied and hashed once into the stage.
 ;; The caller owns/isolates the layout and the target throughout this flow.
+(defn- ma-stage-checked [layout :string base :string base-size :i64 mtp :string mtp-size :i64
+                        assets :string size :i64 stage :string] :string
+  (let [staged (ta-stage (ol-blob-path layout assets) stage assets size)]
+    (if (not (= staged "assets/staged")) staged
+      (if (and (tw-copy (ol-blob-path layout base) (str stage "/model.safetensors") base base-size)
+               (tw-copy (ol-blob-path layout mtp) (str stage "/mtp.safetensors") mtp mtp-size)
+               (= (ta-fs "M" stage "") "1"))
+        "model-artifact/staged" "model-artifact/staging-unknown"))))
+
 (defn model-artifact-stage-main [] :i64
   (let [layout (md-arg 0) base (md-arg 3) base-size (md-decimal (md-arg 4))
         mtp (md-arg 5) mtp-size (md-decimal (md-arg 6)) assets (md-arg 7) size (md-decimal (md-arg 8)) stage (md-arg 9)
@@ -174,11 +183,52 @@
                  (let [checked (ma-check layout (md-arg 1) (md-decimal (md-arg 2))
                                          base base-size mtp mtp-size assets size false)]
                    (if (not (= checked "model-artifact/descriptors-observed")) checked
-                     (let [staged (ta-stage (ol-blob-path layout assets) stage assets size)]
-                       (if (not (= staged "assets/staged")) staged
-                         (if (and (tw-copy (ol-blob-path layout base) (str stage "/model.safetensors") base base-size)
-                                  (tw-copy (ol-blob-path layout mtp) (str stage "/mtp.safetensors") mtp mtp-size)
-                                  (= (ta-fs "M" stage "") "1"))
-                           "model-artifact/staged" "model-artifact/staging-unknown"))))))
+                     (ma-stage-checked layout base base-size mtp mtp-size assets size stage))))
         x (md-out result)]
     (if (= result "model-artifact/staged") 0 1)))
+
+;; A private local publication journal. Intent must be durable before stage
+;; creation; T is a host-provided atomic no-replace rename, not an emulation
+;; using D followed by replacing rename. Any uncertainty stops for reconciliation.
+(defn- mp-save [path :string value :string] :bool
+  (let [b (vector-i64-from-bytes (string-to-utf8 value))]
+    (and (= (ta-fs "D" path "") "0") (ta-write path b (vector-count b) true)
+         (= (ta-fs "H" path "600") "1") (= (ta-fs "M" path "") "1"))))
+
+(defn model-artifact-publish-main [] :i64
+  (let [layout (md-arg 0) manifest (md-arg 1) manifest-size (md-decimal (md-arg 2))
+        base (md-arg 3) base-size (md-decimal (md-arg 4)) mtp (md-arg 5) mtp-size (md-decimal (md-arg 6))
+        assets (md-arg 7) size (md-decimal (md-arg 8)) stage (md-arg 9) dest (md-arg 10)
+        intent (str dest ".intent") done (str dest ".complete")
+        valid (and (= (md-arg 11) "") (md-path? layout) (md-path? stage) (md-path? dest)
+                   (md-path? intent) (md-path? done)
+                   (not (= (string-substring stage (- (string-length stage) 1) (string-length stage)) "/"))
+                   (not (= (string-substring dest (- (string-length dest) 1) (string-length dest)) "/"))
+                   (= (ta-parent stage) (ta-parent dest))
+                   (not (ta-overlap? layout stage)) (not (ta-overlap? layout dest))
+                   (not (ta-overlap? layout intent)) (not (ta-overlap? layout done))
+                   (not (ta-overlap? stage dest)) (not (ta-overlap? stage intent)) (not (ta-overlap? stage done))
+                   (>= size 1024) (<= size 67108864) (= (rem size 512) 0)
+                   (= (ta-fs "D" stage "") "0") (= (ta-fs "D" dest "") "0")
+                   (= (ta-fs "D" intent "") "0") (= (ta-fs "D" done "") "0"))
+        checked (if valid (ma-check layout manifest manifest-size base base-size mtp mtp-size assets size false)
+                  "model-artifact/input-refused")
+        result (if (not (= checked "model-artifact/descriptors-observed")) checked
+                 (let [intent-body (str "awai-model-publish/1\n" manifest "\n" stage "\n" dest "\n")
+                       prepared (and (mp-save intent intent-body) (= (ta-fs "M" (ta-parent dest) "") "1"))]
+                   (if (not prepared) "model-artifact/publication-unknown"
+                     (let [staged (ma-stage-checked layout base base-size mtp mtp-size assets size stage)
+                           receipt (str "{\"assets\":\"" assets "\",\"assetsSize\":" size
+                                        ",\"base\":\"" base "\",\"baseSize\":" base-size
+                                        ",\"kind\":\"awai.model-stage-receipt/1\",\"manifest\":\"" manifest
+                                        "\",\"manifestSize\":" manifest-size ",\"mtp\":\"" mtp "\",\"mtpSize\":" mtp-size "}")]
+                       (if (and (= staged "model-artifact/staged")
+                                (mp-save (str stage "/.awai-model-receipt.json") receipt)
+                                (= (ta-fs "M" stage "") "1")
+                                (= (ta-fs "T" stage dest) "1")
+                                (= (ta-fs "M" (ta-parent dest) "") "1")
+                                (= (ta-fs "T" intent done) "1")
+                                (= (ta-fs "M" (ta-parent dest) "") "1"))
+                         "model-artifact/published" "model-artifact/publication-unknown")))))
+        x (md-out result)]
+    (if (= result "model-artifact/published") 0 1)))

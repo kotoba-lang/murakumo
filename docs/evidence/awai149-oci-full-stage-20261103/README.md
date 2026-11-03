@@ -1,5 +1,8 @@
 # OCI model weights and assets staging candidate
 
+This is the staging-only diagnostic. The later [publication candidate](../awai149-oci-publication-20261103/README.md)
+adds a distinct journaled no-replace publication entry.
+
 The combined OCI entry now stages the two weight blobs as
 `model.safetensors` and `mtp.safetensors` alongside restricted assets. It
 validates the pinned index, manifest, descriptors, small config and assets
