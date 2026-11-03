@@ -1,6 +1,6 @@
 ;; Append after fleet_job_node and its real native dependency closure.
 (ns murakumo.fleet-job-node-test
-  (:export [test-job-dispatch-lease test-job-attempt]))
+  (:export [test-job-dispatch-lease test-job-attempt test-job-receipt-binding]))
 
 ;; DIR must be a newly created private 0700 test directory. It is intentionally
 ;; left with the attempt marker: removing it would make retries unsafe.
@@ -28,3 +28,21 @@
          (= (jn-lease-problem "{\"class\":\"job-one\",\"epoch\":1,\"node\":\"node-a\",\"revision\":0,\"slot\":0,\"until\":1792500060000,\"untrusted\":1}" "node-a" jid now) "job/lease-invalid")
          (= (jn-lease-problem valid "" jid now) "job/lease-invalid")
          (= (jn-lease-problem valid "node-a" jid -1) "job/lease-invalid"))))
+
+;; A real Ed25519 receipt and its known test key. A different chosen class
+;; previously passed because only holder DID and epoch were compared.
+(defn test-job-receipt-binding [] :bool
+  (let [at 1792500000000 jid (as-jobId) did (as-didA) sig (as-sigA)
+        other "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        trust (str "b70=" did) chosen (lease-text "b70" jid 0 1 (+ at 60000) 0)
+        receipt (step-receipt-text at did 1 0 jid "b70" (as-output))]
+    (and (= (jn-receipt-verdict chosen trust jid receipt sig) "job/confirmed")
+         (= (jn-receipt-verdict (lease-text "b70" other 0 1 (+ at 60000) 0) trust jid receipt sig) "job/lease-binding")
+         (= (jn-receipt-verdict chosen trust other receipt sig) "job/lease-binding")
+         (= (jn-receipt-verdict chosen trust "" receipt sig) "job/expected-id-invalid")
+         (= (jn-receipt-verdict chosen trust jid (step-receipt-text at did 1 0 other "b70" (as-output)) sig) "job/receipt-job")
+         (= (jn-receipt-verdict chosen trust jid (step-receipt-text at did 1 0 jid "k16" (as-output)) sig) "job/receipt-node")
+         (= (jn-receipt-verdict chosen trust jid receipt "bad") "job/bad-signature")
+         (= (jn-receipt-verdict chosen "" jid receipt sig) "job/not-the-holder")
+         (= (jn-receipt-verdict (lease-text "b70" jid 0 1 at 0) trust jid receipt sig) "job/lease-expired-or-invalid")
+         (= (jn-receipt-verdict "{}" trust jid receipt sig) "job/lease-invalid"))))
