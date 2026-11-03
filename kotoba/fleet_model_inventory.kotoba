@@ -1,0 +1,9 @@
+;; The archive-derived mask is bound to the inventory parser in one decision.
+;; A privileged host must bind frame to the same opened, exclusively owned
+;; directory and check the helper exit; guest-supplied bytes are not evidence.
+;; Compose after fleet_model_assets and fleet_directory_inventory.
+(ns murakumo.fleet-model-inventory (:export [model-verified-inventory?]))
+
+(defn model-verified-inventory? [source :string dest :string size :i64 digest :string frame :string] :bool
+  (let [mask (tv-walk-mask source dest size digest)]
+    (and (>= mask 0) (di-inventory? frame mask))))
