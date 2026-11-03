@@ -1,6 +1,6 @@
 ;; Append after fleet_job_node and its real native dependency closure.
 (ns murakumo.fleet-job-node-test
-  (:export [test-job-dispatch-lease]))
+  (:export [test-job-dispatch-lease test-job-receipt-binding]))
 
 (defn test-job-dispatch-lease [] :bool
   (let [now 1792500000000 jid "job-one" until (+ now 60000)
@@ -18,3 +18,19 @@
          (= (jn-lease-problem "{\"class\":\"job-one\",\"epoch\":1,\"node\":\"node-a\",\"revision\":0,\"slot\":0,\"until\":1792500060000,\"untrusted\":1}" "node-a" jid now) "job/lease-invalid")
          (= (jn-lease-problem valid "" jid now) "job/lease-invalid")
          (= (jn-lease-problem valid "node-a" jid -1) "job/lease-invalid"))))
+
+
+(defn test-job-receipt-binding [] :bool
+  (let [job "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        other "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        lease (lease-text "n" job 0 1 2000 0)
+        receipt (str "{\"job\":\"" job "\",\"node\":\"n\"}")
+        wrong-job (str "{\"job\":\"" other "\",\"node\":\"n\"}")
+        wrong-node (str "{\"job\":\"" job "\",\"node\":\"other\"}")
+        extra (str "{\"class\":\"" job "\",\"epoch\":1,\"node\":\"n\",\"revision\":0,\"slot\":0,\"until\":2000,\"x\":1}")]
+    (and (jn-receipt-bound? lease receipt job)
+         (not (jn-receipt-bound? lease receipt other))
+         (not (jn-receipt-bound? lease wrong-job job))
+         (not (jn-receipt-bound? lease wrong-node job))
+         (not (jn-receipt-bound? extra receipt job))
+         (not (jn-receipt-bound? lease receipt "")))))

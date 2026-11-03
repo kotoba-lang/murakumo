@@ -64,7 +64,20 @@ a live quorum, nor do they establish effect-boundary fencing after dispatch.
 The 2026-10-23 transcript below remains historical; its rogue path is now a
 separate test-only mutant and has not been rerun as part of this change.
 
-## Reproduce
+The current `run` entry requires `clock` and `follow`; numeric times and the
+old rogue mode are refused. It re-learns the identical, still-live lease after
+cell execution before issuing a receipt. `verify` now takes an independently
+derived expected job ID after the fleet-token argument (pass an empty token
+argument when no token is configured). A receipt is checked against that job
+and the selected lease holder. Receipt suppression cannot undo a cell's
+effects or replace receiver-side fencing, process lifetime control and a
+qualified governor.
+
+The command blocks and output below are the 2026-10-23 historical gate. They
+use numeric time and omit the now-required expected job ID, so they are not a
+reproduction recipe for the current interface.
+
+## Historical gate
 
 First run [cell run](cell-run.md)'s main block, which writes the release,
 the layout and b70's key into `$G`. Then, with the same `$G` and `$K`:
