@@ -1,0 +1,38 @@
+(ns pre-dispatch-fixture (:export [main]))
+(defn- cp-num [v :vector-i64 i :i64 k :string] :i64
+  (if (= k "epoch") 1 (if (= (vector-at v 0) 1) 10000 (vector-at v 0))))
+(defn- cp-str [v :vector-i64 i :i64 k :string] :string "synthetic")
+(defn- cp-text [v :vector-i64] :string (if (= (vector-count v) 0) "missing" (str (vector-at v 0))))
+(defn- rt-lease [cfg :vector-i64 epoch :i64] :vector-i64 cfg)
+(defn- rt-now [] :i64 100)
+(defn- recovery-lease-problem [v :vector-i64 task :string node :string epoch :i64 now :i64] :string
+  (if (and (> (vector-count v) 0) (= (vector-at v 0) 1)) "recovery/lease-admitted" "recovery/refused"))
+(defn- rf-budget [lease :i64 retention :i64 now :i64] :i64 (if (= retention 200) 0 4))
+(defn- rt-runtime [cfg :vector-i64] :vector-i64 cfg)
+(defn- pr-step-resident [dest :string runtime :vector-i64 cache :string next :i64 budget :i64] :string "stub/dispatched")
+(defn- rt-post-problem [cfg :vector-i64 head :vector-i64 lease :vector-i64 fresh :vector-i64 now :i64] :string
+  (cond (<= (cp-num head 0 "until") now) "resident/retention-expired-proposal-retained"
+        (or (not (= (cp-text lease) (cp-text fresh)))
+            (not (= (recovery-lease-problem fresh (cp-str cfg 0 "task") (cp-str cfg 0 "node")
+                      (cp-num lease 0 "epoch") now) "recovery/lease-admitted"))) "resident/lease-lost"
+        :else "resident/admission-held"))
+
+;; Materialization can outlast or invalidate the lease learned by rt-cycle.
+;; Re-learn it after restore, before any inference dispatch; an unknown or
+;; changed lease and insufficient remaining budget cannot start a new turn.
+;; This is not an atomic effect fence: the receiver still needs one.
+(defn- rt-dispatch [cfg :vector-i64 head :vector-i64 lease :vector-i64 dest :string next :i64] :string
+  (let [fresh (rt-lease cfg (cp-num lease 0 "epoch")) now (rt-now)
+        admission (rt-post-problem cfg head lease fresh now)
+        budget (rf-budget (cp-num lease 0 "until") (cp-num head 0 "until") now)]
+    (cond false admission
+          (< budget 1) "profile/budget-refused"
+          :else (pr-step-resident dest (rt-runtime cfg) (cp-str cfg 0 "cache") next budget))))
+
+
+(defn main [] :i64
+ (if (and (= (rt-dispatch [1] [10000] [1] "/test" 1) "stub/dispatched")
+          (= (rt-dispatch [2] [10000] [1] "/test" 1) "resident/lease-lost")
+          (= (rt-dispatch [] [10000] [1] "/test" 1) "resident/lease-lost")
+          (= (rt-dispatch [1] [100] [1] "/test" 1) "resident/retention-expired-proposal-retained")
+          (= (rt-dispatch [1] [200] [1] "/test" 1) "profile/budget-refused")) 0 1))
