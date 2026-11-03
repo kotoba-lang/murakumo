@@ -49,11 +49,10 @@
 ;;    unreadable case is decided, so no later argument can disagree with it.
 ;;
 ;; 2. **Two classes, asymmetric.** A resident is a serving head and is not
-;;    evictable, so opportunistic claims do not stand in its way. An
-;;    opportunistic claim is batch work and must fit in what is left after
-;;    everything. A third class is deliberately impossible (`class-known?`
-;;    refuses it): each added priority turns "who wins" back into a runtime
-;;    accident, which is the state this replaces.
+;;    evictable by opportunistic work. Every immediate allocation must fit
+;;    alongside all observed holders, including opportunistic or unknown ones.
+;;    Eviction eligibility is not evidence of release. A separate controller
+;;    may arrange release and then remeasure before asking for admission again.
 ;;
 ;; Host keeps: reading /sys/class/drm/*/device/mem_info_*, folding
 ;; /proc/<pid>/fdinfo drm-total-vram, and acting on the verdict.
@@ -79,7 +78,8 @@
   ;; What the driver will actually hand out: the VRAM carve-out plus GTT.
   ;; Measured on gad: 48.0 + 23.3 GB, and Vulkan independently reported
   ;; 73052 MiB, which is the same number.
-  (if (measured? vram-total gtt-total) (+ vram-total gtt-total) -1))
+  (if (and (measured? vram-total gtt-total) (<= gtt-total (- 9223372036854775807 vram-total)))
+    (+ vram-total gtt-total) -1))
 
 ;; ── budget ─────────────────────────────────────────────────────────────
 
@@ -94,13 +94,21 @@
   120)
 
 (defn usable-bytes [aperture :i64 headroom-milli :i64] :i64
-  (if (< aperture 0) -1 (- aperture (quot (* aperture headroom-milli) 1000))))
+  (if (or (< aperture 0) (< headroom-milli 0) (> headroom-milli 1000)) -1
+    ;; Split before multiplying: neither term can exceed aperture.
+    (let [whole (* (quot aperture 1000) headroom-milli)
+          rem (- aperture (* (quot aperture 1000) 1000))
+          fraction (quot (* rem headroom-milli) 1000)]
+      (- aperture (+ whole fraction)))))
 
 (defn committed-bytes [resident :i64 opportunistic :i64] :i64
-  (+ resident opportunistic))
+  (if (or (< resident 0) (< opportunistic 0)
+          (> opportunistic (- 9223372036854775807 resident))) -1
+    (+ resident opportunistic)))
 
 (defn remaining-bytes [usable :i64 resident :i64 opportunistic :i64] :i64
-  (- usable (committed-bytes resident opportunistic)))
+  (let [committed (committed-bytes resident opportunistic)]
+    (if (or (< usable 0) (< committed 0)) -1 (- usable committed))))
 
 ;; ── the questions a refusal has to be able to answer ───────────────────
 
@@ -114,7 +122,8 @@
 (defn would-evict-resident? [klass :i64 request :i64 usable :i64 resident :i64] :bool
   ;; An opportunistic claim that only fits by displacing a serving head.
   (if (= klass 1)
-    (if (> (+ request resident) usable) true false)
+    (if (or (< usable 0) (< resident 0) (< request 0) (> resident usable)) true
+      (> request (- usable resident)))
     false))
 
 ;; ── verdict ────────────────────────────────────────────────────────────
@@ -123,23 +132,20 @@
   [klass :i64 request :i64 usable :i64 resident :i64 opportunistic :i64] :i64
   ;; 0 admitted / 1 unmeasured / 2 over-aperture / 3 no-remaining
   ;; 4 would-evict-resident / 5 unknown-class / 6 non-positive-request
-  ;;
-  ;; `usable` carries the sentinel: -1 means the device could not be read, and
-  ;; that is a REFUSAL, not an empty accelerator.
-  (if (>= usable 0)
-    (if (class-known? klass)
-      (if (< request 1)
-        6
-        (if (over-aperture? request usable)
-          2
-          (if (= klass 0)
-            ;; resident: opportunistic claims are evictable and do not block it
-            (if (> (+ request resident) usable) 3 0)
-            (if (would-evict-resident? klass request usable resident)
-              4
-              (if (> request (remaining-bytes usable resident opportunistic)) 3 0)))))
-      5)
-    1))
+  ;; 7 invalid-observation: negative or overflowed commitment.
+  (cond (< usable 0) 1
+        (not (class-known? klass)) 5
+        (< request 1) 6
+        (< (committed-bytes resident opportunistic) 0) 7
+        (over-aperture? request usable) 2
+        (and (= klass 0) (or (> resident usable) (> request (- usable resident)))) 3
+        (and (= klass 0) (> opportunistic (- (- usable resident) request))) 3
+        (= klass 0) 0
+        (would-evict-resident? klass request usable resident) 4
+        ;; request and resident fit; compare against the remaining amount
+        ;; before subtracting opportunistic, avoiding signed addition overflow.
+        (> opportunistic (- (- usable resident) request)) 3
+        :else 0))
 
 (defn admitted?
   [klass :i64 request :i64 usable :i64 resident :i64 opportunistic :i64] :bool
@@ -147,18 +153,11 @@
 
 (defn granted-bytes
   [klass :i64 usable :i64 resident :i64 opportunistic :i64] :i64
-  ;; The largest request that WOULD be admitted for this class right now, so a
-  ;; caller can shrink instead of failing. Never negative, and never a guess:
-  ;; unmeasured grants nothing, because the honest answer to "how much is free"
-  ;; on a device we could not read is not a number.
-  (if (>= usable 0)
-    (if (class-known? klass)
-      (if (= klass 0)
-        (let [room (- usable resident)] (if (< room 0) 0 room))
-        (let [room (remaining-bytes usable resident opportunistic)]
-          (if (< room 0) 0 room)))
-      0)
-    0))
+  ;; Unknown or overflowed usage is not empty capacity.
+  (if (or (< usable 0) (not (class-known? klass))
+          (< (committed-bytes resident opportunistic) 0) (> resident usable)) 0
+    (let [room (- usable resident)]
+      (if (>= opportunistic room) 0 (- room opportunistic)))))
 
 (defn code-name [code :i64] :string
   (if (= code 0) "admitted"
@@ -167,7 +166,8 @@
         (if (= code 3) "no-remaining"
           (if (= code 4) "would-evict-resident"
             (if (= code 5) "unknown-class"
-              (if (= code 6) "non-positive-request" "unknown-code"))))))))
+              (if (= code 6) "non-positive-request"
+                (if (= code 7) "invalid-observation" "unknown-code")))))))))
 
 
 ;; ── demand: who should be holding this device right now ────────────────
@@ -201,7 +201,13 @@
   ;; the two sides of this comparison measure over windows the host controls;
   ;; keeping it a weighted count means the host cannot silently change the
   ;; meaning by changing one window and not the other.
-  (+ queued (quot (* served-recent served-weight-milli) 1000)))
+  ;; Unknown or unrepresentable input must not masquerade as idle demand.
+  ;; Refuse overflow even if division would later bring the product in range.
+  (if (or (< queued 0) (< served-recent 0) (< served-weight-milli 0)) -1
+    (if (and (> served-weight-milli 0)
+             (> served-recent (quot 9223372036854775807 served-weight-milli))) -1
+      (let [weighted (quot (* served-recent served-weight-milli) 1000)]
+        (if (> weighted (- 9223372036854775807 queued)) -1 (+ queued weighted))))))
 
 (defn demand-window-default-s [] :i64
   ;; One hour. Short enough that a device stops being held by yesterday, long
@@ -226,13 +232,20 @@
 (defn idle? [demand :i64 idle-count :i64 idle-threshold :i64] :bool
   ;; Idle is BOTH: nothing to do right now, and that has held for long enough
   ;; to be a fact rather than a gap between two requests.
-  (if (> demand 0) false (if (>= idle-count idle-threshold) true false)))
+  (and (= demand 0) (>= idle-count 0) (> idle-threshold 0)
+       (>= idle-count idle-threshold)))
+
+(defn- demand-comparison-safe? [challenger :i64 holder :i64 margin-milli :i64] :bool
+  (and (>= challenger 0) (>= holder 0) (>= margin-milli 0)
+       (<= challenger (quot 9223372036854775807 1000))
+       (or (= margin-milli 0) (<= holder (quot 9223372036854775807 margin-milli)))))
 
 (defn challenger-wins? [challenger :i64 holder :i64 margin-milli :i64] :bool
   ;; Strictly greater, by the margin. Equal demand leaves the device where it
   ;; is -- incumbency is the tie-break, because moving costs a reload and
   ;; staying costs nothing.
-  (if (> (* challenger 1000) (* holder margin-milli)) true false))
+  (and (demand-comparison-safe? challenger holder margin-milli)
+       (> (* challenger 1000) (* holder margin-milli))))
 
 (defn starvation-losses-default [] :i64
   ;; How many consecutive decisions a workload may lose before its queued work
@@ -257,7 +270,7 @@
   ;; score. Recent completions are evidence that demand recurs; only a queue
   ;; means someone is waiting right now. A workload that is merely unpopular
   ;; must not accumulate a claim on the device while it has nothing to run.
-  (if (< challenger-queued 1)
+  (if (or (< challenger-queued 1) (< loss-streak 0))
     false
     (if (>= loss-streak (starvation-losses-default)) true false)))
 
@@ -265,7 +278,7 @@
   [holder-demand :i64 challenger-demand :i64 challenger-queued :i64
    idle-count :i64 loss-streak :i64] :i64
   ;; 0 keep / 1 revoke-idle / 2 revoke-outbid / 3 keep-no-challenger
-  ;; 4 revoke-starved
+  ;; 4 revoke-starved / 5 invalid or unrepresentable observation (keep)
   ;;
   ;; Four reasons, kept apart because each calls for different operator
   ;; action: an idle holder should release and stay released; an outbid holder
@@ -275,27 +288,29 @@
   ;;
   ;; Thresholds are read from this namespace rather than passed in, so two
   ;; callers cannot compare the same two workloads under different policies.
-  (if (< challenger-demand 1)
-    (if (idle? holder-demand idle-count (idle-samples-default)) 1 3)
-    (if (starved? challenger-queued loss-streak)
-      4
-      (if (idle? holder-demand idle-count (idle-samples-default))
-        1
-        (if (challenger-wins? challenger-demand holder-demand
-                              (margin-default-milli))
-          2
-          0)))))
+  ;; challenger-demand must come from demand-score for the same queue sample:
+  ;; its nonnegative weighted-completions term cannot make it smaller than
+  ;; challenger-queued. Inconsistent samples are not eviction authority.
+  (cond (or (< holder-demand 0) (< challenger-demand 0) (< challenger-queued 0)
+            (< challenger-demand challenger-queued) (< idle-count 0) (< loss-streak 0)) 5
+        (< challenger-demand 1) (if (idle? holder-demand idle-count (idle-samples-default)) 1 3)
+        (starved? challenger-queued loss-streak) 4
+        (idle? holder-demand idle-count (idle-samples-default)) 1
+        (not (demand-comparison-safe? challenger-demand holder-demand (margin-default-milli))) 5
+        (challenger-wins? challenger-demand holder-demand (margin-default-milli)) 2
+        :else 0))
 
 (defn revoke?
   [holder-demand :i64 challenger-demand :i64 challenger-queued :i64
    idle-count :i64 loss-streak :i64] :bool
   (let [c (revoke-code holder-demand challenger-demand challenger-queued
                        idle-count loss-streak)]
-    (if (= c 0) false (if (= c 3) false true))))
+    (or (= c 1) (= c 2) (= c 4))))
 
 (defn revoke-name [code :i64] :string
   (if (= code 0) "keep"
     (if (= code 1) "revoke-idle"
       (if (= code 2) "revoke-outbid"
         (if (= code 3) "keep-no-challenger"
-          (if (= code 4) "revoke-starved" "unknown-code"))))))
+          (if (= code 4) "revoke-starved"
+            (if (= code 5) "invalid-observation" "unknown-code")))))))
