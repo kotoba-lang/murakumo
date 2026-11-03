@@ -106,3 +106,10 @@ operation reports a verified stored result, including a verified readback after
 an unacknowledged push. Refusal and unknown results return exit 1; they do not
 authorize an automatic retry. The [entry-point fixture](evidence/awai150-archive-exit-20261103.json)
 uses a stubbed archive operation and is not an end-to-end GitHub test.
+
+Archive now refuses lexical overlap between work and source store; restore
+refuses overlap between work and destination. The shared absolute-path
+validation rejects noncanonical slash and dot-component spellings. The
+[isolated input-gate observation](evidence/awai150-archive-path-isolation-20261103/)
+includes negative controls. The host must still prevent filesystem aliases and
+concurrent path replacement, and this is not a production archive qualification.
