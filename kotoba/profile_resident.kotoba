@@ -353,6 +353,23 @@
          (not (= lock (cp-str cfg 0 "runtimeFile")))
          (not (= lock (cp-str cfg 0 "archiveAck"))))))
 
+;; Only known successful cycles may be scheduled again. Every refusal or
+;; uncertain side effect exits so the host can reconcile it before another run.
+(defn- rt-cycle-ok? [result :string] :bool
+  (or (= result "resident/idle") (= result "resident/replicas-refreshed")
+      (and (= (ln-field result 0) "resident/published")
+           (> (ln-int (ln-field result 1)) 0) (cp-raw? (ln-field result 2))
+           (= result (str "resident/published " (ln-field result 1) " " (ln-field result 2))))))
+
+(defn- rt-once [cfg :vector-i64 operation :string] :i64
+  (let [result (rt-serialized cfg operation) logged (cp-say result)
+        ok (cond (= operation "cycle") (rt-cycle-ok? result)
+                 (= operation "refresh") (or (= result "resident/retention-ready") (= result "resident/replicas-refreshed"))
+                 (= operation "archive") (= (ln-field result 0) "resident/archive")
+                 (= operation "archive-native") (= (ln-field result 0) "resident-archive/confirmed")
+                 :else false)]
+    (if ok 0 1)))
+
 (defn profile-resident-main [] :i64
   (let [cfg (cp-read (cp-arg 1)) archive-field (json-member cfg 0 "archiveAck")
         ack (cp-str cfg 0 "archiveAck")]
@@ -370,16 +387,16 @@
             (not (rf-voters? (cp-str cfg 0 "voters"))) (= (lease-token (cp-str cfg 0 "tokenFile")) "")
             (not (= (ri-show (cp-str cfg 0 "key")) (str "identity/did " (cp-str cfg 0 "authorB")))))
       (let [x (cp-say "resident/config-refused")] 2)
-      (if (= (cp-arg 0) "refresh") (cp-say (rt-serialized cfg "refresh"))
-      (if (= (cp-arg 0) "archive") (cp-say (rt-serialized cfg "archive"))
-      (if (= (cp-arg 0) "archive-native") (cp-say (rt-serialized cfg "archive-native"))
+      (if (= (cp-arg 0) "refresh") (rt-once cfg "refresh")
+      (if (= (cp-arg 0) "archive") (rt-once cfg "archive")
+      (if (= (cp-arg 0) "archive-native") (rt-once cfg "archive-native")
       (if (= (cp-arg 0) "once")
-        (cp-say (rt-serialized cfg "cycle"))
+        (rt-once cfg "cycle")
       (if (not (= (cp-arg 0) "run")) (let [x (cp-say "resident/command-refused")] 2)
       (loop [i 0]
         (let [result (arena-scope
                        (let [r (rt-serialized cfg "cycle") event (cp-say r)]
-                         (if (or (= r "resident/local-writer-busy") (= r "resident/local-unlock-failed")) 1 0)))
+                         (if (rt-cycle-ok? r) 0 1)))
               z (if (= result 0)
                   (loop [k 0] (if (>= k 10) true (if (pr-pause) (recur (+ k 1)) false))) false)]
           (if z (recur (+ i 1)) 2)))))))))))
