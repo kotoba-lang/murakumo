@@ -20,6 +20,14 @@ request CID. The local head, archive acknowledgement, clock and all config
 paths are trusted host state; the acknowledgement is not a distributed
 lease, and this bridge cannot prove that a socket peer loaded the named model.
 
+The standalone bridge exits zero for `prepare` only when the request is ready,
+and for `complete` only when the matching request is confirmed complete.
+Pending, uncertain, already-consumed and not-completed outcomes exit nonzero;
+callers must inspect the named outcome and reconcile uncertain state rather
+than retry blindly. This is an intentional CLI exit-status change. A bounded
+[entry-point fixture](evidence/awai147-bridge-exit-20261103.json) covers these
+outcomes with synthetic dependencies; it does not exercise storage or inference.
+
 `scripts/itonami-cron-resident-once.sh` is an explicit single-cycle host
 controller. It verifies/refreshes the current archive, prepares the request,
 durably creates a dispatch marker, calls the existing resident once, archives

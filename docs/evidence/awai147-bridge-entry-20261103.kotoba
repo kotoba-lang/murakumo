@@ -1,0 +1,44 @@
+;; Fixture: actual bridge entry point; all storage, validation and result
+;; producers below are synthetic so this only checks its process exit contract.
+(ns bridge-entry-fixture (:export [main]))
+(defn- arg [i :i64] :string (typed-cap-call 38 :string :string (string-from-i64 i)))
+(defn- cp-arg [i :i64] :string
+  (cond (= i 0) (arg 0) (= i 1) "/cfg" (= i 2) "/definition"
+        (= i 3) "pin" (= i 4) "/cursor" (= i 5) "/source" :else ""))
+(defn- cp-safe-absolute? [s :string] :bool true)
+(defn- cp-exists? [s :string] :bool true)
+(defn- cp-read [s :string] :vector-i64 (vector-alloc 0))
+(defn- rt-now [] :i64 1000)
+(defn- br-problem [cfg :vector-i64 definition :vector-i64 pin :string cursor :vector-i64 source :vector-i64 now :i64] :string "bridge/ok")
+(defn- cp-str [cfg :vector-i64 i :i64 k :string] :string (if (= k "request") "/request" "/head"))
+(defn- rt-read-head [cfg :vector-i64 head :string] :vector-i64 (vector-alloc 0))
+(defn- br-head-problem [cfg :vector-i64 head :vector-i64] :string "bridge/head-ready")
+(defn- br-request [definition :vector-i64 pin :string cursor :vector-i64 now :i64] :vector-i64 (vector-alloc 0))
+(defn- br-install [cfg :vector-i64 head :vector-i64 request :vector-i64] :string (arg 1))
+(defn- br-completed? [head :vector-i64 request :vector-i64] :bool (= (arg 1) "yes"))
+(defn- cp-say [s :string] :string (typed-cap-call 37 :string :string (str s "\n")))
+(defn profile-cron-bridge-main [] :i64
+  (let [mode (cp-arg 0) cfgpath (cp-arg 1) definition-path (cp-arg 2)
+        pin (cp-arg 3) cursor-path (cp-arg 4) source-path (cp-arg 5)]
+    (if (or (not (cp-safe-absolute? cfgpath)) (not (cp-safe-absolute? definition-path))
+            (not (cp-safe-absolute? cursor-path)) (not (cp-safe-absolute? source-path))
+            (not (cp-exists? cfgpath)) (not (cp-exists? definition-path))
+            (not (cp-exists? cursor-path)) (not (cp-exists? source-path)))
+      (let [x (cp-say "bridge/input-unavailable")] 2)
+      (let [cfg (cp-read cfgpath) definition (cp-read definition-path) cursor (cp-read cursor-path)
+            source (cp-read source-path) now (rt-now) problem (br-problem cfg definition pin cursor source now)]
+        (if (or (not (= problem "bridge/ok"))
+                (= (cp-str cfg 0 "request") cfgpath) (= (cp-str cfg 0 "request") definition-path)
+                (= (cp-str cfg 0 "request") cursor-path) (= (cp-str cfg 0 "request") source-path))
+          (let [x (cp-say (if (= problem "bridge/ok") "bridge/path-conflict" problem))] 1)
+          (let [head-path (cp-str cfg 0 "head") head (rt-read-head cfg head-path)
+                h (br-head-problem cfg head) request (br-request definition pin cursor now)]
+            (if (not (= h "bridge/head-ready")) (let [x (cp-say h)] 1)
+              (cond (= mode "prepare") (let [result (br-install cfg head request) x (cp-say result)]
+                                         (if (= result "bridge/request-ready") 0 1))
+                    (= mode "complete") (let [completed (br-completed? head request)
+                                               x (cp-say (if completed "bridge/completed" "bridge/not-completed"))]
+                                           (if completed 0 1))
+                    :else (let [x (cp-say "bridge/command-refused")] 2)))))))))
+
+(defn main [] :i64 (profile-cron-bridge-main))

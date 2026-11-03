@@ -89,6 +89,9 @@
           (let [head-path (cp-str cfg 0 "head") head (rt-read-head cfg head-path)
                 h (br-head-problem cfg head) request (br-request definition pin cursor now)]
             (if (not (= h "bridge/head-ready")) (let [x (cp-say h)] 1)
-              (cond (= mode "prepare") (let [x (cp-say (br-install cfg head request))] 0)
-                    (= mode "complete") (let [x (cp-say (if (br-completed? head request) "bridge/completed" "bridge/not-completed"))] 0)
+              (cond (= mode "prepare") (let [result (br-install cfg head request) x (cp-say result)]
+                                         (if (= result "bridge/request-ready") 0 1))
+                    (= mode "complete") (let [completed (br-completed? head request)
+                                               x (cp-say (if completed "bridge/completed" "bridge/not-completed"))]
+                                           (if completed 0 1))
                     :else (let [x (cp-say "bridge/command-refused")] 2)))))))))
