@@ -1,0 +1,11 @@
+[Unit]
+Description=Archive an admitted Itonami resident checkpoint
+After=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+NoNewPrivileges=yes
+TimeoutStartSec=180
+EnvironmentFile=%h/.itonami/native/accountability-steward/resident.env
+ExecStart=@PINNED_ARCHIVE_SCRIPT@ @PINNED_RESIDENT_BINARY@ @RESIDENT_CONFIG@ @PINNED_CHECKPOINT_BINARY@ @PRIVATE_WORKROOT@ @PRIVATE_OWNER_REPO@

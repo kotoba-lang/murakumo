@@ -1,6 +1,25 @@
 ;; Native tests; compose after profile_recovery and checkpoint dependencies.
 (ns murakumo.profile-recovery-test
-  (:export [test-profile-recovery]))
+  (:export [test-profile-recovery test-profile-answer test-profile-save-output]))
+
+;; DIR is an exclusively owned fresh test directory; do not overwrite an
+;; existing file. Exercise real filesystem reads, writes and fsync barriers.
+(defn test-profile-save-output [dir :string] :bool
+  (let [path (str dir "/profile-output-test") original (cp-bytes "completed output")
+        other (cp-bytes "different output") cid (cp-cid original)]
+    (and (not (cp-exists? path))
+         (pr-save-output path original cid)
+         (pr-save-output path original cid)
+         (not (pr-save-output path other (cp-cid other)))
+         (= (cp-cid (cp-read path)) cid))))
+
+(defn test-profile-answer [] :bool
+  (let [done (cp-bytes "{\"choices\":[{\"finish_reason\":\"stop\",\"message\":{\"content\":\"draft\"}}]}")
+        truncated (cp-bytes "{\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"draft\"}}]}")
+        tools (cp-bytes "{\"choices\":[{\"finish_reason\":\"tool_calls\",\"message\":{\"content\":\"draft\"}}]}")
+        missing (cp-bytes "{\"choices\":[{\"message\":{\"content\":\"draft\"}}]}")]
+    (and (= (pr-answer done) "draft") (= (pr-answer truncated) "")
+         (= (pr-answer tools) "") (= (pr-answer missing) ""))))
 
 (defn- prt-runtime [meta :vector-i64 role :vector-i64 endpoint :string model :string] :vector-i64
   (cp-bytes (str "{\"endpoint\":" (pr-json-quote endpoint)

@@ -1,0 +1,11 @@
+# FIFO recovery sync and interrupted recovery
+
+Before archiving the journal, recovery now syncs the current queue file, the intent file, and their directory, then renames the intent and syncs the directory again. This matters particularly when interruption left a complete-looking intent before the original writer had synced it. Recovery does not reapply the transition. A failure at any sync remains `fifo/recovery-unknown`.
+
+A local ARM64 Mac ran the native diagnostic against the prior enqueue, dequeue, cancellation and recovery cases. Three separately compiled test-only variants substituted failure at the queue, intent, or first directory sync; each returned `fifo/recovery-unknown`, left queue and intent intact, and blocked normal `front`. The unmodified candidate could then reconcile each old-state journal. This is fault injection at the source branch, not an observed kernel fsync I/O failure.
+
+Two more instrumented variants paused immediately before and after intent archival. A separate observer killed only its own diagnostic process and tried recovery again for both old and new queue states. Before archival it returned `fifo/aborted` for old and `fifo/recovered` for new; after archival it returned `fifo/no-intent` in both cases, with the original queue unchanged and the intent visible as `queue.last`. Therefore `fifo/no-intent` after a lost response is not evidence that the original operation committed or aborted. A future trusted host must retain and correlate its own operation identity and reconcile the journal/state without starting another workload on an unknown result.
+
+The test script is a one-off observer of the variants, not operational tooling. Its temporary paths require adaptation. Source SHA-256 `ec9841d81de81c8e215baa7a6e363d006f38751389ea69b3f6c1316b0a2830a2`; signed unmodified diagnostic `bd7e091f427f0c6aba1ded0bf496d5f135353fdb784967ed7f3f1876f47f2057`; compiler and diagnostic FS2 packager are the same as in the [previous evidence](../awai151-fifo-aborted-20261103/README.md).
+
+These synthetic observations do not prove power-loss durability, a qualified existence/sync provider, process-tree containment, workload completion, distributed fencing, or a production governor. No service or model was modified.

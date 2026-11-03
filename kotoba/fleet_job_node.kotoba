@@ -32,12 +32,12 @@
 ;;           5. it signs the agent-step receipt with the lease epoch
 ;;              ("receipt <text>", "signature <b64url>").
 ;;   verify  job-node-main verify <voter ports> <trust node=did,...> <node
-;;           output file> <ballot t> [<fleet token file>]; the file is a node's run output, whose
+;;           output file> <ballot t> <fleet token file or empty> <expected job id>; the file is a node's run output, whose
 ;;           "receipt" and "signature" lines are judged (wire 35)
 ;;           learns the chosen lease with lease-round (adopting whatever was
 ;;           chosen), maps its holder to a did through the trust, and judges
 ;;           the receipt with receipt-verdict: job/confirmed only for the
-;;           holder at the lease's epoch.
+;;           holder at the lease's epoch and for the independently expected job.
 ;;
 ;; Composition order: sha2.core, ed25519.selfhost, jcs.reader,
 ;; oci.itonami-artifact, grant.runtime-class, tsukasa ledger_core and
@@ -208,12 +208,10 @@
   (let [ports (jn-arg 1) trust (jn-arg 2)
         out (if (= (typed-cap-call 35 :string :string (string-concat (jn-arg 3) "EXISTS_SEP")) "1") (typed-cap-call 35 :string :string (jn-arg 3)) "")
         receipt (jn-line out "receipt ") sig (jn-line out "signature ") t (jn-int (jn-arg 4))
-        token (jn-token 5)
-        chosen (if (= token "-") "" (lease-round t "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports token))
+        token (jn-token 5) expected (jn-arg 6)
+        chosen (if (or (= token "-") (not (jn-attempt-id? expected))) "" (lease-round t "verifier" (lease-text "verifier" "learn" 0 1 1 0) ports token))
         holder (if (= chosen "") "" (jn-text chosen "node"))
-        verdict (receipt-verdict (jn-did-of trust holder) (jn-num chosen "epoch")
-                                 (jn-num receipt "at") (jn-text receipt "did") (jn-num receipt "epoch") (jn-num receipt "exit")
-                                 (jn-text receipt "job") (jn-text receipt "node") (jn-text receipt "output") sig)
+        verdict (jn-receipt-verdict chosen trust expected receipt sig)
         x (jn-say (str "holder " (if (= holder "") "none" holder) " verdict " verdict))]
     (if (= verdict "job/confirmed") 0 1)))
 

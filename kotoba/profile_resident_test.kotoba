@@ -1,6 +1,6 @@
 ;; Append the public git_checkpoint_test fixtures before this native gate.
 (ns murakumo.profile-resident-test
-  (:export [test-profile-resident]))
+  (:export [test-profile-resident test-profile-archive-ack test-profile-public-environment]))
 
 (defn- rtt-cfg [did :string] :vector-i64
   (cp-bytes (str "{\"authorA\":\"" did "\",\"authorB\":\"" did "\",\"environment\":\"" (cpt-cid)
@@ -15,7 +15,16 @@
        (if (and (= (lg-request "prepare 0 1 B" "task" "/unused" (vector-alloc 0) 1) "no 0 - 0 - -")
                 (= (lg-request (str "accept 1 1 B " (lease-text "B" "other" 0 1 999 1)) "task" "/unused" (vector-alloc 0) 1) "no 0 - 0 - -")) 2 0)
        (if (and (json-canonical? head) (not (rt-due? head "request-one" 99999))
-                (rt-due? head "request-two" 99999) (rt-due? head "request-one" 100000)) 4 0)
+                (rt-due? head "request-two" 99999) (rt-due? head "request-one" 100000)
+                (= (rt-request-id false (vector-alloc 0) "request-one") "request-one")
+                (not (rt-due? head (rt-request-id false (vector-alloc 0) "request-one") 99999))
+                (rt-due? head (rt-request-id false (vector-alloc 0) "request-one") 100000)
+                (= (rt-request-id false (vector-alloc 0) "") "none")
+                (= (rt-request-id true (cp-bytes "{\"a\":1}") "request-one") (cp-cid (cp-bytes "{\"a\":1}")))
+                (= (rt-request-id true (cp-bytes "{\"a\":") "request-one") "")
+                (= (rt-request-id true (vector-alloc 0) "request-one") "")
+                (= (rt-request-id true (vector-alloc 8193) "request-one") "")
+                (= (rt-request-id true (cp-bytes "[]") "request-one") "")) 4 0)
        (if (and (pp-root? cfg a) (not (pp-root? cfg (cpt-envelope false)))
                 (not (pp-root? (rtt-cfg "did:key:untrusted") a))) 8 0)
        (if (and (= (cp-str head 0 "request") "request-one") (= (cp-num head 0 "nextAt") 100000)
@@ -25,3 +34,42 @@
                 (= (rt-post-problem cfg head lease lease 200001) "resident/retention-expired-proposal-retained")) 32 0)
        (if (and (= (rt-post-problem cfg head lease other 100000) "resident/lease-lost")
                 (= (rt-post-problem cfg head lease (vector-alloc 0) 100000) "resident/lease-lost")) 64 0))))
+
+;; Supply a fresh path in a private native FS scope. This tests the real file
+;; boundary; callers own the acknowledgement directory and its writer.
+(defn test-profile-archive-ack [path :string] :bool
+  (let [root (cpt-cid) tree "0123456789abcdef0123456789abcdef01234567" now (rt-now)
+        prefix (str "{\"checkpoint\":\"" root "\",\"kind\":\"itonami.github-archive-ack/1\",\"tree\":\"" tree "\",\"until\":")
+        good (cp-bytes (str prefix (+ now 600000) "}"))]
+    (and (rt-archive-ack? "" root) (not (rt-archive-ack? path root))
+         (cp-write path good) (rt-archive-ack? path root)
+         (not (rt-archive-ack? path "bafkreidifferent"))
+         (cp-write path (cp-bytes (str prefix now "}"))) (not (rt-archive-ack? path root))
+         (cp-write path (cp-bytes (str prefix (+ now 3600000) "}"))) (not (rt-archive-ack? path root))
+         (cp-write path (cp-bytes (str prefix (+ now 600000) ",\"untrusted\":1}")))
+         (not (rt-archive-ack? path root)))))
+
+;; Projection has only classified metadata; runtime-only paths must stay local.
+(defn test-profile-public-environment [] :bool
+  (let [d (cpt-profile) source "0000000000000000000000000000000000000000"
+        cfg (cp-bytes (str "{\"modelArtifactDigest\":\"" d "\",\"mtpArtifactDigest\":\"" d "\",\"profile\":\"" d "\",\"task\":\"drill\"}"))
+        runtime (cp-bytes (str "{\"authorizationFile\":\"/tmp/header\",\"contextDigest\":\"" d
+          "\",\"endpoint\":\"http://localhost/v1/chat/completions\",\"kind\":\"itonami.readonly-profile-runtime-local-mtp/1\",\"maxTokens\":360,\"model\":\"bonsai\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"" d
+          "\",\"rail\":\"murakumo\",\"roleDigest\":\"" d "\",\"socket\":\"/tmp/socket\",\"source\":\"" source
+          "\",\"task\":\"drill\",\"tools\":\"none\",\"workDigest\":\"" d "\"}"))
+        env-text (str "{\"contextDigest\":\"" d "\",\"kind\":\"itonami.profile-environment-public/2\",\"maxTokens\":360,\"model\":\"bonsai\",\"modelArtifactDigest\":\"" d
+          "\",\"mtpArtifactDigest\":\"" d "\",\"profile\":\"awai-growth-steward\",\"profileDigest\":\"" d
+          "\",\"rail\":\"murakumo\",\"roleDigest\":\"" d "\",\"source\":\"" source
+          "\",\"task\":\"drill\",\"tools\":\"none\",\"workDigest\":\"" d "\"}")
+        env (cp-bytes env-text)
+        cap-needle "\"maxTokens\":360" cap-pos (string-index-of env-text cap-needle)
+        wrong-cap (cp-bytes (str (string-substring env-text 0 cap-pos) "\"maxTokens\":361"
+                                 (string-substring env-text (+ cap-pos (string-length cap-needle)) (string-length env-text))))
+        split (string-index-of env-text ",\"source\":")
+        extra (cp-bytes (str (string-substring env-text 0 split) ",\"socket\":\"/tmp/socket\"" (string-substring env-text split (string-length env-text))))
+        wrong-cfg (cp-bytes (str "{\"modelArtifactDigest\":\"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\"mtpArtifactDigest\":\"" d "\",\"profile\":\"" d "\",\"task\":\"drill\"}"))]
+    (and (rt-public-environment? cfg runtime env)
+         (not (rt-public-environment? cfg runtime runtime))
+         (not (rt-public-environment? cfg runtime extra))
+         (not (rt-public-environment? cfg runtime wrong-cap))
+         (not (rt-public-environment? wrong-cfg runtime env)))))

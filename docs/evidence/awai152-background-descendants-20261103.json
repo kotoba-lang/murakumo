@@ -1,0 +1,14 @@
+{
+  "kind": "awai.macos-background-descendants-observation/1",
+  "date": "2026-11-03",
+  "host": "benjamin, macOS ARM64, Tailscale SSH Background launchd session",
+  "observer": "awai152-background-descendants-observer.py",
+  "observerSha256": "30e890855d432f78e13e41a58f47072a8cd566364adecdf7b77a5c86f134daef",
+  "method": "Two unique temporary one-shot Background launchd jobs ran a test-only Python parent that forked a bounded eight-second child. The parent exited normally after the child recorded its identity. One child remained in its parent's process group; the other called setsid first. A separate ps observation was taken one second after the parent marker. No workload process was signaled. After waiting for natural expiry, each exact task label was unloaded and absence checked. A later read-only SSH check found neither observed PID nor the task directory.",
+  "observations": [
+    {"case": "same-process-group", "parentGroup": 81805, "childPid": 81806, "childGroup": 81805, "childSession": 1, "childSeenAfterParentExit": false},
+    {"case": "setsid", "childPid": 81814, "childGroup": 81814, "childSession": 81814, "childSeenAfterParentExit": true}
+  ],
+  "cleanup": "Both exact job labels absent, task-owned temporary directory removed; a later ps check did not find either recorded PID.",
+  "scope": "Single-host Background-session observation, test-only Python; not an Amu workload, actual bot, inference process, lock test, or production qualification. The one-second ps samples do not prove timing for all process trees. launchd job disappearance is insufficient evidence that an escaped descendant has ended. This extends the prior local GUI-session lock/setsid observation to the remote Background session, but does not qualify a process-lifetime boundary or governor."
+}
