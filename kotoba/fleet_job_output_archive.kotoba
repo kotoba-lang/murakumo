@@ -2,7 +2,7 @@
 ;; the store and fresh work path exclusively, pins every input and credential,
 ;; and reconciles ambiguous child/remote outcomes before reusing either path.
 ;; This does not obtain a lease, advance a cursor or limit resource use.
-(ns murakumo.fleet-job-output-archive (:export [job-output-archive-main]))
+(ns murakumo.fleet-job-output-archive (:export [job-output-archive-main job-output-restore-main]))
 
 (defn- jo-archive-result? [result :string cid :string] :bool
   (let [tree (jn-field result 2) status (jn-field result 3)]
@@ -46,3 +46,46 @@
           result (jo-archive work store cid author profile policy environment epoch parent task repo gh pins)
           x (jn-say result)]
       (if (= (jn-field result 0) "job-output/archive-verified") 0 1))))
+
+;; Read restored output through the same bounded regular-file boundary. A
+;; failed read is not equivalent to an empty file: jo-restored-file? checks
+;; its metadata and exact expected CID independently.
+(defn- jo-restored-file [path :string] :vector-i64
+  (let [size (cp-size path) b (if (and (>= size 0) (<= size 16384)) (cp-range path 0 size) (vector-alloc 0))]
+    (if (and (>= size 0) (<= size 16384) (= (vector-count b) size) (= (cp-size path) size)) b (vector-alloc 0))))
+
+(defn- jo-restored-file? [path :string cid :string b :vector-i64] :bool
+  (let [size (cp-size path)]
+    (and (cp-raw? cid) (>= size 0) (<= size 16384) (= size (vector-count b)) (= (cp-cid b) cid))))
+
+(defn- jo-restore-fetch-result? [result :string cid :string] :bool
+  (let [tree (jn-field result 2)]
+    (and (cp-hex? tree 40) (= result (str "archive-restore/fetched " cid " " tree)))))
+
+;; Same pinned arguments as archive, except argument 1 is the absent restore
+;; destination. Fetch and proof verification occur before materialization.
+;; The host keeps work/destination private and exclusively owned, and must
+;; quarantine and reconcile either tree if any step returns unknown.
+(defn job-output-restore-main [] :i64
+  (let [work (jn-arg 0) dest (jn-arg 1) cid (jn-arg 2) author (jn-arg 3)
+        profile (jn-arg 4) policy (jn-arg 5) environment (jn-arg 6) epoch (cp-int (jn-arg 7))
+        parent (jn-arg 8) task (jn-arg 9) repo (jn-arg 10) gh (jn-arg 11)
+        out-path (jn-arg 12) output-cid (jn-arg 13) proof-path (jn-arg 14) proof-cid (jn-arg 15)
+        did (jn-arg 16) job (jn-arg 17)]
+    (if (or (not (checkpoint-path? out-path)) (not (checkpoint-path? proof-path)) (jo-overlap? out-path proof-path)
+            (not (cp-raw? cid)) (not (cp-raw? output-cid)) (not (cp-raw? proof-cid))
+            (not (= (did-key-problem did) "enroll/ok")) (not (jn-job-id? job)))
+      (let [x (jn-say "job-output/restore-config-refused")] 2)
+      (let [fetched (ga-restore-fetch work dest cid author profile policy environment epoch parent task repo gh)
+            tree (jn-field fetched 2) exact (jo-restore-fetch-result? fetched cid)
+            blocks (str work "/readback/blocks")
+            verified (if exact (jo-checkpoint-verdict blocks cid author profile policy environment epoch parent task
+                                                        output-cid proof-cid did job out-path proof-path) "job-output/restore-fetch-unknown")
+            restored (if (= verified "job-output/verified") (cp-materialize blocks (jo-block blocks cid) dest) "refused")
+            output (if (= restored "checkpoint/restored") (jo-restored-file (str dest "/" out-path)) (vector-alloc 0))
+            proof (if (= restored "checkpoint/restored") (jo-restored-file (str dest "/" proof-path)) (vector-alloc 0))
+            complete (and (= restored "checkpoint/restored") (jo-restored-file? (str dest "/" out-path) output-cid output)
+                          (jo-restored-file? (str dest "/" proof-path) proof-cid proof)
+                          (= (jo-proof-verdict proof output did job) "job-output/verified"))]
+        (if complete (let [x (jn-say (str "job-output/restore-verified " cid " " tree))] 0)
+          (let [x (jn-say "job-output/restore-unknown")] 1))))))

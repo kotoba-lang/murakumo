@@ -133,8 +133,8 @@
         legacy (cp-cid (cp-bytes (str (cp-text expected) "\n")))]
     (or (= found canonical) (= found legacy))))
 
-(defn- ga-restore [work :string dest :string cid :string author :string profile :string policy :string environment :string
-                  epoch :i64 parent :string task :string repo :string gh :string] :string
+(defn- ga-restore-fetch [work :string dest :string cid :string author :string profile :string policy :string environment :string
+                        epoch :i64 parent :string task :string repo :string gh :string] :string
   (cond (or (not (cp-safe-absolute? work)) (not (cp-safe-absolute? dest)) (ga-path-overlap? work dest)
             (ga-path-overlap? work (str dest ".partial"))
             (not (cp-safe-absolute? gh)) (not (ga-repo? repo)) (not (cp-raw? cid))
@@ -158,10 +158,18 @@
               checkout (if (cp-ok? check) (cp-git readback "checkoutARG_SEP--quietARG_SEPFETCH_HEADARG_SEP--ARG_SEPblocksARG_SEPmanifest.json") "refused")
               verified (and (cp-ok? checkout) (ga-manifest-matches? (cp-read (str readback "/manifest.json")) manifest)
                             (ga-verified? blocks cid author profile policy environment epoch parent task))]
-          (if (not verified) "archive-restore/readback-refused"
-            (if (= (cp-materialize blocks (cp-load blocks cid) dest) "checkpoint/restored")
-              (str "archive-restore/restored " cid " " tree)
-              "archive-restore/materialize-unknown")))))
+          (if verified (str "archive-restore/fetched " cid " " tree) "archive-restore/readback-refused"))))
+
+;; Keep the existing restore contract. Composed callers can inspect the
+;; verified fetched store before materializing into the destination.
+(defn- ga-restore [work :string dest :string cid :string author :string profile :string policy :string environment :string
+                  epoch :i64 parent :string task :string repo :string gh :string] :string
+  (let [fetched (ga-restore-fetch work dest cid author profile policy environment epoch parent task repo gh)
+        tree (cp-meta-field fetched 2) blocks (str work "/readback/blocks")]
+    (if (not (and (cp-hex? tree 40) (= fetched (str "archive-restore/fetched " cid " " tree)))) fetched
+      (if (= (cp-materialize blocks (cp-load blocks cid) dest) "checkpoint/restored")
+        (str "archive-restore/restored " cid " " tree)
+        "archive-restore/materialize-unknown"))))
 
 (defn github-checkpoint-restore-main [] :i64
   (let [result (ga-restore (cp-arg 0) (cp-arg 1) (cp-arg 2) (cp-arg 3) (cp-arg 4) (cp-arg 5) (cp-arg 6)

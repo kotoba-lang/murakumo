@@ -190,6 +190,13 @@ It accepts an unacknowledged push only if that independent readback verifies;
 otherwise the host must reconcile the unknown result before retrying. This
 entry does not hold a fleet lease, advance the cursor or qualify the process
 boundary. Its combined source has been checked, not exercised against GitHub.
+`job-output-restore-main` independently fetches the pinned private archive and
+checks the signed checkpoint and output proof before materializing a fresh
+destination. It then checks both restored files and the receipt again. The
+host must keep the destination quarantined and reconcile it on any unknown
+result. This entry restores data only; it does not restore a lease or grant
+permission to run a bot. The refactored ordinary checkpoint restore retains
+its prior result contract, but both paths still require runtime qualification.
 Log and existing block reads are bounded, and storage synchronizes the block
 and its directory. The host must keep both paths exclusively owned during the
 operation: separate path-based metadata and reads do not establish identity
