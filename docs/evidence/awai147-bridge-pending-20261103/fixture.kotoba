@@ -1,0 +1,42 @@
+(ns bridge-check (:export [main]))
+(defn- cp-text [b :vector-i64] :string (string-from-utf8 (bytes-from-vector-i64 b)))
+(defn- cp-bytes [s :string] :vector-i64 (vector-i64-from-bytes (string-to-utf8 s)))
+(defn- cp-str [b :vector-i64 i :i64 k :string] :string (if (= k "request") (cp-text b) (if (= k "archiveAck") "/ack" "root")))
+(defn- cp-cid [b :vector-i64] :string (cp-text b))
+(defn- cp-exists? [p :string] :bool (or (= p "/pending.tmp") (= p "/pending") (= p "/clean") (= p "/ack")))
+(defn- cp-read [p :string] :vector-i64 (cp-bytes "wanted"))
+(defn- json-valid? [b :vector-i64] :bool true)
+(defn- json-canonical? [b :vector-i64] :bool true)
+(defn- rt-admitted-head? [cfg :vector-i64 h :vector-i64] :bool true)
+(defn- rt-archive-ack? [p :string r :string] :bool true)
+(defn- rt-save [p :string b :vector-i64] :bool true)
+(defn- br-head-problem [cfg :vector-i64 head :vector-i64] :string
+  (cond (or (not (json-valid? head)) (not (json-canonical? head))) "bridge/head-invalid"
+        (not (rt-admitted-head? cfg head)) "bridge/head-unadmitted"
+        ;; An interrupted request replacement is unknown even when the
+        ;; visible request or the archived head matches the desired CID.
+        (cp-exists? (str (cp-str cfg 0 "request") ".tmp")) "bridge/request-unknown"
+        (or (not (cp-exists? (cp-str cfg 0 "archiveAck")))
+            (not (json-valid? (cp-read (cp-str cfg 0 "archiveAck"))))
+            (not (rt-archive-ack? (cp-str cfg 0 "archiveAck") (cp-str head 0 "checkpoint")))) "bridge/archive-pending"
+        :else "bridge/head-ready"))
+
+(defn- br-install [cfg :vector-i64 head :vector-i64 request :vector-i64] :string
+  (let [path (cp-str cfg 0 "request") wanted (cp-cid request)
+        old (if (cp-exists? path) (cp-cid (cp-read path)) "none")
+        consumed (cp-str head 0 "request")]
+    (cond (cp-exists? (str path ".tmp")) "bridge/request-unknown"
+          (= consumed wanted) "bridge/already-consumed"
+          (and (not (= old "none")) (not (= old consumed)) (not (= old wanted))) "bridge/pending-request"
+          (= old wanted) "bridge/request-ready"
+          (rt-save path request) "bridge/request-ready"
+          :else "bridge/request-unknown")))
+
+(defn main [] :i64
+ (let [pending (cp-bytes "/pending") clean (cp-bytes "/clean") old (cp-bytes "old") wanted (cp-bytes "wanted")]
+  (if (and (= (br-install pending old wanted) "bridge/request-unknown")
+           (= (br-install pending wanted wanted) "bridge/request-unknown")
+           (= (br-install clean old wanted) "bridge/request-ready")
+           (= (br-install clean wanted wanted) "bridge/already-consumed")
+           (= (br-head-problem pending wanted) "bridge/request-unknown")
+           (= (br-head-problem clean wanted) "bridge/head-ready")) 0 1)))
