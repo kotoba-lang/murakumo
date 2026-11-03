@@ -57,6 +57,14 @@ check. A [bounded test](evidence/awai150-git-config-guard-20261103.json)
 exercised the refusal cases with real Git. Its positive control modified the
 remote expression to point at a local bare repository.
 
+The [Mac host authentication observation](evidence/awai154-mac-host-gh-auth-20261103/receipt.json)
+ran `gh auth status` through the diagnostic private host. The operator's CLI
+was signed in, but the child launched with the host's minimal environment
+reported no GitHub authentication. This explains why the local Git and
+connector fixtures do not provide native bot credentials. It does not prove
+that every other possible credential path is absent. A scoped issuer and
+secure delivery remain required; do not copy an operator token into the host.
+
 This check is **not** a complete security boundary: environment-supplied
 proxies, trust stores, credentials, Git/GH executables, configuration races,
 DNS and other host effects remain outside its proof. The host requirements
