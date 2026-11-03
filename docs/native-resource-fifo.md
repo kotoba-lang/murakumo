@@ -10,7 +10,8 @@ missing or duplicate state, full queue, unknown staging and contention are
 refused. No refusal is retried in a polling loop.
 
 Writes use an fsynced `queue.intent`, an fsynced `queue.pending`, an atomic
-rename and directory fsync. A surviving intent or pending file blocks later
+rename and directory fsync. After syncing the new queue, the intent is renamed
+to `queue.last` and the directory is synced again. A surviving intent or pending file blocks later
 operations for trusted-host reconciliation. The source requires a host-owned,
 non-aliased directory; it does not make an untrusted directory safe or
 establish power-loss durability on every filesystem.
@@ -33,8 +34,13 @@ synthetic leftover intent/pending and corrupt state. Its concurrent case is a
 single race; its crash markers are manually created, not a crash or power-loss
 test. No Mac mini or existing service was modified.
 
-A later [Linux process-kill observation](evidence/awai151-fifo-kill-20261103/)
+A historical [Linux process-kill observation](evidence/awai151-fifo-kill-20261103/)
 paused instrumented source after the intent, pending write, rename, directory
 sync and intent unlink. The uninstrumented component refused the surviving
 intent in the first four cases and read the committed ticket in the fifth.
 This does not test power loss, failed fsync, Mac, process trees or admission.
+
+The [Darwin/Linux portability observation](evidence/awai151-fifo-portable-20261103/)
+exercises byte writes and the completed-intent rename on one Mac with the
+diagnostic FS2 runtime and rechecks the current source on Linux. It does not
+qualify the Mac release runtime or authorize governor use.

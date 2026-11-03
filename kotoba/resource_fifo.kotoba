@@ -10,6 +10,18 @@
   (let [reply (typed-cap-call 35 :string :string (str "\u0000FS2\u0000" op path "\u0000" tail))]
     (if (and (>= (string-byte-length reply) 5) (= (string-substring reply 0 5) "\u0000FS2\u0000"))
       (string-substring reply 5 (string-length reply)) "")))
+;; Use the byte FS2 form and verify its complete echo. The diagnostic
+;; Darwin provider supports B as bytes; Linux supports this form as well.
+(defn- rq-write? [path :string value :string] :bool
+  (let [payload (string-to-utf8 value)
+        request (string-to-utf8 (str "\u0000FS2\u0000B" path "\u0000" value))
+        answer (typed-cap-call 35 :bytes :bytes request) n (bytes-count payload)]
+    (and (= (bytes-count answer) (+ n 5)) (= (bytes-at answer 0) 0)
+         (= (bytes-at answer 1) 70) (= (bytes-at answer 2) 83)
+         (= (bytes-at answer 3) 50) (= (bytes-at answer 4) 0)
+         (loop [i 0]
+           (if (= i n) true
+             (and (= (bytes-at payload i) (bytes-at answer (+ i 5))) (recur (+ i 1))))))))
 (defn- rq-root? [s :string] :bool
   (and (> (string-length s) 1) (<= (string-length s) 200)
        (= (string-substring s 0 1) "/") (not (= (string-substring s (- (string-length s) 1) (string-length s)) "/"))
@@ -42,12 +54,14 @@
   (let [state (str root "/queue") tmp (str root "/queue.pending") intent (str root "/queue.intent")]
     ;; Keep a separately fsynced intent across the rename and its directory
     ;; sync. A leftover intent blocks all callers for host reconciliation.
+    ;; Rename the completed marker aside only after the queue directory sync;
+    ;; replacement is supported by the tested Linux and Darwin FS2 L forms.
     (and (= (rq-fs "D" intent "") "0") (= (rq-fs "D" tmp "") "0")
-         (= (rq-fs "B" intent "intent\n") "intent\n") (= (rq-fs "M" intent "") "1")
-         (= (rq-fs "M" root "") "1") (= (rq-fs "B" tmp next) next)
+         (rq-write? intent "intent\n") (= (rq-fs "M" intent "") "1")
+         (= (rq-fs "M" root "") "1") (rq-write? tmp next)
          (= (rq-fs "M" tmp "") "1") (= (rq-fs "A" tmp "") next)
          (= (rq-fs "A" state "") original) (= (rq-fs "L" tmp state) "1")
-         (= (rq-fs "M" root "") "1") (= (rq-fs "J" intent "") "1")
+         (= (rq-fs "M" root "") "1") (= (rq-fs "L" intent (str root "/queue.last")) "1")
          (= (rq-fs "M" root "") "1"))))
 (defn- rq-apply [root :string op :string ticket :string] :string
   (let [state-path (str root "/queue") pending (str state-path ".pending") intent (str state-path ".intent")
